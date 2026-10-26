@@ -181,17 +181,13 @@ fn set<R: Runner>(
         .iter()
         .find(|e| e.service == service && e.scope == scope)
         .cloned();
-    let had_value = old.as_ref().is_some_and(|e| e.source == Source::Keychain);
-    let mut wrote_value = false;
-    // A stored value this replaces, kept in memory to put back if secrets.toml can't be saved.
-    let mut previous = None;
-    let source = if let Some(r) = src.reference {
+    let (source, value) = if let Some(r) = src.reference {
         if !(r.starts_with("op://") || r.starts_with("arn:aws:secretsmanager:")) {
             bail!("unsupported reference (use op://… or an AWS Secrets Manager ARN)");
         }
-        Source::Ref { reference: r }
+        (Source::Ref { reference: r }, None)
     } else if let Some(c) = src.command {
-        Source::Command { command: c }
+        (Source::Command { command: c }, None)
     } else {
         let value = match src.token {
             Some(t) => t,
@@ -200,18 +196,20 @@ fn set<R: Runner>(
         if value.is_empty() {
             bail!("empty value");
         }
-        if had_value {
+        (Source::Keychain, Some(value))
+    };
+    // A stored value this replaces, kept in memory to put back if secrets.toml can't be saved.
+    let mut previous = None;
+    if let Some(v) = &value {
+        if old.as_ref().is_some_and(|e| e.source == Source::Keychain) {
             previous = ctx.store.get(&account)?;
         }
-        ctx.store.set(&account, &value)?;
-        wrote_value = true;
-        Source::Keychain
-    };
+        ctx.store.set(&account, v)?;
+    }
     let described = match &source {
         Source::Keychain => format!("stored in {}", ctx.store.describe()),
         other => other.describe(),
     };
-    let keeps_value = source == Source::Keychain;
     file.set(SecretEntry {
         service: service.into(),
         scope: scope.clone(),
@@ -220,7 +218,7 @@ fn set<R: Runner>(
     if let Err(e) = file.save(&ctx.paths) {
         // Put the store back as the unchanged entry expects: the earlier value, or none. Best
         // effort; the save error is the one to report.
-        if wrote_value {
+        if value.is_some() {
             let _ = match &previous {
                 Some(v) => ctx.store.set(&account, v),
                 None => ctx.store.delete(&account),
@@ -228,7 +226,10 @@ fn set<R: Runner>(
         }
         return Err(e);
     }
-    if !keeps_value && let Some(old) = old {
+    // A new stored value replaced the old one in place; otherwise the old one goes.
+    if value.is_none()
+        && let Some(old) = old
+    {
         forget(ctx, &[old])?;
     }
     println!("Saved {service} secret ({described}; {scope})");
