@@ -4,9 +4,10 @@ use anyhow::{Context, Result, bail};
 use serde::Serialize;
 
 use super::{
-    CheckArgs, CheckKind, Ctx, Format, PolicyCmd, PolicyRmKind, RuleArgs, RuleKind, Unsupported,
-    confirm, plan, table,
+    ApprovalCmd, CheckArgs, CheckKind, Ctx, Format, PolicyCmd, PolicyRmKind, RuleArgs, RuleKind,
+    Unsupported, confirm, plan, table,
 };
+use crate::policy::log;
 use crate::policy::rules::{Allow, Resource, parse_list};
 use crate::policy::{Decision, Mode, Policy, compile, presets};
 use crate::sandbox::{self, name};
@@ -88,12 +89,18 @@ pub fn run<R: Runner>(ctx: &mut Ctx<R>, cmd: PolicyCmd) -> Result<i32> {
             Policy::default().save(&ctx.paths)?;
             println!("Policy reset; the next `sbt run` asks for a mode");
         }
-        PolicyCmd::Log(_) | PolicyCmd::Approval(_) => {
-            return Err(Unsupported(
-                "`sbt policy log` and approvals arrive in the next task".into(),
-            )
-            .into());
+        PolicyCmd::Log(a) => {
+            if a.kind.as_deref().is_some_and(|k| k == "filesystem") {
+                return Err(Unsupported("smolbento has no filesystem policy".into()).into());
+            }
+            let rows = blocked_rows(ctx, a.sandbox.as_deref(), a.limit)?;
+            if a.json {
+                println!("{}", serde_json::to_string_pretty(&rows)?);
+            } else {
+                print!("{}", render_log(&rows));
+            }
         }
+        PolicyCmd::Approval(cmd) => return approval(ctx, &mut policy, cmd),
         PolicyCmd::Refresh(_) => {
             return Err(
                 Unsupported("`sbt policy refresh` is for organization policies".into()).into(),
@@ -145,10 +152,16 @@ fn guard_bound_secrets<R: Runner>(
     scope: Option<&str>,
     denies: &[Resource],
 ) -> Result<()> {
-    let Ok(sandboxes) = sandbox::list(&ctx.vm) else {
-        return Ok(());
+    let sandboxes = match sandbox::list(&ctx.vm) {
+        Ok(s) => s,
+        Err(e) => {
+            eprintln!(
+                "warning: couldn't check sandboxes for bound secrets ({e:#}); adding the rule anyway"
+            );
+            return Ok(());
+        }
     };
-    let secrets = SecretsFile::load(&ctx.paths)?;
+    let secrets = SecretsFile::load(&ctx.paths).ok();
     for sb in sandboxes
         .iter()
         .filter(|s| scope.is_none_or(|n| n == s.name()))
@@ -167,16 +180,125 @@ fn guard_bound_secrets<R: Runner>(
             .iter()
             .find(|name| {
                 secrets
-                    .service(name)
+                    .as_ref()
+                    .and_then(|f| f.service(name))
                     .is_some_and(|s| s.hosts.iter().any(|h| h == host))
             })
-            .map_or_else(|| "a".to_string(), |s| format!("a {s}"));
+            .map_or_else(|| "a secret".to_string(), |s| format!("a {s} secret"));
         bail!(
-            "can't deny {host}: sandbox {} has {service} secret bound to it; remove the secret and recreate the sandbox first",
+            "can't deny {host}: sandbox {} has {service} bound to it; remove the secret and recreate the sandbox first",
             sb.name()
         );
     }
     Ok(())
+}
+
+fn blocked_rows<R: Runner>(
+    ctx: &Ctx<R>,
+    only: Option<&str>,
+    limit: usize,
+) -> Result<Vec<log::LogRow>> {
+    let mut events = Vec::new();
+    for sb in sandbox::list(&ctx.vm)?
+        .into_iter()
+        .filter(|s| only.is_none_or(|n| n == s.name()))
+    {
+        events.push((
+            sb.name().to_string(),
+            ctx.vm.egress_events(&sb.machine, limit)?,
+        ));
+    }
+    Ok(log::rows(&events))
+}
+
+pub fn render_log(rows: &[log::LogRow]) -> String {
+    if rows.is_empty() {
+        return "No blocked requests\n".into();
+    }
+    let mut lines = vec![
+        [
+            "SANDBOX",
+            "TYPE",
+            "HOST",
+            "RULE",
+            "REASON",
+            "LAST SEEN",
+            "COUNT",
+        ]
+        .map(String::from)
+        .to_vec(),
+    ];
+    for r in rows {
+        lines.push(vec![
+            r.sandbox.clone(),
+            "network".into(),
+            r.host.clone(),
+            "-".into(),
+            "no allow rule".into(),
+            r.last_seen.clone(),
+            r.count.to_string(),
+        ]);
+    }
+    table(lines)
+}
+
+/// Approvals are blocked hosts no rule mentions yet; the host is the id.
+fn approval<R: Runner>(ctx: &Ctx<R>, policy: &mut Policy, cmd: ApprovalCmd) -> Result<i32> {
+    let rows = blocked_rows(ctx, None, 200)?;
+    let pending = log::pending(policy, &rows);
+    match cmd {
+        ApprovalCmd::Ls { json } => {
+            if json {
+                println!("{}", serde_json::to_string_pretty(&pending)?);
+            } else if pending.is_empty() {
+                println!("No pending approvals");
+            } else {
+                let mut lines = vec![
+                    ["ID", "SANDBOX", "LAST SEEN", "COUNT"]
+                        .map(String::from)
+                        .to_vec(),
+                ];
+                for r in &pending {
+                    lines.push(vec![
+                        r.host.clone(),
+                        r.sandbox.clone(),
+                        r.last_seen.clone(),
+                        r.count.to_string(),
+                    ]);
+                }
+                print!("{}", table(lines));
+            }
+        }
+        ApprovalCmd::Inspect { id } => {
+            let r = rows
+                .iter()
+                .find(|r| r.host == id)
+                .with_context(|| format!("no blocked request for '{id}'"))?;
+            println!(
+                "Host: {}\nSandbox: {}\nBlocked: {} time(s), last {}",
+                r.host, r.sandbox, r.count, r.last_seen
+            );
+        }
+        ApprovalCmd::Respond {
+            id,
+            decision,
+            sandbox,
+        } => {
+            if !rows.iter().any(|r| r.host == id) {
+                bail!("no blocked request for '{id}' (see `sbt policy approval ls`)");
+            }
+            let decision = match decision {
+                super::ApprovalDecision::Allow => Decision::Allow,
+                super::ApprovalDecision::Deny => Decision::Deny,
+            };
+            let rule =
+                policy.add_rule(sandbox.as_deref(), decision, &id, "approval", None, None)?;
+            policy.save(&ctx.paths)?;
+            println!("{} rule {rule}: {id}", decision.name());
+            plan::push_network(ctx)?;
+        }
+    }
+    Ok(0)
 }
 
 fn check<R: Runner>(ctx: &Ctx<R>, policy: &Policy, a: &CheckArgs) -> Result<i32> {
@@ -439,5 +561,105 @@ mod tests {
         assert_eq!(Policy::load(&t.ctx.paths).unwrap(), Policy::default());
         let err = sbt(&mut t.ctx, &["policy", "refresh"]).unwrap_err();
         assert_eq!(super::super::exit_code(&err), 2);
+    }
+
+    fn blocked(t: &TestEnv) {
+        running(t, &[("sbx.name", "a1")]);
+        t.ctx.vm.runner().ok(
+            &["machine", "egress-events"],
+            r#"[{"timestamp":"2026-10-26T10:00:00Z","operation":"resolve","dest":"example.com"},
+                {"timestamp":"2026-10-26T11:00:00Z","operation":"resolve","dest":"example.com"}]"#,
+        );
+    }
+
+    #[test]
+    fn log_lists_blocked_hosts() {
+        let mut t = test_env(&[]);
+        blocked(&t);
+        assert_eq!(sbt(&mut t.ctx, &["policy", "log"]).unwrap(), 0);
+        assert!(
+            t.ctx
+                .vm
+                .runner()
+                .call_lines()
+                .contains(&"machine egress-events --name sbx-a1 --json --limit 50".to_string())
+        );
+        let err = sbt(&mut t.ctx, &["policy", "log", "--type", "filesystem"]).unwrap_err();
+        assert_eq!(super::super::exit_code(&err), 2);
+    }
+
+    #[test]
+    fn approval_respond_adds_a_rule_and_pushes() {
+        let mut t = test_env(&[]);
+        set_policy(&t, "mode = \"deny-all\"");
+        blocked(&t);
+        sbt(
+            &mut t.ctx,
+            &[
+                "policy",
+                "approval",
+                "respond",
+                "example.com",
+                "allow",
+                "--sandbox",
+                "a1",
+            ],
+        )
+        .unwrap();
+        let p = Policy::load(&t.ctx.paths).unwrap();
+        let rule = &p.sandboxes["a1"].rules[0];
+        assert_eq!(
+            (rule.resources[0].as_str(), rule.created_via.as_str()),
+            ("example.com", "approval")
+        );
+        assert!(
+            updates(&t)
+                .pop()
+                .unwrap()
+                .contains("--allow-host example.com")
+        );
+        let err = sbt(
+            &mut t.ctx,
+            &["policy", "approval", "inspect", "nothing.com"],
+        )
+        .unwrap_err();
+        assert!(err.to_string().contains("no blocked request"), "{err}");
+    }
+
+    #[test]
+    fn log_rows_render() {
+        let rows = vec![log::LogRow {
+            sandbox: "a1".into(),
+            host: "example.com".into(),
+            count: 2,
+            last_seen: "2026-10-26T11:00:00Z".into(),
+        }];
+        insta::assert_snapshot!(render_log(&rows));
+    }
+
+    #[test]
+    fn check_allows_a_bound_secret_host_under_deny_all() {
+        let mut t = test_env(&[]);
+        set_policy(&t, "mode = \"deny-all\"");
+        running(
+            &t,
+            &[
+                ("sbx.name", "a1"),
+                ("sbx.credential-hosts", "api.github.com"),
+            ],
+        );
+        let code = sbt(
+            &mut t.ctx,
+            &[
+                "policy",
+                "check",
+                "network",
+                "api.github.com",
+                "--sandbox",
+                "a1",
+            ],
+        )
+        .unwrap();
+        assert_eq!(code, 0);
     }
 }

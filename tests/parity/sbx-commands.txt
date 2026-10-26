@@ -39,6 +39,9 @@ policy init balanced
 policy allow network api.example.com,*.npmjs.org
 policy ls --wide
 policy log
+policy log my-sandbox --limit 20 --json
+policy approval ls
+policy approval respond example.com allow --sandbox my-sandbox
 policy deny network bad.example.com --sandbox my-sandbox
 policy rm network --id r-0123abcd
 policy rm network --resource api.example.com -f

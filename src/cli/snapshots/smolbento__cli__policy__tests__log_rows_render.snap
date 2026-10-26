@@ -1,0 +1,6 @@
+---
+source: src/cli/policy.rs
+expression: render_log(&rows)
+---
+SANDBOX   TYPE      HOST          RULE   REASON          LAST SEEN              COUNT
+a1        network   example.com   -      no allow rule   2026-10-26T11:00:00Z   2
