@@ -78,22 +78,37 @@ impl Resource {
         } else if let Some(rest) = host.strip_prefix("**.")
             && !has_glob(rest)
         {
+            check_host(rest, raw)?;
             Pattern::Subdomains(rest.into())
         } else if let Some(rest) = host.strip_prefix("*.")
             && !has_glob(rest)
         {
+            check_host(rest, raw)?;
             Pattern::OneLabel(rest.into())
         } else if has_glob(&host) {
             match host.split_once('.') {
-                Some((_, parent)) if !parent.is_empty() && !has_glob(parent) => Pattern::Glob {
-                    pattern: host.clone(),
-                    parent: parent.into(),
-                },
+                Some((label, parent)) if !parent.is_empty() && !has_glob(parent) => {
+                    check_host(parent, raw)?;
+                    if !label
+                        .bytes()
+                        .all(|b| b.is_ascii_alphanumeric() || b"-*?[]!".contains(&b))
+                    {
+                        bail!(
+                            "invalid host in '{raw}': a wildcard label takes letters, digits, '-' \
+                             and the wildcards * ? [..]"
+                        );
+                    }
+                    Pattern::Glob {
+                        pattern: host.clone(),
+                        parent: parent.into(),
+                    }
+                }
                 _ => bail!(
                     "can't use '{raw}': a wildcard must be followed by a fixed domain, like `crl*.digicert.com`"
                 ),
             }
         } else {
+            check_host(&host, raw)?;
             Pattern::Exact(host)
         };
         Ok(Resource {
@@ -148,6 +163,31 @@ impl Resource {
         }
         (!notes.is_empty()).then(|| notes.join("; "))
     }
+}
+
+/// The hostname rules smolvm's `--allow-host-pattern` enforces (`encode_strict` in
+/// smolvm-protocol's host_pattern.rs): one optional trailing dot, at most 253 characters, labels of
+/// 1 to 63 ASCII letters, digits and '-', with no '-' at either end of a label.
+fn check_host(host: &str, raw: &str) -> Result<()> {
+    let host = host.strip_suffix('.').unwrap_or(host);
+    let valid = !host.is_empty()
+        && host.len() <= 253
+        && host.split('.').all(|label| {
+            !label.is_empty()
+                && label.len() <= 63
+                && !label.starts_with('-')
+                && !label.ends_with('-')
+                && label
+                    .bytes()
+                    .all(|b| b.is_ascii_alphanumeric() || b == b'-')
+        });
+    if !valid {
+        bail!(
+            "invalid host in '{raw}': use dot-separated labels of letters, digits and '-' \
+             (1-63 characters each, not starting or ending with '-'; 253 in all)"
+        );
+    }
+    Ok(())
 }
 
 fn split_port(s: &str) -> Result<(&str, Option<u16>)> {
@@ -321,6 +361,51 @@ mod tests {
         assert!(Resource::parse("abc*").is_err());
         assert!(parse_list(" , ").is_err());
         assert_eq!(parse_list("a.com, *.b.com").unwrap().len(), 2);
+    }
+
+    #[test]
+    fn host_names_are_checked_the_way_smolvm_checks_them() {
+        let long_label = "a".repeat(64);
+        let longest = [
+            "a".repeat(63),
+            "b".repeat(63),
+            "c".repeat(63),
+            "d".repeat(61),
+        ]
+        .join(".");
+        for good in [
+            "api.x.com",
+            "x-1.example.com",
+            "localhost",
+            "example.com.",
+            "**.x.com",
+            "*.x.com",
+            "crl*.digicert.com",
+            "[ab]pi.x-y.com",
+            "ocsp?.globalsign.com",
+            longest.as_str(),
+        ] {
+            assert!(Resource::parse(good).is_ok(), "{good}");
+        }
+        let too_long = format!("{longest}d");
+        let label = format!("{long_label}.com");
+        for bad in [
+            "bad_host.com",
+            "-a.com",
+            "a-.com",
+            "a..com",
+            "**.x_y.com",
+            "*.-x.com",
+            "crl*.digi_cert.com",
+            "cr_l*.digicert.com",
+            "https://x.com",
+            "x.com/path",
+            too_long.as_str(),
+            label.as_str(),
+        ] {
+            let err = Resource::parse(bad).unwrap_err().to_string();
+            assert!(err.contains(bad), "{bad}: {err}");
+        }
     }
 
     #[test]
