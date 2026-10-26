@@ -199,13 +199,13 @@ fn add<R: Runner>(
     policy.save(&ctx.paths)?;
     println!("{} rule {id}: {}", decision.name(), a.resources);
     if decision == Decision::Deny {
-        print_deny_notes(policy, &parsed);
+        print_deny_notes(policy, a.sandbox.as_deref(), &parsed);
     }
     plan::push_network(ctx)
 }
 
-fn print_deny_notes(policy: &Policy, denies: &[Resource]) {
-    let (cidr, notes) = deny_notes(policy, denies);
+fn print_deny_notes(policy: &Policy, scope: Option<&str>, denies: &[Resource]) {
+    let (cidr, notes) = deny_notes(policy, scope, denies);
     if cidr {
         println!("note: deny CIDRs apply to sandboxes created from now on");
     }
@@ -217,7 +217,14 @@ fn print_deny_notes(policy: &Policy, denies: &[Resource]) {
 
 /// What to tell the user about a new deny: whether it has a port-less deny CIDR (applied at
 /// create), and a note for each port-scoped entry, which smolvm can't enforce (see `compile`).
-fn deny_notes(policy: &Policy, denies: &[Resource]) -> (bool, Vec<String>) {
+fn deny_notes(policy: &Policy, scope: Option<&str>, denies: &[Resource]) -> (bool, Vec<String>) {
+    // Allows a same-text deny cancels the way `compile` does: global and the deny's own sandbox.
+    // A global deny also cancels each sandbox's own allow there, but it's only reported as
+    // cancelling when a global allow has the same text.
+    let allows: Vec<&crate::policy::Rule> = match scope {
+        Some(s) => policy.rules_for(s).into_iter().map(|(r, _)| r).collect(),
+        None => policy.rules.iter().collect(),
+    };
     let cidr = denies
         .iter()
         .any(|r| r.port.is_none() && matches!(r.to_allow(), Allow::Cidr(_)));
@@ -226,7 +233,7 @@ fn deny_notes(policy: &Policy, denies: &[Resource]) -> (bool, Vec<String>) {
         .filter(|r| r.port.is_some())
         .map(|r| {
             let host = r.without_port();
-            let cancels = policy.all_rules().iter().any(|(rule, _)| {
+            let cancels = allows.iter().any(|rule| {
                 rule.decision == Decision::Allow
                     && rule
                         .resources
@@ -413,7 +420,7 @@ fn approval<R: Runner>(ctx: &Ctx<R>, policy: &mut Policy, cmd: ApprovalCmd) -> R
             policy.save(&ctx.paths)?;
             println!("{} rule {rule}: {id}", decision.name());
             if decision == Decision::Deny {
-                print_deny_notes(policy, &parse_list(&id)?);
+                print_deny_notes(policy, sandbox.as_deref(), &parse_list(&id)?);
             }
             plan::push_network(ctx)?;
         }
@@ -924,10 +931,10 @@ mod tests {
         let res = |s: &str| parse_list(s).unwrap();
         let p = Policy::default();
         // A port-less deny CIDR: the stdout note, as before.
-        let (cidr, notes) = deny_notes(&p, &res("10.0.0.0/8, evil.com"));
+        let (cidr, notes) = deny_notes(&p, None, &res("10.0.0.0/8, evil.com"));
         assert!(cidr && notes.is_empty(), "{notes:?}");
         // A port-scoped one is never applied: no CIDR note, a stderr note instead.
-        let (cidr, notes) = deny_notes(&p, &res("10.0.0.0/8:22, evil.com:8080"));
+        let (cidr, notes) = deny_notes(&p, None, &res("10.0.0.0/8:22, evil.com:8080"));
         assert!(!cidr);
         assert_eq!(
             notes,
@@ -949,7 +956,7 @@ mod tests {
             None,
         )
         .unwrap();
-        let (_, notes) = deny_notes(&p, &res("api.x.com:8080"));
+        let (_, notes) = deny_notes(&p, Some("s1"), &res("api.x.com:8080"));
         assert_eq!(
             notes,
             [
@@ -957,8 +964,20 @@ mod tests {
                  rule with the same text; it doesn't block api.x.com otherwise"
             ]
         );
-        let (_, notes) = deny_notes(&p, &res("[::1]:22"));
+        let (_, notes) = deny_notes(&p, Some("s1"), &res("[::1]:22"));
         assert!(notes[0].contains("deny ::1 to block it"), "{notes:?}");
+        // Compile cancels only within global and the deny's own sandbox; a global deny is
+        // reported as cancelling only a global allow.
+        for scope in [Some("s2"), None] {
+            let (_, notes) = deny_notes(&p, scope, &res("api.x.com:8080"));
+            assert!(notes[0].contains("isn't enforced"), "{scope:?}: {notes:?}");
+        }
+        p.add_rule(None, Decision::Allow, "api.x.com:8080", "added", None, None)
+            .unwrap();
+        for scope in [Some("s2"), None] {
+            let (_, notes) = deny_notes(&p, scope, &res("api.x.com:8080"));
+            assert!(notes[0].contains("only cancels"), "{scope:?}: {notes:?}");
+        }
     }
 
     #[test]
