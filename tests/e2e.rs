@@ -13,10 +13,12 @@ impl E2e {
     fn new(test: &str) -> E2e {
         let dir = tempfile::tempdir().unwrap();
         std::fs::create_dir_all(dir.path().join("ws")).unwrap();
-        E2e {
+        let e = E2e {
             dir,
             name: format!("e2e-{}-{test}", std::process::id()),
-        }
+        };
+        e.ok(&["policy", "init", "allow-all"]);
+        e
     }
 
     fn workspace(&self) -> PathBuf {
@@ -174,4 +176,118 @@ fn diagnose_passes() {
     let e = E2e::new("diag");
     let out = e.ok(&["diagnose"]);
     assert!(!out.contains("FAIL"), "{out}");
+}
+
+fn reachable(e: &E2e, url: &str) -> bool {
+    e.sbt(&[
+        "exec",
+        &e.name,
+        "wget",
+        "-q",
+        "-T",
+        "8",
+        "-O",
+        "/dev/null",
+        url,
+    ])
+    .status
+    .success()
+}
+
+#[test]
+#[ignore = "boots real VMs; run with `just e2e`"]
+fn policy_changes_apply_on_start_and_live() {
+    let e = E2e::new("pol");
+    e.create_alpine();
+    e.ok(&["policy", "init", "deny-all"]);
+    e.ok(&["stop", &e.name]); // allow-all -> restricted applies on the next start
+    assert!(!reachable(&e, "https://example.com"), "deny-all blocks");
+    e.ok(&["policy", "allow", "network", "example.com"]);
+    assert!(reachable(&e, "https://example.com"), "live allow");
+    e.ok(&["policy", "rm", "network", "--resource", "example.com"]);
+    assert!(
+        !reachable(&e, "https://www.wikipedia.org"),
+        "still restricted"
+    );
+    e.ok(&["policy", "init", "balanced"]);
+    assert!(
+        reachable(&e, "https://dl-cdn.alpinelinux.org/"),
+        "balanced allows alpine"
+    );
+    assert!(
+        !reachable(&e, "https://example.com"),
+        "balanced blocks example.com"
+    );
+    let log = e.ok(&["policy", "log", &e.name]);
+    assert!(log.contains("example.com"), "{log}");
+}
+
+#[test]
+#[ignore = "boots real VMs; run with `just e2e`"]
+fn ports_publish_live() {
+    use std::io::{Read, Write};
+    let e = E2e::new("port");
+    e.create_alpine();
+    smolvm(&[
+        "machine",
+        "exec",
+        "--name",
+        &e.machine(),
+        "-d",
+        "--",
+        "sh",
+        "-c",
+        "while true; do printf 'HTTP/1.0 200 OK\\r\\n\\r\\nhi-from-guest\\n' | nc -l -p 8000; done",
+    ]);
+    std::thread::sleep(std::time::Duration::from_secs(1));
+    let port = 18000 + (std::process::id() % 1000) as u16;
+    e.ok(&["ports", &e.name, "--publish", &format!("{port}:8000")]);
+    let mut stream =
+        std::net::TcpStream::connect(("127.0.0.1", port)).expect("published port accepts");
+    stream.write_all(b"GET / HTTP/1.0\r\n\r\n").unwrap();
+    let mut body = String::new();
+    stream.read_to_string(&mut body).unwrap();
+    assert!(body.contains("hi-from-guest"), "{body}");
+    e.ok(&["ports", &e.name, "--unpublish", &format!("{port}:8000")]);
+}
+
+#[test]
+#[ignore = "boots real VMs and needs httpbin.org; run with `just e2e`"]
+fn secrets_are_placeholders_in_the_guest() {
+    let e = E2e::new("sec");
+    e.ok(&["policy", "init", "balanced"]);
+    e.ok(&[
+        "secret",
+        "set-custom",
+        "--host",
+        "httpbin.org",
+        "--env",
+        "TOK",
+        "--command",
+        "printf real-secret-xyz",
+    ]);
+    e.create_alpine();
+    let seen = e.ok(&["exec", &e.name, "sh", "-c", "printf %s \"$TOK\""]);
+    assert!(seen.starts_with("SMOL_PLACEHOLDER_"), "{seen}");
+    smolvm(&[
+        "machine",
+        "exec",
+        "--name",
+        &e.machine(),
+        "-u",
+        "root",
+        "--",
+        "apk",
+        "add",
+        "-q",
+        "curl",
+    ]);
+    let echoed = e.ok(&[
+        "exec",
+        &e.name,
+        "sh",
+        "-c",
+        "curl -s -m 20 -H \"Authorization: Bearer $TOK\" https://httpbin.org/headers",
+    ]);
+    assert!(echoed.contains("Bearer real-secret-xyz"), "{echoed}");
 }
