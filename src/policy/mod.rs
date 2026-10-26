@@ -1,5 +1,7 @@
 //! sbx-compatible network policy: the mode and rules in `policy.toml`.
 
+pub mod compile;
+pub mod log;
 pub mod presets;
 pub mod rules;
 
