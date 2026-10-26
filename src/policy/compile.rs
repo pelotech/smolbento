@@ -20,12 +20,26 @@ fn resources(policy: &Policy, sandbox: &str, decision: Decision) -> Vec<Resource
         .collect()
 }
 
-/// An allow entry is dropped when a deny repeats it or matches its host.
+/// Whether `deny` covers every host under `domain` (at any depth when `any_depth`, else one
+/// label below it).
+fn covers(deny: &Resource, domain: &str, any_depth: bool) -> bool {
+    match &deny.pattern {
+        Pattern::Everything => true,
+        Pattern::Subdomains(p) => domain == p || domain.ends_with(&format!(".{p}")),
+        Pattern::OneLabel(p) => !any_depth && domain == p,
+        _ => false,
+    }
+}
+
+/// An allow entry is dropped when a deny repeats it or covers all it allows: an exact host the
+/// deny matches, or a wildcard's whole subtree.
 fn denied(allow: &Resource, denies: &[Resource]) -> bool {
     denies.iter().any(|d| {
         d.raw.eq_ignore_ascii_case(&allow.raw)
             || match &allow.pattern {
-                Pattern::Exact(h) | Pattern::Subdomains(h) => d.matches(h),
+                Pattern::Exact(h) => d.matches(h),
+                Pattern::Subdomains(h) => covers(d, h, true),
+                Pattern::OneLabel(h) | Pattern::Glob { parent: h, .. } => covers(d, h, false),
                 _ => false,
             }
     })
@@ -286,6 +300,29 @@ mod tests {
         );
         p.set_deny_network("s2", true);
         assert_eq!(list(&network(&p, "s2", &[])).patterns().len(), 0);
+    }
+
+    #[test]
+    fn a_deny_drops_a_wildcard_allow_only_when_it_covers_the_whole_subtree() {
+        let patterns = |allows: &str, denies: &str| {
+            let mut p = policy(Mode::DenyAll);
+            p.add_rule(None, Decision::Allow, allows, "added", None, None)
+                .unwrap();
+            p.add_rule(None, Decision::Deny, denies, "added", None, None)
+                .unwrap();
+            list(&network(&p, "s1", &[])).patterns().to_vec()
+        };
+        // The apex isn't the subtree.
+        assert_eq!(patterns("**.x.com", "x.com"), ["*.x.com"]);
+        assert_eq!(patterns("*.x.com", "x.com"), ["*.x.com"]);
+        // A one-label deny doesn't cover every depth.
+        assert_eq!(patterns("**.x.com", "*.x.com"), ["*.x.com"]);
+        assert!(patterns("**.a.x.com, api.x.com, *.b.x.com", "**.x.com").is_empty());
+        assert!(patterns("**.x.com", "**.X.com").is_empty());
+        assert!(patterns("*.x.com", "*.x.com").is_empty());
+        assert!(patterns("crl*.x.com", "**.x.com").is_empty());
+        assert_eq!(patterns("**.x.com", "**.a.x.com"), ["*.x.com"]);
+        assert_eq!(patterns("**.notx.com", "**.x.com"), ["*.notx.com"]);
     }
 
     #[test]
