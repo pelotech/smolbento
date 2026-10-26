@@ -131,10 +131,11 @@ pub fn stop<R: Runner>(ctx: &mut Ctx<R>, names: &[String]) -> Result<i32> {
     Ok(0)
 }
 
-fn remove<R: Runner>(ctx: &Ctx<R>, sb: &Sandbox) -> Result<()> {
+/// Deletes a sandbox and its per-sandbox policy; `forget_secrets` also drops its own secrets.
+fn remove<R: Runner>(ctx: &Ctx<R>, sb: &Sandbox, forget_secrets: bool) -> Result<()> {
     ctx.vm.delete(&sb.machine)?;
     session::clear(&ctx.paths.sessions(), sb.name());
-    super::secret::forget_sandbox(ctx, sb.name())?;
+    super::secret::forget_sandbox(ctx, sb.name(), forget_secrets)?;
     println!("Removed {}", sb.name());
     Ok(())
 }
@@ -158,7 +159,7 @@ pub fn rm<R: Runner>(ctx: &mut Ctx<R>, a: &RmArgs) -> Result<i32> {
     let names: Vec<&str> = targets.iter().map(Sandbox::name).collect();
     confirm(ctx, &format!("Remove {}?", names.join(", ")), a.force)?;
     for sb in &targets {
-        remove(ctx, sb)?;
+        remove(ctx, sb, true)?;
     }
     Ok(0)
 }
@@ -206,7 +207,7 @@ pub fn prune<R: Runner>(ctx: &mut Ctx<R>, a: &PruneArgs) -> Result<i32> {
         a.force,
     )?;
     for sb in &targets {
-        remove(ctx, sb)?;
+        remove(ctx, sb, true)?;
     }
     Ok(0)
 }
@@ -218,7 +219,7 @@ pub fn reset<R: Runner>(ctx: &mut Ctx<R>, a: &ResetArgs) -> Result<i32> {
         a.force,
     )?;
     for sb in sandbox::list(&ctx.vm)? {
-        remove(ctx, &sb)?;
+        remove(ctx, &sb, !a.preserve_secrets)?;
     }
     let _ = std::fs::remove_dir_all(ctx.paths.sessions());
     if !a.preserve_secrets {
@@ -582,5 +583,39 @@ mod tests {
             .filter(|l| l.contains("delete"))
             .count();
         assert_eq!(deletes, 2);
+    }
+
+    #[test]
+    fn reset_preserve_secrets_keeps_sandbox_scoped_secrets() {
+        use crate::policy::Policy;
+        use crate::secrets::{SecretEntry, SecretsFile, Source, scope_for};
+
+        let mut t = test_env(&[]);
+        let entry = SecretEntry {
+            service: "github".into(),
+            scope: scope_for(Some("a1")),
+            source: Source::Keychain,
+        };
+        t.ctx.store.set(&entry.account(), "gh-123").unwrap();
+        let mut f = SecretsFile::default();
+        f.set(entry.clone());
+        f.save(&t.ctx.paths).unwrap();
+        set_policy(
+            &t,
+            "mode = \"balanced\"\n[[sandboxes.a1.rules]]\nid = \"r-1\"\ndecision = \"allow\"\n\
+             resources = [\"a.com\"]\n",
+        );
+        t.ctx.vm.runner().ok(
+            &["machine", "ls", "--json"],
+            &format!("[{}]", json("sbx-a1", "stopped", "a1")),
+        );
+        sbt(&mut t.ctx, &["reset", "-f", "--preserve-secrets"]).unwrap();
+        let f = SecretsFile::load(&t.ctx.paths).unwrap();
+        assert_eq!(f.secrets, vec![entry.clone()]);
+        assert_eq!(
+            t.ctx.store.get(&entry.account()).unwrap().as_deref(),
+            Some("gh-123")
+        );
+        assert!(Policy::load(&t.ctx.paths).unwrap().sandboxes.is_empty());
     }
 }

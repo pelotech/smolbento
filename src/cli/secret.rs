@@ -257,12 +257,14 @@ fn rm<R: Runner>(ctx: &Ctx<R>, file: &mut SecretsFile, a: SecretRmArgs) -> Resul
     Ok(())
 }
 
-/// `sbt rm`: forget a sandbox's own secrets and policy.
-pub fn forget_sandbox<R: Runner>(ctx: &Ctx<R>, name: &str) -> Result<()> {
-    let mut file = SecretsFile::load(&ctx.paths)?;
-    let gone = file.remove_sandbox(name);
-    forget(ctx, &gone)?;
-    file.save(&ctx.paths)?;
+/// `sbt rm`: forget a sandbox's policy and, with `secrets`, its own secrets.
+pub fn forget_sandbox<R: Runner>(ctx: &Ctx<R>, name: &str, secrets: bool) -> Result<()> {
+    if secrets {
+        let mut file = SecretsFile::load(&ctx.paths)?;
+        let gone = file.remove_sandbox(name);
+        forget(ctx, &gone)?;
+        file.save(&ctx.paths)?;
+    }
     let mut policy = Policy::load(&ctx.paths)?;
     policy.forget_sandbox(name);
     policy.save(&ctx.paths)
