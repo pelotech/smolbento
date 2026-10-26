@@ -107,19 +107,28 @@ fn custom_hosts(raw: &[String]) -> Result<Vec<String>> {
         let host = r.trim().to_ascii_lowercase();
         let unbracketed = host.trim_start_matches('[').trim_end_matches(']');
         if unbracketed.parse::<std::net::IpAddr>().is_ok() {
-            bail!(
-                "'{r}' is an IP address; a secret needs a host name, because smolvm substitutes \
-                 it only in TLS requests to that name"
-            );
+            bail!("'{r}': smolvm only substitutes secrets for host names, not IP addresses");
         }
         if host.contains("://") || host.contains([':', '/', '@', ',']) {
             bail!("'{r}': use a bare host name like api.x.com (no scheme, port or path)");
         }
-        if host.contains(['*', '?', '[', ']']) {
-            bail!("'{r}': secret hosts can't have wildcards; pass each host with its own --host");
+        // smolvm takes `*.domain` (every subdomain, not the domain itself) and no other wildcard.
+        let (prefix, name) = match host.strip_prefix("*.") {
+            Some(name) => ("*.", name),
+            None => ("", host.as_str()),
+        };
+        if name.contains(['*', '?', '[', ']']) {
+            bail!(
+                "'{r}': the only wildcard a secret host takes is a leading `*.`, like *.x.com \
+                 (every subdomain of x.com)"
+            );
         }
-        crate::policy::rules::check_host(&host, r)?;
-        let host = host.strip_suffix('.').unwrap_or(&host).to_string();
+        crate::policy::rules::check_host(name, r)?;
+        let name = name.strip_suffix('.').unwrap_or(name);
+        if !prefix.is_empty() && !name.contains('.') {
+            bail!("'{r}': a wildcard needs a domain below the top level, like *.x.com");
+        }
+        let host = format!("{prefix}{name}");
         if !hosts.contains(&host) {
             hosts.push(host);
         }
@@ -131,7 +140,8 @@ fn custom_hosts(raw: &[String]) -> Result<Vec<String>> {
 /// that create. Only a warning here: the user may be offline.
 fn warn_unresolved(hosts: &[String]) {
     use std::net::ToSocketAddrs;
-    for host in hosts {
+    // `*.x` names no single host to look up.
+    for host in hosts.iter().filter(|h| !h.starts_with("*.")) {
         if (host.as_str(), 443).to_socket_addrs().is_err() {
             eprintln!(
                 "warning: {host} doesn't resolve right now; sandboxes created with this secret \
@@ -483,11 +493,18 @@ mod tests {
             ("api.x.com:443", "use a bare host name like api.x.com"),
             ("tok@api.x.com", "use a bare host name like api.x.com"),
             ("a.com,b.com", "use a bare host name like api.x.com"),
-            ("*.x.com", "wildcards"),
-            ("api.?.com", "wildcards"),
-            ("10.0.0.1", "IP address"),
-            ("::1", "IP address"),
-            ("[::1]", "IP address"),
+            ("*", "wildcard"),
+            ("*.com", "wildcard"),
+            ("**.x.com", "wildcard"),
+            ("api.*.com", "wildcard"),
+            ("api.?.com", "wildcard"),
+            ("*.-x.com", "invalid host"),
+            (
+                "10.0.0.1",
+                "smolvm only substitutes secrets for host names, not IP addresses",
+            ),
+            ("::1", "not IP addresses"),
+            ("[::1]", "not IP addresses"),
             ("-bad.x.com", "invalid host"),
             ("a..com", "invalid host"),
             ("", "invalid host"),
@@ -528,9 +545,11 @@ mod tests {
                 "api.x.com.".to_string(),
                 "b.x.com".to_string(),
                 "api.x.com".to_string(),
+                "*.Notion.com".to_string(),
+                "*.notion.com".to_string(),
             ])
             .unwrap(),
-            vec!["api.x.com", "b.x.com"]
+            vec!["api.x.com", "b.x.com", "*.notion.com"]
         );
     }
 

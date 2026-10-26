@@ -220,12 +220,11 @@ fn guard_bound_secrets<R: Runner>(
         .iter()
         .filter(|s| scope.is_none_or(|n| n == s.name()))
     {
-        let Some(host) = sb
-            .meta
-            .credential_hosts
-            .iter()
-            .find(|h| denies.iter().any(|d| d.matches(h)))
-        else {
+        let Some(host) = sb.meta.credential_hosts.iter().find(|h| {
+            denies
+                .iter()
+                .any(|d| compile::deny_reaches_credential_host(d, h))
+        }) else {
             continue;
         };
         let service = sb
@@ -574,6 +573,24 @@ mod tests {
         f.save(&t.ctx.paths).unwrap();
         let err = sbt(&mut t.ctx, &["policy", "deny", "network", "api.github.com"]).unwrap_err();
         assert!(err.to_string().contains("github secret"), "{err}");
+    }
+
+    #[test]
+    fn deny_refuses_hosts_under_a_wildcard_secret_host() {
+        let mut t = test_env(&[]);
+        running(
+            &t,
+            &[
+                ("sbx.name", "a1"),
+                ("sbx.secrets", "notion-token"),
+                ("sbx.credential-hosts", "*.notion.com"),
+            ],
+        );
+        for deny in ["api.notion.com", "**.notion.com", "*.notion.com"] {
+            let err = sbt(&mut t.ctx, &["policy", "deny", "network", deny]).unwrap_err();
+            assert!(err.to_string().contains("can't deny *.notion.com"), "{err}");
+        }
+        sbt(&mut t.ctx, &["policy", "deny", "network", "notion.com"]).unwrap();
     }
 
     #[test]

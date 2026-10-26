@@ -74,9 +74,45 @@ pub fn network(policy: &Policy, sandbox: &str, credential_hosts: &[String]) -> N
             Allow::Everything => {}
         }
     }
-    // Credential hosts stay `--allow-host`, as before: they must resolve for the secret to work.
-    let hosts = credential_hosts.iter().cloned();
+    // Exact credential hosts stay `--allow-host`, as before: they must resolve for the secret to
+    // work. A `*.x` one can't be resolved, so it's the pattern smolvm wants for it.
+    let (wild, hosts): (Vec<String>, Vec<String>) = credential_hosts
+        .iter()
+        .cloned()
+        .partition(|h| h.starts_with("*."));
+    patterns.extend(wild);
     NetworkSpec::Restricted(AllowList::new(hosts, patterns, cidrs))
+}
+
+/// Whether `host` is a subdomain (at any depth) of `domain`.
+fn under(host: &str, domain: &str) -> bool {
+    host.strip_suffix(domain)
+        .is_some_and(|p| p.len() > 1 && p.ends_with('.'))
+}
+
+/// Whether a bound credential host admits `host`: an exact one (`--allow-host`) the host and its
+/// subdomains, a `*.x` one (a pattern) only the subdomains of x.
+fn credential_admits(cred: &str, host: &str) -> bool {
+    let cred = cred.to_ascii_lowercase();
+    match cred.strip_prefix("*.") {
+        Some(domain) => under(host, domain),
+        None => host == cred || under(host, &cred),
+    }
+}
+
+/// Whether `deny` names a host a bound credential host keeps reachable, so it can't be honoured.
+/// For `*.x`, any deny that matches some host under x does.
+pub fn deny_reaches_credential_host(deny: &Resource, cred: &str) -> bool {
+    let Some(x) = cred.strip_prefix("*.") else {
+        return deny.matches(cred);
+    };
+    match &deny.pattern {
+        Pattern::Everything => true,
+        Pattern::Exact(h) => under(h, x),
+        Pattern::Subdomains(p) => p == x || under(p, x) || under(x, p),
+        Pattern::OneLabel(p) | Pattern::Glob { parent: p, .. } => p == x || under(p, x),
+        Pattern::Cidr { .. } => false,
+    }
 }
 
 /// Deny CIDRs for `machine create` (smolvm accepts them at create only), sorted and unique.
@@ -149,11 +185,7 @@ pub fn check(
     target: &str,
 ) -> Verdict {
     let host = target.trim().to_ascii_lowercase();
-    // smolvm's `--allow-host` also admits subdomains.
-    if credential_hosts.iter().any(|h| {
-        let h = h.to_ascii_lowercase();
-        host == h || host.ends_with(&format!(".{h}"))
-    }) {
+    if credential_hosts.iter().any(|h| credential_admits(h, &host)) {
         return verdict(true, "a secret bound to this sandbox uses this host");
     }
     // No sandbox: compile with the global rules only (an empty name has no per-sandbox entry).
@@ -474,5 +506,53 @@ mod tests {
         assert!(v.allowed && v.reason.contains("secret"), "{}", v.reason);
         let v = check(&policy(Mode::DenyAll), Some("s1"), &bound, "notgithub.com");
         assert!(!v.allowed, "{}", v.reason);
+    }
+
+    #[test]
+    fn wildcard_credential_hosts_are_patterns() {
+        let bound = ["*.notion.com".to_string(), "api.y.example".to_string()];
+        let spec = network(&policy(Mode::DenyAll), "s1", &bound);
+        let l = list(&spec);
+        assert_eq!(l.hosts(), ["api.y.example"]);
+        assert!(l.patterns().contains(&"*.notion.com".to_string()));
+        assert!(!l.hosts().iter().any(|h| h.contains('*')));
+    }
+
+    #[test]
+    fn wildcard_credential_hosts_cover_subdomains_only() {
+        let bound = ["*.notion.com".to_string()];
+        let v = check(&policy(Mode::DenyAll), Some("s1"), &bound, "api.notion.com");
+        assert!(v.allowed && v.reason.contains("secret"), "{}", v.reason);
+        let v = check(&policy(Mode::DenyAll), Some("s1"), &bound, "a.b.notion.com");
+        assert!(v.allowed && v.reason.contains("secret"), "{}", v.reason);
+        let v = check(&policy(Mode::DenyAll), Some("s1"), &bound, "notion.com");
+        assert!(!v.allowed, "the apex isn't covered: {}", v.reason);
+        let spec = network(&policy(Mode::DenyAll), "s1", &bound);
+        assert!(admits(&spec, "api.notion.com", false).is_some());
+        assert!(admits(&spec, "notion.com", false).is_none());
+    }
+
+    #[test]
+    fn denies_that_reach_a_credential_host() {
+        let hits = |deny: &str, cred: &str| {
+            deny_reaches_credential_host(&Resource::parse(deny).unwrap(), cred)
+        };
+        for deny in [
+            "api.notion.com",
+            "a.b.notion.com",
+            "*.notion.com",
+            "**.notion.com",
+            "**.com",
+            "*.api.notion.com",
+            "crl*.notion.com",
+            "**",
+        ] {
+            assert!(hits(deny, "*.notion.com"), "{deny}");
+        }
+        for deny in ["notion.com", "*.com", "api.other.com", "10.0.0.0/8"] {
+            assert!(!hits(deny, "*.notion.com"), "{deny}");
+        }
+        assert!(hits("api.github.com", "api.github.com"));
+        assert!(!hits("github.com", "api.github.com"));
     }
 }

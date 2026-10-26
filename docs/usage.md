@@ -169,9 +169,10 @@ sbt secret rm github
 Values typed at the prompt or given with `-t` go to your OS keychain; see
 [Configuration](configuration.md#secret-values).
 
-`set-custom` takes bare host names (`api.example.com`, no scheme, port, path, wildcard or IP;
-repeat `--host` for more) and warns when one doesn't resolve: smolvm looks the hosts up when it
-creates a sandbox, and the create fails while one doesn't resolve.
+`set-custom` takes bare host names (`api.example.com`, no scheme, port, path or IP; repeat
+`--host` for more), or `*.example.com` for every subdomain of a domain. It warns when a host name
+doesn't resolve: smolvm looks them up when it creates a sandbox, and the create fails while one
+doesn't resolve.
 
 Built-in services: `anthropic`, `claude` (Claude Code's `claude setup-token` token), `cursor`,
 `droid`, `github`, `google`, `groq`, `mistral`, `nebius`, `openai`, `openrouter`, `xai`.
