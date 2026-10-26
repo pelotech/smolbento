@@ -1,0 +1,61 @@
+# Lifecycle
+run claude
+run claude .
+run claude ~/proj ~/docs:ro
+run --name my-sandbox
+run -d claude .
+run --rm shell .
+run codex . -- --model o3
+run claude . --cpus 4 -m 8g
+run claude . -e FOO=bar --env-file .env
+run claude . -p 8080:80 -p 127.0.0.1:3000:3000/tcp
+run claude . -t docker/sandbox-templates:claude-code
+run claude . --clone
+run claude . --kit ghcr.io/example/kit:1 --kit-arg key=value
+run claude . --skills off
+run claude . --static-mcp github,linear
+run claude . --deny-network
+create claude .
+create shell
+create --name dev gemini . --no-progress
+exec my-sandbox ls -la
+exec -it my-sandbox bash
+exec -u root -w /tmp -e A=1 my-sandbox env
+exec --privileged my-sandbox id
+ls
+ls --json
+ls --format yaml
+ls -q
+start my-sandbox
+stop my-sandbox other
+rm my-sandbox
+rm --all -f
+prune --dry-run --filter until=24h
+reset -f --preserve-secrets
+cp ./file my-sandbox:/tmp/file
+cp -L my-sandbox:/etc/hosts ./hosts
+# Later phases (must parse; exit 2 for now)
+ports my-sandbox --publish 8080:80
+policy init balanced
+policy allow network api.example.com,*.npmjs.org
+policy ls --wide
+policy log
+secret set anthropic -t sk-test
+secret set github --command "gh auth token"
+secret ls
+kit inspect ghcr.io/example/kit:1
+mcp add linear --url https://mcp.linear.app/sse
+template ls
+env run
+setup ssh
+tui
+# Native
+settings ls
+settings set docker.enabled false
+daemon status
+version
+completion zsh
+diagnose
+# Docker Cloud (parse; exit 2)
+login
+move my-sandbox --to cloud

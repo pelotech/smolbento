@@ -1,0 +1,52 @@
+name: build
+permissions:
+  contents: read
+on:
+  pull_request:
+    branches:
+      - main
+  push:
+    branches:
+      - main
+  workflow_dispatch:
+    inputs:
+      macos:
+        description: Also run on macOS (macOS minutes are expensive)
+        type: boolean
+        default: false
+
+jobs:
+  test:
+    strategy:
+      fail-fast: false
+      matrix:
+        runner: [ubuntu-latest, ubuntu-24.04-arm]
+    runs-on: ${{ matrix.runner }}
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      - uses: $/.github/actions/nix-devshell
+        with:
+          gh-token: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: Build
+        run: just build
+      - name: Test
+        run: just test
+
+  test-macos:
+    if: ${{ github.event_name == 'workflow_dispatch' && inputs.macos }}
+    runs-on: macos-latest
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      - uses: $/.github/actions/nix-devshell
+        with:
+          gh-token: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: Build
+        run: just build
+      - name: Test
+        run: just test

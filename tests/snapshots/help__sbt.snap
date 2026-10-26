@@ -1,0 +1,45 @@
+---
+source: tests/help.rs
+expression: help(&path)
+---
+Docker Sandboxes (sbx) compatible agent sandboxes on smolvm microVMs
+
+Usage: sbt [OPTIONS] [COMMAND]
+
+Commands:
+  run         Create a sandbox if needed and attach to its agent
+  create      Create and start a sandbox
+  exec        Run a command in a sandbox
+  ls          List sandboxes
+  start       Start stopped sandboxes
+  stop        Stop sandboxes, keeping their state
+  rm          Remove sandboxes
+  prune       Remove stopped sandboxes
+  reset       Remove every sandbox and smolbento's session state
+  cp          Copy files between the host and a sandbox
+  version     Show smolbento and smolvm versions
+  completion  Generate shell completions
+  diagnose    Check smolbento's environment
+  settings    Read and change settings
+  daemon      Accepted for sbx compatibility; smolbento needs no daemon
+  ports       Publish or unpublish ports (not implemented yet)
+  policy      Network policy (not implemented yet)
+  secret      Secrets (not implemented yet)
+  kit         Kits (not implemented yet)
+  mcp         MCP servers (not implemented yet)
+  env         sbxenv.yaml environments (not implemented yet)
+  template    Sandbox templates (not implemented yet)
+  skills      Agent skills (not implemented yet)
+  setup       SSH access (not implemented yet)
+  tui         Dashboard (not implemented yet)
+  help        Print this message or the help of the given subcommand(s)
+
+Options:
+  -D, --debug
+          Print each smolvm command line
+
+  -h, --help
+          Print help
+
+  -V, --version
+          Print version

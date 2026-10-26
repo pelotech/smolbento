@@ -1,0 +1,24 @@
+---
+source: tests/help.rs
+expression: help(&path)
+---
+Remove sandboxes
+
+Usage: sbt rm [OPTIONS] [SANDBOXES]...
+
+Arguments:
+  [SANDBOXES]...
+
+
+Options:
+      --all
+          Remove every sandbox
+
+  -D, --debug
+          Print each smolvm command line
+
+  -f, --force
+          Don't ask for confirmation
+
+  -h, --help
+          Print help

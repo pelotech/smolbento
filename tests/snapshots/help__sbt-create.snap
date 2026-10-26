@@ -1,0 +1,60 @@
+---
+source: tests/help.rs
+expression: help(&path)
+---
+Create and start a sandbox
+
+Usage: sbt create [OPTIONS] <TARGETS>...
+
+Arguments:
+  <TARGETS>...
+          Agent, then workspace paths (none: a mountless sandbox)
+
+Options:
+  -D, --debug
+          Print each smolvm command line
+
+      --name <NAME>
+          Sandbox name (default: <agent>-<workspace basename>)
+
+      --cpus <CPUS>
+          Number of CPUs (0 = all host CPUs)
+
+  -m, --memory <MEMORY>
+          Memory, e.g. 4g (default: half of host memory, 512MiB to 32GiB)
+
+  -e, --env <ENV>
+          Environment variable: KEY=VALUE, or KEY to copy the host's value
+
+      --env-file <ENV_FILE>
+          Read environment variables from a file
+
+  -p, --publish <PUBLISH>
+          Publish a port: [[IP:]HOST:]PORT[/proto]
+
+  -t, --template <TEMPLATE>
+          Image to use instead of the agent's template
+
+      --pull <PULL>
+          Image pull policy (only `missing` is supported)
+
+      --clone
+          Work on a private clone of the git repo (not implemented yet)
+
+      --kit <KIT>
+          Add a kit (not implemented yet)
+
+      --deny-network
+          Deny network access for this sandbox (not implemented yet)
+
+      --skills <SKILLS>
+          Agent skills: off, readonly or readwrite (not implemented yet)
+
+      --static-mcp <STATIC_MCP>
+          Static MCP servers (not implemented yet)
+
+      --no-progress
+          Accepted for sbx compatibility
+
+  -h, --help
+          Print help

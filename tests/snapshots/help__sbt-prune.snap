@@ -1,0 +1,23 @@
+---
+source: tests/help.rs
+expression: help(&path)
+---
+Remove stopped sandboxes
+
+Usage: sbt prune [OPTIONS]
+
+Options:
+  -D, --debug
+          Print each smolvm command line
+
+      --dry-run
+          Show what would be removed
+
+      --filter <FILTER>
+          Filter: until=<timestamp|duration>
+
+  -f, --force
+          Don't ask for confirmation
+
+  -h, --help
+          Print help

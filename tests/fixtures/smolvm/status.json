@@ -1,0 +1,20 @@
+{
+  "cpus": 4,
+  "created_at": 1793026356,
+  "image": "docker/sandbox-templates:claude-code-docker-0.10.0",
+  "labels": {
+    "sbx.agent": "claude",
+    "sbx.created": "1793026356",
+    "sbx.docker": "true",
+    "sbx.name": "claude-myrepo",
+    "sbx.workspace": "/Users/dev/myrepo",
+    "sbx.workspaces": "[\"/Users/dev/myrepo\"]"
+  },
+  "name": "sbx-claude-myrepo",
+  "pid": 4562,
+  "ports": 1,
+  "published_ports": [
+    { "guest": 80, "guest_listening": "not-listening", "host": 18080 }
+  ],
+  "state": "running"
+}

@@ -1,0 +1,8 @@
+/target
+/dist
+.direnv/
+.idea/
+
+# Design notes, specs and plans: local only for now
+docs/superpowers/
+.superpowers/

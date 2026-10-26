@@ -1,0 +1,18 @@
+site_name: smolbento
+site_description: Docker Sandboxes (sbx) compatible agent sandboxes on smolvm microVMs.
+nav:
+  - Home: README.md
+  - Install: install.md
+  - Usage: usage.md
+  - Configuration: configuration.md
+  - sbx compatibility: sbx-compatibility.md
+  - Troubleshooting: troubleshooting.md
+  - Architecture: architecture.md
+  - Security: SECURITY.md
+  - Development: development.md
+  - Development status: development-status.md
+  - Contributing: CONTRIBUTING.md
+
+plugins:
+  - techdocs-core
+  - monorepo

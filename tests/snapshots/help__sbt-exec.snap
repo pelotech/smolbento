@@ -1,0 +1,45 @@
+---
+source: tests/help.rs
+expression: help(&path)
+---
+Run a command in a sandbox
+
+Usage: sbt exec [OPTIONS] <SANDBOX> <COMMAND>...
+
+Arguments:
+  <SANDBOX>
+
+
+  <COMMAND>...
+
+
+Options:
+  -D, --debug
+          Print each smolvm command line
+
+  -i, --interactive
+          Keep stdin open
+
+  -t, --tty
+          Allocate a terminal
+
+  -e, --env <ENV>
+          Environment variable: KEY=VALUE, or KEY to copy the host's value
+
+      --env-file <ENV_FILE>
+          Read environment variables from a file
+
+  -u, --user <USER>
+          User to run as (default: agent)
+
+  -w, --workdir <WORKDIR>
+          Working directory (default: the primary workspace)
+
+      --privileged
+          Run as root
+
+  -d, --detach
+          Not supported (as in sbx)
+
+  -h, --help
+          Print help

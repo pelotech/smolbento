@@ -1,0 +1,12 @@
+apiVersion: backstage.io/v1alpha1
+kind: Component
+metadata:
+  name: smolbento
+  description: Docker Sandboxes (sbx) compatible agent sandboxes on smolvm microVMs.
+  annotations:
+    github.com/project-slug: pelotech/smolbento
+    backstage.io/techdocs-ref: dir:.
+spec:
+  type: tool
+  owner: group:pelotech/leads
+  lifecycle: experimental

@@ -1,0 +1,27 @@
+---
+source: src/cli/ls.rs
+expression: "render(&sample(), Format::Json, false, 1_000_000).unwrap()"
+---
+[
+  {
+    "name": "claude-myrepo",
+    "agent": "claude",
+    "status": "running",
+    "ports": [
+      {
+        "host": 18080,
+        "guest": 80
+      }
+    ],
+    "workspace": "/Users/dev/myrepo",
+    "created_at": "1970-01-12T13:46:38Z"
+  },
+  {
+    "name": "shell-scratch",
+    "agent": "claude",
+    "status": "stopped",
+    "ports": [],
+    "workspace": null,
+    "created_at": "1970-01-11T10:00:00Z"
+  }
+]

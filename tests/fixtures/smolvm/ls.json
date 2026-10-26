@@ -1,0 +1,34 @@
+[
+  {
+    "block_io": "sync",
+    "cmd": ["sleep", "infinity"],
+    "cpus": 4,
+    "created_at": 1793026356,
+    "image": "docker/sandbox-templates:claude-code-docker-0.10.0",
+    "labels": {
+      "sbx.agent": "claude",
+      "sbx.created": "1793026356",
+      "sbx.docker": "true",
+      "sbx.name": "claude-myrepo",
+      "sbx.workspace": "/Users/dev/myrepo",
+      "sbx.workspaces": "[\"/Users/dev/myrepo\"]"
+    },
+    "memory_mib": 8192,
+    "name": "sbx-claude-myrepo",
+    "network": true,
+    "pid": 4562,
+    "ports": 1,
+    "state": "running"
+  },
+  {
+    "cpus": 2,
+    "created_at": 1793020000,
+    "image": "alpine",
+    "labels": {},
+    "memory_mib": 1024,
+    "name": "someone-elses-vm",
+    "pid": null,
+    "ports": 0,
+    "state": "stopped"
+  }
+]

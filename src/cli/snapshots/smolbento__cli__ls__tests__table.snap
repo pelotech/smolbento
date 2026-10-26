@@ -1,0 +1,7 @@
+---
+source: src/cli/ls.rs
+expression: "render(&sample(), Format::Table, false, 1_000_000).unwrap()"
+---
+SANDBOX         AGENT    STATUS      PORTS                 WORKSPACE           CREATED
+claude-myrepo   claude   ● running   127.0.0.1:18080->80   /Users/dev/myrepo   2s
+shell-scratch   claude   ○ stopped                         -                   1d

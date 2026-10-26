@@ -1,0 +1,24 @@
+---
+source: tests/help.rs
+expression: help(&path)
+---
+Copy files between the host and a sandbox
+
+Usage: sbt cp [OPTIONS] <SRC> <DST>
+
+Arguments:
+  <SRC>
+
+
+  <DST>
+
+
+Options:
+  -D, --debug
+          Print each smolvm command line
+
+  -L, --follow-link
+          Follow symbolic links in the host source
+
+  -h, --help
+          Print help
