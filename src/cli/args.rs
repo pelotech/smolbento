@@ -535,7 +535,8 @@ pub struct PolicyLsArgs {
     pub quiet: bool,
     #[arg(long, hide = true)]
     pub source: Option<String>,
-    #[arg(long, hide = true)]
+    /// Only allow or only deny rules
+    #[arg(long, value_name = "allow|deny")]
     pub decision: Option<String>,
     #[arg(long = "created-via", hide = true)]
     pub created_via: Option<String>,

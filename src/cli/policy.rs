@@ -50,6 +50,26 @@ pub fn run<R: Runner>(ctx: &mut Ctx<R>, cmd: PolicyCmd) -> Result<i32> {
             plan::push_network(ctx)?;
         }
         PolicyCmd::Ls(a) => {
+            for (flag, set) in [
+                ("--source", a.source.is_some()),
+                ("--created-via", a.created_via.is_some()),
+                ("--type", a.kind.is_some()),
+                ("--protocol", a.protocol.is_some()),
+                ("--include-inactive", a.include_inactive),
+            ] {
+                if set {
+                    return Err(Unsupported(format!(
+                        "`sbt policy ls {flag}` is not implemented yet"
+                    ))
+                    .into());
+                }
+            }
+            let decision = match a.decision.as_deref() {
+                None => None,
+                Some("allow") => Some(Decision::Allow),
+                Some("deny") => Some(Decision::Deny),
+                Some(other) => bail!("--decision takes allow or deny, not '{other}'"),
+            };
             let format = if a.json {
                 Format::Json
             } else {
@@ -57,7 +77,14 @@ pub fn run<R: Runner>(ctx: &mut Ctx<R>, cmd: PolicyCmd) -> Result<i32> {
             };
             print!(
                 "{}",
-                render_ls(&policy, a.sandbox.as_deref(), a.wide, format, a.quiet)?
+                render_ls(
+                    &policy,
+                    a.sandbox.as_deref(),
+                    a.wide,
+                    format,
+                    a.quiet,
+                    decision
+                )?
             );
         }
         PolicyCmd::Inspect { id, json } => {
@@ -311,6 +338,10 @@ fn approval<R: Runner>(ctx: &Ctx<R>, policy: &mut Policy, cmd: ApprovalCmd) -> R
 }
 
 fn check<R: Runner>(ctx: &Ctx<R>, policy: &Policy, a: &CheckArgs) -> Result<i32> {
+    // --verbose is accepted as is: the deciding reason is always printed.
+    if a.protocol.as_deref().is_some_and(|p| p != "tcp") {
+        return Err(Unsupported("only tcp network rules are supported".into()).into());
+    }
     let bound = match &a.sandbox {
         Some(n) => sandbox::find(&ctx.vm, n)
             .ok()
@@ -345,6 +376,7 @@ pub fn render_ls(
     wide: bool,
     format: Format,
     quiet: bool,
+    decision: Option<Decision>,
 ) -> Result<String> {
     let mut rows = Vec::new();
     if policy.mode == Some(Mode::Balanced) {
@@ -391,6 +423,9 @@ pub fn render_ls(
             resources: rule.resources.clone(),
             notes,
         });
+    }
+    if let Some(d) = decision {
+        rows.retain(|r| r.decision == d.name());
     }
     if quiet {
         return Ok(rows.iter().map(|r| format!("{}\n", r.id)).collect());
@@ -554,7 +589,77 @@ mod tests {
             None,
         )
         .unwrap();
-        insta::assert_snapshot!(render_ls(&p, None, true, Format::Table, false).unwrap());
+        insta::assert_snapshot!(render_ls(&p, None, true, Format::Table, false, None).unwrap());
+    }
+
+    #[test]
+    fn ls_filters_by_decision_and_refuses_unimplemented_filters() {
+        let mut p = Policy {
+            mode: Some(Mode::Balanced),
+            ..Default::default()
+        };
+        p.add_rule(None, Decision::Allow, "api.x.com", "added", None, None)
+            .unwrap();
+        let deny = p
+            .add_rule(None, Decision::Deny, "evil.com", "added", None, None)
+            .unwrap();
+        assert_eq!(
+            render_ls(&p, None, false, Format::Table, true, Some(Decision::Deny)).unwrap(),
+            format!("{deny}\n")
+        );
+        let allows =
+            render_ls(&p, None, false, Format::Table, true, Some(Decision::Allow)).unwrap();
+        assert!(
+            !allows.contains(&deny) && allows.lines().count() > 1,
+            "{allows}"
+        );
+
+        let mut t = test_env(&[]);
+        p.save(&t.ctx.paths).unwrap();
+        assert_eq!(
+            sbt(&mut t.ctx, &["policy", "ls", "--decision", "deny", "-q"]).unwrap(),
+            0
+        );
+        assert!(sbt(&mut t.ctx, &["policy", "ls", "--decision", "maybe"]).is_err());
+        for flag in [
+            &["--source", "local"][..],
+            &["--created-via", "added"],
+            &["--type", "network"],
+            &["--protocol", "tcp"],
+            &["--include-inactive"],
+        ] {
+            let args: Vec<&str> = ["policy", "ls"].iter().chain(flag).copied().collect();
+            let err = sbt(&mut t.ctx, &args).unwrap_err();
+            assert_eq!(super::super::exit_code(&err), 2, "{flag:?}: {err}");
+            assert!(err.to_string().contains("not implemented yet"), "{err}");
+        }
+    }
+
+    #[test]
+    fn check_refuses_other_protocols_and_accepts_verbose() {
+        let mut t = test_env(&[]);
+        let err = sbt(
+            &mut t.ctx,
+            &["policy", "check", "network", "x.com", "--protocol", "udp"],
+        )
+        .unwrap_err();
+        assert_eq!(super::super::exit_code(&err), 2);
+        assert_eq!(
+            sbt(
+                &mut t.ctx,
+                &[
+                    "policy",
+                    "check",
+                    "network",
+                    "x.com",
+                    "--protocol",
+                    "tcp",
+                    "--verbose"
+                ],
+            )
+            .unwrap(),
+            0
+        );
     }
 
     #[test]

@@ -15,6 +15,7 @@ does nothing: smolbento has no daemon.
 | Command or flag | Planned |
 |---|---|
 | `policy refresh`, `secret import`, `secret set --oauth/--registry/--refresh` | Not implemented |
+| `policy ls --source/--created-via/--type/--protocol/--include-inactive`, `policy check --protocol` other than `tcp` | Not implemented (`policy ls --decision` works) |
 | `run/create --clone` | Later |
 | `--kit`, `kit`, `env` (sbxenv.yaml) | Later |
 | `template`, `setup ssh`, `mcp`, `--static-mcp`, `--skills`, `skills` | Later |

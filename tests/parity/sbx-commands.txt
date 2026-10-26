@@ -38,6 +38,7 @@ cp -L my-sandbox:/etc/hosts ./hosts
 policy init balanced
 policy allow network api.example.com,*.npmjs.org
 policy ls --wide
+policy ls --decision deny
 policy log
 policy log my-sandbox --limit 20 --json
 policy approval ls
