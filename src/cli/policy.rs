@@ -656,8 +656,14 @@ mod tests {
             source: Source::Keychain,
         });
         f.save(&t.ctx.paths).unwrap();
-        let err = sbt(&mut t.ctx, &["policy", "deny", "network", "api.github.com"]).unwrap_err();
-        assert!(err.to_string().contains("github secret"), "{err}");
+        for deny in ["api.github.com", "foo.api.github.com"] {
+            let err = sbt(&mut t.ctx, &["policy", "deny", "network", deny]).unwrap_err();
+            assert!(err.to_string().contains("github secret"), "{deny}: {err}");
+        }
+        // Never applied, so accepted (with a stderr note).
+        for deny in ["api.github.com:8080", "foo.api.github.com:8080"] {
+            sbt(&mut t.ctx, &["policy", "deny", "network", deny]).unwrap();
+        }
     }
 
     #[test]

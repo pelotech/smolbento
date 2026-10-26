@@ -108,8 +108,12 @@ fn credential_admits(cred: &str, host: &str) -> bool {
 /// Whether `deny` names a host a bound credential host keeps reachable, so it can't be honoured.
 /// For `*.x`, any deny that matches some host under x does. An exact one is `--allow-host`, which
 /// smolvm widens to its subdomains: a deny matching the host or any host under it does (a deny
-/// of a parent domain alone doesn't reach it).
+/// of a parent domain alone doesn't reach it). A deny with a port is never applied (see
+/// `denied`), so it reaches nothing.
 pub fn deny_reaches_credential_host(deny: &Resource, cred: &str) -> bool {
+    if deny.port.is_some() {
+        return false;
+    }
     let cred = cred.to_ascii_lowercase();
     match cred.strip_prefix("*.") {
         Some(x) => reaches_under(deny, x),
@@ -670,6 +674,24 @@ mod tests {
         }
         assert!(hits("api.github.com", "api.github.com"));
         assert!(!hits("github.com", "api.github.com"));
+    }
+
+    #[test]
+    fn port_scoped_denies_never_reach_a_credential_host() {
+        // They're never applied, so they can't take a bound secret's host away.
+        let hits = |deny: &str, cred: &str| {
+            deny_reaches_credential_host(&Resource::parse(deny).unwrap(), cred)
+        };
+        for deny in [
+            "api.github.com:8080",
+            "foo.api.github.com:8080",
+            "**.github.com:443",
+        ] {
+            assert!(!hits(deny, "api.github.com"), "{deny}");
+        }
+        assert!(!hits("api.notion.com:8080", "*.notion.com"));
+        assert!(hits("api.github.com", "api.github.com"));
+        assert!(hits("foo.api.github.com", "api.github.com"));
     }
 
     #[test]
