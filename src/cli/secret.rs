@@ -98,7 +98,7 @@ fn set<R: Runner>(
     let scope = scope_for(src.sandbox.as_deref());
     let source = if let Some(r) = src.reference {
         if !(r.starts_with("op://") || r.starts_with("arn:aws:secretsmanager:")) {
-            bail!("unsupported reference '{r}' (use op://… or an AWS Secrets Manager ARN)");
+            bail!("unsupported reference (use op://… or an AWS Secrets Manager ARN)");
         }
         Source::Ref { reference: r }
     } else if let Some(c) = src.command {
@@ -119,6 +119,14 @@ fn set<R: Runner>(
         ctx.store.set(&entry.account(), &value)?;
         Source::Keychain
     };
+    if source != Source::Keychain
+        && let Some(old) = file
+            .secrets
+            .iter()
+            .find(|e| e.service == service && e.scope == scope)
+    {
+        forget(ctx, std::slice::from_ref(old))?;
+    }
     let described = match &source {
         Source::Keychain => format!("stored in {}", ctx.store.describe()),
         other => other.describe(),
@@ -159,7 +167,7 @@ fn read_value<R: Runner>(ctx: &Ctx<R>, service: &str) -> Result<String> {
     if !ctx.stdin_tty {
         bail!("no terminal to prompt on; pass -t, --ref or --command");
     }
-    eprint!("Value for {service} (input hidden): ");
+    eprint!("Value for {service} (input hidden, empty line to cancel): ");
     std::io::stderr().flush()?;
     let fd = libc::STDIN_FILENO;
     // SAFETY: plain termios calls on stdin; the saved settings are restored below.
@@ -171,17 +179,15 @@ fn read_value<R: Runner>(ctx: &Ctx<R>, service: &str) -> Result<String> {
         unsafe { libc::tcsetattr(fd, libc::TCSANOW, &quiet) };
     }
     let mut line = String::new();
+    // Ctrl-C must not kill the process while echo is off.
+    let _guard = crate::smolvm::IgnoreInterrupt::new();
     let read = std::io::stdin().lock().read_line(&mut line);
     if have_term {
         unsafe { libc::tcsetattr(fd, libc::TCSANOW, &saved) };
         eprintln!();
     }
     read?;
-    let value = line.trim_end_matches(['\n', '\r']).to_string();
-    if value.is_empty() {
-        bail!("empty value");
-    }
-    Ok(value)
+    Ok(line.trim_end_matches(['\n', '\r']).to_string())
 }
 
 pub fn render_ls(
@@ -354,6 +360,15 @@ mod tests {
         );
         let err = sbt(&mut t.ctx, &["secret", "set", "github", "--oauth"]).unwrap_err();
         assert_eq!(super::super::exit_code(&err), 2);
+    }
+
+    #[test]
+    fn replacing_a_stored_value_with_a_command_deletes_the_value() {
+        let mut t = test_env(&[]);
+        sbt(&mut t.ctx, &["secret", "set", "github", "-t", "v"]).unwrap();
+        assert!(t.ctx.store.get("global/github").unwrap().is_some());
+        sbt(&mut t.ctx, &["secret", "set", "github", "--command", "x"]).unwrap();
+        assert_eq!(t.ctx.store.get("global/github").unwrap(), None);
     }
 
     #[test]

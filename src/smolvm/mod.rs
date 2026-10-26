@@ -131,10 +131,10 @@ fn exit_code(status: ExitStatus) -> i32 {
 }
 
 /// Ignores SIGINT in this process until dropped.
-struct IgnoreInterrupt(libc::sighandler_t);
+pub(crate) struct IgnoreInterrupt(libc::sighandler_t);
 
 impl IgnoreInterrupt {
-    fn new() -> Self {
+    pub(crate) fn new() -> Self {
         // SAFETY: swaps the SIGINT disposition; Drop restores the previous one.
         Self(unsafe { libc::signal(libc::SIGINT, libc::SIG_IGN) })
     }

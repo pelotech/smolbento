@@ -27,7 +27,7 @@ fn output(program: &str, args: &[&str]) -> Result<String> {
 fn aws_args(arn: &str) -> Result<Vec<String>> {
     let parts: Vec<&str> = arn.split(':').collect();
     if parts.len() < 6 || parts[2] != "secretsmanager" || parts[3].is_empty() {
-        bail!("unsupported reference '{arn}' (use op://… or an AWS Secrets Manager ARN)");
+        bail!("unsupported reference (use op://… or an AWS Secrets Manager ARN)");
     }
     Ok([
         "secretsmanager",
@@ -61,8 +61,8 @@ pub fn resolve(entry: &SecretEntry, store: &dyn SecretStore) -> Result<String> {
             let args = aws_args(reference)?;
             output("aws", &args.iter().map(String::as_str).collect::<Vec<_>>())?
         }
-        Source::Ref { reference } => {
-            bail!("unsupported reference '{reference}' (use op://… or an AWS Secrets Manager ARN)")
+        Source::Ref { .. } => {
+            bail!("unsupported reference (use op://… or an AWS Secrets Manager ARN)")
         }
         Source::Command { command } => output("sh", &["-c", command])?,
     };
