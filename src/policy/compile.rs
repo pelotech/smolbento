@@ -106,11 +106,19 @@ fn credential_admits(cred: &str, host: &str) -> bool {
 }
 
 /// Whether `deny` names a host a bound credential host keeps reachable, so it can't be honoured.
-/// For `*.x`, any deny that matches some host under x does.
+/// For `*.x`, any deny that matches some host under x does. An exact one is `--allow-host`, which
+/// smolvm widens to its subdomains: a deny matching the host or any host under it does (a deny
+/// of a parent domain alone doesn't reach it).
 pub fn deny_reaches_credential_host(deny: &Resource, cred: &str) -> bool {
-    let Some(x) = cred.strip_prefix("*.") else {
-        return deny.matches(cred);
-    };
+    let cred = cred.to_ascii_lowercase();
+    match cred.strip_prefix("*.") {
+        Some(x) => reaches_under(deny, x),
+        None => deny.matches(&cred) || reaches_under(deny, &cred),
+    }
+}
+
+/// Whether `deny` matches some host strictly under `x`.
+fn reaches_under(deny: &Resource, x: &str) -> bool {
     match &deny.pattern {
         Pattern::Everything => true,
         Pattern::Exact(h) => under(h, x),
@@ -662,5 +670,35 @@ mod tests {
         }
         assert!(hits("api.github.com", "api.github.com"));
         assert!(!hits("github.com", "api.github.com"));
+    }
+
+    #[test]
+    fn denies_under_an_exact_credential_host_reach_it() {
+        // An exact credential host is `--allow-host`, which smolvm widens to its subdomains.
+        let hits = |deny: &str| {
+            deny_reaches_credential_host(&Resource::parse(deny).unwrap(), "api.github.com")
+        };
+        for deny in [
+            "api.github.com",
+            "foo.api.github.com",
+            "a.b.api.github.com",
+            "*.api.github.com",
+            "**.api.github.com",
+            "**.github.com",
+            "*.github.com",
+            "x*.api.github.com",
+            "**",
+        ] {
+            assert!(hits(deny), "{deny}");
+        }
+        for deny in [
+            "github.com",
+            "*.com",
+            "notapi.github.com",
+            "api.github.co",
+            "10.0.0.0/8",
+        ] {
+            assert!(!hits(deny), "{deny}");
+        }
     }
 }

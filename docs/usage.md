@@ -142,7 +142,7 @@ Good to know:
 - `--deny-network` only applies when a sandbox is created; `sbt run --deny-network` on an existing
   sandbox warns and changes nothing.
 - Hosts used by a sandbox's secrets, and their subdomains, are always reachable from it, so
-  `policy deny` of such a host is refused and names the secret's service.
+  `policy deny` of such a host, or of one under it, is refused and names the secret's service.
 - `balanced` is Docker's list of 195 rules; smolbento allows those hosts on any port (sbx limits
   them to 443).
 - A deny with a port (`host.example.com:8080`, `10.0.0.0/8:22`) isn't applied: smolvm can't block
