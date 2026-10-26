@@ -6,9 +6,15 @@ on:
 
 permissions: {}
 
+# Never cancel a release in flight; a second push to main waits for the first to finish.
+concurrency:
+  group: ${{ github.workflow }}
+  cancel-in-progress: false
+
 jobs:
   release-please:
     runs-on: ubuntu-latest
+    timeout-minutes: 10
     permissions:
       contents: write
       pull-requests: write
@@ -39,6 +45,7 @@ jobs:
           # to build the Mac binary natively instead: runner: macos-latest, builder: cargo
           - { target: aarch64-apple-darwin, runner: ubuntu-latest, builder: zigbuild }
     runs-on: ${{ matrix.runner }}
+    timeout-minutes: 45
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:

@@ -9,11 +9,36 @@ on:
     branches:
       - main
 
+# A new push to a PR cancels its older run; runs on main queue so every merged commit is checked.
+concurrency:
+  group: ${{ github.workflow }}-${{ github.event.pull_request.number || github.ref }}
+  cancel-in-progress: ${{ github.event_name == 'pull_request' }}
+
 env:
   SMOLVM_VERSION: "1.32.3"
 
 jobs:
+  changes:
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    permissions:
+      contents: read
+      pull-requests: read
+    outputs:
+      code: ${{ steps.filter.outputs.code }}
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      - uses: dorny/paths-filter@ceb8a2b8f2d89434be7ff52d3de7ec3738c5cc9d # v4.0.3
+        id: filter
+        with:
+          filters: .github/filters.yaml
+
   e2e-linux:
+    needs: changes
+    # Skipped jobs count as passing, so required checks still go green on docs-only PRs.
+    if: ${{ needs.changes.outputs.code == 'true' }}
     runs-on: ubuntu-latest
     timeout-minutes: 30
     steps:
@@ -23,6 +48,10 @@ jobs:
       - uses: $/.github/actions/nix-devshell
         with:
           gh-token: ${{ secrets.GITHUB_TOKEN }}
+      # Saved from main only: PRs reuse main's cache without crowding it out.
+      - uses: Swatinem/rust-cache@6323deb102c322ba6fcbdcafc7e3dddab59af2b6 # v2.9.2
+        with:
+          save-if: ${{ github.ref == 'refs/heads/main' }}
 
       - name: Enable KVM for the runner user
         run: |

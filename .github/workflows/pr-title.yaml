@@ -7,9 +7,14 @@ on:
   pull_request:
     types: [opened, edited, reopened, synchronize]
 
+concurrency:
+  group: ${{ github.workflow }}-${{ github.event.pull_request.number }}
+  cancel-in-progress: true
+
 jobs:
   pr-lint:
     runs-on: ubuntu-latest
+    timeout-minutes: 5
     steps:
       - uses: morrisoncole/pr-lint-action@51f3cfabaf5d46f94e54524214e45685f0401b2a # v1.7.1
         with:
