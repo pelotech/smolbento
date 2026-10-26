@@ -4,6 +4,7 @@
 use anyhow::{Context, Result, bail};
 
 use super::lifecycle::build_request;
+use super::plan;
 use super::{Ctx, RunArgs, Unsupported};
 use crate::agents;
 use crate::sandbox::{self, session};
@@ -37,14 +38,18 @@ pub fn run<R: Runner>(ctx: &mut Ctx<R>, a: &RunArgs) -> Result<i32> {
                     "specify an agent (e.g. `sbt run claude`) or the --name of an existing sandbox"
                 );
             };
-            let req = build_request(ctx, agent, paths, &a.opts, true)?;
+            let mut req = build_request(ctx, agent, paths, &a.opts, true)?;
+            plan::prepare_create(ctx, &mut req, a.opts.deny_network)?;
             match sandbox::find(&ctx.vm, &req.name)? {
                 Some(sb) => sb,
-                None => sandbox::create(&ctx.vm, &req, ctx.uid)?,
+                None => {
+                    let start_plan = plan::start_plan(ctx, &req.name, &req.secrets)?;
+                    sandbox::create(&ctx.vm, &req, &start_plan)?
+                }
             }
         }
     };
-    sandbox::ensure_running(&ctx.vm, &mut sb, ctx.uid)?;
+    plan::ensure_running(ctx, &mut sb)?;
 
     let sessions = ctx.paths.sessions();
     if a.detach {

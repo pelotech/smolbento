@@ -6,6 +6,7 @@ pub const WORKSPACE: &str = "sbx.workspace";
 pub const WORKSPACES: &str = "sbx.workspaces";
 pub const CREATED: &str = "sbx.created";
 pub const DOCKER: &str = "sbx.docker";
+pub const SECRETS: &str = "sbx.secrets";
 
 /// Sandbox metadata, fixed at create and stored as smolvm machine labels.
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -20,6 +21,8 @@ pub struct Meta {
     pub created: i64,
     /// Whether the sandbox runs a private dockerd.
     pub docker: bool,
+    /// Services whose credentials were bound at create.
+    pub secrets: Vec<String>,
 }
 
 impl Meta {
@@ -36,6 +39,9 @@ impl Meta {
         ]);
         if let Some(w) = &self.workspace {
             labels.insert(WORKSPACE.to_string(), w.clone());
+        }
+        if !self.secrets.is_empty() {
+            labels.insert(SECRETS.to_string(), self.secrets.join(","));
         }
         labels
     }
@@ -55,6 +61,15 @@ impl Meta {
                 .and_then(|c| c.parse().ok())
                 .unwrap_or(0),
             docker: labels.get(DOCKER).is_some_and(|d| d == "true"),
+            secrets: labels
+                .get(SECRETS)
+                .map(|s| {
+                    s.split(',')
+                        .filter(|x| !x.is_empty())
+                        .map(String::from)
+                        .collect()
+                })
+                .unwrap_or_default(),
         })
     }
 }
@@ -71,6 +86,7 @@ mod tests {
             workspaces: vec!["/w/repo".into(), "/w/docs:ro".into()],
             created: 1000,
             docker: true,
+            secrets: vec![],
         }
     }
 
@@ -92,6 +108,17 @@ mod tests {
         let labels = m.to_labels();
         assert!(!labels.contains_key("sbx.workspace"));
         assert_eq!(Meta::from_labels(&labels), Some(m));
+    }
+
+    #[test]
+    fn secrets_label_round_trips() {
+        let m = Meta {
+            secrets: vec!["anthropic".into(), "github".into()],
+            ..meta()
+        };
+        let labels = m.to_labels();
+        assert_eq!(labels["sbx.secrets"], "anthropic,github");
+        assert_eq!(Meta::from_labels(&labels).unwrap().secrets, m.secrets);
     }
 
     #[test]

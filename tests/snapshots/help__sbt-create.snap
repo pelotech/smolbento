@@ -45,7 +45,7 @@ Options:
           Add a kit (not implemented yet)
 
       --deny-network
-          Deny network access for this sandbox (not implemented yet)
+          Deny all network access for this sandbox (bound secrets' hosts stay reachable)
 
       --skills <SKILLS>
           Agent skills: off, readonly or readwrite (not implemented yet)

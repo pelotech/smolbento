@@ -208,7 +208,7 @@ pub struct SandboxOpts {
     pub kit_arg: Vec<String>,
     #[arg(long = "kit-args-file", hide = true)]
     pub kit_args_file: Vec<PathBuf>,
-    /// Deny network access for this sandbox (not implemented yet)
+    /// Deny all network access for this sandbox (bound secrets' hosts stay reachable)
     #[arg(long = "deny-network")]
     pub deny_network: bool,
     /// Agent skills: off, readonly or readwrite (not implemented yet)
@@ -240,7 +240,6 @@ impl SandboxOpts {
                 !self.kit.is_empty() || !self.kit_arg.is_empty() || !self.kit_args_file.is_empty(),
                 "--kit",
             ),
-            (self.deny_network, "--deny-network"),
             (self.skills.is_some(), "--skills"),
             (self.static_mcp.is_some(), "--static-mcp"),
         ];

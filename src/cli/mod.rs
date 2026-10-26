@@ -5,6 +5,7 @@ mod diagnose;
 mod exec;
 mod lifecycle;
 mod ls;
+mod plan;
 mod run;
 mod settings;
 #[cfg(test)]
@@ -52,6 +53,8 @@ pub struct Ctx<R: Runner> {
     pub stdin_tty: bool,
     /// The host user's uid; the sandbox's `agent` user takes it.
     pub uid: u32,
+    /// Where stored secret values live (OS keychain, or the 0600 file).
+    pub store: Box<dyn crate::secrets::store::SecretStore>,
     /// Why config.toml couldn't be loaded; only `diagnose` and `settings` run despite it.
     pub config_error: Option<String>,
 }
@@ -61,6 +64,7 @@ pub fn main(args: impl IntoIterator<Item = OsString>) -> Result<i32> {
     let env: BTreeMap<String, String> = std::env::vars().collect();
     let paths = Paths::from_env(&env)?;
     let (settings, config_error) = Settings::load(&paths, env.clone());
+    let store = crate::secrets::store::platform(&paths, &env);
     let runner = ProcessRunner::new(settings.value("smolvm.path")?).debug(cli.debug);
     let mut ctx = Ctx {
         vm: Smolvm::new(runner),
@@ -71,6 +75,7 @@ pub fn main(args: impl IntoIterator<Item = OsString>) -> Result<i32> {
         now: SystemTime::now().duration_since(UNIX_EPOCH)?.as_secs() as i64,
         stdin_tty: std::io::stdin().is_terminal(),
         uid: crate::sandbox::host_uid(),
+        store,
         config_error,
     };
     dispatch(&mut ctx, cli)

@@ -131,6 +131,7 @@ mod tests {
                 workspaces: workspace.map(|w| vec![w.to_string()]).unwrap_or_default(),
                 created,
                 docker: true,
+                secrets: vec![],
             },
             machine: format!("sbx-{name}"),
             state,

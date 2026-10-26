@@ -4,10 +4,11 @@ use std::time::UNIX_EPOCH;
 
 use anyhow::{Context, Result, bail};
 
+use super::plan;
 use super::{CreateArgs, Ctx, PruneArgs, ResetArgs, RmArgs, SandboxOpts, confirm};
 use crate::agents;
 use crate::sandbox::{self, CreateRequest, Sandbox, name, options, session};
-use crate::smolvm::Runner;
+use crate::smolvm::{NetworkSpec, Runner};
 use crate::workspace::Workspace;
 
 /// Turns sbx's create options into a [`CreateRequest`]. `default_to_cwd`: `run` mounts the current
@@ -78,6 +79,10 @@ pub(crate) fn build_request<R: Runner>(
         ports,
         docker,
         created: ctx.now,
+        network: NetworkSpec::default(),
+        deny_cidrs: vec![],
+        credentials: vec![],
+        secrets: vec![],
     })
 }
 
@@ -86,8 +91,10 @@ pub fn create<R: Runner>(ctx: &mut Ctx<R>, a: &CreateArgs) -> Result<i32> {
         .targets
         .split_first()
         .context("specify an agent, e.g. `sbt create claude .`")?;
-    let req = build_request(ctx, agent, paths, &a.opts, false)?;
-    let sb = sandbox::create(&ctx.vm, &req, ctx.uid)?;
+    let mut req = build_request(ctx, agent, paths, &a.opts, false)?;
+    plan::prepare_create(ctx, &mut req, a.opts.deny_network)?;
+    let start_plan = plan::start_plan(ctx, &req.name, &req.secrets)?;
+    let sb = sandbox::create(&ctx.vm, &req, &start_plan)?;
     println!("Created sandbox {}", sb.name());
     Ok(0)
 }
@@ -99,7 +106,8 @@ pub fn start<R: Runner>(ctx: &mut Ctx<R>, names: &[String]) -> Result<i32> {
             println!("{n} is already running");
             continue;
         }
-        sandbox::start(&ctx.vm, &sb, ctx.uid)?;
+        let start_plan = plan::start_plan(ctx, sb.name(), &sb.meta.secrets)?;
+        sandbox::start(&ctx.vm, &sb, &start_plan)?;
         println!("Started {n}");
     }
     Ok(0)

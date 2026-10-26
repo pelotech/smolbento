@@ -1,4 +1,4 @@
-use crate::smolvm::{CreateSpec, Mount, PortMap};
+use crate::smolvm::{CreateSpec, Credential, Mount, NetworkSpec, PortMap};
 use crate::workspace::Workspace;
 
 use super::labels::Meta;
@@ -19,6 +19,11 @@ pub struct CreateRequest {
     /// Give the sandbox a private dockerd (storage on the machine's own disk).
     pub docker: bool,
     pub created: i64,
+    pub network: NetworkSpec,
+    pub deny_cidrs: Vec<String>,
+    pub credentials: Vec<Credential>,
+    /// Services the credentials come from (the `sbx.secrets` label).
+    pub secrets: Vec<String>,
 }
 
 /// Docker can't keep its storage on the overlay root filesystem, so these are directories on the
@@ -34,6 +39,7 @@ pub fn spec(req: &CreateRequest) -> CreateSpec {
         workspaces: req.workspaces.iter().map(Workspace::label).collect(),
         created: req.created,
         docker: req.docker,
+        secrets: req.secrets.clone(),
     };
     let mut mounts: Vec<Mount> = req.workspaces.iter().map(Workspace::mount).collect();
     if req.docker {
@@ -53,10 +59,12 @@ pub fn spec(req: &CreateRequest) -> CreateSpec {
         memory_mib: Some(req.memory_mib),
         env: req.env.clone(),
         ports: req.ports.clone(),
+        network: req.network.clone(),
+        deny_cidrs: req.deny_cidrs.clone(),
+        credentials: req.credentials.clone(),
         // The workload runs as root so startup steps (dockerd) can; agents exec as `agent`.
         user: Some("root".into()),
         cmd: vec!["sleep".into(), "infinity".into()],
-        ..Default::default()
     }
 }
 
@@ -80,6 +88,10 @@ mod tests {
             }],
             docker,
             created: 1000,
+            network: NetworkSpec::Open,
+            deny_cidrs: vec![],
+            credentials: vec![],
+            secrets: vec![],
         }
     }
 
