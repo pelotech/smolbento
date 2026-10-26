@@ -45,18 +45,23 @@ pub fn run<R: Runner>(ctx: &mut Ctx<R>, cmd: SecretCmd) -> Result<i32> {
                 )
                 .into());
             }
+            check_env_name(&a.env)?;
             if let Some(owner) = services::env_var_owner(&a.env) {
                 bail!(
                     "{} belongs to the built-in {owner} service; use `sbt secret set {owner}`",
                     a.env
                 );
             }
+            let hosts = custom_hosts(&a.hosts)?;
+            if !cfg!(test) {
+                warn_unresolved(&hosts);
+            }
             let name = a.env.to_ascii_lowercase().replace('_', "-");
             file.custom.retain(|c| c.name != name);
             file.custom.push(CustomService {
                 name: name.clone(),
                 env: a.env.clone(),
-                hosts: a.hosts,
+                hosts,
             });
             set(ctx, &mut file, &name, a.source)?;
         }
@@ -76,6 +81,64 @@ pub fn run<R: Runner>(ctx: &mut Ctx<R>, cmd: SecretCmd) -> Result<i32> {
         }
     }
     Ok(0)
+}
+
+/// `--env` of `secret set-custom`: a name a shell (and smolvm's credential flag) accepts.
+fn check_env_name(env: &str) -> Result<()> {
+    let mut bytes = env.bytes();
+    let valid = bytes
+        .next()
+        .is_some_and(|b| b.is_ascii_alphabetic() || b == b'_')
+        && bytes.all(|b| b.is_ascii_alphanumeric() || b == b'_');
+    if !valid {
+        bail!(
+            "'{env}' isn't a valid env var name: use letters, digits and '_', not starting with \
+             a digit (e.g. MY_API_KEY)"
+        );
+    }
+    Ok(())
+}
+
+/// `--host`s of `secret set-custom`, trimmed, lowercased and deduped. smolvm takes them as
+/// `--credential NAME=ENV@HOST,…` and `--allow-host`, so each must be a plain DNS host name.
+fn custom_hosts(raw: &[String]) -> Result<Vec<String>> {
+    let mut hosts: Vec<String> = Vec::new();
+    for r in raw {
+        let host = r.trim().to_ascii_lowercase();
+        let unbracketed = host.trim_start_matches('[').trim_end_matches(']');
+        if unbracketed.parse::<std::net::IpAddr>().is_ok() {
+            bail!(
+                "'{r}' is an IP address; a secret needs a host name, because smolvm substitutes \
+                 it only in TLS requests to that name"
+            );
+        }
+        if host.contains("://") || host.contains([':', '/', '@', ',']) {
+            bail!("'{r}': use a bare host name like api.x.com (no scheme, port or path)");
+        }
+        if host.contains(['*', '?', '[', ']']) {
+            bail!("'{r}': secret hosts can't have wildcards; pass each host with its own --host");
+        }
+        crate::policy::rules::check_host(&host, r)?;
+        let host = host.strip_suffix('.').unwrap_or(&host).to_string();
+        if !hosts.contains(&host) {
+            hosts.push(host);
+        }
+    }
+    Ok(hosts)
+}
+
+/// smolvm resolves credential hosts when it creates a sandbox, so one that doesn't resolve fails
+/// that create. Only a warning here: the user may be offline.
+fn warn_unresolved(hosts: &[String]) {
+    use std::net::ToSocketAddrs;
+    for host in hosts {
+        if (host.as_str(), 443).to_socket_addrs().is_err() {
+            eprintln!(
+                "warning: {host} doesn't resolve right now; sandboxes created with this secret \
+                 will fail to start until it does"
+            );
+        }
+    }
 }
 
 fn set<R: Runner>(
@@ -407,6 +470,92 @@ mod tests {
         )
         .unwrap_err();
         assert!(err.to_string().contains("openai"), "{err}");
+    }
+
+    #[test]
+    fn set_custom_hosts_must_be_bare_host_names() {
+        for (host, says) in [
+            (
+                "https://api.x.com/v1",
+                "use a bare host name like api.x.com",
+            ),
+            ("api.x.com/v1", "use a bare host name like api.x.com"),
+            ("api.x.com:443", "use a bare host name like api.x.com"),
+            ("tok@api.x.com", "use a bare host name like api.x.com"),
+            ("a.com,b.com", "use a bare host name like api.x.com"),
+            ("*.x.com", "wildcards"),
+            ("api.?.com", "wildcards"),
+            ("10.0.0.1", "IP address"),
+            ("::1", "IP address"),
+            ("[::1]", "IP address"),
+            ("-bad.x.com", "invalid host"),
+            ("a..com", "invalid host"),
+            ("", "invalid host"),
+        ] {
+            let err = custom_hosts(&[host.to_string()]).unwrap_err().to_string();
+            assert!(err.contains(says), "{host}: {err}");
+        }
+        let mut t = test_env(&[]);
+        let err = sbt(
+            &mut t.ctx,
+            &[
+                "secret",
+                "set-custom",
+                "--host",
+                "https://api.x.com/v1",
+                "--env",
+                "TOK",
+                "-t",
+                "v",
+            ],
+        )
+        .unwrap_err()
+        .to_string();
+        assert!(
+            err.contains("use a bare host name like api.x.com (no scheme, port or path)"),
+            "{err}"
+        );
+        let f = SecretsFile::load(&t.ctx.paths).unwrap();
+        assert!(f.custom.is_empty() && f.secrets.is_empty());
+        assert_eq!(t.ctx.store.get("global/tok").unwrap(), None);
+    }
+
+    #[test]
+    fn set_custom_hosts_are_lowercased_and_deduped() {
+        assert_eq!(
+            custom_hosts(&[
+                " API.X.com ".to_string(),
+                "api.x.com.".to_string(),
+                "b.x.com".to_string(),
+                "api.x.com".to_string(),
+            ])
+            .unwrap(),
+            vec!["api.x.com", "b.x.com"]
+        );
+    }
+
+    #[test]
+    fn set_custom_env_must_be_a_variable_name() {
+        let mut t = test_env(&[]);
+        for env in ["1TOK", "MY-TOKEN", "TOK=1", "", "TÖK"] {
+            let err = sbt(
+                &mut t.ctx,
+                &[
+                    "secret",
+                    "set-custom",
+                    "--host",
+                    "api.x.com",
+                    "--env",
+                    env,
+                    "-t",
+                    "v",
+                ],
+            )
+            .unwrap_err()
+            .to_string();
+            assert!(err.contains("isn't a valid env var name"), "{env}: {err}");
+        }
+        assert!(SecretsFile::load(&t.ctx.paths).unwrap().custom.is_empty());
     }
 
     #[test]

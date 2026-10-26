@@ -168,7 +168,7 @@ impl Resource {
 /// The hostname rules smolvm's `--allow-host-pattern` enforces (`encode_strict` in
 /// smolvm-protocol's host_pattern.rs): one optional trailing dot, at most 253 characters, labels of
 /// 1 to 63 ASCII letters, digits and '-', with no '-' at either end of a label.
-fn check_host(host: &str, raw: &str) -> Result<()> {
+pub(crate) fn check_host(host: &str, raw: &str) -> Result<()> {
     let host = host.strip_suffix('.').unwrap_or(host);
     let valid = !host.is_empty()
         && host.len() <= 253
