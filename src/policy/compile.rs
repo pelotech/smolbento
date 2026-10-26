@@ -237,7 +237,11 @@ pub fn check(
     if let Some((r, scope, res)) = denies.first() {
         let text = format!("deny rule {} ({scope})", r.id);
         if enforced(res) {
-            return verdict(false, text);
+            // Rules don't record when they were added, so an older sandbox can't be told apart.
+            return verdict(
+                false,
+                format!("{text}, enforced for sandboxes created after it was added"),
+            );
         }
         // smolvm has no host or port deny: a host deny only removes allow entries.
         return match admits(&spec(), &host, mode) {
@@ -557,6 +561,13 @@ mod tests {
         );
         let v = check(&p, Some("s1"), &[], "10.1.2.3");
         assert!(!v.allowed && v.reason.contains("deny rule"), "{}", v.reason);
+        // Deny CIDRs reach smolvm at create only.
+        assert!(
+            v.reason
+                .ends_with("enforced for sandboxes created after it was added"),
+            "{}",
+            v.reason
+        );
 
         let mut p = policy(Mode::Balanced);
         p.add_rule(None, Decision::Deny, "api.openai.com", "added", None, None)
