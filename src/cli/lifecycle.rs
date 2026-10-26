@@ -97,9 +97,7 @@ pub fn create<R: Runner>(ctx: &mut Ctx<R>, a: &CreateArgs) -> Result<i32> {
     if sandbox::find(&ctx.vm, &req.name)?.is_some() {
         bail!("sandbox '{}' already exists", req.name);
     }
-    plan::prepare_create(ctx, &mut req, a.opts.deny_network)?;
-    let start_plan = plan::start_plan(ctx, &req.name, &req.secrets, &req.credential_hosts)?;
-    let sb = sandbox::create(&ctx.vm, &req, &start_plan)?;
+    let sb = plan::create(ctx, &mut req, a.opts.deny_network)?;
     println!("Created sandbox {}", sb.name());
     Ok(0)
 }
@@ -402,6 +400,32 @@ mod tests {
             ]]
         );
         assert!(!create.contains("gh-123"));
+    }
+
+    #[test]
+    fn a_failed_create_does_not_leave_deny_network_behind() {
+        use crate::policy::Policy;
+
+        let mut t = test_env(&[]);
+        let fake = t.ctx.vm.runner();
+        fake.fail(&["machine", "status"], "NOT_FOUND", "vm not found");
+        fake.fail(&["machine", "create"], "CREATE_FAILED", "no space left");
+        let err = sbt(&mut t.ctx, &["create", "claude", ".", "--deny-network"]).unwrap_err();
+        assert!(err.to_string().contains("no space left"), "{err:#}");
+        assert!(Policy::load(&t.ctx.paths).unwrap().sandboxes.is_empty());
+
+        // Created but failed to start: the machine exists, so it stays deny-all.
+        let mut t = test_env(&[]);
+        let fake = t.ctx.vm.runner();
+        fake.ok(
+            &["machine", "status"],
+            &json("sbx-claude-proj", "created", "claude-proj"),
+        );
+        fake.once_fail(&["machine", "status"], "NOT_FOUND", "vm not found");
+        fake.once_fail(&["machine", "status"], "NOT_FOUND", "vm not found");
+        fake.fail(&["machine", "start"], "START_FAILED", "boot failed");
+        assert!(sbt(&mut t.ctx, &["create", "claude", ".", "--deny-network"]).is_err());
+        assert!(Policy::load(&t.ctx.paths).unwrap().sandboxes["claude-proj"].deny_network);
     }
 
     #[test]

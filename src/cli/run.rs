@@ -41,12 +41,7 @@ pub fn run<R: Runner>(ctx: &mut Ctx<R>, a: &RunArgs) -> Result<i32> {
             let mut req = build_request(ctx, agent, paths, &a.opts, true)?;
             match sandbox::find(&ctx.vm, &req.name)? {
                 Some(sb) => (sb, false),
-                None => {
-                    plan::prepare_create(ctx, &mut req, a.opts.deny_network)?;
-                    let start_plan =
-                        plan::start_plan(ctx, &req.name, &req.secrets, &req.credential_hosts)?;
-                    (sandbox::create(&ctx.vm, &req, &start_plan)?, true)
-                }
+                None => (plan::create(ctx, &mut req, a.opts.deny_network)?, true),
             }
         }
     };
@@ -167,6 +162,17 @@ mod tests {
             session::live_sessions(&t.ctx.paths.sessions(), "claude-proj"),
             0
         );
+    }
+
+    #[test]
+    fn a_failed_create_does_not_leave_deny_network_behind() {
+        let mut t = test_env(&[]);
+        let fake = t.ctx.vm.runner();
+        fake.fail(&["machine", "status"], "NOT_FOUND", "vm not found");
+        fake.fail(&["machine", "create"], "CREATE_FAILED", "no space left");
+        assert!(sbt(&mut t.ctx, &["run", "claude", "--deny-network"]).is_err());
+        let p = crate::policy::Policy::load(&t.ctx.paths).unwrap();
+        assert!(p.sandboxes.is_empty(), "{p:?}");
     }
 
     #[test]

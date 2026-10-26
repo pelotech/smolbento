@@ -163,6 +163,34 @@ pub fn prepare_create<R: Runner>(
     Ok(())
 }
 
+/// Prepares, creates and starts a new sandbox. When that fails before smolvm has the machine, a
+/// `--deny-network` flag recorded for it is dropped again, so a later create of the same name
+/// isn't silently deny-all.
+pub fn create<R: Runner>(
+    ctx: &Ctx<R>,
+    req: &mut CreateRequest,
+    deny_network: bool,
+) -> Result<Sandbox> {
+    let result = (|| {
+        prepare_create(ctx, req, deny_network)?;
+        let plan = start_plan(ctx, &req.name, &req.secrets, &req.credential_hosts)?;
+        sandbox::create(&ctx.vm, req, &plan)
+    })();
+    if result.is_err() && deny_network && matches!(sandbox::find(&ctx.vm, &req.name), Ok(None)) {
+        // Best effort: the create error is what matters.
+        if let Ok(mut policy) = Policy::load(&ctx.paths)
+            && let Some(s) = policy.sandboxes.get_mut(&req.name)
+        {
+            s.deny_network = false;
+            if s.rules.is_empty() {
+                policy.sandboxes.remove(&req.name);
+            }
+            let _ = policy.save(&ctx.paths);
+        }
+    }
+    result
+}
+
 /// Pushes the current policy to running sandboxes. Failures are warnings: the policy applies on
 /// each sandbox's next start anyway.
 pub fn push_network<R: Runner>(ctx: &Ctx<R>) -> Result<()> {
