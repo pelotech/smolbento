@@ -218,13 +218,17 @@ fn print_deny_notes(policy: &Policy, scope: Option<&str>, denies: &[Resource]) {
 /// What to tell the user about a new deny: whether it has a port-less deny CIDR (applied at
 /// create), and a note for each port-scoped entry, which smolvm can't enforce (see `compile`).
 fn deny_notes(policy: &Policy, scope: Option<&str>, denies: &[Resource]) -> (bool, Vec<String>) {
-    // Allows a same-text deny cancels the way `compile` does: global and the deny's own sandbox.
-    // A global deny also cancels each sandbox's own allow there, but it's only reported as
-    // cancelling when a global allow has the same text.
-    let allows: Vec<&crate::policy::Rule> = match scope {
-        Some(s) => policy.rules_for(s).into_iter().map(|(r, _)| r).collect(),
-        None => policy.rules.iter().collect(),
+    // A global deny applies with the global rules ("") and in every sandbox.
+    let sandboxes: Vec<&str> = match scope {
+        Some(s) => vec![s],
+        None => std::iter::once("")
+            .chain(policy.sandboxes.keys().map(String::as_str))
+            .collect(),
     };
+    let allows: Vec<Resource> = sandboxes
+        .iter()
+        .flat_map(|s| compile::allows(policy, s))
+        .collect();
     let cidr = denies
         .iter()
         .any(|r| r.port.is_none() && matches!(r.to_allow(), Allow::Cidr(_)));
@@ -233,14 +237,7 @@ fn deny_notes(policy: &Policy, scope: Option<&str>, denies: &[Resource]) -> (boo
         .filter(|r| r.port.is_some())
         .map(|r| {
             let host = r.without_port();
-            let cancels = allows.iter().any(|rule| {
-                rule.decision == Decision::Allow
-                    && rule
-                        .resources
-                        .iter()
-                        .any(|x| x.eq_ignore_ascii_case(&r.raw))
-            });
-            if cancels {
+            if allows.iter().any(|a| compile::cancels(r, a)) {
                 format!(
                     "note: smolvm can't filter by port, so {} only cancels the allow rule with \
                      the same text; it doesn't block {host} otherwise",
@@ -969,18 +966,34 @@ mod tests {
         );
         let (_, notes) = deny_notes(&p, Some("s1"), &res("[::1]:22"));
         assert!(notes[0].contains("deny ::1 to block it"), "{notes:?}");
-        // Compile cancels only within global and the deny's own sandbox; a global deny is
-        // reported as cancelling only a global allow.
-        for scope in [Some("s2"), None] {
-            let (_, notes) = deny_notes(&p, scope, &res("api.x.com:8080"));
-            assert!(notes[0].contains("isn't enforced"), "{scope:?}: {notes:?}");
-        }
-        p.add_rule(None, Decision::Allow, "api.x.com:8080", "added", None, None)
-            .unwrap();
-        for scope in [Some("s2"), None] {
-            let (_, notes) = deny_notes(&p, scope, &res("api.x.com:8080"));
-            assert!(notes[0].contains("only cancels"), "{scope:?}: {notes:?}");
-        }
+        // Another sandbox's deny doesn't cancel it; a global deny does.
+        let (_, notes) = deny_notes(&p, Some("s2"), &res("api.x.com:8080"));
+        assert!(notes[0].contains("isn't enforced"), "{notes:?}");
+        let (_, notes) = deny_notes(&p, None, &res("api.x.com:8080"));
+        assert!(notes[0].contains("only cancels"), "{notes:?}");
+    }
+
+    #[test]
+    fn a_port_scoped_deny_cancels_a_balanced_preset_entry() {
+        let p = Policy {
+            mode: Some(Mode::Balanced),
+            ..Default::default()
+        };
+        let deny = parse_list("crl*.digicert.com:80").unwrap();
+        let (_, notes) = deny_notes(&p, None, &deny);
+        assert!(notes[0].contains("only cancels"), "{notes:?}");
+        // As compile does: the preset entry (widened to *.digicert.com) is gone.
+        let mut p = p;
+        p.add_rule(
+            None,
+            Decision::Deny,
+            "crl*.digicert.com:80",
+            "added",
+            None,
+            None,
+        )
+        .unwrap();
+        assert!(!compile::check(&p, Some("s1"), &[], "crl3.digicert.com:80").allowed);
     }
 
     #[test]

@@ -31,14 +31,18 @@ fn covers(deny: &Resource, domain: &str, any_depth: bool) -> bool {
     }
 }
 
+/// Whether a deny with a port cancels `allow`: only an allow of exactly the same text. smolvm
+/// can't deny one port, and dropping the host would block all its other ports too.
+pub fn cancels(deny: &Resource, allow: &Resource) -> bool {
+    deny.port.is_some() && deny.port == allow.port && deny.raw.eq_ignore_ascii_case(&allow.raw)
+}
+
 /// An allow entry is dropped when a deny repeats it or covers all it allows: an exact host the
-/// deny matches, or a wildcard's whole subtree.
-/// A deny with a port only drops the same port-scoped entry: smolvm can't deny one port, and
-/// dropping the host would block all its other ports too.
+/// deny matches, or a wildcard's whole subtree. A deny with a port only `cancels`.
 fn denied(allow: &Resource, denies: &[Resource]) -> bool {
     denies.iter().any(|d| {
         if d.port.is_some() {
-            return d.port == allow.port && d.raw.eq_ignore_ascii_case(&allow.raw);
+            return cancels(d, allow);
         }
         d.raw.eq_ignore_ascii_case(&allow.raw)
             || match &allow.pattern {
@@ -50,19 +54,25 @@ fn denied(allow: &Resource, denies: &[Resource]) -> bool {
     })
 }
 
-/// What smolvm should allow for a sandbox. A bound credential's hosts are always included: smolvm
-/// requires them.
-pub fn network(policy: &Policy, sandbox: &str, credential_hosts: &[String]) -> NetworkSpec {
-    let mode = policy.mode_for(sandbox);
-    if mode == Mode::AllowAll {
-        return NetworkSpec::Open;
-    }
-    let mut allows = if mode == Mode::Balanced {
+/// The allow entries a sandbox's network is built from: the balanced preset when it applies, and
+/// the allow rules.
+pub fn allows(policy: &Policy, sandbox: &str) -> Vec<Resource> {
+    let mut allows = if policy.mode_for(sandbox) == Mode::Balanced {
         presets::balanced()
     } else {
         Vec::new()
     };
     allows.extend(resources(policy, sandbox, Decision::Allow));
+    allows
+}
+
+/// What smolvm should allow for a sandbox. A bound credential's hosts are always included: smolvm
+/// requires them.
+pub fn network(policy: &Policy, sandbox: &str, credential_hosts: &[String]) -> NetworkSpec {
+    if policy.mode_for(sandbox) == Mode::AllowAll {
+        return NetworkSpec::Open;
+    }
+    let allows = allows(policy, sandbox);
     if allows.iter().any(|r| r.pattern == Pattern::Everything) {
         return NetworkSpec::Open;
     }
