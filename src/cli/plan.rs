@@ -51,8 +51,7 @@ pub fn start_plan<R: Runner>(ctx: &Ctx<R>, meta: &Meta) -> Result<StartPlan> {
     let bound = &meta.secrets;
     let hosts = &meta.credential_hosts;
     // Like create (and sbx after `policy reset`), a start needs a chosen policy.
-    ensure_policy(ctx)?;
-    let policy = Policy::load(&ctx.paths)?;
+    let policy = ensure_policy(ctx)?;
     let secrets = SecretsFile::load(&ctx.paths)?;
     let network = compile::network(&policy, sandbox, hosts);
     let mut env = Vec::new();
@@ -93,11 +92,11 @@ pub fn ensure_running<R: Runner>(ctx: &Ctx<R>, sb: &mut Sandbox) -> Result<()> {
     sandbox::ensure_running(&ctx.vm, sb, || start_plan(ctx, &meta))
 }
 
-/// Asks for a network policy the first time one is needed (sbx behaviour).
-pub fn ensure_policy<R: Runner>(ctx: &Ctx<R>) -> Result<()> {
+/// The policy, asking for a network policy the first time one is needed (sbx behaviour).
+pub fn ensure_policy<R: Runner>(ctx: &Ctx<R>) -> Result<Policy> {
     let mut policy = Policy::load(&ctx.paths)?;
     if policy.mode.is_some() {
-        return Ok(());
+        return Ok(policy);
     }
     if !ctx.stdin_tty {
         bail!(
@@ -121,7 +120,7 @@ pub fn ensure_policy<R: Runner>(ctx: &Ctx<R>) -> Result<()> {
         other => bail!("'{other}' isn't 1, 2 or 3"),
     });
     policy.save(&ctx.paths)?;
-    Ok(())
+    Ok(policy)
 }
 
 /// Fills a new sandbox's network, deny CIDRs and credentials from the policy and secrets.
@@ -130,8 +129,7 @@ pub fn prepare_create<R: Runner>(
     req: &mut CreateRequest,
     deny_network: bool,
 ) -> Result<()> {
-    ensure_policy(ctx)?;
-    let mut policy = Policy::load(&ctx.paths)?;
+    let mut policy = ensure_policy(ctx)?;
     if deny_network {
         policy.set_deny_network(&req.name, true);
         policy.save(&ctx.paths)?;
@@ -180,9 +178,9 @@ pub fn create<R: Runner>(
     result
 }
 
-/// Pushes the current policy to running sandboxes. Failures are warnings: the policy applies on
-/// each sandbox's next start anyway.
-pub fn push_network<R: Runner>(ctx: &Ctx<R>) -> Result<()> {
+/// Pushes the policy (as just saved) to running sandboxes. Failures are warnings: the policy
+/// applies on each sandbox's next start anyway.
+pub fn push_network<R: Runner>(ctx: &Ctx<R>, policy: &Policy) -> Result<()> {
     let sandboxes = match sandbox::list(&ctx.vm) {
         Ok(s) => s,
         Err(e) => {
@@ -192,10 +190,9 @@ pub fn push_network<R: Runner>(ctx: &Ctx<R>) -> Result<()> {
             return Ok(());
         }
     };
-    let policy = Policy::load(&ctx.paths)?;
     let mut updated = 0;
     for sb in sandboxes.iter().filter(|s| s.is_running()) {
-        let network = compile::network(&policy, sb.name(), &sb.meta.credential_hosts);
+        let network = compile::network(policy, sb.name(), &sb.meta.credential_hosts);
         match ctx.vm.update_network(&sb.machine, &network) {
             Ok(()) => updated += 1,
             Err(e) => eprintln!(
@@ -412,7 +409,7 @@ mod tests {
                 ],
             ),
         );
-        push_network(&t.ctx).unwrap();
+        push_network(&t.ctx, &Policy::load(&t.ctx.paths).unwrap()).unwrap();
         let updates: Vec<String> = t
             .ctx
             .vm

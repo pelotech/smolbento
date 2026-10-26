@@ -43,7 +43,7 @@ pub fn run<R: Runner>(ctx: &mut Ctx<R>, cmd: PolicyCmd) -> Result<i32> {
             policy.mode = Some(mode);
             policy.save(&ctx.paths)?;
             println!("Network policy: {}", mode.name());
-            plan::push_network(ctx)?;
+            plan::push_network(ctx, &policy)?;
         }
         PolicyCmd::Allow {
             kind: RuleKind::Network(a),
@@ -64,7 +64,7 @@ pub fn run<R: Runner>(ctx: &mut Ctx<R>, cmd: PolicyCmd) -> Result<i32> {
             }
             policy.save(&ctx.paths)?;
             println!("Removed");
-            plan::push_network(ctx)?;
+            plan::push_network(ctx, &policy)?;
         }
         PolicyCmd::Ls(a) => {
             for (flag, set) in [
@@ -200,7 +200,7 @@ fn add<R: Runner>(
     if decision == Decision::Deny {
         print_deny_notes(policy, a.sandbox.as_deref(), &parsed);
     }
-    plan::push_network(ctx)
+    plan::push_network(ctx, policy)
 }
 
 fn print_deny_notes(policy: &Policy, scope: Option<&str>, denies: &[Resource]) {
@@ -349,9 +349,12 @@ pub fn render_log(rows: &[log::LogRow]) -> String {
     table(lines)
 }
 
+/// How many recent blocked requests per sandbox approvals look at (`policy log` shows 50).
+const APPROVAL_EVENTS: usize = 200;
+
 /// Approvals are blocked hosts no rule mentions yet; the host is the id.
 fn approval<R: Runner>(ctx: &Ctx<R>, policy: &mut Policy, cmd: ApprovalCmd) -> Result<i32> {
-    let rows = blocked_rows(ctx, None, 200)?;
+    let rows = blocked_rows(ctx, None, APPROVAL_EVENTS)?;
     let pending = log::pending(policy, &rows);
     match cmd {
         ApprovalCmd::Ls { json } => {
@@ -414,7 +417,7 @@ fn approval<R: Runner>(ctx: &Ctx<R>, policy: &mut Policy, cmd: ApprovalCmd) -> R
             if decision == Decision::Deny {
                 print_deny_notes(policy, sandbox.as_deref(), &parse_list(&id)?);
             }
-            plan::push_network(ctx)?;
+            plan::push_network(ctx, policy)?;
         }
     }
     Ok(0)
