@@ -158,14 +158,24 @@ impl Resource {
         }
     }
 
+    /// The resource as written, without its port (`[::1]:22` -> `::1`).
+    pub fn without_port(&self) -> String {
+        split_port(&self.raw).map_or_else(|_| self.raw.clone(), |(h, _)| h.to_string())
+    }
+
     /// How smolvm enforces this more loosely than sbx would, if it does. smolvm can't limit a
     /// host to some ports: an allow opens every port, and a deny with a port isn't applied (denying
-    /// the whole host would block the ports it leaves open).
+    /// the whole host would block the ports it leaves open), except that it cancels an allow with
+    /// exactly the same text.
     pub fn note(&self, deny: bool) -> Option<String> {
         let mut notes = Vec::new();
         match self.port {
             Some(p) if deny => {
-                return Some(format!("port {p} not enforced (deny not applied)"));
+                return Some(format!(
+                    "port {p} not enforced (deny not applied, except that it cancels an allow \
+                     of exactly {})",
+                    self.raw
+                ));
             }
             Some(p) => notes.push(format!("port {p} not enforced (all ports allowed)")),
             None => {}
@@ -511,10 +521,10 @@ mod tests {
                 .unwrap()
                 .contains("all ports allowed")
         );
-        let deny = r("a.com:8443").note(true).unwrap();
-        assert!(
-            deny.contains("port 8443") && deny.contains("not applied"),
-            "{deny}"
+        assert_eq!(
+            r("a.com:8443").note(true).unwrap(),
+            "port 8443 not enforced (deny not applied, except that it cancels an allow of \
+             exactly a.com:8443)"
         );
         assert!(
             r("crl*.digicert.com")

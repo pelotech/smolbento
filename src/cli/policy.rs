@@ -190,14 +190,57 @@ fn add<R: Runner>(
     )?;
     policy.save(&ctx.paths)?;
     println!("{} rule {id}: {}", decision.name(), a.resources);
-    if decision == Decision::Deny
-        && parsed
-            .iter()
-            .any(|r| matches!(r.to_allow(), Allow::Cidr(_)))
-    {
-        println!("note: deny CIDRs apply to sandboxes created from now on");
+    if decision == Decision::Deny {
+        print_deny_notes(policy, &parsed);
     }
     plan::push_network(ctx)
+}
+
+fn print_deny_notes(policy: &Policy, denies: &[Resource]) {
+    let (cidr, notes) = deny_notes(policy, denies);
+    if cidr {
+        println!("note: deny CIDRs apply to sandboxes created from now on");
+    }
+    // stderr, so stdout stays what sbx prints.
+    for n in notes {
+        eprintln!("{n}");
+    }
+}
+
+/// What to tell the user about a new deny: whether it has a port-less deny CIDR (applied at
+/// create), and a note for each port-scoped entry, which smolvm can't enforce (see `compile`).
+fn deny_notes(policy: &Policy, denies: &[Resource]) -> (bool, Vec<String>) {
+    let cidr = denies
+        .iter()
+        .any(|r| r.port.is_none() && matches!(r.to_allow(), Allow::Cidr(_)));
+    let notes = denies
+        .iter()
+        .filter(|r| r.port.is_some())
+        .map(|r| {
+            let host = r.without_port();
+            let cancels = policy.all_rules().iter().any(|(rule, _)| {
+                rule.decision == Decision::Allow
+                    && rule
+                        .resources
+                        .iter()
+                        .any(|x| x.eq_ignore_ascii_case(&r.raw))
+            });
+            if cancels {
+                format!(
+                    "note: smolvm can't filter by port, so {} only cancels the allow rule with \
+                     the same text; it doesn't block {host} otherwise",
+                    r.raw
+                )
+            } else {
+                format!(
+                    "note: smolvm can't filter by port, so {} isn't enforced ({host} stays \
+                     reachable on every port); deny {host} to block it",
+                    r.raw
+                )
+            }
+        })
+        .collect();
+    (cidr, notes)
 }
 
 /// smolvm keeps a bound credential's hosts reachable, so a deny on them can't be honoured.
@@ -361,6 +404,9 @@ fn approval<R: Runner>(ctx: &Ctx<R>, policy: &mut Policy, cmd: ApprovalCmd) -> R
                 policy.add_rule(sandbox.as_deref(), decision, &id, "approval", None, None)?;
             policy.save(&ctx.paths)?;
             println!("{} rule {rule}: {id}", decision.name());
+            if decision == Decision::Deny {
+                print_deny_notes(policy, &parse_list(&id)?);
+            }
             plan::push_network(ctx)?;
         }
     }
@@ -839,6 +885,48 @@ mod tests {
         let p = Policy::load(&t.ctx.paths).unwrap();
         assert!(p.sandboxes.is_empty() && p.rules.is_empty());
         assert!(updates(&t).is_empty());
+    }
+
+    #[test]
+    fn deny_notes_explain_ports_and_cidrs() {
+        let res = |s: &str| parse_list(s).unwrap();
+        let p = Policy::default();
+        // A port-less deny CIDR: the stdout note, as before.
+        let (cidr, notes) = deny_notes(&p, &res("10.0.0.0/8, evil.com"));
+        assert!(cidr && notes.is_empty(), "{notes:?}");
+        // A port-scoped one is never applied: no CIDR note, a stderr note instead.
+        let (cidr, notes) = deny_notes(&p, &res("10.0.0.0/8:22, evil.com:8080"));
+        assert!(!cidr);
+        assert_eq!(
+            notes,
+            [
+                "note: smolvm can't filter by port, so 10.0.0.0/8:22 isn't enforced (10.0.0.0/8 \
+                 stays reachable on every port); deny 10.0.0.0/8 to block it",
+                "note: smolvm can't filter by port, so evil.com:8080 isn't enforced (evil.com \
+                 stays reachable on every port); deny evil.com to block it",
+            ]
+        );
+        // The same text as an allow cancels that allow.
+        let mut p = Policy::default();
+        p.add_rule(
+            Some("s1"),
+            Decision::Allow,
+            "api.x.com:8080",
+            "added",
+            None,
+            None,
+        )
+        .unwrap();
+        let (_, notes) = deny_notes(&p, &res("api.x.com:8080"));
+        assert_eq!(
+            notes,
+            [
+                "note: smolvm can't filter by port, so api.x.com:8080 only cancels the allow \
+                 rule with the same text; it doesn't block api.x.com otherwise"
+            ]
+        );
+        let (_, notes) = deny_notes(&p, &res("[::1]:22"));
+        assert!(notes[0].contains("deny ::1 to block it"), "{notes:?}");
     }
 
     #[test]
