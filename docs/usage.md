@@ -106,6 +106,91 @@ Workspaces are mounted at the same absolute path as on your machine, so paths in
 match. Inside the sandbox the `agent` user has your uid, so files the agent creates show up on your
 machine owned by you. Files the agent creates are private to you (mode 600/700).
 
+## Network policy
+
+The first `sbt run` or `sbt create` asks which policy your sandboxes get, and saves the answer:
+
+| Mode | Meaning |
+|---|---|
+| `allow-all` | Open network |
+| `balanced` | Default deny, plus Docker Sandboxes' baseline: AI APIs, package registries, code hosts, container registries, cloud services, OS packages, certificate checks (and the Nix caches) |
+| `deny-all` | Nothing, unless you allow it |
+
+In scripts and CI, choose it up front: `sbt policy init balanced`.
+
+```sh
+sbt policy allow network api.example.com,*.example.org   # applies to running sandboxes at once
+sbt policy deny network tracking.example.com
+sbt policy allow network internal.example.com --sandbox claude-myrepo
+sbt policy ls                       # --wide shows every host and enforcement notes
+sbt policy check network pypi.org   # exits 1 when denied, and says which rule decided
+sbt policy log                      # requests sandboxes made that were blocked
+sbt policy approval ls              # blocked hosts with no rule yet
+sbt policy approval respond registry.example.com allow
+sbt policy rm network --resource api.example.com
+sbt create --deny-network claude    # this sandbox gets deny-all, whatever the global mode
+```
+
+Rules take hosts (`api.x.com`), wildcards (`*.x.com`, `**.x.com`), IPs and CIDRs,
+comma-separated; `**` allows everything. See [sbx compatibility](sbx-compatibility.md) for where
+smolvm enforces a rule more loosely.
+
+Good to know:
+
+- `--deny-network` only applies when a sandbox is created; `sbt run --deny-network` on an existing
+  sandbox warns and changes nothing.
+- Hosts used by a sandbox's secrets are always reachable from it, so `policy deny` of such a host
+  is refused and names the secret's service.
+- `balanced` is Docker's list of 195 rules; smolbento allows those hosts on any port (sbx limits
+  them to 443).
+- Blocked requests come from smolvm's egress log. `policy approval` lists the hosts with no rule
+  yet; the host is the approval id.
+
+## Secrets
+
+Agents never see your API keys: inside the sandbox the variable holds a placeholder, and smolvm
+swaps in the real value only on HTTPS requests to that service's hosts.
+
+```sh
+sbt secret set anthropic                    # prompts (hidden input; an empty line cancels)
+sbt secret set claude --ref op://Private/claude-sandbox/credential   # 1Password, read at each start
+sbt secret set github --command 'gh auth token'                      # run at each start
+sbt secret set openai --sandbox claude-myrepo -t sk-…                # one sandbox only
+sbt secret set-custom --host api.example.com --env EXAMPLE_TOKEN --command 'pass show example'
+sbt secret ls
+sbt secret rm github
+```
+
+`--ref` takes an `op://…` reference or an AWS Secrets Manager ARN (the ARN's region is used).
+Values typed at the prompt or given with `-t` go to your OS keychain; see
+[Configuration](configuration.md#secret-values).
+
+Built-in services: `anthropic`, `claude` (Claude Code's `claude setup-token` token), `cursor`,
+`droid`, `github`, `google`, `groq`, `mistral`, `nebius`, `openai`, `openrouter`, `xai`.
+
+When things take effect:
+
+- A sandbox binds the services that have a secret when it's **created**, and can always reach
+  those services' hosts.
+- A new value for a bound service applies on the sandbox's **next start** (sandboxes stop after each
+  session, so usually the next `sbt run`).
+- A secret for a service a sandbox wasn't created with needs the sandbox **recreated**; `secret set`
+  tells you which.
+
+`sbt rm` removes that sandbox's own secrets and its per-sandbox policy. `sbt reset` removes all
+secrets too, unless you pass `--preserve-secrets`.
+
+## Ports
+
+```sh
+sbt ports claude-myrepo --publish 3000          # picks a free host port; works while running
+sbt ports claude-myrepo --publish 8080:80
+sbt ports claude-myrepo                         # list
+sbt ports claude-myrepo --unpublish 8080:80
+```
+
+Ports bind `127.0.0.1`. UDP ports can only be changed while the sandbox is stopped.
+
 ## Copy files
 
 ```sh

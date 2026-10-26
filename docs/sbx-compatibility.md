@@ -7,18 +7,18 @@ clearly rather than doing something different.
 ## Works today
 
 `run`, `create`, `exec`, `ls`, `start`, `stop`, `rm`, `prune`, `reset`, `cp`, `version`,
-`completion`, `diagnose`, `settings`. `daemon` is accepted and does nothing: smolbento has no daemon.
+`completion`, `diagnose`, `settings`, `policy`, `secret`, `ports`, and `run/create --deny-network`. `daemon` is accepted and
+does nothing: smolbento has no daemon.
 
 ## Parses, not implemented yet (exit 2)
 
 | Command or flag | Planned |
 |---|---|
-| `policy`, `secret`, `ports` | Next phase. See [Development status](development-status.md) |
+| `policy refresh`, `secret import`, `secret set --oauth/--registry/--refresh` | Not implemented |
 | `run/create --clone` | Later |
 | `--kit`, `kit`, `env` (sbxenv.yaml) | Later |
 | `template`, `setup ssh`, `mcp`, `--static-mcp`, `--skills`, `skills` | Later |
 | `tui` | Later |
-| `--deny-network` | With network policy |
 | `--pull always\|never` | `--pull missing` works (it's what smolvm does) |
 | `exec -d`, `--detach-keys` | Not supported (sbx doesn't support `exec -d` either) |
 
@@ -32,8 +32,12 @@ clearly rather than doing something different.
 
 | Area | sbx | smolbento |
 |---|---|---|
-| Network | Default-deny policy with a balanced allow list | **Open network for now**, until the policy phase lands |
-| Secrets | Stored and injected by a proxy | Not yet; pass keys with `-e` or log in inside the sandbox |
+| Network | Default-deny policy | Same three modes and rule syntax. Exact hosts match only that host, and `**.x.com` matches subdomains at any depth but not `x.com` (as in sbx). Looser: `*.x.com` (sbx: exactly one label) matches any depth; wildcards inside a label (`crl*.x.com`, `?`, `[..]`) widen to `*.x.com`; ports, methods and paths in rules aren't enforced. `balanced` is sbx's 195 rules plus Nix caches, on any port rather than only 443 |
+| Host deny rules | Always enforced | Under allow-all, host deny rules aren't enforced (only deny CIDRs are, at create), and a host deny that a broader allow still covers isn't either; `sbt policy check` says "isn't enforced" |
+| Secrets | Proxy injects on the wire | smolvm substitutes on the wire; a sandbox with a secret can always reach that service's hosts (`policy deny` of one is refused); new values apply on the next start |
+| Policy changes | Live everywhere | Live, except switching a running sandbox between allow-all and a restricted mode, and deny-CIDR rules, which apply to sandboxes started or created afterwards |
+| `--deny-network` | Applies to the sandbox | Only when the sandbox is created; on an existing sandbox `run` warns |
+| Approvals | Queue | Derived from smolvm's blocked-request (egress) log; the host is the approval id |
 | Published ports | Any host IP | `127.0.0.1` only (smolvm publishes on loopback) |
 | Single-file `:ro` mounts | Supported | Directories only (smolvm mounts directories) |
 | Machine names | `.` allowed | Names can't contain `--` or end in `-` (smolvm rules) |

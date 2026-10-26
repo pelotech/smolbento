@@ -10,8 +10,8 @@ smolbento is built in phases. Each phase ships on its own.
 copy files, list, stop, start and clean up, with Docker inside each sandbox and your workspace
 mounted at the same path. See [Usage](usage.md).
 
-**Not safe for untrusted work yet:** sandboxes have open network access and no secret proxy until
-Phase 2. See [Security](SECURITY.md).
+**Phase 2 (network policy, secrets, ports) is done.** Choose `balanced` or `deny-all` for untrusted
+work. See [Security](SECURITY.md).
 
 ## Phases
 
@@ -19,8 +19,8 @@ Phase 2. See [Security](SECURITY.md).
 |---|---|---|
 | 0 | Spikes: what smolvm and sbx actually do | ✅ Done |
 | 1 | Repo tooling and CI; `run`, `create`, `exec`, `ls`, `start`, `stop`, `rm`, `prune`, `reset`, `cp`, `version`, `completion`, `diagnose`, `settings`, `daemon` | ✅ Done |
-| 2 | Network policy (`policy init/allow/deny/rm/ls/log/check`, approvals, live changes on running sandboxes), secrets (keychain, `op://` and AWS references, `--command`; the sandbox only sees placeholders), `ports` | ⏭ Next |
-| 3 | `--clone` (the agent works on its own clone; only commits come back, through a `git-remote-sbt` remote), `verify` (security self-check), `fork`, `checkpoint`, `restore` | Planned |
+| 2 | Network policy (`policy init/allow/deny/rm/ls/log/check`, approvals, live changes on running sandboxes), secrets (keychain, `op://` and AWS references, `--command`; the sandbox only sees placeholders), `ports` | ✅ Done |
+| 3 | `--clone` (the agent works on its own clone; only commits come back, through a `git-remote-sbt` remote), `verify` (security self-check), `fork`, `checkpoint`, `restore` | ⏭ Next |
 | 4 | Kits (sbx kit v2 `spec.yaml`, native Smolfiles), `sbxenv.yaml`, the `docker` and `plus` kits and image, host services (e.g. a host Ollama reachable from sandboxes) | Planned |
 | 5 | `template`, `setup ssh`, static MCP, `--skills`, clipboard and browser bridges | Planned |
 | 6 | `tui` dashboard (bare `sbt` opens it on a terminal) | Planned |
@@ -28,20 +28,17 @@ Phase 2. See [Security](SECURITY.md).
 
 ## Known limitations
 
-- Open network and no secret proxy (Phase 2).
 - Workspaces are mounted read-write; there's no clone mode yet (Phase 3).
 - Published ports bind `127.0.0.1` only, and directories (not single files) can be mounted. Both are
   smolvm limits; see [sbx compatibility](sbx-compatibility.md).
+- Linux uses a 0600 file for secret values where no Secret Service runs.
 - Group ids aren't mapped: group-writable shared directories aren't writable through group
   membership.
 
 ## Waiting on a release or CI
 
-These only get exercised for real on GitHub:
-
-- the first PR run of the `e2e` workflow on `ubuntu-latest` (KVM);
-- the first release: cross-compiled, signed macOS binary; Linux binaries on glibc 2.28; cosign
-  signatures.
+Proven on GitHub: e2e on `ubuntu-latest`, and the v0.1.1 release (all three binaries; macOS binary
+verified on a Mac).
 
 ## Cleanups to do
 

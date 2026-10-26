@@ -10,14 +10,15 @@ Docker engine are kept off your machine. The agent can reach your machine only t
 - ports you publish with `-p`, on `127.0.0.1`;
 - the network.
 
-## What it does not isolate yet
+## Network and secrets
 
-!!! warning "Open network"
-    Until the network policy phase lands, sandboxes have **unrestricted outbound network access**,
-    and secrets are not proxied. An agent that can be steered by untrusted input (a malicious
-    issue, dependency or web page) could send your workspace or any API key you pass with `-e`
-    anywhere. Don't use smolbento for untrusted work yet; see
-    [Development status](development-status.md).
+- Choose a network policy (`balanced` or `deny-all` for untrusted work). Sandboxes created before
+  you chose one stay open until their next start.
+- Secrets are placeholders inside the sandbox; the real value only travels to that service's hosts,
+  and only over HTTPS. A secret's hosts are always reachable from sandboxes that bound it.
+- Host rules are enforced a little more loosely than in sbx: `*.x.com` matches any depth,
+  wildcards inside a label widen, and ports, methods and paths in rules aren't enforced. See
+  [sbx compatibility](sbx-compatibility.md).
 
 Other things to know:
 

@@ -11,8 +11,8 @@ cd ~/code/myrepo
 sbt run claude                          # sandbox for this directory, attach to Claude Code
 ```
 
-> **Early days:** sandboxes currently have open network access. See
-> [Development status](docs/development-status.md) for what's done and what's next.
+> Choose a network policy when asked (`balanced` suits most work), and give agents API keys with
+> `sbt secret set`: they only ever see placeholders. See [Development status](docs/development-status.md).
 
 ## Documentation
 
