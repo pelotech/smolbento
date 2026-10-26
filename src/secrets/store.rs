@@ -185,7 +185,8 @@ impl SecretStore for SecretTool {
             None,
         )?;
         match code {
-            0 => decode_keychain_value(&strip_newline(out)).map(Some),
+            // Stored as given (`set` doesn't encode), so returned as is.
+            0 => Ok(Some(strip_newline(out))),
             1 if err.is_empty() => Ok(None),
             _ => bail!("reading the Secret Service: {err}"),
         }
