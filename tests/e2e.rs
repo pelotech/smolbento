@@ -226,6 +226,7 @@ fn policy_changes_apply_on_start_and_live() {
 #[ignore = "boots real VMs; run with `just e2e`"]
 fn ports_publish_live() {
     use std::io::{Read, Write};
+    use std::time::{Duration, Instant};
     let e = E2e::new("port");
     e.create_alpine();
     smolvm(&[
@@ -239,14 +240,28 @@ fn ports_publish_live() {
         "-c",
         "while true; do printf 'HTTP/1.0 200 OK\\r\\n\\r\\nhi-from-guest\\n' | nc -l -p 8000; done",
     ]);
-    std::thread::sleep(std::time::Duration::from_secs(1));
-    let port = 18000 + (std::process::id() % 1000) as u16;
+    let port = smolbento::sandbox::options::free_port().unwrap();
     e.ok(&["ports", &e.name, "--publish", &format!("{port}:8000")]);
-    let mut stream =
-        std::net::TcpStream::connect(("127.0.0.1", port)).expect("published port accepts");
-    stream.write_all(b"GET / HTTP/1.0\r\n\r\n").unwrap();
-    let mut body = String::new();
-    stream.read_to_string(&mut body).unwrap();
+    // The guest's nc may not be listening yet: retry until it answers or the deadline passes.
+    let fetch = || -> std::io::Result<String> {
+        let timeout = Some(Duration::from_secs(10));
+        let mut stream = std::net::TcpStream::connect(("127.0.0.1", port))?;
+        stream.set_read_timeout(timeout)?;
+        stream.set_write_timeout(timeout)?;
+        stream.write_all(b"GET / HTTP/1.0\r\n\r\n")?;
+        let mut body = String::new();
+        stream.read_to_string(&mut body)?;
+        Ok(body)
+    };
+    let deadline = Instant::now() + Duration::from_secs(30);
+    let body = loop {
+        let last = fetch();
+        if last.as_ref().is_ok_and(|b| b.contains("hi-from-guest")) || Instant::now() > deadline {
+            break last;
+        }
+        std::thread::sleep(Duration::from_millis(500));
+    };
+    let body = body.expect("published port answers");
     assert!(body.contains("hi-from-guest"), "{body}");
     e.ok(&["ports", &e.name, "--unpublish", &format!("{port}:8000")]);
 }
