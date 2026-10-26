@@ -1,6 +1,6 @@
 ---
 source: src/cli/policy.rs
-expression: "render_ls(&p, None, true, Format::Table, false, None).unwrap()"
+expression: "ls(&p, LsOpts { wide: true, ..Default::default() })"
 ---
 Mode: balanced
 ID                             SOURCE    APPLIES TO   DECISION   RESOURCES                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                              NOTES

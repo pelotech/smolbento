@@ -92,22 +92,20 @@ pub fn run<R: Runner>(ctx: &mut Ctx<R>, cmd: PolicyCmd) -> Result<i32> {
             } else {
                 a.format.unwrap_or_default()
             };
-            print!(
-                "{}",
-                render_ls(
-                    &policy,
-                    a.sandbox.as_deref(),
-                    a.wide,
-                    format,
-                    a.quiet,
-                    decision
-                )?
-            );
+            let opts = LsOpts {
+                sandbox: a.sandbox.as_deref(),
+                decision,
+                format,
+                wide: a.wide,
+                quiet: a.quiet,
+            };
+            let rows = ls_rows(&policy, &opts);
+            print!("{}", render_ls(&policy, &rows, &opts)?);
             // stderr, so the table stays what sbx prints.
             if format == Format::Table
                 && !a.wide
                 && !a.quiet
-                && let Some(note) = ls_note(&policy, a.sandbox.as_deref(), decision)
+                && let Some(note) = ls_note(&rows)
             {
                 eprintln!("{note}");
             }
@@ -455,31 +453,23 @@ struct LsRow {
     notes: Vec<String>,
 }
 
+/// What `policy ls` lists, and how.
+#[derive(Default)]
+struct LsOpts<'a> {
+    sandbox: Option<&'a str>,
+    decision: Option<Decision>,
+    format: Format,
+    wide: bool,
+    quiet: bool,
+}
+
 /// For the table without --wide (stderr): how many listed rules have enforcement notes.
-fn ls_note(policy: &Policy, sandbox: Option<&str>, decision: Option<Decision>) -> Option<String> {
-    let n = ls_rows(policy, sandbox, decision)
-        .iter()
-        .filter(|r| !r.notes.is_empty())
-        .count();
+fn ls_note(rows: &[LsRow]) -> Option<String> {
+    let n = rows.iter().filter(|r| !r.notes.is_empty()).count();
     (n > 0).then(|| format!("note: {n} rule(s) aren't fully enforced; see `sbt policy ls --wide`"))
 }
 
-pub fn render_ls(
-    policy: &Policy,
-    sandbox: Option<&str>,
-    wide: bool,
-    format: Format,
-    quiet: bool,
-    decision: Option<Decision>,
-) -> Result<String> {
-    let rows = ls_rows(policy, sandbox, decision);
-    if quiet {
-        return Ok(rows.iter().map(|r| format!("{}\n", r.id)).collect());
-    }
-    render_rows(policy, &rows, wide, format)
-}
-
-fn ls_rows(policy: &Policy, sandbox: Option<&str>, decision: Option<Decision>) -> Vec<LsRow> {
+fn ls_rows(policy: &Policy, opts: &LsOpts) -> Vec<LsRow> {
     let mut rows = Vec::new();
     if policy.mode == Some(Mode::Balanced) {
         for (group, resources) in presets::GROUPS {
@@ -493,7 +483,7 @@ fn ls_rows(policy: &Policy, sandbox: Option<&str>, decision: Option<Decision>) -
             });
         }
     }
-    let rules: Vec<_> = match sandbox {
+    let rules: Vec<_> = match opts.sandbox {
         Some(s) => policy.rules_for(Some(s)).collect(),
         None => policy.all_rules().collect(),
     };
@@ -519,14 +509,18 @@ fn ls_rows(policy: &Policy, sandbox: Option<&str>, decision: Option<Decision>) -
             notes,
         });
     }
-    if let Some(d) = decision {
+    if let Some(d) = opts.decision {
         rows.retain(|r| r.decision == d.name());
     }
     rows
 }
 
-fn render_rows(policy: &Policy, rows: &[LsRow], wide: bool, format: Format) -> Result<String> {
-    match format {
+fn render_ls(policy: &Policy, rows: &[LsRow], opts: &LsOpts) -> Result<String> {
+    let wide = opts.wide;
+    if opts.quiet {
+        return Ok(rows.iter().map(|r| format!("{}\n", r.id)).collect());
+    }
+    match opts.format {
         Format::Json => Ok(format!("{}\n", serde_json::to_string_pretty(rows)?)),
         Format::Yaml => Ok(serde_saphyr::to_string(&rows)?),
         Format::Table => {
@@ -578,6 +572,25 @@ mod tests {
             .vm
             .runner()
             .ok(&["machine", "status", "-n", "sbx-a1"], &m);
+    }
+
+    fn ls(p: &Policy, opts: LsOpts) -> String {
+        render_ls(p, &ls_rows(p, &opts), &opts).unwrap()
+    }
+
+    fn ls_note_for(
+        p: &Policy,
+        sandbox: Option<&str>,
+        decision: Option<Decision>,
+    ) -> Option<String> {
+        ls_note(&ls_rows(
+            p,
+            &LsOpts {
+                sandbox,
+                decision,
+                ..Default::default()
+            },
+        ))
     }
 
     fn updates(t: &TestEnv) -> Vec<String> {
@@ -712,7 +725,13 @@ mod tests {
             None,
         )
         .unwrap();
-        insta::assert_snapshot!(render_ls(&p, None, true, Format::Table, false, None).unwrap());
+        insta::assert_snapshot!(ls(
+            &p,
+            LsOpts {
+                wide: true,
+                ..Default::default()
+            }
+        ));
     }
 
     #[test]
@@ -727,11 +746,24 @@ mod tests {
             .add_rule(None, Decision::Deny, "evil.com", "added", None, None)
             .unwrap();
         assert_eq!(
-            render_ls(&p, None, false, Format::Table, true, Some(Decision::Deny)).unwrap(),
+            ls(
+                &p,
+                LsOpts {
+                    quiet: true,
+                    decision: Some(Decision::Deny),
+                    ..Default::default()
+                }
+            ),
             format!("{deny}\n")
         );
-        let allows =
-            render_ls(&p, None, false, Format::Table, true, Some(Decision::Allow)).unwrap();
+        let allows = ls(
+            &p,
+            LsOpts {
+                quiet: true,
+                decision: Some(Decision::Allow),
+                ..Default::default()
+            },
+        );
         assert!(
             !allows.contains(&deny) && allows.lines().count() > 1,
             "{allows}"
@@ -994,7 +1026,7 @@ mod tests {
         };
         p.add_rule(None, Decision::Allow, "a.com", "added", None, None)
             .unwrap();
-        assert_eq!(ls_note(&p, None, None), None, "the preset has no notes");
+        assert_eq!(ls_note_for(&p, None, None), None, "the preset has no notes");
         p.add_rule(None, Decision::Deny, "b.com:8080", "added", None, None)
             .unwrap();
         p.add_rule(
@@ -1007,14 +1039,14 @@ mod tests {
         )
         .unwrap();
         assert_eq!(
-            ls_note(&p, None, None).as_deref(),
+            ls_note_for(&p, None, None).as_deref(),
             Some("note: 2 rule(s) aren't fully enforced; see `sbt policy ls --wide`")
         );
         assert_eq!(
-            ls_note(&p, None, Some(Decision::Allow)).as_deref(),
+            ls_note_for(&p, None, Some(Decision::Allow)).as_deref(),
             Some("note: 1 rule(s) aren't fully enforced; see `sbt policy ls --wide`")
         );
-        assert_eq!(ls_note(&p, Some("s2"), Some(Decision::Allow)), None);
+        assert_eq!(ls_note_for(&p, Some("s2"), Some(Decision::Allow)), None);
     }
 
     #[test]
@@ -1067,7 +1099,11 @@ mod tests {
                 None,
             )
             .unwrap();
-        let json = render_ls(&p, None, false, Format::Json, false, None).unwrap();
+        let json_opts = || LsOpts {
+            format: Format::Json,
+            ..Default::default()
+        };
+        let json = ls(&p, json_opts());
         assert!(json.ends_with("]\n"), "{json}");
         let rows: serde_json::Value = serde_json::from_str(&json).unwrap();
         assert_eq!(rows.as_array().unwrap().len(), 1);
@@ -1078,10 +1114,16 @@ mod tests {
         assert!(!rows[0]["notes"].as_array().unwrap().is_empty());
         // --quiet wins over the format: ids only.
         assert_eq!(
-            render_ls(&p, None, false, Format::Json, true, None).unwrap(),
+            ls(
+                &p,
+                LsOpts {
+                    quiet: true,
+                    ..json_opts()
+                }
+            ),
             format!("{id}\n")
         );
-        let empty = render_ls(&Policy::default(), None, false, Format::Json, false, None).unwrap();
+        let empty = ls(&Policy::default(), json_opts());
         assert_eq!(empty, "[]\n");
         let mut t = test_env(&[]);
         assert_eq!(sbt(&mut t.ctx, &["policy", "ls", "--json"]).unwrap(), 0);
