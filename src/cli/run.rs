@@ -30,8 +30,8 @@ pub fn run<R: Runner>(ctx: &mut Ctx<R>, a: &RunArgs) -> Result<i32> {
         Some(n) => sandbox::find(&ctx.vm, n)?,
         None => None,
     };
-    let mut sb = match existing {
-        Some(sb) => sb,
+    let (mut sb, created) = match existing {
+        Some(sb) => (sb, false),
         None => {
             let Some((agent, paths)) = a.targets.split_first() else {
                 bail!(
@@ -39,16 +39,22 @@ pub fn run<R: Runner>(ctx: &mut Ctx<R>, a: &RunArgs) -> Result<i32> {
                 );
             };
             let mut req = build_request(ctx, agent, paths, &a.opts, true)?;
-            plan::prepare_create(ctx, &mut req, a.opts.deny_network)?;
             match sandbox::find(&ctx.vm, &req.name)? {
-                Some(sb) => sb,
+                Some(sb) => (sb, false),
                 None => {
+                    plan::prepare_create(ctx, &mut req, a.opts.deny_network)?;
                     let start_plan = plan::start_plan(ctx, &req.name, &req.secrets)?;
-                    sandbox::create(&ctx.vm, &req, &start_plan)?
+                    (sandbox::create(&ctx.vm, &req, &start_plan)?, true)
                 }
             }
         }
     };
+    if a.opts.deny_network && !created {
+        eprintln!(
+            "warning: --deny-network only applies when a sandbox is created; {} already exists",
+            sb.name()
+        );
+    }
     plan::ensure_running(ctx, &mut sb)?;
 
     let sessions = ctx.paths.sessions();
@@ -159,6 +165,27 @@ mod tests {
         assert_eq!(
             session::live_sessions(&t.ctx.paths.sessions(), "claude-proj"),
             0
+        );
+    }
+
+    #[test]
+    fn running_an_existing_sandbox_needs_no_policy_and_records_nothing() {
+        let mut t = test_env(&[]);
+        std::fs::remove_file(t.ctx.paths.policy_file()).unwrap();
+        created(&t, "stopped");
+        t.ctx.vm.runner().interactive_exit(0);
+        assert_eq!(
+            sbt(&mut t.ctx, &["run", "claude", "--deny-network"]).unwrap(),
+            0
+        );
+        assert!(!t.ctx.paths.policy_file().exists());
+        let lines = t.ctx.vm.runner().call_lines();
+        assert!(!lines.iter().any(|l| l.contains("create")), "{lines:?}");
+        assert!(
+            lines
+                .iter()
+                .any(|l| l == "machine start -n sbx-claude-proj"),
+            "{lines:?}"
         );
     }
 
