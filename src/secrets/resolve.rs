@@ -38,27 +38,34 @@ fn first_line(stderr: &str) -> String {
     }
 }
 
-/// The `aws` argv that reads a Secrets Manager secret, for any partition.
-fn aws_args(arn: &str) -> Result<Vec<String>> {
-    let parts: Vec<&str> = arn.split(':').collect();
-    if parts.len() < 6 || parts[1].is_empty() || parts[2] != "secretsmanager" || parts[3].is_empty()
+/// The command that reads a reference: `op read` for `op://…`, or `aws secretsmanager` for a
+/// Secrets Manager ARN of any partition. Also how `secret set --ref` validates one.
+pub(crate) fn ref_command(reference: &str) -> Result<(&'static str, Vec<String>)> {
+    if reference.starts_with("op://") {
+        return Ok(("op", vec!["read".into(), reference.into()]));
+    }
+    let parts: Vec<&str> = reference.split(':').collect();
+    if parts.len() < 6
+        || parts[0] != "arn"
+        || parts[1].is_empty()
+        || parts[2] != "secretsmanager"
+        || parts[3].is_empty()
     {
         bail!("unsupported reference (use op://… or an AWS Secrets Manager ARN)");
     }
-    Ok([
+    let args = [
         "secretsmanager",
         "get-secret-value",
         "--region",
         parts[3],
         "--secret-id",
-        arn,
+        reference,
         "--query",
         "SecretString",
         "--output",
         "text",
-    ]
-    .map(String::from)
-    .to_vec())
+    ];
+    Ok(("aws", args.map(String::from).to_vec()))
 }
 
 pub fn resolve(entry: &SecretEntry, store: &dyn SecretStore) -> Result<String> {
@@ -70,15 +77,12 @@ pub fn resolve(entry: &SecretEntry, store: &dyn SecretStore) -> Result<String> {
                 store.describe()
             )
         })?,
-        Source::Ref { reference } if reference.starts_with("op://") => {
-            output("op", &["read", reference])?
-        }
-        Source::Ref { reference } if reference.starts_with("arn:") => {
-            let args = aws_args(reference)?;
-            output("aws", &args.iter().map(String::as_str).collect::<Vec<_>>())?
-        }
-        Source::Ref { .. } => {
-            bail!("unsupported reference (use op://… or an AWS Secrets Manager ARN)")
+        Source::Ref { reference } => {
+            let (program, args) = ref_command(reference)?;
+            output(
+                program,
+                &args.iter().map(String::as_str).collect::<Vec<_>>(),
+            )?
         }
         Source::Command { command } => output("sh", &["-c", command])?,
     };
@@ -103,7 +107,7 @@ mod tests {
     }
 
     #[test]
-    fn aws_args_take_the_region_from_the_arn() {
+    fn ref_commands_take_the_region_from_the_arn() {
         for (arn, region) in [
             (
                 "arn:aws:secretsmanager:us-east-1:123:secret:x-AbC",
@@ -114,7 +118,8 @@ mod tests {
                 "us-gov-west-1",
             ),
         ] {
-            let a = aws_args(arn).unwrap();
+            let (program, a) = ref_command(arn).unwrap();
+            assert_eq!(program, "aws");
             let i = a.iter().position(|x| x == "--region").unwrap();
             assert_eq!(a[i + 1], region);
             assert!(a.contains(&arn.to_string()));
@@ -124,9 +129,18 @@ mod tests {
             "arn:aws:secretsmanager::1:secret:x",
             "arn::secretsmanager:us-east-1:1:secret:x",
             "arn:aws:secretsmanager",
+            "nra:aws:secretsmanager:us-east-1:1:secret:x",
+            "vault://x",
         ] {
-            assert!(aws_args(bad).is_err(), "{bad}");
+            assert!(ref_command(bad).is_err(), "{bad}");
         }
+        assert_eq!(
+            ref_command("op://P/c/credential").unwrap(),
+            (
+                "op",
+                vec!["read".to_string(), "op://P/c/credential".to_string()]
+            )
+        );
     }
 
     #[test]

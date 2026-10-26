@@ -182,9 +182,7 @@ fn set<R: Runner>(
         .find(|e| e.service == service && e.scope == scope)
         .cloned();
     let (source, value) = if let Some(r) = src.reference {
-        if !(r.starts_with("op://") || r.starts_with("arn:aws:secretsmanager:")) {
-            bail!("unsupported reference (use op://… or an AWS Secrets Manager ARN)");
-        }
+        crate::secrets::resolve::ref_command(&r)?;
         (Source::Ref { reference: r }, None)
     } else if let Some(c) = src.command {
         (Source::Command { command: c }, None)
@@ -500,6 +498,26 @@ mod tests {
             f.entry_for("x", "github").unwrap().source,
             Source::Command { .. }
         ));
+    }
+
+    #[test]
+    fn set_ref_accepts_any_aws_partition() {
+        let mut t = test_env(&[]);
+        let arn = "arn:aws-us-gov:secretsmanager:us-gov-west-1:123:secret:x";
+        sbt(&mut t.ctx, &["secret", "set", "github", "--ref", arn]).unwrap();
+        let f = SecretsFile::load(&t.ctx.paths).unwrap();
+        assert_eq!(
+            f.entry_for("x", "github").unwrap().source,
+            Source::Ref {
+                reference: arn.into()
+            }
+        );
+        let err = sbt(
+            &mut t.ctx,
+            &["secret", "set", "github", "--ref", "arn:aws:s3:::bucket"],
+        )
+        .unwrap_err();
+        assert!(err.to_string().contains("unsupported reference"), "{err}");
     }
 
     #[test]
