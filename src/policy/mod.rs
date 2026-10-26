@@ -85,6 +85,18 @@ pub struct Policy {
     pub sandboxes: BTreeMap<String, SandboxPolicy>,
 }
 
+/// `--method` as one canonical list: uppercase, comma-separated, sorted and deduped.
+fn normalise_methods(m: &str) -> Option<String> {
+    let mut v: Vec<String> = m
+        .split(',')
+        .map(|x| x.trim().to_ascii_uppercase())
+        .filter(|x| !x.is_empty())
+        .collect();
+    v.sort();
+    v.dedup();
+    (!v.is_empty()).then(|| v.join(","))
+}
+
 /// A short, stable id from the rule's content, qualifiers included (FNV-1a).
 fn rule_id(
     scope: &str,
@@ -157,6 +169,7 @@ impl Policy {
     ) -> Result<String> {
         let parsed = rules::parse_list(resources)?;
         let resources: Vec<String> = parsed.into_iter().map(|r| r.raw).collect();
+        let method = method.as_deref().and_then(normalise_methods);
         let id = rule_id(
             sandbox.unwrap_or("global"),
             decision,
@@ -165,16 +178,24 @@ impl Policy {
             path.as_deref(),
         );
         let list = self.rules_mut(sandbox);
-        if !list.iter().any(|r| r.id == id) {
-            list.push(Rule {
-                id: id.clone(),
-                decision,
-                resources,
-                created_via: created_via.to_string(),
-                method,
-                path,
-            });
+        // By content too: a rule saved under an older id scheme keeps its id.
+        if let Some(same) = list.iter().find(|r| {
+            r.id == id
+                || (r.decision == decision
+                    && r.resources == resources
+                    && r.method.as_deref().and_then(normalise_methods) == method
+                    && r.path == path)
+        }) {
+            return Ok(same.id.clone());
         }
+        list.push(Rule {
+            id: id.clone(),
+            decision,
+            resources,
+            created_via: created_via.to_string(),
+            method,
+            path,
+        });
         Ok(id)
     }
 
@@ -394,6 +415,56 @@ mod tests {
             .unwrap();
         assert_eq!(again, get);
         assert_eq!(p.rules.len(), 3);
+    }
+
+    #[test]
+    fn methods_are_normalised_and_rules_dedupe_by_content() {
+        let mut p = Policy::default();
+        let a = p
+            .add_rule(
+                None,
+                Decision::Allow,
+                "a.com",
+                "added",
+                Some("get, POST".into()),
+                None,
+            )
+            .unwrap();
+        let b = p
+            .add_rule(
+                None,
+                Decision::Allow,
+                "a.com",
+                "added",
+                Some("POST,GET,get".into()),
+                None,
+            )
+            .unwrap();
+        assert_eq!(a, b);
+        assert_eq!(p.rules.len(), 1);
+        assert_eq!(p.rules[0].method.as_deref(), Some("GET,POST"));
+        // A rule saved under an older id scheme isn't duplicated when added again.
+        let mut p = Policy::default();
+        p.rules.push(Rule {
+            id: "r-0ld0ld00".into(),
+            decision: Decision::Allow,
+            resources: vec!["a.com".into()],
+            created_via: "added".into(),
+            method: Some("get".into()),
+            path: Some("/v1".into()),
+        });
+        let id = p
+            .add_rule(
+                None,
+                Decision::Allow,
+                "a.com",
+                "added",
+                Some("GET".into()),
+                Some("/v1".into()),
+            )
+            .unwrap();
+        assert_eq!(id, "r-0ld0ld00");
+        assert_eq!(p.rules.len(), 1);
     }
 
     #[test]
