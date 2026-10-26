@@ -92,6 +92,7 @@ impl SecretsFile {
             &paths.secrets_file(),
             toml::to_string(self)?.as_bytes(),
             None,
+            crate::config::Symlink::Follow,
         )
     }
 

@@ -138,6 +138,7 @@ impl Policy {
             &paths.policy_file(),
             toml::to_string(self)?.as_bytes(),
             None,
+            crate::config::Symlink::Follow,
         )
     }
 
@@ -333,6 +334,23 @@ mod tests {
         assert!(id.starts_with("r-"));
         let text = std::fs::read_to_string(paths.policy_file()).unwrap();
         assert!(text.contains("mode = \"balanced\""), "{text}");
+    }
+
+    #[test]
+    fn save_writes_through_a_symlinked_policy_file() {
+        let (d, paths) = paths();
+        let real = d.path().join("dotfiles-policy.toml");
+        std::fs::write(&real, "").unwrap();
+        std::os::unix::fs::symlink(&real, paths.policy_file()).unwrap();
+        let p = Policy {
+            mode: Some(Mode::DenyAll),
+            ..Default::default()
+        };
+        p.save(&paths).unwrap();
+        let link = std::fs::symlink_metadata(paths.policy_file()).unwrap();
+        assert!(link.file_type().is_symlink());
+        assert!(std::fs::read_to_string(&real).unwrap().contains("deny-all"));
+        assert_eq!(Policy::load(&paths).unwrap(), p);
     }
 
     #[test]

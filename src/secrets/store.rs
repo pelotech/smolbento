@@ -249,7 +249,13 @@ impl FileStore {
     /// Atomic, and always 0600; a symlink at the path is replaced, not followed (see
     /// `write_atomic`).
     fn write(&self, values: &BTreeMap<String, String>) -> Result<()> {
-        crate::config::write_atomic(&self.path, toml::to_string(values)?.as_bytes(), Some(0o600))
+        // Never write secret values through a link: a link at this path is replaced.
+        crate::config::write_atomic(
+            &self.path,
+            toml::to_string(values)?.as_bytes(),
+            Some(0o600),
+            crate::config::Symlink::Replace,
+        )
     }
 }
 
@@ -388,25 +394,22 @@ mod tests {
     }
 
     #[test]
-    fn file_store_never_follows_a_planted_temp_file() {
+    fn file_store_replaces_a_symlink_instead_of_writing_through_it() {
         let dir = tempfile::tempdir().unwrap();
         let path = dir.path().join("v.toml");
         let outside = dir.path().join("outside");
-        std::fs::write(&outside, "keep").unwrap();
-        std::os::unix::fs::symlink(&outside, dir.path().join("v.toml.tmp")).unwrap();
+        std::fs::write(&outside, "\"x\" = \"1\"\n").unwrap();
+        std::os::unix::fs::symlink(&outside, &path).unwrap();
         let s = FileStore::new(path.clone());
         s.set("a", "s3cret").unwrap();
-        assert_eq!(std::fs::read_to_string(&outside).unwrap(), "keep");
+        assert_eq!(
+            std::fs::read_to_string(&outside).unwrap(),
+            "\"x\" = \"1\"\n"
+        );
+        let meta = std::fs::symlink_metadata(&path).unwrap();
+        assert!(meta.is_file());
+        assert_eq!(meta.permissions().mode() & 0o777, 0o600);
         assert_eq!(s.get("a").unwrap().as_deref(), Some("s3cret"));
-        let mode = std::fs::metadata(&path).unwrap().permissions().mode();
-        assert_eq!(mode & 0o777, 0o600);
-        s.delete("a").unwrap();
-        let mut names: Vec<String> = std::fs::read_dir(dir.path())
-            .unwrap()
-            .map(|e| e.unwrap().file_name().to_string_lossy().into_owned())
-            .collect();
-        names.sort();
-        assert_eq!(names, ["outside", "v.toml", "v.toml.tmp"]);
     }
 
     #[test]

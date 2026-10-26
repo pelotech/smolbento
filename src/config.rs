@@ -157,63 +157,187 @@ impl Settings {
     }
 
     fn save(&self) -> Result<()> {
-        write_atomic(&self.path, toml::to_string(&self.file)?.as_bytes(), None)
+        write_atomic(
+            &self.path,
+            toml::to_string(&self.file)?.as_bytes(),
+            None,
+            Symlink::Follow,
+        )
     }
 }
+
+/// What `write_atomic` does when `path` is a symlink.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum Symlink {
+    /// Write the file the link points to (dotfiles managed with stow and the like).
+    Follow,
+    /// Replace the link with a regular file.
+    Replace,
+}
+
+static TEMP_COUNTER: std::sync::atomic::AtomicU64 = std::sync::atomic::AtomicU64::new(0);
 
 /// Replaces `path` with `bytes` atomically: readers see the old file or the new one, never a
 /// partial write. The bytes go to a new temp file in the same directory, created exclusively
 /// under a unique name (so a file or symlink planted there is never followed), with `mode` (or
 /// else the mode of the file it replaces) set before anything is written; it's synced, then
-/// renamed over `path`. A symlink at `path` is replaced by the file rather than written
-/// through. The temp file is removed on any error.
-pub fn write_atomic(path: &Path, bytes: &[u8], mode: Option<u32>) -> Result<()> {
-    use std::io::Write;
-    use std::os::unix::fs::{OpenOptionsExt, PermissionsExt};
-    use std::sync::atomic::{AtomicU64, Ordering};
-    static COUNTER: AtomicU64 = AtomicU64::new(0);
+/// renamed over the target. The temp file is removed on any error, and stale ones left by killed
+/// writers are cleaned up. `links` says whether a symlink at `path` is written through (config
+/// files a user may keep in a dotfiles repo) or replaced (secret values: never written through
+/// a link).
+pub fn write_atomic(path: &Path, bytes: &[u8], mode: Option<u32>, links: Symlink) -> Result<()> {
+    write_in(path, bytes, mode, links, &TEMP_COUNTER)
+}
 
-    let dir = match path.parent() {
-        Some(d) if !d.as_os_str().is_empty() => d,
-        _ => Path::new("."),
-    };
-    fs::create_dir_all(dir).with_context(|| format!("creating {}", dir.display()))?;
-    let mode = mode.or_else(|| {
-        fs::symlink_metadata(path)
-            .ok()
-            .filter(|m| m.is_file())
-            .map(|m| m.permissions().mode() & 0o7777)
-    });
-    let base = path.file_name().unwrap_or_default().to_string_lossy();
-    let (tmp, mut file) = loop {
-        let n = COUNTER.fetch_add(1, Ordering::Relaxed);
-        let tmp = dir.join(format!(".{base}.{}.{n}.tmp", std::process::id()));
-        let mut opts = fs::OpenOptions::new();
-        opts.write(true)
-            .create_new(true)
-            .mode(mode.unwrap_or(0o666));
-        match opts.open(&tmp) {
-            Ok(f) => break (tmp, f),
-            Err(e) if e.kind() == std::io::ErrorKind::AlreadyExists => continue,
-            Err(e) => return Err(e).with_context(|| format!("writing {}", path.display())),
+/// The temp file name `write_atomic` uses for `base`: `.<base>.<pid>.<n>.tmp`.
+fn temp_name(dir: &Path, base: &str, pid: u32, n: u64) -> PathBuf {
+    dir.join(format!(".{base}.{pid}.{n}.tmp"))
+}
+
+/// Where to write for `path`: the file a symlink points to when following links. A dangling
+/// link resolves to where it points, so the file is created there.
+fn write_target(path: &Path, links: Symlink) -> Result<PathBuf> {
+    let is_link = fs::symlink_metadata(path).is_ok_and(|m| m.file_type().is_symlink());
+    if links == Symlink::Replace || !is_link {
+        return Ok(path.to_path_buf());
+    }
+    if let Ok(real) = fs::canonicalize(path) {
+        return Ok(real);
+    }
+    let mut target = path.to_path_buf();
+    for _ in 0..40 {
+        if !fs::symlink_metadata(&target).is_ok_and(|m| m.file_type().is_symlink()) {
+            return Ok(target);
         }
+        let next = fs::read_link(&target)
+            .with_context(|| format!("reading the link {}", target.display()))?;
+        target = match target.parent() {
+            Some(dir) => dir.join(next),
+            None => next,
+        };
+    }
+    bail!("too many levels of symbolic links at {}", path.display())
+}
+
+/// Temp files of other processes that were killed mid-write (older than 10 minutes, so not one
+/// still being written). Best effort: errors are ignored.
+fn remove_stale_temp_files(dir: &Path, base: &str) {
+    const STALE: std::time::Duration = std::time::Duration::from_secs(600);
+    let Ok(entries) = fs::read_dir(dir) else {
+        return;
     };
-    let result = (|| -> std::io::Result<()> {
+    let prefix = format!(".{base}.");
+    for entry in entries.flatten() {
+        let name = entry.file_name();
+        let Some(rest) = name
+            .to_str()
+            .and_then(|n| n.strip_prefix(&prefix))
+            .and_then(|n| n.strip_suffix(".tmp"))
+        else {
+            continue;
+        };
+        let Some((pid, n)) = rest.split_once('.') else {
+            continue;
+        };
+        let (Ok(pid), Ok(_)) = (pid.parse::<u32>(), n.parse::<u64>()) else {
+            continue;
+        };
+        let old = entry
+            .metadata()
+            .and_then(|m| m.modified())
+            .ok()
+            .and_then(|t| t.elapsed().ok())
+            .is_some_and(|age| age > STALE);
+        if pid != std::process::id() && old {
+            let _ = fs::remove_file(entry.path());
+        }
+    }
+}
+
+#[cfg(unix)]
+fn existing_mode(path: &Path) -> Option<u32> {
+    use std::os::unix::fs::PermissionsExt;
+    fs::symlink_metadata(path)
+        .ok()
+        .filter(|m| m.is_file())
+        .map(|m| m.permissions().mode() & 0o7777)
+}
+
+#[cfg(not(unix))]
+fn existing_mode(_path: &Path) -> Option<u32> {
+    None
+}
+
+/// Creates the temp file exclusively, with `mode` where the platform has modes.
+fn create_temp(tmp: &Path, mode: Option<u32>) -> std::io::Result<fs::File> {
+    let mut opts = fs::OpenOptions::new();
+    opts.write(true).create_new(true);
+    #[cfg(unix)]
+    {
+        use std::os::unix::fs::{OpenOptionsExt, PermissionsExt};
+        opts.mode(mode.unwrap_or(0o666));
+        let file = opts.open(tmp)?;
         // create_new's mode is filtered by the umask; set it exactly.
         if let Some(m) = mode {
             file.set_permissions(fs::Permissions::from_mode(m))?;
         }
+        Ok(file)
+    }
+    #[cfg(not(unix))]
+    {
+        let _ = mode;
+        opts.open(tmp)
+    }
+}
+
+fn write_in(
+    path: &Path,
+    bytes: &[u8],
+    mode: Option<u32>,
+    links: Symlink,
+    counter: &std::sync::atomic::AtomicU64,
+) -> Result<()> {
+    use std::io::Write;
+    use std::sync::atomic::Ordering;
+
+    let target = write_target(path, links)?;
+    let dir = match target.parent() {
+        Some(d) if !d.as_os_str().is_empty() => d.to_path_buf(),
+        _ => PathBuf::from("."),
+    };
+    fs::create_dir_all(&dir).with_context(|| format!("creating {}", dir.display()))?;
+    let mode = mode.or_else(|| existing_mode(&target));
+    let base = target
+        .file_name()
+        .unwrap_or_default()
+        .to_string_lossy()
+        .into_owned();
+    remove_stale_temp_files(&dir, &base);
+    let (tmp, mut file) = loop {
+        let n = counter.fetch_add(1, Ordering::Relaxed);
+        let tmp = temp_name(&dir, &base, std::process::id(), n);
+        match create_temp(&tmp, mode) {
+            Ok(f) => break (tmp, f),
+            Err(e) if e.kind() == std::io::ErrorKind::AlreadyExists => continue,
+            Err(e) => {
+                // create_temp may fail after creating the file (setting its mode).
+                let _ = fs::remove_file(&tmp);
+                return Err(e).with_context(|| format!("writing {}", path.display()));
+            }
+        }
+    };
+    let result = (|| -> std::io::Result<()> {
         file.write_all(bytes)?;
         file.sync_all()?;
         drop(file);
-        fs::rename(&tmp, path)
+        fs::rename(&tmp, &target)
     })();
     if let Err(e) = result {
         let _ = fs::remove_file(&tmp);
         return Err(e).with_context(|| format!("writing {}", path.display()));
     }
-    // Make the rename itself durable; best effort.
-    if let Ok(d) = fs::File::open(dir) {
+    // Make the rename itself durable; best effort (and not possible on every platform).
+    if let Ok(d) = fs::File::open(&dir) {
         let _ = d.sync_all();
     }
     Ok(())
@@ -243,12 +367,93 @@ mod tests {
     }
 
     #[test]
+    fn write_atomic_can_write_through_a_symlink() {
+        use std::os::unix::fs::PermissionsExt;
+        let dir = tempfile::tempdir().unwrap();
+        let real_dir = dir.path().join("dotfiles");
+        fs::create_dir(&real_dir).unwrap();
+        let real = real_dir.join("policy.toml");
+        fs::write(&real, "old").unwrap();
+        fs::set_permissions(&real, fs::Permissions::from_mode(0o640)).unwrap();
+        let link_dir = dir.path().join("cfg");
+        fs::create_dir(&link_dir).unwrap();
+        let link = link_dir.join("policy.toml");
+        std::os::unix::fs::symlink("../dotfiles/policy.toml", &link).unwrap();
+        write_atomic(&link, b"new", None, Symlink::Follow).unwrap();
+        assert!(
+            fs::symlink_metadata(&link)
+                .unwrap()
+                .file_type()
+                .is_symlink()
+        );
+        assert_eq!(fs::read_to_string(&real).unwrap(), "new");
+        let mode = fs::metadata(&real).unwrap().permissions().mode();
+        assert_eq!(mode & 0o777, 0o640);
+        assert_eq!(entries(&real_dir), ["policy.toml"]);
+        assert_eq!(entries(&link_dir), ["policy.toml"]);
+        // A dangling link: the file is created where it points.
+        fs::remove_file(&real).unwrap();
+        write_atomic(&link, b"again", None, Symlink::Follow).unwrap();
+        assert_eq!(fs::read_to_string(&real).unwrap(), "again");
+    }
+
+    #[test]
+    fn write_atomic_skips_a_temp_name_that_is_taken() {
+        use std::sync::atomic::AtomicU64;
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("f.toml");
+        let outside = dir.path().join("outside");
+        fs::write(&outside, "keep").unwrap();
+        // Plant a symlink at exactly the first name the helper will try.
+        let planted = temp_name(dir.path(), "f.toml", std::process::id(), 0);
+        std::os::unix::fs::symlink(&outside, &planted).unwrap();
+        let counter = AtomicU64::new(0);
+        write_in(&path, b"new", Some(0o600), Symlink::Replace, &counter).unwrap();
+        assert_eq!(fs::read_to_string(&outside).unwrap(), "keep");
+        assert_eq!(fs::read_to_string(&path).unwrap(), "new");
+        assert!(
+            fs::symlink_metadata(&planted)
+                .unwrap()
+                .file_type()
+                .is_symlink()
+        );
+        assert_eq!(counter.load(std::sync::atomic::Ordering::Relaxed), 2);
+    }
+
+    #[test]
+    fn write_atomic_removes_stale_temp_files_of_other_processes() {
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("f.toml");
+        let old = std::time::SystemTime::now() - std::time::Duration::from_secs(3600);
+        let stale = temp_name(dir.path(), "f.toml", 99_999_999, 3);
+        let fresh = temp_name(dir.path(), "f.toml", 99_999_998, 0);
+        let mine = temp_name(dir.path(), "f.toml", std::process::id(), 999_999);
+        let other = temp_name(dir.path(), "g.toml", 99_999_999, 0);
+        for p in [&stale, &fresh, &mine, &other] {
+            fs::write(p, "x").unwrap();
+        }
+        for p in [&stale, &mine, &other] {
+            fs::File::options()
+                .write(true)
+                .open(p)
+                .unwrap()
+                .set_modified(old)
+                .unwrap();
+        }
+        write_atomic(&path, b"new", None, Symlink::Replace).unwrap();
+        assert!(!stale.exists(), "stale temp file of a dead write");
+        assert!(fresh.exists(), "may be another process mid-write");
+        assert!(mine.exists(), "this process's own");
+        assert!(other.exists(), "another file's");
+    }
+
+    #[test]
     fn write_atomic_writes_with_the_mode_and_leaves_no_temp_file() {
         use std::os::unix::fs::PermissionsExt;
         let dir = tempfile::tempdir().unwrap();
         let path = dir.path().join("f.toml");
-        write_atomic(&path, b"a = 1\n", Some(0o600)).unwrap();
-        write_atomic(&path, b"a = 2\n", Some(0o600)).unwrap();
+        write_atomic(&path, b"a = 1\n", Some(0o600), Symlink::Follow).unwrap();
+        write_atomic(&path, b"a = 2\n", Some(0o600), Symlink::Follow).unwrap();
         assert_eq!(fs::read_to_string(&path).unwrap(), "a = 2\n");
         let mode = fs::metadata(&path).unwrap().permissions().mode();
         assert_eq!(mode & 0o777, 0o600);
@@ -262,7 +467,7 @@ mod tests {
         let path = dir.path().join("f.toml");
         fs::write(&path, "old").unwrap();
         fs::set_permissions(&path, fs::Permissions::from_mode(0o640)).unwrap();
-        write_atomic(&path, b"new", None).unwrap();
+        write_atomic(&path, b"new", None, Symlink::Replace).unwrap();
         let mode = fs::metadata(&path).unwrap().permissions().mode();
         assert_eq!(mode & 0o777, 0o640);
     }
@@ -274,7 +479,7 @@ mod tests {
         fs::write(&outside, "keep").unwrap();
         let path = dir.path().join("f.toml");
         std::os::unix::fs::symlink(&outside, &path).unwrap();
-        write_atomic(&path, b"new", None).unwrap();
+        write_atomic(&path, b"new", None, Symlink::Replace).unwrap();
         assert_eq!(fs::read_to_string(&outside).unwrap(), "keep");
         assert!(
             !fs::symlink_metadata(&path)
@@ -286,7 +491,7 @@ mod tests {
         let blocked = dir.path().join("blocked");
         fs::create_dir(&blocked).unwrap();
         fs::write(blocked.join("x"), "").unwrap();
-        assert!(write_atomic(&blocked, b"new", None).is_err());
+        assert!(write_atomic(&blocked, b"new", None, Symlink::Replace).is_err());
         assert_eq!(entries(dir.path()), ["blocked", "f.toml", "outside"]);
     }
 
