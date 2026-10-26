@@ -173,7 +173,8 @@ Values typed at the prompt or given with `-t` go to your OS keychain; see
 [Configuration](configuration.md#secret-values).
 
 `set-custom` takes bare host names (`api.example.com`, no scheme, port, path or IP; repeat
-`--host` for more), or `*.example.com` for every subdomain of a domain. It warns when a host name
+`--host` for more), or `*.example.com` for every subdomain of a domain (`*.com` is refused, as smolvm
+refuses it; smolvm has no public suffix list, so `*.co.uk` is accepted). It warns when a host name
 doesn't resolve: smolvm looks them up when it creates a sandbox, and the create fails while one
 doesn't resolve.
 Removing a custom service's last secret (in any scope) removes the service too.
