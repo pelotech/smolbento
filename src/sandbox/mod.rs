@@ -37,6 +37,9 @@ pub fn host_uid() -> u32 {
 pub struct StartPlan {
     pub network: NetworkSpec,
     pub env: Vec<(String, String)>,
+    /// Credential env vars without a value, removed from the inherited environment so the host
+    /// shell's same-named variables can't stand in for them.
+    pub remove: Vec<String>,
     pub uid: u32,
 }
 
@@ -109,7 +112,7 @@ pub fn list<R: Runner>(vm: &Smolvm<R>) -> Result<Vec<Sandbox>> {
 pub fn start<R: Runner>(vm: &Smolvm<R>, sb: &Sandbox, plan: &StartPlan) -> Result<()> {
     vm.update_network(&sb.machine, &plan.network)
         .context("applying the network policy")?;
-    vm.start(&sb.machine, &plan.env)?;
+    vm.start(&sb.machine, &plan.env, &plan.remove)?;
     vm.exec_captured(&ExecSpec {
         name: sb.machine.clone(),
         user: Some("root".into()),
@@ -202,6 +205,7 @@ mod tests {
         StartPlan {
             network: NetworkSpec::Open,
             env: vec![("TOK".into(), "secret".into())],
+            remove: vec!["GONE".into()],
             uid: 501,
         }
     }
@@ -236,6 +240,7 @@ mod tests {
             vm.runner().envs(),
             vec![vec![("TOK".to_string(), "secret".to_string())]]
         );
+        assert_eq!(vm.runner().removed(), vec![vec!["GONE".to_string()]]);
     }
 
     #[test]
@@ -272,6 +277,7 @@ mod tests {
             deny_cidrs: vec![],
             credentials: vec![],
             secrets: vec![],
+            credential_hosts: vec![],
         };
         let fake = FakeRunner::new();
         fake.ok(&["machine", "status"], STATUS);

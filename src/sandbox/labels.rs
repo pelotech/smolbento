@@ -7,6 +7,7 @@ pub const WORKSPACES: &str = "sbx.workspaces";
 pub const CREATED: &str = "sbx.created";
 pub const DOCKER: &str = "sbx.docker";
 pub const SECRETS: &str = "sbx.secrets";
+pub const CREDENTIAL_HOSTS: &str = "sbx.credential-hosts";
 
 /// Sandbox metadata, fixed at create and stored as smolvm machine labels.
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -23,6 +24,9 @@ pub struct Meta {
     pub docker: bool,
     /// Services whose credentials were bound at create.
     pub secrets: Vec<String>,
+    /// Hosts of those credentials as bound at create, sorted. The machine's credentials keep
+    /// them, so its allow list must too, whatever secrets.toml says now.
+    pub credential_hosts: Vec<String>,
 }
 
 impl Meta {
@@ -43,6 +47,12 @@ impl Meta {
         if !self.secrets.is_empty() {
             labels.insert(SECRETS.to_string(), self.secrets.join(","));
         }
+        if !self.credential_hosts.is_empty() {
+            labels.insert(
+                CREDENTIAL_HOSTS.to_string(),
+                self.credential_hosts.join(","),
+            );
+        }
         labels
     }
 
@@ -61,17 +71,22 @@ impl Meta {
                 .and_then(|c| c.parse().ok())
                 .unwrap_or(0),
             docker: labels.get(DOCKER).is_some_and(|d| d == "true"),
-            secrets: labels
-                .get(SECRETS)
-                .map(|s| {
-                    s.split(',')
-                        .filter(|x| !x.is_empty())
-                        .map(String::from)
-                        .collect()
-                })
-                .unwrap_or_default(),
+            secrets: list(labels.get(SECRETS)),
+            credential_hosts: list(labels.get(CREDENTIAL_HOSTS)),
         })
     }
+}
+
+/// A comma-joined label value.
+fn list(value: Option<&String>) -> Vec<String> {
+    value
+        .map(|s| {
+            s.split(',')
+                .filter(|x| !x.is_empty())
+                .map(String::from)
+                .collect()
+        })
+        .unwrap_or_default()
 }
 
 #[cfg(test)]
@@ -87,6 +102,7 @@ mod tests {
             created: 1000,
             docker: true,
             secrets: vec![],
+            credential_hosts: vec![],
         }
     }
 
@@ -119,6 +135,18 @@ mod tests {
         let labels = m.to_labels();
         assert_eq!(labels["sbx.secrets"], "anthropic,github");
         assert_eq!(Meta::from_labels(&labels).unwrap().secrets, m.secrets);
+    }
+
+    #[test]
+    fn credential_hosts_label_round_trips() {
+        let m = Meta {
+            credential_hosts: vec!["api.github.com".into(), "github.com".into()],
+            ..meta()
+        };
+        let labels = m.to_labels();
+        assert_eq!(labels["sbx.credential-hosts"], "api.github.com,github.com");
+        assert_eq!(Meta::from_labels(&labels), Some(m));
+        assert!(!meta().to_labels().contains_key("sbx.credential-hosts"));
     }
 
     #[test]

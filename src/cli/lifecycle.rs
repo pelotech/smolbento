@@ -83,6 +83,7 @@ pub(crate) fn build_request<R: Runner>(
         deny_cidrs: vec![],
         credentials: vec![],
         secrets: vec![],
+        credential_hosts: vec![],
     })
 }
 
@@ -92,8 +93,12 @@ pub fn create<R: Runner>(ctx: &mut Ctx<R>, a: &CreateArgs) -> Result<i32> {
         .split_first()
         .context("specify an agent, e.g. `sbt create claude .`")?;
     let mut req = build_request(ctx, agent, paths, &a.opts, false)?;
+    // Before prepare_create, which may prompt and records --deny-network.
+    if sandbox::find(&ctx.vm, &req.name)?.is_some() {
+        bail!("sandbox '{}' already exists", req.name);
+    }
     plan::prepare_create(ctx, &mut req, a.opts.deny_network)?;
-    let start_plan = plan::start_plan(ctx, &req.name, &req.secrets)?;
+    let start_plan = plan::start_plan(ctx, &req.name, &req.secrets, &req.credential_hosts)?;
     let sb = sandbox::create(&ctx.vm, &req, &start_plan)?;
     println!("Created sandbox {}", sb.name());
     Ok(0)
@@ -106,7 +111,8 @@ pub fn start<R: Runner>(ctx: &mut Ctx<R>, names: &[String]) -> Result<i32> {
             println!("{n} is already running");
             continue;
         }
-        let start_plan = plan::start_plan(ctx, sb.name(), &sb.meta.secrets)?;
+        let start_plan =
+            plan::start_plan(ctx, sb.name(), &sb.meta.secrets, &sb.meta.credential_hosts)?;
         sandbox::start(&ctx.vm, &sb, &start_plan)?;
         println!("Started {n}");
     }
@@ -249,6 +255,8 @@ mod tests {
             &json("sbx-claude-proj", "created", "claude-proj"),
         );
         fake.once_fail(&["machine", "status"], "NOT_FOUND", "vm not found");
+        // create checks the name, then sandbox::create checks again.
+        fake.once_fail(&["machine", "status"], "NOT_FOUND", "vm not found");
         sbt(
             &mut t.ctx,
             &[
@@ -302,6 +310,97 @@ mod tests {
     }
 
     #[test]
+    fn create_on_an_existing_name_fails_before_touching_the_policy() {
+        let mut t = test_env(&[]);
+        t.ctx.vm.runner().ok(
+            &["machine", "status"],
+            &json("sbx-claude-proj", "stopped", "claude-proj"),
+        );
+        let before = std::fs::read_to_string(t.ctx.paths.policy_file()).unwrap();
+        let err = sbt(&mut t.ctx, &["create", "claude", ".", "--deny-network"])
+            .unwrap_err()
+            .to_string();
+        assert!(
+            err.contains("sandbox 'claude-proj' already exists"),
+            "{err}"
+        );
+        assert_eq!(
+            std::fs::read_to_string(t.ctx.paths.policy_file()).unwrap(),
+            before
+        );
+        assert!(
+            !t.ctx
+                .vm
+                .runner()
+                .call_lines()
+                .iter()
+                .any(|l| l.contains("create") || l.contains("start"))
+        );
+    }
+
+    #[test]
+    fn create_deny_network_binds_global_secrets() {
+        use crate::policy::Policy;
+        use crate::secrets::{SecretEntry, SecretsFile, Source, scope_for};
+
+        let mut t = test_env(&[]);
+        let entry = SecretEntry {
+            service: "github".into(),
+            scope: scope_for(None),
+            source: Source::Keychain,
+        };
+        t.ctx.store.set(&entry.account(), "gh-123").unwrap();
+        let mut f = SecretsFile::default();
+        f.set(entry);
+        f.save(&t.ctx.paths).unwrap();
+        let fake = t.ctx.vm.runner();
+        fake.ok(
+            &["machine", "status"],
+            &json("sbx-claude-proj", "created", "claude-proj"),
+        );
+        fake.once_fail(&["machine", "status"], "NOT_FOUND", "vm not found");
+        // create checks the name, then sandbox::create checks again.
+        fake.once_fail(&["machine", "status"], "NOT_FOUND", "vm not found");
+        sbt(&mut t.ctx, &["create", "claude", ".", "--deny-network"]).unwrap();
+
+        let lines = t.ctx.vm.runner().call_lines();
+        let create = lines
+            .iter()
+            .find(|l| l.starts_with("machine create"))
+            .unwrap();
+        assert!(
+            create.contains(" --credential gh_token=GH_TOKEN@api.github.com,github.com,"),
+            "{create}"
+        );
+        assert!(create.contains(" --label sbx.secrets=github "), "{create}");
+        assert!(
+            create.contains(
+                " --label sbx.credential-hosts=api.github.com,api.githubcopilot.com,\
+                 copilot.github.com,gist.github.com,github.com,raw.githubusercontent.com "
+            ),
+            "{create}"
+        );
+        assert!(
+            !create.contains("--net "),
+            "deny-network is restricted: {create}"
+        );
+        assert!(Policy::load(&t.ctx.paths).unwrap().sandboxes["claude-proj"].deny_network);
+        let start = lines
+            .iter()
+            .position(|l| l == "machine start -n sbx-claude-proj");
+        let envs = t.ctx.vm.runner().envs();
+        assert!(start.is_some());
+        assert_eq!(
+            envs,
+            vec![vec![
+                ("GH_TOKEN".to_string(), "gh-123".to_string()),
+                ("GITHUB_TOKEN".to_string(), "gh-123".to_string())
+            ]]
+        );
+        assert!(!create.contains("gh-123"));
+    }
+
+    #[test]
     fn create_without_path_is_mountless_and_docker_can_be_disabled() {
         let mut t = test_env(&[("SMOLBENTO_DOCKER", "false")]);
         let fake = t.ctx.vm.runner();
@@ -309,6 +408,8 @@ mod tests {
             &["machine", "status"],
             &json("sbx-shell-proj", "created", "shell-proj"),
         );
+        fake.once_fail(&["machine", "status"], "NOT_FOUND", "vm not found");
+        // create checks the name, then sandbox::create checks again.
         fake.once_fail(&["machine", "status"], "NOT_FOUND", "vm not found");
         sbt(&mut t.ctx, &["create", "shell", "--cpus", "1", "-m", "1g"]).unwrap();
         let line = t

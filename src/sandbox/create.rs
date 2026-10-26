@@ -24,6 +24,8 @@ pub struct CreateRequest {
     pub credentials: Vec<Credential>,
     /// Services the credentials come from (the `sbx.secrets` label).
     pub secrets: Vec<String>,
+    /// The credentials' hosts, sorted (the `sbx.credential-hosts` label).
+    pub credential_hosts: Vec<String>,
 }
 
 /// Docker can't keep its storage on the overlay root filesystem, so these are directories on the
@@ -40,6 +42,7 @@ pub fn spec(req: &CreateRequest) -> CreateSpec {
         created: req.created,
         docker: req.docker,
         secrets: req.secrets.clone(),
+        credential_hosts: req.credential_hosts.clone(),
     };
     let mut mounts: Vec<Mount> = req.workspaces.iter().map(Workspace::mount).collect();
     if req.docker {
@@ -92,6 +95,7 @@ mod tests {
             deny_cidrs: vec![],
             credentials: vec![],
             secrets: vec![],
+            credential_hosts: vec![],
         }
     }
 

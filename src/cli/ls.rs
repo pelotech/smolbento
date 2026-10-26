@@ -132,6 +132,7 @@ mod tests {
                 created,
                 docker: true,
                 secrets: vec![],
+                credential_hosts: vec![],
             },
             machine: format!("sbx-{name}"),
             state,

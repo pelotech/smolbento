@@ -43,7 +43,8 @@ pub fn run<R: Runner>(ctx: &mut Ctx<R>, a: &RunArgs) -> Result<i32> {
                 Some(sb) => (sb, false),
                 None => {
                     plan::prepare_create(ctx, &mut req, a.opts.deny_network)?;
-                    let start_plan = plan::start_plan(ctx, &req.name, &req.secrets)?;
+                    let start_plan =
+                        plan::start_plan(ctx, &req.name, &req.secrets, &req.credential_hosts)?;
                     (sandbox::create(&ctx.vm, &req, &start_plan)?, true)
                 }
             }

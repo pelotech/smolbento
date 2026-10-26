@@ -29,9 +29,15 @@ pub trait Runner {
     /// Runs smolvm with `--error-format json` and captures its output.
     fn run(&self, args: &[String]) -> Result<Output>;
     /// Like `run`, with extra environment variables for the smolvm process only (secret values
-    /// for `machine start`).
-    fn run_with_env(&self, args: &[String], env: &[(String, String)]) -> Result<Output> {
-        let _ = env;
+    /// for `machine start`), and inherited variables to remove first (credentials without a value
+    /// must not fall back to the host shell's).
+    fn run_with_env(
+        &self,
+        args: &[String],
+        env: &[(String, String)],
+        remove: &[String],
+    ) -> Result<Output> {
+        let _ = (env, remove);
         self.run(args)
     }
     /// Runs smolvm attached to this terminal (stdio inherited) and returns its exit code.
@@ -75,12 +81,21 @@ impl ProcessRunner {
 
 impl Runner for ProcessRunner {
     fn run(&self, args: &[String]) -> Result<Output> {
-        self.run_with_env(args, &[])
+        self.run_with_env(args, &[], &[])
     }
 
-    fn run_with_env(&self, args: &[String], env: &[(String, String)]) -> Result<Output> {
+    fn run_with_env(
+        &self,
+        args: &[String],
+        env: &[(String, String)],
+        remove: &[String],
+    ) -> Result<Output> {
         self.trace(args);
-        let out = Command::new(&self.bin)
+        let mut cmd = Command::new(&self.bin);
+        for name in remove {
+            cmd.env_remove(name);
+        }
+        let out = cmd
             .arg("--error-format")
             .arg("json")
             .args(args)

@@ -19,6 +19,7 @@ pub struct FakeRunner {
     interactive_calls: RefCell<Vec<Vec<String>>>,
     interactive_code: RefCell<i32>,
     envs: RefCell<Vec<Vec<(String, String)>>>,
+    removed: RefCell<Vec<Vec<String>>>,
 }
 
 fn strings(items: &[&str]) -> Vec<String> {
@@ -105,6 +106,11 @@ impl FakeRunner {
         self.envs.borrow().clone()
     }
 
+    /// The variables removed by each `run_with_env` call, in order.
+    pub fn removed(&self) -> Vec<Vec<String>> {
+        self.removed.borrow().clone()
+    }
+
     pub fn interactive_calls(&self) -> Vec<Vec<String>> {
         self.interactive_calls.borrow().clone()
     }
@@ -123,8 +129,14 @@ impl Runner for FakeRunner {
         Ok(replies[index].output.clone())
     }
 
-    fn run_with_env(&self, args: &[String], env: &[(String, String)]) -> Result<Output> {
+    fn run_with_env(
+        &self,
+        args: &[String],
+        env: &[(String, String)],
+        remove: &[String],
+    ) -> Result<Output> {
         self.envs.borrow_mut().push(env.to_vec());
+        self.removed.borrow_mut().push(remove.to_vec());
         self.run(args)
     }
 

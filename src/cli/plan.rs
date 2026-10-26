@@ -40,39 +40,58 @@ pub fn credentials(secrets: &SecretsFile, services: &[String]) -> Result<Vec<Cre
     Ok(out)
 }
 
-/// Network and secret values for starting `sandbox`, whose credentials came from `bound`.
-pub fn start_plan<R: Runner>(ctx: &Ctx<R>, sandbox: &str, bound: &[String]) -> Result<StartPlan> {
+/// Network and secret values for starting `sandbox`, whose credentials came from `bound` and
+/// cover `hosts` (both recorded at create).
+pub fn start_plan<R: Runner>(
+    ctx: &Ctx<R>,
+    sandbox: &str,
+    bound: &[String],
+    hosts: &[String],
+) -> Result<StartPlan> {
     let policy = Policy::load(&ctx.paths)?;
     let secrets = SecretsFile::load(&ctx.paths)?;
-    let network = compile::network(&policy, sandbox, &credential_hosts(&secrets, bound));
+    let network = compile::network(&policy, sandbox, hosts);
     let mut env = Vec::new();
+    let mut remove = Vec::new();
     for name in bound {
+        // A service secrets.toml no longer defines has no known env vars to remove.
+        let vars = secrets
+            .service(name)
+            .map(|s| s.env_vars)
+            .unwrap_or_default();
         let (Some(service), Some(entry)) =
             (secrets.service(name), secrets.entry_for(sandbox, name))
         else {
             eprintln!(
                 "warning: {sandbox} was created with a {name} secret that's no longer set; requests using it will fail"
             );
+            remove.extend(vars);
             continue;
         };
         match resolve(entry, ctx.store.as_ref()) {
             Ok(value) => env.extend(service.env_vars.iter().map(|v| (v.clone(), value.clone()))),
-            Err(e) => eprintln!(
-                "warning: {name} secret for {sandbox}: {e:#}; requests using it will fail"
-            ),
+            Err(e) => {
+                remove.extend(vars);
+                eprintln!(
+                    "warning: {name} secret for {sandbox}: {e:#}; requests using it will fail"
+                );
+            }
         }
     }
     Ok(StartPlan {
         network,
         env,
+        remove,
         uid: ctx.uid,
     })
 }
 
 /// `sandbox::ensure_running` with this context's plan.
 pub fn ensure_running<R: Runner>(ctx: &Ctx<R>, sb: &mut Sandbox) -> Result<()> {
-    let (name, bound) = (sb.name().to_string(), sb.meta.secrets.clone());
-    sandbox::ensure_running(&ctx.vm, sb, || start_plan(ctx, &name, &bound))
+    let meta = sb.meta.clone();
+    sandbox::ensure_running(&ctx.vm, sb, || {
+        start_plan(ctx, &meta.name, &meta.secrets, &meta.credential_hosts)
+    })
 }
 
 /// Asks for a network policy the first time one is needed (sbx behaviour).
@@ -125,7 +144,8 @@ pub fn prepare_create<R: Runner>(
         .filter(|s| secrets.service(s).is_some())
         .collect();
     req.credentials = credentials(&secrets, &services)?;
-    req.network = compile::network(&policy, &req.name, &credential_hosts(&secrets, &services));
+    req.credential_hosts = credential_hosts(&secrets, &services);
+    req.network = compile::network(&policy, &req.name, &req.credential_hosts);
     req.deny_cidrs = compile::deny_cidrs(&policy, &req.name);
     req.secrets = services;
     Ok(())
@@ -146,14 +166,9 @@ pub fn push_network<R: Runner>(ctx: &Ctx<R>) -> Result<()> {
         }
     };
     let policy = Policy::load(&ctx.paths)?;
-    let secrets = SecretsFile::load(&ctx.paths)?;
     let mut updated = 0;
     for sb in sandboxes.iter().filter(|s| s.is_running()) {
-        let network = compile::network(
-            &policy,
-            sb.name(),
-            &credential_hosts(&secrets, &sb.meta.secrets),
-        );
+        let network = compile::network(&policy, sb.name(), &sb.meta.credential_hosts);
         match ctx.vm.update_network(&sb.machine, &network) {
             Ok(()) => updated += 1,
             Err(e) => eprintln!(
@@ -192,7 +207,10 @@ mod tests {
         let t = test_env(&[]);
         set_policy(&t, "mode = \"deny-all\"");
         save_secret(&t, "github", None, "gh-123");
-        let plan = start_plan(&t.ctx, "s1", &["github".to_string()]).unwrap();
+        let github = ["github".to_string()];
+        let hosts = credential_hosts(&SecretsFile::load(&t.ctx.paths).unwrap(), &github);
+        let plan = start_plan(&t.ctx, "s1", &github, &hosts).unwrap();
+        assert!(plan.remove.is_empty());
         assert_eq!(
             plan.env,
             vec![
@@ -210,7 +228,43 @@ mod tests {
     #[test]
     fn missing_secret_values_are_warnings() {
         let t = test_env(&[]);
-        let plan = start_plan(&t.ctx, "s1", &["github".to_string()]).unwrap();
+        let plan = start_plan(&t.ctx, "s1", &["github".to_string()], &[]).unwrap();
+        assert!(plan.env.is_empty());
+        assert_eq!(plan.remove, vec!["GH_TOKEN", "GITHUB_TOKEN"]);
+    }
+
+    #[test]
+    fn unresolvable_secret_vars_are_removed_not_inherited() {
+        let t = test_env(&[]);
+        let mut f = SecretsFile::load(&t.ctx.paths).unwrap();
+        // A keychain entry whose value isn't in the store.
+        f.set(SecretEntry {
+            service: "anthropic".into(),
+            scope: scope_for(None),
+            source: Source::Keychain,
+        });
+        f.save(&t.ctx.paths).unwrap();
+        let plan = start_plan(&t.ctx, "s1", &["anthropic".to_string()], &[]).unwrap();
+        assert!(plan.env.is_empty());
+        assert_eq!(plan.remove, vec!["ANTHROPIC_API_KEY"]);
+    }
+
+    #[test]
+    fn start_keeps_recorded_credential_hosts_after_the_service_is_gone() {
+        let t = test_env(&[]);
+        set_policy(&t, "mode = \"deny-all\"");
+        // `internal` was a custom service at create; secrets.toml no longer defines it.
+        let plan = start_plan(
+            &t.ctx,
+            "s1",
+            &["internal".to_string()],
+            &["api.internal.example".to_string()],
+        )
+        .unwrap();
+        let NetworkSpec::Restricted(list) = plan.network else {
+            panic!("restricted")
+        };
+        assert!(list.hosts().contains(&"api.internal.example".to_string()));
         assert!(plan.env.is_empty());
     }
 
@@ -234,10 +288,15 @@ mod tests {
             deny_cidrs: vec![],
             credentials: vec![],
             secrets: vec![],
+            credential_hosts: vec![],
         };
         prepare_create(&t.ctx, &mut req, true).unwrap();
         assert_eq!(req.secrets, vec!["anthropic"]);
         assert_eq!(req.credentials[0].env_var, "ANTHROPIC_API_KEY");
+        assert!(
+            req.credential_hosts
+                .contains(&"api.anthropic.com".to_string())
+        );
         let NetworkSpec::Restricted(list) = &req.network else {
             panic!("restricted")
         };
@@ -263,13 +322,27 @@ mod tests {
         set_policy(&t, "mode = \"deny-all\"");
         let ls = format!(
             "[{},{}]",
-            machine_json("sbx-a1", "running", &[("sbx.name", "a1")]),
+            machine_json(
+                "sbx-a1",
+                "running",
+                &[
+                    ("sbx.name", "a1"),
+                    ("sbx.credential-hosts", "api.x.example")
+                ]
+            ),
             machine_json("sbx-b1", "stopped", &[("sbx.name", "b1")]),
         );
         t.ctx.vm.runner().ok(&["machine", "ls", "--json"], &ls);
         t.ctx.vm.runner().ok(
             &["machine", "status", "-n", "sbx-a1"],
-            &machine_json("sbx-a1", "running", &[("sbx.name", "a1")]),
+            &machine_json(
+                "sbx-a1",
+                "running",
+                &[
+                    ("sbx.name", "a1"),
+                    ("sbx.credential-hosts", "api.x.example"),
+                ],
+            ),
         );
         push_network(&t.ctx).unwrap();
         let updates: Vec<String> = t
@@ -283,7 +356,8 @@ mod tests {
         assert_eq!(
             updates,
             vec![
-                "machine update -n sbx-a1 --reset-allow-list --allow-cidr 127.0.0.0/8 --allow-cidr ::1/128"
+                "machine update -n sbx-a1 --reset-allow-list --allow-host api.x.example \
+                 --allow-cidr 127.0.0.0/8 --allow-cidr ::1/128"
             ]
         );
     }

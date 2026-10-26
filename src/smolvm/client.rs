@@ -233,11 +233,12 @@ impl<R: Runner> Smolvm<R> {
         self.call(spec.to_args()).map(drop)
     }
 
-    /// `env` reaches the smolvm process only: it's how secret values get to credentials.
-    pub fn start(&self, name: &str, env: &[(String, String)]) -> Result<()> {
-        let out = self
-            .runner
-            .run_with_env(&args(&["machine", "start", "-n", name]), env)?;
+    /// `env` reaches the smolvm process only: it's how secret values get to credentials. `remove`
+    /// names inherited variables to drop, so a credential without a value isn't the host's.
+    pub fn start(&self, name: &str, env: &[(String, String)], remove: &[String]) -> Result<()> {
+        let out =
+            self.runner
+                .run_with_env(&args(&["machine", "start", "-n", name]), env, remove)?;
         if out.code != 0 {
             return Err(SmolvmError::from_output(&out).into());
         }
@@ -392,12 +393,14 @@ mod tests {
     #[test]
     fn start_passes_env_to_the_child_only() {
         let vm = Smolvm::new(FakeRunner::new());
-        vm.start("m", &[("TOK".into(), "secret".into())]).unwrap();
+        vm.start("m", &[("TOK".into(), "secret".into())], &["GONE".into()])
+            .unwrap();
         assert_eq!(vm.runner().call_lines(), vec!["machine start -n m"]);
         assert_eq!(
             vm.runner().envs(),
             vec![vec![("TOK".to_string(), "secret".to_string())]]
         );
+        assert_eq!(vm.runner().removed(), vec![vec!["GONE".to_string()]]);
     }
 
     #[test]
@@ -491,7 +494,7 @@ mod tests {
     #[test]
     fn lifecycle_calls() {
         let vm = Smolvm::new(FakeRunner::new());
-        vm.start("m", &[]).unwrap();
+        vm.start("m", &[], &[]).unwrap();
         vm.stop("m").unwrap();
         vm.delete("m").unwrap();
         vm.cp("/a", "m:/b").unwrap();
