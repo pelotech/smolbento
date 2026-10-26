@@ -176,6 +176,7 @@ Values typed at the prompt or given with `-t` go to your OS keychain; see
 `--host` for more), or `*.example.com` for every subdomain of a domain. It warns when a host name
 doesn't resolve: smolvm looks them up when it creates a sandbox, and the create fails while one
 doesn't resolve.
+Removing a custom service's last secret (in any scope) removes the service too.
 
 Built-in services: `anthropic`, `claude` (Claude Code's `claude setup-token` token), `cursor`,
 `droid`, `github`, `google`, `groq`, `mistral`, `nebius`, `openai`, `openrouter`, `xai`.

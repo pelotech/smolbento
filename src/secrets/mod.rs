@@ -117,12 +117,22 @@ impl SecretsFile {
         self.secrets.push(entry);
     }
 
+    /// Removes one entry; a custom service's definition goes with its last entry in any scope.
     pub fn remove(&mut self, service: &str, scope: &str) -> Option<SecretEntry> {
         let i = self
             .secrets
             .iter()
             .position(|e| e.service == service && e.scope == scope)?;
-        Some(self.secrets.remove(i))
+        let gone = self.secrets.remove(i);
+        self.prune_custom();
+        Some(gone)
+    }
+
+    /// Drops custom services no entry uses any more.
+    fn prune_custom(&mut self) {
+        let secrets = &self.secrets;
+        self.custom
+            .retain(|c| secrets.iter().any(|e| e.service == c.name));
     }
 
     /// The entry a sandbox uses for a service: its own scope first, then global.
@@ -158,6 +168,7 @@ impl SecretsFile {
             .into_iter()
             .partition(|e| e.scope == own);
         self.secrets = kept;
+        self.prune_custom();
         gone
     }
 }

@@ -614,6 +614,32 @@ mod tests {
     }
 
     #[test]
+    fn rm_of_the_last_custom_entry_drops_its_definition() {
+        let mut t = test_env(&[]);
+        for scope in [&[][..], &["--sandbox", "a1"][..]] {
+            let mut args = vec![
+                "secret",
+                "set-custom",
+                "--host",
+                "httpbin.org",
+                "--env",
+                "TOK",
+                "-t",
+                "v",
+            ];
+            args.extend_from_slice(scope);
+            sbt(&mut t.ctx, &args).unwrap();
+        }
+        sbt(&mut t.ctx, &["secret", "rm", "tok"]).unwrap();
+        let f = SecretsFile::load(&t.ctx.paths).unwrap();
+        assert!(f.service("tok").is_some(), "a1 still uses it");
+        sbt(&mut t.ctx, &["secret", "rm", "tok", "--sandbox", "a1"]).unwrap();
+        let f = SecretsFile::load(&t.ctx.paths).unwrap();
+        assert!(f.custom.is_empty(), "{:?}", f.custom);
+        assert!(f.service("tok").is_none());
+    }
+
+    #[test]
     fn rm_sandbox_forgets_its_secrets_and_policy() {
         let mut t = test_env(&[]);
         sbt(
