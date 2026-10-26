@@ -277,9 +277,10 @@ mod tests {
     fn groups_for_hosts() {
         assert_eq!(group_for("api.anthropic.com"), Some("default-ai-services"));
         assert_eq!(
-            group_for("crl3.digicert.com"),
+            group_for("crl3.digicert.com:80"),
             Some("default-cert-validation")
         );
+        assert_eq!(group_for("crl3.digicert.com"), None, "port 80 only");
         assert_eq!(group_for("cache.nixos.org"), Some("smolbento-nix"));
         assert_eq!(group_for("example.com"), None);
     }

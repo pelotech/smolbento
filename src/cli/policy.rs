@@ -419,7 +419,7 @@ pub fn render_ls(
             .filter_map(|r| {
                 Resource::parse(r)
                     .ok()
-                    .and_then(|p| p.note())
+                    .and_then(|p| p.note(rule.decision == Decision::Deny))
                     .map(|n| format!("{r}: {n}"))
             })
             .collect();

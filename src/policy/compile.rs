@@ -2,7 +2,7 @@
 
 use std::collections::BTreeSet;
 
-use super::rules::{Allow, Pattern, Resource};
+use super::rules::{Allow, Pattern, Resource, split_port};
 use super::{Decision, Mode, Policy, presets};
 use crate::smolvm::{AllowList, NetworkSpec};
 
@@ -33,8 +33,13 @@ fn covers(deny: &Resource, domain: &str, any_depth: bool) -> bool {
 
 /// An allow entry is dropped when a deny repeats it or covers all it allows: an exact host the
 /// deny matches, or a wildcard's whole subtree.
+/// A deny with a port only drops the same port-scoped entry: smolvm can't deny one port, and
+/// dropping the host would block all its other ports too.
 fn denied(allow: &Resource, denies: &[Resource]) -> bool {
     denies.iter().any(|d| {
+        if d.port.is_some() {
+            return d.port == allow.port && d.raw.eq_ignore_ascii_case(&allow.raw);
+        }
         d.raw.eq_ignore_ascii_case(&allow.raw)
             || match &allow.pattern {
                 Pattern::Exact(h) => d.matches(h),
@@ -115,10 +120,12 @@ pub fn deny_reaches_credential_host(deny: &Resource, cred: &str) -> bool {
     }
 }
 
-/// Deny CIDRs for `machine create` (smolvm accepts them at create only), sorted and unique.
+/// Deny CIDRs for `machine create` (smolvm accepts them at create only), sorted and unique. One
+/// with a port is left out: smolvm would deny every port of the range.
 pub fn deny_cidrs(policy: &Policy, sandbox: &str) -> Vec<String> {
     resources(policy, sandbox, Decision::Deny)
         .into_iter()
+        .filter(|r| r.port.is_none())
         .filter_map(|r| match r.to_allow() {
             Allow::Cidr(c) => Some(c),
             _ => None,
@@ -184,7 +191,11 @@ pub fn check(
     credential_hosts: &[String],
     target: &str,
 ) -> Verdict {
-    let host = target.trim().to_ascii_lowercase();
+    let target = target.trim().to_ascii_lowercase();
+    // Rules match the target with its port; smolvm's allow list and credentials see the host.
+    let host = split_port(&target)
+        .map_or(target.as_str(), |(h, _)| h)
+        .to_string();
     if credential_hosts.iter().any(|h| credential_admits(h, &host)) {
         return verdict(true, "a secret bound to this sandbox uses this host");
     }
@@ -200,27 +211,32 @@ pub fn check(
                 .collect(),
         ),
     };
-    let hit = |decision: Decision| {
-        rules.iter().find_map(|(r, scope)| {
-            if r.decision != decision {
-                return None;
-            }
-            r.resources
-                .iter()
-                .filter_map(|x| Resource::parse(x).ok())
-                .find(|res| res.matches(&host))
-                .map(|res| (r, scope, res))
-        })
+    let hits = |decision: Decision| {
+        rules
+            .iter()
+            .filter(move |(r, _)| r.decision == decision)
+            .flat_map(|(r, scope)| {
+                r.resources
+                    .iter()
+                    .filter_map(|x| Resource::parse(x).ok())
+                    .filter(|res| res.matches(&target))
+                    .map(move |res| (*r, scope, res))
+            })
     };
-    if let Some((r, scope, res)) = hit(Decision::Deny) {
+    // A CIDR deny without a port is enforced (at create); report it before any other deny.
+    let enforced =
+        |res: &Resource| matches!(res.pattern, Pattern::Cidr { .. }) && res.port.is_none();
+    let spec = || network(policy, sandbox.unwrap_or(""), credential_hosts);
+    let everything = mode != Mode::AllowAll;
+    let mut denies: Vec<_> = hits(Decision::Deny).collect();
+    denies.sort_by_key(|(_, _, res)| !enforced(res));
+    if let Some((r, scope, res)) = denies.first() {
         let text = format!("deny rule {} ({scope})", r.id);
-        if matches!(res.pattern, Pattern::Cidr { .. }) {
+        if enforced(res) {
             return verdict(false, text);
         }
-        // smolvm has no host deny: a host deny only removes allow entries.
-        let spec = network(policy, sandbox.unwrap_or(""), credential_hosts);
-        let everything = mode != Mode::AllowAll;
-        return match admits(&spec, &host, everything) {
+        // smolvm has no host or port deny: a host deny only removes allow entries.
+        return match admits(&spec(), &host, everything) {
             Some(why) => verdict(
                 true,
                 format!("{text} isn't enforced: smolvm still allows it via {why}"),
@@ -236,15 +252,23 @@ pub fn check(
         };
         return verdict(true, why);
     }
-    if let Some((r, scope, _)) = hit(Decision::Allow) {
+    if let Some((r, scope, _)) = hits(Decision::Allow).next() {
         return verdict(true, format!("allow rule {} ({scope})", r.id));
     }
     if mode == Mode::Balanced
-        && let Some(group) = presets::group_for(&host)
+        && let Some(group) = presets::group_for(&target)
     {
         return verdict(true, format!("balanced preset ({group})"));
     }
-    verdict(false, format!("no rule allows it ({} mode)", mode.name()))
+    let text = format!("no rule allows it ({} mode)", mode.name());
+    // smolvm allows a host on every port, and widens wildcards: say so when it lets this through.
+    match admits(&spec(), &host, everything) {
+        Some(why) => verdict(
+            true,
+            format!("{text}, but smolvm still allows it via {why}"),
+        ),
+        None => verdict(false, text),
+    }
 }
 
 #[cfg(test)]
@@ -356,6 +380,90 @@ mod tests {
         assert!(patterns("crl*.x.com", "**.x.com").is_empty());
         assert_eq!(patterns("**.x.com", "**.a.x.com"), ["*.x.com"]);
         assert_eq!(patterns("**.notx.com", "**.x.com"), ["*.notx.com"]);
+    }
+
+    #[test]
+    fn a_port_scoped_deny_never_removes_a_host_allow() {
+        let patterns = |allows: &str, denies: &str| {
+            let mut p = policy(Mode::DenyAll);
+            p.add_rule(None, Decision::Allow, allows, "added", None, None)
+                .unwrap();
+            p.add_rule(None, Decision::Deny, denies, "added", None, None)
+                .unwrap();
+            list(&network(&p, "s1", &[])).patterns().to_vec()
+        };
+        // smolvm can't deny one port: dropping the host would block every port.
+        assert_eq!(patterns("api.x.com", "api.x.com:8080"), ["api.x.com"]);
+        assert_eq!(patterns("api.x.com", "api.x.com:443"), ["api.x.com"]);
+        assert_eq!(patterns("**.x.com", "**.x.com:22"), ["*.x.com"]);
+        // The same port-scoped entry allowed and denied leaves nothing allowed.
+        assert!(patterns("api.x.com:8080", "api.x.com:8080").is_empty());
+    }
+
+    #[test]
+    fn a_port_scoped_deny_cidr_isnt_a_create_deny() {
+        let mut p = policy(Mode::AllowAll);
+        p.add_rule(
+            None,
+            Decision::Deny,
+            "10.0.0.0/8:22, 192.168.0.0/16",
+            "added",
+            None,
+            None,
+        )
+        .unwrap();
+        assert_eq!(deny_cidrs(&p, "s1"), vec!["192.168.0.0/16"]);
+        let v = check(&p, Some("s1"), &[], "10.1.2.3:22");
+        assert!(
+            v.allowed && v.reason.contains("isn't enforced"),
+            "{}",
+            v.reason
+        );
+    }
+
+    #[test]
+    fn check_honours_ports() {
+        let mut p = policy(Mode::Balanced);
+        p.add_rule(None, Decision::Allow, "api.x.com", "added", None, None)
+            .unwrap();
+        let deny = p
+            .add_rule(None, Decision::Deny, "api.x.com:8080", "added", None, None)
+            .unwrap();
+        let v = check(&p, Some("s1"), &[], "api.x.com:8080");
+        assert!(
+            v.allowed && v.reason.contains(&deny) && v.reason.contains("isn't enforced"),
+            "{}",
+            v.reason
+        );
+        let v = check(&p, Some("s1"), &[], "api.x.com:9090");
+        assert!(v.allowed && !v.reason.contains(&deny), "{}", v.reason);
+        let v = check(&p, Some("s1"), &[], "api.x.com");
+        assert!(v.allowed && !v.reason.contains(&deny), "{}", v.reason);
+        // A bound secret's host with a port is still that host.
+        let v = check(&p, Some("s1"), &["cred.example".into()], "cred.example:443");
+        assert!(v.allowed && v.reason.contains("secret"), "{}", v.reason);
+        // The preset allows ocsp.digicert.com:80 only, in sbx; smolvm allows every port.
+        let v = check(&p, Some("s1"), &[], "ocsp.digicert.com:80");
+        assert!(v.allowed && v.reason.contains("balanced"), "{}", v.reason);
+        let v = check(&p, Some("s1"), &[], "ocsp.digicert.com");
+        assert!(
+            v.allowed && v.reason.contains("smolvm still allows"),
+            "{}",
+            v.reason
+        );
+    }
+
+    #[test]
+    fn check_prefers_an_enforced_cidr_deny() {
+        let mut p = policy(Mode::AllowAll);
+        p.add_rule(None, Decision::Deny, "**", "added", None, None)
+            .unwrap();
+        let cidr = p
+            .add_rule(None, Decision::Deny, "10.0.0.0/8", "added", None, None)
+            .unwrap();
+        let v = check(&p, Some("s1"), &[], "10.1.2.3");
+        assert!(!v.allowed && v.reason.contains(&cidr), "{}", v.reason);
+        assert!(!v.reason.contains("isn't enforced"), "{}", v.reason);
     }
 
     #[test]

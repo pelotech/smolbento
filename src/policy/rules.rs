@@ -118,10 +118,15 @@ impl Resource {
         })
     }
 
-    /// sbx semantics, used by `policy check`, approvals and deny subtraction.
+    /// sbx semantics, used by `policy check`, approvals and deny subtraction. A rule without a
+    /// port matches every port. A rule with a port matches only that port; a target without one
+    /// is an HTTPS request (`policy check network api.x.com`), so it counts as port 443.
     pub fn matches(&self, target: &str) -> bool {
         let target = target.trim().to_ascii_lowercase();
-        let host = split_port(&target).map_or(target.as_str(), |(h, _)| h);
+        let (host, port) = split_port(&target).unwrap_or((target.as_str(), None));
+        if self.port.is_some_and(|p| p != port.unwrap_or(443)) {
+            return false;
+        }
         match &self.pattern {
             Pattern::Everything => true,
             Pattern::Exact(h) => host == h,
@@ -152,11 +157,17 @@ impl Resource {
         }
     }
 
-    /// How smolvm enforces this more loosely than sbx would, if it does.
-    pub fn note(&self) -> Option<String> {
+    /// How smolvm enforces this more loosely than sbx would, if it does. smolvm can't limit a
+    /// host to some ports: an allow opens every port, and a deny with a port isn't applied (denying
+    /// the whole host would block the ports it leaves open).
+    pub fn note(&self, deny: bool) -> Option<String> {
         let mut notes = Vec::new();
-        if let Some(p) = self.port {
-            notes.push(format!("port {p} not enforced (all ports allowed)"));
+        match self.port {
+            Some(p) if deny => {
+                return Some(format!("port {p} not enforced (deny not applied)"));
+            }
+            Some(p) => notes.push(format!("port {p} not enforced (all ports allowed)")),
+            None => {}
         }
         if let Pattern::Glob { parent, .. } = &self.pattern {
             notes.push(format!("widened to *.{parent}"));
@@ -190,7 +201,7 @@ pub(crate) fn check_host(host: &str, raw: &str) -> Result<()> {
     Ok(())
 }
 
-fn split_port(s: &str) -> Result<(&str, Option<u16>)> {
+pub(crate) fn split_port(s: &str) -> Result<(&str, Option<u16>)> {
     // `[::1]:443` is a bracketed IPv6 address; `[ab]pi.x.com` is a glob class, not a bracket.
     if let Some(rest) = s.strip_prefix('[')
         && rest.split_once(']').is_some_and(|(a, _)| a.contains(':'))
@@ -428,6 +439,25 @@ mod tests {
     }
 
     #[test]
+    fn port_scoped_rules_match_only_their_port() {
+        assert!(r("api.x.com:8080").matches("api.x.com:8080"));
+        assert!(!r("api.x.com:8080").matches("api.x.com:9090"));
+        assert!(
+            !r("api.x.com:8080").matches("api.x.com"),
+            "a portless target means port 443"
+        );
+        assert!(r("api.x.com:443").matches("api.x.com"));
+        assert!(
+            r("api.x.com").matches("api.x.com:8080"),
+            "no port: any port"
+        );
+        assert!(r("10.0.0.0/8:22").matches("10.1.2.3:22"));
+        assert!(!r("10.0.0.0/8:22").matches("10.1.2.3:80"));
+        assert!(r("[::1]:443").matches("::1"));
+        assert!(!r("[::1]:22").matches("[::1]:443"));
+    }
+
+    #[test]
     fn translation_to_smolvm() {
         // Patterns, not `--allow-host`: smolvm resolves `--allow-host` names at create and fails on
         // one with no address record (blob.core.windows.net, statsig.anthropic.com).
@@ -446,11 +476,21 @@ mod tests {
 
     #[test]
     fn notes_for_looser_enforcement() {
-        assert_eq!(r("a.com").note(), None);
-        assert!(r("a.com:8443").note().unwrap().contains("port"));
+        assert_eq!(r("a.com").note(false), None);
+        assert!(
+            r("a.com:8443")
+                .note(false)
+                .unwrap()
+                .contains("all ports allowed")
+        );
+        let deny = r("a.com:8443").note(true).unwrap();
+        assert!(
+            deny.contains("port 8443") && deny.contains("not applied"),
+            "{deny}"
+        );
         assert!(
             r("crl*.digicert.com")
-                .note()
+                .note(false)
                 .unwrap()
                 .contains("*.digicert.com")
         );
