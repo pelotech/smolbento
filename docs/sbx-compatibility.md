@@ -36,7 +36,7 @@ does nothing: smolbento has no daemon.
 | Network | Default-deny policy | Same three modes and rule syntax. Exact hosts match only that host, and `**.x.com` matches subdomains at any depth but not `x.com` (as in sbx). Looser: `*.x.com` (sbx: exactly one label) matches any depth; wildcards inside a label (`crl*.x.com`, `?`, `[..]`) widen to `*.x.com`; ports, methods and paths in rules aren't enforced. `balanced` is sbx's 195 rules plus Nix caches, on any port rather than only 443 |
 | Host deny rules | Always enforced | Under allow-all, host deny rules aren't enforced (only deny CIDRs are, at create), and a host deny that a broader allow still covers isn't either; `sbt policy check` says "isn't enforced" |
 | Secrets | Proxy injects on the wire | smolvm substitutes on the wire; a sandbox with a secret can always reach that service's hosts (`policy deny` of one is refused); new values apply on the next start |
-| Policy changes | Live everywhere | Live, except switching a running sandbox between allow-all and a restricted mode, and deny-CIDR rules, which apply to sandboxes started or created afterwards |
+| Policy changes | Live everywhere | Live, except switching a running sandbox between allow-all and a restricted mode, which applies on its next start, and deny-CIDR rules, which apply only to sandboxes created afterwards |
 | `--deny-network` | Applies to the sandbox | Only when the sandbox is created; on an existing sandbox `run` warns |
 | Approvals | Queue | Derived from smolvm's blocked-request (egress) log; the host is the approval id |
 | Published ports | Any host IP | `127.0.0.1` only (smolvm publishes on loopback) |
