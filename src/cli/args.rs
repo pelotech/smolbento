@@ -63,8 +63,8 @@ pub enum Cmd {
     Settings(SettingsCmd),
     /// Accepted for sbx compatibility; smolbento needs no daemon
     Daemon(Passthrough),
-    /// Publish or unpublish ports (not implemented yet)
-    Ports(Passthrough),
+    /// Publish or unpublish ports on a sandbox (127.0.0.1 only)
+    Ports(PortsArgs),
     /// Network policy
     #[command(subcommand)]
     Policy(PolicyCmd),
@@ -150,6 +150,7 @@ impl Cmd {
                 | Cmd::Prune(_)
                 | Cmd::Reset(_)
                 | Cmd::Cp(_)
+                | Cmd::Ports(_)
         )
     }
 
@@ -164,6 +165,17 @@ impl Cmd {
                 | Cmd::Volume(_)
         )
     }
+}
+
+#[derive(Debug, Args)]
+pub struct PortsArgs {
+    pub sandbox: String,
+    /// [[127.0.0.1:]HOST:]PORT[/proto]; no host port picks a free one
+    #[arg(long)]
+    pub publish: Vec<String>,
+    /// HOST:PORT[/proto]
+    #[arg(long)]
+    pub unpublish: Vec<String>,
 }
 
 /// Arguments of a command that isn't implemented yet, kept so sbx command lines still parse.

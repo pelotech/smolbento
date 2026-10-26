@@ -59,8 +59,11 @@ secret set-custom --host api.example.com --env EXAMPLE_TOKEN --command "pass sho
 secret ls -g
 secret rm github --sandbox my-sandbox
 secret rm --all -f
-# Later phases (must parse; exit 2 for now)
+# Ports
+ports my-sandbox
+ports my-sandbox --publish 3000 --unpublish 8080:80
 ports my-sandbox --publish 8080:80
+# Later phases (must parse; exit 2 for now)
 kit inspect ghcr.io/example/kit:1
 mcp add linear --url https://mcp.linear.app/sse
 template ls

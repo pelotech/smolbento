@@ -7,6 +7,7 @@ mod lifecycle;
 mod ls;
 mod plan;
 mod policy;
+mod ports;
 mod run;
 mod secret;
 mod settings;
@@ -133,6 +134,7 @@ pub fn dispatch<R: Runner>(ctx: &mut Ctx<R>, cli: Cli) -> Result<i32> {
         Cmd::Settings(s) => settings::run(ctx, s),
         Cmd::Policy(p) => policy::run(ctx, p),
         Cmd::Secret(s) => secret::run(ctx, s),
+        Cmd::Ports(a) => ports::run(ctx, &a),
         Cmd::Daemon(_) => {
             println!("smolbento needs no daemon; smolvm manages each sandbox directly");
             Ok(0)
