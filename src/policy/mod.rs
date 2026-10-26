@@ -85,9 +85,22 @@ pub struct Policy {
     pub sandboxes: BTreeMap<String, SandboxPolicy>,
 }
 
-/// A short, stable id from the rule's content (FNV-1a).
-fn rule_id(scope: &str, decision: Decision, resources: &[String]) -> String {
-    let input = format!("{scope}|{}|{}", decision.name(), resources.join(","));
+/// A short, stable id from the rule's content, qualifiers included (FNV-1a).
+fn rule_id(
+    scope: &str,
+    decision: Decision,
+    resources: &[String],
+    method: Option<&str>,
+    path: Option<&str>,
+) -> String {
+    // Qualifiers are appended only when present, so ids of rules without them stay the same.
+    let mut input = format!("{scope}|{}|{}", decision.name(), resources.join(","));
+    if let Some(m) = method {
+        input.push_str(&format!("|method={m}"));
+    }
+    if let Some(p) = path {
+        input.push_str(&format!("|path={p}"));
+    }
     let mut h: u64 = 0xcbf2_9ce4_8422_2325;
     for b in input.bytes() {
         h ^= u64::from(b);
@@ -145,7 +158,13 @@ impl Policy {
     ) -> Result<String> {
         let parsed = rules::parse_list(resources)?;
         let resources: Vec<String> = parsed.into_iter().map(|r| r.raw).collect();
-        let id = rule_id(sandbox.unwrap_or("global"), decision, &resources);
+        let id = rule_id(
+            sandbox.unwrap_or("global"),
+            decision,
+            &resources,
+            method.as_deref(),
+            path.as_deref(),
+        );
         let list = self.rules_mut(sandbox);
         if !list.iter().any(|r| r.id == id) {
             list.push(Rule {
@@ -325,6 +344,57 @@ mod tests {
         assert_eq!(p.rules[0].resources, vec!["b.com"]);
         assert_eq!(p.remove_rules(None, Some(&a), None), 1);
         assert!(p.rules.is_empty());
+    }
+
+    #[test]
+    fn method_and_path_make_a_distinct_rule() {
+        let mut p = Policy::default();
+        let plain = p
+            .add_rule(None, Decision::Allow, "a.com", "added", None, None)
+            .unwrap();
+        // Ids of rules without qualifiers don't change.
+        assert_eq!(
+            plain,
+            rule_id("global", Decision::Allow, &["a.com".into()], None, None)
+        );
+        assert_eq!(plain, "r-38093da7");
+        let get = p
+            .add_rule(
+                None,
+                Decision::Allow,
+                "a.com",
+                "added",
+                Some("GET".into()),
+                None,
+            )
+            .unwrap();
+        let path = p
+            .add_rule(
+                None,
+                Decision::Allow,
+                "a.com",
+                "added",
+                None,
+                Some("/v1".into()),
+            )
+            .unwrap();
+        assert_ne!(plain, get);
+        assert_ne!(plain, path);
+        assert_ne!(get, path);
+        assert_eq!(p.rules.len(), 3);
+        assert_eq!(p.rules[1].method.as_deref(), Some("GET"));
+        let again = p
+            .add_rule(
+                None,
+                Decision::Allow,
+                "a.com",
+                "added",
+                Some("GET".into()),
+                None,
+            )
+            .unwrap();
+        assert_eq!(again, get);
+        assert_eq!(p.rules.len(), 3);
     }
 
     #[test]
