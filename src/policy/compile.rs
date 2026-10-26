@@ -149,10 +149,11 @@ pub fn check(
     target: &str,
 ) -> Verdict {
     let host = target.trim().to_ascii_lowercase();
-    if credential_hosts
-        .iter()
-        .any(|h| h.to_ascii_lowercase() == host)
-    {
+    // smolvm's `--allow-host` also admits subdomains.
+    if credential_hosts.iter().any(|h| {
+        let h = h.to_ascii_lowercase();
+        host == h || host.ends_with(&format!(".{h}"))
+    }) {
         return verdict(true, "a secret bound to this sandbox uses this host");
     }
     // No sandbox: compile with the global rules only (an empty name has no per-sandbox entry).
@@ -464,5 +465,14 @@ mod tests {
             "api.example.COM",
         );
         assert!(v.allowed && v.reason.contains("secret"), "{}", v.reason);
+    }
+
+    #[test]
+    fn credential_hosts_cover_their_subdomains_as_smolvm_does() {
+        let bound = ["github.com".to_string()];
+        let v = check(&policy(Mode::DenyAll), Some("s1"), &bound, "foo.github.com");
+        assert!(v.allowed && v.reason.contains("secret"), "{}", v.reason);
+        let v = check(&policy(Mode::DenyAll), Some("s1"), &bound, "notgithub.com");
+        assert!(!v.allowed, "{}", v.reason);
     }
 }

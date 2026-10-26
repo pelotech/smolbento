@@ -15,7 +15,8 @@ Docker engine are kept off your machine. The agent can reach your machine only t
 - Choose a network policy (`balanced` or `deny-all` for untrusted work). Sandboxes created before
   you chose one stay open until their next start.
 - Secrets are placeholders inside the sandbox; the real value only travels to that service's hosts,
-  and only over HTTPS. A secret's hosts are always reachable from sandboxes that bound it.
+  and only over HTTPS. A secret's hosts, and their subdomains, are always reachable from sandboxes
+  that bound it.
 - Host rules are enforced a little more loosely than in sbx: `*.x.com` matches any depth,
   wildcards inside a label widen, and ports, methods and paths in rules aren't enforced. See
   [sbx compatibility](sbx-compatibility.md).
