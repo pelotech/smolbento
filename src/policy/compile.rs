@@ -151,14 +151,16 @@ pub fn deny_cidrs(policy: &Policy, sandbox: &str) -> Vec<String> {
         .collect()
 }
 
-/// Why a compiled network still lets `host` through, if it does (the way smolvm matches).
-fn admits(spec: &NetworkSpec, host: &str, everything_rule: bool) -> Option<String> {
+/// Why a network compiled under `mode` still lets `host` through, if it does (the way smolvm
+/// matches).
+fn admits(spec: &NetworkSpec, host: &str, mode: Mode) -> Option<String> {
     let NetworkSpec::Restricted(list) = spec else {
+        // Open in a restricted mode: an allow rule for `**`.
         return Some(
-            if everything_rule {
-                "an allow-everything rule"
-            } else {
+            if mode == Mode::AllowAll {
                 "allow-all mode"
+            } else {
+                "an allow-everything rule"
             }
             .into(),
         );
@@ -230,7 +232,6 @@ pub fn check(
     let enforced =
         |res: &Resource| matches!(res.pattern, Pattern::Cidr { .. }) && res.port.is_none();
     let spec = || network_for(policy, sandbox, credential_hosts);
-    let everything = mode != Mode::AllowAll;
     let mut denies: Vec<_> = hits(Decision::Deny).collect();
     denies.sort_by_key(|(_, _, res)| !enforced(res));
     if let Some((r, scope, res)) = denies.first() {
@@ -239,7 +240,7 @@ pub fn check(
             return verdict(false, text);
         }
         // smolvm has no host or port deny: a host deny only removes allow entries.
-        return match admits(&spec(), &host, everything) {
+        return match admits(&spec(), &host, mode) {
             Some(why) => verdict(
                 true,
                 format!("{text} isn't enforced: smolvm still allows it via {why}"),
@@ -265,7 +266,7 @@ pub fn check(
     }
     let text = format!("no rule allows it ({} mode)", mode.name());
     // smolvm allows a host on every port, and widens wildcards: say so when it lets this through.
-    match admits(&spec(), &host, everything) {
+    match admits(&spec(), &host, mode) {
         Some(why) => verdict(
             true,
             format!("{text}, but smolvm still allows it via {why}"),
@@ -589,14 +590,17 @@ mod tests {
             vec!["api.x.com".to_string(), "*.y.com".to_string()],
             vec![],
         ));
-        assert!(admits(&spec, "api.x.com", false).is_some());
-        assert!(admits(&spec, "a.api.x.com", false).is_none(), "exact only");
-        assert!(admits(&spec, "a.b.y.com", false).is_some());
+        assert!(admits(&spec, "api.x.com", Mode::DenyAll).is_some());
         assert!(
-            admits(&spec, "y.com", false).is_none(),
+            admits(&spec, "a.api.x.com", Mode::DenyAll).is_none(),
+            "exact only"
+        );
+        assert!(admits(&spec, "a.b.y.com", Mode::DenyAll).is_some());
+        assert!(
+            admits(&spec, "y.com", Mode::DenyAll).is_none(),
             "*.y.com excludes the apex"
         );
-        assert!(admits(&spec, "sub.cred.example", false).is_some());
+        assert!(admits(&spec, "sub.cred.example", Mode::DenyAll).is_some());
     }
 
     #[test]
@@ -639,8 +643,8 @@ mod tests {
         let v = check(&policy(Mode::DenyAll), Some("s1"), &bound, "notion.com");
         assert!(!v.allowed, "the apex isn't covered: {}", v.reason);
         let spec = network(&policy(Mode::DenyAll), "s1", &bound);
-        assert!(admits(&spec, "api.notion.com", false).is_some());
-        assert!(admits(&spec, "notion.com", false).is_none());
+        assert!(admits(&spec, "api.notion.com", Mode::DenyAll).is_some());
+        assert!(admits(&spec, "notion.com", Mode::DenyAll).is_none());
     }
 
     #[test]
