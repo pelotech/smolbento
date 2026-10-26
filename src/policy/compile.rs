@@ -67,7 +67,7 @@ pub fn network(policy: &Policy, sandbox: &str, credential_hosts: &[String]) -> N
     NetworkSpec::Restricted(AllowList::new(hosts, patterns, cidrs))
 }
 
-/// Deny CIDRs for `machine create` (smolvm accepts them at create only).
+/// Deny CIDRs for `machine create` (smolvm accepts them at create only), sorted and unique.
 pub fn deny_cidrs(policy: &Policy, sandbox: &str) -> Vec<String> {
     resources(policy, sandbox, Decision::Deny)
         .into_iter()
@@ -75,7 +75,42 @@ pub fn deny_cidrs(policy: &Policy, sandbox: &str) -> Vec<String> {
             Allow::Cidr(c) => Some(c),
             _ => None,
         })
+        .collect::<BTreeSet<_>>()
+        .into_iter()
         .collect()
+}
+
+/// Why a compiled network still lets `host` through, if it does (the way smolvm matches).
+fn admits(spec: &NetworkSpec, host: &str, everything_rule: bool) -> Option<String> {
+    let NetworkSpec::Restricted(list) = spec else {
+        return Some(
+            if everything_rule {
+                "an allow-everything rule"
+            } else {
+                "allow-all mode"
+            }
+            .into(),
+        );
+    };
+    let under = |d: &str| host.strip_suffix(d).is_some_and(|p| p.ends_with('.'));
+    let entry = list
+        .hosts()
+        .iter()
+        .find(|h| host == h.as_str() || under(h))
+        .cloned()
+        .or_else(|| {
+            list.patterns()
+                .iter()
+                .find(|p| p.strip_prefix("*.").is_some_and(under))
+                .cloned()
+        })
+        .or_else(|| {
+            list.cidrs()
+                .iter()
+                .find(|c| Resource::parse(c).is_ok_and(|r| r.matches(host)))
+                .cloned()
+        })?;
+    Some(format!("allow entry {entry}"))
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -99,9 +134,13 @@ pub fn check(
     target: &str,
 ) -> Verdict {
     let host = target.trim().to_ascii_lowercase();
-    if credential_hosts.contains(&host) {
+    if credential_hosts
+        .iter()
+        .any(|h| h.to_ascii_lowercase() == host)
+    {
         return verdict(true, "a secret bound to this sandbox uses this host");
     }
+    // No sandbox: compile with the global rules only (an empty name has no per-sandbox entry).
     let (mode, rules) = match sandbox {
         Some(s) => (policy.mode_for(s), policy.rules_for(s)),
         None => (
@@ -114,15 +153,32 @@ pub fn check(
         ),
     };
     let hit = |decision: Decision| {
-        rules.iter().find(|(r, _)| {
-            r.decision == decision
-                && r.resources
-                    .iter()
-                    .any(|x| Resource::parse(x).is_ok_and(|res| res.matches(&host)))
+        rules.iter().find_map(|(r, scope)| {
+            if r.decision != decision {
+                return None;
+            }
+            r.resources
+                .iter()
+                .filter_map(|x| Resource::parse(x).ok())
+                .find(|res| res.matches(&host))
+                .map(|res| (r, scope, res))
         })
     };
-    if let Some((r, scope)) = hit(Decision::Deny) {
-        return verdict(false, format!("deny rule {} ({scope})", r.id));
+    if let Some((r, scope, res)) = hit(Decision::Deny) {
+        let text = format!("deny rule {} ({scope})", r.id);
+        if matches!(res.pattern, Pattern::Cidr { .. }) {
+            return verdict(false, text);
+        }
+        // smolvm has no host deny: a host deny only removes allow entries.
+        let spec = network(policy, sandbox.unwrap_or(""), credential_hosts);
+        let everything = mode != Mode::AllowAll;
+        return match admits(&spec, &host, everything) {
+            Some(why) => verdict(
+                true,
+                format!("{text} isn't enforced: smolvm still allows it via {why}"),
+            ),
+            None => verdict(false, text),
+        };
     }
     if mode == Mode::AllowAll {
         let why = if policy.mode.is_none() {
@@ -132,7 +188,7 @@ pub fn check(
         };
         return verdict(true, why);
     }
-    if let Some((r, scope)) = hit(Decision::Allow) {
+    if let Some((r, scope, _)) = hit(Decision::Allow) {
         return verdict(true, format!("allow rule {} ({scope})", r.id));
     }
     if mode == Mode::Balanced
@@ -256,6 +312,16 @@ mod tests {
         )
         .unwrap();
         assert_eq!(deny_cidrs(&p, "s1"), vec!["10.0.0.0/8", "192.168.0.0/16"]);
+        p.add_rule(
+            Some("s1"),
+            Decision::Deny,
+            "10.0.0.0/8",
+            "again",
+            None,
+            None,
+        )
+        .unwrap();
+        assert_eq!(deny_cidrs(&p, "s1"), vec!["10.0.0.0/8", "192.168.0.0/16"]);
         assert_eq!(deny_cidrs(&p, "s2"), vec!["10.0.0.0/8"]);
     }
 
@@ -288,5 +354,55 @@ mod tests {
         let v = check(&p, Some("s1"), &["example.com".into()], "example.com");
         assert!(v.allowed && v.reason.contains("secret"), "{}", v.reason);
         assert!(check(&Policy::default(), None, &[], "example.com").allowed);
+    }
+
+    #[test]
+    fn check_reports_what_is_enforced() {
+        let mut p = policy(Mode::AllowAll);
+        p.add_rule(None, Decision::Deny, "evil.com", "added", None, None)
+            .unwrap();
+        p.add_rule(None, Decision::Deny, "10.0.0.0/8", "added", None, None)
+            .unwrap();
+        let v = check(&p, Some("s1"), &[], "evil.com");
+        assert!(
+            v.allowed && v.reason.contains("isn't enforced") && v.reason.contains("allow-all"),
+            "{}",
+            v.reason
+        );
+        let v = check(&p, Some("s1"), &[], "10.1.2.3");
+        assert!(!v.allowed && v.reason.contains("deny rule"), "{}", v.reason);
+
+        let mut p = policy(Mode::Balanced);
+        p.add_rule(None, Decision::Deny, "api.openai.com", "added", None, None)
+            .unwrap();
+        let v = check(&p, Some("s1"), &[], "api.openai.com");
+        assert!(
+            v.allowed && v.reason.contains("isn't enforced") && v.reason.contains("openai.com"),
+            "{}",
+            v.reason
+        );
+
+        let mut p = policy(Mode::DenyAll);
+        p.add_rule(None, Decision::Allow, "**", "added", None, None)
+            .unwrap();
+        p.add_rule(None, Decision::Deny, "evil.com", "added", None, None)
+            .unwrap();
+        let v = check(&p, None, &[], "evil.com");
+        assert!(
+            v.allowed && v.reason.contains("allow-everything"),
+            "{}",
+            v.reason
+        );
+    }
+
+    #[test]
+    fn credential_hosts_match_case_insensitively() {
+        let v = check(
+            &policy(Mode::DenyAll),
+            Some("s1"),
+            &["API.Example.com".into()],
+            "api.example.COM",
+        );
+        assert!(v.allowed && v.reason.contains("secret"), "{}", v.reason);
     }
 }
