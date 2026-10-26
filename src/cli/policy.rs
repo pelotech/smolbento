@@ -337,8 +337,21 @@ fn approval<R: Runner>(ctx: &Ctx<R>, policy: &mut Policy, cmd: ApprovalCmd) -> R
             decision,
             sandbox,
         } => {
-            if !rows.iter().any(|r| r.host == id) {
+            let seen: Vec<&str> = rows
+                .iter()
+                .filter(|r| r.host == id)
+                .map(|r| r.sandbox.as_str())
+                .collect();
+            if seen.is_empty() {
                 bail!("no blocked request for '{id}' (see `sbt policy approval ls`)");
+            }
+            if let Some(s) = sandbox.as_deref()
+                && !seen.contains(&s)
+            {
+                bail!(
+                    "sandbox {s} has no blocked request for '{id}': it was blocked in {}",
+                    seen.join(", ")
+                );
             }
             let decision = match decision {
                 super::ApprovalDecision::Allow => Decision::Allow,
@@ -801,6 +814,31 @@ mod tests {
         )
         .unwrap_err();
         assert!(err.to_string().contains("no blocked request"), "{err}");
+    }
+
+    #[test]
+    fn approval_respond_checks_the_sandbox_that_was_blocked() {
+        let mut t = test_env(&[]);
+        set_policy(&t, "mode = \"deny-all\"");
+        blocked(&t);
+        let err = sbt(
+            &mut t.ctx,
+            &[
+                "policy",
+                "approval",
+                "respond",
+                "example.com",
+                "allow",
+                "--sandbox",
+                "b2",
+            ],
+        )
+        .unwrap_err()
+        .to_string();
+        assert!(err.contains("b2") && err.contains("blocked in a1"), "{err}");
+        let p = Policy::load(&t.ctx.paths).unwrap();
+        assert!(p.sandboxes.is_empty() && p.rules.is_empty());
+        assert!(updates(&t).is_empty());
     }
 
     #[test]
