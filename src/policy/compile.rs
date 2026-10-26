@@ -48,12 +48,9 @@ pub fn network(policy: &Policy, sandbox: &str, credential_hosts: &[String]) -> N
         return NetworkSpec::Open;
     }
     let denies = resources(policy, sandbox, Decision::Deny);
-    let (mut hosts, mut patterns, mut cidrs) = (BTreeSet::new(), BTreeSet::new(), BTreeSet::new());
+    let (mut patterns, mut cidrs) = (BTreeSet::new(), BTreeSet::new());
     for r in allows.iter().filter(|r| !denied(r, &denies)) {
         match r.to_allow() {
-            Allow::Host(h) => {
-                hosts.insert(h);
-            }
             Allow::Pattern(p) => {
                 patterns.insert(p);
             }
@@ -63,7 +60,8 @@ pub fn network(policy: &Policy, sandbox: &str, credential_hosts: &[String]) -> N
             Allow::Everything => {}
         }
     }
-    hosts.extend(credential_hosts.iter().cloned());
+    // Credential hosts stay `--allow-host`, as before: they must resolve for the secret to work.
+    let hosts = credential_hosts.iter().cloned();
     NetworkSpec::Restricted(AllowList::new(hosts, patterns, cidrs))
 }
 
@@ -101,7 +99,10 @@ fn admits(spec: &NetworkSpec, host: &str, everything_rule: bool) -> Option<Strin
         .or_else(|| {
             list.patterns()
                 .iter()
-                .find(|p| p.strip_prefix("*.").is_some_and(under))
+                .find(|p| match p.strip_prefix("*.") {
+                    Some(d) => under(d),
+                    None => host == p.as_str(),
+                })
                 .cloned()
         })
         .or_else(|| {
@@ -245,20 +246,25 @@ mod tests {
         assert_eq!(l.hosts(), ["api.anthropic.com"]);
         assert_eq!(l.patterns(), ["*.npmjs.org"]);
         assert_eq!(l.cidrs(), ["127.0.0.0/8", "::1/128"]);
-        assert_eq!(list(&network(&p, "other", &[])).hosts().len(), 0);
+        assert_eq!(list(&network(&p, "other", &[])).patterns().len(), 0);
     }
 
     #[test]
     fn balanced_has_the_preset_and_widens_globs() {
         let spec = network(&policy(Mode::Balanced), "s1", &[]);
         let l = list(&spec);
-        assert!(l.hosts().contains(&"registry.npmjs.org".to_string()));
+        assert!(l.hosts().is_empty(), "rules never become --allow-host");
+        assert!(l.patterns().contains(&"registry.npmjs.org".to_string()));
         assert!(
-            l.hosts().contains(&"openai.com".to_string()),
-            "**.openai.com -> openai.com"
+            l.patterns().contains(&"*.openai.com".to_string()),
+            "**.openai.com -> *.openai.com"
+        );
+        assert!(
+            l.patterns()
+                .contains(&"*.blob.core.windows.net".to_string())
         );
         assert!(l.patterns().contains(&"*.digicert.com".to_string()));
-        assert!(!l.hosts().contains(&"example.com".to_string()));
+        assert!(!l.patterns().contains(&"example.com".to_string()));
     }
 
     #[test]
@@ -275,11 +281,11 @@ mod tests {
         .unwrap();
         assert!(
             !list(&network(&p, "s1", &[]))
-                .hosts()
+                .patterns()
                 .contains(&"registry.npmjs.org".to_string())
         );
         p.set_deny_network("s2", true);
-        assert_eq!(list(&network(&p, "s2", &[])).hosts().len(), 0);
+        assert_eq!(list(&network(&p, "s2", &[])).patterns().len(), 0);
     }
 
     #[test]
@@ -393,6 +399,23 @@ mod tests {
             "{}",
             v.reason
         );
+    }
+
+    #[test]
+    fn admits_matches_the_way_smolvm_does() {
+        let spec = NetworkSpec::Restricted(crate::smolvm::AllowList::new(
+            vec!["cred.example".to_string()],
+            vec!["api.x.com".to_string(), "*.y.com".to_string()],
+            vec![],
+        ));
+        assert!(admits(&spec, "api.x.com", false).is_some());
+        assert!(admits(&spec, "a.api.x.com", false).is_none(), "exact only");
+        assert!(admits(&spec, "a.b.y.com", false).is_some());
+        assert!(
+            admits(&spec, "y.com", false).is_none(),
+            "*.y.com excludes the apex"
+        );
+        assert!(admits(&spec, "sub.cred.example", false).is_some());
     }
 
     #[test]

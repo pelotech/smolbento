@@ -33,7 +33,7 @@ pub struct Resource {
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum Allow {
     Everything,
-    Host(String),
+    /// A `--allow-host-pattern`: an exact host or `*.domain` (any depth, not the apex).
     Pattern(String),
     Cidr(String),
 }
@@ -124,10 +124,13 @@ impl Resource {
         }
     }
 
+    /// Never `--allow-host`: smolvm resolves those names at create and fails when one has no
+    /// address record (blob.core.windows.net), while patterns resolve at start, warning only.
     pub fn to_allow(&self) -> Allow {
         match &self.pattern {
             Pattern::Everything => Allow::Everything,
-            Pattern::Exact(h) | Pattern::Subdomains(h) => Allow::Host(h.clone()),
+            Pattern::Exact(h) => Allow::Pattern(h.clone()),
+            Pattern::Subdomains(d) => Allow::Pattern(format!("*.{d}")),
             Pattern::OneLabel(d) => Allow::Pattern(format!("*.{d}")),
             Pattern::Glob { parent, .. } => Allow::Pattern(format!("*.{parent}")),
             Pattern::Cidr { addr, prefix } => Allow::Cidr(format!("{addr}/{prefix}")),
@@ -341,8 +344,13 @@ mod tests {
 
     #[test]
     fn translation_to_smolvm() {
-        assert_eq!(r("api.x.com").to_allow(), Allow::Host("api.x.com".into()));
-        assert_eq!(r("**.x.com").to_allow(), Allow::Host("x.com".into()));
+        // Patterns, not `--allow-host`: smolvm resolves `--allow-host` names at create and fails on
+        // one with no address record (blob.core.windows.net, statsig.anthropic.com).
+        assert_eq!(
+            r("api.x.com").to_allow(),
+            Allow::Pattern("api.x.com".into())
+        );
+        assert_eq!(r("**.x.com").to_allow(), Allow::Pattern("*.x.com".into()));
         assert_eq!(r("*.x.com").to_allow(), Allow::Pattern("*.x.com".into()));
         assert_eq!(
             r("crl*.digicert.com").to_allow(),

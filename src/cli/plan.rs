@@ -300,7 +300,7 @@ mod tests {
         };
         assert!(list.hosts().contains(&"api.anthropic.com".to_string()));
         assert!(
-            !list.hosts().contains(&"registry.npmjs.org".to_string()),
+            !list.patterns().contains(&"registry.npmjs.org".to_string()),
             "deny-network ignores balanced"
         );
         assert!(Policy::load(&t.ctx.paths).unwrap().sandboxes["s1"].deny_network);

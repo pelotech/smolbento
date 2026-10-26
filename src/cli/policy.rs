@@ -474,7 +474,7 @@ mod tests {
         .unwrap();
         let last = updates(&t).pop().unwrap();
         assert!(
-            last.contains("--allow-host api.x.com")
+            last.contains("--allow-host-pattern api.x.com")
                 && last.contains("--allow-host-pattern *.npmjs.org"),
             "{last}"
         );
@@ -616,7 +616,7 @@ mod tests {
             updates(&t)
                 .pop()
                 .unwrap()
-                .contains("--allow-host example.com")
+                .contains("--allow-host-pattern example.com")
         );
         let err = sbt(
             &mut t.ctx,
