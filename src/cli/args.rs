@@ -68,8 +68,9 @@ pub enum Cmd {
     /// Network policy
     #[command(subcommand)]
     Policy(PolicyCmd),
-    /// Secrets (not implemented yet)
-    Secret(Passthrough),
+    /// Secrets for agents: sandboxes see placeholders, smolvm sends the real value
+    #[command(subcommand)]
+    Secret(SecretCmd),
     /// Kits (not implemented yet)
     Kit(Passthrough),
     /// MCP servers (not implemented yet)
@@ -587,4 +588,102 @@ pub enum ApprovalCmd {
 pub enum ApprovalDecision {
     Allow,
     Deny,
+}
+
+#[derive(Debug, Subcommand)]
+pub enum SecretCmd {
+    /// Set a secret for a built-in service (anthropic, claude, github, openai, …)
+    Set(SecretSetArgs),
+    /// Set a secret for any host and environment variable
+    SetCustom(SecretCustomArgs),
+    /// List secrets (never values)
+    Ls(SecretLsArgs),
+    /// Remove secrets
+    Rm(SecretRmArgs),
+    #[command(hide = true)]
+    Import(Passthrough),
+}
+
+#[derive(Debug, Args)]
+pub struct SecretSource {
+    /// The value (prefer the prompt: values on the command line reach shell history)
+    #[arg(short = 't', long = "token", alias = "value")]
+    pub token: Option<String>,
+    /// op://vault/item/field (1Password) or an AWS Secrets Manager ARN, read at each start
+    #[arg(long = "ref")]
+    pub reference: Option<String>,
+    /// Host command whose output is the value, run at each start
+    #[arg(long)]
+    pub command: Option<String>,
+    /// Only for this sandbox
+    #[arg(long)]
+    pub sandbox: Option<String>,
+}
+
+#[derive(Debug, Args)]
+pub struct SecretSetArgs {
+    pub service: Option<String>,
+    #[command(flatten)]
+    pub source: SecretSource,
+    #[arg(short = 'f', long)]
+    pub force: bool,
+    #[arg(long, hide = true)]
+    pub oauth: bool,
+    #[arg(long, hide = true)]
+    pub registry: Option<String>,
+    #[arg(long, hide = true)]
+    pub username: Option<String>,
+    #[arg(long = "password-stdin", hide = true)]
+    pub password_stdin: bool,
+    #[arg(long, hide = true)]
+    pub refresh: Option<String>,
+    #[arg(long = "all-sandboxes", hide = true)]
+    pub all_sandboxes: bool,
+    #[arg(long = "no-verify", hide = true)]
+    pub no_verify: bool,
+    #[arg(long = "show-error", hide = true)]
+    pub show_error: bool,
+}
+
+#[derive(Debug, Args)]
+pub struct SecretCustomArgs {
+    /// Hosts the secret is sent to (repeatable)
+    #[arg(long = "host", required = true)]
+    pub hosts: Vec<String>,
+    /// Environment variable that holds the placeholder
+    #[arg(long, required = true)]
+    pub env: String,
+    #[command(flatten)]
+    pub source: SecretSource,
+    #[arg(long, hide = true)]
+    pub placeholder: Option<String>,
+}
+
+#[derive(Debug, Args)]
+pub struct SecretLsArgs {
+    /// Only global secrets
+    #[arg(short = 'g', long)]
+    pub global: bool,
+    #[arg(long)]
+    pub sandbox: Option<String>,
+    #[arg(long)]
+    pub service: Option<String>,
+    #[arg(short = 'q', long)]
+    pub quiet: bool,
+}
+
+#[derive(Debug, Args)]
+pub struct SecretRmArgs {
+    pub service: Option<String>,
+    #[arg(long)]
+    pub sandbox: Option<String>,
+    /// Remove every secret
+    #[arg(long)]
+    pub all: bool,
+    #[arg(short = 'f', long)]
+    pub force: bool,
+    #[arg(long, hide = true)]
+    pub registry: Option<String>,
+    #[arg(long = "all-sandboxes", hide = true)]
+    pub all_sandboxes: bool,
 }

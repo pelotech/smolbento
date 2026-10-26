@@ -24,7 +24,7 @@ Commands:
   daemon      Accepted for sbx compatibility; smolbento needs no daemon
   ports       Publish or unpublish ports (not implemented yet)
   policy      Network policy
-  secret      Secrets (not implemented yet)
+  secret      Secrets for agents: sandboxes see placeholders, smolvm sends the real value
   kit         Kits (not implemented yet)
   mcp         MCP servers (not implemented yet)
   env         sbxenv.yaml environments (not implemented yet)

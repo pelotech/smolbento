@@ -49,11 +49,18 @@ policy check network registry.npmjs.org --sandbox my-sandbox --verbose
 policy inspect r-0123abcd
 policy reset -f
 policy allow network api.example.com --method GET,POST --path '/v1/**'
-# Later phases (must parse; exit 2 for now)
-ports my-sandbox --publish 8080:80
+# Secrets
 secret set anthropic -t sk-test
 secret set github --command "gh auth token"
 secret ls
+secret set claude --ref op://Private/claude-sandbox/credential
+secret set openai --sandbox my-sandbox -t sk-test
+secret set-custom --host api.example.com --env EXAMPLE_TOKEN --command "pass show example"
+secret ls -g
+secret rm github --sandbox my-sandbox
+secret rm --all -f
+# Later phases (must parse; exit 2 for now)
+ports my-sandbox --publish 8080:80
 kit inspect ghcr.io/example/kit:1
 mcp add linear --url https://mcp.linear.app/sse
 template ls

@@ -8,6 +8,7 @@ mod ls;
 mod plan;
 mod policy;
 mod run;
+mod secret;
 mod settings;
 #[cfg(test)]
 mod testutil;
@@ -131,6 +132,7 @@ pub fn dispatch<R: Runner>(ctx: &mut Ctx<R>, cli: Cli) -> Result<i32> {
         Cmd::Diagnose => diagnose::run(ctx),
         Cmd::Settings(s) => settings::run(ctx, s),
         Cmd::Policy(p) => policy::run(ctx, p),
+        Cmd::Secret(s) => secret::run(ctx, s),
         Cmd::Daemon(_) => {
             println!("smolbento needs no daemon; smolvm manages each sandbox directly");
             Ok(0)

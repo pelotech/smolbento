@@ -134,6 +134,7 @@ pub fn stop<R: Runner>(ctx: &mut Ctx<R>, names: &[String]) -> Result<i32> {
 fn remove<R: Runner>(ctx: &Ctx<R>, sb: &Sandbox) -> Result<()> {
     ctx.vm.delete(&sb.machine)?;
     session::clear(&ctx.paths.sessions(), sb.name());
+    super::secret::forget_sandbox(ctx, sb.name())?;
     println!("Removed {}", sb.name());
     Ok(())
 }
@@ -211,7 +212,6 @@ pub fn prune<R: Runner>(ctx: &mut Ctx<R>, a: &PruneArgs) -> Result<i32> {
 }
 
 pub fn reset<R: Runner>(ctx: &mut Ctx<R>, a: &ResetArgs) -> Result<i32> {
-    // smolbento stores no secrets yet, so --preserve-secrets has nothing to preserve.
     confirm(
         ctx,
         "Remove every sandbox and smolbento's session state?",
@@ -221,6 +221,9 @@ pub fn reset<R: Runner>(ctx: &mut Ctx<R>, a: &ResetArgs) -> Result<i32> {
         remove(ctx, &sb)?;
     }
     let _ = std::fs::remove_dir_all(ctx.paths.sessions());
+    if !a.preserve_secrets {
+        super::secret::forget_all(ctx)?;
+    }
     Ok(0)
 }
 
