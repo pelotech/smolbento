@@ -40,15 +40,21 @@ pub fn rows(events: &[(String, Vec<EgressEvent>)]) -> Vec<LogRow> {
     out
 }
 
-/// Blocked hosts no rule mentions yet (in that sandbox's scope): sbx's approval queue.
+/// Blocked hosts no rule mentions yet (in that sandbox's scope): sbx's approval queue. Log hosts
+/// carry no port, so a rule's port is ignored: a rule naming the host on any port handles it.
 pub fn pending<'a>(policy: &Policy, rows: &'a [LogRow]) -> Vec<&'a LogRow> {
+    let names = |x: &str, host: &str| {
+        Resource::parse(x).is_ok_and(|mut res| {
+            res.port = None;
+            res.matches(host)
+        })
+    };
     rows.iter()
         .filter(|row| {
-            !policy.rules_for(&row.sandbox).iter().any(|(r, _)| {
-                r.resources
-                    .iter()
-                    .any(|x| Resource::parse(x).is_ok_and(|res| res.matches(&row.host)))
-            })
+            !policy
+                .rules_for(&row.sandbox)
+                .iter()
+                .any(|(r, _)| r.resources.iter().any(|x| names(x, &row.host)))
         })
         .collect()
 }
@@ -98,5 +104,17 @@ mod tests {
         let rows = rows(&events);
         let pending: Vec<&str> = pending(&p, &rows).iter().map(|r| r.host.as_str()).collect();
         assert_eq!(pending, vec!["a.com"]);
+    }
+
+    #[test]
+    fn a_rule_with_a_port_still_handles_its_host() {
+        // Egress log hosts carry no port.
+        let mut p = Policy::default();
+        p.add_rule(None, Decision::Allow, "a.com:80", "added", None, None)
+            .unwrap();
+        let events = vec![("s1".to_string(), vec![ev("t1", "a.com"), ev("t2", "b.com")])];
+        let rows = rows(&events);
+        let pending: Vec<&str> = pending(&p, &rows).iter().map(|r| r.host.as_str()).collect();
+        assert_eq!(pending, vec!["b.com"]);
     }
 }
