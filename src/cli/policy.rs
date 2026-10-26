@@ -57,8 +57,13 @@ pub fn run<R: Runner>(ctx: &mut Ctx<R>, cmd: PolicyCmd) -> Result<i32> {
             if a.id.is_none() && a.resource.is_none() {
                 bail!("pass --id or --resource");
             }
+            // Ids are unique, so --id alone finds a sandbox's rule too.
+            let sandbox = match (&a.sandbox, &a.id) {
+                (None, Some(id)) => policy.find(id).and_then(|(_, s)| s.map(String::from)),
+                _ => a.sandbox.clone(),
+            };
             let removed =
-                policy.remove_rules(a.sandbox.as_deref(), a.id.as_deref(), a.resource.as_deref());
+                policy.remove_rules(sandbox.as_deref(), a.id.as_deref(), a.resource.as_deref());
             if !removed {
                 bail!("no matching rules");
             }
@@ -1204,6 +1209,21 @@ mod tests {
             .unwrap(),
             0
         );
+    }
+
+    #[test]
+    fn rm_by_id_finds_a_sandbox_rule_without_sandbox() {
+        let mut t = test_env(&[]);
+        set_policy(&t, "mode = \"deny-all\"");
+        let mut p = Policy::load(&t.ctx.paths).unwrap();
+        let id = p
+            .add_rule(Some("a1"), Decision::Allow, "a.com", "added", None, None)
+            .unwrap();
+        p.save(&t.ctx.paths).unwrap();
+        sbt(&mut t.ctx, &["policy", "rm", "network", "--id", &id]).unwrap();
+        assert!(Policy::load(&t.ctx.paths).unwrap().sandboxes.is_empty());
+        let err = sbt(&mut t.ctx, &["policy", "rm", "network", "--id", &id]).unwrap_err();
+        assert!(err.to_string().contains("no matching rules"), "{err}");
     }
 
     #[test]
