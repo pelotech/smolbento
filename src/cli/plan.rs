@@ -48,7 +48,19 @@ pub fn start_plan<R: Runner>(
     bound: &[String],
     hosts: &[String],
 ) -> Result<StartPlan> {
-    let policy = Policy::load(&ctx.paths)?;
+    let mut policy = Policy::load(&ctx.paths)?;
+    if policy.mode.is_none() {
+        if ctx.stdin_tty {
+            ensure_policy(ctx)?;
+            policy = Policy::load(&ctx.paths)?;
+        } else if policy.mode_for(sandbox) == Mode::AllowAll {
+            // Not an error: scripts from before policies existed keep working.
+            eprintln!(
+                "warning: no network policy chosen; {sandbox} starts with an open network \
+                 (choose one with `sbt policy init`)"
+            );
+        }
+    }
     let secrets = SecretsFile::load(&ctx.paths)?;
     let network = compile::network(&policy, sandbox, hosts);
     let mut env = Vec::new();
@@ -304,6 +316,17 @@ mod tests {
             "deny-network ignores balanced"
         );
         assert!(Policy::load(&t.ctx.paths).unwrap().sandboxes["s1"].deny_network);
+    }
+
+    #[test]
+    fn start_without_a_mode_and_without_a_terminal_stays_open() {
+        let t = test_env(&[]);
+        set_policy(&t, "[sandboxes.d1]\ndeny_network = true\n");
+        let plan = start_plan(&t.ctx, "s1", &[], &[]).unwrap();
+        assert_eq!(plan.network, NetworkSpec::Open);
+        assert_eq!(Policy::load(&t.ctx.paths).unwrap().mode, None);
+        let plan = start_plan(&t.ctx, "d1", &[], &[]).unwrap();
+        assert!(matches!(plan.network, NetworkSpec::Restricted(_)));
     }
 
     #[test]

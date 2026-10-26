@@ -226,6 +226,17 @@ impl Policy {
             .deny_network = on;
     }
 
+    /// `policy reset`: drops the mode and every rule, but a sandbox created with
+    /// `--deny-network` stays deny-all.
+    pub fn reset(&mut self) {
+        self.mode = None;
+        self.rules.clear();
+        self.sandboxes.retain(|_, s| s.deny_network);
+        for s in self.sandboxes.values_mut() {
+            s.rules.clear();
+        }
+    }
+
     pub fn forget_sandbox(&mut self, sandbox: &str) {
         self.sandboxes.remove(sandbox);
     }
@@ -314,6 +325,35 @@ mod tests {
         assert_eq!(p.rules[0].resources, vec!["b.com"]);
         assert_eq!(p.remove_rules(None, Some(&a), None), 1);
         assert!(p.rules.is_empty());
+    }
+
+    #[test]
+    fn reset_keeps_deny_network_and_clears_the_rest() {
+        let mut p = Policy {
+            mode: Some(Mode::Balanced),
+            ..Default::default()
+        };
+        p.add_rule(None, Decision::Allow, "g.com", "added", None, None)
+            .unwrap();
+        p.add_rule(Some("s1"), Decision::Allow, "s.com", "added", None, None)
+            .unwrap();
+        p.add_rule(Some("s2"), Decision::Allow, "t.com", "added", None, None)
+            .unwrap();
+        p.set_deny_network("s2", true);
+        p.reset();
+        assert_eq!(p.mode, None);
+        assert!(p.rules.is_empty());
+        assert_eq!(
+            p.sandboxes,
+            BTreeMap::from([(
+                "s2".to_string(),
+                SandboxPolicy {
+                    deny_network: true,
+                    rules: vec![]
+                }
+            )])
+        );
+        assert_eq!(p.mode_for("s2"), Mode::DenyAll);
     }
 
     #[test]

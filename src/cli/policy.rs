@@ -85,9 +85,18 @@ pub fn run<R: Runner>(ctx: &mut Ctx<R>, cmd: PolicyCmd) -> Result<i32> {
             kind: CheckKind::Network(a),
         } => return check(ctx, &policy, &a),
         PolicyCmd::Reset { force } => {
-            confirm(ctx, "Remove every policy rule and the chosen mode?", force)?;
-            Policy::default().save(&ctx.paths)?;
-            println!("Policy reset; the next `sbt run` asks for a mode");
+            confirm(
+                ctx,
+                "Remove every policy rule and the chosen mode? (--deny-network sandboxes stay \
+                 deny-all)",
+                force,
+            )?;
+            policy.reset();
+            policy.save(&ctx.paths)?;
+            println!(
+                "Policy reset; the next `sbt run` asks for a mode (--deny-network sandboxes stay \
+                 deny-all)"
+            );
         }
         PolicyCmd::Log(a) => {
             if a.kind.as_deref().is_some_and(|k| k == "filesystem") {
@@ -559,6 +568,19 @@ mod tests {
         );
         sbt(&mut t.ctx, &["policy", "reset", "-f"]).unwrap();
         assert_eq!(Policy::load(&t.ctx.paths).unwrap(), Policy::default());
+        set_policy(
+            &t,
+            "mode = \"allow-all\"\n[[rules]]\nid = \"r-1\"\ndecision = \"allow\"\n\
+             resources = [\"a.com\"]\n[sandboxes.a1]\ndeny_network = true\n",
+        );
+        sbt(&mut t.ctx, &["policy", "reset", "-f"]).unwrap();
+        let p = Policy::load(&t.ctx.paths).unwrap();
+        assert!(p.mode.is_none() && p.rules.is_empty(), "{p:?}");
+        assert!(p.sandboxes["a1"].deny_network);
+        assert!(matches!(
+            compile::network(&p, "a1", &[]),
+            crate::smolvm::NetworkSpec::Restricted(_)
+        ));
         let err = sbt(&mut t.ctx, &["policy", "refresh"]).unwrap_err();
         assert_eq!(super::super::exit_code(&err), 2);
     }

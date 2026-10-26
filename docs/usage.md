@@ -143,6 +143,9 @@ Good to know:
   is refused and names the secret's service.
 - `balanced` is Docker's list of 195 rules; smolbento allows those hosts on any port (sbx limits
   them to 443).
+- `sbt policy reset` removes the mode and every rule; `--deny-network` sandboxes stay deny-all.
+  Until a mode is chosen again, starting a sandbox asks for one (without a terminal it warns and
+  starts with an open network).
 - Blocked requests come from smolvm's egress log. `policy approval` lists the hosts with no rule
   yet; the host is the approval id.
 
