@@ -10,7 +10,6 @@ use std::cell::RefCell;
 use std::collections::BTreeMap;
 use std::fs;
 use std::io::Write;
-use std::os::unix::fs::{OpenOptionsExt, PermissionsExt};
 use std::path::{Path, PathBuf};
 use std::process::{Command, Stdio};
 
@@ -247,24 +246,10 @@ impl FileStore {
         }
     }
 
+    /// Atomic, and always 0600; a symlink at the path is replaced, not followed (see
+    /// `write_atomic`).
     fn write(&self, values: &BTreeMap<String, String>) -> Result<()> {
-        if let Some(dir) = self.path.parent() {
-            fs::create_dir_all(dir)?;
-        }
-        let mut name = self.path.file_name().unwrap_or_default().to_os_string();
-        name.push(".tmp");
-        let tmp = self.path.with_file_name(name);
-        let mut f = fs::OpenOptions::new()
-            .write(true)
-            .create(true)
-            .truncate(true)
-            .mode(0o600)
-            .open(&tmp)
-            .with_context(|| format!("writing {}", tmp.display()))?;
-        fs::set_permissions(&tmp, fs::Permissions::from_mode(0o600))?;
-        f.write_all(toml::to_string(values)?.as_bytes())?;
-        fs::rename(&tmp, &self.path).with_context(|| format!("writing {}", self.path.display()))?;
-        Ok(())
+        crate::config::write_atomic(&self.path, toml::to_string(values)?.as_bytes(), Some(0o600))
     }
 }
 
@@ -337,6 +322,7 @@ pub fn platform(paths: &Paths, env: &BTreeMap<String, String>) -> Box<dyn Secret
 #[cfg(test)]
 mod tests {
     use super::*;
+    use std::os::unix::fs::PermissionsExt;
 
     #[test]
     fn keychain_add_line_stores_a_printable_hex_payload() {
@@ -399,6 +385,28 @@ mod tests {
         );
         assert_eq!(s.get("old").unwrap().as_deref(), Some("1"));
         assert_eq!(s.get("new").unwrap().as_deref(), Some("2"));
+    }
+
+    #[test]
+    fn file_store_never_follows_a_planted_temp_file() {
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("v.toml");
+        let outside = dir.path().join("outside");
+        std::fs::write(&outside, "keep").unwrap();
+        std::os::unix::fs::symlink(&outside, dir.path().join("v.toml.tmp")).unwrap();
+        let s = FileStore::new(path.clone());
+        s.set("a", "s3cret").unwrap();
+        assert_eq!(std::fs::read_to_string(&outside).unwrap(), "keep");
+        assert_eq!(s.get("a").unwrap().as_deref(), Some("s3cret"));
+        let mode = std::fs::metadata(&path).unwrap().permissions().mode();
+        assert_eq!(mode & 0o777, 0o600);
+        s.delete("a").unwrap();
+        let mut names: Vec<String> = std::fs::read_dir(dir.path())
+            .unwrap()
+            .map(|e| e.unwrap().file_name().to_string_lossy().into_owned())
+            .collect();
+        names.sort();
+        assert_eq!(names, ["outside", "v.toml", "v.toml.tmp"]);
     }
 
     #[test]

@@ -88,12 +88,11 @@ impl SecretsFile {
     }
 
     pub fn save(&self, paths: &Paths) -> Result<()> {
-        let path = paths.secrets_file();
-        if let Some(dir) = path.parent() {
-            fs::create_dir_all(dir).with_context(|| format!("creating {}", dir.display()))?;
-        }
-        fs::write(&path, toml::to_string(self)?)
-            .with_context(|| format!("writing {}", path.display()))
+        crate::config::write_atomic(
+            &paths.secrets_file(),
+            toml::to_string(self)?.as_bytes(),
+            None,
+        )
     }
 
     /// A built-in or custom service.

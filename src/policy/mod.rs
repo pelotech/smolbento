@@ -122,12 +122,11 @@ impl Policy {
     }
 
     pub fn save(&self, paths: &Paths) -> Result<()> {
-        let path = paths.policy_file();
-        if let Some(dir) = path.parent() {
-            fs::create_dir_all(dir).with_context(|| format!("creating {}", dir.display()))?;
-        }
-        fs::write(&path, toml::to_string(self)?)
-            .with_context(|| format!("writing {}", path.display()))
+        crate::config::write_atomic(
+            &paths.policy_file(),
+            toml::to_string(self)?.as_bytes(),
+            None,
+        )
     }
 
     /// The mode a sandbox runs under. Before any mode was chosen, sandboxes stay open as they

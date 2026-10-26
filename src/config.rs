@@ -157,12 +157,66 @@ impl Settings {
     }
 
     fn save(&self) -> Result<()> {
-        if let Some(dir) = self.path.parent() {
-            fs::create_dir_all(dir).with_context(|| format!("creating {}", dir.display()))?;
-        }
-        fs::write(&self.path, toml::to_string(&self.file)?)
-            .with_context(|| format!("writing {}", self.path.display()))
+        write_atomic(&self.path, toml::to_string(&self.file)?.as_bytes(), None)
     }
+}
+
+/// Replaces `path` with `bytes` atomically: readers see the old file or the new one, never a
+/// partial write. The bytes go to a new temp file in the same directory, created exclusively
+/// under a unique name (so a file or symlink planted there is never followed), with `mode` (or
+/// else the mode of the file it replaces) set before anything is written; it's synced, then
+/// renamed over `path`. A symlink at `path` is replaced by the file rather than written
+/// through. The temp file is removed on any error.
+pub fn write_atomic(path: &Path, bytes: &[u8], mode: Option<u32>) -> Result<()> {
+    use std::io::Write;
+    use std::os::unix::fs::{OpenOptionsExt, PermissionsExt};
+    use std::sync::atomic::{AtomicU64, Ordering};
+    static COUNTER: AtomicU64 = AtomicU64::new(0);
+
+    let dir = match path.parent() {
+        Some(d) if !d.as_os_str().is_empty() => d,
+        _ => Path::new("."),
+    };
+    fs::create_dir_all(dir).with_context(|| format!("creating {}", dir.display()))?;
+    let mode = mode.or_else(|| {
+        fs::symlink_metadata(path)
+            .ok()
+            .filter(|m| m.is_file())
+            .map(|m| m.permissions().mode() & 0o7777)
+    });
+    let base = path.file_name().unwrap_or_default().to_string_lossy();
+    let (tmp, mut file) = loop {
+        let n = COUNTER.fetch_add(1, Ordering::Relaxed);
+        let tmp = dir.join(format!(".{base}.{}.{n}.tmp", std::process::id()));
+        let mut opts = fs::OpenOptions::new();
+        opts.write(true)
+            .create_new(true)
+            .mode(mode.unwrap_or(0o666));
+        match opts.open(&tmp) {
+            Ok(f) => break (tmp, f),
+            Err(e) if e.kind() == std::io::ErrorKind::AlreadyExists => continue,
+            Err(e) => return Err(e).with_context(|| format!("writing {}", path.display())),
+        }
+    };
+    let result = (|| -> std::io::Result<()> {
+        // create_new's mode is filtered by the umask; set it exactly.
+        if let Some(m) = mode {
+            file.set_permissions(fs::Permissions::from_mode(m))?;
+        }
+        file.write_all(bytes)?;
+        file.sync_all()?;
+        drop(file);
+        fs::rename(&tmp, path)
+    })();
+    if let Err(e) = result {
+        let _ = fs::remove_file(&tmp);
+        return Err(e).with_context(|| format!("writing {}", path.display()));
+    }
+    // Make the rename itself durable; best effort.
+    if let Ok(d) = fs::File::open(dir) {
+        let _ = d.sync_all();
+    }
+    Ok(())
 }
 
 pub fn parse_bool(v: &str) -> Result<bool> {
@@ -178,6 +232,63 @@ mod tests {
     use super::*;
     use std::collections::BTreeMap;
     use std::path::PathBuf;
+
+    fn entries(dir: &Path) -> Vec<String> {
+        let mut v: Vec<String> = fs::read_dir(dir)
+            .unwrap()
+            .map(|e| e.unwrap().file_name().to_string_lossy().into_owned())
+            .collect();
+        v.sort();
+        v
+    }
+
+    #[test]
+    fn write_atomic_writes_with_the_mode_and_leaves_no_temp_file() {
+        use std::os::unix::fs::PermissionsExt;
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("f.toml");
+        write_atomic(&path, b"a = 1\n", Some(0o600)).unwrap();
+        write_atomic(&path, b"a = 2\n", Some(0o600)).unwrap();
+        assert_eq!(fs::read_to_string(&path).unwrap(), "a = 2\n");
+        let mode = fs::metadata(&path).unwrap().permissions().mode();
+        assert_eq!(mode & 0o777, 0o600);
+        assert_eq!(entries(dir.path()), ["f.toml"]);
+    }
+
+    #[test]
+    fn write_atomic_keeps_an_existing_files_mode_when_none_is_given() {
+        use std::os::unix::fs::PermissionsExt;
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("f.toml");
+        fs::write(&path, "old").unwrap();
+        fs::set_permissions(&path, fs::Permissions::from_mode(0o640)).unwrap();
+        write_atomic(&path, b"new", None).unwrap();
+        let mode = fs::metadata(&path).unwrap().permissions().mode();
+        assert_eq!(mode & 0o777, 0o640);
+    }
+
+    #[test]
+    fn write_atomic_replaces_a_symlink_and_cleans_up_on_failure() {
+        let dir = tempfile::tempdir().unwrap();
+        let outside = dir.path().join("outside");
+        fs::write(&outside, "keep").unwrap();
+        let path = dir.path().join("f.toml");
+        std::os::unix::fs::symlink(&outside, &path).unwrap();
+        write_atomic(&path, b"new", None).unwrap();
+        assert_eq!(fs::read_to_string(&outside).unwrap(), "keep");
+        assert!(
+            !fs::symlink_metadata(&path)
+                .unwrap()
+                .file_type()
+                .is_symlink()
+        );
+        // Renaming a file over a non-empty directory fails: the temp file must not stay behind.
+        let blocked = dir.path().join("blocked");
+        fs::create_dir(&blocked).unwrap();
+        fs::write(blocked.join("x"), "").unwrap();
+        assert!(write_atomic(&blocked, b"new", None).is_err());
+        assert_eq!(entries(dir.path()), ["blocked", "f.toml", "outside"]);
+    }
 
     fn env(pairs: &[(&str, &str)]) -> BTreeMap<String, String> {
         pairs
