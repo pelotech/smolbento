@@ -10,6 +10,24 @@
 
 Docker is **not** needed on the host. Agent images are pulled by smolvm directly.
 
+## Install with Homebrew
+
+```sh
+brew tap smol-machines/tap                  # smolvm, installed as a dependency
+brew trust pelotech/tap smol-machines/tap   # Homebrew 7+ only loads trusted third-party taps
+brew install pelotech/tap/smolbento
+```
+
+This installs `smolbento` and links `sbt` and `bento` to it. `sbx` is not linked, so it can't clash
+with Docker's `sbx`; add `alias sbx=sbt` to your shell if you want it. `brew upgrade` picks up new
+releases. Tap `smol-machines/tap` before trusting it: Homebrew rejects it when it is tapped already
+trusted (see [pelotech/homebrew-tap](https://github.com/pelotech/homebrew-tap)).
+
+!!! note "Linux"
+    smolvm 1.32.3 currently fails to install from `smol-machines/tap` on Linux. Until that is fixed
+    upstream, install smolvm from its release tarball and smolbento with
+    `brew install --ignore-dependencies pelotech/tap/smolbento`, or use a release tarball below.
+
 ## Install from source
 
 From a checkout, with [Nix](https://nixos.org) and [direnv](https://direnv.net):
