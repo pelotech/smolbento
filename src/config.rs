@@ -14,6 +14,10 @@ pub struct Paths {
 }
 
 impl Paths {
+    pub fn policy_file(&self) -> PathBuf {
+        self.config.join("policy.toml")
+    }
+
     /// `SMOLBENTO_*_DIR`, then XDG, then `~/.config` / `~/.cache` (also on macOS).
     pub fn from_env(env: &BTreeMap<String, String>) -> Result<Paths> {
         let pick = |own: &str, xdg: &str, fallback: &str| -> Result<PathBuf> {
