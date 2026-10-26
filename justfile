@@ -41,7 +41,10 @@ release-build target builder:
         case "{{target}}" in *-apple-darwin)
             # Apple Silicon refuses unsigned binaries; an ad-hoc signature is enough for a CLI.
             rcodesign sign "$bin"
-            rcodesign verify "$bin"
+            # `rcodesign verify` rejects ad-hoc signatures (they have no CMS blob), so check that a
+            # code directory is present instead.
+            rcodesign print-signature-info "$bin" | grep -q '^ *code_directory:' \
+                || { echo "error: $bin has no code signature" >&2; exit 1; }
             ;;
         esac
     else
