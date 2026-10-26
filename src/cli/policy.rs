@@ -103,6 +103,14 @@ pub fn run<R: Runner>(ctx: &mut Ctx<R>, cmd: PolicyCmd) -> Result<i32> {
                     decision
                 )?
             );
+            // stderr, so the table stays what sbx prints.
+            if format == Format::Table
+                && !a.wide
+                && !a.quiet
+                && let Some(note) = ls_note(&policy, a.sandbox.as_deref(), decision)
+            {
+                eprintln!("{note}");
+            }
         }
         PolicyCmd::Inspect { id, json } => {
             let (rule, scope) = policy
@@ -446,6 +454,15 @@ struct LsRow {
     notes: Vec<String>,
 }
 
+/// For the table without --wide (stderr): how many listed rules have enforcement notes.
+fn ls_note(policy: &Policy, sandbox: Option<&str>, decision: Option<Decision>) -> Option<String> {
+    let n = ls_rows(policy, sandbox, decision)
+        .iter()
+        .filter(|r| !r.notes.is_empty())
+        .count();
+    (n > 0).then(|| format!("note: {n} rule(s) aren't fully enforced; see `sbt policy ls --wide`"))
+}
+
 pub fn render_ls(
     policy: &Policy,
     sandbox: Option<&str>,
@@ -454,6 +471,14 @@ pub fn render_ls(
     quiet: bool,
     decision: Option<Decision>,
 ) -> Result<String> {
+    let rows = ls_rows(policy, sandbox, decision);
+    if quiet {
+        return Ok(rows.iter().map(|r| format!("{}\n", r.id)).collect());
+    }
+    render_rows(policy, &rows, wide, format)
+}
+
+fn ls_rows(policy: &Policy, sandbox: Option<&str>, decision: Option<Decision>) -> Vec<LsRow> {
     let mut rows = Vec::new();
     if policy.mode == Some(Mode::Balanced) {
         for (group, resources) in presets::GROUPS {
@@ -503,11 +528,12 @@ pub fn render_ls(
     if let Some(d) = decision {
         rows.retain(|r| r.decision == d.name());
     }
-    if quiet {
-        return Ok(rows.iter().map(|r| format!("{}\n", r.id)).collect());
-    }
+    rows
+}
+
+fn render_rows(policy: &Policy, rows: &[LsRow], wide: bool, format: Format) -> Result<String> {
     match format {
-        Format::Json => Ok(format!("{}\n", serde_json::to_string_pretty(&rows)?)),
+        Format::Json => Ok(format!("{}\n", serde_json::to_string_pretty(rows)?)),
         Format::Yaml => Ok(serde_saphyr::to_string(&rows)?),
         Format::Table => {
             let mode = policy.mode.map_or("not chosen", Mode::name);
@@ -519,7 +545,7 @@ pub fn render_ls(
             if wide {
                 lines[0].push("NOTES".into());
             }
-            for r in &rows {
+            for r in rows {
                 let resources = if wide || r.resources.len() <= 3 {
                     r.resources.join(", ")
                 } else {
@@ -927,6 +953,37 @@ mod tests {
         );
         let (_, notes) = deny_notes(&p, &res("[::1]:22"));
         assert!(notes[0].contains("deny ::1 to block it"), "{notes:?}");
+    }
+
+    #[test]
+    fn ls_note_counts_rules_that_arent_fully_enforced() {
+        let mut p = Policy {
+            mode: Some(Mode::Balanced),
+            ..Default::default()
+        };
+        p.add_rule(None, Decision::Allow, "a.com", "added", None, None)
+            .unwrap();
+        assert_eq!(ls_note(&p, None, None), None, "the preset has no notes");
+        p.add_rule(None, Decision::Deny, "b.com:8080", "added", None, None)
+            .unwrap();
+        p.add_rule(
+            Some("s1"),
+            Decision::Allow,
+            "crl*.x.com",
+            "added",
+            None,
+            None,
+        )
+        .unwrap();
+        assert_eq!(
+            ls_note(&p, None, None).as_deref(),
+            Some("note: 2 rule(s) aren't fully enforced; see `sbt policy ls --wide`")
+        );
+        assert_eq!(
+            ls_note(&p, None, Some(Decision::Allow)).as_deref(),
+            Some("note: 1 rule(s) aren't fully enforced; see `sbt policy ls --wide`")
+        );
+        assert_eq!(ls_note(&p, Some("s2"), Some(Decision::Allow)), None);
     }
 
     #[test]

@@ -145,9 +145,12 @@ Good to know:
   `policy deny` of such a host, or of one under it, is refused and names the secret's service.
 - `balanced` is Docker's list of 195 rules; smolbento allows those hosts on any port (sbx limits
   them to 443).
-- A deny with a port (`host.example.com:8080`, `10.0.0.0/8:22`) isn't applied: smolvm can't block
-  a single port, and blocking the whole host would block its other ports too. `policy check`
-  takes a port the same way (`host.example.com:8080`); without one it checks port 443.
+- A deny with a port (`host.example.com:8080`, `10.0.0.0/8:22`) isn't enforced at all: smolvm can't
+  filter by port, so the host stays reachable on every port. Deny the host without a port to block
+  it. The one exception: a deny with exactly the same text as an allow rule cancels that allow.
+  `policy deny` says so when you add one, `policy ls` notes rules that aren't fully enforced, and
+  `policy ls --wide` and `policy check` show the details. `policy check` takes a port the same way
+  (`host.example.com:8080`); without one it checks port 443.
 - `sbt policy reset` stops running sandboxes, then removes the mode and every rule;
   `--deny-network` sandboxes stay deny-all. The next create or start asks for a mode again.
 - Blocked requests come from smolvm's egress log. `policy approval` lists the hosts with no rule
