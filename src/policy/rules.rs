@@ -98,6 +98,7 @@ impl Resource {
                              and the wildcards * ? [..]"
                         );
                     }
+                    check_classes(label, raw)?;
                     Pattern::Glob {
                         pattern: host.clone(),
                         parent: parent.into(),
@@ -176,6 +177,22 @@ impl Resource {
     }
 }
 
+/// Every `[` in a wildcard label opens a non-empty class closed by `]`.
+fn check_classes(label: &str, raw: &str) -> Result<()> {
+    let mut rest = label;
+    while let Some(i) = rest.find('[') {
+        let Some(len) = rest[i + 1..].find(']') else {
+            bail!("missing ']' in '{raw}': a `[` starts a character class like `[ab]`");
+        };
+        let class = &rest[i + 1..i + 1 + len];
+        if class.is_empty() || class == "!" {
+            bail!("empty character class in '{raw}'");
+        }
+        rest = &rest[i + 2 + len..];
+    }
+    Ok(())
+}
+
 /// The hostname rules smolvm's `--allow-host-pattern` enforces (`encode_strict` in
 /// smolvm-protocol's host_pattern.rs): one optional trailing dot, at most 253 characters, labels of
 /// 1 to 63 ASCII letters, digits and '-', with no '-' at either end of a label.
@@ -204,7 +221,7 @@ pub(crate) fn check_host(host: &str, raw: &str) -> Result<()> {
 pub(crate) fn split_port(s: &str) -> Result<(&str, Option<u16>)> {
     // `[::1]:443` is a bracketed IPv6 address; `[ab]pi.x.com` is a glob class, not a bracket.
     if let Some(rest) = s.strip_prefix('[')
-        && rest.split_once(']').is_some_and(|(a, _)| a.contains(':'))
+        && rest.split(']').next().is_some_and(|a| a.contains(':'))
     {
         let (addr, after) = rest
             .split_once(']')
@@ -455,6 +472,17 @@ mod tests {
         assert!(!r("10.0.0.0/8:22").matches("10.1.2.3:80"));
         assert!(r("[::1]:443").matches("::1"));
         assert!(!r("[::1]:22").matches("[::1]:443"));
+    }
+
+    #[test]
+    fn unterminated_brackets_are_rejected() {
+        for bad in ["[ab.x.com", "a[b.x.com", "[!a.x.com", "[::1", "[::1:443"] {
+            let err = Resource::parse(bad).unwrap_err().to_string();
+            assert!(err.contains("missing ']'"), "{bad}: {err}");
+        }
+        assert!(Resource::parse("[]a.x.com").is_err());
+        assert!(Resource::parse("[!]a.x.com").is_err());
+        assert!(Resource::parse("[ab]c[0-9].x.com").is_ok());
     }
 
     #[test]
