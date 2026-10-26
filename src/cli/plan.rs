@@ -48,14 +48,12 @@ pub fn credentials(secrets: &SecretsFile, services: &[String]) -> Result<Vec<Cre
 /// create).
 pub fn start_plan<R: Runner>(ctx: &Ctx<R>, meta: &Meta) -> Result<StartPlan> {
     let sandbox = meta.name.as_str();
-    let bound = &meta.secrets;
-    let hosts = &meta.credential_hosts;
     // Like create (and sbx after `policy reset`), a start needs a chosen policy.
     let policy = ensure_policy(ctx)?;
     let secrets = SecretsFile::load(&ctx.paths)?;
-    let network = compile::network(&policy, sandbox, hosts);
+    let network = compile::network(&policy, sandbox, &meta.credential_hosts);
     let mut env = Vec::new();
-    for name in bound {
+    for name in &meta.secrets {
         let (Some(service), Some(entry)) =
             (secrets.service(name), secrets.entry_for(sandbox, name))
         else {
