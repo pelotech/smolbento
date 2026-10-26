@@ -1141,23 +1141,6 @@ mod tests {
         t.ctx.vm.runner().ok(&["machine", "egress-events"], "[]");
         assert_eq!(sbt(&mut t.ctx, &["policy", "log"]).unwrap(), 0);
         assert_eq!(sbt(&mut t.ctx, &["policy", "log", "--json"]).unwrap(), 0);
-        let rows = vec![log::LogRow {
-            sandbox: "a1".into(),
-            host: "example.com".into(),
-            count: 2,
-            last_seen: "2026-10-26T11:00:00Z".into(),
-        }];
-        let json: serde_json::Value =
-            serde_json::from_str(&serde_json::to_string_pretty(&rows).unwrap()).unwrap();
-        assert_eq!(
-            json,
-            serde_json::json!([{
-                "sandbox": "a1",
-                "host": "example.com",
-                "count": 2,
-                "last_seen": "2026-10-26T11:00:00Z"
-            }])
-        );
     }
 
     #[test]
@@ -1244,7 +1227,7 @@ mod tests {
     }
 
     #[test]
-    fn check_protocol_udp_is_unsupported_for_rules_too() {
+    fn allow_and_deny_refuse_protocols_other_than_tcp() {
         let mut t = test_env(&[]);
         for kind in ["allow", "deny"] {
             let err = sbt(

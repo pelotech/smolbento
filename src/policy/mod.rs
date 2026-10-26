@@ -282,25 +282,9 @@ impl Policy {
 mod tests {
     use super::*;
 
-    fn paths() -> (tempfile::TempDir, Paths) {
-        let dir = tempfile::tempdir().unwrap();
-        let env = std::collections::BTreeMap::from([
-            (
-                "SMOLBENTO_CONFIG_DIR".to_string(),
-                dir.path().display().to_string(),
-            ),
-            (
-                "SMOLBENTO_CACHE_DIR".to_string(),
-                dir.path().join("c").display().to_string(),
-            ),
-        ]);
-        let p = Paths::from_env(&env).unwrap();
-        (dir, p)
-    }
-
     #[test]
     fn missing_file_is_default_and_round_trips() {
-        let (_d, paths) = paths();
+        let (_d, paths) = crate::config::test_paths();
         let mut p = Policy::load(&paths).unwrap();
         assert_eq!(p, Policy::default());
         p.mode = Some(Mode::Balanced);
@@ -335,7 +319,7 @@ mod tests {
     #[cfg(unix)]
     #[test]
     fn save_writes_through_a_symlinked_policy_file() {
-        let (d, paths) = paths();
+        let (d, paths) = crate::config::test_paths();
         let real = d.path().join("dotfiles-policy.toml");
         std::fs::write(&real, "").unwrap();
         std::os::unix::fs::symlink(&real, paths.policy_file()).unwrap();

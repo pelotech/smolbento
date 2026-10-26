@@ -163,22 +163,6 @@ impl SecretsFile {
 mod tests {
     use super::*;
 
-    fn paths() -> (tempfile::TempDir, Paths) {
-        let dir = tempfile::tempdir().unwrap();
-        let env = std::collections::BTreeMap::from([
-            (
-                "SMOLBENTO_CONFIG_DIR".to_string(),
-                dir.path().display().to_string(),
-            ),
-            (
-                "SMOLBENTO_CACHE_DIR".to_string(),
-                dir.path().join("c").display().to_string(),
-            ),
-        ]);
-        let p = Paths::from_env(&env).unwrap();
-        (dir, p)
-    }
-
     fn entry(service: &str, scope: &str, source: Source) -> SecretEntry {
         SecretEntry {
             service: service.into(),
@@ -189,7 +173,7 @@ mod tests {
 
     #[test]
     fn round_trip_and_toml_shape() {
-        let (_d, paths) = paths();
+        let (_d, paths) = crate::config::test_paths();
         let mut f = SecretsFile::load(&paths).unwrap();
         f.set(entry("anthropic", "global", Source::Keychain));
         f.set(entry(

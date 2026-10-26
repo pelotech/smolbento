@@ -295,6 +295,20 @@ mod tests {
         }
     }
 
+    /// The patterns smolvm gets in deny-all mode for these global allows and denies.
+    fn patterns(allows: &str, denies: &str) -> Vec<String> {
+        let mut p = policy(Mode::DenyAll);
+        p.add_rule(None, Decision::Allow, allows, "added", None, None)
+            .unwrap();
+        p.add_rule(None, Decision::Deny, denies, "added", None, None)
+            .unwrap();
+        list(&network(&p, "s1", &[])).patterns().to_vec()
+    }
+
+    fn reaches(deny: &str, cred: &str) -> bool {
+        deny_reaches_credential_host(&Resource::parse(deny).unwrap(), cred)
+    }
+
     #[test]
     fn allow_all_and_unchosen_are_open() {
         assert_eq!(network(&Policy::default(), "s1", &[]), NetworkSpec::Open);
@@ -365,14 +379,6 @@ mod tests {
 
     #[test]
     fn a_deny_drops_a_wildcard_allow_only_when_it_covers_the_whole_subtree() {
-        let patterns = |allows: &str, denies: &str| {
-            let mut p = policy(Mode::DenyAll);
-            p.add_rule(None, Decision::Allow, allows, "added", None, None)
-                .unwrap();
-            p.add_rule(None, Decision::Deny, denies, "added", None, None)
-                .unwrap();
-            list(&network(&p, "s1", &[])).patterns().to_vec()
-        };
         // The apex isn't the subtree.
         assert_eq!(patterns("**.x.com", "x.com"), ["*.x.com"]);
         assert_eq!(patterns("*.x.com", "x.com"), ["*.x.com"]);
@@ -388,14 +394,6 @@ mod tests {
 
     #[test]
     fn a_port_scoped_deny_never_removes_a_host_allow() {
-        let patterns = |allows: &str, denies: &str| {
-            let mut p = policy(Mode::DenyAll);
-            p.add_rule(None, Decision::Allow, allows, "added", None, None)
-                .unwrap();
-            p.add_rule(None, Decision::Deny, denies, "added", None, None)
-                .unwrap();
-            list(&network(&p, "s1", &[])).patterns().to_vec()
-        };
         // smolvm can't deny one port: dropping the host would block every port.
         assert_eq!(patterns("api.x.com", "api.x.com:8080"), ["api.x.com"]);
         assert_eq!(patterns("api.x.com", "api.x.com:443"), ["api.x.com"]);
@@ -649,9 +647,6 @@ mod tests {
 
     #[test]
     fn denies_that_reach_a_credential_host() {
-        let hits = |deny: &str, cred: &str| {
-            deny_reaches_credential_host(&Resource::parse(deny).unwrap(), cred)
-        };
         for deny in [
             "api.notion.com",
             "a.b.notion.com",
@@ -662,39 +657,34 @@ mod tests {
             "crl*.notion.com",
             "**",
         ] {
-            assert!(hits(deny, "*.notion.com"), "{deny}");
+            assert!(reaches(deny, "*.notion.com"), "{deny}");
         }
         for deny in ["notion.com", "*.com", "api.other.com", "10.0.0.0/8"] {
-            assert!(!hits(deny, "*.notion.com"), "{deny}");
+            assert!(!reaches(deny, "*.notion.com"), "{deny}");
         }
-        assert!(hits("api.github.com", "api.github.com"));
-        assert!(!hits("github.com", "api.github.com"));
+        assert!(reaches("api.github.com", "api.github.com"));
+        assert!(!reaches("github.com", "api.github.com"));
     }
 
     #[test]
     fn port_scoped_denies_never_reach_a_credential_host() {
         // They're never applied, so they can't take a bound secret's host away.
-        let hits = |deny: &str, cred: &str| {
-            deny_reaches_credential_host(&Resource::parse(deny).unwrap(), cred)
-        };
         for deny in [
             "api.github.com:8080",
             "foo.api.github.com:8080",
             "**.github.com:443",
         ] {
-            assert!(!hits(deny, "api.github.com"), "{deny}");
+            assert!(!reaches(deny, "api.github.com"), "{deny}");
         }
-        assert!(!hits("api.notion.com:8080", "*.notion.com"));
-        assert!(hits("api.github.com", "api.github.com"));
-        assert!(hits("foo.api.github.com", "api.github.com"));
+        assert!(!reaches("api.notion.com:8080", "*.notion.com"));
+        assert!(reaches("api.github.com", "api.github.com"));
+        assert!(reaches("foo.api.github.com", "api.github.com"));
     }
 
     #[test]
     fn denies_under_an_exact_credential_host_reach_it() {
         // An exact credential host is `--allow-host`, which smolvm widens to its subdomains.
-        let hits = |deny: &str| {
-            deny_reaches_credential_host(&Resource::parse(deny).unwrap(), "api.github.com")
-        };
+        let hits = |deny: &str| reaches(deny, "api.github.com");
         for deny in [
             "api.github.com",
             "foo.api.github.com",

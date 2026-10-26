@@ -305,6 +305,17 @@ fn existing_mode(_path: &Path) -> Option<u32> {
     None
 }
 
+/// Paths under a new temp dir, for tests.
+#[cfg(test)]
+pub(crate) fn test_paths() -> (tempfile::TempDir, Paths) {
+    let dir = tempfile::tempdir().unwrap();
+    let paths = Paths {
+        config: dir.path().to_path_buf(),
+        cache: dir.path().join("c"),
+    };
+    (dir, paths)
+}
+
 pub fn parse_bool(v: &str) -> Result<bool> {
     match v.to_ascii_lowercase().as_str() {
         "true" | "1" | "yes" | "on" => Ok(true),
