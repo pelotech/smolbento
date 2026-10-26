@@ -131,9 +131,7 @@ impl Resource {
         match &self.pattern {
             Pattern::Everything => true,
             Pattern::Exact(h) => host == h,
-            Pattern::Subdomains(d) => host
-                .strip_suffix(d.as_str())
-                .is_some_and(|p| p.len() > 1 && p.ends_with('.')),
+            Pattern::Subdomains(d) => is_under(host, d),
             Pattern::OneLabel(d) => host
                 .strip_suffix(d.as_str())
                 .and_then(|p| p.strip_suffix('.'))
@@ -151,9 +149,9 @@ impl Resource {
         match &self.pattern {
             Pattern::Everything => Allow::Everything,
             Pattern::Exact(h) => Allow::Pattern(h.clone()),
-            Pattern::Subdomains(d) => Allow::Pattern(format!("*.{d}")),
-            Pattern::OneLabel(d) => Allow::Pattern(format!("*.{d}")),
-            Pattern::Glob { parent, .. } => Allow::Pattern(format!("*.{parent}")),
+            Pattern::Subdomains(d) | Pattern::OneLabel(d) | Pattern::Glob { parent: d, .. } => {
+                Allow::Pattern(format!("*.{d}"))
+            }
             Pattern::Cidr { addr, prefix } => Allow::Cidr(format!("{addr}/{prefix}")),
         }
     }
@@ -185,6 +183,12 @@ impl Resource {
         }
         (!notes.is_empty()).then(|| notes.join("; "))
     }
+}
+
+/// Whether `host` is a subdomain (at any depth) of `domain`.
+pub(crate) fn is_under(host: &str, domain: &str) -> bool {
+    host.strip_suffix(domain)
+        .is_some_and(|p| p.len() > 1 && p.ends_with('.'))
 }
 
 /// Every `[` in a wildcard label opens a non-empty class closed by `]`.

@@ -2,7 +2,7 @@
 
 use std::collections::BTreeSet;
 
-use super::rules::{Allow, Pattern, Resource, split_port};
+use super::rules::{Allow, Pattern, Resource, is_under, split_port};
 use super::{Decision, Mode, Policy, presets};
 use crate::smolvm::{AllowList, NetworkSpec};
 
@@ -20,7 +20,7 @@ fn resources(policy: &Policy, sandbox: Option<&str>, decision: Decision) -> Vec<
 fn covers(deny: &Resource, domain: &str, any_depth: bool) -> bool {
     match &deny.pattern {
         Pattern::Everything => true,
-        Pattern::Subdomains(p) => domain == p || domain.ends_with(&format!(".{p}")),
+        Pattern::Subdomains(p) => domain == p || is_under(domain, p),
         Pattern::OneLabel(p) => !any_depth && domain == p,
         _ => false,
     }
@@ -99,19 +99,13 @@ fn network_for(policy: &Policy, sandbox: Option<&str>, credential_hosts: &[Strin
     NetworkSpec::Restricted(AllowList::new(hosts, patterns, cidrs))
 }
 
-/// Whether `host` is a subdomain (at any depth) of `domain`.
-fn under(host: &str, domain: &str) -> bool {
-    host.strip_suffix(domain)
-        .is_some_and(|p| p.len() > 1 && p.ends_with('.'))
-}
-
 /// Whether a bound credential host admits `host`: an exact one (`--allow-host`) the host and its
 /// subdomains, a `*.x` one (a pattern) only the subdomains of x.
 fn credential_admits(cred: &str, host: &str) -> bool {
     let cred = cred.to_ascii_lowercase();
     match cred.strip_prefix("*.") {
-        Some(domain) => under(host, domain),
-        None => host == cred || under(host, &cred),
+        Some(domain) => is_under(host, domain),
+        None => host == cred || is_under(host, &cred),
     }
 }
 
@@ -135,9 +129,9 @@ pub fn deny_reaches_credential_host(deny: &Resource, cred: &str) -> bool {
 fn reaches_under(deny: &Resource, x: &str) -> bool {
     match &deny.pattern {
         Pattern::Everything => true,
-        Pattern::Exact(h) => under(h, x),
-        Pattern::Subdomains(p) => p == x || under(p, x) || under(x, p),
-        Pattern::OneLabel(p) | Pattern::Glob { parent: p, .. } => p == x || under(p, x),
+        Pattern::Exact(h) => is_under(h, x),
+        Pattern::Subdomains(p) => p == x || is_under(p, x) || is_under(x, p),
+        Pattern::OneLabel(p) | Pattern::Glob { parent: p, .. } => p == x || is_under(p, x),
         Pattern::Cidr { .. } => false,
     }
 }
@@ -169,17 +163,16 @@ fn admits(spec: &NetworkSpec, host: &str, everything_rule: bool) -> Option<Strin
             .into(),
         );
     };
-    let under = |d: &str| host.strip_suffix(d).is_some_and(|p| p.ends_with('.'));
     let entry = list
         .hosts()
         .iter()
-        .find(|h| host == h.as_str() || under(h))
+        .find(|h| host == h.as_str() || is_under(host, h))
         .cloned()
         .or_else(|| {
             list.patterns()
                 .iter()
                 .find(|p| match p.strip_prefix("*.") {
-                    Some(d) => under(d),
+                    Some(d) => is_under(host, d),
                     None => host == p.as_str(),
                 })
                 .cloned()
