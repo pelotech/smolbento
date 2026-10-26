@@ -179,15 +179,8 @@ impl Policy {
             path.as_deref(),
         );
         let list = self.rules_mut(sandbox);
-        // By content too: a rule saved under an older id scheme keeps its id.
-        if let Some(same) = list.iter().find(|r| {
-            r.id == id
-                || (r.decision == decision
-                    && r.resources == resources
-                    && r.method.as_deref().and_then(normalise_methods) == method
-                    && r.path == path)
-        }) {
-            return Ok(same.id.clone());
+        if list.iter().any(|r| r.id == id) {
+            return Ok(id);
         }
         list.push(Rule {
             id: id.clone(),
@@ -437,7 +430,7 @@ mod tests {
     }
 
     #[test]
-    fn methods_are_normalised_and_rules_dedupe_by_content() {
+    fn methods_are_normalised_so_rules_dedupe() {
         let mut p = Policy::default();
         let a = p
             .add_rule(
@@ -462,28 +455,6 @@ mod tests {
         assert_eq!(a, b);
         assert_eq!(p.rules.len(), 1);
         assert_eq!(p.rules[0].method.as_deref(), Some("GET,POST"));
-        // A rule saved under an older id scheme isn't duplicated when added again.
-        let mut p = Policy::default();
-        p.rules.push(Rule {
-            id: "r-0ld0ld00".into(),
-            decision: Decision::Allow,
-            resources: vec!["a.com".into()],
-            created_via: "added".into(),
-            method: Some("get".into()),
-            path: Some("/v1".into()),
-        });
-        let id = p
-            .add_rule(
-                None,
-                Decision::Allow,
-                "a.com",
-                "added",
-                Some("GET".into()),
-                Some("/v1".into()),
-            )
-            .unwrap();
-        assert_eq!(id, "r-0ld0ld00");
-        assert_eq!(p.rules.len(), 1);
     }
 
     #[test]

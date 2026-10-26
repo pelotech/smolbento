@@ -29,8 +29,7 @@ pub struct Meta {
     /// them, so its allow list must too, whatever secrets.toml says now.
     pub credential_hosts: Vec<String>,
     /// Env vars of those credentials as bound at create, sorted. A start removes the ones without
-    /// a value, even after their service is gone from secrets.toml. Empty for sandboxes created
-    /// before this label existed.
+    /// a value, even after their service is gone from secrets.toml.
     pub credential_env: Vec<String>,
 }
 

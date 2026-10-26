@@ -56,41 +56,29 @@ pub fn start_plan<R: Runner>(ctx: &Ctx<R>, meta: &Meta) -> Result<StartPlan> {
     let secrets = SecretsFile::load(&ctx.paths)?;
     let network = compile::network(&policy, sandbox, hosts);
     let mut env = Vec::new();
-    let mut remove = Vec::new();
     for name in bound {
-        // Sandboxes created before `sbx.credential-env` existed rely on these.
-        let vars = secrets
-            .service(name)
-            .map(|s| s.env_vars)
-            .unwrap_or_default();
         let (Some(service), Some(entry)) =
             (secrets.service(name), secrets.entry_for(sandbox, name))
         else {
             eprintln!(
                 "warning: {sandbox} was created with a {name} secret that's no longer set; requests using it will fail"
             );
-            remove.extend(vars);
             continue;
         };
         match resolve(entry, ctx.store.as_ref()) {
             Ok(value) => env.extend(service.env_vars.iter().map(|v| (v.clone(), value.clone()))),
-            Err(e) => {
-                remove.extend(vars);
-                eprintln!(
-                    "warning: {name} secret for {sandbox}: {e:#}; requests using it will fail"
-                );
-            }
+            Err(e) => eprintln!(
+                "warning: {name} secret for {sandbox}: {e:#}; requests using it will fail"
+            ),
         }
     }
-    // Recorded env vars cover services secrets.toml no longer defines.
-    remove.extend(
-        meta.credential_env
-            .iter()
-            .filter(|v| !env.iter().any(|(k, _)| k == *v))
-            .cloned(),
-    );
-    remove.sort();
-    remove.dedup();
+    // Recorded env vars without a value, even of services secrets.toml no longer defines.
+    let remove = meta
+        .credential_env
+        .iter()
+        .filter(|v| !env.iter().any(|(k, _)| k == *v))
+        .cloned()
+        .collect();
     Ok(StartPlan {
         network,
         env,
@@ -231,8 +219,15 @@ mod tests {
     use crate::secrets::{SecretEntry, Source, scope_for};
     use crate::smolvm::NetworkSpec;
 
-    /// A sandbox's labels as recorded at create; `credential_env` empty as before it existed.
+    /// A sandbox's labels as recorded at create: `credential_env` holds the built-in services'
+    /// env vars.
     fn meta(name: &str, secrets: &[String], hosts: &[String]) -> Meta {
+        let mut credential_env: Vec<String> = secrets
+            .iter()
+            .filter_map(|s| crate::secrets::services::builtin(s))
+            .flat_map(|s| s.env_vars)
+            .collect();
+        credential_env.sort();
         Meta {
             name: name.into(),
             agent: "claude".into(),
@@ -242,7 +237,7 @@ mod tests {
             docker: false,
             secrets: secrets.to_vec(),
             credential_hosts: hosts.to_vec(),
-            credential_env: vec![],
+            credential_env,
         }
     }
 

@@ -115,10 +115,8 @@ fn keychain_add_line(account: &str, value: &str) -> Result<String> {
 
 /// A keychain password back to the value. Errors never include the password.
 fn decode_keychain_value(stored: &str) -> Result<String> {
-    let Some(payload) = stored.strip_prefix(KEYCHAIN_PREFIX) else {
-        return Ok(stored.to_string());
-    };
     let bad = || anyhow::anyhow!("the keychain item isn't a valid smolbento value");
+    let payload = stored.strip_prefix(KEYCHAIN_PREFIX).ok_or_else(bad)?;
     if payload.len() % 2 != 0 {
         return Err(bad());
     }
@@ -381,8 +379,7 @@ mod tests {
             "pässwörd-ключ"
         );
         assert_eq!(decode_keychain_value(&enc("")).unwrap(), "");
-        assert_eq!(decode_keychain_value("plain-old").unwrap(), "plain-old");
-        for bad in ["sbx1:zz-secret", "sbx1:abc", "sbx1:ff"] {
+        for bad in ["plain-secret", "sbx1:zz-secret", "sbx1:abc", "sbx1:ff"] {
             let err = decode_keychain_value(bad).unwrap_err().to_string();
             assert!(!err.contains(bad) && !err.contains("secret"), "{err}");
         }
