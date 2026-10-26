@@ -57,6 +57,7 @@ smolbento keeps no database of its own. Each sandbox is a smolvm machine named `
 | `sbx.docker` | Whether it runs a private Docker engine |
 | `sbx.secrets` | Services whose secrets were bound at create |
 | `sbx.credential-hosts` | Hosts those secrets use, recorded at create so the sandbox can always reach them |
+| `sbx.credential-env` | Env vars those secrets use; a start keeps any without a value out of the sandbox, even if the service is gone |
 
 `smolvm machine ls` shows them alongside any machines you made with smolvm directly; `sbt ls` shows
 only the ones smolbento made.

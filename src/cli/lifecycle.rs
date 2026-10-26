@@ -84,6 +84,7 @@ pub(crate) fn build_request<R: Runner>(
         credentials: vec![],
         secrets: vec![],
         credential_hosts: vec![],
+        credential_env: vec![],
     })
 }
 
@@ -109,8 +110,7 @@ pub fn start<R: Runner>(ctx: &mut Ctx<R>, names: &[String]) -> Result<i32> {
             println!("{n} is already running");
             continue;
         }
-        let start_plan =
-            plan::start_plan(ctx, sb.name(), &sb.meta.secrets, &sb.meta.credential_hosts)?;
+        let start_plan = plan::start_plan(ctx, &sb.meta)?;
         sandbox::start(&ctx.vm, &sb, &start_plan)?;
         println!("Started {n}");
     }
@@ -380,6 +380,10 @@ mod tests {
                 " --label sbx.credential-hosts=api.github.com,api.githubcopilot.com,\
                  copilot.github.com,gist.github.com,github.com,raw.githubusercontent.com "
             ),
+            "{create}"
+        );
+        assert!(
+            create.contains(" --label sbx.credential-env=GH_TOKEN,GITHUB_TOKEN "),
             "{create}"
         );
         assert!(

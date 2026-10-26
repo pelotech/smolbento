@@ -8,6 +8,7 @@ pub const CREATED: &str = "sbx.created";
 pub const DOCKER: &str = "sbx.docker";
 pub const SECRETS: &str = "sbx.secrets";
 pub const CREDENTIAL_HOSTS: &str = "sbx.credential-hosts";
+pub const CREDENTIAL_ENV: &str = "sbx.credential-env";
 
 /// Sandbox metadata, fixed at create and stored as smolvm machine labels.
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -27,6 +28,10 @@ pub struct Meta {
     /// Hosts of those credentials as bound at create, sorted. The machine's credentials keep
     /// them, so its allow list must too, whatever secrets.toml says now.
     pub credential_hosts: Vec<String>,
+    /// Env vars of those credentials as bound at create, sorted. A start removes the ones without
+    /// a value, even after their service is gone from secrets.toml. Empty for sandboxes created
+    /// before this label existed.
+    pub credential_env: Vec<String>,
 }
 
 impl Meta {
@@ -53,6 +58,9 @@ impl Meta {
                 self.credential_hosts.join(","),
             );
         }
+        if !self.credential_env.is_empty() {
+            labels.insert(CREDENTIAL_ENV.to_string(), self.credential_env.join(","));
+        }
         labels
     }
 
@@ -73,6 +81,7 @@ impl Meta {
             docker: labels.get(DOCKER).is_some_and(|d| d == "true"),
             secrets: list(labels.get(SECRETS)),
             credential_hosts: list(labels.get(CREDENTIAL_HOSTS)),
+            credential_env: list(labels.get(CREDENTIAL_ENV)),
         })
     }
 }
@@ -103,6 +112,7 @@ mod tests {
             docker: true,
             secrets: vec![],
             credential_hosts: vec![],
+            credential_env: vec![],
         }
     }
 
@@ -147,6 +157,18 @@ mod tests {
         assert_eq!(labels["sbx.credential-hosts"], "api.github.com,github.com");
         assert_eq!(Meta::from_labels(&labels), Some(m));
         assert!(!meta().to_labels().contains_key("sbx.credential-hosts"));
+    }
+
+    #[test]
+    fn credential_env_label_round_trips() {
+        let m = Meta {
+            credential_env: vec!["GH_TOKEN".into(), "GITHUB_TOKEN".into()],
+            ..meta()
+        };
+        let labels = m.to_labels();
+        assert_eq!(labels["sbx.credential-env"], "GH_TOKEN,GITHUB_TOKEN");
+        assert_eq!(Meta::from_labels(&labels), Some(m));
+        assert!(!meta().to_labels().contains_key("sbx.credential-env"));
     }
 
     #[test]

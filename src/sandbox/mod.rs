@@ -278,6 +278,7 @@ mod tests {
             credentials: vec![],
             secrets: vec![],
             credential_hosts: vec![],
+            credential_env: vec![],
         };
         let fake = FakeRunner::new();
         fake.ok(&["machine", "status"], STATUS);

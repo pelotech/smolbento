@@ -6,7 +6,7 @@ use anyhow::{Context, Result, bail};
 
 use super::Ctx;
 use crate::policy::{Mode, Policy, compile};
-use crate::sandbox::{self, CreateRequest, Sandbox, StartPlan};
+use crate::sandbox::{self, CreateRequest, Meta, Sandbox, StartPlan};
 use crate::secrets::{SecretsFile, resolve::resolve};
 use crate::smolvm::{Credential, Runner};
 
@@ -40,14 +40,13 @@ pub fn credentials(secrets: &SecretsFile, services: &[String]) -> Result<Vec<Cre
     Ok(out)
 }
 
-/// Network and secret values for starting `sandbox`, whose credentials came from `bound` and
-/// cover `hosts` (both recorded at create).
-pub fn start_plan<R: Runner>(
-    ctx: &Ctx<R>,
-    sandbox: &str,
-    bound: &[String],
-    hosts: &[String],
-) -> Result<StartPlan> {
+/// Network and secret values for starting the sandbox `meta` describes: its credentials came from
+/// `meta.secrets`, cover `meta.credential_hosts` and use `meta.credential_env` (all recorded at
+/// create).
+pub fn start_plan<R: Runner>(ctx: &Ctx<R>, meta: &Meta) -> Result<StartPlan> {
+    let sandbox = meta.name.as_str();
+    let bound = &meta.secrets;
+    let hosts = &meta.credential_hosts;
     let mut policy = Policy::load(&ctx.paths)?;
     if policy.mode.is_none() {
         if ctx.stdin_tty {
@@ -66,7 +65,7 @@ pub fn start_plan<R: Runner>(
     let mut env = Vec::new();
     let mut remove = Vec::new();
     for name in bound {
-        // A service secrets.toml no longer defines has no known env vars to remove.
+        // Sandboxes created before `sbx.credential-env` existed rely on these.
         let vars = secrets
             .service(name)
             .map(|s| s.env_vars)
@@ -90,6 +89,15 @@ pub fn start_plan<R: Runner>(
             }
         }
     }
+    // Recorded env vars cover services secrets.toml no longer defines.
+    remove.extend(
+        meta.credential_env
+            .iter()
+            .filter(|v| !env.iter().any(|(k, _)| k == *v))
+            .cloned(),
+    );
+    remove.sort();
+    remove.dedup();
     Ok(StartPlan {
         network,
         env,
@@ -101,9 +109,7 @@ pub fn start_plan<R: Runner>(
 /// `sandbox::ensure_running` with this context's plan.
 pub fn ensure_running<R: Runner>(ctx: &Ctx<R>, sb: &mut Sandbox) -> Result<()> {
     let meta = sb.meta.clone();
-    sandbox::ensure_running(&ctx.vm, sb, || {
-        start_plan(ctx, &meta.name, &meta.secrets, &meta.credential_hosts)
-    })
+    sandbox::ensure_running(&ctx.vm, sb, || start_plan(ctx, &meta))
 }
 
 /// Asks for a network policy the first time one is needed (sbx behaviour).
@@ -157,6 +163,9 @@ pub fn prepare_create<R: Runner>(
         .collect();
     req.credentials = credentials(&secrets, &services)?;
     req.credential_hosts = credential_hosts(&secrets, &services);
+    req.credential_env = req.credentials.iter().map(|c| c.env_var.clone()).collect();
+    req.credential_env.sort();
+    req.credential_env.dedup();
     req.network = compile::network(&policy, &req.name, &req.credential_hosts);
     req.deny_cidrs = compile::deny_cidrs(&policy, &req.name);
     req.secrets = services;
@@ -173,7 +182,7 @@ pub fn create<R: Runner>(
 ) -> Result<Sandbox> {
     let result = (|| {
         prepare_create(ctx, req, deny_network)?;
-        let plan = start_plan(ctx, &req.name, &req.secrets, &req.credential_hosts)?;
+        let plan = start_plan(ctx, &sandbox::create::meta(req))?;
         sandbox::create(&ctx.vm, req, &plan)
     })();
     if result.is_err() && deny_network && matches!(sandbox::find(&ctx.vm, &req.name), Ok(None)) {
@@ -225,8 +234,24 @@ pub fn push_network<R: Runner>(ctx: &Ctx<R>) -> Result<()> {
 mod tests {
     use super::super::testutil::*;
     use super::*;
+    use crate::sandbox::Meta;
     use crate::secrets::{SecretEntry, Source, scope_for};
     use crate::smolvm::NetworkSpec;
+
+    /// A sandbox's labels as recorded at create; `credential_env` empty as before it existed.
+    fn meta(name: &str, secrets: &[String], hosts: &[String]) -> Meta {
+        Meta {
+            name: name.into(),
+            agent: "claude".into(),
+            workspace: None,
+            workspaces: vec![],
+            created: 1,
+            docker: false,
+            secrets: secrets.to_vec(),
+            credential_hosts: hosts.to_vec(),
+            credential_env: vec![],
+        }
+    }
 
     fn save_secret(t: &TestEnv, service: &str, sandbox: Option<&str>, value: &str) {
         let mut f = SecretsFile::load(&t.ctx.paths).unwrap();
@@ -247,7 +272,7 @@ mod tests {
         save_secret(&t, "github", None, "gh-123");
         let github = ["github".to_string()];
         let hosts = credential_hosts(&SecretsFile::load(&t.ctx.paths).unwrap(), &github);
-        let plan = start_plan(&t.ctx, "s1", &github, &hosts).unwrap();
+        let plan = start_plan(&t.ctx, &meta("s1", &github, &hosts)).unwrap();
         assert!(plan.remove.is_empty());
         assert_eq!(
             plan.env,
@@ -266,7 +291,7 @@ mod tests {
     #[test]
     fn missing_secret_values_are_warnings() {
         let t = test_env(&[]);
-        let plan = start_plan(&t.ctx, "s1", &["github".to_string()], &[]).unwrap();
+        let plan = start_plan(&t.ctx, &meta("s1", &["github".to_string()], &[])).unwrap();
         assert!(plan.env.is_empty());
         assert_eq!(plan.remove, vec!["GH_TOKEN", "GITHUB_TOKEN"]);
     }
@@ -282,7 +307,7 @@ mod tests {
             source: Source::Keychain,
         });
         f.save(&t.ctx.paths).unwrap();
-        let plan = start_plan(&t.ctx, "s1", &["anthropic".to_string()], &[]).unwrap();
+        let plan = start_plan(&t.ctx, &meta("s1", &["anthropic".to_string()], &[])).unwrap();
         assert!(plan.env.is_empty());
         assert_eq!(plan.remove, vec!["ANTHROPIC_API_KEY"]);
     }
@@ -294,9 +319,11 @@ mod tests {
         // `internal` was a custom service at create; secrets.toml no longer defines it.
         let plan = start_plan(
             &t.ctx,
-            "s1",
-            &["internal".to_string()],
-            &["api.internal.example".to_string()],
+            &meta(
+                "s1",
+                &["internal".to_string()],
+                &["api.internal.example".to_string()],
+            ),
         )
         .unwrap();
         let NetworkSpec::Restricted(list) = plan.network else {
@@ -304,6 +331,23 @@ mod tests {
         };
         assert!(list.hosts().contains(&"api.internal.example".to_string()));
         assert!(plan.env.is_empty());
+    }
+
+    #[test]
+    fn recorded_env_vars_of_a_deleted_service_are_still_removed() {
+        let t = test_env(&[]);
+        // `internal` was a custom service with INTERNAL_TOKEN at create; it's gone now.
+        let m = Meta {
+            credential_env: vec!["INTERNAL_TOKEN".into()],
+            ..meta(
+                "s1",
+                &["internal".to_string()],
+                &["api.internal.example".to_string()],
+            )
+        };
+        let plan = start_plan(&t.ctx, &m).unwrap();
+        assert!(plan.env.is_empty());
+        assert_eq!(plan.remove, vec!["INTERNAL_TOKEN"]);
     }
 
     #[test]
@@ -327,9 +371,11 @@ mod tests {
             credentials: vec![],
             secrets: vec![],
             credential_hosts: vec![],
+            credential_env: vec![],
         };
         prepare_create(&t.ctx, &mut req, true).unwrap();
         assert_eq!(req.secrets, vec!["anthropic"]);
+        assert_eq!(req.credential_env, vec!["ANTHROPIC_API_KEY"]);
         assert_eq!(req.credentials[0].env_var, "ANTHROPIC_API_KEY");
         assert!(
             req.credential_hosts
@@ -350,10 +396,10 @@ mod tests {
     fn start_without_a_mode_and_without_a_terminal_stays_open() {
         let t = test_env(&[]);
         set_policy(&t, "[sandboxes.d1]\ndeny_network = true\n");
-        let plan = start_plan(&t.ctx, "s1", &[], &[]).unwrap();
+        let plan = start_plan(&t.ctx, &meta("s1", &[], &[])).unwrap();
         assert_eq!(plan.network, NetworkSpec::Open);
         assert_eq!(Policy::load(&t.ctx.paths).unwrap().mode, None);
-        let plan = start_plan(&t.ctx, "d1", &[], &[]).unwrap();
+        let plan = start_plan(&t.ctx, &meta("d1", &[], &[])).unwrap();
         assert!(matches!(plan.network, NetworkSpec::Restricted(_)));
     }
 
