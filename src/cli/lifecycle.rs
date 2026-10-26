@@ -119,14 +119,19 @@ pub fn start<R: Runner>(ctx: &mut Ctx<R>, names: &[String]) -> Result<i32> {
 
 pub fn stop<R: Runner>(ctx: &mut Ctx<R>, names: &[String]) -> Result<i32> {
     for n in names {
-        let sb = sandbox::get(&ctx.vm, n)?;
-        if sb.is_running() {
-            ctx.vm.stop(&sb.machine)?;
-        }
-        session::clear(&ctx.paths.sessions(), n);
-        println!("Stopped {n}");
+        stop_sandbox(ctx, &sandbox::get(&ctx.vm, n)?)?;
     }
     Ok(0)
+}
+
+/// Stops `sb` if it's running and forgets its sessions.
+pub(crate) fn stop_sandbox<R: Runner>(ctx: &Ctx<R>, sb: &Sandbox) -> Result<()> {
+    if sb.is_running() {
+        ctx.vm.stop(&sb.machine)?;
+    }
+    session::clear(&ctx.paths.sessions(), sb.name());
+    println!("Stopped {}", sb.name());
+    Ok(())
 }
 
 /// Deletes a sandbox and its per-sandbox policy; `forget_secrets` also drops its own secrets.
@@ -537,6 +542,35 @@ mod tests {
                 .call_lines()
                 .contains(&"machine start -n sbx-claude-proj".to_string())
         );
+    }
+
+    #[test]
+    fn start_needs_a_policy() {
+        let mut t = test_env(&[]);
+        set_policy(&t, "");
+        t.ctx.vm.runner().ok(
+            &["machine", "status"],
+            &json("sbx-claude-proj", "stopped", "claude-proj"),
+        );
+        let err = sbt(&mut t.ctx, &["start", "claude-proj"])
+            .unwrap_err()
+            .to_string();
+        assert!(
+            err.contains("no network policy chosen yet; run `sbt policy init"),
+            "{err}"
+        );
+        let started = |t: &TestEnv| {
+            t.ctx
+                .vm
+                .runner()
+                .call_lines()
+                .into_iter()
+                .any(|l| l.starts_with("machine update") || l.starts_with("machine start"))
+        };
+        assert!(!started(&t));
+        sbt(&mut t.ctx, &["policy", "init", "balanced"]).unwrap();
+        sbt(&mut t.ctx, &["start", "claude-proj"]).unwrap();
+        assert!(started(&t));
     }
 
     #[test]

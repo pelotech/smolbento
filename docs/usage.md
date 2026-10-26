@@ -108,7 +108,8 @@ machine owned by you. Files the agent creates are private to you (mode 600/700).
 
 ## Network policy
 
-The first `sbt run` or `sbt create` asks which policy your sandboxes get, and saves the answer:
+Creating or starting a sandbox needs a network policy. The first time, `sbt` asks which one your
+sandboxes get, and saves the answer:
 
 | Mode | Meaning |
 |---|---|
@@ -116,7 +117,8 @@ The first `sbt run` or `sbt create` asks which policy your sandboxes get, and sa
 | `balanced` | Default deny, plus Docker Sandboxes' baseline: AI APIs, package registries, code hosts, container registries, cloud services, OS packages, certificate checks (and the Nix caches) |
 | `deny-all` | Nothing, unless you allow it |
 
-In scripts and CI, choose it up front: `sbt policy init balanced`.
+Without a terminal it can't ask and fails instead, so scripts and CI choose it up front:
+`sbt policy init balanced`.
 
 ```sh
 sbt policy allow network api.example.com,*.example.org   # applies to running sandboxes at once
@@ -143,9 +145,8 @@ Good to know:
   `policy deny` of such a host is refused and names the secret's service.
 - `balanced` is Docker's list of 195 rules; smolbento allows those hosts on any port (sbx limits
   them to 443).
-- `sbt policy reset` removes the mode and every rule; `--deny-network` sandboxes stay deny-all.
-  Until a mode is chosen again, starting a sandbox asks for one (without a terminal it warns and
-  starts with an open network).
+- `sbt policy reset` stops running sandboxes, then removes the mode and every rule;
+  `--deny-network` sandboxes stay deny-all. The next create or start asks for a mode again.
 - Blocked requests come from smolvm's egress log. `policy approval` lists the hosts with no rule
   yet; the host is the approval id.
 

@@ -14,6 +14,23 @@ use crate::sandbox::{self, name};
 use crate::secrets::SecretsFile;
 use crate::smolvm::Runner;
 
+/// Stops every running sandbox, as sbx's `policy reset` does. Failures are warnings: the reset
+/// itself must still happen.
+fn stop_running<R: Runner>(ctx: &Ctx<R>) {
+    let sandboxes = match sandbox::list(&ctx.vm) {
+        Ok(s) => s,
+        Err(e) => {
+            eprintln!("warning: couldn't list sandboxes to stop them ({e:#})");
+            return;
+        }
+    };
+    for sb in sandboxes.iter().filter(|s| s.is_running()) {
+        if let Err(e) = super::lifecycle::stop_sandbox(ctx, sb) {
+            eprintln!("warning: couldn't stop {} ({e:#})", sb.name());
+        }
+    }
+}
+
 pub fn run<R: Runner>(ctx: &mut Ctx<R>, cmd: PolicyCmd) -> Result<i32> {
     let mut policy = Policy::load(&ctx.paths)?;
     match cmd {
@@ -114,15 +131,16 @@ pub fn run<R: Runner>(ctx: &mut Ctx<R>, cmd: PolicyCmd) -> Result<i32> {
         PolicyCmd::Reset { force } => {
             confirm(
                 ctx,
-                "Remove every policy rule and the chosen mode? (--deny-network sandboxes stay \
-                 deny-all)",
+                "Remove every policy rule and the chosen mode? Running sandboxes will be stopped \
+                 (--deny-network sandboxes stay deny-all).",
                 force,
             )?;
+            stop_running(ctx);
             policy.reset();
             policy.save(&ctx.paths)?;
             println!(
-                "Policy reset; the next `sbt run` asks for a mode (--deny-network sandboxes stay \
-                 deny-all)"
+                "Policy reset; the next start or create asks for a mode (--deny-network \
+                 sandboxes stay deny-all)"
             );
         }
         PolicyCmd::Log(a) => {
@@ -688,6 +706,21 @@ mod tests {
         ));
         let err = sbt(&mut t.ctx, &["policy", "refresh"]).unwrap_err();
         assert_eq!(super::super::exit_code(&err), 2);
+    }
+
+    #[test]
+    fn reset_stops_running_sandboxes() {
+        let mut t = test_env(&[]);
+        running(&t, &[("sbx.name", "a1")]);
+        sbt(&mut t.ctx, &["policy", "reset", "-f"]).unwrap();
+        assert!(
+            t.ctx
+                .vm
+                .runner()
+                .call_lines()
+                .contains(&"machine stop -n sbx-a1".to_string())
+        );
+        assert_eq!(Policy::load(&t.ctx.paths).unwrap().mode, None);
     }
 
     fn blocked(t: &TestEnv) {

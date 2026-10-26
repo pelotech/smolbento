@@ -176,10 +176,10 @@ mod tests {
     }
 
     #[test]
-    fn running_an_existing_sandbox_needs_no_policy_and_records_nothing() {
+    fn running_an_existing_sandbox_records_nothing_and_starting_it_needs_a_policy() {
         let mut t = test_env(&[]);
         std::fs::remove_file(t.ctx.paths.policy_file()).unwrap();
-        created(&t, "stopped");
+        created(&t, "running");
         t.ctx.vm.runner().interactive_exit(0);
         assert_eq!(
             sbt(&mut t.ctx, &["run", "claude", "--deny-network"]).unwrap(),
@@ -188,10 +188,21 @@ mod tests {
         assert!(!t.ctx.paths.policy_file().exists());
         let lines = t.ctx.vm.runner().call_lines();
         assert!(!lines.iter().any(|l| l.contains("create")), "{lines:?}");
+
+        // A stopped one has to start, and every start needs a policy.
+        let mut t = test_env(&[]);
+        std::fs::remove_file(t.ctx.paths.policy_file()).unwrap();
+        created(&t, "stopped");
+        let err = sbt(&mut t.ctx, &["run", "claude", "--deny-network"])
+            .unwrap_err()
+            .to_string();
+        assert!(err.contains("sbt policy init"), "{err}");
+        assert!(!t.ctx.paths.policy_file().exists());
+        let lines = t.ctx.vm.runner().call_lines();
         assert!(
-            lines
+            !lines
                 .iter()
-                .any(|l| l == "machine start -n sbx-claude-proj"),
+                .any(|l| l.contains("create") || l.contains("start")),
             "{lines:?}"
         );
     }
