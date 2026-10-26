@@ -13,9 +13,9 @@ mounted at the same path. See [Usage](usage.md).
 **Phase 2 (network policy, secrets, ports) is done.** Choose `balanced` or `deny-all` for untrusted
 work. See [Security](SECURITY.md).
 
-Upgrading from an earlier Phase 2 build: starting a sandbox now needs a chosen network policy, as
-creating one already did. If you never chose one, run `sbt policy init balanced` (or answer the
-prompt) before your next start.
+Upgrading from v0.1.x: starting a sandbox now needs a chosen network policy, as in sbx. Run
+`sbt policy init balanced` (or answer the prompt) before your next start; scripts without a
+terminal fail until you do.
 
 ## Phases
 
