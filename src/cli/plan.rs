@@ -153,8 +153,6 @@ pub fn prepare_create<R: Runner>(
 
 /// Pushes the current policy to running sandboxes. Failures are warnings: the policy applies on
 /// each sandbox's next start anyway.
-// Called by the policy commands once they're wired; tests use it now.
-#[cfg_attr(not(test), allow(dead_code))]
 pub fn push_network<R: Runner>(ctx: &Ctx<R>) -> Result<()> {
     let sandboxes = match sandbox::list(&ctx.vm) {
         Ok(s) => s,

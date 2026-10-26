@@ -23,7 +23,7 @@ Commands:
   settings    Read and change settings
   daemon      Accepted for sbx compatibility; smolbento needs no daemon
   ports       Publish or unpublish ports (not implemented yet)
-  policy      Network policy (not implemented yet)
+  policy      Network policy
   secret      Secrets (not implemented yet)
   kit         Kits (not implemented yet)
   mcp         MCP servers (not implemented yet)

@@ -32,6 +32,7 @@ fn help_snapshots() {
         vec!["prune"],
         vec!["cp"],
         vec!["settings"],
+        vec!["policy"],
     ] {
         let name = if path.is_empty() {
             "sbt".to_string()

@@ -6,6 +6,7 @@ mod exec;
 mod lifecycle;
 mod ls;
 mod plan;
+mod policy;
 mod run;
 mod settings;
 #[cfg(test)]
@@ -129,6 +130,7 @@ pub fn dispatch<R: Runner>(ctx: &mut Ctx<R>, cli: Cli) -> Result<i32> {
         }
         Cmd::Diagnose => diagnose::run(ctx),
         Cmd::Settings(s) => settings::run(ctx, s),
+        Cmd::Policy(p) => policy::run(ctx, p),
         Cmd::Daemon(_) => {
             println!("smolbento needs no daemon; smolvm manages each sandbox directly");
             Ok(0)
@@ -252,8 +254,8 @@ mod tests {
     #[test]
     fn pending_and_cloud_commands_exit_2() {
         let mut t = test_env(&[]);
-        let err = sbt(&mut t.ctx, &["policy", "init", "balanced"]).unwrap_err();
-        assert_eq!(err.to_string(), "`sbt policy` is not implemented yet");
+        let err = sbt(&mut t.ctx, &["kit", "inspect", "x"]).unwrap_err();
+        assert_eq!(err.to_string(), "`sbt kit` is not implemented yet");
         assert_eq!(exit_code(&err), 2);
         let err = sbt(&mut t.ctx, &["move", "x", "--to", "cloud"]).unwrap_err();
         assert!(err.to_string().contains("Docker Cloud"));

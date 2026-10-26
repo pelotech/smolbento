@@ -34,12 +34,20 @@ prune --dry-run --filter until=24h
 reset -f --preserve-secrets
 cp ./file my-sandbox:/tmp/file
 cp -L my-sandbox:/etc/hosts ./hosts
-# Later phases (must parse; exit 2 for now)
-ports my-sandbox --publish 8080:80
+# Network policy
 policy init balanced
 policy allow network api.example.com,*.npmjs.org
 policy ls --wide
 policy log
+policy deny network bad.example.com --sandbox my-sandbox
+policy rm network --id r-0123abcd
+policy rm network --resource api.example.com -f
+policy check network registry.npmjs.org --sandbox my-sandbox --verbose
+policy inspect r-0123abcd
+policy reset -f
+policy allow network api.example.com --method GET,POST --path '/v1/**'
+# Later phases (must parse; exit 2 for now)
+ports my-sandbox --publish 8080:80
 secret set anthropic -t sk-test
 secret set github --command "gh auth token"
 secret ls

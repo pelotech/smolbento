@@ -65,8 +65,9 @@ pub enum Cmd {
     Daemon(Passthrough),
     /// Publish or unpublish ports (not implemented yet)
     Ports(Passthrough),
-    /// Network policy (not implemented yet)
-    Policy(Passthrough),
+    /// Network policy
+    #[command(subcommand)]
+    Policy(PolicyCmd),
     /// Secrets (not implemented yet)
     Secret(Passthrough),
     /// Kits (not implemented yet)
@@ -410,4 +411,180 @@ pub enum SettingsCmd {
     Set { key: String, value: String },
     /// Reset a setting to its default
     Unset { key: String },
+}
+
+#[derive(Debug, Subcommand)]
+pub enum PolicyCmd {
+    /// Choose the network policy for all sandboxes
+    Init {
+        mode: crate::policy::Mode,
+        #[arg(long, hide = true)]
+        sandbox: Option<String>,
+    },
+    /// Allow network access
+    Allow {
+        #[command(subcommand)]
+        kind: RuleKind,
+    },
+    /// Deny network access
+    Deny {
+        #[command(subcommand)]
+        kind: RuleKind,
+    },
+    /// Remove rules
+    Rm {
+        #[command(subcommand)]
+        kind: PolicyRmKind,
+    },
+    /// List rules
+    Ls(PolicyLsArgs),
+    /// Show one rule
+    Inspect {
+        id: String,
+        #[arg(long)]
+        json: bool,
+    },
+    /// Show requests the policy blocked
+    Log(PolicyLogArgs),
+    /// Test whether a host is allowed
+    Check {
+        #[command(subcommand)]
+        kind: CheckKind,
+    },
+    /// Remove every rule and the chosen mode
+    Reset {
+        #[arg(short = 'f', long)]
+        force: bool,
+    },
+    /// Blocked hosts waiting for a decision
+    #[command(subcommand)]
+    Approval(ApprovalCmd),
+    #[command(hide = true)]
+    Refresh(Passthrough),
+}
+
+#[derive(Debug, Subcommand)]
+pub enum RuleKind {
+    /// Network rule
+    Network(RuleArgs),
+}
+
+#[derive(Debug, Args)]
+pub struct RuleArgs {
+    /// Comma-separated hosts, wildcards (*.x, **.x), IPs or CIDRs
+    pub resources: String,
+    /// Apply to one sandbox only
+    #[arg(long)]
+    pub sandbox: Option<String>,
+    /// Only tcp is supported
+    #[arg(long)]
+    pub protocol: Option<String>,
+    /// HTTP methods (stored, not enforced)
+    #[arg(long)]
+    pub method: Option<String>,
+    /// HTTP path (stored, not enforced)
+    #[arg(long)]
+    pub path: Option<String>,
+}
+
+#[derive(Debug, Subcommand)]
+pub enum PolicyRmKind {
+    /// Remove network rules
+    Network(PolicyRmArgs),
+}
+
+#[derive(Debug, Args)]
+pub struct PolicyRmArgs {
+    /// Rule id
+    #[arg(long)]
+    pub id: Option<String>,
+    /// Remove this resource from every rule listing it
+    #[arg(long)]
+    pub resource: Option<String>,
+    #[arg(long)]
+    pub sandbox: Option<String>,
+    #[arg(short = 'f', long)]
+    pub force: bool,
+}
+
+#[derive(Debug, Default, Args)]
+pub struct PolicyLsArgs {
+    /// Only rules that apply to this sandbox
+    pub sandbox: Option<String>,
+    /// Show every resource and enforcement notes
+    #[arg(long)]
+    pub wide: bool,
+    #[arg(long, value_enum)]
+    pub format: Option<Format>,
+    #[arg(long)]
+    pub json: bool,
+    #[arg(short = 'q', long)]
+    pub quiet: bool,
+    #[arg(long, hide = true)]
+    pub source: Option<String>,
+    #[arg(long, hide = true)]
+    pub decision: Option<String>,
+    #[arg(long = "created-via", hide = true)]
+    pub created_via: Option<String>,
+    #[arg(long = "type", hide = true)]
+    pub kind: Option<String>,
+    #[arg(long, hide = true)]
+    pub protocol: Option<String>,
+    #[arg(long = "include-inactive", hide = true)]
+    pub include_inactive: bool,
+}
+
+#[derive(Debug, Args)]
+pub struct PolicyLogArgs {
+    pub sandbox: Option<String>,
+    /// Events read per sandbox
+    #[arg(long, default_value_t = 50)]
+    pub limit: usize,
+    /// all, network or filesystem (only network has events)
+    #[arg(long = "type")]
+    pub kind: Option<String>,
+    #[arg(long)]
+    pub json: bool,
+}
+
+#[derive(Debug, Subcommand)]
+pub enum CheckKind {
+    /// Check a network destination
+    Network(CheckArgs),
+}
+
+#[derive(Debug, Args)]
+pub struct CheckArgs {
+    pub target: String,
+    #[arg(long)]
+    pub sandbox: Option<String>,
+    #[arg(long)]
+    pub protocol: Option<String>,
+    #[arg(long)]
+    pub verbose: bool,
+}
+
+#[derive(Debug, Subcommand)]
+pub enum ApprovalCmd {
+    /// Blocked hosts with no rule yet
+    Ls {
+        #[arg(long)]
+        json: bool,
+    },
+    /// Show one blocked host
+    Inspect { id: String },
+    /// Allow or deny a blocked host
+    Respond {
+        /// The blocked host (as shown by `approval ls`)
+        id: String,
+        decision: ApprovalDecision,
+        #[arg(long)]
+        sandbox: Option<String>,
+    },
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, ValueEnum)]
+pub enum ApprovalDecision {
+    Allow,
+    Deny,
 }

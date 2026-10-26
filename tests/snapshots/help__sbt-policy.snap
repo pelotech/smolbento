@@ -1,0 +1,27 @@
+---
+source: tests/help.rs
+expression: help(&path)
+---
+Network policy
+
+Usage: sbt policy [OPTIONS] <COMMAND>
+
+Commands:
+  init      Choose the network policy for all sandboxes
+  allow     Allow network access
+  deny      Deny network access
+  rm        Remove rules
+  ls        List rules
+  inspect   Show one rule
+  log       Show requests the policy blocked
+  check     Test whether a host is allowed
+  reset     Remove every rule and the chosen mode
+  approval  Blocked hosts waiting for a decision
+  help      Print this message or the help of the given subcommand(s)
+
+Options:
+  -D, --debug
+          Print each smolvm command line
+
+  -h, --help
+          Print help
