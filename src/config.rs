@@ -5,6 +5,7 @@ use std::fs;
 use std::path::{Path, PathBuf};
 
 use anyhow::{Context, Result, bail};
+use serde::de::DeserializeOwned;
 use serde::{Deserialize, Serialize};
 
 #[derive(Debug, Clone)]
@@ -157,13 +158,27 @@ impl Settings {
     }
 
     fn save(&self) -> Result<()> {
-        write_atomic(
-            &self.path,
-            toml::to_string(&self.file)?.as_bytes(),
-            None,
-            Symlink::Follow,
-        )
+        save_toml(&self.path, &self.file)
     }
+}
+
+/// A TOML config file, or the default when there's none.
+pub fn load_toml<T: Default + DeserializeOwned>(path: &Path) -> Result<T> {
+    match fs::read_to_string(path) {
+        Ok(text) => toml::from_str(&text).with_context(|| format!("parsing {}", path.display())),
+        Err(e) if e.kind() == std::io::ErrorKind::NotFound => Ok(T::default()),
+        Err(e) => Err(e).with_context(|| format!("reading {}", path.display())),
+    }
+}
+
+/// Saves a TOML config file atomically, writing through a symlink at `path`.
+pub fn save_toml<T: Serialize>(path: &Path, value: &T) -> Result<()> {
+    write_atomic(
+        path,
+        toml::to_string(value)?.as_bytes(),
+        None,
+        Symlink::Follow,
+    )
 }
 
 /// What `write_atomic` does when `path` is a symlink.

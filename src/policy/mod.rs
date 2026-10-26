@@ -6,9 +6,8 @@ pub mod presets;
 pub mod rules;
 
 use std::collections::BTreeMap;
-use std::fs;
 
-use anyhow::{Context, Result};
+use anyhow::Result;
 use serde::{Deserialize, Serialize};
 
 use crate::config::Paths;
@@ -132,23 +131,11 @@ fn rule_id(
 
 impl Policy {
     pub fn load(paths: &Paths) -> Result<Policy> {
-        let path = paths.policy_file();
-        match fs::read_to_string(&path) {
-            Ok(text) => {
-                toml::from_str(&text).with_context(|| format!("parsing {}", path.display()))
-            }
-            Err(e) if e.kind() == std::io::ErrorKind::NotFound => Ok(Policy::default()),
-            Err(e) => Err(e).with_context(|| format!("reading {}", path.display())),
-        }
+        crate::config::load_toml(&paths.policy_file())
     }
 
     pub fn save(&self, paths: &Paths) -> Result<()> {
-        crate::config::write_atomic(
-            &paths.policy_file(),
-            toml::to_string(self)?.as_bytes(),
-            None,
-            crate::config::Symlink::Follow,
-        )
+        crate::config::save_toml(&paths.policy_file(), self)
     }
 
     /// The mode a sandbox (or, for `None`, the global policy) runs under. Before any mode was

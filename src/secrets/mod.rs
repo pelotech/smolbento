@@ -5,9 +5,7 @@ pub mod resolve;
 pub mod services;
 pub mod store;
 
-use std::fs;
-
-use anyhow::{Context, Result};
+use anyhow::Result;
 use serde::{Deserialize, Serialize};
 
 use crate::config::Paths;
@@ -77,23 +75,11 @@ pub struct SecretsFile {
 
 impl SecretsFile {
     pub fn load(paths: &Paths) -> Result<SecretsFile> {
-        let path = paths.secrets_file();
-        match fs::read_to_string(&path) {
-            Ok(text) => {
-                toml::from_str(&text).with_context(|| format!("parsing {}", path.display()))
-            }
-            Err(e) if e.kind() == std::io::ErrorKind::NotFound => Ok(SecretsFile::default()),
-            Err(e) => Err(e).with_context(|| format!("reading {}", path.display())),
-        }
+        crate::config::load_toml(&paths.secrets_file())
     }
 
     pub fn save(&self, paths: &Paths) -> Result<()> {
-        crate::config::write_atomic(
-            &paths.secrets_file(),
-            toml::to_string(self)?.as_bytes(),
-            None,
-            crate::config::Symlink::Follow,
-        )
+        crate::config::save_toml(&paths.secrets_file(), self)
     }
 
     /// A built-in or custom service.
