@@ -686,7 +686,10 @@ mod tests {
         );
         for deny in ["api.notion.com", "**.notion.com", "*.notion.com"] {
             let err = sbt(&mut t.ctx, &["policy", "deny", "network", deny]).unwrap_err();
-            assert!(err.to_string().contains("can't deny *.notion.com"), "{err}");
+            let msg = err.to_string();
+            // No secrets.toml entry names the service, so the message falls back to "a secret".
+            assert!(msg.contains("can't deny *.notion.com"), "{err}");
+            assert!(msg.contains("has a secret bound to it"), "{err}");
         }
         sbt(&mut t.ctx, &["policy", "deny", "network", "notion.com"]).unwrap();
     }
@@ -1046,5 +1049,163 @@ mod tests {
         )
         .unwrap();
         assert_eq!(code, 0);
+    }
+
+    #[test]
+    fn ls_json_and_quiet() {
+        let mut p = Policy::default();
+        let id = p
+            .add_rule(
+                Some("a1"),
+                Decision::Deny,
+                "b.com:8080",
+                "added",
+                None,
+                None,
+            )
+            .unwrap();
+        let json = render_ls(&p, None, false, Format::Json, false, None).unwrap();
+        assert!(json.ends_with("]\n"), "{json}");
+        let rows: serde_json::Value = serde_json::from_str(&json).unwrap();
+        assert_eq!(rows.as_array().unwrap().len(), 1);
+        assert_eq!(rows[0]["id"], id.as_str());
+        assert_eq!(rows[0]["applies_to"], "a1");
+        assert_eq!(rows[0]["decision"], "deny");
+        assert_eq!(rows[0]["resources"][0], "b.com:8080");
+        assert!(!rows[0]["notes"].as_array().unwrap().is_empty());
+        // --quiet wins over the format: ids only.
+        assert_eq!(
+            render_ls(&p, None, false, Format::Json, true, None).unwrap(),
+            format!("{id}\n")
+        );
+        let empty = render_ls(&Policy::default(), None, false, Format::Json, false, None).unwrap();
+        assert_eq!(empty, "[]\n");
+        let mut t = test_env(&[]);
+        assert_eq!(sbt(&mut t.ctx, &["policy", "ls", "--json"]).unwrap(), 0);
+        assert_eq!(sbt(&mut t.ctx, &["policy", "ls", "--quiet"]).unwrap(), 0);
+    }
+
+    #[test]
+    fn log_empty_and_json() {
+        assert_eq!(render_log(&[]), "No blocked requests\n");
+        let mut t = test_env(&[]);
+        running(&t, &[("sbx.name", "a1")]);
+        t.ctx.vm.runner().ok(&["machine", "egress-events"], "[]");
+        assert_eq!(sbt(&mut t.ctx, &["policy", "log"]).unwrap(), 0);
+        assert_eq!(sbt(&mut t.ctx, &["policy", "log", "--json"]).unwrap(), 0);
+        let rows = vec![log::LogRow {
+            sandbox: "a1".into(),
+            host: "example.com".into(),
+            count: 2,
+            last_seen: "2026-10-26T11:00:00Z".into(),
+        }];
+        let json: serde_json::Value =
+            serde_json::from_str(&serde_json::to_string_pretty(&rows).unwrap()).unwrap();
+        assert_eq!(
+            json,
+            serde_json::json!([{
+                "sandbox": "a1",
+                "host": "example.com",
+                "count": 2,
+                "last_seen": "2026-10-26T11:00:00Z"
+            }])
+        );
+    }
+
+    #[test]
+    fn warnings_dont_stop_a_rule_change() {
+        // Listing sandboxes fails: the bound-secret check and the live push only warn.
+        let mut t = test_env(&[]);
+        set_policy(&t, "mode = \"deny-all\"");
+        t.ctx
+            .vm
+            .runner()
+            .fail(&["machine", "ls"], "SMOLVM_ERROR", "db locked");
+        sbt(&mut t.ctx, &["policy", "deny", "network", "evil.com"]).unwrap();
+        sbt(&mut t.ctx, &["policy", "allow", "network", "ok.com"]).unwrap();
+        assert_eq!(Policy::load(&t.ctx.paths).unwrap().rules.len(), 2);
+        assert!(updates(&t).is_empty());
+        // A reset still resets when the running sandboxes can't be stopped.
+        sbt(&mut t.ctx, &["policy", "reset", "-f"]).unwrap();
+        assert_eq!(Policy::load(&t.ctx.paths).unwrap(), Policy::default());
+    }
+
+    #[test]
+    fn a_failed_live_update_only_warns() {
+        let mut t = test_env(&[]);
+        set_policy(&t, "mode = \"deny-all\"");
+        blocked(&t);
+        t.ctx
+            .vm
+            .runner()
+            .fail(&["machine", "update"], "SMOLVM_ERROR", "not running");
+        sbt(
+            &mut t.ctx,
+            &["policy", "approval", "respond", "example.com", "allow"],
+        )
+        .unwrap();
+        assert_eq!(Policy::load(&t.ctx.paths).unwrap().rules.len(), 1);
+        assert_eq!(updates(&t).len(), 1);
+        // And a stop that fails doesn't keep a reset from happening.
+        t.ctx
+            .vm
+            .runner()
+            .fail(&["machine", "stop"], "SMOLVM_ERROR", "stuck");
+        sbt(&mut t.ctx, &["policy", "reset", "-f"]).unwrap();
+        assert_eq!(Policy::load(&t.ctx.paths).unwrap().mode, None);
+    }
+
+    #[test]
+    fn approval_ls_and_inspect_list_pending_hosts() {
+        let mut t = test_env(&[]);
+        set_policy(&t, "mode = \"deny-all\"");
+        blocked(&t);
+        assert_eq!(sbt(&mut t.ctx, &["policy", "approval", "ls"]).unwrap(), 0);
+        assert_eq!(
+            sbt(&mut t.ctx, &["policy", "approval", "ls", "--json"]).unwrap(),
+            0
+        );
+        assert_eq!(
+            sbt(
+                &mut t.ctx,
+                &["policy", "approval", "inspect", "example.com"]
+            )
+            .unwrap(),
+            0
+        );
+    }
+
+    #[test]
+    fn rm_accepts_force_for_sbx_compatibility() {
+        let mut t = test_env(&[]);
+        set_policy(&t, "mode = \"deny-all\"");
+        sbt(&mut t.ctx, &["policy", "allow", "network", "a.com"]).unwrap();
+        sbt(
+            &mut t.ctx,
+            &["policy", "rm", "network", "--resource", "a.com", "-f"],
+        )
+        .unwrap();
+        // Nothing left to remove: the error is the missing rule, not an unknown flag.
+        let err = sbt(
+            &mut t.ctx,
+            &["policy", "rm", "network", "--resource", "a.com", "--force"],
+        )
+        .unwrap_err();
+        assert!(err.to_string().contains("no matching rules"), "{err}");
+        assert!(Policy::load(&t.ctx.paths).unwrap().rules.is_empty());
+    }
+
+    #[test]
+    fn check_protocol_udp_is_unsupported_for_rules_too() {
+        let mut t = test_env(&[]);
+        for kind in ["allow", "deny"] {
+            let err = sbt(
+                &mut t.ctx,
+                &["policy", kind, "network", "x.com", "--protocol", "udp"],
+            )
+            .unwrap_err();
+            assert_eq!(super::super::exit_code(&err), 2, "{kind}");
+        }
+        assert!(Policy::load(&t.ctx.paths).unwrap().rules.is_empty());
     }
 }

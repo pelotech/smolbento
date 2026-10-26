@@ -530,4 +530,15 @@ mod tests {
         p.forget_sandbox("s1");
         assert!(p.sandboxes.is_empty());
     }
+
+    #[test]
+    fn removing_from_an_unknown_sandbox_leaves_no_entry() {
+        let mut p = Policy::default();
+        assert_eq!(p.remove_rules(Some("ghost"), None, Some("a.com")), 0);
+        assert!(p.sandboxes.is_empty());
+        // A sandbox kept for deny_network survives an empty removal.
+        p.sandboxes.entry("s1".into()).or_default().deny_network = true;
+        assert_eq!(p.remove_rules(Some("s1"), Some("r-nope"), None), 0);
+        assert!(p.sandboxes["s1"].deny_network);
+    }
 }

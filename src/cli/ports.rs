@@ -4,20 +4,12 @@ use anyhow::{Result, bail};
 
 use super::{Ctx, PortsArgs, plan, table};
 use crate::sandbox::{self, options};
-use crate::smolvm::{PortMap, Runner};
+use crate::smolvm::{PortMap, PublishedPort, Runner};
 
 pub fn run<R: Runner>(ctx: &mut Ctx<R>, a: &PortsArgs) -> Result<i32> {
     let mut sb = sandbox::get(&ctx.vm, &a.sandbox)?;
     if a.publish.is_empty() && a.unpublish.is_empty() {
-        if sb.ports.is_empty() {
-            println!("No published ports");
-        } else {
-            let mut lines = vec![vec!["HOST".to_string(), "SANDBOX PORT".to_string()]];
-            for p in &sb.ports {
-                lines.push(vec![format!("127.0.0.1:{}", p.host), p.guest.to_string()]);
-            }
-            print!("{}", table(lines));
-        }
+        print!("{}", render_list(&sb.ports));
         return Ok(0);
     }
     let publish = a
@@ -42,21 +34,41 @@ pub fn run<R: Runner>(ctx: &mut Ctx<R>, a: &PortsArgs) -> Result<i32> {
         plan::ensure_running(ctx, &mut sb)?;
         ctx.vm.publish(&sb.machine, &publish)?;
         for p in &publish {
-            println!("Published 127.0.0.1:{} -> {}", p.host, p.guest);
+            println!("{}", published_line(p));
         }
     }
     if !unpublish.is_empty() {
         ctx.vm.unpublish(&sb.machine, &unpublish)?;
         for p in &unpublish {
-            println!("Unpublished 127.0.0.1:{}", p.host);
+            println!("{}", unpublished_line(p));
         }
     }
     Ok(0)
 }
 
+fn render_list(ports: &[PublishedPort]) -> String {
+    if ports.is_empty() {
+        return "No published ports\n".into();
+    }
+    let mut lines = vec![vec!["HOST".to_string(), "SANDBOX PORT".to_string()]];
+    for p in ports {
+        lines.push(vec![format!("127.0.0.1:{}", p.host), p.guest.to_string()]);
+    }
+    table(lines)
+}
+
+fn published_line(p: &PortMap) -> String {
+    format!("Published 127.0.0.1:{} -> {}", p.host, p.guest)
+}
+
+fn unpublished_line(p: &PortMap) -> String {
+    format!("Unpublished 127.0.0.1:{}", p.host)
+}
+
 #[cfg(test)]
 mod tests {
     use super::super::testutil::*;
+    use super::*;
 
     fn sandbox(t: &TestEnv, state: &str) {
         t.ctx.vm.runner().ok(
@@ -109,5 +121,26 @@ mod tests {
                 .iter()
                 .any(|l| l.contains("update"))
         );
+    }
+
+    #[test]
+    fn output_lines() {
+        let p = PortMap {
+            host: 8080,
+            guest: 80,
+            udp: false,
+        };
+        assert_eq!(published_line(&p), "Published 127.0.0.1:8080 -> 80");
+        assert_eq!(unpublished_line(&p), "Unpublished 127.0.0.1:8080");
+        assert_eq!(render_list(&[]), "No published ports\n");
+        let listed = render_list(&[PublishedPort {
+            host: 8080,
+            guest: 80,
+        }]);
+        let mut rows = listed
+            .lines()
+            .map(|l| l.split_whitespace().collect::<Vec<_>>());
+        assert_eq!(rows.next().unwrap(), ["HOST", "SANDBOX", "PORT"]);
+        assert_eq!(rows.next().unwrap(), ["127.0.0.1:8080", "80"]);
     }
 }

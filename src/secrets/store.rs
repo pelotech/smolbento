@@ -6,6 +6,7 @@
 //! prints any password with non-printable or non-ASCII bytes as hex, and truncates `-i` lines at
 //! about 4096 characters, so values over ~1900 bytes are refused and each write is read back.
 
+#[cfg(test)]
 use std::cell::RefCell;
 use std::collections::BTreeMap;
 use std::fs;
@@ -89,12 +90,16 @@ fn hex(bytes: &[u8]) -> String {
 /// The one `security -i` command that stores a value: `sbx1:` plus the value's bytes as hex, so
 /// no quoting applies and the raw value never appears.
 fn keychain_add_line(account: &str, value: &str) -> Result<String> {
+    // `security -i` splits the line on whitespace and treats quotes and backslashes as quoting.
     if account.is_empty()
         || account
             .chars()
-            .any(|c| c.is_whitespace() || c == '"' || c == '\'')
+            .any(|c| c.is_whitespace() || c.is_control() || matches!(c, '"' | '\'' | '\\'))
     {
-        bail!("invalid secret account '{account}'");
+        bail!("invalid secret account '{account}': use no spaces, quotes or backslashes");
+    }
+    if value.is_empty() {
+        bail!("refusing to store an empty secret value");
     }
     let line = format!(
         "add-generic-password -U -s {SERVICE} -a {account} -w {KEYCHAIN_PREFIX}{}\n",
@@ -284,9 +289,11 @@ impl SecretStore for FileStore {
 }
 
 /// For tests.
+#[cfg(test)]
 #[derive(Default)]
 pub struct MemoryStore(RefCell<BTreeMap<String, String>>);
 
+#[cfg(test)]
 impl SecretStore for MemoryStore {
     fn get(&self, account: &str) -> Result<Option<String>> {
         Ok(self.0.borrow().get(account).cloned())
@@ -343,9 +350,12 @@ mod tests {
         let line = keychain_add_line("global/x", &long).unwrap();
         assert!(line.contains(&format!("-w sbx1:{}", "78".repeat(300))) && !line.contains(&long));
         assert_eq!(line.matches('\n').count(), 1);
-        for bad in ["a b", "a\"b", "a\nb", "a'b", ""] {
-            assert!(keychain_add_line(bad, "v").is_err(), "{bad:?}");
+        for bad in ["a b", "a\"b", "a\nb", "a'b", "a\\b", "a\tb", ""] {
+            let err = keychain_add_line(bad, "v").unwrap_err().to_string();
+            assert!(err.contains("invalid secret account"), "{bad:?}: {err}");
         }
+        let err = keychain_add_line("global/x", "").unwrap_err().to_string();
+        assert!(err.contains("empty secret value"), "{err}");
     }
 
     #[test]

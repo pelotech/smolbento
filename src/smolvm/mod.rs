@@ -146,3 +146,46 @@ impl Drop for IgnoreInterrupt {
         unsafe { libc::signal(libc::SIGINT, self.0) };
     }
 }
+
+#[cfg(all(test, unix))]
+mod tests {
+    use super::*;
+    use std::os::unix::fs::PermissionsExt;
+
+    /// A stand-in for smolvm that prints `$HOME|$PROBE`, with `unset` for missing variables.
+    fn probe(dir: &std::path::Path) -> ProcessRunner {
+        let script = dir.join("fake-smolvm");
+        std::fs::write(
+            &script,
+            "#!/bin/sh\nprintf '%s|%s' \"${HOME-unset}\" \"${PROBE-unset}\"\n",
+        )
+        .unwrap();
+        std::fs::set_permissions(&script, std::fs::Permissions::from_mode(0o755)).unwrap();
+        ProcessRunner::new(script)
+    }
+
+    fn pair(k: &str, v: &str) -> (String, String) {
+        (k.to_string(), v.to_string())
+    }
+
+    #[test]
+    fn remove_drops_inherited_variables_and_env_wins_over_remove() {
+        let dir = tempfile::tempdir().unwrap();
+        let runner = probe(dir.path());
+        let inherited = std::env::var("HOME").unwrap();
+        let run = |env: &[(String, String)], remove: &[&str]| {
+            let remove: Vec<String> = remove.iter().map(|s| s.to_string()).collect();
+            runner.run_with_env(&[], env, &remove).unwrap().stdout
+        };
+        assert_eq!(run(&[], &[]), format!("{inherited}|unset"));
+        // HOME is set in this process; removing it leaves the child without one.
+        assert_eq!(run(&[], &["HOME"]), "unset|unset");
+        // A name in both lists gets the given value: removals happen before `env` is applied.
+        assert_eq!(
+            run(&[pair("HOME", "/x"), pair("PROBE", "p")], &["HOME"]),
+            "/x|p"
+        );
+        // `env` is for the child only.
+        assert_eq!(std::env::var("PROBE").ok(), None);
+    }
+}

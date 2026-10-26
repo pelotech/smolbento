@@ -41,7 +41,8 @@ fn first_line(stderr: &str) -> String {
 /// The `aws` argv that reads a Secrets Manager secret, for any partition.
 fn aws_args(arn: &str) -> Result<Vec<String>> {
     let parts: Vec<&str> = arn.split(':').collect();
-    if parts.len() < 6 || parts[2] != "secretsmanager" || parts[3].is_empty() {
+    if parts.len() < 6 || parts[1].is_empty() || parts[2] != "secretsmanager" || parts[3].is_empty()
+    {
         bail!("unsupported reference (use op://… or an AWS Secrets Manager ARN)");
     }
     Ok([
@@ -121,6 +122,7 @@ mod tests {
         for bad in [
             "arn:aws:s3:::bucket",
             "arn:aws:secretsmanager::1:secret:x",
+            "arn::secretsmanager:us-east-1:1:secret:x",
             "arn:aws:secretsmanager",
         ] {
             assert!(aws_args(bad).is_err(), "{bad}");

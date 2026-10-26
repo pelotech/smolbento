@@ -1,7 +1,7 @@
 use std::collections::BTreeMap;
 use std::path::PathBuf;
 
-use anyhow::{Result, anyhow};
+use anyhow::{Context, Result, anyhow};
 
 use super::{EgressEvent, Machine, NetworkSpec, Output, Runner, SmolvmError};
 
@@ -58,6 +58,11 @@ pub struct Credential {
 
 impl Credential {
     fn arg(&self) -> String {
+        // smolvm would read `NAME=VAR@` as a credential for no host at all.
+        debug_assert!(
+            !self.hosts.is_empty(),
+            "a credential needs at least one host"
+        );
         format!("{}={}@{}", self.name, self.env_var, self.hosts.join(","))
     }
 }
@@ -181,6 +186,14 @@ fn args(items: &[&str]) -> Vec<String> {
     items.iter().map(|s| s.to_string()).collect()
 }
 
+/// The output of a smolvm call that must have succeeded.
+fn checked(out: Output) -> Result<Output> {
+    if out.code != 0 {
+        return Err(SmolvmError::from_output(&out).into());
+    }
+    Ok(out)
+}
+
 impl<R: Runner> Smolvm<R> {
     pub fn new(runner: R) -> Self {
         Self { runner }
@@ -191,11 +204,7 @@ impl<R: Runner> Smolvm<R> {
     }
 
     fn call(&self, args: Vec<String>) -> Result<Output> {
-        let out = self.runner.run(&args)?;
-        if out.code != 0 {
-            return Err(SmolvmError::from_output(&out).into());
-        }
-        Ok(out)
+        checked(self.runner.run(&args)?)
     }
 
     /// The smolvm version, e.g. `1.32.2`.
@@ -239,10 +248,7 @@ impl<R: Runner> Smolvm<R> {
         let out =
             self.runner
                 .run_with_env(&args(&["machine", "start", "-n", name]), env, remove)?;
-        if out.code != 0 {
-            return Err(SmolvmError::from_output(&out).into());
-        }
-        Ok(())
+        checked(out).map(drop)
     }
 
     /// Replaces the machine's whole allow list; applies live on a running machine.
@@ -253,6 +259,9 @@ impl<R: Runner> Smolvm<R> {
     }
 
     pub fn publish(&self, name: &str, ports: &[PortMap]) -> Result<()> {
+        if ports.is_empty() {
+            return Ok(());
+        }
         let mut a = args(&["machine", "update", "-n", name]);
         for p in ports {
             flag(&mut a, "-p", p.arg());
@@ -261,6 +270,9 @@ impl<R: Runner> Smolvm<R> {
     }
 
     pub fn unpublish(&self, name: &str, ports: &[PortMap]) -> Result<()> {
+        if ports.is_empty() {
+            return Ok(());
+        }
         let mut a = args(&["machine", "update", "-n", name]);
         for p in ports {
             flag(&mut a, "--remove-port", p.arg());
@@ -280,7 +292,8 @@ impl<R: Runner> Smolvm<R> {
             "--limit",
             &limit,
         ]))?;
-        Ok(serde_json::from_str(&out.stdout)?)
+        serde_json::from_str(&out.stdout)
+            .with_context(|| format!("parsing the egress events of {name}"))
     }
 
     pub fn stop(&self, name: &str) -> Result<()> {
@@ -422,6 +435,46 @@ mod tests {
                 "machine update -n m --remove-port 8080:80",
             ]
         );
+    }
+
+    #[test]
+    fn publishing_no_ports_makes_no_call() {
+        let vm = Smolvm::new(FakeRunner::new());
+        vm.publish("m", &[]).unwrap();
+        vm.unpublish("m", &[]).unwrap();
+        assert!(vm.runner().call_lines().is_empty());
+    }
+
+    #[test]
+    #[should_panic(expected = "at least one host")]
+    #[cfg(debug_assertions)]
+    fn a_credential_without_hosts_is_refused() {
+        let c = Credential {
+            name: "t".into(),
+            env_var: "T".into(),
+            hosts: vec![],
+        };
+        c.arg();
+    }
+
+    #[test]
+    fn egress_events_parse_errors_name_the_machine() {
+        let fake = FakeRunner::new();
+        fake.ok(&["machine", "egress-events"], "not json");
+        let err = Smolvm::new(fake).egress_events("m1", 5).unwrap_err();
+        let text = format!("{err:#}");
+        assert!(
+            text.contains("egress events of m1") && text.contains("line 1"),
+            "{text}"
+        );
+    }
+
+    #[test]
+    fn start_failure_is_an_error() {
+        let fake = FakeRunner::new();
+        fake.fail(&["machine", "start"], "SMOLVM_ERROR", "boom");
+        let err = Smolvm::new(fake).start("m", &[], &[]).unwrap_err();
+        assert_eq!(err.to_string(), "smolvm: boom");
     }
 
     #[test]

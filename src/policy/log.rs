@@ -30,6 +30,7 @@ pub fn rows(events: &[(String, Vec<EgressEvent>)]) -> Vec<LogRow> {
                     last_seen: String::new(),
                 });
             row.count += 1;
+            // smolvm's timestamps are ISO-8601 UTC (`2026-10-26T14:37:58Z`), so they sort as text.
             if e.timestamp > row.last_seen {
                 row.last_seen = e.timestamp.clone();
             }

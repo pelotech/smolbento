@@ -29,6 +29,9 @@ pub fn credentials(secrets: &SecretsFile, services: &[String]) -> Result<Vec<Cre
         let s = secrets
             .service(name)
             .with_context(|| format!("unknown secret service '{name}'"))?;
+        if s.hosts.is_empty() && !s.env_vars.is_empty() {
+            bail!("secret service '{name}' has no hosts to send its value to");
+        }
         for var in &s.env_vars {
             out.push(Credential {
                 name: var.to_ascii_lowercase(),
