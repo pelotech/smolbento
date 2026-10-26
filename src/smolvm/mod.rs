@@ -3,11 +3,13 @@
 mod client;
 mod error;
 pub mod fake;
+mod network;
 mod types;
 
-pub use client::{CreateSpec, ExecSpec, Mount, PortMap, Smolvm};
+pub use client::{CreateSpec, Credential, ExecSpec, Mount, PortMap, Smolvm};
 pub use error::SmolvmError;
-pub use types::{Machine, MachineState, PublishedPort};
+pub use network::{AllowList, LOOPBACK, NetworkSpec};
+pub use types::{EgressEvent, Machine, MachineState, PublishedPort};
 
 use std::path::PathBuf;
 use std::process::{Command, ExitStatus, Stdio};
@@ -26,6 +28,12 @@ pub struct Output {
 pub trait Runner {
     /// Runs smolvm with `--error-format json` and captures its output.
     fn run(&self, args: &[String]) -> Result<Output>;
+    /// Like `run`, with extra environment variables for the smolvm process only (secret values
+    /// for `machine start`).
+    fn run_with_env(&self, args: &[String], env: &[(String, String)]) -> Result<Output> {
+        let _ = env;
+        self.run(args)
+    }
     /// Runs smolvm attached to this terminal (stdio inherited) and returns its exit code.
     /// Used for `exec`, so raw mode, resizes and colour pass straight through.
     fn interactive(&self, args: &[String]) -> Result<i32>;
@@ -67,11 +75,16 @@ impl ProcessRunner {
 
 impl Runner for ProcessRunner {
     fn run(&self, args: &[String]) -> Result<Output> {
+        self.run_with_env(args, &[])
+    }
+
+    fn run_with_env(&self, args: &[String], env: &[(String, String)]) -> Result<Output> {
         self.trace(args);
         let out = Command::new(&self.bin)
             .arg("--error-format")
             .arg("json")
             .args(args)
+            .envs(env.iter().map(|(k, v)| (k, v)))
             .stdin(Stdio::null())
             .output()
             .with_context(|| self.spawn_error())?;

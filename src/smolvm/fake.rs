@@ -18,6 +18,7 @@ pub struct FakeRunner {
     calls: RefCell<Vec<Vec<String>>>,
     interactive_calls: RefCell<Vec<Vec<String>>>,
     interactive_code: RefCell<i32>,
+    envs: RefCell<Vec<Vec<(String, String)>>>,
 }
 
 fn strings(items: &[&str]) -> Vec<String> {
@@ -99,6 +100,11 @@ impl FakeRunner {
         self.calls().iter().map(|c| c.join(" ")).collect()
     }
 
+    /// The env passed to each `run_with_env` call, in order.
+    pub fn envs(&self) -> Vec<Vec<(String, String)>> {
+        self.envs.borrow().clone()
+    }
+
     pub fn interactive_calls(&self) -> Vec<Vec<String>> {
         self.interactive_calls.borrow().clone()
     }
@@ -115,6 +121,11 @@ impl Runner for FakeRunner {
             return Ok(replies.remove(index).output);
         }
         Ok(replies[index].output.clone())
+    }
+
+    fn run_with_env(&self, args: &[String], env: &[(String, String)]) -> Result<Output> {
+        self.envs.borrow_mut().push(env.to_vec());
+        self.run(args)
     }
 
     fn interactive(&self, args: &[String]) -> Result<i32> {

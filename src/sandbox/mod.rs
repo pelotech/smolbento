@@ -99,7 +99,7 @@ pub fn list<R: Runner>(vm: &Smolvm<R>) -> Result<Vec<Sandbox>> {
 /// Starts the machine, then its startup steps.
 /// `uid` is the host user's uid, given to the image's `agent` user.
 pub fn start<R: Runner>(vm: &Smolvm<R>, sb: &Sandbox, uid: u32) -> Result<()> {
-    vm.start(&sb.machine)?;
+    vm.start(&sb.machine, &[])?;
     vm.exec_captured(&ExecSpec {
         name: sb.machine.clone(),
         user: Some("root".into()),
