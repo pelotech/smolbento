@@ -1,4 +1,5 @@
-//! `sbt ports`: publish ports on a running sandbox (smolvm applies TCP changes live).
+//! `sbt ports`: publish ports on a sandbox (smolvm applies TCP changes live, and UDP ones only
+//! while it's stopped).
 
 use anyhow::{Result, bail};
 
@@ -23,15 +24,18 @@ pub fn run<R: Runner>(ctx: &mut Ctx<R>, a: &PortsArgs) -> Result<i32> {
         .iter()
         .map(|p| options::parse_publish(p, &no_free))
         .collect::<Result<Vec<PortMap>>>()?;
-    if publish.iter().chain(&unpublish).any(|p| p.udp) {
+    let udp = publish.iter().chain(&unpublish).any(|p| p.udp);
+    if udp && sb.is_running() {
         bail!(
             "smolvm can't change UDP ports on a running sandbox; `sbt stop {}` first, or publish it when creating",
             sb.name()
         );
     }
-    if !publish.is_empty() {
-        // sbx starts a stopped sandbox to publish on it.
+    if !publish.is_empty() && !udp {
+        // sbx starts a stopped sandbox to publish on it; UDP ports can only change while stopped.
         plan::ensure_running(ctx, &mut sb)?;
+    }
+    if !publish.is_empty() {
         ctx.vm.publish(&sb.machine, &publish)?;
         for p in &publish {
             println!("Published 127.0.0.1:{} -> {}", p.host, p.guest);
@@ -98,6 +102,38 @@ mod tests {
             .unwrap_err()
             .to_string();
         assert!(err.contains("stop"), "{err}");
+    }
+
+    #[test]
+    fn udp_ports_change_on_a_stopped_sandbox_without_starting_it() {
+        let mut t = test_env(&[]);
+        sandbox(&t, "stopped");
+        sbt(
+            &mut t.ctx,
+            &[
+                "ports",
+                "a1",
+                "--publish",
+                "5353:53/udp",
+                "--publish",
+                "8080:80",
+            ],
+        )
+        .unwrap();
+        sbt(&mut t.ctx, &["ports", "a1", "--unpublish", "5353:53/udp"]).unwrap();
+        let lines = t.ctx.vm.runner().call_lines();
+        assert!(
+            !lines.iter().any(|l| l.contains("machine start")),
+            "{lines:?}"
+        );
+        let updates: Vec<&String> = lines.iter().filter(|l| l.contains("update")).collect();
+        assert_eq!(
+            updates,
+            [
+                "machine update -n sbx-a1 -p 5353:53/udp -p 8080:80",
+                "machine update -n sbx-a1 --remove-port 5353:53/udp"
+            ]
+        );
     }
 
     #[test]

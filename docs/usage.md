@@ -206,7 +206,8 @@ sbt ports claude-myrepo                         # list
 sbt ports claude-myrepo --unpublish 8080:80
 ```
 
-Ports bind `127.0.0.1`. UDP ports can only be changed while the sandbox is stopped.
+Ports bind `127.0.0.1`. UDP ports can only be changed while the sandbox is stopped, so a change
+that includes one doesn't start it.
 
 ## Copy files
 
