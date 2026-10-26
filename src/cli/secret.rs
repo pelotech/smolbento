@@ -169,6 +169,20 @@ fn set<R: Runner>(
         bail!("pass only one of -t, --ref and --command");
     }
     let scope = scope_for(src.sandbox.as_deref());
+    let account = SecretEntry {
+        service: service.into(),
+        scope: scope.clone(),
+        source: Source::Keychain,
+    }
+    .account();
+    // The entry this replaces, if any. A stored value is deleted only once the new entry is saved.
+    let old = file
+        .secrets
+        .iter()
+        .find(|e| e.service == service && e.scope == scope)
+        .cloned();
+    let had_value = old.as_ref().is_some_and(|e| e.source == Source::Keychain);
+    let mut wrote_value = false;
     let source = if let Some(r) = src.reference {
         if !(r.starts_with("op://") || r.starts_with("arn:aws:secretsmanager:")) {
             bail!("unsupported reference (use op://… or an AWS Secrets Manager ARN)");
@@ -184,32 +198,31 @@ fn set<R: Runner>(
         if value.is_empty() {
             bail!("empty value");
         }
-        let entry = SecretEntry {
-            service: service.into(),
-            scope: scope.clone(),
-            source: Source::Keychain,
-        };
-        ctx.store.set(&entry.account(), &value)?;
+        ctx.store.set(&account, &value)?;
+        wrote_value = true;
         Source::Keychain
     };
-    if source != Source::Keychain
-        && let Some(old) = file
-            .secrets
-            .iter()
-            .find(|e| e.service == service && e.scope == scope)
-    {
-        forget(ctx, std::slice::from_ref(old))?;
-    }
     let described = match &source {
         Source::Keychain => format!("stored in {}", ctx.store.describe()),
         other => other.describe(),
     };
+    let keeps_value = source == Source::Keychain;
     file.set(SecretEntry {
         service: service.into(),
         scope: scope.clone(),
         source,
     });
-    file.save(&ctx.paths)?;
+    if let Err(e) = file.save(&ctx.paths) {
+        // Don't leave a value no entry points to. One that replaced an earlier value can't be
+        // put back (the old value is gone), so it stays: the unchanged entry still uses it.
+        if wrote_value && !had_value {
+            let _ = ctx.store.delete(&account);
+        }
+        return Err(e);
+    }
+    if !keeps_value && let Some(old) = old {
+        forget(ctx, &[old])?;
+    }
     println!("Saved {service} secret ({described}; {scope})");
     explain_impact(ctx, service, src.sandbox.as_deref());
     Ok(())
@@ -367,6 +380,29 @@ mod tests {
         );
         let text = std::fs::read_to_string(t.ctx.paths.secrets_file()).unwrap();
         assert!(!text.contains("sk-1"), "{text}");
+    }
+
+    #[test]
+    fn a_failed_save_doesnt_leave_the_value_behind() {
+        use std::os::unix::fs::PermissionsExt;
+        let mut t = test_env(&[]);
+        sbt(&mut t.ctx, &["secret", "set", "github", "-t", "old"]).unwrap();
+        let dir = t.ctx.paths.config.clone();
+        let mode = |m| std::fs::set_permissions(&dir, std::fs::Permissions::from_mode(m)).unwrap();
+        mode(0o555);
+        let new = sbt(&mut t.ctx, &["secret", "set", "anthropic", "-t", "sk-1"]);
+        let replaced = sbt(
+            &mut t.ctx,
+            &["secret", "set", "github", "--command", "gh auth token"],
+        );
+        mode(0o755);
+        assert!(new.is_err() && replaced.is_err());
+        assert_eq!(t.ctx.store.get("global/anthropic").unwrap(), None);
+        // The entry still says the value is stored, so it must still be there.
+        assert_eq!(
+            t.ctx.store.get("global/github").unwrap().as_deref(),
+            Some("old")
+        );
     }
 
     #[test]
