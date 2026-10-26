@@ -33,7 +33,8 @@ direnv, use `nix develop`.
   `cargo insta review`.
 - **Parity:** `tests/parity/sbx-commands.txt` lists sbx command lines that must keep parsing.
 - **End-to-end** (`tests/e2e.rs`, ignored by default) boots small Alpine VMs: lifecycle, exec, same-path
-  mounts, `run` auto-stop, `cp`, `diagnose`.
+  mounts, `run` auto-stop, `cp`, `diagnose`, network policy, ports and secrets. The policy test
+  needs outbound internet (it reaches `example.com`) and the secrets test needs `httpbin.org`.
 
 ## CI
 

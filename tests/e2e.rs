@@ -1,5 +1,6 @@
 //! End-to-end tests that boot real smolvm VMs. Ignored by default; run with `just e2e`.
 //! Machines are small (1 CPU, 1 GiB) so they fit GitHub's private-repo runners.
+//! The network policy test needs internet (example.com), and the secrets test needs httpbin.org.
 
 use std::path::{Path, PathBuf};
 use std::process::{Command, Output};

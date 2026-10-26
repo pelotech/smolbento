@@ -7,8 +7,8 @@ clearly rather than doing something different.
 ## Works today
 
 `run`, `create`, `exec`, `ls`, `start`, `stop`, `rm`, `prune`, `reset`, `cp`, `version`,
-`completion`, `diagnose`, `settings`, `policy`, `secret`, `ports`, and `run/create --deny-network`. `daemon` is accepted and
-does nothing: smolbento has no daemon.
+`completion`, `diagnose`, `settings`, `policy`, `secret`, `ports` and `run/create --deny-network`.
+`daemon` is accepted and does nothing: smolbento has no daemon.
 
 ## Parses, not implemented yet (exit 2)
 
@@ -33,7 +33,7 @@ does nothing: smolbento has no daemon.
 
 | Area | sbx | smolbento |
 |---|---|---|
-| Network | Default-deny policy | Same three modes and rule syntax. Exact hosts match only that host, and `**.x.com` matches subdomains at any depth but not `x.com` (as in sbx). Looser: `*.x.com` (sbx: exactly one label) matches any depth; wildcards inside a label (`crl*.x.com`, `?`, `[..]`) widen to `*.x.com`; ports, methods and paths in rules aren't enforced. `sbt policy ls --wide` shows what isn't, and `sbt policy ls` prints a note on stderr when something isn't. `balanced` is sbx's 195 rules plus Nix caches, on any port rather than only 443 |
+| Network | Default-deny policy | Same three modes and rule syntax. Looser: `*.x.com` matches any depth (sbx: one label); wildcards inside a label (`crl*.x.com`, `?`, `[..]`) widen to `*.x.com`; ports, methods and paths aren't enforced (`policy ls --wide` shows which). `balanced` is sbx's 195 rules plus Nix caches, on any port |
 | Host deny rules | Always enforced | Under allow-all, host deny rules aren't enforced (only deny CIDRs are, at create), and a host deny that a broader allow still covers isn't either; `sbt policy check` says "isn't enforced". A deny with a port isn't enforced at all (smolvm can't filter by port, and denying the host would block its other ports), except that one with exactly the same text as an allow cancels that allow; `sbt policy deny` notes this on stderr |
 | Secrets | Proxy injects on the wire | smolvm substitutes on the wire; a secret's hosts, and their subdomains, are always reachable from sandboxes that bound it (`policy deny` of one is refused); new values apply on the next start |
 | `secret set-custom --host` | Exact host, IP or wildcard pattern | Exact host names, or `*.domain` for every subdomain of it (not the domain itself; any depth); other wildcards are refused, and so are IPs: smolvm only substitutes secrets for host names |

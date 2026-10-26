@@ -12,7 +12,8 @@ sbt run claude                          # sandbox for this directory, attach to 
 ```
 
 > Choose a network policy when asked (`balanced` suits most work), and give agents API keys with
-> `sbt secret set`: they only ever see placeholders. See [Development status](docs/development-status.md).
+> `sbt secret set`: they only ever see placeholders. See
+> [Development status](docs/development-status.md).
 
 ## Documentation
 
