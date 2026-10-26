@@ -1,12 +1,14 @@
 //! Where stored secret values live. The OS keychain is used through its CLI with the value on
 //! stdin, so values never appear in argv. On macOS, `/usr/bin/security` creates and reads the
-//! items, so smolbento upgrades (new ad-hoc signatures) never trigger keychain prompts.
+//! items, so smolbento upgrades (new ad-hoc signatures) never trigger keychain prompts. Writes go
+//! through `security -i` with one command line on stdin and the value hex-encoded (`-X`): the
+//! prompt mode of `-w` reads the terminal, not stdin.
 
 use std::cell::RefCell;
 use std::collections::BTreeMap;
 use std::fs;
 use std::io::Write;
-use std::os::unix::fs::OpenOptionsExt;
+use std::os::unix::fs::{OpenOptionsExt, PermissionsExt};
 use std::path::{Path, PathBuf};
 use std::process::{Command, Stdio};
 
@@ -38,11 +40,16 @@ fn run(program: &str, args: &[&str], input: Option<&str>) -> Result<(i32, String
         .spawn()
         .with_context(|| format!("running {program}"))?;
     if let Some(input) = input {
-        child
+        // A child that exits early closes the pipe; its exit code and stderr tell the story.
+        match child
             .stdin
             .take()
             .expect("piped stdin")
-            .write_all(input.as_bytes())?;
+            .write_all(input.as_bytes())
+        {
+            Err(e) if e.kind() != std::io::ErrorKind::BrokenPipe => return Err(e.into()),
+            _ => {}
+        }
     }
     let out = child.wait_with_output()?;
     Ok((
@@ -66,6 +73,21 @@ const SECURITY: &str = "/usr/bin/security";
 /// `security` exits with this when an item isn't found.
 const NOT_FOUND: i32 = 44;
 
+/// The one `security -i` command that stores a value, hex-encoded so no quoting applies.
+fn keychain_add_line(account: &str, value: &str) -> Result<String> {
+    if account.is_empty()
+        || account
+            .chars()
+            .any(|c| c.is_whitespace() || c == '"' || c == '\'')
+    {
+        bail!("invalid secret account '{account}'");
+    }
+    let hex: String = value.bytes().map(|b| format!("{b:02x}")).collect();
+    Ok(format!(
+        "add-generic-password -U -s {SERVICE} -a {account} -X {hex}\n"
+    ))
+}
+
 impl SecretStore for MacKeychain {
     fn get(&self, account: &str) -> Result<Option<String>> {
         let (code, out, err) = run(
@@ -81,21 +103,8 @@ impl SecretStore for MacKeychain {
     }
 
     fn set(&self, account: &str, value: &str) -> Result<()> {
-        // `-w` as the last argument prompts for the value and asks to retype it: both read stdin.
-        let input = format!("{value}\n{value}\n");
-        let (code, _, err) = run(
-            SECURITY,
-            &[
-                "add-generic-password",
-                "-U",
-                "-s",
-                SERVICE,
-                "-a",
-                account,
-                "-w",
-            ],
-            Some(&input),
-        )?;
+        let line = keychain_add_line(account, value)?;
+        let (code, _, err) = run(SECURITY, &["-i"], Some(&line))?;
         if code != 0 {
             bail!("writing the keychain: {err}");
         }
@@ -124,12 +133,16 @@ pub struct SecretTool;
 
 impl SecretStore for SecretTool {
     fn get(&self, account: &str) -> Result<Option<String>> {
-        let (code, out, _) = run(
+        let (code, out, err) = run(
             "secret-tool",
             &["lookup", "service", SERVICE, "account", account],
             None,
         )?;
-        Ok((code == 0).then(|| strip_newline(out)))
+        match code {
+            0 => Ok(Some(strip_newline(out))),
+            1 if err.is_empty() => Ok(None),
+            _ => bail!("reading the Secret Service: {err}"),
+        }
     }
 
     fn set(&self, account: &str, value: &str) -> Result<()> {
@@ -147,11 +160,14 @@ impl SecretStore for SecretTool {
     }
 
     fn delete(&self, account: &str) -> Result<()> {
-        run(
+        let (code, _, err) = run(
             "secret-tool",
             &["clear", "service", SERVICE, "account", account],
             None,
         )?;
+        if code != 0 && !err.is_empty() {
+            bail!("deleting from the Secret Service: {err}");
+        }
         Ok(())
     }
 
@@ -172,9 +188,13 @@ impl FileStore {
 
     fn read(&self) -> Result<BTreeMap<String, String>> {
         match fs::read_to_string(&self.path) {
-            Ok(text) => {
-                toml::from_str(&text).with_context(|| format!("parsing {}", self.path.display()))
-            }
+            // The TOML error would quote the offending line, which may hold a secret.
+            Ok(text) => toml::from_str(&text).map_err(|_| {
+                anyhow::anyhow!(
+                    "{} is not valid TOML (contents not shown because it holds secrets)",
+                    self.path.display()
+                )
+            }),
             Err(e) if e.kind() == std::io::ErrorKind::NotFound => Ok(BTreeMap::new()),
             Err(e) => Err(e).with_context(|| format!("reading {}", self.path.display())),
         }
@@ -184,14 +204,19 @@ impl FileStore {
         if let Some(dir) = self.path.parent() {
             fs::create_dir_all(dir)?;
         }
+        let mut name = self.path.file_name().unwrap_or_default().to_os_string();
+        name.push(".tmp");
+        let tmp = self.path.with_file_name(name);
         let mut f = fs::OpenOptions::new()
             .write(true)
             .create(true)
             .truncate(true)
             .mode(0o600)
-            .open(&self.path)
-            .with_context(|| format!("writing {}", self.path.display()))?;
+            .open(&tmp)
+            .with_context(|| format!("writing {}", tmp.display()))?;
+        fs::set_permissions(&tmp, fs::Permissions::from_mode(0o600))?;
         f.write_all(toml::to_string(values)?.as_bytes())?;
+        fs::rename(&tmp, &self.path).with_context(|| format!("writing {}", self.path.display()))?;
         Ok(())
     }
 }
@@ -265,7 +290,48 @@ pub fn platform(paths: &Paths, env: &BTreeMap<String, String>) -> Box<dyn Secret
 #[cfg(test)]
 mod tests {
     use super::*;
-    use std::os::unix::fs::PermissionsExt;
+
+    #[test]
+    fn keychain_add_line_hex_encodes_the_value() {
+        let line = keychain_add_line("global/github", "a\"b$ c").unwrap();
+        assert_eq!(
+            line,
+            "add-generic-password -U -s smolbento -a global/github -X 612262242063\n"
+        );
+        assert!(!line.contains("a\"b"));
+        let long = "x".repeat(300);
+        let line = keychain_add_line("global/x", &long).unwrap();
+        assert!(line.contains(&"78".repeat(300)) && !line.contains(&long));
+        assert_eq!(line.matches('\n').count(), 1);
+        for bad in ["a b", "a\"b", "a\nb", "a'b", ""] {
+            assert!(keychain_add_line(bad, "v").is_err(), "{bad:?}");
+        }
+    }
+
+    #[test]
+    fn file_store_tightens_a_loose_file() {
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("v.toml");
+        std::fs::write(&path, "\"old\" = \"1\"\n").unwrap();
+        std::fs::set_permissions(&path, std::fs::Permissions::from_mode(0o644)).unwrap();
+        let s = FileStore::new(path.clone());
+        s.set("new", "2").unwrap();
+        assert_eq!(
+            std::fs::metadata(&path).unwrap().permissions().mode() & 0o777,
+            0o600
+        );
+        assert_eq!(s.get("old").unwrap().as_deref(), Some("1"));
+        assert_eq!(s.get("new").unwrap().as_deref(), Some("2"));
+    }
+
+    #[test]
+    fn corrupt_file_error_hides_contents() {
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("v.toml");
+        std::fs::write(&path, "\"a\" = \"s3cret").unwrap();
+        let err = FileStore::new(path).get("a").unwrap_err();
+        assert!(!format!("{err:#}").contains("s3cret"), "{err:#}");
+    }
 
     #[test]
     fn memory_store() {

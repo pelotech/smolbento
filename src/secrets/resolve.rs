@@ -23,6 +23,28 @@ fn output(program: &str, args: &[&str]) -> Result<String> {
         .to_string())
 }
 
+/// The `aws` argv that reads a Secrets Manager secret, for any partition.
+fn aws_args(arn: &str) -> Result<Vec<String>> {
+    let parts: Vec<&str> = arn.split(':').collect();
+    if parts.len() < 6 || parts[2] != "secretsmanager" || parts[3].is_empty() {
+        bail!("unsupported reference '{arn}' (use op://… or an AWS Secrets Manager ARN)");
+    }
+    Ok([
+        "secretsmanager",
+        "get-secret-value",
+        "--region",
+        parts[3],
+        "--secret-id",
+        arn,
+        "--query",
+        "SecretString",
+        "--output",
+        "text",
+    ]
+    .map(String::from)
+    .to_vec())
+}
+
 pub fn resolve(entry: &SecretEntry, store: &dyn SecretStore) -> Result<String> {
     let value = match &entry.source {
         Source::Keychain => store.get(&entry.account())?.with_context(|| {
@@ -35,19 +57,10 @@ pub fn resolve(entry: &SecretEntry, store: &dyn SecretStore) -> Result<String> {
         Source::Ref { reference } if reference.starts_with("op://") => {
             output("op", &["read", reference])?
         }
-        Source::Ref { reference } if reference.starts_with("arn:aws:secretsmanager:") => output(
-            "aws",
-            &[
-                "secretsmanager",
-                "get-secret-value",
-                "--secret-id",
-                reference,
-                "--query",
-                "SecretString",
-                "--output",
-                "text",
-            ],
-        )?,
+        Source::Ref { reference } if reference.starts_with("arn:") => {
+            let args = aws_args(reference)?;
+            output("aws", &args.iter().map(String::as_str).collect::<Vec<_>>())?
+        }
         Source::Ref { reference } => {
             bail!("unsupported reference '{reference}' (use op://… or an AWS Secrets Manager ARN)")
         }
@@ -70,6 +83,32 @@ mod tests {
             service: "github".into(),
             scope: "global".into(),
             source,
+        }
+    }
+
+    #[test]
+    fn aws_args_take_the_region_from_the_arn() {
+        for (arn, region) in [
+            (
+                "arn:aws:secretsmanager:us-east-1:123:secret:x-AbC",
+                "us-east-1",
+            ),
+            (
+                "arn:aws-us-gov:secretsmanager:us-gov-west-1:123:secret:x",
+                "us-gov-west-1",
+            ),
+        ] {
+            let a = aws_args(arn).unwrap();
+            let i = a.iter().position(|x| x == "--region").unwrap();
+            assert_eq!(a[i + 1], region);
+            assert!(a.contains(&arn.to_string()));
+        }
+        for bad in [
+            "arn:aws:s3:::bucket",
+            "arn:aws:secretsmanager::1:secret:x",
+            "arn:aws:secretsmanager",
+        ] {
+            assert!(aws_args(bad).is_err(), "{bad}");
         }
     }
 
