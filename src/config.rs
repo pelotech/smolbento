@@ -18,6 +18,15 @@ impl Paths {
         self.config.join("policy.toml")
     }
 
+    pub fn secrets_file(&self) -> PathBuf {
+        self.config.join("secrets.toml")
+    }
+
+    /// Fallback secret values where no keychain is usable (mode 0600).
+    pub fn secret_values_file(&self) -> PathBuf {
+        self.config.join("secret-values.toml")
+    }
+
     /// `SMOLBENTO_*_DIR`, then XDG, then `~/.config` / `~/.cache` (also on macOS).
     pub fn from_env(env: &BTreeMap<String, String>) -> Result<Paths> {
         let pick = |own: &str, xdg: &str, fallback: &str| -> Result<PathBuf> {
