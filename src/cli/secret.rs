@@ -394,21 +394,28 @@ mod tests {
     }
 
     /// Runs `f` with the config dir read-only, so saving secrets.toml fails. Root ignores the
-    /// mode, so these tests return early (pass vacuously) when run as root.
+    /// mode, so these tests return early (pass vacuously) when run as root. The mode is restored
+    /// even if `f` panics, so the tempdir can be cleaned up.
+    #[cfg(unix)]
     fn with_read_only_config<T>(t: &mut TestEnv, f: impl FnOnce(&mut TestEnv) -> T) -> Option<T> {
         use std::os::unix::fs::PermissionsExt;
+        struct Restore(std::path::PathBuf);
+        impl Drop for Restore {
+            fn drop(&mut self) {
+                let _ = std::fs::set_permissions(&self.0, std::fs::Permissions::from_mode(0o755));
+            }
+        }
         // SAFETY: geteuid has no preconditions.
         if unsafe { libc::geteuid() } == 0 {
             return None;
         }
         let dir = t.ctx.paths.config.clone();
-        let mode = |m| std::fs::set_permissions(&dir, std::fs::Permissions::from_mode(m)).unwrap();
-        mode(0o555);
-        let out = f(t);
-        mode(0o755);
-        Some(out)
+        std::fs::set_permissions(&dir, std::fs::Permissions::from_mode(0o555)).unwrap();
+        let _restore = Restore(dir);
+        Some(f(t))
     }
 
+    #[cfg(unix)]
     #[test]
     fn a_failed_save_doesnt_leave_the_value_behind() {
         let mut t = test_env(&[]);
@@ -434,6 +441,7 @@ mod tests {
         );
     }
 
+    #[cfg(unix)]
     #[test]
     fn a_failed_save_keeps_removed_values() {
         let mut t = test_env(&[]);

@@ -357,6 +357,7 @@ mod tests {
     use std::collections::BTreeMap;
     use std::path::PathBuf;
 
+    #[cfg(unix)]
     fn entries(dir: &Path) -> Vec<String> {
         let mut v: Vec<String> = fs::read_dir(dir)
             .unwrap()
@@ -366,6 +367,7 @@ mod tests {
         v
     }
 
+    #[cfg(unix)]
     #[test]
     fn write_atomic_can_write_through_a_symlink() {
         use std::os::unix::fs::PermissionsExt;
@@ -397,6 +399,7 @@ mod tests {
         assert_eq!(fs::read_to_string(&real).unwrap(), "again");
     }
 
+    #[cfg(unix)]
     #[test]
     fn write_atomic_skips_a_temp_name_that_is_taken() {
         use std::sync::atomic::AtomicU64;
@@ -447,6 +450,7 @@ mod tests {
         assert!(other.exists(), "another file's");
     }
 
+    #[cfg(unix)]
     #[test]
     fn write_atomic_writes_with_the_mode_and_leaves_no_temp_file() {
         use std::os::unix::fs::PermissionsExt;
@@ -460,6 +464,7 @@ mod tests {
         assert_eq!(entries(dir.path()), ["f.toml"]);
     }
 
+    #[cfg(unix)]
     #[test]
     fn write_atomic_keeps_an_existing_files_mode_when_none_is_given() {
         use std::os::unix::fs::PermissionsExt;
@@ -472,6 +477,7 @@ mod tests {
         assert_eq!(mode & 0o777, 0o640);
     }
 
+    #[cfg(unix)]
     #[test]
     fn write_atomic_replaces_a_symlink_and_cleans_up_on_failure() {
         let dir = tempfile::tempdir().unwrap();

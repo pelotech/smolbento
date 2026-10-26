@@ -336,6 +336,7 @@ mod tests {
         assert!(text.contains("mode = \"balanced\""), "{text}");
     }
 
+    #[cfg(unix)]
     #[test]
     fn save_writes_through_a_symlinked_policy_file() {
         let (d, paths) = paths();
