@@ -34,13 +34,13 @@ pub fn run<R: Runner>(ctx: &mut Ctx<R>, a: &PortsArgs) -> Result<i32> {
         plan::ensure_running(ctx, &mut sb)?;
         ctx.vm.publish(&sb.machine, &publish)?;
         for p in &publish {
-            println!("{}", published_line(p));
+            println!("Published 127.0.0.1:{} -> {}", p.host, p.guest);
         }
     }
     if !unpublish.is_empty() {
         ctx.vm.unpublish(&sb.machine, &unpublish)?;
         for p in &unpublish {
-            println!("{}", unpublished_line(p));
+            println!("Unpublished 127.0.0.1:{}", p.host);
         }
     }
     Ok(0)
@@ -55,14 +55,6 @@ fn render_list(ports: &[PublishedPort]) -> String {
         lines.push(vec![format!("127.0.0.1:{}", p.host), p.guest.to_string()]);
     }
     table(lines)
-}
-
-fn published_line(p: &PortMap) -> String {
-    format!("Published 127.0.0.1:{} -> {}", p.host, p.guest)
-}
-
-fn unpublished_line(p: &PortMap) -> String {
-    format!("Unpublished 127.0.0.1:{}", p.host)
 }
 
 #[cfg(test)]
@@ -124,14 +116,7 @@ mod tests {
     }
 
     #[test]
-    fn output_lines() {
-        let p = PortMap {
-            host: 8080,
-            guest: 80,
-            udp: false,
-        };
-        assert_eq!(published_line(&p), "Published 127.0.0.1:8080 -> 80");
-        assert_eq!(unpublished_line(&p), "Unpublished 127.0.0.1:8080");
+    fn list_output() {
         assert_eq!(render_list(&[]), "No published ports\n");
         let listed = render_list(&[PublishedPort {
             host: 8080,

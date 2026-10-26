@@ -259,23 +259,20 @@ impl<R: Runner> Smolvm<R> {
     }
 
     pub fn publish(&self, name: &str, ports: &[PortMap]) -> Result<()> {
-        if ports.is_empty() {
-            return Ok(());
-        }
-        let mut a = args(&["machine", "update", "-n", name]);
-        for p in ports {
-            flag(&mut a, "-p", p.arg());
-        }
-        self.call(a).map(drop)
+        self.update_ports(name, "-p", ports)
     }
 
     pub fn unpublish(&self, name: &str, ports: &[PortMap]) -> Result<()> {
+        self.update_ports(name, "--remove-port", ports)
+    }
+
+    fn update_ports(&self, name: &str, port_flag: &str, ports: &[PortMap]) -> Result<()> {
         if ports.is_empty() {
             return Ok(());
         }
         let mut a = args(&["machine", "update", "-n", name]);
         for p in ports {
-            flag(&mut a, "--remove-port", p.arg());
+            flag(&mut a, port_flag, p.arg());
         }
         self.call(a).map(drop)
     }

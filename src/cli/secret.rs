@@ -309,11 +309,11 @@ pub fn render_ls(
     }
     let mut lines = vec![["SERVICE", "SCOPE", "SOURCE"].map(String::from).to_vec()];
     for e in entries {
-        let source = match &e.source {
-            Source::Keychain => "stored value".into(),
-            other => other.describe(),
-        };
-        lines.push(vec![e.service.clone(), e.scope.clone(), source]);
+        lines.push(vec![
+            e.service.clone(),
+            e.scope.clone(),
+            e.source.describe(),
+        ]);
     }
     table(lines)
 }
