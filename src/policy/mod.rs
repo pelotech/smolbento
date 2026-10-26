@@ -61,6 +61,15 @@ pub struct Rule {
     pub path: Option<String>,
 }
 
+impl Rule {
+    /// The rule's resources, parsed (they were validated when the rule was added).
+    pub fn parsed(&self) -> impl Iterator<Item = rules::Resource> + '_ {
+        self.resources
+            .iter()
+            .filter_map(|x| rules::Resource::parse(x).ok())
+    }
+}
+
 fn default_created_via() -> String {
     "added".into()
 }
@@ -142,10 +151,13 @@ impl Policy {
         )
     }
 
-    /// The mode a sandbox runs under. Before any mode was chosen, sandboxes stay open as they
-    /// were before policies existed.
-    pub fn mode_for(&self, sandbox: &str) -> Mode {
-        if self.sandboxes.get(sandbox).is_some_and(|s| s.deny_network) {
+    /// The mode a sandbox (or, for `None`, the global policy) runs under. Before any mode was
+    /// chosen, sandboxes stay open as they were before policies existed.
+    pub fn mode_for(&self, sandbox: Option<&str>) -> Mode {
+        if sandbox
+            .and_then(|s| self.sandboxes.get(s))
+            .is_some_and(|s| s.deny_network)
+        {
             return Mode::DenyAll;
         }
         self.mode.unwrap_or(Mode::AllowAll)
@@ -199,7 +211,7 @@ impl Policy {
         sandbox: Option<&str>,
         id: Option<&str>,
         resource: Option<&str>,
-    ) -> usize {
+    ) -> bool {
         let list = self.rules_mut(sandbox);
         let before: usize = list.iter().map(|r| r.resources.len()).sum();
         if let Some(id) = id {
@@ -212,44 +224,47 @@ impl Policy {
             list.retain(|r| !r.resources.is_empty());
         }
         let after: usize = list.iter().map(|r| r.resources.len()).sum();
-        if let Some(s) = sandbox
-            && self
-                .sandboxes
-                .get(s)
-                .is_some_and(|p| p.rules.is_empty() && !p.deny_network)
+        if let Some(s) = sandbox {
+            self.prune(s);
+        }
+        before != after
+    }
+
+    /// Drops a sandbox's entry once it holds nothing.
+    fn prune(&mut self, sandbox: &str) {
+        if self
+            .sandboxes
+            .get(sandbox)
+            .is_some_and(|p| p.rules.is_empty() && !p.deny_network)
         {
-            self.sandboxes.remove(s);
+            self.sandboxes.remove(sandbox);
         }
-        usize::from(before != after)
     }
 
-    /// Rules that apply to a sandbox, global first, with their scope ("global" or the name).
-    pub fn rules_for(&self, sandbox: &str) -> Vec<(&Rule, String)> {
-        let mut out: Vec<(&Rule, String)> = self
-            .rules
-            .iter()
-            .map(|r| (r, "global".to_string()))
-            .collect();
-        if let Some(s) = self.sandboxes.get(sandbox) {
-            out.extend(s.rules.iter().map(|r| (r, sandbox.to_string())));
-        }
-        out
+    /// Rules that apply to a sandbox, global first, with their sandbox (`None` for global).
+    /// `None` gives the global rules only.
+    pub fn rules_for<'a>(
+        &'a self,
+        sandbox: Option<&'a str>,
+    ) -> impl Iterator<Item = (&'a Rule, Option<&'a str>)> {
+        let own = sandbox.and_then(|s| Some((s, self.sandboxes.get(s)?)));
+        self.rules.iter().map(|r| (r, None)).chain(
+            own.into_iter()
+                .flat_map(|(s, p)| p.rules.iter().map(move |r| (r, Some(s)))),
+        )
     }
 
-    pub fn all_rules(&self) -> Vec<(&Rule, String)> {
-        let mut out: Vec<(&Rule, String)> = self
-            .rules
-            .iter()
-            .map(|r| (r, "global".to_string()))
-            .collect();
-        for (name, s) in &self.sandboxes {
-            out.extend(s.rules.iter().map(|r| (r, name.clone())));
-        }
-        out
+    /// Every rule, global first, with its sandbox (`None` for global).
+    pub fn all_rules(&self) -> impl Iterator<Item = (&Rule, Option<&str>)> {
+        self.rules.iter().map(|r| (r, None)).chain(
+            self.sandboxes
+                .iter()
+                .flat_map(|(s, p)| p.rules.iter().map(move |r| (r, Some(s.as_str())))),
+        )
     }
 
-    pub fn find(&self, id: &str) -> Option<(&Rule, String)> {
-        self.all_rules().into_iter().find(|(r, _)| r.id == id)
+    pub fn find(&self, id: &str) -> Option<(&Rule, Option<&str>)> {
+        self.all_rules().find(|(r, _)| r.id == id)
     }
 
     pub fn set_deny_network(&mut self, sandbox: &str, on: bool) {
@@ -257,6 +272,7 @@ impl Policy {
             .entry(sandbox.to_string())
             .or_default()
             .deny_network = on;
+        self.prune(sandbox);
     }
 
     /// `policy reset`: drops the mode and every rule, but a sandbox created with
@@ -350,11 +366,17 @@ mod tests {
     #[test]
     fn modes_per_sandbox() {
         let mut p = Policy::default();
-        assert_eq!(p.mode_for("a1"), Mode::AllowAll);
+        assert_eq!(p.mode_for(Some("a1")), Mode::AllowAll);
         p.mode = Some(Mode::Balanced);
         p.set_deny_network("a1", true);
-        assert_eq!(p.mode_for("a1"), Mode::DenyAll);
-        assert_eq!(p.mode_for("b1"), Mode::Balanced);
+        assert_eq!(p.mode_for(Some("a1")), Mode::DenyAll);
+        assert_eq!(p.mode_for(Some("b1")), Mode::Balanced);
+        assert_eq!(p.mode_for(None), Mode::Balanced);
+        p.set_deny_network("a1", false);
+        assert!(
+            p.sandboxes.is_empty(),
+            "an entry holding nothing is dropped"
+        );
     }
 
     #[test]
@@ -372,9 +394,9 @@ mod tests {
             .unwrap();
         assert_eq!(a, again);
         assert_eq!(p.rules.len(), 1);
-        assert_eq!(p.remove_rules(None, None, Some("a.com")), 1);
+        assert!(p.remove_rules(None, None, Some("a.com")));
         assert_eq!(p.rules[0].resources, vec!["b.com"]);
-        assert_eq!(p.remove_rules(None, Some(&a), None), 1);
+        assert!(p.remove_rules(None, Some(&a), None));
         assert!(p.rules.is_empty());
     }
 
@@ -483,7 +505,7 @@ mod tests {
                 }
             )])
         );
-        assert_eq!(p.mode_for("s2"), Mode::DenyAll);
+        assert_eq!(p.mode_for(Some("s2")), Mode::DenyAll);
     }
 
     #[test]
@@ -493,11 +515,12 @@ mod tests {
             .unwrap();
         p.add_rule(Some("s1"), Decision::Allow, "s.com", "added", None, None)
             .unwrap();
-        let scopes: Vec<String> = p.rules_for("s1").into_iter().map(|(_, s)| s).collect();
-        assert_eq!(scopes, vec!["global", "s1"]);
-        assert_eq!(p.rules_for("other").len(), 1);
+        let scopes: Vec<Option<&str>> = p.rules_for(Some("s1")).map(|(_, s)| s).collect();
+        assert_eq!(scopes, [None, Some("s1")]);
+        assert_eq!(p.rules_for(Some("other")).count(), 1);
+        assert_eq!(p.rules_for(None).count(), 1);
         let id = p.sandboxes["s1"].rules[0].id.clone();
-        assert_eq!(p.find(&id).unwrap().1, "s1");
+        assert_eq!(p.find(&id).unwrap().1, Some("s1"));
         p.forget_sandbox("s1");
         assert!(p.sandboxes.is_empty());
     }
@@ -505,11 +528,11 @@ mod tests {
     #[test]
     fn removing_from_an_unknown_sandbox_leaves_no_entry() {
         let mut p = Policy::default();
-        assert_eq!(p.remove_rules(Some("ghost"), None, Some("a.com")), 0);
+        assert!(!p.remove_rules(Some("ghost"), None, Some("a.com")));
         assert!(p.sandboxes.is_empty());
         // A sandbox kept for deny_network survives an empty removal.
         p.sandboxes.entry("s1".into()).or_default().deny_network = true;
-        assert_eq!(p.remove_rules(Some("s1"), Some("r-nope"), None), 0);
+        assert!(!p.remove_rules(Some("s1"), Some("r-nope"), None));
         assert!(p.sandboxes["s1"].deny_network);
     }
 }

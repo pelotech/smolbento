@@ -59,7 +59,7 @@ pub fn run<R: Runner>(ctx: &mut Ctx<R>, cmd: PolicyCmd) -> Result<i32> {
             }
             let removed =
                 policy.remove_rules(a.sandbox.as_deref(), a.id.as_deref(), a.resource.as_deref());
-            if removed == 0 {
+            if !removed {
                 bail!("no matching rules");
             }
             policy.save(&ctx.paths)?;
@@ -120,13 +120,14 @@ pub fn run<R: Runner>(ctx: &mut Ctx<R>, cmd: PolicyCmd) -> Result<i32> {
                 println!(
                     "{}",
                     serde_json::to_string_pretty(
-                        &serde_json::json!({ "scope": scope, "rule": rule })
+                        &serde_json::json!({ "scope": scope.unwrap_or("global"), "rule": rule })
                     )?
                 );
             } else {
                 println!(
-                    "ID: {}\nScope: {scope}\nDecision: {}\nResources: {}\nCreated via: {}",
+                    "ID: {}\nScope: {}\nDecision: {}\nResources: {}\nCreated via: {}",
                     rule.id,
+                    scope.unwrap_or("global"),
                     rule.decision.name(),
                     rule.resources.join(", "),
                     rule.created_via
@@ -218,16 +219,16 @@ fn print_deny_notes(policy: &Policy, scope: Option<&str>, denies: &[Resource]) {
 /// What to tell the user about a new deny: whether it has a port-less deny CIDR (applied at
 /// create), and a note for each port-scoped entry, which smolvm can't enforce (see `compile`).
 fn deny_notes(policy: &Policy, scope: Option<&str>, denies: &[Resource]) -> (bool, Vec<String>) {
-    // A global deny applies with the global rules ("") and in every sandbox.
-    let sandboxes: Vec<&str> = match scope {
-        Some(s) => vec![s],
-        None => std::iter::once("")
-            .chain(policy.sandboxes.keys().map(String::as_str))
+    // A global deny applies with the global rules alone and in every sandbox.
+    let sandboxes: Vec<Option<&str>> = match scope {
+        Some(s) => vec![Some(s)],
+        None => std::iter::once(None)
+            .chain(policy.sandboxes.keys().map(|s| Some(s.as_str())))
             .collect(),
     };
     let allows: Vec<Resource> = sandboxes
         .iter()
-        .flat_map(|s| compile::allows(policy, s))
+        .flat_map(|s| compile::allows(policy, *s))
         .collect();
     let cidr = denies
         .iter()
@@ -496,19 +497,16 @@ fn ls_rows(policy: &Policy, sandbox: Option<&str>, decision: Option<Decision>) -
             });
         }
     }
-    let rules = match sandbox {
-        Some(s) => policy.rules_for(s),
-        None => policy.all_rules(),
+    let rules: Vec<_> = match sandbox {
+        Some(s) => policy.rules_for(Some(s)).collect(),
+        None => policy.all_rules().collect(),
     };
     for (rule, scope) in rules {
         let mut notes: Vec<String> = rule
-            .resources
-            .iter()
+            .parsed()
             .filter_map(|r| {
-                Resource::parse(r)
-                    .ok()
-                    .and_then(|p| p.note(rule.decision == Decision::Deny))
-                    .map(|n| format!("{r}: {n}"))
+                let note = r.note(rule.decision == Decision::Deny)?;
+                Some(format!("{}: {note}", r.raw))
             })
             .collect();
         for (label, value) in [("method", &rule.method), ("path", &rule.path)] {
@@ -519,11 +517,7 @@ fn ls_rows(policy: &Policy, sandbox: Option<&str>, decision: Option<Decision>) -
         rows.push(LsRow {
             id: rule.id.clone(),
             source: "local".into(),
-            applies_to: if scope == "global" {
-                "all".into()
-            } else {
-                scope
-            },
+            applies_to: scope.unwrap_or("all").into(),
             decision: rule.decision.name().into(),
             resources: rule.resources.clone(),
             notes,

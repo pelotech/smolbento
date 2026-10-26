@@ -6,17 +6,12 @@ use super::rules::{Allow, Pattern, Resource, split_port};
 use super::{Decision, Mode, Policy, presets};
 use crate::smolvm::{AllowList, NetworkSpec};
 
-fn resources(policy: &Policy, sandbox: &str, decision: Decision) -> Vec<Resource> {
+/// The resources of a sandbox's rules (`None`: the global rules only) with this decision.
+fn resources(policy: &Policy, sandbox: Option<&str>, decision: Decision) -> Vec<Resource> {
     policy
         .rules_for(sandbox)
-        .into_iter()
         .filter(|(r, _)| r.decision == decision)
-        .flat_map(|(r, _)| {
-            r.resources
-                .iter()
-                .filter_map(|x| Resource::parse(x).ok())
-                .collect::<Vec<_>>()
-        })
+        .flat_map(|(r, _)| r.parsed())
         .collect()
 }
 
@@ -54,9 +49,9 @@ fn denied(allow: &Resource, denies: &[Resource]) -> bool {
     })
 }
 
-/// The allow entries a sandbox's network is built from: the balanced preset when it applies, and
-/// the allow rules.
-pub fn allows(policy: &Policy, sandbox: &str) -> Vec<Resource> {
+/// The allow entries a sandbox's network (`None`: the global one) is built from: the balanced
+/// preset when it applies, and the allow rules.
+pub fn allows(policy: &Policy, sandbox: Option<&str>) -> Vec<Resource> {
     let mut allows = if policy.mode_for(sandbox) == Mode::Balanced {
         presets::balanced()
     } else {
@@ -69,6 +64,11 @@ pub fn allows(policy: &Policy, sandbox: &str) -> Vec<Resource> {
 /// What smolvm should allow for a sandbox. A bound credential's hosts are always included: smolvm
 /// requires them.
 pub fn network(policy: &Policy, sandbox: &str, credential_hosts: &[String]) -> NetworkSpec {
+    network_for(policy, Some(sandbox), credential_hosts)
+}
+
+/// `network` for a sandbox, or with `None` for the global policy alone.
+fn network_for(policy: &Policy, sandbox: Option<&str>, credential_hosts: &[String]) -> NetworkSpec {
     if policy.mode_for(sandbox) == Mode::AllowAll {
         return NetworkSpec::Open;
     }
@@ -145,7 +145,7 @@ fn reaches_under(deny: &Resource, x: &str) -> bool {
 /// Deny CIDRs for `machine create` (smolvm accepts them at create only), sorted and unique. One
 /// with a port is left out: smolvm would deny every port of the range.
 pub fn deny_cidrs(policy: &Policy, sandbox: &str) -> Vec<String> {
-    resources(policy, sandbox, Decision::Deny)
+    resources(policy, Some(sandbox), Decision::Deny)
         .into_iter()
         .filter(|r| r.port.is_none())
         .filter_map(|r| match r.to_allow() {
@@ -221,34 +221,22 @@ pub fn check(
     if credential_hosts.iter().any(|h| credential_admits(h, &host)) {
         return verdict(true, "a secret bound to this sandbox uses this host");
     }
-    // No sandbox: compile with the global rules only (an empty name has no per-sandbox entry).
-    let (mode, rules) = match sandbox {
-        Some(s) => (policy.mode_for(s), policy.rules_for(s)),
-        None => (
-            policy.mode.unwrap_or(Mode::AllowAll),
-            policy
-                .rules
-                .iter()
-                .map(|r| (r, "global".to_string()))
-                .collect(),
-        ),
-    };
+    // No sandbox: the global rules only.
+    let mode = policy.mode_for(sandbox);
     let hits = |decision: Decision| {
-        rules
-            .iter()
+        policy
+            .rules_for(sandbox)
             .filter(move |(r, _)| r.decision == decision)
             .flat_map(|(r, scope)| {
-                r.resources
-                    .iter()
-                    .filter_map(|x| Resource::parse(x).ok())
+                r.parsed()
                     .filter(|res| res.matches(&target))
-                    .map(move |res| (*r, scope, res))
+                    .map(move |res| (r, scope.unwrap_or("global"), res))
             })
     };
     // A CIDR deny without a port is enforced (at create); report it before any other deny.
     let enforced =
         |res: &Resource| matches!(res.pattern, Pattern::Cidr { .. }) && res.port.is_none();
-    let spec = || network(policy, sandbox.unwrap_or(""), credential_hosts);
+    let spec = || network_for(policy, sandbox, credential_hosts);
     let everything = mode != Mode::AllowAll;
     let mut denies: Vec<_> = hits(Decision::Deny).collect();
     denies.sort_by_key(|(_, _, res)| !enforced(res));

@@ -5,7 +5,6 @@ use std::collections::BTreeMap;
 use serde::Serialize;
 
 use super::Policy;
-use super::rules::Resource;
 use crate::smolvm::EgressEvent;
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize)]
@@ -44,18 +43,14 @@ pub fn rows(events: &[(String, Vec<EgressEvent>)]) -> Vec<LogRow> {
 /// Blocked hosts no rule mentions yet (in that sandbox's scope): sbx's approval queue. Log hosts
 /// carry no port, so a rule's port is ignored: a rule naming the host on any port handles it.
 pub fn pending<'a>(policy: &Policy, rows: &'a [LogRow]) -> Vec<&'a LogRow> {
-    let names = |x: &str, host: &str| {
-        Resource::parse(x).is_ok_and(|mut res| {
-            res.port = None;
-            res.matches(host)
-        })
-    };
     rows.iter()
         .filter(|row| {
-            !policy
-                .rules_for(&row.sandbox)
-                .iter()
-                .any(|(r, _)| r.resources.iter().any(|x| names(x, &row.host)))
+            !policy.rules_for(Some(&row.sandbox)).any(|(r, _)| {
+                r.parsed().any(|mut res| {
+                    res.port = None;
+                    res.matches(&row.host)
+                })
+            })
         })
         .collect()
 }
