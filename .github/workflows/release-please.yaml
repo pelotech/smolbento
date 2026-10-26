@@ -72,3 +72,28 @@ jobs:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
           TAG: ${{ needs.release-please.outputs.tag_name }}
           TARGET: ${{ matrix.target }}
+
+  # Ask pelotech/homebrew-tap to bump the smolbento formula. Its bump workflow verifies these signed
+  # tarballs and opens an auto-merge PR; its daily schedule catches up if this job fails.
+  homebrew:
+    if: ${{ fromJSON(needs.release-please.outputs.releases_created) }}
+    needs: [release-please, binaries]
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    permissions: {}
+    steps:
+      - uses: actions/create-github-app-token@bcd2ba49218906704ab6c1aa796996da409d3eb1 # v3.2.0
+        id: app
+        with:
+          app-id: ${{ vars.ORG_RELEASE_PLEASE_CLIENT_ID }}
+          private-key: ${{ secrets.ORG_RELEASE_PLEASE_PRIVATE_KEY }}
+          owner: pelotech
+          repositories: homebrew-tap
+          permission-contents: write
+      - name: Dispatch formula bump
+        run: >-
+          gh api repos/pelotech/homebrew-tap/dispatches -f event_type=bump-formula
+          -f "client_payload[formula]=smolbento" -f "client_payload[version]=${TAG#v}"
+        env:
+          GH_TOKEN: ${{ steps.app.outputs.token }}
+          TAG: ${{ needs.release-please.outputs.tag_name }}
