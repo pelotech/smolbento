@@ -6,7 +6,7 @@ pub mod name;
 pub mod options;
 pub mod session;
 
-use anyhow::{Context, Result, bail};
+use anyhow::{Context, Result};
 
 use crate::smolvm::{ExecSpec, Machine, MachineState, NetworkSpec, PublishedPort, Runner, Smolvm};
 use crate::workspace::MOUNTLESS_WORKDIR;
@@ -147,11 +147,8 @@ pub fn ensure_running<R: Runner>(
     Ok(())
 }
 
-/// Creates and starts a new sandbox.
+/// Creates and starts a new sandbox (the caller checked the name is free).
 pub fn create<R: Runner>(vm: &Smolvm<R>, req: &CreateRequest, plan: &StartPlan) -> Result<Sandbox> {
-    if find(vm, &req.name)?.is_some() {
-        bail!("sandbox '{}' already exists", req.name);
-    }
     vm.create(&create::spec(req))?;
     let mut sb = get(vm, &req.name)?;
     start(vm, &sb, plan)?;
@@ -261,7 +258,7 @@ mod tests {
     }
 
     #[test]
-    fn create_refuses_existing_then_creates_and_starts() {
+    fn create_creates_and_starts() {
         let req = create::CreateRequest {
             name: "claude-myrepo".into(),
             agent: "claude".into(),
@@ -272,40 +269,27 @@ mod tests {
             ..Default::default()
         };
         let fake = FakeRunner::new();
-        fake.ok(&["machine", "status"], STATUS);
-        assert!(
-            create(&Smolvm::new(fake), &req, &plan())
-                .unwrap_err()
-                .to_string()
-                .contains("already exists")
-        );
-
-        let fake = FakeRunner::new();
         let created = STATUS
             .replace("\"state\": \"running\"", "\"state\": \"created\"")
             .replace("\"true\"", "\"false\"");
-        fake.ok(&["machine", "status"], &created).once_fail(
-            &["machine", "status"],
-            "NOT_FOUND",
-            "vm not found",
-        );
+        fake.ok(&["machine", "status"], &created);
         let vm = Smolvm::new(fake);
         let sb = create(&vm, &req, &plan()).unwrap();
         assert!(sb.is_running());
         let lines = vm.runner().call_lines();
         assert!(
-            lines[1].starts_with("machine create -n sbx-claude-myrepo --image img"),
+            lines[0].starts_with("machine create -n sbx-claude-myrepo --image img"),
             "{}",
-            lines[1]
+            lines[0]
         );
         assert_eq!(
-            lines[3],
+            lines[2],
             "machine update -n sbx-claude-myrepo --net --reset-allow-list"
         );
-        assert_eq!(lines[4], "machine start -n sbx-claude-myrepo");
+        assert_eq!(lines[3], "machine start -n sbx-claude-myrepo");
         assert_eq!(
             lines.len(),
-            6,
+            5,
             "no dockerd for a non-docker sandbox: {lines:?}"
         );
     }

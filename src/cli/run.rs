@@ -121,7 +121,7 @@ mod tests {
     fn creates_attaches_and_stops_after_the_last_session() {
         let mut t = test_env(&[]);
         created(&t, "created");
-        // run looks the name up, then sandbox::create checks again before creating.
+        // run looks the name up, then plan::create checks again before creating.
         t.ctx
             .vm
             .runner()

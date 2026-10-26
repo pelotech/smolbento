@@ -89,10 +89,6 @@ pub fn create<R: Runner>(ctx: &mut Ctx<R>, a: &CreateArgs) -> Result<i32> {
         .split_first()
         .context("specify an agent, e.g. `sbt create claude .`")?;
     let mut req = build_request(ctx, agent, paths, &a.opts, false)?;
-    // Before prepare_create, which may prompt and records --deny-network.
-    if sandbox::find(&ctx.vm, &req.name)?.is_some() {
-        bail!("sandbox '{}' already exists", req.name);
-    }
     let sb = plan::create(ctx, &mut req, a.opts.deny_network)?;
     println!("Created sandbox {}", sb.name());
     Ok(0)
@@ -257,8 +253,6 @@ mod tests {
             &json("sbx-claude-proj", "created", "claude-proj"),
         );
         fake.once_fail(&["machine", "status"], "NOT_FOUND", "vm not found");
-        // create checks the name, then sandbox::create checks again.
-        fake.once_fail(&["machine", "status"], "NOT_FOUND", "vm not found");
         sbt(
             &mut t.ctx,
             &[
@@ -361,8 +355,6 @@ mod tests {
             &json("sbx-claude-proj", "created", "claude-proj"),
         );
         fake.once_fail(&["machine", "status"], "NOT_FOUND", "vm not found");
-        // create checks the name, then sandbox::create checks again.
-        fake.once_fail(&["machine", "status"], "NOT_FOUND", "vm not found");
         sbt(&mut t.ctx, &["create", "claude", ".", "--deny-network"]).unwrap();
 
         let lines = t.ctx.vm.runner().call_lines();
@@ -426,7 +418,6 @@ mod tests {
             &json("sbx-claude-proj", "created", "claude-proj"),
         );
         fake.once_fail(&["machine", "status"], "NOT_FOUND", "vm not found");
-        fake.once_fail(&["machine", "status"], "NOT_FOUND", "vm not found");
         fake.fail(&["machine", "start"], "START_FAILED", "boot failed");
         assert!(sbt(&mut t.ctx, &["create", "claude", ".", "--deny-network"]).is_err());
         assert!(Policy::load(&t.ctx.paths).unwrap().sandboxes["claude-proj"].deny_network);
@@ -440,8 +431,6 @@ mod tests {
             &["machine", "status"],
             &json("sbx-shell-proj", "created", "shell-proj"),
         );
-        fake.once_fail(&["machine", "status"], "NOT_FOUND", "vm not found");
-        // create checks the name, then sandbox::create checks again.
         fake.once_fail(&["machine", "status"], "NOT_FOUND", "vm not found");
         sbt(&mut t.ctx, &["create", "shell", "--cpus", "1", "-m", "1g"]).unwrap();
         let line = t

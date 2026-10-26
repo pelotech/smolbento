@@ -161,6 +161,10 @@ pub fn create<R: Runner>(
     req: &mut CreateRequest,
     deny_network: bool,
 ) -> Result<Sandbox> {
+    // Before prepare_create, which may prompt and records --deny-network.
+    if sandbox::find(&ctx.vm, &req.name)?.is_some() {
+        bail!("sandbox '{}' already exists", req.name);
+    }
     let result = (|| {
         prepare_create(ctx, req, deny_network)?;
         let plan = start_plan(ctx, &sandbox::create::meta(req))?;
