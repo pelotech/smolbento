@@ -15,12 +15,27 @@ fn output(program: &str, args: &[&str]) -> Result<String> {
     if !out.status.success() {
         bail!(
             "{program} failed: {}",
-            String::from_utf8_lossy(&out.stderr).trim()
+            first_line(&String::from_utf8_lossy(&out.stderr))
         );
     }
     Ok(String::from_utf8_lossy(&out.stdout)
         .trim_end_matches(['\n', '\r'])
         .to_string())
+}
+
+/// The first non-empty line of a command's stderr, at most 200 characters: enough to say what
+/// went wrong without copying everything a command printed (maybe a token) into an error.
+fn first_line(stderr: &str) -> String {
+    const MAX: usize = 200;
+    let line = stderr
+        .lines()
+        .map(str::trim)
+        .find(|l| !l.is_empty())
+        .unwrap_or("");
+    match line.char_indices().nth(MAX) {
+        Some((cut, _)) => format!("{}…", &line[..cut]),
+        None => line.to_string(),
+    }
 }
 
 /// The `aws` argv that reads a Secrets Manager secret, for any partition.
@@ -110,6 +125,29 @@ mod tests {
         ] {
             assert!(aws_args(bad).is_err(), "{bad}");
         }
+    }
+
+    #[test]
+    fn a_failing_command_shows_only_the_start_of_its_stderr() {
+        let store = MemoryStore::default();
+        let err = |command: &str| {
+            resolve(
+                &e(Source::Command {
+                    command: command.into(),
+                }),
+                &store,
+            )
+            .unwrap_err()
+            .to_string()
+        };
+        let msg = err("printf 'bad thing\\ntoken-on-line-2\\n' >&2; exit 1");
+        assert!(
+            msg.contains("bad thing") && !msg.contains("token-on-line-2"),
+            "{msg}"
+        );
+        let msg = err("i=0; while [ $i -lt 300 ]; do printf é; i=$((i+1)); done >&2; exit 1");
+        assert!(msg.ends_with('…'), "{msg}");
+        assert_eq!(msg.chars().filter(|c| *c == 'é').count(), 200, "{msg}");
     }
 
     #[test]
