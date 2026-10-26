@@ -183,6 +183,8 @@ fn set<R: Runner>(
         .cloned();
     let had_value = old.as_ref().is_some_and(|e| e.source == Source::Keychain);
     let mut wrote_value = false;
+    // A stored value this replaces, kept in memory to put back if secrets.toml can't be saved.
+    let mut previous = None;
     let source = if let Some(r) = src.reference {
         if !(r.starts_with("op://") || r.starts_with("arn:aws:secretsmanager:")) {
             bail!("unsupported reference (use op://… or an AWS Secrets Manager ARN)");
@@ -197,6 +199,9 @@ fn set<R: Runner>(
         };
         if value.is_empty() {
             bail!("empty value");
+        }
+        if had_value {
+            previous = ctx.store.get(&account)?;
         }
         ctx.store.set(&account, &value)?;
         wrote_value = true;
@@ -213,10 +218,13 @@ fn set<R: Runner>(
         source,
     });
     if let Err(e) = file.save(&ctx.paths) {
-        // Don't leave a value no entry points to. One that replaced an earlier value can't be
-        // put back (the old value is gone), so it stays: the unchanged entry still uses it.
-        if wrote_value && !had_value {
-            let _ = ctx.store.delete(&account);
+        // Put the store back as the unchanged entry expects: the earlier value, or none. Best
+        // effort; the save error is the one to report.
+        if wrote_value {
+            let _ = match &previous {
+                Some(v) => ctx.store.set(&account, v),
+                None => ctx.store.delete(&account),
+            };
         }
         return Err(e);
     }
@@ -328,17 +336,20 @@ fn rm<R: Runner>(ctx: &Ctx<R>, file: &mut SecretsFile, a: SecretRmArgs) -> Resul
     if a.all {
         confirm(ctx, "Remove every secret?", a.force)?;
         let all = std::mem::take(&mut file.secrets);
-        forget(ctx, &all)?;
         file.custom.clear();
+        // Saved first: a failed save must not leave entries pointing at deleted values. A delete
+        // that fails afterwards orphans a value, which is the lesser harm.
+        file.save(&ctx.paths)?;
+        forget(ctx, &all)?;
     } else {
         let service = a.service.context("specify a service, or --all")?;
         let scope = scope_for(a.sandbox.as_deref());
         let removed = file
             .remove(&service, &scope)
             .with_context(|| format!("no {service} secret ({scope})"))?;
+        file.save(&ctx.paths)?;
         forget(ctx, &[removed])?;
     }
-    file.save(&ctx.paths)?;
     println!("Removed");
     Ok(())
 }
@@ -348,8 +359,8 @@ pub fn forget_sandbox<R: Runner>(ctx: &Ctx<R>, name: &str, secrets: bool) -> Res
     if secrets {
         let mut file = SecretsFile::load(&ctx.paths)?;
         let gone = file.remove_sandbox(name);
-        forget(ctx, &gone)?;
         file.save(&ctx.paths)?;
+        forget(ctx, &gone)?;
     }
     let mut policy = Policy::load(&ctx.paths)?;
     policy.forget_sandbox(name);
@@ -359,8 +370,8 @@ pub fn forget_sandbox<R: Runner>(ctx: &Ctx<R>, name: &str, secrets: bool) -> Res
 /// `sbt reset` without --preserve-secrets.
 pub fn forget_all<R: Runner>(ctx: &Ctx<R>) -> Result<()> {
     let file = SecretsFile::load(&ctx.paths)?;
-    forget(ctx, &file.secrets)?;
-    SecretsFile::default().save(&ctx.paths)
+    SecretsFile::default().save(&ctx.paths)?;
+    forget(ctx, &file.secrets)
 }
 
 #[cfg(test)]
@@ -382,26 +393,74 @@ mod tests {
         assert!(!text.contains("sk-1"), "{text}");
     }
 
-    #[test]
-    fn a_failed_save_doesnt_leave_the_value_behind() {
+    /// Runs `f` with the config dir read-only, so saving secrets.toml fails. Root ignores the
+    /// mode, so these tests return early (pass vacuously) when run as root.
+    fn with_read_only_config<T>(t: &mut TestEnv, f: impl FnOnce(&mut TestEnv) -> T) -> Option<T> {
         use std::os::unix::fs::PermissionsExt;
-        let mut t = test_env(&[]);
-        sbt(&mut t.ctx, &["secret", "set", "github", "-t", "old"]).unwrap();
+        // SAFETY: geteuid has no preconditions.
+        if unsafe { libc::geteuid() } == 0 {
+            return None;
+        }
         let dir = t.ctx.paths.config.clone();
         let mode = |m| std::fs::set_permissions(&dir, std::fs::Permissions::from_mode(m)).unwrap();
         mode(0o555);
-        let new = sbt(&mut t.ctx, &["secret", "set", "anthropic", "-t", "sk-1"]);
-        let replaced = sbt(
-            &mut t.ctx,
-            &["secret", "set", "github", "--command", "gh auth token"],
-        );
+        let out = f(t);
         mode(0o755);
-        assert!(new.is_err() && replaced.is_err());
+        Some(out)
+    }
+
+    #[test]
+    fn a_failed_save_doesnt_leave_the_value_behind() {
+        let mut t = test_env(&[]);
+        sbt(&mut t.ctx, &["secret", "set", "github", "-t", "old"]).unwrap();
+        let Some((new, replaced, overwritten)) = with_read_only_config(&mut t, |t| {
+            (
+                sbt(&mut t.ctx, &["secret", "set", "anthropic", "-t", "sk-1"]),
+                sbt(
+                    &mut t.ctx,
+                    &["secret", "set", "github", "--command", "gh auth token"],
+                ),
+                sbt(&mut t.ctx, &["secret", "set", "github", "-t", "new"]),
+            )
+        }) else {
+            return;
+        };
+        assert!(new.is_err() && replaced.is_err() && overwritten.is_err());
         assert_eq!(t.ctx.store.get("global/anthropic").unwrap(), None);
-        // The entry still says the value is stored, so it must still be there.
+        // The entry still says the value is stored, so the old value must still be there.
         assert_eq!(
             t.ctx.store.get("global/github").unwrap().as_deref(),
             Some("old")
+        );
+    }
+
+    #[test]
+    fn a_failed_save_keeps_removed_values() {
+        let mut t = test_env(&[]);
+        sbt(&mut t.ctx, &["secret", "set", "github", "-t", "g"]).unwrap();
+        sbt(
+            &mut t.ctx,
+            &["secret", "set", "openai", "-t", "o", "--sandbox", "a1"],
+        )
+        .unwrap();
+        let Some(results) = with_read_only_config(&mut t, |t| {
+            [
+                sbt(&mut t.ctx, &["secret", "rm", "github"]).map(drop),
+                sbt(&mut t.ctx, &["secret", "rm", "--all", "-f"]).map(drop),
+                forget_sandbox(&t.ctx, "a1", true),
+                forget_all(&t.ctx),
+            ]
+        }) else {
+            return;
+        };
+        assert!(results.iter().all(Result::is_err), "{results:?}");
+        assert_eq!(
+            t.ctx.store.get("global/github").unwrap().as_deref(),
+            Some("g")
+        );
+        assert_eq!(
+            t.ctx.store.get("sandbox:a1/openai").unwrap().as_deref(),
+            Some("o")
         );
     }
 
