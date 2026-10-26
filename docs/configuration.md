@@ -67,3 +67,7 @@ Secret values live in the OS keychain: on macOS through `/usr/bin/security` (ite
 `smolbento`), on Linux through `secret-tool` when a Secret Service is running. Where neither is
 available they go in `~/.config/smolbento/secret-values.toml` (mode 0600). `secrets.toml` never
 holds values.
+
+On macOS a stored value can be at most about 1.9 KB (`security` truncates longer input); for larger
+values, such as certificates or keys, use `secret set --ref` or `--command` so the value is read at
+each start instead of stored. Keychain items hold the value hex-encoded behind an `sbx1:` prefix.

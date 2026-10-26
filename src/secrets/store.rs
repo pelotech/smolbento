@@ -1,8 +1,10 @@
 //! Where stored secret values live. The OS keychain is used through its CLI with the value on
 //! stdin, so values never appear in argv. On macOS, `/usr/bin/security` creates and reads the
 //! items, so smolbento upgrades (new ad-hoc signatures) never trigger keychain prompts. Writes go
-//! through `security -i` with one command line on stdin and the value hex-encoded (`-X`): the
-//! prompt mode of `-w` reads the terminal, not stdin.
+//! through `security -i` with one command line on stdin (the prompt mode of `-w` reads the
+//! terminal, not stdin). The stored password is `sbx1:` plus the value's bytes as hex: `security`
+//! prints any password with non-printable or non-ASCII bytes as hex, and truncates `-i` lines at
+//! about 4096 characters, so values over ~1900 bytes are refused and each write is read back.
 
 use std::cell::RefCell;
 use std::collections::BTreeMap;
@@ -73,7 +75,20 @@ const SECURITY: &str = "/usr/bin/security";
 /// `security` exits with this when an item isn't found.
 const NOT_FOUND: i32 = 44;
 
-/// The one `security -i` command that stores a value, hex-encoded so no quoting applies.
+/// Longest `security -i` line written: `security` silently truncates input lines at about 4096
+/// characters.
+const KEYCHAIN_LINE_MAX: usize = 4000;
+/// Marks a keychain password holding the value's bytes as hex. `find-generic-password -w` prints
+/// hex itself for any password with non-printable or non-ASCII bytes, so the stored password is
+/// always printable.
+const KEYCHAIN_PREFIX: &str = "sbx1:";
+
+fn hex(bytes: &[u8]) -> String {
+    bytes.iter().map(|b| format!("{b:02x}")).collect()
+}
+
+/// The one `security -i` command that stores a value: `sbx1:` plus the value's bytes as hex, so
+/// no quoting applies and the raw value never appears.
 fn keychain_add_line(account: &str, value: &str) -> Result<String> {
     if account.is_empty()
         || account
@@ -82,10 +97,37 @@ fn keychain_add_line(account: &str, value: &str) -> Result<String> {
     {
         bail!("invalid secret account '{account}'");
     }
-    let hex: String = value.bytes().map(|b| format!("{b:02x}")).collect();
-    Ok(format!(
-        "add-generic-password -U -s {SERVICE} -a {account} -X {hex}\n"
-    ))
+    let line = format!(
+        "add-generic-password -U -s {SERVICE} -a {account} -w {KEYCHAIN_PREFIX}{}\n",
+        hex(value.as_bytes())
+    );
+    if line.len() > KEYCHAIN_LINE_MAX {
+        bail!(
+            "secret is too large for the macOS Keychain (max ~1900 bytes); use --ref or --command"
+        );
+    }
+    Ok(line)
+}
+
+/// A keychain password back to the value. Errors never include the password.
+fn decode_keychain_value(stored: &str) -> Result<String> {
+    let Some(payload) = stored.strip_prefix(KEYCHAIN_PREFIX) else {
+        return Ok(stored.to_string());
+    };
+    let bad = || anyhow::anyhow!("the keychain item isn't a valid smolbento value");
+    if payload.len() % 2 != 0 {
+        return Err(bad());
+    }
+    let bytes = (0..payload.len())
+        .step_by(2)
+        .map(|i| {
+            payload
+                .get(i..i + 2)
+                .and_then(|h| u8::from_str_radix(h, 16).ok())
+                .ok_or_else(bad)
+        })
+        .collect::<Result<Vec<u8>>>()?;
+    String::from_utf8(bytes).map_err(|_| bad())
 }
 
 impl SecretStore for MacKeychain {
@@ -96,7 +138,7 @@ impl SecretStore for MacKeychain {
             None,
         )?;
         match code {
-            0 => Ok(Some(strip_newline(out))),
+            0 => decode_keychain_value(&strip_newline(out)).map(Some),
             NOT_FOUND => Ok(None),
             _ => bail!("reading the keychain: {err}"),
         }
@@ -107,6 +149,10 @@ impl SecretStore for MacKeychain {
         let (code, _, err) = run(SECURITY, &["-i"], Some(&line))?;
         if code != 0 {
             bail!("writing the keychain: {err}");
+        }
+        if self.get(account).ok().flatten().as_deref() != Some(value) {
+            let _ = self.delete(account);
+            bail!("the macOS Keychain didn't store the value intact");
         }
         Ok(())
     }
@@ -139,7 +185,7 @@ impl SecretStore for SecretTool {
             None,
         )?;
         match code {
-            0 => Ok(Some(strip_newline(out))),
+            0 => decode_keychain_value(&strip_newline(out)).map(Some),
             1 if err.is_empty() => Ok(None),
             _ => bail!("reading the Secret Service: {err}"),
         }
@@ -292,19 +338,49 @@ mod tests {
     use super::*;
 
     #[test]
-    fn keychain_add_line_hex_encodes_the_value() {
+    fn keychain_add_line_stores_a_printable_hex_payload() {
         let line = keychain_add_line("global/github", "a\"b$ c").unwrap();
         assert_eq!(
             line,
-            "add-generic-password -U -s smolbento -a global/github -X 612262242063\n"
+            "add-generic-password -U -s smolbento -a global/github -w sbx1:612262242063\n"
         );
         assert!(!line.contains("a\"b"));
         let long = "x".repeat(300);
         let line = keychain_add_line("global/x", &long).unwrap();
-        assert!(line.contains(&"78".repeat(300)) && !line.contains(&long));
+        assert!(line.contains(&format!("-w sbx1:{}", "78".repeat(300))) && !line.contains(&long));
         assert_eq!(line.matches('\n').count(), 1);
         for bad in ["a b", "a\"b", "a\nb", "a'b", ""] {
             assert!(keychain_add_line(bad, "v").is_err(), "{bad:?}");
+        }
+    }
+
+    #[test]
+    fn keychain_add_line_refuses_values_security_would_truncate() {
+        let line = keychain_add_line("global/x", &"x".repeat(1900)).unwrap();
+        assert!(line.len() <= KEYCHAIN_LINE_MAX, "{}", line.len());
+        let err = keychain_add_line("global/x", &"x".repeat(2000))
+            .unwrap_err()
+            .to_string();
+        assert!(
+            err.contains("too large for the macOS Keychain") && err.contains("--ref"),
+            "{err}"
+        );
+        assert!(!err.contains("xxxx"), "{err}");
+    }
+
+    #[test]
+    fn decode_keychain_value_reads_the_hex_payload() {
+        let enc = |v: &str| format!("sbx1:{}", hex(v.as_bytes()));
+        assert_eq!(decode_keychain_value(&enc("a\nb")).unwrap(), "a\nb");
+        assert_eq!(
+            decode_keychain_value(&enc("pässwörd-ключ")).unwrap(),
+            "pässwörd-ключ"
+        );
+        assert_eq!(decode_keychain_value(&enc("")).unwrap(), "");
+        assert_eq!(decode_keychain_value("plain-old").unwrap(), "plain-old");
+        for bad in ["sbx1:zz-secret", "sbx1:abc", "sbx1:ff"] {
+            let err = decode_keychain_value(bad).unwrap_err().to_string();
+            assert!(!err.contains(bad) && !err.contains("secret"), "{err}");
         }
     }
 
