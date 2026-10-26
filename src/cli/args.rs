@@ -591,16 +591,10 @@ pub enum ApprovalCmd {
     Respond {
         /// The blocked host (as shown by `approval ls`)
         id: String,
-        decision: ApprovalDecision,
+        decision: crate::policy::Decision,
         #[arg(long)]
         sandbox: Option<String>,
     },
-}
-
-#[derive(Debug, Clone, Copy, PartialEq, Eq, ValueEnum)]
-pub enum ApprovalDecision {
-    Allow,
-    Deny,
 }
 
 #[derive(Debug, Subcommand)]

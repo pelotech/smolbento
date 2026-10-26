@@ -409,10 +409,6 @@ fn approval<R: Runner>(ctx: &Ctx<R>, policy: &mut Policy, cmd: ApprovalCmd) -> R
                     seen.join(", ")
                 );
             }
-            let decision = match decision {
-                super::ApprovalDecision::Allow => Decision::Allow,
-                super::ApprovalDecision::Deny => Decision::Deny,
-            };
             let rule =
                 policy.add_rule(sandbox.as_deref(), decision, &id, "approval", None, None)?;
             policy.save(&ctx.paths)?;
