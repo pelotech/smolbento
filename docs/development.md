@@ -46,6 +46,16 @@ direnv, use `nix develop`.
 | `plan-nix-devshell` | PRs touching the flake | Comments the dev-shell package diff |
 | `Release Please` | main | Release PRs; on release, signed binaries for all targets |
 
+To save runner time:
+
+- A new push to a PR cancels that PR's runs still in progress. Runs on `main` queue instead, so
+  every merged commit gets a result, and a release is never cancelled mid-way.
+- `build` and `e2e` run only when code or tooling changes (the paths in `.github/filters.yaml`).
+  On a docs-only PR they show as skipped, which counts as passing for required checks.
+- Cargo builds are cached with `Swatinem/rust-cache`. The cache is saved from `main` only; PRs
+  restore it, so the first run after a dependency change on `main` is the slow one.
+- Every job has a `timeout-minutes`.
+
 macOS isn't tested in CI by default (it's expensive, and GitHub's Apple Silicon runners can't boot
 VMs). Run `just test` and `just e2e` on a Mac before merging changes that affect macOS, and before
 merging a release PR.

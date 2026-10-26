@@ -1,0 +1,12 @@
+# Paths that need the Rust build, tests and e2e to run (used by dorny/paths-filter).
+# Docs-only changes skip them; pre-commit still lints everything.
+code:
+  - 'src/**'
+  - 'tests/**'
+  - 'Cargo.toml'
+  - 'Cargo.lock'
+  - 'deny.toml'
+  - 'flake.nix'
+  - 'flake.lock'
+  - 'justfile'
+  - '.github/**'
