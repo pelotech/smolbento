@@ -8,7 +8,7 @@ use super::plan;
 use super::{CreateArgs, Ctx, PruneArgs, ResetArgs, RmArgs, SandboxOpts, confirm};
 use crate::agents;
 use crate::sandbox::{self, CreateRequest, Sandbox, name, options, session};
-use crate::smolvm::{NetworkSpec, Runner};
+use crate::smolvm::Runner;
 use crate::workspace::Workspace;
 
 /// Turns sbx's create options into a [`CreateRequest`]. `default_to_cwd`: `run` mounts the current
@@ -79,12 +79,7 @@ pub(crate) fn build_request<R: Runner>(
         ports,
         docker,
         created: ctx.now,
-        network: NetworkSpec::default(),
-        deny_cidrs: vec![],
-        credentials: vec![],
-        secrets: vec![],
-        credential_hosts: vec![],
-        credential_env: vec![],
+        ..Default::default()
     })
 }
 

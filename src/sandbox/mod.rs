@@ -266,19 +266,10 @@ mod tests {
             name: "claude-myrepo".into(),
             agent: "claude".into(),
             image: "img".into(),
-            workspaces: vec![],
             cpus: 1,
             memory_mib: 1024,
-            env: vec![],
-            ports: vec![],
-            docker: false,
             created: 1,
-            network: NetworkSpec::Open,
-            deny_cidrs: vec![],
-            credentials: vec![],
-            secrets: vec![],
-            credential_hosts: vec![],
-            credential_env: vec![],
+            ..Default::default()
         };
         let fake = FakeRunner::new();
         fake.ok(&["machine", "status"], STATUS);

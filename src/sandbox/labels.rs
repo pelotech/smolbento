@@ -11,7 +11,7 @@ pub const CREDENTIAL_HOSTS: &str = "sbx.credential-hosts";
 pub const CREDENTIAL_ENV: &str = "sbx.credential-env";
 
 /// Sandbox metadata, fixed at create and stored as smolvm machine labels.
-#[derive(Debug, Clone, PartialEq, Eq)]
+#[derive(Debug, Clone, Default, PartialEq, Eq)]
 pub struct Meta {
     pub name: String,
     pub agent: String,
@@ -109,9 +109,7 @@ mod tests {
             workspaces: vec!["/w/repo".into(), "/w/docs:ro".into()],
             created: 1000,
             docker: true,
-            secrets: vec![],
-            credential_hosts: vec![],
-            credential_env: vec![],
+            ..Default::default()
         }
     }
 

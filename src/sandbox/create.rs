@@ -5,7 +5,7 @@ use super::labels::Meta;
 use super::name;
 
 /// Everything decided about a new sandbox before it's created.
-#[derive(Debug, Clone, PartialEq, Eq)]
+#[derive(Debug, Clone, Default, PartialEq, Eq)]
 pub struct CreateRequest {
     pub name: String,
     pub agent: String,
@@ -99,12 +99,7 @@ mod tests {
             }],
             docker,
             created: 1000,
-            network: NetworkSpec::Open,
-            deny_cidrs: vec![],
-            credentials: vec![],
-            secrets: vec![],
-            credential_hosts: vec![],
-            credential_env: vec![],
+            ..Default::default()
         }
     }
 

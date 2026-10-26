@@ -131,9 +131,7 @@ mod tests {
                 workspaces: workspace.map(|w| vec![w.to_string()]).unwrap_or_default(),
                 created,
                 docker: true,
-                secrets: vec![],
-                credential_hosts: vec![],
-                credential_env: vec![],
+                ..Default::default()
             },
             machine: format!("sbx-{name}"),
             state,

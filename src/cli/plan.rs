@@ -226,13 +226,11 @@ mod tests {
         Meta {
             name: name.into(),
             agent: "claude".into(),
-            workspace: None,
-            workspaces: vec![],
             created: 1,
-            docker: false,
             secrets: secrets.to_vec(),
             credential_hosts: hosts.to_vec(),
             credential_env,
+            ..Default::default()
         }
     }
 
@@ -340,21 +338,7 @@ mod tests {
         save_secret(&t, "anthropic", None, "sk-1");
         let mut req = CreateRequest {
             name: "s1".into(),
-            agent: "claude".into(),
-            image: "img".into(),
-            workspaces: vec![],
-            cpus: 1,
-            memory_mib: 1024,
-            env: vec![],
-            ports: vec![],
-            docker: false,
-            created: 1,
-            network: NetworkSpec::Open,
-            deny_cidrs: vec![],
-            credentials: vec![],
-            secrets: vec![],
-            credential_hosts: vec![],
-            credential_env: vec![],
+            ..Default::default()
         };
         prepare_create(&t.ctx, &mut req, true).unwrap();
         assert_eq!(req.secrets, vec!["anthropic"]);
