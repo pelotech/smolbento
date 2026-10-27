@@ -103,6 +103,7 @@ pub fn start_plan<R: Runner>(ctx: &Ctx<R>, meta: &Meta) -> Result<StartPlan> {
         remove,
         uid: ctx.uid,
         clone,
+        branchable: meta.forkable() && ctx.settings.bool("fork.enabled")?,
     })
 }
 
@@ -561,6 +562,36 @@ mod tests {
             start_plan(&t.ctx, &meta("s1", &[], &[])).unwrap().clone,
             None
         );
+    }
+
+    #[test]
+    fn start_plan_is_branchable_only_for_forkable_sandboxes() {
+        let branchable = |t: &TestEnv, m: &Meta| start_plan(&t.ctx, m).unwrap().branchable;
+        let mountless = meta("s1", &[], &[]);
+        let mounted = Meta {
+            workspace: Some("/w/p".into()),
+            workspaces: vec!["/w/p".into()],
+            ..mountless.clone()
+        };
+        let clone = Meta {
+            clone_repo: Some("/w/p".into()),
+            ..mounted.clone()
+        };
+        let fork = Meta {
+            fork_of: Some("s0".into()),
+            ..mountless.clone()
+        };
+        let t = test_env(&[]);
+        set_policy(&t, "mode = \"deny-all\"");
+        assert!(branchable(&t, &mountless));
+        assert!(branchable(&t, &clone));
+        assert!(!branchable(&t, &mounted));
+        assert!(!branchable(&t, &fork));
+
+        let t = test_env(&[("SMOLBENTO_FORK", "false")]);
+        set_policy(&t, "mode = \"deny-all\"");
+        assert!(!branchable(&t, &mountless));
+        assert!(!branchable(&t, &clone));
     }
 
     #[test]

@@ -106,6 +106,19 @@ impl Meta {
             fork_of: labels.get(FORK_OF).cloned(),
         })
     }
+
+    /// A mounted host folder the sandbox can write: a copy would share it with the original.
+    pub fn writable_host_folder(&self) -> bool {
+        self.workspaces
+            .iter()
+            .enumerate()
+            .any(|(i, w)| !w.ends_with(":ro") && !(i == 0 && self.clone_repo.is_some()))
+    }
+
+    /// Whether `sbt fork` can copy it: no writable host folder, and not itself a fork.
+    pub fn forkable(&self) -> bool {
+        self.fork_of.is_none() && !self.writable_host_folder()
+    }
 }
 
 /// A comma-joined label value.
@@ -227,5 +240,27 @@ mod tests {
     #[test]
     fn foreign_machine_is_none() {
         assert_eq!(Meta::from_labels(&BTreeMap::new()), None);
+    }
+
+    #[test]
+    fn forkable_needs_no_writable_host_folder_and_no_parent() {
+        let mounted = meta();
+        assert!(mounted.writable_host_folder() && !mounted.forkable());
+        let clone = Meta {
+            clone_repo: Some("/w/repo".into()),
+            ..meta()
+        };
+        assert!(clone.forkable());
+        let mountless = Meta {
+            workspace: None,
+            workspaces: vec![],
+            ..meta()
+        };
+        assert!(mountless.forkable());
+        let fork = Meta {
+            fork_of: Some("a".into()),
+            ..mountless
+        };
+        assert!(!fork.forkable());
     }
 }

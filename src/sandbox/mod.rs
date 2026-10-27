@@ -46,6 +46,8 @@ pub struct StartPlan {
     pub uid: u32,
     /// Set for a clone sandbox; the clone itself is skipped once it exists, the remote copy is not.
     pub clone: Option<CloneStep>,
+    /// Start with `--branchable` so `sbt fork` can copy it; only for forkable sandboxes.
+    pub branchable: bool,
 }
 
 /// The first start of a clone sandbox clones the host repo inside the VM (as sbx).
@@ -183,7 +185,7 @@ pub fn list<R: Runner>(vm: &Smolvm<R>) -> Result<Vec<Sandbox>> {
 pub fn start<R: Runner>(vm: &Smolvm<R>, sb: &Sandbox, plan: &StartPlan) -> Result<()> {
     vm.update_network(&sb.machine, &plan.network)
         .context("applying the network policy")?;
-    vm.start(&sb.machine, &plan.env, &plan.remove)?;
+    vm.start(&sb.machine, plan.branchable, &plan.env, &plan.remove)?;
     if let Err(e) = setup(vm, sb, plan) {
         if let Err(stop) = vm.stop(&sb.machine) {
             eprintln!(
@@ -329,6 +331,7 @@ mod tests {
             remove: vec!["GONE".into()],
             uid: 501,
             clone: None,
+            branchable: true,
         }
     }
 

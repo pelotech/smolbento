@@ -12,6 +12,9 @@ use crate::smolvm::{Runner, SmolvmError};
 use crate::workspace::clone;
 
 pub fn run<R: Runner>(ctx: &mut Ctx<R>, a: &ForkArgs) -> Result<i32> {
+    if !ctx.settings.bool("fork.enabled")? {
+        bail!("fork is turned off (fork.enabled=false)");
+    }
     let mut parent = sandbox::get(&ctx.vm, &a.sandbox)?;
     check_forkable(&parent)?;
     let names = match &a.name {
@@ -45,13 +48,7 @@ fn check_forkable(sb: &Sandbox) -> Result<()> {
     if sb.meta.fork_of.is_some() {
         bail!("forking a fork isn't supported yet");
     }
-    let writable_host_folder = sb
-        .meta
-        .workspaces
-        .iter()
-        .enumerate()
-        .any(|(i, w)| !w.ends_with(":ro") && !(i == 0 && sb.meta.clone_repo.is_some()));
-    if writable_host_folder {
+    if sb.meta.writable_host_folder() {
         bail!("fork needs a sandbox with no writable host folder; create it with --clone");
     }
     Ok(())
@@ -183,7 +180,7 @@ mod tests {
     fn branch(fork: &str) -> String {
         format!(
             "machine branch --from sbx-a -n sbx-{fork} --label sbx.name={fork} \
-             --label sbx.fork-of=a --branchable"
+             --label sbx.fork-of=a"
         )
     }
 
@@ -253,7 +250,7 @@ mod tests {
             branches(&t),
             vec![
                 "machine branch --from sbx-a -n sbx-try_2 --label sbx.name=try.2 \
-                 --label sbx.fork-of=a --branchable"
+                 --label sbx.fork-of=a"
             ]
         );
     }
@@ -285,6 +282,16 @@ mod tests {
         assert_eq!(fake.removed().last().unwrap(), &vec!["OLD_TOKEN"]);
         assert!(fake.call_lines().iter().all(|c| !c.contains("gh-123")));
         assert_eq!(branches(&t), vec![branch("a-fork-1")]);
+    }
+
+    #[test]
+    fn fork_enabled_false_refuses() {
+        let mut t = test_env(&[("SMOLBENTO_FORK", "false")]);
+        parent(&t, "running", &[]);
+        let err = sbt(&mut t.ctx, &["fork", "a"]).unwrap_err().to_string();
+        assert_eq!(err, "fork is turned off (fork.enabled=false)");
+        let calls = t.ctx.vm.runner().call_lines();
+        assert!(calls.iter().all(|c| !c.starts_with("machine")), "{calls:?}");
     }
 
     #[test]

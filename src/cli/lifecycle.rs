@@ -524,12 +524,13 @@ mod tests {
         assert_eq!(pair("-p"), vec!["8080:80"]);
         assert!(pair("--label").contains(&"sbx.created=1000000".to_string()));
         assert!(pair("--label").contains(&"sbx.docker=true".to_string()));
+        // A host-mounted sandbox can't be forked, so it isn't started branchable.
         assert!(
             t.ctx
                 .vm
                 .runner()
                 .call_lines()
-                .contains(&"machine start -n sbx-claude-proj --branchable".to_string())
+                .contains(&"machine start -n sbx-claude-proj".to_string())
         );
     }
 

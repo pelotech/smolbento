@@ -81,6 +81,12 @@ pub const SETTINGS: &[SettingDef] = &[
         default: "true",
         help: "After `run` in a clone sandbox, fetch the agent's commits into the sandbox-<name> remote",
     },
+    SettingDef {
+        key: "fork.enabled",
+        env: "SMOLBENTO_FORK",
+        default: "true",
+        help: "Start clone and mountless sandboxes branchable so `sbt fork` can copy them",
+    },
 ];
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
