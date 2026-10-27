@@ -169,6 +169,16 @@ pub fn check_launchable<R: Runner>(ctx: &Ctx<R>, kit: &mut Kit) -> Result<()> {
     }
     if kit.kind == Kind::Workload
         && kit.command.is_none()
+        && matches!(
+            (&kit.source, &kit.content),
+            (Source::LocalV2(_), Content::None)
+        )
+    {
+        bail!("workload kit declares no image or command");
+    }
+    if kit.kind == Kind::Workload
+        && kit.command.is_none()
+        // R31: a Smolfile defines its own workload (sbx has no Smolfile kits); it keeps `shell`'s.
         && !matches!(kit.source, Source::Smolfile(_))
     {
         bail!(

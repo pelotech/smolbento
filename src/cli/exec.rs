@@ -22,10 +22,10 @@ pub fn exec<R: Runner>(ctx: &mut Ctx<R>, a: &ExecArgs) -> Result<i32> {
         "root".to_string()
     } else {
         // A v3 workload's image user, as sbx; else `agent`.
-        a.user
-            .clone()
-            .or_else(|| sb.meta.user.clone())
-            .unwrap_or_else(|| "agent".into())
+        match &a.user {
+            Some(u) => u.clone(),
+            None => sandbox::launch_user(&ctx.vm, &sb).unwrap_or_else(|| "agent".into()),
+        }
     };
     let spec = ExecSpec {
         name: sb.machine.clone(),
@@ -126,6 +126,21 @@ mod tests {
             ),
         );
         sbt(&mut t.ctx, &["exec", "tool-proj", "id"]).unwrap();
+        // A numeric image user runs as the account the start recorded for it.
+        t.ctx.vm.runner().ok(
+            &["machine", "status"],
+            &machine_json(
+                "sbx-tool-proj",
+                "running",
+                &[
+                    ("sbx.name", "tool-proj"),
+                    ("sbx.workspace", "/w/proj"),
+                    ("sbx.user", "1001:1001"),
+                ],
+            ),
+        );
+        t.ctx.vm.runner().download(b"somebody\n");
+        sbt(&mut t.ctx, &["exec", "tool-proj", "id"]).unwrap();
         sbt(&mut t.ctx, &["exec", "-u", "root", "tool-proj", "id"]).unwrap();
         let calls: Vec<String> = t
             .ctx
@@ -139,6 +154,7 @@ mod tests {
             calls,
             [
                 "machine exec --name sbx-tool-proj -u somebody -w /w/proj -- id",
+                "machine exec --name sbx-tool-proj -u somebody:1001 -w /w/proj -- id",
                 "machine exec --name sbx-tool-proj -u root -w /w/proj -- id",
             ]
         );

@@ -114,9 +114,10 @@ pub fn run<R: Runner>(ctx: &mut Ctx<R>, a: &RunArgs) -> Result<i32> {
         ..Default::default()
     };
     // A v3 workload runs as its image user, through bash so the image's BASH_ENV is sourced.
-    if let Some(user) = &sb.meta.user {
+    let image_user = sandbox::launch_user(&ctx.vm, &sb);
+    if let Some(user) = &image_user {
         spec.user = Some(user.clone());
-        spec.cmd = [BASH, "-c", "exec \"$@\"", "bash"]
+        spec.cmd = [BASH, "-c", "exec -- \"$@\"", "bash"]
             .into_iter()
             .map(String::from)
             .chain(spec.cmd)
@@ -124,7 +125,7 @@ pub fn run<R: Runner>(ctx: &mut Ctx<R>, a: &RunArgs) -> Result<i32> {
     }
     let code = {
         let _session = session::Session::register(&sessions, sb.name())?;
-        if sb.meta.user.is_some() && !has_bash(ctx, &sb)? {
+        if image_user.is_some() && !has_bash(ctx, &sb)? {
             // sbx's error for such an image, and the code its agent exits with.
             eprintln!("executable file '{BASH}' not found");
             127
@@ -158,11 +159,12 @@ pub fn run<R: Runner>(ctx: &mut Ctx<R>, a: &RunArgs) -> Result<i32> {
 
 const BASH: &str = "/bin/bash";
 
-/// Whether the guest has `/bin/bash`, which a v3 workload's agent is launched through.
+/// Whether the guest can run `/bin/bash`, which a v3 workload's agent is launched through.
+/// Runs bash itself, so the image needs no `/bin/sh` for the check.
 fn has_bash<R: Runner>(ctx: &Ctx<R>, sb: &Sandbox) -> Result<bool> {
     let out = ctx.vm.exec_output(&ExecSpec {
         name: sb.machine.clone(),
-        cmd: vec!["sh".into(), "-c".into(), format!("[ -x {BASH} ]")],
+        cmd: vec![BASH.into(), "-c".into(), ":".into()],
         ..Default::default()
     })?;
     Ok(out.code == 0)
@@ -614,7 +616,7 @@ mod tests {
             t.ctx.vm.runner().interactive_calls()[0].join(" "),
             format!(
                 "machine exec --name sbx-toolbox-proj -u somebody -w {ws} -i -- \
-                 /bin/bash -c exec \"$@\" bash /bin/agent --x --y z"
+                 /bin/bash -c exec -- \"$@\" bash /bin/agent --x --y z"
             )
         );
         assert!(
@@ -622,7 +624,38 @@ mod tests {
                 .vm
                 .runner()
                 .call_lines()
-                .contains(&"machine exec --name sbx-toolbox-proj -- sh -c [ -x /bin/bash ]".into())
+                .contains(&"machine exec --name sbx-toolbox-proj -- /bin/bash -c :".into())
+        );
+    }
+
+    #[test]
+    fn run_launches_a_numeric_image_user_as_its_mapped_account() {
+        let mut t = test_env(&[]);
+        let ws = t.ctx.cwd.display().to_string();
+        t.ctx.vm.runner().ok(
+            &["machine", "status"],
+            &machine_json(
+                "sbx-toolbox-proj",
+                "running",
+                &[
+                    ("sbx.name", "toolbox-proj"),
+                    ("sbx.agent", "toolbox"),
+                    ("sbx.workspace", ws.as_str()),
+                    ("sbx.command", r#"["/bin/agent"]"#),
+                    ("sbx.user", "1000"),
+                ],
+            ),
+        );
+        t.ctx.vm.runner().interactive_exit(0);
+        // The start recorded uid 1000's account (`agent`, since moved to the host uid).
+        t.ctx.vm.runner().download(b"agent\n");
+        sbt(&mut t.ctx, &["run", "--name", "toolbox-proj"]).unwrap();
+        assert_eq!(
+            t.ctx.vm.runner().interactive_calls()[0].join(" "),
+            format!(
+                "machine exec --name sbx-toolbox-proj -u agent -w {ws} -i -- \
+                 /bin/bash -c exec -- \"$@\" bash /bin/agent"
+            )
         );
     }
 
@@ -631,7 +664,14 @@ mod tests {
         let mut t = test_env(&[]);
         image_user_sandbox(&t);
         t.ctx.vm.runner().on(
-            &["machine", "exec", "--name", "sbx-toolbox-proj", "--", "sh"],
+            &[
+                "machine",
+                "exec",
+                "--name",
+                "sbx-toolbox-proj",
+                "--",
+                "/bin/bash",
+            ],
             crate::smolvm::Output {
                 code: 1,
                 ..Default::default()

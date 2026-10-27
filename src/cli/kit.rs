@@ -809,6 +809,23 @@ mod tests {
     }
 
     #[test]
+    fn validate_refuses_a_v2_workload_without_an_image_or_command() {
+        let mut t = kit_env();
+        let kit = t.ctx.cwd.join("noimg");
+        fs::create_dir(&kit).unwrap();
+        fs::write(
+            kit.join("spec.yaml"),
+            "schemaVersion: \"2\"\nkind: sandbox\nname: noimg\n",
+        )
+        .unwrap();
+        let e = sbt(&mut t.ctx, &["kit", "validate", "./noimg"]).unwrap_err();
+        assert_eq!(
+            format!("{e:#}"),
+            "workload kit declares no image or command"
+        );
+    }
+
+    #[test]
     fn validate_accepts_v2_workspace_files() {
         let mut t = kit_env();
         let ws = v2_fixture("workspace-files");

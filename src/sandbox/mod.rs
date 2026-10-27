@@ -36,19 +36,70 @@ pub fn identity_cmd(uid: u32) -> String {
     )
 }
 
+/// Where a start records the account a v3 workload's image user resolved to, so a numeric
+/// `USER` still names it after its uid moved to the host's (or `agent`'s move took it).
+pub const IMAGE_USER_FILE: &str = "/etc/smolbento/image-user";
+
 /// `identity_cmd` for a v3 workload's image user (`sbx.user`: `name`, `uid` or either with
-/// `:group`), resolved against the guest's `/etc/passwd`. Root keeps uid 0. Exits 3
-/// (`UNMAPPED`) when the user has no passwd entry or the image has no `usermod`.
+/// `:group`). Run before `identity_cmd`, so a `USER 1000` image still finds `agent` there.
 pub fn image_user_cmd(user: &str, uid: u32) -> String {
-    let name = user.split(':').next().unwrap_or(user);
+    image_user_script(user, uid, "/etc")
+}
+
+/// `image_user_cmd` against the passwd file and record under `etc` (tests use a temp dir). The
+/// first start resolves the user (a uid through `passwd`) and records the account; later starts
+/// read the record. Root keeps uid 0. Exits `UNMAPPED` when there's no account or no `usermod`.
+fn image_user_script(user: &str, uid: u32, etc: &str) -> String {
+    let token = user.split(':').next().unwrap_or(user);
     format!(
-        "n={}; case \"$n\" in *[!0-9]*) ;; \
-         *) n=$(awk -F: -v u=\"$n\" '$3 == u {{ print $1; exit }}' /etc/passwd);; esac; \
+        "f={file}; n=; [ -r \"$f\" ] && read -r n < \"$f\"; \
+         if [ -z \"$n\" ]; then n={token}; case \"$n\" in *[!0-9]*) ;; \
+         *) n=$(awk -F: -v u=\"$n\" '$3 == u {{ print $1; exit }}' {passwd});; esac; \
+         [ -n \"$n\" ] && mkdir -p {dir} && echo \"$n\" > \"$f\"; fi; \
          [ -n \"$n\" ] && u=$(id -u \"$n\" 2>/dev/null) || exit {UNMAPPED}; \
          [ \"$u\" = 0 ] || [ \"$u\" = {uid} ] && exit 0; \
          command -v usermod >/dev/null 2>&1 || exit {UNMAPPED}; usermod -o -u {uid} \"$n\"",
-        sh_quote(name)
+        file = sh_quote(&format!("{etc}/smolbento/image-user")),
+        dir = sh_quote(&format!("{etc}/smolbento")),
+        passwd = sh_quote(&format!("{etc}/passwd")),
+        token = sh_quote(token),
     )
+}
+
+/// The user `run` and `exec` use for a v3 workload: `sbx.user`, except that a non-root uid is
+/// replaced by the account the start recorded for it (keeping any `:group`). Without a record
+/// (the uid has no passwd entry; the start warned) the raw uid.
+pub fn launch_user<R: Runner>(vm: &Smolvm<R>, sb: &Sandbox) -> Option<String> {
+    let spec = sb.meta.user.clone()?;
+    let (user, group) = match spec.split_once(':') {
+        Some((u, g)) => (u, Some(g)),
+        None => (spec.as_str(), None),
+    };
+    if user.is_empty() || !user.bytes().all(|b| b.is_ascii_digit()) || user.parse() == Ok(0u32) {
+        return Some(spec);
+    }
+    let Some(name) = read_guest_file(vm, sb, IMAGE_USER_FILE) else {
+        return Some(spec);
+    };
+    Some(match group {
+        Some(g) => format!("{name}:{g}"),
+        None => name,
+    })
+}
+
+/// A small guest file's first line via `machine cp` (no guest shell needed); `None` when it's
+/// missing or empty.
+fn read_guest_file<R: Runner>(vm: &Smolvm<R>, sb: &Sandbox, path: &str) -> Option<String> {
+    let dir = tempfile::tempdir().ok()?;
+    let local = dir.path().join("file");
+    vm.cp(
+        &format!("{}:{path}", sb.machine),
+        &local.display().to_string(),
+    )
+    .ok()?;
+    let text = std::fs::read_to_string(&local).ok()?;
+    let line = text.lines().next()?.trim();
+    (!line.is_empty()).then(|| line.to_string())
 }
 
 /// `image_user_cmd`'s exit code when it can't map the user.
@@ -274,9 +325,14 @@ pub fn start<R: Runner>(vm: &Smolvm<R>, sb: &Sandbox, plan: &StartPlan) -> Resul
     Ok(())
 }
 
-/// What follows `machine start`: the agent user's uid (and a v3 workload's image user's), dockerd for a pre-4a sandbox, the clone,
+/// What follows `machine start`: a v3 workload's image user's uid, then the agent user's, dockerd for a pre-4a sandbox, the clone,
 /// then the kits' startup runner (a no-op without kits; deferred during a kit first start).
 fn setup<R: Runner>(vm: &Smolvm<R>, sb: &Sandbox, plan: &StartPlan) -> Result<()> {
+    if let Some(user) = &sb.meta.user
+        && let Some(w) = map_image_user(vm, sb, user, plan.uid)?
+    {
+        eprintln!("{w}");
+    }
     vm.exec_captured(&ExecSpec {
         name: sb.machine.clone(),
         user: Some("root".into()),
@@ -284,11 +340,6 @@ fn setup<R: Runner>(vm: &Smolvm<R>, sb: &Sandbox, plan: &StartPlan) -> Result<()
         ..Default::default()
     })
     .context("matching the sandbox's agent user to your host uid")?;
-    if let Some(user) = &sb.meta.user
-        && let Some(w) = map_image_user(vm, sb, user, plan.uid)?
-    {
-        eprintln!("{w}");
-    }
     // The pre-4a path: a docker sandbox created before the docker kit has no startup runner.
     // With kits, the docker kit's startup hook starts dockerd (no second start here).
     if sb.meta.docker && sb.meta.kits.is_empty() {
@@ -763,7 +814,7 @@ mod tests {
     }
 
     #[test]
-    fn a_v3_workloads_image_user_gets_the_host_uid_after_agent() {
+    fn a_v3_workloads_image_user_is_resolved_before_agent_moves() {
         let fake = FakeRunner::new();
         fake.ok(
             &["machine", "status"],
@@ -771,30 +822,149 @@ mod tests {
         );
         let vm = Smolvm::new(fake);
         let mut sb = get(&vm, "claude-myrepo").unwrap();
-        sb.meta.user = Some("somebody:staff".into());
+        sb.meta.user = Some("1000".into());
         ensure_running(&vm, &mut sb, || Ok(plan())).unwrap();
         let lines = vm.runner().call_lines();
-        assert!(lines[3].ends_with("usermod -o -u 501 agent"), "{lines:#?}");
+        // Before `identity_cmd`: uid 1000 is still `agent` the first time.
         assert_eq!(
-            lines[4],
+            lines[3],
             format!(
                 "machine exec --name sbx-claude-myrepo -u root -- sh -c {}",
-                image_user_cmd("somebody:staff", 501)
+                image_user_cmd("1000", 501)
             )
         );
+        assert!(lines[4].ends_with("usermod -o -u 501 agent"), "{lines:#?}");
         assert_eq!(lines.len(), 7, "{lines:#?}");
     }
 
-    #[test]
-    fn image_user_cmd_maps_a_named_or_numeric_non_root_user() {
-        assert_eq!(
-            image_user_cmd("somebody:staff", 501),
-            "n='somebody'; case \"$n\" in *[!0-9]*) ;; \
-             *) n=$(awk -F: -v u=\"$n\" '$3 == u { print $1; exit }' /etc/passwd);; esac; \
-             [ -n \"$n\" ] && u=$(id -u \"$n\" 2>/dev/null) || exit 3; \
-             [ \"$u\" = 0 ] || [ \"$u\" = 501 ] && exit 0; \
-             command -v usermod >/dev/null 2>&1 || exit 3; usermod -o -u 501 \"$n\""
+    /// Runs `image_user_script` on the host against `etc`, with `id` and `usermod` shims that
+    /// read `etc/passwd` and log to `etc/usermod.log`. Returns the exit code.
+    fn run_image_user_script(etc: &std::path::Path, user: &str) -> i32 {
+        let bin = etc.join("bin");
+        std::fs::create_dir_all(&bin).unwrap();
+        let shim = |name: &str, body: &str| {
+            let p = bin.join(name);
+            std::fs::write(&p, format!("#!/bin/sh\n{body}\n")).unwrap();
+            use std::os::unix::fs::PermissionsExt;
+            std::fs::set_permissions(&p, std::fs::Permissions::from_mode(0o755)).unwrap();
+        };
+        shim(
+            "id",
+            r#"awk -F: -v n="$2" '$1 == n { print $3; f = 1 } END { exit !f }' "$ETC/passwd""#,
         );
+        shim("usermod", r#"echo "$@" >> "$ETC/usermod.log""#);
+        let script = image_user_script(user, 501, &etc.display().to_string());
+        let path = format!("{}:{}", bin.display(), std::env::var("PATH").unwrap());
+        std::process::Command::new("sh")
+            .args(["-c", &script])
+            .env("PATH", path)
+            .env("ETC", etc)
+            .status()
+            .unwrap()
+            .code()
+            .unwrap()
+    }
+
+    #[test]
+    fn a_numeric_image_user_is_resolved_once_and_kept_after_agent_moves() {
+        let d = tempfile::tempdir().unwrap();
+        let etc = d.path();
+        let passwd = |agent_uid: u32| {
+            std::fs::write(
+                etc.join("passwd"),
+                format!(
+                    "root:x:0:0::/root:/bin/sh\nagent:x:{agent_uid}:1000::/home/agent:/bin/sh\n"
+                ),
+            )
+            .unwrap()
+        };
+        // First start: uid 1000 is `agent` (sandbox-templates); it's recorded and mapped.
+        passwd(1000);
+        assert_eq!(run_image_user_script(etc, "1000"), 0);
+        let name = std::fs::read_to_string(etc.join("smolbento/image-user")).unwrap();
+        assert_eq!(name, "agent\n");
+        let log = std::fs::read_to_string(etc.join("usermod.log")).unwrap();
+        assert_eq!(log, "-o -u 501 agent\n");
+        // Later starts: `agent` is 501 now and uid 1000 is nobody, yet the record still names it.
+        passwd(501);
+        assert_eq!(run_image_user_script(etc, "1000"), 0);
+        assert_eq!(
+            std::fs::read_to_string(etc.join("usermod.log")).unwrap(),
+            log
+        );
+        // A uid without a passwd entry can't be mapped; root needs no mapping.
+        let d = tempfile::tempdir().unwrap();
+        std::fs::write(d.path().join("passwd"), "root:x:0:0::/root:/bin/sh\n").unwrap();
+        assert_eq!(run_image_user_script(d.path(), "1001"), 3);
+        assert_eq!(run_image_user_script(d.path(), "0"), 0);
+    }
+
+    #[test]
+    fn a_failing_usermod_names_its_error() {
+        let fake = FakeRunner::new();
+        fake.ok(&["machine", "status"], STATUS);
+        fake.on(
+            &[
+                "machine",
+                "exec",
+                "--name",
+                "sbx-claude-myrepo",
+                "-u",
+                "root",
+            ],
+            crate::smolvm::Output {
+                code: 8,
+                stderr: "usermod: user somebody is currently used by process 7\n".into(),
+                ..Default::default()
+            },
+        );
+        let vm = Smolvm::new(fake);
+        let sb = get(&vm, "claude-myrepo").unwrap();
+        let e = format!(
+            "{:#}",
+            map_image_user(&vm, &sb, "somebody", 501).unwrap_err()
+        );
+        assert!(
+            e.contains("usermod: user somebody is currently used by process 7"),
+            "{e}"
+        );
+    }
+
+    #[test]
+    fn launch_user_names_a_numeric_image_users_account() {
+        let fake = FakeRunner::new();
+        fake.ok(&["machine", "status"], STATUS);
+        let vm = Smolvm::new(fake);
+        let mut sb = get(&vm, "claude-myrepo").unwrap();
+        assert_eq!(launch_user(&vm, &sb), None);
+        sb.meta.user = Some("somebody".into());
+        assert_eq!(launch_user(&vm, &sb).as_deref(), Some("somebody"));
+        sb.meta.user = Some("0".into());
+        assert_eq!(launch_user(&vm, &sb).as_deref(), Some("0"));
+        assert!(
+            vm.runner()
+                .call_lines()
+                .iter()
+                .all(|l| !l.contains("machine cp"))
+        );
+        vm.runner().download(b"agent\n");
+        sb.meta.user = Some("1000:staff".into());
+        assert_eq!(launch_user(&vm, &sb).as_deref(), Some("agent:staff"));
+        assert!(
+            vm.runner()
+                .call_lines()
+                .last()
+                .unwrap()
+                .starts_with(&format!("machine cp sbx-claude-myrepo:{IMAGE_USER_FILE} ")),
+        );
+        // No record (no passwd entry): the raw uid.
+        let fake = FakeRunner::new();
+        fake.ok(&["machine", "status"], STATUS);
+        fake.fail(&["machine", "cp"], "NOT_FOUND", "no such file");
+        let vm = Smolvm::new(fake);
+        let mut sb = get(&vm, "claude-myrepo").unwrap();
+        sb.meta.user = Some("1001".into());
+        assert_eq!(launch_user(&vm, &sb).as_deref(), Some("1001"));
     }
 
     #[test]
