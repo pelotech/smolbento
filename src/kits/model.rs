@@ -15,6 +15,9 @@ pub enum Source {
     LocalV3(PathBuf),
     LocalV2(PathBuf),
     Smolfile(PathBuf),
+    /// An agent preset as the workload (`load::preset_kit`), with its image: not a kit the user
+    /// chose.
+    Preset(String),
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]

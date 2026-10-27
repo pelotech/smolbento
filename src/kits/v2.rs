@@ -17,6 +17,24 @@ const NS: &str = "com.docker.sandbox/";
 const WORKSPACE: &str = "${{ kit.env.WORKSPACE }}";
 const HOME: &str = "/home/agent";
 
+/// The kit's name as `parse` gives it, reading only the `name` field.
+pub fn name_in(yaml: &str, dir: &Path) -> Result<String> {
+    let v: Value = serde_saphyr::from_str(yaml).context("reading the v2 kit descriptor")?;
+    let name = match v.get("name") {
+        None | Some(Value::Null) => None,
+        Some(Value::String(n)) => Some(n.clone()),
+        Some(_) => bail!("reading the v2 kit descriptor: name must be a string"),
+    };
+    name_or_source(name, dir)
+}
+
+fn name_or_source(name: Option<String>, dir: &Path) -> Result<String> {
+    match name {
+        Some(n) => check_name(n),
+        None => name_from_source(&Source::LocalV2(dir.to_path_buf())),
+    }
+}
+
 /// `dir` is the kit directory: `spec.yaml` sits in it, with optional `files/home` and
 /// `files/workspace` beside it.
 pub fn parse(yaml: &str, dir: &Path) -> Result<Kit> {
@@ -31,10 +49,7 @@ pub fn parse(yaml: &str, dir: &Path) -> Result<Kit> {
         k => bail!("unknown kind '{k}'"),
     };
     let source = Source::LocalV2(dir.to_path_buf());
-    let name = match s.name.clone() {
-        Some(n) => check_name(n)?,
-        None => name_from_source(&source)?,
-    };
+    let name = name_or_source(s.name.clone(), dir)?;
 
     let mut caps = Vec::new();
     let sandbox = s.sandbox.unwrap_or_default();

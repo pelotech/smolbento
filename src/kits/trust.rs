@@ -7,6 +7,8 @@ use crate::kits::model::Source;
 
 pub fn check(source: &Source, settings: &Settings) -> Result<()> {
     match source {
+        // smolbento's own presets.
+        Source::Preset(_) => Ok(()),
         Source::Registry(r) => {
             let name = normalise(r)?;
             let patterns = settings.value("kit.sources")?;

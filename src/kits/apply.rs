@@ -475,21 +475,14 @@ fn context_scripts(plan: &Plan) -> Result<Vec<String>> {
 
 /// The agent preset as a synthetic workload (`load::preset_kit`), not a kit the user chose.
 fn is_preset(w: &Kit) -> bool {
-    agents::find(&w.name).is_some_and(|a| {
-        w.digest.is_none()
-            && w.caps.is_empty()
-            && matches!(w.content, Content::Image(_))
-            && w.command.as_ref().is_some_and(|c| {
-                c.len() == a.command.len() && c.iter().zip(a.command).all(|(x, y)| x == y)
-            })
-    })
+    matches!(w.source, Source::Preset(_))
 }
 
 /// A registry kit pinned to its digest, or a local kit's canonical path.
 fn pinned_ref(k: &Kit) -> Result<String> {
     Ok(match &k.source {
-        Source::Registry(r) if r.contains('@') => r.clone(),
-        Source::Registry(r) => match &k.digest {
+        Source::Registry(r) | Source::Preset(r) if r.contains('@') => r.clone(),
+        Source::Registry(r) | Source::Preset(r) => match &k.digest {
             Some(d) => format!("{r}@{d}"),
             None => bail!("kit {}: {r} has no digest to pin it to", k.name),
         },

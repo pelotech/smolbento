@@ -6,7 +6,7 @@ use std::path::Path;
 
 use anyhow::{Context, Result, bail};
 
-use super::lifecycle::{kit_plan, kit_target, resolve_clone};
+use super::lifecycle::{has_kit_flags, kit_plan, kit_target, resolve_clone};
 use super::plan;
 use super::{Ctx, RunArgs, Unsupported};
 use crate::agents;
@@ -34,8 +34,16 @@ pub fn run<R: Runner>(ctx: &mut Ctx<R>, a: &RunArgs) -> Result<i32> {
         Some(n) => sandbox::find(&ctx.vm, n)?,
         None => None,
     };
+    let kits_ignored = |sb: &Sandbox| {
+        if let Some(w) = ignored_kits_warning(a, sb.name()) {
+            eprintln!("{w}");
+        }
+    };
     let (mut sb, created) = match existing {
-        Some(sb) => (sb, false),
+        Some(sb) => {
+            kits_ignored(&sb);
+            (sb, false)
+        }
         None => {
             if a.targets.is_empty() {
                 bail!(
@@ -46,16 +54,13 @@ pub fn run<R: Runner>(ctx: &mut Ctx<R>, a: &RunArgs) -> Result<i32> {
             let (mut req, workload) = kit_target(ctx, &a.targets, &a.opts, true)?;
             match sandbox::find(&ctx.vm, &req.name)? {
                 Some(sb) => {
-                    if workload.is_some() {
-                        eprintln!(
-                            "warning: kits only apply when a sandbox is created; {} already exists",
-                            sb.name()
-                        );
-                    }
+                    kits_ignored(&sb);
                     (sb, false)
                 }
                 None => {
-                    let kits = workload.map(|w| kit_plan(ctx, w, &a.opts)).transpose()?;
+                    let kits = workload
+                        .map(|w| kit_plan(ctx, &mut req, w, &a.opts))
+                        .transpose()?;
                     resolve_clone(&mut req, &a.opts)?;
                     (
                         plan::create(ctx, &mut req, &a.opts.deny_network, kits.as_ref())?,
@@ -133,6 +138,15 @@ pub fn run<R: Runner>(ctx: &mut Ctx<R>, a: &RunArgs) -> Result<i32> {
         eprintln!("warning: stopping sandbox {}: {e:#}", sb.name());
     }
     Ok(code)
+}
+
+/// The warning for kits given to `run` of a sandbox that already exists: kit flags, or a workload
+/// kit as the target.
+fn ignored_kits_warning(a: &RunArgs, name: &str) -> Option<String> {
+    let kit_target = a.targets.first().is_some_and(|t| agents::find(t).is_none());
+    (has_kit_flags(&a.opts) || kit_target).then(|| {
+        format!("warning: kits only apply when a sandbox is created; {name} already exists")
+    })
 }
 
 /// A bad setting value only skips the fetch: the stop or `--rm` and the agent's status still apply.
@@ -565,6 +579,91 @@ mod tests {
                 .iter()
                 .any(|l| l.contains("_builder") || l.starts_with("machine create"))
         );
+    }
+
+    #[test]
+    fn attaching_with_a_workload_kit_target_loads_nothing() {
+        for (kit, sandbox) in [
+            ("./kit", "kit-proj"),
+            ("localhost:1/acme/my-kit:1", "my-kit-proj"),
+        ] {
+            let mut t = test_env(&[
+                ("SMOLBENTO_KIT_ALLOW_LOCAL", "true"),
+                ("SMOLBENTO_KIT_SOURCES", "localhost:1/*"),
+            ]);
+            let dir = t.ctx.cwd.join("kit");
+            std::fs::create_dir(&dir).unwrap();
+            std::fs::write(
+                dir.join("k.yaml"),
+                "# syntax=docker/sandbox-kit:3\nschemaVersion: \"3\"\nkind: workload\n",
+            )
+            .unwrap();
+            let ws = t.ctx.cwd.display().to_string();
+            t.ctx.vm.runner().ok(
+                &["machine", "status"],
+                &machine_json(
+                    &format!("sbx-{sandbox}"),
+                    "running",
+                    &[
+                        ("sbx.name", sandbox),
+                        ("sbx.agent", "kit"),
+                        ("sbx.workspace", ws.as_str()),
+                        ("sbx.command", r#"["/bin/agent"]"#),
+                    ],
+                ),
+            );
+            t.ctx.vm.runner().interactive_exit(0);
+            // A build would ask smolvm for `_builder`; a pull of localhost:1 would fail.
+            sbt(&mut t.ctx, &["run", kit, "."]).unwrap();
+            let lines = t.ctx.vm.runner().call_lines();
+            assert!(
+                !lines
+                    .iter()
+                    .any(|l| l.contains("_builder") || l.starts_with("machine create")),
+                "{lines:?}"
+            );
+            assert_eq!(t.ctx.vm.runner().interactive_calls().len(), 1, "{kit}");
+        }
+    }
+
+    #[test]
+    fn kit_flags_on_an_existing_sandbox_are_warned_about() {
+        use clap::Parser;
+        let warning = |args: &[&str]| {
+            let cli = super::super::Cli::try_parse_from(
+                std::iter::once("sbt").chain(args.iter().copied()),
+            )
+            .unwrap();
+            let Some(super::super::Cmd::Run(a)) = cli.command else {
+                panic!("run");
+            };
+            super::ignored_kits_warning(&a, "s1")
+        };
+        let want = Some(
+            "warning: kits only apply when a sandbox is created; s1 already exists".to_string(),
+        );
+        assert_eq!(warning(&["run", "--name", "s1", "--kit", "./k"]), want);
+        assert_eq!(warning(&["run", "--name", "s1", "--kit-arg", "a=1"]), want);
+        assert_eq!(
+            warning(&["run", "--name", "s1", "--kit-args-file", "f"]),
+            want
+        );
+        assert_eq!(warning(&["run", "./k", "."]), want);
+        assert_eq!(warning(&["run", "--name", "s1"]), None);
+        assert_eq!(warning(&["run", "claude", "."]), None);
+    }
+
+    #[test]
+    fn existing_name_with_kit_flags_attaches_without_loading() {
+        let mut t = test_env(&[("SMOLBENTO_KIT_ALLOW_LOCAL", "true")]);
+        created(&t, "running");
+        t.ctx.vm.runner().interactive_exit(0);
+        sbt(
+            &mut t.ctx,
+            &["run", "--name", "claude-proj", "--kit", "./no-such-kit"],
+        )
+        .unwrap();
+        assert_eq!(t.ctx.vm.runner().interactive_calls().len(), 1);
     }
 
     #[test]

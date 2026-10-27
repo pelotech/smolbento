@@ -112,24 +112,31 @@ pub(crate) fn build_kit_request<R: Runner>(
     opts: &SandboxOpts,
     default_to_cwd: bool,
 ) -> Result<(CreateRequest, Option<Plan>)> {
-    let (req, workload) = kit_target(ctx, targets, opts, default_to_cwd)?;
-    let plan = workload.map(|w| kit_plan(ctx, w, opts)).transpose()?;
+    let (mut req, workload) = kit_target(ctx, targets, opts, default_to_cwd)?;
+    let plan = workload
+        .map(|w| kit_plan(ctx, &mut req, w, opts))
+        .transpose()?;
     Ok((req, plan))
 }
 
-/// The first half of `build_kit_request`: the request (so its name) and the workload, loading
-/// nothing but a workload kit given as the target. `None` when there are no kits.
+/// The workload `kit_target` found: the preset as a kit, or a workload kit not loaded yet.
+pub(crate) enum Workload {
+    Preset(Box<Kit>),
+    Ref(String),
+}
+
+/// The first half of `build_kit_request`: the request (so its name) and the workload. Loads
+/// nothing: a workload kit's name comes from `load::kit_name`. `None` when there are no kits.
 pub(crate) fn kit_target<R: Runner>(
     ctx: &Ctx<R>,
     targets: &[String],
     opts: &SandboxOpts,
     default_to_cwd: bool,
-) -> Result<(CreateRequest, Option<Kit>)> {
+) -> Result<(CreateRequest, Option<Workload>)> {
     let (target, paths) = targets.split_first().context("specify an agent")?;
-    let kit_args = !opts.kit_arg.is_empty() || !opts.kit_args_file.is_empty();
     let preset = agents::find(target);
     if preset.is_some() && opts.kit.is_empty() {
-        if kit_args {
+        if has_kit_args(opts) {
             bail!("--kit-arg needs a kit");
         }
         return Ok((
@@ -141,7 +148,7 @@ pub(crate) fn kit_target<R: Runner>(
         Some(agent) => {
             let req = build_request(ctx, target, paths, opts, default_to_cwd)?;
             let workload = load::preset_kit(agent, &req.image);
-            (req, Some(workload))
+            (req, Some(Workload::Preset(Box::new(workload))))
         }
         None => {
             if !looks_like_kit(ctx, target) {
@@ -150,30 +157,52 @@ pub(crate) fn kit_target<R: Runner>(
             if opts.template.is_some() {
                 bail!("-t can't be combined with a workload kit");
             }
-            let mut kit = load::load(ctx, target)?;
+            let name = load::kit_name(ctx, target)?;
+            let req = base_request(ctx, &name, paths, opts, default_to_cwd)?;
+            (req, Some(Workload::Ref(target.clone())))
+        }
+    })
+}
+
+/// Whether any kit flag was given (`run` warns that they don't apply to an existing sandbox).
+pub(crate) fn has_kit_flags(opts: &SandboxOpts) -> bool {
+    !opts.kit.is_empty() || has_kit_args(opts)
+}
+
+fn has_kit_args(opts: &SandboxOpts) -> bool {
+    !opts.kit_arg.is_empty() || !opts.kit_args_file.is_empty()
+}
+
+/// The second half of `build_kit_request`, for a sandbox about to be created: loads the workload
+/// kit (filling `req`'s image) and the `--kit` mixins, and resolves them with the kit args.
+pub(crate) fn kit_plan<R: Runner>(
+    ctx: &Ctx<R>,
+    req: &mut CreateRequest,
+    workload: Workload,
+    opts: &SandboxOpts,
+) -> Result<Plan> {
+    let workload = match workload {
+        Workload::Preset(kit) => *kit,
+        Workload::Ref(target) => {
+            let mut kit = load::load(ctx, &target)?;
             if kit.kind == Kind::Mixin {
                 bail!(
                     "{target} is a mixin; add it with --kit to an agent, e.g. sbt run shell --kit {target}"
                 );
             }
-            // An image with neither Entrypoint nor Cmd gets a shell; recorded in `sbx.command`
-            // so every attach launches the same thing.
+            // Any kit without a command gets the shell preset's, recorded in `sbx.command` so
+            // every attach launches the same thing.
             if kit.command.is_none() {
                 let shell = agents::find("shell").expect("the shell preset");
                 kit.command = Some(shell.command.iter().map(|s| s.to_string()).collect());
             }
-            let mut req = base_request(ctx, &kit.name, paths, opts, default_to_cwd)?;
             if let Content::Image(image) = &kit.content {
                 req.image = image.clone();
                 req.docker = ctx.settings.bool("docker.enabled")? && agents::is_docker_image(image);
             }
-            (req, Some(kit))
+            kit
         }
-    })
-}
-
-/// The second half of `build_kit_request`: kit args, the `--kit` mixins, and the resolved plan.
-pub(crate) fn kit_plan<R: Runner>(ctx: &Ctx<R>, workload: Kit, opts: &SandboxOpts) -> Result<Plan> {
+    };
     let args = ArgValues::parse(&opts.kit_args_file, &opts.kit_arg)?;
     let mixins = opts
         .kit
@@ -1524,6 +1553,36 @@ mod tests {
     }
 
     #[test]
+    fn a_local_kit_named_like_a_preset_is_still_a_kit() {
+        let mut t = kit_env();
+        let dir = tempfile::tempdir().unwrap();
+        let kit = dir.path().join("mine");
+        std::fs::create_dir(&kit).unwrap();
+        std::fs::write(
+            kit.join("spec.yaml"),
+            "schemaVersion: \"2\"\nkind: sandbox\nname: shell\nsandbox:\n  image: img:1\n",
+        )
+        .unwrap();
+        let fake = t.ctx.vm.runner();
+        fake.ok(
+            &["machine", "status"],
+            &json("sbx-shell-proj", "created", "shell-proj"),
+        );
+        fake.once_fail(&["machine", "status"], "NOT_FOUND", "vm not found");
+        sbt(&mut t.ctx, &["create", &kit.display().to_string(), "."]).unwrap();
+        let create = create_line(&t);
+        let path = kit.canonicalize().unwrap().display().to_string();
+        assert!(
+            create.contains(&format!("--label sbx.kits=[\"{path}\"]")),
+            "{create}"
+        );
+        assert!(
+            create.contains(r#"--label sbx.command=["bash","-l"]"#),
+            "{create}"
+        );
+    }
+
+    #[test]
     fn a_mixin_as_the_target_fails_before_smolvm() {
         let mut t = kit_env();
         let kit = fixture("tool-mixin");
@@ -1627,6 +1686,88 @@ mod tests {
             .to_string();
         assert!(err.contains("GH_TOKEN"), "{err}");
         assert!(sandbox_rules(&t, "shell-proj").is_empty());
+    }
+
+    /// A mixin binding the github secret to `env` for api.github.com with `inject`.
+    fn gh_kit(env: &str, inject: &str) -> tempfile::TempDir {
+        let dir = tempfile::tempdir().unwrap();
+        std::fs::write(
+            dir.path().join("spec.yaml"),
+            format!(
+                "schemaVersion: \"2\"\nkind: mixin\nname: gh\ncredentials:\n  - service: github\n    \
+                 apiKey:\n      name: {env}\n      inject:\n        - domain: api.github.com\n{inject}"
+            ),
+        )
+        .unwrap();
+        dir
+    }
+
+    #[test]
+    fn a_kit_format_must_match_the_user_secret_of_its_variable() {
+        // The user's github secret records no format and no header for GH_TOKEN.
+        for (inject, ok) in [
+            ("", true),
+            ("          scheme: bearer\n", false),
+            (
+                "          scheme: basic\n          username: x-access-token\n",
+                false,
+            ),
+        ] {
+            let t = kit_env();
+            global_github_secret(&t);
+            let dir = gh_kit("GH_TOKEN", inject);
+            let (mut req, plan) = kit_request(&t, &["create", "shell", "--kit"], dir.path());
+            let r = crate::cli::plan::prepare_create(&t.ctx, &mut req, &[], plan.as_ref());
+            match ok {
+                true => {
+                    r.unwrap();
+                    assert!(req.credential_formats.is_empty());
+                }
+                false => {
+                    let err = r.unwrap_err().to_string();
+                    assert_eq!(
+                        err,
+                        "kit gh: the github credential (GH_TOKEN) is injected differently by your \
+                         github secret"
+                    );
+                }
+            }
+        }
+    }
+
+    #[test]
+    fn two_kits_with_the_same_format_merge_and_differing_ones_fail() {
+        // KIT_TOKEN isn't one of the github secret's own variables, so only the kits bind it.
+        let bearer = "          scheme: bearer\n";
+        let basic = "          scheme: basic\n          username: u\n";
+        for (second, ok) in [(bearer, true), (basic, false)] {
+            let t = kit_env();
+            global_github_secret(&t);
+            let dir = gh_kit("KIT_TOKEN", bearer);
+            let other = gh_kit("KIT_TOKEN", second);
+            let spec = other.path().join("spec.yaml");
+            let text = std::fs::read_to_string(&spec)
+                .unwrap()
+                .replace("name: gh", "name: gh2");
+            std::fs::write(&spec, text).unwrap();
+            let other = other.path().display().to_string();
+            let (mut req, plan) = kit_request(
+                &t,
+                &["create", "shell", "--kit", other.as_str(), "--kit"],
+                dir.path(),
+            );
+            let r = crate::cli::plan::prepare_create(&t.ctx, &mut req, &[], plan.as_ref());
+            assert_eq!(r.is_ok(), ok, "{second}: {r:?}");
+            if ok {
+                let kit: Vec<_> = req
+                    .credentials
+                    .iter()
+                    .filter(|c| c.env_var == "KIT_TOKEN")
+                    .collect();
+                assert_eq!(kit.len(), 1, "{:?}", req.credentials);
+                assert_eq!(kit[0].set_header.as_deref(), Some("authorization"));
+            }
+        }
     }
 
     /// `build_kit_request` for `args` followed by `kit`.

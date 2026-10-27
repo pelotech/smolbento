@@ -8,32 +8,77 @@ use anyhow::{Context, Result, bail};
 use crate::agents::Agent;
 use crate::cli::Ctx;
 use crate::kits::model::{Content, Kind, Kit, Source};
-use crate::kits::{builder, registry, smolfile, trust, v2};
+use crate::kits::{builder, registry, smolfile, trust, v2, v3};
 use crate::smolvm::Runner;
 
 /// Loads the kit REF names. `trust::check` runs on the source before anything is read, built
 /// or pulled. Presets (`agents::find`) are the caller's business, so `claude` never lands here.
 pub fn load<R: Runner>(ctx: &Ctx<R>, reference: &str) -> Result<Kit> {
+    match locate(ctx, reference)? {
+        Located::Registry(r) => registry::pull(&r, &ctx.paths.kit_cache()),
+        Located::V2(dir) => {
+            let spec = dir.join("spec.yaml");
+            let yaml =
+                fs::read_to_string(&spec).with_context(|| format!("reading {}", spec.display()))?;
+            let mut kit = v2::parse(&yaml, &dir)?;
+            kit.source = Source::LocalV2(dir);
+            Ok(kit)
+        }
+        Located::V3(dir) => load_v3(ctx, &dir),
+        Located::Smolfile(path) => smolfile::load(&path),
+    }
+}
+
+/// The name `load` gives the kit REF names, without pulling or building it: trust is checked,
+/// then the name comes from the source (or a v2 `spec.yaml`'s `name`).
+pub fn kit_name<R: Runner>(ctx: &Ctx<R>, reference: &str) -> Result<String> {
+    match locate(ctx, reference)? {
+        Located::Registry(r) => v3::name_from_source(&Source::Registry(r)),
+        Located::V2(dir) => {
+            let spec = dir.join("spec.yaml");
+            let yaml =
+                fs::read_to_string(&spec).with_context(|| format!("reading {}", spec.display()))?;
+            v2::name_in(&yaml, &dir)
+        }
+        Located::V3(dir) => v3::name_from_source(&Source::LocalV3(dir)),
+        Located::Smolfile(path) => v3::name_from_source(&Source::Smolfile(path)),
+    }
+}
+
+/// Where a kit REF points, after its trust check.
+enum Located {
+    Registry(String),
+    V2(PathBuf),
+    /// The kit directory (a descriptor file's parent).
+    V3(PathBuf),
+    Smolfile(PathBuf),
+}
+
+fn locate<R: Runner>(ctx: &Ctx<R>, reference: &str) -> Result<Located> {
     let Some(path) = local_path(ctx, reference)? else {
         trust::check(&Source::Registry(reference.to_string()), &ctx.settings)?;
-        return registry::pull(reference, &ctx.paths.kit_cache());
+        return Ok(Located::Registry(reference.to_string()));
     };
     // The local check is the same for every local kind, so it runs before anything is read.
     trust::check(&Source::LocalV3(path.clone()), &ctx.settings)?;
     if path.is_dir() {
-        return load_dir(ctx, &path);
+        return Ok(if path.join("spec.yaml").is_file() {
+            Located::V2(path)
+        } else {
+            Located::V3(path)
+        });
     }
     let name = path
         .file_name()
         .and_then(|n| n.to_str())
         .unwrap_or_default();
     if name == "Smolfile" || name.ends_with(".smolfile") {
-        return smolfile::load(&path);
+        return Ok(Located::Smolfile(path));
     }
     if is_descriptor(&path) {
         // buildx needs the whole directory as its context.
         let dir = path.parent().context("kit file has no parent directory")?;
-        return load_v3(ctx, dir);
+        return Ok(Located::V3(dir.to_path_buf()));
     }
     bail!(
         "{} isn't a kit: expected a directory, a Smolfile or a kit descriptor",
@@ -59,18 +104,6 @@ fn local_path<R: Runner>(ctx: &Ctx<R>, reference: &str) -> Result<Option<PathBuf
         Ok(p) => Ok(Some(p)),
         Err(_) => bail!("kit path {reference} doesn't exist"),
     }
-}
-
-fn load_dir<R: Runner>(ctx: &Ctx<R>, dir: &Path) -> Result<Kit> {
-    let spec = dir.join("spec.yaml");
-    if spec.is_file() {
-        let yaml =
-            fs::read_to_string(&spec).with_context(|| format!("reading {}", spec.display()))?;
-        let mut kit = v2::parse(&yaml, dir)?;
-        kit.source = Source::LocalV2(dir.to_path_buf());
-        return Ok(kit);
-    }
-    load_v3(ctx, dir)
 }
 
 fn load_v3<R: Runner>(ctx: &Ctx<R>, dir: &Path) -> Result<Kit> {
@@ -116,7 +149,7 @@ fn is_descriptor(path: &Path) -> bool {
 pub fn preset_kit(agent: &Agent, image: &str) -> Kit {
     Kit {
         name: agent.name.to_string(),
-        source: Source::Registry(image.to_string()),
+        source: Source::Preset(image.to_string()),
         digest: None,
         kind: Kind::Workload,
         provides: vec![],
@@ -258,6 +291,11 @@ mod tests {
         let k = load(&t.ctx, "./kit/m.yaml").unwrap();
         // The source is the parent directory, the build context buildx was given.
         assert_eq!(k.source, Source::LocalV3(dir.canonicalize().unwrap()));
+        // `kit_name` agrees without building, for the file and for its directory.
+        let builds = fake.call_lines().len();
+        assert_eq!(kit_name(&t.ctx, "./kit/m.yaml").unwrap(), k.name);
+        assert_eq!(kit_name(&t.ctx, "./kit").unwrap(), k.name);
+        assert_eq!(fake.call_lines().len(), builds);
         let lines = fake.call_lines();
         assert!(
             lines.iter().any(|l| l.starts_with("machine cp /")),
@@ -282,6 +320,57 @@ mod tests {
     }
 
     #[test]
+    fn kit_name_agrees_with_load_for_local_kits() {
+        let t = allow_local();
+        let named = t.ctx.cwd.join("named-dir");
+        fs::create_dir(&named).unwrap();
+        fs::write(
+            named.join("spec.yaml"),
+            "schemaVersion: \"2\"\nkind: mixin\nname: given\n",
+        )
+        .unwrap();
+        let unnamed = t.ctx.cwd.join("unnamed-dir");
+        fs::create_dir(&unnamed).unwrap();
+        fs::write(
+            unnamed.join("spec.yaml"),
+            "schemaVersion: \"2\"\nkind: mixin\n",
+        )
+        .unwrap();
+        let sf = t.ctx.cwd.join("sf");
+        fs::create_dir(&sf).unwrap();
+        fs::write(sf.join("Smolfile"), "image = \"alpine\"\n").unwrap();
+        fs::write(t.ctx.cwd.join("dev.smolfile"), "image = \"alpine\"\n").unwrap();
+        for (r, want) in [
+            ("./named-dir", "given"),
+            ("./unnamed-dir", "unnamed-dir"),
+            ("./sf/Smolfile", "sf"),
+            ("./dev.smolfile", "dev"),
+        ] {
+            assert_eq!(load(&t.ctx, r).unwrap().name, want, "{r}");
+            assert_eq!(kit_name(&t.ctx, r).unwrap(), want, "{r}");
+        }
+        assert!(t.ctx.vm.runner().call_lines().is_empty());
+    }
+
+    #[test]
+    fn kit_name_agrees_with_a_pulled_registry_kit() {
+        use crate::kits::registry::{fixtures::oci_layout, read_layout};
+        let t = test_env(&[]);
+        let r = "docker.io/acme/my-kit:1";
+        let out = tempfile::tempdir().unwrap();
+        oci_layout(
+            out.path(),
+            Some(r#"{"schemaVersion":"3","kind":"workload","name":"other"}"#),
+            &[],
+            "{}",
+        );
+        // `pull` reads its layout with the ref as the source.
+        let pulled = read_layout(out.path(), Source::Registry(r.into())).unwrap();
+        assert_eq!(kit_name(&t.ctx, r).unwrap(), pulled.name);
+        assert_eq!(pulled.name, "my-kit");
+    }
+
+    #[test]
     fn a_disallowed_registry_ref_is_refused_before_pulling() {
         let t = test_env(&[("SMOLBENTO_KIT_SOURCES", "ghcr.io/ok/*")]);
         let e = load(&t.ctx, "evil.example/x/y:1").unwrap_err();
@@ -295,7 +384,7 @@ mod tests {
         assert_eq!(k.name, "claude");
         assert_eq!(k.kind, Kind::Workload);
         assert_eq!(k.content, Content::Image("img:1".into()));
-        assert_eq!(k.source, Source::Registry("img:1".into()));
+        assert_eq!(k.source, Source::Preset("img:1".into()));
         assert_eq!(
             k.command.unwrap(),
             a.command.iter().map(|s| s.to_string()).collect::<Vec<_>>()

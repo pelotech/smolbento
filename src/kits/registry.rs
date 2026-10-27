@@ -381,7 +381,7 @@ fn build_layout(cache: &Path, manifest: &[u8], digest: &str, reference: &str) ->
 /// command from the image config. Also used for local builds, with their own `source`.
 pub fn read_layout(dir: &Path, source: Source) -> Result<Kit> {
     let what = match &source {
-        Source::Registry(r) => r.clone(),
+        Source::Registry(r) | Source::Preset(r) => r.clone(),
         Source::LocalV3(p) | Source::LocalV2(p) | Source::Smolfile(p) => p.display().to_string(),
     };
     let read = |p: PathBuf| fs::read(&p).with_context(|| format!("reading {}", p.display()));
