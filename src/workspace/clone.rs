@@ -128,6 +128,11 @@ fn remote_owner(repo: &Path, sandbox: &str) -> Option<bool> {
     Some(pack == upload_pack_cmd(sandbox))
 }
 
+/// Whether the repo already has smolbento's `sandbox-<name>` remote.
+pub fn has_remote(repo: &Path, sandbox: &str) -> bool {
+    remote_owner(repo, sandbox) == Some(true)
+}
+
 pub fn check_remote_free(repo: &Path, sandbox: &str) -> Result<()> {
     if remote_owner(repo, sandbox) == Some(false) {
         bail!(
@@ -336,6 +341,7 @@ mod tests {
             "+refs/heads/*:refs/remotes/sandbox-box/*"
         );
         // Ours: a re-create may reuse it.
+        assert!(has_remote(&root, "box"));
         check_remote_free(&root, "box").unwrap();
         remove_remote(&root, "box");
         assert_eq!(get("remote.sandbox-box.url"), "");
@@ -348,6 +354,7 @@ mod tests {
         assert!(err.contains("sandbox-box"), "{err}");
         remove_remote(&root, "box");
         assert_eq!(get("remote.sandbox-box.url"), "https://example.com/x.git");
+        assert!(!has_remote(&root, "box"));
         // A missing repo is silent.
         remove_remote(Path::new("/nonexistent/repo"), "box");
     }

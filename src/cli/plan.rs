@@ -203,6 +203,10 @@ pub fn create<R: Runner>(
     if let Some(repo) = &repo {
         clone::check_remote_free(repo, &req.name)?;
     }
+    // A remote left by an earlier sandbox of this name (`run --rm`) keeps its fetched branches.
+    let had_remote = repo
+        .as_ref()
+        .is_some_and(|r| clone::has_remote(r, &req.name));
     let mut added = Vec::new();
     let result = (|| {
         added = prepare_create(ctx, req, deny_network)?;
@@ -212,8 +216,9 @@ pub fn create<R: Runner>(
         let plan = start_plan(ctx, &sandbox::create::meta(req))?;
         sandbox::create(&ctx.vm, req, &plan)
     })();
+    let added_remote = repo.as_ref().filter(|_| !had_remote);
     if result.is_err()
-        && (!added.is_empty() || repo.is_some())
+        && (!added.is_empty() || added_remote.is_some())
         && matches!(sandbox::find(&ctx.vm, &req.name), Ok(None))
     {
         // Best effort: the create error is what matters.
@@ -225,7 +230,7 @@ pub fn create<R: Runner>(
             }
             let _ = policy.save(&ctx.paths);
         }
-        if let Some(repo) = &repo {
+        if let Some(repo) = added_remote {
             clone::remove_remote(repo, &req.name);
         }
     }

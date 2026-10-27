@@ -378,6 +378,23 @@ mod tests {
     }
 
     #[test]
+    fn a_failed_clone_create_keeps_a_remote_it_didnt_add() {
+        // Left by an earlier `run --rm` of the same name, with the agent's fetched commits.
+        let mut t = test_env(&[]);
+        let (_d, root) = temp_repo();
+        crate::workspace::clone::add_remote(&root, "claude-repo").unwrap();
+        t.ctx.cwd = root.clone();
+        let fake = t.ctx.vm.runner();
+        fake.fail(&["machine", "status"], "NOT_FOUND", "vm not found");
+        fake.fail(&["machine", "create"], "CREATE_FAILED", "no space left");
+        assert!(sbt(&mut t.ctx, &["create", "--clone", "claude", "."]).is_err());
+        assert_eq!(
+            git_config(&root, "remote.sandbox-claude-repo.url"),
+            "file:///sbt/claude-repo"
+        );
+    }
+
+    #[test]
     fn create_builds_the_machine_from_the_preset() {
         let mut t = test_env(&[]);
         let fake = t.ctx.vm.runner();
