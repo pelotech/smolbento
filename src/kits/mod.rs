@@ -1,5 +1,6 @@
 //! sbx kits: a capability model plus parsers for the kit descriptor formats.
 
+pub mod args;
 pub mod model;
 pub mod smolfile;
 pub mod v2;
