@@ -17,7 +17,10 @@ pub const STARTUP_LOG: &str = "/var/log/sbx-kit-startup.log";
 pub const STARTUP_RUNNER: &str = r#"#!/bin/sh
 # Written by smolbento: runs the kits' startup hooks, in order, on every start.
 [ $# -gt 0 ] || set -- /etc/smolbento/startup.d/*.sh
-exec >>/var/log/sbx-kit-startup.log 2>&1 </dev/null
+# Some images have no /var/log.
+log=/var/log/sbx-kit-startup.log
+mkdir -p "${log%/*}"
+exec >>"$log" 2>&1 </dev/null
 echo "=== dispatcher run $(date -u +%Y-%m-%dT%H:%M:%SZ) ==="
 cd /
 for f; do
@@ -670,6 +673,18 @@ mod tests {
         let svc = log.find(&format!("ok {dir}/01-svc.sh hook 1\n"));
         let use_ = log.find(&format!("ok {dir}/02-use.sh hook 1\n"));
         assert!(svc.is_some() && use_.is_some() && svc < use_, "{log}");
+    }
+
+    /// An image without `/var/log` still runs its hooks.
+    #[test]
+    fn the_runner_creates_its_log_directory() {
+        let h = shell("echo hi");
+        let s = Startup::new(&[("01-k.sh", "k", vec![&h])]);
+        let log = s.path("var/log/sbx-kit-startup.log");
+        let runner = s.runner.replace(&s.path("log"), &log);
+        let status = Command::new("sh").arg("-c").arg(&runner).status().unwrap();
+        assert!(status.success());
+        assert!(std::fs::read_to_string(&log).unwrap().contains("hi\n"));
     }
 
     #[test]
