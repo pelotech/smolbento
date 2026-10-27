@@ -27,7 +27,7 @@ use serde_json::{Value, json};
 use sha2::{Digest, Sha256};
 use tokio::io::AsyncWrite;
 
-use crate::kits::model::{Content, Kit, Source};
+use crate::kits::model::{Content, ImageConfig, Kit, Source};
 use crate::kits::{trust, v3};
 
 const DESCRIPTOR_ANNOTATION: &str = "vnd.docker.sandbox.kit.descriptor";
@@ -425,7 +425,7 @@ fn build_layout(cache: &Path, manifest: &[u8], digest: &str, reference: &str) ->
 }
 
 /// Reads a kit from an OCI layout directory: the descriptor from the manifest annotation, the
-/// command from the image config. Also used for local builds, with their own `source`.
+/// command, user and working directory from the image config. Also used for local builds, with their own `source`.
 pub fn read_layout(dir: &Path, source: Source) -> Result<Kit> {
     let what = match &source {
         Source::Registry(r) | Source::Preset(r) => r.clone(),
@@ -465,6 +465,11 @@ pub fn read_layout(dir: &Path, source: Source) -> Result<Kit> {
     let mut command = words("Entrypoint");
     command.extend(words("Cmd"));
     kit.command = (!command.is_empty()).then_some(command);
+    let text = |k: &str| config["config"][k].as_str().unwrap_or_default().to_string();
+    kit.config = Some(ImageConfig {
+        user: text("User"),
+        workdir: text("WorkingDir"),
+    });
     kit.digest = Some(digest);
     kit.content = Content::Oci(dir.to_path_buf());
     Ok(kit)
@@ -606,7 +611,7 @@ pub(crate) mod fixtures {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::kits::model::Kind;
+    use crate::kits::model::{ImageConfig, Kind};
 
     const DESC: &str = r#"{"schemaVersion":"3","kind":"workload","provides":["shell"]}"#;
 
@@ -644,6 +649,26 @@ mod tests {
             kit.command,
             Some(vec!["/bin/agent".into(), "--x".into(), "run".into()])
         );
+    }
+
+    #[test]
+    fn user_and_workdir_come_from_the_image_config() {
+        let d = tempfile::tempdir().unwrap();
+        let cfg = r#"{"config":{"Cmd":["sh"],"User":"somebody","WorkingDir":"/x"}}"#;
+        fixtures::oci_layout(d.path(), Some(DESC), &[], cfg);
+        let kit = read_layout(d.path(), src()).unwrap();
+        assert_eq!(
+            kit.config,
+            Some(ImageConfig {
+                user: "somebody".into(),
+                workdir: "/x".into()
+            })
+        );
+        // Unset fields are empty: root in `/`.
+        let d = tempfile::tempdir().unwrap();
+        fixtures::oci_layout(d.path(), Some(DESC), &[], "{}");
+        let kit = read_layout(d.path(), src()).unwrap();
+        assert_eq!(kit.config, Some(ImageConfig::default()));
     }
 
     #[test]

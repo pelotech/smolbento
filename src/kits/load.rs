@@ -157,6 +157,22 @@ fn is_descriptor(path: &Path) -> bool {
     fs::read(path).is_ok_and(|b| builder::starts_with_syntax(&b))
 }
 
+/// Refuses a workload kit with nothing to launch, with sbx's error: the image config (v3) or
+/// `sandbox.entrypoint`/`command` (v2) must give the command. A Smolfile is smolvm's, so its
+/// sandbox keeps the `shell` preset's command.
+pub fn check_launchable(kit: &Kit) -> Result<()> {
+    if kit.kind == Kind::Workload
+        && kit.command.is_none()
+        && !matches!(kit.source, Source::Smolfile(_))
+    {
+        bail!(
+            "workload kit image declares no ENTRYPOINT or CMD; the image config is the runtime \
+             contract"
+        );
+    }
+    Ok(())
+}
+
 /// A preset as a workload kit: the image and command, no capabilities.
 pub fn preset_kit(agent: &Agent, image: &str) -> Kit {
     Kit {
@@ -171,6 +187,7 @@ pub fn preset_kit(agent: &Agent, image: &str) -> Kit {
         env: vec![],
         content: Content::Image(image.to_string()),
         command: Some(agent.command.iter().map(|s| s.to_string()).collect()),
+        config: None,
     }
 }
 

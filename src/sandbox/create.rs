@@ -43,6 +43,8 @@ pub struct CreateRequest {
     pub kits: Vec<String>,
     /// The workload kit's launch argv (the `sbx.command` label).
     pub command: Option<Vec<String>>,
+    /// A v3 workload kit's image user (the `sbx.user` label).
+    pub user: Option<String>,
     /// Env vars of install-only credentials (the `sbx.credential-install` label).
     pub credential_install: Vec<String>,
     /// Kit credential value formats by env var (`sbx.credential-format.<ENV>` labels).
@@ -87,6 +89,7 @@ pub fn meta(req: &CreateRequest) -> Meta {
         fork_of: None,
         kits: req.kits.clone(),
         command: req.command.clone(),
+        user: req.user.clone(),
         credential_install: req.credential_install.clone(),
         long_running: req.long_running,
         credential_formats: req.credential_formats.clone(),

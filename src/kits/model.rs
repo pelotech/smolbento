@@ -50,6 +50,17 @@ pub struct Kit {
     pub content: Content,
     /// Image Entrypoint+Cmd (sbx@1), filled by registry/compose.
     pub command: Option<Vec<String>>,
+    /// The image config's `User` and `WorkingDir`, for a kit read from an OCI layout (v3).
+    pub config: Option<ImageConfig>,
+}
+
+/// The runtime fields of a kit image's config that sbx honours besides its command.
+#[derive(Debug, Clone, Default, PartialEq, Eq)]
+pub struct ImageConfig {
+    /// `User`, as written (`name`, `uid`, `name:group`); empty for root.
+    pub user: String,
+    /// `WorkingDir`; empty for `/`.
+    pub workdir: String,
 }
 
 #[derive(Debug, Clone, Default, PartialEq, Eq)]

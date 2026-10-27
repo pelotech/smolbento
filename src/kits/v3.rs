@@ -120,6 +120,7 @@ fn from_value(v: Value, source: Source) -> Result<Kit> {
         env: vec![],
         content: Content::None,
         command: None,
+        config: None,
     })
 }
 

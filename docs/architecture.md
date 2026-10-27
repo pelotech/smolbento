@@ -44,7 +44,8 @@ need to change network policy and ports on a running sandbox.
    on an overlay. Sandboxes created before kits (`sbx.docker=true`, no `sbx.kits`) still get
    `dockerd` started directly.
 
-**Run** creates and starts as needed, then execs the agent as `agent` in the workspace. While
+**Run** creates and starts as needed, then execs the agent as `agent` in the workspace (a v3
+workload kit's agent runs as its image user, through `/bin/bash`). While
 attached, it keeps a session file (`~/.cache/smolbento/sessions/<name>/<pid>`). When it exits it
 removes that file and stops the sandbox if no other live session remains, unless the sandbox was
 started with `run -d`.

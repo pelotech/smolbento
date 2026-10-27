@@ -14,6 +14,8 @@ pub const CLONE_TOP: &str = "sbx.clone-top";
 pub const FORK_OF: &str = "sbx.fork-of";
 pub const KITS: &str = "sbx.kits";
 pub const COMMAND: &str = "sbx.command";
+/// The image config's `User` a v3 workload kit's agent runs as (`0` for root).
+pub const USER: &str = "sbx.user";
 pub const CREDENTIAL_INSTALL: &str = "sbx.credential-install";
 pub const LONG_RUNNING: &str = "sbx.long-running";
 /// Prefix of `sbx.credential-format.<ENV>`: how a kit credential's value is formatted.
@@ -94,6 +96,8 @@ pub struct Meta {
     pub kits: Vec<String>,
     /// The workload kit's launch argv, when it replaced the agent preset's.
     pub command: Option<Vec<String>>,
+    /// A v3 workload kit's image user: the agent and `exec` run as it, the agent under `/bin/bash`.
+    pub user: Option<String>,
     /// Env vars of install-only credentials, left out of every start after the first.
     pub credential_install: Vec<String>,
     /// Don't stop the sandbox when its last session ends (`long-running@1`).
@@ -153,6 +157,9 @@ impl Meta {
                 serde_json::to_string(c).expect("strings serialize"),
             );
         }
+        if let Some(u) = &self.user {
+            labels.insert(USER.to_string(), u.clone());
+        }
         if !self.credential_install.is_empty() {
             labels.insert(
                 CREDENTIAL_INSTALL.to_string(),
@@ -201,6 +208,7 @@ impl Meta {
             command: labels
                 .get(COMMAND)
                 .and_then(|j| serde_json::from_str(j).ok()),
+            user: labels.get(USER).cloned(),
             credential_install: list(labels.get(CREDENTIAL_INSTALL)),
             long_running: labels.get(LONG_RUNNING).is_some_and(|v| v == "true"),
             credential_formats: labels
@@ -362,6 +370,7 @@ mod tests {
         let m = Meta {
             kits: vec!["acme/a:1@sha256:ab".into(), "/k/b".into()],
             command: Some(vec!["wl".into(), "--a b".into()]),
+            user: Some("somebody".into()),
             credential_install: vec!["GH_TOKEN".into(), "NPM_TOKEN".into()],
             long_running: true,
             credential_formats: BTreeMap::from([
@@ -377,6 +386,7 @@ mod tests {
         let labels = m.to_labels();
         assert_eq!(labels["sbx.kits"], r#"["acme/a:1@sha256:ab","/k/b"]"#);
         assert_eq!(labels["sbx.command"], r#"["wl","--a b"]"#);
+        assert_eq!(labels["sbx.user"], "somebody");
         assert_eq!(labels["sbx.credential-install"], "GH_TOKEN,NPM_TOKEN");
         assert_eq!(labels["sbx.long-running"], "true");
         assert_eq!(

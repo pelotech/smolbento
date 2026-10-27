@@ -197,8 +197,9 @@ pub(crate) fn kit_plan<R: Runner>(
                     "{target} is a mixin; add it with --kit to an agent, e.g. sbt run shell --kit {target}"
                 );
             }
-            // Any kit without a command gets the shell preset's, recorded in `sbx.command` so
-            // every attach launches the same thing.
+            load::check_launchable(&kit)?;
+            // A Smolfile kit gets the shell preset's command, recorded in `sbx.command` so every
+            // attach launches the same thing.
             if kit.command.is_none() {
                 let shell = agents::find("shell").expect("the shell preset");
                 kit.command = Some(shell.command.iter().map(|s| s.to_string()).collect());
@@ -1608,7 +1609,7 @@ mod tests {
     }
 
     #[test]
-    fn a_workload_kit_without_a_command_launches_a_shell() {
+    fn a_workload_kit_without_a_command_is_refused() {
         let mut t = kit_env();
         let dir = tempfile::tempdir().unwrap();
         let kit = dir.path().join("bare");
@@ -1619,18 +1620,20 @@ mod tests {
         )
         .unwrap();
         let fake = t.ctx.vm.runner();
-        fake.ok(
-            &["machine", "status"],
-            &json("sbx-bare-proj", "created", "bare-proj"),
+        fake.fail(&["machine", "status"], "NOT_FOUND", "vm not found");
+        let err = sbt(&mut t.ctx, &["create", &kit.display().to_string(), "."]).unwrap_err();
+        assert_eq!(
+            format!("{err:#}"),
+            "workload kit image declares no ENTRYPOINT or CMD; the image config is the runtime \
+             contract"
         );
-        fake.once_fail(&["machine", "status"], "NOT_FOUND", "vm not found");
-        sbt(&mut t.ctx, &["create", &kit.display().to_string(), "."]).unwrap();
-        let shell = crate::agents::find("shell").unwrap().command;
-        let want = serde_json::to_string(shell).unwrap();
-        let create = create_line(&t);
         assert!(
-            create.contains(&format!("--label sbx.command={want}")),
-            "{create}"
+            !t.ctx
+                .vm
+                .runner()
+                .call_lines()
+                .iter()
+                .any(|l| l.starts_with("machine create")),
         );
     }
 
@@ -1642,7 +1645,8 @@ mod tests {
         std::fs::create_dir(&kit).unwrap();
         std::fs::write(
             kit.join("spec.yaml"),
-            "schemaVersion: \"2\"\nkind: sandbox\nname: shell\nsandbox:\n  image: img:1\n",
+            "schemaVersion: \"2\"\nkind: sandbox\nname: shell\nsandbox:\n  image: img:1\n  \
+             entrypoint: [/bin/agent]\n",
         )
         .unwrap();
         let fake = t.ctx.vm.runner();
@@ -1659,7 +1663,7 @@ mod tests {
             "{create}"
         );
         assert!(
-            create.contains(r#"--label sbx.command=["bash","-l"]"#),
+            create.contains(r#"--label sbx.command=["/bin/agent"]"#),
             "{create}"
         );
     }

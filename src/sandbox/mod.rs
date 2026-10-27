@@ -36,6 +36,21 @@ pub fn identity_cmd(uid: u32) -> String {
     )
 }
 
+/// `identity_cmd` for a v3 workload's image user (`sbx.user`: `name`, `uid` or either with
+/// `:group`), resolved against the guest's `/etc/passwd`. Root keeps uid 0. Skipped, as for an
+/// image without `agent`, when the user has no passwd entry or the image has no `usermod`.
+pub fn image_user_cmd(user: &str, uid: u32) -> String {
+    let name = user.split(':').next().unwrap_or(user);
+    format!(
+        "n={}; case \"$n\" in *[!0-9]*) ;; \
+         *) n=$(awk -F: -v u=\"$n\" '$3 == u {{ print $1; exit }}' /etc/passwd);; esac; \
+         [ -n \"$n\" ] && u=$(id -u \"$n\" 2>/dev/null) || exit 0; \
+         [ \"$u\" = 0 ] || [ \"$u\" = {uid} ] && exit 0; \
+         command -v usermod >/dev/null 2>&1 || exit 0; usermod -o -u {uid} \"$n\"",
+        sh_quote(name)
+    )
+}
+
 pub fn host_uid() -> u32 {
     // SAFETY: getuid has no preconditions and cannot fail.
     unsafe { libc::getuid() }
@@ -230,7 +245,7 @@ pub fn start<R: Runner>(vm: &Smolvm<R>, sb: &Sandbox, plan: &StartPlan) -> Resul
     Ok(())
 }
 
-/// What follows `machine start`: the agent user's uid, dockerd for a pre-4a sandbox, the clone,
+/// What follows `machine start`: the agent user's uid (and a v3 workload's image user's), dockerd for a pre-4a sandbox, the clone,
 /// then the kits' startup runner (a no-op without kits; deferred during a kit first start).
 fn setup<R: Runner>(vm: &Smolvm<R>, sb: &Sandbox, plan: &StartPlan) -> Result<()> {
     vm.exec_captured(&ExecSpec {
@@ -240,6 +255,15 @@ fn setup<R: Runner>(vm: &Smolvm<R>, sb: &Sandbox, plan: &StartPlan) -> Result<()
         ..Default::default()
     })
     .context("matching the sandbox's agent user to your host uid")?;
+    if let Some(user) = &sb.meta.user {
+        vm.exec_captured(&ExecSpec {
+            name: sb.machine.clone(),
+            user: Some("root".into()),
+            cmd: vec!["sh".into(), "-c".into(), image_user_cmd(user, plan.uid)],
+            ..Default::default()
+        })
+        .context("matching the sandbox's image user to your host uid")?;
+    }
     // The pre-4a path: a docker sandbox created before the docker kit has no startup runner.
     // With kits, the docker kit's startup hook starts dockerd (no second start here).
     if sb.meta.docker && sb.meta.kits.is_empty() {
@@ -711,6 +735,41 @@ mod tests {
             vec![vec![("TOK".to_string(), "secret".to_string())]]
         );
         assert_eq!(vm.runner().removed(), vec![vec!["GONE".to_string()]]);
+    }
+
+    #[test]
+    fn a_v3_workloads_image_user_gets_the_host_uid_after_agent() {
+        let fake = FakeRunner::new();
+        fake.ok(
+            &["machine", "status"],
+            &STATUS.replace("\"state\": \"running\"", "\"state\": \"stopped\""),
+        );
+        let vm = Smolvm::new(fake);
+        let mut sb = get(&vm, "claude-myrepo").unwrap();
+        sb.meta.user = Some("somebody:staff".into());
+        ensure_running(&vm, &mut sb, || Ok(plan())).unwrap();
+        let lines = vm.runner().call_lines();
+        assert!(lines[3].ends_with("usermod -o -u 501 agent"), "{lines:#?}");
+        assert_eq!(
+            lines[4],
+            format!(
+                "machine exec --name sbx-claude-myrepo -u root -- sh -c {}",
+                image_user_cmd("somebody:staff", 501)
+            )
+        );
+        assert_eq!(lines.len(), 7, "{lines:#?}");
+    }
+
+    #[test]
+    fn image_user_cmd_maps_a_named_or_numeric_non_root_user() {
+        assert_eq!(
+            image_user_cmd("somebody:staff", 501),
+            "n='somebody'; case \"$n\" in *[!0-9]*) ;; \
+             *) n=$(awk -F: -v u=\"$n\" '$3 == u { print $1; exit }' /etc/passwd);; esac; \
+             [ -n \"$n\" ] && u=$(id -u \"$n\" 2>/dev/null) || exit 0; \
+             [ \"$u\" = 0 ] || [ \"$u\" = 501 ] && exit 0; \
+             command -v usermod >/dev/null 2>&1 || exit 0; usermod -o -u 501 \"$n\""
+        );
     }
 
     #[test]

@@ -21,7 +21,11 @@ pub fn exec<R: Runner>(ctx: &mut Ctx<R>, a: &ExecArgs) -> Result<i32> {
     let user = if a.privileged {
         "root".to_string()
     } else {
-        a.user.clone().unwrap_or_else(|| "agent".into())
+        // A v3 workload's image user, as sbx; else `agent`.
+        a.user
+            .clone()
+            .or_else(|| sb.meta.user.clone())
+            .unwrap_or_else(|| "agent".into())
     };
     let spec = ExecSpec {
         name: sb.machine.clone(),
@@ -103,6 +107,40 @@ mod tests {
         assert_eq!(
             t.ctx.vm.runner().interactive_calls()[0].join(" "),
             "machine exec --name sbx-claude-proj -u agent -w /w/proj -i -t -- ls -la"
+        );
+    }
+
+    #[test]
+    fn exec_defaults_to_a_v3_workloads_image_user() {
+        let mut t = test_env(&[]);
+        t.ctx.vm.runner().ok(
+            &["machine", "status"],
+            &machine_json(
+                "sbx-tool-proj",
+                "running",
+                &[
+                    ("sbx.name", "tool-proj"),
+                    ("sbx.workspace", "/w/proj"),
+                    ("sbx.user", "somebody"),
+                ],
+            ),
+        );
+        sbt(&mut t.ctx, &["exec", "tool-proj", "id"]).unwrap();
+        sbt(&mut t.ctx, &["exec", "-u", "root", "tool-proj", "id"]).unwrap();
+        let calls: Vec<String> = t
+            .ctx
+            .vm
+            .runner()
+            .interactive_calls()
+            .iter()
+            .map(|c| c.join(" "))
+            .collect();
+        assert_eq!(
+            calls,
+            [
+                "machine exec --name sbx-tool-proj -u somebody -w /w/proj -- id",
+                "machine exec --name sbx-tool-proj -u root -w /w/proj -- id",
+            ]
         );
     }
 

@@ -104,7 +104,7 @@ pub fn run<R: Runner>(ctx: &mut Ctx<R>, a: &RunArgs) -> Result<i32> {
             .map(|s| s.to_string())
             .collect(),
     };
-    let spec = ExecSpec {
+    let mut spec = ExecSpec {
         name: sb.machine.clone(),
         user: Some("agent".into()),
         workdir: Some(sb.workdir()),
@@ -113,9 +113,24 @@ pub fn run<R: Runner>(ctx: &mut Ctx<R>, a: &RunArgs) -> Result<i32> {
         cmd: agents::command_with_args(&command, &a.agent_args),
         ..Default::default()
     };
+    // A v3 workload runs as its image user, through bash so the image's BASH_ENV is sourced.
+    if let Some(user) = &sb.meta.user {
+        spec.user = Some(user.clone());
+        spec.cmd = [BASH, "-c", "exec \"$@\"", "bash"]
+            .into_iter()
+            .map(String::from)
+            .chain(spec.cmd)
+            .collect();
+    }
     let code = {
         let _session = session::Session::register(&sessions, sb.name())?;
-        ctx.vm.exec(&spec)?
+        if sb.meta.user.is_some() && !has_bash(ctx, &sb)? {
+            // sbx's error for such an image, and the code its agent exits with.
+            eprintln!("executable file '{BASH}' not found");
+            127
+        } else {
+            ctx.vm.exec(&spec)?
+        }
     };
 
     // Fetch before `--rm` deletes the sandbox, and while it still runs for `_upload-pack`.
@@ -139,6 +154,18 @@ pub fn run<R: Runner>(ctx: &mut Ctx<R>, a: &RunArgs) -> Result<i32> {
         eprintln!("warning: stopping sandbox {}: {e:#}", sb.name());
     }
     Ok(code)
+}
+
+const BASH: &str = "/bin/bash";
+
+/// Whether the guest has `/bin/bash`, which a v3 workload's agent is launched through.
+fn has_bash<R: Runner>(ctx: &Ctx<R>, sb: &Sandbox) -> Result<bool> {
+    let out = ctx.vm.exec_output(&ExecSpec {
+        name: sb.machine.clone(),
+        cmd: vec!["sh".into(), "-c".into(), format!("[ -x {BASH} ]")],
+        ..Default::default()
+    })?;
+    Ok(out.code == 0)
 }
 
 /// The warning for kits given to `run` of a sandbox that already exists: kit flags, or a workload
@@ -547,6 +574,72 @@ mod tests {
                 "machine exec --name sbx-toolbox-proj -u agent -w {ws} -i -- /bin/agent --x --y z"
             )
         );
+        assert_eq!(
+            t.ctx.vm.runner().call_lines().last().unwrap(),
+            "machine stop -n sbx-toolbox-proj"
+        );
+    }
+
+    /// A v3 workload kit's sandbox: its image user is recorded.
+    fn image_user_sandbox(t: &TestEnv) {
+        let ws = t.ctx.cwd.display().to_string();
+        t.ctx.vm.runner().ok(
+            &["machine", "status"],
+            &machine_json(
+                "sbx-toolbox-proj",
+                "running",
+                &[
+                    ("sbx.name", "toolbox-proj"),
+                    ("sbx.agent", "toolbox"),
+                    ("sbx.workspace", ws.as_str()),
+                    ("sbx.command", r#"["/bin/agent","--x"]"#),
+                    ("sbx.user", "somebody"),
+                ],
+            ),
+        );
+        t.ctx.vm.runner().interactive_exit(0);
+    }
+
+    #[test]
+    fn run_launches_a_v3_workload_as_its_image_user_under_bash() {
+        let mut t = test_env(&[]);
+        image_user_sandbox(&t);
+        sbt(
+            &mut t.ctx,
+            &["run", "--name", "toolbox-proj", "--", "--y", "z"],
+        )
+        .unwrap();
+        let ws = t.ctx.cwd.display().to_string();
+        assert_eq!(
+            t.ctx.vm.runner().interactive_calls()[0].join(" "),
+            format!(
+                "machine exec --name sbx-toolbox-proj -u somebody -w {ws} -i -- \
+                 /bin/bash -c exec \"$@\" bash /bin/agent --x --y z"
+            )
+        );
+        assert!(
+            t.ctx
+                .vm
+                .runner()
+                .call_lines()
+                .contains(&"machine exec --name sbx-toolbox-proj -- sh -c [ -x /bin/bash ]".into())
+        );
+    }
+
+    #[test]
+    fn run_without_bash_in_the_image_fails_like_sbx() {
+        let mut t = test_env(&[]);
+        image_user_sandbox(&t);
+        t.ctx.vm.runner().on(
+            &["machine", "exec", "--name", "sbx-toolbox-proj", "--", "sh"],
+            crate::smolvm::Output {
+                code: 1,
+                ..Default::default()
+            },
+        );
+        let code = sbt(&mut t.ctx, &["run", "--name", "toolbox-proj"]).unwrap();
+        assert_eq!(code, 127);
+        assert!(t.ctx.vm.runner().interactive_calls().is_empty());
         assert_eq!(
             t.ctx.vm.runner().call_lines().last().unwrap(),
             "machine stop -n sbx-toolbox-proj"

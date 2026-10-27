@@ -229,6 +229,7 @@ fn supported(c: &Cap) -> bool {
 fn validate<R: Runner>(ctx: &Ctx<R>, reference: &str, args: &KitArgOpts) -> Result<i32> {
     let values = arg_values(args)?;
     let kit = load::load(ctx, reference)?;
+    load::check_launchable(&kit)?;
     let plan = match kit.kind {
         Kind::Workload => resolve(kit, vec![], &values)?,
         Kind::Mixin => {
@@ -256,6 +257,7 @@ fn empty_workload(name: &str) -> Kit {
         env: vec![],
         content: Content::Image(String::new()),
         command: None,
+        config: None,
     }
 }
 
@@ -784,6 +786,24 @@ mod tests {
         let e = sbt(&mut t.ctx, &["kit", "validate", "./bad"]).unwrap_err();
         assert!(format!("{e:#}").contains("sise"), "{e:#}");
         assert_eq!(super::super::exit_code(&e), 1);
+        assert_eq!(t.stdout(), "");
+    }
+
+    #[test]
+    fn validate_refuses_a_workload_without_a_command() {
+        let mut t = kit_env();
+        v3_kit(
+            &t,
+            "nocmd",
+            r#"{"schemaVersion":"3","kind":"workload","name":"nocmd"}"#,
+            &[],
+        );
+        let e = sbt(&mut t.ctx, &["kit", "validate", "./nocmd"]).unwrap_err();
+        assert_eq!(
+            format!("{e:#}"),
+            "workload kit image declares no ENTRYPOINT or CMD; the image config is the runtime \
+             contract"
+        );
         assert_eq!(t.stdout(), "");
     }
 

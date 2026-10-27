@@ -192,6 +192,11 @@ pub fn apply(
             bail!("kit {kit}: hook env '{v}' is not a valid variable name");
         }
     }
+    // Install hooks run in the workload image's WORKDIR, as sbx runs them (`/` without one).
+    let install_dir = match plan.workload.config.as_ref().map(|c| c.workdir.as_str()) {
+        None | Some("") => "/".to_string(),
+        Some(d) => crate::sandbox::sh_quote(d),
+    };
     let mut per_kit: Vec<(&str, usize)> = Vec::new();
     for (kit, h) in &m.install_hooks {
         let n = match per_kit.iter_mut().find(|(k, _)| k == kit) {
@@ -207,7 +212,7 @@ pub fn apply(
         steps.install.push(InstallStep {
             label: format!("kit {kit} install hook {n}"),
             user: h.user.clone(),
-            script: format!("cd / && {}", guest::hook_script(h)),
+            script: format!("cd {install_dir} && {}", guest::hook_script(h)),
         });
     }
     // The later kit (in dependency order) wins a path.
@@ -240,10 +245,19 @@ pub fn apply(
         }
     }
 
-    // A preset agent isn't a kit: nothing to record, and its command is the agent's own.
+    // A preset agent isn't a kit: nothing to record, and its command is the agent's own. A v3
+    // workload's agent runs as its image's user, root when the image names none.
     let preset = is_preset(&plan.workload);
     if !preset {
         req.command = plan.workload.command.clone();
+        req.user = plan
+            .workload
+            .config
+            .as_ref()
+            .map(|c| match c.user.as_str() {
+                "" => "0".to_string(),
+                u => u.to_string(),
+            });
     }
     for k in kits.iter().skip(usize::from(preset)) {
         let pinned = pinned_ref(k)?;
@@ -605,6 +619,7 @@ mod tests {
             env: vec![],
             content: Content::None,
             command: None,
+            config: None,
         }
     }
     fn workload() -> Kit {
@@ -1082,6 +1097,59 @@ mod tests {
         let labels = create::spec(&req).labels;
         assert_eq!(labels["sbx.long-running"], "true");
         assert_eq!(labels["sbx.command"], r#"["wl","--go"]"#);
+    }
+
+    #[test]
+    fn a_v3_workload_records_its_image_user_and_installs_in_its_workdir() {
+        let hook = Hook {
+            command: HookCmd::Shell("make".into()),
+            user: None,
+            env: vec![],
+            background: false,
+        };
+        let m = with(
+            kit("m", Kind::Mixin),
+            "lifecycle@1",
+            false,
+            CapBody::Lifecycle(Lifecycle {
+                install: vec![hook],
+                ..Default::default()
+            }),
+        );
+        let mut w = workload();
+        w.config = Some(crate::kits::model::ImageConfig {
+            user: "somebody".into(),
+            workdir: "/x".into(),
+        });
+        let p = resolve(w, vec![m.clone()], &ArgValues::default()).unwrap();
+        let mut req = request();
+        let (steps, _) = run(&p, &mut req, &mut Policy::default()).unwrap();
+        assert_eq!(req.user.as_deref(), Some("somebody"));
+        assert_eq!(create::spec(&req).labels["sbx.user"], "somebody");
+        assert_eq!(steps.install[0].user, None);
+        assert!(
+            steps.install[0].script.starts_with("cd '/x' && env -i "),
+            "{}",
+            steps.install[0].script
+        );
+
+        // No USER is root; no WORKDIR is `/`.
+        let mut w = workload();
+        w.config = Some(Default::default());
+        let p = resolve(w, vec![m], &ArgValues::default()).unwrap();
+        let mut req = request();
+        let (steps, _) = run(&p, &mut req, &mut Policy::default()).unwrap();
+        assert_eq!(req.user.as_deref(), Some("0"));
+        assert!(steps.install[0].script.starts_with("cd / && env -i "));
+    }
+
+    #[test]
+    fn a_workload_without_an_image_config_records_no_user() {
+        let p = plan(vec![]);
+        let mut req = request();
+        run(&p, &mut req, &mut Policy::default()).unwrap();
+        assert_eq!(req.user, None);
+        assert!(!create::spec(&req).labels.contains_key("sbx.user"));
     }
 
     #[test]

@@ -24,6 +24,7 @@ pub fn load(path: &Path) -> Result<Kit> {
         env: vec![],
         content: Content::Smolfile(path.to_path_buf()),
         command: None,
+        config: None,
     })
 }
 

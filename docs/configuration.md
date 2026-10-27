@@ -75,6 +75,7 @@ smolbento keeps no database of its own. Each sandbox is a smolvm machine named `
 | `sbx.credential-env` | Env vars those secrets use; a start keeps any without a value out of the sandbox, even if the service is gone |
 | `sbx.kits` | Kits applied at create, pinned to their digests |
 | `sbx.command` | The command a workload kit launches, as a JSON list |
+| `sbx.user` | The image user a v3 workload kit's agent and `exec` run as (`0` for root) |
 | `sbx.credential-install` | Env vars of credentials a kit needs only while installing; later starts leave them out |
 | `sbx.long-running` | `true` when a kit asked not to stop the sandbox when its last session ends |
 

@@ -1071,6 +1071,7 @@ mod tests {
             env: vec![],
             content: Content::None,
             command: None,
+            config: None,
         };
         let mut wl = kit("wl", Kind::Workload);
         wl.content = Content::Image("img:1".into());

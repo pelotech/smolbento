@@ -369,6 +369,7 @@ mod tests {
             env: vec![],
             content: Content::None,
             command: None,
+            config: None,
         }
     }
     fn mixin(name: &str) -> Kit {

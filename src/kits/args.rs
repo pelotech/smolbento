@@ -181,6 +181,7 @@ mod tests {
             env: vec![],
             content: Content::None,
             command: None,
+            config: None,
         }
     }
 

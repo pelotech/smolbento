@@ -196,6 +196,7 @@ fn parse_warn(yaml: &str, dir: &Path) -> Result<(Kit, Vec<String>)> {
         env: s.environment.variables.into_iter().collect(),
         content: sandbox.image.map_or(Content::None, Content::Image),
         command,
+        config: None,
     };
     Ok((kit, warnings))
 }
