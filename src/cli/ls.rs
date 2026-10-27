@@ -1,5 +1,6 @@
 //! ls: sbx's columns (SANDBOX AGENT STATUS PORTS WORKSPACE CREATED) or JSON/YAML.
 
+use std::io::Write;
 use std::time::{Duration, UNIX_EPOCH};
 
 use anyhow::Result;
@@ -16,7 +17,11 @@ pub fn run<R: Runner>(ctx: &mut Ctx<R>, a: &LsArgs) -> Result<i32> {
     } else {
         a.format.unwrap_or_default()
     };
-    print!("{}", render(&sandboxes, format, a.quiet, ctx.now)?);
+    write!(
+        &ctx.out,
+        "{}",
+        render(&sandboxes, format, a.quiet, ctx.now)?
+    )?;
     Ok(0)
 }
 

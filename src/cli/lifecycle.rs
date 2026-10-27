@@ -106,7 +106,7 @@ pub fn create<R: Runner>(ctx: &mut Ctx<R>, a: &CreateArgs) -> Result<i32> {
     let mut req = build_request(ctx, agent, paths, &a.opts, false)?;
     resolve_clone(&mut req, &a.opts)?;
     let sb = plan::create(ctx, &mut req, &a.opts.deny_network)?;
-    println!("Created sandbox {}", sb.name());
+    writeln!(&ctx.out, "Created sandbox {}", sb.name())?;
     Ok(0)
 }
 
@@ -114,12 +114,12 @@ pub fn start<R: Runner>(ctx: &mut Ctx<R>, names: &[String]) -> Result<i32> {
     for n in names {
         let sb = sandbox::get(&ctx.vm, n)?;
         if sb.is_running() {
-            println!("{n} is already running");
+            writeln!(&ctx.out, "{n} is already running")?;
             continue;
         }
         let start_plan = plan::start_plan(ctx, &sb.meta)?;
         sandbox::start(&ctx.vm, &sb, &start_plan)?;
-        println!("Started {n}");
+        writeln!(&ctx.out, "Started {n}")?;
     }
     Ok(0)
 }
@@ -137,7 +137,7 @@ pub(crate) fn stop_sandbox<R: Runner>(ctx: &Ctx<R>, sb: &Sandbox) -> Result<()> 
         ctx.vm.stop(&sb.machine)?;
     }
     session::clear(&ctx.paths.sessions(), sb.name());
-    println!("Stopped {}", sb.name());
+    writeln!(&ctx.out, "Stopped {}", sb.name())?;
     Ok(())
 }
 
@@ -150,7 +150,7 @@ fn remove<R: Runner>(ctx: &Ctx<R>, sb: &Sandbox, forget_secrets: bool) -> Result
     }
     session::clear(&ctx.paths.sessions(), sb.name());
     super::secret::forget_sandbox(ctx, sb.name(), forget_secrets)?;
-    println!("Removed {}", sb.name());
+    writeln!(&ctx.out, "Removed {}", sb.name())?;
     Ok(())
 }
 
@@ -182,7 +182,7 @@ pub fn rm<R: Runner>(ctx: &mut Ctx<R>, a: &RmArgs) -> Result<i32> {
             .collect::<Result<_>>()?
     };
     if targets.is_empty() {
-        println!("No sandboxes found");
+        writeln!(&ctx.out, "No sandboxes found")?;
         return Ok(0);
     }
     let names: Vec<&str> = targets.iter().map(|sb| sb.name()).collect();
@@ -224,11 +224,6 @@ fn cutoff(filters: &[String], now: i64) -> Result<Option<i64>> {
 }
 
 pub fn prune<R: Runner>(ctx: &mut Ctx<R>, a: &PruneArgs) -> Result<i32> {
-    prune_to(ctx, a, &mut std::io::stdout())
-}
-
-/// `prune`, printing what it reports to `out`.
-fn prune_to<R: Runner>(ctx: &mut Ctx<R>, a: &PruneArgs, out: &mut impl Write) -> Result<i32> {
     let cutoff = cutoff(&a.filter, ctx.now)?;
     let all = sandbox::list(&ctx.vm)?;
     let targets: Vec<&Sandbox> = all
@@ -243,16 +238,16 @@ fn prune_to<R: Runner>(ctx: &mut Ctx<R>, a: &PruneArgs, out: &mut impl Write) ->
         .into_iter()
         .partition(|sb| !remaining_forks(sb, &all, &names).is_empty());
     for sb in &skipped {
-        writeln!(out, "{} has forks; skipped", sb.name())?;
+        writeln!(&ctx.out, "{} has forks; skipped", sb.name())?;
     }
     let targets = forks_first(targets);
     if targets.is_empty() {
-        writeln!(out, "Nothing to prune")?;
+        writeln!(&ctx.out, "Nothing to prune")?;
         return Ok(0);
     }
     if a.dry_run {
         for sb in &targets {
-            writeln!(out, "Would remove {}", sb.name())?;
+            writeln!(&ctx.out, "Would remove {}", sb.name())?;
         }
         return Ok(0);
     }
@@ -1259,14 +1254,9 @@ mod tests {
     fn prune_says_which_parents_it_skipped() {
         let mut t = test_env(&[]);
         with_forks(&t, "stopped", "running", "stopped");
-        let a = crate::cli::PruneArgs {
-            force: true,
-            dry_run: false,
-            filter: vec![],
-        };
-        let mut out = Vec::new();
-        super::prune_to(&mut t.ctx, &a, &mut out).unwrap();
-        assert_eq!(String::from_utf8(out).unwrap(), "a has forks; skipped\n");
+        sbt(&mut t.ctx, &["prune", "-f"]).unwrap();
+        // remove() reports through the same sink, after the skips.
+        assert_eq!(t.stdout(), "a has forks; skipped\nRemoved a-fork-2\n");
     }
 
     #[test]

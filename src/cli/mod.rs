@@ -62,6 +62,31 @@ pub struct Ctx<R: Runner> {
     pub store: Box<dyn crate::secrets::store::SecretStore>,
     /// Why config.toml couldn't be loaded; only `diagnose` and `settings` run despite it.
     pub config_error: Option<String>,
+    /// Where command output goes; write with `writeln!(&ctx.out, ..)`. Errors and warnings go to
+    /// stderr (`eprintln!`).
+    pub out: Out,
+}
+
+/// Command output: the process's stdout, or a buffer tests read.
+pub enum Out {
+    Stdout,
+    Buffer(std::cell::RefCell<Vec<u8>>),
+}
+
+impl Write for &Out {
+    fn write(&mut self, buf: &[u8]) -> std::io::Result<usize> {
+        match self {
+            Out::Stdout => std::io::stdout().write(buf),
+            Out::Buffer(b) => b.borrow_mut().write(buf),
+        }
+    }
+
+    fn flush(&mut self) -> std::io::Result<()> {
+        match self {
+            Out::Stdout => std::io::stdout().flush(),
+            Out::Buffer(_) => Ok(()),
+        }
+    }
 }
 
 pub fn main(args: impl IntoIterator<Item = OsString>) -> Result<i32> {
@@ -82,6 +107,7 @@ pub fn main(args: impl IntoIterator<Item = OsString>) -> Result<i32> {
         uid: crate::sandbox::host_uid(),
         store,
         config_error,
+        out: Out::Stdout,
     };
     dispatch(&mut ctx, cli)
 }
@@ -130,7 +156,7 @@ pub fn dispatch<R: Runner>(ctx: &mut Ctx<R>, cli: Cli) -> Result<i32> {
         Cmd::Reset(a) => lifecycle::reset(ctx, &a),
         Cmd::Version => version(ctx),
         Cmd::Completion { shell } => {
-            clap_complete::generate(shell, &mut Cli::command(), "sbt", &mut std::io::stdout());
+            clap_complete::generate(shell, &mut Cli::command(), "sbt", &mut &ctx.out);
             Ok(0)
         }
         Cmd::Diagnose => diagnose::run(ctx),
@@ -140,7 +166,10 @@ pub fn dispatch<R: Runner>(ctx: &mut Ctx<R>, cli: Cli) -> Result<i32> {
         Cmd::Ports(a) => ports::run(ctx, &a),
         Cmd::UploadPack { sandbox, .. } => upload_pack::run(ctx, &sandbox),
         Cmd::Daemon(_) => {
-            println!("smolbento needs no daemon; smolvm manages each sandbox directly");
+            writeln!(
+                &ctx.out,
+                "smolbento needs no daemon; smolvm manages each sandbox directly"
+            )?;
             Ok(0)
         }
         other => Err(Unsupported(format!("`sbt {}` is not implemented yet", other.name())).into()),
@@ -148,10 +177,11 @@ pub fn dispatch<R: Runner>(ctx: &mut Ctx<R>, cli: Cli) -> Result<i32> {
 }
 
 fn version<R: Runner>(ctx: &Ctx<R>) -> Result<i32> {
-    println!("smolbento version v{}", env!("CARGO_PKG_VERSION"));
+    let mut out = &ctx.out;
+    writeln!(out, "smolbento version v{}", env!("CARGO_PKG_VERSION"))?;
     match ctx.vm.version() {
-        Ok(v) => println!("smolvm version v{v}"),
-        Err(e) => println!("smolvm not available: {e:#}"),
+        Ok(v) => writeln!(out, "smolvm version v{v}")?,
+        Err(e) => writeln!(out, "smolvm not available: {e:#}")?,
     }
     Ok(0)
 }
@@ -200,8 +230,9 @@ pub fn confirm<R: Runner>(ctx: &Ctx<R>, question: &str, force: bool) -> Result<(
     if !ctx.stdin_tty {
         bail!("{question} Refusing without a terminal; pass -f to confirm");
     }
-    print!("{question} [y/N] ");
-    std::io::stdout().flush()?;
+    let mut out = &ctx.out;
+    write!(out, "{question} [y/N] ")?;
+    out.flush()?;
     let mut line = String::new();
     std::io::stdin().read_line(&mut line)?;
     if matches!(line.trim().to_ascii_lowercase().as_str(), "y" | "yes") {

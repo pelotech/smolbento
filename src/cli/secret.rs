@@ -67,7 +67,7 @@ pub fn run<R: Runner>(ctx: &mut Ctx<R>, cmd: SecretCmd) -> Result<i32> {
             });
             set(ctx, &mut file, &name, a.source)?;
         }
-        SecretCmd::Ls(a) => ls_to(ctx, &file, &a, &mut std::io::stdout())?,
+        SecretCmd::Ls(a) => ls(ctx, &file, &a)?,
         SecretCmd::Rm(a) => rm(ctx, &mut file, a)?,
         SecretCmd::Import(_) => {
             return Err(Unsupported("`sbt secret import` is not implemented yet".into()).into());
@@ -76,13 +76,7 @@ pub fn run<R: Runner>(ctx: &mut Ctx<R>, cmd: SecretCmd) -> Result<i32> {
     Ok(0)
 }
 
-/// `secret ls`, printing to `out`.
-fn ls_to<R: Runner>(
-    ctx: &Ctx<R>,
-    file: &SecretsFile,
-    a: &SecretLsArgs,
-    out: &mut impl Write,
-) -> Result<()> {
+fn ls<R: Runner>(ctx: &Ctx<R>, file: &SecretsFile, a: &SecretLsArgs) -> Result<()> {
     // A fork also uses its original's sandbox secrets (see `plan::start_plan`). If smolvm can't be
     // asked, the listing stays a plain file read.
     let parent = a
@@ -98,7 +92,7 @@ fn ls_to<R: Runner>(
         a.service.as_deref(),
         a.quiet,
     );
-    write!(out, "{text}")?;
+    write!(&ctx.out, "{text}")?;
     Ok(())
 }
 
@@ -249,15 +243,14 @@ fn set<R: Runner>(
     {
         forget(ctx, &[old])?;
     }
-    println!("Saved {service} secret ({described}; {scope})");
-    explain_impact(ctx, service, src.sandbox.as_deref());
-    Ok(())
+    writeln!(&ctx.out, "Saved {service} secret ({described}; {scope})")?;
+    explain_impact(ctx, service, src.sandbox.as_deref())
 }
 
 /// Which sandboxes pick the change up on their next start, and which would need recreating.
-fn explain_impact<R: Runner>(ctx: &Ctx<R>, service: &str, scope: Option<&str>) {
+fn explain_impact<R: Runner>(ctx: &Ctx<R>, service: &str, scope: Option<&str>) -> Result<()> {
     let Ok(sandboxes) = sandbox::list(&ctx.vm) else {
-        return;
+        return Ok(());
     };
     let (bound, unbound): (Vec<_>, Vec<_>) = sandboxes
         .iter()
@@ -265,14 +258,16 @@ fn explain_impact<R: Runner>(ctx: &Ctx<R>, service: &str, scope: Option<&str>) {
         .partition(|s| s.meta.secrets.iter().any(|x| x == service));
     let names = |v: &[&sandbox::Sandbox]| v.iter().map(|s| s.name()).collect::<Vec<_>>().join(", ");
     if !bound.is_empty() {
-        println!("Applies to {} on their next start", names(&bound));
+        writeln!(&ctx.out, "Applies to {} on their next start", names(&bound))?;
     }
     if !unbound.is_empty() {
-        println!(
+        writeln!(
+            &ctx.out,
             "{} were created without it; recreate them to use it (new sandboxes get it)",
             names(&unbound)
-        );
+        )?;
     }
+    Ok(())
 }
 
 fn read_value<R: Runner>(ctx: &Ctx<R>, service: &str) -> Result<String> {
@@ -381,7 +376,7 @@ fn rm<R: Runner>(ctx: &Ctx<R>, file: &mut SecretsFile, a: SecretRmArgs) -> Resul
         file.save(&ctx.paths)?;
         forget(ctx, &[removed])?;
     }
-    println!("Removed");
+    writeln!(&ctx.out, "Removed")?;
     Ok(())
 }
 
@@ -806,29 +801,23 @@ mod tests {
         assert!(table.contains("sandbox:aa"), "{table}");
         assert!(!table.contains("sandbox:other"), "{table}");
         // Through the handler: a fork's original is looked up from its labels.
-        let via = |t: &TestEnv, sandbox: &str| {
-            let a = SecretLsArgs {
-                global: false,
-                sandbox: Some(sandbox.into()),
-                service: None,
-                quiet: true,
-            };
-            let mut out = Vec::new();
-            ls_to(&t.ctx, &file, &a, &mut out).unwrap();
-            String::from_utf8(out).unwrap()
+        t.stdout();
+        let via = |t: &mut TestEnv, sandbox: &str| {
+            sbt(&mut t.ctx, &["secret", "ls", "-q", "--sandbox", sandbox]).unwrap();
+            t.stdout()
         };
-        assert_eq!(via(&t, "aa-fork-1"), "anthropic\ngithub\nopenai\n");
+        assert_eq!(via(&mut t, "aa-fork-1"), "anthropic\ngithub\nopenai\n");
         // A sandbox that isn't a fork sees only its own and the global ones.
         t.ctx.vm.runner().ok(
             &["machine", "status", "-n", "sbx-plain"],
             &machine_json("sbx-plain", "running", &[("sbx.name", "plain")]),
         );
-        assert_eq!(via(&t, "plain"), "anthropic\n");
+        assert_eq!(via(&mut t, "plain"), "anthropic\n");
     }
 
     #[test]
     fn ls_for_a_sandbox_works_when_smolvm_cannot_be_asked() {
-        let t = test_env(&[]);
+        let mut t = test_env(&[]);
         t.ctx
             .vm
             .runner()
@@ -841,15 +830,13 @@ mod tests {
                 source: Source::Keychain,
             });
         }
-        let a = SecretLsArgs {
-            global: false,
-            sandbox: Some("aa-fork-1".into()),
-            service: None,
-            quiet: true,
-        };
-        let mut out = Vec::new();
-        ls_to(&t.ctx, &f, &a, &mut out).unwrap();
-        assert_eq!(String::from_utf8(out).unwrap(), "github\n");
+        f.save(&t.ctx.paths).unwrap();
+        sbt(
+            &mut t.ctx,
+            &["secret", "ls", "-q", "--sandbox", "aa-fork-1"],
+        )
+        .unwrap();
+        assert_eq!(t.stdout(), "github\n");
     }
 
     #[test]

@@ -1,6 +1,7 @@
 //! diagnose: checks smolvm, the hypervisor and the config file.
 
 use anyhow::Result;
+use std::io::Write;
 
 use super::{Ctx, MIN_SMOLVM, version_at_least};
 use crate::smolvm::Runner;
@@ -16,7 +17,7 @@ pub fn run<R: Runner>(ctx: &mut Ctx<R>) -> Result<i32> {
     ));
     checks.push(config_check(ctx));
     let (text, code) = report(&checks);
-    print!("{text}");
+    write!(&ctx.out, "{text}")?;
     Ok(code)
 }
 

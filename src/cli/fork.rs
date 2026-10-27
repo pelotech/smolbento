@@ -12,12 +12,8 @@ use crate::sandbox::{self, Sandbox, labels, name};
 use crate::smolvm::{Runner, SmolvmError};
 use crate::workspace::clone;
 
+/// Prints each copy's name as it's made.
 pub fn run<R: Runner>(ctx: &mut Ctx<R>, a: &ForkArgs) -> Result<i32> {
-    run_to(ctx, a, &mut std::io::stdout())
-}
-
-/// `run`, printing each copy's name to `out` as it's made.
-fn run_to<R: Runner>(ctx: &mut Ctx<R>, a: &ForkArgs, out: &mut impl Write) -> Result<i32> {
     if !ctx.settings.bool("fork.enabled")? {
         bail!("fork is turned off (fork.enabled=false)");
     }
@@ -44,7 +40,7 @@ fn run_to<R: Runner>(ctx: &mut Ctx<R>, a: &ForkArgs, out: &mut impl Write) -> Re
     for n in &names {
         fork_one(ctx, &parent, n, &start.env, &start.remove)
             .with_context(|| format!("forking {} as {n}", parent.name()))?;
-        writeln!(out, "{n}")?;
+        writeln!(&ctx.out, "{n}")?;
     }
     Ok(0)
 }
@@ -262,6 +258,7 @@ mod tests {
         exists(&t, "a-fork-1");
         sbt(&mut t.ctx, &["fork", "a", "--count", "2"]).unwrap();
         assert_eq!(branches(&t), vec![branch("a-fork-2"), branch("a-fork-3")]);
+        assert_eq!(t.stdout(), "a-fork-2\na-fork-3\n");
     }
 
     #[test]
@@ -269,6 +266,7 @@ mod tests {
         let mut t = test_env(&[]);
         parent(&t, "running", &[]);
         sbt(&mut t.ctx, &["fork", "a", "--name", "try.2"]).unwrap();
+        assert_eq!(t.stdout(), "try.2\n");
         assert_eq!(
             branches(&t),
             vec![
@@ -408,37 +406,6 @@ mod tests {
                 "{args:?}"
             );
         }
-    }
-
-    /// Runs `fork` with `args`, giving what it printed.
-    fn fork_out(t: &mut TestEnv, args: &[&str]) -> String {
-        use clap::Parser;
-        let cli =
-            crate::cli::Cli::try_parse_from(std::iter::once("sbt").chain(args.iter().copied()))
-                .unwrap();
-        let Some(crate::cli::Cmd::Fork(a)) = cli.command else {
-            panic!("not fork")
-        };
-        let mut out = Vec::new();
-        super::run_to(&mut t.ctx, &a, &mut out).unwrap();
-        String::from_utf8(out).unwrap()
-    }
-
-    #[test]
-    fn prints_each_copys_name() {
-        let mut t = test_env(&[]);
-        parent(&t, "running", &[]);
-        exists(&t, "a-fork-1");
-        assert_eq!(
-            fork_out(&mut t, &["fork", "a", "--count", "2"]),
-            "a-fork-2\na-fork-3\n"
-        );
-        let mut t = test_env(&[]);
-        parent(&t, "running", &[]);
-        assert_eq!(
-            fork_out(&mut t, &["fork", "a", "--name", "try.2"]),
-            "try.2\n"
-        );
     }
 
     #[test]

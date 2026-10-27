@@ -120,14 +120,19 @@ pub fn ensure_policy<R: Runner>(ctx: &Ctx<R>) -> Result<Policy> {
             "no network policy chosen yet; run `sbt policy init allow-all|balanced|deny-all` first"
         );
     }
-    println!(
+    let mut out = &ctx.out;
+    writeln!(
+        out,
         "Choose a network policy for your sandboxes (saved; change it with `sbt policy init`):"
-    );
-    println!("  1) allow-all  open network");
-    println!("  2) balanced   AI APIs, package registries, code hosts and more (recommended)");
-    println!("  3) deny-all   nothing unless you allow it");
-    print!("Choice [2]: ");
-    std::io::stdout().flush()?;
+    )?;
+    writeln!(out, "  1) allow-all  open network")?;
+    writeln!(
+        out,
+        "  2) balanced   AI APIs, package registries, code hosts and more (recommended)"
+    )?;
+    writeln!(out, "  3) deny-all   nothing unless you allow it")?;
+    write!(out, "Choice [2]: ")?;
+    out.flush()?;
     let mut line = String::new();
     std::io::stdin().lock().read_line(&mut line)?;
     policy.mode = Some(match line.trim() {
@@ -262,7 +267,7 @@ pub fn push_network<R: Runner>(ctx: &Ctx<R>, policy: &Policy) -> Result<()> {
         }
     }
     if updated > 0 {
-        println!("Updated {updated} running sandbox(es)");
+        writeln!(&ctx.out, "Updated {updated} running sandbox(es)")?;
     }
     Ok(())
 }

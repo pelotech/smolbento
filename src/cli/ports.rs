@@ -2,6 +2,7 @@
 //! while it's stopped).
 
 use anyhow::{Result, bail};
+use std::io::Write;
 
 use super::{Ctx, PortsArgs, plan, table};
 use crate::sandbox::{self, options};
@@ -10,7 +11,7 @@ use crate::smolvm::{PortMap, PublishedPort, Runner};
 pub fn run<R: Runner>(ctx: &mut Ctx<R>, a: &PortsArgs) -> Result<i32> {
     let mut sb = sandbox::get(&ctx.vm, &a.sandbox)?;
     if a.publish.is_empty() && a.unpublish.is_empty() {
-        print!("{}", render_list(&sb.ports));
+        write!(&ctx.out, "{}", render_list(&sb.ports))?;
         return Ok(0);
     }
     let publish = a
@@ -38,13 +39,13 @@ pub fn run<R: Runner>(ctx: &mut Ctx<R>, a: &PortsArgs) -> Result<i32> {
     if !publish.is_empty() {
         ctx.vm.publish(&sb.machine, &publish)?;
         for p in &publish {
-            println!("Published 127.0.0.1:{} -> {}", p.host, p.guest);
+            writeln!(&ctx.out, "Published 127.0.0.1:{} -> {}", p.host, p.guest)?;
         }
     }
     if !unpublish.is_empty() {
         ctx.vm.unpublish(&sb.machine, &unpublish)?;
         for p in &unpublish {
-            println!("Unpublished 127.0.0.1:{}", p.host);
+            writeln!(&ctx.out, "Unpublished 127.0.0.1:{}", p.host)?;
         }
     }
     Ok(0)
