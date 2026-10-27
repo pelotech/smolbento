@@ -578,6 +578,13 @@ pub fn agent_file(plan: &Plan, workdir: &str) -> Result<Option<String>> {
             w.name
         );
     }
+    // A lexical check only: symlinks inside the guest are out of scope.
+    if dir.split('/').any(|c| c == "..") {
+        bail!(
+            "kit {}: agent-context directory '{dir}' must not contain '..'",
+            w.name
+        );
+    }
     let name = c
         .filename
         .as_deref()
@@ -624,7 +631,11 @@ fn context_scripts(plan: &Plan, agent_file: Option<&str>, mounts: &[&Path]) -> V
     if own.is_empty() && mixins.is_empty() {
         return Vec::new();
     }
-    if mounts.iter().any(|m| Path::new(file).starts_with(m)) {
+    let index_dir = format!("{dir}/{}", guest::KITS_CONTEXT_DIR);
+    if mounts
+        .iter()
+        .any(|m| Path::new(file).starts_with(m) || Path::new(&index_dir).starts_with(m))
+    {
         eprintln!(
             "warning: agent context not written: {file} is in a mounted workspace, outside the \
              sandbox"
@@ -1499,6 +1510,11 @@ mod tests {
                 "kit wl: agent-context filename 'a/b.md'",
             ),
             (None, Some(".."), "kit wl: agent-context filename '..'"),
+            (
+                Some("/home/../etc"),
+                None,
+                "kit wl: agent-context directory '/home/../etc'",
+            ),
         ] {
             let w = with(
                 workload(),
@@ -1682,6 +1698,22 @@ mod tests {
             path: "/w".into(),
             read_only: true,
         });
+        let (steps, _) = run(&p, &mut req, &mut Policy::default()).unwrap();
+        assert!(steps.context.is_empty(), "{:?}", steps.context);
+    }
+
+    #[test]
+    fn the_index_directory_is_guarded_like_the_agent_file() {
+        // The agent file is the guest's own, but `kits-agent-context` sits in a mounted dir.
+        let p = plan(vec![context_mixin(
+            "m",
+            Source::LocalV3("/k/m".into()),
+            "b",
+        )]);
+        let mut req = CreateRequest {
+            agent_file: Some("/x/CLAUDE.md".into()),
+            ..in_workspace("/x/kits-agent-context")
+        };
         let (steps, _) = run(&p, &mut req, &mut Policy::default()).unwrap();
         assert!(steps.context.is_empty(), "{:?}", steps.context);
     }
