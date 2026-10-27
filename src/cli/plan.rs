@@ -184,8 +184,8 @@ pub fn prepare_create<R: Runner>(
 }
 
 /// Prepares, creates and starts a new sandbox. When that fails before smolvm has the machine, the
-/// `--deny-network` rules and the `--clone` remote this create added are dropped again; rules the sandbox name already had
-/// stay.
+/// `--deny-network` rules and the `--clone` remote this create added are dropped again; rules the
+/// sandbox name already had stay.
 pub fn create<R: Runner>(
     ctx: &Ctx<R>,
     req: &mut CreateRequest,

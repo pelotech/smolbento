@@ -3,7 +3,7 @@
 
 use anyhow::{Context, Result, bail};
 
-use super::lifecycle::build_request;
+use super::lifecycle::{build_request, resolve_clone};
 use super::plan;
 use super::{Ctx, RunArgs, Unsupported};
 use crate::agents;
@@ -41,7 +41,10 @@ pub fn run<R: Runner>(ctx: &mut Ctx<R>, a: &RunArgs) -> Result<i32> {
             let mut req = build_request(ctx, agent, paths, &a.opts, true)?;
             match sandbox::find(&ctx.vm, &req.name)? {
                 Some(sb) => (sb, false),
-                None => (plan::create(ctx, &mut req, &a.opts.deny_network)?, true),
+                None => {
+                    resolve_clone(&mut req, &a.opts)?;
+                    (plan::create(ctx, &mut req, &a.opts.deny_network)?, true)
+                }
             }
         }
     };
@@ -116,6 +119,23 @@ mod tests {
                     ("sbx.workspace", ws.as_str()),
                 ],
             ),
+        );
+    }
+
+    #[test]
+    fn clone_is_ignored_when_run_attaches_to_an_existing_sandbox() {
+        let mut t = test_env(&[]);
+        created(&t, "running");
+        t.ctx.vm.runner().interactive_exit(0);
+        // cwd is not a git repo, yet --clone must not matter for an existing sandbox.
+        sbt(&mut t.ctx, &["run", "claude", "--clone"]).unwrap();
+        assert!(
+            !t.ctx
+                .vm
+                .runner()
+                .call_lines()
+                .iter()
+                .any(|l| l.contains("machine create"))
         );
     }
 

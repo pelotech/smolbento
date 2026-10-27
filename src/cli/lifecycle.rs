@@ -68,15 +68,6 @@ pub(crate) fn build_request<R: Runner>(
         .map(|p| options::parse_publish(p, &options::free_port))
         .collect::<Result<Vec<_>>>()?;
 
-    let clone = if opts.clone {
-        let primary = workspaces
-            .first()
-            .context("--clone needs a workspace path, e.g. `sbt create --clone claude .`")?;
-        Some(crate::workspace::clone::source(&primary.path)?)
-    } else {
-        None
-    };
-
     Ok(CreateRequest {
         name,
         agent: agent.name.into(),
@@ -87,10 +78,22 @@ pub(crate) fn build_request<R: Runner>(
         env,
         ports,
         docker,
-        clone,
         created: ctx.now,
         ..Default::default()
     })
+}
+
+/// Resolves `--clone` into `req.clone`. Only for a sandbox that is about to be created: `--clone`
+/// is a no-op when `run` re-attaches to an existing one.
+pub(crate) fn resolve_clone(req: &mut CreateRequest, opts: &SandboxOpts) -> Result<()> {
+    if opts.clone {
+        let primary = req
+            .workspaces
+            .first()
+            .context("--clone needs a workspace path, e.g. `sbt create --clone claude .`")?;
+        req.clone = Some(crate::workspace::clone::source(&primary.path)?);
+    }
+    Ok(())
 }
 
 pub fn create<R: Runner>(ctx: &mut Ctx<R>, a: &CreateArgs) -> Result<i32> {
@@ -99,6 +102,7 @@ pub fn create<R: Runner>(ctx: &mut Ctx<R>, a: &CreateArgs) -> Result<i32> {
         .split_first()
         .context("specify an agent, e.g. `sbt create claude .`")?;
     let mut req = build_request(ctx, agent, paths, &a.opts, false)?;
+    resolve_clone(&mut req, &a.opts)?;
     let sb = plan::create(ctx, &mut req, &a.opts.deny_network)?;
     println!("Created sandbox {}", sb.name());
     Ok(0)
