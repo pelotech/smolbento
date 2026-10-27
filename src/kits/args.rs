@@ -31,9 +31,12 @@ impl ArgValues {
                     .with_context(|| format!("{}:{}", f.display(), i + 1))?;
             }
         }
-        for flag in flags {
-            v.insert(flag)
-                .with_context(|| format!("invalid --kit-arg {flag:?}"))?;
+        // Errors name the argument, never its value (it may be a token).
+        for (i, flag) in flags.iter().enumerate() {
+            v.insert(flag).with_context(|| match flag.split_once('=') {
+                Some((name, _)) => format!("invalid --kit-arg {:?}", name.trim()),
+                None => format!("invalid --kit-arg #{}", i + 1),
+            })?;
         }
         Ok(v)
     }
@@ -62,11 +65,18 @@ impl ArgValues {
         Ok(())
     }
 
-    /// The effective values for one kit: scoped beats shared beats default. Errors on missing
-    /// required, pattern/enum mismatch. Unknown names are checked by `check_unknown`.
+    /// The effective values for one kit: scoped beats shared beats default. Errors on an
+    /// invalid pattern (given a value or not), missing required, pattern/enum mismatch. Unknown
+    /// names are checked by `check_unknown`.
     pub fn for_kit(&self, kit: &Kit) -> Result<BTreeMap<String, String>> {
         let mut out = BTreeMap::new();
         for (name, def) in &kit.args {
+            let re = def
+                .pattern
+                .as_deref()
+                .map(|p| Regex::new(p).with_context(|| format!("invalid pattern {p:?}")))
+                .transpose()
+                .with_context(|| format!("kit {}: argument {name}", kit.name))?;
             let given = self
                 .scoped
                 .get(&(kit.name.clone(), name.clone()))
@@ -78,7 +88,8 @@ impl ArgValues {
                 }
                 continue;
             };
-            validate(def, value).with_context(|| format!("kit {}: argument {name}", kit.name))?;
+            validate(def, re.as_ref(), value)
+                .with_context(|| format!("kit {}: argument {name}", kit.name))?;
             out.insert(name.clone(), value.clone());
         }
         Ok(out)
@@ -103,18 +114,16 @@ impl ArgValues {
     }
 }
 
-fn validate(def: &ArgDef, value: &str) -> Result<()> {
+/// Checks `value` against the enum and the compiled `pattern`. Errors say which constraint
+/// failed, never the value.
+fn validate(def: &ArgDef, pattern: Option<&Regex>, value: &str) -> Result<()> {
     if !def.enum_values.is_empty() && !def.enum_values.iter().any(|e| e == value) {
-        bail!(
-            "value {value:?} is not one of: {}",
-            def.enum_values.join(", ")
-        );
+        bail!("the value is not one of: {}", def.enum_values.join(", "));
     }
-    if let Some(p) = &def.pattern {
-        let re = Regex::new(p).with_context(|| format!("invalid pattern {p:?}"))?;
-        if !re.is_match(value) {
-            bail!("value {value:?} does not match pattern {p:?}");
-        }
+    if let Some(re) = pattern
+        && !re.is_match(value)
+    {
+        bail!("the value does not match pattern {:?}", re.as_str());
     }
     Ok(())
 }
@@ -207,15 +216,46 @@ mod tests {
             pattern: Some("^[0-9]+$".into()),
             ..Default::default()
         };
-        let v = ArgValues::parse(&[], &["t=x".into()]).unwrap();
-        assert!(v.for_kit(&kit("k", &[("t", pat)])).is_err());
+        let v = ArgValues::parse(&[], &["t=s3cret".into()]).unwrap();
+        let e = format!("{:#}", v.for_kit(&kit("k", &[("t", pat)])).unwrap_err());
+        assert_eq!(
+            e,
+            "kit k: argument t: the value does not match pattern \"^[0-9]+$\""
+        );
         let en = ArgDef {
             enum_values: vec!["a".into(), "b".into()],
             ..Default::default()
         };
-        assert!(v.for_kit(&kit("k", &[("t", en)])).is_err());
+        let e = format!("{:#}", v.for_kit(&kit("k", &[("t", en)])).unwrap_err());
+        assert_eq!(e, "kit k: argument t: the value is not one of: a, b");
         let v = ArgValues::parse(&[], &["nope=1".into()]).unwrap();
         assert!(v.check_unknown(&[kit("k", &[])]).is_err());
+    }
+
+    #[test]
+    fn an_invalid_pattern_is_an_error_without_a_value() {
+        let bad = ArgDef {
+            pattern: Some("([a-z".into()),
+            ..Default::default()
+        };
+        let e = ArgValues::default()
+            .for_kit(&kit("k", &[("t", bad)]))
+            .unwrap_err();
+        assert!(
+            format!("{e:#}").starts_with("kit k: argument t: invalid pattern \"([a-z\""),
+            "{e:#}"
+        );
+    }
+
+    #[test]
+    fn a_bad_flag_names_the_argument_not_its_value() {
+        let e = ArgValues::parse(&[], &["=s3cret".into()]).unwrap_err();
+        assert!(!format!("{e:#}").contains("s3cret"), "{e:#}");
+        let e = ArgValues::parse(&[], &["ok=1".into(), "s3cret".into()]).unwrap_err();
+        assert_eq!(
+            format!("{e:#}"),
+            "invalid --kit-arg #2: expected name=value"
+        );
     }
 
     #[test]

@@ -88,6 +88,23 @@ pub fn resolve_for(
     args: &ArgValues,
     workdir: &str,
 ) -> Result<Plan> {
+    if workload.kind != Kind::Workload {
+        bail!(
+            "{} is a mixin, not a workload; pass it with --kit",
+            workload.name
+        );
+    }
+    // Names scope `--kit-arg`s and tag policy rules. An agent preset isn't a kit, so a kit may
+    // share its name.
+    let named = std::iter::once(&workload)
+        .filter(|w| !matches!(w.source, crate::kits::model::Source::Preset(_)))
+        .chain(&mixins);
+    let mut seen = BTreeSet::new();
+    for k in named {
+        if !seen.insert(k.name.as_str()) {
+            bail!("two kits are named {}", k.name);
+        }
+    }
     if let Some(m) = mixins.iter().find(|m| m.kind == Kind::Workload) {
         bail!(
             "two workloads: {} and {}; pass a workload kit as the agent argument",
@@ -442,6 +459,23 @@ mod tests {
         let a = mixin("a").requires(&["b"]).provides(&["a"]);
         let b = mixin("b").requires(&["a"]).provides(&["b"]);
         assert!(run(workload("w"), vec![a, b]).is_err());
+    }
+
+    #[test]
+    fn a_mixin_as_the_workload_and_two_kits_of_one_name_are_rejected() {
+        let e = run(mixin("m"), vec![]).unwrap_err();
+        assert_eq!(
+            format!("{e:#}"),
+            "m is a mixin, not a workload; pass it with --kit"
+        );
+        let e = run(workload("w"), vec![mixin("a"), mixin("a")]).unwrap_err();
+        assert_eq!(format!("{e:#}"), "two kits are named a");
+        let e = run(workload("a"), vec![mixin("a")]).unwrap_err();
+        assert_eq!(format!("{e:#}"), "two kits are named a");
+        // A preset agent's name is free for a kit.
+        let mut preset = workload("claude");
+        preset.source = Source::Preset("img:1".into());
+        run(preset, vec![mixin("claude")]).unwrap();
     }
 
     #[test]
