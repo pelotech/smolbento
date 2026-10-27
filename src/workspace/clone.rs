@@ -17,15 +17,31 @@ pub struct CloneSource {
     pub git_dir: PathBuf,
 }
 
+/// The git binary isn't installed (as opposed to git failing).
+#[derive(Debug)]
+struct GitMissing;
+
+impl std::fmt::Display for GitMissing {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.write_str("clone mode needs git on the host")
+    }
+}
+
+impl std::error::Error for GitMissing {}
+
 /// Runs host git in `repo`; the error is git's first stderr line.
 fn git(repo: &Path, args: &[&str]) -> Result<String> {
-    let out = Command::new("git")
+    git_with("git", repo, args)
+}
+
+fn git_with(program: &str, repo: &Path, args: &[&str]) -> Result<String> {
+    let out = Command::new(program)
         .arg("-C")
         .arg(repo)
         .args(args)
         .output()
         .map_err(|e| match e.kind() {
-            std::io::ErrorKind::NotFound => anyhow::anyhow!("clone mode needs git on the host"),
+            std::io::ErrorKind::NotFound => anyhow::Error::new(GitMissing),
             _ => anyhow::Error::new(e).context("running git"),
         })?;
     if !out.status.success() {
@@ -40,7 +56,12 @@ fn git(repo: &Path, args: &[&str]) -> Result<String> {
 }
 
 pub fn source(path: &Path) -> Result<CloneSource> {
-    let out = git(
+    source_with("git", path)
+}
+
+fn source_with(program: &str, path: &Path) -> Result<CloneSource> {
+    let out = git_with(
+        program,
         path,
         &[
             "rev-parse",
@@ -49,11 +70,15 @@ pub fn source(path: &Path) -> Result<CloneSource> {
             "--git-common-dir",
         ],
     )
-    .map_err(|_| {
-        anyhow::anyhow!(
-            "--clone needs a git repository; {} isn't one",
-            path.display()
-        )
+    .map_err(|e| {
+        if e.is::<GitMissing>() {
+            e
+        } else {
+            anyhow::anyhow!(
+                "--clone needs a git repository; {} isn't one",
+                path.display()
+            )
+        }
     })?;
     let mut lines = out.lines();
     let (Some(top), Some(git_dir)) = (lines.next(), lines.next()) else {
@@ -251,6 +276,15 @@ mod tests {
         let d = tempfile::tempdir().unwrap();
         let err = source(d.path()).unwrap_err().to_string();
         assert!(err.contains("--clone needs a git repository"), "{err}");
+    }
+
+    #[test]
+    fn source_reports_missing_git_not_a_missing_repo() {
+        let d = tempfile::tempdir().unwrap();
+        let err = source_with("sbt-no-such-git", d.path())
+            .unwrap_err()
+            .to_string();
+        assert_eq!(err, "clone mode needs git on the host");
     }
 
     #[test]
