@@ -4,7 +4,9 @@ use std::io::{BufRead, Write};
 
 use anyhow::{Context, Result, bail};
 
-use super::{Ctx, SecretCmd, SecretRmArgs, SecretSource, Unsupported, confirm, table};
+use super::{
+    Ctx, SecretCmd, SecretLsArgs, SecretRmArgs, SecretSource, Unsupported, confirm, table,
+};
 use crate::policy::Policy;
 use crate::sandbox::{self, name};
 use crate::secrets::{CustomService, SecretEntry, SecretsFile, Source, scope_for, services};
@@ -65,30 +67,39 @@ pub fn run<R: Runner>(ctx: &mut Ctx<R>, cmd: SecretCmd) -> Result<i32> {
             });
             set(ctx, &mut file, &name, a.source)?;
         }
-        SecretCmd::Ls(a) => {
-            // A fork also uses its original's sandbox secrets (see `plan::start_plan`).
-            let parent = match &a.sandbox {
-                Some(s) => sandbox::find(&ctx.vm, s)?.and_then(|sb| sb.meta.fork_of),
-                None => None,
-            };
-            print!(
-                "{}",
-                render_ls(
-                    &file,
-                    a.sandbox.as_deref(),
-                    parent.as_deref(),
-                    a.global,
-                    a.service.as_deref(),
-                    a.quiet
-                )
-            );
-        }
+        SecretCmd::Ls(a) => ls_to(ctx, &file, &a, &mut std::io::stdout())?,
         SecretCmd::Rm(a) => rm(ctx, &mut file, a)?,
         SecretCmd::Import(_) => {
             return Err(Unsupported("`sbt secret import` is not implemented yet".into()).into());
         }
     }
     Ok(0)
+}
+
+/// `secret ls`, printing to `out`.
+fn ls_to<R: Runner>(
+    ctx: &Ctx<R>,
+    file: &SecretsFile,
+    a: &SecretLsArgs,
+    out: &mut impl Write,
+) -> Result<()> {
+    // A fork also uses its original's sandbox secrets (see `plan::start_plan`). If smolvm can't be
+    // asked, the listing stays a plain file read.
+    let parent = a
+        .sandbox
+        .as_deref()
+        .and_then(|s| sandbox::find(&ctx.vm, s).ok().flatten())
+        .and_then(|sb| sb.meta.fork_of);
+    let text = render_ls(
+        file,
+        a.sandbox.as_deref(),
+        parent.as_deref(),
+        a.global,
+        a.service.as_deref(),
+        a.quiet,
+    );
+    write!(out, "{text}")?;
+    Ok(())
 }
 
 /// `--env` of `secret set-custom`: a name a shell (and smolvm's credential flag) accepts.
@@ -306,10 +317,10 @@ pub fn render_ls(
         .iter()
         .filter(|e| !global_only || e.scope == "global")
         .filter(|e| {
-            own.as_ref().is_none_or(|o| e.scope == "global" || &e.scope == o)
-                // The original's entries, unless the fork has its own for the service.
-                || parent.as_ref() == Some(&e.scope)
-                    && !file.secrets.iter().any(|f| f.service == e.service && Some(&f.scope) == own.as_ref())
+            let shown_for_own = own
+                .as_ref()
+                .is_none_or(|o| e.scope == "global" || &e.scope == o);
+            shown_for_own || inherited(file, e, own.as_deref(), parent.as_deref())
         })
         .filter(|e| service.is_none_or(|s| e.service == s))
         .collect();
@@ -328,6 +339,15 @@ pub fn render_ls(
         ]);
     }
     table(lines)
+}
+
+/// Whether `e` is the fork's original's entry for a service the fork has no entry of its own for.
+fn inherited(file: &SecretsFile, e: &SecretEntry, own: Option<&str>, parent: Option<&str>) -> bool {
+    parent == Some(e.scope.as_str())
+        && !file
+            .secrets
+            .iter()
+            .any(|f| f.service == e.service && Some(f.scope.as_str()) == own)
 }
 
 fn forget<R: Runner>(ctx: &Ctx<R>, entries: &[SecretEntry]) -> Result<()> {
@@ -782,11 +802,51 @@ mod tests {
         let table = render_ls(&file, Some("aa-fork-1"), Some("aa"), false, None, false);
         assert!(table.contains("sandbox:aa"), "{table}");
         assert!(!table.contains("sandbox:other"), "{table}");
-        // Through the command: a fork's parent is looked up from its labels.
-        assert_eq!(
-            sbt(&mut t.ctx, &["secret", "ls", "--sandbox", "aa-fork-1"]).unwrap(),
-            0
+        // Through the handler: a fork's original is looked up from its labels.
+        let via = |t: &TestEnv, sandbox: &str| {
+            let a = SecretLsArgs {
+                global: false,
+                sandbox: Some(sandbox.into()),
+                service: None,
+                quiet: true,
+            };
+            let mut out = Vec::new();
+            ls_to(&t.ctx, &file, &a, &mut out).unwrap();
+            String::from_utf8(out).unwrap()
+        };
+        assert_eq!(via(&t, "aa-fork-1"), "anthropic\ngithub\nopenai\n");
+        // A sandbox that isn't a fork sees only its own and the global ones.
+        t.ctx.vm.runner().ok(
+            &["machine", "status", "-n", "sbx-plain"],
+            &machine_json("sbx-plain", "running", &[("sbx.name", "plain")]),
         );
+        assert_eq!(via(&t, "plain"), "anthropic\n");
+    }
+
+    #[test]
+    fn ls_for_a_sandbox_works_when_smolvm_cannot_be_asked() {
+        let t = test_env(&[]);
+        t.ctx
+            .vm
+            .runner()
+            .fail(&["machine", "status"], "SMOLVM_ERROR", "boom");
+        let mut f = SecretsFile::default();
+        for scope in [None, Some("aa")] {
+            f.set(SecretEntry {
+                service: "github".into(),
+                scope: scope_for(scope),
+                source: Source::Keychain,
+            });
+        }
+        let a = SecretLsArgs {
+            global: false,
+            sandbox: Some("aa-fork-1".into()),
+            service: None,
+            quiet: true,
+        };
+        let mut out = Vec::new();
+        ls_to(&t.ctx, &f, &a, &mut out).unwrap();
+        assert_eq!(String::from_utf8(out).unwrap(), "github\n");
     }
 
     #[test]

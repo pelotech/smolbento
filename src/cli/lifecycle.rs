@@ -155,7 +155,7 @@ fn remove<R: Runner>(ctx: &Ctx<R>, sb: &Sandbox, forget_secrets: bool) -> Result
 }
 
 /// `targets` with forks before parents, so smolvm never refuses a parent for its live forks.
-fn forks_first(mut targets: Vec<Sandbox>) -> Vec<Sandbox> {
+fn forks_first(mut targets: Vec<&Sandbox>) -> Vec<&Sandbox> {
     targets.sort_by_key(|sb| sb.meta.fork_of.is_none());
     targets
 }
@@ -170,8 +170,8 @@ fn remaining_forks<'a>(sb: &Sandbox, all: &'a [Sandbox], removing: &[&str]) -> V
 
 pub fn rm<R: Runner>(ctx: &mut Ctx<R>, a: &RmArgs) -> Result<i32> {
     let all = sandbox::list(&ctx.vm)?;
-    let targets: Vec<Sandbox> = if a.all {
-        all.clone()
+    let named: Vec<Sandbox> = if a.all {
+        Vec::new()
     } else {
         if a.sandboxes.is_empty() {
             bail!("specify sandboxes to remove, or --all");
@@ -181,11 +181,16 @@ pub fn rm<R: Runner>(ctx: &mut Ctx<R>, a: &RmArgs) -> Result<i32> {
             .map(|n| sandbox::get(&ctx.vm, n))
             .collect::<Result<_>>()?
     };
+    let targets: Vec<&Sandbox> = if a.all {
+        all.iter().collect()
+    } else {
+        named.iter().collect()
+    };
     if targets.is_empty() {
         println!("No sandboxes found");
         return Ok(0);
     }
-    let names: Vec<&str> = targets.iter().map(Sandbox::name).collect();
+    let names: Vec<&str> = targets.iter().map(|sb| sb.name()).collect();
     for sb in &targets {
         let forks = remaining_forks(sb, &all, &names);
         if !forks.is_empty() {
@@ -197,7 +202,7 @@ pub fn rm<R: Runner>(ctx: &mut Ctx<R>, a: &RmArgs) -> Result<i32> {
         }
     }
     confirm(ctx, &format!("Remove {}?", names.join(", ")), a.force)?;
-    for sb in &forks_first(targets) {
+    for sb in forks_first(targets) {
         remove(ctx, sb, true)?;
     }
     Ok(0)
@@ -251,7 +256,7 @@ fn prune_to<R: Runner>(ctx: &mut Ctx<R>, a: &PruneArgs, out: &mut impl Write) ->
     for sb in &skipped {
         writeln!(out, "{} has forks; skipped", sb.name())?;
     }
-    let targets = forks_first(targets.into_iter().cloned().collect());
+    let targets = forks_first(targets);
     if targets.is_empty() {
         writeln!(out, "Nothing to prune")?;
         return Ok(0);
@@ -279,8 +284,9 @@ pub fn reset<R: Runner>(ctx: &mut Ctx<R>, a: &ResetArgs) -> Result<i32> {
         "Remove every sandbox and smolbento's session state?",
         a.force,
     )?;
-    for sb in forks_first(sandbox::list(&ctx.vm)?) {
-        remove(ctx, &sb, !a.preserve_secrets)?;
+    let all = sandbox::list(&ctx.vm)?;
+    for sb in forks_first(all.iter().collect()) {
+        remove(ctx, sb, !a.preserve_secrets)?;
     }
     let _ = std::fs::remove_dir_all(ctx.paths.sessions());
     if !a.preserve_secrets {
