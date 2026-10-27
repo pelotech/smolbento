@@ -33,7 +33,7 @@ pub fn image_for(plan: &Plan, cache: &Path) -> Result<String> {
                 let tar = cache
                     .join("images")
                     .join(format!("{}.tar", hex_of(&l.digest)?));
-                ensure_tar(&tar, || l.archive())?;
+                ensure_tar(&tar, |out| l.archive(out))?;
                 Ok(tar.display().to_string())
             }
             _ => bail!("kit '{}' has no image", w.name),
@@ -51,7 +51,7 @@ pub fn image_for(plan: &Plan, cache: &Path) -> Result<String> {
     let tar = cache
         .join("composed")
         .join(format!("{}.tar", hex_of(&key)?));
-    ensure_tar(&tar, || compose(&base, &layered, cache))?;
+    ensure_tar(&tar, |out| compose(&base, &layered, cache, out))?;
     Ok(tar.display().to_string())
 }
 
@@ -100,7 +100,7 @@ impl Layout {
     }
 
     /// The layout as a tar, unchanged.
-    fn archive(&self) -> Result<Vec<u8>> {
+    fn archive(&self, out: &mut impl Write) -> Result<()> {
         let mut blobs = vec![(self.digest.clone(), self.blob(&self.digest)?)];
         let cfg = self.manifest["config"]["digest"]
             .as_str()
@@ -112,11 +112,16 @@ impl Layout {
         }
         let media = self.manifest["mediaType"].as_str();
         let size = fs::metadata(self.blob(&self.digest)?)?.len();
-        write_tar(&self.digest, media, size, blobs)
+        write_tar(out, &self.digest, media, size, blobs)
     }
 }
 
-fn compose(base: &Layout, layered: &[(&Kit, Layout)], cache: &Path) -> Result<Vec<u8>> {
+fn compose(
+    base: &Layout,
+    layered: &[(&Kit, Layout)],
+    cache: &Path,
+    out: &mut impl Write,
+) -> Result<()> {
     let mut manifest = base.manifest.clone();
     let mut config = base.config.clone();
     let mut blobs = Vec::new();
@@ -173,6 +178,7 @@ fn compose(base: &Layout, layered: &[(&Kit, Layout)], cache: &Path) -> Result<Ve
     blobs.push((cfg_digest.clone(), store(&cfg_digest)?));
     blobs.push((m_digest.clone(), store(&m_digest)?));
     write_tar(
+        out,
         &m_digest,
         manifest["mediaType"].as_str(),
         m_bytes.len() as u64,
@@ -183,11 +189,12 @@ fn compose(base: &Layout, layered: &[(&Kit, Layout)], cache: &Path) -> Result<Ve
 /// An OCI image-layout tar. Names carry no `./` (smolvm rejects them), and mtimes, modes and
 /// order are fixed so equal inputs give equal bytes.
 fn write_tar(
+    out: &mut impl Write,
     manifest_digest: &str,
     media_type: Option<&str>,
     manifest_size: u64,
     mut blobs: Vec<(String, PathBuf)>,
-) -> Result<Vec<u8>> {
+) -> Result<()> {
     blobs.sort_by(|a, b| a.0.cmp(&b.0));
     blobs.dedup_by(|a, b| a.0 == b.0);
     let index = json!({
@@ -198,35 +205,46 @@ fn write_tar(
             "size": manifest_size,
         }],
     });
-    let mut b = tar::Builder::new(Vec::new());
+    let mut b = tar::Builder::new(out);
     add(&mut b, "oci-layout", br#"{"imageLayoutVersion":"1.0.0"}"#)?;
     add(&mut b, "index.json", &serde_json::to_vec(&index)?)?;
     for (digest, path) in blobs {
-        let data = fs::read(&path).with_context(|| format!("reading {}", path.display()))?;
-        add(&mut b, &format!("blobs/sha256/{}", hex_of(&digest)?), &data)?;
+        // Layers can be gigabytes: stream them from disk rather than reading them whole.
+        let file = fs::File::open(&path).with_context(|| format!("reading {}", path.display()))?;
+        let len = file.metadata()?.len();
+        let name = format!("blobs/sha256/{}", hex_of(&digest)?);
+        let mut h = header(len);
+        b.append_data(&mut h, &name, file)
+            .with_context(|| format!("adding {name} to the image archive"))?;
     }
-    Ok(b.into_inner()?)
+    b.finish()?;
+    Ok(())
 }
 
-fn add(b: &mut tar::Builder<Vec<u8>>, name: &str, data: &[u8]) -> Result<()> {
+fn header(len: u64) -> tar::Header {
     let mut h = tar::Header::new_gnu();
-    h.set_size(data.len() as u64);
+    h.set_size(len);
     h.set_mode(0o644);
     h.set_mtime(0);
     h.set_entry_type(tar::EntryType::Regular);
+    h
+}
+
+fn add<W: Write>(b: &mut tar::Builder<W>, name: &str, data: &[u8]) -> Result<()> {
+    let mut h = header(data.len() as u64);
     b.append_data(&mut h, name, data)
         .with_context(|| format!("adding {name} to the image archive"))
 }
 
 /// Writes the archive atomically unless it is already there.
-fn ensure_tar(path: &Path, build: impl FnOnce() -> Result<Vec<u8>>) -> Result<()> {
+fn ensure_tar(path: &Path, build: impl FnOnce(&mut fs::File) -> Result<()>) -> Result<()> {
     if path.exists() {
         return Ok(());
     }
     let dir = path.parent().ok_or_else(|| anyhow!("bad archive path"))?;
     fs::create_dir_all(dir).with_context(|| format!("creating {}", dir.display()))?;
     let mut tmp = tempfile::NamedTempFile::new_in(dir)?;
-    tmp.write_all(&build()?)?;
+    build(tmp.as_file_mut())?;
     tmp.persist(path)
         .map_err(|e| e.error)
         .with_context(|| format!("writing {}", path.display()))?;
@@ -345,6 +363,62 @@ mod tests {
         let hist = cfg["history"].as_array().unwrap();
         assert_eq!(hist.len(), 2);
         assert_eq!(hist[1]["created_by"], "smolbento kit mix");
+    }
+
+    #[test]
+    fn multi_layer_mixin_appends_all_layers_in_order() {
+        let f = fx();
+        let d = f._t.path().join("two");
+        let dg = oci_layout(
+            &d,
+            Some(DESC),
+            &[b"one", b"two"],
+            &config(&["sha256:c1", "sha256:c2"]),
+        );
+        let two = kit("two", Content::Oci(d), &dg);
+        let path = image_for(&plan(f.base.clone(), vec![two]), &f.cache).unwrap();
+        let entries = read_tar(&path);
+        let get = |d: &str| {
+            let n = format!("blobs/sha256/{}", hex_of(d).unwrap());
+            serde_json::from_slice::<Value>(&entries.iter().find(|e| e.0 == n).unwrap().1).unwrap()
+        };
+        let index: Value = serde_json::from_slice(&entries[1].1).unwrap();
+        let manifest = get(index["manifests"][0]["digest"].as_str().unwrap());
+        let got: Vec<&str> = manifest["layers"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .map(|l| l["digest"].as_str().unwrap())
+            .collect();
+        assert_eq!(
+            got,
+            [
+                sha256_digest(b"base-layer"),
+                sha256_digest(b"one"),
+                sha256_digest(b"two")
+            ]
+        );
+        let cfg = get(manifest["config"]["digest"].as_str().unwrap());
+        assert_eq!(
+            cfg["rootfs"]["diff_ids"],
+            json!(["sha256:aa", "sha256:c1", "sha256:c2"])
+        );
+        assert_eq!(cfg["history"].as_array().unwrap().len(), 3);
+    }
+
+    #[test]
+    fn composed_config_and_manifest_land_in_the_shared_store() {
+        let f = fx();
+        let path = image_for(&plan(f.base.clone(), vec![f.mix.clone()]), &f.cache).unwrap();
+        let entries = read_tar(&path);
+        let index: Value = serde_json::from_slice(&entries[1].1).unwrap();
+        let md = index["manifests"][0]["digest"].as_str().unwrap();
+        let mbytes = fs::read(store_dir(&f.cache).join(hex_of(md).unwrap())).unwrap();
+        assert_eq!(sha256_digest(&mbytes), md);
+        let manifest: Value = serde_json::from_slice(&mbytes).unwrap();
+        let cd = manifest["config"]["digest"].as_str().unwrap();
+        let cbytes = fs::read(store_dir(&f.cache).join(hex_of(cd).unwrap())).unwrap();
+        assert_eq!(sha256_digest(&cbytes), cd);
     }
 
     #[test]
