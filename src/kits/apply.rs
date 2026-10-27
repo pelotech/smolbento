@@ -11,6 +11,7 @@ use crate::kits::guest;
 use crate::kits::model::{CapBody, Content, CredReq, FileReq, Hook, Kit, NetRule, Rules, Source};
 use crate::kits::resolve::{KitCred, Plan};
 use crate::policy::Policy;
+use crate::policy::rules::is_under;
 use crate::sandbox::CreateRequest;
 use crate::sandbox::labels::CredFormat;
 use crate::sandbox::options::{free_port, parse_memory};
@@ -160,7 +161,7 @@ pub fn apply(
             }
         }
         if kc.req.env.is_some() || !kc.req.inject.is_empty() {
-            bind_credential(kc, req, secrets, &user_creds)?;
+            bind_credential(kc, req, secrets, &user_creds, &mut notes)?;
         }
     }
 
@@ -281,17 +282,58 @@ pub fn apply(
     Ok((steps, added))
 }
 
+/// Whether a kit's inject `host` is one of a service's own `hosts`: the same host, or one its
+/// `*.x` pattern covers.
+fn host_within(host: &str, hosts: &[String]) -> bool {
+    let host = host.to_ascii_lowercase();
+    hosts.iter().any(|s| {
+        let s = s.to_ascii_lowercase();
+        match s.strip_prefix("*.") {
+            None => host == s,
+            Some(d) => {
+                let h = host.strip_prefix("*.").unwrap_or(&host);
+                (h == d && host.starts_with("*.")) || is_under(h, d)
+            }
+        }
+    })
+}
+
 /// Binds a kit credential through the user's secrets: a smolvm credential whose value
 /// `start` resolves from the service's secret. `user_creds`: (env var, service) of the
-/// credentials `req` already had from the user's secrets.
+/// credentials `req` already had from the user's secrets. A built-in service's secret only goes
+/// to that service's own hosts (R24); a custom service's goes where the kit says, with a note.
 fn bind_credential(
     kc: &KitCred,
     req: &mut CreateRequest,
     secrets: &SecretsFile,
     user_creds: &[(String, String)],
+    notes: &mut Vec<String>,
 ) -> Result<()> {
     let c: &CredReq = &kc.req;
     let service = secrets.service(&c.service);
+    // Checked before asking for the secret: setting it wouldn't help.
+    if let Some(builtin) = services::builtin(&c.service) {
+        let mut outside: Vec<&str> = Vec::new();
+        for i in &c.inject {
+            if !host_within(&i.domain, &builtin.hosts) && !outside.contains(&i.domain.as_str()) {
+                outside.push(&i.domain);
+            }
+        }
+        if !outside.is_empty() {
+            let why = format!(
+                "kit {} wants to send your {} secret to {}, which {} doesn't use",
+                kc.kit,
+                c.service,
+                outside.join(", "),
+                c.service
+            );
+            if kc.optional {
+                eprintln!("warning: {why}; skipping its optional credential");
+                return Ok(());
+            }
+            bail!("{why}; refusing");
+        }
+    }
     if secrets.entry_for(&req.name, None, &c.service).is_none() {
         if kc.optional {
             eprintln!(
@@ -340,6 +382,17 @@ fn bind_credential(
             kc.kit,
             c.service
         );
+    }
+    if services::builtin(&c.service).is_none() {
+        let note = format!(
+            "note: kit {} sends your {} secret to {}",
+            kc.kit,
+            c.service,
+            hosts.join(", ")
+        );
+        if !notes.contains(&note) {
+            notes.push(note);
+        }
     }
     // smolvm takes one header and format per credential.
     let shape =
@@ -693,6 +746,57 @@ mod tests {
         assert_eq!(req.credential_env, ["ANTHROPIC_API_KEY"]);
         assert_eq!(req.credential_hosts, ["api.anthropic.com"]);
         assert!(req.credential_services.is_empty());
+    }
+
+    #[test]
+    fn a_builtin_secret_goes_only_to_its_own_hosts() {
+        assert!(super::host_within(
+            "API.github.com",
+            &["api.github.com".into()]
+        ));
+        assert!(!super::host_within(
+            "x.api.github.com",
+            &["api.github.com".into()]
+        ));
+        let pat = ["*.example.com".to_string()];
+        assert!(super::host_within("a.example.com", &pat));
+        assert!(super::host_within("*.a.example.com", &pat));
+        assert!(super::host_within("*.example.com", &pat));
+        assert!(!super::host_within("example.com", &pat));
+
+        let c = cred(
+            "github",
+            None,
+            vec![
+                inject("api.github.com", None),
+                inject("ghe.corp.example", None),
+            ],
+        );
+        let p = plan(vec![with(
+            kit("g", Kind::Mixin),
+            "credential@1",
+            false,
+            c.clone(),
+        )]);
+        let mut req = request();
+        let e = run_with(&p, &mut req, &mut Policy::default(), &secrets(&["github"]))
+            .unwrap_err()
+            .to_string();
+        assert_eq!(
+            e,
+            "kit g wants to send your github secret to ghe.corp.example, which github doesn't use; \
+             refusing"
+        );
+        // Checked before the secret: setting it wouldn't help.
+        let e = run_with(&p, &mut request(), &mut Policy::default(), &secrets(&[]))
+            .unwrap_err()
+            .to_string();
+        assert!(e.contains("refusing"), "{e}");
+        // An optional one is skipped.
+        let p = plan(vec![with(kit("g", Kind::Mixin), "credential@1", true, c)]);
+        let mut req = request();
+        run_with(&p, &mut req, &mut Policy::default(), &secrets(&["github"])).unwrap();
+        assert!(req.credentials.is_empty(), "{:?}", req.credentials);
     }
 
     #[test]

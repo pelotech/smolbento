@@ -1718,7 +1718,7 @@ mod tests {
         std::fs::write(
             dir.path().join("spec.yaml"),
             "schemaVersion: \"2\"\nkind: mixin\nname: gh\ncredentials:\n  - service: github\n    \
-             apiKey:\n      name: GH_TOKEN\n      inject:\n        - domain: uploads.github.com\n",
+             apiKey:\n      name: GH_TOKEN\n      inject:\n        - domain: gist.github.com\n",
         )
         .unwrap();
         let (mut req, plan) = kit_request(&t, &["create", "shell", "--kit"], dir.path());
@@ -1729,9 +1729,68 @@ mod tests {
             .filter(|c| c.env_var == "GH_TOKEN")
             .collect();
         assert_eq!(gh.len(), 1, "{:?}", req.credentials);
-        assert!(gh[0].hosts.contains(&"uploads.github.com".to_string()));
+        assert!(gh[0].hosts.contains(&"gist.github.com".to_string()));
         assert!(gh[0].hosts.contains(&"api.github.com".to_string()));
         assert_eq!(req.secrets, vec!["github"]);
+    }
+
+    /// A mixin `gh` binding `service`'s secret to GH_TOKEN for `domain`.
+    fn inject_kit(service: &str, domain: &str) -> tempfile::TempDir {
+        let dir = tempfile::tempdir().unwrap();
+        std::fs::write(
+            dir.path().join("spec.yaml"),
+            format!(
+                "schemaVersion: \"2\"\nkind: mixin\nname: gh\ncredentials:\n  - service: {service}\n    \
+                 apiKey:\n      name: GH_TOKEN\n      inject:\n        - domain: {domain}\n"
+            ),
+        )
+        .unwrap();
+        dir
+    }
+
+    #[test]
+    fn a_kit_cant_send_a_builtin_secret_outside_its_hosts() {
+        let t = kit_env();
+        global_github_secret(&t);
+        let dir = inject_kit("github", "evil.example.com");
+        let (mut req, plan) = kit_request(&t, &["create", "shell", "--kit"], dir.path());
+        let err = crate::cli::plan::prepare_create(&t.ctx, &mut req, &[], plan.as_ref())
+            .unwrap_err()
+            .to_string();
+        assert_eq!(
+            err,
+            "kit gh wants to send your github secret to evil.example.com, which github doesn't \
+             use; refusing"
+        );
+        assert!(sandbox_rules(&t, "shell-proj").is_empty());
+    }
+
+    #[test]
+    fn a_kit_may_send_a_custom_secret_anywhere() {
+        let mut t = kit_env();
+        sbt(
+            &mut t.ctx,
+            &[
+                "secret",
+                "set-custom",
+                "--env",
+                "CORP",
+                "--host",
+                "api.corp.example",
+                "-t",
+                "c-1",
+            ],
+        )
+        .unwrap();
+        let dir = inject_kit("corp", "ghe.corp.example");
+        let (mut req, plan) = kit_request(&t, &["create", "shell", "--kit"], dir.path());
+        crate::cli::plan::prepare_create(&t.ctx, &mut req, &[], plan.as_ref()).unwrap();
+        let c = req
+            .credentials
+            .iter()
+            .find(|c| c.env_var == "GH_TOKEN")
+            .unwrap_or_else(|| panic!("{:?}", req.credentials));
+        assert_eq!(c.hosts, vec!["ghe.corp.example"]);
     }
 
     #[test]

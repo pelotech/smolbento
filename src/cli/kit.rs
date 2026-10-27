@@ -81,6 +81,10 @@ fn inspect<R: Runner>(ctx: &Ctx<R>, reference: &str, args: &KitArgOpts, json: bo
             .iter()
             .map(|c| json!({"type": c.ty, "optional": c.optional, "supported": supported(c)}))
             .collect();
+        let creds: Vec<_> = credentials(&kit)
+            .into_iter()
+            .map(|(service, hosts)| json!({"service": service, "injectHosts": hosts}))
+            .collect();
         let v = json!({
             "name": kit.name,
             "kind": kind_name(kit.kind),
@@ -91,6 +95,7 @@ fn inspect<R: Runner>(ctx: &Ctx<R>, reference: &str, args: &KitArgOpts, json: bo
             "requires": kit.requires,
             "args": args,
             "capabilities": caps,
+            "credentials": creds,
         });
         writeln!(out, "{}", serde_json::to_string_pretty(&v)?)?;
         return Ok(0);
@@ -148,7 +153,42 @@ fn inspect<R: Runner>(ctx: &Ctx<R>, reference: &str, args: &KitArgOpts, json: bo
         ]);
     }
     write!(out, "{}", super::table(rows))?;
+    let creds = credentials(&kit);
+    if !creds.is_empty() {
+        // Where each secret goes: a built-in service's only to its own hosts (R24).
+        writeln!(out, "Credentials:")?;
+        let mut rows = vec![vec!["SERVICE".into(), "SENT TO".into()]];
+        for (service, hosts) in creds {
+            let to = if hosts.is_empty() {
+                "the service's hosts".into()
+            } else {
+                hosts.join(", ")
+            };
+            rows.push(vec![service, to]);
+        }
+        write!(out, "{}", super::table(rows))?;
+    }
     Ok(0)
+}
+
+/// Each credential that sends one of your secrets (OAuth passthrough sends none): its service and
+/// the hosts it injects into (empty: the service's own), as declared (placeholders unexpanded).
+fn credentials(kit: &Kit) -> Vec<(String, Vec<String>)> {
+    kit.caps
+        .iter()
+        .filter_map(|c| match &c.body {
+            CapBody::Credential(r) if r.env.is_some() || !r.inject.is_empty() => {
+                let mut hosts: Vec<String> = Vec::new();
+                for i in &r.inject {
+                    if !hosts.contains(&i.domain) {
+                        hosts.push(i.domain.clone());
+                    }
+                }
+                Some((r.service.clone(), hosts))
+            }
+            _ => None,
+        })
+        .collect()
 }
 
 fn kind_name(k: Kind) -> &'static str {
@@ -678,6 +718,14 @@ mod tests {
             );
         }
         assert!(t.ctx.vm.runner().call_lines().is_empty());
+        let creds = out.split_once("Credentials:\n").expect(&out).1;
+        let row: Vec<&str> = creds.lines().nth(1).unwrap().split_whitespace().collect();
+        assert_eq!(
+            row,
+            ["example", "api.example.com,", "git.example.com"],
+            "{out}"
+        );
+        assert_eq!(creds.lines().count(), 2, "OAuth sends no secret: {out}");
 
         sbt(&mut t.ctx, &["kit", "inspect", &full, "--json"]).unwrap();
         let v: serde_json::Value = serde_json::from_str(&t.stdout()).unwrap();
@@ -689,6 +737,10 @@ mod tests {
         assert_eq!(caps[2]["supported"], true, "{v}");
         assert_eq!(caps[3]["supported"], false, "{v}");
         assert_eq!(caps[0]["optional"], false);
+        assert_eq!(
+            v["credentials"],
+            serde_json::json!([{"service": "example", "injectHosts": ["api.example.com", "git.example.com"]}])
+        );
     }
 
     #[test]
