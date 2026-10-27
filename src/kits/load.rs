@@ -214,7 +214,7 @@ mod tests {
     use crate::cli::testutil::*;
 
     fn allow_local() -> TestEnv {
-        test_env(&[("SMOLBENTO_KIT_ALLOW_LOCAL", "true")])
+        test_env(&[("SMOLBENTO_KIT_ALLOW_LOCAL_KITS", "true")])
     }
 
     const V2: &str = "schemaVersion: \"2\"\nkind: mixin\nname: my-kit\n";
@@ -252,7 +252,7 @@ mod tests {
     #[test]
     fn docker_is_the_shipped_mixin_and_trusted_without_local_kits() {
         use crate::kits::model::{CapBody, Kind};
-        let t = test_env(&[("SMOLBENTO_KIT_ALLOW_LOCAL", "false")]);
+        let t = test_env(&[("SMOLBENTO_KIT_ALLOW_LOCAL_KITS", "false")]);
         let k = load(&t.ctx, "docker").unwrap();
         assert_eq!(k.name, "docker");
         assert_eq!(k.source, Source::Builtin("docker"));
@@ -290,7 +290,7 @@ mod tests {
 
     #[test]
     fn a_refused_local_source_fails_before_any_runner_call() {
-        let t = test_env(&[("SMOLBENTO_KIT_ALLOW_LOCAL", "false")]);
+        let t = test_env(&[("SMOLBENTO_KIT_ALLOW_LOCAL_KITS", "false")]);
         let dir = t.ctx.cwd.join("kit");
         fs::create_dir(&dir).unwrap();
         fs::write(
@@ -308,7 +308,7 @@ mod tests {
 
     #[test]
     fn trust_is_checked_before_the_directory_is_classified() {
-        let t = test_env(&[("SMOLBENTO_KIT_ALLOW_LOCAL", "false")]);
+        let t = test_env(&[("SMOLBENTO_KIT_ALLOW_LOCAL_KITS", "false")]);
         fs::create_dir(t.ctx.cwd.join("empty")).unwrap();
         let e = load(&t.ctx, "./empty").unwrap_err();
         assert!(
@@ -464,9 +464,9 @@ mod tests {
 
     #[test]
     fn a_disallowed_registry_ref_is_refused_before_pulling() {
-        let t = test_env(&[("SMOLBENTO_KIT_SOURCES", "ghcr.io/ok/*")]);
+        let t = test_env(&[("SMOLBENTO_KIT_ALLOWED_SOURCES", r#"["ghcr.io/ok/"]"#)]);
         let e = load(&t.ctx, "evil.example/x/y:1").unwrap_err();
-        assert!(format!("{e:#}").contains("isn't allowed"), "{e:#}");
+        assert!(format!("{e:#}").contains("not in your allowlist"), "{e:#}");
     }
 
     #[test]

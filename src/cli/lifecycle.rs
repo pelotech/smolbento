@@ -1490,7 +1490,7 @@ mod tests {
     }
 
     fn kit_env() -> TestEnv {
-        test_env(&[("SMOLBENTO_KIT_ALLOW_LOCAL", "true")])
+        test_env(&[("SMOLBENTO_KIT_ALLOW_LOCAL_KITS", "true")])
     }
 
     fn create_line(t: &TestEnv) -> String {

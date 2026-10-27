@@ -688,7 +688,7 @@ mod tests {
 
     #[test]
     fn attaching_to_an_existing_sandbox_loads_no_kits() {
-        let mut t = test_env(&[("SMOLBENTO_KIT_ALLOW_LOCAL", "true")]);
+        let mut t = test_env(&[("SMOLBENTO_KIT_ALLOW_LOCAL_KITS", "true")]);
         created(&t, "running");
         t.ctx.vm.runner().interactive_exit(0);
         // Loading either would fail: the path doesn't exist.
@@ -722,8 +722,8 @@ mod tests {
             ("localhost:1/acme/my-kit:1", "my-kit-proj"),
         ] {
             let mut t = test_env(&[
-                ("SMOLBENTO_KIT_ALLOW_LOCAL", "true"),
-                ("SMOLBENTO_KIT_SOURCES", "localhost:1/*"),
+                ("SMOLBENTO_KIT_ALLOW_LOCAL_KITS", "true"),
+                ("SMOLBENTO_KIT_ALLOWED_SOURCES", r#"["localhost:1/"]"#),
             ]);
             let dir = t.ctx.cwd.join("kit");
             std::fs::create_dir(&dir).unwrap();
@@ -821,7 +821,7 @@ mod tests {
 
     #[test]
     fn existing_name_with_kit_flags_attaches_without_loading() {
-        let mut t = test_env(&[("SMOLBENTO_KIT_ALLOW_LOCAL", "true")]);
+        let mut t = test_env(&[("SMOLBENTO_KIT_ALLOW_LOCAL_KITS", "true")]);
         created(&t, "running");
         t.ctx.vm.runner().interactive_exit(0);
         sbt(

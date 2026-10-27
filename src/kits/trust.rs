@@ -11,30 +11,44 @@ pub fn check(source: &Source, settings: &Settings) -> Result<()> {
         Source::Preset(_) | Source::Builtin(_) => Ok(()),
         Source::Registry(r) => {
             let name = normalise(r)?;
-            let patterns = settings.value("kit.sources")?;
-            if patterns
-                .split(',')
-                .map(str::trim)
-                .any(|p| !p.is_empty() && glob(&normalise_pattern(p), &name))
+            let allowed = allowed_sources(settings)?;
+            if allowed
+                .iter()
+                .any(|p| p == "*" || name.starts_with(&normalise_prefix(p)))
             {
                 return Ok(());
             }
-            let registry = name.split('/').next().unwrap_or_default();
+            let org: Vec<&str> = name.split('/').take(2).collect();
+            let mut suggested = allowed.clone();
+            suggested.push(format!("{}/", org.join("/")));
             bail!(
-                "kit source {name} isn't allowed; allow it with \
-                 sbt settings set kit.sources '{patterns},{registry}/*'"
+                "kit \"{r}\" cannot be installed \u{2014} its source is not in your allowlist; \
+                 current kit.allowedSources: {}\n\
+                 try: sbt settings set kit.allowedSources '{}' (or '[\"*\"]')",
+                serde_json::to_string(&allowed)?,
+                serde_json::to_string(&suggested)?,
             )
         }
         Source::LocalV3(_) | Source::LocalV2(_) | Source::Smolfile(_) => {
-            if !settings.bool("kit.allow-local")? {
+            if !settings.bool("kit.allowLocalKits")? {
                 bail!(
                     "local kits are disabled; enable them with \
-                     sbt settings set kit.allow-local true"
+                     sbt settings set kit.allowLocalKits true"
                 );
             }
             Ok(())
         }
     }
+}
+
+/// `kit.allowedSources`: a JSON array of strings.
+fn allowed_sources(settings: &Settings) -> Result<Vec<String>> {
+    let raw = settings.value("kit.allowedSources")?;
+    serde_json::from_str(&raw).map_err(|e| {
+        anyhow!(
+            "setting kit.allowedSources must be a JSON array of strings, e.g. [\"docker.io/\"]: {e}"
+        )
+    })
 }
 
 /// `registry/repo` with Docker's defaults applied and the tag or digest dropped. Refs a puller
@@ -65,12 +79,6 @@ pub(crate) fn normalise(r: &str) -> Result<String> {
     let has_host = parts.len() > 1 && (parts[0].contains(['.', ':']) || parts[0] == "localhost");
     if has_host {
         parts[0] = parts[0].to_ascii_lowercase();
-        if matches!(
-            parts[0].as_str(),
-            "index.docker.io" | "registry-1.docker.io"
-        ) {
-            parts[0] = "docker.io".to_string();
-        }
     } else {
         parts.insert(0, "docker.io".to_string());
     }
@@ -80,41 +88,16 @@ pub(crate) fn normalise(r: &str) -> Result<String> {
     Ok(parts.join("/"))
 }
 
-/// A `kit.sources` pattern with its registry host normalised as `normalise` does a ref's:
-/// lowercase, Docker Hub's aliases as `docker.io`.
-fn normalise_pattern(p: &str) -> String {
-    let Some((host, rest)) = p.split_once('/') else {
-        return p.to_string();
-    };
-    if !(host.contains(['.', ':']) || host.eq_ignore_ascii_case("localhost")) {
-        return p.to_string();
-    }
-    let host = host.to_ascii_lowercase();
-    let host = match host.as_str() {
-        "index.docker.io" | "registry-1.docker.io" => "docker.io",
-        h => h,
-    };
-    format!("{host}/{rest}")
-}
-
-/// `*` matches any run of characters, `/` included.
-fn glob(pattern: &str, text: &str) -> bool {
-    let mut pieces = pattern.split('*');
-    let first = pieces.next().unwrap_or_default();
-    let Some(mut rest) = text.strip_prefix(first) else {
-        return false;
-    };
-    let pieces: Vec<&str> = pieces.collect();
-    let Some((last, middle)) = pieces.split_last() else {
-        return rest.is_empty();
-    };
-    for p in middle {
-        match rest.find(p) {
-            Some(i) => rest = &rest[i + p.len()..],
-            None => return false,
+/// A `kit.allowedSources` prefix with its registry host lowercased, as `normalise` does a ref's.
+fn normalise_prefix(p: &str) -> String {
+    match p.split_once('/') {
+        Some((host, rest))
+            if host.contains(['.', ':']) || host.eq_ignore_ascii_case("localhost") =>
+        {
+            format!("{}/{rest}", host.to_ascii_lowercase())
         }
+        _ => p.to_string(),
     }
-    rest.ends_with(last)
 }
 
 #[cfg(test)]
@@ -137,24 +120,20 @@ mod tests {
         Source::Registry(r.to_string())
     }
 
+    const KEY: &str = "SMOLBENTO_KIT_ALLOWED_SOURCES";
+
     #[test]
-    fn pattern_hosts_are_normalised_like_refs() {
-        for pattern in [
-            "GHCR.IO/acme/*",
-            "index.docker.io/acme/*",
-            "registry-1.docker.io/acme/*",
-        ] {
-            let (_d, s) = settings(&[("SMOLBENTO_KIT_SOURCES", pattern)]);
-            let r = if pattern.starts_with("GHCR") {
-                "ghcr.io/acme/k:1"
-            } else {
-                "acme/k:1"
-            };
-            check(&registry(r), &s).unwrap_or_else(|e| panic!("{pattern}: {e}"));
-        }
+    fn pattern_hosts_are_case_insensitive_and_aliases_are_not_folded() {
+        let (_d, s) = settings(&[(KEY, r#"["GHCR.IO/acme/"]"#)]);
+        check(&registry("ghcr.io/acme/k:1"), &s).unwrap();
+        check(&registry("GHCR.io/acme/k:1"), &s).unwrap();
         // Only the host: a repository path keeps its case.
-        let (_d, s) = settings(&[("SMOLBENTO_KIT_SOURCES", "ghcr.io/Acme/*")]);
+        let (_d, s) = settings(&[(KEY, r#"["ghcr.io/Acme/"]"#)]);
         assert!(check(&registry("ghcr.io/acme/k:1"), &s).is_err());
+        // sbx does not treat Docker Hub's other hosts as docker.io.
+        let (_d, s) = settings(&[(KEY, r#"["index.docker.io/acme/"]"#)]);
+        check(&registry("index.docker.io/acme/k:1"), &s).unwrap();
+        assert!(check(&registry("acme/k:1"), &s).is_err());
     }
 
     #[test]
@@ -172,9 +151,23 @@ mod tests {
             .to_string();
         assert_eq!(
             err,
-            "kit source ghcr.io/x/y isn't allowed; allow it with \
-             sbt settings set kit.sources 'docker.io/*,ghcr.io/*'"
+            "kit \"ghcr.io/x/y:1\" cannot be installed \u{2014} its source is not in your allowlist; \
+             current kit.allowedSources: [\"docker.io/\"]\n\
+             try: sbt settings set kit.allowedSources '[\"docker.io/\",\"ghcr.io/x/\"]' \
+             (or '[\"*\"]')"
         );
+    }
+
+    #[test]
+    fn hub_aliases_are_refused_under_the_default() {
+        let (_d, s) = settings(&[]);
+        for r in [
+            "index.docker.io/x",
+            "registry-1.docker.io/a/b",
+            "Index.Docker.IO/x",
+        ] {
+            assert!(check(&registry(r), &s).is_err(), "{r} must be refused");
+        }
     }
 
     #[test]
@@ -186,26 +179,31 @@ mod tests {
         let digest = format!("reg.io:443/a/b@sha256:{}", "f".repeat(64));
         assert_eq!(normalise(&digest).unwrap(), "reg.io:443/a/b");
         assert_eq!(normalise("Reg.IO/A/b").unwrap(), "reg.io/A/b");
-        assert_eq!(
-            normalise("index.docker.io/x").unwrap(),
-            "docker.io/library/x"
-        );
-        assert_eq!(
-            normalise("registry-1.docker.io/a/b").unwrap(),
-            "docker.io/a/b"
-        );
+        assert_eq!(normalise("index.docker.io/x").unwrap(), "index.docker.io/x");
     }
 
     #[test]
-    fn patterns_are_comma_separated_globs() {
-        let (_d, s) = settings(&[("SMOLBENTO_KIT_SOURCES", "docker.io/*, ghcr.io/acme/*")]);
+    fn allowed_sources_are_json_prefixes() {
+        let (_d, s) = settings(&[(KEY, r#"["docker.io/", "ghcr.io/acme/"]"#)]);
         check(&registry("ghcr.io/acme/kit/sub:1"), &s).unwrap();
         assert!(check(&registry("ghcr.io/other/kit"), &s).is_err());
-        let (_d, s) = settings(&[("SMOLBENTO_KIT_SOURCES", "*")]);
+        assert!(check(&registry("ghcr.io/acmex/kit"), &s).is_err());
+        let (_d, s) = settings(&[(KEY, r#"["*"]"#)]);
         check(&registry("quay.io/a/b"), &s).unwrap();
-        let (_d, s) = settings(&[("SMOLBENTO_KIT_SOURCES", "docker.io/library/alpine")]);
+        let (_d, s) = settings(&[(KEY, r#"["docker.io/library/alpine"]"#)]);
         check(&registry("alpine"), &s).unwrap();
-        assert!(check(&registry("alpine2"), &s).is_err());
+        let (_d, s) = settings(&[(KEY, "[]")]);
+        assert!(check(&registry("alpine"), &s).is_err());
+    }
+
+    #[test]
+    fn invalid_allowed_sources_name_the_setting() {
+        for bad in ["docker.io/*", "[1]", "{}", ""] {
+            let (_d, s) = settings(&[(KEY, bad)]);
+            let e = check(&registry("alpine"), &s).unwrap_err().to_string();
+            assert!(e.contains("kit.allowedSources"), "{bad}: {e}");
+            assert!(e.contains("JSON array"), "{bad}: {e}");
+        }
     }
 
     #[test]
@@ -213,7 +211,7 @@ mod tests {
         let (_d, s) = settings(&[]);
         let p = PathBuf::from("/k");
         check(&Source::LocalV3(p.clone()), &s).unwrap();
-        let (_d, s) = settings(&[("SMOLBENTO_KIT_ALLOW_LOCAL", "false")]);
+        let (_d, s) = settings(&[("SMOLBENTO_KIT_ALLOW_LOCAL_KITS", "false")]);
         for src in [
             Source::LocalV3(p.clone()),
             Source::LocalV2(p.clone()),
@@ -221,7 +219,7 @@ mod tests {
         ] {
             assert_eq!(
                 check(&src, &s).unwrap_err().to_string(),
-                "local kits are disabled; enable them with sbt settings set kit.allow-local true"
+                "local kits are disabled; enable them with sbt settings set kit.allowLocalKits true"
             );
         }
         check(&registry("a/b"), &s).unwrap();
@@ -256,32 +254,12 @@ mod tests {
     fn registry_host_is_case_insensitive() {
         let (_d, s) = settings(&[]);
         check(&registry("DOCKER.IO/x"), &s).unwrap();
-        check(&registry("Index.Docker.IO/x"), &s).unwrap();
-        check(&registry("registry-1.docker.io/a/b"), &s).unwrap();
         assert!(check(&registry("GHCR.io/x/y"), &s).is_err());
-        let (_d, s) = settings(&[("SMOLBENTO_KIT_SOURCES", "ghcr.io/Acme/*")]);
+        let (_d, s) = settings(&[(KEY, r#"["ghcr.io/Acme/"]"#)]);
         check(&registry("GHCR.IO/Acme/k"), &s).unwrap();
         assert!(
             check(&registry("ghcr.io/acme/k"), &s).is_err(),
             "repo case is kept"
         );
-    }
-
-    #[test]
-    fn glob_handles_middle_wildcards_and_overlap() {
-        assert!(glob("a*b*c", "abc"));
-        assert!(glob("a*b*c", "aXXbYYc"));
-        assert!(glob("a*b*c", "abbc"));
-        assert!(!glob("a*b*c", "acb"));
-        assert!(!glob("a*b*c", "ab"));
-        assert!(!glob("a*a", "a"));
-        assert!(glob("a*a", "aa"));
-        assert!(glob("a*a", "aXa"));
-        assert!(glob("*x*", "x"));
-        assert!(glob("*x*", "a/x/b"));
-        assert!(!glob("*x*", "abc"));
-        assert!(glob("*", ""));
-        assert!(glob("abc", "abc"));
-        assert!(!glob("abc", "abcd"));
     }
 }

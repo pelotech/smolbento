@@ -821,7 +821,7 @@ fn assert_one_dockerd(e: &E2e, what: &str) {
 
 /// A throwaway `registry:2` in its own smolvm machine on a free loopback port, for published-kit
 /// fixtures. Each test starts its own: nextest runs every test in a process of its own. `start`
-/// also lets `e` load kits from any registry (`kit.sources=*`).
+/// also lets `e` load kits from any registry (`kit.allowedSources=["*"]`).
 struct Registry {
     machine: String,
     port: u16,
@@ -829,7 +829,7 @@ struct Registry {
 
 impl Registry {
     fn start(e: &E2e) -> Registry {
-        e.ok(&["settings", "set", "kit.sources", "*"]);
+        e.ok(&["settings", "set", "kit.allowedSources", r#"["*"]"#]);
         let r = Registry {
             machine: format!("e2e-{}-registry", std::process::id()),
             port: smolbento::sandbox::options::free_port().unwrap(),
