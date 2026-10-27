@@ -438,6 +438,7 @@ fn clone_round_trip() {
         ]);
     };
     guest_commit("guest-one");
+    e.ok(&["exec", &e.name, "git", "-C", ws, "tag", "v9.9.9"]);
     assert_eq!(
         std::fs::read_to_string(e.workspace().join("README")).unwrap(),
         "host\n",
@@ -446,6 +447,11 @@ fn clone_round_trip() {
     e.git_ok(&["fetch", "-q", &remote]);
     let log = e.git_ok(&["log", "--format=%s", &format!("{remote}/main")]);
     assert_eq!(log, "guest-one\nhost commit\n");
+    assert_eq!(
+        e.git_ok(&["tag", "-l"]),
+        "",
+        "the agent's tags stay in the sandbox"
+    );
 
     let touch = e.sbt(&["exec", &e.name, "touch", "/run/sandbox/source/x"]);
     assert!(!touch.status.success(), "/run/sandbox/source is read-only");

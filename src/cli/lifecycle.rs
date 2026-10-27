@@ -295,6 +295,10 @@ mod tests {
             git_config(&root, "remote.sandbox-claude-repo.uploadpack"),
             "sbt _upload-pack claude-repo"
         );
+        assert_eq!(
+            git_config(&root, "remote.sandbox-claude-repo.tagOpt"),
+            "--no-tags"
+        );
     }
 
     #[test]

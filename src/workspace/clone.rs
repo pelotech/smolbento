@@ -154,6 +154,11 @@ pub fn add_remote(repo: &Path, sandbox: &str) -> Result<()> {
             &upload_pack_cmd(sandbox),
         ],
     )?;
+    // Only commits come back: tags the agent makes must not land in the host's refs/tags.
+    git(
+        repo,
+        &["config", &format!("remote.{remote}.tagOpt"), "--no-tags"],
+    )?;
     Ok(())
 }
 
@@ -210,6 +215,8 @@ pub fn fetch(repo: &Path, sandbox: &str) -> Result<()> {
             "-c",
             "fetch.fsckObjects=true",
             "fetch",
+            "--no-tags",
+            "--no-recurse-submodules",
             &remote_name(sandbox),
         ])
         .status()
@@ -320,6 +327,7 @@ mod tests {
         };
         assert_eq!(get("remote.sandbox-box.url"), "file:///sbt/box");
         assert_eq!(get("remote.sandbox-box.uploadpack"), "sbt _upload-pack box");
+        assert_eq!(get("remote.sandbox-box.tagopt"), "--no-tags");
         assert_eq!(
             get("remote.sandbox-box.fetch"),
             "+refs/heads/*:refs/remotes/sandbox-box/*"
