@@ -498,7 +498,7 @@ mod tests {
             meta: Meta {
                 name: "r".into(),
                 workspace: Some("/w/r".into()),
-                clone: Some("/w/r".into()),
+                clone_repo: Some("/w/r".into()),
                 ..Default::default()
             },
             machine: "sbx-r".into(),

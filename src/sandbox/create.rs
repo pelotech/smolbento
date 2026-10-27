@@ -51,7 +51,7 @@ pub fn meta(req: &CreateRequest) -> Meta {
         secrets: req.secrets.clone(),
         credential_hosts: req.credential_hosts.clone(),
         credential_env: req.credential_env.clone(),
-        clone: req.clone.as_ref().map(|c| c.top.display().to_string()),
+        clone_repo: req.clone.as_ref().map(|c| c.top.display().to_string()),
     }
 }
 
@@ -89,7 +89,7 @@ pub fn spec(req: &CreateRequest) -> CreateSpec {
         image: req.image.clone(),
         labels: meta.to_labels(),
         mounts,
-        workdir: meta.clone.clone().or_else(|| meta.workspace.clone()),
+        workdir: meta.clone_repo.clone().or_else(|| meta.workspace.clone()),
         cpus: Some(req.cpus),
         memory_mib: Some(req.memory_mib),
         env: req.env.clone(),

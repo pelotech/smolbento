@@ -11,7 +11,7 @@ pub fn run<R: Runner>(ctx: &mut Ctx<R>, sandbox: &str) -> Result<i32> {
     // stdin is git's pipe, but never ask (ensure_policy prompts on stdout).
     ctx.stdin_tty = false;
     let mut sb = sandbox::get(&ctx.vm, sandbox)?;
-    let Some(dir) = sb.meta.clone.clone() else {
+    let Some(dir) = sb.meta.clone_repo.clone() else {
         bail!("sandbox '{sandbox}' isn't a clone sandbox");
     };
     let was_stopped = !sb.is_running();

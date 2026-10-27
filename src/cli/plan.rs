@@ -78,7 +78,7 @@ pub fn start_plan<R: Runner>(ctx: &Ctx<R>, meta: &Meta) -> Result<StartPlan> {
         .filter(|v| !env.iter().any(|(k, _)| k == *v))
         .cloned()
         .collect();
-    let clone = meta.clone.as_ref().map(|dir| {
+    let clone = meta.clone_repo.as_ref().map(|dir| {
         let repo = Path::new(dir);
         let read =
             || -> Result<_> { Ok((clone::worktree_head(repo)?, clone::copied_remotes(repo)?)) };
@@ -529,7 +529,7 @@ mod tests {
         set_policy(&t, "mode = \"deny-all\"");
         let (_d, repo) = host_repo("https://x:y@github.com/o/r.git");
         let mut m = meta("s1", &[], &[]);
-        m.clone = Some(repo.clone());
+        m.clone_repo = Some(repo.clone());
         let plan = start_plan(&t.ctx, &m).unwrap();
         assert_eq!(
             plan.clone,
@@ -556,7 +556,7 @@ mod tests {
             &["worktree", "add", "-q", "-b", "feat", wt.to_str().unwrap()],
         );
         let mut m = meta("s1", &[], &[]);
-        m.clone = Some(wt.display().to_string());
+        m.clone_repo = Some(wt.display().to_string());
         let plan = start_plan(&t.ctx, &m).unwrap();
         assert_eq!(
             plan.clone.unwrap().head,
@@ -569,7 +569,7 @@ mod tests {
         let t = test_env(&[]);
         set_policy(&t, "mode = \"deny-all\"");
         let mut m = meta("s1", &[], &[]);
-        m.clone = Some("/nonexistent/repo".into());
+        m.clone_repo = Some("/nonexistent/repo".into());
         let plan = start_plan(&t.ctx, &m).unwrap();
         assert_eq!(
             plan.clone,

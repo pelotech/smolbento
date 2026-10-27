@@ -143,7 +143,7 @@ pub(crate) fn stop_sandbox<R: Runner>(ctx: &Ctx<R>, sb: &Sandbox) -> Result<()> 
 /// Deletes a sandbox and its per-sandbox policy; `forget_secrets` also drops its own secrets.
 fn remove<R: Runner>(ctx: &Ctx<R>, sb: &Sandbox, forget_secrets: bool) -> Result<()> {
     ctx.vm.delete(&sb.machine)?;
-    if let Some(repo) = &sb.meta.clone {
+    if let Some(repo) = &sb.meta.clone_repo {
         clone::remove_remote(Path::new(repo), sb.name());
     }
     session::clear(&ctx.paths.sessions(), sb.name());
