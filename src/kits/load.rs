@@ -70,6 +70,11 @@ fn load_dir<R: Runner>(ctx: &Ctx<R>, dir: &Path) -> Result<Kit> {
         kit.source = Source::LocalV2(dir.to_path_buf());
         return Ok(kit);
     }
+    load_v3(ctx, dir)
+}
+
+fn load_v3<R: Runner>(ctx: &Ctx<R>, dir: &Path) -> Result<Kit> {
+    let source = Source::LocalV3(dir.to_path_buf());
     let descriptors = fs::read_dir(dir)
         .with_context(|| format!("reading {}", dir.display()))?
         .filter_map(|e| e.ok())
@@ -87,11 +92,6 @@ fn load_dir<R: Runner>(ctx: &Ctx<R>, dir: &Path) -> Result<Kit> {
             builder::SYNTAX
         ),
     }
-    load_v3(ctx, dir)
-}
-
-fn load_v3<R: Runner>(ctx: &Ctx<R>, dir: &Path) -> Result<Kit> {
-    let source = Source::LocalV3(dir.to_path_buf());
     let built = builder::build(ctx, dir)?;
     registry::read_layout(&built, source)
 }
@@ -200,24 +200,33 @@ mod tests {
         );
     }
 
-    #[test]
-    fn several_descriptors_in_one_directory_are_an_error() {
-        let t = allow_local();
-        let dir = t.ctx.cwd.join("kit");
+    /// A directory `twin-kit` with two v3 descriptors.
+    fn twin_kit(t: &TestEnv) -> PathBuf {
+        let dir = t.ctx.cwd.join("twin-kit");
         fs::create_dir(&dir).unwrap();
         for n in ["a.yaml", "b.yaml"] {
             fs::write(dir.join(n), "# syntax=docker/sandbox-kit:3\nkind: mixin\n").unwrap();
         }
-        let m = format!("{:#}", load(&t.ctx, "./kit").unwrap_err());
-        assert!(
-            m.contains("several kit descriptors") && m.contains("kit"),
-            "{m}"
-        );
-        assert!(t.ctx.vm.runner().call_lines().is_empty());
+        dir.canonicalize().unwrap()
     }
 
     #[test]
-    fn a_descriptor_file_routes_to_its_directory_and_the_builder() {
+    fn several_descriptors_are_an_error_for_a_directory_and_for_a_file() {
+        for r in ["./twin-kit", "./twin-kit/a.yaml"] {
+            let t = allow_local();
+            let dir = twin_kit(&t);
+            let m = format!("{:#}", load(&t.ctx, r).unwrap_err());
+            assert!(
+                m.contains("several kit descriptors") && m.contains(&dir.display().to_string()),
+                "{m}"
+            );
+            assert!(t.ctx.vm.runner().call_lines().is_empty(), "{r}");
+        }
+    }
+
+    #[test]
+    fn a_descriptor_file_builds_its_parent_directory() {
+        use crate::kits::registry::fixtures::oci_layout;
         let t = allow_local();
         let dir = t.ctx.cwd.join("kit");
         fs::create_dir(&dir).unwrap();
@@ -226,11 +235,32 @@ mod tests {
             "# syntax=docker/sandbox-kit:3\nschemaVersion: \"3\"\nkind: mixin\n",
         )
         .unwrap();
-        // The fake has no builder machine, so the build fails; routing shows in the calls.
-        let _ = load(&t.ctx, "./kit/m.yaml");
-        let lines = t.ctx.vm.runner().call_lines();
+        // What `docker buildx --output type=oci` hands back, as a tar of the layout.
+        let out = tempfile::tempdir().unwrap();
+        oci_layout(
+            out.path(),
+            Some(r#"{"schemaVersion":"3","kind":"mixin","name":"m"}"#),
+            &[],
+            "{}",
+        );
+        let mut b = tar::Builder::new(Vec::new());
+        b.append_dir_all(".", out.path()).unwrap();
+        let fake = t.ctx.vm.runner();
+        fake.ok(
+            &["machine", "status"],
+            &machine_json(
+                "sbx-_builder",
+                "running",
+                &[("sbx.name", "_builder"), ("sbx.docker", "true")],
+            ),
+        )
+        .download(&b.into_inner().unwrap());
+        let k = load(&t.ctx, "./kit/m.yaml").unwrap();
+        // The source is the parent directory, the build context buildx was given.
+        assert_eq!(k.source, Source::LocalV3(dir.canonicalize().unwrap()));
+        let lines = fake.call_lines();
         assert!(
-            lines.iter().any(|l| l.contains("sbx-_builder")),
+            lines.iter().any(|l| l.starts_with("machine cp /")),
             "{lines:?}"
         );
     }
