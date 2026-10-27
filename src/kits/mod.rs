@@ -2,6 +2,7 @@
 
 pub mod args;
 pub mod model;
+pub mod resolve;
 pub mod smolfile;
 pub mod v2;
 pub mod v3;
