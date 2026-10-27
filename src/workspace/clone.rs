@@ -71,7 +71,7 @@ fn source_with(program: &str, path: &Path) -> Result<CloneSource> {
         ],
     )
     .map_err(|e| {
-        if e.is::<GitMissing>() {
+        if e.is::<GitMissing>() || e.is::<std::io::Error>() {
             e
         } else {
             anyhow::anyhow!(
@@ -121,20 +121,48 @@ pub fn upload_pack_cmd(sandbox: &str) -> String {
 }
 
 /// Whether `sandbox-<name>` exists, and whether smolbento made it.
-fn remote_owner(repo: &Path, sandbox: &str) -> Option<bool> {
+fn remote_owner(repo: &Path, sandbox: &str) -> Result<Option<bool>> {
     let remote = remote_name(sandbox);
-    git(repo, &["config", &format!("remote.{remote}.url")]).ok()?;
-    let pack = git(repo, &["config", &format!("remote.{remote}.uploadpack")]).unwrap_or_default();
-    Some(pack == upload_pack_cmd(sandbox))
+    if config_get(repo, &format!("remote.{remote}.url"))?.is_none() {
+        return Ok(None);
+    }
+    let pack = config_get(repo, &format!("remote.{remote}.uploadpack"))?.unwrap_or_default();
+    Ok(Some(pack == upload_pack_cmd(sandbox)))
+}
+
+/// `git config <key>`: `None` when the key is unset (exit 1); any other failure is an error.
+fn config_get(repo: &Path, key: &str) -> Result<Option<String>> {
+    let out = Command::new("git")
+        .arg("-C")
+        .arg(repo)
+        .args(["config", key])
+        .output()
+        .map_err(|e| match e.kind() {
+            std::io::ErrorKind::NotFound => anyhow::Error::new(GitMissing),
+            _ => anyhow::Error::new(e).context("running git"),
+        })?;
+    match out.status.code() {
+        Some(0) => Ok(Some(
+            String::from_utf8_lossy(&out.stdout).trim_end().to_string(),
+        )),
+        Some(1) => Ok(None),
+        _ => {
+            let err = String::from_utf8_lossy(&out.stderr);
+            bail!(
+                "git config {key}: {}",
+                err.lines().next().unwrap_or("failed")
+            );
+        }
+    }
 }
 
 /// Whether the repo already has smolbento's `sandbox-<name>` remote.
 pub fn has_remote(repo: &Path, sandbox: &str) -> bool {
-    remote_owner(repo, sandbox) == Some(true)
+    matches!(remote_owner(repo, sandbox), Ok(Some(true)))
 }
 
 pub fn check_remote_free(repo: &Path, sandbox: &str) -> Result<()> {
-    if remote_owner(repo, sandbox) == Some(false) {
+    if remote_owner(repo, sandbox)? == Some(false) {
         bail!(
             "the repo already has a remote '{}'; rename or remove it first",
             remote_name(sandbox)
@@ -145,30 +173,39 @@ pub fn check_remote_free(repo: &Path, sandbox: &str) -> Result<()> {
 
 pub fn add_remote(repo: &Path, sandbox: &str) -> Result<()> {
     let remote = remote_name(sandbox);
-    if remote_owner(repo, sandbox).is_none() {
+    let added = remote_owner(repo, sandbox)?.is_none();
+    if added {
         git(
             repo,
             &["remote", "add", &remote, &format!("file:///sbt/{sandbox}")],
         )?;
     }
-    git(
-        repo,
-        &[
-            "config",
-            &format!("remote.{remote}.uploadpack"),
-            &upload_pack_cmd(sandbox),
-        ],
-    )?;
-    // Only commits come back: tags the agent makes must not land in the host's refs/tags.
-    git(
-        repo,
-        &["config", &format!("remote.{remote}.tagOpt"), "--no-tags"],
-    )?;
-    Ok(())
+    let configure = || -> Result<()> {
+        git(
+            repo,
+            &[
+                "config",
+                &format!("remote.{remote}.uploadpack"),
+                &upload_pack_cmd(sandbox),
+            ],
+        )?;
+        // Only commits come back: tags the agent makes must not land in the host's refs/tags.
+        git(
+            repo,
+            &["config", &format!("remote.{remote}.tagOpt"), "--no-tags"],
+        )?;
+        Ok(())
+    };
+    configure().inspect_err(|_| {
+        // Half-configured, it would read as a foreign remote; don't leave it behind.
+        if added {
+            let _ = git(repo, &["remote", "remove", &remote]);
+        }
+    })
 }
 
 pub fn remove_remote(repo: &Path, sandbox: &str) {
-    if remote_owner(repo, sandbox) == Some(true) {
+    if matches!(remote_owner(repo, sandbox), Ok(Some(true))) {
         let _ = git(repo, &["remote", "remove", &remote_name(sandbox)]);
     }
 }
@@ -436,5 +473,61 @@ mod tests {
         git_in(&root, &["remote", "add", "up", "https://h/o/r.git"]);
         git_in(&root, &["remote", "add", "ssh", "ssh://git@h/r.git"]);
         assert_eq!(userinfo_remotes(&root).unwrap(), vec!["origin"]);
+    }
+
+    #[test]
+    fn source_passes_other_spawn_errors_through() {
+        use std::os::unix::fs::PermissionsExt;
+        let d = tempfile::tempdir().unwrap();
+        let prog = d.path().join("not-executable");
+        std::fs::write(&prog, "").unwrap();
+        std::fs::set_permissions(&prog, std::fs::Permissions::from_mode(0o644)).unwrap();
+        let err = format!(
+            "{:#}",
+            source_with(prog.to_str().unwrap(), d.path()).unwrap_err()
+        );
+        assert!(err.contains("running git"), "{err}");
+        assert!(!err.contains("isn't one"), "{err}");
+    }
+
+    #[test]
+    fn remote_owner_errors_when_config_cannot_be_read() {
+        let d = tempfile::tempdir().unwrap();
+        let gone = d.path().join("gone");
+        let err = check_remote_free(&gone, "box").unwrap_err().to_string();
+        assert!(err.contains("git config"), "{err}");
+        assert!(add_remote(&gone, "box").is_err());
+        // An unset key is still just absent.
+        let (_d, root) = repo();
+        assert_eq!(remote_owner(&root, "box").unwrap(), None);
+    }
+
+    #[test]
+    fn add_remote_removes_the_remote_it_added_when_configuring_fails() {
+        let (_d, root) = repo();
+        // Two uploadpack values make the later `git config` overwrite fail.
+        git_in(
+            &root,
+            &["config", "--add", "remote.sandbox-box.uploadpack", "a"],
+        );
+        git_in(
+            &root,
+            &["config", "--add", "remote.sandbox-box.uploadpack", "b"],
+        );
+        assert!(add_remote(&root, "box").is_err());
+        let out = Command::new("git")
+            .arg("-C")
+            .arg(&root)
+            .args(["config", "remote.sandbox-box.url"])
+            .output()
+            .unwrap();
+        assert!(!out.status.success(), "the half-added remote was left");
+    }
+
+    #[test]
+    fn fetch_errors_on_a_missing_remote() {
+        let (_d, root) = repo();
+        let err = fetch(&root, "box").unwrap_err().to_string();
+        assert!(err.contains("sandbox-box"), "{err}");
     }
 }
