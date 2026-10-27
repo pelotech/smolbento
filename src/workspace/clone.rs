@@ -185,14 +185,17 @@ fn is_local(url: &str) -> bool {
     url.find(':').is_none_or(|i| url[..i].contains('/'))
 }
 
-/// An http(s) URL without `user[:token]@`, so no host credential reaches the sandbox.
+/// An http(s) URL without `user[:token]@`, so the clone's copied remotes hold no credential.
+/// The sandbox can still read the host repo's own config at [`SOURCE_MOUNT`].
 fn strip_userinfo(url: &str) -> String {
-    for scheme in ["https://", "http://"] {
-        if let Some(rest) = url.strip_prefix(scheme) {
-            let end = rest.find('/').unwrap_or(rest.len());
-            if let Some(at) = rest[..end].rfind('@') {
-                return format!("{scheme}{}", &rest[at + 1..]);
-            }
+    if let Some((scheme, rest)) = url.split_once("://")
+        && ["http", "https"]
+            .iter()
+            .any(|s| scheme.eq_ignore_ascii_case(s))
+    {
+        let end = rest.find('/').unwrap_or(rest.len());
+        if let Some(at) = rest[..end].rfind('@') {
+            return format!("{scheme}://{}", &rest[at + 1..]);
         }
     }
     url.to_string()
@@ -406,5 +409,7 @@ mod tests {
         assert_eq!(strip_userinfo("https://u:t@h"), "https://h");
         assert_eq!(strip_userinfo("https://h/a@b"), "https://h/a@b");
         assert_eq!(strip_userinfo("ssh://git@h/x"), "ssh://git@h/x");
+        assert_eq!(strip_userinfo("HTTPS://u:t@h/x"), "HTTPS://h/x");
+        assert_eq!(strip_userinfo("Http://u@h/x"), "Http://h/x");
     }
 }
