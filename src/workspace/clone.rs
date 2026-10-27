@@ -212,10 +212,12 @@ pub fn add_remote(repo: &Path, sandbox: &str) -> Result<bool> {
     Ok(added)
 }
 
-pub fn remove_remote(repo: &Path, sandbox: &str) {
-    if matches!(remote_owner(repo, sandbox), Ok(Remote::Ours)) {
-        let _ = git(repo, &["remote", "remove", &remote_name(sandbox)]);
+/// Removes the sandbox's remote if smolbento made it; a foreign one is left alone.
+pub fn remove_remote(repo: &Path, sandbox: &str) -> Result<()> {
+    if remote_owner(repo, sandbox)? == Remote::Ours {
+        git(repo, &["remote", "remove", &remote_name(sandbox)])?;
     }
+    Ok(())
 }
 
 /// A path or `file://` URL: not reachable from the sandbox.
@@ -381,7 +383,7 @@ mod tests {
         assert_eq!(remote_owner(&root, "box").unwrap(), Remote::Ours);
         check_remote_free(&root, "box").unwrap();
         assert!(!add_remote(&root, "box").unwrap(), "reused");
-        remove_remote(&root, "box");
+        remove_remote(&root, "box").unwrap();
         assert_eq!(get("remote.sandbox-box.url"), "");
         // Foreign: refused, and never removed.
         git(
@@ -390,11 +392,11 @@ mod tests {
         );
         let err = check_remote_free(&root, "box").unwrap_err().to_string();
         assert!(err.contains("sandbox-box"), "{err}");
-        remove_remote(&root, "box");
+        remove_remote(&root, "box").unwrap();
         assert_eq!(get("remote.sandbox-box.url"), "https://example.com/x.git");
         assert_eq!(remote_owner(&root, "box").unwrap(), Remote::Foreign);
-        // A missing repo is silent.
-        remove_remote(Path::new("/nonexistent/repo"), "box");
+        // A missing repo is an error; rm and create rollback ignore it.
+        assert!(remove_remote(Path::new("/nonexistent/repo"), "box").is_err());
     }
 
     #[test]

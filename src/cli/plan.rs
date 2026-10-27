@@ -236,7 +236,7 @@ pub fn create<R: Runner>(
             let _ = policy.save(&ctx.paths);
         }
         if let Some(repo) = added_remote {
-            clone::remove_remote(repo, &req.name);
+            let _ = clone::remove_remote(repo, &req.name);
         }
     }
     result

@@ -70,7 +70,7 @@ fn free_names<R: Runner>(ctx: &Ctx<R>, parent: &str, count: u32) -> Result<Vec<S
 }
 
 /// Copies the parent's policy entry and adds the clone remote, then branches; a failed branch
-/// undoes both.
+/// undoes both (a failed undo only warns).
 fn fork_one<R: Runner>(
     ctx: &Ctx<R>,
     parent: &Sandbox,
@@ -79,6 +79,8 @@ fn fork_one<R: Runner>(
     remove: &[String],
 ) -> Result<()> {
     let mut policy = Policy::load(&ctx.paths)?;
+    // The name is free, so an entry under it is stale (say, a machine deleted with raw smolvm).
+    policy.forget_sandbox(fork);
     policy.copy_sandbox(parent.name(), fork);
     policy.save(&ctx.paths)?;
     let repo = parent.meta.clone_repo.as_deref().map(Path::new);
@@ -103,16 +105,22 @@ fn fork_one<R: Runner>(
             )
             .map_err(|e| branch_hint(e, parent.name()))
             .inspect_err(|_| {
-                if let (Some(r), true) = (repo, added) {
-                    clone::remove_remote(r, fork);
+                if let (Some(r), true) = (repo, added)
+                    && let Err(e) = clone::remove_remote(r, fork)
+                {
+                    eprintln!("warning: removing the sandbox-{fork} remote: {e:#}");
                 }
             })
     });
     if result.is_err() {
         // Nothing was created: undo the policy copy made for it.
-        if let Ok(mut p) = Policy::load(&ctx.paths) {
+        let undo = || -> Result<()> {
+            let mut p = Policy::load(&ctx.paths)?;
             p.forget_sandbox(fork);
-            let _ = p.save(&ctx.paths);
+            p.save(&ctx.paths)
+        };
+        if let Err(e) = undo() {
+            eprintln!("warning: removing {fork}'s policy entry: {e:#}");
         }
     }
     result
@@ -294,6 +302,20 @@ mod tests {
         assert_eq!(err, "fork is turned off (fork.enabled=false)");
         let calls = t.ctx.vm.runner().call_lines();
         assert!(calls.iter().all(|c| !c.starts_with("machine")), "{calls:?}");
+    }
+
+    #[test]
+    fn a_stale_policy_entry_for_the_name_is_dropped() {
+        let mut t = test_env(&[]);
+        set_policy(
+            &t,
+            "mode = \"allow-all\"\n[[sandboxes.a-fork-1.rules]]\nid = \"r-1\"\n\
+             decision = \"deny\"\nresources = [\"stale.com\"]\n",
+        );
+        parent(&t, "running", &[]);
+        sbt(&mut t.ctx, &["fork", "a"]).unwrap();
+        let p = Policy::load(&t.ctx.paths).unwrap();
+        assert!(!p.sandboxes.contains_key("a-fork-1"), "{:?}", p.sandboxes);
     }
 
     #[test]

@@ -144,7 +144,8 @@ pub(crate) fn stop_sandbox<R: Runner>(ctx: &Ctx<R>, sb: &Sandbox) -> Result<()> 
 fn remove<R: Runner>(ctx: &Ctx<R>, sb: &Sandbox, forget_secrets: bool) -> Result<()> {
     ctx.vm.delete(&sb.machine)?;
     if let Some(repo) = &sb.meta.clone_repo {
-        clone::remove_remote(Path::new(repo), sb.name());
+        // Best effort: the host repo may be gone.
+        let _ = clone::remove_remote(Path::new(repo), sb.name());
     }
     session::clear(&ctx.paths.sessions(), sb.name());
     super::secret::forget_sandbox(ctx, sb.name(), forget_secrets)?;
