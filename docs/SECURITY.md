@@ -41,6 +41,11 @@ Other things to know:
   of that file, and neither is an `http.extraHeader`. Don't keep credentials in the repo config;
   use a credential helper or `sbt secret`. `create --clone` warns about remote URLs with a token.
 - `sbt exec --privileged` and the sandbox's Docker engine run as root inside the VM.
+- Sandboxes that can be forked (clone and mountless ones, not forks) are started branchable. On
+  Linux that drops smolvm's no-ptrace hardening of the VM process, so other processes running as
+  you can read its memory, including secret values; on every platform smolvm stops handing their
+  idle memory back. Turn it off with `sbt settings set fork.enabled false` (from each sandbox's
+  next start).
 - smolbento refuses to run as root on the host, because the agent takes the caller's uid.
 
 ## Supply chain

@@ -1,4 +1,5 @@
 use anyhow::Result;
+use std::io::Write;
 
 use super::{Ctx, SettingsCmd, table};
 use crate::config::{SETTINGS, Settings, Source};
@@ -6,8 +7,8 @@ use crate::smolvm::Runner;
 
 pub fn run<R: Runner>(ctx: &mut Ctx<R>, cmd: SettingsCmd) -> Result<i32> {
     match cmd {
-        SettingsCmd::Ls { no_trunc } => print!("{}", render(&ctx.settings, no_trunc)?),
-        SettingsCmd::Get { key } => println!("{}", ctx.settings.value(&key)?),
+        SettingsCmd::Ls { no_trunc } => write!(&ctx.out, "{}", render(&ctx.settings, no_trunc)?)?,
+        SettingsCmd::Get { key } => writeln!(&ctx.out, "{}", ctx.settings.value(&key)?)?,
         SettingsCmd::Set { key, value } => ctx.settings.set(&key, &value)?,
         SettingsCmd::Unset { key } => ctx.settings.unset(&key)?,
     }

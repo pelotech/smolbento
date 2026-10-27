@@ -13,6 +13,8 @@ exist only in some checkouts). If they're there, read the relevant section befor
 - **smolvm is the state.** Per-sandbox metadata lives in `sbx.*` machine labels set at create.
   Do not add a sandbox state file. Global data lives in `~/.config/smolbento/*.toml`.
 - **Always `--net-backend virtio-net`** on create; live policy and port changes depend on it.
+- **Command output goes through `ctx.out`** (`writeln!(&ctx.out, ..)`), never `println!`; tests
+  read it with `t.stdout()`. Errors and warnings stay `eprintln!`.
 - **Interactive exec inherits stdio.** `run` and `exec -it` exec `smolvm machine exec -it`
   directly; never pipe a TTY through buffers.
 - **Secrets (when they land):** store sources only (keychain, `op://`/aws ref, command). Resolve

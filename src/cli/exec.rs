@@ -132,7 +132,7 @@ mod tests {
                 .vm
                 .runner()
                 .call_lines()
-                .contains(&"machine start -n sbx-claude-proj".to_string())
+                .contains(&"machine start -n sbx-claude-proj --branchable".to_string())
         );
         assert_eq!(
             t.ctx.vm.runner().interactive_calls()[0].join(" "),

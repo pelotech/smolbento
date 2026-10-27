@@ -14,11 +14,13 @@ sbt settings unset docker.enabled       # back to the default
 | `docker.enabled` | `SMOLBENTO_DOCKER` | `true` | Use the Docker-enabled agent images and run a private Docker engine in each sandbox |
 | `smolvm.path` | `SMOLBENTO_SMOLVM` | `smolvm` | The smolvm binary to run |
 | `clone.fetch-on-exit` | `SMOLBENTO_CLONE_FETCH_ON_EXIT` | `true` | After `run` in a clone sandbox, fetch the agent's commits into the `sandbox-<name>` remote |
+| `fork.enabled` | `SMOLBENTO_FORK` | `true` | Start clone and mountless sandboxes branchable so `sbt fork` can copy them; `false` also turns `sbt fork` off |
 
 An environment variable wins over the config file, which wins over the default. Booleans accept
 `true`/`false`, `1`/`0`, `yes`/`no` and `on`/`off`.
 
-`docker.enabled` applies to sandboxes created afterwards.
+`docker.enabled` applies to sandboxes created afterwards. `fork.enabled` applies from each
+sandbox's next start; see [Fork](usage.md#fork) for what it costs.
 
 ## Files
 

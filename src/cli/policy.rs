@@ -2,6 +2,7 @@
 
 use anyhow::{Context, Result, bail};
 use serde::Serialize;
+use std::io::Write;
 
 use super::{
     ApprovalCmd, CheckArgs, CheckKind, Ctx, Format, PolicyCmd, PolicyRmKind, RuleArgs, RuleKind,
@@ -42,7 +43,7 @@ pub fn run<R: Runner>(ctx: &mut Ctx<R>, cmd: PolicyCmd) -> Result<i32> {
             }
             policy.mode = Some(mode);
             policy.save(&ctx.paths)?;
-            println!("Network policy: {}", mode.name());
+            writeln!(&ctx.out, "Network policy: {}", mode.name())?;
             plan::push_network(ctx, &policy)?;
         }
         PolicyCmd::Allow {
@@ -68,7 +69,7 @@ pub fn run<R: Runner>(ctx: &mut Ctx<R>, cmd: PolicyCmd) -> Result<i32> {
                 bail!("no matching rules");
             }
             policy.save(&ctx.paths)?;
-            println!("Removed");
+            writeln!(&ctx.out, "Removed")?;
             plan::push_network(ctx, &policy)?;
         }
         PolicyCmd::Ls(a) => {
@@ -105,7 +106,7 @@ pub fn run<R: Runner>(ctx: &mut Ctx<R>, cmd: PolicyCmd) -> Result<i32> {
                 quiet: a.quiet,
             };
             let rows = ls_rows(&policy, &opts);
-            print!("{}", render_ls(&policy, &rows, &opts)?);
+            write!(&ctx.out, "{}", render_ls(&policy, &rows, &opts)?)?;
             // stderr, so the table stays what sbx prints.
             if format == Format::Table
                 && !a.wide
@@ -120,21 +121,23 @@ pub fn run<R: Runner>(ctx: &mut Ctx<R>, cmd: PolicyCmd) -> Result<i32> {
                 .find(&id)
                 .with_context(|| format!("no rule '{id}'"))?;
             if json {
-                println!(
+                writeln!(
+                    &ctx.out,
                     "{}",
                     serde_json::to_string_pretty(
                         &serde_json::json!({ "scope": scope.unwrap_or("global"), "rule": rule })
                     )?
-                );
+                )?;
             } else {
-                println!(
+                writeln!(
+                    &ctx.out,
                     "ID: {}\nScope: {}\nDecision: {}\nResources: {}\nCreated via: {}",
                     rule.id,
                     scope.unwrap_or("global"),
                     rule.decision.name(),
                     rule.resources.join(", "),
                     rule.created_via
-                );
+                )?;
             }
         }
         PolicyCmd::Check {
@@ -158,7 +161,10 @@ pub fn run<R: Runner>(ctx: &mut Ctx<R>, cmd: PolicyCmd) -> Result<i32> {
             stop_running(ctx);
             policy.reset();
             policy.save(&ctx.paths)?;
-            println!("Policy reset; the next start or create asks for a mode{legacy}");
+            writeln!(
+                &ctx.out,
+                "Policy reset; the next start or create asks for a mode{legacy}"
+            )?;
         }
         PolicyCmd::Log(a) => {
             if a.kind.as_deref().is_some_and(|k| k == "filesystem") {
@@ -166,9 +172,9 @@ pub fn run<R: Runner>(ctx: &mut Ctx<R>, cmd: PolicyCmd) -> Result<i32> {
             }
             let rows = blocked_rows(ctx, a.sandbox.as_deref(), a.limit)?;
             if a.json {
-                println!("{}", serde_json::to_string_pretty(&rows)?);
+                writeln!(&ctx.out, "{}", serde_json::to_string_pretty(&rows)?)?;
             } else {
-                print!("{}", render_log(&rows));
+                write!(&ctx.out, "{}", render_log(&rows))?;
             }
         }
         PolicyCmd::Approval(cmd) => return approval(ctx, &mut policy, cmd),
@@ -206,22 +212,31 @@ fn add<R: Runner>(
         a.path,
     )?;
     policy.save(&ctx.paths)?;
-    println!("{} rule {id}: {}", decision.name(), a.resources);
+    writeln!(&ctx.out, "{} rule {id}: {}", decision.name(), a.resources)?;
     if decision == Decision::Deny {
-        print_deny_notes(policy, a.sandbox.as_deref(), &parsed);
+        print_deny_notes(ctx, policy, a.sandbox.as_deref(), &parsed)?;
     }
     plan::push_network(ctx, policy)
 }
 
-fn print_deny_notes(policy: &Policy, scope: Option<&str>, denies: &[Resource]) {
+fn print_deny_notes<R: Runner>(
+    ctx: &Ctx<R>,
+    policy: &Policy,
+    scope: Option<&str>,
+    denies: &[Resource],
+) -> Result<()> {
     let (cidr, notes) = deny_notes(policy, scope, denies);
     if cidr {
-        println!("note: deny CIDRs apply to sandboxes created from now on");
+        writeln!(
+            &ctx.out,
+            "note: deny CIDRs apply to sandboxes created from now on"
+        )?;
     }
     // stderr, so stdout stays what sbx prints.
     for n in notes {
         eprintln!("{n}");
     }
+    Ok(())
 }
 
 /// What to tell the user about a new deny: whether it has a port-less deny CIDR (applied at
@@ -430,9 +445,9 @@ fn approval<R: Runner>(ctx: &Ctx<R>, policy: &mut Policy, cmd: ApprovalCmd) -> R
     match cmd {
         ApprovalCmd::Ls { json } => {
             if json {
-                println!("{}", serde_json::to_string_pretty(&pending)?);
+                writeln!(&ctx.out, "{}", serde_json::to_string_pretty(&pending)?)?;
             } else if pending.is_empty() {
-                println!("No pending approvals");
+                writeln!(&ctx.out, "No pending approvals")?;
             } else {
                 let mut lines = vec![
                     ["ID", "SANDBOX", "LAST SEEN", "COUNT"]
@@ -447,7 +462,7 @@ fn approval<R: Runner>(ctx: &Ctx<R>, policy: &mut Policy, cmd: ApprovalCmd) -> R
                         r.count.to_string(),
                     ]);
                 }
-                print!("{}", table(lines));
+                write!(&ctx.out, "{}", table(lines))?;
             }
         }
         ApprovalCmd::Inspect { id } => {
@@ -455,10 +470,11 @@ fn approval<R: Runner>(ctx: &Ctx<R>, policy: &mut Policy, cmd: ApprovalCmd) -> R
                 .iter()
                 .find(|r| r.host == id)
                 .with_context(|| format!("no blocked request for '{id}'"))?;
-            println!(
+            writeln!(
+                &ctx.out,
                 "Host: {}\nSandbox: {}\nBlocked: {} time(s), last {}",
                 r.host, r.sandbox, r.count, r.last_seen
-            );
+            )?;
         }
         ApprovalCmd::Respond {
             id,
@@ -484,9 +500,9 @@ fn approval<R: Runner>(ctx: &Ctx<R>, policy: &mut Policy, cmd: ApprovalCmd) -> R
             let rule =
                 policy.add_rule(sandbox.as_deref(), decision, &id, "approval", None, None)?;
             policy.save(&ctx.paths)?;
-            println!("{} rule {rule}: {id}", decision.name());
+            writeln!(&ctx.out, "{} rule {rule}: {id}", decision.name())?;
             if decision == Decision::Deny {
-                print_deny_notes(policy, sandbox.as_deref(), &parse_list(&id)?);
+                print_deny_notes(ctx, policy, sandbox.as_deref(), &parse_list(&id)?)?;
             }
             plan::push_network(ctx, policy)?;
         }
@@ -508,12 +524,13 @@ fn check<R: Runner>(ctx: &Ctx<R>, policy: &Policy, a: &CheckArgs) -> Result<i32>
         None => Vec::new(),
     };
     let v = compile::check(policy, a.sandbox.as_deref(), &bound, &a.target);
-    println!(
+    writeln!(
+        &ctx.out,
         "{}: {} ({})",
         a.target,
         if v.allowed { "allowed" } else { "denied" },
         v.reason
-    );
+    )?;
     Ok(if v.allowed { 0 } else { 1 })
 }
 

@@ -52,6 +52,8 @@ pub enum Cmd {
     Reset(ResetArgs),
     /// Copy files between the host and a sandbox
     Cp(CpArgs),
+    /// Copy a running sandbox (memory, processes, disk) for parallel attempts
+    Fork(ForkArgs),
     /// Show smolbento and smolvm versions
     Version,
     /// Generate shell completions
@@ -120,6 +122,7 @@ impl Cmd {
             Cmd::Prune(_) => "prune",
             Cmd::Reset(_) => "reset",
             Cmd::Cp(_) => "cp",
+            Cmd::Fork(_) => "fork",
             Cmd::Version => "version",
             Cmd::Completion { .. } => "completion",
             Cmd::Diagnose => "diagnose",
@@ -159,6 +162,7 @@ impl Cmd {
                 | Cmd::Prune(_)
                 | Cmd::Reset(_)
                 | Cmd::Cp(_)
+                | Cmd::Fork(_)
                 | Cmd::Ports(_)
                 | Cmd::UploadPack { .. }
         )
@@ -186,6 +190,19 @@ pub struct PortsArgs {
     /// HOST:PORT[/proto]
     #[arg(long)]
     pub unpublish: Vec<String>,
+}
+
+#[derive(Debug, Args)]
+pub struct ForkArgs {
+    /// Sandbox to copy
+    pub sandbox: String,
+    /// Name of the copy (default: <sandbox>-fork-<n>)
+    #[arg(long)]
+    pub name: Option<String>,
+    /// Number of copies
+    #[arg(long, default_value_t = 1, conflicts_with = "name",
+          value_parser = clap::value_parser!(u32).range(1..))]
+    pub count: u32,
 }
 
 /// Arguments of a command that isn't implemented yet, kept so sbx command lines still parse.

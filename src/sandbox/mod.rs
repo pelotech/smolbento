@@ -46,6 +46,8 @@ pub struct StartPlan {
     pub uid: u32,
     /// Set for a clone sandbox; the clone itself is skipped once it exists, the remote copy is not.
     pub clone: Option<CloneStep>,
+    /// Start with `--branchable` so `sbt fork` can copy it; only for forkable sandboxes.
+    pub branchable: bool,
 }
 
 /// The first start of a clone sandbox clones the host repo inside the VM (as sbx).
@@ -156,7 +158,18 @@ pub fn find<R: Runner>(vm: &Smolvm<R>, name: &str) -> Result<Option<Sandbox>> {
 }
 
 pub fn get<R: Runner>(vm: &Smolvm<R>, name: &str) -> Result<Sandbox> {
-    find(vm, name)?.with_context(|| format!("sandbox '{name}' not found (see `sbt ls`)"))
+    find(vm, name)?.ok_or_else(|| not_found(name))
+}
+
+/// `name` among already listed sandboxes (from `list`), with `get`'s error.
+pub fn pick<'a>(all: &'a [Sandbox], name: &str) -> Result<&'a Sandbox> {
+    all.iter()
+        .find(|sb| sb.name() == name)
+        .ok_or_else(|| not_found(name))
+}
+
+fn not_found(name: &str) -> anyhow::Error {
+    anyhow::anyhow!("sandbox '{name}' not found (see `sbt ls`)")
 }
 
 /// All sandboxes, sorted by name; running ones include their published ports.
@@ -183,7 +196,7 @@ pub fn list<R: Runner>(vm: &Smolvm<R>) -> Result<Vec<Sandbox>> {
 pub fn start<R: Runner>(vm: &Smolvm<R>, sb: &Sandbox, plan: &StartPlan) -> Result<()> {
     vm.update_network(&sb.machine, &plan.network)
         .context("applying the network policy")?;
-    vm.start(&sb.machine, &plan.env, &plan.remove)?;
+    vm.start(&sb.machine, plan.branchable, &plan.env, &plan.remove)?;
     if let Err(e) = setup(vm, sb, plan) {
         if let Err(stop) = vm.stop(&sb.machine) {
             eprintln!(
@@ -329,6 +342,7 @@ mod tests {
             remove: vec!["GONE".into()],
             uid: 501,
             clone: None,
+            branchable: true,
         }
     }
 
@@ -348,7 +362,7 @@ mod tests {
             lines[1],
             "machine update -n sbx-claude-myrepo --net --reset-allow-list"
         );
-        assert_eq!(lines[2], "machine start -n sbx-claude-myrepo");
+        assert_eq!(lines[2], "machine start -n sbx-claude-myrepo --branchable");
         assert!(
             lines[3].ends_with("usermod -o -u 501 agent"),
             "{}",
@@ -443,7 +457,7 @@ mod tests {
             lines[2],
             "machine update -n sbx-claude-myrepo --net --reset-allow-list"
         );
-        assert_eq!(lines[3], "machine start -n sbx-claude-myrepo");
+        assert_eq!(lines[3], "machine start -n sbx-claude-myrepo --branchable");
         assert_eq!(
             lines.len(),
             5,

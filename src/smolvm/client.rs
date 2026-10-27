@@ -244,11 +244,37 @@ impl<R: Runner> Smolvm<R> {
 
     /// `env` reaches the smolvm process only: it's how secret values get to credentials. `remove`
     /// names inherited variables to drop, so a credential without a value isn't the host's.
-    pub fn start(&self, name: &str, env: &[(String, String)], remove: &[String]) -> Result<()> {
-        let out =
-            self.runner
-                .run_with_env(&args(&["machine", "start", "-n", name]), env, remove)?;
-        checked(out).map(drop)
+    /// `branchable` lets `sbt fork` branch it later, at a cost: smolvm doesn't reclaim its idle
+    /// memory, and on Linux other processes running as the user can read the VM process's memory.
+    pub fn start(
+        &self,
+        name: &str,
+        branchable: bool,
+        env: &[(String, String)],
+        remove: &[String],
+    ) -> Result<()> {
+        let mut a = args(&["machine", "start", "-n", name]);
+        if branchable {
+            a.push("--branchable".into());
+        }
+        checked(self.runner.run_with_env(&a, env, remove)?).map(drop)
+    }
+
+    /// A copy-on-write child of the running, branchable `from`: its memory, processes and disk. Its
+    /// credential values come from this process's environment, like `start`'s.
+    pub fn branch(
+        &self,
+        from: &str,
+        name: &str,
+        labels: &[(String, String)],
+        env: &[(String, String)],
+        remove: &[String],
+    ) -> Result<()> {
+        let mut a = args(&["machine", "branch", "--from", from, "-n", name]);
+        for (k, v) in labels {
+            flag(&mut a, "--label", format!("{k}={v}"));
+        }
+        checked(self.runner.run_with_env(&a, env, remove)?).map(drop)
     }
 
     /// Replaces the machine's whole allow list; applies live on a running machine.
@@ -322,6 +348,49 @@ mod tests {
     use super::*;
     use crate::smolvm::fake::FakeRunner;
     use crate::smolvm::{AllowList, MachineState};
+
+    #[test]
+    fn start_is_branchable_only_when_asked() {
+        let fake = FakeRunner::new();
+        fake.ok(&["machine", "start"], "");
+        let vm = Smolvm::new(fake);
+        vm.start("m", true, &[], &[]).unwrap();
+        vm.start("m", false, &[], &[]).unwrap();
+        assert_eq!(
+            vm.runner().call_lines(),
+            vec!["machine start -n m --branchable", "machine start -n m"]
+        );
+    }
+
+    #[test]
+    fn branch_passes_labels_in_argv_and_secrets_in_env() {
+        let fake = FakeRunner::new();
+        fake.ok(&["machine", "branch"], "");
+        let vm = Smolvm::new(fake);
+        vm.branch(
+            "sbx-a",
+            "sbx-a-fork-1",
+            &[
+                ("sbx.name".into(), "a-fork-1".into()),
+                ("sbx.fork-of".into(), "a".into()),
+            ],
+            &[("TOK".into(), "secret-value".into())],
+            &["GH_TOKEN".into()],
+        )
+        .unwrap();
+        let line = &vm.runner().call_lines()[0];
+        assert_eq!(
+            line,
+            "machine branch --from sbx-a -n sbx-a-fork-1 --label sbx.name=a-fork-1 \
+             --label sbx.fork-of=a"
+        );
+        assert!(!line.contains("secret-value"));
+        assert_eq!(
+            vm.runner().envs()[0],
+            vec![("TOK".into(), "secret-value".into())]
+        );
+        assert_eq!(vm.runner().removed()[0], vec!["GH_TOKEN".to_string()]);
+    }
 
     #[test]
     fn create_args() {
@@ -403,9 +472,17 @@ mod tests {
     #[test]
     fn start_passes_env_to_the_child_only() {
         let vm = Smolvm::new(FakeRunner::new());
-        vm.start("m", &[("TOK".into(), "secret".into())], &["GONE".into()])
-            .unwrap();
-        assert_eq!(vm.runner().call_lines(), vec!["machine start -n m"]);
+        vm.start(
+            "m",
+            true,
+            &[("TOK".into(), "secret".into())],
+            &["GONE".into()],
+        )
+        .unwrap();
+        assert_eq!(
+            vm.runner().call_lines(),
+            vec!["machine start -n m --branchable"]
+        );
         assert_eq!(
             vm.runner().envs(),
             vec![vec![("TOK".to_string(), "secret".to_string())]]
@@ -470,7 +547,7 @@ mod tests {
     fn start_failure_is_an_error() {
         let fake = FakeRunner::new();
         fake.fail(&["machine", "start"], "SMOLVM_ERROR", "boom");
-        let err = Smolvm::new(fake).start("m", &[], &[]).unwrap_err();
+        let err = Smolvm::new(fake).start("m", true, &[], &[]).unwrap_err();
         assert_eq!(err.to_string(), "smolvm: boom");
     }
 
@@ -544,14 +621,14 @@ mod tests {
     #[test]
     fn lifecycle_calls() {
         let vm = Smolvm::new(FakeRunner::new());
-        vm.start("m", &[], &[]).unwrap();
+        vm.start("m", true, &[], &[]).unwrap();
         vm.stop("m").unwrap();
         vm.delete("m").unwrap();
         vm.cp("/a", "m:/b").unwrap();
         assert_eq!(
             vm.runner().call_lines(),
             vec![
-                "machine start -n m",
+                "machine start -n m --branchable",
                 "machine stop -n m",
                 "machine delete -n m -f",
                 "machine cp /a m:/b",

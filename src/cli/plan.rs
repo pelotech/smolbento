@@ -56,9 +56,8 @@ pub fn start_plan<R: Runner>(ctx: &Ctx<R>, meta: &Meta) -> Result<StartPlan> {
     let network = compile::network(&policy, sandbox, &meta.credential_hosts);
     let mut env = Vec::new();
     for name in &meta.secrets {
-        let (Some(service), Some(entry)) =
-            (secrets.service(name), secrets.entry_for(sandbox, name))
-        else {
+        let entry = secrets.entry_for(sandbox, meta.fork_of.as_deref(), name);
+        let (Some(service), Some(entry)) = (secrets.service(name), entry) else {
             eprintln!(
                 "warning: {sandbox} was created with a {name} secret that's no longer set; requests using it will fail"
             );
@@ -100,6 +99,7 @@ pub fn start_plan<R: Runner>(ctx: &Ctx<R>, meta: &Meta) -> Result<StartPlan> {
         remove,
         uid: ctx.uid,
         clone,
+        branchable: meta.forkable() && ctx.settings.bool("fork.enabled")?,
     })
 }
 
@@ -120,14 +120,19 @@ pub fn ensure_policy<R: Runner>(ctx: &Ctx<R>) -> Result<Policy> {
             "no network policy chosen yet; run `sbt policy init allow-all|balanced|deny-all` first"
         );
     }
-    println!(
+    let mut out = &ctx.out;
+    writeln!(
+        out,
         "Choose a network policy for your sandboxes (saved; change it with `sbt policy init`):"
-    );
-    println!("  1) allow-all  open network");
-    println!("  2) balanced   AI APIs, package registries, code hosts and more (recommended)");
-    println!("  3) deny-all   nothing unless you allow it");
-    print!("Choice [2]: ");
-    std::io::stdout().flush()?;
+    )?;
+    writeln!(out, "  1) allow-all  open network")?;
+    writeln!(
+        out,
+        "  2) balanced   AI APIs, package registries, code hosts and more (recommended)"
+    )?;
+    writeln!(out, "  3) deny-all   nothing unless you allow it")?;
+    write!(out, "Choice [2]: ")?;
+    out.flush()?;
     let mut line = String::new();
     std::io::stdin().lock().read_line(&mut line)?;
     policy.mode = Some(match line.trim() {
@@ -232,7 +237,7 @@ pub fn create<R: Runner>(
             let _ = policy.save(&ctx.paths);
         }
         if let Some(repo) = added_remote {
-            clone::remove_remote(repo, &req.name);
+            let _ = clone::remove_remote(repo, &req.name);
         }
     }
     result
@@ -262,7 +267,7 @@ pub fn push_network<R: Runner>(ctx: &Ctx<R>, policy: &Policy) -> Result<()> {
         }
     }
     if updated > 0 {
-        println!("Updated {updated} running sandbox(es)");
+        writeln!(&ctx.out, "Updated {updated} running sandbox(es)")?;
     }
     Ok(())
 }
@@ -328,6 +333,21 @@ mod tests {
         };
         assert!(list.hosts().contains(&"api.github.com".to_string()));
         assert_eq!(plan.uid, 501);
+    }
+
+    #[test]
+    fn fork_secrets_resolve_own_then_parent_then_global() {
+        let t = test_env(&[]);
+        set_policy(&t, "mode = \"deny-all\"");
+        save_secret(&t, "github", None, "gh-global");
+        save_secret(&t, "github", Some("a"), "gh-parent");
+        let github = ["github".to_string()];
+        let mut m = meta("a-fork-1", &github, &[]);
+        m.fork_of = Some("a".into());
+        let gh = |plan: StartPlan| plan.env[0].1.clone();
+        assert_eq!(gh(start_plan(&t.ctx, &m).unwrap()), "gh-parent");
+        save_secret(&t, "github", Some("a-fork-1"), "gh-fork");
+        assert_eq!(gh(start_plan(&t.ctx, &m).unwrap()), "gh-fork");
     }
 
     #[test]
@@ -543,6 +563,25 @@ mod tests {
             start_plan(&t.ctx, &meta("s1", &[], &[])).unwrap().clone,
             None
         );
+    }
+
+    #[test]
+    fn start_plan_is_branchable_only_for_forkable_sandboxes() {
+        // Which sandboxes are forkable is `Meta::forkable`'s test; this checks the plan uses it.
+        let branchable = |t: &TestEnv, m: &Meta| start_plan(&t.ctx, m).unwrap().branchable;
+        let mountless = meta("s1", &[], &[]);
+        let fork = Meta {
+            fork_of: Some("s0".into()),
+            ..mountless.clone()
+        };
+        let t = test_env(&[]);
+        set_policy(&t, "mode = \"deny-all\"");
+        assert!(branchable(&t, &mountless));
+        assert!(!branchable(&t, &fork));
+
+        let t = test_env(&[("SMOLBENTO_FORK", "false")]);
+        set_policy(&t, "mode = \"deny-all\"");
+        assert!(!branchable(&t, &mountless));
     }
 
     #[test]

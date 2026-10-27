@@ -53,8 +53,19 @@ pub fn test_env(extra_env: &[(&str, &str)]) -> TestEnv {
             uid: 501,
             store: Box::new(crate::secrets::store::MemoryStore::default()),
             config_error,
+            out: super::Out::Buffer(Default::default()),
         },
         _dir: dir,
+    }
+}
+
+impl TestEnv {
+    /// What commands have written to stdout since the last call.
+    pub fn stdout(&self) -> String {
+        match &self.ctx.out {
+            super::Out::Buffer(b) => String::from_utf8(b.take()).unwrap(),
+            super::Out::Stdout => unreachable!("tests capture stdout"),
+        }
     }
 }
 

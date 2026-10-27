@@ -11,6 +11,7 @@ pub const CREDENTIAL_HOSTS: &str = "sbx.credential-hosts";
 pub const CREDENTIAL_ENV: &str = "sbx.credential-env";
 pub const CLONE: &str = "sbx.clone";
 pub const CLONE_TOP: &str = "sbx.clone-top";
+pub const FORK_OF: &str = "sbx.fork-of";
 
 /// Sandbox metadata, fixed at create and stored as smolvm machine labels.
 #[derive(Debug, Clone, Default, PartialEq, Eq)]
@@ -37,6 +38,8 @@ pub struct Meta {
     /// `sbx.clone=true` plus `sbx.clone-top` when it differs from `workspace` (a subdirectory was
     /// given).
     pub clone_repo: Option<String>,
+    /// The sandbox this one was forked from.
+    pub fork_of: Option<String>,
 }
 
 impl Meta {
@@ -72,6 +75,9 @@ impl Meta {
                 labels.insert(CLONE_TOP.to_string(), top.clone());
             }
         }
+        if let Some(f) = &self.fork_of {
+            labels.insert(FORK_OF.to_string(), f.clone());
+        }
         labels
     }
 
@@ -97,7 +103,26 @@ impl Meta {
                 .get(CLONE)
                 .filter(|c| *c == "true")
                 .and_then(|_| labels.get(CLONE_TOP).or(labels.get(WORKSPACE)).cloned()),
+            fork_of: labels.get(FORK_OF).cloned(),
         })
+    }
+
+    /// A mounted host folder the sandbox can write: a copy would share it with the original.
+    pub fn writable_host_folder(&self) -> bool {
+        // A workspace label without a readable list (an empty or garbled `sbx.workspaces`) still
+        // names a folder; assume it's writable.
+        if self.workspaces.is_empty() && self.clone_repo.is_none() && self.workspace.is_some() {
+            return true;
+        }
+        self.workspaces
+            .iter()
+            .enumerate()
+            .any(|(i, w)| !w.ends_with(":ro") && !(i == 0 && self.clone_repo.is_some()))
+    }
+
+    /// Whether `sbt fork` can copy it: no writable host folder, and not itself a fork.
+    pub fn forkable(&self) -> bool {
+        self.fork_of.is_none() && !self.writable_host_folder()
     }
 }
 
@@ -206,7 +231,69 @@ mod tests {
     }
 
     #[test]
+    fn fork_of_label_round_trips() {
+        let m = Meta {
+            fork_of: Some("a".into()),
+            ..meta()
+        };
+        let labels = m.to_labels();
+        assert_eq!(labels["sbx.fork-of"], "a");
+        assert_eq!(Meta::from_labels(&labels), Some(m));
+        assert!(!meta().to_labels().contains_key("sbx.fork-of"));
+    }
+
+    #[test]
     fn foreign_machine_is_none() {
         assert_eq!(Meta::from_labels(&BTreeMap::new()), None);
+    }
+
+    #[test]
+    fn forkable_needs_no_writable_host_folder_and_no_parent() {
+        let mounted = meta();
+        assert!(mounted.writable_host_folder() && !mounted.forkable());
+        let clone = Meta {
+            clone_repo: Some("/w/repo".into()),
+            ..meta()
+        };
+        assert!(clone.forkable());
+        let mountless = Meta {
+            workspace: None,
+            workspaces: vec![],
+            ..meta()
+        };
+        assert!(mountless.forkable());
+        let fork = Meta {
+            fork_of: Some("a".into()),
+            ..mountless.clone()
+        };
+        assert!(!fork.forkable());
+    }
+
+    #[test]
+    fn a_workspace_without_a_readable_list_counts_as_writable() {
+        let from = |workspaces: Option<&str>| {
+            let mut labels = BTreeMap::from([
+                (NAME.to_string(), "a".to_string()),
+                (WORKSPACE.to_string(), "/w/p".to_string()),
+            ]);
+            if let Some(w) = workspaces {
+                labels.insert(WORKSPACES.to_string(), w.to_string());
+            }
+            Meta::from_labels(&labels).unwrap()
+        };
+        for w in [None, Some(""), Some("[]"), Some("not json")] {
+            assert!(
+                from(w).writable_host_folder() && !from(w).forkable(),
+                "{w:?}"
+            );
+        }
+        assert!(from(Some("[\"/w/p:ro\"]")).forkable());
+        // A clone's workspace is its own copy, whatever the list says.
+        let labels = BTreeMap::from([
+            (NAME.to_string(), "a".to_string()),
+            (WORKSPACE.to_string(), "/w/p".to_string()),
+            (CLONE.to_string(), "true".to_string()),
+        ]);
+        assert!(Meta::from_labels(&labels).unwrap().forkable());
     }
 }

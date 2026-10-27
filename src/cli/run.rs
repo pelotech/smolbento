@@ -1,6 +1,7 @@
 //! run: create the sandbox if needed, start it, attach to the agent, and stop it when the last
 //! session ends (unless it was started with -d).
 
+use std::io::Write;
 use std::path::Path;
 
 use anyhow::{Context, Result, bail};
@@ -64,7 +65,7 @@ pub fn run<R: Runner>(ctx: &mut Ctx<R>, a: &RunArgs) -> Result<i32> {
     let sessions = ctx.paths.sessions();
     if a.detach {
         session::mark_detached(&sessions, sb.name())?;
-        println!("{}", sb.name());
+        writeln!(&ctx.out, "{}", sb.name())?;
         return Ok(0);
     }
 

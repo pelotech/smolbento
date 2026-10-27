@@ -9,6 +9,7 @@ clearly rather than doing something different.
 `run`, `create`, `exec`, `ls`, `start`, `stop`, `rm`, `prune`, `reset`, `cp`, `version`,
 `completion`, `diagnose`, `settings`, `policy`, `secret`, `ports`, `run/create --deny-network`
 (per-sandbox deny rules, as in sbx) and `run/create --clone`.
+`fork` is a smolbento extension: sbx has no fork (its `template save` saves the disk only).
 `daemon` is accepted and does nothing: smolbento has no daemon.
 
 ## Parses, not implemented yet (exit 2)

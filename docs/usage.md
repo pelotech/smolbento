@@ -145,6 +145,48 @@ Good to know:
   from then on (the sandbox is gone); remove it with `git remote remove sandbox-<name>` when you're
   done.
 
+## Fork
+
+```sh
+sbt fork claude-myrepo                        # one copy: claude-myrepo-fork-1
+sbt fork claude-myrepo --count 3              # three copies, for parallel attempts
+sbt fork claude-myrepo --name claude-try-b    # pick the copy's name
+```
+
+`fork` copies a running sandbox (memory, processes and disk) into new sandboxes and prints their
+names, one per line. A stopped sandbox is started first. Copies are copy-on-write, so they're quick
+and small, and from then on each one changes on its own: a file written in one isn't seen in the
+others or in the original.
+
+Use it for parallel attempts (fork once per idea, keep the best) or as an undo point: fork before
+risky work, and if it goes wrong, `sbt rm` the copy you worked in and fork the original again.
+
+Good to know:
+
+- Only clone sandboxes (`--clone`) and sandboxes without a writable host folder can be forked:
+  a host folder would be shared by every copy. Read-only (`:ro`) workspaces are fine.
+- Forks of forks aren't supported yet; fork the original again instead.
+- Secrets carry over: a fork uses its original's sandbox secrets (a secret set for the fork itself
+  wins), then the global ones. It gets a copy of the original's per-sandbox policy rules (such as
+  `--deny-network`), which you can change per fork afterwards. `sbt secret ls --sandbox FORK`
+  lists the original's secrets too, under the original's scope.
+- Each fork of a clone sandbox has its own `sandbox-<fork>` remote in your repo:
+  `git fetch sandbox-claude-myrepo-fork-1`.
+- Remove a sandbox's forks before the sandbox itself: `sbt rm` of a sandbox with forks fails unless
+  its forks are removed in the same command. `prune` and `reset` remove forks first, and `prune`
+  keeps a stopped sandbox while it still has forks.
+- `sbt ls --json` shows a fork's original in `fork_of`. A fork's created time is its own.
+- A fork's published ports get new host ports, picked by smolvm; see `sbt ports <fork>`.
+- smolvm limits how deep a chain of copies can get, and says so if a fork would go past it.
+- Sandboxes started before fork support, or while `fork.enabled` was off, need one restart
+  (`sbt stop NAME && sbt start NAME`) before they can be forked; `fork` says so.
+
+Sandboxes that can be forked (clone and mountless ones, not forks) are started branchable, which
+has two costs: smolvm doesn't hand their idle memory back to your machine, and on Linux the VM
+process's memory, which holds secret values, is readable by other processes running as you. If
+you don't use fork, turn it off with `sbt settings set fork.enabled false`; it applies from each
+sandbox's next start.
+
 ## Run commands inside
 
 ```sh

@@ -1,5 +1,6 @@
 //! ls: sbx's columns (SANDBOX AGENT STATUS PORTS WORKSPACE CREATED) or JSON/YAML.
 
+use std::io::Write;
 use std::time::{Duration, UNIX_EPOCH};
 
 use anyhow::Result;
@@ -16,7 +17,11 @@ pub fn run<R: Runner>(ctx: &mut Ctx<R>, a: &LsArgs) -> Result<i32> {
     } else {
         a.format.unwrap_or_default()
     };
-    print!("{}", render(&sandboxes, format, a.quiet, ctx.now)?);
+    write!(
+        &ctx.out,
+        "{}",
+        render(&sandboxes, format, a.quiet, ctx.now)?
+    )?;
     Ok(0)
 }
 
@@ -28,6 +33,8 @@ struct Row<'a> {
     ports: &'a [PublishedPort],
     workspace: Option<&'a str>,
     created_at: String,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    fork_of: Option<&'a str>,
 }
 
 fn status(state: MachineState) -> &'static str {
@@ -58,6 +65,7 @@ pub fn render(sandboxes: &[Sandbox], format: Format, quiet: bool, now: i64) -> R
                 UNIX_EPOCH + Duration::from_secs(s.meta.created.max(0) as u64),
             )
             .to_string(),
+            fork_of: s.meta.fork_of.as_deref(),
         })
         .collect();
     match format {
@@ -169,6 +177,25 @@ mod tests {
     #[test]
     fn json() {
         insta::assert_snapshot!(render(&sample(), Format::Json, false, 1_000_000).unwrap());
+    }
+
+    #[test]
+    fn json_fork_of_only_on_forks() {
+        let mut v = sample();
+        v[0].meta.fork_of = Some("a".into());
+        let rows: serde_json::Value =
+            serde_json::from_str(&render(&v, Format::Json, false, 1_000_000).unwrap()).unwrap();
+        assert_eq!(rows[0]["fork_of"], "a");
+        assert!(rows[1].get("fork_of").is_none());
+    }
+
+    #[test]
+    fn yaml_fork_of_only_on_forks() {
+        let mut v = sample();
+        v[0].meta.fork_of = Some("a".into());
+        let out = render(&v, Format::Yaml, false, 1_000_000).unwrap();
+        assert_eq!(out.matches("fork_of").count(), 1, "{out}");
+        assert!(out.contains("fork_of: a"), "{out}");
     }
 
     #[test]
