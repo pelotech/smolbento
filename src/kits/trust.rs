@@ -37,7 +37,7 @@ pub fn check(source: &Source, settings: &Settings) -> Result<()> {
 
 /// `registry/repo` with Docker's defaults applied and the tag or digest dropped. Refs a puller
 /// would read differently (or refuse) are errors, so the check never sees another name than the pull.
-fn normalise(r: &str) -> Result<String> {
+pub(crate) fn normalise(r: &str) -> Result<String> {
     let invalid = || anyhow!("invalid kit reference '{r}'");
     if r.is_empty() || r.contains(char::is_whitespace) || r.contains("//") || r.contains("..") {
         return Err(invalid());

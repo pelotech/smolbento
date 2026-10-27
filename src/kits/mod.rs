@@ -2,6 +2,7 @@
 
 pub mod args;
 pub mod model;
+pub mod registry;
 pub mod resolve;
 pub mod smolfile;
 pub mod trust;
