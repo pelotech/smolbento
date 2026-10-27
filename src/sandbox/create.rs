@@ -1,5 +1,6 @@
 use crate::smolvm::{CreateSpec, Credential, Mount, NetworkSpec, PortMap};
 use crate::workspace::Workspace;
+use crate::workspace::clone::{CloneSource, SOURCE_MOUNT};
 
 use super::labels::Meta;
 use super::name;
@@ -28,6 +29,9 @@ pub struct CreateRequest {
     pub credential_hosts: Vec<String>,
     /// The credentials' env vars, sorted (the `sbx.credential-env` label).
     pub credential_env: Vec<String>,
+    /// `--clone`: the host repo the sandbox clones; its git dir replaces the primary workspace's
+    /// mount.
+    pub clone: Option<CloneSource>,
 }
 
 /// Docker can't keep its storage on the overlay root filesystem, so these are directories on the
@@ -46,13 +50,43 @@ pub fn meta(req: &CreateRequest) -> Meta {
         secrets: req.secrets.clone(),
         credential_hosts: req.credential_hosts.clone(),
         credential_env: req.credential_env.clone(),
+        clone: req.clone.is_some(),
+        clone_top: req
+            .clone
+            .as_ref()
+            .map(|c| c.top.display().to_string())
+            .filter(|t| {
+                Some(t)
+                    != req
+                        .workspaces
+                        .first()
+                        .map(|w| w.path.display().to_string())
+                        .as_ref()
+            }),
     }
 }
 
 pub fn spec(req: &CreateRequest) -> CreateSpec {
     let meta = meta(req);
     let primary = meta.workspace.clone();
-    let mut mounts: Vec<Mount> = req.workspaces.iter().map(Workspace::mount).collect();
+    let mut mounts = Vec::new();
+    for (i, w) in req.workspaces.iter().enumerate() {
+        match (&req.clone, i) {
+            (Some(c), 0) => {
+                mounts.push(Mount {
+                    host: Some(c.git_dir.clone()),
+                    guest: SOURCE_MOUNT.into(),
+                    read_only: true,
+                });
+                mounts.push(Mount {
+                    host: None,
+                    guest: c.top.display().to_string(),
+                    read_only: false,
+                });
+            }
+            _ => mounts.push(w.mount()),
+        }
+    }
     if req.docker {
         mounts.extend(DOCKER_VOLUMES.map(|d| Mount {
             host: None,
@@ -65,7 +99,11 @@ pub fn spec(req: &CreateRequest) -> CreateSpec {
         image: req.image.clone(),
         labels: meta.to_labels(),
         mounts,
-        workdir: primary,
+        workdir: req
+            .clone
+            .as_ref()
+            .map(|c| c.top.display().to_string())
+            .or(primary),
         cpus: Some(req.cpus),
         memory_mib: Some(req.memory_mib),
         env: req.env.clone(),
@@ -138,6 +176,45 @@ mod tests {
         assert_eq!(spec.workdir.as_deref(), Some("/w/repo"));
         assert_eq!(spec.user.as_deref(), Some("root"));
         assert_eq!(spec.cmd, vec!["sleep", "infinity"]);
+    }
+
+    #[test]
+    fn clone_mounts_the_git_dir_read_only_and_a_guest_volume() {
+        let ws = vec![
+            Workspace {
+                path: "/w/repo/sub".into(),
+                read_only: false,
+            },
+            Workspace {
+                path: "/w/docs".into(),
+                read_only: true,
+            },
+        ];
+        let mut req = request(false, ws);
+        req.clone = Some(CloneSource {
+            top: "/w/repo".into(),
+            git_dir: "/w/repo/.git".into(),
+        });
+        let spec = spec(&req);
+        let mounts: Vec<String> = spec
+            .to_args()
+            .windows(2)
+            .filter(|w| w[0] == "-v")
+            .map(|w| w[1].clone())
+            .collect();
+        assert_eq!(
+            mounts,
+            vec![
+                "/w/repo/.git:/run/sandbox/source:ro",
+                "/w/repo",
+                "/w/docs:/w/docs:ro",
+            ]
+        );
+        // The clone isn't there until the first start, so the workload starts in the volume.
+        assert_eq!(spec.workdir.as_deref(), Some("/w/repo"));
+        assert_eq!(spec.labels["sbx.clone"], "true");
+        assert_eq!(spec.labels["sbx.clone-top"], "/w/repo");
+        assert_eq!(spec.labels["sbx.workspace"], "/w/repo/sub");
     }
 
     #[test]
