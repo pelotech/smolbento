@@ -40,6 +40,8 @@ pub struct Kit {
     pub requires: Vec<String>,
     pub args: BTreeMap<String, ArgDef>,
     pub caps: Vec<Cap>,
+    /// Plain environment variables (v2 `environment.variables`), set at start.
+    pub env: Vec<(String, String)>,
     pub content: Content,
     /// Image Entrypoint+Cmd (sbx@1), filled by registry/compose.
     pub command: Option<Vec<String>>,

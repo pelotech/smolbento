@@ -110,6 +110,7 @@ fn from_value(v: Value, source: Source) -> Result<Kit> {
         requires: d.requires,
         args,
         caps,
+        env: vec![],
         content: Content::None,
         command: None,
     })
@@ -117,7 +118,7 @@ fn from_value(v: Value, source: Source) -> Result<Kit> {
 
 /// A short token naming the kit: it scopes `--kit-arg` and tags policy rule origins, so it comes
 /// from the source, never from the free-text `displayName`.
-fn name_from_source(source: &Source) -> String {
+pub(crate) fn name_from_source(source: &Source) -> String {
     match source {
         Source::Registry(r) => {
             let last = r.rsplit('/').next().unwrap_or(r);

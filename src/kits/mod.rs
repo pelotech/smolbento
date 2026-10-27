@@ -1,6 +1,8 @@
 //! sbx kits: a capability model plus parsers for the kit descriptor formats.
 
 pub mod model;
+pub mod smolfile;
+pub mod v2;
 pub mod v3;
 
 /// Commit of docker/sandbox-kit-spec the parsers and test fixtures were written against.
