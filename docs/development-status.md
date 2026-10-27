@@ -13,6 +13,9 @@ mounted at the same path. See [Usage](usage.md).
 **Phase 2 (network policy, secrets, ports) is done.** Choose `balanced` or `deny-all` for untrusted
 work. See [Security](SECURITY.md).
 
+**Phase 3a (clone mode) is done.** `sbt run --clone` gives the agent its own clone of the repo;
+its commits come back through `git fetch sandbox-<name>`. See [Usage](usage.md#clone-mode).
+
 Upgrading from v0.1.x: starting a sandbox now needs a chosen network policy, as in sbx. Run
 `sbt policy init balanced` (or answer the prompt) before your next start; scripts without a
 terminal fail until you do.
@@ -24,7 +27,8 @@ terminal fail until you do.
 | 0 | Spikes: what smolvm and sbx actually do | ✅ Done |
 | 1 | Repo tooling and CI; `run`, `create`, `exec`, `ls`, `start`, `stop`, `rm`, `prune`, `reset`, `cp`, `version`, `completion`, `diagnose`, `settings`, `daemon` | ✅ Done |
 | 2 | Network policy (`policy init/allow/deny/rm/ls/log/check`, approvals, live changes on running sandboxes), secrets (keychain, `op://` and AWS references, `--command`; the sandbox only sees placeholders), `ports` | ✅ Done |
-| 3 | `--clone` (the agent works on its own clone; only commits come back, through a `git-remote-sbt` remote), `verify` (security self-check), `fork`, `checkpoint`, `restore` | ⏭ Next |
+| 3a | `--clone` (the agent works on its own clone; only commits come back, through the `sandbox-<name>` remote) | ✅ Done |
+| 3b | `fork`, `checkpoint`, `restore` | ⏭ Next |
 | 4 | Kits (sbx kit v2 `spec.yaml`, native Smolfiles), `sbxenv.yaml`, the `docker` and `plus` kits and image, host services (e.g. a host Ollama reachable from sandboxes) | Planned |
 | 5 | `template`, `setup ssh`, static MCP, `--skills`, clipboard and browser bridges | Planned |
 | 6 | `tui` dashboard (bare `sbt` opens it on a terminal) | Planned |
@@ -32,7 +36,7 @@ terminal fail until you do.
 
 ## Known limitations
 
-- Workspaces are mounted read-write; there's no clone mode yet (Phase 3).
+- Workspaces are mounted read-write unless you use `--clone`.
 - Published ports bind `127.0.0.1` only, and directories (not single files) can be mounted. Both are
   smolvm limits; see [sbx compatibility](sbx-compatibility.md).
 - Linux uses a 0600 file for secret values where no Secret Service runs.

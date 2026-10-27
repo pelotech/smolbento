@@ -77,8 +77,49 @@ Options for `run` and `create`:
 | `--env-file FILE` | Read `KEY=VALUE` lines |
 | `-p, --publish [[127.0.0.1:]HOST:]PORT[/udp]` | Publish a port on `127.0.0.1`; with no host port, a free one is picked |
 | `-t, --template IMAGE` | Use another image |
+| `--clone` | Give the agent its own clone of the repo instead of mounting it (see [Clone mode](#clone-mode)) |
 
 These are fixed when the sandbox is created; changing them later means `rm` and create again.
+
+## Clone mode
+
+```sh
+cd ~/code/myrepo
+sbt run --clone claude .
+```
+
+With `--clone` the agent doesn't write to your checkout. Your repo is mounted read-only at
+`/run/sandbox/source`, and on the sandbox's first start it is cloned to the same path as on your
+machine, on the sandbox's own disk. The clone starts from your repo's current `HEAD` (for a linked
+worktree, its branch); uncommitted changes aren't carried over. The clone survives stop and start.
+
+Your remotes (`origin`, `upstream`, …) are copied into the clone, except local-path and `file://`
+ones. Any user name and token in an HTTPS remote URL is removed, so no host credential reaches the
+sandbox. SSH remotes are copied but won't work in the sandbox (no keys); use an HTTPS remote with
+`sbt secret set github` if the agent should push.
+
+The agent's commits come back through a remote `sandbox-<name>` added to your repo:
+
+```sh
+git fetch sandbox-claude-myrepo
+git log sandbox-claude-myrepo/main
+git merge sandbox-claude-myrepo/main          # or check out, cherry-pick, …
+```
+
+Good to know:
+
+- `run` fetches `sandbox-<name>` when the agent exits and prints git's summary. Turn it off with
+  `sbt settings set clone.fetch-on-exit false`. A failed fetch only warns.
+- That automatic fetch checks the objects it receives (`fetch.fsckObjects`). A manual `git fetch`
+  uses your git config; to check it too, run
+  `git -c fetch.fsckObjects=true fetch sandbox-<name>`.
+- Fetching from a stopped sandbox starts it, fetches, and stops it again.
+- `git fetch` runs `sbt _upload-pack <name>` for that remote, so `sbt` must be on your `PATH`.
+- `--clone` needs a workspace path in a git repository, and git on your machine. The image needs
+  git too; if the clone fails, the start fails with git's error and the next start tries again.
+- `--clone` only applies when the sandbox is created; `run` on an existing sandbox ignores it.
+- `sbt rm`, `prune` and `reset` remove the `sandbox-<name>` remote. Nothing else in your repo's
+  config changes.
 
 ## Run commands inside
 

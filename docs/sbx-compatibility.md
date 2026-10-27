@@ -7,8 +7,8 @@ clearly rather than doing something different.
 ## Works today
 
 `run`, `create`, `exec`, `ls`, `start`, `stop`, `rm`, `prune`, `reset`, `cp`, `version`,
-`completion`, `diagnose`, `settings`, `policy`, `secret`, `ports` and `run/create --deny-network`
-(per-sandbox deny rules, as in sbx).
+`completion`, `diagnose`, `settings`, `policy`, `secret`, `ports`, `run/create --deny-network`
+(per-sandbox deny rules, as in sbx) and `run/create --clone`.
 `daemon` is accepted and does nothing: smolbento has no daemon.
 
 ## Parses, not implemented yet (exit 2)
@@ -17,7 +17,6 @@ clearly rather than doing something different.
 |---|---|
 | `policy refresh`, `secret import`, `secret set --oauth/--registry/--refresh` | Not implemented |
 | `policy ls --source/--created-via/--type/--protocol/--include-inactive`, `policy check --protocol` other than `tcp` | Not implemented (`policy ls --decision` works) |
-| `run/create --clone` | Later |
 | `--kit`, `kit`, `env` (sbxenv.yaml) | Later |
 | `template`, `setup ssh`, `mcp`, `--static-mcp`, `--skills`, `skills` | Later |
 | `tui` | Later |
@@ -44,6 +43,11 @@ clearly rather than doing something different.
 | Single-file `:ro` mounts | Supported | Directories only (smolvm mounts directories) |
 | Machine names | `.` allowed | Names can't contain `--` or end in `-` (smolvm rules) |
 | Daemon | `sandboxd` | None; each command talks to smolvm directly |
+| Clone transport | A git daemon in the sandbox on a published port; the remote URL changes on every start, and fetch fails while the sandbox is stopped | No daemon or port: the `sandbox-<name>` remote's `uploadpack` runs `sbt _upload-pack <name>`, which runs `git-upload-pack` in the sandbox through `smolvm machine exec`. `git remote -v` shows a placeholder `file:///sbt/<name>` URL |
+| Fetch on exit | None | `sbt run` fetches `sandbox-<name>` when the agent exits (setting `clone.fetch-on-exit`, default `true`) |
+| Object checking | Plain `git fetch` | The fetch on exit runs with `fetch.fsckObjects=true`; manual `git fetch` is unchanged, and your repo config isn't touched beyond the remote |
+| Fetch from a stopped sandbox | Fails | Starts the sandbox, fetches, stops it again |
+| Linked worktrees as the clone source | Not supported | Supported; the clone checks out the worktree's branch |
 | `--version` | `sbx version vX` | `sbt --version` prints `sbt X`; `sbt version` also shows the smolvm version |
 
 ## Exit codes
