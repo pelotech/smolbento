@@ -158,7 +158,18 @@ pub fn find<R: Runner>(vm: &Smolvm<R>, name: &str) -> Result<Option<Sandbox>> {
 }
 
 pub fn get<R: Runner>(vm: &Smolvm<R>, name: &str) -> Result<Sandbox> {
-    find(vm, name)?.with_context(|| format!("sandbox '{name}' not found (see `sbt ls`)"))
+    find(vm, name)?.ok_or_else(|| not_found(name))
+}
+
+/// `name` among already listed sandboxes (from `list`), with `get`'s error.
+pub fn pick<'a>(all: &'a [Sandbox], name: &str) -> Result<&'a Sandbox> {
+    all.iter()
+        .find(|sb| sb.name() == name)
+        .ok_or_else(|| not_found(name))
+}
+
+fn not_found(name: &str) -> anyhow::Error {
+    anyhow::anyhow!("sandbox '{name}' not found (see `sbt ls`)")
 }
 
 /// All sandboxes, sorted by name; running ones include their published ports.

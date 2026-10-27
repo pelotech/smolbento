@@ -170,21 +170,16 @@ fn remaining_forks<'a>(sb: &Sandbox, all: &'a [Sandbox], removing: &[&str]) -> V
 
 pub fn rm<R: Runner>(ctx: &mut Ctx<R>, a: &RmArgs) -> Result<i32> {
     let all = sandbox::list(&ctx.vm)?;
-    let named: Vec<Sandbox> = if a.all {
-        Vec::new()
+    let targets: Vec<&Sandbox> = if a.all {
+        all.iter().collect()
     } else {
         if a.sandboxes.is_empty() {
             bail!("specify sandboxes to remove, or --all");
         }
         a.sandboxes
             .iter()
-            .map(|n| sandbox::get(&ctx.vm, n))
+            .map(|n| sandbox::pick(&all, n))
             .collect::<Result<_>>()?
-    };
-    let targets: Vec<&Sandbox> = if a.all {
-        all.iter().collect()
-    } else {
-        named.iter().collect()
     };
     if targets.is_empty() {
         println!("No sandboxes found");
@@ -1219,6 +1214,21 @@ mod tests {
         with_forks(&t, "stopped", "stopped", "stopped");
         sbt(&mut t.ctx, &["rm", "-f", "a", "a-fork-1", "a-fork-2"]).unwrap();
         assert_eq!(deletes(&t), vec!["a-fork-1", "a-fork-2", "a"]);
+        // Named targets come from the one list, not a status call each.
+        let calls = t.ctx.vm.runner().call_lines();
+        assert!(
+            calls.iter().all(|c| !c.starts_with("machine status")),
+            "{calls:?}"
+        );
+    }
+
+    #[test]
+    fn rm_of_a_missing_sandbox_deletes_nothing() {
+        let mut t = test_env(&[]);
+        with_forks(&t, "stopped", "stopped", "stopped");
+        let err = sbt(&mut t.ctx, &["rm", "-f", "a-fork-1", "nope"]).unwrap_err();
+        assert_eq!(err.to_string(), "sandbox 'nope' not found (see `sbt ls`)");
+        assert!(deletes(&t).is_empty());
     }
 
     #[test]
