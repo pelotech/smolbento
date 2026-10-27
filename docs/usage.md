@@ -168,7 +168,8 @@ Good to know:
 - Forks of forks aren't supported yet; fork the original again instead.
 - Secrets carry over: a fork uses its original's sandbox secrets (a secret set for the fork itself
   wins), then the global ones. It gets a copy of the original's per-sandbox policy rules (such as
-  `--deny-network`), which you can change per fork afterwards.
+  `--deny-network`), which you can change per fork afterwards. `sbt secret ls --sandbox FORK`
+  lists the original's secrets too, under the original's scope.
 - Each fork of a clone sandbox has its own `sandbox-<fork>` remote in your repo:
   `git fetch sandbox-claude-myrepo-fork-1`.
 - Remove a sandbox's forks before the sandbox itself: `sbt rm` of a sandbox with forks fails unless

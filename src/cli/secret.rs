@@ -65,16 +65,24 @@ pub fn run<R: Runner>(ctx: &mut Ctx<R>, cmd: SecretCmd) -> Result<i32> {
             });
             set(ctx, &mut file, &name, a.source)?;
         }
-        SecretCmd::Ls(a) => print!(
-            "{}",
-            render_ls(
-                &file,
-                a.sandbox.as_deref(),
-                a.global,
-                a.service.as_deref(),
-                a.quiet
-            )
-        ),
+        SecretCmd::Ls(a) => {
+            // A fork also uses its original's sandbox secrets (see `plan::start_plan`).
+            let parent = match &a.sandbox {
+                Some(s) => sandbox::find(&ctx.vm, s)?.and_then(|sb| sb.meta.fork_of),
+                None => None,
+            };
+            print!(
+                "{}",
+                render_ls(
+                    &file,
+                    a.sandbox.as_deref(),
+                    parent.as_deref(),
+                    a.global,
+                    a.service.as_deref(),
+                    a.quiet
+                )
+            );
+        }
         SecretCmd::Rm(a) => rm(ctx, &mut file, a)?,
         SecretCmd::Import(_) => {
             return Err(Unsupported("`sbt secret import` is not implemented yet".into()).into());
@@ -286,18 +294,22 @@ fn read_value<R: Runner>(ctx: &Ctx<R>, service: &str) -> Result<String> {
 pub fn render_ls(
     file: &SecretsFile,
     sandbox: Option<&str>,
+    fork_of: Option<&str>,
     global_only: bool,
     service: Option<&str>,
     quiet: bool,
 ) -> String {
     let own = sandbox.map(|s| scope_for(Some(s)));
+    let parent = fork_of.map(|p| scope_for(Some(p)));
     let entries: Vec<&SecretEntry> = file
         .secrets
         .iter()
         .filter(|e| !global_only || e.scope == "global")
         .filter(|e| {
-            own.as_ref()
-                .is_none_or(|o| e.scope == "global" || &e.scope == o)
+            own.as_ref().is_none_or(|o| e.scope == "global" || &e.scope == o)
+                // The original's entries, unless the fork has its own for the service.
+                || parent.as_ref() == Some(&e.scope)
+                    && !file.secrets.iter().any(|f| f.service == e.service && Some(&f.scope) == own.as_ref())
         })
         .filter(|e| service.is_none_or(|s| e.service == s))
         .collect();
@@ -719,6 +731,7 @@ mod tests {
         insta::assert_snapshot!(render_ls(
             &SecretsFile::load(&t.ctx.paths).unwrap(),
             None,
+            None,
             false,
             None,
             false
@@ -733,6 +746,47 @@ mod tests {
         );
         sbt(&mut t.ctx, &["secret", "rm", "--all", "-f"]).unwrap();
         assert!(SecretsFile::load(&t.ctx.paths).unwrap().secrets.is_empty());
+    }
+
+    #[test]
+    fn ls_of_a_fork_includes_its_originals_secrets() {
+        let mut t = test_env(&[]);
+        for args in [
+            &["anthropic", "-t", "g"][..],
+            &["github", "-t", "p", "--sandbox", "aa"][..],
+            &["openai", "-t", "p", "--sandbox", "aa"][..],
+            &["openai", "-t", "f", "--sandbox", "aa-fork-1"][..],
+            &["claude", "-t", "o", "--sandbox", "other"][..],
+        ] {
+            let mut full = vec!["secret", "set"];
+            full.extend_from_slice(args);
+            sbt(&mut t.ctx, &full).unwrap();
+        }
+        let fake = t.ctx.vm.runner();
+        fake.ok(
+            &["machine", "status", "-n", "sbx-aa-fork-1"],
+            &machine_json(
+                "sbx-aa-fork-1",
+                "running",
+                &[("sbx.name", "aa-fork-1"), ("sbx.fork-of", "aa")],
+            ),
+        );
+        let file = SecretsFile::load(&t.ctx.paths).unwrap();
+        let ls = |sandbox, fork_of| render_ls(&file, sandbox, fork_of, false, None, true);
+        // Own, the original's (but not where the fork has its own) and global.
+        assert_eq!(
+            ls(Some("aa-fork-1"), Some("aa")),
+            "anthropic\ngithub\nopenai\n"
+        );
+        assert_eq!(ls(Some("aa-fork-1"), None), "anthropic\nopenai\n");
+        let table = render_ls(&file, Some("aa-fork-1"), Some("aa"), false, None, false);
+        assert!(table.contains("sandbox:aa"), "{table}");
+        assert!(!table.contains("sandbox:other"), "{table}");
+        // Through the command: a fork's parent is looked up from its labels.
+        assert_eq!(
+            sbt(&mut t.ctx, &["secret", "ls", "--sandbox", "aa-fork-1"]).unwrap(),
+            0
+        );
     }
 
     #[test]
