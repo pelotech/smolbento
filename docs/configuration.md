@@ -24,8 +24,12 @@ An environment variable wins over the config file, which wins over the default. 
 `docker.enabled` applies to sandboxes created afterwards. `kit.sources` patterns match the
 registry and repository with the tag dropped and Docker Hub spelled out: `alpine` is
 `docker.io/library/alpine`, `ghcr.io/acme/kit:1` is `ghcr.io/acme/kit`. To also allow one
-organisation's kits on GitHub: `sbt settings set kit.sources 'docker.io/*,ghcr.io/acme/*'`. `fork.enabled` applies from each
-sandbox's next start; see [Fork](usage.md#fork) for what it costs.
+organisation's kits on GitHub: `sbt settings set kit.sources 'docker.io/*,ghcr.io/acme/*'`.
+`kit.sources` applies to kits only: the images a kit names (a workload kit's image, the base image
+its layers are added to) are pulled without it, like a Dockerfile's `FROM`. Registries are reached
+over HTTPS, except loopback ones (`localhost`, `127.0.0.0/8`, `::1`), which use plain HTTP.
+`fork.enabled` applies from each sandbox's next start; see [Fork](usage.md#fork) for what it
+costs.
 
 ## Files
 

@@ -67,7 +67,7 @@ with its `type@version` before anything is created; an optional one is skipped w
 
 | Capability | sbx (local) | smolbento |
 |---|---|---|
-| `network-policy@1`, `@2` | Yes | Yes: per-sandbox rules with source `kit`; install-phase rules only while install steps run. `@2` method and path rules aren't enforced, so a kit that requires them is refused |
+| `network-policy@1`, `@2` | Yes | Yes: per-sandbox rules with source `kit`. Install-phase rules are in place from the sandbox's creation through its first start's setup and install steps, removed when install finishes, and never used by later starts. `@2` method and path rules aren't enforced, so a kit that requires them is refused |
 | `credential@1` | Yes | API keys: yes, through your secrets. OAuth with `passthrough: true`: yes (the token and resource hosts are allowed; the agent's own login keeps its tokens in the sandbox). OAuth without passthrough: no |
 | `port@1` | Yes | Yes, on `127.0.0.1` |
 | `volume@1` | Yes (kept across removal) | Yes, on the sandbox's disk; removed with the sandbox |
@@ -91,13 +91,14 @@ Differences:
 |---|---|---|
 | Building local v3 kits | BuildKit on your machine | BuildKit in a hidden `_builder` sandbox; no Docker on your machine needed. It pulls base images without a registry login (kits built on `dhi.io`, like Docker's examples, don't build yet) and never gets your secrets |
 | Kit volumes | Kept across `rm` and recreation | Removed with the sandbox (`rm`, `reset`, recreate); kept across stop and start; each fork gets its own copy |
+| Where a kit sends a secret | Any host the kit names | A built-in service's secret only to that service's own hosts (else the kit is refused); a custom service's anywhere, with a note at `create` and `kit add` |
 | Install-only credentials | Available only while installing | The sandbox restarts once after install, without them; later requests to their hosts get `502` |
 | OAuth credentials | Passthrough and sentinel tokens | Passthrough only (sentinel tokens need smolvm support) |
 | Method and path rules | Enforced | Not enforced (as for `policy allow --method/--path`); a kit that requires them is refused |
 | `kit add` | Adds rules, steps and context; files and host deny rules need a recreate | Also applies files and deny rules live. Image layers, credentials, ports, volumes, resources, environment variables and `long-running` need a recreate ("recreate required"); asks before opening network access, `-y/--yes` skips the question |
 | `kit inspect`, `kit validate` | `--format`, `--offline` | Neither; `kit inspect --json` gives JSON |
 | The name `docker` | A registry ref (the `docker` image) | The shipped Docker kit; write `docker.io/library/docker` for the image |
-| A ref that is also a directory | Registry ref | A local kit: `alpine` with an `./alpine` directory present loads the directory |
+| A ref that is also a local path | Registry ref | A local kit: a ref that names a file or directory relative to the current directory loads it, e.g. `alpine` with an `alpine` directory present. Write `docker.io/library/alpine` for the registry. `docker` is always the shipped kit |
 | Docker in the sandbox | Run by the `-docker` images | The shipped `docker` kit, added to Docker-enabled images; a failed first start removes the sandbox, as for any kit |
 
 ## Exit codes

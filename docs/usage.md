@@ -136,7 +136,9 @@ Good to know:
   `PATH` (every install puts it there; the `sbt`, `sbx` and `bento` names are links to it).
 - `--clone` needs a workspace path in a git repository, and git 2.31 or newer on your machine. The
   image needs git too: the built-in agent images have it, but with `-t` pick an image with git
-  installed. If the clone fails, the start fails with git's error and the next start tries again.
+  installed. If the clone fails, the start fails with git's error. On a sandbox's first start with
+  kits (every Docker-enabled sandbox has the `docker` kit) the sandbox is then removed, so run the
+  same `create` or `run` again; otherwise the next start tries again.
 - `--clone` only applies when the sandbox is created; `run` on an existing sandbox ignores it.
 - `sbt rm`, `prune` and `reset` remove the `sandbox-<name>` remote, and with it the
   `sandbox-<name>/…` branches, as sbx does. Merge what you want first, or keep a branch:
@@ -236,19 +238,28 @@ where the agent name goes, and the sandbox is named after it. A kit reference is
 | `./my-kit` (a directory with a `spec.yaml`) | A local v2 kit |
 | `./Smolfile`, `./x.smolfile` | A smolvm Smolfile |
 
+A reference that names a file or directory relative to the current directory is that local kit,
+even without `./`: with an `alpine` directory present, `alpine` loads it rather than the registry.
+`docker` is always the shipped kit.
+
 Kit arguments: `--kit-arg NAME=VALUE` sets an argument for every kit, `--kit-arg KIT.NAME=VALUE`
 for one kit, and `--kit-args-file FILE` reads `NAME=VALUE` lines. Files are read in order, then
-`--kit-arg`; the last value wins, and a value for one kit beats a value for all.
+`--kit-arg`; the last value wins, and a value for one kit beats a value for all. Argument values
+aren't secret: they can end up in the sandbox's environment and smolvm's machine config, so put
+secrets in [credentials](#secrets) instead.
 
 What a kit does, and when:
 
 - **First start**: its install steps run once, with any network access the kit needs only for
-  installing. If one fails, the sandbox is removed and the step's output printed, so the same
-  command works again once it's fixed. Its files and agent instructions are written once.
+  installing. If one fails (or anything else in the first start), the sandbox is removed and the
+  error printed, so the same command works again once it's fixed. Its files and agent
+  instructions are written once; a v2 kit's `files/workspace` and `${WORKDIR}` are the sandbox's
+  primary workspace, or `/home/agent/workspace` without one.
 - **Every start**: its startup steps run in the background, alongside the agent. Their output goes
   to `/var/log/smolbento/startup.log` in the sandbox; a failing step is logged, not fatal.
 - **Credentials** come from your secrets: if a kit needs one you haven't set, the error says which
-  `sbt secret set` command to run. A credential the kit needs only while installing is available
+  `sbt secret set` command to run. A built-in service's secret only goes to that service's own
+  hosts; see [Security](SECURITY.md#kits). A credential the kit needs only while installing is available
   during install; the sandbox then restarts once without it, and later requests to its hosts get
   `502`.
 - **Volumes** a kit declares are on the sandbox's own disk: they survive stop and start, and are

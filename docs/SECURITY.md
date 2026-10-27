@@ -36,16 +36,34 @@ access, so load only kits you trust.
 
 - **Which kits load.** Published kits only from the registries in `kit.sources` (default Docker
   Hub, `docker.io/*`), and local kits only while `kit.allow-local` is `true` (the default). Both are
-  checked before anything is downloaded or built. Signatures aren't checked yet.
+  checked before anything is downloaded or built. Signatures aren't checked yet. The images a kit
+  names (a workload kit's image, the base image its layers are added to) are pulled without a
+  `kit.sources` check, like a Dockerfile's `FROM`. Registries are reached over HTTPS, except
+  loopback ones (`localhost`, `127.0.0.0/8`, `::1`), which use plain HTTP, as in Docker.
 - **Kit network rules.** A kit's allow rules are added for its sandbox only, even under
   `deny-all`, as in sbx. `sbt policy ls --source kit` lists them (`--source local` lists yours).
   Deny rules always win: to block a host a kit allows, run
-  `sbt policy deny network --sandbox NAME HOST`. Rules a kit needs only while installing are
-  removed when its install steps finish.
+  `sbt policy deny network --sandbox NAME HOST`. Rules a kit needs only while installing
+  (`kit-install:<kit>` in `policy ls`) are in place from the sandbox's creation through its first
+  start's setup and install steps, and removed when install finishes. Later starts never use them,
+  even if a create was interrupted before it could remove them; `sbt rm` removes any left over.
 - **`kit add`** asks before it opens new network access on an existing sandbox; `-y` grants it,
   and without a terminal it fails.
 - **Kit credentials** use your secrets, as placeholders in the sandbox; the value only goes to the
-  hosts the kit names. A credential a kit needs only while installing is gone after install.
+  hosts the kit names (or the service's own hosts, if it names none). What a kit can do with them:
+  - A kit may send a **built-in** service's secret (`github`, `anthropic`, …) only to that
+    service's own hosts. Naming any other host fails: "kit K wants to send your github secret to
+    HOST, which github doesn't use; refusing". sbx trusts the kit here; smolbento doesn't, because
+    Docker Hub kits load by default.
+  - A kit may send a **custom** service's secret (`sbt secret set-custom`) to any host it names.
+    `create` and `kit add` print "kit K sends your SERVICE secret to HOSTS".
+  - `sbt kit inspect REF` lists each credential's service and the hosts it's sent to.
+  - A credential's hosts are always reachable from the sandbox, and a deny rule can't block them
+    while the kit's binding exists, which is for the sandbox's life (smolvm needs them to send the
+    secret). To drop them, recreate the sandbox without the kit.
+  - A credential a kit needs only while installing is gone after install.
+- **Kit arguments aren't secret.** Their values can end up in the sandbox's environment and in
+  smolvm's machine config. Put secrets in credentials, not in `--kit-arg`.
 - **Local kit builds** run in the `_builder` sandbox, a VM under your global network policy, not on
   your machine's Docker. The builder never gets your secrets.
 
