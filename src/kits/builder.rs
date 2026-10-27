@@ -26,12 +26,28 @@ const SYNTAX: &str = "# syntax=docker/sandbox-kit:3";
 const DOCKER_WAIT: u32 = 30;
 /// How much of a failed build's output the error shows.
 const TAIL_LINES: usize = 20;
-const AUTH_MARKERS: [&str; 4] = [
-    "401",
-    "unauthorized",
+/// Phrases registries and buildx use for a missing login (matched lowercased).
+const AUTH_PHRASES: [&str; 5] = [
+    "unauthorized:",
     "authentication required",
     "denied: requested access",
+    "pull access denied",
+    "401 unauthorized",
 ];
+/// What may precede a bare HTTP 401 status; a bare "401" elsewhere is often a size or a digest.
+const STATUS_PREFIXES: [&str; 3] = ["status: ", "status code ", ": "];
+
+/// Whether a lowercased line of buildx output reports a registry login failure.
+fn is_auth_failure(lower: &str) -> bool {
+    if AUTH_PHRASES.iter().any(|p| lower.contains(p)) {
+        return true;
+    }
+    lower.match_indices("401").any(|(i, _)| {
+        let (before, after) = (&lower[..i], &lower[i + 3..]);
+        !after.starts_with(|c: char| c.is_ascii_digit())
+            && STATUS_PREFIXES.iter().any(|p| before.ends_with(p))
+    })
+}
 
 /// Numbers this process's builds, so concurrent builds get their own `/build/<n>`.
 static BUILDS: AtomicU32 = AtomicU32::new(0);
@@ -227,8 +243,7 @@ fn build_error(dir: &Path, e: &anyhow::Error) -> anyhow::Error {
         Some(s) => s.message.clone(),
         None => format!("{e:#}"),
     };
-    let lower = output.to_lowercase();
-    if AUTH_MARKERS.iter().any(|m| lower.contains(m)) {
+    if output.lines().any(|l| is_auth_failure(&l.to_lowercase())) {
         let from = registry_host(&output)
             .map(|h| format!(" from {h}"))
             .unwrap_or_default();
@@ -245,10 +260,7 @@ fn build_error(dir: &Path, e: &anyhow::Error) -> anyhow::Error {
 
 /// The registry of the first image reference or URL on an auth error line.
 fn registry_host(output: &str) -> Option<String> {
-    let auth_line = |l: &&str| {
-        let l = l.to_lowercase();
-        AUTH_MARKERS.iter().any(|m| l.contains(m))
-    };
+    let auth_line = |l: &&str| is_auth_failure(&l.to_lowercase());
     output
         .lines()
         .filter(auth_line)
@@ -283,6 +295,18 @@ fn unpack(kit_tar: &Path, built: &Path, tmp: &Path) -> Result<PathBuf> {
             bail!(
                 "the built kit has an unexpected {kind:?} entry {}",
                 entry.path()?.display()
+            );
+        }
+        // `unpack_in` would skip these silently; buildx never writes them, so the tar is suspect.
+        let path = entry.path()?.into_owned();
+        if path.is_absolute()
+            || path
+                .components()
+                .any(|c| matches!(c, std::path::Component::ParentDir))
+        {
+            bail!(
+                "the built kit has an entry outside its layout: {}",
+                path.display()
             );
         }
         entry
@@ -713,5 +737,60 @@ mod tests {
             "{:?}",
             fake.removed()
         );
+    }
+
+    #[test]
+    fn a_401_inside_a_digest_or_size_is_not_an_auth_failure() {
+        let log = "#5 sha256:4019ab0c401def 12.3MB / 40.1MB\n\
+                   #5 transferred 4012 bytes\n\
+                   #6 ERROR: process \"/bin/sh -c make\" did not complete successfully: exit code: 2\n";
+        let (_t, err) = failing_build(log);
+        assert!(!err.contains("registry login"), "{err}");
+        assert!(err.contains("transferred 4012 bytes"), "{err}");
+        assert!(err.contains("exit code: 2"), "{err}");
+    }
+
+    #[test]
+    fn clear_auth_signals_are_recognised() {
+        for line in [
+            "unexpected status: 401 Unauthorized",
+            "failed with status code 401",
+            "HEAD https://r.example/v2/x: 401 ",
+            "error: unauthorized: authentication required",
+            "pull access denied for x",
+            "denied: requested access to the resource is denied",
+        ] {
+            assert!(is_auth_failure(&line.to_lowercase()), "{line}");
+        }
+        for line in [
+            "sha256:aa401bb",
+            "transferred 4012 bytes",
+            "status: 4010",
+            "line 401",
+        ] {
+            assert!(!is_auth_failure(line), "{line}");
+        }
+    }
+
+    #[test]
+    fn unpack_refuses_entries_outside_the_layout() {
+        for bad in ["../evil", "/etc/evil"] {
+            let d = tempfile::tempdir().unwrap();
+            let mut h = tar::Header::new_gnu();
+            h.set_entry_type(tar::EntryType::Regular);
+            h.set_size(1);
+            h.set_mode(0o644);
+            let name = &mut h.as_gnu_mut().unwrap().name;
+            name[..bad.len()].copy_from_slice(bad.as_bytes());
+            h.set_cksum();
+            let mut b = tar::Builder::new(Vec::new());
+            b.append(&h, &b"x"[..]).unwrap();
+            let kit_tar = d.path().join("kit.tar");
+            fs::write(&kit_tar, b.into_inner().unwrap()).unwrap();
+            let err = unpack(&kit_tar, &d.path().join("built"), d.path())
+                .unwrap_err()
+                .to_string();
+            assert!(err.contains(bad), "{bad}: {err}");
+        }
     }
 }
