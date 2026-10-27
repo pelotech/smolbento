@@ -1,5 +1,12 @@
 # Changelog
 
+## [0.4.0](https://github.com/pelotech/smolbento/compare/v0.3.0...v0.4.0) (2026-10-27)
+
+
+### Features
+
+* add sbt fork for copy-on-write sandbox copies ([#18](https://github.com/pelotech/smolbento/issues/18)) ([b12ef71](https://github.com/pelotech/smolbento/commit/b12ef7135ea89abf32df282b32208b7f04785387))
+
 ## [0.3.0](https://github.com/pelotech/smolbento/compare/v0.2.1...v0.3.0) (2026-10-27)
 
 
