@@ -263,6 +263,24 @@ impl Policy {
         self.prune(sandbox);
     }
 
+    /// Copies `from`'s per-sandbox entry (rules and `deny_network`) to `to`, e.g. for a fork.
+    /// Rule ids hash their scope, so the copies get ids derived for `to`. No-op without an entry.
+    pub fn copy_sandbox(&mut self, from: &str, to: &str) {
+        let Some(mut entry) = self.sandboxes.get(from).cloned() else {
+            return;
+        };
+        for r in &mut entry.rules {
+            r.id = rule_id(
+                to,
+                r.decision,
+                &r.resources,
+                r.method.as_deref(),
+                r.path.as_deref(),
+            );
+        }
+        self.sandboxes.insert(to.to_string(), entry);
+    }
+
     /// `policy reset`: drops the mode and every rule, but a sandbox with the v0.2.0
     /// `deny_network` flag stays deny-all.
     pub fn reset(&mut self) {
@@ -282,6 +300,23 @@ impl Policy {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn copy_sandbox_clones_rules_and_deny_network() {
+        let mut p = Policy::default();
+        p.add_rule(Some("a"), Decision::Deny, "evil.com", "added", None, None)
+            .unwrap();
+        p.set_deny_network("a", true);
+        p.copy_sandbox("a", "a-fork-1");
+        assert_eq!(p.sandboxes["a-fork-1"].rules.len(), 1);
+        assert!(p.sandboxes["a-fork-1"].deny_network);
+        assert_ne!(
+            p.sandboxes["a-fork-1"].rules[0].id,
+            p.sandboxes["a"].rules[0].id
+        );
+        p.copy_sandbox("none", "x");
+        assert!(!p.sandboxes.contains_key("x"));
+    }
 
     #[test]
     fn missing_file_is_default_and_round_trips() {

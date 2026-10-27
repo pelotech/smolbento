@@ -121,17 +121,18 @@ impl SecretsFile {
             .retain(|c| secrets.iter().any(|e| e.service == c.name));
     }
 
-    /// The entry a sandbox uses for a service: its own scope first, then global.
-    pub fn entry_for(&self, sandbox: &str, service: &str) -> Option<&SecretEntry> {
-        let own = scope_for(Some(sandbox));
+    /// The entry in exactly one scope (`None` = global), with no fallback.
+    pub fn scoped_entry(&self, sandbox: Option<&str>, service: &str) -> Option<&SecretEntry> {
+        let scope = scope_for(sandbox);
         self.secrets
             .iter()
-            .find(|e| e.service == service && e.scope == own)
-            .or_else(|| {
-                self.secrets
-                    .iter()
-                    .find(|e| e.service == service && e.scope == "global")
-            })
+            .find(|e| e.service == service && e.scope == scope)
+    }
+
+    /// The entry a sandbox uses for a service: its own scope first, then global.
+    pub fn entry_for(&self, sandbox: &str, service: &str) -> Option<&SecretEntry> {
+        self.scoped_entry(Some(sandbox), service)
+            .or_else(|| self.scoped_entry(None, service))
     }
 
     /// Services with a secret in this sandbox's scope (its own or global), sorted.
@@ -228,6 +229,16 @@ mod tests {
         assert!(f.remove("github", "global").is_some());
         assert_eq!(scope_for(Some("s1")), "sandbox:s1");
         assert_eq!(scope_for(None), "global");
+    }
+
+    #[test]
+    fn scoped_entry_is_exact() {
+        let mut f = SecretsFile::default();
+        f.set(entry("github", "global", Source::Keychain));
+        f.set(entry("github", "sandbox:a", Source::Keychain));
+        assert!(f.scoped_entry(Some("a"), "github").is_some());
+        assert!(f.scoped_entry(Some("b"), "github").is_none());
+        assert!(f.scoped_entry(None, "github").is_some());
     }
 
     #[test]

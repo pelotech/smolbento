@@ -56,9 +56,12 @@ pub fn start_plan<R: Runner>(ctx: &Ctx<R>, meta: &Meta) -> Result<StartPlan> {
     let network = compile::network(&policy, sandbox, &meta.credential_hosts);
     let mut env = Vec::new();
     for name in &meta.secrets {
-        let (Some(service), Some(entry)) =
-            (secrets.service(name), secrets.entry_for(sandbox, name))
-        else {
+        // Own scope, then the fork parent's, then global.
+        let entry = secrets
+            .scoped_entry(Some(sandbox), name)
+            .or_else(|| (meta.fork_of.as_deref()).and_then(|p| secrets.scoped_entry(Some(p), name)))
+            .or_else(|| secrets.scoped_entry(None, name));
+        let (Some(service), Some(entry)) = (secrets.service(name), entry) else {
             eprintln!(
                 "warning: {sandbox} was created with a {name} secret that's no longer set; requests using it will fail"
             );
@@ -328,6 +331,21 @@ mod tests {
         };
         assert!(list.hosts().contains(&"api.github.com".to_string()));
         assert_eq!(plan.uid, 501);
+    }
+
+    #[test]
+    fn fork_secrets_resolve_own_then_parent_then_global() {
+        let t = test_env(&[]);
+        set_policy(&t, "mode = \"deny-all\"");
+        save_secret(&t, "github", None, "gh-global");
+        save_secret(&t, "github", Some("a"), "gh-parent");
+        let github = ["github".to_string()];
+        let mut m = meta("a-fork-1", &github, &[]);
+        m.fork_of = Some("a".into());
+        let gh = |plan: StartPlan| plan.env[0].1.clone();
+        assert_eq!(gh(start_plan(&t.ctx, &m).unwrap()), "gh-parent");
+        save_secret(&t, "github", Some("a-fork-1"), "gh-fork");
+        assert_eq!(gh(start_plan(&t.ctx, &m).unwrap()), "gh-fork");
     }
 
     #[test]
