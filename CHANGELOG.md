@@ -1,5 +1,18 @@
 # Changelog
 
+## [0.2.0](https://github.com/pelotech/smolbento/compare/v0.1.1...v0.2.0) (2026-10-27)
+
+
+### Features
+
+* add network policy, secrets and ports ([#12](https://github.com/pelotech/smolbento/issues/12)) ([dac3bb0](https://github.com/pelotech/smolbento/commit/dac3bb05297ea7218ef3a3fea25740804e438981))
+
+
+### Chores
+
+* **deps:** update actions/create-github-app-token action to v3.3.0 ([#11](https://github.com/pelotech/smolbento/issues/11)) ([2eda4df](https://github.com/pelotech/smolbento/commit/2eda4dff7275992645b3d0f58da1b2e3fa40ec4e))
+* dispatch homebrew-tap formula bump on release ([#9](https://github.com/pelotech/smolbento/issues/9)) ([0f7fe60](https://github.com/pelotech/smolbento/commit/0f7fe60a1eecdf86763ba57ea56e2ef82c34ea13))
+
 ## [0.1.1](https://github.com/pelotech/smolbento/compare/v0.1.0...v0.1.1) (2026-10-26)
 
 
