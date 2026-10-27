@@ -1,7 +1,7 @@
 //! End-to-end tests that boot real smolvm VMs. Ignored by default; run with `just e2e`.
 //! Machines are small (1 CPU, 1 GiB) so they fit GitHub's private-repo runners.
 //! The network policy test needs internet (example.com), the secrets test needs httpbin.org, and
-//! the clone test needs the Alpine package mirror.
+//! the clone and fork tests need the Alpine package mirror, and the fork test needs httpbin.org.
 
 use std::path::{Path, PathBuf};
 use std::process::{Command, Output};
@@ -141,6 +141,16 @@ impl Drop for E2e {
             .args(["machine", "delete", "-n", &self.machine(), "-f"])
             .output();
     }
+}
+
+/// Whether `smolvm args` succeeds.
+fn smolvm_ok(args: &[&str]) -> bool {
+    Command::new("smolvm")
+        .args(args)
+        .output()
+        .unwrap()
+        .status
+        .success()
 }
 
 fn smolvm(args: &[&str]) {
@@ -474,6 +484,181 @@ fn clone_round_trip() {
         !e.git_ok(&["remote"]).lines().any(|r| r == remote),
         "rm removes the remote"
     );
+}
+
+/// Deletes fork machines the test made, before the parent's `E2e` drops (declare it after).
+struct Forks(Vec<String>);
+
+impl Drop for Forks {
+    fn drop(&mut self) {
+        for n in &self.0 {
+            let _ = Command::new("smolvm")
+                .args(["machine", "delete", "-n", &format!("sbx-{n}"), "-f"])
+                .output();
+        }
+    }
+}
+
+#[test]
+#[ignore = "boots real VMs and needs httpbin.org; run with `just e2e`"]
+fn fork_round_trip() {
+    let e = E2e::new("fork");
+    let ws = e.workspace();
+    let ws = ws.to_str().unwrap();
+    std::fs::write(e.workspace().join("README"), "host\n").unwrap();
+    e.git_ok(&["init", "-q", "-b", "main"]);
+    e.git_ok(&["add", "README"]);
+    e.git_ok(&["commit", "-q", "-m", "host commit"]);
+    e.ok(&["policy", "init", "balanced"]);
+    e.ok(&[
+        "secret",
+        "set-custom",
+        "--host",
+        "httpbin.org",
+        "--env",
+        "TOK",
+        "--command",
+        "printf real-secret-xyz",
+    ]);
+
+    // As in clone_round_trip: the first-start clone fails on Alpine until git and agent exist.
+    let out = e.sbt(&[
+        "create", "--clone", "shell", ws, "--name", &e.name, "-t", "alpine", "--cpus", "1", "-m",
+        "1g",
+    ]);
+    assert!(
+        !out.status.success(),
+        "create without git in the image fails"
+    );
+    smolvm(&["machine", "start", "-n", &e.machine()]);
+    guest_root(
+        &e,
+        &format!(
+            "adduser -D -u {} agent && apk add -q git",
+            smolbento::sandbox::host_uid()
+        ),
+    );
+    smolvm(&["machine", "stop", "-n", &e.machine()]);
+    e.ok(&["start", &e.name]);
+
+    let guest_commit = |sb: &str, msg: &str| {
+        e.ok(&[
+            "exec",
+            sb,
+            "sh",
+            "-c",
+            &format!(
+                "echo {msg} >> README && git -c user.name=a -c user.email=a@a \
+                 -c commit.gpgsign=false commit -q -am {msg}"
+            ),
+        ]);
+    };
+    guest_root(&e, "echo before > /root/before");
+    guest_commit(&e.name, "before-fork");
+
+    let names: Vec<String> = e
+        .ok(&["fork", &e.name, "--count", "2"])
+        .lines()
+        .map(str::to_string)
+        .collect();
+    let forks = Forks(names.clone());
+    assert_eq!(
+        names,
+        [format!("{}-fork-1", e.name), format!("{}-fork-2", e.name)]
+    );
+    let (f1, f2) = (&forks.0[0], &forks.0[1]);
+
+    let root_test = |sb: &str, path: &str| {
+        smolvm_ok(&[
+            "machine",
+            "exec",
+            "--name",
+            &format!("sbx-{sb}"),
+            "-u",
+            "root",
+            "--",
+            "test",
+            "-e",
+            path,
+        ])
+    };
+    for f in [f1, f2] {
+        assert!(root_test(f, "/root/before"), "{f} sees the parent's files");
+        let log = e.ok(&["exec", f, "git", "-C", ws, "log", "--format=%s", "-1"]);
+        assert_eq!(log, "before-fork\n", "{f} has the parent's commit");
+    }
+    smolvm(&[
+        "machine",
+        "exec",
+        "--name",
+        &format!("sbx-{f1}"),
+        "-u",
+        "root",
+        "--",
+        "touch",
+        "/root/only-1",
+    ]);
+    assert!(root_test(f1, "/root/only-1"));
+    assert!(!root_test(f2, "/root/only-1"), "forks don't share writes");
+    assert!(
+        !root_test(&e.name, "/root/only-1"),
+        "the parent doesn't see fork writes"
+    );
+
+    let echo_tok = |sb: &str| {
+        e.ok(&[
+            "exec",
+            sb,
+            "sh",
+            "-c",
+            "wget -q -T 20 -O - --header \"Authorization: Bearer $TOK\" \
+             https://httpbin.org/headers",
+        ])
+    };
+    let echoed = echo_tok(f1);
+    assert!(echoed.contains("Bearer real-secret-xyz"), "{echoed}");
+    e.ok(&["stop", f1]);
+    e.ok(&["start", f1]);
+    let echoed = echo_tok(f1);
+    assert!(
+        echoed.contains("Bearer real-secret-xyz"),
+        "after restart: {echoed}"
+    );
+
+    guest_commit(f1, "in-fork-1");
+    e.git_ok(&["fetch", "-q", &format!("sandbox-{f1}")]);
+    let log = e.git_ok(&["log", "--format=%s", "-1", &format!("sandbox-{f1}/main")]);
+    assert_eq!(log, "in-fork-1\n");
+    let parent_remote = format!("sandbox-{}", e.name);
+    e.git_ok(&["fetch", "-q", &parent_remote]);
+    let log = e.git_ok(&["log", "--format=%s", &format!("{parent_remote}/main")]);
+    assert_eq!(
+        log, "before-fork\nhost commit\n",
+        "the parent doesn't have the fork's commit"
+    );
+
+    let out = e.sbt(&["rm", "-f", &e.name]);
+    let err = String::from_utf8_lossy(&out.stderr);
+    assert!(!out.status.success(), "rm of a parent with forks fails");
+    assert!(err.contains("remove its forks first"), "{err}");
+    e.ok(&["rm", "-f", f1, f2]);
+    e.ok(&["rm", "-f", &e.name]);
+    let remotes = e.git_ok(&["remote"]);
+    for n in [f1, f2, &e.name] {
+        let remote = format!("sandbox-{n}");
+        assert!(!remotes.lines().any(|r| r == remote), "{remote} removed");
+    }
+
+    // A sandbox with a writable host folder can't be forked: the copies would share it.
+    let m = E2e::new("forkmnt");
+    m.create_alpine();
+    let out = m.sbt(&["fork", &m.name]);
+    let err = String::from_utf8_lossy(&out.stderr);
+    assert!(
+        !out.status.success(),
+        "fork of a host-mounted sandbox fails"
+    );
+    assert!(err.contains("--clone"), "{err}");
 }
 
 /// smolvm dials host loopback when a guest connects to its gateway; smolbento denies that. Only
