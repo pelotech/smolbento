@@ -1,5 +1,6 @@
 //! create, start, stop, rm, prune and reset.
 
+use std::path::Path;
 use std::time::UNIX_EPOCH;
 
 use anyhow::{Context, Result, bail};
@@ -145,7 +146,7 @@ fn remove<R: Runner>(ctx: &Ctx<R>, sb: &Sandbox, forget_secrets: bool) -> Result
     if sb.meta.clone
         && let Some(repo) = &sb.meta.workspace
     {
-        clone::remove_remote(std::path::Path::new(repo), sb.name());
+        clone::remove_remote(Path::new(repo), sb.name());
     }
     session::clear(&ctx.paths.sessions(), sb.name());
     super::secret::forget_sandbox(ctx, sb.name(), forget_secrets)?;
@@ -301,20 +302,38 @@ mod tests {
         );
     }
 
+    fn no_machine_created(t: &TestEnv) -> bool {
+        !t.ctx
+            .vm
+            .runner()
+            .call_lines()
+            .iter()
+            .any(|l| l.contains("machine create"))
+    }
+
     #[test]
-    fn clone_needs_a_repo_and_a_free_remote_before_smolvm_is_called() {
-        // not a repo
+    fn clone_needs_a_repo_before_smolvm_is_called() {
         let mut t = test_env(&[]);
         let err = sbt(&mut t.ctx, &["create", "--clone", "claude", "."])
             .unwrap_err()
             .to_string();
         assert!(err.contains("--clone needs a git repository"), "{err}");
-        // mountless
+        assert!(no_machine_created(&t));
+    }
+
+    #[test]
+    fn clone_needs_a_workspace_path_before_smolvm_is_called() {
+        let mut t = test_env(&[]);
         let err = sbt(&mut t.ctx, &["create", "--clone", "claude"])
             .unwrap_err()
             .to_string();
         assert!(err.contains("--clone needs a workspace path"), "{err}");
-        // foreign remote
+        assert!(no_machine_created(&t));
+    }
+
+    #[test]
+    fn clone_needs_a_free_remote_before_smolvm_is_called() {
+        let mut t = test_env(&[]);
         let (_d, root) = temp_repo();
         git(
             &root,
@@ -337,14 +356,33 @@ mod tests {
             err.contains("already has a remote 'sandbox-claude-repo'"),
             "{err}"
         );
-        assert!(
-            !t.ctx
-                .vm
-                .runner()
-                .call_lines()
-                .iter()
-                .any(|l| l.contains("machine create"))
+        assert!(no_machine_created(&t));
+    }
+
+    #[test]
+    fn clone_create_still_works_when_a_remote_url_has_a_token() {
+        // The credential warning goes to stderr (see clone::userinfo_remotes' own test); it must
+        // not stop the create.
+        let mut t = test_env(&[]);
+        let (_d, root) = temp_repo();
+        git(
+            &root,
+            &[
+                "remote",
+                "add",
+                "origin",
+                "https://u:tok@github.com/o/r.git",
+            ],
         );
+        t.ctx.cwd = root;
+        let fake = t.ctx.vm.runner();
+        fake.ok(
+            &["machine", "status"],
+            &json("sbx-claude-repo", "created", "claude-repo"),
+        );
+        fake.once_fail(&["machine", "status"], "NOT_FOUND", "vm not found");
+        sbt(&mut t.ctx, &["create", "--clone", "claude", "."]).unwrap();
+        assert!(!no_machine_created(&t));
     }
 
     #[test]

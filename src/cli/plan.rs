@@ -1,6 +1,7 @@
 //! Glue between sandboxes and the policy and secrets: what each start and create gets.
 
 use std::io::{BufRead, Write};
+use std::path::PathBuf;
 
 use anyhow::{Context, Result, bail};
 
@@ -78,7 +79,7 @@ pub fn start_plan<R: Runner>(ctx: &Ctx<R>, meta: &Meta) -> Result<StartPlan> {
         .cloned()
         .collect();
     let clone = meta.clone_dir().map(|dir| {
-        let repo = std::path::PathBuf::from(meta.workspace.as_deref().unwrap_or(&dir));
+        let repo = PathBuf::from(meta.workspace.as_deref().unwrap_or(&dir));
         let read = || -> Result<_> {
             Ok((
                 clone::worktree_branch(&repo)?,
@@ -195,11 +196,12 @@ pub fn create<R: Runner>(
     if sandbox::find(&ctx.vm, &req.name)?.is_some() {
         bail!("sandbox '{}' already exists", req.name);
     }
-    let repo = req
-        .clone
-        .as_ref()
-        .and(req.workspaces.first())
-        .map(|w| w.path.clone());
+    // The repo a `--clone` copies is the primary workspace's.
+    let repo = if req.clone.is_some() {
+        req.workspaces.first().map(|w| w.path.clone())
+    } else {
+        None
+    };
     if let Some(repo) = &repo {
         clone::check_remote_free(repo, &req.name)?;
         for remote in clone::userinfo_remotes(repo).unwrap_or_default() {
@@ -565,6 +567,27 @@ mod tests {
             start_plan(&t.ctx, &meta("s1", &[], &[])).unwrap().clone,
             None
         );
+    }
+
+    #[test]
+    fn start_plan_for_a_linked_worktree_names_its_branch() {
+        let t = test_env(&[]);
+        set_policy(&t, "mode = \"deny-all\"");
+        let (d, repo) = host_repo("https://github.com/o/r.git");
+        let wt = d.path().canonicalize().unwrap().join("wt");
+        let st = std::process::Command::new("git")
+            .arg("-C")
+            .arg(&repo)
+            .args(["worktree", "add", "-q", "-b", "feat"])
+            .arg(&wt)
+            .status()
+            .unwrap();
+        assert!(st.success());
+        let mut m = meta("s1", &[], &[]);
+        m.clone = true;
+        m.workspace = Some(wt.display().to_string());
+        let plan = start_plan(&t.ctx, &m).unwrap();
+        assert_eq!(plan.clone.unwrap().branch.as_deref(), Some("feat"));
     }
 
     #[test]

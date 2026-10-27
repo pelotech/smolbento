@@ -40,10 +40,11 @@ const DOCKER_VOLUMES: [&str; 2] = ["/var/lib/docker", "/var/lib/containerd"];
 
 /// The labels the sandbox gets.
 pub fn meta(req: &CreateRequest) -> Meta {
+    let primary = req.workspaces.first().map(|w| w.path.display().to_string());
     Meta {
         name: req.name.clone(),
         agent: req.agent.clone(),
-        workspace: req.workspaces.first().map(|w| w.path.display().to_string()),
+        workspace: primary.clone(),
         workspaces: req.workspaces.iter().map(Workspace::label).collect(),
         created: req.created,
         docker: req.docker,
@@ -55,14 +56,7 @@ pub fn meta(req: &CreateRequest) -> Meta {
             .clone
             .as_ref()
             .map(|c| c.top.display().to_string())
-            .filter(|t| {
-                Some(t)
-                    != req
-                        .workspaces
-                        .first()
-                        .map(|w| w.path.display().to_string())
-                        .as_ref()
-            }),
+            .filter(|t| Some(t) != primary.as_ref()),
     }
 }
 
@@ -70,23 +64,25 @@ pub fn spec(req: &CreateRequest) -> CreateSpec {
     let meta = meta(req);
     let primary = meta.workspace.clone();
     let mut mounts = Vec::new();
-    for (i, w) in req.workspaces.iter().enumerate() {
-        match (&req.clone, i) {
-            (Some(c), 0) => {
-                mounts.push(Mount {
-                    host: Some(c.git_dir.clone()),
-                    guest: SOURCE_MOUNT.into(),
-                    read_only: true,
-                });
-                mounts.push(Mount {
-                    host: None,
-                    guest: c.top.display().to_string(),
-                    read_only: false,
-                });
-            }
-            _ => mounts.push(w.mount()),
+    let mut rest = req.workspaces.iter();
+    match (&req.clone, rest.next()) {
+        // The primary workspace is the clone: its git dir and a guest-only volume stand in for it.
+        (Some(c), Some(_)) => {
+            mounts.push(Mount {
+                host: Some(c.git_dir.clone()),
+                guest: SOURCE_MOUNT.into(),
+                read_only: true,
+            });
+            mounts.push(Mount {
+                host: None,
+                guest: c.top.display().to_string(),
+                read_only: false,
+            });
         }
+        (None, Some(w)) => mounts.push(w.mount()),
+        (_, None) => {}
     }
+    mounts.extend(rest.map(Workspace::mount));
     if req.docker {
         mounts.extend(DOCKER_VOLUMES.map(|d| Mount {
             host: None,
@@ -215,6 +211,22 @@ mod tests {
         assert_eq!(spec.labels["sbx.clone"], "true");
         assert_eq!(spec.labels["sbx.clone-top"], "/w/repo");
         assert_eq!(spec.labels["sbx.workspace"], "/w/repo/sub");
+    }
+
+    #[test]
+    fn clone_at_the_repo_top_has_no_clone_top_label() {
+        let ws = vec![Workspace {
+            path: "/w/repo".into(),
+            read_only: false,
+        }];
+        let mut req = request(false, ws);
+        req.clone = Some(CloneSource {
+            top: "/w/repo".into(),
+            git_dir: "/w/repo/.git".into(),
+        });
+        let spec = spec(&req);
+        assert_eq!(spec.labels["sbx.clone"], "true");
+        assert!(!spec.labels.contains_key("sbx.clone-top"));
     }
 
     #[test]
