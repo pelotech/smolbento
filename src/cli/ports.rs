@@ -79,7 +79,7 @@ mod tests {
         sandbox(&t, "stopped");
         sbt(&mut t.ctx, &["ports", "a1", "--publish", "8080:80"]).unwrap();
         let lines = t.ctx.vm.runner().call_lines();
-        assert!(lines.contains(&"machine start -n sbx-a1".to_string()));
+        assert!(lines.contains(&"machine start -n sbx-a1 --branchable".to_string()));
         assert_eq!(lines.last().unwrap(), "machine update -n sbx-a1 -p 8080:80");
     }
 

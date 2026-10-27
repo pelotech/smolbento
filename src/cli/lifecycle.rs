@@ -487,7 +487,7 @@ mod tests {
                 .vm
                 .runner()
                 .call_lines()
-                .contains(&"machine start -n sbx-claude-proj".to_string())
+                .contains(&"machine start -n sbx-claude-proj --branchable".to_string())
         );
     }
 
@@ -789,7 +789,7 @@ mod tests {
                 .vm
                 .runner()
                 .call_lines()
-                .contains(&"machine start -n sbx-shell-proj".to_string())
+                .contains(&"machine start -n sbx-shell-proj --branchable".to_string())
         );
     }
 
@@ -861,7 +861,7 @@ mod tests {
                 .vm
                 .runner()
                 .call_lines()
-                .contains(&"machine start -n sbx-claude-proj".to_string())
+                .contains(&"machine start -n sbx-claude-proj --branchable".to_string())
         );
     }
 

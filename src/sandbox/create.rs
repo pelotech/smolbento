@@ -52,6 +52,7 @@ pub fn meta(req: &CreateRequest) -> Meta {
         credential_hosts: req.credential_hosts.clone(),
         credential_env: req.credential_env.clone(),
         clone_repo: req.clone.as_ref().map(|c| c.top.display().to_string()),
+        fork_of: None,
     }
 }
 

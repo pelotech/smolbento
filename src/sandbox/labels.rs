@@ -11,6 +11,7 @@ pub const CREDENTIAL_HOSTS: &str = "sbx.credential-hosts";
 pub const CREDENTIAL_ENV: &str = "sbx.credential-env";
 pub const CLONE: &str = "sbx.clone";
 pub const CLONE_TOP: &str = "sbx.clone-top";
+pub const FORK_OF: &str = "sbx.fork-of";
 
 /// Sandbox metadata, fixed at create and stored as smolvm machine labels.
 #[derive(Debug, Clone, Default, PartialEq, Eq)]
@@ -37,6 +38,8 @@ pub struct Meta {
     /// `sbx.clone=true` plus `sbx.clone-top` when it differs from `workspace` (a subdirectory was
     /// given).
     pub clone_repo: Option<String>,
+    /// The sandbox this one was forked from.
+    pub fork_of: Option<String>,
 }
 
 impl Meta {
@@ -72,6 +75,9 @@ impl Meta {
                 labels.insert(CLONE_TOP.to_string(), top.clone());
             }
         }
+        if let Some(f) = &self.fork_of {
+            labels.insert(FORK_OF.to_string(), f.clone());
+        }
         labels
     }
 
@@ -97,6 +103,7 @@ impl Meta {
                 .get(CLONE)
                 .filter(|c| *c == "true")
                 .and_then(|_| labels.get(CLONE_TOP).or(labels.get(WORKSPACE)).cloned()),
+            fork_of: labels.get(FORK_OF).cloned(),
         })
     }
 }
@@ -203,6 +210,18 @@ mod tests {
             Meta::from_labels(&meta().to_labels()).unwrap().clone_repo,
             None
         );
+    }
+
+    #[test]
+    fn fork_of_label_round_trips() {
+        let m = Meta {
+            fork_of: Some("a".into()),
+            ..meta()
+        };
+        let labels = m.to_labels();
+        assert_eq!(labels["sbx.fork-of"], "a");
+        assert_eq!(Meta::from_labels(&labels), Some(m));
+        assert!(!meta().to_labels().contains_key("sbx.fork-of"));
     }
 
     #[test]

@@ -348,7 +348,7 @@ mod tests {
             lines[1],
             "machine update -n sbx-claude-myrepo --net --reset-allow-list"
         );
-        assert_eq!(lines[2], "machine start -n sbx-claude-myrepo");
+        assert_eq!(lines[2], "machine start -n sbx-claude-myrepo --branchable");
         assert!(
             lines[3].ends_with("usermod -o -u 501 agent"),
             "{}",
@@ -443,7 +443,7 @@ mod tests {
             lines[2],
             "machine update -n sbx-claude-myrepo --net --reset-allow-list"
         );
-        assert_eq!(lines[3], "machine start -n sbx-claude-myrepo");
+        assert_eq!(lines[3], "machine start -n sbx-claude-myrepo --branchable");
         assert_eq!(
             lines.len(),
             5,
