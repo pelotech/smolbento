@@ -12,7 +12,7 @@ use crate::smolvm::{
     ExecSpec, Machine, MachineState, NetworkSpec, PublishedPort, Runner, Smolvm, SmolvmError,
 };
 use crate::workspace::MOUNTLESS_WORKDIR;
-use crate::workspace::clone::SOURCE_MOUNT;
+use crate::workspace::clone::{SOURCE_MOUNT, WorktreeHead};
 
 pub use create::CreateRequest;
 pub use labels::Meta;
@@ -54,7 +54,7 @@ pub struct CloneStep {
     /// Where the clone goes: a guest-only volume at the host repo's path.
     pub dir: String,
     /// Only for a linked worktree, whose source HEAD is the main worktree's.
-    pub branch: Option<String>,
+    pub head: Option<WorktreeHead>,
     /// Host remotes to copy (local ones and credentials already left out).
     pub remotes: Vec<(String, String)>,
 }
@@ -80,17 +80,23 @@ fn clone_prep_cmd(step: &CloneStep) -> String {
 
 /// As `agent`: sbx's clone command (skipped once cloned), then its remote copy, which runs on
 /// every start so a failed add is retried and host remote changes arrive (as sbx's setup script).
+/// A detached worktree's commit is checked out after the clone; if that fails, the clone's `.git`
+/// goes again so the next start retries rather than keeping the wrong checkout.
 fn clone_cmd(step: &CloneStep) -> String {
     let (d, git) = step.quoted();
-    let branch = step
-        .branch
-        .as_ref()
-        .map(|b| format!("--branch {} ", sh_quote(b)))
-        .unwrap_or_default();
-    let mut s = format!(
-        "set -e; [ -d {git} ] || \
-         git -c safe.directory={SOURCE_MOUNT} clone -q {branch}{SOURCE_MOUNT} {d}; cd {d}"
-    );
+    let clone = format!("git -c safe.directory={SOURCE_MOUNT} clone -q");
+    let clone = match &step.head {
+        None => format!("{clone} {SOURCE_MOUNT} {d}"),
+        Some(WorktreeHead::Branch(b)) => {
+            format!("{clone} --branch {} {SOURCE_MOUNT} {d}", sh_quote(b))
+        }
+        Some(WorktreeHead::Detached(c)) => format!(
+            "{{ {clone} --no-checkout {SOURCE_MOUNT} {d} && \
+             git -C {d} checkout -q --detach {} -- || {{ rm -rf {git}; exit 1; }}; }}",
+            sh_quote(c)
+        ),
+    };
+    let mut s = format!("set -e; [ -d {git} ] || {clone}; cd {d}");
     for (n, u) in &step.remotes {
         let (n, u) = (sh_quote(n), sh_quote(u));
         s.push_str(&format!(
@@ -431,7 +437,7 @@ mod tests {
     fn clone_commands_quote_and_copy_remotes() {
         let step = CloneStep {
             dir: "/w/my repo".into(),
-            branch: Some("feat".into()),
+            head: Some(WorktreeHead::Branch("feat".into())),
             remotes: vec![("origin".into(), "https://github.com/o/r.git".into())],
         };
         assert_eq!(
@@ -446,6 +452,22 @@ mod tests {
              git remote set-url -- 'origin' 'https://github.com/o/r.git' 2>/dev/null || git remote add -- 'origin' 'https://github.com/o/r.git'"
         );
         assert_eq!(sh_quote("it's"), r"'it'\''s'");
+    }
+
+    #[test]
+    fn a_detached_worktree_clone_checks_out_its_commit_or_retries() {
+        let step = CloneStep {
+            dir: "/w/r".into(),
+            head: Some(WorktreeHead::Detached("abc123".into())),
+            remotes: vec![],
+        };
+        assert_eq!(
+            clone_cmd(&step),
+            "set -e; [ -d '/w/r/.git' ] || \
+             { git -c safe.directory=/run/sandbox/source clone -q --no-checkout /run/sandbox/source '/w/r' && \
+             git -C '/w/r' checkout -q --detach 'abc123' -- || { rm -rf '/w/r/.git'; exit 1; }; }; \
+             cd '/w/r'"
+        );
     }
 
     #[test]
@@ -471,7 +493,7 @@ mod tests {
             uid: 501,
             clone: Some(CloneStep {
                 dir: "/w/r".into(),
-                branch: None,
+                head: None,
                 remotes: vec![],
             }),
         };
@@ -511,7 +533,7 @@ mod tests {
         let mut p = plan();
         p.clone = Some(CloneStep {
             dir: "/w/r".into(),
-            branch: None,
+            head: None,
             remotes: vec![],
         });
         let err = start(&vm, &sb, &p).unwrap_err();
@@ -530,7 +552,7 @@ mod tests {
     fn a_failed_clone_prep_reports_the_first_line_and_stops() {
         let step = CloneStep {
             dir: "/w/r".into(),
-            branch: None,
+            head: None,
             remotes: vec![],
         };
         let prep = clone_prep_cmd(&step);

@@ -49,7 +49,7 @@ clearly rather than doing something different.
 | Fetch on exit | None | `sbt run` fetches `sandbox-<name>` when the agent exits (setting `clone.fetch-on-exit`, default `true`) |
 | Object checking | Plain `git fetch` | The fetch on exit runs with `fetch.fsckObjects=true`; manual `git fetch` is unchanged, and your repo config isn't touched beyond the remote |
 | Fetch from a stopped sandbox | Fails | Starts the sandbox, fetches, stops it again |
-| Linked worktrees as the clone source | Not supported | Supported; the clone checks out the worktree's branch |
+| Linked worktrees as the clone source | Not supported | Supported; the clone checks out the worktree's branch, or its commit when detached |
 | `--version` | `sbx version vX` | `sbt --version` prints `sbt X`; `sbt version` also shows the smolvm version |
 
 ## Exit codes

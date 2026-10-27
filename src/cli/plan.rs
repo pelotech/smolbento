@@ -81,8 +81,8 @@ pub fn start_plan<R: Runner>(ctx: &Ctx<R>, meta: &Meta) -> Result<StartPlan> {
     let clone = meta.clone.as_ref().map(|dir| {
         let repo = Path::new(dir);
         let read =
-            || -> Result<_> { Ok((clone::worktree_branch(repo)?, clone::copied_remotes(repo)?)) };
-        let (branch, remotes) = read().unwrap_or_else(|e| {
+            || -> Result<_> { Ok((clone::worktree_head(repo)?, clone::copied_remotes(repo)?)) };
+        let (head, remotes) = read().unwrap_or_else(|e| {
             eprintln!(
                 "warning: reading the host repo for {sandbox}: {e:#}; its remotes aren't copied"
             );
@@ -90,7 +90,7 @@ pub fn start_plan<R: Runner>(ctx: &Ctx<R>, meta: &Meta) -> Result<StartPlan> {
         });
         CloneStep {
             dir: dir.clone(),
-            branch,
+            head,
             remotes,
         }
     });
@@ -535,7 +535,7 @@ mod tests {
             plan.clone,
             Some(CloneStep {
                 dir: repo,
-                branch: None,
+                head: None,
                 remotes: vec![("origin".into(), "https://github.com/o/r.git".into())],
             })
         );
@@ -558,7 +558,10 @@ mod tests {
         let mut m = meta("s1", &[], &[]);
         m.clone = Some(wt.display().to_string());
         let plan = start_plan(&t.ctx, &m).unwrap();
-        assert_eq!(plan.clone.unwrap().branch.as_deref(), Some("feat"));
+        assert_eq!(
+            plan.clone.unwrap().head,
+            Some(clone::WorktreeHead::Branch("feat".into()))
+        );
     }
 
     #[test]
@@ -572,7 +575,7 @@ mod tests {
             plan.clone,
             Some(CloneStep {
                 dir: "/nonexistent/repo".into(),
-                branch: None,
+                head: None,
                 remotes: vec![],
             })
         );

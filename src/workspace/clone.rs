@@ -91,7 +91,17 @@ fn source_with(program: &str, path: &Path) -> Result<CloneSource> {
     }
 }
 
-pub fn worktree_branch(path: &Path) -> Result<Option<String>> {
+/// What a linked worktree has checked out. The clone repeats it, as the source's HEAD is the main
+/// worktree's.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum WorktreeHead {
+    Branch(String),
+    /// A detached HEAD's commit.
+    Detached(String),
+}
+
+/// `None` unless `path` is in a linked worktree.
+pub fn worktree_head(path: &Path) -> Result<Option<WorktreeHead>> {
     let out = git(
         path,
         &[
@@ -106,9 +116,15 @@ pub fn worktree_branch(path: &Path) -> Result<Option<String>> {
     if git_dir == common {
         return Ok(None);
     }
-    Ok(git(path, &["symbolic-ref", "-q", "--short", "HEAD"])
-        .ok()
-        .filter(|b| !b.is_empty()))
+    if let Ok(branch) = git(path, &["symbolic-ref", "-q", "--short", "HEAD"])
+        && !branch.is_empty()
+    {
+        return Ok(Some(WorktreeHead::Branch(branch)));
+    }
+    Ok(Some(WorktreeHead::Detached(git(
+        path,
+        &["rev-parse", "HEAD"],
+    )?)))
 }
 
 pub fn remote_name(sandbox: &str) -> String {
@@ -322,8 +338,27 @@ mod tests {
         let s = source(&wt).unwrap();
         assert_eq!(s.top, wt);
         assert_eq!(s.git_dir, root.join(".git"));
-        assert_eq!(worktree_branch(&wt).unwrap().as_deref(), Some("feat"));
-        assert_eq!(worktree_branch(&root).unwrap(), None);
+        assert_eq!(
+            worktree_head(&wt).unwrap(),
+            Some(WorktreeHead::Branch("feat".into()))
+        );
+        assert_eq!(worktree_head(&root).unwrap(), None);
+    }
+
+    #[test]
+    fn a_detached_linked_worktree_names_its_commit() {
+        let (d, root) = temp_repo();
+        let base = git_output("git", &root, &["rev-parse", "HEAD"]).unwrap();
+        let base = stdout(&base);
+        let wt = d.path().canonicalize().unwrap().join("wt");
+        git(
+            &root,
+            &["worktree", "add", "-q", "--detach", wt.to_str().unwrap()],
+        );
+        assert_eq!(
+            worktree_head(&wt).unwrap(),
+            Some(WorktreeHead::Detached(base))
+        );
     }
 
     #[test]
