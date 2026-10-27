@@ -144,15 +144,6 @@ impl Drop for E2e {
 }
 
 /// Whether `smolvm args` succeeds.
-fn smolvm_ok(args: &[&str]) -> bool {
-    Command::new("smolvm")
-        .args(args)
-        .output()
-        .unwrap()
-        .status
-        .success()
-}
-
 fn smolvm(args: &[&str]) {
     let out = Command::new("smolvm").args(args).output().unwrap();
     assert!(
@@ -357,19 +348,23 @@ fn secrets_are_placeholders_in_the_guest() {
 }
 
 /// Runs `script` as root in the guest, straight through smolvm.
-fn guest_root(e: &E2e, script: &str) {
-    smolvm(&[
-        "machine",
-        "exec",
-        "--name",
-        &e.machine(),
-        "-u",
-        "root",
-        "--",
-        "sh",
-        "-c",
-        script,
-    ]);
+/// Runs `script` as root in sandbox `sb`, with smolvm (not sbt) so it works before setup.
+fn root_sh(sb: &str, script: &str) -> std::process::Output {
+    let machine = format!("sbx-{sb}");
+    let args = [
+        "machine", "exec", "--name", &machine, "-u", "root", "--", "sh", "-c", script,
+    ];
+    Command::new("smolvm").args(args).output().unwrap()
+}
+
+/// `root_sh` that must succeed.
+fn guest_root(sb: &str, script: &str) {
+    let out = root_sh(sb, script);
+    assert!(
+        out.status.success(),
+        "{script} in {sb}:\n{}",
+        String::from_utf8_lossy(&out.stderr)
+    );
 }
 
 #[test]
@@ -418,7 +413,7 @@ fn clone_round_trip() {
 
     smolvm(&["machine", "start", "-n", &e.machine()]);
     guest_root(
-        &e,
+        &e.name,
         &format!(
             "adduser -D -u {} agent && apk add -q git",
             smolbento::sandbox::host_uid()
@@ -532,7 +527,7 @@ fn fork_round_trip() {
     );
     smolvm(&["machine", "start", "-n", &e.machine()]);
     guest_root(
-        &e,
+        &e.name,
         &format!(
             "adduser -D -u {} agent && apk add -q git",
             smolbento::sandbox::host_uid()
@@ -553,7 +548,7 @@ fn fork_round_trip() {
             ),
         ]);
     };
-    guest_root(&e, "echo before > /root/before");
+    guest_root(&e.name, "echo before > /root/before");
     guest_commit(&e.name, "before-fork");
 
     // Guard the predicted names first: a partial failure still cleans up the copy it made.
@@ -585,36 +580,13 @@ fn fork_round_trip() {
         "a fork's created time is its own: {f1_row} vs {parent_row}"
     );
 
-    let root_test = |sb: &str, path: &str| {
-        smolvm_ok(&[
-            "machine",
-            "exec",
-            "--name",
-            &format!("sbx-{sb}"),
-            "-u",
-            "root",
-            "--",
-            "test",
-            "-e",
-            path,
-        ])
-    };
+    let root_test = |sb: &str, path: &str| root_sh(sb, &format!("test -e {path}")).status.success();
     for f in [f1, f2] {
         assert!(root_test(f, "/root/before"), "{f} sees the parent's files");
         let log = e.ok(&["exec", f, "git", "-C", ws, "log", "--format=%s", "-1"]);
         assert_eq!(log, "before-fork\n", "{f} has the parent's commit");
     }
-    smolvm(&[
-        "machine",
-        "exec",
-        "--name",
-        &format!("sbx-{f1}"),
-        "-u",
-        "root",
-        "--",
-        "touch",
-        "/root/only-1",
-    ]);
+    guest_root(f1, "touch /root/only-1");
     assert!(root_test(f1, "/root/only-1"));
     // Positive controls: the exec works in these machines, so a missing file means missing.
     assert!(root_test(f2, "/root/before"), "{f2} is reachable");
