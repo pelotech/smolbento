@@ -18,6 +18,8 @@ pub fn load<R: Runner>(ctx: &Ctx<R>, reference: &str) -> Result<Kit> {
         trust::check(&Source::Registry(reference.to_string()), &ctx.settings)?;
         return registry::pull(reference, &ctx.paths.kit_cache());
     };
+    // The local check is the same for every local kind, so it runs before anything is read.
+    trust::check(&Source::LocalV3(path.clone()), &ctx.settings)?;
     if path.is_dir() {
         return load_dir(ctx, &path);
     }
@@ -26,7 +28,6 @@ pub fn load<R: Runner>(ctx: &Ctx<R>, reference: &str) -> Result<Kit> {
         .and_then(|n| n.to_str())
         .unwrap_or_default();
     if name == "Smolfile" || name.ends_with(".smolfile") {
-        trust::check(&Source::Smolfile(path.clone()), &ctx.settings)?;
         return smolfile::load(&path);
     }
     if is_descriptor(&path) {
@@ -63,29 +64,34 @@ fn local_path<R: Runner>(ctx: &Ctx<R>, reference: &str) -> Result<Option<PathBuf
 fn load_dir<R: Runner>(ctx: &Ctx<R>, dir: &Path) -> Result<Kit> {
     let spec = dir.join("spec.yaml");
     if spec.is_file() {
-        trust::check(&Source::LocalV2(dir.to_path_buf()), &ctx.settings)?;
         let yaml =
             fs::read_to_string(&spec).with_context(|| format!("reading {}", spec.display()))?;
         let mut kit = v2::parse(&yaml, dir)?;
         kit.source = Source::LocalV2(dir.to_path_buf());
         return Ok(kit);
     }
-    let has_descriptor = fs::read_dir(dir)
+    let descriptors = fs::read_dir(dir)
         .with_context(|| format!("reading {}", dir.display()))?
         .filter_map(|e| e.ok())
-        .any(|e| is_descriptor(&e.path()));
-    if !has_descriptor {
-        bail!(
+        .filter(|e| is_descriptor(&e.path()))
+        .count();
+    match descriptors {
+        0 => bail!(
             "{} isn't a kit: no spec.yaml or kit descriptor",
             dir.display()
-        );
+        ),
+        1 => {}
+        _ => bail!(
+            "{} has several kit descriptors; keep one *.yaml starting with `{}`",
+            dir.display(),
+            builder::SYNTAX
+        ),
     }
     load_v3(ctx, dir)
 }
 
 fn load_v3<R: Runner>(ctx: &Ctx<R>, dir: &Path) -> Result<Kit> {
     let source = Source::LocalV3(dir.to_path_buf());
-    trust::check(&source, &ctx.settings)?;
     let built = builder::build(ctx, dir)?;
     registry::read_layout(&built, source)
 }
@@ -181,6 +187,52 @@ mod tests {
             "{e:#}"
         );
         assert!(t.ctx.vm.runner().call_lines().is_empty());
+    }
+
+    #[test]
+    fn trust_is_checked_before_the_directory_is_classified() {
+        let t = test_env(&[("SMOLBENTO_KIT_ALLOW_LOCAL", "false")]);
+        fs::create_dir(t.ctx.cwd.join("empty")).unwrap();
+        let e = load(&t.ctx, "./empty").unwrap_err();
+        assert!(
+            format!("{e:#}").contains("local kits are disabled"),
+            "{e:#}"
+        );
+    }
+
+    #[test]
+    fn several_descriptors_in_one_directory_are_an_error() {
+        let t = allow_local();
+        let dir = t.ctx.cwd.join("kit");
+        fs::create_dir(&dir).unwrap();
+        for n in ["a.yaml", "b.yaml"] {
+            fs::write(dir.join(n), "# syntax=docker/sandbox-kit:3\nkind: mixin\n").unwrap();
+        }
+        let m = format!("{:#}", load(&t.ctx, "./kit").unwrap_err());
+        assert!(
+            m.contains("several kit descriptors") && m.contains("kit"),
+            "{m}"
+        );
+        assert!(t.ctx.vm.runner().call_lines().is_empty());
+    }
+
+    #[test]
+    fn a_descriptor_file_routes_to_its_directory_and_the_builder() {
+        let t = allow_local();
+        let dir = t.ctx.cwd.join("kit");
+        fs::create_dir(&dir).unwrap();
+        fs::write(
+            dir.join("m.yaml"),
+            "# syntax=docker/sandbox-kit:3\nschemaVersion: \"3\"\nkind: mixin\n",
+        )
+        .unwrap();
+        // The fake has no builder machine, so the build fails; routing shows in the calls.
+        let _ = load(&t.ctx, "./kit/m.yaml");
+        let lines = t.ctx.vm.runner().call_lines();
+        assert!(
+            lines.iter().any(|l| l.contains("sbx-_builder")),
+            "{lines:?}"
+        );
     }
 
     #[test]
