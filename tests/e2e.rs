@@ -746,7 +746,7 @@ fn wait_until(secs: u64, mut check: impl FnMut() -> bool) -> bool {
 
 /// The guest's startup log (empty until the startup runner first writes it).
 fn startup_log(e: &E2e) -> String {
-    let out = root_sh(&e.name, "cat /var/log/smolbento/startup.log 2>/dev/null");
+    let out = root_sh(&e.name, "cat /var/log/sbx-kit-startup.log 2>/dev/null");
     String::from_utf8_lossy(&out.stdout).into_owned()
 }
 
@@ -756,13 +756,32 @@ fn dockerds(e: &E2e) -> usize {
     String::from_utf8_lossy(&out.stdout).lines().count()
 }
 
-/// Docker-in-sandbox is the shipped `docker` kit: dockerd comes from its startup hook, run by the
-/// detached startup runner, and must outlive that runner and the exec that started it.
+/// Docker-in-sandbox is the shipped `docker` kit: its background startup hook starts dockerd in
+/// its own session, inside the blocking startup runner's exec, so dockerd must outlive that exec.
+/// A later kit's blocking startup hook waits for it: startup hooks run in kit order, so it sees the
+/// daemon the earlier background hook started, and `create` and `start` return only once it's up.
 #[test]
 #[ignore = "boots real VMs and pulls the shell-docker image; run with `just e2e`"]
 fn docker_kit_runs_dockerd_across_restarts() {
     let mut e = E2e::new("dock");
     e.vars.push(("SMOLBENTO_DOCKER", "true".into()));
+    let kit = e.dir.path().join("e2e-wait-docker");
+    std::fs::create_dir_all(&kit).unwrap();
+    std::fs::write(
+        kit.join("spec.yaml"),
+        r#"schemaVersion: "2"
+kind: mixin
+name: e2e-wait-docker
+setup:
+  startup:
+    - command:
+        - sh
+        - -c
+        - "i=0; until docker info >/dev/null 2>&1; do i=$((i+1)); [ $i -lt 90 ] || exit 9; sleep 1; done"
+      user: "0"
+"#,
+    )
+    .unwrap();
     let ws = e.workspace();
     e.ok(&[
         "create",
@@ -770,39 +789,57 @@ fn docker_kit_runs_dockerd_across_restarts() {
         ws.to_str().unwrap(),
         "--name",
         &e.name,
+        // Named first, so its startup hook runs before the waiting kit's: without `--kit
+        // docker` the shipped kit is added after the `--kit` kits.
+        "--kit",
+        "docker",
+        "--kit",
+        kit.to_str().unwrap(),
         "--cpus",
         "1",
         "-m",
         "1g",
     ]);
     assert_eq!(e.state(), "running");
+    assert!(
+        root_sh(&e.name, "command -v setsid").status.success(),
+        "the shipped image has setsid"
+    );
     let docker_info = || {
         e.sbt(&["exec", "--privileged", &e.name, "docker", "info"])
             .status
             .success()
     };
+    // No waiting: the blocking hook already saw dockerd, and the exec that ran it has ended.
     assert!(
-        wait_until(90, || startup_log(&e).contains("startup.d/01-docker.sh")),
-        "the startup runner ran the docker kit's script:\n{}",
-        startup_log(&e)
-    );
-    assert!(
-        wait_until(90, docker_info),
-        "docker info as root:\n{}",
+        docker_info(),
+        "docker info right after create:\n{}\n{}",
+        startup_log(&e),
         String::from_utf8_lossy(&root_sh(&e.name, "cat /var/log/dockerd.log; ps -ef").stdout)
     );
-    // A later, separate exec still finds the daemon the runner started.
-    assert_one_dockerd(&e, "dockerd survives the startup runner");
+    assert_one_dockerd(&e, "dockerd survives the startup runner's exec");
     assert!(docker_info(), "docker info from a later exec");
 
     e.ok(&["stop", &e.name]);
     e.ok(&["start", &e.name]);
-    assert!(wait_until(90, docker_info), "docker info after a restart");
+    assert!(docker_info(), "docker info right after a restart");
     assert_one_dockerd(&e, "exactly one dockerd after a restart");
     let log = startup_log(&e);
+    let count = |line: &str| log.lines().filter(|l| l.trim() == line).count();
     assert!(
-        log.matches("startup.d/01-docker.sh").count() >= 2,
-        "the runner ran on both starts:\n{log}"
+        count("ok /etc/smolbento/startup.d/01-docker.sh hook 1") >= 2,
+        "dockerd started on both starts:\n{log}"
+    );
+    assert!(
+        log.lines()
+            .filter(|l| l.starts_with("ok ") && l.ends_with("-e2e-wait-docker.sh hook 1"))
+            .count()
+            >= 2,
+        "the blocking hook finished on both starts:\n{log}"
+    );
+    assert!(
+        log.matches("=== dispatcher run ").count() >= 2,
+        "one dispatcher run per start:\n{log}"
     );
 }
 
@@ -956,8 +993,13 @@ impl Image {
 
     /// Alpine's layers and config, pulled from Docker Hub with smolbento's own client.
     fn alpine() -> Image {
+        Image::pull("alpine")
+    }
+
+    /// `reference`'s layers and config, pulled from Docker Hub with smolbento's own client.
+    fn pull(reference: &str) -> Image {
         let cache = tempfile::tempdir().unwrap();
-        let dir = smolbento::kits::registry::pull_image("alpine", cache.path()).unwrap();
+        let dir = smolbento::kits::registry::pull_image(reference, cache.path()).unwrap();
         let blob = |d: &serde_json::Value| {
             let hex = d.as_str().unwrap().trim_start_matches("sha256:");
             std::fs::read(dir.join("blobs/sha256").join(hex)).unwrap()
@@ -987,27 +1029,34 @@ impl Image {
     }
 
     /// Appends an uncompressed layer holding `path` (relative, e.g. `opt/x/f`) with `body`.
-    fn with_file(mut self, path: &str, body: &str) -> Image {
+    fn with_file(self, path: &str, body: &str) -> Image {
+        self.with_files(&[(path, body)])
+    }
+
+    /// Appends one uncompressed layer holding each `(path, body)`.
+    fn with_files(mut self, files: &[(&str, &str)]) -> Image {
         let mut b = tar::Builder::new(Vec::new());
-        let parts: Vec<&str> = path.split('/').collect();
-        for i in 1..parts.len() {
+        let mut dirs = std::collections::BTreeSet::new();
+        for (path, body) in files {
+            let parts: Vec<&str> = path.split('/').collect();
+            for i in 1..parts.len() {
+                let dir = format!("{}/", parts[..i].join("/"));
+                if !dirs.insert(dir.clone()) {
+                    continue;
+                }
+                let mut h = tar::Header::new_gnu();
+                h.set_entry_type(tar::EntryType::Directory);
+                h.set_mode(0o755);
+                h.set_size(0);
+                h.set_cksum();
+                b.append_data(&mut h, dir, std::io::empty()).unwrap();
+            }
             let mut h = tar::Header::new_gnu();
-            h.set_entry_type(tar::EntryType::Directory);
-            h.set_mode(0o755);
-            h.set_size(0);
+            h.set_mode(0o644);
+            h.set_size(body.len() as u64);
             h.set_cksum();
-            b.append_data(
-                &mut h,
-                format!("{}/", parts[..i].join("/")),
-                std::io::empty(),
-            )
-            .unwrap();
+            b.append_data(&mut h, path, body.as_bytes()).unwrap();
         }
-        let mut h = tar::Header::new_gnu();
-        h.set_mode(0o644);
-        h.set_size(body.len() as u64);
-        h.set_cksum();
-        b.append_data(&mut h, path, body.as_bytes()).unwrap();
         let data = b.into_inner().unwrap();
         let diff_id = sha256(&data);
         self.config["rootfs"]["diff_ids"]
@@ -1017,6 +1066,30 @@ impl Image {
         self.layers
             .push((data, "application/vnd.oci.image.layer.v1.tar".to_string()));
         self
+    }
+}
+
+impl Image {
+    /// The image's `path` (e.g. `etc/passwd`) from its topmost layer that has it, read with the
+    /// host's `tar` (which detects gzip itself).
+    fn file(&self, path: &str) -> String {
+        let dir = tempfile::tempdir().unwrap();
+        let layer = dir.path().join("layer");
+        for (data, _) in self.layers.iter().rev() {
+            std::fs::write(&layer, data).unwrap();
+            for member in [path.to_string(), format!("./{path}")] {
+                let out = Command::new("tar")
+                    .arg("-xOf")
+                    .arg(&layer)
+                    .arg(&member)
+                    .output()
+                    .unwrap();
+                if out.status.success() && !out.stdout.is_empty() {
+                    return String::from_utf8(out.stdout).unwrap();
+                }
+            }
+        }
+        panic!("no {path} in the image");
     }
 }
 
@@ -1081,8 +1154,11 @@ fn published_workload_kit_runs_its_command() {
     let reg = Registry::start(&e);
     let mut image = Image::alpine();
     image.config["config"]["Entrypoint"] = serde_json::Value::Null;
-    image.config["config"]["Cmd"] =
-        serde_json::json!(["sh", "-c", "echo workload-command-ran-as-$(id -un)"]);
+    image.config["config"]["Cmd"] = serde_json::json!([
+        "sh",
+        "-c",
+        "echo workload-command-ran-as-$(id -un) in $(pwd)"
+    ]);
     let kit = reg.push(
         "workload",
         image,
@@ -1092,7 +1168,10 @@ fn published_workload_kit_runs_its_command() {
             serde_json::json!([
                 {"type": "com.docker.sandbox/sbx@1"},
                 {"type": "com.docker.sandbox/lifecycle@1",
-                 "config": {"install": [{"command": add_agent_hook(), "user": "0"}]}},
+                 "config": {"install": [
+                     {"command": add_agent_hook(), "user": "0"},
+                     {"command": "apk add -q bash", "user": "0"},
+                 ]}},
             ]),
         ),
     );
@@ -1109,8 +1188,10 @@ fn published_workload_kit_runs_its_command() {
         "1g",
     ]);
     assert_eq!(e.state(), "running");
+    // The image has no USER, so the agent runs as root, as in sbx, in the workspace.
     let out = e.ok(&["run", "--name", &e.name]);
-    assert!(out.contains("workload-command-ran-as-agent"), "{out}");
+    let want = format!("workload-command-ran-as-root in {}", ws.display());
+    assert!(out.contains(&want), "{out}");
 }
 
 #[test]
@@ -1352,4 +1433,274 @@ setup:
     assert!(root_out(&e.name, "cat /etc/smolbento/kits").contains("e2e-add"));
     let rules = e.ok(&["policy", "ls", "--source", "kit"]);
     assert!(rules.contains("example.com"), "{rules}");
+}
+
+/// Debian (it has bash and `usermod`) plus accounts `somebody` (uid 1234) and `numbered`
+/// (uid 1001), a `BASH_ENV` file, `WORKDIR /x`, and env vars `E2E_DECLARED` and `E2E_UNDECLARED`,
+/// published as a workload kit whose image `USER` is `user`. Its command reports who and where it
+/// runs, whether bash sourced `BASH_ENV`, and writes a file in the workspace.
+fn image_user_kit(reg: &Registry, repo: &str, user: &str, lifecycle: serde_json::Value) -> String {
+    let base = Image::pull("debian:bookworm-slim");
+    let passwd = base.file("etc/passwd")
+        + "somebody:x:1234:1234::/home/somebody:/bin/bash\n\
+           numbered:x:1001:1001::/home/numbered:/bin/sh\n";
+    let group = base.file("etc/group") + "somebody:x:1234:\nnumbered:x:1001:\n";
+    let mut image = base.with_files(&[
+        ("etc/passwd", &passwd),
+        ("etc/group", &group),
+        ("etc/e2e-bash-env", "export E2E_FROM_BASH_ENV=yes\n"),
+        ("x/.keep", ""),
+    ]);
+    let c = &mut image.config["config"];
+    c["User"] = user.into();
+    c["WorkingDir"] = "/x".into();
+    c["Entrypoint"] = serde_json::Value::Null;
+    c["Cmd"] = serde_json::json!([
+        "sh",
+        "-c",
+        "echo \"ran user=$(id -un) bash_env=$E2E_FROM_BASH_ENV pwd=$(pwd)\"; \
+         touch \"wrote-as-$(id -un)\""
+    ]);
+    let mut env: Vec<serde_json::Value> = c["Env"].as_array().cloned().unwrap_or_default();
+    env.extend([
+        "BASH_ENV=/etc/e2e-bash-env".into(),
+        "E2E_DECLARED=declared".into(),
+        "E2E_UNDECLARED=undeclared".into(),
+    ]);
+    c["Env"] = env.into();
+    let mut caps = vec![serde_json::json!({"type": "com.docker.sandbox/sbx@1"})];
+    if !lifecycle.is_null() {
+        caps.push(
+            serde_json::json!({"type": "com.docker.sandbox/lifecycle@1", "config": lifecycle}),
+        );
+    }
+    reg.push(repo, image, descriptor("workload", &[], caps.into()))
+}
+
+impl E2e {
+    /// `sbt create` of workload kit `kit` on the workspace.
+    fn create_workload(&self, kit: &str) {
+        let ws = self.workspace();
+        self.ok(&[
+            "create",
+            kit,
+            ws.to_str().unwrap(),
+            "--name",
+            &self.name,
+            "--cpus",
+            "1",
+            "-m",
+            "1g",
+        ]);
+    }
+
+    /// Runs the workload's agent; asserts it ran as `user` (its uid mapped to the host's) with
+    /// `BASH_ENV` sourced, in the workspace, and could write there.
+    fn assert_agent_runs_as(&self, user: &str) {
+        let ws = self.workspace();
+        let out = self.ok(&["run", "--name", &self.name]);
+        let want = format!("ran user={user} bash_env=yes pwd={}", ws.display());
+        assert!(out.contains(&want), "want {want:?} in:\n{out}");
+        let written = ws.join(format!("wrote-as-{user}"));
+        let meta = std::fs::metadata(&written)
+            .unwrap_or_else(|e| panic!("{} on the host: {e}", written.display()));
+        use std::os::unix::fs::MetadataExt;
+        assert_eq!(meta.uid(), smolbento::sandbox::host_uid(), "owned by you");
+    }
+}
+
+/// sbx #3 and #12: a v3 workload's agent runs as the image `USER` under bash (so `BASH_ENV` is
+/// sourced) in the workspace. Install hooks run in `WORKDIR` with a clean environment (the
+/// baseline plus declared vars); startup hooks get the whole container environment.
+#[test]
+#[ignore = "boots real VMs and pulls debian; run with `just e2e`"]
+fn v3_workload_runs_as_its_image_user_with_bash_env() {
+    let e = E2e::new("imguser");
+    let reg = Registry::start(&e);
+    let kit = image_user_kit(
+        &reg,
+        "image-user",
+        "somebody",
+        serde_json::json!({
+            "install": [{"command": "env > /etc/e2e-install-env; pwd > /etc/e2e-install-pwd",
+                         "user": "0", "env": ["E2E_DECLARED"]}],
+            "startup": [{"command": "env > /etc/e2e-startup-env", "user": "0"}],
+        }),
+    );
+    e.create_workload(&kit);
+
+    let install = root_out(&e.name, "cat /etc/e2e-install-env");
+    assert!(install.contains("E2E_DECLARED=declared"), "{install}");
+    assert!(install.contains("PATH="), "{install}");
+    assert!(!install.contains("E2E_UNDECLARED"), "{install}");
+    assert!(!install.contains("BASH_ENV"), "{install}");
+    assert_eq!(root_out(&e.name, "cat /etc/e2e-install-pwd"), "/x\n");
+    let startup = root_out(&e.name, "cat /etc/e2e-startup-env");
+    assert!(startup.contains("E2E_UNDECLARED=undeclared"), "{startup}");
+
+    assert_eq!(e.ok(&["exec", &e.name, "id", "-un"]).trim(), "somebody");
+    e.assert_agent_runs_as("somebody");
+}
+
+/// A numeric image `USER` runs as the account that has that uid, moved to the host's uid.
+#[test]
+#[ignore = "boots real VMs and pulls debian; run with `just e2e`"]
+fn numeric_image_user_runs_as_its_account() {
+    let e = E2e::new("numuser");
+    let reg = Registry::start(&e);
+    let kit = image_user_kit(&reg, "numeric-user", "1001", serde_json::Value::Null);
+    e.create_workload(&kit);
+    e.assert_agent_runs_as("numbered");
+}
+
+/// sbx #11: a blocking startup hook that fails keeps a new sandbox stopped (create only warns),
+/// and every later start fails.
+#[test]
+#[ignore = "boots real VMs and pulls alpine; run with `just e2e`"]
+fn failing_startup_hook_fails_the_start() {
+    let e = E2e::new("startfail");
+    let kit = e.dir.path().join("e2e-fail-start");
+    std::fs::create_dir_all(&kit).unwrap();
+    std::fs::write(
+        kit.join("spec.yaml"),
+        r#"schemaVersion: "2"
+kind: mixin
+name: e2e-fail-start
+setup:
+  startup:
+    - command: [sh, -c, "sleep 2; exit 7"]
+      user: "0"
+"#,
+    )
+    .unwrap();
+    let ws = e.workspace();
+    let out = e.sbt(&[
+        "create",
+        "-t",
+        "alpine",
+        "--kit",
+        kit.to_str().unwrap(),
+        "shell",
+        ws.to_str().unwrap(),
+        "--name",
+        &e.name,
+        "--cpus",
+        "1",
+        "-m",
+        "1g",
+    ]);
+    let err = String::from_utf8_lossy(&out.stderr);
+    assert!(out.status.success(), "create still succeeds:\n{err}");
+    assert!(
+        err.contains("StartRuntime after create failed")
+            && err.contains("kit startup exited with code 7"),
+        "{err}"
+    );
+    assert_eq!(e.state(), "stopped");
+
+    let out = e.sbt(&["start", &e.name]);
+    let err = String::from_utf8_lossy(&out.stderr);
+    assert!(!out.status.success(), "start fails");
+    assert!(err.contains("kit startup exited with code 7"), "{err}");
+    assert_eq!(e.state(), "stopped");
+}
+
+/// sbx #15: a mixin's agent context goes beside the workspace, in the sandbox only: the shell
+/// agent's `AGENTS.md` gets an index block and the kit's text goes to `kits-agent-context/`.
+#[test]
+#[ignore = "boots real VMs and pulls alpine; run with `just e2e`"]
+fn mixin_agent_context_sits_beside_the_workspace() {
+    let e = E2e::new("ctx");
+    let kit = e.dir.path().join("e2e-ctx");
+    std::fs::create_dir_all(&kit).unwrap();
+    std::fs::write(
+        kit.join("spec.yaml"),
+        format!(
+            r#"schemaVersion: "2"
+kind: mixin
+name: e2e-ctx
+agentInstructions:
+  content: "Use the e2e tools."
+setup:
+  install:
+    - command: "{}"
+"#,
+            add_agent_hook()
+        ),
+    )
+    .unwrap();
+    e.create_with_kits(&[kit.to_str().unwrap()]);
+    let parent = e.workspace().parent().unwrap().to_path_buf();
+    let p = parent.display();
+    let index = root_out(&e.name, &format!("cat {p}/AGENTS.md"));
+    let line = format!("- **e2e-ctx** — See {p}/kits-agent-context/e2e-ctx.md.");
+    assert!(
+        index.contains("<!-- sbx:kits-section start -->")
+            && index.contains(&line)
+            && index.contains("<!-- sbx:kits-section end -->"),
+        "{index}"
+    );
+    let body = root_out(&e.name, &format!("cat {p}/kits-agent-context/e2e-ctx.md"));
+    assert!(body.contains("Use the e2e tools."), "{body}");
+    assert_eq!(
+        root_out(
+            &e.name,
+            &format!("stat -c %U {p}/AGENTS.md {p}/kits-agent-context/e2e-ctx.md")
+        ),
+        "agent\nagent\n"
+    );
+    assert!(!parent.join("AGENTS.md").exists(), "nothing on the host");
+    assert!(
+        !parent.join("kits-agent-context").exists(),
+        "nothing on the host"
+    );
+}
+
+/// sbx #6, #8, #9: kit argument errors stop `create` before any machine is made.
+#[test]
+#[ignore = "runs sbt against smolvm; run with `just e2e`"]
+fn kit_arg_errors_stop_create() {
+    let e = E2e::new("args");
+    let ws = e.workspace();
+    let ws = ws.to_str().unwrap();
+    let fails = |args: &[&str], want: &str| {
+        let out = e.sbt(args);
+        let err = String::from_utf8_lossy(&out.stderr);
+        assert!(!out.status.success(), "{args:?} fails");
+        assert!(err.contains(want), "{args:?}: want {want:?} in:\n{err}");
+        assert_eq!(e.state(), "absent", "{args:?} made no sandbox");
+    };
+    fails(
+        &["create", "shell", ws, "--name", &e.name, "--kit-arg", "a=1"],
+        "kit arguments were supplied but no kits were referenced",
+    );
+
+    let kit = e.dir.path().join("e2e-args");
+    std::fs::create_dir_all(&kit).unwrap();
+    std::fs::write(
+        kit.join("spec.yaml"),
+        r#"schemaVersion: "2"
+kind: mixin
+name: e2e-args
+args:
+  opt:
+    description: optional, no default
+  num:
+    default: 5
+    enum: [5, 6]
+setup:
+  install:
+    - command: "echo ${{ kit.args.opt }} ${{ kit.args.num }}"
+"#,
+    )
+    .unwrap();
+    let kit = kit.to_str().unwrap();
+    fails(
+        &[
+            "create", "-t", "alpine", "--kit", kit, "shell", ws, "--name", &e.name,
+        ],
+        "create-phase kit arg \"opt\" has no resolved value",
+    );
+    // An empty value is a value, and unquoted numbers are strings.
+    e.ok(&["kit", "validate", kit, "--kit-arg", "opt="]);
 }
