@@ -1,7 +1,7 @@
 //! Clone mode, host side: the repo a `--clone` sandbox copies, and its `sandbox-<name>` remote.
 
 use std::path::{Path, PathBuf};
-use std::process::Command;
+use std::process::{Command, Output};
 
 use anyhow::{Context, Result, bail};
 
@@ -29,13 +29,9 @@ impl std::fmt::Display for GitMissing {
 
 impl std::error::Error for GitMissing {}
 
-/// Runs host git in `repo`; the error is git's first stderr line.
-fn git(repo: &Path, args: &[&str]) -> Result<String> {
-    git_with("git", repo, args)
-}
-
-fn git_with(program: &str, repo: &Path, args: &[&str]) -> Result<String> {
-    let out = Command::new(program)
+/// Spawns `program -C repo args`; a missing binary is [`GitMissing`].
+fn git_output(program: &str, repo: &Path, args: &[&str]) -> Result<Output> {
+    Command::new(program)
         .arg("-C")
         .arg(repo)
         .args(args)
@@ -43,24 +39,35 @@ fn git_with(program: &str, repo: &Path, args: &[&str]) -> Result<String> {
         .map_err(|e| match e.kind() {
             std::io::ErrorKind::NotFound => anyhow::Error::new(GitMissing),
             _ => anyhow::Error::new(e).context("running git"),
-        })?;
+        })
+}
+
+fn stdout(out: &Output) -> String {
+    String::from_utf8_lossy(&out.stdout).trim_end().to_string()
+}
+
+/// git's first stderr line.
+fn first_line(out: &Output) -> String {
+    let err = String::from_utf8_lossy(&out.stderr);
+    err.lines().next().unwrap_or("failed").to_string()
+}
+
+/// Runs host git in `repo`; the error is git's first stderr line.
+fn git(repo: &Path, args: &[&str]) -> Result<String> {
+    let out = git_output("git", repo, args)?;
     if !out.status.success() {
-        let err = String::from_utf8_lossy(&out.stderr);
-        bail!(
-            "git {}: {}",
-            args.join(" "),
-            err.lines().next().unwrap_or("failed")
-        );
+        bail!("git {}: {}", args.join(" "), first_line(&out));
     }
-    Ok(String::from_utf8_lossy(&out.stdout).trim_end().to_string())
+    Ok(stdout(&out))
 }
 
 pub fn source(path: &Path) -> Result<CloneSource> {
     source_with("git", path)
 }
 
+/// `source` with another git binary. Only git failing means "not a repo"; a spawn error stays.
 fn source_with(program: &str, path: &Path) -> Result<CloneSource> {
-    let out = git_with(
+    let out = git_output(
         program,
         path,
         &[
@@ -69,28 +76,19 @@ fn source_with(program: &str, path: &Path) -> Result<CloneSource> {
             "--show-toplevel",
             "--git-common-dir",
         ],
-    )
-    .map_err(|e| {
-        if e.is::<GitMissing>() || e.is::<std::io::Error>() {
-            e
-        } else {
-            anyhow::anyhow!(
-                "--clone needs a git repository; {} isn't one",
-                path.display()
-            )
-        }
-    })?;
-    let mut lines = out.lines();
-    let (Some(top), Some(git_dir)) = (lines.next(), lines.next()) else {
-        bail!(
+    )?;
+    let text = stdout(&out);
+    let mut lines = text.lines();
+    match (out.status.success(), lines.next(), lines.next()) {
+        (true, Some(top), Some(git_dir)) => Ok(CloneSource {
+            top: top.into(),
+            git_dir: git_dir.into(),
+        }),
+        _ => bail!(
             "--clone needs a git repository; {} isn't one",
             path.display()
-        );
-    };
-    Ok(CloneSource {
-        top: top.into(),
-        git_dir: git_dir.into(),
-    })
+        ),
+    }
 }
 
 pub fn worktree_branch(path: &Path) -> Result<Option<String>> {
@@ -104,7 +102,8 @@ pub fn worktree_branch(path: &Path) -> Result<Option<String>> {
         ],
     )?;
     let mut lines = out.lines();
-    if lines.next() == lines.next() {
+    let (git_dir, common) = (lines.next(), lines.next());
+    if git_dir == common {
         return Ok(None);
     }
     Ok(git(path, &["symbolic-ref", "-q", "--short", "HEAD"])
@@ -143,27 +142,11 @@ fn remote_owner(repo: &Path, sandbox: &str) -> Result<Remote> {
 
 /// `git config <key>`: `None` when the key is unset (exit 1); any other failure is an error.
 fn config_get(repo: &Path, key: &str) -> Result<Option<String>> {
-    let out = Command::new("git")
-        .arg("-C")
-        .arg(repo)
-        .args(["config", key])
-        .output()
-        .map_err(|e| match e.kind() {
-            std::io::ErrorKind::NotFound => anyhow::Error::new(GitMissing),
-            _ => anyhow::Error::new(e).context("running git"),
-        })?;
+    let out = git_output("git", repo, &["config", key])?;
     match out.status.code() {
-        Some(0) => Ok(Some(
-            String::from_utf8_lossy(&out.stdout).trim_end().to_string(),
-        )),
+        Some(0) => Ok(Some(stdout(&out))),
         Some(1) => Ok(None),
-        _ => {
-            let err = String::from_utf8_lossy(&out.stderr);
-            bail!(
-                "git config {key}: {}",
-                err.lines().next().unwrap_or("failed")
-            );
-        }
+        _ => bail!("git config {key}: {}", first_line(&out)),
     }
 }
 
@@ -247,31 +230,30 @@ fn strip_userinfo(url: &str) -> String {
     url.to_string()
 }
 
+/// Every remote's name and URL (`get-url`, so `insteadOf` rewrites apply).
+fn remotes(repo: &Path) -> Result<Vec<(String, String)>> {
+    git(repo, &["remote"])?
+        .lines()
+        .map(|name| Ok((name.to_string(), git(repo, &["remote", "get-url", name])?)))
+        .collect()
+}
+
 /// Remotes whose http(s) URL carries a user name or token, which the sandbox can read in the
 /// mounted host config.
 pub fn userinfo_remotes(repo: &Path) -> Result<Vec<String>> {
-    let mut out = Vec::new();
-    for name in git(repo, &["remote"])?.lines() {
-        let url = git(repo, &["remote", "get-url", name])?;
-        if strip_userinfo(&url) != url {
-            out.push(name.to_string());
-        }
-    }
-    Ok(out)
+    Ok(remotes(repo)?
+        .into_iter()
+        .filter(|(_, url)| strip_userinfo(url) != *url)
+        .map(|(name, _)| name)
+        .collect())
 }
 
 pub fn copied_remotes(repo: &Path) -> Result<Vec<(String, String)>> {
-    let mut out = Vec::new();
-    for name in git(repo, &["remote"])?.lines() {
-        if name.starts_with("sandbox-") {
-            continue;
-        }
-        let url = git(repo, &["remote", "get-url", name])?;
-        if !is_local(&url) {
-            out.push((name.to_string(), strip_userinfo(&url)));
-        }
-    }
-    Ok(out)
+    Ok(remotes(repo)?
+        .into_iter()
+        .filter(|(name, url)| !name.starts_with("sandbox-") && !is_local(url))
+        .map(|(name, url)| (name, strip_userinfo(&url)))
+        .collect())
 }
 
 pub fn fetch(repo: &Path, sandbox: &str) -> Result<()> {
