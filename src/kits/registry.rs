@@ -64,6 +64,18 @@ fn pull_layout(
     cache: &Path,
     require_kit: bool,
 ) -> Result<PathBuf> {
+    let fetched = fetch_ref(reference, pin, cache, require_kit, true)?;
+    build_layout(cache, &fetched.manifest, &fetched.digest, reference)
+}
+
+/// Fetches REF's manifest and config into the cache's blob store, and its layers with `layers`.
+fn fetch_ref(
+    reference: &str,
+    pin: Option<&str>,
+    cache: &Path,
+    require_kit: bool,
+    layers: bool,
+) -> Result<Fetched> {
     // The same normaliser the trust check uses, so both read the ref alike.
     trust::normalise(reference)?;
     let mut r: Reference = reference
@@ -77,21 +89,21 @@ fn pull_layout(
         .build()
         .context("starting the registry client")?;
     let client = new_client(&r);
-    let fetched = rt.block_on(async {
-        let first = fetch(&client, &r, &RegistryAuth::Anonymous, cache, require_kit).await;
+    rt.block_on(async {
+        let anonymous = RegistryAuth::Anonymous;
+        let first = fetch(&client, &r, &anonymous, cache, require_kit, layers).await;
         match first {
             Ok(f) => Ok(f),
             // Private images answer anonymous pulls with 401/403; only then try the docker login.
             Err(e) if is_auth_error(&e) => match docker_auth(r.resolve_registry()) {
-                Some(auth) => fetch(&client, &r, &auth, cache, require_kit)
+                Some(auth) => fetch(&client, &r, &auth, cache, require_kit, layers)
                     .await
                     .map_err(|e2| e2.context(format!("{e:#} (anonymous)"))),
                 None => Err(e),
             },
             Err(e) => Err(e),
         }
-    })?;
-    build_layout(cache, &fetched.manifest, &fetched.digest, reference)
+    })
 }
 
 /// The ring provider is installed once; reqwest's no-provider rustls build needs a default.
@@ -163,6 +175,7 @@ async fn fetch(
     auth: &RegistryAuth,
     cache: &Path,
     require_kit: bool,
+    layers: bool,
 ) -> Result<Fetched> {
     let (mut bytes, mut digest) = fetch_manifest(client, r, auth).await?;
     let mut r = r.clone();
@@ -180,8 +193,11 @@ async fn fetch(
     let store = store_dir(cache);
     fs::create_dir_all(&store).with_context(|| format!("creating {}", store.display()))?;
     put_bytes(cache, &digest, &bytes)?;
-    for d in blob_digests(&manifest)? {
-        fetch_blob(client, &r, &d, cache).await?;
+    // The config comes first.
+    let blobs = blob_digests(&manifest)?;
+    let wanted = if layers { blobs.len() } else { 1 };
+    for d in &blobs[..wanted] {
+        fetch_blob(client, &r, d, cache).await?;
     }
     Ok(Fetched {
         manifest: bytes,
@@ -452,6 +468,55 @@ pub fn read_layout(dir: &Path, source: Source) -> Result<Kit> {
         .ok_or_else(|| anyhow!("the manifest has no config"))?;
     let config: Value = serde_json::from_slice(&read(blobs.join(hex_of(config_digest)?))?)
         .context("reading the image config")?;
+    kit.command = command_of(&config);
+    let text = |k: &str| config["config"][k].as_str().unwrap_or_default().to_string();
+    kit.config = Some(ImageConfig {
+        user: text("User"),
+        workdir: text("WorkingDir"),
+    });
+    kit.digest = Some(digest);
+    kit.content = Content::Oci(dir.to_path_buf());
+    Ok(kit)
+}
+
+/// Entrypoint+Cmd of a plain image's config, for a v2 workload that declares no command. An image
+/// already in the cache (`pull_image`) answers offline; otherwise only its manifest and config
+/// are fetched.
+pub fn image_command(reference: &str, cache: &Path) -> Result<Option<Vec<String>>> {
+    let blobs = store_dir(cache);
+    let read_json = |p: PathBuf| -> Result<Value> {
+        let bytes = fs::read(&p).with_context(|| format!("reading {}", p.display()))?;
+        serde_json::from_slice(&bytes).with_context(|| format!("reading {}", p.display()))
+    };
+    let manifest_digest = match cached_manifest(reference, cache) {
+        Some(d) => d,
+        None => {
+            fetch_ref(reference, None, cache, false, false)
+                .with_context(|| format!("reading the image config of {reference}"))?
+                .digest
+        }
+    };
+    let manifest = read_json(blobs.join(hex_of(&manifest_digest)?))?;
+    let config_digest = manifest["config"]["digest"]
+        .as_str()
+        .ok_or_else(|| anyhow!("the manifest of {reference} has no config"))?;
+    Ok(command_of(&read_json(blobs.join(hex_of(config_digest)?))?))
+}
+
+/// The manifest digest of a layout in the cache made for `reference`.
+fn cached_manifest(reference: &str, cache: &Path) -> Option<String> {
+    fs::read_dir(cache.join("oci")).ok()?.find_map(|e| {
+        let index: Value =
+            serde_json::from_slice(&fs::read(e.ok()?.path().join("index.json")).ok()?).ok()?;
+        let m = &index["manifests"][0];
+        (m["annotations"][REF_NAME_ANNOTATION].as_str() == Some(reference))
+            .then(|| m["digest"].as_str().map(String::from))
+            .flatten()
+    })
+}
+
+/// An image config's Entrypoint then Cmd; `None` when both are empty.
+fn command_of(config: &Value) -> Option<Vec<String>> {
     let words = |k: &str| -> Vec<String> {
         config["config"][k]
             .as_array()
@@ -464,15 +529,7 @@ pub fn read_layout(dir: &Path, source: Source) -> Result<Kit> {
     };
     let mut command = words("Entrypoint");
     command.extend(words("Cmd"));
-    kit.command = (!command.is_empty()).then_some(command);
-    let text = |k: &str| config["config"][k].as_str().unwrap_or_default().to_string();
-    kit.config = Some(ImageConfig {
-        user: text("User"),
-        workdir: text("WorkingDir"),
-    });
-    kit.digest = Some(digest);
-    kit.content = Content::Oci(dir.to_path_buf());
-    Ok(kit)
+    (!command.is_empty()).then_some(command)
 }
 
 fn docker_config_dir() -> Option<PathBuf> {
@@ -565,6 +622,20 @@ fn credential_helper(name: &str, server: &str) -> Option<RegistryAuth> {
 #[cfg(test)]
 pub(crate) mod fixtures {
     use super::*;
+
+    /// A plain image (no kit annotation) in the kit cache as `reference`, as `pull_image` leaves
+    /// it; returns its layout directory.
+    pub fn cached_image(cache: &Path, reference: &str, config_json: &str) -> PathBuf {
+        let tmp = tempfile::tempdir().unwrap();
+        let digest = oci_layout(tmp.path(), None, &[], config_json);
+        fs::create_dir_all(store_dir(cache)).unwrap();
+        for e in fs::read_dir(store_dir(tmp.path())).unwrap() {
+            let data = fs::read(e.unwrap().path()).unwrap();
+            put_bytes(cache, &sha256_digest(&data), &data).unwrap();
+        }
+        let manifest = fs::read(store_dir(tmp.path()).join(hex_of(&digest).unwrap())).unwrap();
+        build_layout(cache, &manifest, &digest, reference).unwrap()
+    }
 
     /// Writes a one-manifest OCI layout into `dir`; returns the manifest digest.
     pub fn oci_layout(
@@ -669,6 +740,22 @@ mod tests {
         fixtures::oci_layout(d.path(), Some(DESC), &[], "{}");
         let kit = read_layout(d.path(), src()).unwrap();
         assert_eq!(kit.config, Some(ImageConfig::default()));
+    }
+
+    #[test]
+    fn image_command_reads_a_cached_image_without_the_network() {
+        let cache = tempfile::tempdir().unwrap();
+        fixtures::cached_image(
+            cache.path(),
+            "img:1",
+            r#"{"config":{"Entrypoint":["/bin/agent"],"Cmd":["run"]}}"#,
+        );
+        fixtures::cached_image(cache.path(), "bare:1", r#"{"config":{}}"#);
+        assert_eq!(
+            image_command("img:1", cache.path()).unwrap(),
+            Some(vec!["/bin/agent".to_string(), "run".into()])
+        );
+        assert_eq!(image_command("bare:1", cache.path()).unwrap(), None);
     }
 
     #[test]

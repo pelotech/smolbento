@@ -10,7 +10,7 @@ use super::args::{KitArgOpts, KitCmd};
 use super::plan;
 use crate::kits::apply::apply;
 use crate::kits::args::ArgValues;
-use crate::kits::model::{Cap, CapBody, Content, Kind, Kit, Source};
+use crate::kits::model::{Cap, CapBody, Content, ImageConfig, Kind, Kit, Source};
 use crate::kits::resolve::{resolve, resolve_for};
 use crate::kits::{compose, guest, load};
 use crate::policy::{Decision, Policy, compile};
@@ -228,8 +228,8 @@ fn supported(c: &Cap) -> bool {
 /// provides whatever the mixin requires.
 fn validate<R: Runner>(ctx: &Ctx<R>, reference: &str, args: &KitArgOpts) -> Result<i32> {
     let values = arg_values(args)?;
-    let kit = load::load(ctx, reference)?;
-    load::check_launchable(&kit)?;
+    let mut kit = load::load(ctx, reference)?;
+    load::check_launchable(ctx, &mut kit)?;
     let plan = match kit.kind {
         Kind::Workload => resolve(kit, vec![], &values)?,
         Kind::Mixin => {
@@ -406,12 +406,13 @@ fn add_running<R: Runner>(
         .map(recorded_kit)
         .chain(std::iter::once(kit))
         .collect();
-    let plan = resolve_for(
-        empty_workload(&sb.meta.agent),
-        mixins,
-        values,
-        &sb.workdir(),
-    )?;
+    // Install hooks run where the create ran them: a v3 workload's image WORKDIR.
+    let mut workload = empty_workload(&sb.meta.agent);
+    workload.config = sb.meta.image_workdir.clone().map(|workdir| ImageConfig {
+        workdir,
+        ..Default::default()
+    });
+    let plan = resolve_for(workload, mixins, values, &sb.workdir())?;
     plan.warn_skipped();
 
     // In memory until approved.
@@ -929,6 +930,32 @@ mod tests {
             guest::STARTUP_RUNNER
         );
         assert_eq!(kit_rules(&t), vec!["api.net.example".to_string()]);
+    }
+
+    #[test]
+    fn add_runs_install_hooks_in_the_recorded_image_workdir() {
+        let mut t = kit_env();
+        set_policy(&t, "mode = \"deny-all\"\n");
+        dev_sandbox(&t, BASE);
+        t.ctx.vm.runner().ok(
+            &["machine", "status", "-n", MACHINE],
+            &machine_json(
+                MACHINE,
+                "running",
+                &[
+                    ("sbx.name", "dev"),
+                    ("sbx.agent", "shell"),
+                    ("sbx.workdir", "/x"),
+                ],
+            ),
+        );
+        v3_kit(&t, "net", NET_KIT, &[]);
+        sbt(&mut t.ctx, &["kit", "add", "dev", "./net", "--yes"]).unwrap();
+        let want = format!(
+            "machine exec --name {MACHINE} -u root -- sh -c {}",
+            install_script().replacen("cd / ", "cd '/x' ", 1)
+        );
+        assert!(dev_calls(&t).contains(&want), "{:#?}", dev_calls(&t));
     }
 
     #[test]

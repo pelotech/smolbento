@@ -193,10 +193,13 @@ pub fn apply(
         }
     }
     // Install hooks run in the workload image's WORKDIR, as sbx runs them (`/` without one).
-    let install_dir = match plan.workload.config.as_ref().map(|c| c.workdir.as_str()) {
-        None | Some("") => "/".to_string(),
-        Some(d) => crate::sandbox::sh_quote(d),
-    };
+    let workdir = plan
+        .workload
+        .config
+        .as_ref()
+        .map(|c| c.workdir.as_str())
+        .filter(|d| !d.is_empty() && *d != "/");
+    let install_dir = workdir.map_or_else(|| "/".to_string(), crate::sandbox::sh_quote);
     let mut per_kit: Vec<(&str, usize)> = Vec::new();
     for (kit, h) in &m.install_hooks {
         let n = match per_kit.iter_mut().find(|(k, _)| k == kit) {
@@ -250,6 +253,7 @@ pub fn apply(
     let preset = is_preset(&plan.workload);
     if !preset {
         req.command = plan.workload.command.clone();
+        req.image_workdir = workdir.map(String::from);
         req.user = plan
             .workload
             .config
@@ -1126,6 +1130,7 @@ mod tests {
         let (steps, _) = run(&p, &mut req, &mut Policy::default()).unwrap();
         assert_eq!(req.user.as_deref(), Some("somebody"));
         assert_eq!(create::spec(&req).labels["sbx.user"], "somebody");
+        assert_eq!(create::spec(&req).labels["sbx.workdir"], "/x");
         assert_eq!(steps.install[0].user, None);
         assert!(
             steps.install[0].script.starts_with("cd '/x' && env -i "),
@@ -1140,6 +1145,7 @@ mod tests {
         let mut req = request();
         let (steps, _) = run(&p, &mut req, &mut Policy::default()).unwrap();
         assert_eq!(req.user.as_deref(), Some("0"));
+        assert_eq!(req.image_workdir, None);
         assert!(steps.install[0].script.starts_with("cd / && env -i "));
     }
 

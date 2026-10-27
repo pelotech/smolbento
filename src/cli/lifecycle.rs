@@ -197,7 +197,7 @@ pub(crate) fn kit_plan<R: Runner>(
                     "{target} is a mixin; add it with --kit to an agent, e.g. sbt run shell --kit {target}"
                 );
             }
-            load::check_launchable(&kit)?;
+            load::check_launchable(ctx, &mut kit)?;
             // A Smolfile kit gets the shell preset's command, recorded in `sbx.command` so every
             // attach launches the same thing.
             if kit.command.is_none() {
@@ -1619,6 +1619,12 @@ mod tests {
             "schemaVersion: \"2\"\nkind: sandbox\nname: bare\nsandbox:\n  image: img:1\n",
         )
         .unwrap();
+        // The image declares no command either.
+        crate::kits::registry::fixtures::cached_image(
+            &t.ctx.paths.kit_cache(),
+            "img:1",
+            r#"{"config":{"Env":["A=1"]}}"#,
+        );
         let fake = t.ctx.vm.runner();
         fake.fail(&["machine", "status"], "NOT_FOUND", "vm not found");
         let err = sbt(&mut t.ctx, &["create", &kit.display().to_string(), "."]).unwrap_err();
@@ -1635,6 +1641,38 @@ mod tests {
                 .iter()
                 .any(|l| l.starts_with("machine create")),
         );
+    }
+
+    #[test]
+    fn a_v2_workload_without_a_command_launches_its_images() {
+        let mut t = kit_env();
+        let dir = tempfile::tempdir().unwrap();
+        let kit = dir.path().join("bare");
+        std::fs::create_dir(&kit).unwrap();
+        std::fs::write(
+            kit.join("spec.yaml"),
+            "schemaVersion: \"2\"\nkind: sandbox\nname: bare\nsandbox:\n  image: img:1\n",
+        )
+        .unwrap();
+        crate::kits::registry::fixtures::cached_image(
+            &t.ctx.paths.kit_cache(),
+            "img:1",
+            r#"{"config":{"Entrypoint":["/bin/agent"],"Cmd":["--x"]}}"#,
+        );
+        let fake = t.ctx.vm.runner();
+        fake.ok(
+            &["machine", "status"],
+            &json("sbx-bare-proj", "created", "bare-proj"),
+        );
+        fake.once_fail(&["machine", "status"], "NOT_FOUND", "vm not found");
+        sbt(&mut t.ctx, &["create", &kit.display().to_string(), "."]).unwrap();
+        let create = create_line(&t);
+        assert!(
+            create.contains(r#"--label sbx.command=["/bin/agent","--x"]"#),
+            "{create}"
+        );
+        // v2 still launches as `agent`.
+        assert!(!create.contains("sbx.user"), "{create}");
     }
 
     #[test]

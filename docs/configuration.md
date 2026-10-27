@@ -76,6 +76,7 @@ smolbento keeps no database of its own. Each sandbox is a smolvm machine named `
 | `sbx.kits` | Kits applied at create, pinned to their digests |
 | `sbx.command` | The command a workload kit launches, as a JSON list |
 | `sbx.user` | The image user a v3 workload kit's agent and `exec` run as (`0` for root) |
+| `sbx.workdir` | A v3 workload kit's image `WORKDIR`, where install hooks run (absent for `/`) |
 | `sbx.credential-install` | Env vars of credentials a kit needs only while installing; later starts leave them out |
 | `sbx.long-running` | `true` when a kit asked not to stop the sandbox when its last session ends |
 

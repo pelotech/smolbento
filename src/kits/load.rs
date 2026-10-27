@@ -157,10 +157,16 @@ fn is_descriptor(path: &Path) -> bool {
     fs::read(path).is_ok_and(|b| builder::starts_with_syntax(&b))
 }
 
-/// Refuses a workload kit with nothing to launch, with sbx's error: the image config (v3) or
-/// `sandbox.entrypoint`/`command` (v2) must give the command. A Smolfile is smolvm's, so its
-/// sandbox keeps the `shell` preset's command.
-pub fn check_launchable(kit: &Kit) -> Result<()> {
+/// Gives a workload kit its command or refuses it with sbx's error. v3 has its image config's;
+/// a v2 kit without `sandbox.entrypoint`/`command` takes its `sandbox.image`'s Entrypoint+Cmd.
+/// A Smolfile is smolvm's, so its sandbox keeps the `shell` preset's command.
+pub fn check_launchable<R: Runner>(ctx: &Ctx<R>, kit: &mut Kit) -> Result<()> {
+    if kit.kind == Kind::Workload
+        && kit.command.is_none()
+        && let (Source::LocalV2(_), Content::Image(image)) = (&kit.source, &kit.content)
+    {
+        kit.command = registry::image_command(image, &ctx.paths.kit_cache())?;
+    }
     if kit.kind == Kind::Workload
         && kit.command.is_none()
         && !matches!(kit.source, Source::Smolfile(_))

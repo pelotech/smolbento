@@ -37,18 +37,47 @@ pub fn identity_cmd(uid: u32) -> String {
 }
 
 /// `identity_cmd` for a v3 workload's image user (`sbx.user`: `name`, `uid` or either with
-/// `:group`), resolved against the guest's `/etc/passwd`. Root keeps uid 0. Skipped, as for an
-/// image without `agent`, when the user has no passwd entry or the image has no `usermod`.
+/// `:group`), resolved against the guest's `/etc/passwd`. Root keeps uid 0. Exits 3
+/// (`UNMAPPED`) when the user has no passwd entry or the image has no `usermod`.
 pub fn image_user_cmd(user: &str, uid: u32) -> String {
     let name = user.split(':').next().unwrap_or(user);
     format!(
         "n={}; case \"$n\" in *[!0-9]*) ;; \
          *) n=$(awk -F: -v u=\"$n\" '$3 == u {{ print $1; exit }}' /etc/passwd);; esac; \
-         [ -n \"$n\" ] && u=$(id -u \"$n\" 2>/dev/null) || exit 0; \
+         [ -n \"$n\" ] && u=$(id -u \"$n\" 2>/dev/null) || exit {UNMAPPED}; \
          [ \"$u\" = 0 ] || [ \"$u\" = {uid} ] && exit 0; \
-         command -v usermod >/dev/null 2>&1 || exit 0; usermod -o -u {uid} \"$n\"",
+         command -v usermod >/dev/null 2>&1 || exit {UNMAPPED}; usermod -o -u {uid} \"$n\"",
         sh_quote(name)
     )
+}
+
+/// `image_user_cmd`'s exit code when it can't map the user.
+const UNMAPPED: i32 = 3;
+
+/// Runs `image_user_cmd` as root. Returns the warning for a user it couldn't map: the agent then
+/// runs with the image's uid, which may not be able to write the host workspace.
+pub fn map_image_user<R: Runner>(
+    vm: &Smolvm<R>,
+    sb: &Sandbox,
+    user: &str,
+    uid: u32,
+) -> Result<Option<String>> {
+    let out = vm.exec_output(&ExecSpec {
+        name: sb.machine.clone(),
+        user: Some("root".into()),
+        cmd: vec!["sh".into(), "-c".into(), image_user_cmd(user, uid)],
+        ..Default::default()
+    })?;
+    match out.code {
+        0 => Ok(None),
+        UNMAPPED => Ok(Some(format!(
+            "warning: {}: couldn't map the image user {user} to your uid; the workspace may not \
+             be writable",
+            sb.name()
+        ))),
+        _ => Err(anyhow::anyhow!(SmolvmError::from_output(&out).message))
+            .context("matching the sandbox's image user to your host uid"),
+    }
 }
 
 pub fn host_uid() -> u32 {
@@ -255,14 +284,10 @@ fn setup<R: Runner>(vm: &Smolvm<R>, sb: &Sandbox, plan: &StartPlan) -> Result<()
         ..Default::default()
     })
     .context("matching the sandbox's agent user to your host uid")?;
-    if let Some(user) = &sb.meta.user {
-        vm.exec_captured(&ExecSpec {
-            name: sb.machine.clone(),
-            user: Some("root".into()),
-            cmd: vec!["sh".into(), "-c".into(), image_user_cmd(user, plan.uid)],
-            ..Default::default()
-        })
-        .context("matching the sandbox's image user to your host uid")?;
+    if let Some(user) = &sb.meta.user
+        && let Some(w) = map_image_user(vm, sb, user, plan.uid)?
+    {
+        eprintln!("{w}");
     }
     // The pre-4a path: a docker sandbox created before the docker kit has no startup runner.
     // With kits, the docker kit's startup hook starts dockerd (no second start here).
@@ -766,9 +791,39 @@ mod tests {
             image_user_cmd("somebody:staff", 501),
             "n='somebody'; case \"$n\" in *[!0-9]*) ;; \
              *) n=$(awk -F: -v u=\"$n\" '$3 == u { print $1; exit }' /etc/passwd);; esac; \
-             [ -n \"$n\" ] && u=$(id -u \"$n\" 2>/dev/null) || exit 0; \
+             [ -n \"$n\" ] && u=$(id -u \"$n\" 2>/dev/null) || exit 3; \
              [ \"$u\" = 0 ] || [ \"$u\" = 501 ] && exit 0; \
-             command -v usermod >/dev/null 2>&1 || exit 0; usermod -o -u 501 \"$n\""
+             command -v usermod >/dev/null 2>&1 || exit 3; usermod -o -u 501 \"$n\""
+        );
+    }
+
+    #[test]
+    fn an_unmappable_image_user_is_a_warning() {
+        let fake = FakeRunner::new();
+        fake.ok(&["machine", "status"], STATUS);
+        let vm = Smolvm::new(fake);
+        let sb = get(&vm, "claude-myrepo").unwrap();
+        assert_eq!(map_image_user(&vm, &sb, "somebody", 501).unwrap(), None);
+        vm.runner().on(
+            &[
+                "machine",
+                "exec",
+                "--name",
+                "sbx-claude-myrepo",
+                "-u",
+                "root",
+            ],
+            crate::smolvm::Output {
+                code: 3,
+                ..Default::default()
+            },
+        );
+        assert_eq!(
+            map_image_user(&vm, &sb, "1001", 501).unwrap().as_deref(),
+            Some(
+                "warning: claude-myrepo: couldn't map the image user 1001 to your uid; the \
+                 workspace may not be writable"
+            )
         );
     }
 
