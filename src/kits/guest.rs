@@ -104,9 +104,10 @@ pub fn as_user(user: Option<&str>, script: &str) -> String {
 }
 
 /// A kit's `startup.d` script: its startup hooks in order. A blocking hook runs to completion and
-/// logs `ok <script> hook N`; a failure exits with its code. A background hook is started in its
-/// own session (`setsid`, else `nohup`), so it outlives the runner's exec, and logs
-/// `started <script> hook N`; its failure is only logged.
+/// logs `ok <script> hook N`; a failure exits with its code. A background hook is started detached
+/// and logs `ok <script> hook N` at once, as sbx does; its failure is only logged. With `setsid` it
+/// gets its own session, so it outlives the runner's exec on a normal finish; the `nohup` fallback
+/// stays in the runner's process group, so a kill of that group takes it too.
 pub fn startup_script(kit: &str, hooks: &[&Hook]) -> String {
     // The kit name only appears quoted.
     let mut s = String::from("#!/bin/sh\n# Kit startup hooks (written by smolbento).\ncd /\n");
@@ -121,9 +122,7 @@ pub fn startup_script(kit: &str, hooks: &[&Hook]) -> String {
             let body = sh_quote(&format!(
                 "if {{ {run}; }}; then :; else echo {failed} \"(exit $?)\"; fi"
             ));
-            s.push_str(&format!(
-                "$d sh -c {body} &\necho \"started $0 hook {n}\"\n"
-            ));
+            s.push_str(&format!("$d sh -c {body} &\necho \"ok $0 hook {n}\"\n"));
         } else {
             s.push_str(&format!(
                 "if {{ {run}; }}; then echo \"ok $0 hook {n}\"; \
@@ -668,7 +667,7 @@ mod tests {
         );
         let log = s.log();
         let dir = s.path("startup.d");
-        let svc = log.find(&format!("started {dir}/01-svc.sh hook 1\n"));
+        let svc = log.find(&format!("ok {dir}/01-svc.sh hook 1\n"));
         let use_ = log.find(&format!("ok {dir}/02-use.sh hook 1\n"));
         assert!(svc.is_some() && use_.is_some() && svc < use_, "{log}");
     }
@@ -708,8 +707,8 @@ mod tests {
         assert!(
             at("'echo a'") < at("hook 1\"")
                 && at("hook 1\"") < at("echo b")
-                && at("echo b") < at("started $0 hook 2")
-                && at("started $0 hook 2") < at("'echo c'"),
+                && at("echo b") < at("ok $0 hook 2")
+                && at("ok $0 hook 2") < at("'echo c'"),
             "{s}"
         );
         assert!(s.contains("$d sh -c "), "{s}");
