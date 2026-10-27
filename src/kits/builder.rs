@@ -21,7 +21,7 @@ pub const BUILDER: &str = "_builder";
 pub const BUILDER_IMAGE: &str = "docker/sandbox-templates:shell-docker-0.10.0";
 
 const MEMORY_MIB: u64 = 4096;
-const SYNTAX: &str = "# syntax=docker/sandbox-kit:3";
+pub(crate) const SYNTAX: &str = "# syntax=docker/sandbox-kit:3";
 /// `docker info` tries, a second apart, before dockerd counts as not starting.
 const DOCKER_WAIT: u32 = 30;
 /// How much of a failed build's output the error shows.

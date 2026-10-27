@@ -3,6 +3,7 @@
 pub mod args;
 pub mod builder;
 pub mod compose;
+pub mod load;
 pub mod model;
 pub mod registry;
 pub mod resolve;
