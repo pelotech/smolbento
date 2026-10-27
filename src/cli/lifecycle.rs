@@ -421,6 +421,15 @@ mod tests {
         fake.fail(&["machine", "start"], "START_FAILED", "boot failed");
         assert!(sbt(&mut t.ctx, &["create", "claude", ".", "--deny-network"]).is_err());
         assert!(Policy::load(&t.ctx.paths).unwrap().sandboxes["claude-proj"].deny_network);
+
+        // No policy chosen and no terminal: create stops before recording --deny-network, and the
+        // rollback doesn't write a policy.toml either.
+        let mut t = test_env(&[]);
+        std::fs::remove_file(t.ctx.paths.policy_file()).unwrap();
+        let fake = t.ctx.vm.runner();
+        fake.fail(&["machine", "status"], "NOT_FOUND", "vm not found");
+        assert!(sbt(&mut t.ctx, &["create", "claude", ".", "--deny-network"]).is_err());
+        assert!(!t.ctx.paths.policy_file().exists());
     }
 
     #[test]

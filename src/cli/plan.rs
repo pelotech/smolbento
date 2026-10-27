@@ -168,7 +168,9 @@ pub fn create<R: Runner>(
     })();
     if result.is_err() && deny_network && matches!(sandbox::find(&ctx.vm, &req.name), Ok(None)) {
         // Best effort: the create error is what matters.
-        if let Ok(mut policy) = Policy::load(&ctx.paths) {
+        if let Ok(mut policy) = Policy::load(&ctx.paths)
+            && policy.sandboxes.contains_key(&req.name)
+        {
             policy.set_deny_network(&req.name, false);
             let _ = policy.save(&ctx.paths);
         }
