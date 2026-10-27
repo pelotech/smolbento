@@ -6,9 +6,9 @@ pub mod name;
 pub mod options;
 pub mod session;
 
-use anyhow::{Context, Result, bail};
+use anyhow::{Context, Result};
 
-use crate::smolvm::{ExecSpec, Machine, MachineState, PublishedPort, Runner, Smolvm};
+use crate::smolvm::{ExecSpec, Machine, MachineState, NetworkSpec, PublishedPort, Runner, Smolvm};
 use crate::workspace::MOUNTLESS_WORKDIR;
 
 pub use create::CreateRequest;
@@ -29,6 +29,18 @@ pub fn identity_cmd(uid: u32) -> String {
 pub fn host_uid() -> u32 {
     // SAFETY: getuid has no preconditions and cannot fail.
     unsafe { libc::getuid() }
+}
+
+/// What a start needs beyond the machine: its network, the secret values for its credentials
+/// (only ever passed as env to `machine start`), and the uid for the agent user.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct StartPlan {
+    pub network: NetworkSpec,
+    pub env: Vec<(String, String)>,
+    /// Credential env vars without a value, removed from the inherited environment so the host
+    /// shell's same-named variables can't stand in for them.
+    pub remove: Vec<String>,
+    pub uid: u32,
 }
 
 #[derive(Debug, Clone, PartialEq)]
@@ -96,14 +108,15 @@ pub fn list<R: Runner>(vm: &Smolvm<R>) -> Result<Vec<Sandbox>> {
     Ok(out)
 }
 
-/// Starts the machine, then its startup steps.
-/// `uid` is the host user's uid, given to the image's `agent` user.
-pub fn start<R: Runner>(vm: &Smolvm<R>, sb: &Sandbox, uid: u32) -> Result<()> {
-    vm.start(&sb.machine)?;
+/// Applies the network to the stopped machine, starts it with the secret env, then its setup steps.
+pub fn start<R: Runner>(vm: &Smolvm<R>, sb: &Sandbox, plan: &StartPlan) -> Result<()> {
+    vm.update_network(&sb.machine, &plan.network)
+        .context("applying the network policy")?;
+    vm.start(&sb.machine, &plan.env, &plan.remove)?;
     vm.exec_captured(&ExecSpec {
         name: sb.machine.clone(),
         user: Some("root".into()),
-        cmd: vec!["sh".into(), "-c".into(), identity_cmd(uid)],
+        cmd: vec!["sh".into(), "-c".into(), identity_cmd(plan.uid)],
         ..Default::default()
     })
     .context("matching the sandbox's agent user to your host uid")?;
@@ -120,28 +133,33 @@ pub fn start<R: Runner>(vm: &Smolvm<R>, sb: &Sandbox, uid: u32) -> Result<()> {
     Ok(())
 }
 
-pub fn ensure_running<R: Runner>(vm: &Smolvm<R>, sb: &mut Sandbox, uid: u32) -> Result<()> {
+/// Starts the sandbox if needed. The plan is only computed for a start, because resolving secrets
+/// can ask for Touch ID.
+pub fn ensure_running<R: Runner>(
+    vm: &Smolvm<R>,
+    sb: &mut Sandbox,
+    plan: impl FnOnce() -> Result<StartPlan>,
+) -> Result<()> {
     if !sb.is_running() {
-        start(vm, sb, uid)?;
+        start(vm, sb, &plan()?)?;
         sb.state = MachineState::Running;
     }
     Ok(())
 }
 
-/// Creates and starts a new sandbox.
-pub fn create<R: Runner>(vm: &Smolvm<R>, req: &CreateRequest, uid: u32) -> Result<Sandbox> {
-    if find(vm, &req.name)?.is_some() {
-        bail!("sandbox '{}' already exists", req.name);
-    }
+/// Creates and starts a new sandbox (the caller checked the name is free).
+pub fn create<R: Runner>(vm: &Smolvm<R>, req: &CreateRequest, plan: &StartPlan) -> Result<Sandbox> {
     vm.create(&create::spec(req))?;
     let mut sb = get(vm, &req.name)?;
-    ensure_running(vm, &mut sb, uid)?;
+    start(vm, &sb, plan)?;
+    sb.state = MachineState::Running;
     Ok(sb)
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::smolvm::NetworkSpec;
     use crate::smolvm::fake::FakeRunner;
 
     const STATUS: &str = include_str!("../../tests/fixtures/smolvm/status.json");
@@ -180,8 +198,17 @@ mod tests {
         assert_eq!(list[0].ports.len(), 1);
     }
 
+    fn plan() -> StartPlan {
+        StartPlan {
+            network: NetworkSpec::Open,
+            env: vec![("TOK".into(), "secret".into())],
+            remove: vec!["GONE".into()],
+            uid: 501,
+        }
+    }
+
     #[test]
-    fn starting_a_docker_sandbox_starts_dockerd() {
+    fn start_applies_network_then_starts_with_env_then_setup() {
         let fake = FakeRunner::new();
         fake.ok(
             &["machine", "status"],
@@ -189,26 +216,37 @@ mod tests {
         );
         let vm = Smolvm::new(fake);
         let mut sb = get(&vm, "claude-myrepo").unwrap();
-        ensure_running(&vm, &mut sb, 501).unwrap();
+        ensure_running(&vm, &mut sb, || Ok(plan())).unwrap();
         assert!(sb.is_running());
         let lines = vm.runner().call_lines();
-        assert_eq!(lines[1], "machine start -n sbx-claude-myrepo");
         assert_eq!(
-            lines[2],
-            format!(
-                "machine exec --name sbx-claude-myrepo -u root -- sh -c {}",
-                identity_cmd(501)
-            )
+            lines[1],
+            "machine update -n sbx-claude-myrepo --net --reset-allow-list"
         );
+        assert_eq!(lines[2], "machine start -n sbx-claude-myrepo");
         assert!(
-            lines[2].ends_with("usermod -o -u 501 agent"),
+            lines[3].ends_with("usermod -o -u 501 agent"),
             "{}",
-            lines[2]
+            lines[3]
         );
         assert_eq!(
-            lines[3],
+            lines[4],
             format!("machine exec --name sbx-claude-myrepo -u root -d -- sh -c {DOCKER_START}")
         );
+        assert_eq!(
+            vm.runner().envs(),
+            vec![vec![("TOK".to_string(), "secret".to_string())]]
+        );
+        assert_eq!(vm.runner().removed(), vec![vec!["GONE".to_string()]]);
+    }
+
+    #[test]
+    fn running_sandboxes_skip_the_plan() {
+        let fake = FakeRunner::new();
+        fake.ok(&["machine", "status"], STATUS);
+        let vm = Smolvm::new(fake);
+        let mut sb = get(&vm, "claude-myrepo").unwrap();
+        ensure_running(&vm, &mut sb, || panic!("plan must not be computed")).unwrap();
     }
 
     #[test]
@@ -220,52 +258,35 @@ mod tests {
     }
 
     #[test]
-    fn create_refuses_existing_then_creates_and_starts() {
+    fn create_creates_and_starts() {
         let req = create::CreateRequest {
             name: "claude-myrepo".into(),
             agent: "claude".into(),
             image: "img".into(),
-            workspaces: vec![],
             cpus: 1,
             memory_mib: 1024,
-            env: vec![],
-            ports: vec![],
-            docker: false,
             created: 1,
+            ..Default::default()
         };
-        let fake = FakeRunner::new();
-        fake.ok(&["machine", "status"], STATUS);
-        assert!(
-            create(&Smolvm::new(fake), &req, 501)
-                .unwrap_err()
-                .to_string()
-                .contains("already exists")
-        );
-
         let fake = FakeRunner::new();
         let created = STATUS
             .replace("\"state\": \"running\"", "\"state\": \"created\"")
             .replace("\"true\"", "\"false\"");
-        fake.ok(&["machine", "status"], &created).once_fail(
-            &["machine", "status"],
-            "NOT_FOUND",
-            "vm not found",
-        );
+        fake.ok(&["machine", "status"], &created);
         let vm = Smolvm::new(fake);
-        let sb = create(&vm, &req, 501).unwrap();
+        let sb = create(&vm, &req, &plan()).unwrap();
         assert!(sb.is_running());
         let lines = vm.runner().call_lines();
         assert!(
-            lines[1].starts_with("machine create -n sbx-claude-myrepo --image img"),
+            lines[0].starts_with("machine create -n sbx-claude-myrepo --image img"),
             "{}",
-            lines[1]
+            lines[0]
+        );
+        assert_eq!(
+            lines[2],
+            "machine update -n sbx-claude-myrepo --net --reset-allow-list"
         );
         assert_eq!(lines[3], "machine start -n sbx-claude-myrepo");
-        assert!(
-            lines[4].ends_with("usermod -o -u 501 agent"),
-            "{}",
-            lines[4]
-        );
         assert_eq!(
             lines.len(),
             5,

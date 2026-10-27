@@ -32,6 +32,8 @@ pub fn test_env(extra_env: &[(&str, &str)]) -> TestEnv {
         env.insert(k.to_string(), v.to_string());
     }
     let paths = Paths::from_env(&env).unwrap();
+    std::fs::create_dir_all(&paths.config).unwrap();
+    std::fs::write(paths.policy_file(), "mode = \"allow-all\"\n").unwrap();
     let (settings, config_error) = Settings::load(&paths, env.clone());
     let fake = FakeRunner::new();
     fake.ok(&["--version"], "smolvm 1.32.2\n");
@@ -48,6 +50,7 @@ pub fn test_env(extra_env: &[(&str, &str)]) -> TestEnv {
             now: 1_000_000,
             stdin_tty: false,
             uid: 501,
+            store: Box::new(crate::secrets::store::MemoryStore::default()),
             config_error,
         },
         _dir: dir,
@@ -62,6 +65,11 @@ pub fn break_config(t: &mut TestEnv) {
     let (settings, config_error) = Settings::load(&t.ctx.paths, t.ctx.env.clone());
     t.ctx.settings = settings;
     t.ctx.config_error = config_error;
+}
+
+/// Replaces policy.toml.
+pub fn set_policy(t: &TestEnv, toml: &str) {
+    std::fs::write(t.ctx.paths.policy_file(), toml).unwrap();
 }
 
 pub fn sbt(ctx: &mut Ctx<FakeRunner>, args: &[&str]) -> Result<i32> {

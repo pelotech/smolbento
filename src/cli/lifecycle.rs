@@ -4,6 +4,7 @@ use std::time::UNIX_EPOCH;
 
 use anyhow::{Context, Result, bail};
 
+use super::plan;
 use super::{CreateArgs, Ctx, PruneArgs, ResetArgs, RmArgs, SandboxOpts, confirm};
 use crate::agents;
 use crate::sandbox::{self, CreateRequest, Sandbox, name, options, session};
@@ -78,6 +79,7 @@ pub(crate) fn build_request<R: Runner>(
         ports,
         docker,
         created: ctx.now,
+        ..Default::default()
     })
 }
 
@@ -86,8 +88,8 @@ pub fn create<R: Runner>(ctx: &mut Ctx<R>, a: &CreateArgs) -> Result<i32> {
         .targets
         .split_first()
         .context("specify an agent, e.g. `sbt create claude .`")?;
-    let req = build_request(ctx, agent, paths, &a.opts, false)?;
-    let sb = sandbox::create(&ctx.vm, &req, ctx.uid)?;
+    let mut req = build_request(ctx, agent, paths, &a.opts, false)?;
+    let sb = plan::create(ctx, &mut req, a.opts.deny_network)?;
     println!("Created sandbox {}", sb.name());
     Ok(0)
 }
@@ -99,7 +101,8 @@ pub fn start<R: Runner>(ctx: &mut Ctx<R>, names: &[String]) -> Result<i32> {
             println!("{n} is already running");
             continue;
         }
-        sandbox::start(&ctx.vm, &sb, ctx.uid)?;
+        let start_plan = plan::start_plan(ctx, &sb.meta)?;
+        sandbox::start(&ctx.vm, &sb, &start_plan)?;
         println!("Started {n}");
     }
     Ok(0)
@@ -107,19 +110,26 @@ pub fn start<R: Runner>(ctx: &mut Ctx<R>, names: &[String]) -> Result<i32> {
 
 pub fn stop<R: Runner>(ctx: &mut Ctx<R>, names: &[String]) -> Result<i32> {
     for n in names {
-        let sb = sandbox::get(&ctx.vm, n)?;
-        if sb.is_running() {
-            ctx.vm.stop(&sb.machine)?;
-        }
-        session::clear(&ctx.paths.sessions(), n);
-        println!("Stopped {n}");
+        stop_sandbox(ctx, &sandbox::get(&ctx.vm, n)?)?;
     }
     Ok(0)
 }
 
-fn remove<R: Runner>(ctx: &Ctx<R>, sb: &Sandbox) -> Result<()> {
+/// Stops `sb` if it's running and forgets its sessions.
+pub(crate) fn stop_sandbox<R: Runner>(ctx: &Ctx<R>, sb: &Sandbox) -> Result<()> {
+    if sb.is_running() {
+        ctx.vm.stop(&sb.machine)?;
+    }
+    session::clear(&ctx.paths.sessions(), sb.name());
+    println!("Stopped {}", sb.name());
+    Ok(())
+}
+
+/// Deletes a sandbox and its per-sandbox policy; `forget_secrets` also drops its own secrets.
+fn remove<R: Runner>(ctx: &Ctx<R>, sb: &Sandbox, forget_secrets: bool) -> Result<()> {
     ctx.vm.delete(&sb.machine)?;
     session::clear(&ctx.paths.sessions(), sb.name());
+    super::secret::forget_sandbox(ctx, sb.name(), forget_secrets)?;
     println!("Removed {}", sb.name());
     Ok(())
 }
@@ -143,7 +153,7 @@ pub fn rm<R: Runner>(ctx: &mut Ctx<R>, a: &RmArgs) -> Result<i32> {
     let names: Vec<&str> = targets.iter().map(Sandbox::name).collect();
     confirm(ctx, &format!("Remove {}?", names.join(", ")), a.force)?;
     for sb in &targets {
-        remove(ctx, sb)?;
+        remove(ctx, sb, true)?;
     }
     Ok(0)
 }
@@ -191,22 +201,24 @@ pub fn prune<R: Runner>(ctx: &mut Ctx<R>, a: &PruneArgs) -> Result<i32> {
         a.force,
     )?;
     for sb in &targets {
-        remove(ctx, sb)?;
+        remove(ctx, sb, true)?;
     }
     Ok(0)
 }
 
 pub fn reset<R: Runner>(ctx: &mut Ctx<R>, a: &ResetArgs) -> Result<i32> {
-    // smolbento stores no secrets yet, so --preserve-secrets has nothing to preserve.
     confirm(
         ctx,
         "Remove every sandbox and smolbento's session state?",
         a.force,
     )?;
     for sb in sandbox::list(&ctx.vm)? {
-        remove(ctx, &sb)?;
+        remove(ctx, &sb, !a.preserve_secrets)?;
     }
     let _ = std::fs::remove_dir_all(ctx.paths.sessions());
+    if !a.preserve_secrets {
+        super::secret::forget_all(ctx)?;
+    }
     Ok(0)
 }
 
@@ -291,6 +303,133 @@ mod tests {
                 .call_lines()
                 .contains(&"machine start -n sbx-claude-proj".to_string())
         );
+    }
+
+    #[test]
+    fn create_on_an_existing_name_fails_before_touching_the_policy() {
+        let mut t = test_env(&[]);
+        t.ctx.vm.runner().ok(
+            &["machine", "status"],
+            &json("sbx-claude-proj", "stopped", "claude-proj"),
+        );
+        let before = std::fs::read_to_string(t.ctx.paths.policy_file()).unwrap();
+        let err = sbt(&mut t.ctx, &["create", "claude", ".", "--deny-network"])
+            .unwrap_err()
+            .to_string();
+        assert!(
+            err.contains("sandbox 'claude-proj' already exists"),
+            "{err}"
+        );
+        assert_eq!(
+            std::fs::read_to_string(t.ctx.paths.policy_file()).unwrap(),
+            before
+        );
+        assert!(
+            !t.ctx
+                .vm
+                .runner()
+                .call_lines()
+                .iter()
+                .any(|l| l.contains("create") || l.contains("start"))
+        );
+    }
+
+    #[test]
+    fn create_deny_network_binds_global_secrets() {
+        use crate::policy::Policy;
+        use crate::secrets::{SecretEntry, SecretsFile, Source, scope_for};
+
+        let mut t = test_env(&[]);
+        let entry = SecretEntry {
+            service: "github".into(),
+            scope: scope_for(None),
+            source: Source::Keychain,
+        };
+        t.ctx.store.set(&entry.account(), "gh-123").unwrap();
+        let mut f = SecretsFile::default();
+        f.set(entry);
+        f.save(&t.ctx.paths).unwrap();
+        let fake = t.ctx.vm.runner();
+        fake.ok(
+            &["machine", "status"],
+            &json("sbx-claude-proj", "created", "claude-proj"),
+        );
+        fake.once_fail(&["machine", "status"], "NOT_FOUND", "vm not found");
+        sbt(&mut t.ctx, &["create", "claude", ".", "--deny-network"]).unwrap();
+
+        let lines = t.ctx.vm.runner().call_lines();
+        let create = lines
+            .iter()
+            .find(|l| l.starts_with("machine create"))
+            .unwrap();
+        assert!(
+            create.contains(" --credential gh_token=GH_TOKEN@api.github.com,github.com,"),
+            "{create}"
+        );
+        assert!(create.contains(" --label sbx.secrets=github "), "{create}");
+        assert!(
+            create.contains(
+                " --label sbx.credential-hosts=api.github.com,api.githubcopilot.com,\
+                 copilot.github.com,gist.github.com,github.com,raw.githubusercontent.com "
+            ),
+            "{create}"
+        );
+        assert!(
+            create.contains(" --label sbx.credential-env=GH_TOKEN,GITHUB_TOKEN "),
+            "{create}"
+        );
+        assert!(
+            !create.contains("--net "),
+            "deny-network is restricted: {create}"
+        );
+        assert!(Policy::load(&t.ctx.paths).unwrap().sandboxes["claude-proj"].deny_network);
+        let start = lines
+            .iter()
+            .position(|l| l == "machine start -n sbx-claude-proj");
+        let envs = t.ctx.vm.runner().envs();
+        assert!(start.is_some());
+        assert_eq!(
+            envs,
+            vec![vec![
+                ("GH_TOKEN".to_string(), "gh-123".to_string()),
+                ("GITHUB_TOKEN".to_string(), "gh-123".to_string())
+            ]]
+        );
+        assert!(!create.contains("gh-123"));
+    }
+
+    #[test]
+    fn a_failed_create_does_not_leave_deny_network_behind() {
+        use crate::policy::Policy;
+
+        let mut t = test_env(&[]);
+        let fake = t.ctx.vm.runner();
+        fake.fail(&["machine", "status"], "NOT_FOUND", "vm not found");
+        fake.fail(&["machine", "create"], "CREATE_FAILED", "no space left");
+        let err = sbt(&mut t.ctx, &["create", "claude", ".", "--deny-network"]).unwrap_err();
+        assert!(err.to_string().contains("no space left"), "{err:#}");
+        assert!(Policy::load(&t.ctx.paths).unwrap().sandboxes.is_empty());
+
+        // Created but failed to start: the machine exists, so it stays deny-all.
+        let mut t = test_env(&[]);
+        let fake = t.ctx.vm.runner();
+        fake.ok(
+            &["machine", "status"],
+            &json("sbx-claude-proj", "created", "claude-proj"),
+        );
+        fake.once_fail(&["machine", "status"], "NOT_FOUND", "vm not found");
+        fake.fail(&["machine", "start"], "START_FAILED", "boot failed");
+        assert!(sbt(&mut t.ctx, &["create", "claude", ".", "--deny-network"]).is_err());
+        assert!(Policy::load(&t.ctx.paths).unwrap().sandboxes["claude-proj"].deny_network);
+
+        // No policy chosen and no terminal: create stops before recording --deny-network, and the
+        // rollback doesn't write a policy.toml either.
+        let mut t = test_env(&[]);
+        std::fs::remove_file(t.ctx.paths.policy_file()).unwrap();
+        let fake = t.ctx.vm.runner();
+        fake.fail(&["machine", "status"], "NOT_FOUND", "vm not found");
+        assert!(sbt(&mut t.ctx, &["create", "claude", ".", "--deny-network"]).is_err());
+        assert!(!t.ctx.paths.policy_file().exists());
     }
 
     #[test]
@@ -399,6 +538,35 @@ mod tests {
     }
 
     #[test]
+    fn start_needs_a_policy() {
+        let mut t = test_env(&[]);
+        set_policy(&t, "");
+        t.ctx.vm.runner().ok(
+            &["machine", "status"],
+            &json("sbx-claude-proj", "stopped", "claude-proj"),
+        );
+        let err = sbt(&mut t.ctx, &["start", "claude-proj"])
+            .unwrap_err()
+            .to_string();
+        assert!(
+            err.contains("no network policy chosen yet; run `sbt policy init"),
+            "{err}"
+        );
+        let started = |t: &TestEnv| {
+            t.ctx
+                .vm
+                .runner()
+                .call_lines()
+                .into_iter()
+                .any(|l| l.starts_with("machine update") || l.starts_with("machine start"))
+        };
+        assert!(!started(&t));
+        sbt(&mut t.ctx, &["policy", "init", "balanced"]).unwrap();
+        sbt(&mut t.ctx, &["start", "claude-proj"]).unwrap();
+        assert!(started(&t));
+    }
+
+    #[test]
     fn rm_needs_force_without_a_terminal() {
         let mut t = test_env(&[]);
         t.ctx.vm.runner().ok(
@@ -470,5 +638,39 @@ mod tests {
             .filter(|l| l.contains("delete"))
             .count();
         assert_eq!(deletes, 2);
+    }
+
+    #[test]
+    fn reset_preserve_secrets_keeps_sandbox_scoped_secrets() {
+        use crate::policy::Policy;
+        use crate::secrets::{SecretEntry, SecretsFile, Source, scope_for};
+
+        let mut t = test_env(&[]);
+        let entry = SecretEntry {
+            service: "github".into(),
+            scope: scope_for(Some("a1")),
+            source: Source::Keychain,
+        };
+        t.ctx.store.set(&entry.account(), "gh-123").unwrap();
+        let mut f = SecretsFile::default();
+        f.set(entry.clone());
+        f.save(&t.ctx.paths).unwrap();
+        set_policy(
+            &t,
+            "mode = \"balanced\"\n[[sandboxes.a1.rules]]\nid = \"r-1\"\ndecision = \"allow\"\n\
+             resources = [\"a.com\"]\n",
+        );
+        t.ctx.vm.runner().ok(
+            &["machine", "ls", "--json"],
+            &format!("[{}]", json("sbx-a1", "stopped", "a1")),
+        );
+        sbt(&mut t.ctx, &["reset", "-f", "--preserve-secrets"]).unwrap();
+        let f = SecretsFile::load(&t.ctx.paths).unwrap();
+        assert_eq!(f.secrets, vec![entry.clone()]);
+        assert_eq!(
+            t.ctx.store.get(&entry.account()).unwrap().as_deref(),
+            Some("gh-123")
+        );
+        assert!(Policy::load(&t.ctx.paths).unwrap().sandboxes.is_empty());
     }
 }

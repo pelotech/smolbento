@@ -63,12 +63,14 @@ pub enum Cmd {
     Settings(SettingsCmd),
     /// Accepted for sbx compatibility; smolbento needs no daemon
     Daemon(Passthrough),
-    /// Publish or unpublish ports (not implemented yet)
-    Ports(Passthrough),
-    /// Network policy (not implemented yet)
-    Policy(Passthrough),
-    /// Secrets (not implemented yet)
-    Secret(Passthrough),
+    /// Publish or unpublish ports on a sandbox (127.0.0.1 only)
+    Ports(PortsArgs),
+    /// Network policy
+    #[command(subcommand)]
+    Policy(PolicyCmd),
+    /// Secrets for agents: sandboxes see placeholders, smolvm sends the real value
+    #[command(subcommand)]
+    Secret(SecretCmd),
     /// Kits (not implemented yet)
     Kit(Passthrough),
     /// MCP servers (not implemented yet)
@@ -148,6 +150,7 @@ impl Cmd {
                 | Cmd::Prune(_)
                 | Cmd::Reset(_)
                 | Cmd::Cp(_)
+                | Cmd::Ports(_)
         )
     }
 
@@ -162,6 +165,17 @@ impl Cmd {
                 | Cmd::Volume(_)
         )
     }
+}
+
+#[derive(Debug, Args)]
+pub struct PortsArgs {
+    pub sandbox: String,
+    /// [[127.0.0.1:]HOST:]PORT[/proto]; no host port picks a free one
+    #[arg(long)]
+    pub publish: Vec<String>,
+    /// HOST:PORT[/proto]
+    #[arg(long)]
+    pub unpublish: Vec<String>,
 }
 
 /// Arguments of a command that isn't implemented yet, kept so sbx command lines still parse.
@@ -208,7 +222,7 @@ pub struct SandboxOpts {
     pub kit_arg: Vec<String>,
     #[arg(long = "kit-args-file", hide = true)]
     pub kit_args_file: Vec<PathBuf>,
-    /// Deny network access for this sandbox (not implemented yet)
+    /// Deny all network access for this sandbox (bound secrets' hosts stay reachable)
     #[arg(long = "deny-network")]
     pub deny_network: bool,
     /// Agent skills: off, readonly or readwrite (not implemented yet)
@@ -240,7 +254,6 @@ impl SandboxOpts {
                 !self.kit.is_empty() || !self.kit_arg.is_empty() || !self.kit_args_file.is_empty(),
                 "--kit",
             ),
-            (self.deny_network, "--deny-network"),
             (self.skills.is_some(), "--skills"),
             (self.static_mcp.is_some(), "--static-mcp"),
         ];
@@ -411,4 +424,273 @@ pub enum SettingsCmd {
     Set { key: String, value: String },
     /// Reset a setting to its default
     Unset { key: String },
+}
+
+#[derive(Debug, Subcommand)]
+pub enum PolicyCmd {
+    /// Choose the network policy for all sandboxes
+    Init {
+        mode: crate::policy::Mode,
+        #[arg(long, hide = true)]
+        sandbox: Option<String>,
+    },
+    /// Allow network access
+    Allow {
+        #[command(subcommand)]
+        kind: RuleKind,
+    },
+    /// Deny network access
+    Deny {
+        #[command(subcommand)]
+        kind: RuleKind,
+    },
+    /// Remove rules
+    Rm {
+        #[command(subcommand)]
+        kind: PolicyRmKind,
+    },
+    /// List rules
+    Ls(PolicyLsArgs),
+    /// Show one rule
+    Inspect {
+        id: String,
+        #[arg(long)]
+        json: bool,
+    },
+    /// Show requests the policy blocked
+    Log(PolicyLogArgs),
+    /// Test whether a host is allowed
+    Check {
+        #[command(subcommand)]
+        kind: CheckKind,
+    },
+    /// Remove every rule and the chosen mode
+    Reset {
+        #[arg(short = 'f', long)]
+        force: bool,
+    },
+    /// Blocked hosts waiting for a decision
+    #[command(subcommand)]
+    Approval(ApprovalCmd),
+    #[command(hide = true)]
+    Refresh(Passthrough),
+}
+
+#[derive(Debug, Subcommand)]
+pub enum RuleKind {
+    /// Network rule
+    Network(RuleArgs),
+}
+
+#[derive(Debug, Args)]
+pub struct RuleArgs {
+    /// Comma-separated hosts, wildcards (*.x, **.x), IPs or CIDRs
+    pub resources: String,
+    /// Apply to one sandbox only
+    #[arg(long)]
+    pub sandbox: Option<String>,
+    /// Only tcp is supported
+    #[arg(long)]
+    pub protocol: Option<String>,
+    /// HTTP methods (stored, not enforced)
+    #[arg(long)]
+    pub method: Option<String>,
+    /// HTTP path (stored, not enforced)
+    #[arg(long)]
+    pub path: Option<String>,
+}
+
+#[derive(Debug, Subcommand)]
+pub enum PolicyRmKind {
+    /// Remove network rules
+    Network(PolicyRmArgs),
+}
+
+#[derive(Debug, Args)]
+pub struct PolicyRmArgs {
+    /// Rule id
+    #[arg(long)]
+    pub id: Option<String>,
+    /// Remove this resource from every rule listing it
+    #[arg(long)]
+    pub resource: Option<String>,
+    #[arg(long)]
+    pub sandbox: Option<String>,
+    #[arg(short = 'f', long)]
+    pub force: bool,
+}
+
+#[derive(Debug, Default, Args)]
+pub struct PolicyLsArgs {
+    /// Only rules that apply to this sandbox
+    pub sandbox: Option<String>,
+    /// Show every resource and enforcement notes
+    #[arg(long)]
+    pub wide: bool,
+    #[arg(long, value_enum)]
+    pub format: Option<Format>,
+    #[arg(long)]
+    pub json: bool,
+    #[arg(short = 'q', long)]
+    pub quiet: bool,
+    #[arg(long, hide = true)]
+    pub source: Option<String>,
+    /// Only allow or only deny rules
+    #[arg(long, value_name = "allow|deny")]
+    pub decision: Option<String>,
+    #[arg(long = "created-via", hide = true)]
+    pub created_via: Option<String>,
+    #[arg(long = "type", hide = true)]
+    pub kind: Option<String>,
+    #[arg(long, hide = true)]
+    pub protocol: Option<String>,
+    #[arg(long = "include-inactive", hide = true)]
+    pub include_inactive: bool,
+}
+
+#[derive(Debug, Args)]
+pub struct PolicyLogArgs {
+    pub sandbox: Option<String>,
+    /// Events read per sandbox
+    #[arg(long, default_value_t = 50)]
+    pub limit: usize,
+    /// all, network or filesystem (only network has events)
+    #[arg(long = "type")]
+    pub kind: Option<String>,
+    #[arg(long)]
+    pub json: bool,
+}
+
+#[derive(Debug, Subcommand)]
+pub enum CheckKind {
+    /// Check a network destination
+    Network(CheckArgs),
+}
+
+#[derive(Debug, Args)]
+pub struct CheckArgs {
+    pub target: String,
+    #[arg(long)]
+    pub sandbox: Option<String>,
+    #[arg(long)]
+    pub protocol: Option<String>,
+    #[arg(long)]
+    pub verbose: bool,
+}
+
+#[derive(Debug, Subcommand)]
+pub enum ApprovalCmd {
+    /// Blocked hosts with no rule yet
+    Ls {
+        #[arg(long)]
+        json: bool,
+    },
+    /// Show one blocked host
+    Inspect { id: String },
+    /// Allow or deny a blocked host
+    Respond {
+        /// The blocked host (as shown by `approval ls`)
+        id: String,
+        decision: crate::policy::Decision,
+        #[arg(long)]
+        sandbox: Option<String>,
+    },
+}
+
+#[derive(Debug, Subcommand)]
+pub enum SecretCmd {
+    /// Set a secret for a built-in service (anthropic, claude, github, openai, …)
+    Set(SecretSetArgs),
+    /// Set a secret for any host and environment variable
+    SetCustom(SecretCustomArgs),
+    /// List secrets (never values)
+    Ls(SecretLsArgs),
+    /// Remove secrets
+    Rm(SecretRmArgs),
+    #[command(hide = true)]
+    Import(Passthrough),
+}
+
+#[derive(Debug, Args)]
+pub struct SecretSource {
+    /// The value (prefer the prompt: values on the command line reach shell history)
+    #[arg(short = 't', long = "token", alias = "value")]
+    pub token: Option<String>,
+    /// op://vault/item/field (1Password) or an AWS Secrets Manager ARN, read at each start
+    #[arg(long = "ref")]
+    pub reference: Option<String>,
+    /// Host command whose output is the value, run at each start
+    #[arg(long)]
+    pub command: Option<String>,
+    /// Only for this sandbox
+    #[arg(long)]
+    pub sandbox: Option<String>,
+}
+
+#[derive(Debug, Args)]
+pub struct SecretSetArgs {
+    pub service: Option<String>,
+    #[command(flatten)]
+    pub source: SecretSource,
+    #[arg(short = 'f', long)]
+    pub force: bool,
+    #[arg(long, hide = true)]
+    pub oauth: bool,
+    #[arg(long, hide = true)]
+    pub registry: Option<String>,
+    #[arg(long, hide = true)]
+    pub username: Option<String>,
+    #[arg(long = "password-stdin", hide = true)]
+    pub password_stdin: bool,
+    #[arg(long, hide = true)]
+    pub refresh: Option<String>,
+    #[arg(long = "all-sandboxes", hide = true)]
+    pub all_sandboxes: bool,
+    #[arg(long = "no-verify", hide = true)]
+    pub no_verify: bool,
+    #[arg(long = "show-error", hide = true)]
+    pub show_error: bool,
+}
+
+#[derive(Debug, Args)]
+pub struct SecretCustomArgs {
+    /// Hosts the secret is sent to (repeatable)
+    #[arg(long = "host", required = true)]
+    pub hosts: Vec<String>,
+    /// Environment variable that holds the placeholder
+    #[arg(long, required = true)]
+    pub env: String,
+    #[command(flatten)]
+    pub source: SecretSource,
+    #[arg(long, hide = true)]
+    pub placeholder: Option<String>,
+}
+
+#[derive(Debug, Args)]
+pub struct SecretLsArgs {
+    /// Only global secrets
+    #[arg(short = 'g', long)]
+    pub global: bool,
+    #[arg(long)]
+    pub sandbox: Option<String>,
+    #[arg(long)]
+    pub service: Option<String>,
+    #[arg(short = 'q', long)]
+    pub quiet: bool,
+}
+
+#[derive(Debug, Args)]
+pub struct SecretRmArgs {
+    pub service: Option<String>,
+    #[arg(long)]
+    pub sandbox: Option<String>,
+    /// Remove every secret
+    #[arg(long)]
+    pub all: bool,
+    #[arg(short = 'f', long)]
+    pub force: bool,
+    #[arg(long, hide = true)]
+    pub registry: Option<String>,
+    #[arg(long = "all-sandboxes", hide = true)]
+    pub all_sandboxes: bool,
 }

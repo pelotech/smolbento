@@ -1,0 +1,24 @@
+---
+source: tests/help.rs
+expression: help(&path)
+---
+Publish or unpublish ports on a sandbox (127.0.0.1 only)
+
+Usage: sbt ports [OPTIONS] <SANDBOX>
+
+Arguments:
+  <SANDBOX>
+
+
+Options:
+  -D, --debug
+          Print each smolvm command line
+
+      --publish <PUBLISH>
+          [[127.0.0.1:]HOST:]PORT[/proto]; no host port picks a free one
+
+      --unpublish <UNPUBLISH>
+          HOST:PORT[/proto]
+
+  -h, --help
+          Print help

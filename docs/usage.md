@@ -106,6 +106,109 @@ Workspaces are mounted at the same absolute path as on your machine, so paths in
 match. Inside the sandbox the `agent` user has your uid, so files the agent creates show up on your
 machine owned by you. Files the agent creates are private to you (mode 600/700).
 
+## Network policy
+
+Creating or starting a sandbox needs a network policy. The first time, `sbt` asks which one your
+sandboxes get, and saves the answer:
+
+| Mode | Meaning |
+|---|---|
+| `allow-all` | Open network |
+| `balanced` | Default deny, plus Docker Sandboxes' baseline: AI APIs, package registries, code hosts, container registries, cloud services, OS packages, certificate checks (and the Nix caches) |
+| `deny-all` | Nothing, unless you allow it |
+
+Without a terminal it can't ask and fails instead, so scripts and CI choose it up front:
+`sbt policy init balanced`.
+
+```sh
+sbt policy allow network api.example.com,*.example.org   # applies to running sandboxes at once
+sbt policy deny network tracking.example.com
+sbt policy allow network internal.example.com --sandbox claude-myrepo
+sbt policy ls                       # --wide shows every host and enforcement notes
+sbt policy check network pypi.org   # exits 1 when denied, and says which rule decided
+sbt policy log                      # requests sandboxes made that were blocked
+sbt policy approval ls              # blocked hosts with no rule yet
+sbt policy approval respond registry.example.com allow
+sbt policy rm network --resource api.example.com
+sbt create --deny-network claude    # this sandbox gets deny-all, whatever the global mode
+```
+
+Rules take hosts (`api.x.com`), wildcards (`*.x.com`, `**.x.com`), IPs and CIDRs,
+comma-separated; `**` allows everything. See [sbx compatibility](sbx-compatibility.md) for where
+smolvm enforces a rule more loosely.
+
+Good to know:
+
+- `--deny-network` only applies when a sandbox is created; `sbt run --deny-network` on an existing
+  sandbox warns and changes nothing.
+- Hosts used by a sandbox's secrets, and their subdomains, are always reachable from it, so
+  `policy deny` of such a host, or of one under it, is refused and names the secret's service.
+- `balanced` is Docker's list of 195 rules; smolbento allows those hosts on any port (sbx limits
+  them to 443).
+- A deny with a port (`host.example.com:8080`, `10.0.0.0/8:22`) isn't enforced at all: smolvm can't
+  filter by port, so the host stays reachable on every port. Deny the host without a port to block
+  it. The one exception: a deny with exactly the same text as an allow rule cancels that allow.
+  `policy deny` says so when you add one, `policy ls` notes rules that aren't fully enforced, and
+  `policy ls --wide` and `policy check` show the details. `policy check` takes a port the same way
+  (`host.example.com:8080`); without one it checks port 443.
+- `sbt policy reset` stops running sandboxes, then removes the mode and every rule;
+  `--deny-network` sandboxes stay deny-all. The next create or start asks for a mode again.
+- Blocked requests come from smolvm's egress log. `policy approval` lists the hosts with no rule
+  yet; the host is the approval id.
+
+## Secrets
+
+Agents never see your API keys: inside the sandbox the variable holds a placeholder, and smolvm
+swaps in the real value only on HTTPS requests to that service's hosts.
+
+```sh
+sbt secret set anthropic                    # prompts (hidden input; an empty line cancels)
+sbt secret set claude --ref op://Private/claude-sandbox/credential   # 1Password, read at each start
+sbt secret set github --command 'gh auth token'                      # run at each start
+sbt secret set openai --sandbox claude-myrepo -t sk-…                # one sandbox only
+sbt secret set-custom --host api.example.com --env EXAMPLE_TOKEN --command 'pass show example'
+sbt secret ls
+sbt secret rm github
+```
+
+`--ref` takes an `op://…` reference or an AWS Secrets Manager ARN (the ARN's region is used).
+Values typed at the prompt or given with `-t` go to your OS keychain; see
+[Configuration](configuration.md#secret-values).
+
+`set-custom` takes bare host names (`api.example.com`, no scheme, port, path or IP; repeat
+`--host` for more), or `*.example.com` for every subdomain of a domain (`*.com` is refused, as smolvm
+refuses it; smolvm has no public suffix list, so `*.co.uk` is accepted). It warns when a host name
+doesn't resolve: smolvm looks them up when it creates a sandbox, and the create fails while one
+doesn't resolve.
+Removing a custom service's last secret (in any scope) removes the service too.
+
+Built-in services: `anthropic`, `claude` (Claude Code's `claude setup-token` token), `cursor`,
+`droid`, `github`, `google`, `groq`, `mistral`, `nebius`, `openai`, `openrouter`, `xai`.
+
+When things take effect:
+
+- A sandbox binds the services that have a secret when it's **created**, and can always reach
+  those services' hosts.
+- A new value for a bound service applies on the sandbox's **next start** (sandboxes stop after each
+  session, so usually the next `sbt run`).
+- A secret for a service a sandbox wasn't created with needs the sandbox **recreated**; `secret set`
+  tells you which.
+
+`sbt rm` removes that sandbox's own secrets and its per-sandbox policy. `sbt reset` removes all
+secrets too, unless you pass `--preserve-secrets`.
+
+## Ports
+
+```sh
+sbt ports claude-myrepo --publish 3000          # picks a free host port; works while running
+sbt ports claude-myrepo --publish 8080:80
+sbt ports claude-myrepo                         # list
+sbt ports claude-myrepo --unpublish 8080:80
+```
+
+Ports bind `127.0.0.1`. UDP ports can only be changed while the sandbox is stopped, so a change
+that includes one doesn't start it.
+
 ## Copy files
 
 ```sh

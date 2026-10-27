@@ -4,6 +4,7 @@
 use anyhow::{Context, Result, bail};
 
 use super::lifecycle::build_request;
+use super::plan;
 use super::{Ctx, RunArgs, Unsupported};
 use crate::agents;
 use crate::sandbox::{self, session};
@@ -29,22 +30,28 @@ pub fn run<R: Runner>(ctx: &mut Ctx<R>, a: &RunArgs) -> Result<i32> {
         Some(n) => sandbox::find(&ctx.vm, n)?,
         None => None,
     };
-    let mut sb = match existing {
-        Some(sb) => sb,
+    let (mut sb, created) = match existing {
+        Some(sb) => (sb, false),
         None => {
             let Some((agent, paths)) = a.targets.split_first() else {
                 bail!(
                     "specify an agent (e.g. `sbt run claude`) or the --name of an existing sandbox"
                 );
             };
-            let req = build_request(ctx, agent, paths, &a.opts, true)?;
+            let mut req = build_request(ctx, agent, paths, &a.opts, true)?;
             match sandbox::find(&ctx.vm, &req.name)? {
-                Some(sb) => sb,
-                None => sandbox::create(&ctx.vm, &req, ctx.uid)?,
+                Some(sb) => (sb, false),
+                None => (plan::create(ctx, &mut req, a.opts.deny_network)?, true),
             }
         }
     };
-    sandbox::ensure_running(&ctx.vm, &mut sb, ctx.uid)?;
+    if a.opts.deny_network && !created {
+        eprintln!(
+            "warning: --deny-network only applies when a sandbox is created; {} already exists",
+            sb.name()
+        );
+    }
+    plan::ensure_running(ctx, &mut sb)?;
 
     let sessions = ctx.paths.sessions();
     if a.detach {
@@ -114,7 +121,7 @@ mod tests {
     fn creates_attaches_and_stops_after_the_last_session() {
         let mut t = test_env(&[]);
         created(&t, "created");
-        // run looks the name up, then sandbox::create checks again before creating.
+        // run looks the name up, then plan::create checks again before creating.
         t.ctx
             .vm
             .runner()
@@ -154,6 +161,49 @@ mod tests {
         assert_eq!(
             session::live_sessions(&t.ctx.paths.sessions(), "claude-proj"),
             0
+        );
+    }
+
+    #[test]
+    fn a_failed_create_does_not_leave_deny_network_behind() {
+        let mut t = test_env(&[]);
+        let fake = t.ctx.vm.runner();
+        fake.fail(&["machine", "status"], "NOT_FOUND", "vm not found");
+        fake.fail(&["machine", "create"], "CREATE_FAILED", "no space left");
+        assert!(sbt(&mut t.ctx, &["run", "claude", "--deny-network"]).is_err());
+        let p = crate::policy::Policy::load(&t.ctx.paths).unwrap();
+        assert!(p.sandboxes.is_empty(), "{p:?}");
+    }
+
+    #[test]
+    fn running_an_existing_sandbox_records_nothing_and_starting_it_needs_a_policy() {
+        let mut t = test_env(&[]);
+        std::fs::remove_file(t.ctx.paths.policy_file()).unwrap();
+        created(&t, "running");
+        t.ctx.vm.runner().interactive_exit(0);
+        assert_eq!(
+            sbt(&mut t.ctx, &["run", "claude", "--deny-network"]).unwrap(),
+            0
+        );
+        assert!(!t.ctx.paths.policy_file().exists());
+        let lines = t.ctx.vm.runner().call_lines();
+        assert!(!lines.iter().any(|l| l.contains("create")), "{lines:?}");
+
+        // A stopped one has to start, and every start needs a policy.
+        let mut t = test_env(&[]);
+        std::fs::remove_file(t.ctx.paths.policy_file()).unwrap();
+        created(&t, "stopped");
+        let err = sbt(&mut t.ctx, &["run", "claude", "--deny-network"])
+            .unwrap_err()
+            .to_string();
+        assert!(err.contains("sbt policy init"), "{err}");
+        assert!(!t.ctx.paths.policy_file().exists());
+        let lines = t.ctx.vm.runner().call_lines();
+        assert!(
+            !lines
+                .iter()
+                .any(|l| l.contains("create") || l.contains("start")),
+            "{lines:?}"
         );
     }
 

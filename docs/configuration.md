@@ -24,6 +24,9 @@ An environment variable wins over the config file, which wins over the default. 
 | Path | Contents |
 |---|---|
 | `~/.config/smolbento/config.toml` | Settings written by `sbt settings set` |
+| `~/.config/smolbento/policy.toml` | Network policy: mode, global and per-sandbox rules |
+| `~/.config/smolbento/secrets.toml` | Where each secret comes from (never the value) |
+| `~/.config/smolbento/secret-values.toml` | Secret values, mode 0600, only where no OS keychain is usable (headless Linux, CI) |
 | `~/.cache/smolbento/sessions/` | One file per attached `run` session, used to stop a sandbox when the last session ends |
 
 `XDG_CONFIG_HOME` and `XDG_CACHE_HOME` are honoured (also on macOS). `SMOLBENTO_CONFIG_DIR` and
@@ -52,6 +55,20 @@ smolbento keeps no database of its own. Each sandbox is a smolvm machine named `
 | `sbx.workspaces` | All mounted paths, as a JSON list |
 | `sbx.created` | Creation time, unix seconds |
 | `sbx.docker` | Whether it runs a private Docker engine |
+| `sbx.secrets` | Services whose secrets were bound at create |
+| `sbx.credential-hosts` | Hosts those secrets use, recorded at create so the sandbox can always reach them |
+| `sbx.credential-env` | Env vars those secrets use; a start keeps any without a value out of the sandbox, even if the service is gone |
 
 `smolvm machine ls` shows them alongside any machines you made with smolvm directly; `sbt ls` shows
 only the ones smolbento made.
+
+## Secret values
+
+Secret values live in the OS keychain: on macOS through `/usr/bin/security` (items under service
+`smolbento`), on Linux through `secret-tool` when a Secret Service is running. Where neither is
+available they go in `~/.config/smolbento/secret-values.toml` (mode 0600). `secrets.toml` never
+holds values.
+
+On macOS a stored value can be at most about 1.9 KB (`security` truncates longer input); for larger
+values, such as certificates or keys, use `secret set --ref` or `--command` so the value is read at
+each start instead of stored. Keychain items hold the value hex-encoded behind an `sbx1:` prefix.

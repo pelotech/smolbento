@@ -5,7 +5,11 @@ mod diagnose;
 mod exec;
 mod lifecycle;
 mod ls;
+mod plan;
+mod policy;
+mod ports;
 mod run;
+mod secret;
 mod settings;
 #[cfg(test)]
 mod testutil;
@@ -52,6 +56,8 @@ pub struct Ctx<R: Runner> {
     pub stdin_tty: bool,
     /// The host user's uid; the sandbox's `agent` user takes it.
     pub uid: u32,
+    /// Where stored secret values live (OS keychain, or the 0600 file).
+    pub store: Box<dyn crate::secrets::store::SecretStore>,
     /// Why config.toml couldn't be loaded; only `diagnose` and `settings` run despite it.
     pub config_error: Option<String>,
 }
@@ -61,6 +67,7 @@ pub fn main(args: impl IntoIterator<Item = OsString>) -> Result<i32> {
     let env: BTreeMap<String, String> = std::env::vars().collect();
     let paths = Paths::from_env(&env)?;
     let (settings, config_error) = Settings::load(&paths, env.clone());
+    let store = crate::secrets::store::platform(&paths, &env);
     let runner = ProcessRunner::new(settings.value("smolvm.path")?).debug(cli.debug);
     let mut ctx = Ctx {
         vm: Smolvm::new(runner),
@@ -71,6 +78,7 @@ pub fn main(args: impl IntoIterator<Item = OsString>) -> Result<i32> {
         now: SystemTime::now().duration_since(UNIX_EPOCH)?.as_secs() as i64,
         stdin_tty: std::io::stdin().is_terminal(),
         uid: crate::sandbox::host_uid(),
+        store,
         config_error,
     };
     dispatch(&mut ctx, cli)
@@ -124,6 +132,9 @@ pub fn dispatch<R: Runner>(ctx: &mut Ctx<R>, cli: Cli) -> Result<i32> {
         }
         Cmd::Diagnose => diagnose::run(ctx),
         Cmd::Settings(s) => settings::run(ctx, s),
+        Cmd::Policy(p) => policy::run(ctx, p),
+        Cmd::Secret(s) => secret::run(ctx, s),
+        Cmd::Ports(a) => ports::run(ctx, &a),
         Cmd::Daemon(_) => {
             println!("smolbento needs no daemon; smolvm manages each sandbox directly");
             Ok(0)
@@ -247,8 +258,8 @@ mod tests {
     #[test]
     fn pending_and_cloud_commands_exit_2() {
         let mut t = test_env(&[]);
-        let err = sbt(&mut t.ctx, &["policy", "init", "balanced"]).unwrap_err();
-        assert_eq!(err.to_string(), "`sbt policy` is not implemented yet");
+        let err = sbt(&mut t.ctx, &["kit", "inspect", "x"]).unwrap_err();
+        assert_eq!(err.to_string(), "`sbt kit` is not implemented yet");
         assert_eq!(exit_code(&err), 2);
         let err = sbt(&mut t.ctx, &["move", "x", "--to", "cloud"]).unwrap_err();
         assert!(err.to_string().contains("Docker Cloud"));

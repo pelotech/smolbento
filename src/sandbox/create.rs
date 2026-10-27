@@ -1,11 +1,11 @@
-use crate::smolvm::{CreateSpec, Mount, PortMap};
+use crate::smolvm::{CreateSpec, Credential, Mount, NetworkSpec, PortMap};
 use crate::workspace::Workspace;
 
 use super::labels::Meta;
 use super::name;
 
 /// Everything decided about a new sandbox before it's created.
-#[derive(Debug, Clone, PartialEq, Eq)]
+#[derive(Debug, Clone, Default, PartialEq, Eq)]
 pub struct CreateRequest {
     pub name: String,
     pub agent: String,
@@ -19,22 +19,39 @@ pub struct CreateRequest {
     /// Give the sandbox a private dockerd (storage on the machine's own disk).
     pub docker: bool,
     pub created: i64,
+    pub network: NetworkSpec,
+    pub deny_cidrs: Vec<String>,
+    pub credentials: Vec<Credential>,
+    /// Services the credentials come from (the `sbx.secrets` label).
+    pub secrets: Vec<String>,
+    /// The credentials' hosts, sorted (the `sbx.credential-hosts` label).
+    pub credential_hosts: Vec<String>,
+    /// The credentials' env vars, sorted (the `sbx.credential-env` label).
+    pub credential_env: Vec<String>,
 }
 
 /// Docker can't keep its storage on the overlay root filesystem, so these are directories on the
 /// machine's own disk (they survive restarts).
 const DOCKER_VOLUMES: [&str; 2] = ["/var/lib/docker", "/var/lib/containerd"];
 
-pub fn spec(req: &CreateRequest) -> CreateSpec {
-    let primary = req.workspaces.first().map(|w| w.path.display().to_string());
-    let meta = Meta {
+/// The labels the sandbox gets.
+pub fn meta(req: &CreateRequest) -> Meta {
+    Meta {
         name: req.name.clone(),
         agent: req.agent.clone(),
-        workspace: primary.clone(),
+        workspace: req.workspaces.first().map(|w| w.path.display().to_string()),
         workspaces: req.workspaces.iter().map(Workspace::label).collect(),
         created: req.created,
         docker: req.docker,
-    };
+        secrets: req.secrets.clone(),
+        credential_hosts: req.credential_hosts.clone(),
+        credential_env: req.credential_env.clone(),
+    }
+}
+
+pub fn spec(req: &CreateRequest) -> CreateSpec {
+    let meta = meta(req);
+    let primary = meta.workspace.clone();
     let mut mounts: Vec<Mount> = req.workspaces.iter().map(Workspace::mount).collect();
     if req.docker {
         mounts.extend(DOCKER_VOLUMES.map(|d| Mount {
@@ -53,6 +70,9 @@ pub fn spec(req: &CreateRequest) -> CreateSpec {
         memory_mib: Some(req.memory_mib),
         env: req.env.clone(),
         ports: req.ports.clone(),
+        network: req.network.clone(),
+        deny_cidrs: req.deny_cidrs.clone(),
+        credentials: req.credentials.clone(),
         // The workload runs as root so startup steps (dockerd) can; agents exec as `agent`.
         user: Some("root".into()),
         cmd: vec!["sleep".into(), "infinity".into()],
@@ -79,6 +99,7 @@ mod tests {
             }],
             docker,
             created: 1000,
+            ..Default::default()
         }
     }
 

@@ -36,6 +36,14 @@ pub struct PublishedPort {
     pub guest: u16,
 }
 
+/// One line of `smolvm machine egress-events --json`: a request the policy refused.
+#[derive(Debug, Clone, PartialEq, Eq, Deserialize)]
+pub struct EgressEvent {
+    pub timestamp: String,
+    pub operation: String,
+    pub dest: String,
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -63,6 +71,16 @@ mod tests {
                 guest: 80
             }]
         );
+    }
+
+    #[test]
+    fn parses_egress_events() {
+        let events: Vec<EgressEvent> = serde_json::from_str(
+            r#"[{"timestamp":"2026-10-26T14:37:58Z","operation":"resolve","dest":"example.com"}]"#,
+        )
+        .unwrap();
+        assert_eq!(events[0].dest, "example.com");
+        assert_eq!(events[0].operation, "resolve");
     }
 
     #[test]

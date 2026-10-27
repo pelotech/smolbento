@@ -6,9 +6,12 @@ pub const WORKSPACE: &str = "sbx.workspace";
 pub const WORKSPACES: &str = "sbx.workspaces";
 pub const CREATED: &str = "sbx.created";
 pub const DOCKER: &str = "sbx.docker";
+pub const SECRETS: &str = "sbx.secrets";
+pub const CREDENTIAL_HOSTS: &str = "sbx.credential-hosts";
+pub const CREDENTIAL_ENV: &str = "sbx.credential-env";
 
 /// Sandbox metadata, fixed at create and stored as smolvm machine labels.
-#[derive(Debug, Clone, PartialEq, Eq)]
+#[derive(Debug, Clone, Default, PartialEq, Eq)]
 pub struct Meta {
     pub name: String,
     pub agent: String,
@@ -20,6 +23,14 @@ pub struct Meta {
     pub created: i64,
     /// Whether the sandbox runs a private dockerd.
     pub docker: bool,
+    /// Services whose credentials were bound at create.
+    pub secrets: Vec<String>,
+    /// Hosts of those credentials as bound at create, sorted. The machine's credentials keep
+    /// them, so its allow list must too, whatever secrets.toml says now.
+    pub credential_hosts: Vec<String>,
+    /// Env vars of those credentials as bound at create, sorted. A start removes the ones without
+    /// a value, even after their service is gone from secrets.toml.
+    pub credential_env: Vec<String>,
 }
 
 impl Meta {
@@ -36,6 +47,18 @@ impl Meta {
         ]);
         if let Some(w) = &self.workspace {
             labels.insert(WORKSPACE.to_string(), w.clone());
+        }
+        if !self.secrets.is_empty() {
+            labels.insert(SECRETS.to_string(), self.secrets.join(","));
+        }
+        if !self.credential_hosts.is_empty() {
+            labels.insert(
+                CREDENTIAL_HOSTS.to_string(),
+                self.credential_hosts.join(","),
+            );
+        }
+        if !self.credential_env.is_empty() {
+            labels.insert(CREDENTIAL_ENV.to_string(), self.credential_env.join(","));
         }
         labels
     }
@@ -55,8 +78,23 @@ impl Meta {
                 .and_then(|c| c.parse().ok())
                 .unwrap_or(0),
             docker: labels.get(DOCKER).is_some_and(|d| d == "true"),
+            secrets: list(labels.get(SECRETS)),
+            credential_hosts: list(labels.get(CREDENTIAL_HOSTS)),
+            credential_env: list(labels.get(CREDENTIAL_ENV)),
         })
     }
+}
+
+/// A comma-joined label value.
+fn list(value: Option<&String>) -> Vec<String> {
+    value
+        .map(|s| {
+            s.split(',')
+                .filter(|x| !x.is_empty())
+                .map(String::from)
+                .collect()
+        })
+        .unwrap_or_default()
 }
 
 #[cfg(test)]
@@ -71,6 +109,7 @@ mod tests {
             workspaces: vec!["/w/repo".into(), "/w/docs:ro".into()],
             created: 1000,
             docker: true,
+            ..Default::default()
         }
     }
 
@@ -92,6 +131,41 @@ mod tests {
         let labels = m.to_labels();
         assert!(!labels.contains_key("sbx.workspace"));
         assert_eq!(Meta::from_labels(&labels), Some(m));
+    }
+
+    #[test]
+    fn secrets_label_round_trips() {
+        let m = Meta {
+            secrets: vec!["anthropic".into(), "github".into()],
+            ..meta()
+        };
+        let labels = m.to_labels();
+        assert_eq!(labels["sbx.secrets"], "anthropic,github");
+        assert_eq!(Meta::from_labels(&labels).unwrap().secrets, m.secrets);
+    }
+
+    #[test]
+    fn credential_hosts_label_round_trips() {
+        let m = Meta {
+            credential_hosts: vec!["api.github.com".into(), "github.com".into()],
+            ..meta()
+        };
+        let labels = m.to_labels();
+        assert_eq!(labels["sbx.credential-hosts"], "api.github.com,github.com");
+        assert_eq!(Meta::from_labels(&labels), Some(m));
+        assert!(!meta().to_labels().contains_key("sbx.credential-hosts"));
+    }
+
+    #[test]
+    fn credential_env_label_round_trips() {
+        let m = Meta {
+            credential_env: vec!["GH_TOKEN".into(), "GITHUB_TOKEN".into()],
+            ..meta()
+        };
+        let labels = m.to_labels();
+        assert_eq!(labels["sbx.credential-env"], "GH_TOKEN,GITHUB_TOKEN");
+        assert_eq!(Meta::from_labels(&labels), Some(m));
+        assert!(!meta().to_labels().contains_key("sbx.credential-env"));
     }
 
     #[test]

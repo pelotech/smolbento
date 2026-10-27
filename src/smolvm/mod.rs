@@ -3,11 +3,13 @@
 mod client;
 mod error;
 pub mod fake;
+mod network;
 mod types;
 
-pub use client::{CreateSpec, ExecSpec, Mount, PortMap, Smolvm};
+pub use client::{CreateSpec, Credential, ExecSpec, Mount, PortMap, Smolvm};
 pub use error::SmolvmError;
-pub use types::{Machine, MachineState, PublishedPort};
+pub use network::{AllowList, LOOPBACK, NetworkSpec};
+pub use types::{EgressEvent, Machine, MachineState, PublishedPort};
 
 use std::path::PathBuf;
 use std::process::{Command, ExitStatus, Stdio};
@@ -26,6 +28,18 @@ pub struct Output {
 pub trait Runner {
     /// Runs smolvm with `--error-format json` and captures its output.
     fn run(&self, args: &[String]) -> Result<Output>;
+    /// Like `run`, with extra environment variables for the smolvm process only (secret values
+    /// for `machine start`), and inherited variables to remove first (credentials without a value
+    /// must not fall back to the host shell's).
+    fn run_with_env(
+        &self,
+        args: &[String],
+        env: &[(String, String)],
+        remove: &[String],
+    ) -> Result<Output> {
+        let _ = (env, remove);
+        self.run(args)
+    }
     /// Runs smolvm attached to this terminal (stdio inherited) and returns its exit code.
     /// Used for `exec`, so raw mode, resizes and colour pass straight through.
     fn interactive(&self, args: &[String]) -> Result<i32>;
@@ -67,11 +81,25 @@ impl ProcessRunner {
 
 impl Runner for ProcessRunner {
     fn run(&self, args: &[String]) -> Result<Output> {
+        self.run_with_env(args, &[], &[])
+    }
+
+    fn run_with_env(
+        &self,
+        args: &[String],
+        env: &[(String, String)],
+        remove: &[String],
+    ) -> Result<Output> {
         self.trace(args);
-        let out = Command::new(&self.bin)
+        let mut cmd = Command::new(&self.bin);
+        for name in remove {
+            cmd.env_remove(name);
+        }
+        let out = cmd
             .arg("--error-format")
             .arg("json")
             .args(args)
+            .envs(env.iter().map(|(k, v)| (k, v)))
             .stdin(Stdio::null())
             .output()
             .with_context(|| self.spawn_error())?;
@@ -103,10 +131,10 @@ fn exit_code(status: ExitStatus) -> i32 {
 }
 
 /// Ignores SIGINT in this process until dropped.
-struct IgnoreInterrupt(libc::sighandler_t);
+pub(crate) struct IgnoreInterrupt(libc::sighandler_t);
 
 impl IgnoreInterrupt {
-    fn new() -> Self {
+    pub(crate) fn new() -> Self {
         // SAFETY: swaps the SIGINT disposition; Drop restores the previous one.
         Self(unsafe { libc::signal(libc::SIGINT, libc::SIG_IGN) })
     }
@@ -116,5 +144,48 @@ impl Drop for IgnoreInterrupt {
     fn drop(&mut self) {
         // SAFETY: restores the disposition saved in `new`.
         unsafe { libc::signal(libc::SIGINT, self.0) };
+    }
+}
+
+#[cfg(all(test, unix))]
+mod tests {
+    use super::*;
+    use std::os::unix::fs::PermissionsExt;
+
+    /// A stand-in for smolvm that prints `$HOME|$PROBE`, with `unset` for missing variables.
+    fn probe(dir: &std::path::Path) -> ProcessRunner {
+        let script = dir.join("fake-smolvm");
+        std::fs::write(
+            &script,
+            "#!/bin/sh\nprintf '%s|%s' \"${HOME-unset}\" \"${PROBE-unset}\"\n",
+        )
+        .unwrap();
+        std::fs::set_permissions(&script, std::fs::Permissions::from_mode(0o755)).unwrap();
+        ProcessRunner::new(script)
+    }
+
+    fn pair(k: &str, v: &str) -> (String, String) {
+        (k.to_string(), v.to_string())
+    }
+
+    #[test]
+    fn remove_drops_inherited_variables_and_env_wins_over_remove() {
+        let dir = tempfile::tempdir().unwrap();
+        let runner = probe(dir.path());
+        let inherited = std::env::var("HOME").unwrap();
+        let run = |env: &[(String, String)], remove: &[&str]| {
+            let remove: Vec<String> = remove.iter().map(|s| s.to_string()).collect();
+            runner.run_with_env(&[], env, &remove).unwrap().stdout
+        };
+        assert_eq!(run(&[], &[]), format!("{inherited}|unset"));
+        // HOME is set in this process; removing it leaves the child without one.
+        assert_eq!(run(&[], &["HOME"]), "unset|unset");
+        // A name in both lists gets the given value: removals happen before `env` is applied.
+        assert_eq!(
+            run(&[pair("HOME", "/x"), pair("PROBE", "p")], &["HOME"]),
+            "/x|p"
+        );
+        // `env` is for the child only.
+        assert_eq!(std::env::var("PROBE").ok(), None);
     }
 }

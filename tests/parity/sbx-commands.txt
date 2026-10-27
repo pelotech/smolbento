@@ -34,15 +34,37 @@ prune --dry-run --filter until=24h
 reset -f --preserve-secrets
 cp ./file my-sandbox:/tmp/file
 cp -L my-sandbox:/etc/hosts ./hosts
-# Later phases (must parse; exit 2 for now)
-ports my-sandbox --publish 8080:80
+# Network policy
 policy init balanced
 policy allow network api.example.com,*.npmjs.org
 policy ls --wide
+policy ls --decision deny
 policy log
+policy log my-sandbox --limit 20 --json
+policy approval ls
+policy approval respond example.com allow --sandbox my-sandbox
+policy deny network bad.example.com --sandbox my-sandbox
+policy rm network --id r-0123abcd
+policy rm network --resource api.example.com -f
+policy check network registry.npmjs.org --sandbox my-sandbox --verbose
+policy inspect r-0123abcd
+policy reset -f
+policy allow network api.example.com --method GET,POST --path '/v1/**'
+# Secrets
 secret set anthropic -t sk-test
 secret set github --command "gh auth token"
 secret ls
+secret set claude --ref op://Private/claude-sandbox/credential
+secret set openai --sandbox my-sandbox -t sk-test
+secret set-custom --host api.example.com --env EXAMPLE_TOKEN --command "pass show example"
+secret ls -g
+secret rm github --sandbox my-sandbox
+secret rm --all -f
+# Ports
+ports my-sandbox
+ports my-sandbox --publish 3000 --unpublish 8080:80
+ports my-sandbox --publish 8080:80
+# Later phases (must parse; exit 2 for now)
 kit inspect ghcr.io/example/kit:1
 mcp add linear --url https://mcp.linear.app/sse
 template ls
