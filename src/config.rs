@@ -75,6 +75,12 @@ pub const SETTINGS: &[SettingDef] = &[
         default: "smolvm",
         help: "smolvm binary to run",
     },
+    SettingDef {
+        key: "clone.fetch-on-exit",
+        env: "SMOLBENTO_CLONE_FETCH_ON_EXIT",
+        default: "true",
+        help: "After `run` in a clone sandbox, fetch the agent's commits into the sandbox-<name> remote",
+    },
 ];
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -349,6 +355,15 @@ mod tests {
     }
 
     #[cfg(unix)]
+    #[test]
+    fn clone_fetch_on_exit_defaults_to_true() {
+        let d = SETTINGS
+            .iter()
+            .find(|d| d.key == "clone.fetch-on-exit")
+            .unwrap();
+        assert_eq!(d.default, "true");
+    }
+
     #[test]
     fn write_atomic_can_write_through_a_symlink() {
         use std::os::unix::fs::PermissionsExt;
