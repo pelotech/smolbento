@@ -333,11 +333,16 @@ pub fn create<R: Runner>(
     let steps =
         start(vm, &sb, plan).and_then(|()| first_start(vm, &sb, plan, kit, drop_install_rules));
     if let Err(e) = steps {
+        // Every Docker sandbox takes this path (the docker kit), most without install hooks.
+        let what = if kit.steps.install.is_empty() {
+            "the first start failed"
+        } else {
+            "kit install failed"
+        };
         return Err(match vm.delete(&sb.machine) {
-            Ok(()) => anyhow!("kit install failed (the sandbox was removed): {e:#}"),
+            Ok(()) => anyhow!("{what} (the sandbox was removed): {e:#}"),
             Err(d) => anyhow!(
-                "kit install failed: {e:#}\nremoving the sandbox failed too ({d:#}); remove it \
-                 with `sbt rm {}`",
+                "{what}: {e:#}\nremoving the sandbox failed too ({d:#}); remove it with `sbt rm {}`",
                 sb.name()
             ),
         });
@@ -1249,6 +1254,25 @@ mod tests {
         assert_eq!(
             vm.runner().call_lines().last().unwrap(),
             &format!("machine delete -n {MACHINE} -f")
+        );
+    }
+
+    #[test]
+    fn a_failed_first_start_without_install_hooks_says_so_neutrally() {
+        // Like a default Docker sandbox: the docker kit has no install hooks.
+        let vm = created_vm();
+        vm.runner()
+            .fail(&["machine", "cp"], "CP_FAILED", "no space left");
+        let mut plan = kit_plan(&[]);
+        let kit = plan.kit.as_mut().unwrap();
+        kit.steps.install.clear();
+        kit.steps.install_rules.clear();
+        let err = create(&vm, &request(), &plan, |_| unreachable!()).unwrap_err();
+        assert!(
+            err.to_string()
+                .starts_with("the first start failed (the sandbox was removed): ")
+                && format!("{err:#}").contains("no space left"),
+            "{err:#}"
         );
     }
 
