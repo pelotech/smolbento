@@ -91,8 +91,8 @@ sbt run --clone claude .
 With `--clone` the agent doesn't write to your checkout. Your repo is mounted read-only at
 `/run/sandbox/source`, and on the sandbox's first start it is cloned to the same path as on your
 machine, on the sandbox's own disk. The clone starts from your repo's current `HEAD` (for a linked
-worktree, its branch, or its commit when its `HEAD` is detached); uncommitted changes aren't
-carried over. The clone survives stop and start.
+worktree, its branch, or its commit when its `HEAD` is detached; should that checkout fail, it
+starts from your repo's `HEAD` with a warning); uncommitted changes aren't carried over. The clone survives stop and start.
 The clone is writable, so `:ro` on the `--clone` workspace is ignored (the mounted repo is
 read-only anyway).
 

@@ -80,8 +80,9 @@ fn clone_prep_cmd(step: &CloneStep) -> String {
 
 /// As `agent`: sbx's clone command (skipped once cloned), then its remote copy, which runs on
 /// every start so a failed add is retried and host remote changes arrive (as sbx's setup script).
-/// A detached worktree's commit is checked out after the clone; if that fails, the clone's `.git`
-/// goes again so the next start retries rather than keeping the wrong checkout.
+/// A detached worktree's commit is checked out after the clone (a local clone copies every object,
+/// so commits made while detached are there too). If that checkout still fails, the clone keeps
+/// its default HEAD, with a warning, rather than failing every start.
 fn clone_cmd(step: &CloneStep) -> String {
     let (d, git) = step.quoted();
     let clone = format!("git -c safe.directory={SOURCE_MOUNT} clone -q");
@@ -91,9 +92,13 @@ fn clone_cmd(step: &CloneStep) -> String {
             format!("{clone} --branch {} {SOURCE_MOUNT} {d}", sh_quote(b))
         }
         Some(WorktreeHead::Detached(c)) => format!(
-            "{{ {clone} --no-checkout {SOURCE_MOUNT} {d} && \
-             git -C {d} checkout -q --detach {} -- || {{ rm -rf {git}; exit 1; }}; }}",
-            sh_quote(c)
+            "{{ {clone} --no-checkout {SOURCE_MOUNT} {d} || exit 1; \
+             git -C {d} checkout -q --detach {q} -- 2>/dev/null || {{ \
+             echo \"warning: commit {short} isn't in the clone; the agent starts \
+             from $(git -C {d} symbolic-ref -q --short HEAD || echo HEAD) instead\" >&2; \
+             git -C {d} reset -q --hard || {{ rm -rf {git}; exit 1; }}; }}; }}",
+            q = sh_quote(c),
+            short = c.get(..12).unwrap_or(c),
         ),
     };
     let mut s = format!("set -e; [ -d {git} ] || {clone}; cd {d}");
@@ -217,24 +222,29 @@ fn setup<R: Runner>(vm: &Smolvm<R>, sb: &Sandbox, plan: &StartPlan) -> Result<()
 
 fn run_clone<R: Runner>(vm: &Smolvm<R>, sb: &Sandbox, step: &CloneStep) -> Result<()> {
     for (user, cmd) in [("root", clone_prep_cmd(step)), ("agent", clone_cmd(step))] {
-        vm.exec_captured(&ExecSpec {
-            name: sb.machine.clone(),
-            user: Some(user.into()),
-            cmd: vec!["sh".into(), "-c".into(), cmd],
-            ..Default::default()
-        })
-        .map_err(|e| {
-            // git's first error line, not the whole stderr.
-            let text = match e.downcast_ref::<SmolvmError>() {
-                Some(s) => s.message.clone(),
-                None => format!("{e:#}"),
-            };
-            let line = text
-                .lines()
-                .find(|l| !l.trim().is_empty())
-                .unwrap_or("failed");
-            anyhow::anyhow!("cloning the repo in the sandbox: {}", line.trim())
-        })?;
+        let out = vm
+            .exec_captured(&ExecSpec {
+                name: sb.machine.clone(),
+                user: Some(user.into()),
+                cmd: vec!["sh".into(), "-c".into(), cmd],
+                ..Default::default()
+            })
+            .map_err(|e| {
+                // git's first error line, not the whole stderr.
+                let text = match e.downcast_ref::<SmolvmError>() {
+                    Some(s) => s.message.clone(),
+                    None => format!("{e:#}"),
+                };
+                let line = text
+                    .lines()
+                    .find(|l| !l.trim().is_empty())
+                    .unwrap_or("failed");
+                anyhow::anyhow!("cloning the repo in the sandbox: {}", line.trim())
+            })?;
+        // The detached-commit fallback's warning; git's own chatter stays quiet.
+        for w in out.stderr.lines().filter(|l| l.starts_with("warning: ")) {
+            eprintln!("{w}");
+        }
     }
     Ok(())
 }
@@ -455,16 +465,21 @@ mod tests {
     }
 
     #[test]
-    fn a_detached_worktree_clone_checks_out_its_commit_or_retries() {
+    fn a_detached_worktree_clone_checks_out_its_commit_or_falls_back() {
         let step = CloneStep {
-            head: Some(WorktreeHead::Detached("abc123".into())),
+            head: Some(WorktreeHead::Detached(
+                "0123456789abcdef0123456789abcdef01234567".into(),
+            )),
             ..step("/w/r")
         };
         assert_eq!(
             clone_cmd(&step),
             "set -e; [ -d '/w/r/.git' ] || \
-             { git -c safe.directory=/run/sandbox/source clone -q --no-checkout /run/sandbox/source '/w/r' && \
-             git -C '/w/r' checkout -q --detach 'abc123' -- || { rm -rf '/w/r/.git'; exit 1; }; }; \
+             { git -c safe.directory=/run/sandbox/source clone -q --no-checkout /run/sandbox/source '/w/r' || exit 1; \
+             git -C '/w/r' checkout -q --detach '0123456789abcdef0123456789abcdef01234567' -- 2>/dev/null || { \
+             echo \"warning: commit 0123456789ab isn't in the clone; the agent starts \
+             from $(git -C '/w/r' symbolic-ref -q --short HEAD || echo HEAD) instead\" >&2; \
+             git -C '/w/r' reset -q --hard || { rm -rf '/w/r/.git'; exit 1; }; }; }; \
              cd '/w/r'"
         );
     }
