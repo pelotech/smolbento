@@ -185,6 +185,15 @@ mod tests {
     }
 
     #[test]
+    fn yaml_fork_of_only_on_forks() {
+        let mut v = sample();
+        v[0].meta.fork_of = Some("a".into());
+        let out = render(&v, Format::Yaml, false, 1_000_000).unwrap();
+        assert_eq!(out.matches("fork_of").count(), 1, "{out}");
+        assert!(out.contains("fork_of: a"), "{out}");
+    }
+
+    #[test]
     fn yaml() {
         insta::assert_snapshot!(render(&sample(), Format::Yaml, false, 1_000_000).unwrap());
     }
