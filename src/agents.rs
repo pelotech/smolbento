@@ -5,24 +5,26 @@ pub struct Agent {
     pub name: &'static str,
     pub image: &'static str,
     pub command: &'static [&'static str],
-    /// The profile file `agent-context@1` writes into (a managed section per kit).
+    /// The agent file's name. Like sbx, it sits in the parent of the workspace path in the
+    /// guest; kit agent context goes there.
     pub context_file: &'static str,
 }
 
-/// The context file of workloads that aren't a preset.
-pub const DEFAULT_CONTEXT_FILE: &str = "/home/agent/AGENTS.md";
+/// The agent file's name for presets without their own, and for a workload kit's
+/// `agent-context` without a `filename`.
+pub const DEFAULT_CONTEXT_FILE: &str = "AGENTS.md";
 
 pub const AGENTS: &[Agent] = &[
     Agent {
         name: "claude",
         image: "docker/sandbox-templates:claude-code-docker-0.10.0",
-        context_file: "/home/agent/.claude/CLAUDE.md",
+        context_file: "CLAUDE.md",
         command: &["claude", "--dangerously-skip-permissions"],
     },
     Agent {
         name: "codex",
         image: "docker/sandbox-templates:codex-docker-0.7.0",
-        context_file: "/home/agent/.codex/AGENTS.md",
+        context_file: DEFAULT_CONTEXT_FILE,
         command: &["codex", "--dangerously-bypass-approvals-and-sandbox"],
     },
     Agent {
@@ -63,7 +65,7 @@ pub const AGENTS: &[Agent] = &[
     Agent {
         name: "gemini",
         image: "docker/sandbox-templates:gemini-docker-0.10.0",
-        context_file: "/home/agent/.gemini/GEMINI.md",
+        context_file: "GEMINI.md",
         command: &["gemini", "--yolo"],
     },
     Agent {

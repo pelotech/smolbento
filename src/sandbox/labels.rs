@@ -18,6 +18,8 @@ pub const COMMAND: &str = "sbx.command";
 pub const USER: &str = "sbx.user";
 /// A v3 workload kit's image WORKDIR, when not `/`.
 pub const WORKDIR: &str = "sbx.workdir";
+/// The agent file in the guest of a workload kit that declares one (`kit add` indexes into it).
+pub const AGENT_FILE: &str = "sbx.agent-file";
 pub const CREDENTIAL_INSTALL: &str = "sbx.credential-install";
 pub const LONG_RUNNING: &str = "sbx.long-running";
 /// Prefix of `sbx.credential-format.<ENV>`: how a kit credential's value is formatted.
@@ -102,6 +104,9 @@ pub struct Meta {
     pub user: Option<String>,
     /// A v3 workload's image WORKDIR, where install hooks run (`kit add` too); `None` for `/`.
     pub image_workdir: Option<String>,
+    /// A workload kit's agent file in the guest; `None` for a preset (its file follows from its
+    /// name) or a workload that declares none.
+    pub agent_file: Option<String>,
     /// Env vars of install-only credentials, left out of every start after the first.
     pub credential_install: Vec<String>,
     /// Don't stop the sandbox when its last session ends (`long-running@1`).
@@ -167,6 +172,9 @@ impl Meta {
         if let Some(w) = &self.image_workdir {
             labels.insert(WORKDIR.to_string(), w.clone());
         }
+        if let Some(f) = &self.agent_file {
+            labels.insert(AGENT_FILE.to_string(), f.clone());
+        }
         if !self.credential_install.is_empty() {
             labels.insert(
                 CREDENTIAL_INSTALL.to_string(),
@@ -217,6 +225,7 @@ impl Meta {
                 .and_then(|j| serde_json::from_str(j).ok()),
             user: labels.get(USER).cloned(),
             image_workdir: labels.get(WORKDIR).cloned(),
+            agent_file: labels.get(AGENT_FILE).cloned(),
             credential_install: list(labels.get(CREDENTIAL_INSTALL)),
             long_running: labels.get(LONG_RUNNING).is_some_and(|v| v == "true"),
             credential_formats: labels
@@ -380,6 +389,7 @@ mod tests {
             command: Some(vec!["wl".into(), "--a b".into()]),
             user: Some("somebody".into()),
             image_workdir: Some("/x".into()),
+            agent_file: Some("/w/AGENTS.md".into()),
             credential_install: vec!["GH_TOKEN".into(), "NPM_TOKEN".into()],
             long_running: true,
             credential_formats: BTreeMap::from([
@@ -397,6 +407,7 @@ mod tests {
         assert_eq!(labels["sbx.command"], r#"["wl","--a b"]"#);
         assert_eq!(labels["sbx.user"], "somebody");
         assert_eq!(labels["sbx.workdir"], "/x");
+        assert_eq!(labels["sbx.agent-file"], "/w/AGENTS.md");
         assert_eq!(labels["sbx.credential-install"], "GH_TOKEN,NPM_TOKEN");
         assert_eq!(labels["sbx.long-running"], "true");
         assert_eq!(

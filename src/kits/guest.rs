@@ -225,44 +225,88 @@ pub fn file_script(f: &FileReq) -> String {
     s
 }
 
-/// Replaces kit `kit`'s managed section in `file` with `body`, or appends it; text outside the
-/// markers stays. `body` is inline text or `file:<in-image path>` (copied with `cat`).
-pub fn context_script(file: &str, kit: &str, body: &str) -> String {
-    context_script_parts(file, kit, &[body])
-}
+/// The directory, next to the agent file, holding one `<kit>.md` per mixin with agent context.
+pub const KITS_CONTEXT_DIR: &str = "kits-agent-context";
+/// The markers around sbx's kits index in the agent file.
+pub const KITS_SECTION_START: &str = "<!-- sbx:kits-section start -->";
+pub const KITS_SECTION_END: &str = "<!-- sbx:kits-section end -->";
 
-/// `context_script` with several bodies, one blank line apart (one section per kit and file).
-pub fn context_script_parts(file: &str, kit: &str, bodies: &[&str]) -> String {
-    let begin = sh_quote(&format!("<!-- smolbento:kit:{kit} -->"));
-    let end = sh_quote(&format!("<!-- /smolbento:kit:{kit} -->"));
-    let mut section = format!("printf '%s\\n' {begin}\n");
+/// Shell commands printing `bodies` one blank line apart. A body is inline text or
+/// `file:<in-image path>` (copied with `awk 1`, which ends it with a newline).
+fn print_bodies(bodies: &[&str]) -> String {
+    let mut s = String::new();
     for (i, b) in bodies.iter().enumerate() {
         if i > 0 {
-            section.push_str("echo\n");
+            s.push_str("echo\n");
         }
         match b.strip_prefix("file:") {
-            // `awk 1` ends the copy with a newline even when the file doesn't.
-            Some(path) => section.push_str(&format!("awk 1 {}\n", sh_quote(path))),
-            None => section.push_str(&format!(
+            Some(path) => s.push_str(&format!("awk 1 {}\n", sh_quote(path))),
+            None => s.push_str(&format!(
                 "printf '%s\\n' {}\n",
                 sh_quote(b.trim_end_matches('\n'))
             )),
         }
     }
-    section.push_str(&format!("printf '%s\\n' {end}\n"));
+    s
+}
+
+/// Appends `bodies` to the agent file `file`, one blank line apart, with no markers (a workload
+/// kit's own agent context, written once at create).
+pub fn append_context_script(file: &str, bodies: &[&str]) -> String {
     let f = sh_quote(file);
     format!(
-        "set -e\n{OWNER}\n{mkdirs}s=$(mktemp); t=$(mktemp)\n{{\n{section}}} > \"$s\"\n\
+        "set -e\n{OWNER}\n{mkdirs}new=; [ -e {f} ] || new=1\n\
+         if [ -s {f} ]; then {{ [ -z \"$(tail -c 1 {f})\" ] || echo; echo; }} >> {f}; fi\n\
+         {{\n{body}}} >> {f}\n\
+         [ -z \"$new\" ] || [ -z \"$o\" ] || chown \"$o\" {f}\n",
+        mkdirs = mkdirs(file),
+        body = print_bodies(bodies),
+    )
+}
+
+/// Writes a mixin's agent context to its own file `path`, replacing it; the file and its
+/// directory go to `agent`.
+pub fn kit_context_script(path: &str, bodies: &[&str]) -> String {
+    let p = sh_quote(path);
+    let dir = Path::new(path)
+        .parent()
+        .map_or_else(|| "/".to_string(), |d| d.display().to_string());
+    format!(
+        "set -e\n{OWNER}\n{mkdirs}{{\n{body}}} > {p}\n[ -z \"$o\" ] || chown \"$o\" {d} {p}\n",
+        mkdirs = mkdirs(path),
+        body = print_bodies(bodies),
+        d = sh_quote(&dir),
+    )
+}
+
+/// Puts one `- **<kit>** — See <path>.` line per entry in sbx's kits index block of `file`,
+/// rewriting the block in place (a kit's old line is replaced) or appending it; text outside
+/// the block stays.
+pub fn kits_index_script(file: &str, entries: &[(String, String)]) -> String {
+    let lines: Vec<String> = entries
+        .iter()
+        .map(|(kit, path)| sh_quote(&format!("- **{kit}** — See {path}.")))
+        .collect();
+    let f = sh_quote(file);
+    format!(
+        "set -e\n{OWNER}\n{mkdirs}s=$(mktemp); t=$(mktemp)\nprintf '%s\\n' {lines} > \"$s\"\n\
          new=; [ -e {f} ] || {{ : > {f}; new=1; }}\n\
-         awk -v b={begin} -v e={end} -v s=\"$s\" '\n\
-         function put(  l) {{ while ((getline l < s) > 0) print l; close(s); done = 1 }}\n\
-         $0 == b {{ if (!done) put(); skip = 1; next }}\n\
-         skip {{ if ($0 == e) skip = 0; next }}\n\
+         awk -v b={start} -v e={end} -v s=\"$s\" '\n\
+         function key(l,  i) {{ i = index(substr(l, 5), \"**\"); return i ? substr(l, 1, i + 5) : l }}\n\
+         function put(  i) {{ print b; print \"## Kits\"; for (i = 1; i <= m; i++) print keep[i];\n\
+           for (i = 1; i <= n; i++) print add[i]; print e; done = 1 }}\n\
+         BEGIN {{ while ((getline l < s) > 0) {{ add[++n] = l; new_kit[key(l)] = 1 }} close(s) }}\n\
+         $0 == b {{ inb = 1; next }}\n\
+         inb && $0 == e {{ inb = 0; if (!done) put(); next }}\n\
+         inb {{ if ($0 != \"## Kits\" && $0 != \"\" && !(key($0) in new_kit)) keep[++m] = $0; next }}\n\
          {{ print }}\n\
-         END {{ if (!done) {{ if (NR) print \"\"; put() }} }}' {f} > \"$t\"\n\
+         END {{ if (!done) {{ if (NR && !inb) print \"\"; put() }} }}' {f} > \"$t\"\n\
          cat \"$t\" > {f}\nrm -f \"$s\" \"$t\"\n\
          [ -z \"$new\" ] || [ -z \"$o\" ] || chown \"$o\" {f}\n",
         mkdirs = mkdirs(file),
+        lines = lines.join(" "),
+        start = sh_quote(KITS_SECTION_START),
+        end = sh_quote(KITS_SECTION_END),
     )
 }
 
@@ -483,36 +527,112 @@ mod tests {
         assert_eq!(std::fs::read_to_string(&path).unwrap(), "two");
     }
 
+    fn entry(kit: &str, path: &str) -> (String, String) {
+        (kit.to_string(), path.to_string())
+    }
+
     #[test]
-    fn context_script_twice_leaves_one_section_below_user_text() {
+    fn the_kits_index_is_rewritten_in_place_and_keeps_other_text() {
         let dir = tempfile::tempdir().unwrap();
         let file = dir.path().join("CLAUDE.md");
-        std::fs::write(&file, "# mine\nkeep me\n").unwrap();
+        std::fs::write(&file, "# mine\nkeep me").unwrap();
         let f = file.display().to_string();
-        let out = sh(&context_script(&f, "acme", "first body"));
+        let out = sh(&kits_index_script(
+            &f,
+            &[entry("a", "/p/kits-agent-context/a.md")],
+        ));
         assert!(out.status.success(), "{out:?}");
-        let out = sh(&context_script(&f, "acme", "second 'body'"));
+        std::fs::write(
+            &file,
+            std::fs::read_to_string(&file).unwrap() + "\n# after\n",
+        )
+        .unwrap();
+        // `kit add`: the new kit joins the one block, in place; a rerun changes nothing.
+        let add = kits_index_script(&f, &[entry("b", "/p/kits-agent-context/b.md")]);
+        for _ in 0..2 {
+            let out = sh(&add);
+            assert!(out.status.success(), "{out:?}");
+            assert_eq!(
+                std::fs::read_to_string(&file).unwrap(),
+                "# mine\nkeep me\n\n<!-- sbx:kits-section start -->\n## Kits\n\
+                 - **a** — See /p/kits-agent-context/a.md.\n\
+                 - **b** — See /p/kits-agent-context/b.md.\n\
+                 <!-- sbx:kits-section end -->\n\n# after\n"
+            );
+        }
+        // A kit's line is replaced, not repeated; `ab` isn't `a`.
+        let out = sh(&kits_index_script(
+            &f,
+            &[entry("a", "/q/a 'x'.md"), entry("ab", "/p/ab.md")],
+        ));
+        assert!(out.status.success(), "{out:?}");
+        let text = std::fs::read_to_string(&file).unwrap();
+        assert_eq!(text.matches("- **a** ").count(), 1, "{text}");
+        assert!(text.contains("- **a** — See /q/a 'x'.md.\n"), "{text}");
+        assert!(text.contains("- **b** — See"), "{text}");
+        assert!(text.contains("- **ab** — See /p/ab.md.\n"), "{text}");
+        assert_eq!(text.matches("sbx:kits-section start").count(), 1, "{text}");
+    }
+
+    #[test]
+    fn the_kits_index_creates_the_file() {
+        let dir = tempfile::tempdir().unwrap();
+        let file = dir.path().join("new/AGENTS.md");
+        let f = file.display().to_string();
+        let out = sh(&kits_index_script(
+            &f,
+            &[entry("a", "/p/a.md"), entry("b", "/p/b.md")],
+        ));
         assert!(out.status.success(), "{out:?}");
         assert_eq!(
             std::fs::read_to_string(&file).unwrap(),
-            "# mine\nkeep me\n\n<!-- smolbento:kit:acme -->\nsecond 'body'\n\
-             <!-- /smolbento:kit:acme -->\n"
+            "<!-- sbx:kits-section start -->\n## Kits\n- **a** — See /p/a.md.\n\
+             - **b** — See /p/b.md.\n<!-- sbx:kits-section end -->\n"
         );
     }
 
     #[test]
-    fn context_script_creates_the_file_and_copies_an_in_image_file() {
+    fn workload_context_is_appended_without_markers() {
         let dir = tempfile::tempdir().unwrap();
         let src = dir.path().join("ctx.md");
         std::fs::write(&src, "from image").unwrap();
-        let file = dir.path().join("new/AGENTS.md");
+        let file = dir.path().join("AGENTS.md");
+        std::fs::write(&file, "# preamble").unwrap();
         let f = file.display().to_string();
         let body = format!("file:{}", src.display());
-        let out = sh(&context_script(&f, "k", &body));
+        let out = sh(&append_context_script(&f, &["use 'x'\n", &body]));
         assert!(out.status.success(), "{out:?}");
         assert_eq!(
             std::fs::read_to_string(&file).unwrap(),
-            "<!-- smolbento:kit:k -->\nfrom image\n<!-- /smolbento:kit:k -->\n"
+            "# preamble\n\nuse 'x'\n\nfrom image\n"
+        );
+        // A new file starts with the body.
+        let file = dir.path().join("sub/CLAUDE.md");
+        let out = sh(&append_context_script(
+            &file.display().to_string(),
+            &["only"],
+        ));
+        assert!(out.status.success(), "{out:?}");
+        assert_eq!(std::fs::read_to_string(&file).unwrap(), "only\n");
+    }
+
+    #[test]
+    fn a_kit_context_file_is_replaced() {
+        let dir = tempfile::tempdir().unwrap();
+        let file = dir.path().join("kits-agent-context/k.md");
+        let f = file.display().to_string();
+        for body in ["first", "second 'body'"] {
+            let out = sh(&kit_context_script(&f, &[body, "more"]));
+            assert!(out.status.success(), "{out:?}");
+        }
+        assert_eq!(
+            std::fs::read_to_string(&file).unwrap(),
+            "second 'body'\n\nmore\n"
+        );
+        let s = kit_context_script("/p/kits-agent-context/k.md", &["x"]);
+        assert!(
+            s.contains("chown \"$o\" '/p/kits-agent-context'"),
+            "the directory goes to agent: {s}"
         );
     }
 

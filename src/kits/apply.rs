@@ -27,7 +27,7 @@ pub struct KitSteps {
     pub install: Vec<InstallStep>,
     /// Scripts writing kit files (as root, then owned by `agent`).
     pub files: Vec<String>,
-    /// Scripts writing agent context sections.
+    /// Scripts writing agent context: the agent file, kit context files and their index.
     pub context: Vec<String>,
     /// `(file name "NN-<kit>.sh", body)` for `/etc/smolbento/startup.d`, in run order.
     pub startup_d: Vec<(String, String)>,
@@ -225,7 +225,12 @@ pub fn apply(
         files.push(f);
     }
     steps.files = files.into_iter().map(guest::file_script).collect();
-    steps.context = context_scripts(plan)?;
+    let agent_file = match req.agent_file.clone() {
+        Some(f) => Some(f),
+        None => agent_file(plan, &req.workdir())?,
+    };
+    let mounts: Vec<&Path> = req.workspaces.iter().map(|w| w.path.as_path()).collect();
+    steps.context = context_scripts(plan, agent_file.as_deref(), &mounts);
     if !tmpfs.is_empty() {
         steps
             .startup_d
@@ -254,6 +259,8 @@ pub fn apply(
     if !preset {
         req.command = plan.workload.command.clone();
         req.image_workdir = workdir.map(String::from);
+        // `kit add` can't reload the workload: it reads this back from `sbx.agent-file`.
+        req.agent_file = agent_file;
         req.user = plan
             .workload
             .config
@@ -549,28 +556,95 @@ fn upper_env(service: &str) -> String {
         .collect()
 }
 
-/// One script per profile file and kit, in plan order.
-fn context_scripts(plan: &Plan) -> Result<Vec<String>> {
-    let profile =
-        agents::find(&plan.workload.name).map_or(agents::DEFAULT_CONTEXT_FILE, |a| a.context_file);
-    let (profile_dir, profile_name) = profile.rsplit_once('/').expect("an absolute path");
-    let mut sections: Vec<((String, String), Vec<&str>)> = Vec::new();
+/// The agent file in the guest: the preset's file name, or the workload kit's own
+/// `agent-context` file, in the parent of `workdir` (sbx #15). `None` when the workload declares
+/// none.
+pub fn agent_file(plan: &Plan, workdir: &str) -> Result<Option<String>> {
+    let parent = Path::new(workdir)
+        .parent()
+        .map_or_else(|| "/".to_string(), |p| p.display().to_string());
+    let join = |dir: &str, name: &str| format!("{}/{name}", dir.trim_end_matches('/'));
+    let w = &plan.workload;
+    if is_preset(w) {
+        return Ok(agents::find(&w.name).map(|a| join(&parent, a.context_file)));
+    }
+    let Some((_, c)) = plan.merged.contexts.iter().find(|(k, _)| *k == w.name) else {
+        return Ok(None);
+    };
+    let dir = c.directory.as_deref().unwrap_or(&parent);
+    if !dir.starts_with('/') {
+        bail!(
+            "kit {}: agent-context directory '{dir}' must be an absolute path",
+            w.name
+        );
+    }
+    let name = c
+        .filename
+        .as_deref()
+        .unwrap_or(agents::DEFAULT_CONTEXT_FILE);
+    if name.is_empty() || name.contains('/') || name == "." || name == ".." {
+        bail!(
+            "kit {}: agent-context filename '{name}' must be a file name",
+            w.name
+        );
+    }
+    Ok(Some(join(dir, name)))
+}
+
+/// sbx's layout (#15): the workload's own context appended to the agent file; each mixin's in
+/// `<dir>/kits-agent-context/<kit>.md`, indexed in one block of the agent file. A mixin's
+/// `filename`/`directory` are ignored, as sbx does. Nothing is written into a mounted workspace:
+/// the agent file is the guest's own.
+fn context_scripts(plan: &Plan, agent_file: Option<&str>, mounts: &[&Path]) -> Vec<String> {
+    let w = &plan.workload;
+    let mut own: Vec<&str> = Vec::new();
+    let mut mixins: Vec<(&str, Vec<&str>)> = Vec::new();
     for (kit, c) in &plan.merged.contexts {
-        let dir = c.directory.as_deref().unwrap_or(profile_dir);
-        if !dir.starts_with('/') {
-            bail!("kit {kit}: agent-context directory '{dir}' must be an absolute path");
+        if c.content.trim().is_empty() {
+            continue;
         }
-        let name = c.filename.as_deref().unwrap_or(profile_name);
-        let key = (format!("{}/{name}", dir.trim_end_matches('/')), kit.clone());
-        match sections.iter_mut().find(|(k, _)| *k == key) {
-            Some((_, bodies)) => bodies.push(&c.content),
-            None => sections.push((key, vec![&c.content])),
+        if !is_preset(w) && *kit == w.name {
+            own.push(&c.content);
+        } else {
+            match mixins.iter_mut().find(|(k, _)| k == kit) {
+                Some((_, bodies)) => bodies.push(&c.content),
+                None => mixins.push((kit, vec![&c.content])),
+            }
         }
     }
-    Ok(sections
-        .iter()
-        .map(|((file, kit), bodies)| guest::context_script_parts(file, kit, bodies))
-        .collect())
+    let Some(file) = agent_file else {
+        for (kit, _) in &mixins {
+            eprintln!(
+                "warning: kit {kit}: agent context dropped (the workload declares no agent file)"
+            );
+        }
+        return Vec::new();
+    };
+    let dir = file.rsplit_once('/').map_or("", |(d, _)| d);
+    if own.is_empty() && mixins.is_empty() {
+        return Vec::new();
+    }
+    if mounts.iter().any(|m| Path::new(file).starts_with(m)) {
+        eprintln!(
+            "warning: agent context not written: {file} is in a mounted workspace, outside the \
+             sandbox"
+        );
+        return Vec::new();
+    }
+    let mut scripts = Vec::new();
+    if !own.is_empty() {
+        scripts.push(guest::append_context_script(file, &own));
+    }
+    let mut entries = Vec::new();
+    for (kit, bodies) in &mixins {
+        let path = format!("{dir}/{}/{kit}.md", guest::KITS_CONTEXT_DIR);
+        scripts.push(guest::kit_context_script(&path, bodies));
+        entries.push((kit.to_string(), path));
+    }
+    if !entries.is_empty() {
+        scripts.push(guest::kits_index_script(file, &entries));
+    }
+    scripts
 }
 
 /// The agent preset as a synthetic workload (`load::preset_kit`), not a kit the user chose.
@@ -1189,7 +1263,7 @@ mod tests {
     }
 
     #[test]
-    fn hooks_files_and_contexts_become_steps() {
+    fn hooks_and_files_become_steps() {
         let hook = |cmd: &str, user: Option<&str>, background| Hook {
             command: HookCmd::Shell(cmd.into()),
             user: user.map(String::from),
@@ -1213,16 +1287,6 @@ mod tests {
                 files: vec![file("/etc/x", "from a")],
             }),
         );
-        let a = with(
-            a,
-            "agent-context@1",
-            false,
-            CapBody::AgentContext(AgentContextReq {
-                filename: None,
-                directory: None,
-                content: "use x".into(),
-            }),
-        );
         let b = with(
             kit("b", Kind::Mixin),
             "lifecycle@1",
@@ -1231,16 +1295,6 @@ mod tests {
                 install: vec![hook("npm i -g y", Some("agent"), false)],
                 startup: vec![],
                 files: vec![file("/etc/x", "from b")],
-            }),
-        );
-        let b = with(
-            b,
-            "agent-context@2",
-            false,
-            CapBody::AgentContext(AgentContextReq {
-                filename: Some("NOTES.md".into()),
-                directory: Some("/work".into()),
-                content: "use y".into(),
             }),
         );
         let p = plan(vec![a, b]);
@@ -1270,18 +1324,6 @@ mod tests {
         );
         assert_eq!(steps.files.len(), 1, "the later kit wins one path");
         assert!(steps.files[0].contains("'from b'"));
-        assert_eq!(steps.context.len(), 2);
-        // The workload `wl` isn't a preset: the generic profile file.
-        assert!(
-            steps.context[0].contains("'/home/agent/AGENTS.md'"),
-            "{}",
-            steps.context[0]
-        );
-        assert!(
-            steps.context[1].contains("'/work/NOTES.md'"),
-            "{}",
-            steps.context[1]
-        );
         let names: Vec<&str> = steps.startup_d.iter().map(|(n, _)| n.as_str()).collect();
         assert_eq!(names, ["01-a.sh"]);
         assert!(
@@ -1438,27 +1480,209 @@ mod tests {
     }
 
     #[test]
-    fn an_unpinned_registry_kit_and_a_relative_context_directory_fail() {
+    fn an_unpinned_registry_kit_and_a_bad_agent_file_fail() {
         let mut m = kit("m", Kind::Mixin);
         m.digest = None;
         let e = run(&plan(vec![m]), &mut request(), &mut Policy::default()).unwrap_err();
         assert!(format!("{e:#}").contains("no digest"), "{e:#}");
 
-        let ctx = CapBody::AgentContext(AgentContextReq {
-            filename: None,
-            directory: Some("rel/dir".into()),
-            content: "x".into(),
-        });
-        let p = plan(vec![with(
-            kit("c", Kind::Mixin),
+        // The workload's own agent file must be an absolute directory and a plain file name.
+        for (dir, name, err) in [
+            (
+                Some("rel/dir"),
+                None,
+                "kit wl: agent-context directory 'rel/dir'",
+            ),
+            (
+                None,
+                Some("a/b.md"),
+                "kit wl: agent-context filename 'a/b.md'",
+            ),
+            (None, Some(".."), "kit wl: agent-context filename '..'"),
+        ] {
+            let w = with(
+                workload(),
+                "agent-context@1",
+                false,
+                context(dir, name, "x"),
+            );
+            let p = resolve(w, vec![], &ArgValues::default()).unwrap();
+            let e = run(&p, &mut request(), &mut Policy::default()).unwrap_err();
+            assert!(format!("{e:#}").contains(err), "{e:#}");
+        }
+    }
+
+    fn context(directory: Option<&str>, filename: Option<&str>, content: &str) -> CapBody {
+        CapBody::AgentContext(AgentContextReq {
+            filename: filename.map(String::from),
+            directory: directory.map(String::from),
+            content: content.into(),
+        })
+    }
+
+    /// A mixin `name` with one agent context `content` (its filename and directory are ignored).
+    fn context_mixin(name: &str, source: Source, content: &str) -> Kit {
+        let mut m = kit(name, Kind::Mixin);
+        m.source = source;
+        with(
+            m,
+            "agent-context@2",
+            false,
+            context(Some("/elsewhere"), Some("X.md"), content),
+        )
+    }
+
+    fn in_workspace(path: &str) -> CreateRequest {
+        CreateRequest {
+            workspaces: vec![crate::workspace::Workspace {
+                path: path.into(),
+                read_only: false,
+            }],
+            ..request()
+        }
+    }
+
+    fn preset_plan(agent: &str, mixins: Vec<Kit>) -> Plan {
+        let w = crate::kits::load::preset_kit(agents::find(agent).unwrap(), "img:1");
+        resolve(w, mixins, &ArgValues::default()).unwrap()
+    }
+
+    /// sbx's layout (#15): each mixin's context in `<parent>/kits-agent-context/<kit>.md`, one
+    /// index block in the agent file, both in the workspace's parent.
+    fn mixin_layout(agent_file: &str, kits: &[(&str, &str)]) -> Vec<String> {
+        let dir = agent_file.rsplit_once('/').unwrap().0;
+        let mut out = Vec::new();
+        let mut entries = Vec::new();
+        for (kit, body) in kits {
+            let path = format!("{dir}/kits-agent-context/{kit}.md");
+            out.push(guest::kit_context_script(&path, &[body]));
+            entries.push((kit.to_string(), path));
+        }
+        out.push(guest::kits_index_script(agent_file, &entries));
+        out
+    }
+
+    #[test]
+    fn a_preset_agent_file_sits_in_the_workspace_parent() {
+        for (agent, file) in [
+            ("claude", "CLAUDE.md"),
+            ("codex", "AGENTS.md"),
+            ("gemini", "GEMINI.md"),
+            ("shell", "AGENTS.md"),
+        ] {
+            // A v2 and a v3 mixin get the same layout.
+            let p = preset_plan(
+                agent,
+                vec![
+                    context_mixin("m2", Source::LocalV2("/k/m2".into()), "use m2"),
+                    context_mixin("m3", Source::LocalV3("/k/m3".into()), "use m3"),
+                ],
+            );
+            let mut req = in_workspace("/w/proj");
+            let (steps, _) = run(&p, &mut req, &mut Policy::default()).unwrap();
+            assert_eq!(
+                steps.context,
+                mixin_layout(&format!("/w/{file}"), &[("m2", "use m2"), ("m3", "use m3")]),
+                "{agent}"
+            );
+            // A preset's file follows from its name: no label.
+            assert_eq!(req.agent_file, None);
+        }
+    }
+
+    #[test]
+    fn a_mountless_sandbox_uses_the_parent_of_its_workdir() {
+        let p = preset_plan(
+            "claude",
+            vec![context_mixin("m", Source::LocalV3("/k/m".into()), "b")],
+        );
+        let (steps, _) = run(&p, &mut request(), &mut Policy::default()).unwrap();
+        assert_eq!(
+            steps.context,
+            mixin_layout("/home/agent/CLAUDE.md", &[("m", "b")])
+        );
+    }
+
+    #[test]
+    fn a_workload_appends_its_own_context_and_records_its_agent_file() {
+        let w = with(
+            workload(),
             "agent-context@1",
             false,
-            ctx,
-        )]);
-        let e = run(&p, &mut request(), &mut Policy::default()).unwrap_err();
-        assert!(
-            format!("{e:#}").contains("kit c: agent-context directory 'rel/dir'"),
-            "{e:#}"
+            context(None, Some("AGENTS.md"), "wl body"),
         );
+        let p = resolve(
+            w,
+            vec![context_mixin("m", Source::LocalV3("/k/m".into()), "use m")],
+            &ArgValues::default(),
+        )
+        .unwrap();
+        let mut req = in_workspace("/w/proj");
+        let (steps, _) = run(&p, &mut req, &mut Policy::default()).unwrap();
+        let mut want = vec![guest::append_context_script("/w/AGENTS.md", &["wl body"])];
+        want.extend(mixin_layout("/w/AGENTS.md", &[("m", "use m")]));
+        assert_eq!(steps.context, want);
+        assert_eq!(req.agent_file.as_deref(), Some("/w/AGENTS.md"));
+        assert_eq!(create::spec(&req).labels["sbx.agent-file"], "/w/AGENTS.md");
+
+        // A directory of its own, and the default file name.
+        let w = with(
+            workload(),
+            "agent-context@1",
+            false,
+            context(Some("/ctx/"), None, "b"),
+        );
+        let p = resolve(w, vec![], &ArgValues::default()).unwrap();
+        let mut req = in_workspace("/w/proj");
+        let (steps, _) = run(&p, &mut req, &mut Policy::default()).unwrap();
+        assert_eq!(
+            steps.context,
+            [guest::append_context_script("/ctx/AGENTS.md", &["b"])]
+        );
+    }
+
+    #[test]
+    fn mixin_context_is_dropped_when_the_workload_declares_no_agent_file() {
+        let p = plan(vec![context_mixin(
+            "m",
+            Source::LocalV3("/k/m".into()),
+            "b",
+        )]);
+        let mut req = in_workspace("/w/proj");
+        let (steps, _) = run(&p, &mut req, &mut Policy::default()).unwrap();
+        assert!(steps.context.is_empty(), "{:?}", steps.context);
+        assert_eq!(req.agent_file, None);
+        assert!(!create::spec(&req).labels.contains_key("sbx.agent-file"));
+    }
+
+    #[test]
+    fn a_recorded_agent_file_wins() {
+        // `kit add` passes the sandbox's `sbx.agent-file`: its workload isn't reloaded.
+        let p = plan(vec![context_mixin(
+            "m",
+            Source::LocalV3("/k/m".into()),
+            "b",
+        )]);
+        let mut req = CreateRequest {
+            agent_file: Some("/x/CLAUDE.md".into()),
+            ..in_workspace("/w/proj")
+        };
+        let (steps, _) = run(&p, &mut req, &mut Policy::default()).unwrap();
+        assert_eq!(steps.context, mixin_layout("/x/CLAUDE.md", &[("m", "b")]));
+    }
+
+    #[test]
+    fn context_is_never_written_into_a_mounted_workspace() {
+        let p = preset_plan(
+            "claude",
+            vec![context_mixin("m", Source::LocalV3("/k/m".into()), "b")],
+        );
+        let mut req = in_workspace("/w/proj");
+        req.workspaces.push(crate::workspace::Workspace {
+            path: "/w".into(),
+            read_only: true,
+        });
+        let (steps, _) = run(&p, &mut req, &mut Policy::default()).unwrap();
+        assert!(steps.context.is_empty(), "{:?}", steps.context);
     }
 }

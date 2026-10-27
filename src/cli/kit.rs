@@ -17,6 +17,7 @@ use crate::policy::{Decision, Policy, compile};
 use crate::sandbox::{self, CreateRequest, KitPhase, Sandbox};
 use crate::secrets::SecretsFile;
 use crate::smolvm::{ExecSpec, Runner};
+use crate::workspace::Workspace;
 
 /// Reads the guest's kits record; a sandbox without one has no kits.
 const READ_KITS: &str = "[ ! -e /etc/smolbento/kits ] || cat /etc/smolbento/kits";
@@ -426,8 +427,17 @@ fn add_running<R: Runner>(
     // In memory until approved.
     let mut policy = plan::ensure_policy(ctx)?;
     let secrets = SecretsFile::load(&ctx.paths)?;
+    // The workspaces place the agent file (and keep context out of mounts); a workload kit's
+    // agent file was recorded at create.
     let mut req = CreateRequest {
         name: name.to_string(),
+        workspaces: sb
+            .meta
+            .workspaces
+            .iter()
+            .map(|w| Workspace::from_label(w))
+            .collect(),
+        agent_file: sb.meta.agent_file.clone(),
         ..Default::default()
     };
     let (mut steps, added) = apply(
@@ -631,14 +641,17 @@ mod tests {
     }
 
     fn dev_sandbox_in(t: &TestEnv, state: &str, record: &str) {
+        dev_sandbox_labeled(t, state, &[("sbx.agent", "shell")], record);
+    }
+
+    /// `dev` with `labels` besides its name.
+    fn dev_sandbox_labeled(t: &TestEnv, state: &str, labels: &[(&str, &str)], record: &str) {
         let fake = t.ctx.vm.runner();
+        let mut all = vec![("sbx.name", "dev")];
+        all.extend_from_slice(labels);
         fake.ok(
             &["machine", "status", "-n", MACHINE],
-            &machine_json(
-                MACHINE,
-                state,
-                &[("sbx.name", "dev"), ("sbx.agent", "shell")],
-            ),
+            &machine_json(MACHINE, state, &all),
         );
         fake.ok(
             &[
@@ -993,6 +1006,70 @@ mod tests {
             guest::STARTUP_RUNNER
         );
         assert_eq!(kit_rules(&t), vec!["api.net.example".to_string()]);
+    }
+
+    /// Whether `script` ran in `dev` as root, inline or copied in.
+    fn ran(t: &TestEnv, script: &str) -> bool {
+        let inline = format!("machine exec --name {MACHINE} -u root -- sh -c {script}");
+        dev_calls(t).contains(&inline)
+            || t.ctx.vm.runner().uploads().iter().any(|(_, c)| c == script)
+    }
+
+    #[test]
+    fn add_indexes_a_mixin_context_beside_the_workspace() {
+        let mut t = kit_env();
+        dev_sandbox_labeled(
+            &t,
+            "running",
+            &[
+                ("sbx.agent", "claude"),
+                ("sbx.workspace", "/w/proj"),
+                ("sbx.workspaces", r#"["/w/proj"]"#),
+            ],
+            BASE,
+        );
+        v3_kit(&t, "net", NET_KIT, &[]);
+        sbt(&mut t.ctx, &["kit", "add", "dev", "./net", "--yes"]).unwrap();
+        let path = "/w/kits-agent-context/net.md";
+        assert!(ran(&t, &guest::kit_context_script(path, &["Use net."])));
+        let index = guest::kits_index_script("/w/CLAUDE.md", &[("net".into(), path.into())]);
+        assert!(ran(&t, &index), "{:#?}", dev_calls(&t));
+    }
+
+    #[test]
+    fn add_indexes_into_a_workload_kits_recorded_agent_file() {
+        let mut t = kit_env();
+        dev_sandbox_labeled(
+            &t,
+            "running",
+            &[("sbx.agent", "wl"), ("sbx.agent-file", "/x/AGENTS.md")],
+            BASE,
+        );
+        v3_kit(&t, "net", NET_KIT, &[]);
+        sbt(&mut t.ctx, &["kit", "add", "dev", "./net", "--yes"]).unwrap();
+        let path = "/x/kits-agent-context/net.md";
+        let index = guest::kits_index_script("/x/AGENTS.md", &[("net".into(), path.into())]);
+        assert!(ran(&t, &index), "{:#?}", dev_calls(&t));
+    }
+
+    #[test]
+    fn add_drops_a_mixin_context_when_the_workload_has_no_agent_file() {
+        let mut t = kit_env();
+        dev_sandbox_labeled(&t, "running", &[("sbx.agent", "wl")], BASE);
+        v3_kit(&t, "net", NET_KIT, &[]);
+        sbt(&mut t.ctx, &["kit", "add", "dev", "./net", "--yes"]).unwrap();
+        assert!(
+            !dev_calls(&t).iter().any(|l| l.contains("Use net."))
+                && !t
+                    .ctx
+                    .vm
+                    .runner()
+                    .uploads()
+                    .iter()
+                    .any(|(_, c)| c.contains("Use net.")),
+            "{:#?}",
+            dev_calls(&t)
+        );
     }
 
     /// R30 for `kit add`: the kit stays and the sandbox keeps running.
