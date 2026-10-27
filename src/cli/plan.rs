@@ -202,6 +202,13 @@ pub fn create<R: Runner>(
         .map(|w| w.path.clone());
     if let Some(repo) = &repo {
         clone::check_remote_free(repo, &req.name)?;
+        for remote in clone::userinfo_remotes(repo).unwrap_or_default() {
+            eprintln!(
+                "warning: remote '{remote}' has a user name or token in its URL; the sandbox can \
+                 read it in {}/config",
+                clone::SOURCE_MOUNT
+            );
+        }
     }
     // A remote left by an earlier sandbox of this name (`run --rm`) keeps its fetched branches.
     let had_remote = repo

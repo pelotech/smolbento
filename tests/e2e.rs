@@ -457,6 +457,9 @@ fn clone_round_trip() {
 
     let touch = e.sbt(&["exec", &e.name, "touch", "/run/sandbox/source/x"]);
     assert!(!touch.status.success(), "/run/sandbox/source is read-only");
+    // Known, as in sbx: the host repo's config, credentials included, is readable in the sandbox.
+    let config = e.ok(&["exec", &e.name, "cat", "/run/sandbox/source/config"]);
+    assert!(config.contains("u:tok@example.com"), "{config}");
 
     // Fetching a stopped sandbox starts it, fetches and stops it again; the clone survives.
     guest_commit("guest-two");

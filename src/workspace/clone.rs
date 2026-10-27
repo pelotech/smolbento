@@ -201,6 +201,19 @@ fn strip_userinfo(url: &str) -> String {
     url.to_string()
 }
 
+/// Remotes whose http(s) URL carries a user name or token, which the sandbox can read in the
+/// mounted host config.
+pub fn userinfo_remotes(repo: &Path) -> Result<Vec<String>> {
+    let mut out = Vec::new();
+    for name in git(repo, &["remote"])?.lines() {
+        let url = git(repo, &["remote", "get-url", name])?;
+        if strip_userinfo(&url) != url {
+            out.push(name.to_string());
+        }
+    }
+    Ok(out)
+}
+
 pub fn copied_remotes(repo: &Path) -> Result<Vec<(String, String)>> {
     let mut out = Vec::new();
     for name in git(repo, &["remote"])?.lines() {
@@ -411,5 +424,17 @@ mod tests {
         assert_eq!(strip_userinfo("ssh://git@h/x"), "ssh://git@h/x");
         assert_eq!(strip_userinfo("HTTPS://u:t@h/x"), "HTTPS://h/x");
         assert_eq!(strip_userinfo("Http://u@h/x"), "Http://h/x");
+    }
+
+    #[test]
+    fn userinfo_remotes_names_the_remotes_with_credentials() {
+        let (_d, root) = repo();
+        git_in(
+            &root,
+            &["remote", "add", "origin", "https://u:tok@h/o/r.git"],
+        );
+        git_in(&root, &["remote", "add", "up", "https://h/o/r.git"]);
+        git_in(&root, &["remote", "add", "ssh", "ssh://git@h/r.git"]);
+        assert_eq!(userinfo_remotes(&root).unwrap(), vec!["origin"]);
     }
 }
