@@ -39,6 +39,7 @@ pub fn credentials(secrets: &SecretsFile, services: &[String]) -> Result<Vec<Cre
                 name: var.to_ascii_lowercase(),
                 env_var: var.clone(),
                 hosts: s.hosts.clone(),
+                ..Default::default()
             });
         }
     }

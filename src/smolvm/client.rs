@@ -49,11 +49,13 @@ impl PortMap {
 
 /// A secret the guest sees only as a placeholder; smolvm substitutes the real value (from the
 /// `machine start` environment) on HTTPS requests to `hosts`.
-#[derive(Debug, Clone, PartialEq, Eq)]
+#[derive(Debug, Clone, Default, PartialEq, Eq)]
 pub struct Credential {
     pub name: String,
     pub env_var: String,
     pub hosts: Vec<String>,
+    /// smolvm sets this header to the value itself (`:set-header=`), for inject-only credentials.
+    pub set_header: Option<String>,
 }
 
 impl Credential {
@@ -63,7 +65,11 @@ impl Credential {
             !self.hosts.is_empty(),
             "a credential needs at least one host"
         );
-        format!("{}={}@{}", self.name, self.env_var, self.hosts.join(","))
+        let mut arg = format!("{}={}@{}", self.name, self.env_var, self.hosts.join(","));
+        if let Some(h) = &self.set_header {
+            arg.push_str(&format!(":set-header={h}"));
+        }
+        arg
     }
 }
 
@@ -77,6 +83,8 @@ pub struct CreateSpec {
     /// Ranges refused before anything is allowed (smolvm accepts these at create only).
     pub deny_cidrs: Vec<String>,
     pub credentials: Vec<Credential>,
+    /// `--smolfile`: a Smolfile kit's configuration, which may also name the image.
+    pub smolfile: Option<PathBuf>,
     pub mounts: Vec<Mount>,
     pub workdir: Option<String>,
     pub cpus: Option<u32>,
@@ -96,7 +104,13 @@ impl CreateSpec {
     pub fn to_args(&self) -> Vec<String> {
         let mut a = vec!["machine".to_string(), "create".to_string()];
         flag(&mut a, "-n", &self.name);
-        flag(&mut a, "--image", &self.image);
+        // smolvm takes the image from the Smolfile when `--image` is left out.
+        if self.smolfile.is_none() || !self.image.is_empty() {
+            flag(&mut a, "--image", &self.image);
+        }
+        if let Some(s) = &self.smolfile {
+            flag(&mut a, "--smolfile", s.display().to_string());
+        }
         a.extend(self.network.create_args());
         for c in &self.deny_cidrs {
             flag(&mut a, "--deny-cidr", c);
@@ -458,6 +472,7 @@ mod tests {
                 name: "gh_token".into(),
                 env_var: "GH_TOKEN".into(),
                 hosts: vec!["github.com".into(), "api.github.com".into()],
+                ..Default::default()
             }],
             ..Default::default()
         };
@@ -520,6 +535,26 @@ mod tests {
     }
 
     #[test]
+    fn set_header_and_smolfile_args() {
+        let spec = CreateSpec {
+            name: "m".into(),
+            smolfile: Some("/k/Smolfile".into()),
+            credentials: vec![Credential {
+                name: "x".into(),
+                env_var: "SBX_KIT_X".into(),
+                hosts: vec!["api.x.com".into()],
+                set_header: Some("authorization".into()),
+            }],
+            ..Default::default()
+        };
+        assert_eq!(
+            spec.to_args().join(" "),
+            "machine create -n m --smolfile /k/Smolfile --net --net-backend virtio-net \
+             --credential x=SBX_KIT_X@api.x.com:set-header=authorization"
+        );
+    }
+
+    #[test]
     #[should_panic(expected = "at least one host")]
     #[cfg(debug_assertions)]
     fn a_credential_without_hosts_is_refused() {
@@ -527,6 +562,7 @@ mod tests {
             name: "t".into(),
             env_var: "T".into(),
             hosts: vec![],
+            ..Default::default()
         };
         c.arg();
     }

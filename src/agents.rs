@@ -5,32 +5,42 @@ pub struct Agent {
     pub name: &'static str,
     pub image: &'static str,
     pub command: &'static [&'static str],
+    /// The profile file `agent-context@1` writes into (a managed section per kit).
+    pub context_file: &'static str,
 }
+
+/// The context file of workloads that aren't a preset.
+pub const DEFAULT_CONTEXT_FILE: &str = "/home/agent/AGENTS.md";
 
 pub const AGENTS: &[Agent] = &[
     Agent {
         name: "claude",
         image: "docker/sandbox-templates:claude-code-docker-0.10.0",
+        context_file: "/home/agent/.claude/CLAUDE.md",
         command: &["claude", "--dangerously-skip-permissions"],
     },
     Agent {
         name: "codex",
         image: "docker/sandbox-templates:codex-docker-0.7.0",
+        context_file: "/home/agent/.codex/AGENTS.md",
         command: &["codex", "--dangerously-bypass-approvals-and-sandbox"],
     },
     Agent {
         name: "copilot",
         image: "docker/sandbox-templates:copilot-docker-0.4.0",
+        context_file: DEFAULT_CONTEXT_FILE,
         command: &["copilot", "--yolo"],
     },
     Agent {
         name: "cursor",
         image: "docker/sandbox-templates:cursor-agent-docker-0.7.0",
+        context_file: DEFAULT_CONTEXT_FILE,
         command: &["cursor-agent", "--yolo"],
     },
     Agent {
         name: "devin",
         image: "docker/sandbox-templates:devin-docker-0.7.0",
+        context_file: DEFAULT_CONTEXT_FILE,
         command: &[
             "devin",
             "--permission-mode",
@@ -41,31 +51,37 @@ pub const AGENTS: &[Agent] = &[
     Agent {
         name: "docker-agent",
         image: "docker/sandbox-templates:docker-agent-docker-0.7.0",
+        context_file: DEFAULT_CONTEXT_FILE,
         command: &["docker-agent", "run", "--yolo"],
     },
     Agent {
         name: "droid",
         image: "docker/sandbox-templates:droid-docker-0.4.0",
+        context_file: DEFAULT_CONTEXT_FILE,
         command: &["droid"],
     },
     Agent {
         name: "gemini",
         image: "docker/sandbox-templates:gemini-docker-0.10.0",
+        context_file: "/home/agent/.gemini/GEMINI.md",
         command: &["gemini", "--yolo"],
     },
     Agent {
         name: "kiro",
         image: "docker/sandbox-templates:kiro-docker-0.4.0",
+        context_file: DEFAULT_CONTEXT_FILE,
         command: &["kiro", "chat", "--trust-all-tools"],
     },
     Agent {
         name: "opencode",
         image: "docker/sandbox-templates:opencode-docker-0.7.0",
+        context_file: DEFAULT_CONTEXT_FILE,
         command: &["opencode"],
     },
     Agent {
         name: "shell",
         image: "docker/sandbox-templates:shell-docker-0.10.0",
+        context_file: DEFAULT_CONTEXT_FILE,
         command: &["bash", "-l"],
     },
 ];

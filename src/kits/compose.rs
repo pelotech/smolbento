@@ -15,15 +15,7 @@ use crate::kits::resolve::Plan;
 /// The `--image` for a plan: the workload's ref or path when no mixin has layers; otherwise a
 /// cached archive at `<cache>/composed/<sha256 of input manifest digests>.tar`.
 pub fn image_for(plan: &Plan, cache: &Path) -> Result<String> {
-    let mut layered = Vec::new();
-    for m in &plan.mixins {
-        if let Content::Oci(dir) = &m.content {
-            let l = Layout::read(dir)?;
-            if !l.layers().is_empty() {
-                layered.push((m, l));
-            }
-        }
-    }
+    let layered = layered_mixins(plan)?;
     let w = &plan.workload;
     if layered.is_empty() {
         return match &w.content {
@@ -53,6 +45,24 @@ pub fn image_for(plan: &Plan, cache: &Path) -> Result<String> {
         .join(format!("{}.tar", hex_of(&key)?));
     ensure_tar(&tar, |out| compose(&base, &layered, cache, out))?;
     Ok(tar.display().to_string())
+}
+
+/// Whether any mixin brings image layers (a Smolfile workload can't take them).
+pub fn has_mixin_layers(plan: &Plan) -> Result<bool> {
+    Ok(!layered_mixins(plan)?.is_empty())
+}
+
+fn layered_mixins(plan: &Plan) -> Result<Vec<(&Kit, Layout)>> {
+    let mut layered = Vec::new();
+    for m in &plan.mixins {
+        if let Content::Oci(dir) = &m.content {
+            let l = Layout::read(dir)?;
+            if !l.layers().is_empty() {
+                layered.push((m, l));
+            }
+        }
+    }
+    Ok(layered)
 }
 
 /// An OCI layout directory read just enough to stack layers.

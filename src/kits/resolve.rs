@@ -29,7 +29,9 @@ pub struct Plan {
 pub struct Merged {
     pub install: Rules,
     pub runtime: Rules,
-    pub credentials: Vec<CredReq>,
+    /// The same network rules per kit (each kit's rules are tagged with it in the policy).
+    pub network: Vec<KitRules>,
+    pub credentials: Vec<KitCred>,
     pub ports: Vec<(u16, bool)>,
     pub volumes: Vec<(String, bool, Option<String>)>,
     pub cpus: Option<String>,
@@ -43,6 +45,20 @@ pub struct Merged {
     pub git_identity: bool,
     pub long_running: bool,
     pub privileged: bool,
+}
+
+#[derive(Debug)]
+pub struct KitRules {
+    pub kit: String,
+    pub install: Rules,
+    pub runtime: Rules,
+}
+
+#[derive(Debug)]
+pub struct KitCred {
+    pub kit: String,
+    pub optional: bool,
+    pub req: CredReq,
 }
 
 pub fn resolve(workload: Kit, mixins: Vec<Kit>, args: &ArgValues) -> Result<Plan> {
@@ -109,7 +125,11 @@ pub fn resolve(workload: Kit, mixins: Vec<Kit>, args: &ArgValues) -> Result<Plan
                             cap.ty
                         );
                     }
-                    merged.credentials.push(c.clone());
+                    merged.credentials.push(KitCred {
+                        kit: k.name.clone(),
+                        optional: cap.optional,
+                        req: c.clone(),
+                    });
                 }
                 CapBody::Network { install, runtime } => {
                     // Method and path qualifiers can't be enforced, only hosts can.
@@ -148,6 +168,11 @@ pub fn resolve(workload: Kit, mixins: Vec<Kit>, args: &ArgValues) -> Result<Plan
                     } else {
                         (install.clone(), runtime.clone())
                     };
+                    merged.network.push(KitRules {
+                        kit: k.name.clone(),
+                        install: install.clone(),
+                        runtime: runtime.clone(),
+                    });
                     merged.install.allow.extend(install.allow);
                     merged.install.deny.extend(install.deny);
                     merged.runtime.allow.extend(runtime.allow);
@@ -485,6 +510,19 @@ mod tests {
         let hosts = |r: &[NetRule]| r.iter().map(|x| x.host.clone()).collect::<Vec<_>>();
         assert_eq!(hosts(&p.merged.runtime.allow), ["a.com", "b.com"]);
         assert_eq!(hosts(&p.merged.runtime.deny), ["bad.com", "worse.com"]);
+        let per_kit: Vec<(&str, Vec<String>)> = p
+            .merged
+            .network
+            .iter()
+            .map(|k| (k.kit.as_str(), hosts(&k.runtime.allow)))
+            .collect();
+        assert_eq!(
+            per_kit,
+            [
+                ("w", vec!["a.com".to_string()]),
+                ("m", vec!["b.com".into()])
+            ]
+        );
     }
 
     #[test]

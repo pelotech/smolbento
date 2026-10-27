@@ -1,8 +1,10 @@
 //! sbx kits: a capability model plus parsers for the kit descriptor formats.
 
+pub mod apply;
 pub mod args;
 pub mod builder;
 pub mod compose;
+pub mod guest;
 pub mod load;
 pub mod model;
 pub mod registry;

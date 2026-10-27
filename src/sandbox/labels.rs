@@ -12,6 +12,56 @@ pub const CREDENTIAL_ENV: &str = "sbx.credential-env";
 pub const CLONE: &str = "sbx.clone";
 pub const CLONE_TOP: &str = "sbx.clone-top";
 pub const FORK_OF: &str = "sbx.fork-of";
+pub const KITS: &str = "sbx.kits";
+pub const COMMAND: &str = "sbx.command";
+pub const CREDENTIAL_INSTALL: &str = "sbx.credential-install";
+pub const LONG_RUNNING: &str = "sbx.long-running";
+/// Prefix of `sbx.credential-format.<ENV>`: how a kit credential's value is formatted.
+pub const CREDENTIAL_FORMAT: &str = "sbx.credential-format.";
+/// Prefix of `sbx.credential-service.<ENV>`: the secret service behind a kit credential's env var
+/// when it isn't one of that service's own env vars.
+pub const CREDENTIAL_SERVICE: &str = "sbx.credential-service.";
+
+/// How a kit credential's value becomes its header value (`:set-header`), applied at start.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum CredFormat {
+    /// `%s` stands for the value, e.g. `Bearer %s`.
+    Format(String),
+    /// HTTP basic auth with this user name and the value as the password.
+    Basic(String),
+}
+
+impl CredFormat {
+    fn to_label(&self) -> String {
+        match self {
+            CredFormat::Format(f) => format!("format:{f}"),
+            CredFormat::Basic(u) => format!("basic:{u}"),
+        }
+    }
+
+    fn from_label(s: &str) -> Option<CredFormat> {
+        if let Some(f) = s.strip_prefix("format:") {
+            return Some(CredFormat::Format(f.to_string()));
+        }
+        s.strip_prefix("basic:")
+            .map(|u| CredFormat::Basic(u.to_string()))
+    }
+
+    /// The header value for `value`.
+    pub fn apply(&self, value: &str) -> String {
+        match self {
+            CredFormat::Format(f) => f.replace("%s", value),
+            CredFormat::Basic(user) => {
+                use base64::Engine;
+                let raw = format!("{user}:{value}");
+                format!(
+                    "Basic {}",
+                    base64::engine::general_purpose::STANDARD.encode(raw)
+                )
+            }
+        }
+    }
+}
 
 /// Sandbox metadata, fixed at create and stored as smolvm machine labels.
 #[derive(Debug, Clone, Default, PartialEq, Eq)]
@@ -40,6 +90,18 @@ pub struct Meta {
     pub clone_repo: Option<String>,
     /// The sandbox this one was forked from.
     pub fork_of: Option<String>,
+    /// Applied kits as pinned refs (`REF@sha256:…`, or a local kit's path), dependency order.
+    pub kits: Vec<String>,
+    /// The workload kit's launch argv, when it replaced the agent preset's.
+    pub command: Option<Vec<String>>,
+    /// Env vars of install-only credentials, left out of every start after the first.
+    pub credential_install: Vec<String>,
+    /// Don't stop the sandbox when its last session ends (`long-running@1`).
+    pub long_running: bool,
+    /// Kit credentials whose value is formatted before smolvm sets it as a header, by env var.
+    pub credential_formats: BTreeMap<String, CredFormat>,
+    /// Kit credential env vars outside their service's own env vars, to their service.
+    pub credential_services: BTreeMap<String, String>,
 }
 
 impl Meta {
@@ -78,6 +140,34 @@ impl Meta {
         if let Some(f) = &self.fork_of {
             labels.insert(FORK_OF.to_string(), f.clone());
         }
+        // Kit labels exist only on sandboxes created with kits.
+        if !self.kits.is_empty() {
+            labels.insert(
+                KITS.to_string(),
+                serde_json::to_string(&self.kits).expect("strings serialize"),
+            );
+        }
+        if let Some(c) = &self.command {
+            labels.insert(
+                COMMAND.to_string(),
+                serde_json::to_string(c).expect("strings serialize"),
+            );
+        }
+        if !self.credential_install.is_empty() {
+            labels.insert(
+                CREDENTIAL_INSTALL.to_string(),
+                self.credential_install.join(","),
+            );
+        }
+        if self.long_running {
+            labels.insert(LONG_RUNNING.to_string(), "true".into());
+        }
+        for (env, f) in &self.credential_formats {
+            labels.insert(format!("{CREDENTIAL_FORMAT}{env}"), f.to_label());
+        }
+        for (env, service) in &self.credential_services {
+            labels.insert(format!("{CREDENTIAL_SERVICE}{env}"), service.clone());
+        }
         labels
     }
 
@@ -104,6 +194,28 @@ impl Meta {
                 .filter(|c| *c == "true")
                 .and_then(|_| labels.get(CLONE_TOP).or(labels.get(WORKSPACE)).cloned()),
             fork_of: labels.get(FORK_OF).cloned(),
+            kits: labels
+                .get(KITS)
+                .and_then(|j| serde_json::from_str(j).ok())
+                .unwrap_or_default(),
+            command: labels
+                .get(COMMAND)
+                .and_then(|j| serde_json::from_str(j).ok()),
+            credential_install: list(labels.get(CREDENTIAL_INSTALL)),
+            long_running: labels.get(LONG_RUNNING).is_some_and(|v| v == "true"),
+            credential_formats: labels
+                .iter()
+                .filter_map(|(k, v)| {
+                    let env = k.strip_prefix(CREDENTIAL_FORMAT)?;
+                    Some((env.to_string(), CredFormat::from_label(v)?))
+                })
+                .collect(),
+            credential_services: labels
+                .iter()
+                .filter_map(|(k, v)| {
+                    Some((k.strip_prefix(CREDENTIAL_SERVICE)?.to_string(), v.clone()))
+                })
+                .collect(),
         })
     }
 
@@ -243,6 +355,55 @@ mod tests {
         assert_eq!(labels["sbx.fork-of"], "a");
         assert_eq!(Meta::from_labels(&labels), Some(m));
         assert!(!meta().to_labels().contains_key("sbx.fork-of"));
+    }
+
+    #[test]
+    fn kit_labels_round_trip() {
+        let m = Meta {
+            kits: vec!["acme/a:1@sha256:ab".into(), "/k/b".into()],
+            command: Some(vec!["wl".into(), "--a b".into()]),
+            credential_install: vec!["GH_TOKEN".into(), "NPM_TOKEN".into()],
+            long_running: true,
+            credential_formats: BTreeMap::from([
+                ("SBX_KIT_X".into(), CredFormat::Format("Bearer %s".into())),
+                (
+                    "GH_TOKEN".into(),
+                    CredFormat::Basic("x-access-token".into()),
+                ),
+            ]),
+            credential_services: BTreeMap::from([("SBX_KIT_X".into(), "x".into())]),
+            ..meta()
+        };
+        let labels = m.to_labels();
+        assert_eq!(labels["sbx.kits"], r#"["acme/a:1@sha256:ab","/k/b"]"#);
+        assert_eq!(labels["sbx.command"], r#"["wl","--a b"]"#);
+        assert_eq!(labels["sbx.credential-install"], "GH_TOKEN,NPM_TOKEN");
+        assert_eq!(labels["sbx.long-running"], "true");
+        assert_eq!(
+            labels["sbx.credential-format.SBX_KIT_X"],
+            "format:Bearer %s"
+        );
+        assert_eq!(
+            labels["sbx.credential-format.GH_TOKEN"],
+            "basic:x-access-token"
+        );
+        assert_eq!(labels["sbx.credential-service.SBX_KIT_X"], "x");
+        assert_eq!(Meta::from_labels(&labels), Some(m));
+        // Absent when empty, so sandboxes without kits keep their labels.
+        let plain = meta().to_labels();
+        assert_eq!(plain.len(), 6, "{plain:?}");
+    }
+
+    #[test]
+    fn credential_formats_apply_to_the_value() {
+        assert_eq!(
+            CredFormat::Format("Bearer %s".into()).apply("t0k"),
+            "Bearer t0k"
+        );
+        assert_eq!(
+            CredFormat::Basic("x-access-token".into()).apply("ghp"),
+            "Basic eC1hY2Nlc3MtdG9rZW46Z2hw"
+        );
     }
 
     #[test]

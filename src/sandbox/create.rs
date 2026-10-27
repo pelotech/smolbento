@@ -1,8 +1,11 @@
+use std::collections::BTreeMap;
+use std::path::PathBuf;
+
 use crate::smolvm::{CreateSpec, Credential, Mount, NetworkSpec, PortMap};
 use crate::workspace::Workspace;
 use crate::workspace::clone::{CloneSource, SOURCE_MOUNT};
 
-use super::labels::Meta;
+use super::labels::{CredFormat, Meta};
 use super::name;
 
 /// Everything decided about a new sandbox before it's created.
@@ -32,6 +35,27 @@ pub struct CreateRequest {
     /// `--clone`: the host repo the sandbox clones; its git dir replaces the primary workspace's
     /// mount.
     pub clone: Option<CloneSource>,
+    /// The user gave `--cpus` / `-m`, which a kit's `resources@1` doesn't override.
+    pub cpus_set: bool,
+    pub memory_set: bool,
+    /// Pinned refs of the applied kits (the `sbx.kits` label).
+    pub kits: Vec<String>,
+    /// The workload kit's launch argv (the `sbx.command` label).
+    pub command: Option<Vec<String>>,
+    /// Env vars of install-only credentials (the `sbx.credential-install` label).
+    pub credential_install: Vec<String>,
+    /// Kit credential value formats by env var (`sbx.credential-format.<ENV>` labels).
+    pub credential_formats: BTreeMap<String, CredFormat>,
+    /// Kit credential env vars to their service (`sbx.credential-service.<ENV>` labels).
+    pub credential_services: BTreeMap<String, String>,
+    /// `long-running@1` (the `sbx.long-running` label).
+    pub long_running: bool,
+    /// Extra guest-only volumes (kit `volume@1`, non-tmpfs).
+    pub volumes: Vec<String>,
+    /// tmpfs volumes, mounted by a kit startup step (`mount -t tmpfs`), not by smolvm.
+    pub tmpfs: Vec<String>,
+    /// A Smolfile workload kit, passed with `--smolfile`.
+    pub smolfile: Option<PathBuf>,
 }
 
 /// Docker can't keep its storage on the overlay root filesystem, so these are directories on the
@@ -53,6 +77,12 @@ pub fn meta(req: &CreateRequest) -> Meta {
         credential_env: req.credential_env.clone(),
         clone_repo: req.clone.as_ref().map(|c| c.top.display().to_string()),
         fork_of: None,
+        kits: req.kits.clone(),
+        command: req.command.clone(),
+        credential_install: req.credential_install.clone(),
+        long_running: req.long_running,
+        credential_formats: req.credential_formats.clone(),
+        credential_services: req.credential_services.clone(),
     }
 }
 
@@ -85,6 +115,16 @@ pub fn spec(req: &CreateRequest) -> CreateSpec {
             read_only: false,
         }));
     }
+    for v in &req.volumes {
+        // A kit may ask for a volume smolbento already mounts (docker's storage).
+        if !mounts.iter().any(|m| m.guest == *v) {
+            mounts.push(Mount {
+                host: None,
+                guest: v.clone(),
+                read_only: false,
+            });
+        }
+    }
     CreateSpec {
         name: name::machine_name(&req.name),
         image: req.image.clone(),
@@ -98,6 +138,7 @@ pub fn spec(req: &CreateRequest) -> CreateSpec {
         network: req.network.clone(),
         deny_cidrs: req.deny_cidrs.clone(),
         credentials: req.credentials.clone(),
+        smolfile: req.smolfile.clone(),
         // The workload runs as root so startup steps (dockerd) can; agents exec as `agent`.
         user: Some("root".into()),
         cmd: vec!["sleep".into(), "infinity".into()],
