@@ -103,8 +103,7 @@ pub fn run<R: Runner>(ctx: &mut Ctx<R>, a: &RunArgs) -> Result<i32> {
             Ok(()) => session::clear(&sessions, sb.name()),
             Err(e) => eprintln!("warning: removing sandbox {}: {e:#}", sb.name()),
         }
-    } else if !session::is_detached(&sessions, sb.name())
-        && session::live_sessions(&sessions, sb.name()) == 0
+    } else if session::idle(&sessions, sb.name())
         && let Err(e) = ctx.vm.stop(&sb.machine)
     {
         eprintln!("warning: stopping sandbox {}: {e:#}", sb.name());

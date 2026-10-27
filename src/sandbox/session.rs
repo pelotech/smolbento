@@ -61,6 +61,11 @@ pub fn is_detached(sessions: &Path, sandbox: &str) -> bool {
     sessions.join(sandbox).join(DETACHED).exists()
 }
 
+/// Nobody needs the sandbox running: it wasn't started with `run -d` and has no live session.
+pub fn idle(sessions: &Path, sandbox: &str) -> bool {
+    !is_detached(sessions, sandbox) && live_sessions(sessions, sandbox) == 0
+}
+
 /// Forgets every session and the detached marker (on stop and rm).
 pub fn clear(sessions: &Path, sandbox: &str) {
     let _ = fs::remove_dir_all(sessions.join(sandbox));
@@ -105,8 +110,10 @@ mod tests {
     fn detached_marker() {
         let dir = tempfile::tempdir().unwrap();
         assert!(!is_detached(dir.path(), "a"));
+        assert!(idle(dir.path(), "a"));
         mark_detached(dir.path(), "a").unwrap();
         assert!(is_detached(dir.path(), "a"));
+        assert!(!idle(dir.path(), "a"));
         assert_eq!(live_sessions(dir.path(), "a"), 0);
         clear(dir.path(), "a");
         assert!(!is_detached(dir.path(), "a"));

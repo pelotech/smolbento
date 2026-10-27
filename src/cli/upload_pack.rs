@@ -14,7 +14,7 @@ pub fn run<R: Runner>(ctx: &mut Ctx<R>, sandbox: &str) -> Result<i32> {
     let Some(dir) = sb.meta.clone.clone() else {
         bail!("sandbox '{sandbox}' isn't a clone sandbox");
     };
-    let started = !sb.is_running();
+    let was_stopped = !sb.is_running();
     let sessions = ctx.paths.sessions();
     // Registered while git runs, so a concurrent `_upload-pack` won't stop the sandbox under it.
     let live = session::Session::register(&sessions, sb.name())?;
@@ -34,9 +34,8 @@ pub fn run<R: Runner>(ctx: &mut Ctx<R>, sandbox: &str) -> Result<i32> {
     // Our own session must not keep the sandbox running.
     drop(live);
     // Re-stop a sandbox this command started even when the exec failed.
-    if started
-        && !session::is_detached(&sessions, sb.name())
-        && session::live_sessions(&sessions, sb.name()) == 0
+    if was_stopped
+        && session::idle(&sessions, sb.name())
         && let Err(e) = ctx.vm.stop(&sb.machine)
     {
         eprintln!("warning: stopping sandbox {}: {e:#}", sb.name());
