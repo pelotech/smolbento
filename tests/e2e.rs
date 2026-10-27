@@ -1,6 +1,7 @@
 //! End-to-end tests that boot real smolvm VMs. Ignored by default; run with `just e2e`.
 //! Machines are small (1 CPU, 1 GiB) so they fit GitHub's private-repo runners.
-//! The network policy test needs internet (example.com), and the secrets test needs httpbin.org.
+//! The network policy test needs internet (example.com), the secrets test needs httpbin.org, and
+//! the clone test needs the Alpine package mirror.
 
 use std::path::{Path, PathBuf};
 use std::process::{Command, Output};
@@ -31,14 +32,49 @@ impl E2e {
     }
 
     fn sbt(&self, args: &[&str]) -> Output {
-        Command::new(env!("CARGO_BIN_EXE_smolbento"))
-            .args(args)
-            .current_dir(self.workspace())
+        self.env(Command::new(env!("CARGO_BIN_EXE_smolbento")).args(args))
+            .output()
+            .unwrap()
+    }
+
+    fn env<'a>(&self, cmd: &'a mut Command) -> &'a mut Command {
+        cmd.current_dir(self.workspace())
             .env("SMOLBENTO_CONFIG_DIR", self.dir.path().join("config"))
             .env("SMOLBENTO_CACHE_DIR", self.dir.path().join("cache"))
             .env("SMOLBENTO_DOCKER", "false")
-            .output()
-            .unwrap()
+    }
+
+    /// Host git in the workspace. The `sandbox-<name>` remote runs `sbt _upload-pack`, so `sbt`
+    /// (a symlink to this build) goes first on `PATH`, with the same environment as [`E2e::sbt`].
+    fn git(&self, args: &[&str]) -> Output {
+        let bin = self.dir.path().join("bin");
+        if !bin.exists() {
+            std::fs::create_dir_all(&bin).unwrap();
+            std::os::unix::fs::symlink(env!("CARGO_BIN_EXE_smolbento"), bin.join("sbt")).unwrap();
+        }
+        let path = std::env::join_paths(
+            std::iter::once(bin).chain(std::env::split_paths(&std::env::var_os("PATH").unwrap())),
+        )
+        .unwrap();
+        self.env(
+            Command::new("git")
+                .args(["-c", "user.name=e2e", "-c", "user.email=e2e@example.com"])
+                .args(["-c", "commit.gpgsign=false"])
+                .args(args),
+        )
+        .env("PATH", path)
+        .output()
+        .unwrap()
+    }
+
+    fn git_ok(&self, args: &[&str]) -> String {
+        let out = self.git(args);
+        assert!(
+            out.status.success(),
+            "git {args:?} failed:\n{}",
+            String::from_utf8_lossy(&out.stderr)
+        );
+        String::from_utf8_lossy(&out.stdout).into_owned()
     }
 
     fn ok(&self, args: &[&str]) -> String {
@@ -306,4 +342,125 @@ fn secrets_are_placeholders_in_the_guest() {
         "curl -s -m 20 -H \"Authorization: Bearer $TOK\" https://httpbin.org/headers",
     ]);
     assert!(echoed.contains("Bearer real-secret-xyz"), "{echoed}");
+}
+
+/// Runs `script` as root in the guest, straight through smolvm.
+fn guest_root(e: &E2e, script: &str) {
+    smolvm(&[
+        "machine",
+        "exec",
+        "--name",
+        &e.machine(),
+        "-u",
+        "root",
+        "--",
+        "sh",
+        "-c",
+        script,
+    ]);
+}
+
+#[test]
+#[ignore = "boots real VMs; run with `just e2e`"]
+fn clone_round_trip() {
+    let e = E2e::new("clone");
+    let ws = e.workspace();
+    let ws = ws.to_str().unwrap();
+    let remote = format!("sandbox-{}", e.name);
+    std::fs::write(e.workspace().join("README"), "host\n").unwrap();
+    e.git_ok(&["init", "-q", "-b", "main"]);
+    e.git_ok(&["add", "README"]);
+    e.git_ok(&["commit", "-q", "-m", "host commit"]);
+    e.git_ok(&[
+        "remote",
+        "add",
+        "origin",
+        "https://u:tok@example.com/o/r.git",
+    ]);
+    e.ok(&[
+        "secret",
+        "set-custom",
+        "--host",
+        "example.com",
+        "--env",
+        "TOK",
+        "--command",
+        "printf real-secret-xyz",
+    ]);
+
+    // Alpine has no `agent` user or git, so the first-start clone fails and stops the machine.
+    let out = e.sbt(&[
+        "create", "--clone", "shell", ws, "--name", &e.name, "-t", "alpine", "--cpus", "1", "-m",
+        "1g",
+    ]);
+    let err = String::from_utf8_lossy(&out.stderr);
+    assert!(
+        !out.status.success(),
+        "create without git in the image fails"
+    );
+    assert!(err.contains("cloning the repo in the sandbox"), "{err}");
+    assert!(
+        e.git_ok(&["remote"]).lines().any(|r| r == remote),
+        "remote kept"
+    );
+
+    smolvm(&["machine", "start", "-n", &e.machine()]);
+    guest_root(
+        &e,
+        &format!(
+            "adduser -D -u {} agent && apk add -q git",
+            smolbento::sandbox::host_uid()
+        ),
+    );
+    smolvm(&["machine", "stop", "-n", &e.machine()]);
+    e.ok(&["start", &e.name]);
+
+    let url = e.ok(&[
+        "exec", &e.name, "git", "-C", ws, "remote", "get-url", "origin",
+    ]);
+    assert_eq!(
+        url.trim(),
+        "https://example.com/o/r.git",
+        "userinfo stripped"
+    );
+    let tok = e.ok(&["exec", &e.name, "sh", "-c", "printf %s \"$TOK\""]);
+    assert!(tok.starts_with("SMOL_PLACEHOLDER_"), "{tok}");
+    let guest_commit = |msg: &str| {
+        e.ok(&[
+            "exec",
+            &e.name,
+            "sh",
+            "-c",
+            &format!(
+                "echo {msg} >> README && git -c user.name=a -c user.email=a@a \
+                 -c commit.gpgsign=false commit -q -am {msg}"
+            ),
+        ]);
+    };
+    guest_commit("guest-one");
+    assert_eq!(
+        std::fs::read_to_string(e.workspace().join("README")).unwrap(),
+        "host\n",
+        "the host checkout is untouched"
+    );
+    e.git_ok(&["fetch", "-q", &remote]);
+    let log = e.git_ok(&["log", "--format=%s", &format!("{remote}/main")]);
+    assert_eq!(log, "guest-one\nhost commit\n");
+
+    let touch = e.sbt(&["exec", &e.name, "touch", "/run/sandbox/source/x"]);
+    assert!(!touch.status.success(), "/run/sandbox/source is read-only");
+
+    // Fetching a stopped sandbox starts it, fetches and stops it again; the clone survives.
+    guest_commit("guest-two");
+    e.ok(&["stop", &e.name]);
+    e.git_ok(&["fetch", "-q", &remote]);
+    assert_eq!(e.state(), "stopped");
+    let log = e.git_ok(&["log", "--format=%s", "-1", &format!("{remote}/main")]);
+    assert_eq!(log, "guest-two\n");
+
+    e.ok(&["rm", "-f", &e.name]);
+    assert!(
+        !e.git_ok(&["remote"]).lines().any(|r| r == remote),
+        "rm removes the remote"
+    );
 }
