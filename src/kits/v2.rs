@@ -269,12 +269,13 @@ struct SecurityCfg {
 #[derive(Deserialize)]
 #[serde(deny_unknown_fields)]
 struct ArgCfg {
+    #[serde(default, deserialize_with = "opt_scalar")]
     default: Option<String>,
     #[serde(default)]
     required: bool,
     #[allow(dead_code)]
     description: Option<String>,
-    #[serde(default, rename = "enum")]
+    #[serde(default, rename = "enum", deserialize_with = "scalar_list")]
     enum_values: Vec<String>,
     pattern: Option<String>,
 }
@@ -809,5 +810,14 @@ mod tests {
         let (k, warnings) = parse_warn(&yaml, Path::new("/nonexistent")).unwrap();
         assert_eq!(k.command, Some(vec!["a".to_string(), "b".to_string()]));
         assert_eq!(warnings.len(), 2, "{warnings:?}");
+    }
+
+    #[test]
+    fn unquoted_numbers_and_bools_in_default_and_enum_become_strings() {
+        let yaml = "schemaVersion: \"2\"\nkind: mixin\nname: m\nargs:\n  a:\n    default: 5\n    \
+                    enum: [5, true, x]\n";
+        let k = parse(yaml, Path::new("/nonexistent")).unwrap();
+        assert_eq!(k.args["a"].default.as_deref(), Some("5"));
+        assert_eq!(k.args["a"].enum_values, ["5", "true", "x"]);
     }
 }

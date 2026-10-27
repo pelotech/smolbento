@@ -3,6 +3,8 @@
 use std::collections::BTreeMap;
 use std::path::PathBuf;
 
+use serde::{Deserialize, Deserializer};
+
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum Kind {
     Workload,
@@ -189,4 +191,41 @@ pub struct AgentContextReq {
     pub directory: Option<String>,
     /// Inline body, or `file:<path>` for a `contentFile` staged in the kit image.
     pub content: String,
+}
+
+/// A YAML scalar: sbx accepts an unquoted number or bool where an arg default or enum value is
+/// a string, and coerces it (`5` is `"5"`).
+#[derive(Deserialize)]
+#[serde(untagged)]
+enum Scalar {
+    Str(String),
+    Int(i64),
+    Uint(u64),
+    Float(f64),
+    Bool(bool),
+}
+
+impl Scalar {
+    fn into_string(self) -> String {
+        match self {
+            Scalar::Str(s) => s,
+            Scalar::Int(n) => n.to_string(),
+            Scalar::Uint(n) => n.to_string(),
+            Scalar::Float(n) => n.to_string(),
+            Scalar::Bool(b) => b.to_string(),
+        }
+    }
+}
+
+/// `deserialize_with` for an optional string that may be written as a number or bool.
+pub(crate) fn opt_scalar<'de, D: Deserializer<'de>>(d: D) -> Result<Option<String>, D::Error> {
+    Ok(Option::<Scalar>::deserialize(d)?.map(Scalar::into_string))
+}
+
+/// `deserialize_with` for a list of strings that may be written as numbers or bools.
+pub(crate) fn scalar_list<'de, D: Deserializer<'de>>(d: D) -> Result<Vec<String>, D::Error> {
+    Ok(Vec::<Scalar>::deserialize(d)?
+        .into_iter()
+        .map(Scalar::into_string)
+        .collect())
 }

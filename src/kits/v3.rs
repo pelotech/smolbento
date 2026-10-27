@@ -57,11 +57,12 @@ struct CapabilityItem {
 #[derive(Deserialize)]
 #[serde(rename_all = "camelCase")]
 struct Arg {
+    #[serde(default, deserialize_with = "opt_scalar")]
     default: Option<String>,
     #[serde(default)]
     required: bool,
     pattern: Option<String>,
-    #[serde(default, rename = "enum")]
+    #[serde(default, rename = "enum", deserialize_with = "scalar_list")]
     enum_values: Vec<String>,
     env: Option<String>,
     // Build-time only; accepted so published descriptors parse.
@@ -93,6 +94,7 @@ fn from_value(v: Value, source: Source) -> Result<Kit> {
             cap(c)
         })
         .collect::<Result<Vec<_>>>()?;
+    let name = name_from_source(&source)?;
     let args = d
         .args
         .into_iter()
@@ -107,7 +109,6 @@ fn from_value(v: Value, source: Source) -> Result<Kit> {
             (name, def)
         })
         .collect();
-    let name = name_from_source(&source)?;
     Ok(Kit {
         name,
         source,
@@ -694,6 +695,18 @@ mod tests {
             .unwrap_err();
             assert_eq!(format!("{e:#}"), "capability 1 has no type");
         }
+    }
+
+    #[test]
+    fn unquoted_numbers_and_bools_in_default_and_enum_become_strings() {
+        let k = parse(
+            "schemaVersion: \"3\"\nkind: mixin\nargs:\n  a:\n    default: 5\n    enum: [5, 6, true, 1.5, x]\n  b:\n    default: false\n",
+            local("x"),
+        )
+        .unwrap();
+        assert_eq!(k.args["a"].default.as_deref(), Some("5"));
+        assert_eq!(k.args["a"].enum_values, ["5", "6", "true", "1.5", "x"]);
+        assert_eq!(k.args["b"].default.as_deref(), Some("false"));
     }
 
     #[test]

@@ -122,12 +122,12 @@ pub(crate) fn build_kit_request<R: Runner>(
     Ok((req, plan))
 }
 
-/// For a sandbox about to be created: kit args with an agent preset need a `--kit`. (`run` of an
-/// existing sandbox only warns that kit flags don't apply.)
+/// Kit args need a kit: a `--kit` or a workload kit as the target. Like sbx this fails on every
+/// command, including `run` of an existing sandbox.
 pub(crate) fn check_kit_args(targets: &[String], opts: &SandboxOpts) -> Result<()> {
-    let preset = targets.first().is_some_and(|t| agents::find(t).is_some());
-    if preset && opts.kit.is_empty() && has_kit_args(opts) {
-        bail!("--kit-arg needs a kit");
+    let workload_kit = targets.first().is_some_and(|t| agents::find(t).is_none());
+    if !workload_kit && opts.kit.is_empty() && has_kit_args(opts) {
+        bail!("kit arguments were supplied but no kits were referenced");
     }
     Ok(())
 }
@@ -1731,7 +1731,7 @@ mod tests {
             ),
             (
                 vec!["create", "shell", "--kit-arg", "mode=1"],
-                "--kit-arg needs a kit",
+                "kit arguments were supplied but no kits were referenced",
             ),
             (
                 vec!["create", &workload, "-t", "img:1"],

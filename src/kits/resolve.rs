@@ -133,12 +133,8 @@ pub fn resolve_for(
 
     let mut kit_args = BTreeMap::new();
     for k in &all {
-        let mut effective = args.for_kit(k)?;
-        // An optional arg with no value and no default expands to "".
-        for name in k.args.keys() {
-            effective.entry(name.clone()).or_default();
-        }
-        kit_args.insert(k.name.clone(), effective);
+        // An optional arg with no value and no default stays out: using it is an error.
+        kit_args.insert(k.name.clone(), args.for_kit(k)?);
     }
 
     let mut merged = Merged::default();
@@ -157,8 +153,14 @@ pub fn resolve_for(
     let mut skipped = Vec::new();
     for k in &all {
         let a = &kit_args[&k.name];
+        let unresolved: BTreeSet<String> = k
+            .args
+            .keys()
+            .filter(|n| !a.contains_key(*n))
+            .cloned()
+            .collect();
         let ex = |s: &str| -> Result<String> {
-            expand(s, a, &env_map).with_context(|| format!("kit {}", k.name))
+            expand(s, a, &unresolved, &env_map).with_context(|| format!("kit {}", k.name))
         };
         for cap in &k.caps {
             match &cap.body {
@@ -690,12 +692,13 @@ mod tests {
         );
         m.args.insert("opt".into(), ArgDef::default());
         m.env = vec![("TOOL".into(), "x".into())];
+        // `opt` is declared with no value but never used: not an error.
         let m = m
             .cap(
                 "l@1",
                 false,
                 CapBody::Lifecycle(Lifecycle {
-                    install: vec![shell_hook("hi ${{ kit.args.name }}${{ kit.args.opt }}")],
+                    install: vec![shell_hook("hi ${{ kit.args.name }}")],
                     startup: vec![Hook {
                         command: HookCmd::Argv(vec!["echo".into(), "${{ kit.env.HOME }}".into()]),
                         ..shell_hook("")
@@ -730,7 +733,36 @@ mod tests {
         assert_eq!(p.merged.files[0].path, "/f/alice");
         assert_eq!(p.merged.files[0].content, "x");
         assert_eq!(p.merged.contexts[0].1.content, "for alice");
-        assert_eq!(p.args["m"]["opt"], "");
+        assert!(!p.args["m"].contains_key("opt"));
+    }
+
+    fn opt_hook_kit() -> Kit {
+        let mut m = mixin("m");
+        m.args.insert("opt".into(), ArgDef::default());
+        m.cap(
+            "l@1",
+            false,
+            CapBody::Lifecycle(Lifecycle {
+                install: vec![shell_hook("x${{ kit.args.opt }}y")],
+                startup: vec![],
+                files: vec![],
+            }),
+        )
+    }
+
+    #[test]
+    fn a_used_optional_arg_with_no_value_is_an_error_but_empty_is_a_value() {
+        let e = resolve(workload("w"), vec![opt_hook_kit()], &ArgValues::default()).unwrap_err();
+        assert_eq!(
+            format!("{e:#}"),
+            "kit m: create-phase kit arg \"opt\" has no resolved value"
+        );
+        let v = ArgValues::parse(&[], &["opt=".into()]).unwrap();
+        let p = resolve(workload("w"), vec![opt_hook_kit()], &v).unwrap();
+        assert_eq!(
+            p.merged.install_hooks[0].1.command,
+            HookCmd::Shell("xy".into())
+        );
     }
 
     #[test]

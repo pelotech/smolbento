@@ -1,6 +1,6 @@
 //! Kit argument values (`--kit-arg`, `--kit-args-file`) and `${{ kit.* }}` placeholder expansion.
 
-use std::collections::BTreeMap;
+use std::collections::{BTreeMap, BTreeSet};
 use std::path::PathBuf;
 
 use anyhow::{Context, Result, anyhow, bail};
@@ -128,11 +128,26 @@ fn validate(def: &ArgDef, pattern: Option<&Regex>, value: &str) -> Result<()> {
     Ok(())
 }
 
-/// Expands `${{ kit.args.NAME }}` and `${{ kit.env.NAME }}`; undeclared names are errors.
-/// `$VAR` and `${VAR}` are left for the shell.
+/// A declared optional arg with no value and no default, used in a placeholder (sbx errors the
+/// same way). An explicit empty value is a value.
+#[derive(Debug)]
+pub struct NoResolvedValue(pub String);
+
+impl std::fmt::Display for NoResolvedValue {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        write!(f, "create-phase kit arg {:?} has no resolved value", self.0)
+    }
+}
+
+impl std::error::Error for NoResolvedValue {}
+
+/// Expands `${{ kit.args.NAME }}` and `${{ kit.env.NAME }}`; undeclared names are errors, and so
+/// are declared ones in `unresolved` (no value, no default). `$VAR` and `${VAR}` are left for
+/// the shell.
 pub fn expand(
     s: &str,
     args: &BTreeMap<String, String>,
+    unresolved: &BTreeSet<String>,
     env: &BTreeMap<String, String>,
 ) -> Result<String> {
     let mut out = String::with_capacity(s.len());
@@ -145,8 +160,11 @@ pub fn expand(
             .ok_or_else(|| anyhow!("unterminated placeholder in {s:?}"))?;
         let expr = after[..end].trim();
         let value = if let Some(n) = expr.strip_prefix("kit.args.") {
-            args.get(n)
-                .ok_or_else(|| anyhow!("undeclared kit argument {n:?} in placeholder"))?
+            match args.get(n) {
+                Some(v) => v,
+                None if unresolved.contains(n) => return Err(NoResolvedValue(n.into()).into()),
+                None => bail!("undeclared kit argument {n:?} in placeholder"),
+            }
         } else if let Some(n) = expr.strip_prefix("kit.env.") {
             env.get(n)
                 .ok_or_else(|| anyhow!("undeclared kit env {n:?} in placeholder"))?
@@ -297,14 +315,15 @@ mod tests {
     fn expand_args_and_env_and_refuse_undeclared() {
         let a = BTreeMap::from([("v".to_string(), "1.2".to_string())]);
         let e = BTreeMap::from([("HOME".to_string(), "/home/agent".to_string())]);
+        let none = BTreeSet::new();
         assert_eq!(
-            expand("${{ kit.env.HOME }}/v${{kit.args.v}}", &a, &e).unwrap(),
+            expand("${{ kit.env.HOME }}/v${{kit.args.v}}", &a, &none, &e).unwrap(),
             "/home/agent/v1.2"
         );
-        assert!(expand("${{ kit.args.x }}", &a, &e).is_err());
-        assert!(expand("${{ kit.args.v", &a, &e).is_err());
+        assert!(expand("${{ kit.args.x }}", &a, &none, &e).is_err());
+        assert!(expand("${{ kit.args.v", &a, &none, &e).is_err());
         assert_eq!(
-            expand("$HOME ${HOME} stay", &a, &e).unwrap(),
+            expand("$HOME ${HOME} stay", &a, &none, &e).unwrap(),
             "$HOME ${HOME} stay"
         );
     }

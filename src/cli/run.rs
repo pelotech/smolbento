@@ -30,6 +30,7 @@ pub fn check_args(a: &RunArgs) -> Result<()> {
 }
 
 pub fn run<R: Runner>(ctx: &mut Ctx<R>, a: &RunArgs) -> Result<i32> {
+    super::lifecycle::check_kit_args(&a.targets, &a.opts)?;
     let existing = match &a.opts.name {
         Some(n) => sandbox::find(&ctx.vm, n)?,
         None => None,
@@ -58,7 +59,6 @@ pub fn run<R: Runner>(ctx: &mut Ctx<R>, a: &RunArgs) -> Result<i32> {
                     (sb, false)
                 }
                 None => {
-                    super::lifecycle::check_kit_args(&a.targets, &a.opts)?;
                     let kits = workload
                         .map(|w| kit_plan(ctx, &mut req, w, &a.opts))
                         .transpose()?;
@@ -777,9 +777,8 @@ mod tests {
             "warning: kits only apply when a sandbox is created; s1 already exists".to_string(),
         );
         assert_eq!(warning(&["run", "--name", "s1", "--kit", "./k"]), want);
-        assert_eq!(warning(&["run", "--name", "s1", "--kit-arg", "a=1"]), want);
         assert_eq!(
-            warning(&["run", "--name", "s1", "--kit-args-file", "f"]),
+            warning(&["run", "--name", "s1", "--kit", "./k", "--kit-arg", "a=1"]),
             want
         );
         assert_eq!(warning(&["run", "./k", "."]), want);
@@ -788,12 +787,20 @@ mod tests {
     }
 
     #[test]
-    fn kit_args_without_a_kit_attach_to_an_existing_sandbox_but_fail_a_create() {
+    fn kit_args_without_a_kit_always_fail() {
+        let want = "kit arguments were supplied but no kits were referenced";
         let mut t = test_env(&[]);
         created(&t, "running");
         t.ctx.vm.runner().interactive_exit(0);
-        sbt(&mut t.ctx, &["run", "claude", "--kit-arg", "a=1"]).unwrap();
-        assert_eq!(t.ctx.vm.runner().interactive_calls().len(), 1);
+        for args in [
+            vec!["run", "claude", "--kit-arg", "a=1"],
+            vec!["run", "--name", "claude-proj", "--kit-arg", "a=1"],
+            vec!["run", "--name", "claude-proj", "--kit-args-file", "f"],
+        ] {
+            let err = sbt(&mut t.ctx, &args).unwrap_err();
+            assert_eq!(format!("{err:#}"), want, "{args:?}");
+        }
+        assert!(t.ctx.vm.runner().interactive_calls().is_empty());
 
         let mut t = test_env(&[]);
         t.ctx
@@ -801,7 +808,7 @@ mod tests {
             .runner()
             .fail(&["machine", "status"], "NOT_FOUND", "vm not found");
         let err = sbt(&mut t.ctx, &["run", "claude", "--kit-arg", "a=1"]).unwrap_err();
-        assert_eq!(format!("{err:#}"), "--kit-arg needs a kit");
+        assert_eq!(format!("{err:#}"), want);
         assert!(
             !t.ctx
                 .vm

@@ -9,7 +9,7 @@ use super::Ctx;
 use super::args::{KitArgOpts, KitCmd};
 use super::plan;
 use crate::kits::apply::apply;
-use crate::kits::args::ArgValues;
+use crate::kits::args::{ArgValues, NoResolvedValue};
 use crate::kits::model::{Cap, CapBody, Content, ImageConfig, Kind, Kit, Source};
 use crate::kits::resolve::{resolve, resolve_for};
 use crate::kits::{compose, guest, load};
@@ -230,14 +230,22 @@ fn validate<R: Runner>(ctx: &Ctx<R>, reference: &str, args: &KitArgOpts) -> Resu
     let values = arg_values(args)?;
     let mut kit = load::load(ctx, reference)?;
     load::check_launchable(ctx, &mut kit)?;
-    let plan = match kit.kind {
-        Kind::Workload => resolve(kit, vec![], &values)?,
+    let resolved = match kit.kind {
+        Kind::Workload => resolve(kit, vec![], &values),
         Kind::Mixin => {
             let mut base = empty_workload("validate");
             base.provides = kit.requires.clone();
-            resolve(base, vec![kit], &values)?
+            resolve(base, vec![kit], &values)
         }
     };
+    // sbx's validate says the artifact failed validation when an arg has no value.
+    let plan = resolved.map_err(|e| {
+        if e.root_cause().is::<NoResolvedValue>() {
+            anyhow::anyhow!("{e:#}; artifact validation failed")
+        } else {
+            e
+        }
+    })?;
     plan.warn_skipped();
     writeln!(&ctx.out, "ok")?;
     Ok(0)
@@ -855,6 +863,33 @@ mod tests {
         )
         .unwrap_err();
         assert!(format!("{e:#}").contains("nope"), "{e:#}");
+    }
+
+    #[test]
+    fn validate_reports_a_used_arg_with_no_value_like_sbx() {
+        let mut t = kit_env();
+        let dir = t.ctx.cwd.join("chk");
+        fs::create_dir(&dir).unwrap();
+        fs::write(
+            dir.join("spec.yaml"),
+            "schemaVersion: \"2\"\nkind: mixin\nname: chk\nargs:\n  opt:\n    description: d\n\
+             setup:\n  install:\n    - command: echo ${{ kit.args.opt }}\n",
+        )
+        .unwrap();
+        let e = sbt(&mut t.ctx, &["kit", "validate", "./chk"]).unwrap_err();
+        assert_eq!(
+            format!("{e:#}"),
+            "kit chk: create-phase kit arg \"opt\" has no resolved value; \
+             artifact validation failed"
+        );
+        assert_eq!(
+            sbt(
+                &mut t.ctx,
+                &["kit", "validate", "./chk", "--kit-arg", "opt="]
+            )
+            .unwrap(),
+            0
+        );
     }
 
     #[test]
