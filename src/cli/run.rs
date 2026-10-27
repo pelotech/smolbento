@@ -1,6 +1,8 @@
 //! run: create the sandbox if needed, start it, attach to the agent, and stop it when the last
 //! session ends (unless it was started with -d).
 
+use std::path::Path;
+
 use anyhow::{Context, Result, bail};
 
 use super::lifecycle::{build_request, resolve_clone};
@@ -90,7 +92,7 @@ pub fn run<R: Runner>(ctx: &mut Ctx<R>, a: &RunArgs) -> Result<i32> {
     // Fetch before `--rm` deletes the sandbox, and while it still runs for `_upload-pack`.
     if fetch_on_exit(ctx, &sb)
         && let Some(repo) = &sb.meta.workspace
-        && let Err(e) = clone::fetch(std::path::Path::new(repo), sb.name())
+        && let Err(e) = clone::fetch(Path::new(repo), sb.name())
     {
         eprintln!("warning: fetching the agent's commits: {e:#}");
     }
