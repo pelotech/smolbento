@@ -53,6 +53,10 @@ impl Paths {
     pub fn sessions(&self) -> PathBuf {
         self.cache.join("sessions")
     }
+
+    pub fn kit_cache(&self) -> PathBuf {
+        self.cache.join("kits")
+    }
 }
 
 pub struct SettingDef {
@@ -86,6 +90,18 @@ pub const SETTINGS: &[SettingDef] = &[
         env: "SMOLBENTO_FORK",
         default: "true",
         help: "Start clone and mountless sandboxes branchable so `sbt fork` can copy them",
+    },
+    SettingDef {
+        key: "kit.sources",
+        env: "SMOLBENTO_KIT_SOURCES",
+        default: "docker.io/*",
+        help: "Registries kits may load from: comma-separated patterns (`*` = any)",
+    },
+    SettingDef {
+        key: "kit.allow-local",
+        env: "SMOLBENTO_KIT_ALLOW_LOCAL",
+        default: "true",
+        help: "Allow kits from local directories and Smolfiles",
     },
 ];
 
@@ -509,6 +525,7 @@ mod tests {
             (PathBuf::from("/c"), PathBuf::from("/k"))
         );
         assert_eq!(p.sessions(), PathBuf::from("/k/sessions"));
+        assert_eq!(p.kit_cache(), PathBuf::from("/k/kits"));
     }
 
     #[test]
