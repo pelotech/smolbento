@@ -7,3 +7,6 @@ pub mod sandbox;
 pub mod secrets;
 pub mod smolvm;
 pub mod workspace;
+
+#[cfg(test)]
+pub(crate) mod testgit;

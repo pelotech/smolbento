@@ -288,45 +288,11 @@ pub fn fetch(repo: &Path, sandbox: &str) -> Result<()> {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use std::process::Command;
-
-    fn git_in(dir: &Path, args: &[&str]) {
-        let st = Command::new("git")
-            .arg("-C")
-            .arg(dir)
-            .args(args)
-            .status()
-            .unwrap();
-        assert!(st.success(), "git {args:?}");
-    }
-
-    fn repo() -> (tempfile::TempDir, PathBuf) {
-        let dir = tempfile::tempdir().unwrap();
-        let root = dir.path().canonicalize().unwrap().join("repo");
-        std::fs::create_dir(&root).unwrap();
-        git_in(&root, &["init", "-q", "-b", "main"]);
-        git_in(
-            &root,
-            &[
-                "-c",
-                "user.name=t",
-                "-c",
-                "user.email=t@t",
-                "-c",
-                "commit.gpgsign=false",
-                "commit",
-                "-q",
-                "--allow-empty",
-                "-m",
-                "base",
-            ],
-        );
-        (dir, root)
-    }
+    use crate::testgit::{git, git_config, temp_repo};
 
     #[test]
     fn source_finds_top_and_git_dir_from_a_subdirectory() {
-        let (_d, root) = repo();
+        let (_d, root) = temp_repo();
         std::fs::create_dir(root.join("sub")).unwrap();
         let s = source(&root.join("sub")).unwrap();
         assert_eq!(
@@ -356,9 +322,9 @@ mod tests {
 
     #[test]
     fn linked_worktree_uses_the_main_git_dir_and_its_own_branch() {
-        let (d, root) = repo();
+        let (d, root) = temp_repo();
         let wt = d.path().canonicalize().unwrap().join("wt");
-        git_in(
+        git(
             &root,
             &["worktree", "add", "-q", "-b", "feat", wt.to_str().unwrap()],
         );
@@ -371,18 +337,10 @@ mod tests {
 
     #[test]
     fn remote_add_check_and_remove() {
-        let (_d, root) = repo();
+        let (_d, root) = temp_repo();
         check_remote_free(&root, "box").unwrap();
         add_remote(&root, "box").unwrap();
-        let get = |k: &str| {
-            let o = Command::new("git")
-                .arg("-C")
-                .arg(&root)
-                .args(["config", k])
-                .output()
-                .unwrap();
-            String::from_utf8(o.stdout).unwrap().trim().to_string()
-        };
+        let get = |k: &str| git_config(&root, k);
         assert_eq!(get("remote.sandbox-box.url"), "file:///sbt/box");
         assert_eq!(
             get("remote.sandbox-box.uploadpack"),
@@ -399,7 +357,7 @@ mod tests {
         remove_remote(&root, "box");
         assert_eq!(get("remote.sandbox-box.url"), "");
         // Foreign: refused, and never removed.
-        git_in(
+        git(
             &root,
             &["remote", "add", "sandbox-box", "https://example.com/x.git"],
         );
@@ -414,8 +372,8 @@ mod tests {
 
     #[test]
     fn copied_remotes_skip_local_and_strip_http_userinfo() {
-        let (_d, root) = repo();
-        git_in(
+        let (_d, root) = temp_repo();
+        git(
             &root,
             &[
                 "remote",
@@ -424,10 +382,10 @@ mod tests {
                 "https://u:tok@github.com/o/r.git",
             ],
         );
-        git_in(&root, &["remote", "add", "up", "git@github.com:o/r.git"]);
-        git_in(&root, &["remote", "add", "ssh", "ssh://git@host/r.git"]);
-        git_in(&root, &["remote", "add", "path", "/srv/r.git"]);
-        git_in(&root, &["remote", "add", "file", "file:///srv/r.git"]);
+        git(&root, &["remote", "add", "up", "git@github.com:o/r.git"]);
+        git(&root, &["remote", "add", "ssh", "ssh://git@host/r.git"]);
+        git(&root, &["remote", "add", "path", "/srv/r.git"]);
+        git(&root, &["remote", "add", "file", "file:///srv/r.git"]);
         add_remote(&root, "box").unwrap();
         let mut got = copied_remotes(&root).unwrap();
         got.sort();
@@ -465,13 +423,13 @@ mod tests {
 
     #[test]
     fn userinfo_remotes_names_the_remotes_with_credentials() {
-        let (_d, root) = repo();
-        git_in(
+        let (_d, root) = temp_repo();
+        git(
             &root,
             &["remote", "add", "origin", "https://u:tok@h/o/r.git"],
         );
-        git_in(&root, &["remote", "add", "up", "https://h/o/r.git"]);
-        git_in(&root, &["remote", "add", "ssh", "ssh://git@h/r.git"]);
+        git(&root, &["remote", "add", "up", "https://h/o/r.git"]);
+        git(&root, &["remote", "add", "ssh", "ssh://git@h/r.git"]);
         assert_eq!(userinfo_remotes(&root).unwrap(), vec!["origin"]);
     }
 
@@ -498,35 +456,33 @@ mod tests {
         assert!(err.contains("git config"), "{err}");
         assert!(add_remote(&gone, "box").is_err());
         // An unset key is still just absent.
-        let (_d, root) = repo();
+        let (_d, root) = temp_repo();
         assert_eq!(remote_owner(&root, "box").unwrap(), None);
     }
 
     #[test]
     fn add_remote_removes_the_remote_it_added_when_configuring_fails() {
-        let (_d, root) = repo();
+        let (_d, root) = temp_repo();
         // Two uploadpack values make the later `git config` overwrite fail.
-        git_in(
+        git(
             &root,
             &["config", "--add", "remote.sandbox-box.uploadpack", "a"],
         );
-        git_in(
+        git(
             &root,
             &["config", "--add", "remote.sandbox-box.uploadpack", "b"],
         );
         assert!(add_remote(&root, "box").is_err());
-        let out = Command::new("git")
-            .arg("-C")
-            .arg(&root)
-            .args(["config", "remote.sandbox-box.url"])
-            .output()
-            .unwrap();
-        assert!(!out.status.success(), "the half-added remote was left");
+        assert_eq!(
+            git_config(&root, "remote.sandbox-box.url"),
+            "",
+            "the half-added remote was left"
+        );
     }
 
     #[test]
     fn fetch_errors_on_a_missing_remote() {
-        let (_d, root) = repo();
+        let (_d, root) = temp_repo();
         let err = fetch(&root, "box").unwrap_err().to_string();
         assert!(err.contains("sandbox-box"), "{err}");
     }

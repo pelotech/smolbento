@@ -282,6 +282,7 @@ mod tests {
     use crate::sandbox::Meta;
     use crate::secrets::{SecretEntry, Source, scope_for};
     use crate::smolvm::NetworkSpec;
+    use std::path::Path;
 
     /// A sandbox's labels as recorded at create: `credential_env` holds the built-in services'
     /// env vars.
@@ -524,26 +525,11 @@ mod tests {
         );
     }
 
+    /// A temp repo with an `origin` remote, as a path string.
     fn host_repo(origin: &str) -> (tempfile::TempDir, String) {
-        let dir = tempfile::tempdir().unwrap();
-        let root = dir.path().canonicalize().unwrap().join("repo");
-        std::fs::create_dir(&root).unwrap();
-        let git = |args: &[&str]| {
-            let st = std::process::Command::new("git")
-                .arg("-C")
-                .arg(&root)
-                .args(["-c", "user.name=t", "-c", "user.email=t@t"])
-                .args(["-c", "commit.gpgsign=false"])
-                .args(args)
-                .status()
-                .unwrap();
-            assert!(st.success(), "git {args:?}");
-        };
-        git(&["init", "-q", "-b", "main"]);
-        git(&["commit", "-q", "--allow-empty", "-m", "init"]);
-        git(&["remote", "add", "origin", origin]);
-        let path = root.to_str().unwrap().to_string();
-        (dir, path)
+        let (dir, root) = temp_repo();
+        git(&root, &["remote", "add", "origin", origin]);
+        (dir, root.display().to_string())
     }
 
     #[test]
@@ -575,14 +561,10 @@ mod tests {
         set_policy(&t, "mode = \"deny-all\"");
         let (d, repo) = host_repo("https://github.com/o/r.git");
         let wt = d.path().canonicalize().unwrap().join("wt");
-        let st = std::process::Command::new("git")
-            .arg("-C")
-            .arg(&repo)
-            .args(["worktree", "add", "-q", "-b", "feat"])
-            .arg(&wt)
-            .status()
-            .unwrap();
-        assert!(st.success());
+        git(
+            Path::new(&repo),
+            &["worktree", "add", "-q", "-b", "feat", wt.to_str().unwrap()],
+        );
         let mut m = meta("s1", &[], &[]);
         m.clone = true;
         m.workspace = Some(wt.display().to_string());
