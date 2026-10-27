@@ -88,7 +88,7 @@ pub fn network(policy: &Policy, sandbox: &str, credential_hosts: &[String]) -> N
 }
 
 /// `network` plus the install-phase kit rules with these ids: only for the steps that run a kit's
-/// install hooks (a create's first start, `kit add`), which pass the ids they added themselves.
+/// install hooks (a create's first start, `kit add`), which pass their own kits' ids.
 pub fn network_with(
     policy: &Policy,
     sandbox: &str,
@@ -180,7 +180,13 @@ pub const HOST_LOOPBACK: [&str; 2] = ["127.0.0.0/8", "::1/128"];
 /// `HOST_LOOPBACK` and the deny rules' CIDRs. One with a port is left out: smolvm would deny
 /// every port of the range.
 pub fn deny_cidrs(policy: &Policy, sandbox: &str) -> Vec<String> {
-    resources(policy, Some(sandbox), &[], Decision::Deny)
+    deny_cidrs_with(policy, sandbox, &[])
+}
+
+/// `deny_cidrs` plus those of the install-phase kit rules with these ids: a create passes its
+/// own, as for `network_with`. smolvm fixes deny CIDRs at create, so they outlast the install.
+pub fn deny_cidrs_with(policy: &Policy, sandbox: &str, install: &[String]) -> Vec<String> {
+    resources(policy, Some(sandbox), install, Decision::Deny)
         .into_iter()
         .filter(|r| r.port.is_none())
         .filter_map(|r| match r.to_allow() {
@@ -560,6 +566,19 @@ mod tests {
             with_loopback(&["10.0.0.0/8", "192.168.0.0/16"])
         );
         assert_eq!(deny_cidrs(&p, "s2"), with_loopback(&["10.0.0.0/8"]));
+        // An install-phase deny counts only for the create that passes its id.
+        let id = p
+            .add_rule(
+                Some("s1"),
+                Decision::Deny,
+                "172.16.0.0/12",
+                "kit-install:k",
+                None,
+                None,
+            )
+            .unwrap();
+        assert!(!deny_cidrs(&p, "s1").contains(&"172.16.0.0/12".to_string()));
+        assert!(deny_cidrs_with(&p, "s1", &[id]).contains(&"172.16.0.0/12".to_string()));
     }
 
     fn with_loopback(cidrs: &[&str]) -> Vec<String> {

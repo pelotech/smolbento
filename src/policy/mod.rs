@@ -61,15 +61,6 @@ pub struct Rule {
     pub path: Option<String>,
 }
 
-impl Rule {
-    /// The rule's resources, parsed (they were validated when the rule was added).
-    pub fn parsed(&self) -> impl Iterator<Item = rules::Resource> + '_ {
-        self.resources
-            .iter()
-            .filter_map(|x| rules::Resource::parse(x).ok())
-    }
-}
-
 /// `created_via` of a kit's runtime rules: `kit:<kit>`.
 pub const KIT_VIA: &str = "kit:";
 /// `created_via` of a kit's install-phase rules: `kit-install:<kit>`. Only the steps that run the
@@ -78,6 +69,13 @@ pub const KIT_VIA: &str = "kit:";
 pub const KIT_INSTALL_VIA: &str = "kit-install:";
 
 impl Rule {
+    /// The rule's resources, parsed (they were validated when the rule was added).
+    pub fn parsed(&self) -> impl Iterator<Item = rules::Resource> + '_ {
+        self.resources
+            .iter()
+            .filter_map(|x| rules::Resource::parse(x).ok())
+    }
+
     /// Where the rule came from: "kit" when a kit added it (runtime or install phase), else
     /// "local".
     pub fn source(&self) -> &'static str {
@@ -293,10 +291,11 @@ impl Policy {
         Ok((all, added))
     }
 
-    /// Removes the sandbox's rules with these ids.
+    /// Removes the sandbox's kit rules (runtime or install phase) with these ids; a user's rule
+    /// with one of them stays.
     pub fn remove_rules_by_ids(&mut self, sandbox: &str, ids: &[String]) {
         self.rules_mut(Some(sandbox))
-            .retain(|r| !ids.contains(&r.id));
+            .retain(|r| !(ids.contains(&r.id) && r.source() == "kit"));
         self.prune(sandbox);
     }
 
@@ -727,8 +726,9 @@ mod tests {
         p.remove_rules_by_ids("sb", &all);
         assert_eq!(p.sandboxes["sb"].rules.len(), 1);
         assert_eq!(p.sandboxes["sb"].rules[0].id, user);
-        p.remove_rules_by_ids("sb", &[user]);
-        assert!(!p.sandboxes.contains_key("sb"));
+        // Only kit rules go by id this way.
+        p.remove_rules_by_ids("sb", std::slice::from_ref(&user));
+        assert_eq!(p.sandboxes["sb"].rules[0].id, user);
     }
 
     #[test]

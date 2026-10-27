@@ -56,7 +56,7 @@ pub fn start_plan<R: Runner>(ctx: &Ctx<R>, meta: &Meta) -> Result<StartPlan> {
 }
 
 /// `start_plan` for a create's first start, which also passes the install-only credentials and
-/// opens the install-phase rules with these ids (the ones this create added).
+/// opens the install-phase rules with these ids (this create's kits').
 pub fn first_start_plan<R: Runner>(
     ctx: &Ctx<R>,
     meta: &Meta,
@@ -349,6 +349,7 @@ fn create_with<R: Runner>(
                 &req.credential_hosts,
                 &k.steps.install_rules,
             );
+            req.deny_cidrs = compile::deny_cidrs_with(&policy, &req.name, &k.steps.install_rules);
         }
         if let Some(repo) = &repo
             && clone::add_remote(repo, &req.name)?
