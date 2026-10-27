@@ -34,11 +34,13 @@ that address.
 A kit can install software as root in the sandbox, run steps on every start and open network
 access, so load only kits you trust.
 
-- **Which kits load.** Published kits only from the registries in `kit.sources` (default Docker
-  Hub, `docker.io/*`), and local kits only while `kit.allow-local` is `true` (the default). Both are
-  checked before anything is downloaded or built. Signatures aren't checked yet. The images a kit
-  names (a workload kit's image, the base image its layers are added to) are pulled without a
-  `kit.sources` check, like a Dockerfile's `FROM`. Registries are reached over HTTPS, except
+- **Which kits load.** Published kits only from the prefixes in `kit.allowedSources` (default
+  Docker Hub, `["docker.io/"]`), and local kits only while `kit.allowLocalKits` is `true` (the
+  default). Both are checked before anything is downloaded or built. A prefix without `/`, such as
+  `ghcr.io`, matches only that registry host, never a look-alike such as `ghcr.io.evil.com`.
+  Signatures aren't checked yet. The images a kit names (a workload kit's image, the base image its
+  layers are added to) are pulled without a `kit.allowedSources` check, like a Dockerfile's
+  `FROM`. Registries are reached over HTTPS, except
   loopback ones (`localhost`, `127.0.0.0/8`, `::1`), which use plain HTTP, as in Docker.
 - **Kit network rules.** A kit's allow rules are added for its sandbox only, even under
   `deny-all`, as in sbx. `sbt policy ls --source kit` lists them (`--source local` lists yours).
@@ -64,6 +66,14 @@ access, so load only kits you trust.
     while the kit's binding exists, which is for the sandbox's life (smolvm needs them to send the
     secret). To drop them, recreate the sandbox without the kit.
   - A credential a kit needs only while installing is gone after install.
+- **What kit steps see.** Install steps run as root. A v3 install step gets a clean environment:
+  `PATH`, `HOME`, `USER`, `TERM`, the proxy and CA variables, and only the variables it declares.
+  Startup steps and v2 steps get the sandbox's whole environment, including your secrets'
+  variables, but those hold placeholders, not the values, as everywhere in the sandbox. A failing
+  startup step stops the sandbox from starting until it's fixed.
+- **A workload kit's agent** runs as the image's `USER`, or as root if the image sets none, as in
+  sbx. A non-root user gets your uid so it can write the workspace, like the built-in agents'
+  `agent` user.
 - **Kit arguments aren't secret.** Their values can end up in the sandbox's environment and in
   smolvm's machine config. Put secrets in credentials, not in `--kit-arg`.
 - **Local kit builds** run in the `_builder` sandbox, a VM under your global network policy, not on

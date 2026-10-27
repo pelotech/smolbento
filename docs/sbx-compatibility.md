@@ -70,11 +70,11 @@ with its `type@version` before anything is created; an optional one is skipped w
 | `network-policy@1`, `@2` | Yes | Yes: per-sandbox rules with source `kit`. Install-phase rules are in place from the sandbox's creation through its first start's setup and install steps, removed when install finishes, and never used by later starts. An install-phase deny of a CIDR is the exception: smolvm takes CIDR denies only at create, so it stays enforced for the sandbox's life (create prints a note) though `policy ls` no longer shows it. `@2` method and path rules aren't enforced, so a kit that requires them is refused |
 | `credential@1` | Yes | API keys: yes, through your secrets. OAuth with `passthrough: true`: yes (the token and resource hosts are allowed; the agent's own login keeps its tokens in the sandbox). OAuth without passthrough: no |
 | `port@1` | Yes | Yes, on `127.0.0.1` |
-| `volume@1` | Yes (kept across removal) | Yes, on the sandbox's disk; removed with the sandbox |
+| `volume@1` | Yes, removed with the sandbox | Yes, on the sandbox's disk; removed with the sandbox (`rm`, `reset`, recreate), kept across stop and start; each fork gets its own copy |
 | `resources@1` | Limited (no GPU) | CPUs and memory; GPU ignored, as in sbx |
-| `lifecycle@1` | Yes | Yes: install steps on the first start, startup steps on every start |
-| `agent-context@1`, `@2` | Yes | Yes: a managed section in the agent's instructions file |
-| `sbx@1` | Yes | Yes: the workload's command is the agent |
+| `lifecycle@1` | Yes | Yes: install steps on the first start, startup steps on every start (see below). `interactive` is ignored, as in sbx |
+| `agent-context@1`, `@2` | Yes | Yes, in the same places as sbx (see below) |
+| `sbx@1` | Yes | Yes: the workload's command is the agent, run as in sbx (see below) |
 | `git-identity@1` | Yes | Yes: your `git config user.name/email` |
 | `long-running@1` | Yes | Yes: no auto-stop when the last session ends |
 | `privileged@1` | Yes | Yes |
@@ -85,21 +85,64 @@ with its `type@version` before anything is created; an optional one is skipped w
 | `kit-registry@1` | Approved builder kits only | No |
 | `agent-interactive-sessions@1`, `usb-device@1` | No | No |
 
+What works as in sbx:
+
+- **Launch.** A workload kit's command runs as the image's `USER` (root when it has none) under
+  `/bin/bash`, so `BASH_ENV` is sourced, in the workspace path rather than `WORKDIR`. `sbt exec`
+  uses the same user. An image without `/bin/bash` fails with `executable file '/bin/bash' not
+  found` (exit 127). The image user gets your uid so it can write the workspace; a numeric `USER`
+  runs as the account that has that uid. A workload whose image declares no `ENTRYPOINT` or `CMD`
+  is refused at create and `kit validate`.
+- **Hooks.** Install steps run as root in the image's `WORKDIR`; startup steps and kit files
+  default to `agent`, not the image user. v3 install steps get a clean environment: `PATH`,
+  `HOME`, `USER`, `TERM`, the proxy and CA variables, and the variables the step declares in
+  `env`. v3 startup steps and all v2 steps get the sandbox's full environment.
+- **Startup steps** block, in kit order, and a failing one fails the start
+  (`kit startup exited with code N`); one marked `background: true` is started at its place and
+  only logged if it fails. The log is `/var/log/sbx-kit-startup.log`. If a startup step fails during
+  create, the sandbox is still created, with sbx's `StartRuntime after create failed` warning, and
+  left stopped; later starts fail until the step succeeds.
+- **Kit arguments.** An optional argument a kit uses with no value and no default is an error
+  (`create-phase kit arg "x" has no resolved value`); `--kit-arg x=` sets it to empty.
+  `--kit-arg` without a kit is an error. Unquoted numbers and booleans in `default:` and `enum:`
+  become strings.
+- **Agent context** goes in the agent's file in the parent directory of the workspace path, inside
+  the sandbox only (nothing is written on your machine): `CLAUDE.md` for claude, `GEMINI.md` for
+  gemini, `AGENTS.md` for the others, or the file a workload kit's own `agent-context` names, with
+  its text appended. A mixin's text goes to `kits-agent-context/<kit>.md` next to that file, which
+  lists it between `<!-- sbx:kits-section start -->` and `<!-- sbx:kits-section end -->`. A mixin's
+  context is dropped, with a warning, when the workload declares no agent file.
+- **Settings.** `kit.allowedSources` and `kit.allowLocalKits` (see
+  [Configuration](configuration.md#settings)).
+
 Differences:
 
 | Area | sbx | smolbento |
 |---|---|---|
 | Building local v3 kits | BuildKit on your machine | BuildKit in a hidden `_builder` sandbox; no Docker on your machine needed. It pulls base images without a registry login (kits built on `dhi.io`, like Docker's examples, don't build yet) and never gets your secrets |
-| Kit volumes | Kept across `rm` and recreation | Removed with the sandbox (`rm`, `reset`, recreate); kept across stop and start; each fork gets its own copy |
-| Where a kit sends a secret | Any host the kit names | A built-in service's secret only to that service's own hosts (else the kit is refused); a custom service's anywhere, with a note at `create` and `kit add` |
-| Install-only credentials | Available only while installing | The sandbox restarts once after install, without them; later requests to their hosts get `502` |
+| Where a kit sends a secret | Any host the kit names, after you approve it | A built-in service's secret only to that service's own hosts (else the kit is refused); a custom service's anywhere, with a note at `create` and `kit add` |
+| Install-only credentials | Not injected after install: the placeholder stays and requests go out without the credential | The sandbox restarts once after install, without them; later requests to their hosts get `502` |
 | OAuth credentials | Passthrough and sentinel tokens | Passthrough only (sentinel tokens need smolvm support) |
-| Method and path rules | Enforced | Not enforced (as for `policy allow --method/--path`); a kit that requires them is refused |
-| `kit add` | Adds rules, steps and context; files and host deny rules need a recreate | Also applies files and deny rules live. Image layers, credentials, ports, volumes, resources, environment variables and `long-running` need a recreate ("recreate required"); asks before opening network access, `-y/--yes` skips the question |
+| Method and path rules | Enforced (`403` outside the rule) | Not enforced (as for `policy allow --method/--path`); a kit that requires them is refused |
+| `kit add` | Recreates the container; refuses v2 kits with files and v3 mixins on a v3 workload; asks before opening network access, with no flag to skip the question | Applies to the running sandbox, files and deny rules included. Image layers, credentials, ports, volumes, resources, environment variables and `long-running` need a recreate ("recreate required"); asks before opening network access, and `-y/--yes` skips the question. A new startup step that fails only warns |
 | `kit inspect`, `kit validate` | `--format`, `--offline` | Neither; `kit inspect --json` gives JSON |
 | The name `docker` | A registry ref (the `docker` image) | The shipped Docker kit; write `docker.io/library/docker` for the image |
 | A ref that is also a local path | Registry ref | A local kit: a ref that names a file or directory relative to the current directory loads it, e.g. `alpine` with an `alpine` directory present. Write `docker.io/library/alpine` for the registry. `docker` is always the shipped kit |
-| Docker in the sandbox | Run by the `-docker` images | The shipped `docker` kit, added to Docker-enabled images; a failed first start removes the sandbox, as for any kit |
+| Docker in the sandbox | Run by the `-docker` images | The shipped `docker` kit, added to Docker-enabled images after your `--kit` kits; name it first (`--kit docker --kit ./mine`) if your kit's startup steps use Docker. A failed first start removes the sandbox, as for any kit |
+| v3 mixins on built-in agents | Refused (`no workload kit in the set`) | Allowed |
+| Loopback registries | HTTPS only | Plain HTTP for `localhost`, `127.0.0.0/8` and `::1`, as in Docker |
+| Smolfile kits | None | A Smolfile defines its own workload, so one without a command keeps the shell agent's |
+| Agent context file | Starts with a long platform preamble | No preamble: only kit text and the index |
+| Startup log lines | `ok /etc/durable-startup.d/…` | `ok /etc/smolbento/startup.d/NN-<kit>.sh hook N`, one per step and start |
+| Kit settings | Also `kit.requireSignature`, `kit.trustedSigners`, `kit.ignoreTransparencyLog`, `kit.allowExtractedAgents` | Not yet: signatures aren't checked, and built-in agents aren't kits |
+
+Not compared with sbx yet:
+
+- How arguments with float or unusual literal values (`1.0`, `0x10`, `True`) become strings
+  (smolbento writes `1.0` as `1`).
+- A startup step or v2 step run as a non-root user: it keeps the sandbox's environment, except
+  that `HOME`, `USER`, `LOGNAME` and `SHELL` are that user's (through `runuser`, or `su` on images
+  without it).
 
 ## Exit codes
 
