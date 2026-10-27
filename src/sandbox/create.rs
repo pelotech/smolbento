@@ -2,8 +2,8 @@ use std::collections::BTreeMap;
 use std::path::PathBuf;
 
 use crate::smolvm::{CreateSpec, Credential, Mount, NetworkSpec, PortMap};
-use crate::workspace::Workspace;
 use crate::workspace::clone::{CloneSource, SOURCE_MOUNT};
+use crate::workspace::{MOUNTLESS_WORKDIR, Workspace};
 
 use super::labels::{CredFormat, Meta};
 use super::name;
@@ -57,6 +57,17 @@ pub struct CreateRequest {
     pub tmpfs: Vec<String>,
     /// A Smolfile workload kit, passed with `--smolfile`.
     pub smolfile: Option<PathBuf>,
+}
+
+impl CreateRequest {
+    /// The sandbox's working directory in the guest, as `Sandbox::workdir` gives it once created:
+    /// the primary workspace (inside the clone with `--clone`), or sbx's mountless directory.
+    pub fn workdir(&self) -> String {
+        self.workspaces.first().map_or_else(
+            || MOUNTLESS_WORKDIR.into(),
+            |w| w.path.display().to_string(),
+        )
+    }
 }
 
 /// The labels the sandbox gets.

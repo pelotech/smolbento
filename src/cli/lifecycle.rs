@@ -12,7 +12,7 @@ use crate::agents;
 use crate::kits::args::ArgValues;
 use crate::kits::load;
 use crate::kits::model::{Content, Kind, Kit, Source};
-use crate::kits::resolve::{Plan, resolve};
+use crate::kits::resolve::{Plan, resolve_for};
 use crate::sandbox::{self, CreateRequest, Sandbox, name, options, session};
 use crate::smolvm::Runner;
 use crate::workspace::{Workspace, clone};
@@ -172,7 +172,8 @@ fn has_kit_args(opts: &SandboxOpts) -> bool {
 }
 
 /// The second half of `build_kit_request`, for a sandbox about to be created: loads the workload
-/// kit (filling `req`'s image) and the `--kit` mixins, and resolves them with the kit args.
+/// kit (filling `req`'s image) and the `--kit` mixins, and resolves them with the kit args and
+/// `req`'s working directory.
 pub(crate) fn kit_plan<R: Runner>(
     ctx: &Ctx<R>,
     req: &mut CreateRequest,
@@ -211,7 +212,7 @@ pub(crate) fn kit_plan<R: Runner>(
     if req.docker && !mixins.iter().any(|k| k.source == Source::Builtin("docker")) {
         mixins.push(load::builtin("docker").expect("the docker kit is shipped")?);
     }
-    let plan = resolve(workload, mixins, &args)?;
+    let plan = resolve_for(workload, mixins, &args, &req.workdir())?;
     plan.warn_skipped();
     Ok(plan)
 }
@@ -1543,6 +1544,28 @@ mod tests {
             .expect("the install hook runs");
         assert!(start < install, "{lines:?}");
         assert_eq!(t.stdout(), "Created sandbox shell-proj\n");
+    }
+
+    #[test]
+    fn create_writes_v2_workspace_files_into_the_workspace() {
+        let mut t = kit_env();
+        let fake = t.ctx.vm.runner();
+        fake.ok(
+            &["machine", "status"],
+            &json("sbx-shell-proj", "created", "shell-proj"),
+        );
+        fake.once_fail(&["machine", "status"], "NOT_FOUND", "vm not found");
+        let kit = fixture("workspace-files");
+        sbt(&mut t.ctx, &["create", "shell", ".", "--kit", &kit]).unwrap();
+        let ws = t.ctx.cwd.canonicalize().unwrap().display().to_string();
+        let lines = t.ctx.vm.runner().call_lines();
+        let wrote = |needle: &str| {
+            lines
+                .iter()
+                .any(|l| l.starts_with("machine exec") && l.contains(needle))
+        };
+        assert!(wrote(&format!("{ws}/docs/NOTES.md")), "{lines:#?}");
+        assert!(wrote(&format!("workdir={ws}")), "{lines:#?}");
     }
 
     #[test]

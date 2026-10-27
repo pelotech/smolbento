@@ -11,7 +11,7 @@ use super::plan;
 use crate::kits::apply::apply;
 use crate::kits::args::ArgValues;
 use crate::kits::model::{Cap, CapBody, Content, Kind, Kit, Source};
-use crate::kits::resolve::resolve;
+use crate::kits::resolve::{resolve, resolve_for};
 use crate::kits::{compose, guest, load};
 use crate::policy::{Decision, Policy, compile};
 use crate::sandbox::{self, CreateRequest, KitPhase, Sandbox};
@@ -364,7 +364,12 @@ fn add_running<R: Runner>(
         .map(recorded_kit)
         .chain(std::iter::once(kit))
         .collect();
-    let plan = resolve(empty_workload(&sb.meta.agent), mixins, values)?;
+    let plan = resolve_for(
+        empty_workload(&sb.meta.agent),
+        mixins,
+        values,
+        &sb.workdir(),
+    )?;
     plan.warn_skipped();
 
     // In memory until approved.
@@ -719,6 +724,14 @@ mod tests {
         assert!(format!("{e:#}").contains("sise"), "{e:#}");
         assert_eq!(super::super::exit_code(&e), 1);
         assert_eq!(t.stdout(), "");
+    }
+
+    #[test]
+    fn validate_accepts_v2_workspace_files() {
+        let mut t = kit_env();
+        let ws = v2_fixture("workspace-files");
+        assert_eq!(sbt(&mut t.ctx, &["kit", "validate", &ws]).unwrap(), 0);
+        assert_eq!(t.stdout(), "ok\n");
     }
 
     #[test]

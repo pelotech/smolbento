@@ -71,7 +71,23 @@ pub struct KitCred {
     pub req: CredReq,
 }
 
+/// `${{ kit.env.WORKSPACE }}` when there's no sandbox (`kit validate`, tests): the mountless
+/// working directory, so a kit validates the same way it applies to a mountless sandbox.
+pub const NO_SANDBOX_WORKDIR: &str = crate::workspace::MOUNTLESS_WORKDIR;
+
+/// `resolve_for` without a sandbox, for checking kits: `WORKSPACE` is `NO_SANDBOX_WORKDIR`.
 pub fn resolve(workload: Kit, mixins: Vec<Kit>, args: &ArgValues) -> Result<Plan> {
+    resolve_for(workload, mixins, args, NO_SANDBOX_WORKDIR)
+}
+
+/// Resolves the kits for a sandbox whose working directory in the guest is `workdir`: v2's
+/// `files/workspace` and `${WORKDIR}` expand to it as `${{ kit.env.WORKSPACE }}`.
+pub fn resolve_for(
+    workload: Kit,
+    mixins: Vec<Kit>,
+    args: &ArgValues,
+    workdir: &str,
+) -> Result<Plan> {
     if let Some(m) = mixins.iter().find(|m| m.kind == Kind::Workload) {
         bail!(
             "two workloads: {} and {}; pass a workload kit as the agent argument",
@@ -107,6 +123,7 @@ pub fn resolve(workload: Kit, mixins: Vec<Kit>, args: &ArgValues) -> Result<Plan
     }
     let mut env_map: BTreeMap<String, String> = merged.env.iter().cloned().collect();
     env_map.insert("HOME".into(), AGENT_HOME.into());
+    env_map.insert("WORKSPACE".into(), workdir.into());
 
     let mut skipped = Vec::new();
     for k in &all {
@@ -674,5 +691,39 @@ mod tests {
             }),
         );
         assert!(run(workload("w"), vec![m]).is_err());
+    }
+
+    #[test]
+    fn v2_workspace_files_and_workdir_expand_to_the_workdir() {
+        let dir = std::path::Path::new("tests/fixtures/kits/v2/workspace-files");
+        let yaml = std::fs::read_to_string(dir.join("spec.yaml")).unwrap();
+        let kit = crate::kits::v2::parse(&yaml, dir).unwrap();
+        let files = |p: &Plan| -> Vec<(String, String)> {
+            p.merged
+                .files
+                .iter()
+                .map(|f| (f.path.clone(), f.content.clone()))
+                .collect()
+        };
+        let p = resolve_for(
+            workload("w"),
+            vec![kit.clone()],
+            &ArgValues::default(),
+            "/w/repo",
+        )
+        .unwrap();
+        assert_eq!(
+            files(&p),
+            [
+                ("/home/agent/.wsrc".into(), "workdir=/w/repo\n".into()),
+                (
+                    "/w/repo/docs/NOTES.md".into(),
+                    "Notes for the workspace.\n".into()
+                ),
+            ]
+        );
+        // Without a sandbox (`kit validate`): the mountless directory.
+        let p = resolve(workload("w"), vec![kit], &ArgValues::default()).unwrap();
+        assert_eq!(files(&p)[1].0, "/home/agent/workspace/docs/NOTES.md");
     }
 }
