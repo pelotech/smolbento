@@ -10,6 +10,7 @@ use anyhow::{Context, Result};
 
 use crate::smolvm::{ExecSpec, Machine, MachineState, NetworkSpec, PublishedPort, Runner, Smolvm};
 use crate::workspace::MOUNTLESS_WORKDIR;
+use crate::workspace::clone::SOURCE_MOUNT;
 
 pub use create::CreateRequest;
 pub use labels::Meta;
@@ -41,6 +42,54 @@ pub struct StartPlan {
     /// shell's same-named variables can't stand in for them.
     pub remove: Vec<String>,
     pub uid: u32,
+    /// Set for a clone sandbox; the clone itself is skipped once it exists.
+    pub clone: Option<CloneStep>,
+}
+
+/// The first start of a clone sandbox clones the host repo inside the VM (as sbx).
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct CloneStep {
+    /// Where the clone goes: a guest-only volume at the host repo's path.
+    pub dir: String,
+    /// Only for a linked worktree, whose source HEAD is the main worktree's.
+    pub branch: Option<String>,
+    /// Host remotes to copy (local ones and credentials already left out).
+    pub remotes: Vec<(String, String)>,
+}
+
+/// Single-quotes `s` for `sh -c`.
+pub fn sh_quote(s: &str) -> String {
+    format!("'{}'", s.replace('\'', r"'\''"))
+}
+
+/// As root: the volume is root-owned and may hold `lost+found`, which `git clone` won't clone into.
+fn clone_prep_cmd(step: &CloneStep) -> String {
+    let d = sh_quote(&step.dir);
+    let lf = sh_quote(&format!("{}/lost+found", step.dir));
+    let git = sh_quote(&format!("{}/.git", step.dir));
+    format!("[ -d {git} ] && exit 0; rmdir {lf} 2>/dev/null; chown agent {d}")
+}
+
+/// As `agent`: sbx's clone command, then its remote copy.
+fn clone_cmd(step: &CloneStep) -> String {
+    let d = sh_quote(&step.dir);
+    let git = sh_quote(&format!("{}/.git", step.dir));
+    let branch = step
+        .branch
+        .as_ref()
+        .map(|b| format!("--branch {} ", sh_quote(b)))
+        .unwrap_or_default();
+    let mut s = format!(
+        "set -e; [ -d {git} ] && exit 0; \
+         git -c safe.directory={SOURCE_MOUNT} clone -q {branch}{SOURCE_MOUNT} {d}; cd {d}"
+    );
+    for (n, u) in &step.remotes {
+        let (n, u) = (sh_quote(n), sh_quote(u));
+        s.push_str(&format!(
+            "; git remote set-url -- {n} {u} 2>/dev/null || git remote add -- {n} {u}"
+        ));
+    }
+    s
 }
 
 #[derive(Debug, Clone, PartialEq)]
@@ -130,6 +179,17 @@ pub fn start<R: Runner>(vm: &Smolvm<R>, sb: &Sandbox, plan: &StartPlan) -> Resul
         })
         .context("starting dockerd")?;
     }
+    if let Some(step) = &plan.clone {
+        for (user, cmd) in [("root", clone_prep_cmd(step)), ("agent", clone_cmd(step))] {
+            vm.exec_captured(&ExecSpec {
+                name: sb.machine.clone(),
+                user: Some(user.into()),
+                cmd: vec!["sh".into(), "-c".into(), cmd],
+                ..Default::default()
+            })
+            .context("cloning the repo in the sandbox")?;
+        }
+    }
     Ok(())
 }
 
@@ -204,6 +264,7 @@ mod tests {
             env: vec![("TOK".into(), "secret".into())],
             remove: vec!["GONE".into()],
             uid: 501,
+            clone: None,
         }
     }
 
@@ -291,6 +352,68 @@ mod tests {
             lines.len(),
             5,
             "no dockerd for a non-docker sandbox: {lines:?}"
+        );
+    }
+
+    #[test]
+    fn clone_commands_quote_and_copy_remotes() {
+        let step = CloneStep {
+            dir: "/w/my repo".into(),
+            branch: Some("feat".into()),
+            remotes: vec![("origin".into(), "https://github.com/o/r.git".into())],
+        };
+        assert_eq!(
+            clone_prep_cmd(&step),
+            "[ -d '/w/my repo/.git' ] && exit 0; rmdir '/w/my repo/lost+found' 2>/dev/null; chown agent '/w/my repo'"
+        );
+        assert_eq!(
+            clone_cmd(&step),
+            "set -e; [ -d '/w/my repo/.git' ] && exit 0; \
+             git -c safe.directory=/run/sandbox/source clone -q --branch 'feat' /run/sandbox/source '/w/my repo'; \
+             cd '/w/my repo'; \
+             git remote set-url -- 'origin' 'https://github.com/o/r.git' 2>/dev/null || git remote add -- 'origin' 'https://github.com/o/r.git'"
+        );
+        assert_eq!(sh_quote("it's"), r"'it'\''s'");
+    }
+
+    #[test]
+    fn start_runs_the_clone_step_after_setup() {
+        let fake = FakeRunner::new();
+        fake.ok(&["machine"], "");
+        let vm = Smolvm::new(fake);
+        let sb = Sandbox {
+            meta: Meta {
+                name: "r".into(),
+                workspace: Some("/w/r".into()),
+                clone: true,
+                ..Default::default()
+            },
+            machine: "sbx-r".into(),
+            state: MachineState::Stopped,
+            ports: vec![],
+        };
+        let plan = StartPlan {
+            network: NetworkSpec::Open,
+            env: vec![],
+            remove: vec![],
+            uid: 501,
+            clone: Some(CloneStep {
+                dir: "/w/r".into(),
+                branch: None,
+                remotes: vec![],
+            }),
+        };
+        start(&vm, &sb, &plan).unwrap();
+        let lines = vm.runner().call_lines();
+        let last2 = &lines[lines.len() - 2..];
+        assert!(
+            last2[0].contains("-u root") && last2[0].contains("chown agent"),
+            "{last2:?}"
+        );
+        assert!(
+            last2[1].contains("-u agent")
+                && last2[1].contains("clone -q /run/sandbox/source '/w/r'"),
+            "{last2:?}"
         );
     }
 }

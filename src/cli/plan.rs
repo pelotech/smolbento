@@ -6,9 +6,10 @@ use anyhow::{Context, Result, bail};
 
 use super::Ctx;
 use crate::policy::{Mode, Policy, compile};
-use crate::sandbox::{self, CreateRequest, Meta, Sandbox, StartPlan};
+use crate::sandbox::{self, CloneStep, CreateRequest, Meta, Sandbox, StartPlan};
 use crate::secrets::{SecretsFile, resolve::resolve};
 use crate::smolvm::{Credential, Runner};
+use crate::workspace::clone;
 
 /// Hosts of the given services' credentials.
 pub fn credential_hosts(secrets: &SecretsFile, services: &[String]) -> Vec<String> {
@@ -76,11 +77,32 @@ pub fn start_plan<R: Runner>(ctx: &Ctx<R>, meta: &Meta) -> Result<StartPlan> {
         .filter(|v| !env.iter().any(|(k, _)| k == *v))
         .cloned()
         .collect();
+    let clone = meta.clone_dir().map(|dir| {
+        let repo = std::path::PathBuf::from(meta.workspace.as_deref().unwrap_or(&dir));
+        let read = || -> Result<_> {
+            Ok((
+                clone::worktree_branch(&repo)?,
+                clone::copied_remotes(&repo)?,
+            ))
+        };
+        let (branch, remotes) = read().unwrap_or_else(|e| {
+            eprintln!(
+                "warning: reading the host repo for {sandbox}: {e:#}; its remotes aren't copied"
+            );
+            (None, Vec::new())
+        });
+        CloneStep {
+            dir,
+            branch,
+            remotes,
+        }
+    });
     Ok(StartPlan {
         network,
         env,
         remove,
         uid: ctx.uid,
+        clone,
     })
 }
 
@@ -467,6 +489,69 @@ mod tests {
                 "machine update -n sbx-a1 --reset-allow-list --allow-host api.x.example \
                  --allow-cidr 127.0.0.0/8 --allow-cidr ::1/128"
             ]
+        );
+    }
+
+    fn host_repo(origin: &str) -> (tempfile::TempDir, String) {
+        let dir = tempfile::tempdir().unwrap();
+        let root = dir.path().canonicalize().unwrap().join("repo");
+        std::fs::create_dir(&root).unwrap();
+        let git = |args: &[&str]| {
+            let st = std::process::Command::new("git")
+                .arg("-C")
+                .arg(&root)
+                .args(["-c", "user.name=t", "-c", "user.email=t@t"])
+                .args(["-c", "commit.gpgsign=false"])
+                .args(args)
+                .status()
+                .unwrap();
+            assert!(st.success(), "git {args:?}");
+        };
+        git(&["init", "-q", "-b", "main"]);
+        git(&["commit", "-q", "--allow-empty", "-m", "init"]);
+        git(&["remote", "add", "origin", origin]);
+        let path = root.to_str().unwrap().to_string();
+        (dir, path)
+    }
+
+    #[test]
+    fn start_plan_clones_with_the_host_repos_remotes() {
+        let t = test_env(&[]);
+        set_policy(&t, "mode = \"deny-all\"");
+        let (_d, repo) = host_repo("https://x:y@github.com/o/r.git");
+        let mut m = meta("s1", &[], &[]);
+        m.clone = true;
+        m.workspace = Some(repo.clone());
+        let plan = start_plan(&t.ctx, &m).unwrap();
+        assert_eq!(
+            plan.clone,
+            Some(CloneStep {
+                dir: repo,
+                branch: None,
+                remotes: vec![("origin".into(), "https://github.com/o/r.git".into())],
+            })
+        );
+        assert_eq!(
+            start_plan(&t.ctx, &meta("s1", &[], &[])).unwrap().clone,
+            None
+        );
+    }
+
+    #[test]
+    fn start_plan_warns_when_the_host_repo_is_gone() {
+        let t = test_env(&[]);
+        set_policy(&t, "mode = \"deny-all\"");
+        let mut m = meta("s1", &[], &[]);
+        m.clone = true;
+        m.workspace = Some("/nonexistent/repo".into());
+        let plan = start_plan(&t.ctx, &m).unwrap();
+        assert_eq!(
+            plan.clone,
+            Some(CloneStep {
+                dir: "/nonexistent/repo".into(),
+                branch: None,
+                remotes: vec![],
+            })
         );
     }
 }
