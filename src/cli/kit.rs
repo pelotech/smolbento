@@ -666,6 +666,7 @@ mod tests {
             user: None,
             env: vec![],
             background: false,
+            clean_env: true,
         };
         format!("cd / && {}", guest::hook_script(&h))
     }

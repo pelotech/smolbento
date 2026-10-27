@@ -1104,6 +1104,7 @@ mod tests {
                         user: None,
                         env: vec![],
                         background: false,
+                        clean_env: true,
                     }],
                     ..Default::default()
                 }),

@@ -550,18 +550,21 @@ fn lifecycle(
     kit: &str,
     warnings: &mut Vec<String>,
 ) -> Result<Option<Lifecycle>> {
-    // v2 defaults: install runs as root, startup as the agent user.
+    // v2 defaults: install runs as root, startup as the agent user. Both get the full container
+    // environment, as in sbx.
     let install = s.install.into_iter().map(|h| Hook {
         command: HookCmd::Shell(h.command),
         user: Some(h.user.unwrap_or_else(|| "0".into())),
         env: vec![],
         background: false,
+        clean_env: false,
     });
     let startup = s.startup.into_iter().map(|h| Hook {
         command: HookCmd::Argv(h.command),
         user: Some(h.user.unwrap_or_else(|| "1000".into())),
         env: vec![],
         background: h.background,
+        clean_env: false,
     });
     let mut static_files = |sub: &str, dest: &str| -> Result<Vec<FileReq>> {
         let root = dir.join(sub);
@@ -656,7 +659,22 @@ mod tests {
             Source::LocalV2(dir.into()),
         )
         .unwrap();
-        assert_eq!(v2.caps, v3.caps);
+        // The one difference: sbx runs v3 install hooks in a clean environment, v2 hooks in the
+        // container's.
+        let mut v3_caps = v3.caps.clone();
+        let mut hooks = 0;
+        for (a, b) in v2.caps.iter().zip(&mut v3_caps) {
+            if let (CapBody::Lifecycle(a), CapBody::Lifecycle(b)) = (&a.body, &mut b.body) {
+                assert!(a.install.iter().chain(&a.startup).all(|h| !h.clean_env));
+                for h in &mut b.install {
+                    assert!(h.clean_env);
+                    h.clean_env = false;
+                    hooks += 1;
+                }
+            }
+        }
+        assert!(hooks > 0, "the fixture has an install hook");
+        assert_eq!(v2.caps, v3_caps);
         assert_eq!(v2.kind, v3.kind);
     }
 

@@ -601,7 +601,8 @@ struct FileCfg {
 }
 
 fn lifecycle(c: LifecycleCfg) -> Lifecycle {
-    let hook = |h: HookCfg| Hook {
+    // sbx runs only install hooks in a clean environment.
+    let hook = |h: HookCfg, clean_env: bool| Hook {
         command: match h.command {
             CommandCfg::Shell(s) => HookCmd::Shell(s),
             CommandCfg::Argv(a) => HookCmd::Argv(a),
@@ -609,10 +610,11 @@ fn lifecycle(c: LifecycleCfg) -> Lifecycle {
         user: h.user,
         env: h.env,
         background: h.background.unwrap_or(false),
+        clean_env,
     };
     Lifecycle {
-        install: c.install.into_iter().map(hook).collect(),
-        startup: c.startup.into_iter().map(hook).collect(),
+        install: c.install.into_iter().map(|h| hook(h, true)).collect(),
+        startup: c.startup.into_iter().map(|h| hook(h, false)).collect(),
         files: c
             .files
             .into_iter()
@@ -784,6 +786,9 @@ mod tests {
         assert_eq!(l.install[0].env, ["WORKSPACE_DIR"]);
         assert!(matches!(l.install[0].command, HookCmd::Shell(_)));
         assert!(matches!(l.startup[0].command, HookCmd::Argv(_)));
+        // Only install hooks get sbx's clean environment.
+        assert!(l.install.iter().all(|h| h.clean_env));
+        assert!(l.startup.iter().all(|h| !h.clean_env));
 
         // agent-skills is unsupported but its optional flag survives.
         let skills = k

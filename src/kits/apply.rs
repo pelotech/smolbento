@@ -1110,6 +1110,7 @@ mod tests {
             user: None,
             env: vec![],
             background: false,
+            clean_env: true,
         };
         let m = with(
             kit("m", Kind::Mixin),
@@ -1194,6 +1195,7 @@ mod tests {
             user: user.map(String::from),
             env: vec![],
             background,
+            clean_env: true,
         };
         let file = |path: &str, content: &str| FileReq {
             path: path.into(),
@@ -1251,24 +1253,19 @@ mod tests {
             .into_iter()
             .map(|i| (i.user, i.script))
             .collect();
-        // guest's tests pin the CA pass-through text; here it only has to sit after HOME.
-        let ca: String = crate::kits::guest::CA_ENV
-            .iter()
-            .map(|v| format!(r#" ${{{v}+{v}="${v}"}}"#))
-            .collect();
+        // guest's tests pin the hook text; here it only has to run from WORKDIR (`/` here).
+        let script = |cmd: &str| {
+            format!(
+                "cd / && {}",
+                crate::kits::guest::hook_script(&hook(cmd, None, false))
+            )
+        };
+        assert!(script("x").contains("env -i "));
         assert_eq!(
             install,
             [
-                (
-                    None,
-                    format!(
-                        r#"cd / && env -i PATH="$PATH" HOME="$HOME"{ca} sh -c 'apt-get install x'"#
-                    )
-                ),
-                (
-                    Some("agent".into()),
-                    format!(r#"cd / && env -i PATH="$PATH" HOME="$HOME"{ca} sh -c 'npm i -g y'"#)
-                ),
+                (None, script("apt-get install x")),
+                (Some("agent".into()), script("npm i -g y")),
             ]
         );
         assert_eq!(steps.files.len(), 1, "the later kit wins one path");

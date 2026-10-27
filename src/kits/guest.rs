@@ -46,27 +46,44 @@ pub const CA_ENV: &[&str] = &[
     "DENO_CERT",
 ];
 
-/// A hook with only `PATH`, `HOME`, the `CA_ENV` vars that are set in the guest and its declared
-/// env vars. The caller runs it from `/` as the hook's user (`exec -u`, or `as_user` in a startup
-/// script).
+/// What sbx keeps in a v3 install hook's `env -i`, before the `CA_ENV` vars.
+const CLEAN_ENV: &[&str] = &[
+    "PATH",
+    "HOME",
+    "USER",
+    "TERM",
+    "HTTP_PROXY",
+    "HTTPS_PROXY",
+    "http_proxy",
+    "https_proxy",
+    "NO_PROXY",
+    "no_proxy",
+];
+
+/// A hook's command line, run as the hook's user (`exec -u`, or `as_user` in a startup script).
+/// A `clean_env` hook (v3 install) gets sbx's `env -i` with only the `CLEAN_ENV` and `CA_ENV` vars
+/// that are set in the guest and its declared env vars; any other hook inherits the container's
+/// environment, as in sbx.
 pub fn hook_script(h: &Hook) -> String {
-    let mut s = String::from(r#"env -i PATH="$PATH" HOME="$HOME""#);
-    // `${V+V="$V"}` expands to one word when V is set (even empty) and to nothing when unset, so
-    // an unset CA var stays unset rather than becoming an empty value.
-    for v in CA_ENV {
-        s.push_str(&format!(r#" ${{{v}+{v}="${v}"}}"#));
-    }
-    // apply refuses other names; skipping them here keeps the script well-formed regardless.
-    for v in h.env.iter().filter(|v| is_env_name(v)) {
-        s.push_str(&format!(r#" {v}="${v}""#));
+    let mut s = String::new();
+    if h.clean_env {
+        s.push_str("env -i");
+        // `${V+V="$V"}` expands to one word when V is set (even empty) and to nothing when unset,
+        // so an unset var stays unset rather than becoming an empty value.
+        for v in CLEAN_ENV.iter().chain(CA_ENV) {
+            s.push_str(&format!(r#" ${{{v}+{v}="${v}"}}"#));
+        }
+        // apply refuses other names; skipping them here keeps the script well-formed regardless.
+        for v in h.env.iter().filter(|v| is_env_name(v)) {
+            s.push_str(&format!(r#" {v}="${v}""#));
+        }
+        s.push(' ');
     }
     match &h.command {
-        HookCmd::Shell(c) => s.push_str(&format!(" sh -c {}", sh_quote(c))),
+        HookCmd::Shell(c) => s.push_str(&format!("sh -c {}", sh_quote(c))),
         HookCmd::Argv(argv) => {
-            for a in argv {
-                s.push(' ');
-                s.push_str(&sh_quote(a));
-            }
+            let words: Vec<String> = argv.iter().map(|a| sh_quote(a)).collect();
+            s.push_str(&words.join(" "));
         }
     }
     s
@@ -259,11 +276,17 @@ mod tests {
             user: None,
             env: env.iter().map(|s| s.to_string()).collect(),
             background: false,
+            clean_env: true,
         }
     }
 
-    /// The CA pass-through `hook_script` puts after `HOME`.
-    const CA: &str = concat!(
+    /// The baseline `hook_script` gives a v3 install hook: each var only when set.
+    const BASE: &str = concat!(
+        r#"env -i ${PATH+PATH="$PATH"} ${HOME+HOME="$HOME"} ${USER+USER="$USER"}"#,
+        r#" ${TERM+TERM="$TERM"}"#,
+        r#" ${HTTP_PROXY+HTTP_PROXY="$HTTP_PROXY"} ${HTTPS_PROXY+HTTPS_PROXY="$HTTPS_PROXY"}"#,
+        r#" ${http_proxy+http_proxy="$http_proxy"} ${https_proxy+https_proxy="$https_proxy"}"#,
+        r#" ${NO_PROXY+NO_PROXY="$NO_PROXY"} ${no_proxy+no_proxy="$no_proxy"}"#,
         r#" ${SSL_CERT_FILE+SSL_CERT_FILE="$SSL_CERT_FILE"}"#,
         r#" ${SSL_CERT_DIR+SSL_CERT_DIR="$SSL_CERT_DIR"}"#,
         r#" ${CURL_CA_BUNDLE+CURL_CA_BUNDLE="$CURL_CA_BUNDLE"}"#,
@@ -272,6 +295,14 @@ mod tests {
         r#" ${NODE_EXTRA_CA_CERTS+NODE_EXTRA_CA_CERTS="$NODE_EXTRA_CA_CERTS"}"#,
         r#" ${DENO_CERT+DENO_CERT="$DENO_CERT"}"#,
     );
+
+    /// A hook with the full container environment (v3 startup, all v2 hooks).
+    fn full_env(cmd: HookCmd) -> Hook {
+        Hook {
+            clean_env: false,
+            ..hook(cmd, &[])
+        }
+    }
 
     fn sh(script: &str) -> std::process::Output {
         Command::new("sh").arg("-c").arg(script).output().unwrap()
@@ -298,13 +329,10 @@ mod tests {
         let h = hook(HookCmd::Shell("echo hi".into()), &["FOO"]);
         assert_eq!(
             hook_script(&h),
-            format!(r#"env -i PATH="$PATH" HOME="$HOME"{CA} FOO="$FOO" sh -c 'echo hi'"#)
+            format!(r#"{BASE} FOO="$FOO" sh -c 'echo hi'"#)
         );
         let h = hook(HookCmd::Argv(vec!["echo".into(), "it's".into()]), &[]);
-        assert_eq!(
-            hook_script(&h),
-            format!(r#"env -i PATH="$PATH" HOME="$HOME"{CA} 'echo' 'it'\''s'"#)
-        );
+        assert_eq!(hook_script(&h), format!(r#"{BASE} 'echo' 'it'\''s'"#));
     }
 
     #[test]
@@ -346,6 +374,81 @@ mod tests {
             .output()
             .unwrap();
         assert_eq!(String::from_utf8_lossy(&out.stdout), "f|unset\n");
+    }
+
+    /// sbx's v3 install hooks keep the proxy vars too, and an unset one stays unset.
+    #[test]
+    fn a_v3_install_hook_keeps_set_proxy_and_ca_vars_and_drops_the_rest() {
+        let h = hook(
+            HookCmd::Shell(
+                "echo \"$HTTPS_PROXY|$no_proxy|$SSL_CERT_FILE|$TERM|${USER-unset}|\
+                 ${http_proxy-unset}|${BAR-unset}|$FOO\""
+                    .into(),
+            ),
+            &["FOO"],
+        );
+        let out = Command::new("sh")
+            .arg("-c")
+            .arg(hook_script(&h))
+            .env("HTTPS_PROXY", "http://proxy:3128")
+            .env("no_proxy", "localhost")
+            .env("SSL_CERT_FILE", "/ca.pem")
+            .env("TERM", "xterm")
+            .env_remove("USER")
+            .env_remove("http_proxy")
+            .env("BAR", "b")
+            .env("FOO", "f")
+            .output()
+            .unwrap();
+        assert!(out.status.success(), "{out:?}");
+        assert_eq!(
+            String::from_utf8_lossy(&out.stdout),
+            "http://proxy:3128|localhost|/ca.pem|xterm|unset|unset|unset|f\n"
+        );
+    }
+
+    #[test]
+    fn a_full_env_hook_runs_as_written() {
+        assert_eq!(
+            hook_script(&full_env(HookCmd::Shell("echo hi".into()))),
+            "sh -c 'echo hi'"
+        );
+        assert_eq!(
+            hook_script(&full_env(HookCmd::Argv(vec!["echo".into(), "it's".into()]))),
+            r#"'echo' 'it'\''s'"#
+        );
+    }
+
+    /// v3 startup hooks and all v2 hooks see the container's environment, as in sbx.
+    #[test]
+    fn a_full_env_hook_sees_any_container_var() {
+        for cmd in [
+            HookCmd::Shell("echo \"$BAR\"".into()),
+            HookCmd::Argv(vec!["sh".into(), "-c".into(), "echo \"$BAR\"".into()]),
+        ] {
+            let out = Command::new("sh")
+                .arg("-c")
+                .arg(hook_script(&full_env(cmd)))
+                .env("BAR", "from the container")
+                .output()
+                .unwrap();
+            assert_eq!(String::from_utf8_lossy(&out.stdout), "from the container\n");
+        }
+    }
+
+    #[test]
+    fn the_runner_gives_full_env_startup_hooks_the_container_env() {
+        let h = full_env(HookCmd::Shell("echo \"bar=$BAR\"".into()));
+        let s = Startup::new(&[("01-k.sh", "k", vec![&h])]);
+        let status = Command::new("sh")
+            .arg("-c")
+            .arg(&s.runner)
+            .arg("startup")
+            .env("BAR", "b")
+            .status()
+            .unwrap();
+        assert!(status.success());
+        assert!(s.log().contains("bar=b\n"), "{}", s.log());
     }
 
     #[test]

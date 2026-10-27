@@ -163,6 +163,9 @@ pub struct Hook {
     pub user: Option<String>,
     pub env: Vec<String>,
     pub background: bool,
+    /// sbx's v3 install-hook environment: `env -i` with a small baseline plus the declared `env`.
+    /// Off for v3 startup hooks and all v2 hooks, which get the full container environment.
+    pub clean_env: bool,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
