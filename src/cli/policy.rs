@@ -141,19 +141,24 @@ pub fn run<R: Runner>(ctx: &mut Ctx<R>, cmd: PolicyCmd) -> Result<i32> {
             kind: CheckKind::Network(a),
         } => return check(ctx, &policy, &a),
         PolicyCmd::Reset { force } => {
+            // Sandboxes created with smolbento 0.2.0's `--deny-network` stay deny-all.
+            let legacy = if policy.sandboxes.values().any(|s| s.deny_network) {
+                " (sandboxes created with smolbento 0.2.0's --deny-network stay deny-all)"
+            } else {
+                ""
+            };
             confirm(
                 ctx,
-                "Remove every policy rule and the chosen mode? Running sandboxes will be stopped \
-                 (--deny-network sandboxes stay deny-all).",
+                &format!(
+                    "Remove every policy rule and the chosen mode? Running sandboxes will be \
+                     stopped{legacy}."
+                ),
                 force,
             )?;
             stop_running(ctx);
             policy.reset();
             policy.save(&ctx.paths)?;
-            println!(
-                "Policy reset; the next start or create asks for a mode (--deny-network \
-                 sandboxes stay deny-all)"
-            );
+            println!("Policy reset; the next start or create asks for a mode{legacy}");
         }
         PolicyCmd::Log(a) => {
             if a.kind.as_deref().is_some_and(|k| k == "filesystem") {
@@ -259,6 +264,30 @@ fn deny_notes(policy: &Policy, scope: Option<&str>, denies: &[Resource]) -> (boo
     (cidr, notes)
 }
 
+/// The first of a sandbox's credential `hosts` that one of `denies` reaches, with what's bound to
+/// it ("a github secret", or "a secret" when secrets.toml no longer names the service).
+fn bound_conflict(
+    hosts: &[String],
+    services: &[String],
+    secrets: Option<&SecretsFile>,
+    denies: &[Resource],
+) -> Option<(String, String)> {
+    let host = hosts.iter().find(|h| {
+        denies
+            .iter()
+            .any(|d| compile::deny_reaches_credential_host(d, h))
+    })?;
+    let service = services
+        .iter()
+        .find(|name| {
+            secrets
+                .and_then(|f| f.service(name))
+                .is_some_and(|s| s.hosts.iter().any(|h| h == host))
+        })
+        .map_or_else(|| "a secret".to_string(), |s| format!("a {s} secret"));
+    Some((host.clone(), service))
+}
+
 /// smolvm keeps a bound credential's hosts reachable, so a deny on them can't be honoured.
 fn guard_bound_secrets<R: Runner>(
     ctx: &Ctx<R>,
@@ -279,30 +308,67 @@ fn guard_bound_secrets<R: Runner>(
         .iter()
         .filter(|s| scope.is_none_or(|n| n == s.name()))
     {
-        let Some(host) = sb.meta.credential_hosts.iter().find(|h| {
-            denies
-                .iter()
-                .any(|d| compile::deny_reaches_credential_host(d, h))
-        }) else {
-            continue;
-        };
-        let service = sb
-            .meta
-            .secrets
-            .iter()
-            .find(|name| {
-                secrets
-                    .as_ref()
-                    .and_then(|f| f.service(name))
-                    .is_some_and(|s| s.hosts.iter().any(|h| h == host))
-            })
-            .map_or_else(|| "a secret".to_string(), |s| format!("a {s} secret"));
-        bail!(
-            "can't deny {host}: sandbox {} has {service} bound to it; remove the secret and recreate the sandbox first",
-            sb.name()
-        );
+        if let Some((host, service)) = bound_conflict(
+            &sb.meta.credential_hosts,
+            &sb.meta.secrets,
+            secrets.as_ref(),
+            denies,
+        ) {
+            bail!(
+                "can't deny {host}: sandbox {} has {service} bound to it; remove the secret and recreate the sandbox first",
+                sb.name()
+            );
+        }
     }
     Ok(())
+}
+
+/// `--deny-network` values, each parsed as `sbt policy deny network` parses its resources.
+pub(super) fn parse_create_denies(values: &[String]) -> Result<Vec<(String, Vec<Resource>)>> {
+    values
+        .iter()
+        .map(|v| {
+            let parsed = parse_list(v).with_context(|| format!("--deny-network {v}"))?;
+            Ok((v.clone(), parsed))
+        })
+        .collect()
+}
+
+/// `run`/`create --deny-network`: adds each value as a deny rule of the new sandbox `sandbox`, as
+/// `sbt policy deny network --sandbox <sandbox> <value>` would, with the same checks and stderr
+/// notes. `services` and `credential_hosts` are the secrets the sandbox is about to be created
+/// with. Returns the ids of the rules that weren't there yet; the caller saves the policy.
+pub(super) fn add_create_denies(
+    policy: &mut Policy,
+    sandbox: &str,
+    denies: &[(String, Vec<Resource>)],
+    secrets: &SecretsFile,
+    services: &[String],
+    credential_hosts: &[String],
+) -> Result<Vec<String>> {
+    let all: Vec<Resource> = denies.iter().flat_map(|(_, p)| p.iter().cloned()).collect();
+    if let Some((host, service)) = bound_conflict(credential_hosts, services, Some(secrets), &all) {
+        bail!(
+            "can't deny {host}: sandbox {sandbox} would be created with {service} bound to it; remove the secret first"
+        );
+    }
+    let before: Vec<String> = policy
+        .sandboxes
+        .get(sandbox)
+        .map(|s| s.rules.iter().map(|r| r.id.clone()).collect())
+        .unwrap_or_default();
+    let mut added = Vec::new();
+    for (value, _) in denies {
+        let id = policy.add_rule(Some(sandbox), Decision::Deny, value, "added", None, None)?;
+        if !before.contains(&id) && !added.contains(&id) {
+            added.push(id);
+        }
+    }
+    // Only the stderr notes: port-less deny CIDRs are in place before this sandbox is created.
+    for n in deny_notes(policy, Some(sandbox), &all).1 {
+        eprintln!("{n}");
+    }
+    Ok(added)
 }
 
 fn blocked_rows<R: Runner>(

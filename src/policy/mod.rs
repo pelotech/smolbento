@@ -75,7 +75,8 @@ fn default_created_via() -> String {
 
 #[derive(Debug, Clone, Default, PartialEq, Eq, Serialize, Deserialize)]
 pub struct SandboxPolicy {
-    /// Created with `--deny-network`: deny-all whatever the global mode.
+    /// Deny-all whatever the global mode. Kept for policy files written by v0.2.0, whose
+    /// `--deny-network` set it; nothing sets it any more.
     #[serde(default, skip_serializing_if = "std::ops::Not::not")]
     pub deny_network: bool,
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
@@ -262,8 +263,8 @@ impl Policy {
         self.prune(sandbox);
     }
 
-    /// `policy reset`: drops the mode and every rule, but a sandbox created with
-    /// `--deny-network` stays deny-all.
+    /// `policy reset`: drops the mode and every rule, but a sandbox with the v0.2.0
+    /// `deny_network` flag stays deny-all.
     pub fn reset(&mut self) {
         self.mode = None;
         self.rules.clear();

@@ -41,13 +41,15 @@ pub fn run<R: Runner>(ctx: &mut Ctx<R>, a: &RunArgs) -> Result<i32> {
             let mut req = build_request(ctx, agent, paths, &a.opts, true)?;
             match sandbox::find(&ctx.vm, &req.name)? {
                 Some(sb) => (sb, false),
-                None => (plan::create(ctx, &mut req, a.opts.deny_network)?, true),
+                None => (plan::create(ctx, &mut req, &a.opts.deny_network)?, true),
             }
         }
     };
-    if a.opts.deny_network && !created {
+    if !a.opts.deny_network.is_empty() && !created {
         eprintln!(
-            "warning: --deny-network only applies when a sandbox is created; {} already exists",
+            "warning: --deny-network only adds rules when a sandbox is created; {} already exists \
+             (use `sbt policy deny network --sandbox {}`)",
+            sb.name(),
             sb.name()
         );
     }
@@ -165,14 +167,58 @@ mod tests {
     }
 
     #[test]
-    fn a_failed_create_does_not_leave_deny_network_behind() {
+    fn a_failed_create_does_not_leave_deny_rules_behind() {
         let mut t = test_env(&[]);
         let fake = t.ctx.vm.runner();
         fake.fail(&["machine", "status"], "NOT_FOUND", "vm not found");
         fake.fail(&["machine", "create"], "CREATE_FAILED", "no space left");
-        assert!(sbt(&mut t.ctx, &["run", "claude", "--deny-network"]).is_err());
+        assert!(sbt(&mut t.ctx, &["run", "claude", "--deny-network", "evil.com"]).is_err());
         let p = crate::policy::Policy::load(&t.ctx.paths).unwrap();
         assert!(p.sandboxes.is_empty(), "{p:?}");
+    }
+
+    #[test]
+    fn deny_network_adds_sandbox_deny_rules_at_create() {
+        let mut t = test_env(&[]);
+        created(&t, "created");
+        // run looks the name up, then plan::create checks again before creating.
+        for _ in 0..2 {
+            t.ctx
+                .vm
+                .runner()
+                .once_fail(&["machine", "status"], "NOT_FOUND", "vm not found");
+        }
+        t.ctx.vm.runner().interactive_exit(0);
+        sbt(
+            &mut t.ctx,
+            &[
+                "run",
+                "claude",
+                "--deny-network",
+                "a.example,b.example",
+                "--deny-network",
+                "c.example",
+            ],
+        )
+        .unwrap();
+        let p = crate::policy::Policy::load(&t.ctx.paths).unwrap();
+        let rules: Vec<Vec<String>> = p.sandboxes["claude-proj"]
+            .rules
+            .iter()
+            .map(|r| {
+                assert_eq!(r.decision, crate::policy::Decision::Deny);
+                r.resources.clone()
+            })
+            .collect();
+        assert_eq!(
+            rules,
+            vec![
+                vec!["a.example".to_string()],
+                vec!["b.example".to_string()],
+                vec!["c.example".to_string()]
+            ]
+        );
+        assert!(p.rules.is_empty());
     }
 
     #[test]
@@ -182,7 +228,7 @@ mod tests {
         created(&t, "running");
         t.ctx.vm.runner().interactive_exit(0);
         assert_eq!(
-            sbt(&mut t.ctx, &["run", "claude", "--deny-network"]).unwrap(),
+            sbt(&mut t.ctx, &["run", "claude", "--deny-network", "evil.com"]).unwrap(),
             0
         );
         assert!(!t.ctx.paths.policy_file().exists());
@@ -193,7 +239,7 @@ mod tests {
         let mut t = test_env(&[]);
         std::fs::remove_file(t.ctx.paths.policy_file()).unwrap();
         created(&t, "stopped");
-        let err = sbt(&mut t.ctx, &["run", "claude", "--deny-network"])
+        let err = sbt(&mut t.ctx, &["run", "claude", "--deny-network", "evil.com"])
             .unwrap_err()
             .to_string();
         assert!(err.contains("sbt policy init"), "{err}");

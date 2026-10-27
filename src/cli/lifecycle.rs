@@ -89,7 +89,7 @@ pub fn create<R: Runner>(ctx: &mut Ctx<R>, a: &CreateArgs) -> Result<i32> {
         .split_first()
         .context("specify an agent, e.g. `sbt create claude .`")?;
     let mut req = build_request(ctx, agent, paths, &a.opts, false)?;
-    let sb = plan::create(ctx, &mut req, a.opts.deny_network)?;
+    let sb = plan::create(ctx, &mut req, &a.opts.deny_network)?;
     println!("Created sandbox {}", sb.name());
     Ok(0)
 }
@@ -313,9 +313,12 @@ mod tests {
             &json("sbx-claude-proj", "stopped", "claude-proj"),
         );
         let before = std::fs::read_to_string(t.ctx.paths.policy_file()).unwrap();
-        let err = sbt(&mut t.ctx, &["create", "claude", ".", "--deny-network"])
-            .unwrap_err()
-            .to_string();
+        let err = sbt(
+            &mut t.ctx,
+            &["create", "claude", ".", "--deny-network", "evil.com"],
+        )
+        .unwrap_err()
+        .to_string();
         assert!(
             err.contains("sandbox 'claude-proj' already exists"),
             "{err}"
@@ -334,12 +337,18 @@ mod tests {
         );
     }
 
-    #[test]
-    fn create_deny_network_binds_global_secrets() {
-        use crate::policy::Policy;
-        use crate::secrets::{SecretEntry, SecretsFile, Source, scope_for};
+    /// Fake smolvm for one create of claude-proj that succeeds.
+    fn creatable(t: &TestEnv) {
+        let fake = t.ctx.vm.runner();
+        fake.ok(
+            &["machine", "status"],
+            &json("sbx-claude-proj", "created", "claude-proj"),
+        );
+        fake.once_fail(&["machine", "status"], "NOT_FOUND", "vm not found");
+    }
 
-        let mut t = test_env(&[]);
+    fn global_github_secret(t: &TestEnv) {
+        use crate::secrets::{SecretEntry, SecretsFile, Source, scope_for};
         let entry = SecretEntry {
             service: "github".into(),
             scope: scope_for(None),
@@ -349,86 +358,194 @@ mod tests {
         let mut f = SecretsFile::default();
         f.set(entry);
         f.save(&t.ctx.paths).unwrap();
-        let fake = t.ctx.vm.runner();
-        fake.ok(
-            &["machine", "status"],
-            &json("sbx-claude-proj", "created", "claude-proj"),
+    }
+
+    /// The sandbox's rules as (decision, resources).
+    fn sandbox_rules(t: &TestEnv, name: &str) -> Vec<(String, Vec<String>)> {
+        crate::policy::Policy::load(&t.ctx.paths)
+            .unwrap()
+            .sandboxes
+            .get(name)
+            .map(|s| {
+                s.rules
+                    .iter()
+                    .map(|r| (r.decision.name().to_string(), r.resources.clone()))
+                    .collect()
+            })
+            .unwrap_or_default()
+    }
+
+    fn deny(resources: &[&str]) -> (String, Vec<String>) {
+        (
+            "deny".into(),
+            resources.iter().map(|r| r.to_string()).collect(),
+        )
+    }
+
+    #[test]
+    fn create_deny_network_adds_sandbox_deny_rules() {
+        let mut t = test_env(&[]);
+        set_policy(&t, "mode = \"balanced\"\n");
+        global_github_secret(&t);
+        creatable(&t);
+        sbt(
+            &mut t.ctx,
+            &[
+                "create",
+                "claude",
+                ".",
+                "--deny-network",
+                "evil.com,10.0.0.0/8",
+                "--deny-network",
+                "tracker.example",
+            ],
+        )
+        .unwrap();
+
+        // One sandbox-scoped rule per value, as `policy deny network --sandbox` adds them.
+        assert_eq!(
+            sandbox_rules(&t, "claude-proj"),
+            vec![
+                deny(&["evil.com"]),
+                deny(&["10.0.0.0/8"]),
+                deny(&["tracker.example"])
+            ]
         );
-        fake.once_fail(&["machine", "status"], "NOT_FOUND", "vm not found");
-        sbt(&mut t.ctx, &["create", "claude", ".", "--deny-network"]).unwrap();
+        let p = crate::policy::Policy::load(&t.ctx.paths).unwrap();
+        assert!(p.rules.is_empty(), "nothing global: {p:?}");
+        assert!(!p.sandboxes["claude-proj"].deny_network);
 
         let lines = t.ctx.vm.runner().call_lines();
         let create = lines
             .iter()
             .find(|l| l.starts_with("machine create"))
             .unwrap();
+        assert!(create.contains(" --deny-cidr 10.0.0.0/8 "), "{create}");
+        // The sandbox keeps its mode and secrets.
         assert!(
             create.contains(" --credential gh_token=GH_TOKEN@api.github.com,github.com,"),
             "{create}"
         );
-        assert!(create.contains(" --label sbx.secrets=github "), "{create}");
-        assert!(
-            create.contains(
-                " --label sbx.credential-hosts=api.github.com,api.githubcopilot.com,\
-                 copilot.github.com,gist.github.com,github.com,raw.githubusercontent.com "
-            ),
-            "{create}"
-        );
-        assert!(
-            create.contains(" --label sbx.credential-env=GH_TOKEN,GITHUB_TOKEN "),
-            "{create}"
-        );
-        assert!(
-            !create.contains("--net "),
-            "deny-network is restricted: {create}"
-        );
-        assert!(Policy::load(&t.ctx.paths).unwrap().sandboxes["claude-proj"].deny_network);
-        let start = lines
-            .iter()
-            .position(|l| l == "machine start -n sbx-claude-proj");
-        let envs = t.ctx.vm.runner().envs();
-        assert!(start.is_some());
-        assert_eq!(
-            envs,
-            vec![vec![
-                ("GH_TOKEN".to_string(), "gh-123".to_string()),
-                ("GITHUB_TOKEN".to_string(), "gh-123".to_string())
-            ]]
-        );
+        assert!(create.contains("registry.npmjs.org"), "{create}");
         assert!(!create.contains("gh-123"));
     }
 
     #[test]
-    fn a_failed_create_does_not_leave_deny_network_behind() {
-        use crate::policy::Policy;
+    fn deny_network_is_checked_before_the_machine_is_created() {
+        // A bad host: nothing is created and the policy is untouched.
+        let mut t = test_env(&[]);
+        let fake = t.ctx.vm.runner();
+        fake.fail(&["machine", "status"], "NOT_FOUND", "vm not found");
+        let before = std::fs::read_to_string(t.ctx.paths.policy_file()).unwrap();
+        let err = sbt(
+            &mut t.ctx,
+            &[
+                "create",
+                "claude",
+                ".",
+                "--deny-network",
+                "ok.com,10.0.0.0/33",
+            ],
+        )
+        .unwrap_err();
+        assert!(format!("{err:#}").contains("--deny-network"), "{err:#}");
+        assert_eq!(
+            std::fs::read_to_string(t.ctx.paths.policy_file()).unwrap(),
+            before
+        );
+        let lines = t.ctx.vm.runner().call_lines();
+        assert!(!lines.iter().any(|l| l.contains("create")), "{lines:?}");
 
+        // A host a secret bound at create uses: smolvm would keep it reachable.
+        let mut t = test_env(&[]);
+        global_github_secret(&t);
+        let fake = t.ctx.vm.runner();
+        fake.fail(&["machine", "status"], "NOT_FOUND", "vm not found");
+        let err = sbt(
+            &mut t.ctx,
+            &["create", "claude", ".", "--deny-network", "github.com"],
+        )
+        .unwrap_err()
+        .to_string();
+        assert!(
+            err.contains(
+                "can't deny github.com: sandbox claude-proj would be created with a github secret"
+            ),
+            "{err}"
+        );
+        assert!(sandbox_rules(&t, "claude-proj").is_empty());
+        let lines = t.ctx.vm.runner().call_lines();
+        assert!(!lines.iter().any(|l| l.contains("create")), "{lines:?}");
+    }
+
+    #[test]
+    fn a_failed_create_removes_only_its_own_deny_rules() {
+        let earlier = "mode = \"allow-all\"\n[[sandboxes.claude-proj.rules]]\nid = \"r-old\"\n\
+                       decision = \"deny\"\nresources = [\"old.example\"]\n";
+        let mut t = test_env(&[]);
+        set_policy(&t, earlier);
+        let fake = t.ctx.vm.runner();
+        fake.fail(&["machine", "status"], "NOT_FOUND", "vm not found");
+        fake.fail(&["machine", "create"], "CREATE_FAILED", "no space left");
+        let err = sbt(
+            &mut t.ctx,
+            &["create", "claude", ".", "--deny-network", "evil.com"],
+        )
+        .unwrap_err();
+        assert!(err.to_string().contains("no space left"), "{err:#}");
+        assert_eq!(
+            sandbox_rules(&t, "claude-proj"),
+            vec![deny(&["old.example"])]
+        );
+
+        // Nothing earlier: the sandbox's entry goes away.
         let mut t = test_env(&[]);
         let fake = t.ctx.vm.runner();
         fake.fail(&["machine", "status"], "NOT_FOUND", "vm not found");
         fake.fail(&["machine", "create"], "CREATE_FAILED", "no space left");
-        let err = sbt(&mut t.ctx, &["create", "claude", ".", "--deny-network"]).unwrap_err();
-        assert!(err.to_string().contains("no space left"), "{err:#}");
-        assert!(Policy::load(&t.ctx.paths).unwrap().sandboxes.is_empty());
-
-        // Created but failed to start: the machine exists, so it stays deny-all.
-        let mut t = test_env(&[]);
-        let fake = t.ctx.vm.runner();
-        fake.ok(
-            &["machine", "status"],
-            &json("sbx-claude-proj", "created", "claude-proj"),
+        assert!(
+            sbt(
+                &mut t.ctx,
+                &["create", "claude", ".", "--deny-network", "evil.com"]
+            )
+            .is_err()
         );
-        fake.once_fail(&["machine", "status"], "NOT_FOUND", "vm not found");
-        fake.fail(&["machine", "start"], "START_FAILED", "boot failed");
-        assert!(sbt(&mut t.ctx, &["create", "claude", ".", "--deny-network"]).is_err());
-        assert!(Policy::load(&t.ctx.paths).unwrap().sandboxes["claude-proj"].deny_network);
+        assert!(
+            crate::policy::Policy::load(&t.ctx.paths)
+                .unwrap()
+                .sandboxes
+                .is_empty()
+        );
 
-        // No policy chosen and no terminal: create stops before recording --deny-network, and the
-        // rollback doesn't write a policy.toml either.
+        // Created but failed to start: the machine exists, so its rules stay.
+        let mut t = test_env(&[]);
+        creatable(&t);
+        t.ctx
+            .vm
+            .runner()
+            .fail(&["machine", "start"], "START_FAILED", "boot failed");
+        assert!(
+            sbt(
+                &mut t.ctx,
+                &["create", "claude", ".", "--deny-network", "evil.com"]
+            )
+            .is_err()
+        );
+        assert_eq!(sandbox_rules(&t, "claude-proj"), vec![deny(&["evil.com"])]);
+
+        // No policy chosen and no terminal: create stops before adding rules, and the rollback
+        // doesn't write a policy.toml either.
         let mut t = test_env(&[]);
         std::fs::remove_file(t.ctx.paths.policy_file()).unwrap();
         let fake = t.ctx.vm.runner();
         fake.fail(&["machine", "status"], "NOT_FOUND", "vm not found");
-        assert!(sbt(&mut t.ctx, &["create", "claude", ".", "--deny-network"]).is_err());
+        assert!(
+            sbt(
+                &mut t.ctx,
+                &["create", "claude", ".", "--deny-network", "evil.com"]
+            )
+            .is_err()
+        );
         assert!(!t.ctx.paths.policy_file().exists());
     }
 

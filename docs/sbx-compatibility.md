@@ -7,7 +7,8 @@ clearly rather than doing something different.
 ## Works today
 
 `run`, `create`, `exec`, `ls`, `start`, `stop`, `rm`, `prune`, `reset`, `cp`, `version`,
-`completion`, `diagnose`, `settings`, `policy`, `secret`, `ports` and `run/create --deny-network`.
+`completion`, `diagnose`, `settings`, `policy`, `secret`, `ports` and `run/create --deny-network`
+(per-sandbox deny rules, as in sbx).
 `daemon` is accepted and does nothing: smolbento has no daemon.
 
 ## Parses, not implemented yet (exit 2)
@@ -38,7 +39,6 @@ clearly rather than doing something different.
 | Secrets | Proxy injects on the wire | smolvm substitutes on the wire; a secret's hosts, and their subdomains, are always reachable from sandboxes that bound it (`policy deny` of one is refused); new values apply on the next start |
 | `secret set-custom --host` | Exact host, IP or wildcard pattern | Exact host names, or `*.domain` for every subdomain of it (not the domain itself; any depth); other wildcards are refused, and so are IPs: smolvm only substitutes secrets for host names |
 | Policy changes | Live everywhere | Live, except switching a running sandbox between allow-all and a restricted mode, which applies on its next start, and deny-CIDR rules, which apply only to sandboxes created afterwards (`policy check` says so) |
-| `--deny-network` | Applies to the sandbox | Only when the sandbox is created; on an existing sandbox `run` warns |
 | Approvals | Queue | Derived from smolvm's blocked-request (egress) log; the host is the approval id |
 | Published ports | Any host IP | `127.0.0.1` only (smolvm publishes on loopback) |
 | Single-file `:ro` mounts | Supported | Directories only (smolvm mounts directories) |
