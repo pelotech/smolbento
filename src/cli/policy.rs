@@ -74,7 +74,6 @@ pub fn run<R: Runner>(ctx: &mut Ctx<R>, cmd: PolicyCmd) -> Result<i32> {
         }
         PolicyCmd::Ls(a) => {
             for (flag, set) in [
-                ("--source", a.source.is_some()),
                 ("--created-via", a.created_via.is_some()),
                 ("--type", a.kind.is_some()),
                 ("--protocol", a.protocol.is_some()),
@@ -93,6 +92,11 @@ pub fn run<R: Runner>(ctx: &mut Ctx<R>, cmd: PolicyCmd) -> Result<i32> {
                 Some("deny") => Some(Decision::Deny),
                 Some(other) => bail!("--decision takes allow or deny, not '{other}'"),
             };
+            let source = match a.source.as_deref() {
+                None => None,
+                Some(s @ ("local" | "org" | "kit")) => Some(s),
+                Some(other) => bail!("--source takes local, org or kit, not '{other}'"),
+            };
             let format = if a.json {
                 Format::Json
             } else {
@@ -100,6 +104,7 @@ pub fn run<R: Runner>(ctx: &mut Ctx<R>, cmd: PolicyCmd) -> Result<i32> {
             };
             let opts = LsOpts {
                 sandbox: a.sandbox.as_deref(),
+                source,
                 decision,
                 format,
                 wide: a.wide,
@@ -548,6 +553,8 @@ struct LsRow {
 #[derive(Default)]
 struct LsOpts<'a> {
     sandbox: Option<&'a str>,
+    /// `local`, `org` or `kit`; smolbento has no org rules, and the balanced preset counts as local.
+    source: Option<&'a str>,
     decision: Option<Decision>,
     format: Format,
     wide: bool,
@@ -593,7 +600,11 @@ fn ls_rows(policy: &Policy, opts: &LsOpts) -> Vec<LsRow> {
         }
         rows.push(LsRow {
             id: rule.id.clone(),
-            source: "local".into(),
+            // Kit rules show their kit, e.g. `kit:github`.
+            source: match rule.source() {
+                "kit" => rule.created_via.clone(),
+                s => s.into(),
+            },
             applies_to: scope.unwrap_or("all").into(),
             decision: rule.decision.name().into(),
             resources: rule.resources.clone(),
@@ -602,6 +613,12 @@ fn ls_rows(policy: &Policy, opts: &LsOpts) -> Vec<LsRow> {
     }
     if let Some(d) = opts.decision {
         rows.retain(|r| r.decision == d.name());
+    }
+    if let Some(want) = opts.source {
+        rows.retain(|r| match r.source.split(':').next().unwrap_or("") {
+            "default" => want == "local",
+            kind => kind == want,
+        });
     }
     rows
 }
@@ -868,8 +885,7 @@ mod tests {
         );
         assert!(sbt(&mut t.ctx, &["policy", "ls", "--decision", "maybe"]).is_err());
         for flag in [
-            &["--source", "local"][..],
-            &["--created-via", "added"],
+            &["--created-via", "added"][..],
             &["--type", "network"],
             &["--protocol", "tcp"],
             &["--include-inactive"],
@@ -879,6 +895,50 @@ mod tests {
             assert_eq!(super::super::exit_code(&err), 2, "{flag:?}: {err}");
             assert!(err.to_string().contains("not implemented yet"), "{err}");
         }
+    }
+
+    #[test]
+    fn ls_source_filters_kit_and_local_rules() {
+        use crate::kits::model::{NetRule, Rules};
+        let mut t = test_env(&[]);
+        let mut p = Policy::default();
+        p.add_rule(
+            Some("my-sb"),
+            Decision::Allow,
+            "user.com",
+            "added",
+            None,
+            None,
+        )
+        .unwrap();
+        let rules = Rules {
+            allow: vec![NetRule {
+                host: "kit.com".into(),
+                methods: vec![],
+                paths: vec![],
+            }],
+            deny: vec![],
+        };
+        p.add_kit_rules("my-sb", "gh", &rules).unwrap();
+        p.save(&t.ctx.paths).unwrap();
+        let mut out = |args: &[&str]| {
+            sbt(&mut t.ctx, args).unwrap();
+            t.stdout()
+        };
+        let kit = out(&["policy", "ls", "my-sb", "--source", "kit"]);
+        assert!(kit.contains("kit.com") && kit.contains("kit:gh"), "{kit}");
+        assert!(!kit.contains("user.com"), "{kit}");
+        let local = out(&["policy", "ls", "my-sb", "--source", "local"]);
+        assert!(
+            local.contains("user.com") && !local.contains("kit.com"),
+            "{local}"
+        );
+        let org = out(&["policy", "ls", "my-sb", "--source", "org"]);
+        assert!(
+            !org.contains("user.com") && !org.contains("kit.com"),
+            "{org}"
+        );
+        assert!(sbt(&mut t.ctx, &["policy", "ls", "--source", "x"]).is_err());
     }
 
     #[test]

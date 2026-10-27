@@ -561,7 +561,8 @@ pub struct PolicyLsArgs {
     pub json: bool,
     #[arg(short = 'q', long)]
     pub quiet: bool,
-    #[arg(long, hide = true)]
+    /// Only rules from this source
+    #[arg(long, value_name = "local|org|kit")]
     pub source: Option<String>,
     /// Only allow or only deny rules
     #[arg(long, value_name = "allow|deny")]

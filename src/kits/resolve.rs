@@ -6,7 +6,7 @@ use anyhow::{Context, Result, bail};
 
 use crate::kits::args::{ArgValues, expand};
 use crate::kits::model::{
-    AgentContextReq, CapBody, CredReq, FileReq, Hook, HookCmd, Kind, Kit, Rules,
+    AgentContextReq, CapBody, CredReq, FileReq, Hook, HookCmd, Kind, Kit, NetRule, Rules,
 };
 
 /// The agent user's home in the platform floor; the host can't see the guest's real env.
@@ -112,10 +112,46 @@ pub fn resolve(workload: Kit, mixins: Vec<Kit>, args: &ArgValues) -> Result<Plan
                     merged.credentials.push(c.clone());
                 }
                 CapBody::Network { install, runtime } => {
-                    merged.install.allow.extend(install.allow.iter().cloned());
-                    merged.install.deny.extend(install.deny.iter().cloned());
-                    merged.runtime.allow.extend(runtime.allow.iter().cloned());
-                    merged.runtime.deny.extend(runtime.deny.iter().cloned());
+                    // Method and path qualifiers can't be enforced, only hosts can.
+                    let qualified = [install, runtime]
+                        .iter()
+                        .flat_map(|r| r.allow.iter().chain(&r.deny))
+                        .any(|n| !n.methods.is_empty() || !n.paths.is_empty());
+                    let host_only = |r: &Rules| {
+                        let strip = |l: &[NetRule]| -> Vec<NetRule> {
+                            l.iter()
+                                .map(|n| NetRule {
+                                    host: n.host.clone(),
+                                    methods: vec![],
+                                    paths: vec![],
+                                })
+                                .collect()
+                        };
+                        Rules {
+                            allow: strip(&r.allow),
+                            deny: strip(&r.deny),
+                        }
+                    };
+                    let (install, runtime) = if qualified && cap.ty.ends_with("network-policy@2") {
+                        if !cap.optional {
+                            bail!(
+                                "kit {}: network-policy@2 method/path rules are not enforced by \
+                                 smolbento",
+                                k.name
+                            );
+                        }
+                        skipped.push(format!(
+                            "{}: network-policy@2 method/path (host-only)",
+                            k.name
+                        ));
+                        (host_only(install), host_only(runtime))
+                    } else {
+                        (install.clone(), runtime.clone())
+                    };
+                    merged.install.allow.extend(install.allow);
+                    merged.install.deny.extend(install.deny);
+                    merged.runtime.allow.extend(runtime.allow);
+                    merged.runtime.deny.extend(runtime.deny);
                 }
                 CapBody::Port { container, udp } => {
                     if !merged.ports.contains(&(*container, *udp)) {
@@ -449,6 +485,35 @@ mod tests {
         let hosts = |r: &[NetRule]| r.iter().map(|x| x.host.clone()).collect::<Vec<_>>();
         assert_eq!(hosts(&p.merged.runtime.allow), ["a.com", "b.com"]);
         assert_eq!(hosts(&p.merged.runtime.deny), ["bad.com", "worse.com"]);
+    }
+
+    #[test]
+    fn network_policy_2_method_and_path_rules_need_to_be_optional() {
+        let n = |host: &str, methods: &[&str]| CapBody::Network {
+            install: Rules::default(),
+            runtime: Rules {
+                allow: vec![NetRule {
+                    host: host.into(),
+                    methods: methods.iter().map(|s| s.to_string()).collect(),
+                    paths: vec![],
+                }],
+                deny: vec![],
+            },
+        };
+        let ty = "com.docker.sandbox/network-policy@2";
+        let req = mixin("m").cap(ty, false, n("a.com", &["GET"]));
+        let e = run(workload("w"), vec![req]).unwrap_err();
+        assert_eq!(
+            format!("{e:#}"),
+            "kit m: network-policy@2 method/path rules are not enforced by smolbento"
+        );
+        let opt = mixin("m").cap(ty, true, n("a.com", &["GET"]));
+        let p = run(workload("w"), vec![opt]).unwrap();
+        assert_eq!(p.skipped, ["m: network-policy@2 method/path (host-only)"]);
+        assert!(p.merged.runtime.allow[0].methods.is_empty());
+        // Host-only entries and @1 are unaffected.
+        let plain = mixin("m").cap(ty, false, n("a.com", &[]));
+        assert!(run(workload("w"), vec![plain]).unwrap().skipped.is_empty());
     }
 
     #[test]

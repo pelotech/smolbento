@@ -11,6 +11,7 @@ use anyhow::Result;
 use serde::{Deserialize, Serialize};
 
 use crate::config::Paths;
+use crate::kits::model::Rules;
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, clap::ValueEnum)]
 #[serde(rename_all = "kebab-case")]
@@ -69,6 +70,17 @@ impl Rule {
     }
 }
 
+impl Rule {
+    /// Where the rule came from: "kit" when a kit added it, else "local".
+    pub fn source(&self) -> &'static str {
+        if self.created_via.starts_with("kit:") {
+            "kit"
+        } else {
+            "local"
+        }
+    }
+}
+
 fn default_created_via() -> String {
     "added".into()
 }
@@ -104,6 +116,15 @@ fn normalise_methods(m: &str) -> Option<String> {
     v.sort();
     v.dedup();
     (!v.is_empty()).then(|| v.join(","))
+}
+
+/// What a rule id hashes as its scope: kit rules get their kit too, so they never share an id
+/// with a user rule for the same resources.
+fn id_scope(sandbox: &str, created_via: &str) -> String {
+    match created_via.strip_prefix("kit:") {
+        Some(kit) => format!("{sandbox}|kit={kit}"),
+        None => sandbox.to_string(),
+    }
 }
 
 /// A short, stable id from the rule's content, qualifiers included (FNV-1a).
@@ -172,7 +193,7 @@ impl Policy {
         let resources: Vec<String> = parsed.into_iter().map(|r| r.raw).collect();
         let method = method.as_deref().and_then(normalise_methods);
         let id = rule_id(
-            sandbox.unwrap_or("global"),
+            &id_scope(sandbox.unwrap_or("global"), created_via),
             decision,
             &resources,
             method.as_deref(),
@@ -191,6 +212,63 @@ impl Policy {
             path,
         });
         Ok(id)
+    }
+
+    /// Adds a kit's runtime rules for `sandbox` with `created_via = "kit:<kit>"`. Returns
+    /// `(all, added)`: the ids of every rule now in place, and the subset this call created.
+    /// Adding the same rules again is a no-op, so a caller rolling back removes only `added`
+    /// (via `remove_rules_by_ids`), never a rule that was there before.
+    /// A rule carries one path, so each path of an entry gets its own rule.
+    pub fn add_kit_rules(
+        &mut self,
+        sandbox: &str,
+        kit: &str,
+        rules: &Rules,
+    ) -> Result<(Vec<String>, Vec<String>)> {
+        let via = format!("kit:{kit}");
+        let (mut all, mut added) = (Vec::new(), Vec::new());
+        for (decision, list) in [
+            (Decision::Allow, &rules.allow),
+            (Decision::Deny, &rules.deny),
+        ] {
+            for n in list {
+                let method = (!n.methods.is_empty()).then(|| n.methods.join(","));
+                let paths: Vec<Option<String>> = if n.paths.is_empty() {
+                    vec![None]
+                } else {
+                    n.paths.iter().cloned().map(Some).collect()
+                };
+                for path in paths {
+                    let before: Vec<String> = self
+                        .rules_mut(Some(sandbox))
+                        .iter()
+                        .map(|r| r.id.clone())
+                        .collect();
+                    let id = self.add_rule(
+                        Some(sandbox),
+                        decision,
+                        &n.host,
+                        &via,
+                        method.clone(),
+                        path,
+                    )?;
+                    if !before.contains(&id) && !added.contains(&id) {
+                        added.push(id.clone());
+                    }
+                    if !all.contains(&id) {
+                        all.push(id);
+                    }
+                }
+            }
+        }
+        Ok((all, added))
+    }
+
+    /// Removes the sandbox's rules with these ids.
+    pub fn remove_rules_by_ids(&mut self, sandbox: &str, ids: &[String]) {
+        self.rules_mut(Some(sandbox))
+            .retain(|r| !ids.contains(&r.id));
+        self.prune(sandbox);
     }
 
     /// Removes rules by id, or one resource from every rule listing it (dropping emptied rules).
@@ -272,7 +350,7 @@ impl Policy {
         };
         for r in &mut entry.rules {
             r.id = rule_id(
-                to,
+                &id_scope(to, &r.created_via),
                 r.decision,
                 &r.resources,
                 r.method.as_deref(),
@@ -572,5 +650,82 @@ mod tests {
         p.sandboxes.entry("s1".into()).or_default().deny_network = true;
         assert!(!p.remove_rules(Some("s1"), Some("r-nope"), None));
         assert!(p.sandboxes["s1"].deny_network);
+    }
+
+    fn net(host: &str, methods: &[&str], paths: &[&str]) -> crate::kits::model::NetRule {
+        crate::kits::model::NetRule {
+            host: host.into(),
+            methods: methods.iter().map(|s| s.to_string()).collect(),
+            paths: paths.iter().map(|s| s.to_string()).collect(),
+        }
+    }
+
+    #[test]
+    fn kit_rules_are_tagged_distinct_and_idempotent() {
+        let mut p = Policy::default();
+        let user = p
+            .add_rule(Some("sb"), Decision::Allow, "a.com", "added", None, None)
+            .unwrap();
+        let rules = Rules {
+            allow: vec![
+                net("a.com", &[], &[]),
+                net("b.com", &["get", "post"], &["/x", "/y"]),
+            ],
+            deny: vec![net("bad.com", &[], &[])],
+        };
+        let (all, added) = p.add_kit_rules("sb", "gh", &rules).unwrap();
+        // a.com, b.com x 2 paths, bad.com
+        assert_eq!((all.len(), added.len()), (4, 4));
+        assert!(!all.contains(&user), "kit id differs from the user's rule");
+        let sb = &p.sandboxes["sb"].rules;
+        assert_eq!(sb.len(), 5);
+        assert!(
+            sb.iter()
+                .filter(|r| r.source() == "kit")
+                .all(|r| r.created_via == "kit:gh")
+        );
+        assert_eq!(sb[0].source(), "local");
+        let b = sb.iter().find(|r| r.path.as_deref() == Some("/y")).unwrap();
+        assert_eq!(b.method.as_deref(), Some("GET,POST"));
+
+        // Again: same ids, nothing new, no duplicates.
+        let (all2, added2) = p.add_kit_rules("sb", "gh", &rules).unwrap();
+        assert_eq!((all2, added2.len()), (all.clone(), 0));
+        assert_eq!(p.sandboxes["sb"].rules.len(), 5);
+
+        p.remove_rules_by_ids("sb", &all);
+        assert_eq!(p.sandboxes["sb"].rules.len(), 1);
+        assert_eq!(p.sandboxes["sb"].rules[0].id, user);
+        p.remove_rules_by_ids("sb", &[user]);
+        assert!(!p.sandboxes.contains_key("sb"));
+    }
+
+    #[test]
+    fn kit_rules_apply_to_their_sandbox_and_a_user_deny_wins() {
+        let mut p = Policy {
+            mode: Some(Mode::DenyAll),
+            ..Default::default()
+        };
+        let rules = Rules {
+            allow: vec![net("api.kit.com", &[], &[])],
+            deny: vec![],
+        };
+        p.add_kit_rules("sb", "gh", &rules).unwrap();
+        let spec = |sb: &str| format!("{:?}", compile::network(&p, sb, &[]));
+        assert!(spec("sb").contains("api.kit.com"));
+        assert!(!spec("other").contains("api.kit.com"));
+        assert!(compile::check(&p, Some("sb"), &[], "api.kit.com").allowed);
+        assert!(!compile::check(&p, Some("other"), &[], "api.kit.com").allowed);
+
+        p.add_rule(
+            Some("sb"),
+            Decision::Deny,
+            "api.kit.com",
+            "added",
+            None,
+            None,
+        )
+        .unwrap();
+        assert!(!compile::check(&p, Some("sb"), &[], "api.kit.com").allowed);
     }
 }
