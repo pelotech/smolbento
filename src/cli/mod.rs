@@ -13,6 +13,7 @@ mod secret;
 mod settings;
 #[cfg(test)]
 mod testutil;
+mod upload_pack;
 
 pub use args::*;
 
@@ -135,6 +136,7 @@ pub fn dispatch<R: Runner>(ctx: &mut Ctx<R>, cli: Cli) -> Result<i32> {
         Cmd::Policy(p) => policy::run(ctx, p),
         Cmd::Secret(s) => secret::run(ctx, s),
         Cmd::Ports(a) => ports::run(ctx, &a),
+        Cmd::UploadPack { sandbox, .. } => upload_pack::run(ctx, &sandbox),
         Cmd::Daemon(_) => {
             println!("smolbento needs no daemon; smolvm manages each sandbox directly");
             Ok(0)

@@ -97,6 +97,14 @@ pub enum Cmd {
     Attach(Passthrough),
     #[command(hide = true)]
     Volume(Passthrough),
+    /// git runs this for a clone sandbox's remote (`uploadpack`); stdout is git's stream
+    #[command(name = "_upload-pack", hide = true)]
+    UploadPack {
+        sandbox: String,
+        /// The remote's placeholder path, which git appends; ignored
+        #[arg(hide = true)]
+        path: Option<String>,
+    },
 }
 
 impl Cmd {
@@ -133,6 +141,7 @@ impl Cmd {
             Cmd::Ttl(_) => "ttl",
             Cmd::Attach(_) => "attach",
             Cmd::Volume(_) => "volume",
+            Cmd::UploadPack { .. } => "_upload-pack",
         }
     }
 
@@ -151,6 +160,7 @@ impl Cmd {
                 | Cmd::Reset(_)
                 | Cmd::Cp(_)
                 | Cmd::Ports(_)
+                | Cmd::UploadPack { .. }
         )
     }
 
