@@ -78,13 +78,26 @@ pub fn launch_user<R: Runner>(vm: &Smolvm<R>, sb: &Sandbox) -> Option<String> {
     if user.is_empty() || !user.bytes().all(|b| b.is_ascii_digit()) || user.parse() == Ok(0u32) {
         return Some(spec);
     }
-    let Some(name) = read_guest_file(vm, sb, IMAGE_USER_FILE) else {
+    // The guest wrote the record, so it only counts as a plain account name.
+    let Some(name) = read_guest_file(vm, sb, IMAGE_USER_FILE).filter(|n| is_account_name(n)) else {
         return Some(spec);
     };
     Some(match group {
         Some(g) => format!("{name}:{g}"),
         None => name,
     })
+}
+
+/// A POSIX-style account name: `[A-Za-z_][A-Za-z0-9_.-]*` with an optional trailing `$`, at
+/// most 32 characters. Nothing that `-u` could read as a flag, a group or more than one word.
+fn is_account_name(name: &str) -> bool {
+    let body = name.strip_suffix('$').unwrap_or(name);
+    let mut bytes = body.bytes();
+    name.len() <= 32
+        && bytes
+            .next()
+            .is_some_and(|b| b.is_ascii_alphabetic() || b == b'_')
+        && bytes.all(|b| b.is_ascii_alphanumeric() || matches!(b, b'_' | b'.' | b'-'))
 }
 
 /// A small guest file's first line via `machine cp` (no guest shell needed); `None` when it's
@@ -928,6 +941,34 @@ mod tests {
             e.contains("usermod: user somebody is currently used by process 7"),
             "{e}"
         );
+    }
+
+    #[test]
+    fn launch_user_ignores_a_hostile_record() {
+        let long = "a".repeat(33);
+        for record in ["-x", "a:b", "a b", long.as_str(), "a\u{7}b", ""] {
+            let fake = FakeRunner::new();
+            fake.ok(&["machine", "status"], STATUS);
+            fake.download(format!("{record}\n").as_bytes());
+            let vm = Smolvm::new(fake);
+            let mut sb = get(&vm, "claude-myrepo").unwrap();
+            sb.meta.user = Some("1001:staff".into());
+            assert_eq!(
+                launch_user(&vm, &sb).as_deref(),
+                Some("1001:staff"),
+                "{record:?}"
+            );
+        }
+        // The longest name allowed, and a trailing `$` (machine accounts).
+        for ok in ["a".repeat(32), "_svc.x-1$".to_string()] {
+            let fake = FakeRunner::new();
+            fake.ok(&["machine", "status"], STATUS);
+            fake.download(format!("{ok}\n").as_bytes());
+            let vm = Smolvm::new(fake);
+            let mut sb = get(&vm, "claude-myrepo").unwrap();
+            sb.meta.user = Some("1001".into());
+            assert_eq!(launch_user(&vm, &sb).as_deref(), Some(ok.as_str()));
+        }
     }
 
     #[test]
