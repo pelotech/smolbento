@@ -1,9 +1,8 @@
 //! `sbt kit inspect|validate|add`.
 
 use std::io::{BufRead, Write};
-use std::path::PathBuf;
 
-use anyhow::{Context, Result, bail};
+use anyhow::{Context, Result, anyhow, bail};
 use serde_json::json;
 
 use super::Ctx;
@@ -15,7 +14,7 @@ use crate::kits::model::{Cap, CapBody, Content, Kind, Kit, Source};
 use crate::kits::resolve::resolve;
 use crate::kits::{compose, guest, load};
 use crate::policy::{Decision, Policy, compile};
-use crate::sandbox::{self, CreateRequest, KitPhase};
+use crate::sandbox::{self, CreateRequest, KitPhase, Sandbox};
 use crate::secrets::SecretsFile;
 use crate::smolvm::{ExecSpec, Runner};
 
@@ -36,7 +35,17 @@ pub fn run<R: Runner>(ctx: &mut Ctx<R>, cmd: KitCmd) -> Result<i32> {
             args,
             yes,
         } => add(ctx, &sandbox, &reference, &args, yes),
+        KitCmd::Pack(_) => pending("pack"),
+        KitCmd::Push(_) => pending("push"),
+        KitCmd::Pull(_) => pending("pull"),
+        KitCmd::Sign(_) => pending("sign"),
+        KitCmd::Verify(_) => pending("verify"),
     }
+}
+
+/// sbx kit subcommands smolbento doesn't have yet: exit 2, like other pending commands.
+fn pending(sub: &str) -> Result<i32> {
+    Err(super::Unsupported(format!("`sbt kit {sub}` is not implemented yet")).into())
 }
 
 fn arg_values(a: &KitArgOpts) -> Result<ArgValues> {
@@ -253,7 +262,13 @@ struct Recorded {
 
 fn parse_record(text: &str) -> Vec<Recorded> {
     text.lines()
-        .filter(|l| !l.trim().is_empty())
+        .filter(|l| {
+            let named = !l.split('\t').next().unwrap_or_default().trim().is_empty();
+            if !named && !l.trim().is_empty() {
+                eprintln!("warning: ignoring a malformed line in /etc/smolbento/kits: {l:?}");
+            }
+            named
+        })
         .map(|l| {
             let mut f = l.split('\t');
             let name = f.next().unwrap_or_default().to_string();
@@ -276,15 +291,12 @@ fn parse_record(text: &str) -> Vec<Recorded> {
 
 /// A recorded kit as a mixin that only provides: its capabilities were applied already.
 fn recorded_kit(r: &Recorded) -> Kit {
-    // Recorded registry refs are pinned; local kits are recorded by path.
-    let source = if r.reference.starts_with('/') {
-        Source::LocalV3(PathBuf::from(&r.reference))
-    } else {
-        Source::Registry(r.reference.clone())
-    };
+    // Only `provides` matters; the placeholder digest lets `apply` record any ref, even one a
+    // hand-edited record left unpinned or empty (its line is dropped again below).
     Kit {
         name: r.name.clone(),
-        source,
+        source: Source::Registry(r.reference.clone()),
+        digest: Some("sha256:recorded".into()),
         kind: Kind::Mixin,
         provides: r.provides.clone(),
         content: Content::None,
@@ -310,7 +322,27 @@ fn add<R: Runner>(
     if !recreate.is_empty() {
         bail!("recreate required: {}", recreate.join(", "));
     }
+    let started = !sb.is_running();
     plan::ensure_running(ctx, &mut sb)?;
+    add_running(ctx, &sb, kit, &values, yes, started).map_err(|e| {
+        if started {
+            anyhow!("{e:#}\n({name} was started for this and is still running)")
+        } else {
+            e
+        }
+    })
+}
+
+/// `add` once the sandbox runs; `started` says whether `add` started it.
+fn add_running<R: Runner>(
+    ctx: &Ctx<R>,
+    sb: &Sandbox,
+    kit: Kit,
+    values: &ArgValues,
+    yes: bool,
+    started: bool,
+) -> Result<i32> {
+    let name = sb.name();
     let record = ctx
         .vm
         .exec_captured(&ExecSpec {
@@ -331,7 +363,7 @@ fn add<R: Runner>(
         .map(recorded_kit)
         .chain(std::iter::once(kit))
         .collect();
-    let plan = resolve(empty_workload(&sb.meta.agent), mixins, &values)?;
+    let plan = resolve(empty_workload(&sb.meta.agent), mixins, values)?;
     plan.warn_skipped();
 
     // In memory until approved.
@@ -358,7 +390,7 @@ fn add<R: Runner>(
     hosts.sort();
     hosts.dedup();
     if !hosts.is_empty() && !yes {
-        approve(ctx, &kit_name, &hosts)?;
+        approve(ctx, &kit_name, &hosts, started)?;
     }
 
     // The record and startup script go after the existing ones.
@@ -386,15 +418,16 @@ fn add<R: Runner>(
         let network = compile::network(policy, name, &sb.meta.credential_hosts);
         ctx.vm.update_network(&sb.machine, &network)
     };
-    let result = (|| -> std::result::Result<(), (KitPhase, anyhow::Error)> {
+    // `None`: opening the kit's network, before any hook ran.
+    let result = (|| -> std::result::Result<(), (Option<KitPhase>, anyhow::Error)> {
         if !added.is_empty() {
             let open = || -> Result<()> {
                 policy.save(&ctx.paths)?;
                 push(&policy).context("applying the kit's network rules")
             };
-            open().map_err(|e| (KitPhase::AfterInstall, e))?;
+            open().map_err(|e| (None, e))?;
         }
-        sandbox::apply_kit_steps(&ctx.vm, &sb, &steps, || {
+        sandbox::apply_kit_steps(&ctx.vm, sb, &steps, || {
             if steps.install_rules.is_empty() {
                 return Ok(());
             }
@@ -403,12 +436,16 @@ fn add<R: Runner>(
             policy.save(&ctx.paths)?;
             push(&policy).context("removing the install-phase network rules")
         })
+        .map_err(|(phase, e)| (Some(phase), e))
     })();
     if let Err((phase, e)) = result {
         let hooks_ran = !steps.install.is_empty()
-            && (phase == KitPhase::Install || phase == KitPhase::AfterInstall);
+            && matches!(phase, Some(KitPhase::Install | KitPhase::AfterInstall));
         let mut msg = match phase {
-            KitPhase::Write => format!(
+            Some(KitPhase::Write) if added.is_empty() => {
+                format!("kit add failed; files it wrote may remain: {e:#}")
+            }
+            Some(KitPhase::Write) => format!(
                 "kit add failed; its network rules were removed, but files it wrote may remain: \
                  {e:#}"
             ),
@@ -436,14 +473,14 @@ fn add<R: Runner>(
         bail!(msg);
     }
     if let Some((path, _, _)) = &startup {
-        sandbox::run_kit_startup(&ctx.vm, &sb, path);
+        sandbox::run_kit_startup(&ctx.vm, sb, path);
     }
     writeln!(&ctx.out, "Added kit {kit_name} to {name}")?;
     Ok(0)
 }
 
 /// Asks before a kit widens the sandbox's network access (SPEC-v3 §7.4); declining is an error.
-fn approve<R: Runner>(ctx: &Ctx<R>, kit: &str, hosts: &[String]) -> Result<()> {
+fn approve<R: Runner>(ctx: &Ctx<R>, kit: &str, hosts: &[String], started: bool) -> Result<()> {
     if !ctx.stdin_tty {
         bail!("kit add needs --yes to grant network access without a terminal");
     }
@@ -455,7 +492,12 @@ fn approve<R: Runner>(ctx: &Ctx<R>, kit: &str, hosts: &[String]) -> Result<()> {
     if matches!(line.trim().to_ascii_lowercase().as_str(), "y" | "yes") {
         Ok(())
     } else {
-        bail!("aborted; nothing was changed")
+        // `add` notes the start itself.
+        bail!(if started {
+            "aborted"
+        } else {
+            "aborted; nothing was changed"
+        })
     }
 }
 
@@ -513,12 +555,16 @@ mod tests {
 
     /// A running shell sandbox `dev` whose guest kits record is `record`.
     fn dev_sandbox(t: &TestEnv, record: &str) {
+        dev_sandbox_in(t, "running", record);
+    }
+
+    fn dev_sandbox_in(t: &TestEnv, state: &str, record: &str) {
         let fake = t.ctx.vm.runner();
         fake.ok(
             &["machine", "status", "-n", MACHINE],
             &machine_json(
                 MACHINE,
-                "running",
+                state,
                 &[("sbx.name", "dev"), ("sbx.agent", "shell")],
             ),
         );
@@ -560,11 +606,12 @@ mod tests {
         format!("cd / && {}", guest::hook_script(&h))
     }
 
+    /// Resources of `net`'s rules (`created_via = kit:net`).
     fn kit_rules(t: &TestEnv) -> Vec<String> {
         Policy::load(&t.ctx.paths)
             .unwrap()
             .all_rules()
-            .filter(|(r, _)| r.source() == "kit")
+            .filter(|(r, _)| r.created_via == "kit:net")
             .flat_map(|(r, _)| r.resources.clone())
             .collect()
     }
@@ -866,6 +913,18 @@ mod tests {
     fn a_failed_install_hook_drops_the_kits_rules() {
         let mut t = kit_env();
         set_policy(&t, "mode = \"deny-all\"\n");
+        let mut policy = Policy::load(&t.ctx.paths).unwrap();
+        let mine = policy
+            .add_rule(
+                Some("dev"),
+                crate::policy::Decision::Allow,
+                "mine.example",
+                "added",
+                None,
+                None,
+            )
+            .unwrap();
+        policy.save(&t.ctx.paths).unwrap();
         dev_sandbox(&t, BASE);
         v3_kit(&t, "net", NET_KIT, &[]);
         t.ctx.vm.runner().fail(
@@ -893,18 +952,119 @@ mod tests {
             "{m}"
         );
         assert!(kit_rules(&t).is_empty());
+        let policy = Policy::load(&t.ctx.paths).unwrap();
+        assert_eq!(
+            policy.find(&mine).map(|(r, s)| (r.resources.clone(), s)),
+            Some((vec!["mine.example".to_string()], Some("dev"))),
+            "the user's own rule stays"
+        );
         let lines = dev_calls(&t);
         let last_update = lines
             .iter()
             .rfind(|l| l.starts_with("machine update"))
             .unwrap();
         assert!(!last_update.contains("api.net.example"), "{lines:#?}");
+        assert!(last_update.contains("mine.example"), "{lines:#?}");
         assert!(!lines.iter().any(|l| l.contains("machine delete")));
         assert!(
             !lines
                 .iter()
                 .any(|l| l.starts_with("machine cp") && l.ends_with(guest::KITS_FILE)),
             "{lines:#?}"
+        );
+    }
+
+    #[test]
+    fn a_failed_network_push_is_not_blamed_on_hooks() {
+        let mut t = kit_env();
+        set_policy(&t, "mode = \"deny-all\"\n");
+        dev_sandbox(&t, BASE);
+        v3_kit(&t, "net", NET_KIT, &[]);
+        t.ctx
+            .vm
+            .runner()
+            .once_fail(&["machine", "update", "-n", MACHINE], "net", "no route");
+        let e = sbt(&mut t.ctx, &["kit", "add", "dev", "./net", "--yes"]).unwrap_err();
+        let m = format!("{e:#}");
+        assert!(
+            m.starts_with("kit add failed; nothing was kept: ") && !m.contains("install hooks"),
+            "{m}"
+        );
+        assert!(m.contains("no route"), "{m}");
+        assert!(kit_rules(&t).is_empty());
+        assert!(
+            !dev_calls(&t).iter().any(|l| l.contains("echo hi")),
+            "no hook ran"
+        );
+    }
+
+    #[test]
+    fn a_failed_write_without_kit_rules_claims_no_rule_removal() {
+        let mut t = kit_env();
+        dev_sandbox(&t, BASE);
+        v3_kit(
+            &t,
+            "quiet",
+            r#"{"schemaVersion":"3","kind":"mixin","name":"quiet","capabilities":[
+                {"type":"com.docker.sandbox/lifecycle@1","config":{"install":[{"command":"echo hi"}]}}]}"#,
+            &[],
+        );
+        // The startup files' `mkdir`, the first write.
+        t.ctx.vm.runner().fail(
+            &[
+                "machine",
+                "exec",
+                "--name",
+                MACHINE,
+                "-u",
+                "root",
+                "--",
+                "sh",
+                "-c",
+                "mkdir -p '/etc/smolbento'",
+            ],
+            "exec",
+            "disk full",
+        );
+        let e = sbt(&mut t.ctx, &["kit", "add", "dev", "./quiet"]).unwrap_err();
+        let m = format!("{e:#}");
+        assert!(
+            m.starts_with("kit add failed; files it wrote may remain: ") && !m.contains("rules"),
+            "{m}"
+        );
+    }
+
+    #[test]
+    fn a_malformed_kits_record_line_does_not_block_adding() {
+        let mut t = kit_env();
+        set_policy(&t, "mode = \"deny-all\"\n");
+        let record = format!("{BASE}odd\n\tno-name\tx\nloose\tunpinned-ref\tl\n");
+        dev_sandbox(&t, &record);
+        v3_kit(&t, "net", NET_KIT, &[]);
+        sbt(&mut t.ctx, &["kit", "add", "dev", "./net", "--yes"]).unwrap();
+        let uploads: std::collections::BTreeMap<String, String> =
+            t.ctx.vm.runner().uploads().into_iter().collect();
+        let kits = &uploads[&format!("{MACHINE}:{}", guest::KITS_FILE)];
+        let net_dir = t.ctx.cwd.join("net").canonicalize().unwrap();
+        assert_eq!(*kits, format!("{record}net\t{}\tnet\n", net_dir.display()));
+    }
+
+    #[test]
+    fn a_refusal_after_starting_a_stopped_sandbox_says_so() {
+        let mut t = kit_env();
+        set_policy(&t, "mode = \"deny-all\"\n");
+        dev_sandbox_in(&t, "stopped", BASE);
+        v3_kit(&t, "net", NET_KIT, &[]);
+        let e = sbt(&mut t.ctx, &["kit", "add", "dev", "./net"]).unwrap_err();
+        assert_eq!(
+            format!("{e:#}"),
+            "kit add needs --yes to grant network access without a terminal\n\
+             (dev was started for this and is still running)"
+        );
+        assert!(
+            dev_calls(&t).iter().any(|l| l.starts_with("machine start")),
+            "{:#?}",
+            dev_calls(&t)
         );
     }
 }

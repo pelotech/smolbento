@@ -237,6 +237,16 @@ pub enum KitCmd {
         #[arg(long, short = 'y')]
         yes: bool,
     },
+    #[command(hide = true)]
+    Pack(Passthrough),
+    #[command(hide = true)]
+    Push(Passthrough),
+    #[command(hide = true)]
+    Pull(Passthrough),
+    #[command(hide = true)]
+    Sign(Passthrough),
+    #[command(hide = true)]
+    Verify(Passthrough),
 }
 
 /// Kit argument flags, as on `run` and `create`.

@@ -80,6 +80,11 @@ kit add my-sandbox ./mcp-postgres/
 kit add my-sandbox ghcr.io/myorg/mcp-postgres:1.0
 kit add my-sandbox ./mcp-postgres/ --kit-arg host=db.internal
 # Later phases (must parse; exit 2 for now)
+kit pack ./my-kit
+kit push ./my-kit ghcr.io/myorg/my-kit:1.0
+kit pull ghcr.io/myorg/my-kit:1.0
+kit sign ghcr.io/myorg/my-kit:1.0
+kit verify ghcr.io/myorg/my-kit:1.0
 mcp add linear --url https://mcp.linear.app/sse
 template ls
 env run

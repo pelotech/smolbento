@@ -298,6 +298,9 @@ mod tests {
         let err = sbt(&mut t.ctx, &["mcp", "ls"]).unwrap_err();
         assert_eq!(err.to_string(), "`sbt mcp` is not implemented yet");
         assert_eq!(exit_code(&err), 2);
+        let err = sbt(&mut t.ctx, &["kit", "pack", "./my-kit"]).unwrap_err();
+        assert_eq!(err.to_string(), "`sbt kit pack` is not implemented yet");
+        assert_eq!(exit_code(&err), 2);
         let err = sbt(&mut t.ctx, &["move", "x", "--to", "cloud"]).unwrap_err();
         assert!(err.to_string().contains("Docker Cloud"));
         assert_eq!(exit_code(&err), 2);
