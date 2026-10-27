@@ -117,7 +117,7 @@ pub fn remote_name(sandbox: &str) -> String {
 }
 
 pub fn upload_pack_cmd(sandbox: &str) -> String {
-    format!("sbt _upload-pack {sandbox}")
+    format!("smolbento _upload-pack {sandbox}")
 }
 
 /// Whether `sandbox-<name>` exists, and whether smolbento made it.
@@ -326,7 +326,10 @@ mod tests {
             String::from_utf8(o.stdout).unwrap().trim().to_string()
         };
         assert_eq!(get("remote.sandbox-box.url"), "file:///sbt/box");
-        assert_eq!(get("remote.sandbox-box.uploadpack"), "sbt _upload-pack box");
+        assert_eq!(
+            get("remote.sandbox-box.uploadpack"),
+            "smolbento _upload-pack box"
+        );
         assert_eq!(get("remote.sandbox-box.tagopt"), "--no-tags");
         assert_eq!(
             get("remote.sandbox-box.fetch"),

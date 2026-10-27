@@ -293,7 +293,7 @@ mod tests {
         assert!(create.contains("--label sbx.clone=true"), "{create}");
         assert_eq!(
             git_config(&root, "remote.sandbox-claude-repo.uploadpack"),
-            "sbt _upload-pack claude-repo"
+            "smolbento _upload-pack claude-repo"
         );
         assert_eq!(
             git_config(&root, "remote.sandbox-claude-repo.tagOpt"),

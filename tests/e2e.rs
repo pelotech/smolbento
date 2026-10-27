@@ -44,13 +44,15 @@ impl E2e {
             .env("SMOLBENTO_DOCKER", "false")
     }
 
-    /// Host git in the workspace. The `sandbox-<name>` remote runs `sbt _upload-pack`, so `sbt`
-    /// (a symlink to this build) goes first on `PATH`, with the same environment as [`E2e::sbt`].
+    /// Host git in the workspace. The `sandbox-<name>` remote runs `smolbento _upload-pack`, so
+    /// `smolbento` (a symlink to this build) goes first on `PATH`, with the same environment as
+    /// [`E2e::sbt`].
     fn git(&self, args: &[&str]) -> Output {
         let bin = self.dir.path().join("bin");
         if !bin.exists() {
             std::fs::create_dir_all(&bin).unwrap();
-            std::os::unix::fs::symlink(env!("CARGO_BIN_EXE_smolbento"), bin.join("sbt")).unwrap();
+            std::os::unix::fs::symlink(env!("CARGO_BIN_EXE_smolbento"), bin.join("smolbento"))
+                .unwrap();
         }
         let path = std::env::join_paths(
             std::iter::once(bin).chain(std::env::split_paths(&std::env::var_os("PATH").unwrap())),
