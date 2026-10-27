@@ -31,10 +31,28 @@ pub fn is_env_name(v: &str) -> bool {
         && c.all(|x| x.is_ascii_alphanumeric() || x == '_')
 }
 
-/// A hook with only `PATH`, `HOME` and its declared env vars. The caller runs it from `/` as the
-/// hook's user (`exec -u`, or `as_user` in a startup script).
+/// CA settings smolvm gives the guest (its TLS-terminating proxy's bundle, for bound credentials).
+/// Hooks keep them so install hooks can reach hosts that have a credential bound.
+pub const CA_ENV: &[&str] = &[
+    "SSL_CERT_FILE",
+    "SSL_CERT_DIR",
+    "CURL_CA_BUNDLE",
+    "REQUESTS_CA_BUNDLE",
+    "GIT_SSL_CAINFO",
+    "NODE_EXTRA_CA_CERTS",
+    "DENO_CERT",
+];
+
+/// A hook with only `PATH`, `HOME`, the `CA_ENV` vars that are set in the guest and its declared
+/// env vars. The caller runs it from `/` as the hook's user (`exec -u`, or `as_user` in a startup
+/// script).
 pub fn hook_script(h: &Hook) -> String {
     let mut s = String::from(r#"env -i PATH="$PATH" HOME="$HOME""#);
+    // `${V+V="$V"}` expands to one word when V is set (even empty) and to nothing when unset, so
+    // an unset CA var stays unset rather than becoming an empty value.
+    for v in CA_ENV {
+        s.push_str(&format!(r#" ${{{v}+{v}="${v}"}}"#));
+    }
     // apply refuses other names; skipping them here keeps the script well-formed regardless.
     for v in h.env.iter().filter(|v| is_env_name(v)) {
         s.push_str(&format!(r#" {v}="${v}""#));
@@ -219,6 +237,17 @@ mod tests {
         }
     }
 
+    /// The CA pass-through `hook_script` puts after `HOME`.
+    const CA: &str = concat!(
+        r#" ${SSL_CERT_FILE+SSL_CERT_FILE="$SSL_CERT_FILE"}"#,
+        r#" ${SSL_CERT_DIR+SSL_CERT_DIR="$SSL_CERT_DIR"}"#,
+        r#" ${CURL_CA_BUNDLE+CURL_CA_BUNDLE="$CURL_CA_BUNDLE"}"#,
+        r#" ${REQUESTS_CA_BUNDLE+REQUESTS_CA_BUNDLE="$REQUESTS_CA_BUNDLE"}"#,
+        r#" ${GIT_SSL_CAINFO+GIT_SSL_CAINFO="$GIT_SSL_CAINFO"}"#,
+        r#" ${NODE_EXTRA_CA_CERTS+NODE_EXTRA_CA_CERTS="$NODE_EXTRA_CA_CERTS"}"#,
+        r#" ${DENO_CERT+DENO_CERT="$DENO_CERT"}"#,
+    );
+
     fn sh(script: &str) -> std::process::Output {
         Command::new("sh").arg("-c").arg(script).output().unwrap()
     }
@@ -228,12 +257,37 @@ mod tests {
         let h = hook(HookCmd::Shell("echo hi".into()), &["FOO"]);
         assert_eq!(
             hook_script(&h),
-            r#"env -i PATH="$PATH" HOME="$HOME" FOO="$FOO" sh -c 'echo hi'"#
+            format!(r#"env -i PATH="$PATH" HOME="$HOME"{CA} FOO="$FOO" sh -c 'echo hi'"#)
         );
         let h = hook(HookCmd::Argv(vec!["echo".into(), "it's".into()]), &[]);
         assert_eq!(
             hook_script(&h),
-            r#"env -i PATH="$PATH" HOME="$HOME" 'echo' 'it'\''s'"#
+            format!(r#"env -i PATH="$PATH" HOME="$HOME"{CA} 'echo' 'it'\''s'"#)
+        );
+    }
+
+    #[test]
+    fn hook_script_keeps_ca_vars_only_when_set() {
+        let h = hook(
+            HookCmd::Shell(
+                "echo \"${SSL_CERT_FILE-unset}|${CURL_CA_BUNDLE-unset}|${DENO_CERT-unset}|${BAR-unset}\""
+                    .into(),
+            ),
+            &[],
+        );
+        let out = Command::new("sh")
+            .arg("-c")
+            .arg(hook_script(&h))
+            .env("SSL_CERT_FILE", "/run/smolvm/ca bundle.pem")
+            .env("DENO_CERT", "")
+            .env_remove("CURL_CA_BUNDLE")
+            .env("BAR", "b")
+            .output()
+            .unwrap();
+        assert!(out.status.success(), "{out:?}");
+        assert_eq!(
+            String::from_utf8_lossy(&out.stdout),
+            "/run/smolvm/ca bundle.pem|unset||unset\n"
         );
     }
 

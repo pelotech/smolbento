@@ -1008,17 +1008,23 @@ mod tests {
             .into_iter()
             .map(|i| (i.user, i.script))
             .collect();
+        // guest's tests pin the CA pass-through text; here it only has to sit after HOME.
+        let ca: String = crate::kits::guest::CA_ENV
+            .iter()
+            .map(|v| format!(r#" ${{{v}+{v}="${v}"}}"#))
+            .collect();
         assert_eq!(
             install,
             [
                 (
                     None,
-                    r#"cd / && env -i PATH="$PATH" HOME="$HOME" sh -c 'apt-get install x'"#
-                        .to_string()
+                    format!(
+                        r#"cd / && env -i PATH="$PATH" HOME="$HOME"{ca} sh -c 'apt-get install x'"#
+                    )
                 ),
                 (
                     Some("agent".into()),
-                    r#"cd / && env -i PATH="$PATH" HOME="$HOME" sh -c 'npm i -g y'"#.into()
+                    format!(r#"cd / && env -i PATH="$PATH" HOME="$HOME"{ca} sh -c 'npm i -g y'"#)
                 ),
             ]
         );
