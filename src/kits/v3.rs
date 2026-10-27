@@ -95,6 +95,11 @@ fn from_value(v: Value, source: Source) -> Result<Kit> {
         })
         .collect::<Result<Vec<_>>>()?;
     let name = name_from_source(&source)?;
+    for c in &caps {
+        if let CapBody::Lifecycle(l) = &c.body {
+            check_hooks(&name, l)?;
+        }
+    }
     let args = d
         .args
         .into_iter()
@@ -707,6 +712,38 @@ mod tests {
         assert_eq!(k.args["a"].default.as_deref(), Some("5"));
         assert_eq!(k.args["a"].enum_values, ["5", "6", "true", "1.5", "x"]);
         assert_eq!(k.args["b"].default.as_deref(), Some("false"));
+    }
+
+    #[test]
+    fn an_empty_hook_command_is_an_error() {
+        for (hook, want) in [
+            (
+                r#"{"command":[]}"#,
+                "kit k: install hook 1 has an empty command",
+            ),
+            (
+                r#"{"command":"  "}"#,
+                "kit k: install hook 1 has an empty command",
+            ),
+        ] {
+            let e = parse_json(
+                &format!(
+                    r#"{{"schemaVersion":"3","kind":"mixin","capabilities":[{{"type":"com.docker.sandbox/lifecycle@1","config":{{"install":[{hook}]}}}}]}}"#
+                ),
+                local("k"),
+            )
+            .unwrap_err();
+            assert_eq!(format!("{e:#}"), want);
+        }
+        let e = parse_json(
+            r#"{"schemaVersion":"3","kind":"mixin","capabilities":[{"type":"com.docker.sandbox/lifecycle@1","config":{"startup":[{"command":["a"]},{"command":""}]}}]}"#,
+            local("k"),
+        )
+        .unwrap_err();
+        assert_eq!(
+            format!("{e:#}"),
+            "kit k: startup hook 2 has an empty command"
+        );
     }
 
     #[test]

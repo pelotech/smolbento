@@ -3,6 +3,7 @@
 use std::collections::BTreeMap;
 use std::path::PathBuf;
 
+use anyhow::{Result, bail};
 use serde::{Deserialize, Deserializer};
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -228,4 +229,21 @@ pub(crate) fn scalar_list<'de, D: Deserializer<'de>>(d: D) -> Result<Vec<String>
         .into_iter()
         .map(Scalar::into_string)
         .collect())
+}
+
+/// Rejects a hook with nothing to run: an empty argv or a blank shell string. Hooks are numbered
+/// from 1 within their list.
+pub(crate) fn check_hooks(kit: &str, l: &Lifecycle) -> Result<()> {
+    for (phase, hooks) in [("install", &l.install), ("startup", &l.startup)] {
+        for (i, h) in hooks.iter().enumerate() {
+            let empty = match &h.command {
+                HookCmd::Shell(s) => s.trim().is_empty(),
+                HookCmd::Argv(a) => a.is_empty(),
+            };
+            if empty {
+                bail!("kit {kit}: {phase} hook {} has an empty command", i + 1);
+            }
+        }
+    }
+    Ok(())
 }

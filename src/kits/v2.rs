@@ -592,6 +592,7 @@ fn lifecycle(
         startup: startup.collect(),
         files,
     };
+    check_hooks(kit, &l)?;
     let empty = l.install.is_empty() && l.startup.is_empty() && l.files.is_empty();
     Ok((!empty).then_some(l))
 }
@@ -819,5 +820,27 @@ mod tests {
         let k = parse(yaml, Path::new("/nonexistent")).unwrap();
         assert_eq!(k.args["a"].default.as_deref(), Some("5"));
         assert_eq!(k.args["a"].enum_values, ["5", "true", "x"]);
+    }
+
+    #[test]
+    fn an_empty_hook_command_is_an_error() {
+        for (setup, want) in [
+            (
+                "install:\n    - command: \" \"\n",
+                "kit m: install hook 1 has an empty command",
+            ),
+            (
+                "install:\n    - command: ok\n    - command: \"\"\n",
+                "kit m: install hook 2 has an empty command",
+            ),
+            (
+                "startup:\n    - command: []\n",
+                "kit m: startup hook 1 has an empty command",
+            ),
+        ] {
+            let yaml = format!("schemaVersion: \"2\"\nkind: mixin\nname: m\nsetup:\n  {setup}");
+            let e = parse(&yaml, Path::new("/nonexistent")).unwrap_err();
+            assert_eq!(format!("{e:#}"), want);
+        }
     }
 }
