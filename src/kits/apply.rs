@@ -22,8 +22,8 @@ use crate::smolvm::{Credential, PortMap};
 pub struct KitSteps {
     /// Policy rule ids to remove once the install hooks have run.
     pub install_rules: Vec<String>,
-    /// `(exec user, script)` run with `sh -c` in order; `None` is root.
-    pub install: Vec<(Option<String>, String)>,
+    /// Run with `sh -c` in order.
+    pub install: Vec<InstallStep>,
     /// Scripts writing kit files (as root, then owned by `agent`).
     pub files: Vec<String>,
     /// Scripts writing agent context sections.
@@ -32,6 +32,16 @@ pub struct KitSteps {
     pub startup_d: Vec<(String, String)>,
     /// `/etc/smolbento/kits`: `name<TAB>ref<TAB>provides` per kit.
     pub kits_record: String,
+}
+
+/// One install-time guest script.
+#[derive(Debug, Clone, Default, PartialEq, Eq)]
+pub struct InstallStep {
+    /// Names the step in errors, e.g. `kit a install hook 2`.
+    pub label: String,
+    /// The exec user; `None` is root.
+    pub user: Option<String>,
+    pub script: String,
 }
 
 /// Fills `req` from the plan and writes the kits' policy rules (install-phase ones too: they must
@@ -143,9 +153,11 @@ pub fn apply(
                 .any(|c| matches!(c.body, CapBody::GitIdentity) && !c.optional)
         });
         match (host_git(), required) {
-            (Some((name, email)), _) => steps
-                .install
-                .push((None, guest::git_identity_script(&name, &email))),
+            (Some((name, email)), _) => steps.install.push(InstallStep {
+                label: "the git identity step".into(),
+                user: None,
+                script: guest::git_identity_script(&name, &email),
+            }),
             (None, Some(k)) => bail!(
                 "kit {} needs your git identity; set it with `git config --global user.name …` \
                  and `git config --global user.email …`",
@@ -161,9 +173,23 @@ pub fn apply(
             bail!("kit {kit}: hook env '{v}' is not a valid variable name");
         }
     }
-    for (_, h) in &m.install_hooks {
-        let script = format!("cd / && {}", guest::hook_script(h));
-        steps.install.push((h.user.clone(), script));
+    let mut per_kit: Vec<(&str, usize)> = Vec::new();
+    for (kit, h) in &m.install_hooks {
+        let n = match per_kit.iter_mut().find(|(k, _)| k == kit) {
+            Some((_, n)) => {
+                *n += 1;
+                *n
+            }
+            None => {
+                per_kit.push((kit, 1));
+                1
+            }
+        };
+        steps.install.push(InstallStep {
+            label: format!("kit {kit} install hook {n}"),
+            user: h.user.clone(),
+            script: format!("cd / && {}", guest::hook_script(h)),
+        });
     }
     // The later kit (in dependency order) wins a path.
     let mut files: Vec<&FileReq> = Vec::new();
@@ -935,8 +961,15 @@ mod tests {
         let p = plan(vec![a, b]);
         let mut req = request();
         let (steps, _) = run(&p, &mut req, &mut Policy::default()).unwrap();
+        let labels: Vec<&str> = steps.install.iter().map(|i| i.label.as_str()).collect();
+        assert_eq!(labels, ["kit a install hook 1", "kit b install hook 1"]);
+        let install: Vec<(Option<String>, String)> = steps
+            .install
+            .into_iter()
+            .map(|i| (i.user, i.script))
+            .collect();
         assert_eq!(
-            steps.install,
+            install,
             [
                 (
                     None,
@@ -993,11 +1026,12 @@ mod tests {
         .unwrap();
         assert_eq!(
             steps.install,
-            [(
-                None,
-                "git config --system user.name 'Ada L' && git config --system user.email 'ada@x.org'"
+            [InstallStep {
+                label: "the git identity step".into(),
+                user: None,
+                script: "git config --system user.name 'Ada L' && git config --system user.email 'ada@x.org'"
                     .to_string()
-            )]
+            }]
         );
         let e = run(&p, &mut request(), &mut Policy::default()).unwrap_err();
         assert!(format!("{e:#}").contains("git config"), "{e:#}");

@@ -8,7 +8,7 @@ pub mod session;
 
 use anyhow::{Context, Result, anyhow};
 
-use crate::kits::apply::KitSteps;
+use crate::kits::apply::{InstallStep, KitSteps};
 use crate::kits::guest;
 use crate::smolvm::{
     ExecSpec, Machine, MachineState, NetworkSpec, PublishedPort, Runner, Smolvm, SmolvmError,
@@ -230,7 +230,7 @@ pub fn start<R: Runner>(vm: &Smolvm<R>, sb: &Sandbox, plan: &StartPlan) -> Resul
 }
 
 /// What follows `machine start`: the agent user's uid, dockerd, the clone, then the kits'
-/// startup runner (a no-op without kits).
+/// startup runner (a no-op without kits; deferred during a kit first start).
 fn setup<R: Runner>(vm: &Smolvm<R>, sb: &Sandbox, plan: &StartPlan) -> Result<()> {
     vm.exec_captured(&ExecSpec {
         name: sb.machine.clone(),
@@ -254,7 +254,10 @@ fn setup<R: Runner>(vm: &Smolvm<R>, sb: &Sandbox, plan: &StartPlan) -> Result<()
             eprintln!("{w}");
         }
     }
-    run_startup(vm, sb);
+    // A kit first start runs it once its startup scripts are written.
+    if plan.kit.is_none() {
+        run_startup(vm, sb);
+    }
     Ok(())
 }
 
@@ -317,21 +320,27 @@ pub fn create<R: Runner>(
 ) -> Result<Sandbox> {
     vm.create(&create::spec(req))?;
     let mut sb = get(vm, &req.name)?;
-    start(vm, &sb, plan)?;
-    sb.state = MachineState::Running;
-    if let Some(kit) = &plan.kit {
-        if let Err(e) = first_start(vm, &sb, plan, kit, drop_install_rules) {
-            return Err(match vm.delete(&sb.machine) {
-                Ok(()) => anyhow!("kit install failed (the sandbox was removed): {e:#}"),
-                Err(d) => anyhow!(
-                    "kit install failed: {e:#}\nremoving the sandbox failed too ({d:#}); remove it \
-                     with `sbt rm {}`",
-                    sb.name()
-                ),
-            });
-        }
-        run_startup(vm, &sb);
+    let Some(kit) = &plan.kit else {
+        start(vm, &sb, plan)?;
+        sb.state = MachineState::Running;
+        return Ok(sb);
+    };
+    // A kit sandbox isn't usable until its steps ran, so a failed first start removes it too and
+    // the same command can simply run again.
+    let steps =
+        start(vm, &sb, plan).and_then(|()| first_start(vm, &sb, plan, kit, drop_install_rules));
+    if let Err(e) = steps {
+        return Err(match vm.delete(&sb.machine) {
+            Ok(()) => anyhow!("kit install failed (the sandbox was removed): {e:#}"),
+            Err(d) => anyhow!(
+                "kit install failed: {e:#}\nremoving the sandbox failed too ({d:#}); remove it \
+                 with `sbt rm {}`",
+                sb.name()
+            ),
+        });
     }
+    sb.state = MachineState::Running;
+    run_startup(vm, &sb);
     Ok(sb)
 }
 
@@ -344,10 +353,8 @@ fn first_start<R: Runner>(
     drop_install_rules: impl FnOnce(&[String]) -> Result<NetworkSpec>,
 ) -> Result<()> {
     let mut steps = Steps { vm, sb, n: 0 };
-    for (user, script) in &kit.steps.install {
-        steps
-            .run(user.as_deref().unwrap_or("root"), script)
-            .map_err(|e| anyhow!("{}", stderr_tail(&e, 20)))?;
+    for step in &kit.steps.install {
+        steps.install(step)?;
     }
     let mut network = plan.network.clone();
     if !kit.steps.install_rules.is_empty() {
@@ -379,7 +386,6 @@ fn first_start<R: Runner>(
                 .chain(&kit.restart_without)
                 .cloned()
                 .collect(),
-            kit: None,
             ..plan.clone()
         };
         start(vm, sb, &restart).context("restarting without install-only credentials")?;
@@ -420,7 +426,7 @@ struct Steps<'a, R: Runner> {
 }
 
 impl<R: Runner> Steps<'_, R> {
-    fn run(&mut self, user: &str, script: &str) -> Result<()> {
+    fn spec(&mut self, user: &str, script: &str) -> Result<ExecSpec> {
         let cmd = if script.len() > INLINE_MAX {
             self.n += 1;
             let path = format!("{STEP_DIR}/step-{}.sh", self.n);
@@ -429,13 +435,40 @@ impl<R: Runner> Steps<'_, R> {
         } else {
             vec!["sh".into(), "-c".into(), script.into()]
         };
-        self.vm.exec_captured(&ExecSpec {
+        Ok(ExecSpec {
             name: self.sb.machine.clone(),
             user: Some(user.into()),
             cmd,
             ..Default::default()
-        })?;
+        })
+    }
+
+    fn run(&mut self, user: &str, script: &str) -> Result<()> {
+        let spec = self.spec(user, script)?;
+        self.vm.exec_captured(&spec)?;
         Ok(())
+    }
+
+    /// An install step; a failure names it and carries the end of its output.
+    fn install(&mut self, step: &InstallStep) -> Result<()> {
+        let spec = self.spec(step.user.as_deref().unwrap_or("root"), &step.script)?;
+        let out = self
+            .vm
+            .exec_output(&spec)
+            .with_context(|| format!("{} failed", step.label))?;
+        if out.code == 0 {
+            return Ok(());
+        }
+        let text = if out.stderr.trim().is_empty() {
+            out.stdout.clone()
+        } else {
+            SmolvmError::from_output(&out).message
+        };
+        let tail = last_lines(&text, 20);
+        if tail.is_empty() {
+            anyhow::bail!("{} failed (exit {})", step.label, out.code);
+        }
+        anyhow::bail!("{} failed:\n{tail}", step.label)
     }
 }
 
@@ -480,12 +513,8 @@ fn put_files<R: Runner>(
     Ok(())
 }
 
-/// The last `n` lines of a failed guest command's output (smolvm's error message carries it).
-fn stderr_tail(e: &anyhow::Error, n: usize) -> String {
-    let text = match e.downcast_ref::<SmolvmError>() {
-        Some(s) => s.message.clone(),
-        None => format!("{e:#}"),
-    };
+/// The last `n` lines of `text`.
+fn last_lines(text: &str, n: usize) -> String {
     let lines: Vec<&str> = text.trim_end().lines().collect();
     lines[lines.len().saturating_sub(n)..].join("\n")
 }
@@ -883,6 +912,14 @@ mod tests {
         ))
     }
 
+    fn hook(n: usize, user: Option<&str>, script: &str) -> InstallStep {
+        InstallStep {
+            label: format!("kit k install hook {n}"),
+            user: user.map(String::from),
+            script: script.into(),
+        }
+    }
+
     fn kit_plan(restart_without: &[&str]) -> StartPlan {
         StartPlan {
             network: restricted(&["api.example.com", "registry.npmjs.org"]),
@@ -895,8 +932,8 @@ mod tests {
                 steps: KitSteps {
                     install_rules: vec!["r-npm".into()],
                     install: vec![
-                        (None, "echo install-1".into()),
-                        (Some("agent".into()), "echo install-2".into()),
+                        hook(1, None, "echo install-1"),
+                        hook(2, Some("agent"), "echo install-2"),
                     ],
                     files: vec!["echo files-1".into()],
                     context: vec!["echo context-1".into()],
@@ -970,6 +1007,11 @@ mod tests {
             "{lines:#?}"
         );
         assert_eq!(lines.last().unwrap(), &runner, "{lines:#?}");
+        assert_eq!(
+            lines.iter().filter(|l| **l == runner).count(),
+            1,
+            "only after the kit files: {lines:#?}"
+        );
         // R11: the post-install update replaces the whole list, so the CIDRs smolvm resolved
         // for the install host go with it.
         assert!(
@@ -1033,6 +1075,11 @@ mod tests {
                 .any(|l| l.ends_with("usermod -o -u 501 agent")),
             "setup runs again: {lines:#?}"
         );
+        assert_eq!(
+            lines.iter().filter(|l| l.ends_with(STARTUP_START)).count(),
+            1,
+            "not on the restart either: {lines:#?}"
+        );
         let envs = vm.runner().envs();
         let removed = vm.runner().removed();
         assert_eq!(envs.len(), 2);
@@ -1073,7 +1120,7 @@ mod tests {
         assert_eq!(
             err,
             format!(
-                "kit install failed (the sandbox was removed): {}",
+                "kit install failed (the sandbox was removed): kit k install hook 1 failed:\n{}",
                 stderr[5..].join("\n")
             )
         );
@@ -1127,7 +1174,7 @@ mod tests {
         let big = format!("echo {}", "x".repeat(70 * 1024));
         let mut plan = kit_plan(&[]);
         let kit = plan.kit.as_mut().unwrap();
-        kit.steps.install = vec![(Some("agent".into()), big.clone())];
+        kit.steps.install = vec![hook(1, Some("agent"), &big)];
         create(&vm, &request(), &plan, |_| {
             Ok(restricted(&["api.example.com"]))
         })
@@ -1205,5 +1252,71 @@ mod tests {
                 .any(|l| l.starts_with("machine stop")),
             "the sandbox stays up"
         );
+    }
+
+    #[test]
+    fn a_failed_hook_with_no_stderr_reports_its_stdout() {
+        let vm = created_vm();
+        vm.runner().on(
+            &[
+                "machine",
+                "exec",
+                "--name",
+                MACHINE,
+                "-u",
+                "root",
+                "--",
+                "sh",
+                "-c",
+                "echo install-1",
+            ],
+            crate::smolvm::Output {
+                code: 2,
+                stdout: "resolving\nE: package not found\n".into(),
+                stderr: String::new(),
+            },
+        );
+        let err = create(&vm, &request(), &kit_plan(&[]), |_| unreachable!())
+            .unwrap_err()
+            .to_string();
+        assert_eq!(
+            err,
+            "kit install failed (the sandbox was removed): kit k install hook 1 failed:\n\
+             resolving\nE: package not found"
+        );
+    }
+
+    #[test]
+    fn a_failed_first_start_of_a_kit_sandbox_removes_it() {
+        let vm = created_vm();
+        vm.runner().fail(
+            &[
+                "machine",
+                "exec",
+                "--name",
+                MACHINE,
+                "-u",
+                "root",
+                "--",
+                "sh",
+                "-c",
+                &identity_cmd(501),
+            ],
+            "EXEC_FAILED",
+            "usermod: busy",
+        );
+        let err = create(&vm, &request(), &kit_plan(&[]), |_| unreachable!()).unwrap_err();
+        assert!(
+            err.to_string()
+                .starts_with("kit install failed (the sandbox was removed): "),
+            "{err:#}"
+        );
+        assert!(format!("{err:#}").contains("usermod: busy"), "{err:#}");
+        let lines = vm.runner().call_lines();
+        assert_eq!(
+            lines.last().unwrap(),
+            &format!("machine delete -n {MACHINE} -f")
+        );
+        assert!(!lines.iter().any(|l| l.contains("install-1")), "{lines:#?}");
     }
 }

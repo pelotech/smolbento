@@ -101,13 +101,18 @@ fn plan_for<R: Runner>(ctx: &Ctx<R>, meta: &Meta, install: bool) -> Result<Start
             ),
         }
     }
-    // Recorded env vars without a value, even of services secrets.toml no longer defines.
-    let remove = meta
+    // Recorded env vars without a value, even of services secrets.toml no longer defines, and
+    // install-only and kit ones: none may come from the host shell's environment instead.
+    let mut remove: Vec<String> = meta
         .credential_env
         .iter()
+        .chain(&meta.credential_install)
+        .chain(meta.credential_services.keys())
         .filter(|v| !env.iter().any(|(k, _)| k == *v))
         .cloned()
         .collect();
+    remove.sort();
+    remove.dedup();
     let clone = meta.clone_repo.as_ref().map(|dir| {
         let repo = Path::new(dir);
         let read =
@@ -223,9 +228,9 @@ pub fn prepare_create<R: Runner>(
     Ok(added)
 }
 
-/// Prepares, creates and starts a new sandbox. When that fails before smolvm has the machine, the
-/// `--deny-network` rules and the `--clone` remote this create added are dropped again; rules the
-/// sandbox name already had stay.
+/// Prepares, creates and starts a new sandbox. When that fails and smolvm doesn't have the machine
+/// (a failed kit first start removes it), the `--deny-network` rules, the kit's rules and the
+/// `--clone` remote this create added are dropped again; rules the sandbox name already had stay.
 pub fn create<R: Runner>(
     ctx: &Ctx<R>,
     req: &mut CreateRequest,
@@ -248,12 +253,13 @@ pub fn create<R: Runner>(
             );
         }
     }
-    let mut added = Vec::new();
+    // The kit's rules are already in the policy; they go too if the create fails.
+    let mut added: Vec<String> = kit.as_ref().map(|k| k.rule_ids.clone()).unwrap_or_default();
     // Only a remote this create made: one left by an earlier sandbox of this name (`run --rm`)
     // keeps its fetched branches.
     let mut added_remote = None;
     let result = (|| {
-        added = prepare_create(ctx, req, deny_network)?;
+        added.extend(prepare_create(ctx, req, deny_network)?);
         if let Some(repo) = &repo
             && clone::add_remote(repo, &req.name)?
         {
@@ -261,13 +267,10 @@ pub fn create<R: Runner>(
         }
         let meta = sandbox::create::meta(req);
         let plan = match kit {
-            Some(kit) => {
-                added.extend(kit.rule_ids.iter().cloned());
-                StartPlan {
-                    kit: Some(kit),
-                    ..first_start_plan(ctx, &meta)?
-                }
-            }
+            Some(kit) => StartPlan {
+                kit: Some(kit),
+                ..first_start_plan(ctx, &meta)?
+            },
             None => start_plan(ctx, &meta)?,
         };
         let req: &CreateRequest = req;
@@ -739,7 +742,10 @@ mod tests {
 
     /// `create` of `s1` with a kit that allows `registry.npmjs.org` for install only and
     /// `api.example.com` at runtime. Returns the env and the kit's two rule ids.
-    fn kit_create(fail_install: bool) -> (TestEnv, Result<Sandbox>, [String; 2]) {
+    fn kit_create(
+        fail_install: bool,
+        deny_network: &[String],
+    ) -> (TestEnv, Result<Sandbox>, [String; 2]) {
         use crate::kits::apply::KitSteps;
         use crate::policy::Decision;
         use crate::sandbox::KitFirstStart;
@@ -755,10 +761,13 @@ mod tests {
         policy.save(&t.ctx.paths).unwrap();
         let fake = t.ctx.vm.runner();
         fake.fail(&["machine", "status"], "NOT_FOUND", "vm not found");
-        fake.once_ok(
-            &["machine", "status"],
-            &machine_json("sbx-s1", "created", &[("sbx.name", "s1")]),
-        );
+        // A bad `--deny-network` host fails before the machine exists.
+        if deny_network.is_empty() {
+            fake.once_ok(
+                &["machine", "status"],
+                &machine_json("sbx-s1", "created", &[("sbx.name", "s1")]),
+            );
+        }
         // `create` checks the name is free first.
         fake.once_fail(&["machine", "status"], "NOT_FOUND", "vm not found");
         if fail_install {
@@ -773,7 +782,11 @@ mod tests {
         let kit = KitFirstStart {
             steps: KitSteps {
                 install_rules: vec![ids[0].clone()],
-                install: vec![(None, "npm i".into())],
+                install: vec![crate::kits::apply::InstallStep {
+                    label: "kit k install hook 1".into(),
+                    user: None,
+                    script: "npm i".into(),
+                }],
                 ..Default::default()
             },
             rule_ids: ids.to_vec(),
@@ -783,13 +796,13 @@ mod tests {
             name: "s1".into(),
             ..Default::default()
         };
-        let result = create(&t.ctx, &mut req, &[], Some(kit));
+        let result = create(&t.ctx, &mut req, deny_network, Some(kit));
         (t, result, ids)
     }
 
     #[test]
     fn create_with_a_kit_drops_install_rules_after_the_hooks() {
-        let (t, result, ids) = kit_create(false);
+        let (t, result, ids) = kit_create(false, &[]);
         result.unwrap();
         let p = Policy::load(&t.ctx.paths).unwrap();
         let left: Vec<&String> = p.sandboxes["s1"].rules.iter().map(|r| &r.id).collect();
@@ -819,11 +832,11 @@ mod tests {
 
     #[test]
     fn a_failed_kit_install_removes_the_sandbox_and_every_kit_rule() {
-        let (t, result, _) = kit_create(true);
+        let (t, result, _) = kit_create(true, &[]);
         let err = result.unwrap_err().to_string();
         assert_eq!(
             err,
-            "kit install failed (the sandbox was removed): npm ERR! 404"
+            "kit install failed (the sandbox was removed): kit k install hook 1 failed:\nnpm ERR! 404"
         );
         assert!(
             t.ctx
@@ -834,5 +847,45 @@ mod tests {
         );
         let p = Policy::load(&t.ctx.paths).unwrap();
         assert!(!p.sandboxes.contains_key("s1"), "{p:?}");
+    }
+
+    #[test]
+    fn a_create_failing_before_the_machine_exists_drops_the_kit_rules() {
+        let (t, result, _) = kit_create(false, &["not a host!".to_string()]);
+        assert!(result.is_err());
+        assert!(
+            !t.ctx
+                .vm
+                .runner()
+                .call_lines()
+                .iter()
+                .any(|l| l.starts_with("machine create")),
+            "fails in prepare_create"
+        );
+        let p = Policy::load(&t.ctx.paths).unwrap();
+        assert!(!p.sandboxes.contains_key("s1"), "{p:?}");
+    }
+
+    #[test]
+    fn unrecorded_install_and_kit_vars_are_still_removed() {
+        let t = test_env(&[]);
+        set_policy(&t, "mode = \"deny-all\"");
+        save_secret(&t, "github", None, "gh-123");
+        // `credential_env` doesn't list either; the labels still name them.
+        let m = Meta {
+            credential_install: vec!["GH_TOKEN".into()],
+            credential_services: [("SBX_KIT_GONE".to_string(), "gone".to_string())].into(),
+            ..meta("s1", &["github".to_string()], &[])
+        };
+        let m = Meta {
+            credential_env: vec!["GITHUB_TOKEN".into()],
+            ..m
+        };
+        let plan = start_plan(&t.ctx, &m).unwrap();
+        assert_eq!(plan.remove, vec!["GH_TOKEN", "SBX_KIT_GONE"]);
+        assert_eq!(
+            plan.env,
+            vec![("GITHUB_TOKEN".to_string(), "gh-123".to_string())]
+        );
     }
 }

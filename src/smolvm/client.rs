@@ -355,6 +355,12 @@ impl<R: Runner> Smolvm<R> {
     pub fn exec_captured(&self, spec: &ExecSpec) -> Result<Output> {
         self.call(spec.to_args())
     }
+
+    /// `exec_captured` that returns a non-zero exit as output too, for callers that report the
+    /// guest command's own stdout and stderr.
+    pub fn exec_output(&self, spec: &ExecSpec) -> Result<Output> {
+        self.runner.run(&spec.to_args())
+    }
 }
 
 #[cfg(test)]
