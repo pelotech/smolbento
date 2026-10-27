@@ -72,8 +72,8 @@ fn free_names<R: Runner>(ctx: &Ctx<R>, parent: &str, count: u32) -> Result<Vec<S
     Ok(out)
 }
 
-/// Drops stale state under the fork's name and copies the parent's policy entry, then adds the clone remote and branches; on failure, undoes
-/// what it did in reverse (a failed undo only warns).
+/// Drops stale state under the fork's name and copies the parent's policy entry, then adds the
+/// clone remote and branches; on failure, undoes what it did in reverse (a failed undo only warns).
 fn fork_one<R: Runner>(
     ctx: &Ctx<R>,
     parent: &Sandbox,
