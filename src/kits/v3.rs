@@ -32,8 +32,6 @@ pub fn parse_json(json: &str, source: Source) -> Result<Kit> {
 #[serde(rename_all = "camelCase")]
 struct Descriptor {
     schema_version: String,
-    #[serde(default)]
-    display_name: String,
     kind: String,
     #[serde(default)]
     provides: Vec<String>,
@@ -102,11 +100,7 @@ fn from_value(v: Value, source: Source) -> Result<Kit> {
             (name, def)
         })
         .collect();
-    let name = if d.display_name.is_empty() {
-        name_from_source(&source)
-    } else {
-        d.display_name
-    };
+    let name = name_from_source(&source);
     Ok(Kit {
         name,
         source,
@@ -121,25 +115,36 @@ fn from_value(v: Value, source: Source) -> Result<Kit> {
     })
 }
 
-/// Last path or ref segment, without a tag, digest or yaml extension.
-fn name_from_source(source: &Source) -> String {
-    let raw = match source {
-        Source::Registry(r) => r.as_str(),
-        Source::LocalV3(p) | Source::LocalV2(p) | Source::Smolfile(p) => {
-            return last_segment(p);
+/// A short token naming the kit: it scopes `--kit-arg` and tags policy rule origins, so it comes
+/// from the source, never from the free-text `displayName`.
+pub(crate) fn name_from_source(source: &Source) -> String {
+    match source {
+        Source::Registry(r) => {
+            let last = r.rsplit('/').next().unwrap_or(r);
+            let last = last.split('@').next().unwrap_or(last);
+            last.split(':').next().unwrap_or(last).to_string()
         }
-    };
-    let last = raw.rsplit('/').next().unwrap_or(raw);
-    let last = last.split('@').next().unwrap_or(last);
-    last.split(':').next().unwrap_or(last).to_string()
+        Source::LocalV3(p) | Source::LocalV2(p) => path_name(p),
+        Source::Smolfile(p) => {
+            if p.file_name().is_some_and(|n| n == "Smolfile") {
+                let parent = p.parent().and_then(|d| d.file_name());
+                if let Some(n) = parent.and_then(|n| n.to_str()) {
+                    return n.to_string();
+                }
+            }
+            path_name(p)
+        }
+    }
 }
 
-fn last_segment(p: &Path) -> String {
-    let n = p.file_name().and_then(|n| n.to_str()).unwrap_or("kit");
-    n.strip_suffix(".yaml")
-        .or_else(|| n.strip_suffix(".yml"))
-        .unwrap_or(n)
-        .to_string()
+/// Directory basename, or the file stem when the path is a file.
+fn path_name(p: &Path) -> String {
+    let part = if p.is_dir() {
+        p.file_name()
+    } else {
+        p.file_stem()
+    };
+    part.and_then(|n| n.to_str()).unwrap_or("kit").to_string()
 }
 
 fn cap(item: CapabilityItem) -> Result<Cap> {
@@ -645,7 +650,7 @@ mod tests {
     #[test]
     fn claude_mixin_capabilities_decode() {
         let k = parse(&fixture("claude-mixin.yaml"), local("c")).unwrap();
-        assert_eq!(k.name, "Claude Code (mixin)");
+        assert_eq!(k.name, "c");
         assert_eq!(k.provides, ["claude@${{ kit.args.version }}"]);
         assert_eq!(k.args["version"].default.as_deref(), Some("2.1.311"));
         assert_eq!(k.args["reasoningEffort"].enum_values.len(), 7);
@@ -844,18 +849,25 @@ mod tests {
     }
 
     #[test]
-    fn name_falls_back_to_the_source() {
-        let k = parse_json(
-            r#"{"schemaVersion":"3","kind":"mixin"}"#,
-            Source::Registry("ghcr.io/acme/tool:1.2".into()),
-        )
-        .unwrap();
-        assert_eq!(k.name, "tool");
-        let k = parse(
-            "schemaVersion: \"3\"\nkind: mixin\n",
-            Source::LocalV3("kits/dev.yaml".into()),
-        )
-        .unwrap();
-        assert_eq!(k.name, "dev");
+    fn name_comes_from_the_source_not_display_name() {
+        let json = r#"{"schemaVersion":"3","kind":"mixin","displayName":"Fancy Name"}"#;
+        let name = |src| parse_json(json, src).unwrap().name;
+        assert_eq!(
+            name(Source::Registry(
+                "docker.io/acme/sbx-kit-team:1.0@sha256:abc".into()
+            )),
+            "sbx-kit-team"
+        );
+        assert_eq!(
+            name(Source::Registry("ghcr.io/acme/tool:1.2".into())),
+            "tool"
+        );
+        assert_eq!(name(Source::LocalV3("kits/dev.yaml".into())), "dev");
+        let dir = tempfile::tempdir().unwrap();
+        let kit_dir = dir.path().join("my-kit");
+        std::fs::create_dir(&kit_dir).unwrap();
+        assert_eq!(name(Source::LocalV3(kit_dir)), "my-kit");
+        assert_eq!(name(Source::Smolfile("proj/Smolfile".into())), "proj");
+        assert_eq!(name(Source::Smolfile("proj/dev.smolfile".into())), "dev");
     }
 }
