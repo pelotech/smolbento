@@ -567,17 +567,9 @@ mod tests {
 
     #[test]
     fn start_plan_is_branchable_only_for_forkable_sandboxes() {
+        // Which sandboxes are forkable is `Meta::forkable`'s test; this checks the plan uses it.
         let branchable = |t: &TestEnv, m: &Meta| start_plan(&t.ctx, m).unwrap().branchable;
         let mountless = meta("s1", &[], &[]);
-        let mounted = Meta {
-            workspace: Some("/w/p".into()),
-            workspaces: vec!["/w/p".into()],
-            ..mountless.clone()
-        };
-        let clone = Meta {
-            clone_repo: Some("/w/p".into()),
-            ..mounted.clone()
-        };
         let fork = Meta {
             fork_of: Some("s0".into()),
             ..mountless.clone()
@@ -585,14 +577,11 @@ mod tests {
         let t = test_env(&[]);
         set_policy(&t, "mode = \"deny-all\"");
         assert!(branchable(&t, &mountless));
-        assert!(branchable(&t, &clone));
-        assert!(!branchable(&t, &mounted));
         assert!(!branchable(&t, &fork));
 
         let t = test_env(&[("SMOLBENTO_FORK", "false")]);
         set_policy(&t, "mode = \"deny-all\"");
         assert!(!branchable(&t, &mountless));
-        assert!(!branchable(&t, &clone));
     }
 
     #[test]
