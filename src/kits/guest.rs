@@ -110,7 +110,18 @@ pub fn tmpfs_script(volumes: &[(String, Option<String>)]) -> String {
         String::from("#!/bin/sh\n# tmpfs volumes of the sandbox's kits (written by smolbento).\n");
     for (path, mode) in volumes {
         let p = sh_quote(path);
-        let mounted = sh_quote(&format!(" {path} tmpfs "));
+        // /proc/mounts escapes a space, tab, newline and backslash in a path as octal.
+        let escaped: String = path
+            .chars()
+            .map(|c| match c {
+                ' ' => "\\040".to_string(),
+                '\t' => "\\011".to_string(),
+                '\n' => "\\012".to_string(),
+                '\\' => "\\134".to_string(),
+                c => c.to_string(),
+            })
+            .collect();
+        let mounted = sh_quote(&format!(" {escaped} tmpfs "));
         let opts = mode
             .as_ref()
             .map(|m| format!("-o mode={} ", sh_quote(m)))
@@ -250,6 +261,22 @@ mod tests {
 
     fn sh(script: &str) -> std::process::Output {
         Command::new("sh").arg("-c").arg(script).output().unwrap()
+    }
+
+    #[test]
+    fn a_mounted_tmpfs_with_a_space_in_its_path_is_seen() {
+        let d = tempfile::tempdir().unwrap();
+        let mounts = d.path().join("mounts");
+        let script = tmpfs_script(&[("/data/my cache".into(), None)])
+            .replace("/proc/mounts", &mounts.display().to_string())
+            .replace("mkdir -p", "true")
+            .replace("mount -t", "echo MOUNT");
+        std::fs::write(&mounts, "tmpfs /data/my\\040cache tmpfs rw 0 0\n").unwrap();
+        let out = String::from_utf8(sh(&script).stdout).unwrap();
+        assert!(!out.contains("MOUNT"), "{out}");
+        std::fs::write(&mounts, "tmpfs /data/my tmpfs rw 0 0\n").unwrap();
+        let out = String::from_utf8(sh(&script).stdout).unwrap();
+        assert!(out.contains("MOUNT"), "{out}");
     }
 
     #[test]

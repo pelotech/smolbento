@@ -114,11 +114,22 @@ pub(crate) fn build_kit_request<R: Runner>(
     opts: &SandboxOpts,
     default_to_cwd: bool,
 ) -> Result<(CreateRequest, Option<Plan>)> {
+    check_kit_args(targets, opts)?;
     let (mut req, workload) = kit_target(ctx, targets, opts, default_to_cwd)?;
     let plan = workload
         .map(|w| kit_plan(ctx, &mut req, w, opts))
         .transpose()?;
     Ok((req, plan))
+}
+
+/// For a sandbox about to be created: kit args with an agent preset need a `--kit`. (`run` of an
+/// existing sandbox only warns that kit flags don't apply.)
+pub(crate) fn check_kit_args(targets: &[String], opts: &SandboxOpts) -> Result<()> {
+    let preset = targets.first().is_some_and(|t| agents::find(t).is_some());
+    if preset && opts.kit.is_empty() && has_kit_args(opts) {
+        bail!("--kit-arg needs a kit");
+    }
+    Ok(())
 }
 
 /// The workload `kit_target` found: the preset as a kit, or a workload kit not loaded yet.
@@ -138,9 +149,6 @@ pub(crate) fn kit_target<R: Runner>(
     let (target, paths) = targets.split_first().context("specify an agent")?;
     Ok(match agents::find(target) {
         Some(agent) => {
-            if opts.kit.is_empty() && has_kit_args(opts) {
-                bail!("--kit-arg needs a kit");
-            }
             let req = build_request(ctx, target, paths, opts, default_to_cwd)?;
             if opts.kit.is_empty() && !req.docker {
                 return Ok((req, None));
@@ -208,13 +216,21 @@ pub(crate) fn kit_plan<R: Runner>(
         .iter()
         .map(|r| load::load(ctx, r))
         .collect::<Result<Vec<_>>>()?;
-    // A Docker-enabled image gets dockerd through the shipped kit, unless `--kit docker` added it.
-    if req.docker && !mixins.iter().any(|k| k.source == Source::Builtin("docker")) {
+    if needs_docker_kit(req.docker, &workload, &mixins) {
         mixins.push(load::builtin("docker").expect("the docker kit is shipped")?);
     }
     let plan = resolve_for(workload, mixins, &args, &req.workdir())?;
     plan.warn_skipped();
     Ok(plan)
+}
+
+/// A Docker-enabled image gets dockerd through the shipped kit, unless `--kit docker` added it or
+/// another kit in the plan provides `docker` (two would clash on `provides`).
+fn needs_docker_kit(docker_image: bool, workload: &Kit, mixins: &[Kit]) -> bool {
+    docker_image
+        && !std::iter::once(workload).chain(mixins).any(|k| {
+            k.source == Source::Builtin("docker") || k.provides.iter().any(|p| p == "docker")
+        })
 }
 
 /// A path or a registry reference rather than a misspelt agent, which mustn't reach a registry.
@@ -1896,6 +1912,24 @@ mod tests {
     }
 
     /// `build_kit_request` for `args` followed by `kit`.
+    #[test]
+    fn a_kit_providing_docker_replaces_the_shipped_one() {
+        use super::needs_docker_kit;
+        use crate::agents;
+        use crate::kits::{load, model::Source};
+        let preset = load::preset_kit(agents::find("shell").unwrap(), "img:1");
+        let mut own = load::builtin("docker").unwrap().unwrap();
+        own.source = Source::Registry("acme/dind:1".into());
+        own.name = "dind".into();
+        assert!(needs_docker_kit(true, &preset, &[]));
+        assert!(!needs_docker_kit(false, &preset, &[]));
+        assert!(!needs_docker_kit(true, &preset, &[own.clone()]));
+        let shipped = load::builtin("docker").unwrap().unwrap();
+        assert!(!needs_docker_kit(true, &preset, &[shipped]));
+        own.provides.clear();
+        assert!(needs_docker_kit(true, &preset, &[own]));
+    }
+
     fn kit_request(
         t: &TestEnv,
         args: &[&str],

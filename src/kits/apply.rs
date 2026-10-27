@@ -253,8 +253,11 @@ pub fn apply(
         req.kits.push(pinned);
     }
     req.long_running = m.long_running;
-    // `sbx.docker` (shown by `ls`) says the sandbox has a private dockerd: the docker kit's.
-    req.docker = kits.iter().any(|k| k.source == Source::Builtin("docker"));
+    // `sbx.docker` (shown by `ls`) says the sandbox has a private dockerd: the docker kit's, or
+    // that of a kit providing `docker` in its place.
+    req.docker = kits
+        .iter()
+        .any(|k| k.source == Source::Builtin("docker") || k.provides.iter().any(|p| p == "docker"));
 
     // Last, so an error above leaves the policy untouched; a failure part-way through (a bad
     // host) restores the snapshot. Runtime rules go first: an install rule that is also a runtime
@@ -351,20 +354,8 @@ fn bind_credential(
             );
             return Ok(());
         }
-        let how = if services::builtin(&c.service).is_some() {
-            format!("sbt secret set {}", c.service)
-        } else {
-            format!(
-                "sbt secret set-custom --env {} --host {}",
-                upper_env(&c.service),
-                c.inject.first().map_or("HOST", |i| i.domain.as_str())
-            )
-        };
-        bail!(
-            "kit {} needs the {} secret; set it with {how}",
-            kc.kit,
-            c.service
-        );
+        let host = c.inject.first().map_or("HOST", |i| i.domain.as_str());
+        bail!("{}", missing_secret(&kc.kit, &c.service, host));
     }
     let env = c
         .env
@@ -393,12 +384,7 @@ fn bind_credential(
         );
     }
     if services::builtin(&c.service).is_none() {
-        let note = format!(
-            "note: kit {} sends your {} secret to {}",
-            kc.kit,
-            c.service,
-            hosts.join(", ")
-        );
+        let note = custom_service_note(&kc.kit, &c.service, &hosts);
         if !notes.contains(&note) {
             notes.push(note);
         }
@@ -500,6 +486,38 @@ fn bind_credential(
 }
 
 /// `my-svc` → `MY_SVC`.
+/// The error for a kit credential whose secret isn't set, with the command that sets it. A custom
+/// service is named after `set-custom`'s `--env` (lowercased, `_` as `-`), so the hint names the
+/// variable that gives `service`, or says no variable does.
+fn missing_secret(kit: &str, service: &str, host: &str) -> String {
+    if services::builtin(service).is_some() {
+        return format!(
+            "kit {kit} needs the {service} secret; set it with sbt secret set {service}"
+        );
+    }
+    let env = upper_env(service);
+    if guest::is_env_name(&env) && env.to_ascii_lowercase().replace('_', "-") == service {
+        format!(
+            "kit {kit} needs the {service} secret; set it with \
+             sbt secret set-custom --env {env} --host {host}"
+        )
+    } else {
+        format!(
+            "kit {kit} needs a custom secret service named {service}, which \
+             `sbt secret set-custom` can't define: it names a service after its --env variable, \
+             lowercased with '_' as '-'"
+        )
+    }
+}
+
+/// What create and `kit add` print when a kit binds a custom service's secret (R24).
+fn custom_service_note(kit: &str, service: &str, hosts: &[String]) -> String {
+    format!(
+        "note: kit {kit} sends your {service} secret to {}",
+        hosts.join(", ")
+    )
+}
+
 fn upper_env(service: &str) -> String {
     service
         .chars()
@@ -733,6 +751,34 @@ mod tests {
         assert_eq!(
             rule_hosts(&policy, &steps.install_rules),
             ["pkg.example.com"]
+        );
+    }
+
+    #[test]
+    fn a_missing_custom_secret_names_the_command_that_defines_it() {
+        assert_eq!(
+            missing_secret("k", "my-api", "api.x.com"),
+            "kit k needs the my-api secret; set it with \
+             sbt secret set-custom --env MY_API --host api.x.com"
+        );
+        // `set-custom --env MY_API` names its service my-api, never my_api or 1tok.
+        for service in ["my_api", "1tok", "My-Api"] {
+            let m = missing_secret("k", service, "api.x.com");
+            assert!(
+                m.starts_with(&format!(
+                    "kit k needs a custom secret service named {service}, which"
+                )) && m.contains("can't define"),
+                "{m}"
+            );
+        }
+    }
+
+    #[test]
+    fn a_custom_service_binding_notes_where_the_secret_goes() {
+        let hosts = vec!["api.x.com".to_string(), "up.x.com".to_string()];
+        assert_eq!(
+            custom_service_note("k", "my-api", &hosts),
+            "note: kit k sends your my-api secret to api.x.com, up.x.com"
         );
     }
 

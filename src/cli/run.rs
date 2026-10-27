@@ -58,6 +58,7 @@ pub fn run<R: Runner>(ctx: &mut Ctx<R>, a: &RunArgs) -> Result<i32> {
                     (sb, false)
                 }
                 None => {
+                    super::lifecycle::check_kit_args(&a.targets, &a.opts)?;
                     let kits = workload
                         .map(|w| kit_plan(ctx, &mut req, w, &a.opts))
                         .transpose()?;
@@ -651,6 +652,31 @@ mod tests {
         assert_eq!(warning(&["run", "./k", "."]), want);
         assert_eq!(warning(&["run", "--name", "s1"]), None);
         assert_eq!(warning(&["run", "claude", "."]), None);
+    }
+
+    #[test]
+    fn kit_args_without_a_kit_attach_to_an_existing_sandbox_but_fail_a_create() {
+        let mut t = test_env(&[]);
+        created(&t, "running");
+        t.ctx.vm.runner().interactive_exit(0);
+        sbt(&mut t.ctx, &["run", "claude", "--kit-arg", "a=1"]).unwrap();
+        assert_eq!(t.ctx.vm.runner().interactive_calls().len(), 1);
+
+        let mut t = test_env(&[]);
+        t.ctx
+            .vm
+            .runner()
+            .fail(&["machine", "status"], "NOT_FOUND", "vm not found");
+        let err = sbt(&mut t.ctx, &["run", "claude", "--kit-arg", "a=1"]).unwrap_err();
+        assert_eq!(format!("{err:#}"), "--kit-arg needs a kit");
+        assert!(
+            !t.ctx
+                .vm
+                .runner()
+                .call_lines()
+                .iter()
+                .any(|l| l.starts_with("machine create")),
+        );
     }
 
     #[test]

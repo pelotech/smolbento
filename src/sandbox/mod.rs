@@ -365,6 +365,9 @@ fn first_start<R: Runner>(
         if !kit.steps.install_rules.is_empty() {
             network = drop_install_rules(&kit.steps.install_rules)
                 .context("removing the install-phase network rules")?;
+        }
+        // A restart below applies `network` itself (`start` sends it to the stopped machine).
+        if !kit.steps.install_rules.is_empty() && kit.restart_without.is_empty() {
             // R11: smolvm resolves each allowed host to CIDRs, and `--remove-allow-host` leaves
             // those behind, so the host would stay reachable by IP. `update_network` sends
             // `--reset-allow-list` with the whole list, which clears the stored hosts and CIDRs
@@ -464,36 +467,52 @@ struct Steps<'a, R: Runner> {
 }
 
 impl<R: Runner> Steps<'_, R> {
-    fn spec(&mut self, user: &str, script: &str) -> Result<ExecSpec> {
-        let cmd = if script.len() > INLINE_MAX {
+    /// The exec for `script`, and the guest path it was copied to (if it was).
+    fn spec(&mut self, user: &str, script: &str) -> Result<(ExecSpec, Option<String>)> {
+        let (cmd, copied) = if script.len() > INLINE_MAX {
             self.n += 1;
             let path = format!("{STEP_DIR}/step-{}.sh", self.n);
             put_files(self.vm, self.sb, &[(path.clone(), script, "644")])?;
-            vec!["sh".into(), path]
+            (vec!["sh".into(), path.clone()], Some(path))
         } else {
-            vec!["sh".into(), "-c".into(), script.into()]
+            (vec!["sh".into(), "-c".into(), script.into()], None)
         };
-        Ok(ExecSpec {
+        let spec = ExecSpec {
             name: self.sb.machine.clone(),
             user: Some(user.into()),
             cmd,
             ..Default::default()
-        })
+        };
+        Ok((spec, copied))
+    }
+
+    /// Removes a copied-in script once it ran, as root (`/run/smolbento` is root's). Best effort:
+    /// the step's own result is what matters.
+    fn remove(&self, copied: Option<String>) {
+        if let Some(path) = copied {
+            let _ = self.vm.exec_captured(&ExecSpec {
+                name: self.sb.machine.clone(),
+                user: Some("root".into()),
+                cmd: vec!["rm".into(), "-f".into(), path],
+                ..Default::default()
+            });
+        }
     }
 
     fn run(&mut self, user: &str, script: &str) -> Result<()> {
-        let spec = self.spec(user, script)?;
-        self.vm.exec_captured(&spec)?;
+        let (spec, copied) = self.spec(user, script)?;
+        let result = self.vm.exec_captured(&spec);
+        self.remove(copied);
+        result?;
         Ok(())
     }
 
     /// An install step; a failure names it and carries the end of its output.
     fn install(&mut self, step: &InstallStep) -> Result<()> {
-        let spec = self.spec(step.user.as_deref().unwrap_or("root"), &step.script)?;
-        let out = self
-            .vm
-            .exec_output(&spec)
-            .with_context(|| format!("{} failed", step.label))?;
+        let (spec, copied) = self.spec(step.user.as_deref().unwrap_or("root"), &step.script)?;
+        let out = self.vm.exec_output(&spec);
+        self.remove(copied);
+        let out = out.with_context(|| format!("{} failed", step.label))?;
         if out.code == 0 {
             return Ok(());
         }
@@ -1158,6 +1177,16 @@ mod tests {
             install2 < stop && stop < restart && restart < files,
             "{lines:#?}"
         );
+        // The network without the install rules goes once, to the stopped machine, by `start`.
+        let updates: Vec<usize> = (install2..restart)
+            .filter(|&i| lines[i].starts_with("machine update"))
+            .collect();
+        assert!(
+            updates.len() == 1
+                && stop < updates[0]
+                && lines[updates[0]].contains("api.example.com"),
+            "{lines:#?}"
+        );
         assert!(
             lines[restart..files]
                 .iter()
@@ -1297,6 +1326,10 @@ mod tests {
                 && l.ends_with(&format!("{MACHINE}:/run/smolbento/step-1.sh"))
         });
         assert!(cp < run, "{lines:#?}");
+        let rm = position(&lines, "step rm", |l| {
+            *l == format!("machine exec --name {MACHINE} -u root -- rm -f /run/smolbento/step-1.sh")
+        });
+        assert!(run < rm, "{lines:#?}");
         let uploads = vm.runner().uploads();
         assert!(
             uploads
