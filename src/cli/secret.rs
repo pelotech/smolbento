@@ -84,15 +84,7 @@ fn ls<R: Runner>(ctx: &Ctx<R>, file: &SecretsFile, a: &SecretLsArgs) -> Result<(
         .as_deref()
         .and_then(|s| sandbox::find(&ctx.vm, s).ok().flatten())
         .and_then(|sb| sb.meta.fork_of);
-    let text = render_ls(
-        file,
-        a.sandbox.as_deref(),
-        parent.as_deref(),
-        a.global,
-        a.service.as_deref(),
-        a.quiet,
-    );
-    write!(&ctx.out, "{text}")?;
+    write!(&ctx.out, "{}", render_ls(file, a, parent.as_deref()))?;
     Ok(())
 }
 
@@ -297,29 +289,23 @@ fn read_value<R: Runner>(ctx: &Ctx<R>, service: &str) -> Result<String> {
     Ok(line.trim_end_matches(['\n', '\r']).to_string())
 }
 
-pub fn render_ls(
-    file: &SecretsFile,
-    sandbox: Option<&str>,
-    fork_of: Option<&str>,
-    global_only: bool,
-    service: Option<&str>,
-    quiet: bool,
-) -> String {
-    let own = sandbox.map(|s| scope_for(Some(s)));
+/// `secret ls` for `a`; `fork_of` is `a.sandbox`'s original when it's a fork.
+fn render_ls(file: &SecretsFile, a: &SecretLsArgs, fork_of: Option<&str>) -> String {
+    let own = a.sandbox.as_deref().map(|s| scope_for(Some(s)));
     let parent = fork_of.map(|p| scope_for(Some(p)));
     let entries: Vec<&SecretEntry> = file
         .secrets
         .iter()
-        .filter(|e| !global_only || e.scope == "global")
+        .filter(|e| !a.global || e.scope == "global")
         .filter(|e| {
             let shown_for_own = own
                 .as_ref()
                 .is_none_or(|o| e.scope == "global" || &e.scope == o);
             shown_for_own || inherited(file, e, own.as_deref(), parent.as_deref())
         })
-        .filter(|e| service.is_none_or(|s| e.service == s))
+        .filter(|e| a.service.as_deref().is_none_or(|s| e.service == s))
         .collect();
-    if quiet {
+    if a.quiet {
         return entries.iter().map(|e| format!("{}\n", e.service)).collect();
     }
     if entries.is_empty() {
@@ -746,14 +732,9 @@ mod tests {
             ],
         )
         .unwrap();
-        insta::assert_snapshot!(render_ls(
-            &SecretsFile::load(&t.ctx.paths).unwrap(),
-            None,
-            None,
-            false,
-            None,
-            false
-        ));
+        t.stdout();
+        sbt(&mut t.ctx, &["secret", "ls"]).unwrap();
+        insta::assert_snapshot!(t.stdout());
         sbt(&mut t.ctx, &["secret", "rm", "anthropic"]).unwrap();
         assert_eq!(t.ctx.store.get("global/anthropic").unwrap(), None);
         assert!(
@@ -789,30 +770,28 @@ mod tests {
                 &[("sbx.name", "aa-fork-1"), ("sbx.fork-of", "aa")],
             ),
         );
-        let file = SecretsFile::load(&t.ctx.paths).unwrap();
-        let ls = |sandbox, fork_of| render_ls(&file, sandbox, fork_of, false, None, true);
-        // Own, the original's (but not where the fork has its own) and global.
-        assert_eq!(
-            ls(Some("aa-fork-1"), Some("aa")),
-            "anthropic\ngithub\nopenai\n"
-        );
-        assert_eq!(ls(Some("aa-fork-1"), None), "anthropic\nopenai\n");
-        let table = render_ls(&file, Some("aa-fork-1"), Some("aa"), false, None, false);
-        assert!(table.contains("sandbox:aa"), "{table}");
-        assert!(!table.contains("sandbox:other"), "{table}");
-        // Through the handler: a fork's original is looked up from its labels.
         t.stdout();
-        let via = |t: &mut TestEnv, sandbox: &str| {
-            sbt(&mut t.ctx, &["secret", "ls", "-q", "--sandbox", sandbox]).unwrap();
+        let ls = |t: &mut TestEnv, args: &[&str]| {
+            let mut full = vec!["secret", "ls"];
+            full.extend_from_slice(args);
+            sbt(&mut t.ctx, &full).unwrap();
             t.stdout()
         };
-        assert_eq!(via(&mut t, "aa-fork-1"), "anthropic\ngithub\nopenai\n");
+        // Own, the original's (but not where the fork has its own) and global; the original is
+        // looked up from the fork's labels.
+        assert_eq!(
+            ls(&mut t, &["-q", "--sandbox", "aa-fork-1"]),
+            "anthropic\ngithub\nopenai\n"
+        );
+        let table = ls(&mut t, &["--sandbox", "aa-fork-1"]);
+        assert!(table.contains("sandbox:aa"), "{table}");
+        assert!(!table.contains("sandbox:other"), "{table}");
         // A sandbox that isn't a fork sees only its own and the global ones.
         t.ctx.vm.runner().ok(
             &["machine", "status", "-n", "sbx-plain"],
             &machine_json("sbx-plain", "running", &[("sbx.name", "plain")]),
         );
-        assert_eq!(via(&mut t, "plain"), "anthropic\n");
+        assert_eq!(ls(&mut t, &["-q", "--sandbox", "plain"]), "anthropic\n");
     }
 
     #[test]
