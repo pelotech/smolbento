@@ -12,10 +12,7 @@ pub fn check(source: &Source, settings: &Settings) -> Result<()> {
         Source::Registry(r) => {
             let name = normalise(r)?;
             let allowed = allowed_sources(settings)?;
-            if allowed
-                .iter()
-                .any(|p| p == "*" || name.starts_with(&normalise_prefix(p)))
-            {
+            if allowed.iter().any(|p| matches(&name, p)) {
                 return Ok(());
             }
             let org: Vec<&str> = name.split('/').take(2).collect();
@@ -43,12 +40,38 @@ pub fn check(source: &Source, settings: &Settings) -> Result<()> {
 
 /// `kit.allowedSources`: a JSON array of strings.
 fn allowed_sources(settings: &Settings) -> Result<Vec<String>> {
-    let raw = settings.value("kit.allowedSources")?;
-    serde_json::from_str(&raw).map_err(|e| {
+    parse_allowed_sources(&settings.value("kit.allowedSources")?)
+}
+
+/// Also checked by `sbt settings set`, so a bad value is refused before it's saved.
+pub(crate) fn parse_allowed_sources(raw: &str) -> Result<Vec<String>> {
+    let list: Vec<String> = serde_json::from_str(raw).map_err(|e| {
         anyhow!(
             "setting kit.allowedSources must be a JSON array of strings, e.g. [\"docker.io/\"]: {e}"
         )
-    })
+    })?;
+    if list.iter().any(String::is_empty) {
+        bail!(
+            "setting kit.allowedSources has an empty prefix; remove it, or use \"*\" to allow any \
+             source"
+        );
+    }
+    Ok(list)
+}
+
+/// Whether the normalised ref `name` is allowed by prefix `p`. A prefix without `/` names a
+/// registry host and matches only that whole host, so `ghcr.io` doesn't allow `ghcr.io.evil.com`.
+fn matches(name: &str, p: &str) -> bool {
+    if p == "*" {
+        return true;
+    }
+    if !p.contains('/') {
+        let host = p.to_ascii_lowercase();
+        return name
+            .strip_prefix(&host)
+            .is_some_and(|rest| rest.is_empty() || rest.starts_with('/'));
+    }
+    name.starts_with(&normalise_prefix(p))
 }
 
 /// `registry/repo` with Docker's defaults applied and the tag or digest dropped. Refs a puller
@@ -204,6 +227,36 @@ mod tests {
             assert!(e.contains("kit.allowedSources"), "{bad}: {e}");
             assert!(e.contains("JSON array"), "{bad}: {e}");
         }
+    }
+
+    #[test]
+    fn a_host_only_prefix_matches_at_a_host_boundary() {
+        let (_d, s) = settings(&[(KEY, r#"["ghcr.io", "LocalHost:5000"]"#)]);
+        check(&registry("ghcr.io/x/y:1"), &s).unwrap();
+        check(&registry("GHCR.IO/x"), &s).unwrap();
+        check(&registry("localhost:5000/k:1"), &s).unwrap();
+        for r in [
+            "ghcr.io.evil.com/x",
+            "ghcr.iox/y",
+            "ghcr.io:5000/x",
+            "localhost:50001/k",
+            "localhost/k",
+        ] {
+            assert!(check(&registry(r), &s).is_err(), "{r} must be refused");
+        }
+    }
+
+    #[test]
+    fn an_empty_prefix_is_an_error() {
+        for bad in [r#"[""]"#, r#"["docker.io/", ""]"#] {
+            let (_d, s) = settings(&[(KEY, bad)]);
+            let e = check(&registry("alpine"), &s).unwrap_err().to_string();
+            assert!(e.contains("kit.allowedSources"), "{bad}: {e}");
+            assert!(e.contains("empty"), "{bad}: {e}");
+        }
+        assert!(parse_allowed_sources(r#"["docker.io/","*"]"#).is_ok());
+        assert!(parse_allowed_sources(r#"[""]"#).is_err());
+        assert!(parse_allowed_sources("[1]").is_err());
     }
 
     #[test]

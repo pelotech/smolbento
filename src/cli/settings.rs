@@ -64,6 +64,36 @@ mod tests {
     }
 
     #[test]
+    fn set_validates_kit_allowed_sources() {
+        let mut t = test_env(&[]);
+        for bad in ["docker.io/", "[1]", r#"[""]"#, r#"["docker.io/", ""]"#] {
+            let e = sbt(&mut t.ctx, &["settings", "set", "kit.allowedSources", bad])
+                .unwrap_err()
+                .to_string();
+            assert!(e.contains("kit.allowedSources"), "{bad}: {e}");
+        }
+        assert_eq!(
+            t.ctx.settings.value("kit.allowedSources").unwrap(),
+            r#"["docker.io/"]"#,
+            "a refused value is not saved"
+        );
+        sbt(
+            &mut t.ctx,
+            &[
+                "settings",
+                "set",
+                "kit.allowedSources",
+                r#"["ghcr.io","*"]"#,
+            ],
+        )
+        .unwrap();
+        assert_eq!(
+            t.ctx.settings.value("kit.allowedSources").unwrap(),
+            r#"["ghcr.io","*"]"#
+        );
+    }
+
+    #[test]
     fn ls_lists_the_clone_fetch_on_exit_setting() {
         let t = test_env(&[]);
         let listing = render(&t.ctx.settings, true).unwrap();

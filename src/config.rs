@@ -173,6 +173,9 @@ impl Settings {
         if matches!(def.default, "true" | "false") {
             parse_bool(value)?;
         }
+        if key == "kit.allowedSources" {
+            crate::kits::trust::parse_allowed_sources(value)?;
+        }
         self.file
             .settings
             .insert(key.to_string(), value.to_string());
