@@ -100,7 +100,7 @@ fn from_value(v: Value, source: Source) -> Result<Kit> {
             (name, def)
         })
         .collect();
-    let name = name_from_source(&source);
+    let name = name_from_source(&source)?;
     Ok(Kit {
         name,
         source,
@@ -118,7 +118,20 @@ fn from_value(v: Value, source: Source) -> Result<Kit> {
 
 /// A short token naming the kit: it scopes `--kit-arg` and tags policy rule origins, so it comes
 /// from the source, never from the free-text `displayName`.
-pub(crate) fn name_from_source(source: &Source) -> String {
+pub(crate) fn name_from_source(source: &Source) -> Result<String> {
+    check_name(raw_name(source))
+}
+
+/// Kit names land in guest scripts, file names, markers and the tab-separated kits record.
+pub(crate) fn check_name(name: String) -> Result<String> {
+    let ok = |c: char| c.is_ascii_alphanumeric() || matches!(c, '.' | '_' | '-');
+    if name.is_empty() || !name.chars().all(ok) {
+        bail!("kit name '{name}' may only contain letters, digits, '.', '_' and '-'");
+    }
+    Ok(name)
+}
+
+fn raw_name(source: &Source) -> String {
     match source {
         Source::Registry(r) => {
             let last = r.rsplit('/').next().unwrap_or(r);
@@ -865,6 +878,20 @@ mod tests {
         let e = one_cap(r#"{"type":"com.docker.sandbox/credential@1","config":{"service":"s","phase":"runtime"}}"#)
             .unwrap_err();
         assert!(format!("{e:#}").contains("apiKey"), "{e:#}");
+    }
+
+    #[test]
+    fn kit_names_are_restricted() {
+        assert_eq!(check_name("my-kit_1.0".into()).unwrap(), "my-kit_1.0");
+        for bad in ["", "a\nb", "a\tb", "a\\b", "a b", "a;b"] {
+            let e = check_name(bad.into()).unwrap_err();
+            assert_eq!(
+                e.to_string(),
+                format!("kit name '{bad}' may only contain letters, digits, '.', '_' and '-'")
+            );
+        }
+        let e = name_from_source(&Source::LocalV3("/k/bad\nname".into())).unwrap_err();
+        assert!(e.to_string().contains("may only contain"), "{e}");
     }
 
     #[test]

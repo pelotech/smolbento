@@ -68,7 +68,8 @@ pub fn as_user(user: Option<&str>, script: &str) -> String {
 /// A kit's `startup.d` script: its startup hooks in order, background ones with `&`. A failing
 /// hook is reported and the rest still run.
 pub fn startup_script(kit: &str, hooks: &[&Hook]) -> String {
-    let mut s = format!("#!/bin/sh\n# Startup hooks of kit {kit} (written by smolbento).\ncd /\n");
+    // The kit name only appears quoted.
+    let mut s = String::from("#!/bin/sh\n# Kit startup hooks (written by smolbento).\ncd /\n");
     for (i, h) in hooks.iter().enumerate() {
         let run = as_user(h.user.as_deref(), &hook_script(h));
         let failed = sh_quote(&format!(
@@ -114,10 +115,13 @@ pub fn git_identity_script(name: &str, email: &str) -> String {
     )
 }
 
+const AGENT_HOME: &str = "/home/agent";
+
 /// Sets `$o` to `agent` when the image has that user, else leaves it empty (no chown).
 const OWNER: &str = "o=; id agent >/dev/null 2>&1 && o=agent";
 
-/// Creates the missing parent directories of `path`, each owned by `$o`.
+/// Creates the missing parent directories of `path`. Those under the agent's home go to `$o`;
+/// elsewhere they stay root's.
 fn mkdirs(path: &str) -> String {
     let mut dirs: Vec<&Path> = Path::new(path)
         .parent()
@@ -131,7 +135,11 @@ fn mkdirs(path: &str) -> String {
     dirs.iter()
         .map(|d| {
             let q = sh_quote(&d.display().to_string());
-            format!("[ -d {q} ] || {{ mkdir {q}; [ -z \"$o\" ] || chown \"$o\" {q}; }}\n")
+            if d.starts_with(AGENT_HOME) && *d != Path::new(AGENT_HOME) {
+                format!("[ -d {q} ] || {{ mkdir {q}; [ -z \"$o\" ] || chown \"$o\" {q}; }}\n")
+            } else {
+                format!("[ -d {q} ] || mkdir {q}\n")
+            }
         })
         .collect()
 }
@@ -305,6 +313,45 @@ mod tests {
         assert_eq!(
             std::fs::read_to_string(&file).unwrap(),
             "<!-- smolbento:kit:k -->\nfrom image\n<!-- /smolbento:kit:k -->\n"
+        );
+    }
+
+    #[test]
+    fn only_dirs_under_the_agent_home_are_given_to_agent() {
+        let f = FileReq {
+            path: "/home/agent/.config/x/f".into(),
+            content: "c".into(),
+            mode: None,
+            overwrite: true,
+        };
+        let s = file_script(&f);
+        assert!(s.contains("[ -d '/home/agent/.config' ] || { mkdir '/home/agent/.config'; [ -z \"$o\" ] || chown \"$o\" '/home/agent/.config'; }"), "{s}");
+        assert!(s.contains("[ -d '/home' ] || mkdir '/home'\n"), "{s}");
+        assert!(
+            s.contains("[ -d '/home/agent' ] || mkdir '/home/agent'\n"),
+            "{s}"
+        );
+        let s = file_script(&FileReq {
+            path: "/etc/kit/conf".into(),
+            ..f
+        });
+        assert!(s.contains("[ -d '/etc/kit' ] || mkdir '/etc/kit'\n"), "{s}");
+        assert!(s.contains("chown \"$o\" '/etc/kit/conf'"), "{s}");
+        assert!(!s.contains("chown \"$o\" '/etc/kit'\n"), "{s}");
+    }
+
+    #[test]
+    fn startup_scripts_only_quote_the_kit_name() {
+        let h = hook(HookCmd::Shell("true".into()), &[]);
+        let s = startup_script("k", &[&h]);
+        assert!(
+            !s.lines()
+                .any(|l| l.starts_with('#') && l.contains('k') && l.contains("kit k")),
+            "{s}"
+        );
+        assert!(
+            s.contains("'smolbento: kit k startup hook 1 failed'"),
+            "{s}"
         );
     }
 

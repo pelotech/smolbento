@@ -172,7 +172,7 @@ pub fn apply(
         files.push(f);
     }
     steps.files = files.into_iter().map(guest::file_script).collect();
-    steps.context = context_scripts(plan);
+    steps.context = context_scripts(plan)?;
     if !tmpfs.is_empty() {
         steps
             .startup_d
@@ -201,7 +201,7 @@ pub fn apply(
         req.command = plan.workload.command.clone();
     }
     for k in kits.iter().skip(usize::from(preset)) {
-        let pinned = pinned_ref(k);
+        let pinned = pinned_ref(k)?;
         steps
             .kits_record
             .push_str(&format!("{}\t{pinned}\t{}\n", k.name, k.provides.join(",")));
@@ -209,8 +209,10 @@ pub fn apply(
     }
     req.long_running = m.long_running;
 
-    // Last, so an error above leaves the policy untouched. Runtime rules go first: an install
-    // rule that is also a runtime rule must outlive the install phase.
+    // Last, so an error above leaves the policy untouched; a failure part-way through (a bad
+    // host) restores the snapshot. Runtime rules go first: an install rule that is also a runtime
+    // rule must outlive the install phase.
+    let snapshot = policy.clone();
     let mut added = Vec::new();
     let mut add = |policy: &mut Policy| -> Result<()> {
         for (kit, _, runtime) in &kit_rules {
@@ -224,7 +226,7 @@ pub fn apply(
         Ok(())
     };
     if let Err(e) = add(policy) {
-        policy.remove_rules_by_ids(&req.name, &added);
+        *policy = snapshot;
         return Err(e);
     }
     for s in &plan.skipped {
@@ -322,6 +324,14 @@ fn bind_credential(kc: &KitCred, req: &mut CreateRequest, secrets: &SecretsFile)
         .find(|x| x.name == name && x.env_var == env)
     {
         Some(x) => {
+            // Two kits binding the same variable must agree on how smolvm injects it.
+            if x.set_header != set_header || req.credential_formats.get(&env) != fmt.as_ref() {
+                bail!(
+                    "kit {}: the {} credential ({env}) is injected differently by another kit",
+                    kc.kit,
+                    c.service
+                );
+            }
             for h in &hosts {
                 if !x.hosts.contains(h) {
                     x.hosts.push(h.clone());
@@ -371,13 +381,16 @@ fn upper_env(service: &str) -> String {
 }
 
 /// One script per profile file and kit, in plan order.
-fn context_scripts(plan: &Plan) -> Vec<String> {
+fn context_scripts(plan: &Plan) -> Result<Vec<String>> {
     let profile =
         agents::find(&plan.workload.name).map_or(agents::DEFAULT_CONTEXT_FILE, |a| a.context_file);
     let (profile_dir, profile_name) = profile.rsplit_once('/').expect("an absolute path");
     let mut sections: Vec<((String, String), Vec<&str>)> = Vec::new();
     for (kit, c) in &plan.merged.contexts {
         let dir = c.directory.as_deref().unwrap_or(profile_dir);
+        if !dir.starts_with('/') {
+            bail!("kit {kit}: agent-context directory '{dir}' must be an absolute path");
+        }
         let name = c.filename.as_deref().unwrap_or(profile_name);
         let key = (format!("{}/{name}", dir.trim_end_matches('/')), kit.clone());
         match sections.iter_mut().find(|(k, _)| *k == key) {
@@ -385,10 +398,10 @@ fn context_scripts(plan: &Plan) -> Vec<String> {
             None => sections.push((key, vec![&c.content])),
         }
     }
-    sections
+    Ok(sections
         .iter()
         .map(|((file, kit), bodies)| guest::context_script_parts(file, kit, bodies))
-        .collect()
+        .collect())
 }
 
 /// The agent preset as a synthetic workload (`load::preset_kit`), not a kit the user chose.
@@ -404,18 +417,19 @@ fn is_preset(w: &Kit) -> bool {
 }
 
 /// A registry kit pinned to its digest, or a local kit's canonical path.
-fn pinned_ref(k: &Kit) -> String {
-    match &k.source {
+fn pinned_ref(k: &Kit) -> Result<String> {
+    Ok(match &k.source {
+        Source::Registry(r) if r.contains('@') => r.clone(),
         Source::Registry(r) => match &k.digest {
-            Some(d) if !r.contains('@') => format!("{r}@{d}"),
-            _ => r.clone(),
+            Some(d) => format!("{r}@{d}"),
+            None => bail!("kit {}: {r} has no digest to pin it to", k.name),
         },
         Source::LocalV3(p) | Source::LocalV2(p) | Source::Smolfile(p) => p
             .canonicalize()
             .unwrap_or_else(|_| p.clone())
             .display()
             .to_string(),
-    }
+    })
 }
 
 #[cfg(test)]
@@ -995,5 +1009,135 @@ mod tests {
         )]);
         let (steps, _) = run(&p, &mut request(), &mut Policy::default()).unwrap();
         assert!(steps.install.is_empty());
+    }
+
+    #[test]
+    fn a_bad_host_part_way_leaves_the_policy_unchanged() {
+        let ok = CapBody::Network {
+            install: Rules::default(),
+            runtime: rules(&["ok.example.com", "*"]),
+        };
+        let bad = CapBody::Network {
+            install: rules(&["pkg.example.com"]),
+            runtime: Rules::default(),
+        };
+        let p = plan(vec![
+            with(kit("a", Kind::Mixin), "network-policy@1", false, ok),
+            with(kit("b", Kind::Mixin), "network-policy@1", false, bad),
+        ]);
+        let mut policy = Policy::default();
+        policy
+            .add_rule(
+                Some("sb"),
+                crate::policy::Decision::Allow,
+                "mine.example.com",
+                "added",
+                None,
+                None,
+            )
+            .unwrap();
+        let before = policy.clone();
+        assert!(run(&p, &mut request(), &mut policy).is_err());
+        assert_eq!(policy, before);
+    }
+
+    #[test]
+    fn two_kits_binding_one_variable_must_inject_it_alike() {
+        let c = |domain: &str, header: Option<&str>| {
+            cred("github", Some("GH_TOKEN"), vec![inject(domain, header)])
+        };
+        let p = plan(vec![
+            with(
+                kit("a", Kind::Mixin),
+                "credential@1",
+                false,
+                c("github.com", Some("authorization")),
+            ),
+            with(
+                kit("b", Kind::Mixin),
+                "credential@1",
+                false,
+                c("api.github.com", Some("authorization")),
+            ),
+        ]);
+        let mut req = request();
+        run_with(&p, &mut req, &mut Policy::default(), &secrets(&["github"])).unwrap();
+        assert_eq!(
+            credential_args(&req),
+            ["github=GH_TOKEN@github.com,api.github.com:set-header=authorization"]
+        );
+
+        let mut formatted = inject("api.github.com", Some("authorization"));
+        formatted.format = Some("Bearer %s".into());
+        let p = plan(vec![
+            with(
+                kit("a", Kind::Mixin),
+                "credential@1",
+                false,
+                c("github.com", Some("authorization")),
+            ),
+            with(
+                kit("b", Kind::Mixin),
+                "credential@1",
+                false,
+                cred("github", Some("GH_TOKEN"), vec![formatted]),
+            ),
+        ]);
+        let e = run_with(
+            &p,
+            &mut request(),
+            &mut Policy::default(),
+            &secrets(&["github"]),
+        )
+        .unwrap_err();
+        assert!(format!("{e:#}").contains("injected differently"), "{e:#}");
+        let p = plan(vec![
+            with(
+                kit("a", Kind::Mixin),
+                "credential@1",
+                false,
+                c("github.com", None),
+            ),
+            with(
+                kit("b", Kind::Mixin),
+                "credential@1",
+                false,
+                c("api.github.com", Some("x-token")),
+            ),
+        ]);
+        assert!(
+            run_with(
+                &p,
+                &mut request(),
+                &mut Policy::default(),
+                &secrets(&["github"])
+            )
+            .is_err()
+        );
+    }
+
+    #[test]
+    fn an_unpinned_registry_kit_and_a_relative_context_directory_fail() {
+        let mut m = kit("m", Kind::Mixin);
+        m.digest = None;
+        let e = run(&plan(vec![m]), &mut request(), &mut Policy::default()).unwrap_err();
+        assert!(format!("{e:#}").contains("no digest"), "{e:#}");
+
+        let ctx = CapBody::AgentContext(AgentContextReq {
+            filename: None,
+            directory: Some("rel/dir".into()),
+            content: "x".into(),
+        });
+        let p = plan(vec![with(
+            kit("c", Kind::Mixin),
+            "agent-context@1",
+            false,
+            ctx,
+        )]);
+        let e = run(&p, &mut request(), &mut Policy::default()).unwrap_err();
+        assert!(
+            format!("{e:#}").contains("kit c: agent-context directory 'rel/dir'"),
+            "{e:#}"
+        );
     }
 }

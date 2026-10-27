@@ -13,7 +13,7 @@ pub fn load(path: &Path) -> Result<Kit> {
     std::fs::File::open(path).with_context(|| format!("reading Smolfile {}", path.display()))?;
     let source = Source::Smolfile(path.to_path_buf());
     Ok(Kit {
-        name: name_from_source(&source),
+        name: name_from_source(&source)?,
         source,
         digest: None,
         kind: Kind::Workload,

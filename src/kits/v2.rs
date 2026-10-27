@@ -10,7 +10,7 @@ use serde::Deserialize;
 use serde_json::Value;
 
 use crate::kits::model::*;
-use crate::kits::v3::name_from_source;
+use crate::kits::v3::{check_name, name_from_source};
 
 const NS: &str = "com.docker.sandbox/";
 /// Left for apply to expand: the workspace path is only known at create time.
@@ -31,7 +31,10 @@ pub fn parse(yaml: &str, dir: &Path) -> Result<Kit> {
         k => bail!("unknown kind '{k}'"),
     };
     let source = Source::LocalV2(dir.to_path_buf());
-    let name = s.name.clone().unwrap_or_else(|| name_from_source(&source));
+    let name = match s.name.clone() {
+        Some(n) => check_name(n)?,
+        None => name_from_source(&source)?,
+    };
 
     let mut caps = Vec::new();
     let sandbox = s.sandbox.unwrap_or_default();
@@ -615,6 +618,18 @@ mod tests {
             k.content,
             Content::Image("ghcr.io/example/agent:1.2".into())
         );
+    }
+
+    #[test]
+    fn a_name_with_control_characters_is_refused() {
+        for name in [r#""a\nb""#, r#""a\tb""#, r#""a\\b""#] {
+            let e = parse(
+                &format!("schemaVersion: \"2\"\nkind: mixin\nname: {name}\n"),
+                Path::new("kits/x"),
+            )
+            .unwrap_err();
+            assert!(format!("{e:#}").contains("may only contain"), "{e:#}");
+        }
     }
 
     #[test]
