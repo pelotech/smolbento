@@ -16,6 +16,9 @@ work. See [Security](SECURITY.md).
 **Phase 3a (clone mode) is done.** `sbt run --clone` gives the agent its own clone of the repo;
 its commits come back through `git fetch sandbox-<name>`. See [Usage](usage.md#clone-mode).
 
+**Phase 3b (fork) is done.** `sbt fork` copies a running sandbox, memory and all, for parallel
+attempts or as an undo point. See [Usage](usage.md#fork).
+
 Upgrading from v0.1.x: starting a sandbox now needs a chosen network policy, as in sbx. Run
 `sbt policy init balanced` (or answer the prompt) before your next start; scripts without a
 terminal fail until you do.
@@ -28,8 +31,8 @@ terminal fail until you do.
 | 1 | Repo tooling and CI; `run`, `create`, `exec`, `ls`, `start`, `stop`, `rm`, `prune`, `reset`, `cp`, `version`, `completion`, `diagnose`, `settings`, `daemon` | ✅ Done |
 | 2 | Network policy (`policy init/allow/deny/rm/ls/log/check`, approvals, live changes on running sandboxes), secrets (keychain, `op://` and AWS references, `--command`; the sandbox only sees placeholders), `ports` | ✅ Done |
 | 3a | `--clone` (the agent works on its own clone; only commits come back, through the `sandbox-<name>` remote) | ✅ Done |
-| 3b | `fork`, `checkpoint`, `restore` | ⏭ Next |
-| 4 | Kits (sbx kit v2 `spec.yaml`, native Smolfiles), `sbxenv.yaml`, the `docker` and `plus` kits and image, host services (e.g. a host Ollama reachable from sandboxes) | Planned |
+| 3b | `fork` (copy-on-write copies of a running sandbox). `checkpoint`/`restore` dropped: secrets can't work in a restored smolvm checkpoint from the CLI | ✅ Done |
+| 4 | Kits (sbx kit v2 `spec.yaml`, native Smolfiles), `sbxenv.yaml`, the `docker` and `plus` kits and image, host services (e.g. a host Ollama reachable from sandboxes) | ⏭ Next |
 | 5 | `template`, `setup ssh`, static MCP, `--skills`, clipboard and browser bridges | Planned |
 | 6 | `tui` dashboard (bare `sbt` opens it on a terminal) | Planned |
 | 7 | Warm-start pool for near-instant creates; Windows | Planned |
