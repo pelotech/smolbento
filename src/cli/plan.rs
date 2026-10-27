@@ -321,6 +321,11 @@ fn create_with<R: Runner>(
             );
         }
     }
+    // The name has no machine, so install-phase rules under it are an interrupted create's:
+    // `rm` can't reach them, so they go before this create adds its own.
+    if prepared.is_none() {
+        drop_stale_install_rules(ctx, &req.name)?;
+    }
     let mut added: Vec<String> = prepared
         .as_ref()
         .map(|k| k.rule_ids.clone())
@@ -373,12 +378,12 @@ fn create_with<R: Runner>(
                 let name = &req.name;
                 eprintln!(
                     "warning: couldn't check whether {name} still exists ({e:#}); what this create \
-                     added was kept, and `sbt rm {name}` removes it"
+                     added was kept, and `sbt rm {name}` removes it if the sandbox exists"
                 );
                 if !added.is_empty() {
                     eprintln!(
-                        "warning: or remove its rules with `sbt policy rm network --sandbox {name} \
-                         --id <id>` (rule ids: {})",
+                        "warning: if it doesn't, remove its rules with `sbt policy rm network \
+                         --sandbox {name} --id <id>` (rule ids: {})",
                         added.join(", ")
                     );
                 }
@@ -400,6 +405,21 @@ fn create_with<R: Runner>(
         }
     }
     result
+}
+
+/// Removes the install-phase kit rules an interrupted create of `name` left in the policy.
+fn drop_stale_install_rules<R: Runner>(ctx: &Ctx<R>, name: &str) -> Result<()> {
+    let mut policy = Policy::load(&ctx.paths)?;
+    let stale: Vec<String> = policy
+        .rules_for(Some(name))
+        .filter(|(r, s)| s.is_some() && r.is_kit_install())
+        .map(|(r, _)| r.id.clone())
+        .collect();
+    if !stale.is_empty() {
+        policy.remove_rules_by_ids(name, &stale);
+        policy.save(&ctx.paths)?;
+    }
+    Ok(())
 }
 
 /// Removes a new sandbox's install-phase kit rules from the policy and returns its network
@@ -1003,6 +1023,105 @@ mod tests {
             first_start_plan(&t.ctx, &m, &[install]).unwrap().network
         );
         assert!(first.contains("registry.npmjs.org"), "{first}");
+    }
+
+    #[test]
+    fn a_re_create_after_an_interrupted_one_opens_then_drops_its_install_rules() {
+        use crate::kits::args::ArgValues;
+        use crate::kits::model::{
+            Cap, CapBody, Content, Hook, HookCmd, Kind, Kit, Lifecycle, NetRule, Rules, Source,
+        };
+        use crate::policy::Decision;
+        let t = test_env(&[]);
+        set_policy(&t, "mode = \"deny-all\"");
+        // An interrupted create of s1 left its install rule behind, and no machine.
+        let mut policy = Policy::load(&t.ctx.paths).unwrap();
+        policy
+            .add_rule(
+                Some("s1"),
+                Decision::Allow,
+                "registry.npmjs.org",
+                "kit-install:k",
+                None,
+                None,
+            )
+            .unwrap();
+        policy.save(&t.ctx.paths).unwrap();
+        let fake = t.ctx.vm.runner();
+        fake.fail(&["machine", "status"], "NOT_FOUND", "vm not found");
+        fake.once_ok(
+            &["machine", "status"],
+            &machine_json("sbx-s1", "created", &[("sbx.name", "s1")]),
+        );
+        fake.once_fail(&["machine", "status"], "NOT_FOUND", "vm not found");
+        let kit = |name: &str, kind| Kit {
+            name: name.into(),
+            source: Source::Registry(format!("acme/{name}:1")),
+            digest: Some(format!("sha256:{}", "ab".repeat(32))),
+            kind,
+            provides: vec![],
+            requires: vec![],
+            args: Default::default(),
+            caps: vec![],
+            env: vec![],
+            content: Content::None,
+            command: None,
+        };
+        let mut wl = kit("wl", Kind::Workload);
+        wl.content = Content::Image("img:1".into());
+        let mut k = kit("k", Kind::Mixin);
+        let cap = |ty: &str, body| Cap {
+            ty: format!("com.docker.sandbox/{ty}"),
+            optional: false,
+            body,
+        };
+        k.caps = vec![
+            cap(
+                "network-policy@2",
+                CapBody::Network {
+                    install: Rules {
+                        allow: vec![NetRule {
+                            host: "registry.npmjs.org".into(),
+                            methods: vec![],
+                            paths: vec![],
+                        }],
+                        deny: vec![],
+                    },
+                    runtime: Rules::default(),
+                },
+            ),
+            cap(
+                "lifecycle@1",
+                CapBody::Lifecycle(Lifecycle {
+                    install: vec![Hook {
+                        command: HookCmd::Shell("npm i".into()),
+                        user: None,
+                        env: vec![],
+                        background: false,
+                    }],
+                    ..Default::default()
+                }),
+            ),
+        ];
+        let plan = crate::kits::resolve::resolve(wl, vec![k], &ArgValues::default()).unwrap();
+        let mut req = CreateRequest {
+            name: "s1".into(),
+            ..Default::default()
+        };
+        create_with(&t.ctx, &mut req, &[], Some(&plan), None).unwrap();
+        let lines = t.ctx.vm.runner().call_lines();
+        let create = lines
+            .iter()
+            .find(|l| l.starts_with("machine create"))
+            .unwrap();
+        assert!(create.contains("registry.npmjs.org"), "{create}");
+        let p = Policy::load(&t.ctx.paths).unwrap();
+        let left: Vec<&crate::policy::Rule> = p
+            .sandboxes
+            .get("s1")
+            .map(|s| s.rules.iter().collect())
+            .unwrap_or_default();
+        assert!(left.iter().all(|r| !r.is_kit_install()), "{left:?}");
     }
 
     #[test]

@@ -266,8 +266,17 @@ pub fn apply(
             added.extend(policy.add_kit_rules(&req.name, kit, runtime, false)?.1);
         }
         for (kit, install, _) in &kit_rules {
-            let new = policy.add_kit_rules(&req.name, kit, install, true)?.1;
-            steps.install_rules.extend(new.iter().cloned());
+            let (all, new) = policy.add_kit_rules(&req.name, kit, install, true)?;
+            // Every install rule in place opens for the first start, one an interrupted create
+            // left too; only the new ones are rolled back.
+            for id in all {
+                let is_install = policy
+                    .rules_for(Some(&req.name))
+                    .any(|(r, s)| s.is_some() && r.id == id && r.is_kit_install());
+                if is_install && !steps.install_rules.contains(&id) {
+                    steps.install_rules.push(id);
+                }
+            }
             added.extend(new);
         }
         Ok(())
@@ -716,10 +725,15 @@ mod tests {
                 assert_eq!(via, "kit:net");
             }
         }
-        // Applying again adds nothing new, so a rollback can't remove what was there.
+        // Applying again adds nothing new, so a rollback can't remove what was there; the install
+        // rules already in place (an interrupted create's) still open for the first start.
         let mut again = request();
         let (steps, added) = run(&p, &mut again, &mut policy).unwrap();
-        assert!(added.is_empty() && steps.install_rules.is_empty());
+        assert!(added.is_empty(), "{added:?}");
+        assert_eq!(
+            rule_hosts(&policy, &steps.install_rules),
+            ["pkg.example.com"]
+        );
     }
 
     #[test]
