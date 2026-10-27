@@ -72,13 +72,18 @@ mod tests {
         std::fs::write(dir.join(pid.to_string()), b"").unwrap();
     }
 
-    fn stopped(t: &TestEnv) -> bool {
+    /// Whether smolvm got a `machine <cmd>` call.
+    fn called(t: &TestEnv, cmd: &str) -> bool {
         t.ctx
             .vm
             .runner()
             .call_lines()
             .iter()
-            .any(|l| l.contains("machine stop"))
+            .any(|l| l.contains(cmd))
+    }
+
+    fn stopped(t: &TestEnv) -> bool {
+        called(t, "machine stop")
     }
 
     #[test]
@@ -108,14 +113,7 @@ mod tests {
                 "/w/r",
             ]]
         );
-        assert!(
-            !t.ctx
-                .vm
-                .runner()
-                .call_lines()
-                .iter()
-                .any(|l| l.contains("machine stop"))
-        );
+        assert!(!stopped(&t));
     }
 
     #[test]
@@ -155,19 +153,6 @@ mod tests {
     }
 
     #[test]
-    fn leaves_it_running_when_a_session_is_live() {
-        let mut t = test_env(&[]);
-        t.ctx.vm.runner().ok(&["machine"], "");
-        clone_sandbox(&t, "stopped");
-        t.ctx.vm.runner().interactive_exit(0);
-        other_session(&t);
-        sbt(&mut t.ctx, &["_upload-pack", "box"]).unwrap();
-        assert!(!stopped(&t));
-        // Only the other session is left; ours is gone.
-        assert_eq!(session::live_sessions(&t.ctx.paths.sessions(), "box"), 1);
-    }
-
-    #[test]
     fn overlapping_calls_leave_the_stop_to_the_last_one() {
         let mut t = test_env(&[]);
         t.ctx.vm.runner().ok(&["machine"], "");
@@ -177,6 +162,8 @@ mod tests {
         other_session(&t);
         sbt(&mut t.ctx, &["_upload-pack", "box"]).unwrap();
         assert!(!stopped(&t));
+        // Only the other session is left; ours is gone.
+        assert_eq!(session::live_sessions(&t.ctx.paths.sessions(), "box"), 1);
         // Once it's done, the next call stops the sandbox it started.
         session::clear(&t.ctx.paths.sessions(), "box");
         sbt(&mut t.ctx, &["_upload-pack", "box"]).unwrap();
@@ -223,14 +210,7 @@ mod tests {
             .to_string();
         assert!(err.contains("sbt policy init"), "{err}");
         assert!(t.ctx.vm.runner().interactive_calls().is_empty());
-        assert!(
-            !t.ctx
-                .vm
-                .runner()
-                .call_lines()
-                .iter()
-                .any(|l| l.contains("machine start"))
-        );
+        assert!(!called(&t, "machine start"));
     }
 
     #[test]

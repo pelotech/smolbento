@@ -457,9 +457,8 @@ mod tests {
     #[test]
     fn a_detached_worktree_clone_checks_out_its_commit_or_retries() {
         let step = CloneStep {
-            dir: "/w/r".into(),
             head: Some(WorktreeHead::Detached("abc123".into())),
-            remotes: vec![],
+            ..step("/w/r")
         };
         assert_eq!(
             clone_cmd(&step),
@@ -470,11 +469,16 @@ mod tests {
         );
     }
 
-    #[test]
-    fn start_runs_the_clone_step_after_setup() {
-        let fake = FakeRunner::new();
-        fake.ok(&["machine"], "");
-        let vm = Smolvm::new(fake);
+    fn step(dir: &str) -> CloneStep {
+        CloneStep {
+            dir: dir.into(),
+            head: None,
+            remotes: vec![],
+        }
+    }
+
+    /// A stopped clone sandbox `r` of `/w/r`, and a plan that clones it.
+    fn clone_sandbox() -> (Sandbox, StartPlan) {
         let sb = Sandbox {
             meta: Meta {
                 name: "r".into(),
@@ -487,16 +491,18 @@ mod tests {
             ports: vec![],
         };
         let plan = StartPlan {
-            network: NetworkSpec::Open,
-            env: vec![],
-            remove: vec![],
-            uid: 501,
-            clone: Some(CloneStep {
-                dir: "/w/r".into(),
-                head: None,
-                remotes: vec![],
-            }),
+            clone: Some(step("/w/r")),
+            ..plan()
         };
+        (sb, plan)
+    }
+
+    #[test]
+    fn start_runs_the_clone_step_after_setup() {
+        let fake = FakeRunner::new();
+        fake.ok(&["machine"], "");
+        let vm = Smolvm::new(fake);
+        let (sb, plan) = clone_sandbox();
         start(&vm, &sb, &plan).unwrap();
         let lines = vm.runner().call_lines();
         let last2 = &lines[lines.len() - 2..];
@@ -520,22 +526,7 @@ mod tests {
             "fatal: repository not found\nhint: more",
         );
         let vm = Smolvm::new(fake);
-        let sb = Sandbox {
-            meta: Meta {
-                name: "r".into(),
-                clone: Some("/w/r".into()),
-                ..Default::default()
-            },
-            machine: "sbx-r".into(),
-            state: MachineState::Stopped,
-            ports: vec![],
-        };
-        let mut p = plan();
-        p.clone = Some(CloneStep {
-            dir: "/w/r".into(),
-            head: None,
-            remotes: vec![],
-        });
+        let (sb, p) = clone_sandbox();
         let err = start(&vm, &sb, &p).unwrap_err();
         assert_eq!(
             err.to_string(),
@@ -550,12 +541,7 @@ mod tests {
 
     #[test]
     fn a_failed_clone_prep_reports_the_first_line_and_stops() {
-        let step = CloneStep {
-            dir: "/w/r".into(),
-            head: None,
-            remotes: vec![],
-        };
-        let prep = clone_prep_cmd(&step);
+        let prep = clone_prep_cmd(&step("/w/r"));
         let fake = FakeRunner::new();
         fake.spawn_fail(
             &[
@@ -564,18 +550,7 @@ mod tests {
             "could not run smolvm\nsecond line",
         );
         let vm = Smolvm::new(fake);
-        let sb = Sandbox {
-            meta: Meta {
-                name: "r".into(),
-                clone: Some("/w/r".into()),
-                ..Default::default()
-            },
-            machine: "sbx-r".into(),
-            state: MachineState::Stopped,
-            ports: vec![],
-        };
-        let mut p = plan();
-        p.clone = Some(step);
+        let (sb, p) = clone_sandbox();
         let err = start(&vm, &sb, &p).unwrap_err();
         assert_eq!(
             err.to_string(),

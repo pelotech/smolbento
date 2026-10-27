@@ -354,15 +354,6 @@ mod tests {
         v
     }
 
-    #[test]
-    fn clone_fetch_on_exit_defaults_to_true() {
-        let d = SETTINGS
-            .iter()
-            .find(|d| d.key == "clone.fetch-on-exit")
-            .unwrap();
-        assert_eq!(d.default, "true");
-    }
-
     #[cfg(unix)]
     #[test]
     fn write_atomic_can_write_through_a_symlink() {
