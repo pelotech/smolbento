@@ -3,6 +3,7 @@
 mod args;
 mod diagnose;
 mod exec;
+mod fork;
 mod lifecycle;
 mod ls;
 mod plan;
@@ -120,6 +121,7 @@ pub fn dispatch<R: Runner>(ctx: &mut Ctx<R>, cli: Cli) -> Result<i32> {
         Cmd::Create(a) => lifecycle::create(ctx, &a),
         Cmd::Exec(a) => exec::exec(ctx, &a),
         Cmd::Cp(a) => exec::cp(ctx, &a),
+        Cmd::Fork(a) => fork::run(ctx, &a),
         Cmd::Ls(a) => ls::run(ctx, &a),
         Cmd::Start { sandboxes } => lifecycle::start(ctx, &sandboxes),
         Cmd::Stop { sandboxes } => lifecycle::stop(ctx, &sandboxes),

@@ -1,0 +1,26 @@
+---
+source: tests/help.rs
+expression: help(&path)
+---
+Copy a running sandbox (memory, processes, disk) for parallel attempts
+
+Usage: sbt fork [OPTIONS] <SANDBOX>
+
+Arguments:
+  <SANDBOX>
+          Sandbox to copy
+
+Options:
+  -D, --debug
+          Print each smolvm command line
+
+      --name <NAME>
+          Name of the copy (default: <sandbox>-fork-<n>)
+
+      --count <COUNT>
+          Number of copies
+
+          [default: 1]
+
+  -h, --help
+          Print help

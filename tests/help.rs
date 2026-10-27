@@ -31,6 +31,7 @@ fn help_snapshots() {
         vec!["rm"],
         vec!["prune"],
         vec!["cp"],
+        vec!["fork"],
         vec!["settings"],
         vec!["policy"],
         vec!["secret"],

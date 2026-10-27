@@ -17,6 +17,7 @@ Commands:
   prune       Remove stopped sandboxes
   reset       Remove every sandbox and smolbento's session state
   cp          Copy files between the host and a sandbox
+  fork        Copy a running sandbox (memory, processes, disk) for parallel attempts
   version     Show smolbento and smolvm versions
   completion  Generate shell completions
   diagnose    Check smolbento's environment
