@@ -4,6 +4,8 @@ use std::path::{Path, PathBuf};
 
 use anyhow::{Context, Result, bail};
 
+pub mod clone;
+
 use crate::smolvm::Mount;
 
 /// Working directory of a sandbox created without a workspace (sbx's choice).
