@@ -18,6 +18,8 @@ pub enum Source {
     /// An agent preset as the workload (`load::preset_kit`), with its image: not a kit the user
     /// chose.
     Preset(String),
+    /// A kit shipped inside smolbento (`load::builtin`), by name: only `docker` so far.
+    Builtin(&'static str),
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]

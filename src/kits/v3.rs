@@ -138,6 +138,7 @@ fn raw_name(source: &Source) -> String {
             let last = last.split('@').next().unwrap_or(last);
             last.split(':').next().unwrap_or(last).to_string()
         }
+        Source::Builtin(n) => n.to_string(),
         Source::LocalV3(p) | Source::LocalV2(p) => path_name(p),
         Source::Smolfile(p) => {
             if p.file_name().is_some_and(|n| n == "Smolfile")

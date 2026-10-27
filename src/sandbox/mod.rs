@@ -19,7 +19,8 @@ use crate::workspace::clone::{SOURCE_MOUNT, WorktreeHead};
 pub use create::CreateRequest;
 pub use labels::Meta;
 
-/// Started detached as root after each start of a sandbox with `sbx.docker=true`.
+/// Started detached as root after each start of a pre-4a docker sandbox (`sbx.docker=true`, no
+/// `sbx.kits`). Newer ones get dockerd from the docker kit's startup hook (`kits/docker`).
 pub const DOCKER_START: &str = "pgrep -x dockerd >/dev/null || { rm -f /var/run/docker.pid; exec dockerd >/var/log/dockerd.log 2>&1; }";
 
 /// Started detached as root after every start: the kits' startup runner, when the sandbox has one.
@@ -229,8 +230,8 @@ pub fn start<R: Runner>(vm: &Smolvm<R>, sb: &Sandbox, plan: &StartPlan) -> Resul
     Ok(())
 }
 
-/// What follows `machine start`: the agent user's uid, dockerd, the clone, then the kits'
-/// startup runner (a no-op without kits; deferred during a kit first start).
+/// What follows `machine start`: the agent user's uid, dockerd for a pre-4a sandbox, the clone,
+/// then the kits' startup runner (a no-op without kits; deferred during a kit first start).
 fn setup<R: Runner>(vm: &Smolvm<R>, sb: &Sandbox, plan: &StartPlan) -> Result<()> {
     vm.exec_captured(&ExecSpec {
         name: sb.machine.clone(),
@@ -239,7 +240,9 @@ fn setup<R: Runner>(vm: &Smolvm<R>, sb: &Sandbox, plan: &StartPlan) -> Result<()
         ..Default::default()
     })
     .context("matching the sandbox's agent user to your host uid")?;
-    if sb.meta.docker {
+    // The pre-4a path: a docker sandbox created before the docker kit has no startup runner.
+    // With kits, the docker kit's startup hook starts dockerd (no second start here).
+    if sb.meta.docker && sb.meta.kits.is_empty() {
         vm.exec_captured(&ExecSpec {
             name: sb.machine.clone(),
             user: Some("root".into()),
@@ -645,6 +648,8 @@ mod tests {
         }
     }
 
+    /// The fixture is a pre-4a docker sandbox: `sbx.docker=true` and no `sbx.kits`, so `setup`
+    /// starts dockerd itself.
     #[test]
     fn start_applies_network_then_starts_with_env_then_setup() {
         let fake = FakeRunner::new();
@@ -681,6 +686,30 @@ mod tests {
             vec![vec![("TOK".to_string(), "secret".to_string())]]
         );
         assert_eq!(vm.runner().removed(), vec![vec!["GONE".to_string()]]);
+    }
+
+    #[test]
+    fn a_docker_kit_sandbox_leaves_dockerd_to_its_startup_runner() {
+        let fake = FakeRunner::new();
+        fake.ok(
+            &["machine", "status"],
+            &STATUS
+                .replace("\"state\": \"running\"", "\"state\": \"stopped\"")
+                .replace(
+                    "\"sbx.docker\": \"true\",",
+                    "\"sbx.docker\": \"true\", \"sbx.kits\": \"[\\\"builtin:docker\\\"]\",",
+                ),
+        );
+        let vm = Smolvm::new(fake);
+        let mut sb = get(&vm, "claude-myrepo").unwrap();
+        assert_eq!(sb.meta.kits, ["builtin:docker"]);
+        ensure_running(&vm, &mut sb, || Ok(plan())).unwrap();
+        let lines = vm.runner().call_lines();
+        assert!(
+            !lines.iter().any(|l| l.ends_with(DOCKER_START)),
+            "no second dockerd start: {lines:#?}"
+        );
+        assert!(lines.last().unwrap().ends_with(STARTUP_START), "{lines:#?}");
     }
 
     #[test]

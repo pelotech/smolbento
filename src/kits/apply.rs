@@ -252,6 +252,8 @@ pub fn apply(
         req.kits.push(pinned);
     }
     req.long_running = m.long_running;
+    // `sbx.docker` (shown by `ls`) says the sandbox has a private dockerd: the docker kit's.
+    req.docker = kits.iter().any(|k| k.source == Source::Builtin("docker"));
 
     // Last, so an error above leaves the policy untouched; a failure part-way through (a bad
     // host) restores the snapshot. Runtime rules go first: an install rule that is also a runtime
@@ -478,7 +480,8 @@ fn is_preset(w: &Kit) -> bool {
     matches!(w.source, Source::Preset(_))
 }
 
-/// A registry kit pinned to its digest, or a local kit's canonical path.
+/// A registry kit pinned to its digest, a shipped kit as `builtin:<name>`, or a local kit's
+/// canonical path.
 fn pinned_ref(k: &Kit) -> Result<String> {
     Ok(match &k.source {
         Source::Registry(r) | Source::Preset(r) if r.contains('@') => r.clone(),
@@ -486,6 +489,7 @@ fn pinned_ref(k: &Kit) -> Result<String> {
             Some(d) => format!("{r}@{d}"),
             None => bail!("kit {}: {r} has no digest to pin it to", k.name),
         },
+        Source::Builtin(n) => format!("builtin:{n}"),
         Source::LocalV3(p) | Source::LocalV2(p) | Source::Smolfile(p) => p
             .canonicalize()
             .unwrap_or_else(|_| p.clone())

@@ -20,7 +20,8 @@ pub struct CreateRequest {
     pub memory_mib: u64,
     pub env: Vec<(String, String)>,
     pub ports: Vec<PortMap>,
-    /// Give the sandbox a private dockerd (storage on the machine's own disk).
+    /// The sandbox has a private dockerd (the `sbx.docker` label). Before kits are applied: the
+    /// image should get the `docker` kit; `kits::apply` then sets it from the applied kits.
     pub docker: bool,
     pub created: i64,
     pub network: NetworkSpec,
@@ -57,10 +58,6 @@ pub struct CreateRequest {
     /// A Smolfile workload kit, passed with `--smolfile`.
     pub smolfile: Option<PathBuf>,
 }
-
-/// Docker can't keep its storage on the overlay root filesystem, so these are directories on the
-/// machine's own disk (they survive restarts).
-const DOCKER_VOLUMES: [&str; 2] = ["/var/lib/docker", "/var/lib/containerd"];
 
 /// The labels the sandbox gets.
 pub fn meta(req: &CreateRequest) -> Meta {
@@ -108,15 +105,8 @@ pub fn spec(req: &CreateRequest) -> CreateSpec {
         (_, None) => {}
     }
     mounts.extend(rest.map(Workspace::mount));
-    if req.docker {
-        mounts.extend(DOCKER_VOLUMES.map(|d| Mount {
-            host: None,
-            guest: d.into(),
-            read_only: false,
-        }));
-    }
     for v in &req.volumes {
-        // A kit may ask for a volume smolbento already mounts (docker's storage).
+        // Two kits may ask for the same volume.
         if !mounts.iter().any(|m| m.guest == *v) {
             mounts.push(Mount {
                 host: None,
@@ -169,6 +159,7 @@ mod tests {
         }
     }
 
+    /// Docker's storage comes from the docker kit's `volume@1`s (`req.volumes`).
     #[test]
     fn spec_with_workspace_and_docker() {
         let ws = vec![
@@ -181,7 +172,9 @@ mod tests {
                 read_only: true,
             },
         ];
-        let spec = spec(&request(true, ws));
+        let mut req = request(true, ws);
+        req.volumes = vec!["/var/lib/docker".into(), "/var/lib/containerd".into()];
+        let spec = spec(&req);
         assert_eq!(spec.name, "sbx-claude_repo");
         assert_eq!(spec.labels["sbx.name"], "claude.repo");
         assert_eq!(spec.labels["sbx.workspace"], "/w/repo");

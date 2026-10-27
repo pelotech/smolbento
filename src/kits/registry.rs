@@ -382,6 +382,7 @@ fn build_layout(cache: &Path, manifest: &[u8], digest: &str, reference: &str) ->
 pub fn read_layout(dir: &Path, source: Source) -> Result<Kit> {
     let what = match &source {
         Source::Registry(r) | Source::Preset(r) => r.clone(),
+        Source::Builtin(n) => format!("builtin:{n}"),
         Source::LocalV3(p) | Source::LocalV2(p) | Source::Smolfile(p) => p.display().to_string(),
     };
     let read = |p: PathBuf| fs::read(&p).with_context(|| format!("reading {}", p.display()));

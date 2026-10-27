@@ -10,7 +10,11 @@ use std::time::Duration;
 use anyhow::{Context, Result, bail};
 use sha2::{Digest, Sha256};
 
+use crate::agents;
 use crate::cli::{Ctx, plan};
+use crate::kits::args::ArgValues;
+use crate::kits::load;
+use crate::kits::resolve::{Plan, resolve};
 use crate::sandbox::{self, CreateRequest, options};
 use crate::smolvm::{ExecSpec, Runner, Smolvm, SmolvmError};
 
@@ -72,7 +76,8 @@ pub fn build<R: Runner>(ctx: &Ctx<R>, dir: &Path) -> Result<PathBuf> {
             (sb, running)
         }
         None => (
-            plan::create(ctx, &mut request(ctx), &[], None)
+            docker_plan()
+                .and_then(|kits| plan::create(ctx, &mut request(ctx), &[], Some(&kits)))
                 .context("creating the kit builder sandbox")?,
             false,
         ),
@@ -89,6 +94,18 @@ pub fn build<R: Runner>(ctx: &Ctx<R>, dir: &Path) -> Result<PathBuf> {
     }
     result?;
     unpack(&kit_tar, &cache.join("built"), tmp.path())
+}
+
+/// The builder's kits: the shell preset with the shipped docker kit, whose startup hook starts
+/// dockerd on every start of the builder.
+fn docker_plan() -> Result<Plan> {
+    let shell = agents::find("shell").expect("the shell preset");
+    let docker = load::builtin("docker").expect("the docker kit is shipped")?;
+    resolve(
+        load::preset_kit(shell, BUILDER_IMAGE),
+        vec![docker],
+        &ArgValues::default(),
+    )
 }
 
 /// The builder sandbox: mountless, with a private dockerd, under the global network policy.
@@ -148,7 +165,7 @@ fn pack(dir: &Path, out: &Path) -> Result<()> {
         .with_context(|| format!("packing {}", dir.display()))
 }
 
-/// Waits for the builder's dockerd, which `machine start` only launches.
+/// Waits for the builder's dockerd, which the docker kit's startup hook only launches.
 fn wait_for_docker<R: Runner>(
     vm: &Smolvm<R>,
     machine: &str,
@@ -374,7 +391,11 @@ mod tests {
         machine_json(
             "sbx-_builder",
             state,
-            &[("sbx.name", "_builder"), ("sbx.docker", "true")],
+            &[
+                ("sbx.name", "_builder"),
+                ("sbx.docker", "true"),
+                ("sbx.kits", r#"["builtin:docker"]"#),
+            ],
         )
     }
 
@@ -422,6 +443,8 @@ mod tests {
         assert!(c.contains(&format!("--image {BUILDER_IMAGE}")), "{c}");
         assert!(c.contains("--label sbx.name=_builder"), "{c}");
         assert!(c.contains("--label sbx.docker=true"), "{c}");
+        // dockerd comes from the shipped docker kit, not the pre-4a `setup` fallback.
+        assert!(c.contains(r#"--label sbx.kits=["builtin:docker"]"#), "{c}");
         assert!(
             c.contains("-v /var/lib/docker -v /var/lib/containerd"),
             "{c}"
@@ -440,7 +463,8 @@ mod tests {
         let order = [
             i("machine start -n sbx-_builder"),
             i("usermod -o -u 501 agent"),
-            i("-d -- sh -c pgrep -x dockerd"),
+            i("sbx-_builder:/etc/smolbento/startup.d/01-docker.sh"),
+            i(&format!("-d -- sh -c {}", sandbox::STARTUP_START)),
             i("-u root -- docker info"),
             i(&format!("-u root -- mkdir -p {n}/ctx")),
             i(&format!("sbx-_builder:{n}/ctx.tar")),
@@ -454,6 +478,10 @@ mod tests {
             i("machine stop -n sbx-_builder"),
         ];
         assert!(order.is_sorted(), "{order:?} in {rest:#?}");
+        assert!(
+            !rest.iter().any(|l| l.contains("pgrep -x dockerd")),
+            "dockerd is started once, by the startup runner: {rest:#?}"
+        );
         assert!(
             rest.contains(&"machine start -n sbx-_builder".to_string()),
             "not branchable: {rest:#?}"

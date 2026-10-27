@@ -1,4 +1,4 @@
-//! Turns a kit REF (a path or a registry reference) into a `Kit`.
+//! Turns a kit REF (a shipped kit's name, a path or a registry reference) into a `Kit`.
 
 use std::fs;
 use std::path::{Path, PathBuf};
@@ -11,9 +11,22 @@ use crate::kits::model::{Content, Kind, Kit, Source};
 use crate::kits::{builder, registry, smolfile, trust, v2, v3};
 use crate::smolvm::Runner;
 
+/// Kits shipped inside smolbento, by the bare name that loads them.
+const BUILTINS: [(&str, &str); 1] = [("docker", include_str!("../../kits/docker/docker.yaml"))];
+
+/// The shipped kit a bare REF names. Only the bare word: `./docker` is a path.
+pub fn builtin(reference: &str) -> Option<Result<Kit>> {
+    let (name, yaml) = BUILTINS.iter().find(|(n, _)| *n == reference)?;
+    Some(v3::parse(yaml, Source::Builtin(name)).with_context(|| format!("shipped kit {name}")))
+}
+
 /// Loads the kit REF names. `trust::check` runs on the source before anything is read, built
-/// or pulled. Presets (`agents::find`) are the caller's business, so `claude` never lands here.
+/// or pulled. Presets (`agents::find`) are the caller's business, so `claude` never lands here;
+/// shipped kits (`docker`) are found before any path or registry.
 pub fn load<R: Runner>(ctx: &Ctx<R>, reference: &str) -> Result<Kit> {
+    if let Some(kit) = builtin(reference) {
+        return kit;
+    }
     match locate(ctx, reference)? {
         Located::Registry(r) => registry::pull(&r, &ctx.paths.kit_cache()),
         Located::V2(dir) => {
@@ -32,6 +45,9 @@ pub fn load<R: Runner>(ctx: &Ctx<R>, reference: &str) -> Result<Kit> {
 /// The name `load` gives the kit REF names, without pulling or building it: trust is checked,
 /// then the name comes from the source (or a v2 `spec.yaml`'s `name`).
 pub fn kit_name<R: Runner>(ctx: &Ctx<R>, reference: &str) -> Result<String> {
+    if let Some((name, _)) = BUILTINS.iter().find(|(n, _)| *n == reference) {
+        return v3::name_from_source(&Source::Builtin(name));
+    }
     match locate(ctx, reference)? {
         Located::Registry(r) => v3::name_from_source(&Source::Registry(r)),
         Located::V2(dir) => {
@@ -202,6 +218,45 @@ mod tests {
         fs::write(&p, "image = \"alpine\"\n").unwrap();
         let k = load(&t.ctx, "dev.smolfile").unwrap();
         assert_eq!(k.source, Source::Smolfile(p.canonicalize().unwrap()));
+    }
+
+    #[test]
+    fn docker_is_the_shipped_mixin_and_trusted_without_local_kits() {
+        use crate::kits::model::{CapBody, Kind};
+        let t = test_env(&[("SMOLBENTO_KIT_ALLOW_LOCAL", "false")]);
+        let k = load(&t.ctx, "docker").unwrap();
+        assert_eq!(k.name, "docker");
+        assert_eq!(k.source, Source::Builtin("docker"));
+        assert_eq!(k.kind, Kind::Mixin);
+        assert_eq!(k.provides, ["docker"]);
+        let volumes: Vec<&str> = k
+            .caps
+            .iter()
+            .filter_map(|c| match &c.body {
+                CapBody::Volume { path, .. } => Some(path.as_str()),
+                _ => None,
+            })
+            .collect();
+        assert_eq!(volumes, ["/var/lib/docker", "/var/lib/containerd"]);
+        assert!(k.caps.iter().any(|c| c.body == CapBody::Privileged));
+        assert_eq!(kit_name(&t.ctx, "docker").unwrap(), "docker");
+        assert!(t.ctx.vm.runner().call_lines().is_empty());
+    }
+
+    #[test]
+    fn a_docker_directory_is_still_reachable_as_a_path() {
+        let t = allow_local();
+        let dir = t.ctx.cwd.join("docker");
+        fs::create_dir(&dir).unwrap();
+        fs::write(dir.join("spec.yaml"), V2).unwrap();
+        let k = load(&t.ctx, "./docker").unwrap();
+        assert_eq!(k.name, "my-kit");
+        assert_eq!(k.source, Source::LocalV2(dir.canonicalize().unwrap()));
+        // The bare word stays the shipped kit, even with a `docker` directory in the cwd.
+        assert_eq!(
+            load(&t.ctx, "docker").unwrap().source,
+            Source::Builtin("docker")
+        );
     }
 
     #[test]

@@ -11,7 +11,7 @@ use super::{CreateArgs, Ctx, PruneArgs, ResetArgs, RmArgs, SandboxOpts, confirm}
 use crate::agents;
 use crate::kits::args::ArgValues;
 use crate::kits::load;
-use crate::kits::model::{Content, Kind, Kit};
+use crate::kits::model::{Content, Kind, Kit, Source};
 use crate::kits::resolve::{Plan, resolve};
 use crate::sandbox::{self, CreateRequest, Sandbox, name, options, session};
 use crate::smolvm::Runner;
@@ -35,6 +35,7 @@ pub(crate) fn build_request<R: Runner>(
         None if docker_enabled => agent.image.to_string(),
         None => agents::plain_image(agent.image),
     };
+    // Asks for the docker kit; `apply` sets it again from the kits actually applied.
     req.docker = docker_enabled && agents::is_docker_image(&req.image);
     Ok(req)
 }
@@ -105,7 +106,8 @@ fn base_request<R: Runner>(
 
 /// `build_request` for `targets` (an agent preset or a workload kit REF, then workspace paths)
 /// plus `--kit` mixins: loads and resolves the kits, without touching smolvm's machines or the
-/// policy. `plan::create` applies the plan. A preset without `--kit` gives no plan.
+/// policy. `plan::create` applies the plan. A preset without `--kit` gives no plan, unless its
+/// image gets the `docker` kit.
 pub(crate) fn build_kit_request<R: Runner>(
     ctx: &Ctx<R>,
     targets: &[String],
@@ -134,19 +136,15 @@ pub(crate) fn kit_target<R: Runner>(
     default_to_cwd: bool,
 ) -> Result<(CreateRequest, Option<Workload>)> {
     let (target, paths) = targets.split_first().context("specify an agent")?;
-    let preset = agents::find(target);
-    if preset.is_some() && opts.kit.is_empty() {
-        if has_kit_args(opts) {
-            bail!("--kit-arg needs a kit");
-        }
-        return Ok((
-            build_request(ctx, target, paths, opts, default_to_cwd)?,
-            None,
-        ));
-    }
-    Ok(match preset {
+    Ok(match agents::find(target) {
         Some(agent) => {
+            if opts.kit.is_empty() && has_kit_args(opts) {
+                bail!("--kit-arg needs a kit");
+            }
             let req = build_request(ctx, target, paths, opts, default_to_cwd)?;
+            if opts.kit.is_empty() && !req.docker {
+                return Ok((req, None));
+            }
             let workload = load::preset_kit(agent, &req.image);
             (req, Some(Workload::Preset(Box::new(workload))))
         }
@@ -204,11 +202,15 @@ pub(crate) fn kit_plan<R: Runner>(
         }
     };
     let args = ArgValues::parse(&opts.kit_args_file, &opts.kit_arg)?;
-    let mixins = opts
+    let mut mixins = opts
         .kit
         .iter()
         .map(|r| load::load(ctx, r))
         .collect::<Result<Vec<_>>>()?;
+    // A Docker-enabled image gets dockerd through the shipped kit, unless `--kit docker` added it.
+    if req.docker && !mixins.iter().any(|k| k.source == Source::Builtin("docker")) {
+        mixins.push(load::builtin("docker").expect("the docker kit is shipped")?);
+    }
     let plan = resolve(workload, mixins, &args)?;
     plan.warn_skipped();
     Ok(plan)
@@ -654,6 +656,18 @@ mod tests {
         assert_eq!(pair("-p"), vec!["8080:80"]);
         assert!(pair("--label").contains(&"sbx.created=1000000".to_string()));
         assert!(pair("--label").contains(&"sbx.docker=true".to_string()));
+        // Docker-in-sandbox is the shipped `docker` kit: its volumes above, its startup hook here.
+        assert!(pair("--label").contains(&r#"sbx.kits=["builtin:docker"]"#.to_string()));
+        let uploads = t.ctx.vm.runner().uploads();
+        let (_, script) = uploads
+            .iter()
+            .find(|(to, _)| to == "sbx-claude-proj:/etc/smolbento/startup.d/01-docker.sh")
+            .expect("the docker kit's startup script");
+        assert!(script.contains("exec dockerd"), "{script}");
+        assert!(
+            script.contains("} &"),
+            "dockerd runs in the background: {script}"
+        );
         // A host-mounted sandbox can't be forked, so it isn't started branchable.
         assert!(
             t.ctx
@@ -957,12 +971,40 @@ mod tests {
         );
         assert!(!line.contains(" -v "), "{line}");
         assert!(line.contains("--label sbx.docker=false"), "{line}");
+        assert!(!line.contains("sbx.kits"), "no docker kit: {line}");
         assert!(
             t.ctx
                 .vm
                 .runner()
                 .call_lines()
                 .contains(&"machine start -n sbx-shell-proj --branchable".to_string())
+        );
+    }
+
+    #[test]
+    fn kit_docker_adds_dockerd_to_any_template() {
+        let mut t = test_env(&[]);
+        let fake = t.ctx.vm.runner();
+        fake.ok(
+            &["machine", "status"],
+            &json("sbx-shell-proj", "created", "shell-proj"),
+        );
+        fake.once_fail(&["machine", "status"], "NOT_FOUND", "vm not found");
+        sbt(
+            &mut t.ctx,
+            &["create", "-t", "alpine", "--kit", "docker", "shell", "."],
+        )
+        .unwrap();
+        let line = create_line(&t);
+        assert!(line.contains("--image alpine "), "{line}");
+        assert!(
+            line.contains("-v /var/lib/docker -v /var/lib/containerd"),
+            "{line}"
+        );
+        assert!(line.contains("--label sbx.docker=true"), "{line}");
+        assert!(
+            line.contains(r#"--label sbx.kits=["builtin:docker"]"#),
+            "{line}"
         );
     }
 
@@ -1484,8 +1526,9 @@ mod tests {
         let create = create_line(&t);
         assert!(create.contains("-e TOOL_MODE=fast"), "{create}");
         assert!(create.contains(":8080 "), "{create}");
+        // The shell preset's image is Docker-enabled, so the docker kit comes too.
         assert!(
-            create.contains(&format!("--label sbx.kits=[\"{kit}\"]")),
+            create.contains(&format!("--label sbx.kits=[\"{kit}\",\"builtin:docker\"]")),
             "{create}"
         );
         assert!(create.contains("api.tool.example"), "{create}");
