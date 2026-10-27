@@ -15,11 +15,16 @@ sbt settings unset docker.enabled       # back to the default
 | `smolvm.path` | `SMOLBENTO_SMOLVM` | `smolvm` | The smolvm binary to run |
 | `clone.fetch-on-exit` | `SMOLBENTO_CLONE_FETCH_ON_EXIT` | `true` | After `run` in a clone sandbox, fetch the agent's commits into the `sandbox-<name>` remote |
 | `fork.enabled` | `SMOLBENTO_FORK` | `true` | Start clone and mountless sandboxes branchable so `sbt fork` can copy them; `false` also turns `sbt fork` off |
+| `kit.sources` | `SMOLBENTO_KIT_SOURCES` | `docker.io/*` | Registries published kits may load from: comma-separated patterns, where `*` matches anything (`*` alone allows every registry) |
+| `kit.allow-local` | `SMOLBENTO_KIT_ALLOW_LOCAL` | `true` | Allow kits from local directories, descriptor files and Smolfiles |
 
 An environment variable wins over the config file, which wins over the default. Booleans accept
 `true`/`false`, `1`/`0`, `yes`/`no` and `on`/`off`.
 
-`docker.enabled` applies to sandboxes created afterwards. `fork.enabled` applies from each
+`docker.enabled` applies to sandboxes created afterwards. `kit.sources` patterns match the
+registry and repository with the tag dropped and Docker Hub spelled out: `alpine` is
+`docker.io/library/alpine`, `ghcr.io/acme/kit:1` is `ghcr.io/acme/kit`. To also allow one
+organisation's kits on GitHub: `sbt settings set kit.sources 'docker.io/*,ghcr.io/acme/*'`. `fork.enabled` applies from each
 sandbox's next start; see [Fork](usage.md#fork) for what it costs.
 
 ## Files
@@ -31,6 +36,7 @@ sandbox's next start; see [Fork](usage.md#fork) for what it costs.
 | `~/.config/smolbento/secrets.toml` | Where each secret comes from (never the value) |
 | `~/.config/smolbento/secret-values.toml` | Secret values, mode 0600, only where no OS keychain is usable (headless Linux, CI) |
 | `~/.cache/smolbento/sessions/` | One file per attached `run` session, used to stop a sandbox when the last session ends |
+| `~/.cache/smolbento/kits/` | Downloaded and built kits, and images with kit layers added; safe to delete |
 
 `XDG_CONFIG_HOME` and `XDG_CACHE_HOME` are honoured (also on macOS). `SMOLBENTO_CONFIG_DIR` and
 `SMOLBENTO_CACHE_DIR` override both.
@@ -63,6 +69,10 @@ smolbento keeps no database of its own. Each sandbox is a smolvm machine named `
 | `sbx.clone` | `true` for a `--clone` sandbox |
 | `sbx.clone-top` | Top of the cloned repo, when the workspace is a subdirectory of it |
 | `sbx.credential-env` | Env vars those secrets use; a start keeps any without a value out of the sandbox, even if the service is gone |
+| `sbx.kits` | Kits applied at create, pinned to their digests |
+| `sbx.command` | The command a workload kit launches, as a JSON list |
+| `sbx.credential-install` | Env vars of credentials a kit needs only while installing; later starts leave them out |
+| `sbx.long-running` | `true` when a kit asked not to stop the sandbox when its last session ends |
 
 `smolvm machine ls` shows them alongside any machines you made with smolvm directly; `sbt ls` shows
 only the ones smolbento made.

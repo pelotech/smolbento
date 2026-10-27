@@ -29,7 +29,27 @@ that address.
   wildcards inside a label widen, and ports, methods and paths in rules aren't enforced. See
   [sbx compatibility](sbx-compatibility.md).
 
-Other things to know:
+## Kits
+
+A kit can install software as root in the sandbox, run steps on every start and open network
+access, so load only kits you trust.
+
+- **Which kits load.** Published kits only from the registries in `kit.sources` (default Docker
+  Hub, `docker.io/*`), and local kits only while `kit.allow-local` is `true` (the default). Both are
+  checked before anything is downloaded or built. Signatures aren't checked yet.
+- **Kit network rules.** A kit's allow rules are added for its sandbox only, even under
+  `deny-all`, as in sbx. `sbt policy ls --source kit` lists them (`--source local` lists yours).
+  Deny rules always win: to block a host a kit allows, run
+  `sbt policy deny network --sandbox NAME HOST`. Rules a kit needs only while installing are
+  removed when its install steps finish.
+- **`kit add`** asks before it opens new network access on an existing sandbox; `-y` grants it,
+  and without a terminal it fails.
+- **Kit credentials** use your secrets, as placeholders in the sandbox; the value only goes to the
+  hosts the kit names. A credential a kit needs only while installing is gone after install.
+- **Local kit builds** run in the `_builder` sandbox, a VM under your global network policy, not on
+  your machine's Docker. The builder never gets your secrets.
+
+## Other things to know
 
 - The agent runs with its permission prompts disabled. The VM, not the agent, is the boundary.
 - Workspaces are mounted read-write by default. Anything the agent writes, including git hooks or

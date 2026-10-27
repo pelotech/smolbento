@@ -8,7 +8,9 @@ clearly rather than doing something different.
 
 `run`, `create`, `exec`, `ls`, `start`, `stop`, `rm`, `prune`, `reset`, `cp`, `version`,
 `completion`, `diagnose`, `settings`, `policy`, `secret`, `ports`, `run/create --deny-network`
-(per-sandbox deny rules, as in sbx) and `run/create --clone`.
+(per-sandbox deny rules, as in sbx), `run/create --clone`, kits (`run/create --kit`, `--kit-arg`,
+`--kit-args-file`, `kit inspect`, `kit validate`, `kit add`; see [Kits](#kits)) and
+`policy ls --source`.
 `fork` is a smolbento extension: sbx has no fork (its `template save` saves the disk only).
 `daemon` is accepted and does nothing: smolbento has no daemon.
 
@@ -17,8 +19,9 @@ clearly rather than doing something different.
 | Command or flag | Planned |
 |---|---|
 | `policy refresh`, `secret import`, `secret set --oauth/--registry/--refresh` | Not implemented |
-| `policy ls --source/--created-via/--type/--protocol/--include-inactive`, `policy check --protocol` other than `tcp` | Not implemented (`policy ls --decision` works) |
-| `--kit`, `kit`, `env` (sbxenv.yaml) | Later |
+| `policy ls --created-via/--type/--protocol/--include-inactive`, `policy check --protocol` other than `tcp` | Not implemented (`policy ls --decision` and `--source` work) |
+| `kit pack`, `kit push`, `kit pull`, `kit sign`, `kit verify` | Not implemented |
+| `env` (sbxenv.yaml) | Later |
 | `template`, `setup ssh`, `mcp`, `--static-mcp`, `--skills`, `skills` | Later |
 | `tui` | Later |
 | `--pull always\|never` | `--pull missing` works (it's what smolvm does) |
@@ -52,6 +55,50 @@ clearly rather than doing something different.
 | Fetch from a stopped sandbox | Fails | Starts the sandbox, fetches, stops it again |
 | Linked worktrees as the clone source | Not supported | Supported; the clone checks out the worktree's branch, or its commit when detached |
 | `--version` | `sbx version vX` | `sbt --version` prints `sbt X`; `sbt version` also shows the smolvm version |
+
+## Kits
+
+smolbento implements the [sandbox kit spec](https://github.com/docker/sandbox-kit-spec) at commit
+`198d50b5fd57b216b511fd7200010a3636cb3f01` (`SPEC_COMMIT` in the code). v3 is still experimental
+upstream. v2 `spec.yaml` kits are read into the same model, and smolvm Smolfiles work as kits too.
+
+What each capability does in smolbento. A kit that **requires** one marked "no" or "later" fails
+with its `type@version` before anything is created; an optional one is skipped with a warning.
+
+| Capability | sbx (local) | smolbento |
+|---|---|---|
+| `network-policy@1`, `@2` | Yes | Yes: per-sandbox rules with source `kit`; install-phase rules only while install steps run. `@2` method and path rules aren't enforced, so a kit that requires them is refused |
+| `credential@1` | Yes | API keys: yes, through your secrets. OAuth with `passthrough: true`: yes (the token and resource hosts are allowed; the agent's own login keeps its tokens in the sandbox). OAuth without passthrough: no |
+| `port@1` | Yes | Yes, on `127.0.0.1` |
+| `volume@1` | Yes (kept across removal) | Yes, on the sandbox's disk; removed with the sandbox |
+| `resources@1` | Limited (no GPU) | CPUs and memory; GPU ignored, as in sbx |
+| `lifecycle@1` | Yes | Yes: install steps on the first start, startup steps on every start |
+| `agent-context@1`, `@2` | Yes | Yes: a managed section in the agent's instructions file |
+| `sbx@1` | Yes | Yes: the workload's command is the agent |
+| `git-identity@1` | Yes | Yes: your `git config user.name/email` |
+| `long-running@1` | Yes | Yes: no auto-stop when the last session ends |
+| `privileged@1` | Yes | Yes |
+| `agent-sessions@1` | Declaration only | Declaration only |
+| `host-mount@1` | Yes | Later (Phase 5) |
+| `ssh-agent@1` | Yes | Later (Phase 5, with `setup ssh`) |
+| `agent-skills@1`, `agent-skill@1` | Yes | Later (Phase 5, with `--skills`) |
+| `kit-registry@1` | Approved builder kits only | No |
+| `agent-interactive-sessions@1`, `usb-device@1` | No | No |
+
+Differences:
+
+| Area | sbx | smolbento |
+|---|---|---|
+| Building local v3 kits | BuildKit on your machine | BuildKit in a hidden `_builder` sandbox; no Docker on your machine needed. It pulls base images without a registry login (kits built on `dhi.io`, like Docker's examples, don't build yet) and never gets your secrets |
+| Kit volumes | Kept across `rm` and recreation | Removed with the sandbox (`rm`, `reset`, recreate); kept across stop and start; each fork gets its own copy |
+| Install-only credentials | Available only while installing | The sandbox restarts once after install, without them; later requests to their hosts get `502` |
+| OAuth credentials | Passthrough and sentinel tokens | Passthrough only (sentinel tokens need smolvm support) |
+| Method and path rules | Enforced | Not enforced (as for `policy allow --method/--path`); a kit that requires them is refused |
+| `kit add` | Adds rules, steps and context; files and host deny rules need a recreate | Also applies files and deny rules live. Image layers, credentials, ports, volumes, resources, environment variables and `long-running` need a recreate ("recreate required"); asks before opening network access, `-y/--yes` skips the question |
+| `kit inspect`, `kit validate` | `--format`, `--offline` | Neither; `kit inspect --json` gives JSON |
+| The name `docker` | A registry ref (the `docker` image) | The shipped Docker kit; write `docker.io/library/docker` for the image |
+| A ref that is also a directory | Registry ref | A local kit: `alpine` with an `./alpine` directory present loads the directory |
+| Docker in the sandbox | Run by the `-docker` images | The shipped `docker` kit, added to Docker-enabled images; a failed first start removes the sandbox, as for any kit |
 
 ## Exit codes
 

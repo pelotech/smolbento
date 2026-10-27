@@ -207,6 +207,74 @@ without touching your host's Docker. Its storage is on the sandbox's own disk an
 To skip Docker (smaller images, faster first pull), set `sbt settings set docker.enabled false`
 before creating sandboxes; agents then use the plain image variants.
 
+The engine comes from the shipped `docker` kit (see [Kits](#kits)): Docker-enabled images get it
+automatically, and `--kit docker` adds it to any image, e.g. `sbt create -t alpine --kit docker
+shell .`. dockerd starts on every start of the sandbox; its log is `/var/log/dockerd.log`.
+
+## Kits
+
+Kits add tools, files, network rules, credentials and setup steps to a sandbox. smolbento runs
+Docker Sandboxes kits (v3, and v2 `spec.yaml`) and smolvm Smolfiles.
+
+```sh
+sbt run claude . --kit docker.io/acme/postgres-kit:1    # add a mixin kit to an agent
+sbt run docker.io/acme/my-agent:1 .                     # a workload kit replaces the agent
+sbt create shell . --kit ./my-kit --kit-arg region=eu   # a local kit, with an argument
+sbt kit inspect ./my-kit                                # what it provides and asks for
+sbt kit validate ./my-kit                               # check it without running it
+sbt kit add claude-myrepo ./my-mixin                    # add a mixin to an existing sandbox
+```
+
+A **mixin** kit adds to an agent (`--kit`, repeatable). A **workload** kit is the agent: pass it
+where the agent name goes, and the sandbox is named after it. A kit reference is one of:
+
+| Reference | Kit |
+|---|---|
+| `docker` | The shipped Docker kit |
+| `docker.io/acme/kit:1`, `ghcr.io/acme/kit@sha256:…` | A published kit, pulled from its registry |
+| `./my-kit` (a directory with one `*.yaml` starting `# syntax=docker/sandbox-kit:3`), or that file | A local v3 kit, built in the builder sandbox (below) |
+| `./my-kit` (a directory with a `spec.yaml`) | A local v2 kit |
+| `./Smolfile`, `./x.smolfile` | A smolvm Smolfile |
+
+Kit arguments: `--kit-arg NAME=VALUE` sets an argument for every kit, `--kit-arg KIT.NAME=VALUE`
+for one kit, and `--kit-args-file FILE` reads `NAME=VALUE` lines. Files are read in order, then
+`--kit-arg`; the last value wins, and a value for one kit beats a value for all.
+
+What a kit does, and when:
+
+- **First start**: its install steps run once, with any network access the kit needs only for
+  installing. If one fails, the sandbox is removed and the step's output printed, so the same
+  command works again once it's fixed. Its files and agent instructions are written once.
+- **Every start**: its startup steps run in the background, alongside the agent. Their output goes
+  to `/var/log/smolbento/startup.log` in the sandbox; a failing step is logged, not fatal.
+- **Credentials** come from your secrets: if a kit needs one you haven't set, the error says which
+  `sbt secret set` command to run. A credential the kit needs only while installing is available
+  during install; the sandbox then restarts once without it, and later requests to its hosts get
+  `502`.
+- **Volumes** a kit declares are on the sandbox's own disk: they survive stop and start, and are
+  removed with the sandbox.
+
+Only kits from Docker Hub load by default, plus local kits; see [Configuration](configuration.md)
+for `kit.sources` and `kit.allow-local`, and [Security](SECURITY.md#kits) for what a kit can open.
+
+### Adding a kit to a sandbox
+
+`sbt kit add SANDBOX REF` adds a mixin to an existing sandbox without restarting it: network rules,
+install and startup steps, files and agent instructions apply at once (a stopped sandbox is started
+for it). A kit that would change the image, credentials, ports, volumes, resources, environment
+variables or auto-stop needs a new sandbox: `kit add` says "recreate required" and changes nothing.
+If the kit opens network access, `kit add` asks first; `-y` grants it, and without a terminal it
+fails.
+
+### The builder sandbox
+
+Local v3 kits are built with BuildKit in a hidden sandbox, `_builder`, so you don't need Docker on
+your machine. It's created on first use, stopped after each build and not shown by `sbt ls`; its
+disk keeps the build cache, and `sbt rm _builder` resets it. Builds use your global network policy
+(`sbt policy log _builder` shows what was blocked) and never get your secrets. Base images are
+pulled without a registry login, so a kit built on an image that needs one (Docker's own examples
+use `dhi.io`) won't build locally yet; published kits are not affected.
+
 ## Files and ownership
 
 Workspaces are mounted at the same absolute path as on your machine, so paths in errors and logs
