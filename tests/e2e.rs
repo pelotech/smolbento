@@ -792,20 +792,31 @@ fn docker_kit_runs_dockerd_across_restarts() {
         String::from_utf8_lossy(&root_sh(&e.name, "cat /var/log/dockerd.log; ps -ef").stdout)
     );
     // A later, separate exec still finds the daemon the runner started.
-    std::thread::sleep(std::time::Duration::from_secs(3));
-    assert_eq!(dockerds(&e), 1, "dockerd survives the startup runner");
+    assert_one_dockerd(&e, "dockerd survives the startup runner");
     assert!(docker_info(), "docker info from a later exec");
 
     e.ok(&["stop", &e.name]);
     e.ok(&["start", &e.name]);
     assert!(wait_until(90, docker_info), "docker info after a restart");
-    std::thread::sleep(std::time::Duration::from_secs(3));
-    assert_eq!(dockerds(&e), 1, "exactly one dockerd after a restart");
+    assert_one_dockerd(&e, "exactly one dockerd after a restart");
     let log = startup_log(&e);
     assert!(
         log.matches("startup.d/01-docker.sh").count() >= 2,
         "the runner ran on both starts:\n{log}"
     );
+}
+
+/// Checks the sandbox runs exactly one dockerd, again and again for about 5 s: a second one
+/// started late (a duplicate start) shows up.
+fn assert_one_dockerd(e: &E2e, what: &str) {
+    let until = std::time::Instant::now() + std::time::Duration::from_secs(5);
+    loop {
+        assert_eq!(dockerds(e), 1, "{what}");
+        if std::time::Instant::now() >= until {
+            break;
+        }
+        std::thread::sleep(std::time::Duration::from_millis(500));
+    }
 }
 
 /// A throwaway `registry:2` in its own smolvm machine on a free loopback port, for published-kit
