@@ -148,6 +148,12 @@ fn parse_warn(yaml: &str, dir: &Path) -> Result<(Kit, Vec<String>)> {
     if let Some(a) = s.agent_instructions
         && let Some(content) = a.content.filter(|c| !c.trim().is_empty())
     {
+        if kind == Kind::Mixin && a.filename.is_some() {
+            warnings.push(format!(
+                "warning: kit {name}: agentInstructions.filename is only used for kind \
+                 \"sandbox\", not \"mixin\""
+            ));
+        }
         caps.push(cap(
             "agent-context@2",
             CapBody::AgentContext(AgentContextReq {
@@ -842,5 +848,23 @@ mod tests {
             let e = parse(&yaml, Path::new("/nonexistent")).unwrap_err();
             assert_eq!(format!("{e:#}"), want);
         }
+    }
+
+    #[test]
+    fn a_mixin_agent_instructions_filename_warns() {
+        let y = "schemaVersion: \"2\"\nkind: mixin\nname: m\nagentInstructions:\n  filename: X.md\n  \
+                 content: hi\n";
+        let (_, w) = parse_warn(y, Path::new("/nonexistent")).unwrap();
+        assert_eq!(
+            w,
+            [
+                "warning: kit m: agentInstructions.filename is only used for kind \"sandbox\", not \"mixin\""
+            ]
+        );
+        let y = y
+            .replace("mixin", "sandbox")
+            .replace("name: m", "name: m\nsandbox:\n  image: a:1");
+        let (_, w) = parse_warn(&y, Path::new("/nonexistent")).unwrap();
+        assert!(w.is_empty(), "{w:?}");
     }
 }
