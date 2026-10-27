@@ -6,7 +6,7 @@ use std::path::Path;
 
 use anyhow::{Context, Result, bail};
 
-use super::lifecycle::{build_kit_request, resolve_clone};
+use super::lifecycle::{kit_plan, kit_target, resolve_clone};
 use super::plan;
 use super::{Ctx, RunArgs, Unsupported};
 use crate::agents;
@@ -42,10 +42,11 @@ pub fn run<R: Runner>(ctx: &mut Ctx<R>, a: &RunArgs) -> Result<i32> {
                     "specify an agent (e.g. `sbt run claude`) or the --name of an existing sandbox"
                 );
             }
-            let (mut req, kits) = build_kit_request(ctx, &a.targets, &a.opts, true)?;
+            // The name first: attaching to an existing sandbox loads no kits.
+            let (mut req, workload) = kit_target(ctx, &a.targets, &a.opts, true)?;
             match sandbox::find(&ctx.vm, &req.name)? {
                 Some(sb) => {
-                    if kits.is_some() {
+                    if workload.is_some() {
                         eprintln!(
                             "warning: kits only apply when a sandbox is created; {} already exists",
                             sb.name()
@@ -54,6 +55,7 @@ pub fn run<R: Runner>(ctx: &mut Ctx<R>, a: &RunArgs) -> Result<i32> {
                     (sb, false)
                 }
                 None => {
+                    let kits = workload.map(|w| kit_plan(ctx, w, &a.opts)).transpose()?;
                     resolve_clone(&mut req, &a.opts)?;
                     (
                         plan::create(ctx, &mut req, &a.opts.deny_network, kits.as_ref())?,
@@ -533,6 +535,35 @@ mod tests {
         assert_eq!(
             t.ctx.vm.runner().call_lines().last().unwrap(),
             "machine stop -n sbx-toolbox-proj"
+        );
+    }
+
+    #[test]
+    fn attaching_to_an_existing_sandbox_loads_no_kits() {
+        let mut t = test_env(&[("SMOLBENTO_KIT_ALLOW_LOCAL", "true")]);
+        created(&t, "running");
+        t.ctx.vm.runner().interactive_exit(0);
+        // Loading either would fail: the path doesn't exist.
+        sbt(
+            &mut t.ctx,
+            &[
+                "run",
+                "claude",
+                "--kit",
+                "./no-such-kit",
+                "--kit-arg",
+                "a=1",
+            ],
+        )
+        .unwrap();
+        assert_eq!(t.ctx.vm.runner().interactive_calls().len(), 1);
+        assert!(
+            !t.ctx
+                .vm
+                .runner()
+                .call_lines()
+                .iter()
+                .any(|l| l.contains("_builder") || l.starts_with("machine create"))
         );
     }
 

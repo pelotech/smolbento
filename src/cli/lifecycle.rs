@@ -11,7 +11,7 @@ use super::{CreateArgs, Ctx, PruneArgs, ResetArgs, RmArgs, SandboxOpts, confirm}
 use crate::agents;
 use crate::kits::args::ArgValues;
 use crate::kits::load;
-use crate::kits::model::{Content, Kind};
+use crate::kits::model::{Content, Kind, Kit};
 use crate::kits::resolve::{Plan, resolve};
 use crate::sandbox::{self, CreateRequest, Sandbox, name, options, session};
 use crate::smolvm::Runner;
@@ -112,6 +112,19 @@ pub(crate) fn build_kit_request<R: Runner>(
     opts: &SandboxOpts,
     default_to_cwd: bool,
 ) -> Result<(CreateRequest, Option<Plan>)> {
+    let (req, workload) = kit_target(ctx, targets, opts, default_to_cwd)?;
+    let plan = workload.map(|w| kit_plan(ctx, w, opts)).transpose()?;
+    Ok((req, plan))
+}
+
+/// The first half of `build_kit_request`: the request (so its name) and the workload, loading
+/// nothing but a workload kit given as the target. `None` when there are no kits.
+pub(crate) fn kit_target<R: Runner>(
+    ctx: &Ctx<R>,
+    targets: &[String],
+    opts: &SandboxOpts,
+    default_to_cwd: bool,
+) -> Result<(CreateRequest, Option<Kit>)> {
     let (target, paths) = targets.split_first().context("specify an agent")?;
     let kit_args = !opts.kit_arg.is_empty() || !opts.kit_args_file.is_empty();
     let preset = agents::find(target);
@@ -124,12 +137,11 @@ pub(crate) fn build_kit_request<R: Runner>(
             None,
         ));
     }
-    let args = ArgValues::parse(&opts.kit_args_file, &opts.kit_arg)?;
-    let (req, workload) = match preset {
+    Ok(match preset {
         Some(agent) => {
             let req = build_request(ctx, target, paths, opts, default_to_cwd)?;
             let workload = load::preset_kit(agent, &req.image);
-            (req, workload)
+            (req, Some(workload))
         }
         None => {
             if !looks_like_kit(ctx, target) {
@@ -138,20 +150,31 @@ pub(crate) fn build_kit_request<R: Runner>(
             if opts.template.is_some() {
                 bail!("-t can't be combined with a workload kit");
             }
-            let kit = load::load(ctx, target)?;
+            let mut kit = load::load(ctx, target)?;
             if kit.kind == Kind::Mixin {
                 bail!(
                     "{target} is a mixin; add it with --kit to an agent, e.g. sbt run shell --kit {target}"
                 );
+            }
+            // An image with neither Entrypoint nor Cmd gets a shell; recorded in `sbx.command`
+            // so every attach launches the same thing.
+            if kit.command.is_none() {
+                let shell = agents::find("shell").expect("the shell preset");
+                kit.command = Some(shell.command.iter().map(|s| s.to_string()).collect());
             }
             let mut req = base_request(ctx, &kit.name, paths, opts, default_to_cwd)?;
             if let Content::Image(image) = &kit.content {
                 req.image = image.clone();
                 req.docker = ctx.settings.bool("docker.enabled")? && agents::is_docker_image(image);
             }
-            (req, kit)
+            (req, Some(kit))
         }
-    };
+    })
+}
+
+/// The second half of `build_kit_request`: kit args, the `--kit` mixins, and the resolved plan.
+pub(crate) fn kit_plan<R: Runner>(ctx: &Ctx<R>, workload: Kit, opts: &SandboxOpts) -> Result<Plan> {
+    let args = ArgValues::parse(&opts.kit_args_file, &opts.kit_arg)?;
     let mixins = opts
         .kit
         .iter()
@@ -159,7 +182,7 @@ pub(crate) fn build_kit_request<R: Runner>(
         .collect::<Result<Vec<_>>>()?;
     let plan = resolve(workload, mixins, &args)?;
     plan.warn_skipped();
-    Ok((req, Some(plan)))
+    Ok(plan)
 }
 
 /// A path or a registry reference rather than a misspelt agent, which mustn't reach a registry.
@@ -1471,6 +1494,33 @@ mod tests {
             "{create}"
         );
         assert!(create.contains("--label sbx.agent=toolbox"), "{create}");
+    }
+
+    #[test]
+    fn a_workload_kit_without_a_command_launches_a_shell() {
+        let mut t = kit_env();
+        let dir = tempfile::tempdir().unwrap();
+        let kit = dir.path().join("bare");
+        std::fs::create_dir(&kit).unwrap();
+        std::fs::write(
+            kit.join("spec.yaml"),
+            "schemaVersion: \"2\"\nkind: sandbox\nname: bare\nsandbox:\n  image: img:1\n",
+        )
+        .unwrap();
+        let fake = t.ctx.vm.runner();
+        fake.ok(
+            &["machine", "status"],
+            &json("sbx-bare-proj", "created", "bare-proj"),
+        );
+        fake.once_fail(&["machine", "status"], "NOT_FOUND", "vm not found");
+        sbt(&mut t.ctx, &["create", &kit.display().to_string(), "."]).unwrap();
+        let shell = crate::agents::find("shell").unwrap().command;
+        let want = serde_json::to_string(shell).unwrap();
+        let create = create_line(&t);
+        assert!(
+            create.contains(&format!("--label sbx.command={want}")),
+            "{create}"
+        );
     }
 
     #[test]
