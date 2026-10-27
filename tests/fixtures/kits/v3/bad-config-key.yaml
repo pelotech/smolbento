@@ -1,0 +1,7 @@
+# syntax=docker/sandbox-kit:3
+schemaVersion: "3"
+kind: mixin
+displayName: bad
+capabilities:
+  - type: com.docker.sandbox/volume@1
+    config: {path: /x, sise: 1g}

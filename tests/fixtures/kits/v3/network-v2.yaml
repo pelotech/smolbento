@@ -1,0 +1,13 @@
+# syntax=docker/sandbox-kit:3
+schemaVersion: "3"
+kind: mixin
+displayName: net2
+provides: [net2]
+capabilities:
+  - type: com.docker.sandbox/network-policy@2
+    config:
+      install:
+        allow: [{hosts: [registry.npmjs.org]}]
+      runtime:
+        allow: [{hosts: [api.example.com], methods: [GET], paths: ["/v1/*"]}]
+        deny: [{hosts: [telemetry.example.com]}]
