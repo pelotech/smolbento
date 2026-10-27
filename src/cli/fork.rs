@@ -90,6 +90,8 @@ fn fork_one<R: Runner>(
         let labels = [
             (labels::NAME.to_string(), fork.to_string()),
             (labels::FORK_OF.to_string(), parent.name().to_string()),
+            // A child inherits its source's labels; a fork's age is its own.
+            (labels::CREATED.to_string(), ctx.now.to_string()),
         ];
         ctx.vm
             .branch(
@@ -180,7 +182,7 @@ mod tests {
     fn branch(fork: &str) -> String {
         format!(
             "machine branch --from sbx-a -n sbx-{fork} --label sbx.name={fork} \
-             --label sbx.fork-of=a"
+             --label sbx.fork-of=a --label sbx.created=1000000"
         )
     }
 
@@ -250,7 +252,7 @@ mod tests {
             branches(&t),
             vec![
                 "machine branch --from sbx-a -n sbx-try_2 --label sbx.name=try.2 \
-                 --label sbx.fork-of=a"
+                 --label sbx.fork-of=a --label sbx.created=1000000"
             ]
         );
     }

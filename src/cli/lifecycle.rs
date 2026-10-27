@@ -1227,6 +1227,28 @@ mod tests {
     }
 
     #[test]
+    fn prune_until_keeps_a_new_fork_of_an_old_parent() {
+        let mut t = test_env(&[]);
+        let parent = fork_json("a", "stopped", None);
+        // `fork` labels the copy with its own creation time (now), not the parent's.
+        let fork = machine_json(
+            "sbx-a-fork-1",
+            "stopped",
+            &[
+                ("sbx.name", "a-fork-1"),
+                ("sbx.created", "1000000"),
+                ("sbx.fork-of", "a"),
+            ],
+        );
+        let fake = t.ctx.vm.runner();
+        fake.ok(&["machine", "ls", "--json"], &format!("[{parent},{fork}]"));
+        fake.ok(&["machine", "status", "-n", "sbx-a"], &parent);
+        fake.ok(&["machine", "status", "-n", "sbx-a-fork-1"], &fork);
+        sbt(&mut t.ctx, &["prune", "-f", "--filter", "until=1m"]).unwrap();
+        assert!(deletes(&t).is_empty(), "{:?}", deletes(&t));
+    }
+
+    #[test]
     fn reset_deletes_forks_before_parents() {
         let mut t = test_env(&[]);
         with_forks(&t, "stopped", "stopped", "stopped");
