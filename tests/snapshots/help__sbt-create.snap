@@ -44,8 +44,8 @@ Options:
       --kit <KIT>
           Add a kit (not implemented yet)
 
-      --deny-network
-          Deny all network access for this sandbox (bound secrets' hosts stay reachable)
+      --deny-network <HOST>
+          Add a per-sandbox network deny rule at creation time. Can be specified multiple times. The rule applies only to the new sandbox and can be listed or removed later with 'sbt policy ls <NAME>' or 'sbt policy rm network --sandbox <NAME> --resource <HOST>'
 
       --skills <SKILLS>
           Agent skills: off, readonly or readwrite (not implemented yet)

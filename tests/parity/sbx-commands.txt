@@ -14,10 +14,11 @@ run claude . --clone
 run claude . --kit ghcr.io/example/kit:1 --kit-arg key=value
 run claude . --skills off
 run claude . --static-mcp github,linear
-run claude . --deny-network
+run claude . --deny-network evil.com
 create claude .
 create shell
 create --name dev gemini . --no-progress
+create claude . --deny-network evil.com,10.0.0.0/8 --deny-network tracker.example
 exec my-sandbox ls -la
 exec -it my-sandbox bash
 exec -u root -w /tmp -e A=1 my-sandbox env

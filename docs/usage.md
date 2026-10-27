@@ -130,7 +130,7 @@ sbt policy log                      # requests sandboxes made that were blocked
 sbt policy approval ls              # blocked hosts with no rule yet
 sbt policy approval respond registry.example.com allow
 sbt policy rm network --resource api.example.com
-sbt create --deny-network claude    # this sandbox gets deny-all, whatever the global mode
+sbt create claude . --deny-network evil.com,tracker.example   # deny rules for this sandbox only
 ```
 
 Rules take hosts (`api.x.com`), wildcards (`*.x.com`, `**.x.com`), IPs and CIDRs,
@@ -139,8 +139,13 @@ smolvm enforces a rule more loosely.
 
 Good to know:
 
-- `--deny-network` only applies when a sandbox is created; `sbt run --deny-network` on an existing
-  sandbox warns and changes nothing.
+- `run`/`create --deny-network <HOST>` adds a deny rule for the new sandbox only, exactly as
+  `sbt policy deny network --sandbox <NAME> <HOST>` does; repeat it or comma-separate hosts. It
+  applies only when the sandbox is created: on an existing sandbox `run` warns and changes nothing
+  (use `policy deny network --sandbox`). If the create fails, the rules it added are removed.
+- smolbento 0.2.0's `--deny-network` took no host and made the sandbox deny-all
+  (`deny_network = true` under `[sandboxes.<NAME>]` in `policy.toml`). Such sandboxes stay
+  deny-all, `policy reset` included; delete that line to give one the global mode again.
 - Hosts used by a sandbox's secrets, and their subdomains, are always reachable from it, so
   `policy deny` of such a host, or of one under it, is refused and names the secret's service.
 - `balanced` is Docker's list of 195 rules; smolbento allows those hosts on any port (sbx limits
@@ -152,7 +157,8 @@ Good to know:
   `policy ls --wide` and `policy check` show the details. `policy check` takes a port the same way
   (`host.example.com:8080`); without one it checks port 443.
 - `sbt policy reset` stops running sandboxes, then removes the mode and every rule;
-  `--deny-network` sandboxes stay deny-all. The next create or start asks for a mode again.
+  sandboxes deny-all from smolbento 0.2.0's `--deny-network` stay so. The next create or start
+  asks for a mode again.
 - Blocked requests come from smolvm's egress log. `policy approval` lists the hosts with no rule
   yet; the host is the approval id.
 

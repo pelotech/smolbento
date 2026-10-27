@@ -121,17 +121,16 @@ pub fn ensure_policy<R: Runner>(ctx: &Ctx<R>) -> Result<Policy> {
     Ok(policy)
 }
 
-/// Fills a new sandbox's network, deny CIDRs and credentials from the policy and secrets.
+/// Fills a new sandbox's network, deny CIDRs and credentials from the policy and secrets, after
+/// adding its `--deny-network` rules. Returns the ids of the rules it added (see `create`).
 pub fn prepare_create<R: Runner>(
     ctx: &Ctx<R>,
     req: &mut CreateRequest,
-    deny_network: bool,
-) -> Result<()> {
+    deny_network: &[String],
+) -> Result<Vec<String>> {
+    // Bad hosts fail before the policy prompt and before smolvm is asked for anything.
+    let denies = super::policy::parse_create_denies(deny_network)?;
     let mut policy = ensure_policy(ctx)?;
-    if deny_network {
-        policy.set_deny_network(&req.name, true);
-        policy.save(&ctx.paths)?;
-    }
     let secrets = SecretsFile::load(&ctx.paths)?;
     let services: Vec<String> = secrets
         .services_for(&req.name)
@@ -143,35 +142,50 @@ pub fn prepare_create<R: Runner>(
     req.credential_env = req.credentials.iter().map(|c| c.env_var.clone()).collect();
     req.credential_env.sort();
     req.credential_env.dedup();
+    let mut added = Vec::new();
+    if !denies.is_empty() {
+        added = super::policy::add_create_denies(
+            &mut policy,
+            &req.name,
+            &denies,
+            &secrets,
+            &services,
+            &req.credential_hosts,
+        )?;
+        // The last fallible step, so an error here leaves no rules for `create` to roll back.
+        policy.save(&ctx.paths)?;
+    }
     req.network = compile::network(&policy, &req.name, &req.credential_hosts);
     req.deny_cidrs = compile::deny_cidrs(&policy, &req.name);
     req.secrets = services;
-    Ok(())
+    Ok(added)
 }
 
-/// Prepares, creates and starts a new sandbox. When that fails before smolvm has the machine, a
-/// `--deny-network` flag recorded for it is dropped again, so a later create of the same name
-/// isn't silently deny-all.
+/// Prepares, creates and starts a new sandbox. When that fails before smolvm has the machine, the
+/// `--deny-network` rules this create added are dropped again; rules the sandbox name already had
+/// stay.
 pub fn create<R: Runner>(
     ctx: &Ctx<R>,
     req: &mut CreateRequest,
-    deny_network: bool,
+    deny_network: &[String],
 ) -> Result<Sandbox> {
-    // Before prepare_create, which may prompt and records --deny-network.
+    // Before prepare_create, which may prompt and adds the --deny-network rules.
     if sandbox::find(&ctx.vm, &req.name)?.is_some() {
         bail!("sandbox '{}' already exists", req.name);
     }
+    let mut added = Vec::new();
     let result = (|| {
-        prepare_create(ctx, req, deny_network)?;
+        added = prepare_create(ctx, req, deny_network)?;
         let plan = start_plan(ctx, &sandbox::create::meta(req))?;
         sandbox::create(&ctx.vm, req, &plan)
     })();
-    if result.is_err() && deny_network && matches!(sandbox::find(&ctx.vm, &req.name), Ok(None)) {
+    if result.is_err() && !added.is_empty() && matches!(sandbox::find(&ctx.vm, &req.name), Ok(None))
+    {
         // Best effort: the create error is what matters.
-        if let Ok(mut policy) = Policy::load(&ctx.paths)
-            && policy.sandboxes.contains_key(&req.name)
-        {
-            policy.set_deny_network(&req.name, false);
+        if let Ok(mut policy) = Policy::load(&ctx.paths) {
+            for id in &added {
+                policy.remove_rules(Some(&req.name), Some(id), None);
+            }
             let _ = policy.save(&ctx.paths);
         }
     }
@@ -333,7 +347,7 @@ mod tests {
     }
 
     #[test]
-    fn prepare_create_binds_configured_services_and_deny_network() {
+    fn prepare_create_binds_configured_services() {
         let t = test_env(&[]);
         set_policy(&t, "mode = \"balanced\"");
         save_secret(&t, "anthropic", None, "sk-1");
@@ -341,7 +355,7 @@ mod tests {
             name: "s1".into(),
             ..Default::default()
         };
-        prepare_create(&t.ctx, &mut req, true).unwrap();
+        let added = prepare_create(&t.ctx, &mut req, &["evil.com".to_string()]).unwrap();
         assert_eq!(req.secrets, vec!["anthropic"]);
         assert_eq!(req.credential_env, vec!["ANTHROPIC_API_KEY"]);
         assert_eq!(req.credentials[0].env_var, "ANTHROPIC_API_KEY");
@@ -353,11 +367,40 @@ mod tests {
             panic!("restricted")
         };
         assert!(list.hosts().contains(&"api.anthropic.com".to_string()));
+        assert!(list.patterns().contains(&"registry.npmjs.org".to_string()));
+        let p = Policy::load(&t.ctx.paths).unwrap();
+        assert_eq!(added, vec![p.sandboxes["s1"].rules[0].id.clone()]);
+        assert!(!p.sandboxes["s1"].deny_network);
+    }
+
+    #[test]
+    fn legacy_deny_network_still_compiles_to_deny_all() {
+        // Written by v0.2.0's `--deny-network`.
+        let t = test_env(&[]);
+        set_policy(
+            &t,
+            "mode = \"balanced\"\n[sandboxes.s1]\ndeny_network = true\n",
+        );
+        save_secret(&t, "anthropic", None, "sk-1");
+        let mut req = CreateRequest {
+            name: "s1".into(),
+            ..Default::default()
+        };
+        assert!(prepare_create(&t.ctx, &mut req, &[]).unwrap().is_empty());
+        let NetworkSpec::Restricted(list) = &req.network else {
+            panic!("restricted")
+        };
+        assert!(list.hosts().contains(&"api.anthropic.com".to_string()));
         assert!(
             !list.patterns().contains(&"registry.npmjs.org".to_string()),
-            "deny-network ignores balanced"
+            "deny-all ignores balanced"
         );
-        assert!(Policy::load(&t.ctx.paths).unwrap().sandboxes["s1"].deny_network);
+        let plan = start_plan(&t.ctx, &meta("s1", &[], &[])).unwrap();
+        assert!(matches!(plan.network, NetworkSpec::Restricted(_)));
+        let mut p = Policy::load(&t.ctx.paths).unwrap();
+        assert!(p.sandboxes["s1"].deny_network, "still read");
+        p.reset();
+        assert!(p.sandboxes["s1"].deny_network, "reset keeps it");
     }
 
     #[test]

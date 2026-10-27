@@ -222,9 +222,11 @@ pub struct SandboxOpts {
     pub kit_arg: Vec<String>,
     #[arg(long = "kit-args-file", hide = true)]
     pub kit_args_file: Vec<PathBuf>,
-    /// Deny all network access for this sandbox (bound secrets' hosts stay reachable)
-    #[arg(long = "deny-network")]
-    pub deny_network: bool,
+    /// Add a per-sandbox network deny rule at creation time. Can be specified multiple times.
+    /// The rule applies only to the new sandbox and can be listed or removed later with
+    /// 'sbt policy ls <NAME>' or 'sbt policy rm network --sandbox <NAME> --resource <HOST>'
+    #[arg(long = "deny-network", value_name = "HOST", value_delimiter = ',')]
+    pub deny_network: Vec<String>,
     /// Agent skills: off, readonly or readwrite (not implemented yet)
     #[arg(long)]
     pub skills: Option<String>,
