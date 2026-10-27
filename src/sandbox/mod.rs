@@ -724,9 +724,10 @@ pub fn run_startup<R: Runner>(vm: &Smolvm<R>, sb: &Sandbox, script: Option<&str>
         })
         .context(what)?;
     if out.code != 0 {
-        // The runner writes only to its log, so stderr is smolvm's own error.
-        if !out.stderr.trim().is_empty() {
-            return Err(anyhow!(SmolvmError::from_output(&out).message).context(what));
+        // The runner writes only to its log; a smolvm error envelope means smolvm failed. Any
+        // other stderr comes from the guest, so the start gets sbx's text.
+        if let Some(e) = SmolvmError::from_json(&out) {
+            return Err(anyhow!(e.message).context(what));
         }
         anyhow::bail!("kit startup exited with code {}", out.code);
     }
@@ -1815,6 +1816,26 @@ mod tests {
             format!("{err:#}"),
             "running the kits' startup hooks: agent gone"
         );
+    }
+
+    /// Guest stderr (here the shell's, before the runner's redirect) isn't smolvm's error.
+    #[test]
+    fn startup_stderr_without_a_smolvm_error_gets_sbxs_text() {
+        let fake = FakeRunner::new();
+        fake.ok(&["machine"], "");
+        fake.on(
+            &["machine", "exec", "--name", "sbx-r", "-u", "root", "--"],
+            crate::smolvm::Output {
+                code: 2,
+                stderr: "sh: can't create /var/log/sbx-kit-startup.log: Read-only file system\n"
+                    .into(),
+                ..Default::default()
+            },
+        );
+        let vm = Smolvm::new(fake);
+        let (sb, _) = clone_sandbox();
+        let err = run_startup(&vm, &sb, None).unwrap_err();
+        assert_eq!(format!("{err:#}"), "kit startup exited with code 2");
     }
 
     #[test]
