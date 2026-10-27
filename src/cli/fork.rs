@@ -133,7 +133,7 @@ fn branch_hint(e: anyhow::Error, parent: &str) -> anyhow::Error {
     };
     if message.contains("was not started as branchable") {
         return anyhow!(
-            "{parent} was started before fork support; restart it once \
+            "{parent} was started without fork support; restart it once \
              (`sbt stop {parent} && sbt start {parent}`) to enable fork"
         );
     }
@@ -471,7 +471,7 @@ mod tests {
         let err = format!("{:#}", sbt(&mut t.ctx, &["fork", "a"]).unwrap_err());
         assert!(
             err.contains(
-                "a was started before fork support; restart it once \
+                "a was started without fork support; restart it once \
                  (`sbt stop a && sbt start a`) to enable fork"
             ),
             "{err}"
