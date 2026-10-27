@@ -45,6 +45,11 @@ pub fn pull_digest(reference: &str, digest: &str, cache: &Path) -> Result<Kit> {
     pull_kit(reference, Some(digest), cache)
 }
 
+/// Pulls a plain image (no kit annotation required) into an OCI layout; returns its directory.
+pub fn pull_image(reference: &str, cache: &Path) -> Result<PathBuf> {
+    pull_layout(reference, None, cache, false)
+}
+
 fn pull_kit(reference: &str, pin: Option<&str>, cache: &Path) -> Result<Kit> {
     let dir = pull_layout(reference, pin, cache, true)?;
     read_layout(&dir, Source::Registry(reference.to_string()))
@@ -234,7 +239,7 @@ fn kit_descriptor(manifest: &Value, what: &str) -> Result<String> {
 }
 
 /// `<hex>` of a `sha256:<hex>` digest. Digests become file names, so anything else is refused.
-fn hex_of(digest: &str) -> Result<&str> {
+pub(crate) fn hex_of(digest: &str) -> Result<&str> {
     digest
         .strip_prefix("sha256:")
         .filter(|h| h.len() == 64 && h.bytes().all(|c| matches!(c, b'0'..=b'9' | b'a'..=b'f')))
@@ -245,11 +250,11 @@ fn hex(bytes: &[u8]) -> String {
     bytes.iter().map(|b| format!("{b:02x}")).collect()
 }
 
-fn sha256_digest(data: &[u8]) -> String {
+pub(crate) fn sha256_digest(data: &[u8]) -> String {
     format!("sha256:{}", hex(&Sha256::digest(data)))
 }
 
-fn store_dir(cache: &Path) -> PathBuf {
+pub(crate) fn store_dir(cache: &Path) -> PathBuf {
     cache.join("blobs").join("sha256")
 }
 
@@ -258,7 +263,7 @@ fn blob_path(cache: &Path, digest: &str) -> Result<PathBuf> {
 }
 
 /// Stores a blob whose digest the caller computed (the manifest).
-fn put_bytes(cache: &Path, digest: &str, data: &[u8]) -> Result<()> {
+pub(crate) fn put_bytes(cache: &Path, digest: &str, data: &[u8]) -> Result<()> {
     let path = blob_path(cache, digest)?;
     if path.exists() {
         return Ok(());
@@ -505,7 +510,7 @@ fn credential_helper(name: &str, server: &str) -> Option<RegistryAuth> {
 }
 
 #[cfg(test)]
-mod fixtures {
+pub(crate) mod fixtures {
     use super::*;
 
     /// Writes a one-manifest OCI layout into `dir`; returns the manifest digest.
