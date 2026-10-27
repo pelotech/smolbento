@@ -6,6 +6,8 @@ use std::path::Path;
 use anyhow::{Context, Result, bail};
 
 use super::Ctx;
+use crate::kits::apply::apply;
+use crate::kits::resolve::Plan;
 use crate::policy::{Mode, Policy, compile};
 use crate::sandbox::{self, CloneStep, CreateRequest, Meta, Sandbox, StartPlan, name};
 use crate::secrets::{SecretsFile, resolve::resolve};
@@ -183,12 +185,15 @@ pub fn ensure_policy<R: Runner>(ctx: &Ctx<R>) -> Result<Policy> {
 }
 
 /// Fills a new sandbox's network, deny CIDRs and credentials from the policy and secrets, after
-/// adding its `--deny-network` rules. Returns the ids of the rules it added (see `create`).
+/// adding its `--deny-network` rules, and applies the resolved `kits` on top: their credentials
+/// merge with the user's secrets and their rules join the policy. Returns the ids of the rules it
+/// added (see `create`) and the kits' first-start steps.
 pub fn prepare_create<R: Runner>(
     ctx: &Ctx<R>,
     req: &mut CreateRequest,
     deny_network: &[String],
-) -> Result<Vec<String>> {
+    kits: Option<&Plan>,
+) -> Result<(Vec<String>, Option<sandbox::KitFirstStart>)> {
     // Bad hosts fail before the policy prompt and before smolvm is asked for anything.
     let denies = super::policy::parse_create_denies(deny_network)?;
     let mut policy = ensure_policy(ctx)?;
@@ -209,35 +214,81 @@ pub fn prepare_create<R: Runner>(
     req.credential_env = req.credentials.iter().map(|c| c.env_var.clone()).collect();
     req.credential_env.sort();
     req.credential_env.dedup();
+    req.secrets = services;
     let mut added = Vec::new();
+    let mut first_start = None;
+    if let Some(plan) = kits {
+        // In memory until the save below, so an error before it leaves the policy file alone.
+        let (steps, ids) = apply(
+            plan,
+            req,
+            &mut policy,
+            &secrets,
+            &ctx.paths.kit_cache(),
+            &|| host_git_identity(ctx),
+        )?;
+        added.extend(ids.iter().cloned());
+        first_start = Some(sandbox::KitFirstStart {
+            steps,
+            restart_without: req.credential_install.clone(),
+            rule_ids: ids,
+        });
+    }
     if !denies.is_empty() {
-        added = super::policy::add_create_denies(
+        added.extend(super::policy::add_create_denies(
             &mut policy,
             &req.name,
             &denies,
             &secrets,
-            &services,
+            &req.secrets,
             &req.credential_hosts,
-        )?;
+        )?);
+    }
+    if !added.is_empty() {
         // The last fallible step, so an error here leaves no rules for `create` to roll back.
         policy.save(&ctx.paths)?;
     }
     req.network = compile::network(&policy, &req.name, &req.credential_hosts);
     req.deny_cidrs = compile::deny_cidrs(&policy, &req.name);
-    req.secrets = services;
-    Ok(added)
+    Ok((added, first_start))
 }
 
-/// Prepares, creates and starts a new sandbox. When that fails and smolvm doesn't have the machine
-/// (a failed kit first start removes it), the `--deny-network` rules, the kit's rules and the
-/// `--clone` remote this create added are dropped again; rules the sandbox name already had stay.
+/// The host's git `user.name` and `user.email`, for a kit's `git-identity@1`.
+fn host_git_identity<R: Runner>(ctx: &Ctx<R>) -> Option<(String, String)> {
+    let get = |key: &str| -> Option<String> {
+        let out = std::process::Command::new("git")
+            .args(["config", "--get", key])
+            .current_dir(&ctx.cwd)
+            .output()
+            .ok()?;
+        let v = String::from_utf8(out.stdout).ok()?.trim().to_string();
+        (out.status.success() && !v.is_empty()).then_some(v)
+    };
+    Some((get("user.name")?, get("user.email")?))
+}
+
+/// Prepares, creates and starts a new sandbox, applying `kits` when given. When that fails and
+/// smolvm doesn't have the machine (a failed kit first start removes it), the `--deny-network`
+/// rules, the kits' rules and the `--clone` remote this create added are dropped again; rules the
+/// sandbox name already had stay.
 pub fn create<R: Runner>(
     ctx: &Ctx<R>,
     req: &mut CreateRequest,
     deny_network: &[String],
-    kit: Option<sandbox::KitFirstStart>,
+    kits: Option<&Plan>,
 ) -> Result<Sandbox> {
-    // Before prepare_create, which may prompt and adds the --deny-network rules.
+    create_with(ctx, req, deny_network, kits, None)
+}
+
+/// `create`, or with `prepared` steps whose rules are already in the policy (tests).
+fn create_with<R: Runner>(
+    ctx: &Ctx<R>,
+    req: &mut CreateRequest,
+    deny_network: &[String],
+    kits: Option<&Plan>,
+    prepared: Option<sandbox::KitFirstStart>,
+) -> Result<Sandbox> {
+    // Before prepare_create, which may prompt and adds the --deny-network and kit rules.
     if sandbox::find(&ctx.vm, &req.name)?.is_some() {
         bail!("sandbox '{}' already exists", req.name);
     }
@@ -253,13 +304,17 @@ pub fn create<R: Runner>(
             );
         }
     }
-    // The kit's rules are already in the policy; they go too if the create fails.
-    let mut added: Vec<String> = kit.as_ref().map(|k| k.rule_ids.clone()).unwrap_or_default();
+    let mut added: Vec<String> = prepared
+        .as_ref()
+        .map(|k| k.rule_ids.clone())
+        .unwrap_or_default();
     // Only a remote this create made: one left by an earlier sandbox of this name (`run --rm`)
     // keeps its fetched branches.
     let mut added_remote = None;
     let result = (|| {
-        added.extend(prepare_create(ctx, req, deny_network)?);
+        let (ids, kit) = prepare_create(ctx, req, deny_network, kits)?;
+        added.extend(ids);
+        let kit = kit.or(prepared);
         if let Some(repo) = &repo
             && clone::add_remote(repo, &req.name)?
         {
@@ -487,7 +542,7 @@ mod tests {
             name: "s1".into(),
             ..Default::default()
         };
-        let added = prepare_create(&t.ctx, &mut req, &["evil.com".to_string()]).unwrap();
+        let (added, _) = prepare_create(&t.ctx, &mut req, &["evil.com".to_string()], None).unwrap();
         assert_eq!(req.secrets, vec!["anthropic"]);
         assert_eq!(req.credential_env, vec!["ANTHROPIC_API_KEY"]);
         assert_eq!(req.credentials[0].env_var, "ANTHROPIC_API_KEY");
@@ -518,7 +573,12 @@ mod tests {
             name: "s1".into(),
             ..Default::default()
         };
-        assert!(prepare_create(&t.ctx, &mut req, &[]).unwrap().is_empty());
+        assert!(
+            prepare_create(&t.ctx, &mut req, &[], None)
+                .unwrap()
+                .0
+                .is_empty()
+        );
         let NetworkSpec::Restricted(list) = &req.network else {
             panic!("restricted")
         };
@@ -796,7 +856,7 @@ mod tests {
             name: "s1".into(),
             ..Default::default()
         };
-        let result = create(&t.ctx, &mut req, deny_network, Some(kit));
+        let result = create_with(&t.ctx, &mut req, deny_network, None, Some(kit));
         (t, result, ids)
     }
 

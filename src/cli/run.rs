@@ -6,7 +6,7 @@ use std::path::Path;
 
 use anyhow::{Context, Result, bail};
 
-use super::lifecycle::{build_request, resolve_clone};
+use super::lifecycle::{build_kit_request, resolve_clone};
 use super::plan;
 use super::{Ctx, RunArgs, Unsupported};
 use crate::agents;
@@ -37,18 +37,26 @@ pub fn run<R: Runner>(ctx: &mut Ctx<R>, a: &RunArgs) -> Result<i32> {
     let (mut sb, created) = match existing {
         Some(sb) => (sb, false),
         None => {
-            let Some((agent, paths)) = a.targets.split_first() else {
+            if a.targets.is_empty() {
                 bail!(
                     "specify an agent (e.g. `sbt run claude`) or the --name of an existing sandbox"
                 );
-            };
-            let mut req = build_request(ctx, agent, paths, &a.opts, true)?;
+            }
+            let (mut req, kits) = build_kit_request(ctx, &a.targets, &a.opts, true)?;
             match sandbox::find(&ctx.vm, &req.name)? {
-                Some(sb) => (sb, false),
+                Some(sb) => {
+                    if kits.is_some() {
+                        eprintln!(
+                            "warning: kits only apply when a sandbox is created; {} already exists",
+                            sb.name()
+                        );
+                    }
+                    (sb, false)
+                }
                 None => {
                     resolve_clone(&mut req, &a.opts)?;
                     (
-                        plan::create(ctx, &mut req, &a.opts.deny_network, None)?,
+                        plan::create(ctx, &mut req, &a.opts.deny_network, kits.as_ref())?,
                         true,
                     )
                 }
@@ -72,20 +80,29 @@ pub fn run<R: Runner>(ctx: &mut Ctx<R>, a: &RunArgs) -> Result<i32> {
         return Ok(0);
     }
 
-    let agent = agents::find(&sb.meta.agent).with_context(|| {
-        format!(
-            "sandbox '{}' has no known agent ('{}')",
-            sb.name(),
-            sb.meta.agent
-        )
-    })?;
+    // A workload kit's command, else the preset's.
+    let command: Vec<String> = match &sb.meta.command {
+        Some(c) => c.clone(),
+        None => agents::find(&sb.meta.agent)
+            .with_context(|| {
+                format!(
+                    "sandbox '{}' has no known agent ('{}')",
+                    sb.name(),
+                    sb.meta.agent
+                )
+            })?
+            .command
+            .iter()
+            .map(|s| s.to_string())
+            .collect(),
+    };
     let spec = ExecSpec {
         name: sb.machine.clone(),
         user: Some("agent".into()),
         workdir: Some(sb.workdir()),
         interactive: true,
         tty: ctx.stdin_tty,
-        cmd: agents::command_with_args(agent.command, &a.agent_args),
+        cmd: agents::command_with_args(&command, &a.agent_args),
         ..Default::default()
     };
     let code = {
@@ -107,7 +124,8 @@ pub fn run<R: Runner>(ctx: &mut Ctx<R>, a: &RunArgs) -> Result<i32> {
             Ok(()) => session::clear(&sessions, sb.name()),
             Err(e) => eprintln!("warning: removing sandbox {}: {e:#}", sb.name()),
         }
-    } else if session::idle(&sessions, sb.name())
+    } else if !sb.meta.long_running
+        && session::idle(&sessions, sb.name())
         && let Err(e) = ctx.vm.stop(&sb.machine)
     {
         eprintln!("warning: stopping sandbox {}: {e:#}", sb.name());
@@ -374,8 +392,8 @@ mod tests {
         let mut t = test_env(&[]);
         t.ctx.vm.runner().ok(&["--version"], "smolvm 1.0.0\n");
         for args in [
-            &["run", "claude", "--kit", "x"][..],
-            &["create", "claude", "--kit", "x"][..],
+            &["run", "claude", "--skills", "off"][..],
+            &["create", "claude", "--skills", "off"][..],
             &["run", "claude", "--new"][..],
         ] {
             let err = sbt(&mut t.ctx, args).unwrap_err();
@@ -476,6 +494,61 @@ mod tests {
                 .unwrap();
             assert_eq!(super::fetch_on_exit(&t.ctx, &sb), want);
         }
+    }
+
+    fn kit_sandbox(t: &TestEnv, long_running: bool) {
+        let ws = t.ctx.cwd.display().to_string();
+        let mut labels = vec![
+            ("sbx.name", "toolbox-proj"),
+            ("sbx.agent", "toolbox"),
+            ("sbx.workspace", ws.as_str()),
+            ("sbx.command", r#"["/bin/agent","--x"]"#),
+        ];
+        if long_running {
+            labels.push(("sbx.long-running", "true"));
+        }
+        t.ctx.vm.runner().ok(
+            &["machine", "status"],
+            &machine_json("sbx-toolbox-proj", "running", &labels),
+        );
+        t.ctx.vm.runner().interactive_exit(0);
+    }
+
+    #[test]
+    fn run_launches_a_kit_sandboxs_command() {
+        let mut t = test_env(&[]);
+        kit_sandbox(&t, false);
+        sbt(
+            &mut t.ctx,
+            &["run", "--name", "toolbox-proj", "--", "--y", "z"],
+        )
+        .unwrap();
+        let ws = t.ctx.cwd.display().to_string();
+        assert_eq!(
+            t.ctx.vm.runner().interactive_calls()[0].join(" "),
+            format!(
+                "machine exec --name sbx-toolbox-proj -u agent -w {ws} -i -- /bin/agent --x --y z"
+            )
+        );
+        assert_eq!(
+            t.ctx.vm.runner().call_lines().last().unwrap(),
+            "machine stop -n sbx-toolbox-proj"
+        );
+    }
+
+    #[test]
+    fn a_long_running_sandbox_keeps_running_after_the_last_session() {
+        let mut t = test_env(&[]);
+        kit_sandbox(&t, true);
+        sbt(&mut t.ctx, &["run", "--name", "toolbox-proj"]).unwrap();
+        assert!(
+            !t.ctx
+                .vm
+                .runner()
+                .call_lines()
+                .iter()
+                .any(|l| l.starts_with("machine stop"))
+        );
     }
 
     #[test]

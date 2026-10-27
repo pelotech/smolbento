@@ -9,6 +9,10 @@ use anyhow::{Context, Result, bail};
 use super::plan;
 use super::{CreateArgs, Ctx, PruneArgs, ResetArgs, RmArgs, SandboxOpts, confirm};
 use crate::agents;
+use crate::kits::args::ArgValues;
+use crate::kits::load;
+use crate::kits::model::{Content, Kind};
+use crate::kits::resolve::{Plan, resolve};
 use crate::sandbox::{self, CreateRequest, Sandbox, name, options, session};
 use crate::smolvm::Runner;
 use crate::workspace::{Workspace, clone};
@@ -22,12 +26,35 @@ pub(crate) fn build_request<R: Runner>(
     opts: &SandboxOpts,
     default_to_cwd: bool,
 ) -> Result<CreateRequest> {
-    let agent = agents::find(agent_name).with_context(|| {
-        format!(
-            "unknown agent '{agent_name}' (agents: {}); kits are not implemented yet",
-            agents::names().join(", ")
-        )
-    })?;
+    let agent = agents::find(agent_name).with_context(|| unknown_agent(agent_name))?;
+    let mut req = base_request(ctx, agent.name, paths, opts, default_to_cwd)?;
+    let docker_enabled = ctx.settings.bool("docker.enabled")?;
+    // docker.enabled=false swaps the preset for its plain variant; an explicit -t is used as given.
+    req.image = match &opts.template {
+        Some(t) => t.clone(),
+        None if docker_enabled => agent.image.to_string(),
+        None => agents::plain_image(agent.image),
+    };
+    req.docker = docker_enabled && agents::is_docker_image(&req.image);
+    Ok(req)
+}
+
+fn unknown_agent(name: &str) -> String {
+    format!(
+        "unknown agent '{name}' (agents: {}); a kit is given by its path or registry reference",
+        agents::names().join(", ")
+    )
+}
+
+/// Everything but the image: `agent` is the preset or workload kit name (the `sbx.agent` label
+/// and the default name's prefix).
+fn base_request<R: Runner>(
+    ctx: &Ctx<R>,
+    agent: &str,
+    paths: &[String],
+    opts: &SandboxOpts,
+    default_to_cwd: bool,
+) -> Result<CreateRequest> {
     let mut workspaces = paths
         .iter()
         .map(|p| Workspace::parse(p, &ctx.cwd))
@@ -38,22 +65,13 @@ pub(crate) fn build_request<R: Runner>(
     let name = match &opts.name {
         Some(n) => n.clone(),
         None => name::default_name(
-            agent.name,
+            agent,
             workspaces
                 .first()
                 .map_or(ctx.cwd.as_path(), |w| w.path.as_path()),
         ),
     };
     name::validate(&name)?;
-
-    let docker_enabled = ctx.settings.bool("docker.enabled")?;
-    // docker.enabled=false swaps the preset for its plain variant; an explicit -t is used as given.
-    let image = match &opts.template {
-        Some(t) => t.clone(),
-        None if docker_enabled => agent.image.to_string(),
-        None => agents::plain_image(agent.image),
-    };
-    let docker = docker_enabled && agents::is_docker_image(&image);
 
     let cpus = match opts.cpus {
         Some(c) if c > 0 => c,
@@ -72,17 +90,81 @@ pub(crate) fn build_request<R: Runner>(
 
     Ok(CreateRequest {
         name,
-        agent: agent.name.into(),
-        image,
+        agent: agent.into(),
         workspaces,
         cpus,
         memory_mib,
         env,
         ports,
-        docker,
         created: ctx.now,
+        cpus_set: opts.cpus.is_some(),
+        memory_set: opts.memory.is_some(),
         ..Default::default()
     })
+}
+
+/// `build_request` for `targets` (an agent preset or a workload kit REF, then workspace paths)
+/// plus `--kit` mixins: loads and resolves the kits, without touching smolvm's machines or the
+/// policy. `plan::create` applies the plan. A preset without `--kit` gives no plan.
+pub(crate) fn build_kit_request<R: Runner>(
+    ctx: &Ctx<R>,
+    targets: &[String],
+    opts: &SandboxOpts,
+    default_to_cwd: bool,
+) -> Result<(CreateRequest, Option<Plan>)> {
+    let (target, paths) = targets.split_first().context("specify an agent")?;
+    let kit_args = !opts.kit_arg.is_empty() || !opts.kit_args_file.is_empty();
+    let preset = agents::find(target);
+    if preset.is_some() && opts.kit.is_empty() {
+        if kit_args {
+            bail!("--kit-arg needs a kit");
+        }
+        return Ok((
+            build_request(ctx, target, paths, opts, default_to_cwd)?,
+            None,
+        ));
+    }
+    let args = ArgValues::parse(&opts.kit_args_file, &opts.kit_arg)?;
+    let (req, workload) = match preset {
+        Some(agent) => {
+            let req = build_request(ctx, target, paths, opts, default_to_cwd)?;
+            let workload = load::preset_kit(agent, &req.image);
+            (req, workload)
+        }
+        None => {
+            if !looks_like_kit(ctx, target) {
+                bail!(unknown_agent(target));
+            }
+            if opts.template.is_some() {
+                bail!("-t can't be combined with a workload kit");
+            }
+            let kit = load::load(ctx, target)?;
+            if kit.kind == Kind::Mixin {
+                bail!(
+                    "{target} is a mixin; add it with --kit to an agent, e.g. sbt run shell --kit {target}"
+                );
+            }
+            let mut req = base_request(ctx, &kit.name, paths, opts, default_to_cwd)?;
+            if let Content::Image(image) = &kit.content {
+                req.image = image.clone();
+                req.docker = ctx.settings.bool("docker.enabled")? && agents::is_docker_image(image);
+            }
+            (req, kit)
+        }
+    };
+    let mixins = opts
+        .kit
+        .iter()
+        .map(|r| load::load(ctx, r))
+        .collect::<Result<Vec<_>>>()?;
+    let plan = resolve(workload, mixins, &args)?;
+    plan.warn_skipped();
+    Ok((req, Some(plan)))
+}
+
+/// A path or a registry reference rather than a misspelt agent, which mustn't reach a registry.
+fn looks_like_kit<R: Runner>(ctx: &Ctx<R>, target: &str) -> bool {
+    target.contains(['/', ':', '@']) || target.starts_with('.') || ctx.cwd.join(target).exists()
 }
 
 /// Resolves `--clone` into `req.clone`. Only for a sandbox that is about to be created: `--clone`
@@ -99,13 +181,12 @@ pub(crate) fn resolve_clone(req: &mut CreateRequest, opts: &SandboxOpts) -> Resu
 }
 
 pub fn create<R: Runner>(ctx: &mut Ctx<R>, a: &CreateArgs) -> Result<i32> {
-    let (agent, paths) = a
-        .targets
-        .split_first()
-        .context("specify an agent, e.g. `sbt create claude .`")?;
-    let mut req = build_request(ctx, agent, paths, &a.opts, false)?;
+    if a.targets.is_empty() {
+        bail!("specify an agent, e.g. `sbt create claude .`");
+    }
+    let (mut req, kits) = build_kit_request(ctx, &a.targets, &a.opts, false)?;
     resolve_clone(&mut req, &a.opts)?;
-    let sb = plan::create(ctx, &mut req, &a.opts.deny_network, None)?;
+    let sb = plan::create(ctx, &mut req, &a.opts.deny_network, kits.as_ref())?;
     writeln!(&ctx.out, "Created sandbox {}", sb.name())?;
     Ok(0)
 }
@@ -1287,5 +1368,234 @@ mod tests {
         with_forks(&t, "stopped", "stopped", "stopped");
         sbt(&mut t.ctx, &["reset", "-f"]).unwrap();
         assert_eq!(deletes(&t), vec!["a-fork-1", "a-fork-2", "a"]);
+    }
+
+    fn fixture(name: &str) -> String {
+        format!(
+            "{}/tests/fixtures/kits/v2/{name}",
+            env!("CARGO_MANIFEST_DIR")
+        )
+    }
+
+    fn kit_env() -> TestEnv {
+        test_env(&[("SMOLBENTO_KIT_ALLOW_LOCAL", "true")])
+    }
+
+    fn create_line(t: &TestEnv) -> String {
+        t.ctx
+            .vm
+            .runner()
+            .call_lines()
+            .into_iter()
+            .find(|l| l.starts_with("machine create"))
+            .expect("a machine create")
+    }
+
+    fn no_machine_calls(t: &TestEnv) -> bool {
+        !t.ctx
+            .vm
+            .runner()
+            .call_lines()
+            .iter()
+            .any(|l| l.starts_with("machine "))
+    }
+
+    #[test]
+    fn create_with_a_mixin_kit_applies_it() {
+        let mut t = kit_env();
+        // allow-all would leave the kit's allow rule out of the argv.
+        set_policy(&t, "mode = \"deny-all\"");
+        let fake = t.ctx.vm.runner();
+        fake.ok(
+            &["machine", "status"],
+            &json("sbx-shell-proj", "created", "shell-proj"),
+        );
+        fake.once_fail(&["machine", "status"], "NOT_FOUND", "vm not found");
+        let kit = fixture("tool-mixin");
+        sbt(
+            &mut t.ctx,
+            &[
+                "create",
+                "shell",
+                ".",
+                "--kit",
+                &kit,
+                "--kit-arg",
+                "mode=slow",
+                "--cpus",
+                "1",
+                "-m",
+                "1g",
+            ],
+        )
+        .unwrap();
+        let create = create_line(&t);
+        assert!(create.contains("-e TOOL_MODE=fast"), "{create}");
+        assert!(create.contains(":8080 "), "{create}");
+        assert!(
+            create.contains(&format!("--label sbx.kits=[\"{kit}\"]")),
+            "{create}"
+        );
+        assert!(create.contains("api.tool.example"), "{create}");
+        let lines = t.ctx.vm.runner().call_lines();
+        let start = lines
+            .iter()
+            .position(|l| l == "machine start -n sbx-shell-proj")
+            .unwrap();
+        let install = lines
+            .iter()
+            .position(|l| l.contains("machine exec") && l.contains("echo installed"))
+            .expect("the install hook runs");
+        assert!(start < install, "{lines:?}");
+        assert_eq!(t.stdout(), "Created sandbox shell-proj\n");
+    }
+
+    #[test]
+    fn create_with_a_workload_kit_names_the_sandbox_after_it() {
+        let mut t = kit_env();
+        let fake = t.ctx.vm.runner();
+        fake.ok(
+            &["machine", "status"],
+            &json("sbx-toolbox-proj", "created", "toolbox-proj"),
+        );
+        fake.once_fail(&["machine", "status"], "NOT_FOUND", "vm not found");
+        sbt(&mut t.ctx, &["create", &fixture("tool-workload"), "."]).unwrap();
+        let create = create_line(&t);
+        assert!(create.contains("-n sbx-toolbox-proj"), "{create}");
+        assert!(
+            create.contains("--image ghcr.io/example/toolbox:1"),
+            "{create}"
+        );
+        assert!(
+            create.contains(r#"--label sbx.command=["/bin/agent","--x"]"#),
+            "{create}"
+        );
+        assert!(create.contains("--label sbx.agent=toolbox"), "{create}");
+    }
+
+    #[test]
+    fn a_mixin_as_the_target_fails_before_smolvm() {
+        let mut t = kit_env();
+        let kit = fixture("tool-mixin");
+        let err = sbt(&mut t.ctx, &["create", &kit]).unwrap_err().to_string();
+        assert_eq!(
+            err,
+            format!(
+                "{kit} is a mixin; add it with --kit to an agent, e.g. sbt run shell --kit {kit}"
+            )
+        );
+        assert!(no_machine_calls(&t));
+    }
+
+    #[test]
+    fn bad_kit_flags_fail_before_smolvm() {
+        let kit = fixture("tool-mixin");
+        let workload = fixture("tool-workload");
+        for (args, want) in [
+            (
+                vec!["create", "shell", "--kit", &kit, "--kit-arg", "nope=1"],
+                "unknown kit argument nope",
+            ),
+            (
+                vec!["create", "shell", "--kit-arg", "mode=1"],
+                "--kit-arg needs a kit",
+            ),
+            (
+                vec!["create", &workload, "-t", "img:1"],
+                "-t can't be combined with a workload kit",
+            ),
+        ] {
+            let mut t = kit_env();
+            let err = format!("{:#}", sbt(&mut t.ctx, &args).unwrap_err());
+            assert!(err.contains(want), "{args:?}: {err}");
+            assert!(no_machine_calls(&t), "{args:?}");
+            assert!(
+                crate::policy::Policy::load(&t.ctx.paths)
+                    .unwrap()
+                    .sandboxes
+                    .is_empty()
+            );
+        }
+    }
+
+    #[test]
+    fn a_kit_create_on_an_existing_name_adds_no_rules() {
+        let mut t = kit_env();
+        t.ctx.vm.runner().ok(
+            &["machine", "status"],
+            &json("sbx-shell-proj", "stopped", "shell-proj"),
+        );
+        let err = sbt(
+            &mut t.ctx,
+            &["create", "shell", ".", "--kit", &fixture("tool-mixin")],
+        )
+        .unwrap_err()
+        .to_string();
+        assert!(err.contains("already exists"), "{err}");
+        assert!(sandbox_rules(&t, "shell-proj").is_empty());
+    }
+
+    #[test]
+    fn a_kit_binding_merges_with_a_global_secret_of_the_same_variable() {
+        let t = kit_env();
+        global_github_secret(&t);
+        let dir = tempfile::tempdir().unwrap();
+        std::fs::write(
+            dir.path().join("spec.yaml"),
+            "schemaVersion: \"2\"\nkind: mixin\nname: gh\ncredentials:\n  - service: github\n    \
+             apiKey:\n      name: GH_TOKEN\n      inject:\n        - domain: uploads.github.com\n",
+        )
+        .unwrap();
+        let (mut req, plan) = kit_request(&t, &["create", "shell", "--kit"], dir.path());
+        crate::cli::plan::prepare_create(&t.ctx, &mut req, &[], plan.as_ref()).unwrap();
+        let gh: Vec<_> = req
+            .credentials
+            .iter()
+            .filter(|c| c.env_var == "GH_TOKEN")
+            .collect();
+        assert_eq!(gh.len(), 1, "{:?}", req.credentials);
+        assert!(gh[0].hosts.contains(&"uploads.github.com".to_string()));
+        assert!(gh[0].hosts.contains(&"api.github.com".to_string()));
+        assert_eq!(req.secrets, vec!["github"]);
+    }
+
+    #[test]
+    fn a_kit_injecting_a_global_secrets_variable_differently_fails() {
+        let t = kit_env();
+        global_github_secret(&t);
+        let dir = tempfile::tempdir().unwrap();
+        std::fs::write(
+            dir.path().join("spec.yaml"),
+            "schemaVersion: \"2\"\nkind: mixin\nname: gh\ncredentials:\n  - service: github\n    \
+             apiKey:\n      name: GH_TOKEN\n      inject:\n        - domain: api.github.com\n          \
+             header: x-token\n",
+        )
+        .unwrap();
+        let (mut req, plan) = kit_request(&t, &["create", "shell", "--kit"], dir.path());
+        let err = crate::cli::plan::prepare_create(&t.ctx, &mut req, &[], plan.as_ref())
+            .unwrap_err()
+            .to_string();
+        assert!(err.contains("GH_TOKEN"), "{err}");
+        assert!(sandbox_rules(&t, "shell-proj").is_empty());
+    }
+
+    /// `build_kit_request` for `args` followed by `kit`.
+    fn kit_request(
+        t: &TestEnv,
+        args: &[&str],
+        kit: &std::path::Path,
+    ) -> (
+        crate::sandbox::CreateRequest,
+        Option<crate::kits::resolve::Plan>,
+    ) {
+        let kit = kit.display().to_string();
+        let argv: Vec<&str> = std::iter::once("sbt")
+            .chain(args.iter().copied())
+            .chain([kit.as_str(), "--cpus", "1", "-m", "1g"])
+            .collect();
+        let Some(Cmd::Create(a)) = Cli::try_parse_from(argv).unwrap().command else {
+            panic!("expected create");
+        };
+        super::build_kit_request(&t.ctx, &a.targets, &a.opts, true).unwrap()
     }
 }

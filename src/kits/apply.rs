@@ -104,6 +104,24 @@ pub fn apply(
         }
     }
 
+    // The user's own secrets' credentials, already in `req`: kit bindings merge with them.
+    let user_creds: Vec<(String, String)> = req
+        .credentials
+        .iter()
+        .map(|c| {
+            let service = req
+                .secrets
+                .iter()
+                .find(|s| {
+                    secrets
+                        .service(s)
+                        .is_some_and(|sv| sv.env_vars.contains(&c.env_var))
+                })
+                .cloned()
+                .unwrap_or_default();
+            (c.env_var.clone(), service)
+        })
+        .collect();
     let mut kit_rules: Vec<(String, Rules, Rules)> = m
         .network
         .iter()
@@ -142,7 +160,7 @@ pub fn apply(
             }
         }
         if kc.req.env.is_some() || !kc.req.inject.is_empty() {
-            bind_credential(kc, req, secrets)?;
+            bind_credential(kc, req, secrets, &user_creds)?;
         }
     }
 
@@ -255,9 +273,6 @@ pub fn apply(
         *policy = snapshot;
         return Err(e);
     }
-    for s in &plan.skipped {
-        eprintln!("warning: skipping optional capability {s}");
-    }
     for note in notes {
         eprintln!("{note}");
     }
@@ -265,8 +280,14 @@ pub fn apply(
 }
 
 /// Binds a kit credential through the user's secrets: a smolvm credential whose value
-/// `start` resolves from the service's secret.
-fn bind_credential(kc: &KitCred, req: &mut CreateRequest, secrets: &SecretsFile) -> Result<()> {
+/// `start` resolves from the service's secret. `user_creds`: (env var, service) of the
+/// credentials `req` already had from the user's secrets.
+fn bind_credential(
+    kc: &KitCred,
+    req: &mut CreateRequest,
+    secrets: &SecretsFile,
+    user_creds: &[(String, String)],
+) -> Result<()> {
     let c: &CredReq = &kc.req;
     let service = secrets.service(&c.service);
     if secrets.entry_for(&req.name, None, &c.service).is_none() {
@@ -344,16 +365,36 @@ fn bind_credential(kc: &KitCred, req: &mut CreateRequest, secrets: &SecretsFile)
     {
         name = env.to_ascii_lowercase();
     }
-    match req
-        .credentials
-        .iter_mut()
-        .find(|x| x.name == name && x.env_var == env)
-    {
+    // One variable holds one value: a binding of it merges with the existing one.
+    match req.credentials.iter_mut().find(|x| x.env_var == env) {
         Some(x) => {
-            // Two kits binding the same variable must agree on how smolvm injects it.
-            if x.set_header != set_header || req.credential_formats.get(&env) != fmt.as_ref() {
+            let user = user_creds.iter().find(|(e, _)| *e == env);
+            let owner = match user {
+                Some((_, s)) => Some(s),
+                None => req.credential_services.get(&env).or_else(|| {
+                    req.secrets.iter().find(|s| {
+                        secrets
+                            .service(s)
+                            .is_some_and(|sv| sv.env_vars.contains(&env))
+                    })
+                }),
+            };
+            if owner.is_some_and(|s| *s != c.service) {
                 bail!(
-                    "kit {}: the {} credential ({env}) is injected differently by another kit",
+                    "kit {}: {env} is already bound to the {} secret, not {}",
+                    kc.kit,
+                    owner.map_or("", |s| s.as_str()),
+                    c.service
+                );
+            }
+            // Two bindings of the same variable must agree on how smolvm injects it.
+            if x.set_header != set_header || req.credential_formats.get(&env) != fmt.as_ref() {
+                let other = match user {
+                    Some(_) => format!("your {} secret", c.service),
+                    None => "another kit".to_string(),
+                };
+                bail!(
+                    "kit {}: the {} credential ({env}) is injected differently by {other}",
                     kc.kit,
                     c.service
                 );
@@ -378,7 +419,9 @@ fn bind_credential(kc: &KitCred, req: &mut CreateRequest, secrets: &SecretsFile)
         req.credential_services
             .insert(env.clone(), c.service.clone());
     }
-    if c.install && !c.runtime && !req.credential_install.contains(&env) {
+    // The user's own secret stays set at runtime.
+    let user = user_creds.iter().any(|(e, _)| *e == env);
+    if c.install && !c.runtime && !user && !req.credential_install.contains(&env) {
         req.credential_install.push(env.clone());
     }
     let sorted_push = |v: &mut Vec<String>, items: &[String]| {

@@ -119,8 +119,8 @@ pub fn plain_image(image: &str) -> String {
 }
 
 /// sbx's rule for `-- ARGS`: flags are appended to the preset; a bare word replaces its flags.
-pub fn command_with_args(command: &[&str], args: &[String]) -> Vec<String> {
-    let mut cmd: Vec<String> = command.iter().map(|s| s.to_string()).collect();
+pub fn command_with_args<S: AsRef<str>>(command: &[S], args: &[String]) -> Vec<String> {
+    let mut cmd: Vec<String> = command.iter().map(|s| s.as_ref().to_string()).collect();
     match args.first() {
         None => {}
         Some(first) if first.starts_with('-') => cmd.extend(args.iter().cloned()),

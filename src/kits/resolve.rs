@@ -25,6 +25,16 @@ pub struct Plan {
     pub skipped: Vec<String>,
 }
 
+impl Plan {
+    /// One stderr line per skipped optional capability.
+    pub fn warn_skipped(&self) {
+        for s in &self.skipped {
+            let (kit, what) = s.split_once(": ").unwrap_or(("?", s));
+            eprintln!("warning: kit {kit}: skipping {what} (not supported)");
+        }
+    }
+}
+
 #[derive(Debug, Default)]
 pub struct Merged {
     pub install: Rules,

@@ -242,12 +242,14 @@ pub struct SandboxOpts {
     /// Work on a private clone of the git repo; its commits come back via the sandbox-<name> git remote
     #[arg(long)]
     pub clone: bool,
-    /// Add a kit (not implemented yet)
-    #[arg(long)]
+    /// Add a kit (repeatable)
+    #[arg(long, value_name = "REF")]
     pub kit: Vec<String>,
-    #[arg(long = "kit-arg", hide = true)]
+    /// Kit argument: NAME=VALUE, or KIT.NAME=VALUE for one kit (repeatable)
+    #[arg(long = "kit-arg", value_name = "NAME=VALUE")]
     pub kit_arg: Vec<String>,
-    #[arg(long = "kit-args-file", hide = true)]
+    /// Read kit arguments (NAME=VALUE lines) from a file (repeatable)
+    #[arg(long = "kit-args-file", value_name = "FILE")]
     pub kit_args_file: Vec<PathBuf>,
     /// Add a per-sandbox network deny rule at creation time. Can be specified multiple times.
     /// The rule applies only to the new sandbox and can be listed or removed later with
@@ -278,10 +280,6 @@ impl SandboxOpts {
     /// Rejects flags from later phases and Docker Cloud-only flags.
     pub fn check_supported(&self) -> Result<()> {
         let pending = [
-            (
-                !self.kit.is_empty() || !self.kit_arg.is_empty() || !self.kit_args_file.is_empty(),
-                "--kit",
-            ),
             (self.skills.is_some(), "--skills"),
             (self.static_mcp.is_some(), "--static-mcp"),
         ];
@@ -311,7 +309,7 @@ impl SandboxOpts {
 
 #[derive(Debug, Args)]
 pub struct RunArgs {
-    /// Agent, then workspace paths (default: the current directory)
+    /// Agent or workload kit, then workspace paths (default: the current directory)
     pub targets: Vec<String>,
     #[command(flatten)]
     pub opts: SandboxOpts,
@@ -332,7 +330,7 @@ pub struct RunArgs {
 
 #[derive(Debug, Args)]
 pub struct CreateArgs {
-    /// Agent, then workspace paths (none: a mountless sandbox)
+    /// Agent or workload kit, then workspace paths (none: a mountless sandbox)
     #[arg(required = true)]
     pub targets: Vec<String>,
     #[command(flatten)]
