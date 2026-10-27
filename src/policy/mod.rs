@@ -70,14 +70,27 @@ impl Rule {
     }
 }
 
+/// `created_via` of a kit's runtime rules: `kit:<kit>`.
+pub const KIT_VIA: &str = "kit:";
+/// `created_via` of a kit's install-phase rules: `kit-install:<kit>`. Only the steps that run the
+/// install hooks compile them (`compile::network_with`), so one left behind by an interrupted
+/// create never opens a later start.
+pub const KIT_INSTALL_VIA: &str = "kit-install:";
+
 impl Rule {
-    /// Where the rule came from: "kit" when a kit added it, else "local".
+    /// Where the rule came from: "kit" when a kit added it (runtime or install phase), else
+    /// "local".
     pub fn source(&self) -> &'static str {
-        if self.created_via.starts_with("kit:") {
+        if self.created_via.starts_with(KIT_VIA) || self.is_kit_install() {
             "kit"
         } else {
             "local"
         }
+    }
+
+    /// An install-phase kit rule.
+    pub fn is_kit_install(&self) -> bool {
+        self.created_via.starts_with(KIT_INSTALL_VIA)
     }
 }
 
@@ -119,9 +132,13 @@ fn normalise_methods(m: &str) -> Option<String> {
 }
 
 /// What a rule id hashes as its scope: kit rules get their kit too, so they never share an id
-/// with a user rule for the same resources.
+/// with a user rule for the same resources. A kit's install and runtime rules share the scope: an
+/// install rule that is also a runtime rule is the runtime rule, and outlives the install phase.
 fn id_scope(sandbox: &str, created_via: &str) -> String {
-    match created_via.strip_prefix("kit:") {
+    let kit = created_via
+        .strip_prefix(KIT_VIA)
+        .or_else(|| created_via.strip_prefix(KIT_INSTALL_VIA));
+    match kit {
         Some(kit) => format!("{sandbox}|kit={kit}"),
         None => sandbox.to_string(),
     }
@@ -214,7 +231,8 @@ impl Policy {
         Ok(id)
     }
 
-    /// Adds a kit's runtime rules for `sandbox` with `created_via = "kit:<kit>"`. Returns
+    /// Adds a kit's rules for `sandbox` with `created_via = "kit:<kit>"`, or for its install-phase
+    /// rules (`install`) `"kit-install:<kit>"`. Returns
     /// `(all, added)`: the ids of every rule now in place, and the subset this call created.
     /// Adding the same rules again is a no-op, so a caller rolling back removes only `added`
     /// (via `remove_rules_by_ids`), never a rule that was there before.
@@ -224,8 +242,9 @@ impl Policy {
         sandbox: &str,
         kit: &str,
         rules: &Rules,
+        install: bool,
     ) -> Result<(Vec<String>, Vec<String>)> {
-        let via = format!("kit:{kit}");
+        let via = format!("{}{kit}", if install { KIT_INSTALL_VIA } else { KIT_VIA });
         let (mut all, mut added) = (Vec::new(), Vec::new());
         for (decision, list) in [
             (Decision::Allow, &rules.allow),
@@ -252,6 +271,16 @@ impl Policy {
                         method.clone(),
                         path,
                     )?;
+                    // A runtime rule that an interrupted create left as an install rule becomes
+                    // a runtime rule again.
+                    if !install
+                        && let Some(r) = self
+                            .rules_mut(Some(sandbox))
+                            .iter_mut()
+                            .find(|r| r.id == id && r.is_kit_install())
+                    {
+                        r.created_via = via.clone();
+                    }
                     if !before.contains(&id) && !added.contains(&id) {
                         added.push(id.clone());
                     }
@@ -348,6 +377,8 @@ impl Policy {
         let Some(mut entry) = self.sandboxes.get(from).cloned() else {
             return;
         };
+        // Install-phase rules belong to `from`'s (unfinished) create, not to the copy.
+        entry.rules.retain(|r| !r.is_kit_install());
         for r in &mut entry.rules {
             r.id = rule_id(
                 &id_scope(to, &r.created_via),
@@ -673,7 +704,7 @@ mod tests {
             ],
             deny: vec![net("bad.com", &[], &[])],
         };
-        let (all, added) = p.add_kit_rules("sb", "gh", &rules).unwrap();
+        let (all, added) = p.add_kit_rules("sb", "gh", &rules, false).unwrap();
         // a.com, b.com x 2 paths, bad.com
         assert_eq!((all.len(), added.len()), (4, 4));
         assert!(!all.contains(&user), "kit id differs from the user's rule");
@@ -689,7 +720,7 @@ mod tests {
         assert_eq!(b.method.as_deref(), Some("GET,POST"));
 
         // Again: same ids, nothing new, no duplicates.
-        let (all2, added2) = p.add_kit_rules("sb", "gh", &rules).unwrap();
+        let (all2, added2) = p.add_kit_rules("sb", "gh", &rules, false).unwrap();
         assert_eq!((all2, added2.len()), (all.clone(), 0));
         assert_eq!(p.sandboxes["sb"].rules.len(), 5);
 
@@ -697,6 +728,56 @@ mod tests {
         assert_eq!(p.sandboxes["sb"].rules.len(), 1);
         assert_eq!(p.sandboxes["sb"].rules[0].id, user);
         p.remove_rules_by_ids("sb", &[user]);
+        assert!(!p.sandboxes.contains_key("sb"));
+    }
+
+    #[test]
+    fn install_rules_apply_only_when_named_and_are_not_forked() {
+        let mut p = Policy {
+            mode: Some(Mode::DenyAll),
+            ..Default::default()
+        };
+        let rules = |h: &str| Rules {
+            allow: vec![net(h, &[], &[])],
+            deny: vec![],
+        };
+        p.add_kit_rules("sb", "gh", &rules("run.kit.com"), false)
+            .unwrap();
+        let (_, install) = p
+            .add_kit_rules("sb", "gh", &rules("pkg.kit.com"), true)
+            .unwrap();
+        // The same host for install as for runtime is the runtime rule.
+        let (_, dup) = p
+            .add_kit_rules("sb", "gh", &rules("run.kit.com"), true)
+            .unwrap();
+        assert!(dup.is_empty());
+        let r = p.find(&install[0]).unwrap().0;
+        assert_eq!(
+            (r.created_via.as_str(), r.source()),
+            ("kit-install:gh", "kit")
+        );
+        let plain = format!("{:?}", compile::network(&p, "sb", &[]));
+        assert!(
+            plain.contains("run.kit.com") && !plain.contains("pkg.kit.com"),
+            "{plain}"
+        );
+        assert!(!compile::check(&p, Some("sb"), &[], "pkg.kit.com").allowed);
+        let with = format!("{:?}", compile::network_with(&p, "sb", &[], &install));
+        assert!(with.contains("pkg.kit.com"), "{with}");
+        p.copy_sandbox("sb", "fork");
+        assert!(
+            p.sandboxes["fork"]
+                .rules
+                .iter()
+                .all(|r| !r.is_kit_install())
+        );
+        // A runtime rule an interrupted create left as an install rule is a runtime one again.
+        let (_, again) = p
+            .add_kit_rules("sb", "gh", &rules("pkg.kit.com"), false)
+            .unwrap();
+        assert!(again.is_empty());
+        assert_eq!(p.find(&install[0]).unwrap().0.created_via, "kit:gh");
+        p.forget_sandbox("sb");
         assert!(!p.sandboxes.contains_key("sb"));
     }
 
@@ -710,7 +791,7 @@ mod tests {
             allow: vec![net("api.kit.com", &[], &[])],
             deny: vec![],
         };
-        p.add_kit_rules("sb", "gh", &rules).unwrap();
+        p.add_kit_rules("sb", "gh", &rules, false).unwrap();
         let spec = |sb: &str| format!("{:?}", compile::network(&p, sb, &[]));
         assert!(spec("sb").contains("api.kit.com"));
         assert!(!spec("other").contains("api.kit.com"));

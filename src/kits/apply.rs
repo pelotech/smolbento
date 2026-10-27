@@ -262,10 +262,10 @@ pub fn apply(
     let mut added = Vec::new();
     let mut add = |policy: &mut Policy| -> Result<()> {
         for (kit, _, runtime) in &kit_rules {
-            added.extend(policy.add_kit_rules(&req.name, kit, runtime)?.1);
+            added.extend(policy.add_kit_rules(&req.name, kit, runtime, false)?.1);
         }
         for (kit, install, _) in &kit_rules {
-            let new = policy.add_kit_rules(&req.name, kit, install)?.1;
+            let new = policy.add_kit_rules(&req.name, kit, install, true)?.1;
             steps.install_rules.extend(new.iter().cloned());
             added.extend(new);
         }
@@ -656,7 +656,12 @@ mod tests {
             ["pkg.example.com"]
         );
         for id in &added {
-            assert_eq!(policy.find(id).unwrap().0.created_via, "kit:net");
+            let via = &policy.find(id).unwrap().0.created_via;
+            if steps.install_rules.contains(id) {
+                assert_eq!(via, "kit-install:net");
+            } else {
+                assert_eq!(via, "kit:net");
+            }
         }
         // Applying again adds nothing new, so a rollback can't remove what was there.
         let mut again = request();

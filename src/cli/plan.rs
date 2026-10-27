@@ -52,20 +52,37 @@ pub fn credentials(secrets: &SecretsFile, services: &[String]) -> Result<Vec<Cre
 /// `meta.secrets`, cover `meta.credential_hosts` and use `meta.credential_env` (all recorded at
 /// create). Install-only credentials (`meta.credential_install`) are left out.
 pub fn start_plan<R: Runner>(ctx: &Ctx<R>, meta: &Meta) -> Result<StartPlan> {
-    plan_for(ctx, meta, false)
+    plan_for(ctx, meta, None)
 }
 
-/// `start_plan` for a create's first start, which also passes the install-only credentials.
-pub fn first_start_plan<R: Runner>(ctx: &Ctx<R>, meta: &Meta) -> Result<StartPlan> {
-    plan_for(ctx, meta, true)
+/// `start_plan` for a create's first start, which also passes the install-only credentials and
+/// opens the install-phase rules with these ids (the ones this create added).
+pub fn first_start_plan<R: Runner>(
+    ctx: &Ctx<R>,
+    meta: &Meta,
+    install_rules: &[String],
+) -> Result<StartPlan> {
+    plan_for(ctx, meta, Some(install_rules))
 }
 
-fn plan_for<R: Runner>(ctx: &Ctx<R>, meta: &Meta, install: bool) -> Result<StartPlan> {
+/// `install`: the first start's install-phase rule ids; `None` for any other start, which never
+/// opens install-phase rules (one left by an interrupted create stays shut).
+fn plan_for<R: Runner>(
+    ctx: &Ctx<R>,
+    meta: &Meta,
+    install_rules: Option<&[String]>,
+) -> Result<StartPlan> {
+    let install = install_rules.is_some();
     let sandbox = meta.name.as_str();
     // Like create (and sbx after `policy reset`), a start needs a chosen policy.
     let policy = ensure_policy(ctx)?;
     let secrets = SecretsFile::load(&ctx.paths)?;
-    let network = compile::network(&policy, sandbox, &meta.credential_hosts);
+    let network = compile::network_with(
+        &policy,
+        sandbox,
+        &meta.credential_hosts,
+        install_rules.unwrap_or_default(),
+    );
     let mut env = Vec::new();
     for name in &meta.secrets {
         let entry = secrets.entry_for(sandbox, meta.fork_of.as_deref(), name);
@@ -315,6 +332,19 @@ fn create_with<R: Runner>(
         let (ids, kit) = prepare_create(ctx, req, deny_network, kits)?;
         added.extend(ids);
         let kit = kit.or(prepared);
+        // The machine is created with this create's install-phase rules open: the first start's
+        // setup and install hooks run under them, until `drop_install_rules`.
+        if let Some(k) = &kit
+            && !k.steps.install_rules.is_empty()
+        {
+            let policy = Policy::load(&ctx.paths)?;
+            req.network = compile::network_with(
+                &policy,
+                &req.name,
+                &req.credential_hosts,
+                &k.steps.install_rules,
+            );
+        }
         if let Some(repo) = &repo
             && clone::add_remote(repo, &req.name)?
         {
@@ -322,19 +352,40 @@ fn create_with<R: Runner>(
         }
         let meta = sandbox::create::meta(req);
         let plan = match kit {
-            Some(kit) => StartPlan {
-                kit: Some(kit),
-                ..first_start_plan(ctx, &meta)?
-            },
+            Some(kit) => {
+                let plan = first_start_plan(ctx, &meta, &kit.steps.install_rules)?;
+                StartPlan {
+                    kit: Some(kit),
+                    ..plan
+                }
+            }
             None => start_plan(ctx, &meta)?,
         };
         let req: &CreateRequest = req;
         sandbox::create(&ctx.vm, req, &plan, |ids| drop_install_rules(ctx, req, ids))
     })();
-    if result.is_err()
-        && (!added.is_empty() || added_remote.is_some())
-        && matches!(sandbox::find(&ctx.vm, &req.name), Ok(None))
-    {
+    let rollback = result.is_err() && (!added.is_empty() || added_remote.is_some());
+    let gone = rollback
+        && match sandbox::find(&ctx.vm, &req.name) {
+            Ok(found) => found.is_none(),
+            Err(e) => {
+                // Unknown whether the sandbox is gone: keep what it added (`rm` drops it).
+                let name = &req.name;
+                eprintln!(
+                    "warning: couldn't check whether {name} still exists ({e:#}); what this create \
+                     added was kept, and `sbt rm {name}` removes it"
+                );
+                if !added.is_empty() {
+                    eprintln!(
+                        "warning: or remove its rules with `sbt policy rm network --sandbox {name} \
+                         --id <id>` (rule ids: {})",
+                        added.join(", ")
+                    );
+                }
+                false
+            }
+        };
+    if gone {
         // Best effort: the create error is what matters.
         if !added.is_empty()
             && let Ok(mut policy) = Policy::load(&ctx.paths)
@@ -762,7 +813,7 @@ mod tests {
         );
         assert_eq!(plan.remove, vec!["GH_TOKEN"]);
         // The create's first start has them, for the install hooks.
-        let first = first_start_plan(&t.ctx, &m).unwrap();
+        let first = first_start_plan(&t.ctx, &m, &[]).unwrap();
         assert!(
             first
                 .env
@@ -812,12 +863,15 @@ mod tests {
         let t = test_env(&[]);
         set_policy(&t, "mode = \"deny-all\"");
         let mut policy = Policy::load(&t.ctx.paths).unwrap();
-        let mut add = |host: &str| {
+        let mut add = |host: &str, via: &str| {
             policy
-                .add_rule(Some("s1"), Decision::Allow, host, "kit:k", None, None)
+                .add_rule(Some("s1"), Decision::Allow, host, via, None, None)
                 .unwrap()
         };
-        let ids = [add("registry.npmjs.org"), add("api.example.com")];
+        let ids = [
+            add("registry.npmjs.org", "kit-install:k"),
+            add("api.example.com", "kit:k"),
+        ];
         policy.save(&t.ctx.paths).unwrap();
         let fake = t.ctx.vm.runner();
         fake.fail(&["machine", "status"], "NOT_FOUND", "vm not found");
@@ -888,6 +942,67 @@ mod tests {
                 && !update.contains("registry.npmjs.org"),
             "{update}"
         );
+    }
+
+    #[test]
+    fn the_first_start_opens_this_creates_install_rules() {
+        let (t, result, _) = kit_create(false, &[]);
+        result.unwrap();
+        let lines = t.ctx.vm.runner().call_lines();
+        let start = lines
+            .iter()
+            .position(|l| l.starts_with("machine start"))
+            .unwrap_or_else(|| panic!("{lines:#?}"));
+        let update = &lines[start - 1];
+        assert!(
+            update.starts_with("machine update -n sbx-s1") && update.contains("registry.npmjs.org"),
+            "{lines:#?}"
+        );
+    }
+
+    #[test]
+    fn install_rules_left_by_an_interrupted_create_stay_shut() {
+        use crate::policy::Decision;
+        let t = test_env(&[]);
+        set_policy(&t, "mode = \"deny-all\"");
+        let mut policy = Policy::load(&t.ctx.paths).unwrap();
+        let install = policy
+            .add_rule(
+                Some("s1"),
+                Decision::Allow,
+                "registry.npmjs.org",
+                "kit-install:k",
+                None,
+                None,
+            )
+            .unwrap();
+        policy
+            .add_rule(
+                Some("s1"),
+                Decision::Allow,
+                "api.example.com",
+                "kit:k",
+                None,
+                None,
+            )
+            .unwrap();
+        policy.save(&t.ctx.paths).unwrap();
+        let m = meta("s1", &[], &[]);
+        let later = format!("{:?}", start_plan(&t.ctx, &m).unwrap().network);
+        assert!(
+            later.contains("api.example.com") && !later.contains("registry.npmjs.org"),
+            "{later}"
+        );
+        // Neither a first start without these ids nor a policy push opens them.
+        let first = format!("{:?}", first_start_plan(&t.ctx, &m, &[]).unwrap().network);
+        assert!(!first.contains("registry.npmjs.org"), "{first}");
+        let pushed = format!("{:?}", compile::network(&policy, "s1", &[]));
+        assert!(!pushed.contains("registry.npmjs.org"), "{pushed}");
+        let first = format!(
+            "{:?}",
+            first_start_plan(&t.ctx, &m, &[install]).unwrap().network
+        );
+        assert!(first.contains("registry.npmjs.org"), "{first}");
     }
 
     #[test]

@@ -600,7 +600,8 @@ fn ls_rows(policy: &Policy, opts: &LsOpts) -> Vec<LsRow> {
         }
         rows.push(LsRow {
             id: rule.id.clone(),
-            // Kit rules show their kit, e.g. `kit:github`.
+            // Kit rules show their kit, e.g. `kit:github`, or `kit-install:github` for an
+            // install-phase rule.
             source: match rule.source() {
                 "kit" => rule.created_via.clone(),
                 s => s.into(),
@@ -617,6 +618,8 @@ fn ls_rows(policy: &Policy, opts: &LsOpts) -> Vec<LsRow> {
     if let Some(want) = opts.source {
         rows.retain(|r| match r.source.split(':').next().unwrap_or("") {
             "default" => want == "local",
+            // An install-phase kit rule (`kit-install:<kit>`) is a kit rule.
+            "kit-install" => want == "kit",
             kind => kind == want,
         });
     }
@@ -925,7 +928,10 @@ mod tests {
             }],
             deny: vec![],
         };
-        p.add_kit_rules("my-sb", "gh", &rules).unwrap();
+        p.add_kit_rules("my-sb", "gh", &rules, false).unwrap();
+        let mut install = rules.clone();
+        install.allow[0].host = "pkg.kit.com".into();
+        p.add_kit_rules("my-sb", "gh", &install, true).unwrap();
         p.save(&t.ctx.paths).unwrap();
         let mut out = |args: &[&str]| {
             sbt(&mut t.ctx, args).unwrap();
@@ -933,6 +939,9 @@ mod tests {
         };
         let kit = out(&["policy", "ls", "my-sb", "--source", "kit"]);
         assert!(kit.contains("kit.com") && kit.contains("kit:gh"), "{kit}");
+        // An install-phase rule (left by an interrupted create) says so.
+        let line = kit.lines().find(|l| l.contains("pkg.kit.com")).expect(&kit);
+        assert!(line.contains("kit-install:gh"), "{kit}");
         assert!(!kit.contains("user.com"), "{kit}");
         let local = out(&["policy", "ls", "my-sb", "--source", "local"]);
         assert!(

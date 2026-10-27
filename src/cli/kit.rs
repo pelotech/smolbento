@@ -420,8 +420,14 @@ fn add_running<R: Runner>(
         .map(|(_, file, body)| (file.clone(), body.clone()))
         .collect();
 
+    // Opens this add's install-phase rules (and no others) until they're removed.
     let push = |policy: &Policy| -> Result<()> {
-        let network = compile::network(policy, name, &sb.meta.credential_hosts);
+        let network = compile::network_with(
+            policy,
+            name,
+            &sb.meta.credential_hosts,
+            &steps.install_rules,
+        );
         ctx.vm.update_network(&sb.machine, &network)
     };
     // `None`: opening the kit's network, before any hook ran.
