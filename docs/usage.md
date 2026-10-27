@@ -255,8 +255,12 @@ What a kit does, and when:
   error printed, so the same command works again once it's fixed. Its files and agent
   instructions are written once; a v2 kit's `files/workspace` and `${WORKDIR}` are the sandbox's
   primary workspace, or `/home/agent/workspace` without one.
-- **Every start**: its startup steps run in the background, alongside the agent. Their output goes
-  to `/var/log/smolbento/startup.log` in the sandbox; a failing step is logged, not fatal.
+- **Every start**: its startup steps run in order before the agent, and a failing one fails the
+  start (`kit startup exited with code N`). Steps marked `background: true` (such as the `docker`
+  kit's `dockerd`) start after them, alongside the agent; one of those failing is only logged.
+  Output goes to `/var/log/sbx-kit-startup.log` in the sandbox. If a step fails during create, the
+  sandbox is still created, with a warning, and stopped: each later start fails until the step
+  succeeds, as in sbx. `kit add` only warns.
 - **Credentials** come from your secrets: if a kit needs one you haven't set, the error says which
   `sbt secret set` command to run. A built-in service's secret only goes to that service's own
   hosts; see [Security](SECURITY.md#kits). A credential the kit needs only while installing is

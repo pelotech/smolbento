@@ -528,8 +528,14 @@ fn add_running<R: Runner>(
         }
         bail!(msg);
     }
-    if let Some((path, _, _)) = &startup {
-        sandbox::run_kit_startup(&ctx.vm, sb, path);
+    // Like a create (R30): the kit stays, and later starts fail until its hooks succeed.
+    if let Some((path, _, _)) = &startup
+        && let Err(e) = sandbox::run_startup(&ctx.vm, sb, Some(path))
+    {
+        eprintln!(
+            "warning: kit {kit_name}'s startup hooks failed: {e:#}; later starts fail until they \
+             succeed"
+        );
     }
     writeln!(&ctx.out, "Added kit {kit_name} to {name}")?;
     Ok(0)
@@ -922,8 +928,18 @@ mod tests {
             l.starts_with("machine cp ")
                 && l.ends_with(&format!("{MACHINE}:/etc/smolbento/startup.d/02-net.sh"))
         });
-        let started = pos("startup", &|l| {
-            l.contains(" -d -- sh -c ") && l.contains("'/etc/smolbento/startup.d/02-net.sh'")
+        let script = Some("/etc/smolbento/startup.d/02-net.sh");
+        let sync = pos("blocking startup", &|l| {
+            *l == format!(
+                "machine exec --name {MACHINE} -u root -- sh -c {}",
+                crate::sandbox::startup_cmd(false, script)
+            )
+        });
+        let started = pos("background startup", &|l| {
+            *l == format!(
+                "machine exec --name {MACHINE} -u root -d -- sh -c {}",
+                crate::sandbox::startup_cmd(true, script)
+            )
         });
         assert!(
             read < open
@@ -932,7 +948,8 @@ mod tests {
                 && close < file
                 && file < context
                 && context < startup_cp
-                && startup_cp < started,
+                && startup_cp < sync
+                && sync < started,
             "{lines:#?}"
         );
         assert_eq!(lines.last(), Some(&lines[started]), "{lines:#?}");
@@ -947,6 +964,43 @@ mod tests {
             guest::STARTUP_RUNNER
         );
         assert_eq!(kit_rules(&t), vec!["api.net.example".to_string()]);
+    }
+
+    /// R30 for `kit add`: the kit stays and the sandbox keeps running.
+    #[test]
+    fn a_failing_startup_hook_on_kit_add_only_warns() {
+        let mut t = kit_env();
+        set_policy(&t, "mode = \"deny-all\"\n");
+        dev_sandbox(&t, BASE);
+        v3_kit(&t, "net", NET_KIT, &[]);
+        let script = Some("/etc/smolbento/startup.d/02-net.sh");
+        t.ctx.vm.runner().on(
+            &[
+                "machine",
+                "exec",
+                "--name",
+                MACHINE,
+                "-u",
+                "root",
+                "--",
+                "sh",
+                "-c",
+                &crate::sandbox::startup_cmd(false, script),
+            ],
+            crate::smolvm::Output {
+                code: 2,
+                ..Default::default()
+            },
+        );
+        sbt(&mut t.ctx, &["kit", "add", "dev", "./net", "--yes"]).unwrap();
+        assert!(t.stdout().contains("Added kit net to dev"));
+        let lines = dev_calls(&t);
+        assert!(
+            !lines
+                .iter()
+                .any(|l| l.starts_with("machine stop") || l.contains(" -d -- sh -c ")),
+            "{lines:#?}"
+        );
     }
 
     #[test]

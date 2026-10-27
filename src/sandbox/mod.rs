@@ -23,10 +23,6 @@ pub use labels::Meta;
 /// `sbx.kits`). Newer ones get dockerd from the docker kit's startup hook (`kits/docker`).
 pub const DOCKER_START: &str = "pgrep -x dockerd >/dev/null || { rm -f /var/run/docker.pid; exec dockerd >/var/log/dockerd.log 2>&1; }";
 
-/// Started detached as root after every start: the kits' startup runner, when the sandbox has one.
-pub const STARTUP_START: &str =
-    "[ -x /etc/smolbento/startup ] || exit 0; exec /etc/smolbento/startup";
-
 /// Gives the image's `agent` user the host user's uid. virtiofs passes host uids through, so
 /// without this uid 1000 can't write a workspace owned by, say, uid 501 (verified on smolvm
 /// 1.32.2). Idempotent; skipped for images without an `agent` user.
@@ -338,8 +334,9 @@ pub fn start<R: Runner>(vm: &Smolvm<R>, sb: &Sandbox, plan: &StartPlan) -> Resul
     Ok(())
 }
 
-/// What follows `machine start`: a v3 workload's image user's uid, then the agent user's, dockerd for a pre-4a sandbox, the clone,
-/// then the kits' startup runner (a no-op without kits; deferred during a kit first start).
+/// What follows `machine start`: a v3 workload's image user's uid, then the agent user's, dockerd
+/// for a pre-4a sandbox, the clone, then the kits' startup hooks (a no-op without kits; deferred
+/// during a kit first start). A failed blocking startup hook fails the start.
 fn setup<R: Runner>(vm: &Smolvm<R>, sb: &Sandbox, plan: &StartPlan) -> Result<()> {
     if let Some(user) = &sb.meta.user
         && let Some(w) = map_image_user(vm, sb, user, plan.uid)?
@@ -370,9 +367,9 @@ fn setup<R: Runner>(vm: &Smolvm<R>, sb: &Sandbox, plan: &StartPlan) -> Result<()
             eprintln!("{w}");
         }
     }
-    // A kit first start runs it once its startup scripts are written.
+    // A kit first start runs them once its startup scripts are written.
     if plan.kit.is_none() {
-        run_startup(vm, sb);
+        run_startup(vm, sb, None)?;
     }
     Ok(())
 }
@@ -461,7 +458,18 @@ pub fn create<R: Runner>(
         });
     }
     sb.state = MachineState::Running;
-    run_startup(vm, &sb);
+    if let Err(e) = run_startup(vm, &sb, None) {
+        // Kept, as in sbx, but stopped: the next start runs the hooks again and fails until
+        // they succeed, rather than running the agent without them.
+        eprintln!("{}", create_warning(&e));
+        match vm.stop(&sb.machine) {
+            Ok(()) => sb.state = MachineState::Stopped,
+            Err(stop) => eprintln!(
+                "warning: stopping {} after its startup hooks failed: {stop:#}",
+                sb.name()
+            ),
+        }
+    }
     Ok(sb)
 }
 
@@ -689,47 +697,55 @@ fn last_lines(text: &str, n: usize) -> String {
     lines[lines.len().saturating_sub(n)..].join("\n")
 }
 
-/// Starts the kits' startup runner, detached as root. A failure only warns: the agent can run
-/// without its startup hooks, as in sbx.
-fn run_startup<R: Runner>(vm: &Smolvm<R>, sb: &Sandbox) {
-    let exec = vm.exec_captured(&ExecSpec {
-        name: sb.machine.clone(),
-        user: Some("root".into()),
-        detach: true,
-        cmd: vec!["sh".into(), "-c".into(), STARTUP_START.into()],
-        ..Default::default()
-    });
-    if let Err(e) = exec {
-        eprintln!(
-            "warning: starting the kits' startup hooks in {}: {e:#}",
-            sb.name()
-        );
-    }
+/// The startup runner's command, as root: its `sync` part, or with `background` the part the
+/// caller detaches. `script` limits it to one kit's `startup.d` script. A no-op without kits.
+pub fn startup_cmd(background: bool, script: Option<&str>) -> String {
+    let mode = if background { "background" } else { "sync" };
+    let script = script
+        .map(|s| format!(" {}", sh_quote(s)))
+        .unwrap_or_default();
+    format!(
+        "[ -x {p} ] || exit 0; exec {p} {mode}{script}",
+        p = guest::STARTUP_PATH
+    )
 }
 
-/// Starts one kit's `startup.d` script, detached as root and logging like the startup runner (a
-/// kit added to a running sandbox). A failure only warns, as for `run_startup`.
-pub fn run_kit_startup<R: Runner>(vm: &Smolvm<R>, sb: &Sandbox, script: &str) {
-    let exec = vm.exec_captured(&ExecSpec {
+/// Runs the kits' startup hooks (or one kit's `script`) as sbx does on every start: the blocking
+/// ones first, waiting for them, then the background ones, detached. A failed blocking hook is an
+/// error with sbx's text (its output is in the guest's startup log); failing to start the
+/// background ones only warns.
+pub fn run_startup<R: Runner>(vm: &Smolvm<R>, sb: &Sandbox, script: Option<&str>) -> Result<()> {
+    let exec = |background: bool| ExecSpec {
         name: sb.machine.clone(),
         user: Some("root".into()),
-        detach: true,
-        cmd: vec![
-            "sh".into(),
-            "-c".into(),
-            format!(
-                "mkdir -p /var/log/smolbento && exec sh {} >>/var/log/smolbento/startup.log 2>&1",
-                sh_quote(script)
-            ),
-        ],
+        detach: background,
+        cmd: vec!["sh".into(), "-c".into(), startup_cmd(background, script)],
         ..Default::default()
-    });
-    if let Err(e) = exec {
+    };
+    let what = "running the kits' startup hooks";
+    let out = vm.exec_output(&exec(false)).context(what)?;
+    if out.code != 0 {
+        // The runner writes only to its log, so stderr is smolvm's own error.
+        if !out.stderr.trim().is_empty() {
+            return Err(anyhow!(SmolvmError::from_output(&out).message).context(what));
+        }
+        anyhow::bail!("kit startup exited with code {}", out.code);
+    }
+    if let Err(e) = vm.exec_captured(&exec(true)) {
         eprintln!(
-            "warning: starting the kit's startup hooks in {}: {e:#}",
+            "warning: starting the kits' background startup hooks in {}: {e:#}",
             sb.name()
         );
     }
+    Ok(())
+}
+
+/// sbx's warning when a create's startup hooks fail (the sandbox is kept).
+fn create_warning(e: &anyhow::Error) -> String {
+    format!(
+        "warning: StartRuntime after create failed; kit commands.startup will fire on first run: \
+         {e:#}"
+    )
 }
 
 #[cfg(test)]
@@ -816,9 +832,19 @@ mod tests {
         );
         assert_eq!(
             lines[5],
-            format!("machine exec --name sbx-claude-myrepo -u root -d -- sh -c {STARTUP_START}")
+            format!(
+                "machine exec --name sbx-claude-myrepo -u root -- sh -c {}",
+                startup_cmd(false, None)
+            )
         );
-        assert_eq!(lines.len(), 6, "{lines:#?}");
+        assert_eq!(
+            lines[6],
+            format!(
+                "machine exec --name sbx-claude-myrepo -u root -d -- sh -c {}",
+                startup_cmd(true, None)
+            )
+        );
+        assert_eq!(lines.len(), 7, "{lines:#?}");
         assert_eq!(
             vm.runner().envs(),
             vec![vec![("TOK".to_string(), "secret".to_string())]]
@@ -847,7 +873,7 @@ mod tests {
             )
         );
         assert!(lines[4].ends_with("usermod -o -u 501 agent"), "{lines:#?}");
-        assert_eq!(lines.len(), 7, "{lines:#?}");
+        assert_eq!(lines.len(), 8, "{lines:#?}");
     }
 
     /// Runs `image_user_script` on the host against `etc`, with `id` and `usermod` shims that
@@ -1059,7 +1085,10 @@ mod tests {
             !lines.iter().any(|l| l.ends_with(DOCKER_START)),
             "no second dockerd start: {lines:#?}"
         );
-        assert!(lines.last().unwrap().ends_with(STARTUP_START), "{lines:#?}");
+        assert!(
+            lines.last().unwrap().ends_with(&startup_cmd(true, None)),
+            "{lines:#?}"
+        );
     }
 
     #[test]
@@ -1143,10 +1172,11 @@ mod tests {
         assert_eq!(lines[3], "machine start -n sbx-claude-myrepo --branchable");
         assert_eq!(
             lines.len(),
-            6,
+            7,
             "no dockerd for a non-docker sandbox: {lines:?}"
         );
-        assert!(lines[5].ends_with(STARTUP_START), "{lines:?}");
+        assert!(lines[5].ends_with(&startup_cmd(false, None)), "{lines:?}");
+        assert!(lines[6].ends_with(&startup_cmd(true, None)), "{lines:?}");
     }
 
     #[test]
@@ -1249,9 +1279,16 @@ mod tests {
         let (sb, plan) = clone_sandbox();
         start(&vm, &sb, &plan).unwrap();
         let lines = vm.runner().call_lines();
-        // The startup runner follows the clone.
-        assert!(lines.last().unwrap().ends_with(STARTUP_START), "{lines:?}");
-        let last2 = &lines[lines.len() - 3..lines.len() - 1];
+        // The startup hooks follow the clone.
+        assert!(
+            lines[lines.len() - 2].ends_with(&startup_cmd(false, None)),
+            "{lines:?}"
+        );
+        assert!(
+            lines.last().unwrap().ends_with(&startup_cmd(true, None)),
+            "{lines:?}"
+        );
+        let last2 = &lines[lines.len() - 4..lines.len() - 2];
         assert!(
             last2[0].contains("-u root") && last2[0].contains("chown agent"),
             "{last2:?}"
@@ -1428,7 +1465,8 @@ mod tests {
             l.starts_with("machine cp ")
                 && l.ends_with(&format!("{MACHINE}:/etc/smolbento/startup.d/01-k.sh"))
         });
-        let runner = exec_line("root", true, STARTUP_START);
+        let sync = exec_line("root", false, &startup_cmd(false, None));
+        let runner = exec_line("root", true, &startup_cmd(true, None));
         assert!(
             start < uid
                 && uid < install1
@@ -1439,10 +1477,14 @@ mod tests {
                 && context < startup_d,
             "{lines:#?}"
         );
+        assert_eq!(lines[lines.len() - 2], sync, "{lines:#?}");
         assert_eq!(lines.last().unwrap(), &runner, "{lines:#?}");
         assert_eq!(
-            lines.iter().filter(|l| **l == runner).count(),
-            1,
+            lines
+                .iter()
+                .filter(|l| **l == sync || **l == runner)
+                .count(),
+            2,
             "only after the kit files: {lines:#?}"
         );
         // R11: the post-install update replaces the whole list, so the CIDRs smolvm resolved
@@ -1519,7 +1561,10 @@ mod tests {
             "setup runs again: {lines:#?}"
         );
         assert_eq!(
-            lines.iter().filter(|l| l.ends_with(STARTUP_START)).count(),
+            lines
+                .iter()
+                .filter(|l| l.ends_with(&startup_cmd(false, None)))
+                .count(),
             1,
             "not on the restart either: {lines:#?}"
         );
@@ -1664,7 +1709,7 @@ mod tests {
     }
 
     #[test]
-    fn a_plain_start_only_adds_the_detached_startup_runner() {
+    fn a_plain_start_runs_the_blocking_startup_hooks_then_starts_the_background_ones() {
         let fake = FakeRunner::new();
         fake.ok(&["machine"], "");
         let vm = Smolvm::new(fake);
@@ -1680,18 +1725,138 @@ mod tests {
         )
         .unwrap();
         let lines = vm.runner().call_lines();
-        assert_eq!(lines.len(), 4, "{lines:#?}");
+        assert_eq!(lines.len(), 5, "{lines:#?}");
         assert!(lines[2].ends_with("usermod -o -u 501 agent"), "{lines:#?}");
+        // Both are no-ops without kits (no runner).
         assert_eq!(
             lines[3],
-            "machine exec --name sbx-r -u root -d -- sh -c \
-             [ -x /etc/smolbento/startup ] || exit 0; exec /etc/smolbento/startup"
+            "machine exec --name sbx-r -u root -- sh -c \
+             [ -x /etc/smolbento/startup ] || exit 0; exec /etc/smolbento/startup sync"
         );
-        assert!(STARTUP_START.contains(guest::STARTUP_PATH));
+        assert_eq!(
+            lines[4],
+            "machine exec --name sbx-r -u root -d -- sh -c \
+             [ -x /etc/smolbento/startup ] || exit 0; exec /etc/smolbento/startup background"
+        );
+    }
+
+    /// The blocking part of the startup runner in `sbx-r`, answering with exit `code`.
+    fn failing_startup(fake: &FakeRunner, machine: &str, code: i32) {
+        fake.on(
+            &[
+                "machine",
+                "exec",
+                "--name",
+                machine,
+                "-u",
+                "root",
+                "--",
+                "sh",
+                "-c",
+                &startup_cmd(false, None),
+            ],
+            crate::smolvm::Output {
+                code,
+                ..Default::default()
+            },
+        );
     }
 
     #[test]
-    fn a_failed_startup_runner_exec_is_only_a_warning() {
+    fn a_failing_startup_hook_fails_the_start_and_stops_the_machine() {
+        let fake = FakeRunner::new();
+        fake.ok(&["machine"], "");
+        failing_startup(&fake, "sbx-r", 3);
+        let vm = Smolvm::new(fake);
+        let (mut sb, plan) = clone_sandbox();
+        sb.meta.clone_repo = None;
+        let err = start(
+            &vm,
+            &sb,
+            &StartPlan {
+                clone: None,
+                ..plan
+            },
+        )
+        .unwrap_err();
+        assert_eq!(format!("{err:#}"), "kit startup exited with code 3");
+        let lines = vm.runner().call_lines();
+        assert_eq!(lines.last().unwrap(), "machine stop -n sbx-r", "{lines:#?}");
+        assert!(
+            !lines.iter().any(|l| l.ends_with(" background")),
+            "no background hooks: {lines:#?}"
+        );
+    }
+
+    #[test]
+    fn a_failing_startup_hook_at_create_warns_and_keeps_the_sandbox_stopped() {
+        let vm = created_vm();
+        failing_startup(vm.runner(), MACHINE, 1);
+        let sb = create(&vm, &request(), &kit_plan(&[]), |_| {
+            Ok(restricted(&["api.example.com"]))
+        })
+        .unwrap();
+        // Stopped, so the next run starts it and runs the hooks again (and fails like sbx).
+        assert_eq!(sb.state, MachineState::Stopped);
+        let lines = vm.runner().call_lines();
+        assert_eq!(
+            lines.last().unwrap(),
+            &format!("machine stop -n {MACHINE}"),
+            "{lines:#?}"
+        );
+        assert!(
+            !lines
+                .iter()
+                .any(|l| l.starts_with("machine delete") || l.ends_with(" background")),
+            "{lines:#?}"
+        );
+        assert_eq!(
+            create_warning(&anyhow!("kit startup exited with code 1")),
+            "warning: StartRuntime after create failed; kit commands.startup will fire on first \
+             run: kit startup exited with code 1"
+        );
+    }
+
+    #[test]
+    fn one_kits_startup_hooks_run_by_script() {
+        let fake = FakeRunner::new();
+        fake.ok(&["machine"], "");
+        let vm = Smolvm::new(fake);
+        let (sb, _) = clone_sandbox();
+        let script = "/etc/smolbento/startup.d/02-net.sh";
+        run_startup(&vm, &sb, Some(script)).unwrap();
+        assert_eq!(
+            vm.runner().call_lines(),
+            vec![
+                "machine exec --name sbx-r -u root -- sh -c [ -x /etc/smolbento/startup ] || \
+                 exit 0; exec /etc/smolbento/startup sync '/etc/smolbento/startup.d/02-net.sh'",
+                "machine exec --name sbx-r -u root -d -- sh -c [ -x /etc/smolbento/startup ] || \
+                 exit 0; exec /etc/smolbento/startup background \
+                 '/etc/smolbento/startup.d/02-net.sh'",
+            ]
+        );
+    }
+
+    #[test]
+    fn a_smolvm_error_running_the_startup_hooks_is_named() {
+        let fake = FakeRunner::new();
+        fake.ok(&["machine"], "");
+        fake.fail(
+            &["machine", "exec", "--name", "sbx-r", "-u", "root", "--"],
+            "EXEC_FAILED",
+            "agent gone",
+        );
+        let vm = Smolvm::new(fake);
+        let (sb, _) = clone_sandbox();
+        let err = run_startup(&vm, &sb, None).unwrap_err();
+        assert_eq!(
+            format!("{err:#}"),
+            "running the kits' startup hooks: agent gone"
+        );
+    }
+
+    #[test]
+    fn a_failed_background_startup_exec_is_only_a_warning() {
         let fake = FakeRunner::new();
         fake.ok(&["machine"], "");
         fake.fail(

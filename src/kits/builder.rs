@@ -475,7 +475,11 @@ mod tests {
             i("machine start -n sbx-_builder"),
             i("usermod -o -u 501 agent"),
             i("sbx-_builder:/etc/smolbento/startup.d/01-docker.sh"),
-            i(&format!("-d -- sh -c {}", sandbox::STARTUP_START)),
+            i(&format!(
+                "-u root -- sh -c {}",
+                sandbox::startup_cmd(false, None)
+            )),
+            i(&format!("-d -- sh -c {}", sandbox::startup_cmd(true, None))),
             i("-u root -- docker info"),
             i(&format!("-u root -- mkdir -p {n}/ctx")),
             i(&format!("sbx-_builder:{n}/ctx.tar")),
