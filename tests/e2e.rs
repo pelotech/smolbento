@@ -556,17 +556,34 @@ fn fork_round_trip() {
     guest_root(&e, "echo before > /root/before");
     guest_commit(&e.name, "before-fork");
 
+    // Guard the predicted names first: a partial failure still cleans up the copy it made.
+    let forks = Forks(vec![
+        format!("{}-fork-1", e.name),
+        format!("{}-fork-2", e.name),
+    ]);
     let names: Vec<String> = e
         .ok(&["fork", &e.name, "--count", "2"])
         .lines()
         .map(str::to_string)
         .collect();
-    let forks = Forks(names.clone());
-    assert_eq!(
-        names,
-        [format!("{}-fork-1", e.name), format!("{}-fork-2", e.name)]
-    );
+    assert_eq!(names, forks.0);
     let (f1, f2) = (&forks.0[0], &forks.0[1]);
+
+    let ls: serde_json::Value = serde_json::from_str(&e.ok(&["ls", "--json"])).unwrap();
+    let row = |n: &str| {
+        ls.as_array()
+            .unwrap()
+            .iter()
+            .find(|r| r["name"] == n)
+            .unwrap_or_else(|| panic!("{n} listed: {ls}"))
+            .clone()
+    };
+    let (parent_row, f1_row) = (row(&e.name), row(f1));
+    assert_eq!(f1_row["fork_of"], e.name.as_str());
+    assert!(
+        f1_row["created_at"].as_str() > parent_row["created_at"].as_str(),
+        "a fork's created time is its own: {f1_row} vs {parent_row}"
+    );
 
     let root_test = |sb: &str, path: &str| {
         smolvm_ok(&[
