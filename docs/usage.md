@@ -92,11 +92,18 @@ With `--clone` the agent doesn't write to your checkout. Your repo is mounted re
 `/run/sandbox/source`, and on the sandbox's first start it is cloned to the same path as on your
 machine, on the sandbox's own disk. The clone starts from your repo's current `HEAD` (for a linked
 worktree, its branch); uncommitted changes aren't carried over. The clone survives stop and start.
+The clone is writable, so `:ro` on the `--clone` workspace is ignored (the mounted repo is
+read-only anyway).
 
 Your remotes (`origin`, `upstream`, …) are copied into the clone, except local-path and `file://`
-ones. Any user name and token in an HTTPS remote URL is removed, so no host credential reaches the
-sandbox. SSH remotes are copied but won't work in the sandbox (no keys); use an HTTPS remote with
+ones. Any user name and token in an HTTPS remote URL is left out of the clone's copies. SSH remotes
+are copied but won't work in the sandbox (no keys); use an HTTPS remote with
 `sbt secret set github` if the agent should push.
+
+The agent can read your repo's whole `.git` at `/run/sandbox/source`, as in sbx, including
+`.git/config` with any token in a remote URL or an `http.extraHeader`. Don't keep credentials
+there; use a credential helper on your machine, or `sbt secret` for the sandbox. `create --clone`
+warns when a remote URL has a user name or token in it.
 
 The agent's commits come back through a remote `sandbox-<name>` added to your repo:
 
@@ -106,20 +113,30 @@ git log sandbox-claude-myrepo/main
 git merge sandbox-claude-myrepo/main          # or check out, cherry-pick, …
 ```
 
+Only branches come back: the remote is set to `--no-tags`, so tags the agent makes stay in the
+sandbox (sbx's remote follows tags).
+
 Good to know:
 
 - `run` fetches `sandbox-<name>` when the agent exits and prints git's summary. Turn it off with
   `sbt settings set clone.fetch-on-exit false`. A failed fetch only warns.
-- That automatic fetch checks the objects it receives (`fetch.fsckObjects`). A manual `git fetch`
-  uses your git config; to check it too, run
+- That automatic fetch checks the objects it receives (`fetch.fsckObjects`) and doesn't recurse
+  into submodules. A manual `git fetch` uses your git config; to check it too, run
   `git -c fetch.fsckObjects=true fetch sandbox-<name>`.
-- Fetching from a stopped sandbox starts it, fetches, and stops it again.
-- `git fetch` runs `sbt _upload-pack <name>` for that remote, so `sbt` must be on your `PATH`.
+- Fetching from a stopped sandbox starts it, fetches, and stops it again. So does anything that
+  fetches every remote (`git fetch --all`, `git remote update`, an IDE's background fetch), one
+  stopped clone sandbox after another.
+- `git fetch` runs `smolbento _upload-pack <name>` for that remote, so `smolbento` must be on your
+  `PATH` (every install puts it there; the `sbt`, `sbx` and `bento` names are links to it).
 - `--clone` needs a workspace path in a git repository, and git on your machine. The image needs
   git too; if the clone fails, the start fails with git's error and the next start tries again.
 - `--clone` only applies when the sandbox is created; `run` on an existing sandbox ignores it.
-- `sbt rm`, `prune` and `reset` remove the `sandbox-<name>` remote. Nothing else in your repo's
-  config changes.
+- `sbt rm`, `prune` and `reset` remove the `sandbox-<name>` remote, and with it the
+  `sandbox-<name>/…` branches, as sbx does. Merge what you want first, or keep a branch:
+  `git branch keep sandbox-<name>/main`. Nothing else in your repo's config changes.
+- `run --rm` keeps the remote, so the commits fetched when the agent exits survive. Its fetch fails
+  from then on (the sandbox is gone); remove it with `git remote remove sandbox-<name>` when you're
+  done.
 
 ## Run commands inside
 

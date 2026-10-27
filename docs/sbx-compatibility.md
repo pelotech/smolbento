@@ -43,7 +43,8 @@ clearly rather than doing something different.
 | Single-file `:ro` mounts | Supported | Directories only (smolvm mounts directories) |
 | Machine names | `.` allowed | Names can't contain `--` or end in `-` (smolvm rules) |
 | Daemon | `sandboxd` | None; each command talks to smolvm directly |
-| Clone transport | A git daemon in the sandbox on a published port; the remote URL changes on every start, and fetch fails while the sandbox is stopped | No daemon or port: the `sandbox-<name>` remote's `uploadpack` runs `sbt _upload-pack <name>`, which runs `git-upload-pack` in the sandbox through `smolvm machine exec`. `git remote -v` shows a placeholder `file:///sbt/<name>` URL |
+| Clone transport | A git daemon in the sandbox on a published port; the remote URL changes on every start, and fetch fails while the sandbox is stopped | No daemon or port: the `sandbox-<name>` remote's `uploadpack` runs `smolbento _upload-pack <name>` (so `smolbento` must be on `PATH`), which runs `git-upload-pack` in the sandbox through `smolvm machine exec`. `git remote -v` shows a placeholder `file:///sbt/<name>` URL |
+| Tags from the sandbox | The `sandbox-<name>` remote follows tags | The remote has `tagOpt = --no-tags`; only branches come back |
 | Fetch on exit | None | `sbt run` fetches `sandbox-<name>` when the agent exits (setting `clone.fetch-on-exit`, default `true`) |
 | Object checking | Plain `git fetch` | The fetch on exit runs with `fetch.fsckObjects=true`; manual `git fetch` is unchanged, and your repo config isn't touched beyond the remote |
 | Fetch from a stopped sandbox | Fails | Starts the sandbox, fetches, stops it again |
