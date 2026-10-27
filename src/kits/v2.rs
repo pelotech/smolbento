@@ -103,7 +103,7 @@ pub fn parse(yaml: &str, dir: &Path) -> Result<Kit> {
         caps.push(cap(
             "agent-context@2",
             CapBody::AgentContext(AgentContextReq {
-                filename: None,
+                filename: a.filename,
                 directory: None,
                 content: a.content.unwrap_or_default(),
             }),
@@ -232,8 +232,6 @@ struct ArgCfg {
 #[derive(Deserialize)]
 #[serde(deny_unknown_fields)]
 struct AgentInstructions {
-    // The model's agent-context carries no filename for v2: the agent preset names the file.
-    #[allow(dead_code)]
     filename: Option<String>,
     content: Option<String>,
 }
@@ -543,8 +541,14 @@ fn walk(root: &Path, dir: &Path, dest: &str, out: &mut Vec<FileReq>) -> Result<(
     entries.sort_by_key(|e| e.file_name());
     for e in entries {
         let p = e.path();
-        if p.is_dir() {
+        // Symlinks are skipped: following a directory link can loop forever, and a link could
+        // pull in files from outside the kit (sbx rejects `../` traversal for the same reason).
+        let ty = e.file_type()?;
+        if ty.is_dir() {
             walk(root, &p, dest, out)?;
+            continue;
+        }
+        if !ty.is_file() {
             continue;
         }
         let rel = p
@@ -645,5 +649,22 @@ mod tests {
         assert!(c.runtime && !c.install);
         assert_eq!(c.inject[0].header.as_deref(), Some("Authorization"));
         assert_eq!(c.inject[0].format.as_deref(), Some("Bearer %s"));
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn symlinks_under_files_are_skipped_so_cycles_end() {
+        let d = tempfile::tempdir().unwrap();
+        let home = d.path().join("files/home");
+        std::fs::create_dir_all(home.join("sub")).unwrap();
+        std::fs::write(home.join("sub/a.txt"), "a").unwrap();
+        std::os::unix::fs::symlink(&home, home.join("sub/loop")).unwrap();
+        std::os::unix::fs::symlink(home.join("sub/a.txt"), home.join("link.txt")).unwrap();
+        let k = parse("schemaVersion: \"2\"\nkind: mixin\n", d.path()).unwrap();
+        let CapBody::Lifecycle(l) = &k.caps[0].body else {
+            panic!()
+        };
+        let paths: Vec<_> = l.files.iter().map(|f| f.path.as_str()).collect();
+        assert_eq!(paths, ["/home/agent/sub/a.txt"]);
     }
 }

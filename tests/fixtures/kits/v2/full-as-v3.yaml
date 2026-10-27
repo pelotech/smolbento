@@ -72,4 +72,5 @@ capabilities:
           content: "# Notes\n"
   - type: com.docker.sandbox/agent-context@2
     config:
+      filename: AGENTS.md
       content: Use the tool.
