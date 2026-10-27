@@ -67,7 +67,7 @@ with its `type@version` before anything is created; an optional one is skipped w
 
 | Capability | sbx (local) | smolbento |
 |---|---|---|
-| `network-policy@1`, `@2` | Yes | Yes: per-sandbox rules with source `kit`. Install-phase rules are in place from the sandbox's creation through its first start's setup and install steps, removed when install finishes, and never used by later starts. `@2` method and path rules aren't enforced, so a kit that requires them is refused |
+| `network-policy@1`, `@2` | Yes | Yes: per-sandbox rules with source `kit`. Install-phase rules are in place from the sandbox's creation through its first start's setup and install steps, removed when install finishes, and never used by later starts. An install-phase deny of a CIDR is the exception: smolvm takes CIDR denies only at create, so it stays enforced for the sandbox's life (create prints a note) though `policy ls` no longer shows it. `@2` method and path rules aren't enforced, so a kit that requires them is refused |
 | `credential@1` | Yes | API keys: yes, through your secrets. OAuth with `passthrough: true`: yes (the token and resource hosts are allowed; the agent's own login keeps its tokens in the sandbox). OAuth without passthrough: no |
 | `port@1` | Yes | Yes, on `127.0.0.1` |
 | `volume@1` | Yes (kept across removal) | Yes, on the sandbox's disk; removed with the sandbox |
