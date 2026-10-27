@@ -76,7 +76,7 @@ fn free_names<R: Runner>(ctx: &Ctx<R>, parent: &str, count: u32) -> Result<Vec<S
     Ok(out)
 }
 
-/// Copies the parent's policy entry, then adds the clone remote and branches; on failure, undoes
+/// Drops stale state under the fork's name and copies the parent's policy entry, then adds the clone remote and branches; on failure, undoes
 /// what it did in reverse (a failed undo only warns).
 fn fork_one<R: Runner>(
     ctx: &Ctx<R>,
@@ -85,9 +85,10 @@ fn fork_one<R: Runner>(
     env: &[(String, String)],
     remove: &[String],
 ) -> Result<()> {
+    // The name is free, so anything stored under it is stale (say, a machine deleted with raw
+    // smolvm): drop its secrets, keychain values included, and policy entry.
+    super::secret::forget_sandbox(ctx, fork, true)?;
     let mut policy = Policy::load(&ctx.paths)?;
-    // The name is free, so an entry under it is stale (say, a machine deleted with raw smolvm).
-    policy.forget_sandbox(fork);
     policy.copy_sandbox(parent.name(), fork);
     policy.save(&ctx.paths)?;
     let result = add_remote_and_branch(ctx, parent, fork, env, remove);
@@ -317,17 +318,37 @@ mod tests {
     }
 
     #[test]
-    fn a_stale_policy_entry_for_the_name_is_dropped() {
+    fn stale_policy_and_secrets_for_the_name_are_dropped() {
         let mut t = test_env(&[]);
         set_policy(
             &t,
             "mode = \"allow-all\"\n[[sandboxes.a-fork-1.rules]]\nid = \"r-1\"\n\
              decision = \"deny\"\nresources = [\"stale.com\"]\n",
         );
-        parent(&t, "running", &[]);
+        let mut f = SecretsFile::default();
+        for scope in ["a", "a-fork-1"] {
+            let entry = SecretEntry {
+                service: "github".into(),
+                scope: scope_for(Some(scope)),
+                source: Source::Keychain,
+            };
+            t.ctx.store.set(&entry.account(), scope).unwrap();
+            f.set(entry);
+        }
+        f.save(&t.ctx.paths).unwrap();
+        parent(&t, "running", &[("sbx.secrets", "github")]);
         sbt(&mut t.ctx, &["fork", "a"]).unwrap();
         let p = Policy::load(&t.ctx.paths).unwrap();
         assert!(!p.sandboxes.contains_key("a-fork-1"), "{:?}", p.sandboxes);
+        let f = SecretsFile::load(&t.ctx.paths).unwrap();
+        let scopes: Vec<_> = f.secrets.iter().map(|e| e.scope.as_str()).collect();
+        assert_eq!(scopes, vec!["sandbox:a"]);
+        assert_eq!(t.ctx.store.get("sandbox:a-fork-1/github").unwrap(), None);
+        // The fork's next start falls back to the parent's secret.
+        assert_eq!(
+            f.entry_for("a-fork-1", Some("a"), "github").unwrap().scope,
+            "sandbox:a"
+        );
     }
 
     #[test]
