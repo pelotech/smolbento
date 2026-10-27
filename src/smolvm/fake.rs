@@ -18,6 +18,7 @@ pub struct FakeRunner {
     calls: RefCell<Vec<Vec<String>>>,
     interactive_calls: RefCell<Vec<Vec<String>>>,
     interactive_code: RefCell<i32>,
+    interactive_error: RefCell<Option<String>>,
     envs: RefCell<Vec<Vec<(String, String)>>>,
     removed: RefCell<Vec<Vec<String>>>,
 }
@@ -92,6 +93,12 @@ impl FakeRunner {
         self
     }
 
+    /// Make interactive calls fail, as when smolvm can't be spawned.
+    pub fn interactive_fail(&self, message: &str) -> &Self {
+        *self.interactive_error.borrow_mut() = Some(message.into());
+        self
+    }
+
     pub fn calls(&self) -> Vec<Vec<String>> {
         self.calls.borrow().clone()
     }
@@ -142,6 +149,9 @@ impl Runner for FakeRunner {
 
     fn interactive(&self, args: &[String]) -> Result<i32> {
         self.interactive_calls.borrow_mut().push(args.to_vec());
+        if let Some(message) = self.interactive_error.borrow().as_ref() {
+            anyhow::bail!("{message}");
+        }
         Ok(*self.interactive_code.borrow())
     }
 }

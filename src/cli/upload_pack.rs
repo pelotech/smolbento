@@ -27,7 +27,8 @@ pub fn run<R: Runner>(ctx: &mut Ctx<R>, sandbox: &str) -> Result<i32> {
         interactive: true,
         cmd: vec!["git-upload-pack".into(), dir],
         ..Default::default()
-    })?;
+    });
+    // Re-stop a sandbox this command started even when the exec failed.
     let sessions = ctx.paths.sessions();
     if started
         && !session::is_detached(&sessions, sb.name())
@@ -36,7 +37,7 @@ pub fn run<R: Runner>(ctx: &mut Ctx<R>, sandbox: &str) -> Result<i32> {
     {
         eprintln!("warning: stopping sandbox {}: {e:#}", sb.name());
     }
-    Ok(code)
+    code
 }
 
 #[cfg(test)]
@@ -115,6 +116,22 @@ mod tests {
             .position(|l| l.contains("machine stop"))
             .expect("stopped");
         assert!(start < stop, "{lines:?}");
+    }
+
+    #[test]
+    fn stops_it_again_when_the_exec_fails() {
+        let mut t = test_env(&[]);
+        t.ctx.vm.runner().ok(&["machine"], "");
+        clone_sandbox(&t, "stopped");
+        t.ctx.vm.runner().interactive_fail("spawning smolvm: busy");
+        let err = sbt(&mut t.ctx, &["_upload-pack", "box"])
+            .unwrap_err()
+            .to_string();
+        assert!(err.contains("spawning smolvm"), "{err}");
+        assert_eq!(
+            t.ctx.vm.runner().call_lines().last().unwrap(),
+            "machine stop -n sbx-box"
+        );
     }
 
     #[test]
