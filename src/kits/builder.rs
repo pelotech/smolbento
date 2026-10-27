@@ -374,6 +374,7 @@ mod tests {
     }
 
     /// The tar of an OCI layout holding a kit, as `docker buildx --output type=oci` writes it.
+    /// The same bytes on every call: tests compare digests of separately made tars.
     fn kit_tar() -> Vec<u8> {
         let d = tempfile::tempdir().unwrap();
         oci_layout(
@@ -383,6 +384,9 @@ mod tests {
             "{}",
         );
         let mut b = tar::Builder::new(Vec::new());
+        // Without this the headers carry the files' mtimes, and a second boundary between two
+        // calls changes the digest.
+        b.mode(tar::HeaderMode::Deterministic);
         b.append_dir_all(".", d.path()).unwrap();
         b.into_inner().unwrap()
     }
