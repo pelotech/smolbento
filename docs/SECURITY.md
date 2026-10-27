@@ -33,8 +33,13 @@ Other things to know:
 
 - The agent runs with its permission prompts disabled. The VM, not the agent, is the boundary.
 - Workspaces are mounted read-write by default. Anything the agent writes, including git hooks or
-  config in a mounted repo, lands on your machine. A safer clone mode (only commits come back) is
-  planned.
+  config in a mounted repo, lands on your machine. With `--clone` the repo is read-only to the
+  agent and only commits come back, when you `git fetch sandbox-<name>` (not tags); review them
+  before you merge. Fetched objects can be checked with `git -c fetch.fsckObjects=true fetch`.
+- With `--clone` the agent can read your repo's whole `.git`, as in sbx, including `.git/config`.
+  A user name and token in an HTTPS remote URL are left out of the clone's own remotes, but not out
+  of that file, and neither is an `http.extraHeader`. Don't keep credentials in the repo config;
+  use a credential helper or `sbt secret`. `create --clone` warns about remote URLs with a token.
 - `sbt exec --privileged` and the sandbox's Docker engine run as root inside the VM.
 - smolbento refuses to run as root on the host, because the agent takes the caller's uid.
 

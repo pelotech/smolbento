@@ -13,6 +13,7 @@ sbt settings unset docker.enabled       # back to the default
 |---|---|---|---|
 | `docker.enabled` | `SMOLBENTO_DOCKER` | `true` | Use the Docker-enabled agent images and run a private Docker engine in each sandbox |
 | `smolvm.path` | `SMOLBENTO_SMOLVM` | `smolvm` | The smolvm binary to run |
+| `clone.fetch-on-exit` | `SMOLBENTO_CLONE_FETCH_ON_EXIT` | `true` | After `run` in a clone sandbox, fetch the agent's commits into the `sandbox-<name>` remote |
 
 An environment variable wins over the config file, which wins over the default. Booleans accept
 `true`/`false`, `1`/`0`, `yes`/`no` and `on`/`off`.
@@ -57,6 +58,8 @@ smolbento keeps no database of its own. Each sandbox is a smolvm machine named `
 | `sbx.docker` | Whether it runs a private Docker engine |
 | `sbx.secrets` | Services whose secrets were bound at create |
 | `sbx.credential-hosts` | Hosts those secrets use, recorded at create so the sandbox can always reach them |
+| `sbx.clone` | `true` for a `--clone` sandbox |
+| `sbx.clone-top` | Top of the cloned repo, when the workspace is a subdirectory of it |
 | `sbx.credential-env` | Env vars those secrets use; a start keeps any without a value out of the sandbox, even if the service is gone |
 
 `smolvm machine ls` shows them alongside any machines you made with smolvm directly; `sbt ls` shows

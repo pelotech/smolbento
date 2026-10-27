@@ -18,8 +18,10 @@ pub struct FakeRunner {
     calls: RefCell<Vec<Vec<String>>>,
     interactive_calls: RefCell<Vec<Vec<String>>>,
     interactive_code: RefCell<i32>,
+    interactive_error: RefCell<Option<String>>,
     envs: RefCell<Vec<Vec<(String, String)>>>,
     removed: RefCell<Vec<Vec<String>>>,
+    spawn_errors: RefCell<Vec<(Vec<String>, String)>>,
 }
 
 fn strings(items: &[&str]) -> Vec<String> {
@@ -69,6 +71,18 @@ impl FakeRunner {
         )
     }
 
+    /// `ok` that also writes `stderr`, as a successful exec whose guest command warned.
+    pub fn ok_with_stderr(&self, prefix: &[&str], stdout: &str, stderr: &str) -> &Self {
+        self.on(
+            prefix,
+            Output {
+                stdout: stdout.into(),
+                stderr: stderr.into(),
+                ..Output::default()
+            },
+        )
+    }
+
     pub fn once_ok(&self, prefix: &[&str], stdout: &str) -> &Self {
         self.once(
             prefix,
@@ -87,8 +101,22 @@ impl FakeRunner {
         self.once(prefix, error_output(code, message))
     }
 
+    /// Make calls starting with `prefix` fail to run at all, as when smolvm can't be spawned.
+    pub fn spawn_fail(&self, prefix: &[&str], message: &str) -> &Self {
+        self.spawn_errors
+            .borrow_mut()
+            .push((strings(prefix), message.into()));
+        self
+    }
+
     pub fn interactive_exit(&self, code: i32) -> &Self {
         *self.interactive_code.borrow_mut() = code;
+        self
+    }
+
+    /// Make interactive calls fail, as when smolvm can't be spawned.
+    pub fn interactive_fail(&self, message: &str) -> &Self {
+        *self.interactive_error.borrow_mut() = Some(message.into());
         self
     }
 
@@ -119,6 +147,14 @@ impl FakeRunner {
 impl Runner for FakeRunner {
     fn run(&self, args: &[String]) -> Result<Output> {
         self.calls.borrow_mut().push(args.to_vec());
+        if let Some((_, message)) = self
+            .spawn_errors
+            .borrow()
+            .iter()
+            .rfind(|(p, _)| args.starts_with(p))
+        {
+            anyhow::bail!("{message}");
+        }
         let mut replies = self.replies.borrow_mut();
         let Some(index) = replies.iter().rposition(|r| args.starts_with(&r.prefix)) else {
             return Ok(Output::default());
@@ -142,6 +178,9 @@ impl Runner for FakeRunner {
 
     fn interactive(&self, args: &[String]) -> Result<i32> {
         self.interactive_calls.borrow_mut().push(args.to_vec());
+        if let Some(message) = self.interactive_error.borrow().as_ref() {
+            anyhow::bail!("{message}");
+        }
         Ok(*self.interactive_code.borrow())
     }
 }

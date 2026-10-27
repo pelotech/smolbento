@@ -39,7 +39,7 @@ Options:
           Image pull policy (only `missing` is supported)
 
       --clone
-          Work on a private clone of the git repo (not implemented yet)
+          Work on a private clone of the git repo; its commits come back via the sandbox-<name> git remote
 
       --kit <KIT>
           Add a kit (not implemented yet)

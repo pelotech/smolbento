@@ -1,5 +1,6 @@
 //! create, start, stop, rm, prune and reset.
 
+use std::path::Path;
 use std::time::UNIX_EPOCH;
 
 use anyhow::{Context, Result, bail};
@@ -9,7 +10,7 @@ use super::{CreateArgs, Ctx, PruneArgs, ResetArgs, RmArgs, SandboxOpts, confirm}
 use crate::agents;
 use crate::sandbox::{self, CreateRequest, Sandbox, name, options, session};
 use crate::smolvm::Runner;
-use crate::workspace::Workspace;
+use crate::workspace::{Workspace, clone};
 
 /// Turns sbx's create options into a [`CreateRequest`]. `default_to_cwd`: `run` mounts the current
 /// directory when no path is given; `create` makes a mountless sandbox.
@@ -83,12 +84,26 @@ pub(crate) fn build_request<R: Runner>(
     })
 }
 
+/// Resolves `--clone` into `req.clone`. Only for a sandbox that is about to be created: `--clone`
+/// is a no-op when `run` re-attaches to an existing one.
+pub(crate) fn resolve_clone(req: &mut CreateRequest, opts: &SandboxOpts) -> Result<()> {
+    if opts.clone {
+        let primary = req
+            .workspaces
+            .first()
+            .context("--clone needs a workspace path, e.g. `sbt create --clone claude .`")?;
+        req.clone = Some(clone::source(&primary.path)?);
+    }
+    Ok(())
+}
+
 pub fn create<R: Runner>(ctx: &mut Ctx<R>, a: &CreateArgs) -> Result<i32> {
     let (agent, paths) = a
         .targets
         .split_first()
         .context("specify an agent, e.g. `sbt create claude .`")?;
     let mut req = build_request(ctx, agent, paths, &a.opts, false)?;
+    resolve_clone(&mut req, &a.opts)?;
     let sb = plan::create(ctx, &mut req, &a.opts.deny_network)?;
     println!("Created sandbox {}", sb.name());
     Ok(0)
@@ -128,6 +143,9 @@ pub(crate) fn stop_sandbox<R: Runner>(ctx: &Ctx<R>, sb: &Sandbox) -> Result<()> 
 /// Deletes a sandbox and its per-sandbox policy; `forget_secrets` also drops its own secrets.
 fn remove<R: Runner>(ctx: &Ctx<R>, sb: &Sandbox, forget_secrets: bool) -> Result<()> {
     ctx.vm.delete(&sb.machine)?;
+    if let Some(repo) = &sb.meta.clone_repo {
+        clone::remove_remote(Path::new(repo), sb.name());
+    }
     session::clear(&ctx.paths.sessions(), sb.name());
     super::secret::forget_sandbox(ctx, sb.name(), forget_secrets)?;
     println!("Removed {}", sb.name());
@@ -242,6 +260,174 @@ mod tests {
         let l = labels(name);
         let pairs: Vec<(&str, &str)> = l.iter().map(|(k, v)| (*k, v.as_str())).collect();
         machine_json(machine, state, &pairs)
+    }
+
+    #[test]
+    fn create_clone_mounts_the_repo_and_adds_the_remote() {
+        let mut t = test_env(&[]);
+        let (_d, root) = temp_repo();
+        t.ctx.cwd = root.clone();
+        let fake = t.ctx.vm.runner();
+        fake.ok(
+            &["machine", "status"],
+            &json("sbx-claude-repo", "created", "claude-repo"),
+        );
+        fake.once_fail(&["machine", "status"], "NOT_FOUND", "vm not found");
+        sbt(&mut t.ctx, &["create", "--clone", "claude", "."]).unwrap();
+        let create = t
+            .ctx
+            .vm
+            .runner()
+            .call_lines()
+            .into_iter()
+            .find(|l| l.contains("machine create"))
+            .unwrap();
+        assert!(
+            create.contains(&format!(
+                "-v {}/.git:/run/sandbox/source:ro",
+                root.display()
+            )),
+            "{create}"
+        );
+        assert!(create.contains("--label sbx.clone=true"), "{create}");
+        assert_eq!(
+            git_config(&root, "remote.sandbox-claude-repo.uploadpack"),
+            "smolbento _upload-pack claude-repo"
+        );
+        assert_eq!(
+            git_config(&root, "remote.sandbox-claude-repo.tagOpt"),
+            "--no-tags"
+        );
+    }
+
+    fn no_machine_created(t: &TestEnv) -> bool {
+        !t.ctx
+            .vm
+            .runner()
+            .call_lines()
+            .iter()
+            .any(|l| l.contains("machine create"))
+    }
+
+    #[test]
+    fn clone_needs_a_repo_before_smolvm_is_called() {
+        let mut t = test_env(&[]);
+        let err = sbt(&mut t.ctx, &["create", "--clone", "claude", "."])
+            .unwrap_err()
+            .to_string();
+        assert!(err.contains("--clone needs a git repository"), "{err}");
+        assert!(no_machine_created(&t));
+    }
+
+    #[test]
+    fn clone_needs_a_workspace_path_before_smolvm_is_called() {
+        let mut t = test_env(&[]);
+        let err = sbt(&mut t.ctx, &["create", "--clone", "claude"])
+            .unwrap_err()
+            .to_string();
+        assert!(err.contains("--clone needs a workspace path"), "{err}");
+        assert!(no_machine_created(&t));
+    }
+
+    #[test]
+    fn clone_needs_a_free_remote_before_smolvm_is_called() {
+        let mut t = test_env(&[]);
+        let (_d, root) = temp_repo();
+        git(
+            &root,
+            &[
+                "remote",
+                "add",
+                "sandbox-claude-repo",
+                "https://example.com/x",
+            ],
+        );
+        t.ctx.cwd = root;
+        t.ctx
+            .vm
+            .runner()
+            .fail(&["machine", "status"], "NOT_FOUND", "vm not found");
+        let err = sbt(&mut t.ctx, &["create", "--clone", "claude", "."])
+            .unwrap_err()
+            .to_string();
+        assert!(
+            err.contains("already has a remote 'sandbox-claude-repo'"),
+            "{err}"
+        );
+        assert!(no_machine_created(&t));
+    }
+
+    #[test]
+    fn clone_create_still_works_when_a_remote_url_has_a_token() {
+        // The credential warning goes to stderr (see clone::userinfo_remotes' own test); it must
+        // not stop the create.
+        let mut t = test_env(&[]);
+        let (_d, root) = temp_repo();
+        git(
+            &root,
+            &[
+                "remote",
+                "add",
+                "origin",
+                "https://u:tok@github.com/o/r.git",
+            ],
+        );
+        t.ctx.cwd = root;
+        let fake = t.ctx.vm.runner();
+        fake.ok(
+            &["machine", "status"],
+            &json("sbx-claude-repo", "created", "claude-repo"),
+        );
+        fake.once_fail(&["machine", "status"], "NOT_FOUND", "vm not found");
+        sbt(&mut t.ctx, &["create", "--clone", "claude", "."]).unwrap();
+        assert!(!no_machine_created(&t));
+    }
+
+    #[test]
+    fn a_failed_clone_create_removes_the_remote_only_when_no_machine_exists() {
+        // machine create fails: no machine, so the remote is removed again.
+        let mut t = test_env(&[]);
+        let (_d, root) = temp_repo();
+        t.ctx.cwd = root.clone();
+        let fake = t.ctx.vm.runner();
+        fake.fail(&["machine", "status"], "NOT_FOUND", "vm not found");
+        fake.fail(&["machine", "create"], "CREATE_FAILED", "no space left");
+        assert!(sbt(&mut t.ctx, &["create", "--clone", "claude", "."]).is_err());
+        assert_eq!(git_config(&root, "remote.sandbox-claude-repo.url"), "");
+
+        // Created but the start failed (e.g. the clone step): the machine exists, so the remote
+        // stays for the next start's retry.
+        let mut t = test_env(&[]);
+        t.ctx.cwd = root.clone();
+        let fake = t.ctx.vm.runner();
+        fake.ok(
+            &["machine", "status"],
+            &json("sbx-claude-repo", "created", "claude-repo"),
+        );
+        fake.once_fail(&["machine", "status"], "NOT_FOUND", "vm not found");
+        fake.fail(&["machine", "start"], "START_FAILED", "boot failed");
+        assert!(sbt(&mut t.ctx, &["create", "--clone", "claude", "."]).is_err());
+        assert_eq!(
+            git_config(&root, "remote.sandbox-claude-repo.url"),
+            "file:///sbt/claude-repo"
+        );
+    }
+
+    #[test]
+    fn a_failed_clone_create_keeps_a_remote_it_didnt_add() {
+        // Left by an earlier `run --rm` of the same name, with the agent's fetched commits.
+        let mut t = test_env(&[]);
+        let (_d, root) = temp_repo();
+        crate::workspace::clone::add_remote(&root, "claude-repo").unwrap();
+        t.ctx.cwd = root.clone();
+        let fake = t.ctx.vm.runner();
+        fake.fail(&["machine", "status"], "NOT_FOUND", "vm not found");
+        fake.fail(&["machine", "create"], "CREATE_FAILED", "no space left");
+        assert!(sbt(&mut t.ctx, &["create", "--clone", "claude", "."]).is_err());
+        assert_eq!(
+            git_config(&root, "remote.sandbox-claude-repo.url"),
+            "file:///sbt/claude-repo"
+        );
     }
 
     #[test]
@@ -706,6 +892,105 @@ mod tests {
         sbt(&mut t.ctx, &["policy", "init", "balanced"]).unwrap();
         sbt(&mut t.ctx, &["start", "claude-proj"]).unwrap();
         assert!(started(&t));
+    }
+
+    fn clone_json(name: &str, state: &str, repo: &std::path::Path) -> String {
+        machine_json(
+            &format!("sbx-{name}"),
+            state,
+            &[
+                ("sbx.name", name),
+                ("sbx.created", "999000"),
+                ("sbx.clone", "true"),
+                ("sbx.workspace", &repo.display().to_string()),
+            ],
+        )
+    }
+
+    fn remote(repo: &std::path::Path, name: &str) -> String {
+        git_config(repo, &format!("remote.sandbox-{name}.url"))
+    }
+
+    #[test]
+    fn rm_prune_and_reset_remove_our_remote_but_keep_foreign_ones() {
+        for cmd in [
+            vec!["rm", "-f", "box"],
+            vec!["prune", "-f"],
+            vec!["reset", "-f"],
+        ] {
+            let mut t = test_env(&[]);
+            let (_d, repo) = temp_repo();
+            crate::workspace::clone::add_remote(&repo, "box").unwrap();
+            git(
+                &repo,
+                &[
+                    "remote",
+                    "add",
+                    "sandbox-other",
+                    "https://example.com/x.git",
+                ],
+            );
+            let fake = t.ctx.vm.runner();
+            fake.ok(&["machine", "status"], &clone_json("box", "stopped", &repo));
+            fake.ok(
+                &["machine", "ls", "--json"],
+                &format!("[{}]", clone_json("box", "stopped", &repo)),
+            );
+            assert!(!remote(&repo, "box").is_empty());
+            sbt(&mut t.ctx, &cmd).unwrap();
+            assert_eq!(remote(&repo, "box"), "", "{cmd:?}");
+            assert!(!remote(&repo, "other").is_empty(), "{cmd:?}");
+        }
+    }
+
+    #[test]
+    fn rm_keeps_a_foreign_remote_of_the_same_name() {
+        let mut t = test_env(&[]);
+        let (_d, repo) = temp_repo();
+        git(
+            &repo,
+            &["remote", "add", "sandbox-box", "https://example.com/x.git"],
+        );
+        t.ctx
+            .vm
+            .runner()
+            .ok(&["machine", "status"], &clone_json("box", "stopped", &repo));
+        sbt(&mut t.ctx, &["rm", "-f", "box"]).unwrap();
+        assert!(!remote(&repo, "box").is_empty());
+    }
+
+    #[test]
+    fn rm_succeeds_when_the_clone_workspace_is_gone() {
+        let mut t = test_env(&[]);
+        let gone = t.ctx.cwd.join("deleted");
+        t.ctx
+            .vm
+            .runner()
+            .ok(&["machine", "status"], &clone_json("box", "stopped", &gone));
+        sbt(&mut t.ctx, &["rm", "-f", "box"]).unwrap();
+    }
+
+    #[test]
+    fn rm_removes_the_remote_from_the_repo_top_when_the_subdirectory_is_gone() {
+        let mut t = test_env(&[]);
+        let (_d, repo) = temp_repo();
+        crate::workspace::clone::add_remote(&repo, "box").unwrap();
+        let sub = repo.join("deleted").display().to_string();
+        t.ctx.vm.runner().ok(
+            &["machine", "status"],
+            &machine_json(
+                "sbx-box",
+                "stopped",
+                &[
+                    ("sbx.name", "box"),
+                    ("sbx.clone", "true"),
+                    ("sbx.workspace", &sub),
+                    ("sbx.clone-top", &repo.display().to_string()),
+                ],
+            ),
+        );
+        sbt(&mut t.ctx, &["rm", "-f", "box"]).unwrap();
+        assert_eq!(remote(&repo, "box"), "");
     }
 
     #[test]

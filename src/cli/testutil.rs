@@ -7,6 +7,7 @@ use super::{Cli, Ctx, dispatch};
 use crate::config::{Paths, Settings};
 use crate::smolvm::Smolvm;
 use crate::smolvm::fake::FakeRunner;
+pub use crate::testgit::*;
 
 pub struct TestEnv {
     pub ctx: Ctx<FakeRunner>,

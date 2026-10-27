@@ -13,6 +13,7 @@ mod secret;
 mod settings;
 #[cfg(test)]
 mod testutil;
+mod upload_pack;
 
 pub use args::*;
 
@@ -135,6 +136,7 @@ pub fn dispatch<R: Runner>(ctx: &mut Ctx<R>, cli: Cli) -> Result<i32> {
         Cmd::Policy(p) => policy::run(ctx, p),
         Cmd::Secret(s) => secret::run(ctx, s),
         Cmd::Ports(a) => ports::run(ctx, &a),
+        Cmd::UploadPack { sandbox, .. } => upload_pack::run(ctx, &sandbox),
         Cmd::Daemon(_) => {
             println!("smolbento needs no daemon; smolvm manages each sandbox directly");
             Ok(0)
@@ -264,14 +266,14 @@ mod tests {
         let err = sbt(&mut t.ctx, &["move", "x", "--to", "cloud"]).unwrap_err();
         assert!(err.to_string().contains("Docker Cloud"));
         assert_eq!(exit_code(&err), 2);
-        let Some(Cmd::Run(run)) = Cli::try_parse_from(["sbt", "run", "claude", "--clone"])
+        let Some(Cmd::Run(run)) = Cli::try_parse_from(["sbt", "run", "claude", "--skills", "off"])
             .unwrap()
             .command
         else {
             panic!("expected run");
         };
         let err = run.opts.check_supported().unwrap_err();
-        assert_eq!(err.to_string(), "--clone is not implemented yet");
+        assert_eq!(err.to_string(), "--skills is not implemented yet");
         assert_eq!(exit_code(&err), 2);
     }
 

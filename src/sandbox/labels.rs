@@ -9,6 +9,8 @@ pub const DOCKER: &str = "sbx.docker";
 pub const SECRETS: &str = "sbx.secrets";
 pub const CREDENTIAL_HOSTS: &str = "sbx.credential-hosts";
 pub const CREDENTIAL_ENV: &str = "sbx.credential-env";
+pub const CLONE: &str = "sbx.clone";
+pub const CLONE_TOP: &str = "sbx.clone-top";
 
 /// Sandbox metadata, fixed at create and stored as smolvm machine labels.
 #[derive(Debug, Clone, Default, PartialEq, Eq)]
@@ -31,6 +33,10 @@ pub struct Meta {
     /// Env vars of those credentials as bound at create, sorted. A start removes the ones without
     /// a value, even after their service is gone from secrets.toml.
     pub credential_env: Vec<String>,
+    /// `--clone`: the host repo's top, which is also the clone's path in the guest. Stored as
+    /// `sbx.clone=true` plus `sbx.clone-top` when it differs from `workspace` (a subdirectory was
+    /// given).
+    pub clone_repo: Option<String>,
 }
 
 impl Meta {
@@ -60,6 +66,12 @@ impl Meta {
         if !self.credential_env.is_empty() {
             labels.insert(CREDENTIAL_ENV.to_string(), self.credential_env.join(","));
         }
+        if let Some(top) = &self.clone_repo {
+            labels.insert(CLONE.to_string(), "true".into());
+            if Some(top) != self.workspace.as_ref() {
+                labels.insert(CLONE_TOP.to_string(), top.clone());
+            }
+        }
         labels
     }
 
@@ -81,6 +93,10 @@ impl Meta {
             secrets: list(labels.get(SECRETS)),
             credential_hosts: list(labels.get(CREDENTIAL_HOSTS)),
             credential_env: list(labels.get(CREDENTIAL_ENV)),
+            clone_repo: labels
+                .get(CLONE)
+                .filter(|c| *c == "true")
+                .and_then(|_| labels.get(CLONE_TOP).or(labels.get(WORKSPACE)).cloned()),
         })
     }
 }
@@ -166,6 +182,27 @@ mod tests {
         assert_eq!(labels["sbx.credential-env"], "GH_TOKEN,GITHUB_TOKEN");
         assert_eq!(Meta::from_labels(&labels), Some(m));
         assert!(!meta().to_labels().contains_key("sbx.credential-env"));
+    }
+
+    #[test]
+    fn clone_labels_round_trip() {
+        // At the repo top: no `sbx.clone-top`, the workspace is the top.
+        let mut m = meta();
+        m.clone_repo = Some("/w/repo".into());
+        let labels = m.to_labels();
+        assert_eq!(labels["sbx.clone"], "true");
+        assert!(!labels.contains_key("sbx.clone-top"));
+        assert_eq!(Meta::from_labels(&labels), Some(m.clone()));
+        // A subdirectory was given: the top is its own label.
+        m.clone_repo = Some("/w".into());
+        let labels = m.to_labels();
+        assert_eq!(labels["sbx.clone-top"], "/w");
+        assert_eq!(Meta::from_labels(&labels), Some(m));
+        assert!(!meta().to_labels().contains_key("sbx.clone"));
+        assert_eq!(
+            Meta::from_labels(&meta().to_labels()).unwrap().clone_repo,
+            None
+        );
     }
 
     #[test]

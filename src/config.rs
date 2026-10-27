@@ -75,6 +75,12 @@ pub const SETTINGS: &[SettingDef] = &[
         default: "smolvm",
         help: "smolvm binary to run",
     },
+    SettingDef {
+        key: "clone.fetch-on-exit",
+        env: "SMOLBENTO_CLONE_FETCH_ON_EXIT",
+        default: "true",
+        help: "After `run` in a clone sandbox, fetch the agent's commits into the sandbox-<name> remote",
+    },
 ];
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]

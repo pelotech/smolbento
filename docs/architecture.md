@@ -51,12 +51,12 @@ started with `run -d`.
 | Path | Responsibility |
 |---|---|
 | `src/main.rs` | Entry point: runs the CLI and maps errors to exit codes |
-| `src/cli/` | Command definitions mirroring sbx, and thin handlers |
+| `src/cli/` | Command definitions mirroring sbx, and thin handlers (`upload_pack.rs`: the hidden `_upload-pack` that clone remotes run) |
 | `src/smolvm/` | `Runner`, the typed smolvm client, JSON types, the test fake |
 | `src/sandbox/` | Names, labels, create plan, start steps, sessions, option parsing |
 | `src/agents.rs` | Agent presets |
-| `src/workspace.rs` | Workspace paths and mounts |
+| `src/workspace/` | Workspace paths and mounts; `clone.rs`: clone mode on the host (repo, `sandbox-<name>` remote, fetch) |
 | `src/config.rs` | Paths and settings |
 
 See [Development status](development-status.md) for the modules later phases add (network policy,
-secrets, the git remote helper, kits, host services, MCP, the dashboard).
+secrets, kits, host services, MCP, the dashboard).

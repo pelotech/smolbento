@@ -1,14 +1,17 @@
 //! run: create the sandbox if needed, start it, attach to the agent, and stop it when the last
 //! session ends (unless it was started with -d).
 
+use std::path::Path;
+
 use anyhow::{Context, Result, bail};
 
-use super::lifecycle::build_request;
+use super::lifecycle::{build_request, resolve_clone};
 use super::plan;
 use super::{Ctx, RunArgs, Unsupported};
 use crate::agents;
-use crate::sandbox::{self, session};
+use crate::sandbox::{self, Sandbox, session};
 use crate::smolvm::{ExecSpec, Runner};
+use crate::workspace::clone;
 
 /// Flag checks that need no smolvm; `dispatch` runs them before its smolvm gate.
 pub fn check_args(a: &RunArgs) -> Result<()> {
@@ -41,7 +44,10 @@ pub fn run<R: Runner>(ctx: &mut Ctx<R>, a: &RunArgs) -> Result<i32> {
             let mut req = build_request(ctx, agent, paths, &a.opts, true)?;
             match sandbox::find(&ctx.vm, &req.name)? {
                 Some(sb) => (sb, false),
-                None => (plan::create(ctx, &mut req, &a.opts.deny_network)?, true),
+                None => {
+                    resolve_clone(&mut req, &a.opts)?;
+                    (plan::create(ctx, &mut req, &a.opts.deny_network)?, true)
+                }
             }
         }
     };
@@ -83,19 +89,38 @@ pub fn run<R: Runner>(ctx: &mut Ctx<R>, a: &RunArgs) -> Result<i32> {
         ctx.vm.exec(&spec)?
     };
 
+    // Fetch before `--rm` deletes the sandbox, and while it still runs for `_upload-pack`.
+    if fetch_on_exit(ctx, &sb)
+        && let Some(repo) = &sb.meta.clone_repo
+        && let Err(e) = clone::fetch(Path::new(repo), sb.name())
+    {
+        eprintln!("warning: fetching the agent's commits: {e:#}");
+    }
+
     // The agent's exit code is the result; failing to clean up after it only warrants a warning.
     if a.rm {
         match ctx.vm.delete(&sb.machine) {
             Ok(()) => session::clear(&sessions, sb.name()),
             Err(e) => eprintln!("warning: removing sandbox {}: {e:#}", sb.name()),
         }
-    } else if !session::is_detached(&sessions, sb.name())
-        && session::live_sessions(&sessions, sb.name()) == 0
+    } else if session::idle(&sessions, sb.name())
         && let Err(e) = ctx.vm.stop(&sb.machine)
     {
         eprintln!("warning: stopping sandbox {}: {e:#}", sb.name());
     }
     Ok(code)
+}
+
+/// A bad setting value only skips the fetch: the stop or `--rm` and the agent's status still apply.
+fn fetch_on_exit<R: Runner>(ctx: &Ctx<R>, sb: &Sandbox) -> bool {
+    sb.meta.clone_repo.is_some()
+        && ctx
+            .settings
+            .bool("clone.fetch-on-exit")
+            .unwrap_or_else(|e| {
+                eprintln!("warning: not fetching the agent's commits: {e:#}");
+                false
+            })
 }
 
 #[cfg(test)]
@@ -116,6 +141,23 @@ mod tests {
                     ("sbx.workspace", ws.as_str()),
                 ],
             ),
+        );
+    }
+
+    #[test]
+    fn clone_is_ignored_when_run_attaches_to_an_existing_sandbox() {
+        let mut t = test_env(&[]);
+        created(&t, "running");
+        t.ctx.vm.runner().interactive_exit(0);
+        // cwd is not a git repo, yet --clone must not matter for an existing sandbox.
+        sbt(&mut t.ctx, &["run", "claude", "--clone"]).unwrap();
+        assert!(
+            !t.ctx
+                .vm
+                .runner()
+                .call_lines()
+                .iter()
+                .any(|l| l.contains("machine create"))
         );
     }
 
@@ -328,8 +370,8 @@ mod tests {
         let mut t = test_env(&[]);
         t.ctx.vm.runner().ok(&["--version"], "smolvm 1.0.0\n");
         for args in [
-            &["run", "claude", "--clone"][..],
-            &["create", "claude", "--clone"][..],
+            &["run", "claude", "--kit", "x"][..],
+            &["create", "claude", "--kit", "x"][..],
             &["run", "claude", "--new"][..],
         ] {
             let err = sbt(&mut t.ctx, args).unwrap_err();
@@ -352,6 +394,99 @@ mod tests {
                 .unwrap_err()
                 .to_string()
                 .contains("--rm")
+        );
+    }
+
+    fn clone_sandbox(t: &TestEnv, ws: &std::path::Path) {
+        t.ctx.vm.runner().ok(
+            &["machine", "status"],
+            &machine_json(
+                "sbx-claude-proj",
+                "running",
+                &[
+                    ("sbx.name", "claude-proj"),
+                    ("sbx.agent", "claude"),
+                    ("sbx.workspace", &ws.display().to_string()),
+                    ("sbx.clone", "true"),
+                ],
+            ),
+        );
+    }
+
+    #[test]
+    fn a_failed_fetch_warns_and_keeps_the_agent_status_and_the_stop() {
+        let mut t = test_env(&[]);
+        // The remote's upload-pack records that the fetch ran, then fails it.
+        let (_keep, repo) = temp_repo();
+        let marker = repo.parent().unwrap().join("fetch-ran");
+        git(
+            &repo,
+            &[
+                "remote",
+                "add",
+                "sandbox-claude-proj",
+                "file:///sbt/claude-proj",
+            ],
+        );
+        git(
+            &repo,
+            &[
+                "config",
+                "remote.sandbox-claude-proj.uploadpack",
+                &format!("touch '{}'; exit 1 #", marker.display()),
+            ],
+        );
+        clone_sandbox(&t, &repo);
+        t.ctx.vm.runner().interactive_exit(5);
+        assert_eq!(
+            sbt(&mut t.ctx, &["run", "--name", "claude-proj"]).unwrap(),
+            5
+        );
+        assert!(marker.exists(), "the fetch was never attempted");
+        assert_eq!(
+            t.ctx.vm.runner().call_lines().last().unwrap(),
+            "machine stop -n sbx-claude-proj"
+        );
+    }
+
+    #[test]
+    fn fetch_on_exit_needs_a_clone_and_the_setting() {
+        let (_keep, repo) = temp_repo();
+        for (env, clone, want) in [
+            (&[][..], true, true),
+            (
+                &[("SMOLBENTO_CLONE_FETCH_ON_EXIT", "false")][..],
+                true,
+                false,
+            ),
+            (&[][..], false, false),
+        ] {
+            let t = test_env(env);
+            if clone {
+                clone_sandbox(&t, &repo);
+            } else {
+                created(&t, "running");
+            }
+            let sb = crate::sandbox::find(&t.ctx.vm, "claude-proj")
+                .unwrap()
+                .unwrap();
+            assert_eq!(super::fetch_on_exit(&t.ctx, &sb), want);
+        }
+    }
+
+    #[test]
+    fn a_bad_fetch_setting_skips_the_fetch_but_not_the_rm() {
+        let mut t = test_env(&[("SMOLBENTO_CLONE_FETCH_ON_EXIT", "yes")]);
+        let (_keep, repo) = temp_repo();
+        clone_sandbox(&t, &repo);
+        t.ctx.vm.runner().interactive_exit(3);
+        assert_eq!(
+            sbt(&mut t.ctx, &["run", "--rm", "--name", "claude-proj"]).unwrap(),
+            3
+        );
+        assert_eq!(
+            t.ctx.vm.runner().call_lines().last().unwrap(),
+            "machine delete -n sbx-claude-proj -f"
         );
     }
 }

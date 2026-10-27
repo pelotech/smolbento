@@ -1,14 +1,16 @@
 //! Glue between sandboxes and the policy and secrets: what each start and create gets.
 
 use std::io::{BufRead, Write};
+use std::path::Path;
 
 use anyhow::{Context, Result, bail};
 
 use super::Ctx;
 use crate::policy::{Mode, Policy, compile};
-use crate::sandbox::{self, CreateRequest, Meta, Sandbox, StartPlan};
+use crate::sandbox::{self, CloneStep, CreateRequest, Meta, Sandbox, StartPlan};
 use crate::secrets::{SecretsFile, resolve::resolve};
 use crate::smolvm::{Credential, Runner};
+use crate::workspace::clone;
 
 /// Hosts of the given services' credentials.
 pub fn credential_hosts(secrets: &SecretsFile, services: &[String]) -> Vec<String> {
@@ -76,11 +78,28 @@ pub fn start_plan<R: Runner>(ctx: &Ctx<R>, meta: &Meta) -> Result<StartPlan> {
         .filter(|v| !env.iter().any(|(k, _)| k == *v))
         .cloned()
         .collect();
+    let clone = meta.clone_repo.as_ref().map(|dir| {
+        let repo = Path::new(dir);
+        let read =
+            || -> Result<_> { Ok((clone::worktree_head(repo)?, clone::copied_remotes(repo)?)) };
+        let (head, remotes) = read().unwrap_or_else(|e| {
+            eprintln!(
+                "warning: reading the host repo for {sandbox}: {e:#}; its remotes aren't copied"
+            );
+            (None, Vec::new())
+        });
+        CloneStep {
+            dir: dir.clone(),
+            head,
+            remotes,
+        }
+    });
     Ok(StartPlan {
         network,
         env,
         remove,
         uid: ctx.uid,
+        clone,
     })
 }
 
@@ -162,8 +181,8 @@ pub fn prepare_create<R: Runner>(
 }
 
 /// Prepares, creates and starts a new sandbox. When that fails before smolvm has the machine, the
-/// `--deny-network` rules this create added are dropped again; rules the sandbox name already had
-/// stay.
+/// `--deny-network` rules and the `--clone` remote this create added are dropped again; rules the
+/// sandbox name already had stay.
 pub fn create<R: Runner>(
     ctx: &Ctx<R>,
     req: &mut CreateRequest,
@@ -173,20 +192,47 @@ pub fn create<R: Runner>(
     if sandbox::find(&ctx.vm, &req.name)?.is_some() {
         bail!("sandbox '{}' already exists", req.name);
     }
+    // The repo a `--clone` copies, at its top.
+    let repo = req.clone.as_ref().map(|c| c.top.clone());
+    if let Some(repo) = &repo {
+        clone::check_remote_free(repo, &req.name)?;
+        for remote in clone::userinfo_remotes(repo).unwrap_or_default() {
+            eprintln!(
+                "warning: remote '{remote}' has a user name or token in its URL; the sandbox can \
+                 read it in {}/config",
+                clone::SOURCE_MOUNT
+            );
+        }
+    }
     let mut added = Vec::new();
+    // Only a remote this create made: one left by an earlier sandbox of this name (`run --rm`)
+    // keeps its fetched branches.
+    let mut added_remote = None;
     let result = (|| {
         added = prepare_create(ctx, req, deny_network)?;
+        if let Some(repo) = &repo
+            && clone::add_remote(repo, &req.name)?
+        {
+            added_remote = Some(repo);
+        }
         let plan = start_plan(ctx, &sandbox::create::meta(req))?;
         sandbox::create(&ctx.vm, req, &plan)
     })();
-    if result.is_err() && !added.is_empty() && matches!(sandbox::find(&ctx.vm, &req.name), Ok(None))
+    if result.is_err()
+        && (!added.is_empty() || added_remote.is_some())
+        && matches!(sandbox::find(&ctx.vm, &req.name), Ok(None))
     {
         // Best effort: the create error is what matters.
-        if let Ok(mut policy) = Policy::load(&ctx.paths) {
+        if !added.is_empty()
+            && let Ok(mut policy) = Policy::load(&ctx.paths)
+        {
             for id in &added {
                 policy.remove_rules(Some(&req.name), Some(id), None);
             }
             let _ = policy.save(&ctx.paths);
+        }
+        if let Some(repo) = added_remote {
+            clone::remove_remote(repo, &req.name);
         }
     }
     result
@@ -467,6 +513,71 @@ mod tests {
                 "machine update -n sbx-a1 --reset-allow-list --allow-host api.x.example \
                  --allow-cidr 127.0.0.0/8 --allow-cidr ::1/128"
             ]
+        );
+    }
+
+    /// A temp repo with an `origin` remote, as a path string.
+    fn host_repo(origin: &str) -> (tempfile::TempDir, String) {
+        let (dir, root) = temp_repo();
+        git(&root, &["remote", "add", "origin", origin]);
+        (dir, root.display().to_string())
+    }
+
+    #[test]
+    fn start_plan_clones_with_the_host_repos_remotes() {
+        let t = test_env(&[]);
+        set_policy(&t, "mode = \"deny-all\"");
+        let (_d, repo) = host_repo("https://x:y@github.com/o/r.git");
+        let mut m = meta("s1", &[], &[]);
+        m.clone_repo = Some(repo.clone());
+        let plan = start_plan(&t.ctx, &m).unwrap();
+        assert_eq!(
+            plan.clone,
+            Some(CloneStep {
+                dir: repo,
+                head: None,
+                remotes: vec![("origin".into(), "https://github.com/o/r.git".into())],
+            })
+        );
+        assert_eq!(
+            start_plan(&t.ctx, &meta("s1", &[], &[])).unwrap().clone,
+            None
+        );
+    }
+
+    #[test]
+    fn start_plan_for_a_linked_worktree_names_its_branch() {
+        let t = test_env(&[]);
+        set_policy(&t, "mode = \"deny-all\"");
+        let (d, repo) = host_repo("https://github.com/o/r.git");
+        let wt = d.path().canonicalize().unwrap().join("wt");
+        git(
+            Path::new(&repo),
+            &["worktree", "add", "-q", "-b", "feat", wt.to_str().unwrap()],
+        );
+        let mut m = meta("s1", &[], &[]);
+        m.clone_repo = Some(wt.display().to_string());
+        let plan = start_plan(&t.ctx, &m).unwrap();
+        assert_eq!(
+            plan.clone.unwrap().head,
+            Some(clone::WorktreeHead::Branch("feat".into()))
+        );
+    }
+
+    #[test]
+    fn start_plan_warns_when_the_host_repo_is_gone() {
+        let t = test_env(&[]);
+        set_policy(&t, "mode = \"deny-all\"");
+        let mut m = meta("s1", &[], &[]);
+        m.clone_repo = Some("/nonexistent/repo".into());
+        let plan = start_plan(&t.ctx, &m).unwrap();
+        assert_eq!(
+            plan.clone,
+            Some(CloneStep {
+                dir: "/nonexistent/repo".into(),
+                head: None,
+                remotes: vec![],
+            })
         );
     }
 }
