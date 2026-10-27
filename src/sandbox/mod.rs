@@ -8,7 +8,9 @@ pub mod session;
 
 use anyhow::{Context, Result};
 
-use crate::smolvm::{ExecSpec, Machine, MachineState, NetworkSpec, PublishedPort, Runner, Smolvm};
+use crate::smolvm::{
+    ExecSpec, Machine, MachineState, NetworkSpec, PublishedPort, Runner, Smolvm, SmolvmError,
+};
 use crate::workspace::MOUNTLESS_WORKDIR;
 use crate::workspace::clone::SOURCE_MOUNT;
 
@@ -179,16 +181,41 @@ pub fn start<R: Runner>(vm: &Smolvm<R>, sb: &Sandbox, plan: &StartPlan) -> Resul
         })
         .context("starting dockerd")?;
     }
-    if let Some(step) = &plan.clone {
-        for (user, cmd) in [("root", clone_prep_cmd(step)), ("agent", clone_cmd(step))] {
-            vm.exec_captured(&ExecSpec {
-                name: sb.machine.clone(),
-                user: Some(user.into()),
-                cmd: vec!["sh".into(), "-c".into(), cmd],
-                ..Default::default()
-            })
-            .context("cloning the repo in the sandbox")?;
+    if let Some(step) = &plan.clone
+        && let Err(e) = run_clone(vm, sb, step)
+    {
+        // Left running without a clone, later commands would skip `start` and never retry it.
+        if let Err(stop) = vm.stop(&sb.machine) {
+            eprintln!(
+                "warning: stopping {} after the failed clone: {stop:#}",
+                sb.name()
+            );
         }
+        return Err(e);
+    }
+    Ok(())
+}
+
+fn run_clone<R: Runner>(vm: &Smolvm<R>, sb: &Sandbox, step: &CloneStep) -> Result<()> {
+    for (user, cmd) in [("root", clone_prep_cmd(step)), ("agent", clone_cmd(step))] {
+        vm.exec_captured(&ExecSpec {
+            name: sb.machine.clone(),
+            user: Some(user.into()),
+            cmd: vec!["sh".into(), "-c".into(), cmd],
+            ..Default::default()
+        })
+        .map_err(|e| {
+            // git's first error line, not the whole stderr.
+            let line = match e.downcast_ref::<SmolvmError>() {
+                Some(s) => s
+                    .message
+                    .lines()
+                    .find(|l| !l.trim().is_empty())
+                    .unwrap_or("failed"),
+                None => return e.context("cloning the repo in the sandbox"),
+            };
+            anyhow::anyhow!("cloning the repo in the sandbox: {}", line.trim())
+        })?;
     }
     Ok(())
 }
@@ -414,6 +441,43 @@ mod tests {
             last2[1].contains("-u agent")
                 && last2[1].contains("clone -q /run/sandbox/source '/w/r'"),
             "{last2:?}"
+        );
+    }
+
+    #[test]
+    fn a_failed_clone_stops_the_machine_and_reports_gits_first_line() {
+        let fake = FakeRunner::new();
+        fake.fail(
+            &["machine", "exec", "--name", "sbx-r", "-u", "agent"],
+            "EXEC_FAILED",
+            "fatal: repository not found\nhint: more",
+        );
+        let vm = Smolvm::new(fake);
+        let sb = Sandbox {
+            meta: Meta {
+                name: "r".into(),
+                clone: true,
+                ..Default::default()
+            },
+            machine: "sbx-r".into(),
+            state: MachineState::Stopped,
+            ports: vec![],
+        };
+        let mut p = plan();
+        p.clone = Some(CloneStep {
+            dir: "/w/r".into(),
+            branch: None,
+            remotes: vec![],
+        });
+        let err = start(&vm, &sb, &p).unwrap_err();
+        assert_eq!(
+            err.to_string(),
+            "cloning the repo in the sandbox: fatal: repository not found"
+        );
+        let lines = vm.runner().call_lines();
+        assert!(
+            lines.last().unwrap().starts_with("machine stop"),
+            "{lines:?}"
         );
     }
 }
