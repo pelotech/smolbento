@@ -259,10 +259,18 @@ fn write_target(path: &Path, links: Symlink) -> Result<PathBuf> {
     }
     let next =
         fs::read_link(path).with_context(|| format!("reading the link {}", path.display()))?;
-    Ok(match path.parent() {
+    let target = match path.parent() {
         Some(dir) => dir.join(next),
         None => next,
-    })
+    };
+    // A chain of dangling links or a loop: don't replace a link in the middle with a file.
+    if fs::symlink_metadata(&target).is_ok() {
+        bail!(
+            "can't write {}: its symlink doesn't lead to a file",
+            path.display()
+        );
+    }
+    Ok(target)
 }
 
 /// Temp files `write_atomic` left for this file when a writer was killed mid-write (older than
@@ -370,6 +378,23 @@ mod tests {
         fs::remove_file(&real).unwrap();
         write_atomic(&link, b"again", None, Symlink::Follow).unwrap();
         assert_eq!(fs::read_to_string(&real).unwrap(), "again");
+        // A chain of dangling links, and a loop: refused, and no link is replaced.
+        let middle = link_dir.join("middle");
+        let chained = link_dir.join("chained.toml");
+        std::os::unix::fs::symlink("missing", &middle).unwrap();
+        std::os::unix::fs::symlink("middle", &chained).unwrap();
+        let looped = link_dir.join("loop.toml");
+        std::os::unix::fs::symlink("loop.toml", &looped).unwrap();
+        for p in [&chained, &looped] {
+            let err = write_atomic(p, b"x", None, Symlink::Follow).unwrap_err();
+            assert!(err.to_string().contains("doesn't lead to a file"), "{err}");
+        }
+        assert!(
+            fs::symlink_metadata(&middle)
+                .unwrap()
+                .file_type()
+                .is_symlink()
+        );
     }
 
     #[test]
