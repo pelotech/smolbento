@@ -98,7 +98,8 @@ read-only anyway).
 Your remotes (`origin`, `upstream`, …) are copied into the clone, except local-path and `file://`
 ones. Any user name and token in an HTTPS remote URL is left out of the clone's copies. SSH remotes
 are copied but won't work in the sandbox (no keys); use an HTTPS remote with
-`sbt secret set github` if the agent should push.
+`sbt secret set github` if the agent should push. The copy is redone on every start, so remotes you
+add or change on your machine reach the clone the next time the sandbox starts.
 
 The agent can read your repo's whole `.git` at `/run/sandbox/source`, as in sbx, including
 `.git/config` with any token in a remote URL or an `http.extraHeader`. Don't keep credentials
@@ -128,8 +129,9 @@ Good to know:
   stopped clone sandbox after another.
 - `git fetch` runs `smolbento _upload-pack <name>` for that remote, so `smolbento` must be on your
   `PATH` (every install puts it there; the `sbt`, `sbx` and `bento` names are links to it).
-- `--clone` needs a workspace path in a git repository, and git on your machine. The image needs
-  git too; if the clone fails, the start fails with git's error and the next start tries again.
+- `--clone` needs a workspace path in a git repository, and git 2.31 or newer on your machine. The
+  image needs git too: the built-in agent images have it, but with `-t` pick an image with git
+  installed. If the clone fails, the start fails with git's error and the next start tries again.
 - `--clone` only applies when the sandbox is created; `run` on an existing sandbox ignores it.
 - `sbt rm`, `prune` and `reset` remove the `sandbox-<name>` remote, and with it the
   `sandbox-<name>/…` branches, as sbx does. Merge what you want first, or keep a branch:
