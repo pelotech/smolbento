@@ -475,3 +475,51 @@ fn clone_round_trip() {
         "rm removes the remote"
     );
 }
+
+/// smolvm dials host loopback when a guest connects to its gateway; smolbento denies that. Only
+/// bytes arriving prove reachability: smolvm's stack accepts every SYN, so `nc -z` can't tell.
+#[test]
+#[ignore = "boots real VMs; run with `just e2e`"]
+fn host_loopback_is_unreachable() {
+    use std::io::Read;
+    use std::time::{Duration, Instant};
+    let listener = std::net::TcpListener::bind("127.0.0.1:0").unwrap();
+    let port = listener.local_addr().unwrap().port();
+    listener.set_nonblocking(true).unwrap();
+    let (tx, rx) = std::sync::mpsc::channel::<()>();
+    let received = std::thread::spawn(move || {
+        let mut got = Vec::new();
+        // Until the guest's probe is done, then 2s more for bytes in flight.
+        let mut until = None;
+        while until.is_none_or(|t| Instant::now() < t) {
+            if until.is_none() && rx.try_recv().is_ok() {
+                until = Some(Instant::now() + Duration::from_secs(2));
+            }
+            if let Ok((mut stream, _)) = listener.accept() {
+                stream.set_nonblocking(false).unwrap();
+                stream
+                    .set_read_timeout(Some(Duration::from_secs(3)))
+                    .unwrap();
+                let mut buf = [0u8; 64];
+                if let Ok(n) = stream.read(&mut buf) {
+                    got.extend_from_slice(&buf[..n]);
+                }
+            }
+            std::thread::sleep(Duration::from_millis(50));
+        }
+        got
+    });
+    let e = E2e::new("lo");
+    e.create_alpine();
+    let probe = format!(
+        "gw=$(ip route | awk '/default/ {{print $3}}'); echo probe | nc -w 3 \"$gw\" {port}; true"
+    );
+    e.sbt(&["exec", &e.name, "sh", "-c", &probe]);
+    tx.send(()).unwrap();
+    let got = received.join().unwrap();
+    assert!(
+        got.is_empty(),
+        "the host's 127.0.0.1:{port} got {:?} from the sandbox",
+        String::from_utf8_lossy(&got)
+    );
+}

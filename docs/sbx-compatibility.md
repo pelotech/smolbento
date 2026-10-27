@@ -39,6 +39,7 @@ clearly rather than doing something different.
 | `secret set-custom --host` | Exact host, IP or wildcard pattern | Exact host names, or `*.domain` for every subdomain of it (not the domain itself; any depth); other wildcards are refused, and so are IPs: smolvm only substitutes secrets for host names |
 | Policy changes | Live everywhere | Live, except switching a running sandbox between allow-all and a restricted mode, which applies on its next start, and deny-CIDR rules, which apply only to sandboxes created afterwards (`policy check` says so) |
 | Approvals | Queue | Derived from smolvm's blocked-request (egress) log; the host is the approval id |
+| Host services | Reachable per port as `host.docker.internal` when the policy allows `localhost:PORT` | Not reachable yet; planned with host services. The host's localhost is always blocked. Under allow-all the host's LAN IP isn't, so services listening on `0.0.0.0` are reachable through it (sbx blocks it) |
 | Published ports | Any host IP | `127.0.0.1` only (smolvm publishes on loopback) |
 | Single-file `:ro` mounts | Supported | Directories only (smolvm mounts directories) |
 | Machine names | `.` allowed | Names can't contain `--` or end in `-` (smolvm rules) |

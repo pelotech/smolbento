@@ -581,6 +581,31 @@ mod tests {
     }
 
     #[test]
+    fn create_denies_host_loopback_in_every_mode() {
+        for mode in ["allow-all", "balanced"] {
+            let mut t = test_env(&[]);
+            set_policy(&t, &format!("mode = \"{mode}\"\n"));
+            creatable(&t);
+            sbt(&mut t.ctx, &["create", "claude", "."]).unwrap();
+            let lines = t.ctx.vm.runner().call_lines();
+            let create = lines
+                .iter()
+                .find(|l| l.starts_with("machine create"))
+                .unwrap();
+            for cidr in ["127.0.0.0/8", "::1/128"] {
+                assert!(
+                    create.contains(&format!(" --deny-cidr {cidr} ")),
+                    "{mode}: {create}"
+                );
+            }
+            // Not a rule: `policy ls` doesn't show it.
+            let p = crate::policy::Policy::load(&t.ctx.paths).unwrap();
+            assert!(p.rules.is_empty(), "{mode}: {p:?}");
+            assert!(sandbox_rules(&t, "claude-proj").is_empty(), "{mode}");
+        }
+    }
+
+    #[test]
     fn deny_network_is_checked_before_the_machine_is_created() {
         // A bad host: nothing is created and the policy is untouched.
         let mut t = test_env(&[]);
