@@ -2,6 +2,9 @@
 //! Machines are small (1 CPU, 1 GiB) so they fit GitHub's private-repo runners.
 //! The network policy test needs internet (example.com), the secrets test needs httpbin.org, and
 //! the clone and fork tests need the Alpine package mirror, and the fork test needs httpbin.org.
+//! The kit tests pull `alpine`, `registry:2`, the shell-docker template and BuildKit images from
+//! Docker Hub, and the install-phase tests need example.com and httpbin.org. Published-kit
+//! fixtures go to a `registry:2` machine on a loopback port, pushed with `oci-client`.
 
 use std::path::{Path, PathBuf};
 use std::process::{Command, Output};
@@ -9,6 +12,8 @@ use std::process::{Command, Output};
 struct E2e {
     dir: tempfile::TempDir,
     name: String,
+    /// Extra environment for every `sbt` call (e.g. `SMOLBENTO_DOCKER=true` for one test).
+    vars: Vec<(&'static str, String)>,
 }
 
 impl E2e {
@@ -18,6 +23,7 @@ impl E2e {
         let e = E2e {
             dir,
             name: format!("e2e-{}-{test}", std::process::id()),
+            vars: Vec::new(),
         };
         e.ok(&["policy", "init", "allow-all"]);
         e
@@ -42,6 +48,7 @@ impl E2e {
             .env("SMOLBENTO_CONFIG_DIR", self.dir.path().join("config"))
             .env("SMOLBENTO_CACHE_DIR", self.dir.path().join("cache"))
             .env("SMOLBENTO_DOCKER", "false")
+            .envs(self.vars.iter().map(|(k, v)| (k, v)))
     }
 
     /// Host git in the workspace. The `sandbox-<name>` remote runs `smolbento _upload-pack`, so
@@ -702,4 +709,617 @@ fn host_loopback_is_unreachable() {
         "the host's 127.0.0.1:{port} got {:?} from the sandbox",
         String::from_utf8_lossy(&got)
     );
+}
+
+/// Polls `check` every second until it returns true or `secs` pass.
+fn wait_until(secs: u64, mut check: impl FnMut() -> bool) -> bool {
+    let deadline = std::time::Instant::now() + std::time::Duration::from_secs(secs);
+    loop {
+        if check() {
+            return true;
+        }
+        if std::time::Instant::now() > deadline {
+            return false;
+        }
+        std::thread::sleep(std::time::Duration::from_secs(1));
+    }
+}
+
+/// The guest's startup log (empty until the startup runner first writes it).
+fn startup_log(e: &E2e) -> String {
+    let out = root_sh(&e.name, "cat /var/log/smolbento/startup.log 2>/dev/null");
+    String::from_utf8_lossy(&out.stdout).into_owned()
+}
+
+/// Number of dockerd processes in the guest.
+fn dockerds(e: &E2e) -> usize {
+    let out = e.sbt(&["exec", &e.name, "sh", "-c", "pgrep -x dockerd || true"]);
+    String::from_utf8_lossy(&out.stdout).lines().count()
+}
+
+/// Docker-in-sandbox is the shipped `docker` kit: dockerd comes from its startup hook, run by the
+/// detached startup runner, and must outlive that runner and the exec that started it.
+#[test]
+#[ignore = "boots real VMs and pulls the shell-docker image; run with `just e2e`"]
+fn docker_kit_runs_dockerd_across_restarts() {
+    let mut e = E2e::new("dock");
+    e.vars.push(("SMOLBENTO_DOCKER", "true".into()));
+    let ws = e.workspace();
+    e.ok(&[
+        "create",
+        "shell",
+        ws.to_str().unwrap(),
+        "--name",
+        &e.name,
+        "--cpus",
+        "1",
+        "-m",
+        "1g",
+    ]);
+    assert_eq!(e.state(), "running");
+    let docker_info = || {
+        e.sbt(&["exec", "--privileged", &e.name, "docker", "info"])
+            .status
+            .success()
+    };
+    assert!(
+        wait_until(90, || startup_log(&e).contains("startup.d/01-docker.sh")),
+        "the startup runner ran the docker kit's script:\n{}",
+        startup_log(&e)
+    );
+    assert!(
+        wait_until(90, docker_info),
+        "docker info as root:\n{}",
+        String::from_utf8_lossy(&root_sh(&e.name, "cat /var/log/dockerd.log; ps -ef").stdout)
+    );
+    // A later, separate exec still finds the daemon the runner started.
+    std::thread::sleep(std::time::Duration::from_secs(3));
+    assert_eq!(dockerds(&e), 1, "dockerd survives the startup runner");
+    assert!(docker_info(), "docker info from a later exec");
+
+    e.ok(&["stop", &e.name]);
+    e.ok(&["start", &e.name]);
+    assert!(wait_until(90, docker_info), "docker info after a restart");
+    std::thread::sleep(std::time::Duration::from_secs(3));
+    assert_eq!(dockerds(&e), 1, "exactly one dockerd after a restart");
+    let log = startup_log(&e);
+    assert!(
+        log.matches("startup.d/01-docker.sh").count() >= 2,
+        "the runner ran on both starts:\n{log}"
+    );
+}
+
+/// A throwaway `registry:2` in its own smolvm machine on a free loopback port, for published-kit
+/// fixtures. Each test starts its own: nextest runs every test in a process of its own. `start`
+/// also lets `e` load kits from any registry (`kit.sources=*`).
+struct Registry {
+    machine: String,
+    port: u16,
+}
+
+impl Registry {
+    fn start(e: &E2e) -> Registry {
+        e.ok(&["settings", "set", "kit.sources", "*"]);
+        let r = Registry {
+            machine: format!("e2e-{}-registry", std::process::id()),
+            port: smolbento::sandbox::options::free_port().unwrap(),
+        };
+        let publish = format!("{}:5000", r.port);
+        smolvm(&[
+            "machine",
+            "run",
+            "-d",
+            "-n",
+            &r.machine,
+            "--image",
+            "registry:2",
+            "--cpus",
+            "1",
+            "--mem",
+            "512",
+            "--net",
+            "-p",
+            &publish,
+        ]);
+        assert!(wait_until(60, || r.answers()), "the local registry answers");
+        r
+    }
+
+    fn answers(&self) -> bool {
+        use std::io::{Read, Write};
+        let Ok(mut s) = std::net::TcpStream::connect(("127.0.0.1", self.port)) else {
+            return false;
+        };
+        let _ = s.set_read_timeout(Some(std::time::Duration::from_secs(5)));
+        let mut body = String::new();
+        s.write_all(b"GET /v2/ HTTP/1.0\r\n\r\n").is_ok()
+            && s.read_to_string(&mut body).is_ok()
+            && body.starts_with("HTTP/1.")
+            && body.contains(" 200 ")
+    }
+
+    /// `localhost:<port>/e2e/<repo>:1`.
+    fn reference(&self, repo: &str) -> String {
+        format!("localhost:{}/e2e/{repo}:1", self.port)
+    }
+
+    /// Pushes `image` as a kit: the descriptor goes in the manifest annotation, as `sbx kit push`
+    /// publishes it.
+    fn push(&self, repo: &str, image: Image, descriptor: serde_json::Value) -> String {
+        use oci_client::client::{ClientConfig, ClientProtocol, Config, ImageLayer};
+        use oci_client::manifest::OciImageManifest;
+        use oci_client::secrets::RegistryAuth;
+        let reference = self.reference(repo);
+        let _ = rustls::crypto::ring::default_provider().install_default();
+        let client = oci_client::Client::new(ClientConfig {
+            protocol: ClientProtocol::Http,
+            ..Default::default()
+        });
+        let layers: Vec<ImageLayer> = image
+            .layers
+            .into_iter()
+            .map(|(data, media)| ImageLayer::new(data, media, None))
+            .collect();
+        let config = Config::oci_v1(serde_json::to_vec(&image.config).unwrap(), None);
+        let annotations = std::collections::BTreeMap::from([
+            (
+                "vnd.docker.sandbox.kit.descriptor".to_string(),
+                descriptor.to_string(),
+            ),
+            (
+                "vnd.docker.sandbox.kit.schema-version".to_string(),
+                "3".to_string(),
+            ),
+        ]);
+        let manifest = OciImageManifest::build(&layers, &config, Some(annotations));
+        let rt = tokio::runtime::Builder::new_current_thread()
+            .enable_all()
+            .build()
+            .unwrap();
+        rt.block_on(client.push(
+            &reference.parse().unwrap(),
+            &layers,
+            config,
+            &RegistryAuth::Anonymous,
+            Some(manifest),
+        ))
+        .unwrap_or_else(|e| panic!("pushing {reference}: {e}"));
+        reference
+    }
+}
+
+impl Drop for Registry {
+    fn drop(&mut self) {
+        let _ = Command::new("smolvm")
+            .args(["machine", "delete", "-f", "-n", &self.machine])
+            .output();
+    }
+}
+
+/// Layers (data, media type) and image config of a kit image to push.
+struct Image {
+    layers: Vec<(Vec<u8>, String)>,
+    config: serde_json::Value,
+}
+
+fn arch() -> &'static str {
+    if cfg!(target_arch = "aarch64") {
+        "arm64"
+    } else {
+        "amd64"
+    }
+}
+
+impl Image {
+    /// No layers: a declaration-only mixin.
+    fn empty() -> Image {
+        Image {
+            layers: Vec::new(),
+            config: serde_json::json!({
+                "architecture": arch(),
+                "os": "linux",
+                "rootfs": {"type": "layers", "diff_ids": []},
+                "config": {},
+            }),
+        }
+    }
+
+    /// Alpine's layers and config, pulled from Docker Hub with smolbento's own client.
+    fn alpine() -> Image {
+        let cache = tempfile::tempdir().unwrap();
+        let dir = smolbento::kits::registry::pull_image("alpine", cache.path()).unwrap();
+        let blob = |d: &serde_json::Value| {
+            let hex = d.as_str().unwrap().trim_start_matches("sha256:");
+            std::fs::read(dir.join("blobs/sha256").join(hex)).unwrap()
+        };
+        let index: serde_json::Value =
+            serde_json::from_slice(&std::fs::read(dir.join("index.json")).unwrap()).unwrap();
+        let manifest: serde_json::Value =
+            serde_json::from_slice(&blob(&index["manifests"][0]["digest"])).unwrap();
+        let layers = manifest["layers"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .map(|l| {
+                let media = match l["mediaType"].as_str().unwrap() {
+                    "application/vnd.docker.image.rootfs.diff.tar.gzip" => {
+                        "application/vnd.oci.image.layer.v1.tar+gzip"
+                    }
+                    m => m,
+                };
+                (blob(&l["digest"]), media.to_string())
+            })
+            .collect();
+        Image {
+            layers,
+            config: serde_json::from_slice(&blob(&manifest["config"]["digest"])).unwrap(),
+        }
+    }
+
+    /// Appends an uncompressed layer holding `path` (relative, e.g. `opt/x/f`) with `body`.
+    fn with_file(mut self, path: &str, body: &str) -> Image {
+        let mut b = tar::Builder::new(Vec::new());
+        let parts: Vec<&str> = path.split('/').collect();
+        for i in 1..parts.len() {
+            let mut h = tar::Header::new_gnu();
+            h.set_entry_type(tar::EntryType::Directory);
+            h.set_mode(0o755);
+            h.set_size(0);
+            h.set_cksum();
+            b.append_data(
+                &mut h,
+                format!("{}/", parts[..i].join("/")),
+                std::io::empty(),
+            )
+            .unwrap();
+        }
+        let mut h = tar::Header::new_gnu();
+        h.set_mode(0o644);
+        h.set_size(body.len() as u64);
+        h.set_cksum();
+        b.append_data(&mut h, path, body.as_bytes()).unwrap();
+        let data = b.into_inner().unwrap();
+        let diff_id = sha256(&data);
+        self.config["rootfs"]["diff_ids"]
+            .as_array_mut()
+            .unwrap()
+            .push(diff_id.into());
+        self.layers
+            .push((data, "application/vnd.oci.image.layer.v1.tar".to_string()));
+        self
+    }
+}
+
+fn sha256(data: &[u8]) -> String {
+    use sha2::Digest;
+    let hex: String = sha2::Sha256::digest(data)
+        .iter()
+        .map(|b| format!("{b:02x}"))
+        .collect();
+    format!("sha256:{hex}")
+}
+
+/// A kit descriptor as published: `schemaVersion` 3 plus `kind` and capabilities.
+fn descriptor(kind: &str, provides: &[&str], caps: serde_json::Value) -> serde_json::Value {
+    serde_json::json!({
+        "schemaVersion": "3",
+        "kind": kind,
+        "provides": provides,
+        "capabilities": caps,
+    })
+}
+
+/// Install hook (as root) giving an Alpine guest the `agent` user, as the identity step would.
+fn add_agent_hook() -> String {
+    format!(
+        "id agent >/dev/null 2>&1 || adduser -D -u {} agent",
+        smolbento::sandbox::host_uid()
+    )
+}
+
+impl E2e {
+    /// `sbt create` of an Alpine-based shell sandbox with `kits` (`-t alpine --kit ...`).
+    fn create_with_kits(&self, kits: &[&str]) {
+        let ws = self.workspace();
+        let mut args = vec!["create", "-t", "alpine"];
+        for k in kits {
+            args.extend(["--kit", k]);
+        }
+        args.extend([
+            "shell",
+            ws.to_str().unwrap(),
+            "--name",
+            &self.name,
+            "--cpus",
+            "1",
+            "-m",
+            "1g",
+        ]);
+        self.ok(&args);
+    }
+}
+
+/// Root's view of `script` in sandbox `sb`: its stdout, whatever the exit status.
+fn root_out(sb: &str, script: &str) -> String {
+    String::from_utf8_lossy(&root_sh(sb, script).stdout).into_owned()
+}
+
+#[test]
+#[ignore = "boots real VMs and pulls alpine; run with `just e2e`"]
+fn published_workload_kit_runs_its_command() {
+    let e = E2e::new("wl");
+    let reg = Registry::start(&e);
+    let mut image = Image::alpine();
+    image.config["config"]["Entrypoint"] = serde_json::Value::Null;
+    image.config["config"]["Cmd"] =
+        serde_json::json!(["sh", "-c", "echo workload-command-ran-as-$(id -un)"]);
+    let kit = reg.push(
+        "workload",
+        image,
+        descriptor(
+            "workload",
+            &[],
+            serde_json::json!([
+                {"type": "com.docker.sandbox/sbx@1"},
+                {"type": "com.docker.sandbox/lifecycle@1",
+                 "config": {"install": [{"command": add_agent_hook(), "user": "0"}]}},
+            ]),
+        ),
+    );
+    let ws = e.workspace();
+    e.ok(&[
+        "create",
+        &kit,
+        ws.to_str().unwrap(),
+        "--name",
+        &e.name,
+        "--cpus",
+        "1",
+        "-m",
+        "1g",
+    ]);
+    assert_eq!(e.state(), "running");
+    let out = e.ok(&["run", "--name", &e.name]);
+    assert!(out.contains("workload-command-ran-as-agent"), "{out}");
+}
+
+#[test]
+#[ignore = "boots real VMs and pulls alpine; run with `just e2e`"]
+fn mixin_layer_is_visible_in_the_guest() {
+    let e = E2e::new("layer");
+    let reg = Registry::start(&e);
+    let kit = reg.push(
+        "layer",
+        Image::empty().with_file("opt/e2e-mixin/hello", "hello from a mixin layer\n"),
+        descriptor("mixin", &["e2e-layer"], serde_json::json!([])),
+    );
+    e.create_with_kits(&[&kit]);
+    assert_eq!(
+        root_out(&e.name, "cat /opt/e2e-mixin/hello"),
+        "hello from a mixin layer\n"
+    );
+    // Alpine's own files are still there under the mixin's layer.
+    assert!(root_out(&e.name, "cat /etc/alpine-release").starts_with('3'));
+}
+
+/// Deletes the shared `_builder` sandbox after the test, unless it existed before.
+struct BuilderGuard(bool);
+
+impl BuilderGuard {
+    fn new() -> BuilderGuard {
+        let existed = Command::new("smolvm")
+            .args(["machine", "status", "-n", "sbx-_builder"])
+            .output()
+            .unwrap()
+            .status
+            .success();
+        BuilderGuard(existed)
+    }
+}
+
+impl Drop for BuilderGuard {
+    fn drop(&mut self) {
+        if !self.0 {
+            let _ = Command::new("smolvm")
+                .args(["machine", "delete", "-f", "-n", "sbx-_builder"])
+                .output();
+        }
+    }
+}
+
+#[test]
+#[ignore = "boots real VMs, builds in the builder sandbox and pulls from Docker Hub; run with `just e2e`"]
+fn local_v3_kit_builds_in_the_builder_sandbox() {
+    let e = E2e::new("build");
+    let _builder = BuilderGuard::new();
+    let kit = e.dir.path().join("built");
+    std::fs::create_dir_all(&kit).unwrap();
+    std::fs::write(
+        kit.join("built.yaml"),
+        r#"# syntax=docker/sandbox-kit:3
+schemaVersion: "3"
+kind: mixin
+version: "1.0.0"
+provides: [e2e-built]
+build: |
+  FROM busybox:1.37 AS build
+  RUN mkdir -p /out/opt/e2e-built && echo "built in the builder" > /out/opt/e2e-built/hello
+  FROM scratch
+  COPY --from=build /out/ /
+"#,
+    )
+    .unwrap();
+    e.create_with_kits(&[kit.to_str().unwrap()]);
+    assert_eq!(
+        root_out(&e.name, "cat /opt/e2e-built/hello"),
+        "built in the builder\n"
+    );
+    let ls = e.ok(&["ls", "--json"]);
+    assert!(!ls.contains("_builder"), "the builder is hidden: {ls}");
+}
+
+#[test]
+#[ignore = "boots real VMs and needs example.com; run with `just e2e`"]
+fn install_phase_network_closes_after_install() {
+    let e = E2e::new("instnet");
+    e.ok(&["policy", "init", "deny-all"]);
+    let reg = Registry::start(&e);
+    // During install: example.com by name, then by the IP it resolved to (any HTTP answer).
+    let probe = r#"set -e
+wget -q -T 15 -O /dev/null https://example.com
+ip=$(nslookup example.com 2>/dev/null | awk '/^Address/ && $NF !~ /:/ {print $NF}' | head -n 1)
+[ -n "$ip" ]
+wget -S -T 15 -O /dev/null "http://$ip/" 2>&1 | grep -q 'HTTP/'
+echo "$ip" > /etc/e2e-install-ip"#;
+    let kit = reg.push(
+        "install-net",
+        Image::empty(),
+        descriptor(
+            "mixin",
+            &["e2e-install-net"],
+            serde_json::json!([
+                {"type": "com.docker.sandbox/network-policy@1",
+                 "config": {"install": {"allow": ["example.com"]}}},
+                {"type": "com.docker.sandbox/lifecycle@1",
+                 "config": {"install": [
+                     {"command": add_agent_hook(), "user": "0"},
+                     {"command": probe, "user": "0"},
+                 ]}},
+            ]),
+        ),
+    );
+    e.create_with_kits(&[&kit]);
+    let ip = root_out(&e.name, "cat /etc/e2e-install-ip")
+        .trim()
+        .to_string();
+    assert!(!ip.is_empty(), "the install hook reached example.com");
+
+    assert!(
+        !reachable(&e, "https://example.com"),
+        "example.com is closed after install"
+    );
+    let by_ip = e.sbt(&[
+        "exec",
+        &e.name,
+        "sh",
+        "-c",
+        &format!("wget -S -T 8 -O /dev/null http://{ip}/ 2>&1 | grep -q 'HTTP/'"),
+    ]);
+    assert!(
+        !by_ip.status.success(),
+        "{ip} (example.com's address) is closed after install"
+    );
+    let rules = e.ok(&["policy", "ls"]);
+    assert!(
+        !rules.contains("example.com"),
+        "install rules removed:\n{rules}"
+    );
+}
+
+#[test]
+#[ignore = "boots real VMs and needs httpbin.org; run with `just e2e`"]
+fn install_only_credential_is_gone_after_install() {
+    let e = E2e::new("instcred");
+    e.ok(&[
+        "secret",
+        "set-custom",
+        "--host",
+        "httpbin.org",
+        "--env",
+        "E2E_TOK",
+        "--command",
+        "printf real-secret-xyz",
+    ]);
+    let reg = Registry::start(&e);
+    let kit = reg.push(
+        "install-cred",
+        Image::empty(),
+        descriptor(
+            "mixin",
+            &["e2e-install-cred"],
+            serde_json::json!([
+                {"type": "com.docker.sandbox/credential@1",
+                 "config": {"service": "e2e-tok", "phase": "install",
+                            "apiKey": {"name": "KIT_TOK", "inject": [
+                                {"domain": "httpbin.org", "header": "authorization",
+                                 "format": "Bearer %s"}]}}},
+                {"type": "com.docker.sandbox/lifecycle@1",
+                 "config": {"install": [
+                     {"command": add_agent_hook(), "user": "0"},
+                     {"command": "wget -q -T 20 -O /etc/e2e-install-echo https://httpbin.org/headers",
+                      "user": "0"},
+                 ]}},
+            ]),
+        ),
+    );
+    e.create_with_kits(&[&kit]);
+    let during = root_out(&e.name, "cat /etc/e2e-install-echo");
+    assert!(
+        during.contains("Bearer real-secret-xyz"),
+        "substituted during install: {during}"
+    );
+    let after = e.sbt(&[
+        "exec",
+        &e.name,
+        "sh",
+        "-c",
+        "wget -S -T 20 -O - https://httpbin.org/headers 2>&1",
+    ]);
+    let after = String::from_utf8_lossy(&after.stdout);
+    assert!(after.contains("502"), "502 after install: {after}");
+    assert!(!after.contains("real-secret-xyz"), "{after}");
+}
+
+#[test]
+#[ignore = "boots real VMs and needs example.com; run with `just e2e`"]
+fn kit_add_applies_network_and_hooks_live() {
+    let e = E2e::new("kitadd");
+    e.create_alpine();
+    e.ok(&["policy", "init", "deny-all"]);
+    e.ok(&["stop", &e.name]); // allow-all -> restricted applies on the next start
+    e.ok(&["start", &e.name]);
+    assert!(!reachable(&e, "https://example.com"), "deny-all blocks");
+    let boot = root_out(&e.name, "cat /proc/sys/kernel/random/boot_id");
+
+    let kit = e.dir.path().join("e2e-add");
+    std::fs::create_dir_all(&kit).unwrap();
+    std::fs::write(
+        kit.join("spec.yaml"),
+        r#"schemaVersion: "2"
+kind: mixin
+name: e2e-add
+permissions:
+  network:
+    allow: [example.com]
+setup:
+  install:
+    - command: touch /etc/e2e-kit-installed
+  startup:
+    - command: [touch, /tmp/e2e-kit-started]
+      user: "0"
+"#,
+    )
+    .unwrap();
+    e.ok(&["kit", "add", &e.name, kit.to_str().unwrap(), "--yes"]);
+
+    assert_eq!(
+        root_out(&e.name, "cat /proc/sys/kernel/random/boot_id"),
+        boot,
+        "applied without a restart"
+    );
+    assert!(reachable(&e, "https://example.com"), "the kit's allow rule");
+    assert!(
+        root_sh(&e.name, "test -f /etc/e2e-kit-installed")
+            .status
+            .success()
+    );
+    assert!(
+        wait_until(30, || root_sh(&e.name, "test -f /tmp/e2e-kit-started")
+            .status
+            .success()),
+        "the startup hook ran"
+    );
+    assert!(root_out(&e.name, "cat /etc/smolbento/kits").contains("e2e-add"));
+    let rules = e.ok(&["policy", "ls", "--source", "kit"]);
+    assert!(rules.contains("example.com"), "{rules}");
 }
