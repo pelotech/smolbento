@@ -53,8 +53,9 @@ struct CapabilityItem {
     config: Option<Value>,
 }
 
+// Lenient like the descriptor's top level: an unknown arg key is ignored.
 #[derive(Deserialize)]
-#[serde(rename_all = "camelCase", deny_unknown_fields)]
+#[serde(rename_all = "camelCase")]
 struct Arg {
     default: Option<String>,
     #[serde(default)]
@@ -84,7 +85,13 @@ fn from_value(v: Value, source: Source) -> Result<Kit> {
     let caps = d
         .capabilities
         .into_iter()
-        .map(cap)
+        .enumerate()
+        .map(|(i, c)| {
+            if c.ty.trim().is_empty() {
+                bail!("capability {i} has no type");
+            }
+            cap(c)
+        })
         .collect::<Result<Vec<_>>>()?;
     let args = d
         .args
@@ -663,6 +670,56 @@ mod tests {
         assert!(format!("{e:#}").contains("schemaVersion"));
         let e = parse("schemaVersion: \"3\"\nkind: set\n", local("x")).unwrap_err();
         assert!(format!("{e:#}").contains("publish"), "{e:#}");
+    }
+
+    #[test]
+    fn an_unknown_kind_is_an_error() {
+        let e = parse("schemaVersion: \"3\"\nkind: plugin\n", local("x")).unwrap_err();
+        assert_eq!(format!("{e:#}"), "unknown kind 'plugin'");
+    }
+
+    #[test]
+    fn a_capability_without_a_type_is_an_error_naming_its_index() {
+        for ty in [r#""#, r#""type":"","#] {
+            let e = parse_json(
+                &format!(
+                    r#"{{"schemaVersion":"3","kind":"mixin","capabilities":[
+                        {{"type":"com.docker.sandbox/sbx@1"}},{{{ty}"optional":true}}]}}"#
+                ),
+                local("t"),
+            )
+            .unwrap_err();
+            assert_eq!(format!("{e:#}"), "capability 1 has no type");
+        }
+    }
+
+    #[test]
+    fn unknown_arg_keys_are_ignored() {
+        let k = parse(
+            "schemaVersion: \"3\"\nkind: mixin\nargs:\n  a:\n    default: x\n    later: 1\n",
+            local("x"),
+        )
+        .unwrap();
+        assert_eq!(k.args["a"].default.as_deref(), Some("x"));
+    }
+
+    #[test]
+    fn a_port_of_zero_and_content_with_content_file_are_errors() {
+        let e = one_cap(r#"{"type":"com.docker.sandbox/port@1","config":{"container":0}}"#)
+            .unwrap_err();
+        assert!(
+            format!("{e:#}").contains("container must be 1..65535"),
+            "{e:#}"
+        );
+        let e = one_cap(
+            r#"{"type":"com.docker.sandbox/agent-context@1",
+                "config":{"content":"x","contentFile":"/k/x.md"}}"#,
+        )
+        .unwrap_err();
+        assert!(
+            format!("{e:#}").contains("content and contentFile are mutually exclusive"),
+            "{e:#}"
+        );
     }
 
     #[test]

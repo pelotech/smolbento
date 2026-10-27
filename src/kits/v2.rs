@@ -36,8 +36,17 @@ fn name_or_source(name: Option<String>, dir: &Path) -> Result<String> {
 }
 
 /// `dir` is the kit directory: `spec.yaml` sits in it, with optional `files/home` and
-/// `files/workspace` beside it.
+/// `files/workspace` beside it. Fields smolbento ignores are warnings on stderr.
 pub fn parse(yaml: &str, dir: &Path) -> Result<Kit> {
+    let (kit, warnings) = parse_warn(yaml, dir)?;
+    for w in warnings {
+        eprintln!("{w}");
+    }
+    Ok(kit)
+}
+
+/// `parse`, returning its warnings instead of printing them.
+fn parse_warn(yaml: &str, dir: &Path) -> Result<(Kit, Vec<String>)> {
     let v: Value = serde_saphyr::from_str(yaml).context("reading the v2 kit descriptor")?;
     let s: Spec = serde_json::from_value(v).context("reading the v2 kit descriptor")?;
     if s.schema_version != "2" {
@@ -50,9 +59,27 @@ pub fn parse(yaml: &str, dir: &Path) -> Result<Kit> {
     };
     let source = Source::LocalV2(dir.to_path_buf());
     let name = name_or_source(s.name.clone(), dir)?;
+    let mut warnings = Vec::new();
+    let mut ignored =
+        |field: &str| warnings.push(format!("warning: kit {name}: {field} is ignored"));
 
     let mut caps = Vec::new();
-    let sandbox = s.sandbox.unwrap_or_default();
+    let mut sandbox = s.sandbox.unwrap_or_default();
+    if sandbox.build.is_some() {
+        ignored("sandbox.build");
+    }
+    if sandbox.resources.as_ref().is_some_and(|r| r.gpu.is_some()) {
+        ignored("sandbox.resources.gpu");
+    }
+    // Only a workload's command runs.
+    if kind == Kind::Mixin {
+        if sandbox.entrypoint.take().is_some() {
+            ignored("sandbox.entrypoint");
+        }
+        if sandbox.command.take().is_some() {
+            ignored("sandbox.command");
+        }
+    }
     if let Some(r) = sandbox.resources {
         caps.push(cap(
             "resources@1",
@@ -114,16 +141,19 @@ pub fn parse(yaml: &str, dir: &Path) -> Result<Kit> {
             },
         ));
     }
-    if let Some(l) = lifecycle(s.setup.unwrap_or_default(), dir)? {
+    if let Some(l) = lifecycle(s.setup.unwrap_or_default(), dir, &name, &mut warnings)? {
         caps.push(cap("lifecycle@1", CapBody::Lifecycle(l)));
     }
-    if let Some(a) = s.agent_instructions {
+    // No content, nothing to write.
+    if let Some(a) = s.agent_instructions
+        && let Some(content) = a.content.filter(|c| !c.trim().is_empty())
+    {
         caps.push(cap(
             "agent-context@2",
             CapBody::AgentContext(AgentContextReq {
                 filename: a.filename,
                 directory: None,
-                content: a.content.unwrap_or_default(),
+                content,
             }),
         ));
     }
@@ -154,7 +184,7 @@ pub fn parse(yaml: &str, dir: &Path) -> Result<Kit> {
                 .collect(),
         ),
     };
-    Ok(Kit {
+    let kit = Kit {
         name,
         source,
         digest: None,
@@ -166,7 +196,8 @@ pub fn parse(yaml: &str, dir: &Path) -> Result<Kit> {
         env: s.environment.variables.into_iter().collect(),
         content: sandbox.image.map_or(Content::None, Content::Image),
         command,
-    })
+    };
+    Ok((kit, warnings))
 }
 
 fn cap(name: &str, body: CapBody) -> Cap {
@@ -301,8 +332,8 @@ struct Environment {
 #[serde(deny_unknown_fields)]
 struct SandboxCfg {
     image: Option<String>,
-    // Image builds are not supported; `image` is required alongside, per the sbx docs.
-    #[allow(dead_code)]
+    // Image builds are not supported (a warning); `image` is required alongside, per the sbx
+    // docs.
     build: Option<Value>,
     entrypoint: Option<Vec<String>>,
     command: Option<CommandCfg>,
@@ -340,7 +371,7 @@ impl CommandCfg {
 struct ResourcesCfg {
     cpu: Option<f64>,
     memory: Option<String>,
-    #[allow(dead_code)]
+    // Not supported: a warning.
     gpu: Option<String>,
 }
 
@@ -512,7 +543,12 @@ struct FileCfg {
 
 /// Hooks and files in v2 apply order: `files/home`, install, `setup.files`, startup,
 /// `files/workspace`. Install and startup stay separate lists, so only the files need ordering.
-fn lifecycle(s: Setup, dir: &Path) -> Result<Option<Lifecycle>> {
+fn lifecycle(
+    s: Setup,
+    dir: &Path,
+    kit: &str,
+    warnings: &mut Vec<String>,
+) -> Result<Option<Lifecycle>> {
     // v2 defaults: install runs as root, startup as the agent user.
     let install = s.install.into_iter().map(|h| Hook {
         command: HookCmd::Shell(h.command),
@@ -526,14 +562,26 @@ fn lifecycle(s: Setup, dir: &Path) -> Result<Option<Lifecycle>> {
         env: vec![],
         background: h.background,
     });
-    let mut files = static_files(&dir.join("files/home"), HOME)?;
+    let mut static_files = |sub: &str, dest: &str| -> Result<Vec<FileReq>> {
+        let root = dir.join(sub);
+        let mut out = Vec::new();
+        if root.is_dir() {
+            walk(&root, &root, dest, &mut out, &mut |rel| {
+                warnings.push(format!(
+                    "warning: kit {kit}: {sub}/{rel} is a symlink; skipped"
+                ))
+            })?;
+        }
+        Ok(out)
+    };
+    let mut files = static_files("files/home", HOME)?;
     files.extend(s.files.into_iter().map(|f| FileReq {
         path: f.path,
         content: f.content.replace("${WORKDIR}", WORKSPACE),
         mode: f.mode,
         overwrite: !f.only_if_missing,
     }));
-    files.extend(static_files(&dir.join("files/workspace"), WORKSPACE)?);
+    files.extend(static_files("files/workspace", WORKSPACE)?);
     let l = Lifecycle {
         install: install.collect(),
         startup: startup.collect(),
@@ -543,16 +591,15 @@ fn lifecycle(s: Setup, dir: &Path) -> Result<Option<Lifecycle>> {
     Ok((!empty).then_some(l))
 }
 
-/// Every file under `root`, in path order, targeted at `dest` plus its relative path.
-fn static_files(root: &Path, dest: &str) -> Result<Vec<FileReq>> {
-    let mut out = Vec::new();
-    if root.is_dir() {
-        walk(root, root, dest, &mut out)?;
-    }
-    Ok(out)
-}
-
-fn walk(root: &Path, dir: &Path, dest: &str, out: &mut Vec<FileReq>) -> Result<()> {
+/// Every file under `root`, in path order, targeted at `dest` plus its relative path. Each
+/// skipped symlink's path relative to `root` goes to `symlink`.
+fn walk(
+    root: &Path,
+    dir: &Path,
+    dest: &str,
+    out: &mut Vec<FileReq>,
+    symlink: &mut dyn FnMut(&str),
+) -> Result<()> {
     let mut entries = std::fs::read_dir(dir)
         .with_context(|| format!("reading {}", dir.display()))?
         .collect::<std::io::Result<Vec<_>>>()?;
@@ -563,10 +610,7 @@ fn walk(root: &Path, dir: &Path, dest: &str, out: &mut Vec<FileReq>) -> Result<(
         // pull in files from outside the kit (sbx rejects `../` traversal for the same reason).
         let ty = e.file_type()?;
         if ty.is_dir() {
-            walk(root, &p, dest, out)?;
-            continue;
-        }
-        if !ty.is_file() {
+            walk(root, &p, dest, out, symlink)?;
             continue;
         }
         let rel = p
@@ -575,6 +619,13 @@ fn walk(root: &Path, dir: &Path, dest: &str, out: &mut Vec<FileReq>) -> Result<(
             .map(|c| c.as_os_str().to_string_lossy())
             .collect::<Vec<_>>()
             .join("/");
+        if ty.is_symlink() {
+            symlink(&rel);
+            continue;
+        }
+        if !ty.is_file() {
+            continue;
+        }
         let content = std::fs::read_to_string(&p)
             .with_context(|| format!("reading {} (static files must be text)", p.display()))?;
         out.push(FileReq {
@@ -690,11 +741,54 @@ mod tests {
         std::fs::write(home.join("sub/a.txt"), "a").unwrap();
         std::os::unix::fs::symlink(&home, home.join("sub/loop")).unwrap();
         std::os::unix::fs::symlink(home.join("sub/a.txt"), home.join("link.txt")).unwrap();
-        let k = parse("schemaVersion: \"2\"\nkind: mixin\n", d.path()).unwrap();
+        let (k, warnings) = parse_warn("schemaVersion: \"2\"\nkind: mixin\n", d.path()).unwrap();
         let CapBody::Lifecycle(l) = &k.caps[0].body else {
             panic!()
         };
         let paths: Vec<_> = l.files.iter().map(|f| f.path.as_str()).collect();
         assert_eq!(paths, ["/home/agent/sub/a.txt"]);
+        let name = k.name;
+        assert_eq!(
+            warnings,
+            [
+                format!("warning: kit {name}: files/home/link.txt is a symlink; skipped"),
+                format!("warning: kit {name}: files/home/sub/loop is a symlink; skipped"),
+            ]
+        );
+    }
+
+    #[test]
+    fn empty_agent_instructions_add_no_capability() {
+        for body in [
+            "",
+            "agentInstructions:\n  filename: X.md\n",
+            "agentInstructions:\n  content: \"  \"\n",
+        ] {
+            let yaml = format!("schemaVersion: \"2\"\nkind: mixin\nname: m\n{body}");
+            let k = parse(&yaml, Path::new("/nonexistent")).unwrap();
+            assert!(k.caps.is_empty(), "{body}: {:?}", k.caps);
+        }
+    }
+
+    #[test]
+    fn ignored_fields_warn_once_each() {
+        let yaml = "schemaVersion: \"2\"\nkind: mixin\nname: m\nsandbox:\n  build: {context: .}\n  \
+                    entrypoint: [a]\n  command: [b]\n  resources:\n    gpu: all\n";
+        let (k, warnings) = parse_warn(yaml, Path::new("/nonexistent")).unwrap();
+        assert_eq!(k.command, None);
+        assert_eq!(
+            warnings,
+            [
+                "warning: kit m: sandbox.build is ignored",
+                "warning: kit m: sandbox.resources.gpu is ignored",
+                "warning: kit m: sandbox.entrypoint is ignored",
+                "warning: kit m: sandbox.command is ignored",
+            ]
+        );
+        // A workload's command runs.
+        let yaml = yaml.replace("kind: mixin", "kind: sandbox");
+        let (k, warnings) = parse_warn(&yaml, Path::new("/nonexistent")).unwrap();
+        assert_eq!(k.command, Some(vec!["a".to_string(), "b".to_string()]));
+        assert_eq!(warnings.len(), 2, "{warnings:?}");
     }
 }
