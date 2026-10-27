@@ -1,5 +1,6 @@
 //! create, start, stop, rm, prune and reset.
 
+use std::io::Write;
 use std::path::Path;
 use std::time::UNIX_EPOCH;
 
@@ -168,8 +169,9 @@ fn remaining_forks<'a>(sb: &Sandbox, all: &'a [Sandbox], removing: &[&str]) -> V
 }
 
 pub fn rm<R: Runner>(ctx: &mut Ctx<R>, a: &RmArgs) -> Result<i32> {
+    let all = sandbox::list(&ctx.vm)?;
     let targets: Vec<Sandbox> = if a.all {
-        sandbox::list(&ctx.vm)?
+        all.clone()
     } else {
         if a.sandboxes.is_empty() {
             bail!("specify sandboxes to remove, or --all");
@@ -184,7 +186,6 @@ pub fn rm<R: Runner>(ctx: &mut Ctx<R>, a: &RmArgs) -> Result<i32> {
         return Ok(0);
     }
     let names: Vec<&str> = targets.iter().map(Sandbox::name).collect();
-    let all = sandbox::list(&ctx.vm)?;
     for sb in &targets {
         let forks = remaining_forks(sb, &all, &names);
         if !forks.is_empty() {
@@ -223,6 +224,11 @@ fn cutoff(filters: &[String], now: i64) -> Result<Option<i64>> {
 }
 
 pub fn prune<R: Runner>(ctx: &mut Ctx<R>, a: &PruneArgs) -> Result<i32> {
+    prune_to(ctx, a, &mut std::io::stdout())
+}
+
+/// `prune`, printing what it reports to `out`.
+fn prune_to<R: Runner>(ctx: &mut Ctx<R>, a: &PruneArgs, out: &mut impl Write) -> Result<i32> {
     let cutoff = cutoff(&a.filter, ctx.now)?;
     let all = sandbox::list(&ctx.vm)?;
     let mut targets: Vec<&Sandbox> = all
@@ -243,16 +249,16 @@ pub fn prune<R: Runner>(ctx: &mut Ctx<R>, a: &PruneArgs) -> Result<i32> {
         skipped.push(targets.remove(i));
     }
     for sb in &skipped {
-        println!("{} has forks; skipped", sb.name());
+        writeln!(out, "{} has forks; skipped", sb.name())?;
     }
     let targets = forks_first(targets.into_iter().cloned().collect());
     if targets.is_empty() {
-        println!("Nothing to prune");
+        writeln!(out, "Nothing to prune")?;
         return Ok(0);
     }
     if a.dry_run {
         for sb in &targets {
-            println!("Would remove {}", sb.name());
+            writeln!(out, "Would remove {}", sb.name())?;
         }
         return Ok(0);
     }
@@ -1207,11 +1213,23 @@ mod tests {
         with_forks(&t, "stopped", "stopped", "stopped");
         sbt(&mut t.ctx, &["rm", "-f", "a", "a-fork-1", "a-fork-2"]).unwrap();
         assert_eq!(deletes(&t), vec!["a-fork-1", "a-fork-2", "a"]);
+    }
 
+    #[test]
+    fn rm_all_deletes_forks_before_parents_and_lists_once() {
         let mut t = test_env(&[]);
         with_forks(&t, "stopped", "stopped", "stopped");
         sbt(&mut t.ctx, &["rm", "-f", "--all"]).unwrap();
         assert_eq!(deletes(&t), vec!["a-fork-1", "a-fork-2", "a"]);
+        let lists = t
+            .ctx
+            .vm
+            .runner()
+            .call_lines()
+            .iter()
+            .filter(|c| c.starts_with("machine ls"))
+            .count();
+        assert_eq!(lists, 1);
     }
 
     #[test]
@@ -1225,6 +1243,20 @@ mod tests {
         with_forks(&t, "stopped", "stopped", "stopped");
         sbt(&mut t.ctx, &["prune", "-f"]).unwrap();
         assert_eq!(deletes(&t), vec!["a-fork-1", "a-fork-2", "a"]);
+    }
+
+    #[test]
+    fn prune_says_which_parents_it_skipped() {
+        let mut t = test_env(&[]);
+        with_forks(&t, "stopped", "running", "stopped");
+        let a = crate::cli::PruneArgs {
+            force: true,
+            dry_run: false,
+            filter: vec![],
+        };
+        let mut out = Vec::new();
+        super::prune_to(&mut t.ctx, &a, &mut out).unwrap();
+        assert_eq!(String::from_utf8(out).unwrap(), "a has forks; skipped\n");
     }
 
     #[test]
