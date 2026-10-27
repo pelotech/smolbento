@@ -264,7 +264,8 @@ impl Policy {
     }
 
     /// Copies `from`'s per-sandbox entry (rules and `deny_network`) to `to`, e.g. for a fork.
-    /// Rule ids hash their scope, so the copies get ids derived for `to`. No-op without an entry.
+    /// Rule ids hash their scope, so the copies get ids derived for `to`. Replaces any existing
+    /// entry for `to`; without an entry for `from` it does nothing (`to`'s entry stays).
     pub fn copy_sandbox(&mut self, from: &str, to: &str) {
         let Some(mut entry) = self.sandboxes.get(from).cloned() else {
             return;
@@ -316,6 +317,36 @@ mod tests {
         );
         p.copy_sandbox("none", "x");
         assert!(!p.sandboxes.contains_key("x"));
+    }
+
+    #[test]
+    fn a_copied_rule_is_removed_by_its_own_id_only() {
+        let mut p = Policy::default();
+        p.add_rule(Some("a"), Decision::Deny, "evil.com", "added", None, None)
+            .unwrap();
+        p.copy_sandbox("a", "a-fork-1");
+        let copy_id = p.sandboxes["a-fork-1"].rules[0].id.clone();
+        let parent_id = p.sandboxes["a"].rules[0].id.clone();
+        // The parent's id doesn't name the copy's rule.
+        assert!(!p.remove_rules(Some("a-fork-1"), Some(&parent_id), None));
+        assert!(p.remove_rules(Some("a-fork-1"), Some(&copy_id), None));
+        assert!(!p.sandboxes.contains_key("a-fork-1"));
+        assert_eq!(p.sandboxes["a"].rules.len(), 1);
+        assert_eq!(p.sandboxes["a"].rules[0].id, parent_id);
+    }
+
+    #[test]
+    fn copy_sandbox_copies_a_deny_network_only_entry_and_replaces_the_target() {
+        let mut p = Policy::default();
+        p.set_deny_network("a", true);
+        p.add_rule(Some("b"), Decision::Deny, "old.com", "added", None, None)
+            .unwrap();
+        p.copy_sandbox("a", "a-fork-1");
+        assert!(p.sandboxes["a-fork-1"].deny_network);
+        assert!(p.sandboxes["a-fork-1"].rules.is_empty());
+        p.copy_sandbox("a", "b");
+        assert!(p.sandboxes["b"].deny_network);
+        assert!(p.sandboxes["b"].rules.is_empty(), "replaced, not merged");
     }
 
     #[test]
