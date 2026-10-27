@@ -525,9 +525,12 @@ mod tests {
         )
         .unwrap();
         let f = SecretsFile::load(&t.ctx.paths).unwrap();
-        assert_eq!(f.entry_for("a1", "claude").unwrap().scope, "sandbox:a1");
+        assert_eq!(
+            f.entry_for("a1", None, "claude").unwrap().scope,
+            "sandbox:a1"
+        );
         assert!(matches!(
-            f.entry_for("x", "github").unwrap().source,
+            f.entry_for("x", None, "github").unwrap().source,
             Source::Command { .. }
         ));
     }
@@ -539,7 +542,7 @@ mod tests {
         sbt(&mut t.ctx, &["secret", "set", "github", "--ref", arn]).unwrap();
         let f = SecretsFile::load(&t.ctx.paths).unwrap();
         assert_eq!(
-            f.entry_for("x", "github").unwrap().source,
+            f.entry_for("x", None, "github").unwrap().source,
             Source::Ref {
                 reference: arn.into()
             }

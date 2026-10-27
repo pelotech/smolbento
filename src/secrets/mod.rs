@@ -122,16 +122,23 @@ impl SecretsFile {
     }
 
     /// The entry in exactly one scope (`None` = global), with no fallback.
-    pub fn scoped_entry(&self, sandbox: Option<&str>, service: &str) -> Option<&SecretEntry> {
+    fn scoped_entry(&self, sandbox: Option<&str>, service: &str) -> Option<&SecretEntry> {
         let scope = scope_for(sandbox);
         self.secrets
             .iter()
             .find(|e| e.service == service && e.scope == scope)
     }
 
-    /// The entry a sandbox uses for a service: its own scope first, then global.
-    pub fn entry_for(&self, sandbox: &str, service: &str) -> Option<&SecretEntry> {
+    /// The entry a sandbox uses for a service: its own scope, then its fork parent's (`fork_of`),
+    /// then global.
+    pub fn entry_for(
+        &self,
+        sandbox: &str,
+        fork_of: Option<&str>,
+        service: &str,
+    ) -> Option<&SecretEntry> {
         self.scoped_entry(Some(sandbox), service)
+            .or_else(|| fork_of.and_then(|p| self.scoped_entry(Some(p), service)))
             .or_else(|| self.scoped_entry(None, service))
     }
 
@@ -217,13 +224,29 @@ mod tests {
             },
         ));
         f.set(entry("openai", "sandbox:s2", Source::Keychain));
-        assert_eq!(f.entry_for("s1", "github").unwrap().scope, "sandbox:s1");
-        assert_eq!(f.entry_for("s3", "github").unwrap().scope, "global");
+        assert_eq!(
+            f.entry_for("s1", None, "github").unwrap().scope,
+            "sandbox:s1"
+        );
+        assert_eq!(f.entry_for("s3", None, "github").unwrap().scope, "global");
         assert_eq!(f.services_for("s1"), vec!["github"]);
         assert_eq!(f.services_for("s2"), vec!["github", "openai"]);
         assert_eq!(
-            f.entry_for("s1", "github").unwrap().account(),
+            f.entry_for("s1", None, "github").unwrap().account(),
             "sandbox:s1/github"
+        );
+        // A fork falls back to its parent's scope before global, but its own scope wins.
+        assert_eq!(
+            f.entry_for("f1", Some("s1"), "github").unwrap().scope,
+            "sandbox:s1"
+        );
+        assert_eq!(
+            f.entry_for("s1", Some("s3"), "github").unwrap().scope,
+            "sandbox:s1"
+        );
+        assert_eq!(
+            f.entry_for("f3", Some("s3"), "github").unwrap().scope,
+            "global"
         );
         assert_eq!(f.remove_sandbox("s1").len(), 1);
         assert!(f.remove("github", "global").is_some());

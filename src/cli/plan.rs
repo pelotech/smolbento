@@ -56,11 +56,7 @@ pub fn start_plan<R: Runner>(ctx: &Ctx<R>, meta: &Meta) -> Result<StartPlan> {
     let network = compile::network(&policy, sandbox, &meta.credential_hosts);
     let mut env = Vec::new();
     for name in &meta.secrets {
-        // Own scope, then the fork parent's, then global.
-        let entry = secrets
-            .scoped_entry(Some(sandbox), name)
-            .or_else(|| (meta.fork_of.as_deref()).and_then(|p| secrets.scoped_entry(Some(p), name)))
-            .or_else(|| secrets.scoped_entry(None, name));
+        let entry = secrets.entry_for(sandbox, meta.fork_of.as_deref(), name);
         let (Some(service), Some(entry)) = (secrets.service(name), entry) else {
             eprintln!(
                 "warning: {sandbox} was created with a {name} secret that's no longer set; requests using it will fail"
