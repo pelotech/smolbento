@@ -109,6 +109,11 @@ impl Meta {
 
     /// A mounted host folder the sandbox can write: a copy would share it with the original.
     pub fn writable_host_folder(&self) -> bool {
+        // A workspace label without a readable list (an empty or garbled `sbx.workspaces`) still
+        // names a folder; assume it's writable.
+        if self.workspaces.is_empty() && self.clone_repo.is_none() && self.workspace.is_some() {
+            return true;
+        }
         self.workspaces
             .iter()
             .enumerate()
@@ -259,8 +264,36 @@ mod tests {
         assert!(mountless.forkable());
         let fork = Meta {
             fork_of: Some("a".into()),
-            ..mountless
+            ..mountless.clone()
         };
         assert!(!fork.forkable());
+    }
+
+    #[test]
+    fn a_workspace_without_a_readable_list_counts_as_writable() {
+        let from = |workspaces: Option<&str>| {
+            let mut labels = BTreeMap::from([
+                (NAME.to_string(), "a".to_string()),
+                (WORKSPACE.to_string(), "/w/p".to_string()),
+            ]);
+            if let Some(w) = workspaces {
+                labels.insert(WORKSPACES.to_string(), w.to_string());
+            }
+            Meta::from_labels(&labels).unwrap()
+        };
+        for w in [None, Some(""), Some("[]"), Some("not json")] {
+            assert!(
+                from(w).writable_host_folder() && !from(w).forkable(),
+                "{w:?}"
+            );
+        }
+        assert!(from(Some("[\"/w/p:ro\"]")).forkable());
+        // A clone's workspace is its own copy, whatever the list says.
+        let labels = BTreeMap::from([
+            (NAME.to_string(), "a".to_string()),
+            (WORKSPACE.to_string(), "/w/p".to_string()),
+            (CLONE.to_string(), "true".to_string()),
+        ]);
+        assert!(Meta::from_labels(&labels).unwrap().forkable());
     }
 }
