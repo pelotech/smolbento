@@ -1,5 +1,12 @@
 # Changelog
 
+## [0.2.1](https://github.com/pelotech/smolbento/compare/v0.2.0...v0.2.1) (2026-10-27)
+
+
+### Bug Fixes
+
+* make --deny-network add per-sandbox deny rules, as in sbx ([#13](https://github.com/pelotech/smolbento/issues/13)) ([66730ce](https://github.com/pelotech/smolbento/commit/66730cebc518635f8f1288f84193857b99a74278))
+
 ## [0.2.0](https://github.com/pelotech/smolbento/compare/v0.1.1...v0.2.0) (2026-10-27)
 
 
