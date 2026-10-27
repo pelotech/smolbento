@@ -52,6 +52,14 @@ pub fn has_mixin_layers(plan: &Plan) -> Result<bool> {
     Ok(!layered_mixins(plan)?.is_empty())
 }
 
+/// Whether this kit brings image layers of its own (`kit add` can't apply them live).
+pub fn has_layers(kit: &Kit) -> Result<bool> {
+    Ok(match &kit.content {
+        Content::Oci(dir) => !Layout::read(dir)?.layers().is_empty(),
+        _ => false,
+    })
+}
+
 fn layered_mixins(plan: &Plan) -> Result<Vec<(&Kit, Layout)>> {
     let mut layered = Vec::new();
     for m in &plan.mixins {

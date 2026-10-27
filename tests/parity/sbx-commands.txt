@@ -70,8 +70,16 @@ secret rm --all -f
 ports my-sandbox
 ports my-sandbox --publish 3000 --unpublish 8080:80
 ports my-sandbox --publish 8080:80
-# Later phases (must parse; exit 2 for now)
+# Kits
 kit inspect ghcr.io/example/kit:1
+kit inspect ./my-kit --json
+kit inspect ./my-kit --kit-arg region=eu
+kit validate ./my-kit
+kit validate ./my-kit --kit-arg region=eu --kit-args-file kit.env
+kit add my-sandbox ./mcp-postgres/
+kit add my-sandbox ghcr.io/myorg/mcp-postgres:1.0
+kit add my-sandbox ./mcp-postgres/ --kit-arg host=db.internal
+# Later phases (must parse; exit 2 for now)
 mcp add linear --url https://mcp.linear.app/sse
 template ls
 env run

@@ -254,7 +254,7 @@ pub fn prepare_create<R: Runner>(
 }
 
 /// The host's git `user.name` and `user.email`, for a kit's `git-identity@1`.
-fn host_git_identity<R: Runner>(ctx: &Ctx<R>) -> Option<(String, String)> {
+pub(crate) fn host_git_identity<R: Runner>(ctx: &Ctx<R>) -> Option<(String, String)> {
     let get = |key: &str| -> Option<String> {
         let out = std::process::Command::new("git")
             .args(["config", "--get", key])

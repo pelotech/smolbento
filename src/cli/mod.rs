@@ -4,6 +4,7 @@ mod args;
 mod diagnose;
 mod exec;
 mod fork;
+mod kit;
 mod lifecycle;
 mod ls;
 pub(crate) mod plan;
@@ -164,6 +165,7 @@ pub fn dispatch<R: Runner>(ctx: &mut Ctx<R>, cli: Cli) -> Result<i32> {
         Cmd::Policy(p) => policy::run(ctx, p),
         Cmd::Secret(s) => secret::run(ctx, s),
         Cmd::Ports(a) => ports::run(ctx, &a),
+        Cmd::Kit(k) => kit::run(ctx, k),
         Cmd::UploadPack { sandbox, .. } => upload_pack::run(ctx, &sandbox),
         Cmd::Daemon(_) => {
             writeln!(
@@ -293,8 +295,8 @@ mod tests {
     #[test]
     fn pending_and_cloud_commands_exit_2() {
         let mut t = test_env(&[]);
-        let err = sbt(&mut t.ctx, &["kit", "inspect", "x"]).unwrap_err();
-        assert_eq!(err.to_string(), "`sbt kit` is not implemented yet");
+        let err = sbt(&mut t.ctx, &["mcp", "ls"]).unwrap_err();
+        assert_eq!(err.to_string(), "`sbt mcp` is not implemented yet");
         assert_eq!(exit_code(&err), 2);
         let err = sbt(&mut t.ctx, &["move", "x", "--to", "cloud"]).unwrap_err();
         assert!(err.to_string().contains("Docker Cloud"));

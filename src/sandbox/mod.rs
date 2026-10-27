@@ -352,65 +352,94 @@ fn first_start<R: Runner>(
     kit: &KitFirstStart,
     drop_install_rules: impl FnOnce(&[String]) -> Result<NetworkSpec>,
 ) -> Result<()> {
-    let mut steps = Steps { vm, sb, n: 0 };
-    for step in &kit.steps.install {
-        steps.install(step)?;
+    let after_install = || -> Result<()> {
+        let mut network = plan.network.clone();
+        if !kit.steps.install_rules.is_empty() {
+            network = drop_install_rules(&kit.steps.install_rules)
+                .context("removing the install-phase network rules")?;
+            // R11: smolvm resolves each allowed host to CIDRs, and `--remove-allow-host` leaves
+            // those behind, so the host would stay reachable by IP. `update_network` sends
+            // `--reset-allow-list` with the whole list, which clears the stored hosts and CIDRs
+            // and replaces the running allow list (learned IPs of names no longer allowed are
+            // dropped too).
+            vm.update_network(&sb.machine, &network)
+                .context("removing the install-phase network rules")?;
+        }
+        if !kit.restart_without.is_empty() {
+            vm.stop(&sb.machine)
+                .context("restarting without install-only credentials")?;
+            let without = |v: &String| kit.restart_without.contains(v);
+            let restart = StartPlan {
+                network,
+                env: plan
+                    .env
+                    .iter()
+                    .filter(|(k, _)| !without(k))
+                    .cloned()
+                    .collect(),
+                remove: plan
+                    .remove
+                    .iter()
+                    .chain(&kit.restart_without)
+                    .cloned()
+                    .collect(),
+                ..plan.clone()
+            };
+            start(vm, sb, &restart).context("restarting without install-only credentials")?;
+        }
+        Ok(())
+    };
+    apply_kit_steps(vm, sb, &kit.steps, after_install).map_err(|(_, e)| e)
+}
+
+/// Where `apply_kit_steps` failed.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum KitPhase {
+    /// An install hook (hooks that ran may have changed the guest).
+    Install,
+    /// The caller's step between the hooks and the files.
+    AfterInstall,
+    /// Files, agent context, startup scripts or the kits record.
+    Write,
+}
+
+/// Applies kit steps to a running sandbox, for a create's first start and for `kit add`: install
+/// hooks, then `after_install` (dropping the install-phase rules), then files, agent context, the
+/// `startup.d` scripts, the startup runner and the kits record (written whole).
+pub fn apply_kit_steps<R: Runner>(
+    vm: &Smolvm<R>,
+    sb: &Sandbox,
+    steps: &KitSteps,
+    after_install: impl FnOnce() -> Result<()>,
+) -> std::result::Result<(), (KitPhase, anyhow::Error)> {
+    let mut run = Steps { vm, sb, n: 0 };
+    for step in &steps.install {
+        run.install(step).map_err(|e| (KitPhase::Install, e))?;
     }
-    let mut network = plan.network.clone();
-    if !kit.steps.install_rules.is_empty() {
-        network = drop_install_rules(&kit.steps.install_rules)
-            .context("removing the install-phase network rules")?;
-        // R11: smolvm resolves each allowed host to CIDRs, and `--remove-allow-host` leaves
-        // those behind, so the host would stay reachable by IP. `update_network` sends
-        // `--reset-allow-list` with the whole list, which clears the stored hosts and CIDRs
-        // and replaces the running allow list (learned IPs of names no longer allowed are
-        // dropped too).
-        vm.update_network(&sb.machine, &network)
-            .context("removing the install-phase network rules")?;
-    }
-    if !kit.restart_without.is_empty() {
-        vm.stop(&sb.machine)
-            .context("restarting without install-only credentials")?;
-        let without = |v: &String| kit.restart_without.contains(v);
-        let restart = StartPlan {
-            network,
-            env: plan
-                .env
-                .iter()
-                .filter(|(k, _)| !without(k))
-                .cloned()
-                .collect(),
-            remove: plan
-                .remove
-                .iter()
-                .chain(&kit.restart_without)
-                .cloned()
-                .collect(),
-            ..plan.clone()
-        };
-        start(vm, sb, &restart).context("restarting without install-only credentials")?;
-    }
-    for script in &kit.steps.files {
-        steps.run("root", script).context("writing kit files")?;
-    }
-    for script in &kit.steps.context {
-        steps.run("root", script).context("writing agent context")?;
-    }
-    let mut files: Vec<(String, &str, &str)> = kit
-        .steps
-        .startup_d
-        .iter()
-        .map(|(name, body)| {
-            (
-                format!("{}/{name}", guest::STARTUP_DIR),
-                body.as_str(),
-                "644",
-            )
-        })
-        .collect();
-    files.push((guest::STARTUP_PATH.into(), guest::STARTUP_RUNNER, "755"));
-    files.push((guest::KITS_FILE.into(), &kit.steps.kits_record, "644"));
-    put_files(vm, sb, &files).context("writing the kits' startup scripts")
+    after_install().map_err(|e| (KitPhase::AfterInstall, e))?;
+    let mut write = || -> Result<()> {
+        for script in &steps.files {
+            run.run("root", script).context("writing kit files")?;
+        }
+        for script in &steps.context {
+            run.run("root", script).context("writing agent context")?;
+        }
+        let mut files: Vec<(String, &str, &str)> = steps
+            .startup_d
+            .iter()
+            .map(|(name, body)| {
+                (
+                    format!("{}/{name}", guest::STARTUP_DIR),
+                    body.as_str(),
+                    "644",
+                )
+            })
+            .collect();
+        files.push((guest::STARTUP_PATH.into(), guest::STARTUP_RUNNER, "755"));
+        files.push((guest::KITS_FILE.into(), &steps.kits_record, "644"));
+        put_files(vm, sb, &files).context("writing the kits' startup scripts")
+    };
+    write().map_err(|e| (KitPhase::Write, e))
 }
 
 /// Larger scripts are copied in rather than passed as `sh -c` argv, well under Linux's 128 KiB
@@ -532,6 +561,31 @@ fn run_startup<R: Runner>(vm: &Smolvm<R>, sb: &Sandbox) {
     if let Err(e) = exec {
         eprintln!(
             "warning: starting the kits' startup hooks in {}: {e:#}",
+            sb.name()
+        );
+    }
+}
+
+/// Starts one kit's `startup.d` script, detached as root and logging like the startup runner (a
+/// kit added to a running sandbox). A failure only warns, as for `run_startup`.
+pub fn run_kit_startup<R: Runner>(vm: &Smolvm<R>, sb: &Sandbox, script: &str) {
+    let exec = vm.exec_captured(&ExecSpec {
+        name: sb.machine.clone(),
+        user: Some("root".into()),
+        detach: true,
+        cmd: vec![
+            "sh".into(),
+            "-c".into(),
+            format!(
+                "mkdir -p /var/log/smolbento && exec sh {} >>/var/log/smolbento/startup.log 2>&1",
+                sh_quote(script)
+            ),
+        ],
+        ..Default::default()
+    });
+    if let Err(e) = exec {
+        eprintln!(
+            "warning: starting the kit's startup hooks in {}: {e:#}",
             sb.name()
         );
     }

@@ -1,0 +1,27 @@
+---
+source: tests/help.rs
+expression: help(&path)
+---
+Show what a kit provides and requests
+
+Usage: sbt kit inspect [OPTIONS] <REFERENCE>
+
+Arguments:
+  <REFERENCE>
+          Kit: a registry reference or a local directory, descriptor or Smolfile
+
+Options:
+  -D, --debug
+          Print each smolvm command line
+
+      --kit-arg <NAME=VALUE>
+          Kit argument: NAME=VALUE, or KIT.NAME=VALUE for one kit (repeatable)
+
+      --kit-args-file <FILE>
+          Read kit arguments (NAME=VALUE lines) from a file (repeatable)
+
+      --json
+          Output in JSON format
+
+  -h, --help
+          Print help

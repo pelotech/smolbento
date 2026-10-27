@@ -26,7 +26,7 @@ Commands:
   ports       Publish or unpublish ports on a sandbox (127.0.0.1 only)
   policy      Network policy
   secret      Secrets for agents: sandboxes see placeholders, smolvm sends the real value
-  kit         Kits (not implemented yet)
+  kit         Inspect, validate and add kits
   mcp         MCP servers (not implemented yet)
   env         sbxenv.yaml environments (not implemented yet)
   template    Sandbox templates (not implemented yet)

@@ -73,8 +73,9 @@ pub enum Cmd {
     /// Secrets for agents: sandboxes see placeholders, smolvm sends the real value
     #[command(subcommand)]
     Secret(SecretCmd),
-    /// Kits (not implemented yet)
-    Kit(Passthrough),
+    /// Inspect, validate and add kits
+    #[command(subcommand)]
+    Kit(KitCmd),
     /// MCP servers (not implemented yet)
     Mcp(Passthrough),
     /// sbxenv.yaml environments (not implemented yet)
@@ -203,6 +204,50 @@ pub struct ForkArgs {
     #[arg(long, default_value_t = 1, conflicts_with = "name",
           value_parser = clap::value_parser!(u32).range(1..))]
     pub count: u32,
+}
+
+#[derive(Debug, Subcommand)]
+pub enum KitCmd {
+    /// Show what a kit provides and requests
+    Inspect {
+        /// Kit: a registry reference or a local directory, descriptor or Smolfile
+        reference: String,
+        #[command(flatten)]
+        args: KitArgOpts,
+        /// Output in JSON format
+        #[arg(long)]
+        json: bool,
+    },
+    /// Check a kit without running it
+    Validate {
+        /// Kit: a registry reference or a local directory, descriptor or Smolfile
+        reference: String,
+        #[command(flatten)]
+        args: KitArgOpts,
+    },
+    /// Add a mixin kit to an existing sandbox
+    Add {
+        /// Sandbox name
+        sandbox: String,
+        /// Mixin kit: a registry reference or a local directory or descriptor
+        reference: String,
+        #[command(flatten)]
+        args: KitArgOpts,
+        /// Grant the kit's network access without asking
+        #[arg(long, short = 'y')]
+        yes: bool,
+    },
+}
+
+/// Kit argument flags, as on `run` and `create`.
+#[derive(Debug, Clone, Default, Args)]
+pub struct KitArgOpts {
+    /// Kit argument: NAME=VALUE, or KIT.NAME=VALUE for one kit (repeatable)
+    #[arg(long = "kit-arg", value_name = "NAME=VALUE")]
+    pub kit_arg: Vec<String>,
+    /// Read kit arguments (NAME=VALUE lines) from a file (repeatable)
+    #[arg(long = "kit-args-file", value_name = "FILE")]
+    pub kit_args_file: Vec<PathBuf>,
 }
 
 /// Arguments of a command that isn't implemented yet, kept so sbx command lines still parse.
