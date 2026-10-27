@@ -124,11 +124,11 @@ fn local_path<R: Runner>(ctx: &Ctx<R>, reference: &str) -> Result<Option<PathBuf
 
 fn load_v3<R: Runner>(ctx: &Ctx<R>, dir: &Path) -> Result<Kit> {
     let source = Source::LocalV3(dir.to_path_buf());
-    let descriptors = fs::read_dir(dir)
-        .with_context(|| format!("reading {}", dir.display()))?
-        .filter_map(|e| e.ok())
-        .filter(|e| is_descriptor(&e.path()))
-        .count();
+    let mut descriptors = 0;
+    for e in fs::read_dir(dir).with_context(|| format!("reading {}", dir.display()))? {
+        let e = e.with_context(|| format!("reading {}", dir.display()))?;
+        descriptors += usize::from(is_descriptor(&e.path()));
+    }
     match descriptors {
         0 => bail!(
             "{} isn't a kit: no spec.yaml or kit descriptor",
@@ -145,7 +145,7 @@ fn load_v3<R: Runner>(ctx: &Ctx<R>, dir: &Path) -> Result<Kit> {
     registry::read_layout(&built, source)
 }
 
-/// A `*.yaml`/`*.yml` file whose first line is the v3 syntax line.
+/// A `*.yaml`/`*.yml` file whose first line is the v3 syntax line (after an optional BOM).
 fn is_descriptor(path: &Path) -> bool {
     let yaml = matches!(
         path.extension().and_then(|e| e.to_str()),
@@ -154,11 +154,7 @@ fn is_descriptor(path: &Path) -> bool {
     if !yaml || !path.is_file() {
         return false;
     }
-    let Ok(bytes) = fs::read(path) else {
-        return false;
-    };
-    let first = bytes.split(|b| *b == b'\n').next().unwrap_or_default();
-    String::from_utf8_lossy(first).trim_end() == builder::SYNTAX
+    fs::read(path).is_ok_and(|b| builder::starts_with_syntax(&b))
 }
 
 /// A preset as a workload kit: the image and command, no capabilities.
@@ -310,6 +306,14 @@ mod tests {
             );
             assert!(t.ctx.vm.runner().call_lines().is_empty(), "{r}");
         }
+    }
+
+    #[test]
+    fn a_descriptor_may_start_with_a_bom() {
+        let d = tempfile::tempdir().unwrap();
+        let f = d.path().join("k.yaml");
+        fs::write(&f, "\u{feff}# syntax=docker/sandbox-kit:3\nkind: mixin\n").unwrap();
+        assert!(is_descriptor(&f));
     }
 
     #[test]

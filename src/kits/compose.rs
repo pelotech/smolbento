@@ -2,7 +2,7 @@
 //! mixin's layers on top of the workload's.
 
 use std::fs;
-use std::io::Write;
+use std::io::{Read, Write};
 use std::path::{Path, PathBuf};
 
 use anyhow::{Context, Result, anyhow, bail};
@@ -232,11 +232,37 @@ fn write_tar(
         let len = file.metadata()?.len();
         let name = format!("blobs/sha256/{}", hex_of(&digest)?);
         let mut h = header(len);
-        b.append_data(&mut h, &name, file)
+        // At most the header's size, and a blob that shrank since is an error, not a short entry.
+        let mut data = Counted {
+            inner: file.take(len),
+            n: 0,
+        };
+        b.append_data(&mut h, &name, &mut data)
             .with_context(|| format!("adding {name} to the image archive"))?;
+        if data.n != len {
+            bail!(
+                "{} changed while being archived ({} of {len} bytes)",
+                path.display(),
+                data.n
+            );
+        }
     }
     b.finish()?;
     Ok(())
+}
+
+/// A reader counting the bytes read through it.
+struct Counted<R> {
+    inner: R,
+    n: u64,
+}
+
+impl<R: Read> Read for Counted<R> {
+    fn read(&mut self, buf: &mut [u8]) -> std::io::Result<usize> {
+        let n = self.inner.read(buf)?;
+        self.n += n as u64;
+        Ok(n)
+    }
 }
 
 fn header(len: u64) -> tar::Header {
@@ -263,6 +289,7 @@ fn ensure_tar(path: &Path, build: impl FnOnce(&mut fs::File) -> Result<()>) -> R
     fs::create_dir_all(dir).with_context(|| format!("creating {}", dir.display()))?;
     let mut tmp = tempfile::NamedTempFile::new_in(dir)?;
     build(tmp.as_file_mut())?;
+    tmp.as_file().sync_all()?;
     tmp.persist(path)
         .map_err(|e| e.error)
         .with_context(|| format!("writing {}", path.display()))?;

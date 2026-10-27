@@ -15,7 +15,7 @@ pub fn check(source: &Source, settings: &Settings) -> Result<()> {
             if patterns
                 .split(',')
                 .map(str::trim)
-                .any(|p| !p.is_empty() && glob(p, &name))
+                .any(|p| !p.is_empty() && glob(&normalise_pattern(p), &name))
             {
                 return Ok(());
             }
@@ -80,6 +80,23 @@ pub(crate) fn normalise(r: &str) -> Result<String> {
     Ok(parts.join("/"))
 }
 
+/// A `kit.sources` pattern with its registry host normalised as `normalise` does a ref's:
+/// lowercase, Docker Hub's aliases as `docker.io`.
+fn normalise_pattern(p: &str) -> String {
+    let Some((host, rest)) = p.split_once('/') else {
+        return p.to_string();
+    };
+    if !(host.contains(['.', ':']) || host.eq_ignore_ascii_case("localhost")) {
+        return p.to_string();
+    }
+    let host = host.to_ascii_lowercase();
+    let host = match host.as_str() {
+        "index.docker.io" | "registry-1.docker.io" => "docker.io",
+        h => h,
+    };
+    format!("{host}/{rest}")
+}
+
 /// `*` matches any run of characters, `/` included.
 fn glob(pattern: &str, text: &str) -> bool {
     let mut pieces = pattern.split('*');
@@ -118,6 +135,26 @@ mod tests {
 
     fn registry(r: &str) -> Source {
         Source::Registry(r.to_string())
+    }
+
+    #[test]
+    fn pattern_hosts_are_normalised_like_refs() {
+        for pattern in [
+            "GHCR.IO/acme/*",
+            "index.docker.io/acme/*",
+            "registry-1.docker.io/acme/*",
+        ] {
+            let (_d, s) = settings(&[("SMOLBENTO_KIT_SOURCES", pattern)]);
+            let r = if pattern.starts_with("GHCR") {
+                "ghcr.io/acme/k:1"
+            } else {
+                "acme/k:1"
+            };
+            check(&registry(r), &s).unwrap_or_else(|e| panic!("{pattern}: {e}"));
+        }
+        // Only the host: a repository path keeps its case.
+        let (_d, s) = settings(&[("SMOLBENTO_KIT_SOURCES", "ghcr.io/Acme/*")]);
+        assert!(check(&registry("ghcr.io/acme/k:1"), &s).is_err());
     }
 
     #[test]

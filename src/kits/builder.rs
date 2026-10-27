@@ -38,8 +38,9 @@ const AUTH_PHRASES: [&str; 5] = [
     "pull access denied",
     "401 unauthorized",
 ];
-/// What may precede a bare HTTP 401 status; a bare "401" elsewhere is often a size or a digest.
-const STATUS_PREFIXES: [&str; 3] = ["status: ", "status code ", ": "];
+/// What may precede a bare HTTP 401 status; a bare "401" elsewhere is often a size, a count or a
+/// digest (`: 401 bytes`).
+const STATUS_PREFIXES: [&str; 2] = ["status: ", "status code "];
 
 /// Whether a lowercased line of buildx output reports a registry login failure.
 fn is_auth_failure(lower: &str) -> bool {
@@ -48,7 +49,7 @@ fn is_auth_failure(lower: &str) -> bool {
     }
     lower.match_indices("401").any(|(i, _)| {
         let (before, after) = (&lower[..i], &lower[i + 3..]);
-        !after.starts_with(|c: char| c.is_ascii_digit())
+        !after.starts_with(|c: char| c.is_ascii_alphanumeric())
             && STATUS_PREFIXES.iter().any(|p| before.ends_with(p))
     })
 }
@@ -124,6 +125,13 @@ fn request<R: Runner>(ctx: &Ctx<R>) -> CreateRequest {
 
 /// The kit's descriptor file name: the single `*.yaml`/`*.yml` whose first line is the v3 syntax
 /// line (upstream names it after the kit, e.g. `claude-mixin.yaml`).
+/// Whether a file's first line is the v3 syntax line, after an optional UTF-8 BOM.
+pub(crate) fn starts_with_syntax(bytes: &[u8]) -> bool {
+    let bytes = bytes.strip_prefix(b"\xEF\xBB\xBF").unwrap_or(bytes);
+    let first = bytes.split(|b| *b == b'\n').next().unwrap_or_default();
+    String::from_utf8_lossy(first).trim_end() == SYNTAX
+}
+
 fn descriptor(dir: &Path) -> Result<String> {
     let mut found = Vec::new();
     for entry in fs::read_dir(dir).with_context(|| format!("reading {}", dir.display()))? {
@@ -135,8 +143,7 @@ fn descriptor(dir: &Path) -> Result<String> {
             continue;
         }
         let bytes = fs::read(&path).with_context(|| format!("reading {}", path.display()))?;
-        let first = bytes.split(|b| *b == b'\n').next().unwrap_or_default();
-        if String::from_utf8_lossy(first).trim_end() == SYNTAX {
+        if starts_with_syntax(&bytes) {
             found.push(name.to_string());
         }
     }
@@ -783,11 +790,22 @@ mod tests {
     }
 
     #[test]
+    fn the_syntax_line_may_follow_a_bom() {
+        assert!(starts_with_syntax(
+            b"\xEF\xBB\xBF# syntax=docker/sandbox-kit:3\r\nkind: x\n"
+        ));
+        assert!(starts_with_syntax(MIXIN.as_bytes()));
+        assert!(!starts_with_syntax(
+            b"\xEF\xBB\xBFkind: x\n# syntax=docker/sandbox-kit:3\n"
+        ));
+    }
+
+    #[test]
     fn clear_auth_signals_are_recognised() {
         for line in [
             "unexpected status: 401 Unauthorized",
             "failed with status code 401",
-            "HEAD https://r.example/v2/x: 401 ",
+            "HEAD https://r.example/v2/x: 401 Unauthorized",
             "error: unauthorized: authentication required",
             "pull access denied for x",
             "denied: requested access to the resource is denied",
@@ -798,7 +816,11 @@ mod tests {
             "sha256:aa401bb",
             "transferred 4012 bytes",
             "status: 4010",
+            "status: 401b",
             "line 401",
+            "copied: 401 bytes",
+            "HEAD https://r.example/v2/x: 401 ",
+            "layer: 401kb",
         ] {
             assert!(!is_auth_failure(line), "{line}");
         }

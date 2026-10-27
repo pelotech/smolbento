@@ -389,9 +389,15 @@ fn build_layout(cache: &Path, manifest: &[u8], digest: &str, reference: &str) ->
             continue;
         }
         let src = blob_path(cache, d)?;
-        // Hard links keep one copy per blob; copy when the store is on another device.
+        // Hard links keep one copy per blob; copy when the store is on another device, via a
+        // temp file so an interrupted copy never leaves a short blob under its digest.
         if fs::hard_link(&src, &dst).is_err() {
-            fs::copy(&src, &dst).with_context(|| format!("copying {}", src.display()))?;
+            let tmp = tempfile::NamedTempFile::new_in(&blobs)?;
+            fs::copy(&src, tmp.path()).with_context(|| format!("copying {}", src.display()))?;
+            tmp.as_file().sync_all()?;
+            tmp.persist(&dst)
+                .map_err(|e| e.error)
+                .with_context(|| format!("writing {}", dst.display()))?;
         }
     }
     fs::write(dir.join("oci-layout"), r#"{"imageLayoutVersion":"1.0.0"}"#)?;
