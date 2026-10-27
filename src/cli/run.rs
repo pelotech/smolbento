@@ -415,14 +415,33 @@ mod tests {
     #[test]
     fn a_failed_fetch_warns_and_keeps_the_agent_status_and_the_stop() {
         let mut t = test_env(&[]);
-        // A repo without the sandbox-<name> remote: the fetch fails.
+        // The remote's upload-pack records that the fetch ran, then fails it.
         let (_keep, repo) = temp_repo();
+        let marker = repo.parent().unwrap().join("fetch-ran");
+        git(
+            &repo,
+            &[
+                "remote",
+                "add",
+                "sandbox-claude-proj",
+                "file:///sbt/claude-proj",
+            ],
+        );
+        git(
+            &repo,
+            &[
+                "config",
+                "remote.sandbox-claude-proj.uploadpack",
+                &format!("touch '{}'; exit 1 #", marker.display()),
+            ],
+        );
         clone_sandbox(&t, &repo);
         t.ctx.vm.runner().interactive_exit(5);
         assert_eq!(
             sbt(&mut t.ctx, &["run", "--name", "claude-proj"]).unwrap(),
             5
         );
+        assert!(marker.exists(), "the fetch was never attempted");
         assert_eq!(
             t.ctx.vm.runner().call_lines().last().unwrap(),
             "machine stop -n sbx-claude-proj"

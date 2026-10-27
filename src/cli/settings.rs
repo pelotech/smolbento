@@ -61,4 +61,18 @@ mod tests {
         assert_eq!(t.ctx.settings.value("docker.enabled").unwrap(), "true");
         assert!(sbt(&mut t.ctx, &["settings", "get", "nope"]).is_err());
     }
+
+    #[test]
+    fn ls_lists_the_clone_fetch_on_exit_setting() {
+        let t = test_env(&[]);
+        let listing = render(&t.ctx.settings, true).unwrap();
+        let row = listing
+            .lines()
+            .find(|l| l.starts_with("clone.fetch-on-exit"))
+            .expect("listed");
+        assert_eq!(
+            row.split_whitespace().take(3).collect::<Vec<_>>(),
+            vec!["clone.fetch-on-exit", "true", "default"]
+        );
+    }
 }
