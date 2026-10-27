@@ -1,6 +1,7 @@
 //! fork: copy-on-write copies of a running sandbox (smolvm `machine branch`), for parallel attempts
 //! or as an undo point. smolbento-only (sbx has no fork).
 
+use std::io::Write;
 use std::path::Path;
 
 use anyhow::{Context, Result, anyhow, bail};
@@ -12,6 +13,11 @@ use crate::smolvm::{Runner, SmolvmError};
 use crate::workspace::clone;
 
 pub fn run<R: Runner>(ctx: &mut Ctx<R>, a: &ForkArgs) -> Result<i32> {
+    run_to(ctx, a, &mut std::io::stdout())
+}
+
+/// `run`, printing each copy's name to `out` as it's made.
+fn run_to<R: Runner>(ctx: &mut Ctx<R>, a: &ForkArgs, out: &mut impl Write) -> Result<i32> {
     if !ctx.settings.bool("fork.enabled")? {
         bail!("fork is turned off (fork.enabled=false)");
     }
@@ -38,7 +44,7 @@ pub fn run<R: Runner>(ctx: &mut Ctx<R>, a: &ForkArgs) -> Result<i32> {
     for n in &names {
         fork_one(ctx, &parent, n, &start.env, &start.remove)
             .with_context(|| format!("forking {} as {n}", parent.name()))?;
-        println!("{n}");
+        writeln!(out, "{n}")?;
     }
     Ok(0)
 }
@@ -61,7 +67,8 @@ fn free_names<R: Runner>(ctx: &Ctx<R>, parent: &str, count: u32) -> Result<Vec<S
     while out.len() < count as usize {
         let candidate = format!("{parent}-fork-{n}");
         if sandbox::find(&ctx.vm, &candidate)?.is_none() {
-            name::validate(&candidate)?;
+            name::validate(&candidate)
+                .map_err(|e| anyhow!("{e}; use --name to choose a shorter one"))?;
             out.push(candidate);
         }
         n += 1;
@@ -378,9 +385,64 @@ mod tests {
         }
     }
 
+    /// Runs `fork` with `args`, giving what it printed.
+    fn fork_out(t: &mut TestEnv, args: &[&str]) -> String {
+        use clap::Parser;
+        let cli =
+            crate::cli::Cli::try_parse_from(std::iter::once("sbt").chain(args.iter().copied()))
+                .unwrap();
+        let Some(crate::cli::Cmd::Fork(a)) = cli.command else {
+            panic!("not fork")
+        };
+        let mut out = Vec::new();
+        super::run_to(&mut t.ctx, &a, &mut out).unwrap();
+        String::from_utf8(out).unwrap()
+    }
+
+    #[test]
+    fn prints_each_copys_name() {
+        let mut t = test_env(&[]);
+        parent(&t, "running", &[]);
+        exists(&t, "a-fork-1");
+        assert_eq!(
+            fork_out(&mut t, &["fork", "a", "--count", "2"]),
+            "a-fork-2\na-fork-3\n"
+        );
+        let mut t = test_env(&[]);
+        parent(&t, "running", &[]);
+        assert_eq!(
+            fork_out(&mut t, &["fork", "a", "--name", "try.2"]),
+            "try.2\n"
+        );
+    }
+
+    #[test]
+    fn a_too_long_default_name_points_at_name() {
+        let mut t = test_env(&[]);
+        let long = "a".repeat(120);
+        let machine = format!("sbx-{long}");
+        let fake = t.ctx.vm.runner();
+        fake.fail(&["machine", "status"], "NOT_FOUND", "machine not found");
+        fake.ok(
+            &["machine", "status", "-n", &machine],
+            &machine_json(&machine, "running", &[("sbx.name", &long)]),
+        );
+        let err = sbt(&mut t.ctx, &["fork", &long]).unwrap_err().to_string();
+        assert!(
+            err.contains("is too long (maximum 124 characters)"),
+            "{err}"
+        );
+        assert!(
+            err.ends_with("; use --name to choose a shorter one"),
+            "{err}"
+        );
+        assert!(branches(&t).is_empty());
+    }
+
     #[test]
     fn count_and_name_are_exclusive() {
         for args in [
+            &["fork", "a", "--count", "1", "--name", "x"][..],
             &["fork", "a", "--count", "2", "--name", "x"][..],
             &["fork", "a", "--count", "0"][..],
         ] {
