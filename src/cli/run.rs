@@ -47,7 +47,10 @@ pub fn run<R: Runner>(ctx: &mut Ctx<R>, a: &RunArgs) -> Result<i32> {
                 Some(sb) => (sb, false),
                 None => {
                     resolve_clone(&mut req, &a.opts)?;
-                    (plan::create(ctx, &mut req, &a.opts.deny_network)?, true)
+                    (
+                        plan::create(ctx, &mut req, &a.opts.deny_network, None)?,
+                        true,
+                    )
                 }
             }
         }

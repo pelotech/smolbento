@@ -72,7 +72,7 @@ pub fn build<R: Runner>(ctx: &Ctx<R>, dir: &Path) -> Result<PathBuf> {
             (sb, running)
         }
         None => (
-            plan::create(ctx, &mut request(ctx), &[])
+            plan::create(ctx, &mut request(ctx), &[], None)
                 .context("creating the kit builder sandbox")?,
             false,
         ),

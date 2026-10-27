@@ -105,7 +105,7 @@ pub fn create<R: Runner>(ctx: &mut Ctx<R>, a: &CreateArgs) -> Result<i32> {
         .context("specify an agent, e.g. `sbt create claude .`")?;
     let mut req = build_request(ctx, agent, paths, &a.opts, false)?;
     resolve_clone(&mut req, &a.opts)?;
-    let sb = plan::create(ctx, &mut req, &a.opts.deny_network)?;
+    let sb = plan::create(ctx, &mut req, &a.opts.deny_network, None)?;
     writeln!(&ctx.out, "Created sandbox {}", sb.name())?;
     Ok(0)
 }

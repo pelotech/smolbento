@@ -9,7 +9,7 @@ use super::Ctx;
 use crate::policy::{Mode, Policy, compile};
 use crate::sandbox::{self, CloneStep, CreateRequest, Meta, Sandbox, StartPlan, name};
 use crate::secrets::{SecretsFile, resolve::resolve};
-use crate::smolvm::{Credential, Runner};
+use crate::smolvm::{Credential, NetworkSpec, Runner};
 use crate::workspace::clone;
 
 /// Hosts of the given services' credentials.
@@ -48,8 +48,17 @@ pub fn credentials(secrets: &SecretsFile, services: &[String]) -> Result<Vec<Cre
 
 /// Network and secret values for starting the sandbox `meta` describes: its credentials came from
 /// `meta.secrets`, cover `meta.credential_hosts` and use `meta.credential_env` (all recorded at
-/// create).
+/// create). Install-only credentials (`meta.credential_install`) are left out.
 pub fn start_plan<R: Runner>(ctx: &Ctx<R>, meta: &Meta) -> Result<StartPlan> {
+    plan_for(ctx, meta, false)
+}
+
+/// `start_plan` for a create's first start, which also passes the install-only credentials.
+pub fn first_start_plan<R: Runner>(ctx: &Ctx<R>, meta: &Meta) -> Result<StartPlan> {
+    plan_for(ctx, meta, true)
+}
+
+fn plan_for<R: Runner>(ctx: &Ctx<R>, meta: &Meta, install: bool) -> Result<StartPlan> {
     let sandbox = meta.name.as_str();
     // Like create (and sbx after `policy reset`), a start needs a chosen policy.
     let policy = ensure_policy(ctx)?;
@@ -64,8 +73,29 @@ pub fn start_plan<R: Runner>(ctx: &Ctx<R>, meta: &Meta) -> Result<StartPlan> {
             );
             continue;
         };
+        // The service's own env vars, then kit ones bound to it (`sbx.credential-service.*`).
+        let vars: Vec<&String> = service
+            .env_vars
+            .iter()
+            .chain(
+                meta.credential_services
+                    .iter()
+                    .filter(|(_, s)| *s == name)
+                    .map(|(v, _)| v),
+            )
+            .filter(|v| install || !meta.credential_install.contains(v))
+            .collect();
+        if vars.is_empty() {
+            continue;
+        }
         match resolve(entry, ctx.store.as_ref()) {
-            Ok(value) => env.extend(service.env_vars.iter().map(|v| (v.clone(), value.clone()))),
+            Ok(value) => env.extend(vars.into_iter().map(|v| {
+                let value = match meta.credential_formats.get(v) {
+                    Some(f) => f.apply(&value),
+                    None => value.clone(),
+                };
+                (v.clone(), value)
+            })),
             Err(e) => eprintln!(
                 "warning: {name} secret for {sandbox}: {e:#}; requests using it will fail"
             ),
@@ -101,6 +131,7 @@ pub fn start_plan<R: Runner>(ctx: &Ctx<R>, meta: &Meta) -> Result<StartPlan> {
         uid: ctx.uid,
         clone,
         branchable: meta.forkable() && ctx.settings.bool("fork.enabled")?,
+        kit: None,
     })
 }
 
@@ -199,6 +230,7 @@ pub fn create<R: Runner>(
     ctx: &Ctx<R>,
     req: &mut CreateRequest,
     deny_network: &[String],
+    kit: Option<sandbox::KitFirstStart>,
 ) -> Result<Sandbox> {
     // Before prepare_create, which may prompt and adds the --deny-network rules.
     if sandbox::find(&ctx.vm, &req.name)?.is_some() {
@@ -227,8 +259,19 @@ pub fn create<R: Runner>(
         {
             added_remote = Some(repo);
         }
-        let plan = start_plan(ctx, &sandbox::create::meta(req))?;
-        sandbox::create(&ctx.vm, req, &plan)
+        let meta = sandbox::create::meta(req);
+        let plan = match kit {
+            Some(kit) => {
+                added.extend(kit.rule_ids.iter().cloned());
+                StartPlan {
+                    kit: Some(kit),
+                    ..first_start_plan(ctx, &meta)?
+                }
+            }
+            None => start_plan(ctx, &meta)?,
+        };
+        let req: &CreateRequest = req;
+        sandbox::create(&ctx.vm, req, &plan, |ids| drop_install_rules(ctx, req, ids))
     })();
     if result.is_err()
         && (!added.is_empty() || added_remote.is_some())
@@ -248,6 +291,19 @@ pub fn create<R: Runner>(
         }
     }
     result
+}
+
+/// Removes a new sandbox's install-phase kit rules from the policy and returns its network
+/// without them. Only this sandbox's rules change, so only its network needs pushing.
+fn drop_install_rules<R: Runner>(
+    ctx: &Ctx<R>,
+    req: &CreateRequest,
+    ids: &[String],
+) -> Result<NetworkSpec> {
+    let mut policy = Policy::load(&ctx.paths)?;
+    policy.remove_rules_by_ids(&req.name, ids);
+    policy.save(&ctx.paths)?;
+    Ok(compile::network(&policy, &req.name, &req.credential_hosts))
 }
 
 /// Pushes the policy (as just saved) to running sandboxes. Failures are warnings: the policy
@@ -625,5 +681,158 @@ mod tests {
                 remotes: vec![],
             })
         );
+    }
+
+    #[test]
+    fn install_only_credentials_are_left_out_of_later_starts() {
+        let t = test_env(&[]);
+        set_policy(&t, "mode = \"deny-all\"");
+        save_secret(&t, "github", None, "gh-123");
+        let m = Meta {
+            credential_install: vec!["GH_TOKEN".into()],
+            ..meta("s1", &["github".to_string()], &[])
+        };
+        let plan = start_plan(&t.ctx, &m).unwrap();
+        assert_eq!(
+            plan.env,
+            vec![("GITHUB_TOKEN".to_string(), "gh-123".to_string())]
+        );
+        assert_eq!(plan.remove, vec!["GH_TOKEN"]);
+        // The create's first start has them, for the install hooks.
+        let first = first_start_plan(&t.ctx, &m).unwrap();
+        assert!(
+            first
+                .env
+                .iter()
+                .any(|(k, v)| k == "GH_TOKEN" && v == "gh-123")
+        );
+        assert!(first.remove.is_empty());
+    }
+
+    #[test]
+    fn kit_credential_vars_resolve_their_service_and_format() {
+        use crate::sandbox::labels::CredFormat;
+        let t = test_env(&[]);
+        set_policy(&t, "mode = \"deny-all\"");
+        save_secret(&t, "github", None, "gh-123");
+        let mut m = meta("s1", &["github".to_string()], &[]);
+        m.credential_env.push("SBX_KIT_GITHUB".into());
+        m.credential_services = [("SBX_KIT_GITHUB".to_string(), "github".to_string())].into();
+        m.credential_formats = [
+            (
+                "SBX_KIT_GITHUB".to_string(),
+                CredFormat::Format("Bearer %s".into()),
+            ),
+            ("GH_TOKEN".to_string(), CredFormat::Basic("x".into())),
+        ]
+        .into();
+        let plan = start_plan(&t.ctx, &m).unwrap();
+        let env: std::collections::BTreeMap<_, _> = plan.env.into_iter().collect();
+        assert_eq!(env["SBX_KIT_GITHUB"], "Bearer gh-123");
+        assert_eq!(
+            env["GH_TOKEN"],
+            CredFormat::Basic("x".into()).apply("gh-123")
+        );
+        assert_eq!(env["GITHUB_TOKEN"], "gh-123");
+        assert!(plan.remove.is_empty(), "{:?}", plan.remove);
+    }
+
+    /// `create` of `s1` with a kit that allows `registry.npmjs.org` for install only and
+    /// `api.example.com` at runtime. Returns the env and the kit's two rule ids.
+    fn kit_create(fail_install: bool) -> (TestEnv, Result<Sandbox>, [String; 2]) {
+        use crate::kits::apply::KitSteps;
+        use crate::policy::Decision;
+        use crate::sandbox::KitFirstStart;
+        let t = test_env(&[]);
+        set_policy(&t, "mode = \"deny-all\"");
+        let mut policy = Policy::load(&t.ctx.paths).unwrap();
+        let mut add = |host: &str| {
+            policy
+                .add_rule(Some("s1"), Decision::Allow, host, "kit:k", None, None)
+                .unwrap()
+        };
+        let ids = [add("registry.npmjs.org"), add("api.example.com")];
+        policy.save(&t.ctx.paths).unwrap();
+        let fake = t.ctx.vm.runner();
+        fake.fail(&["machine", "status"], "NOT_FOUND", "vm not found");
+        fake.once_ok(
+            &["machine", "status"],
+            &machine_json("sbx-s1", "created", &[("sbx.name", "s1")]),
+        );
+        // `create` checks the name is free first.
+        fake.once_fail(&["machine", "status"], "NOT_FOUND", "vm not found");
+        if fail_install {
+            fake.fail(
+                &[
+                    "machine", "exec", "--name", "sbx-s1", "-u", "root", "--", "sh", "-c", "npm i",
+                ],
+                "EXEC_FAILED",
+                "npm ERR! 404",
+            );
+        }
+        let kit = KitFirstStart {
+            steps: KitSteps {
+                install_rules: vec![ids[0].clone()],
+                install: vec![(None, "npm i".into())],
+                ..Default::default()
+            },
+            rule_ids: ids.to_vec(),
+            ..Default::default()
+        };
+        let mut req = CreateRequest {
+            name: "s1".into(),
+            ..Default::default()
+        };
+        let result = create(&t.ctx, &mut req, &[], Some(kit));
+        (t, result, ids)
+    }
+
+    #[test]
+    fn create_with_a_kit_drops_install_rules_after_the_hooks() {
+        let (t, result, ids) = kit_create(false);
+        result.unwrap();
+        let p = Policy::load(&t.ctx.paths).unwrap();
+        let left: Vec<&String> = p.sandboxes["s1"].rules.iter().map(|r| &r.id).collect();
+        assert_eq!(left, vec![&ids[1]]);
+        let lines = t.ctx.vm.runner().call_lines();
+        let create = lines
+            .iter()
+            .position(|l| l.starts_with("machine create"))
+            .unwrap();
+        assert!(
+            lines[create].contains("registry.npmjs.org"),
+            "{}",
+            lines[create]
+        );
+        let hook = lines
+            .iter()
+            .position(|l| l.ends_with("sh -c npm i"))
+            .unwrap();
+        let update = &lines[hook + 1];
+        assert!(
+            update.starts_with("machine update -n sbx-s1 --reset-allow-list")
+                && update.contains("api.example.com")
+                && !update.contains("registry.npmjs.org"),
+            "{update}"
+        );
+    }
+
+    #[test]
+    fn a_failed_kit_install_removes_the_sandbox_and_every_kit_rule() {
+        let (t, result, _) = kit_create(true);
+        let err = result.unwrap_err().to_string();
+        assert_eq!(
+            err,
+            "kit install failed (the sandbox was removed): npm ERR! 404"
+        );
+        assert!(
+            t.ctx
+                .vm
+                .runner()
+                .call_lines()
+                .contains(&"machine delete -n sbx-s1 -f".to_string())
+        );
+        let p = Policy::load(&t.ctx.paths).unwrap();
+        assert!(!p.sandboxes.contains_key("s1"), "{p:?}");
     }
 }

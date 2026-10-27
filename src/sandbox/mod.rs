@@ -6,8 +6,10 @@ pub mod name;
 pub mod options;
 pub mod session;
 
-use anyhow::{Context, Result};
+use anyhow::{Context, Result, anyhow};
 
+use crate::kits::apply::KitSteps;
+use crate::kits::guest;
 use crate::smolvm::{
     ExecSpec, Machine, MachineState, NetworkSpec, PublishedPort, Runner, Smolvm, SmolvmError,
 };
@@ -19,6 +21,10 @@ pub use labels::Meta;
 
 /// Started detached as root after each start of a sandbox with `sbx.docker=true`.
 pub const DOCKER_START: &str = "pgrep -x dockerd >/dev/null || { rm -f /var/run/docker.pid; exec dockerd >/var/log/dockerd.log 2>&1; }";
+
+/// Started detached as root after every start: the kits' startup runner, when the sandbox has one.
+pub const STARTUP_START: &str =
+    "[ -x /etc/smolbento/startup ] || exit 0; exec /etc/smolbento/startup";
 
 /// Gives the image's `agent` user the host user's uid. virtiofs passes host uids through, so
 /// without this uid 1000 can't write a workspace owned by, say, uid 501 (verified on smolvm
@@ -48,6 +54,20 @@ pub struct StartPlan {
     pub clone: Option<CloneStep>,
     /// Start with `--branchable` so `sbt fork` can copy it; only for forkable sandboxes.
     pub branchable: bool,
+    /// Kit steps for the first start; only `create` runs them.
+    pub kit: Option<KitFirstStart>,
+}
+
+/// A kit sandbox's first start, after the usual setup (spec "Data flow" 7).
+#[derive(Debug, Clone, Default, PartialEq, Eq)]
+pub struct KitFirstStart {
+    pub steps: KitSteps,
+    /// Install-only credential env vars (`sbx.credential-install`): set for the install hooks,
+    /// then the machine restarts without them.
+    pub restart_without: Vec<String>,
+    /// Every policy rule id the kits added, removed again by `cli::plan::create` when the create
+    /// fails.
+    pub rule_ids: Vec<String>,
 }
 
 /// The first start of a clone sandbox clones the host repo inside the VM (as sbx).
@@ -209,7 +229,8 @@ pub fn start<R: Runner>(vm: &Smolvm<R>, sb: &Sandbox, plan: &StartPlan) -> Resul
     Ok(())
 }
 
-/// What follows `machine start`: the agent user's uid, dockerd, then the clone.
+/// What follows `machine start`: the agent user's uid, dockerd, the clone, then the kits'
+/// startup runner (a no-op without kits).
 fn setup<R: Runner>(vm: &Smolvm<R>, sb: &Sandbox, plan: &StartPlan) -> Result<()> {
     vm.exec_captured(&ExecSpec {
         name: sb.machine.clone(),
@@ -233,6 +254,7 @@ fn setup<R: Runner>(vm: &Smolvm<R>, sb: &Sandbox, plan: &StartPlan) -> Result<()
             eprintln!("{w}");
         }
     }
+    run_startup(vm, sb);
     Ok(())
 }
 
@@ -284,13 +306,206 @@ pub fn ensure_running<R: Runner>(
     Ok(())
 }
 
-/// Creates and starts a new sandbox (the caller checked the name is free).
-pub fn create<R: Runner>(vm: &Smolvm<R>, req: &CreateRequest, plan: &StartPlan) -> Result<Sandbox> {
+/// Creates and starts a new sandbox (the caller checked the name is free), then runs its kit
+/// steps. `drop_install_rules` removes the install-phase rules from the policy and returns this
+/// sandbox's network without them. A failing kit step removes the sandbox (spec Decision 6).
+pub fn create<R: Runner>(
+    vm: &Smolvm<R>,
+    req: &CreateRequest,
+    plan: &StartPlan,
+    drop_install_rules: impl FnOnce(&[String]) -> Result<NetworkSpec>,
+) -> Result<Sandbox> {
     vm.create(&create::spec(req))?;
     let mut sb = get(vm, &req.name)?;
     start(vm, &sb, plan)?;
     sb.state = MachineState::Running;
+    if let Some(kit) = &plan.kit {
+        if let Err(e) = first_start(vm, &sb, plan, kit, drop_install_rules) {
+            return Err(match vm.delete(&sb.machine) {
+                Ok(()) => anyhow!("kit install failed (the sandbox was removed): {e:#}"),
+                Err(d) => anyhow!(
+                    "kit install failed: {e:#}\nremoving the sandbox failed too ({d:#}); remove it \
+                     with `sbt rm {}`",
+                    sb.name()
+                ),
+            });
+        }
+        run_startup(vm, &sb);
+    }
     Ok(sb)
+}
+
+/// Steps 3–8 of the first start (spec "Data flow" 7); the caller removes the sandbox on error.
+fn first_start<R: Runner>(
+    vm: &Smolvm<R>,
+    sb: &Sandbox,
+    plan: &StartPlan,
+    kit: &KitFirstStart,
+    drop_install_rules: impl FnOnce(&[String]) -> Result<NetworkSpec>,
+) -> Result<()> {
+    let mut steps = Steps { vm, sb, n: 0 };
+    for (user, script) in &kit.steps.install {
+        steps
+            .run(user.as_deref().unwrap_or("root"), script)
+            .map_err(|e| anyhow!("{}", stderr_tail(&e, 20)))?;
+    }
+    let mut network = plan.network.clone();
+    if !kit.steps.install_rules.is_empty() {
+        network = drop_install_rules(&kit.steps.install_rules)
+            .context("removing the install-phase network rules")?;
+        // R11: smolvm resolves each allowed host to CIDRs, and `--remove-allow-host` leaves
+        // those behind, so the host would stay reachable by IP. `update_network` sends
+        // `--reset-allow-list` with the whole list, which clears the stored hosts and CIDRs
+        // and replaces the running allow list (learned IPs of names no longer allowed are
+        // dropped too).
+        vm.update_network(&sb.machine, &network)
+            .context("removing the install-phase network rules")?;
+    }
+    if !kit.restart_without.is_empty() {
+        vm.stop(&sb.machine)
+            .context("restarting without install-only credentials")?;
+        let without = |v: &String| kit.restart_without.contains(v);
+        let restart = StartPlan {
+            network,
+            env: plan
+                .env
+                .iter()
+                .filter(|(k, _)| !without(k))
+                .cloned()
+                .collect(),
+            remove: plan
+                .remove
+                .iter()
+                .chain(&kit.restart_without)
+                .cloned()
+                .collect(),
+            kit: None,
+            ..plan.clone()
+        };
+        start(vm, sb, &restart).context("restarting without install-only credentials")?;
+    }
+    for script in &kit.steps.files {
+        steps.run("root", script).context("writing kit files")?;
+    }
+    for script in &kit.steps.context {
+        steps.run("root", script).context("writing agent context")?;
+    }
+    let mut files: Vec<(String, &str, &str)> = kit
+        .steps
+        .startup_d
+        .iter()
+        .map(|(name, body)| {
+            (
+                format!("{}/{name}", guest::STARTUP_DIR),
+                body.as_str(),
+                "644",
+            )
+        })
+        .collect();
+    files.push((guest::STARTUP_PATH.into(), guest::STARTUP_RUNNER, "755"));
+    files.push((guest::KITS_FILE.into(), &kit.steps.kits_record, "644"));
+    put_files(vm, sb, &files).context("writing the kits' startup scripts")
+}
+
+/// Larger scripts are copied in rather than passed as `sh -c` argv, well under Linux's 128 KiB
+/// limit per argument.
+const INLINE_MAX: usize = 64 * 1024;
+const STEP_DIR: &str = "/run/smolbento";
+
+/// Runs guest scripts, numbering the ones copied in.
+struct Steps<'a, R: Runner> {
+    vm: &'a Smolvm<R>,
+    sb: &'a Sandbox,
+    n: usize,
+}
+
+impl<R: Runner> Steps<'_, R> {
+    fn run(&mut self, user: &str, script: &str) -> Result<()> {
+        let cmd = if script.len() > INLINE_MAX {
+            self.n += 1;
+            let path = format!("{STEP_DIR}/step-{}.sh", self.n);
+            put_files(self.vm, self.sb, &[(path.clone(), script, "644")])?;
+            vec!["sh".into(), path]
+        } else {
+            vec!["sh".into(), "-c".into(), script.into()]
+        };
+        self.vm.exec_captured(&ExecSpec {
+            name: self.sb.machine.clone(),
+            user: Some(user.into()),
+            cmd,
+            ..Default::default()
+        })?;
+        Ok(())
+    }
+}
+
+/// Writes `(guest path, content, mode)` files as root via host temp files and `machine cp`
+/// (which copies single files only).
+fn put_files<R: Runner>(
+    vm: &Smolvm<R>,
+    sb: &Sandbox,
+    files: &[(String, &str, &str)],
+) -> Result<()> {
+    let root = |script: String| {
+        vm.exec_captured(&ExecSpec {
+            name: sb.machine.clone(),
+            user: Some("root".into()),
+            cmd: vec!["sh".into(), "-c".into(), script],
+            ..Default::default()
+        })
+    };
+    let mut dirs: Vec<String> = files
+        .iter()
+        .filter_map(|(p, _, _)| std::path::Path::new(p).parent())
+        .map(|d| sh_quote(&d.display().to_string()))
+        .collect();
+    dirs.sort();
+    dirs.dedup();
+    root(format!("mkdir -p {}", dirs.join(" ")))?;
+    let tmp = tempfile::tempdir().context("creating a temp dir")?;
+    for (i, (path, content, _)) in files.iter().enumerate() {
+        let host = tmp.path().join(i.to_string());
+        std::fs::write(&host, content).with_context(|| format!("writing {}", host.display()))?;
+        vm.cp(
+            &host.display().to_string(),
+            &format!("{}:{path}", sb.machine),
+        )
+        .with_context(|| format!("copying {path} into the sandbox"))?;
+    }
+    let chmod: Vec<String> = files
+        .iter()
+        .map(|(p, _, mode)| format!("chmod {mode} {}", sh_quote(p)))
+        .collect();
+    root(chmod.join(" && "))?;
+    Ok(())
+}
+
+/// The last `n` lines of a failed guest command's output (smolvm's error message carries it).
+fn stderr_tail(e: &anyhow::Error, n: usize) -> String {
+    let text = match e.downcast_ref::<SmolvmError>() {
+        Some(s) => s.message.clone(),
+        None => format!("{e:#}"),
+    };
+    let lines: Vec<&str> = text.trim_end().lines().collect();
+    lines[lines.len().saturating_sub(n)..].join("\n")
+}
+
+/// Starts the kits' startup runner, detached as root. A failure only warns: the agent can run
+/// without its startup hooks, as in sbx.
+fn run_startup<R: Runner>(vm: &Smolvm<R>, sb: &Sandbox) {
+    let exec = vm.exec_captured(&ExecSpec {
+        name: sb.machine.clone(),
+        user: Some("root".into()),
+        detach: true,
+        cmd: vec!["sh".into(), "-c".into(), STARTUP_START.into()],
+        ..Default::default()
+    });
+    if let Err(e) = exec {
+        eprintln!(
+            "warning: starting the kits' startup hooks in {}: {e:#}",
+            sb.name()
+        );
+    }
 }
 
 #[cfg(test)]
@@ -343,6 +558,7 @@ mod tests {
             uid: 501,
             clone: None,
             branchable: true,
+            kit: None,
         }
     }
 
@@ -372,6 +588,11 @@ mod tests {
             lines[4],
             format!("machine exec --name sbx-claude-myrepo -u root -d -- sh -c {DOCKER_START}")
         );
+        assert_eq!(
+            lines[5],
+            format!("machine exec --name sbx-claude-myrepo -u root -d -- sh -c {STARTUP_START}")
+        );
+        assert_eq!(lines.len(), 6, "{lines:#?}");
         assert_eq!(
             vm.runner().envs(),
             vec![vec![("TOK".to_string(), "secret".to_string())]]
@@ -445,7 +666,7 @@ mod tests {
             .replace("\"true\"", "\"false\"");
         fake.ok(&["machine", "status"], &created);
         let vm = Smolvm::new(fake);
-        let sb = create(&vm, &req, &plan()).unwrap();
+        let sb = create(&vm, &req, &plan(), |_| unreachable!()).unwrap();
         assert!(sb.is_running());
         let lines = vm.runner().call_lines();
         assert!(
@@ -460,9 +681,10 @@ mod tests {
         assert_eq!(lines[3], "machine start -n sbx-claude-myrepo --branchable");
         assert_eq!(
             lines.len(),
-            5,
+            6,
             "no dockerd for a non-docker sandbox: {lines:?}"
         );
+        assert!(lines[5].ends_with(STARTUP_START), "{lines:?}");
     }
 
     #[test]
@@ -565,7 +787,9 @@ mod tests {
         let (sb, plan) = clone_sandbox();
         start(&vm, &sb, &plan).unwrap();
         let lines = vm.runner().call_lines();
-        let last2 = &lines[lines.len() - 2..];
+        // The startup runner follows the clone.
+        assert!(lines.last().unwrap().ends_with(STARTUP_START), "{lines:?}");
+        let last2 = &lines[lines.len() - 3..lines.len() - 1];
         assert!(
             last2[0].contains("-u root") && last2[0].contains("chown agent"),
             "{last2:?}"
@@ -624,6 +848,362 @@ mod tests {
         assert!(
             !lines.iter().any(|l| l.contains("-u agent -- sh")),
             "{lines:?}"
+        );
+    }
+
+    const MACHINE: &str = "sbx-claude-myrepo";
+
+    /// A fake whose `status` answers with a freshly created (non-docker) `claude-myrepo`.
+    fn created_vm() -> Smolvm<FakeRunner> {
+        let fake = FakeRunner::new();
+        let created = STATUS
+            .replace("\"state\": \"running\"", "\"state\": \"created\"")
+            .replace("\"true\"", "\"false\"");
+        fake.ok(&["machine", "status"], &created);
+        Smolvm::new(fake)
+    }
+
+    fn request() -> CreateRequest {
+        CreateRequest {
+            name: "claude-myrepo".into(),
+            agent: "claude".into(),
+            image: "img".into(),
+            cpus: 1,
+            memory_mib: 1024,
+            created: 1,
+            ..Default::default()
+        }
+    }
+
+    fn restricted(hosts: &[&str]) -> NetworkSpec {
+        NetworkSpec::Restricted(crate::smolvm::AllowList::new(
+            hosts.iter().map(|h| h.to_string()),
+            vec![],
+            vec![],
+        ))
+    }
+
+    fn kit_plan(restart_without: &[&str]) -> StartPlan {
+        StartPlan {
+            network: restricted(&["api.example.com", "registry.npmjs.org"]),
+            env: vec![
+                ("TOK".into(), "secret".into()),
+                ("KEEP".into(), "kept".into()),
+            ],
+            remove: vec![],
+            kit: Some(KitFirstStart {
+                steps: KitSteps {
+                    install_rules: vec!["r-npm".into()],
+                    install: vec![
+                        (None, "echo install-1".into()),
+                        (Some("agent".into()), "echo install-2".into()),
+                    ],
+                    files: vec!["echo files-1".into()],
+                    context: vec!["echo context-1".into()],
+                    startup_d: vec![("01-k.sh".into(), "echo startup".into())],
+                    kits_record: "k\tref@sha256:00\tnpm\n".into(),
+                },
+                restart_without: restart_without.iter().map(|v| v.to_string()).collect(),
+                rule_ids: vec!["r-npm".into(), "r-api".into()],
+            }),
+            ..plan()
+        }
+    }
+
+    fn exec_line(user: &str, detach: bool, script: &str) -> String {
+        let d = if detach { " -d" } else { "" };
+        format!("machine exec --name {MACHINE} -u {user}{d} -- sh -c {script}")
+    }
+
+    fn position(lines: &[String], what: &str, pred: impl Fn(&String) -> bool) -> usize {
+        lines
+            .iter()
+            .position(pred)
+            .unwrap_or_else(|| panic!("no {what} in {lines:#?}"))
+    }
+
+    #[test]
+    fn create_runs_kit_steps_in_lifecycle_order() {
+        let vm = created_vm();
+        let dropped = std::cell::RefCell::new(Vec::new());
+        create(&vm, &request(), &kit_plan(&[]), |ids| {
+            dropped.borrow_mut().extend_from_slice(ids);
+            Ok(restricted(&["api.example.com"]))
+        })
+        .unwrap();
+        assert_eq!(*dropped.borrow(), vec!["r-npm".to_string()]);
+        let lines = vm.runner().call_lines();
+        let start = position(&lines, "start", |l| l.starts_with("machine start"));
+        let uid = position(&lines, "usermod", |l| {
+            l.ends_with("usermod -o -u 501 agent")
+        });
+        let install1 = position(&lines, "install 1", |l| {
+            *l == exec_line("root", false, "echo install-1")
+        });
+        let install2 = position(&lines, "install 2", |l| {
+            *l == exec_line("agent", false, "echo install-2")
+        });
+        let update = position(&lines, "post-install update", |l| {
+            l.starts_with("machine update")
+                && l.contains("--allow-host api.example.com")
+                && !l.contains("registry.npmjs.org")
+        });
+        let files = position(&lines, "files", |l| {
+            *l == exec_line("root", false, "echo files-1")
+        });
+        let context = position(&lines, "context", |l| {
+            *l == exec_line("root", false, "echo context-1")
+        });
+        let startup_d = position(&lines, "startup.d cp", |l| {
+            l.starts_with("machine cp ")
+                && l.ends_with(&format!("{MACHINE}:/etc/smolbento/startup.d/01-k.sh"))
+        });
+        let runner = exec_line("root", true, STARTUP_START);
+        assert!(
+            start < uid
+                && uid < install1
+                && install1 < install2
+                && install2 < update
+                && update < files
+                && files < context
+                && context < startup_d,
+            "{lines:#?}"
+        );
+        assert_eq!(lines.last().unwrap(), &runner, "{lines:#?}");
+        // R11: the post-install update replaces the whole list, so the CIDRs smolvm resolved
+        // for the install host go with it.
+        assert!(
+            lines[update].contains("--reset-allow-list"),
+            "{}",
+            lines[update]
+        );
+        assert!(
+            !lines.iter().any(|l| l.contains("machine stop")),
+            "{lines:#?}"
+        );
+        let uploads: std::collections::BTreeMap<String, String> =
+            vm.runner().uploads().into_iter().collect();
+        let at = |p: &str| uploads.get(&format!("{MACHINE}:{p}")).cloned();
+        assert_eq!(
+            at("/etc/smolbento/startup.d/01-k.sh").as_deref(),
+            Some("echo startup")
+        );
+        assert_eq!(
+            at(guest::STARTUP_PATH).as_deref(),
+            Some(guest::STARTUP_RUNNER)
+        );
+        assert_eq!(
+            at(guest::KITS_FILE).as_deref(),
+            Some("k\tref@sha256:00\tnpm\n")
+        );
+        assert!(
+            lines[startup_d..]
+                .iter()
+                .any(|l| l.contains("chmod 755 '/etc/smolbento/startup'")),
+            "{lines:#?}"
+        );
+    }
+
+    #[test]
+    fn install_only_credentials_restart_the_machine_without_them() {
+        let vm = created_vm();
+        create(&vm, &request(), &kit_plan(&["TOK"]), |_| {
+            Ok(restricted(&["api.example.com"]))
+        })
+        .unwrap();
+        let lines = vm.runner().call_lines();
+        let install2 = position(&lines, "install 2", |l| {
+            *l == exec_line("agent", false, "echo install-2")
+        });
+        let stop = position(&lines, "stop", |l| l.starts_with("machine stop"));
+        let restart = lines
+            .iter()
+            .rposition(|l| l.starts_with("machine start"))
+            .unwrap();
+        let files = position(&lines, "files", |l| {
+            *l == exec_line("root", false, "echo files-1")
+        });
+        assert!(
+            install2 < stop && stop < restart && restart < files,
+            "{lines:#?}"
+        );
+        assert!(
+            lines[restart..files]
+                .iter()
+                .any(|l| l.ends_with("usermod -o -u 501 agent")),
+            "setup runs again: {lines:#?}"
+        );
+        let envs = vm.runner().envs();
+        let removed = vm.runner().removed();
+        assert_eq!(envs.len(), 2);
+        assert!(
+            envs[0].iter().any(|(k, _)| k == "TOK"),
+            "the first start has it"
+        );
+        assert!(!envs[1].iter().any(|(k, _)| k == "TOK"), "{:?}", envs[1]);
+        assert!(envs[1].iter().any(|(k, _)| k == "KEEP"));
+        assert!(removed[1].contains(&"TOK".to_string()), "{:?}", removed[1]);
+    }
+
+    #[test]
+    fn a_failed_install_hook_removes_the_sandbox() {
+        let vm = created_vm();
+        let stderr: Vec<String> = (1..=25).map(|i| format!("line {i}")).collect();
+        vm.runner().fail(
+            &[
+                "machine",
+                "exec",
+                "--name",
+                MACHINE,
+                "-u",
+                "root",
+                "--",
+                "sh",
+                "-c",
+                "echo install-1",
+            ],
+            "EXEC_FAILED",
+            &stderr.join("\n"),
+        );
+        let err = create(&vm, &request(), &kit_plan(&[]), |_| {
+            panic!("install rules stay until the hooks succeed")
+        })
+        .unwrap_err()
+        .to_string();
+        assert_eq!(
+            err,
+            format!(
+                "kit install failed (the sandbox was removed): {}",
+                stderr[5..].join("\n")
+            )
+        );
+        let lines = vm.runner().call_lines();
+        assert_eq!(
+            lines.last().unwrap(),
+            &format!("machine delete -n {MACHINE} -f")
+        );
+        assert!(!lines.iter().any(|l| l.contains("install-2")), "{lines:#?}");
+    }
+
+    #[test]
+    fn failing_to_drop_the_install_rules_or_write_files_removes_the_sandbox() {
+        let vm = created_vm();
+        let err = create(&vm, &request(), &kit_plan(&[]), |_| {
+            anyhow::bail!("policy.toml: permission denied")
+        })
+        .unwrap_err();
+        assert!(
+            err.to_string()
+                .starts_with("kit install failed (the sandbox was removed): "),
+            "{err}"
+        );
+        assert!(format!("{err:#}").contains("permission denied"), "{err:#}");
+        assert_eq!(
+            vm.runner().call_lines().last().unwrap(),
+            &format!("machine delete -n {MACHINE} -f")
+        );
+
+        let vm = created_vm();
+        vm.runner()
+            .fail(&["machine", "cp"], "CP_FAILED", "no space left");
+        let err = create(&vm, &request(), &kit_plan(&[]), |_| {
+            Ok(restricted(&["api.example.com"]))
+        })
+        .unwrap_err();
+        assert!(
+            err.to_string().starts_with("kit install failed")
+                && format!("{err:#}").contains("no space left"),
+            "{err:#}"
+        );
+        assert_eq!(
+            vm.runner().call_lines().last().unwrap(),
+            &format!("machine delete -n {MACHINE} -f")
+        );
+    }
+
+    #[test]
+    fn a_large_script_is_copied_in_rather_than_passed_in_argv() {
+        let vm = created_vm();
+        let big = format!("echo {}", "x".repeat(70 * 1024));
+        let mut plan = kit_plan(&[]);
+        let kit = plan.kit.as_mut().unwrap();
+        kit.steps.install = vec![(Some("agent".into()), big.clone())];
+        create(&vm, &request(), &plan, |_| {
+            Ok(restricted(&["api.example.com"]))
+        })
+        .unwrap();
+        let lines = vm.runner().call_lines();
+        assert!(!lines.iter().any(|l| l.contains(&big)), "inline");
+        let run = position(&lines, "step exec", |l| {
+            *l == format!("machine exec --name {MACHINE} -u agent -- sh /run/smolbento/step-1.sh")
+        });
+        let cp = position(&lines, "step cp", |l| {
+            l.starts_with("machine cp ")
+                && l.ends_with(&format!("{MACHINE}:/run/smolbento/step-1.sh"))
+        });
+        assert!(cp < run, "{lines:#?}");
+        let uploads = vm.runner().uploads();
+        assert!(
+            uploads
+                .iter()
+                .any(|(p, c)| p.ends_with(":/run/smolbento/step-1.sh") && *c == big)
+        );
+    }
+
+    #[test]
+    fn a_plain_start_only_adds_the_detached_startup_runner() {
+        let fake = FakeRunner::new();
+        fake.ok(&["machine"], "");
+        let vm = Smolvm::new(fake);
+        let (mut sb, plan) = clone_sandbox();
+        sb.meta.clone_repo = None;
+        start(
+            &vm,
+            &sb,
+            &StartPlan {
+                clone: None,
+                ..plan
+            },
+        )
+        .unwrap();
+        let lines = vm.runner().call_lines();
+        assert_eq!(lines.len(), 4, "{lines:#?}");
+        assert!(lines[2].ends_with("usermod -o -u 501 agent"), "{lines:#?}");
+        assert_eq!(
+            lines[3],
+            "machine exec --name sbx-r -u root -d -- sh -c \
+             [ -x /etc/smolbento/startup ] || exit 0; exec /etc/smolbento/startup"
+        );
+        assert!(STARTUP_START.contains(guest::STARTUP_PATH));
+    }
+
+    #[test]
+    fn a_failed_startup_runner_exec_is_only_a_warning() {
+        let fake = FakeRunner::new();
+        fake.ok(&["machine"], "");
+        fake.fail(
+            &["machine", "exec", "--name", "sbx-r", "-u", "root", "-d"],
+            "EXEC_FAILED",
+            "no such file",
+        );
+        let vm = Smolvm::new(fake);
+        let (mut sb, plan) = clone_sandbox();
+        sb.meta.clone_repo = None;
+        start(
+            &vm,
+            &sb,
+            &StartPlan {
+                clone: None,
+                ..plan
+            },
+        )
+        .unwrap();
+        assert!(
+            !vm.runner()
+                .call_lines()
+                .iter()
+                .any(|l| l.starts_with("machine stop")),
+            "the sandbox stays up"
         );
     }
 }

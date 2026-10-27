@@ -23,6 +23,7 @@ pub struct FakeRunner {
     removed: RefCell<Vec<Vec<String>>>,
     spawn_errors: RefCell<Vec<(Vec<String>, String)>>,
     download: RefCell<Option<Vec<u8>>>,
+    uploads: RefCell<Vec<(String, String)>>,
 }
 
 fn strings(items: &[&str]) -> Vec<String> {
@@ -146,6 +147,11 @@ impl FakeRunner {
         self.removed.borrow().clone()
     }
 
+    /// `(MACHINE:PATH, content)` of each `machine cp HOST MACHINE:PATH`, read when it ran.
+    pub fn uploads(&self) -> Vec<(String, String)> {
+        self.uploads.borrow().clone()
+    }
+
     pub fn interactive_calls(&self) -> Vec<Vec<String>> {
         self.interactive_calls.borrow().clone()
     }
@@ -168,6 +174,14 @@ impl Runner for FakeRunner {
             && src.contains(':')
         {
             std::fs::write(dst, bytes)?;
+        }
+        if let [m, cp, src, dst] = args
+            && m == "machine"
+            && cp == "cp"
+            && dst.contains(':')
+            && let Ok(content) = std::fs::read_to_string(src)
+        {
+            self.uploads.borrow_mut().push((dst.clone(), content));
         }
         let mut replies = self.replies.borrow_mut();
         let Some(index) = replies.iter().rposition(|r| args.starts_with(&r.prefix)) else {
