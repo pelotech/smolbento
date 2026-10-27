@@ -88,7 +88,7 @@ pub fn run<R: Runner>(ctx: &mut Ctx<R>, a: &RunArgs) -> Result<i32> {
     };
 
     // Fetch before `--rm` deletes the sandbox, and while it still runs for `_upload-pack`.
-    if fetch_on_exit(ctx, &sb)?
+    if fetch_on_exit(ctx, &sb)
         && let Some(repo) = &sb.meta.workspace
         && let Err(e) = clone::fetch(std::path::Path::new(repo), sb.name())
     {
@@ -110,8 +110,16 @@ pub fn run<R: Runner>(ctx: &mut Ctx<R>, a: &RunArgs) -> Result<i32> {
     Ok(code)
 }
 
-fn fetch_on_exit<R: Runner>(ctx: &Ctx<R>, sb: &Sandbox) -> Result<bool> {
-    Ok(sb.meta.clone && ctx.settings.bool("clone.fetch-on-exit")?)
+/// A bad setting value only skips the fetch: the stop or `--rm` and the agent's status still apply.
+fn fetch_on_exit<R: Runner>(ctx: &Ctx<R>, sb: &Sandbox) -> bool {
+    sb.meta.clone
+        && ctx
+            .settings
+            .bool("clone.fetch-on-exit")
+            .unwrap_or_else(|e| {
+                eprintln!("warning: not fetching the agent's commits: {e:#}");
+                false
+            })
 }
 
 #[cfg(test)]
@@ -442,7 +450,23 @@ mod tests {
             let sb = crate::sandbox::find(&t.ctx.vm, "claude-proj")
                 .unwrap()
                 .unwrap();
-            assert_eq!(super::fetch_on_exit(&t.ctx, &sb).unwrap(), want);
+            assert_eq!(super::fetch_on_exit(&t.ctx, &sb), want);
         }
+    }
+
+    #[test]
+    fn a_bad_fetch_setting_skips_the_fetch_but_not_the_rm() {
+        let mut t = test_env(&[("SMOLBENTO_CLONE_FETCH_ON_EXIT", "yes")]);
+        let (_keep, repo) = temp_repo();
+        clone_sandbox(&t, &repo);
+        t.ctx.vm.runner().interactive_exit(3);
+        assert_eq!(
+            sbt(&mut t.ctx, &["run", "--rm", "--name", "claude-proj"]).unwrap(),
+            3
+        );
+        assert_eq!(
+            t.ctx.vm.runner().call_lines().last().unwrap(),
+            "machine delete -n sbx-claude-proj -f"
+        );
     }
 }
