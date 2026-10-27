@@ -161,10 +161,26 @@ pub fn list<R: Runner>(vm: &Smolvm<R>) -> Result<Vec<Sandbox>> {
 }
 
 /// Applies the network to the stopped machine, starts it with the secret env, then its setup steps.
+/// A failed setup step stops the machine again: left running half set up, later commands would
+/// skip `start` and never retry it.
 pub fn start<R: Runner>(vm: &Smolvm<R>, sb: &Sandbox, plan: &StartPlan) -> Result<()> {
     vm.update_network(&sb.machine, &plan.network)
         .context("applying the network policy")?;
     vm.start(&sb.machine, &plan.env, &plan.remove)?;
+    if let Err(e) = setup(vm, sb, plan) {
+        if let Err(stop) = vm.stop(&sb.machine) {
+            eprintln!(
+                "warning: stopping {} after the failed start: {stop:#}",
+                sb.name()
+            );
+        }
+        return Err(e);
+    }
+    Ok(())
+}
+
+/// What follows `machine start`: the agent user's uid, dockerd, then the clone.
+fn setup<R: Runner>(vm: &Smolvm<R>, sb: &Sandbox, plan: &StartPlan) -> Result<()> {
     vm.exec_captured(&ExecSpec {
         name: sb.machine.clone(),
         user: Some("root".into()),
@@ -182,17 +198,8 @@ pub fn start<R: Runner>(vm: &Smolvm<R>, sb: &Sandbox, plan: &StartPlan) -> Resul
         })
         .context("starting dockerd")?;
     }
-    if let Some(step) = &plan.clone
-        && let Err(e) = run_clone(vm, sb, step)
-    {
-        // Left running without a clone, later commands would skip `start` and never retry it.
-        if let Err(stop) = vm.stop(&sb.machine) {
-            eprintln!(
-                "warning: stopping {} after the failed clone: {stop:#}",
-                sb.name()
-            );
-        }
-        return Err(e);
+    if let Some(step) = &plan.clone {
+        run_clone(vm, sb, step)?;
     }
     Ok(())
 }
@@ -336,6 +343,38 @@ mod tests {
         let vm = Smolvm::new(fake);
         let mut sb = get(&vm, "claude-myrepo").unwrap();
         ensure_running(&vm, &mut sb, || panic!("plan must not be computed")).unwrap();
+    }
+
+    #[test]
+    fn a_failed_setup_step_stops_the_machine() {
+        let fake = FakeRunner::new();
+        fake.ok(
+            &["machine", "status"],
+            &STATUS.replace("\"state\": \"running\"", "\"state\": \"stopped\""),
+        );
+        fake.fail(
+            &[
+                "machine",
+                "exec",
+                "--name",
+                "sbx-claude-myrepo",
+                "-u",
+                "root",
+                "-d",
+            ],
+            "EXEC_FAILED",
+            "dockerd: not found",
+        );
+        let vm = Smolvm::new(fake);
+        let mut sb = get(&vm, "claude-myrepo").unwrap();
+        assert!(sb.meta.docker);
+        let err = ensure_running(&vm, &mut sb, || Ok(plan())).unwrap_err();
+        assert!(format!("{err:#}").contains("starting dockerd"), "{err:#}");
+        assert!(!sb.is_running());
+        assert_eq!(
+            vm.runner().call_lines().last().unwrap(),
+            "machine stop -n sbx-claude-myrepo"
+        );
     }
 
     #[test]
