@@ -354,7 +354,6 @@ mod tests {
         v
     }
 
-    #[cfg(unix)]
     #[test]
     fn clone_fetch_on_exit_defaults_to_true() {
         let d = SETTINGS
@@ -364,6 +363,7 @@ mod tests {
         assert_eq!(d.default, "true");
     }
 
+    #[cfg(unix)]
     #[test]
     fn write_atomic_can_write_through_a_symlink() {
         use std::os::unix::fs::PermissionsExt;
