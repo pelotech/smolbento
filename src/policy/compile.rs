@@ -136,8 +136,13 @@ fn reaches_under(deny: &Resource, x: &str) -> bool {
     }
 }
 
-/// Deny CIDRs for `machine create` (smolvm accepts them at create only), sorted and unique. One
-/// with a port is left out: smolvm would deny every port of the range.
+/// Denied for every sandbox, whatever the mode: smolvm dials host loopback for a guest connecting
+/// to its gateway, and sbx doesn't let sandboxes reach the host's localhost.
+pub const HOST_LOOPBACK: [&str; 2] = ["127.0.0.0/8", "::1/128"];
+
+/// Deny CIDRs for `machine create` (smolvm accepts them at create only), sorted and unique:
+/// `HOST_LOOPBACK` and the deny rules' CIDRs. One with a port is left out: smolvm would deny
+/// every port of the range.
 pub fn deny_cidrs(policy: &Policy, sandbox: &str) -> Vec<String> {
     resources(policy, Some(sandbox), Decision::Deny)
         .into_iter()
@@ -146,6 +151,7 @@ pub fn deny_cidrs(policy: &Policy, sandbox: &str) -> Vec<String> {
             Allow::Cidr(c) => Some(c),
             _ => None,
         })
+        .chain(HOST_LOOPBACK.map(String::from))
         .collect::<BTreeSet<_>>()
         .into_iter()
         .collect()
@@ -418,7 +424,7 @@ mod tests {
             None,
         )
         .unwrap();
-        assert_eq!(deny_cidrs(&p, "s1"), vec!["192.168.0.0/16"]);
+        assert_eq!(deny_cidrs(&p, "s1"), with_loopback(&["192.168.0.0/16"]));
         let v = check(&p, Some("s1"), &[], "10.1.2.3:22");
         assert!(
             v.allowed && v.reason.contains("isn't enforced"),
@@ -501,7 +507,10 @@ mod tests {
             None,
         )
         .unwrap();
-        assert_eq!(deny_cidrs(&p, "s1"), vec!["10.0.0.0/8", "192.168.0.0/16"]);
+        assert_eq!(
+            deny_cidrs(&p, "s1"),
+            with_loopback(&["10.0.0.0/8", "192.168.0.0/16"])
+        );
         p.add_rule(
             Some("s1"),
             Decision::Deny,
@@ -511,8 +520,32 @@ mod tests {
             None,
         )
         .unwrap();
-        assert_eq!(deny_cidrs(&p, "s1"), vec!["10.0.0.0/8", "192.168.0.0/16"]);
-        assert_eq!(deny_cidrs(&p, "s2"), vec!["10.0.0.0/8"]);
+        assert_eq!(
+            deny_cidrs(&p, "s1"),
+            with_loopback(&["10.0.0.0/8", "192.168.0.0/16"])
+        );
+        assert_eq!(deny_cidrs(&p, "s2"), with_loopback(&["10.0.0.0/8"]));
+    }
+
+    fn with_loopback(cidrs: &[&str]) -> Vec<String> {
+        let all: BTreeSet<String> = cidrs
+            .iter()
+            .chain(&HOST_LOOPBACK)
+            .map(|c| c.to_string())
+            .collect();
+        all.into_iter().collect()
+    }
+
+    #[test]
+    fn host_loopback_is_denied_in_every_mode() {
+        for mode in [Mode::AllowAll, Mode::Balanced, Mode::DenyAll] {
+            assert_eq!(deny_cidrs(&policy(mode), "s1"), with_loopback(&[]));
+        }
+        // A rule for the same range doesn't repeat it.
+        let mut p = policy(Mode::AllowAll);
+        p.add_rule(None, Decision::Deny, "127.0.0.0/8", "added", None, None)
+            .unwrap();
+        assert_eq!(deny_cidrs(&p, "s1"), with_loopback(&[]));
     }
 
     #[test]
