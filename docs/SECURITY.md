@@ -46,7 +46,9 @@ access, so load only kits you trust.
   `sbt policy deny network --sandbox NAME HOST`. Rules a kit needs only while installing
   (`kit-install:<kit>` in `policy ls`) are in place from the sandbox's creation through its first
   start's setup and install steps, and removed when install finishes. Later starts never use them,
-  even if a create was interrupted before it could remove them; `sbt rm` removes any left over.
+  even if a create was interrupted before it could remove them; `sbt rm` removes any left over,
+  and so does the next create of that name. An install-phase deny of a CIDR stays for the
+  sandbox's life: smolvm takes CIDR denies only at create.
 - **`kit add`** asks before it opens new network access on an existing sandbox; `-y` grants it,
   and without a terminal it fails.
 - **Kit credentials** use your secrets, as placeholders in the sandbox; the value only goes to the

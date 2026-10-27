@@ -259,9 +259,9 @@ What a kit does, and when:
   to `/var/log/smolbento/startup.log` in the sandbox; a failing step is logged, not fatal.
 - **Credentials** come from your secrets: if a kit needs one you haven't set, the error says which
   `sbt secret set` command to run. A built-in service's secret only goes to that service's own
-  hosts; see [Security](SECURITY.md#kits). A credential the kit needs only while installing is available
-  during install; the sandbox then restarts once without it, and later requests to its hosts get
-  `502`.
+  hosts; see [Security](SECURITY.md#kits). A credential the kit needs only while installing is
+  available during install; the sandbox then restarts once without it, and later requests to its
+  hosts get `502`.
 - **Volumes** a kit declares are on the sandbox's own disk: they survive stop and start, and are
   removed with the sandbox.
 
