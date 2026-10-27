@@ -1,5 +1,17 @@
 # Changelog
 
+## [0.3.0](https://github.com/pelotech/smolbento/compare/v0.2.1...v0.3.0) (2026-10-27)
+
+
+### Features
+
+* add clone mode (run/create --clone) ([#17](https://github.com/pelotech/smolbento/issues/17)) ([90021dd](https://github.com/pelotech/smolbento/commit/90021dd5f99ef222d16a2b5ce33e8133cffee743))
+
+
+### Bug Fixes
+
+* stop sandboxes from reaching services on the host's localhost ([#15](https://github.com/pelotech/smolbento/issues/15)) ([a590ca5](https://github.com/pelotech/smolbento/commit/a590ca5dbf7ccbb46a6702c4499c31b572155348))
+
 ## [0.2.1](https://github.com/pelotech/smolbento/compare/v0.2.0...v0.2.1) (2026-10-27)
 
 
