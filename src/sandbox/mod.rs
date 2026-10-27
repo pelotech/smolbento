@@ -59,24 +59,29 @@ pub struct CloneStep {
     pub remotes: Vec<(String, String)>,
 }
 
+impl CloneStep {
+    /// The clone dir and its `.git`, quoted for `sh -c`.
+    fn quoted(&self) -> (String, String) {
+        (sh_quote(&self.dir), sh_quote(&format!("{}/.git", self.dir)))
+    }
+}
+
 /// Single-quotes `s` for `sh -c`.
-pub fn sh_quote(s: &str) -> String {
+fn sh_quote(s: &str) -> String {
     format!("'{}'", s.replace('\'', r"'\''"))
 }
 
 /// As root: the volume is root-owned and may hold `lost+found`, which `git clone` won't clone into.
 fn clone_prep_cmd(step: &CloneStep) -> String {
-    let d = sh_quote(&step.dir);
+    let (d, git) = step.quoted();
     let lf = sh_quote(&format!("{}/lost+found", step.dir));
-    let git = sh_quote(&format!("{}/.git", step.dir));
     format!("[ -d {git} ] && exit 0; rmdir {lf} 2>/dev/null; chown agent {d}")
 }
 
 /// As `agent`: sbx's clone command (skipped once cloned), then its remote copy, which runs on
 /// every start so a failed add is retried and host remote changes arrive (as sbx's setup script).
 fn clone_cmd(step: &CloneStep) -> String {
-    let d = sh_quote(&step.dir);
-    let git = sh_quote(&format!("{}/.git", step.dir));
+    let (d, git) = step.quoted();
     let branch = step
         .branch
         .as_ref()

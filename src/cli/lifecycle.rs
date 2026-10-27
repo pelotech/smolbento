@@ -92,7 +92,7 @@ pub(crate) fn resolve_clone(req: &mut CreateRequest, opts: &SandboxOpts) -> Resu
             .workspaces
             .first()
             .context("--clone needs a workspace path, e.g. `sbt create --clone claude .`")?;
-        req.clone = Some(crate::workspace::clone::source(&primary.path)?);
+        req.clone = Some(clone::source(&primary.path)?);
     }
     Ok(())
 }
