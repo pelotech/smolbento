@@ -76,8 +76,8 @@ fn free_names<R: Runner>(ctx: &Ctx<R>, parent: &str, count: u32) -> Result<Vec<S
     Ok(out)
 }
 
-/// Copies the parent's policy entry and adds the clone remote, then branches; a failed branch
-/// undoes both (a failed undo only warns).
+/// Copies the parent's policy entry, then adds the clone remote and branches; on failure, undoes
+/// what it did in reverse (a failed undo only warns).
 fn fork_one<R: Runner>(
     ctx: &Ctx<R>,
     parent: &Sandbox,
@@ -90,45 +90,49 @@ fn fork_one<R: Runner>(
     policy.forget_sandbox(fork);
     policy.copy_sandbox(parent.name(), fork);
     policy.save(&ctx.paths)?;
+    let result = add_remote_and_branch(ctx, parent, fork, env, remove);
+    if result.is_err()
+        && let Err(e) = super::secret::forget_sandbox(ctx, fork, false)
+    {
+        eprintln!("warning: removing {fork}'s policy entry: {e:#}");
+    }
+    result
+}
+
+fn add_remote_and_branch<R: Runner>(
+    ctx: &Ctx<R>,
+    parent: &Sandbox,
+    fork: &str,
+    env: &[(String, String)],
+    remove: &[String],
+) -> Result<()> {
     let repo = parent.meta.clone_repo.as_deref().map(Path::new);
-    let added_remote = match repo {
-        Some(r) => clone::add_remote(r, fork),
-        None => Ok(false),
+    let added = match repo {
+        Some(r) => clone::add_remote(r, fork)?,
+        None => false,
     };
-    let result = added_remote.and_then(|added| {
-        let labels = [
-            (labels::NAME.to_string(), fork.to_string()),
-            (labels::FORK_OF.to_string(), parent.name().to_string()),
-            // A child inherits its source's labels; a fork's age is its own.
-            (labels::CREATED.to_string(), ctx.now.to_string()),
-        ];
-        ctx.vm
-            .branch(
-                &parent.machine,
-                &name::machine_name(fork),
-                &labels,
-                env,
-                remove,
-            )
-            .map_err(|e| branch_hint(e, parent.name()))
-            .inspect_err(|_| {
-                if let (Some(r), true) = (repo, added)
-                    && let Err(e) = clone::remove_remote(r, fork)
-                {
-                    eprintln!("warning: removing the sandbox-{fork} remote: {e:#}");
-                }
-            })
-    });
-    if result.is_err() {
-        // Nothing was created: undo the policy copy made for it.
-        let undo = || -> Result<()> {
-            let mut p = Policy::load(&ctx.paths)?;
-            p.forget_sandbox(fork);
-            p.save(&ctx.paths)
-        };
-        if let Err(e) = undo() {
-            eprintln!("warning: removing {fork}'s policy entry: {e:#}");
-        }
+    let labels = [
+        (labels::NAME.to_string(), fork.to_string()),
+        (labels::FORK_OF.to_string(), parent.name().to_string()),
+        // A child inherits its source's labels; a fork's age is its own.
+        (labels::CREATED.to_string(), ctx.now.to_string()),
+    ];
+    let result = ctx
+        .vm
+        .branch(
+            &parent.machine,
+            &name::machine_name(fork),
+            &labels,
+            env,
+            remove,
+        )
+        .map_err(|e| branch_hint(e, parent.name()));
+    if result.is_err()
+        && added
+        && let Some(r) = repo
+        && let Err(e) = clone::remove_remote(r, fork)
+    {
+        eprintln!("warning: removing the sandbox-{fork} remote: {e:#}");
     }
     result
 }
