@@ -21,6 +21,7 @@ pub struct FakeRunner {
     interactive_error: RefCell<Option<String>>,
     envs: RefCell<Vec<Vec<(String, String)>>>,
     removed: RefCell<Vec<Vec<String>>>,
+    spawn_errors: RefCell<Vec<(Vec<String>, String)>>,
 }
 
 fn strings(items: &[&str]) -> Vec<String> {
@@ -88,6 +89,14 @@ impl FakeRunner {
         self.once(prefix, error_output(code, message))
     }
 
+    /// Make calls starting with `prefix` fail to run at all, as when smolvm can't be spawned.
+    pub fn spawn_fail(&self, prefix: &[&str], message: &str) -> &Self {
+        self.spawn_errors
+            .borrow_mut()
+            .push((strings(prefix), message.into()));
+        self
+    }
+
     pub fn interactive_exit(&self, code: i32) -> &Self {
         *self.interactive_code.borrow_mut() = code;
         self
@@ -126,6 +135,14 @@ impl FakeRunner {
 impl Runner for FakeRunner {
     fn run(&self, args: &[String]) -> Result<Output> {
         self.calls.borrow_mut().push(args.to_vec());
+        if let Some((_, message)) = self
+            .spawn_errors
+            .borrow()
+            .iter()
+            .rfind(|(p, _)| args.starts_with(p))
+        {
+            anyhow::bail!("{message}");
+        }
         let mut replies = self.replies.borrow_mut();
         let Some(index) = replies.iter().rposition(|r| args.starts_with(&r.prefix)) else {
             return Ok(Output::default());

@@ -44,7 +44,7 @@ pub struct StartPlan {
     /// shell's same-named variables can't stand in for them.
     pub remove: Vec<String>,
     pub uid: u32,
-    /// Set for a clone sandbox; the clone itself is skipped once it exists.
+    /// Set for a clone sandbox; the clone itself is skipped once it exists, the remote copy is not.
     pub clone: Option<CloneStep>,
 }
 
@@ -72,7 +72,8 @@ fn clone_prep_cmd(step: &CloneStep) -> String {
     format!("[ -d {git} ] && exit 0; rmdir {lf} 2>/dev/null; chown agent {d}")
 }
 
-/// As `agent`: sbx's clone command, then its remote copy.
+/// As `agent`: sbx's clone command (skipped once cloned), then its remote copy, which runs on
+/// every start so a failed add is retried and host remote changes arrive (as sbx's setup script).
 fn clone_cmd(step: &CloneStep) -> String {
     let d = sh_quote(&step.dir);
     let git = sh_quote(&format!("{}/.git", step.dir));
@@ -82,7 +83,7 @@ fn clone_cmd(step: &CloneStep) -> String {
         .map(|b| format!("--branch {} ", sh_quote(b)))
         .unwrap_or_default();
     let mut s = format!(
-        "set -e; [ -d {git} ] && exit 0; \
+        "set -e; [ -d {git} ] || \
          git -c safe.directory={SOURCE_MOUNT} clone -q {branch}{SOURCE_MOUNT} {d}; cd {d}"
     );
     for (n, u) in &step.remotes {
@@ -206,14 +207,14 @@ fn run_clone<R: Runner>(vm: &Smolvm<R>, sb: &Sandbox, step: &CloneStep) -> Resul
         })
         .map_err(|e| {
             // git's first error line, not the whole stderr.
-            let line = match e.downcast_ref::<SmolvmError>() {
-                Some(s) => s
-                    .message
-                    .lines()
-                    .find(|l| !l.trim().is_empty())
-                    .unwrap_or("failed"),
-                None => return e.context("cloning the repo in the sandbox"),
+            let text = match e.downcast_ref::<SmolvmError>() {
+                Some(s) => s.message.clone(),
+                None => format!("{e:#}"),
             };
+            let line = text
+                .lines()
+                .find(|l| !l.trim().is_empty())
+                .unwrap_or("failed");
             anyhow::anyhow!("cloning the repo in the sandbox: {}", line.trim())
         })?;
     }
@@ -395,7 +396,7 @@ mod tests {
         );
         assert_eq!(
             clone_cmd(&step),
-            "set -e; [ -d '/w/my repo/.git' ] && exit 0; \
+            "set -e; [ -d '/w/my repo/.git' ] || \
              git -c safe.directory=/run/sandbox/source clone -q --branch 'feat' /run/sandbox/source '/w/my repo'; \
              cd '/w/my repo'; \
              git remote set-url -- 'origin' 'https://github.com/o/r.git' 2>/dev/null || git remote add -- 'origin' 'https://github.com/o/r.git'"
@@ -477,6 +478,50 @@ mod tests {
         let lines = vm.runner().call_lines();
         assert!(
             lines.last().unwrap().starts_with("machine stop"),
+            "{lines:?}"
+        );
+    }
+
+    #[test]
+    fn a_failed_clone_prep_reports_the_first_line_and_stops() {
+        let step = CloneStep {
+            dir: "/w/r".into(),
+            branch: None,
+            remotes: vec![],
+        };
+        let prep = clone_prep_cmd(&step);
+        let fake = FakeRunner::new();
+        fake.spawn_fail(
+            &[
+                "machine", "exec", "--name", "sbx-r", "-u", "root", "--", "sh", "-c", &prep,
+            ],
+            "could not run smolvm\nsecond line",
+        );
+        let vm = Smolvm::new(fake);
+        let sb = Sandbox {
+            meta: Meta {
+                name: "r".into(),
+                clone: true,
+                ..Default::default()
+            },
+            machine: "sbx-r".into(),
+            state: MachineState::Stopped,
+            ports: vec![],
+        };
+        let mut p = plan();
+        p.clone = Some(step);
+        let err = start(&vm, &sb, &p).unwrap_err();
+        assert_eq!(
+            err.to_string(),
+            "cloning the repo in the sandbox: could not run smolvm"
+        );
+        let lines = vm.runner().call_lines();
+        assert!(
+            lines.last().unwrap().starts_with("machine stop"),
+            "{lines:?}"
+        );
+        assert!(
+            !lines.iter().any(|l| l.contains("-u agent -- sh")),
             "{lines:?}"
         );
     }
