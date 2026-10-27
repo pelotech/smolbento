@@ -472,7 +472,8 @@ fn add_running<R: Runner>(
     };
     // `None`: opening the kit's network, before any hook ran.
     let result = (|| -> std::result::Result<(), (Option<KitPhase>, anyhow::Error)> {
-        if !added.is_empty() {
+        // Install rules an interrupted add left are opened too: `added` doesn't list them.
+        if !added.is_empty() || !steps.install_rules.is_empty() {
             let open = || -> Result<()> {
                 policy.save(&ctx.paths)?;
                 push(&policy).context("applying the kit's network rules")
@@ -908,6 +909,47 @@ mod tests {
             guest::STARTUP_RUNNER
         );
         assert_eq!(kit_rules(&t), vec!["api.net.example".to_string()]);
+    }
+
+    #[test]
+    fn add_opens_install_rules_an_interrupted_add_left() {
+        use crate::kits::model::{NetRule, Rules};
+        let mut t = kit_env();
+        set_policy(&t, "mode = \"deny-all\"\n");
+        // Both of net's rules are already there, so this add adds none.
+        let rules = |h: &str| Rules {
+            allow: vec![NetRule {
+                host: h.into(),
+                methods: vec![],
+                paths: vec![],
+            }],
+            deny: vec![],
+        };
+        let mut policy = Policy::load(&t.ctx.paths).unwrap();
+        policy
+            .add_kit_rules("dev", "net", &rules("api.net.example"), false)
+            .unwrap();
+        policy
+            .add_kit_rules("dev", "net", &rules("pkg.example.com"), true)
+            .unwrap();
+        policy.save(&t.ctx.paths).unwrap();
+        dev_sandbox(&t, BASE);
+        v3_kit(&t, "net", NET_KIT, &[]);
+        sbt(&mut t.ctx, &["kit", "add", "dev", "./net", "--yes"]).unwrap();
+
+        let lines = dev_calls(&t);
+        let hook = lines
+            .iter()
+            .position(|l| l.ends_with(&install_script()))
+            .unwrap_or_else(|| panic!("{lines:#?}"));
+        assert!(
+            lines[..hook]
+                .iter()
+                .any(|l| l.starts_with("machine update") && l.contains(" pkg.example.com")),
+            "{lines:#?}"
+        );
+        let p = Policy::load(&t.ctx.paths).unwrap();
+        assert!(p.all_rules().all(|(r, _)| !r.is_kit_install()), "{p:?}");
     }
 
     #[test]

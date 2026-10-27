@@ -350,6 +350,10 @@ fn create_with<R: Runner>(
                 &k.steps.install_rules,
             );
             req.deny_cidrs = compile::deny_cidrs_with(&policy, &req.name, &k.steps.install_rules);
+            for note in compile::install_deny_cidr_notes(&policy, &req.name, &k.steps.install_rules)
+            {
+                eprintln!("{note}");
+            }
         }
         if let Some(repo) = &repo
             && clone::add_remote(repo, &req.name)?

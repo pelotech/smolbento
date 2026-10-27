@@ -199,6 +199,48 @@ pub fn deny_cidrs_with(policy: &Policy, sandbox: &str, install: &[String]) -> Ve
         .collect()
 }
 
+/// For a create: one note per kit whose install-phase rules (of these ids) deny CIDRs that no
+/// other rule denies. smolvm keeps a create's deny CIDRs, so they outlast the install phase.
+pub fn install_deny_cidr_notes(policy: &Policy, sandbox: &str, install: &[String]) -> Vec<String> {
+    let lasting = deny_cidrs(policy, sandbox);
+    let mut per_kit: Vec<(&str, Vec<String>)> = Vec::new();
+    for (r, _) in policy.rules_for(Some(sandbox)) {
+        let Some(kit) = r.created_via.strip_prefix(super::KIT_INSTALL_VIA) else {
+            continue;
+        };
+        if r.decision != Decision::Deny || !install.contains(&r.id) {
+            continue;
+        }
+        for res in r.parsed().filter(|x| x.port.is_none()) {
+            let Allow::Cidr(c) = res.to_allow() else {
+                continue;
+            };
+            if lasting.contains(&c) {
+                continue;
+            }
+            let i = match per_kit.iter().position(|(k, _)| *k == kit) {
+                Some(i) => i,
+                None => {
+                    per_kit.push((kit, Vec::new()));
+                    per_kit.len() - 1
+                }
+            };
+            if !per_kit[i].1.contains(&c) {
+                per_kit[i].1.push(c);
+            }
+        }
+    }
+    per_kit
+        .into_iter()
+        .map(|(kit, cidrs)| {
+            format!(
+                "note: kit {kit}'s install-phase deny of {} stays for this sandbox's life",
+                cidrs.join(", ")
+            )
+        })
+        .collect()
+}
+
 /// Why a network compiled under `mode` still lets `host` through, if it does (the way smolvm
 /// matches).
 fn admits(spec: &NetworkSpec, host: &str, mode: Mode) -> Option<String> {
@@ -578,7 +620,24 @@ mod tests {
             )
             .unwrap();
         assert!(!deny_cidrs(&p, "s1").contains(&"172.16.0.0/12".to_string()));
-        assert!(deny_cidrs_with(&p, "s1", &[id]).contains(&"172.16.0.0/12".to_string()));
+        let cidrs = deny_cidrs_with(&p, "s1", std::slice::from_ref(&id));
+        assert!(cidrs.contains(&"172.16.0.0/12".to_string()));
+        assert_eq!(
+            install_deny_cidr_notes(&p, "s1", &[id]),
+            ["note: kit k's install-phase deny of 172.16.0.0/12 stays for this sandbox's life"]
+        );
+        // One a lasting rule denies anyway needs no note.
+        let id = p
+            .add_rule(
+                Some("s1"),
+                Decision::Deny,
+                "10.0.0.0/8, bad.example",
+                "kit-install:k",
+                None,
+                None,
+            )
+            .unwrap();
+        assert!(install_deny_cidr_notes(&p, "s1", &[id]).is_empty());
     }
 
     fn with_loopback(cidrs: &[&str]) -> Vec<String> {

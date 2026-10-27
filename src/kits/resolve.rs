@@ -96,12 +96,24 @@ pub fn resolve_for(
     }
     // Names scope `--kit-arg`s and tag policy rules. An agent preset isn't a kit, so a kit may
     // share its name.
+    use crate::kits::model::Source;
     let named = std::iter::once(&workload)
-        .filter(|w| !matches!(w.source, crate::kits::model::Source::Preset(_)))
+        .filter(|w| !matches!(w.source, Source::Preset(_)))
         .chain(&mixins);
     let mut seen = BTreeSet::new();
     for k in named {
         if !seen.insert(k.name.as_str()) {
+            // Most likely a user's own docker kit beside the shipped one a Docker image gets.
+            let shipped = std::iter::once(&workload)
+                .chain(&mixins)
+                .any(|k| k.source == Source::Builtin("docker"));
+            if k.name == "docker" && shipped {
+                bail!(
+                    "two kits are named docker: yours and the shipped one a Docker-enabled image \
+                     gets; rename your kit, or have it provide docker (`provides: [docker]`) to \
+                     replace the shipped one"
+                );
+            }
             bail!("two kits are named {}", k.name);
         }
     }
@@ -472,6 +484,14 @@ mod tests {
         assert_eq!(format!("{e:#}"), "two kits are named a");
         let e = run(workload("a"), vec![mixin("a")]).unwrap_err();
         assert_eq!(format!("{e:#}"), "two kits are named a");
+        let shipped = crate::kits::load::builtin("docker").unwrap().unwrap();
+        let e = run(workload("w"), vec![mixin("docker"), shipped]).unwrap_err();
+        assert_eq!(
+            format!("{e:#}"),
+            "two kits are named docker: yours and the shipped one a Docker-enabled image gets; \
+             rename your kit, or have it provide docker (`provides: [docker]`) to replace the \
+             shipped one"
+        );
         // A preset agent's name is free for a kit.
         let mut preset = workload("claude");
         preset.source = Source::Preset("img:1".into());
