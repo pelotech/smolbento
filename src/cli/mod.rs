@@ -6,14 +6,14 @@ mod exec;
 mod fork;
 mod lifecycle;
 mod ls;
-mod plan;
+pub(crate) mod plan;
 mod policy;
 mod ports;
 mod run;
 mod secret;
 mod settings;
 #[cfg(test)]
-mod testutil;
+pub(crate) mod testutil;
 mod upload_pack;
 
 pub use args::*;

@@ -22,6 +22,7 @@ pub struct FakeRunner {
     envs: RefCell<Vec<Vec<(String, String)>>>,
     removed: RefCell<Vec<Vec<String>>>,
     spawn_errors: RefCell<Vec<(Vec<String>, String)>>,
+    download: RefCell<Option<Vec<u8>>>,
 }
 
 fn strings(items: &[&str]) -> Vec<String> {
@@ -109,6 +110,12 @@ impl FakeRunner {
         self
     }
 
+    /// Make each `machine cp MACHINE:PATH HOST` write `bytes` to `HOST`, as a real download would.
+    pub fn download(&self, bytes: &[u8]) -> &Self {
+        *self.download.borrow_mut() = Some(bytes.to_vec());
+        self
+    }
+
     pub fn interactive_exit(&self, code: i32) -> &Self {
         *self.interactive_code.borrow_mut() = code;
         self
@@ -154,6 +161,13 @@ impl Runner for FakeRunner {
             .rfind(|(p, _)| args.starts_with(p))
         {
             anyhow::bail!("{message}");
+        }
+        if let (Some(bytes), [m, cp, src, dst]) = (self.download.borrow().as_ref(), args)
+            && m == "machine"
+            && cp == "cp"
+            && src.contains(':')
+        {
+            std::fs::write(dst, bytes)?;
         }
         let mut replies = self.replies.borrow_mut();
         let Some(index) = replies.iter().rposition(|r| args.starts_with(&r.prefix)) else {

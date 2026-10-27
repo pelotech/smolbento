@@ -246,7 +246,7 @@ pub(crate) fn hex_of(digest: &str) -> Result<&str> {
         .ok_or_else(|| anyhow!("unsupported digest '{digest}'"))
 }
 
-fn hex(bytes: &[u8]) -> String {
+pub(crate) fn hex(bytes: &[u8]) -> String {
     bytes.iter().map(|b| format!("{b:02x}")).collect()
 }
 

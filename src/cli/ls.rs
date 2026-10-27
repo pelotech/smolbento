@@ -11,7 +11,9 @@ use crate::sandbox::{self, Sandbox};
 use crate::smolvm::{MachineState, PublishedPort, Runner};
 
 pub fn run<R: Runner>(ctx: &mut Ctx<R>, a: &LsArgs) -> Result<i32> {
-    let sandboxes = sandbox::list(&ctx.vm)?;
+    let mut sandboxes = sandbox::list(&ctx.vm)?;
+    // Internal sandboxes such as the kit builder (`_builder`); sbx's ls has no --all.
+    sandboxes.retain(|s| !s.name().starts_with('_'));
     let format = if a.json {
         Format::Json
     } else {
@@ -214,6 +216,24 @@ mod tests {
             "No sandboxes found\n"
         );
         assert_eq!(render(&[], Format::Json, false, 0).unwrap(), "[]\n");
+    }
+
+    #[test]
+    fn internal_sandboxes_are_hidden() {
+        use super::super::testutil::{machine_json, sbt, test_env};
+        let mut t = test_env(&[]);
+        let ls = format!(
+            "[{},{}]",
+            machine_json("sbx-_builder", "stopped", &[("sbx.name", "_builder")]),
+            machine_json("sbx-a1", "stopped", &[("sbx.name", "a1")]),
+        );
+        t.ctx.vm.runner().ok(&["machine", "ls", "--json"], &ls);
+        for args in [&["ls"][..], &["ls", "-q"], &["ls", "--json"]] {
+            sbt(&mut t.ctx, args).unwrap();
+            let out = t.stdout();
+            assert!(out.contains("a1"), "{out}");
+            assert!(!out.contains("_builder"), "{args:?}: {out}");
+        }
     }
 
     #[test]
