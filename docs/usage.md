@@ -255,9 +255,10 @@ What a kit does, and when:
   error printed, so the same command works again once it's fixed. Its files and agent
   instructions are written once; a v2 kit's `files/workspace` and `${WORKDIR}` are the sandbox's
   primary workspace, or `/home/agent/workspace` without one.
-- **Every start**: its startup steps run in order before the agent, and a failing one fails the
-  start (`kit startup exited with code N`). Steps marked `background: true` (such as the `docker`
-  kit's `dockerd`) start after them, alongside the agent; one of those failing is only logged.
+- **Every start**: the kits' startup steps run in kit order before the agent, and a failing one
+  fails the start (`kit startup exited with code N`). A step marked `background: true` (such as
+  the `docker` kit's `dockerd`) is started at its place in that order and keeps running, so later
+  steps can use it; one of those failing is only logged.
   Output goes to `/var/log/sbx-kit-startup.log` in the sandbox. If a step fails during create, the
   sandbox is still created, with a warning, and stopped: each later start fails until the step
   succeeds, as in sbx. `kit add` only warns.

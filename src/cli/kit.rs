@@ -929,16 +929,10 @@ mod tests {
                 && l.ends_with(&format!("{MACHINE}:/etc/smolbento/startup.d/02-net.sh"))
         });
         let script = Some("/etc/smolbento/startup.d/02-net.sh");
-        let sync = pos("blocking startup", &|l| {
+        let started = pos("startup", &|l| {
             *l == format!(
                 "machine exec --name {MACHINE} -u root -- sh -c {}",
-                crate::sandbox::startup_cmd(false, script)
-            )
-        });
-        let started = pos("background startup", &|l| {
-            *l == format!(
-                "machine exec --name {MACHINE} -u root -d -- sh -c {}",
-                crate::sandbox::startup_cmd(true, script)
+                crate::sandbox::startup_cmd(script)
             )
         });
         assert!(
@@ -948,8 +942,7 @@ mod tests {
                 && close < file
                 && file < context
                 && context < startup_cp
-                && startup_cp < sync
-                && sync < started,
+                && startup_cp < started,
             "{lines:#?}"
         );
         assert_eq!(lines.last(), Some(&lines[started]), "{lines:#?}");
@@ -985,7 +978,7 @@ mod tests {
                 "--",
                 "sh",
                 "-c",
-                &crate::sandbox::startup_cmd(false, script),
+                &crate::sandbox::startup_cmd(script),
             ],
             crate::smolvm::Output {
                 code: 2,
@@ -996,9 +989,7 @@ mod tests {
         assert!(t.stdout().contains("Added kit net to dev"));
         let lines = dev_calls(&t);
         assert!(
-            !lines
-                .iter()
-                .any(|l| l.starts_with("machine stop") || l.contains(" -d -- sh -c ")),
+            !lines.iter().any(|l| l.starts_with("machine stop")),
             "{lines:#?}"
         );
     }

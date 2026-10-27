@@ -10,21 +10,19 @@ pub const STARTUP_DIR: &str = "/etc/smolbento/startup.d";
 pub const KITS_FILE: &str = "/etc/smolbento/kits";
 pub const STARTUP_LOG: &str = "/var/log/sbx-kit-startup.log";
 
-/// The kits' startup runner, as root on every start (`/etc/smolbento/startup <mode> [script…]`).
-/// `sync` runs the blocking hooks in order and exits with the first failure's code (the start
-/// waits for it); `background` starts the `background: true` ones (detached by the caller). The
-/// scripts default to all of `startup.d`, in order. Logs like sbx's dispatcher.
+/// The kits' startup runner, as root on every start (`/etc/smolbento/startup [script…]`): one
+/// pass over the `startup.d` scripts (or the ones named), in kit order, like sbx's dispatcher.
+/// Blocking hooks run to completion and the first failure ends the pass with its exit code;
+/// background hooks are started detached at their position.
 pub const STARTUP_RUNNER: &str = r#"#!/bin/sh
 # Written by smolbento: runs the kits' startup hooks, in order, on every start.
-mode=$1
-shift
 [ $# -gt 0 ] || set -- /etc/smolbento/startup.d/*.sh
-exec >>/var/log/sbx-kit-startup.log 2>&1
-echo "=== dispatcher run $(date -u +%Y-%m-%dT%H:%M:%SZ) $mode ==="
+exec >>/var/log/sbx-kit-startup.log 2>&1 </dev/null
+echo "=== dispatcher run $(date -u +%Y-%m-%dT%H:%M:%SZ) ==="
 cd /
 for f; do
   [ -f "$f" ] || continue
-  sh "$f" "$mode" || { rc=$?; echo "kit startup exited with code $rc"; exit $rc; }
+  sh "$f" || { rc=$?; echo "kit startup exited with code $rc"; exit $rc; }
 done
 "#;
 
@@ -88,39 +86,42 @@ pub fn as_user(user: Option<&str>, script: &str) -> String {
     }
 }
 
-/// A kit's `startup.d` script, run as `sh <script> <mode>`: with `sync` its blocking hooks in
-/// order, exiting with the first failure's code; with `background` its background hooks, each
-/// started with `&` (a failure is only logged). Each hook that succeeds logs `ok <script> hook N`.
+/// A kit's `startup.d` script: its startup hooks in order. A blocking hook runs to completion and
+/// logs `ok <script> hook N`; a failure exits with its code. A background hook is started in its
+/// own session (`setsid`, else `nohup`), so it outlives the runner's exec, and logs
+/// `started <script> hook N`; its failure is only logged.
 pub fn startup_script(kit: &str, hooks: &[&Hook]) -> String {
     // The kit name only appears quoted.
     let mut s = String::from("#!/bin/sh\n# Kit startup hooks (written by smolbento).\ncd /\n");
+    if hooks.iter().any(|h| h.background) {
+        s.push_str("d=nohup; command -v setsid >/dev/null 2>&1 && d=setsid\n");
+    }
     for (i, h) in hooks.iter().enumerate() {
         let run = as_user(h.user.as_deref(), &hook_script(h));
         let n = i + 1;
         let failed = sh_quote(&format!("smolbento: kit {kit} startup hook {n} failed"));
-        let ok = format!("echo \"ok $0 hook {n}\"");
         if h.background {
+            let body = sh_quote(&format!(
+                "if {{ {run}; }}; then :; else echo {failed} \"(exit $?)\"; fi"
+            ));
             s.push_str(&format!(
-                "if [ \"$1\" = background ]; then\n  \
-                 {{ if {{ {run}; }}; then {ok}; else echo {failed} \"(exit $?)\"; fi; }} &\nfi\n"
+                "$d sh -c {body} &\necho \"started $0 hook {n}\"\n"
             ));
         } else {
             s.push_str(&format!(
-                "if [ \"$1\" = sync ]; then\n  \
-                 if {{ {run}; }}; then {ok}; else rc=$?; echo {failed} \"(exit $rc)\"; exit $rc; fi\nfi\n"
+                "if {{ {run}; }}; then echo \"ok $0 hook {n}\"; \
+                 else rc=$?; echo {failed} \"(exit $rc)\"; exit $rc; fi\n"
             ));
         }
     }
     s
 }
 
-/// Mounts tmpfs volumes (lost on stop, so this runs on every start, before the startup hooks:
-/// in the runner's `sync` run). A failed mount is logged, not fatal. `(path, mode)`.
+/// Mounts tmpfs volumes (lost on stop, so this runs on every start, first: `00-volumes.sh`). A
+/// failed mount is logged, not fatal. `(path, mode)`.
 pub fn tmpfs_script(volumes: &[(String, Option<String>)]) -> String {
-    let mut s = String::from(
-        "#!/bin/sh\n# tmpfs volumes of the sandbox's kits (written by smolbento).\n\
-         [ \"$1\" = sync ] || exit 0\n",
-    );
+    let mut s =
+        String::from("#!/bin/sh\n# tmpfs volumes of the sandbox's kits (written by smolbento).\n");
     for (path, mode) in volumes {
         let p = sh_quote(path);
         // /proc/mounts escapes a space, tab, newline and backslash in a path as octal.
@@ -276,14 +277,6 @@ mod tests {
         Command::new("sh").arg("-c").arg(script).output().unwrap()
     }
 
-    /// `script` as a startup.d script in the runner's `sync` run.
-    fn sh_sync(script: &str) -> std::process::Output {
-        Command::new("sh")
-            .args(["-c", script, "script", "sync"])
-            .output()
-            .unwrap()
-    }
-
     #[test]
     fn a_mounted_tmpfs_with_a_space_in_its_path_is_seen() {
         let d = tempfile::tempdir().unwrap();
@@ -293,10 +286,10 @@ mod tests {
             .replace("mkdir -p", "true")
             .replace("mount -t", "echo MOUNT");
         std::fs::write(&mounts, "tmpfs /data/my\\040cache tmpfs rw 0 0\n").unwrap();
-        let out = String::from_utf8(sh_sync(&script).stdout).unwrap();
+        let out = String::from_utf8(sh(&script).stdout).unwrap();
         assert!(!out.contains("MOUNT"), "{out}");
         std::fs::write(&mounts, "tmpfs /data/my tmpfs rw 0 0\n").unwrap();
-        let out = String::from_utf8(sh_sync(&script).stdout).unwrap();
+        let out = String::from_utf8(sh(&script).stdout).unwrap();
         assert!(out.contains("MOUNT"), "{out}");
     }
 
@@ -457,31 +450,20 @@ mod tests {
         );
     }
 
-    /// A temp `startup.d` with kit `a` (sync `first`, background `bg`), kit `b` (sync, exits 3)
-    /// and kit `c` (sync `third`), and the runner pointed at it and at a temp log.
+    /// A temp `startup.d` and log, and the runner pointed at them.
     struct Startup {
         d: tempfile::TempDir,
         runner: String,
     }
 
     impl Startup {
-        fn new() -> Self {
+        /// `(file, kit, hooks)` scripts in `startup.d`.
+        fn new(scripts: &[(&str, &str, Vec<&Hook>)]) -> Self {
             let d = tempfile::tempdir().unwrap();
             let dir = d.path().join("startup.d");
             std::fs::create_dir(&dir).unwrap();
-            let first = hook(HookCmd::Shell("echo first".into()), &[]);
-            let bg = Hook {
-                background: true,
-                ..hook(HookCmd::Shell("echo bg".into()), &[])
-            };
-            let bad = hook(HookCmd::Shell("echo second; exit 3".into()), &[]);
-            let third = hook(HookCmd::Shell("echo third".into()), &[]);
-            for (file, kit, hooks) in [
-                ("01-a.sh", "a", vec![&first, &bg]),
-                ("02-b.sh", "b", vec![&bad]),
-                ("03-c.sh", "c", vec![&third]),
-            ] {
-                std::fs::write(dir.join(file), startup_script(kit, &hooks)).unwrap();
+            for (file, kit, hooks) in scripts {
+                std::fs::write(dir.join(file), startup_script(kit, hooks)).unwrap();
             }
             let runner = STARTUP_RUNNER
                 .replace(STARTUP_DIR, &dir.display().to_string())
@@ -489,8 +471,8 @@ mod tests {
             Startup { d, runner }
         }
 
-        fn dir(&self) -> String {
-            self.d.path().join("startup.d").display().to_string()
+        fn path(&self, name: &str) -> String {
+            self.d.path().join(name).display().to_string()
         }
 
         /// Runs the runner with `args` and returns its exit code.
@@ -508,86 +490,125 @@ mod tests {
         fn log(&self) -> String {
             std::fs::read_to_string(self.d.path().join("log")).unwrap_or_default()
         }
+
+        /// The log once it contains `text` (polled for up to 2 s).
+        fn log_with(&self, text: &str) -> String {
+            for _ in 0..100 {
+                if self.log().contains(text) {
+                    break;
+                }
+                std::thread::sleep(std::time::Duration::from_millis(20));
+            }
+            self.log()
+        }
+    }
+
+    fn shell(cmd: &str) -> Hook {
+        hook(HookCmd::Shell(cmd.into()), &[])
+    }
+
+    fn background(cmd: &str) -> Hook {
+        Hook {
+            background: true,
+            ..shell(cmd)
+        }
     }
 
     #[test]
-    fn the_sync_runner_blocks_on_hooks_in_order_and_stops_at_a_failure() {
-        let s = Startup::new();
-        assert_eq!(s.run(&["sync"]), Some(3));
+    fn the_runner_runs_hooks_in_kit_order_and_stops_at_a_failure() {
+        let (first, bad, third) = (
+            shell("echo first"),
+            shell("echo second; exit 3"),
+            shell("echo third"),
+        );
+        let s = Startup::new(&[
+            ("01-a.sh", "a", vec![&first]),
+            ("02-b.sh", "b", vec![&bad]),
+            ("03-c.sh", "c", vec![&third]),
+        ]);
+        assert_eq!(s.run(&[]), Some(3));
         let log = s.log();
-        let dir = s.dir();
+        let dir = s.path("startup.d");
         assert!(log.starts_with("=== dispatcher run "), "{log}");
         assert!(
-            log.contains(&format!("first\nok {dir}/01-a.sh hook 1\n")),
+            log.contains(&format!("first\nok {dir}/01-a.sh hook 1\nsecond\n")),
             "{log}"
         );
-        assert!(log.contains("second\n"), "{log}");
-        assert!(log.contains("kit startup exited with code 3"), "{log}");
-        assert!(!log.contains("bg"), "background hooks wait: {log}");
+        assert!(
+            log.contains(
+                "smolbento: kit b startup hook 1 failed (exit 3)\nkit startup exited with code 3\n"
+            ),
+            "{log}"
+        );
         assert!(!log.contains("third"), "nothing after the failure: {log}");
     }
 
+    /// sbx's order: a background hook starts at its position and the pass goes on, so a later
+    /// kit's blocking hook can wait for it.
     #[test]
-    fn the_background_runner_starts_only_background_hooks() {
-        let s = Startup::new();
-        assert_eq!(s.run(&["background"]), Some(0));
-        let dir = s.dir();
-        let ok = format!("bg\nok {dir}/01-a.sh hook 2\n");
-        for _ in 0..100 {
-            if s.log().contains(&ok) {
-                break;
-            }
-            std::thread::sleep(std::time::Duration::from_millis(20));
-        }
-        let log = s.log();
-        assert!(log.starts_with("=== dispatcher run "), "{log}");
-        assert!(log.contains(&ok), "{log}");
+    fn a_later_blocking_hook_can_wait_for_an_earlier_background_hook() {
+        let d = tempfile::tempdir().unwrap();
+        let ready = d.path().join("ready").display().to_string();
+        let service = background(&format!("sleep 0.3; touch '{ready}'; sleep 1"));
+        let wait = shell(&format!(
+            "i=0; while [ ! -e '{ready}' ]; do i=$((i+1)); [ $i -le 50 ] || exit 9; sleep 0.1; done"
+        ));
+        let s = Startup::new(&[
+            ("01-svc.sh", "svc", vec![&service]),
+            ("02-use.sh", "use", vec![&wait]),
+        ]);
+        let started = std::time::Instant::now();
+        assert_eq!(s.run(&[]), Some(0), "{}", s.log());
         assert!(
-            !log.contains("first") && !log.contains("second") && !log.contains("third"),
-            "{log}"
+            started.elapsed() < std::time::Duration::from_secs(1),
+            "the runner didn't wait for the background hook to exit"
         );
+        let log = s.log();
+        let dir = s.path("startup.d");
+        let svc = log.find(&format!("started {dir}/01-svc.sh hook 1\n"));
+        let use_ = log.find(&format!("ok {dir}/02-use.sh hook 1\n"));
+        assert!(svc.is_some() && use_.is_some() && svc < use_, "{log}");
     }
 
     #[test]
     fn the_runner_runs_only_the_scripts_it_is_given() {
-        let s = Startup::new();
-        let c = format!("{}/03-c.sh", s.dir());
-        assert_eq!(s.run(&["sync", &c]), Some(0));
+        let (first, third) = (shell("echo first"), shell("echo third"));
+        let s = Startup::new(&[
+            ("01-a.sh", "a", vec![&first]),
+            ("03-c.sh", "c", vec![&third]),
+        ]);
+        let c = format!("{}/03-c.sh", s.path("startup.d"));
+        assert_eq!(s.run(&[&c]), Some(0));
         let log = s.log();
         assert!(log.contains(&format!("third\nok {c} hook 1\n")), "{log}");
-        assert!(!log.contains("first") && !log.contains("second"), "{log}");
+        assert!(!log.contains("first"), "{log}");
     }
 
     #[test]
     fn a_failing_background_hook_is_only_logged() {
-        let d = tempfile::tempdir().unwrap();
-        let bad = Hook {
-            background: true,
-            ..hook(HookCmd::Shell("exit 4".into()), &[])
-        };
-        let script = d.path().join("01-k.sh");
-        std::fs::write(&script, startup_script("k", &[&bad])).unwrap();
-        let out = Command::new("sh")
-            .arg(&script)
-            .arg("background")
-            .output()
-            .unwrap();
-        assert_eq!(out.status.code(), Some(0));
-        let text = String::from_utf8(out.stdout).unwrap();
-        assert_eq!(text, "smolbento: kit k startup hook 1 failed (exit 4)\n");
+        let (bad, after) = (background("exit 4"), shell("echo after"));
+        let s = Startup::new(&[("01-k.sh", "k", vec![&bad, &after])]);
+        assert_eq!(s.run(&[]), Some(0));
+        let log = s.log_with("(exit 4)");
+        assert!(
+            log.contains("smolbento: kit k startup hook 1 failed (exit 4)\n"),
+            "{log}"
+        );
+        assert!(log.contains("after\n"), "{log}");
     }
 
     #[test]
-    fn tmpfs_volumes_mount_only_in_the_sync_run() {
-        let s = tmpfs_script(&[("/data/cache".into(), None)]).replace("mkdir -p", "echo MKDIR");
-        let out = Command::new("sh")
-            .arg("-c")
-            .arg(&s)
-            .arg("v")
-            .arg("background")
-            .output()
-            .unwrap();
-        assert!(out.stdout.is_empty(), "{out:?}");
-        assert!(s.contains("[ \"$1\" = sync ] || exit 0\n"), "{s}");
+    fn a_kits_startup_script_keeps_its_hooks_in_order() {
+        let (a, b, c) = (shell("echo a"), background("echo b"), shell("echo c"));
+        let s = startup_script("k", &[&a, &b, &c]);
+        let at = |t: &str| s.find(t).unwrap_or_else(|| panic!("{t} in {s}"));
+        assert!(
+            at("'echo a'") < at("hook 1\"")
+                && at("hook 1\"") < at("echo b")
+                && at("echo b") < at("started $0 hook 2")
+                && at("started $0 hook 2") < at("'echo c'"),
+            "{s}"
+        );
+        assert!(s.contains("$d sh -c "), "{s}");
     }
 }

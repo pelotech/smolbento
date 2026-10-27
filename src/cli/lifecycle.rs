@@ -683,7 +683,7 @@ mod tests {
             .expect("the docker kit's startup script");
         assert!(script.contains("exec dockerd"), "{script}");
         assert!(
-            script.contains("} &"),
+            script.contains("$d sh -c ") && script.contains("fi' &\n"),
             "dockerd runs in the background: {script}"
         );
         // A host-mounted sandbox can't be forked, so it isn't started branchable.

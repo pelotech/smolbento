@@ -1288,7 +1288,8 @@ mod tests {
         let names: Vec<&str> = steps.startup_d.iter().map(|(n, _)| n.as_str()).collect();
         assert_eq!(names, ["01-a.sh"]);
         assert!(
-            steps.startup_d[0].1.contains("runuser -u 'agent'"),
+            // A background hook, so quoted once more for its detached `sh -c`.
+            steps.startup_d[0].1.contains(r"runuser -u '\''agent'\''"),
             "{}",
             steps.startup_d[0].1
         );
