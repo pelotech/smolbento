@@ -33,10 +33,10 @@ pub struct Meta {
     /// Env vars of those credentials as bound at create, sorted. A start removes the ones without
     /// a value, even after their service is gone from secrets.toml.
     pub credential_env: Vec<String>,
-    /// Whether the workspace is a clone (`--clone`) rather than a mount.
-    pub clone: bool,
-    /// The host repo's top, when it differs from `workspace` (a subdirectory was given).
-    pub clone_top: Option<String>,
+    /// `--clone`: the host repo's top, which is also the clone's path in the guest. Stored as
+    /// `sbx.clone=true` plus `sbx.clone-top` when it differs from `workspace` (a subdirectory was
+    /// given).
+    pub clone: Option<String>,
 }
 
 impl Meta {
@@ -66,21 +66,13 @@ impl Meta {
         if !self.credential_env.is_empty() {
             labels.insert(CREDENTIAL_ENV.to_string(), self.credential_env.join(","));
         }
-        if self.clone {
+        if let Some(top) = &self.clone {
             labels.insert(CLONE.to_string(), "true".into());
-        }
-        if let Some(t) = &self.clone_top {
-            labels.insert(CLONE_TOP.to_string(), t.clone());
+            if Some(top) != self.workspace.as_ref() {
+                labels.insert(CLONE_TOP.to_string(), top.clone());
+            }
         }
         labels
-    }
-
-    /// Where a clone sandbox's clone lives in the guest (the host repo's top, as a path).
-    pub fn clone_dir(&self) -> Option<String> {
-        if !self.clone {
-            return None;
-        }
-        self.clone_top.clone().or_else(|| self.workspace.clone())
     }
 
     /// `None` for machines smolbento didn't create.
@@ -101,8 +93,10 @@ impl Meta {
             secrets: list(labels.get(SECRETS)),
             credential_hosts: list(labels.get(CREDENTIAL_HOSTS)),
             credential_env: list(labels.get(CREDENTIAL_ENV)),
-            clone: labels.get(CLONE).is_some_and(|c| c == "true"),
-            clone_top: labels.get(CLONE_TOP).cloned(),
+            clone: labels
+                .get(CLONE)
+                .filter(|c| *c == "true")
+                .and_then(|_| labels.get(CLONE_TOP).or(labels.get(WORKSPACE)).cloned()),
         })
     }
 }
@@ -192,20 +186,20 @@ mod tests {
 
     #[test]
     fn clone_labels_round_trip() {
+        // At the repo top: no `sbx.clone-top`, the workspace is the top.
         let mut m = meta();
-        m.clone = true;
+        m.clone = Some("/w/repo".into());
         let labels = m.to_labels();
         assert_eq!(labels["sbx.clone"], "true");
         assert!(!labels.contains_key("sbx.clone-top"));
-        assert_eq!(
-            Meta::from_labels(&labels).unwrap().clone_dir().as_deref(),
-            Some("/w/repo")
-        );
-        m.clone_top = Some("/w".into());
-        let back = Meta::from_labels(&m.to_labels()).unwrap();
-        assert_eq!(back.clone_dir().as_deref(), Some("/w"));
+        assert_eq!(Meta::from_labels(&labels), Some(m.clone()));
+        // A subdirectory was given: the top is its own label.
+        m.clone = Some("/w".into());
+        let labels = m.to_labels();
+        assert_eq!(labels["sbx.clone-top"], "/w");
+        assert_eq!(Meta::from_labels(&labels), Some(m));
         assert!(!meta().to_labels().contains_key("sbx.clone"));
-        assert_eq!(meta().clone_dir(), None);
+        assert_eq!(Meta::from_labels(&meta().to_labels()).unwrap().clone, None);
     }
 
     #[test]

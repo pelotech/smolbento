@@ -1,7 +1,7 @@
 //! Glue between sandboxes and the policy and secrets: what each start and create gets.
 
 use std::io::{BufRead, Write};
-use std::path::PathBuf;
+use std::path::Path;
 
 use anyhow::{Context, Result, bail};
 
@@ -78,14 +78,10 @@ pub fn start_plan<R: Runner>(ctx: &Ctx<R>, meta: &Meta) -> Result<StartPlan> {
         .filter(|v| !env.iter().any(|(k, _)| k == *v))
         .cloned()
         .collect();
-    let clone = meta.clone_dir().map(|dir| {
-        let repo = PathBuf::from(meta.workspace.as_deref().unwrap_or(&dir));
-        let read = || -> Result<_> {
-            Ok((
-                clone::worktree_branch(&repo)?,
-                clone::copied_remotes(&repo)?,
-            ))
-        };
+    let clone = meta.clone.as_ref().map(|dir| {
+        let repo = Path::new(dir);
+        let read =
+            || -> Result<_> { Ok((clone::worktree_branch(repo)?, clone::copied_remotes(repo)?)) };
         let (branch, remotes) = read().unwrap_or_else(|e| {
             eprintln!(
                 "warning: reading the host repo for {sandbox}: {e:#}; its remotes aren't copied"
@@ -93,7 +89,7 @@ pub fn start_plan<R: Runner>(ctx: &Ctx<R>, meta: &Meta) -> Result<StartPlan> {
             (None, Vec::new())
         });
         CloneStep {
-            dir,
+            dir: dir.clone(),
             branch,
             remotes,
         }
@@ -196,12 +192,8 @@ pub fn create<R: Runner>(
     if sandbox::find(&ctx.vm, &req.name)?.is_some() {
         bail!("sandbox '{}' already exists", req.name);
     }
-    // The repo a `--clone` copies is the primary workspace's.
-    let repo = if req.clone.is_some() {
-        req.workspaces.first().map(|w| w.path.clone())
-    } else {
-        None
-    };
+    // The repo a `--clone` copies, at its top.
+    let repo = req.clone.as_ref().map(|c| c.top.clone());
     if let Some(repo) = &repo {
         clone::check_remote_free(repo, &req.name)?;
         for remote in clone::userinfo_remotes(repo).unwrap_or_default() {
@@ -282,7 +274,6 @@ mod tests {
     use crate::sandbox::Meta;
     use crate::secrets::{SecretEntry, Source, scope_for};
     use crate::smolvm::NetworkSpec;
-    use std::path::Path;
 
     /// A sandbox's labels as recorded at create: `credential_env` holds the built-in services'
     /// env vars.
@@ -538,8 +529,7 @@ mod tests {
         set_policy(&t, "mode = \"deny-all\"");
         let (_d, repo) = host_repo("https://x:y@github.com/o/r.git");
         let mut m = meta("s1", &[], &[]);
-        m.clone = true;
-        m.workspace = Some(repo.clone());
+        m.clone = Some(repo.clone());
         let plan = start_plan(&t.ctx, &m).unwrap();
         assert_eq!(
             plan.clone,
@@ -566,8 +556,7 @@ mod tests {
             &["worktree", "add", "-q", "-b", "feat", wt.to_str().unwrap()],
         );
         let mut m = meta("s1", &[], &[]);
-        m.clone = true;
-        m.workspace = Some(wt.display().to_string());
+        m.clone = Some(wt.display().to_string());
         let plan = start_plan(&t.ctx, &m).unwrap();
         assert_eq!(plan.clone.unwrap().branch.as_deref(), Some("feat"));
     }
@@ -577,8 +566,7 @@ mod tests {
         let t = test_env(&[]);
         set_policy(&t, "mode = \"deny-all\"");
         let mut m = meta("s1", &[], &[]);
-        m.clone = true;
-        m.workspace = Some("/nonexistent/repo".into());
+        m.clone = Some("/nonexistent/repo".into());
         let plan = start_plan(&t.ctx, &m).unwrap();
         assert_eq!(
             plan.clone,

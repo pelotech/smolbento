@@ -143,9 +143,7 @@ pub(crate) fn stop_sandbox<R: Runner>(ctx: &Ctx<R>, sb: &Sandbox) -> Result<()> 
 /// Deletes a sandbox and its per-sandbox policy; `forget_secrets` also drops its own secrets.
 fn remove<R: Runner>(ctx: &Ctx<R>, sb: &Sandbox, forget_secrets: bool) -> Result<()> {
     ctx.vm.delete(&sb.machine)?;
-    if sb.meta.clone
-        && let Some(repo) = &sb.meta.workspace
-    {
+    if let Some(repo) = &sb.meta.clone {
         clone::remove_remote(Path::new(repo), sb.name());
     }
     session::clear(&ctx.paths.sessions(), sb.name());
@@ -970,6 +968,29 @@ mod tests {
             .runner()
             .ok(&["machine", "status"], &clone_json("box", "stopped", &gone));
         sbt(&mut t.ctx, &["rm", "-f", "box"]).unwrap();
+    }
+
+    #[test]
+    fn rm_removes_the_remote_from_the_repo_top_when_the_subdirectory_is_gone() {
+        let mut t = test_env(&[]);
+        let (_d, repo) = temp_repo();
+        crate::workspace::clone::add_remote(&repo, "box").unwrap();
+        let sub = repo.join("deleted").display().to_string();
+        t.ctx.vm.runner().ok(
+            &["machine", "status"],
+            &machine_json(
+                "sbx-box",
+                "stopped",
+                &[
+                    ("sbx.name", "box"),
+                    ("sbx.clone", "true"),
+                    ("sbx.workspace", &sub),
+                    ("sbx.clone-top", &repo.display().to_string()),
+                ],
+            ),
+        );
+        sbt(&mut t.ctx, &["rm", "-f", "box"]).unwrap();
+        assert_eq!(remote(&repo, "box"), "");
     }
 
     #[test]

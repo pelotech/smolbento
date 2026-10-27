@@ -44,25 +44,19 @@ pub fn meta(req: &CreateRequest) -> Meta {
     Meta {
         name: req.name.clone(),
         agent: req.agent.clone(),
-        workspace: primary.clone(),
+        workspace: primary,
         workspaces: req.workspaces.iter().map(Workspace::label).collect(),
         created: req.created,
         docker: req.docker,
         secrets: req.secrets.clone(),
         credential_hosts: req.credential_hosts.clone(),
         credential_env: req.credential_env.clone(),
-        clone: req.clone.is_some(),
-        clone_top: req
-            .clone
-            .as_ref()
-            .map(|c| c.top.display().to_string())
-            .filter(|t| Some(t) != primary.as_ref()),
+        clone: req.clone.as_ref().map(|c| c.top.display().to_string()),
     }
 }
 
 pub fn spec(req: &CreateRequest) -> CreateSpec {
     let meta = meta(req);
-    let primary = meta.workspace.clone();
     let mut mounts = Vec::new();
     let mut rest = req.workspaces.iter();
     match (&req.clone, rest.next()) {
@@ -95,11 +89,7 @@ pub fn spec(req: &CreateRequest) -> CreateSpec {
         image: req.image.clone(),
         labels: meta.to_labels(),
         mounts,
-        workdir: req
-            .clone
-            .as_ref()
-            .map(|c| c.top.display().to_string())
-            .or(primary),
+        workdir: meta.clone.clone().or_else(|| meta.workspace.clone()),
         cpus: Some(req.cpus),
         memory_mib: Some(req.memory_mib),
         env: req.env.clone(),

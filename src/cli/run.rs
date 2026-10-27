@@ -91,7 +91,7 @@ pub fn run<R: Runner>(ctx: &mut Ctx<R>, a: &RunArgs) -> Result<i32> {
 
     // Fetch before `--rm` deletes the sandbox, and while it still runs for `_upload-pack`.
     if fetch_on_exit(ctx, &sb)
-        && let Some(repo) = &sb.meta.workspace
+        && let Some(repo) = &sb.meta.clone
         && let Err(e) = clone::fetch(Path::new(repo), sb.name())
     {
         eprintln!("warning: fetching the agent's commits: {e:#}");
@@ -114,7 +114,7 @@ pub fn run<R: Runner>(ctx: &mut Ctx<R>, a: &RunArgs) -> Result<i32> {
 
 /// A bad setting value only skips the fetch: the stop or `--rm` and the agent's status still apply.
 fn fetch_on_exit<R: Runner>(ctx: &Ctx<R>, sb: &Sandbox) -> bool {
-    sb.meta.clone
+    sb.meta.clone.is_some()
         && ctx
             .settings
             .bool("clone.fetch-on-exit")

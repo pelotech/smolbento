@@ -413,7 +413,7 @@ mod tests {
             meta: Meta {
                 name: "r".into(),
                 workspace: Some("/w/r".into()),
-                clone: true,
+                clone: Some("/w/r".into()),
                 ..Default::default()
             },
             machine: "sbx-r".into(),
@@ -457,7 +457,7 @@ mod tests {
         let sb = Sandbox {
             meta: Meta {
                 name: "r".into(),
-                clone: true,
+                clone: Some("/w/r".into()),
                 ..Default::default()
             },
             machine: "sbx-r".into(),
@@ -501,7 +501,7 @@ mod tests {
         let sb = Sandbox {
             meta: Meta {
                 name: "r".into(),
-                clone: true,
+                clone: Some("/w/r".into()),
                 ..Default::default()
             },
             machine: "sbx-r".into(),
