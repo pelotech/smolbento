@@ -7,7 +7,7 @@ use anyhow::{Context, Result, bail};
 
 use super::Ctx;
 use crate::policy::{Mode, Policy, compile};
-use crate::sandbox::{self, CloneStep, CreateRequest, Meta, Sandbox, StartPlan};
+use crate::sandbox::{self, CloneStep, CreateRequest, Meta, Sandbox, StartPlan, name};
 use crate::secrets::{SecretsFile, resolve::resolve};
 use crate::smolvm::{Credential, Runner};
 use crate::workspace::clone;
@@ -156,11 +156,17 @@ pub fn prepare_create<R: Runner>(
     let denies = super::policy::parse_create_denies(deny_network)?;
     let mut policy = ensure_policy(ctx)?;
     let secrets = SecretsFile::load(&ctx.paths)?;
-    let services: Vec<String> = secrets
-        .services_for(&req.name)
-        .into_iter()
-        .filter(|s| secrets.service(s).is_some())
-        .collect();
+    // Internal sandboxes run untrusted code (a kit's build steps): no credentials, not even as
+    // placeholders.
+    let services: Vec<String> = if name::is_internal(&req.name) {
+        Vec::new()
+    } else {
+        secrets
+            .services_for(&req.name)
+            .into_iter()
+            .filter(|s| secrets.service(s).is_some())
+            .collect()
+    };
     req.credentials = credentials(&secrets, &services)?;
     req.credential_hosts = credential_hosts(&secrets, &services);
     req.credential_env = req.credentials.iter().map(|c| c.env_var.clone()).collect();

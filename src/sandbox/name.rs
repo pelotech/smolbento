@@ -33,6 +33,12 @@ pub fn validate(name: &str) -> Result<()> {
     Ok(())
 }
 
+/// smolbento's own sandboxes, such as the kit builder (`_builder`): a leading `_`, which user
+/// names can't have. They're hidden from `ls`, not forkable, and get no secrets.
+pub fn is_internal(name: &str) -> bool {
+    name.starts_with('_')
+}
+
 /// smolvm allows `_` but not `.`; sbx allows `.` but not `_`, so the mapping is reversible.
 pub fn machine_name(name: &str) -> String {
     format!("{MACHINE_PREFIX}{}", name.replace('.', "_"))
@@ -68,6 +74,16 @@ pub fn default_name(agent: &str, workspace: &Path) -> String {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn internal_names_start_with_an_underscore() {
+        assert!(is_internal("_builder"));
+        assert!(!is_internal("claude-repo"));
+        assert!(
+            validate("_builder").is_err(),
+            "users can't take internal names"
+        );
+    }
 
     #[test]
     fn valid_names() {

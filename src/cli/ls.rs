@@ -7,13 +7,13 @@ use anyhow::Result;
 use serde::Serialize;
 
 use super::{Ctx, Format, LsArgs, table};
-use crate::sandbox::{self, Sandbox};
+use crate::sandbox::{self, Sandbox, name};
 use crate::smolvm::{MachineState, PublishedPort, Runner};
 
 pub fn run<R: Runner>(ctx: &mut Ctx<R>, a: &LsArgs) -> Result<i32> {
     let mut sandboxes = sandbox::list(&ctx.vm)?;
-    // Internal sandboxes such as the kit builder (`_builder`); sbx's ls has no --all.
-    sandboxes.retain(|s| !s.name().starts_with('_'));
+    // sbx's ls has no --all.
+    sandboxes.retain(|s| !name::is_internal(s.name()));
     let format = if a.json {
         Format::Json
     } else {

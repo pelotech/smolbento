@@ -123,7 +123,9 @@ impl Meta {
     /// Whether `sbt fork` can copy it: no writable host folder, not itself a fork, and not an
     /// internal sandbox (`_builder`), which would only pay branchable's memory cost.
     pub fn forkable(&self) -> bool {
-        self.fork_of.is_none() && !self.writable_host_folder() && !self.name.starts_with('_')
+        self.fork_of.is_none()
+            && !self.writable_host_folder()
+            && !super::name::is_internal(&self.name)
     }
 }
 

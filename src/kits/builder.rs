@@ -679,4 +679,39 @@ mod tests {
         );
         assert_eq!(registry_host("401 Unauthorized at /build/1/ctx"), None);
     }
+
+    #[test]
+    fn the_builder_gets_no_secrets() {
+        use crate::secrets::{SecretEntry, SecretsFile, Source as SecretSource, scope_for};
+        let t = test_env(&[]);
+        let entry = SecretEntry {
+            service: "github".into(),
+            scope: scope_for(None),
+            source: SecretSource::Keychain,
+        };
+        t.ctx.store.set(&entry.account(), "gh-123").unwrap();
+        let mut f = SecretsFile::default();
+        f.set(entry);
+        f.save(&t.ctx.paths).unwrap();
+        let fake = t.ctx.vm.runner();
+        fake.ok(&["machine", "status"], &builder_json("created"))
+            .once_fail(&["machine", "status"], "NOT_FOUND", "vm not found")
+            .once_fail(&["machine", "status"], "NOT_FOUND", "vm not found")
+            .download(&kit_tar());
+        let kit = kit_dir();
+        build(&t.ctx, kit.path()).unwrap();
+        let lines = fake.call_lines();
+        let create = lines
+            .iter()
+            .find(|l| l.starts_with("machine create -n sbx-_builder"))
+            .unwrap();
+        assert!(!create.contains("--credential"), "{create}");
+        assert!(!create.contains("sbx.secrets"), "{create}");
+        assert_eq!(fake.envs(), vec![Vec::<(String, String)>::new()]);
+        assert!(
+            fake.removed().iter().all(|r| r.is_empty()),
+            "{:?}",
+            fake.removed()
+        );
+    }
 }
