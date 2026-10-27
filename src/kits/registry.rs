@@ -6,6 +6,7 @@
 
 use std::fs;
 use std::io::{self, Write};
+use std::net::{Ipv4Addr, Ipv6Addr};
 use std::path::{Path, PathBuf};
 use std::pin::Pin;
 use std::process::{Command, Stdio};
@@ -15,7 +16,7 @@ use anyhow::{Context, Result, anyhow, bail};
 use base64::Engine;
 use base64::engine::general_purpose::STANDARD;
 use oci_client::Reference;
-use oci_client::client::{Client, ClientConfig};
+use oci_client::client::{Client, ClientConfig, ClientProtocol};
 use oci_client::errors::OciDistributionError;
 use oci_client::manifest::{
     IMAGE_MANIFEST_LIST_MEDIA_TYPE, IMAGE_MANIFEST_MEDIA_TYPE, OCI_IMAGE_INDEX_MEDIA_TYPE,
@@ -75,7 +76,7 @@ fn pull_layout(
         .enable_all()
         .build()
         .context("starting the registry client")?;
-    let client = new_client();
+    let client = new_client(&r);
     let fetched = rt.block_on(async {
         let first = fetch(&client, &r, &RegistryAuth::Anonymous, cache, require_kit).await;
         match first {
@@ -95,10 +96,50 @@ fn pull_layout(
 
 /// The ring provider is installed once; reqwest's no-provider rustls build needs a default.
 /// TLS roots come from the OS verifier (rustls-platform-verifier), not a bundled list.
-fn new_client() -> Client {
+fn new_client(r: &Reference) -> Client {
     // Err means a provider is already installed, which is fine.
     let _ = rustls::crypto::ring::default_provider().install_default();
-    Client::new(ClientConfig::default())
+    Client::new(ClientConfig {
+        protocol: protocol_for(r),
+        ..ClientConfig::default()
+    })
+}
+
+/// Like Docker, a loopback registry (`localhost`, `127.0.0.0/8`, `[::1]`, any port) is spoken to
+/// over plain HTTP; every other registry is HTTPS only.
+fn protocol_for(r: &Reference) -> ClientProtocol {
+    // oci-client matches the exception against `resolve_registry()` verbatim.
+    let registry = r.resolve_registry();
+    if is_loopback(registry) {
+        ClientProtocol::HttpsExcept(vec![registry.to_string()])
+    } else {
+        ClientProtocol::Https
+    }
+}
+
+/// REGISTRY is `host[:port]`; the host is compared lowercased, as `trust::normalise` does.
+fn is_loopback(registry: &str) -> bool {
+    let registry = registry.to_ascii_lowercase();
+    let port_ok = |p: &str| p.is_empty() || p.bytes().all(|c| c.is_ascii_digit());
+    if let Some(rest) = registry.strip_prefix('[') {
+        let Some((host, tail)) = rest.split_once(']') else {
+            return false;
+        };
+        let port = match tail.strip_prefix(':') {
+            Some(p) if !p.is_empty() => p,
+            Some(_) => return false,
+            None if tail.is_empty() => "",
+            None => return false,
+        };
+        return port_ok(port) && host.parse::<Ipv6Addr>().is_ok_and(|ip| ip.is_loopback());
+    }
+    let (host, port) = match registry.split_once(':') {
+        Some((h, p)) if !p.is_empty() => (h, p),
+        Some(_) => return false,
+        None => (registry.as_str(), ""),
+    };
+    port_ok(port)
+        && (host == "localhost" || host.parse::<Ipv4Addr>().is_ok_and(|ip| ip.is_loopback()))
 }
 
 fn is_auth_error(e: &anyhow::Error) -> bool {
@@ -759,9 +800,47 @@ mod tests {
 
     #[test]
     fn client_builds_with_the_ring_provider() {
-        let _ = new_client();
-        let _ = new_client();
+        let r: Reference = "ghcr.io/a/b".parse().unwrap();
+        let _ = new_client(&r);
+        let _ = new_client(&r);
         assert!(rustls::crypto::CryptoProvider::get_default().is_some());
+    }
+
+    #[test]
+    fn only_loopback_registries_allow_plain_http() {
+        let protocol = |s: &str| protocol_for(&s.parse::<Reference>().expect(s));
+        for (r, host) in [
+            ("localhost/kit:1", "localhost"),
+            ("localhost:5000/kit:1", "localhost:5000"),
+            ("LocalHost:5000/kit", "LocalHost:5000"),
+            ("127.0.0.1/kit", "127.0.0.1"),
+            ("127.0.0.1:5000/a/kit", "127.0.0.1:5000"),
+            ("127.255.0.9:80/kit", "127.255.0.9:80"),
+        ] {
+            assert_eq!(
+                protocol(r),
+                ClientProtocol::HttpsExcept(vec![host.to_string()]),
+                "{r}"
+            );
+        }
+        for r in [
+            "ghcr.io/a/kit",
+            "docker.io/library/kit",
+            "kit",
+            "localhost.evil.com/kit",
+            "localhost.evil.com:5000/kit",
+            "127.0.0.1.nip.io/kit",
+            "128.0.0.1:5000/kit",
+        ] {
+            assert_eq!(protocol(r), ClientProtocol::Https, "{r}");
+        }
+        // oci-client 0.18 does not parse IPv6 registries yet; the host check still accepts them.
+        assert!(is_loopback("[::1]"));
+        assert!(is_loopback("[::1]:5000"));
+        assert!(!is_loopback("[::2]:5000"));
+        assert!(!is_loopback("localhost:"));
+        assert!(!is_loopback("localhost:50x"));
+        assert!(!is_loopback("[::1]x"));
     }
 
     #[test]
