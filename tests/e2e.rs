@@ -251,7 +251,26 @@ fn policy_changes_apply_on_start_and_live() {
     assert!(!reachable(&e, "https://example.com"), "deny-all blocks");
     e.ok(&["policy", "allow", "network", "example.com"]);
     assert!(reachable(&e, "https://example.com"), "live allow");
+    let ip = e.ok(&[
+        "exec",
+        &e.name,
+        "sh",
+        "-c",
+        "nslookup example.com 2>/dev/null | awk '/^Address/ && $NF !~ /:/ {print $NF}' | head -n 1",
+    ]);
+    let ip = ip.trim();
+    assert!(!ip.is_empty(), "example.com resolved");
+    let by_ip = |e: &E2e| {
+        let probe = format!("wget -S -T 8 -O /dev/null http://{ip}/ 2>&1 | grep -q 'HTTP/'");
+        e.sbt(&["exec", &e.name, "sh", "-c", &probe])
+            .status
+            .success()
+    };
+    assert!(by_ip(&e), "live allow reaches {ip}");
+    // The last host leaves a host-less list: closed live, by name and by its IP (no restart).
     e.ok(&["policy", "rm", "network", "--resource", "example.com"]);
+    assert!(!reachable(&e, "https://example.com"), "live rm");
+    assert!(!by_ip(&e), "live rm closes {ip} (example.com's address)");
     assert!(
         !reachable(&e, "https://www.wikipedia.org"),
         "still restricted"

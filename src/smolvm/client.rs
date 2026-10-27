@@ -291,11 +291,15 @@ impl<R: Runner> Smolvm<R> {
         checked(self.runner.run_with_env(&a, env, remove)?).map(drop)
     }
 
-    /// Replaces the machine's whole allow list; applies live on a running machine.
+    /// Replaces the machine's whole allow list; applies live on a running machine. A list
+    /// without hosts takes two calls (see `network::NO_HOSTS_PLACEHOLDER`).
     pub fn update_network(&self, name: &str, network: &NetworkSpec) -> Result<()> {
-        let mut a = args(&["machine", "update", "-n", name]);
-        a.extend(network.update_args());
-        self.call(a).map(drop)
+        for flags in network.update_calls() {
+            let mut a = args(&["machine", "update", "-n", name]);
+            a.extend(flags);
+            self.call(a)?;
+        }
+        Ok(())
     }
 
     pub fn publish(&self, name: &str, ports: &[PortMap]) -> Result<()> {
@@ -528,6 +532,21 @@ mod tests {
                 "machine update -n m --net --reset-allow-list",
                 "machine update -n m -p 8080:80",
                 "machine update -n m --remove-port 8080:80",
+            ]
+        );
+    }
+
+    #[test]
+    fn emptying_the_host_list_resets_through_a_placeholder() {
+        let vm = Smolvm::new(FakeRunner::new());
+        let deny_all = NetworkSpec::Restricted(AllowList::new(vec![], vec![], vec![]));
+        vm.update_network("m", &deny_all).unwrap();
+        assert_eq!(
+            vm.runner().call_lines(),
+            vec![
+                "machine update -n m --reset-allow-list --allow-host-pattern smolbento.invalid \
+                 --allow-cidr 127.0.0.0/8 --allow-cidr ::1/128",
+                "machine update -n m --remove-allow-host smolbento.invalid",
             ]
         );
     }

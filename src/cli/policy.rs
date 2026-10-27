@@ -720,7 +720,13 @@ mod tests {
             Policy::load(&t.ctx.paths).unwrap().mode,
             Some(Mode::DenyAll)
         );
-        assert_eq!(updates(&t).len(), 1);
+        // No hosts: smolvm's live-reset workaround takes a second call.
+        let u = updates(&t);
+        assert_eq!(u.len(), 2, "{u:?}");
+        assert!(
+            u[1].ends_with("--remove-allow-host smolbento.invalid"),
+            "{u:?}"
+        );
     }
 
     #[test]

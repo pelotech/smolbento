@@ -364,7 +364,8 @@ fn first_start<R: Runner>(
             // those behind, so the host would stay reachable by IP. `update_network` sends
             // `--reset-allow-list` with the whole list, which clears the stored hosts and CIDRs
             // and replaces the running allow list (learned IPs of names no longer allowed are
-            // dropped too).
+            // dropped too; a list left without hosts needs smolvm's workaround in
+            // `NO_HOSTS_PLACEHOLDER`).
             vm.update_network(&sb.machine, &network)
                 .context("removing the install-phase network rules")?;
         }
