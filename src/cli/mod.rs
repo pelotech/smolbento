@@ -264,14 +264,14 @@ mod tests {
         let err = sbt(&mut t.ctx, &["move", "x", "--to", "cloud"]).unwrap_err();
         assert!(err.to_string().contains("Docker Cloud"));
         assert_eq!(exit_code(&err), 2);
-        let Some(Cmd::Run(run)) = Cli::try_parse_from(["sbt", "run", "claude", "--clone"])
+        let Some(Cmd::Run(run)) = Cli::try_parse_from(["sbt", "run", "claude", "--skills", "off"])
             .unwrap()
             .command
         else {
             panic!("expected run");
         };
         let err = run.opts.check_supported().unwrap_err();
-        assert_eq!(err.to_string(), "--clone is not implemented yet");
+        assert_eq!(err.to_string(), "--skills is not implemented yet");
         assert_eq!(exit_code(&err), 2);
     }
 

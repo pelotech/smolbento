@@ -184,7 +184,7 @@ pub fn prepare_create<R: Runner>(
 }
 
 /// Prepares, creates and starts a new sandbox. When that fails before smolvm has the machine, the
-/// `--deny-network` rules this create added are dropped again; rules the sandbox name already had
+/// `--deny-network` rules and the `--clone` remote this create added are dropped again; rules the sandbox name already had
 /// stay.
 pub fn create<R: Runner>(
     ctx: &Ctx<R>,
@@ -195,20 +195,38 @@ pub fn create<R: Runner>(
     if sandbox::find(&ctx.vm, &req.name)?.is_some() {
         bail!("sandbox '{}' already exists", req.name);
     }
+    let repo = req
+        .clone
+        .as_ref()
+        .and(req.workspaces.first())
+        .map(|w| w.path.clone());
+    if let Some(repo) = &repo {
+        clone::check_remote_free(repo, &req.name)?;
+    }
     let mut added = Vec::new();
     let result = (|| {
         added = prepare_create(ctx, req, deny_network)?;
+        if let Some(repo) = &repo {
+            clone::add_remote(repo, &req.name)?;
+        }
         let plan = start_plan(ctx, &sandbox::create::meta(req))?;
         sandbox::create(&ctx.vm, req, &plan)
     })();
-    if result.is_err() && !added.is_empty() && matches!(sandbox::find(&ctx.vm, &req.name), Ok(None))
+    if result.is_err()
+        && (!added.is_empty() || repo.is_some())
+        && matches!(sandbox::find(&ctx.vm, &req.name), Ok(None))
     {
         // Best effort: the create error is what matters.
-        if let Ok(mut policy) = Policy::load(&ctx.paths) {
+        if !added.is_empty()
+            && let Ok(mut policy) = Policy::load(&ctx.paths)
+        {
             for id in &added {
                 policy.remove_rules(Some(&req.name), Some(id), None);
             }
             let _ = policy.save(&ctx.paths);
+        }
+        if let Some(repo) = &repo {
+            clone::remove_remote(repo, &req.name);
         }
     }
     result

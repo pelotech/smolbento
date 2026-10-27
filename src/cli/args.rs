@@ -212,7 +212,7 @@ pub struct SandboxOpts {
     /// Image pull policy (only `missing` is supported)
     #[arg(long)]
     pub pull: Option<String>,
-    /// Work on a private clone of the git repo (not implemented yet)
+    /// Work on a private clone of the git repo; its commits come back via the sandbox-<name> git remote
     #[arg(long)]
     pub clone: bool,
     /// Add a kit (not implemented yet)
@@ -251,7 +251,6 @@ impl SandboxOpts {
     /// Rejects flags from later phases and Docker Cloud-only flags.
     pub fn check_supported(&self) -> Result<()> {
         let pending = [
-            (self.clone, "--clone"),
             (
                 !self.kit.is_empty() || !self.kit_arg.is_empty() || !self.kit_args_file.is_empty(),
                 "--kit",

@@ -328,8 +328,8 @@ mod tests {
         let mut t = test_env(&[]);
         t.ctx.vm.runner().ok(&["--version"], "smolvm 1.0.0\n");
         for args in [
-            &["run", "claude", "--clone"][..],
-            &["create", "claude", "--clone"][..],
+            &["run", "claude", "--kit", "x"][..],
+            &["create", "claude", "--kit", "x"][..],
             &["run", "claude", "--new"][..],
         ] {
             let err = sbt(&mut t.ctx, args).unwrap_err();

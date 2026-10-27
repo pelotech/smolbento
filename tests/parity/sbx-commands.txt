@@ -16,6 +16,7 @@ run claude . --skills off
 run claude . --static-mcp github,linear
 run claude . --deny-network evil.com
 create claude .
+create --clone claude .
 create shell
 create --name dev gemini . --no-progress
 create claude . --deny-network evil.com,10.0.0.0/8 --deny-network tracker.example
