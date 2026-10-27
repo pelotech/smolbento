@@ -117,7 +117,7 @@ fn from_value(v: Value, source: Source) -> Result<Kit> {
 
 /// A short token naming the kit: it scopes `--kit-arg` and tags policy rule origins, so it comes
 /// from the source, never from the free-text `displayName`.
-pub(crate) fn name_from_source(source: &Source) -> String {
+fn name_from_source(source: &Source) -> String {
     match source {
         Source::Registry(r) => {
             let last = r.rsplit('/').next().unwrap_or(r);
@@ -126,15 +126,33 @@ pub(crate) fn name_from_source(source: &Source) -> String {
         }
         Source::LocalV3(p) | Source::LocalV2(p) => path_name(p),
         Source::Smolfile(p) => {
-            if p.file_name().is_some_and(|n| n == "Smolfile") {
-                let parent = p.parent().and_then(|d| d.file_name());
-                if let Some(n) = parent.and_then(|n| n.to_str()) {
-                    return n.to_string();
-                }
+            if p.file_name().is_some_and(|n| n == "Smolfile")
+                && let Some(n) = project_dir_name(p)
+            {
+                return n;
             }
             path_name(p)
         }
     }
+}
+
+/// Name of the directory holding `p`. A bare or `./` path has a parent with no name of its own,
+/// so that case resolves the parent against the filesystem.
+fn project_dir_name(p: &Path) -> Option<String> {
+    let parent = p.parent()?;
+    let name = |d: &Path| Some(d.file_name()?.to_str()?.to_string());
+    if let Some(n) = name(parent) {
+        return Some(n);
+    }
+    let parent = if parent.as_os_str().is_empty() {
+        Path::new(".")
+    } else {
+        parent
+    };
+    let dir = std::fs::canonicalize(parent)
+        .or_else(|_| std::env::current_dir())
+        .ok()?;
+    name(&dir)
 }
 
 /// Directory basename, or the file stem when the path is a file.
@@ -868,6 +886,20 @@ mod tests {
         std::fs::create_dir(&kit_dir).unwrap();
         assert_eq!(name(Source::LocalV3(kit_dir)), "my-kit");
         assert_eq!(name(Source::Smolfile("proj/Smolfile".into())), "proj");
+        assert_eq!(name(Source::Registry("localhost:5000/kit:1".into())), "kit");
+        let digest = format!("acme/kit@sha256:{}", "ab".repeat(32));
+        assert_eq!(name(Source::Registry(digest)), "kit");
+
+        // Relative paths: the parent has no name of its own, so it is resolved on disk.
+        let cwd = std::env::current_dir().unwrap();
+        let cwd_name = cwd.file_name().unwrap().to_str().unwrap().to_string();
+        assert_eq!(name(Source::Smolfile("Smolfile".into())), cwd_name);
+        assert_eq!(name(Source::Smolfile("./Smolfile".into())), cwd_name);
+        let root = dir.path().canonicalize().unwrap();
+        std::fs::create_dir(root.join("sub")).unwrap();
+        let via_dotdot = root.join("sub").join("..").join("Smolfile");
+        let want = root.file_name().unwrap().to_str().unwrap();
+        assert_eq!(name(Source::Smolfile(via_dotdot)), want);
         assert_eq!(name(Source::Smolfile("proj/dev.smolfile".into())), "dev");
     }
 }
