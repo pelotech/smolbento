@@ -152,6 +152,20 @@ fn remove<R: Runner>(ctx: &Ctx<R>, sb: &Sandbox, forget_secrets: bool) -> Result
     Ok(())
 }
 
+/// `targets` with forks before parents, so smolvm never refuses a parent for its live forks.
+fn forks_first(mut targets: Vec<Sandbox>) -> Vec<Sandbox> {
+    targets.sort_by_key(|sb| sb.meta.fork_of.is_none());
+    targets
+}
+
+/// Forks of `sb` that aren't being removed with it.
+fn remaining_forks<'a>(sb: &Sandbox, all: &'a [Sandbox], removing: &[&str]) -> Vec<&'a str> {
+    all.iter()
+        .filter(|f| f.meta.fork_of.as_deref() == Some(sb.name()) && !removing.contains(&f.name()))
+        .map(Sandbox::name)
+        .collect()
+}
+
 pub fn rm<R: Runner>(ctx: &mut Ctx<R>, a: &RmArgs) -> Result<i32> {
     let targets: Vec<Sandbox> = if a.all {
         sandbox::list(&ctx.vm)?
@@ -169,8 +183,19 @@ pub fn rm<R: Runner>(ctx: &mut Ctx<R>, a: &RmArgs) -> Result<i32> {
         return Ok(0);
     }
     let names: Vec<&str> = targets.iter().map(Sandbox::name).collect();
-    confirm(ctx, &format!("Remove {}?", names.join(", ")), a.force)?;
+    let all = sandbox::list(&ctx.vm)?;
     for sb in &targets {
+        let forks = remaining_forks(sb, &all, &names);
+        if !forks.is_empty() {
+            bail!(
+                "{} has forks; remove its forks first: {}",
+                sb.name(),
+                forks.join(", ")
+            );
+        }
+    }
+    confirm(ctx, &format!("Remove {}?", names.join(", ")), a.force)?;
+    for sb in &forks_first(targets) {
         remove(ctx, sb, true)?;
     }
     Ok(0)
@@ -198,11 +223,28 @@ fn cutoff(filters: &[String], now: i64) -> Result<Option<i64>> {
 
 pub fn prune<R: Runner>(ctx: &mut Ctx<R>, a: &PruneArgs) -> Result<i32> {
     let cutoff = cutoff(&a.filter, ctx.now)?;
-    let targets: Vec<Sandbox> = sandbox::list(&ctx.vm)?
-        .into_iter()
+    let all = sandbox::list(&ctx.vm)?;
+    let mut targets: Vec<&Sandbox> = all
+        .iter()
         .filter(|sb| !sb.is_running())
         .filter(|sb| cutoff.is_none_or(|c| sb.meta.created < c))
         .collect();
+    // A parent whose forks stay can't be deleted; skipping it may in turn keep its own parent.
+    let mut skipped = Vec::new();
+    loop {
+        let names: Vec<&str> = targets.iter().map(|sb| sb.name()).collect();
+        let Some(i) = targets
+            .iter()
+            .position(|sb| !remaining_forks(sb, &all, &names).is_empty())
+        else {
+            break;
+        };
+        skipped.push(targets.remove(i));
+    }
+    for sb in &skipped {
+        println!("{} has forks; skipped", sb.name());
+    }
+    let targets = forks_first(targets.into_iter().cloned().collect());
     if targets.is_empty() {
         println!("Nothing to prune");
         return Ok(0);
@@ -230,7 +272,7 @@ pub fn reset<R: Runner>(ctx: &mut Ctx<R>, a: &ResetArgs) -> Result<i32> {
         "Remove every sandbox and smolbento's session state?",
         a.force,
     )?;
-    for sb in sandbox::list(&ctx.vm)? {
+    for sb in forks_first(sandbox::list(&ctx.vm)?) {
         remove(ctx, &sb, !a.preserve_secrets)?;
     }
     let _ = std::fs::remove_dir_all(ctx.paths.sessions());
@@ -907,6 +949,14 @@ mod tests {
         )
     }
 
+    /// Fakes `machine ls --json` for the one sandbox a test `rm`s by name.
+    fn ls_one(t: &TestEnv, json: &str) {
+        t.ctx
+            .vm
+            .runner()
+            .ok(&["machine", "ls", "--json"], &format!("[{json}]"));
+    }
+
     fn remote(repo: &std::path::Path, name: &str) -> String {
         git_config(repo, &format!("remote.sandbox-{name}.url"))
     }
@@ -955,6 +1005,7 @@ mod tests {
             .vm
             .runner()
             .ok(&["machine", "status"], &clone_json("box", "stopped", &repo));
+        ls_one(&t, &clone_json("box", "stopped", &repo));
         sbt(&mut t.ctx, &["rm", "-f", "box"]).unwrap();
         assert!(!remote(&repo, "box").is_empty());
     }
@@ -967,6 +1018,7 @@ mod tests {
             .vm
             .runner()
             .ok(&["machine", "status"], &clone_json("box", "stopped", &gone));
+        ls_one(&t, &clone_json("box", "stopped", &gone));
         sbt(&mut t.ctx, &["rm", "-f", "box"]).unwrap();
     }
 
@@ -976,19 +1028,18 @@ mod tests {
         let (_d, repo) = temp_repo();
         crate::workspace::clone::add_remote(&repo, "box").unwrap();
         let sub = repo.join("deleted").display().to_string();
-        t.ctx.vm.runner().ok(
-            &["machine", "status"],
-            &machine_json(
-                "sbx-box",
-                "stopped",
-                &[
-                    ("sbx.name", "box"),
-                    ("sbx.clone", "true"),
-                    ("sbx.workspace", &sub),
-                    ("sbx.clone-top", &repo.display().to_string()),
-                ],
-            ),
+        let box_json = machine_json(
+            "sbx-box",
+            "stopped",
+            &[
+                ("sbx.name", "box"),
+                ("sbx.clone", "true"),
+                ("sbx.workspace", &sub),
+                ("sbx.clone-top", &repo.display().to_string()),
+            ],
         );
+        t.ctx.vm.runner().ok(&["machine", "status"], &box_json);
+        ls_one(&t, &box_json);
         sbt(&mut t.ctx, &["rm", "-f", "box"]).unwrap();
         assert_eq!(remote(&repo, "box"), "");
     }
@@ -1000,6 +1051,7 @@ mod tests {
             &["machine", "status"],
             &json("sbx-claude-proj", "running", "claude-proj"),
         );
+        ls_one(&t, &json("sbx-claude-proj", "running", "claude-proj"));
         assert!(
             sbt(&mut t.ctx, &["rm", "claude-proj"])
                 .unwrap_err()
@@ -1099,5 +1151,85 @@ mod tests {
             Some("gh-123")
         );
         assert!(Policy::load(&t.ctx.paths).unwrap().sandboxes.is_empty());
+    }
+
+    fn fork_json(name: &str, state: &str, parent: Option<&str>) -> String {
+        let mut l = labels(name);
+        if let Some(p) = parent {
+            l.push(("sbx.fork-of", p.to_string()));
+        }
+        let pairs: Vec<(&str, &str)> = l.iter().map(|(k, v)| (*k, v.as_str())).collect();
+        machine_json(&format!("sbx-{name}"), state, &pairs)
+    }
+
+    /// `a` with forks `a-fork-1` and `a-fork-2`, in the given states.
+    fn with_forks(t: &TestEnv, a: &str, f1: &str, f2: &str) {
+        let (ja, j1, j2) = (
+            fork_json("a", a, None),
+            fork_json("a-fork-1", f1, Some("a")),
+            fork_json("a-fork-2", f2, Some("a")),
+        );
+        let fake = t.ctx.vm.runner();
+        fake.ok(&["machine", "ls", "--json"], &format!("[{ja},{j1},{j2}]"));
+        fake.ok(&["machine", "status", "-n", "sbx-a"], &ja);
+        fake.ok(&["machine", "status", "-n", "sbx-a-fork-1"], &j1);
+        fake.ok(&["machine", "status", "-n", "sbx-a-fork-2"], &j2);
+    }
+
+    fn deletes(t: &TestEnv) -> Vec<String> {
+        t.ctx
+            .vm
+            .runner()
+            .call_lines()
+            .into_iter()
+            .filter(|l| l.contains("machine delete"))
+            .map(|l| l.replace("machine delete -n sbx-", "").replace(" -f", ""))
+            .collect()
+    }
+
+    #[test]
+    fn rm_refuses_a_parent_that_still_has_forks() {
+        let mut t = test_env(&[]);
+        with_forks(&t, "stopped", "stopped", "stopped");
+        let err = sbt(&mut t.ctx, &["rm", "-f", "a"]).unwrap_err().to_string();
+        assert!(
+            err.contains("remove its forks first: a-fork-1, a-fork-2"),
+            "{err}"
+        );
+        assert!(deletes(&t).is_empty());
+    }
+
+    #[test]
+    fn rm_deletes_forks_named_in_the_same_call_before_the_parent() {
+        let mut t = test_env(&[]);
+        with_forks(&t, "stopped", "stopped", "stopped");
+        sbt(&mut t.ctx, &["rm", "-f", "a", "a-fork-1", "a-fork-2"]).unwrap();
+        assert_eq!(deletes(&t), vec!["a-fork-1", "a-fork-2", "a"]);
+
+        let mut t = test_env(&[]);
+        with_forks(&t, "stopped", "stopped", "stopped");
+        sbt(&mut t.ctx, &["rm", "-f", "--all"]).unwrap();
+        assert_eq!(deletes(&t), vec!["a-fork-1", "a-fork-2", "a"]);
+    }
+
+    #[test]
+    fn prune_skips_a_parent_whose_fork_is_running() {
+        let mut t = test_env(&[]);
+        with_forks(&t, "stopped", "running", "stopped");
+        sbt(&mut t.ctx, &["prune", "-f"]).unwrap();
+        assert_eq!(deletes(&t), vec!["a-fork-2"]);
+
+        let mut t = test_env(&[]);
+        with_forks(&t, "stopped", "stopped", "stopped");
+        sbt(&mut t.ctx, &["prune", "-f"]).unwrap();
+        assert_eq!(deletes(&t), vec!["a-fork-1", "a-fork-2", "a"]);
+    }
+
+    #[test]
+    fn reset_deletes_forks_before_parents() {
+        let mut t = test_env(&[]);
+        with_forks(&t, "stopped", "stopped", "stopped");
+        sbt(&mut t.ctx, &["reset", "-f"]).unwrap();
+        assert_eq!(deletes(&t), vec!["a-fork-1", "a-fork-2", "a"]);
     }
 }

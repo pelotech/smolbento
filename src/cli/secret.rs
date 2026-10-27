@@ -772,10 +772,12 @@ mod tests {
         let mut p = crate::policy::Policy::load(&t.ctx.paths).unwrap();
         p.set_deny_network("a1", true);
         p.save(&t.ctx.paths).unwrap();
-        t.ctx.vm.runner().ok(
-            &["machine", "status"],
-            &machine_json("sbx-a1", "stopped", &[("sbx.name", "a1")]),
-        );
+        let a1 = machine_json("sbx-a1", "stopped", &[("sbx.name", "a1")]);
+        t.ctx.vm.runner().ok(&["machine", "status"], &a1);
+        t.ctx
+            .vm
+            .runner()
+            .ok(&["machine", "ls", "--json"], &format!("[{a1}]"));
         sbt(&mut t.ctx, &["rm", "-f", "a1"]).unwrap();
         assert!(SecretsFile::load(&t.ctx.paths).unwrap().secrets.is_empty());
         assert_eq!(t.ctx.store.get("sandbox:a1/github").unwrap(), None);
