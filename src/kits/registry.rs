@@ -16,6 +16,7 @@ use base64::Engine;
 use base64::engine::general_purpose::STANDARD;
 use oci_client::Reference;
 use oci_client::client::{Client, ClientConfig};
+use oci_client::errors::OciDistributionError;
 use oci_client::manifest::{
     IMAGE_MANIFEST_LIST_MEDIA_TYPE, IMAGE_MANIFEST_MEDIA_TYPE, OCI_IMAGE_INDEX_MEDIA_TYPE,
     OCI_IMAGE_MEDIA_TYPE,
@@ -69,21 +70,40 @@ fn pull_layout(
         .enable_all()
         .build()
         .context("starting the registry client")?;
-    let client = Client::new(ClientConfig::default());
+    let client = new_client();
     let fetched = rt.block_on(async {
         let first = fetch(&client, &r, &RegistryAuth::Anonymous, cache, require_kit).await;
         match first {
             Ok(f) => Ok(f),
-            // Anonymous pulls fail with 401 on private images; try the host's docker login.
-            Err(e) => match docker_auth(r.resolve_registry()) {
+            // Private images answer anonymous pulls with 401/403; only then try the docker login.
+            Err(e) if is_auth_error(&e) => match docker_auth(r.resolve_registry()) {
                 Some(auth) => fetch(&client, &r, &auth, cache, require_kit)
                     .await
                     .map_err(|e2| e2.context(format!("{e:#} (anonymous)"))),
                 None => Err(e),
             },
+            Err(e) => Err(e),
         }
     })?;
     build_layout(cache, &fetched.manifest, &fetched.digest, reference)
+}
+
+/// The ring provider is installed once; reqwest's no-provider rustls build needs a default.
+/// TLS roots come from the OS verifier (rustls-platform-verifier), not a bundled list.
+fn new_client() -> Client {
+    // Err means a provider is already installed, which is fine.
+    let _ = rustls::crypto::ring::default_provider().install_default();
+    Client::new(ClientConfig::default())
+}
+
+fn is_auth_error(e: &anyhow::Error) -> bool {
+    e.chain()
+        .any(|c| match c.downcast_ref::<OciDistributionError>() {
+            Some(OciDistributionError::AuthenticationFailure(_))
+            | Some(OciDistributionError::UnauthorizedError { .. }) => true,
+            Some(OciDistributionError::ServerError { code, .. }) => matches!(code, 401 | 403),
+            _ => false,
+        })
 }
 
 struct Fetched {
@@ -729,6 +749,33 @@ mod tests {
             auth_from_config(cfg, "index.docker.io", &ask),
             Some(RegistryAuth::Basic(n, s)) if n == "desktop" && s == "https://index.docker.io/v1/"
         ));
+    }
+
+    #[test]
+    fn client_builds_with_the_ring_provider() {
+        let _ = new_client();
+        let _ = new_client();
+        assert!(rustls::crypto::CryptoProvider::get_default().is_some());
+    }
+
+    #[test]
+    fn only_auth_errors_retry_with_credentials() {
+        let auth = anyhow::Error::new(OciDistributionError::UnauthorizedError { url: "u".into() })
+            .context("pulling the manifest");
+        assert!(is_auth_error(&auth));
+        let denied = anyhow::Error::new(OciDistributionError::ServerError {
+            code: 403,
+            url: "u".into(),
+            message: "m".into(),
+        });
+        assert!(is_auth_error(&denied));
+        let other = anyhow::Error::new(OciDistributionError::ServerError {
+            code: 500,
+            url: "u".into(),
+            message: "m".into(),
+        });
+        assert!(!is_auth_error(&other));
+        assert!(!is_auth_error(&anyhow!("boom")));
     }
 
     #[test]

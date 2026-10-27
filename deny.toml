@@ -17,7 +17,7 @@ allow = [
   "Unicode-3.0",
   "Zlib",
   "MPL-2.0",
-  "CDLA-Permissive-2.0", # webpki-root-certs, the CA bundle behind rustls
+  "CDLA-Permissive-2.0", # webpki-root-certs, pulled in by rustls-platform-verifier (non-host targets)
 ]
 confidence-threshold = 0.9
 

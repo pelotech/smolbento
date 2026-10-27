@@ -18,8 +18,9 @@ clap = { version = "4.6.7", features = ["derive"] }
 clap_complete = "4.6.11"
 humantime = "2.4.0"
 libc = "0.2.191"
-oci-client = "0.18.0"
+oci-client = { version = "0.18.0", default-features = false, features = ["rustls-tls-no-provider"] }
 regex-lite = "0.1.9"
+rustls = { version = "0.23.46", default-features = false, features = ["ring", "std", "tls12"] }
 serde = { version = "1.0.229", features = ["derive"] }
 serde-saphyr = "2.0.0"
 serde_json = "1.0.154"
