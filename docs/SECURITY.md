@@ -10,6 +10,14 @@ Docker engine are kept off your machine. The agent can reach your machine only t
 - ports you publish with `-p`, on `127.0.0.1`;
 - the network.
 
+Sandboxes can't reach services on your machine's localhost (`127.0.0.1` or `::1`), in any policy
+mode. Sandboxes created with smolbento 0.2.1 or earlier can: remove them with `sbt rm` and create
+them again.
+
+Under `allow-all`, a sandbox can still reach your machine's LAN IP, so a service listening on all
+interfaces (`0.0.0.0`) is reachable through it. `balanced` and `deny-all` block it unless you allow
+that address.
+
 ## Network and secrets
 
 - Choose a network policy (`balanced` or `deny-all` for untrusted work). Sandboxes created before

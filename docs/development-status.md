@@ -35,6 +35,9 @@ terminal fail until you do.
 - Workspaces are mounted read-write; there's no clone mode yet (Phase 3).
 - Published ports bind `127.0.0.1` only, and directories (not single files) can be mounted. Both are
   smolvm limits; see [sbx compatibility](sbx-compatibility.md).
+- Sandboxes can't reach services on the host yet (planned with host services, Phase 4). Under
+  `allow-all`, the host's LAN IP isn't blocked, so services listening on `0.0.0.0` are reachable
+  through it.
 - Linux uses a 0600 file for secret values where no Secret Service runs.
 - Group ids aren't mapped: group-writable shared directories aren't writable through group
   membership.
