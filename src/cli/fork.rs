@@ -138,7 +138,7 @@ fn branch_hint(e: anyhow::Error, parent: &str) -> anyhow::Error {
         );
     }
     if message.contains("qcow2 backing layers") || message.contains("safe backing depth") {
-        return anyhow!("{e}; a sandbox can be forked about 30 times");
+        return e.context("smolvm limits how deep a chain of copies can get");
     }
     e
 }
@@ -148,6 +148,7 @@ mod tests {
     use super::super::testutil::*;
     use crate::policy::Policy;
     use crate::secrets::{SecretEntry, SecretsFile, Source, scope_for};
+    use crate::smolvm::SmolvmError;
 
     const NOT_BRANCHABLE: &str = "agent operation failed: fork: machine 'sbx-a' was not started \
         as branchable, so it has no copy-on-write memory to branch from. Restart it with \
@@ -486,10 +487,17 @@ mod tests {
             .runner()
             .fail(&["machine", "branch"], "CONFLICT", CHAIN_DEPTH);
         let err = format!("{:#}", sbt(&mut t.ctx, &["fork", "a"]).unwrap_err());
-        assert!(err.contains("the safe limit is 32"), "{err}");
         assert!(
-            err.contains("a sandbox can be forked about 30 times"),
+            err.contains("smolvm limits how deep a chain of copies can get: smolvm: "),
             "{err}"
+        );
+        assert!(err.contains("the safe limit is 32"), "{err}");
+        // The original error stays in the chain.
+        assert!(
+            sbt(&mut t.ctx, &["fork", "a"])
+                .unwrap_err()
+                .chain()
+                .any(|c| c.downcast_ref::<SmolvmError>().is_some())
         );
     }
 
