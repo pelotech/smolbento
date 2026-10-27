@@ -33,10 +33,10 @@ exist only in some checkouts). If they're there, read the relevant section befor
 | `smolvm` | `Runner` trait, command builder, JSON types |
 | `sandbox` | naming, labels, lifecycle, session tracking |
 | `agents` | agent presets (data) |
-| `workspace` | mounts (clone mode later) |
+| `workspace` | mounts; clone mode (host git, `sandbox-<name>` remote) |
 | `config` | settings and precedence |
 
-Planned for later phases: `gitremote` (`git-remote-sbt`), `policy`, `secrets`, `kits`, `hostsvc`
+Planned for later phases: `policy`, `secrets`, `kits`, `hostsvc`
 (host services and `_relay`), `mcp`, `tui`; `kits/` for shipped kits and `images/plus/` for the plus
 image.
 
