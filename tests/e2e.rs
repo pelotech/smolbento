@@ -616,7 +616,13 @@ fn fork_round_trip() {
         "/root/only-1",
     ]);
     assert!(root_test(f1, "/root/only-1"));
+    // Positive controls: the exec works in these machines, so a missing file means missing.
+    assert!(root_test(f2, "/root/before"), "{f2} is reachable");
     assert!(!root_test(f2, "/root/only-1"), "forks don't share writes");
+    assert!(
+        root_test(&e.name, "/root/before"),
+        "the parent is reachable"
+    );
     assert!(
         !root_test(&e.name, "/root/only-1"),
         "the parent doesn't see fork writes"
