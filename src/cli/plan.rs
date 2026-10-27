@@ -204,20 +204,20 @@ pub fn create<R: Runner>(
             );
         }
     }
-    // A remote left by an earlier sandbox of this name (`run --rm`) keeps its fetched branches.
-    let had_remote = repo
-        .as_ref()
-        .is_some_and(|r| clone::has_remote(r, &req.name));
     let mut added = Vec::new();
+    // Only a remote this create made: one left by an earlier sandbox of this name (`run --rm`)
+    // keeps its fetched branches.
+    let mut added_remote = None;
     let result = (|| {
         added = prepare_create(ctx, req, deny_network)?;
-        if let Some(repo) = &repo {
-            clone::add_remote(repo, &req.name)?;
+        if let Some(repo) = &repo
+            && clone::add_remote(repo, &req.name)?
+        {
+            added_remote = Some(repo);
         }
         let plan = start_plan(ctx, &sandbox::create::meta(req))?;
         sandbox::create(&ctx.vm, req, &plan)
     })();
-    let added_remote = repo.as_ref().filter(|_| !had_remote);
     if result.is_err()
         && (!added.is_empty() || added_remote.is_some())
         && matches!(sandbox::find(&ctx.vm, &req.name), Ok(None))

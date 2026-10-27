@@ -121,13 +121,24 @@ pub fn upload_pack_cmd(sandbox: &str) -> String {
 }
 
 /// Whether `sandbox-<name>` exists, and whether smolbento made it.
-fn remote_owner(repo: &Path, sandbox: &str) -> Result<Option<bool>> {
+#[derive(Debug, PartialEq, Eq)]
+enum Remote {
+    Absent,
+    Ours,
+    Foreign,
+}
+
+fn remote_owner(repo: &Path, sandbox: &str) -> Result<Remote> {
     let remote = remote_name(sandbox);
     if config_get(repo, &format!("remote.{remote}.url"))?.is_none() {
-        return Ok(None);
+        return Ok(Remote::Absent);
     }
     let pack = config_get(repo, &format!("remote.{remote}.uploadpack"))?.unwrap_or_default();
-    Ok(Some(pack == upload_pack_cmd(sandbox)))
+    Ok(if pack == upload_pack_cmd(sandbox) {
+        Remote::Ours
+    } else {
+        Remote::Foreign
+    })
 }
 
 /// `git config <key>`: `None` when the key is unset (exit 1); any other failure is an error.
@@ -156,13 +167,8 @@ fn config_get(repo: &Path, key: &str) -> Result<Option<String>> {
     }
 }
 
-/// Whether the repo already has smolbento's `sandbox-<name>` remote.
-pub fn has_remote(repo: &Path, sandbox: &str) -> bool {
-    matches!(remote_owner(repo, sandbox), Ok(Some(true)))
-}
-
 pub fn check_remote_free(repo: &Path, sandbox: &str) -> Result<()> {
-    if remote_owner(repo, sandbox)? == Some(false) {
+    if remote_owner(repo, sandbox)? == Remote::Foreign {
         bail!(
             "the repo already has a remote '{}'; rename or remove it first",
             remote_name(sandbox)
@@ -171,9 +177,11 @@ pub fn check_remote_free(repo: &Path, sandbox: &str) -> Result<()> {
     Ok(())
 }
 
-pub fn add_remote(repo: &Path, sandbox: &str) -> Result<()> {
+/// Adds and configures the `sandbox-<name>` remote; `true` when it created it (rather than reusing
+/// one an earlier sandbox of this name left).
+pub fn add_remote(repo: &Path, sandbox: &str) -> Result<bool> {
     let remote = remote_name(sandbox);
-    let added = remote_owner(repo, sandbox)?.is_none();
+    let added = remote_owner(repo, sandbox)? == Remote::Absent;
     if added {
         git(
             repo,
@@ -201,11 +209,12 @@ pub fn add_remote(repo: &Path, sandbox: &str) -> Result<()> {
         if added {
             let _ = git(repo, &["remote", "remove", &remote]);
         }
-    })
+    })?;
+    Ok(added)
 }
 
 pub fn remove_remote(repo: &Path, sandbox: &str) {
-    if matches!(remote_owner(repo, sandbox), Ok(Some(true))) {
+    if matches!(remote_owner(repo, sandbox), Ok(Remote::Ours)) {
         let _ = git(repo, &["remote", "remove", &remote_name(sandbox)]);
     }
 }
@@ -339,7 +348,7 @@ mod tests {
     fn remote_add_check_and_remove() {
         let (_d, root) = temp_repo();
         check_remote_free(&root, "box").unwrap();
-        add_remote(&root, "box").unwrap();
+        assert!(add_remote(&root, "box").unwrap(), "created");
         let get = |k: &str| git_config(&root, k);
         assert_eq!(get("remote.sandbox-box.url"), "file:///sbt/box");
         assert_eq!(
@@ -352,8 +361,9 @@ mod tests {
             "+refs/heads/*:refs/remotes/sandbox-box/*"
         );
         // Ours: a re-create may reuse it.
-        assert!(has_remote(&root, "box"));
+        assert_eq!(remote_owner(&root, "box").unwrap(), Remote::Ours);
         check_remote_free(&root, "box").unwrap();
+        assert!(!add_remote(&root, "box").unwrap(), "reused");
         remove_remote(&root, "box");
         assert_eq!(get("remote.sandbox-box.url"), "");
         // Foreign: refused, and never removed.
@@ -365,7 +375,7 @@ mod tests {
         assert!(err.contains("sandbox-box"), "{err}");
         remove_remote(&root, "box");
         assert_eq!(get("remote.sandbox-box.url"), "https://example.com/x.git");
-        assert!(!has_remote(&root, "box"));
+        assert_eq!(remote_owner(&root, "box").unwrap(), Remote::Foreign);
         // A missing repo is silent.
         remove_remote(Path::new("/nonexistent/repo"), "box");
     }
@@ -457,7 +467,7 @@ mod tests {
         assert!(add_remote(&gone, "box").is_err());
         // An unset key is still just absent.
         let (_d, root) = temp_repo();
-        assert_eq!(remote_owner(&root, "box").unwrap(), None);
+        assert_eq!(remote_owner(&root, "box").unwrap(), Remote::Absent);
     }
 
     #[test]
