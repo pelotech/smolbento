@@ -536,9 +536,11 @@ fn approve<R: Runner>(ctx: &Ctx<R>, kit: &str, hosts: &[String], started: bool) 
     if !ctx.stdin_tty {
         bail!("kit add needs --yes to grant network access without a terminal");
     }
-    let mut out = &ctx.out;
-    write!(out, "Allow {kit} to reach: {}? [y/N] ", hosts.join(", "))?;
-    out.flush()?;
+    // A question, not command output: stderr, like the secret value prompt.
+    let mut err = std::io::stderr().lock();
+    write!(err, "Allow {kit} to reach: {}? [y/N] ", hosts.join(", "))?;
+    err.flush()?;
+    drop(err);
     let mut line = String::new();
     std::io::stdin().lock().read_line(&mut line)?;
     if matches!(line.trim().to_ascii_lowercase().as_str(), "y" | "yes") {
