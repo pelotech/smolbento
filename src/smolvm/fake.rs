@@ -71,6 +71,18 @@ impl FakeRunner {
         )
     }
 
+    /// `ok` that also writes `stderr`, as a successful exec whose guest command warned.
+    pub fn ok_with_stderr(&self, prefix: &[&str], stdout: &str, stderr: &str) -> &Self {
+        self.on(
+            prefix,
+            Output {
+                stdout: stdout.into(),
+                stderr: stderr.into(),
+                ..Output::default()
+            },
+        )
+    }
+
     pub fn once_ok(&self, prefix: &[&str], stdout: &str) -> &Self {
         self.once(
             prefix,

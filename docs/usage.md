@@ -92,9 +92,9 @@ With `--clone` the agent doesn't write to your checkout. Your repo is mounted re
 `/run/sandbox/source`, and on the sandbox's first start it is cloned to the same path as on your
 machine, on the sandbox's own disk. The clone starts from your repo's current `HEAD` (for a linked
 worktree, its branch, or its commit when its `HEAD` is detached; should that checkout fail, it
-starts from your repo's `HEAD` with a warning); uncommitted changes aren't carried over. The clone survives stop and start.
-The clone is writable, so `:ro` on the `--clone` workspace is ignored (the mounted repo is
-read-only anyway).
+starts from the source repo's default `HEAD` with a warning); uncommitted changes aren't carried
+over. The clone survives stop and start. The clone is writable, so `:ro` on the `--clone` workspace
+is ignored (the mounted repo is read-only anyway).
 
 Your remotes (`origin`, `upstream`, …) are copied into the clone, except local-path and `file://`
 ones. Any user name and token in an HTTPS remote URL is left out of the clone's copies. SSH remotes
