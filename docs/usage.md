@@ -174,9 +174,17 @@ Good to know:
 - Remove a sandbox's forks before the sandbox itself: `sbt rm` of a sandbox with forks fails unless
   its forks are removed in the same command. `prune` and `reset` remove forks first, and `prune`
   keeps a stopped sandbox while it still has forks.
-- A sandbox can be forked about 30 times.
-- Sandboxes started before fork support need one restart (`sbt stop NAME && sbt start NAME`) before
-  they can be forked; `fork` says so.
+- `sbt ls --json` shows a fork's original in `fork_of`. A fork's created time is its own.
+- A fork's published ports get new host ports, picked by smolvm; see `sbt ports <fork>`.
+- smolvm limits how deep a chain of copies can get, and says so if a fork would go past it.
+- Sandboxes started before fork support, or while `fork.enabled` was off, need one restart
+  (`sbt stop NAME && sbt start NAME`) before they can be forked; `fork` says so.
+
+Sandboxes that can be forked (clone and mountless ones, not forks) are started branchable, which
+has two costs: smolvm doesn't hand their idle memory back to your machine, and on Linux the VM
+process's memory, which holds secret values, is readable by other processes running as you. If
+you don't use fork, turn it off with `sbt settings set fork.enabled false`; it applies from each
+sandbox's next start.
 
 ## Run commands inside
 
