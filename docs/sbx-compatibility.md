@@ -128,7 +128,7 @@ Differences:
 | `kit inspect`, `kit validate` | `--format`, `--offline` | Neither; `kit inspect --json` gives JSON |
 | The name `docker` | A registry ref (the `docker` image) | The shipped Docker kit; write `docker.io/library/docker` for the image |
 | A ref that is also a local path | Registry ref | A local kit: a ref that names a file or directory relative to the current directory loads it, e.g. `alpine` with an `alpine` directory present. Write `docker.io/library/alpine` for the registry. `docker` is always the shipped kit |
-| Docker in the sandbox | Run by the `-docker` images | The shipped `docker` kit, added to Docker-enabled images after your `--kit` kits; name it first (`--kit docker --kit ./mine`) if your kit's startup steps use Docker. A failed first start removes the sandbox, as for any kit |
+| Docker in the sandbox | Run by the `-docker` images | The shipped `docker` kit, added to Docker-enabled images before your kits, so their startup steps can use Docker. A failed first start removes the sandbox, as for any kit |
 | v3 mixins on built-in agents | Refused (`no workload kit in the set`) | Allowed |
 | Loopback registries | HTTPS only | Plain HTTP for `localhost`, `127.0.0.0/8` and `::1`, as in Docker |
 | Smolfile kits | None | A Smolfile defines its own workload, so one without a command keeps the shell agent's |

@@ -217,8 +217,12 @@ pub(crate) fn kit_plan<R: Runner>(
         .iter()
         .map(|r| load::load(ctx, r))
         .collect::<Result<Vec<_>>>()?;
+    // First: other kits' startup steps may use the dockerd it starts (in sbx it's in the image).
     if needs_docker_kit(req.docker, &workload, &mixins) {
-        mixins.push(load::builtin("docker").expect("the docker kit is shipped")?);
+        mixins.insert(
+            0,
+            load::builtin("docker").expect("the docker kit is shipped")?,
+        );
     }
     let plan = resolve_for(workload, mixins, &args, &req.workdir())?;
     plan.warn_skipped();
@@ -1544,9 +1548,9 @@ mod tests {
         let create = create_line(&t);
         assert!(create.contains("-e TOOL_MODE=fast"), "{create}");
         assert!(create.contains(":8080 "), "{create}");
-        // The shell preset's image is Docker-enabled, so the docker kit comes too.
+        // The shell preset's image is Docker-enabled, so the docker kit comes too, first.
         assert!(
-            create.contains(&format!("--label sbx.kits=[\"{kit}\",\"builtin:docker\"]")),
+            create.contains(&format!("--label sbx.kits=[\"builtin:docker\",\"{kit}\"]")),
             "{create}"
         );
         assert!(create.contains("api.tool.example"), "{create}");
@@ -1951,6 +1955,34 @@ mod tests {
                 assert_eq!(kit[0].set_header.as_deref(), Some("authorization"));
             }
         }
+    }
+
+    #[test]
+    fn the_shipped_docker_kit_comes_before_user_kits() {
+        let t = kit_env();
+        let kit = |name: &str| {
+            let dir = tempfile::tempdir().unwrap();
+            std::fs::write(
+                dir.path().join("spec.yaml"),
+                format!("schemaVersion: \"2\"\nkind: mixin\nname: {name}\n"),
+            )
+            .unwrap();
+            dir
+        };
+        let (b, a) = (kit("bkit"), kit("akit"));
+        let b_path = b.path().display().to_string();
+        let (_, plan) = kit_request(
+            &t,
+            &["create", "shell", "--kit", &b_path, "--kit"],
+            a.path(),
+        );
+        let names: Vec<String> = plan
+            .unwrap()
+            .mixins
+            .iter()
+            .map(|k| k.name.clone())
+            .collect();
+        assert_eq!(names, ["docker", "bkit", "akit"]);
     }
 
     /// `build_kit_request` for `args` followed by `kit`.

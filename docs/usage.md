@@ -272,8 +272,8 @@ What a kit does, and when:
   was started, for a background one), and a failing step's output and exit code. If a step fails
   during create, the sandbox is still created, with a warning, and stopped: each later start fails
   until the step succeeds, as in sbx. `kit add` only warns. Startup steps run as `agent` unless
-  they name a user. The shipped `docker` kit is added after your `--kit` kits, so if one of your
-  startup steps uses Docker, name it first: `--kit docker --kit ./my-kit`.
+  they name a user. The shipped `docker` kit comes before your kits, so your startup steps can use
+  Docker.
 - **Environment**: a v3 install step gets a clean environment (`PATH`, `HOME`, `USER`, `TERM`, the
   proxy and CA variables, and the variables it lists in `env`). Startup steps and every v2 step
   get the sandbox's full environment, as in sbx.

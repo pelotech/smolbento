@@ -758,8 +758,9 @@ fn dockerds(e: &E2e) -> usize {
 
 /// Docker-in-sandbox is the shipped `docker` kit: its background startup hook starts dockerd in
 /// its own session, inside the blocking startup runner's exec, so dockerd must outlive that exec.
-/// A later kit's blocking startup hook waits for it: startup hooks run in kit order, so it sees the
-/// daemon the earlier background hook started, and `create` and `start` return only once it's up.
+/// A `--kit` mixin's blocking startup hook waits for it: the shipped kit comes before the user's
+/// kits and hooks run in kit order, so it sees the daemon the earlier background hook started, and
+/// `create` and `start` return only once it's up.
 #[test]
 #[ignore = "boots real VMs and pulls the shell-docker image; run with `just e2e`"]
 fn docker_kit_runs_dockerd_across_restarts() {
@@ -789,10 +790,6 @@ setup:
         ws.to_str().unwrap(),
         "--name",
         &e.name,
-        // Named first, so its startup hook runs before the waiting kit's: without `--kit
-        // docker` the shipped kit is added after the `--kit` kits.
-        "--kit",
-        "docker",
         "--kit",
         kit.to_str().unwrap(),
         "--cpus",
