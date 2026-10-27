@@ -231,23 +231,17 @@ pub fn prune<R: Runner>(ctx: &mut Ctx<R>, a: &PruneArgs) -> Result<i32> {
 fn prune_to<R: Runner>(ctx: &mut Ctx<R>, a: &PruneArgs, out: &mut impl Write) -> Result<i32> {
     let cutoff = cutoff(&a.filter, ctx.now)?;
     let all = sandbox::list(&ctx.vm)?;
-    let mut targets: Vec<&Sandbox> = all
+    let targets: Vec<&Sandbox> = all
         .iter()
         .filter(|sb| !sb.is_running())
         .filter(|sb| cutoff.is_none_or(|c| sb.meta.created < c))
         .collect();
-    // A parent whose forks stay can't be deleted; skipping it may in turn keep its own parent.
-    let mut skipped = Vec::new();
-    loop {
-        let names: Vec<&str> = targets.iter().map(|sb| sb.name()).collect();
-        let Some(i) = targets
-            .iter()
-            .position(|sb| !remaining_forks(sb, &all, &names).is_empty())
-        else {
-            break;
-        };
-        skipped.push(targets.remove(i));
-    }
+    // A parent whose forks stay can't be deleted. One pass is enough while forks can't be forked
+    // (`check_forkable`): a skipped parent is never itself a fork that keeps another target.
+    let names: Vec<&str> = targets.iter().map(|sb| sb.name()).collect();
+    let (skipped, targets): (Vec<&Sandbox>, Vec<&Sandbox>) = targets
+        .into_iter()
+        .partition(|sb| !remaining_forks(sb, &all, &names).is_empty());
     for sb in &skipped {
         writeln!(out, "{} has forks; skipped", sb.name())?;
     }
