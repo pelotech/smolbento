@@ -674,7 +674,7 @@ fn context_scripts(plan: &Plan, agent_file: Option<&str>, mounts: &[&Path]) -> V
 }
 
 /// The agent preset as a synthetic workload (`load::preset_kit`), not a kit the user chose.
-fn is_preset(w: &Kit) -> bool {
+pub fn is_preset(w: &Kit) -> bool {
     matches!(w.source, Source::Preset(_))
 }
 

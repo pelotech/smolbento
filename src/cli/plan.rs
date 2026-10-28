@@ -233,7 +233,9 @@ pub fn prepare_create<R: Runner>(
     req.credential_env.dedup();
     req.secrets = services;
     if !name::is_internal(&req.name) {
-        sandbox::env::apply(req)?;
+        // No plan is the bare preset; a workload kit named like one isn't it.
+        let preset = kits.is_none_or(|p| crate::kits::apply::is_preset(&p.workload));
+        sandbox::env::apply(req, preset)?;
     }
     let mut added = Vec::new();
     let mut first_start = None;

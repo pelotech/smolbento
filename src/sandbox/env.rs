@@ -6,8 +6,8 @@ use anyhow::{Context, Result};
 
 use super::CreateRequest;
 
-/// `SBX_CRED_<SVC>_MODE` services by agent, as sbx sets them: `shell` all eight, `claude` only
-/// anthropic. Other presets aren't measured and get none; kits get none.
+/// `SBX_CRED_<SVC>_MODE` services by agent preset, as sbx sets them: `shell` all eight, `claude`
+/// only anthropic. Other presets aren't measured and get none; kits get none, whatever their name.
 fn credential_services(agent: &str) -> &'static [&'static str] {
     match agent {
         "shell" => &[
@@ -46,8 +46,10 @@ pub fn new_uuid() -> Result<String> {
 }
 
 /// The sandbox variables for `req` (after its secrets are bound), with `id` as `SANDBOX_ID`.
-/// Never a secret value: a mode is `apikey` (the service's secret is bound) or `none`.
-pub fn defaults(req: &CreateRequest, id: &str) -> Vec<(String, String)> {
+/// `preset`: the workload is the agent preset `req.agent`, not a kit; only presets get the
+/// credential modes and `IS_SANDBOX`. Never a secret value: a mode is `apikey` (the service's
+/// secret is bound) or `none`.
+pub fn defaults(req: &CreateRequest, id: &str, preset: bool) -> Vec<(String, String)> {
     let mut env = vec![
         ("SANDBOX_NAME".to_string(), req.name.clone()),
         ("SANDBOX_VM_ID".to_string(), req.name.clone()),
@@ -55,7 +57,8 @@ pub fn defaults(req: &CreateRequest, id: &str) -> Vec<(String, String)> {
         ("WORKSPACE_DIR".to_string(), req.workdir()),
         ("SBX_AGENT".to_string(), req.agent.clone()),
     ];
-    for svc in credential_services(&req.agent) {
+    let agent = if preset { req.agent.as_str() } else { "" };
+    for svc in credential_services(agent) {
         let mode = if req.secrets.iter().any(|s| s == svc) {
             "apikey"
         } else {
@@ -66,16 +69,16 @@ pub fn defaults(req: &CreateRequest, id: &str) -> Vec<(String, String)> {
             mode.into(),
         ));
     }
-    if req.agent == "claude" {
+    if agent == "claude" {
         env.push(("IS_SANDBOX".into(), "1".into()));
     }
     env
 }
 
 /// Adds the defaults to `req.env`, behind anything already there (the user's `-e` wins).
-pub fn apply(req: &mut CreateRequest) -> Result<()> {
+pub fn apply(req: &mut CreateRequest, preset: bool) -> Result<()> {
     let id = new_uuid()?;
-    for (k, v) in defaults(req, &id) {
+    for (k, v) in defaults(req, &id, preset) {
         if !req.env.iter().any(|(n, _)| *n == k) {
             req.env.push((k, v));
         }
@@ -117,7 +120,7 @@ mod tests {
 
     #[test]
     fn claude_gets_identity_one_mode_and_is_sandbox() {
-        let env = defaults(&req("claude", &["anthropic"]), "ID");
+        let env = defaults(&req("claude", &["anthropic"]), "ID", true);
         assert_eq!(get(&env, "SANDBOX_NAME"), Some("my-sb"));
         assert_eq!(get(&env, "SANDBOX_VM_ID"), Some("my-sb"));
         assert_eq!(get(&env, "SANDBOX_ID"), Some("ID"));
@@ -130,7 +133,7 @@ mod tests {
 
     #[test]
     fn shell_gets_all_eight_modes_none_without_secrets() {
-        let env = defaults(&req("shell", &["github"]), "ID");
+        let env = defaults(&req("shell", &["github"]), "ID", true);
         let modes: Vec<_> = env
             .iter()
             .filter(|(k, _)| k.starts_with("SBX_CRED_"))
@@ -145,7 +148,7 @@ mod tests {
     fn kits_and_mountless_sandboxes() {
         let mut r = req("mykit", &["anthropic"]);
         r.workspaces.clear();
-        let env = defaults(&r, "ID");
+        let env = defaults(&r, "ID", false);
         assert!(env.iter().all(|(k, _)| !k.starts_with("SBX_CRED_")));
         assert_eq!(get(&env, "SBX_AGENT"), Some("mykit"));
         assert_eq!(
@@ -155,10 +158,23 @@ mod tests {
     }
 
     #[test]
+    fn a_kit_named_like_a_preset_gets_no_preset_variables() {
+        for agent in ["claude", "shell"] {
+            let env = defaults(&req(agent, &["anthropic"]), "ID", false);
+            assert!(
+                env.iter().all(|(k, _)| !k.starts_with("SBX_CRED_")),
+                "{env:?}"
+            );
+            assert_eq!(get(&env, "IS_SANDBOX"), None);
+            assert_eq!(get(&env, "SBX_AGENT"), Some(agent));
+        }
+    }
+
+    #[test]
     fn user_env_wins_and_values_are_never_secrets() {
         let mut r = req("claude", &["anthropic"]);
         r.env = vec![("SBX_AGENT".into(), "mine".into())];
-        apply(&mut r).unwrap();
+        apply(&mut r, true).unwrap();
         assert_eq!(get(&r.env, "SBX_AGENT"), Some("mine"));
         assert_eq!(r.env.iter().filter(|(k, _)| k == "SBX_AGENT").count(), 1);
         assert!(get(&r.env, "SANDBOX_ID").is_some());

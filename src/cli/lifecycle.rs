@@ -1652,6 +1652,31 @@ mod tests {
     }
 
     #[test]
+    fn a_workload_kit_named_claude_gets_no_preset_variables() {
+        let mut t = kit_env();
+        let dir = tempfile::tempdir().unwrap();
+        let kit = dir.path().join("claude");
+        std::fs::create_dir(&kit).unwrap();
+        std::fs::write(
+            kit.join("spec.yaml"),
+            "schemaVersion: \"2\"\nkind: sandbox\nname: claude\nsandbox:\n  image: img:1\n  \
+             entrypoint: [/bin/agent]\n",
+        )
+        .unwrap();
+        let fake = t.ctx.vm.runner();
+        fake.ok(
+            &["machine", "status"],
+            &json("sbx-claude-proj", "created", "claude-proj"),
+        );
+        fake.once_fail(&["machine", "status"], "NOT_FOUND", "vm not found");
+        sbt(&mut t.ctx, &["create", &kit.display().to_string(), "."]).unwrap();
+        let create = create_line(&t);
+        assert!(create.contains("-e SBX_AGENT=claude"), "{create}");
+        assert!(!create.contains("SBX_CRED_"), "{create}");
+        assert!(!create.contains("IS_SANDBOX"), "{create}");
+    }
+
+    #[test]
     fn a_workload_kit_without_a_command_is_refused() {
         let mut t = kit_env();
         let dir = tempfile::tempdir().unwrap();
