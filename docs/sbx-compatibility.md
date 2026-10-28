@@ -7,7 +7,8 @@ clearly rather than doing something different.
 ## Works today
 
 `run`, `create`, `exec`, `ls`, `start`, `stop`, `rm`, `prune`, `reset`, `cp`, `version`,
-`completion`, `diagnose`, `settings`, `policy`, `secret`, `ports`, `run/create --deny-network`
+`completion`, `diagnose`, `settings`, `policy`, `secret`, `ports`, `env create|run|exec|rm`
+(see [Environment files](#environment-files)), `run/create --deny-network`
 (per-sandbox deny rules, as in sbx), `run/create --clone`, kits (`run/create --kit`, `--kit-arg`,
 `--kit-args-file`, `kit inspect`, `kit validate`, `kit add`; see [Kits](#kits)) and
 `policy ls --source`.
@@ -21,7 +22,7 @@ clearly rather than doing something different.
 | `policy refresh`, `secret import`, `secret set --oauth/--registry/--refresh` | Not implemented |
 | `policy ls --created-via/--type/--protocol/--include-inactive`, `policy check --protocol` other than `tcp` | Not implemented (`policy ls --decision` and `--source` work) |
 | `kit pack`, `kit push`, `kit pull`, `kit sign`, `kit verify` | Not implemented |
-| `env` (sbxenv.yaml) | Later |
+| `env plan` and the `sbxenv.yaml` fields listed under [Environment files](#environment-files) | Later |
 | `template`, `setup ssh`, `mcp`, `--static-mcp`, `--skills`, `skills` | Later |
 | `tui` | Later |
 | `--pull always\|never` | `--pull missing` works (it's what smolvm does) |
@@ -57,6 +58,24 @@ clearly rather than doing something different.
 | `policy ls --wide` | sbx's wide layout | Columns differ: a NAME column is added; sbx's other wide columns aren't shown |
 | Install-phase kit rules in `policy ls` | Not listed after create | Never listed, also while a create is still installing (they're in effect then, but `policy ls` doesn't show them) |
 | `--version` | `sbx version vX` | `sbt --version` prints `sbt X`; `sbt version` also shows the smolvm version |
+
+## Environment files
+
+`env create`, `env run`, `env exec` and `env rm` read `sbxenv.yaml` as sbx v0.49.2 does, for the
+fields smolbento supports. These exit 2 and name the field or command: `env plan`, `lifecycle`,
+`bindings`, `registries`, `mcp`, `mounts`, `sandboxOptions.profile|skills|display|gpu|usb|
+writableEnvFiles`, and `pullPolicy` other than `missing`.
+
+| Area | sbx | smolbento |
+|---|---|---|
+| Approval | Asks until you approve once, then remembers | Nothing is remembered: `env create` and `env run` ask on every call; `--force` approves one call (scripts, no terminal) |
+| Plan diffs | The summary shows changes against the last apply | No diff; the summary lists what the call will do |
+| `refresh`, `backend` on a secret | Used | Accepted, no effect: smolbento resolves at every start |
+| `--skip-host-commands`, `--prune-bindings` | Skip lifecycle and MCP commands; remove bindings | Accepted, no effect (there are no lifecycle commands or bindings yet). Secret `command:` sources run either way, as in sbx |
+| Unknown secret service | Accepted by `env plan` | Refused at create, with the error `sbt secret set` gives |
+| Workload kit as `agent` | The kit whose name equals `agent` | A local kit is matched by its directory name, a registry kit by the last part of its repository name |
+| Secret `command:` source | Runs on the host | Runs from a fresh temporary directory, so a relative helper path fails (also for `secret set --command`) |
+| `env run` on an existing sandbox | Passes `env`, applies nothing else | Same |
 
 ## Sandbox environment
 

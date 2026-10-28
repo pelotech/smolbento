@@ -83,6 +83,19 @@ access, so load only kits you trust.
 - **Local kit builds** run in the `_builder` sandbox, a VM under your global network policy, not on
   your machine's Docker. The builder never gets your secrets.
 
+## Environment files
+
+- An `sbxenv.yaml` from a repository can run commands on your machine, outside the sandbox: a
+  secret's `command:` source runs with your privileges (at `env create`, to check it, and at each
+  start). `env create` and `env run` show every such command in their summary and ask
+  `Apply? [y/N]` before running anything. Nothing is remembered, so they ask each time. `--force`
+  skips the question; use it only on files you trust.
+- Every secret `command:` source (here and in `sbt secret set --command`) runs from a fresh
+  temporary directory, so a command can't pick up a script from the directory you are in. Use an
+  absolute path or `PATH`.
+- A failed `env create` leaves the secrets it stored; `env rm` with the same files removes them.
+- The summary shows a literal secret as a hash, never the value.
+
 ## Other things to know
 
 - The agent runs with its permission prompts disabled. The VM, not the agent, is the boundary.
