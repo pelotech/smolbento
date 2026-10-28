@@ -1,6 +1,6 @@
 ---
 source: src/cli/progress.rs
-assertion_line: 228
+assertion_line: 218
 expression: "text(&out).replace('\\x1b', \"\\\\e\").replace('\\r', \"\\\\r\")"
 ---
 
@@ -9,14 +9,14 @@ expression: "text(&out).replace('\\x1b', \"\\\\e\").replace('\\r', \"\\\\r\")"
   \e[90mWorkspace:\e[m  /path/ws (rw)
 
 \e[94m  IMAGE\e[m
-\e[?25l  \e[35m⠋\e[m image — pulling…
+  \e[35m⠋\e[m image — pulling…
 \e[1A\r\e[K  \e[35m⠙\e[m image — pulling…
         42%
 \e[1A\r\e[K\e[1A\r\e[K  \e[35m⠹\e[m image — pulling…
         syncing
 \e[1A\r\e[K\e[1A\r\e[K  \e[32m✓\e[m image — ready
-\e[?25h\e[?25l  \e[35m⠋\e[m kit — building…
+  \e[35m⠋\e[m kit — building…
 \e[1A\r\e[K  \e[31m✗\e[m kit — failed
-\e[?25h
+
   \e[32m✓\e[m Created sandbox chk-pg1
         \e[94mtry:\e[m sbt run --name chk-pg1

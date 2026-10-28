@@ -15,8 +15,6 @@ const GREEN: &str = "32";
 const RED: &str = "31";
 /// Moves up one line and clears it.
 const UP_CLEAR: &str = "\x1b[1A\r\x1b[K";
-const HIDE_CURSOR: &str = "\x1b[?25l";
-const SHOW_CURSOR: &str = "\x1b[?25h";
 
 /// Writes sections, fields and steps. On a terminal a step is one line redrawn in place; otherwise
 /// each step prints when it starts and when it ends. `quiet` makes every call a no-op. Cloning is
@@ -87,7 +85,6 @@ impl Progress {
             lines: 0,
         };
         if self.drawing() {
-            self.write(HIDE_CURSOR);
             step.draw(None);
         } else {
             self.write(&format!("  ○ {subject} — {doing}…\n"));
@@ -161,22 +158,11 @@ impl Step {
 
     fn end(&mut self, line: &str) {
         if self.lines > 0 {
-            self.p.write(&format!(
-                "{}{line}{SHOW_CURSOR}",
-                UP_CLEAR.repeat(self.lines)
-            ));
+            self.p
+                .write(&format!("{}{line}", UP_CLEAR.repeat(self.lines)));
             self.lines = 0;
         } else {
             self.p.write(line);
-        }
-    }
-}
-
-impl Drop for Step {
-    /// A step left open by an early return still gives the terminal its cursor back.
-    fn drop(&mut self) {
-        if self.lines > 0 {
-            self.p.write(SHOW_CURSOR);
         }
     }
 }
@@ -250,13 +236,6 @@ mod tests {
             create(&p);
             assert_eq!(text(&out), "");
         }
-    }
-
-    #[test]
-    fn dropping_an_unfinished_tty_step_shows_the_cursor_again() {
-        let (p, out) = reporter(true, false, false);
-        drop(p.step("image", "pulling"));
-        assert!(text(&out).ends_with("\x1b[?25h"));
     }
 
     #[test]

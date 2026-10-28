@@ -155,7 +155,10 @@ impl Runner for ProcessRunner {
                 stdout_pipe.read_to_end(&mut buf).map(|_| buf)
             });
             let stderr = read_pieces(&mut stderr_pipe, on_line);
-            (stdout.join().expect("stdout reader panicked"), stderr)
+            let stdout = stdout
+                .join()
+                .unwrap_or_else(|_| Err(std::io::Error::other("stdout reader panicked")));
+            (stdout, stderr)
         });
         let status = child.wait().context("waiting for smolvm")?;
         Ok(Output {
@@ -179,10 +182,14 @@ impl Runner for ProcessRunner {
 }
 
 /// Reads `r` to the end, calling `on_line` with each non-empty piece between `\r`s and `\n`s
-/// as soon as it ends (and with the unterminated rest at the end). Returns everything read.
+/// as soon as it ends, and with the unterminated rest at the end. smolvm leaves its latest pull
+/// progress unterminated until the next update, so a rest ending in `%` or `...` is passed on as
+/// soon as it's read (once: not again when its terminator arrives). Returns everything read.
 fn read_pieces(r: &mut impl Read, on_line: &mut dyn FnMut(&str)) -> std::io::Result<Vec<u8>> {
     let mut all = Vec::new();
     let mut start = 0;
+    // Where the current piece ended when it was passed on early, if it was.
+    let mut sent_to = None;
     let mut buf = [0u8; 4096];
     let mut emit = |piece: &[u8]| {
         if !piece.is_empty() {
@@ -198,11 +205,21 @@ fn read_pieces(r: &mut impl Read, on_line: &mut dyn FnMut(&str)) -> std::io::Res
         };
         all.extend_from_slice(&buf[..n]);
         while let Some(i) = all[start..].iter().position(|b| matches!(b, b'\r' | b'\n')) {
-            emit(&all[start..start + i]);
+            if sent_to != Some(start + i) {
+                emit(&all[start..start + i]);
+            }
             start += i + 1;
+            sent_to = None;
+        }
+        let rest = &all[start..];
+        if (rest.ends_with(b"%") || rest.ends_with(b"...")) && sent_to != Some(all.len()) {
+            emit(rest);
+            sent_to = Some(all.len());
         }
     }
-    emit(&all[start..]);
+    if sent_to != Some(all.len()) {
+        emit(&all[start..]);
+    }
     Ok(all)
 }
 
@@ -321,5 +338,54 @@ mod tests {
             .run_streaming(&[], &[pair("PROBE", "p")], &["HOME".into()], &mut |_| {})
             .unwrap();
         assert_eq!(out.stdout, "unset|p");
+    }
+
+    /// Hands out `chunks` one read at a time, logging each read next to the lines it produced.
+    struct Chunks<'a> {
+        chunks: std::collections::VecDeque<&'static str>,
+        log: &'a std::cell::RefCell<Vec<String>>,
+    }
+
+    impl Read for Chunks<'_> {
+        fn read(&mut self, buf: &mut [u8]) -> std::io::Result<usize> {
+            self.log.borrow_mut().push("<read>".into());
+            let Some(chunk) = self.chunks.pop_front() else {
+                return Ok(0);
+            };
+            buf[..chunk.len()].copy_from_slice(chunk.as_bytes());
+            Ok(chunk.len())
+        }
+    }
+
+    #[test]
+    fn unterminated_progress_is_passed_on_when_read_and_only_once() {
+        let log = std::cell::RefCell::new(Vec::new());
+        let mut r = Chunks {
+            chunks: [
+                "Pulling a...",
+                "\rPulling a... [=> ] 5%",
+                "\rPulling a... [==] 100% — syncing...",
+                "\rPulling a... done.\nwarn: x",
+            ]
+            .into(),
+            log: &log,
+        };
+        let all = read_pieces(&mut r, &mut |l| log.borrow_mut().push(l.to_string())).unwrap();
+        assert_eq!(
+            log.take(),
+            [
+                "<read>",
+                "Pulling a...",
+                "<read>",
+                "Pulling a... [=> ] 5%",
+                "<read>",
+                "Pulling a... [==] 100% — syncing...",
+                "<read>",
+                "Pulling a... done.",
+                "<read>",
+                "warn: x",
+            ]
+        );
+        assert!(all.ends_with(b"done.\nwarn: x"));
     }
 }
