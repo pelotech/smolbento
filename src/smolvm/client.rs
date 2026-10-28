@@ -3,7 +3,9 @@ use std::path::PathBuf;
 
 use anyhow::{Context, Result, anyhow};
 
-use super::{EgressEvent, Machine, NetworkSpec, Output, Runner, SmolvmError};
+use super::{
+    EgressEvent, Machine, NetworkSpec, Output, PullProgress, Runner, SmolvmError, pull_progress,
+};
 
 /// A `-v` mount: a host directory at a guest path, or (no host) a directory on the machine's own disk.
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -267,11 +269,28 @@ impl<R: Runner> Smolvm<R> {
         env: &[(String, String)],
         remove: &[String],
     ) -> Result<()> {
+        self.start_with_progress(name, branchable, env, remove, &mut |_| {})
+    }
+
+    /// `start`, calling `on_progress` as smolvm pulls the image (only when it has to pull).
+    pub fn start_with_progress(
+        &self,
+        name: &str,
+        branchable: bool,
+        env: &[(String, String)],
+        remove: &[String],
+        on_progress: &mut dyn FnMut(PullProgress),
+    ) -> Result<()> {
         let mut a = args(&["machine", "start", "-n", name]);
         if branchable {
             a.push("--branchable".into());
         }
-        checked(self.runner.run_with_env(&a, env, remove)?).map(drop)
+        let mut on_line = |line: &str| {
+            if let Some(p) = pull_progress(line) {
+                on_progress(p);
+            }
+        };
+        checked(self.runner.run_streaming(&a, env, remove, &mut on_line)?).map(drop)
     }
 
     /// A copy-on-write child of the running, branchable `from`: its memory, processes and disk. Its
@@ -608,6 +627,43 @@ mod tests {
             text.contains("egress events of m1") && text.contains("line 1"),
             "{text}"
         );
+    }
+
+    #[test]
+    fn start_reports_pull_progress_and_still_passes_env() {
+        let fake = FakeRunner::new();
+        fake.progress(
+            &["machine", "start"],
+            &[
+                "Pulling image alpine...",
+                "Pulling image alpine... [==>                 ] 10%",
+                "something else",
+                "Pulling image alpine... [====================] 100% — syncing...",
+                "Pulling image alpine... done.",
+            ],
+        );
+        let vm = Smolvm::new(fake);
+        let mut seen = Vec::new();
+        vm.start_with_progress("m", false, &[("T".into(), "v".into())], &[], &mut |p| {
+            seen.push(p)
+        })
+        .unwrap();
+        assert_eq!(seen, [PullProgress::Percent(10), PullProgress::Syncing]);
+        assert_eq!(vm.runner().call_lines(), vec!["machine start -n m"]);
+        assert_eq!(
+            vm.runner().envs(),
+            vec![vec![("T".to_string(), "v".to_string())]]
+        );
+    }
+
+    #[test]
+    fn start_with_progress_failure_is_an_error() {
+        let fake = FakeRunner::new();
+        fake.fail(&["machine", "start"], "SMOLVM_ERROR", "boom");
+        let err = Smolvm::new(fake)
+            .start_with_progress("m", true, &[], &[], &mut |_| {})
+            .unwrap_err();
+        assert_eq!(err.to_string(), "smolvm: boom");
     }
 
     #[test]

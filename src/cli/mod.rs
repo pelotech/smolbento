@@ -13,6 +13,7 @@ mod ls;
 pub(crate) mod plan;
 mod policy;
 mod ports;
+pub(crate) mod progress;
 mod run;
 pub(crate) mod secret;
 mod settings;
@@ -60,6 +61,8 @@ pub struct Ctx<R: Runner> {
     /// Unix seconds.
     pub now: i64,
     pub stdin_tty: bool,
+    /// Whether stdout is a terminal: progress redraws in place and uses colour only then.
+    pub stdout_tty: bool,
     /// The host user's uid and gid; the sandbox's `agent` user takes them.
     pub uid: u32,
     pub gid: u32,
@@ -74,10 +77,12 @@ pub struct Ctx<R: Runner> {
     pub args: Vec<String>,
 }
 
-/// Command output: the process's stdout, or a buffer tests read.
+/// Command output: the process's stdout, or a buffer tests read. Clones share the same output,
+/// so a progress reporter can own one without borrowing `Ctx`.
+#[derive(Clone)]
 pub enum Out {
     Stdout,
-    Buffer(std::cell::RefCell<Vec<u8>>),
+    Buffer(std::rc::Rc<std::cell::RefCell<Vec<u8>>>),
 }
 
 impl Write for &Out {
@@ -112,6 +117,7 @@ pub fn main(args: impl IntoIterator<Item = OsString>) -> Result<i32> {
         env,
         now: SystemTime::now().duration_since(UNIX_EPOCH)?.as_secs() as i64,
         stdin_tty: std::io::stdin().is_terminal(),
+        stdout_tty: std::io::stdout().is_terminal(),
         uid: crate::sandbox::host_uid(),
         gid: crate::sandbox::host_gid(),
         store,

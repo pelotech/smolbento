@@ -4,13 +4,16 @@ mod client;
 mod error;
 pub mod fake;
 mod network;
+mod pull;
 mod types;
 
 pub use client::{CreateSpec, Credential, ExecSpec, Mount, PortMap, Smolvm};
 pub use error::SmolvmError;
 pub use network::{AllowList, LOOPBACK, NetworkSpec};
+pub use pull::{PullProgress, pull_progress};
 pub use types::{EgressEvent, Machine, MachineState, PublishedPort};
 
+use std::io::Read;
 use std::path::PathBuf;
 use std::process::{Command, ExitStatus, Stdio};
 
@@ -39,6 +42,18 @@ pub trait Runner {
     ) -> Result<Output> {
         let _ = (env, remove);
         self.run(args)
+    }
+    /// Like `run_with_env`, calling `on_line` with each piece of stderr (split on `\r` and `\n`)
+    /// as smolvm writes it, for progress. The returned `Output` still holds all of stderr.
+    fn run_streaming(
+        &self,
+        args: &[String],
+        env: &[(String, String)],
+        remove: &[String],
+        on_line: &mut dyn FnMut(&str),
+    ) -> Result<Output> {
+        let _ = on_line;
+        self.run_with_env(args, env, remove)
     }
     /// Runs smolvm attached to this terminal (stdio inherited) and returns its exit code.
     /// Used for `exec`, so raw mode, resizes and colour pass straight through.
@@ -71,6 +86,20 @@ impl ProcessRunner {
         }
     }
 
+    /// `smolvm --error-format json ARGS` with stdin closed, `remove` unset and then `env` set.
+    fn command(&self, args: &[String], env: &[(String, String)], remove: &[String]) -> Command {
+        let mut cmd = Command::new(&self.bin);
+        for name in remove {
+            cmd.env_remove(name);
+        }
+        cmd.arg("--error-format")
+            .arg("json")
+            .args(args)
+            .envs(env.iter().map(|(k, v)| (k, v)))
+            .stdin(Stdio::null());
+        cmd
+    }
+
     fn spawn_error(&self) -> String {
         format!(
             "could not run {}; install smolvm with `brew install smol-machines/tap/smolvm` or set smolvm.path",
@@ -91,22 +120,48 @@ impl Runner for ProcessRunner {
         remove: &[String],
     ) -> Result<Output> {
         self.trace(args);
-        let mut cmd = Command::new(&self.bin);
-        for name in remove {
-            cmd.env_remove(name);
-        }
-        let out = cmd
-            .arg("--error-format")
-            .arg("json")
-            .args(args)
-            .envs(env.iter().map(|(k, v)| (k, v)))
-            .stdin(Stdio::null())
+        let out = self
+            .command(args, env, remove)
             .output()
             .with_context(|| self.spawn_error())?;
         Ok(Output {
             code: exit_code(out.status),
             stdout: String::from_utf8_lossy(&out.stdout).into_owned(),
             stderr: String::from_utf8_lossy(&out.stderr).into_owned(),
+        })
+    }
+
+    fn run_streaming(
+        &self,
+        args: &[String],
+        env: &[(String, String)],
+        remove: &[String],
+        on_line: &mut dyn FnMut(&str),
+    ) -> Result<Output> {
+        self.trace(args);
+        let mut child = self
+            .command(args, env, remove)
+            .stdout(Stdio::piped())
+            .stderr(Stdio::piped())
+            .spawn()
+            .with_context(|| self.spawn_error())?;
+        let mut stdout_pipe = child.stdout.take().context("smolvm stdout")?;
+        let mut stderr_pipe = child.stderr.take().context("smolvm stderr")?;
+        // A scoped thread drains stdout while this thread reads stderr as it arrives, so smolvm
+        // never blocks on a full stdout pipe while we wait for stderr (or the other way round).
+        let (stdout, stderr) = std::thread::scope(|s| {
+            let stdout = s.spawn(move || {
+                let mut buf = Vec::new();
+                stdout_pipe.read_to_end(&mut buf).map(|_| buf)
+            });
+            let stderr = read_pieces(&mut stderr_pipe, on_line);
+            (stdout.join().expect("stdout reader panicked"), stderr)
+        });
+        let status = child.wait().context("waiting for smolvm")?;
+        Ok(Output {
+            code: exit_code(status),
+            stdout: String::from_utf8_lossy(&stdout.context("reading smolvm stdout")?).into_owned(),
+            stderr: String::from_utf8_lossy(&stderr.context("reading smolvm stderr")?).into_owned(),
         })
     }
 
@@ -121,6 +176,34 @@ impl Runner for ProcessRunner {
         let status = child.wait().context("waiting for smolvm")?;
         Ok(exit_code(status))
     }
+}
+
+/// Reads `r` to the end, calling `on_line` with each non-empty piece between `\r`s and `\n`s
+/// as soon as it ends (and with the unterminated rest at the end). Returns everything read.
+fn read_pieces(r: &mut impl Read, on_line: &mut dyn FnMut(&str)) -> std::io::Result<Vec<u8>> {
+    let mut all = Vec::new();
+    let mut start = 0;
+    let mut buf = [0u8; 4096];
+    let mut emit = |piece: &[u8]| {
+        if !piece.is_empty() {
+            on_line(&String::from_utf8_lossy(piece));
+        }
+    };
+    loop {
+        let n = match r.read(&mut buf) {
+            Ok(0) => break,
+            Ok(n) => n,
+            Err(e) if e.kind() == std::io::ErrorKind::Interrupted => continue,
+            Err(e) => return Err(e),
+        };
+        all.extend_from_slice(&buf[..n]);
+        while let Some(i) = all[start..].iter().position(|b| matches!(b, b'\r' | b'\n')) {
+            emit(&all[start..start + i]);
+            start += i + 1;
+        }
+    }
+    emit(&all[start..]);
+    Ok(all)
 }
 
 fn exit_code(status: ExitStatus) -> i32 {
@@ -164,6 +247,14 @@ mod tests {
         ProcessRunner::new(script)
     }
 
+    /// A stand-in for smolvm running `body` as a shell script.
+    fn script(dir: &std::path::Path, body: &str) -> ProcessRunner {
+        let script = dir.join("fake-smolvm");
+        std::fs::write(&script, format!("#!/bin/sh\n{body}\n")).unwrap();
+        std::fs::set_permissions(&script, std::fs::Permissions::from_mode(0o755)).unwrap();
+        ProcessRunner::new(script)
+    }
+
     fn pair(k: &str, v: &str) -> (String, String) {
         (k.to_string(), v.to_string())
     }
@@ -187,5 +278,48 @@ mod tests {
         );
         // `env` is for the child only.
         assert_eq!(std::env::var("PROBE").ok(), None);
+    }
+
+    #[test]
+    fn streaming_splits_stderr_on_cr_and_lf_and_keeps_everything() {
+        let dir = tempfile::tempdir().unwrap();
+        let runner = script(
+            dir.path(),
+            r"printf 'out'; printf 'a...\ra... 5%%\ra... 9%%\r\nnext\n\ntail' >&2; exit 3",
+        );
+        let mut lines = Vec::new();
+        let out = runner
+            .run_streaming(&[], &[], &[], &mut |l| lines.push(l.to_string()))
+            .unwrap();
+        assert_eq!(lines, ["a...", "a... 5%", "a... 9%", "next", "tail"]);
+        assert_eq!(out.code, 3);
+        assert_eq!(out.stdout, "out");
+        assert_eq!(out.stderr, "a...\ra... 5%\ra... 9%\r\nnext\n\ntail");
+    }
+
+    #[test]
+    fn streaming_drains_a_full_stdout_pipe_while_reading_stderr() {
+        let dir = tempfile::tempdir().unwrap();
+        // More than a pipe buffer on stdout before anything on stderr.
+        let runner = script(
+            dir.path(),
+            "head -c 300000 /dev/zero | tr '\\0' x; echo done >&2",
+        );
+        let mut lines = Vec::new();
+        let out = runner
+            .run_streaming(&[], &[], &[], &mut |l| lines.push(l.to_string()))
+            .unwrap();
+        assert_eq!(out.stdout.len(), 300000);
+        assert_eq!(lines, ["done"]);
+    }
+
+    #[test]
+    fn streaming_passes_env_and_removals_like_run_with_env() {
+        let dir = tempfile::tempdir().unwrap();
+        let runner = probe(dir.path());
+        let out = runner
+            .run_streaming(&[], &[pair("PROBE", "p")], &["HOME".into()], &mut |_| {})
+            .unwrap();
+        assert_eq!(out.stdout, "unset|p");
     }
 }

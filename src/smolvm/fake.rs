@@ -24,6 +24,7 @@ pub struct FakeRunner {
     spawn_errors: RefCell<Vec<(Vec<String>, String)>>,
     download: RefCell<Option<Vec<u8>>>,
     uploads: RefCell<Vec<(String, String)>>,
+    progress: RefCell<Vec<(Vec<String>, Vec<String>)>>,
 }
 
 fn strings(items: &[&str]) -> Vec<String> {
@@ -117,6 +118,15 @@ impl FakeRunner {
         self
     }
 
+    /// Make `run_streaming` calls starting with `prefix` emit `lines` (stderr pieces) before
+    /// answering as `run` would. Later registrations win.
+    pub fn progress(&self, prefix: &[&str], lines: &[&str]) -> &Self {
+        self.progress
+            .borrow_mut()
+            .push((strings(prefix), strings(lines)));
+        self
+    }
+
     pub fn interactive_exit(&self, code: i32) -> &Self {
         *self.interactive_code.borrow_mut() = code;
         self
@@ -202,6 +212,26 @@ impl Runner for FakeRunner {
         self.envs.borrow_mut().push(env.to_vec());
         self.removed.borrow_mut().push(remove.to_vec());
         self.run(args)
+    }
+
+    fn run_streaming(
+        &self,
+        args: &[String],
+        env: &[(String, String)],
+        remove: &[String],
+        on_line: &mut dyn FnMut(&str),
+    ) -> Result<Output> {
+        let lines = self
+            .progress
+            .borrow()
+            .iter()
+            .rfind(|(p, _)| args.starts_with(p))
+            .map(|(_, lines)| lines.clone())
+            .unwrap_or_default();
+        for line in &lines {
+            on_line(line);
+        }
+        self.run_with_env(args, env, remove)
     }
 
     fn interactive(&self, args: &[String]) -> Result<i32> {
