@@ -10,12 +10,14 @@ use crate::kits::capability;
 use crate::kits::compose;
 use crate::kits::guest;
 use crate::kits::model::{CapBody, Content, CredReq, FileReq, Hook, Kit, NetRule, Rules, Source};
+use crate::kits::registry_auth::Logins;
 use crate::kits::resolve::{KitCred, Plan};
 use crate::policy::Policy;
 use crate::policy::rules::is_under;
 use crate::sandbox::CreateRequest;
 use crate::sandbox::labels::CredFormat;
 use crate::sandbox::options::{free_port, parse_memory};
+use crate::secrets::store::SecretStore;
 use crate::secrets::{SecretsFile, services};
 use crate::smolvm::{Credential, PortMap};
 
@@ -54,6 +56,7 @@ pub fn apply(
     req: &mut CreateRequest,
     policy: &mut Policy,
     secrets: &SecretsFile,
+    store: &dyn SecretStore,
     cache: &Path,
     host_git: &dyn Fn() -> Option<(String, String)>,
 ) -> Result<(KitSteps, Vec<String>)> {
@@ -71,7 +74,7 @@ pub fn apply(
             req.image.clear();
             req.smolfile = Some(path.clone());
         }
-        _ => req.image = compose::image_for(plan, cache)?,
+        _ => req.image = compose::image_for(plan, cache, Logins::new(&secrets.registries, store))?,
     }
 
     if let Some(c) = m.cpus.as_deref().filter(|_| !req.cpus_set) {
@@ -800,7 +803,16 @@ mod tests {
         policy: &mut Policy,
         s: &SecretsFile,
     ) -> Result<(KitSteps, Vec<String>)> {
-        apply(p, req, policy, s, Path::new("/nonexistent"), &no_git)
+        let store = crate::secrets::store::MemoryStore::default();
+        apply(
+            p,
+            req,
+            policy,
+            s,
+            &store,
+            Path::new("/nonexistent"),
+            &no_git,
+        )
     }
     fn credential_args(req: &CreateRequest) -> Vec<String> {
         create::spec(req)
@@ -1376,6 +1388,7 @@ mod tests {
             &mut req,
             &mut Policy::default(),
             &secrets(&[]),
+            &crate::secrets::store::MemoryStore::default(),
             Path::new("/nonexistent"),
             &git,
         )

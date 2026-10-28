@@ -28,7 +28,8 @@ use sha2::{Digest, Sha256};
 use tokio::io::AsyncWrite;
 
 use crate::kits::model::{Content, ImageConfig, Kit, Source};
-use crate::kits::{registry_auth, trust, v3};
+use crate::kits::registry_auth::Logins;
+use crate::kits::{trust, v3};
 
 const DESCRIPTOR_ANNOTATION: &str = "vnd.docker.sandbox.kit.descriptor";
 const SCHEMA_ANNOTATION: &str = "vnd.docker.sandbox.kit.schema-version";
@@ -36,23 +37,23 @@ const REF_NAME_ANNOTATION: &str = "org.opencontainers.image.ref.name";
 
 /// Fetches REF's manifest and config and its layers into the cache. A manifest without the kit
 /// descriptor annotation is a plain image and an error.
-pub fn pull(reference: &str, cache: &Path) -> Result<Kit> {
-    pull_kit(reference, None, cache)
+pub fn pull(reference: &str, cache: &Path, logins: Logins) -> Result<Kit> {
+    pull_kit(reference, None, cache, logins)
 }
 
 /// Same, pinned to a manifest digest; used again when a cache entry is missing.
-pub fn pull_digest(reference: &str, digest: &str, cache: &Path) -> Result<Kit> {
+pub fn pull_digest(reference: &str, digest: &str, cache: &Path, logins: Logins) -> Result<Kit> {
     hex_of(digest)?;
-    pull_kit(reference, Some(digest), cache)
+    pull_kit(reference, Some(digest), cache, logins)
 }
 
 /// Pulls a plain image (no kit annotation required) into an OCI layout; returns its directory.
-pub fn pull_image(reference: &str, cache: &Path) -> Result<PathBuf> {
-    pull_layout(reference, None, cache, false)
+pub fn pull_image(reference: &str, cache: &Path, logins: Logins) -> Result<PathBuf> {
+    pull_layout(reference, None, cache, false, logins)
 }
 
-fn pull_kit(reference: &str, pin: Option<&str>, cache: &Path) -> Result<Kit> {
-    let dir = pull_layout(reference, pin, cache, true)?;
+fn pull_kit(reference: &str, pin: Option<&str>, cache: &Path, logins: Logins) -> Result<Kit> {
+    let dir = pull_layout(reference, pin, cache, true, logins)?;
     read_layout(&dir, Source::Registry(reference.to_string()))
 }
 
@@ -63,8 +64,9 @@ fn pull_layout(
     pin: Option<&str>,
     cache: &Path,
     require_kit: bool,
+    logins: Logins,
 ) -> Result<PathBuf> {
-    let fetched = fetch_ref(reference, pin, cache, require_kit, true)?;
+    let fetched = fetch_ref(reference, pin, cache, require_kit, true, logins)?;
     build_layout(cache, &fetched.manifest, &fetched.digest, reference)
 }
 
@@ -75,6 +77,7 @@ fn fetch_ref(
     cache: &Path,
     require_kit: bool,
     layers: bool,
+    logins: Logins,
 ) -> Result<Fetched> {
     // The same normaliser the trust check uses, so both read the ref alike.
     trust::normalise(reference)?;
@@ -90,7 +93,8 @@ fn fetch_ref(
         .context("starting the registry client")?;
     let client = new_client(&r);
     // A stored registry secret (`sbt secret set --registry`) is used instead of anonymous.
-    let stored = registry_auth::kit_pull_auth(r.registry(), r.repository())
+    let stored = logins
+        .auth_for(r.registry(), r.repository())
         .with_context(|| format!("logging in to {} with its registry secret", r.registry()))?;
     rt.block_on(async {
         if let Some(auth) = stored {
@@ -490,7 +494,7 @@ pub fn read_layout(dir: &Path, source: Source) -> Result<Kit> {
 /// Entrypoint+Cmd of a plain image's config, for a v2 workload that declares no command. An image
 /// already in the cache (`pull_image`) answers offline; otherwise only its manifest and config
 /// are fetched.
-pub fn image_command(reference: &str, cache: &Path) -> Result<Option<Vec<String>>> {
+pub fn image_command(reference: &str, cache: &Path, logins: Logins) -> Result<Option<Vec<String>>> {
     let blobs = store_dir(cache);
     let read_json = |p: PathBuf| -> Result<Value> {
         let bytes = fs::read(&p).with_context(|| format!("reading {}", p.display()))?;
@@ -499,7 +503,7 @@ pub fn image_command(reference: &str, cache: &Path) -> Result<Option<Vec<String>
     let manifest_digest = match cached_manifest(reference, cache) {
         Some(d) => d,
         None => {
-            fetch_ref(reference, None, cache, false, false)
+            fetch_ref(reference, None, cache, false, false, logins)
                 .with_context(|| format!("reading the image config of {reference}"))?
                 .digest
         }
@@ -761,10 +765,13 @@ mod tests {
         );
         fixtures::cached_image(cache.path(), "bare:1", r#"{"config":{}}"#);
         assert_eq!(
-            image_command("img:1", cache.path()).unwrap(),
+            image_command("img:1", cache.path(), Logins::none()).unwrap(),
             Some(vec!["/bin/agent".to_string(), "run".into()])
         );
-        assert_eq!(image_command("bare:1", cache.path()).unwrap(), None);
+        assert_eq!(
+            image_command("bare:1", cache.path(), Logins::none()).unwrap(),
+            None
+        );
     }
 
     #[test]

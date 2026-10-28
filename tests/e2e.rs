@@ -996,7 +996,12 @@ impl Image {
     /// `reference`'s layers and config, pulled from Docker Hub with smolbento's own client.
     fn pull(reference: &str) -> Image {
         let cache = tempfile::tempdir().unwrap();
-        let dir = smolbento::kits::registry::pull_image(reference, cache.path()).unwrap();
+        let dir = smolbento::kits::registry::pull_image(
+            reference,
+            cache.path(),
+            smolbento::kits::registry_auth::Logins::none(),
+        )
+        .unwrap();
         let blob = |d: &serde_json::Value| {
             let hex = d.as_str().unwrap().trim_start_matches("sha256:");
             std::fs::read(dir.join("blobs/sha256").join(hex)).unwrap()

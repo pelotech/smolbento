@@ -247,6 +247,7 @@ pub fn prepare_create<R: Runner>(
             req,
             &mut policy,
             &secrets,
+            &*ctx.store,
             &ctx.paths.kit_cache(),
             &|| host_git_identity(ctx),
         )?;

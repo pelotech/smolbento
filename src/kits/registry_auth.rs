@@ -2,7 +2,6 @@
 //! the stored login for smolbento's own kit pulls. The login and tokens never reach argv, logs,
 //! errors or URLs; Basic goes in the `Authorization` header only.
 
-use std::collections::BTreeMap;
 use std::time::Duration;
 
 use anyhow::{Context, Result, bail};
@@ -12,10 +11,9 @@ use reqwest::redirect::Policy;
 use reqwest::{StatusCode, Url};
 use serde_json::Value;
 
-use crate::config::Paths;
 use crate::kits::registry::is_loopback;
-use crate::secrets::store::{self, SecretStore};
-use crate::secrets::{RegistryEntry, SecretsFile, registry_secret};
+use crate::secrets::store::SecretStore;
+use crate::secrets::{RegistryEntry, registry_secret};
 
 /// Docker Hub's names; its token server is `auth.docker.io`.
 const DOCKER_HUB: [&str; 3] = ["docker.io", "index.docker.io", "registry-1.docker.io"];
@@ -95,12 +93,22 @@ async fn mint_async(
         .send()
         .await
         .with_context(|| format!("asking registry {host} where to log in"))?;
-    let Some((realm, service)) = res
+    // Every challenge, across header lines: a Bearer one may follow Basic (RFC 7235).
+    let header = res
         .headers()
-        .get(WWW_AUTHENTICATE)
-        .and_then(|h| h.to_str().ok())
-        .and_then(parse_challenge)
-    else {
+        .get_all(WWW_AUTHENTICATE)
+        .iter()
+        .map(|h| String::from_utf8_lossy(h.as_bytes()).into_owned())
+        .collect::<Vec<_>>()
+        .join(", ");
+    let Some((realm, service)) = parse_challenge(&header) else {
+        // Fail closed: oci-client would send Basic to any Bearer realm it finds.
+        if header.to_ascii_lowercase().contains("bearer") {
+            bail!(
+                "registry {host} asks for a Bearer token but gives no realm smolbento can read; \
+                 the login was not sent"
+            );
+        }
         return Ok(None);
     };
     if !trusted_realm(host, &realm, entry.auth_endpoint.as_deref()) {
@@ -146,49 +154,80 @@ async fn mint_async(
     }
 }
 
-/// `Bearer realm="…",service="…"` → (realm, service). Other schemes (Basic) → `None`.
+/// The first Bearer challenge's (realm, service) in a `WWW-Authenticate` value, which may list
+/// several challenges (`Basic realm="r", Bearer realm="…"`). `None` without one with a realm.
 pub fn parse_challenge(header: &str) -> Option<(String, Option<String>)> {
-    let (scheme, rest) = header.trim().split_once(' ')?;
-    if !scheme.eq_ignore_ascii_case("bearer") {
-        return None;
-    }
-    let (mut realm, mut service) = (None, None);
-    let mut chars = rest.chars().peekable();
-    loop {
-        while chars.next_if(|c| *c == ',' || c.is_whitespace()).is_some() {}
-        let mut key = String::new();
-        while let Some(c) = chars.next_if(|c| *c != '=' && *c != ',') {
-            key.push(c);
-        }
-        if key.is_empty() && chars.peek().is_none() {
-            break;
-        }
-        if chars.next_if_eq(&'=').is_none() {
+    challenges(header)
+        .into_iter()
+        .filter(|(scheme, _)| scheme == "bearer")
+        .find_map(|(_, params)| {
+            let get = |k: &str| params.iter().find(|(n, _)| n == k).map(|(_, v)| v.clone());
+            Some((get("realm")?, get("service")))
+        })
+}
+
+/// RFC 7235 challenges as (lowercased scheme, [(lowercased name, value)]). Challenges and their
+/// params are all comma-separated: an item that starts with a bare token is a new challenge.
+fn challenges(header: &str) -> Vec<(String, Vec<(String, String)>)> {
+    let mut out: Vec<(String, Vec<(String, String)>)> = Vec::new();
+    for item in split_commas(header) {
+        let item = item.trim();
+        if item.is_empty() {
             continue;
         }
-        while chars.next_if(|c| *c == ' ').is_some() {}
-        let mut value = String::new();
-        if chars.next_if_eq(&'"').is_some() {
-            while let Some(c) = chars.next() {
-                match c {
-                    '\\' => value.extend(chars.next()),
-                    '"' => break,
-                    c => value.push(c),
-                }
-            }
+        let end = item
+            .find(|c: char| c.is_whitespace() || c == '=')
+            .unwrap_or(item.len());
+        let (first, rest) = item.split_at(end);
+        let param = if rest.trim_start().starts_with('=') {
+            item
         } else {
-            while let Some(c) = chars.next_if(|c| *c != ',') {
-                value.push(c);
-            }
-            value = value.trim().to_string();
-        }
-        match key.trim().to_ascii_lowercase().as_str() {
-            "realm" => realm = Some(value),
-            "service" => service = Some(value),
-            _ => {}
+            out.push((first.to_ascii_lowercase(), Vec::new()));
+            rest.trim()
+        };
+        if let Some((k, v)) = param.split_once('=')
+            && let Some((_, params)) = out.last_mut()
+        {
+            params.push((k.trim().to_ascii_lowercase(), unquote(v.trim())));
         }
     }
-    Some((realm?, service))
+    out
+}
+
+/// Splits at commas outside quoted strings.
+fn split_commas(s: &str) -> Vec<String> {
+    let (mut items, mut cur, mut quoted, mut escaped) = (Vec::new(), String::new(), false, false);
+    for c in s.chars() {
+        match c {
+            _ if escaped => escaped = false,
+            '\\' if quoted => escaped = true,
+            '"' => quoted = !quoted,
+            ',' if !quoted => {
+                items.push(std::mem::take(&mut cur));
+                continue;
+            }
+            _ => {}
+        }
+        cur.push(c);
+    }
+    items.push(cur);
+    items
+}
+
+fn unquote(v: &str) -> String {
+    let Some(inner) = v.strip_prefix('"') else {
+        return v.to_string();
+    };
+    let mut out = String::new();
+    let mut chars = inner.chars();
+    while let Some(c) = chars.next() {
+        match c {
+            '\\' => out.extend(chars.next()),
+            '"' => break,
+            c => out.push(c),
+        }
+    }
+    out
 }
 
 /// Whether HOST's login may be sent to REALM: https only, and the realm is HOST itself,
@@ -245,29 +284,48 @@ pub(crate) fn stored_login(
     Ok(Some((entry.clone(), RegistryAuth::Basic(user, password))))
 }
 
-/// The pull auth for a kit pull from REPO on REGISTRY, from the user's stored registry secret:
-/// a minted Bearer token, or the Basic login itself for a registry that takes Basic on `/v2/`
-/// (sent only to that registry). `None` without a stored secret. Kit pulls have no `Ctx`, so
-/// the secrets file and store come from the environment, as `main` builds them.
-pub(crate) fn kit_pull_auth(registry: &str, repo: &str) -> Result<Option<RegistryAuth>> {
-    let env: BTreeMap<String, String> = std::env::vars().collect();
-    let paths = Paths::from_env(&env)?;
-    let file = SecretsFile::load(&paths)?;
-    if file.registries.is_empty() {
-        return Ok(None);
+/// The stored registry logins kit pulls may use, injected by the caller (from `Ctx`).
+#[derive(Clone, Copy)]
+pub struct Logins<'a> {
+    registries: &'a [RegistryEntry],
+    store: Option<&'a dyn SecretStore>,
+}
+
+impl<'a> Logins<'a> {
+    pub fn new(registries: &'a [RegistryEntry], store: &'a dyn SecretStore) -> Logins<'a> {
+        Logins {
+            registries,
+            store: Some(store),
+        }
     }
-    let store = store::platform(&paths, &env);
-    let Some((entry, RegistryAuth::Basic(user, password))) =
-        stored_login(&file.registries, &*store, registry)?
-    else {
-        return Ok(None);
-    };
-    Ok(Some(
-        match mint(&entry.host, &entry, &password, &[repo.to_string()])? {
-            Some(token) => RegistryAuth::Bearer(token),
-            None => RegistryAuth::Basic(user, password),
-        },
-    ))
+
+    /// No stored logins: anonymous and docker-login pulls only.
+    pub fn none() -> Logins<'static> {
+        Logins {
+            registries: &[],
+            store: None,
+        }
+    }
+
+    /// The auth for pulling REPO from REGISTRY with its stored login: a minted Bearer token, or,
+    /// only when `/v2/` has no Bearer challenge, the Basic login itself (oci-client then sends
+    /// it to that registry only). `None` without a stored login. Sync; call outside a runtime.
+    pub(crate) fn auth_for(&self, registry: &str, repo: &str) -> Result<Option<RegistryAuth>> {
+        let Some(store) = self.store else {
+            return Ok(None);
+        };
+        let Some((entry, RegistryAuth::Basic(user, password))) =
+            stored_login(self.registries, store, registry)?
+        else {
+            return Ok(None);
+        };
+        Ok(Some(
+            match mint(&entry.host, &entry, &password, &[repo.to_string()])? {
+                Some(token) => RegistryAuth::Bearer(token),
+                None => RegistryAuth::Basic(user, password),
+            },
+        ))
+    }
 }
 
 #[cfg(test)]
@@ -306,6 +364,26 @@ mod tests {
         assert_eq!(
             parse_challenge(r#"Bearer realm=https://r.example/t"#),
             Some(("https://r.example/t".into(), None))
+        );
+        // RFC 7235 lists several challenges in one header; the Bearer one is found wherever it is.
+        assert_eq!(
+            parse_challenge(
+                r#"Basic realm="x, y", Bearer realm="https://r.example/t",service="s", Other"#
+            ),
+            Some(("https://r.example/t".into(), Some("s".into())))
+        );
+        assert_eq!(
+            parse_challenge("Bearer\trealm=\"https://r.example/t\""),
+            Some(("https://r.example/t".into(), None))
+        );
+        assert_eq!(
+            parse_challenge(r#"Basic realm="a", BEARER  realm = "https://r.example/t""#),
+            Some(("https://r.example/t".into(), None))
+        );
+        // A Basic param named like a Bearer one doesn't count.
+        assert_eq!(
+            parse_challenge(r#"Basic realm="https://x/t", Bearer"#),
+            None
         );
         assert_eq!(parse_challenge(r#"Basic realm="Registry Realm""#), None);
         assert_eq!(parse_challenge(r#"Bearer service="x""#), None);
@@ -549,5 +627,102 @@ mod tests {
             format!("{e:#}").contains("sbt secret set --registry quay.io"),
             "{e:#}"
         );
+    }
+
+    fn raw(status: &'static str, header: &'static str) -> Box<dyn Fn(u16) -> String + Send> {
+        Box::new(move |port| {
+            let header = header.replace("{port}", &port.to_string());
+            format!("HTTP/1.1 {status}\r\n{header}Content-Length: 0\r\nConnection: close\r\n\r\n")
+        })
+    }
+
+    /// What `Logins` hands oci-client for a stored login on a fake registry at 127.0.0.1.
+    fn kit_auth(
+        responses: Vec<Box<dyn Fn(u16) -> String + Send>>,
+    ) -> (Result<Option<RegistryAuth>>, Vec<String>) {
+        let (port, rx) = serve(responses);
+        let host = format!("127.0.0.1:{port}");
+        let store = MemoryStore::default();
+        store.set(&registry_account(&host), "s3cret").unwrap();
+        let regs = vec![entry(&host, Some("u"), None)];
+        let auth = Logins::new(&regs, &store).auth_for(&host, "kits/a");
+        (auth, rx.try_iter().collect())
+    }
+
+    #[test]
+    fn kit_pull_uses_a_minted_bearer_token() {
+        let (auth, reqs) = kit_auth(vec![
+            challenge("127.0.0.1"),
+            json("200 OK", r#"{"token":"minted"}"#),
+        ]);
+        assert!(matches!(auth.unwrap(), Some(RegistryAuth::Bearer(t)) if t == "minted"));
+        assert!(
+            reqs[1].contains("scope=repository%3Akits%2Fa%3Apull"),
+            "{}",
+            reqs[1]
+        );
+    }
+
+    #[test]
+    fn kit_pull_sends_basic_only_without_a_bearer_challenge() {
+        for resp in [
+            raw("200 OK", ""),
+            raw(
+                "401 Unauthorized",
+                "WWW-Authenticate: Basic realm=\"Registry Realm\"\r\n",
+            ),
+        ] {
+            let (auth, reqs) = kit_auth(vec![resp]);
+            assert!(
+                matches!(auth.unwrap(), Some(RegistryAuth::Basic(u, p)) if u == "u" && p == "s3cret")
+            );
+            assert_eq!(reqs.len(), 1);
+        }
+    }
+
+    #[test]
+    fn a_bearer_challenge_after_basic_is_still_checked() {
+        let (auth, reqs) = kit_auth(vec![raw(
+            "401 Unauthorized",
+            "WWW-Authenticate: Basic realm=\"x\", Bearer realm=\"http://localhost:{port}/token\"\r\n",
+        )]);
+        let e = auth.unwrap_err();
+        assert!(
+            format!("{e:#}").contains("--registry-auth-endpoint http://localhost:"),
+            "{e:#}"
+        );
+        assert_eq!(reqs.len(), 1);
+        // The same with the challenges in two header lines.
+        let (auth, _) = kit_auth(vec![raw(
+            "401 Unauthorized",
+            "WWW-Authenticate: Basic realm=\"x\"\r\nWWW-Authenticate: Bearer realm=\"http://localhost:{port}/token\"\r\n",
+        )]);
+        assert!(auth.is_err());
+    }
+
+    #[test]
+    fn a_bearer_challenge_without_a_realm_fails_closed() {
+        for header in [
+            "WWW-Authenticate: Bearer service=\"x\"\r\n",
+            "WWW-Authenticate: Basic realm=\"x\", Bearer\r\n",
+        ] {
+            let (auth, reqs) = kit_auth(vec![raw("401 Unauthorized", header)]);
+            let e = auth.unwrap_err();
+            assert!(format!("{e:#}").contains("no realm"), "{e:#}");
+            assert!(!format!("{e:#}").contains("s3cret"));
+            assert_eq!(reqs.len(), 1);
+        }
+    }
+
+    #[test]
+    fn no_stored_login_means_no_auth_and_no_request() {
+        let store = MemoryStore::default();
+        assert!(
+            Logins::new(&[], &store)
+                .auth_for("ghcr.io", "a")
+                .unwrap()
+                .is_none()
+        );
+        assert!(Logins::none().auth_for("ghcr.io", "a").unwrap().is_none());
     }
 }
