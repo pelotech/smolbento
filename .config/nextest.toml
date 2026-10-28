@@ -1,7 +1,21 @@
+# Two e2e tests share smolbento's one `_builder` sandbox, and a build recreates it when its stored
+# registry logins differ, so they run one at a time.
+[test-groups]
+builder = { max-threads = 1 }
+
+[[profile.default.overrides]]
+filter = 'binary(e2e) & (test(local_v3_kit_builds_in_the_builder_sandbox) | test(local_kit_builds_from_a_registry_that_needs_a_login))'
+test-group = 'builder'
+
 # CI's e2e job runs with NEXTEST_PROFILE=ci. Several e2e tests reach example.com and httpbin.org,
 # so a failed e2e test gets one retry there; nextest still reports it as flaky.
 [profile.ci]
 fail-fast = false
+
+[[profile.ci.overrides]]
+filter = 'binary(e2e) & (test(local_v3_kit_builds_in_the_builder_sandbox) | test(local_kit_builds_from_a_registry_that_needs_a_login))'
+test-group = 'builder'
+retries = 1
 
 [[profile.ci.overrides]]
 filter = 'binary(e2e)'

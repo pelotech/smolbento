@@ -560,6 +560,10 @@ It's used for:
   `HOST/<repo>` in its descriptor, smolbento gets a short-lived pull token for those repositories
   on your machine and starts the builder fresh with it, so a build must start pulling within a few
   minutes. Only `HOST/…` references count: an image named without its registry gets no token.
+  A build that reaches a registry you stored a login for without naming it that way gets
+  `502 credential unavailable` from it (not an anonymous pull) and fails, naming the registry: write
+  the image as `HOST/<repo>` in the kit, or remove the login with `sbt secret rm --registry HOST`.
+  Docker Hub logins don't apply to local kit builds yet (`FROM debian` gets no token).
   Adding or removing a registry credential recreates the builder (and its build cache) at the next
   build.
 
