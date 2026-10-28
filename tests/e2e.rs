@@ -1272,6 +1272,82 @@ build: |
 }
 
 #[test]
+#[ignore = "boots real VMs and pulls from dhi.io with a login; run with `just e2e`"]
+fn local_kit_builds_from_a_registry_that_needs_a_login() {
+    // Local only: needs a Docker account with dhi.io access and its access token in a file.
+    let (Ok(user), Ok(token_file)) = (
+        std::env::var("SMOLBENTO_E2E_DHI_USER"),
+        std::env::var("SMOLBENTO_E2E_DHI_TOKEN_FILE"),
+    ) else {
+        eprintln!(
+            "skipped: set SMOLBENTO_E2E_DHI_USER and SMOLBENTO_E2E_DHI_TOKEN_FILE to build from dhi.io"
+        );
+        return;
+    };
+    let token = std::fs::read(&token_file).unwrap();
+    let e = E2e::new("dhi");
+    let _builder = BuilderGuard::new();
+
+    // The token lives in the real keychain on macOS: remove it on every exit path. This also
+    // removes a dhi.io credential you stored yourself.
+    struct RegistryCleanup<'a>(&'a E2e);
+    impl Drop for RegistryCleanup<'_> {
+        fn drop(&mut self) {
+            let _ = self.0.sbt(&["secret", "rm", "--registry", "dhi.io"]);
+        }
+    }
+    let _cleanup = RegistryCleanup(&e);
+    let mut set = e
+        .env(Command::new(env!("CARGO_BIN_EXE_smolbento")).args([
+            "secret",
+            "set",
+            "--registry",
+            "dhi.io",
+            "--username",
+            &user,
+            "--password-stdin",
+        ]))
+        .stdin(std::process::Stdio::piped())
+        .stdout(std::process::Stdio::piped())
+        .stderr(std::process::Stdio::piped())
+        .spawn()
+        .unwrap();
+    {
+        use std::io::Write;
+        set.stdin.take().unwrap().write_all(&token).unwrap();
+    }
+    let out = set.wait_with_output().unwrap();
+    assert!(
+        out.status.success(),
+        "secret set --registry: {}",
+        String::from_utf8_lossy(&out.stderr)
+    );
+
+    let kit = e.dir.path().join("dhi");
+    std::fs::create_dir_all(&kit).unwrap();
+    std::fs::write(
+        kit.join("dhi.yaml"),
+        r#"# syntax=docker/sandbox-kit:3
+schemaVersion: "3"
+kind: mixin
+version: "1.0.0"
+provides: [e2e-dhi]
+build: |
+  FROM dhi.io/debian-base:trixie AS base
+  FROM scratch
+  COPY --from=base /etc/os-release /opt/e2e-dhi/os-release
+"#,
+    )
+    .unwrap();
+    e.create_with_kits(&[kit.to_str().unwrap()]);
+    let release = root_out(&e.name, "cat /opt/e2e-dhi/os-release");
+    assert!(
+        release.contains(r#"VERSION_CODENAME="trixie""#),
+        "{release}"
+    );
+}
+
+#[test]
 #[ignore = "boots real VMs and needs example.com; run with `just e2e`"]
 fn install_phase_network_closes_after_install() {
     let e = E2e::new("instnet");
