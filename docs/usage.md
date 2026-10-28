@@ -66,6 +66,31 @@ sbt create shell               # no path: a sandbox with no host directory mount
 
 A sandbox made by `create` stays running until you stop it (as in sbx).
 
+`run` and `create` print their progress as they go: a SANDBOX summary, KITS (only when a kit was
+pulled or built), IMAGE (with a live pull percentage) and SETUP, then `Created sandbox NAME`. On
+`create` a last line suggests `try: sbt run --name NAME`. `start` and `env create|run` show the same
+steps. Pass `--no-progress` to `run` or `create` to hide them. On a terminal the steps redraw in
+place; otherwise each prints as plain lines.
+
+```
+SANDBOX
+  Name:       shell-proj
+  Agent:      shell
+  Workspace:  -
+  Image:      docker/sandbox-templates:shell-0.10.0
+  CPU:        3
+  Memory:     1536 MiB
+
+IMAGE
+  ✓ image — ready
+
+SETUP
+  ✓ sandbox — started
+
+  ✓ Created sandbox shell-proj
+        try: sbt run --name shell-proj
+```
+
 Options for `run` and `create`:
 
 | Option | Meaning |
@@ -77,6 +102,7 @@ Options for `run` and `create`:
 | `--env-file FILE` | Read `KEY=VALUE` lines |
 | `-p, --publish [[127.0.0.1:]HOST:]PORT[/udp]` | Publish a port on `127.0.0.1`; with no host port, a free one is picked |
 | `-t, --template IMAGE` | Use another image |
+| `--no-progress` | Don't print progress |
 | `--clone` | Give the agent its own clone of the repo instead of mounting it (see [Clone mode](#clone-mode)) |
 
 These are fixed when the sandbox is created; changing them later means `rm` and create again.
