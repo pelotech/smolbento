@@ -12,10 +12,13 @@ the VM is the boundary.
 ## Quick start
 
 ```sh
-brew install smol-machines/tap/smolvm   # smolvm 1.32.4 or newer
-just install                            # from a checkout of this repo
+# smolvm 1.32.4 or newer
+brew install smol-machines/tap/smolvm
+# from a checkout of this repo
+just install
 cd ~/code/myrepo
-sbt run claude                          # create a sandbox for this directory and attach
+# create a sandbox for this directory and attach
+sbt run claude
 ```
 
 When you exit the agent, the sandbox stops; run `sbt run claude` again to pick up where you left

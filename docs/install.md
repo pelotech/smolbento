@@ -13,8 +13,10 @@ Docker is **not** needed on the host. Agent images are pulled by smolvm directly
 ## Install with Homebrew
 
 ```sh
-brew tap smol-machines/tap                  # smolvm, installed as a dependency
-brew trust pelotech/tap smol-machines/tap   # Homebrew 7+ only loads trusted third-party taps
+# smolvm, installed as a dependency
+brew tap smol-machines/tap
+# Homebrew 7+ only loads trusted third-party taps
+brew trust pelotech/tap smol-machines/tap
 brew install pelotech/tap/smolbento
 ```
 
@@ -75,5 +77,6 @@ Linux, smolvm's hypervisor entitlement on macOS) and your config file. See
 ## Shell completions
 
 ```sh
-sbt completion zsh > "${fpath[1]}/_sbt"     # also: bash, fish, powershell
+# also: bash, fish, powershell
+sbt completion zsh > "${fpath[1]}/_sbt"
 ```
