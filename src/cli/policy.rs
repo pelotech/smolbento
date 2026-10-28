@@ -58,6 +58,14 @@ pub fn run<R: Runner>(ctx: &mut Ctx<R>, cmd: PolicyCmd) -> Result<i32> {
             if a.id.is_none() && a.resource.is_none() {
                 bail!("pass --id or --resource");
             }
+            if let Some(sb) =
+                policy.kit_rule_target(a.sandbox.as_deref(), a.id.as_deref(), a.resource.as_deref())
+            {
+                bail!(
+                    "kit rules can't be removed; add a deny rule instead \
+                     (sbt policy deny network --sandbox {sb} <host>)"
+                );
+            }
             // Ids are unique, so --id alone finds a sandbox's rule too.
             let sandbox = match (&a.sandbox, &a.id) {
                 (None, Some(id)) => policy.find(id).and_then(|(_, s)| s.map(String::from)),
@@ -542,11 +550,21 @@ fn check<R: Runner>(ctx: &Ctx<R>, policy: &Policy, a: &CheckArgs) -> Result<i32>
 #[derive(Serialize)]
 struct LsRow {
     id: String,
+    /// Only kit rows have one: `kit:<sandbox>`.
+    #[serde(skip_serializing_if = "String::is_empty")]
+    name: String,
     source: String,
     applies_to: String,
     decision: String,
     resources: Vec<String>,
     notes: Vec<String>,
+    /// Only kit rows say so (`false`); they change with their kits, not by `policy rm`.
+    #[serde(skip_serializing_if = "is_true")]
+    editable: bool,
+}
+
+fn is_true(b: &bool) -> bool {
+    *b
 }
 
 /// What `policy ls` lists, and how.
@@ -578,6 +596,8 @@ fn ls_rows(policy: &Policy, opts: &LsOpts) -> Vec<LsRow> {
                 decision: "allow".into(),
                 resources: resources.iter().map(|r| r.to_string()).collect(),
                 notes: Vec::new(),
+                editable: true,
+                name: String::new(),
             });
         }
     }
@@ -585,6 +605,9 @@ fn ls_rows(policy: &Policy, opts: &LsOpts) -> Vec<LsRow> {
         Some(s) => policy.rules_for(Some(s)).collect(),
         None => policy.all_rules().collect(),
     };
+    // sbx shows one `kit:<sandbox>` policy per sandbox, whatever kits made it. The per-kit rules
+    // stay in the store (rollback and `kit add` need them); only the listing aggregates.
+    let mut kit_rows: Vec<LsRow> = Vec::new();
     for (rule, scope) in rules {
         let mut notes: Vec<String> = rule
             .parsed()
@@ -598,28 +621,60 @@ fn ls_rows(policy: &Policy, opts: &LsOpts) -> Vec<LsRow> {
                 notes.push(format!("{label} {v} not enforced"));
             }
         }
+        if rule.source() == "kit" {
+            let sandbox = scope.unwrap_or("all");
+            let name = format!("kit:{sandbox}");
+            let decision = rule.decision.name();
+            let at = kit_rows
+                .iter()
+                .position(|r| r.name == name && r.decision == decision);
+            let row = match at {
+                Some(i) => &mut kit_rows[i],
+                None => {
+                    // The allow rule is the one sbx shows; a kit deny rule gets its own id.
+                    let id = match rule.decision {
+                        Decision::Allow => crate::policy::kit_rule_id(sandbox),
+                        Decision::Deny => crate::policy::kit_rule_id(&format!("{sandbox}|deny")),
+                    };
+                    kit_rows.push(LsRow {
+                        id,
+                        name,
+                        source: "kit".into(),
+                        applies_to: format!("sandbox:{sandbox}"),
+                        decision: decision.into(),
+                        resources: Vec::new(),
+                        notes: Vec::new(),
+                        editable: false,
+                    });
+                    kit_rows.last_mut().expect("just pushed")
+                }
+            };
+            for r in &rule.resources {
+                if !row.resources.contains(r) {
+                    row.resources.push(r.clone());
+                }
+            }
+            row.notes.extend(notes);
+            continue;
+        }
         rows.push(LsRow {
             id: rule.id.clone(),
-            // Kit rules show their kit, e.g. `kit:github`, or `kit-install:github` for an
-            // install-phase rule.
-            source: match rule.source() {
-                "kit" => rule.created_via.clone(),
-                s => s.into(),
-            },
+            name: String::new(),
+            source: rule.source().into(),
             applies_to: scope.unwrap_or("all").into(),
             decision: rule.decision.name().into(),
             resources: rule.resources.clone(),
             notes,
+            editable: true,
         });
     }
+    rows.extend(kit_rows);
     if let Some(d) = opts.decision {
         rows.retain(|r| r.decision == d.name());
     }
     if let Some(want) = opts.source {
-        rows.retain(|r| match r.source.split(':').next().unwrap_or("") {
+        rows.retain(|r| match r.source.as_str() {
             "default" => want == "local",
-            // An install-phase kit rule (`kit-install:<kit>`) is a kit rule.
-            "kit-install" => want == "kit",
             kind => kind == want,
         });
     }
@@ -642,10 +697,13 @@ fn render_ls(policy: &Policy, rows: &[LsRow], opts: &LsOpts) -> Result<String> {
                     .to_vec(),
             ];
             if wide {
+                lines[0].insert(1, "NAME".into());
                 lines[0].push("NOTES".into());
             }
             for r in rows {
-                let resources = if wide || r.resources.len() <= 3 {
+                let resources = if !r.editable && !wide {
+                    format!("network: {} {}", r.resources.len(), r.decision)
+                } else if wide || r.resources.len() <= 3 {
                     r.resources.join(", ")
                 } else {
                     format!("{} rules", r.resources.len())
@@ -658,6 +716,14 @@ fn render_ls(policy: &Policy, rows: &[LsRow], opts: &LsOpts) -> Result<String> {
                     resources,
                 ];
                 if wide {
+                    line.insert(
+                        1,
+                        if r.name.is_empty() {
+                            "-".into()
+                        } else {
+                            r.name.clone()
+                        },
+                    );
                     line.push(r.notes.join("; "));
                 }
                 lines.push(line);
@@ -937,12 +1003,33 @@ mod tests {
             sbt(&mut t.ctx, args).unwrap();
             t.stdout()
         };
+        // One aggregated rule per sandbox, like sbx: runtime and install hosts together.
         let kit = out(&["policy", "ls", "my-sb", "--source", "kit"]);
-        assert!(kit.contains("kit.com") && kit.contains("kit:gh"), "{kit}");
-        // An install-phase rule (left by an interrupted create) says so.
-        let line = kit.lines().find(|l| l.contains("pkg.kit.com")).expect(&kit);
-        assert!(line.contains("kit-install:gh"), "{kit}");
-        assert!(!kit.contains("user.com"), "{kit}");
+        let rows: Vec<_> = kit.lines().skip(2).collect();
+        assert_eq!(rows.len(), 1, "{kit}");
+        let id = crate::policy::kit_rule_id("my-sb");
+        assert!(rows[0].starts_with(&id), "{kit}");
+        assert!(rows[0].contains("sandbox:my-sb"), "{kit}");
+        assert!(rows[0].contains("network: 2 allow"), "{kit}");
+        assert!(
+            !kit.contains("kit:gh") && !kit.contains("user.com"),
+            "{kit}"
+        );
+        let wide = out(&["policy", "ls", "my-sb", "--source", "kit", "--wide"]);
+        assert!(wide.contains("kit:my-sb"), "{wide}");
+        assert!(
+            wide.contains("kit.com") && wide.contains("pkg.kit.com"),
+            "{wide}"
+        );
+        let json = out(&["policy", "ls", "my-sb", "--source", "kit", "--json"]);
+        let json: serde_json::Value = serde_json::from_str(&json).unwrap();
+        assert_eq!(json.as_array().unwrap().len(), 1);
+        assert_eq!(json[0]["id"], id.as_str());
+        assert_eq!(json[0]["name"], "kit:my-sb");
+        assert_eq!(json[0]["source"], "kit");
+        assert_eq!(json[0]["applies_to"], "sandbox:my-sb");
+        assert_eq!(json[0]["editable"], false);
+        assert_eq!(json[0]["resources"].as_array().unwrap().len(), 2);
         let local = out(&["policy", "ls", "my-sb", "--source", "local"]);
         assert!(
             local.contains("user.com") && !local.contains("kit.com"),
@@ -1382,6 +1469,44 @@ mod tests {
         assert!(Policy::load(&t.ctx.paths).unwrap().sandboxes.is_empty());
         let err = sbt(&mut t.ctx, &["policy", "rm", "network", "--id", &id]).unwrap_err();
         assert!(err.to_string().contains("no matching rules"), "{err}");
+    }
+
+    #[test]
+    fn rm_refuses_kit_rules_by_id_aggregate_id_or_resource() {
+        use crate::kits::model::{NetRule, Rules};
+        let mut t = test_env(&[]);
+        set_policy(&t, "mode = \"deny-all\"");
+        let mut p = Policy::load(&t.ctx.paths).unwrap();
+        let rules = Rules {
+            allow: vec![NetRule {
+                host: "kit.com".into(),
+                methods: vec![],
+                paths: vec![],
+            }],
+            deny: vec![],
+        };
+        let (ids, _) = p.add_kit_rules("sb", "gh", &rules, false).unwrap();
+        p.save(&t.ctx.paths).unwrap();
+        let agg = crate::policy::kit_rule_id("sb");
+        for args in [
+            vec!["policy", "rm", "network", "--id", ids[0].as_str()],
+            vec!["policy", "rm", "network", "--id", agg.as_str()],
+            vec![
+                "policy",
+                "rm",
+                "network",
+                "--sandbox",
+                "sb",
+                "--resource",
+                "kit.com",
+            ],
+        ] {
+            let err = sbt(&mut t.ctx, &args).unwrap_err().to_string();
+            assert!(err.contains("kit rules can't be removed"), "{err}");
+            assert!(err.contains("policy deny network --sandbox sb"), "{err}");
+        }
+        let p = Policy::load(&t.ctx.paths).unwrap();
+        assert_eq!(p.rules_for(Some("sb")).count(), 1);
     }
 
     #[test]

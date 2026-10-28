@@ -142,6 +142,12 @@ fn id_scope(sandbox: &str, created_via: &str) -> String {
     }
 }
 
+/// The id `policy ls` shows for a sandbox's aggregated kit rule (`kit:<sandbox>`): a stable hash
+/// of the sandbox name, so it never changes as kits come and go.
+pub fn kit_rule_id(sandbox: &str) -> String {
+    rule_id(&format!("kit:{sandbox}"), Decision::Allow, &[], None, None)
+}
+
 /// A short, stable id from the rule's content, qualifiers included (FNV-1a).
 fn rule_id(
     scope: &str,
@@ -322,6 +328,41 @@ impl Policy {
             self.prune(s);
         }
         before != after
+    }
+
+    /// The sandbox whose kit rule `policy rm` was pointed at, by a per-kit id, the aggregated
+    /// `kit:<sandbox>` id, or a resource only kit rules list. Kit rules aren't removed that way.
+    pub fn kit_rule_target(
+        &self,
+        sandbox: Option<&str>,
+        id: Option<&str>,
+        resource: Option<&str>,
+    ) -> Option<String> {
+        let sandboxes = self
+            .sandboxes
+            .iter()
+            .filter(|(name, _)| sandbox.is_none_or(|s| s == name.as_str()));
+        for (name, sp) in sandboxes {
+            if let Some(id) = id
+                && (id == kit_rule_id(name)
+                    || id == kit_rule_id(&format!("{name}|deny"))
+                    || sp.rules.iter().any(|r| r.id == id && r.source() == "kit"))
+            {
+                return Some(name.clone());
+            }
+            if let (None, Some(res)) = (id, resource) {
+                let lists = |kit: bool| {
+                    sp.rules.iter().any(|r| {
+                        (r.source() == "kit") == kit
+                            && r.resources.iter().any(|x| x.eq_ignore_ascii_case(res))
+                    })
+                };
+                if sandbox.is_some() && lists(true) && !lists(false) {
+                    return Some(name.clone());
+                }
+            }
+        }
+        None
     }
 
     /// Drops a sandbox's entry once it holds nothing.
