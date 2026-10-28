@@ -10,6 +10,7 @@ use std::sync::LazyLock;
 use anyhow::{Context, Result, bail};
 use regex_lite::Regex;
 use serde::Deserialize;
+use serde::de::{self, DeserializeOwned, Deserializer, Visitor};
 use serde_json::{Map, Value};
 
 const ESCAPE: &str = "__sbxenv_esc__";
@@ -39,24 +40,33 @@ struct Ref {
 #[derive(Deserialize, Default, Clone, Debug)]
 #[serde(rename_all = "camelCase", deny_unknown_fields)]
 pub struct ArgDecl {
+    #[serde(default, deserialize_with = "opt_text")]
     pub default: Option<String>,
     pub required: Option<bool>,
+    #[serde(default, deserialize_with = "opt_text")]
     pub description: Option<String>,
+    #[serde(default, deserialize_with = "opt_text_list")]
     pub r#enum: Option<Vec<String>>,
+    #[serde(default, deserialize_with = "opt_text")]
     pub pattern: Option<String>,
 }
 
-/// The typed file. Every field optional (required ones are checked after merging).
+/// The typed file. Every field optional (required ones are checked after merging). Text fields
+/// take any YAML scalar: `PORT: 8080` and `DEBUG: on` are the strings "8080" and "on".
 #[derive(Deserialize, Default, Debug)]
 #[serde(rename_all = "camelCase", deny_unknown_fields)]
 pub struct EnvFile {
+    #[serde(default, deserialize_with = "opt_text")]
     pub schema_version: Option<String>,
+    #[serde(default, deserialize_with = "opt_text")]
     pub name: Option<String>,
+    #[serde(default, deserialize_with = "opt_text")]
     pub agent: Option<String>,
     pub args: Option<BTreeMap<String, ArgDecl>>,
     pub kits: Option<Vec<KitEntry>>,
     pub workspace: Option<Workspace>,
     pub additional_workspaces: Option<Vec<ExtraWorkspace>>,
+    #[serde(default, deserialize_with = "opt_text_map")]
     pub env: Option<BTreeMap<String, String>>,
     pub ports: Option<Vec<Port>>,
     pub secrets: Option<BTreeMap<String, SecretDecl>>,
@@ -69,26 +79,41 @@ pub struct EnvFile {
     pub mounts: Option<Value>,
 }
 
-#[derive(Deserialize, Debug)]
-#[serde(untagged)]
+/// A kit source, or `{source, args}`.
+#[derive(Debug)]
 pub enum KitEntry {
     Source(String),
-    Pinned {
-        source: String,
-        args: Option<BTreeMap<String, String>>,
-    },
+    Pinned(PinnedKit),
 }
 
 #[derive(Deserialize, Debug)]
-#[serde(untagged)]
+#[serde(deny_unknown_fields)]
+pub struct PinnedKit {
+    #[serde(deserialize_with = "text")]
+    pub source: String,
+    #[serde(default, deserialize_with = "opt_text_map")]
+    pub args: Option<BTreeMap<String, String>>,
+}
+
+/// A path, or `{path, clone}`.
+#[derive(Debug)]
 pub enum Workspace {
     Path(String),
-    Object { path: String, clone: Option<bool> },
+    Object(WorkspaceObject),
+}
+
+#[derive(Deserialize, Debug)]
+#[serde(deny_unknown_fields)]
+pub struct WorkspaceObject {
+    #[serde(deserialize_with = "text")]
+    pub path: String,
+    pub clone: Option<bool>,
 }
 
 #[derive(Deserialize, Debug)]
 #[serde(rename_all = "camelCase", deny_unknown_fields)]
 pub struct ExtraWorkspace {
+    #[serde(deserialize_with = "text")]
     pub path: String,
     pub read_only: Option<bool>,
 }
@@ -98,29 +123,53 @@ pub struct ExtraWorkspace {
 pub struct Port {
     pub sandbox: u16,
     pub host: Option<u16>,
+    #[serde(default, deserialize_with = "opt_text")]
     pub protocol: Option<String>,
-    #[serde(rename = "hostIP")]
+    #[serde(rename = "hostIP", default, deserialize_with = "opt_text")]
     pub host_ip: Option<String>,
 }
 
-#[derive(Deserialize, Debug, Clone)]
+#[derive(Deserialize, Clone)]
 #[serde(rename_all = "camelCase", deny_unknown_fields)]
 pub struct SecretDecl {
+    #[serde(default, deserialize_with = "opt_text")]
     pub value: Option<String>,
+    #[serde(default, deserialize_with = "opt_text")]
     pub r#ref: Option<String>,
+    #[serde(default, deserialize_with = "opt_text")]
     pub command: Option<String>,
     pub snapshot: Option<bool>,
+    #[serde(default, deserialize_with = "opt_text")]
     pub refresh: Option<String>,
+    #[serde(default, deserialize_with = "opt_text")]
     pub backend: Option<String>,
     pub no_verify: Option<bool>,
+}
+
+/// Like the derived one, but a literal `value` is never shown.
+impl std::fmt::Debug for SecretDecl {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.debug_struct("SecretDecl")
+            .field("value", &self.value.as_ref().map(|_| "<redacted>"))
+            .field("ref", &self.r#ref)
+            .field("command", &self.command)
+            .field("snapshot", &self.snapshot)
+            .field("refresh", &self.refresh)
+            .field("backend", &self.backend)
+            .field("no_verify", &self.no_verify)
+            .finish()
+    }
 }
 
 #[derive(Deserialize, Debug)]
 #[serde(rename_all = "camelCase", deny_unknown_fields)]
 pub struct SandboxOptions {
+    #[serde(default, deserialize_with = "opt_text")]
     pub template: Option<String>,
+    #[serde(default, deserialize_with = "opt_text")]
     pub memory: Option<String>,
     pub cpus: Option<u32>,
+    #[serde(default, deserialize_with = "opt_text")]
     pub pull_policy: Option<String>,
     pub profile: Option<Value>,
     pub skills: Option<Value>,
@@ -130,22 +179,113 @@ pub struct SandboxOptions {
     pub writable_env_files: Option<Value>,
 }
 
+/// A YAML scalar as text: a string as is, a number or bool as written. Null and collections are
+/// errors that never show the value.
+struct Text(String);
+
+impl<'de> Deserialize<'de> for Text {
+    fn deserialize<D: Deserializer<'de>>(d: D) -> Result<Self, D::Error> {
+        struct V;
+        impl Visitor<'_> for V {
+            type Value = Text;
+            fn expecting(&self, f: &mut std::fmt::Formatter) -> std::fmt::Result {
+                f.write_str("a string")
+            }
+            fn visit_str<E: de::Error>(self, v: &str) -> Result<Text, E> {
+                Ok(Text(v.to_string()))
+            }
+            fn visit_bool<E: de::Error>(self, v: bool) -> Result<Text, E> {
+                Ok(Text(v.to_string()))
+            }
+            fn visit_i64<E: de::Error>(self, v: i64) -> Result<Text, E> {
+                Ok(Text(v.to_string()))
+            }
+            fn visit_u64<E: de::Error>(self, v: u64) -> Result<Text, E> {
+                Ok(Text(v.to_string()))
+            }
+            fn visit_f64<E: de::Error>(self, v: f64) -> Result<Text, E> {
+                Ok(Text(v.to_string()))
+            }
+        }
+        d.deserialize_any(V)
+    }
+}
+
+fn text<'de, D: Deserializer<'de>>(d: D) -> Result<String, D::Error> {
+    Text::deserialize(d).map(|t| t.0)
+}
+
+fn opt_text<'de, D: Deserializer<'de>>(d: D) -> Result<Option<String>, D::Error> {
+    Ok(Option::<Text>::deserialize(d)?.map(|t| t.0))
+}
+
+fn opt_text_list<'de, D: Deserializer<'de>>(d: D) -> Result<Option<Vec<String>>, D::Error> {
+    let list = Option::<Vec<Text>>::deserialize(d)?;
+    Ok(list.map(|l| l.into_iter().map(|t| t.0).collect()))
+}
+
+fn opt_text_map<'de, D: Deserializer<'de>>(
+    d: D,
+) -> Result<Option<BTreeMap<String, String>>, D::Error> {
+    let map = Option::<BTreeMap<String, Text>>::deserialize(d)?;
+    Ok(map.map(|m| m.into_iter().map(|(k, t)| (k, t.0)).collect()))
+}
+
+/// Reads a string or an object; the object's own errors (an unknown field) come through as they
+/// are, which an untagged enum would hide.
+fn text_or<'de, D: Deserializer<'de>, T: DeserializeOwned>(
+    d: D,
+) -> Result<std::result::Result<String, T>, D::Error> {
+    let v = Value::deserialize(d)?;
+    if v.is_object() {
+        serde_json::from_value(v)
+            .map(Err)
+            .map_err(de::Error::custom)
+    } else {
+        text(v).map(Ok).map_err(de::Error::custom)
+    }
+}
+
+impl<'de> Deserialize<'de> for KitEntry {
+    fn deserialize<D: Deserializer<'de>>(d: D) -> Result<Self, D::Error> {
+        Ok(match text_or(d)? {
+            Ok(s) => KitEntry::Source(s),
+            Err(p) => KitEntry::Pinned(p),
+        })
+    }
+}
+
+impl<'de> Deserialize<'de> for Workspace {
+    fn deserialize<D: Deserializer<'de>>(d: D) -> Result<Self, D::Error> {
+        Ok(match text_or(d)? {
+            Ok(s) => Workspace::Path(s),
+            Err(o) => Workspace::Object(o),
+        })
+    }
+}
+
+/// YAML 1.2 (as sbx's Go parser): only `true` and `false` are booleans; `yes`, `on` are text.
+fn parse_yaml(text: &str) -> std::result::Result<Value, serde_saphyr::Error> {
+    serde_saphyr::from_str_with_options(text, serde_saphyr::options! { strict_booleans: true })
+}
+
 pub fn read(path: &Path) -> Result<RawFile> {
     let path = std::path::absolute(path)?;
     let dir = path.parent().map(Path::to_path_buf).unwrap_or_default();
     let text =
         std::fs::read_to_string(&path).with_context(|| format!("reading {}", path.display()))?;
     let (tokenized, refs) = tokenize(&text);
-    let mut value: Value = serde_saphyr::from_str(&tokenized)
-        .map_err(|e| anyhow::anyhow!("{}: {e}", path.display()))?;
-    if value.is_null() {
-        value = Value::Object(Map::new());
-    }
-    let file = RawFile {
+    let mut file = RawFile {
         path,
         dir,
-        value,
+        value: Value::Null,
         refs,
+    };
+    file.value = match parse_yaml(&tokenized) {
+        Ok(Value::Null) => Value::Object(Map::new()),
+        Ok(v) => v,
+        // The message may quote the text; show references as written, not as tokens.
+        Err(e) => bail!("{}: {}", file.name(), file.restore(&e.to_string())),
     };
     file.check_placement()?;
     Ok(file)
@@ -304,7 +444,7 @@ impl RawFile {
             && let Some(r) = index(&c).and_then(|n| self.refs.get(n)).filter(|r| r.alone)
         {
             let text = self.text_of(r, args, project_dir)?;
-            return Ok(match serde_saphyr::from_str::<Value>(&text) {
+            return Ok(match parse_yaml(&text) {
                 Ok(v) if v.is_number() || v.is_boolean() => v,
                 _ => Value::String(text),
             });
@@ -368,14 +508,22 @@ impl RawFile {
             return Ok(());
         };
         let msg = e.to_string();
+        let path = culprit(value);
         if let Some(field) = msg
             .strip_prefix("unknown field `")
             .and_then(|r| r.split('`').next())
         {
-            bail!("{}: unknown field \"{field}\"", self.name());
+            // The path runs through the field itself; name the object that has it.
+            let at = path.as_deref().unwrap_or_default();
+            match at.rfind(&format!(".{field}")) {
+                Some(i) => bail!("{}: {}: unknown field \"{field}\"", self.name(), &at[..i]),
+                None => bail!("{}: unknown field \"{field}\"", self.name()),
+            }
         }
-        match culprit(value) {
-            Some(path) => bail!("{}: {path}: {msg}", self.name()),
+        match path {
+            // serde quotes the offending value, which may be a secret.
+            Some(p) if p.starts_with("secrets") => bail!("{}: {p}: invalid value", self.name()),
+            Some(p) => bail!("{}: {p}: {msg}", self.name()),
             None => bail!("{}: {msg}", self.name()),
         }
     }
@@ -624,5 +772,120 @@ mod tests {
         let a = f.args().unwrap();
         assert_eq!(a["n"].default.as_deref(), Some("4"));
         assert_eq!(a["n"].r#enum.as_ref().unwrap().len(), 2);
+    }
+
+    fn typed(yaml: &str, a: &[(&str, &str)]) -> Result<EnvFile> {
+        Ok(serde_json::from_value(expand(yaml, a)?)?)
+    }
+
+    #[test]
+    fn yaml_numbers_and_bools_fill_string_fields() {
+        let f = typed(
+            "schemaVersion: 1\nenv:\n  PORT: 3000\n  DEBUG: on\n  OFF: no\n  T: true\n  F: 1.5\nsandboxOptions:\n  memory: 4096\n",
+            &[],
+        )
+        .unwrap();
+        assert_eq!(f.schema_version.as_deref(), Some("1"));
+        let env = f.env.unwrap();
+        assert_eq!(env["PORT"], "3000");
+        assert_eq!(env["DEBUG"], "on");
+        assert_eq!(env["OFF"], "no");
+        assert_eq!(env["T"], "true");
+        assert_eq!(env["F"], "1.5");
+        assert_eq!(f.sandbox_options.unwrap().memory.as_deref(), Some("4096"));
+    }
+
+    #[test]
+    fn a_numeric_argument_default_is_text() {
+        let (_d, f) = load("args:\n  n:\n    default: 4\n    enum: [4, 8]\n");
+        let a = f.args().unwrap();
+        assert_eq!(a["n"].default.as_deref(), Some("4"));
+        assert_eq!(
+            a["n"].r#enum.as_deref(),
+            Some(&["4".to_string(), "8".to_string()][..])
+        );
+    }
+
+    #[test]
+    fn a_numeric_reference_is_text_in_env_and_a_number_in_cpus() {
+        let f = typed(
+            "env:\n  PORT: ${{ env.args.port }}\nsandboxOptions:\n  cpus: ${{ env.args.n }}\n",
+            &[("port", "8080"), ("n", "4")],
+        )
+        .unwrap();
+        assert_eq!(f.env.unwrap()["PORT"], "8080");
+        assert_eq!(f.sandbox_options.unwrap().cpus, Some(4));
+    }
+
+    #[test]
+    fn a_yes_argument_stays_text() {
+        let f = typed("env:\n  X: ${{ env.args.b }}\n", &[("b", "yes")]).unwrap();
+        assert_eq!(f.env.unwrap()["X"], "yes");
+    }
+
+    #[test]
+    fn a_numeric_secret_value_is_text() {
+        let f = typed("secrets:\n  github:\n    value: 123456789\n", &[]).unwrap();
+        assert_eq!(
+            f.secrets.unwrap()["github"].value.as_deref(),
+            Some("123456789")
+        );
+    }
+
+    #[test]
+    fn debug_of_a_secret_hides_its_value() {
+        let f = typed("secrets:\n  github:\n    value: ghp_dummy\n", &[]).unwrap();
+        let shown = format!("{f:?}");
+        assert!(!shown.contains("ghp_dummy"), "{shown}");
+        assert!(shown.contains("<redacted>"), "{shown}");
+    }
+
+    #[test]
+    fn secret_type_errors_do_not_show_the_value() {
+        for y in [
+            "secrets:\n  github:\n    snapshot: 123456789\n",
+            "secrets:\n  github:\n    snapshot: \"123456789\"\n",
+            "secrets:\n  github:\n    value: [123456789]\n",
+        ] {
+            let e = expand(y, &[]).unwrap_err().to_string();
+            assert!(!e.contains("123456789"), "{e}");
+            assert!(e.contains("secrets.github"), "{e}");
+        }
+    }
+
+    #[test]
+    fn null_in_a_string_map_is_an_error() {
+        let e = expand("env:\n  X: ~\n", &[]).unwrap_err().to_string();
+        assert!(e.contains("env.X: "), "{e}");
+    }
+
+    #[test]
+    fn unknown_workspace_and_kit_fields_are_refused_with_their_path() {
+        let e = expand("workspace:\n  path: .\n  clne: true\n", &[])
+            .unwrap_err()
+            .to_string();
+        assert!(e.ends_with(": workspace: unknown field \"clne\""), "{e}");
+        let e = expand("kits:\n  - source: org/k\n    arg: {a: 1}\n", &[])
+            .unwrap_err()
+            .to_string();
+        assert!(e.ends_with(": kits[0]: unknown field \"arg\""), "{e}");
+    }
+
+    #[test]
+    fn kit_args_may_be_numbers() {
+        let f = typed("kits:\n  - source: org/k\n    args: {n: 3}\n", &[]).unwrap();
+        let KitEntry::Pinned(p) = &f.kits.unwrap()[0] else {
+            panic!("pinned")
+        };
+        assert_eq!(p.args.as_ref().unwrap()["n"], "3");
+    }
+
+    #[test]
+    fn syntax_errors_show_references_as_written() {
+        let d = tempfile::tempdir().unwrap();
+        let p = d.path().join("sbxenv.yaml");
+        std::fs::write(&p, "env:\n  X: ${{ env.args.a }}\n   bad: [\n").unwrap();
+        let e = read(&p).err().unwrap().to_string();
+        assert!(!e.contains("__sbxenv_"), "{e}");
     }
 }

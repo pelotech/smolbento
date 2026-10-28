@@ -4,7 +4,7 @@ use std::path::{Path, PathBuf};
 
 use anyhow::{Context, Result, bail};
 
-use super::file::{EnvFile, KitEntry, Port, SecretDecl, Workspace};
+use super::file::{EnvFile, KitEntry, PinnedKit, Port, SecretDecl, Workspace};
 use super::load::Loaded;
 use crate::agents;
 use crate::cli::SandboxOpts;
@@ -89,10 +89,10 @@ pub fn spec(loaded: &Loaded, overrides: &Overrides, secrets: &SecretsFile) -> Re
         .iter()
         .flatten()
         .filter_map(|k| match k {
-            KitEntry::Pinned {
+            KitEntry::Pinned(PinnedKit {
                 source,
                 args: Some(args),
-            } => Some((
+            }) => Some((
                 source.clone(),
                 args.iter().map(|(k, v)| format!("{k}={v}")).collect(),
             )),
@@ -315,13 +315,13 @@ fn section(
 fn workspace(f: &EnvFile) -> Option<(&str, Option<bool>)> {
     match f.workspace.as_ref()? {
         Workspace::Path(p) => Some((p, None)),
-        Workspace::Object { path, clone } => Some((path, *clone)),
+        Workspace::Object(o) => Some((&o.path, o.clone)),
     }
 }
 
 fn source(k: &KitEntry) -> &str {
     match k {
-        KitEntry::Source(s) | KitEntry::Pinned { source: s, .. } => s,
+        KitEntry::Source(s) | KitEntry::Pinned(PinnedKit { source: s, .. }) => s,
     }
 }
 

@@ -222,12 +222,14 @@ fn arg_values(
     Ok(values)
 }
 
-/// Objects merge by key, arrays concatenate, anything else replaces.
+/// Objects merge by key, arrays concatenate, anything else replaces; a null (an empty `key:`)
+/// leaves the base value.
 fn merge(base: &mut Value, over: Value) {
     match (base, over) {
         (Value::Object(a), Value::Object(b)) => {
             for (k, v) in b {
                 match a.get_mut(&k) {
+                    Some(_) if v.is_null() => {}
                     Some(slot) => merge(slot, v),
                     None => {
                         a.insert(k, v);
@@ -359,6 +361,19 @@ mod tests {
             files: vec![],
             flags: f.iter().map(|s| s.to_string()).collect(),
         }
+    }
+
+    #[test]
+    fn a_null_override_keeps_the_base_value() {
+        let t = T::new();
+        t.write(
+            "proj/a.yaml",
+            &format!("{MIN}env:\n  X: \"1\"\nsandboxOptions:\n  memory: 8g\n"),
+        );
+        t.write("proj/b.yaml", "env:\nsandboxOptions:\n  memory:\n");
+        let f = t.load(&["a.yaml", "b.yaml"], &none()).unwrap().file;
+        assert_eq!(f.env.unwrap()["X"], "1");
+        assert_eq!(f.sandbox_options.unwrap().memory.as_deref(), Some("8g"));
     }
 
     #[test]
@@ -675,11 +690,11 @@ mod tests {
             .unwrap()
             .file
             .workspace;
-        let Some(Workspace::Object { path, clone }) = w else {
+        let Some(Workspace::Object(o)) = w else {
             panic!("not an object")
         };
-        assert!(path.ends_with("/y"));
-        assert_eq!(clone, Some(true));
+        assert!(o.path.ends_with("/y"));
+        assert_eq!(o.clone, Some(true));
     }
 
     #[test]
