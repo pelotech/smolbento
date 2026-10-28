@@ -492,6 +492,36 @@ Good to know:
 - Blocked requests come from smolvm's egress log. `policy approval` lists the hosts with no rule
   yet; the host is the approval id.
 
+### Host services
+
+A sandbox reaches your machine's localhost as `host.docker.internal`, as in sbx, once a
+`localhost` rule allows it:
+
+```sh
+sbt policy allow network --sandbox claude-myrepo localhost   # before the sandbox is created
+sbt run --name claude-myrepo claude .
+# inside: curl http://host.docker.internal:11434/
+sbt policy rm network --sandbox claude-myrepo --resource localhost   # closes it, live
+sbt policy allow network --sandbox claude-myrepo localhost           # opens it again, live
+```
+
+- **The rule must apply when the sandbox is created.** Only your own `localhost` rules (global, or
+  `--sandbox NAME` for that name) give a sandbox host access, and only at create; it's recorded on
+  the sandbox. For it, later `localhost` rules open and close the host live. Any other sandbox is
+  created with your machine's loopback blocked for its life: a rule added afterwards prints
+  `note: NAME were created without host access; recreate them to use it`.
+- **Every port opens.** smolvm can't open a single host port yet, so `localhost:11434` opens every
+  port on your machine's `127.0.0.1` to those sandboxes, and `policy allow` warns
+  (`warning: smolvm can't open a single host port yet; …`). See
+  [Security](SECURITY.md#host-services-localhost-rules).
+- Kit rules never grant host access, and the `_builder` sandbox never has it.
+- An `allow-all` sandbox created with host access keeps it until it's recreated; `policy rm`
+  of its rule says so.
+- Each start adds `100.96.0.1 host.docker.internal` to the sandbox's `/etc/hosts`; an image
+  without a writable `/etc/hosts` gets a warning and no name. `127.0.0.1`, `::1` and
+  `host.docker.internal` rules aren't host-services rules (as in sbx, the rule must say
+  `localhost`). A blocked request gets connection refused, not sbx's `403 Approval required`.
+
 ## Secrets
 
 Agents never see your API keys: inside the sandbox the variable holds a placeholder, and smolvm
