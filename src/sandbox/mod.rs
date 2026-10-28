@@ -640,7 +640,7 @@ pub fn apply_kit_steps<R: Runner>(
     let mut told: Vec<&str> = Vec::new();
     for step in &steps.install {
         if let Some(kit) = step.kit.as_deref()
-            && told.last() != Some(&kit)
+            && !told.contains(&kit)
         {
             on(Event::Install(kit));
             told.push(kit);
@@ -1637,6 +1637,14 @@ echo "$g""#,
                 ..hook(0, None, "echo git-identity")
             },
         );
+        // A hook of another kit between k's: k still gets one step.
+        kit.steps.install.insert(
+            2,
+            InstallStep {
+                kit: Some("j".into()),
+                ..hook(0, None, "echo j")
+            },
+        );
         let mut events = Vec::new();
         create(&vm, &request(), &plan, |_| Ok(restricted(&[])), &mut |e| {
             events.push(format!("{e:?}"))
@@ -1650,6 +1658,7 @@ echo "$g""#,
                 "Pull(Syncing)",
                 "Setup",
                 "Install(\"k\")",
+                "Install(\"j\")",
                 "Install(\"docker\")"
             ]
         );

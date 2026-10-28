@@ -343,10 +343,21 @@ pub fn create<R: Runner>(
     deny_network: &[String],
     kits: Option<&Plan>,
 ) -> Result<Sandbox> {
+    // Before prepare_create, which may prompt and adds the --deny-network and kit rules.
+    check_free(ctx, &req.name)?;
     create_with(ctx, req, deny_network, kits, None, &mut |_| {})
 }
 
+/// Fails when a sandbox named `name` exists.
+pub fn check_free<R: Runner>(ctx: &Ctx<R>, name: &str) -> Result<()> {
+    if sandbox::find(&ctx.vm, name)?.is_some() {
+        bail!("sandbox '{name}' already exists");
+    }
+    Ok(())
+}
+
 /// `create`, reporting its `IMAGE` and `SETUP` steps to `p`; a failure fails the running step.
+/// The caller has run `check_free`, before printing anything.
 pub fn create_reported<R: Runner>(
     ctx: &Ctx<R>,
     req: &mut CreateRequest,
@@ -360,8 +371,8 @@ pub fn create_reported<R: Runner>(
     created
 }
 
-/// `create`, or with `prepared` steps whose rules are already in the policy (tests); `on` hears
-/// what the start and the kit steps are doing.
+/// `create` once the name is known to be free, or with `prepared` steps whose rules are already
+/// in the policy (tests); `on` hears what the start and the kit steps are doing.
 fn create_with<R: Runner>(
     ctx: &Ctx<R>,
     req: &mut CreateRequest,
@@ -370,10 +381,6 @@ fn create_with<R: Runner>(
     prepared: Option<sandbox::KitFirstStart>,
     on: &mut dyn FnMut(sandbox::Event),
 ) -> Result<Sandbox> {
-    // Before prepare_create, which may prompt and adds the --deny-network and kit rules.
-    if sandbox::find(&ctx.vm, &req.name)?.is_some() {
-        bail!("sandbox '{}' already exists", req.name);
-    }
     // The repo a `--clone` copies, at its top.
     let repo = req.clone.as_ref().map(|c| c.top.clone());
     if let Some(repo) = &repo {
@@ -1036,7 +1043,9 @@ mod tests {
             name: "s1".into(),
             ..Default::default()
         };
-        let result = create_with(&t.ctx, &mut req, deny_network, None, Some(kit), &mut |_| {});
+        let result = check_free(&t.ctx, "s1").and_then(|()| {
+            create_with(&t.ctx, &mut req, deny_network, None, Some(kit), &mut |_| {})
+        });
         (t, result, ids)
     }
 
@@ -1219,6 +1228,7 @@ mod tests {
             name: "s1".into(),
             ..Default::default()
         };
+        check_free(&t.ctx, "s1").unwrap();
         create_with(&t.ctx, &mut req, &[], Some(&plan), None, &mut |_| {}).unwrap();
         let lines = t.ctx.vm.runner().call_lines();
         let create = lines

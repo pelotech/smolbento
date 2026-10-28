@@ -176,10 +176,7 @@ pub(crate) fn kit_plan<R: Runner>(
     opts: &SandboxOpts,
     p: &Progress,
 ) -> Result<Plan> {
-    // The docker kit a Docker image gets on its own isn't worth a section.
-    if matches!(workload, Workload::Ref(_)) || !opts.kit.is_empty() {
-        p.section("KITS");
-    }
+    let mut kits = KitsSection::new(p);
     let workload_source = match &workload {
         Workload::Ref(target) => Some(target.clone()),
         Workload::Preset(_) => None,
@@ -187,7 +184,7 @@ pub(crate) fn kit_plan<R: Runner>(
     let workload = match workload {
         Workload::Preset(kit) => *kit,
         Workload::Ref(target) => {
-            let mut kit = load_step(ctx, p, &target)?;
+            let mut kit = kits.load(ctx, &target)?;
             if kit.kind == Kind::Mixin {
                 // sbx's report, then how to use the mixin.
                 bail!(
@@ -214,7 +211,7 @@ pub(crate) fn kit_plan<R: Runner>(
     let mut mixins = opts
         .kit
         .iter()
-        .map(|r| load_step(ctx, p, r))
+        .map(|r| kits.load(ctx, r))
         .collect::<Result<Vec<_>>>()?;
     for (source, pins) in &opts.kit_pins {
         let kit = match opts.kit.iter().position(|k| k == source) {
@@ -243,32 +240,65 @@ pub(crate) fn kit_plan<R: Runner>(
     Ok(plan)
 }
 
-/// Loads kit `reference` as a step: `○ REF — pulling…` or `building…`, then `✓ REF — ready`, or
-/// `cached` when the kit cache already had it all; a kit with nothing to fetch is just
-/// `✓ REF — cached`.
-fn load_step<R: Runner>(ctx: &Ctx<R>, p: &Progress, reference: &str) -> Result<Kit> {
-    let mut step = None;
-    let loaded = load::load_noting(ctx, reference, &mut |fetch| {
-        let doing = match fetch {
-            load::Fetch::Pull => "pulling",
-            load::Fetch::Build => "building",
-        };
-        step = Some(p.step(reference, doing));
-    });
-    match (loaded, step) {
-        (Ok((kit, cached)), step) => {
-            let word = if cached { "cached" } else { "ready" };
-            match step {
-                Some(s) => s.done(word),
-                None => p.done(reference, word),
+/// The `KITS` section, shown only once a kit is pulled or built: kits with nothing to fetch
+/// (shipped, v2 or Smolfile) wait for it and are listed `✓ REF — cached` when it opens.
+struct KitsSection<'a> {
+    p: &'a Progress,
+    open: bool,
+    /// Kits loaded without a fetch before the section opened.
+    waiting: Vec<String>,
+}
+
+impl<'a> KitsSection<'a> {
+    fn new(p: &'a Progress) -> Self {
+        Self {
+            p,
+            open: false,
+            waiting: Vec::new(),
+        }
+    }
+
+    /// Loads kit `reference`: a pull or build is a step, `○ REF — pulling…` or `building…`,
+    /// then `✓ REF — ready`, or `cached` when the kit cache already had it all.
+    fn load<R: Runner>(&mut self, ctx: &Ctx<R>, reference: &str) -> Result<Kit> {
+        let mut step = None;
+        let loaded = load::load_noting(ctx, reference, &mut |fetch| {
+            self.open_section();
+            let doing = match fetch {
+                load::Fetch::Pull => "pulling",
+                load::Fetch::Build => "building",
+            };
+            step = Some(self.p.step(reference, doing));
+        });
+        match (loaded, step) {
+            (Ok((kit, cached)), Some(s)) => {
+                s.done(if cached { "cached" } else { "ready" });
+                Ok(kit)
             }
-            Ok(kit)
+            (Ok((kit, _)), None) => {
+                if self.open {
+                    self.p.done(reference, "cached");
+                } else {
+                    self.waiting.push(reference.to_string());
+                }
+                Ok(kit)
+            }
+            (Err(e), Some(s)) => {
+                s.fail();
+                Err(e)
+            }
+            (Err(e), None) => Err(e),
         }
-        (Err(e), Some(s)) => {
-            s.fail();
-            Err(e)
+    }
+
+    fn open_section(&mut self) {
+        if !self.open {
+            self.open = true;
+            self.p.section("KITS");
+            for reference in self.waiting.drain(..) {
+                self.p.done(&reference, "cached");
+            }
         }
-        (Err(e), None) => Err(e),
     }
 }
 
@@ -318,7 +348,8 @@ pub fn create<R: Runner>(ctx: &mut Ctx<R>, a: &CreateArgs) -> Result<i32> {
 }
 
 /// Creates the sandbox `kit_target` described, reporting it to `p`: the `SANDBOX` section, then
-/// the `KITS`, `IMAGE` and `SETUP` steps. The caller prints the finish line.
+/// the `KITS`, `IMAGE` and `SETUP` steps. The caller prints the finish line. A taken name fails
+/// before anything is printed or any kit is fetched.
 pub(crate) fn create_reported<R: Runner>(
     ctx: &Ctx<R>,
     p: &Progress,
@@ -326,11 +357,12 @@ pub(crate) fn create_reported<R: Runner>(
     workload: Option<Workload>,
     opts: &SandboxOpts,
 ) -> Result<Sandbox> {
+    resolve_clone(req, opts)?;
+    plan::check_free(ctx, &req.name)?;
     report_sandbox(p, req, workload.as_ref(), opts.clone);
     let kits = workload
         .map(|w| kit_plan(ctx, req, w, opts, p))
         .transpose()?;
-    resolve_clone(req, opts)?;
     plan::create_reported(ctx, req, &opts.deny_network, kits.as_ref(), p)
 }
 
@@ -1322,6 +1354,46 @@ SETUP
     }
 
     #[test]
+    fn create_of_a_taken_name_fails_before_printing_or_fetching_kits() {
+        let mut t = kit_env();
+        t.ctx.vm.runner().ok(
+            &["machine", "status"],
+            &json("sbx-shell-proj", "stopped", "shell-proj"),
+        );
+        v3_kit(
+            &t,
+            "kit",
+            r#"{"schemaVersion":"3","kind":"mixin","name":"m"}"#,
+            &[],
+        );
+        let err = sbt(&mut t.ctx, &["create", "shell", ".", "--kit", "./kit"]).unwrap_err();
+        assert_eq!(err.to_string(), "sandbox 'shell-proj' already exists");
+        assert_eq!(t.stdout(), "");
+        assert_eq!(
+            t.ctx.vm.runner().call_lines(),
+            ["--version", "machine status -n sbx-shell-proj --json"]
+        );
+    }
+
+    #[test]
+    fn kits_without_a_fetch_wait_for_the_kits_section() {
+        let mut t = host_mount_env(SHARED);
+        let v2 = fixture("tool-mixin");
+        sbt(
+            &mut t.ctx,
+            &["create", "shell", ".", "--kit", &v2, "--kit", "./hm"],
+        )
+        .unwrap();
+        let out = t.stdout();
+        assert!(
+            out.contains(&format!(
+                "\nKITS\n  ✓ {v2} — cached\n  ○ ./hm — building…\n  ✓ ./hm — ready\n\nIMAGE\n"
+            )),
+            "{out}"
+        );
+    }
+
+    #[test]
     fn create_no_progress_prints_nothing() {
         let mut t = test_env(&[]);
         creatable(&t);
@@ -1803,13 +1875,24 @@ SETUP
             .expect("a machine create")
     }
 
+    /// No machine touched: only the lookup that checks the name is free.
     fn no_machine_calls(t: &TestEnv) -> bool {
         !t.ctx
             .vm
             .runner()
             .call_lines()
             .iter()
-            .any(|l| l.starts_with("machine "))
+            .any(|l| l.starts_with("machine ") && !l.starts_with("machine status"))
+    }
+
+    /// A kit env whose sandbox names are all free.
+    fn kit_env_free() -> TestEnv {
+        let t = kit_env();
+        t.ctx
+            .vm
+            .runner()
+            .fail(&["machine", "status"], "NOT_FOUND", "vm not found");
+        t
     }
 
     #[test]
@@ -1890,10 +1973,7 @@ SETUP
             out.contains(&format!("  Image:      from {kit}\n")),
             "{out}"
         );
-        assert!(
-            out.contains(&format!("\nKITS\n  ✓ {kit} — cached\n")),
-            "{out}"
-        );
+        assert!(!out.contains("KITS"), "nothing pulled or built: {out}");
         assert!(
             out.contains("  ○ wl — installing…\n  ✓ wl — installed\n"),
             "{out}"
@@ -1948,8 +2028,8 @@ SETUP
             .position(|l| l.contains("machine exec") && l.contains("echo installed"))
             .expect("the install hook runs");
         assert!(start < install, "{lines:?}");
-        // The progress, as sbx prints it without a terminal: the kit (a v2 directory needs no
-        // pull or build), then the install hooks' kit before the docker kit, which has none.
+        // The progress, as sbx prints it without a terminal: no KITS (a v2 directory needs no
+        // pull or build), and the install hooks' kit before the docker kit, which has none.
         let ws = t.ctx.cwd.display().to_string();
         assert_eq!(
             t.stdout().replace(&ws, "WS").replace(&kit, "KIT"),
@@ -1961,9 +2041,6 @@ SANDBOX
   Image:      docker/sandbox-templates:shell-docker-0.10.0
   CPU:        1
   Memory:     1 GiB
-
-KITS
-  ✓ KIT — cached
 
 IMAGE
   ○ image — pulling…
@@ -2153,7 +2230,7 @@ SETUP
 
     #[test]
     fn a_mixin_as_the_target_fails_before_smolvm() {
-        let mut t = kit_env();
+        let mut t = kit_env_free();
         let kit = fixture("tool-mixin");
         let err = sbt(&mut t.ctx, &["create", &kit]).unwrap_err().to_string();
         assert_eq!(
@@ -2193,7 +2270,7 @@ SETUP
                 "ZIP kits are not supported",
             ),
         ] {
-            let mut t = kit_env();
+            let mut t = kit_env_free();
             let err = format!("{:#}", sbt(&mut t.ctx, &args).unwrap_err());
             assert!(err.contains(want), "{args:?}: {err}");
             assert!(no_machine_calls(&t), "{args:?}");
