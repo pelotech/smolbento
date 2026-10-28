@@ -83,7 +83,7 @@ access, so load only kits you trust.
 - **Local kit builds** run in the `_builder` sandbox, a VM under your global network policy, not on
   your machine's Docker. The builder never gets your secrets.
 - **Registry credentials** (`sbt secret set --registry`) stay on your machine: the login is sent
-  only over HTTPS to the registry, `auth.docker.io` for Docker Hub, or the exact
+  only over HTTPS (or plain HTTP to a registry on localhost) to the registry, `auth.docker.io` for Docker Hub, or the exact
   `--registry-auth-endpoint`. For a local build, smolbento trades it on the host for a pull token
   scoped to the repositories the kit's descriptor names, valid for a few minutes, and smolvm sets
   it as the `Authorization` header on the builder's requests to that registry; the guest sees only

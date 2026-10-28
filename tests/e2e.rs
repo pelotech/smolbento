@@ -1333,6 +1333,8 @@ fn local_kit_builds_from_a_registry_that_needs_a_login() {
         return;
     }
     let token = std::fs::read(&token_file).unwrap();
+    // This recreates your real `_builder` (a global smolvm machine); your next real build
+    // recreates it again.
     let e = E2e::new("dhi");
     let _builder = BuilderGuard::new();
 
