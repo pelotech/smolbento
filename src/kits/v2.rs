@@ -557,8 +557,8 @@ fn lifecycle(
     kit: &str,
     warnings: &mut Vec<String>,
 ) -> Result<Option<Lifecycle>> {
-    // v2 defaults: install runs as root, startup as the agent user. Both get the full container
-    // environment, as in sbx.
+    // v2 defaults: install runs as root, startup as the agent user (sbx's uid 1000; here `agent`
+    // has the host's uid, so it's named). Both get the full container environment, as in sbx.
     let install = s.install.into_iter().map(|h| Hook {
         command: HookCmd::Shell(h.command),
         user: Some(h.user.unwrap_or_else(|| "0".into())),
@@ -568,7 +568,7 @@ fn lifecycle(
     });
     let startup = s.startup.into_iter().map(|h| Hook {
         command: HookCmd::Argv(h.command),
-        user: Some(h.user.unwrap_or_else(|| "1000".into())),
+        user: Some(h.user.unwrap_or_else(|| "agent".into())),
         env: vec![],
         background: h.background,
         clean_env: false,

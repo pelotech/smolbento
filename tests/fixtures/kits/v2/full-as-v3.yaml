@@ -55,7 +55,7 @@ capabilities:
           user: "1000"
       startup:
         - command: [tool, serve]
-          user: "1000"
+          user: agent
           background: true
         - command: [tool, warm]
           user: "0"

@@ -93,16 +93,38 @@ pub fn hook_script(h: &Hook) -> String {
 }
 
 /// `script` as `user` from a root shell. `runuser` where the image has it (util-linux), else `su`.
+/// A numeric user runs as the account with that uid (`agent` has moved off uid 1000 to the host's
+/// uid, so a uid alone can't name it); a uid with no account runs through `setpriv`, if present.
 pub fn as_user(user: Option<&str>, script: &str) -> String {
+    as_user_in(user, script, "/etc/passwd")
+}
+
+/// `as_user` against `passwd` (tests use a temp file).
+fn as_user_in(user: Option<&str>, script: &str, passwd: &str) -> String {
+    let q = sh_quote(script);
+    let by_name = |u: &str| {
+        format!(
+            "if command -v runuser >/dev/null 2>&1; then runuser -u {u} -- sh -c {q}; \
+             else su -s /bin/sh {u} -c {q}; fi"
+        )
+    };
     match user {
         None | Some("root") | Some("0") => script.to_string(),
-        Some(u) => {
-            let (u, q) = (sh_quote(u), sh_quote(script));
+        Some(u) if !u.is_empty() && u.bytes().all(|b| b.is_ascii_digit()) => {
+            let missing = sh_quote(&format!(
+                "smolbento: no account has uid {u}, and no setpriv"
+            ));
             format!(
-                "if command -v runuser >/dev/null 2>&1; then runuser -u {u} -- sh -c {q}; \
-                 else su -s /bin/sh {u} -c {q}; fi"
+                "if _sbu=$(awk -F: -v u={u} '$3 == u {{ print $1; exit }}' {passwd}) \
+                 && [ -n \"$_sbu\" ]; then {run}; \
+                 elif command -v setpriv >/dev/null 2>&1; then \
+                 setpriv --reuid {u} --regid {u} --clear-groups sh -c {q}; \
+                 else echo {missing} >&2; false; fi",
+                passwd = sh_quote(passwd),
+                run = by_name("\"$_sbu\""),
             )
         }
+        Some(u) => by_name(&sh_quote(u)),
     }
 }
 
@@ -658,6 +680,101 @@ mod tests {
         assert!(s.contains("[ -d '/etc/kit' ] || mkdir '/etc/kit'\n"), "{s}");
         assert!(s.contains("chown \"$o\" '/etc/kit/conf'"), "{s}");
         assert!(!s.contains("chown \"$o\" '/etc/kit'\n"), "{s}");
+    }
+
+    /// A temp dir holding `passwd` with `acct` at uid 4321, and a `bin` of fake `runuser` and
+    /// `setpriv` that report how they were called and run the script.
+    fn fake_guest() -> tempfile::TempDir {
+        let d = tempfile::tempdir().unwrap();
+        std::fs::write(
+            d.path().join("passwd"),
+            "root:x:0:0::/root:/bin/sh\nacct:x:4321:4321::/home/acct:/bin/sh\n",
+        )
+        .unwrap();
+        let bin = d.path().join("bin");
+        std::fs::create_dir(&bin).unwrap();
+        let fake = |name: &str, body: &str| {
+            use std::os::unix::fs::PermissionsExt;
+            let p = bin.join(name);
+            std::fs::write(&p, format!("#!/bin/sh\n{body}")).unwrap();
+            std::fs::set_permissions(&p, std::fs::Permissions::from_mode(0o755)).unwrap();
+        };
+        // `runuser -u NAME -- sh -c S`; `setpriv --reuid U --regid G --clear-groups sh -c S`.
+        fake("runuser", "echo \"runuser $2\"; shift 3; exec \"$@\"\n");
+        fake(
+            "setpriv",
+            "echo \"setpriv $2 $4 $5\"; shift 5; exec \"$@\"\n",
+        );
+        d
+    }
+
+    /// `as_user_in` against the fake guest, with `path` as `PATH`.
+    fn run_as(d: &tempfile::TempDir, user: &str, path: &str) -> std::process::Output {
+        let passwd = d.path().join("passwd").display().to_string();
+        Command::new("/bin/sh")
+            .arg("-c")
+            .arg(as_user_in(Some(user), "echo ran", &passwd))
+            .env("PATH", path)
+            .output()
+            .unwrap()
+    }
+
+    fn fake_path(d: &tempfile::TempDir) -> String {
+        format!(
+            "{}:{}",
+            d.path().join("bin").display(),
+            std::env::var("PATH").unwrap()
+        )
+    }
+
+    #[test]
+    fn a_numeric_user_runs_as_its_account() {
+        let d = fake_guest();
+        let out = run_as(&d, "4321", &fake_path(&d));
+        assert!(out.status.success(), "{out:?}");
+        assert_eq!(String::from_utf8_lossy(&out.stdout), "runuser acct\nran\n");
+    }
+
+    #[test]
+    fn a_named_user_is_passed_by_name() {
+        let d = fake_guest();
+        let out = run_as(&d, "agent", &fake_path(&d));
+        assert_eq!(String::from_utf8_lossy(&out.stdout), "runuser agent\nran\n");
+    }
+
+    #[test]
+    fn a_uid_without_an_account_runs_through_setpriv() {
+        let d = fake_guest();
+        let out = run_as(&d, "777", &fake_path(&d));
+        assert!(out.status.success(), "{out:?}");
+        assert_eq!(
+            String::from_utf8_lossy(&out.stdout),
+            "setpriv 777 777 --clear-groups\nran\n"
+        );
+    }
+
+    #[test]
+    fn a_uid_without_an_account_or_setpriv_fails_clearly() {
+        let d = fake_guest();
+        // Only awk on the PATH.
+        let awk = String::from_utf8(sh("command -v awk").stdout).unwrap();
+        let only = d.path().join("only");
+        std::fs::create_dir(&only).unwrap();
+        std::os::unix::fs::symlink(awk.trim(), only.join("awk")).unwrap();
+        let out = run_as(&d, "777", &only.display().to_string());
+        assert!(!out.status.success());
+        assert!(out.stdout.is_empty(), "{out:?}");
+        assert_eq!(
+            String::from_utf8_lossy(&out.stderr),
+            "smolbento: no account has uid 777, and no setpriv\n"
+        );
+    }
+
+    #[test]
+    fn root_needs_no_switch() {
+        for u in ["root", "0"] {
+            assert_eq!(as_user(Some(u), "echo ran"), "echo ran");
+        }
     }
 
     #[test]
