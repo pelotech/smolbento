@@ -770,6 +770,7 @@ mod tests {
                 })
                 .collect(),
             custom: vec![],
+            registries: vec![],
         }
     }
     fn request() -> CreateRequest {

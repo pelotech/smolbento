@@ -1,27 +1,31 @@
 //! `sbt secret`: secret sources. Values go to the secret store, never to secrets.toml.
 
-use std::io::{BufRead, Write};
+use std::io::{BufRead, Read, Write};
 
 use anyhow::{Context, Result, bail};
 
 use super::{
-    Ctx, SecretCmd, SecretLsArgs, SecretRmArgs, SecretSource, Unsupported, confirm, table,
+    Ctx, SecretCmd, SecretLsArgs, SecretRmArgs, SecretSetArgs, SecretSource, Unsupported, confirm,
+    table,
 };
 use crate::policy::Policy;
 use crate::sandbox::{self, name};
-use crate::secrets::{CustomService, SecretEntry, SecretsFile, Source, scope_for, services};
+use crate::secrets::{
+    CustomService, RegistryEntry, SecretEntry, SecretsFile, Source, registry_account, scope_for,
+    services,
+};
 use crate::smolvm::Runner;
 
 pub fn run<R: Runner>(ctx: &mut Ctx<R>, cmd: SecretCmd) -> Result<i32> {
     let mut file = SecretsFile::load(&ctx.paths)?;
     match cmd {
+        SecretCmd::Set(a) if a.registry.is_some() => registry_set(ctx, &mut file, a)?,
         SecretCmd::Set(a) => {
+            if a.username.is_some() || a.password_stdin || a.registry_auth_endpoint.is_some() {
+                bail!("--username, --password-stdin and --registry-auth-endpoint need --registry");
+            }
             let unsupported = [
                 (a.oauth, "--oauth"),
-                (
-                    a.registry.is_some() || a.username.is_some() || a.password_stdin,
-                    "registry credentials",
-                ),
                 (a.refresh.is_some(), "--refresh"),
                 (a.all_sandboxes, "--all-sandboxes"),
                 (a.no_verify || a.show_error, "--no-verify/--show-error"),
@@ -89,7 +93,34 @@ fn ls<R: Runner>(ctx: &Ctx<R>, file: &SecretsFile, a: &SecretLsArgs) -> Result<(
         .as_deref()
         .and_then(|s| sandbox::find(&ctx.vm, s).ok().flatten())
         .and_then(|sb| sb.meta.fork_of);
-    write!(&ctx.out, "{}", render_ls(file, a, parent.as_deref()))?;
+    let mut text = render_ls(file, a, parent.as_deref());
+    if !a.quiet
+        && !a.global
+        && a.sandbox.is_none()
+        && a.service.is_none()
+        && !file.registries.is_empty()
+    {
+        if text == "No secrets\n" {
+            text.clear();
+        } else {
+            text.push('\n');
+        }
+        let mut rows = vec![
+            ["SCOPE", "TYPE", "NAME", "SECRET"]
+                .map(String::from)
+                .to_vec(),
+        ];
+        for r in &file.registries {
+            rows.push(vec![
+                "(host only)".into(),
+                "registry".into(),
+                r.host.clone(),
+                "(stored)".into(),
+            ]);
+        }
+        text.push_str(&table(rows));
+    }
+    write!(&ctx.out, "{text}")?;
     Ok(())
 }
 
@@ -358,20 +389,35 @@ fn forget<R: Runner>(ctx: &Ctx<R>, entries: &[SecretEntry]) -> Result<()> {
 }
 
 fn rm<R: Runner>(ctx: &Ctx<R>, file: &mut SecretsFile, a: SecretRmArgs) -> Result<()> {
-    if a.registry.is_some() || a.all_sandboxes {
-        return Err(Unsupported(
-            "registry and --all-sandboxes removal are not implemented yet".into(),
-        )
-        .into());
+    if a.registry.is_some() && (a.sandbox.is_some() || a.all_sandboxes) {
+        return Err(Unsupported(REGISTRY_SANDBOX.into()).into());
+    }
+    if let Some(host) = &a.registry {
+        let host = host.trim().to_ascii_lowercase();
+        let i = file
+            .registries
+            .iter()
+            .position(|r| r.host == host)
+            .with_context(|| format!("no {host} secret (host only)"))?;
+        file.registries.remove(i);
+        file.save(&ctx.paths)?;
+        ctx.store.delete(&registry_account(&host))?;
+        writeln!(&ctx.out, "Removed registry secret {host} ((host only))")?;
+        return Ok(());
+    }
+    if a.all_sandboxes {
+        return Err(Unsupported("--all-sandboxes removal is not implemented yet".into()).into());
     }
     if a.all {
         confirm(ctx, "Remove every secret?", a.force)?;
         let all = std::mem::take(&mut file.secrets);
+        let registries = std::mem::take(&mut file.registries);
         file.custom.clear();
         // Saved first: a failed save must not leave entries pointing at deleted values. A delete
         // that fails afterwards orphans a value, which is the lesser harm.
         file.save(&ctx.paths)?;
         forget(ctx, &all)?;
+        forget_registries(ctx, &registries)?;
     } else {
         let service = a.service.context("specify a service, or --all")?;
         let scope = scope_for(a.sandbox.as_deref());
@@ -402,13 +448,258 @@ pub fn forget_sandbox<R: Runner>(ctx: &Ctx<R>, name: &str, secrets: bool) -> Res
 pub fn forget_all<R: Runner>(ctx: &Ctx<R>) -> Result<()> {
     let file = SecretsFile::load(&ctx.paths)?;
     SecretsFile::default().save(&ctx.paths)?;
-    forget(ctx, &file.secrets)
+    forget(ctx, &file.secrets)?;
+    forget_registries(ctx, &file.registries)
+}
+
+fn forget_registries<R: Runner>(ctx: &Ctx<R>, entries: &[RegistryEntry]) -> Result<()> {
+    for r in entries {
+        ctx.store.delete(&registry_account(&r.host))?;
+    }
+    Ok(())
+}
+
+const REGISTRY_SANDBOX: &str = "registry credentials for sandboxes (--sandbox, --all-sandboxes) \
+     are not implemented yet; they're used for host pulls only";
+
+/// `secret set --registry`: the password or token comes from stdin.
+fn registry_set<R: Runner>(ctx: &Ctx<R>, file: &mut SecretsFile, a: SecretSetArgs) -> Result<()> {
+    if a.source.sandbox.is_some() || a.all_sandboxes {
+        return Err(Unsupported(REGISTRY_SANDBOX.into()).into());
+    }
+    if a.service.is_some()
+        || a.source.token.is_some()
+        || a.source.reference.is_some()
+        || a.source.command.is_some()
+    {
+        bail!(
+            "--registry takes its password or token from --password-stdin, not a service, -t, --ref or --command"
+        );
+    }
+    if !a.password_stdin {
+        bail!(
+            "--registry needs --password-stdin, e.g. `gh auth token | sbt secret set --registry \
+             ghcr.io --password-stdin`"
+        );
+    }
+    let host = a.registry.unwrap_or_default();
+    set_registry(
+        ctx,
+        file,
+        &host,
+        a.username,
+        a.registry_auth_endpoint,
+        std::io::stdin().lock(),
+    )
+}
+
+fn set_registry<R: Runner>(
+    ctx: &Ctx<R>,
+    file: &mut SecretsFile,
+    host: &str,
+    username: Option<String>,
+    auth_endpoint: Option<String>,
+    mut input: impl Read,
+) -> Result<()> {
+    let host = host.trim().to_ascii_lowercase();
+    if host.is_empty() || host.contains("://") || host.contains(['/', '@', ' ']) {
+        bail!("'{host}': use a bare registry host like ghcr.io (no scheme or path)");
+    }
+    let mut value = String::new();
+    input.read_to_string(&mut value)?;
+    let value = value.strip_suffix('\n').unwrap_or(&value);
+    let value = value.strip_suffix('\r').unwrap_or(value);
+    if value.is_empty() {
+        bail!("empty password or token on stdin");
+    }
+    let account = registry_account(&host);
+    // Kept in memory to put back if secrets.toml can't be saved.
+    let previous = ctx.store.get(&account)?;
+    ctx.store.set(&account, value)?;
+    let who = username.clone().unwrap_or_else(|| "(token-only)".into());
+    file.registries.retain(|r| r.host != host);
+    file.registries.push(RegistryEntry {
+        host: host.clone(),
+        username,
+        auth_endpoint,
+    });
+    if let Err(e) = file.save(&ctx.paths) {
+        let _ = match &previous {
+            Some(v) => ctx.store.set(&account, v),
+            None => ctx.store.delete(&account),
+        };
+        return Err(e);
+    }
+    writeln!(
+        &ctx.out,
+        "Saved registry secret {host} (host only, username {who})"
+    )?;
+    Ok(())
 }
 
 #[cfg(test)]
 mod tests {
     use super::super::testutil::*;
     use super::*;
+
+    fn set_registry_from(
+        t: &mut TestEnv,
+        host: &str,
+        user: Option<&str>,
+        input: &str,
+    ) -> Result<()> {
+        let mut file = SecretsFile::load(&t.ctx.paths)?;
+        set_registry(
+            &t.ctx,
+            &mut file,
+            host,
+            user.map(String::from),
+            None,
+            input.as_bytes(),
+        )
+    }
+
+    #[test]
+    fn registry_set_token_only_stores_value_and_entry() {
+        let mut t = test_env(&[]);
+        set_registry_from(&mut t, "Quay.IO", None, "tok\n").unwrap();
+        assert_eq!(
+            t.stdout(),
+            "Saved registry secret quay.io (host only, username (token-only))\n"
+        );
+        let f = SecretsFile::load(&t.ctx.paths).unwrap();
+        assert_eq!(f.registries.len(), 1);
+        assert_eq!(f.registries[0].host, "quay.io");
+        assert_eq!(f.registries[0].username, None);
+        assert_eq!(
+            crate::secrets::registry_secret(&*t.ctx.store, "quay.io")
+                .unwrap()
+                .as_deref(),
+            Some("tok")
+        );
+        let text = std::fs::read_to_string(t.ctx.paths.secrets_file()).unwrap();
+        assert!(
+            !text.contains("tok\n") && !text.contains("\"tok\""),
+            "{text}"
+        );
+    }
+
+    #[test]
+    fn registry_set_with_username_and_replace() {
+        let mut t = test_env(&[]);
+        set_registry_from(&mut t, "ghcr.io", Some("me"), "one").unwrap();
+        assert_eq!(
+            t.stdout(),
+            "Saved registry secret ghcr.io (host only, username me)\n"
+        );
+        set_registry_from(&mut t, "ghcr.io", Some("me"), "two").unwrap();
+        let f = SecretsFile::load(&t.ctx.paths).unwrap();
+        assert_eq!(f.registries.len(), 1);
+        assert_eq!(f.registries[0].username.as_deref(), Some("me"));
+        assert_eq!(
+            t.ctx.store.get("registry:ghcr.io").unwrap().as_deref(),
+            Some("two")
+        );
+    }
+
+    #[test]
+    fn registry_set_refuses_empty_input_and_bad_hosts() {
+        let mut t = test_env(&[]);
+        assert!(set_registry_from(&mut t, "ghcr.io", None, "\n").is_err());
+        assert!(set_registry_from(&mut t, "ghcr.io", None, "").is_err());
+        assert!(set_registry_from(&mut t, "https://ghcr.io/x", None, "t").is_err());
+        assert!(
+            SecretsFile::load(&t.ctx.paths)
+                .unwrap()
+                .registries
+                .is_empty()
+        );
+        assert_eq!(t.ctx.store.get("registry:ghcr.io").unwrap(), None);
+    }
+
+    #[test]
+    fn registry_set_refusals() {
+        let mut t = test_env(&[]);
+        for extra in [&["--sandbox", "a1"][..], &["--all-sandboxes"][..]] {
+            let mut args = vec!["secret", "set", "--registry", "ghcr.io", "--password-stdin"];
+            args.extend_from_slice(extra);
+            let e = sbt(&mut t.ctx, &args).unwrap_err();
+            assert!(e.downcast_ref::<Unsupported>().is_some(), "{e}");
+            assert!(e.to_string().contains("used for host pulls only"), "{e}");
+        }
+        let e = sbt(&mut t.ctx, &["secret", "set", "--registry", "ghcr.io"]).unwrap_err();
+        assert!(e.to_string().contains("--password-stdin"), "{e}");
+        let e = sbt(
+            &mut t.ctx,
+            &["secret", "set", "--username", "u", "--password-stdin"],
+        )
+        .unwrap_err();
+        assert!(e.to_string().contains("--registry"), "{e}");
+    }
+
+    #[test]
+    fn registry_ls_rows() {
+        let mut t = test_env(&[]);
+        sbt(&mut t.ctx, &["secret", "ls"]).unwrap();
+        assert_eq!(t.stdout(), "No secrets\n");
+        set_registry_from(&mut t, "ghcr.io", Some("me"), "abcdefgh").unwrap();
+        t.stdout();
+        sbt(&mut t.ctx, &["secret", "ls"]).unwrap();
+        let out = t.stdout();
+        assert!(out.contains("SCOPE") && out.contains("TYPE"), "{out}");
+        assert!(
+            out.contains("(host only)   registry   ghcr.io   (stored)"),
+            "{out}"
+        );
+        assert!(!out.contains("abcd"), "{out}");
+    }
+
+    #[test]
+    fn registry_rm_removes_value_and_entry() {
+        let mut t = test_env(&[]);
+        set_registry_from(&mut t, "ghcr.io", None, "v").unwrap();
+        t.stdout();
+        sbt(&mut t.ctx, &["secret", "rm", "--registry", "GHCR.io"]).unwrap();
+        assert_eq!(
+            t.stdout(),
+            "Removed registry secret ghcr.io ((host only))\n"
+        );
+        assert!(
+            SecretsFile::load(&t.ctx.paths)
+                .unwrap()
+                .registries
+                .is_empty()
+        );
+        assert_eq!(t.ctx.store.get("registry:ghcr.io").unwrap(), None);
+        let e = sbt(&mut t.ctx, &["secret", "rm", "--registry", "ghcr.io"]).unwrap_err();
+        assert_eq!(e.to_string(), "no ghcr.io secret (host only)");
+        let e = sbt(
+            &mut t.ctx,
+            &["secret", "rm", "--registry", "ghcr.io", "--sandbox", "a"],
+        )
+        .unwrap_err();
+        assert!(e.downcast_ref::<Unsupported>().is_some(), "{e}");
+        let e = sbt(
+            &mut t.ctx,
+            &["secret", "rm", "--registry", "ghcr.io", "--all-sandboxes"],
+        )
+        .unwrap_err();
+        assert!(e.downcast_ref::<Unsupported>().is_some(), "{e}");
+    }
+
+    #[test]
+    fn rm_all_clears_registries() {
+        let mut t = test_env(&[]);
+        set_registry_from(&mut t, "ghcr.io", None, "v").unwrap();
+        sbt(&mut t.ctx, &["secret", "rm", "--all", "-f"]).unwrap();
+        assert!(
+            SecretsFile::load(&t.ctx.paths)
+                .unwrap()
+                .registries
+                .is_empty()
+        );
+        assert_eq!(t.ctx.store.get("registry:ghcr.io").unwrap(), None);
+    }
 
     #[test]
     fn set_with_token_stores_the_value_in_the_store_only() {

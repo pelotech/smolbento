@@ -66,6 +66,8 @@ secret set-custom --host api.example.com --env EXAMPLE_TOKEN --command "pass sho
 secret ls -g
 secret rm github --sandbox my-sandbox
 secret rm --all -f
+secret set --registry ghcr.io --password-stdin
+secret rm --registry ghcr.io
 # Ports
 ports my-sandbox
 ports my-sandbox --publish 3000 --unpublish 8080:80

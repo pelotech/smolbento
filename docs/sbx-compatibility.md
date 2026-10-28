@@ -19,7 +19,7 @@ clearly rather than doing something different.
 
 | Command or flag | Planned |
 |---|---|
-| `policy refresh`, `secret import`, `secret set --oauth/--registry/--refresh` | Not implemented |
+| `policy refresh`, `secret import`, `secret set --oauth/--refresh`, `secret set/rm --registry` with `--sandbox`/`--all-sandboxes` | Not implemented |
 | `policy ls --created-via/--type/--protocol/--include-inactive`, `policy check --protocol` other than `tcp` | Not implemented (`policy ls --decision` and `--source` work) |
 | `kit pack`, `kit push`, `kit pull`, `kit sign`, `kit verify` | Not implemented |
 | `env plan` and the `sbxenv.yaml` fields listed under [Environment files](#environment-files) | Later |
@@ -73,6 +73,7 @@ writableEnvFiles`, and `pullPolicy` other than `missing`.
 | `refresh`, `backend` on a secret | Used | Accepted, no effect: smolbento resolves at every start |
 | `--skip-host-commands`, `--prune-bindings` | Skip lifecycle and MCP commands; remove bindings | Accepted, no effect (there are no lifecycle commands or bindings yet). Secret `command:` sources run either way, as in sbx |
 | Unknown secret service | Accepted by `env plan` | Refused at create, with the error `sbt secret set` gives |
+| `secret ls` with registry credentials | `SECRET` shows the first characters | A separate `SCOPE TYPE NAME SECRET` table; `SECRET` is always `(stored)`, never part of a value. No `--json` on `secret ls` yet |
 | Workload kit as `agent` | The kit whose name equals `agent` | A local kit is matched by its directory name, a registry kit by the last part of its repository name |
 | Secret `command:` source | Runs on the host | Runs from a fresh temporary directory, so a relative helper path fails (also for `secret set --command`) |
 | `env run` on an existing sandbox | Passes `env`, applies nothing else | Same |
