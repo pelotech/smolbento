@@ -948,6 +948,31 @@ mod tests {
         );
     }
 
+    #[test]
+    fn the_builder_never_gets_host_access() {
+        let mut t = test_env(&[]);
+        fs::write(t.ctx.paths.policy_file(), "mode = \"deny-all\"\n").unwrap();
+        sbt(&mut t.ctx, &["policy", "allow", "network", "localhost"]).unwrap();
+        let fake = t.ctx.vm.runner();
+        fake.ok(&["machine", "status"], &builder_json("created"))
+            .once_fail(&["machine", "status"], "NOT_FOUND", "vm not found")
+            .once_fail(&["machine", "status"], "NOT_FOUND", "vm not found")
+            .download(&kit_tar());
+        let kit = kit_dir();
+        build(&t.ctx, kit.path()).unwrap();
+        let lines = fake.call_lines();
+        let create = lines
+            .iter()
+            .find(|l| l.starts_with("machine create -n sbx-_builder"))
+            .unwrap();
+        assert!(create.contains("--deny-cidr 127.0.0.0/8"), "{create}");
+        assert!(!create.contains("sbx.host-access"), "{create}");
+        assert!(
+            !lines.iter().any(|l| l.contains("100.96.0.1/32")),
+            "{lines:#?}"
+        );
+    }
+
     /// A stored `dhi.io` login (password `pw`) under the balanced policy, so allow hosts show.
     fn with_dhi_login(t: &TestEnv) {
         use crate::secrets::{RegistryEntry, SecretsFile, registry_account};

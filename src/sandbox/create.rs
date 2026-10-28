@@ -60,6 +60,9 @@ pub struct CreateRequest {
     pub credential_services: BTreeMap<String, String>,
     /// `long-running@1` (the `sbx.long-running` label).
     pub long_running: bool,
+    /// Created without the host loopback deny, as a `localhost` rule applied (the
+    /// `sbx.host-access` label).
+    pub host_access: bool,
     /// Extra guest-only volumes (kit `volume@1`, non-tmpfs).
     pub volumes: Vec<String>,
     /// tmpfs volumes, mounted by a kit startup step (`mount -t tmpfs`), not by smolvm.
@@ -102,6 +105,7 @@ pub fn meta(req: &CreateRequest) -> Meta {
         agent_file: req.agent_file.clone(),
         credential_install: req.credential_install.clone(),
         long_running: req.long_running,
+        host_access: req.host_access,
         credential_formats: req.credential_formats.clone(),
         credential_services: req.credential_services.clone(),
     }

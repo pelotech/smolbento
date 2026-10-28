@@ -11,8 +11,33 @@ Docker engine are kept off your machine. The agent can reach your machine only t
 - the network.
 
 Sandboxes can't reach services on your machine's localhost (`127.0.0.1` or `::1`), in any policy
-mode. Sandboxes created with smolbento 0.2.1 or earlier can: remove them with `sbt rm` and create
-them again.
+mode, unless you add a `localhost` rule (below). Sandboxes created with smolbento 0.2.1 or earlier
+can: remove them with `sbt rm` and create them again.
+
+### Host services (`localhost` rules)
+
+`sbt policy allow network [--sandbox NAME] localhost[:PORT]` lets sandboxes reach your machine's
+localhost as `host.docker.internal`. What it really opens, until smolvm can open a single host
+port:
+
+- **Every port.** A `localhost` rule opens every port on your machine's `127.0.0.1` (not `::1`) to
+  the sandboxes it applies to, whatever port it names. `policy allow` warns about this each time.
+- **Only sandboxes created with host access.** A sandbox gets host access only if one of your own
+  `localhost` allow rules applies to it when it's created. Every other sandbox is created with
+  your machine's loopback blocked for its life; a later `localhost` rule doesn't open it (`policy
+  allow` names those sandboxes) until you recreate them. Sandboxes created before smolbento had
+  host services keep the block until they're recreated.
+- **Closing it is best-effort.** `policy rm` of the rule closes the port in a running sandbox at
+  once, but a sandbox created with host access can still reach your machine's localhost in other
+  ways, for example a broad allow CIDR or a DNS answer covering `100.96.0.1`, the always-allowed
+  `127.0.0.0/8` in restricted allow lists, or a switch to `allow-all`. To
+  take host access away for good, recreate the sandbox without the rule.
+- **`allow-all` is fixed at create.** An `allow-all` sandbox created with host access reaches every
+  host port for its life, rule or not (`policy rm` says so).
+- **Kits can't grant it.** A kit's `localhost` rules never give a sandbox host access, only yours
+  do.
+- **The kit builder never has it.** `_builder` is always created with your machine's loopback
+  blocked, even under a global `localhost` rule.
 
 Under `allow-all`, a sandbox can still reach your machine's LAN IP, so a service listening on all
 interfaces (`0.0.0.0`) is reachable through it. `balanced` and `deny-all` block it unless you allow

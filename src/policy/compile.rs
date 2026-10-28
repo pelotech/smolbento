@@ -4,6 +4,7 @@ use std::collections::BTreeSet;
 
 use super::rules::{Allow, Pattern, Resource, is_under, split_port};
 use super::{Decision, Mode, Policy, Rule, presets};
+use crate::sandbox::name::is_internal;
 use crate::smolvm::{AllowList, NetworkSpec};
 
 /// The rules that apply to a sandbox (`None`: the global rules only): every rule but install-phase
@@ -83,8 +84,13 @@ fn allows_with(policy: &Policy, sandbox: Option<&str>, install: &[String]) -> Ve
 
 /// What smolvm should allow for a sandbox. A bound credential's hosts are always included: smolvm
 /// requires them. Install-phase kit rules are left out (see `network_with`).
-pub fn network(policy: &Policy, sandbox: &str, credential_hosts: &[String]) -> NetworkSpec {
-    network_for(policy, Some(sandbox), credential_hosts, &[])
+pub fn network(
+    policy: &Policy,
+    sandbox: &str,
+    credential_hosts: &[String],
+    host_access: bool,
+) -> NetworkSpec {
+    network_for(policy, Some(sandbox), credential_hosts, &[], host_access)
 }
 
 /// `network` plus the install-phase kit rules with these ids: only for the steps that run a kit's
@@ -94,8 +100,15 @@ pub fn network_with(
     sandbox: &str,
     credential_hosts: &[String],
     install: &[String],
+    host_access: bool,
 ) -> NetworkSpec {
-    network_for(policy, Some(sandbox), credential_hosts, install)
+    network_for(
+        policy,
+        Some(sandbox),
+        credential_hosts,
+        install,
+        host_access,
+    )
 }
 
 /// `network` for a sandbox, or with `None` for the global policy alone.
@@ -104,6 +117,7 @@ fn network_for(
     sandbox: Option<&str>,
     credential_hosts: &[String],
     install: &[String],
+    host_access: bool,
 ) -> NetworkSpec {
     if policy.mode_for(sandbox) == Mode::AllowAll {
         return NetworkSpec::Open;
@@ -115,6 +129,11 @@ fn network_for(
     let denies = resources(policy, sandbox, install, Decision::Deny);
     let (mut patterns, mut cidrs) = (BTreeSet::new(), BTreeSet::new());
     for r in allows.iter().filter(|r| !denied(r, &denies)) {
+        // Host services come from the user's own rules only (`user_host_services`), never a
+        // `localhost` pattern.
+        if is_host_services(r) {
+            continue;
+        }
         match r.to_allow() {
             Allow::Pattern(p) => {
                 patterns.insert(p);
@@ -132,6 +151,9 @@ fn network_for(
         .cloned()
         .partition(|h| h.starts_with("*."));
     patterns.extend(wild);
+    if host_access && user_host_services(policy, sandbox) {
+        cidrs.insert(format!("{HOST_GATEWAY}/32"));
+    }
     NetworkSpec::Restricted(AllowList::new(hosts, patterns, cidrs))
 }
 
@@ -172,20 +194,60 @@ fn reaches_under(deny: &Resource, x: &str) -> bool {
     }
 }
 
-/// Denied for every sandbox, whatever the mode: smolvm dials host loopback for a guest connecting
-/// to its gateway, and sbx doesn't let sandboxes reach the host's localhost.
+/// The guest's gateway, which smolvm forwards to the host's loopback (measured in
+/// docs/superpowers/notes/2026-10-28-host-services-spike.md). A restricted machine reaches it only
+/// while `HOST_GATEWAY/32` is in its allow list, which `machine update` changes live.
+pub const HOST_GATEWAY: &str = "100.96.0.1";
+
+/// Whether an allow entry is a host-services rule: `localhost`, with any port or none. It becomes
+/// the gateway in the allow list (smolvm can't open one port, so every host port opens). Other
+/// spellings of loopback (`127.0.0.1`, `host.docker.internal`) aren't: sbx doesn't treat them so.
+pub(crate) fn is_host_services(r: &Resource) -> bool {
+    matches!(&r.pattern, Pattern::Exact(h) if h == "localhost")
+}
+
+/// Whether one of the user's own `localhost` allow rules applies to a sandbox (`None`: the global
+/// rules), and no deny drops it. Kit rules (runtime or install phase) never count: a kit is less
+/// trusted than the user, and host access outlasts it (no create-time deny).
+fn user_host_services(policy: &Policy, sandbox: Option<&str>) -> bool {
+    let denies = resources(policy, sandbox, &[], Decision::Deny);
+    policy
+        .rules_for(sandbox)
+        .filter(|(r, _)| r.decision == Decision::Allow && r.source() == "local")
+        .flat_map(|(r, _)| r.parsed())
+        .any(|x| is_host_services(&x) && !denied(&x, &denies))
+}
+
+/// Whether a sandbox created now gets host access: one of the user's own `localhost` allow rules
+/// applies to it, and no deny drops it. It's then created without the `HOST_LOOPBACK` deny and labelled
+/// `sbx.host-access`; only such a sandbox gets the gateway from `localhost` rules. Internal sandboxes (the kit
+/// builder) never do: it builds untrusted kits and needs nothing on the host.
+pub fn host_access(policy: &Policy, sandbox: &str) -> bool {
+    !is_internal(sandbox) && user_host_services(policy, Some(sandbox))
+}
+
+/// Denied at create for every sandbox, whatever the mode, unless it gets host access
+/// (`host_access`): smolvm dials host loopback for a guest connecting to its gateway, and sbx
+/// doesn't let sandboxes reach the host's localhost. A restricted allow list alone isn't enough:
+/// a broad allow CIDR, a later switch to allow-all, or a DNS answer of the gateway would reach it.
 pub const HOST_LOOPBACK: [&str; 2] = ["127.0.0.0/8", "::1/128"];
 
 /// Deny CIDRs for `machine create` (smolvm accepts them at create only), sorted and unique:
-/// `HOST_LOOPBACK` and the deny rules' CIDRs. One with a port is left out: smolvm would deny
-/// every port of the range.
-pub fn deny_cidrs(policy: &Policy, sandbox: &str) -> Vec<String> {
-    deny_cidrs_with(policy, sandbox, &[])
+/// `HOST_LOOPBACK` when it applies and the deny rules' CIDRs. One with a port is left out: smolvm
+/// would deny every port of the range.
+pub fn deny_cidrs(policy: &Policy, sandbox: &str, host_access: bool) -> Vec<String> {
+    deny_cidrs_with(policy, sandbox, host_access, &[])
 }
 
 /// `deny_cidrs` plus those of the install-phase kit rules with these ids: a create passes its
 /// own, as for `network_with`. smolvm fixes deny CIDRs at create, so they outlast the install.
-pub fn deny_cidrs_with(policy: &Policy, sandbox: &str, install: &[String]) -> Vec<String> {
+pub fn deny_cidrs_with(
+    policy: &Policy,
+    sandbox: &str,
+    host_access: bool,
+    install: &[String],
+) -> Vec<String> {
+    let loopback = !host_access;
     resources(policy, Some(sandbox), install, Decision::Deny)
         .into_iter()
         .filter(|r| r.port.is_none())
@@ -193,7 +255,12 @@ pub fn deny_cidrs_with(policy: &Policy, sandbox: &str, install: &[String]) -> Ve
             Allow::Cidr(c) => Some(c),
             _ => None,
         })
-        .chain(HOST_LOOPBACK.map(String::from))
+        .chain(
+            HOST_LOOPBACK
+                .iter()
+                .filter(|_| loopback)
+                .map(|c| c.to_string()),
+        )
         .collect::<BTreeSet<_>>()
         .into_iter()
         .collect()
@@ -201,8 +268,13 @@ pub fn deny_cidrs_with(policy: &Policy, sandbox: &str, install: &[String]) -> Ve
 
 /// For a create: one note per kit whose install-phase rules (of these ids) deny CIDRs that no
 /// other rule denies. smolvm keeps a create's deny CIDRs, so they outlast the install phase.
-pub fn install_deny_cidr_notes(policy: &Policy, sandbox: &str, install: &[String]) -> Vec<String> {
-    let lasting = deny_cidrs(policy, sandbox);
+pub fn install_deny_cidr_notes(
+    policy: &Policy,
+    sandbox: &str,
+    host_access: bool,
+    install: &[String],
+) -> Vec<String> {
+    let lasting = deny_cidrs(policy, sandbox, host_access);
     let mut per_kit: Vec<(&str, Vec<String>)> = Vec::new();
     for (r, _) in policy.rules_for(Some(sandbox)) {
         let Some(kit) = r.created_via.strip_prefix(super::KIT_INSTALL_VIA) else {
@@ -320,7 +392,7 @@ pub fn check(
     // A CIDR deny without a port is enforced (at create); report it before any other deny.
     let enforced =
         |res: &Resource| matches!(res.pattern, Pattern::Cidr { .. }) && res.port.is_none();
-    let spec = || network_for(policy, sandbox, credential_hosts, &[]);
+    let spec = || network_for(policy, sandbox, credential_hosts, &[], false);
     let mut denies: Vec<_> = hits(Decision::Deny).collect();
     denies.sort_by_key(|(_, _, res)| !enforced(res));
     if let Some((r, scope, res)) = denies.first() {
@@ -395,7 +467,7 @@ mod tests {
             .unwrap();
         p.add_rule(None, Decision::Deny, denies, "added", None, None)
             .unwrap();
-        list(&network(&p, "s1", &[])).patterns().to_vec()
+        list(&network(&p, "s1", &[], false)).patterns().to_vec()
     }
 
     fn reaches(deny: &str, cred: &str) -> bool {
@@ -404,9 +476,12 @@ mod tests {
 
     #[test]
     fn allow_all_and_unchosen_are_open() {
-        assert_eq!(network(&Policy::default(), "s1", &[]), NetworkSpec::Open);
         assert_eq!(
-            network(&policy(Mode::AllowAll), "s1", &[]),
+            network(&Policy::default(), "s1", &[], false),
+            NetworkSpec::Open
+        );
+        assert_eq!(
+            network(&policy(Mode::AllowAll), "s1", &[], false),
             NetworkSpec::Open
         );
     }
@@ -423,17 +498,17 @@ mod tests {
             None,
         )
         .unwrap();
-        let spec = network(&p, "s1", &["api.anthropic.com".to_string()]);
+        let spec = network(&p, "s1", &["api.anthropic.com".to_string()], false);
         let l = list(&spec);
         assert_eq!(l.hosts(), ["api.anthropic.com"]);
         assert_eq!(l.patterns(), ["*.npmjs.org"]);
         assert_eq!(l.cidrs(), ["127.0.0.0/8", "::1/128"]);
-        assert_eq!(list(&network(&p, "other", &[])).patterns().len(), 0);
+        assert_eq!(list(&network(&p, "other", &[], false)).patterns().len(), 0);
     }
 
     #[test]
     fn balanced_has_the_preset_and_widens_globs() {
-        let spec = network(&policy(Mode::Balanced), "s1", &[]);
+        let spec = network(&policy(Mode::Balanced), "s1", &[], false);
         let l = list(&spec);
         assert!(l.hosts().is_empty(), "rules never become --allow-host");
         assert!(l.patterns().contains(&"registry.npmjs.org".to_string()));
@@ -462,12 +537,12 @@ mod tests {
         )
         .unwrap();
         assert!(
-            !list(&network(&p, "s1", &[]))
+            !list(&network(&p, "s1", &[], false))
                 .patterns()
                 .contains(&"registry.npmjs.org".to_string())
         );
         p.set_deny_network("s2", true);
-        assert_eq!(list(&network(&p, "s2", &[])).patterns().len(), 0);
+        assert_eq!(list(&network(&p, "s2", &[], false)).patterns().len(), 0);
     }
 
     #[test]
@@ -507,7 +582,10 @@ mod tests {
             None,
         )
         .unwrap();
-        assert_eq!(deny_cidrs(&p, "s1"), with_loopback(&["192.168.0.0/16"]));
+        assert_eq!(
+            deny_cidrs(&p, "s1", host_access(&p, "s1")),
+            with_loopback(&["192.168.0.0/16"])
+        );
         let v = check(&p, Some("s1"), &[], "10.1.2.3:22");
         assert!(
             v.allowed && v.reason.contains("isn't enforced"),
@@ -566,7 +644,7 @@ mod tests {
         let mut p = policy(Mode::DenyAll);
         p.add_rule(None, Decision::Allow, "**", "added", None, None)
             .unwrap();
-        assert_eq!(network(&p, "s1", &[]), NetworkSpec::Open);
+        assert_eq!(network(&p, "s1", &[], false), NetworkSpec::Open);
     }
 
     #[test]
@@ -591,7 +669,7 @@ mod tests {
         )
         .unwrap();
         assert_eq!(
-            deny_cidrs(&p, "s1"),
+            deny_cidrs(&p, "s1", host_access(&p, "s1")),
             with_loopback(&["10.0.0.0/8", "192.168.0.0/16"])
         );
         p.add_rule(
@@ -604,10 +682,13 @@ mod tests {
         )
         .unwrap();
         assert_eq!(
-            deny_cidrs(&p, "s1"),
+            deny_cidrs(&p, "s1", host_access(&p, "s1")),
             with_loopback(&["10.0.0.0/8", "192.168.0.0/16"])
         );
-        assert_eq!(deny_cidrs(&p, "s2"), with_loopback(&["10.0.0.0/8"]));
+        assert_eq!(
+            deny_cidrs(&p, "s2", host_access(&p, "s2")),
+            with_loopback(&["10.0.0.0/8"])
+        );
         // An install-phase deny counts only for the create that passes its id.
         let id = p
             .add_rule(
@@ -619,11 +700,13 @@ mod tests {
                 None,
             )
             .unwrap();
-        assert!(!deny_cidrs(&p, "s1").contains(&"172.16.0.0/12".to_string()));
-        let cidrs = deny_cidrs_with(&p, "s1", std::slice::from_ref(&id));
+        assert!(
+            !deny_cidrs(&p, "s1", host_access(&p, "s1")).contains(&"172.16.0.0/12".to_string())
+        );
+        let cidrs = deny_cidrs_with(&p, "s1", host_access(&p, "s1"), std::slice::from_ref(&id));
         assert!(cidrs.contains(&"172.16.0.0/12".to_string()));
         assert_eq!(
-            install_deny_cidr_notes(&p, "s1", &[id]),
+            install_deny_cidr_notes(&p, "s1", host_access(&p, "s1"), &[id]),
             ["note: kit k's install-phase deny of 172.16.0.0/12 stays for this sandbox's life"]
         );
         // One a lasting rule denies anyway needs no note.
@@ -637,7 +720,7 @@ mod tests {
                 None,
             )
             .unwrap();
-        assert!(install_deny_cidr_notes(&p, "s1", &[id]).is_empty());
+        assert!(install_deny_cidr_notes(&p, "s1", host_access(&p, "s1"), &[id]).is_empty());
     }
 
     fn with_loopback(cidrs: &[&str]) -> Vec<String> {
@@ -650,15 +733,45 @@ mod tests {
     }
 
     #[test]
-    fn host_loopback_is_denied_in_every_mode() {
-        for mode in [Mode::AllowAll, Mode::Balanced, Mode::DenyAll] {
-            assert_eq!(deny_cidrs(&policy(mode), "s1"), with_loopback(&[]));
+    fn host_loopback_is_denied_in_every_mode_without_a_localhost_rule() {
+        for p in [
+            Policy::default(),
+            policy(Mode::AllowAll),
+            policy(Mode::Balanced),
+            policy(Mode::DenyAll),
+        ] {
+            assert_eq!(
+                deny_cidrs(&p, "s1", host_access(&p, "s1")),
+                with_loopback(&[]),
+                "{:?}",
+                p.mode
+            );
+            assert!(!host_access(&p, "s1"));
         }
+        // A broad allow CIDR covering the gateway doesn't give host access.
+        let mut p = policy(Mode::DenyAll);
+        p.add_rule(
+            None,
+            Decision::Allow,
+            "100.64.0.0/10, 0.0.0.0/0",
+            "added",
+            None,
+            None,
+        )
+        .unwrap();
+        assert_eq!(
+            deny_cidrs(&p, "s1", host_access(&p, "s1")),
+            with_loopback(&[])
+        );
+        assert!(!host_access(&p, "s1"));
         // A rule for the same range doesn't repeat it.
         let mut p = policy(Mode::AllowAll);
         p.add_rule(None, Decision::Deny, "127.0.0.0/8", "added", None, None)
             .unwrap();
-        assert_eq!(deny_cidrs(&p, "s1"), with_loopback(&[]));
+        assert_eq!(
+            deny_cidrs(&p, "s1", host_access(&p, "s1")),
+            with_loopback(&[])
+        );
     }
 
     #[test]
@@ -781,7 +894,7 @@ mod tests {
     #[test]
     fn wildcard_credential_hosts_are_patterns() {
         let bound = ["*.notion.com".to_string(), "api.y.example".to_string()];
-        let spec = network(&policy(Mode::DenyAll), "s1", &bound);
+        let spec = network(&policy(Mode::DenyAll), "s1", &bound, false);
         let l = list(&spec);
         assert_eq!(l.hosts(), ["api.y.example"]);
         assert!(l.patterns().contains(&"*.notion.com".to_string()));
@@ -797,7 +910,7 @@ mod tests {
         assert!(v.allowed && v.reason.contains("secret"), "{}", v.reason);
         let v = check(&policy(Mode::DenyAll), Some("s1"), &bound, "notion.com");
         assert!(!v.allowed, "the apex isn't covered: {}", v.reason);
-        let spec = network(&policy(Mode::DenyAll), "s1", &bound);
+        let spec = network(&policy(Mode::DenyAll), "s1", &bound, false);
         assert!(admits(&spec, "api.notion.com", Mode::DenyAll).is_some());
         assert!(admits(&spec, "notion.com", Mode::DenyAll).is_none());
     }
@@ -864,5 +977,176 @@ mod tests {
         ] {
             assert!(!hits(deny), "{deny}");
         }
+    }
+
+    const GATEWAY: &str = "100.96.0.1/32";
+
+    fn has_gateway(spec: &NetworkSpec) -> bool {
+        list(spec).cidrs().contains(&GATEWAY.to_string())
+    }
+
+    #[test]
+    fn localhost_rules_open_the_gateway_with_host_access_only() {
+        for rule in ["localhost:11434", "localhost", "LOCALHOST:11434"] {
+            let mut p = policy(Mode::DenyAll);
+            p.add_rule(None, Decision::Allow, rule, "added", None, None)
+                .unwrap();
+            for sb in ["s1", "s2"] {
+                let spec = network(&p, sb, &[], true);
+                assert!(has_gateway(&spec), "{rule} {sb}");
+                let l = list(&spec);
+                assert!(l.patterns().is_empty() && l.hosts().is_empty(), "{rule}");
+                // Created without host access: never the gateway.
+                let spec = network(&p, sb, &[], false);
+                assert!(!has_gateway(&spec), "{rule} {sb}");
+                assert!(list(&spec).patterns().is_empty(), "{rule}");
+                assert!(host_access(&p, sb), "{rule}");
+            }
+        }
+        // Scoped to one sandbox: only that one.
+        let mut p = policy(Mode::Balanced);
+        let id = p
+            .add_rule(
+                Some("s1"),
+                Decision::Allow,
+                "localhost:8080",
+                "added",
+                None,
+                None,
+            )
+            .unwrap();
+        assert!(has_gateway(&network(&p, "s1", &[], true)));
+        assert!(!has_gateway(&network(&p, "s2", &[], true)));
+        assert!(host_access(&p, "s1") && !host_access(&p, "s2"));
+        assert!(
+            !list(&network(&p, "s1", &[], true))
+                .patterns()
+                .contains(&"localhost".to_string())
+        );
+        // Removed: gone.
+        p.remove_rules(Some("s1"), Some(&id), None);
+        assert!(!has_gateway(&network(&p, "s1", &[], true)));
+    }
+
+    #[test]
+    fn other_loopback_spellings_are_not_host_services() {
+        let rules = "127.0.0.1:80, host.docker.internal:80";
+        let mut p = policy(Mode::DenyAll);
+        p.add_rule(None, Decision::Allow, rules, "added", None, None)
+            .unwrap();
+        let spec = network(&p, "s1", &[], true);
+        let l = list(&spec);
+        assert_eq!(l.patterns(), ["host.docker.internal"]);
+        assert_eq!(l.cidrs(), ["127.0.0.0/8", "127.0.0.1/32", "::1/128"]);
+        assert_eq!(
+            deny_cidrs(&p, "s1", host_access(&p, "s1")),
+            with_loopback(&[])
+        );
+        assert!(!host_access(&p, "s1"));
+    }
+
+    #[test]
+    fn a_localhost_rule_drops_the_host_loopback_deny_in_every_mode() {
+        for mode in [Mode::AllowAll, Mode::Balanced, Mode::DenyAll] {
+            let mut p = policy(mode);
+            p.add_rule(
+                Some("s1"),
+                Decision::Allow,
+                "localhost:11434",
+                "added",
+                None,
+                None,
+            )
+            .unwrap();
+            assert!(
+                deny_cidrs(&p, "s1", host_access(&p, "s1")).is_empty(),
+                "{mode:?}"
+            );
+            assert_eq!(
+                deny_cidrs(&p, "s2", host_access(&p, "s2")),
+                with_loopback(&[]),
+                "{mode:?}"
+            );
+            // A deny of localhost wins.
+            p.add_rule(Some("s1"), Decision::Deny, "localhost", "added", None, None)
+                .unwrap();
+            assert_eq!(
+                deny_cidrs(&p, "s1", host_access(&p, "s1")),
+                with_loopback(&[]),
+                "{mode:?}"
+            );
+            assert!(!host_access(&p, "s1"));
+        }
+    }
+
+    #[test]
+    fn host_services_rules_are_localhost_in_any_case() {
+        for (r, yes) in [
+            ("localhost", true),
+            ("LOCALHOST:11434", true),
+            ("localhost.example.com", false),
+            ("127.0.0.1:80", false),
+        ] {
+            assert_eq!(is_host_services(&Resource::parse(r).unwrap()), yes, "{r}");
+        }
+    }
+
+    #[test]
+    fn kit_rules_never_grant_host_access() {
+        let mut p = policy(Mode::DenyAll);
+        let install = p
+            .add_rule(
+                Some("s1"),
+                Decision::Allow,
+                "localhost:11434",
+                "kit-install:k",
+                None,
+                None,
+            )
+            .unwrap();
+        p.add_rule(
+            Some("s1"),
+            Decision::Allow,
+            "LOCALHOST:8080",
+            "kit:k",
+            None,
+            None,
+        )
+        .unwrap();
+        let ids = std::slice::from_ref(&install);
+        assert!(!host_access(&p, "s1"));
+        assert_eq!(
+            deny_cidrs_with(&p, "s1", host_access(&p, "s1"), ids),
+            with_loopback(&[])
+        );
+        assert_eq!(
+            deny_cidrs(&p, "s1", host_access(&p, "s1")),
+            with_loopback(&[])
+        );
+        for spec in [
+            network_with(&p, "s1", &[], ids, true),
+            network(&p, "s1", &[], true),
+        ] {
+            assert!(!has_gateway(&spec), "{spec:?}");
+            assert!(list(&spec).patterns().is_empty(), "{spec:?}");
+        }
+        // A user rule alongside still works.
+        p.add_rule(
+            Some("s1"),
+            Decision::Allow,
+            "localhost:3000",
+            "added",
+            None,
+            None,
+        )
+        .unwrap();
+        assert!(host_access(&p, "s1"));
+        assert!(deny_cidrs_with(&p, "s1", host_access(&p, "s1"), ids).is_empty());
+        assert!(has_gateway(&network_with(&p, "s1", &[], ids, true)));
+        // An approved rule is the user's too.
+        let mut p = policy(Mode::DenyAll);
+        p.add_rule(None, Decision::Allow, "localhost", "approval", None, None)
+            .unwrap();
+        assert!(host_access(&p, "s1"));
     }
 }

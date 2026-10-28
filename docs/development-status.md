@@ -25,6 +25,12 @@ v2 directories) and Smolfiles; `sbt kit inspect/validate/add` work. See [Usage](
 **Phase 4b (sbxenv.yaml) is done.** `sbt env create|run|exec|rm` read Docker Sandboxes environment
 files. See [Usage](usage.md#environments-sbxenvyaml).
 
+**Phase 4c (host services) is done, as an interim.** `sbt policy allow network localhost[:PORT]`
+lets sandboxes created under that rule reach your machine's localhost as `host.docker.internal`,
+opened and closed live. Until smolvm can open a single host port, the rule opens every port on
+your machine's `127.0.0.1` to them. See [Usage](usage.md#host-services) and
+[Security](SECURITY.md#host-services-localhost-rules).
+
 Docker in a sandbox is now the shipped `docker` kit, so every Docker-enabled create goes through
 the kit first start: if that first start fails, the sandbox is removed. Run the same command
 again once the cause is fixed.
@@ -48,7 +54,7 @@ terminal fail until you do.
 | 3b | `fork` (copy-on-write copies of a running sandbox). `checkpoint`/`restore` dropped: secrets can't work in a restored smolvm checkpoint from the CLI | ✅ Done |
 | 4a | Kits: v3 capabilities, v2 `spec.yaml`, Smolfiles, `kit inspect/validate/add`, the `docker` kit, the `_builder` sandbox | ✅ Done |
 | 4b | `sbxenv.yaml` core: `env create/run/exec/rm`, files, args, user defaults, secrets, kits, ports | ✅ Done |
-| 4c | Host services (e.g. a host Ollama reachable from sandboxes) | Planned |
+| 4c | Host services: `localhost[:PORT]` rules reach the host as `host.docker.internal`, live (interim: every host port, until smolvm can open one) | ✅ Done (interim) |
 | 4d | The `plus` image and kit | Planned |
 | 5 | `template`, `setup ssh`, static MCP, `--skills`, clipboard and browser bridges; the kit capabilities `host-mount@1`, `ssh-agent@1`, `agent-skills@1`/`agent-skill@1` | Planned |
 | after 5 | Finish `sbxenv.yaml`: `env plan`, remembered approvals (`env.rememberHostCommands`), `lifecycle`, `bindings`, `registries`, `mcp`, `mounts`, the remaining `sandboxOptions` | Planned |
@@ -60,9 +66,11 @@ terminal fail until you do.
 - Workspaces are mounted read-write unless you use `--clone`.
 - Published ports bind `127.0.0.1` only, and directories (not single files) can be mounted. Both are
   smolvm limits; see [sbx compatibility](sbx-compatibility.md).
-- Sandboxes can't reach services on the host yet (planned with host services, Phase 4c). Under
-  `allow-all`, the host's LAN IP isn't blocked, so services listening on `0.0.0.0` are reachable
-  through it.
+- A `localhost` rule opens every port on the host's `127.0.0.1`, not just the one it names, and
+  only to sandboxes created while one of your `localhost` rules applied; others need recreating.
+  Closing it in such a sandbox is best-effort until it's recreated. See
+  [Security](SECURITY.md#host-services-localhost-rules). Under `allow-all`, the host's LAN IP isn't
+  blocked, so services listening on `0.0.0.0` are reachable through it.
 - Linux uses a 0600 file for secret values where no Secret Service runs.
 - Only the agent's primary group takes your gid: group-writable shared directories aren't
   writable through your other groups. Images without `groupmod` (busybox) keep their gid, so on
@@ -70,19 +78,34 @@ terminal fail until you do.
 
 ## Needs smolvm support (later decisions)
 
+Changes we'd propose to smolvm (none filed yet). What smolvm 1.32.4 lacks, and what smolbento does
+meanwhile:
+
+- **Per-port host access.** smolvm can open the host's loopback to a guest only as a whole (the
+  gateway CIDR `100.96.0.1/32`). Meanwhile a `localhost:PORT` rule opens every host port to
+  sandboxes created with host access (documented).
+- **Live allow list with no hosts left.** A `machine update` that leaves CIDRs but no hosts
+  doesn't revoke the removed hosts until restart. Meanwhile every allow list keeps the
+  placeholder host `smolbento.invalid`.
+- **Registry credentials for sandboxes.** `secret set --registry --sandbox/--all-sandboxes`, a
+  login for a sandbox's own `docker pull`. smolvm reads credential values only at start and
+  registry tokens last minutes, so it needs smolvm to mint or refresh the token itself. Meanwhile
+  registry logins are host-only and the builder gets a fresh token before each build.
+- **Credential hosts with a port.** `--credential` can't bind a host with a port. Meanwhile the
+  builder skips logins for registries on a port (documented).
 - **OAuth sentinel tokens and enforced method/path rules.** Both need something that reads
-  decrypted HTTPS requests; smolvm's proxy only substitutes credentials. Until then, kits get
+  decrypted HTTPS requests; smolvm's proxy only substitutes credentials. Meanwhile kits get
   passthrough OAuth only, and method/path rules (kits' and `policy allow --method/--path`) aren't
   enforced. Preferred: method/path matching and an OAuth sentinel mode upstream in smolvm. Only if
   that's declined: smolbento's own egress proxy, a phase of its own.
-- **Registry credentials for sandboxes.** `secret set --registry --sandbox/--all-sandboxes`, a
-  login for a sandbox's own `docker pull`. smolvm reads credential values only at start and
-  registry tokens last minutes, so it needs smolvm to mint or refresh the token itself (the builder
-  gets one fresh before each build instead).
-- **`machine update --label`.** Would let `kit add`ed kits be listed without starting a stopped
-  sandbox. Cosmetic.
-- **Install-only credentials after install.** sbx leaves the placeholder and sends requests without
-  the credential; smolbento's requests get smolvm's `502 credential unavailable`.
+- **`machine update --label`.** Labels are create-time only. Meanwhile kits added with `kit add`
+  aren't listed on a stopped sandbox without starting it. Cosmetic.
+- **Guest DNS upstream order.** Guest DNS forwards to the host's first IPv4 resolver only, so a
+  name that resolver refuses fails in every VM even when the host resolves it. Meanwhile nothing
+  (the e2e tests avoid such names).
+- **Install-only credentials after install.** smolvm answers `502 credential unavailable` when a
+  binding has no value; sbx sends the request without the credential. Meanwhile a documented
+  difference.
 
 ## sbx differences to revisit
 

@@ -487,6 +487,7 @@ fn add_running<R: Runner>(
             name,
             &sb.meta.credential_hosts,
             &steps.install_rules,
+            sb.meta.host_access,
         );
         ctx.vm.update_network(&sb.machine, &network)
     };

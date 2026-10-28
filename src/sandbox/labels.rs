@@ -24,6 +24,9 @@ pub const WORKDIR: &str = "sbx.workdir";
 pub const AGENT_FILE: &str = "sbx.agent-file";
 pub const CREDENTIAL_INSTALL: &str = "sbx.credential-install";
 pub const LONG_RUNNING: &str = "sbx.long-running";
+/// Created without the host loopback deny, because a `localhost` rule applied: only such a
+/// sandbox gets the gateway from `localhost` rules (see `policy::compile::HOST_GATEWAY`).
+pub const HOST_ACCESS: &str = "sbx.host-access";
 /// Prefix of `sbx.credential-format.<ENV>`: how a kit credential's value is formatted.
 pub const CREDENTIAL_FORMAT: &str = "sbx.credential-format.";
 /// Prefix of `sbx.credential-service.<ENV>`: the secret service behind a kit credential's env var
@@ -115,6 +118,8 @@ pub struct Meta {
     pub credential_install: Vec<String>,
     /// Don't stop the sandbox when its last session ends (`long-running@1`).
     pub long_running: bool,
+    /// Created without the host loopback deny (the `sbx.host-access` label).
+    pub host_access: bool,
     /// Kit credentials whose value is formatted before smolvm sets it as a header, by env var.
     pub credential_formats: BTreeMap<String, CredFormat>,
     /// Kit credential env vars outside their service's own env vars, to their service.
@@ -191,6 +196,9 @@ impl Meta {
         if self.long_running {
             labels.insert(LONG_RUNNING.to_string(), "true".into());
         }
+        if self.host_access {
+            labels.insert(HOST_ACCESS.to_string(), "true".into());
+        }
         for (env, f) in &self.credential_formats {
             labels.insert(format!("{CREDENTIAL_FORMAT}{env}"), f.to_label());
         }
@@ -236,6 +244,7 @@ impl Meta {
             agent_file: labels.get(AGENT_FILE).cloned(),
             credential_install: list(labels.get(CREDENTIAL_INSTALL)),
             long_running: labels.get(LONG_RUNNING).is_some_and(|v| v == "true"),
+            host_access: labels.get(HOST_ACCESS).is_some_and(|v| v == "true"),
             credential_formats: labels
                 .iter()
                 .filter_map(|(k, v)| {
@@ -308,6 +317,18 @@ mod tests {
         assert_eq!(labels["sbx.workspaces"], r#"["/w/repo","/w/docs:ro"]"#);
         assert_eq!(labels["sbx.docker"], "true");
         assert_eq!(Meta::from_labels(&labels), Some(meta()));
+    }
+
+    #[test]
+    fn host_access_label_round_trips() {
+        assert!(!meta().to_labels().contains_key("sbx.host-access"));
+        let m = Meta {
+            host_access: true,
+            ..meta()
+        };
+        let labels = m.to_labels();
+        assert_eq!(labels["sbx.host-access"], "true");
+        assert_eq!(Meta::from_labels(&labels), Some(m));
     }
 
     #[test]
