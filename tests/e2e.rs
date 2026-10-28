@@ -1,10 +1,10 @@
 //! End-to-end tests that boot real smolvm VMs. Ignored by default; run with `just e2e`.
 //! Machines are small (1 CPU, 1 GiB) so they fit GitHub's private-repo runners.
-//! The network policy test needs internet (example.com), the secrets test needs httpbin.org, and
-//! the clone and fork tests need the Alpine package mirror, and the fork test needs httpbin.org.
-//! The kit tests pull `alpine`, `registry:2`, the shell-docker template and BuildKit images from
-//! Docker Hub, and the install-phase tests need example.com and httpbin.org. Published-kit
-//! fixtures go to a `registry:2` machine on a loopback port, pushed with `oci-client`.
+//! The network policy, secrets, fork and install-phase tests need httpbin.org (not example.com:
+//! some resolvers, smolvm's upstream among them, answer NXDOMAIN for it). The clone and fork tests
+//! need the Alpine package mirror. The kit tests pull `alpine`, `registry:2`, the shell-docker
+//! template and BuildKit images from Docker Hub. Published-kit fixtures go to a `registry:2`
+//! machine on a loopback port, pushed with `oci-client`.
 
 use std::path::{Path, PathBuf};
 use std::process::{Command, Output};
@@ -248,18 +248,18 @@ fn policy_changes_apply_on_start_and_live() {
     e.create_alpine();
     e.ok(&["policy", "init", "deny-all"]);
     e.ok(&["stop", &e.name]); // allow-all -> restricted applies on the next start
-    assert!(!reachable(&e, "https://example.com"), "deny-all blocks");
-    e.ok(&["policy", "allow", "network", "example.com"]);
-    assert!(reachable(&e, "https://example.com"), "live allow");
+    assert!(!reachable(&e, "https://httpbin.org"), "deny-all blocks");
+    e.ok(&["policy", "allow", "network", "httpbin.org"]);
+    assert!(reachable(&e, "https://httpbin.org"), "live allow");
     let ip = e.ok(&[
         "exec",
         &e.name,
         "sh",
         "-c",
-        "nslookup example.com 2>/dev/null | awk '/^Address/ && $NF !~ /:/ {print $NF}' | head -n 1",
+        "nslookup httpbin.org 2>/dev/null | awk '/^Address/ && $NF !~ /:/ {print $NF}' | head -n 1",
     ]);
     let ip = ip.trim();
-    assert!(!ip.is_empty(), "example.com resolved");
+    assert!(!ip.is_empty(), "httpbin.org resolved");
     let by_ip = |e: &E2e| {
         let probe = format!("wget -S -T 8 -O /dev/null http://{ip}/ 2>&1 | grep -q 'HTTP/'");
         e.sbt(&["exec", &e.name, "sh", "-c", &probe])
@@ -268,9 +268,9 @@ fn policy_changes_apply_on_start_and_live() {
     };
     assert!(by_ip(&e), "live allow reaches {ip}");
     // The last host leaves a host-less list: closed live, by name and by its IP (no restart).
-    e.ok(&["policy", "rm", "network", "--resource", "example.com"]);
-    assert!(!reachable(&e, "https://example.com"), "live rm");
-    assert!(!by_ip(&e), "live rm closes {ip} (example.com's address)");
+    e.ok(&["policy", "rm", "network", "--resource", "httpbin.org"]);
+    assert!(!reachable(&e, "https://httpbin.org"), "live rm");
+    assert!(!by_ip(&e), "live rm closes {ip} (httpbin.org's address)");
     assert!(
         !reachable(&e, "https://www.wikipedia.org"),
         "still restricted"
@@ -281,11 +281,11 @@ fn policy_changes_apply_on_start_and_live() {
         "balanced allows alpine"
     );
     assert!(
-        !reachable(&e, "https://example.com"),
-        "balanced blocks example.com"
+        !reachable(&e, "https://httpbin.org"),
+        "balanced blocks httpbin.org"
     );
     let log = e.ok(&["policy", "log", &e.name]);
-    assert!(log.contains("example.com"), "{log}");
+    assert!(log.contains("httpbin.org"), "{log}");
 }
 
 #[test]
@@ -1267,15 +1267,15 @@ build: |
 }
 
 #[test]
-#[ignore = "boots real VMs and needs example.com; run with `just e2e`"]
+#[ignore = "boots real VMs and needs httpbin.org; run with `just e2e`"]
 fn install_phase_network_closes_after_install() {
     let e = E2e::new("instnet");
     e.ok(&["policy", "init", "deny-all"]);
     let reg = Registry::start(&e);
-    // During install: example.com by name, then by the IP it resolved to (any HTTP answer).
+    // During install: httpbin.org by name, then by the IP it resolved to (any HTTP answer).
     let probe = r#"set -e
-wget -q -T 15 -O /dev/null https://example.com
-ip=$(nslookup example.com 2>/dev/null | awk '/^Address/ && $NF !~ /:/ {print $NF}' | head -n 1)
+wget -q -T 15 -O /dev/null https://httpbin.org
+ip=$(nslookup httpbin.org 2>/dev/null | awk '/^Address/ && $NF !~ /:/ {print $NF}' | head -n 1)
 [ -n "$ip" ]
 wget -S -T 15 -O /dev/null "http://$ip/" 2>&1 | grep -q 'HTTP/'
 echo "$ip" > /etc/e2e-install-ip"#;
@@ -1287,7 +1287,7 @@ echo "$ip" > /etc/e2e-install-ip"#;
             &["e2e-install-net"],
             serde_json::json!([
                 {"type": "com.docker.sandbox/network-policy@1",
-                 "config": {"install": {"allow": ["example.com"]}}},
+                 "config": {"install": {"allow": ["httpbin.org"]}}},
                 {"type": "com.docker.sandbox/lifecycle@1",
                  "config": {"install": [
                      {"command": add_agent_hook(), "user": "0"},
@@ -1300,11 +1300,11 @@ echo "$ip" > /etc/e2e-install-ip"#;
     let ip = root_out(&e.name, "cat /etc/e2e-install-ip")
         .trim()
         .to_string();
-    assert!(!ip.is_empty(), "the install hook reached example.com");
+    assert!(!ip.is_empty(), "the install hook reached httpbin.org");
 
     assert!(
-        !reachable(&e, "https://example.com"),
-        "example.com is closed after install"
+        !reachable(&e, "https://httpbin.org"),
+        "httpbin.org is closed after install"
     );
     let by_ip = e.sbt(&[
         "exec",
@@ -1315,17 +1315,17 @@ echo "$ip" > /etc/e2e-install-ip"#;
     ]);
     assert!(
         !by_ip.status.success(),
-        "{ip} (example.com's address) is closed after install"
+        "{ip} (httpbin.org's address) is closed after install"
     );
     // `policy ls` never lists install-phase rules (as sbx), so check the stored policy too.
     let rules = e.ok(&["policy", "ls"]);
     assert!(
-        !rules.contains("example.com"),
+        !rules.contains("httpbin.org"),
         "install rules not listed:\n{rules}"
     );
     let stored = std::fs::read_to_string(e.dir.path().join("config/policy.toml")).unwrap();
     assert!(
-        !stored.contains("example.com"),
+        !stored.contains("httpbin.org"),
         "install rules removed:\n{stored}"
     );
 }
@@ -1385,14 +1385,14 @@ fn install_only_credential_is_gone_after_install() {
 }
 
 #[test]
-#[ignore = "boots real VMs and needs example.com; run with `just e2e`"]
+#[ignore = "boots real VMs and needs httpbin.org; run with `just e2e`"]
 fn kit_add_applies_network_and_hooks_live() {
     let e = E2e::new("kitadd");
     e.create_alpine();
     e.ok(&["policy", "init", "deny-all"]);
     e.ok(&["stop", &e.name]); // allow-all -> restricted applies on the next start
     e.ok(&["start", &e.name]);
-    assert!(!reachable(&e, "https://example.com"), "deny-all blocks");
+    assert!(!reachable(&e, "https://httpbin.org"), "deny-all blocks");
     let boot = root_out(&e.name, "cat /proc/sys/kernel/random/boot_id");
 
     let kit = e.dir.path().join("e2e-add");
@@ -1404,7 +1404,7 @@ kind: mixin
 name: e2e-add
 permissions:
   network:
-    allow: [example.com]
+    allow: [httpbin.org]
 setup:
   install:
     - command: touch /etc/e2e-kit-installed
@@ -1421,7 +1421,7 @@ setup:
         boot,
         "applied without a restart"
     );
-    assert!(reachable(&e, "https://example.com"), "the kit's allow rule");
+    assert!(reachable(&e, "https://httpbin.org"), "the kit's allow rule");
     assert!(
         root_sh(&e.name, "test -f /etc/e2e-kit-installed")
             .status
@@ -1439,7 +1439,7 @@ setup:
     assert!(rules.contains("network: 1 allow"), "{rules}");
     let wide = e.ok(&["policy", "ls", "--source", "kit", "--wide"]);
     assert!(wide.contains(&format!("kit:{}", e.name)), "{wide}");
-    assert!(wide.contains("example.com"), "{wide}");
+    assert!(wide.contains("httpbin.org"), "{wide}");
 }
 
 /// Debian (it has bash and `usermod`) plus accounts `somebody` (uid 1234) and `numbered`
