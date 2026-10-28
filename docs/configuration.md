@@ -53,9 +53,10 @@ costs.
 | `~/.config/smolbento/secret-values.toml` | Secret values, mode 0600, only where no OS keychain is usable (headless Linux, CI) |
 | `~/.cache/smolbento/sessions/` | One file per attached `run` session, used to stop a sandbox when the last session ends |
 | `~/.cache/smolbento/kits/` | Downloaded and built kits, and images with kit layers added; safe to delete |
+| `~/.local/share/smolbento/kit-host-mounts/` | Kit [host mounts](usage.md#kit-host-mounts), kept after their sandboxes are removed |
 
-`XDG_CONFIG_HOME` and `XDG_CACHE_HOME` are honoured (also on macOS). `SMOLBENTO_CONFIG_DIR` and
-`SMOLBENTO_CACHE_DIR` override both.
+`XDG_CONFIG_HOME`, `XDG_CACHE_HOME` and `XDG_DATA_HOME` are honoured (also on macOS).
+`SMOLBENTO_CONFIG_DIR`, `SMOLBENTO_CACHE_DIR` and `SMOLBENTO_DATA_DIR` override them.
 
 `config.toml` looks like:
 

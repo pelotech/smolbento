@@ -31,6 +31,11 @@ opened and closed live. Until smolvm can open a single host port, the rule opens
 your machine's `127.0.0.1` to them. See [Usage](usage.md#host-services) and
 [Security](SECURITY.md#host-services-localhost-rules).
 
+**Phase 5a (host mounts) is done.** Kits can declare `host-mount@1`: a directory on your machine
+shared by the kit's sandboxes and kept after they're removed. `--mount` and `sbxenv.yaml`
+`mounts:` choose your own directory, and the new `sbt inspect` shows where each one is. See
+[Usage](usage.md#kit-host-mounts).
+
 Docker in a sandbox is now the shipped `docker` kit, so every Docker-enabled create goes through
 the kit first start: if that first start fails, the sandbox is removed. Run the same command
 again once the cause is fixed.
@@ -55,8 +60,9 @@ terminal fail until you do.
 | 4a | Kits: v3 capabilities, v2 `spec.yaml`, Smolfiles, `kit inspect/validate/add`, the `docker` kit, the `_builder` sandbox | ✅ Done |
 | 4b | `sbxenv.yaml` core: `env create/run/exec/rm`, files, args, user defaults, secrets, kits, ports | ✅ Done |
 | 4c | Host services: `localhost[:PORT]` rules reach the host as `host.docker.internal`, live (interim: every host port, until smolvm can open one) | ✅ Done (interim) |
-| 5 | In parts, easiest first: 5a host mounts (`host-mount@1`, `sbxenv.yaml` `mounts:`); 5b SSH (`ssh-agent@1`, `setup ssh`); 5c skills (`--skills`, `skills`, `agent-skills@1`/`agent-skill@1`); 5d `template`; 5e clipboard and browser bridges; 5f MCP (`--static-mcp`, `mcp`) | Planned |
-| 6 | Finish `sbxenv.yaml`: `env plan`, remembered approvals (`env.rememberHostCommands`), `lifecycle`, `bindings`, `registries`, `mcp`, `mounts`, the remaining `sandboxOptions` | Planned |
+| 5a | Host mounts: `host-mount@1`, `--mount`, `sbxenv.yaml` `mounts:`, `inspect` | ✅ Done |
+| 5 | In parts, easiest first: 5b SSH (`ssh-agent@1`, `setup ssh`); 5c skills (`--skills`, `skills`, `agent-skills@1`/`agent-skill@1`); 5d `template`; 5e clipboard and browser bridges; 5f MCP (`--static-mcp`, `mcp`) | Planned |
+| 6 | Finish `sbxenv.yaml`: `env plan`, remembered approvals (`env.rememberHostCommands`), `lifecycle`, `bindings`, `registries`, `mcp`, the remaining `sandboxOptions` | Planned |
 | 7 | Kit publishing: `kit pack/push/pull/sign/verify` | Planned |
 | 8 | The `plus` kit, built and published with smolbento itself (an end-to-end check of everything before it) | Planned |
 | 9 | `tui` dashboard (bare `sbt` opens it on a terminal) | Planned |
@@ -110,11 +116,15 @@ meanwhile:
 
 ## sbx differences to revisit
 
-Measured against sbx v0.49.2; [sbx compatibility](sbx-compatibility.md) has the full list. Worth
+Measured against sbx v0.49.2, and v0.50.1 for kit host mounts, `--mount` and `inspect`;
+[sbx compatibility](sbx-compatibility.md) has the full list. Worth
 another look:
 
 - **Secrets sent to other hosts.** sbx lets a kit send a built-in secret (e.g. GitHub) to another
   host after you approve it once per host; smolbento refuses. An approval flow would close the gap.
+- **Kit host mounts.** A published kit's directory is keyed on its repository (sbx's key isn't
+  measured), `reset` keeps the directories (sbx deletes them), and `inspect` leaves out sbx's
+  CPU, memory, uptime, digest, auth, policy, proxy, MCP and daemon rows.
 - **Kit volume `size`.** sbx gives the volume a block device of that size; smolbento ignores it.
 - **Kit signing and publishing.** `kit pack/push/pull/sign/verify/provenance/builder` and the
   settings `kit.requireSignature`, `kit.trustedSigners`, `kit.ignoreTransparencyLog`,

@@ -103,6 +103,11 @@ access, so load only kits you trust.
 - **A workload kit's agent** runs as the image's `USER`, or as root if the image sets none, as in
   sbx. A non-root user gets your uid so it can write the workspace, like the built-in agents'
   `agent` user.
+- **Kit host mounts** (`host-mount@1`) are directories on your machine. What the sandbox writes
+  there lands on your disk, outside the VM, and every other sandbox of the same kit reads it, now
+  and after this one is removed (a published kit is keyed by its repository, so later versions of
+  it too). Don't let an untrusted sandbox share a kit host mount with one you trust. With `--mount`
+  the sandbox can read and write the directory you give it, and everything below it.
 - **Kit arguments aren't secret.** Their values can end up in the sandbox's environment and in
   smolvm's machine config. Put secrets in credentials, not in `--kit-arg`.
 - **Local kit builds** run in the `_builder` sandbox, a VM under your global network policy, not on
