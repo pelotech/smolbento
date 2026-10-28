@@ -9,6 +9,8 @@ pub const DOCKER: &str = "sbx.docker";
 pub const SECRETS: &str = "sbx.secrets";
 pub const CREDENTIAL_HOSTS: &str = "sbx.credential-hosts";
 pub const CREDENTIAL_ENV: &str = "sbx.credential-env";
+/// The kit builder's stored registry hosts, sorted: its header bindings, fixed at create.
+pub const REGISTRIES: &str = "sbx.registries";
 pub const CLONE: &str = "sbx.clone";
 pub const CLONE_TOP: &str = "sbx.clone-top";
 pub const FORK_OF: &str = "sbx.fork-of";
@@ -90,6 +92,8 @@ pub struct Meta {
     /// Env vars of those credentials as bound at create, sorted. A start removes the ones without
     /// a value, even after their service is gone from secrets.toml.
     pub credential_env: Vec<String>,
+    /// The kit builder's registry hosts, sorted (see `REGISTRIES`).
+    pub registries: Vec<String>,
     /// `--clone`: the host repo's top, which is also the clone's path in the guest. Stored as
     /// `sbx.clone=true` plus `sbx.clone-top` when it differs from `workspace` (a subdirectory was
     /// given).
@@ -143,6 +147,9 @@ impl Meta {
         }
         if !self.credential_env.is_empty() {
             labels.insert(CREDENTIAL_ENV.to_string(), self.credential_env.join(","));
+        }
+        if !self.registries.is_empty() {
+            labels.insert(REGISTRIES.to_string(), self.registries.join(","));
         }
         if let Some(top) = &self.clone_repo {
             labels.insert(CLONE.to_string(), "true".into());
@@ -211,6 +218,7 @@ impl Meta {
             secrets: list(labels.get(SECRETS)),
             credential_hosts: list(labels.get(CREDENTIAL_HOSTS)),
             credential_env: list(labels.get(CREDENTIAL_ENV)),
+            registries: list(labels.get(REGISTRIES)),
             clone_repo: labels
                 .get(CLONE)
                 .filter(|c| *c == "true")
@@ -347,6 +355,18 @@ mod tests {
         assert_eq!(labels["sbx.credential-env"], "GH_TOKEN,GITHUB_TOKEN");
         assert_eq!(Meta::from_labels(&labels), Some(m));
         assert!(!meta().to_labels().contains_key("sbx.credential-env"));
+    }
+
+    #[test]
+    fn registries_label_round_trips() {
+        let m = Meta {
+            registries: vec!["dhi.io".into(), "ghcr.io".into()],
+            ..meta()
+        };
+        let labels = m.to_labels();
+        assert_eq!(labels["sbx.registries"], "dhi.io,ghcr.io");
+        assert_eq!(Meta::from_labels(&labels), Some(m));
+        assert!(!meta().to_labels().contains_key("sbx.registries"));
     }
 
     #[test]
