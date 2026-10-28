@@ -41,10 +41,7 @@ pub(crate) fn build_request<R: Runner>(
 }
 
 fn unknown_agent(name: &str) -> String {
-    format!(
-        "unknown agent '{name}' (agents: {}); a kit is given by its path or registry reference",
-        agents::names().join(", ")
-    )
+    format!("unknown agent \"{name}\"")
 }
 
 /// Everything but the image: `agent` is the preset or workload kit name (the `sbx.agent` label
@@ -157,7 +154,7 @@ pub(crate) fn kit_target<R: Runner>(
             (req, Some(Workload::Preset(Box::new(workload))))
         }
         None => {
-            if !looks_like_kit(ctx, target) {
+            if !looks_like_kit(target) {
                 bail!(unknown_agent(target));
             }
             if opts.template.is_some() {
@@ -246,8 +243,9 @@ fn needs_docker_kit(docker_image: bool, workload: &Kit, mixins: &[Kit]) -> bool 
 }
 
 /// A path or a registry reference rather than a misspelt agent, which mustn't reach a registry.
-fn looks_like_kit<R: Runner>(ctx: &Ctx<R>, target: &str) -> bool {
-    target.contains(['/', ':', '@']) || target.starts_with('.') || ctx.cwd.join(target).exists()
+/// As in sbx a bare word is only an agent name, tag or not (`alpine:3`); a reference needs a `/`.
+fn looks_like_kit(target: &str) -> bool {
+    target.contains('/') || target.starts_with('.')
 }
 
 /// Resolves `--clone` into `req.clone`. Only for a sandbox that is about to be created: `--clone`
@@ -1068,8 +1066,15 @@ mod tests {
             sbt(&mut t.ctx, &["create", "nope"])
                 .unwrap_err()
                 .to_string()
-                .contains("unknown agent 'nope'")
+                .contains("unknown agent \"nope\"")
         );
+        // Exact sbx text; a bare word with a tag is still an agent name.
+        for w in ["alpine", "alpine:3"] {
+            assert_eq!(
+                sbt(&mut t.ctx, &["create", w]).unwrap_err().to_string(),
+                format!("unknown agent \"{w}\"")
+            );
+        }
         assert!(
             sbt(&mut t.ctx, &["create", "claude", "--name", "a_b"])
                 .unwrap_err()

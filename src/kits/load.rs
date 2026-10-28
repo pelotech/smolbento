@@ -72,6 +72,13 @@ enum Located {
 
 fn locate<R: Runner>(ctx: &Ctx<R>, reference: &str) -> Result<Located> {
     let Some(path) = local_path(ctx, reference)? else {
+        // Like sbx, a registry reference has a `/` (a tag alone isn't one: `alpine:3` is not).
+        if !reference.contains('/') {
+            bail!(
+                "kit reference \"{reference}\": not a local path and does not look like a \
+                 registry reference"
+            );
+        }
         trust::check(&Source::Registry(reference.to_string()), &ctx.settings)?;
         return Ok(Located::Registry(reference.to_string()));
     };
@@ -102,7 +109,8 @@ fn locate<R: Runner>(ctx: &Ctx<R>, reference: &str) -> Result<Located> {
     )
 }
 
-/// A canonical host path when REF is path-like (or exists relative to the cwd), else `None`.
+/// A canonical host path when REF is an explicit path (`/x`, `./x`, `../x`, `~/x`, `.`, `..`),
+/// else `None`. A relative name is never a path, even if it exists, as in sbx.
 fn local_path<R: Runner>(ctx: &Ctx<R>, reference: &str) -> Result<Option<PathBuf>> {
     let path = if let Some(rest) = reference.strip_prefix("~/") {
         let home = ctx.env.get("HOME").context("HOME is not set")?;
@@ -110,10 +118,11 @@ fn local_path<R: Runner>(ctx: &Ctx<R>, reference: &str) -> Result<Option<PathBuf
     } else {
         ctx.cwd.join(reference)
     };
-    let looks_local = ["/", "./", "../", "~/"]
-        .iter()
-        .any(|p| reference.starts_with(p));
-    if !looks_local && !path.exists() {
+    let looks_local = [".", ".."].contains(&reference)
+        || ["/", "./", "../", "~/"]
+            .iter()
+            .any(|p| reference.starts_with(p));
+    if !looks_local {
         return Ok(None);
     }
     match path.canonicalize() {
@@ -232,12 +241,13 @@ mod tests {
     }
 
     #[test]
-    fn a_bare_relative_name_that_exists_is_a_path() {
+    fn a_dot_slash_name_is_a_path_and_a_bare_one_is_not() {
         let t = allow_local();
         let dir = t.ctx.cwd.join("kit");
         fs::create_dir(&dir).unwrap();
         fs::write(dir.join("spec.yaml"), V2).unwrap();
-        assert_eq!(load(&t.ctx, "kit").unwrap().name, "my-kit");
+        assert_eq!(load(&t.ctx, "./kit").unwrap().name, "my-kit");
+        assert!(load(&t.ctx, "kit").is_err());
     }
 
     #[test]
@@ -245,7 +255,7 @@ mod tests {
         let t = allow_local();
         let p = t.ctx.cwd.join("dev.smolfile");
         fs::write(&p, "image = \"alpine\"\n").unwrap();
-        let k = load(&t.ctx, "dev.smolfile").unwrap();
+        let k = load(&t.ctx, "./dev.smolfile").unwrap();
         assert_eq!(k.source, Source::Smolfile(p.canonicalize().unwrap()));
     }
 
@@ -440,6 +450,20 @@ mod tests {
         ] {
             assert_eq!(load(&t.ctx, r).unwrap().name, want, "{r}");
             assert_eq!(kit_name(&t.ctx, r).unwrap(), want, "{r}");
+        }
+        assert!(t.ctx.vm.runner().call_lines().is_empty());
+    }
+
+    #[test]
+    fn bare_words_are_not_kits_even_when_a_directory_exists() {
+        let t = allow_local();
+        fs::create_dir(t.ctx.cwd.join("alpine")).unwrap();
+        for r in ["alpine", "alpine:3", "mykit"] {
+            let want = format!(
+                "kit reference \"{r}\": not a local path and does not look like a registry reference"
+            );
+            assert_eq!(load(&t.ctx, r).unwrap_err().to_string(), want, "{r}");
+            assert_eq!(kit_name(&t.ctx, r).unwrap_err().to_string(), want, "{r}");
         }
         assert!(t.ctx.vm.runner().call_lines().is_empty());
     }
