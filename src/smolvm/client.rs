@@ -221,7 +221,7 @@ impl<R: Runner> Smolvm<R> {
         checked(self.runner.run(&args)?)
     }
 
-    /// The smolvm version, e.g. `1.32.2`.
+    /// The smolvm version, e.g. `1.32.4`.
     pub fn version(&self) -> Result<String> {
         let out = self.call(args(&["--version"]))?;
         out.stdout
@@ -655,8 +655,8 @@ mod tests {
     #[test]
     fn version_takes_last_word() {
         let fake = FakeRunner::new();
-        fake.ok(&["--version"], "smolvm 1.32.2\n");
-        assert_eq!(Smolvm::new(fake).version().unwrap(), "1.32.2");
+        fake.ok(&["--version"], "smolvm 1.32.4\n");
+        assert_eq!(Smolvm::new(fake).version().unwrap(), "1.32.4");
     }
 
     #[test]

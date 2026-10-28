@@ -12,7 +12,7 @@ the VM is the boundary.
 ## Quick start
 
 ```sh
-brew install smol-machines/tap/smolvm   # smolvm 1.32.2 or newer
+brew install smol-machines/tap/smolvm   # smolvm 1.32.4 or newer
 just install                            # from a checkout of this repo
 cd ~/code/myrepo
 sbt run claude                          # create a sandbox for this directory and attach

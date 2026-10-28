@@ -145,6 +145,6 @@ mod tests {
         t.ctx.vm.runner().ok(&["--version"], "smolvm 1.0.0\n");
         let (ok, msg) = smolvm_check(&t.ctx);
         assert!(!ok);
-        assert!(msg.contains("minimum 1.32.2"), "{msg}");
+        assert!(msg.contains("minimum 1.32.4"), "{msg}");
     }
 }
