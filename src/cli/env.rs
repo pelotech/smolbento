@@ -6,11 +6,12 @@ use std::path::Path;
 use anyhow::{Context, Result, anyhow, bail};
 
 use super::{
-    Ctx, EnvApplyOpts, EnvCmd, EnvCommon, RunArgs, SandboxOpts, SecretSource, Unsupported, confirm,
+    Ctx, EnvApplyOpts, EnvCmd, EnvCommon, EnvExecArgs, EnvRmArgs, ExecArgs, RunArgs, SandboxOpts,
+    SecretSource, Unsupported, confirm,
 };
 use crate::env::file::SecretDecl;
 use crate::env::load::{ArgInputs, Loaded, load};
-use crate::env::spec::{EnvSpec, Op, Overrides, spec, summary};
+use crate::env::spec::{EnvSpec, Op, Overrides, name, remove_summary, spec, summary};
 use crate::sandbox;
 use crate::secrets::{SecretEntry, SecretsFile, Source, resolve::resolve, scope_for};
 use crate::smolvm::Runner;
@@ -19,8 +20,8 @@ pub fn run<R: Runner>(ctx: &mut Ctx<R>, cmd: EnvCmd) -> Result<i32> {
     match cmd {
         EnvCmd::Create(a) => create(ctx, &a.common, &a.apply),
         EnvCmd::Run(a) => env_run(ctx, &a.common, &a.apply, a.detach),
-        EnvCmd::Exec(_) => not_yet("exec"),
-        EnvCmd::Rm(_) => not_yet("rm"),
+        EnvCmd::Exec(a) => env_exec(ctx, a),
+        EnvCmd::Rm(a) => env_rm(ctx, a),
         EnvCmd::Plan(_) => not_yet("plan"),
     }
 }
@@ -89,6 +90,115 @@ fn env_run<R: Runner>(
         }
     };
     super::run::run(ctx, &args)
+}
+
+/// Loads the files for `exec` and `rm`, which need only the name: no kit or workspace checks.
+fn load_name<R: Runner>(
+    ctx: &Ctx<R>,
+    paths: &[String],
+    name_flag: Option<&str>,
+    env_arg: &[String],
+    env_args_file: &[std::path::PathBuf],
+) -> Result<(Loaded, String)> {
+    let home = ctx.env.get("HOME").context("HOME is not set")?;
+    let inputs = ArgInputs {
+        files: env_args_file.to_vec(),
+        flags: env_arg.to_vec(),
+    };
+    let loaded = load(paths, &inputs, &ctx.cwd, Path::new(home))?;
+    let name = name(&loaded, name_flag)?;
+    Ok((loaded, name))
+}
+
+fn env_exec<R: Runner>(ctx: &mut Ctx<R>, a: EnvExecArgs) -> Result<i32> {
+    // Without `--` every positional is the command and the file comes from the current directory.
+    let (paths, command) = if a.command.is_empty() {
+        (vec![], a.paths)
+    } else {
+        (a.paths, a.command)
+    };
+    if command.is_empty() {
+        bail!("specify a command to run, e.g. `sbt env exec -- bash`");
+    }
+    let (loaded, name) = load_name(ctx, &paths, a.name.as_deref(), &a.env_arg, &a.env_args_file)?;
+    if sandbox::find(&ctx.vm, &name)?.is_none() {
+        bail!("sandbox '{name}' not found for this environment\n  try: sbt env create");
+    }
+    // The file's env first, so the user's -e wins.
+    let mut env: Vec<String> = loaded
+        .file
+        .env
+        .iter()
+        .flatten()
+        .map(|(k, v)| format!("{k}={v}"))
+        .collect();
+    env.extend(a.env);
+    super::exec::exec(
+        ctx,
+        &ExecArgs {
+            interactive: a.interactive,
+            tty: a.tty,
+            env,
+            env_file: a.env_file,
+            user: a.user,
+            workdir: a.workdir,
+            privileged: a.privileged,
+            detach: a.detach,
+            detach_keys: a.detach_keys,
+            sandbox: name,
+            command,
+        },
+    )
+}
+
+fn env_rm<R: Runner>(ctx: &mut Ctx<R>, a: EnvRmArgs) -> Result<i32> {
+    let c = &a.common;
+    let (loaded, name) = load_name(
+        ctx,
+        &c.paths,
+        c.name.as_deref(),
+        &c.env_arg,
+        &c.env_args_file,
+    )?;
+    let scope = scope_for(Some(&name));
+    let scoped: Vec<String> = SecretsFile::load(&ctx.paths)?
+        .secrets
+        .into_iter()
+        .filter(|e| e.scope == scope)
+        .map(|e| e.service)
+        .collect();
+    let all = sandbox::list(&ctx.vm)?;
+    let sb = all.iter().find(|sb| sb.name() == name);
+    if sb.is_none() && scoped.is_empty() {
+        eprintln!("error: sandbox '{name}' not found\n  try: sbt ls");
+        return Ok(0);
+    }
+    if let Some(sb) = sb {
+        let forks = super::lifecycle::remaining_forks(sb, &all, &[&name]);
+        if !forks.is_empty() {
+            bail!(
+                "{name} has forks; remove its forks first: {}",
+                forks.join(", ")
+            );
+        }
+    }
+    write!(&ctx.out, "{}", remove_summary(&loaded, &name, &scoped))?;
+    if !a.force && !ctx.stdin_tty {
+        bail!("stdin is not a terminal; use --force to skip confirmation");
+    }
+    confirm(ctx, "Remove?", a.force)?;
+    match sb {
+        Some(sb) => {
+            super::lifecycle::delete_sandbox(ctx, sb, true)?;
+            writeln!(&ctx.out, "Removed sandbox {name}")?;
+        }
+        // No sandbox: only the secrets (and any stale policy) are left to forget.
+        None => super::secret::forget_sandbox(ctx, &name, true)?,
+    }
+    if !scoped.is_empty() {
+        writeln!(&ctx.out, "Removed secrets scoped to {name}")?;
+    }
+    Ok(0)
 }
 
 /// Loads the files and turns them into create options, refusing cloud-only flags first.
@@ -503,6 +613,191 @@ mod tests {
         assert_eq!(creates(&t).len(), 1);
         assert!(t.stdout().ends_with("claude-proj\n"));
         assert!(t.ctx.vm.runner().interactive_calls().is_empty());
+    }
+
+    fn listed(t: &TestEnv, extra: &[(&str, &str)]) {
+        let mut labels = vec![("sbx.name", "claude-proj"), ("sbx.agent", "claude")];
+        labels.extend_from_slice(extra);
+        let json = machine_json("sbx-claude-proj", "created", &labels);
+        t.ctx
+            .vm
+            .runner()
+            .ok(&["machine", "ls", "--json"], &format!("[{json}]"));
+    }
+
+    #[test]
+    fn exec_splits_paths_from_the_command_at_dashes() {
+        let mut t = with_file(FILE);
+        existing(&t, "running");
+        t.ctx.vm.runner().interactive_exit(3);
+        let file = t.ctx.cwd.join("sbxenv.yaml").display().to_string();
+        let code = sbt(&mut t.ctx, &["env", "exec", &file, "--", "npm", "test"]).unwrap();
+        assert_eq!(code, 3);
+        let call = t.ctx.vm.runner().interactive_calls()[0].join(" ");
+        assert!(call.ends_with("-- npm test"), "{call}");
+        assert!(call.contains("--name sbx-claude-proj"), "{call}");
+    }
+
+    #[test]
+    fn exec_without_dashes_takes_every_positional_as_the_command() {
+        let mut t = with_file(FILE);
+        existing(&t, "running");
+        t.ctx.vm.runner().interactive_exit(0);
+        sbt(&mut t.ctx, &["env", "exec", "go", "test", "./..."]).unwrap();
+        let call = t.ctx.vm.runner().interactive_calls()[0].join(" ");
+        assert!(call.ends_with("-- go test ./..."), "{call}");
+    }
+
+    #[test]
+    fn exec_passes_the_files_env_and_the_users_wins() {
+        let mut t = with_file(FILE);
+        existing(&t, "running");
+        t.ctx.vm.runner().interactive_exit(0);
+        sbt(&mut t.ctx, &["env", "exec", "-e", "X=mine", "--", "env"]).unwrap();
+        let call = t.ctx.vm.runner().interactive_calls()[0].join(" ");
+        let (file, user) = (call.find("-e X=one"), call.find("-e X=mine"));
+        assert!(file.is_some() && user.is_some() && file < user, "{call}");
+    }
+
+    #[test]
+    fn exec_of_a_missing_sandbox_fails() {
+        let mut t = with_file(FILE);
+        t.ctx
+            .vm
+            .runner()
+            .fail(&["machine", "status"], "NOT_FOUND", "vm not found");
+        let err = sbt(&mut t.ctx, &["env", "exec", "--", "ls"])
+            .unwrap_err()
+            .to_string();
+        assert_eq!(
+            err,
+            "sandbox 'claude-proj' not found for this environment\n  try: sbt env create"
+        );
+        assert!(t.ctx.vm.runner().interactive_calls().is_empty());
+    }
+
+    #[test]
+    fn exec_works_when_the_workspace_is_gone() {
+        let mut t = with_file(&FILE.replace("workspace: .", "workspace: ./gone"));
+        existing(&t, "running");
+        t.ctx.vm.runner().interactive_exit(0);
+        sbt(&mut t.ctx, &["env", "exec", "--", "ls"]).unwrap();
+    }
+
+    fn set_scoped(t: &mut TestEnv, scope: &[&str]) {
+        let mut a = vec!["secret", "set", "github", "-t", "tok"];
+        a.extend_from_slice(scope);
+        sbt(&mut t.ctx, &a).unwrap();
+    }
+
+    fn deletes(t: &TestEnv) -> Vec<String> {
+        lines(t)
+            .into_iter()
+            .filter(|l| l.starts_with("machine delete"))
+            .collect()
+    }
+
+    #[test]
+    fn rm_force_removes_the_sandbox_and_only_its_scoped_secret() {
+        let mut t = with_file(FILE);
+        set_scoped(&mut t, &["--sandbox", "claude-proj"]);
+        set_scoped(&mut t, &[]);
+        listed(&t, &[]);
+        assert_eq!(sbt(&mut t.ctx, &["env", "rm", "--force"]).unwrap(), 0);
+        let out = t.stdout();
+        assert!(out.contains("ENVIRONMENT\n  Name: claude-proj\n"), "{out}");
+        assert!(out.contains("  - github\n"), "{out}");
+        assert!(
+            out.ends_with("Removed sandbox claude-proj\nRemoved secrets scoped to claude-proj\n"),
+            "{out}"
+        );
+        assert_eq!(deletes(&t).len(), 1, "{:?}", lines(&t));
+        assert!(scoped(&t).is_empty());
+        assert_eq!(stored(&t, "github"), None);
+        let global = SecretsFile::load(&t.ctx.paths).unwrap();
+        assert!(global.secrets.iter().any(|e| e.scope == "global"));
+        assert_eq!(
+            t.ctx.store.get("global/github").unwrap().as_deref(),
+            Some("tok")
+        );
+    }
+
+    #[test]
+    fn rm_without_a_terminal_or_force_changes_nothing() {
+        let mut t = with_file(FILE);
+        set_scoped(&mut t, &["--sandbox", "claude-proj"]);
+        listed(&t, &[]);
+        let err = sbt(&mut t.ctx, &["env", "rm"]).unwrap_err().to_string();
+        assert_eq!(
+            err,
+            "stdin is not a terminal; use --force to skip confirmation"
+        );
+        assert!(t.stdout().contains("ENVIRONMENT\n"));
+        assert!(deletes(&t).is_empty());
+        assert_eq!(scoped(&t).len(), 1);
+    }
+
+    #[test]
+    fn rm_of_nothing_exits_0() {
+        let mut t = with_file(FILE);
+        t.ctx.vm.runner().ok(&["machine", "ls", "--json"], "[]");
+        assert_eq!(sbt(&mut t.ctx, &["env", "rm", "-f"]).unwrap(), 0);
+        assert_eq!(t.stdout(), "");
+        assert!(deletes(&t).is_empty());
+    }
+
+    #[test]
+    fn rm_with_only_scoped_secrets_removes_them() {
+        let mut t = with_file(FILE);
+        set_scoped(&mut t, &["--sandbox", "claude-proj"]);
+        t.ctx.vm.runner().ok(&["machine", "ls", "--json"], "[]");
+        sbt(&mut t.ctx, &["env", "rm", "-f"]).unwrap();
+        assert!(
+            t.stdout()
+                .ends_with("\nRemoved secrets scoped to claude-proj\n"),
+            "{}",
+            t.stdout()
+        );
+        assert!(!t.stdout().contains("Removed sandbox"));
+        assert!(scoped(&t).is_empty());
+        assert_eq!(stored(&t, "github"), None);
+    }
+
+    #[test]
+    fn rm_refuses_a_sandbox_with_forks() {
+        let mut t = with_file(FILE);
+        let a = machine_json(
+            "sbx-claude-proj",
+            "created",
+            &[("sbx.name", "claude-proj"), ("sbx.agent", "claude")],
+        );
+        let b = machine_json(
+            "sbx-claude-proj-fork-1",
+            "created",
+            &[
+                ("sbx.name", "claude-proj-fork-1"),
+                ("sbx.fork-of", "claude-proj"),
+            ],
+        );
+        t.ctx
+            .vm
+            .runner()
+            .ok(&["machine", "ls", "--json"], &format!("[{a},{b}]"));
+        let err = sbt(&mut t.ctx, &["env", "rm", "-f"])
+            .unwrap_err()
+            .to_string();
+        assert_eq!(
+            err,
+            "claude-proj has forks; remove its forks first: claude-proj-fork-1"
+        );
+        assert!(deletes(&t).is_empty());
+    }
+
+    #[test]
+    fn rm_needs_the_required_args() {
+        let mut t = with_file(&format!("{FILE}args:\n  channel:\n    required: true\n"));
+        assert!(sbt(&mut t.ctx, &["env", "rm", "-f"]).is_err());
+        assert!(sbt(&mut t.ctx, &["env", "exec", "--", "ls"]).is_err());
     }
 
     #[test]

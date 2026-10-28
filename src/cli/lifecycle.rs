@@ -324,14 +324,22 @@ pub(crate) fn stop_sandbox<R: Runner>(ctx: &Ctx<R>, sb: &Sandbox) -> Result<()> 
 }
 
 /// Deletes a sandbox and its per-sandbox policy; `forget_secrets` also drops its own secrets.
-fn remove<R: Runner>(ctx: &Ctx<R>, sb: &Sandbox, forget_secrets: bool) -> Result<()> {
+pub(crate) fn delete_sandbox<R: Runner>(
+    ctx: &Ctx<R>,
+    sb: &Sandbox,
+    forget_secrets: bool,
+) -> Result<()> {
     ctx.vm.delete(&sb.machine)?;
     if let Some(repo) = &sb.meta.clone_repo {
         // Best effort: the host repo may be gone.
         let _ = clone::remove_remote(Path::new(repo), sb.name());
     }
     session::clear(&ctx.paths.sessions(), sb.name());
-    super::secret::forget_sandbox(ctx, sb.name(), forget_secrets)?;
+    super::secret::forget_sandbox(ctx, sb.name(), forget_secrets)
+}
+
+fn remove<R: Runner>(ctx: &Ctx<R>, sb: &Sandbox, forget_secrets: bool) -> Result<()> {
+    delete_sandbox(ctx, sb, forget_secrets)?;
     writeln!(&ctx.out, "Removed {}", sb.name())?;
     Ok(())
 }
@@ -343,7 +351,11 @@ fn forks_first(mut targets: Vec<&Sandbox>) -> Vec<&Sandbox> {
 }
 
 /// Forks of `sb` that aren't being removed with it.
-fn remaining_forks<'a>(sb: &Sandbox, all: &'a [Sandbox], removing: &[&str]) -> Vec<&'a str> {
+pub(crate) fn remaining_forks<'a>(
+    sb: &Sandbox,
+    all: &'a [Sandbox],
+    removing: &[&str],
+) -> Vec<&'a str> {
     all.iter()
         .filter(|f| f.meta.fork_of.as_deref() == Some(sb.name()) && !removing.contains(&f.name()))
         .map(Sandbox::name)

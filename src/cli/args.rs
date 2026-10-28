@@ -167,7 +167,7 @@ impl Cmd {
                 | Cmd::Fork(_)
                 | Cmd::Ports(_)
                 | Cmd::UploadPack { .. }
-                | Cmd::Env(EnvCmd::Create(_) | EnvCmd::Run(_))
+                | Cmd::Env(EnvCmd::Create(_) | EnvCmd::Run(_) | EnvCmd::Exec(_) | EnvCmd::Rm(_))
         )
     }
 
@@ -190,10 +190,10 @@ pub enum EnvCmd {
     Create(EnvCreateArgs),
     /// Create (if needed) and attach to a sandbox environment
     Run(EnvRunArgs),
-    /// Execute a command inside a sandbox environment (not implemented yet)
-    Exec(Passthrough),
-    /// Remove a sandbox environment and its scoped resources (not implemented yet)
-    Rm(Passthrough),
+    /// Execute a command inside a sandbox environment
+    Exec(EnvExecArgs),
+    /// Remove a sandbox environment and its scoped resources
+    Rm(EnvRmArgs),
     /// Show what an environment would change outside the sandbox (not implemented yet)
     Plan(Passthrough),
 }
@@ -256,6 +256,67 @@ pub struct EnvRunArgs {
     /// Create/start the sandbox without attaching
     #[arg(short = 'd', long)]
     pub detach: bool,
+}
+
+/// `env exec`: `ExecArgs`' flags, the `EnvCommon` ones, then `[PATH...] -- CMD...`.
+#[derive(Debug, Args)]
+pub struct EnvExecArgs {
+    /// Keep stdin open
+    #[arg(short = 'i', long)]
+    pub interactive: bool,
+    /// Allocate a terminal
+    #[arg(short = 't', long)]
+    pub tty: bool,
+    /// Environment variable: KEY=VALUE, or KEY to copy the host's value
+    #[arg(short = 'e', long = "env")]
+    pub env: Vec<String>,
+    /// Read environment variables from a file
+    #[arg(long = "env-file")]
+    pub env_file: Vec<PathBuf>,
+    /// User to run as (default: agent)
+    #[arg(short = 'u', long)]
+    pub user: Option<String>,
+    /// Working directory (default: the primary workspace)
+    #[arg(short = 'w', long)]
+    pub workdir: Option<String>,
+    /// Run as root
+    #[arg(long)]
+    pub privileged: bool,
+    /// Not supported (as in sbx)
+    #[arg(short = 'd', long)]
+    pub detach: bool,
+    #[arg(long = "detach-keys", hide = true)]
+    pub detach_keys: Option<String>,
+    /// Name for the sandbox, overriding 'name:' in sbxenv.yaml and the derived <agent>-<directory> (every 'sbt env' command addressing this environment needs the same value)
+    #[arg(long)]
+    pub name: Option<String>,
+    /// Value for an argument the environment file declares, as name=value (can be repeated)
+    #[arg(long = "env-arg", value_name = "NAME=VALUE")]
+    pub env_arg: Vec<String>,
+    /// File of name=value environment arguments, one per line (can be repeated); --env-arg overrides
+    #[arg(long = "env-args-file", value_name = "FILE")]
+    pub env_args_file: Vec<PathBuf>,
+    /// sbxenv.yaml files or directories before `--`; without `--` every positional is the command
+    #[arg(value_name = "PATH")]
+    pub paths: Vec<String>,
+    /// The command to run
+    #[arg(last = true, value_name = "COMMAND")]
+    pub command: Vec<String>,
+}
+
+#[derive(Debug, Args)]
+pub struct EnvRmArgs {
+    #[command(flatten)]
+    pub common: EnvCommon,
+    /// Skip confirmation prompts and delete even if in use (e.g. an open SSH connection)
+    #[arg(short = 'f', long)]
+    pub force: bool,
+    /// Also remove this environment's bindings from the global credentials.yaml (smolbento keeps none)
+    #[arg(long = "prune-bindings")]
+    pub prune_bindings: bool,
+    /// Skip the host lifecycle commands the environment declares (smolbento runs none)
+    #[arg(long = "skip-host-commands")]
+    pub skip_host_commands: bool,
 }
 
 #[derive(Debug, Args)]

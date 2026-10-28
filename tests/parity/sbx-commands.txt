@@ -87,6 +87,11 @@ env create
 env create --force ./project
 env run -d ./project
 env run --env-arg channel=beta
+env exec go test ./...
+env exec -it -- bash
+env exec sbxenv.yaml override.yaml -- npm test
+env rm
+env rm --force --prune-bindings ./project
 # Later phases (must parse; exit 2 for now)
 kit pack ./my-kit
 kit push ./my-kit ghcr.io/myorg/my-kit:1.0

@@ -9,8 +9,8 @@ Usage: sbt env [OPTIONS] <COMMAND>
 Commands:
   create  Create a sandbox environment from sbxenv.yaml
   run     Create (if needed) and attach to a sandbox environment
-  exec    Execute a command inside a sandbox environment (not implemented yet)
-  rm      Remove a sandbox environment and its scoped resources (not implemented yet)
+  exec    Execute a command inside a sandbox environment
+  rm      Remove a sandbox environment and its scoped resources
   plan    Show what an environment would change outside the sandbox (not implemented yet)
   help    Print this message or the help of the given subcommand(s)
 

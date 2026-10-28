@@ -170,9 +170,19 @@ pub fn spec(loaded: &Loaded, overrides: &Overrides, secrets: &SecretsFile) -> Re
     })
 }
 
-/// sbx's plan layout, without diffs. `scoped` is the services stored for the sandbox (rm only).
-pub fn summary(loaded: &Loaded, spec: &EnvSpec, op: Op, scoped: &[String]) -> String {
-    let f = &loaded.file;
+/// The `rm` plan: the sandbox and the services scoped to it, all to destroy. Needs only the name,
+/// so it works when the rest of the file (workspace, kits) no longer checks out.
+pub fn remove_summary(loaded: &Loaded, name: &str, scoped: &[String]) -> String {
+    let mut out = header(loaded, name);
+    let mut n = section(&mut out, "SANDBOX", '-', vec![(name.to_string(), vec![])]);
+    let secrets = scoped.iter().map(|s| (s.clone(), vec![])).collect();
+    n += section(&mut out, "SECRETS", '-', secrets);
+    out += &format!("\n  0 to add · 0 to change · {n} to destroy\n");
+    out
+}
+
+/// The `ENVIRONMENT` block: name and file(s).
+fn header(loaded: &Loaded, name: &str) -> String {
     let files: Vec<String> = loaded
         .files
         .iter()
@@ -180,22 +190,20 @@ pub fn summary(loaded: &Loaded, spec: &EnvSpec, op: Op, scoped: &[String]) -> St
         .collect();
     let mut out = String::from("ENVIRONMENT\n");
     if let [file] = files.as_slice() {
-        out += &format!("  Name: {}\n  File: {}\n", spec.name, file);
+        out += &format!("  Name: {name}\n  File: {file}\n");
     } else {
-        out += &format!(
-            "  Name:  {}\n  Files: {}\n",
-            spec.name,
-            files.join("\n         ")
-        );
+        out += &format!("  Name:  {name}\n  Files: {}\n", files.join("\n         "));
     }
+    out
+}
 
+/// sbx's plan layout, without diffs. `scoped` is the services stored for the sandbox (rm only).
+pub fn summary(loaded: &Loaded, spec: &EnvSpec, op: Op, scoped: &[String]) -> String {
     if op == Op::Remove {
-        let mut n = section(&mut out, "SANDBOX", '-', vec![(spec.name.clone(), vec![])]);
-        let secrets = scoped.iter().map(|s| (s.clone(), vec![])).collect();
-        n += section(&mut out, "SECRETS", '-', secrets);
-        out += &format!("\n  0 to add · 0 to change · {n} to destroy\n");
-        return out;
+        return remove_summary(loaded, &spec.name, scoped);
     }
+    let f = &loaded.file;
+    let mut out = header(loaded, &spec.name);
 
     let mut sandbox = vec![format!("agent: {}", f.agent.as_deref().unwrap_or_default())];
     if let Some(o) = &f.sandbox_options {
