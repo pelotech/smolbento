@@ -56,6 +56,22 @@ clearly rather than doing something different.
 | Linked worktrees as the clone source | Not supported | Supported; the clone checks out the worktree's branch, or its commit when detached |
 | `--version` | `sbx version vX` | `sbt --version` prints `sbt X`; `sbt version` also shows the smolvm version |
 
+## Sandbox environment
+
+Set at create (`-e`, so every process sees them; your own `-e` wins). Never a secret value.
+
+- Set: `SANDBOX_NAME`, `SANDBOX_VM_ID` (the name), `SANDBOX_ID` (a new UUID per sandbox),
+  `WORKSPACE_DIR` (host path of the primary workspace; the guest workdir when mountless),
+  `SBX_AGENT` (preset or kit name), `SBX_CRED_<SVC>_MODE` (`apikey` when the service's secret is
+  bound at create, else `none`; `shell` gets all eight services, `claude` only `ANTHROPIC`, other
+  presets and kits none, as measured), `IS_SANDBOX=1` for `claude`. `TZ` is passed from the host's
+  `TZ` in TTY sessions (`run`, `exec -it`) only when it's set; sbx derives one when it isn't.
+- Left out: `*_API_KEY=proxy-managed` and the `GH_TOKEN` sentinel (smolvm uses its own
+  placeholders), `MCP_*` (no gateway), `GIT_CONFIG_*`, the proxy specifics
+  (`PROXY_CA_CERT_B64`, `JAVA_TOOL_OPTIONS`, `NODE_USE_ENV_PROXY`), `CLAUDE_ENV_FILE`,
+  `SSH_AUTH_SOCK*`, `WAYLAND_DISPLAY`/`XDG_RUNTIME_DIR`, the PAM-style startup-hook environment and
+  `LC_ALL=C` for startup hooks. Kits relying on those see them unset.
+
 ## Kits
 
 smolbento implements the [sandbox kit spec](https://github.com/docker/sandbox-kit-spec) at commit

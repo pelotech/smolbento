@@ -232,6 +232,9 @@ pub fn prepare_create<R: Runner>(
     req.credential_env.sort();
     req.credential_env.dedup();
     req.secrets = services;
+    if !name::is_internal(&req.name) {
+        sandbox::env::apply(req)?;
+    }
     let mut added = Vec::new();
     let mut first_start = None;
     if let Some(plan) = kits {

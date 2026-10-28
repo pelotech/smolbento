@@ -27,11 +27,13 @@ pub fn exec<R: Runner>(ctx: &mut Ctx<R>, a: &ExecArgs) -> Result<i32> {
             None => sandbox::launch_user(&ctx.vm, &sb).unwrap_or_else(|| "agent".into()),
         }
     };
+    let mut env = options::parse_env(&a.env, &a.env_file, &ctx.env)?;
+    sandbox::env::session_tz(&ctx.env, a.tty, &mut env);
     let spec = ExecSpec {
         name: sb.machine.clone(),
         user: Some(user),
         workdir: Some(a.workdir.clone().unwrap_or_else(|| sb.workdir())),
-        env: options::parse_env(&a.env, &a.env_file, &ctx.env)?,
+        env,
         interactive: a.interactive,
         tty: a.tty,
         detach: false,
@@ -192,6 +194,27 @@ mod tests {
             t.ctx.vm.runner().interactive_calls()[0].join(" "),
             "machine exec --name sbx-claude-proj -u root -w /tmp -e HOSTVAR=h -- id"
         );
+    }
+
+    #[test]
+    fn exec_passes_the_host_tz_only_with_a_tty() {
+        for (flags, want) in [(&["-it"][..], " -e TZ=Asia/Kolkata"), (&["-i"][..], "")] {
+            let mut t = test_env(&[("TZ", "Asia/Kolkata")]);
+            t.ctx.vm.runner().ok(
+                &["machine", "status"],
+                &machine_json("sbx-claude-proj", "running", &[("sbx.name", "claude-proj")]),
+            );
+            let mut args = vec!["exec"];
+            args.extend(flags);
+            args.extend(["claude-proj", "id"]);
+            sbt(&mut t.ctx, &args).unwrap();
+            let line = t.ctx.vm.runner().interactive_calls()[0].join(" ");
+            assert_eq!(
+                line.contains(" -e TZ=Asia/Kolkata"),
+                !want.is_empty(),
+                "{line}"
+            );
+        }
     }
 
     #[test]

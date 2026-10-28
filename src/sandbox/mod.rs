@@ -1,6 +1,7 @@
 //! Sandboxes: smolvm machines that smolbento created, identified by their `sbx.*` labels.
 
 pub mod create;
+pub mod env;
 pub mod labels;
 pub mod name;
 pub mod options;

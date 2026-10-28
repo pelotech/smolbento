@@ -683,7 +683,25 @@ mod tests {
         );
         assert_eq!(pair("--cpus"), vec!["2"]);
         assert_eq!(pair("--mem"), vec!["4096"]);
-        assert_eq!(pair("-e"), vec!["A=1"]);
+        // The user's -e first, then sbx's sandbox variables (SANDBOX_ID is a fresh UUID).
+        let mut env = pair("-e");
+        let id = env.remove(3);
+        assert!(
+            id.starts_with("SANDBOX_ID=") && id.len() == "SANDBOX_ID=".len() + 36,
+            "{id}"
+        );
+        assert_eq!(
+            env,
+            vec![
+                "A=1".to_string(),
+                "SANDBOX_NAME=claude-proj".into(),
+                "SANDBOX_VM_ID=claude-proj".into(),
+                format!("WORKSPACE_DIR={ws}"),
+                "SBX_AGENT=claude".into(),
+                "SBX_CRED_ANTHROPIC_MODE=none".into(),
+                "IS_SANDBOX=1".into(),
+            ]
+        );
         assert_eq!(pair("-p"), vec!["8080:80"]);
         assert!(pair("--label").contains(&"sbx.created=1000000".to_string()));
         assert!(pair("--label").contains(&"sbx.docker=true".to_string()));
