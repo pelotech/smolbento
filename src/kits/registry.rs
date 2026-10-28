@@ -28,7 +28,7 @@ use sha2::{Digest, Sha256};
 use tokio::io::AsyncWrite;
 
 use crate::kits::model::{Content, ImageConfig, Kit, Source};
-use crate::kits::{trust, v3};
+use crate::kits::{registry_auth, trust, v3};
 
 const DESCRIPTOR_ANNOTATION: &str = "vnd.docker.sandbox.kit.descriptor";
 const SCHEMA_ANNOTATION: &str = "vnd.docker.sandbox.kit.schema-version";
@@ -89,7 +89,15 @@ fn fetch_ref(
         .build()
         .context("starting the registry client")?;
     let client = new_client(&r);
+    // A stored registry secret (`sbt secret set --registry`) is used instead of anonymous.
+    let stored = registry_auth::kit_pull_auth(r.registry(), r.repository())
+        .with_context(|| format!("logging in to {} with its registry secret", r.registry()))?;
     rt.block_on(async {
+        if let Some(auth) = stored {
+            return fetch(&client, &r, &auth, cache, require_kit, layers)
+                .await
+                .with_context(|| format!("pulling {} with its registry secret", r.whole()));
+        }
         let anonymous = RegistryAuth::Anonymous;
         let first = fetch(&client, &r, &anonymous, cache, require_kit, layers).await;
         match first {
@@ -130,7 +138,7 @@ fn protocol_for(r: &Reference) -> ClientProtocol {
 }
 
 /// REGISTRY is `host[:port]`; the host is compared lowercased, as `trust::normalise` does.
-fn is_loopback(registry: &str) -> bool {
+pub(crate) fn is_loopback(registry: &str) -> bool {
     let registry = registry.to_ascii_lowercase();
     let port_ok = |p: &str| p.is_empty() || p.bytes().all(|c| c.is_ascii_digit());
     if let Some(rest) = registry.strip_prefix('[') {

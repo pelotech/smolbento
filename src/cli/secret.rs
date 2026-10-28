@@ -505,6 +505,12 @@ fn set_registry<R: Runner>(
     if host.is_empty() || host.contains("://") || host.contains(['/', '@', ' ']) {
         bail!("'{host}': use a bare registry host like ghcr.io (no scheme or path)");
     }
+    // The login is only ever sent over https (see `kits::registry_auth::trusted_realm`).
+    if let Some(e) = &auth_endpoint
+        && !e.starts_with("https://")
+    {
+        bail!("--registry-auth-endpoint must be an https:// URL: {e}");
+    }
     let mut value = String::new();
     input.read_to_string(&mut value)?;
     let value = value.strip_suffix('\n').unwrap_or(&value);
@@ -615,6 +621,35 @@ mod tests {
                 .is_empty()
         );
         assert_eq!(t.ctx.store.get("registry:ghcr.io").unwrap(), None);
+    }
+
+    #[test]
+    fn registry_auth_endpoint_must_be_https() {
+        let t = test_env(&[]);
+        let mut file = SecretsFile::load(&t.ctx.paths).unwrap();
+        let mut set = |endpoint: &str| {
+            set_registry(
+                &t.ctx,
+                &mut file,
+                "quay.io",
+                None,
+                Some(endpoint.into()),
+                "tok".as_bytes(),
+            )
+        };
+        let e = set("http://auth.example.com/token").unwrap_err();
+        assert_eq!(
+            e.to_string(),
+            "--registry-auth-endpoint must be an https:// URL: http://auth.example.com/token"
+        );
+        assert!(set("auth.example.com/token").is_err());
+        assert_eq!(t.ctx.store.get("registry:quay.io").unwrap(), None);
+        set("https://auth.example.com/token").unwrap();
+        let f = SecretsFile::load(&t.ctx.paths).unwrap();
+        assert_eq!(
+            f.registries[0].auth_endpoint.as_deref(),
+            Some("https://auth.example.com/token")
+        );
     }
 
     #[test]
