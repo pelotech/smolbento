@@ -47,6 +47,7 @@ impl E2e {
         cmd.current_dir(self.workspace())
             .env("SMOLBENTO_CONFIG_DIR", self.dir.path().join("config"))
             .env("SMOLBENTO_CACHE_DIR", self.dir.path().join("cache"))
+            .env("SMOLBENTO_DATA_DIR", self.dir.path().join("data"))
             .env("SMOLBENTO_DOCKER", "false")
             .envs(self.vars.iter().map(|(k, v)| (k, v)))
     }
@@ -1358,6 +1359,102 @@ build: |
     );
     let ls = e.ok(&["ls", "--json"]);
     assert!(!ls.contains("_builder"), "the builder is hidden: {ls}");
+}
+
+/// A kit's `host-mount@1` directory is shared by its sandboxes and outlives them; `--mount`
+/// replaces it with your own directory.
+#[test]
+#[ignore = "boots real VMs, builds in the builder sandbox and pulls debian; run with `just e2e`"]
+fn kit_host_mount_shared_and_kept() {
+    const SHARED: &str = "/home/agent/.e2e-shared";
+    let e = E2e::new("hostmount");
+    let _builder = BuilderGuard::new();
+    let kit = e.dir.path().join("hostmount");
+    std::fs::create_dir_all(&kit).unwrap();
+    std::fs::write(
+        kit.join("hostmount.yaml"),
+        format!(
+            r#"# syntax=docker/sandbox-kit:3
+schemaVersion: "3"
+kind: workload
+version: "1.0.0"
+capabilities:
+  - type: com.docker.sandbox/sbx@1
+  - type: com.docker.sandbox/host-mount@1
+    config:
+      path: {SHARED}
+build: |
+  FROM debian:bookworm-slim
+  RUN useradd -m -u 1000 -s /bin/bash agent
+  USER agent
+  CMD ["bash"]
+"#
+        ),
+    )
+    .unwrap();
+    let kit = kit.canonicalize().unwrap();
+    let (a, b) = (format!("{}-a", e.name), format!("{}-b", e.name));
+    struct Cleanup<'a>([&'a str; 2]);
+    impl Drop for Cleanup<'_> {
+        fn drop(&mut self) {
+            for n in self.0 {
+                let _ = Command::new("smolvm")
+                    .args(["machine", "delete", "-f", "-n", &format!("sbx-{n}")])
+                    .output();
+            }
+        }
+    }
+    let _cleanup = Cleanup([&a, &b]);
+    let ws = e.workspace();
+    let create = |name: &str, extra: &[&str]| {
+        let mut args = vec![
+            "create",
+            kit.to_str().unwrap(),
+            ws.to_str().unwrap(),
+            "--name",
+            name,
+            "--cpus",
+            "1",
+            "-m",
+            "1g",
+        ];
+        args.extend(extra);
+        e.ok(&args);
+    };
+    let mounts = |name: &str| -> serde_json::Value {
+        let out = e.ok(&["inspect", "--json", name]);
+        serde_json::from_str::<serde_json::Value>(&out).unwrap()["mounts"].clone()
+    };
+
+    // The agent in one sandbox writes; another sandbox of the same kit reads it.
+    create(&a, &[]);
+    create(&b, &[]);
+    let managed = smolbento::kits::host_mount::managed_dir(
+        &e.dir.path().join("data/kit-host-mounts"),
+        kit.to_str().unwrap(),
+        SHARED,
+    );
+    assert_eq!(mounts(&a)[SHARED], managed.to_str().unwrap());
+    let note = format!("{SHARED}/note");
+    e.ok(&["exec", &a, "sh", "-c", &format!("echo from-a > {note}")]);
+    assert_eq!(e.ok(&["exec", &b, "cat", &note]), "from-a\n");
+
+    // Removing both sandboxes keeps the directory and its file.
+    e.ok(&["rm", "-f", &a, &b]);
+    assert_eq!(
+        std::fs::read_to_string(managed.join("note")).unwrap(),
+        "from-a\n"
+    );
+
+    // `--mount` binds a directory of yours instead.
+    let mine = e.dir.path().join("mine");
+    std::fs::create_dir_all(&mine).unwrap();
+    let mine = mine.canonicalize().unwrap();
+    std::fs::write(mine.join("note"), "from-host\n").unwrap();
+    let bind = format!("{}:{SHARED}", mine.display());
+    create(&e.name, &["--mount", &bind]);
+    assert_eq!(e.ok(&["exec", &e.name, "cat", &note]), "from-host\n");
+    assert_eq!(mounts(&e.name)[SHARED], mine.to_str().unwrap());
 }
 
 /// The keychain smolbento's secret store uses here (src/secrets/store.rs `platform`): macOS

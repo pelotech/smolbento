@@ -39,7 +39,7 @@ struct Row<'a> {
     fork_of: Option<&'a str>,
 }
 
-fn status(state: MachineState) -> &'static str {
+pub(super) fn status(state: MachineState) -> &'static str {
     match state {
         MachineState::Running => "running",
         MachineState::Stopped => "stopped",
@@ -146,6 +146,7 @@ mod tests {
             machine: format!("sbx-{name}"),
             state,
             ports,
+            image: None,
         }
     }
 

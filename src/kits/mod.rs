@@ -6,6 +6,7 @@ pub mod builder;
 pub mod capability;
 pub mod compose;
 pub mod guest;
+pub mod host_mount;
 pub mod load;
 pub mod model;
 pub mod registry;

@@ -486,6 +486,52 @@ mod tests {
     }
 
     #[test]
+    fn create_binds_the_mounts_of_the_file() {
+        let mut t = with_file(
+            "schemaVersion: \"1\"\nagent: shell\nkits:\n  - ./hm\nmounts:\n  /home/agent/.hm: ./data\n",
+        );
+        t.ctx
+            .env
+            .insert("SMOLBENTO_KIT_ALLOW_LOCAL_KITS".into(), "true".into());
+        let ws = t.ctx.cwd.display().to_string();
+        t.ctx.vm.runner().ok(
+            &["machine", "status"],
+            &machine_json(
+                "sbx-shell-proj",
+                "created",
+                &[
+                    ("sbx.name", "shell-proj"),
+                    ("sbx.agent", "shell"),
+                    ("sbx.workspace", ws.as_str()),
+                ],
+            ),
+        );
+        t.ctx
+            .vm
+            .runner()
+            .once_fail(&["machine", "status"], "NOT_FOUND", "vm not found");
+        // env create looks the name up once more, for its own "already exists" error.
+        t.ctx
+            .vm
+            .runner()
+            .once_fail(&["machine", "status"], "NOT_FOUND", "vm not found");
+        v3_kit(
+            &t,
+            "hm",
+            r#"{"schemaVersion":"3","kind":"mixin","name":"hm","capabilities":[
+                {"type":"com.docker.sandbox/host-mount@1","config":{"path":"/home/agent/.hm"}}]}"#,
+            &[],
+        );
+        std::fs::create_dir(t.ctx.cwd.join("data")).unwrap();
+        sbt(&mut t.ctx, &["env", "create", "--force"]).unwrap();
+        let create = creates(&t).remove(0);
+        assert!(
+            create.contains(" -v TMP/proj/data:/home/agent/.hm "),
+            "{create}"
+        );
+    }
+
+    #[test]
     fn create_provisions_scoped_secrets_before_the_create() {
         let mut t = with_file(&format!(
             "{FILE}secrets:\n  github:\n    value: ghp_dummy\n"

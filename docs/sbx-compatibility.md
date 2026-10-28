@@ -1,17 +1,18 @@
 # sbx compatibility
 
-smolbento accepts Docker Sandboxes command lines flag for flag (sbx v0.49 reference). Anything not
-implemented yet still parses, then exits with status **2** and a message saying so, so scripts fail
-clearly rather than doing something different.
+smolbento accepts Docker Sandboxes command lines flag for flag (sbx v0.49 reference; kit host
+mounts, `--mount` and `inspect` against v0.50.1). Anything not implemented yet still parses, then
+exits with status **2** and a message saying so, so scripts fail clearly rather than doing
+something different.
 
 ## Works today
 
-`run`, `create`, `exec`, `ls`, `start`, `stop`, `rm`, `prune`, `reset`, `cp`, `version`,
-`completion`, `diagnose`, `settings`, `policy`, `secret`, `ports`, `env create|run|exec|rm`
-(see [Environment files](#environment-files)), `run/create --deny-network`
-(per-sandbox deny rules, as in sbx), `run/create --clone`, kits (`run/create --kit`, `--kit-arg`,
-`--kit-args-file`, `kit inspect`, `kit validate`, `kit add`; see [Kits](#kits)) and
-`policy ls --source`.
+`run`, `create`, `exec`, `ls`, `inspect`, `start`, `stop`, `rm`, `prune`, `reset`, `cp`,
+`version`, `completion`, `diagnose`, `settings`, `policy`, `secret`, `ports`,
+`env create|run|exec|rm` (see [Environment files](#environment-files)), `run/create
+--deny-network` (per-sandbox deny rules, as in sbx), `run/create --clone`, kits (`run/create
+--kit`, `--kit-arg`, `--kit-args-file`, `--mount`, `kit inspect`, `kit validate`, `kit add`; see
+[Kits](#kits)) and `policy ls --source`.
 `fork` is a smolbento extension: sbx has no fork (its `template save` saves the disk only).
 `daemon` is accepted and does nothing: smolbento has no daemon.
 
@@ -57,14 +58,16 @@ clearly rather than doing something different.
 | Linked worktrees as the clone source | Not supported | Supported; the clone checks out the worktree's branch, or its commit when detached |
 | `policy ls --wide` | sbx's wide layout | Columns differ: a NAME column is added; sbx's other wide columns aren't shown |
 | Install-phase kit rules in `policy ls` | Not listed after create | Never listed, also while a create is still installing (they're in effect then, but `policy ls` doesn't show them) |
+| `inspect` | Also shows CPUs, memory, uptime, image digest, auth mode, network policy, mount policy, runtime mounts, proxy, MCP gateway and daemon | Those are left out; the rest follows sbx's layout and JSON keys |
+| `reset` | Deletes all its state, kit host-mount directories included | Removes sandboxes only; kit host-mount directories stay (delete them yourself) |
 | `--version` | `sbx version vX` | `sbt --version` prints `sbt X`; `sbt version` also shows the smolvm version |
 
 ## Environment files
 
-`env create`, `env run`, `env exec` and `env rm` read `sbxenv.yaml` as sbx v0.49.2 does, for the
-fields smolbento supports. These exit 2 and name the field or command: `env plan`, `lifecycle`,
-`bindings`, `registries`, `mcp`, `mounts`, `sandboxOptions.profile|skills|display|gpu|usb|
-writableEnvFiles`, and `pullPolicy` other than `missing`.
+`env create`, `env run`, `env exec` and `env rm` read `sbxenv.yaml` as sbx v0.49.2 does (v0.50.1
+for `mounts`), for the fields smolbento supports. These exit 2 and name the field or command:
+`env plan`, `lifecycle`, `bindings`, `registries`, `mcp`, `sandboxOptions.profile|skills|display|
+gpu|usb|writableEnvFiles`, and `pullPolicy` other than `missing`.
 
 | Area | sbx | smolbento |
 |---|---|---|
@@ -77,6 +80,7 @@ writableEnvFiles`, and `pullPolicy` other than `missing`.
 | Workload kit as `agent` | The kit whose name equals `agent` | A local kit is matched by its directory name, a registry kit by the last part of its repository name |
 | Secret `command:` source | Runs on the host | Runs from a fresh temporary directory, so a relative helper path fails (also for `secret set --command`) |
 | `env run` on an existing sandbox | Passes `env`, applies nothing else | Same |
+| `mounts:` path no kit declares | `no kit declares host-mount@1 at "PATH"; remove this environment's sandbox and provisioned secrets`, then `try: sbx env rm`; checked after the kit image is prepared | The first part only (the secrets are stored by then, and `env rm` removes them); checked before a registry kit's image is prepared |
 | Kits that can't be loaded | Checked before secrets are stored | A local kit path that doesn't exist, a `.zip` or a `git+` source is refused before secrets are stored. A registry kit isn't checked without the network: one that can't be pulled fails after the secrets were stored; `env rm` removes them |
 
 ## Sandbox environment
@@ -123,7 +127,7 @@ with its `type@version` before anything is created; an optional one is skipped w
 | `long-running@1` | Yes | Yes: no auto-stop when the last session ends |
 | `privileged@1` | Yes | Yes |
 | `agent-sessions@1` | Declaration only | Declaration only |
-| `host-mount@1` | Yes | Later (Phase 5) |
+| `host-mount@1` | Yes | Yes: a directory on your machine, shared by the kit's sandboxes and kept after `rm` (see below) |
 | `ssh-agent@1` | Yes | Later (Phase 5, with `setup ssh`) |
 | `agent-skills@1`, `agent-skill@1` | Yes | Later (Phase 5, with `--skills`) |
 | `kit-registry@1` | Approved builder kits only | No |
@@ -178,6 +182,16 @@ What works as in sbx:
   which lists it between `<!-- sbx:kits-section start -->` and `<!-- sbx:kits-section end -->`.
 - **Settings.** `kit.allowedSources` and `kit.allowLocalKits` (see
   [Configuration](configuration.md#settings)).
+- **Host mounts.** A `host-mount@1` directory is `kit-host-mounts/<sha256(kit)>/<sha256(path)>`
+  under smolbento's data directory (`~/.local/share/smolbento`), keyed on the kit that declares it
+  (a mixin's own, not the workload's); for a local kit, `kit` is its canonical directory. Parents
+  are `0700`, the directory gets the kit's `mode` (`0755` by default), and an existing one is
+  reused as is. Sandboxes of the same kit share it, and `rm` keeps it. `--mount HOST:SANDBOX_PATH`
+  and `sbxenv.yaml` `mounts:` replace it, at create only, with sbx's errors
+  (`--mount "X" requires HOST:SANDBOX_PATH`, `HOST "X" does not exist on the host`,
+  `no kit declares host-mount@1 at "PATH"`). Two kits declaring storage at the same path fail with
+  a shorter form of sbx's message: `kits A and B both declare storage at PATH; a host mount has
+  one owner`.
 
 Differences:
 
@@ -196,6 +210,9 @@ Differences:
 | The name `docker` | A registry ref (the `docker` image) | The shipped Docker kit; write `docker.io/library/docker` for the image |
 | Docker in the sandbox | Run by the `-docker` images | The shipped `docker` kit, first before your kits (added to Docker-enabled images, or given with `--kit docker`), so their startup steps can use Docker. Its `dockerd` step runs in the background, so a failing `dockerd` is only logged (`/var/log/dockerd.log`) and doesn't stop the start |
 | v3 mixins on built-in agents | Refused (`no workload kit in the set`) | Allowed |
+| `--mount` with a file as `HOST` | Not measured | The workspace error, `workspace X is a file; …` (smolvm mounts directories only) |
+| `--mount` path no kit declares | `request failed: 400 Bad Request: no kit declares host-mount@1 at "PATH"`, after the image is prepared | `no kit declares host-mount@1 at "PATH"`; a local kit is still built first, but a published kit's image isn't prepared |
+| Where host-mount directories live | `~/Library/Application Support/com.docker.sandboxes/sandboxes/kit-host-mounts/` on macOS | Under smolbento's data directory, so sbx's directories aren't shared |
 | Loopback registries | HTTPS only | Plain HTTP for `localhost`, `127.0.0.0/8` and `::1`, as in Docker |
 | Smolfile kits | None | A Smolfile defines its own workload, so one without a command keeps the shell agent's |
 | Agent context file | Starts with a long platform preamble | No preamble: only kit text and the index |
@@ -217,6 +234,8 @@ Not compared with sbx yet:
 - `integrates` and `conflicts` errors (texts from the kit spec's resolver), and a published kit
   whose provides have no version (read as is; it meets only unconstrained requires).
 - An optional argument a kit declares but doesn't use, with no value and no default.
+- A published kit's host-mount identity: smolbento keys it on `<registry>/<repository>` (no tag or
+  digest, as the kit spec asks); sbx's choice hasn't been measured.
 - The agent file's kits index after hand edits, such as a removed or duplicated marker or text
   added inside the block.
 

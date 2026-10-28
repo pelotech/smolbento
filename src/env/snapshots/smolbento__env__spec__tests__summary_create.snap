@@ -19,6 +19,9 @@ WORKSPACES
   + <root>/proj/docs
       readOnly: true
 
+MOUNTS
+  + <root>/proj/cache -> /home/agent/.cache
+
 KITS
   + org/tool
 
@@ -43,5 +46,5 @@ PORTS
   + 53/udp
       host: ephemeral
 
-  11 to add · 0 to change · 0 to destroy
+  12 to add · 0 to change · 0 to destroy
   ! this plan runs commands on this machine, outside the sandbox, with your own privileges

@@ -155,6 +155,12 @@ pub fn spec(loaded: &Loaded, overrides: &Overrides, secrets: &SecretsFile) -> Re
         memory: o.and_then(|o| o.memory.clone()),
         env: env.iter().map(|(k, v)| format!("{k}={v}")).collect(),
         publish,
+        mount: f
+            .mounts
+            .iter()
+            .flatten()
+            .map(|(guest, host)| format!("{host}:{guest}"))
+            .collect(),
         template: o.and_then(|o| o.template.clone()),
         // `load` refuses every policy but `missing`.
         pull: o.and_then(|o| o.pull_policy.clone()),
@@ -238,6 +244,14 @@ pub fn summary(loaded: &Loaded, spec: &EnvSpec, op: Op, scoped: &[String]) -> St
         workspaces.push((w.path.clone(), ro.into_iter().collect()));
     }
     n += section(&mut out, "WORKSPACES", '+', workspaces);
+
+    let mounts = f
+        .mounts
+        .iter()
+        .flatten()
+        .map(|(guest, host)| (format!("{host} -> {guest}"), vec![]))
+        .collect();
+    n += section(&mut out, "MOUNTS", '+', mounts);
 
     let kits = f
         .kits
@@ -401,6 +415,30 @@ mod tests {
     }
 
     const HEAD: &str = "schemaVersion: \"1\"\n";
+
+    #[test]
+    fn mounts_become_host_colon_path_binds() {
+        let t = T::new();
+        let s = t
+            .spec(&format!(
+                "{HEAD}agent: claude\nmounts:\n  /home/agent/b: ./two\n  /home/agent/a: /abs/one\n"
+            ))
+            .unwrap();
+        assert_eq!(
+            s.opts.mount,
+            vec![
+                "/abs/one:/home/agent/a".to_string(),
+                format!("{}:/home/agent/b", t.p("proj/two")),
+            ]
+        );
+        assert!(
+            t.spec(&format!("{HEAD}agent: claude\n"))
+                .unwrap()
+                .opts
+                .mount
+                .is_empty()
+        );
+    }
 
     #[test]
     fn preset_agent_takes_every_kit() {
@@ -610,7 +648,7 @@ mod tests {
         t.write(
             "proj/sbxenv.yaml",
             &format!(
-                "{HEAD}name: web-app\nagent: claude\nworkspace:\n  path: ./web\n  clone: true\nadditionalWorkspaces:\n  - path: ./docs\n    readOnly: true\nkits:\n  - org/tool\nenv:\n  NODE_ENV: development\nports:\n  - sandbox: 3000\n    host: 3000\n  - sandbox: 53\n    protocol: udp\nsecrets:\n  github:\n    command: gh auth token\n  openai:\n    value: sk-dummy\n  google:\n    ref: op://vault/item/field\nsandboxOptions:\n  cpus: 4\n  memory: 8g\n"
+                "{HEAD}name: web-app\nagent: claude\nworkspace:\n  path: ./web\n  clone: true\nadditionalWorkspaces:\n  - path: ./docs\n    readOnly: true\nkits:\n  - org/tool\nmounts:\n  /home/agent/.cache: ./cache\nenv:\n  NODE_ENV: development\nports:\n  - sandbox: 3000\n    host: 3000\n  - sandbox: 53\n    protocol: udp\nsecrets:\n  github:\n    command: gh auth token\n  openai:\n    value: sk-dummy\n  google:\n    ref: op://vault/item/field\nsandboxOptions:\n  cpus: 4\n  memory: 8g\n"
             ),
         );
         t.write("proj/local.yaml", "env:\n  LOG_LEVEL: debug\n");

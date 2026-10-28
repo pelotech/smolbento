@@ -319,6 +319,24 @@ fn body(ty: &str, config: Option<Value>) -> Result<CapBody> {
                 mode: c.mode,
             }
         }
+        "host-mount@1" => {
+            let c: HostMountCfg = decode(config)?;
+            if !canonical_abs(&c.path) {
+                bail!(
+                    "host-mount@1 path {:?} must be absolute and canonical",
+                    c.path
+                );
+            }
+            if let Some(m) = &c.mode
+                && !((3..=4).contains(&m.len()) && m.bytes().all(|b| (b'0'..=b'7').contains(&b)))
+            {
+                bail!("host-mount@1 mode {m:?} must be octal");
+            }
+            CapBody::HostMount {
+                path: c.path,
+                mode: c.mode,
+            }
+        }
         "resources@1" => {
             let c: ResourcesCfg = decode(config)?;
             CapBody::Resources {
@@ -368,7 +386,7 @@ fn body(ty: &str, config: Option<Value>) -> Result<CapBody> {
         }
         // Its command templates matter to the agent launcher, not to the kit model.
         "agent-sessions@1" => CapBody::AgentSessions,
-        // host-mount, ssh-agent, agent-skills, agent-skill, usb-device, kit-registry,
+        // ssh-agent, agent-skills, agent-skill, usb-device, kit-registry,
         // agent-interactive-sessions, acp and anything unknown.
         _ => CapBody::Unsupported,
     })
@@ -592,6 +610,20 @@ struct VolumeCfg {
     #[serde(default)]
     tmpfs: bool,
     mode: Option<String>,
+}
+
+#[derive(Deserialize)]
+#[serde(deny_unknown_fields)]
+struct HostMountCfg {
+    path: String,
+    mode: Option<String>,
+}
+
+/// Absolute with no `.`/`..`/empty components (so no `//` or trailing `/`), not `/`, no NUL.
+fn canonical_abs(path: &str) -> bool {
+    path.strip_prefix('/').is_some_and(|rest| {
+        !path.contains('\0') && rest.split('/').all(|c| !matches!(c, "" | "." | ".."))
+    })
 }
 
 #[derive(Deserialize)]
@@ -833,6 +865,70 @@ mod tests {
             format!("{e:#}").contains("content and contentFile are mutually exclusive"),
             "{e:#}"
         );
+    }
+
+    fn host_mount(config: &str) -> Result<CapBody> {
+        let k = one_cap(&format!(
+            r#"{{"type":"com.docker.sandbox/host-mount@1","config":{config}}}"#
+        ))?;
+        Ok(k.caps[0].body.clone())
+    }
+
+    #[test]
+    fn host_mount_parses_path_and_mode() {
+        assert_eq!(
+            host_mount(r#"{"path":"/home/agent/.cache/x"}"#).unwrap(),
+            CapBody::HostMount {
+                path: "/home/agent/.cache/x".into(),
+                mode: None
+            }
+        );
+        for mode in ["755", "0755", "1777"] {
+            let body = host_mount(&format!(r#"{{"path":"/data","mode":"{mode}"}}"#)).unwrap();
+            assert_eq!(
+                body,
+                CapBody::HostMount {
+                    path: "/data".into(),
+                    mode: Some(mode.into())
+                }
+            );
+        }
+    }
+
+    #[test]
+    fn host_mount_refuses_paths_that_are_not_absolute_and_canonical() {
+        for path in [
+            "data",
+            "",
+            "/",
+            "/data/",
+            "/a//b",
+            "/a/./b",
+            "/a/../b",
+            "/a/.",
+            "/..",
+            "/a\\u0000b",
+        ] {
+            let e = host_mount(&format!(r#"{{"path":"{path}"}}"#)).unwrap_err();
+            let path = path.replace("\\u0000", "\0");
+            assert_eq!(
+                e.root_cause().to_string(),
+                format!("host-mount@1 path {path:?} must be absolute and canonical")
+            );
+        }
+    }
+
+    #[test]
+    fn host_mount_refuses_a_mode_that_is_not_octal_and_unknown_keys() {
+        for mode in ["", "75", "07555", "0789", "rwx", "+755"] {
+            let e = host_mount(&format!(r#"{{"path":"/data","mode":"{mode}"}}"#)).unwrap_err();
+            assert_eq!(
+                e.root_cause().to_string(),
+                format!("host-mount@1 mode {mode:?} must be octal")
+            );
+        }
+        let e = host_mount(r#"{"path":"/data","size":"1G"}"#).unwrap_err();
+        assert!(format!("{e:#}").contains("unknown field `size`"), "{e:#}");
     }
 
     #[test]

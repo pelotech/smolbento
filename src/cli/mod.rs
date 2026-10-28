@@ -5,6 +5,7 @@ mod diagnose;
 mod env;
 mod exec;
 mod fork;
+mod inspect;
 mod kit;
 mod kit_doc;
 pub(crate) mod lifecycle;
@@ -162,6 +163,7 @@ pub fn dispatch<R: Runner>(ctx: &mut Ctx<R>, cli: Cli) -> Result<i32> {
         Cmd::Cp(a) => exec::cp(ctx, &a),
         Cmd::Fork(a) => fork::run(ctx, &a),
         Cmd::Ls(a) => ls::run(ctx, &a),
+        Cmd::Inspect(a) => inspect::run(ctx, &a),
         Cmd::Start { sandboxes } => lifecycle::start(ctx, &sandboxes),
         Cmd::Stop { sandboxes } => lifecycle::stop(ctx, &sandboxes),
         Cmd::Rm(a) => lifecycle::rm(ctx, &a),

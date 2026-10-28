@@ -11,6 +11,7 @@ Commands:
   create      Create and start a sandbox
   exec        Run a command in a sandbox
   ls          List sandboxes
+  inspect     Show a sandbox's details
   start       Start stopped sandboxes
   stop        Stop sandboxes, keeping their state
   rm          Remove sandboxes

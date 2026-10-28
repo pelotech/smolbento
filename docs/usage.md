@@ -315,6 +315,8 @@ What a kit does, and when:
   hosts get `502`.
 - **Volumes** a kit declares are on the sandbox's own disk: they survive stop and start, and are
   removed with the sandbox.
+- **Host mounts** a kit declares are directories on your machine, shared by the kit's sandboxes
+  and kept after they're removed (see [kit host mounts](#kit-host-mounts)).
 
 Only kits from Docker Hub load by default, plus local kits; see [Configuration](configuration.md)
 for `kit.allowedSources` and `kit.allowLocalKits`, and [Security](SECURITY.md#kits) for what a kit
@@ -347,6 +349,33 @@ for it). A kit that would change the image, credentials, ports, volumes, resourc
 variables or auto-stop needs a new sandbox: `kit add` says "recreate required" and changes nothing.
 If the kit opens network access, `kit add` asks first; `-y` grants it, and without a terminal it
 fails.
+
+### Kit host mounts
+
+A kit that declares `host-mount@1` gets a directory on your machine mounted at the path it names,
+for something the agent should keep, such as a cache. smolbento creates it on first use under
+`~/.local/share/smolbento/kit-host-mounts/` (`$XDG_DATA_HOME/smolbento/…` when that's set, or
+`$SMOLBENTO_DATA_DIR/kit-host-mounts/`), one directory per kit and path. Every sandbox of the same
+kit shares it, the agent can write it, and it's kept when the sandboxes are removed. A local kit is keyed by its
+directory, a published kit by its repository, so a new tag or digest keeps the same directory.
+
+To use a directory of your own instead, bind it when you create the sandbox:
+
+```sh
+sbt create ./my-kit . --mount ~/agent-cache:/home/agent/.cache/tool
+```
+
+`--mount HOST:SANDBOX_PATH` can be repeated, and each `SANDBOX_PATH` must be one a kit declares
+(`no kit declares host-mount@1 at "PATH"` otherwise). `HOST` is resolved from the current directory
+and must be an existing directory. Mounts are set at create only: `sbt run --mount` on an existing
+sandbox still checks `HOST` (a missing or invalid one is an error), then warns and ignores the
+mount, and `kit add` of a kit that declares one says "recreate required".
+In an [environment file](#environments-sbxenvyaml), `mounts:` does the same.
+
+`sbt inspect SANDBOX` shows a sandbox's details, with each host mount as `Host mounts: HOST:PATH`
+(`--json` or `--format json|yaml`: `mounts`, sandbox path to host path). There's no command to
+remove the directories: `rm`, `prune` and `reset` leave them alone. Delete one yourself when no
+sandbox needs it.
 
 ### The builder sandbox
 
@@ -423,9 +452,17 @@ sbt env rm                           # remove the sandbox and the secrets scoped
   directory name, a registry kit by the last part of its repository name. The other kits are added
   to it. A local kit path that doesn't exist, a `.zip` or a `git+` source is refused before any
   secret is stored; a registry kit that can't be pulled fails after (`env rm` removes the secrets).
+- **Mounts.** `mounts:` maps a kit's [host mount](#kit-host-mounts) path to a directory of yours,
+  as `--mount` does; a relative directory is relative to the file that names it. Later files win
+  per path.
+
+  ```yaml
+  mounts:
+    /home/agent/.cache/tool: ./cache
+  ```
 
 Not supported yet (exit 2, naming the field or command): `env plan`, `lifecycle`, `bindings`,
-`registries`, `mcp`, `mounts`, and the `sandboxOptions` other than `cpus`, `memory`, `template` and
+`registries`, `mcp`, and the `sandboxOptions` other than `cpus`, `memory`, `template` and
 `pullPolicy: missing`. `refresh` and `backend` on a secret, `--skip-host-commands` and
 `--prune-bindings` are accepted and do nothing. Secret service names must be ones `sbt secret set`
 knows; others are refused. See [sbx compatibility](sbx-compatibility.md#environment-files).
@@ -640,7 +677,9 @@ sbt ls --json            # or --format json|yaml
 sbt ls -q                # names only
 ```
 
-`sbt` with no arguments also lists sandboxes.
+`sbt` with no arguments also lists sandboxes. `sbt inspect NAME` shows one sandbox: agent, kits,
+state, image, workspace, host mounts, secrets, ports and sessions (`--json` or
+`--format json|yaml` for scripts).
 
 ```
 SANDBOX         AGENT    STATUS      PORTS                 WORKSPACE             CREATED

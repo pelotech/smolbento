@@ -35,14 +35,18 @@ pub fn run<R: Runner>(ctx: &mut Ctx<R>, a: &RunArgs) -> Result<i32> {
         Some(n) => sandbox::find(&ctx.vm, n)?,
         None => None,
     };
-    let kits_ignored = |sb: &Sandbox| {
-        if let Some(w) = ignored_kits_warning(a, sb.name()) {
+    let warn_ignored = |sb: &Sandbox| {
+        let warnings = [
+            ignored_kits_warning(a, sb.name()),
+            ignored_mount_warning(a, sb.name()),
+        ];
+        for w in warnings.into_iter().flatten() {
             eprintln!("{w}");
         }
     };
     let (mut sb, created) = match existing {
         Some(sb) => {
-            kits_ignored(&sb);
+            warn_ignored(&sb);
             (sb, false)
         }
         None => {
@@ -55,7 +59,7 @@ pub fn run<R: Runner>(ctx: &mut Ctx<R>, a: &RunArgs) -> Result<i32> {
             let (mut req, workload) = kit_target(ctx, &a.targets, &a.opts, true)?;
             match sandbox::find(&ctx.vm, &req.name)? {
                 Some(sb) => {
-                    kits_ignored(&sb);
+                    warn_ignored(&sb);
                     (sb, false)
                 }
                 None => {
@@ -185,6 +189,13 @@ fn ignored_kits_warning(a: &RunArgs, name: &str) -> Option<String> {
     let kit_target = a.targets.first().is_some_and(|t| agents::find(t).is_none());
     (has_kit_flags(&a.opts) || kit_target).then(|| {
         format!("warning: kits only apply when a sandbox is created; {name} already exists")
+    })
+}
+
+/// The warning for `--mount` given to `run` of a sandbox that already exists.
+fn ignored_mount_warning(a: &RunArgs, name: &str) -> Option<String> {
+    (!a.opts.mount.is_empty()).then(|| {
+        format!("warning: --mount only applies when a sandbox is created; {name} already exists")
     })
 }
 
@@ -791,6 +802,39 @@ mod tests {
             );
             assert_eq!(t.ctx.vm.runner().interactive_calls().len(), 1, "{kit}");
         }
+    }
+
+    #[test]
+    fn mount_on_an_existing_sandbox_is_warned_about_and_attaches() {
+        use clap::Parser;
+        let warning = |args: &[&str]| {
+            let cli = super::super::Cli::try_parse_from(
+                std::iter::once("sbt").chain(args.iter().copied()),
+            )
+            .unwrap();
+            let Some(super::super::Cmd::Run(a)) = cli.command else {
+                panic!("run");
+            };
+            super::ignored_mount_warning(&a, "s1")
+        };
+        assert_eq!(
+            warning(&["run", "--name", "s1", "--mount", ".:/home/agent/x"]).as_deref(),
+            Some("warning: --mount only applies when a sandbox is created; s1 already exists")
+        );
+        assert_eq!(warning(&["run", "--name", "s1"]), None);
+
+        let mut t = test_env(&[]);
+        created(&t, "running");
+        t.ctx.vm.runner().interactive_exit(0);
+        sbt(&mut t.ctx, &["run", "claude", "--mount", ".:/home/agent/x"]).unwrap();
+        assert!(
+            !t.ctx
+                .vm
+                .runner()
+                .call_lines()
+                .iter()
+                .any(|l| l.contains("machine create"))
+        );
     }
 
     #[test]

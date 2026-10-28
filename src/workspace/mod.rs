@@ -28,12 +28,7 @@ impl Workspace {
             .join(raw)
             .canonicalize()
             .with_context(|| format!("workspace {raw} does not exist"))?;
-        if !path.is_dir() {
-            bail!(
-                "workspace {} is a file; smolvm can only mount directories",
-                path.display()
-            );
-        }
+        check_dir(&path)?;
         Ok(Workspace { path, read_only })
     }
 
@@ -67,6 +62,45 @@ impl Workspace {
             self.path.display().to_string()
         }
     }
+}
+
+fn check_dir(path: &Path) -> Result<()> {
+    if !path.is_dir() {
+        bail!(
+            "workspace {} is a file; smolvm can only mount directories",
+            path.display()
+        );
+    }
+    Ok(())
+}
+
+/// Parses `--mount HOST:SANDBOX_PATH` into the canonical host directory and the guest path. HOST
+/// is relative to `cwd`; SANDBOX_PATH is after the last `:`.
+pub fn parse_mount(arg: &str, cwd: &Path) -> Result<(PathBuf, String)> {
+    let (host, guest) = match arg.rsplit_once(':') {
+        Some((h, g)) if !h.is_empty() && !g.is_empty() => (h, g),
+        _ => bail!("--mount \"{arg}\" requires HOST:SANDBOX_PATH\n  try: sbt create --help"),
+    };
+    let abs = cwd.join(host);
+    let host = abs
+        .canonicalize()
+        .ok()
+        .with_context(|| format!("HOST \"{}\" does not exist on the host", abs.display()))?;
+    check_dir(&host)?;
+    Ok((host, guest.to_string()))
+}
+
+/// `parse_mount` for each `--mount`; a SANDBOX_PATH is bound once.
+pub fn parse_mounts(args: &[String], cwd: &Path) -> Result<Vec<(PathBuf, String)>> {
+    let mut mounts: Vec<(PathBuf, String)> = Vec::new();
+    for arg in args {
+        let (host, guest) = parse_mount(arg, cwd)?;
+        if mounts.iter().any(|(_, g)| *g == guest) {
+            bail!("--mount {guest} given twice");
+        }
+        mounts.push((host, guest));
+    }
+    Ok(mounts)
 }
 
 #[cfg(test)]
@@ -114,5 +148,54 @@ mod tests {
                 .to_string()
                 .contains("only mount directories")
         );
+    }
+
+    #[test]
+    fn parses_a_mount_binding() {
+        let dir = tempfile::tempdir().unwrap();
+        let root = dir.path().canonicalize().unwrap();
+        std::fs::create_dir(root.join("data")).unwrap();
+        std::fs::write(root.join("f"), "x").unwrap();
+        assert_eq!(
+            parse_mount("data:/home/agent/x", &root).unwrap(),
+            (root.join("data"), "/home/agent/x".to_string())
+        );
+        // HOST may hold a `:`; SANDBOX_PATH is after the last one.
+        std::fs::create_dir(root.join("a:b")).unwrap();
+        assert_eq!(parse_mount("a:b:/x", &root).unwrap().0, root.join("a:b"));
+        let err = |arg: &str| format!("{:#}", parse_mount(arg, &root).unwrap_err());
+        for arg in ["data", ":/x", "data:"] {
+            assert_eq!(
+                err(arg),
+                format!("--mount \"{arg}\" requires HOST:SANDBOX_PATH\n  try: sbt create --help")
+            );
+        }
+        assert_eq!(
+            err("missing:/x"),
+            format!(
+                "HOST \"{}\" does not exist on the host",
+                root.join("missing").display()
+            )
+        );
+        assert_eq!(
+            err("f:/x"),
+            format!(
+                "workspace {} is a file; smolvm can only mount directories",
+                root.join("f").display()
+            )
+        );
+    }
+
+    #[test]
+    fn a_sandbox_path_can_be_bound_once() {
+        let dir = tempfile::tempdir().unwrap();
+        let root = dir.path().canonicalize().unwrap();
+        let args = |a: &[&str]| a.iter().map(|s| s.to_string()).collect::<Vec<_>>();
+        assert_eq!(
+            parse_mounts(&args(&[".:/a", ".:/b"]), &root).unwrap().len(),
+            2
+        );
+        let e = parse_mounts(&args(&[".:/a", ".:/a"]), &root).unwrap_err();
+        assert_eq!(e.to_string(), "--mount /a given twice");
     }
 }

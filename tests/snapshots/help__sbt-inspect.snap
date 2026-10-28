@@ -1,0 +1,27 @@
+---
+source: tests/help.rs
+expression: help(&path)
+---
+Show a sandbox's details
+
+Usage: sbt inspect [OPTIONS] <SANDBOX>
+
+Arguments:
+  <SANDBOX>
+
+
+Options:
+  -D, --debug
+          Print each smolvm command line
+
+      --format <FORMAT>
+          Output format
+
+          [default: table]
+          [possible values: table, json, yaml]
+
+      --json
+          Same as --format json
+
+  -h, --help
+          Print help

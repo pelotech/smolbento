@@ -7,6 +7,7 @@ use anyhow::{Context, Result, bail};
 
 use super::Ctx;
 use crate::kits::apply::apply;
+use crate::kits::host_mount;
 use crate::kits::resolve::Plan;
 use crate::policy::{Mode, Policy, compile};
 use crate::sandbox::{self, CloneStep, CreateRequest, Meta, Sandbox, StartPlan, name};
@@ -205,8 +206,9 @@ pub fn ensure_policy<R: Runner>(ctx: &Ctx<R>) -> Result<Policy> {
 
 /// Fills a new sandbox's network, deny CIDRs and credentials from the policy and secrets, after
 /// adding its `--deny-network` rules, and applies the resolved `kits` on top: their credentials
-/// merge with the user's secrets and their rules join the policy. Returns the ids of the rules it
-/// added (see `create`) and the kits' first-start steps.
+/// merge with the user's secrets and their rules join the policy, and their host mounts get a
+/// `--mount` binding or a managed directory (made here). Returns the ids of the rules it added
+/// (see `create`) and the kits' first-start steps.
 pub fn prepare_create<R: Runner>(
     ctx: &Ctx<R>,
     req: &mut CreateRequest,
@@ -215,6 +217,24 @@ pub fn prepare_create<R: Runner>(
 ) -> Result<(Vec<String>, Option<sandbox::KitFirstStart>)> {
     // Bad hosts fail before the policy prompt and before smolvm is asked for anything.
     let denies = super::policy::parse_create_denies(deny_network)?;
+    // So do `--mount` paths no kit declares. The managed directories are made last.
+    let workspaces: Vec<String> = req
+        .workspaces
+        .iter()
+        .map(|w| &w.path)
+        .chain(req.clone.as_ref().map(|c| &c.top))
+        .map(|p| p.display().to_string())
+        .collect();
+    let host_dirs = host_mount::host_dirs(
+        kits.map_or(&[], |p| &p.merged.host_mounts),
+        &req.host_mounts,
+        &workspaces,
+        &ctx.paths.kit_host_mounts(),
+    )?;
+    req.host_mounts = host_dirs
+        .iter()
+        .map(|d| (d.host.clone(), d.guest.clone()))
+        .collect();
     let mut policy = ensure_policy(ctx)?;
     let secrets = SecretsFile::load(&ctx.paths)?;
     // Internal sandboxes run untrusted code (a kit's build steps): no secrets, not even as
@@ -276,6 +296,8 @@ pub fn prepare_create<R: Runner>(
             &req.credential_hosts,
         )?);
     }
+    // After every check, so a refused create makes no directories.
+    host_mount::create_managed(&host_dirs)?;
     if !added.is_empty() {
         // The last fallible step, so an error here leaves no rules for `create` to roll back.
         policy.save(&ctx.paths)?;

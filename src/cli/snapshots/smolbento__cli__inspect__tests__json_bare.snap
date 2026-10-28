@@ -1,0 +1,11 @@
+---
+source: src/cli/inspect.rs
+expression: t.stdout()
+---
+{
+  "name": "shell-x",
+  "agent": "shell",
+  "kits": [],
+  "state": "stopped",
+  "sessions": 0
+}

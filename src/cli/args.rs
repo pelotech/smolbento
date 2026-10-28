@@ -34,6 +34,8 @@ pub enum Cmd {
     Exec(ExecArgs),
     /// List sandboxes
     Ls(LsArgs),
+    /// Show a sandbox's details
+    Inspect(InspectArgs),
     /// Start stopped sandboxes
     Start {
         #[arg(required = true)]
@@ -118,6 +120,7 @@ impl Cmd {
             Cmd::Create(_) => "create",
             Cmd::Exec(_) => "exec",
             Cmd::Ls(_) => "ls",
+            Cmd::Inspect(_) => "inspect",
             Cmd::Start { .. } => "start",
             Cmd::Stop { .. } => "stop",
             Cmd::Rm(_) => "rm",
@@ -158,6 +161,7 @@ impl Cmd {
                 | Cmd::Create(_)
                 | Cmd::Exec(_)
                 | Cmd::Ls(_)
+                | Cmd::Inspect(_)
                 | Cmd::Start { .. }
                 | Cmd::Stop { .. }
                 | Cmd::Rm(_)
@@ -470,6 +474,10 @@ pub struct SandboxOpts {
     /// `--kit-arg` and `--kit-args-file`.
     #[arg(skip)]
     pub kit_pins: Vec<(String, Vec<String>)>,
+    /// Bind a host directory to a kit host-mount@1 path (can be repeated): HOST:SANDBOX_PATH. Can
+    /// only be used when creating a new sandbox.
+    #[arg(long, value_name = "HOST:SANDBOX_PATH")]
+    pub mount: Vec<String>,
     /// Add a per-sandbox network deny rule at creation time. Can be specified multiple times.
     /// The rule applies only to the new sandbox and can be listed or removed later with
     /// 'sbt policy ls <NAME>' or 'sbt policy rm network --sandbox <NAME> --resource <HOST>'
@@ -614,6 +622,17 @@ pub struct LsArgs {
     /// Only print names
     #[arg(short = 'q', long)]
     pub quiet: bool,
+}
+
+#[derive(Debug, Args)]
+pub struct InspectArgs {
+    pub sandbox: String,
+    /// Output format
+    #[arg(long, value_enum, default_value = "table")]
+    pub format: Format,
+    /// Same as --format json
+    #[arg(long)]
+    pub json: bool,
 }
 
 #[derive(Debug, Args)]

@@ -16,7 +16,7 @@ use crate::kits::model::{Content, Kind, Kit, Source};
 use crate::kits::resolve::{Plan, resolve_for};
 use crate::sandbox::{self, CreateRequest, Sandbox, name, options, session};
 use crate::smolvm::Runner;
-use crate::workspace::{Workspace, clone};
+use crate::workspace::{self, Workspace, clone};
 
 /// Turns sbx's create options into a [`CreateRequest`]. `default_to_cwd`: `run` mounts the current
 /// directory when no path is given; `create` makes a mountless sandbox.
@@ -54,6 +54,8 @@ fn base_request<R: Runner>(
     opts: &SandboxOpts,
     default_to_cwd: bool,
 ) -> Result<CreateRequest> {
+    // Before anything else, like sbx; whether a kit declares each path is checked once kits resolve.
+    let host_mounts = workspace::parse_mounts(&opts.mount, &ctx.cwd)?;
     let mut workspaces = paths
         .iter()
         .map(|p| Workspace::parse(p, &ctx.cwd))
@@ -98,6 +100,7 @@ fn base_request<R: Runner>(
         created: ctx.now,
         cpus_set: opts.cpus.is_some(),
         memory_set: opts.memory.is_some(),
+        host_mounts,
         ..Default::default()
     })
 }
@@ -2239,5 +2242,170 @@ mod tests {
             panic!("expected create");
         };
         super::build_kit_request(&t.ctx, &a.targets, &a.opts, true).unwrap()
+    }
+
+    const SHARED: &str = "/home/agent/.chk-shared";
+
+    /// A `shell-proj` create with a v3 mixin `./hm` declaring host-mount@1 at `path`, mode 0750.
+    fn host_mount_env(path: &str) -> TestEnv {
+        let t = kit_env();
+        let fake = t.ctx.vm.runner();
+        fake.ok(
+            &["machine", "status"],
+            &json("sbx-shell-proj", "created", "shell-proj"),
+        );
+        fake.once_fail(&["machine", "status"], "NOT_FOUND", "vm not found");
+        let descriptor = format!(
+            r#"{{"schemaVersion":"3","kind":"mixin","name":"hm","capabilities":[
+                {{"type":"com.docker.sandbox/host-mount@1","config":{{"path":"{path}",
+                "mode":"0750"}}}}]}}"#
+        );
+        v3_kit(&t, "hm", &descriptor, &[]);
+        std::fs::create_dir(t.ctx.cwd.join("data")).unwrap();
+        t
+    }
+
+    /// `./hm`'s managed directory for `path`.
+    fn managed(t: &TestEnv, path: &str) -> std::path::PathBuf {
+        let kit = t.ctx.cwd.join("hm").display().to_string();
+        crate::kits::host_mount::managed_dir(&t.ctx.paths.kit_host_mounts(), &kit, path)
+    }
+
+    /// The `-v` values and the `sbx.host-mounts` label of the machine create.
+    fn create_mounts(t: &TestEnv) -> (Vec<String>, Option<String>) {
+        let call = t
+            .ctx
+            .vm
+            .runner()
+            .calls()
+            .into_iter()
+            .find(|c| c.starts_with(&["machine".to_string(), "create".to_string()]))
+            .expect("a machine create");
+        let value = |flag: &str| -> Vec<String> {
+            call.windows(2)
+                .filter(|w| w[0] == flag)
+                .map(|w| w[1].clone())
+                .collect()
+        };
+        let label = value("--label")
+            .into_iter()
+            .find_map(|l| l.strip_prefix("sbx.host-mounts=").map(String::from));
+        (value("-v"), label)
+    }
+
+    fn mode(path: &std::path::Path) -> u32 {
+        use std::os::unix::fs::PermissionsExt;
+        std::fs::metadata(path).unwrap().permissions().mode() & 0o7777
+    }
+
+    #[test]
+    fn create_mounts_a_kit_s_managed_host_directory() {
+        let mut t = host_mount_env(SHARED);
+        sbt(&mut t.ctx, &["create", "shell", ".", "--kit", "./hm"]).unwrap();
+        let dir = managed(&t, SHARED);
+        let (mounts, label) = create_mounts(&t);
+        assert!(
+            mounts.contains(&format!("{}:{SHARED}", dir.display())),
+            "{mounts:?}"
+        );
+        let want = serde_json::json!({ SHARED: dir }).to_string();
+        assert_eq!(label.as_deref(), Some(want.as_str()));
+        assert_eq!(mode(&dir), 0o750);
+        assert_eq!(mode(dir.parent().unwrap()), 0o700);
+        assert_eq!(mode(&t.ctx.paths.kit_host_mounts()), 0o700);
+    }
+
+    #[test]
+    fn an_existing_managed_directory_is_reused_unchanged() {
+        use std::os::unix::fs::PermissionsExt;
+        let mut t = host_mount_env(SHARED);
+        let dir = managed(&t, SHARED);
+        std::fs::create_dir_all(&dir).unwrap();
+        std::fs::set_permissions(&dir, std::fs::Permissions::from_mode(0o711)).unwrap();
+        std::fs::write(dir.join("keep"), "x").unwrap();
+        sbt(&mut t.ctx, &["create", "shell", ".", "--kit", "./hm"]).unwrap();
+        assert_eq!(mode(&dir), 0o711);
+        assert_eq!(std::fs::read_to_string(dir.join("keep")).unwrap(), "x");
+    }
+
+    #[test]
+    fn mount_binds_a_host_directory_instead_of_the_managed_one() {
+        let mut t = host_mount_env(SHARED);
+        let bind = format!("data:{SHARED}");
+        sbt(
+            &mut t.ctx,
+            &["create", "shell", ".", "--kit", "./hm", "--mount", &bind],
+        )
+        .unwrap();
+        let data = t.ctx.cwd.join("data");
+        let (mounts, label) = create_mounts(&t);
+        assert!(
+            mounts.contains(&format!("{}:{SHARED}", data.display())),
+            "{mounts:?}"
+        );
+        let want = serde_json::json!({ SHARED: data }).to_string();
+        assert_eq!(label.as_deref(), Some(want.as_str()));
+        assert!(!t.ctx.paths.kit_host_mounts().exists());
+    }
+
+    #[test]
+    fn refused_mounts_create_nothing() {
+        let shared = format!("data:{SHARED}");
+        let other = "data:/home/agent/other";
+        let undeclared = "no kit declares host-mount@1 at \"/home/agent/other\"";
+        let cases: Vec<(Vec<&str>, String)> = vec![
+            (
+                vec!["--kit", "./hm", "--mount", "data"],
+                "--mount \"data\" requires HOST:SANDBOX_PATH\n  try: sbt create --help".into(),
+            ),
+            (
+                vec!["--kit", "./hm", "--mount", "missing:/x"],
+                "HOST \"{cwd}/missing\" does not exist on the host".into(),
+            ),
+            (
+                vec!["--kit", "./hm", "--mount", &shared, "--mount", &shared],
+                format!("--mount {SHARED} given twice"),
+            ),
+            (vec!["--kit", "./hm", "--mount", other], undeclared.into()),
+            // No kits at all.
+            (vec!["-t", "alpine", "--mount", other], undeclared.into()),
+        ];
+        for (flags, want) in cases {
+            let mut t = host_mount_env(SHARED);
+            let cwd = t.ctx.cwd.display().to_string();
+            let mut args = vec!["create", "shell", "."];
+            args.extend(&flags);
+            let e = sbt(&mut t.ctx, &args).unwrap_err();
+            assert_eq!(format!("{e:#}"), want.replace("{cwd}", &cwd), "{flags:?}");
+            assert!(no_machine_create(&t), "{flags:?}");
+            assert!(!t.ctx.paths.kit_host_mounts().exists(), "{flags:?}");
+        }
+    }
+
+    #[test]
+    fn a_host_mount_at_a_workspace_path_is_refused() {
+        let ws = tempfile::tempdir().unwrap();
+        let ws = ws.path().canonicalize().unwrap().display().to_string();
+        let mut t = host_mount_env(&ws);
+        let e = sbt(
+            &mut t.ctx,
+            &["create", "shell", &ws, "--kit", "./hm", "--name", "ws"],
+        )
+        .unwrap_err();
+        assert_eq!(
+            format!("{e:#}"),
+            format!("host-mount@1 path {ws} is already a workspace mount")
+        );
+        assert!(no_machine_create(&t));
+        assert!(!t.ctx.paths.kit_host_mounts().exists());
+    }
+
+    fn no_machine_create(t: &TestEnv) -> bool {
+        !t.ctx
+            .vm
+            .runner()
+            .call_lines()
+            .iter()
+            .any(|l| l.starts_with("machine create"))
     }
 }

@@ -28,6 +28,7 @@ fn help_snapshots() {
         vec!["create"],
         vec!["exec"],
         vec!["ls"],
+        vec!["inspect"],
         vec!["rm"],
         vec!["prune"],
         vec!["cp"],
