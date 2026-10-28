@@ -69,6 +69,8 @@ pub struct Ctx<R: Runner> {
     /// Where command output goes; write with `writeln!(&ctx.out, ..)`. Errors and warnings go to
     /// stderr (`eprintln!`).
     pub out: Out,
+    /// The command-line arguments after argv[0], for hints that repeat the command.
+    pub args: Vec<String>,
 }
 
 /// Command output: the process's stdout, or a buffer tests read.
@@ -94,7 +96,8 @@ impl Write for &Out {
 }
 
 pub fn main(args: impl IntoIterator<Item = OsString>) -> Result<i32> {
-    let cli = Cli::parse_from(args);
+    let args: Vec<OsString> = args.into_iter().collect();
+    let cli = Cli::parse_from(&args);
     let env: BTreeMap<String, String> = std::env::vars().collect();
     let paths = Paths::from_env(&env)?;
     let (settings, config_error) = Settings::load(&paths, env.clone());
@@ -113,6 +116,11 @@ pub fn main(args: impl IntoIterator<Item = OsString>) -> Result<i32> {
         store,
         config_error,
         out: Out::Stdout,
+        args: args
+            .iter()
+            .skip(1)
+            .map(|a| a.to_string_lossy().into_owned())
+            .collect(),
     };
     dispatch(&mut ctx, cli)
 }

@@ -40,7 +40,7 @@ fn create<R: Runner>(ctx: &mut Ctx<R>, c: &EnvCommon, a: &EnvApplyOpts) -> Resul
         );
     }
     write!(&ctx.out, "{}", summary(&loaded, &spec, Op::Create, &[]))?;
-    approve(ctx, &loaded, a.force, "create")?;
+    approve(ctx, &loaded, a.force)?;
     provision(ctx, &mut secrets, &spec)?;
     let args = super::CreateArgs {
         targets: spec.targets,
@@ -60,7 +60,7 @@ fn env_run<R: Runner>(
     let exists = sandbox::find(&ctx.vm, &spec.name)?.is_some();
     let op = if exists { Op::Run } else { Op::Create };
     write!(&ctx.out, "{}", summary(&loaded, &spec, op, &[]))?;
-    approve(ctx, &loaded, a.force, "run")?;
+    approve(ctx, &loaded, a.force)?;
     let args = if exists {
         // Attach as it was created, with the file's current env for this session.
         RunArgs {
@@ -232,16 +232,29 @@ fn prepare<R: Runner>(
 }
 
 /// sbx asks before every `env create` and `env run`; `--force` approves this invocation.
-fn approve<R: Runner>(ctx: &Ctx<R>, loaded: &Loaded, force: bool, cmd: &str) -> Result<()> {
+fn approve<R: Runner>(ctx: &Ctx<R>, loaded: &Loaded, force: bool) -> Result<()> {
     if !force && !ctx.stdin_tty {
+        // The command as given, quoted for the shell, with `--force` added (sbx does the same).
+        let words: Vec<String> = ctx.args.iter().map(|a| shell_word(a)).collect();
+        let command = words.join(" ");
         bail!(
             "{} changes things outside the sandbox that have not been approved; approve them by \
              running this in a terminal, or approve this invocation with --force (-f)\n  \
-             try: sbt env {cmd} --force",
+             try: sbt {command} --force",
             loaded.files[0].display()
         );
     }
     confirm(ctx, "Apply?", force)
+}
+
+/// `s` as one shell word: as is when that's safe, else single-quoted.
+fn shell_word(s: &str) -> String {
+    let plain = |c: char| c.is_ascii_alphanumeric() || "-_./:=@%+,".contains(c);
+    if !s.is_empty() && s.chars().all(plain) {
+        s.to_string()
+    } else {
+        sandbox::sh_quote(s)
+    }
 }
 
 /// Stores the file's secrets at the sandbox's scope. Every source is checked before any is
@@ -520,6 +533,34 @@ mod tests {
             lines(&t)
         );
         assert!(scoped(&t).is_empty());
+    }
+
+    #[test]
+    fn the_force_hint_repeats_the_original_arguments() {
+        let mut t = with_file(FILE);
+        let text = format!("{FILE}args:\n  v:\n    default: a\n");
+        std::fs::write(t.ctx.cwd.join("my env.yaml"), text).unwrap();
+        missing_then_created(&t, 1);
+        let err = sbt(
+            &mut t.ctx,
+            &[
+                "env",
+                "create",
+                "my env.yaml",
+                "--name",
+                "box",
+                "--env-arg",
+                "v=x y",
+            ],
+        )
+        .unwrap_err()
+        .to_string();
+        assert!(
+            err.ends_with(
+                "\n  try: sbt env create 'my env.yaml' --name box --env-arg 'v=x y' --force"
+            ),
+            "{err}"
+        );
     }
 
     #[test]
