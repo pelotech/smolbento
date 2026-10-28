@@ -2,17 +2,18 @@
 
 mod args;
 mod diagnose;
+mod env;
 mod exec;
 mod fork;
 mod kit;
 mod kit_doc;
-mod lifecycle;
+pub(crate) mod lifecycle;
 mod ls;
 pub(crate) mod plan;
 mod policy;
 mod ports;
 mod run;
-mod secret;
+pub(crate) mod secret;
 mod settings;
 #[cfg(test)]
 pub(crate) mod testutil;
@@ -68,6 +69,8 @@ pub struct Ctx<R: Runner> {
     /// Where command output goes; write with `writeln!(&ctx.out, ..)`. Errors and warnings go to
     /// stderr (`eprintln!`).
     pub out: Out,
+    /// The command-line arguments after argv[0], for hints that repeat the command.
+    pub args: Vec<String>,
 }
 
 /// Command output: the process's stdout, or a buffer tests read.
@@ -93,7 +96,8 @@ impl Write for &Out {
 }
 
 pub fn main(args: impl IntoIterator<Item = OsString>) -> Result<i32> {
-    let cli = Cli::parse_from(args);
+    let args: Vec<OsString> = args.into_iter().collect();
+    let cli = Cli::parse_from(&args);
     let env: BTreeMap<String, String> = std::env::vars().collect();
     let paths = Paths::from_env(&env)?;
     let (settings, config_error) = Settings::load(&paths, env.clone());
@@ -112,6 +116,11 @@ pub fn main(args: impl IntoIterator<Item = OsString>) -> Result<i32> {
         store,
         config_error,
         out: Out::Stdout,
+        args: args
+            .iter()
+            .skip(1)
+            .map(|a| a.to_string_lossy().into_owned())
+            .collect(),
     };
     dispatch(&mut ctx, cli)
 }
@@ -169,6 +178,7 @@ pub fn dispatch<R: Runner>(ctx: &mut Ctx<R>, cli: Cli) -> Result<i32> {
         Cmd::Secret(s) => secret::run(ctx, s),
         Cmd::Ports(a) => ports::run(ctx, &a),
         Cmd::Kit(k) => kit::run(ctx, k),
+        Cmd::Env(e) => env::run(ctx, e),
         Cmd::UploadPack { sandbox, .. } => upload_pack::run(ctx, &sandbox),
         Cmd::Daemon(_) => {
             writeln!(

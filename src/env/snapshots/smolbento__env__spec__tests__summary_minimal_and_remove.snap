@@ -1,0 +1,13 @@
+---
+source: src/env/spec.rs
+expression: "summarise(&t, &[\"sbxenv.yaml\"], Op::Run, &[])"
+---
+ENVIRONMENT
+  Name: claude-proj
+  File: <root>/proj/sbxenv.yaml
+
+SANDBOX
+  + claude-proj
+      agent: claude
+
+  1 to add · 0 to change · 0 to destroy

@@ -28,7 +28,7 @@ Commands:
   secret      Secrets for agents: sandboxes see placeholders, smolvm sends the real value
   kit         Inspect, validate and add kits
   mcp         MCP servers (not implemented yet)
-  env         sbxenv.yaml environments (not implemented yet)
+  env         Manage a sandbox declared in an sbxenv.yaml file
   template    Sandbox templates (not implemented yet)
   skills      Agent skills (not implemented yet)
   setup       SSH access (not implemented yet)

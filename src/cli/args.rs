@@ -78,8 +78,9 @@ pub enum Cmd {
     Kit(KitCmd),
     /// MCP servers (not implemented yet)
     Mcp(Passthrough),
-    /// sbxenv.yaml environments (not implemented yet)
-    Env(Passthrough),
+    /// Manage a sandbox declared in an sbxenv.yaml file
+    #[command(subcommand)]
+    Env(EnvCmd),
     /// Sandbox templates (not implemented yet)
     Template(Passthrough),
     /// Agent skills (not implemented yet)
@@ -166,6 +167,7 @@ impl Cmd {
                 | Cmd::Fork(_)
                 | Cmd::Ports(_)
                 | Cmd::UploadPack { .. }
+                | Cmd::Env(EnvCmd::Create(_) | EnvCmd::Run(_) | EnvCmd::Exec(_) | EnvCmd::Rm(_))
         )
     }
 
@@ -180,6 +182,141 @@ impl Cmd {
                 | Cmd::Volume(_)
         )
     }
+}
+
+#[derive(Debug, Subcommand)]
+pub enum EnvCmd {
+    /// Create a sandbox environment from sbxenv.yaml
+    Create(EnvCreateArgs),
+    /// Create (if needed) and attach to a sandbox environment
+    Run(EnvRunArgs),
+    /// Execute a command inside a sandbox environment
+    Exec(EnvExecArgs),
+    /// Remove a sandbox environment and its scoped resources
+    Rm(EnvRmArgs),
+    /// Show what an environment would change outside the sandbox (not implemented yet)
+    Plan(Passthrough),
+}
+
+/// What every `env` command takes.
+#[derive(Debug, Clone, Default, Args)]
+pub struct EnvCommon {
+    /// sbxenv.yaml files, or directories holding one (default: the current directory)
+    #[arg(value_name = "PATH")]
+    pub paths: Vec<String>,
+    /// Name for the sandbox, overriding 'name:' in sbxenv.yaml and the derived <agent>-<directory> (every 'sbt env' command addressing this environment needs the same value)
+    #[arg(long)]
+    pub name: Option<String>,
+    /// Value for an argument the environment file declares, as name=value (can be repeated)
+    #[arg(long = "env-arg", value_name = "NAME=VALUE")]
+    pub env_arg: Vec<String>,
+    /// File of name=value environment arguments, one per line (can be repeated); --env-arg overrides
+    #[arg(long = "env-args-file", value_name = "FILE")]
+    pub env_args_file: Vec<PathBuf>,
+}
+
+/// What `env create` and `env run` take besides `EnvCommon`.
+#[derive(Debug, Clone, Default, Args)]
+pub struct EnvApplyOpts {
+    /// Override workspace.clone in sbxenv.yaml (see 'sbt create --clone')
+    #[arg(long, num_args = 0..=1, require_equals = true, default_missing_value = "true")]
+    pub clone: Option<bool>,
+    /// Apply the environment plan without asking
+    #[arg(short = 'f', long)]
+    pub force: bool,
+    /// Value for an argument a kit declares, as name=value for every kit or kit.name=value for one (can be repeated); overrides the args a kits: entry pins in sbxenv.yaml
+    #[arg(long = "kit-arg", value_name = "NAME=VALUE")]
+    pub kit_arg: Vec<String>,
+    /// File of name=value kit arguments, one per line (can be repeated); --kit-arg overrides
+    #[arg(long = "kit-args-file", value_name = "FILE")]
+    pub kit_args_file: Vec<PathBuf>,
+    /// Skip the host lifecycle commands the environment declares (smolbento runs none)
+    #[arg(long = "skip-host-commands")]
+    pub skip_host_commands: bool,
+    #[arg(long = "on-timeout", hide = true)]
+    pub on_timeout: Option<String>,
+    #[arg(long, hide = true)]
+    pub ttl: Option<String>,
+}
+
+#[derive(Debug, Args)]
+pub struct EnvCreateArgs {
+    #[command(flatten)]
+    pub common: EnvCommon,
+    #[command(flatten)]
+    pub apply: EnvApplyOpts,
+}
+
+#[derive(Debug, Args)]
+pub struct EnvRunArgs {
+    #[command(flatten)]
+    pub common: EnvCommon,
+    #[command(flatten)]
+    pub apply: EnvApplyOpts,
+    /// Create/start the sandbox without attaching
+    #[arg(short = 'd', long)]
+    pub detach: bool,
+}
+
+/// `env exec`: `ExecArgs`' flags, the `EnvCommon` ones, then `[PATH...] -- CMD...`.
+#[derive(Debug, Args)]
+pub struct EnvExecArgs {
+    /// Keep stdin open
+    #[arg(short = 'i', long)]
+    pub interactive: bool,
+    /// Allocate a terminal
+    #[arg(short = 't', long)]
+    pub tty: bool,
+    /// Environment variable: KEY=VALUE, or KEY to copy the host's value
+    #[arg(short = 'e', long = "env")]
+    pub env: Vec<String>,
+    /// Read environment variables from a file
+    #[arg(long = "env-file")]
+    pub env_file: Vec<PathBuf>,
+    /// User to run as (default: agent)
+    #[arg(short = 'u', long)]
+    pub user: Option<String>,
+    /// Working directory (default: the primary workspace)
+    #[arg(short = 'w', long)]
+    pub workdir: Option<String>,
+    /// Run as root
+    #[arg(long)]
+    pub privileged: bool,
+    /// Not supported (as in sbx)
+    #[arg(short = 'd', long)]
+    pub detach: bool,
+    #[arg(long = "detach-keys", hide = true)]
+    pub detach_keys: Option<String>,
+    /// Name for the sandbox, overriding 'name:' in sbxenv.yaml and the derived <agent>-<directory> (every 'sbt env' command addressing this environment needs the same value)
+    #[arg(long)]
+    pub name: Option<String>,
+    /// Value for an argument the environment file declares, as name=value (can be repeated)
+    #[arg(long = "env-arg", value_name = "NAME=VALUE")]
+    pub env_arg: Vec<String>,
+    /// File of name=value environment arguments, one per line (can be repeated); --env-arg overrides
+    #[arg(long = "env-args-file", value_name = "FILE")]
+    pub env_args_file: Vec<PathBuf>,
+    /// sbxenv.yaml files or directories before `--`; without `--` every positional is the command
+    #[arg(value_name = "PATH")]
+    pub paths: Vec<String>,
+    /// The command to run
+    #[arg(last = true, value_name = "COMMAND")]
+    pub command: Vec<String>,
+}
+
+#[derive(Debug, Args)]
+pub struct EnvRmArgs {
+    #[command(flatten)]
+    pub common: EnvCommon,
+    /// Skip confirmation prompts and delete even if in use (e.g. an open SSH connection)
+    #[arg(short = 'f', long)]
+    pub force: bool,
+    /// Also remove this environment's bindings from the global credentials.yaml (smolbento keeps none)
+    #[arg(long = "prune-bindings")]
+    pub prune_bindings: bool,
+    /// Skip the host lifecycle commands the environment declares (smolbento runs none)
+    #[arg(long = "skip-host-commands")]
+    pub skip_host_commands: bool,
 }
 
 #[derive(Debug, Args)]
@@ -329,6 +466,10 @@ pub struct SandboxOpts {
     /// Read kit arguments (NAME=VALUE lines) from a file (repeatable)
     #[arg(long = "kit-args-file", value_name = "FILE")]
     pub kit_args_file: Vec<PathBuf>,
+    /// Kit args an sbxenv.yaml pins: (kit source as given to `--kit`, `NAME=VALUE`s). Beneath
+    /// `--kit-arg` and `--kit-args-file`.
+    #[arg(skip)]
+    pub kit_pins: Vec<(String, Vec<String>)>,
     /// Add a per-sandbox network deny rule at creation time. Can be specified multiple times.
     /// The rule applies only to the new sandbox and can be listed or removed later with
     /// 'sbt policy ls <NAME>' or 'sbt policy rm network --sandbox <NAME> --resource <HOST>'
@@ -404,6 +545,9 @@ pub struct RunArgs {
     /// Arguments for the agent
     #[arg(last = true)]
     pub agent_args: Vec<String>,
+    /// Extra env for the agent's session (`env run` of an existing sandbox: the file's env).
+    #[arg(skip)]
+    pub session_env: Vec<(String, String)>,
 }
 
 #[derive(Debug, Args)]

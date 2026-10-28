@@ -357,6 +357,79 @@ disk keeps the build cache, and `sbt rm _builder` resets it. Builds use your glo
 pulled without a registry login, so a kit built on an image that needs one (Docker's own examples
 use `dhi.io`) won't build locally yet; published kits are not affected.
 
+## Environments (sbxenv.yaml)
+
+An environment file describes a sandbox: agent, workspace, kits, ports, variables and secrets.
+`sbt env` reads the same `sbxenv.yaml` files as Docker's `sbx env` (schema `"1"`).
+
+```yaml
+schemaVersion: "1"
+agent: claude
+name: myrepo
+workspace: .
+args:
+  region:
+    default: eu-west-1
+env:
+  AWS_REGION: ${{ env.args.region }}
+ports:
+  - host: 8080
+    sandbox: 8080
+secrets:
+  github:
+    command: gh auth token
+sandboxOptions:
+  cpus: 4
+  memory: 8g
+```
+
+```sh
+sbt env create                       # from ./sbxenv.yaml: summary, ask, create (no attach)
+sbt env run -f ./team ./local.yaml   # create if missing, then attach; -f skips the question
+sbt env exec -- make test            # run a command in the environment's sandbox
+sbt env rm                           # remove the sandbox and the secrets scoped to it
+```
+
+- **Files.** Each `PATH` is a file or a directory holding `sbxenv.yaml`. With none, smolbento reads
+  `~/.sbxenv.yaml` (if present) and then `./sbxenv.yaml`. Files merge in order: maps merge by key,
+  lists concatenate, later values win (an empty `key:` keeps the earlier value). Relative paths
+  are relative to the file that names them. `${{ env.projectDir }}` is the first `PATH`'s directory
+  (the current directory when no `PATH` is given, even when `~/.sbxenv.yaml` is read);
+  `${{ env.fileDir }}` is the declaring file's directory.
+- **Values.** As in YAML 1.2, only `true` and `false` are booleans. Text fields take numbers and
+  booleans as written: `PORT: 8080` and `DEBUG: on` are the strings `8080` and `on`.
+- **User defaults.** `~/.sbxenv.yaml` applies to every environment. It can't set `name`, and its
+  `workspace` must be `${{ env.projectDir }}` or below it.
+- **Args.** A file declares `args:` and uses them as `${{ env.args.NAME }}`. Each arg needs
+  exactly one of `default` or `required: true`, and may limit its values with `enum` or `pattern`
+  (not both). Give values with `--env-arg NAME=VALUE` or
+  `--env-args-file FILE` (`--env-arg` wins).
+- **Name.** `name:` or `--name`; otherwise `<agent>-<workspace directory>`. The name links a file
+  to its sandbox, so give every command the same `--name` you created it with.
+- **Approval.** `env create` and `env run` print a summary of what they will create, including any
+  host commands, and ask `Apply? [y/N]` every time (nothing is remembered yet). `-f/--force`
+  approves that one invocation; without a terminal and without `--force` they refuse. `env rm`
+  asks `Remove? [y/N]` the same way. `env exec` never asks.
+- **`env create`** refuses a sandbox that already exists (use `env run`, or `env rm` first).
+  Secrets are stored at the sandbox's scope before the sandbox is made. A failed create leaves
+  them; `env rm` with the same files removes them.
+- **`env run`** on an existing sandbox starts it if needed and attaches, passing the file's
+  current `env` values to the session. It doesn't apply other changes (kits, ports, workspaces,
+  secrets, options): recreate with `env rm` and `env create`, as in sbx.
+- **`env exec`** takes the `sbt exec` flags, and the command after `--`. Without `--`, every
+  argument is the command and the files come from the current directory. A command with options
+  needs the `--` (`sbt env exec -- ls -la`), or they are read as `env exec`'s own.
+- **Kits.** `agent` can name a built-in agent, or a workload kit from `kits:`: a local kit by its
+  directory name, a registry kit by the last part of its repository name. The other kits are added
+  to it. A local kit path that doesn't exist, a `.zip` or a `git+` source is refused before any
+  secret is stored; a registry kit that can't be pulled fails after (`env rm` removes the secrets).
+
+Not supported yet (exit 2, naming the field or command): `env plan`, `lifecycle`, `bindings`,
+`registries`, `mcp`, `mounts`, and the `sandboxOptions` other than `cpus`, `memory`, `template` and
+`pullPolicy: missing`. `refresh` and `backend` on a secret, `--skip-host-commands` and
+`--prune-bindings` are accepted and do nothing. Secret service names must be ones `sbt secret set`
+knows; others are refused. See [sbx compatibility](sbx-compatibility.md#environment-files).
+
 ## Files and ownership
 
 Workspaces are mounted at the same absolute path as on your machine, so paths in errors and logs
@@ -444,6 +517,10 @@ refuses it; smolvm has no public suffix list, so `*.co.uk` is accepted). It warn
 doesn't resolve: smolvm looks them up when it creates a sandbox, and the create fails while one
 doesn't resolve.
 Removing a custom service's last secret (in any scope) removes the service too.
+
+A `--command` source runs from a fresh temporary directory, not your current one: give helper
+scripts by absolute path or put them on `PATH`. A relative path such as `./get-token.sh` no longer
+works.
 
 Built-in services: `anthropic`, `claude` (Claude Code's `claude setup-token` token), `cursor`,
 `droid`, `github`, `google`, `groq`, `mistral`, `nebius`, `openai`, `openrouter`, `xai`.

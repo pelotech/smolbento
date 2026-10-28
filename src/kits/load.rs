@@ -88,7 +88,22 @@ enum Located {
     Smolfile(PathBuf),
 }
 
+/// Refuses the kit sources sbx takes that smolbento doesn't: ZIP files and `git+` URLs.
+pub fn check_kind(reference: &str) -> Result<()> {
+    if reference.starts_with("git+") {
+        bail!(
+            "kit {reference}: git kit sources are not supported; clone the repository and use \
+             the kit's directory"
+        );
+    }
+    if reference.ends_with(".zip") {
+        bail!("kit {reference}: ZIP kits are not supported; unzip it and use the directory");
+    }
+    Ok(())
+}
+
 fn locate<R: Runner>(ctx: &Ctx<R>, reference: &str, offline: bool) -> Result<Located> {
+    check_kind(reference)?;
     let Some(path) = local_path(ctx, reference)? else {
         // Like sbx, a registry reference has a `/` (a tag alone isn't one: `alpine:3` is not).
         if !reference.contains('/') {

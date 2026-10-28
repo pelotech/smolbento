@@ -1,6 +1,6 @@
 # Development status
 
-Last updated: 2026-10-27.
+Last updated: 2026-10-28.
 
 smolbento is built in phases. Each phase ships on its own.
 
@@ -22,9 +22,16 @@ attempts or as an undo point. See [Usage](usage.md#fork).
 **Phase 4a (kits) is done.** `--kit` runs Docker Sandboxes kits (published v3 kits, local v3 and
 v2 directories) and Smolfiles; `sbt kit inspect/validate/add` work. See [Usage](usage.md#kits).
 
+**Phase 4b (sbxenv.yaml) is done.** `sbt env create|run|exec|rm` read Docker Sandboxes environment
+files. See [Usage](usage.md#environments-sbxenvyaml).
+
 Docker in a sandbox is now the shipped `docker` kit, so every Docker-enabled create goes through
 the kit first start: if that first start fails, the sandbox is removed. Run the same command
 again once the cause is fixed.
+
+Change you may notice: every secret `command:` source (`sbt secret set --command`, and `command:` in
+an environment file) now runs from a fresh temporary directory. Give helpers by absolute path or put
+them on `PATH`; a path relative to your current directory no longer works.
 
 Upgrading from v0.1.x: starting a sandbox now needs a chosen network policy, as in sbx. Run
 `sbt policy init balanced` (or answer the prompt) before your next start; scripts without a
@@ -40,10 +47,11 @@ terminal fail until you do.
 | 3a | `--clone` (the agent works on its own clone; only commits come back, through the `sandbox-<name>` remote) | ✅ Done |
 | 3b | `fork` (copy-on-write copies of a running sandbox). `checkpoint`/`restore` dropped: secrets can't work in a restored smolvm checkpoint from the CLI | ✅ Done |
 | 4a | Kits: v3 capabilities, v2 `spec.yaml`, Smolfiles, `kit inspect/validate/add`, the `docker` kit, the `_builder` sandbox | ✅ Done |
-| 4b | `sbxenv.yaml` | ⏭ Next |
+| 4b | `sbxenv.yaml` core: `env create/run/exec/rm`, files, args, user defaults, secrets, kits, ports | ✅ Done |
 | 4c | Host services (e.g. a host Ollama reachable from sandboxes) | Planned |
 | 4d | The `plus` image and kit | Planned |
 | 5 | `template`, `setup ssh`, static MCP, `--skills`, clipboard and browser bridges; the kit capabilities `host-mount@1`, `ssh-agent@1`, `agent-skills@1`/`agent-skill@1` | Planned |
+| after 5 | Finish `sbxenv.yaml`: `env plan`, remembered approvals (`env.rememberHostCommands`), `lifecycle`, `bindings`, `registries`, `mcp`, `mounts`, the remaining `sandboxOptions` | Planned |
 | 6 | `tui` dashboard (bare `sbt` opens it on a terminal) | Planned |
 | 7 | Warm-start pool for near-instant creates; Windows | Planned |
 

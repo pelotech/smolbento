@@ -1,0 +1,36 @@
+---
+source: tests/help.rs
+expression: help(&path)
+---
+Remove a sandbox environment and its scoped resources
+
+Usage: sbt env rm [OPTIONS] [PATH]...
+
+Arguments:
+  [PATH]...
+          sbxenv.yaml files, or directories holding one (default: the current directory)
+
+Options:
+  -D, --debug
+          Print each smolvm command line
+
+      --name <NAME>
+          Name for the sandbox, overriding 'name:' in sbxenv.yaml and the derived <agent>-<directory> (every 'sbt env' command addressing this environment needs the same value)
+
+      --env-arg <NAME=VALUE>
+          Value for an argument the environment file declares, as name=value (can be repeated)
+
+      --env-args-file <FILE>
+          File of name=value environment arguments, one per line (can be repeated); --env-arg overrides
+
+  -f, --force
+          Skip confirmation prompts and delete even if in use (e.g. an open SSH connection)
+
+      --prune-bindings
+          Also remove this environment's bindings from the global credentials.yaml (smolbento keeps none)
+
+      --skip-host-commands
+          Skip the host lifecycle commands the environment declares (smolbento runs none)
+
+  -h, --help
+          Print help

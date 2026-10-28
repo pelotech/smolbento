@@ -40,6 +40,11 @@ fn help_snapshots() {
         vec!["kit", "inspect"],
         vec!["kit", "validate"],
         vec!["kit", "add"],
+        vec!["env"],
+        vec!["env", "create"],
+        vec!["env", "run"],
+        vec!["env", "exec"],
+        vec!["env", "rm"],
     ] {
         let name = if path.is_empty() {
             "sbt".to_string()

@@ -7,9 +7,12 @@ use anyhow::{Context, Result, bail};
 use super::store::SecretStore;
 use super::{SecretEntry, Source};
 
+/// Runs `program` from a fresh temporary directory (as sbx does), removed when it finishes.
 fn output(program: &str, args: &[&str]) -> Result<String> {
+    let dir = tempfile::tempdir().context("creating a working directory for the secret")?;
     let out = Command::new(program)
         .args(args)
+        .current_dir(dir.path())
         .output()
         .with_context(|| format!("running {program}"))?;
     if !out.status.success() {
@@ -164,6 +167,21 @@ mod tests {
         let msg = err("i=0; while [ $i -lt 300 ]; do printf é; i=$((i+1)); done >&2; exit 1");
         assert!(msg.ends_with('…'), "{msg}");
         assert_eq!(msg.chars().filter(|c| *c == 'é').count(), 200, "{msg}");
+    }
+
+    #[test]
+    fn commands_run_in_a_fresh_temporary_directory() {
+        let store = MemoryStore::default();
+        let dir = resolve(
+            &e(Source::Command {
+                command: "pwd -P".into(),
+            }),
+            &store,
+        )
+        .unwrap();
+        let cwd = std::env::current_dir().unwrap().canonicalize().unwrap();
+        assert_ne!(std::path::Path::new(&dir), cwd);
+        assert!(!std::path::Path::new(&dir).exists(), "{dir} was removed");
     }
 
     #[test]

@@ -33,10 +33,7 @@ pub fn run<R: Runner>(ctx: &mut Ctx<R>, cmd: SecretCmd) -> Result<i32> {
                 .service
                 .context("specify a service, e.g. `sbt secret set anthropic`")?;
             if file.service(&service).is_none() {
-                bail!(
-                    "unknown service '{service}' (built-in: {}; or use `sbt secret set-custom`)",
-                    services::builtin_names().join(", ")
-                );
+                bail!(unknown_service(&service));
             }
             set(ctx, &mut file, &service, a.source)?;
         }
@@ -74,6 +71,14 @@ pub fn run<R: Runner>(ctx: &mut Ctx<R>, cmd: SecretCmd) -> Result<i32> {
         }
     }
     Ok(0)
+}
+
+/// `secret set`'s error for a service that is neither built in nor custom.
+pub(crate) fn unknown_service(service: &str) -> String {
+    format!(
+        "unknown service '{service}' (built-in: {}; or use `sbt secret set-custom`)",
+        services::builtin_names().join(", ")
+    )
 }
 
 fn ls<R: Runner>(ctx: &Ctx<R>, file: &SecretsFile, a: &SecretLsArgs) -> Result<()> {
@@ -162,6 +167,21 @@ fn set<R: Runner>(
     service: &str,
     src: SecretSource,
 ) -> Result<()> {
+    let scope = scope_for(src.sandbox.as_deref());
+    let sandbox = src.sandbox.clone();
+    let described = store(ctx, file, service, src)?;
+    writeln!(&ctx.out, "Saved {service} secret ({described}; {scope})")?;
+    explain_impact(ctx, service, sandbox.as_deref())
+}
+
+/// `secret set` without its output: stores the value (if any) and saves the entry. Returns where
+/// the value lives, as `secret set` describes it.
+pub(crate) fn store<R: Runner>(
+    ctx: &Ctx<R>,
+    file: &mut SecretsFile,
+    service: &str,
+    src: SecretSource,
+) -> Result<String> {
     if let Some(s) = &src.sandbox {
         name::validate(s)?;
     }
@@ -235,8 +255,7 @@ fn set<R: Runner>(
     {
         forget(ctx, &[old])?;
     }
-    writeln!(&ctx.out, "Saved {service} secret ({described}; {scope})")?;
-    explain_impact(ctx, service, src.sandbox.as_deref())
+    Ok(described)
 }
 
 /// Which sandboxes pick the change up on their next start, and which would need recreating.

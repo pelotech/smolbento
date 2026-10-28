@@ -13,6 +13,8 @@ pub struct ArgValues {
     shared: BTreeMap<String, String>,
     /// Keyed by (kit name, arg name).
     scoped: BTreeMap<(String, String), String>,
+    /// What an sbxenv.yaml pins for one kit, keyed like `scoped`; beneath every flag.
+    pinned: BTreeMap<(String, String), String>,
 }
 
 impl ArgValues {
@@ -41,6 +43,20 @@ impl ArgValues {
         Ok(v)
     }
 
+    /// Pins `NAME=VALUE` args for the kit named `kit`.
+    pub fn pin(&mut self, kit: &str, args: &[String]) -> Result<()> {
+        for a in args {
+            let (name, value) = a
+                .split_once('=')
+                .ok_or_else(|| anyhow!("kit {kit}: expected name=value"))?;
+            self.pinned.insert(
+                (kit.to_string(), name.trim().to_string()),
+                value.to_string(),
+            );
+        }
+        Ok(())
+    }
+
     fn insert(&mut self, entry: &str) -> Result<()> {
         let (key, value) = entry
             .split_once('=')
@@ -65,7 +81,7 @@ impl ArgValues {
         Ok(())
     }
 
-    /// The effective values for one kit: scoped beats shared beats default. Errors on an
+    /// The effective values for one kit: scoped beats shared beats pinned beats default. Errors on an
     /// invalid pattern (given a value or not), missing required, pattern/enum mismatch. Unknown
     /// names are checked by `check_unknown`.
     pub fn for_kit(&self, kit: &Kit) -> Result<BTreeMap<String, String>> {
@@ -81,6 +97,7 @@ impl ArgValues {
                 .scoped
                 .get(&(kit.name.clone(), name.clone()))
                 .or_else(|| self.shared.get(name))
+                .or_else(|| self.pinned.get(&(kit.name.clone(), name.clone())))
                 .or(def.default.as_ref());
             let Some(value) = given else {
                 if def.required {
@@ -103,7 +120,7 @@ impl ArgValues {
                 bail!("unknown kit argument {name}");
             }
         }
-        for (kit, name) in self.scoped.keys() {
+        for (kit, name) in self.scoped.keys().chain(self.pinned.keys()) {
             let Some(k) = kits.iter().find(|k| &k.name == kit) else {
                 continue;
             };

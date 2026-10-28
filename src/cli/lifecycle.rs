@@ -41,7 +41,7 @@ pub(crate) fn build_request<R: Runner>(
     Ok(req)
 }
 
-fn unknown_agent(name: &str) -> String {
+pub(crate) fn unknown_agent(name: &str) -> String {
     format!("unknown agent \"{name}\"")
 }
 
@@ -186,6 +186,10 @@ pub(crate) fn kit_plan<R: Runner>(
     workload: Workload,
     opts: &SandboxOpts,
 ) -> Result<Plan> {
+    let workload_source = match &workload {
+        Workload::Ref(target) => Some(target.clone()),
+        Workload::Preset(_) => None,
+    };
     let workload = match workload {
         Workload::Preset(kit) => *kit,
         Workload::Ref(target) => {
@@ -212,12 +216,20 @@ pub(crate) fn kit_plan<R: Runner>(
             kit
         }
     };
-    let args = ArgValues::parse(&opts.kit_args_file, &opts.kit_arg)?;
+    let mut args = ArgValues::parse(&opts.kit_args_file, &opts.kit_arg)?;
     let mut mixins = opts
         .kit
         .iter()
         .map(|r| load::load(ctx, r))
         .collect::<Result<Vec<_>>>()?;
+    for (source, pins) in &opts.kit_pins {
+        let kit = match opts.kit.iter().position(|k| k == source) {
+            Some(i) => &mixins[i],
+            None if workload_source.as_ref() == Some(source) => &workload,
+            None => continue,
+        };
+        args.pin(&kit.name, pins)?;
+    }
     // First, added or given with `--kit docker`: other kits' startup steps may use the dockerd it
     // starts (in sbx it's in the image).
     if let Some(i) = mixins
@@ -312,14 +324,22 @@ pub(crate) fn stop_sandbox<R: Runner>(ctx: &Ctx<R>, sb: &Sandbox) -> Result<()> 
 }
 
 /// Deletes a sandbox and its per-sandbox policy; `forget_secrets` also drops its own secrets.
-fn remove<R: Runner>(ctx: &Ctx<R>, sb: &Sandbox, forget_secrets: bool) -> Result<()> {
+pub(crate) fn delete_sandbox<R: Runner>(
+    ctx: &Ctx<R>,
+    sb: &Sandbox,
+    forget_secrets: bool,
+) -> Result<()> {
     ctx.vm.delete(&sb.machine)?;
     if let Some(repo) = &sb.meta.clone_repo {
         // Best effort: the host repo may be gone.
         let _ = clone::remove_remote(Path::new(repo), sb.name());
     }
     session::clear(&ctx.paths.sessions(), sb.name());
-    super::secret::forget_sandbox(ctx, sb.name(), forget_secrets)?;
+    super::secret::forget_sandbox(ctx, sb.name(), forget_secrets)
+}
+
+fn remove<R: Runner>(ctx: &Ctx<R>, sb: &Sandbox, forget_secrets: bool) -> Result<()> {
+    delete_sandbox(ctx, sb, forget_secrets)?;
     writeln!(&ctx.out, "Removed {}", sb.name())?;
     Ok(())
 }
@@ -331,7 +351,11 @@ fn forks_first(mut targets: Vec<&Sandbox>) -> Vec<&Sandbox> {
 }
 
 /// Forks of `sb` that aren't being removed with it.
-fn remaining_forks<'a>(sb: &Sandbox, all: &'a [Sandbox], removing: &[&str]) -> Vec<&'a str> {
+pub(crate) fn remaining_forks<'a>(
+    sb: &Sandbox,
+    all: &'a [Sandbox],
+    removing: &[&str],
+) -> Vec<&'a str> {
     all.iter()
         .filter(|f| f.meta.fork_of.as_deref() == Some(sb.name()) && !removing.contains(&f.name()))
         .map(Sandbox::name)
@@ -1556,6 +1580,80 @@ mod tests {
     }
 
     #[test]
+    fn kit_pins_apply_beneath_kit_args() {
+        let dir = tempfile::tempdir().unwrap();
+        std::fs::write(
+            dir.path().join("spec.yaml"),
+            "schemaVersion: \"2\"\nkind: mixin\nname: pinme\nargs:\n  mode:\n    default: plain\nsetup:\n  install:\n    - command: echo mode=${{ kit.args.mode }}\n",
+        )
+        .unwrap();
+        let kit = dir.path().display().to_string();
+        for (flags, want) in [(vec![], "mode=pinned"), (vec!["mode=flag"], "mode=flag")] {
+            let mut t = kit_env();
+            let fake = t.ctx.vm.runner();
+            fake.ok(
+                &["machine", "status"],
+                &json("sbx-shell-proj", "created", "shell-proj"),
+            );
+            fake.once_fail(&["machine", "status"], "NOT_FOUND", "vm not found");
+            let a = super::CreateArgs {
+                targets: vec!["shell".into(), ".".into()],
+                opts: super::SandboxOpts {
+                    kit: vec![kit.clone()],
+                    kit_arg: flags.iter().map(|s| s.to_string()).collect(),
+                    kit_pins: vec![(kit.clone(), vec!["mode=pinned".into()])],
+                    ..Default::default()
+                },
+                no_progress: false,
+            };
+            super::create(&mut t.ctx, &a).unwrap();
+            let lines = t.ctx.vm.runner().call_lines();
+            assert!(
+                lines
+                    .iter()
+                    .any(|l| l.contains("machine exec") && l.contains(want)),
+                "{want}: {lines:?}"
+            );
+        }
+    }
+
+    #[test]
+    fn kit_pins_apply_to_a_workload_kit() {
+        let dir = tempfile::tempdir().unwrap();
+        let kit = dir.path().join("wl");
+        std::fs::create_dir(&kit).unwrap();
+        std::fs::write(
+            kit.join("spec.yaml"),
+            "schemaVersion: \"2\"\nkind: sandbox\nname: wl\nargs:\n  mode:\n    default: plain\nsandbox:\n  image: img:1\n  entrypoint: [/bin/agent]\nsetup:\n  install:\n    - command: echo mode=${{ kit.args.mode }}\n",
+        )
+        .unwrap();
+        let kit = kit.display().to_string();
+        let mut t = kit_env();
+        let fake = t.ctx.vm.runner();
+        fake.ok(
+            &["machine", "status"],
+            &json("sbx-wl-proj", "created", "wl-proj"),
+        );
+        fake.once_fail(&["machine", "status"], "NOT_FOUND", "vm not found");
+        let a = super::CreateArgs {
+            targets: vec![kit.clone(), ".".into()],
+            opts: super::SandboxOpts {
+                kit_pins: vec![(kit.clone(), vec!["mode=pinned".into()])],
+                ..Default::default()
+            },
+            no_progress: false,
+        };
+        super::create(&mut t.ctx, &a).unwrap();
+        let lines = t.ctx.vm.runner().call_lines();
+        assert!(
+            lines
+                .iter()
+                .any(|l| l.contains("machine exec") && l.contains("mode=pinned")),
+            "{lines:?}"
+        );
+    }
+
+    #[test]
     fn create_with_a_mixin_kit_applies_it() {
         let mut t = kit_env();
         // allow-all would leave the kit's allow rule out of the argv.
@@ -1806,6 +1904,14 @@ mod tests {
             (
                 vec!["create", &workload, "-t", "img:1"],
                 "-t can't be combined with a workload kit",
+            ),
+            (
+                vec!["create", "shell", "--kit", "git+https://github.com/o/r.git"],
+                "git kit sources are not supported",
+            ),
+            (
+                vec!["create", "shell", "--kit", "./k.zip"],
+                "ZIP kits are not supported",
             ),
         ] {
             let mut t = kit_env();

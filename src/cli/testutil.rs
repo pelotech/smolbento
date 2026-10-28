@@ -55,6 +55,7 @@ pub fn test_env(extra_env: &[(&str, &str)]) -> TestEnv {
             store: Box::new(crate::secrets::store::MemoryStore::default()),
             config_error,
             out: super::Out::Buffer(Default::default()),
+            args: vec![],
         },
         _dir: dir,
     }
@@ -87,6 +88,7 @@ pub fn set_policy(t: &TestEnv, toml: &str) {
 
 pub fn sbt(ctx: &mut Ctx<FakeRunner>, args: &[&str]) -> Result<i32> {
     let cli = Cli::try_parse_from(std::iter::once("sbt").chain(args.iter().copied()))?;
+    ctx.args = args.iter().map(|a| a.to_string()).collect();
     dispatch(ctx, cli)
 }
 

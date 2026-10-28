@@ -1,0 +1,16 @@
+---
+source: src/env/spec.rs
+expression: "summarise(&t, &[\"sbxenv.yaml\"], Op::Remove,\n&[\"github\".into(), \"openai\".into()])"
+---
+ENVIRONMENT
+  Name: claude-proj
+  File: <root>/proj/sbxenv.yaml
+
+SANDBOX
+  - claude-proj
+
+SECRETS
+  - github
+  - openai
+
+  0 to add · 0 to change · 3 to destroy
