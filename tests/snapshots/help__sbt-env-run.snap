@@ -1,0 +1,47 @@
+---
+source: tests/help.rs
+expression: help(&path)
+---
+Create (if needed) and attach to a sandbox environment
+
+Usage: sbt env run [OPTIONS] [PATH]...
+
+Arguments:
+  [PATH]...
+          sbxenv.yaml files, or directories holding one (default: the current directory)
+
+Options:
+  -D, --debug
+          Print each smolvm command line
+
+      --name <NAME>
+          Name for the sandbox, overriding 'name:' in sbxenv.yaml and the derived <agent>-<directory> (every 'sbt env' command addressing this environment needs the same value)
+
+      --env-arg <NAME=VALUE>
+          Value for an argument the environment file declares, as name=value (can be repeated)
+
+      --env-args-file <FILE>
+          File of name=value environment arguments, one per line (can be repeated); --env-arg overrides
+
+      --clone[=<CLONE>]
+          Override workspace.clone in sbxenv.yaml (see 'sbt create --clone')
+
+          [possible values: true, false]
+
+  -f, --force
+          Apply the environment plan without asking
+
+      --kit-arg <NAME=VALUE>
+          Value for an argument a kit declares, as name=value for every kit or kit.name=value for one (can be repeated); overrides the args a kits: entry pins in sbxenv.yaml
+
+      --kit-args-file <FILE>
+          File of name=value kit arguments, one per line (can be repeated); --kit-arg overrides
+
+      --skip-host-commands
+          Skip the host lifecycle commands the environment declares (smolbento runs none)
+
+  -d, --detach
+          Create/start the sandbox without attaching
+
+  -h, --help
+          Print help

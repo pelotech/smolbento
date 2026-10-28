@@ -167,6 +167,21 @@ fn set<R: Runner>(
     service: &str,
     src: SecretSource,
 ) -> Result<()> {
+    let scope = scope_for(src.sandbox.as_deref());
+    let sandbox = src.sandbox.clone();
+    let described = store(ctx, file, service, src)?;
+    writeln!(&ctx.out, "Saved {service} secret ({described}; {scope})")?;
+    explain_impact(ctx, service, sandbox.as_deref())
+}
+
+/// `secret set` without its output: stores the value (if any) and saves the entry. Returns where
+/// the value lives, as `secret set` describes it.
+pub(crate) fn store<R: Runner>(
+    ctx: &Ctx<R>,
+    file: &mut SecretsFile,
+    service: &str,
+    src: SecretSource,
+) -> Result<String> {
     if let Some(s) = &src.sandbox {
         name::validate(s)?;
     }
@@ -240,8 +255,7 @@ fn set<R: Runner>(
     {
         forget(ctx, &[old])?;
     }
-    writeln!(&ctx.out, "Saved {service} secret ({described}; {scope})")?;
-    explain_impact(ctx, service, src.sandbox.as_deref())
+    Ok(described)
 }
 
 /// Which sandboxes pick the change up on their next start, and which would need recreating.

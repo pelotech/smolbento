@@ -114,6 +114,7 @@ pub fn run<R: Runner>(ctx: &mut Ctx<R>, a: &RunArgs) -> Result<i32> {
         ..Default::default()
     };
     sandbox::env::session_tz(&ctx.env, spec.tty, &mut spec.env);
+    spec.env.extend(a.session_env.iter().cloned());
     // A v3 workload runs as its image user, through bash so the image's BASH_ENV is sourced.
     let image_user = sandbox::launch_user(&ctx.vm, &sb);
     if let Some(user) = &image_user {

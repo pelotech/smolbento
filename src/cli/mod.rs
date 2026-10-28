@@ -2,6 +2,7 @@
 
 mod args;
 mod diagnose;
+mod env;
 mod exec;
 mod fork;
 mod kit;
@@ -169,6 +170,7 @@ pub fn dispatch<R: Runner>(ctx: &mut Ctx<R>, cli: Cli) -> Result<i32> {
         Cmd::Secret(s) => secret::run(ctx, s),
         Cmd::Ports(a) => ports::run(ctx, &a),
         Cmd::Kit(k) => kit::run(ctx, k),
+        Cmd::Env(e) => env::run(ctx, e),
         Cmd::UploadPack { sandbox, .. } => upload_pack::run(ctx, &sandbox),
         Cmd::Daemon(_) => {
             writeln!(

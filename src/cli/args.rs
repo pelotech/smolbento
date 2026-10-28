@@ -78,8 +78,9 @@ pub enum Cmd {
     Kit(KitCmd),
     /// MCP servers (not implemented yet)
     Mcp(Passthrough),
-    /// sbxenv.yaml environments (not implemented yet)
-    Env(Passthrough),
+    /// Manage a sandbox declared in an sbxenv.yaml file
+    #[command(subcommand)]
+    Env(EnvCmd),
     /// Sandbox templates (not implemented yet)
     Template(Passthrough),
     /// Agent skills (not implemented yet)
@@ -166,6 +167,7 @@ impl Cmd {
                 | Cmd::Fork(_)
                 | Cmd::Ports(_)
                 | Cmd::UploadPack { .. }
+                | Cmd::Env(EnvCmd::Create(_) | EnvCmd::Run(_))
         )
     }
 
@@ -180,6 +182,80 @@ impl Cmd {
                 | Cmd::Volume(_)
         )
     }
+}
+
+#[derive(Debug, Subcommand)]
+pub enum EnvCmd {
+    /// Create a sandbox environment from sbxenv.yaml
+    Create(EnvCreateArgs),
+    /// Create (if needed) and attach to a sandbox environment
+    Run(EnvRunArgs),
+    /// Execute a command inside a sandbox environment (not implemented yet)
+    Exec(Passthrough),
+    /// Remove a sandbox environment and its scoped resources (not implemented yet)
+    Rm(Passthrough),
+    /// Show what an environment would change outside the sandbox (not implemented yet)
+    Plan(Passthrough),
+}
+
+/// What every `env` command takes.
+#[derive(Debug, Clone, Default, Args)]
+pub struct EnvCommon {
+    /// sbxenv.yaml files, or directories holding one (default: the current directory)
+    #[arg(value_name = "PATH")]
+    pub paths: Vec<String>,
+    /// Name for the sandbox, overriding 'name:' in sbxenv.yaml and the derived <agent>-<directory> (every 'sbt env' command addressing this environment needs the same value)
+    #[arg(long)]
+    pub name: Option<String>,
+    /// Value for an argument the environment file declares, as name=value (can be repeated)
+    #[arg(long = "env-arg", value_name = "NAME=VALUE")]
+    pub env_arg: Vec<String>,
+    /// File of name=value environment arguments, one per line (can be repeated); --env-arg overrides
+    #[arg(long = "env-args-file", value_name = "FILE")]
+    pub env_args_file: Vec<PathBuf>,
+}
+
+/// What `env create` and `env run` take besides `EnvCommon`.
+#[derive(Debug, Clone, Default, Args)]
+pub struct EnvApplyOpts {
+    /// Override workspace.clone in sbxenv.yaml (see 'sbt create --clone')
+    #[arg(long, num_args = 0..=1, require_equals = true, default_missing_value = "true")]
+    pub clone: Option<bool>,
+    /// Apply the environment plan without asking
+    #[arg(short = 'f', long)]
+    pub force: bool,
+    /// Value for an argument a kit declares, as name=value for every kit or kit.name=value for one (can be repeated); overrides the args a kits: entry pins in sbxenv.yaml
+    #[arg(long = "kit-arg", value_name = "NAME=VALUE")]
+    pub kit_arg: Vec<String>,
+    /// File of name=value kit arguments, one per line (can be repeated); --kit-arg overrides
+    #[arg(long = "kit-args-file", value_name = "FILE")]
+    pub kit_args_file: Vec<PathBuf>,
+    /// Skip the host lifecycle commands the environment declares (smolbento runs none)
+    #[arg(long = "skip-host-commands")]
+    pub skip_host_commands: bool,
+    #[arg(long = "on-timeout", hide = true)]
+    pub on_timeout: Option<String>,
+    #[arg(long, hide = true)]
+    pub ttl: Option<String>,
+}
+
+#[derive(Debug, Args)]
+pub struct EnvCreateArgs {
+    #[command(flatten)]
+    pub common: EnvCommon,
+    #[command(flatten)]
+    pub apply: EnvApplyOpts,
+}
+
+#[derive(Debug, Args)]
+pub struct EnvRunArgs {
+    #[command(flatten)]
+    pub common: EnvCommon,
+    #[command(flatten)]
+    pub apply: EnvApplyOpts,
+    /// Create/start the sandbox without attaching
+    #[arg(short = 'd', long)]
+    pub detach: bool,
 }
 
 #[derive(Debug, Args)]
@@ -408,6 +484,9 @@ pub struct RunArgs {
     /// Arguments for the agent
     #[arg(last = true)]
     pub agent_args: Vec<String>,
+    /// Extra env for the agent's session (`env run` of an existing sandbox: the file's env).
+    #[arg(skip)]
+    pub session_env: Vec<(String, String)>,
 }
 
 #[derive(Debug, Args)]
