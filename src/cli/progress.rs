@@ -12,10 +12,12 @@ const GREY: &str = "90";
 const MAGENTA: &str = "35";
 const GREEN: &str = "32";
 const RED: &str = "31";
-/// Moves up one line and clears it.
-const UP_CLEAR: &str = "\x1b[1A\r\x1b[K";
+/// Returns to the start of the line and clears it. Steps never move the cursor up, so text
+/// written to stderr during a step (a warning) is never erased.
+const CLEAR: &str = "\r\x1b[K";
 
-/// Writes sections, fields and steps. On a terminal a step is one line redrawn in place; otherwise
+/// Writes sections, fields and steps. On a terminal a step is one line redrawn in place (with no
+/// newline until it ends); otherwise
 /// each step prints when it starts and when it ends. `quiet` makes every call a no-op. Cloning is
 /// cheap; clones write to the same output.
 #[derive(Clone)]
@@ -32,8 +34,8 @@ pub struct Step {
     subject: String,
     doing: String,
     frame: usize,
-    /// Lines drawn on a terminal (the step, then its detail); 0 once ended or when not drawing.
-    lines: usize,
+    /// Drawn on a terminal and not yet ended.
+    drawn: bool,
 }
 
 impl Progress {
@@ -81,7 +83,7 @@ impl Progress {
             subject: subject.to_string(),
             doing: doing.to_string(),
             frame: 0,
-            lines: 0,
+            drawn: false,
         };
         if self.drawing() {
             step.draw(None);
@@ -131,9 +133,9 @@ impl Progress {
 }
 
 impl Step {
-    /// Redraws the step with `text` under it and the next spinner frame. Terminal only.
+    /// Redraws the step with `text` after it and the next spinner frame. Terminal only.
     pub fn detail(&mut self, text: &str) {
-        if self.lines > 0 {
+        if self.drawn {
             self.frame = (self.frame + 1) % SPINNER.len();
             self.draw(Some(text));
         }
@@ -157,23 +159,21 @@ impl Step {
         self.end(&format!("  {mark} {} — failed\n", self.subject));
     }
 
+    /// `  ⠙ subject — doing… detail`, over the current line and without a newline.
     fn draw(&mut self, detail: Option<&str>) {
-        let mut s = UP_CLEAR.repeat(self.lines);
         let frame = self.p.paint(MAGENTA, SPINNER[self.frame]);
-        s += &format!("  {frame} {} — {}…\n", self.subject, self.doing);
-        self.lines = 1;
-        if let Some(text) = detail {
-            s += &format!("        {text}\n");
-            self.lines = 2;
-        }
-        self.p.write(&s);
+        let detail = detail.map(|d| format!(" {d}")).unwrap_or_default();
+        self.p.write(&format!(
+            "{CLEAR}  {frame} {} — {}…{detail}",
+            self.subject, self.doing
+        ));
+        self.drawn = true;
     }
 
     fn end(&mut self, line: &str) {
-        if self.lines > 0 {
-            self.p
-                .write(&format!("{}{line}", UP_CLEAR.repeat(self.lines)));
-            self.lines = 0;
+        if self.drawn {
+            self.p.write(&format!("{CLEAR}{line}"));
+            self.drawn = false;
         } else {
             self.p.write(line);
         }
@@ -318,7 +318,7 @@ mod tests {
         p.step("box", "starting").done_as("Started box");
         assert_eq!(
             text(&out),
-            "  ⠋ box — starting…\n\x1b[1A\r\x1b[K  ✓ Started box\n"
+            "\r\x1b[K  ⠋ box — starting…\r\x1b[K  ✓ Started box\n"
         );
     }
 
@@ -334,10 +334,35 @@ mod tests {
         let (p, out) = reporter(true, false, false);
         create(&p);
         let s = text(&out);
-        assert!(s.contains("\x1b[1A\r\x1b[K"), "{s:?}");
+        assert!(s.contains("\r\x1b[K  ⠙ image — pulling… 42%"), "{s:?}");
         assert!(!s.contains("\x1b[9"), "{s:?}");
         assert!(!s.contains("\x1b[3"), "{s:?}");
         assert!(s.contains("  ✓ image — ready\n"), "{s:?}");
+    }
+
+    /// A warning written to stderr during a step must stay on screen: the terminal gets one
+    /// stream, so interleave both into one buffer and check nothing moves the cursor up.
+    #[test]
+    fn tty_never_moves_up_over_a_warning() {
+        let (p, out) = reporter(true, false, false);
+        let warn = || {
+            let _ = (&out).write_all(b"warning: kept stopped\n");
+        };
+        let mut s = p.step("image", "pulling");
+        warn();
+        s.detail("42%");
+        warn();
+        s.done("ready");
+        let s = p.step("kit", "installing");
+        warn();
+        s.fail();
+        let s = text(&out);
+        assert!(!s.contains("\x1b[1A") && !s.contains("\x1b[A"), "{s:?}");
+        assert_eq!(s.matches("warning: kept stopped\n").count(), 3, "{s:?}");
+        assert!(
+            s.ends_with("warning: kept stopped\n\r\x1b[K  ✗ kit — failed\n"),
+            "{s:?}"
+        );
     }
 
     #[test]
