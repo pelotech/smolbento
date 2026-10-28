@@ -5,6 +5,7 @@
 
 use std::collections::BTreeMap;
 use std::path::{Path, PathBuf};
+use std::sync::LazyLock;
 
 use anyhow::{Context, Result, bail};
 use regex_lite::Regex;
@@ -12,6 +13,13 @@ use serde::Deserialize;
 use serde_json::{Map, Value};
 
 const ESCAPE: &str = "__sbxenv_esc__";
+
+static REF: LazyLock<Regex> = LazyLock::new(|| Regex::new(r"\$\{\{\s*([^}]*?)\s*\}\}").unwrap());
+// What may precede a plain scalar that is a whole value: `key: ` or `- `, never a quote.
+static BEFORE_OK: LazyLock<Regex> =
+    LazyLock::new(|| Regex::new(r#"^\s*(?:-\s+)*(?:[^\s"'\-#][^"']*:\s+)?$"#).unwrap());
+static TOKEN: LazyLock<Regex> =
+    LazyLock::new(|| Regex::new(r"__sbxenv_(?:ref_(\d+)|esc)__").unwrap());
 
 /// One file, read and tokenized; references not yet substituted.
 pub struct RawFile {
@@ -145,13 +153,10 @@ pub fn read(path: &Path) -> Result<RawFile> {
 /// Replaces `$${{` and `${{ expr }}` with tokens, recording each reference.
 fn tokenize(text: &str) -> (String, Vec<Ref>) {
     let escaped = text.replace("$${{", ESCAPE);
-    let re = Regex::new(r"\$\{\{\s*([^}]*?)\s*\}\}").unwrap();
-    // What may precede a plain scalar that is a whole value: `key: ` or `- `, never a quote.
-    let before_ok = Regex::new(r#"^\s*(?:-\s+)*(?:[^\s"'\-#][^"']*:\s+)?$"#).unwrap();
     let mut out = String::new();
     let mut refs = Vec::new();
     let mut last = 0;
-    for c in re.captures_iter(&escaped) {
+    for c in REF.captures_iter(&escaped) {
         let m = c.get(0).unwrap();
         let line_start = escaped[..m.start()].rfind('\n').map_or(0, |i| i + 1);
         let line_end = escaped[m.end()..].find('\n').map_or(escaped.len(), |i| m.end() + i);
@@ -165,7 +170,7 @@ fn tokenize(text: &str) -> (String, Vec<Ref>) {
         refs.push(Ref {
             expr: c[1].to_string(),
             line: escaped[..m.start()].matches('\n').count() + 1,
-            alone: !before.trim().is_empty() && before_ok.is_match(before) && after_ok,
+            alone: !before.trim().is_empty() && BEFORE_OK.is_match(before) && after_ok,
         });
     }
     out.push_str(&escaped[last..]);
@@ -273,21 +278,21 @@ impl RawFile {
         args: &BTreeMap<String, String>,
         project_dir: &Path,
     ) -> Result<Value> {
-        let token = Regex::new(r"__sbxenv_(?:ref_(\d+)|esc)__").unwrap();
         let index = |c: &regex_lite::Captures| c.get(1).and_then(|n| n.as_str().parse::<usize>().ok());
-        // A plain scalar that is exactly one reference takes the substituted text's YAML type.
-        if let Some(c) = token.captures(s).filter(|c| c[0].len() == s.len())
+        // A plain scalar that is exactly one reference becomes a number or bool when the text is
+        // one; anything else stays the text as written.
+        if let Some(c) = TOKEN.captures(s).filter(|c| c[0].len() == s.len())
             && let Some(r) = index(&c).and_then(|n| self.refs.get(n)).filter(|r| r.alone)
         {
             let text = self.text_of(r, args, project_dir)?;
             return Ok(match serde_saphyr::from_str::<Value>(&text) {
-                Ok(v) if !v.is_array() && !v.is_object() => v,
+                Ok(v) if v.is_number() || v.is_boolean() => v,
                 _ => Value::String(text),
             });
         }
         let mut out = String::new();
         let mut last = 0;
-        for c in token.captures_iter(s) {
+        for c in TOKEN.captures_iter(s) {
             let m = c.get(0).unwrap();
             out.push_str(&s[last..m.start()]);
             match index(&c).and_then(|n| self.refs.get(n)) {
@@ -451,6 +456,24 @@ mod tests {
         assert_eq!(v["env"]["N"], "4");
         let e = expand("sandboxOptions:\n  cpus: \"${{ env.args.n }}\"\n", &[("n", "4")]).unwrap_err();
         assert!(e.to_string().contains("sandboxOptions.cpus"), "{e}");
+    }
+
+    #[test]
+    fn bool_reference_is_typed() {
+        let v = expand(
+            "additionalWorkspaces:\n  - path: /x\n    readOnly: ${{ env.args.b }}\n",
+            &[("b", "true")],
+        )
+        .unwrap();
+        assert_eq!(v["additionalWorkspaces"][0]["readOnly"], true);
+    }
+
+    #[test]
+    fn non_number_non_bool_text_is_kept_exactly() {
+        for t in ["echo hi # note", "'x'", ""] {
+            let v = expand("env:\n  X: ${{ env.args.c }}\n", &[("c", t)]).unwrap();
+            assert_eq!(v["env"]["X"], t, "{t:?}");
+        }
     }
 
     #[test]
