@@ -218,7 +218,7 @@ pub enum KitFormat {
 pub enum KitCmd {
     /// Show what a kit provides and requests
     Inspect {
-        /// Kit: a registry reference or a local directory, descriptor or Smolfile
+        /// Kit: a registry reference or a local path (./dir, descriptor or Smolfile)
         reference: String,
         #[command(flatten)]
         args: KitArgOpts,
@@ -234,7 +234,7 @@ pub enum KitCmd {
     },
     /// Check a kit without running it
     Validate {
-        /// Kit: a registry reference or a local directory, descriptor or Smolfile
+        /// Kit: a registry reference or a local path (./dir, descriptor or Smolfile)
         reference: String,
         #[command(flatten)]
         args: KitArgOpts,
@@ -252,7 +252,7 @@ pub enum KitCmd {
     Add {
         /// Sandbox name
         sandbox: String,
-        /// Mixin kit: a registry reference or a local directory or descriptor
+        /// Mixin kit: a registry reference or a local path (./dir or descriptor)
         reference: String,
         #[command(flatten)]
         args: KitArgOpts,
@@ -320,7 +320,7 @@ pub struct SandboxOpts {
     /// Work on a private clone of the git repo; its commits come back via the sandbox-<name> git remote
     #[arg(long)]
     pub clone: bool,
-    /// Add a kit (repeatable)
+    /// Add a kit: registry reference or local path, e.g. ./kit (repeatable)
     #[arg(long, value_name = "REF")]
     pub kit: Vec<String>,
     /// Kit argument: NAME=VALUE, or KIT.NAME=VALUE for one kit (repeatable)
@@ -387,7 +387,7 @@ impl SandboxOpts {
 
 #[derive(Debug, Args)]
 pub struct RunArgs {
-    /// Agent or workload kit, then workspace paths (default: the current directory)
+    /// Agent or workload kit (registry reference or local path, e.g. ./kit), then workspace paths (default: the current directory)
     pub targets: Vec<String>,
     #[command(flatten)]
     pub opts: SandboxOpts,
@@ -408,7 +408,7 @@ pub struct RunArgs {
 
 #[derive(Debug, Args)]
 pub struct CreateArgs {
-    /// Agent or workload kit, then workspace paths (none: a mountless sandbox)
+    /// Agent or workload kit (registry reference or local path, e.g. ./kit), then workspace paths (none: a mountless sandbox)
     #[arg(required = true)]
     pub targets: Vec<String>,
     #[command(flatten)]

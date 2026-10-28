@@ -250,9 +250,10 @@ fn needs_docker_kit(docker_image: bool, workload: &Kit, mixins: &[Kit]) -> bool 
 }
 
 /// A path or a registry reference rather than a misspelt agent, which mustn't reach a registry.
-/// As in sbx a bare word is only an agent name, tag or not (`alpine:3`); a reference needs a `/`.
+/// As in sbx a bare word is only an agent name, tag or not (`alpine:3`), dotted or not (`.hidden`);
+/// a reference is `.`, `..` or needs a `/` (`./kit`, `../kit`, `org/kit`).
 fn looks_like_kit(target: &str) -> bool {
-    target.contains('/') || target.starts_with('.')
+    target.contains('/') || target == "." || target == ".."
 }
 
 /// Resolves `--clone` into `req.clone`. Only for a sandbox that is about to be created: `--clone`
@@ -1094,7 +1095,8 @@ mod tests {
                 .contains("unknown agent \"nope\"")
         );
         // Exact sbx text; a bare word with a tag is still an agent name.
-        for w in ["alpine", "alpine:3"] {
+        // A dotted bare word is a name too; only `.`, `..` and paths are kit refs.
+        for w in ["alpine", "alpine:3", ".hidden", "...", ".kit.yaml"] {
             assert_eq!(
                 sbt(&mut t.ctx, &["create", w]).unwrap_err().to_string(),
                 format!("unknown agent \"{w}\"")

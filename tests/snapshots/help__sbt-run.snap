@@ -8,7 +8,7 @@ Usage: sbt run [OPTIONS] [TARGETS]... [-- <AGENT_ARGS>...]
 
 Arguments:
   [TARGETS]...
-          Agent or workload kit, then workspace paths (default: the current directory)
+          Agent or workload kit (registry reference or local path, e.g. ./kit), then workspace paths (default: the current directory)
 
   [AGENT_ARGS]...
           Arguments for the agent
@@ -45,7 +45,7 @@ Options:
           Work on a private clone of the git repo; its commits come back via the sandbox-<name> git remote
 
       --kit <REF>
-          Add a kit (repeatable)
+          Add a kit: registry reference or local path, e.g. ./kit (repeatable)
 
       --kit-arg <NAME=VALUE>
           Kit argument: NAME=VALUE, or KIT.NAME=VALUE for one kit (repeatable)

@@ -11,7 +11,7 @@ Arguments:
           Sandbox name
 
   <REFERENCE>
-          Mixin kit: a registry reference or a local directory or descriptor
+          Mixin kit: a registry reference or a local path (./dir or descriptor)
 
 Options:
   -D, --debug

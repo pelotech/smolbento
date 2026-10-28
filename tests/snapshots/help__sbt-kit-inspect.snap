@@ -8,7 +8,7 @@ Usage: sbt kit inspect [OPTIONS] <REFERENCE>
 
 Arguments:
   <REFERENCE>
-          Kit: a registry reference or a local directory, descriptor or Smolfile
+          Kit: a registry reference or a local path (./dir, descriptor or Smolfile)
 
 Options:
   -D, --debug
