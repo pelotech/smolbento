@@ -55,11 +55,12 @@ terminal fail until you do.
 | 4a | Kits: v3 capabilities, v2 `spec.yaml`, Smolfiles, `kit inspect/validate/add`, the `docker` kit, the `_builder` sandbox | ✅ Done |
 | 4b | `sbxenv.yaml` core: `env create/run/exec/rm`, files, args, user defaults, secrets, kits, ports | ✅ Done |
 | 4c | Host services: `localhost[:PORT]` rules reach the host as `host.docker.internal`, live (interim: every host port, until smolvm can open one) | ✅ Done (interim) |
-| 4d | The `plus` image and kit | Planned |
-| 5 | `template`, `setup ssh`, static MCP, `--skills`, clipboard and browser bridges; the kit capabilities `host-mount@1`, `ssh-agent@1`, `agent-skills@1`/`agent-skill@1` | Planned |
-| after 5 | Finish `sbxenv.yaml`: `env plan`, remembered approvals (`env.rememberHostCommands`), `lifecycle`, `bindings`, `registries`, `mcp`, `mounts`, the remaining `sandboxOptions` | Planned |
-| 6 | `tui` dashboard (bare `sbt` opens it on a terminal) | Planned |
-| 7 | Warm-start pool for near-instant creates; Windows | Planned |
+| 5 | In parts, easiest first: 5a host mounts (`host-mount@1`, `sbxenv.yaml` `mounts:`); 5b SSH (`ssh-agent@1`, `setup ssh`); 5c skills (`--skills`, `skills`, `agent-skills@1`/`agent-skill@1`); 5d `template`; 5e clipboard and browser bridges; 5f MCP (`--static-mcp`, `mcp`) | Planned |
+| 6 | Finish `sbxenv.yaml`: `env plan`, remembered approvals (`env.rememberHostCommands`), `lifecycle`, `bindings`, `registries`, `mcp`, `mounts`, the remaining `sandboxOptions` | Planned |
+| 7 | Kit publishing: `kit pack/push/pull/sign/verify` | Planned |
+| 8 | The `plus` kit, built and published with smolbento itself (an end-to-end check of everything before it) | Planned |
+| 9 | `tui` dashboard (bare `sbt` opens it on a terminal) | Planned |
+| 10 | Warm-start pool for near-instant creates; Windows | Planned |
 
 ## Known limitations
 
