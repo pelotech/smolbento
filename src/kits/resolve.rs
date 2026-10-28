@@ -29,10 +29,20 @@ pub struct Plan {
 impl Plan {
     /// One stderr line per skipped optional capability.
     pub fn warn_skipped(&self) {
-        for s in &self.skipped {
-            let (kit, what) = s.split_once(": ").unwrap_or(("?", s));
-            eprintln!("warning: kit {kit}: skipping {what} (not supported)");
+        for w in self.skipped_warnings() {
+            eprintln!("warning: {w}");
         }
+    }
+
+    /// The same, without the `warning: ` prefix.
+    pub fn skipped_warnings(&self) -> Vec<String> {
+        self.skipped
+            .iter()
+            .map(|s| {
+                let (kit, what) = s.split_once(": ").unwrap_or(("?", s));
+                format!("kit {kit}: skipping {what} (not supported)")
+            })
+            .collect()
     }
 }
 

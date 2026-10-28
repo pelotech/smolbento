@@ -24,16 +24,24 @@ pub fn builtin(reference: &str) -> Option<Result<Kit>> {
 /// or pulled. Presets (`agents::find`) are the caller's business, so `claude` never lands here;
 /// shipped kits (`docker`) are found before any path or registry.
 pub fn load<R: Runner>(ctx: &Ctx<R>, reference: &str) -> Result<Kit> {
-    let mut kit = load_kit(ctx, reference)?;
+    load_with(ctx, reference, false)
+}
+
+/// `load`, optionally offline (`kit inspect|validate --offline`): like sbx, the source policy
+/// isn't checked, and only what needs no network loads (a local v2 kit or Smolfile). A registry
+/// reference would be pulled and a v3 source directory built (the builder pulls its base image),
+/// so both are refused.
+pub fn load_with<R: Runner>(ctx: &Ctx<R>, reference: &str, offline: bool) -> Result<Kit> {
+    let mut kit = load_kit(ctx, reference, offline)?;
     kit.reference = Some(reference.to_string());
     Ok(kit)
 }
 
-fn load_kit<R: Runner>(ctx: &Ctx<R>, reference: &str) -> Result<Kit> {
+fn load_kit<R: Runner>(ctx: &Ctx<R>, reference: &str, offline: bool) -> Result<Kit> {
     if let Some(kit) = builtin(reference) {
         return kit;
     }
-    match locate(ctx, reference)? {
+    match locate(ctx, reference, offline)? {
         Located::Registry(r) => registry::pull(&r, &ctx.paths.kit_cache()),
         Located::V2(dir) => {
             let spec = dir.join("spec.yaml");
@@ -43,6 +51,10 @@ fn load_kit<R: Runner>(ctx: &Ctx<R>, reference: &str) -> Result<Kit> {
             kit.source = Source::LocalV2(dir);
             Ok(kit)
         }
+        Located::V3(_) if offline => bail!(
+            "kit {reference} is a v3 source kit and --offline has no kit builder: building it \
+             needs the network; run without --offline"
+        ),
         Located::V3(dir) => load_v3(ctx, &dir),
         Located::Smolfile(path) => smolfile::load(&path),
     }
@@ -54,7 +66,7 @@ pub fn kit_name<R: Runner>(ctx: &Ctx<R>, reference: &str) -> Result<String> {
     if let Some((name, _)) = BUILTINS.iter().find(|(n, _)| *n == reference) {
         return v3::name_from_source(&Source::Builtin(name));
     }
-    match locate(ctx, reference)? {
+    match locate(ctx, reference, false)? {
         Located::Registry(r) => v3::name_from_source(&Source::Registry(r)),
         Located::V2(dir) => {
             let spec = dir.join("spec.yaml");
@@ -76,7 +88,7 @@ enum Located {
     Smolfile(PathBuf),
 }
 
-fn locate<R: Runner>(ctx: &Ctx<R>, reference: &str) -> Result<Located> {
+fn locate<R: Runner>(ctx: &Ctx<R>, reference: &str, offline: bool) -> Result<Located> {
     let Some(path) = local_path(ctx, reference)? else {
         // Like sbx, a registry reference has a `/` (a tag alone isn't one: `alpine:3` is not).
         if !reference.contains('/') {
@@ -85,11 +97,16 @@ fn locate<R: Runner>(ctx: &Ctx<R>, reference: &str) -> Result<Located> {
                  registry reference"
             );
         }
+        if offline {
+            bail!("kit {reference} is a registry reference; --offline takes only local kits");
+        }
         trust::check(&Source::Registry(reference.to_string()), &ctx.settings)?;
         return Ok(Located::Registry(reference.to_string()));
     };
     // The local check is the same for every local kind, so it runs before anything is read.
-    trust::check(&Source::LocalV3(path.clone()), &ctx.settings)?;
+    if !offline {
+        trust::check(&Source::LocalV3(path.clone()), &ctx.settings)?;
+    }
     if path.is_dir() {
         return Ok(if path.join("spec.yaml").is_file() {
             Located::V2(path)

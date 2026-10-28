@@ -206,6 +206,14 @@ pub struct ForkArgs {
     pub count: u32,
 }
 
+/// `kit inspect --format`.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, clap::ValueEnum)]
+pub enum KitFormat {
+    Table,
+    Json,
+    Yaml,
+}
+
 #[derive(Debug, Subcommand)]
 pub enum KitCmd {
     /// Show what a kit provides and requests
@@ -214,9 +222,15 @@ pub enum KitCmd {
         reference: String,
         #[command(flatten)]
         args: KitArgOpts,
+        /// Output format
+        #[arg(long, value_enum)]
+        format: Option<KitFormat>,
         /// Output in JSON format
         #[arg(long)]
         json: bool,
+        /// Skip the source policy check; local kits only, no network
+        #[arg(long)]
+        offline: bool,
     },
     /// Check a kit without running it
     Validate {
@@ -224,6 +238,12 @@ pub enum KitCmd {
         reference: String,
         #[command(flatten)]
         args: KitArgOpts,
+        /// Output in JSON format
+        #[arg(long)]
+        json: bool,
+        /// Skip the source policy check; local kits only, no network
+        #[arg(long)]
+        offline: bool,
     },
     /// Add a mixin kit to an existing sandbox
     Add {

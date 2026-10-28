@@ -6,7 +6,8 @@ use anyhow::{Context, Result, anyhow, bail};
 use serde_json::json;
 
 use super::Ctx;
-use super::args::{KitArgOpts, KitCmd};
+use super::args::{KitArgOpts, KitCmd, KitFormat};
+use super::kit_doc::Doc;
 use super::plan;
 use crate::kits::apply::apply;
 use crate::kits::args::{ArgValues, NoResolvedValue};
@@ -27,9 +28,23 @@ pub fn run<R: Runner>(ctx: &mut Ctx<R>, cmd: KitCmd) -> Result<i32> {
         KitCmd::Inspect {
             reference,
             args,
+            format,
             json,
-        } => inspect(ctx, &reference, &args, json),
-        KitCmd::Validate { reference, args } => validate(ctx, &reference, &args),
+            offline,
+        } => {
+            let format = if json {
+                KitFormat::Json
+            } else {
+                format.unwrap_or(KitFormat::Table)
+            };
+            inspect(ctx, &reference, &args, format, offline)
+        }
+        KitCmd::Validate {
+            reference,
+            args,
+            json,
+            offline,
+        } => validate(ctx, &reference, &args, json, offline),
         KitCmd::Add {
             sandbox,
             reference,
@@ -53,162 +68,45 @@ fn arg_values(a: &KitArgOpts) -> Result<ArgValues> {
     ArgValues::parse(&a.kit_args_file, &a.kit_arg)
 }
 
-/// The kit as loaded, without resolving it: what it is and what it asks for.
-fn inspect<R: Runner>(ctx: &Ctx<R>, reference: &str, args: &KitArgOpts, json: bool) -> Result<i32> {
+/// The kit as loaded, without resolving it: sbx's summary table (then which capabilities
+/// smolbento supports), or its v2-shaped descriptor as JSON or YAML.
+fn inspect<R: Runner>(
+    ctx: &Ctx<R>,
+    reference: &str,
+    args: &KitArgOpts,
+    format: KitFormat,
+    offline: bool,
+) -> Result<i32> {
     // Only checked: inspecting doesn't expand anything.
     arg_values(args)?;
-    let kit = load::load(ctx, reference)?;
+    let kit = load::load_with(ctx, reference, offline)?;
+    let doc = Doc::new(&kit);
     let mut out = &ctx.out;
-    let (source, from) = source_of(&kit.source);
-    if json {
-        let args: serde_json::Map<String, serde_json::Value> = kit
-            .args
-            .iter()
-            .map(|(name, a)| {
-                (
-                    name.clone(),
-                    json!({
-                        "default": a.default,
-                        "required": a.required,
-                        "pattern": a.pattern,
-                        "enum": a.enum_values,
-                        "env": a.env,
-                    }),
-                )
-            })
-            .collect();
-        let caps: Vec<_> = kit
-            .caps
-            .iter()
-            .map(|c| json!({"type": c.ty, "optional": c.optional, "supported": supported(c)}))
-            .collect();
-        let creds: Vec<_> = credentials(&kit)
-            .into_iter()
-            .map(|(service, hosts)| json!({"service": service, "injectHosts": hosts}))
-            .collect();
-        let v = json!({
-            "name": kit.name,
-            "kind": kind_name(kit.kind),
-            "source": source,
-            "sourceType": from,
-            "digest": kit.digest,
-            "provides": kit.provides,
-            "requires": kit.requires,
-            "args": args,
-            "capabilities": caps,
-            "credentials": creds,
-        });
-        writeln!(out, "{}", serde_json::to_string_pretty(&v)?)?;
-        return Ok(0);
-    }
-    let list = |l: &[String]| {
-        if l.is_empty() {
-            "-".to_string()
-        } else {
-            l.join(", ")
+    match format {
+        KitFormat::Json => writeln!(out, "{}", doc.json()?)?,
+        KitFormat::Yaml => write!(out, "{}", doc.yaml()?)?,
+        KitFormat::Table => {
+            write!(out, "{}", doc.table(&kit))?;
+            if !kit.caps.is_empty() {
+                writeln!(out, "Capabilities:")?;
+                let mut rows = vec![vec!["TYPE".into(), "OPTIONAL".into(), "SUPPORT".into()]];
+                for c in &kit.caps {
+                    rows.push(vec![
+                        c.ty.clone(),
+                        if c.optional { "yes" } else { "no" }.into(),
+                        if supported(c) {
+                            "supported"
+                        } else {
+                            "not supported"
+                        }
+                        .into(),
+                    ]);
+                }
+                write!(out, "{}", super::table(rows))?;
+            }
         }
-    };
-    writeln!(out, "Name:      {}", kit.name)?;
-    writeln!(out, "Kind:      {}", kind_name(kit.kind))?;
-    writeln!(out, "Source:    {source} ({from})")?;
-    writeln!(out, "Digest:    {}", kit.digest.as_deref().unwrap_or("-"))?;
-    writeln!(out, "Provides:  {}", list(&kit.provides))?;
-    writeln!(out, "Requires:  {}", list(&kit.requires))?;
-    if kit.args.is_empty() {
-        writeln!(out, "Args:      -")?;
-    } else {
-        writeln!(out, "Args:")?;
-        for (name, a) in &kit.args {
-            let mut what = Vec::new();
-            if a.required {
-                what.push("required".to_string());
-            }
-            if let Some(d) = &a.default {
-                what.push(format!("default {d:?}"));
-            }
-            if !a.enum_values.is_empty() {
-                what.push(format!("one of {}", a.enum_values.join("|")));
-            }
-            if let Some(p) = &a.pattern {
-                what.push(format!("pattern {p}"));
-            }
-            writeln!(out, "  {name}  {}", what.join(", "))?;
-        }
-    }
-    if kit.caps.is_empty() {
-        writeln!(out, "Capabilities: -")?;
-        return Ok(0);
-    }
-    writeln!(out, "Capabilities:")?;
-    let mut rows = vec![vec!["TYPE".into(), "OPTIONAL".into(), "SUPPORT".into()]];
-    for c in &kit.caps {
-        rows.push(vec![
-            c.ty.clone(),
-            if c.optional { "yes" } else { "no" }.into(),
-            if supported(c) {
-                "supported"
-            } else {
-                "not supported"
-            }
-            .into(),
-        ]);
-    }
-    write!(out, "{}", super::table(rows))?;
-    let creds = credentials(&kit);
-    if !creds.is_empty() {
-        // Where each secret goes: a built-in service's only to its own hosts (R24).
-        writeln!(out, "Credentials:")?;
-        let mut rows = vec![vec!["SERVICE".into(), "SENT TO".into()]];
-        for (service, hosts) in creds {
-            let to = if hosts.is_empty() {
-                "the service's hosts".into()
-            } else {
-                hosts.join(", ")
-            };
-            rows.push(vec![service, to]);
-        }
-        write!(out, "{}", super::table(rows))?;
     }
     Ok(0)
-}
-
-/// Each credential that sends one of your secrets (OAuth passthrough sends none): its service and
-/// the hosts it injects into (empty: the service's own), as declared (placeholders unexpanded).
-fn credentials(kit: &Kit) -> Vec<(String, Vec<String>)> {
-    kit.caps
-        .iter()
-        .filter_map(|c| match &c.body {
-            CapBody::Credential(r) if r.env.is_some() || !r.inject.is_empty() => {
-                let mut hosts: Vec<String> = Vec::new();
-                for i in &r.inject {
-                    if !hosts.contains(&i.domain) {
-                        hosts.push(i.domain.clone());
-                    }
-                }
-                Some((r.service.clone(), hosts))
-            }
-            _ => None,
-        })
-        .collect()
-}
-
-fn kind_name(k: Kind) -> &'static str {
-    match k {
-        Kind::Workload => "workload",
-        Kind::Mixin => "mixin",
-    }
-}
-
-/// The ref or path, and what kind of source it is.
-fn source_of(s: &Source) -> (String, &'static str) {
-    match s {
-        Source::Registry(r) => (r.clone(), "registry"),
-        Source::Preset(r) => (r.clone(), "preset"),
-        Source::Builtin(n) => (n.to_string(), "builtin"),
-        Source::LocalV3(p) => (p.display().to_string(), "local v3"),
-        Source::LocalV2(p) => (p.display().to_string(), "local v2"),
-        Source::Smolfile(p) => (p.display().to_string(), "smolfile"),
-    }
 }
 
 /// Whether smolbento can provide the capability (`resolve` fails a required one it can't).
@@ -227,9 +125,26 @@ fn supported(c: &Cap) -> bool {
 
 /// Loads and resolves the kit on its own: a workload by itself, a mixin on an empty workload that
 /// provides whatever the mixin requires, at a version its constraints accept.
-fn validate<R: Runner>(ctx: &Ctx<R>, reference: &str, args: &KitArgOpts) -> Result<i32> {
+fn validate<R: Runner>(
+    ctx: &Ctx<R>,
+    reference: &str,
+    args: &KitArgOpts,
+    json: bool,
+    offline: bool,
+) -> Result<i32> {
     let values = arg_values(args)?;
-    let mut kit = load::load(ctx, reference)?;
+    let mut kit = load::load_with(ctx, reference, offline)?;
+    let kind = reference_kind(&kit.source, reference);
+    if offline
+        && kit.kind == Kind::Workload
+        && kit.command.is_none()
+        && matches!(&kit.content, Content::Image(i) if !i.is_empty())
+    {
+        bail!(
+            "kit {reference}: its command comes from the image config, which needs a registry \
+             lookup; --offline can't validate it"
+        );
+    }
     load::check_launchable(ctx, &mut kit)?;
     let resolved = match kit.kind {
         Kind::Workload => resolve(kit, vec![], &values),
@@ -253,9 +168,39 @@ fn validate<R: Runner>(ctx: &Ctx<R>, reference: &str, args: &KitArgOpts) -> Resu
             e
         }
     })?;
-    plan.warn_skipped();
-    writeln!(&ctx.out, "ok")?;
+    if json {
+        let v = json!({
+            "reference": reference,
+            "kind": kind,
+            "valid": true,
+            "warnings": plan.skipped_warnings(),
+        });
+        writeln!(&ctx.out, "{v}")?;
+    } else {
+        plan.warn_skipped();
+        writeln!(&ctx.out, "✓ {reference} — valid")?;
+    }
     Ok(0)
+}
+
+/// What sort of reference `validate --json` reports: sbx's `directory` for a kit directory.
+fn reference_kind(source: &Source, reference: &str) -> &'static str {
+    match source {
+        Source::Registry(_) => "registry",
+        Source::Builtin(_) | Source::Preset(_) => "builtin",
+        Source::LocalV2(_) | Source::LocalV3(_) | Source::Smolfile(_) => {
+            let path = reference.strip_prefix("~/").unwrap_or(reference);
+            if path.ends_with(".yaml")
+                || path.ends_with(".yml")
+                || path.ends_with("Smolfile")
+                || path.ends_with(".smolfile")
+            {
+                "file"
+            } else {
+                "directory"
+            }
+        }
+    }
 }
 
 /// A synthetic preset workload with nothing in it: the existing sandbox's agent for `kit add`.
@@ -731,67 +676,201 @@ mod tests {
     }
 
     #[test]
-    fn inspect_lists_a_v2_kits_capabilities() {
+    fn inspect_prints_sbxs_table_then_the_capability_support() {
+        let mut t = kit_env();
+        v3_kit(&t, "net", NET_KIT, &[]);
+        sbt(&mut t.ctx, &["kit", "inspect", "./net"]).unwrap();
+        let out = t.stdout();
+        let (head, rest) = out.split_once("Capabilities:\n").expect(&out);
+        let template = head.lines().nth(3).unwrap();
+        assert!(template.starts_with("Template: sbx-kit-src:net-"), "{out}");
+        let head = head.replacen(template, "Template: T", 1);
+        insta::assert_snapshot!(head, @r"
+        Name: net
+        Kind: mixin
+        Schema: v3
+        Template: T
+        Policies:
+          Network: 2 allow, 0 deny
+        Credentials: 0 sources
+        Commands: 1 install, 1 startup, 1 init files
+        ");
+        assert!(rest.contains("com.docker.sandbox/agent-context@1"), "{out}");
+    }
+
+    #[test]
+    fn inspect_counts_a_v2_kits_credentials_and_rules() {
         let mut t = kit_env();
         let full = v2_fixture("full");
         sbt(&mut t.ctx, &["kit", "inspect", &full]).unwrap();
         let out = t.stdout();
-        assert!(out.contains("Name:") && out.contains("full-kit"), "{out}");
-        assert!(out.contains("workload"), "{out}");
-        assert!(out.contains("local v2"), "{out}");
-        let caps: Vec<&str> = out
-            .lines()
-            .filter(|l| l.starts_with("com.docker.sandbox/"))
-            .collect();
-        let want = [
-            ("resources@1", "supported"),
-            ("network-policy@1", "supported"),
-            ("credential@1", "supported"),
-            // OAuth without passthrough (sentinel tokens).
-            ("credential@1", "not supported"),
-            ("port@1", "supported"),
-            ("port@1", "supported"),
-            ("volume@1", "supported"),
-            ("volume@1", "supported"),
-            ("lifecycle@1", "supported"),
-            ("agent-context@2", "supported"),
-        ];
-        assert_eq!(caps.len(), want.len(), "{out}");
-        for (l, (ty, support)) in caps.iter().zip(want) {
-            let cols: Vec<&str> = l
-                .split("   ")
-                .map(str::trim)
-                .filter(|c| !c.is_empty())
-                .collect();
-            assert_eq!(
-                cols,
-                vec![format!("com.docker.sandbox/{ty}").as_str(), "no", support],
-                "{out}"
-            );
-        }
+        let head = out.split_once("Capabilities:").expect(&out).0;
+        insta::assert_snapshot!(head, @r"
+        Name: full-kit
+        Kind: workload
+        Schema: v2
+        Policies:
+          Network: 2 allow, 1 deny
+        Credentials: 2 sources
+        Commands: 2 install, 2 startup, 4 init files
+        ");
         assert!(t.ctx.vm.runner().call_lines().is_empty());
-        let creds = out.split_once("Credentials:\n").expect(&out).1;
-        let row: Vec<&str> = creds.lines().nth(1).unwrap().split_whitespace().collect();
+    }
+
+    #[test]
+    fn inspect_json_is_the_v2_shaped_document_even_for_v3() {
+        let mut t = kit_env();
+        let full = v2_fixture("full");
+        sbt(&mut t.ctx, &["kit", "inspect", &full, "--format", "json"]).unwrap();
+        let json = t.stdout();
+        let v: serde_json::Value = serde_json::from_str(&json).unwrap();
+        let keys: Vec<&str> = v.as_object().unwrap().keys().map(String::as_str).collect();
         assert_eq!(
-            row,
-            ["example", "api.example.com,", "git.example.com"],
-            "{out}"
+            keys,
+            [
+                "credentials",
+                "kind",
+                "name",
+                "permissions",
+                "sandbox",
+                "schemaVersion",
+                "setup"
+            ]
         );
-        assert_eq!(creds.lines().count(), 2, "OAuth sends no secret: {out}");
+        assert_eq!(v["schemaVersion"], "2");
+        assert_eq!(v["kind"], "sandbox");
+        assert_eq!(v["name"], "full-kit");
+        assert_eq!(
+            v["sandbox"],
+            serde_json::json!({"image": "ghcr.io/example/agent:1.2",
+                "resources": {"cpu": 2, "memory": "4g"}})
+        );
+        assert_eq!(
+            v["permissions"],
+            serde_json::json!({"network": {
+                "allow": ["api.example.com", "*.cdn.example.com"],
+                "deny": ["telemetry.example.com"]}})
+        );
+        assert_eq!(v["credentials"][0]["service"], "example");
+        assert_eq!(v["credentials"][0]["apiKey"]["name"], "EXAMPLE_API_KEY");
+        assert_eq!(
+            v["setup"]["install"][1],
+            serde_json::json!({"command": "echo hi", "user": "1000"})
+        );
+        // Two `setup.files` plus the two static files under `files/home` and `files/workspace`.
+        assert_eq!(v["setup"]["files"].as_array().unwrap().len(), 4);
 
         sbt(&mut t.ctx, &["kit", "inspect", &full, "--json"]).unwrap();
+        assert_eq!(t.stdout(), json, "--json is --format json");
+
+        v3_kit(&t, "net", NET_KIT, &[]);
+        sbt(&mut t.ctx, &["kit", "inspect", "./net", "--json"]).unwrap();
         let v: serde_json::Value = serde_json::from_str(&t.stdout()).unwrap();
-        assert_eq!(v["name"], "full-kit");
-        assert_eq!(v["kind"], "workload");
-        assert_eq!(v["sourceType"], "local v2");
-        let caps = v["capabilities"].as_array().unwrap();
-        assert_eq!(caps.len(), want.len());
-        assert_eq!(caps[2]["supported"], true, "{v}");
-        assert_eq!(caps[3]["supported"], false, "{v}");
-        assert_eq!(caps[0]["optional"], false);
+        assert_eq!(v["schemaVersion"], "2");
+        assert_eq!(v["kind"], "mixin");
         assert_eq!(
-            v["credentials"],
-            serde_json::json!([{"service": "example", "injectHosts": ["api.example.com", "git.example.com"]}])
+            v["permissions"]["network"]["allow"],
+            serde_json::json!(["pkg.example.com", "api.net.example"])
+        );
+        assert_eq!(
+            v["setup"]["install"],
+            serde_json::json!([{"command": "echo hi"}])
+        );
+    }
+
+    #[test]
+    fn inspect_yaml_carries_the_same_document() {
+        let mut t = kit_env();
+        let full = v2_fixture("full");
+        sbt(&mut t.ctx, &["kit", "inspect", &full, "--format", "json"]).unwrap();
+        let json: serde_json::Value = serde_json::from_str(&t.stdout()).unwrap();
+        sbt(&mut t.ctx, &["kit", "inspect", &full, "--format", "yaml"]).unwrap();
+        let yaml = t.stdout();
+        assert!(yaml.starts_with("schemaVersion: "), "{yaml}");
+        let back: serde_json::Value = serde_saphyr::from_str(&yaml).unwrap();
+        assert_eq!(back, json);
+    }
+
+    #[test]
+    fn inspect_rejects_an_unknown_format() {
+        let mut t = kit_env();
+        let e = sbt(
+            &mut t.ctx,
+            &["kit", "inspect", &v2_fixture("full"), "--format", "xml"],
+        )
+        .unwrap_err();
+        assert!(format!("{e:#}").contains("xml"), "{e:#}");
+    }
+
+    #[test]
+    fn offline_takes_local_v2_without_the_source_policy_and_refuses_the_network() {
+        // Local kits are refused by default: --offline skips that check, as in sbx.
+        let mut t = test_env(&[("SMOLBENTO_KIT_ALLOW_LOCAL_KITS", "false")]);
+        let full = v2_fixture("full");
+        sbt(&mut t.ctx, &["kit", "inspect", &full]).unwrap_err();
+        sbt(&mut t.ctx, &["kit", "inspect", &full, "--offline"]).unwrap();
+        assert!(t.stdout().starts_with("Name: full-kit"));
+        let tool = v2_fixture("tool-mixin");
+        sbt(&mut t.ctx, &["kit", "validate", &tool, "--offline"]).unwrap();
+        // A workload that takes its command from an image would need a registry lookup.
+        let e = sbt(&mut t.ctx, &["kit", "validate", &full, "--offline"]).unwrap_err();
+        assert!(format!("{e:#}").contains("--offline"), "{e:#}");
+
+        let e = sbt(
+            &mut t.ctx,
+            &["kit", "inspect", "docker.io/x/y:1", "--offline"],
+        )
+        .unwrap_err();
+        assert!(format!("{e:#}").contains("--offline"), "{e:#}");
+        let e = sbt(
+            &mut t.ctx,
+            &["kit", "validate", "ghcr.io/x/y:1", "--offline"],
+        )
+        .unwrap_err();
+        assert!(format!("{e:#}").contains("--offline"), "{e:#}");
+        assert!(t.ctx.vm.runner().call_lines().is_empty());
+    }
+
+    #[test]
+    fn offline_refuses_a_v3_source_directory_before_building() {
+        let mut t = kit_env();
+        v3_kit(&t, "net", NET_KIT, &[]);
+        let e = sbt(&mut t.ctx, &["kit", "inspect", "./net", "--offline"]).unwrap_err();
+        let msg = format!("{e:#}");
+        assert!(
+            msg.contains("--offline") && msg.contains("v3 source kit"),
+            "{msg}"
+        );
+        assert!(t.ctx.vm.runner().call_lines().is_empty());
+    }
+
+    #[test]
+    fn validate_json_reports_the_reference_kind_and_warnings() {
+        let mut t = kit_env();
+        let tool = v2_fixture("tool-mixin");
+        sbt(&mut t.ctx, &["kit", "validate", &tool, "--json"]).unwrap();
+        let v: serde_json::Value = serde_json::from_str(&t.stdout()).unwrap();
+        assert_eq!(
+            v,
+            serde_json::json!({"reference": tool, "kind": "directory", "valid": true,
+                "warnings": []})
+        );
+        v3_kit(
+            &t,
+            "odd",
+            r#"{"schemaVersion":"3","kind":"mixin","name":"odd","capabilities":[
+            {"type":"com.docker.sandbox/usb-device@1","optional":true}]}"#,
+            &[],
+        );
+        sbt(&mut t.ctx, &["kit", "validate", "./odd", "--json"]).unwrap();
+        let v: serde_json::Value = serde_json::from_str(&t.stdout()).unwrap();
+        assert_eq!(v["reference"], "./odd");
+        assert_eq!(v["kind"], "directory");
+        assert_eq!(
+            v["warnings"],
+            serde_json::json!([
+                "kit odd: skipping com.docker.sandbox/usb-device@1 (not supported)"
+            ])
         );
     }
 
@@ -821,7 +900,10 @@ mod tests {
             sbt(&mut t.ctx, &["kit", "validate", &v2_fixture("tool-mixin")]).unwrap(),
             0
         );
-        assert_eq!(t.stdout(), "ok\n");
+        assert_eq!(
+            t.stdout(),
+            format!("✓ {} — valid\n", v2_fixture("tool-mixin"))
+        );
 
         let yaml = fs::read_to_string(format!(
             "{}/tests/fixtures/kits/v3/bad-config-key.yaml",
@@ -876,7 +958,7 @@ mod tests {
         let mut t = kit_env();
         let ws = v2_fixture("workspace-files");
         assert_eq!(sbt(&mut t.ctx, &["kit", "validate", &ws]).unwrap(), 0);
-        assert_eq!(t.stdout(), "ok\n");
+        assert_eq!(t.stdout(), format!("✓ {ws} — valid\n"));
     }
 
     #[test]
@@ -1322,7 +1404,7 @@ mod tests {
         );
         v3_kit(&t, "net", &kit, &[]);
         assert_eq!(sbt(&mut t.ctx, &["kit", "validate", "./net"]).unwrap(), 0);
-        assert_eq!(t.stdout(), "ok\n");
+        assert_eq!(t.stdout(), "✓ ./net — valid\n");
     }
 
     #[test]

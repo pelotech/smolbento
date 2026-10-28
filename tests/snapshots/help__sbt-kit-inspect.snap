@@ -20,8 +20,16 @@ Options:
       --kit-args-file <FILE>
           Read kit arguments (NAME=VALUE lines) from a file (repeatable)
 
+      --format <FORMAT>
+          Output format
+
+          [possible values: table, json, yaml]
+
       --json
           Output in JSON format
+
+      --offline
+          Skip the source policy check; local kits only, no network
 
   -h, --help
           Print help

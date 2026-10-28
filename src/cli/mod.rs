@@ -5,6 +5,7 @@ mod diagnose;
 mod exec;
 mod fork;
 mod kit;
+mod kit_doc;
 mod lifecycle;
 mod ls;
 pub(crate) mod plan;
