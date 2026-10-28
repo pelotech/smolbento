@@ -431,6 +431,9 @@ fn add_running<R: Runner>(
     if sb.meta.command.is_some() {
         workload.source = Source::Registry(String::new());
         workload.digest = Some("sha256:recorded".into());
+    } else {
+        // A preset provides its agent name, as at create (the image isn't recorded: version 0).
+        workload.provides = vec![load::preset_provide(&sb.meta.agent, "")];
     }
     workload.config = sb.meta.image_workdir.clone().map(|workdir| ImageConfig {
         workdir,
@@ -1252,6 +1255,21 @@ mod tests {
             !lines.iter().any(|l| l.contains("startup.d")),
             "no startup hooks: {lines:#?}"
         );
+    }
+
+    #[test]
+    fn add_meets_a_requires_on_the_sandboxs_agent_preset() {
+        let mut t = kit_env();
+        dev_sandbox_labeled(&t, "running", &[("sbx.agent", "claude")], "");
+        v3_kit(
+            &t,
+            "forclaude",
+            r#"{"schemaVersion":"3","kind":"mixin","name":"forclaude","requires":["claude"],
+                "capabilities":[{"type":"com.docker.sandbox/lifecycle@1",
+                "config":{"install":[{"command":"echo hi"}]}}]}"#,
+            &[],
+        );
+        sbt(&mut t.ctx, &["kit", "add", "dev", "./forclaude"]).unwrap();
     }
 
     #[test]

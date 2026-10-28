@@ -117,8 +117,8 @@ pub fn resolve_for(
             if k.name == "docker" && shipped {
                 bail!(
                     "two kits are named docker: yours and the shipped one a Docker-enabled image \
-                     gets; rename your kit, or have it provide docker (`provides: [docker]`) to \
-                     replace the shipped one"
+                     gets; rename your kit, or have it provide docker \
+                     (`provides: [docker@<version>]`) to replace the shipped one"
                 );
             }
             bail!("two kits are named {}", k.name);
@@ -732,8 +732,8 @@ mod tests {
         assert_eq!(
             format!("{e:#}"),
             "two kits are named docker: yours and the shipped one a Docker-enabled image gets; \
-             rename your kit, or have it provide docker (`provides: [docker]`) to replace the \
-             shipped one"
+             rename your kit, or have it provide docker (`provides: [docker@<version>]`) to \
+             replace the shipped one"
         );
         // A preset agent's name is free for a kit.
         let mut preset = workload("claude");
