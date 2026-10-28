@@ -621,8 +621,14 @@ fn ls_rows(policy: &Policy, opts: &LsOpts) -> Vec<LsRow> {
                 notes.push(format!("{label} {v} not enforced"));
             }
         }
-        if rule.source() == "kit" {
-            let sandbox = scope.unwrap_or("all");
+        // sbx doesn't list install-only hosts after create.
+        if rule.is_kit_install() {
+            continue;
+        }
+        if rule.source() == "kit"
+            && let Some(sandbox) = scope
+        {
+            // (Kit rules always carry a sandbox scope; a scopeless one lists as a plain rule.)
             let name = format!("kit:{sandbox}");
             let decision = rule.decision.name();
             let at = kit_rows
@@ -1003,14 +1009,15 @@ mod tests {
             sbt(&mut t.ctx, args).unwrap();
             t.stdout()
         };
-        // One aggregated rule per sandbox, like sbx: runtime and install hosts together.
+        // One aggregated rule per sandbox, like sbx: runtime hosts only (install-phase hosts are
+        // not listed).
         let kit = out(&["policy", "ls", "my-sb", "--source", "kit"]);
         let rows: Vec<_> = kit.lines().skip(2).collect();
         assert_eq!(rows.len(), 1, "{kit}");
         let id = crate::policy::kit_rule_id("my-sb");
         assert!(rows[0].starts_with(&id), "{kit}");
         assert!(rows[0].contains("sandbox:my-sb"), "{kit}");
-        assert!(rows[0].contains("network: 2 allow"), "{kit}");
+        assert!(rows[0].contains("network: 1 allow"), "{kit}");
         assert!(
             !kit.contains("kit:gh") && !kit.contains("user.com"),
             "{kit}"
@@ -1018,7 +1025,7 @@ mod tests {
         let wide = out(&["policy", "ls", "my-sb", "--source", "kit", "--wide"]);
         assert!(wide.contains("kit:my-sb"), "{wide}");
         assert!(
-            wide.contains("kit.com") && wide.contains("pkg.kit.com"),
+            wide.contains("kit.com") && !wide.contains("pkg.kit.com"),
             "{wide}"
         );
         let json = out(&["policy", "ls", "my-sb", "--source", "kit", "--json"]);
@@ -1029,7 +1036,7 @@ mod tests {
         assert_eq!(json[0]["source"], "kit");
         assert_eq!(json[0]["applies_to"], "sandbox:my-sb");
         assert_eq!(json[0]["editable"], false);
-        assert_eq!(json[0]["resources"].as_array().unwrap().len(), 2);
+        assert_eq!(json[0]["resources"].as_array().unwrap().len(), 1);
         let local = out(&["policy", "ls", "my-sb", "--source", "local"]);
         assert!(
             local.contains("user.com") && !local.contains("kit.com"),

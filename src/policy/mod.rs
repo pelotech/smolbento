@@ -305,7 +305,8 @@ impl Policy {
         self.prune(sandbox);
     }
 
-    /// Removes rules by id, or one resource from every rule listing it (dropping emptied rules).
+    /// Removes rules by id, or one resource from every non-kit rule listing it (dropping emptied
+    /// rules).
     pub fn remove_rules(
         &mut self,
         sandbox: Option<&str>,
@@ -318,7 +319,8 @@ impl Policy {
             list.retain(|r| r.id != id);
         }
         if let Some(res) = resource {
-            for r in list.iter_mut() {
+            // Kit rules go with their kit, never by resource.
+            for r in list.iter_mut().filter(|r| r.source() != "kit") {
                 r.resources.retain(|x| !x.eq_ignore_ascii_case(res));
             }
             list.retain(|r| !r.resources.is_empty());
@@ -820,6 +822,24 @@ mod tests {
         assert_eq!(p.find(&install[0]).unwrap().0.created_via, "kit:gh");
         p.forget_sandbox("sb");
         assert!(!p.sandboxes.contains_key("sb"));
+    }
+
+    #[test]
+    fn rm_by_resource_leaves_kit_rules_alone() {
+        let mut p = Policy::default();
+        p.add_rule(Some("sb"), Decision::Allow, "x.com", "added", None, None)
+            .unwrap();
+        let rules = Rules {
+            allow: vec![net("x.com", &[], &[])],
+            deny: vec![],
+        };
+        p.add_kit_rules("sb", "gh", &rules, false).unwrap();
+        assert!(p.kit_rule_target(Some("sb"), None, Some("x.com")).is_none());
+        assert!(p.remove_rules(Some("sb"), None, Some("x.com")));
+        let left: Vec<_> = p.rules_for(Some("sb")).collect();
+        assert_eq!(left.len(), 1);
+        assert_eq!(left[0].0.created_via, "kit:gh");
+        assert_eq!(left[0].0.resources, ["x.com"]);
     }
 
     #[test]

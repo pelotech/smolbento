@@ -19,6 +19,7 @@ clearly rather than doing something different.
 | Command or flag | Planned |
 |---|---|
 | `policy refresh`, `secret import`, `secret set --oauth/--registry/--refresh` | Not implemented |
+| `policy ls --wide` | sbx's wide layout | Columns differ: a NAME column is added; sbx's other wide columns aren't shown. Kit rules are one `kit:<sandbox>` row per sandbox, as in sbx |
 | `policy ls --created-via/--type/--protocol/--include-inactive`, `policy check --protocol` other than `tcp` | Not implemented (`policy ls --decision` and `--source` work) |
 | `kit pack`, `kit push`, `kit pull`, `kit sign`, `kit verify` | Not implemented |
 | `env` (sbxenv.yaml) | Later |
