@@ -34,6 +34,8 @@ pub enum Cmd {
     Exec(ExecArgs),
     /// List sandboxes
     Ls(LsArgs),
+    /// Show a sandbox's details
+    Inspect(InspectArgs),
     /// Start stopped sandboxes
     Start {
         #[arg(required = true)]
@@ -118,6 +120,7 @@ impl Cmd {
             Cmd::Create(_) => "create",
             Cmd::Exec(_) => "exec",
             Cmd::Ls(_) => "ls",
+            Cmd::Inspect(_) => "inspect",
             Cmd::Start { .. } => "start",
             Cmd::Stop { .. } => "stop",
             Cmd::Rm(_) => "rm",
@@ -158,6 +161,7 @@ impl Cmd {
                 | Cmd::Create(_)
                 | Cmd::Exec(_)
                 | Cmd::Ls(_)
+                | Cmd::Inspect(_)
                 | Cmd::Start { .. }
                 | Cmd::Stop { .. }
                 | Cmd::Rm(_)
@@ -618,6 +622,17 @@ pub struct LsArgs {
     /// Only print names
     #[arg(short = 'q', long)]
     pub quiet: bool,
+}
+
+#[derive(Debug, Args)]
+pub struct InspectArgs {
+    pub sandbox: String,
+    /// Output format
+    #[arg(long, value_enum, default_value = "table")]
+    pub format: Format,
+    /// Same as --format json
+    #[arg(long)]
+    pub json: bool,
 }
 
 #[derive(Debug, Args)]

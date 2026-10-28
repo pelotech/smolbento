@@ -1,0 +1,15 @@
+---
+source: src/cli/inspect.rs
+expression: t.stdout()
+---
+
+  Name:            shell-x
+  Agent:           shell
+  Kits:            none
+  State:           stopped
+  Image:           -
+  Workspace:       -
+  Clone source:    -
+  Secrets:         none
+  Ports:           none published
+  Sessions:        0

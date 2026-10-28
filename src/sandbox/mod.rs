@@ -284,6 +284,8 @@ pub struct Sandbox {
     pub state: MachineState,
     /// Filled from `machine status` for running sandboxes.
     pub ports: Vec<PublishedPort>,
+    /// The machine's image, when smolvm reports one.
+    pub image: Option<String>,
 }
 
 impl Sandbox {
@@ -293,6 +295,7 @@ impl Sandbox {
             machine: m.name.clone(),
             state: m.state,
             ports: m.published_ports.clone(),
+            image: m.image.clone(),
         })
     }
 
@@ -1393,6 +1396,7 @@ echo "$g""#,
             machine: "sbx-r".into(),
             state: MachineState::Stopped,
             ports: vec![],
+            image: None,
         };
         let plan = StartPlan {
             clone: Some(step("/w/r")),

@@ -1,0 +1,22 @@
+---
+source: src/cli/inspect.rs
+expression: t.stdout()
+---
+mounts:
+  /home/agent/.cache/x: /Users/dev/.local/share/smolbento/kit-host-mounts/aa/bb
+name: claude-proj
+agent: claude
+kits:
+- ghcr.io/example/kit:1@sha256:abc
+- /Users/dev/kits/cache
+state: running
+image: docker/sandbox-templates:claude-code
+workspace: /Users/dev/proj
+clone_source: /Users/dev/proj
+secrets:
+- anthropic
+- github
+ports:
+- 127.0.0.1:18080->8080/tcp4
+- 127.0.0.1:3000->3000/tcp4
+sessions: 1

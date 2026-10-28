@@ -33,6 +33,9 @@ ls
 ls --json
 ls --format yaml
 ls -q
+inspect my-sandbox
+inspect my-sandbox --json
+inspect my-sandbox --format yaml
 start my-sandbox
 stop my-sandbox other
 rm my-sandbox

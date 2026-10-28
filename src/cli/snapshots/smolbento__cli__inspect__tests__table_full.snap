@@ -1,0 +1,16 @@
+---
+source: src/cli/inspect.rs
+expression: t.stdout()
+---
+
+  Name:            claude-proj
+  Agent:           claude
+  Kits:            ghcr.io/example/kit:1@sha256:abc, /Users/dev/kits/cache
+  State:           running
+  Image:           docker/sandbox-templates:claude-code
+  Workspace:       /Users/dev/proj
+  Clone source:    /Users/dev/proj
+  Host mounts:     /Users/dev/.local/share/smolbento/kit-host-mounts/aa/bb:/home/agent/.cache/x
+  Secrets:         anthropic, github
+  Ports:           127.0.0.1:18080->8080/tcp4, 127.0.0.1:3000->3000/tcp4
+  Sessions:        1
