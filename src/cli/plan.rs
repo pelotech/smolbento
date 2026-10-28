@@ -82,6 +82,7 @@ fn plan_for<R: Runner>(
         sandbox,
         &meta.credential_hosts,
         install_rules.unwrap_or_default(),
+        meta.host_access,
     );
     let mut env = Vec::new();
     for name in &meta.secrets {
@@ -279,7 +280,8 @@ pub fn prepare_create<R: Runner>(
         // The last fallible step, so an error here leaves no rules for `create` to roll back.
         policy.save(&ctx.paths)?;
     }
-    req.network = compile::network(&policy, &req.name, &req.credential_hosts);
+    req.host_access = compile::host_access(&policy, &req.name);
+    req.network = compile::network(&policy, &req.name, &req.credential_hosts, req.host_access);
     req.deny_cidrs = compile::deny_cidrs(&policy, &req.name);
     Ok((added, first_start))
 }
@@ -357,11 +359,13 @@ fn create_with<R: Runner>(
             && !k.steps.install_rules.is_empty()
         {
             let policy = Policy::load(&ctx.paths)?;
+            req.host_access = compile::host_access_with(&policy, &req.name, &k.steps.install_rules);
             req.network = compile::network_with(
                 &policy,
                 &req.name,
                 &req.credential_hosts,
                 &k.steps.install_rules,
+                req.host_access,
             );
             req.deny_cidrs = compile::deny_cidrs_with(&policy, &req.name, &k.steps.install_rules);
             for note in compile::install_deny_cidr_notes(&policy, &req.name, &k.steps.install_rules)
@@ -451,7 +455,12 @@ fn drop_install_rules<R: Runner>(
     let mut policy = Policy::load(&ctx.paths)?;
     policy.remove_rules_by_ids(&req.name, ids);
     policy.save(&ctx.paths)?;
-    Ok(compile::network(&policy, &req.name, &req.credential_hosts))
+    Ok(compile::network(
+        &policy,
+        &req.name,
+        &req.credential_hosts,
+        req.host_access,
+    ))
 }
 
 /// Pushes the policy (as just saved) to running sandboxes. Failures are warnings: the policy
@@ -468,7 +477,12 @@ pub fn push_network<R: Runner>(ctx: &Ctx<R>, policy: &Policy) -> Result<()> {
     };
     let mut updated = 0;
     for sb in sandboxes.iter().filter(|s| s.is_running()) {
-        let network = compile::network(policy, sb.name(), &sb.meta.credential_hosts);
+        let network = compile::network(
+            policy,
+            sb.name(),
+            &sb.meta.credential_hosts,
+            sb.meta.host_access,
+        );
         match ctx.vm.update_network(&sb.machine, &network) {
             Ok(()) => updated += 1,
             Err(e) => eprintln!(
@@ -1035,7 +1049,7 @@ mod tests {
         // Neither a first start without these ids nor a policy push opens them.
         let first = format!("{:?}", first_start_plan(&t.ctx, &m, &[]).unwrap().network);
         assert!(!first.contains("registry.npmjs.org"), "{first}");
-        let pushed = format!("{:?}", compile::network(&policy, "s1", &[]));
+        let pushed = format!("{:?}", compile::network(&policy, "s1", &[], false));
         assert!(!pushed.contains("registry.npmjs.org"), "{pushed}");
         let first = format!(
             "{:?}",

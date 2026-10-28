@@ -79,7 +79,7 @@ pub fn run<R: Runner>(ctx: &mut Ctx<R>, cmd: PolicyCmd) -> Result<i32> {
             }
             policy.save(&ctx.paths)?;
             writeln!(&ctx.out, "Removed")?;
-            print_allow_all_notes(ctx, &before, &policy);
+            print_host_notes(ctx, &before, &policy, None, Decision::Deny, &[]);
             plan::push_network(ctx, &policy)?;
         }
         PolicyCmd::Ls(a) => {
@@ -231,17 +231,22 @@ fn add<R: Runner>(
     writeln!(&ctx.out, "{} rule {id}: {}", decision.name(), a.resources)?;
     if decision == Decision::Deny {
         print_deny_notes(ctx, policy, a.sandbox.as_deref(), &parsed)?;
-    } else if let Some(w) = localhost_warning(a.sandbox.as_deref(), &parsed) {
-        eprintln!("{w}");
     }
-    print_allow_all_notes(ctx, &before, policy);
+    print_host_notes(
+        ctx,
+        &before,
+        policy,
+        a.sandbox.as_deref(),
+        decision,
+        &parsed,
+    );
     plan::push_network(ctx, policy)
 }
 
 /// For an allow of `localhost[:PORT]` (host services, see `compile::HOST_GATEWAY`): smolvm opens
 /// the gateway to every host port, not just this one.
 fn localhost_warning(scope: Option<&str>, allows: &[Resource]) -> Option<String> {
-    if !allows.iter().any(|r| r.without_port() == "localhost") {
+    if !allows.iter().any(compile::is_host_services) {
         return None;
     }
     let to = scope.map_or("all sandboxes".to_string(), |s| format!("sandbox {s}"));
@@ -251,23 +256,56 @@ fn localhost_warning(scope: Option<&str>, allows: &[Resource]) -> Option<String>
     ))
 }
 
-/// One note per sandbox (of `names`) whose network is open and whose host access a rule change
-/// turned on or off: an open machine's host loopback deny is fixed at create.
-fn allow_all_notes(before: &Policy, after: &Policy, names: &[&str]) -> Vec<String> {
-    names
+/// For an allow of `localhost[:PORT]`: the sandboxes in its scope (of `sandboxes`, name and
+/// `sbx.host-access`) created without host access, which never get it.
+fn without_access_note(scope: Option<&str>, sandboxes: &[(&str, bool)]) -> Option<String> {
+    let names: Vec<&str> = sandboxes
         .iter()
-        .filter(|n| compile::network(after, n, &[]) == NetworkSpec::Open)
-        .filter(|n| compile::host_services(before, n) != compile::host_services(after, n))
-        .map(|n| format!("note: {n} uses allow-all; host access changes when it's recreated"))
+        .filter(|(n, access)| !access && scope.is_none_or(|s| s == *n))
+        .map(|(n, _)| *n)
+        .collect();
+    (!names.is_empty()).then(|| {
+        format!(
+            "note: {} were created without host access; recreate them to use it",
+            names.join(", ")
+        )
+    })
+}
+
+/// One note per open sandbox with host access that a rule change took its `localhost` rule
+/// from: without an allow list, it reaches host loopback until it's recreated.
+fn keeps_access_notes(before: &Policy, after: &Policy, sandboxes: &[(&str, bool)]) -> Vec<String> {
+    sandboxes
+        .iter()
+        .filter(|(n, access)| {
+            *access
+                && compile::network(after, n, &[], true) == NetworkSpec::Open
+                && compile::host_access(before, n)
+                && !compile::host_access(after, n)
+        })
+        .map(|(n, _)| format!("note: {n} keeps host access until it's recreated"))
         .collect()
 }
 
-/// `allow_all_notes` for the existing sandboxes, on stderr. Lists them only when a `localhost`
-/// rule is involved; a failure to list is left to `push_network` to report.
-fn print_allow_all_notes<R: Runner>(ctx: &Ctx<R>, before: &Policy, after: &Policy) {
+/// The localhost warning and host access notes (stderr) for a rule change from `before` to
+/// `after`: `added` are the resources of a new rule with this decision in `scope` (none for a
+/// removal). Sandboxes are listed only when a `localhost` rule is involved; a failure to list is
+/// left to `push_network` to report.
+fn print_host_notes<R: Runner>(
+    ctx: &Ctx<R>,
+    before: &Policy,
+    after: &Policy,
+    scope: Option<&str>,
+    decision: Decision,
+    added: &[Resource],
+) {
+    let allowed = decision == Decision::Allow;
+    if allowed && let Some(w) = localhost_warning(scope, added) {
+        eprintln!("{w}");
+    }
     let localhost = |p: &Policy| {
         p.all_rules()
-            .any(|(r, _)| r.parsed().any(|x| x.without_port() == "localhost"))
+            .any(|(r, _)| r.parsed().any(|x| compile::is_host_services(&x)))
     };
     if !localhost(before) && !localhost(after) {
         return;
@@ -275,8 +313,17 @@ fn print_allow_all_notes<R: Runner>(ctx: &Ctx<R>, before: &Policy, after: &Polic
     let Ok(sandboxes) = sandbox::list(&ctx.vm) else {
         return;
     };
-    let names: Vec<&str> = sandboxes.iter().map(|s| s.name()).collect();
-    for n in allow_all_notes(before, after, &names) {
+    let sbs: Vec<(&str, bool)> = sandboxes
+        .iter()
+        .map(|s| (s.name(), s.meta.host_access))
+        .collect();
+    if allowed
+        && added.iter().any(compile::is_host_services)
+        && let Some(n) = without_access_note(scope, &sbs)
+    {
+        eprintln!("{n}");
+    }
+    for n in keeps_access_notes(before, after, &sbs) {
         eprintln!("{n}");
     }
 }
@@ -559,13 +606,16 @@ fn approval<R: Runner>(ctx: &Ctx<R>, policy: &mut Policy, cmd: ApprovalCmd) -> R
                     seen.join(", ")
                 );
             }
+            let before = policy.clone();
             let rule =
                 policy.add_rule(sandbox.as_deref(), decision, &id, "approval", None, None)?;
             policy.save(&ctx.paths)?;
             writeln!(&ctx.out, "{} rule {rule}: {id}", decision.name())?;
+            let parsed = parse_list(&id)?;
             if decision == Decision::Deny {
-                print_deny_notes(ctx, policy, sandbox.as_deref(), &parse_list(&id)?)?;
+                print_deny_notes(ctx, policy, sandbox.as_deref(), &parsed)?;
             }
+            print_host_notes(ctx, &before, policy, sandbox.as_deref(), decision, &parsed);
             plan::push_network(ctx, policy)?;
         }
     }
@@ -1155,7 +1205,7 @@ mod tests {
         assert!(p.mode.is_none() && p.rules.is_empty(), "{p:?}");
         assert!(p.sandboxes["a1"].deny_network);
         assert!(matches!(
-            compile::network(&p, "a1", &[]),
+            compile::network(&p, "a1", &[], false),
             crate::smolvm::NetworkSpec::Restricted(_)
         ));
         let err = sbt(&mut t.ctx, &["policy", "refresh"]).unwrap_err();
@@ -1608,44 +1658,52 @@ mod tests {
     }
 
     #[test]
-    fn localhost_rules_push_the_gateway_live() {
-        let mut t = test_env(&[]);
-        set_policy(&t, "mode = \"deny-all\"");
-        running(&t, &[("sbx.name", "a1")]);
-        sbt(
-            &mut t.ctx,
-            &[
-                "policy",
-                "allow",
-                "network",
-                "--sandbox",
-                "a1",
-                "localhost:11434",
-            ],
-        )
-        .unwrap();
-        // No hosts: the list is the first of the two calls (see `NO_HOSTS_PLACEHOLDER`).
-        let last = resets(&t).pop().unwrap();
-        assert!(
-            last.contains("--allow-cidr 100.96.0.1/32") && !last.contains("localhost"),
-            "{last}"
-        );
-        sbt(
-            &mut t.ctx,
-            &[
-                "policy",
-                "rm",
-                "network",
-                "--sandbox",
-                "a1",
-                "--resource",
-                "localhost:11434",
-            ],
-        )
-        .unwrap();
-        let u = resets(&t);
-        assert_eq!(u.len(), 2, "{u:?}");
-        assert!(!u[1].contains("100.96.0.1"), "{u:?}");
+    fn localhost_rules_push_the_gateway_live_with_host_access_only() {
+        for access in [true, false] {
+            let mut t = test_env(&[]);
+            set_policy(&t, "mode = \"deny-all\"");
+            let mut labels = vec![("sbx.name", "a1")];
+            if access {
+                labels.push(("sbx.host-access", "true"));
+            }
+            running(&t, &labels);
+            sbt(
+                &mut t.ctx,
+                &[
+                    "policy",
+                    "allow",
+                    "network",
+                    "--sandbox",
+                    "a1",
+                    "LOCALHOST:11434",
+                ],
+            )
+            .unwrap();
+            // No hosts: the list is the first of the two calls (see `NO_HOSTS_PLACEHOLDER`).
+            let last = resets(&t).pop().unwrap();
+            assert_eq!(
+                last.contains("--allow-cidr 100.96.0.1/32"),
+                access,
+                "{access}: {last}"
+            );
+            assert!(!last.to_lowercase().contains("localhost"), "{last}");
+            sbt(
+                &mut t.ctx,
+                &[
+                    "policy",
+                    "rm",
+                    "network",
+                    "--sandbox",
+                    "a1",
+                    "--resource",
+                    "LOCALHOST:11434",
+                ],
+            )
+            .unwrap();
+            let u = resets(&t);
+            assert_eq!(u.len(), 2, "{u:?}");
+            assert!(!u[1].contains("100.96.0.1"), "{u:?}");
+        }
     }
 
     #[test]
@@ -1657,7 +1715,7 @@ mod tests {
              host's localhost to all sandboxes"
         );
         assert_eq!(
-            localhost_warning(Some("a1"), &res("api.x.com, localhost")).unwrap(),
+            localhost_warning(Some("a1"), &res("api.x.com, LOCALHOST:11434")).unwrap(),
             "warning: smolvm can't open a single host port yet; this opens every port on your \
              host's localhost to sandbox a1"
         );
@@ -1667,22 +1725,43 @@ mod tests {
     }
 
     #[test]
-    fn allow_all_notes_name_open_sandboxes_whose_host_access_changes() {
+    fn without_access_note_lists_sandboxes_in_scope_without_the_label() {
+        let sbs = [("a1", false), ("b2", true), ("c3", false)];
+        assert_eq!(
+            without_access_note(None, &sbs).unwrap(),
+            "note: a1, c3 were created without host access; recreate them to use it"
+        );
+        assert_eq!(
+            without_access_note(Some("c3"), &sbs).unwrap(),
+            "note: c3 were created without host access; recreate them to use it"
+        );
+        assert!(without_access_note(Some("b2"), &sbs).is_none());
+        assert!(without_access_note(Some("zz"), &sbs).is_none());
+        assert!(without_access_note(None, &[("b2", true)]).is_none());
+    }
+
+    #[test]
+    fn keeps_access_notes_name_open_sandboxes_with_host_access_that_lose_the_rule() {
         let mut before = Policy {
             mode: Some(Mode::AllowAll),
             ..Default::default()
         };
-        before.set_deny_network("closed", true);
-        let mut after = before.clone();
-        after
+        before
             .add_rule(None, Decision::Allow, "localhost:80", "added", None, None)
             .unwrap();
-        let names = ["a1", "closed"];
-        let note = "note: a1 uses allow-all; host access changes when it's recreated";
-        assert_eq!(allow_all_notes(&before, &after, &names), [note]);
-        // Removing it again: the same note.
-        assert_eq!(allow_all_notes(&after, &before, &names), [note]);
-        // No change in host access: no note.
-        assert!(allow_all_notes(&after, &after, &names).is_empty());
+        let mut after = before.clone();
+        after.remove_rules(None, None, Some("localhost:80"));
+        let sbs = [("a1", true), ("b2", false)];
+        assert_eq!(
+            keeps_access_notes(&before, &after, &sbs),
+            ["note: a1 keeps host access until it's recreated"]
+        );
+        // No change: no note. A restricted sandbox loses it live: no note.
+        assert!(keeps_access_notes(&before, &before, &sbs).is_empty());
+        let mut before = before.clone();
+        before.mode = Some(Mode::DenyAll);
+        let mut after = after.clone();
+        after.mode = Some(Mode::DenyAll);
+        assert!(keeps_access_notes(&before, &after, &sbs).is_empty());
     }
 }

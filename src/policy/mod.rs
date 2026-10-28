@@ -799,13 +799,16 @@ mod tests {
             (r.created_via.as_str(), r.source()),
             ("kit-install:gh", "kit")
         );
-        let plain = format!("{:?}", compile::network(&p, "sb", &[]));
+        let plain = format!("{:?}", compile::network(&p, "sb", &[], false));
         assert!(
             plain.contains("run.kit.com") && !plain.contains("pkg.kit.com"),
             "{plain}"
         );
         assert!(!compile::check(&p, Some("sb"), &[], "pkg.kit.com").allowed);
-        let with = format!("{:?}", compile::network_with(&p, "sb", &[], &install));
+        let with = format!(
+            "{:?}",
+            compile::network_with(&p, "sb", &[], &install, false)
+        );
         assert!(with.contains("pkg.kit.com"), "{with}");
         p.copy_sandbox("sb", "fork");
         assert!(
@@ -853,7 +856,7 @@ mod tests {
             deny: vec![],
         };
         p.add_kit_rules("sb", "gh", &rules, false).unwrap();
-        let spec = |sb: &str| format!("{:?}", compile::network(&p, sb, &[]));
+        let spec = |sb: &str| format!("{:?}", compile::network(&p, sb, &[], false));
         assert!(spec("sb").contains("api.kit.com"));
         assert!(!spec("other").contains("api.kit.com"));
         assert!(compile::check(&p, Some("sb"), &[], "api.kit.com").allowed);

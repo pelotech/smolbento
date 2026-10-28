@@ -881,29 +881,48 @@ mod tests {
     }
 
     #[test]
-    fn create_denies_host_loopback_only_when_open() {
-        for (mode, denied) in [("allow-all", true), ("balanced", false)] {
-            let mut t = test_env(&[]);
-            set_policy(&t, &format!("mode = \"{mode}\"\n"));
-            creatable(&t);
-            sbt(&mut t.ctx, &["create", "claude", "."]).unwrap();
-            let lines = t.ctx.vm.runner().call_lines();
-            let create = lines
-                .iter()
-                .find(|l| l.starts_with("machine create"))
-                .unwrap();
-            // A restricted list keeps the gateway closed by itself (see `compile::HOST_GATEWAY`).
-            for cidr in ["127.0.0.0/8", "::1/128"] {
+    fn create_denies_host_loopback_unless_a_localhost_rule_applies() {
+        let rule =
+            "[[rules]]\nid = \"r-1\"\ndecision = \"allow\"\nresources = [\"LOCALHOST:11434\"]\n";
+        for mode in ["allow-all", "balanced", "deny-all"] {
+            for localhost in [false, true] {
+                let mut t = test_env(&[]);
+                let extra = if localhost { rule } else { "" };
+                set_policy(&t, &format!("mode = \"{mode}\"\n{extra}"));
+                creatable(&t);
+                sbt(&mut t.ctx, &["create", "claude", "."]).unwrap();
+                let lines = t.ctx.vm.runner().call_lines();
+                let create = lines
+                    .iter()
+                    .find(|l| l.starts_with("machine create"))
+                    .unwrap();
+                for cidr in ["127.0.0.0/8", "::1/128"] {
+                    assert_eq!(
+                        create.contains(&format!(" --deny-cidr {cidr} ")),
+                        !localhost,
+                        "{mode}: {create}"
+                    );
+                }
                 assert_eq!(
-                    create.contains(&format!(" --deny-cidr {cidr} ")),
-                    denied,
+                    create.contains("--label sbx.host-access=true"),
+                    localhost,
                     "{mode}: {create}"
                 );
+                // A restricted sandbox with host access gets the gateway from the start.
+                if mode != "allow-all" {
+                    assert_eq!(
+                        create.contains("--allow-cidr 100.96.0.1/32"),
+                        localhost,
+                        "{mode}: {create}"
+                    );
+                }
+                if !localhost {
+                    // Not a rule: `policy ls` doesn't show it.
+                    let p = crate::policy::Policy::load(&t.ctx.paths).unwrap();
+                    assert!(p.rules.is_empty(), "{mode}: {p:?}");
+                    assert!(sandbox_rules(&t, "claude-proj").is_empty(), "{mode}");
+                }
             }
-            // Not a rule: `policy ls` doesn't show it.
-            let p = crate::policy::Policy::load(&t.ctx.paths).unwrap();
-            assert!(p.rules.is_empty(), "{mode}: {p:?}");
-            assert!(sandbox_rules(&t, "claude-proj").is_empty(), "{mode}");
         }
     }
 
