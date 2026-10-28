@@ -515,7 +515,6 @@ fn bind_credential(
     Ok(())
 }
 
-/// `my-svc` → `MY_SVC`.
 /// sbx's warning for a required credential whose secret isn't set (R39: the create goes on and
 /// the kit's requests go out without it), then the command that sets it.
 fn unbound_required(kit: &str, service: &str, host: &str) -> String {
@@ -531,14 +530,15 @@ fn unbound_required(kit: &str, service: &str, host: &str) -> String {
 fn missing_secret(kit: &str, service: &str, host: &str) -> String {
     if services::builtin(service).is_some() {
         return format!(
-            "kit {kit} needs the {service} secret; set it with sbt secret set {service}"
+            "kit {kit} needs the {service} secret; set it with sbt secret set {service} \
+             and recreate the sandbox"
         );
     }
     let env = upper_env(service);
     if guest::is_env_name(&env) && env.to_ascii_lowercase().replace('_', "-") == service {
         format!(
             "kit {kit} needs the {service} secret; set it with \
-             sbt secret set-custom --env {env} --host {host}"
+             sbt secret set-custom --env {env} --host {host} and recreate the sandbox"
         )
     } else {
         format!(
@@ -557,6 +557,7 @@ fn custom_service_note(kit: &str, service: &str, hosts: &[String]) -> String {
     )
 }
 
+/// `my-svc` → `MY_SVC`.
 fn upper_env(service: &str) -> String {
     service
         .chars()
@@ -880,7 +881,8 @@ mod tests {
         assert_eq!(
             missing_secret("k", "my-api", "api.x.com"),
             "kit k needs the my-api secret; set it with \
-             sbt secret set-custom --env MY_API --host api.x.com"
+             sbt secret set-custom --env MY_API --host api.x.com \
+             and recreate the sandbox"
         );
         // `set-custom --env MY_API` names its service my-api, never my_api or 1tok.
         for service in ["my_api", "1tok", "My-Api"] {
@@ -1018,7 +1020,8 @@ mod tests {
         assert_eq!(
             unbound_required("gh", "github", "github.com"),
             "WARN: required credential not found for service github\n\
-             kit gh needs the github secret; set it with sbt secret set github"
+             kit gh needs the github secret; set it with sbt secret set github \
+             and recreate the sandbox"
         );
     }
 
