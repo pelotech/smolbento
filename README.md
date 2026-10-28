@@ -5,11 +5,15 @@ coding agents in [smolvm](https://github.com/smol-machines/smolvm) microVMs. One
 as `sbt`, `sbx` or `bento`; no daemon and no Docker needed on the host.
 
 ```sh
-brew tap smol-machines/tap                  # smolvm, installed as a dependency
-brew trust pelotech/tap smol-machines/tap   # Homebrew 7+ only loads trusted third-party taps
-brew install pelotech/tap/smolbento         # installs smolbento, sbt and bento
+# smolvm, installed as a dependency
+brew tap smol-machines/tap
+# Homebrew 7+ only loads trusted third-party taps
+brew trust pelotech/tap smol-machines/tap
+# installs smolbento, sbt and bento
+brew install pelotech/tap/smolbento
 cd ~/code/myrepo
-sbt run claude                              # sandbox for this directory, attach to Claude Code
+# sandbox for this directory, attach to Claude Code
+sbt run claude
 ```
 
 Building from source and release tarballs are covered in [Install](docs/install.md).
