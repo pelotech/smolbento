@@ -205,6 +205,7 @@ fn parse_warn(yaml: &str, dir: &Path) -> Result<(Kit, Vec<String>)> {
         content: sandbox.image.map_or(Content::None, Content::Image),
         command,
         config: None,
+        reference: None,
     };
     Ok((kit, warnings))
 }

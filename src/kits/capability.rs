@@ -1,8 +1,8 @@
 //! Kit-to-kit capabilities: `provides`, `requires`, `integrates` and `conflicts` entries, parsed
 //! and matched as SPEC-v3 §5 says (pinned in `super::SPEC_COMMIT`; a port of the spec's Go
 //! `spec/version.go`). Versions are dotted segments compared per segment, not semver. Every
-//! message here is the spec frontend's or resolver's text, so the composition errors live in one
-//! place.
+//! message here is the spec frontend's or resolver's text as sbx prints it (checklist #27,
+//! without sbx's outer `resolve kits:` prefix), so the composition errors live in one place.
 
 use std::cmp::Ordering;
 use std::fmt;
@@ -471,6 +471,28 @@ pub fn integrates_violated(kit: &str, entry: &str, offered: &[String]) -> String
 
 pub fn conflict(kit: &str, entry: &str, provider: &str) -> String {
     format!("{kit} conflicts with {entry:?}, which {provider} provides; the two cannot compose")
+}
+
+/// sbx's resolver report: one `  - ` line per problem under its heading. Kits are named by
+/// reference as typed (`Kit::label`).
+pub fn incoherent(problems: &[String]) -> String {
+    let mut out = String::from("resolve: the kit set is not coherent:");
+    for p in problems {
+        out.push_str("\n  - ");
+        out.push_str(p);
+    }
+    out
+}
+
+pub const NO_WORKLOAD: &str =
+    "no workload kit in the set; every composition needs exactly one kind: workload base";
+
+pub fn cycle(kits: &[&str]) -> String {
+    format!("resolve: dependency cycle among {}", kits.join(", "))
+}
+
+pub fn listed_twice(kit: &str) -> String {
+    format!("kit {kit} is listed more than once")
 }
 
 /// Whether a `provides` entry names `name` (any version, either spelling).

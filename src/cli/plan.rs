@@ -1077,6 +1077,7 @@ mod tests {
             content: Content::None,
             command: None,
             config: None,
+            reference: None,
         };
         let mut wl = kit("wl", Kind::Workload);
         wl.content = Content::Image("img:1".into());

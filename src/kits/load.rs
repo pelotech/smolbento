@@ -24,6 +24,12 @@ pub fn builtin(reference: &str) -> Option<Result<Kit>> {
 /// or pulled. Presets (`agents::find`) are the caller's business, so `claude` never lands here;
 /// shipped kits (`docker`) are found before any path or registry.
 pub fn load<R: Runner>(ctx: &Ctx<R>, reference: &str) -> Result<Kit> {
+    let mut kit = load_kit(ctx, reference)?;
+    kit.reference = Some(reference.to_string());
+    Ok(kit)
+}
+
+fn load_kit<R: Runner>(ctx: &Ctx<R>, reference: &str) -> Result<Kit> {
     if let Some(kit) = builtin(reference) {
         return kit;
     }
@@ -215,6 +221,7 @@ pub fn preset_kit(agent: &Agent, image: &str) -> Kit {
         content: Content::Image(image.to_string()),
         command: Some(agent.command.iter().map(|s| s.to_string()).collect()),
         config: None,
+        reference: None,
     }
 }
 

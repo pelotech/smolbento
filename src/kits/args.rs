@@ -202,6 +202,7 @@ mod tests {
             content: Content::None,
             command: None,
             config: None,
+            reference: None,
         }
     }
 

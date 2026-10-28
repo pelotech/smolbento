@@ -275,6 +275,7 @@ fn empty_workload(name: &str) -> Kit {
         content: Content::Image(String::new()),
         command: None,
         config: None,
+        reference: None,
     }
 }
 
@@ -1268,8 +1269,8 @@ mod tests {
         let e = sbt(&mut t.ctx, &["kit", "add", "dev", "./net", "--yes"]).unwrap_err();
         assert_eq!(
             format!("{e:#}"),
-            "net requires \"base\" but nothing in the set provides it; add a kit that provides \
-             com.docker.kit/base"
+            "resolve: the kit set is not coherent:\n  - ./net requires \"base\" but nothing in \
+             the set provides it; add a kit that provides com.docker.kit/base"
         );
         assert!(kit_rules(&t).is_empty());
     }
@@ -1284,7 +1285,8 @@ mod tests {
         let e = sbt(&mut t.ctx, &["kit", "add", "dev", "./net", "--yes"]).unwrap_err();
         assert_eq!(
             format!("{e:#}"),
-            "net requires \"base >= 2, < 3\" but the set only offers base (unversioned, from base)"
+            "resolve: the kit set is not coherent:\n  - ./net requires \"base >= 2, < 3\" but the \
+             set only offers base (unversioned, from base)"
         );
 
         let mut t = kit_env();

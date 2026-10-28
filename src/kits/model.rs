@@ -61,6 +61,16 @@ pub struct Kit {
     pub command: Option<Vec<String>>,
     /// The image config's `User` and `WorkingDir`, for a kit read from an OCI layout (v3).
     pub config: Option<ImageConfig>,
+    /// The reference the user gave (`--kit`, the agent argument), as typed: resolver messages name
+    /// kits by it, as sbx does. None for presets and kits already in a sandbox.
+    pub reference: Option<String>,
+}
+
+impl Kit {
+    /// How messages name the kit: its reference as typed, else its name.
+    pub fn label(&self) -> &str {
+        self.reference.as_deref().unwrap_or(&self.name)
+    }
 }
 
 /// The runtime fields of a kit image's config that sbx honours besides its command.

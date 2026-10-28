@@ -191,8 +191,11 @@ pub(crate) fn kit_plan<R: Runner>(
         Workload::Ref(target) => {
             let mut kit = load::load(ctx, &target)?;
             if kit.kind == Kind::Mixin {
+                // sbx's report, then how to use the mixin.
                 bail!(
-                    "{target} is a mixin; add it with --kit to an agent, e.g. sbt run shell --kit {target}"
+                    "{}\n{target} is a mixin; add it with --kit to an agent, e.g. sbt run shell \
+                     --kit {target}",
+                    capability::incoherent(&[capability::NO_WORKLOAD.to_string()])
                 );
             }
             load::check_launchable(ctx, &mut kit)?;
@@ -1752,7 +1755,9 @@ mod tests {
         assert_eq!(
             err,
             format!(
-                "{kit} is a mixin; add it with --kit to an agent, e.g. sbt run shell --kit {kit}"
+                "resolve: the kit set is not coherent:\n  - no workload kit in the set; every \
+                 composition needs exactly one kind: workload base\n{kit} is a mixin; add it with \
+                 --kit to an agent, e.g. sbt run shell --kit {kit}"
             )
         );
         assert!(no_machine_calls(&t));

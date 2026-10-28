@@ -27,6 +27,7 @@ pub fn load(path: &Path) -> Result<Kit> {
         content: Content::Smolfile(path.to_path_buf()),
         command: None,
         config: None,
+        reference: None,
     })
 }
 

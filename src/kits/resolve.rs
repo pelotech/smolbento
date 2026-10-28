@@ -91,16 +91,22 @@ pub fn resolve_for(
 ) -> Result<Plan> {
     if workload.kind != Kind::Workload {
         bail!(
-            "{} is a mixin, not a workload; pass it with --kit",
-            workload.name
+            "{}",
+            capability::incoherent(&[capability::NO_WORKLOAD.to_string()])
         );
     }
     // Names scope `--kit-arg`s and tag policy rules. An agent preset isn't a kit, so a kit may
     // share its name.
     use crate::kits::model::Source;
-    let named = std::iter::once(&workload)
+    let named: Vec<&Kit> = std::iter::once(&workload)
         .filter(|w| !matches!(w.source, Source::Preset(_)))
-        .chain(&mixins);
+        .chain(&mixins)
+        .collect();
+    for (i, k) in named.iter().enumerate() {
+        if named[..i].iter().any(|o| o.source == k.source) {
+            bail!("{}", capability::listed_twice(k.label()));
+        }
+    }
     let mut seen = BTreeSet::new();
     for k in named {
         if !seen.insert(k.name.as_str()) {
@@ -333,7 +339,7 @@ fn order(workload: &Kit, mixins: Vec<Kit>) -> Result<Vec<Kit>> {
         for s in &k.provides {
             match capability::parse_provide(s) {
                 Ok(p) => index.entry(p.name.clone()).or_default().push((i, p)),
-                Err(e) => problems.push(format!("{}: {e}", k.name)),
+                Err(e) => problems.push(format!("{}: {e}", k.label())),
             }
         }
     }
@@ -342,7 +348,7 @@ fn order(workload: &Kit, mixins: Vec<Kit>) -> Result<Vec<Kit>> {
         let mut owners = BTreeSet::new();
         for (i, p) in ps {
             if owners.insert(*i) {
-                offers.push((all[*i].name.as_str(), p.version.as_deref()));
+                offers.push((all[*i].label(), p.version.as_deref()));
             }
         }
         if owners.len() > 1 {
@@ -367,7 +373,7 @@ fn order(workload: &Kit, mixins: Vec<Kit>) -> Result<Vec<Kit>> {
     let offered = |name: &str, me: usize| -> Vec<String> {
         others(name, me)
             .into_iter()
-            .map(|(i, p)| capability::describe(p, &all[*i].name))
+            .map(|(i, p)| capability::describe(p, all[*i].label()))
             .collect()
     };
 
@@ -377,7 +383,7 @@ fn order(workload: &Kit, mixins: Vec<Kit>) -> Result<Vec<Kit>> {
             let r = match capability::parse_require(s) {
                 Ok(r) => r,
                 Err(e) => {
-                    problems.push(format!("{}: {e}", k.name));
+                    problems.push(format!("{}: {e}", k.label()));
                     continue;
                 }
             };
@@ -386,14 +392,14 @@ fn order(workload: &Kit, mixins: Vec<Kit>) -> Result<Vec<Kit>> {
                     deps[me].insert(p);
                 }
                 None if index.contains_key(&r.name) => problems.push(capability::unmet_version(
-                    &k.name,
+                    k.label(),
                     s,
                     &index[&r.name]
                         .iter()
-                        .map(|(i, p)| capability::describe(p, &all[*i].name))
+                        .map(|(i, p)| capability::describe(p, all[*i].label()))
                         .collect::<Vec<_>>(),
                 )),
-                None => problems.push(capability::unmet(&k.name, s, &r.name)),
+                None => problems.push(capability::unmet(k.label(), s, &r.name)),
             }
         }
     }
@@ -402,7 +408,7 @@ fn order(workload: &Kit, mixins: Vec<Kit>) -> Result<Vec<Kit>> {
             let r = match capability::parse_require(s) {
                 Ok(r) => r,
                 Err(e) => {
-                    problems.push(format!("{}: {e}", k.name));
+                    problems.push(format!("{}: {e}", k.label()));
                     continue;
                 }
             };
@@ -412,7 +418,7 @@ fn order(workload: &Kit, mixins: Vec<Kit>) -> Result<Vec<Kit>> {
                     deps[me].insert(p);
                 }
                 None if !present.is_empty() => {
-                    problems.push(capability::integrates_violated(&k.name, s, &present))
+                    problems.push(capability::integrates_violated(k.label(), s, &present))
                 }
                 None => {}
             }
@@ -421,12 +427,12 @@ fn order(workload: &Kit, mixins: Vec<Kit>) -> Result<Vec<Kit>> {
     for (me, k) in all.iter().enumerate() {
         for s in &k.conflicts {
             for (i, _) in others(&capability::normalize(s), me) {
-                problems.push(capability::conflict(&k.name, s, &all[*i].name));
+                problems.push(capability::conflict(k.label(), s, all[*i].label()));
             }
         }
     }
     if !problems.is_empty() {
-        bail!("{}", problems.join("\n"));
+        bail!("{}", capability::incoherent(&problems));
     }
 
     // Index 0 is the workload, always first.
@@ -442,8 +448,8 @@ fn order(workload: &Kit, mixins: Vec<Kit>) -> Result<Vec<Kit>> {
             .iter()
             .position(|(me, _)| deps[*me].iter().all(|d| placed.contains(d)))
         else {
-            let names: Vec<_> = rest.iter().map(|(_, k)| k.name.as_str()).collect();
-            bail!("kits have circular requirements: {}", names.join(", "));
+            let kits: Vec<_> = rest.iter().map(|(_, k)| k.label()).collect();
+            bail!("{}", capability::cycle(&kits));
         };
         let (me, k) = rest.remove(i);
         placed.insert(me);
@@ -473,6 +479,7 @@ mod tests {
             content: Content::None,
             command: None,
             config: None,
+            reference: None,
         }
     }
     fn mixin(name: &str) -> Kit {
@@ -504,6 +511,16 @@ mod tests {
             });
             self
         }
+    }
+
+    /// A kit the user named by `reference`.
+    fn typed(mut k: Kit, reference: &str) -> Kit {
+        k.reference = Some(reference.into());
+        k
+    }
+    /// One problem in sbx's coherence block.
+    fn incoherent(problem: &str) -> String {
+        format!("resolve: the kit set is not coherent:\n  - {problem}")
     }
 
     fn run(w: Kit, m: Vec<Kit>) -> Result<Plan> {
@@ -559,13 +576,14 @@ mod tests {
 
     #[test]
     fn duplicate_provides_fail_like_sbx_at_any_versions() {
-        let a = mixin("a").provides(&["x@1.0.0"]);
+        let a = typed(mixin("a").provides(&["x@1.0.0"]), "./chkdupa");
         let b = mixin("b").provides(&["com.docker.kit/x@2.0"]);
         let e = run(workload("w"), vec![a, b]).unwrap_err();
         assert_eq!(
             format!("{e:#}"),
-            "capability \"com.docker.kit/x\" is provided by more than one kit: a (1.0.0), b (2.0); \
-             one name has one owner, so drop the redundant kit"
+            "resolve: the kit set is not coherent:\n  - capability \"com.docker.kit/x\" is \
+             provided by more than one kit: ./chkdupa (1.0.0), b (2.0); one name has one owner, so \
+             drop the redundant kit"
         );
         let a = mixin("a").provides(&["x"]);
         let b = mixin("b").provides(&["x@1"]);
@@ -578,11 +596,12 @@ mod tests {
 
     #[test]
     fn unmet_requires_fails_like_sbx() {
-        let e = run(workload("w"), vec![mixin("a").requires(&["x >= 1.0.0"])]).unwrap_err();
+        let a = typed(mixin("a").requires(&["nothing >= 1.0.0"]), "./chkreq");
+        let e = run(workload("w"), vec![a]).unwrap_err();
         assert_eq!(
             format!("{e:#}"),
-            "a requires \"x >= 1.0.0\" but nothing in the set provides it; add a kit that provides \
-             com.docker.kit/x"
+            "resolve: the kit set is not coherent:\n  - ./chkreq requires \"nothing >= 1.0.0\" but \
+             nothing in the set provides it; add a kit that provides com.docker.kit/nothing"
         );
     }
 
@@ -598,7 +617,7 @@ mod tests {
         let e = run(w, vec![too_new]).unwrap_err();
         assert_eq!(
             format!("{e:#}"),
-            "a requires \"node >= 21\" but the set only offers node@20.11.1 (from w)"
+            incoherent("a requires \"node >= 21\" but the set only offers node@20.11.1 (from w)")
         );
         // An unversioned provide satisfies only an unconstrained require.
         let w = workload("w").provides(&["node"]);
@@ -606,7 +625,9 @@ mod tests {
         let e = run(w, vec![mixin("a").requires(&["node > 0"])]).unwrap_err();
         assert_eq!(
             format!("{e:#}"),
-            "a requires \"node > 0\" but the set only offers node (unversioned, from w)"
+            incoherent(
+                "a requires \"node > 0\" but the set only offers node (unversioned, from w)"
+            )
         );
         // Another namespace's name never matches the default one.
         let w = workload("w").provides(&["com.example/node@20"]);
@@ -619,19 +640,19 @@ mod tests {
         let e = run(workload("w"), vec![a]).unwrap_err();
         assert_eq!(
             format!("{e:#}"),
-            "a requires \"x\" but the set only offers x@1 (from a)"
+            incoherent("a requires \"x\" but the set only offers x@1 (from a)")
         );
     }
 
     #[test]
     fn every_problem_is_reported_and_bad_entries_name_their_kit() {
-        let a = mixin("a").requires(&["x", "Y"]);
+        let a = typed(mixin("a").requires(&["x", "Y"]), "./a");
         let e = run(workload("w"), vec![a]).unwrap_err();
         assert_eq!(
             format!("{e:#}"),
-            "a requires \"x\" but nothing in the set provides it; add a kit that provides \
-             com.docker.kit/x\n\
-             a: requires entry \"Y\": invalid capability name \"Y\""
+            "resolve: the kit set is not coherent:\n  - ./a requires \"x\" but nothing in the set \
+             provides it; add a kit that provides com.docker.kit/x\n  - ./a: requires entry \"Y\": \
+             invalid capability name \"Y\""
         );
     }
 
@@ -644,8 +665,10 @@ mod tests {
         let e = run(w, vec![a]).unwrap_err();
         assert_eq!(
             format!("{e:#}"),
-            "a integrates with \"docker-engine >= 25.0.0\" but the set only offers \
-             docker-engine@24.0.7 (from w); upgrade the provider or drop it from the set"
+            incoherent(
+                "a integrates with \"docker-engine >= 25.0.0\" but the set only offers \
+                 docker-engine@24.0.7 (from w); upgrade the provider or drop it from the set"
+            )
         );
 
         let w = workload("w").provides(&["podman@5"]);
@@ -654,7 +677,7 @@ mod tests {
         let e = run(w, vec![a]).unwrap_err();
         assert_eq!(
             format!("{e:#}"),
-            "a conflicts with \"podman\", which w provides; the two cannot compose"
+            incoherent("a conflicts with \"podman\", which w provides; the two cannot compose")
         );
     }
 
@@ -667,10 +690,27 @@ mod tests {
     }
 
     #[test]
-    fn circular_requires_fail() {
-        let a = mixin("a").requires(&["b"]).provides(&["a"]);
-        let b = mixin("b").requires(&["a"]).provides(&["b"]);
-        assert!(run(workload("w"), vec![a, b]).is_err());
+    fn circular_requires_fail_like_sbx() {
+        let a = typed(mixin("a").requires(&["b"]).provides(&["a@1"]), "./chkcyca");
+        let b = typed(mixin("b").requires(&["a"]).provides(&["b@1"]), "./chkcycb");
+        let e = run(workload("w"), vec![a, b]).unwrap_err();
+        assert_eq!(
+            format!("{e:#}"),
+            "resolve: dependency cycle among ./chkcyca, ./chkcycb"
+        );
+    }
+
+    #[test]
+    fn a_kit_listed_twice_fails_like_sbx() {
+        let a = || typed(mixin("a"), "./chkallow");
+        let e = run(workload("w"), vec![a(), a()]).unwrap_err();
+        assert_eq!(format!("{e:#}"), "kit ./chkallow is listed more than once");
+        // The same kit by another spelling is still listed twice; sbx names the later one.
+        let e = run(workload("w"), vec![a(), typed(mixin("a"), "./chkallow/")]).unwrap_err();
+        assert_eq!(format!("{e:#}"), "kit ./chkallow/ is listed more than once");
+        let docker = || crate::kits::load::builtin("docker").unwrap().unwrap();
+        let e = run(workload("w"), vec![docker(), docker()]).unwrap_err();
+        assert_eq!(format!("{e:#}"), "kit docker is listed more than once");
     }
 
     #[test]
@@ -678,11 +718,14 @@ mod tests {
         let e = run(mixin("m"), vec![]).unwrap_err();
         assert_eq!(
             format!("{e:#}"),
-            "m is a mixin, not a workload; pass it with --kit"
+            "resolve: the kit set is not coherent:\n  - no workload kit in the set; every \
+             composition needs exactly one kind: workload base"
         );
-        let e = run(workload("w"), vec![mixin("a"), mixin("a")]).unwrap_err();
+        let mut other = mixin("a");
+        other.source = Source::Registry("other/a".into());
+        let e = run(workload("w"), vec![mixin("a"), other.clone()]).unwrap_err();
         assert_eq!(format!("{e:#}"), "two kits are named a");
-        let e = run(workload("a"), vec![mixin("a")]).unwrap_err();
+        let e = run(workload("a"), vec![other]).unwrap_err();
         assert_eq!(format!("{e:#}"), "two kits are named a");
         let shipped = crate::kits::load::builtin("docker").unwrap().unwrap();
         let e = run(workload("w"), vec![mixin("docker"), shipped]).unwrap_err();
