@@ -99,6 +99,15 @@ impl E2e {
     /// Alpine has no `agent` user or bash; add them as root, straight through smolvm. The user
     /// gets the host uid, as smolbento's identity step does for sbx images.
     fn create_alpine(&self) {
+        self.create_alpine_with("apk add -q bash");
+    }
+
+    /// `create_alpine` without bash, so it needs no network (busybox has `wget`).
+    fn create_alpine_offline(&self) {
+        self.create_alpine_with("true");
+    }
+
+    fn create_alpine_with(&self, then: &str) {
         let ws = self.workspace();
         self.ok(&[
             "create",
@@ -114,7 +123,7 @@ impl E2e {
             "1g",
         ]);
         let setup = format!(
-            "adduser -D -u {} agent && apk add -q bash",
+            "adduser -D -u {} agent && {then}",
             smolbento::sandbox::host_uid()
         );
         smolvm(&[
@@ -727,6 +736,83 @@ fn host_loopback_is_unreachable() {
         got.is_empty(),
         "the host's 127.0.0.1:{port} got {:?} from the sandbox",
         String::from_utf8_lossy(&got)
+    );
+}
+
+/// A host service on 127.0.0.1 (random port) answering every connection with `200 ok`, for the
+/// life of the test process. Returns its port.
+fn host_service() -> u16 {
+    use std::io::{Read, Write};
+    let listener = std::net::TcpListener::bind("127.0.0.1:0").unwrap();
+    let port = listener.local_addr().unwrap().port();
+    std::thread::spawn(move || {
+        for mut stream in listener.incoming().flatten() {
+            let _ = stream.set_read_timeout(Some(std::time::Duration::from_secs(2)));
+            let _ = stream.read(&mut [0u8; 1024]);
+            let _ = stream.write_all(b"HTTP/1.0 200 OK\r\nContent-Length: 2\r\n\r\nok");
+        }
+    });
+    port
+}
+
+/// sbx's host services: a `localhost:PORT` rule lets sandboxes created with host access reach
+/// the host as `host.docker.internal:PORT`, opened and closed live. Under smolvm 1.32.4 it opens
+/// every host port (see SECURITY.md), so only the open/closed transitions are checked.
+#[test]
+#[ignore = "boots real VMs; run with `just e2e`"]
+fn host_services_open_and_close_live() {
+    let port = host_service();
+    let url = format!("http://host.docker.internal:{port}/");
+    let rule = format!("localhost:{port}");
+
+    // Created under deny-all without a localhost rule: the loopback deny stays for its life.
+    let a = E2e::new("hs0");
+    a.ok(&["policy", "init", "deny-all"]);
+    a.create_alpine_offline();
+    assert!(!reachable(&a, &url), "no rule, no host access");
+    let out = a.sbt(&["policy", "allow", "network", "--sandbox", &a.name, &rule]);
+    assert!(out.status.success(), "{out:?}");
+    let err = String::from_utf8_lossy(&out.stderr);
+    assert!(
+        err.contains(&format!(
+            "note: {} were created without host access; recreate them to use it",
+            a.name
+        )),
+        "{err}"
+    );
+    assert!(
+        err.contains(&format!(
+            "warning: smolvm can't open a single host port yet; this opens every port on your \
+             host's localhost to sandbox {}",
+            a.name
+        )),
+        "{err}"
+    );
+    assert!(!reachable(&a, &url), "created without host access");
+
+    // A sandbox-scoped localhost rule before create: created with host access.
+    let b = E2e::new("hs1");
+    b.ok(&["policy", "init", "deny-all"]);
+    b.ok(&["policy", "allow", "network", "--sandbox", &b.name, &rule]);
+    b.create_alpine_offline();
+    let boot = root_out(&b.name, "cat /proc/sys/kernel/random/boot_id");
+    assert!(reachable(&b, &url), "created with host access");
+    b.ok(&[
+        "policy",
+        "rm",
+        "network",
+        "--sandbox",
+        &b.name,
+        "--resource",
+        &rule,
+    ]);
+    assert!(!reachable(&b, &url), "live rm closes it");
+    b.ok(&["policy", "allow", "network", "--sandbox", &b.name, &rule]);
+    assert!(reachable(&b, &url), "live allow reopens it");
+    assert_eq!(
+        root_out(&b.name, "cat /proc/sys/kernel/random/boot_id"),
+        boot,
+        "no restart"
     );
 }
 
