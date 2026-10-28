@@ -67,10 +67,10 @@ sbt create shell               # no path: a sandbox with no host directory mount
 A sandbox made by `create` stays running until you stop it (as in sbx).
 
 `run` and `create` print their progress as they go: a SANDBOX summary, KITS (only when a kit was
-pulled or built), IMAGE (with a live pull percentage) and SETUP, then `Created sandbox NAME`. On
-`create` a last line suggests `try: sbt run --name NAME`. `start` and `env create|run` show the same
-steps. Pass `--no-progress` to `run` or `create` to hide them. On a terminal the steps redraw in
-place; otherwise each prints as plain lines.
+pulled or built), IMAGE and SETUP, then `Created sandbox NAME`. On `create` a last line suggests
+`try: sbt run --name NAME`. `env create` and `env run` show the same steps when they create a
+sandbox. `start` prints one line per sandbox instead (`○ NAME — starting…`, then
+`✓ Started NAME`). Without a terminal each step prints a line when it starts and one when it ends:
 
 ```
 SANDBOX
@@ -82,14 +82,24 @@ SANDBOX
   Memory:     1536 MiB
 
 IMAGE
+  ○ image — pulling…
   ✓ image — ready
 
 SETUP
+  ○ sandbox — starting…
   ✓ sandbox — started
 
   ✓ Created sandbox shell-proj
         try: sbt run --name shell-proj
 ```
+
+On a terminal each step is one line redrawn in place, with a spinner and, while an image is
+pulled, the percentage after it (`⠙ image — pulling… 42%`).
+
+Progress goes to stdout, as in sbx. A script that captures the output (such as
+`name=$(sbt run -d …)`) should pass `--no-progress` to `run` or `create`. It hides all progress,
+including the `Created sandbox NAME` and `try:` lines, so `create --no-progress` prints nothing and
+`run -d --no-progress` prints only the sandbox name.
 
 Options for `run` and `create`:
 
