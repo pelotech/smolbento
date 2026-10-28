@@ -13,7 +13,7 @@ use crate::policy::rules::{Allow, Resource, parse_list};
 use crate::policy::{Decision, Mode, Policy, compile, presets};
 use crate::sandbox::{self, name};
 use crate::secrets::SecretsFile;
-use crate::smolvm::Runner;
+use crate::smolvm::{NetworkSpec, Runner};
 
 /// Stops every running sandbox, as sbx's `policy reset` does. Failures are warnings: the reset
 /// itself must still happen.
@@ -71,6 +71,7 @@ pub fn run<R: Runner>(ctx: &mut Ctx<R>, cmd: PolicyCmd) -> Result<i32> {
                 (None, Some(id)) => policy.find(id).and_then(|(_, s)| s.map(String::from)),
                 _ => a.sandbox.clone(),
             };
+            let before = policy.clone();
             let removed =
                 policy.remove_rules(sandbox.as_deref(), a.id.as_deref(), a.resource.as_deref());
             if !removed {
@@ -78,6 +79,7 @@ pub fn run<R: Runner>(ctx: &mut Ctx<R>, cmd: PolicyCmd) -> Result<i32> {
             }
             policy.save(&ctx.paths)?;
             writeln!(&ctx.out, "Removed")?;
+            print_allow_all_notes(ctx, &before, &policy);
             plan::push_network(ctx, &policy)?;
         }
         PolicyCmd::Ls(a) => {
@@ -216,6 +218,7 @@ fn add<R: Runner>(
     if decision == Decision::Deny {
         guard_bound_secrets(ctx, a.sandbox.as_deref(), &parsed)?;
     }
+    let before = policy.clone();
     let id = policy.add_rule(
         a.sandbox.as_deref(),
         decision,
@@ -228,8 +231,54 @@ fn add<R: Runner>(
     writeln!(&ctx.out, "{} rule {id}: {}", decision.name(), a.resources)?;
     if decision == Decision::Deny {
         print_deny_notes(ctx, policy, a.sandbox.as_deref(), &parsed)?;
+    } else if let Some(w) = localhost_warning(a.sandbox.as_deref(), &parsed) {
+        eprintln!("{w}");
     }
+    print_allow_all_notes(ctx, &before, policy);
     plan::push_network(ctx, policy)
+}
+
+/// For an allow of `localhost[:PORT]` (host services, see `compile::HOST_GATEWAY`): smolvm opens
+/// the gateway to every host port, not just this one.
+fn localhost_warning(scope: Option<&str>, allows: &[Resource]) -> Option<String> {
+    if !allows.iter().any(|r| r.without_port() == "localhost") {
+        return None;
+    }
+    let to = scope.map_or("all sandboxes".to_string(), |s| format!("sandbox {s}"));
+    Some(format!(
+        "warning: smolvm can't open a single host port yet; this opens every port on your host's \
+         localhost to {to}"
+    ))
+}
+
+/// One note per sandbox (of `names`) whose network is open and whose host access a rule change
+/// turned on or off: an open machine's host loopback deny is fixed at create.
+fn allow_all_notes(before: &Policy, after: &Policy, names: &[&str]) -> Vec<String> {
+    names
+        .iter()
+        .filter(|n| compile::network(after, n, &[]) == NetworkSpec::Open)
+        .filter(|n| compile::host_services(before, n) != compile::host_services(after, n))
+        .map(|n| format!("note: {n} uses allow-all; host access changes when it's recreated"))
+        .collect()
+}
+
+/// `allow_all_notes` for the existing sandboxes, on stderr. Lists them only when a `localhost`
+/// rule is involved; a failure to list is left to `push_network` to report.
+fn print_allow_all_notes<R: Runner>(ctx: &Ctx<R>, before: &Policy, after: &Policy) {
+    let localhost = |p: &Policy| {
+        p.all_rules()
+            .any(|(r, _)| r.parsed().any(|x| x.without_port() == "localhost"))
+    };
+    if !localhost(before) && !localhost(after) {
+        return;
+    }
+    let Ok(sandboxes) = sandbox::list(&ctx.vm) else {
+        return;
+    };
+    let names: Vec<&str> = sandboxes.iter().map(|s| s.name()).collect();
+    for n in allow_all_notes(before, after, &names) {
+        eprintln!("{n}");
+    }
 }
 
 fn print_deny_notes<R: Runner>(
@@ -774,6 +823,14 @@ mod tests {
                 ..Default::default()
             },
         ))
+    }
+
+    /// The `machine update` calls that set a whole allow list.
+    fn resets(t: &TestEnv) -> Vec<String> {
+        updates(t)
+            .into_iter()
+            .filter(|l| l.contains("--reset-allow-list"))
+            .collect()
     }
 
     fn updates(t: &TestEnv) -> Vec<String> {
@@ -1548,5 +1605,84 @@ mod tests {
             assert_eq!(super::super::exit_code(&err), 2, "{kind}");
         }
         assert!(Policy::load(&t.ctx.paths).unwrap().rules.is_empty());
+    }
+
+    #[test]
+    fn localhost_rules_push_the_gateway_live() {
+        let mut t = test_env(&[]);
+        set_policy(&t, "mode = \"deny-all\"");
+        running(&t, &[("sbx.name", "a1")]);
+        sbt(
+            &mut t.ctx,
+            &[
+                "policy",
+                "allow",
+                "network",
+                "--sandbox",
+                "a1",
+                "localhost:11434",
+            ],
+        )
+        .unwrap();
+        // No hosts: the list is the first of the two calls (see `NO_HOSTS_PLACEHOLDER`).
+        let last = resets(&t).pop().unwrap();
+        assert!(
+            last.contains("--allow-cidr 100.96.0.1/32") && !last.contains("localhost"),
+            "{last}"
+        );
+        sbt(
+            &mut t.ctx,
+            &[
+                "policy",
+                "rm",
+                "network",
+                "--sandbox",
+                "a1",
+                "--resource",
+                "localhost:11434",
+            ],
+        )
+        .unwrap();
+        let u = resets(&t);
+        assert_eq!(u.len(), 2, "{u:?}");
+        assert!(!u[1].contains("100.96.0.1"), "{u:?}");
+    }
+
+    #[test]
+    fn localhost_warning_names_the_scope() {
+        let res = |s: &str| parse_list(s).unwrap();
+        assert_eq!(
+            localhost_warning(None, &res("localhost:11434")).unwrap(),
+            "warning: smolvm can't open a single host port yet; this opens every port on your \
+             host's localhost to all sandboxes"
+        );
+        assert_eq!(
+            localhost_warning(Some("a1"), &res("api.x.com, localhost")).unwrap(),
+            "warning: smolvm can't open a single host port yet; this opens every port on your \
+             host's localhost to sandbox a1"
+        );
+        for other in ["127.0.0.1:80", "host.docker.internal:80", "api.x.com"] {
+            assert!(localhost_warning(None, &res(other)).is_none(), "{other}");
+        }
+    }
+
+    #[test]
+    fn allow_all_notes_name_open_sandboxes_whose_host_access_changes() {
+        let mut before = Policy {
+            mode: Some(Mode::AllowAll),
+            ..Default::default()
+        };
+        before.set_deny_network("closed", true);
+        let mut after = before.clone();
+        after
+            .add_rule(None, Decision::Allow, "localhost:80", "added", None, None)
+            .unwrap();
+        let names = ["a1", "closed"];
+        let note = "note: a1 uses allow-all; host access changes when it's recreated";
+        assert_eq!(allow_all_notes(&before, &after, &names), [note]);
+        // Removing it again: the same note.
+        assert_eq!(allow_all_notes(&after, &before, &names), [note]);
+        // No change in host access: no note.
+        assert!(allow_all_notes(&after, &after, &names).is_empty());
     }
 }

@@ -115,6 +115,10 @@ fn network_for(
     let denies = resources(policy, sandbox, install, Decision::Deny);
     let (mut patterns, mut cidrs) = (BTreeSet::new(), BTreeSet::new());
     for r in allows.iter().filter(|r| !denied(r, &denies)) {
+        if is_host_services(r) {
+            cidrs.insert(format!("{HOST_GATEWAY}/32"));
+            continue;
+        }
         match r.to_allow() {
             Allow::Pattern(p) => {
                 patterns.insert(p);
@@ -172,13 +176,40 @@ fn reaches_under(deny: &Resource, x: &str) -> bool {
     }
 }
 
-/// Denied for every sandbox, whatever the mode: smolvm dials host loopback for a guest connecting
-/// to its gateway, and sbx doesn't let sandboxes reach the host's localhost.
+/// The guest's gateway, which smolvm forwards to the host's loopback (measured in
+/// docs/superpowers/notes/2026-10-28-host-services-spike.md). A restricted machine reaches it only
+/// while `HOST_GATEWAY/32` is in its allow list, which `machine update` changes live.
+pub const HOST_GATEWAY: &str = "100.96.0.1";
+
+/// Whether an allow entry is a host-services rule: `localhost`, with any port or none. It becomes
+/// the gateway in the allow list (smolvm can't open one port, so every host port opens). Other
+/// spellings of loopback (`127.0.0.1`, `host.docker.internal`) aren't: sbx doesn't treat them so.
+fn is_host_services(r: &Resource) -> bool {
+    matches!(&r.pattern, Pattern::Exact(h) if h == "localhost")
+}
+
+/// Whether an active, undenied `localhost` allow rule applies to a sandbox.
+fn host_services_with(policy: &Policy, sandbox: &str, install: &[String]) -> bool {
+    let denies = resources(policy, Some(sandbox), install, Decision::Deny);
+    allows_with(policy, Some(sandbox), install)
+        .iter()
+        .any(|r| is_host_services(r) && !denied(r, &denies))
+}
+
+/// Whether a sandbox may reach host services (a `localhost` allow rule applies to it).
+pub fn host_services(policy: &Policy, sandbox: &str) -> bool {
+    host_services_with(policy, sandbox, &[])
+}
+
+/// Denied at create for a sandbox whose network is open and that no `localhost` rule applies to:
+/// smolvm dials host loopback for a guest connecting to its gateway, and sbx doesn't let
+/// sandboxes reach the host's localhost. A restricted list keeps the gateway closed by itself,
+/// and opens it live for a `localhost` rule, so it isn't denied there.
 pub const HOST_LOOPBACK: [&str; 2] = ["127.0.0.0/8", "::1/128"];
 
 /// Deny CIDRs for `machine create` (smolvm accepts them at create only), sorted and unique:
-/// `HOST_LOOPBACK` and the deny rules' CIDRs. One with a port is left out: smolvm would deny
-/// every port of the range.
+/// `HOST_LOOPBACK` when it applies and the deny rules' CIDRs. One with a port is left out: smolvm
+/// would deny every port of the range.
 pub fn deny_cidrs(policy: &Policy, sandbox: &str) -> Vec<String> {
     deny_cidrs_with(policy, sandbox, &[])
 }
@@ -186,6 +217,8 @@ pub fn deny_cidrs(policy: &Policy, sandbox: &str) -> Vec<String> {
 /// `deny_cidrs` plus those of the install-phase kit rules with these ids: a create passes its
 /// own, as for `network_with`. smolvm fixes deny CIDRs at create, so they outlast the install.
 pub fn deny_cidrs_with(policy: &Policy, sandbox: &str, install: &[String]) -> Vec<String> {
+    let loopback = network_for(policy, Some(sandbox), &[], install) == NetworkSpec::Open
+        && !host_services_with(policy, sandbox, install);
     resources(policy, Some(sandbox), install, Decision::Deny)
         .into_iter()
         .filter(|r| r.port.is_none())
@@ -193,7 +226,12 @@ pub fn deny_cidrs_with(policy: &Policy, sandbox: &str, install: &[String]) -> Ve
             Allow::Cidr(c) => Some(c),
             _ => None,
         })
-        .chain(HOST_LOOPBACK.map(String::from))
+        .chain(
+            HOST_LOOPBACK
+                .iter()
+                .filter(|_| loopback)
+                .map(|c| c.to_string()),
+        )
         .collect::<BTreeSet<_>>()
         .into_iter()
         .collect()
@@ -650,10 +688,20 @@ mod tests {
     }
 
     #[test]
-    fn host_loopback_is_denied_in_every_mode() {
-        for mode in [Mode::AllowAll, Mode::Balanced, Mode::DenyAll] {
-            assert_eq!(deny_cidrs(&policy(mode), "s1"), with_loopback(&[]));
+    fn host_loopback_is_denied_only_for_open_sandboxes() {
+        assert_eq!(
+            deny_cidrs(&policy(Mode::AllowAll), "s1"),
+            with_loopback(&[])
+        );
+        assert_eq!(deny_cidrs(&Policy::default(), "s1"), with_loopback(&[]));
+        // Restricted lists keep the gateway closed unless a localhost rule opens it.
+        for mode in [Mode::Balanced, Mode::DenyAll] {
+            assert!(deny_cidrs(&policy(mode), "s1").is_empty(), "{mode:?}");
         }
+        let mut p = policy(Mode::DenyAll);
+        p.add_rule(None, Decision::Deny, "10.0.0.0/8", "added", None, None)
+            .unwrap();
+        assert_eq!(deny_cidrs(&p, "s1"), ["10.0.0.0/8"]);
         // A rule for the same range doesn't repeat it.
         let mut p = policy(Mode::AllowAll);
         p.add_rule(None, Decision::Deny, "127.0.0.0/8", "added", None, None)
@@ -864,5 +912,108 @@ mod tests {
         ] {
             assert!(!hits(deny), "{deny}");
         }
+    }
+
+    const GATEWAY: &str = "100.96.0.1/32";
+
+    #[test]
+    fn localhost_rules_open_the_gateway() {
+        for rule in ["localhost:11434", "localhost", "LocalHost:80"] {
+            let mut p = policy(Mode::DenyAll);
+            p.add_rule(None, Decision::Allow, rule, "added", None, None)
+                .unwrap();
+            for sb in ["s1", "s2"] {
+                let spec = network(&p, sb, &[]);
+                let l = list(&spec);
+                assert!(l.cidrs().contains(&GATEWAY.to_string()), "{rule} {sb}");
+                assert!(l.patterns().is_empty() && l.hosts().is_empty(), "{rule}");
+            }
+        }
+        // Scoped to one sandbox: only that one.
+        let mut p = policy(Mode::Balanced);
+        let id = p
+            .add_rule(
+                Some("s1"),
+                Decision::Allow,
+                "localhost:8080",
+                "added",
+                None,
+                None,
+            )
+            .unwrap();
+        assert!(
+            list(&network(&p, "s1", &[]))
+                .cidrs()
+                .contains(&GATEWAY.to_string())
+        );
+        assert!(
+            !list(&network(&p, "s2", &[]))
+                .cidrs()
+                .contains(&GATEWAY.to_string())
+        );
+        assert!(
+            !list(&network(&p, "s1", &[]))
+                .patterns()
+                .contains(&"localhost".to_string())
+        );
+        // Removed: gone.
+        p.remove_rules(Some("s1"), Some(&id), None);
+        assert!(
+            !list(&network(&p, "s1", &[]))
+                .cidrs()
+                .contains(&GATEWAY.to_string())
+        );
+    }
+
+    #[test]
+    fn other_loopback_spellings_are_not_host_services() {
+        let mut p = policy(Mode::DenyAll);
+        p.add_rule(
+            None,
+            Decision::Allow,
+            "127.0.0.1:80, host.docker.internal:80",
+            "added",
+            None,
+            None,
+        )
+        .unwrap();
+        let spec = network(&p, "s1", &[]);
+        let l = list(&spec);
+        assert_eq!(l.patterns(), ["host.docker.internal"]);
+        assert_eq!(l.cidrs(), ["127.0.0.0/8", "127.0.0.1/32", "::1/128"]);
+        // An open sandbox keeps the host loopback deny for them.
+        let mut p = policy(Mode::AllowAll);
+        p.add_rule(
+            None,
+            Decision::Allow,
+            "127.0.0.1:80, host.docker.internal:80",
+            "added",
+            None,
+            None,
+        )
+        .unwrap();
+        assert_eq!(deny_cidrs(&p, "s1"), with_loopback(&[]));
+    }
+
+    #[test]
+    fn a_localhost_rule_drops_the_host_loopback_deny_of_open_sandboxes() {
+        let mut p = policy(Mode::AllowAll);
+        p.add_rule(
+            Some("s1"),
+            Decision::Allow,
+            "localhost:11434",
+            "added",
+            None,
+            None,
+        )
+        .unwrap();
+        assert!(deny_cidrs(&p, "s1").is_empty());
+        assert_eq!(deny_cidrs(&p, "s2"), with_loopback(&[]));
+        assert!(host_services(&p, "s1") && !host_services(&p, "s2"));
+        // A deny of localhost wins.
+        p.add_rule(Some("s1"), Decision::Deny, "localhost", "added", None, None)
+            .unwrap();
+        assert_eq!(deny_cidrs(&p, "s1"), with_loopback(&[]));
+        assert!(!host_services(&p, "s1"));
     }
 }

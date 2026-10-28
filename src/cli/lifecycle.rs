@@ -881,8 +881,8 @@ mod tests {
     }
 
     #[test]
-    fn create_denies_host_loopback_in_every_mode() {
-        for mode in ["allow-all", "balanced"] {
+    fn create_denies_host_loopback_only_when_open() {
+        for (mode, denied) in [("allow-all", true), ("balanced", false)] {
             let mut t = test_env(&[]);
             set_policy(&t, &format!("mode = \"{mode}\"\n"));
             creatable(&t);
@@ -892,9 +892,11 @@ mod tests {
                 .iter()
                 .find(|l| l.starts_with("machine create"))
                 .unwrap();
+            // A restricted list keeps the gateway closed by itself (see `compile::HOST_GATEWAY`).
             for cidr in ["127.0.0.0/8", "::1/128"] {
-                assert!(
+                assert_eq!(
                     create.contains(&format!(" --deny-cidr {cidr} ")),
+                    denied,
                     "{mode}: {create}"
                 );
             }
