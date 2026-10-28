@@ -10,7 +10,7 @@ and add `-D` to any command to print the smolvm commands it runs, for example `s
 
 ## `smolvm 1.x is too old`
 
-smolbento needs smolvm 1.32.2 or newer: `brew upgrade smolvm`.
+smolbento needs smolvm 1.32.4 or newer: `brew upgrade smolvm`.
 
 ## `could not run smolvm`
 

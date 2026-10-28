@@ -34,7 +34,7 @@ use crate::config::{Paths, Settings};
 use crate::smolvm::{ProcessRunner, Runner, Smolvm};
 
 /// The oldest smolvm smolbento supports.
-pub const MIN_SMOLVM: &str = "1.32.2";
+pub const MIN_SMOLVM: &str = "1.32.4";
 
 /// A command or flag that smolbento doesn't support (yet, or ever). Exits with status 2.
 #[derive(Debug, thiserror::Error)]

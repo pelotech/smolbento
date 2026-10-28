@@ -3,7 +3,7 @@
 ## Requirements
 
 - **macOS on Apple Silicon**, or **Linux** (x86_64 or arm64) with KVM. Windows is planned.
-- **smolvm 1.32.2 or newer**: `brew install smol-machines/tap/smolvm`, or a release tarball from
+- **smolvm 1.32.4 or newer**: `brew install smol-machines/tap/smolvm`, or a release tarball from
   [smol-machines/smolvm](https://github.com/smol-machines/smolvm/releases).
 - On Linux, your user needs read/write access to `/dev/kvm` (usually membership of the `kvm` group).
 - A normal user account. smolbento refuses to run as root (see [Security](SECURITY.md)).
