@@ -466,8 +466,8 @@ impl RawFile {
         Ok(Value::String(out))
     }
 
-    /// Relative `workspace`, `additionalWorkspaces[].path`, `mounts` host paths and local kit sources become absolute
-    /// against the file's directory (symlinks are not resolved).
+    /// Relative `workspace`, `additionalWorkspaces[].path`, `mounts` host paths and local kit
+    /// sources become absolute against the file's directory (symlinks are not resolved).
     fn absolutize(&self, value: &mut Value) {
         let abs = |s: &mut String| {
             if let Ok(p) = std::path::absolute(self.dir.join(&*s)) {

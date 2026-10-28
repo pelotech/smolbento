@@ -263,7 +263,7 @@ mod tests {
 
     /// smolvm copies the machine's mounts and labels: the branch argv leaves them alone.
     #[test]
-    fn a_fork_keeps_the_parent_s_host_mounts() {
+    fn a_fork_of_a_sandbox_with_host_mounts_leaves_the_branch_argv_alone() {
         let mut t = test_env(&[]);
         parent(
             &t,

@@ -355,8 +355,8 @@ fails.
 A kit that declares `host-mount@1` gets a directory on your machine mounted at the path it names,
 for something the agent should keep, such as a cache. smolbento creates it on first use under
 `~/.local/share/smolbento/kit-host-mounts/` (`$XDG_DATA_HOME/smolbento/…` when that's set, or
-`$SMOLBENTO_DATA_DIR/…`), one directory per kit and path. Every sandbox of the same kit shares it,
-the agent can write it, and it's kept when the sandboxes are removed. A local kit is keyed by its
+`$SMOLBENTO_DATA_DIR/kit-host-mounts/`), one directory per kit and path. Every sandbox of the same
+kit shares it, the agent can write it, and it's kept when the sandboxes are removed. A local kit is keyed by its
 directory, a published kit by its repository, so a new tag or digest keeps the same directory.
 
 To use a directory of your own instead, bind it when you create the sandbox:
@@ -368,7 +368,8 @@ sbt create ./my-kit . --mount ~/agent-cache:/home/agent/.cache/tool
 `--mount HOST:SANDBOX_PATH` can be repeated, and each `SANDBOX_PATH` must be one a kit declares
 (`no kit declares host-mount@1 at "PATH"` otherwise). `HOST` is resolved from the current directory
 and must be an existing directory. Mounts are set at create only: `sbt run --mount` on an existing
-sandbox warns and ignores it, and `kit add` of a kit that declares one says "recreate required".
+sandbox still checks `HOST` (a missing or invalid one is an error), then warns and ignores the
+mount, and `kit add` of a kit that declares one says "recreate required".
 In an [environment file](#environments-sbxenvyaml), `mounts:` does the same.
 
 `sbt inspect SANDBOX` shows a sandbox's details, with each host mount as `Host mounts: HOST:PATH`
