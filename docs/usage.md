@@ -252,8 +252,9 @@ for one kit, and `--kit-args-file FILE` reads `NAME=VALUE` lines. Files are read
 aren't secret: they can end up in the sandbox's environment and smolvm's machine config, so put
 secrets in [credentials](#secrets) instead. An argument a kit uses that has no value and no default
 is an error (`create-phase kit arg "x" has no resolved value`); `--kit-arg x=` sets it to empty.
-`--kit-arg` without any kit is an error too. Unquoted numbers and booleans in a kit's `default:`
-and `enum:` are read as strings.
+`--kit-arg` without any kit is an error too. As in sbx, a `KIT.NAME` value for a kit that isn't in
+the sandbox is ignored. Unquoted numbers and booleans in a kit's `default:` and `enum:` are read
+as strings.
 
 What a kit does, and when:
 

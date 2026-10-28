@@ -95,7 +95,8 @@ impl ArgValues {
         Ok(out)
     }
 
-    /// Every given name must be declared by at least one kit (scoped: by that kit).
+    /// Every given name must be declared by at least one kit (scoped: by that kit). A scoped
+    /// name for a kit not in the set is ignored, as in sbx.
     pub fn check_unknown(&self, kits: &[Kit]) -> Result<()> {
         for name in self.shared.keys() {
             if !kits.iter().any(|k| k.args.contains_key(name)) {
@@ -104,7 +105,7 @@ impl ArgValues {
         }
         for (kit, name) in self.scoped.keys() {
             let Some(k) = kits.iter().find(|k| &k.name == kit) else {
-                bail!("unknown kit {kit} in argument {kit}.{name}");
+                continue;
             };
             if !k.args.contains_key(name) {
                 bail!("kit {kit} does not declare argument {name}");
@@ -295,12 +296,26 @@ mod tests {
     }
 
     #[test]
-    fn scoped_unknown_kit_or_arg_is_rejected() {
+    fn a_scoped_arg_for_an_absent_kit_is_ignored_like_sbx() {
         let k = kit("k", &[("a", ArgDef::default())]);
-        let v = ArgValues::parse(&[], &["other.a=1".into()]).unwrap();
-        assert!(v.check_unknown(std::slice::from_ref(&k)).is_err());
+        let v = ArgValues::parse(&[], &["other.opt=v".into()]).unwrap();
+        v.check_unknown(std::slice::from_ref(&k)).unwrap();
+        assert!(v.for_kit(&k).unwrap().is_empty());
+        // An undeclared name on a kit in the set, or an unscoped one, is still an error.
         let v = ArgValues::parse(&[], &["k.zzz=1".into()]).unwrap();
-        assert!(v.check_unknown(std::slice::from_ref(&k)).is_err());
+        assert_eq!(
+            v.check_unknown(std::slice::from_ref(&k))
+                .unwrap_err()
+                .to_string(),
+            "kit k does not declare argument zzz"
+        );
+        let v = ArgValues::parse(&[], &["zzz=1".into()]).unwrap();
+        assert_eq!(
+            v.check_unknown(std::slice::from_ref(&k))
+                .unwrap_err()
+                .to_string(),
+            "unknown kit argument zzz"
+        );
         let v = ArgValues::parse(&[], &["k.a=1".into()]).unwrap();
         v.check_unknown(&[k]).unwrap();
     }
