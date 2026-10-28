@@ -1618,6 +1618,42 @@ mod tests {
     }
 
     #[test]
+    fn kit_pins_apply_to_a_workload_kit() {
+        let dir = tempfile::tempdir().unwrap();
+        let kit = dir.path().join("wl");
+        std::fs::create_dir(&kit).unwrap();
+        std::fs::write(
+            kit.join("spec.yaml"),
+            "schemaVersion: \"2\"\nkind: sandbox\nname: wl\nargs:\n  mode:\n    default: plain\nsandbox:\n  image: img:1\n  entrypoint: [/bin/agent]\nsetup:\n  install:\n    - command: echo mode=${{ kit.args.mode }}\n",
+        )
+        .unwrap();
+        let kit = kit.display().to_string();
+        let mut t = kit_env();
+        let fake = t.ctx.vm.runner();
+        fake.ok(
+            &["machine", "status"],
+            &json("sbx-wl-proj", "created", "wl-proj"),
+        );
+        fake.once_fail(&["machine", "status"], "NOT_FOUND", "vm not found");
+        let a = super::CreateArgs {
+            targets: vec![kit.clone(), ".".into()],
+            opts: super::SandboxOpts {
+                kit_pins: vec![(kit.clone(), vec!["mode=pinned".into()])],
+                ..Default::default()
+            },
+            no_progress: false,
+        };
+        super::create(&mut t.ctx, &a).unwrap();
+        let lines = t.ctx.vm.runner().call_lines();
+        assert!(
+            lines
+                .iter()
+                .any(|l| l.contains("machine exec") && l.contains("mode=pinned")),
+            "{lines:?}"
+        );
+    }
+
+    #[test]
     fn create_with_a_mixin_kit_applies_it() {
         let mut t = kit_env();
         // allow-all would leave the kit's allow rule out of the argv.
