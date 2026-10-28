@@ -11,7 +11,7 @@ use super::plan;
 use super::{Ctx, RunArgs, Unsupported};
 use crate::agents;
 use crate::sandbox::{self, Sandbox, session};
-use crate::smolvm::{ExecSpec, Runner};
+use crate::smolvm::{ExecSpec, Runner, SmolvmError};
 use crate::workspace::clone;
 
 /// Flag checks that need no smolvm; `dispatch` runs them before its smolvm gate.
@@ -160,14 +160,21 @@ pub fn run<R: Runner>(ctx: &mut Ctx<R>, a: &RunArgs) -> Result<i32> {
 const BASH: &str = "/bin/bash";
 
 /// Whether the guest can run `/bin/bash`, which a v3 workload's agent is launched through.
-/// Runs bash itself, so the image needs no `/bin/sh` for the check.
+/// Runs bash itself, so the image needs no `/bin/sh` for the check. An error smolvm reports (the
+/// machine gone, say) is that error, not a missing bash.
 fn has_bash<R: Runner>(ctx: &Ctx<R>, sb: &Sandbox) -> Result<bool> {
     let out = ctx.vm.exec_output(&ExecSpec {
         name: sb.machine.clone(),
         cmd: vec![BASH.into(), "-c".into(), ":".into()],
         ..Default::default()
     })?;
-    Ok(out.code == 0)
+    if out.code == 0 {
+        return Ok(true);
+    }
+    match SmolvmError::from_json(&out) {
+        Some(e) => Err(e.into()),
+        None => Ok(false),
+    }
 }
 
 /// The warning for kits given to `run` of a sandbox that already exists: kit flags, or a workload
@@ -684,6 +691,30 @@ mod tests {
             t.ctx.vm.runner().call_lines().last().unwrap(),
             "machine stop -n sbx-toolbox-proj"
         );
+    }
+
+    #[test]
+    fn a_smolvm_error_from_the_bash_probe_is_not_a_missing_bash() {
+        let mut t = test_env(&[]);
+        image_user_sandbox(&t);
+        t.ctx.vm.runner().fail(
+            &[
+                "machine",
+                "exec",
+                "--name",
+                "sbx-toolbox-proj",
+                "--",
+                "/bin/bash",
+            ],
+            "AGENT_ERROR",
+            "the guest agent is not responding",
+        );
+        let err = sbt(&mut t.ctx, &["run", "--name", "toolbox-proj"]).unwrap_err();
+        assert!(
+            format!("{err:#}").contains("the guest agent is not responding"),
+            "{err:#}"
+        );
+        assert!(t.ctx.vm.runner().interactive_calls().is_empty());
     }
 
     #[test]
