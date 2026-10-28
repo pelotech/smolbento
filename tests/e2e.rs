@@ -1901,6 +1901,24 @@ fn env_files_create_exec_and_remove() {
     std::fs::write(&local, "env:\n  EXTRA: \"1\"\n").unwrap();
     let (base, local) = (base.to_str().unwrap(), local.to_str().unwrap());
 
+    // The secret lives in the real keychain on macOS: remove it on every exit path.
+    struct EnvCleanup<'a>(&'a E2e, [&'a str; 2]);
+    impl Drop for EnvCleanup<'_> {
+        fn drop(&mut self) {
+            let [base, local] = self.1;
+            let _ = self.0.sbt(&[
+                "env",
+                "rm",
+                "--force",
+                "--env-arg",
+                "greeting=hi",
+                base,
+                local,
+            ]);
+        }
+    }
+    let _cleanup = EnvCleanup(&e, [base, local]);
+
     e.ok(&[
         "env",
         "create",
