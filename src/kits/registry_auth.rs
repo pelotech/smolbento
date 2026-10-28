@@ -18,7 +18,7 @@ use crate::secrets::{RegistryEntry, registry_secret};
 /// Docker Hub's names; its token server is `auth.docker.io`.
 const DOCKER_HUB: [&str; 3] = ["docker.io", "index.docker.io", "registry-1.docker.io"];
 
-fn is_docker_hub(host: &str) -> bool {
+pub(crate) fn is_docker_hub(host: &str) -> bool {
     DOCKER_HUB.contains(&host)
 }
 
@@ -32,7 +32,7 @@ fn api_host(host: &str) -> &str {
 }
 
 /// A token-only login (no `--username`) authenticates as `token`: token servers that take a
-/// personal access token (ghcr.io, GitLab, Gitea) ignore the user name. Registries that check it
+/// personal access token (e.g. ghcr.io) ignore the user name. Registries that check it
 /// (Docker Hub, dhi.io, Quay robots) need `--username`. Docker's `<token>` sentinel is not used:
 /// it means an OAuth refresh token, a different flow (`POST /token`, which dhi.io refuses).
 fn username(entry: &RegistryEntry) -> &str {

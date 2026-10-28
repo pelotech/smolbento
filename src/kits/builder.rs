@@ -74,6 +74,9 @@ fn build_with<R: Runner>(ctx: &Ctx<R>, dir: &Path, mint: Minter) -> Result<PathB
         .with_context(|| format!("reading {}", dir.join(&desc).display()))?;
     let text = String::from_utf8_lossy(&text);
     let mut registries = SecretsFile::load(&ctx.paths)?.registries;
+    // smolvm's `--credential` can't carry a port in HOST, and the builder's Docker Hub pulls
+    // (the `docker/sandbox-kit` frontend) go to a host no descriptor names.
+    registries.retain(|r| !r.host.contains(':') && !registry_auth::is_docker_hub(&r.host));
     registries.sort_by(|a, b| a.host.cmp(&b.host));
     let hosts: Vec<String> = registries.iter().map(|r| r.host.clone()).collect();
     // Bound to the builder but given no token by this build (see `pull_tokens`).
@@ -1104,6 +1107,47 @@ mod tests {
             .position(|l| l.starts_with("machine create -n sbx-_builder"))
             .expect("create");
         assert!(delete < create, "{lines:#?}");
+    }
+
+    /// Stored logins the builder can't use (a registry on a port, Docker Hub) are not bound: it
+    /// builds as if they weren't stored.
+    fn unbindable_logins_are_not_bound(hosts: &[&str]) {
+        use crate::secrets::{RegistryEntry, SecretsFile};
+        let t = test_env(&[]);
+        let mut f = SecretsFile::default();
+        for h in hosts {
+            f.registries.push(RegistryEntry {
+                host: (*h).into(),
+                username: None,
+                auth_endpoint: None,
+            });
+        }
+        f.save(&t.ctx.paths).unwrap();
+        let fake = t.ctx.vm.runner();
+        fake.ok(&["machine", "status"], &builder_json("created"))
+            .once_fail(&["machine", "status"], "NOT_FOUND", "vm not found")
+            .once_fail(&["machine", "status"], "NOT_FOUND", "vm not found")
+            .download(&kit_tar());
+        let kit = kit_dir();
+        build_with(&t.ctx, kit.path(), no_mint).unwrap();
+        let lines = fake.call_lines();
+        let create = lines
+            .iter()
+            .find(|l| l.starts_with("machine create -n sbx-_builder"))
+            .unwrap();
+        assert!(!create.contains("--credential"), "{create}");
+        assert!(!create.contains("sbx.registries"), "{create}");
+        assert_eq!(fake.envs(), vec![Vec::<(String, String)>::new()]);
+    }
+
+    #[test]
+    fn a_login_for_a_registry_on_a_port_is_not_bound() {
+        unbindable_logins_are_not_bound(&["registry.corp:5000", "localhost:5000"]);
+    }
+
+    #[test]
+    fn a_docker_hub_login_is_not_bound() {
+        unbindable_logins_are_not_bound(&["registry-1.docker.io", "docker.io"]);
     }
 
     #[test]
