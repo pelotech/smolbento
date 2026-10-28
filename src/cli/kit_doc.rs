@@ -3,6 +3,8 @@
 //! sbx prints a v2-shaped descriptor (`schemaVersion` "2", kind `sandbox` or `mixin`) for every
 //! kit, v3 included; `Doc` is that shape, built from the format-neutral model.
 
+use std::collections::BTreeMap;
+
 use anyhow::Result;
 use serde::Serialize;
 use serde_json::Value;
@@ -19,6 +21,38 @@ pub struct Doc {
     permissions: Permissions,
     credentials: Vec<Cred>,
     setup: Setup,
+    /// What sbx's descriptor has no place for; sbx's own keys stay as they are.
+    smolbento: Extras,
+}
+
+#[derive(Serialize, Default)]
+struct Extras {
+    source: String,
+    #[serde(rename = "sourceType")]
+    source_type: &'static str,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    digest: Option<String>,
+    #[serde(skip_serializing_if = "Vec::is_empty")]
+    provides: Vec<String>,
+    #[serde(skip_serializing_if = "Vec::is_empty")]
+    requires: Vec<String>,
+    #[serde(skip_serializing_if = "Vec::is_empty")]
+    integrates: Vec<String>,
+    #[serde(skip_serializing_if = "Vec::is_empty")]
+    conflicts: Vec<String>,
+    #[serde(skip_serializing_if = "BTreeMap::is_empty")]
+    args: BTreeMap<String, Arg>,
+}
+
+#[derive(Serialize)]
+struct Arg {
+    required: bool,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    default: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pattern: Option<String>,
+    #[serde(rename = "enum", skip_serializing_if = "Vec::is_empty")]
+    enum_values: Vec<String>,
 }
 
 #[derive(Serialize, Default)]
@@ -200,6 +234,7 @@ impl Doc {
                 _ => {}
             }
         }
+        let source = source_of(&kit.source);
         Doc {
             schema_version: "2",
             kind: match kit.kind {
@@ -211,6 +246,30 @@ impl Doc {
             permissions: Permissions { network: net },
             credentials,
             setup,
+            smolbento: Extras {
+                source: source.0,
+                source_type: source.1,
+                digest: kit.digest.clone(),
+                provides: kit.provides.clone(),
+                requires: kit.requires.clone(),
+                integrates: kit.integrates.clone(),
+                conflicts: kit.conflicts.clone(),
+                args: kit
+                    .args
+                    .iter()
+                    .map(|(n, a)| {
+                        (
+                            n.clone(),
+                            Arg {
+                                required: a.required,
+                                default: a.default.clone(),
+                                pattern: a.pattern.clone(),
+                                enum_values: a.enum_values.clone(),
+                            },
+                        )
+                    })
+                    .collect(),
+            },
         }
     }
 
@@ -243,6 +302,57 @@ impl Doc {
             self.setup.files.len()
         );
         s
+    }
+
+    /// smolbento's extra lines, after the capability list: only what the kit has.
+    pub fn extras_table(&self) -> String {
+        let e = &self.smolbento;
+        let mut s = format!("Source: {} ({})\n", e.source, e.source_type);
+        if let Some(d) = &e.digest {
+            s += &format!("Digest: {d}\n");
+        }
+        for (label, list) in [
+            ("Provides", &e.provides),
+            ("Requires", &e.requires),
+            ("Integrates", &e.integrates),
+            ("Conflicts", &e.conflicts),
+        ] {
+            if !list.is_empty() {
+                s += &format!("{label}: {}\n", list.join(", "));
+            }
+        }
+        if !e.args.is_empty() {
+            s += "Args:\n";
+            for (name, a) in &e.args {
+                let mut what = Vec::new();
+                if a.required {
+                    what.push("required".to_string());
+                }
+                if let Some(d) = &a.default {
+                    what.push(format!("default {d:?}"));
+                }
+                if !a.enum_values.is_empty() {
+                    what.push(format!("one of {}", a.enum_values.join("|")));
+                }
+                if let Some(p) = &a.pattern {
+                    what.push(format!("pattern {p}"));
+                }
+                s += &format!("  {name}  {}\n", what.join(", "));
+            }
+        }
+        s
+    }
+}
+
+/// The ref or path, and what kind of source it is.
+fn source_of(s: &Source) -> (String, &'static str) {
+    match s {
+        Source::Registry(r) => (r.clone(), "registry"),
+        Source::Preset(r) => (r.clone(), "preset"),
+        Source::Builtin(n) => (n.to_string(), "builtin"),
+        Source::LocalV3(p) => (p.display().to_string(), "local v3"),
+        Source::LocalV2(p) => (p.display().to_string(), "local v2"),
+        Source::Smolfile(p) => (p.display().to_string(), "smolfile"),
     }
 }
 

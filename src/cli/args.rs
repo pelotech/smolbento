@@ -238,6 +238,9 @@ pub enum KitCmd {
         reference: String,
         #[command(flatten)]
         args: KitArgOpts,
+        /// Output format
+        #[arg(long, value_enum)]
+        format: Option<KitFormat>,
         /// Output in JSON format
         #[arg(long)]
         json: bool,

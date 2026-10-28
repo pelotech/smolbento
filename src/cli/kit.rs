@@ -3,7 +3,6 @@
 use std::io::{BufRead, Write};
 
 use anyhow::{Context, Result, anyhow, bail};
-use serde_json::json;
 
 use super::Ctx;
 use super::args::{KitArgOpts, KitCmd, KitFormat};
@@ -31,20 +30,14 @@ pub fn run<R: Runner>(ctx: &mut Ctx<R>, cmd: KitCmd) -> Result<i32> {
             format,
             json,
             offline,
-        } => {
-            let format = if json {
-                KitFormat::Json
-            } else {
-                format.unwrap_or(KitFormat::Table)
-            };
-            inspect(ctx, &reference, &args, format, offline)
-        }
+        } => inspect(ctx, &reference, &args, format_of(format, json), offline),
         KitCmd::Validate {
             reference,
             args,
+            format,
             json,
             offline,
-        } => validate(ctx, &reference, &args, json, offline),
+        } => validate(ctx, &reference, &args, format_of(format, json), offline),
         KitCmd::Add {
             sandbox,
             reference,
@@ -62,6 +55,15 @@ pub fn run<R: Runner>(ctx: &mut Ctx<R>, cmd: KitCmd) -> Result<i32> {
 /// sbx kit subcommands smolbento doesn't have yet: exit 2, like other pending commands.
 fn pending(sub: &str) -> Result<i32> {
     Err(super::Unsupported(format!("`sbt kit {sub}` is not implemented yet")).into())
+}
+
+/// `--json` is `--format json`.
+fn format_of(format: Option<KitFormat>, json: bool) -> KitFormat {
+    if json {
+        KitFormat::Json
+    } else {
+        format.unwrap_or(KitFormat::Table)
+    }
 }
 
 fn arg_values(a: &KitArgOpts) -> Result<ArgValues> {
@@ -104,6 +106,7 @@ fn inspect<R: Runner>(
                 }
                 write!(out, "{}", super::table(rows))?;
             }
+            write!(out, "{}", doc.extras_table())?;
         }
     }
     Ok(0)
@@ -129,12 +132,56 @@ fn validate<R: Runner>(
     ctx: &Ctx<R>,
     reference: &str,
     args: &KitArgOpts,
-    json: bool,
+    format: KitFormat,
     offline: bool,
 ) -> Result<i32> {
+    let checked = check_kit(ctx, reference, args, offline);
+    if format == KitFormat::Table {
+        for w in checked? {
+            eprintln!("warning: {w}");
+        }
+        writeln!(&ctx.out, "✓ {reference} — valid")?;
+        return Ok(0);
+    }
+    let (valid, warnings, errors) = match &checked {
+        Ok(w) => (true, w.clone(), vec![]),
+        Err(e) => (false, vec![], vec![format!("{e:#}")]),
+    };
+    let report = Report {
+        reference,
+        kind: reference_kind(reference),
+        valid,
+        warnings,
+        errors,
+    };
+    if format == KitFormat::Json {
+        writeln!(&ctx.out, "{}", serde_json::to_string(&report)?)?;
+    } else {
+        write!(&ctx.out, "{}", serde_saphyr::to_string(&report)?)?;
+    }
+    Ok(if valid { 0 } else { 1 })
+}
+
+/// `validate --format json|yaml`: sbx's result, with the failure messages when invalid.
+#[derive(serde::Serialize)]
+struct Report<'a> {
+    reference: &'a str,
+    kind: &'static str,
+    valid: bool,
+    warnings: Vec<String>,
+    #[serde(skip_serializing_if = "Vec::is_empty")]
+    errors: Vec<String>,
+}
+
+/// Loads and checks the kit; returns the warnings.
+fn check_kit<R: Runner>(
+    ctx: &Ctx<R>,
+    reference: &str,
+    args: &KitArgOpts,
+    offline: bool,
+) -> Result<Vec<String>> {
     let values = arg_values(args)?;
     let mut kit = load::load_with(ctx, reference, offline)?;
-    let kind = reference_kind(&kit.source, reference);
     if offline
         && kit.kind == Kind::Workload
         && kit.command.is_none()
@@ -168,39 +215,27 @@ fn validate<R: Runner>(
             e
         }
     })?;
-    if json {
-        let v = json!({
-            "reference": reference,
-            "kind": kind,
-            "valid": true,
-            "warnings": plan.skipped_warnings(),
-        });
-        writeln!(&ctx.out, "{v}")?;
-    } else {
-        plan.warn_skipped();
-        writeln!(&ctx.out, "✓ {reference} — valid")?;
-    }
-    Ok(0)
+    Ok(plan.skipped_warnings())
 }
 
-/// What sort of reference `validate --json` reports: sbx's `directory` for a kit directory.
-fn reference_kind(source: &Source, reference: &str) -> &'static str {
-    match source {
-        Source::Registry(_) => "registry",
-        Source::Builtin(_) | Source::Preset(_) => "builtin",
-        Source::LocalV2(_) | Source::LocalV3(_) | Source::Smolfile(_) => {
-            let path = reference.strip_prefix("~/").unwrap_or(reference);
-            if path.ends_with(".yaml")
-                || path.ends_with(".yml")
-                || path.ends_with("Smolfile")
-                || path.ends_with(".smolfile")
-            {
-                "file"
-            } else {
-                "directory"
-            }
-        }
+/// What sort of reference `validate --format json` reports, from the text alone (a failed load
+/// has no source): sbx's `directory` for a kit directory.
+fn reference_kind(reference: &str) -> &'static str {
+    let local = [".", ".."].contains(&reference)
+        || ["/", "./", "../", "~/"]
+            .iter()
+            .any(|p| reference.starts_with(p));
+    if !local {
+        return if reference == "docker" {
+            "builtin"
+        } else {
+            "registry"
+        };
     }
+    let file = [".yaml", ".yml", "Smolfile", ".smolfile"]
+        .iter()
+        .any(|e| reference.ends_with(e));
+    if file { "file" } else { "directory" }
 }
 
 /// A synthetic preset workload with nothing in it: the existing sandbox's agent for `kit add`.
@@ -734,7 +769,8 @@ mod tests {
                 "permissions",
                 "sandbox",
                 "schemaVersion",
-                "setup"
+                "setup",
+                "smolbento"
             ]
         );
         assert_eq!(v["schemaVersion"], "2");
@@ -789,6 +825,131 @@ mod tests {
         assert!(yaml.starts_with("schemaVersion: "), "{yaml}");
         let back: serde_json::Value = serde_saphyr::from_str(&yaml).unwrap();
         assert_eq!(back, json);
+    }
+
+    #[test]
+    fn inspect_keeps_smolbentos_details_after_sbxs_table_and_under_one_json_key() {
+        let mut t = kit_env();
+        let kit = NET_KIT.replace(
+            r#""provides":["net@1.0.0"]"#,
+            r#""provides":["net@1.0.0"],"conflicts":["old"],"integrates":["extra"],
+            "args":{"mode":{"default":"fast","enum":["fast","slow"]},"id":{"required":true}}"#,
+        );
+        v3_kit(&t, "net", &kit, &[]);
+        sbt(&mut t.ctx, &["kit", "inspect", "./net"]).unwrap();
+        let out = t.stdout();
+        let tail = out.split_once("Source: ").expect(&out).1;
+        let tail: Vec<&str> = tail.lines().collect();
+        assert!(tail[0].ends_with("(local v3)"), "{out}");
+        assert!(tail[1].starts_with("Digest: sha256:"), "{out}");
+        assert_eq!(
+            &tail[2..],
+            [
+                "Provides: net@1.0.0",
+                "Requires: base",
+                "Integrates: extra",
+                "Conflicts: old",
+                "Args:",
+                "  id  required",
+                "  mode  default \"fast\", one of fast|slow",
+            ],
+            "{out}"
+        );
+
+        sbt(&mut t.ctx, &["kit", "inspect", "./net", "--json"]).unwrap();
+        let v: serde_json::Value = serde_json::from_str(&t.stdout()).unwrap();
+        let x = &v["smolbento"];
+        assert_eq!(x["sourceType"], "local v3");
+        assert_eq!(x["provides"], serde_json::json!(["net@1.0.0"]));
+        assert_eq!(x["conflicts"], serde_json::json!(["old"]));
+        assert_eq!(x["args"]["id"], serde_json::json!({"required": true}));
+        assert_eq!(
+            x["args"]["mode"],
+            serde_json::json!({"required": false, "default": "fast", "enum": ["fast", "slow"]})
+        );
+        assert!(x["digest"].as_str().unwrap().starts_with("sha256:"));
+    }
+
+    #[test]
+    fn validate_reports_every_failure_as_json_or_yaml_and_exits_1() {
+        let mut t = kit_env();
+        let net = NET_KIT.replace(
+            r#""capabilities":["#,
+            r#""args":{"id":{"required":true}},"capabilities":["#,
+        );
+        v3_kit(&t, "needarg", &net, &[]);
+        let cases: [(&str, &str, &str); 3] = [
+            ("./missing", "directory", "doesn't exist"),
+            ("docker.io/x/y:1", "registry", "--offline"),
+            ("./needarg", "directory", "argument id is required"),
+        ];
+        for (reference, kind, msg) in cases {
+            let offline = if reference.starts_with("docker.io") {
+                "--offline"
+            } else {
+                "--json"
+            };
+            let mut argv = vec!["kit", "validate", reference, "--format", "json"];
+            if offline == "--offline" {
+                argv.push(offline);
+            }
+            assert_eq!(sbt(&mut t.ctx, &argv).unwrap(), 1, "{reference}");
+            let v: serde_json::Value = serde_json::from_str(&t.stdout()).unwrap();
+            assert_eq!(v["reference"], reference);
+            assert_eq!(v["kind"], kind);
+            assert_eq!(v["valid"], false);
+            assert_eq!(v["warnings"], serde_json::json!([]));
+            let errors = v["errors"].as_array().unwrap();
+            assert_eq!(errors.len(), 1, "{v}");
+            assert!(errors[0].as_str().unwrap().contains(msg), "{v}");
+        }
+        v3_kit(
+            &t,
+            "odd",
+            r#"{"schemaVersion":"3","kind":"mixin","name":"odd","capabilities":[
+            {"type":"com.docker.sandbox/usb-device@1","optional":false}]}"#,
+            &[],
+        );
+        assert_eq!(
+            sbt(&mut t.ctx, &["kit", "validate", "./odd", "--json"]).unwrap(),
+            1
+        );
+        let v: serde_json::Value = serde_json::from_str(&t.stdout()).unwrap();
+        assert!(
+            v["errors"][0].as_str().unwrap().contains("usb-device"),
+            "{v}"
+        );
+        // yaml, and the plain error for a table.
+        assert_eq!(
+            sbt(
+                &mut t.ctx,
+                &["kit", "validate", "./missing", "--format", "yaml"]
+            )
+            .unwrap(),
+            1
+        );
+        let y = t.stdout();
+        assert!(
+            y.starts_with("reference: ./missing\nkind: directory\nvalid: false\n"),
+            "{y}"
+        );
+        let back: serde_json::Value = serde_saphyr::from_str(&y).unwrap();
+        assert_eq!(back["valid"], false);
+        sbt(&mut t.ctx, &["kit", "validate", "./missing"]).unwrap_err();
+        assert_eq!(t.stdout(), "");
+        // A success has no `errors` key.
+        sbt(
+            &mut t.ctx,
+            &[
+                "kit",
+                "validate",
+                &v2_fixture("tool-mixin"),
+                "--format",
+                "yaml",
+            ],
+        )
+        .unwrap();
+        assert!(!t.stdout().contains("errors"));
     }
 
     #[test]
