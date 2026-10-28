@@ -1869,6 +1869,14 @@ mod tests {
                 vec!["create", &workload, "-t", "img:1"],
                 "-t can't be combined with a workload kit",
             ),
+            (
+                vec!["create", "shell", "--kit", "git+https://github.com/o/r.git"],
+                "git kit sources are not supported",
+            ),
+            (
+                vec!["create", "shell", "--kit", "./k.zip"],
+                "ZIP kits are not supported",
+            ),
         ] {
             let mut t = kit_env();
             let err = format!("{:#}", sbt(&mut t.ctx, &args).unwrap_err());

@@ -75,6 +75,13 @@ pub fn spec(loaded: &Loaded, overrides: &Overrides, secrets: &SecretsFile) -> Re
         .flatten()
         .map(|k| source(k).to_string())
         .collect();
+    // Registry references aren't checked: that needs the network.
+    for k in &kits {
+        crate::kits::load::check_kind(k)?;
+        if k.starts_with('/') && !Path::new(k).exists() {
+            bail!("{k}: no such file or directory");
+        }
+    }
     let target = if agents::find(agent).is_some() {
         agent.to_string()
     } else {
@@ -362,7 +369,7 @@ mod tests {
             let t = T {
                 dir: tempfile::tempdir().unwrap(),
             };
-            for d in ["proj", "proj/web", "proj/docs"] {
+            for d in ["proj", "proj/web", "proj/docs", "proj/k", "proj/mine"] {
                 std::fs::create_dir(t.dir.path().join(d)).unwrap();
             }
             t
@@ -435,6 +442,30 @@ mod tests {
             ))
             .unwrap();
         assert_eq!(s.targets[0], "reg.example:5000/org/k@sha256:abc");
+    }
+
+    #[test]
+    fn kit_sources_are_checked_before_anything_happens() {
+        let t = T::new();
+        let e = t.err(&format!("{HEAD}agent: claude\nkits:\n  - ./nope\n"));
+        assert_eq!(
+            e,
+            format!("{}: no such file or directory", t.p("proj/nope"))
+        );
+        let e = t.err(&format!(
+            "{HEAD}agent: claude\nkits:\n  - source: ./k.zip\n"
+        ));
+        assert_eq!(
+            e,
+            crate::kits::load::check_kind("x.zip")
+                .unwrap_err()
+                .to_string()
+                .replace("x.zip", &t.p("proj/k.zip"))
+        );
+        assert!(e.contains("not supported"), "{e}");
+        let git = "git+https://github.com/o/r.git#ref=main";
+        let e = t.err(&format!("{HEAD}agent: claude\nkits:\n  - {git}\n"));
+        assert!(e.contains(git) && e.contains("not supported"), "{e}");
     }
 
     #[test]

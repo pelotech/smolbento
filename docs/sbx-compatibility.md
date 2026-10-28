@@ -76,6 +76,7 @@ writableEnvFiles`, and `pullPolicy` other than `missing`.
 | Workload kit as `agent` | The kit whose name equals `agent` | A local kit is matched by its directory name, a registry kit by the last part of its repository name |
 | Secret `command:` source | Runs on the host | Runs from a fresh temporary directory, so a relative helper path fails (also for `secret set --command`) |
 | `env run` on an existing sandbox | Passes `env`, applies nothing else | Same |
+| Kits that can't be loaded | Checked before secrets are stored | A local kit path that doesn't exist, a `.zip` or a `git+` source is refused before secrets are stored. A registry kit isn't checked without the network: one that can't be pulled fails after the secrets were stored; `env rm` removes them |
 
 ## Sandbox environment
 
@@ -154,7 +155,7 @@ What works as in sbx:
   `sbt create .hidden` with `unknown agent ".hidden"`, and `--kit alpine` with
   `kit reference "alpine": not a local path and does not look like a registry reference`. A local
   kit is a path (`.`, `..`, `./kit`, `../kit`, `/abs/kit`); a registry reference has a `/`
-  (`docker.io/acme/kit:1`).
+  (`docker.io/acme/kit:1`). ZIP kits and `git+` sources are refused.
 - **Versions.** `provides: [name@1.2.0]` and `requires: ["name >= 1.0"]` follow the kit spec's
   version grammar. The agent presets provide their name at their image tag's version, so a v2
   mixin's `requires.agent: claude` works on `claude`.
