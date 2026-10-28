@@ -1,5 +1,17 @@
 # Changelog
 
+## [0.7.0](https://github.com/pelotech/smolbento/compare/v0.6.0...v0.7.0) (2026-10-28)
+
+
+### Features
+
+* kit host mounts, --mount and inspect (Phase 5a) ([#31](https://github.com/pelotech/smolbento/issues/31)) ([be321de](https://github.com/pelotech/smolbento/commit/be321debdd18aa0c64fb75b34868464ba1ae1413))
+
+
+### Docs
+
+* move trailing comments off install command lines so zsh paste works ([#33](https://github.com/pelotech/smolbento/issues/33)) ([cc15008](https://github.com/pelotech/smolbento/commit/cc15008271c7545b77bccf9a9c79a1f296709780))
+
 ## [0.6.0](https://github.com/pelotech/smolbento/compare/v0.5.0...v0.6.0) (2026-10-28)
 
 
