@@ -1,5 +1,17 @@
 # Changelog
 
+## [0.8.0](https://github.com/pelotech/smolbento/compare/v0.7.0...v0.8.0) (2026-10-28)
+
+
+### Features
+
+* progress output while creating sandboxes, and sbx aliases ([#34](https://github.com/pelotech/smolbento/issues/34)) ([f2894ce](https://github.com/pelotech/smolbento/commit/f2894ce2309b1af3caf0d10ffd171b1bfdacb093))
+
+
+### Bug Fixes
+
+* **kits:** copy binary files from a kit's files/ directory ([#35](https://github.com/pelotech/smolbento/issues/35)) ([a570439](https://github.com/pelotech/smolbento/commit/a570439d4dadf18cbe10a071a82bbc416126c7eb))
+
 ## [0.7.0](https://github.com/pelotech/smolbento/compare/v0.6.0...v0.7.0) (2026-10-28)
 
 
