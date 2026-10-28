@@ -29,7 +29,8 @@ port:
   host services keep the block until they're recreated.
 - **Closing it is best-effort.** `policy rm` of the rule closes the port in a running sandbox at
   once, but a sandbox created with host access can still reach your machine's localhost in other
-  ways: a broad allow CIDR or a DNS answer covering `100.96.0.1`, or a switch to `allow-all`. To
+  ways, for example a broad allow CIDR or a DNS answer covering `100.96.0.1`, the always-allowed
+  `127.0.0.0/8` in restricted allow lists, or a switch to `allow-all`. To
   take host access away for good, recreate the sandbox without the rule.
 - **`allow-all` is fixed at create.** An `allow-all` sandbox created with host access reaches every
   host port for its life, rule or not (`policy rm` says so).

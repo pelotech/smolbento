@@ -517,7 +517,8 @@ sbt policy allow network --sandbox claude-myrepo localhost           # opens it 
 - Kit rules never grant host access, and the `_builder` sandbox never has it.
 - An `allow-all` sandbox created with host access keeps it until it's recreated; `policy rm`
   of its rule says so.
-- Each start adds `100.96.0.1 host.docker.internal` to the sandbox's `/etc/hosts`; an image
+- Each start adds `100.96.0.1 host.docker.internal` to the sandbox's `/etc/hosts`. The name
+  resolves in every sandbox, but only those created with host access can connect. An image
   without a writable `/etc/hosts` gets a warning and no name. `127.0.0.1`, `::1` and
   `host.docker.internal` rules aren't host-services rules (as in sbx, the rule must say
   `localhost`). A blocked request gets connection refused, not sbx's `403 Approval required`.
