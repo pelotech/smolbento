@@ -471,6 +471,10 @@ mod tests {
                 "SMOLBENTO_CACHE_DIR".to_string(),
                 dir.path().display().to_string(),
             ),
+            (
+                "SMOLBENTO_DATA_DIR".to_string(),
+                dir.path().display().to_string(),
+            ),
             ("PATH".to_string(), "/nonexistent".to_string()),
         ]);
         let paths = crate::config::Paths::from_env(&env).unwrap();

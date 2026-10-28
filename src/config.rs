@@ -12,6 +12,7 @@ use serde::{Deserialize, Serialize};
 pub struct Paths {
     pub config: PathBuf,
     pub cache: PathBuf,
+    pub data: PathBuf,
 }
 
 impl Paths {
@@ -28,7 +29,8 @@ impl Paths {
         self.config.join("secret-values.toml")
     }
 
-    /// `SMOLBENTO_*_DIR`, then XDG, then `~/.config` / `~/.cache` (also on macOS).
+    /// `SMOLBENTO_*_DIR`, then XDG, then `~/.config` / `~/.cache` / `~/.local/share` (also on
+    /// macOS).
     pub fn from_env(env: &BTreeMap<String, String>) -> Result<Paths> {
         let pick = |own: &str, xdg: &str, fallback: &str| -> Result<PathBuf> {
             if let Some(dir) = env.get(own) {
@@ -43,6 +45,7 @@ impl Paths {
         Ok(Paths {
             config: pick("SMOLBENTO_CONFIG_DIR", "XDG_CONFIG_HOME", ".config")?,
             cache: pick("SMOLBENTO_CACHE_DIR", "XDG_CACHE_HOME", ".cache")?,
+            data: pick("SMOLBENTO_DATA_DIR", "XDG_DATA_HOME", ".local/share")?,
         })
     }
 
@@ -56,6 +59,11 @@ impl Paths {
 
     pub fn kit_cache(&self) -> PathBuf {
         self.cache.join("kits")
+    }
+
+    /// Managed directories of kit host mounts (`kits::host_mount::managed_dir`), kept after `rm`.
+    pub fn kit_host_mounts(&self) -> PathBuf {
+        self.data.join("kit-host-mounts")
     }
 }
 
@@ -351,6 +359,7 @@ pub(crate) fn test_paths() -> (tempfile::TempDir, Paths) {
     let paths = Paths {
         config: dir.path().to_path_buf(),
         cache: dir.path().join("c"),
+        data: dir.path().join("d"),
     };
     (dir, paths)
 }
@@ -516,19 +525,33 @@ mod tests {
         let p = Paths::from_env(&env(&[("HOME", "/h")])).unwrap();
         assert_eq!(p.config, PathBuf::from("/h/.config/smolbento"));
         assert_eq!(p.cache, PathBuf::from("/h/.cache/smolbento"));
-        let p = Paths::from_env(&env(&[("HOME", "/h"), ("XDG_CONFIG_HOME", "/x")])).unwrap();
+        assert_eq!(p.data, PathBuf::from("/h/.local/share/smolbento"));
+        let p = Paths::from_env(&env(&[
+            ("HOME", "/h"),
+            ("XDG_CONFIG_HOME", "/x"),
+            ("XDG_DATA_HOME", "/xd"),
+        ]))
+        .unwrap();
         assert_eq!(p.config, PathBuf::from("/x/smolbento"));
+        assert_eq!(p.data, PathBuf::from("/xd/smolbento"));
         let p = Paths::from_env(&env(&[
             ("SMOLBENTO_CONFIG_DIR", "/c"),
             ("SMOLBENTO_CACHE_DIR", "/k"),
+            ("SMOLBENTO_DATA_DIR", "/d"),
+            ("XDG_DATA_HOME", "/xd"),
         ]))
         .unwrap();
         assert_eq!(
-            (p.config.clone(), p.cache.clone()),
-            (PathBuf::from("/c"), PathBuf::from("/k"))
+            (p.config.clone(), p.cache.clone(), p.data.clone()),
+            (
+                PathBuf::from("/c"),
+                PathBuf::from("/k"),
+                PathBuf::from("/d")
+            )
         );
         assert_eq!(p.sessions(), PathBuf::from("/k/sessions"));
         assert_eq!(p.kit_cache(), PathBuf::from("/k/kits"));
+        assert_eq!(p.kit_host_mounts(), PathBuf::from("/d/kit-host-mounts"));
     }
 
     #[test]
@@ -537,6 +560,7 @@ mod tests {
         let e = env(&[
             ("SMOLBENTO_CONFIG_DIR", dir.path().to_str().unwrap()),
             ("SMOLBENTO_CACHE_DIR", "/k"),
+            ("SMOLBENTO_DATA_DIR", "/d"),
         ]);
         let paths = Paths::from_env(&e).unwrap();
 
@@ -574,6 +598,7 @@ mod tests {
         let e = env(&[
             ("SMOLBENTO_CONFIG_DIR", dir.path().to_str().unwrap()),
             ("SMOLBENTO_CACHE_DIR", "/k"),
+            ("SMOLBENTO_DATA_DIR", "/d"),
         ]);
         let mut s = Settings::load(&Paths::from_env(&e).unwrap(), e).0;
         assert!(
@@ -593,6 +618,7 @@ mod tests {
         let e = env(&[
             ("SMOLBENTO_CONFIG_DIR", dir.path().to_str().unwrap()),
             ("SMOLBENTO_CACHE_DIR", "/k"),
+            ("SMOLBENTO_DATA_DIR", "/d"),
             ("SMOLBENTO_SMOLVM", "/opt/smolvm"),
         ]);
         let paths = Paths::from_env(&e).unwrap();

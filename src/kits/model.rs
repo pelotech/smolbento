@@ -115,6 +115,12 @@ pub enum CapBody {
         tmpfs: bool,
         mode: Option<String>,
     },
+    /// A runtime-owned host directory at `path`, shared by the kit's sandboxes. `mode` is applied
+    /// when the directory is created (default `0755`).
+    HostMount {
+        path: String,
+        mode: Option<String>,
+    },
     /// `cpus` stays text so the model can be `Eq`; apply parses it.
     Resources {
         cpus: Option<String>,

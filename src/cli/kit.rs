@@ -713,6 +713,21 @@ mod tests {
     }
 
     #[test]
+    fn host_mount_is_supported() {
+        let cap = |body| super::Cap {
+            ty: String::new(),
+            optional: false,
+            body,
+        };
+        let host = cap(super::CapBody::HostMount {
+            path: "/data".into(),
+            mode: None,
+        });
+        assert!(super::supported(&host));
+        assert!(!super::supported(&cap(super::CapBody::Unsupported)));
+    }
+
+    #[test]
     fn inspect_prints_sbxs_table_then_the_capability_support() {
         let mut t = kit_env();
         v3_kit(&t, "net", NET_KIT, &[]);

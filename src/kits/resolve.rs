@@ -6,6 +6,7 @@ use anyhow::{Context, Result, bail};
 
 use crate::kits::args::{ArgValues, expand};
 use crate::kits::capability;
+use crate::kits::host_mount;
 use crate::kits::model::{
     AgentContextReq, CapBody, CredReq, FileReq, Hook, HookCmd, Kind, Kit, NetRule, Rules,
 };
@@ -55,6 +56,8 @@ pub struct Merged {
     pub credentials: Vec<KitCred>,
     pub ports: Vec<(u16, bool)>,
     pub volumes: Vec<(String, bool, Option<String>)>,
+    /// In kit order.
+    pub host_mounts: Vec<HostMount>,
     pub cpus: Option<String>,
     pub memory: Option<String>,
     pub env: Vec<(String, String)>,
@@ -66,6 +69,17 @@ pub struct Merged {
     pub git_identity: bool,
     pub long_running: bool,
     pub privileged: bool,
+}
+
+/// A `host-mount@1` and the kit that declared it, which keys its managed directory.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct HostMount {
+    /// Kit name.
+    pub kit: String,
+    /// `host_mount::identity` of the kit.
+    pub identity: String,
+    pub path: String,
+    pub mode: Option<String>,
 }
 
 #[derive(Debug)]
@@ -177,6 +191,11 @@ pub fn resolve_for(
     env_map.insert("WORKSPACE".into(), workdir.into());
 
     let mut skipped = Vec::new();
+    // The kit that first declared each volume path: a host mount there conflicts with it.
+    let mut volume_kits: BTreeMap<String, String> = BTreeMap::new();
+    let one_owner = |a: &str, b: &str, path: &str| {
+        format!("kits {a} and {b} both declare storage at {path}; a host mount has one owner")
+    };
     for k in &all {
         let a = &kit_args[&k.name];
         let unresolved: BTreeSet<String> = k
@@ -268,14 +287,32 @@ pub fn resolve_for(
                     }
                 }
                 CapBody::Volume { path, tmpfs, mode } => {
+                    if let Some(h) = merged.host_mounts.iter().find(|h| &h.path == path) {
+                        bail!("{}", one_owner(&h.kit, &k.name, path));
+                    }
                     match merged.volumes.iter().find(|v| &v.0 == path) {
                         Some(v) if v.1 != *tmpfs || v.2 != *mode => bail!(
                             "kit {}: volume {path} conflicts with another kit's request",
                             k.name
                         ),
                         Some(_) => {}
-                        None => merged.volumes.push((path.clone(), *tmpfs, mode.clone())),
+                        None => {
+                            merged.volumes.push((path.clone(), *tmpfs, mode.clone()));
+                            volume_kits.insert(path.clone(), k.name.clone());
+                        }
                     }
+                }
+                CapBody::HostMount { path, mode } => {
+                    let owner = merged.host_mounts.iter().find(|h| &h.path == path);
+                    if let Some(a) = owner.map(|h| &h.kit).or(volume_kits.get(path)) {
+                        bail!("{}", one_owner(a, &k.name, path));
+                    }
+                    merged.host_mounts.push(HostMount {
+                        kit: k.name.clone(),
+                        identity: host_mount::identity(k)?,
+                        path: path.clone(),
+                        mode: mode.clone(),
+                    });
                 }
                 CapBody::Resources { cpus, memory } => {
                     if cpus.is_some() {
@@ -819,26 +856,22 @@ mod tests {
     #[test]
     fn a_required_unsupported_capability_fails_closed() {
         let k = mixin("m").cap(
-            "com.docker.sandbox/host-mount@1",
+            "com.docker.sandbox/ssh-agent@1",
             false,
             CapBody::Unsupported,
         );
         let e = run(workload("w"), vec![k]).unwrap_err();
         assert_eq!(
             format!("{e:#}"),
-            "kit m: com.docker.sandbox/host-mount@1 is not supported by smolbento"
+            "kit m: com.docker.sandbox/ssh-agent@1 is not supported by smolbento"
         );
     }
 
     #[test]
     fn an_optional_unsupported_capability_is_skipped() {
-        let k = mixin("m").cap(
-            "com.docker.sandbox/host-mount@1",
-            true,
-            CapBody::Unsupported,
-        );
+        let k = mixin("m").cap("com.docker.sandbox/ssh-agent@1", true, CapBody::Unsupported);
         let p = run(workload("w"), vec![k]).unwrap();
-        assert_eq!(p.skipped, ["m: com.docker.sandbox/host-mount@1"]);
+        assert_eq!(p.skipped, ["m: com.docker.sandbox/ssh-agent@1"]);
     }
 
     fn cred(oauth: Option<OAuthReq>) -> CapBody {
@@ -952,6 +985,62 @@ mod tests {
         let c = mixin("c").cap("v@1", false, vol("/data", false));
         let p = run(workload("w"), vec![a, c]).unwrap();
         assert_eq!(p.merged.volumes, [("/data".to_string(), false, None)]);
+    }
+
+    fn host(path: &str, mode: Option<&str>) -> CapBody {
+        CapBody::HostMount {
+            path: path.into(),
+            mode: mode.map(Into::into),
+        }
+    }
+
+    #[test]
+    fn host_mounts_are_collected_in_kit_order_with_their_kit_s_identity() {
+        const HM: &str = "com.docker.sandbox/host-mount@1";
+        let mut a = mixin("a")
+            .requires(&["b"])
+            .cap(HM, false, host("/home/agent/.a", None));
+        a.source = Source::LocalV3("/kits/a".into());
+        let b =
+            mixin("b")
+                .provides(&["b@1.0.0"])
+                .cap(HM, false, host("/home/agent/.b", Some("0700")));
+        let w = workload("w").cap(HM, false, host("/w", None));
+        let p = run(w, vec![a, b]).unwrap();
+        let got: Vec<_> = p
+            .merged
+            .host_mounts
+            .iter()
+            .map(|m| (&*m.kit, &*m.identity, &*m.path, m.mode.as_deref()))
+            .collect();
+        assert_eq!(
+            got,
+            [
+                ("w", "docker.io/library/w", "/w", None),
+                ("b", "docker.io/library/b", "/home/agent/.b", Some("0700")),
+                ("a", "/kits/a", "/home/agent/.a", None),
+            ]
+        );
+    }
+
+    #[test]
+    fn a_host_mount_path_has_one_owner() {
+        const HM: &str = "com.docker.sandbox/host-mount@1";
+        let msg = "kits a and b both declare storage at /data; a host mount has one owner";
+        let cases = [
+            // Two host mounts, even identical ones.
+            (host("/data", None), host("/data", Some("0700"))),
+            (host("/data", None), host("/data", None)),
+            // A host mount and a volume, either order.
+            (host("/data", None), vol("/data", false)),
+            (vol("/data", false), host("/data", None)),
+        ];
+        for (first, second) in cases {
+            let a = mixin("a").cap(HM, false, first);
+            let b = mixin("b").cap(HM, false, second);
+            let e = run(workload("w"), vec![a, b]).unwrap_err();
+            assert_eq!(format!("{e:#}"), msg);
+        }
     }
 
     #[test]

@@ -47,6 +47,7 @@ impl E2e {
         cmd.current_dir(self.workspace())
             .env("SMOLBENTO_CONFIG_DIR", self.dir.path().join("config"))
             .env("SMOLBENTO_CACHE_DIR", self.dir.path().join("cache"))
+            .env("SMOLBENTO_DATA_DIR", self.dir.path().join("data"))
             .env("SMOLBENTO_DOCKER", "false")
             .envs(self.vars.iter().map(|(k, v)| (k, v)))
     }

@@ -15,7 +15,7 @@ pub struct TestEnv {
     _dir: tempfile::TempDir,
 }
 
-/// A context with temp config/cache dirs, cwd `<tmp>/proj`, `now` = 1_000_000, uid 501 and smolvm
+/// A context with temp config/cache/data dirs, cwd `<tmp>/proj`, `now` = 1_000_000, uid 501 and smolvm
 /// 1.32.4.
 pub fn test_env(extra_env: &[(&str, &str)]) -> TestEnv {
     let dir = tempfile::tempdir().unwrap();
@@ -27,6 +27,10 @@ pub fn test_env(extra_env: &[(&str, &str)]) -> TestEnv {
         (
             "SMOLBENTO_CACHE_DIR".to_string(),
             dir.path().join("cache").display().to_string(),
+        ),
+        (
+            "SMOLBENTO_DATA_DIR".to_string(),
+            dir.path().join("data").display().to_string(),
         ),
     ]);
     for (k, v) in extra_env {
