@@ -25,13 +25,13 @@ v2 directories) and Smolfiles; `sbt kit inspect/validate/add` work. See [Usage](
 **Phase 4b (sbxenv.yaml) is done.** `sbt env create|run|exec|rm` read Docker Sandboxes environment
 files. See [Usage](usage.md#environments-sbxenvyaml).
 
-Change you may notice: every secret `command:` source (`sbt secret set --command`, and `command:` in
-an environment file) now runs from a fresh temporary directory. Give helpers by absolute path or put
-them on `PATH`; a path relative to your current directory no longer works.
-
 Docker in a sandbox is now the shipped `docker` kit, so every Docker-enabled create goes through
 the kit first start: if that first start fails, the sandbox is removed. Run the same command
 again once the cause is fixed.
+
+Change you may notice: every secret `command:` source (`sbt secret set --command`, and `command:` in
+an environment file) now runs from a fresh temporary directory. Give helpers by absolute path or put
+them on `PATH`; a path relative to your current directory no longer works.
 
 Upgrading from v0.1.x: starting a sandbox now needs a chosen network policy, as in sbx. Run
 `sbt policy init balanced` (or answer the prompt) before your next start; scripts without a

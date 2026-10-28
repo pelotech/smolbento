@@ -392,13 +392,17 @@ sbt env rm                           # remove the sandbox and the secrets scoped
 
 - **Files.** Each `PATH` is a file or a directory holding `sbxenv.yaml`. With none, smolbento reads
   `~/.sbxenv.yaml` (if present) and then `./sbxenv.yaml`. Files merge in order: maps merge by key,
-  lists concatenate, later values win. Relative paths are relative to the file that names them.
-  `${{ env.projectDir }}` and `${{ env.fileDir }}` are the first file's directory and the declaring
-  file's.
+  lists concatenate, later values win (an empty `key:` keeps the earlier value). Relative paths
+  are relative to the file that names them. `${{ env.projectDir }}` is the first `PATH`'s directory
+  (the current directory when no `PATH` is given, even when `~/.sbxenv.yaml` is read);
+  `${{ env.fileDir }}` is the declaring file's directory.
+- **Values.** As in YAML 1.2, only `true` and `false` are booleans. Text fields take numbers and
+  booleans as written: `PORT: 8080` and `DEBUG: on` are the strings `8080` and `on`.
 - **User defaults.** `~/.sbxenv.yaml` applies to every environment. It can't set `name`, and its
   `workspace` must be `${{ env.projectDir }}` or below it.
-- **Args.** A file declares `args:` (each with a `default`, `required: true`, an `enum` or a
-  `pattern`) and uses them as `${{ env.args.NAME }}`. Give values with `--env-arg NAME=VALUE` or
+- **Args.** A file declares `args:` and uses them as `${{ env.args.NAME }}`. Each arg needs
+  exactly one of `default` or `required: true`, and may limit its values with `enum` or `pattern`
+  (not both). Give values with `--env-arg NAME=VALUE` or
   `--env-args-file FILE` (`--env-arg` wins).
 - **Name.** `name:` or `--name`; otherwise `<agent>-<workspace directory>`. The name links a file
   to its sandbox, so give every command the same `--name` you created it with.
@@ -413,10 +417,12 @@ sbt env rm                           # remove the sandbox and the secrets scoped
   current `env` values to the session. It doesn't apply other changes (kits, ports, workspaces,
   secrets, options): recreate with `env rm` and `env create`, as in sbx.
 - **`env exec`** takes the `sbt exec` flags, and the command after `--`. Without `--`, every
-  argument is the command and the files come from the current directory.
+  argument is the command and the files come from the current directory. A command with options
+  needs the `--` (`sbt env exec -- ls -la`), or they are read as `env exec`'s own.
 - **Kits.** `agent` can name a built-in agent, or a workload kit from `kits:`: a local kit by its
   directory name, a registry kit by the last part of its repository name. The other kits are added
-  to it.
+  to it. A local kit path that doesn't exist, a `.zip` or a `git+` source is refused before any
+  secret is stored; a registry kit that can't be pulled fails after (`env rm` removes the secrets).
 
 Not supported yet (exit 2, naming the field or command): `env plan`, `lifecycle`, `bindings`,
 `registries`, `mcp`, `mounts`, and the `sandboxOptions` other than `cpus`, `memory`, `template` and
