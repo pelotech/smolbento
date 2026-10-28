@@ -71,6 +71,31 @@ terminal fail until you do.
   `_builder` through smolvm so no token lands in the guest.
 - **`machine update --label`.** Would let `kit add`ed kits be listed without starting a stopped
   sandbox. Cosmetic.
+- **Install-only credentials after install.** sbx leaves the placeholder and sends requests without
+  the credential; smolbento's requests get smolvm's `502 credential unavailable`.
+
+## sbx differences to revisit
+
+Measured against sbx v0.49.2; [sbx compatibility](sbx-compatibility.md) has the full list. Worth
+another look:
+
+- **Secrets sent to other hosts.** sbx lets a kit send a built-in secret (e.g. GitHub) to another
+  host after you approve it once per host; smolbento refuses. An approval flow would close the gap.
+- **Kit volume `size`.** sbx gives the volume a block device of that size; smolbento ignores it.
+- **Kit signing and publishing.** `kit pack/push/pull/sign/verify/provenance/builder` and the
+  settings `kit.requireSignature`, `kit.trustedSigners`, `kit.ignoreTransparencyLog`,
+  `kit.allowExtractedAgents`.
+- **Sandbox variables.** smolbento leaves out sbx's fake credential values, `MCP_*`, its proxy
+  settings, `GIT_CONFIG_*` and the SSH/display variables, and sets `SBX_CRED_*_MODE` only for
+  `shell` and `claude` (the only agents measured).
+- **Kept on purpose, recheck if sbx changes:** `kit add` applies live (sbx recreates the sandbox and
+  refuses some kits), plain HTTP for loopback registries (sbx: HTTPS only), the `_builder` sandbox
+  (sbx: host buildx), the built-in `docker` kit, and v3 mixins on built-in agents (sbx refuses).
+- **Not measured yet:** unquoted floats in kit args, unused optional args, a v3 mixin's context
+  when the workload has an agent file, the kits index after hand edits, a hanging startup step,
+  `setsid` in the other `-docker` images, `git-identity` without a host identity, sbx's preamble in
+  the agent file, `kit add` of the same kit twice, auto-stop timing, `policy ls --wide` columns, and
+  the `kit validate` failure JSON.
 
 ## Waiting on a release or CI
 
