@@ -8,6 +8,7 @@ use sha2::{Digest, Sha256};
 
 use super::model::{Kit, Source};
 use super::registry::hex;
+use super::resolve::HostMount;
 
 /// What keys a kit's host mounts (sbx): a local kit's canonical path; a published kit's
 /// `<registry>/<repository>`, without tag or digest so updates keep its directories.
@@ -33,6 +34,90 @@ pub fn identity(kit: &Kit) -> Result<String> {
 pub fn managed_dir(root: &Path, identity: &str, path: &str) -> PathBuf {
     let sha = |s: &str| hex(&Sha256::digest(s.as_bytes()));
     root.join(sha(identity)).join(sha(path))
+}
+
+/// Where a kit host mount comes from on the host.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct HostDir {
+    pub host: PathBuf,
+    pub guest: String,
+    /// The managed directory's mode; `None` for a `--mount` binding.
+    pub managed_mode: Option<u32>,
+}
+
+/// Each `declared` host mount's directory, in kit order: its `--mount` binding (`(host, guest)`
+/// from `bindings`), else its managed directory under `root`. Every binding must be declared, and
+/// no declared path may be one of `workspaces` (guest paths).
+pub fn host_dirs(
+    declared: &[HostMount],
+    bindings: &[(PathBuf, String)],
+    workspaces: &[String],
+    root: &Path,
+) -> Result<Vec<HostDir>> {
+    if let Some((_, guest)) = bindings
+        .iter()
+        .find(|(_, g)| !declared.iter().any(|d| d.path == *g))
+    {
+        bail!("no kit declares host-mount@1 at {guest:?}");
+    }
+    declared
+        .iter()
+        .map(|d| {
+            if workspaces.contains(&d.path) {
+                bail!("host-mount@1 path {} is already a workspace mount", d.path);
+            }
+            Ok(match bindings.iter().find(|(_, g)| *g == d.path) {
+                Some((host, _)) => HostDir {
+                    host: host.clone(),
+                    guest: d.path.clone(),
+                    managed_mode: None,
+                },
+                None => {
+                    let mode = d.mode.as_deref().unwrap_or("0755");
+                    HostDir {
+                        host: managed_dir(root, &d.identity, &d.path),
+                        guest: d.path.clone(),
+                        managed_mode: Some(
+                            u32::from_str_radix(mode, 8)
+                                .with_context(|| format!("host-mount@1 mode {mode:?}"))?,
+                        ),
+                    }
+                }
+            })
+        })
+        .collect()
+}
+
+/// Creates the missing managed directories: parents `0700`, the directory itself with its mode.
+/// An existing one is left as it is, contents and permissions.
+pub fn create_managed(dirs: &[HostDir]) -> Result<()> {
+    for d in dirs {
+        let Some(mode) = d.managed_mode.filter(|_| !d.host.is_dir()) else {
+            continue;
+        };
+        (|| -> std::io::Result<()> {
+            let mut builder = std::fs::DirBuilder::new();
+            builder.recursive(true);
+            #[cfg(unix)]
+            {
+                use std::os::unix::fs::{DirBuilderExt, PermissionsExt};
+                if let Some(parent) = d.host.parent() {
+                    builder.mode(0o700).create(parent)?;
+                }
+                builder.recursive(false).mode(mode).create(&d.host)?;
+                // The create mode is filtered by the umask; set it exactly.
+                std::fs::set_permissions(&d.host, std::fs::Permissions::from_mode(mode))?;
+            }
+            #[cfg(not(unix))]
+            {
+                let _ = mode;
+                builder.create(&d.host)?;
+            }
+            Ok(())
+        })()
+        .with_context(|| format!("creating {}", d.host.display()))?;
+    }
+    Ok(())
 }
 
 #[cfg(test)]

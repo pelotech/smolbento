@@ -470,6 +470,10 @@ pub struct SandboxOpts {
     /// `--kit-arg` and `--kit-args-file`.
     #[arg(skip)]
     pub kit_pins: Vec<(String, Vec<String>)>,
+    /// Bind a host directory to a kit host-mount@1 path (can be repeated): HOST:SANDBOX_PATH. Can
+    /// only be used when creating a new sandbox.
+    #[arg(long, value_name = "HOST:SANDBOX_PATH")]
+    pub mount: Vec<String>,
     /// Add a per-sandbox network deny rule at creation time. Can be specified multiple times.
     /// The rule applies only to the new sandbox and can be listed or removed later with
     /// 'sbt policy ls <NAME>' or 'sbt policy rm network --sandbox <NAME> --resource <HOST>'

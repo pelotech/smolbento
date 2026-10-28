@@ -261,6 +261,19 @@ mod tests {
         assert_eq!(remote(&repo, "a-fork-1", "tagOpt"), "--no-tags");
     }
 
+    /// smolvm copies the machine's mounts and labels: the branch argv leaves them alone.
+    #[test]
+    fn a_fork_keeps_the_parent_s_host_mounts() {
+        let mut t = test_env(&[]);
+        parent(
+            &t,
+            "running",
+            &[("sbx.host-mounts", r#"{"/home/agent/x":"/data/x"}"#)],
+        );
+        assert_eq!(sbt(&mut t.ctx, &["fork", "a"]).unwrap(), 0);
+        assert_eq!(branches(&t), vec![branch("a-fork-1")]);
+    }
+
     #[test]
     fn default_names_skip_taken_ones() {
         let mut t = test_env(&[]);

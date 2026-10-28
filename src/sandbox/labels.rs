@@ -27,6 +27,8 @@ pub const LONG_RUNNING: &str = "sbx.long-running";
 /// Created without the host loopback deny, because a `localhost` rule applied: only such a
 /// sandbox gets the gateway from `localhost` rules (see `policy::compile::HOST_GATEWAY`).
 pub const HOST_ACCESS: &str = "sbx.host-access";
+/// Kit host mounts: a JSON object of guest path to host directory.
+pub const HOST_MOUNTS: &str = "sbx.host-mounts";
 /// Prefix of `sbx.credential-format.<ENV>`: how a kit credential's value is formatted.
 pub const CREDENTIAL_FORMAT: &str = "sbx.credential-format.";
 /// Prefix of `sbx.credential-service.<ENV>`: the secret service behind a kit credential's env var
@@ -124,6 +126,8 @@ pub struct Meta {
     pub credential_formats: BTreeMap<String, CredFormat>,
     /// Kit credential env vars outside their service's own env vars, to their service.
     pub credential_services: BTreeMap<String, String>,
+    /// Kit host mounts: guest path to host directory.
+    pub host_mounts: BTreeMap<String, String>,
 }
 
 impl Meta {
@@ -199,6 +203,12 @@ impl Meta {
         if self.host_access {
             labels.insert(HOST_ACCESS.to_string(), "true".into());
         }
+        if !self.host_mounts.is_empty() {
+            labels.insert(
+                HOST_MOUNTS.to_string(),
+                serde_json::to_string(&self.host_mounts).expect("strings serialize"),
+            );
+        }
         for (env, f) in &self.credential_formats {
             labels.insert(format!("{CREDENTIAL_FORMAT}{env}"), f.to_label());
         }
@@ -258,6 +268,10 @@ impl Meta {
                     Some((k.strip_prefix(CREDENTIAL_SERVICE)?.to_string(), v.clone()))
                 })
                 .collect(),
+            host_mounts: labels
+                .get(HOST_MOUNTS)
+                .and_then(|j| serde_json::from_str(j).ok())
+                .unwrap_or_default(),
         })
     }
 
@@ -328,6 +342,18 @@ mod tests {
         };
         let labels = m.to_labels();
         assert_eq!(labels["sbx.host-access"], "true");
+        assert_eq!(Meta::from_labels(&labels), Some(m));
+    }
+
+    #[test]
+    fn host_mounts_label_round_trips() {
+        assert!(!meta().to_labels().contains_key("sbx.host-mounts"));
+        let m = Meta {
+            host_mounts: BTreeMap::from([("/home/agent/x".into(), "/data/x".into())]),
+            ..meta()
+        };
+        let labels = m.to_labels();
+        assert_eq!(labels["sbx.host-mounts"], r#"{"/home/agent/x":"/data/x"}"#);
         assert_eq!(Meta::from_labels(&labels), Some(m));
     }
 

@@ -63,6 +63,9 @@ pub struct CreateRequest {
     /// Created without the host loopback deny, as a `localhost` rule applied (the
     /// `sbx.host-access` label).
     pub host_access: bool,
+    /// `(host, guest)`: the `--mount` bindings until kits are applied; then every kit
+    /// `host-mount@1`, in kit order (the `sbx.host-mounts` label).
+    pub host_mounts: Vec<(PathBuf, String)>,
     /// Extra guest-only volumes (kit `volume@1`, non-tmpfs).
     pub volumes: Vec<String>,
     /// tmpfs volumes, mounted by a kit startup step (`mount -t tmpfs`), not by smolvm.
@@ -108,6 +111,11 @@ pub fn meta(req: &CreateRequest) -> Meta {
         host_access: req.host_access,
         credential_formats: req.credential_formats.clone(),
         credential_services: req.credential_services.clone(),
+        host_mounts: req
+            .host_mounts
+            .iter()
+            .map(|(host, guest)| (guest.clone(), host.display().to_string()))
+            .collect(),
     }
 }
 
@@ -133,6 +141,11 @@ pub fn spec(req: &CreateRequest) -> CreateSpec {
         (_, None) => {}
     }
     mounts.extend(rest.map(Workspace::mount));
+    mounts.extend(req.host_mounts.iter().map(|(host, guest)| Mount {
+        host: Some(host.clone()),
+        guest: guest.clone(),
+        read_only: false,
+    }));
     for v in &req.volumes {
         // Two kits may ask for the same volume.
         if !mounts.iter().any(|m| m.guest == *v) {
@@ -225,6 +238,38 @@ mod tests {
         assert_eq!(spec.workdir.as_deref(), Some("/w/repo"));
         assert_eq!(spec.user.as_deref(), Some("root"));
         assert_eq!(spec.cmd, vec!["sleep", "infinity"]);
+    }
+
+    #[test]
+    fn host_mounts_go_after_workspaces_and_before_volumes() {
+        let ws = vec![Workspace {
+            path: "/w/repo".into(),
+            read_only: false,
+        }];
+        let mut req = request(false, ws);
+        req.host_mounts = vec![("/data/x".into(), "/home/agent/x".into())];
+        req.volumes = vec!["/var/lib/docker".into()];
+        let spec = spec(&req);
+        let mounts: Vec<String> = spec
+            .to_args()
+            .windows(2)
+            .filter(|w| w[0] == "-v")
+            .map(|w| w[1].clone())
+            .collect();
+        assert_eq!(
+            mounts,
+            vec![
+                "/w/repo:/w/repo",
+                "/data/x:/home/agent/x",
+                "/var/lib/docker"
+            ]
+        );
+        assert_eq!(
+            spec.labels["sbx.host-mounts"],
+            r#"{"/home/agent/x":"/data/x"}"#
+        );
+        let plain = super::spec(&request(false, vec![]));
+        assert!(!plain.labels.contains_key("sbx.host-mounts"));
     }
 
     #[test]

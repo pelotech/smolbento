@@ -271,6 +271,7 @@ fn needs_recreate(kit: &Kit) -> Result<Vec<&'static str>> {
             CapBody::Credential(r) if r.env.is_some() || !r.inject.is_empty() => "credentials",
             CapBody::Port { .. } => "ports",
             CapBody::Volume { .. } => "volumes",
+            CapBody::HostMount { .. } => "host mounts",
             CapBody::Resources { .. } => "resources",
             CapBody::LongRunning => "long-running",
             _ => continue,
@@ -285,6 +286,7 @@ fn needs_recreate(kit: &Kit) -> Result<Vec<&'static str>> {
         "credentials",
         "ports",
         "volumes",
+        "host mounts",
         "resources",
         "environment variables",
         "long-running",
@@ -590,7 +592,6 @@ mod tests {
     use super::super::testutil::*;
     use crate::kits::guest;
     use crate::kits::model::{Hook, HookCmd};
-    use crate::kits::registry::fixtures::oci_layout;
     use crate::policy::Policy;
 
     const MACHINE: &str = "sbx-dev";
@@ -605,34 +606,6 @@ mod tests {
             "{}/tests/fixtures/kits/v2/{name}",
             env!("CARGO_MANIFEST_DIR")
         )
-    }
-
-    /// A local v3 kit directory `dir` whose `_builder` build hands back `descriptor` (JSON) with
-    /// `layers`.
-    fn v3_kit(t: &TestEnv, dir: &str, descriptor: &str, layers: &[&[u8]]) {
-        let kit = t.ctx.cwd.join(dir);
-        fs::create_dir(&kit).unwrap();
-        fs::write(
-            kit.join("kit.yaml"),
-            "# syntax=docker/sandbox-kit:3\nschemaVersion: \"3\"\nkind: mixin\n",
-        )
-        .unwrap();
-        let out = tempfile::tempdir().unwrap();
-        oci_layout(out.path(), Some(descriptor), layers, "{}");
-        let mut b = tar::Builder::new(Vec::new());
-        b.append_dir_all(".", out.path()).unwrap();
-        t.ctx
-            .vm
-            .runner()
-            .ok(
-                &["machine", "status", "-n", "sbx-_builder"],
-                &machine_json(
-                    "sbx-_builder",
-                    "running",
-                    &[("sbx.name", "_builder"), ("sbx.docker", "true")],
-                ),
-            )
-            .download(&b.into_inner().unwrap());
     }
 
     /// A running shell sandbox `dev` whose guest kits record is `record`.
@@ -1239,6 +1212,22 @@ mod tests {
         assert_eq!(format!("{e:#}"), "recreate required: image layers");
         assert!(dev_calls(&t).is_empty(), "{:#?}", dev_calls(&t));
         assert!(kit_rules(&t).is_empty());
+    }
+
+    #[test]
+    fn adding_a_mixin_with_a_host_mount_needs_a_recreate() {
+        let mut t = kit_env();
+        dev_sandbox(&t, BASE);
+        v3_kit(
+            &t,
+            "hm",
+            r#"{"schemaVersion":"3","kind":"mixin","name":"hm","capabilities":[
+                {"type":"com.docker.sandbox/host-mount@1","config":{"path":"/home/agent/x"}}]}"#,
+            &[],
+        );
+        let e = sbt(&mut t.ctx, &["kit", "add", "dev", "./hm", "--yes"]).unwrap_err();
+        assert_eq!(format!("{e:#}"), "recreate required: host mounts");
+        assert!(dev_calls(&t).is_empty(), "{:#?}", dev_calls(&t));
     }
 
     #[test]

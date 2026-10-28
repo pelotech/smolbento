@@ -109,3 +109,31 @@ pub fn machine_json(machine: &str, state: &str, labels: &[(&str, &str)]) -> Stri
     })
     .to_string()
 }
+
+/// A local v3 kit directory `dir` (under the cwd) whose `_builder` build hands back `descriptor`
+/// (JSON) with `layers`.
+pub fn v3_kit(t: &TestEnv, dir: &str, descriptor: &str, layers: &[&[u8]]) {
+    let kit = t.ctx.cwd.join(dir);
+    std::fs::create_dir(&kit).unwrap();
+    std::fs::write(
+        kit.join("kit.yaml"),
+        "# syntax=docker/sandbox-kit:3\nschemaVersion: \"3\"\nkind: mixin\n",
+    )
+    .unwrap();
+    let out = tempfile::tempdir().unwrap();
+    crate::kits::registry::fixtures::oci_layout(out.path(), Some(descriptor), layers, "{}");
+    let mut b = tar::Builder::new(Vec::new());
+    b.append_dir_all(".", out.path()).unwrap();
+    t.ctx
+        .vm
+        .runner()
+        .ok(
+            &["machine", "status", "-n", "sbx-_builder"],
+            &machine_json(
+                "sbx-_builder",
+                "running",
+                &[("sbx.name", "_builder"), ("sbx.docker", "true")],
+            ),
+        )
+        .download(&b.into_inner().unwrap());
+}

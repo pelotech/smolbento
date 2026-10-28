@@ -16,6 +16,7 @@ run claude . --kit ghcr.io/example/kit:1 --kit-args-file kit.env
 run claude . --skills off
 run claude . --static-mcp github,linear
 run claude . --deny-network evil.com
+run --mount /tmp:/home/agent/x shell
 create claude .
 create --clone claude .
 create shell
@@ -23,6 +24,7 @@ create --name dev gemini . --no-progress
 create claude . --deny-network evil.com,10.0.0.0/8 --deny-network tracker.example
 create shell . --kit ./my-kit --kit ghcr.io/example/kit:1 --kit-arg kit.key=value
 create shell --kit ./my-kit --kit-args-file kit.env
+create --mount /tmp:/home/agent/x shell
 exec my-sandbox ls -la
 exec -it my-sandbox bash
 exec -u root -w /tmp -e A=1 my-sandbox env
