@@ -95,6 +95,8 @@ pub fn hook_script(h: &Hook) -> String {
 /// `script` as `user` from a root shell. `runuser` where the image has it (util-linux), else `su`.
 /// A numeric user runs as the account with that uid (`agent` has moved off uid 1000 to the host's
 /// uid, so a uid alone can't name it); a uid with no account runs through `setpriv`, if present.
+/// Exactly `1000` is sbx's image `agent` (uid 1000 there), so it runs as `agent` when the guest
+/// has that account, whatever uid it holds now.
 pub fn as_user(user: Option<&str>, script: &str) -> String {
     as_user_in(user, script, "/etc/passwd")
 }
@@ -114,7 +116,7 @@ fn as_user_in(user: Option<&str>, script: &str, passwd: &str) -> String {
             let missing = sh_quote(&format!(
                 "smolbento: no account has uid {u}, and no setpriv"
             ));
-            format!(
+            let numeric = format!(
                 "if _sbu=$(awk -F: -v u={u} '$3 == u {{ print $1; exit }}' {passwd}) \
                  && [ -n \"$_sbu\" ]; then {run}; \
                  elif command -v setpriv >/dev/null 2>&1; then \
@@ -122,7 +124,17 @@ fn as_user_in(user: Option<&str>, script: &str, passwd: &str) -> String {
                  else echo {missing} >&2; false; fi",
                 passwd = sh_quote(passwd),
                 run = by_name("\"$_sbu\""),
-            )
+            );
+            if u == "1000" {
+                format!(
+                    "if awk -F: '$1 == \"agent\" {{ f = 1 }} END {{ exit !f }}' {passwd}; \
+                     then {agent}; else {numeric}; fi",
+                    passwd = sh_quote(passwd),
+                    agent = by_name("agent"),
+                )
+            } else {
+                numeric
+            }
         }
         Some(u) => by_name(&sh_quote(u)),
     }
@@ -733,6 +745,41 @@ mod tests {
         let out = run_as(&d, "4321", &fake_path(&d));
         assert!(out.status.success(), "{out:?}");
         assert_eq!(String::from_utf8_lossy(&out.stdout), "runuser acct\nran\n");
+    }
+
+    #[test]
+    fn user_1000_runs_as_agent_when_the_guest_has_one() {
+        let d = fake_guest();
+        std::fs::write(
+            d.path().join("passwd"),
+            "root:x:0:0::/root:/bin/sh\nagent:x:4321:4321::/home/agent:/bin/sh\n\
+             ubuntu:x:1000:1000::/home/ubuntu:/bin/sh\n",
+        )
+        .unwrap();
+        let out = run_as(&d, "1000", &fake_path(&d));
+        assert!(out.status.success(), "{out:?}");
+        assert_eq!(String::from_utf8_lossy(&out.stdout), "runuser agent\nran\n");
+    }
+
+    #[test]
+    fn user_1000_without_an_agent_account_resolves_numerically() {
+        let d = fake_guest();
+        std::fs::write(
+            d.path().join("passwd"),
+            "root:x:0:0::/root:/bin/sh\nubuntu:x:1000:1000::/home/ubuntu:/bin/sh\n",
+        )
+        .unwrap();
+        let out = run_as(&d, "1000", &fake_path(&d));
+        assert_eq!(
+            String::from_utf8_lossy(&out.stdout),
+            "runuser ubuntu\nran\n"
+        );
+        std::fs::write(d.path().join("passwd"), "root:x:0:0::/root:/bin/sh\n").unwrap();
+        let out = run_as(&d, "1000", &fake_path(&d));
+        assert_eq!(
+            String::from_utf8_lossy(&out.stdout),
+            "setpriv 1000 1000 --clear-groups\nran\n"
+        );
     }
 
     #[test]
