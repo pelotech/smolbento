@@ -50,9 +50,15 @@ fn group_cmd(user: &str, gid: u32) -> String {
 /// Names the host `host.docker.internal` in the guest, as sbx does: the guest gateway reaches the
 /// host's loopback for sandboxes with host access (`policy::compile::HOST_GATEWAY`). Idempotent.
 pub fn hosts_cmd() -> String {
+    hosts_script("/etc/hosts")
+}
+
+/// `hosts_cmd` against the hosts file at `file` (tests use a temp file). The leading newline keeps
+/// the line apart when the file doesn't end in one.
+fn hosts_script(file: &str) -> String {
     format!(
-        "grep -q ' host.docker.internal$' /etc/hosts || \
-         echo '{HOST_GATEWAY} host.docker.internal' >> /etc/hosts"
+        "grep -q ' host.docker.internal$' {file} || \
+         printf '\\n%s\\n' '{HOST_GATEWAY} host.docker.internal' >> {file}"
     )
 }
 
@@ -788,6 +794,27 @@ fn create_warning(e: &anyhow::Error) -> String {
 
 #[cfg(test)]
 mod tests {
+    #[test]
+    fn hosts_line_stays_apart_and_is_added_once() {
+        let d = tempfile::tempdir().unwrap();
+        let f = d.path().join("hosts");
+        std::fs::write(&f, "127.0.0.1 localhost").unwrap(); // no trailing newline
+        let cmd = hosts_script(f.to_str().unwrap());
+        for _ in 0..2 {
+            let st = std::process::Command::new("sh")
+                .args(["-c", &cmd])
+                .status()
+                .unwrap();
+            assert!(st.success());
+        }
+        let got = std::fs::read_to_string(&f).unwrap();
+        let lines: Vec<&str> = got.lines().filter(|l| !l.is_empty()).collect();
+        assert_eq!(
+            lines,
+            ["127.0.0.1 localhost", "100.96.0.1 host.docker.internal"]
+        );
+    }
+
     use super::*;
     use crate::smolvm::NetworkSpec;
     use crate::smolvm::fake::FakeRunner;
@@ -900,7 +927,7 @@ mod tests {
         assert_eq!(
             lines[4],
             "machine exec --name sbx-claude-myrepo -u root -- sh -c grep -q ' host.docker.internal$' \
-             /etc/hosts || echo '100.96.0.1 host.docker.internal' >> /etc/hosts"
+             /etc/hosts || printf '\\n%s\\n' '100.96.0.1 host.docker.internal' >> /etc/hosts"
         );
     }
 
