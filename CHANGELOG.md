@@ -1,5 +1,25 @@
 # Changelog
 
+## [0.5.0](https://github.com/pelotech/smolbento/compare/v0.4.0...v0.5.0) (2026-10-28)
+
+
+### Features
+
+* add sbx environment files (Phase 4b) ([#25](https://github.com/pelotech/smolbento/issues/25)) ([17bb335](https://github.com/pelotech/smolbento/commit/17bb335d6f164e8870ad34b9437efa34ecc2704f))
+* add sbx kits (Phase 4a) with measured sbx parity ([#23](https://github.com/pelotech/smolbento/issues/23)) ([4f88b60](https://github.com/pelotech/smolbento/commit/4f88b60c483a474a80241992f950e13690fdb1c8))
+
+
+### Bug Fixes
+
+* **deps:** update rust crate base64 to 0.23.0 ([#24](https://github.com/pelotech/smolbento/issues/24)) ([36b9908](https://github.com/pelotech/smolbento/commit/36b99089f1ca18b831b64a5d72a9a82d3f721937))
+
+
+### Chores
+
+* **deps:** update dependency sigstore/cosign to v3.1.4 ([#21](https://github.com/pelotech/smolbento/issues/21)) ([9eccbf2](https://github.com/pelotech/smolbento/commit/9eccbf22295480262db0d58460e0c66571faac12))
+* **deps:** update swatinem/rust-cache action to v2.9.3 ([#20](https://github.com/pelotech/smolbento/issues/20)) ([2a4ac56](https://github.com/pelotech/smolbento/commit/2a4ac562f1d9aec2c9a7b702a0e3c4bddd99a3c1))
+* require smolvm 1.32.4 ([#26](https://github.com/pelotech/smolbento/issues/26)) ([e3634b9](https://github.com/pelotech/smolbento/commit/e3634b9ac80fc5605b80d6993d00ff9d12f29fa0))
+
 ## [0.4.0](https://github.com/pelotech/smolbento/compare/v0.3.0...v0.4.0) (2026-10-27)
 
 
