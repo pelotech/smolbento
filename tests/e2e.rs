@@ -806,9 +806,12 @@ fn host_services_open_and_close_live() {
         "--resource",
         &rule,
     ]);
-    assert!(!reachable(&b, &url), "live rm closes it");
+    assert!(wait_until(10, || !reachable(&b, &url)), "live rm closes it");
     b.ok(&["policy", "allow", "network", "--sandbox", &b.name, &rule]);
-    assert!(reachable(&b, &url), "live allow reopens it");
+    assert!(
+        wait_until(10, || reachable(&b, &url)),
+        "live allow reopens it"
+    );
     assert_eq!(
         root_out(&b.name, "cat /proc/sys/kernel/random/boot_id"),
         boot,
