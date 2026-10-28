@@ -33,6 +33,7 @@ pub enum Cmd {
     /// Run a command in a sandbox
     Exec(ExecArgs),
     /// List sandboxes
+    #[command(visible_alias = "list")]
     Ls(LsArgs),
     /// Show a sandbox's details
     Inspect(InspectArgs),
@@ -47,6 +48,7 @@ pub enum Cmd {
         sandboxes: Vec<String>,
     },
     /// Remove sandboxes
+    #[command(visible_aliases = ["remove", "delete"])]
     Rm(RmArgs),
     /// Remove stopped sandboxes
     Prune(PruneArgs),
@@ -73,7 +75,7 @@ pub enum Cmd {
     #[command(subcommand)]
     Policy(PolicyCmd),
     /// Secrets for agents: sandboxes see placeholders, smolvm sends the real value
-    #[command(subcommand)]
+    #[command(subcommand, visible_alias = "secrets")]
     Secret(SecretCmd),
     /// Inspect, validate and add kits
     #[command(subcommand)]
@@ -684,6 +686,7 @@ pub struct CpArgs {
 #[derive(Debug, Subcommand)]
 pub enum SettingsCmd {
     /// List settings
+    #[command(visible_alias = "list")]
     Ls {
         #[arg(long = "no-trunc")]
         no_trunc: bool,
@@ -875,8 +878,10 @@ pub enum SecretCmd {
     /// Set a secret for any host and environment variable
     SetCustom(SecretCustomArgs),
     /// List secrets (never values)
+    #[command(visible_alias = "list")]
     Ls(SecretLsArgs),
     /// Remove secrets
+    #[command(visible_aliases = ["remove", "delete", "unset"])]
     Rm(SecretRmArgs),
     #[command(hide = true)]
     Import(Passthrough),
@@ -973,3 +978,36 @@ pub struct SecretRmArgs {
     pub all_sandboxes: bool,
 }
 
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn parse(args: &[&str]) -> Cmd {
+        Cli::try_parse_from(std::iter::once("sbt").chain(args.iter().copied()))
+            .unwrap()
+            .command
+            .unwrap()
+    }
+
+    #[test]
+    fn sbx_aliases_name_their_commands() {
+        assert!(matches!(parse(&["list"]), Cmd::Ls(_)));
+        for rm in ["remove", "delete"] {
+            assert!(matches!(parse(&[rm, "a"]), Cmd::Rm(_)));
+        }
+        assert!(matches!(
+            parse(&["secrets", "list"]),
+            Cmd::Secret(SecretCmd::Ls(_))
+        ));
+        for rm in ["remove", "delete", "unset"] {
+            assert!(matches!(
+                parse(&["secret", rm, "github"]),
+                Cmd::Secret(SecretCmd::Rm(_))
+            ));
+        }
+        assert!(matches!(
+            parse(&["settings", "list"]),
+            Cmd::Settings(SettingsCmd::Ls { .. })
+        ));
+    }
+}

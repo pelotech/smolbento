@@ -34,6 +34,8 @@ ls
 ls --json
 ls --format yaml
 ls -q
+list
+list --json
 inspect my-sandbox
 inspect my-sandbox --json
 inspect my-sandbox --format yaml
@@ -41,6 +43,8 @@ start my-sandbox
 stop my-sandbox other
 rm my-sandbox
 rm --all -f
+remove my-sandbox
+delete --all -f
 prune --dry-run --filter until=24h
 reset -f --preserve-secrets
 cp ./file my-sandbox:/tmp/file
@@ -74,6 +78,11 @@ secret rm github --sandbox my-sandbox
 secret rm --all -f
 secret set --registry ghcr.io --password-stdin
 secret rm --registry ghcr.io
+secrets ls
+secret list -g
+secret remove github --sandbox my-sandbox
+secret delete --all -f
+secret unset github
 # Ports
 ports my-sandbox
 ports my-sandbox --publish 3000 --unpublish 8080:80
@@ -113,6 +122,7 @@ setup ssh
 tui
 # Native
 settings ls
+settings list
 settings set docker.enabled false
 daemon status
 version

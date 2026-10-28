@@ -7,7 +7,7 @@ Read and change settings
 Usage: sbt settings [OPTIONS] <COMMAND>
 
 Commands:
-  ls     List settings
+  ls     List settings [alias: list]
   get    Print a setting's value
   set    Change a setting
   unset  Reset a setting to its default

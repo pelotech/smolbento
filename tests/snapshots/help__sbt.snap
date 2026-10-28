@@ -10,11 +10,11 @@ Commands:
   run         Create a sandbox if needed and attach to its agent
   create      Create and start a sandbox
   exec        Run a command in a sandbox
-  ls          List sandboxes
+  ls          List sandboxes [alias: list]
   inspect     Show a sandbox's details
   start       Start stopped sandboxes
   stop        Stop sandboxes, keeping their state
-  rm          Remove sandboxes
+  rm          Remove sandboxes [aliases: remove, delete]
   prune       Remove stopped sandboxes
   reset       Remove every sandbox and smolbento's session state
   cp          Copy files between the host and a sandbox
@@ -26,7 +26,7 @@ Commands:
   daemon      Accepted for sbx compatibility; smolbento needs no daemon
   ports       Publish or unpublish ports on a sandbox (127.0.0.1 only)
   policy      Network policy
-  secret      Secrets for agents: sandboxes see placeholders, smolvm sends the real value
+  secret      Secrets for agents: sandboxes see placeholders, smolvm sends the real value [alias: secrets]
   kit         Inspect, validate and add kits
   mcp         MCP servers (not implemented yet)
   env         Manage a sandbox declared in an sbxenv.yaml file
