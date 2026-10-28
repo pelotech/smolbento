@@ -257,23 +257,25 @@ and `enum:` are read as strings.
 
 What a kit does, and when:
 
-- **First start**: its install steps run once, as root in the image's `WORKDIR`, with any network
-  access the kit needs only for installing. If one fails (or anything else in the first start),
-  the sandbox is removed and the error printed, so the same command works again once it's fixed.
-  Its files and agent instructions are written once (see
-  [agent instructions](#agent-instructions-from-kits)); a v2 kit's `files/workspace` and
-  `${WORKDIR}` are the sandbox's primary workspace, or `/home/agent/workspace` without one.
+- **First start**: its install steps run once, as root in a workload kit's image `WORKDIR` (`/`
+  otherwise), with any network access the kit needs only for installing. If one fails, or a kit
+  file can't be written, the sandbox is removed and the error printed, so the same command works
+  again once it's fixed. A failing startup step doesn't remove it (see below). Its files and agent
+  instructions are written once (see [agent instructions](#agent-instructions-from-kits)); a v2
+  kit's `files/workspace` and `${WORKDIR}` are the sandbox's primary workspace, or
+  `/home/agent/workspace` without one.
 - **Every start**: the kits' startup steps run in kit order before the agent, and a failing one
   fails the start (`kit startup exited with code N`). A step marked `background: true` (such as
   the `docker` kit's `dockerd`) is started at its place in that order and keeps running, so later
-  steps can use it; one of those failing is only logged.
+  steps can use it; one of those failing is only logged. A step that doesn't finish (and isn't
+  marked `background`) holds up the start: there's no timeout, as in sbx.
   Output goes to `/var/log/sbx-kit-startup.log` in the sandbox: a `=== dispatcher run … ===` line
   per start, then `ok /etc/smolbento/startup.d/NN-<kit>.sh hook N` for each step that finished (or
   was started, for a background one), and a failing step's output and exit code. If a step fails
   during create, the sandbox is still created, with a warning, and stopped: each later start fails
   until the step succeeds, as in sbx. `kit add` only warns. Startup steps run as `agent` unless
-  they name a user. The shipped `docker` kit comes before your kits, so your startup steps can use
-  Docker.
+  they name a user; a numeric user runs as the account that has that uid. The shipped `docker` kit
+  comes before your kits, so your startup steps can use Docker.
 - **Environment**: a v3 install step gets a clean environment (`PATH`, `HOME`, `USER`, `TERM`, the
   proxy and CA variables, and the variables it lists in `env`). Startup steps and every v2 step
   get the sandbox's full environment, as in sbx.

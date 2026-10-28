@@ -93,15 +93,16 @@ What works as in sbx:
   found` (exit 127). The image user gets your uid so it can write the workspace; a numeric `USER`
   runs as the account that has that uid. A workload whose image declares no `ENTRYPOINT` or `CMD`
   is refused at create and `kit validate`.
-- **Hooks.** Install steps run as root in the image's `WORKDIR`; startup steps and kit files
-  default to `agent`, not the image user. v3 install steps get a clean environment: `PATH`,
-  `HOME`, `USER`, `TERM`, the proxy and CA variables, and the variables the step declares in
-  `env`. v3 startup steps and all v2 steps get the sandbox's full environment.
+- **Hooks.** Install steps run as root in a workload kit's image `WORKDIR` (`/` otherwise);
+  startup steps and kit files default to `agent`, not the image user. v3 install steps get a clean
+  environment: `PATH`, `HOME`, `USER`, `TERM`, the proxy and CA variables, and the variables the
+  step declares in `env`. v3 startup steps and all v2 steps get the sandbox's full environment.
 - **Startup steps** block, in kit order, and a failing one fails the start
   (`kit startup exited with code N`); one marked `background: true` is started at its place and
-  only logged if it fails. The log is `/var/log/sbx-kit-startup.log`. If a startup step fails during
-  create, the sandbox is still created, with sbx's `StartRuntime after create failed` warning, and
-  left stopped; later starts fail until the step succeeds.
+  only logged if it fails. A blocking step that never finishes holds up the start (no timeout).
+  The log is `/var/log/sbx-kit-startup.log`. If a startup step fails during create, the sandbox is
+  still created, with sbx's `StartRuntime after create failed` warning, and left stopped; later
+  starts fail until the step succeeds.
 - **Kit arguments.** An optional argument a kit uses with no value and no default is an error
   (`create-phase kit arg "x" has no resolved value`); `--kit-arg x=` sets it to empty.
   `--kit-arg` without a kit is an error. Unquoted numbers and booleans in `default:` and `enum:`
@@ -109,9 +110,8 @@ What works as in sbx:
 - **Agent context** goes in the agent's file in the parent directory of the workspace path, inside
   the sandbox only (nothing is written on your machine): `CLAUDE.md` for claude, `GEMINI.md` for
   gemini, `AGENTS.md` for the others, or the file a workload kit's own `agent-context` names, with
-  its text appended. A mixin's text goes to `kits-agent-context/<kit>.md` next to that file, which
-  lists it between `<!-- sbx:kits-section start -->` and `<!-- sbx:kits-section end -->`. A mixin's
-  context is dropped, with a warning, when the workload declares no agent file.
+  its text appended. A v2 mixin's text goes to `kits-agent-context/<kit>.md` next to that file,
+  which lists it between `<!-- sbx:kits-section start -->` and `<!-- sbx:kits-section end -->`.
 - **Settings.** `kit.allowedSources` and `kit.allowLocalKits` (see
   [Configuration](configuration.md#settings)).
 
@@ -128,11 +128,12 @@ Differences:
 | `kit inspect`, `kit validate` | `--format`, `--offline` | Neither; `kit inspect --json` gives JSON |
 | The name `docker` | A registry ref (the `docker` image) | The shipped Docker kit; write `docker.io/library/docker` for the image |
 | A ref that is also a local path | Registry ref | A local kit: a ref that names a file or directory relative to the current directory loads it, e.g. `alpine` with an `alpine` directory present. Write `docker.io/library/alpine` for the registry. `docker` is always the shipped kit |
-| Docker in the sandbox | Run by the `-docker` images | The shipped `docker` kit, added to Docker-enabled images before your kits, so their startup steps can use Docker. A failed first start removes the sandbox, as for any kit |
+| Docker in the sandbox | Run by the `-docker` images | The shipped `docker` kit, first before your kits (added to Docker-enabled images, or given with `--kit docker`), so their startup steps can use Docker. Its `dockerd` step runs in the background, so a failing `dockerd` is only logged (`/var/log/dockerd.log`) and doesn't stop the start |
 | v3 mixins on built-in agents | Refused (`no workload kit in the set`) | Allowed |
 | Loopback registries | HTTPS only | Plain HTTP for `localhost`, `127.0.0.0/8` and `::1`, as in Docker |
 | Smolfile kits | None | A Smolfile defines its own workload, so one without a command keeps the shell agent's |
 | Agent context file | Starts with a long platform preamble | No preamble: only kit text and the index |
+| Mixin context when the workload declares no agent file | Dropped silently | Dropped with a warning |
 | Startup log lines | `ok /etc/durable-startup.d/…` | `ok /etc/smolbento/startup.d/NN-<kit>.sh hook N`, one per step and start |
 | Kit settings | Also `kit.requireSignature`, `kit.trustedSigners`, `kit.ignoreTransparencyLog`, `kit.allowExtractedAgents` | Not yet: signatures aren't checked, and built-in agents aren't kits |
 
@@ -141,8 +142,13 @@ Not compared with sbx yet:
 - How arguments with float or unusual literal values (`1.0`, `0x10`, `True`) become strings
   (smolbento writes `1.0` as `1`).
 - A startup step or v2 step run as a non-root user: it keeps the sandbox's environment, except
-  that `HOME`, `USER`, `LOGNAME` and `SHELL` are that user's (through `runuser`, or `su` on images
-  without it).
+  that `HOME`, `USER`, `LOGNAME` and `SHELL` are that user's (through `runuser`, or `su` without
+  `-` on images without `runuser`, which resets them too).
+- A v3 mixin's agent context: smolbento puts it in `kits-agent-context/<kit>.md` and the index, as
+  for a v2 mixin.
+- An optional argument a kit declares but doesn't use, with no value and no default.
+- The agent file's kits index after hand edits, such as a removed or duplicated marker or text
+  added inside the block.
 
 ## Exit codes
 
