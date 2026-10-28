@@ -4,6 +4,7 @@ use std::collections::BTreeSet;
 
 use super::rules::{Allow, Pattern, Resource, is_under, split_port};
 use super::{Decision, Mode, Policy, Rule, presets};
+use crate::kits::builder::BUILDER;
 use crate::smolvm::{AllowList, NetworkSpec};
 
 /// The rules that apply to a sandbox (`None`: the global rules only): every rule but install-phase
@@ -219,9 +220,10 @@ fn user_host_services(policy: &Policy, sandbox: Option<&str>) -> bool {
 
 /// Whether a sandbox created now gets host access: one of the user's own `localhost` allow rules
 /// applies to it, and no deny drops it. It's then created without the `HOST_LOOPBACK` deny and labelled
-/// `sbx.host-access`; only such a sandbox gets the gateway from `localhost` rules.
+/// `sbx.host-access`; only such a sandbox gets the gateway from `localhost` rules. The kit builder
+/// never does: it builds untrusted kits and needs nothing on the host.
 pub fn host_access(policy: &Policy, sandbox: &str) -> bool {
-    user_host_services(policy, Some(sandbox))
+    sandbox != BUILDER && user_host_services(policy, Some(sandbox))
 }
 
 /// Denied at create for every sandbox, whatever the mode, unless it gets host access

@@ -8,6 +8,7 @@ use super::{
     ApprovalCmd, CheckArgs, CheckKind, Ctx, Format, PolicyCmd, PolicyRmKind, RuleArgs, RuleKind,
     Unsupported, confirm, plan, table,
 };
+use crate::kits::builder::BUILDER;
 use crate::policy::log;
 use crate::policy::rules::{Allow, Resource, parse_list};
 use crate::policy::{Decision, Mode, Policy, compile, presets};
@@ -257,11 +258,12 @@ fn localhost_warning(scope: Option<&str>, allows: &[Resource]) -> Option<String>
 }
 
 /// For an allow of `localhost[:PORT]`: the sandboxes in its scope (of `sandboxes`, name and
-/// `sbx.host-access`) created without host access, which never get it.
+/// `sbx.host-access`) created without host access, which never get it. The kit builder never has
+/// it, so recreating it wouldn't help.
 fn without_access_note(scope: Option<&str>, sandboxes: &[(&str, bool)]) -> Option<String> {
     let names: Vec<&str> = sandboxes
         .iter()
-        .filter(|(n, access)| !access && scope.is_none_or(|s| s == *n))
+        .filter(|(n, access)| !access && *n != BUILDER && scope.is_none_or(|s| s == *n))
         .map(|(n, _)| *n)
         .collect();
     (!names.is_empty()).then(|| {
@@ -1738,6 +1740,7 @@ mod tests {
         assert!(without_access_note(Some("b2"), &sbs).is_none());
         assert!(without_access_note(Some("zz"), &sbs).is_none());
         assert!(without_access_note(None, &[("b2", true)]).is_none());
+        assert!(without_access_note(None, &[(BUILDER, false)]).is_none());
     }
 
     #[test]
