@@ -21,13 +21,19 @@ pub fn exec<R: Runner>(ctx: &mut Ctx<R>, a: &ExecArgs) -> Result<i32> {
     let user = if a.privileged {
         "root".to_string()
     } else {
-        a.user.clone().unwrap_or_else(|| "agent".into())
+        // A v3 workload's image user, as sbx; else `agent`.
+        match &a.user {
+            Some(u) => u.clone(),
+            None => sandbox::launch_user(&ctx.vm, &sb).unwrap_or_else(|| "agent".into()),
+        }
     };
+    let mut env = options::parse_env(&a.env, &a.env_file, &ctx.env)?;
+    sandbox::env::session_tz(&ctx.env, a.tty, &mut env);
     let spec = ExecSpec {
         name: sb.machine.clone(),
         user: Some(user),
         workdir: Some(a.workdir.clone().unwrap_or_else(|| sb.workdir())),
-        env: options::parse_env(&a.env, &a.env_file, &ctx.env)?,
+        env,
         interactive: a.interactive,
         tty: a.tty,
         detach: false,
@@ -107,6 +113,56 @@ mod tests {
     }
 
     #[test]
+    fn exec_defaults_to_a_v3_workloads_image_user() {
+        let mut t = test_env(&[]);
+        t.ctx.vm.runner().ok(
+            &["machine", "status"],
+            &machine_json(
+                "sbx-tool-proj",
+                "running",
+                &[
+                    ("sbx.name", "tool-proj"),
+                    ("sbx.workspace", "/w/proj"),
+                    ("sbx.user", "somebody"),
+                ],
+            ),
+        );
+        sbt(&mut t.ctx, &["exec", "tool-proj", "id"]).unwrap();
+        // A numeric image user runs as the account the start recorded for it.
+        t.ctx.vm.runner().ok(
+            &["machine", "status"],
+            &machine_json(
+                "sbx-tool-proj",
+                "running",
+                &[
+                    ("sbx.name", "tool-proj"),
+                    ("sbx.workspace", "/w/proj"),
+                    ("sbx.user", "1001:1001"),
+                ],
+            ),
+        );
+        t.ctx.vm.runner().download(b"somebody\n");
+        sbt(&mut t.ctx, &["exec", "tool-proj", "id"]).unwrap();
+        sbt(&mut t.ctx, &["exec", "-u", "root", "tool-proj", "id"]).unwrap();
+        let calls: Vec<String> = t
+            .ctx
+            .vm
+            .runner()
+            .interactive_calls()
+            .iter()
+            .map(|c| c.join(" "))
+            .collect();
+        assert_eq!(
+            calls,
+            [
+                "machine exec --name sbx-tool-proj -u somebody -w /w/proj -- id",
+                "machine exec --name sbx-tool-proj -u somebody:1001 -w /w/proj -- id",
+                "machine exec --name sbx-tool-proj -u root -w /w/proj -- id",
+            ]
+        );
+    }
+
+    #[test]
     fn exec_privileged_env_and_starts_stopped() {
         let mut t = test_env(&[("HOSTVAR", "h")]);
         t.ctx.vm.runner().ok(
@@ -138,6 +194,23 @@ mod tests {
             t.ctx.vm.runner().interactive_calls()[0].join(" "),
             "machine exec --name sbx-claude-proj -u root -w /tmp -e HOSTVAR=h -- id"
         );
+    }
+
+    #[test]
+    fn exec_passes_the_host_tz_only_with_a_tty() {
+        for (flags, want) in [(&["-it"][..], true), (&["-i"][..], false)] {
+            let mut t = test_env(&[("TZ", "Asia/Kolkata")]);
+            t.ctx.vm.runner().ok(
+                &["machine", "status"],
+                &machine_json("sbx-claude-proj", "running", &[("sbx.name", "claude-proj")]),
+            );
+            let mut args = vec!["exec"];
+            args.extend(flags);
+            args.extend(["claude-proj", "id"]);
+            sbt(&mut t.ctx, &args).unwrap();
+            let line = t.ctx.vm.runner().interactive_calls()[0].join(" ");
+            assert_eq!(line.contains(" -e TZ=Asia/Kolkata"), want, "{line}");
+        }
     }
 
     #[test]

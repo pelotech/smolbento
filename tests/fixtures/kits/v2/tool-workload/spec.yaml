@@ -1,0 +1,7 @@
+# A workload kit the CLI tests pass as the agent argument.
+schemaVersion: "2"
+kind: sandbox
+name: toolbox
+sandbox:
+  image: ghcr.io/example/toolbox:1
+  entrypoint: [/bin/agent, --x]

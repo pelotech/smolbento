@@ -11,6 +11,7 @@ use anyhow::Result;
 use serde::{Deserialize, Serialize};
 
 use crate::config::Paths;
+use crate::kits::model::Rules;
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, clap::ValueEnum)]
 #[serde(rename_all = "kebab-case")]
@@ -60,12 +61,34 @@ pub struct Rule {
     pub path: Option<String>,
 }
 
+/// `created_via` of a kit's runtime rules: `kit:<kit>`.
+pub const KIT_VIA: &str = "kit:";
+/// `created_via` of a kit's install-phase rules: `kit-install:<kit>`. Only the steps that run the
+/// install hooks compile them (`compile::network_with`), so one left behind by an interrupted
+/// create never opens a later start.
+pub const KIT_INSTALL_VIA: &str = "kit-install:";
+
 impl Rule {
     /// The rule's resources, parsed (they were validated when the rule was added).
     pub fn parsed(&self) -> impl Iterator<Item = rules::Resource> + '_ {
         self.resources
             .iter()
             .filter_map(|x| rules::Resource::parse(x).ok())
+    }
+
+    /// Where the rule came from: "kit" when a kit added it (runtime or install phase), else
+    /// "local".
+    pub fn source(&self) -> &'static str {
+        if self.created_via.starts_with(KIT_VIA) || self.is_kit_install() {
+            "kit"
+        } else {
+            "local"
+        }
+    }
+
+    /// An install-phase kit rule.
+    pub fn is_kit_install(&self) -> bool {
+        self.created_via.starts_with(KIT_INSTALL_VIA)
     }
 }
 
@@ -104,6 +127,25 @@ fn normalise_methods(m: &str) -> Option<String> {
     v.sort();
     v.dedup();
     (!v.is_empty()).then(|| v.join(","))
+}
+
+/// What a rule id hashes as its scope: kit rules get their kit too, so they never share an id
+/// with a user rule for the same resources. A kit's install and runtime rules share the scope: an
+/// install rule that is also a runtime rule is the runtime rule, and outlives the install phase.
+fn id_scope(sandbox: &str, created_via: &str) -> String {
+    let kit = created_via
+        .strip_prefix(KIT_VIA)
+        .or_else(|| created_via.strip_prefix(KIT_INSTALL_VIA));
+    match kit {
+        Some(kit) => format!("{sandbox}|kit={kit}"),
+        None => sandbox.to_string(),
+    }
+}
+
+/// The id `policy ls` shows for a sandbox's aggregated kit rule (`kit:<sandbox>`): a stable hash
+/// of the sandbox name, so it never changes as kits come and go.
+pub fn kit_rule_id(sandbox: &str) -> String {
+    rule_id(&format!("kit:{sandbox}"), Decision::Allow, &[], None, None)
 }
 
 /// A short, stable id from the rule's content, qualifiers included (FNV-1a).
@@ -172,7 +214,7 @@ impl Policy {
         let resources: Vec<String> = parsed.into_iter().map(|r| r.raw).collect();
         let method = method.as_deref().and_then(normalise_methods);
         let id = rule_id(
-            sandbox.unwrap_or("global"),
+            &id_scope(sandbox.unwrap_or("global"), created_via),
             decision,
             &resources,
             method.as_deref(),
@@ -193,7 +235,78 @@ impl Policy {
         Ok(id)
     }
 
-    /// Removes rules by id, or one resource from every rule listing it (dropping emptied rules).
+    /// Adds a kit's rules for `sandbox` with `created_via = "kit:<kit>"`, or for its install-phase
+    /// rules (`install`) `"kit-install:<kit>"`. Returns
+    /// `(all, added)`: the ids of every rule now in place, and the subset this call created.
+    /// Adding the same rules again is a no-op, so a caller rolling back removes only `added`
+    /// (via `remove_rules_by_ids`), never a rule that was there before.
+    /// A rule carries one path, so each path of an entry gets its own rule.
+    pub fn add_kit_rules(
+        &mut self,
+        sandbox: &str,
+        kit: &str,
+        rules: &Rules,
+        install: bool,
+    ) -> Result<(Vec<String>, Vec<String>)> {
+        let via = format!("{}{kit}", if install { KIT_INSTALL_VIA } else { KIT_VIA });
+        let (mut all, mut added) = (Vec::new(), Vec::new());
+        for (decision, list) in [
+            (Decision::Allow, &rules.allow),
+            (Decision::Deny, &rules.deny),
+        ] {
+            for n in list {
+                let method = (!n.methods.is_empty()).then(|| n.methods.join(","));
+                let paths: Vec<Option<String>> = if n.paths.is_empty() {
+                    vec![None]
+                } else {
+                    n.paths.iter().cloned().map(Some).collect()
+                };
+                for path in paths {
+                    let before: Vec<String> = self
+                        .rules_mut(Some(sandbox))
+                        .iter()
+                        .map(|r| r.id.clone())
+                        .collect();
+                    let id = self.add_rule(
+                        Some(sandbox),
+                        decision,
+                        &n.host,
+                        &via,
+                        method.clone(),
+                        path,
+                    )?;
+                    // A runtime rule that an interrupted create left as an install rule becomes
+                    // a runtime rule again.
+                    if !install
+                        && let Some(r) = self
+                            .rules_mut(Some(sandbox))
+                            .iter_mut()
+                            .find(|r| r.id == id && r.is_kit_install())
+                    {
+                        r.created_via = via.clone();
+                    }
+                    if !before.contains(&id) && !added.contains(&id) {
+                        added.push(id.clone());
+                    }
+                    if !all.contains(&id) {
+                        all.push(id);
+                    }
+                }
+            }
+        }
+        Ok((all, added))
+    }
+
+    /// Removes the sandbox's kit rules (runtime or install phase) with these ids; a user's rule
+    /// with one of them stays.
+    pub fn remove_rules_by_ids(&mut self, sandbox: &str, ids: &[String]) {
+        self.rules_mut(Some(sandbox))
+            .retain(|r| !(ids.contains(&r.id) && r.source() == "kit"));
+        self.prune(sandbox);
+    }
+
+    /// Removes rules by id, or one resource from every non-kit rule listing it (dropping emptied
+    /// rules).
     pub fn remove_rules(
         &mut self,
         sandbox: Option<&str>,
@@ -206,7 +319,8 @@ impl Policy {
             list.retain(|r| r.id != id);
         }
         if let Some(res) = resource {
-            for r in list.iter_mut() {
+            // Kit rules go with their kit, never by resource.
+            for r in list.iter_mut().filter(|r| r.source() != "kit") {
                 r.resources.retain(|x| !x.eq_ignore_ascii_case(res));
             }
             list.retain(|r| !r.resources.is_empty());
@@ -216,6 +330,41 @@ impl Policy {
             self.prune(s);
         }
         before != after
+    }
+
+    /// The sandbox whose kit rule `policy rm` was pointed at, by a per-kit id, the aggregated
+    /// `kit:<sandbox>` id, or a resource only kit rules list. Kit rules aren't removed that way.
+    pub fn kit_rule_target(
+        &self,
+        sandbox: Option<&str>,
+        id: Option<&str>,
+        resource: Option<&str>,
+    ) -> Option<String> {
+        let sandboxes = self
+            .sandboxes
+            .iter()
+            .filter(|(name, _)| sandbox.is_none_or(|s| s == name.as_str()));
+        for (name, sp) in sandboxes {
+            if let Some(id) = id
+                && (id == kit_rule_id(name)
+                    || id == kit_rule_id(&format!("{name}|deny"))
+                    || sp.rules.iter().any(|r| r.id == id && r.source() == "kit"))
+            {
+                return Some(name.clone());
+            }
+            if let (None, Some(res)) = (id, resource) {
+                let lists = |kit: bool| {
+                    sp.rules.iter().any(|r| {
+                        (r.source() == "kit") == kit
+                            && r.resources.iter().any(|x| x.eq_ignore_ascii_case(res))
+                    })
+                };
+                if sandbox.is_some() && lists(true) && !lists(false) {
+                    return Some(name.clone());
+                }
+            }
+        }
+        None
     }
 
     /// Drops a sandbox's entry once it holds nothing.
@@ -270,9 +419,11 @@ impl Policy {
         let Some(mut entry) = self.sandboxes.get(from).cloned() else {
             return;
         };
+        // Install-phase rules belong to `from`'s (unfinished) create, not to the copy.
+        entry.rules.retain(|r| !r.is_kit_install());
         for r in &mut entry.rules {
             r.id = rule_id(
-                to,
+                &id_scope(to, &r.created_via),
                 r.decision,
                 &r.resources,
                 r.method.as_deref(),
@@ -572,5 +723,151 @@ mod tests {
         p.sandboxes.entry("s1".into()).or_default().deny_network = true;
         assert!(!p.remove_rules(Some("s1"), Some("r-nope"), None));
         assert!(p.sandboxes["s1"].deny_network);
+    }
+
+    fn net(host: &str, methods: &[&str], paths: &[&str]) -> crate::kits::model::NetRule {
+        crate::kits::model::NetRule {
+            host: host.into(),
+            methods: methods.iter().map(|s| s.to_string()).collect(),
+            paths: paths.iter().map(|s| s.to_string()).collect(),
+        }
+    }
+
+    #[test]
+    fn kit_rules_are_tagged_distinct_and_idempotent() {
+        let mut p = Policy::default();
+        let user = p
+            .add_rule(Some("sb"), Decision::Allow, "a.com", "added", None, None)
+            .unwrap();
+        let rules = Rules {
+            allow: vec![
+                net("a.com", &[], &[]),
+                net("b.com", &["get", "post"], &["/x", "/y"]),
+            ],
+            deny: vec![net("bad.com", &[], &[])],
+        };
+        let (all, added) = p.add_kit_rules("sb", "gh", &rules, false).unwrap();
+        // a.com, b.com x 2 paths, bad.com
+        assert_eq!((all.len(), added.len()), (4, 4));
+        assert!(!all.contains(&user), "kit id differs from the user's rule");
+        let sb = &p.sandboxes["sb"].rules;
+        assert_eq!(sb.len(), 5);
+        assert!(
+            sb.iter()
+                .filter(|r| r.source() == "kit")
+                .all(|r| r.created_via == "kit:gh")
+        );
+        assert_eq!(sb[0].source(), "local");
+        let b = sb.iter().find(|r| r.path.as_deref() == Some("/y")).unwrap();
+        assert_eq!(b.method.as_deref(), Some("GET,POST"));
+
+        // Again: same ids, nothing new, no duplicates.
+        let (all2, added2) = p.add_kit_rules("sb", "gh", &rules, false).unwrap();
+        assert_eq!((all2, added2.len()), (all.clone(), 0));
+        assert_eq!(p.sandboxes["sb"].rules.len(), 5);
+
+        p.remove_rules_by_ids("sb", &all);
+        assert_eq!(p.sandboxes["sb"].rules.len(), 1);
+        assert_eq!(p.sandboxes["sb"].rules[0].id, user);
+        // Only kit rules go by id this way.
+        p.remove_rules_by_ids("sb", std::slice::from_ref(&user));
+        assert_eq!(p.sandboxes["sb"].rules[0].id, user);
+    }
+
+    #[test]
+    fn install_rules_apply_only_when_named_and_are_not_forked() {
+        let mut p = Policy {
+            mode: Some(Mode::DenyAll),
+            ..Default::default()
+        };
+        let rules = |h: &str| Rules {
+            allow: vec![net(h, &[], &[])],
+            deny: vec![],
+        };
+        p.add_kit_rules("sb", "gh", &rules("run.kit.com"), false)
+            .unwrap();
+        let (_, install) = p
+            .add_kit_rules("sb", "gh", &rules("pkg.kit.com"), true)
+            .unwrap();
+        // The same host for install as for runtime is the runtime rule.
+        let (_, dup) = p
+            .add_kit_rules("sb", "gh", &rules("run.kit.com"), true)
+            .unwrap();
+        assert!(dup.is_empty());
+        let r = p.find(&install[0]).unwrap().0;
+        assert_eq!(
+            (r.created_via.as_str(), r.source()),
+            ("kit-install:gh", "kit")
+        );
+        let plain = format!("{:?}", compile::network(&p, "sb", &[]));
+        assert!(
+            plain.contains("run.kit.com") && !plain.contains("pkg.kit.com"),
+            "{plain}"
+        );
+        assert!(!compile::check(&p, Some("sb"), &[], "pkg.kit.com").allowed);
+        let with = format!("{:?}", compile::network_with(&p, "sb", &[], &install));
+        assert!(with.contains("pkg.kit.com"), "{with}");
+        p.copy_sandbox("sb", "fork");
+        assert!(
+            p.sandboxes["fork"]
+                .rules
+                .iter()
+                .all(|r| !r.is_kit_install())
+        );
+        // A runtime rule an interrupted create left as an install rule is a runtime one again.
+        let (_, again) = p
+            .add_kit_rules("sb", "gh", &rules("pkg.kit.com"), false)
+            .unwrap();
+        assert!(again.is_empty());
+        assert_eq!(p.find(&install[0]).unwrap().0.created_via, "kit:gh");
+        p.forget_sandbox("sb");
+        assert!(!p.sandboxes.contains_key("sb"));
+    }
+
+    #[test]
+    fn rm_by_resource_leaves_kit_rules_alone() {
+        let mut p = Policy::default();
+        p.add_rule(Some("sb"), Decision::Allow, "x.com", "added", None, None)
+            .unwrap();
+        let rules = Rules {
+            allow: vec![net("x.com", &[], &[])],
+            deny: vec![],
+        };
+        p.add_kit_rules("sb", "gh", &rules, false).unwrap();
+        assert!(p.kit_rule_target(Some("sb"), None, Some("x.com")).is_none());
+        assert!(p.remove_rules(Some("sb"), None, Some("x.com")));
+        let left: Vec<_> = p.rules_for(Some("sb")).collect();
+        assert_eq!(left.len(), 1);
+        assert_eq!(left[0].0.created_via, "kit:gh");
+        assert_eq!(left[0].0.resources, ["x.com"]);
+    }
+
+    #[test]
+    fn kit_rules_apply_to_their_sandbox_and_a_user_deny_wins() {
+        let mut p = Policy {
+            mode: Some(Mode::DenyAll),
+            ..Default::default()
+        };
+        let rules = Rules {
+            allow: vec![net("api.kit.com", &[], &[])],
+            deny: vec![],
+        };
+        p.add_kit_rules("sb", "gh", &rules, false).unwrap();
+        let spec = |sb: &str| format!("{:?}", compile::network(&p, sb, &[]));
+        assert!(spec("sb").contains("api.kit.com"));
+        assert!(!spec("other").contains("api.kit.com"));
+        assert!(compile::check(&p, Some("sb"), &[], "api.kit.com").allowed);
+        assert!(!compile::check(&p, Some("other"), &[], "api.kit.com").allowed);
+
+        p.add_rule(
+            Some("sb"),
+            Decision::Deny,
+            "api.kit.com",
+            "added",
+            None,
+            None,
+        )
+        .unwrap();
+        assert!(!compile::check(&p, Some("sb"), &[], "api.kit.com").allowed);
     }
 }

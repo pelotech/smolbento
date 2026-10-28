@@ -15,9 +15,9 @@
       extractVersionTemplate: '^v(?<version>.*)$',
     },
     {
-      // pinned agent template images; tags look like claude-code-docker-0.10.0
+      // pinned agent and kit builder template images; tags look like claude-code-docker-0.10.0
       customType: 'regex',
-      managerFilePatterns: ['/^src/agents\\.rs$/'],
+      managerFilePatterns: ['/^src/agents\\.rs$/', '/^src/kits/builder\\.rs$/'],
       matchStrings: ['"(?<depName>docker/sandbox-templates):(?<currentValue>[a-z0-9.-]+)"'],
       datasourceTemplate: 'docker',
       versioningTemplate: 'regex:^(?<compatibility>[a-z-]+)-(?<major>\\d+)\\.(?<minor>\\d+)\\.(?<patch>\\d+)$',

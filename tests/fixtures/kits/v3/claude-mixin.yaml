@@ -1,0 +1,275 @@
+# syntax=docker/sandbox-kit:3
+# The Claude Code agent as a MIXIN: the same declarations as the
+# standalone workload kit (examples/claude), minus what only the kit that
+# owns the environment can carry — the entrypoint (the base workload's
+# stays; run `claude` in the shell), and agent-sessions (the session
+# control surface belongs to the workload).
+schemaVersion: "3"
+displayName: Claude Code (mixin)
+author: "Docker, Inc."
+description: >-
+  The Claude Code CLI as a mixin — the native binary in an overlay, with
+  the Anthropic credential (API key or claude.ai OAuth), session-state
+  volumes, and the hooks the agent needs. Layer it onto a shell base and
+  run `claude`.
+sourceUrl: https://github.com/anthropics/claude-code
+
+kind: mixin
+
+args:
+  version:
+    default: "2.1.311"
+    pattern: '^[0-9]+\.[0-9]+\.[0-9]+$'
+    description: Claude Code release to install
+    buildArg: CLAUDE_VERSION
+  # Model selection, resolved at create so one published kit serves every
+  # preference: `--kit-arg model=… reasoningEffort=…`, or a kits[] entry's
+  # args in sbxenv.yaml. Empty leaves Claude Code's own default in force.
+  # Both are also exported into the sandbox environment, so a shell inside
+  # can read what the session was created with.
+  model:
+    default: ""
+    pattern: '^[A-Za-z0-9._-]*$'
+    description: Claude model to use (settings.json `model`); empty keeps the CLI default
+    env: CLAUDE_MODEL
+  reasoningEffort:
+    default: ""
+    enum: ["", low, medium, high, xhigh, max, auto]
+    description: Effort level (settings.json `effortLevel`); empty keeps the CLI default
+    env: CLAUDE_REASONING_EFFORT
+
+provides: ["claude@${{ kit.args.version }}"]
+
+capabilities:
+  # The agent's own egress rides with the kit that ships the agent: the
+  # base grants nothing for services it doesn't carry.
+  - type: com.docker.sandbox/network-policy@1
+    config:
+      runtime:
+        allow:
+          - api.anthropic.com:443
+          - platform.claude.com:443
+          - downloads.claude.ai:443
+          - claude.com:443
+          - mcp-proxy.anthropic.com:443
+          # /remote-control and /teleport relay: the daemon keeps a
+          # WebSocket open here so claude.ai and the mobile app can
+          # drive this session.
+          - bridge.claudeusercontent.com:443
+
+  # Declaring both apiKey and oauth means "whichever the host has bound".
+  # Optional: claude runs without any binding (it falls back to /login),
+  # and OAuth records are never literal wire values, so required would
+  # warn spuriously on exactly the healthy OAuth setup.
+  - type: com.docker.sandbox/credential@1
+    optional: true
+    description: Anthropic API access (API key or claude.ai OAuth)
+    config:
+      service: anthropic
+      phase: runtime
+      # No proxyManaged: claude derives its mode from the surfaced
+      # credential state (the settings.json hook below), and a phantom
+      # ANTHROPIC_API_KEY would falsely signal key auth on hosts with no
+      # credential at all.
+      apiKey:
+        name: ANTHROPIC_API_KEY
+        inject:
+          - {domain: api.anthropic.com, header: x-api-key, format: "%s"}
+          - {domain: mcp-proxy.anthropic.com, header: x-api-key, format: "%s"}
+      oauth:
+        tokenEndpoint: {host: platform.claude.com, path: /v1/oauth/token}
+        sentinels:
+          accessToken: sk-ant-oat01-proxy-managed
+          refreshToken: sk-ant-ort01-proxy-managed
+        credentialFile:
+          path: ~/.claude/.credentials.json
+          structure:
+            claudeAiOauth:
+              accessToken: "{{.AccessToken}}"
+              refreshToken: "{{.RefreshToken}}"
+              expiresAt: "{{.ExpiresAt}}"
+              scopes: "{{.Scopes}}"
+            primaryApiKey: "{{.PrimaryApiKey}}"
+
+  # Session state persists across container recreation; subdirectories
+  # rather than all of ~/.claude/, so kit-managed files (settings.json,
+  # .credentials.json) keep coming from the hooks on every create. Every
+  # volume sets a size: sbx formats an unsized kit volume at 512 MiB, and
+  # a path that outgrows it fails with ENOSPC mid-session.
+  - type: com.docker.sandbox/volume@1
+    description: Conversation history; grows without bound, gets the headroom
+    config: {path: /home/agent/.claude/projects, size: 2g}
+  - type: com.docker.sandbox/volume@1
+    description: Per-session state; load-bearing for `claude -c`
+    config: {path: /home/agent/.claude/sessions, size: 512m}
+  - type: com.docker.sandbox/volume@1
+    description: TodoWrite state
+    config: {path: /home/agent/.claude/todos, size: 512m}
+  - type: com.docker.sandbox/volume@1
+    description: Bash state snapshots across sessions
+    config: {path: /home/agent/.claude/shell-snapshots, size: 512m}
+  - type: com.docker.sandbox/volume@1
+    description: Local feature-flag cache
+    config: {path: /home/agent/.claude/statsig, size: 512m}
+
+  - type: com.docker.sandbox/lifecycle@1
+    config:
+      install:
+        # ~/.claude.json carries the bypass/onboarding/trust flags and is
+        # credential-independent. Seeded as root and chowned: a base image
+        # may ship its own ~/.claude.json an agent-uid writer cannot
+        # replace. Content is deterministic for a WORKSPACE_DIR, so the
+        # rewrite is idempotent.
+        - command: |
+            set -e
+            ws="${WORKSPACE_DIR:-/}"
+            esc=$(printf '%s' "$ws" | sed 's/\\/\\\\/g; s/"/\\"/g; s/\t/\\t/g; s/\r/\\r/g')
+            projects="\"/\": { \"hasTrustDialogAccepted\": true }"
+            [ "$ws" = "/" ] || projects="$projects, \"$esc\": { \"hasTrustDialogAccepted\": true }"
+            printf '%s\n' "{
+              \"bypassPermissionsModeAccepted\": true,
+              \"hasCompletedOnboarding\": true,
+              \"projects\": { $projects }
+            }" > /home/agent/.claude.json
+            chown agent:agent /home/agent/.claude.json
+          user: "0"
+          env: [WORKSPACE_DIR]
+          description: Seed Claude bypass and trust flags
+
+        # Volumes and agent-skills mount under ~/.claude/ before install
+        # runs, so the runtime creates that parent root-owned when the
+        # image (shell base + mixin overlay) does not ship it. Re-own
+        # here so the agent-uid settings seed below can write into it.
+        - command: mkdir -p /home/agent/.claude && chown agent:agent /home/agent/.claude
+          user: "0"
+          description: Ensure ~/.claude is agent-owned before settings seed
+
+        # Seed ~/.claude/settings.json from the auth mode the engine
+        # surfaces. apiKeyHelper is included only when a credential
+        # resolved; without it Claude Code prompts for /login. Rewritten
+        # unconditionally on every (re)create so a mode change is picked
+        # up; deterministic from the mode, so idempotent.
+        - command: |
+            set -e
+            HELPER=''
+            if [ "${SBX_CRED_ANTHROPIC_MODE:-none}" != none ]; then
+              HELPER='  "apiKeyHelper": "echo proxy-managed",
+            '
+            fi
+            # Model selection from the create-phase args. The args'
+            # patterns admit no quote or backslash, so the expanded
+            # value is safe inside the JSON string. effortLevel accepts
+            # low/medium/high/xhigh; max and auto persist only through
+            # CLAUDE_CODE_EFFORT_LEVEL (settings.json rejects them).
+            model='${{ kit.args.model }}'
+            effort='${{ kit.args.reasoningEffort }}'
+            MODEL=''
+            EFFORT=''
+            ENV_BLOCK=''
+            [ -z "$model" ] || MODEL="  \"model\": \"$model\",
+            "
+            case "$effort" in
+              '') ;;
+              max|auto)
+                ENV_BLOCK="  \"env\": { \"CLAUDE_CODE_EFFORT_LEVEL\": \"$effort\" },
+            "
+                ;;
+              *)
+                EFFORT="  \"effortLevel\": \"$effort\",
+            "
+                ;;
+            esac
+            # Lifecycle hooks for Narwhal (see /usr/local/bin/sbx-claude-hook):
+            # Stop and StopFailure report a finished turn, Notification the
+            # moments Claude waits on the user, UserPromptSubmit the prompt
+            # that names the conversation (Claude Code lists sessions by id
+            # only). The script never fails, never writes stdout and runs
+            # async, so a session without the desktop app sees no delay and
+            # no hook error.
+            HOOK='{ "type": "command", "command": "/usr/local/bin/sbx-claude-hook claude", "timeout": 10, "async": true }'
+            HOOKS="  \"hooks\": {
+                \"Stop\": [ { \"hooks\": [ $HOOK ] } ],
+                \"StopFailure\": [ { \"hooks\": [ $HOOK ] } ],
+                \"UserPromptSubmit\": [ { \"hooks\": [ $HOOK ] } ],
+                \"Notification\": [ { \"matcher\": \"permission_prompt|idle_prompt|elicitation_dialog|elicitation_url_dialog|agent_needs_input\", \"hooks\": [ $HOOK ] } ]
+              },
+            "
+            # The statusLine command is the only place Claude Code exposes
+            # the live session (model, context window, cost, lines changed);
+            # sbx-agent-hook forwards it to Narwhal's status bar and prints
+            # nothing, so no status line is drawn in the terminal. A mixin that
+            # sets its own statusLine (e.g. claude-sbx-statusline) replaces
+            # this one and the app's session view goes quiet for that sandbox.
+            STATUSLINE="  \"statusLine\": { \"type\": \"command\", \"command\": \"/usr/local/bin/sbx-claude-hook claude-status\" },
+            "
+            printf '%s' "{
+              \"themeId\": 1,
+              \"alwaysThinkingEnabled\": true,
+            ${HELPER}${MODEL}${EFFORT}${ENV_BLOCK}${HOOKS}${STATUSLINE}  \"permissions\": { \"defaultMode\": \"bypassPermissions\" },
+              \"bypassPermissionsModeAccepted\": true,
+              \"skipDangerousModePermissionPrompt\": true
+            }
+            " > /home/agent/.claude/settings.json
+          user: agent
+          env: [SBX_CRED_ANTHROPIC_MODE]
+          description: Seed Claude settings.json from the surfaced auth mode
+
+        # Gateway-first MCP registration, at install time so it is
+        # race-free. `claude mcp add` is not an idempotent rewrite —
+        # re-adding exits 1 — so `|| true` keeps a carried-forward entry
+        # from failing the create. The sentinel name is not a credential;
+        # the proxy substitutes the real token at request time.
+        - command: &register-mcp-gateway |
+            set -e
+            [ -n "$MCP_GATEWAY_URL" ] || exit 0
+            claude mcp add mcp-gateway "$MCP_GATEWAY_URL" \
+              --transport http \
+              --scope user \
+              --header "Authorization: Bearer $MCP_SENTINEL_TOKEN_NAME" || true
+          user: agent
+          env: [MCP_GATEWAY_URL, MCP_SENTINEL_TOKEN_NAME]
+          description: Register the sandbox MCP gateway at install
+      startup:
+        # Block volumes mount with a root-owned root and the entrypoint
+        # runs as the agent user, so root re-owns the mount roots here,
+        # after mount and before agent activity.
+        - command: [sh, -c, "chown -R agent:agent /home/agent/.claude/projects /home/agent/.claude/sessions /home/agent/.claude/todos /home/agent/.claude/shell-snapshots /home/agent/.claude/statsig 2>/dev/null || true"]
+          user: "0"
+          description: Re-own claude session-state volume mount roots to agent
+
+        # MCP registration fallback for the rare create where the
+        # install-time seed could not run. Non-destructive on purpose:
+        # startup hooks run concurrently with the live session, so no
+        # remove-then-add.
+        - command: *register-mcp-gateway
+          user: agent
+          env: [MCP_GATEWAY_URL, MCP_SENTINEL_TOKEN_NAME]
+          description: Register the sandbox MCP gateway (startup fallback)
+
+  # Where claude reads shared skills, so the host's store reaches it in
+  # the mixin shape too.
+  # The runtime also exposes selected agent-skill@1 bundles here, even
+  # when host sharing is off or the user has no host skills.
+  - type: com.docker.sandbox/agent-skills@1
+    optional: true
+    config:
+      path: /home/agent/.claude/skills
+
+  # Offer both versions during the runtime rollout; select one.
+  - type: com.docker.sandbox/agent-context@1
+    optional: true
+    config: &agent-context
+      filename: CLAUDE.md
+      directory: /home/agent/.claude
+      content: |
+        Claude Code is installed at `/usr/local/bin/claude`. Run `claude` for an
+        interactive session or `claude -p "<prompt>"` for a one-shot answer.
+
+        Authentication is proxy-mediated: `ANTHROPIC_API_KEY` in this container is
+        a sentinel — the sandbox proxy substitutes the real key bound on the host
+        (`sbx secret set anthropic`) on requests to Anthropic's APIs. Without a
+        bound key, `claude` will ask you to log in.
+
+  - type: com.docker.sandbox/agent-context@2
+    optional: true
+    config: *agent-context

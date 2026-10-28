@@ -6,12 +6,12 @@ use std::path::Path;
 
 use anyhow::{Context, Result, bail};
 
-use super::lifecycle::{build_request, resolve_clone};
+use super::lifecycle::{has_kit_flags, kit_plan, kit_target, resolve_clone};
 use super::plan;
 use super::{Ctx, RunArgs, Unsupported};
 use crate::agents;
 use crate::sandbox::{self, Sandbox, session};
-use crate::smolvm::{ExecSpec, Runner};
+use crate::smolvm::{ExecSpec, Runner, SmolvmError};
 use crate::workspace::clone;
 
 /// Flag checks that need no smolvm; `dispatch` runs them before its smolvm gate.
@@ -30,24 +30,43 @@ pub fn check_args(a: &RunArgs) -> Result<()> {
 }
 
 pub fn run<R: Runner>(ctx: &mut Ctx<R>, a: &RunArgs) -> Result<i32> {
+    super::lifecycle::check_kit_args(&a.targets, &a.opts)?;
     let existing = match &a.opts.name {
         Some(n) => sandbox::find(&ctx.vm, n)?,
         None => None,
     };
+    let kits_ignored = |sb: &Sandbox| {
+        if let Some(w) = ignored_kits_warning(a, sb.name()) {
+            eprintln!("{w}");
+        }
+    };
     let (mut sb, created) = match existing {
-        Some(sb) => (sb, false),
+        Some(sb) => {
+            kits_ignored(&sb);
+            (sb, false)
+        }
         None => {
-            let Some((agent, paths)) = a.targets.split_first() else {
+            if a.targets.is_empty() {
                 bail!(
                     "specify an agent (e.g. `sbt run claude`) or the --name of an existing sandbox"
                 );
-            };
-            let mut req = build_request(ctx, agent, paths, &a.opts, true)?;
+            }
+            // The name first: attaching to an existing sandbox loads no kits.
+            let (mut req, workload) = kit_target(ctx, &a.targets, &a.opts, true)?;
             match sandbox::find(&ctx.vm, &req.name)? {
-                Some(sb) => (sb, false),
+                Some(sb) => {
+                    kits_ignored(&sb);
+                    (sb, false)
+                }
                 None => {
+                    let kits = workload
+                        .map(|w| kit_plan(ctx, &mut req, w, &a.opts))
+                        .transpose()?;
                     resolve_clone(&mut req, &a.opts)?;
-                    (plan::create(ctx, &mut req, &a.opts.deny_network)?, true)
+                    (
+                        plan::create(ctx, &mut req, &a.opts.deny_network, kits.as_ref())?,
+                        true,
+                    )
                 }
             }
         }
@@ -69,25 +88,51 @@ pub fn run<R: Runner>(ctx: &mut Ctx<R>, a: &RunArgs) -> Result<i32> {
         return Ok(0);
     }
 
-    let agent = agents::find(&sb.meta.agent).with_context(|| {
-        format!(
-            "sandbox '{}' has no known agent ('{}')",
-            sb.name(),
-            sb.meta.agent
-        )
-    })?;
-    let spec = ExecSpec {
+    // A workload kit's command, else the preset's.
+    let command: Vec<String> = match &sb.meta.command {
+        Some(c) => c.clone(),
+        None => agents::find(&sb.meta.agent)
+            .with_context(|| {
+                format!(
+                    "sandbox '{}' has no known agent ('{}')",
+                    sb.name(),
+                    sb.meta.agent
+                )
+            })?
+            .command
+            .iter()
+            .map(|s| s.to_string())
+            .collect(),
+    };
+    let mut spec = ExecSpec {
         name: sb.machine.clone(),
         user: Some("agent".into()),
         workdir: Some(sb.workdir()),
         interactive: true,
         tty: ctx.stdin_tty,
-        cmd: agents::command_with_args(agent.command, &a.agent_args),
+        cmd: agents::command_with_args(&command, &a.agent_args),
         ..Default::default()
     };
+    sandbox::env::session_tz(&ctx.env, spec.tty, &mut spec.env);
+    // A v3 workload runs as its image user, through bash so the image's BASH_ENV is sourced.
+    let image_user = sandbox::launch_user(&ctx.vm, &sb);
+    if let Some(user) = &image_user {
+        spec.user = Some(user.clone());
+        spec.cmd = [BASH, "-c", "exec -- \"$@\"", "bash"]
+            .into_iter()
+            .map(String::from)
+            .chain(spec.cmd)
+            .collect();
+    }
     let code = {
         let _session = session::Session::register(&sessions, sb.name())?;
-        ctx.vm.exec(&spec)?
+        if image_user.is_some() && !has_bash(ctx, &sb)? {
+            // sbx's error for such an image, and the code its agent exits with.
+            eprintln!("executable file '{BASH}' not found");
+            127
+        } else {
+            ctx.vm.exec(&spec)?
+        }
     };
 
     // Fetch before `--rm` deletes the sandbox, and while it still runs for `_upload-pack`.
@@ -104,12 +149,42 @@ pub fn run<R: Runner>(ctx: &mut Ctx<R>, a: &RunArgs) -> Result<i32> {
             Ok(()) => session::clear(&sessions, sb.name()),
             Err(e) => eprintln!("warning: removing sandbox {}: {e:#}", sb.name()),
         }
-    } else if session::idle(&sessions, sb.name())
+    } else if !sb.meta.long_running
+        && session::idle(&sessions, sb.name())
         && let Err(e) = ctx.vm.stop(&sb.machine)
     {
         eprintln!("warning: stopping sandbox {}: {e:#}", sb.name());
     }
     Ok(code)
+}
+
+const BASH: &str = "/bin/bash";
+
+/// Whether the guest can run `/bin/bash`, which a v3 workload's agent is launched through.
+/// Runs bash itself, so the image needs no `/bin/sh` for the check. An error smolvm reports (the
+/// machine gone, say) is that error, not a missing bash.
+fn has_bash<R: Runner>(ctx: &Ctx<R>, sb: &Sandbox) -> Result<bool> {
+    let out = ctx.vm.exec_output(&ExecSpec {
+        name: sb.machine.clone(),
+        cmd: vec![BASH.into(), "-c".into(), ":".into()],
+        ..Default::default()
+    })?;
+    if out.code == 0 {
+        return Ok(true);
+    }
+    match SmolvmError::from_json(&out) {
+        Some(e) => Err(e.into()),
+        None => Ok(false),
+    }
+}
+
+/// The warning for kits given to `run` of a sandbox that already exists: kit flags, or a workload
+/// kit as the target.
+fn ignored_kits_warning(a: &RunArgs, name: &str) -> Option<String> {
+    let kit_target = a.targets.first().is_some_and(|t| agents::find(t).is_none());
+    (has_kit_flags(&a.opts) || kit_target).then(|| {
+        format!("warning: kits only apply when a sandbox is created; {name} already exists")
+    })
 }
 
 /// A bad setting value only skips the fetch: the stop or `--rm` and the agent's status still apply.
@@ -371,8 +446,8 @@ mod tests {
         let mut t = test_env(&[]);
         t.ctx.vm.runner().ok(&["--version"], "smolvm 1.0.0\n");
         for args in [
-            &["run", "claude", "--kit", "x"][..],
-            &["create", "claude", "--kit", "x"][..],
+            &["run", "claude", "--skills", "off"][..],
+            &["create", "claude", "--skills", "off"][..],
             &["run", "claude", "--new"][..],
         ] {
             let err = sbt(&mut t.ctx, args).unwrap_err();
@@ -473,6 +548,335 @@ mod tests {
                 .unwrap();
             assert_eq!(super::fetch_on_exit(&t.ctx, &sb), want);
         }
+    }
+
+    fn kit_sandbox(t: &TestEnv, long_running: bool) {
+        let ws = t.ctx.cwd.display().to_string();
+        let mut labels = vec![
+            ("sbx.name", "toolbox-proj"),
+            ("sbx.agent", "toolbox"),
+            ("sbx.workspace", ws.as_str()),
+            ("sbx.command", r#"["/bin/agent","--x"]"#),
+        ];
+        if long_running {
+            labels.push(("sbx.long-running", "true"));
+        }
+        t.ctx.vm.runner().ok(
+            &["machine", "status"],
+            &machine_json("sbx-toolbox-proj", "running", &labels),
+        );
+        t.ctx.vm.runner().interactive_exit(0);
+    }
+
+    #[test]
+    fn run_launches_a_kit_sandboxs_command() {
+        let mut t = test_env(&[]);
+        kit_sandbox(&t, false);
+        sbt(
+            &mut t.ctx,
+            &["run", "--name", "toolbox-proj", "--", "--y", "z"],
+        )
+        .unwrap();
+        let ws = t.ctx.cwd.display().to_string();
+        assert_eq!(
+            t.ctx.vm.runner().interactive_calls()[0].join(" "),
+            format!(
+                "machine exec --name sbx-toolbox-proj -u agent -w {ws} -i -- /bin/agent --x --y z"
+            )
+        );
+        assert_eq!(
+            t.ctx.vm.runner().call_lines().last().unwrap(),
+            "machine stop -n sbx-toolbox-proj"
+        );
+    }
+
+    /// A v3 workload kit's sandbox: its image user is recorded.
+    fn image_user_sandbox(t: &TestEnv) {
+        let ws = t.ctx.cwd.display().to_string();
+        t.ctx.vm.runner().ok(
+            &["machine", "status"],
+            &machine_json(
+                "sbx-toolbox-proj",
+                "running",
+                &[
+                    ("sbx.name", "toolbox-proj"),
+                    ("sbx.agent", "toolbox"),
+                    ("sbx.workspace", ws.as_str()),
+                    ("sbx.command", r#"["/bin/agent","--x"]"#),
+                    ("sbx.user", "somebody"),
+                ],
+            ),
+        );
+        t.ctx.vm.runner().interactive_exit(0);
+    }
+
+    #[test]
+    fn run_launches_a_v3_workload_as_its_image_user_under_bash() {
+        let mut t = test_env(&[]);
+        image_user_sandbox(&t);
+        sbt(
+            &mut t.ctx,
+            &["run", "--name", "toolbox-proj", "--", "--y", "z"],
+        )
+        .unwrap();
+        let ws = t.ctx.cwd.display().to_string();
+        assert_eq!(
+            t.ctx.vm.runner().interactive_calls()[0].join(" "),
+            format!(
+                "machine exec --name sbx-toolbox-proj -u somebody -w {ws} -i -- \
+                 /bin/bash -c exec -- \"$@\" bash /bin/agent --x --y z"
+            )
+        );
+        assert!(
+            t.ctx
+                .vm
+                .runner()
+                .call_lines()
+                .contains(&"machine exec --name sbx-toolbox-proj -- /bin/bash -c :".into())
+        );
+    }
+
+    #[test]
+    fn run_launches_a_numeric_image_user_as_its_mapped_account() {
+        let mut t = test_env(&[]);
+        let ws = t.ctx.cwd.display().to_string();
+        t.ctx.vm.runner().ok(
+            &["machine", "status"],
+            &machine_json(
+                "sbx-toolbox-proj",
+                "running",
+                &[
+                    ("sbx.name", "toolbox-proj"),
+                    ("sbx.agent", "toolbox"),
+                    ("sbx.workspace", ws.as_str()),
+                    ("sbx.command", r#"["/bin/agent"]"#),
+                    ("sbx.user", "1000"),
+                ],
+            ),
+        );
+        t.ctx.vm.runner().interactive_exit(0);
+        // The start recorded uid 1000's account (`agent`, since moved to the host uid).
+        t.ctx.vm.runner().download(b"agent\n");
+        sbt(&mut t.ctx, &["run", "--name", "toolbox-proj"]).unwrap();
+        assert_eq!(
+            t.ctx.vm.runner().interactive_calls()[0].join(" "),
+            format!(
+                "machine exec --name sbx-toolbox-proj -u agent -w {ws} -i -- \
+                 /bin/bash -c exec -- \"$@\" bash /bin/agent"
+            )
+        );
+    }
+
+    #[test]
+    fn run_without_bash_in_the_image_fails_like_sbx() {
+        let mut t = test_env(&[]);
+        image_user_sandbox(&t);
+        t.ctx.vm.runner().on(
+            &[
+                "machine",
+                "exec",
+                "--name",
+                "sbx-toolbox-proj",
+                "--",
+                "/bin/bash",
+            ],
+            crate::smolvm::Output {
+                code: 1,
+                ..Default::default()
+            },
+        );
+        let code = sbt(&mut t.ctx, &["run", "--name", "toolbox-proj"]).unwrap();
+        assert_eq!(code, 127);
+        assert!(t.ctx.vm.runner().interactive_calls().is_empty());
+        assert_eq!(
+            t.ctx.vm.runner().call_lines().last().unwrap(),
+            "machine stop -n sbx-toolbox-proj"
+        );
+    }
+
+    #[test]
+    fn a_smolvm_error_from_the_bash_probe_is_not_a_missing_bash() {
+        let mut t = test_env(&[]);
+        image_user_sandbox(&t);
+        t.ctx.vm.runner().fail(
+            &[
+                "machine",
+                "exec",
+                "--name",
+                "sbx-toolbox-proj",
+                "--",
+                "/bin/bash",
+            ],
+            "AGENT_ERROR",
+            "the guest agent is not responding",
+        );
+        let err = sbt(&mut t.ctx, &["run", "--name", "toolbox-proj"]).unwrap_err();
+        assert!(
+            format!("{err:#}").contains("the guest agent is not responding"),
+            "{err:#}"
+        );
+        assert!(t.ctx.vm.runner().interactive_calls().is_empty());
+    }
+
+    #[test]
+    fn attaching_to_an_existing_sandbox_loads_no_kits() {
+        let mut t = test_env(&[("SMOLBENTO_KIT_ALLOW_LOCAL_KITS", "true")]);
+        created(&t, "running");
+        t.ctx.vm.runner().interactive_exit(0);
+        // Loading either would fail: the path doesn't exist.
+        sbt(
+            &mut t.ctx,
+            &[
+                "run",
+                "claude",
+                "--kit",
+                "./no-such-kit",
+                "--kit-arg",
+                "a=1",
+            ],
+        )
+        .unwrap();
+        assert_eq!(t.ctx.vm.runner().interactive_calls().len(), 1);
+        assert!(
+            !t.ctx
+                .vm
+                .runner()
+                .call_lines()
+                .iter()
+                .any(|l| l.contains("_builder") || l.starts_with("machine create"))
+        );
+    }
+
+    #[test]
+    fn attaching_with_a_workload_kit_target_loads_nothing() {
+        for (kit, sandbox) in [
+            ("./kit", "kit-proj"),
+            ("localhost:1/acme/my-kit:1", "my-kit-proj"),
+        ] {
+            let mut t = test_env(&[
+                ("SMOLBENTO_KIT_ALLOW_LOCAL_KITS", "true"),
+                ("SMOLBENTO_KIT_ALLOWED_SOURCES", r#"["localhost:1/"]"#),
+            ]);
+            let dir = t.ctx.cwd.join("kit");
+            std::fs::create_dir(&dir).unwrap();
+            std::fs::write(
+                dir.join("k.yaml"),
+                "# syntax=docker/sandbox-kit:3\nschemaVersion: \"3\"\nkind: workload\n",
+            )
+            .unwrap();
+            let ws = t.ctx.cwd.display().to_string();
+            t.ctx.vm.runner().ok(
+                &["machine", "status"],
+                &machine_json(
+                    &format!("sbx-{sandbox}"),
+                    "running",
+                    &[
+                        ("sbx.name", sandbox),
+                        ("sbx.agent", "kit"),
+                        ("sbx.workspace", ws.as_str()),
+                        ("sbx.command", r#"["/bin/agent"]"#),
+                    ],
+                ),
+            );
+            t.ctx.vm.runner().interactive_exit(0);
+            // A build would ask smolvm for `_builder`; a pull of localhost:1 would fail.
+            sbt(&mut t.ctx, &["run", kit, "."]).unwrap();
+            let lines = t.ctx.vm.runner().call_lines();
+            assert!(
+                !lines
+                    .iter()
+                    .any(|l| l.contains("_builder") || l.starts_with("machine create")),
+                "{lines:?}"
+            );
+            assert_eq!(t.ctx.vm.runner().interactive_calls().len(), 1, "{kit}");
+        }
+    }
+
+    #[test]
+    fn kit_flags_on_an_existing_sandbox_are_warned_about() {
+        use clap::Parser;
+        let warning = |args: &[&str]| {
+            let cli = super::super::Cli::try_parse_from(
+                std::iter::once("sbt").chain(args.iter().copied()),
+            )
+            .unwrap();
+            let Some(super::super::Cmd::Run(a)) = cli.command else {
+                panic!("run");
+            };
+            super::ignored_kits_warning(&a, "s1")
+        };
+        let want = Some(
+            "warning: kits only apply when a sandbox is created; s1 already exists".to_string(),
+        );
+        assert_eq!(warning(&["run", "--name", "s1", "--kit", "./k"]), want);
+        assert_eq!(
+            warning(&["run", "--name", "s1", "--kit", "./k", "--kit-arg", "a=1"]),
+            want
+        );
+        assert_eq!(warning(&["run", "./k", "."]), want);
+        assert_eq!(warning(&["run", "--name", "s1"]), None);
+        assert_eq!(warning(&["run", "claude", "."]), None);
+    }
+
+    #[test]
+    fn kit_args_without_a_kit_always_fail() {
+        let want = "kit arguments were supplied but no kits were referenced";
+        let mut t = test_env(&[]);
+        created(&t, "running");
+        t.ctx.vm.runner().interactive_exit(0);
+        for args in [
+            vec!["run", "claude", "--kit-arg", "a=1"],
+            vec!["run", "--name", "claude-proj", "--kit-arg", "a=1"],
+            vec!["run", "--name", "claude-proj", "--kit-args-file", "f"],
+        ] {
+            let err = sbt(&mut t.ctx, &args).unwrap_err();
+            assert_eq!(format!("{err:#}"), want, "{args:?}");
+        }
+        assert!(t.ctx.vm.runner().interactive_calls().is_empty());
+
+        let mut t = test_env(&[]);
+        t.ctx
+            .vm
+            .runner()
+            .fail(&["machine", "status"], "NOT_FOUND", "vm not found");
+        let err = sbt(&mut t.ctx, &["run", "claude", "--kit-arg", "a=1"]).unwrap_err();
+        assert_eq!(format!("{err:#}"), want);
+        assert!(
+            !t.ctx
+                .vm
+                .runner()
+                .call_lines()
+                .iter()
+                .any(|l| l.starts_with("machine create")),
+        );
+    }
+
+    #[test]
+    fn existing_name_with_kit_flags_attaches_without_loading() {
+        let mut t = test_env(&[("SMOLBENTO_KIT_ALLOW_LOCAL_KITS", "true")]);
+        created(&t, "running");
+        t.ctx.vm.runner().interactive_exit(0);
+        sbt(
+            &mut t.ctx,
+            &["run", "--name", "claude-proj", "--kit", "./no-such-kit"],
+        )
+        .unwrap();
+        assert_eq!(t.ctx.vm.runner().interactive_calls().len(), 1);
+    }
+
+    #[test]
+    fn a_long_running_sandbox_keeps_running_after_the_last_session() {
+        let mut t = test_env(&[]);
+        kit_sandbox(&t, true);
+        sbt(&mut t.ctx, &["run", "--name", "toolbox-proj"]).unwrap();
+        assert!(
+            !t.ctx
+                .vm
+                .runner()
+                .call_lines()
+                .iter()
+                .any(|l| l.starts_with("machine stop"))
+        );
     }
 
     #[test]

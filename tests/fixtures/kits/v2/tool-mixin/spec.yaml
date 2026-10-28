@@ -1,0 +1,19 @@
+# A mixin the CLI tests add with --kit: env, a port, a network rule and an install hook.
+schemaVersion: "2"
+kind: mixin
+name: tool
+args:
+  mode:
+    default: fast
+environment:
+  variables:
+    TOOL_MODE: fast
+permissions:
+  network:
+    allow:
+      - api.tool.example
+ports:
+  - container: 8080
+setup:
+  install:
+    - command: echo installed

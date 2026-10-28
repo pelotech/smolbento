@@ -1,0 +1,30 @@
+---
+source: tests/help.rs
+expression: help(&path)
+---
+Add a mixin kit to an existing sandbox
+
+Usage: sbt kit add [OPTIONS] <SANDBOX> <REFERENCE>
+
+Arguments:
+  <SANDBOX>
+          Sandbox name
+
+  <REFERENCE>
+          Mixin kit: a registry reference or a local path (./dir or descriptor)
+
+Options:
+  -D, --debug
+          Print each smolvm command line
+
+      --kit-arg <NAME=VALUE>
+          Kit argument: NAME=VALUE, or KIT.NAME=VALUE for one kit (repeatable)
+
+      --kit-args-file <FILE>
+          Read kit arguments (NAME=VALUE lines) from a file (repeatable)
+
+  -y, --yes
+          Grant the kit's network access without asking
+
+  -h, --help
+          Print help

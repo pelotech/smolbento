@@ -58,6 +58,14 @@ pub fn run<R: Runner>(ctx: &mut Ctx<R>, cmd: PolicyCmd) -> Result<i32> {
             if a.id.is_none() && a.resource.is_none() {
                 bail!("pass --id or --resource");
             }
+            if let Some(sb) =
+                policy.kit_rule_target(a.sandbox.as_deref(), a.id.as_deref(), a.resource.as_deref())
+            {
+                bail!(
+                    "kit rules can't be removed; add a deny rule instead \
+                     (sbt policy deny network --sandbox {sb} <host>)"
+                );
+            }
             // Ids are unique, so --id alone finds a sandbox's rule too.
             let sandbox = match (&a.sandbox, &a.id) {
                 (None, Some(id)) => policy.find(id).and_then(|(_, s)| s.map(String::from)),
@@ -74,7 +82,6 @@ pub fn run<R: Runner>(ctx: &mut Ctx<R>, cmd: PolicyCmd) -> Result<i32> {
         }
         PolicyCmd::Ls(a) => {
             for (flag, set) in [
-                ("--source", a.source.is_some()),
                 ("--created-via", a.created_via.is_some()),
                 ("--type", a.kind.is_some()),
                 ("--protocol", a.protocol.is_some()),
@@ -93,6 +100,11 @@ pub fn run<R: Runner>(ctx: &mut Ctx<R>, cmd: PolicyCmd) -> Result<i32> {
                 Some("deny") => Some(Decision::Deny),
                 Some(other) => bail!("--decision takes allow or deny, not '{other}'"),
             };
+            let source = match a.source.as_deref() {
+                None => None,
+                Some(s @ ("local" | "org" | "kit")) => Some(s),
+                Some(other) => bail!("--source takes local, org or kit, not '{other}'"),
+            };
             let format = if a.json {
                 Format::Json
             } else {
@@ -100,6 +112,7 @@ pub fn run<R: Runner>(ctx: &mut Ctx<R>, cmd: PolicyCmd) -> Result<i32> {
             };
             let opts = LsOpts {
                 sandbox: a.sandbox.as_deref(),
+                source,
                 decision,
                 format,
                 wide: a.wide,
@@ -537,17 +550,29 @@ fn check<R: Runner>(ctx: &Ctx<R>, policy: &Policy, a: &CheckArgs) -> Result<i32>
 #[derive(Serialize)]
 struct LsRow {
     id: String,
+    /// Only kit rows have one: `kit:<sandbox>`.
+    #[serde(skip_serializing_if = "String::is_empty")]
+    name: String,
     source: String,
     applies_to: String,
     decision: String,
     resources: Vec<String>,
     notes: Vec<String>,
+    /// Only kit rows say so (`false`); they change with their kits, not by `policy rm`.
+    #[serde(skip_serializing_if = "is_true")]
+    editable: bool,
+}
+
+fn is_true(b: &bool) -> bool {
+    *b
 }
 
 /// What `policy ls` lists, and how.
 #[derive(Default)]
 struct LsOpts<'a> {
     sandbox: Option<&'a str>,
+    /// `local`, `org` or `kit`; smolbento has no org rules, and the balanced preset counts as local.
+    source: Option<&'a str>,
     decision: Option<Decision>,
     format: Format,
     wide: bool,
@@ -571,6 +596,8 @@ fn ls_rows(policy: &Policy, opts: &LsOpts) -> Vec<LsRow> {
                 decision: "allow".into(),
                 resources: resources.iter().map(|r| r.to_string()).collect(),
                 notes: Vec::new(),
+                editable: true,
+                name: String::new(),
             });
         }
     }
@@ -578,6 +605,9 @@ fn ls_rows(policy: &Policy, opts: &LsOpts) -> Vec<LsRow> {
         Some(s) => policy.rules_for(Some(s)).collect(),
         None => policy.all_rules().collect(),
     };
+    // sbx shows one `kit:<sandbox>` policy per sandbox, whatever kits made it. The per-kit rules
+    // stay in the store (rollback and `kit add` need them); only the listing aggregates.
+    let mut kit_rows: Vec<LsRow> = Vec::new();
     for (rule, scope) in rules {
         let mut notes: Vec<String> = rule
             .parsed()
@@ -591,17 +621,68 @@ fn ls_rows(policy: &Policy, opts: &LsOpts) -> Vec<LsRow> {
                 notes.push(format!("{label} {v} not enforced"));
             }
         }
+        // sbx doesn't list install-only hosts after create.
+        if rule.is_kit_install() {
+            continue;
+        }
+        if rule.source() == "kit"
+            && let Some(sandbox) = scope
+        {
+            // (Kit rules always carry a sandbox scope; a scopeless one lists as a plain rule.)
+            let name = format!("kit:{sandbox}");
+            let decision = rule.decision.name();
+            let at = kit_rows
+                .iter()
+                .position(|r| r.name == name && r.decision == decision);
+            let row = match at {
+                Some(i) => &mut kit_rows[i],
+                None => {
+                    // The allow rule is the one sbx shows; a kit deny rule gets its own id.
+                    let id = match rule.decision {
+                        Decision::Allow => crate::policy::kit_rule_id(sandbox),
+                        Decision::Deny => crate::policy::kit_rule_id(&format!("{sandbox}|deny")),
+                    };
+                    kit_rows.push(LsRow {
+                        id,
+                        name,
+                        source: "kit".into(),
+                        applies_to: format!("sandbox:{sandbox}"),
+                        decision: decision.into(),
+                        resources: Vec::new(),
+                        notes: Vec::new(),
+                        editable: false,
+                    });
+                    kit_rows.last_mut().expect("just pushed")
+                }
+            };
+            for r in &rule.resources {
+                if !row.resources.contains(r) {
+                    row.resources.push(r.clone());
+                }
+            }
+            row.notes.extend(notes);
+            continue;
+        }
         rows.push(LsRow {
             id: rule.id.clone(),
-            source: "local".into(),
+            name: String::new(),
+            source: rule.source().into(),
             applies_to: scope.unwrap_or("all").into(),
             decision: rule.decision.name().into(),
             resources: rule.resources.clone(),
             notes,
+            editable: true,
         });
     }
+    rows.extend(kit_rows);
     if let Some(d) = opts.decision {
         rows.retain(|r| r.decision == d.name());
+    }
+    if let Some(want) = opts.source {
+        rows.retain(|r| match r.source.as_str() {
+            "default" => want == "local",
+            kind => kind == want,
+        });
     }
     rows
 }
@@ -622,10 +703,13 @@ fn render_ls(policy: &Policy, rows: &[LsRow], opts: &LsOpts) -> Result<String> {
                     .to_vec(),
             ];
             if wide {
+                lines[0].insert(1, "NAME".into());
                 lines[0].push("NOTES".into());
             }
             for r in rows {
-                let resources = if wide || r.resources.len() <= 3 {
+                let resources = if !r.editable && !wide {
+                    format!("network: {} {}", r.resources.len(), r.decision)
+                } else if wide || r.resources.len() <= 3 {
                     r.resources.join(", ")
                 } else {
                     format!("{} rules", r.resources.len())
@@ -638,6 +722,14 @@ fn render_ls(policy: &Policy, rows: &[LsRow], opts: &LsOpts) -> Result<String> {
                     resources,
                 ];
                 if wide {
+                    line.insert(
+                        1,
+                        if r.name.is_empty() {
+                            "-".into()
+                        } else {
+                            r.name.clone()
+                        },
+                    );
                     line.push(r.notes.join("; "));
                 }
                 lines.push(line);
@@ -703,7 +795,13 @@ mod tests {
             Policy::load(&t.ctx.paths).unwrap().mode,
             Some(Mode::DenyAll)
         );
-        assert_eq!(updates(&t).len(), 1);
+        // No hosts: smolvm's live-reset workaround takes a second call.
+        let u = updates(&t);
+        assert_eq!(u.len(), 2, "{u:?}");
+        assert!(
+            u[1].ends_with("--remove-allow-host smolbento.invalid"),
+            "{u:?}"
+        );
     }
 
     #[test]
@@ -868,8 +966,7 @@ mod tests {
         );
         assert!(sbt(&mut t.ctx, &["policy", "ls", "--decision", "maybe"]).is_err());
         for flag in [
-            &["--source", "local"][..],
-            &["--created-via", "added"],
+            &["--created-via", "added"][..],
             &["--type", "network"],
             &["--protocol", "tcp"],
             &["--include-inactive"],
@@ -879,6 +976,78 @@ mod tests {
             assert_eq!(super::super::exit_code(&err), 2, "{flag:?}: {err}");
             assert!(err.to_string().contains("not implemented yet"), "{err}");
         }
+    }
+
+    #[test]
+    fn ls_source_filters_kit_and_local_rules() {
+        use crate::kits::model::{NetRule, Rules};
+        let mut t = test_env(&[]);
+        let mut p = Policy::default();
+        p.add_rule(
+            Some("my-sb"),
+            Decision::Allow,
+            "user.com",
+            "added",
+            None,
+            None,
+        )
+        .unwrap();
+        let rules = Rules {
+            allow: vec![NetRule {
+                host: "kit.com".into(),
+                methods: vec![],
+                paths: vec![],
+            }],
+            deny: vec![],
+        };
+        p.add_kit_rules("my-sb", "gh", &rules, false).unwrap();
+        let mut install = rules.clone();
+        install.allow[0].host = "pkg.kit.com".into();
+        p.add_kit_rules("my-sb", "gh", &install, true).unwrap();
+        p.save(&t.ctx.paths).unwrap();
+        let mut out = |args: &[&str]| {
+            sbt(&mut t.ctx, args).unwrap();
+            t.stdout()
+        };
+        // One aggregated rule per sandbox, like sbx: runtime hosts only (install-phase hosts are
+        // not listed).
+        let kit = out(&["policy", "ls", "my-sb", "--source", "kit"]);
+        let rows: Vec<_> = kit.lines().skip(2).collect();
+        assert_eq!(rows.len(), 1, "{kit}");
+        let id = crate::policy::kit_rule_id("my-sb");
+        assert!(rows[0].starts_with(&id), "{kit}");
+        assert!(rows[0].contains("sandbox:my-sb"), "{kit}");
+        assert!(rows[0].contains("network: 1 allow"), "{kit}");
+        assert!(
+            !kit.contains("kit:gh") && !kit.contains("user.com"),
+            "{kit}"
+        );
+        let wide = out(&["policy", "ls", "my-sb", "--source", "kit", "--wide"]);
+        assert!(wide.contains("kit:my-sb"), "{wide}");
+        assert!(
+            wide.contains("kit.com") && !wide.contains("pkg.kit.com"),
+            "{wide}"
+        );
+        let json = out(&["policy", "ls", "my-sb", "--source", "kit", "--json"]);
+        let json: serde_json::Value = serde_json::from_str(&json).unwrap();
+        assert_eq!(json.as_array().unwrap().len(), 1);
+        assert_eq!(json[0]["id"], id.as_str());
+        assert_eq!(json[0]["name"], "kit:my-sb");
+        assert_eq!(json[0]["source"], "kit");
+        assert_eq!(json[0]["applies_to"], "sandbox:my-sb");
+        assert_eq!(json[0]["editable"], false);
+        assert_eq!(json[0]["resources"].as_array().unwrap().len(), 1);
+        let local = out(&["policy", "ls", "my-sb", "--source", "local"]);
+        assert!(
+            local.contains("user.com") && !local.contains("kit.com"),
+            "{local}"
+        );
+        let org = out(&["policy", "ls", "my-sb", "--source", "org"]);
+        assert!(
+            !org.contains("user.com") && !org.contains("kit.com"),
+            "{org}"
+        );
+        assert!(sbt(&mut t.ctx, &["policy", "ls", "--source", "x"]).is_err());
     }
 
     #[test]
@@ -1307,6 +1476,44 @@ mod tests {
         assert!(Policy::load(&t.ctx.paths).unwrap().sandboxes.is_empty());
         let err = sbt(&mut t.ctx, &["policy", "rm", "network", "--id", &id]).unwrap_err();
         assert!(err.to_string().contains("no matching rules"), "{err}");
+    }
+
+    #[test]
+    fn rm_refuses_kit_rules_by_id_aggregate_id_or_resource() {
+        use crate::kits::model::{NetRule, Rules};
+        let mut t = test_env(&[]);
+        set_policy(&t, "mode = \"deny-all\"");
+        let mut p = Policy::load(&t.ctx.paths).unwrap();
+        let rules = Rules {
+            allow: vec![NetRule {
+                host: "kit.com".into(),
+                methods: vec![],
+                paths: vec![],
+            }],
+            deny: vec![],
+        };
+        let (ids, _) = p.add_kit_rules("sb", "gh", &rules, false).unwrap();
+        p.save(&t.ctx.paths).unwrap();
+        let agg = crate::policy::kit_rule_id("sb");
+        for args in [
+            vec!["policy", "rm", "network", "--id", ids[0].as_str()],
+            vec!["policy", "rm", "network", "--id", agg.as_str()],
+            vec![
+                "policy",
+                "rm",
+                "network",
+                "--sandbox",
+                "sb",
+                "--resource",
+                "kit.com",
+            ],
+        ] {
+            let err = sbt(&mut t.ctx, &args).unwrap_err().to_string();
+            assert!(err.contains("kit rules can't be removed"), "{err}");
+            assert!(err.contains("policy deny network --sandbox sb"), "{err}");
+        }
+        let p = Policy::load(&t.ctx.paths).unwrap();
+        assert_eq!(p.rules_for(Some("sb")).count(), 1);
     }
 
     #[test]

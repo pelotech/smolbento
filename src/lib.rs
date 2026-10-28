@@ -2,6 +2,7 @@
 pub mod agents;
 pub mod cli;
 pub mod config;
+pub mod kits;
 pub mod policy;
 pub mod sandbox;
 pub mod secrets;

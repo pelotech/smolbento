@@ -1,0 +1,9 @@
+# A mixin with workspace files and no OAuth: `files/workspace` and `${WORKDIR}` resolve to the
+# sandbox's workspace.
+schemaVersion: "2"
+kind: mixin
+name: ws-files
+setup:
+  files:
+    - path: /home/agent/.wsrc
+      content: "workdir=${WORKDIR}\n"

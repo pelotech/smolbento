@@ -12,6 +12,62 @@ pub const CREDENTIAL_ENV: &str = "sbx.credential-env";
 pub const CLONE: &str = "sbx.clone";
 pub const CLONE_TOP: &str = "sbx.clone-top";
 pub const FORK_OF: &str = "sbx.fork-of";
+pub const KITS: &str = "sbx.kits";
+pub const COMMAND: &str = "sbx.command";
+/// The image config's `User` a v3 workload kit's agent runs as (`0` for root).
+pub const USER: &str = "sbx.user";
+/// A v3 workload kit's image WORKDIR, when not `/`.
+pub const WORKDIR: &str = "sbx.workdir";
+/// The agent file in the guest of a workload kit that declares one (`kit add` indexes into it).
+pub const AGENT_FILE: &str = "sbx.agent-file";
+pub const CREDENTIAL_INSTALL: &str = "sbx.credential-install";
+pub const LONG_RUNNING: &str = "sbx.long-running";
+/// Prefix of `sbx.credential-format.<ENV>`: how a kit credential's value is formatted.
+pub const CREDENTIAL_FORMAT: &str = "sbx.credential-format.";
+/// Prefix of `sbx.credential-service.<ENV>`: the secret service behind a kit credential's env var
+/// when it isn't one of that service's own env vars.
+pub const CREDENTIAL_SERVICE: &str = "sbx.credential-service.";
+
+/// How a kit credential's value becomes its header value (`:set-header`), applied at start.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum CredFormat {
+    /// `%s` stands for the value, e.g. `Bearer %s`.
+    Format(String),
+    /// HTTP basic auth with this user name and the value as the password.
+    Basic(String),
+}
+
+impl CredFormat {
+    fn to_label(&self) -> String {
+        match self {
+            CredFormat::Format(f) => format!("format:{f}"),
+            CredFormat::Basic(u) => format!("basic:{u}"),
+        }
+    }
+
+    fn from_label(s: &str) -> Option<CredFormat> {
+        if let Some(f) = s.strip_prefix("format:") {
+            return Some(CredFormat::Format(f.to_string()));
+        }
+        s.strip_prefix("basic:")
+            .map(|u| CredFormat::Basic(u.to_string()))
+    }
+
+    /// The header value for `value`.
+    pub fn apply(&self, value: &str) -> String {
+        match self {
+            CredFormat::Format(f) => f.replace("%s", value),
+            CredFormat::Basic(user) => {
+                use base64::Engine;
+                let raw = format!("{user}:{value}");
+                format!(
+                    "Basic {}",
+                    base64::engine::general_purpose::STANDARD.encode(raw)
+                )
+            }
+        }
+    }
+}
 
 /// Sandbox metadata, fixed at create and stored as smolvm machine labels.
 #[derive(Debug, Clone, Default, PartialEq, Eq)]
@@ -40,6 +96,25 @@ pub struct Meta {
     pub clone_repo: Option<String>,
     /// The sandbox this one was forked from.
     pub fork_of: Option<String>,
+    /// Applied kits as pinned refs (`REF@sha256:…`, or a local kit's path), dependency order.
+    pub kits: Vec<String>,
+    /// The workload kit's launch argv, when it replaced the agent preset's.
+    pub command: Option<Vec<String>>,
+    /// A v3 workload kit's image user: the agent and `exec` run as it, the agent under `/bin/bash`.
+    pub user: Option<String>,
+    /// A v3 workload's image WORKDIR, where install hooks run (`kit add` too); `None` for `/`.
+    pub image_workdir: Option<String>,
+    /// A workload kit's agent file in the guest; `None` for a preset (its file follows from its
+    /// name) or a workload that declares none.
+    pub agent_file: Option<String>,
+    /// Env vars of install-only credentials, left out of every start after the first.
+    pub credential_install: Vec<String>,
+    /// Don't stop the sandbox when its last session ends (`long-running@1`).
+    pub long_running: bool,
+    /// Kit credentials whose value is formatted before smolvm sets it as a header, by env var.
+    pub credential_formats: BTreeMap<String, CredFormat>,
+    /// Kit credential env vars outside their service's own env vars, to their service.
+    pub credential_services: BTreeMap<String, String>,
 }
 
 impl Meta {
@@ -78,6 +153,43 @@ impl Meta {
         if let Some(f) = &self.fork_of {
             labels.insert(FORK_OF.to_string(), f.clone());
         }
+        // Kit labels exist only on sandboxes created with kits.
+        if !self.kits.is_empty() {
+            labels.insert(
+                KITS.to_string(),
+                serde_json::to_string(&self.kits).expect("strings serialize"),
+            );
+        }
+        if let Some(c) = &self.command {
+            labels.insert(
+                COMMAND.to_string(),
+                serde_json::to_string(c).expect("strings serialize"),
+            );
+        }
+        if let Some(u) = &self.user {
+            labels.insert(USER.to_string(), u.clone());
+        }
+        if let Some(w) = &self.image_workdir {
+            labels.insert(WORKDIR.to_string(), w.clone());
+        }
+        if let Some(f) = &self.agent_file {
+            labels.insert(AGENT_FILE.to_string(), f.clone());
+        }
+        if !self.credential_install.is_empty() {
+            labels.insert(
+                CREDENTIAL_INSTALL.to_string(),
+                self.credential_install.join(","),
+            );
+        }
+        if self.long_running {
+            labels.insert(LONG_RUNNING.to_string(), "true".into());
+        }
+        for (env, f) in &self.credential_formats {
+            labels.insert(format!("{CREDENTIAL_FORMAT}{env}"), f.to_label());
+        }
+        for (env, service) in &self.credential_services {
+            labels.insert(format!("{CREDENTIAL_SERVICE}{env}"), service.clone());
+        }
         labels
     }
 
@@ -104,6 +216,31 @@ impl Meta {
                 .filter(|c| *c == "true")
                 .and_then(|_| labels.get(CLONE_TOP).or(labels.get(WORKSPACE)).cloned()),
             fork_of: labels.get(FORK_OF).cloned(),
+            kits: labels
+                .get(KITS)
+                .and_then(|j| serde_json::from_str(j).ok())
+                .unwrap_or_default(),
+            command: labels
+                .get(COMMAND)
+                .and_then(|j| serde_json::from_str(j).ok()),
+            user: labels.get(USER).cloned(),
+            image_workdir: labels.get(WORKDIR).cloned(),
+            agent_file: labels.get(AGENT_FILE).cloned(),
+            credential_install: list(labels.get(CREDENTIAL_INSTALL)),
+            long_running: labels.get(LONG_RUNNING).is_some_and(|v| v == "true"),
+            credential_formats: labels
+                .iter()
+                .filter_map(|(k, v)| {
+                    let env = k.strip_prefix(CREDENTIAL_FORMAT)?;
+                    Some((env.to_string(), CredFormat::from_label(v)?))
+                })
+                .collect(),
+            credential_services: labels
+                .iter()
+                .filter_map(|(k, v)| {
+                    Some((k.strip_prefix(CREDENTIAL_SERVICE)?.to_string(), v.clone()))
+                })
+                .collect(),
         })
     }
 
@@ -120,9 +257,12 @@ impl Meta {
             .any(|(i, w)| !w.ends_with(":ro") && !(i == 0 && self.clone_repo.is_some()))
     }
 
-    /// Whether `sbt fork` can copy it: no writable host folder, and not itself a fork.
+    /// Whether `sbt fork` can copy it: no writable host folder, not itself a fork, and not an
+    /// internal sandbox (`_builder`), which would only pay branchable's memory cost.
     pub fn forkable(&self) -> bool {
-        self.fork_of.is_none() && !self.writable_host_folder()
+        self.fork_of.is_none()
+            && !self.writable_host_folder()
+            && !super::name::is_internal(&self.name)
     }
 }
 
@@ -243,6 +383,61 @@ mod tests {
     }
 
     #[test]
+    fn kit_labels_round_trip() {
+        let m = Meta {
+            kits: vec!["acme/a:1@sha256:ab".into(), "/k/b".into()],
+            command: Some(vec!["wl".into(), "--a b".into()]),
+            user: Some("somebody".into()),
+            image_workdir: Some("/x".into()),
+            agent_file: Some("/w/AGENTS.md".into()),
+            credential_install: vec!["GH_TOKEN".into(), "NPM_TOKEN".into()],
+            long_running: true,
+            credential_formats: BTreeMap::from([
+                ("SBX_KIT_X".into(), CredFormat::Format("Bearer %s".into())),
+                (
+                    "GH_TOKEN".into(),
+                    CredFormat::Basic("x-access-token".into()),
+                ),
+            ]),
+            credential_services: BTreeMap::from([("SBX_KIT_X".into(), "x".into())]),
+            ..meta()
+        };
+        let labels = m.to_labels();
+        assert_eq!(labels["sbx.kits"], r#"["acme/a:1@sha256:ab","/k/b"]"#);
+        assert_eq!(labels["sbx.command"], r#"["wl","--a b"]"#);
+        assert_eq!(labels["sbx.user"], "somebody");
+        assert_eq!(labels["sbx.workdir"], "/x");
+        assert_eq!(labels["sbx.agent-file"], "/w/AGENTS.md");
+        assert_eq!(labels["sbx.credential-install"], "GH_TOKEN,NPM_TOKEN");
+        assert_eq!(labels["sbx.long-running"], "true");
+        assert_eq!(
+            labels["sbx.credential-format.SBX_KIT_X"],
+            "format:Bearer %s"
+        );
+        assert_eq!(
+            labels["sbx.credential-format.GH_TOKEN"],
+            "basic:x-access-token"
+        );
+        assert_eq!(labels["sbx.credential-service.SBX_KIT_X"], "x");
+        assert_eq!(Meta::from_labels(&labels), Some(m));
+        // Absent when empty, so sandboxes without kits keep their labels.
+        let plain = meta().to_labels();
+        assert_eq!(plain.len(), 6, "{plain:?}");
+    }
+
+    #[test]
+    fn credential_formats_apply_to_the_value() {
+        assert_eq!(
+            CredFormat::Format("Bearer %s".into()).apply("t0k"),
+            "Bearer t0k"
+        );
+        assert_eq!(
+            CredFormat::Basic("x-access-token".into()).apply("ghp"),
+            "Basic eC1hY2Nlc3MtdG9rZW46Z2hw"
+        );
+    }
+
+    #[test]
     fn foreign_machine_is_none() {
         assert_eq!(Meta::from_labels(&BTreeMap::new()), None);
     }
@@ -262,6 +457,11 @@ mod tests {
             ..meta()
         };
         assert!(mountless.forkable());
+        let internal = Meta {
+            name: "_builder".into(),
+            ..mountless.clone()
+        };
+        assert!(!internal.forkable());
         let fork = Meta {
             fork_of: Some("a".into()),
             ..mountless.clone()

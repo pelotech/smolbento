@@ -1,0 +1,76 @@
+# Hand-written v3 equivalent of full/spec.yaml; the v2 shim must produce the same capabilities.
+schemaVersion: "3"
+kind: workload
+capabilities:
+  - type: com.docker.sandbox/resources@1
+    config:
+      cpu: 2
+      memory: 4g
+  - type: com.docker.sandbox/network-policy@1
+    config:
+      runtime:
+        allow: [api.example.com, "*.cdn.example.com"]
+        deny: [telemetry.example.com]
+  - type: com.docker.sandbox/credential@1
+    config:
+      service: example
+      phase: runtime
+      apiKey:
+        name: EXAMPLE_API_KEY
+        inject:
+          - domain: api.example.com
+            header: x-api-key
+          - domain: git.example.com
+            scheme: basic
+            username: x-access-token
+  - type: com.docker.sandbox/credential@1
+    config:
+      service: example-oauth
+      phase: runtime
+      oauth:
+        tokenEndpoint:
+          host: auth.example.com
+        resourceHosts: [api.example.com]
+  - type: com.docker.sandbox/port@1
+    config:
+      container: 8080
+  - type: com.docker.sandbox/port@1
+    config:
+      container: 5353
+      transport: udp
+  - type: com.docker.sandbox/volume@1
+    config:
+      path: /var/cache/tool
+  - type: com.docker.sandbox/volume@1
+    config:
+      path: /scratch
+      tmpfs: true
+      mode: "0700"
+  - type: com.docker.sandbox/lifecycle@1
+    config:
+      install:
+        - command: apt-get install -y jq
+          user: "0"
+        - command: echo hi
+          user: "1000"
+      startup:
+        - command: [tool, serve]
+          user: agent
+          background: true
+        - command: [tool, warm]
+          user: "0"
+      files:
+        - path: /home/agent/.config/tool/config.toml
+          content: "tool = true\n"
+        - path: /home/agent/.toolrc
+          content: "workdir=${{ kit.env.WORKSPACE }}\n"
+          mode: "0600"
+          overwrite: false
+        - path: /home/agent/.other
+          content: other
+        - path: ${{ kit.env.WORKSPACE }}/docs/NOTES.md
+          content: "# Notes\n"
+  - type: com.docker.sandbox/agent-context@2
+    config:
+      filename: AGENTS.md
+      content: Use the tool.

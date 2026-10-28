@@ -8,7 +8,9 @@ clearly rather than doing something different.
 
 `run`, `create`, `exec`, `ls`, `start`, `stop`, `rm`, `prune`, `reset`, `cp`, `version`,
 `completion`, `diagnose`, `settings`, `policy`, `secret`, `ports`, `run/create --deny-network`
-(per-sandbox deny rules, as in sbx) and `run/create --clone`.
+(per-sandbox deny rules, as in sbx), `run/create --clone`, kits (`run/create --kit`, `--kit-arg`,
+`--kit-args-file`, `kit inspect`, `kit validate`, `kit add`; see [Kits](#kits)) and
+`policy ls --source`.
 `fork` is a smolbento extension: sbx has no fork (its `template save` saves the disk only).
 `daemon` is accepted and does nothing: smolbento has no daemon.
 
@@ -17,8 +19,9 @@ clearly rather than doing something different.
 | Command or flag | Planned |
 |---|---|
 | `policy refresh`, `secret import`, `secret set --oauth/--registry/--refresh` | Not implemented |
-| `policy ls --source/--created-via/--type/--protocol/--include-inactive`, `policy check --protocol` other than `tcp` | Not implemented (`policy ls --decision` works) |
-| `--kit`, `kit`, `env` (sbxenv.yaml) | Later |
+| `policy ls --created-via/--type/--protocol/--include-inactive`, `policy check --protocol` other than `tcp` | Not implemented (`policy ls --decision` and `--source` work) |
+| `kit pack`, `kit push`, `kit pull`, `kit sign`, `kit verify` | Not implemented |
+| `env` (sbxenv.yaml) | Later |
 | `template`, `setup ssh`, `mcp`, `--static-mcp`, `--skills`, `skills` | Later |
 | `tui` | Later |
 | `--pull always\|never` | `--pull missing` works (it's what smolvm does) |
@@ -51,7 +54,150 @@ clearly rather than doing something different.
 | Object checking | Plain `git fetch` | The fetch on exit runs with `fetch.fsckObjects=true`; manual `git fetch` is unchanged, and your repo config isn't touched beyond the remote |
 | Fetch from a stopped sandbox | Fails | Starts the sandbox, fetches, stops it again |
 | Linked worktrees as the clone source | Not supported | Supported; the clone checks out the worktree's branch, or its commit when detached |
+| `policy ls --wide` | sbx's wide layout | Columns differ: a NAME column is added; sbx's other wide columns aren't shown |
+| Install-phase kit rules in `policy ls` | Not listed after create | Never listed, also while a create is still installing (they're in effect then, but `policy ls` doesn't show them) |
 | `--version` | `sbx version vX` | `sbt --version` prints `sbt X`; `sbt version` also shows the smolvm version |
+
+## Sandbox environment
+
+As in sbx, every sandbox gets these variables, set at create (`-e`, so every process sees them,
+agent and `exec` alike; your own `-e` wins). None of them holds a secret value.
+
+- `SANDBOX_NAME`, `SANDBOX_VM_ID` (the name) and `SANDBOX_ID` (a new UUID on every create). A
+  `fork` gets its own name and a new id, not its parent's.
+- `WORKSPACE_DIR`: the host path of the primary workspace; the guest workdir when mountless.
+- `SBX_AGENT`: the preset or kit name. `IS_SANDBOX=1` for the `claude` preset.
+- `SBX_CRED_<SVC>_MODE`: `apikey` when the service's secret is bound at create, else `none`.
+  `shell` gets all eight services and `claude` only `ANTHROPIC`, as in sbx; the other presets and
+  kits get none, even one named `claude` or `shell` (sbx's set for them hasn't been compared).
+- `TZ` is passed from the host's `TZ` in TTY sessions (`run`, `exec -it`) only when it's set; sbx
+  derives one when it isn't.
+
+Left out: `*_API_KEY=proxy-managed` and the `GH_TOKEN` sentinel (smolvm uses its own
+placeholders), `MCP_*` (no MCP gateway), `GIT_CONFIG_*`, the proxy specifics
+(`PROXY_CA_CERT_B64`, `JAVA_TOOL_OPTIONS`, `NODE_USE_ENV_PROXY`), `CLAUDE_ENV_FILE`,
+`SSH_AUTH_SOCK*`, `WAYLAND_DISPLAY`/`XDG_RUNTIME_DIR`, the PAM-style startup-hook environment and
+`LC_ALL=C` for startup hooks. Kits relying on those see them unset.
+
+## Kits
+
+smolbento implements the [sandbox kit spec](https://github.com/docker/sandbox-kit-spec) at commit
+`198d50b5fd57b216b511fd7200010a3636cb3f01` (`SPEC_COMMIT` in the code). v3 is still experimental
+upstream. v2 `spec.yaml` kits are read into the same model, and smolvm Smolfiles work as kits too.
+
+What each capability does in smolbento. A kit that **requires** one marked "no" or "later" fails
+with its `type@version` before anything is created; an optional one is skipped with a warning.
+
+| Capability | sbx (local) | smolbento |
+|---|---|---|
+| `network-policy@1`, `@2` | Yes | Yes: per-sandbox rules with source `kit`. Install-phase rules are in place from the sandbox's creation through its first start's setup and install steps, removed when install finishes, and never used by later starts. An install-phase deny of a CIDR is the exception: smolvm takes CIDR denies only at create, so it stays enforced for the sandbox's life (create prints a note) though `policy ls` doesn't show it. `@2` method and path rules aren't enforced, so a kit that requires them is refused |
+| `credential@1` | Yes | API keys: yes, through your secrets. OAuth with `passthrough: true`: yes (the token and resource hosts are allowed; the agent's own login keeps its tokens in the sandbox). OAuth without passthrough: no |
+| `port@1` | Yes | Yes, on `127.0.0.1` |
+| `volume@1` | Yes, removed with the sandbox | Yes, on the sandbox's disk; removed with the sandbox (`rm`, `reset`, recreate), kept across stop and start; each fork gets its own copy |
+| `resources@1` | Limited (no GPU) | CPUs and memory; GPU ignored, as in sbx |
+| `lifecycle@1` | Yes | Yes: install steps on the first start, startup steps on every start (see below). `interactive` is ignored, as in sbx |
+| `agent-context@1`, `@2` | Yes | Yes, in the same places as sbx (see below) |
+| `sbx@1` | Yes | Yes: the workload's command is the agent, run as in sbx (see below) |
+| `git-identity@1` | Yes | Yes: your `git config user.name/email` |
+| `long-running@1` | Yes | Yes: no auto-stop when the last session ends |
+| `privileged@1` | Yes | Yes |
+| `agent-sessions@1` | Declaration only | Declaration only |
+| `host-mount@1` | Yes | Later (Phase 5) |
+| `ssh-agent@1` | Yes | Later (Phase 5, with `setup ssh`) |
+| `agent-skills@1`, `agent-skill@1` | Yes | Later (Phase 5, with `--skills`) |
+| `kit-registry@1` | Approved builder kits only | No |
+| `agent-interactive-sessions@1`, `usb-device@1` | No | No |
+
+What works as in sbx:
+
+- **Launch.** A workload kit's command runs as the image's `USER` (root when it has none) under
+  `/bin/bash`, so `BASH_ENV` is sourced, in the workspace path rather than `WORKDIR`. `sbt exec`
+  uses the same user. An image without `/bin/bash` fails with `executable file '/bin/bash' not
+  found` (exit 127). The image user gets your uid so it can write the workspace; a numeric `USER`
+  runs as the account that has that uid. A workload whose image declares no `ENTRYPOINT` or `CMD`
+  is refused at create and `kit validate`.
+- **Hooks.** Install steps run as root in a workload kit's image `WORKDIR` (`/` otherwise);
+  startup steps and kit files default to `agent`, not the image user. v3 install steps get a clean
+  environment: `PATH`, `HOME`, `USER`, `TERM`, the proxy and CA variables, and the variables the
+  step declares in `env`. v3 startup steps and all v2 steps get the sandbox's full environment.
+- **Startup steps** block, in kit order, and a failing one fails the start
+  (`kit startup exited with code N`); one marked `background: true` is started at its place and
+  only logged if it fails. A blocking step that never finishes holds up the start (no timeout).
+  The log is `/var/log/sbx-kit-startup.log`. If a startup step fails during create, the sandbox is
+  still created, with sbx's `StartRuntime after create failed` warning, and left stopped; later
+  starts fail until the step succeeds.
+- **Kit arguments.** An optional argument a kit uses with no value and no default is an error
+  (`create-phase kit arg "x" has no resolved value`); `--kit-arg x=` sets it to empty.
+  `--kit-arg` without a kit is an error, and a `KIT.NAME` value for a kit that isn't in the set
+  is ignored. Unquoted numbers and booleans in `default:` and `enum:` become strings.
+- **Kit references.** A bare word is an agent name, never a kit, even when a directory of that name
+  exists, and so is a dotted one: `sbt create alpine` fails with `unknown agent "alpine"`,
+  `sbt create .hidden` with `unknown agent ".hidden"`, and `--kit alpine` with
+  `kit reference "alpine": not a local path and does not look like a registry reference`. A local
+  kit is a path (`.`, `..`, `./kit`, `../kit`, `/abs/kit`); a registry reference has a `/`
+  (`docker.io/acme/kit:1`).
+- **Versions.** `provides: [name@1.2.0]` and `requires: ["name >= 1.0"]` follow the kit spec's
+  version grammar. The agent presets provide their name at their image tag's version, so a v2
+  mixin's `requires.agent: claude` works on `claude`.
+- **Composition errors** use sbx's texts and name each kit by its reference as typed:
+  `resolve: the kit set is not coherent:` followed by one `  - <problem>` line per problem,
+  `resolve: dependency cycle among ./a, ./b`, and `kit ./x is listed more than once`.
+- **Unbound credentials.** A required kit credential whose secret isn't set doesn't stop the
+  create: it warns `WARN: required credential not found for service SERVICE` and the kit's
+  requests go out without it. smolbento adds a line with the `sbt secret set` command to run.
+- **`kit inspect` and `kit validate`** print sbx's summary (`Name:`, `Kind:`, `Schema:`,
+  `Policies:`, `Credentials:`, `Commands:`) and `✓ <ref> — valid`; `kit inspect --format json` is
+  the v2-shaped descriptor and `kit validate --json` is `{reference, kind, valid, warnings}`.
+- **Kit rules in `policy ls`** are one `kit:<sandbox>` row per sandbox (source `kit`), whatever
+  kits made them. They can't be removed with `policy rm`; deny a host instead.
+- **Agent context** goes in the agent's file in the parent directory of the workspace path, inside
+  the sandbox only (nothing is written on your machine): `CLAUDE.md` for claude, `GEMINI.md` for
+  gemini, `AGENTS.md` for the others, or the file a workload kit's own `agent-context` names, with
+  its text appended. A v2 mixin's text goes to `kits-agent-context/<kit>.md` next to that file,
+  which lists it between `<!-- sbx:kits-section start -->` and `<!-- sbx:kits-section end -->`.
+- **Settings.** `kit.allowedSources` and `kit.allowLocalKits` (see
+  [Configuration](configuration.md#settings)).
+
+Differences:
+
+| Area | sbx | smolbento |
+|---|---|---|
+| Building local v3 kits | BuildKit on your machine | BuildKit in a hidden `_builder` sandbox; no Docker on your machine needed. It pulls base images without a registry login (kits built on `dhi.io`, like Docker's examples, don't build yet) and never gets your secrets |
+| Where a kit sends a secret | Any host the kit names, after you approve it | A built-in service's secret only to that service's own hosts (else the kit is refused); a custom service's anywhere, with a note at `create` and `kit add` |
+| Install-only credentials | Not injected after install: the placeholder stays and requests go out without the credential | The sandbox restarts once after install, without them; later requests to their hosts get `502` |
+| OAuth credentials | Passthrough and sentinel tokens | Passthrough only (sentinel tokens need smolvm support) |
+| Method and path rules | Enforced (`403` outside the rule) | Not enforced (as for `policy allow --method/--path`); a kit that requires them is refused |
+| `kit add` | Recreates the container; refuses v2 kits with files and v3 mixins on a v3 workload; asks before opening network access, with no flag to skip the question | Applies to the running sandbox, files and deny rules included. Image layers, credentials, ports, volumes, resources, environment variables and `long-running` need a recreate ("recreate required"); asks before opening network access, and `-y/--yes` skips the question. A new startup step that fails only warns |
+| `kit inspect --offline`, `kit validate --offline` | Skips the daemon policy (`kit.allowedSources`, `kit.allowLocalKits`, `kit.requireSignature`); local directory or ZIP only; v3 source directories refused (no builder) | Skips the source policy, `kit.allowLocalKits` included, as sbx documents. Local v2 kits and Smolfiles only. Registry refs and v3 source directories are refused (they need the network); `validate` of a v2 workload whose command comes from its image is refused too. No ZIP or git references |
+| `kit inspect` output | Summary table; `--format json` is the v2-shaped descriptor; `--kit-arg` shows substituted content | Same shape, plus `--format yaml` and `--json`. After sbx's lines the table adds `Capabilities:` (what smolbento supports), then Source, Digest, Provides, Requires, Integrates, Conflicts, Credentials (each service and the hosts its secret is sent to) and Args when present; JSON/YAML carry those under a top-level `smolbento` key. `--kit-arg` is only checked, not substituted into the output |
+| `kit validate` output | `✓ <ref> — valid`; `--json` gives `{reference, kind, valid, warnings}` | Same, with `--format table\|json\|yaml`. A failure with `--json`/`--format json\|yaml` prints the same object with `valid: false` and `errors: [<message>]` on stdout and exits 1; table output prints the plain error |
+| Unmeasured parts of `kit inspect`/`validate` | | Inferred, not measured against sbx: `kind` values other than `directory` (we use `file`, `registry`, `builtin`); `Schema:` for registry (`v3`), builtin (`v3`) and Smolfile (`smolfile`) kits; the network rule counts (install and runtime rules merged, hosts deduplicated) and init-file count (v2 `files/home` and `files/workspace` files included); the JSON layout under sandbox, permissions, credentials and setup; the failure object above; `Template:` shown only for a built local v3 kit |
+| The name `docker` | A registry ref (the `docker` image) | The shipped Docker kit; write `docker.io/library/docker` for the image |
+| Docker in the sandbox | Run by the `-docker` images | The shipped `docker` kit, first before your kits (added to Docker-enabled images, or given with `--kit docker`), so their startup steps can use Docker. Its `dockerd` step runs in the background, so a failing `dockerd` is only logged (`/var/log/dockerd.log`) and doesn't stop the start |
+| v3 mixins on built-in agents | Refused (`no workload kit in the set`) | Allowed |
+| Loopback registries | HTTPS only | Plain HTTP for `localhost`, `127.0.0.0/8` and `::1`, as in Docker |
+| Smolfile kits | None | A Smolfile defines its own workload, so one without a command keeps the shell agent's |
+| Agent context file | Starts with a long platform preamble | No preamble: only kit text and the index |
+| Mixin context when the workload declares no agent file | Dropped silently | Dropped with a warning |
+| Startup log lines | `ok /etc/durable-startup.d/…` | `ok /etc/smolbento/startup.d/NN-<kit>.sh hook N`, one per step and start |
+| v2 kits' `requires.agent` | A base-agent name | A capability name with no version, so any version of it meets it (v2 has no versioned provides); the presets provide theirs |
+| `kit add` and earlier kits | Recreates with the whole set | Matches the new kit against the provides recorded at create, with their versions; records written before versions existed hold bare names, which meet only unconstrained requires. An agent preset's own name counts as version `0` (`claude@0`), so a versioned require on it can pass at create and fail at `kit add`. Errors name earlier kits by kit name (their references aren't recorded). The earlier kits' own requires and conflicts aren't checked again |
+| Kit settings | Also `kit.requireSignature`, `kit.trustedSigners`, `kit.ignoreTransparencyLog`, `kit.allowExtractedAgents` | Not yet: signatures aren't checked, and built-in agents aren't kits |
+
+Not compared with sbx yet:
+
+- How arguments with float or unusual literal values (`1.0`, `0x10`, `True`) become strings
+  (smolbento writes `1.0` as `1`).
+- A startup step or v2 step run as a non-root user: it keeps the sandbox's environment, except
+  that `HOME`, `USER`, `LOGNAME` and `SHELL` are that user's (through `runuser`, or `su` without
+  `-` on images without `runuser`, which resets them too).
+- A v3 mixin's agent context: smolbento puts it in `kits-agent-context/<kit>.md` and the index, as
+  for a v2 mixin.
+- `integrates` and `conflicts` errors (texts from the kit spec's resolver), and a published kit
+  whose provides have no version (read as is; it meets only unconstrained requires).
+- An optional argument a kit declares but doesn't use, with no value and no default.
+- The agent file's kits index after hand edits, such as a removed or duplicated marker or text
+  added inside the block.
 
 ## Exit codes
 

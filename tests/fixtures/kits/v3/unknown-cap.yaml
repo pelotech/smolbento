@@ -1,0 +1,10 @@
+# syntax=docker/sandbox-kit:3
+schemaVersion: "3"
+kind: mixin
+displayName: unknown
+capabilities:
+  - type: com.example/thing@1
+    config: {anything: goes}
+  - type: com.docker.sandbox/usb-device@1
+    optional: true
+    config: {vendorId: "0x1234"}

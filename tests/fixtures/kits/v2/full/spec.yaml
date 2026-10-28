@@ -1,0 +1,64 @@
+schemaVersion: "2"
+kind: sandbox
+name: full-kit
+displayName: Full Kit
+description: Exercises every v2 field smolbento maps.
+sandbox:
+  image: ghcr.io/example/agent:1.2
+  resources:
+    cpu: 2
+    memory: 4g
+environment:
+  variables:
+    TOOL_MODE: fast
+permissions:
+  network:
+    allow:
+      - api.example.com
+      - "*.cdn.example.com"
+    deny:
+      - telemetry.example.com
+credentials:
+  - service: example
+    apiKey:
+      name: EXAMPLE_API_KEY
+      inject:
+        - domain: api.example.com
+          header: x-api-key
+        - domain: git.example.com
+          scheme: basic
+          username: x-access-token
+  - service: example-oauth
+    oauth:
+      tokenEndpoint:
+        host: auth.example.com
+      resourceHosts: [api.example.com]
+ports:
+  - container: 8080
+  - container: 5353
+    protocol: udp
+volumes:
+  - path: /var/cache/tool
+  - path: /scratch
+    type: tmpfs
+    mode: "0700"
+setup:
+  install:
+    - command: apt-get install -y jq
+    - command: echo hi
+      user: "1000"
+  startup:
+    - command: [tool, serve]
+      background: true
+    - command: [tool, warm]
+      user: "0"
+  files:
+    - path: /home/agent/.toolrc
+      content: "workdir=${WORKDIR}\n"
+      mode: "0600"
+      onlyIfMissing: true
+    - path: /home/agent/.other
+      content: other
+agentInstructions:
+  filename: AGENTS.md
+  content: Use the tool.

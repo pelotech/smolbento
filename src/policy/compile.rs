@@ -3,13 +3,29 @@
 use std::collections::BTreeSet;
 
 use super::rules::{Allow, Pattern, Resource, is_under, split_port};
-use super::{Decision, Mode, Policy, presets};
+use super::{Decision, Mode, Policy, Rule, presets};
 use crate::smolvm::{AllowList, NetworkSpec};
 
-/// The resources of a sandbox's rules (`None`: the global rules only) with this decision.
-fn resources(policy: &Policy, sandbox: Option<&str>, decision: Decision) -> Vec<Resource> {
+/// The rules that apply to a sandbox (`None`: the global rules only): every rule but install-phase
+/// kit rules, of which only those in `install` (the ids the running install step added) apply.
+fn active<'a>(
+    policy: &'a Policy,
+    sandbox: Option<&'a str>,
+    install: &'a [String],
+) -> impl Iterator<Item = (&'a Rule, Option<&'a str>)> {
     policy
         .rules_for(sandbox)
+        .filter(move |(r, _)| !r.is_kit_install() || install.contains(&r.id))
+}
+
+/// The resources of a sandbox's active rules with this decision.
+fn resources(
+    policy: &Policy,
+    sandbox: Option<&str>,
+    install: &[String],
+    decision: Decision,
+) -> Vec<Resource> {
+    active(policy, sandbox, install)
         .filter(|(r, _)| r.decision == decision)
         .flat_map(|(r, _)| r.parsed())
         .collect()
@@ -52,31 +68,51 @@ fn denied(allow: &Resource, denies: &[Resource]) -> bool {
 /// The allow entries a sandbox's network (`None`: the global one) is built from: the balanced
 /// preset when it applies, and the allow rules.
 pub fn allows(policy: &Policy, sandbox: Option<&str>) -> Vec<Resource> {
+    allows_with(policy, sandbox, &[])
+}
+
+fn allows_with(policy: &Policy, sandbox: Option<&str>, install: &[String]) -> Vec<Resource> {
     let mut allows = if policy.mode_for(sandbox) == Mode::Balanced {
         presets::balanced()
     } else {
         Vec::new()
     };
-    allows.extend(resources(policy, sandbox, Decision::Allow));
+    allows.extend(resources(policy, sandbox, install, Decision::Allow));
     allows
 }
 
 /// What smolvm should allow for a sandbox. A bound credential's hosts are always included: smolvm
-/// requires them.
+/// requires them. Install-phase kit rules are left out (see `network_with`).
 pub fn network(policy: &Policy, sandbox: &str, credential_hosts: &[String]) -> NetworkSpec {
-    network_for(policy, Some(sandbox), credential_hosts)
+    network_for(policy, Some(sandbox), credential_hosts, &[])
+}
+
+/// `network` plus the install-phase kit rules with these ids: only for the steps that run a kit's
+/// install hooks (a create's first start, `kit add`), which pass their own kits' ids.
+pub fn network_with(
+    policy: &Policy,
+    sandbox: &str,
+    credential_hosts: &[String],
+    install: &[String],
+) -> NetworkSpec {
+    network_for(policy, Some(sandbox), credential_hosts, install)
 }
 
 /// `network` for a sandbox, or with `None` for the global policy alone.
-fn network_for(policy: &Policy, sandbox: Option<&str>, credential_hosts: &[String]) -> NetworkSpec {
+fn network_for(
+    policy: &Policy,
+    sandbox: Option<&str>,
+    credential_hosts: &[String],
+    install: &[String],
+) -> NetworkSpec {
     if policy.mode_for(sandbox) == Mode::AllowAll {
         return NetworkSpec::Open;
     }
-    let allows = allows(policy, sandbox);
+    let allows = allows_with(policy, sandbox, install);
     if allows.iter().any(|r| r.pattern == Pattern::Everything) {
         return NetworkSpec::Open;
     }
-    let denies = resources(policy, sandbox, Decision::Deny);
+    let denies = resources(policy, sandbox, install, Decision::Deny);
     let (mut patterns, mut cidrs) = (BTreeSet::new(), BTreeSet::new());
     for r in allows.iter().filter(|r| !denied(r, &denies)) {
         match r.to_allow() {
@@ -144,7 +180,13 @@ pub const HOST_LOOPBACK: [&str; 2] = ["127.0.0.0/8", "::1/128"];
 /// `HOST_LOOPBACK` and the deny rules' CIDRs. One with a port is left out: smolvm would deny
 /// every port of the range.
 pub fn deny_cidrs(policy: &Policy, sandbox: &str) -> Vec<String> {
-    resources(policy, Some(sandbox), Decision::Deny)
+    deny_cidrs_with(policy, sandbox, &[])
+}
+
+/// `deny_cidrs` plus those of the install-phase kit rules with these ids: a create passes its
+/// own, as for `network_with`. smolvm fixes deny CIDRs at create, so they outlast the install.
+pub fn deny_cidrs_with(policy: &Policy, sandbox: &str, install: &[String]) -> Vec<String> {
+    resources(policy, Some(sandbox), install, Decision::Deny)
         .into_iter()
         .filter(|r| r.port.is_none())
         .filter_map(|r| match r.to_allow() {
@@ -154,6 +196,48 @@ pub fn deny_cidrs(policy: &Policy, sandbox: &str) -> Vec<String> {
         .chain(HOST_LOOPBACK.map(String::from))
         .collect::<BTreeSet<_>>()
         .into_iter()
+        .collect()
+}
+
+/// For a create: one note per kit whose install-phase rules (of these ids) deny CIDRs that no
+/// other rule denies. smolvm keeps a create's deny CIDRs, so they outlast the install phase.
+pub fn install_deny_cidr_notes(policy: &Policy, sandbox: &str, install: &[String]) -> Vec<String> {
+    let lasting = deny_cidrs(policy, sandbox);
+    let mut per_kit: Vec<(&str, Vec<String>)> = Vec::new();
+    for (r, _) in policy.rules_for(Some(sandbox)) {
+        let Some(kit) = r.created_via.strip_prefix(super::KIT_INSTALL_VIA) else {
+            continue;
+        };
+        if r.decision != Decision::Deny || !install.contains(&r.id) {
+            continue;
+        }
+        for res in r.parsed().filter(|x| x.port.is_none()) {
+            let Allow::Cidr(c) = res.to_allow() else {
+                continue;
+            };
+            if lasting.contains(&c) {
+                continue;
+            }
+            let i = match per_kit.iter().position(|(k, _)| *k == kit) {
+                Some(i) => i,
+                None => {
+                    per_kit.push((kit, Vec::new()));
+                    per_kit.len() - 1
+                }
+            };
+            if !per_kit[i].1.contains(&c) {
+                per_kit[i].1.push(c);
+            }
+        }
+    }
+    per_kit
+        .into_iter()
+        .map(|(kit, cidrs)| {
+            format!(
+                "note: kit {kit}'s install-phase deny of {} stays for this sandbox's life",
+                cidrs.join(", ")
+            )
+        })
         .collect()
 }
 
@@ -225,8 +309,7 @@ pub fn check(
     // No sandbox: the global rules only.
     let mode = policy.mode_for(sandbox);
     let hits = |decision: Decision| {
-        policy
-            .rules_for(sandbox)
+        active(policy, sandbox, &[])
             .filter(move |(r, _)| r.decision == decision)
             .flat_map(|(r, scope)| {
                 r.parsed()
@@ -237,7 +320,7 @@ pub fn check(
     // A CIDR deny without a port is enforced (at create); report it before any other deny.
     let enforced =
         |res: &Resource| matches!(res.pattern, Pattern::Cidr { .. }) && res.port.is_none();
-    let spec = || network_for(policy, sandbox, credential_hosts);
+    let spec = || network_for(policy, sandbox, credential_hosts, &[]);
     let mut denies: Vec<_> = hits(Decision::Deny).collect();
     denies.sort_by_key(|(_, _, res)| !enforced(res));
     if let Some((r, scope, res)) = denies.first() {
@@ -525,6 +608,36 @@ mod tests {
             with_loopback(&["10.0.0.0/8", "192.168.0.0/16"])
         );
         assert_eq!(deny_cidrs(&p, "s2"), with_loopback(&["10.0.0.0/8"]));
+        // An install-phase deny counts only for the create that passes its id.
+        let id = p
+            .add_rule(
+                Some("s1"),
+                Decision::Deny,
+                "172.16.0.0/12",
+                "kit-install:k",
+                None,
+                None,
+            )
+            .unwrap();
+        assert!(!deny_cidrs(&p, "s1").contains(&"172.16.0.0/12".to_string()));
+        let cidrs = deny_cidrs_with(&p, "s1", std::slice::from_ref(&id));
+        assert!(cidrs.contains(&"172.16.0.0/12".to_string()));
+        assert_eq!(
+            install_deny_cidr_notes(&p, "s1", &[id]),
+            ["note: kit k's install-phase deny of 172.16.0.0/12 stays for this sandbox's life"]
+        );
+        // One a lasting rule denies anyway needs no note.
+        let id = p
+            .add_rule(
+                Some("s1"),
+                Decision::Deny,
+                "10.0.0.0/8, bad.example",
+                "kit-install:k",
+                None,
+                None,
+            )
+            .unwrap();
+        assert!(install_deny_cidr_notes(&p, "s1", &[id]).is_empty());
     }
 
     fn with_loopback(cidrs: &[&str]) -> Vec<String> {

@@ -5,32 +5,44 @@ pub struct Agent {
     pub name: &'static str,
     pub image: &'static str,
     pub command: &'static [&'static str],
+    /// The agent file's name. Like sbx, it sits in the parent of the workspace path in the
+    /// guest; kit agent context goes there.
+    pub context_file: &'static str,
 }
+
+/// The agent file's name for presets without their own, and for a workload kit's
+/// `agent-context` without a `filename`.
+pub const DEFAULT_CONTEXT_FILE: &str = "AGENTS.md";
 
 pub const AGENTS: &[Agent] = &[
     Agent {
         name: "claude",
         image: "docker/sandbox-templates:claude-code-docker-0.10.0",
+        context_file: "CLAUDE.md",
         command: &["claude", "--dangerously-skip-permissions"],
     },
     Agent {
         name: "codex",
         image: "docker/sandbox-templates:codex-docker-0.7.0",
+        context_file: DEFAULT_CONTEXT_FILE,
         command: &["codex", "--dangerously-bypass-approvals-and-sandbox"],
     },
     Agent {
         name: "copilot",
         image: "docker/sandbox-templates:copilot-docker-0.4.0",
+        context_file: DEFAULT_CONTEXT_FILE,
         command: &["copilot", "--yolo"],
     },
     Agent {
         name: "cursor",
         image: "docker/sandbox-templates:cursor-agent-docker-0.7.0",
+        context_file: DEFAULT_CONTEXT_FILE,
         command: &["cursor-agent", "--yolo"],
     },
     Agent {
         name: "devin",
         image: "docker/sandbox-templates:devin-docker-0.7.0",
+        context_file: DEFAULT_CONTEXT_FILE,
         command: &[
             "devin",
             "--permission-mode",
@@ -41,31 +53,37 @@ pub const AGENTS: &[Agent] = &[
     Agent {
         name: "docker-agent",
         image: "docker/sandbox-templates:docker-agent-docker-0.7.0",
+        context_file: DEFAULT_CONTEXT_FILE,
         command: &["docker-agent", "run", "--yolo"],
     },
     Agent {
         name: "droid",
         image: "docker/sandbox-templates:droid-docker-0.4.0",
+        context_file: DEFAULT_CONTEXT_FILE,
         command: &["droid"],
     },
     Agent {
         name: "gemini",
         image: "docker/sandbox-templates:gemini-docker-0.10.0",
+        context_file: "GEMINI.md",
         command: &["gemini", "--yolo"],
     },
     Agent {
         name: "kiro",
         image: "docker/sandbox-templates:kiro-docker-0.4.0",
+        context_file: DEFAULT_CONTEXT_FILE,
         command: &["kiro", "chat", "--trust-all-tools"],
     },
     Agent {
         name: "opencode",
         image: "docker/sandbox-templates:opencode-docker-0.7.0",
+        context_file: DEFAULT_CONTEXT_FILE,
         command: &["opencode"],
     },
     Agent {
         name: "shell",
         image: "docker/sandbox-templates:shell-docker-0.10.0",
+        context_file: DEFAULT_CONTEXT_FILE,
         command: &["bash", "-l"],
     },
 ];
@@ -103,8 +121,8 @@ pub fn plain_image(image: &str) -> String {
 }
 
 /// sbx's rule for `-- ARGS`: flags are appended to the preset; a bare word replaces its flags.
-pub fn command_with_args(command: &[&str], args: &[String]) -> Vec<String> {
-    let mut cmd: Vec<String> = command.iter().map(|s| s.to_string()).collect();
+pub fn command_with_args<S: AsRef<str>>(command: &[S], args: &[String]) -> Vec<String> {
+    let mut cmd: Vec<String> = command.iter().map(|s| s.as_ref().to_string()).collect();
     match args.first() {
         None => {}
         Some(first) if first.starts_with('-') => cmd.extend(args.iter().cloned()),

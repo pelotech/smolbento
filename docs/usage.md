@@ -136,7 +136,9 @@ Good to know:
   `PATH` (every install puts it there; the `sbt`, `sbx` and `bento` names are links to it).
 - `--clone` needs a workspace path in a git repository, and git 2.31 or newer on your machine. The
   image needs git too: the built-in agent images have it, but with `-t` pick an image with git
-  installed. If the clone fails, the start fails with git's error and the next start tries again.
+  installed. If the clone fails, the start fails with git's error. On a sandbox's first start with
+  kits (every Docker-enabled sandbox has the `docker` kit) the sandbox is then removed, so run the
+  same `create` or `run` again; otherwise the next start tries again.
 - `--clone` only applies when the sandbox is created; `run` on an existing sandbox ignores it.
 - `sbt rm`, `prune` and `reset` remove the `sandbox-<name>` remote, and with it the
   `sandbox-<name>/…` branches, as sbx does. Merge what you want first, or keep a branch:
@@ -199,6 +201,14 @@ sbt exec -u root -w /tmp -e DEBUG=1 claude-myrepo env
 `exec` starts a stopped sandbox first. It runs as the `agent` user in the workspace directory
 unless you pass `-u` or `-w`; `--privileged` runs as root. It exits with the command's status.
 
+The agent and every `exec` see the sandbox variables sbx sets: `SANDBOX_NAME`, `SANDBOX_VM_ID`
+(the name), `SANDBOX_ID` (a UUID, new for each sandbox and each fork), `WORKSPACE_DIR` (the host
+path of the primary workspace), `SBX_AGENT` (the agent or kit name) and, for the `shell` and
+`claude` presets (not kits of those names), `SBX_CRED_<SERVICE>_MODE` (`apikey` when that
+service's secret was set at create, else `none`). The `claude` preset also gets `IS_SANDBOX=1`.
+Your own `-e` wins. See
+[sbx compatibility](sbx-compatibility.md#sandbox-environment) for what's left out.
+
 ## Docker inside a sandbox
 
 Every sandbox runs its own Docker engine, so agents can `docker build` and `docker compose up`
@@ -206,6 +216,146 @@ without touching your host's Docker. Its storage is on the sandbox's own disk an
 
 To skip Docker (smaller images, faster first pull), set `sbt settings set docker.enabled false`
 before creating sandboxes; agents then use the plain image variants.
+
+The engine comes from the shipped `docker` kit (see [Kits](#kits)): Docker-enabled images get it
+automatically, and `--kit docker` adds it to any image, e.g. `sbt create -t alpine --kit docker
+shell .`. dockerd starts on every start of the sandbox; its log is `/var/log/dockerd.log`.
+
+## Kits
+
+Kits add tools, files, network rules, credentials and setup steps to a sandbox. smolbento runs
+Docker Sandboxes kits (v3, and v2 `spec.yaml`) and smolvm Smolfiles.
+
+```sh
+sbt run claude . --kit docker.io/acme/postgres-kit:1    # add a mixin kit to an agent
+sbt run docker.io/acme/my-agent:1 .                     # a workload kit replaces the agent
+sbt create shell . --kit ./my-kit --kit-arg region=eu   # a local kit, with an argument
+sbt kit inspect ./my-kit                                # what it provides and asks for
+sbt kit validate ./my-kit                               # check it without running it
+sbt kit add claude-myrepo ./my-mixin                    # add a mixin to an existing sandbox
+```
+
+A **mixin** kit adds to an agent (`--kit`, repeatable). A **workload** kit is the agent: pass it
+where the agent name goes, and the sandbox is named after it. Its image's command runs as the
+image's `USER` (root if it sets none) under `/bin/bash`, so `BASH_ENV` is sourced, in the workspace
+path; `sbt exec` uses the same user. The user gets your uid so it can write the workspace (a
+numeric `USER` runs as the account with that uid). A workload whose image has no `ENTRYPOINT` or
+`CMD` is refused, and one without `/bin/bash` fails to start its agent. A kit reference is one of:
+
+| Reference | Kit |
+|---|---|
+| `docker` | The shipped Docker kit |
+| `docker.io/acme/kit:1`, `ghcr.io/acme/kit@sha256:…` | A published kit, pulled from its registry |
+| `./my-kit` (a directory with one `*.yaml` starting `# syntax=docker/sandbox-kit:3`), or that file | A local v3 kit, built in the builder sandbox (below) |
+| `./my-kit` (a directory with a `spec.yaml`) | A local v2 kit |
+| `./Smolfile`, `./x.smolfile` | A smolvm Smolfile |
+
+A local kit is always written as a path: `./my-kit`, `../kits/my-kit`, `.` or an absolute path.
+As in sbx, a bare word is never a kit, even when a directory of that name exists: `sbt create
+my-kit` is `unknown agent "my-kit"`, and `--kit my-kit` says it's `not a local path and does not
+look like a registry reference`. A registry reference has a `/`, so for the `alpine` image write
+`docker.io/library/alpine`. `docker` is always the shipped kit.
+
+Kits can version what they provide and what they need, as in the kit spec:
+`provides: [postgres@16.2.0]` and `requires: ["postgres >= 16"]`. A missing or mismatched
+capability stops the create with sbx's `resolve: the kit set is not coherent:` and one line per
+problem. The agent presets provide their own name, so a v2 mixin's `requires.agent: claude` works
+on `claude`.
+
+`sbt kit inspect REF` prints a summary (name, kind, schema, network rule counts, credentials and
+commands), then the capabilities and what smolbento supports of each, then the source and the
+kit's provides, requires, credentials (each service and the hosts its secret is sent to) and
+arguments. `--format json` (or `--json`) and `--format yaml` give the
+kit as a v2-shaped descriptor, with smolbento's extras under a `smolbento` key; the credential
+entries there list the hosts each secret is sent to. `sbt kit validate REF` prints
+`✓ REF — valid`, or the error and exit status 1; with `--json` or `--format json|yaml` it prints
+`{reference, kind, valid, warnings}`, plus `errors` when it isn't valid. `--offline` checks a local
+v2 kit or Smolfile without the network or the source policy.
+
+Kit arguments: `--kit-arg NAME=VALUE` sets an argument for every kit, `--kit-arg KIT.NAME=VALUE`
+for one kit, and `--kit-args-file FILE` reads `NAME=VALUE` lines. Files are read in order, then
+`--kit-arg`; the last value wins, and a value for one kit beats a value for all. Argument values
+aren't secret: they can end up in the sandbox's environment and smolvm's machine config, so put
+secrets in [credentials](#secrets) instead. An argument a kit uses that has no value and no default
+is an error (`create-phase kit arg "x" has no resolved value`); `--kit-arg x=` sets it to empty.
+`--kit-arg` without any kit is an error too. As in sbx, a `KIT.NAME` value for a kit that isn't in
+the sandbox is ignored. Unquoted numbers and booleans in a kit's `default:` and `enum:` are read
+as strings.
+
+What a kit does, and when:
+
+- **First start**: its install steps run once, as root in a workload kit's image `WORKDIR` (`/`
+  otherwise), with any network access the kit needs only for installing. If one fails, or a kit
+  file can't be written, the sandbox is removed and the error printed, so the same command works
+  again once it's fixed. A failing startup step doesn't remove it (see below). Its files and agent
+  instructions are written once (see [agent instructions](#agent-instructions-from-kits)); a v2
+  kit's `files/workspace` and `${WORKDIR}` are the sandbox's primary workspace, or
+  `/home/agent/workspace` without one.
+- **Every start**: the kits' startup steps run in kit order before the agent, and a failing one
+  fails the start (`kit startup exited with code N`). A step marked `background: true` (such as
+  the `docker` kit's `dockerd`) is started at its place in that order and keeps running, so later
+  steps can use it; one of those failing is only logged. A step that doesn't finish (and isn't
+  marked `background`) holds up the start: there's no timeout, as in sbx.
+  Output goes to `/var/log/sbx-kit-startup.log` in the sandbox: a `=== dispatcher run … ===` line
+  per start, then `ok /etc/smolbento/startup.d/NN-<kit>.sh hook N` for each step that finished (or
+  was started, for a background one), and a failing step's output and exit code. If a step fails
+  during create, the sandbox is still created, with a warning, and stopped: each later start fails
+  until the step succeeds, as in sbx. `kit add` only warns. Startup steps run as `agent` unless
+  they name a user; a numeric user runs as the account that has that uid. The shipped `docker` kit
+  comes before your kits, so your startup steps can use Docker.
+- **Environment**: a v3 install step gets a clean environment (`PATH`, `HOME`, `USER`, `TERM`, the
+  proxy and CA variables, and the variables it lists in `env`). Startup steps and every v2 step
+  get the sandbox's full environment, as in sbx.
+- **Credentials** come from your secrets. If a kit needs one you haven't set, the sandbox is still
+  created, as in sbx: you get `WARN: required credential not found for service SERVICE` and the
+  `sbt secret set` command to run, and the kit's requests go out without the credential until you
+  set it and recreate the sandbox. A built-in service's secret only goes to that service's own
+  hosts; see [Security](SECURITY.md#kits). A credential the kit needs only while installing is
+  available during install; the sandbox then restarts once without it, and later requests to its
+  hosts get `502`.
+- **Volumes** a kit declares are on the sandbox's own disk: they survive stop and start, and are
+  removed with the sandbox.
+
+Only kits from Docker Hub load by default, plus local kits; see [Configuration](configuration.md)
+for `kit.allowedSources` and `kit.allowLocalKits`, and [Security](SECURITY.md#kits) for what a kit
+can open.
+
+### Agent instructions from kits
+
+Kit instructions for the agent go where sbx puts them: in the agent's file in the parent directory
+of the workspace path, inside the sandbox only. With workspace `~/src/app`, claude reads
+`~/src/CLAUDE.md`, gemini `~/src/GEMINI.md` and other agents `~/src/AGENTS.md`; a sandbox without a
+workspace uses `/home/agent`. A workload kit can name its own file, and its text is appended to it.
+Each mixin's text goes to `kits-agent-context/<kit>.md` next to that file, and the file gets a
+`## Kits` list pointing at them, between `<!-- sbx:kits-section start -->` and
+`<!-- sbx:kits-section end -->`. `kit add` adds a line to that list. Unlike sbx, smolbento writes no
+platform preamble of its own.
+
+- Nothing is written on your machine: if the file would land in a mounted workspace (say you also
+  mounted the parent directory), smolbento skips it with a warning.
+- If a workload kit declares no agent file, mixin instructions are dropped, with a warning.
+- The files are owned by `agent`, except a file the image already has owned by root, which keeps
+  its owner.
+- With `--clone` and a workspace that is a subdirectory of the repo, the parent directory is inside
+  the sandbox's clone, so the files show up there as untracked files.
+
+### Adding a kit to a sandbox
+
+`sbt kit add SANDBOX REF` adds a mixin to an existing sandbox without restarting it: network rules,
+install and startup steps, files and agent instructions apply at once (a stopped sandbox is started
+for it). A kit that would change the image, credentials, ports, volumes, resources, environment
+variables or auto-stop needs a new sandbox: `kit add` says "recreate required" and changes nothing.
+If the kit opens network access, `kit add` asks first; `-y` grants it, and without a terminal it
+fails.
+
+### The builder sandbox
+
+Local v3 kits are built with BuildKit in a hidden sandbox, `_builder`, so you don't need Docker on
+your machine. It's created on first use, stopped after each build and not shown by `sbt ls`; its
+disk keeps the build cache, and `sbt rm _builder` resets it. Builds use your global network policy
+(`sbt policy log _builder` shows what was blocked) and never get your secrets. Base images are
+pulled without a registry login, so a kit built on an image that needs one (Docker's own examples
+use `dhi.io`) won't build locally yet; published kits are not affected.
 
 ## Files and ownership
 

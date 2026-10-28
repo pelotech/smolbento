@@ -37,11 +37,15 @@ need to change network policy and ports on a running sandbox.
 1. *Identity:* the image's `agent` user is given your uid (`usermod -o -u <uid> agent`). smolvm's
    file sharing passes host uids through, so this is what lets the agent write your workspace and
    makes its files yours on the host.
-2. *Docker:* for Docker-enabled sandboxes, `dockerd` is started in the background. Its data lives in
-   `/var/lib/docker` and `/var/lib/containerd`, which are directories on the VM's own disk rather than
-   the image's overlay filesystem, because Docker's storage can't sit on an overlay.
+2. *Docker:* Docker-enabled sandboxes get the shipped `docker` kit (`kits/docker/docker.yaml`, or
+   `--kit docker` on any image). Its startup hook starts `dockerd` in the background on every start.
+   Its data lives in `/var/lib/docker` and `/var/lib/containerd`, the kit's volumes: directories on
+   the VM's own disk rather than the image's overlay filesystem, because Docker's storage can't sit
+   on an overlay. Sandboxes created before kits (`sbx.docker=true`, no `sbx.kits`) still get
+   `dockerd` started directly.
 
-**Run** creates and starts as needed, then execs the agent as `agent` in the workspace. While
+**Run** creates and starts as needed, then execs the agent as `agent` in the workspace (a v3
+workload kit's agent runs as its image user, through `/bin/bash`). While
 attached, it keeps a session file (`~/.cache/smolbento/sessions/<name>/<pid>`). When it exits it
 removes that file and stops the sandbox if no other live session remains, unless the sandbox was
 started with `run -d`.

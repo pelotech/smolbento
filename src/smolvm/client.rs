@@ -49,11 +49,13 @@ impl PortMap {
 
 /// A secret the guest sees only as a placeholder; smolvm substitutes the real value (from the
 /// `machine start` environment) on HTTPS requests to `hosts`.
-#[derive(Debug, Clone, PartialEq, Eq)]
+#[derive(Debug, Clone, Default, PartialEq, Eq)]
 pub struct Credential {
     pub name: String,
     pub env_var: String,
     pub hosts: Vec<String>,
+    /// smolvm sets this header to the value itself (`:set-header=`), for inject-only credentials.
+    pub set_header: Option<String>,
 }
 
 impl Credential {
@@ -63,7 +65,11 @@ impl Credential {
             !self.hosts.is_empty(),
             "a credential needs at least one host"
         );
-        format!("{}={}@{}", self.name, self.env_var, self.hosts.join(","))
+        let mut arg = format!("{}={}@{}", self.name, self.env_var, self.hosts.join(","));
+        if let Some(h) = &self.set_header {
+            arg.push_str(&format!(":set-header={h}"));
+        }
+        arg
     }
 }
 
@@ -77,6 +83,8 @@ pub struct CreateSpec {
     /// Ranges refused before anything is allowed (smolvm accepts these at create only).
     pub deny_cidrs: Vec<String>,
     pub credentials: Vec<Credential>,
+    /// `--smolfile`: a Smolfile kit's configuration, which may also name the image.
+    pub smolfile: Option<PathBuf>,
     pub mounts: Vec<Mount>,
     pub workdir: Option<String>,
     pub cpus: Option<u32>,
@@ -96,7 +104,13 @@ impl CreateSpec {
     pub fn to_args(&self) -> Vec<String> {
         let mut a = vec!["machine".to_string(), "create".to_string()];
         flag(&mut a, "-n", &self.name);
-        flag(&mut a, "--image", &self.image);
+        // smolvm takes the image from the Smolfile when `--image` is left out.
+        if self.smolfile.is_none() || !self.image.is_empty() {
+            flag(&mut a, "--image", &self.image);
+        }
+        if let Some(s) = &self.smolfile {
+            flag(&mut a, "--smolfile", s.display().to_string());
+        }
         a.extend(self.network.create_args());
         for c in &self.deny_cidrs {
             flag(&mut a, "--deny-cidr", c);
@@ -267,6 +281,7 @@ impl<R: Runner> Smolvm<R> {
         from: &str,
         name: &str,
         labels: &[(String, String)],
+        vars: &[(String, String)],
         env: &[(String, String)],
         remove: &[String],
     ) -> Result<()> {
@@ -274,14 +289,22 @@ impl<R: Runner> Smolvm<R> {
         for (k, v) in labels {
             flag(&mut a, "--label", format!("{k}={v}"));
         }
+        // Per-branch variables: the child's exec sessions see them (not secrets; they're argv).
+        for (k, v) in vars {
+            flag(&mut a, "-e", format!("{k}={v}"));
+        }
         checked(self.runner.run_with_env(&a, env, remove)?).map(drop)
     }
 
-    /// Replaces the machine's whole allow list; applies live on a running machine.
+    /// Replaces the machine's whole allow list; applies live on a running machine. A list
+    /// without hosts takes two calls (see `network::NO_HOSTS_PLACEHOLDER`).
     pub fn update_network(&self, name: &str, network: &NetworkSpec) -> Result<()> {
-        let mut a = args(&["machine", "update", "-n", name]);
-        a.extend(network.update_args());
-        self.call(a).map(drop)
+        for flags in network.update_calls() {
+            let mut a = args(&["machine", "update", "-n", name]);
+            a.extend(flags);
+            self.call(a)?;
+        }
+        Ok(())
     }
 
     pub fn publish(&self, name: &str, ports: &[PortMap]) -> Result<()> {
@@ -341,6 +364,12 @@ impl<R: Runner> Smolvm<R> {
     pub fn exec_captured(&self, spec: &ExecSpec) -> Result<Output> {
         self.call(spec.to_args())
     }
+
+    /// `exec_captured` that returns a non-zero exit as output too, for callers that report the
+    /// guest command's own stdout and stderr.
+    pub fn exec_output(&self, spec: &ExecSpec) -> Result<Output> {
+        self.runner.run(&spec.to_args())
+    }
 }
 
 #[cfg(test)]
@@ -374,6 +403,7 @@ mod tests {
                 ("sbx.name".into(), "a-fork-1".into()),
                 ("sbx.fork-of".into(), "a".into()),
             ],
+            &[("V".into(), "1".into())],
             &[("TOK".into(), "secret-value".into())],
             &["GH_TOKEN".into()],
         )
@@ -382,7 +412,7 @@ mod tests {
         assert_eq!(
             line,
             "machine branch --from sbx-a -n sbx-a-fork-1 --label sbx.name=a-fork-1 \
-             --label sbx.fork-of=a"
+             --label sbx.fork-of=a -e V=1"
         );
         assert!(!line.contains("secret-value"));
         assert_eq!(
@@ -458,6 +488,7 @@ mod tests {
                 name: "gh_token".into(),
                 env_var: "GH_TOKEN".into(),
                 hosts: vec!["github.com".into(), "api.github.com".into()],
+                ..Default::default()
             }],
             ..Default::default()
         };
@@ -512,11 +543,46 @@ mod tests {
     }
 
     #[test]
+    fn emptying_the_host_list_resets_through_a_placeholder() {
+        let vm = Smolvm::new(FakeRunner::new());
+        let deny_all = NetworkSpec::Restricted(AllowList::new(vec![], vec![], vec![]));
+        vm.update_network("m", &deny_all).unwrap();
+        assert_eq!(
+            vm.runner().call_lines(),
+            vec![
+                "machine update -n m --reset-allow-list --allow-host-pattern smolbento.invalid \
+                 --allow-cidr 127.0.0.0/8 --allow-cidr ::1/128",
+                "machine update -n m --remove-allow-host smolbento.invalid",
+            ]
+        );
+    }
+
+    #[test]
     fn publishing_no_ports_makes_no_call() {
         let vm = Smolvm::new(FakeRunner::new());
         vm.publish("m", &[]).unwrap();
         vm.unpublish("m", &[]).unwrap();
         assert!(vm.runner().call_lines().is_empty());
+    }
+
+    #[test]
+    fn set_header_and_smolfile_args() {
+        let spec = CreateSpec {
+            name: "m".into(),
+            smolfile: Some("/k/Smolfile".into()),
+            credentials: vec![Credential {
+                name: "x".into(),
+                env_var: "SBX_KIT_X".into(),
+                hosts: vec!["api.x.com".into()],
+                set_header: Some("authorization".into()),
+            }],
+            ..Default::default()
+        };
+        assert_eq!(
+            spec.to_args().join(" "),
+            "machine create -n m --smolfile /k/Smolfile --net --net-backend virtio-net \
+             --credential x=SBX_KIT_X@api.x.com:set-header=authorization"
+        );
     }
 
     #[test]
@@ -527,6 +593,7 @@ mod tests {
             name: "t".into(),
             env_var: "T".into(),
             hosts: vec![],
+            ..Default::default()
         };
         c.arg();
     }

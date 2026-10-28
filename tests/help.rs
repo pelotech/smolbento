@@ -36,6 +36,10 @@ fn help_snapshots() {
         vec!["policy"],
         vec!["secret"],
         vec!["ports"],
+        vec!["kit"],
+        vec!["kit", "inspect"],
+        vec!["kit", "validate"],
+        vec!["kit", "add"],
     ] {
         let name = if path.is_empty() {
             "sbt".to_string()

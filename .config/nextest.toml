@@ -1,0 +1,8 @@
+# CI's e2e job runs with NEXTEST_PROFILE=ci. Several e2e tests reach example.com and httpbin.org,
+# so a failed e2e test gets one retry there; nextest still reports it as flaky.
+[profile.ci]
+fail-fast = false
+
+[[profile.ci.overrides]]
+filter = 'binary(e2e)'
+retries = 1

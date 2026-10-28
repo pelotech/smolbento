@@ -12,6 +12,7 @@ run claude . -p 8080:80 -p 127.0.0.1:3000:3000/tcp
 run claude . -t docker/sandbox-templates:claude-code
 run claude . --clone
 run claude . --kit ghcr.io/example/kit:1 --kit-arg key=value
+run claude . --kit ghcr.io/example/kit:1 --kit-args-file kit.env
 run claude . --skills off
 run claude . --static-mcp github,linear
 run claude . --deny-network evil.com
@@ -20,6 +21,8 @@ create --clone claude .
 create shell
 create --name dev gemini . --no-progress
 create claude . --deny-network evil.com,10.0.0.0/8 --deny-network tracker.example
+create shell . --kit ./my-kit --kit ghcr.io/example/kit:1 --kit-arg kit.key=value
+create shell --kit ./my-kit --kit-args-file kit.env
 exec my-sandbox ls -la
 exec -it my-sandbox bash
 exec -u root -w /tmp -e A=1 my-sandbox env
@@ -41,6 +44,7 @@ policy init balanced
 policy allow network api.example.com,*.npmjs.org
 policy ls --wide
 policy ls --decision deny
+policy ls --source kit
 policy log
 policy log my-sandbox --limit 20 --json
 policy approval ls
@@ -66,8 +70,24 @@ secret rm --all -f
 ports my-sandbox
 ports my-sandbox --publish 3000 --unpublish 8080:80
 ports my-sandbox --publish 8080:80
-# Later phases (must parse; exit 2 for now)
+# Kits
 kit inspect ghcr.io/example/kit:1
+kit inspect ./my-kit --json
+kit inspect ./my-kit --format yaml
+kit inspect ./my-kit --format table --offline
+kit inspect ./my-kit --kit-arg region=eu
+kit validate ./my-kit
+kit validate ./my-kit --json --offline
+kit validate ./my-kit --kit-arg region=eu --kit-args-file kit.env
+kit add my-sandbox ./mcp-postgres/
+kit add my-sandbox ghcr.io/myorg/mcp-postgres:1.0
+kit add my-sandbox ./mcp-postgres/ --kit-arg host=db.internal
+# Later phases (must parse; exit 2 for now)
+kit pack ./my-kit
+kit push ./my-kit ghcr.io/myorg/my-kit:1.0
+kit pull ghcr.io/myorg/my-kit:1.0
+kit sign ghcr.io/myorg/my-kit:1.0
+kit verify ghcr.io/myorg/my-kit:1.0
 mcp add linear --url https://mcp.linear.app/sse
 template ls
 env run

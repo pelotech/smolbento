@@ -4,16 +4,18 @@ mod args;
 mod diagnose;
 mod exec;
 mod fork;
+mod kit;
+mod kit_doc;
 mod lifecycle;
 mod ls;
-mod plan;
+pub(crate) mod plan;
 mod policy;
 mod ports;
 mod run;
 mod secret;
 mod settings;
 #[cfg(test)]
-mod testutil;
+pub(crate) mod testutil;
 mod upload_pack;
 
 pub use args::*;
@@ -56,8 +58,9 @@ pub struct Ctx<R: Runner> {
     /// Unix seconds.
     pub now: i64,
     pub stdin_tty: bool,
-    /// The host user's uid; the sandbox's `agent` user takes it.
+    /// The host user's uid and gid; the sandbox's `agent` user takes them.
     pub uid: u32,
+    pub gid: u32,
     /// Where stored secret values live (OS keychain, or the 0600 file).
     pub store: Box<dyn crate::secrets::store::SecretStore>,
     /// Why config.toml couldn't be loaded; only `diagnose` and `settings` run despite it.
@@ -105,6 +108,7 @@ pub fn main(args: impl IntoIterator<Item = OsString>) -> Result<i32> {
         now: SystemTime::now().duration_since(UNIX_EPOCH)?.as_secs() as i64,
         stdin_tty: std::io::stdin().is_terminal(),
         uid: crate::sandbox::host_uid(),
+        gid: crate::sandbox::host_gid(),
         store,
         config_error,
         out: Out::Stdout,
@@ -164,6 +168,7 @@ pub fn dispatch<R: Runner>(ctx: &mut Ctx<R>, cli: Cli) -> Result<i32> {
         Cmd::Policy(p) => policy::run(ctx, p),
         Cmd::Secret(s) => secret::run(ctx, s),
         Cmd::Ports(a) => ports::run(ctx, &a),
+        Cmd::Kit(k) => kit::run(ctx, k),
         Cmd::UploadPack { sandbox, .. } => upload_pack::run(ctx, &sandbox),
         Cmd::Daemon(_) => {
             writeln!(
@@ -293,8 +298,11 @@ mod tests {
     #[test]
     fn pending_and_cloud_commands_exit_2() {
         let mut t = test_env(&[]);
-        let err = sbt(&mut t.ctx, &["kit", "inspect", "x"]).unwrap_err();
-        assert_eq!(err.to_string(), "`sbt kit` is not implemented yet");
+        let err = sbt(&mut t.ctx, &["mcp", "ls"]).unwrap_err();
+        assert_eq!(err.to_string(), "`sbt mcp` is not implemented yet");
+        assert_eq!(exit_code(&err), 2);
+        let err = sbt(&mut t.ctx, &["kit", "pack", "./my-kit"]).unwrap_err();
+        assert_eq!(err.to_string(), "`sbt kit pack` is not implemented yet");
         assert_eq!(exit_code(&err), 2);
         let err = sbt(&mut t.ctx, &["move", "x", "--to", "cloud"]).unwrap_err();
         assert!(err.to_string().contains("Docker Cloud"));

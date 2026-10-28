@@ -45,6 +45,20 @@ impl Workspace {
         }
     }
 
+    /// Back from `label`.
+    pub fn from_label(label: &str) -> Workspace {
+        match label.strip_suffix(":ro") {
+            Some(path) => Workspace {
+                path: path.into(),
+                read_only: true,
+            },
+            None => Workspace {
+                path: label.into(),
+                read_only: false,
+            },
+        }
+    }
+
     /// As stored in the `sbx.workspaces` label.
     pub fn label(&self) -> String {
         if self.read_only {
@@ -77,6 +91,7 @@ mod tests {
         let w = Workspace::parse("docs:ro", &root).unwrap();
         assert!(w.read_only);
         assert_eq!(w.label(), format!("{}:ro", root.join("docs").display()));
+        assert_eq!(Workspace::from_label(&w.label()), w);
         let m = w.mount();
         assert_eq!(m.host.as_deref(), Some(root.join("docs").as_path()));
         assert_eq!(m.guest, root.join("docs").display().to_string());

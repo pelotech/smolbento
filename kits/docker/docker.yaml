@@ -1,0 +1,18 @@
+# syntax=docker/sandbox-kit:3
+schemaVersion: "3"
+kind: mixin
+displayName: docker
+version: "1.0.0"
+provides: [docker]
+capabilities:
+  - type: com.docker.sandbox/volume@1
+    config: {path: /var/lib/docker}
+  - type: com.docker.sandbox/volume@1
+    config: {path: /var/lib/containerd}
+  - type: com.docker.sandbox/privileged@1
+  - type: com.docker.sandbox/lifecycle@1
+    config:
+      startup:
+        - command: "pgrep -x dockerd >/dev/null || { rm -f /var/run/docker.pid; exec dockerd >/var/log/dockerd.log 2>&1; }"
+          user: "0"
+          background: true

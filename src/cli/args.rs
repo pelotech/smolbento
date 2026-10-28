@@ -73,8 +73,9 @@ pub enum Cmd {
     /// Secrets for agents: sandboxes see placeholders, smolvm sends the real value
     #[command(subcommand)]
     Secret(SecretCmd),
-    /// Kits (not implemented yet)
-    Kit(Passthrough),
+    /// Inspect, validate and add kits
+    #[command(subcommand)]
+    Kit(KitCmd),
     /// MCP servers (not implemented yet)
     Mcp(Passthrough),
     /// sbxenv.yaml environments (not implemented yet)
@@ -205,6 +206,83 @@ pub struct ForkArgs {
     pub count: u32,
 }
 
+/// `kit inspect --format`.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, clap::ValueEnum)]
+pub enum KitFormat {
+    Table,
+    Json,
+    Yaml,
+}
+
+#[derive(Debug, Subcommand)]
+pub enum KitCmd {
+    /// Show what a kit provides and requests
+    Inspect {
+        /// Kit: a registry reference or a local path (./dir, descriptor or Smolfile)
+        reference: String,
+        #[command(flatten)]
+        args: KitArgOpts,
+        /// Output format
+        #[arg(long, value_enum)]
+        format: Option<KitFormat>,
+        /// Output in JSON format
+        #[arg(long)]
+        json: bool,
+        /// Skip the source policy check; local kits only, no network
+        #[arg(long)]
+        offline: bool,
+    },
+    /// Check a kit without running it
+    Validate {
+        /// Kit: a registry reference or a local path (./dir, descriptor or Smolfile)
+        reference: String,
+        #[command(flatten)]
+        args: KitArgOpts,
+        /// Output format
+        #[arg(long, value_enum)]
+        format: Option<KitFormat>,
+        /// Output in JSON format
+        #[arg(long)]
+        json: bool,
+        /// Skip the source policy check; local kits only, no network
+        #[arg(long)]
+        offline: bool,
+    },
+    /// Add a mixin kit to an existing sandbox
+    Add {
+        /// Sandbox name
+        sandbox: String,
+        /// Mixin kit: a registry reference or a local path (./dir or descriptor)
+        reference: String,
+        #[command(flatten)]
+        args: KitArgOpts,
+        /// Grant the kit's network access without asking
+        #[arg(long, short = 'y')]
+        yes: bool,
+    },
+    #[command(hide = true)]
+    Pack(Passthrough),
+    #[command(hide = true)]
+    Push(Passthrough),
+    #[command(hide = true)]
+    Pull(Passthrough),
+    #[command(hide = true)]
+    Sign(Passthrough),
+    #[command(hide = true)]
+    Verify(Passthrough),
+}
+
+/// Kit argument flags, as on `run` and `create`.
+#[derive(Debug, Clone, Default, Args)]
+pub struct KitArgOpts {
+    /// Kit argument: NAME=VALUE, or KIT.NAME=VALUE for one kit (repeatable)
+    #[arg(long = "kit-arg", value_name = "NAME=VALUE")]
+    pub kit_arg: Vec<String>,
+    /// Read kit arguments (NAME=VALUE lines) from a file (repeatable)
+    #[arg(long = "kit-args-file", value_name = "FILE")]
+    pub kit_args_file: Vec<PathBuf>,
+}
+
 /// Arguments of a command that isn't implemented yet, kept so sbx command lines still parse.
 #[derive(Debug, Args)]
 pub struct Passthrough {
@@ -242,12 +320,14 @@ pub struct SandboxOpts {
     /// Work on a private clone of the git repo; its commits come back via the sandbox-<name> git remote
     #[arg(long)]
     pub clone: bool,
-    /// Add a kit (not implemented yet)
-    #[arg(long)]
+    /// Add a kit: registry reference or local path, e.g. ./kit (repeatable)
+    #[arg(long, value_name = "REF")]
     pub kit: Vec<String>,
-    #[arg(long = "kit-arg", hide = true)]
+    /// Kit argument: NAME=VALUE, or KIT.NAME=VALUE for one kit (repeatable)
+    #[arg(long = "kit-arg", value_name = "NAME=VALUE")]
     pub kit_arg: Vec<String>,
-    #[arg(long = "kit-args-file", hide = true)]
+    /// Read kit arguments (NAME=VALUE lines) from a file (repeatable)
+    #[arg(long = "kit-args-file", value_name = "FILE")]
     pub kit_args_file: Vec<PathBuf>,
     /// Add a per-sandbox network deny rule at creation time. Can be specified multiple times.
     /// The rule applies only to the new sandbox and can be listed or removed later with
@@ -278,10 +358,6 @@ impl SandboxOpts {
     /// Rejects flags from later phases and Docker Cloud-only flags.
     pub fn check_supported(&self) -> Result<()> {
         let pending = [
-            (
-                !self.kit.is_empty() || !self.kit_arg.is_empty() || !self.kit_args_file.is_empty(),
-                "--kit",
-            ),
             (self.skills.is_some(), "--skills"),
             (self.static_mcp.is_some(), "--static-mcp"),
         ];
@@ -311,7 +387,7 @@ impl SandboxOpts {
 
 #[derive(Debug, Args)]
 pub struct RunArgs {
-    /// Agent, then workspace paths (default: the current directory)
+    /// Agent or workload kit (registry reference or local path, e.g. ./kit), then workspace paths (default: the current directory)
     pub targets: Vec<String>,
     #[command(flatten)]
     pub opts: SandboxOpts,
@@ -332,7 +408,7 @@ pub struct RunArgs {
 
 #[derive(Debug, Args)]
 pub struct CreateArgs {
-    /// Agent, then workspace paths (none: a mountless sandbox)
+    /// Agent or workload kit (registry reference or local path, e.g. ./kit), then workspace paths (none: a mountless sandbox)
     #[arg(required = true)]
     pub targets: Vec<String>,
     #[command(flatten)]
@@ -561,7 +637,8 @@ pub struct PolicyLsArgs {
     pub json: bool,
     #[arg(short = 'q', long)]
     pub quiet: bool,
-    #[arg(long, hide = true)]
+    /// Only rules from this source
+    #[arg(long, value_name = "local|org|kit")]
     pub source: Option<String>,
     /// Only allow or only deny rules
     #[arg(long, value_name = "allow|deny")]

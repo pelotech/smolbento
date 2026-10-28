@@ -53,6 +53,10 @@ impl Paths {
     pub fn sessions(&self) -> PathBuf {
         self.cache.join("sessions")
     }
+
+    pub fn kit_cache(&self) -> PathBuf {
+        self.cache.join("kits")
+    }
 }
 
 pub struct SettingDef {
@@ -86,6 +90,18 @@ pub const SETTINGS: &[SettingDef] = &[
         env: "SMOLBENTO_FORK",
         default: "true",
         help: "Start clone and mountless sandboxes branchable so `sbt fork` can copy them",
+    },
+    SettingDef {
+        key: "kit.allowedSources",
+        env: "SMOLBENTO_KIT_ALLOWED_SOURCES",
+        default: "[\"docker.io/\"]",
+        help: "Registry prefixes kits may load from, as a JSON array (`[\"*\"]` = any)",
+    },
+    SettingDef {
+        key: "kit.allowLocalKits",
+        env: "SMOLBENTO_KIT_ALLOW_LOCAL_KITS",
+        default: "true",
+        help: "Allow kits from local directories and Smolfiles",
     },
 ];
 
@@ -156,6 +172,9 @@ impl Settings {
         let def = Self::def(key)?;
         if matches!(def.default, "true" | "false") {
             parse_bool(value)?;
+        }
+        if key == "kit.allowedSources" {
+            crate::kits::trust::parse_allowed_sources(value)?;
         }
         self.file
             .settings
@@ -509,6 +528,7 @@ mod tests {
             (PathBuf::from("/c"), PathBuf::from("/k"))
         );
         assert_eq!(p.sessions(), PathBuf::from("/k/sessions"));
+        assert_eq!(p.kit_cache(), PathBuf::from("/k/kits"));
     }
 
     #[test]

@@ -1,8 +1,11 @@
-use crate::smolvm::{CreateSpec, Credential, Mount, NetworkSpec, PortMap};
-use crate::workspace::Workspace;
-use crate::workspace::clone::{CloneSource, SOURCE_MOUNT};
+use std::collections::BTreeMap;
+use std::path::PathBuf;
 
-use super::labels::Meta;
+use crate::smolvm::{CreateSpec, Credential, Mount, NetworkSpec, PortMap};
+use crate::workspace::clone::{CloneSource, SOURCE_MOUNT};
+use crate::workspace::{MOUNTLESS_WORKDIR, Workspace};
+
+use super::labels::{CredFormat, Meta};
 use super::name;
 
 /// Everything decided about a new sandbox before it's created.
@@ -17,7 +20,8 @@ pub struct CreateRequest {
     pub memory_mib: u64,
     pub env: Vec<(String, String)>,
     pub ports: Vec<PortMap>,
-    /// Give the sandbox a private dockerd (storage on the machine's own disk).
+    /// The sandbox has a private dockerd (the `sbx.docker` label). Before kits are applied: the
+    /// image should get the `docker` kit; `kits::apply` then sets it from the applied kits.
     pub docker: bool,
     pub created: i64,
     pub network: NetworkSpec,
@@ -32,11 +36,46 @@ pub struct CreateRequest {
     /// `--clone`: the host repo the sandbox clones; its git dir replaces the primary workspace's
     /// mount.
     pub clone: Option<CloneSource>,
+    /// The user gave `--cpus` / `-m`, which a kit's `resources@1` doesn't override.
+    pub cpus_set: bool,
+    pub memory_set: bool,
+    /// Pinned refs of the applied kits (the `sbx.kits` label).
+    pub kits: Vec<String>,
+    /// The workload kit's launch argv (the `sbx.command` label).
+    pub command: Option<Vec<String>>,
+    /// A v3 workload kit's image user (the `sbx.user` label).
+    pub user: Option<String>,
+    /// A v3 workload kit's image WORKDIR, when not `/` (the `sbx.workdir` label).
+    pub image_workdir: Option<String>,
+    /// A workload kit's agent file in the guest (the `sbx.agent-file` label). `kits::apply`
+    /// uses one already set (`kit add`) instead of deriving it.
+    pub agent_file: Option<String>,
+    /// Env vars of install-only credentials (the `sbx.credential-install` label).
+    pub credential_install: Vec<String>,
+    /// Kit credential value formats by env var (`sbx.credential-format.<ENV>` labels).
+    pub credential_formats: BTreeMap<String, CredFormat>,
+    /// Kit credential env vars to their service (`sbx.credential-service.<ENV>` labels).
+    pub credential_services: BTreeMap<String, String>,
+    /// `long-running@1` (the `sbx.long-running` label).
+    pub long_running: bool,
+    /// Extra guest-only volumes (kit `volume@1`, non-tmpfs).
+    pub volumes: Vec<String>,
+    /// tmpfs volumes, mounted by a kit startup step (`mount -t tmpfs`), not by smolvm.
+    pub tmpfs: Vec<String>,
+    /// A Smolfile workload kit, passed with `--smolfile`.
+    pub smolfile: Option<PathBuf>,
 }
 
-/// Docker can't keep its storage on the overlay root filesystem, so these are directories on the
-/// machine's own disk (they survive restarts).
-const DOCKER_VOLUMES: [&str; 2] = ["/var/lib/docker", "/var/lib/containerd"];
+impl CreateRequest {
+    /// The sandbox's working directory in the guest, as `Sandbox::workdir` gives it once created:
+    /// the primary workspace (inside the clone with `--clone`), or sbx's mountless directory.
+    pub fn workdir(&self) -> String {
+        self.workspaces.first().map_or_else(
+            || MOUNTLESS_WORKDIR.into(),
+            |w| w.path.display().to_string(),
+        )
+    }
+}
 
 /// The labels the sandbox gets.
 pub fn meta(req: &CreateRequest) -> Meta {
@@ -53,6 +92,15 @@ pub fn meta(req: &CreateRequest) -> Meta {
         credential_env: req.credential_env.clone(),
         clone_repo: req.clone.as_ref().map(|c| c.top.display().to_string()),
         fork_of: None,
+        kits: req.kits.clone(),
+        command: req.command.clone(),
+        user: req.user.clone(),
+        image_workdir: req.image_workdir.clone(),
+        agent_file: req.agent_file.clone(),
+        credential_install: req.credential_install.clone(),
+        long_running: req.long_running,
+        credential_formats: req.credential_formats.clone(),
+        credential_services: req.credential_services.clone(),
     }
 }
 
@@ -78,12 +126,15 @@ pub fn spec(req: &CreateRequest) -> CreateSpec {
         (_, None) => {}
     }
     mounts.extend(rest.map(Workspace::mount));
-    if req.docker {
-        mounts.extend(DOCKER_VOLUMES.map(|d| Mount {
-            host: None,
-            guest: d.into(),
-            read_only: false,
-        }));
+    for v in &req.volumes {
+        // Two kits may ask for the same volume.
+        if !mounts.iter().any(|m| m.guest == *v) {
+            mounts.push(Mount {
+                host: None,
+                guest: v.clone(),
+                read_only: false,
+            });
+        }
     }
     CreateSpec {
         name: name::machine_name(&req.name),
@@ -98,6 +149,7 @@ pub fn spec(req: &CreateRequest) -> CreateSpec {
         network: req.network.clone(),
         deny_cidrs: req.deny_cidrs.clone(),
         credentials: req.credentials.clone(),
+        smolfile: req.smolfile.clone(),
         // The workload runs as root so startup steps (dockerd) can; agents exec as `agent`.
         user: Some("root".into()),
         cmd: vec!["sleep".into(), "infinity".into()],
@@ -128,6 +180,7 @@ mod tests {
         }
     }
 
+    /// Docker's storage comes from the docker kit's `volume@1`s (`req.volumes`).
     #[test]
     fn spec_with_workspace_and_docker() {
         let ws = vec![
@@ -140,7 +193,9 @@ mod tests {
                 read_only: true,
             },
         ];
-        let spec = spec(&request(true, ws));
+        let mut req = request(true, ws);
+        req.volumes = vec!["/var/lib/docker".into(), "/var/lib/containerd".into()];
+        let spec = spec(&req);
         assert_eq!(spec.name, "sbx-claude_repo");
         assert_eq!(spec.labels["sbx.name"], "claude.repo");
         assert_eq!(spec.labels["sbx.workspace"], "/w/repo");

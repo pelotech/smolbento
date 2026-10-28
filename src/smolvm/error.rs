@@ -22,18 +22,23 @@ struct Body {
 }
 
 impl SmolvmError {
-    /// Reads the JSON error smolvm prints on stderr, falling back to the raw text.
-    pub fn from_output(out: &Output) -> Self {
-        let parsed = out
+    /// The JSON error smolvm printed on stderr, if any.
+    pub fn from_json(out: &Output) -> Option<Self> {
+        let Envelope { error } = out
             .stderr
             .lines()
             .rev()
-            .find_map(|line| serde_json::from_str::<Envelope>(line.trim()).ok());
-        match parsed {
-            Some(Envelope { error }) => Self {
-                code: error.code,
-                message: error.message,
-            },
+            .find_map(|line| serde_json::from_str::<Envelope>(line.trim()).ok())?;
+        Some(Self {
+            code: error.code,
+            message: error.message,
+        })
+    }
+
+    /// Reads the JSON error smolvm prints on stderr, falling back to the raw text.
+    pub fn from_output(out: &Output) -> Self {
+        match Self::from_json(out) {
+            Some(e) => e,
             None => {
                 let text = out.stderr.trim();
                 Self {
