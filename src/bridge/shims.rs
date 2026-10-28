@@ -14,6 +14,7 @@ use super::GUEST_SOCKET;
 fn prelude() -> String {
     format!(
         r#"#!/bin/sh
+{MARKER}
 # smolbento: reaches the host browser and clipboard while a session is attached.
 n=${{0##*/}}
 post() {{
@@ -58,7 +59,11 @@ if [ -n "$text" ]; then printf %s "$*" | copy; else copy; fi
 "#;
 
 /// Reading the host clipboard isn't supported: no output. A whole script, without the prelude.
-const WL_PASTE: &str = "#!/bin/sh\n# smolbento: host clipboard reads are not supported.\nexit 1\n";
+const WL_PASTE: &str = "#!/bin/sh\n# smolbento bridge shim\n\
+                        # smolbento: host clipboard reads are not supported.\nexit 1\n";
+
+/// A line in every shim, so `remove_cmd` takes out only ours, never a real `xclip`.
+const MARKER: &str = "# smolbento bridge shim";
 
 const XCLIP: &str = r#"while [ $# -gt 0 ]; do
   case $1 in
@@ -109,6 +114,23 @@ const SHIMS: [(&str, &str); 5] = [
     ("xsel", XSEL),
 ];
 const LINKS: [&str; 2] = ["pbcopy", "clip.exe"];
+
+/// As root at every start of a sandbox without the bridge (a fork, whose disk came with its
+/// parent's shims): removes the shims that are ours.
+pub fn remove_cmd() -> String {
+    remove_script("/usr/local/bin")
+}
+
+/// `remove_cmd` in `dir`. The links go first: `grep` reads `wl-copy` through them.
+fn remove_script(dir: &str) -> String {
+    let names: Vec<&str> = LINKS.into_iter().chain(SHIMS.map(|(n, _)| n)).collect();
+    format!(
+        "cd {} 2>/dev/null || exit 0\nfor f in {}; do\n  \
+         if grep -qsx '{MARKER}' \"$f\"; then rm -f \"$f\"; fi\ndone\n",
+        sh_quote(dir),
+        names.join(" ")
+    )
+}
 
 /// As root at every start of a bridged sandbox: writes the shims into `/usr/local/bin`, replacing
 /// what's there.
@@ -268,6 +290,37 @@ mod tests {
                 .unwrap()
                 .contains("xsel")
         );
+    }
+
+    #[test]
+    fn remove_takes_out_only_our_shims() {
+        let g = Guest::new(None);
+        let shims = g.path("shims");
+        // A real program and a real link to one, under shim names.
+        std::fs::remove_file(shims.join("xclip")).unwrap();
+        std::fs::write(shims.join("xclip"), "#!/bin/sh\necho real xclip\n").unwrap();
+        std::fs::remove_file(shims.join("pbcopy")).unwrap();
+        std::os::unix::fs::symlink("xclip", shims.join("pbcopy")).unwrap();
+        std::fs::write(shims.join("other"), MARKER).unwrap();
+        let out = Command::new("sh")
+            .arg("-c")
+            .arg(remove_script(&shims.display().to_string()))
+            .output()
+            .unwrap();
+        assert!(out.status.success(), "{out:?}");
+        let mut left: Vec<String> = std::fs::read_dir(&shims)
+            .unwrap()
+            .map(|e| e.unwrap().file_name().into_string().unwrap())
+            .collect();
+        left.sort();
+        assert_eq!(left, vec!["other", "pbcopy", "xclip"]);
+        // Nothing to do without the dir.
+        let out = Command::new("sh")
+            .arg("-c")
+            .arg(remove_script(&g.path("missing").display().to_string()))
+            .output()
+            .unwrap();
+        assert!(out.status.success(), "{out:?}");
     }
 
     #[test]

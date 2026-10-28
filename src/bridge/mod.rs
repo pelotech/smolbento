@@ -9,7 +9,7 @@ use sha2::{Digest, Sha256};
 
 use crate::kits::registry::hex;
 
-pub use shims::install_cmd;
+pub use shims::{install_cmd, remove_cmd};
 
 /// Where the host socket appears in the guest (`--mount-socket`).
 pub const GUEST_SOCKET: &str = "/run/smolbento/bridge.sock";
