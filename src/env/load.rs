@@ -277,7 +277,6 @@ fn check_supported(f: &EnvFile) -> Result<()> {
         ("bindings", f.bindings.is_some()),
         ("registries", f.registries.is_some()),
         ("mcp", f.mcp.is_some()),
-        ("mounts", f.mounts.is_some()),
     ]
     .iter()
     .filter(|(_, set)| *set)
@@ -361,6 +360,44 @@ mod tests {
             files: vec![],
             flags: f.iter().map(|s| s.to_string()).collect(),
         }
+    }
+
+    #[test]
+    fn mounts_resolve_per_file_and_merge_by_sandbox_path() {
+        let t = T::new();
+        t.write(
+            "home/.sbxenv.yaml",
+            &format!("{MIN}mounts:\n  /home/agent/a: ./user\n  /home/agent/b: /abs/b\n"),
+        );
+        std::fs::create_dir(t.dir.path().join("proj/sub")).unwrap();
+        t.write(
+            "proj/sbxenv.yaml",
+            &format!("{MIN}mounts:\n  /home/agent/a: ./proj-a\n"),
+        );
+        t.write("proj/sub/x.yaml", "mounts:\n  /home/agent/c: ../up\n");
+        let m = t.load(&[], &none()).unwrap().file.mounts.unwrap();
+        let cwd = t.cwd().display().to_string();
+        assert_eq!(m["/home/agent/a"], format!("{cwd}/proj-a"));
+        assert_eq!(m["/home/agent/b"], "/abs/b");
+        assert_eq!(m.len(), 2);
+        let m = t
+            .load(&["sbxenv.yaml", "sub/x.yaml"], &none())
+            .unwrap()
+            .file
+            .mounts
+            .unwrap();
+        assert_eq!(m["/home/agent/c"], format!("{cwd}/up"));
+    }
+
+    #[test]
+    fn mounts_must_be_a_map_of_strings() {
+        let t = T::new();
+        t.write("proj/a.yaml", &format!("{MIN}mounts:\n  - /x\n"));
+        let e = t.err(&["a.yaml"], &none());
+        assert!(
+            e.contains("a.yaml: mounts[0]: invalid type: sequence, expected a map"),
+            "{e}"
+        );
     }
 
     #[test]

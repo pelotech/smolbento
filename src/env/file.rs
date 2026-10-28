@@ -69,6 +69,9 @@ pub struct EnvFile {
     #[serde(default, deserialize_with = "opt_text_map")]
     pub env: Option<BTreeMap<String, String>>,
     pub ports: Option<Vec<Port>>,
+    /// Sandbox path to host directory.
+    #[serde(default, deserialize_with = "opt_text_map")]
+    pub mounts: Option<BTreeMap<String, String>>,
     pub secrets: Option<BTreeMap<String, SecretDecl>>,
     pub sandbox_options: Option<SandboxOptions>,
     // Out of scope: kept as raw values so they can be refused by name.
@@ -76,7 +79,6 @@ pub struct EnvFile {
     pub bindings: Option<Value>,
     pub registries: Option<Value>,
     pub mcp: Option<Value>,
-    pub mounts: Option<Value>,
 }
 
 /// A kit source, or `{source, args}`.
@@ -464,7 +466,7 @@ impl RawFile {
         Ok(Value::String(out))
     }
 
-    /// Relative `workspace`, `additionalWorkspaces[].path` and local kit sources become absolute
+    /// Relative `workspace`, `additionalWorkspaces[].path`, `mounts` host paths and local kit sources become absolute
     /// against the file's directory (symlinks are not resolved).
     fn absolutize(&self, value: &mut Value) {
         let abs = |s: &mut String| {
@@ -492,6 +494,13 @@ impl RawFile {
         }
         if let Some(Value::Array(list)) = top.get_mut("additionalWorkspaces") {
             list.iter_mut().for_each(|w| fix(w, "path", false));
+        }
+        if let Some(Value::Object(m)) = top.get_mut("mounts") {
+            m.values_mut().for_each(|v| {
+                if let Value::String(s) = v {
+                    abs(s)
+                }
+            });
         }
         if let Some(Value::Array(list)) = top.get_mut("kits") {
             for k in list {

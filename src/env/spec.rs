@@ -155,6 +155,12 @@ pub fn spec(loaded: &Loaded, overrides: &Overrides, secrets: &SecretsFile) -> Re
         memory: o.and_then(|o| o.memory.clone()),
         env: env.iter().map(|(k, v)| format!("{k}={v}")).collect(),
         publish,
+        mount: f
+            .mounts
+            .iter()
+            .flatten()
+            .map(|(guest, host)| format!("{host}:{guest}"))
+            .collect(),
         template: o.and_then(|o| o.template.clone()),
         // `load` refuses every policy but `missing`.
         pull: o.and_then(|o| o.pull_policy.clone()),
@@ -401,6 +407,30 @@ mod tests {
     }
 
     const HEAD: &str = "schemaVersion: \"1\"\n";
+
+    #[test]
+    fn mounts_become_host_colon_path_binds() {
+        let t = T::new();
+        let s = t
+            .spec(&format!(
+                "{HEAD}agent: claude\nmounts:\n  /home/agent/b: ./two\n  /home/agent/a: /abs/one\n"
+            ))
+            .unwrap();
+        assert_eq!(
+            s.opts.mount,
+            vec![
+                "/abs/one:/home/agent/a".to_string(),
+                format!("{}:/home/agent/b", t.p("proj/two")),
+            ]
+        );
+        assert!(
+            t.spec(&format!("{HEAD}agent: claude\n"))
+                .unwrap()
+                .opts
+                .mount
+                .is_empty()
+        );
+    }
 
     #[test]
     fn preset_agent_takes_every_kit() {
