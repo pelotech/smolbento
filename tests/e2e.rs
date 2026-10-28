@@ -1877,3 +1877,80 @@ fn sbx_sandbox_variables_reach_the_agent_exec_and_forks() {
     m.ok(&["rm", "-f", &fork]);
     drop(forks);
 }
+
+#[test]
+#[ignore = "boots real VMs; run with `just e2e`"]
+fn env_files_create_exec_and_remove() {
+    let e = E2e::new("envf");
+    let dir = e.dir.path().join("envs");
+    std::fs::create_dir_all(dir.join("ws")).unwrap();
+    let base = dir.join("base.yaml");
+    let local = dir.join("local.yaml");
+    std::fs::write(
+        &base,
+        format!(
+            "schemaVersion: \"1\"\nagent: shell\nname: {}\nworkspace: ./ws\n\
+             args:\n  greeting:\n    required: true\n\
+             env:\n  GREETING: ${{{{ env.args.greeting }}}}\n\
+             secrets:\n  github:\n    value: dummy-token\n\
+             sandboxOptions:\n  template: alpine\n  cpus: 1\n  memory: 1g\n",
+            e.name
+        ),
+    )
+    .unwrap();
+    std::fs::write(&local, "env:\n  EXTRA: \"1\"\n").unwrap();
+    let (base, local) = (base.to_str().unwrap(), local.to_str().unwrap());
+
+    e.ok(&[
+        "env",
+        "create",
+        "--force",
+        base,
+        local,
+        "--env-arg",
+        "greeting=hi",
+    ]);
+    assert_ne!(e.state(), "absent");
+    // Alpine has no `agent` user or bash; add them as `create_alpine` does.
+    guest_root(
+        &e.name,
+        &format!(
+            "adduser -D -u {} agent && apk add -q bash",
+            smolbento::sandbox::host_uid()
+        ),
+    );
+
+    let out = e.ok(&[
+        "env",
+        "exec",
+        "--env-arg",
+        "greeting=hi",
+        base,
+        local,
+        "--",
+        "sh",
+        "-c",
+        "echo $GREETING $EXTRA; pwd",
+    ]);
+    let ws = dir.join("ws").canonicalize().unwrap();
+    assert_eq!(out, format!("hi 1\n{}\n", ws.display()));
+
+    let secrets = e.ok(&["secret", "ls"]);
+    assert!(
+        secrets.contains("github") && secrets.contains(&e.name),
+        "{secrets}"
+    );
+
+    e.ok(&[
+        "env",
+        "rm",
+        "--force",
+        "--env-arg",
+        "greeting=hi",
+        base,
+        local,
+    ]);
+    assert_eq!(e.state(), "absent");
+    let secrets = e.ok(&["secret", "ls"]);
+    assert!(!secrets.contains(&e.name), "{secrets}");
+}
