@@ -1317,10 +1317,16 @@ echo "$ip" > /etc/e2e-install-ip"#;
         !by_ip.status.success(),
         "{ip} (example.com's address) is closed after install"
     );
+    // `policy ls` never lists install-phase rules (as sbx), so check the stored policy too.
     let rules = e.ok(&["policy", "ls"]);
     assert!(
         !rules.contains("example.com"),
-        "install rules removed:\n{rules}"
+        "install rules not listed:\n{rules}"
+    );
+    let stored = std::fs::read_to_string(e.dir.path().join("config/policy.toml")).unwrap();
+    assert!(
+        !stored.contains("example.com"),
+        "install rules removed:\n{stored}"
     );
 }
 
@@ -1428,8 +1434,12 @@ setup:
         "the startup hook ran"
     );
     assert!(root_out(&e.name, "cat /etc/smolbento/kits").contains("e2e-add"));
+    // As in sbx: one `kit:<sandbox>` row, its hosts counted (listed with --wide).
     let rules = e.ok(&["policy", "ls", "--source", "kit"]);
-    assert!(rules.contains("example.com"), "{rules}");
+    assert!(rules.contains("network: 1 allow"), "{rules}");
+    let wide = e.ok(&["policy", "ls", "--source", "kit", "--wide"]);
+    assert!(wide.contains(&format!("kit:{}", e.name)), "{wide}");
+    assert!(wide.contains("example.com"), "{wide}");
 }
 
 /// Debian (it has bash and `usermod`) plus accounts `somebody` (uid 1234) and `numbered`
@@ -1737,4 +1747,115 @@ setup:
     );
     // An empty value is a value, and unquoted numbers are strings.
     e.ok(&["kit", "validate", kit, "--kit-arg", "opt="]);
+
+    // As in sbx: a local kit is a path (`../e2e-args` from the workspace), a bare word never is.
+    let out = e.ok(&["kit", "validate", "../e2e-args", "--kit-arg", "opt="]);
+    assert_eq!(out, "✓ ../e2e-args — valid\n");
+    let out = e.ok(&[
+        "kit",
+        "validate",
+        "../e2e-args",
+        "--json",
+        "--kit-arg",
+        "opt=",
+    ]);
+    let v: serde_json::Value = serde_json::from_str(&out).unwrap();
+    assert_eq!(v["valid"], true, "{out}");
+    let out = e.ok(&["kit", "inspect", "../e2e-args"]);
+    assert!(
+        out.starts_with("Name: e2e-args\nKind: mixin\nSchema: v2\n"),
+        "{out}"
+    );
+    std::fs::create_dir_all(e.workspace().join("e2e-args")).unwrap();
+    fails(
+        &["create", "e2e-args", ws, "--name", &e.name],
+        "unknown agent \"e2e-args\"",
+    );
+    fails(
+        &[
+            "create", "shell", ws, "--name", &e.name, "--kit", "e2e-args",
+        ],
+        "not a local path and does not look like a registry reference",
+    );
+}
+
+/// `NAME=value` lines for the sbx sandbox variables, as printed by `script`'s `env` in the guest.
+const SBX_VARS: &str = "for v in SANDBOX_NAME SANDBOX_VM_ID SANDBOX_ID WORKSPACE_DIR SBX_AGENT \
+                        SBX_CRED_ANTHROPIC_MODE; do eval \"echo $v=\\$$v\"; done";
+
+fn sbx_vars(out: &str) -> std::collections::BTreeMap<String, String> {
+    out.lines()
+        .filter_map(|l| l.trim_end_matches('\r').split_once('='))
+        .map(|(k, v)| (k.to_string(), v.to_string()))
+        .collect()
+}
+
+/// `8-4-4-4-12` lowercase hex.
+fn is_uuid(s: &str) -> bool {
+    let parts: Vec<&str> = s.split('-').collect();
+    parts.iter().map(|p| p.len()).eq([8, 4, 4, 4, 12])
+        && parts.iter().all(|p| {
+            p.chars()
+                .all(|c| c.is_ascii_hexdigit() && !c.is_ascii_uppercase())
+        })
+}
+
+/// sbx's sandbox variables reach the agent and `exec`; a fork gets its own name and id
+/// (`machine branch -e` wins over what the fork inherits from its parent).
+#[test]
+#[ignore = "boots real VMs; run with `just e2e`"]
+fn sbx_sandbox_variables_reach_the_agent_exec_and_forks() {
+    let e = E2e::new("env");
+    e.create_alpine();
+    let ws = e.workspace();
+    let exec = sbx_vars(&e.ok(&["exec", &e.name, "sh", "-c", SBX_VARS]));
+    assert_eq!(exec["SANDBOX_NAME"], e.name, "{exec:?}");
+    assert_eq!(exec["SANDBOX_VM_ID"], e.name, "{exec:?}");
+    assert!(is_uuid(&exec["SANDBOX_ID"]), "{exec:?}");
+    assert_eq!(exec["WORKSPACE_DIR"], ws.to_str().unwrap(), "{exec:?}");
+    assert_eq!(exec["SBX_AGENT"], "shell", "{exec:?}");
+    assert_eq!(exec["SBX_CRED_ANTHROPIC_MODE"], "none", "{exec:?}");
+
+    // The agent (the shell preset's shell) sees the same values.
+    let agent = sbx_vars(&e.ok(&["run", "--name", &e.name, "--", "-c", SBX_VARS]));
+    assert_eq!(agent, exec, "the agent's variables match exec's");
+
+    // A mountless sandbox can be forked. Set up as `create_alpine` does, plus the guest workdir
+    // (sbx images have it; Alpine doesn't).
+    let m = E2e::new("envm");
+    m.ok(&[
+        "create", "shell", "--name", &m.name, "-t", "alpine", "--cpus", "1", "-m", "1g",
+    ]);
+    guest_root(
+        &m.name,
+        &format!(
+            "adduser -D -u {} agent && apk add -q bash \
+             && install -d -o agent /home/agent/workspace",
+            smolbento::sandbox::host_uid()
+        ),
+    );
+    let fork = format!("{}-fork-1", m.name);
+    let forks = Forks(vec![fork.clone()]);
+    assert_eq!(m.ok(&["fork", &m.name]).trim(), fork);
+    let parent = sbx_vars(&m.ok(&["exec", &m.name, "sh", "-c", SBX_VARS]));
+    let child = sbx_vars(&m.ok(&["exec", &fork, "sh", "-c", SBX_VARS]));
+    assert_eq!(parent["SANDBOX_NAME"], m.name, "{parent:?}");
+    assert_eq!(
+        child["SANDBOX_NAME"], fork,
+        "the fork's own name: {child:?}"
+    );
+    assert_eq!(child["SANDBOX_VM_ID"], fork, "{child:?}");
+    assert!(is_uuid(&child["SANDBOX_ID"]), "{child:?}");
+    assert_ne!(
+        child["SANDBOX_ID"], parent["SANDBOX_ID"],
+        "the fork's own id"
+    );
+    assert_ne!(
+        exec["SANDBOX_ID"], parent["SANDBOX_ID"],
+        "an id per sandbox"
+    );
+    assert_eq!(child["WORKSPACE_DIR"], parent["WORKSPACE_DIR"], "{child:?}");
+    assert!(!parent["WORKSPACE_DIR"].is_empty(), "{parent:?}");
+    m.ok(&["rm", "-f", &fork]);
+    drop(forks);
 }
