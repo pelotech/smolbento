@@ -217,8 +217,15 @@ pub(crate) fn kit_plan<R: Runner>(
         .iter()
         .map(|r| load::load(ctx, r))
         .collect::<Result<Vec<_>>>()?;
-    // First: other kits' startup steps may use the dockerd it starts (in sbx it's in the image).
-    if needs_docker_kit(req.docker, &workload, &mixins) {
+    // First, added or given with `--kit docker`: other kits' startup steps may use the dockerd it
+    // starts (in sbx it's in the image).
+    if let Some(i) = mixins
+        .iter()
+        .position(|k| k.source == Source::Builtin("docker"))
+    {
+        let docker = mixins.remove(i);
+        mixins.insert(0, docker);
+    } else if needs_docker_kit(req.docker, &workload, &mixins) {
         mixins.insert(
             0,
             load::builtin("docker").expect("the docker kit is shipped")?,
@@ -1983,6 +1990,31 @@ mod tests {
             .map(|k| k.name.clone())
             .collect();
         assert_eq!(names, ["docker", "bkit", "akit"]);
+    }
+
+    #[test]
+    fn an_explicit_docker_kit_comes_before_user_kits_too() {
+        let t = kit_env();
+        let dir = tempfile::tempdir().unwrap();
+        std::fs::write(
+            dir.path().join("spec.yaml"),
+            "schemaVersion: \"2\"\nkind: mixin\nname: akit\n",
+        )
+        .unwrap();
+        let a = dir.path().display().to_string();
+        // `--kit docker` after the user kit.
+        let (_, plan) = kit_request(
+            &t,
+            &["create", "-t", "alpine", "shell", "--kit", &a, "--kit"],
+            std::path::Path::new("docker"),
+        );
+        let names: Vec<String> = plan
+            .unwrap()
+            .mixins
+            .iter()
+            .map(|k| k.name.clone())
+            .collect();
+        assert_eq!(names, ["docker", "akit"]);
     }
 
     /// `build_kit_request` for `args` followed by `kit`.
