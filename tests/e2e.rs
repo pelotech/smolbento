@@ -1433,15 +1433,15 @@ setup:
 }
 
 /// Debian (it has bash and `usermod`) plus accounts `somebody` (uid 1234) and `numbered`
-/// (uid 1001), a `BASH_ENV` file, `WORKDIR /x`, and env vars `E2E_DECLARED` and `E2E_UNDECLARED`,
+/// (uid 4321), a `BASH_ENV` file, `WORKDIR /x`, and env vars `E2E_DECLARED` and `E2E_UNDECLARED`,
 /// published as a workload kit whose image `USER` is `user`. Its command reports who and where it
 /// runs, whether bash sourced `BASH_ENV`, and writes a file in the workspace.
 fn image_user_kit(reg: &Registry, repo: &str, user: &str, lifecycle: serde_json::Value) -> String {
     let base = Image::pull("debian:bookworm-slim");
     let passwd = base.file("etc/passwd")
         + "somebody:x:1234:1234::/home/somebody:/bin/bash\n\
-           numbered:x:1001:1001::/home/numbered:/bin/sh\n";
-    let group = base.file("etc/group") + "somebody:x:1234:\nnumbered:x:1001:\n";
+           numbered:x:4321:4321::/home/numbered:/bin/sh\n";
+    let group = base.file("etc/group") + "somebody:x:1234:\nnumbered:x:4321:\n";
     let mut image = base.with_files(&[
         ("etc/passwd", &passwd),
         ("etc/group", &group),
@@ -1545,7 +1545,7 @@ fn v3_workload_runs_as_its_image_user_with_bash_env() {
 fn numeric_image_user_runs_as_its_account() {
     let e = E2e::new("numuser");
     let reg = Registry::start(&e);
-    let kit = image_user_kit(&reg, "numeric-user", "1001", serde_json::Value::Null);
+    let kit = image_user_kit(&reg, "numeric-user", "4321", serde_json::Value::Null);
     e.create_workload(&kit);
     e.assert_agent_runs_as("numbered");
 }
@@ -1600,6 +1600,43 @@ setup:
     assert!(!out.status.success(), "start fails");
     assert!(err.contains("kit startup exited with code 7"), "{err}");
     assert_eq!(e.state(), "stopped");
+}
+
+/// sbx #13: a v2 startup hook without `user:` runs as the agent account (sbx's uid 1000; here
+/// `agent` has the host's uid), and it doesn't keep the sandbox from starting.
+#[test]
+#[ignore = "boots real VMs and pulls alpine; run with `just e2e`"]
+fn v2_startup_hook_runs_as_agent_by_default() {
+    let e = E2e::new("v2user");
+    let kit = e.dir.path().join("e2e-v2-user");
+    std::fs::create_dir_all(&kit).unwrap();
+    std::fs::write(
+        kit.join("spec.yaml"),
+        format!(
+            r#"schemaVersion: "2"
+kind: mixin
+name: e2e-v2-user
+setup:
+  install:
+    - command: "{}"
+  startup:
+    - command: [sh, -c, "id -un > /tmp/e2e-started-as"]
+"#,
+            add_agent_hook()
+        ),
+    )
+    .unwrap();
+    e.create_with_kits(&[kit.to_str().unwrap()]);
+    e.ok(&["start", &e.name]);
+    assert_eq!(e.state(), "running");
+    let uid = smolbento::sandbox::host_uid();
+    assert_eq!(
+        root_out(
+            &e.name,
+            "cat /tmp/e2e-started-as; stat -c '%U %u' /tmp/e2e-started-as"
+        ),
+        format!("agent\nagent {uid}\n")
+    );
 }
 
 /// sbx #15: a mixin's agent context goes beside the workspace, in the sandbox only: the shell
