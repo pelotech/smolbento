@@ -1,5 +1,18 @@
 # Changelog
 
+## [0.6.0](https://github.com/pelotech/smolbento/compare/v0.5.0...v0.6.0) (2026-10-28)
+
+
+### Features
+
+* host services via localhost policy rules (Phase 4c) ([#30](https://github.com/pelotech/smolbento/issues/30)) ([0545dc9](https://github.com/pelotech/smolbento/commit/0545dc94b5ef5630f08e800ebcef002f8d57187d))
+* registry logins for host pulls and the kit builder ([#28](https://github.com/pelotech/smolbento/issues/28)) ([fc91d95](https://github.com/pelotech/smolbento/commit/fc91d95d87dd9564df11a0493e2e9dbcc96ba0a2))
+
+
+### Tests
+
+* **e2e:** reach httpbin.org instead of example.com ([#27](https://github.com/pelotech/smolbento/issues/27)) ([d8833b9](https://github.com/pelotech/smolbento/commit/d8833b93dfa4e6e490c136469aa95e0ea5343f83))
+
 ## [0.5.0](https://github.com/pelotech/smolbento/compare/v0.4.0...v0.5.0) (2026-10-28)
 
 
