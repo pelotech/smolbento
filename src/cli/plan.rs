@@ -359,7 +359,6 @@ fn create_with<R: Runner>(
             && !k.steps.install_rules.is_empty()
         {
             let policy = Policy::load(&ctx.paths)?;
-            req.host_access = compile::host_access_with(&policy, &req.name, &k.steps.install_rules);
             req.network = compile::network_with(
                 &policy,
                 &req.name,

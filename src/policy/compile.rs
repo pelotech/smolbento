@@ -128,10 +128,9 @@ fn network_for(
     let denies = resources(policy, sandbox, install, Decision::Deny);
     let (mut patterns, mut cidrs) = (BTreeSet::new(), BTreeSet::new());
     for r in allows.iter().filter(|r| !denied(r, &denies)) {
+        // Host services come from the user's own rules only (`user_host_services`), never a
+        // `localhost` pattern.
         if is_host_services(r) {
-            if host_access {
-                cidrs.insert(format!("{HOST_GATEWAY}/32"));
-            }
             continue;
         }
         match r.to_allow() {
@@ -151,6 +150,9 @@ fn network_for(
         .cloned()
         .partition(|h| h.starts_with("*."));
     patterns.extend(wild);
+    if host_access && user_host_services(policy, sandbox) {
+        cidrs.insert(format!("{HOST_GATEWAY}/32"));
+    }
     NetworkSpec::Restricted(AllowList::new(hosts, patterns, cidrs))
 }
 
@@ -203,19 +205,23 @@ pub(crate) fn is_host_services(r: &Resource) -> bool {
     matches!(&r.pattern, Pattern::Exact(h) if h == "localhost")
 }
 
-/// `host_access` with the install-phase kit rules of these ids, as for `network_with`.
-pub fn host_access_with(policy: &Policy, sandbox: &str, install: &[String]) -> bool {
-    let denies = resources(policy, Some(sandbox), install, Decision::Deny);
-    allows_with(policy, Some(sandbox), install)
-        .iter()
-        .any(|r| is_host_services(r) && !denied(r, &denies))
+/// Whether one of the user's own `localhost` allow rules applies to a sandbox (`None`: the global
+/// rules), and no deny drops it. Kit rules (runtime or install phase) never count: a kit is less
+/// trusted than the user, and host access outlasts it (no create-time deny).
+fn user_host_services(policy: &Policy, sandbox: Option<&str>) -> bool {
+    let denies = resources(policy, sandbox, &[], Decision::Deny);
+    policy
+        .rules_for(sandbox)
+        .filter(|(r, _)| r.decision == Decision::Allow && r.source() == "local")
+        .flat_map(|(r, _)| r.parsed())
+        .any(|x| is_host_services(&x) && !denied(&x, &denies))
 }
 
-/// Whether a sandbox created now gets host access: an active, undenied `localhost` allow rule
-/// applies to it. It's then created without the `HOST_LOOPBACK` deny and labelled
+/// Whether a sandbox created now gets host access: one of the user's own `localhost` allow rules
+/// applies to it, and no deny drops it. It's then created without the `HOST_LOOPBACK` deny and labelled
 /// `sbx.host-access`; only such a sandbox gets the gateway from `localhost` rules.
 pub fn host_access(policy: &Policy, sandbox: &str) -> bool {
-    host_access_with(policy, sandbox, &[])
+    user_host_services(policy, Some(sandbox))
 }
 
 /// Denied at create for every sandbox, whatever the mode, unless it gets host access
@@ -234,7 +240,7 @@ pub fn deny_cidrs(policy: &Policy, sandbox: &str) -> Vec<String> {
 /// `deny_cidrs` plus those of the install-phase kit rules with these ids: a create passes its
 /// own, as for `network_with`. smolvm fixes deny CIDRs at create, so they outlast the install.
 pub fn deny_cidrs_with(policy: &Policy, sandbox: &str, install: &[String]) -> Vec<String> {
-    let loopback = !host_access_with(policy, sandbox, install);
+    let loopback = !host_access(policy, sandbox);
     resources(policy, Some(sandbox), install, Decision::Deny)
         .into_iter()
         .filter(|r| r.port.is_none())
@@ -1038,5 +1044,58 @@ mod tests {
         ] {
             assert_eq!(is_host_services(&Resource::parse(r).unwrap()), yes, "{r}");
         }
+    }
+
+    #[test]
+    fn kit_rules_never_grant_host_access() {
+        let mut p = policy(Mode::DenyAll);
+        let install = p
+            .add_rule(
+                Some("s1"),
+                Decision::Allow,
+                "localhost:11434",
+                "kit-install:k",
+                None,
+                None,
+            )
+            .unwrap();
+        p.add_rule(
+            Some("s1"),
+            Decision::Allow,
+            "LOCALHOST:8080",
+            "kit:k",
+            None,
+            None,
+        )
+        .unwrap();
+        let ids = std::slice::from_ref(&install);
+        assert!(!host_access(&p, "s1"));
+        assert_eq!(deny_cidrs_with(&p, "s1", ids), with_loopback(&[]));
+        assert_eq!(deny_cidrs(&p, "s1"), with_loopback(&[]));
+        for spec in [
+            network_with(&p, "s1", &[], ids, true),
+            network(&p, "s1", &[], true),
+        ] {
+            assert!(!has_gateway(&spec), "{spec:?}");
+            assert!(list(&spec).patterns().is_empty(), "{spec:?}");
+        }
+        // A user rule alongside still works.
+        p.add_rule(
+            Some("s1"),
+            Decision::Allow,
+            "localhost:3000",
+            "added",
+            None,
+            None,
+        )
+        .unwrap();
+        assert!(host_access(&p, "s1"));
+        assert!(deny_cidrs_with(&p, "s1", ids).is_empty());
+        assert!(has_gateway(&network_with(&p, "s1", &[], ids, true)));
+        // An approved rule is the user's too.
+        let mut p = policy(Mode::DenyAll);
+        p.add_rule(None, Decision::Allow, "localhost", "approval", None, None)
+            .unwrap();
+        assert!(host_access(&p, "s1"));
     }
 }
