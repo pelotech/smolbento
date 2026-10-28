@@ -392,6 +392,11 @@ fn rm<R: Runner>(ctx: &Ctx<R>, file: &mut SecretsFile, a: SecretRmArgs) -> Resul
     if a.registry.is_some() && (a.sandbox.is_some() || a.all_sandboxes) {
         return Err(Unsupported(REGISTRY_SANDBOX.into()).into());
     }
+    if a.registry.is_some() && (a.all || a.service.is_some()) {
+        bail!(
+            "--registry removes one registry login; it can't be combined with --all or a service"
+        );
+    }
     if let Some(host) = &a.registry {
         let host = host.trim().to_ascii_lowercase();
         let i = file
@@ -476,6 +481,16 @@ fn registry_set<R: Runner>(ctx: &Ctx<R>, file: &mut SecretsFile, a: SecretSetArg
             "--registry takes its password or token from --password-stdin, not a service, -t, --ref or --command"
         );
     }
+    for (flag, given) in [
+        ("--oauth", a.oauth),
+        ("--refresh", a.refresh.is_some()),
+        ("--no-verify", a.no_verify),
+        ("--show-error", a.show_error),
+    ] {
+        if given {
+            bail!("{flag} has no effect with --registry; remove it");
+        }
+    }
     if !a.password_stdin {
         bail!(
             "--registry needs --password-stdin, e.g. `gh auth token | sbt secret set --registry \
@@ -501,11 +516,12 @@ fn set_registry<R: Runner>(
     auth_endpoint: Option<String>,
     mut input: impl Read,
 ) -> Result<()> {
+    let username = username.filter(|u| !u.is_empty());
     let host = host.trim().to_ascii_lowercase();
     if host.is_empty() || host.contains("://") || host.contains(['/', '@', ' ']) {
         bail!("'{host}': use a bare registry host like ghcr.io (no scheme or path)");
     }
-    // The login is only ever sent over https (see `kits::registry_auth::trusted_realm`).
+    // The login is only ever sent over https, or plain http to localhost (see `kits::registry_auth::trusted_realm`).
     if let Some(e) = &auth_endpoint
         && !e.starts_with("https://")
     {
@@ -650,6 +666,46 @@ mod tests {
             f.registries[0].auth_endpoint.as_deref(),
             Some("https://auth.example.com/token")
         );
+    }
+
+    #[test]
+    fn registry_set_refuses_flags_it_would_ignore() {
+        let mut t = test_env(&[]);
+        for flag in [
+            &["--oauth"][..],
+            &["--refresh", "x"],
+            &["--no-verify"],
+            &["--show-error"],
+        ] {
+            let mut args = vec!["secret", "set", "--registry", "ghcr.io", "--password-stdin"];
+            args.extend_from_slice(flag);
+            let e = sbt(&mut t.ctx, &args).unwrap_err();
+            assert!(e.to_string().contains(flag[0]), "{e}");
+        }
+        assert_eq!(t.ctx.store.get("registry:ghcr.io").unwrap(), None);
+    }
+
+    #[test]
+    fn registry_rm_refuses_all_and_a_service() {
+        let mut t = test_env(&[]);
+        for extra in [&["--all"][..], &["github"]] {
+            let mut args = vec!["secret", "rm", "--registry", "ghcr.io"];
+            args.extend_from_slice(extra);
+            let e = sbt(&mut t.ctx, &args).unwrap_err();
+            assert!(e.to_string().contains("--registry"), "{e}");
+        }
+    }
+
+    #[test]
+    fn an_empty_username_is_token_only() {
+        let mut t = test_env(&[]);
+        set_registry_from(&mut t, "ghcr.io", Some(""), "tok").unwrap();
+        assert_eq!(
+            t.stdout(),
+            "Saved registry secret ghcr.io (host only, username (token-only))\n"
+        );
+        let f = SecretsFile::load(&t.ctx.paths).unwrap();
+        assert_eq!(f.registries[0].username, None);
     }
 
     #[test]
