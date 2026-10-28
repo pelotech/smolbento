@@ -10,11 +10,12 @@ use serde_json::{Value, json};
 
 use crate::kits::model::{Content, Kit};
 use crate::kits::registry::{self, hex_of, put_bytes, sha256_digest, store_dir};
+use crate::kits::registry_auth::Logins;
 use crate::kits::resolve::Plan;
 
 /// The `--image` for a plan: the workload's ref or path when no mixin has layers; otherwise a
 /// cached archive at `<cache>/composed/<sha256 of input manifest digests>.tar`.
-pub fn image_for(plan: &Plan, cache: &Path) -> Result<String> {
+pub fn image_for(plan: &Plan, cache: &Path, logins: Logins) -> Result<String> {
     let layered = layered_mixins(plan)?;
     let w = &plan.workload;
     if layered.is_empty() {
@@ -32,7 +33,7 @@ pub fn image_for(plan: &Plan, cache: &Path) -> Result<String> {
         };
     }
     let base = match &w.content {
-        Content::Image(r) => Layout::read(&registry::pull_image(r, cache)?)?,
+        Content::Image(r) => Layout::read(&registry::pull_image(r, cache, logins)?)?,
         Content::Oci(dir) => Layout::read(dir)?,
         Content::Smolfile(_) => bail!("mixins with image layers can't be added to a Smolfile kit"),
         Content::None => bail!("kit '{}' has no image to add layers to", w.name),
@@ -373,7 +374,7 @@ mod tests {
     fn composes_layers_in_plan_order() {
         let f = fx();
         let p = plan(f.base.clone(), vec![f.mix.clone(), f.bare.clone()]);
-        let path = image_for(&p, &f.cache).unwrap();
+        let path = image_for(&p, &f.cache, Logins::none()).unwrap();
         assert!(path.starts_with(f.cache.join("composed").to_str().unwrap()));
         let entries = read_tar(&path);
         let names: Vec<&str> = entries.iter().map(|e| e.0.as_str()).collect();
@@ -421,7 +422,7 @@ mod tests {
             &config(&["sha256:c1", "sha256:c2"]),
         );
         let two = kit("two", Content::Oci(d), &dg);
-        let path = image_for(&plan(f.base.clone(), vec![two]), &f.cache).unwrap();
+        let path = image_for(&plan(f.base.clone(), vec![two]), &f.cache, Logins::none()).unwrap();
         let entries = read_tar(&path);
         let get = |d: &str| {
             let n = format!("blobs/sha256/{}", hex_of(d).unwrap());
@@ -454,7 +455,12 @@ mod tests {
     #[test]
     fn composed_config_and_manifest_land_in_the_shared_store() {
         let f = fx();
-        let path = image_for(&plan(f.base.clone(), vec![f.mix.clone()]), &f.cache).unwrap();
+        let path = image_for(
+            &plan(f.base.clone(), vec![f.mix.clone()]),
+            &f.cache,
+            Logins::none(),
+        )
+        .unwrap();
         let entries = read_tar(&path);
         let index: Value = serde_json::from_slice(&entries[1].1).unwrap();
         let md = index["manifests"][0]["digest"].as_str().unwrap();
@@ -470,15 +476,15 @@ mod tests {
     fn second_run_reuses_the_archive() {
         let f = fx();
         let p = plan(f.base.clone(), vec![f.mix.clone()]);
-        let a = image_for(&p, &f.cache).unwrap();
+        let a = image_for(&p, &f.cache, Logins::none()).unwrap();
         let bytes = fs::read(&a).unwrap();
         let m1 = fs::metadata(&a).unwrap().modified().unwrap();
-        let b = image_for(&p, &f.cache).unwrap();
+        let b = image_for(&p, &f.cache, Logins::none()).unwrap();
         assert_eq!(a, b);
         assert_eq!(fs::metadata(&b).unwrap().modified().unwrap(), m1);
         // Same inputs rebuilt from scratch give the same bytes.
         fs::remove_file(&a).unwrap();
-        image_for(&p, &f.cache).unwrap();
+        image_for(&p, &f.cache, Logins::none()).unwrap();
         assert_eq!(fs::read(&a).unwrap(), bytes);
     }
 
@@ -488,20 +494,20 @@ mod tests {
         let mut w = f.base.clone();
         w.content = Content::Image("alpine:3".into());
         let p = plan(w, vec![f.bare.clone()]);
-        assert_eq!(image_for(&p, &f.cache).unwrap(), "alpine:3");
+        assert_eq!(image_for(&p, &f.cache, Logins::none()).unwrap(), "alpine:3");
     }
 
     #[test]
     fn layout_workload_without_mixin_layers_becomes_a_tar() {
         let f = fx();
         let p = plan(f.base.clone(), vec![f.bare.clone()]);
-        let path = image_for(&p, &f.cache).unwrap();
+        let path = image_for(&p, &f.cache, Logins::none()).unwrap();
         let entries = read_tar(&path);
         assert_eq!(entries[0].0, "oci-layout");
         assert_eq!(entries[1].0, "index.json");
         assert_eq!(entries.len(), 5);
         assert!(entries.iter().all(|e| !e.0.starts_with("./")));
-        assert_eq!(image_for(&p, &f.cache).unwrap(), path);
+        assert_eq!(image_for(&p, &f.cache, Logins::none()).unwrap(), path);
     }
 
     #[test]
@@ -509,7 +515,7 @@ mod tests {
         let f = fx();
         let mut w = f.base.clone();
         w.content = Content::Smolfile("x.smolfile".into());
-        let err = image_for(&plan(w, vec![f.mix.clone()]), &f.cache).unwrap_err();
+        let err = image_for(&plan(w, vec![f.mix.clone()]), &f.cache, Logins::none()).unwrap_err();
         assert_eq!(
             err.to_string(),
             "mixins with image layers can't be added to a Smolfile kit"
@@ -522,7 +528,8 @@ mod tests {
         let d = f._t.path().join("odd");
         let dg = oci_layout(&d, Some(DESC), &[b"l"], &config(&[]));
         let odd = kit("odd", Content::Oci(d), &dg);
-        let err = image_for(&plan(f.base.clone(), vec![odd]), &f.cache).unwrap_err();
+        let err =
+            image_for(&plan(f.base.clone(), vec![odd]), &f.cache, Logins::none()).unwrap_err();
         assert!(err.to_string().contains("don't match its diff_ids"));
     }
 }

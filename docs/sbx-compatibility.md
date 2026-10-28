@@ -19,7 +19,7 @@ clearly rather than doing something different.
 
 | Command or flag | Planned |
 |---|---|
-| `policy refresh`, `secret import`, `secret set --oauth/--registry/--refresh` | Not implemented |
+| `policy refresh`, `secret import`, `secret set --oauth/--refresh`, `secret set/rm --registry` with `--sandbox`/`--all-sandboxes` | Not implemented |
 | `policy ls --created-via/--type/--protocol/--include-inactive`, `policy check --protocol` other than `tcp` | Not implemented (`policy ls --decision` and `--source` work) |
 | `kit pack`, `kit push`, `kit pull`, `kit sign`, `kit verify` | Not implemented |
 | `env plan` and the `sbxenv.yaml` fields listed under [Environment files](#environment-files) | Later |
@@ -73,6 +73,7 @@ writableEnvFiles`, and `pullPolicy` other than `missing`.
 | `refresh`, `backend` on a secret | Used | Accepted, no effect: smolbento resolves at every start |
 | `--skip-host-commands`, `--prune-bindings` | Skip lifecycle and MCP commands; remove bindings | Accepted, no effect (there are no lifecycle commands or bindings yet). Secret `command:` sources run either way, as in sbx |
 | Unknown secret service | Accepted by `env plan` | Refused at create, with the error `sbt secret set` gives |
+| `secret ls` with registry credentials | `SECRET` shows the first characters | A separate `SCOPE TYPE NAME SECRET` table; `SECRET` is always `(stored)`, never part of a value. No `--json` on `secret ls` yet |
 | Workload kit as `agent` | The kit whose name equals `agent` | A local kit is matched by its directory name, a registry kit by the last part of its repository name |
 | Secret `command:` source | Runs on the host | Runs from a fresh temporary directory, so a relative helper path fails (also for `secret set --command`) |
 | `env run` on an existing sandbox | Passes `env`, applies nothing else | Same |
@@ -182,7 +183,7 @@ Differences:
 
 | Area | sbx | smolbento |
 |---|---|---|
-| Building local v3 kits | BuildKit on your machine | BuildKit in a hidden `_builder` sandbox; no Docker on your machine needed. It pulls base images without a registry login (kits built on `dhi.io`, like Docker's examples, don't build yet) and never gets your secrets |
+| Building local v3 kits | BuildKit on your machine | BuildKit in a hidden `_builder` sandbox; no Docker on your machine needed. It never gets your secrets. Base images that need a login pull with your `secret set --registry` credentials, which stay on the host: the builder gets a short-lived pull token for the `HOST/<repo>` references in the descriptor as a header smolvm sets, can reach those registries whatever the policy, and is recreated when the set of registries changes. A build that reaches a stored-login registry without naming `HOST/<repo>` gets `502 credential unavailable` and fails (remove the login or name the image that way); Docker Hub logins don't apply to builds yet |
 | Where a kit sends a secret | Any host the kit names, after you approve it | A built-in service's secret only to that service's own hosts (else the kit is refused); a custom service's anywhere, with a note at `create` and `kit add` |
 | Install-only credentials | Not injected after install: the placeholder stays and requests go out without the credential | The sandbox restarts once after install, without them; later requests to their hosts get `502` |
 | OAuth credentials | Passthrough and sentinel tokens | Passthrough only (sentinel tokens need smolvm support) |

@@ -1528,6 +1528,7 @@ dependencies = [
  "libc",
  "oci-client",
  "regex-lite",
+ "reqwest",
  "rustls",
  "serde",
  "serde-saphyr",

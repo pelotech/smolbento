@@ -33,6 +33,8 @@ pub struct CreateRequest {
     pub credential_hosts: Vec<String>,
     /// The credentials' env vars, sorted (the `sbx.credential-env` label).
     pub credential_env: Vec<String>,
+    /// Stored registry hosts the kit builder binds (the `sbx.registries` label).
+    pub registries: Vec<String>,
     /// `--clone`: the host repo the sandbox clones; its git dir replaces the primary workspace's
     /// mount.
     pub clone: Option<CloneSource>,
@@ -90,6 +92,7 @@ pub fn meta(req: &CreateRequest) -> Meta {
         secrets: req.secrets.clone(),
         credential_hosts: req.credential_hosts.clone(),
         credential_env: req.credential_env.clone(),
+        registries: req.registries.clone(),
         clone_repo: req.clone.as_ref().map(|c| c.top.display().to_string()),
         fork_of: None,
         kits: req.kits.clone(),

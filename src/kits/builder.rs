@@ -14,9 +14,11 @@ use crate::agents;
 use crate::cli::{Ctx, plan};
 use crate::kits::args::ArgValues;
 use crate::kits::load;
+use crate::kits::registry_auth;
 use crate::kits::resolve::{Plan, resolve};
-use crate::sandbox::{self, CreateRequest, options};
-use crate::smolvm::{ExecSpec, Runner, Smolvm, SmolvmError};
+use crate::sandbox::{self, CreateRequest, Sandbox, options};
+use crate::secrets::{RegistryEntry, SecretsFile, registry_secret};
+use crate::smolvm::{Credential, ExecSpec, MachineState, Runner, Smolvm, SmolvmError};
 
 use super::registry::hex;
 
@@ -57,10 +59,32 @@ fn is_auth_failure(lower: &str) -> bool {
 /// Numbers this process's builds, so concurrent builds get their own `/build/<n>`.
 static BUILDS: AtomicU32 = AtomicU32::new(0);
 
+/// Mints a pull token: (host, entry, password, repos). `registry_auth::pull_token`, or a fake.
+type Minter = fn(&str, &RegistryEntry, &str, &[String]) -> Result<String>;
+
 /// Builds the v3 kit directory `dir` and returns the OCI layout it produced, unpacked into the
 /// cache (`<cache>/built/<sha256 of the tar>`).
 pub fn build<R: Runner>(ctx: &Ctx<R>, dir: &Path) -> Result<PathBuf> {
+    build_with(ctx, dir, registry_auth::pull_token)
+}
+
+fn build_with<R: Runner>(ctx: &Ctx<R>, dir: &Path, mint: Minter) -> Result<PathBuf> {
     let desc = descriptor(dir)?;
+    let text = fs::read(dir.join(&desc))
+        .with_context(|| format!("reading {}", dir.join(&desc).display()))?;
+    let text = String::from_utf8_lossy(&text);
+    let mut registries = SecretsFile::load(&ctx.paths)?.registries;
+    // smolvm's `--credential` can't carry a port in HOST, and the builder's Docker Hub pulls
+    // (the `docker/sandbox-kit` frontend) go to a host no descriptor names.
+    registries.retain(|r| !r.host.contains(':') && !registry_auth::is_docker_hub(&r.host));
+    registries.sort_by(|a, b| a.host.cmp(&b.host));
+    let hosts: Vec<String> = registries.iter().map(|r| r.host.clone()).collect();
+    // Bound to the builder but given no token by this build (see `pull_tokens`).
+    let unbound: Vec<String> = hosts
+        .iter()
+        .filter(|h| repos_in(&text, h).is_empty())
+        .cloned()
+        .collect();
     let cache = ctx.paths.kit_cache();
     fs::create_dir_all(&cache).with_context(|| format!("creating {}", cache.display()))?;
     // In the cache, so the unpacked layout can be renamed into place.
@@ -71,22 +95,32 @@ pub fn build<R: Runner>(ctx: &Ctx<R>, dir: &Path) -> Result<PathBuf> {
     let (ctx_tar, kit_tar) = (tmp.path().join("ctx.tar"), tmp.path().join("kit.tar"));
     pack(dir, &ctx_tar)?;
 
-    let (mut sb, was_running) = match sandbox::find(&ctx.vm, BUILDER)? {
+    let found = match sandbox::find(&ctx.vm, BUILDER)? {
+        // Its registry bindings are fixed at create: a changed set of logins needs a new one.
+        Some(sb) if sb.meta.registries != hosts => {
+            ctx.vm
+                .delete(&sb.machine)
+                .context("removing the kit builder sandbox to bind the stored registry logins")?;
+            None
+        }
+        found => found,
+    };
+    let (mut sb, was_running) = match found {
         Some(sb) => {
             let running = sb.is_running();
             (sb, running)
         }
         None => (
             docker_plan()
-                .and_then(|kits| plan::create(ctx, &mut request(ctx), &[], Some(&kits)))
+                .and_then(|kits| plan::create(ctx, &mut request(ctx, &hosts), &[], Some(&kits)))
                 .context("creating the kit builder sandbox")?,
             false,
         ),
     };
-    let result = plan::ensure_running(ctx, &mut sb)
-        .context("starting the kit builder sandbox")
+    let result = pull_tokens(ctx, &registries, &text, mint)
+        .and_then(|tokens| start(ctx, &mut sb, tokens).context("starting the kit builder sandbox"))
         .and_then(|()| wait_for_docker(&ctx.vm, &sb.machine, DOCKER_WAIT, Duration::from_secs(1)))
-        .and_then(|()| run_build(ctx, &sb.machine, dir, &desc, &ctx_tar, &kit_tar));
+        .and_then(|()| run_build(ctx, &sb.machine, dir, &desc, &ctx_tar, &kit_tar, &unbound));
     if !was_running
         && sb.is_running()
         && let Err(e) = ctx.vm.stop(&sb.machine)
@@ -95,6 +129,96 @@ pub fn build<R: Runner>(ctx: &Ctx<R>, dir: &Path) -> Result<PathBuf> {
     }
     result?;
     unpack(&kit_tar, &cache.join("built"), tmp.path())
+}
+
+/// The builder's binding for its `i`th stored registry (sorted by host): smolvm sets the
+/// `Authorization` header on requests to HOST to the value of `SBX_REGISTRY_<i>_AUTH`, which a
+/// build passes at start as `Bearer <token>`. The guest only sees a placeholder.
+pub(crate) fn registry_credential(i: usize, host: &str) -> Credential {
+    Credential {
+        name: format!("reg-{i}"),
+        env_var: registry_env(i),
+        hosts: vec![host.to_string()],
+        set_header: Some("authorization".into()),
+    }
+}
+
+fn registry_env(i: usize) -> String {
+    format!("SBX_REGISTRY_{i}_AUTH")
+}
+
+/// `SBX_REGISTRY_<i>_AUTH=Bearer <token>` for each stored registry the descriptor `text` pulls
+/// from, minted now: tokens last minutes and smolvm reads credential values at start only.
+/// A stored host the descriptor doesn't name keeps its variable unset; smolvm then answers the
+/// builder's requests to it with `502 credential unavailable`, not an anonymous request (see
+/// `build_error`).
+fn pull_tokens<R: Runner>(
+    ctx: &Ctx<R>,
+    registries: &[RegistryEntry],
+    text: &str,
+    mint: Minter,
+) -> Result<Vec<(String, String)>> {
+    let mut env = Vec::new();
+    for (i, entry) in registries.iter().enumerate() {
+        let host = &entry.host;
+        let repos = repos_in(text, host);
+        if repos.is_empty() {
+            continue;
+        }
+        let Some(password) = registry_secret(ctx.store.as_ref(), host)? else {
+            bail!(
+                "registry secret {host} has no value in {}; set it again with \
+                 `sbt secret set --registry {host} --password-stdin`",
+                ctx.store.describe()
+            );
+        };
+        let token = mint(host, entry, &password, &repos)
+            .with_context(|| format!("getting a pull token for {host}"))?;
+        env.push((registry_env(i), format!("Bearer {token}")));
+    }
+    Ok(env)
+}
+
+/// The repositories of HOST's image references (`HOST/<repo>[:tag][@digest]`) in `text`,
+/// sorted.
+fn repos_in(text: &str, host: &str) -> Vec<String> {
+    let prefix = format!("{}/", host.to_ascii_lowercase());
+    let mut repos: Vec<String> = text
+        .to_ascii_lowercase()
+        .split(|c: char| c.is_whitespace() || matches!(c, '"' | '\'' | '=' | ',' | '[' | ']'))
+        .filter_map(|word| {
+            let word = word.split_once("://").map_or(word, |(_, rest)| rest);
+            let rest = word.strip_prefix(&prefix)?;
+            let rest = rest.split_once('@').map_or(rest, |(r, _)| r);
+            let repo = rest.split_once(':').map_or(rest, |(r, _)| r);
+            let valid = repo
+                .bytes()
+                .all(|b| b.is_ascii_alphanumeric() || matches!(b, b'.' | b'_' | b'-' | b'/'));
+            (!repo.is_empty() && valid).then(|| repo.to_string())
+        })
+        .collect();
+    repos.sort();
+    repos.dedup();
+    repos
+}
+
+/// Starts the builder; with `tokens`, fresh (stopping it first), since smolvm reads credential
+/// values at start only. The tokens go in `machine start`'s environment only.
+fn start<R: Runner>(ctx: &Ctx<R>, sb: &mut Sandbox, tokens: Vec<(String, String)>) -> Result<()> {
+    if tokens.is_empty() {
+        return plan::ensure_running(ctx, sb);
+    }
+    if sb.is_running() {
+        ctx.vm.stop(&sb.machine)?;
+        sb.state = MachineState::Stopped;
+    }
+    let meta = sb.meta.clone();
+    sandbox::ensure_running(&ctx.vm, sb, || {
+        let mut plan = plan::start_plan(ctx, &meta)?;
+        plan.remove.retain(|v| !tokens.iter().any(|(k, _)| k == v));
+        plan.env.extend(tokens);
+        Ok(plan)
+    })
 }
 
 /// The builder's kits: the shell preset with the shipped docker kit, whose startup hook starts
@@ -110,7 +234,7 @@ fn docker_plan() -> Result<Plan> {
 }
 
 /// The builder sandbox: mountless, with a private dockerd, under the global network policy.
-fn request<R: Runner>(ctx: &Ctx<R>) -> CreateRequest {
+fn request<R: Runner>(ctx: &Ctx<R>, registries: &[String]) -> CreateRequest {
     CreateRequest {
         name: BUILDER.into(),
         agent: "shell".into(),
@@ -119,6 +243,7 @@ fn request<R: Runner>(ctx: &Ctx<R>) -> CreateRequest {
         memory_mib: MEMORY_MIB,
         docker: true,
         created: ctx.now,
+        registries: registries.to_vec(),
         ..Default::default()
     }
 }
@@ -213,6 +338,7 @@ fn run_build<R: Runner>(
     desc: &str,
     ctx_tar: &Path,
     kit_tar: &Path,
+    unbound: &[String],
 ) -> Result<()> {
     let n = format!(
         "/build/{}-{}",
@@ -250,7 +376,7 @@ fn run_build<R: Runner>(
             &format!("type=oci,dest={guest_kit_tar}"),
             &ctx_dir,
         ])
-        .map_err(|e| build_error(dir, &e))?;
+        .map_err(|e| build_error(dir, &e, unbound))?;
         ctx.vm
             .cp(&format!("{machine}:{guest_kit_tar}"), &host(kit_tar)?)
             .context("copying the built kit out of the builder")
@@ -261,19 +387,37 @@ fn run_build<R: Runner>(
     result
 }
 
-/// A failed `docker buildx build`: a registry login it needed, or the end of its output.
-fn build_error(dir: &Path, e: &anyhow::Error) -> anyhow::Error {
+/// A failed `docker buildx build`: a stored login it got no token for (`unbound`), a registry
+/// login it needed, or the end of its output.
+fn build_error(dir: &Path, e: &anyhow::Error, unbound: &[String]) -> anyhow::Error {
     let output = match e.downcast_ref::<SmolvmError>() {
         Some(s) => s.message.clone(),
         None => format!("{e:#}"),
     };
+    if !unbound.is_empty() && output.contains("credential unavailable") {
+        let hosts = unbound.join(", ");
+        let (host, refs) = match unbound {
+            [h] => (h.as_str(), format!("`{h}/<repo>`")),
+            _ => ("HOST", "`HOST/<repo>`".to_string()),
+        };
+        return anyhow::anyhow!(
+            "building {} failed: the build reached {hosts}, which you stored a registry login for, \
+             without a token: smolbento gets one only for images the kit's descriptor names as \
+             {refs}. Name the image that way in the kit, or remove the login with \
+             `sbt secret rm --registry {host}`",
+            dir.display()
+        );
+    }
     if output.lines().any(|l| is_auth_failure(&l.to_lowercase())) {
-        let from = registry_host(&output)
+        let host = registry_host(&output);
+        let from = host
+            .as_ref()
             .map(|h| format!(" from {h}"))
             .unwrap_or_default();
+        let host = host.as_deref().unwrap_or("HOST");
         return anyhow::anyhow!(
-            "building {} failed: the build pulls{from}, which needs a registry login; \
-             registry login for the builder isn't supported yet",
+            "building {} failed: the build pulls{from}, which needs a registry login; store \
+             one with `sbt secret set --registry {host} --password-stdin`",
             dir.display()
         );
     }
@@ -569,29 +713,55 @@ mod tests {
 
     fn failing_build(stderr: &str) -> (TestEnv, String) {
         let t = test_env(&[]);
-        let fake = t.ctx.vm.runner();
-        fake.ok(&["machine", "status"], &builder_json("stopped"))
-            .on(
-                &[
-                    "machine",
-                    "exec",
-                    "--name",
-                    "sbx-_builder",
-                    "-u",
-                    "root",
-                    "--",
-                    "docker",
-                    "buildx",
-                ],
-                crate::smolvm::Output {
-                    code: 1,
-                    stdout: String::new(),
-                    stderr: stderr.into(),
-                },
-            );
-        let kit = kit_dir();
-        let err = format!("{:#}", build(&t.ctx, kit.path()).unwrap_err());
+        let err = failing_build_in(&t, &builder_json("stopped"), stderr);
         (t, err)
+    }
+
+    /// A build of `kit_dir()` in the builder `status` describes whose buildx fails with `stderr`.
+    fn failing_build_in(t: &TestEnv, status: &str, stderr: &str) -> String {
+        let fake = t.ctx.vm.runner();
+        fake.ok(&["machine", "status"], status).on(
+            &[
+                "machine",
+                "exec",
+                "--name",
+                "sbx-_builder",
+                "-u",
+                "root",
+                "--",
+                "docker",
+                "buildx",
+            ],
+            crate::smolvm::Output {
+                code: 1,
+                stdout: String::new(),
+                stderr: stderr.into(),
+            },
+        );
+        let kit = kit_dir();
+        format!("{:#}", build_with(&t.ctx, kit.path(), no_mint).unwrap_err())
+    }
+
+    #[test]
+    fn an_unbound_registry_login_names_the_host_and_the_fix() {
+        let t = test_env(&[]);
+        with_dhi_login(&t);
+        let err = failing_build_in(
+            &t,
+            &dhi_builder_json("stopped"),
+            "#3 ERROR: failed to resolve source metadata for dhi.io/debian-base:trixie: \
+             unexpected status from GET request to https://dhi.io/token: 502 Bad Gateway: \
+             smolvm credentials: credential unavailable\n",
+        );
+        assert!(
+            err.contains(
+                "the build reached dhi.io, which you stored a registry login for, without a token"
+            ),
+            "{err}"
+        );
+        assert!(err.contains("`dhi.io/<repo>`"), "{err}");
+        assert!(err.contains("`sbt secret rm --registry dhi.io`"), "{err}");
+        assert!(!err.contains("tok-"), "{err}");
     }
 
     #[test]
@@ -612,7 +782,7 @@ mod tests {
     }
 
     #[test]
-    fn an_auth_failure_says_registry_login_is_unsupported() {
+    fn an_auth_failure_points_at_secret_set_registry() {
         let (_t, err) = failing_build(
             "#3 ERROR: failed to resolve source metadata for ghcr.io/acme/base:1: \
              unexpected status from HEAD request to https://ghcr.io/v2/acme/base/manifests/1: \
@@ -620,16 +790,16 @@ mod tests {
         );
         assert!(
             err.contains(
-                "failed: the build pulls from ghcr.io, which needs a registry login; \
-                 registry login for the builder isn't supported yet"
+                "failed: the build pulls from ghcr.io, which needs a registry login; store \
+                 one with `sbt secret set --registry ghcr.io --password-stdin`"
             ),
             "{err}"
         );
         let (_t, err) = failing_build("ERROR: authentication required\n");
         assert!(
             err.contains(
-                "failed: the build pulls, which needs a registry login; \
-                 registry login for the builder isn't supported yet"
+                "failed: the build pulls, which needs a registry login; store \
+                 one with `sbt secret set --registry HOST --password-stdin`"
             ),
             "{err}"
         );
@@ -776,6 +946,234 @@ mod tests {
             "{:?}",
             fake.removed()
         );
+    }
+
+    /// A stored `dhi.io` login (password `pw`) under the balanced policy, so allow hosts show.
+    fn with_dhi_login(t: &TestEnv) {
+        use crate::secrets::{RegistryEntry, SecretsFile, registry_account};
+        fs::write(t.ctx.paths.policy_file(), "mode = \"balanced\"\n").unwrap();
+        t.ctx.store.set(&registry_account("dhi.io"), "pw").unwrap();
+        let mut f = SecretsFile::default();
+        f.registries.push(RegistryEntry {
+            host: "dhi.io".into(),
+            username: Some("josmo".into()),
+            auth_endpoint: None,
+        });
+        f.save(&t.ctx.paths).unwrap();
+    }
+
+    /// A kit dir whose build starts `FROM dhi.io/debian-base:trixie`.
+    fn dhi_kit_dir() -> tempfile::TempDir {
+        let d = tempfile::tempdir().unwrap();
+        fs::write(
+            d.path().join("dhi.yaml"),
+            format!("{MIXIN}build: |\n  FROM dhi.io/debian-base:trixie AS b\n  FROM scratch\n"),
+        )
+        .unwrap();
+        d
+    }
+
+    fn fake_mint(host: &str, entry: &RegistryEntry, pw: &str, repos: &[String]) -> Result<String> {
+        assert_eq!((host, entry.host.as_str(), pw), ("dhi.io", "dhi.io", "pw"));
+        assert_eq!(repos, ["debian-base"]);
+        Ok("tok-123".into())
+    }
+
+    fn no_mint(_: &str, _: &RegistryEntry, _: &str, _: &[String]) -> Result<String> {
+        panic!("no token is needed")
+    }
+
+    fn dhi_builder_json(state: &str) -> String {
+        machine_json(
+            "sbx-_builder",
+            state,
+            &[
+                ("sbx.name", "_builder"),
+                ("sbx.docker", "true"),
+                ("sbx.kits", r#"["builtin:docker"]"#),
+                ("sbx.registries", "dhi.io"),
+                ("sbx.credential-hosts", "dhi.io"),
+                ("sbx.credential-env", "SBX_REGISTRY_0_AUTH"),
+            ],
+        )
+    }
+
+    #[test]
+    fn the_builder_binds_stored_registry_logins_and_starts_with_a_fresh_token() {
+        let t = test_env(&[]);
+        with_dhi_login(&t);
+        let fake = t.ctx.vm.runner();
+        fake.ok(&["machine", "status"], &dhi_builder_json("created"))
+            .once_fail(&["machine", "status"], "NOT_FOUND", "vm not found")
+            .once_fail(&["machine", "status"], "NOT_FOUND", "vm not found")
+            .download(&kit_tar());
+        let kit = dhi_kit_dir();
+        build_with(&t.ctx, kit.path(), fake_mint).unwrap();
+
+        let lines = fake.call_lines();
+        let create = lines
+            .iter()
+            .find(|l| l.starts_with("machine create -n sbx-_builder"))
+            .unwrap();
+        assert!(
+            create
+                .contains("--credential reg-0=SBX_REGISTRY_0_AUTH@dhi.io:set-header=authorization"),
+            "{create}"
+        );
+        assert!(create.contains("--allow-host dhi.io"), "{create}");
+        assert!(create.contains("--label sbx.registries=dhi.io"), "{create}");
+        // The create's own first start, then a fresh start that carries the token.
+        let starts: Vec<usize> = (0..lines.len())
+            .filter(|&i| lines[i] == "machine start -n sbx-_builder")
+            .collect();
+        assert_eq!(starts.len(), 2, "{lines:#?}");
+        assert!(
+            lines[starts[0]..starts[1]].contains(&"machine stop -n sbx-_builder".to_string()),
+            "{lines:#?}"
+        );
+        let token = (
+            "SBX_REGISTRY_0_AUTH".to_string(),
+            "Bearer tok-123".to_string(),
+        );
+        let envs = fake.envs();
+        assert!(!envs[0].contains(&token), "{envs:?}");
+        assert!(envs[1].contains(&token), "{envs:?}");
+        assert!(
+            !fake.removed()[1].contains(&token.0),
+            "{:?}",
+            fake.removed()
+        );
+        // Later starts unset it, so the host shell's environment can't fill it.
+        assert!(fake.removed()[0].contains(&token.0), "{:?}", fake.removed());
+        assert!(
+            !lines.iter().any(|l| l.contains("tok-123")),
+            "never in argv: {lines:#?}"
+        );
+        assert_eq!(lines.last().unwrap(), "machine stop -n sbx-_builder");
+    }
+
+    #[test]
+    fn a_running_builder_is_restarted_to_take_a_token() {
+        let t = test_env(&[]);
+        with_dhi_login(&t);
+        let fake = t.ctx.vm.runner();
+        fake.ok(&["machine", "status"], &dhi_builder_json("running"))
+            .download(&kit_tar());
+        let kit = dhi_kit_dir();
+        build_with(&t.ctx, kit.path(), fake_mint).unwrap();
+        let lines = fake.call_lines();
+        assert!(!lines.iter().any(|l| l.starts_with("machine create")));
+        let stop = lines
+            .iter()
+            .position(|l| l == "machine stop -n sbx-_builder");
+        let start = lines
+            .iter()
+            .position(|l| l == "machine start -n sbx-_builder");
+        assert!(stop.unwrap() < start.unwrap(), "{lines:#?}");
+        assert!(
+            fake.envs()[0].contains(&(
+                "SBX_REGISTRY_0_AUTH".to_string(),
+                "Bearer tok-123".to_string()
+            )),
+            "{:?}",
+            fake.envs()
+        );
+        // It was running before: it stays running.
+        assert!(
+            lines.last().unwrap().contains("-- rm -rf /build/"),
+            "{lines:#?}"
+        );
+    }
+
+    #[test]
+    fn a_builder_without_the_stored_registries_is_recreated() {
+        let t = test_env(&[]);
+        with_dhi_login(&t);
+        let fake = t.ctx.vm.runner();
+        fake.ok(&["machine", "status"], &dhi_builder_json("created"))
+            // Later registrations answer first: find gets the old builder, create's check none.
+            .once_fail(&["machine", "status"], "NOT_FOUND", "vm not found")
+            .once_ok(&["machine", "status"], &builder_json("stopped"))
+            .download(&kit_tar());
+        let kit = dhi_kit_dir();
+        build_with(&t.ctx, kit.path(), fake_mint).unwrap();
+        let lines = fake.call_lines();
+        let delete = lines
+            .iter()
+            .position(|l| l == "machine delete -n sbx-_builder -f")
+            .expect("delete");
+        let create = lines
+            .iter()
+            .position(|l| l.starts_with("machine create -n sbx-_builder"))
+            .expect("create");
+        assert!(delete < create, "{lines:#?}");
+    }
+
+    /// Stored logins the builder can't use (a registry on a port, Docker Hub) are not bound: it
+    /// builds as if they weren't stored.
+    fn unbindable_logins_are_not_bound(hosts: &[&str]) {
+        use crate::secrets::{RegistryEntry, SecretsFile};
+        let t = test_env(&[]);
+        let mut f = SecretsFile::default();
+        for h in hosts {
+            f.registries.push(RegistryEntry {
+                host: (*h).into(),
+                username: None,
+                auth_endpoint: None,
+            });
+        }
+        f.save(&t.ctx.paths).unwrap();
+        let fake = t.ctx.vm.runner();
+        fake.ok(&["machine", "status"], &builder_json("created"))
+            .once_fail(&["machine", "status"], "NOT_FOUND", "vm not found")
+            .once_fail(&["machine", "status"], "NOT_FOUND", "vm not found")
+            .download(&kit_tar());
+        let kit = kit_dir();
+        build_with(&t.ctx, kit.path(), no_mint).unwrap();
+        let lines = fake.call_lines();
+        let create = lines
+            .iter()
+            .find(|l| l.starts_with("machine create -n sbx-_builder"))
+            .unwrap();
+        assert!(!create.contains("--credential"), "{create}");
+        assert!(!create.contains("sbx.registries"), "{create}");
+        assert_eq!(fake.envs(), vec![Vec::<(String, String)>::new()]);
+    }
+
+    #[test]
+    fn a_login_for_a_registry_on_a_port_is_not_bound() {
+        unbindable_logins_are_not_bound(&["registry.corp:5000", "localhost:5000"]);
+    }
+
+    #[test]
+    fn a_docker_hub_login_is_not_bound() {
+        unbindable_logins_are_not_bound(&["registry-1.docker.io", "docker.io"]);
+    }
+
+    #[test]
+    fn a_registry_the_kit_doesnt_pull_from_gets_no_token() {
+        let t = test_env(&[]);
+        with_dhi_login(&t);
+        let fake = t.ctx.vm.runner();
+        fake.ok(&["machine", "status"], &dhi_builder_json("running"))
+            .download(&kit_tar());
+        let kit = kit_dir();
+        build_with(&t.ctx, kit.path(), no_mint).unwrap();
+        let lines = fake.call_lines();
+        assert!(!lines.iter().any(|l| l.starts_with("machine stop")));
+        assert!(!lines.iter().any(|l| l.starts_with("machine start")));
+    }
+
+    #[test]
+    fn repos_are_the_hosts_references_without_tag_or_digest() {
+        let text = "build: |\n  FROM dhi.io/debian-base:trixie AS b\n  \
+                    COPY --from=dhi.io/team/tool@sha256:abcd / /\n  FROM \"DHI.io/node\"\n  \
+                    FROM ghcr.io/dhi.io/x\n  RUN echo dhi.io/\n";
+        assert_eq!(
+            repos_in(text, "dhi.io"),
+            ["debian-base", "node", "team/tool"]
+        );
+        assert!(repos_in(text, "quay.io").is_empty());
     }
 
     #[test]

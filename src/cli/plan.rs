@@ -216,8 +216,8 @@ pub fn prepare_create<R: Runner>(
     let denies = super::policy::parse_create_denies(deny_network)?;
     let mut policy = ensure_policy(ctx)?;
     let secrets = SecretsFile::load(&ctx.paths)?;
-    // Internal sandboxes run untrusted code (a kit's build steps): no credentials, not even as
-    // placeholders.
+    // Internal sandboxes run untrusted code (a kit's build steps): no secrets, not even as
+    // placeholders. The builder only binds stored registry hosts (`req.registries`) below.
     let services: Vec<String> = if name::is_internal(&req.name) {
         Vec::new()
     } else {
@@ -229,6 +229,13 @@ pub fn prepare_create<R: Runner>(
     };
     req.credentials = credentials(&secrets, &services)?;
     req.credential_hosts = credential_hosts(&secrets, &services);
+    for (i, host) in req.registries.iter().enumerate() {
+        req.credentials
+            .push(crate::kits::builder::registry_credential(i, host));
+        req.credential_hosts.push(host.clone());
+    }
+    req.credential_hosts.sort();
+    req.credential_hosts.dedup();
     req.credential_env = req.credentials.iter().map(|c| c.env_var.clone()).collect();
     req.credential_env.sort();
     req.credential_env.dedup();
@@ -247,6 +254,7 @@ pub fn prepare_create<R: Runner>(
             req,
             &mut policy,
             &secrets,
+            &*ctx.store,
             &ctx.paths.kit_cache(),
             &|| host_git_identity(ctx),
         )?;

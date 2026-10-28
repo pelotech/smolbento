@@ -58,6 +58,27 @@ pub struct CustomService {
     pub hosts: Vec<String>,
 }
 
+/// A registry pull credential. Host only: the value is in the secret store under
+/// `registry_account(host)`.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct RegistryEntry {
+    pub host: String,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub username: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub auth_endpoint: Option<String>,
+}
+
+/// Key in the secret store for a registry's password or token.
+pub fn registry_account(host: &str) -> String {
+    format!("registry:{host}")
+}
+
+/// The stored password or token for a registry host, if any.
+pub fn registry_secret(store: &dyn store::SecretStore, host: &str) -> Result<Option<String>> {
+    store.get(&registry_account(host))
+}
+
 pub fn scope_for(sandbox: Option<&str>) -> String {
     match sandbox {
         Some(s) => format!("sandbox:{s}"),
@@ -71,6 +92,8 @@ pub struct SecretsFile {
     pub secrets: Vec<SecretEntry>,
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub custom: Vec<CustomService>,
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub registries: Vec<RegistryEntry>,
 }
 
 impl SecretsFile {

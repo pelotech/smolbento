@@ -9,6 +9,7 @@ pub mod guest;
 pub mod load;
 pub mod model;
 pub mod registry;
+pub mod registry_auth;
 pub mod resolve;
 pub mod smolfile;
 pub mod trust;

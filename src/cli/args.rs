@@ -885,12 +885,18 @@ pub struct SecretSetArgs {
     pub force: bool,
     #[arg(long, hide = true)]
     pub oauth: bool,
-    #[arg(long, hide = true)]
+    /// Store a pull credential for this container registry (host only)
+    #[arg(long, value_name = "HOST")]
     pub registry: Option<String>,
-    #[arg(long, hide = true)]
+    /// Registry username (omit for a token-only login)
+    #[arg(long)]
     pub username: Option<String>,
-    #[arg(long = "password-stdin", hide = true)]
+    /// Read the registry password or token from standard input
+    #[arg(long = "password-stdin")]
     pub password_stdin: bool,
+    /// Trust this exact HTTPS URL as the registry's Bearer authentication endpoint
+    #[arg(long = "registry-auth-endpoint", value_name = "URL")]
+    pub registry_auth_endpoint: Option<String>,
     #[arg(long, hide = true)]
     pub refresh: Option<String>,
     #[arg(long = "all-sandboxes", hide = true)]
@@ -938,7 +944,8 @@ pub struct SecretRmArgs {
     pub all: bool,
     #[arg(short = 'f', long)]
     pub force: bool,
-    #[arg(long, hide = true)]
+    /// Remove the pull credential for this container registry
+    #[arg(long, value_name = "HOST")]
     pub registry: Option<String>,
     #[arg(long = "all-sandboxes", hide = true)]
     pub all_sandboxes: bool,

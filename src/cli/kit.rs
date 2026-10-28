@@ -443,6 +443,7 @@ fn add_running<R: Runner>(
         &mut req,
         &mut policy,
         &secrets,
+        &*ctx.store,
         &ctx.paths.kit_cache(),
         &|| plan::host_git_identity(ctx),
     )?;

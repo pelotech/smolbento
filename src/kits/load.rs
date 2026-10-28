@@ -8,7 +8,9 @@ use anyhow::{Context, Result, bail};
 use crate::agents::Agent;
 use crate::cli::Ctx;
 use crate::kits::model::{Content, Kind, Kit, Source};
+use crate::kits::registry_auth::Logins;
 use crate::kits::{builder, capability, registry, smolfile, trust, v2, v3};
+use crate::secrets::SecretsFile;
 use crate::smolvm::Runner;
 
 /// Kits shipped inside smolbento, by the bare name that loads them.
@@ -42,7 +44,11 @@ fn load_kit<R: Runner>(ctx: &Ctx<R>, reference: &str, offline: bool) -> Result<K
         return kit;
     }
     match locate(ctx, reference, offline)? {
-        Located::Registry(r) => registry::pull(&r, &ctx.paths.kit_cache()),
+        Located::Registry(r) => {
+            let secrets = SecretsFile::load(&ctx.paths)?;
+            let logins = Logins::new(&secrets.registries, &*ctx.store);
+            registry::pull(&r, &ctx.paths.kit_cache(), logins)
+        }
         Located::V2(dir) => {
             let spec = dir.join("spec.yaml");
             let yaml =
@@ -212,7 +218,9 @@ pub fn check_launchable<R: Runner>(ctx: &Ctx<R>, kit: &mut Kit) -> Result<()> {
         && kit.command.is_none()
         && let (Source::LocalV2(_), Content::Image(image)) = (&kit.source, &kit.content)
     {
-        kit.command = registry::image_command(image, &ctx.paths.kit_cache())?;
+        let secrets = SecretsFile::load(&ctx.paths)?;
+        let logins = Logins::new(&secrets.registries, &*ctx.store);
+        kit.command = registry::image_command(image, &ctx.paths.kit_cache(), logins)?;
     }
     if kit.kind == Kind::Workload
         && kit.command.is_none()

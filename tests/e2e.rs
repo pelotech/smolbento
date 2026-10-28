@@ -996,7 +996,12 @@ impl Image {
     /// `reference`'s layers and config, pulled from Docker Hub with smolbento's own client.
     fn pull(reference: &str) -> Image {
         let cache = tempfile::tempdir().unwrap();
-        let dir = smolbento::kits::registry::pull_image(reference, cache.path()).unwrap();
+        let dir = smolbento::kits::registry::pull_image(
+            reference,
+            cache.path(),
+            smolbento::kits::registry_auth::Logins::none(),
+        )
+        .unwrap();
         let blob = |d: &serde_json::Value| {
             let hex = d.as_str().unwrap().trim_start_matches("sha256:");
             std::fs::read(dir.join("blobs/sha256").join(hex)).unwrap()
@@ -1264,6 +1269,133 @@ build: |
     );
     let ls = e.ok(&["ls", "--json"]);
     assert!(!ls.contains("_builder"), "the builder is hidden: {ls}");
+}
+
+/// The keychain smolbento's secret store uses here (src/secrets/store.rs `platform`): macOS
+/// `security`, or Linux `secret-tool` with a session bus. `None` means the 0600 file store, which
+/// lives in the per-test config dir.
+fn os_keychain(op: &str, account: &str) -> Option<Command> {
+    if cfg!(target_os = "macos") {
+        let mut c = Command::new("/usr/bin/security");
+        c.args([op, "-s", "smolbento", "-a", account]);
+        return Some(c);
+    }
+    let on_path = Command::new("sh")
+        .args(["-c", "command -v secret-tool"])
+        .output()
+        .is_ok_and(|o| o.status.success());
+    if std::env::var_os("DBUS_SESSION_BUS_ADDRESS").is_none() || !on_path {
+        return None;
+    }
+    let op = if op == "find-generic-password" {
+        "lookup"
+    } else {
+        "clear"
+    };
+    let mut c = Command::new("secret-tool");
+    c.args([op, "service", "smolbento", "account", account]);
+    Some(c)
+}
+
+/// Whether the keychain has smolbento's item ACCOUNT. Its value is never read or printed.
+fn os_keychain_has(account: &str) -> bool {
+    os_keychain("find-generic-password", account).is_some_and(|mut c| {
+        c.output().is_ok_and(|o| {
+            o.status.success() && (cfg!(target_os = "macos") || !o.stdout.is_empty())
+        })
+    })
+}
+
+fn os_keychain_delete(account: &str) {
+    if let Some(mut c) = os_keychain("delete-generic-password", account) {
+        let _ = c.output();
+    }
+}
+
+#[test]
+#[ignore = "boots real VMs and pulls from dhi.io with a login; run with `just e2e`"]
+fn local_kit_builds_from_a_registry_that_needs_a_login() {
+    // Local only: needs a Docker account with dhi.io access and its access token in a file.
+    let (Ok(user), Ok(token_file)) = (
+        std::env::var("SMOLBENTO_E2E_DHI_USER"),
+        std::env::var("SMOLBENTO_E2E_DHI_TOKEN_FILE"),
+    ) else {
+        eprintln!(
+            "skipped: set SMOLBENTO_E2E_DHI_USER and SMOLBENTO_E2E_DHI_TOKEN_FILE to build from dhi.io"
+        );
+        return;
+    };
+    // The value goes to the OS keychain, which is shared with your own smolbento whatever the
+    // config dir: never touch a dhi.io login you stored yourself.
+    const ACCOUNT: &str = "registry:dhi.io";
+    if os_keychain_has(ACCOUNT) {
+        eprintln!("skipped: your keychain already has a smolbento dhi.io login; not touching it");
+        return;
+    }
+    let token = std::fs::read(&token_file).unwrap();
+    // This recreates your real `_builder` (a global smolvm machine); your next real build
+    // recreates it again.
+    let e = E2e::new("dhi");
+    let _builder = BuilderGuard::new();
+
+    // Removed on every exit path; directly from the keychain too, in case `secret rm` refuses
+    // after a partial `secret set`.
+    struct RegistryCleanup<'a>(&'a E2e);
+    impl Drop for RegistryCleanup<'_> {
+        fn drop(&mut self) {
+            let _ = self.0.sbt(&["secret", "rm", "--registry", "dhi.io"]);
+            os_keychain_delete(ACCOUNT);
+        }
+    }
+    let _cleanup = RegistryCleanup(&e);
+    let mut set = e
+        .env(Command::new(env!("CARGO_BIN_EXE_smolbento")).args([
+            "secret",
+            "set",
+            "--registry",
+            "dhi.io",
+            "--username",
+            &user,
+            "--password-stdin",
+        ]))
+        .stdin(std::process::Stdio::piped())
+        .stdout(std::process::Stdio::piped())
+        .stderr(std::process::Stdio::piped())
+        .spawn()
+        .unwrap();
+    {
+        use std::io::Write;
+        set.stdin.take().unwrap().write_all(&token).unwrap();
+    }
+    let out = set.wait_with_output().unwrap();
+    assert!(
+        out.status.success(),
+        "secret set --registry: {}",
+        String::from_utf8_lossy(&out.stderr)
+    );
+
+    let kit = e.dir.path().join("dhi");
+    std::fs::create_dir_all(&kit).unwrap();
+    std::fs::write(
+        kit.join("dhi.yaml"),
+        r#"# syntax=docker/sandbox-kit:3
+schemaVersion: "3"
+kind: mixin
+version: "1.0.0"
+provides: [e2e-dhi]
+build: |
+  FROM dhi.io/debian-base:trixie AS base
+  FROM scratch
+  COPY --from=base /etc/os-release /opt/e2e-dhi/os-release
+"#,
+    )
+    .unwrap();
+    e.create_with_kits(&[kit.to_str().unwrap()]);
+    let release = root_out(&e.name, "cat /opt/e2e-dhi/os-release");
+    assert!(
+        release.contains(r#"VERSION_CODENAME="trixie""#),
+        "{release}"
+    );
 }
 
 #[test]
