@@ -245,6 +245,14 @@ pub fn summary(loaded: &Loaded, spec: &EnvSpec, op: Op, scoped: &[String]) -> St
     }
     n += section(&mut out, "WORKSPACES", '+', workspaces);
 
+    let mounts = f
+        .mounts
+        .iter()
+        .flatten()
+        .map(|(guest, host)| (format!("{host} -> {guest}"), vec![]))
+        .collect();
+    n += section(&mut out, "MOUNTS", '+', mounts);
+
     let kits = f
         .kits
         .iter()
@@ -640,7 +648,7 @@ mod tests {
         t.write(
             "proj/sbxenv.yaml",
             &format!(
-                "{HEAD}name: web-app\nagent: claude\nworkspace:\n  path: ./web\n  clone: true\nadditionalWorkspaces:\n  - path: ./docs\n    readOnly: true\nkits:\n  - org/tool\nenv:\n  NODE_ENV: development\nports:\n  - sandbox: 3000\n    host: 3000\n  - sandbox: 53\n    protocol: udp\nsecrets:\n  github:\n    command: gh auth token\n  openai:\n    value: sk-dummy\n  google:\n    ref: op://vault/item/field\nsandboxOptions:\n  cpus: 4\n  memory: 8g\n"
+                "{HEAD}name: web-app\nagent: claude\nworkspace:\n  path: ./web\n  clone: true\nadditionalWorkspaces:\n  - path: ./docs\n    readOnly: true\nkits:\n  - org/tool\nmounts:\n  /home/agent/.cache: ./cache\nenv:\n  NODE_ENV: development\nports:\n  - sandbox: 3000\n    host: 3000\n  - sandbox: 53\n    protocol: udp\nsecrets:\n  github:\n    command: gh auth token\n  openai:\n    value: sk-dummy\n  google:\n    ref: op://vault/item/field\nsandboxOptions:\n  cpus: 4\n  memory: 8g\n"
             ),
         );
         t.write("proj/local.yaml", "env:\n  LOG_LEVEL: debug\n");
