@@ -88,6 +88,8 @@ pub struct CreateSpec {
     /// `--smolfile`: a Smolfile kit's configuration, which may also name the image.
     pub smolfile: Option<PathBuf>,
     pub mounts: Vec<Mount>,
+    /// `--mount-socket`: (host socket, guest path), connected to the host path at connect time.
+    pub mount_sockets: Vec<(PathBuf, String)>,
     pub workdir: Option<String>,
     pub cpus: Option<u32>,
     pub memory_mib: Option<u64>,
@@ -125,6 +127,13 @@ impl CreateSpec {
         }
         for m in &self.mounts {
             flag(&mut a, "-v", m.arg());
+        }
+        for (host, guest) in &self.mount_sockets {
+            flag(
+                &mut a,
+                "--mount-socket",
+                format!("{}:{guest}", host.display()),
+            );
         }
         if let Some(w) = &self.workdir {
             flag(&mut a, "-w", w);
@@ -464,6 +473,7 @@ mod tests {
                     read_only: false,
                 },
             ],
+            mount_sockets: vec![("/tmp/sbt-501/ab.sock".into(), "/run/b.sock".into())],
             workdir: Some("/w".into()),
             cpus: Some(2),
             memory_mib: Some(4096),
@@ -487,8 +497,9 @@ mod tests {
         assert_eq!(
             spec.to_args().join(" "),
             "machine create -n sbx-claude-repo --image img:1 --net --net-backend virtio-net \
-             --label sbx.name=claude-repo -v /w:/w -v /docs:/docs:ro -v /var/lib/docker -w /w \
-             --cpus 2 --mem 4096 -e A=1 -p 8080:80 -p 53:53/udp -u root -- sleep infinity"
+             --label sbx.name=claude-repo -v /w:/w -v /docs:/docs:ro -v /var/lib/docker \
+             --mount-socket /tmp/sbt-501/ab.sock:/run/b.sock -w /w --cpus 2 --mem 4096 -e A=1 \
+             -p 8080:80 -p 53:53/udp -u root -- sleep infinity"
         );
     }
 

@@ -9,6 +9,7 @@ pub mod session;
 
 use anyhow::{Context, Result, anyhow};
 
+use crate::bridge;
 use crate::kits::apply::{InstallStep, KitSteps};
 use crate::kits::guest;
 use crate::policy::compile::HOST_GATEWAY;
@@ -433,6 +434,20 @@ fn setup<R: Runner>(vm: &Smolvm<R>, sb: &Sandbox, plan: &StartPlan) -> Result<()
     }) {
         eprintln!(
             "warning: {}: couldn't add host.docker.internal to /etc/hosts: {e:#}",
+            sb.name()
+        );
+    }
+    // Not fatal either: without the shims the agent prints URLs instead of opening them.
+    if sb.meta.bridge
+        && let Err(e) = vm.exec_captured(&ExecSpec {
+            name: sb.machine.clone(),
+            user: Some("root".into()),
+            cmd: vec!["sh".into(), "-c".into(), bridge::install_cmd()],
+            ..Default::default()
+        })
+    {
+        eprintln!(
+            "warning: {}: couldn't install the browser and clipboard shims: {e:#}",
             sb.name()
         );
     }
@@ -969,6 +984,71 @@ mod tests {
             vec![vec![("TOK".to_string(), "secret".to_string())]]
         );
         assert_eq!(vm.runner().removed(), vec![vec!["GONE".to_string()]]);
+    }
+
+    #[test]
+    fn starts_install_the_bridge_shims_only_for_bridged_sandboxes() {
+        for bridged in [true, false] {
+            let fake = FakeRunner::new();
+            let status = STATUS.replace("\"state\": \"running\"", "\"state\": \"stopped\"");
+            let status = if bridged {
+                status.replace(
+                    "\"sbx.docker\"",
+                    "\"sbx.bridge\": \"true\",\n    \"sbx.docker\"",
+                )
+            } else {
+                status
+            };
+            fake.ok(&["machine", "status"], &status);
+            let vm = Smolvm::new(fake);
+            let mut sb = get(&vm, "claude-myrepo").unwrap();
+            assert_eq!(sb.meta.bridge, bridged);
+            ensure_running(&vm, &mut sb, || Ok(plan())).unwrap();
+            let install = format!(
+                "machine exec --name sbx-claude-myrepo -u root -- sh -c {}",
+                bridge::install_cmd()
+            );
+            let lines = vm.runner().call_lines();
+            assert_eq!(lines.contains(&install), bridged, "{lines:#?}");
+            if bridged {
+                assert!(lines[4].ends_with(&hosts_cmd()), "{lines:#?}");
+                assert_eq!(lines[5], install);
+            }
+        }
+    }
+
+    #[test]
+    fn failing_to_install_the_shims_warns_and_the_start_goes_on() {
+        let fake = FakeRunner::new();
+        fake.ok(
+            &["machine", "status"],
+            &STATUS
+                .replace("\"state\": \"running\"", "\"state\": \"stopped\"")
+                .replace(
+                    "\"sbx.docker\"",
+                    "\"sbx.bridge\": \"true\",\n    \"sbx.docker\"",
+                ),
+        );
+        fake.fail(
+            &[
+                "machine",
+                "exec",
+                "--name",
+                "sbx-claude-myrepo",
+                "-u",
+                "root",
+                "--",
+                "sh",
+                "-c",
+                &bridge::install_cmd(),
+            ],
+            "EXEC_FAILED",
+            "Read-only file system",
+        );
+        let vm = Smolvm::new(fake);
+        let mut sb = get(&vm, "claude-myrepo").unwrap();
+        ensure_running(&vm, &mut sb, || Ok(plan())).unwrap();
+        assert!(sb.is_running());
     }
 
     #[test]

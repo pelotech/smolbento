@@ -1,6 +1,7 @@
 use std::collections::BTreeMap;
 use std::path::PathBuf;
 
+use crate::bridge;
 use crate::smolvm::{CreateSpec, Credential, Mount, NetworkSpec, PortMap};
 use crate::workspace::clone::{CloneSource, SOURCE_MOUNT};
 use crate::workspace::{MOUNTLESS_WORKDIR, Workspace};
@@ -109,6 +110,8 @@ pub fn meta(req: &CreateRequest) -> Meta {
         credential_install: req.credential_install.clone(),
         long_running: req.long_running,
         host_access: req.host_access,
+        // Internal sandboxes (`_builder`) never have a user attached.
+        bridge: !name::is_internal(&req.name),
         credential_formats: req.credential_formats.clone(),
         credential_services: req.credential_services.clone(),
         host_mounts: req
@@ -156,11 +159,17 @@ pub fn spec(req: &CreateRequest) -> CreateSpec {
             });
         }
     }
+    let mount_sockets = if meta.bridge {
+        vec![(bridge::host_socket(&req.name), bridge::GUEST_SOCKET.into())]
+    } else {
+        vec![]
+    };
     CreateSpec {
         name: name::machine_name(&req.name),
         image: req.image.clone(),
         labels: meta.to_labels(),
         mounts,
+        mount_sockets,
         workdir: meta.clone_repo.clone().or_else(|| meta.workspace.clone()),
         cpus: Some(req.cpus),
         memory_mib: Some(req.memory_mib),
@@ -238,6 +247,30 @@ mod tests {
         assert_eq!(spec.workdir.as_deref(), Some("/w/repo"));
         assert_eq!(spec.user.as_deref(), Some("root"));
         assert_eq!(spec.cmd, vec!["sleep", "infinity"]);
+    }
+
+    #[test]
+    fn new_sandboxes_get_the_bridge_socket_and_label() {
+        let args = spec(&request(false, vec![])).to_args();
+        let socket = format!(
+            "{}:/run/smolbento/bridge.sock",
+            bridge::host_socket("claude.repo").display()
+        );
+        assert!(
+            args.windows(2)
+                .any(|w| w[0] == "--mount-socket" && w[1] == socket),
+            "{args:?}"
+        );
+        assert!(args.contains(&"sbx.bridge=true".to_string()), "{args:?}");
+        // Not the internal builder: nobody attaches to it.
+        let mut req = request(false, vec![]);
+        req.name = "_builder".into();
+        let args = spec(&req).to_args();
+        assert!(!args.contains(&"--mount-socket".to_string()), "{args:?}");
+        assert!(
+            !args.iter().any(|a| a.starts_with("sbx.bridge")),
+            "{args:?}"
+        );
     }
 
     #[test]
