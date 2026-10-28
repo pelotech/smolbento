@@ -6,13 +6,13 @@ mod exec;
 mod fork;
 mod kit;
 mod kit_doc;
-mod lifecycle;
+pub(crate) mod lifecycle;
 mod ls;
 pub(crate) mod plan;
 mod policy;
 mod ports;
 mod run;
-mod secret;
+pub(crate) mod secret;
 mod settings;
 #[cfg(test)]
 pub(crate) mod testutil;

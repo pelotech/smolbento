@@ -7,7 +7,7 @@ use anyhow::{Result, bail};
 use regex_lite::Regex;
 use serde_json::Value;
 
-use super::file::{ArgDecl, EnvFile, RawFile, read};
+use super::file::{ArgDecl, EnvFile, RawFile, lexical, read};
 use crate::cli::Unsupported;
 
 pub struct Loaded {
@@ -28,7 +28,7 @@ pub fn load(paths: &[String], args: &ArgInputs, cwd: &Path, home: &Path) -> Resu
     let (files, user_default) = select(paths, cwd, home)?;
     let project_dir = match paths.first() {
         Some(p) => {
-            let p = cwd.join(p);
+            let p = lexical(&cwd.join(p));
             if p.is_dir() {
                 p
             } else {
@@ -462,6 +462,15 @@ mod tests {
         t.write("proj/other.yaml", MIN);
         let l = t.load(&["other.yaml"], &none()).unwrap();
         assert_eq!(l.project_dir, cwd);
+    }
+
+    #[test]
+    fn project_dir_is_folded_by_name() {
+        let t = T::new();
+        t.write("proj/sbxenv.yaml", MIN);
+        std::fs::create_dir(t.cwd().join("sub")).unwrap();
+        assert_eq!(t.load(&["."], &none()).unwrap().project_dir, t.cwd());
+        assert_eq!(t.load(&["sub/.."], &none()).unwrap().project_dir, t.cwd());
     }
 
     #[test]

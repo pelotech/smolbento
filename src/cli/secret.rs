@@ -33,10 +33,7 @@ pub fn run<R: Runner>(ctx: &mut Ctx<R>, cmd: SecretCmd) -> Result<i32> {
                 .service
                 .context("specify a service, e.g. `sbt secret set anthropic`")?;
             if file.service(&service).is_none() {
-                bail!(
-                    "unknown service '{service}' (built-in: {}; or use `sbt secret set-custom`)",
-                    services::builtin_names().join(", ")
-                );
+                bail!(unknown_service(&service));
             }
             set(ctx, &mut file, &service, a.source)?;
         }
@@ -74,6 +71,14 @@ pub fn run<R: Runner>(ctx: &mut Ctx<R>, cmd: SecretCmd) -> Result<i32> {
         }
     }
     Ok(0)
+}
+
+/// `secret set`'s error for a service that is neither built in nor custom.
+pub(crate) fn unknown_service(service: &str) -> String {
+    format!(
+        "unknown service '{service}' (built-in: {}; or use `sbt secret set-custom`)",
+        services::builtin_names().join(", ")
+    )
 }
 
 fn ls<R: Runner>(ctx: &Ctx<R>, file: &SecretsFile, a: &SecretLsArgs) -> Result<()> {

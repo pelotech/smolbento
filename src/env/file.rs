@@ -103,7 +103,7 @@ pub struct Port {
     pub host_ip: Option<String>,
 }
 
-#[derive(Deserialize, Debug)]
+#[derive(Deserialize, Debug, Clone)]
 #[serde(rename_all = "camelCase", deny_unknown_fields)]
 pub struct SecretDecl {
     pub value: Option<String>,
@@ -382,7 +382,7 @@ impl RawFile {
 }
 
 /// Folds `..` away by name (std's `absolute` keeps it), without touching the filesystem.
-fn lexical(p: &Path) -> PathBuf {
+pub(crate) fn lexical(p: &Path) -> PathBuf {
     let mut out = PathBuf::new();
     for c in p.components() {
         match c {

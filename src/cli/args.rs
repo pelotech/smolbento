@@ -329,6 +329,10 @@ pub struct SandboxOpts {
     /// Read kit arguments (NAME=VALUE lines) from a file (repeatable)
     #[arg(long = "kit-args-file", value_name = "FILE")]
     pub kit_args_file: Vec<PathBuf>,
+    /// Kit args an sbxenv.yaml pins: (kit source as given to `--kit`, `NAME=VALUE`s). Beneath
+    /// `--kit-arg` and `--kit-args-file`.
+    #[arg(skip)]
+    pub kit_pins: Vec<(String, Vec<String>)>,
     /// Add a per-sandbox network deny rule at creation time. Can be specified multiple times.
     /// The rule applies only to the new sandbox and can be listed or removed later with
     /// 'sbt policy ls <NAME>' or 'sbt policy rm network --sandbox <NAME> --resource <HOST>'

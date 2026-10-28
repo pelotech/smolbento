@@ -1,0 +1,47 @@
+---
+source: src/env/spec.rs
+expression: "summarise(&t, &[\"sbxenv.yaml\", \"local.yaml\"], Op::Create, &[])"
+---
+ENVIRONMENT
+  Name:  web-app
+  Files: <root>/proj/sbxenv.yaml
+         <root>/proj/local.yaml
+
+SANDBOX
+  + web-app
+      agent: claude
+      sandboxOptions.cpus: 4
+      sandboxOptions.memory: 8g
+
+WORKSPACES
+  + <root>/proj/web
+      clone: true
+  + <root>/proj/docs
+      readOnly: true
+
+KITS
+  + org/tool
+
+ENV
+  + LOG_LEVEL
+      value: debug
+  + NODE_ENV
+      value: development
+
+SECRETS
+  + github
+      command: gh auth token
+      workdir: fresh host temporary directory
+  + google
+      ref: op://vault/item/field
+  + openai
+      value: sha256:1eaa840f0577b0dbef7d091e41827c315610880057abaffd31736cac13356010
+
+PORTS
+  + 3000/tcp
+      host: 3000
+  + 53/udp
+      host: ephemeral
+
+  11 to add · 0 to change · 0 to destroy
+  ! this plan runs commands on this machine, outside the sandbox, with your own privileges

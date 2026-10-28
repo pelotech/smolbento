@@ -41,7 +41,7 @@ pub(crate) fn build_request<R: Runner>(
     Ok(req)
 }
 
-fn unknown_agent(name: &str) -> String {
+pub(crate) fn unknown_agent(name: &str) -> String {
     format!("unknown agent \"{name}\"")
 }
 
@@ -186,6 +186,10 @@ pub(crate) fn kit_plan<R: Runner>(
     workload: Workload,
     opts: &SandboxOpts,
 ) -> Result<Plan> {
+    let workload_source = match &workload {
+        Workload::Ref(target) => Some(target.clone()),
+        Workload::Preset(_) => None,
+    };
     let workload = match workload {
         Workload::Preset(kit) => *kit,
         Workload::Ref(target) => {
@@ -212,12 +216,20 @@ pub(crate) fn kit_plan<R: Runner>(
             kit
         }
     };
-    let args = ArgValues::parse(&opts.kit_args_file, &opts.kit_arg)?;
+    let mut args = ArgValues::parse(&opts.kit_args_file, &opts.kit_arg)?;
     let mut mixins = opts
         .kit
         .iter()
         .map(|r| load::load(ctx, r))
         .collect::<Result<Vec<_>>>()?;
+    for (source, pins) in &opts.kit_pins {
+        let kit = match opts.kit.iter().position(|k| k == source) {
+            Some(i) => &mixins[i],
+            None if workload_source.as_ref() == Some(source) => &workload,
+            None => continue,
+        };
+        args.pin(&kit.name, pins)?;
+    }
     // First, added or given with `--kit docker`: other kits' startup steps may use the dockerd it
     // starts (in sbx it's in the image).
     if let Some(i) = mixins
@@ -1553,6 +1565,44 @@ mod tests {
             .call_lines()
             .iter()
             .any(|l| l.starts_with("machine "))
+    }
+
+    #[test]
+    fn kit_pins_apply_beneath_kit_args() {
+        let dir = tempfile::tempdir().unwrap();
+        std::fs::write(
+            dir.path().join("spec.yaml"),
+            "schemaVersion: \"2\"\nkind: mixin\nname: pinme\nargs:\n  mode:\n    default: plain\nsetup:\n  install:\n    - command: echo mode=${{ kit.args.mode }}\n",
+        )
+        .unwrap();
+        let kit = dir.path().display().to_string();
+        for (flags, want) in [(vec![], "mode=pinned"), (vec!["mode=flag"], "mode=flag")] {
+            let mut t = kit_env();
+            let fake = t.ctx.vm.runner();
+            fake.ok(
+                &["machine", "status"],
+                &json("sbx-shell-proj", "created", "shell-proj"),
+            );
+            fake.once_fail(&["machine", "status"], "NOT_FOUND", "vm not found");
+            let a = super::CreateArgs {
+                targets: vec!["shell".into(), ".".into()],
+                opts: super::SandboxOpts {
+                    kit: vec![kit.clone()],
+                    kit_arg: flags.iter().map(|s| s.to_string()).collect(),
+                    kit_pins: vec![(kit.clone(), vec!["mode=pinned".into()])],
+                    ..Default::default()
+                },
+                no_progress: false,
+            };
+            super::create(&mut t.ctx, &a).unwrap();
+            let lines = t.ctx.vm.runner().call_lines();
+            assert!(
+                lines
+                    .iter()
+                    .any(|l| l.contains("machine exec") && l.contains(want)),
+                "{want}: {lines:?}"
+            );
+        }
     }
 
     #[test]
