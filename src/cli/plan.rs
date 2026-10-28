@@ -153,6 +153,7 @@ fn plan_for<R: Runner>(
         env,
         remove,
         uid: ctx.uid,
+        gid: ctx.gid,
         clone,
         branchable: meta.forkable() && ctx.settings.bool("fork.enabled")?,
         kit: None,

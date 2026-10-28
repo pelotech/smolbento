@@ -58,8 +58,9 @@ pub struct Ctx<R: Runner> {
     /// Unix seconds.
     pub now: i64,
     pub stdin_tty: bool,
-    /// The host user's uid; the sandbox's `agent` user takes it.
+    /// The host user's uid and gid; the sandbox's `agent` user takes them.
     pub uid: u32,
+    pub gid: u32,
     /// Where stored secret values live (OS keychain, or the 0600 file).
     pub store: Box<dyn crate::secrets::store::SecretStore>,
     /// Why config.toml couldn't be loaded; only `diagnose` and `settings` run despite it.
@@ -107,6 +108,7 @@ pub fn main(args: impl IntoIterator<Item = OsString>) -> Result<i32> {
         now: SystemTime::now().duration_since(UNIX_EPOCH)?.as_secs() as i64,
         stdin_tty: std::io::stdin().is_terminal(),
         uid: crate::sandbox::host_uid(),
+        gid: crate::sandbox::host_gid(),
         store,
         config_error,
         out: Out::Stdout,

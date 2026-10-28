@@ -24,12 +24,25 @@ pub use labels::Meta;
 /// `sbx.kits`). Newer ones get dockerd from the docker kit's startup hook (`kits/docker`).
 pub const DOCKER_START: &str = "pgrep -x dockerd >/dev/null || { rm -f /var/run/docker.pid; exec dockerd >/var/log/dockerd.log 2>&1; }";
 
-/// Gives the image's `agent` user the host user's uid. virtiofs passes host uids through, so
-/// without this uid 1000 can't write a workspace owned by, say, uid 501 (verified on smolvm
-/// 1.32.2). Idempotent; skipped for images without an `agent` user.
-pub fn identity_cmd(uid: u32) -> String {
+/// Gives the image's `agent` user the host user's uid and its primary group the host gid.
+/// virtiofs passes host uids through, so without this uid 1000 can't write a workspace owned by,
+/// say, uid 501 (verified on smolvm 1.32.2). Idempotent; skipped for images without an `agent`
+/// user.
+pub fn identity_cmd(uid: u32, gid: u32) -> String {
     format!(
-        "id -u agent >/dev/null 2>&1 || exit 0; [ \"$(id -u agent)\" = {uid} ] || usermod -o -u {uid} agent"
+        "id -u agent >/dev/null 2>&1 || exit 0; {group}[ \"$(id -u agent)\" = {uid} ] || usermod -o -u {uid} agent",
+        group = group_cmd("agent", gid),
+    )
+}
+
+/// Gives `user`'s primary group the host gid. On Linux, virtiofs creates files as the caller's
+/// uid and gid, and the unprivileged VMM can't take on another gid, so any other gid gets EPERM
+/// even in a workspace the uid owns. Root's group stays 0; images without `groupmod` (busybox)
+/// are left alone. `user` is a shell word.
+fn group_cmd(user: &str, gid: u32) -> String {
+    format!(
+        "g=$(id -g {user}); [ \"$g\" = 0 ] || [ \"$g\" = {gid} ] || \
+         ! command -v groupmod >/dev/null 2>&1 || groupmod -o -g {gid} \"$(id -gn {user})\" || exit; "
     )
 }
 
@@ -39,14 +52,14 @@ pub const IMAGE_USER_FILE: &str = "/etc/smolbento/image-user";
 
 /// `identity_cmd` for a v3 workload's image user (`sbx.user`: `name`, `uid` or either with
 /// `:group`). Run before `identity_cmd`, so a `USER 1000` image still finds `agent` there.
-pub fn image_user_cmd(user: &str, uid: u32) -> String {
-    image_user_script(user, uid, "/etc")
+pub fn image_user_cmd(user: &str, uid: u32, gid: u32) -> String {
+    image_user_script(user, uid, gid, "/etc")
 }
 
 /// `image_user_cmd` against the passwd file and record under `etc` (tests use a temp dir). The
 /// first start resolves the user (a uid through `passwd`) and records the account; later starts
 /// read the record. Root keeps uid 0. Exits `UNMAPPED` when there's no account or no `usermod`.
-fn image_user_script(user: &str, uid: u32, etc: &str) -> String {
+fn image_user_script(user: &str, uid: u32, gid: u32, etc: &str) -> String {
     let token = user.split(':').next().unwrap_or(user);
     format!(
         "f={file}; n=; [ -r \"$f\" ] && read -r n < \"$f\"; \
@@ -54,8 +67,9 @@ fn image_user_script(user: &str, uid: u32, etc: &str) -> String {
          *) n=$(awk -F: -v u=\"$n\" '$3 == u {{ print $1; exit }}' {passwd});; esac; \
          [ -n \"$n\" ] && mkdir -p {dir} && echo \"$n\" > \"$f\"; fi; \
          [ -n \"$n\" ] && u=$(id -u \"$n\" 2>/dev/null) || exit {UNMAPPED}; \
-         [ \"$u\" = 0 ] || [ \"$u\" = {uid} ] && exit 0; \
+         [ \"$u\" = 0 ] && exit 0; {group}[ \"$u\" = {uid} ] && exit 0; \
          command -v usermod >/dev/null 2>&1 || exit {UNMAPPED}; usermod -o -u {uid} \"$n\"",
+        group = group_cmd("\"$n\"", gid),
         file = sh_quote(&format!("{etc}/smolbento/image-user")),
         dir = sh_quote(&format!("{etc}/smolbento")),
         passwd = sh_quote(&format!("{etc}/passwd")),
@@ -122,11 +136,12 @@ pub fn map_image_user<R: Runner>(
     sb: &Sandbox,
     user: &str,
     uid: u32,
+    gid: u32,
 ) -> Result<Option<String>> {
     let out = vm.exec_output(&ExecSpec {
         name: sb.machine.clone(),
         user: Some("root".into()),
-        cmd: vec!["sh".into(), "-c".into(), image_user_cmd(user, uid)],
+        cmd: vec!["sh".into(), "-c".into(), image_user_cmd(user, uid, gid)],
         ..Default::default()
     })?;
     match out.code {
@@ -146,8 +161,13 @@ pub fn host_uid() -> u32 {
     unsafe { libc::getuid() }
 }
 
+pub fn host_gid() -> u32 {
+    // SAFETY: getgid has no preconditions and cannot fail.
+    unsafe { libc::getgid() }
+}
+
 /// What a start needs beyond the machine: its network, the secret values for its credentials
-/// (only ever passed as env to `machine start`), and the uid for the agent user.
+/// (only ever passed as env to `machine start`), and the uid and gid for the agent user.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct StartPlan {
     pub network: NetworkSpec,
@@ -156,6 +176,7 @@ pub struct StartPlan {
     /// shell's same-named variables can't stand in for them.
     pub remove: Vec<String>,
     pub uid: u32,
+    pub gid: u32,
     /// Set for a clone sandbox; the clone itself is skipped once it exists, the remote copy is not.
     pub clone: Option<CloneStep>,
     /// Start with `--branchable` so `sbt fork` can copy it; only for forkable sandboxes.
@@ -340,14 +361,14 @@ pub fn start<R: Runner>(vm: &Smolvm<R>, sb: &Sandbox, plan: &StartPlan) -> Resul
 /// during a kit first start). A failed blocking startup hook fails the start.
 fn setup<R: Runner>(vm: &Smolvm<R>, sb: &Sandbox, plan: &StartPlan) -> Result<()> {
     if let Some(user) = &sb.meta.user
-        && let Some(w) = map_image_user(vm, sb, user, plan.uid)?
+        && let Some(w) = map_image_user(vm, sb, user, plan.uid, plan.gid)?
     {
         eprintln!("{w}");
     }
     vm.exec_captured(&ExecSpec {
         name: sb.machine.clone(),
         user: Some("root".into()),
-        cmd: vec!["sh".into(), "-c".into(), identity_cmd(plan.uid)],
+        cmd: vec!["sh".into(), "-c".into(), identity_cmd(plan.uid, plan.gid)],
         ..Default::default()
     })
     .context("matching the sandbox's agent user to your host uid")?;
@@ -791,6 +812,7 @@ mod tests {
             env: vec![("TOK".into(), "secret".into())],
             remove: vec!["GONE".into()],
             uid: 501,
+            gid: 20,
             clone: None,
             branchable: true,
             kit: None,
@@ -857,15 +879,16 @@ mod tests {
             lines[3],
             format!(
                 "machine exec --name sbx-claude-myrepo -u root -- sh -c {}",
-                image_user_cmd("1000", 501)
+                image_user_cmd("1000", 501, 20)
             )
         );
         assert!(lines[4].ends_with("usermod -o -u 501 agent"), "{lines:#?}");
         assert_eq!(lines.len(), 7, "{lines:#?}");
     }
 
-    /// Runs `image_user_script` on the host against `etc`, with `id` and `usermod` shims that
-    /// read `etc/passwd` and log to `etc/usermod.log`. Returns the exit code.
+    /// Runs `image_user_script` (uid 501, gid 20) on the host against `etc`, with `id`, `usermod`
+    /// and `groupmod` shims that read `etc/passwd` and `etc/group` and log to
+    /// `etc/<command>.log`. Returns the exit code.
     fn run_image_user_script(etc: &std::path::Path, user: &str) -> i32 {
         let bin = etc.join("bin");
         std::fs::create_dir_all(&bin).unwrap();
@@ -877,10 +900,14 @@ mod tests {
         };
         shim(
             "id",
-            r#"awk -F: -v n="$2" '$1 == n { print $3; f = 1 } END { exit !f }' "$ETC/passwd""#,
+            r#"case $1 in -u) f=3;; *) f=4;; esac
+g=$(awk -F: -v n="$2" -v f=$f '$1 == n { print $f; x = 1 } END { exit !x }' "$ETC/passwd") || exit 1
+[ "$1" = -gn ] && g=$(awk -F: -v g="$g" '$3 == g { print $1 }' "$ETC/group")
+echo "$g""#,
         );
         shim("usermod", r#"echo "$@" >> "$ETC/usermod.log""#);
-        let script = image_user_script(user, 501, &etc.display().to_string());
+        shim("groupmod", r#"echo "$@" >> "$ETC/groupmod.log""#);
+        let script = image_user_script(user, 501, 20, &etc.display().to_string());
         let path = format!("{}:{}", bin.display(), std::env::var("PATH").unwrap());
         std::process::Command::new("sh")
             .args(["-c", &script])
@@ -905,6 +932,7 @@ mod tests {
             )
             .unwrap()
         };
+        std::fs::write(etc.join("group"), "root:x:0:\nagent:x:1000:\n").unwrap();
         // First start: uid 1000 is `agent` (sandbox-templates); it's recorded and mapped.
         passwd(1000);
         assert_eq!(run_image_user_script(etc, "1000"), 0);
@@ -912,6 +940,9 @@ mod tests {
         assert_eq!(name, "agent\n");
         let log = std::fs::read_to_string(etc.join("usermod.log")).unwrap();
         assert_eq!(log, "-o -u 501 agent\n");
+        // Its group takes the host gid too: Linux virtiofs creates files as the caller's gid.
+        let groups = std::fs::read_to_string(etc.join("groupmod.log")).unwrap();
+        assert_eq!(groups, "-o -g 20 agent\n");
         // Later starts: `agent` is 501 now and uid 1000 is nobody, yet the record still names it.
         passwd(501);
         assert_eq!(run_image_user_script(etc, "1000"), 0);
@@ -949,7 +980,7 @@ mod tests {
         let sb = get(&vm, "claude-myrepo").unwrap();
         let e = format!(
             "{:#}",
-            map_image_user(&vm, &sb, "somebody", 501).unwrap_err()
+            map_image_user(&vm, &sb, "somebody", 501, 20).unwrap_err()
         );
         assert!(
             e.contains("usermod: user somebody is currently used by process 7"),
@@ -1028,7 +1059,7 @@ mod tests {
         fake.ok(&["machine", "status"], STATUS);
         let vm = Smolvm::new(fake);
         let sb = get(&vm, "claude-myrepo").unwrap();
-        assert_eq!(map_image_user(&vm, &sb, "somebody", 501).unwrap(), None);
+        assert_eq!(map_image_user(&vm, &sb, "somebody", 501, 20).unwrap(), None);
         vm.runner().on(
             &[
                 "machine",
@@ -1044,7 +1075,9 @@ mod tests {
             },
         );
         assert_eq!(
-            map_image_user(&vm, &sb, "1001", 501).unwrap().as_deref(),
+            map_image_user(&vm, &sb, "1001", 501, 20)
+                .unwrap()
+                .as_deref(),
             Some(
                 "warning: claude-myrepo: couldn't map the image user 1001 to your uid; the \
                  workspace may not be writable"
@@ -1121,10 +1154,13 @@ mod tests {
     }
 
     #[test]
-    fn identity_cmd_targets_the_host_uid() {
+    fn identity_cmd_targets_the_host_uid_and_gid() {
         assert_eq!(
-            identity_cmd(501),
-            "id -u agent >/dev/null 2>&1 || exit 0; [ \"$(id -u agent)\" = 501 ] || usermod -o -u 501 agent"
+            identity_cmd(501, 20),
+            "id -u agent >/dev/null 2>&1 || exit 0; g=$(id -g agent); [ \"$g\" = 0 ] || \
+             [ \"$g\" = 20 ] || ! command -v groupmod >/dev/null 2>&1 || \
+             groupmod -o -g 20 \"$(id -gn agent)\" || exit; \
+             [ \"$(id -u agent)\" = 501 ] || usermod -o -u 501 agent"
         );
     }
 
@@ -1885,7 +1921,7 @@ mod tests {
                 "--",
                 "sh",
                 "-c",
-                &identity_cmd(501),
+                &identity_cmd(501, 20),
             ],
             "EXEC_FAILED",
             "usermod: busy",

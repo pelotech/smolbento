@@ -56,8 +56,9 @@ terminal fail until you do.
   `allow-all`, the host's LAN IP isn't blocked, so services listening on `0.0.0.0` are reachable
   through it.
 - Linux uses a 0600 file for secret values where no Secret Service runs.
-- Group ids aren't mapped: group-writable shared directories aren't writable through group
-  membership.
+- Only the agent's primary group takes your gid: group-writable shared directories aren't
+  writable through your other groups. Images without `groupmod` (busybox) keep their gid, so on
+  Linux the agent can't create files in the workspace unless that gid already matches yours.
 
 ## Needs smolvm support (later decisions)
 
