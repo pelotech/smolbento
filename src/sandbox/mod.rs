@@ -13,7 +13,8 @@ use crate::kits::apply::{InstallStep, KitSteps};
 use crate::kits::guest;
 use crate::policy::compile::HOST_GATEWAY;
 use crate::smolvm::{
-    ExecSpec, Machine, MachineState, NetworkSpec, PublishedPort, Runner, Smolvm, SmolvmError,
+    ExecSpec, Machine, MachineState, NetworkSpec, PublishedPort, PullProgress, Runner, Smolvm,
+    SmolvmError,
 };
 use crate::workspace::MOUNTLESS_WORKDIR;
 use crate::workspace::clone::{SOURCE_MOUNT, WorktreeHead};
@@ -180,6 +181,20 @@ pub fn host_uid() -> u32 {
 pub fn host_gid() -> u32 {
     // SAFETY: getgid has no preconditions and cannot fail.
     unsafe { libc::getgid() }
+}
+
+/// What a create or start is doing, for the caller's progress output.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum Event<'a> {
+    /// `machine start` begins; smolvm pulls the image first when it's missing.
+    Boot,
+    /// smolvm's image pull progress.
+    Pull(PullProgress),
+    /// The machine is up; the guest setup begins.
+    Setup,
+    /// A kit's part of the first start begins: its install hooks, and for the last kit the
+    /// rest of the first start.
+    Install(&'a str),
 }
 
 /// What a start needs beyond the machine: its network, the secret values for its credentials
@@ -360,9 +375,27 @@ pub fn list<R: Runner>(vm: &Smolvm<R>) -> Result<Vec<Sandbox>> {
 /// A failed setup step stops the machine again: left running half set up, later commands would
 /// skip `start` and never retry it.
 pub fn start<R: Runner>(vm: &Smolvm<R>, sb: &Sandbox, plan: &StartPlan) -> Result<()> {
+    start_with(vm, sb, plan, &mut |_| {})
+}
+
+/// `start`, telling `on` what it's doing.
+pub fn start_with<R: Runner>(
+    vm: &Smolvm<R>,
+    sb: &Sandbox,
+    plan: &StartPlan,
+    on: &mut dyn FnMut(Event),
+) -> Result<()> {
     vm.update_network(&sb.machine, &plan.network)
         .context("applying the network policy")?;
-    vm.start(&sb.machine, plan.branchable, &plan.env, &plan.remove)?;
+    on(Event::Boot);
+    vm.start_with_progress(
+        &sb.machine,
+        plan.branchable,
+        &plan.env,
+        &plan.remove,
+        &mut |p| on(Event::Pull(p)),
+    )?;
+    on(Event::Setup);
     if let Err(e) = setup(vm, sb, plan) {
         if let Err(stop) = vm.stop(&sb.machine) {
             eprintln!(
@@ -478,23 +511,25 @@ pub fn ensure_running<R: Runner>(
 /// Creates and starts a new sandbox (the caller checked the name is free), then runs its kit
 /// steps. `drop_install_rules` removes the install-phase rules from the policy and returns this
 /// sandbox's network without them. A failing kit step removes the sandbox (spec Decision 6).
+/// `on` hears what the start and the kit steps are doing.
 pub fn create<R: Runner>(
     vm: &Smolvm<R>,
     req: &CreateRequest,
     plan: &StartPlan,
     drop_install_rules: impl FnOnce(&[String]) -> Result<NetworkSpec>,
+    on: &mut dyn FnMut(Event),
 ) -> Result<Sandbox> {
     vm.create(&create::spec(req))?;
     let mut sb = get(vm, &req.name)?;
     let Some(kit) = &plan.kit else {
-        start(vm, &sb, plan)?;
+        start_with(vm, &sb, plan, on)?;
         sb.state = MachineState::Running;
         return Ok(sb);
     };
     // A kit sandbox isn't usable until its steps ran, so a failed first start removes it too and
     // the same command can simply run again.
-    let steps =
-        start(vm, &sb, plan).and_then(|()| first_start(vm, &sb, plan, kit, drop_install_rules));
+    let steps = start_with(vm, &sb, plan, on)
+        .and_then(|()| first_start(vm, &sb, plan, kit, drop_install_rules, on));
     if let Err(e) = steps {
         // Every Docker sandbox takes this path (the docker kit), most without install hooks.
         let what = if kit.steps.install.is_empty() {
@@ -533,6 +568,7 @@ fn first_start<R: Runner>(
     plan: &StartPlan,
     kit: &KitFirstStart,
     drop_install_rules: impl FnOnce(&[String]) -> Result<NetworkSpec>,
+    on: &mut dyn FnMut(Event),
 ) -> Result<()> {
     let after_install = || -> Result<()> {
         let mut network = plan.network.clone();
@@ -575,7 +611,7 @@ fn first_start<R: Runner>(
         }
         Ok(())
     };
-    apply_kit_steps(vm, sb, &kit.steps, after_install).map_err(|(_, e)| e)
+    apply_kit_steps(vm, sb, &kit.steps, after_install, on).map_err(|(_, e)| e)
 }
 
 /// Where `apply_kit_steps` failed.
@@ -591,16 +627,36 @@ pub enum KitPhase {
 
 /// Applies kit steps to a running sandbox, for a create's first start and for `kit add`: install
 /// hooks, then `after_install` (dropping the install-phase rules), then files, agent context, the
-/// `startup.d` scripts, the startup runner and the kits record (written whole).
+/// `startup.d` scripts, the startup runner and the kits record (written whole). `on` hears
+/// `Install` for each kit: before its first install hook, and after the hooks for kits with none.
 pub fn apply_kit_steps<R: Runner>(
     vm: &Smolvm<R>,
     sb: &Sandbox,
     steps: &KitSteps,
     after_install: impl FnOnce() -> Result<()>,
+    on: &mut dyn FnMut(Event),
 ) -> std::result::Result<(), (KitPhase, anyhow::Error)> {
     let mut run = Steps { vm, sb, n: 0 };
+    let mut told: Vec<&str> = Vec::new();
     for step in &steps.install {
+        if let Some(kit) = step.kit.as_deref()
+            && told.last() != Some(&kit)
+        {
+            on(Event::Install(kit));
+            told.push(kit);
+        }
         run.install(step).map_err(|e| (KitPhase::Install, e))?;
+    }
+    // The kits record's first column is each kit's name.
+    for kit in steps
+        .kits_record
+        .lines()
+        .filter_map(|l| l.split('\t').next())
+    {
+        if !told.contains(&kit) {
+            on(Event::Install(kit));
+            told.push(kit);
+        }
     }
     after_install().map_err(|e| (KitPhase::AfterInstall, e))?;
     let mut write = || -> Result<()> {
@@ -1291,7 +1347,7 @@ echo "$g""#,
             .replace("\"true\"", "\"false\"");
         fake.ok(&["machine", "status"], &created);
         let vm = Smolvm::new(fake);
-        let sb = create(&vm, &req, &plan(), |_| unreachable!()).unwrap();
+        let sb = create(&vm, &req, &plan(), |_| unreachable!(), &mut |_| {}).unwrap();
         assert!(sb.is_running());
         let lines = vm.runner().call_lines();
         assert!(
@@ -1515,6 +1571,7 @@ echo "$g""#,
     fn hook(n: usize, user: Option<&str>, script: &str) -> InstallStep {
         InstallStep {
             label: format!("kit k install hook {n}"),
+            kit: Some("k".into()),
             user: user.map(String::from),
             script: script.into(),
         }
@@ -1560,13 +1617,58 @@ echo "$g""#,
     }
 
     #[test]
+    fn create_tells_what_it_is_doing() {
+        let vm = created_vm();
+        vm.runner().progress(
+            &["machine", "start"],
+            &[
+                "Pulling image img... [==>      ] 10%",
+                "Pulling image img... [=========] 100% — syncing...",
+            ],
+        );
+        let mut plan = kit_plan(&[]);
+        let kit = plan.kit.as_mut().unwrap();
+        // The docker kit, without install hooks, comes after the kit whose hooks run.
+        kit.steps.kits_record = "docker\tbuiltin:docker\tdocker\nk\tref@sha256:00\tnpm\n".into();
+        kit.steps.install.insert(
+            0,
+            InstallStep {
+                kit: None,
+                ..hook(0, None, "echo git-identity")
+            },
+        );
+        let mut events = Vec::new();
+        create(&vm, &request(), &plan, |_| Ok(restricted(&[])), &mut |e| {
+            events.push(format!("{e:?}"))
+        })
+        .unwrap();
+        assert_eq!(
+            events,
+            [
+                "Boot",
+                "Pull(Percent(10))",
+                "Pull(Syncing)",
+                "Setup",
+                "Install(\"k\")",
+                "Install(\"docker\")"
+            ]
+        );
+    }
+
+    #[test]
     fn create_runs_kit_steps_in_lifecycle_order() {
         let vm = created_vm();
         let dropped = std::cell::RefCell::new(Vec::new());
-        create(&vm, &request(), &kit_plan(&[]), |ids| {
-            dropped.borrow_mut().extend_from_slice(ids);
-            Ok(restricted(&["api.example.com"]))
-        })
+        create(
+            &vm,
+            &request(),
+            &kit_plan(&[]),
+            |ids| {
+                dropped.borrow_mut().extend_from_slice(ids);
+                Ok(restricted(&["api.example.com"]))
+            },
+            &mut |_| {},
+        )
         .unwrap();
         assert_eq!(*dropped.borrow(), vec!["r-npm".to_string()]);
         let lines = vm.runner().call_lines();
@@ -1649,9 +1751,13 @@ echo "$g""#,
     #[test]
     fn install_only_credentials_restart_the_machine_without_them() {
         let vm = created_vm();
-        create(&vm, &request(), &kit_plan(&["TOK"]), |_| {
-            Ok(restricted(&["api.example.com"]))
-        })
+        create(
+            &vm,
+            &request(),
+            &kit_plan(&["TOK"]),
+            |_| Ok(restricted(&["api.example.com"])),
+            &mut |_| {},
+        )
         .unwrap();
         let lines = vm.runner().call_lines();
         let install2 = position(&lines, "install 2", |l| {
@@ -1725,9 +1831,13 @@ echo "$g""#,
             "EXEC_FAILED",
             &stderr.join("\n"),
         );
-        let err = create(&vm, &request(), &kit_plan(&[]), |_| {
-            panic!("install rules stay until the hooks succeed")
-        })
+        let err = create(
+            &vm,
+            &request(),
+            &kit_plan(&[]),
+            |_| panic!("install rules stay until the hooks succeed"),
+            &mut |_| {},
+        )
         .unwrap_err()
         .to_string();
         assert_eq!(
@@ -1748,9 +1858,13 @@ echo "$g""#,
     #[test]
     fn failing_to_drop_the_install_rules_or_write_files_removes_the_sandbox() {
         let vm = created_vm();
-        let err = create(&vm, &request(), &kit_plan(&[]), |_| {
-            anyhow::bail!("policy.toml: permission denied")
-        })
+        let err = create(
+            &vm,
+            &request(),
+            &kit_plan(&[]),
+            |_| anyhow::bail!("policy.toml: permission denied"),
+            &mut |_| {},
+        )
         .unwrap_err();
         assert!(
             err.to_string()
@@ -1766,9 +1880,13 @@ echo "$g""#,
         let vm = created_vm();
         vm.runner()
             .fail(&["machine", "cp"], "CP_FAILED", "no space left");
-        let err = create(&vm, &request(), &kit_plan(&[]), |_| {
-            Ok(restricted(&["api.example.com"]))
-        })
+        let err = create(
+            &vm,
+            &request(),
+            &kit_plan(&[]),
+            |_| Ok(restricted(&["api.example.com"])),
+            &mut |_| {},
+        )
         .unwrap_err();
         assert!(
             err.to_string().starts_with("kit install failed")
@@ -1791,7 +1909,7 @@ echo "$g""#,
         let kit = plan.kit.as_mut().unwrap();
         kit.steps.install.clear();
         kit.steps.install_rules.clear();
-        let err = create(&vm, &request(), &plan, |_| unreachable!()).unwrap_err();
+        let err = create(&vm, &request(), &plan, |_| unreachable!(), &mut |_| {}).unwrap_err();
         assert!(
             err.to_string()
                 .starts_with("the first start failed (the sandbox was removed): ")
@@ -1807,9 +1925,13 @@ echo "$g""#,
         let mut plan = kit_plan(&[]);
         let kit = plan.kit.as_mut().unwrap();
         kit.steps.install = vec![hook(1, Some("agent"), &big)];
-        create(&vm, &request(), &plan, |_| {
-            Ok(restricted(&["api.example.com"]))
-        })
+        create(
+            &vm,
+            &request(),
+            &plan,
+            |_| Ok(restricted(&["api.example.com"])),
+            &mut |_| {},
+        )
         .unwrap();
         let lines = vm.runner().call_lines();
         assert!(!lines.iter().any(|l| l.contains(&big)), "inline");
@@ -1909,9 +2031,13 @@ echo "$g""#,
     fn a_failing_startup_hook_at_create_warns_and_keeps_the_sandbox_stopped() {
         let vm = created_vm();
         failing_startup(vm.runner(), MACHINE, 1);
-        let sb = create(&vm, &request(), &kit_plan(&[]), |_| {
-            Ok(restricted(&["api.example.com"]))
-        })
+        let sb = create(
+            &vm,
+            &request(),
+            &kit_plan(&[]),
+            |_| Ok(restricted(&["api.example.com"])),
+            &mut |_| {},
+        )
         .unwrap();
         // Stopped, so the next run starts it and runs the hooks again (and fails like sbx).
         assert_eq!(sb.state, MachineState::Stopped);
@@ -2009,9 +2135,15 @@ echo "$g""#,
                 stderr: String::new(),
             },
         );
-        let err = create(&vm, &request(), &kit_plan(&[]), |_| unreachable!())
-            .unwrap_err()
-            .to_string();
+        let err = create(
+            &vm,
+            &request(),
+            &kit_plan(&[]),
+            |_| unreachable!(),
+            &mut |_| {},
+        )
+        .unwrap_err()
+        .to_string();
         assert_eq!(
             err,
             "kit install failed (the sandbox was removed): kit k install hook 1 failed:\n\
@@ -2038,7 +2170,14 @@ echo "$g""#,
             "EXEC_FAILED",
             "usermod: busy",
         );
-        let err = create(&vm, &request(), &kit_plan(&[]), |_| unreachable!()).unwrap_err();
+        let err = create(
+            &vm,
+            &request(),
+            &kit_plan(&[]),
+            |_| unreachable!(),
+            &mut |_| {},
+        )
+        .unwrap_err();
         assert!(
             err.to_string()
                 .starts_with("kit install failed (the sandbox was removed): "),

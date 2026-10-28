@@ -1,10 +1,9 @@
 //! Progress lines for create/run/start, in sbx's layout, written to `ctx.out`.
-// Wired into create/run/start in the next change; drop this then.
-#![allow(dead_code)]
 
 use std::io::Write;
 
 use super::{Ctx, Out};
+use crate::sandbox::Event;
 use crate::smolvm::Runner;
 
 const SPINNER: [&str; 10] = ["⠋", "⠙", "⠹", "⠸", "⠼", "⠴", "⠦", "⠧", "⠇", "⠏"];
@@ -92,6 +91,14 @@ impl Progress {
         step
     }
 
+    /// `  ✓ subject — word`, for a step that had nothing to do.
+    pub fn done(&self, subject: &str, word: &str) {
+        self.write(&format!(
+            "  {} {subject} — {word}\n",
+            self.paint(GREEN, "✓")
+        ));
+    }
+
     /// A blank line and `  ✓ line`.
     pub fn finish(&self, line: &str) {
         self.write(&format!("\n  {} {line}\n", self.paint(GREEN, "✓")));
@@ -138,6 +145,12 @@ impl Step {
         self.end(&format!("  {mark} {} — {word}\n", self.subject));
     }
 
+    /// `  ✓ line` in place of the step, e.g. `  ✓ Started NAME`.
+    pub fn done_as(mut self, line: &str) {
+        let mark = self.p.paint(GREEN, "✓");
+        self.end(&format!("  {mark} {line}\n"));
+    }
+
     /// `  ✗ subject — failed`; the caller then reports the error as usual.
     pub fn fail(mut self) {
         let mark = self.p.paint(RED, "✗");
@@ -164,6 +177,58 @@ impl Step {
         } else {
             self.p.write(line);
         }
+    }
+}
+
+/// A create's IMAGE and SETUP steps, from the sandbox's [`Event`]s: `image` around `machine
+/// start` (with the pull percentage on a terminal), then `sandbox` around the guest setup and one
+/// step per kit's part of the first start.
+pub struct CreateSteps {
+    p: Progress,
+    /// The running step and the word that ends it.
+    current: Option<(Step, &'static str)>,
+}
+
+impl CreateSteps {
+    pub fn new(p: &Progress) -> Self {
+        Self {
+            p: p.clone(),
+            current: None,
+        }
+    }
+
+    pub fn on(&mut self, e: Event) {
+        match e {
+            Event::Boot => {
+                self.p.section("IMAGE");
+                self.begin("image", "pulling", "ready");
+            }
+            Event::Pull(pull) => {
+                if let Some((step, _)) = &mut self.current {
+                    step.detail(&pull.to_string());
+                }
+            }
+            Event::Setup => {
+                self.end(true);
+                self.p.section("SETUP");
+                self.begin("sandbox", "starting", "started");
+            }
+            Event::Install(kit) => {
+                self.end(true);
+                self.begin(kit, "installing", "installed");
+            }
+        }
+    }
+
+    /// Ends the running step: done when the create succeeded, else failed.
+    pub fn end(&mut self, ok: bool) {
+        if let Some((step, word)) = self.current.take() {
+            if ok { step.done(word) } else { step.fail() }
+        }
+    }
+
+    fn begin(&mut self, subject: &str, doing: &str, done: &'static str) {
+        self.current = Some((self.p.step(subject, doing), done));
     }
 }
 
@@ -208,6 +273,52 @@ mod tests {
              \x20 ○ image — pulling…\n  ✓ image — ready\n\
              \x20 ○ kit — building…\n  ✗ kit — failed\n\
              \n  ✓ Created sandbox chk-pg1\n        try: sbt run --name chk-pg1\n"
+        );
+    }
+
+    #[test]
+    fn create_steps_follow_the_sandbox_events() {
+        use crate::smolvm::PullProgress;
+        let (p, out) = reporter(false, false, false);
+        let mut steps = CreateSteps::new(&p);
+        for e in [
+            Event::Boot,
+            Event::Pull(PullProgress::Percent(42)),
+            Event::Setup,
+            Event::Install("docker"),
+        ] {
+            steps.on(e);
+        }
+        steps.end(true);
+        assert_eq!(
+            text(&out),
+            "\nIMAGE\n  ○ image — pulling…\n  ✓ image — ready\n\nSETUP\n\
+             \x20 ○ sandbox — starting…\n  ✓ sandbox — started\n\
+             \x20 ○ docker — installing…\n  ✓ docker — installed\n"
+        );
+        steps.on(Event::Boot);
+        steps.end(false);
+        steps.end(false);
+        assert_eq!(
+            text(&out),
+            "\nIMAGE\n  ○ image — pulling…\n  ✗ image — failed\n"
+        );
+    }
+
+    #[test]
+    fn a_step_can_end_as_its_own_line_or_need_no_start() {
+        let (p, out) = reporter(false, false, false);
+        p.step("box", "starting").done_as("Started box");
+        p.done("./kit", "cached");
+        assert_eq!(
+            text(&out),
+            "  ○ box — starting…\n  ✓ Started box\n  ✓ ./kit — cached\n"
+        );
+        let (p, out) = reporter(true, false, false);
+        p.step("box", "starting").done_as("Started box");
+        assert_eq!(
+            text(&out),
+            "  ⠋ box — starting…\n\x1b[1A\r\x1b[K  ✓ Started box\n"
         );
     }
 

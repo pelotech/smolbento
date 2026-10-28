@@ -71,6 +71,7 @@ fn env_run<R: Runner>(
             },
             detach,
             rm: false,
+            no_progress: false,
             new: false,
             detach_keys: None,
             agent_args: vec![],
@@ -83,6 +84,7 @@ fn env_run<R: Runner>(
             opts: spec.opts,
             detach,
             rm: false,
+            no_progress: false,
             new: false,
             detach_keys: None,
             agent_args: vec![],
@@ -450,7 +452,12 @@ mod tests {
             out.starts_with("ENVIRONMENT\n  Name: claude-proj\n"),
             "{out}"
         );
-        assert!(out.ends_with("Created sandbox claude-proj\n"), "{out}");
+        assert!(
+            out.ends_with(
+                "  ✓ Created sandbox claude-proj\n        try: sbt run --name claude-proj\n"
+            ),
+            "{out}"
+        );
         assert!(!out.contains("PROVISION"), "{out}");
 
         let mut plain = with_file(FILE);

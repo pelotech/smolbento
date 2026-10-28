@@ -17,6 +17,7 @@ run claude . --skills off
 run claude . --static-mcp github,linear
 run claude . --deny-network evil.com
 run --mount /tmp:/home/agent/x shell
+run --no-progress shell
 create claude .
 create --clone claude .
 create shell

@@ -546,6 +546,9 @@ pub struct RunArgs {
     /// Remove the sandbox when the agent exits
     #[arg(long)]
     pub rm: bool,
+    /// Suppress progress output
+    #[arg(long = "no-progress")]
+    pub no_progress: bool,
     #[arg(long, hide = true)]
     pub new: bool,
     #[arg(long = "detach-keys", hide = true)]
@@ -565,7 +568,7 @@ pub struct CreateArgs {
     pub targets: Vec<String>,
     #[command(flatten)]
     pub opts: SandboxOpts,
-    /// Accepted for sbx compatibility
+    /// Suppress progress output
     #[arg(long = "no-progress")]
     pub no_progress: bool,
 }
@@ -969,3 +972,4 @@ pub struct SecretRmArgs {
     #[arg(long = "all-sandboxes", hide = true)]
     pub all_sandboxes: bool,
 }
+

@@ -63,7 +63,7 @@ Options:
           Static MCP servers (not implemented yet)
 
       --no-progress
-          Accepted for sbx compatibility
+          Suppress progress output
 
   -h, --help
           Print help

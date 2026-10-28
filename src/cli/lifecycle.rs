@@ -7,6 +7,7 @@ use std::time::UNIX_EPOCH;
 use anyhow::{Context, Result, bail};
 
 use super::plan;
+use super::progress::Progress;
 use super::{CreateArgs, Ctx, PruneArgs, ResetArgs, RmArgs, SandboxOpts, confirm};
 use crate::agents;
 use crate::kits::args::ArgValues;
@@ -14,7 +15,7 @@ use crate::kits::capability;
 use crate::kits::load;
 use crate::kits::model::{Content, Kind, Kit, Source};
 use crate::kits::resolve::{Plan, resolve_for};
-use crate::sandbox::{self, CreateRequest, Sandbox, name, options, session};
+use crate::sandbox::{self, CreateRequest, Event, Sandbox, name, options, session};
 use crate::smolvm::Runner;
 use crate::workspace::{self, Workspace, clone};
 
@@ -105,24 +106,6 @@ fn base_request<R: Runner>(
     })
 }
 
-/// `build_request` for `targets` (an agent preset or a workload kit REF, then workspace paths)
-/// plus `--kit` mixins: loads and resolves the kits, without touching smolvm's machines or the
-/// policy. `plan::create` applies the plan. A preset without `--kit` gives no plan, unless its
-/// image gets the `docker` kit.
-pub(crate) fn build_kit_request<R: Runner>(
-    ctx: &Ctx<R>,
-    targets: &[String],
-    opts: &SandboxOpts,
-    default_to_cwd: bool,
-) -> Result<(CreateRequest, Option<Plan>)> {
-    check_kit_args(targets, opts)?;
-    let (mut req, workload) = kit_target(ctx, targets, opts, default_to_cwd)?;
-    let plan = workload
-        .map(|w| kit_plan(ctx, &mut req, w, opts))
-        .transpose()?;
-    Ok((req, plan))
-}
-
 /// Kit args need a kit: a `--kit` or a workload kit as the target. Like sbx this fails on every
 /// command, including `run` of an existing sandbox.
 pub(crate) fn check_kit_args(targets: &[String], opts: &SandboxOpts) -> Result<()> {
@@ -139,8 +122,10 @@ pub(crate) enum Workload {
     Ref(String),
 }
 
-/// The first half of `build_kit_request`: the request (so its name) and the workload. Loads
-/// nothing: a workload kit's name comes from `load::kit_name`. `None` when there are no kits.
+/// `build_request` for `targets` (an agent preset or a workload kit REF, then workspace paths),
+/// and the workload: the request (so its name) without loading any kit; a workload kit's name
+/// comes from `load::kit_name`. `kit_plan` loads the kits. `None` when there are no kits: a
+/// preset without `--kit`, unless its image gets the `docker` kit.
 pub(crate) fn kit_target<R: Runner>(
     ctx: &Ctx<R>,
     targets: &[String],
@@ -180,15 +165,21 @@ fn has_kit_args(opts: &SandboxOpts) -> bool {
     !opts.kit_arg.is_empty() || !opts.kit_args_file.is_empty()
 }
 
-/// The second half of `build_kit_request`, for a sandbox about to be created: loads the workload
-/// kit (filling `req`'s image) and the `--kit` mixins, and resolves them with the kit args and
-/// `req`'s working directory.
+/// The second half of `kit_target`, for a sandbox about to be created: loads the workload kit
+/// (filling `req`'s image) and the `--kit` mixins, each a step under `KITS`, and resolves them
+/// with the kit args and `req`'s working directory. Touches neither smolvm's machines nor the
+/// policy: `plan::create` applies the plan.
 pub(crate) fn kit_plan<R: Runner>(
     ctx: &Ctx<R>,
     req: &mut CreateRequest,
     workload: Workload,
     opts: &SandboxOpts,
+    p: &Progress,
 ) -> Result<Plan> {
+    // The docker kit a Docker image gets on its own isn't worth a section.
+    if matches!(workload, Workload::Ref(_)) || !opts.kit.is_empty() {
+        p.section("KITS");
+    }
     let workload_source = match &workload {
         Workload::Ref(target) => Some(target.clone()),
         Workload::Preset(_) => None,
@@ -196,7 +187,7 @@ pub(crate) fn kit_plan<R: Runner>(
     let workload = match workload {
         Workload::Preset(kit) => *kit,
         Workload::Ref(target) => {
-            let mut kit = load::load(ctx, &target)?;
+            let mut kit = load_step(ctx, p, &target)?;
             if kit.kind == Kind::Mixin {
                 // sbx's report, then how to use the mixin.
                 bail!(
@@ -223,7 +214,7 @@ pub(crate) fn kit_plan<R: Runner>(
     let mut mixins = opts
         .kit
         .iter()
-        .map(|r| load::load(ctx, r))
+        .map(|r| load_step(ctx, p, r))
         .collect::<Result<Vec<_>>>()?;
     for (source, pins) in &opts.kit_pins {
         let kit = match opts.kit.iter().position(|k| k == source) {
@@ -250,6 +241,35 @@ pub(crate) fn kit_plan<R: Runner>(
     let plan = resolve_for(workload, mixins, &args, &req.workdir())?;
     plan.warn_skipped();
     Ok(plan)
+}
+
+/// Loads kit `reference` as a step: `○ REF — pulling…` or `building…`, then `✓ REF — ready`, or
+/// `cached` when the kit cache already had it all; a kit with nothing to fetch is just
+/// `✓ REF — cached`.
+fn load_step<R: Runner>(ctx: &Ctx<R>, p: &Progress, reference: &str) -> Result<Kit> {
+    let mut step = None;
+    let loaded = load::load_noting(ctx, reference, &mut |fetch| {
+        let doing = match fetch {
+            load::Fetch::Pull => "pulling",
+            load::Fetch::Build => "building",
+        };
+        step = Some(p.step(reference, doing));
+    });
+    match (loaded, step) {
+        (Ok((kit, cached)), step) => {
+            let word = if cached { "cached" } else { "ready" };
+            match step {
+                Some(s) => s.done(word),
+                None => p.done(reference, word),
+            }
+            Ok(kit)
+        }
+        (Err(e), Some(s)) => {
+            s.fail();
+            Err(e)
+        }
+        (Err(e), None) => Err(e),
+    }
 }
 
 /// A Docker-enabled image gets dockerd through the shipped kit, unless `--kit docker` added it or
@@ -288,14 +308,78 @@ pub fn create<R: Runner>(ctx: &mut Ctx<R>, a: &CreateArgs) -> Result<i32> {
     if a.targets.is_empty() {
         bail!("specify an agent, e.g. `sbt create claude .`");
     }
-    let (mut req, kits) = build_kit_request(ctx, &a.targets, &a.opts, false)?;
-    resolve_clone(&mut req, &a.opts)?;
-    let sb = plan::create(ctx, &mut req, &a.opts.deny_network, kits.as_ref())?;
-    writeln!(&ctx.out, "Created sandbox {}", sb.name())?;
+    check_kit_args(&a.targets, &a.opts)?;
+    let (mut req, workload) = kit_target(ctx, &a.targets, &a.opts, false)?;
+    let p = Progress::for_ctx(ctx, a.no_progress);
+    let sb = create_reported(ctx, &p, &mut req, workload, &a.opts)?;
+    p.finish(&format!("Created sandbox {}", sb.name()));
+    p.hint(&format!("sbt run --name {}", sb.name()));
     Ok(0)
 }
 
+/// Creates the sandbox `kit_target` described, reporting it to `p`: the `SANDBOX` section, then
+/// the `KITS`, `IMAGE` and `SETUP` steps. The caller prints the finish line.
+pub(crate) fn create_reported<R: Runner>(
+    ctx: &Ctx<R>,
+    p: &Progress,
+    req: &mut CreateRequest,
+    workload: Option<Workload>,
+    opts: &SandboxOpts,
+) -> Result<Sandbox> {
+    report_sandbox(p, req, workload.as_ref(), opts.clone);
+    let kits = workload
+        .map(|w| kit_plan(ctx, req, w, opts, p))
+        .transpose()?;
+    resolve_clone(req, opts)?;
+    plan::create_reported(ctx, req, &opts.deny_network, kits.as_ref(), p)
+}
+
+/// The `SANDBOX` section, before any kit loads: a workload kit's image is known only once it
+/// has, and CPU and memory are what smolbento passes unless a kit's resources change them.
+fn report_sandbox(p: &Progress, req: &CreateRequest, workload: Option<&Workload>, clone: bool) {
+    p.section("SANDBOX");
+    p.field("Name", &req.name);
+    p.field("Agent", &req.agent);
+    let workspaces: Vec<String> = req
+        .workspaces
+        .iter()
+        .enumerate()
+        .map(|(i, w)| {
+            let mode = match (i, clone, w.read_only) {
+                (0, true, _) => "clone",
+                (_, _, true) => "ro",
+                _ => "rw",
+            };
+            format!("{} ({mode})", w.path.display())
+        })
+        .collect();
+    let workspaces = if workspaces.is_empty() {
+        "-".to_string()
+    } else {
+        workspaces.join(", ")
+    };
+    p.field("Workspace", &workspaces);
+    let image = match workload {
+        Some(Workload::Ref(r)) => format!("from {r}"),
+        _ => req.image.clone(),
+    };
+    p.field("Image", &image);
+    p.field("CPU", &req.cpus.to_string());
+    p.field("Memory", &memory(req.memory_mib));
+}
+
+/// `32 GiB`, or `768 MiB` when it isn't whole GiB.
+fn memory(mib: u64) -> String {
+    if mib.is_multiple_of(1024) {
+        format!("{} GiB", mib / 1024)
+    } else {
+        format!("{mib} MiB")
+    }
+}
+
+/// `start NAME` reports one step per sandbox: `○ NAME — starting…`, then `✓ Started NAME`.
 pub fn start<R: Runner>(ctx: &mut Ctx<R>, names: &[String]) -> Result<i32> {
+    let p = Progress::for_ctx(ctx, false);
     for n in names {
         let sb = sandbox::get(&ctx.vm, n)?;
         if sb.is_running() {
@@ -303,8 +387,19 @@ pub fn start<R: Runner>(ctx: &mut Ctx<R>, names: &[String]) -> Result<i32> {
             continue;
         }
         let start_plan = plan::start_plan(ctx, &sb.meta)?;
-        sandbox::start(&ctx.vm, &sb, &start_plan)?;
-        writeln!(&ctx.out, "Started {n}")?;
+        let mut step = p.step(n, "starting");
+        let started = sandbox::start_with(&ctx.vm, &sb, &start_plan, &mut |e| {
+            if let Event::Pull(pull) = e {
+                step.detail(&pull.to_string());
+            }
+        });
+        match started {
+            Ok(()) => step.done_as(&format!("Started {n}")),
+            Err(e) => {
+                step.fail();
+                return Err(e);
+            }
+        }
     }
     Ok(0)
 }
@@ -1159,6 +1254,98 @@ mod tests {
     }
 
     #[test]
+    fn create_without_kits_prints_no_kits_or_kit_steps() {
+        let mut t = test_env(&[("SMOLBENTO_DOCKER", "false")]);
+        let fake = t.ctx.vm.runner();
+        fake.ok(
+            &["machine", "status"],
+            &json("sbx-shell-proj", "created", "shell-proj"),
+        );
+        fake.once_fail(&["machine", "status"], "NOT_FOUND", "vm not found");
+        sbt(
+            &mut t.ctx,
+            &[
+                "create",
+                "--name",
+                "shell-proj",
+                "shell",
+                "--cpus",
+                "3",
+                "-m",
+                "1536m",
+            ],
+        )
+        .unwrap();
+        assert_eq!(
+            t.stdout(),
+            "
+SANDBOX
+  Name:       shell-proj
+  Agent:      shell
+  Workspace:  -
+  Image:      docker/sandbox-templates:shell-0.10.0
+  CPU:        3
+  Memory:     1536 MiB
+
+IMAGE
+  ○ image — pulling…
+  ✓ image — ready
+
+SETUP
+  ○ sandbox — starting…
+  ✓ sandbox — started
+
+  ✓ Created sandbox shell-proj
+        try: sbt run --name shell-proj
+"
+        );
+    }
+
+    #[test]
+    fn create_shows_clone_and_read_only_workspaces() {
+        let mut t = test_env(&[]);
+        let fake = t.ctx.vm.runner();
+        fake.ok(
+            &["machine", "status"],
+            &json("sbx-claude-proj", "created", "claude-proj"),
+        );
+        fake.once_fail(&["machine", "status"], "NOT_FOUND", "vm not found");
+        let docs = t.ctx.cwd.join("docs");
+        std::fs::create_dir(&docs).unwrap();
+        sbt(&mut t.ctx, &["create", "claude", ".", "docs:ro"]).unwrap();
+        let ws = t.ctx.cwd.display().to_string();
+        let out = t.stdout();
+        assert!(
+            out.contains(&format!("  Workspace:  {ws} (rw), {ws}/docs (ro)\n")),
+            "{out}"
+        );
+    }
+
+    #[test]
+    fn create_no_progress_prints_nothing() {
+        let mut t = test_env(&[]);
+        creatable(&t);
+        sbt(&mut t.ctx, &["create", "claude", ".", "--no-progress"]).unwrap();
+        assert_eq!(t.stdout(), "");
+    }
+
+    #[test]
+    fn a_failed_image_pull_fails_its_step() {
+        let mut t = test_env(&[]);
+        creatable(&t);
+        t.ctx
+            .vm
+            .runner()
+            .fail(&["machine", "start"], "PULL_FAILED", "no such image");
+        sbt(&mut t.ctx, &["create", "claude", "."]).unwrap_err();
+        let out = t.stdout();
+        assert!(
+            out.ends_with("\nIMAGE\n  ○ image — pulling…\n  ✗ image — failed\n"),
+            "{out}"
+        );
+    }
+
+    #[test]
     fn stop_and_start() {
         let mut t = test_env(&[]);
         t.ctx.vm.runner().ok(
@@ -1179,6 +1366,7 @@ mod tests {
             &["machine", "status"],
             &json("sbx-claude-proj", "stopped", "claude-proj"),
         );
+        t.stdout();
         sbt(&mut t.ctx, &["start", "claude-proj"]).unwrap();
         assert!(
             t.ctx
@@ -1186,6 +1374,27 @@ mod tests {
                 .runner()
                 .call_lines()
                 .contains(&"machine start -n sbx-claude-proj --branchable".to_string())
+        );
+        assert_eq!(
+            t.stdout(),
+            "  ○ claude-proj — starting…\n  ✓ Started claude-proj\n"
+        );
+    }
+
+    #[test]
+    fn a_failed_start_fails_its_step() {
+        let mut t = test_env(&[]);
+        let fake = t.ctx.vm.runner();
+        fake.ok(
+            &["machine", "status"],
+            &json("sbx-claude-proj", "stopped", "claude-proj"),
+        );
+        fake.fail(&["machine", "start"], "BOOT_FAILED", "no hypervisor");
+        let err = sbt(&mut t.ctx, &["start", "claude-proj"]).unwrap_err();
+        assert!(format!("{err:#}").contains("no hypervisor"), "{err:#}");
+        assert_eq!(
+            t.stdout(),
+            "  ○ claude-proj — starting…\n  ✗ claude-proj — failed\n"
         );
     }
 
@@ -1675,6 +1884,20 @@ mod tests {
                 .any(|l| l.contains("machine exec") && l.contains("mode=pinned")),
             "{lines:?}"
         );
+        // The image comes from the kit, which loads after SANDBOX is printed.
+        let out = t.stdout();
+        assert!(
+            out.contains(&format!("  Image:      from {kit}\n")),
+            "{out}"
+        );
+        assert!(
+            out.contains(&format!("\nKITS\n  ✓ {kit} — cached\n")),
+            "{out}"
+        );
+        assert!(
+            out.contains("  ○ wl — installing…\n  ✓ wl — installed\n"),
+            "{out}"
+        );
     }
 
     #[test]
@@ -1725,7 +1948,39 @@ mod tests {
             .position(|l| l.contains("machine exec") && l.contains("echo installed"))
             .expect("the install hook runs");
         assert!(start < install, "{lines:?}");
-        assert_eq!(t.stdout(), "Created sandbox shell-proj\n");
+        // The progress, as sbx prints it without a terminal: the kit (a v2 directory needs no
+        // pull or build), then the install hooks' kit before the docker kit, which has none.
+        let ws = t.ctx.cwd.display().to_string();
+        assert_eq!(
+            t.stdout().replace(&ws, "WS").replace(&kit, "KIT"),
+            "
+SANDBOX
+  Name:       shell-proj
+  Agent:      shell
+  Workspace:  WS (rw)
+  Image:      docker/sandbox-templates:shell-docker-0.10.0
+  CPU:        1
+  Memory:     1 GiB
+
+KITS
+  ✓ KIT — cached
+
+IMAGE
+  ○ image — pulling…
+  ✓ image — ready
+
+SETUP
+  ○ sandbox — starting…
+  ✓ sandbox — started
+  ○ tool — installing…
+  ✓ tool — installed
+  ○ docker — installing…
+  ✓ docker — installed
+
+  ✓ Created sandbox shell-proj
+        try: sbt run --name shell-proj
+"
+        );
     }
 
     #[test]
@@ -2206,7 +2461,7 @@ mod tests {
         assert_eq!(names, ["docker", "akit"]);
     }
 
-    /// `build_kit_request` for `args` followed by `kit`.
+    /// `kit_target` and a quiet `kit_plan` for `args` followed by `kit`.
     #[test]
     fn a_kit_providing_docker_replaces_the_shipped_one() {
         use super::needs_docker_kit;
@@ -2241,7 +2496,10 @@ mod tests {
         let Some(Cmd::Create(a)) = Cli::try_parse_from(argv).unwrap().command else {
             panic!("expected create");
         };
-        super::build_kit_request(&t.ctx, &a.targets, &a.opts, true).unwrap()
+        let (mut req, workload) = super::kit_target(&t.ctx, &a.targets, &a.opts, true).unwrap();
+        let quiet = super::Progress::new(t.ctx.out.clone(), false, false, true);
+        let plan = workload.map(|w| super::kit_plan(&t.ctx, &mut req, w, &a.opts, &quiet).unwrap());
+        (req, plan)
     }
 
     const SHARED: &str = "/home/agent/.chk-shared";
@@ -2302,6 +2560,11 @@ mod tests {
     fn create_mounts_a_kit_s_managed_host_directory() {
         let mut t = host_mount_env(SHARED);
         sbt(&mut t.ctx, &["create", "shell", ".", "--kit", "./hm"]).unwrap();
+        let out = t.stdout();
+        assert!(
+            out.contains("\nKITS\n  ○ ./hm — building…\n  ✓ ./hm — ready\n\nIMAGE\n"),
+            "{out}"
+        );
         let dir = managed(&t, SHARED);
         let (mounts, label) = create_mounts(&t);
         assert!(

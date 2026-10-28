@@ -34,20 +34,57 @@ pub fn load<R: Runner>(ctx: &Ctx<R>, reference: &str) -> Result<Kit> {
 /// reference would be pulled and a v3 source directory built (the builder pulls its base image),
 /// so both are refused.
 pub fn load_with<R: Runner>(ctx: &Ctx<R>, reference: &str, offline: bool) -> Result<Kit> {
-    let mut kit = load_kit(ctx, reference, offline)?;
-    kit.reference = Some(reference.to_string());
-    Ok(kit)
+    Ok(load_kit(ctx, reference, offline, &mut |_| {})?.0)
 }
 
-fn load_kit<R: Runner>(ctx: &Ctx<R>, reference: &str, offline: bool) -> Result<Kit> {
+/// What loading a kit fetches.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum Fetch {
+    /// A registry pull.
+    Pull,
+    /// A build of a v3 source directory.
+    Build,
+}
+
+/// `load`, calling `before` just before it pulls or builds the kit. Also returns whether that
+/// added nothing to the kit cache (true when there was nothing to pull or build).
+pub fn load_noting<R: Runner>(
+    ctx: &Ctx<R>,
+    reference: &str,
+    before: &mut dyn FnMut(Fetch),
+) -> Result<(Kit, bool)> {
+    load_kit(ctx, reference, false, before)
+}
+
+fn load_kit<R: Runner>(
+    ctx: &Ctx<R>,
+    reference: &str,
+    offline: bool,
+    before: &mut dyn FnMut(Fetch),
+) -> Result<(Kit, bool)> {
+    let (mut kit, cached) = fetch_kit(ctx, reference, offline, before)?;
+    kit.reference = Some(reference.to_string());
+    Ok((kit, cached))
+}
+
+fn fetch_kit<R: Runner>(
+    ctx: &Ctx<R>,
+    reference: &str,
+    offline: bool,
+    before: &mut dyn FnMut(Fetch),
+) -> Result<(Kit, bool)> {
     if let Some(kit) = builtin(reference) {
-        return kit;
+        return Ok((kit?, true));
     }
     match locate(ctx, reference, offline)? {
         Located::Registry(r) => {
             let secrets = SecretsFile::load(&ctx.paths)?;
             let logins = Logins::new(&secrets.registries, &*ctx.store);
-            registry::pull(&r, &ctx.paths.kit_cache(), logins)
+            let cache = ctx.paths.kit_cache();
+            before(Fetch::Pull);
+            let blobs = entries(&registry::store_dir(&cache));
+            let kit = registry::pull(&r, &cache, logins)?;
+            Ok((kit, entries(&registry::store_dir(&cache)) == blobs))
         }
         Located::V2(dir) => {
             let spec = dir.join("spec.yaml");
@@ -55,15 +92,20 @@ fn load_kit<R: Runner>(ctx: &Ctx<R>, reference: &str, offline: bool) -> Result<K
                 fs::read_to_string(&spec).with_context(|| format!("reading {}", spec.display()))?;
             let mut kit = v2::parse(&yaml, &dir)?;
             kit.source = Source::LocalV2(dir);
-            Ok(kit)
+            Ok((kit, true))
         }
         Located::V3(_) if offline => bail!(
             "kit {reference} is a v3 source kit and --offline has no kit builder: building it \
              needs the network; run without --offline"
         ),
-        Located::V3(dir) => load_v3(ctx, &dir),
-        Located::Smolfile(path) => smolfile::load(&path),
+        Located::V3(dir) => load_v3(ctx, &dir, before),
+        Located::Smolfile(path) => Ok((smolfile::load(&path)?, true)),
     }
+}
+
+/// How many entries `dir` has (0 when it doesn't exist).
+fn entries(dir: &Path) -> usize {
+    fs::read_dir(dir).map_or(0, |d| d.count())
 }
 
 /// The name `load` gives the kit REF names, without pulling or building it: trust is checked,
@@ -175,7 +217,12 @@ fn local_path<R: Runner>(ctx: &Ctx<R>, reference: &str) -> Result<Option<PathBuf
     }
 }
 
-fn load_v3<R: Runner>(ctx: &Ctx<R>, dir: &Path) -> Result<Kit> {
+/// Builds the kit; also returns whether the build's output was already in the cache.
+fn load_v3<R: Runner>(
+    ctx: &Ctx<R>,
+    dir: &Path,
+    before: &mut dyn FnMut(Fetch),
+) -> Result<(Kit, bool)> {
     let source = Source::LocalV3(dir.to_path_buf());
     let mut descriptors = 0;
     for e in fs::read_dir(dir).with_context(|| format!("reading {}", dir.display()))? {
@@ -194,8 +241,12 @@ fn load_v3<R: Runner>(ctx: &Ctx<R>, dir: &Path) -> Result<Kit> {
             builder::SYNTAX
         ),
     }
+    before(Fetch::Build);
+    let outputs = ctx.paths.kit_cache().join("built");
+    let known = entries(&outputs);
     let built = builder::build(ctx, dir)?;
-    registry::read_layout(&built, source)
+    let cached = entries(&outputs) == known;
+    Ok((registry::read_layout(&built, source)?, cached))
 }
 
 /// A `*.yaml`/`*.yml` file whose first line is the v3 syntax line (after an optional BOM).
@@ -467,6 +518,32 @@ mod tests {
             lines.iter().any(|l| l.starts_with("machine cp /")),
             "{lines:?}"
         );
+    }
+
+    #[test]
+    fn load_noting_tells_what_it_fetches_and_whether_the_cache_had_it() {
+        let t = allow_local();
+        v3_kit(
+            &t,
+            "kit",
+            r#"{"schemaVersion":"3","kind":"mixin","name":"m"}"#,
+            &[],
+        );
+        let fetched = |reference: &str| {
+            let mut seen = Vec::new();
+            let (_, cached) = load_noting(&t.ctx, reference, &mut |f| seen.push(f)).unwrap();
+            (seen, cached)
+        };
+        assert_eq!(fetched("./kit"), (vec![Fetch::Build], false));
+        // The same build output again.
+        assert_eq!(fetched("./kit"), (vec![Fetch::Build], true));
+        // Shipped and v2 kits need neither.
+        assert_eq!(fetched("docker"), (vec![], true));
+        let v2 = format!(
+            "{}/tests/fixtures/kits/v2/tool-mixin",
+            env!("CARGO_MANIFEST_DIR")
+        );
+        assert_eq!(fetched(&v2), (vec![], true));
     }
 
     #[test]

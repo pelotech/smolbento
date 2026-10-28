@@ -6,6 +6,7 @@ use std::path::Path;
 use anyhow::{Context, Result, bail};
 
 use super::Ctx;
+use super::progress::{CreateSteps, Progress};
 use crate::kits::apply::apply;
 use crate::kits::host_mount;
 use crate::kits::resolve::Plan;
@@ -342,16 +343,32 @@ pub fn create<R: Runner>(
     deny_network: &[String],
     kits: Option<&Plan>,
 ) -> Result<Sandbox> {
-    create_with(ctx, req, deny_network, kits, None)
+    create_with(ctx, req, deny_network, kits, None, &mut |_| {})
 }
 
-/// `create`, or with `prepared` steps whose rules are already in the policy (tests).
+/// `create`, reporting its `IMAGE` and `SETUP` steps to `p`; a failure fails the running step.
+pub fn create_reported<R: Runner>(
+    ctx: &Ctx<R>,
+    req: &mut CreateRequest,
+    deny_network: &[String],
+    kits: Option<&Plan>,
+    p: &Progress,
+) -> Result<Sandbox> {
+    let mut steps = CreateSteps::new(p);
+    let created = create_with(ctx, req, deny_network, kits, None, &mut |e| steps.on(e));
+    steps.end(created.is_ok());
+    created
+}
+
+/// `create`, or with `prepared` steps whose rules are already in the policy (tests); `on` hears
+/// what the start and the kit steps are doing.
 fn create_with<R: Runner>(
     ctx: &Ctx<R>,
     req: &mut CreateRequest,
     deny_network: &[String],
     kits: Option<&Plan>,
     prepared: Option<sandbox::KitFirstStart>,
+    on: &mut dyn FnMut(sandbox::Event),
 ) -> Result<Sandbox> {
     // Before prepare_create, which may prompt and adds the --deny-network and kit rules.
     if sandbox::find(&ctx.vm, &req.name)?.is_some() {
@@ -430,7 +447,13 @@ fn create_with<R: Runner>(
             None => start_plan(ctx, &meta)?,
         };
         let req: &CreateRequest = req;
-        sandbox::create(&ctx.vm, req, &plan, |ids| drop_install_rules(ctx, req, ids))
+        sandbox::create(
+            &ctx.vm,
+            req,
+            &plan,
+            |ids| drop_install_rules(ctx, req, ids),
+            on,
+        )
     })();
     let rollback = result.is_err() && (!added.is_empty() || added_remote.is_some());
     let gone = rollback
@@ -1000,6 +1023,7 @@ mod tests {
                 install_rules: vec![ids[0].clone()],
                 install: vec![crate::kits::apply::InstallStep {
                     label: "kit k install hook 1".into(),
+                    kit: Some("k".into()),
                     user: None,
                     script: "npm i".into(),
                 }],
@@ -1012,7 +1036,7 @@ mod tests {
             name: "s1".into(),
             ..Default::default()
         };
-        let result = create_with(&t.ctx, &mut req, deny_network, None, Some(kit));
+        let result = create_with(&t.ctx, &mut req, deny_network, None, Some(kit), &mut |_| {});
         (t, result, ids)
     }
 
@@ -1195,7 +1219,7 @@ mod tests {
             name: "s1".into(),
             ..Default::default()
         };
-        create_with(&t.ctx, &mut req, &[], Some(&plan), None).unwrap();
+        create_with(&t.ctx, &mut req, &[], Some(&plan), None, &mut |_| {}).unwrap();
         let lines = t.ctx.vm.runner().call_lines();
         let create = lines
             .iter()
