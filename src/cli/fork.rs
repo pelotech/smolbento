@@ -113,6 +113,9 @@ fn add_remote_and_branch<R: Runner>(
         (labels::FORK_OF.to_string(), parent.name().to_string()),
         // A child inherits its source's labels; a fork's age is its own.
         (labels::CREATED.to_string(), ctx.now.to_string()),
+        // The copy keeps the parent's bridge socket path, but a session serves each sandbox at
+        // its own (`bridge::host_socket`): a fork gets no bridge (no shims installed at starts).
+        (labels::BRIDGE.to_string(), "false".to_string()),
     ];
     // The child inherits the parent's create-time -e values: give it its own identity.
     let vars = [
@@ -214,8 +217,8 @@ mod tests {
     fn branch(fork: &str) -> String {
         format!(
             "machine branch --from sbx-a -n sbx-{fork} --label sbx.name={fork} \
-             --label sbx.fork-of=a --label sbx.created=1000000 -e SANDBOX_NAME={fork} \
-             -e SANDBOX_VM_ID={fork} -e SANDBOX_ID=ID"
+             --label sbx.fork-of=a --label sbx.created=1000000 --label sbx.bridge=false \
+             -e SANDBOX_NAME={fork} -e SANDBOX_VM_ID={fork} -e SANDBOX_ID=ID"
         )
     }
 
@@ -300,8 +303,8 @@ mod tests {
             branches(&t),
             vec![
                 "machine branch --from sbx-a -n sbx-try_2 --label sbx.name=try.2 \
-                 --label sbx.fork-of=a --label sbx.created=1000000 -e SANDBOX_NAME=try.2 \
-                 -e SANDBOX_VM_ID=try.2 -e SANDBOX_ID=ID"
+                 --label sbx.fork-of=a --label sbx.created=1000000 --label sbx.bridge=false \
+                 -e SANDBOX_NAME=try.2 -e SANDBOX_VM_ID=try.2 -e SANDBOX_ID=ID"
             ]
         );
     }

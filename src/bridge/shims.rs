@@ -6,9 +6,11 @@ use crate::sandbox::sh_quote;
 
 use super::GUEST_SOCKET;
 
-/// What the shims (except `wl-paste`) start with: their name (`pbcopy` and `clip.exe` are links to `wl-copy`), `post
-/// PATH`, which sends stdin to the host, and `copy`, which sends stdin to the host clipboard
-/// (trimming one trailing newline when `trim` is set).
+/// What the shims (except `wl-paste`) start with: their name (`pbcopy` and `clip.exe` are links
+/// to `wl-copy`); `post PATH`, which sends stdin to the host (`-m 10`: a listener that never
+/// answers can't hang the agent); `need`, for an option's value; and `copy`, which sends stdin to
+/// the host clipboard. With `trim` set, `copy` drops one trailing newline; that goes through a
+/// shell variable, so NUL bytes are lost on that path only (clipboard text has none).
 fn prelude() -> String {
     format!(
         r#"#!/bin/sh
@@ -16,9 +18,10 @@ fn prelude() -> String {
 n=${{0##*/}}
 post() {{
   command -v curl >/dev/null 2>&1 &&
-    curl -sf --unix-socket {GUEST_SOCKET} -X POST --data-binary @- "http://bridge/$1" >/dev/null 2>&1
+    curl -sf -m 10 --unix-socket {GUEST_SOCKET} -X POST --data-binary @- "http://bridge/$1" >/dev/null 2>&1
 }}
 bad() {{ echo "$n: unsupported option $1" >&2; exit 1; }}
+need() {{ [ "$1" -gt 1 ] || {{ echo "$n: option requires an argument" >&2; exit 1; }}; }}
 copy() {{
   if [ -n "$trim" ]; then
     t=$(cat; printf x); t=${{t%x}}; t=${{t%"
@@ -44,7 +47,7 @@ while [ $# -gt 0 ]; do
   case $1 in
     -n|--trim-newline) trim=1 ;;
     -p|--primary|-f|--foreground|-o|--paste-once) ;;
-    -t|--type) shift; case $1 in text/*|TEXT|STRING|UTF8_STRING) ;; *) bad "$1" ;; esac ;;
+    -t|--type) need $#; shift; case $1 in text/*|TEXT|STRING|UTF8_STRING) ;; *) bad "$1" ;; esac ;;
     --) shift; text=1; break ;;
     -*) bad "$1" ;;
     *) text=1; break ;;
@@ -61,8 +64,8 @@ const XCLIP: &str = r#"while [ $# -gt 0 ]; do
   case $1 in
     -i|-in) ;;
     -o|-out) exit 1 ;;
-    -sel*|-d|-display) shift ;;
-    -t|-target) shift; case $1 in text/*|TEXT|STRING|UTF8_STRING) ;; *) bad "$1" ;; esac ;;
+    -sel*|-d|-display) need $#; shift ;;
+    -t|-target) need $#; shift; case $1 in text/*|TEXT|STRING|UTF8_STRING) ;; *) bad "$1" ;; esac ;;
     -r|-rmlastnl) trim=1 ;;
     -q|-quiet|-silent|-verbose|-noutf8) ;;
     *) bad "$1" ;;
@@ -216,6 +219,8 @@ mod tests {
     fn request(path: &str) -> Vec<String> {
         [
             "-sf",
+            "-m",
+            "10",
             "--unix-socket",
             GUEST_SOCKET,
             "-X",
@@ -290,7 +295,8 @@ mod tests {
     fn xdg_open_prints_the_url_when_the_bridge_fails_or_curl_is_missing() {
         let url = "http://localhost:3000/";
         let fallback = format!("Open this URL in your browser: {url}\n");
-        for g in [Guest::new(Some(7)), Guest::new(None)] {
+        // 7: no listener; 28: curl's `-m` timeout, a listener that never answered.
+        for g in [Guest::new(Some(7)), Guest::new(Some(28)), Guest::new(None)] {
             assert_eq!(
                 g.run("xdg-open", &[url], ""),
                 (0, fallback.clone(), "".into())
@@ -349,7 +355,7 @@ mod tests {
 
     #[test]
     fn a_failed_copy_says_so() {
-        for g in [Guest::new(Some(22)), Guest::new(None)] {
+        for g in [Guest::new(Some(22)), Guest::new(Some(28)), Guest::new(None)] {
             for shim in ["wl-copy", "pbcopy", "xclip", "xsel"] {
                 let args: &[&str] = if shim == "xsel" { &["-i"] } else { &[] };
                 assert_eq!(
@@ -378,6 +384,29 @@ mod tests {
             assert_eq!(
                 g.run(shim, &args, "x"),
                 (1, "".into(), format!("{shim}: unsupported option {bad}\n")),
+                "{shim} {args:?}"
+            );
+            assert_eq!(g.sent(), None);
+        }
+    }
+
+    #[test]
+    fn a_value_option_given_last_needs_its_value() {
+        for (shim, args) in [
+            ("wl-copy", vec!["-t"]),
+            ("wl-copy", vec!["-n", "--type"]),
+            ("xclip", vec!["-selection"]),
+            ("xclip", vec!["-i", "-t"]),
+            ("xclip", vec!["-d"]),
+        ] {
+            let g = Guest::new(Some(0));
+            assert_eq!(
+                g.run(shim, &args, "x"),
+                (
+                    1,
+                    "".into(),
+                    format!("{shim}: option requires an argument\n")
+                ),
                 "{shim} {args:?}"
             );
             assert_eq!(g.sent(), None);

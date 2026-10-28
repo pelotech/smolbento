@@ -1010,9 +1010,13 @@ mod tests {
             );
             let lines = vm.runner().call_lines();
             assert_eq!(lines.contains(&install), bridged, "{lines:#?}");
+            // Right after the hosts step.
             if bridged {
-                assert!(lines[4].ends_with(&hosts_cmd()), "{lines:#?}");
-                assert_eq!(lines[5], install);
+                let hosts = lines
+                    .iter()
+                    .position(|l| l.ends_with(&hosts_cmd()))
+                    .unwrap();
+                assert_eq!(lines[hosts + 1], install, "{lines:#?}");
             }
         }
     }
