@@ -503,15 +503,21 @@ fn add_running<R: Runner>(
             };
             open().map_err(|e| (None, e))?;
         }
-        sandbox::apply_kit_steps(&ctx.vm, sb, &steps, || {
-            if steps.install_rules.is_empty() {
-                return Ok(());
-            }
-            let mut policy = Policy::load(&ctx.paths)?;
-            policy.remove_rules_by_ids(name, &steps.install_rules);
-            policy.save(&ctx.paths)?;
-            push(&policy).context("removing the install-phase network rules")
-        })
+        sandbox::apply_kit_steps(
+            &ctx.vm,
+            sb,
+            &steps,
+            || {
+                if steps.install_rules.is_empty() {
+                    return Ok(());
+                }
+                let mut policy = Policy::load(&ctx.paths)?;
+                policy.remove_rules_by_ids(name, &steps.install_rules);
+                policy.save(&ctx.paths)?;
+                push(&policy).context("removing the install-phase network rules")
+            },
+            &mut |_| {},
+        )
         .map_err(|(phase, e)| (Some(phase), e))
     })();
     if let Err((phase, e)) = result {

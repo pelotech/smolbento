@@ -71,5 +71,8 @@ Options:
       --rm
           Remove the sandbox when the agent exits
 
+      --no-progress
+          Suppress progress output
+
   -h, --help
           Print help

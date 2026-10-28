@@ -60,6 +60,8 @@ something different.
 | Install-phase kit rules in `policy ls` | Not listed after create | Never listed, also while a create is still installing (they're in effect then, but `policy ls` doesn't show them) |
 | `inspect` | Also shows CPUs, memory, uptime, image digest, auth mode, network policy, mount policy, runtime mounts, proxy, MCP gateway and daemon | Those are left out; the rest follows sbx's layout and JSON keys |
 | `reset` | Deletes all its state, kit host-mount directories included | Removes sandboxes only; kit host-mount directories stay (delete them yourself) |
+| Progress output | SANDBOX, KITS and IMAGE sections with a line per layer | Same layout, plus SETUP and `start` lines, which are smolbento's own. No per-layer lines: the image pull shows a percentage. CPU and Memory print before a kit's `resources@1` applies. A kit's "cached" label is approximate when pulls or builds run at the same time. On a terminal the step's detail (the pull percentage) is on the step's line, not on a second line as in sbx, and a warning printed during a step follows the step's last drawn line, which stays; nothing is erased |
+| Command aliases | `ls`, `rm`/`delete`, `secret`, `secret ls`/`rm`/`delete`/`unset`, `settings ls` | Implemented now; the `template`, `skills` and `volume` aliases come with those commands |
 | `--version` | `sbx version vX` | `sbt --version` prints `sbt X`; `sbt version` also shows the smolvm version |
 
 ## Environment files

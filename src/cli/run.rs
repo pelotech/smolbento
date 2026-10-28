@@ -6,8 +6,9 @@ use std::path::Path;
 
 use anyhow::{Context, Result, bail};
 
-use super::lifecycle::{has_kit_flags, kit_plan, kit_target, resolve_clone};
+use super::lifecycle::{create_reported, has_kit_flags, kit_target};
 use super::plan;
+use super::progress::Progress;
 use super::{Ctx, RunArgs, Unsupported};
 use crate::agents;
 use crate::sandbox::{self, Sandbox, session};
@@ -63,14 +64,10 @@ pub fn run<R: Runner>(ctx: &mut Ctx<R>, a: &RunArgs) -> Result<i32> {
                     (sb, false)
                 }
                 None => {
-                    let kits = workload
-                        .map(|w| kit_plan(ctx, &mut req, w, &a.opts))
-                        .transpose()?;
-                    resolve_clone(&mut req, &a.opts)?;
-                    (
-                        plan::create(ctx, &mut req, &a.opts.deny_network, kits.as_ref())?,
-                        true,
-                    )
+                    let p = Progress::for_ctx(ctx, a.no_progress);
+                    let sb = create_reported(ctx, &p, &mut req, workload, &a.opts)?;
+                    p.finish(&format!("Created sandbox {}", sb.name()));
+                    (sb, true)
                 }
             }
         }
@@ -294,6 +291,54 @@ mod tests {
             session::live_sessions(&t.ctx.paths.sessions(), "claude-proj"),
             0
         );
+    }
+
+    /// `run -d claude` of a new sandbox, with `extra` args; returns stdout.
+    fn run_new(extra: &[&str]) -> String {
+        let mut t = test_env(&[]);
+        created(&t, "created");
+        // run looks the name up, then plan::create checks again before creating.
+        for _ in 0..2 {
+            t.ctx
+                .vm
+                .runner()
+                .once_fail(&["machine", "status"], "NOT_FOUND", "vm not found");
+        }
+        let args: Vec<&str> = ["run", "-d", "claude", "--cpus", "1", "-m", "1g"]
+            .into_iter()
+            .chain(extra.iter().copied())
+            .collect();
+        sbt(&mut t.ctx, &args).unwrap();
+        t.stdout()
+    }
+
+    #[test]
+    fn run_of_a_new_sandbox_reports_the_create_without_a_hint() {
+        let out = run_new(&[]);
+        assert!(
+            out.starts_with("\nSANDBOX\n  Name:       claude-proj\n"),
+            "{out}"
+        );
+        assert!(
+            out.ends_with(
+                "  ✓ docker — installed\n\n  ✓ Created sandbox claude-proj\nclaude-proj\n"
+            ),
+            "{out}"
+        );
+        assert!(!out.contains("try:"), "{out}");
+    }
+
+    #[test]
+    fn no_progress_leaves_only_the_detached_name() {
+        assert_eq!(run_new(&["--no-progress"]), "claude-proj\n");
+    }
+
+    #[test]
+    fn run_of_an_existing_sandbox_reports_no_progress() {
+        let mut t = test_env(&[]);
+        created(&t, "stopped");
+        sbt(&mut t.ctx, &["run", "-d", "--name", "claude-proj"]).unwrap();
+        assert_eq!(t.stdout(), "claude-proj\n");
     }
 
     #[test]

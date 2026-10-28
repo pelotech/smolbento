@@ -43,6 +43,8 @@ pub struct KitSteps {
 pub struct InstallStep {
     /// Names the step in errors, e.g. `kit a install hook 2`.
     pub label: String,
+    /// The kit whose hook this is; `None` for smolbento's own steps (the git identity).
+    pub kit: Option<String>,
     /// The exec user; `None` is root.
     pub user: Option<String>,
     pub script: String,
@@ -178,6 +180,7 @@ pub fn apply(
         match (host_git(), required) {
             (Some((name, email)), _) => steps.install.push(InstallStep {
                 label: "the git identity step".into(),
+                kit: None,
                 user: None,
                 script: guest::git_identity_script(&name, &email),
             }),
@@ -218,6 +221,7 @@ pub fn apply(
         };
         steps.install.push(InstallStep {
             label: format!("kit {kit} install hook {n}"),
+            kit: Some(kit.to_string()),
             user: h.user.clone(),
             script: format!("cd {install_dir} && {}", guest::hook_script(h)),
         });
@@ -1397,6 +1401,7 @@ mod tests {
             steps.install,
             [InstallStep {
                 label: "the git identity step".into(),
+                kit: None,
                 user: None,
                 script: "git config --system user.name 'Ada L' && git config --system user.email 'ada@x.org'"
                     .to_string()
