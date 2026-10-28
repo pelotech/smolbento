@@ -61,8 +61,8 @@ access, so load only kits you trust.
     Docker Hub kits load by default.
   - A kit may send a **custom** service's secret (`sbt secret set-custom`) to any host it names.
     `create` and `kit add` print "kit K sends your SERVICE secret to HOSTS".
-  - `sbt kit inspect REF --format json` lists each credential's service and the hosts it's sent
-    to.
+  - `sbt kit inspect REF` lists each credential's service and the hosts its secret is sent to,
+    under `Credentials:`; `--format json` has them in `credentials`.
   - A credential's hosts are always reachable from the sandbox, and a deny rule can't block them
     while the kit's binding exists, which is for the sandbox's life (smolvm needs them to send the
     secret). To drop them, recreate the sandbox without the kit.

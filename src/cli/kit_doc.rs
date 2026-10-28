@@ -10,6 +10,7 @@ use serde::Serialize;
 use serde_json::Value;
 
 use crate::kits::model::{CapBody, Content, HookCmd, Kind, Kit, Source};
+use crate::secrets::services;
 
 #[derive(Serialize)]
 #[serde(rename_all = "camelCase")]
@@ -319,6 +320,27 @@ impl Doc {
         ] {
             if !list.is_empty() {
                 s += &format!("{label}: {}\n", list.join(", "));
+            }
+        }
+        if !self.credentials.is_empty() {
+            // Where each secret goes: the hosts the kit names, else the service's own hosts.
+            s += "Credentials:\n";
+            for c in &self.credentials {
+                let mut hosts: Vec<String> = Vec::new();
+                for i in c.api_key.iter().flat_map(|k| &k.inject) {
+                    if !hosts.contains(&i.domain) {
+                        hosts.push(i.domain.clone());
+                    }
+                }
+                if hosts.is_empty() {
+                    hosts = services::builtin(&c.service).map_or_else(Vec::new, |b| b.hosts);
+                }
+                let to = if hosts.is_empty() {
+                    "the service's own hosts".to_string()
+                } else {
+                    hosts.join(", ")
+                };
+                s += &format!("  {}  sent to {to}\n", c.service);
             }
         }
         if !e.args.is_empty() {

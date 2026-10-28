@@ -834,6 +834,14 @@ mod tests {
             r#""provides":["net@1.0.0"]"#,
             r#""provides":["net@1.0.0"],"conflicts":["old"],"integrates":["extra"],
             "args":{"mode":{"default":"fast","enum":["fast","slow"]},"id":{"required":true}}"#,
+        )
+        .replace(
+            r#""capabilities":["#,
+            r#""capabilities":[
+          {"type":"com.docker.sandbox/credential@1","config":{"service":"my-api","phase":"runtime","apiKey":{
+            "inject":[{"domain":"api.x.com","header":"x-key"},{"domain":"up.x.com"}]}}},
+          {"type":"com.docker.sandbox/credential@1","config":{"service":"droid","phase":"runtime","apiKey":{"name":"FACTORY_API_KEY"}}},
+          {"type":"com.docker.sandbox/credential@1","config":{"service":"other","phase":"runtime","apiKey":{"name":"OTHER_KEY"}}},"#,
         );
         v3_kit(&t, "net", &kit, &[]);
         sbt(&mut t.ctx, &["kit", "inspect", "./net"]).unwrap();
@@ -849,6 +857,10 @@ mod tests {
                 "Requires: base",
                 "Integrates: extra",
                 "Conflicts: old",
+                "Credentials:",
+                "  my-api  sent to api.x.com, up.x.com",
+                "  droid  sent to api.factory.ai, app.factory.ai, relay.factory.ai",
+                "  other  sent to the service's own hosts",
                 "Args:",
                 "  id  required",
                 "  mode  default \"fast\", one of fast|slow",
