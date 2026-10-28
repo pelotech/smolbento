@@ -203,7 +203,8 @@ pub enum HookCmd {
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct FileReq {
     pub path: String,
-    pub content: String,
+    /// Bytes, not text: a kit's `files/` directory can hold anything (sbx copies it as is).
+    pub content: Vec<u8>,
     pub mode: Option<String>,
     pub overwrite: bool,
 }
