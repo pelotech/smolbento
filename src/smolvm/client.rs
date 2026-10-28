@@ -281,12 +281,17 @@ impl<R: Runner> Smolvm<R> {
         from: &str,
         name: &str,
         labels: &[(String, String)],
+        vars: &[(String, String)],
         env: &[(String, String)],
         remove: &[String],
     ) -> Result<()> {
         let mut a = args(&["machine", "branch", "--from", from, "-n", name]);
         for (k, v) in labels {
             flag(&mut a, "--label", format!("{k}={v}"));
+        }
+        // Per-branch variables: the child's exec sessions see them (not secrets; they're argv).
+        for (k, v) in vars {
+            flag(&mut a, "-e", format!("{k}={v}"));
         }
         checked(self.runner.run_with_env(&a, env, remove)?).map(drop)
     }
@@ -398,6 +403,7 @@ mod tests {
                 ("sbx.name".into(), "a-fork-1".into()),
                 ("sbx.fork-of".into(), "a".into()),
             ],
+            &[("V".into(), "1".into())],
             &[("TOK".into(), "secret-value".into())],
             &["GH_TOKEN".into()],
         )
@@ -406,7 +412,7 @@ mod tests {
         assert_eq!(
             line,
             "machine branch --from sbx-a -n sbx-a-fork-1 --label sbx.name=a-fork-1 \
-             --label sbx.fork-of=a"
+             --label sbx.fork-of=a -e V=1"
         );
         assert!(!line.contains("secret-value"));
         assert_eq!(

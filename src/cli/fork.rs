@@ -114,12 +114,19 @@ fn add_remote_and_branch<R: Runner>(
         // A child inherits its source's labels; a fork's age is its own.
         (labels::CREATED.to_string(), ctx.now.to_string()),
     ];
+    // The child inherits the parent's create-time -e values: give it its own identity.
+    let vars = [
+        ("SANDBOX_NAME".to_string(), fork.to_string()),
+        ("SANDBOX_VM_ID".to_string(), fork.to_string()),
+        ("SANDBOX_ID".to_string(), sandbox::env::new_uuid()?),
+    ];
     let result = ctx
         .vm
         .branch(
             &parent.machine,
             &name::machine_name(fork),
             &labels,
+            &vars,
             env,
             remove,
         )
@@ -193,13 +200,22 @@ mod tests {
             .call_lines()
             .into_iter()
             .filter(|c| c.starts_with("machine branch"))
+            .map(|c| normalize_id(&c))
             .collect()
+    }
+
+    /// The fresh SANDBOX_ID replaced by `ID`.
+    fn normalize_id(line: &str) -> String {
+        let at = line.find("SANDBOX_ID=").expect("a SANDBOX_ID") + "SANDBOX_ID=".len();
+        assert_eq!(line.len() - at, 36, "{line}");
+        format!("{}ID", &line[..at])
     }
 
     fn branch(fork: &str) -> String {
         format!(
             "machine branch --from sbx-a -n sbx-{fork} --label sbx.name={fork} \
-             --label sbx.fork-of=a --label sbx.created=1000000"
+             --label sbx.fork-of=a --label sbx.created=1000000 -e SANDBOX_NAME={fork} \
+             -e SANDBOX_VM_ID={fork} -e SANDBOX_ID=ID"
         )
     }
 
@@ -271,7 +287,8 @@ mod tests {
             branches(&t),
             vec![
                 "machine branch --from sbx-a -n sbx-try_2 --label sbx.name=try.2 \
-                 --label sbx.fork-of=a --label sbx.created=1000000"
+                 --label sbx.fork-of=a --label sbx.created=1000000 -e SANDBOX_NAME=try.2 \
+                 -e SANDBOX_VM_ID=try.2 -e SANDBOX_ID=ID"
             ]
         );
     }

@@ -60,7 +60,8 @@ clearly rather than doing something different.
 
 Set at create (`-e`, so every process sees them; your own `-e` wins). Never a secret value.
 
-- Set: `SANDBOX_NAME`, `SANDBOX_VM_ID` (the name), `SANDBOX_ID` (a new UUID per sandbox),
+- Set: `SANDBOX_NAME`, `SANDBOX_VM_ID` (the name), `SANDBOX_ID` (a new UUID on every create and
+  every `fork`, which gets its own name and id via `machine branch -e`),
   `WORKSPACE_DIR` (host path of the primary workspace; the guest workdir when mountless),
   `SBX_AGENT` (preset or kit name), `SBX_CRED_<SVC>_MODE` (`apikey` when the service's secret is
   bound at create, else `none`; `shell` gets all eight services, `claude` only `ANTHROPIC`, other

@@ -198,7 +198,7 @@ mod tests {
 
     #[test]
     fn exec_passes_the_host_tz_only_with_a_tty() {
-        for (flags, want) in [(&["-it"][..], " -e TZ=Asia/Kolkata"), (&["-i"][..], "")] {
+        for (flags, want) in [(&["-it"][..], true), (&["-i"][..], false)] {
             let mut t = test_env(&[("TZ", "Asia/Kolkata")]);
             t.ctx.vm.runner().ok(
                 &["machine", "status"],
@@ -209,11 +209,7 @@ mod tests {
             args.extend(["claude-proj", "id"]);
             sbt(&mut t.ctx, &args).unwrap();
             let line = t.ctx.vm.runner().interactive_calls()[0].join(" ");
-            assert_eq!(
-                line.contains(" -e TZ=Asia/Kolkata"),
-                !want.is_empty(),
-                "{line}"
-            );
+            assert_eq!(line.contains(" -e TZ=Asia/Kolkata"), want, "{line}");
         }
     }
 
