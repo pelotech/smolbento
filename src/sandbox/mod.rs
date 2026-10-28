@@ -11,6 +11,7 @@ use anyhow::{Context, Result, anyhow};
 
 use crate::kits::apply::{InstallStep, KitSteps};
 use crate::kits::guest;
+use crate::policy::compile::HOST_GATEWAY;
 use crate::smolvm::{
     ExecSpec, Machine, MachineState, NetworkSpec, PublishedPort, Runner, Smolvm, SmolvmError,
 };
@@ -43,6 +44,15 @@ fn group_cmd(user: &str, gid: u32) -> String {
     format!(
         "g=$(id -g {user}); [ \"$g\" = 0 ] || [ \"$g\" = {gid} ] || \
          ! command -v groupmod >/dev/null 2>&1 || groupmod -o -g {gid} \"$(id -gn {user})\" || exit; "
+    )
+}
+
+/// Names the host `host.docker.internal` in the guest, as sbx does: the guest gateway reaches the
+/// host's loopback for sandboxes with host access (`policy::compile::HOST_GATEWAY`). Idempotent.
+pub fn hosts_cmd() -> String {
+    format!(
+        "grep -q ' host.docker.internal$' /etc/hosts || \
+         echo '{HOST_GATEWAY} host.docker.internal' >> /etc/hosts"
     )
 }
 
@@ -372,6 +382,18 @@ fn setup<R: Runner>(vm: &Smolvm<R>, sb: &Sandbox, plan: &StartPlan) -> Result<()
         ..Default::default()
     })
     .context("matching the sandbox's agent user to your host uid")?;
+    // Not fatal: an image without a writable /etc/hosts still works, just without the name.
+    if let Err(e) = vm.exec_captured(&ExecSpec {
+        name: sb.machine.clone(),
+        user: Some("root".into()),
+        cmd: vec!["sh".into(), "-c".into(), hosts_cmd()],
+        ..Default::default()
+    }) {
+        eprintln!(
+            "warning: {}: couldn't add host.docker.internal to /etc/hosts: {e:#}",
+            sb.name()
+        );
+    }
     // The pre-4a path: a docker sandbox created before the docker kit has no startup runner.
     // With kits, the docker kit's startup hook starts dockerd (no second start here).
     if sb.meta.docker && sb.meta.kits.is_empty() {
@@ -843,23 +865,81 @@ mod tests {
             "{}",
             lines[3]
         );
+        assert!(lines[4].ends_with(&hosts_cmd()), "{lines:#?}");
         assert_eq!(
-            lines[4],
+            lines[5],
             format!("machine exec --name sbx-claude-myrepo -u root -d -- sh -c {DOCKER_START}")
         );
         assert_eq!(
-            lines[5],
+            lines[6],
             format!(
                 "machine exec --name sbx-claude-myrepo -u root -- sh -c {}",
                 startup_cmd(None)
             )
         );
-        assert_eq!(lines.len(), 6, "{lines:#?}");
+        assert_eq!(lines.len(), 7, "{lines:#?}");
         assert_eq!(
             vm.runner().envs(),
             vec![vec![("TOK".to_string(), "secret".to_string())]]
         );
         assert_eq!(vm.runner().removed(), vec![vec!["GONE".to_string()]]);
+    }
+
+    #[test]
+    fn every_start_names_the_host_after_the_agent_user() {
+        let fake = FakeRunner::new();
+        fake.ok(
+            &["machine", "status"],
+            &STATUS.replace("\"state\": \"running\"", "\"state\": \"stopped\""),
+        );
+        let vm = Smolvm::new(fake);
+        let mut sb = get(&vm, "claude-myrepo").unwrap();
+        ensure_running(&vm, &mut sb, || Ok(plan())).unwrap();
+        let lines = vm.runner().call_lines();
+        assert!(lines[3].ends_with("usermod -o -u 501 agent"), "{lines:#?}");
+        assert_eq!(
+            lines[4],
+            "machine exec --name sbx-claude-myrepo -u root -- sh -c grep -q ' host.docker.internal$' \
+             /etc/hosts || echo '100.96.0.1 host.docker.internal' >> /etc/hosts"
+        );
+    }
+
+    #[test]
+    fn a_read_only_etc_hosts_warns_and_the_start_goes_on() {
+        let fake = FakeRunner::new();
+        fake.ok(
+            &["machine", "status"],
+            &STATUS.replace("\"state\": \"running\"", "\"state\": \"stopped\""),
+        );
+        fake.fail(
+            &[
+                "machine",
+                "exec",
+                "--name",
+                "sbx-claude-myrepo",
+                "-u",
+                "root",
+                "--",
+                "sh",
+                "-c",
+                &hosts_cmd(),
+            ],
+            "EXEC_FAILED",
+            "Read-only file system",
+        );
+        let vm = Smolvm::new(fake);
+        let mut sb = get(&vm, "claude-myrepo").unwrap();
+        ensure_running(&vm, &mut sb, || Ok(plan())).unwrap();
+        assert!(sb.is_running());
+        let lines = vm.runner().call_lines();
+        assert!(
+            lines.iter().any(|l| l.ends_with(&startup_cmd(None))),
+            "{lines:#?}"
+        );
+        assert!(
+            !lines.iter().any(|l| l.starts_with("machine stop")),
+            "{lines:#?}"
+        );
     }
 
     #[test]
@@ -883,7 +963,7 @@ mod tests {
             )
         );
         assert!(lines[4].ends_with("usermod -o -u 501 agent"), "{lines:#?}");
-        assert_eq!(lines.len(), 7, "{lines:#?}");
+        assert_eq!(lines.len(), 8, "{lines:#?}");
     }
 
     /// Runs `image_user_script` (uid 501, gid 20) on the host against `etc`, with `id`, `usermod`
@@ -1196,10 +1276,10 @@ echo "$g""#,
         assert_eq!(lines[3], "machine start -n sbx-claude-myrepo --branchable");
         assert_eq!(
             lines.len(),
-            6,
+            7,
             "no dockerd for a non-docker sandbox: {lines:?}"
         );
-        assert!(lines[5].ends_with(&startup_cmd(None)), "{lines:?}");
+        assert!(lines[6].ends_with(&startup_cmd(None)), "{lines:?}");
     }
 
     #[test]
@@ -1739,11 +1819,12 @@ echo "$g""#,
         )
         .unwrap();
         let lines = vm.runner().call_lines();
-        assert_eq!(lines.len(), 4, "{lines:#?}");
+        assert_eq!(lines.len(), 5, "{lines:#?}");
         assert!(lines[2].ends_with("usermod -o -u 501 agent"), "{lines:#?}");
+        assert!(lines[3].ends_with(&hosts_cmd()), "{lines:#?}");
         // A no-op without kits (no runner).
         assert_eq!(
-            lines[3],
+            lines[4],
             "machine exec --name sbx-r -u root -- sh -c \
              [ -x /etc/smolbento/startup ] || exit 0; exec /etc/smolbento/startup"
         );
