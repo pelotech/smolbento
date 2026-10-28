@@ -43,10 +43,10 @@ access, so load only kits you trust.
   `FROM`. Registries are reached over HTTPS, except
   loopback ones (`localhost`, `127.0.0.0/8`, `::1`), which use plain HTTP, as in Docker.
 - **Kit network rules.** A kit's allow rules are added for its sandbox only, even under
-  `deny-all`, as in sbx. `sbt policy ls --source kit` lists them (`--source local` lists yours).
-  Deny rules always win: to block a host a kit allows, run
-  `sbt policy deny network --sandbox NAME HOST`. Rules a kit needs only while installing
-  (`kit-install:<kit>` in `policy ls`) are in place from the sandbox's creation through its first
+  `deny-all`, as in sbx. `sbt policy ls --source kit` lists them as one `kit:NAME` row per
+  sandbox (`--source local` lists yours). Deny rules always win: to block a host a kit allows, run
+  `sbt policy deny network --sandbox NAME HOST`. Rules a kit needs only while installing aren't
+  listed by `policy ls`, as in sbx; they are in place from the sandbox's creation through its first
   start's setup and install steps, and removed when install finishes. Later starts never use them,
   even if a create was interrupted before it could remove them; `sbt rm` removes any left over,
   and so does the next create of that name. An install-phase deny of a CIDR stays for the
@@ -61,13 +61,14 @@ access, so load only kits you trust.
     Docker Hub kits load by default.
   - A kit may send a **custom** service's secret (`sbt secret set-custom`) to any host it names.
     `create` and `kit add` print "kit K sends your SERVICE secret to HOSTS".
-  - `sbt kit inspect REF` lists each credential's service and the hosts it's sent to.
+  - `sbt kit inspect REF --format json` lists each credential's service and the hosts it's sent
+    to.
   - A credential's hosts are always reachable from the sandbox, and a deny rule can't block them
     while the kit's binding exists, which is for the sandbox's life (smolvm needs them to send the
     secret). To drop them, recreate the sandbox without the kit.
   - A credential whose secret isn't set doesn't stop the create, as in sbx: it warns
     (`WARN: required credential not found for service SERVICE`), and the kit's requests go out
-    without the credential.
+    without the credential until you set the secret and recreate the sandbox.
   - A credential a kit needs only while installing is gone after install.
 - **What kit steps see.** Install steps run as root. A v3 install step gets a clean environment:
   `PATH`, `HOME`, `USER`, `TERM`, the proxy and CA variables, and only the variables it declares.

@@ -201,6 +201,13 @@ sbt exec -u root -w /tmp -e DEBUG=1 claude-myrepo env
 `exec` starts a stopped sandbox first. It runs as the `agent` user in the workspace directory
 unless you pass `-u` or `-w`; `--privileged` runs as root. It exits with the command's status.
 
+The agent and every `exec` see the sandbox variables sbx sets: `SANDBOX_NAME`, `SANDBOX_VM_ID`
+(the name), `SANDBOX_ID` (a UUID, new for each sandbox and each fork), `WORKSPACE_DIR` (the host
+path of the primary workspace), `SBX_AGENT` (the agent or kit name) and, for `shell` and `claude`,
+`SBX_CRED_<SERVICE>_MODE` (`apikey` when that service's secret was set at create, else `none`).
+`claude` also gets `IS_SANDBOX=1`. Your own `-e` wins. See
+[sbx compatibility](sbx-compatibility.md#sandbox-environment) for what's left out.
+
 ## Docker inside a sandbox
 
 Every sandbox runs its own Docker engine, so agents can `docker build` and `docker compose up`
@@ -242,9 +249,26 @@ numeric `USER` runs as the account with that uid). A workload whose image has no
 | `./my-kit` (a directory with a `spec.yaml`) | A local v2 kit |
 | `./Smolfile`, `./x.smolfile` | A smolvm Smolfile |
 
-A reference that names a file or directory relative to the current directory is that local kit,
-even without `./`: with an `alpine` directory present, `alpine` loads it rather than the registry.
-`docker` is always the shipped kit.
+A local kit is always written as a path: `./my-kit`, `../kits/my-kit`, `.` or an absolute path.
+As in sbx, a bare word is never a kit, even when a directory of that name exists: `sbt create
+my-kit` is `unknown agent "my-kit"`, and `--kit my-kit` says it's `not a local path and does not
+look like a registry reference`. A registry reference has a `/`, so `alpine` is
+`docker.io/library/alpine`. `docker` is always the shipped kit.
+
+Kits can version what they provide and what they need, as in the kit spec:
+`provides: [postgres@16.2.0]` and `requires: ["postgres >= 16"]`. A missing or mismatched
+capability stops the create with sbx's `resolve: the kit set is not coherent:` and one line per
+problem. The agent presets provide their own name, so a v2 mixin's `requires.agent: claude` works
+on `claude`.
+
+`sbt kit inspect REF` prints a summary (name, kind, schema, network rule counts, credentials and
+commands), then the capabilities and what smolbento supports of each, then the source and the
+kit's provides, requires and arguments. `--format json` (or `--json`) and `--format yaml` give the
+kit as a v2-shaped descriptor, with smolbento's extras under a `smolbento` key; the credential
+entries there list the hosts each secret is sent to. `sbt kit validate REF` prints
+`✓ REF — valid`, or the error and exit status 1; with `--json` or `--format json|yaml` it prints
+`{reference, kind, valid, warnings}`, plus `errors` when it isn't valid. `--offline` checks a local
+v2 kit or Smolfile without the network or the source policy.
 
 Kit arguments: `--kit-arg NAME=VALUE` sets an argument for every kit, `--kit-arg KIT.NAME=VALUE`
 for one kit, and `--kit-args-file FILE` reads `NAME=VALUE` lines. Files are read in order, then
