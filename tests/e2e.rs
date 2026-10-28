@@ -1505,7 +1505,24 @@ impl E2e {
     /// `BASH_ENV` sourced, in the workspace, and could write there.
     fn assert_agent_runs_as(&self, user: &str) {
         let ws = self.workspace();
-        let out = self.ok(&["run", "--name", &self.name]);
+        let run = self.sbt(&["run", "--name", &self.name]);
+        if !run.status.success() {
+            // What the guest saw, so a failure on another host (e.g. Linux CI) explains itself.
+            let probe = "id; id agent; ls -lnd . ..; grep -E ' virtiofs | 9p ' /proc/mounts; \
+                         cat /proc/self/uid_map /proc/self/gid_map 2>&1; \
+                         cat /etc/smolbento/image-user 2>&1; touch probe-$(id -u) 2>&1; ls -ln";
+            let as_root = self.sbt(&["exec", "--privileged", &self.name, "sh", "-c", probe]);
+            let as_user = self.sbt(&["exec", "-u", user, &self.name, "sh", "-c", probe]);
+            panic!(
+                "sbt run failed:\n{}\n--- as root:\n{}{}\n--- as {user}:\n{}{}",
+                String::from_utf8_lossy(&run.stderr),
+                String::from_utf8_lossy(&as_root.stdout),
+                String::from_utf8_lossy(&as_root.stderr),
+                String::from_utf8_lossy(&as_user.stdout),
+                String::from_utf8_lossy(&as_user.stderr),
+            );
+        }
+        let out = String::from_utf8_lossy(&run.stdout).into_owned();
         let want = format!("ran user={user} bash_env=yes pwd={}", ws.display());
         assert!(out.contains(&want), "want {want:?} in:\n{out}");
         let written = ws.join(format!("wrote-as-{user}"));

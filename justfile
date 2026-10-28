@@ -12,7 +12,7 @@ test:
 
 # Run end-to-end tests against real smolvm VMs (needs a hypervisor)
 e2e:
-    cargo nextest run --locked --run-ignored only --test-threads 1 -E 'binary(e2e)'
+    cargo nextest run --locked --run-ignored only --test-threads 1 --no-fail-fast -E 'binary(e2e)'
 
 # Run all pre-commit hooks
 lint:
