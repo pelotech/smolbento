@@ -251,12 +251,24 @@ pub fn file_script(f: &FileReq) -> String {
     s.push_str(OWNER);
     s.push('\n');
     s.push_str(&mkdirs(&f.path));
-    s.push_str(&format!("printf %s {} > {p}\n", sh_quote(&f.content)));
+    s.push_str(&format!("{} > {p}\n", printf_bytes(&f.content)));
     if let Some(m) = &f.mode {
         s.push_str(&format!("chmod {} {p}\n", sh_quote(m)));
     }
     s.push_str(&format!("[ -z \"$o\" ] || chown \"$o\" {p}\n"));
     s
+}
+
+/// A `printf` command printing `bytes` exactly. Text goes through `%s`; anything else (NUL,
+/// invalid UTF-8) is spelled as octal escapes, which plain POSIX `printf` understands.
+fn printf_bytes(bytes: &[u8]) -> String {
+    match std::str::from_utf8(bytes) {
+        Ok(text) if !text.contains('\0') => format!("printf %s {}", sh_quote(text)),
+        _ => {
+            let escaped: String = bytes.iter().map(|b| format!("\\{b:03o}")).collect();
+            format!("printf '{escaped}'")
+        }
+    }
 }
 
 /// The directory, next to the agent file, holding one `<kit>.md` per mixin with agent context.
@@ -668,6 +680,26 @@ mod tests {
             s.contains("chown \"$o\" '/p/kits-agent-context'"),
             "the directory goes to agent: {s}"
         );
+    }
+
+    #[test]
+    fn file_script_writes_binary_content_byte_for_byte() {
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("f.swp").display().to_string();
+        let content: Vec<u8> = b"b0VIM\0\xff\xfe\x80'%\\n\n"
+            .iter()
+            .copied()
+            .chain(0..=255)
+            .collect();
+        let f = FileReq {
+            path: path.clone(),
+            content: content.clone(),
+            mode: None,
+            overwrite: true,
+        };
+        let out = sh(&file_script(&f));
+        assert!(out.status.success(), "{out:?}");
+        assert_eq!(std::fs::read(&path).unwrap(), content);
     }
 
     #[test]

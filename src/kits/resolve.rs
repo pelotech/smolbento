@@ -334,9 +334,14 @@ pub fn resolve_for(
                             .push((k.name.clone(), expand_hook(h, &ex)?));
                     }
                     for f in &l.files {
+                        // Only text can hold `${{ }}` references; other bytes pass through.
+                        let content = match std::str::from_utf8(&f.content) {
+                            Ok(text) => ex(text)?.into_bytes(),
+                            Err(_) => f.content.clone(),
+                        };
                         merged.files.push(FileReq {
                             path: ex(&f.path)?,
-                            content: ex(&f.content)?,
+                            content,
                             ..f.clone()
                         });
                     }
@@ -1125,7 +1130,7 @@ mod tests {
             HookCmd::Argv(vec!["echo".into(), "/home/agent".into()])
         );
         assert_eq!(p.merged.files[0].path, "/f/alice");
-        assert_eq!(p.merged.files[0].content, "x");
+        assert_eq!(p.merged.files[0].content, b"x");
         assert_eq!(p.merged.contexts[0].1.content, "for alice");
         assert!(!p.args["m"].contains_key("opt"));
     }
@@ -1180,7 +1185,7 @@ mod tests {
         let dir = std::path::Path::new("tests/fixtures/kits/v2/workspace-files");
         let yaml = std::fs::read_to_string(dir.join("spec.yaml")).unwrap();
         let kit = crate::kits::v2::parse(&yaml, dir).unwrap();
-        let files = |p: &Plan| -> Vec<(String, String)> {
+        let files = |p: &Plan| -> Vec<(String, Vec<u8>)> {
             p.merged
                 .files
                 .iter()

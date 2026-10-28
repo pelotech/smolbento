@@ -227,7 +227,7 @@ impl Doc {
                     setup.startup.extend(l.startup.iter().map(hook));
                     setup.files.extend(l.files.iter().map(|f| File {
                         path: f.path.clone(),
-                        content: f.content.clone(),
+                        content: String::from_utf8_lossy(&f.content).into_owned(),
                         mode: f.mode.clone(),
                         only_if_missing: !f.overwrite,
                     }));

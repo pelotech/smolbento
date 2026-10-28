@@ -718,7 +718,7 @@ fn lifecycle(c: LifecycleCfg) -> Lifecycle {
             .into_iter()
             .map(|f| FileReq {
                 path: f.path,
-                content: f.content,
+                content: f.content.into_bytes(),
                 mode: f.mode,
                 // The spec defaults to overwriting.
                 overwrite: f.overwrite.unwrap_or(true),

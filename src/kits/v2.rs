@@ -591,7 +591,7 @@ fn lifecycle(
     let mut files = static_files("files/home", HOME)?;
     files.extend(s.files.into_iter().map(|f| FileReq {
         path: f.path,
-        content: f.content.replace("${WORKDIR}", WORKSPACE),
+        content: f.content.replace("${WORKDIR}", WORKSPACE).into_bytes(),
         mode: f.mode,
         overwrite: !f.only_if_missing,
     }));
@@ -641,8 +641,7 @@ fn walk(
         if !ty.is_file() {
             continue;
         }
-        let content = std::fs::read_to_string(&p)
-            .with_context(|| format!("reading {} (static files must be text)", p.display()))?;
+        let content = std::fs::read(&p).with_context(|| format!("reading {}", p.display()))?;
         out.push(FileReq {
             path: format!("{dest}/{rel}"),
             content,
@@ -783,6 +782,33 @@ mod tests {
             [
                 format!("warning: kit {name}: files/home/link.txt is a symlink; skipped"),
                 format!("warning: kit {name}: files/home/sub/loop is a symlink; skipped"),
+            ]
+        );
+    }
+
+    #[test]
+    fn binary_files_are_copied_byte_for_byte_as_in_sbx() {
+        // An editor swap file left next to a kit file, e.g. vim's `.AGENTS.md.swp`.
+        let swap = b"b0VIM 9.0\0\0\xff\xfe\x80'%\\binary";
+        let d = tempfile::tempdir().unwrap();
+        let ws = d.path().join("files/workspace");
+        std::fs::create_dir_all(&ws).unwrap();
+        std::fs::write(ws.join("AGENTS.md"), "# agents\n").unwrap();
+        std::fs::write(ws.join(".AGENTS.md.swp"), swap).unwrap();
+        let k = parse("schemaVersion: \"2\"\nkind: mixin\n", d.path()).unwrap();
+        let CapBody::Lifecycle(l) = &k.caps[0].body else {
+            panic!()
+        };
+        let files: Vec<_> = l
+            .files
+            .iter()
+            .map(|f| (f.path.as_str(), f.content.as_slice()))
+            .collect();
+        assert_eq!(
+            files,
+            [
+                ("${{ kit.env.WORKSPACE }}/.AGENTS.md.swp", &swap[..]),
+                ("${{ kit.env.WORKSPACE }}/AGENTS.md", &b"# agents\n"[..]),
             ]
         );
     }
