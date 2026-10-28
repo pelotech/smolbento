@@ -65,6 +65,9 @@ access, so load only kits you trust.
   - A credential's hosts are always reachable from the sandbox, and a deny rule can't block them
     while the kit's binding exists, which is for the sandbox's life (smolvm needs them to send the
     secret). To drop them, recreate the sandbox without the kit.
+  - A credential whose secret isn't set doesn't stop the create, as in sbx: it warns
+    (`WARN: required credential not found for service SERVICE`), and the kit's requests go out
+    without the credential.
   - A credential a kit needs only while installing is gone after install.
 - **What kit steps see.** Install steps run as root. A v3 install step gets a clean environment:
   `PATH`, `HOME`, `USER`, `TERM`, the proxy and CA variables, and only the variables it declares.

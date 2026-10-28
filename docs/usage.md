@@ -279,8 +279,10 @@ What a kit does, and when:
 - **Environment**: a v3 install step gets a clean environment (`PATH`, `HOME`, `USER`, `TERM`, the
   proxy and CA variables, and the variables it lists in `env`). Startup steps and every v2 step
   get the sandbox's full environment, as in sbx.
-- **Credentials** come from your secrets: if a kit needs one you haven't set, the error says which
-  `sbt secret set` command to run. A built-in service's secret only goes to that service's own
+- **Credentials** come from your secrets. If a kit needs one you haven't set, the sandbox is still
+  created, as in sbx: you get `WARN: required credential not found for service SERVICE` and the
+  `sbt secret set` command to run, and the kit's requests go out without the credential until you
+  set it and recreate the sandbox. A built-in service's secret only goes to that service's own
   hosts; see [Security](SECURITY.md#kits). A credential the kit needs only while installing is
   available during install; the sandbox then restarts once without it, and later requests to its
   hosts get `502`.

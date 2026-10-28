@@ -384,7 +384,8 @@ fn bind_credential(
             return Ok(());
         }
         let host = c.inject.first().map_or("HOST", |i| i.domain.as_str());
-        bail!("{}", missing_secret(&kc.kit, &c.service, host));
+        eprintln!("{}", unbound_required(&kc.kit, &c.service, host));
+        return Ok(());
     }
     let env = c
         .env
@@ -515,7 +516,16 @@ fn bind_credential(
 }
 
 /// `my-svc` → `MY_SVC`.
-/// The error for a kit credential whose secret isn't set, with the command that sets it. A custom
+/// sbx's warning for a required credential whose secret isn't set (R39: the create goes on and
+/// the kit's requests go out without it), then the command that sets it.
+fn unbound_required(kit: &str, service: &str, host: &str) -> String {
+    format!(
+        "WARN: required credential not found for service {service}\n{}",
+        missing_secret(kit, service, host)
+    )
+}
+
+/// What a kit credential whose secret isn't set needs, with the command that sets it. A custom
 /// service is named after `set-custom`'s `--env` (lowercased, `_` as `-`), so the hint names the
 /// variable that gives `service`, or says no variable does.
 fn missing_secret(kit: &str, service: &str, host: &str) -> String {
@@ -990,31 +1000,26 @@ mod tests {
     }
 
     #[test]
-    fn a_missing_required_credential_fails_and_an_optional_one_is_skipped() {
+    fn a_missing_required_credential_warns_like_sbx_and_an_optional_one_is_skipped() {
         let c = || cred("github", Some("GH_TOKEN"), vec![inject("github.com", None)]);
-        let p = plan(vec![with(
-            kit("gh", Kind::Mixin),
-            "credential@1",
-            false,
-            c(),
-        )]);
-        let mut policy = Policy::default();
-        let e = run(&p, &mut request(), &mut policy).unwrap_err();
+        for optional in [false, true] {
+            let p = plan(vec![with(
+                kit("gh", Kind::Mixin),
+                "credential@1",
+                optional,
+                c(),
+            )]);
+            let mut policy = Policy::default();
+            let mut req = request();
+            run(&p, &mut req, &mut policy).unwrap();
+            assert!(req.credentials.is_empty(), "{:?}", req.credentials);
+            assert!(credential_args(&req).is_empty());
+        }
         assert_eq!(
-            format!("{e:#}"),
-            "kit gh needs the github secret; set it with sbt secret set github"
+            unbound_required("gh", "github", "github.com"),
+            "WARN: required credential not found for service github\n\
+             kit gh needs the github secret; set it with sbt secret set github"
         );
-        assert_eq!(policy, Policy::default());
-
-        let p = plan(vec![with(
-            kit("gh", Kind::Mixin),
-            "credential@1",
-            true,
-            c(),
-        )]);
-        let mut req = request();
-        run(&p, &mut req, &mut policy).unwrap();
-        assert!(req.credentials.is_empty());
     }
 
     #[test]
