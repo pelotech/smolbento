@@ -212,6 +212,18 @@ impl RawFile {
         Ok(())
     }
 
+    /// `s` with its reference tokens turned back into `${{ expr }}` text.
+    pub fn restore(&self, s: &str) -> String {
+        TOKEN
+            .replace_all(s, |c: &regex_lite::Captures| {
+                match c.get(1).and_then(|n| n.as_str().parse::<usize>().ok()) {
+                    Some(n) => format!("${{{{ {} }}}}", self.refs[n].expr),
+                    None => "$${{".to_string(),
+                }
+            })
+            .into_owned()
+    }
+
     /// The `args` block as written (refs aren't allowed there), or an empty map.
     pub fn args(&self) -> Result<BTreeMap<String, ArgDecl>> {
         let Some(block) = self.value.get("args") else {
