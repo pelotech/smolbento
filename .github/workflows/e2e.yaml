@@ -73,3 +73,5 @@ jobs:
         run: smolvm --version
       - name: End-to-end tests
         run: just e2e
+        env:
+          NEXTEST_PROFILE: ci

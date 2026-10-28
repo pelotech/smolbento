@@ -20,7 +20,7 @@ direnv, use `nix develop`.
 |---|---|
 | `just build` | Build the binary |
 | `just test` | Unit, snapshot and sbx parity tests (nextest) |
-| `just e2e` | End-to-end tests that boot real VMs; needs smolvm and a hypervisor |
+| `just e2e` | End-to-end tests that boot real VMs, two at a time (`just e2e 4` for more); needs smolvm and a hypervisor |
 | `just lint` | All pre-commit hooks: fmt, clippy, cargo-deny, yamllint, actionlint, zizmor |
 | `just install` | Install into `~/.cargo/bin` with the `sbt`/`sbx`/`bento` links |
 | `just release-build TARGET BUILDER` | Build a release tarball into `dist/` |
