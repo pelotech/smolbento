@@ -1779,7 +1779,8 @@ setup:
     );
 }
 
-/// `NAME=value` lines for the sbx sandbox variables, as printed by `script`'s `env` in the guest.
+/// A shell loop printing `NAME=value` for each sbx sandbox variable, run in the guest by `exec`
+/// and `run`.
 const SBX_VARS: &str = "for v in SANDBOX_NAME SANDBOX_VM_ID SANDBOX_ID WORKSPACE_DIR SBX_AGENT \
                         SBX_CRED_ANTHROPIC_MODE; do eval \"echo $v=\\$$v\"; done";
 
