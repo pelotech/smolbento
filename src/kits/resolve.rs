@@ -141,18 +141,27 @@ pub fn resolve_for(
             m.name
         );
     }
+    // Args first: a `provides` entry may name one (`claude@${{ kit.args.version }}`), and
+    // ordering parses the expanded entries.
+    let mut workload = workload;
+    let mut mixins = mixins;
+    let mut kit_args = BTreeMap::new();
+    let unordered: Vec<Kit> = std::iter::once(workload.clone())
+        .chain(mixins.iter().cloned())
+        .collect();
+    args.check_unknown(&unordered)?;
+    for k in &unordered {
+        // An optional arg with no value and no default stays out: using it is an error.
+        kit_args.insert(k.name.clone(), args.for_kit(k)?);
+    }
+    for k in std::iter::once(&mut workload).chain(mixins.iter_mut()) {
+        expand_provides(k, &kit_args[&k.name])?;
+    }
     let mixins = order(&workload, mixins)?;
 
     let all: Vec<Kit> = std::iter::once(workload.clone())
         .chain(mixins.iter().cloned())
         .collect();
-    args.check_unknown(&all)?;
-
-    let mut kit_args = BTreeMap::new();
-    for k in &all {
-        // An optional arg with no value and no default stays out: using it is an error.
-        kit_args.insert(k.name.clone(), args.for_kit(k)?);
-    }
 
     let mut merged = Merged::default();
     for k in &all {
@@ -339,6 +348,28 @@ fn expand_hook(h: &Hook, ex: &dyn Fn(&str) -> Result<String>) -> Result<Hook> {
 /// requires met by another kit, a present provider within `integrates`, no `conflicts`), then
 /// orders the mixins: providers before the kits that require or integrate with them, otherwise as
 /// given. Every problem is reported, one per line.
+/// Expands the arg references in `k.provides` (the only capability field that may carry them).
+fn expand_provides(k: &mut Kit, args: &BTreeMap<String, String>) -> Result<()> {
+    if !k.provides.iter().any(|s| capability::has_arg_ref(s)) {
+        return Ok(());
+    }
+    let unresolved: BTreeSet<String> = k
+        .args
+        .keys()
+        .filter(|n| !args.contains_key(*n))
+        .cloned()
+        .collect();
+    let env = BTreeMap::new();
+    let provides = k
+        .provides
+        .iter()
+        .map(|s| expand(s, args, &unresolved, &env))
+        .collect::<Result<Vec<_>>>()
+        .with_context(|| format!("kit {}", k.name))?;
+    k.provides = provides;
+    Ok(())
+}
+
 fn order(workload: &Kit, mixins: Vec<Kit>) -> Result<Vec<Kit>> {
     let all: Vec<&Kit> = std::iter::once(workload).chain(&mixins).collect();
     let mut problems = Vec::new();
@@ -582,6 +613,31 @@ mod tests {
         let w = workload("w").provides(&["node"]);
         let p = run(w, vec![mixin("a").requires(&["node"])]).unwrap();
         assert_eq!(names(&p), ["a"]);
+    }
+
+    #[test]
+    fn a_provide_naming_a_kit_arg_expands_before_ordering() {
+        let mut c = mixin("c").provides(&["claude@${{ kit.args.version }}"]);
+        c.args.insert(
+            "version".into(),
+            ArgDef {
+                default: Some("2.1.0".into()),
+                ..Default::default()
+            },
+        );
+        let u = mixin("u").requires(&["claude >= 2.0"]);
+        let p = run(workload("w"), vec![u.clone(), c.clone()]).unwrap();
+        assert_eq!(names(&p), ["c", "u"]);
+        assert_eq!(p.mixins[0].provides, ["claude@2.1.0"]);
+        let v = ArgValues::parse(&[], &["version=1.9.0".into()]).unwrap();
+        let e = resolve(workload("w"), vec![u, c.clone()], &v).unwrap_err();
+        assert!(format!("{e:#}").contains("only offers"), "{e:#}");
+        c.args.get_mut("version").unwrap().default = None;
+        let e = run(workload("w"), vec![c]).unwrap_err();
+        assert_eq!(
+            format!("{e:#}"),
+            "kit c: create-phase kit arg \"version\" has no resolved value"
+        );
     }
 
     #[test]
