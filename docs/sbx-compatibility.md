@@ -183,7 +183,7 @@ Differences:
 
 | Area | sbx | smolbento |
 |---|---|---|
-| Building local v3 kits | BuildKit on your machine | BuildKit in a hidden `_builder` sandbox; no Docker on your machine needed. It pulls base images without a registry login (kits built on `dhi.io`, like Docker's examples, don't build yet) and never gets your secrets |
+| Building local v3 kits | BuildKit on your machine | BuildKit in a hidden `_builder` sandbox; no Docker on your machine needed. It never gets your secrets. Base images that need a login pull with your `secret set --registry` credentials, which stay on the host: the builder gets a short-lived pull token for the `HOST/<repo>` references in the descriptor as a header smolvm sets, can reach those registries whatever the policy, and is recreated when the set of registries changes |
 | Where a kit sends a secret | Any host the kit names, after you approve it | A built-in service's secret only to that service's own hosts (else the kit is refused); a custom service's anywhere, with a note at `create` and `kit add` |
 | Install-only credentials | Not injected after install: the placeholder stays and requests go out without the credential | The sandbox restarts once after install, without them; later requests to their hosts get `502` |
 | OAuth credentials | Passthrough and sentinel tokens | Passthrough only (sentinel tokens need smolvm support) |

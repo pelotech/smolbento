@@ -353,9 +353,9 @@ fails.
 Local v3 kits are built with BuildKit in a hidden sandbox, `_builder`, so you don't need Docker on
 your machine. It's created on first use, stopped after each build and not shown by `sbt ls`; its
 disk keeps the build cache, and `sbt rm _builder` resets it. Builds use your global network policy
-(`sbt policy log _builder` shows what was blocked) and never get your secrets. Base images are
-pulled without a registry login, so a kit built on an image that needs one (Docker's own examples
-use `dhi.io`) won't build locally yet; published kits are not affected.
+(`sbt policy log _builder` shows what was blocked) and never get your secrets. A kit built on an
+image that needs a login (Docker's own examples use `dhi.io`) builds once you store a
+[registry credential](#registry-credentials) for that registry.
 
 ## Environments (sbxenv.yaml)
 
@@ -533,6 +533,38 @@ When things take effect:
   session, so usually the next `sbt run`).
 - A secret for a service a sandbox wasn't created with needs the sandbox **recreated**; `secret set`
   tells you which.
+
+### Registry credentials
+
+A registry credential lets smolbento pull kits and images that need a login. It stays on your
+machine: sandboxes never get it.
+
+```sh
+sbt secret set --registry dhi.io --username alice --password-stdin < token.txt   # Docker Hub token
+gh auth token | sbt secret set --registry ghcr.io --password-stdin               # token-only
+sbt secret ls
+sbt secret rm --registry dhi.io
+```
+
+The password or token goes to your OS keychain; `secrets.toml` keeps only the host and user name.
+Omit `--username` for registries that take a token alone (ghcr.io, GitLab, Gitea); Docker Hub,
+`dhi.io` and Quay robots need it. A registry whose token server is on another host needs
+`--registry-auth-endpoint https://…`, the exact URL to trust: the login is only ever sent over
+HTTPS to the registry itself, `auth.docker.io` for Docker Hub, or that URL.
+
+It's used for:
+
+- **Published kits** pulled from that registry.
+- **Local kit builds.** The `_builder` sandbox can reach every registry you stored a credential for,
+  and smolvm sets the `Authorization` header on its requests there. Before each build that names
+  `HOST/<repo>` in its descriptor, smolbento gets a short-lived pull token for those repositories
+  on your machine and starts the builder fresh with it, so a build must start pulling within a few
+  minutes. Only `HOST/…` references count: an image named without its registry gets no token.
+  Adding or removing a registry credential recreates the builder (and its build cache) at the next
+  build.
+
+`--sandbox` and `--all-sandboxes` (a login for a sandbox's own `docker pull`) aren't supported
+yet.
 
 `sbt rm` removes that sandbox's own secrets and its per-sandbox policy. `sbt reset` removes all
 secrets too, unless you pass `--preserve-secrets`.

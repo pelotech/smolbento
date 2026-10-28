@@ -101,7 +101,9 @@ only the ones smolbento made.
 Secret values live in the OS keychain: on macOS through `/usr/bin/security` (items under service
 `smolbento`), on Linux through `secret-tool` when a Secret Service is running. Where neither is
 available they go in `~/.config/smolbento/secret-values.toml` (mode 0600). `secrets.toml` never
-holds values.
+holds values. A registry credential's password or token is stored the same way, as account
+`registry:<host>`; `secrets.toml` keeps its host, user name and `--registry-auth-endpoint` under
+`[[registries]]`.
 
 On macOS a stored value can be at most about 1.9 KB (`security` truncates longer input); for larger
 values, such as certificates or keys, use `secret set --ref` or `--command` so the value is read at

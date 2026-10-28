@@ -75,9 +75,10 @@ terminal fail until you do.
   passthrough OAuth only, and method/path rules (kits' and `policy allow --method/--path`) aren't
   enforced. Preferred: method/path matching and an OAuth sentinel mode upstream in smolvm. Only if
   that's declined: smolbento's own egress proxy, a phase of its own.
-- **Registry login for the builder sandbox.** Local kits built on an image that needs a login
-  (Docker's examples use `dhi.io`) can't build yet. Likely: bind the host's registry credential to
-  `_builder` through smolvm so no token lands in the guest.
+- **Registry credentials for sandboxes.** `secret set --registry --sandbox/--all-sandboxes`, a
+  login for a sandbox's own `docker pull`. smolvm reads credential values only at start and
+  registry tokens last minutes, so it needs smolvm to mint or refresh the token itself (the builder
+  gets one fresh before each build instead).
 - **`machine update --label`.** Would let `kit add`ed kits be listed without starting a stopped
   sandbox. Cosmetic.
 - **Install-only credentials after install.** sbx leaves the placeholder and sends requests without
