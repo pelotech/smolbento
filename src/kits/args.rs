@@ -191,6 +191,8 @@ mod tests {
             kind: Kind::Mixin,
             provides: vec![],
             requires: vec![],
+            integrates: vec![],
+            conflicts: vec![],
             args: args
                 .iter()
                 .map(|(n, d)| (n.to_string(), d.clone()))

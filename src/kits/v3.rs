@@ -10,6 +10,7 @@ use anyhow::{Context, Result, anyhow, bail};
 use serde::Deserialize;
 use serde_json::Value;
 
+use crate::kits::capability;
 use crate::kits::model::*;
 
 const NS: &str = "com.docker.sandbox/";
@@ -33,10 +34,17 @@ pub fn parse_json(json: &str, source: Source) -> Result<Kit> {
 struct Descriptor {
     schema_version: String,
     kind: String,
+    /// The version of unversioned `provides` when the reference carries none.
+    #[serde(default, deserialize_with = "opt_scalar")]
+    version: Option<String>,
     #[serde(default)]
     provides: Vec<String>,
     #[serde(default)]
     requires: Vec<String>,
+    #[serde(default)]
+    integrates: Vec<String>,
+    #[serde(default)]
+    conflicts: Vec<String>,
     #[serde(default)]
     capabilities: Vec<CapabilityItem>,
     #[serde(default)]
@@ -83,6 +91,7 @@ fn from_value(v: Value, source: Source) -> Result<Kit> {
         "set" => bail!("kind: set must be published (docker buildx build) before it can be run"),
         k => bail!("unknown kind '{k}'"),
     };
+    let provides = provides(&d, &source)?;
     let caps = d
         .capabilities
         .into_iter()
@@ -119,8 +128,10 @@ fn from_value(v: Value, source: Source) -> Result<Kit> {
         source,
         digest: None,
         kind,
-        provides: d.provides,
+        provides,
         requires: d.requires,
+        integrates: d.integrates,
+        conflicts: d.conflicts,
         args,
         caps,
         env: vec![],
@@ -128,6 +139,54 @@ fn from_value(v: Value, source: Source) -> Result<Kit> {
         command: None,
         config: None,
     })
+}
+
+/// Checks the capability entries (SPEC-v3 §5) and gives each unversioned provide its version: a
+/// version-shaped registry tag's, else the descriptor's `version:`. A kit sbx would build here
+/// (local or shipped) must leave none unversioned, as the spec's frontend refuses; a published kit
+/// that still has one keeps it, and it then satisfies only unconstrained requires.
+fn provides(d: &Descriptor, source: &Source) -> Result<Vec<String>> {
+    let mut errs = Vec::new();
+    if let Some(v) = &d.version
+        && !capability::has_arg_ref(v)
+        && !capability::is_version(v)
+    {
+        errs.push(format!("version: invalid version {:?}", v.trim()));
+    }
+    errs.extend(capability::validate(
+        &d.provides,
+        &d.requires,
+        &d.integrates,
+        &d.conflicts,
+    ));
+    if !errs.is_empty() {
+        bail!("{}", errs.join("\n"));
+    }
+    let fallback = match source {
+        Source::Registry(r) => capability::version_from_reference(r),
+        _ => None,
+    }
+    .or_else(|| d.version.clone().filter(|v| capability::is_version(v)));
+    let unversioned = |s: &str| !s.contains('@') && !capability::has_arg_ref(s);
+    if fallback.is_none() && !matches!(source, Source::Registry(_)) {
+        let errs: Vec<String> = d
+            .provides
+            .iter()
+            .enumerate()
+            .filter(|(_, s)| unversioned(s))
+            .map(|(i, s)| capability::unversioned(i, s))
+            .collect();
+        if !errs.is_empty() {
+            bail!("{}", errs.join("\n"));
+        }
+    }
+    Ok(d.provides
+        .iter()
+        .map(|s| match &fallback {
+            Some(v) if unversioned(s) => format!("{}@{v}", s.trim()),
+            _ => s.clone(),
+        })
+        .collect())
 }
 
 /// A short token naming the kit: it scopes `--kit-arg` and tags policy rule origins, so it comes
@@ -650,7 +709,7 @@ mod tests {
     fn parses_network_v2_phases() {
         let k = parse(&fixture("network-v2.yaml"), local("n")).unwrap();
         assert_eq!(k.kind, Kind::Mixin);
-        assert_eq!(k.provides, ["net2"]);
+        assert_eq!(k.provides, ["net2@1.0.0"]);
         let CapBody::Network { install, runtime } = &k.caps[0].body else {
             panic!()
         };
@@ -773,6 +832,95 @@ mod tests {
             format!("{e:#}").contains("content and contentFile are mutually exclusive"),
             "{e:#}"
         );
+    }
+
+    #[test]
+    fn a_local_kit_s_provides_need_a_version_like_sbx() {
+        let e = parse_json(
+            r#"{"schemaVersion":"3","kind":"mixin","provides":["x","y@1.0.0","z"]}"#,
+            local("k"),
+        )
+        .unwrap_err();
+        let hint = "has no version: add @<version> here or a top-level version: field (a \
+                    version-shaped image tag can override it at consumption, but a published kit \
+                    must carry one)";
+        assert_eq!(
+            format!("{e:#}"),
+            format!(
+                "provides[0]: provides entry \"x\" {hint}\nprovides[2]: provides entry \"z\" {hint}"
+            )
+        );
+        let e = parse(
+            "schemaVersion: \"3\"\nkind: mixin\nprovides: [x]\n",
+            Source::Builtin("b"),
+        )
+        .unwrap_err();
+        assert!(format!("{e:#}").starts_with("provides[0]: provides entry \"x\" has no version"));
+    }
+
+    #[test]
+    fn version_is_the_fallback_for_unversioned_provides_and_a_tag_beats_it() {
+        let d = r#"{"schemaVersion":"3","kind":"mixin","version":"1.2.0",
+            "provides":["x","y@3","${{ kit.args.v }}"]}"#;
+        let k = parse_json(d, local("k")).unwrap();
+        assert_eq!(k.provides, ["x@1.2.0", "y@3", "${{ kit.args.v }}"]);
+        let k = parse_json(d, Source::Registry("docker.io/acme/k:v2.0.1".into())).unwrap();
+        assert_eq!(k.provides, ["x@2.0.1", "y@3", "${{ kit.args.v }}"]);
+        // Not a version-shaped tag: the descriptor's version stays.
+        let k = parse_json(d, Source::Registry("acme/k:latest@sha256:00".into())).unwrap();
+        assert_eq!(k.provides[0], "x@1.2.0");
+        // A published kit without versions is still read; it satisfies unconstrained requires.
+        let k = parse_json(
+            r#"{"schemaVersion":"3","kind":"mixin","provides":["x"]}"#,
+            Source::Registry("acme/k".into()),
+        )
+        .unwrap();
+        assert_eq!(k.provides, ["x"]);
+    }
+
+    #[test]
+    fn capability_entries_follow_the_spec_grammar() {
+        let bad = |field: &str, entry: &str| {
+            let d = format!(r#"{{"schemaVersion":"3","kind":"mixin","{field}":["{entry}"]}}"#);
+            format!("{:#}", parse_json(&d, local("k")).unwrap_err())
+        };
+        assert_eq!(
+            bad("provides", "Gh@1"),
+            "provides[0]: provides entry \"Gh@1\": invalid capability name \"Gh\""
+        );
+        assert_eq!(
+            bad("provides", "gh@v1"),
+            "provides[0]: provides entry \"gh@v1\": invalid version \"v1\""
+        );
+        assert_eq!(
+            bad("requires", "node >= 2, < 1"),
+            "requires[0]: requires entry \"node >= 2, < 1\": unsatisfiable constraints: >= 2 and < 1"
+        );
+        assert_eq!(
+            bad("requires", "x >= ${{ kit.args.v }}"),
+            "requires[0]: requires entry \"x >= ${{ kit.args.v }}\": arg references are not \
+             allowed in requires"
+        );
+        assert_eq!(
+            bad("integrates", "x ~ 1"),
+            "integrates[0]: requires entry \"x ~ 1\": invalid capability name \"x ~ 1\""
+        );
+        assert_eq!(
+            bad("conflicts", "x@1"),
+            "conflicts[0]: conflicts entry \"x@1\": invalid capability name \"x@1\""
+        );
+        assert_eq!(
+            bad("provides", "example/x@1"),
+            "provides[0]: provides entry \"example/x@1\": namespace \"example\" in \"example/x\" is a \
+             single label, which this specification reserves; a namespace of your own is \
+             reverse-DNS, as in com.example/x"
+        );
+        let e = parse_json(
+            r#"{"schemaVersion":"3","kind":"mixin","version":"v1"}"#,
+            local("k"),
+        )
+        .unwrap_err();
+        assert_eq!(format!("{e:#}"), "version: invalid version \"v1\"");
     }
 
     #[test]

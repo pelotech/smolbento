@@ -135,6 +135,9 @@ Differences:
 | Agent context file | Starts with a long platform preamble | No preamble: only kit text and the index |
 | Mixin context when the workload declares no agent file | Dropped silently | Dropped with a warning |
 | Startup log lines | `ok /etc/durable-startup.d/…` | `ok /etc/smolbento/startup.d/NN-<kit>.sh hook N`, one per step and start |
+| `provides`/`requires` errors | Name each kit by its reference as typed (`./chkreq`) | Name each kit by its kit name; one problem per line. Versions, constraints and the sentences follow the kit spec |
+| v2 kits' `requires.agent` | A base-agent name | A bare capability name with no version, so any version of it meets it (v2 has no versioned provides) |
+| `kit add` and earlier kits | Recreates with the whole set | Matches the new kit against the provides recorded at create, with their versions; records written before versions existed hold bare names, which meet only unconstrained requires. The earlier kits' own requires and conflicts aren't checked again |
 | Kit settings | Also `kit.requireSignature`, `kit.trustedSigners`, `kit.ignoreTransparencyLog`, `kit.allowExtractedAgents` | Not yet: signatures aren't checked, and built-in agents aren't kits |
 
 Not compared with sbx yet:
@@ -146,6 +149,8 @@ Not compared with sbx yet:
   `-` on images without `runuser`, which resets them too).
 - A v3 mixin's agent context: smolbento puts it in `kits-agent-context/<kit>.md` and the index, as
   for a v2 mixin.
+- `integrates` and `conflicts` errors (texts from the kit spec's resolver), and a published kit
+  whose provides have no version (read as is; it meets only unconstrained requires).
 - An optional argument a kit declares but doesn't use, with no value and no default.
 - The agent file's kits index after hand edits, such as a removed or duplicated marker or text
   added inside the block.

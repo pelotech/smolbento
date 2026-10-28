@@ -207,6 +207,8 @@ pub fn preset_kit(agent: &Agent, image: &str) -> Kit {
         kind: Kind::Workload,
         provides: vec![],
         requires: vec![],
+        integrates: vec![],
+        conflicts: vec![],
         args: Default::default(),
         caps: vec![],
         env: vec![],
@@ -267,7 +269,7 @@ mod tests {
         assert_eq!(k.name, "docker");
         assert_eq!(k.source, Source::Builtin("docker"));
         assert_eq!(k.kind, Kind::Mixin);
-        assert_eq!(k.provides, ["docker"]);
+        assert_eq!(k.provides, ["docker@1.0.0"]);
         let volumes: Vec<&str> = k
             .caps
             .iter()

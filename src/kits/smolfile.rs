@@ -19,6 +19,8 @@ pub fn load(path: &Path) -> Result<Kit> {
         kind: Kind::Workload,
         provides: vec![],
         requires: vec![],
+        integrates: vec![],
+        conflicts: vec![],
         args: Default::default(),
         caps: vec![],
         env: vec![],

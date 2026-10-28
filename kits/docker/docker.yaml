@@ -2,6 +2,7 @@
 schemaVersion: "3"
 kind: mixin
 displayName: docker
+version: "1.0.0"
 provides: [docker]
 capabilities:
   - type: com.docker.sandbox/volume@1

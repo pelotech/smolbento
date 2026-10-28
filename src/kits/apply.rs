@@ -6,6 +6,7 @@ use std::path::Path;
 use anyhow::{Context, Result, bail};
 
 use crate::agents;
+use crate::kits::capability;
 use crate::kits::compose;
 use crate::kits::guest;
 use crate::kits::model::{CapBody, Content, CredReq, FileReq, Hook, Kit, NetRule, Rules, Source};
@@ -280,9 +281,12 @@ pub fn apply(
     req.long_running = m.long_running;
     // `sbx.docker` (shown by `ls`) says the sandbox has a private dockerd: the docker kit's, or
     // that of a kit providing `docker` in its place.
-    req.docker = kits
-        .iter()
-        .any(|k| k.source == Source::Builtin("docker") || k.provides.iter().any(|p| p == "docker"));
+    req.docker = kits.iter().any(|k| {
+        k.source == Source::Builtin("docker")
+            || k.provides
+                .iter()
+                .any(|p| capability::provides_name(p, "docker"))
+    });
 
     // Last, so an error above leaves the policy untouched; a failure part-way through (a bad
     // host) restores the snapshot. Runtime rules go first: an install rule that is also a runtime
@@ -703,6 +707,8 @@ mod tests {
             kind,
             provides: vec![],
             requires: vec![],
+            integrates: vec![],
+            conflicts: vec![],
             args: BTreeMap::new(),
             caps: vec![],
             env: vec![],

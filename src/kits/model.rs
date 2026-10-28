@@ -44,8 +44,14 @@ pub struct Kit {
     /// `sha256:...` of the manifest, when known.
     pub digest: Option<String>,
     pub kind: Kind,
+    /// `name@version` (`kits::capability`); unversioned only from a published kit or a v2 one.
     pub provides: Vec<String>,
+    /// `name` or `name <op> version, ...`.
     pub requires: Vec<String>,
+    /// `name` or `name <op> version, ...`: works with a provider when present (SPEC-v3 §5).
+    pub integrates: Vec<String>,
+    /// Bare names that must be absent from the set.
+    pub conflicts: Vec<String>,
     pub args: BTreeMap<String, ArgDef>,
     pub caps: Vec<Cap>,
     /// Plain environment variables (v2 `environment.variables`), set at start.

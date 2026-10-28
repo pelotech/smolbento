@@ -1066,6 +1066,8 @@ mod tests {
             kind,
             provides: vec![],
             requires: vec![],
+            integrates: vec![],
+            conflicts: vec![],
             args: Default::default(),
             caps: vec![],
             env: vec![],

@@ -5,6 +5,7 @@ use std::collections::{BTreeMap, BTreeSet};
 use anyhow::{Context, Result, bail};
 
 use crate::kits::args::{ArgValues, expand};
+use crate::kits::capability;
 use crate::kits::model::{
     AgentContextReq, CapBody, CredReq, FileReq, Hook, HookCmd, Kind, Kit, NetRule, Rules,
 };
@@ -318,36 +319,134 @@ fn expand_hook(h: &Hook, ex: &dyn Fn(&str) -> Result<String>) -> Result<Hook> {
 }
 
 /// Stable topological sort: repeatedly take the first mixin whose requirements are provided.
+/// Checks the set's capabilities like the spec's resolver (SPEC-v3 §5.3: one provider per name,
+/// requires met by another kit, a present provider within `integrates`, no `conflicts`), then
+/// orders the mixins: providers before the kits that require or integrate with them, otherwise as
+/// given. Every problem is reported, one per line.
 fn order(workload: &Kit, mixins: Vec<Kit>) -> Result<Vec<Kit>> {
-    let mut providers: BTreeMap<&str, &str> = BTreeMap::new();
-    for k in std::iter::once(workload).chain(mixins.iter()) {
-        for p in &k.provides {
-            if let Some(other) = providers.insert(p, &k.name) {
-                bail!("'{p}' is provided by both {other} and {}", k.name);
+    let all: Vec<&Kit> = std::iter::once(workload).chain(&mixins).collect();
+    let mut problems = Vec::new();
+
+    // Normalized name to (kit index, provide), in set order.
+    let mut index: BTreeMap<String, Vec<(usize, capability::Provide)>> = BTreeMap::new();
+    for (i, k) in all.iter().enumerate() {
+        for s in &k.provides {
+            match capability::parse_provide(s) {
+                Ok(p) => index.entry(p.name.clone()).or_default().push((i, p)),
+                Err(e) => problems.push(format!("{}: {e}", k.name)),
             }
         }
     }
-    for k in std::iter::once(workload).chain(mixins.iter()) {
-        for r in &k.requires {
-            if !providers.contains_key(r.as_str()) {
-                bail!("{} requires '{r}', which no kit provides", k.name);
+    for (name, ps) in &index {
+        let mut offers: Vec<(&str, Option<&str>)> = Vec::new();
+        let mut owners = BTreeSet::new();
+        for (i, p) in ps {
+            if owners.insert(*i) {
+                offers.push((all[*i].name.as_str(), p.version.as_deref()));
             }
         }
+        if owners.len() > 1 {
+            problems.push(capability::duplicate(name, &offers));
+        }
+    }
+    let others = |name: &str, me: usize| -> Vec<&(usize, capability::Provide)> {
+        index
+            .get(name)
+            .into_iter()
+            .flatten()
+            .filter(|(i, _)| *i != me)
+            .collect()
+    };
+    // The kit (not `me`) whose provide meets `r`.
+    let provider = |r: &capability::Require, me: usize| -> Option<usize> {
+        others(&r.name, me)
+            .into_iter()
+            .find(|(_, p)| capability::satisfies(p, r))
+            .map(|(i, _)| *i)
+    };
+    let offered = |name: &str, me: usize| -> Vec<String> {
+        others(name, me)
+            .into_iter()
+            .map(|(i, p)| capability::describe(p, &all[*i].name))
+            .collect()
+    };
+
+    let mut deps: Vec<BTreeSet<usize>> = vec![BTreeSet::new(); all.len()];
+    for (me, k) in all.iter().enumerate() {
+        for s in &k.requires {
+            let r = match capability::parse_require(s) {
+                Ok(r) => r,
+                Err(e) => {
+                    problems.push(format!("{}: {e}", k.name));
+                    continue;
+                }
+            };
+            match provider(&r, me) {
+                Some(p) => {
+                    deps[me].insert(p);
+                }
+                None if index.contains_key(&r.name) => problems.push(capability::unmet_version(
+                    &k.name,
+                    s,
+                    &index[&r.name]
+                        .iter()
+                        .map(|(i, p)| capability::describe(p, &all[*i].name))
+                        .collect::<Vec<_>>(),
+                )),
+                None => problems.push(capability::unmet(&k.name, s, &r.name)),
+            }
+        }
+    }
+    for (me, k) in all.iter().enumerate() {
+        for s in &k.integrates {
+            let r = match capability::parse_require(s) {
+                Ok(r) => r,
+                Err(e) => {
+                    problems.push(format!("{}: {e}", k.name));
+                    continue;
+                }
+            };
+            let present = offered(&r.name, me);
+            match provider(&r, me) {
+                Some(p) => {
+                    deps[me].insert(p);
+                }
+                None if !present.is_empty() => {
+                    problems.push(capability::integrates_violated(&k.name, s, &present))
+                }
+                None => {}
+            }
+        }
+    }
+    for (me, k) in all.iter().enumerate() {
+        for s in &k.conflicts {
+            for (i, _) in others(&capability::normalize(s), me) {
+                problems.push(capability::conflict(&k.name, s, &all[*i].name));
+            }
+        }
+    }
+    if !problems.is_empty() {
+        bail!("{}", problems.join("\n"));
     }
 
-    let mut have: BTreeSet<String> = workload.provides.iter().cloned().collect();
-    let mut rest = mixins;
+    // Index 0 is the workload, always first.
+    let mut placed = BTreeSet::from([0]);
+    let mut rest: Vec<(usize, Kit)> = mixins
+        .into_iter()
+        .enumerate()
+        .map(|(i, k)| (i + 1, k))
+        .collect();
     let mut out = Vec::with_capacity(rest.len());
     while !rest.is_empty() {
         let Some(i) = rest
             .iter()
-            .position(|k| k.requires.iter().all(|r| have.contains(r)))
+            .position(|(me, _)| deps[*me].iter().all(|d| placed.contains(d)))
         else {
-            let names: Vec<_> = rest.iter().map(|k| k.name.as_str()).collect();
+            let names: Vec<_> = rest.iter().map(|(_, k)| k.name.as_str()).collect();
             bail!("kits have circular requirements: {}", names.join(", "));
         };
-        let k = rest.remove(i);
-        have.extend(k.provides.iter().cloned());
+        let (me, k) = rest.remove(i);
+        placed.insert(me);
         out.push(k);
     }
     Ok(out)
@@ -366,6 +465,8 @@ mod tests {
             kind,
             provides: vec![],
             requires: vec![],
+            integrates: vec![],
+            conflicts: vec![],
             args: BTreeMap::new(),
             caps: vec![],
             env: vec![],
@@ -457,17 +558,112 @@ mod tests {
     }
 
     #[test]
-    fn duplicate_provides_fail() {
-        let a = mixin("a").provides(&["x"]);
-        let b = mixin("b").provides(&["x"]);
+    fn duplicate_provides_fail_like_sbx_at_any_versions() {
+        let a = mixin("a").provides(&["x@1.0.0"]);
+        let b = mixin("b").provides(&["com.docker.kit/x@2.0"]);
         let e = run(workload("w"), vec![a, b]).unwrap_err();
-        assert!(format!("{e:#}").contains("'x'"), "{e:#}");
+        assert_eq!(
+            format!("{e:#}"),
+            "capability \"com.docker.kit/x\" is provided by more than one kit: a (1.0.0), b (2.0); \
+             one name has one owner, so drop the redundant kit"
+        );
+        let a = mixin("a").provides(&["x"]);
+        let b = mixin("b").provides(&["x@1"]);
+        let e = run(workload("w"), vec![a, b]).unwrap_err();
+        assert!(
+            format!("{e:#}").contains(": a (unversioned), b (1);"),
+            "{e:#}"
+        );
     }
 
     #[test]
-    fn unmet_requires_fails_naming_both() {
-        let e = run(workload("w"), vec![mixin("a").requires(&["x"])]).unwrap_err();
-        assert_eq!(format!("{e:#}"), "a requires 'x', which no kit provides");
+    fn unmet_requires_fails_like_sbx() {
+        let e = run(workload("w"), vec![mixin("a").requires(&["x >= 1.0.0"])]).unwrap_err();
+        assert_eq!(
+            format!("{e:#}"),
+            "a requires \"x >= 1.0.0\" but nothing in the set provides it; add a kit that provides \
+             com.docker.kit/x"
+        );
+    }
+
+    #[test]
+    fn a_require_is_met_only_by_a_version_in_its_constraints() {
+        let w = workload("w").provides(&["node@20.11.1"]);
+        let ok = mixin("a").requires(&["node >= 20.0.0, < 21.0.0"]);
+        assert_eq!(names(&run(w.clone(), vec![ok]).unwrap()), ["a"]);
+        let qualified = mixin("a").requires(&["com.docker.kit/node = 20.11.1"]);
+        assert_eq!(names(&run(w.clone(), vec![qualified]).unwrap()), ["a"]);
+
+        let too_new = mixin("a").requires(&["node >= 21"]);
+        let e = run(w, vec![too_new]).unwrap_err();
+        assert_eq!(
+            format!("{e:#}"),
+            "a requires \"node >= 21\" but the set only offers node@20.11.1 (from w)"
+        );
+        // An unversioned provide satisfies only an unconstrained require.
+        let w = workload("w").provides(&["node"]);
+        assert!(run(w.clone(), vec![mixin("a").requires(&["node"])]).is_ok());
+        let e = run(w, vec![mixin("a").requires(&["node > 0"])]).unwrap_err();
+        assert_eq!(
+            format!("{e:#}"),
+            "a requires \"node > 0\" but the set only offers node (unversioned, from w)"
+        );
+        // Another namespace's name never matches the default one.
+        let w = workload("w").provides(&["com.example/node@20"]);
+        assert!(run(w, vec![mixin("a").requires(&["node"])]).is_err());
+    }
+
+    #[test]
+    fn a_kit_cannot_meet_its_own_require() {
+        let a = mixin("a").provides(&["x@1"]).requires(&["x"]);
+        let e = run(workload("w"), vec![a]).unwrap_err();
+        assert_eq!(
+            format!("{e:#}"),
+            "a requires \"x\" but the set only offers x@1 (from a)"
+        );
+    }
+
+    #[test]
+    fn every_problem_is_reported_and_bad_entries_name_their_kit() {
+        let a = mixin("a").requires(&["x", "Y"]);
+        let e = run(workload("w"), vec![a]).unwrap_err();
+        assert_eq!(
+            format!("{e:#}"),
+            "a requires \"x\" but nothing in the set provides it; add a kit that provides \
+             com.docker.kit/x\n\
+             a: requires entry \"Y\": invalid capability name \"Y\""
+        );
+    }
+
+    #[test]
+    fn a_present_provider_must_meet_integrates_and_conflicts_must_be_absent() {
+        let w = workload("w").provides(&["docker-engine@24.0.7"]);
+        let mut a = mixin("a");
+        a.integrates = vec!["docker-engine >= 25.0.0".into()];
+        assert!(run(workload("bare"), vec![a.clone()]).is_ok());
+        let e = run(w, vec![a]).unwrap_err();
+        assert_eq!(
+            format!("{e:#}"),
+            "a integrates with \"docker-engine >= 25.0.0\" but the set only offers \
+             docker-engine@24.0.7 (from w); upgrade the provider or drop it from the set"
+        );
+
+        let w = workload("w").provides(&["podman@5"]);
+        let mut a = mixin("a");
+        a.conflicts = vec!["podman".into()];
+        let e = run(w, vec![a]).unwrap_err();
+        assert_eq!(
+            format!("{e:#}"),
+            "a conflicts with \"podman\", which w provides; the two cannot compose"
+        );
+    }
+
+    #[test]
+    fn a_met_integrates_orders_like_requires() {
+        let mut a = mixin("a");
+        a.integrates = vec!["b >= 1".into()];
+        let b = mixin("b").provides(&["b@1.2"]);
+        assert_eq!(names(&run(workload("w"), vec![a, b]).unwrap()), ["b", "a"]);
     }
 
     #[test]

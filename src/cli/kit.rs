@@ -12,7 +12,7 @@ use crate::kits::apply::apply;
 use crate::kits::args::{ArgValues, NoResolvedValue};
 use crate::kits::model::{Cap, CapBody, Content, ImageConfig, Kind, Kit, Source};
 use crate::kits::resolve::{resolve, resolve_for};
-use crate::kits::{compose, guest, load};
+use crate::kits::{capability, compose, guest, load};
 use crate::policy::{Decision, Policy, compile};
 use crate::sandbox::{self, CreateRequest, KitPhase, Sandbox};
 use crate::secrets::SecretsFile;
@@ -226,7 +226,7 @@ fn supported(c: &Cap) -> bool {
 }
 
 /// Loads and resolves the kit on its own: a workload by itself, a mixin on an empty workload that
-/// provides whatever the mixin requires.
+/// provides whatever the mixin requires, at a version its constraints accept.
 fn validate<R: Runner>(ctx: &Ctx<R>, reference: &str, args: &KitArgOpts) -> Result<i32> {
     let values = arg_values(args)?;
     let mut kit = load::load(ctx, reference)?;
@@ -235,7 +235,13 @@ fn validate<R: Runner>(ctx: &Ctx<R>, reference: &str, args: &KitArgOpts) -> Resu
         Kind::Workload => resolve(kit, vec![], &values),
         Kind::Mixin => {
             let mut base = empty_workload("validate");
-            base.provides = kit.requires.clone();
+            // A version within each require's constraints; a malformed one fails in `resolve`.
+            base.provides = kit
+                .requires
+                .iter()
+                .filter_map(|r| capability::parse_require(r).ok())
+                .map(|r| capability::witness(&r))
+                .collect();
             resolve(base, vec![kit], &values)
         }
     };
@@ -261,6 +267,8 @@ fn empty_workload(name: &str) -> Kit {
         kind: Kind::Workload,
         provides: vec![],
         requires: vec![],
+        integrates: vec![],
+        conflicts: vec![],
         args: Default::default(),
         caps: vec![],
         env: vec![],
@@ -677,7 +685,7 @@ mod tests {
     }
 
     const NET_KIT: &str = r#"{"schemaVersion":"3","kind":"mixin","name":"net",
-        "provides":["net"],"requires":["base"],
+        "provides":["net@1.0.0"],"requires":["base"],
         "capabilities":[
           {"type":"com.docker.sandbox/network-policy@1","config":{
             "install":{"allow":["pkg.example.com"]},"runtime":{"allow":["api.net.example"]}}},
@@ -1006,7 +1014,11 @@ mod tests {
             t.ctx.vm.runner().uploads().into_iter().collect();
         let kits = &uploads[&format!("{MACHINE}:{}", guest::KITS_FILE)];
         let net_dir = t.ctx.cwd.join("net").canonicalize().unwrap();
-        assert_eq!(*kits, format!("{BASE}net\t{}\tnet\n", net_dir.display()));
+        // The record keeps each provide with its version, for a later `kit add`'s requires.
+        assert_eq!(
+            *kits,
+            format!("{BASE}net\t{}\tnet@1.0.0\n", net_dir.display())
+        );
         assert_eq!(
             uploads[&format!("{MACHINE}:{}", guest::STARTUP_PATH)],
             guest::STARTUP_RUNNER
@@ -1254,8 +1266,43 @@ mod tests {
         dev_sandbox(&t, "");
         v3_kit(&t, "net", NET_KIT, &[]);
         let e = sbt(&mut t.ctx, &["kit", "add", "dev", "./net", "--yes"]).unwrap_err();
-        assert!(format!("{e:#}").contains("requires 'base'"), "{e:#}");
+        assert_eq!(
+            format!("{e:#}"),
+            "net requires \"base\" but nothing in the set provides it; add a kit that provides \
+             com.docker.kit/base"
+        );
         assert!(kit_rules(&t).is_empty());
+    }
+
+    #[test]
+    fn add_matches_versioned_requires_against_the_recorded_provides() {
+        let kit = NET_KIT.replace(r#""requires":["base"]"#, r#""requires":["base >= 2, < 3"]"#);
+        // An old record's bare provide has no version: it meets only unconstrained requires.
+        let mut t = kit_env();
+        dev_sandbox(&t, BASE);
+        v3_kit(&t, "net", &kit, &[]);
+        let e = sbt(&mut t.ctx, &["kit", "add", "dev", "./net", "--yes"]).unwrap_err();
+        assert_eq!(
+            format!("{e:#}"),
+            "net requires \"base >= 2, < 3\" but the set only offers base (unversioned, from base)"
+        );
+
+        let mut t = kit_env();
+        dev_sandbox(&t, "base\tghcr.io/acme/base@sha256:00\tbase@2.4.1\n");
+        v3_kit(&t, "net", &kit, &[]);
+        sbt(&mut t.ctx, &["kit", "add", "dev", "./net", "--yes"]).unwrap();
+    }
+
+    #[test]
+    fn validate_checks_a_mixin_against_a_set_that_meets_its_requires() {
+        let mut t = kit_env();
+        let kit = NET_KIT.replace(
+            r#""requires":["base"]"#,
+            r#""requires":["base > 2.1, < 3","com.example/tool = 1.4"]"#,
+        );
+        v3_kit(&t, "net", &kit, &[]);
+        assert_eq!(sbt(&mut t.ctx, &["kit", "validate", "./net"]).unwrap(), 0);
+        assert_eq!(t.stdout(), "ok\n");
     }
 
     #[test]
@@ -1407,7 +1454,10 @@ mod tests {
             t.ctx.vm.runner().uploads().into_iter().collect();
         let kits = &uploads[&format!("{MACHINE}:{}", guest::KITS_FILE)];
         let net_dir = t.ctx.cwd.join("net").canonicalize().unwrap();
-        assert_eq!(*kits, format!("{record}net\t{}\tnet\n", net_dir.display()));
+        assert_eq!(
+            *kits,
+            format!("{record}net\t{}\tnet@1.0.0\n", net_dir.display())
+        );
     }
 
     #[test]

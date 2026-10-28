@@ -2,6 +2,7 @@
 schemaVersion: "3"
 kind: mixin
 displayName: net2
+version: "1.0.0"
 provides: [net2]
 capabilities:
   - type: com.docker.sandbox/network-policy@2

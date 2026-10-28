@@ -1199,7 +1199,7 @@ fn mixin_layer_is_visible_in_the_guest() {
     let kit = reg.push(
         "layer",
         Image::empty().with_file("opt/e2e-mixin/hello", "hello from a mixin layer\n"),
-        descriptor("mixin", &["e2e-layer"], serde_json::json!([])),
+        descriptor("mixin", &["e2e-layer@1.0.0"], serde_json::json!([])),
     );
     e.create_with_kits(&[&kit]);
     assert_eq!(

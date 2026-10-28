@@ -197,6 +197,8 @@ fn parse_warn(yaml: &str, dir: &Path) -> Result<(Kit, Vec<String>)> {
         kind,
         provides: vec![],
         requires: s.requires.and_then(|r| r.agent).into_iter().collect(),
+        integrates: vec![],
+        conflicts: vec![],
         args,
         caps,
         env: s.environment.variables.into_iter().collect(),

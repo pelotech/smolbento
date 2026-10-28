@@ -684,7 +684,8 @@ mod tests {
     use super::*;
     use crate::kits::model::{ImageConfig, Kind};
 
-    const DESC: &str = r#"{"schemaVersion":"3","kind":"workload","provides":["shell"]}"#;
+    const DESC: &str =
+        r#"{"schemaVersion":"3","kind":"workload","version":"1.0.0","provides":["shell"]}"#;
 
     fn src() -> Source {
         Source::Registry("docker.io/acme/kit:1".into())
@@ -696,7 +697,7 @@ mod tests {
         let digest = fixtures::oci_layout(d.path(), Some(DESC), &[b"layer"], "{}");
         let kit = read_layout(d.path(), src()).unwrap();
         assert_eq!(kit.kind, Kind::Workload);
-        assert_eq!(kit.provides, vec!["shell"]);
+        assert_eq!(kit.provides, vec!["shell@1"]);
         assert_eq!(kit.digest.as_deref(), Some(digest.as_str()));
         assert_eq!(kit.content, Content::Oci(d.path().to_path_buf()));
         assert_eq!(kit.command, None);

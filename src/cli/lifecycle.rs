@@ -10,6 +10,7 @@ use super::plan;
 use super::{CreateArgs, Ctx, PruneArgs, ResetArgs, RmArgs, SandboxOpts, confirm};
 use crate::agents;
 use crate::kits::args::ArgValues;
+use crate::kits::capability;
 use crate::kits::load;
 use crate::kits::model::{Content, Kind, Kit, Source};
 use crate::kits::resolve::{Plan, resolve_for};
@@ -238,7 +239,10 @@ pub(crate) fn kit_plan<R: Runner>(
 fn needs_docker_kit(docker_image: bool, workload: &Kit, mixins: &[Kit]) -> bool {
     docker_image
         && !std::iter::once(workload).chain(mixins).any(|k| {
-            k.source == Source::Builtin("docker") || k.provides.iter().any(|p| p == "docker")
+            k.source == Source::Builtin("docker")
+                || k.provides
+                    .iter()
+                    .any(|p| capability::provides_name(p, "docker"))
         })
 }
 
