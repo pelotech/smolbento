@@ -66,10 +66,10 @@ agent and `exec` alike; your own `-e` wins). None of them holds a secret value.
 - `SANDBOX_NAME`, `SANDBOX_VM_ID` (the name) and `SANDBOX_ID` (a new UUID on every create). A
   `fork` gets its own name and a new id, not its parent's.
 - `WORKSPACE_DIR`: the host path of the primary workspace; the guest workdir when mountless.
-- `SBX_AGENT`: the preset or kit name. `IS_SANDBOX=1` for `claude`.
+- `SBX_AGENT`: the preset or kit name. `IS_SANDBOX=1` for the `claude` preset.
 - `SBX_CRED_<SVC>_MODE`: `apikey` when the service's secret is bound at create, else `none`.
   `shell` gets all eight services and `claude` only `ANTHROPIC`, as in sbx; the other presets and
-  kits get none (sbx's set for them hasn't been compared).
+  kits get none, even one named `claude` or `shell` (sbx's set for them hasn't been compared).
 - `TZ` is passed from the host's `TZ` in TTY sessions (`run`, `exec -it`) only when it's set; sbx
   derives one when it isn't.
 
@@ -168,8 +168,8 @@ Differences:
 | OAuth credentials | Passthrough and sentinel tokens | Passthrough only (sentinel tokens need smolvm support) |
 | Method and path rules | Enforced (`403` outside the rule) | Not enforced (as for `policy allow --method/--path`); a kit that requires them is refused |
 | `kit add` | Recreates the container; refuses v2 kits with files and v3 mixins on a v3 workload; asks before opening network access, with no flag to skip the question | Applies to the running sandbox, files and deny rules included. Image layers, credentials, ports, volumes, resources, environment variables and `long-running` need a recreate ("recreate required"); asks before opening network access, and `-y/--yes` skips the question. A new startup step that fails only warns |
-| `kit inspect --offline`, `kit validate --offline` | Skips the daemon policy (`kit.allowedSources`, `kit.allowLocalKits`, `kit.requireSignature`); local directory or ZIP only; v3 source directories refused (no builder) | Skips the source policy, `kit.allow-local` included, as sbx documents. Local v2 kits and Smolfiles only. Registry refs and v3 source directories are refused (they need the network); `validate` of a v2 workload whose command comes from its image is refused too. No ZIP or git references |
-| `kit inspect` output | Summary table; `--format json` is the v2-shaped descriptor; `--kit-arg` shows substituted content | Same shape, plus `--format yaml` and `--json`. After sbx's lines the table adds `Capabilities:` (what smolbento supports), then Source, Digest, Provides, Requires, Integrates, Conflicts and Args when present; JSON/YAML carry those under a top-level `smolbento` key. `--kit-arg` is only checked, not substituted into the output |
+| `kit inspect --offline`, `kit validate --offline` | Skips the daemon policy (`kit.allowedSources`, `kit.allowLocalKits`, `kit.requireSignature`); local directory or ZIP only; v3 source directories refused (no builder) | Skips the source policy, `kit.allowLocalKits` included, as sbx documents. Local v2 kits and Smolfiles only. Registry refs and v3 source directories are refused (they need the network); `validate` of a v2 workload whose command comes from its image is refused too. No ZIP or git references |
+| `kit inspect` output | Summary table; `--format json` is the v2-shaped descriptor; `--kit-arg` shows substituted content | Same shape, plus `--format yaml` and `--json`. After sbx's lines the table adds `Capabilities:` (what smolbento supports), then Source, Digest, Provides, Requires, Integrates, Conflicts, Credentials (each service and the hosts its secret is sent to) and Args when present; JSON/YAML carry those under a top-level `smolbento` key. `--kit-arg` is only checked, not substituted into the output |
 | `kit validate` output | `✓ <ref> — valid`; `--json` gives `{reference, kind, valid, warnings}` | Same, with `--format table\|json\|yaml`. A failure with `--json`/`--format json\|yaml` prints the same object with `valid: false` and `errors: [<message>]` on stdout and exits 1; table output prints the plain error |
 | Unmeasured parts of `kit inspect`/`validate` | | Inferred, not measured against sbx: `kind` values other than `directory` (we use `file`, `registry`, `builtin`); `Schema:` for registry (`v3`), builtin (`v3`) and Smolfile (`smolfile`) kits; the network rule counts (install and runtime rules merged, hosts deduplicated) and init-file count (v2 `files/home` and `files/workspace` files included); the JSON layout under sandbox, permissions, credentials and setup; the failure object above; `Template:` shown only for a built local v3 kit |
 | The name `docker` | A registry ref (the `docker` image) | The shipped Docker kit; write `docker.io/library/docker` for the image |

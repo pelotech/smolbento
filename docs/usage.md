@@ -203,9 +203,10 @@ unless you pass `-u` or `-w`; `--privileged` runs as root. It exits with the com
 
 The agent and every `exec` see the sandbox variables sbx sets: `SANDBOX_NAME`, `SANDBOX_VM_ID`
 (the name), `SANDBOX_ID` (a UUID, new for each sandbox and each fork), `WORKSPACE_DIR` (the host
-path of the primary workspace), `SBX_AGENT` (the agent or kit name) and, for `shell` and `claude`,
-`SBX_CRED_<SERVICE>_MODE` (`apikey` when that service's secret was set at create, else `none`).
-`claude` also gets `IS_SANDBOX=1`. Your own `-e` wins. See
+path of the primary workspace), `SBX_AGENT` (the agent or kit name) and, for the `shell` and
+`claude` presets (not kits of those names), `SBX_CRED_<SERVICE>_MODE` (`apikey` when that
+service's secret was set at create, else `none`). The `claude` preset also gets `IS_SANDBOX=1`.
+Your own `-e` wins. See
 [sbx compatibility](sbx-compatibility.md#sandbox-environment) for what's left out.
 
 ## Docker inside a sandbox
@@ -252,7 +253,7 @@ numeric `USER` runs as the account with that uid). A workload whose image has no
 A local kit is always written as a path: `./my-kit`, `../kits/my-kit`, `.` or an absolute path.
 As in sbx, a bare word is never a kit, even when a directory of that name exists: `sbt create
 my-kit` is `unknown agent "my-kit"`, and `--kit my-kit` says it's `not a local path and does not
-look like a registry reference`. A registry reference has a `/`, so `alpine` is
+look like a registry reference`. A registry reference has a `/`, so for the `alpine` image write
 `docker.io/library/alpine`. `docker` is always the shipped kit.
 
 Kits can version what they provide and what they need, as in the kit spec:
@@ -263,7 +264,8 @@ on `claude`.
 
 `sbt kit inspect REF` prints a summary (name, kind, schema, network rule counts, credentials and
 commands), then the capabilities and what smolbento supports of each, then the source and the
-kit's provides, requires and arguments. `--format json` (or `--json`) and `--format yaml` give the
+kit's provides, requires, credentials (each service and the hosts its secret is sent to) and
+arguments. `--format json` (or `--json`) and `--format yaml` give the
 kit as a v2-shaped descriptor, with smolbento's extras under a `smolbento` key; the credential
 entries there list the hosts each secret is sent to. `sbt kit validate REF` prints
 `✓ REF — valid`, or the error and exit status 1; with `--json` or `--format json|yaml` it prints
