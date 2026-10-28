@@ -133,7 +133,8 @@ pub struct SandboxOptions {
 pub fn read(path: &Path) -> Result<RawFile> {
     let path = std::path::absolute(path)?;
     let dir = path.parent().map(Path::to_path_buf).unwrap_or_default();
-    let text = std::fs::read_to_string(&path).with_context(|| format!("reading {}", path.display()))?;
+    let text =
+        std::fs::read_to_string(&path).with_context(|| format!("reading {}", path.display()))?;
     let (tokenized, refs) = tokenize(&text);
     let mut value: Value = serde_saphyr::from_str(&tokenized)
         .map_err(|e| anyhow::anyhow!("{}: {e}", path.display()))?;
@@ -159,7 +160,9 @@ fn tokenize(text: &str) -> (String, Vec<Ref>) {
     for c in REF.captures_iter(&escaped) {
         let m = c.get(0).unwrap();
         let line_start = escaped[..m.start()].rfind('\n').map_or(0, |i| i + 1);
-        let line_end = escaped[m.end()..].find('\n').map_or(escaped.len(), |i| m.end() + i);
+        let line_end = escaped[m.end()..]
+            .find('\n')
+            .map_or(escaped.len(), |i| m.end() + i);
         let before = &escaped[line_start..m.start()];
         let after = &escaped[m.end()..line_end];
         let after_ok = after.trim().is_empty()
@@ -197,9 +200,7 @@ impl RawFile {
             }
         }
         let bad = match &self.value {
-            Value::Object(m) => m
-                .iter()
-                .any(|(k, x)| has_token(k) || walk(x, k == "args")),
+            Value::Object(m) => m.iter().any(|(k, x)| has_token(k) || walk(x, k == "args")),
             _ => false,
         };
         if bad {
@@ -228,7 +229,12 @@ impl RawFile {
         Ok(value)
     }
 
-    fn text_of(&self, r: &Ref, args: &BTreeMap<String, String>, project_dir: &Path) -> Result<String> {
+    fn text_of(
+        &self,
+        r: &Ref,
+        args: &BTreeMap<String, String>,
+        project_dir: &Path,
+    ) -> Result<String> {
         if let Some(name) = r.expr.strip_prefix("env.args.") {
             return match args.get(name) {
                 Some(v) => Ok(v.clone()),
@@ -278,7 +284,8 @@ impl RawFile {
         args: &BTreeMap<String, String>,
         project_dir: &Path,
     ) -> Result<Value> {
-        let index = |c: &regex_lite::Captures| c.get(1).and_then(|n| n.as_str().parse::<usize>().ok());
+        let index =
+            |c: &regex_lite::Captures| c.get(1).and_then(|n| n.as_str().parse::<usize>().ok());
         // A plain scalar that is exactly one reference becomes a number or bool when the text is
         // one; anything else stays the text as written.
         if let Some(c) = TOKEN.captures(s).filter(|c| c[0].len() == s.len())
@@ -400,7 +407,11 @@ fn culprit(root: &Value) -> Option<String> {
     'down: loop {
         let children: Vec<(Seg, &Value)> = match at {
             Value::Object(m) => m.iter().map(|(k, x)| (Seg::Key(k.clone()), x)).collect(),
-            Value::Array(a) => a.iter().enumerate().map(|(i, x)| (Seg::Idx(i), x)).collect(),
+            Value::Array(a) => a
+                .iter()
+                .enumerate()
+                .map(|(i, x)| (Seg::Idx(i), x))
+                .collect(),
             _ => break,
         };
         for (seg, child) in children {
@@ -440,7 +451,10 @@ mod tests {
     }
 
     fn args(pairs: &[(&str, &str)]) -> BTreeMap<String, String> {
-        pairs.iter().map(|(k, v)| (k.to_string(), v.to_string())).collect()
+        pairs
+            .iter()
+            .map(|(k, v)| (k.to_string(), v.to_string()))
+            .collect()
     }
 
     fn expand(yaml: &str, a: &[(&str, &str)]) -> Result<Value> {
@@ -450,11 +464,19 @@ mod tests {
 
     #[test]
     fn unquoted_reference_is_typed_quoted_is_a_string() {
-        let v = expand("sandboxOptions:\n  cpus: ${{ env.args.n }}\n", &[("n", "4")]).unwrap();
+        let v = expand(
+            "sandboxOptions:\n  cpus: ${{ env.args.n }}\n",
+            &[("n", "4")],
+        )
+        .unwrap();
         assert_eq!(v["sandboxOptions"]["cpus"], 4);
         let v = expand("env:\n  N: \"${{ env.args.n }}\"\n", &[("n", "4")]).unwrap();
         assert_eq!(v["env"]["N"], "4");
-        let e = expand("sandboxOptions:\n  cpus: \"${{ env.args.n }}\"\n", &[("n", "4")]).unwrap_err();
+        let e = expand(
+            "sandboxOptions:\n  cpus: \"${{ env.args.n }}\"\n",
+            &[("n", "4")],
+        )
+        .unwrap_err();
         assert!(e.to_string().contains("sandboxOptions.cpus"), "{e}");
     }
 
@@ -478,7 +500,11 @@ mod tests {
 
     #[test]
     fn escapes_and_dollars_stay_literal() {
-        let v = expand("env:\n  LIT: \"$PATH:/x and $${{ env.args.c }}\"\n", &[("c", "1")]).unwrap();
+        let v = expand(
+            "env:\n  LIT: \"$PATH:/x and $${{ env.args.c }}\"\n",
+            &[("c", "1")],
+        )
+        .unwrap();
         assert_eq!(v["env"]["LIT"], "$PATH:/x and ${{ env.args.c }}");
     }
 
@@ -493,7 +519,11 @@ mod tests {
 
     #[test]
     fn substituted_text_is_not_expanded_again() {
-        let v = expand("env:\n  X: ${{ env.args.a }}\n", &[("a", "${{ env.args.x }}")]).unwrap();
+        let v = expand(
+            "env:\n  X: ${{ env.args.a }}\n",
+            &[("a", "${{ env.args.x }}")],
+        )
+        .unwrap();
         assert_eq!(v["env"]["X"], "${{ env.args.x }}");
     }
 
@@ -506,7 +536,10 @@ mod tests {
     #[test]
     fn undeclared_argument_names_file_and_line() {
         let (_d, f) = load("agent: shell\nenv:\n  X: ${{ env.args.nope }}\n");
-        let e = f.expand(&args(&[]), Path::new("/proj")).unwrap_err().to_string();
+        let e = f
+            .expand(&args(&[]), Path::new("/proj"))
+            .unwrap_err()
+            .to_string();
         assert!(
             e.starts_with("the environment references an argument it does not declare: nope ("),
             "{e}"
@@ -516,28 +549,41 @@ mod tests {
 
     #[test]
     fn references_in_keys_or_args_are_refused() {
-        for y in ["env:\n  ${{ env.args.k }}: v\n", "args:\n  x:\n    default: ${{ env.fileDir }}\n"] {
+        for y in [
+            "env:\n  ${{ env.args.k }}: v\n",
+            "args:\n  x:\n    default: ${{ env.fileDir }}\n",
+        ] {
             let d = tempfile::tempdir().unwrap();
             let p = d.path().join("sbxenv.yaml");
             std::fs::write(&p, y).unwrap();
             let e = read(&p).err().unwrap().to_string();
-            assert!(e.contains("references aren't allowed in field names or the args: block"), "{e}");
+            assert!(
+                e.contains("references aren't allowed in field names or the args: block"),
+                "{e}"
+            );
         }
     }
 
     #[test]
     fn unknown_reference_is_named() {
-        let e = expand("env:\n  X: ${{ env.home }}\n", &[]).unwrap_err().to_string();
+        let e = expand("env:\n  X: ${{ env.home }}\n", &[])
+            .unwrap_err()
+            .to_string();
         assert!(e.contains("env.home"), "{e}");
     }
 
     #[test]
     fn relative_paths_become_absolute() {
-        let (_d, f) = load("workspace: ./ws\nkits: [./k, org/k, /abs/k]\nadditionalWorkspaces:\n  - path: ../x\n");
+        let (_d, f) = load(
+            "workspace: ./ws\nkits: [./k, org/k, /abs/k]\nadditionalWorkspaces:\n  - path: ../x\n",
+        );
         let v = f.expand(&args(&[]), Path::new("/proj")).unwrap();
         let dir = f.dir.display().to_string();
         assert_eq!(v["workspace"], format!("{dir}/ws"));
-        assert_eq!(v["kits"], serde_json::json!([format!("{dir}/k"), "org/k", "/abs/k"]));
+        assert_eq!(
+            v["kits"],
+            serde_json::json!([format!("{dir}/k"), "org/k", "/abs/k"])
+        );
         let parent = f.dir.parent().unwrap().display().to_string();
         assert_eq!(v["additionalWorkspaces"][0]["path"], format!("{parent}/x"));
     }
@@ -550,9 +596,13 @@ mod tests {
 
     #[test]
     fn wrong_type_names_the_field_path() {
-        let e = expand("sandboxOptions:\n  cpus: lots\n", &[]).unwrap_err().to_string();
+        let e = expand("sandboxOptions:\n  cpus: lots\n", &[])
+            .unwrap_err()
+            .to_string();
         assert!(e.contains(": sandboxOptions.cpus: "), "{e}");
-        let e = expand("ports:\n  - sandbox: 80\n  - sandbox: x\n", &[]).unwrap_err().to_string();
+        let e = expand("ports:\n  - sandbox: 80\n  - sandbox: x\n", &[])
+            .unwrap_err()
+            .to_string();
         assert!(e.contains(": ports[1].sandbox: "), "{e}");
     }
 
