@@ -95,27 +95,33 @@ pub fn create_managed(dirs: &[HostDir]) -> Result<()> {
         let Some(mode) = d.managed_mode.filter(|_| !d.host.is_dir()) else {
             continue;
         };
-        (|| -> std::io::Result<()> {
-            let mut builder = std::fs::DirBuilder::new();
-            builder.recursive(true);
-            #[cfg(unix)]
-            {
-                use std::os::unix::fs::{DirBuilderExt, PermissionsExt};
-                if let Some(parent) = d.host.parent() {
-                    builder.mode(0o700).create(parent)?;
-                }
-                builder.recursive(false).mode(mode).create(&d.host)?;
-                // The create mode is filtered by the umask; set it exactly.
-                std::fs::set_permissions(&d.host, std::fs::Permissions::from_mode(mode))?;
-            }
-            #[cfg(not(unix))]
-            {
-                let _ = mode;
-                builder.create(&d.host)?;
-            }
-            Ok(())
-        })()
-        .with_context(|| format!("creating {}", d.host.display()))?;
+        create_dir(&d.host, mode).with_context(|| format!("creating {}", d.host.display()))?;
+    }
+    Ok(())
+}
+
+/// One managed directory. A directory that appears meanwhile (a concurrent first create of the
+/// same kit) is reused as it is.
+fn create_dir(host: &Path, mode: u32) -> std::io::Result<()> {
+    let mut builder = std::fs::DirBuilder::new();
+    builder.recursive(true);
+    #[cfg(unix)]
+    {
+        use std::os::unix::fs::{DirBuilderExt, PermissionsExt};
+        if let Some(parent) = host.parent() {
+            builder.mode(0o700).create(parent)?;
+        }
+        match builder.recursive(false).mode(mode).create(host) {
+            Err(e) if e.kind() == std::io::ErrorKind::AlreadyExists => {}
+            Err(e) => return Err(e),
+            // The create mode is filtered by the umask; set it exactly.
+            Ok(()) => std::fs::set_permissions(host, std::fs::Permissions::from_mode(mode))?,
+        }
+    }
+    #[cfg(not(unix))]
+    {
+        let _ = mode;
+        builder.create(host)?;
     }
     Ok(())
 }
@@ -189,5 +195,22 @@ mod tests {
         );
         let id = hex(&Sha256::digest(b"/private/tmp/k"));
         assert_eq!(d.parent().unwrap(), Path::new("/data").join(id));
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn a_dir_created_concurrently_is_reused_untouched() {
+        use std::os::unix::fs::PermissionsExt;
+        let root = std::env::temp_dir().join(format!("sbt-hm-{}", std::process::id()));
+        let host = root.join("kit").join("dir");
+        create_dir(&host, 0o755).unwrap();
+        std::fs::write(host.join("keep"), "1").unwrap();
+        std::fs::set_permissions(&host, std::fs::Permissions::from_mode(0o700)).unwrap();
+        // The lost race: the directory exists when the create runs.
+        create_dir(&host, 0o755).unwrap();
+        assert!(host.join("keep").exists());
+        let mode = std::fs::metadata(&host).unwrap().permissions().mode() & 0o777;
+        assert_eq!(mode, 0o700);
+        std::fs::remove_dir_all(&root).unwrap();
     }
 }
