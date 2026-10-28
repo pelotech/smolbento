@@ -417,6 +417,12 @@ fn add_running<R: Runner>(
         .collect();
     // Install hooks run where the create ran them: a v3 workload's image WORKDIR.
     let mut workload = empty_workload(&sb.meta.agent);
+    // A workload kit, whatever its name, isn't a preset: create gives every one a command
+    // (`sbx.command`), and its agent file is the recorded `sbx.agent-file` or none.
+    if sb.meta.command.is_some() {
+        workload.source = Source::Registry(String::new());
+        workload.digest = Some("sha256:recorded".into());
+    }
     workload.config = sb.meta.image_workdir.clone().map(|workdir| ImageConfig {
         workdir,
         ..Default::default()
@@ -1054,12 +1060,29 @@ mod tests {
 
     #[test]
     fn add_drops_a_mixin_context_when_the_workload_has_no_agent_file() {
-        let mut t = kit_env();
-        dev_sandbox_labeled(&t, "running", &[("sbx.agent", "wl")], BASE);
-        v3_kit(&t, "net", NET_KIT, &[]);
-        sbt(&mut t.ctx, &["kit", "add", "dev", "./net", "--yes"]).unwrap();
+        // A workload kit named like a preset is still a workload kit: no preset agent file.
+        for agent in ["wl", "claude"] {
+            let mut t = kit_env();
+            dev_sandbox_labeled(
+                &t,
+                "running",
+                &[
+                    ("sbx.agent", agent),
+                    ("sbx.command", r#"["/bin/agent"]"#),
+                    ("sbx.workspace", "/w/proj"),
+                    ("sbx.workspaces", r#"["/w/proj"]"#),
+                ],
+                BASE,
+            );
+            v3_kit(&t, "net", NET_KIT, &[]);
+            sbt(&mut t.ctx, &["kit", "add", "dev", "./net", "--yes"]).unwrap();
+            assert_no_net_context(&t);
+        }
+    }
+
+    fn assert_no_net_context(t: &TestEnv) {
         assert!(
-            !dev_calls(&t).iter().any(|l| l.contains("Use net."))
+            !dev_calls(t).iter().any(|l| l.contains("Use net."))
                 && !t
                     .ctx
                     .vm
@@ -1068,7 +1091,7 @@ mod tests {
                     .iter()
                     .any(|(_, c)| c.contains("Use net.")),
             "{:#?}",
-            dev_calls(&t)
+            dev_calls(t)
         );
     }
 
