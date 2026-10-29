@@ -86,13 +86,34 @@ pub fn apply(req: &mut CreateRequest, preset: bool) -> Result<()> {
     Ok(())
 }
 
-/// A TTY session gets the host's `TZ`, if set (sbx also derives one when unset; we don't).
-pub fn session_tz(host: &BTreeMap<String, String>, tty: bool, env: &mut Vec<(String, String)>) {
-    if !tty || env.iter().any(|(k, _)| k == "TZ") {
-        return;
+/// What a TTY session takes from the host, as sbx: `TZ` (sbx also derives one when unset; we
+/// don't) and the terminal's identity, which agents read to print clickable (OSC 8) links.
+const TTY_HOST_VARS: [&str; 4] = ["TZ", "TERM_PROGRAM", "TERM_PROGRAM_VERSION", "COLORTERM"];
+
+/// Adds a session's variables to `env`, never over one it already sets (`-e` wins): the host's
+/// `TTY_HOST_VARS` on a TTY, and, in a sandbox with the browser bridge, `BROWSER=xdg-open`.
+/// Without a `DISPLAY` a Linux agent assumes it has no browser and only prints the URL; `BROWSER`
+/// makes it call the bridge's `xdg-open` (sbx sets `WAYLAND_DISPLAY` for its compositor instead).
+pub fn session_env(
+    host: &BTreeMap<String, String>,
+    tty: bool,
+    bridge: bool,
+    env: &mut Vec<(String, String)>,
+) {
+    let mut add = |k: &str, v: &str| {
+        if !env.iter().any(|(e, _)| e == k) {
+            env.push((k.into(), v.into()));
+        }
+    };
+    if tty {
+        for k in TTY_HOST_VARS {
+            if let Some(v) = host.get(k).filter(|v| !v.is_empty()) {
+                add(k, v);
+            }
+        }
     }
-    if let Some(tz) = host.get("TZ").filter(|v| !v.is_empty()) {
-        env.push(("TZ".into(), tz.clone()));
+    if bridge {
+        add("BROWSER", "xdg-open");
     }
 }
 
@@ -189,17 +210,67 @@ mod tests {
         assert_ne!(a, new_uuid().unwrap());
     }
 
+    fn vars(pairs: &[(&str, &str)]) -> Vec<(String, String)> {
+        pairs
+            .iter()
+            .map(|(k, v)| (k.to_string(), v.to_string()))
+            .collect()
+    }
+
     #[test]
     fn tz_only_on_a_tty_with_host_tz() {
         let host: BTreeMap<_, _> = [("TZ".to_string(), "Asia/Kolkata".to_string())].into();
         let mut e = Vec::new();
-        session_tz(&host, false, &mut e);
+        session_env(&host, false, false, &mut e);
         assert!(e.is_empty());
-        session_tz(&BTreeMap::new(), true, &mut e);
+        session_env(&BTreeMap::new(), true, false, &mut e);
         assert!(e.is_empty());
-        session_tz(&host, true, &mut e);
-        assert_eq!(e, vec![("TZ".to_string(), "Asia/Kolkata".to_string())]);
-        session_tz(&host, true, &mut e);
+        session_env(&host, true, false, &mut e);
+        assert_eq!(e, vars(&[("TZ", "Asia/Kolkata")]));
+        session_env(&host, true, false, &mut e);
         assert_eq!(e.len(), 1);
+    }
+
+    #[test]
+    fn a_tty_session_gets_the_host_terminal_so_links_are_clickable() {
+        let host: BTreeMap<_, _> = [
+            ("TERM_PROGRAM", "iTerm.app"),
+            ("TERM_PROGRAM_VERSION", "3.5.0"),
+            ("COLORTERM", "truecolor"),
+            ("LC_TERMINAL", "iTerm2"),
+        ]
+        .into_iter()
+        .map(|(k, v)| (k.to_string(), v.to_string()))
+        .collect();
+        let mut e = Vec::new();
+        session_env(&host, false, false, &mut e);
+        assert!(e.is_empty(), "{e:?}");
+        session_env(&host, true, false, &mut e);
+        assert_eq!(
+            e,
+            vars(&[
+                ("TERM_PROGRAM", "iTerm.app"),
+                ("TERM_PROGRAM_VERSION", "3.5.0"),
+                ("COLORTERM", "truecolor"),
+            ])
+        );
+        // `-e` wins over the host's value.
+        let mut e = vars(&[("COLORTERM", "256")]);
+        session_env(&host, true, false, &mut e);
+        assert_eq!(e.iter().filter(|(k, _)| k == "COLORTERM").count(), 1);
+        assert!(e.contains(&("COLORTERM".into(), "256".into())));
+    }
+
+    #[test]
+    fn a_bridged_sandbox_points_browser_at_the_shim() {
+        let mut e = Vec::new();
+        session_env(&BTreeMap::new(), false, true, &mut e);
+        assert_eq!(e, vars(&[("BROWSER", "xdg-open")]));
+        let mut e = Vec::new();
+        session_env(&BTreeMap::new(), true, false, &mut e);
+        assert!(e.is_empty(), "no bridge, no BROWSER: {e:?}");
+        let mut e = vars(&[("BROWSER", "w3m")]);
+        session_env(&BTreeMap::new(), true, true, &mut e);
+        assert_eq!(e, vars(&[("BROWSER", "w3m")]));
     }
 }

@@ -100,6 +100,11 @@ agent and `exec` alike; your own `-e` wins). None of them holds a secret value.
   kits get none, even one named `claude` or `shell` (sbx's set for them hasn't been compared).
 - `TZ` is passed from the host's `TZ` in TTY sessions (`run`, `exec -it`) only when it's set; sbx
   derives one when it isn't.
+- `TERM_PROGRAM`, `TERM_PROGRAM_VERSION` and `COLORTERM` are passed from the host in TTY sessions,
+  as in sbx, so agents can tell your terminal shows clickable links.
+- `BROWSER=xdg-open` in every `run`/`exec` of a sandbox with the browser bridge. Without a display
+  a Linux agent (Claude Code, for one) assumes there's no browser and only prints the URL; sbx sets
+  `WAYLAND_DISPLAY` for its compositor instead.
 
 Left out: `*_API_KEY=proxy-managed` and the `GH_TOKEN` sentinel (smolvm uses its own
 placeholders), `MCP_*` (no MCP gateway), `GIT_CONFIG_*`, the proxy specifics
