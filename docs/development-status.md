@@ -67,7 +67,7 @@ terminal fail until you do.
 | 4c | Host services: `localhost[:PORT]` rules reach the host as `host.docker.internal`, live (interim: every host port, until smolvm can open one) | ✅ Done (interim) |
 | 5a | Host mounts: `host-mount@1`, `--mount`, `sbxenv.yaml` `mounts:`, `inspect` | ✅ Done |
 | 5e | Browser and clipboard bridge while attached (`xdg-open`, `wl-copy`/`xclip`/`xsel`/`pbcopy`, the login callback relay, `browser.enabled`) | ✅ Done |
-| 5 | The other parts, easiest first: 5b SSH (`ssh-agent@1`, `setup ssh`); 5c skills (`--skills`, `skills`, `agent-skills@1`/`agent-skill@1`); 5d `template`; 5f MCP (`--static-mcp`, `mcp`) | Planned |
+| 5 | The other parts, easiest first: 5b SSH agent forwarding (`ssh-agent@1` with `sign` limits, `ssh.agentForwardingEnabled`, `ssh.agentSocketPath`); 5c skills (`--skills`, `skills`, `agent-skills@1`/`agent-skill@1`); 5d `template`; 5f MCP (`--static-mcp`, `mcp`); 5g `ssh-agent@1` `authenticate` limits (logins only to named servers, checked against your known hosts); 5h `setup ssh` (`ssh NAME.sbx` into sandboxes, e.g. from VS Code Remote-SSH; the `ssh.autoCreate`, `ssh.defaultAgent`, `ssh.defaultTemplate`, `ssh.workspaceRoot` settings) | Planned |
 | 6 | Finish `sbxenv.yaml`: `env plan`, remembered approvals (`env.rememberHostCommands`), `lifecycle`, `bindings`, `registries`, `mcp`, the remaining `sandboxOptions` | Planned |
 | 7 | Kit publishing: `kit pack/push/pull/sign/verify` | Planned |
 | 8 | The `plus` kit, built and published with smolbento itself (an end-to-end check of everything before it) | Planned |
