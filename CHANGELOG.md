@@ -1,5 +1,12 @@
 # Changelog
 
+## [0.12.0](https://github.com/pelotech/smolbento/compare/v0.11.0...v0.12.0) (2026-10-29)
+
+
+### Features
+
+* **skills:** agent skills store, --skills modes and kit skill capabilities ([#45](https://github.com/pelotech/smolbento/issues/45)) ([89ae87b](https://github.com/pelotech/smolbento/commit/89ae87bd0d5fc44a6c9c2ba901dd4099e6c2ef08))
+
 ## [0.11.0](https://github.com/pelotech/smolbento/compare/v0.10.1...v0.11.0) (2026-10-29)
 
 
