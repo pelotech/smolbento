@@ -1,6 +1,6 @@
 [package]
 name = "smolbento"
-version = "0.9.0"
+version = "0.10.0"
 edition = "2024"
 description = "Docker Sandboxes (sbx) compatible agent sandboxes on smolvm microVMs"
 license = "Apache-2.0"
