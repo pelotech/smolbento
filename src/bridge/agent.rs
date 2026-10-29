@@ -34,6 +34,18 @@ pub struct PhaseGrant {
 }
 
 impl AgentGrant {
+    /// A built-in agent's own grant (sbx's `shell`): optional, runtime, unrestricted.
+    pub fn built_in() -> AgentGrant {
+        AgentGrant {
+            install: None,
+            runtime: Some(PhaseGrant {
+                sign: None,
+                required: false,
+                kit: None,
+            }),
+        }
+    }
+
     pub fn is_empty(&self) -> bool {
         self.install.is_none() && self.runtime.is_none()
     }

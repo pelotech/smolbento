@@ -332,9 +332,9 @@ fn settle_agent<R: Runner>(
     private: impl FnOnce(&Path) -> bool,
 ) -> Result<Vec<String>> {
     req.ssh_agent = None;
-    let Some(grant) = kits.map(|p| &p.merged.ssh_agent) else {
-        return Ok(vec![]);
-    };
+    // No plan is the bare preset: a built-in agent's own grant (`resolve_for` adds it to a plan).
+    let built_in = agent::AgentGrant::built_in();
+    let grant = kits.map_or(&built_in, |p| &p.merged.ssh_agent);
     if grant.is_empty() || name::is_internal(&req.name) {
         return Ok(vec![]);
     }
@@ -1480,6 +1480,29 @@ mod tests {
         );
         // A runtime grant isn't the install phase's: its hooks don't see it.
         assert!(hook.contains("unset SSH_AUTH_SOCK && "), "{hook}");
+    }
+
+    /// `create shell` with no kits has no plan, and still gets the built-in agent's grant.
+    #[test]
+    fn a_bare_built_in_agent_gets_the_agent_too() {
+        let agent = host_agent();
+        let sock = agent.path().join("agent.sock").display().to_string();
+        let t = test_env(&[("SSH_AUTH_SOCK", &sock)]);
+        let fake = t.ctx.vm.runner();
+        fake.fail(&["machine", "status"], "NOT_FOUND", "vm not found");
+        let mut req = agent_request(true);
+        let _ = create_with(&t.ctx, &mut req, &[], None, None, &mut |_| {});
+        let lines = t.ctx.vm.runner().call_lines();
+        let create = lines
+            .iter()
+            .find(|l| l.starts_with("machine create"))
+            .unwrap_or_else(|| panic!("{lines:#?}"));
+        assert!(create.contains(":/run/ssh-agent.sock"), "{create}");
+        assert!(create.contains(AGENT_ENV), "{create}");
+        assert!(
+            create.contains(r#"sbx.ssh-agent={"runtime":{"sign":null}}"#),
+            "{create}"
+        );
     }
 
     #[test]
