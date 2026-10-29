@@ -122,14 +122,7 @@ fn add_url<R: Runner>(
     force: bool,
 ) -> Result<()> {
     let checkout = repo::clone(url)?;
-    let found = repo::discover(checkout.root())?;
-    if found.is_empty()
-        && std::fs::symlink_metadata(checkout.root().join("SKILL.md")).is_ok_and(|m| m.is_file())
-    {
-        bail!(
-            "SKILL.md at the repository root isn't a skill directory; put the skill in a directory\n  try: sbt skills add --help"
-        );
-    }
+    let found = repo::discover(checkout.root(), &repo::repo_name(url))?;
     let picked = pick(&found, only)?;
     let replacing: Vec<&str> = picked
         .keys()
@@ -188,12 +181,17 @@ fn import<R: Runner>(ctx: &Ctx<R>, store: &Store, a: &SkillsImportArgs) -> Resul
             Event::Missing(d) => missing.push(d),
         }
     }
-    // sbx prints the missing-source notices after the picks.
+    // sbx prints the missing-source notices after the picks, on stdout.
     for d in missing {
-        eprintln!(
+        writeln!(
+            &ctx.out,
             "No skills directory found at {}; nothing to import",
             d.display()
-        );
+        )?;
+    }
+    // Nothing to import: no summary, and nothing written.
+    if picks.is_empty() {
+        return Ok(());
     }
     let n = picks.len();
     let s = if n == 1 { "" } else { "s" };
@@ -278,6 +276,10 @@ fn install<R: Runner>(
 
 fn update<R: Runner>(ctx: &Ctx<R>, store: &Store, a: &SkillsUpdateArgs) -> Result<i32> {
     let sources = store.sources()?;
+    if a.skills.is_empty() && sources.skills.is_empty() {
+        writeln!(&ctx.out, "No repository-installed skills found")?;
+        return Ok(0);
+    }
     let names: Vec<String> = if a.skills.is_empty() {
         sources.skills.keys().cloned().collect()
     } else {
@@ -297,29 +299,41 @@ fn update<R: Runner>(ctx: &Ctx<R>, store: &Store, a: &SkillsUpdateArgs) -> Resul
             .or_default()
             .push(n);
     }
-    let mut code = 0;
+    let (mut code, mut updated) = (0, 0);
     for (url, skills) in by_repo {
         // One repository failing doesn't stop the others.
         match update_repo(ctx, store, &sources, url, &skills) {
-            Ok(c) => code = code.max(c),
+            Ok((c, n)) => {
+                code = code.max(c);
+                updated += n;
+            }
             Err(e) => {
                 eprintln!("error: {url}: {e:#}");
                 code = 1;
             }
         }
     }
+    if updated > 0 {
+        writeln!(
+            &ctx.out,
+            "Updated {updated} skill{} in {}",
+            if updated == 1 { "" } else { "s" },
+            store.dir.display()
+        )?;
+    }
     Ok(code)
 }
 
+/// Updates `skills` from `url`: the exit code, and how many it updated.
 fn update_repo<R: Runner>(
     ctx: &Ctx<R>,
     store: &Store,
     sources: &Sources,
     url: &str,
     skills: &[&String],
-) -> Result<i32> {
+) -> Result<(i32, usize)> {
     let c = repo::clone(url)?;
-    let found = repo::discover(c.root())?;
+    let found = repo::discover(c.root(), &repo::repo_name(url))?;
     let mut code = 0;
     let mut picked = BTreeMap::new();
     for &n in skills {
@@ -333,7 +347,7 @@ fn update_repo<R: Runner>(
         }
     }
     install(ctx, store, &c, &picked, "Updated")?;
-    Ok(code)
+    Ok((code, picked.len()))
 }
 
 #[cfg(test)]
@@ -487,7 +501,11 @@ mod tests {
         std::fs::write(r.path().join("alpha/SKILL.md"), "v2").unwrap();
         commit(r.path(), &["-a"], "v2");
         sbt(&mut t.ctx, &["skills", "upgrade", "alpha"]).unwrap();
-        assert_eq!(t.stdout(), "Updated skill alpha\n");
+        let s = store.dir.display();
+        assert_eq!(
+            t.stdout(),
+            format!("Updated skill alpha\nUpdated 1 skill in {s}\n")
+        );
         assert_eq!(
             std::fs::read_to_string(store.dir.join("alpha/SKILL.md")).unwrap(),
             "v2"
@@ -523,7 +541,13 @@ mod tests {
         commit(&b, &["-a"], "v2");
         std::fs::remove_dir_all(&a).unwrap(); // sorts first, fails to clone
         assert_eq!(sbt(&mut t.ctx, &["skills", "update"]).unwrap(), 1);
-        assert_eq!(t.stdout(), "Updated skill gamma\n");
+        assert_eq!(
+            t.stdout(),
+            format!(
+                "Updated skill gamma\nUpdated 1 skill in {}\n",
+                store.dir.display()
+            )
+        );
         assert_eq!(
             std::fs::read_to_string(store.dir.join("gamma/SKILL.md")).unwrap(),
             "v2"
@@ -544,29 +568,145 @@ mod tests {
         crate::testgit::git(r.path(), &["add", "-A"]);
         commit(r.path(), &[], "v2");
         assert_eq!(sbt(&mut t.ctx, &["skills", "update"]).unwrap(), 1);
-        assert_eq!(t.stdout(), "Updated skill alpha\n");
+        assert_eq!(
+            t.stdout(),
+            format!(
+                "Updated skill alpha\nUpdated 1 skill in {}\n",
+                store.dir.display()
+            )
+        );
         assert_eq!(
             std::fs::read_to_string(store.dir.join("alpha/SKILL.md")).unwrap(),
             "v2"
         );
     }
 
+    /// A committed repo at `<tmp>/<name>` holding `files`.
+    fn named_repo(name: &str, files: &[(&str, &str)]) -> (tempfile::TempDir, std::path::PathBuf) {
+        let t = tempfile::tempdir().unwrap();
+        let r = t.path().join(name);
+        for (p, body) in files {
+            let f = r.join(p);
+            std::fs::create_dir_all(f.parent().unwrap()).unwrap();
+            std::fs::write(f, body).unwrap();
+        }
+        crate::testgit::git(&r, &["init", "-q"]);
+        crate::testgit::git(&r, &["add", "-A"]);
+        commit(&r, &[], "v1");
+        (t, r)
+    }
+
     #[test]
-    fn add_explains_a_skill_md_at_the_repository_root() {
+    fn a_skill_md_at_the_root_installs_the_repository_as_one_skill() {
         let t = test_env(&[]);
-        let r = tempfile::tempdir().unwrap();
-        std::fs::write(r.path().join("SKILL.md"), "s").unwrap();
-        crate::testgit::git(r.path(), &["init", "-q"]);
-        crate::testgit::git(r.path(), &["add", "-A"]);
-        commit(r.path(), &[], "v1");
-        let store = Store::new(&t.ctx.paths);
-        let e = add_url(&t.ctx, &store, r.path().to_str().unwrap(), &[], false)
-            .unwrap_err()
-            .to_string();
-        assert_eq!(
-            e,
-            "SKILL.md at the repository root isn't a skill directory; put the skill in a directory\n  try: sbt skills add --help"
+        let (_d, r) = named_repo(
+            "affiliate-skills",
+            &[
+                ("SKILL.md", "---\nname: affiliate-check\n---\n"),
+                (".env.example", "X=1"),
+                ("skills/nested/SKILL.md", "n"),
+            ],
         );
+        let store = Store::new(&t.ctx.paths);
+        add_url(&t.ctx, &store, r.to_str().unwrap(), &[], false).unwrap();
+        assert!(
+            t.stdout()
+                .starts_with("Added skill affiliate-check\nAdded 1 skill into ")
+        );
+        let s = store.dir.join("affiliate-check");
+        assert!(s.join(".env.example").is_file());
+        assert!(s.join("skills/nested/SKILL.md").is_file());
+        assert!(!s.join(".git").exists());
+        assert_eq!(store.list().unwrap(), ["affiliate-check"]);
+        // Without a frontmatter name: the repository's basename.
+        let (_d, r) = named_repo("solo.git", &[("SKILL.md", "plain")]);
+        add_url(&t.ctx, &store, r.to_str().unwrap(), &[], false).unwrap();
+        assert!(store.has("solo"));
+    }
+
+    #[test]
+    fn add_and_update_name_skills_from_their_frontmatter() {
+        let mut t = test_env(&[]);
+        let (_d, r) = named_repo(
+            "skills",
+            &[("template/SKILL.md", "---\nname: template-skill\n---\nv1")],
+        );
+        let url = r.to_str().unwrap();
+        let store = Store::new(&t.ctx.paths);
+        add_url(&t.ctx, &store, url, &["template-skill".into()], false).unwrap();
+        t.stdout();
+        assert!(store.has("template-skill") && !store.has("template"));
+        std::fs::write(
+            r.join("template/SKILL.md"),
+            "---\nname: template-skill\n---\nv2",
+        )
+        .unwrap();
+        commit(&r, &["-a"], "v2");
+        sbt(&mut t.ctx, &["skills", "update"]).unwrap();
+        assert_eq!(
+            t.stdout(),
+            format!(
+                "Updated skill template-skill\nUpdated 1 skill in {}\n",
+                store.dir.display()
+            )
+        );
+        assert!(
+            std::fs::read_to_string(store.dir.join("template-skill/SKILL.md"))
+                .unwrap()
+                .ends_with("v2")
+        );
+    }
+
+    #[test]
+    fn update_with_no_repository_skills_says_so() {
+        let mut t = test_env(&[]);
+        assert_eq!(sbt(&mut t.ctx, &["skills", "update"]).unwrap(), 0);
+        assert_eq!(t.stdout(), "No repository-installed skills found\n");
+    }
+
+    #[test]
+    fn a_failed_clone_says_why_on_one_line() {
+        let t = test_env(&[]);
+        let d = tempfile::tempdir().unwrap();
+        let store = Store::new(&t.ctx.paths);
+        let e = add_url(
+            &t.ctx,
+            &store,
+            d.path().join("nope").to_str().unwrap(),
+            &[],
+            false,
+        )
+        .unwrap_err()
+        .to_string();
+        assert!(
+            e.starts_with("clone skills repository: exit status 128: "),
+            "{e}"
+        );
+    }
+
+    #[test]
+    fn import_with_nothing_to_import_prints_only_the_notices() {
+        let home = tempfile::tempdir().unwrap();
+        let h = home.path();
+        let mut t = test_env(&[("HOME", h.to_str().unwrap())]);
+        let want: String = crate::skills::import::SOURCES
+            .iter()
+            .map(|s| {
+                format!(
+                    "No skills directory found at {}; nothing to import\n",
+                    h.join(s).display()
+                )
+            })
+            .collect();
+        for args in [
+            &["skills", "import", "--dry-run"][..],
+            &["skills", "import"],
+        ] {
+            sbt(&mut t.ctx, args).unwrap();
+            assert_eq!(t.stdout(), want, "{args:?}");
+        }
+        let store = Store::new(&t.ctx.paths);
+        assert!(!store.dir.exists() && !store.meta.exists());
     }
 
     #[test]
