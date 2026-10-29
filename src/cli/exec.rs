@@ -6,6 +6,7 @@ use anyhow::{Context, Result, bail};
 
 use super::plan;
 use super::{CpArgs, Ctx, ExecArgs, Unsupported};
+use crate::bridge;
 use crate::sandbox::{self, name, options};
 use crate::smolvm::{ExecSpec, Runner};
 
@@ -38,6 +39,12 @@ pub fn exec<R: Runner>(ctx: &mut Ctx<R>, a: &ExecArgs) -> Result<i32> {
         tty: a.tty,
         detach: false,
         cmd: a.command.clone(),
+    };
+    // `exec -it` is an attached session: serve the browser and clipboard bridge during it.
+    let _bridge = if a.interactive && a.tty {
+        bridge::attach(&ctx.env, &ctx.settings, &sb)
+    } else {
+        None
     };
     ctx.vm.exec(&spec)
 }
@@ -266,5 +273,33 @@ mod tests {
                 .to_string()
                 .contains("absolute")
         );
+    }
+
+    #[test]
+    fn exec_it_serves_the_bridge_while_attached() {
+        let mut t = test_env(&[]);
+        let (name, seen) = bridge_probe(&t, "exec", true);
+        sbt(&mut t.ctx, &["exec", "-it", &name, "sh"]).unwrap();
+        // Without a terminal it isn't an attached session.
+        sbt(&mut t.ctx, &["exec", "-i", &name, "sh"]).unwrap();
+        sbt(&mut t.ctx, &["exec", &name, "true"]).unwrap();
+        assert_eq!(*seen.borrow(), vec![true, false, false]);
+        assert!(!crate::bridge::host_socket(&name).exists());
+    }
+
+    #[test]
+    fn exec_it_serves_no_bridge_for_an_unlabelled_sandbox() {
+        let mut t = test_env(&[]);
+        let (name, seen) = bridge_probe(&t, "exec", false);
+        sbt(&mut t.ctx, &["exec", "-it", &name, "sh"]).unwrap();
+        assert_eq!(*seen.borrow(), vec![false]);
+    }
+
+    #[test]
+    fn exec_it_serves_no_bridge_over_ssh_without_a_display() {
+        let mut t = test_env(&[("SSH_CONNECTION", "10.0.0.1 50000 10.0.0.2 22")]);
+        let (name, seen) = bridge_probe(&t, "exec", true);
+        sbt(&mut t.ctx, &["exec", "-it", &name, "sh"]).unwrap();
+        assert_eq!(*seen.borrow(), vec![false]);
     }
 }

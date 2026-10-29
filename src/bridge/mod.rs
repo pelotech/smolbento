@@ -1,6 +1,8 @@
 //! The browser and clipboard bridge: guest shims (`xdg-open`, `wl-copy`, …) that reach the host
 //! over a socket smolvm mounts into the sandbox, served while a user is attached.
 
+mod host;
+mod server;
 mod shims;
 
 use std::path::PathBuf;
@@ -9,6 +11,8 @@ use sha2::{Digest, Sha256};
 
 use crate::kits::registry::hex;
 
+pub use host::{attach, handlers};
+pub use server::{Handlers, Server, serve};
 pub use shims::{install_cmd, remove_cmd};
 
 /// Where the host socket appears in the guest (`--mount-socket`).

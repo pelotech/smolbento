@@ -25,6 +25,7 @@ pub struct FakeRunner {
     download: RefCell<Option<Vec<u8>>>,
     uploads: RefCell<Vec<(String, String)>>,
     progress: RefCell<Vec<(Vec<String>, Vec<String>)>>,
+    during_interactive: RefCell<Option<Box<dyn Fn()>>>,
 }
 
 fn strings(items: &[&str]) -> Vec<String> {
@@ -132,6 +133,12 @@ impl FakeRunner {
         self
     }
 
+    /// Run `f` inside each interactive call, to see what holds while the user is attached.
+    pub fn during_interactive(&self, f: impl Fn() + 'static) -> &Self {
+        *self.during_interactive.borrow_mut() = Some(Box::new(f));
+        self
+    }
+
     /// Make interactive calls fail, as when smolvm can't be spawned.
     pub fn interactive_fail(&self, message: &str) -> &Self {
         *self.interactive_error.borrow_mut() = Some(message.into());
@@ -236,6 +243,9 @@ impl Runner for FakeRunner {
 
     fn interactive(&self, args: &[String]) -> Result<i32> {
         self.interactive_calls.borrow_mut().push(args.to_vec());
+        if let Some(f) = self.during_interactive.borrow().as_ref() {
+            f();
+        }
         if let Some(message) = self.interactive_error.borrow().as_ref() {
             anyhow::bail!("{message}");
         }
