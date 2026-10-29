@@ -519,16 +519,16 @@ sbt skills rm pdf
 ```
 
 - `add` clones with your host `git`, so anything git can fetch works, private repositories
-  included. Every directory that holds a `SKILL.md` is a skill, named after the directory.
-  `--skill` (repeatable, or comma-separated) picks some. An existing skill asks before it's
-  replaced; `-f` skips the question, and without a terminal `-f` is required.
+  included. Every directory below the repository root that holds a `SKILL.md` is a skill, named after the directory.
+  `--skill` (repeatable, or comma-separated) picks some. A skill that already exists
+  asks before it's replaced; `-f` skips the question, and without a terminal replacing needs `-f`.
 - `import` copies the skills from `~/.agents/skills`, `~/.claude/skills`,
   `~/.config/opencode/skills`, `~/.copilot/skills`, `~/.cursor/skills` and `~/.factory/skills`, in
   that order. When two directories have the same skill, the earlier one wins and the other gets a
   warning.
 - `update` works only for skills added from a repository (smolbento records where in
   `agent-skills-metadata/sources.json`). Importing a skill drops that record.
-- `rm` asks first, like `add`; `-f` skips it.
+- `rm` always asks first; `-f` skips it. `import` asks only when it would replace a skill, like `add`.
 
 `sbt reset` deletes the store and its records.
 
@@ -572,8 +572,8 @@ Each agent has its own directory:
 
 `~` is `/home/agent`. Sandboxes created before skills existed have none; recreate them.
 
-The links are made by the start's setup as the `agent` user. An image without an `agent` account
-(and a v3 workload kit's image user, when there's none) gets no links: the start warns
+The links are made by the start's setup as the sandbox's launch user: a v3 workload kit's image
+user if it has one, else `agent`. An image with neither gets no links: the start warns
 (`couldn't link shared skills`) and goes on. `sbx` images have `agent`.
 
 ### Skills from kits
@@ -581,9 +581,10 @@ The links are made by the start's setup as the `agent` user. An image without an
 A kit can ask for more skills directories and ship skills of its own:
 
 - `agent-skills@1` names a directory (`path`, absolute) that gets the store, with `mode`
-  `readonly` (the default) or `readwrite`. The sandbox's mode, the agent's directory and the kit's
-  mode all apply, and the narrowest wins; `--skills off` leaves the directory empty of store
-  skills. Kits that name the same path share it, with the widest mode.
+  `readonly` (the default) or `readwrite`. For each directory, the widest
+  request among the agent's own directory (read-write) and the kits wins, then the sandbox's
+  `--skills` mode caps it (`off` leaves the directory empty of store skills). A kit's `mode` only
+  limits directories that it alone names. Kits that name the same path share it.
 - `agent-skill@1` bundles a skill from the kit's image: `path` is the skill's directory, `name`
   (optional) is its name in the skills directory, defaulting to the directory's name. At first
   start smolbento checks that `SKILL.md` is a file and that no skill of that name is there, then
@@ -592,10 +593,10 @@ A kit can ask for more skills directories and ship skills of its own:
   `warning: skipping skill NAME: reason` (or a note) and the sandbox starts without it. A bundled
   skill with the same name as a stored skill is a conflict too: the store link is there first.
   smolbento only links bundled skills and never runs anything in them.
-- A directory that gets bundled skills is never mounted over, so with `readwrite` it gets
-  read-only links instead. Mounting the store over it would put the kit's skills in your store.
-- These steps run as the `agent` user, so a required bundled skill in an image without an `agent`
-  account fails the create. `kit add` refuses kits with either capability: mounts are set at
+- When a kit bundles skills, every skills directory gets read-only links, even with `readwrite`,
+  and is never mounted over. Mounting the store over it would put the kit's skills in your store.
+- The bundled-skill step runs as the kit's user if it names one, else `agent`, so a required
+  bundled skill in an image with neither fails the create. `kit add` refuses kits with either capability: mounts are set at
   create, so create a new sandbox with the kit.
 
 ## Environments (sbxenv.yaml)
