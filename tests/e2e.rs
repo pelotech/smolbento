@@ -51,6 +51,8 @@ impl E2e {
             .env("SMOLBENTO_DOCKER", "false")
             // Never your SSH agent: only the SSH tests set a throwaway one in `vars`.
             .env_remove("SSH_AUTH_SOCK")
+            .env_remove("SMOLBENTO_SSH_AGENT_SOCKET")
+            .env_remove("SMOLBENTO_SSH_AGENT_FORWARDING")
             .envs(self.vars.iter().map(|(k, v)| (k, v)))
     }
 

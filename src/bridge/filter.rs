@@ -39,11 +39,29 @@ const AGENT_DEADLINE: Duration = Duration::from_secs(120);
 /// connection, so turning `ssh.agentForwardingEnabled` off blocks new connections at once.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct Backing {
-    pub paths: Paths,
-    pub env: BTreeMap<String, String>,
+    paths: Paths,
+    env: BTreeMap<String, String>,
 }
 
 impl Backing {
+    /// Keeps only the env vars the host agent lookup reads, so the rest of the process env (which
+    /// may hold secrets) is never carried in a plan, or printed with it.
+    pub fn new(paths: &Paths, env: &BTreeMap<String, String>) -> Self {
+        const KEPT: [&str; 3] = [
+            "SSH_AUTH_SOCK",
+            "SMOLBENTO_SSH_AGENT_SOCKET",
+            "SMOLBENTO_SSH_AGENT_FORWARDING",
+        ];
+        Backing {
+            paths: paths.clone(),
+            env: env
+                .iter()
+                .filter(|(k, _)| KEPT.contains(&k.as_str()))
+                .map(|(k, v)| (k.clone(), v.clone()))
+                .collect(),
+        }
+    }
+
     /// The host agent for a new connection; `None` refuses it: forwarding is off, there's no
     /// agent, or the settings can't be read.
     fn agent(&self) -> Option<PathBuf> {
@@ -60,11 +78,7 @@ impl Backing {
 /// only warn, and the guest's agent connections then fail.
 pub fn attach(paths: &Paths, env: &BTreeMap<String, String>, sb: &Sandbox) -> Option<Server> {
     let access = sb.meta.ssh_agent.as_ref()?.runtime.clone()?;
-    let backing = Backing {
-        paths: paths.clone(),
-        env: env.clone(),
-    };
-    serve_for(sb.name(), access, backing)
+    serve_for(sb.name(), access, Backing::new(paths, env))
 }
 
 /// Serves `access` on the sandbox `name`'s agent socket; problems only warn.

@@ -291,10 +291,7 @@ pub fn prepare_create<R: Runner>(
             steps,
             restart_without: req.credential_install.clone(),
             rule_ids: ids,
-            agent: Some(crate::bridge::filter::Backing {
-                paths: ctx.paths.clone(),
-                env: ctx.env.clone(),
-            }),
+            agent: Some(crate::bridge::filter::Backing::new(&ctx.paths, &ctx.env)),
         });
     }
     if !denies.is_empty() {
@@ -1490,8 +1487,14 @@ mod tests {
         let t = test_env(&[("SSH_AUTH_SOCK", &sock)]);
         let fake = t.ctx.vm.runner();
         fake.fail(&["machine", "status"], "NOT_FOUND", "vm not found");
+        fake.once_ok(
+            &["machine", "status"],
+            &machine_json("sbx-s1", "created", &[("sbx.name", "s1")]),
+        );
+        fake.once_fail(&["machine", "status"], "NOT_FOUND", "vm not found");
         let mut req = agent_request(true);
-        let _ = create_with(&t.ctx, &mut req, &[], None, None, &mut |_| {});
+        check_free(&t.ctx, "s1").unwrap();
+        create_with(&t.ctx, &mut req, &[], None, None, &mut |_| {}).unwrap();
         let lines = t.ctx.vm.runner().call_lines();
         let create = lines
             .iter()
@@ -1503,6 +1506,77 @@ mod tests {
             create.contains(r#"sbx.ssh-agent={"runtime":{"sign":null}}"#),
             "{create}"
         );
+    }
+
+    /// With no agent available a bare preset is created without a socket, and without an error.
+    #[test]
+    fn a_bare_built_in_agent_without_an_agent_gets_none() {
+        let t = test_env(&[("SMOLBENTO_SSH_AGENT_FORWARDING", "false")]);
+        let fake = t.ctx.vm.runner();
+        fake.fail(&["machine", "status"], "NOT_FOUND", "vm not found");
+        fake.once_ok(
+            &["machine", "status"],
+            &machine_json("sbx-s1", "created", &[("sbx.name", "s1")]),
+        );
+        fake.once_fail(&["machine", "status"], "NOT_FOUND", "vm not found");
+        let mut req = agent_request(true);
+        check_free(&t.ctx, "s1").unwrap();
+        create_with(&t.ctx, &mut req, &[], None, None, &mut |_| {}).unwrap();
+        let lines = t.ctx.vm.runner().call_lines();
+        let create = lines
+            .iter()
+            .find(|l| l.starts_with("machine create"))
+            .unwrap_or_else(|| panic!("{lines:#?}"));
+        assert!(!create.contains("ssh-agent"), "{create}");
+        assert!(!create.contains("SSH_AUTH_SOCK"), "{create}");
+    }
+
+    /// An internal sandbox (`_builder`) never gets the agent, even with one available.
+    #[test]
+    fn an_internal_name_gets_no_agent() {
+        let agent = host_agent();
+        let sock = agent.path().join("agent.sock").display().to_string();
+        let t = test_env(&[("SSH_AUTH_SOCK", &sock)]);
+        let fake = t.ctx.vm.runner();
+        fake.fail(&["machine", "status"], "NOT_FOUND", "vm not found");
+        fake.once_ok(
+            &["machine", "status"],
+            &machine_json("sbx-s1", "created", &[("sbx.name", "s1")]),
+        );
+        fake.once_fail(&["machine", "status"], "NOT_FOUND", "vm not found");
+        let mut req = agent_request(true);
+        req.name = "_builder".into();
+        check_free(&t.ctx, "s1").unwrap();
+        create_with(&t.ctx, &mut req, &[], None, None, &mut |_| {}).unwrap();
+        let lines = t.ctx.vm.runner().call_lines();
+        let create = lines
+            .iter()
+            .find(|l| l.starts_with("machine create"))
+            .unwrap_or_else(|| panic!("{lines:#?}"));
+        assert!(!create.contains("ssh-agent"), "{create}");
+        assert!(!create.contains("SSH_AUTH_SOCK"), "{create}");
+    }
+
+    /// A plan's Debug output never carries the process env beyond what the agent lookup reads.
+    #[test]
+    fn a_kit_first_start_debug_output_has_no_secrets() {
+        let t = test_env(&[
+            ("SSH_AUTH_SOCK", "/a.sock"),
+            ("MY_SECRET_TOKEN", "hunter2-secret-value"),
+        ]);
+        let first = sandbox::KitFirstStart {
+            steps: Default::default(),
+            restart_without: Default::default(),
+            rule_ids: vec![],
+            agent: Some(crate::bridge::filter::Backing::new(
+                &t.ctx.paths,
+                &t.ctx.env,
+            )),
+        };
+        let shown = format!("{first:?}");
+        assert!(shown.contains("/a.sock"), "{shown}");
+        assert!(!shown.contains("hunter2-secret-value"), "{shown}");
+        assert!(!shown.contains("MY_SECRET_TOKEN"), "{shown}");
     }
 
     #[test]

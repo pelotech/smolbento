@@ -507,7 +507,6 @@ fn setup<R: Runner>(
     Ok(())
 }
 
-/// What a start says when the socket directory isn't `private`: per socket the sandbox has.
 /// Checks the socket directory (once, and only for a sandbox with the bridge or an agent):
 /// whether the bridge's shims may be installed, and the warnings a start prints.
 fn check_socket_dir(sb: &Sandbox, private: &dyn Fn(&Path) -> bool) -> (bool, Vec<String>) {
@@ -516,6 +515,7 @@ fn check_socket_dir(sb: &Sandbox, private: &dyn Fn(&Path) -> bool) -> (bool, Vec
     (sb.meta.bridge && ok, unsafe_dir_warnings(sb, &dir, ok))
 }
 
+/// What a start says when the socket directory isn't `private`: per socket the sandbox has.
 fn unsafe_dir_warnings(sb: &Sandbox, dir: &Path, private: bool) -> Vec<String> {
     let mut out = Vec::new();
     if private {
@@ -523,7 +523,8 @@ fn unsafe_dir_warnings(sb: &Sandbox, dir: &Path, private: bool) -> Vec<String> {
     }
     let mut warn = |what: &str| {
         out.push(format!(
-            "warning: {} isn't a private directory owned by you; {} gets no {what} until it is",
+            "warning: {} isn't a private directory owned by you; {} gets no {what} unless \
+             it can be made private",
             dir.display(),
             sb.name()
         ))
@@ -1159,7 +1160,7 @@ mod tests {
         let unsafe_dir = |what: &str| {
             format!(
                 "warning: {} isn't a private directory owned by you; claude-myrepo gets no {what} \
-                 until it is",
+                 unless it can be made private",
                 dir.display()
             )
         };
@@ -1970,10 +1971,8 @@ echo "$g""#,
             let vm = Smolvm::new(fake);
             let (_dir, paths) = crate::config::test_paths();
             let mut plan = kit_plan(&[]);
-            plan.kit.as_mut().unwrap().agent = Some(bridge::filter::Backing {
-                paths,
-                env: Default::default(),
-            });
+            plan.kit.as_mut().unwrap().agent =
+                Some(bridge::filter::Backing::new(&paths, &Default::default()));
             let sb = create(
                 &vm,
                 &request(),

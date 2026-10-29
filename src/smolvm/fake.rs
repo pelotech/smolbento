@@ -143,7 +143,6 @@ impl FakeRunner {
         self
     }
 
-    /// Make interactive calls fail, as when smolvm can't be spawned.
     /// Call `f` with the args during each (non-interactive) call that starts with `prefix`.
     pub fn during(&self, prefix: &[&str], f: impl Fn(&[String]) + 'static) -> &Self {
         self.during
@@ -152,6 +151,7 @@ impl FakeRunner {
         self
     }
 
+    /// Make interactive calls fail, as when smolvm can't be spawned.
     pub fn interactive_fail(&self, message: &str) -> &Self {
         *self.interactive_error.borrow_mut() = Some(message.into());
         self
