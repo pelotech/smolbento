@@ -196,6 +196,12 @@ pub fn mounts(store: &Path, label: &Label) -> Vec<Mount> {
 /// one, else uid 1000, as sbx does (smolbento remaps `agent` to the host user).
 const OWNER: &str = r#"if u=$(id -u agent 2>/dev/null) && g=$(id -g agent 2>/dev/null); then o=$u:$g; else o=1000:1000; fi"#;
 
+/// `real DIR` succeeds when DIR's longest existing prefix resolves to itself: no symlink anywhere
+/// in the path (skills paths are canonical), so root never creates or chowns through one. Run
+/// before `mkdir -p` and again after it. A root-owned symlinked component (`/home -> /var/home`)
+/// is refused too.
+const REAL: &str = r#"real() { q=$1; while [ ! -e "$q" ] && [ ! -L "$q" ]; do q=${q%/*}; q=${q:-/}; done; [ "$(cd "$q" 2>/dev/null && pwd -P)" = "$q" ]; }"#;
+
 /// Run as root at every start: for each linking directory, make it (owned by the agent, refusing
 /// a symlink), drop links into the shared mount whose skill is gone, then link every store entry
 /// that has no name there yet (anything already there wins: the agent's own skill, image
@@ -217,10 +223,11 @@ fn link_script_at(shared: &str, owner: &str, dirs: &[Dir]) -> Option<String> {
     Some(format!(
         r#"S={s}
 {owner}
+{REAL}
 rc=0
 for d in {dirs}; do
-  if [ -L "$d" ]; then echo "$d is a symlink; not linking skills there" >&2; rc=1; continue; fi
-  mkdir -p "$d" && chown "$o" "$d" || {{ rc=1; continue; }}
+  if ! real "$d" || ! mkdir -p "$d" || ! real "$d"; then echo "$d is not a plain directory path (a symlink in it?); not linking skills there" >&2; rc=1; continue; fi
+  chown "$o" "$d" || {{ rc=1; continue; }}
   for l in "$d"/* "$d"/.[!.]*; do
     [ -L "$l" ] || continue
     case "$(readlink "$l")" in "$S"/*) [ -e "$l" ] || rm -f "$l" ;; esac
@@ -229,7 +236,7 @@ for d in {dirs}; do
     n=${{e##*/}}
     case "$n" in [A-Za-z0-9]*) ;; *) continue ;; esac
     case "$n" in *[!A-Za-z0-9._-]*) continue ;; esac
-    [ -e "$d/$n" ] || [ -L "$d/$n" ] || {{ ln -s "$S/$n" "$d/$n" && chown -h "$o" "$d/$n"; }} || rc=1
+    [ -e "$d/$n" ] || [ -L "$d/$n" ] || {{ ln -sn "$S/$n" "$d/$n" && chown -h "$o" "$d/$n"; }} || rc=1
   done
 done
 exit $rc"#,
@@ -252,7 +259,7 @@ fn bundled_script_as(owner: &str, dirs: &[Dir], skills: &[(String, String, bool)
         .map(|d| crate::sandbox::sh_quote(&d.path))
         .collect();
     let dirs = dirs.join(" ");
-    let mut s = format!("{owner}\nrc=0\n");
+    let mut s = format!("{owner}\n{REAL}\nrc=0\n");
     for (name, source, optional) in skills {
         let (n, src) = (
             crate::sandbox::sh_quote(name),
@@ -279,7 +286,7 @@ if [ -L {src}/SKILL.md ] || [ ! -f {src}/SKILL.md ]; then why="{source}/SKILL.md
 for d in {dirs}; do
   if [ -z "$why" ] && {{ [ -e "$d"/{n} ] || [ -L "$d"/{n} ]; }}; then why="$d/{name} already exists"; taken=$d; fi
 done
-if [ -n "$why" ]; then {fail}; else for d in {dirs}; do ! [ -L "$d" ] && mkdir -p "$d" && chown "$o" "$d" && ln -s {src} "$d"/{n} && chown -h "$o" "$d"/{n} || {{ {unlinked}; }}; done; fi
+if [ -n "$why" ]; then {fail}; else for d in {dirs}; do real "$d" && mkdir -p "$d" && real "$d" && chown "$o" "$d" && ln -sn {src} "$d"/{n} && chown -h "$o" "$d"/{n} || {{ {unlinked}; }}; done; fi
 "#
         );
     }
@@ -352,7 +359,7 @@ mod tests {
 
     #[test]
     fn bundled_script_links_checks_and_skips_optional_conflicts() {
-        let t = tempfile::tempdir().unwrap();
+        let t = tmp();
         let src = t.path().join("img/review");
         std::fs::create_dir_all(&src).unwrap();
         std::fs::write(src.join("SKILL.md"), "s").unwrap();
@@ -450,7 +457,7 @@ mod tests {
 
     #[test]
     fn bundled_script_fails_a_required_skill_it_cannot_link() {
-        let t = tempfile::tempdir().unwrap();
+        let t = tmp();
         let src = t.path().join("img/review");
         std::fs::create_dir_all(&src).unwrap();
         std::fs::write(src.join("SKILL.md"), "s").unwrap();
@@ -491,7 +498,7 @@ mod tests {
 
     #[test]
     fn link_script_fails_for_a_dir_it_cannot_write_and_still_links_the_others() {
-        let t = tempfile::tempdir().unwrap();
+        let t = tmp();
         let shared = t.path().join("shared");
         std::fs::create_dir_all(shared.join("alpha")).unwrap();
         let locked = t.path().join("locked");
@@ -525,33 +532,73 @@ mod tests {
         assert!(!out.status.success());
     }
 
+    /// A temp dir under the canonical temp path (macOS's `/var` is a symlink, which the scripts
+    /// refuse).
+    fn tmp() -> tempfile::TempDir {
+        tempfile::tempdir_in(std::env::temp_dir().canonicalize().unwrap()).unwrap()
+    }
+
+    /// Both scripts refuse a skills directory reached through a symlink, as its last component or
+    /// a parent (`~/.claude -> /elsewhere`), and create and change nothing there.
     #[test]
-    fn link_script_refuses_a_symlinked_directory() {
-        let t = tempfile::tempdir().unwrap();
+    fn the_scripts_refuse_a_symlinked_directory_or_parent() {
+        let t = tmp();
         let shared = t.path().join("shared");
         std::fs::create_dir_all(shared.join("alpha")).unwrap();
+        let src = t.path().join("img/review");
+        std::fs::create_dir_all(&src).unwrap();
+        std::fs::write(src.join("SKILL.md"), "s").unwrap();
         let elsewhere = t.path().join("elsewhere");
         std::fs::create_dir(&elsewhere).unwrap();
-        let d = t.path().join("skills");
-        std::os::unix::fs::symlink(&elsewhere, &d).unwrap();
-        let script = link_script_at(
-            shared.to_str().unwrap(),
-            ME,
-            &[dir(d.to_str().unwrap(), Access::Link)],
-        )
-        .unwrap();
-        let out = std::process::Command::new("sh")
-            .args(["-c", &script])
-            .output()
-            .unwrap();
-        assert!(!out.status.success());
-        assert!(String::from_utf8_lossy(&out.stderr).contains("is a symlink"));
-        assert!(std::fs::read_dir(&elsewhere).unwrap().next().is_none());
+        let last = t.path().join("skills");
+        std::os::unix::fs::symlink(&elsewhere, &last).unwrap();
+        let parent = t.path().join("home/.claude");
+        std::fs::create_dir(t.path().join("home")).unwrap();
+        std::os::unix::fs::symlink(&elsewhere, &parent).unwrap();
+        let s = src.to_str().unwrap().to_string();
+        let sh = |script: &str| {
+            std::process::Command::new("sh")
+                .args(["-c", script])
+                .output()
+                .unwrap()
+        };
+        for d in [last, parent.join("skills"), parent.join("a/b/skills")] {
+            let dirs = [dir(d.to_str().unwrap(), Access::Link)];
+            let out = sh(&link_script_at(shared.to_str().unwrap(), ME, &dirs).unwrap());
+            assert!(!out.status.success(), "{}", d.display());
+            assert!(
+                String::from_utf8_lossy(&out.stderr).contains("not a plain directory path"),
+                "{}",
+                String::from_utf8_lossy(&out.stderr)
+            );
+            let req = sh(&bundled_script_as(
+                ME,
+                &dirs,
+                &[("review".into(), s.clone(), false)],
+            ));
+            assert!(!req.status.success(), "{}", d.display());
+            let opt = sh(&bundled_script_as(
+                ME,
+                &dirs,
+                &[("review".into(), s.clone(), true)],
+            ));
+            assert!(opt.status.success(), "{}", d.display());
+            assert!(
+                String::from_utf8_lossy(&opt.stderr).contains("warning: skipping skill review"),
+                "{}",
+                String::from_utf8_lossy(&opt.stderr)
+            );
+            assert!(
+                std::fs::read_dir(&elsewhere).unwrap().next().is_none(),
+                "nothing made through {}",
+                d.display()
+            );
+        }
     }
 
     #[test]
     fn link_script_links_new_entries_clears_dangling_and_keeps_the_agent_s_own() {
-        let t = tempfile::tempdir().unwrap();
+        let t = tmp();
         let shared = t.path().join("shared");
         let d = t.path().join("home/.claude/skills");
         for n in ["alpha", "gone", "mine", ".tmp-x"] {

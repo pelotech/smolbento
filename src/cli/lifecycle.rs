@@ -2872,7 +2872,7 @@ SETUP
         let lines = t.ctx.vm.runner().call_lines();
         let bundled = lines
             .iter()
-            .position(|l| l.starts_with("machine exec") && l.contains("ln -s '/opt/k/review'"))
+            .position(|l| l.starts_with("machine exec") && l.contains("ln -sn '/opt/k/review'"))
             .expect("the bundled skills step");
         assert!(
             lines[bundled].contains(" -u root ") && lines[bundled].contains(" -- sh -c "),
@@ -2969,7 +2969,7 @@ SETUP
         sbt(&mut t.ctx, &["create", "shell", ".", "--kit", "./k"]).unwrap();
         let lines = t.ctx.vm.runner().call_lines();
         assert!(lines.iter().any(|l| l.starts_with("machine create")));
-        assert!(!lines.iter().any(|l| l.contains("ln -s ")), "{lines:#?}");
+        assert!(!lines.iter().any(|l| l.contains("ln -sn ")), "{lines:#?}");
     }
 
     #[test]

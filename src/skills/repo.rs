@@ -120,8 +120,11 @@ pub fn clone(url: &str) -> Result<Checkout> {
     })
 }
 
-/// The top-level `name:` in a leading `---` YAML block, trimmed and unquoted.
+/// The top-level `name:` in a leading `---` YAML block (after an optional BOM): a quoted value's
+/// contents, or a plain value without its ` #` comment, trimmed. None for an empty value or a
+/// block scalar (`|`, `>`), so the directory's name is used.
 pub fn frontmatter_name(text: &str) -> Option<String> {
+    let text = text.strip_prefix('\u{feff}').unwrap_or(text);
     let mut lines = text.lines().map(|l| l.trim_end_matches('\r'));
     if lines.next()?.trim_end() != "---" {
         return None;
@@ -130,14 +133,22 @@ pub fn frontmatter_name(text: &str) -> Option<String> {
         if matches!(line.trim_end(), "---" | "...") {
             return None;
         }
-        if let Some(v) = line.strip_prefix("name:") {
-            let v = v.trim();
-            let v = ['"', '\'']
-                .iter()
-                .find_map(|q| v.strip_prefix(*q).and_then(|v| v.strip_suffix(*q)))
-                .unwrap_or(v);
-            return (!v.is_empty()).then(|| v.to_string());
-        }
+        let Some(v) = line.strip_prefix("name:") else {
+            continue;
+        };
+        let v = v.trim();
+        let v = match v.chars().next() {
+            Some(q @ ('"' | '\'')) => v[1..].split(q).next().unwrap_or_default(),
+            Some('|' | '>') => return None,
+            _ => {
+                let end = v
+                    .char_indices()
+                    .find(|&(i, c)| c == '#' && (i == 0 || v[..i].ends_with([' ', '\t'])))
+                    .map_or(v.len(), |(i, _)| i);
+                v[..end].trim()
+            }
+        };
+        return (!v.is_empty()).then(|| v.to_string());
     }
     None
 }
@@ -256,6 +267,14 @@ mod tests {
             ("name: nofront\n", None),
             ("---\nname:\n---\n", None),
             ("", None),
+            // A UTF-8 BOM, comments, and block scalars (which fall back to the directory).
+            ("\u{feff}---\nname: bom\n---\n", Some("bom")),
+            ("---\nname: pdf # the PDF skill\n---\n", Some("pdf")),
+            ("---\nname: a#b\n---\n", Some("a#b")),
+            ("---\nname: \"q\" # c\n---\n", Some("q")),
+            ("---\nname: # none\n---\n", None),
+            ("---\nname: >-\n  folded\n---\n", None),
+            ("---\nname: |\n  lit\n---\n", None),
         ] {
             assert_eq!(frontmatter_name(text).as_deref(), want, "{text:?}");
         }
@@ -339,12 +358,13 @@ mod tests {
                 ("plain/SKILL.md", "no frontmatter"),
                 ("unnamed/SKILL.md", "---\ndescription: x\n---\n"),
                 ("bad/SKILL.md", "---\nname: ../evil\n---\n"),
+                ("folded/SKILL.md", "---\nname: >-\n  x y\n---\n"),
             ],
         );
         let found = discover(d.path(), "repo").unwrap();
         assert_eq!(
             found.keys().collect::<Vec<_>>(),
-            ["plain", "template-skill", "unnamed"]
+            ["folded", "plain", "template-skill", "unnamed"]
         );
         assert!(found["template-skill"].ends_with("template"));
     }
