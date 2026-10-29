@@ -1,6 +1,8 @@
 use std::collections::BTreeMap;
 use std::path::{Path, PathBuf};
 
+use anyhow::{Result, bail};
+
 use crate::bridge;
 use crate::bridge::agent::{self, AgentLabel};
 use crate::smolvm::{CreateSpec, Credential, Mount, NetworkSpec, PortMap};
@@ -153,21 +155,30 @@ pub fn drop_unsafe_bridge(
 }
 
 /// Leaves the SSH agent out when `private` says the host's socket directory isn't private to
-/// this user (as `drop_unsafe_bridge`); returns the warning.
+/// this user (as `drop_unsafe_bridge`); returns the warning. `required`: the kit of a required
+/// grant, which refuses the create instead.
 pub fn drop_unsafe_agent(
     req: &mut CreateRequest,
+    required: Option<&str>,
     private: impl FnOnce(&Path) -> bool,
-) -> Option<String> {
+) -> Result<Option<String>> {
     let dir = bridge::socket_dir();
     if meta(req).ssh_agent.is_none() || private(&dir) {
-        return None;
+        return Ok(None);
+    }
+    if let Some(kit) = required {
+        bail!(
+            "kit {kit}: ssh-agent@1 needs an SSH agent, but {} isn't a private directory owned by \
+             you",
+            dir.display()
+        );
     }
     req.ssh_agent = None;
-    Some(format!(
+    Ok(Some(format!(
         "warning: {} isn't a private directory owned by you; {} gets no SSH agent",
         dir.display(),
         req.name
-    ))
+    )))
 }
 
 pub fn spec(req: &CreateRequest) -> CreateSpec {
@@ -549,14 +560,15 @@ mod tests {
     }
 
     #[test]
-    fn a_socket_dir_that_isnt_private_means_no_agent() {
+    fn a_socket_dir_that_isnt_private_means_no_optional_agent() {
         let mut req = request(false, vec![]);
         req.ssh_agent = runtime_and_install(unrestricted(), None);
         let mut checked = None;
-        let warning = drop_unsafe_agent(&mut req, |dir| {
+        let warning = drop_unsafe_agent(&mut req, None, |dir| {
             checked = Some(dir.to_path_buf());
             false
-        });
+        })
+        .unwrap();
         let dir = bridge::socket_dir();
         assert_eq!(checked.as_deref(), Some(dir.as_path()));
         assert_eq!(
@@ -573,9 +585,32 @@ mod tests {
         // A private one keeps it; no grant checks nothing.
         let mut req = request(false, vec![]);
         req.ssh_agent = runtime_and_install(unrestricted(), None);
-        assert_eq!(drop_unsafe_agent(&mut req, |_| true), None);
+        assert_eq!(drop_unsafe_agent(&mut req, None, |_| true).unwrap(), None);
         assert!(req.ssh_agent.is_some());
         let mut req = request(false, vec![]);
-        assert_eq!(drop_unsafe_agent(&mut req, |_| panic!("checked")), None);
+        let none = drop_unsafe_agent(&mut req, Some("k"), |_| panic!("checked"));
+        assert_eq!(none.unwrap(), None);
+    }
+
+    /// A required grant refuses the create instead.
+    #[test]
+    fn a_socket_dir_that_isnt_private_refuses_a_required_agent() {
+        let mut req = request(false, vec![]);
+        req.ssh_agent = runtime_and_install(unrestricted(), None);
+        let e = drop_unsafe_agent(&mut req, Some("k"), |_| false).unwrap_err();
+        assert_eq!(
+            e.to_string(),
+            format!(
+                "kit k: ssh-agent@1 needs an SSH agent, but {} isn't a private directory owned \
+                 by you",
+                bridge::socket_dir().display()
+            )
+        );
+        // A private one keeps it.
+        assert_eq!(
+            drop_unsafe_agent(&mut req, Some("k"), |_| true).unwrap(),
+            None
+        );
+        assert!(req.ssh_agent.is_some());
     }
 }

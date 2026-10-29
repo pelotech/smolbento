@@ -239,7 +239,9 @@ pub fn prepare_create<R: Runner>(
         .collect();
     // So does a required SSH agent the host can't back. Before `apply`, whose install hooks
     // need to know whether they get the agent.
-    settle_agent(ctx, req, kits)?;
+    for note in settle_agent(ctx, req, kits, bridge::private_dir)? {
+        eprintln!("{note}");
+    }
     let mut policy = ensure_policy(ctx)?;
     let secrets = SecretsFile::load(&ctx.paths)?;
     // Internal sandboxes run untrusted code (a kit's build steps): no secrets, not even as
@@ -317,29 +319,30 @@ pub fn prepare_create<R: Runner>(
 }
 
 /// Sets `req.ssh_agent` from the kits' `ssh-agent@1` grant: refused when a required phase has no
-/// host agent to back it, dropped (with notes) when an optional one hasn't, or when the socket
-/// directory isn't private. Internal sandboxes never get one.
+/// host agent to back it or the socket directory isn't `private`; dropped when an optional one
+/// hasn't or it isn't. Returns the notes and warnings for stderr. Internal sandboxes never get one.
 fn settle_agent<R: Runner>(
     ctx: &Ctx<R>,
     req: &mut CreateRequest,
     kits: Option<&Plan>,
-) -> Result<()> {
+    private: impl FnOnce(&Path) -> bool,
+) -> Result<Vec<String>> {
     req.ssh_agent = None;
     let Some(grant) = kits.map(|p| &p.merged.ssh_agent) else {
-        return Ok(());
+        return Ok(vec![]);
     };
     if grant.is_empty() || name::is_internal(&req.name) {
-        return Ok(());
+        return Ok(vec![]);
     }
-    let (label, notes) = agent::settle(grant, &agent::host_agent(&ctx.settings, &ctx.env)?)?;
-    for note in notes {
-        eprintln!("{note}");
-    }
+    let (label, mut notes) = agent::settle(grant, &agent::host_agent(&ctx.settings, &ctx.env)?)?;
     req.ssh_agent = label;
-    if let Some(warning) = sandbox::create::drop_unsafe_agent(req, bridge::private_dir) {
-        eprintln!("{warning}");
-    }
-    Ok(())
+    let required = [&grant.install, &grant.runtime]
+        .into_iter()
+        .flatten()
+        .find(|p| p.required)
+        .map(|p| p.kit.as_deref().unwrap_or("?"));
+    notes.extend(sandbox::create::drop_unsafe_agent(req, required, private)?);
+    Ok(notes)
 }
 
 /// What a create says when the sandbox gets host access: the localhost rule opens every host port.
@@ -1355,24 +1358,11 @@ mod tests {
         }
     }
 
-    /// Creates `s1` from the `shell` preset (`preset`) or a v3 image workload, plus a mixin `k`
-    /// with an install hook and `caps`, with `env` as sbt's environment. Returns the env, the
-    /// result and the smolvm calls.
-    fn agent_create(
-        env: &[(&str, &str)],
-        preset: bool,
-        caps: Vec<crate::kits::model::Cap>,
-    ) -> (TestEnv, Result<Sandbox>, Vec<String>) {
+    /// The `shell` preset (`preset`) or a v3 image workload, plus a mixin `k` with an install hook
+    /// and `caps`, resolved.
+    fn agent_plan(preset: bool, caps: Vec<crate::kits::model::Cap>) -> Plan {
         use crate::kits::args::ArgValues;
         use crate::kits::model::{Cap, CapBody, Content, Hook, HookCmd, Kind, Kit, Lifecycle};
-        let t = test_env(env);
-        let fake = t.ctx.vm.runner();
-        fake.fail(&["machine", "status"], "NOT_FOUND", "vm not found");
-        fake.once_ok(
-            &["machine", "status"],
-            &machine_json("sbx-s1", "created", &[("sbx.name", "s1")]),
-        );
-        fake.once_fail(&["machine", "status"], "NOT_FOUND", "vm not found");
         let kit = |name: &str, kind, content| Kit {
             name: name.into(),
             source: crate::kits::model::Source::Registry(format!("acme/{name}:1")),
@@ -1411,12 +1401,34 @@ mod tests {
                 ..Default::default()
             }),
         });
-        let plan = crate::kits::resolve::resolve(wl, vec![k], &ArgValues::default()).unwrap();
-        let mut req = CreateRequest {
+        crate::kits::resolve::resolve(wl, vec![k], &ArgValues::default()).unwrap()
+    }
+
+    fn agent_request(preset: bool) -> CreateRequest {
+        CreateRequest {
             name: "s1".into(),
             agent: if preset { "shell" } else { "wl" }.into(),
             ..Default::default()
-        };
+        }
+    }
+
+    /// Creates `s1` from `agent_plan`, with `env` as sbt's environment. Returns the env, the
+    /// result and the smolvm calls.
+    fn agent_create(
+        env: &[(&str, &str)],
+        preset: bool,
+        caps: Vec<crate::kits::model::Cap>,
+    ) -> (TestEnv, Result<Sandbox>, Vec<String>) {
+        let t = test_env(env);
+        let fake = t.ctx.vm.runner();
+        fake.fail(&["machine", "status"], "NOT_FOUND", "vm not found");
+        fake.once_ok(
+            &["machine", "status"],
+            &machine_json("sbx-s1", "created", &[("sbx.name", "s1")]),
+        );
+        fake.once_fail(&["machine", "status"], "NOT_FOUND", "vm not found");
+        let plan = agent_plan(preset, caps);
+        let mut req = agent_request(preset);
         let result = check_free(&t.ctx, "s1")
             .and_then(|()| create_with(&t.ctx, &mut req, &[], Some(&plan), None, &mut |_| {}));
         let lines = t.ctx.vm.runner().call_lines();
@@ -1569,5 +1581,70 @@ mod tests {
             assert!(!create.contains("SSH_AUTH_SOCK"), "{create}");
             assert!(!hook.contains("SSH_AUTH_SOCK &&"), "{hook}");
         }
+    }
+
+    /// What `prepare_create` prints: a note for a kit's dropped grant, none for the implicit one.
+    #[test]
+    fn only_a_kit_grant_dropped_for_want_of_an_agent_leaves_a_note() {
+        let t = test_env(&[]);
+        let plan = agent_plan(false, vec![ssh_agent(&["runtime"], &[], true)]);
+        let mut req = agent_request(false);
+        let notes = settle_agent(&t.ctx, &mut req, Some(&plan), |_| panic!("checked")).unwrap();
+        assert_eq!(
+            notes,
+            [
+                "kit k: no SSH agent for the runtime phase (SSH_AUTH_SOCK is unset); continuing \
+              without one"
+            ]
+        );
+        assert_eq!(req.ssh_agent, None);
+        let plan = agent_plan(true, vec![]);
+        let mut req = agent_request(true);
+        let notes = settle_agent(&t.ctx, &mut req, Some(&plan), |_| panic!("checked")).unwrap();
+        assert!(notes.is_empty(), "{notes:?}");
+        assert_eq!(req.ssh_agent, None);
+    }
+
+    /// An unsafe socket directory refuses a required grant and drops an optional or implicit one.
+    #[test]
+    fn an_unsafe_socket_dir_refuses_a_required_grant_and_drops_the_rest() {
+        let agent = host_agent();
+        let sock = agent.path().join("agent.sock").display().to_string();
+        let t = test_env(&[("SSH_AUTH_SOCK", &sock)]);
+        let dir = crate::bridge::socket_dir();
+        let plan = agent_plan(false, vec![ssh_agent(&["runtime"], &[], false)]);
+        let mut req = agent_request(false);
+        let e = settle_agent(&t.ctx, &mut req, Some(&plan), |_| false).unwrap_err();
+        assert_eq!(
+            e.to_string(),
+            format!(
+                "kit k: ssh-agent@1 needs an SSH agent, but {} isn't a private directory owned \
+                 by you",
+                dir.display()
+            )
+        );
+        let warning = format!(
+            "warning: {} isn't a private directory owned by you; s1 gets no SSH agent",
+            dir.display()
+        );
+        for (preset, caps) in [
+            (false, vec![ssh_agent(&["install", "runtime"], &[], true)]),
+            (true, vec![]),
+        ] {
+            let plan = agent_plan(preset, caps);
+            let mut req = agent_request(preset);
+            let notes = settle_agent(&t.ctx, &mut req, Some(&plan), |_| false).unwrap();
+            assert_eq!(notes, std::slice::from_ref(&warning));
+            assert_eq!(req.ssh_agent, None);
+        }
+        // A private one keeps the required grant.
+        let mut req = agent_request(false);
+        let plan = agent_plan(false, vec![ssh_agent(&["runtime"], &[], false)]);
+        assert!(
+            settle_agent(&t.ctx, &mut req, Some(&plan), |_| true)
+                .unwrap()
+                .is_empty()
+        );
+        assert!(req.ssh_agent.is_some());
     }
 }

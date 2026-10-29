@@ -460,13 +460,10 @@ fn setup<R: Runner>(
     // The socket directory is checked on every start: /tmp can be emptied (macOS does on reboot)
     // and another user can create it first, then the mount would reach them.
     // The SSH agent's socket is in the same directory: unsafe, nothing serves it this start.
-    let dir = bridge::socket_dir();
-    let agent = sb.meta.ssh_agent.is_some();
-    let dir_ok = (sb.meta.bridge || agent) && private(&dir);
-    for w in unsafe_dir_warnings(sb, &dir, dir_ok) {
+    let (safe, warnings) = check_socket_dir(sb, private);
+    for w in warnings {
         eprintln!("{w}");
     }
-    let safe = sb.meta.bridge && dir_ok;
     let (shims, what) = if safe {
         (bridge::install_cmd(), "install")
     } else {
@@ -508,6 +505,14 @@ fn setup<R: Runner>(
 }
 
 /// What a start says when the socket directory isn't `private`: per socket the sandbox has.
+/// Checks the socket directory (once, and only for a sandbox with the bridge or an agent):
+/// whether the bridge's shims may be installed, and the warnings a start prints.
+fn check_socket_dir(sb: &Sandbox, private: &dyn Fn(&Path) -> bool) -> (bool, Vec<String>) {
+    let dir = bridge::socket_dir();
+    let ok = (sb.meta.bridge || sb.meta.ssh_agent.is_some()) && private(&dir);
+    (sb.meta.bridge && ok, unsafe_dir_warnings(sb, &dir, ok))
+}
+
 fn unsafe_dir_warnings(sb: &Sandbox, dir: &Path, private: bool) -> Vec<String> {
     let mut out = Vec::new();
     if private {
@@ -1142,20 +1147,25 @@ mod tests {
                 dir.display()
             )
         };
+        // What `setup` prints: an agent-only sandbox's warning, and no shims.
         assert_eq!(
-            unsafe_dir_warnings(&sb, &dir, false),
-            [unsafe_dir("SSH agent")]
+            check_socket_dir(&sb, &|_| false),
+            (false, vec![unsafe_dir("SSH agent")])
         );
-        assert!(unsafe_dir_warnings(&sb, &dir, true).is_empty());
+        assert_eq!(check_socket_dir(&sb, &|_| true), (false, vec![]));
         let mut both = sb.clone();
         both.meta.bridge = true;
         assert_eq!(
-            unsafe_dir_warnings(&both, &dir, false),
-            [
-                unsafe_dir("browser or clipboard bridge"),
-                unsafe_dir("SSH agent")
-            ]
+            check_socket_dir(&both, &|_| false),
+            (
+                false,
+                vec![
+                    unsafe_dir("browser or clipboard bridge"),
+                    unsafe_dir("SSH agent")
+                ]
+            )
         );
+        assert_eq!(check_socket_dir(&both, &|_| true), (true, vec![]));
         // Neither: nothing to check.
         let mut neither = sb.clone();
         neither.meta.ssh_agent = None;
