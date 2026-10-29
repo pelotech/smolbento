@@ -5,11 +5,11 @@
 
 use std::collections::BTreeSet;
 use std::io::Write;
-use std::net::{Ipv4Addr, TcpListener, TcpStream};
+use std::net::{IpAddr, Ipv4Addr, Ipv6Addr, SocketAddr, TcpListener, TcpStream};
 use std::sync::Arc;
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::thread::{self, JoinHandle};
-use std::time::Instant;
+use std::time::{Duration, Instant};
 
 use anyhow::Result;
 
@@ -18,7 +18,19 @@ use crate::sandbox::sh_quote;
 use crate::smolvm::{ExecSpec, Output};
 
 /// Runs `smolvm ARGS`. Its own, not the session's runner, which can't move to another thread.
+/// The guest is untrusted: it must be bounded by `REPLAY_TIMEOUT` and `MAX_REPLAY`.
 pub type Exec = Box<dyn Fn(&[String]) -> Result<Output> + Send + Sync>;
+
+/// How long a replay may run before smolvm is killed (`502`).
+pub(super) const REPLAY_TIMEOUT: Duration = Duration::from_secs(15);
+/// The most a replay may answer with (`502` beyond).
+pub(super) const MAX_REPLAY: usize = 1 << 20;
+/// Relays a session may start: a login needs one.
+const MAX_RELAYS: usize = 4;
+/// How long a relay listens: a login's callback comes within minutes.
+const LIFETIME: Duration = Duration::from_secs(10 * 60);
+/// How long the check for a host service already on the port waits for it to answer.
+const PROBE: Duration = Duration::from_millis(200);
 
 /// Where replays run: the sandbox's machine, as the session's user.
 struct Guest {
@@ -32,7 +44,11 @@ pub struct Relays {
     guest: Arc<Guest>,
     /// Ports already started or that failed: each is tried once per session.
     tried: BTreeSet<u16>,
+    /// Warned that `MAX_RELAYS` were started.
+    warned_full: bool,
+    lifetime: Duration,
     stop: Arc<AtomicBool>,
+    /// One per started relay.
     threads: Vec<JoinHandle<()>>,
 }
 
@@ -46,15 +62,27 @@ impl Relays {
                 user: user.into(),
             }),
             tried: BTreeSet::new(),
+            warned_full: false,
+            lifetime: LIFETIME,
             stop: Arc::default(),
             threads: Vec::new(),
         }
     }
 
-    /// Starts relaying `port` to the sandbox, once. A warning when the host's port is taken.
+    /// Starts relaying `port` to the sandbox for `LIFETIME`, once, up to `MAX_RELAYS` a session.
+    /// A warning when the host's port is taken, or (once) when the session has its relays.
     pub fn start(&mut self, port: u16) -> Option<String> {
         if !self.tried.insert(port) {
             return None;
+        }
+        if self.threads.len() == MAX_RELAYS {
+            if std::mem::replace(&mut self.warned_full, true) {
+                return None;
+            }
+            return Some(format!(
+                "warning: this session already relays {MAX_RELAYS} login callbacks; not relaying \
+                 localhost:{port} or any more"
+            ));
         }
         let listener = match listen(port) {
             Ok(l) => l,
@@ -65,8 +93,9 @@ impl Relays {
             }
         };
         let (exec, guest, stop) = (self.exec.clone(), self.guest.clone(), self.stop.clone());
+        let until = Instant::now() + self.lifetime;
         self.threads.push(thread::spawn(move || {
-            accept_loop(&listener, port, &exec, &guest, &stop)
+            accept_loop(&listener, port, &exec, &guest, &stop, until)
         }));
         None
     }
@@ -84,14 +113,36 @@ impl Drop for Relays {
 
 /// Loopback only: the browser is on this host.
 fn listen(port: u16) -> std::io::Result<TcpListener> {
+    if in_use(port) {
+        return Err(std::io::ErrorKind::AddrInUse.into());
+    }
     let l = TcpListener::bind((Ipv4Addr::LOCALHOST, port))?;
     l.set_nonblocking(true)?;
     Ok(l)
 }
 
-/// One request at a time, like the bridge.
-fn accept_loop(listener: &TcpListener, port: u16, exec: &Exec, guest: &Guest, stop: &AtomicBool) {
-    while !stop.load(Ordering::Relaxed) {
+/// Whether something on the host answers on `localhost:PORT`. On macOS our bind to
+/// `127.0.0.1:PORT` succeeds while a service listens on `0.0.0.0:PORT` or `[::]:PORT`
+/// (`SO_REUSEADDR`), and then takes that service's loopback connections.
+fn in_use(port: u16) -> bool {
+    [
+        IpAddr::V4(Ipv4Addr::LOCALHOST),
+        IpAddr::V6(Ipv6Addr::LOCALHOST),
+    ]
+    .into_iter()
+    .any(|ip| TcpStream::connect_timeout(&SocketAddr::new(ip, port), PROBE).is_ok())
+}
+
+/// One request at a time, like the bridge, until a stop or `until`.
+fn accept_loop(
+    listener: &TcpListener,
+    port: u16,
+    exec: &Exec,
+    guest: &Guest,
+    stop: &AtomicBool,
+    until: Instant,
+) {
+    while !stop.load(Ordering::Relaxed) && Instant::now() < until {
         match listener.accept() {
             Ok((stream, _)) => answer(&stream, port, exec, guest, stop),
             Err(_) => thread::sleep(POLL),
@@ -522,6 +573,76 @@ mod tests {
         assert!(warning.len() > want.len(), "{warning}");
         assert_eq!(relays.start(port), None);
         assert!(calls.lock().unwrap().is_empty());
+    }
+
+    /// The relay can't take over a host service listening on every address (macOS would let
+    /// the bind to 127.0.0.1 succeed).
+    #[test]
+    fn a_port_served_on_every_address_is_taken() {
+        let blockers = [
+            TcpListener::bind((Ipv4Addr::UNSPECIFIED, 0)).ok(),
+            // Skipped where the host has no IPv6.
+            TcpListener::bind((Ipv6Addr::UNSPECIFIED, 0)).ok(),
+        ];
+        assert!(blockers[0].is_some());
+        for taken in blockers.iter().flatten() {
+            let port = taken.local_addr().unwrap().port();
+            let (exec, calls) = fake(answered(""));
+            let mut relays = Relays::new(exec, "sbx-m", "agent");
+            let warning = relays.start(port).expect("a warning");
+            assert!(
+                warning.starts_with(&format!("warning: can't listen on 127.0.0.1:{port} ")),
+                "{warning}"
+            );
+            assert!(relays.threads.is_empty());
+            assert!(calls.lock().unwrap().is_empty());
+        }
+    }
+
+    #[test]
+    fn a_session_starts_at_most_four_relays_and_warns_once() {
+        let (exec, _) = fake(answered(""));
+        let mut relays = Relays::new(exec, "sbx-m", "agent");
+        let mut ports = BTreeSet::new();
+        while ports.len() < 6 {
+            ports.insert(free_port());
+        }
+        let ports: Vec<u16> = ports.into_iter().collect();
+        for &p in &ports[..4] {
+            assert_eq!(relays.start(p), None);
+        }
+        assert_eq!(
+            relays.start(ports[4]).as_deref(),
+            Some(
+                format!(
+                    "warning: this session already relays 4 login callbacks; not relaying \
+                     localhost:{} or any more",
+                    ports[4]
+                )
+                .as_str()
+            )
+        );
+        assert_eq!(relays.start(ports[5]), None, "warned once");
+        assert_eq!(relays.threads.len(), 4);
+        assert!(TcpStream::connect((Ipv4Addr::LOCALHOST, ports[4])).is_err());
+    }
+
+    #[test]
+    fn a_relay_closes_after_its_lifetime() {
+        let (exec, _) = fake(answered(""));
+        let mut relays = Relays::new(exec, "sbx-m", "agent");
+        relays.lifetime = Duration::from_millis(200);
+        let port = free_port();
+        assert_eq!(relays.start(port), None);
+        assert!(TcpStream::connect((Ipv4Addr::LOCALHOST, port)).is_ok());
+        let until = Instant::now() + Duration::from_secs(5);
+        while TcpStream::connect((Ipv4Addr::LOCALHOST, port)).is_ok() {
+            assert!(Instant::now() < until, "still listening");
+            thread::sleep(POLL);
+        }
+        // Not started again: one try per port.
+        assert_eq!(relays.start(port), None);
+        assert!(TcpStream::connect((Ipv4Addr::LOCALHOST, port)).is_err());
     }
 
     #[test]

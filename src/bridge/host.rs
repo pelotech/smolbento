@@ -9,11 +9,11 @@ use std::time::{Duration, Instant};
 
 use anyhow::{Context, Result, bail};
 
-use super::relay::Relays;
+use super::relay::{self, Relays};
 use super::server::{self, Handlers, Relay, Server};
 use crate::config::Settings;
 use crate::sandbox::Sandbox;
-use crate::smolvm::{ProcessRunner, Runner};
+use crate::smolvm::ProcessRunner;
 
 /// Internal test overrides: a program run with the URL as its argument / the text on stdin.
 const OPEN_CMD: &str = "SMOLBENTO_OPEN_CMD";
@@ -44,16 +44,19 @@ pub fn handlers(
     }
 }
 
-/// Starts the login callback relays; they stop when the handlers are dropped (the server stops).
 /// Who replays a login callback: a v3 workload's image user (`sbx.user`), else `agent`, as for
 /// the session itself. Any user reaches the guest's loopback; the image may have no `agent`.
 fn relay_user(sb: &Sandbox) -> &str {
     sb.meta.user.as_deref().unwrap_or("agent")
 }
 
+/// Starts the login callback relays; they stop when the handlers are dropped (the server stops).
+/// Each replay is bounded: the guest is untrusted.
 fn relay(smolvm: &str, machine: &str, user: &str) -> Relay {
     let runner = ProcessRunner::new(smolvm);
-    let exec = Box::new(move |args: &[String]| runner.run(args));
+    let exec = Box::new(move |args: &[String]| {
+        runner.run_bounded(args, relay::REPLAY_TIMEOUT, relay::MAX_REPLAY)
+    });
     let relays = Mutex::new(Relays::new(exec, machine, user));
     Box::new(move |port| {
         if let Some(warning) = relays.lock().ok().and_then(|mut r| r.start(port)) {
