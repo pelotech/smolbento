@@ -304,8 +304,26 @@ pub fn prepare_create<R: Runner>(
             &req.credential_hosts,
         )?);
     }
+    let wants = skill_wants(&req.agent, kits);
+    let dirs = crate::skills::plan_dirs(req.skills_mode, &wants, false);
+    req.skills = (!dirs.is_empty()).then(|| crate::skills::Setup {
+        store: crate::skills::store::Store::new(&ctx.paths).dir,
+        label: crate::skills::Label {
+            mode: req.skills_mode,
+            dirs,
+        },
+    });
     // After every check, so a refused create makes no directories.
     host_mount::create_managed(&host_dirs)?;
+    // Created empty so it can be mounted; `off` mounts nothing.
+    if req.skills.as_ref().is_some_and(|s| {
+        s.label
+            .dirs
+            .iter()
+            .any(|d| d.access != crate::skills::Access::None)
+    }) {
+        crate::skills::store::Store::new(&ctx.paths).ensure()?;
+    }
     if !added.is_empty() {
         // The last fallible step, so an error here leaves no rules for `create` to roll back.
         policy.save(&ctx.paths)?;
@@ -317,6 +335,21 @@ pub fn prepare_create<R: Runner>(
         eprintln!("{note}");
     }
     Ok((added, first_start))
+}
+
+/// The built-in agent's skills directory (for a preset workload or no kits) as a read-write
+/// request: the user's mode decides. Kit `agent-skills@1` requests come later.
+fn skill_wants(agent: &str, kits: Option<&Plan>) -> Vec<crate::skills::Want> {
+    let preset = kits.is_none_or(|p| crate::kits::apply::is_preset(&p.workload));
+    preset
+        .then(|| crate::agents::find(agent).and_then(|a| a.skills_dir))
+        .flatten()
+        .map(|p| crate::skills::Want {
+            path: p.to_string(),
+            readwrite: true,
+        })
+        .into_iter()
+        .collect()
 }
 
 /// Sets `req.ssh_agent` from the kits' `ssh-agent@1` grant: refused when a required phase has no

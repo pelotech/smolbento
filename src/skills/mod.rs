@@ -5,8 +5,16 @@ pub mod import;
 pub mod repo;
 pub mod store;
 
+use std::path::{Path, PathBuf};
+
 use anyhow::{Result, bail};
 use serde::{Deserialize, Serialize};
+
+use crate::config::Settings;
+use crate::smolvm::Mount;
+
+/// Where a sandbox sees the whole store read-only; its skills directories link into it.
+pub const SHARED: &str = "/run/sbx/skills-shared";
 
 /// sbx's skill name rule: a portable directory name that can't leave its parent.
 pub fn valid_name(name: &str) -> bool {
@@ -45,6 +53,106 @@ impl Mode {
     }
 }
 
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "lowercase")]
+pub enum Access {
+    /// Bundled kit skills only (`off`).
+    None,
+    /// Links into the read-only `SHARED` mount, rebuilt at each start.
+    Ro,
+    /// The store mounted over the directory.
+    Rw,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct Dir {
+    pub path: String,
+    pub access: Access,
+}
+
+/// The `sbx.skills` label: fixed at create.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct Label {
+    pub mode: Mode,
+    pub dirs: Vec<Dir>,
+}
+
+impl Label {
+    pub fn to_label(&self) -> String {
+        serde_json::to_string(self).expect("a skills label serializes")
+    }
+
+    pub fn from_label(s: &str) -> Option<Label> {
+        serde_json::from_str(s).ok()
+    }
+}
+
+/// A skills directory someone asked for: the built-in agent's or a kit's `agent-skills@1`.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct Want {
+    pub path: String,
+    pub readwrite: bool,
+}
+
+/// What a create mounts and labels.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct Setup {
+    pub store: PathBuf,
+    pub label: Label,
+}
+
+/// One entry per path (widest request wins), with the narrower of `mode` and the request. A
+/// sandbox with bundled skills never mounts over a directory (they'd land in the user's store).
+pub fn plan_dirs(mode: Mode, wants: &[Want], has_bundled: bool) -> Vec<Dir> {
+    let mut by_path: std::collections::BTreeMap<&str, bool> = Default::default();
+    for w in wants {
+        *by_path.entry(&w.path).or_default() |= w.readwrite;
+    }
+    by_path
+        .into_iter()
+        .map(|(path, rw)| Dir {
+            path: path.to_string(),
+            access: match mode {
+                Mode::Off => Access::None,
+                Mode::Readwrite if rw && !has_bundled => Access::Rw,
+                _ => Access::Ro,
+            },
+        })
+        .collect()
+}
+
+/// The store once read-only at `SHARED` when any directory links into it, and over each
+/// read-write directory.
+pub fn mounts(store: &Path, dirs: &[Dir]) -> Vec<Mount> {
+    let mut m = Vec::new();
+    if dirs.iter().any(|d| d.access == Access::Ro) {
+        m.push(Mount {
+            host: Some(store.to_path_buf()),
+            guest: SHARED.into(),
+            read_only: true,
+        });
+    }
+    m.extend(
+        dirs.iter()
+            .filter(|d| d.access == Access::Rw)
+            .map(|d| Mount {
+                host: Some(store.to_path_buf()),
+                guest: d.path.clone(),
+                read_only: false,
+            }),
+    );
+    m
+}
+
+/// `--skills` (or sbxenv's `sandboxOptions.skills`), else `skills.defaultMode`.
+pub fn resolve_mode(flag: Option<&str>, settings: &Settings) -> Result<Mode> {
+    match flag {
+        Some(f) => Mode::parse(f),
+        None => Mode::parse(&settings.value("skills.defaultMode")?)
+            .map_err(|e| anyhow::anyhow!("setting skills.defaultMode: {e}")),
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -75,5 +183,72 @@ mod tests {
         assert_eq!(Mode::parse("off").unwrap(), Mode::Off);
         let e = Mode::parse("rw").unwrap_err().to_string();
         assert!(e.contains("off, readonly or readwrite"), "{e}");
+    }
+
+    fn want(p: &str, rw: bool) -> Want {
+        Want {
+            path: p.into(),
+            readwrite: rw,
+        }
+    }
+    fn dir(p: &str, a: Access) -> Dir {
+        Dir {
+            path: p.into(),
+            access: a,
+        }
+    }
+
+    #[test]
+    fn dirs_take_the_narrower_access_and_bundled_caps_at_links() {
+        let w = [want("/s", true), want("/k", false), want("/s", false)];
+        assert_eq!(
+            plan_dirs(Mode::Readwrite, &w, false),
+            [dir("/k", Access::Ro), dir("/s", Access::Rw)]
+        );
+        assert_eq!(
+            plan_dirs(Mode::Readonly, &w, false),
+            [dir("/k", Access::Ro), dir("/s", Access::Ro)]
+        );
+        assert_eq!(
+            plan_dirs(Mode::Off, &w, false),
+            [dir("/k", Access::None), dir("/s", Access::None)]
+        );
+        assert_eq!(
+            plan_dirs(Mode::Readwrite, &w, true),
+            [dir("/k", Access::Ro), dir("/s", Access::Ro)]
+        );
+        assert!(plan_dirs(Mode::Readonly, &[], false).is_empty());
+    }
+
+    #[test]
+    fn mounts_share_one_read_only_mount_and_mount_over_rw_dirs() {
+        let store = Path::new("/h/store");
+        let m = mounts(
+            store,
+            &[
+                dir("/a", Access::Ro),
+                dir("/b", Access::Ro),
+                dir("/c", Access::Rw),
+                dir("/d", Access::None),
+            ],
+        );
+        let got: Vec<(String, bool)> = m.iter().map(|m| (m.guest.clone(), m.read_only)).collect();
+        assert_eq!(got, [(SHARED.to_string(), true), ("/c".to_string(), false)]);
+        assert!(m.iter().all(|m| m.host.as_deref() == Some(store)));
+        assert!(mounts(store, &[dir("/d", Access::None)]).is_empty());
+    }
+
+    #[test]
+    fn label_round_trip() {
+        let l = Label {
+            mode: Mode::Readonly,
+            dirs: vec![dir("/home/agent/.claude/skills", Access::Ro)],
+        };
+        let s = l.to_label();
+        assert_eq!(
+            s,
+            r#"{"mode":"readonly","dirs":[{"path":"/home/agent/.claude/skills","access":"ro"}]}"#
+        );
+        assert_eq!(Label::from_label(&s), Some(l));
     }
 }

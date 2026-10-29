@@ -89,6 +89,8 @@ fn base_request<R: Runner>(
         .iter()
         .map(|p| options::parse_publish(p, &options::free_port))
         .collect::<Result<Vec<_>>>()?;
+    // Before any smolvm call, so a bad value fails early.
+    let skills_mode = crate::skills::resolve_mode(opts.skills.as_deref(), &ctx.settings)?;
 
     Ok(CreateRequest {
         name,
@@ -102,6 +104,7 @@ fn base_request<R: Runner>(
         cpus_set: opts.cpus.is_some(),
         memory_set: opts.memory.is_some(),
         host_mounts,
+        skills_mode,
         ..Default::default()
     })
 }
@@ -836,6 +839,11 @@ mod tests {
             pair("-v"),
             vec![
                 format!("{ws}:{ws}"),
+                // Skills default to readonly: the store, shared read-only.
+                format!(
+                    "{}:/run/sbx/skills-shared:ro",
+                    t.ctx.paths.skills_store().display()
+                ),
                 "/var/lib/docker".into(),
                 "/var/lib/containerd".into()
             ]
@@ -2643,6 +2651,137 @@ SETUP
     fn mode(path: &std::path::Path) -> u32 {
         use std::os::unix::fs::PermissionsExt;
         std::fs::metadata(path).unwrap().permissions().mode() & 0o7777
+    }
+
+    /// Creates `args` (a `claude-proj` or `shell-proj` sandbox) with `env`; returns the env, the
+    /// skills `-v` values and the `sbx.skills` label.
+    fn skills_create(
+        env: &[(&str, &str)],
+        args: &[&str],
+    ) -> (TestEnv, anyhow::Result<i32>, Vec<String>, Option<String>) {
+        let mut all = vec![("SMOLBENTO_DOCKER", "false")];
+        all.extend_from_slice(env);
+        let mut t = test_env(&all);
+        let agent = args[1];
+        let fake = t.ctx.vm.runner();
+        fake.ok(
+            &["machine", "status"],
+            &json(
+                &format!("sbx-{agent}-proj"),
+                "created",
+                &format!("{agent}-proj"),
+            ),
+        );
+        fake.once_fail(&["machine", "status"], "NOT_FOUND", "vm not found");
+        let r = sbt(&mut t.ctx, args);
+        if r.is_err() {
+            return (t, r, vec![], None);
+        }
+        let store = t.ctx.paths.skills_store().display().to_string();
+        let call = t
+            .ctx
+            .vm
+            .runner()
+            .calls()
+            .into_iter()
+            .find(|c| c.starts_with(&["machine".to_string(), "create".to_string()]))
+            .expect("a machine create");
+        let value = |flag: &str| -> Vec<String> {
+            call.windows(2)
+                .filter(|w| w[0] == flag)
+                .map(|w| w[1].clone())
+                .collect()
+        };
+        let mounts = value("-v")
+            .into_iter()
+            .filter(|v| v.starts_with(&format!("{store}:")))
+            .collect();
+        let label = value("--label")
+            .into_iter()
+            .find_map(|l| l.strip_prefix("sbx.skills=").map(String::from));
+        (t, r, mounts, label)
+    }
+
+    #[test]
+    fn create_shares_skills_by_mode() {
+        use crate::skills::{Access, Label, Mode};
+        let claude = "/home/agent/.claude/skills";
+        // (env, args, the store's mount point, the label's mode and access)
+        type Case<'a> = (
+            &'a [(&'a str, &'a str)],
+            &'a [&'a str],
+            Option<&'a str>,
+            Mode,
+            Access,
+        );
+        let cases: [Case; 5] = [
+            (
+                &[],
+                &["create", "claude", "."],
+                Some("/run/sbx/skills-shared:ro"),
+                Mode::Readonly,
+                Access::Ro,
+            ),
+            (
+                &[],
+                &["create", "claude", ".", "--skills", "readwrite"],
+                Some(claude),
+                Mode::Readwrite,
+                Access::Rw,
+            ),
+            (
+                &[],
+                &["create", "claude", ".", "--skills", "off"],
+                None,
+                Mode::Off,
+                Access::None,
+            ),
+            (
+                &[("SMOLBENTO_SKILLS_DEFAULT_MODE", "off")],
+                &["create", "claude", "."],
+                None,
+                Mode::Off,
+                Access::None,
+            ),
+            (
+                &[("SMOLBENTO_SKILLS_DEFAULT_MODE", "off")],
+                &["create", "claude", ".", "--skills", "readonly"],
+                Some("/run/sbx/skills-shared:ro"),
+                Mode::Readonly,
+                Access::Ro,
+            ),
+        ];
+        for (env, args, mount, want_mode, access) in cases {
+            let (t, r, mounts, label) = skills_create(env, args);
+            r.unwrap();
+            let store = t.ctx.paths.skills_store();
+            let want: Vec<String> = mount
+                .map(|m| format!("{}:{m}", store.display()))
+                .into_iter()
+                .collect();
+            assert_eq!(mounts, want, "{args:?}");
+            let label = Label::from_label(&label.expect("an sbx.skills label")).unwrap();
+            assert_eq!(label.mode, want_mode, "{args:?}");
+            assert_eq!(label.dirs.len(), 1, "{args:?}");
+            assert_eq!(label.dirs[0].path, claude);
+            assert_eq!(label.dirs[0].access, access, "{args:?}");
+            if access == Access::None {
+                assert!(!store.exists(), "{args:?}");
+            } else {
+                assert_eq!(mode(&store), 0o700, "{args:?}");
+            }
+        }
+
+        let (t, r, mounts, label) = skills_create(&[], &["create", "shell", "."]);
+        r.unwrap();
+        assert!(mounts.is_empty() && label.is_none(), "{mounts:?} {label:?}");
+        assert!(!t.ctx.paths.skills_store().exists());
+
+        let (_, r, _, _) = skills_create(&[], &["create", "claude", ".", "--skills", "bogus"]);
+        assert_eq!(
+            r.unwrap_err().to_string(),
+            "invalid skills mode \"bogus\": use off, readonly or readwrite"
+        );
     }
 
     #[test]

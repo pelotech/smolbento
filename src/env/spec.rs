@@ -162,6 +162,7 @@ pub fn spec(loaded: &Loaded, overrides: &Overrides, secrets: &SecretsFile) -> Re
             .map(|(guest, host)| format!("{host}:{guest}"))
             .collect(),
         template: o.and_then(|o| o.template.clone()),
+        skills: o.and_then(|o| o.skills.clone()),
         // `load` refuses every policy but `missing`.
         pull: o.and_then(|o| o.pull_policy.clone()),
         clone: overrides
@@ -224,6 +225,7 @@ pub fn summary(loaded: &Loaded, spec: &EnvSpec, op: Op, scoped: &[String]) -> St
             ("cpus", o.cpus.map(|c| c.to_string())),
             ("memory", o.memory.clone()),
             ("template", o.template.clone()),
+            ("skills", o.skills.clone()),
             ("pullPolicy", o.pull_policy.clone()),
         ];
         for (k, v) in opts {
@@ -609,6 +611,13 @@ mod tests {
         assert_eq!(s.opts.memory.as_deref(), Some("8g"));
         assert_eq!(s.opts.template.as_deref(), Some("img:1"));
         assert_eq!(s.opts.pull.as_deref(), Some("missing"));
+
+        let s = t
+            .spec(&format!(
+                "{HEAD}agent: claude\nsandboxOptions:\n  skills: off\n"
+            ))
+            .unwrap();
+        assert_eq!(s.opts.skills.as_deref(), Some("off"));
 
         let e = t.err(&format!(
             "{HEAD}agent: claude\nports:\n  - sandbox: 80\n    protocol: tcp6\n"

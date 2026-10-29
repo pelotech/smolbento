@@ -8,6 +8,8 @@ pub struct Agent {
     /// The agent file's name. Like sbx, it sits in the parent of the workspace path in the
     /// guest; kit agent context goes there.
     pub context_file: &'static str,
+    /// Where the agent reads skills (sbx's table); `None` for agents without skills.
+    pub skills_dir: Option<&'static str>,
 }
 
 /// The agent file's name for presets without their own, and for a workload kit's
@@ -19,30 +21,35 @@ pub const AGENTS: &[Agent] = &[
         name: "claude",
         image: "docker/sandbox-templates:claude-code-docker-0.10.0",
         context_file: "CLAUDE.md",
+        skills_dir: Some("/home/agent/.claude/skills"),
         command: &["claude", "--dangerously-skip-permissions"],
     },
     Agent {
         name: "codex",
         image: "docker/sandbox-templates:codex-docker-0.7.0",
         context_file: DEFAULT_CONTEXT_FILE,
+        skills_dir: Some("/home/agent/.agents/skills"),
         command: &["codex", "--dangerously-bypass-approvals-and-sandbox"],
     },
     Agent {
         name: "copilot",
         image: "docker/sandbox-templates:copilot-docker-0.4.0",
         context_file: DEFAULT_CONTEXT_FILE,
+        skills_dir: Some("/home/agent/.copilot/skills"),
         command: &["copilot", "--yolo"],
     },
     Agent {
         name: "cursor",
         image: "docker/sandbox-templates:cursor-agent-docker-0.7.0",
         context_file: DEFAULT_CONTEXT_FILE,
+        skills_dir: Some("/home/agent/.cursor/skills"),
         command: &["cursor-agent", "--yolo"],
     },
     Agent {
         name: "devin",
         image: "docker/sandbox-templates:devin-docker-0.7.0",
         context_file: DEFAULT_CONTEXT_FILE,
+        skills_dir: Some("/home/agent/.agents/skills"),
         command: &[
             "devin",
             "--permission-mode",
@@ -54,36 +61,42 @@ pub const AGENTS: &[Agent] = &[
         name: "docker-agent",
         image: "docker/sandbox-templates:docker-agent-docker-0.7.0",
         context_file: DEFAULT_CONTEXT_FILE,
+        skills_dir: None,
         command: &["docker-agent", "run", "--yolo"],
     },
     Agent {
         name: "droid",
         image: "docker/sandbox-templates:droid-docker-0.4.0",
         context_file: DEFAULT_CONTEXT_FILE,
+        skills_dir: Some("/home/agent/.factory/skills"),
         command: &["droid"],
     },
     Agent {
         name: "gemini",
         image: "docker/sandbox-templates:gemini-docker-0.10.0",
         context_file: "GEMINI.md",
+        skills_dir: None,
         command: &["gemini", "--yolo"],
     },
     Agent {
         name: "kiro",
         image: "docker/sandbox-templates:kiro-docker-0.4.0",
         context_file: DEFAULT_CONTEXT_FILE,
+        skills_dir: None,
         command: &["kiro", "chat", "--trust-all-tools"],
     },
     Agent {
         name: "opencode",
         image: "docker/sandbox-templates:opencode-docker-0.7.0",
         context_file: DEFAULT_CONTEXT_FILE,
+        skills_dir: Some("/home/agent/.config/opencode/skills"),
         command: &["opencode"],
     },
     Agent {
         name: "shell",
         image: "docker/sandbox-templates:shell-docker-0.10.0",
         context_file: DEFAULT_CONTEXT_FILE,
+        skills_dir: None,
         command: &["bash", "-l"],
     },
 ];
@@ -153,6 +166,21 @@ mod tests {
                 "{} is not pinned",
                 a.image
             );
+        }
+    }
+
+    #[test]
+    fn skills_dirs_follow_sbx() {
+        let d = |n: &str| find(n).unwrap().skills_dir;
+        assert_eq!(d("claude"), Some("/home/agent/.claude/skills"));
+        assert_eq!(d("codex"), Some("/home/agent/.agents/skills"));
+        assert_eq!(d("devin"), Some("/home/agent/.agents/skills"));
+        assert_eq!(d("copilot"), Some("/home/agent/.copilot/skills"));
+        assert_eq!(d("cursor"), Some("/home/agent/.cursor/skills"));
+        assert_eq!(d("droid"), Some("/home/agent/.factory/skills"));
+        assert_eq!(d("opencode"), Some("/home/agent/.config/opencode/skills"));
+        for n in ["gemini", "kiro", "docker-agent", "shell"] {
+            assert_eq!(d(n), None, "{n}");
         }
     }
 

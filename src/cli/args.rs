@@ -492,7 +492,8 @@ pub struct SandboxOpts {
     /// 'sbt policy ls <NAME>' or 'sbt policy rm network --sandbox <NAME> --resource <HOST>'
     #[arg(long = "deny-network", value_name = "HOST", value_delimiter = ',')]
     pub deny_network: Vec<String>,
-    /// Agent skills: off, readonly or readwrite (not implemented yet)
+    /// Shared skills: off, readonly (store linked in read-only) or readwrite (store mounted over
+    /// the agent's skills directory). Default: skills.defaultMode
     #[arg(long)]
     pub skills: Option<String>,
     /// Static MCP servers (not implemented yet)
@@ -515,10 +516,7 @@ pub struct SandboxOpts {
 impl SandboxOpts {
     /// Rejects flags from later phases and Docker Cloud-only flags.
     pub fn check_supported(&self) -> Result<()> {
-        let pending = [
-            (self.skills.is_some(), "--skills"),
-            (self.static_mcp.is_some(), "--static-mcp"),
-        ];
+        let pending = [(self.static_mcp.is_some(), "--static-mcp")];
         if let Some((_, flag)) = pending.iter().find(|(set, _)| *set) {
             return Err(Unsupported(format!("{flag} is not implemented yet")).into());
         }

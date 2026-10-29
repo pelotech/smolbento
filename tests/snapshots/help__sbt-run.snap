@@ -60,7 +60,7 @@ Options:
           Add a per-sandbox network deny rule at creation time. Can be specified multiple times. The rule applies only to the new sandbox and can be listed or removed later with 'sbt policy ls <NAME>' or 'sbt policy rm network --sandbox <NAME> --resource <HOST>'
 
       --skills <SKILLS>
-          Agent skills: off, readonly or readwrite (not implemented yet)
+          Shared skills: off, readonly (store linked in read-only) or readwrite (store mounted over the agent's skills directory). Default: skills.defaultMode
 
       --static-mcp <STATIC_MCP>
           Static MCP servers (not implemented yet)

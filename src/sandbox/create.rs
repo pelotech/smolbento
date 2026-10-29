@@ -80,6 +80,10 @@ pub struct CreateRequest {
     /// The SSH agent granted per phase once availability and the socket directory were checked
     /// (the `sbx.ssh-agent` label); `None`: no agent.
     pub ssh_agent: Option<AgentLabel>,
+    /// `--skills` resolved (Phase 5c); the directories come from `prepare_create`.
+    pub skills_mode: crate::skills::Mode,
+    /// The store mount and `sbx.skills` label; `None` without skills directories.
+    pub skills: Option<crate::skills::Setup>,
 }
 
 impl CreateRequest {
@@ -131,6 +135,7 @@ pub fn meta(req: &CreateRequest) -> Meta {
             .ssh_agent
             .clone()
             .filter(|_| !name::is_internal(&req.name)),
+        skills: req.skills.as_ref().map(|s| s.label.clone()),
     }
 }
 
@@ -179,6 +184,9 @@ pub fn spec(req: &CreateRequest) -> CreateSpec {
         guest: guest.clone(),
         read_only: false,
     }));
+    if let Some(s) = &req.skills {
+        mounts.extend(crate::skills::mounts(&s.store, &s.label.dirs));
+    }
     for v in &req.volumes {
         // Two kits may ask for the same volume.
         if !mounts.iter().any(|m| m.guest == *v) {
