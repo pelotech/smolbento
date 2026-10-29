@@ -524,7 +524,8 @@ sbt skills rm pdf
   `clone skills repository: exit status N: ...`.
 - Every directory below the repository root that holds a `SKILL.md` is a skill; directories
   inside a skill aren't searched. A `SKILL.md` at the repository root makes the whole repository
-  one skill (every file but `.git`). A skill is named by the `name:` in its `SKILL.md`
+  one skill (its regular files and directories, `.git` excepted; symlinks and special files
+  aren't copied, in any skill). A skill is named by the `name:` in its `SKILL.md`
   frontmatter, else after its directory (the repository, for a root skill): anthropics/skills'
   `template/` is `template-skill`. A name that isn't a valid directory name is skipped with a
   warning, and two skills with one name are an error. `--skill` (repeatable, or comma-separated)
@@ -586,8 +587,9 @@ Each agent has its own directory:
 
 The links are made by the start's setup as root, as in `sbx`. The skills directory and each link
 belong to the image's `agent` account (your uid, in smolbento), or to uid 1000 in an image without
-one; parent directories it has to create belong to root. A skills directory that is a symlink gets
-no links. If linking fails the start warns (`couldn't link shared skills`) and goes on.
+one; parent directories it has to create belong to root. A skills directory whose path goes
+through a symlink (the directory or any parent) gets no links, and a required bundled skill for it
+fails the create. If linking fails the start warns (`couldn't link shared skills`) and goes on.
 
 ### Skills from kits
 

@@ -213,8 +213,10 @@ names. What you share with a sandbox is what its agent will follow:
 - **Prefer HTTPS or SSH for `skills add`.** `http://` and `git://` URLs are accepted, as in
   `sbx`, but their content can be changed in transit.
 - **Linking runs as root in the guest**, as in `sbx`. It only creates the skills directory and
-  links in it, changes the owner of those alone, and refuses a skills directory that is a
-  symlink.
+  links in it, and changes the owner of those alone. It refuses a skills directory whose path
+  goes through a symlink anywhere (the directory itself or a parent such as `~/.claude`), checked
+  before and after creating it, so the agent can't point it at another place. That includes
+  image symlinks such as `/home -> /var/home`: such a sandbox gets no skills links.
 - **Bundled kit skills are image content.** An `agent-skill@1` skill comes from the kit's image,
   and smolbento only links it. Its instructions reach the agent like any skill's, so trust the kit
   as you would for its install hooks.
