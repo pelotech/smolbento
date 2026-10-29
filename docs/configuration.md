@@ -121,7 +121,7 @@ smolbento keeps no database of its own. Each sandbox is a smolvm machine named `
 | `sbx.agent-file` | The agent instructions file a workload kit's own `agent-context` names, so `kit add` can index a new mixin's context in it |
 | `sbx.workdir` | A v3 workload kit's image `WORKDIR`, where install hooks run (absent for `/`) |
 | `sbx.credential-install` | Env vars of credentials a kit needs only while installing; later starts leave them out |
-| `sbx.skills` | The skills mode and each skills directory with its access (`ro` links or `rw` mount), set at create |
+| `sbx.skills` | The skills mode, the `/run/sbx/skills-shared` mount (`none`, `ro` or `rw`) and each skills directory with its access (`none`, `link`, or the store mounted over it `ro` or `rw`), set at create |
 | `sbx.long-running` | `true` when a kit asked not to stop the sandbox when its last session ends |
 
 `smolvm machine ls` shows them alongside any machines you made with smolvm directly; `sbt ls` shows

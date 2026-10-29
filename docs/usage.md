@@ -509,7 +509,7 @@ that's set, or `$SMOLBENTO_DATA_DIR/agent-skills`), one directory per skill. It 
 store, so bring your skills over with `import`.
 
 ```sh
-sbt skills add anthropics/skills --skill pdf     # from GitHub, or any Git URL (HTTPS or SSH)
+sbt skills add anthropics/skills --skill pdf     # from GitHub, or any Git URL
 sbt skills add anthropics/skills                 # every skill in the repository
 sbt skills import --dry-run                      # see what your agents' directories hold
 sbt skills import                                # copy them into the store
@@ -518,17 +518,28 @@ sbt skills update pdf                            # re-fetch a skill added from a
 sbt skills rm pdf
 ```
 
-- `add` clones with your host `git`, so anything git can fetch works, private repositories
-  included. Every directory below the repository root that holds a `SKILL.md` is a skill, named
-  after the directory. `--skill` (repeatable, or comma-separated) picks some. A skill that already
-  exists asks before it's replaced; `-f` skips the question, and without a terminal replacing
-  needs `-f`.
+- `add` clones with your host `git` (HTTPS, SSH, `http://` or `git://`), so anything git can
+  fetch works, private repositories included. git never prompts: set up a credential helper or
+  SSH agent for private repositories. A failed clone prints git's own message, as
+  `clone skills repository: exit status N: ...`.
+- Every directory below the repository root that holds a `SKILL.md` is a skill; directories
+  inside a skill aren't searched. A `SKILL.md` at the repository root makes the whole repository
+  one skill (every file but `.git`). A skill is named by the `name:` in its `SKILL.md`
+  frontmatter, else after its directory (the repository, for a root skill): anthropics/skills'
+  `template/` is `template-skill`. A name that isn't a valid directory name is skipped with a
+  warning, and two skills with one name are an error. `--skill` (repeatable, or comma-separated)
+  picks some by that name. A skill that already exists asks before it's replaced; `-f` skips the
+  question, and without a terminal replacing needs `-f`.
 - `import` copies the skills from `~/.agents/skills`, `~/.claude/skills`,
   `~/.config/opencode/skills`, `~/.copilot/skills`, `~/.cursor/skills` and `~/.factory/skills`, in
-  that order. When two directories have the same skill, the earlier one wins and the other gets a
-  warning.
+  that order, each named after its directory. When two directories have the same skill, the
+  earlier one wins and the other gets a warning. With nothing to import it only says where it
+  looked.
 - `update` works only for skills added from a repository (smolbento records where in
-  `agent-skills-metadata/sources.json`). Importing a skill drops that record.
+  `agent-skills-metadata/sources.json`). Importing a skill drops that record. It finds skills the
+  same way as `add`, prints `Updated skill x` or `Skill "x" is already up to date` for each, then
+  `Updated N skills in <store>` if any changed. With none added from a repository it prints
+  `No repository-installed skills found`.
 - `rm` always asks first; `-f` skips it. `import` asks only when it would replace a skill, like `add`.
 
 `sbt reset` deletes the store and its records.
@@ -539,7 +550,7 @@ sbt skills rm pdf
 
 | Mode | In the sandbox |
 |---|---|
-| `readonly` (default) | The store is mounted read-only at `/run/sbx/skills-shared`, and the agent's skills directory (for `claude`, `~/.claude/skills`) is a normal directory with one symlink per skill, such as `pdf -> /run/sbx/skills-shared/pdf`. The agent can't change a stored skill, but can add its own directories beside the links |
+| `readonly` (default) | The store is mounted read-only at `/run/sbx/skills-shared`, and the agent's skills directory (for `claude`, `~/.claude/skills`) is a normal directory with one symlink per skill, such as `pdf -> /run/sbx/skills-shared/pdf`. The agent can't change a stored skill, but can add its own directories beside the links. A [kit's directory](#skills-from-kits) differs |
 | `readwrite` | The store is mounted over the agent's skills directory. What the agent writes there lands in your store at once |
 | `off` | No store and no skills directory |
 
@@ -573,19 +584,20 @@ Each agent has its own directory:
 
 `~` is `/home/agent`. Sandboxes created before skills existed have none; recreate them.
 
-The links are made by the start's setup as the sandbox's launch user: a v3 workload kit's image
-user if it has one, else `agent`. An image with neither gets no links: the start warns
-(`couldn't link shared skills`) and goes on. `sbx` images have `agent`.
+The links are made by the start's setup as root, as in `sbx`. The skills directory and each link
+belong to the image's `agent` account (your uid, in smolbento), or to uid 1000 in an image without
+one; parent directories it has to create belong to root. A skills directory that is a symlink gets
+no links. If linking fails the start warns (`couldn't link shared skills`) and goes on.
 
 ### Skills from kits
 
 A kit can ask for more skills directories and ship skills of its own:
 
 - `agent-skills@1` names a directory (`path`, absolute) that gets the store, with `mode`
-  `readonly` (the default) or `readwrite`. For each directory, the widest
-  request among the agent's own directory (read-write) and the kits wins, then the sandbox's
-  `--skills` mode caps it (`off` leaves the directory empty of store skills). A kit's `mode` only
-  limits directories that it alone names. Kits that name the same path share it.
+  `readonly` (the default) or `readwrite`. Its access is the narrower of the kit's `mode` (the
+  widest, when several kits name the path) and the sandbox's `--skills` mode. Unlike the agent's
+  own directory, the store is mounted over it, read-only or read-write, with no links; `off`
+  leaves it out. A path that is also the agent's own directory behaves like the agent's.
 - `agent-skill@1` bundles a skill from the kit's image: `path` is the skill's directory, `name`
   (optional) is its name in the skills directory, defaulting to the directory's name. At first
   start smolbento checks that `SKILL.md` is a file and that no skill of that name is there, then
@@ -594,11 +606,17 @@ A kit can ask for more skills directories and ship skills of its own:
   `warning: skipping skill NAME: reason` (or a note) and the sandbox starts without it. A bundled
   skill with the same name as a stored skill is a conflict too: the store link is there first.
   smolbento only links bundled skills and never runs anything in them.
-- When a kit bundles skills, every skills directory gets read-only links, even with `readwrite`,
-  and is never mounted over. Mounting the store over it would put the kit's skills in your store.
-- The bundled-skill step runs as the v3 workload's image user, else `agent`, so a required
-  bundled skill in an image with neither fails the create. `kit add` refuses kits with either
-  capability: mounts are set at create, so create a new sandbox with the kit.
+- When a sandbox has bundled skills, no skills directory is mounted over (that would put the
+  kit's skills in your store): every one, the agent's own included, gets links into
+  `/run/sbx/skills-shared`. That mount is read-write if any directory would have been
+  read-write (so the agent can change stored skills through the links), else read-only. With
+  `off` there is no mount and the directories hold only the bundled skills.
+- A bundled skill named like a stored skill fails the create with `failed to compose shared skills
+  into the sandbox: bundled skills NAME cannot be exposed in DIR: another skill already uses the
+  name`.
+- The bundled-skill step runs as root and gives the links to the agent, like the start's links.
+  `kit add` refuses kits with either capability: mounts are set at create, so create a new
+  sandbox with the kit.
 
 ## Environments (sbxenv.yaml)
 

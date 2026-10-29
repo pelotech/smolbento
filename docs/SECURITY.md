@@ -206,6 +206,15 @@ names. What you share with a sandbox is what its agent will follow:
   it loads whatever the store holds at each start, including changes made by a `readwrite`
   sandbox or by you.
 - **Use `--skills off` for untrusted work.** The sandbox gets no store and no skills directory.
+- **A kit can widen `readwrite` to links.** With `--skills readwrite`, a kit that bundles a skill
+  and names a `readwrite` directory makes `/run/sbx/skills-shared` read-write, so the agent can
+  change stored skills through every link. Check a kit's `agent-skills@1` modes before using it
+  with `readwrite`.
+- **Prefer HTTPS or SSH for `skills add`.** `http://` and `git://` URLs are accepted, as in
+  `sbx`, but their content can be changed in transit.
+- **Linking runs as root in the guest**, as in `sbx`. It only creates the skills directory and
+  links in it, changes the owner of those alone, and refuses a skills directory that is a
+  symlink.
 - **Bundled kit skills are image content.** An `agent-skill@1` skill comes from the kit's image,
   and smolbento only links it. Its instructions reach the agent like any skill's, so trust the kit
   as you would for its install hooks.
