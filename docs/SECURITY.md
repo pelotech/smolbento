@@ -153,6 +153,17 @@ access, so load only kits you trust.
   idle memory back. Turn it off with `sbt settings set fork.enabled false` (from each sandbox's
   next start).
 - smolbento refuses to run as root on the host, because the agent takes the caller's uid.
+- While you're attached (`sbt run`, `sbt exec -it`), anything in the sandbox can open `https://`
+  URLs in your browser and overwrite your clipboard (it can't read it). A malicious page opened
+  this way runs in your real browser, with your logins. To stop URL opening, run
+  `sbt settings set browser.enabled false`. The bridge socket lives in `/tmp/sbt-<uid>/`
+  (mode 0700), so other users on your machine can't reach it.
+- When an opened URL's `redirect_uri` is `http://localhost:PORT` or `http://127.0.0.1:PORT`,
+  smolbento listens on your machine's `127.0.0.1:PORT` (never other interfaces) for the rest of
+  the session and passes requests whose `Host` is `localhost:PORT` or `127.0.0.1:PORT` into the
+  sandbox. Other local programs can reach that port too while it's open, as they could reach
+  the callback server of an agent running on your machine. `browser.enabled false` also turns
+  the relay off.
 
 ## Supply chain
 

@@ -245,6 +245,35 @@ service's secret was set at create, else `none`). The `claude` preset also gets 
 Your own `-e` wins. See
 [sbx compatibility](sbx-compatibility.md#sandbox-environment) for what's left out.
 
+## Browser and clipboard
+
+While you're attached (`sbt run`, `sbt exec -it`), the sandbox can open URLs in your browser and
+copy text to your clipboard, as in sbx:
+
+```sh
+# inside the sandbox
+xdg-open https://github.com/login/device    # opens in your host browser
+git diff | wl-copy                          # or xclip, xsel, pbcopy, clip.exe
+```
+
+- Only `https://` URLs open. Anything else, or a URL opened while nobody is attached, prints
+  `Open this URL in your browser: URL` for you to open yourself.
+- Copying is text only. Reading your clipboard isn't supported (`wl-paste`, `xclip -o` and
+  `xsel -o` print nothing), and neither is pasting images. A copy while nobody is attached fails
+  with `<command>: failed to write host clipboard`.
+- Browser logins work: when an opened URL's `redirect_uri` is `http://localhost:PORT/…` or
+  `http://127.0.0.1:PORT/…`, smolbento listens on your machine's `127.0.0.1:PORT` for the rest of
+  the session and passes the browser's callback to the agent's callback server in the sandbox.
+  If that port is already taken on your machine, it warns and the URL still opens. Callbacks
+  that carry a body (`response_mode=form_post`) lose it; the usual query-string redirects work.
+- Over SSH without a forwarded display (on Linux, `DISPLAY` or `WAYLAND_DISPLAY`; on macOS, always
+  over SSH) nothing is served, so URLs are printed instead.
+- `sbt settings set browser.enabled false` stops URL opening and the login relay; copying still
+  works.
+- The shims (`xdg-open`, `xclip`, `xsel`, `wl-copy`, `wl-paste`, `pbcopy`, `clip.exe`) are put
+  in `/usr/local/bin` on every start and need `curl` in the image; without it they fall back.
+- Sandboxes created before this feature, and forks, have no bridge. Recreate a sandbox to get it.
+
 ## Docker inside a sandbox
 
 Every sandbox runs its own Docker engine, so agents can `docker build` and `docker compose up`
