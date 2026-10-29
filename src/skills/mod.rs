@@ -144,6 +144,42 @@ pub fn mounts(store: &Path, dirs: &[Dir]) -> Vec<Mount> {
     m
 }
 
+/// Run at every start as the launch user: for each read-only directory, drop links into the
+/// shared mount whose skill is gone, then link every store entry that has no name there yet
+/// (anything already there wins: the agent's own skill, image content, a bundled kit skill).
+pub fn link_script(dirs: &[Dir]) -> Option<String> {
+    link_script_at(SHARED, dirs)
+}
+
+fn link_script_at(shared: &str, dirs: &[Dir]) -> Option<String> {
+    let ro: Vec<String> = dirs
+        .iter()
+        .filter(|d| d.access == Access::Ro)
+        .map(|d| crate::sandbox::sh_quote(&d.path))
+        .collect();
+    if ro.is_empty() {
+        return None;
+    }
+    let s = crate::sandbox::sh_quote(shared);
+    Some(format!(
+        r#"S={s}
+for d in {dirs}; do
+  mkdir -p "$d"
+  for l in "$d"/* "$d"/.[!.]*; do
+    [ -L "$l" ] || continue
+    case "$(readlink "$l")" in "$S"/*) [ -e "$l" ] || rm -f "$l" ;; esac
+  done
+  for e in "$S"/*; do
+    n=${{e##*/}}
+    case "$n" in [A-Za-z0-9]*) ;; *) continue ;; esac
+    case "$n" in *[!A-Za-z0-9._-]*) continue ;; esac
+    [ -e "$d/$n" ] || [ -L "$d/$n" ] || ln -s "$S/$n" "$d/$n"
+  done
+done"#,
+        dirs = ro.join(" ")
+    ))
+}
+
 /// `--skills` (or sbxenv's `sandboxOptions.skills`), else `skills.defaultMode`.
 pub fn resolve_mode(flag: Option<&str>, settings: &Settings) -> Result<Mode> {
     match flag {
@@ -196,6 +232,46 @@ mod tests {
             path: p.into(),
             access: a,
         }
+    }
+
+    #[test]
+    fn link_script_links_new_entries_clears_dangling_and_keeps_the_agent_s_own() {
+        let t = tempfile::tempdir().unwrap();
+        let shared = t.path().join("shared");
+        let d = t.path().join("home/.claude/skills");
+        for n in ["alpha", "gone", "mine", ".tmp-x"] {
+            std::fs::create_dir_all(shared.join(n)).unwrap();
+        }
+        let dirs = [
+            dir(d.to_str().unwrap(), Access::Ro),
+            dir("/x", Access::Rw),
+            dir("/y", Access::None),
+        ];
+        let script = link_script_at(shared.to_str().unwrap(), &dirs).unwrap();
+        assert!(!script.contains("/x") && !script.contains("/y"));
+        let run = || {
+            assert!(
+                std::process::Command::new("sh")
+                    .args(["-c", &script])
+                    .status()
+                    .unwrap()
+                    .success()
+            )
+        };
+        std::fs::create_dir_all(d.join("mine")).unwrap(); // the agent's own
+        run();
+        assert_eq!(
+            std::fs::read_link(d.join("alpha")).unwrap(),
+            shared.join("alpha")
+        );
+        assert!(std::fs::symlink_metadata(d.join("mine")).unwrap().is_dir());
+        assert!(std::fs::symlink_metadata(d.join(".tmp-x")).is_err());
+        std::fs::remove_dir(shared.join("gone")).unwrap();
+        std::fs::create_dir(shared.join("gamma")).unwrap();
+        run();
+        assert!(std::fs::symlink_metadata(d.join("gone")).is_err());
+        assert!(d.join("gamma").exists());
+        assert_eq!(link_script_at("/s", &[dir("/x", Access::Rw)]), None);
     }
 
     #[test]

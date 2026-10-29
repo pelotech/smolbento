@@ -487,6 +487,24 @@ fn setup<R: Runner>(
             sb.name()
         );
     }
+    // Not fatal: without the links the agent just doesn't see the shared skills this start.
+    // As the launch user (never root), so the links belong to the agent.
+    if let Some(script) = sb
+        .meta
+        .skills
+        .as_ref()
+        .and_then(|l| crate::skills::link_script(&l.dirs))
+    {
+        let user = launch_user(vm, sb).unwrap_or_else(|| "agent".into());
+        if let Err(e) = vm.exec_captured(&ExecSpec {
+            name: sb.machine.clone(),
+            user: Some(user),
+            cmd: vec!["sh".into(), "-c".into(), script],
+            ..Default::default()
+        }) {
+            eprintln!("warning: {}: couldn't link shared skills: {e:#}", sb.name());
+        }
+    }
     // The pre-4a path: a docker sandbox created before the docker kit has no startup runner.
     // With kits, the docker kit's startup hook starts dockerd (no second start here).
     if sb.meta.docker && sb.meta.kits.is_empty() {
@@ -1259,6 +1277,89 @@ mod tests {
             lines[4],
             "machine exec --name sbx-claude-myrepo -u root -- sh -c grep -q ' host.docker.internal$' \
              /etc/hosts || printf '\\n%s\\n' '100.96.0.1 host.docker.internal' >> /etc/hosts"
+        );
+    }
+
+    fn skills_status(label: &str) -> String {
+        let l = label.replace('"', "\\\"");
+        STATUS
+            .replace("\"state\": \"running\"", "\"state\": \"stopped\"")
+            .replace(
+                "\"sbx.docker\"",
+                &format!("\"sbx.skills\": \"{l}\",\n    \"sbx.docker\""),
+            )
+    }
+
+    const RO_LABEL: &str =
+        r#"{"mode":"readonly","dirs":[{"path":"/home/agent/.claude/skills","access":"ro"}]}"#;
+
+    #[test]
+    fn a_read_only_skills_sandbox_links_the_store_as_the_launch_user_at_start() {
+        let fake = FakeRunner::new();
+        fake.ok(&["machine", "status"], &skills_status(RO_LABEL));
+        let vm = Smolvm::new(fake);
+        let mut sb = get(&vm, "claude-myrepo").unwrap();
+        ensure_running(&vm, &mut sb, || Ok(plan())).unwrap();
+        let script = crate::skills::link_script(&sb.meta.skills.as_ref().unwrap().dirs).unwrap();
+        let lines = vm.runner().call_lines();
+        let want = format!("machine exec --name sbx-claude-myrepo -u agent -- sh -c {script}");
+        assert_eq!(
+            lines.iter().filter(|l| **l == want).count(),
+            1,
+            "{lines:#?}"
+        );
+        assert!(script.contains("/home/agent/.claude/skills"));
+        let at = |f: &dyn Fn(&String) -> bool| lines.iter().position(f).unwrap();
+        let hosts = at(&|l| l.ends_with(&hosts_cmd()));
+        let link = at(&|l| *l == want);
+        assert!(hosts < link, "{lines:#?}");
+    }
+
+    #[test]
+    fn a_failed_skills_link_only_warns() {
+        let fake = FakeRunner::new();
+        fake.ok(&["machine", "status"], &skills_status(RO_LABEL));
+        let script = crate::skills::link_script(&[crate::skills::Dir {
+            path: "/home/agent/.claude/skills".into(),
+            access: crate::skills::Access::Ro,
+        }])
+        .unwrap();
+        fake.fail(
+            &[
+                "machine",
+                "exec",
+                "--name",
+                "sbx-claude-myrepo",
+                "-u",
+                "agent",
+                "--",
+                "sh",
+                "-c",
+                &script,
+            ],
+            "EXEC_FAILED",
+            "boom",
+        );
+        let vm = Smolvm::new(fake);
+        let mut sb = get(&vm, "claude-myrepo").unwrap();
+        ensure_running(&vm, &mut sb, || Ok(plan())).unwrap();
+        assert!(sb.is_running());
+    }
+
+    #[test]
+    fn a_sandbox_without_a_skills_label_gets_no_link_exec() {
+        let fake = FakeRunner::new();
+        fake.ok(
+            &["machine", "status"],
+            &STATUS.replace("\"state\": \"running\"", "\"state\": \"stopped\""),
+        );
+        let vm = Smolvm::new(fake);
+        let mut sb = get(&vm, "claude-myrepo").unwrap();
+        ensure_running(&vm, &mut sb, || Ok(plan())).unwrap();
+        let lines = vm.runner().call_lines();
+        assert!(
+            !lines.iter().any(|l| l.contains("skills-shared")),
+            "{lines:#?}"
         );
     }
 
