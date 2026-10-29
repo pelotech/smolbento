@@ -1,5 +1,12 @@
 # Changelog
 
+## [0.10.0](https://github.com/pelotech/smolbento/compare/v0.9.0...v0.10.0) (2026-10-29)
+
+
+### Features
+
+* filtered SSH agent forwarding (Phase 5b) ([#39](https://github.com/pelotech/smolbento/issues/39)) ([010eae3](https://github.com/pelotech/smolbento/commit/010eae3afd6a5eadeacd2771a5851f619b67a15b))
+
 ## [0.9.0](https://github.com/pelotech/smolbento/compare/v0.8.0...v0.9.0) (2026-10-29)
 
 
