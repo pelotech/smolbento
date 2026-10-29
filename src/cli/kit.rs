@@ -694,7 +694,7 @@ mod tests {
     }
 
     #[test]
-    fn host_mount_is_supported() {
+    fn host_mount_and_ssh_agent_without_authenticate_are_supported() {
         let cap = |body| super::Cap {
             ty: String::new(),
             optional: false,
@@ -706,6 +706,16 @@ mod tests {
         });
         assert!(super::supported(&host));
         assert!(!super::supported(&cap(super::CapBody::Unsupported)));
+        let ssh = |authenticate: Vec<String>| {
+            cap(super::CapBody::SshAgent {
+                phases: vec![crate::kits::model::SshPhase::Runtime],
+                unrestricted: false,
+                sign: vec!["git".into()],
+                authenticate,
+            })
+        };
+        assert!(super::supported(&ssh(vec![])));
+        assert!(!super::supported(&ssh(vec!["github.com".into()])));
     }
 
     #[test]

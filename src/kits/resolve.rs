@@ -436,7 +436,10 @@ fn ssh_phase(
             if !e.optional {
                 bail!("kit {kit}: ssh-agent@1 authenticate limits aren't supported yet");
             }
-            let note = format!("{kit}: com.docker.sandbox/ssh-agent@1 with authenticate limits");
+            let note = format!(
+                "{kit}: com.docker.sandbox/ssh-agent@1 with authenticate limits in the {} phase",
+                phase.as_str()
+            );
             if !skipped.contains(&note) {
                 skipped.push(note);
             }
@@ -1074,8 +1077,8 @@ mod tests {
         assert_eq!(
             p.skipped_warnings(),
             [
-                "kit o: skipping com.docker.sandbox/ssh-agent@1 with authenticate limits (not \
-                 supported)"
+                "kit o: skipping com.docker.sandbox/ssh-agent@1 with authenticate limits in the \
+                 runtime phase (not supported)"
             ]
         );
 
@@ -1083,6 +1086,28 @@ mod tests {
         let p = run(preset(), vec![req]).unwrap();
         assert_eq!(p.merged.ssh_agent.runtime, grant(None, true, Some("m")));
         assert!(p.skipped.is_empty());
+    }
+
+    #[test]
+    fn an_optional_authenticate_entry_is_skipped_only_in_bounded_phases() {
+        use SshPhase::{Install, Runtime};
+        // `o` spans both phases; `u` makes runtime unrestricted, so only install skips `o`.
+        let o = mixin("o").cap(
+            SSH,
+            true,
+            ssh(&[Install, Runtime], &["git"], &["github.com"]),
+        );
+        let u = mixin("u").cap(SSH, true, ssh(&[Runtime], &[], &[]));
+        let p = run(workload("w"), vec![o, u]).unwrap();
+        assert_eq!(p.merged.ssh_agent.install, None);
+        assert_eq!(p.merged.ssh_agent.runtime, grant(None, false, Some("o")));
+        assert_eq!(
+            p.skipped_warnings(),
+            [
+                "kit o: skipping com.docker.sandbox/ssh-agent@1 with authenticate limits in the \
+                 install phase (not supported)"
+            ]
+        );
     }
 
     fn cred(oauth: Option<OAuthReq>) -> CapBody {
