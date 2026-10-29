@@ -606,12 +606,12 @@ mod tests {
         }
         let dirs = [
             dir(d.to_str().unwrap(), Access::Link),
-            dir("/w", Access::Rw),
-            dir("/x", Access::Ro),
-            dir("/y", Access::None),
+            dir("/not-linked-rw", Access::Rw),
+            dir("/not-linked-ro", Access::Ro),
+            dir("/not-linked-none", Access::None),
         ];
         let script = link_script_at(shared.to_str().unwrap(), ME, &dirs).unwrap();
-        assert!(!script.contains("/w") && !script.contains("/x") && !script.contains("/y"));
+        assert!(!script.contains("/not-linked"));
         let run = || {
             assert!(
                 std::process::Command::new("sh")
