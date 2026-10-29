@@ -327,6 +327,8 @@ pub fn prepare_create<R: Runner>(
     // The first start's first step, so it runs before every install hook and after the start's
     // setup linked the store (a store entry of the same name is then taken). As the launch user,
     // like the store's links, so the links belong to the agent.
+    // Bundled skills come from kits, and kits always make a first start.
+    debug_assert!(bundled.is_empty() || first_start.is_some());
     if !bundled.is_empty()
         && let Some(first) = first_start.as_mut()
     {

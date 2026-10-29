@@ -752,7 +752,9 @@ pub fn apply_kit_steps<R: Runner>(
             on(Event::Install(kit));
             told.push(kit);
         }
-        run.install(step).map_err(|e| (KitPhase::Install, e))?;
+        for line in run.install(step).map_err(|e| (KitPhase::Install, e))? {
+            eprintln!("{line}");
+        }
     }
     // The kits record's first column is each kit's name.
     for kit in steps
@@ -844,14 +846,25 @@ impl<R: Runner> Steps<'_, R> {
         Ok(())
     }
 
-    /// An install step; a failure names it and carries the end of its output.
-    fn install(&mut self, step: &InstallStep) -> Result<()> {
+    /// An install step; a failure names it and carries the end of its output. A successful
+    /// smolbento step (`kit: None`) returns its stderr lines for the user: the bundled skills
+    /// step warns there about an optional skill it skipped. Kit hooks' output stays quiet.
+    fn install(&mut self, step: &InstallStep) -> Result<Vec<String>> {
         let (spec, copied) = self.spec(step.user.as_deref().unwrap_or("root"), &step.script)?;
         let out = self.vm.exec_output(&spec);
         self.remove(copied);
         let out = out.with_context(|| format!("{} failed", step.label))?;
         if out.code == 0 {
-            return Ok(());
+            if step.kit.is_some() {
+                return Ok(Vec::new());
+            }
+            return Ok(out
+                .stderr
+                .lines()
+                .map(str::trim_end)
+                .filter(|l| !l.is_empty())
+                .map(String::from)
+                .collect());
         }
         let text = if out.stderr.trim().is_empty() {
             out.stdout.clone()
@@ -2240,6 +2253,35 @@ echo "$g""#,
         assert!(!envs[1].iter().any(|(k, _)| k == "TOK"), "{:?}", envs[1]);
         assert!(envs[1].iter().any(|(k, _)| k == "KEEP"));
         assert!(removed[1].contains(&"TOK".to_string()), "{:?}", removed[1]);
+    }
+
+    #[test]
+    fn a_successful_smolbento_step_relays_its_stderr_and_a_kit_hook_does_not() {
+        let fake = FakeRunner::new();
+        fake.ok(&["machine", "status"], STATUS);
+        fake.ok_with_stderr(
+            &["machine", "exec"],
+            "",
+            "warning: skipping skill review: /x/review already exists\n",
+        );
+        let vm = Smolvm::new(fake);
+        let sb = get(&vm, "claude-myrepo").unwrap();
+        let mut run = Steps {
+            vm: &vm,
+            sb: &sb,
+            n: 0,
+        };
+        let own = InstallStep {
+            label: "bundled agent skills".into(),
+            kit: None,
+            user: Some("agent".into()),
+            script: "true".into(),
+        };
+        assert_eq!(
+            run.install(&own).unwrap(),
+            ["warning: skipping skill review: /x/review already exists"]
+        );
+        assert!(run.install(&hook(1, None, "true")).unwrap().is_empty());
     }
 
     #[test]
