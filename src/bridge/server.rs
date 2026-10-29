@@ -41,8 +41,8 @@ pub(super) const DEADLINE: Duration = Duration::from_secs(10);
 pub(super) const POLL: Duration = Duration::from_millis(50);
 
 /// A running listener. Dropping it stops the thread (within `POLL`, or once a running opener or
-/// copier returns; those have their own timeout), so no request is handled after it, and removes the socket file, if it is still
-/// the one this process bound.
+/// copier returns; those have their own timeout), so no request is handled after it, and removes
+/// the socket file, if it is still the one this process bound.
 pub struct Server {
     path: PathBuf,
     ino: u64,
@@ -318,8 +318,12 @@ fn open(h: &Handlers, body: &[u8]) -> Response {
     {
         return Response::new(400, "only https URLs are supported");
     }
-    if url.chars().any(|c| c.is_control() || c.is_whitespace()) {
-        return bad_request();
+    // Characters never valid in a URL: they would reach `open`/`xdg-open` (a shell script).
+    if url
+        .chars()
+        .any(|c| c.is_control() || c.is_whitespace() || "`\"\\<>{}|^".contains(c))
+    {
+        return Response::new(400, "invalid URL");
     }
     // A login's callback server in the sandbox: relay the browser's callback to it.
     if let Some(port) = callback_port(url) {
@@ -662,8 +666,25 @@ mod tests {
             assert_eq!(r.status, 400, "{url}");
             assert_eq!(r.body, "only https URLs are supported\n", "{url}");
         }
-        for url in ["https://a b", "https://a\n", "https://a\u{7f}"] {
-            assert_eq!(route(&h, &post("/open", url)).status, 400, "{url:?}");
+        for url in [
+            "https://a b",
+            "https://a\n",
+            "https://a\u{7f}",
+            "https://a/`id`",
+            "https://a/\"x",
+            "https://a/\\x",
+            "https://a/<x>",
+            "https://a/{x}",
+            "https://a/x|y",
+            "https://a/x^y",
+            "https://a/\u{85}",
+        ] {
+            let r = route(&h, &post("/open", url));
+            assert_eq!(
+                (r.status, r.body.as_str()),
+                (400, "invalid URL\n"),
+                "{url:?}"
+            );
         }
         let bad_utf8 = Request {
             body: b"https://\xff".to_vec(),
