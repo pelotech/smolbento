@@ -589,7 +589,7 @@ pub fn prune<R: Runner>(ctx: &mut Ctx<R>, a: &PruneArgs) -> Result<i32> {
 pub fn reset<R: Runner>(ctx: &mut Ctx<R>, a: &ResetArgs) -> Result<i32> {
     confirm(
         ctx,
-        "Remove every sandbox and smolbento's session state?",
+        "Remove every sandbox, smolbento's session state and the shared skills store?",
         a.force,
     )?;
     let all = sandbox::list(&ctx.vm)?;
@@ -597,6 +597,7 @@ pub fn reset<R: Runner>(ctx: &mut Ctx<R>, a: &ResetArgs) -> Result<i32> {
         remove(ctx, sb, !a.preserve_secrets)?;
     }
     let _ = std::fs::remove_dir_all(ctx.paths.sessions());
+    crate::skills::store::Store::new(&ctx.paths).wipe()?;
     if !a.preserve_secrets {
         super::secret::forget_all(ctx)?;
     }
@@ -1852,6 +1853,17 @@ SETUP
         with_forks(&t, "stopped", "stopped", "stopped");
         sbt(&mut t.ctx, &["reset", "-f"]).unwrap();
         assert_eq!(deletes(&t), vec!["a-fork-1", "a-fork-2", "a"]);
+    }
+
+    #[test]
+    fn reset_removes_the_skills_store() {
+        let mut t = test_env(&[]);
+        t.ctx.vm.runner().ok(&["machine", "ls", "--json"], "[]");
+        let store = t.ctx.paths.skills_store();
+        std::fs::create_dir_all(store.join("a")).unwrap();
+        std::fs::create_dir_all(t.ctx.paths.skills_metadata()).unwrap();
+        sbt(&mut t.ctx, &["reset", "-f"]).unwrap();
+        assert!(!store.exists() && !t.ctx.paths.skills_metadata().exists());
     }
 
     fn fixture(name: &str) -> String {
