@@ -104,8 +104,28 @@ agent and `exec` alike; your own `-e` wins). None of them holds a secret value.
 Left out: `*_API_KEY=proxy-managed` and the `GH_TOKEN` sentinel (smolvm uses its own
 placeholders), `MCP_*` (no MCP gateway), `GIT_CONFIG_*`, the proxy specifics
 (`PROXY_CA_CERT_B64`, `JAVA_TOOL_OPTIONS`, `NODE_USE_ENV_PROXY`), `CLAUDE_ENV_FILE`,
-`SSH_AUTH_SOCK*`, `WAYLAND_DISPLAY`/`XDG_RUNTIME_DIR`, the PAM-style startup-hook environment and
+`SSH_AUTH_SOCK_GATEWAY` (`SSH_AUTH_SOCK` is set with an [SSH agent](#ssh-agent) grant),
+`WAYLAND_DISPLAY`/`XDG_RUNTIME_DIR`, the PAM-style startup-hook environment and
 `LC_ALL=C` for startup hooks. Kits relying on those see them unset.
+
+## SSH agent
+
+As in sbx, sandboxes of the built-in agents get your SSH agent at runtime when you have one, kits
+ask with `ssh-agent@1`, `SSH_AUTH_SOCK` is `/run/ssh-agent.sock`, and only listing keys and
+signing reach your agent (`ssh-add -D` fails with `Failed to remove all identities.`). The
+settings are sbx's: `ssh.agentForwardingEnabled` and `ssh.agentSocketPath`.
+
+| Area | sbx | smolbento |
+|---|---|---|
+| Serving | The daemon, whenever the sandbox runs | `sbt` itself, only while it runs for the sandbox: `sbt run` (attached), `sbt exec -it` and plain `sbt exec`, and the create's install steps for an `install` grant. No daemon: at other times (the workload running on its own, a `long-running` sandbox nobody is attached to) the sandbox's agent connections fail |
+| Sessions | Every session reaches the agent | The first session serves it; a second one at the same time uses that one, and when the first exits the agent is gone until the next `run` or `exec` |
+| Which agent | The sbx client's `SSH_AUTH_SOCK` | The `SSH_AUTH_SOCK` of the `sbt` that serves it, or `ssh.agentSocketPath` |
+| `SSH_AUTH_SOCK_GATEWAY` | `gateway.docker.internal:3129` | Not set (no TCP gateway) |
+| `authenticate` limits | Logins only to the named servers | Not yet (Phase 5g): a required entry with them is refused (`kit K: ssh-agent@1 authenticate limits aren't supported yet`), an optional one skipped |
+| `setup ssh` | `ssh NAME.sbx` into sandboxes | Not yet (Phase 5h) |
+| Forks | No forks | A fork has no agent of its own, but keeps the parent's socket mount, so its processes can use the agent, with the parent's grant, while the parent is served |
+| `kit add` of an `ssh-agent@1` kit | Recreates the container | "recreate required: … SSH agent" |
+| Sandboxes from before | n/a | Sandboxes created before smolbento had the agent have none; recreate them |
 
 ## Kits
 
@@ -131,7 +151,7 @@ with its `type@version` before anything is created; an optional one is skipped w
 | `privileged@1` | Yes | Yes |
 | `agent-sessions@1` | Declaration only | Declaration only |
 | `host-mount@1` | Yes | Yes: a directory on your machine, shared by the kit's sandboxes and kept after `rm` (see below) |
-| `ssh-agent@1` | Yes | Later (Phase 5, with `setup ssh`) |
+| `ssh-agent@1` | Yes | Yes, with `sign` limits, served while `sbt` runs (see [SSH agent](#ssh-agent)). `authenticate` limits: later (a required entry with them is refused, an optional one skipped) |
 | `agent-skills@1`, `agent-skill@1` | Yes | Later (Phase 5, with `--skills`) |
 | `kit-registry@1` | Approved builder kits only | No |
 | `agent-interactive-sessions@1`, `usb-device@1` | No | No |

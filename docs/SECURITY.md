@@ -175,6 +175,24 @@ access, so load only kits you trust.
   on `localhost`, whose cookies aren't separated by port: they can read and set the cookies of
   your other `localhost` apps. Each replay is cut off after 15 seconds or 1 MiB of response.
   `browser.enabled false` also turns the relay off.
+- **Your SSH agent.** Sandboxes of the built-in agents, and kits that ask with `ssh-agent@1`, can
+  use your SSH agent while `sbt run`, `sbt exec -it` or `sbt exec` runs for them (and a kit's
+  `install` grant during the create's install steps). What they can do with it:
+  - list your agent's public keys, and have it sign with any of them: git commit signatures, and
+    SSH logins to any server your keys open (a kit's `sign: [...]` list allows only signatures in
+    those namespaces, no logins);
+  - not add, remove or lock keys, or anything else: smolbento answers every other request itself
+    with a failure, without passing it on. Your private keys never enter the sandbox.
+
+  While it's served, code in the sandbox can sign as you and log in where your keys work, so
+  don't run untrusted work with it. A fork has no agent of its own but keeps the parent's socket
+  mount: while the parent is being served, a process in a fork can use the agent with the
+  parent's grant. The socket lives in `/tmp/sbt-<uid>/` and gets the same checks as the bridge's
+  (a sandbox gets no agent for a start while that directory isn't private, or the create is
+  refused for a kit that requires it). To turn it off, run
+  `sbt settings set ssh.agentForwardingEnabled false` (new connections are refused at once; open
+  ones stay) or run `sbt` without `SSH_AUTH_SOCK`; to use a dedicated agent with only the keys you
+  want sandboxes to use, set `ssh.agentSocketPath` to its socket.
 
 ## Supply chain
 

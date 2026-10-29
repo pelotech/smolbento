@@ -36,6 +36,12 @@ shared by the kit's sandboxes and kept after they're removed. `--mount` and `sbx
 `mounts:` choose your own directory, and the new `sbt inspect` shows where each one is. See
 [Usage](usage.md#kit-host-mounts).
 
+**Phase 5b (SSH agent forwarding) is done.** Sandboxes of the built-in agents, and kits that ask
+with `ssh-agent@1`, can list your SSH agent's keys and sign (git over SSH, commit signing), but
+can't add, remove or lock keys; `sign` limits keep a kit to the namespaces it names. It's served
+while `sbt run`, `sbt exec -it` or `sbt exec` runs. Sandboxes created before it need recreating.
+See [Usage](usage.md#ssh-agent) and [Security](SECURITY.md#other-things-to-know).
+
 **Phase 5e (browser and clipboard) is done.** While you're attached, the sandbox can open
 `https://` URLs in your browser, copy text to your clipboard, and finish browser logins that
 redirect to `localhost`. Sandboxes created before it need recreating. See
@@ -66,8 +72,9 @@ terminal fail until you do.
 | 4b | `sbxenv.yaml` core: `env create/run/exec/rm`, files, args, user defaults, secrets, kits, ports | ✅ Done |
 | 4c | Host services: `localhost[:PORT]` rules reach the host as `host.docker.internal`, live (interim: every host port, until smolvm can open one) | ✅ Done (interim) |
 | 5a | Host mounts: `host-mount@1`, `--mount`, `sbxenv.yaml` `mounts:`, `inspect` | ✅ Done |
+| 5b | SSH agent forwarding: `ssh-agent@1` with `sign` limits, the built-in agents' own grant, `ssh.agentForwardingEnabled`, `ssh.agentSocketPath` | ✅ Done |
 | 5e | Browser and clipboard bridge while attached (`xdg-open`, `wl-copy`/`xclip`/`xsel`/`pbcopy`, the login callback relay, `browser.enabled`) | ✅ Done |
-| 5 | The other parts, easiest first: 5b SSH agent forwarding (`ssh-agent@1` with `sign` limits, `ssh.agentForwardingEnabled`, `ssh.agentSocketPath`); 5c skills (`--skills`, `skills`, `agent-skills@1`/`agent-skill@1`); 5d `template`; 5f MCP (`--static-mcp`, `mcp`); 5g `ssh-agent@1` `authenticate` limits (logins only to named servers, checked against your known hosts); 5h `setup ssh` (`ssh NAME.sbx` into sandboxes, e.g. from VS Code Remote-SSH; the `ssh.autoCreate`, `ssh.defaultAgent`, `ssh.defaultTemplate`, `ssh.workspaceRoot` settings) | Planned |
+| 5 | The other parts, easiest first: 5c skills (`--skills`, `skills`, `agent-skills@1`/`agent-skill@1`); 5d `template`; 5f MCP (`--static-mcp`, `mcp`); 5g `ssh-agent@1` `authenticate` limits (logins only to named servers, checked against your known hosts); 5h `setup ssh` (`ssh NAME.sbx` into sandboxes, e.g. from VS Code Remote-SSH; the `ssh.autoCreate`, `ssh.defaultAgent`, `ssh.defaultTemplate`, `ssh.workspaceRoot` settings) | Planned |
 | 6 | Finish `sbxenv.yaml`: `env plan`, remembered approvals (`env.rememberHostCommands`), `lifecycle`, `bindings`, `registries`, `mcp`, the remaining `sandboxOptions` | Planned |
 | 7 | Kit publishing: `kit pack/push/pull/sign/verify` | Planned |
 | 8 | The `plus` kit, built and published with smolbento itself (an end-to-end check of everything before it) | Planned |
@@ -87,6 +94,8 @@ terminal fail until you do.
 - Linux uses a 0600 file for secret values where no Secret Service runs.
 - The browser and clipboard bridge works only while you're attached (`run`, `exec -it`), copies
   text only, and doesn't read your clipboard or paste images. Forks have no bridge.
+- The SSH agent is served only while `sbt run`, `sbt exec -it` or `sbt exec` runs for the sandbox
+  (no daemon), and `ssh-agent@1` `authenticate` limits aren't supported yet (5g).
 - Only the agent's primary group takes your gid: group-writable shared directories aren't
   writable through your other groups. Images without `groupmod` (busybox) keep their gid, so on
   Linux the agent can't create files in the workspace unless that gid already matches yours.
