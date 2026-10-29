@@ -1,10 +1,10 @@
 //! End-to-end tests that boot real smolvm VMs. Ignored by default; run with `just e2e`.
 //! Machines are small (1 CPU, 1 GiB) so they fit GitHub's private-repo runners.
 //! The network policy, secrets, fork and install-phase tests need httpbin.org (not example.com:
-//! some resolvers, smolvm's upstream among them, answer NXDOMAIN for it). The clone and fork tests
-//! need the Alpine package mirror. The kit tests pull `alpine`, `registry:2`, the shell-docker
-//! template and BuildKit images from Docker Hub. Published-kit fixtures go to a `registry:2`
-//! machine on a loopback port, pushed with `oci-client`.
+//! some resolvers, smolvm's upstream among them, answer NXDOMAIN for it). The clone, fork and
+//! bridge tests need the Alpine package mirror. The kit tests pull `alpine`, `registry:2`, the
+//! shell-docker template and BuildKit images from Docker Hub. Published-kit fixtures go to a
+//! `registry:2` machine on a loopback port, pushed with `oci-client`.
 
 use std::path::{Path, PathBuf};
 use std::process::{Command, Output};
@@ -2289,4 +2289,117 @@ fn env_files_create_exec_and_remove() {
     assert_eq!(e.state(), "absent");
     let secrets = e.ok(&["secret", "ls"]);
     assert!(!secrets.contains(&e.name), "{secrets}");
+}
+
+/// A `smolbento _bridge NAME` in the background, as `run` and `exec -it` serve it while attached.
+/// Killed on drop, so a failing test doesn't leave it running.
+struct Bridge {
+    child: std::process::Child,
+    socket: PathBuf,
+}
+
+impl Bridge {
+    fn start(e: &E2e, opener: &Path, copier: &Path) -> Bridge {
+        let child = e
+            .env(Command::new(env!("CARGO_BIN_EXE_smolbento")).args(["_bridge", &e.name]))
+            .env("SMOLBENTO_OPEN_CMD", opener)
+            .env("SMOLBENTO_COPY_CMD", copier)
+            .spawn()
+            .unwrap();
+        let socket = smolbento::bridge::host_socket(&e.name);
+        assert!(wait_until(10, || socket.exists()), "_bridge didn't serve");
+        Bridge { child, socket }
+    }
+}
+
+impl Drop for Bridge {
+    fn drop(&mut self) {
+        let _ = self.child.kill();
+        let _ = self.child.wait();
+        let _ = std::fs::remove_file(&self.socket);
+    }
+}
+
+/// An executable `sh` script.
+fn sh_script(path: &Path, body: &str) {
+    use std::os::unix::fs::PermissionsExt;
+    std::fs::write(path, format!("#!/bin/sh\n{body}\n")).unwrap();
+    std::fs::set_permissions(path, std::fs::Permissions::from_mode(0o755)).unwrap();
+}
+
+/// `GET path` on the host's `127.0.0.1:port`; the whole response.
+fn host_get(port: u16, path: &str) -> std::io::Result<String> {
+    use std::io::{Read, Write};
+    let mut s = std::net::TcpStream::connect(("127.0.0.1", port))?;
+    s.set_read_timeout(Some(std::time::Duration::from_secs(30)))?;
+    write!(
+        s,
+        "GET {path} HTTP/1.1\r\nHost: 127.0.0.1:{port}\r\nConnection: close\r\n\r\n"
+    )?;
+    let mut out = String::new();
+    s.read_to_string(&mut out)?;
+    Ok(out)
+}
+
+/// The browser and clipboard bridge while "attached": https URLs reach the host opener, other
+/// URLs and a stopped bridge print the fallback, copies reach the host clipboard, and a login
+/// redirect to `http://127.0.0.1:PORT` relays the host's callback to a guest loopback listener.
+/// The host commands are scripts that record what they get; no browser or clipboard is touched.
+#[test]
+#[ignore = "boots real VMs and needs the Alpine package mirror; run with `just e2e`"]
+fn bridge_opens_urls_copies_text_and_relays_login_callbacks() {
+    let e = E2e::new("brg");
+    e.create_alpine_with("apk add -q curl busybox-extras");
+    let dir = e.dir.path();
+    let (opened, copied) = (dir.join("opened"), dir.join("copied"));
+    let (opener, copier) = (dir.join("open.sh"), dir.join("copy.sh"));
+    sh_script(
+        &opener,
+        &format!("printf '%s\\n' \"$1\" >> '{}'", opened.display()),
+    );
+    sh_script(&copier, &format!("cat > '{}'", copied.display()));
+    let guest = |script: &str| e.ok(&["exec", &e.name, "sh", "-c", script]);
+    let read = |p: &Path| std::fs::read_to_string(p).unwrap_or_default();
+
+    let bridge = Bridge::start(&e, &opener, &copier);
+    assert_eq!(guest("xdg-open https://example.invalid/x"), "");
+    assert_eq!(read(&opened), "https://example.invalid/x\n");
+    assert_eq!(
+        guest("xdg-open http://example.invalid/y"),
+        "Open this URL in your browser: http://example.invalid/y\n",
+        "only https URLs open"
+    );
+    guest("printf hi | wl-copy");
+    assert_eq!(read(&copied), "hi");
+
+    // A login whose redirect_uri is the guest's loopback callback server: the host's
+    // 127.0.0.1:PORT relays to it. PORT is free on the host; the guest's is its own.
+    let port = std::net::TcpListener::bind("127.0.0.1:0")
+        .unwrap()
+        .local_addr()
+        .unwrap()
+        .port();
+    guest_root(
+        &e.name,
+        &format!(
+            "mkdir -p /tmp/www && echo callback-ok > /tmp/www/cb && \
+             busybox-extras httpd -p 127.0.0.1:{port} -h /tmp/www"
+        ),
+    );
+    let login = format!(
+        "https://login.example.invalid/auth?client_id=c&redirect_uri=http%3A%2F%2F127.0.0.1%3A{port}%2Fcb"
+    );
+    assert_eq!(guest(&format!("xdg-open '{login}'")), "");
+    let answer = host_get(port, "/cb?code=abc").unwrap();
+    assert!(answer.starts_with("HTTP/1.1 200"), "{answer}");
+    assert!(answer.contains("callback-ok"), "{answer}");
+
+    // Nobody attached: the shims fall back and the relay is gone.
+    drop(bridge);
+    assert_eq!(
+        guest("xdg-open https://example.invalid/z"),
+        "Open this URL in your browser: https://example.invalid/z\n"
+    );
+    assert_eq!(read(&opened).lines().count(), 2, "nothing more opened");
+    assert!(host_get(port, "/cb").is_err(), "the relay stopped");
 }

@@ -15,9 +15,10 @@ pub use types::{EgressEvent, Machine, MachineState, PublishedPort};
 
 use std::io::Read;
 use std::path::PathBuf;
-use std::process::{Command, ExitStatus, Stdio};
+use std::process::{Child, Command, ExitStatus, Stdio};
+use std::time::{Duration, Instant};
 
-use anyhow::{Context, Result};
+use anyhow::{Context, Result, anyhow, bail};
 
 /// Captured result of one smolvm invocation.
 #[derive(Debug, Clone, Default, PartialEq, Eq)]
@@ -98,6 +99,45 @@ impl ProcessRunner {
             .envs(env.iter().map(|(k, v)| (k, v)))
             .stdin(Stdio::null());
         cmd
+    }
+
+    /// Like `run`, for output an untrusted guest controls (the login relay's replay): smolvm is
+    /// killed after `timeout`, and an error once stdout passes `cap` bytes. Stderr is dropped.
+    pub fn run_bounded(&self, args: &[String], timeout: Duration, cap: usize) -> Result<Output> {
+        self.trace(args);
+        let until = Instant::now() + timeout;
+        let mut child = self
+            .command(args, &[], &[])
+            .stdout(Stdio::piped())
+            .stderr(Stdio::null())
+            .spawn()
+            .with_context(|| self.spawn_error())?;
+        let mut pipe = child.stdout.take().context("smolvm stdout")?;
+        let (tx, rx) = std::sync::mpsc::channel();
+        // Its own thread, so the timeout holds while smolvm writes nothing.
+        std::thread::spawn(move || {
+            let mut buf = Vec::new();
+            let read = (&mut pipe).take(cap as u64 + 1).read_to_end(&mut buf);
+            let _ = tx.send(read.map(|_| buf));
+        });
+        let out = match rx.recv_timeout(timeout) {
+            Ok(Ok(buf)) if buf.len() > cap => Err(anyhow!("smolvm wrote more than {cap} bytes")),
+            Ok(Ok(buf)) => wait_until(&mut child, until).map(|status| Output {
+                code: exit_code(status),
+                stdout: String::from_utf8_lossy(&buf).into_owned(),
+                stderr: String::new(),
+            }),
+            Ok(Err(e)) => Err(anyhow!(e).context("reading smolvm's output")),
+            Err(_) => Err(anyhow!(
+                "smolvm didn't finish within {}s",
+                timeout.as_secs()
+            )),
+        };
+        if out.is_err() {
+            let _ = child.kill();
+            let _ = child.wait();
+        }
+        out
     }
 
     fn spawn_error(&self) -> String {
@@ -223,6 +263,19 @@ fn read_pieces(r: &mut impl Read, on_line: &mut dyn FnMut(&str)) -> std::io::Res
     Ok(all)
 }
 
+/// Waits for `child` to exit, until `until`.
+fn wait_until(child: &mut Child, until: Instant) -> Result<ExitStatus> {
+    loop {
+        if let Some(status) = child.try_wait()? {
+            return Ok(status);
+        }
+        if Instant::now() >= until {
+            bail!("smolvm didn't exit in time");
+        }
+        std::thread::sleep(Duration::from_millis(20));
+    }
+}
+
 fn exit_code(status: ExitStatus) -> i32 {
     use std::os::unix::process::ExitStatusExt;
     status
@@ -274,6 +327,61 @@ mod tests {
 
     fn pair(k: &str, v: &str) -> (String, String) {
         (k.to_string(), v.to_string())
+    }
+
+    #[test]
+    fn run_bounded_captures_stdout_and_the_exit_code() {
+        let dir = tempfile::tempdir().unwrap();
+        let r = script(
+            dir.path(),
+            "printf 'HTTP/1.1 200 OK'; echo oops >&2; exit 3",
+        );
+        let out = r.run_bounded(&[], Duration::from_secs(5), 1 << 20).unwrap();
+        assert_eq!(
+            out,
+            Output {
+                code: 3,
+                stdout: "HTTP/1.1 200 OK".into(),
+                stderr: String::new(),
+            }
+        );
+    }
+
+    #[test]
+    fn run_bounded_kills_a_hung_smolvm() {
+        let dir = tempfile::tempdir().unwrap();
+        let r = script(dir.path(), "exec sleep 30");
+        let started = Instant::now();
+        let err = r
+            .run_bounded(&[], Duration::from_millis(300), 1 << 20)
+            .unwrap_err();
+        assert!(err.to_string().contains("didn't finish"), "{err:#}");
+        assert!(
+            started.elapsed() < Duration::from_secs(5),
+            "{:?}",
+            started.elapsed()
+        );
+    }
+
+    #[test]
+    fn run_bounded_refuses_output_over_the_cap() {
+        let dir = tempfile::tempdir().unwrap();
+        // Endless output: refused at the cap, not after the timeout.
+        let r = script(dir.path(), "exec yes");
+        let started = Instant::now();
+        let err = r
+            .run_bounded(&[], Duration::from_secs(10), 1000)
+            .unwrap_err();
+        assert!(err.to_string().contains("more than 1000 bytes"), "{err:#}");
+        assert!(
+            started.elapsed() < Duration::from_secs(5),
+            "{:?}",
+            started.elapsed()
+        );
+        // Exactly the cap is fine.
+        let r = script(dir.path(), "head -c 1000 /dev/zero | tr '\\0' x");
+        let out = r.run_bounded(&[], Duration::from_secs(5), 1000).unwrap();
+        assert_eq!(out.stdout.len(), 1000);
     }
 
     #[test]

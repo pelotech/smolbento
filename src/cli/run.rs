@@ -11,6 +11,7 @@ use super::plan;
 use super::progress::Progress;
 use super::{Ctx, RunArgs, Unsupported};
 use crate::agents;
+use crate::bridge;
 use crate::sandbox::{self, Sandbox, session};
 use crate::smolvm::{ExecSpec, Runner, SmolvmError};
 use crate::workspace::clone;
@@ -128,6 +129,8 @@ pub fn run<R: Runner>(ctx: &mut Ctx<R>, a: &RunArgs) -> Result<i32> {
     }
     let code = {
         let _session = session::Session::register(&sessions, sb.name())?;
+        // Opens URLs and copies text on the host for the agent while the user is attached.
+        let _bridge = bridge::attach(&ctx.env, &ctx.settings, &sb);
         if image_user.is_some() && !has_bash(ctx, &sb)? {
             // sbx's error for such an image, and the code its agent exits with.
             eprintln!("executable file '{BASH}' not found");
@@ -983,5 +986,31 @@ mod tests {
             t.ctx.vm.runner().call_lines().last().unwrap(),
             "machine delete -n sbx-claude-proj -f"
         );
+    }
+
+    #[test]
+    fn serves_the_bridge_while_attached() {
+        let mut t = test_env(&[]);
+        let (name, seen) = bridge_probe(&t, "run", true);
+        sbt(&mut t.ctx, &["run", "--name", &name]).unwrap();
+        assert_eq!(*seen.borrow(), vec![true]);
+        // Stopped with the session.
+        assert!(!crate::bridge::host_socket(&name).exists());
+    }
+
+    #[test]
+    fn serves_no_bridge_for_an_unlabelled_sandbox() {
+        let mut t = test_env(&[]);
+        let (name, seen) = bridge_probe(&t, "run", false);
+        sbt(&mut t.ctx, &["run", "--name", &name]).unwrap();
+        assert_eq!(*seen.borrow(), vec![false]);
+    }
+
+    #[test]
+    fn serves_no_bridge_over_ssh_without_a_display() {
+        let mut t = test_env(&[("SSH_CONNECTION", "10.0.0.1 50000 10.0.0.2 22")]);
+        let (name, seen) = bridge_probe(&t, "run", true);
+        sbt(&mut t.ctx, &["run", "--name", &name]).unwrap();
+        assert_eq!(*seen.borrow(), vec![false]);
     }
 }

@@ -153,6 +153,28 @@ access, so load only kits you trust.
   idle memory back. Turn it off with `sbt settings set fork.enabled false` (from each sandbox's
   next start).
 - smolbento refuses to run as root on the host, because the agent takes the caller's uid.
+- While you're attached (`sbt run`, `sbt exec -it`), anything in the sandbox can open `https://`
+  URLs in your browser and overwrite your clipboard (it can't read it). A malicious page opened
+  this way runs in your real browser, with your logins. To stop URL opening, run
+  `sbt settings set browser.enabled false`. Text the sandbox puts on your clipboard may be
+  crafted to run commands when pasted into a terminal; check it before pasting it there. The
+  bridge socket lives in `/tmp/sbt-<uid>/` (mode 0700). smolbento checks that directory when a
+  sandbox is created and at every start: it must be a real directory (not a symlink) owned by you
+  with mode 0700, and is created that way if missing. If it isn't, the sandbox gets no bridge for
+  that start (the shims are removed), with a warning, so another user who creates the directory
+  first (macOS empties `/tmp` on reboot) can't receive what the sandbox sends.
+- Forks don't install the bridge shims, but keep the parent's socket mount: while the parent is
+  attached, a process in a fork can open URLs and copy through the parent's bridge.
+- When an opened URL's `redirect_uri` is `http://localhost:PORT` or `http://127.0.0.1:PORT`,
+  smolbento listens on your machine's `127.0.0.1:PORT` (never other interfaces) for 10 minutes
+  (or until the session ends), at most 4 ports a session, unless something already answers on
+  `localhost:PORT`, and passes requests whose `Host` is `localhost:PORT` or `127.0.0.1:PORT` into the
+  sandbox. Other local programs can reach that port too while it's open, as they could reach
+  the callback server of an agent running on your machine. While it's open, the sandbox can
+  claim that port before a service of yours starts on it. Pages the sandbox serves there are
+  on `localhost`, whose cookies aren't separated by port: they can read and set the cookies of
+  your other `localhost` apps. Each replay is cut off after 15 seconds or 1 MiB of response.
+  `browser.enabled false` also turns the relay off.
 
 ## Supply chain
 

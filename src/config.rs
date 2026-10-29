@@ -111,6 +111,12 @@ pub const SETTINGS: &[SettingDef] = &[
         default: "true",
         help: "Allow kits from local directories and Smolfiles",
     },
+    SettingDef {
+        key: "browser.enabled",
+        env: "SMOLBENTO_BROWSER_ENABLED",
+        default: "true",
+        help: "Allow sandboxed processes to open URLs in the host browser. Disabling it also prevents in-sandbox OAuth logins that redirect to localhost.",
+    },
 ];
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]

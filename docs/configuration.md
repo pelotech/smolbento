@@ -17,6 +17,7 @@ sbt settings unset docker.enabled       # back to the default
 | `fork.enabled` | `SMOLBENTO_FORK` | `true` | Start clone and mountless sandboxes branchable so `sbt fork` can copy them; `false` also turns `sbt fork` off |
 | `kit.allowedSources` | `SMOLBENTO_KIT_ALLOWED_SOURCES` | `["docker.io/"]` | Where published kits may load from: a JSON array of prefixes (`["*"]` allows any) |
 | `kit.allowLocalKits` | `SMOLBENTO_KIT_ALLOW_LOCAL_KITS` | `true` | Allow kits from local directories, descriptor files and Smolfiles |
+| `browser.enabled` | `SMOLBENTO_BROWSER_ENABLED` | `true` | Let sandboxes open `https://` URLs in your browser while you're attached; `false` also stops in-sandbox logins that redirect to `localhost` (see [Browser and clipboard](usage.md#browser-and-clipboard)) |
 
 An environment variable wins over the config file, which wins over the default. Booleans accept
 `true`/`false`, `1`/`0`, `yes`/`no` and `on`/`off`.
@@ -42,6 +43,9 @@ loopback ones (`localhost`, `127.0.0.0/8`, `::1`), which use plain HTTP. sbx's s
 
 `fork.enabled` applies from each sandbox's next start; see [Fork](usage.md#fork) for what it
 costs.
+
+`browser.enabled` applies from the next `run` or `exec -it`. Copying to your clipboard isn't
+affected.
 
 ## Files
 

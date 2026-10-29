@@ -1,6 +1,7 @@
 //! The sbx-compatible command line.
 
 mod args;
+mod bridge;
 mod diagnose;
 mod env;
 mod exec;
@@ -188,6 +189,7 @@ pub fn dispatch<R: Runner>(ctx: &mut Ctx<R>, cli: Cli) -> Result<i32> {
         Cmd::Kit(k) => kit::run(ctx, k),
         Cmd::Env(e) => env::run(ctx, e),
         Cmd::UploadPack { sandbox, .. } => upload_pack::run(ctx, &sandbox),
+        Cmd::Bridge { sandbox } => bridge::run(ctx, &sandbox),
         Cmd::Daemon(_) => {
             writeln!(
                 &ctx.out,

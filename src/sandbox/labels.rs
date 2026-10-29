@@ -27,6 +27,8 @@ pub const LONG_RUNNING: &str = "sbx.long-running";
 /// Created without the host loopback deny, because a `localhost` rule applied: only such a
 /// sandbox gets the gateway from `localhost` rules (see `policy::compile::HOST_GATEWAY`).
 pub const HOST_ACCESS: &str = "sbx.host-access";
+/// Created with the browser and clipboard bridge socket (`bridge::GUEST_SOCKET`).
+pub const BRIDGE: &str = "sbx.bridge";
 /// Kit host mounts: a JSON object of guest path to host directory.
 pub const HOST_MOUNTS: &str = "sbx.host-mounts";
 /// Prefix of `sbx.credential-format.<ENV>`: how a kit credential's value is formatted.
@@ -122,6 +124,8 @@ pub struct Meta {
     pub long_running: bool,
     /// Created without the host loopback deny (the `sbx.host-access` label).
     pub host_access: bool,
+    /// Created with the bridge socket mounted: starts install the guest shims (`sbx.bridge`).
+    pub bridge: bool,
     /// Kit credentials whose value is formatted before smolvm sets it as a header, by env var.
     pub credential_formats: BTreeMap<String, CredFormat>,
     /// Kit credential env vars outside their service's own env vars, to their service.
@@ -203,6 +207,9 @@ impl Meta {
         if self.host_access {
             labels.insert(HOST_ACCESS.to_string(), "true".into());
         }
+        if self.bridge {
+            labels.insert(BRIDGE.to_string(), "true".into());
+        }
         if !self.host_mounts.is_empty() {
             labels.insert(
                 HOST_MOUNTS.to_string(),
@@ -255,6 +262,7 @@ impl Meta {
             credential_install: list(labels.get(CREDENTIAL_INSTALL)),
             long_running: labels.get(LONG_RUNNING).is_some_and(|v| v == "true"),
             host_access: labels.get(HOST_ACCESS).is_some_and(|v| v == "true"),
+            bridge: labels.get(BRIDGE).is_some_and(|v| v == "true"),
             credential_formats: labels
                 .iter()
                 .filter_map(|(k, v)| {
@@ -342,6 +350,18 @@ mod tests {
         };
         let labels = m.to_labels();
         assert_eq!(labels["sbx.host-access"], "true");
+        assert_eq!(Meta::from_labels(&labels), Some(m));
+    }
+
+    #[test]
+    fn bridge_label_round_trips() {
+        assert!(!meta().to_labels().contains_key("sbx.bridge"));
+        let m = Meta {
+            bridge: true,
+            ..meta()
+        };
+        let labels = m.to_labels();
+        assert_eq!(labels["sbx.bridge"], "true");
         assert_eq!(Meta::from_labels(&labels), Some(m));
     }
 

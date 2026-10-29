@@ -113,6 +113,10 @@ pub enum Cmd {
         #[arg(hide = true)]
         path: Option<String>,
     },
+    /// Serves a sandbox's browser and clipboard bridge until killed, as an attached session does
+    /// (for e2e tests, which can't attach)
+    #[command(name = "_bridge", hide = true)]
+    Bridge { sandbox: String },
 }
 
 impl Cmd {
@@ -152,6 +156,7 @@ impl Cmd {
             Cmd::Attach(_) => "attach",
             Cmd::Volume(_) => "volume",
             Cmd::UploadPack { .. } => "_upload-pack",
+            Cmd::Bridge { .. } => "_bridge",
         }
     }
 
@@ -173,6 +178,7 @@ impl Cmd {
                 | Cmd::Fork(_)
                 | Cmd::Ports(_)
                 | Cmd::UploadPack { .. }
+                | Cmd::Bridge { .. }
                 | Cmd::Env(EnvCmd::Create(_) | EnvCmd::Run(_) | EnvCmd::Exec(_) | EnvCmd::Rm(_))
         )
     }

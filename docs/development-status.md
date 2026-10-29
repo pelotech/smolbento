@@ -36,6 +36,11 @@ shared by the kit's sandboxes and kept after they're removed. `--mount` and `sbx
 `mounts:` choose your own directory, and the new `sbt inspect` shows where each one is. See
 [Usage](usage.md#kit-host-mounts).
 
+**Phase 5e (browser and clipboard) is done.** While you're attached, the sandbox can open
+`https://` URLs in your browser, copy text to your clipboard, and finish browser logins that
+redirect to `localhost`. Sandboxes created before it need recreating. See
+[Usage](usage.md#browser-and-clipboard).
+
 Docker in a sandbox is now the shipped `docker` kit, so every Docker-enabled create goes through
 the kit first start: if that first start fails, the sandbox is removed. Run the same command
 again once the cause is fixed.
@@ -61,7 +66,8 @@ terminal fail until you do.
 | 4b | `sbxenv.yaml` core: `env create/run/exec/rm`, files, args, user defaults, secrets, kits, ports | ✅ Done |
 | 4c | Host services: `localhost[:PORT]` rules reach the host as `host.docker.internal`, live (interim: every host port, until smolvm can open one) | ✅ Done (interim) |
 | 5a | Host mounts: `host-mount@1`, `--mount`, `sbxenv.yaml` `mounts:`, `inspect` | ✅ Done |
-| 5 | In parts, easiest first: 5b SSH (`ssh-agent@1`, `setup ssh`); 5c skills (`--skills`, `skills`, `agent-skills@1`/`agent-skill@1`); 5d `template`; 5e clipboard and browser bridges; 5f MCP (`--static-mcp`, `mcp`) | Planned |
+| 5e | Browser and clipboard bridge while attached (`xdg-open`, `wl-copy`/`xclip`/`xsel`/`pbcopy`, the login callback relay, `browser.enabled`) | ✅ Done |
+| 5 | The other parts, easiest first: 5b SSH (`ssh-agent@1`, `setup ssh`); 5c skills (`--skills`, `skills`, `agent-skills@1`/`agent-skill@1`); 5d `template`; 5f MCP (`--static-mcp`, `mcp`) | Planned |
 | 6 | Finish `sbxenv.yaml`: `env plan`, remembered approvals (`env.rememberHostCommands`), `lifecycle`, `bindings`, `registries`, `mcp`, the remaining `sandboxOptions` | Planned |
 | 7 | Kit publishing: `kit pack/push/pull/sign/verify` | Planned |
 | 8 | The `plus` kit, built and published with smolbento itself (an end-to-end check of everything before it) | Planned |
@@ -79,6 +85,8 @@ terminal fail until you do.
   [Security](SECURITY.md#host-services-localhost-rules). Under `allow-all`, the host's LAN IP isn't
   blocked, so services listening on `0.0.0.0` are reachable through it.
 - Linux uses a 0600 file for secret values where no Secret Service runs.
+- The browser and clipboard bridge works only while you're attached (`run`, `exec -it`), copies
+  text only, and doesn't read your clipboard or paste images. Forks have no bridge.
 - Only the agent's primary group takes your gid: group-writable shared directories aren't
   writable through your other groups. Images without `groupmod` (busybox) keep their gid, so on
   Linux the agent can't create files in the workspace unless that gid already matches yours.

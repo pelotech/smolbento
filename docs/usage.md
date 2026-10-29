@@ -245,6 +245,42 @@ service's secret was set at create, else `none`). The `claude` preset also gets 
 Your own `-e` wins. See
 [sbx compatibility](sbx-compatibility.md#sandbox-environment) for what's left out.
 
+## Browser and clipboard
+
+While you're attached (`sbt run`, `sbt exec -it`), the sandbox can open URLs in your browser and
+copy text to your clipboard, as in sbx:
+
+```sh
+# inside the sandbox
+xdg-open https://github.com/login/device    # opens in your host browser
+git diff | wl-copy                          # or xclip, xsel, pbcopy, clip.exe
+```
+
+- Only `https://` URLs open. Anything else, or a URL opened while nobody is attached, prints
+  `Open this URL in your browser: URL` for you to open yourself.
+- Copying is text only. Reading your clipboard isn't supported (`wl-paste`, `xclip -o` and
+  `xsel -o` print nothing), and neither is pasting images. A copy while nobody is attached fails
+  with `<command>: failed to write host clipboard`.
+- Browser logins work: when an opened URL's `redirect_uri` is `http://localhost:PORT/…` or
+  `http://127.0.0.1:PORT/…`, smolbento listens on your machine's `127.0.0.1:PORT` for 10 minutes
+  (or until the session ends) and passes the browser's callback to the agent's callback server
+  in the sandbox. If something on your machine already answers on that port, it warns and the
+  URL still opens. A session relays at most 4 ports; it warns once and ignores the rest. Callbacks
+  that carry a body (`response_mode=form_post`) lose it; the usual query-string redirects work.
+- Over SSH without a forwarded display (on Linux, `DISPLAY` or `WAYLAND_DISPLAY`; on macOS, always
+  over SSH) nothing is served, so URLs are printed instead.
+- `sbt settings set browser.enabled false` stops URL opening and the login relay; copying still
+  works.
+- The shims (`xdg-open`, `xclip`, `xsel`, `wl-copy`, `wl-paste`, `pbcopy`, `clip.exe`) are put
+  in `/usr/local/bin` on every start and need `curl` in the image; without it they fall back.
+- The first attached session serves the bridge. A second one attached at the same time doesn't,
+  and when the first exits the bridge stops until the next `sbt run` or `sbt exec -it`.
+- Sandboxes created before this feature have no bridge. Recreate a sandbox to get it. The
+  directory `/tmp/sbt-<uid>` is checked when a sandbox is created and at every start; while it
+  isn't a private directory owned by you (0700), the sandbox gets no bridge, with a warning.
+- Forks don't install the shims, but they keep the parent's socket mount: while the parent is
+  attached, a process in a fork can still use the parent's bridge.
+
 ## Docker inside a sandbox
 
 Every sandbox runs its own Docker engine, so agents can `docker build` and `docker compose up`
