@@ -21,7 +21,12 @@ fn serve<R: Runner>(ctx: &Ctx<R>, name: &str) -> Result<Server> {
     if !sb.meta.bridge {
         bail!("sandbox '{name}' has no browser and clipboard bridge (sandboxes get one at create)");
     }
-    let handlers = bridge::handlers(&ctx.env, ctx.settings.bool("browser.enabled")?);
+    let handlers = bridge::handlers(
+        &ctx.env,
+        ctx.settings.bool("browser.enabled")?,
+        &ctx.settings.value("smolvm.path")?,
+        &sb.machine,
+    );
     bridge::serve(&bridge::host_socket(sb.name()), handlers)?
         .with_context(|| format!("another session already serves sandbox '{name}'s bridge"))
 }

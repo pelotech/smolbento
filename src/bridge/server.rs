@@ -17,6 +17,8 @@ use anyhow::{Context, Result, bail};
 pub type Opener = Box<dyn Fn(&str) -> Result<()> + Send + Sync>;
 /// Sets the host clipboard to the given text.
 pub type Copier = Box<dyn Fn(&[u8]) -> Result<()> + Send + Sync>;
+/// Starts the login callback relay for a port (once per port; later calls do nothing).
+pub type Relay = Box<dyn Fn(u16) + Send + Sync>;
 
 /// What the requests do; tests inject their own opener and copier.
 pub struct Handlers {
@@ -24,6 +26,7 @@ pub struct Handlers {
     pub browser_enabled: bool,
     pub open: Opener,
     pub copy: Copier,
+    pub relay: Relay,
 }
 
 /// Request bodies above this are refused (`413`).
@@ -33,9 +36,9 @@ const MAX_LINE: u64 = 8 << 10;
 const MAX_HEADERS: usize = 100;
 /// How long a client has, from its connect, to send its whole request; also how long writing the
 /// answer may take. Requests are handled one at a time, so this bounds what a slow client holds.
-const DEADLINE: Duration = Duration::from_secs(10);
+pub(super) const DEADLINE: Duration = Duration::from_secs(10);
 /// How often the accept loop and a request being read check for a stop.
-const POLL: Duration = Duration::from_millis(50);
+pub(super) const POLL: Duration = Duration::from_millis(50);
 
 /// A running listener. Dropping it stops the thread (within `POLL`, or once a running opener or
 /// copier returns; those have their own timeout), so no request is handled after it, and removes the socket file, if it is still
@@ -139,26 +142,53 @@ fn handle(stream: &UnixStream, h: &Handlers, until: Instant, stop: &AtomicBool) 
     if stream.set_nonblocking(false).is_err() || stream.set_write_timeout(Some(DEADLINE)).is_err() {
         return;
     }
-    let reader = Deadline {
-        stream,
-        until,
-        stop,
-    };
-    let resp = match read_request(&mut BufReader::new(reader)) {
+    let resp = match read_within(stream, until, stop) {
         Ok(req) => route(h, &req),
         Err(resp) => resp,
     };
     let _ = write_response(&mut &*stream, &resp);
 }
 
-/// Reads from a client until a deadline for the whole request (not per read), or a stop.
-struct Deadline<'a> {
-    stream: &'a UnixStream,
+/// Reads one request from a client (the bridge's, or a browser's at the login relay) until
+/// `until` for the whole request (not per read), or a stop.
+pub(super) fn read_within<S: Stream>(
+    stream: &S,
+    until: Instant,
+    stop: &AtomicBool,
+) -> Result<Request, Response> {
+    read_request(&mut BufReader::new(Deadline {
+        stream,
+        until,
+        stop,
+    }))
+}
+
+/// A socket that can wait a while for data: Unix (the bridge) or TCP (the login relay).
+pub(super) trait Stream {
+    fn read_for(&self, buf: &mut [u8], timeout: Duration) -> std::io::Result<usize>;
+}
+
+impl Stream for UnixStream {
+    fn read_for(&self, buf: &mut [u8], timeout: Duration) -> std::io::Result<usize> {
+        self.set_read_timeout(Some(timeout))?;
+        (&mut &*self).read(buf)
+    }
+}
+
+impl Stream for std::net::TcpStream {
+    fn read_for(&self, buf: &mut [u8], timeout: Duration) -> std::io::Result<usize> {
+        self.set_read_timeout(Some(timeout))?;
+        (&mut &*self).read(buf)
+    }
+}
+
+struct Deadline<'a, S> {
+    stream: &'a S,
     until: Instant,
     stop: &'a AtomicBool,
 }
 
-impl Read for Deadline<'_> {
+impl<S: Stream> Read for Deadline<'_, S> {
     fn read(&mut self, buf: &mut [u8]) -> std::io::Result<usize> {
         use std::io::ErrorKind::{Interrupted, TimedOut, WouldBlock};
         loop {
@@ -167,8 +197,7 @@ impl Read for Deadline<'_> {
                 return Err(TimedOut.into());
             }
             // Wake up every POLL to see a stop.
-            self.stream.set_read_timeout(Some(left.min(POLL)))?;
-            match (&mut &*self.stream).read(buf) {
+            match self.stream.read_for(buf, left.min(POLL)) {
                 Err(e) if matches!(e.kind(), WouldBlock | TimedOut | Interrupted) => {}
                 r => return r,
             }
@@ -177,20 +206,20 @@ impl Read for Deadline<'_> {
 }
 
 #[derive(Debug, PartialEq)]
-struct Request {
-    method: String,
-    path: String,
-    body: Vec<u8>,
+pub(super) struct Request {
+    pub method: String,
+    pub path: String,
+    pub body: Vec<u8>,
 }
 
 #[derive(Debug, PartialEq)]
-struct Response {
-    status: u16,
+pub(super) struct Response {
+    pub status: u16,
     body: String,
 }
 
 impl Response {
-    fn new(status: u16, body: &str) -> Response {
+    pub(super) fn new(status: u16, body: &str) -> Response {
         let body = if body.is_empty() {
             String::new()
         } else {
@@ -200,7 +229,7 @@ impl Response {
     }
 }
 
-fn bad_request() -> Response {
+pub(super) fn bad_request() -> Response {
     Response::new(400, "bad request")
 }
 
@@ -286,10 +315,57 @@ fn open(h: &Handlers, body: &[u8]) -> Response {
     if url.chars().any(|c| c.is_control() || c.is_whitespace()) {
         return bad_request();
     }
-    // Task 3 hook: start the login callback relay here, before opening, when the URL's
-    // (URL-decoded) `redirect_uri` is `http://localhost:PORT/…` or `http://127.0.0.1:PORT/…`
-    // (once per port per session).
+    // A login's callback server in the sandbox: relay the browser's callback to it.
+    if let Some(port) = callback_port(url) {
+        (h.relay)(port);
+    }
     done((h.open)(url))
+}
+
+/// The port of a URL's (URL-decoded) `redirect_uri` when it is `http://localhost:PORT…` or
+/// `http://127.0.0.1:PORT…`.
+fn callback_port(url: &str) -> Option<u16> {
+    let url = url.split('#').next()?;
+    let (_, query) = url.split_once('?')?;
+    let value = query
+        .split('&')
+        .find_map(|p| p.strip_prefix("redirect_uri="))?;
+    let uri = percent_decode(value);
+    if !uri.get(..7)?.eq_ignore_ascii_case("http://") {
+        return None;
+    }
+    let rest = &uri[7..];
+    let (host, rest) = rest.split_once(':')?;
+    if !host.eq_ignore_ascii_case("localhost") && host != "127.0.0.1" {
+        return None;
+    }
+    let end = rest.find(['/', '?', '#']).unwrap_or(rest.len());
+    let port = &rest[..end];
+    if !port.bytes().all(|b| b.is_ascii_digit()) {
+        return None;
+    }
+    port.parse().ok().filter(|&p| p != 0)
+}
+
+/// `%XX` decoding; anything else (an invalid escape too) is kept.
+fn percent_decode(s: &str) -> String {
+    let b = s.as_bytes();
+    let mut out = Vec::with_capacity(b.len());
+    let mut i = 0;
+    let digit = |j: usize| b.get(j).and_then(|&c| (c as char).to_digit(16));
+    while i < b.len() {
+        match (b[i], digit(i + 1), digit(i + 2)) {
+            (b'%', Some(hi), Some(lo)) => {
+                out.push((hi * 16 + lo) as u8);
+                i += 3;
+            }
+            (c, ..) => {
+                out.push(c);
+                i += 1;
+            }
+        }
+    }
+    String::from_utf8_lossy(&out).into_owned()
 }
 
 /// `204` for a handler that worked, else `502` with its error.
@@ -313,7 +389,7 @@ fn reason(status: u16) -> &'static str {
     }
 }
 
-fn write_response(w: &mut impl Write, resp: &Response) -> std::io::Result<()> {
+pub(super) fn write_response(w: &mut impl Write, resp: &Response) -> std::io::Result<()> {
     let status = resp.status;
     let mut head = format!("HTTP/1.1 {status} {}\r\n", reason(status));
     if status != 204 {
@@ -334,10 +410,11 @@ mod tests {
     use std::io::Cursor;
     use std::sync::Mutex;
 
-    /// Handlers that record what they were asked to open and copy; `fail` makes both fail.
+    /// Handlers that record what they were asked to open, copy and relay; `fail` makes opening
+    /// and copying fail.
     fn recording(enabled: bool, fail: bool) -> (Handlers, Arc<Mutex<Vec<String>>>) {
         let seen = Arc::new(Mutex::new(Vec::new()));
-        let (o, c) = (seen.clone(), seen.clone());
+        let (o, c, r) = (seen.clone(), seen.clone(), seen.clone());
         let h = Handlers {
             browser_enabled: enabled,
             open: Box::new(move |url| {
@@ -356,6 +433,7 @@ mod tests {
                 }
                 Ok(())
             }),
+            relay: Box::new(move |port| r.lock().unwrap().push(format!("relay {port}"))),
         };
         (h, seen)
     }
@@ -440,6 +518,123 @@ mod tests {
         let url = "https://example.com/a?b=c%20d";
         assert_eq!(route(&h, &post("/open", url)).status, 204);
         assert_eq!(*seen.lock().unwrap(), vec![format!("open {url}")]);
+    }
+
+    #[test]
+    fn finds_a_loopback_redirect_uris_port() {
+        for (url, port) in [
+            // URL-encoded, as OAuth clients send it.
+            (
+                "https://auth.example.com/authorize?client_id=x&redirect_uri=http%3A%2F%2Flocalhost%3A8085%2Fcallback&state=y",
+                Some(8085),
+            ),
+            (
+                "https://a.example/o?redirect_uri=http%3a%2f%2f127.0.0.1%3a54545%2Fcb%3Fx%3D1",
+                Some(54545),
+            ),
+            // Not encoded, no path, first parameter, upper-case scheme and host.
+            (
+                "https://a.example/o?redirect_uri=http://127.0.0.1:9000",
+                Some(9000),
+            ),
+            (
+                "https://a.example/o?redirect_uri=HTTP://LocalHost:1455/x",
+                Some(1455),
+            ),
+            (
+                "https://a.example/o?a=1&redirect_uri=http://localhost:80?q#f",
+                Some(80),
+            ),
+            // Other hosts.
+            (
+                "https://a.example/o?redirect_uri=http%3A%2F%2Fexample.com%3A8085%2Fcb",
+                None,
+            ),
+            (
+                "https://a.example/o?redirect_uri=http://localhost.evil.com:8085/",
+                None,
+            ),
+            (
+                "https://a.example/o?redirect_uri=http://127.0.0.1.nip.io:8085/",
+                None,
+            ),
+            (
+                "https://a.example/o?redirect_uri=http://localhost:8085@evil.com/",
+                None,
+            ),
+            ("https://a.example/o?redirect_uri=http://[::1]:8085/", None),
+            // Not http, or no usable port.
+            (
+                "https://a.example/o?redirect_uri=https://localhost:8085/",
+                None,
+            ),
+            (
+                "https://a.example/o?redirect_uri=http%3A%2F%2Flocalhost%2Fcb",
+                None,
+            ),
+            (
+                "https://a.example/o?redirect_uri=http://localhost:/cb",
+                None,
+            ),
+            (
+                "https://a.example/o?redirect_uri=http://localhost:0/cb",
+                None,
+            ),
+            (
+                "https://a.example/o?redirect_uri=http://localhost:65536/cb",
+                None,
+            ),
+            (
+                "https://a.example/o?redirect_uri=http://localhost:80x/cb",
+                None,
+            ),
+            // Another parameter, the path, or the fragment.
+            (
+                "https://a.example/o?my_redirect_uri=http://localhost:8085/",
+                None,
+            ),
+            (
+                "https://a.example/redirect_uri=http://localhost:8085/",
+                None,
+            ),
+            (
+                "https://a.example/o#redirect_uri=http://localhost:8085/",
+                None,
+            ),
+            ("https://a.example/o", None),
+        ] {
+            assert_eq!(callback_port(url), port, "{url}");
+        }
+    }
+
+    #[test]
+    fn percent_decoding_keeps_what_isnt_an_escape() {
+        assert_eq!(percent_decode("a%3A%2fb"), "a:/b");
+        assert_eq!(percent_decode("100%"), "100%");
+        assert_eq!(percent_decode("%zz%4"), "%zz%4");
+        assert_eq!(percent_decode("%+1%-f"), "%+1%-f");
+        assert_eq!(percent_decode("%C3%A9+x"), "é+x");
+    }
+
+    #[test]
+    fn open_starts_the_relay_before_opening() {
+        let (h, seen) = recording(true, false);
+        let url = "https://a.example/o?redirect_uri=http%3A%2F%2Flocalhost%3A8085%2Fcb";
+        assert_eq!(route(&h, &post("/open", url)).status, 204);
+        assert_eq!(
+            *seen.lock().unwrap(),
+            vec!["relay 8085".to_string(), format!("open {url}")]
+        );
+        // No loopback redirect_uri: no relay.
+        seen.lock().unwrap().clear();
+        let other = "https://a.example/o?redirect_uri=https%3A%2F%2Fexample.com%2Fcb";
+        assert_eq!(route(&h, &post("/open", other)).status, 204);
+        assert_eq!(*seen.lock().unwrap(), vec![format!("open {other}")]);
+        // Nor for a URL that isn't opened.
+        seen.lock().unwrap().clear();
+        let (off, off_seen) = recording(false, false);
+        assert_eq!(route(&off, &post("/open", url)).status, 403);
+        assert!(off_seen.lock().unwrap().is_empty());
     }
 
     #[test]

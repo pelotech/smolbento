@@ -3,14 +3,17 @@
 use std::collections::BTreeMap;
 use std::io::Write;
 use std::process::{Command, Stdio};
+use std::sync::Mutex;
 use std::thread;
 use std::time::{Duration, Instant};
 
 use anyhow::{Context, Result, bail};
 
-use super::server::{self, Handlers, Server};
+use super::relay::Relays;
+use super::server::{self, Handlers, Relay, Server};
 use crate::config::Settings;
 use crate::sandbox::Sandbox;
+use crate::smolvm::{ProcessRunner, Runner};
 
 /// Internal test overrides: a program run with the URL as its argument / the text on stdin.
 const OPEN_CMD: &str = "SMOLBENTO_OPEN_CMD";
@@ -23,15 +26,33 @@ pub fn has_display(env: &BTreeMap<String, String>, linux: bool) -> bool {
     !set("SSH_CONNECTION") || (linux && (set("DISPLAY") || set("WAYLAND_DISPLAY")))
 }
 
-/// Handlers that run the host's browser and clipboard commands, or the env overrides.
-pub fn handlers(env: &BTreeMap<String, String>, browser_enabled: bool) -> Handlers {
+/// Handlers that run the host's browser and clipboard commands, or the env overrides, and relay
+/// login callbacks into `machine` with the `smolvm` binary.
+pub fn handlers(
+    env: &BTreeMap<String, String>,
+    browser_enabled: bool,
+    smolvm: &str,
+    machine: &str,
+) -> Handlers {
     let open_cmd = env.get(OPEN_CMD).cloned();
     let copy_cmd = env.get(COPY_CMD).cloned();
     Handlers {
         browser_enabled,
         open: Box::new(move |url| open_url(open_cmd.as_deref(), url)),
         copy: Box::new(move |text| copy_text(copy_cmd.as_deref(), text)),
+        relay: relay(smolvm, machine),
     }
+}
+
+/// Starts the login callback relays; they stop when the handlers are dropped (the server stops).
+fn relay(smolvm: &str, machine: &str) -> Relay {
+    let runner = ProcessRunner::new(smolvm);
+    let relays = Mutex::new(Relays::new(Box::new(move |args| runner.run(args)), machine));
+    Box::new(move |port| {
+        if let Some(warning) = relays.lock().ok().and_then(|mut r| r.start(port)) {
+            eprintln!("{warning}");
+        }
+    })
 }
 
 /// Serves the sandbox's bridge for an attached session (`run`, `exec -it`) until the result is
@@ -45,7 +66,11 @@ pub fn attach(env: &BTreeMap<String, String>, settings: &Settings, sb: &Sandbox)
         eprintln!("warning: not opening URLs from the sandbox: {e:#}");
         false
     });
-    server::serve(&super::host_socket(sb.name()), handlers(env, browser)).unwrap_or_else(|e| {
+    let smolvm = settings
+        .value("smolvm.path")
+        .unwrap_or_else(|_| "smolvm".into());
+    let h = handlers(env, browser, &smolvm, &sb.machine);
+    server::serve(&super::host_socket(sb.name()), h).unwrap_or_else(|e| {
         eprintln!(
             "warning: {}: no browser and clipboard bridge: {e:#}",
             sb.name()
@@ -205,6 +230,10 @@ mod tests {
         script
     }
 
+    fn test_handlers(vars: &[(&str, &str)], browser: bool) -> Handlers {
+        handlers(&env(vars), browser, "/nonexistent/smolvm", "sbx-test")
+    }
+
     fn read(dir: &Path, what: &str) -> String {
         std::fs::read_to_string(dir.join(format!("out.{what}"))).unwrap()
     }
@@ -213,7 +242,7 @@ mod tests {
     fn the_overrides_get_the_url_and_the_text() {
         let dir = tempfile::tempdir().unwrap();
         let cmd = recorder(dir.path(), 0).display().to_string();
-        let h = handlers(&env(&[(OPEN_CMD, &cmd), (COPY_CMD, &cmd)]), true);
+        let h = test_handlers(&[(OPEN_CMD, &cmd), (COPY_CMD, &cmd)], true);
         (h.open)("https://example.com/?a=b c").unwrap();
         assert_eq!(read(dir.path(), "args"), "https://example.com/?a=b c\n");
         assert_eq!(read(dir.path(), "stdin"), "");
@@ -226,11 +255,11 @@ mod tests {
     fn a_failing_or_missing_command_is_an_error() {
         let dir = tempfile::tempdir().unwrap();
         let cmd = recorder(dir.path(), 3).display().to_string();
-        let h = handlers(&env(&[(OPEN_CMD, &cmd), (COPY_CMD, &cmd)]), true);
+        let h = test_handlers(&[(OPEN_CMD, &cmd), (COPY_CMD, &cmd)], true);
         assert!((h.open)("https://x").is_err());
         assert!((h.copy)(b"x").is_err());
         let missing = dir.path().join("missing").display().to_string();
-        let h = handlers(&env(&[(OPEN_CMD, &missing), (COPY_CMD, &missing)]), true);
+        let h = test_handlers(&[(OPEN_CMD, &missing), (COPY_CMD, &missing)], true);
         let err = (h.open)("https://x").unwrap_err();
         assert!(format!("{err:#}").contains("running"), "{err:#}");
         assert!((h.copy)(b"x").is_err());
@@ -238,8 +267,8 @@ mod tests {
 
     #[test]
     fn handlers_carry_the_browser_setting() {
-        assert!(handlers(&env(&[]), true).browser_enabled);
-        assert!(!handlers(&env(&[]), false).browser_enabled);
+        assert!(test_handlers(&[], true).browser_enabled);
+        assert!(!test_handlers(&[], false).browser_enabled);
     }
 
     #[test]
