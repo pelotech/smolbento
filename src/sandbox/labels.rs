@@ -1,5 +1,7 @@
 use std::collections::BTreeMap;
 
+use crate::bridge::agent::AgentLabel;
+
 pub const NAME: &str = "sbx.name";
 pub const AGENT: &str = "sbx.agent";
 pub const WORKSPACE: &str = "sbx.workspace";
@@ -29,6 +31,8 @@ pub const LONG_RUNNING: &str = "sbx.long-running";
 pub const HOST_ACCESS: &str = "sbx.host-access";
 /// Created with the browser and clipboard bridge socket (`bridge::GUEST_SOCKET`).
 pub const BRIDGE: &str = "sbx.bridge";
+/// The SSH agent granted at create, per phase (`bridge::agent::AgentLabel`, JSON).
+pub const SSH_AGENT: &str = "sbx.ssh-agent";
 /// Kit host mounts: a JSON object of guest path to host directory.
 pub const HOST_MOUNTS: &str = "sbx.host-mounts";
 /// Prefix of `sbx.credential-format.<ENV>`: how a kit credential's value is formatted.
@@ -132,6 +136,8 @@ pub struct Meta {
     pub credential_services: BTreeMap<String, String>,
     /// Kit host mounts: guest path to host directory.
     pub host_mounts: BTreeMap<String, String>,
+    /// The SSH agent phases granted at create and what each may sign (`sbx.ssh-agent`).
+    pub ssh_agent: Option<AgentLabel>,
 }
 
 impl Meta {
@@ -216,6 +222,9 @@ impl Meta {
                 serde_json::to_string(&self.host_mounts).expect("strings serialize"),
             );
         }
+        if let Some(a) = &self.ssh_agent {
+            labels.insert(SSH_AGENT.to_string(), a.to_label());
+        }
         for (env, f) in &self.credential_formats {
             labels.insert(format!("{CREDENTIAL_FORMAT}{env}"), f.to_label());
         }
@@ -280,6 +289,9 @@ impl Meta {
                 .get(HOST_MOUNTS)
                 .and_then(|j| serde_json::from_str(j).ok())
                 .unwrap_or_default(),
+            ssh_agent: labels
+                .get(SSH_AGENT)
+                .and_then(|j| AgentLabel::from_label(j)),
         })
     }
 
@@ -362,6 +374,27 @@ mod tests {
         };
         let labels = m.to_labels();
         assert_eq!(labels["sbx.bridge"], "true");
+        assert_eq!(Meta::from_labels(&labels), Some(m));
+    }
+
+    #[test]
+    fn ssh_agent_label_round_trips() {
+        use crate::bridge::agent::Access;
+        assert!(!meta().to_labels().contains_key("sbx.ssh-agent"));
+        let m = Meta {
+            ssh_agent: Some(AgentLabel {
+                runtime: Some(Access { sign: None }),
+                install: Some(Access {
+                    sign: Some(vec!["git".into()]),
+                }),
+            }),
+            ..meta()
+        };
+        let labels = m.to_labels();
+        assert_eq!(
+            labels["sbx.ssh-agent"],
+            r#"{"runtime":{"sign":null},"install":{"sign":["git"]}}"#
+        );
         assert_eq!(Meta::from_labels(&labels), Some(m));
     }
 

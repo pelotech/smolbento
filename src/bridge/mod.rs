@@ -1,6 +1,7 @@
 //! The browser and clipboard bridge: guest shims (`xdg-open`, `wl-copy`, …) that reach the host
 //! over a socket smolvm mounts into the sandbox, served while a user is attached.
 
+pub mod agent;
 mod host;
 mod relay;
 mod server;

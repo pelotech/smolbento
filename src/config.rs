@@ -117,6 +117,18 @@ pub const SETTINGS: &[SettingDef] = &[
         default: "true",
         help: "Allow sandboxed processes to open URLs in the host browser. Disabling it also prevents in-sandbox OAuth logins that redirect to localhost.",
     },
+    SettingDef {
+        key: "ssh.agentForwardingEnabled",
+        env: "SMOLBENTO_SSH_AGENT_FORWARDING",
+        default: "true",
+        help: "Allow sandboxes to list SSH agent keys and sign, but not add, remove or lock keys. Disabling blocks new agent connections; existing connections remain active.",
+    },
+    SettingDef {
+        key: "ssh.agentSocketPath",
+        env: "SMOLBENTO_SSH_AGENT_SOCKET",
+        default: "",
+        help: "Optional fixed host SSH agent socket path. Empty uses each client's current SSH_AUTH_SOCK.",
+    },
 ];
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]

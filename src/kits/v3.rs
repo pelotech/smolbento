@@ -109,6 +109,7 @@ fn from_value(v: Value, source: Source) -> Result<Kit> {
             check_hooks(&name, l)?;
         }
     }
+    check_ssh_phases(&name, &caps)?;
     let args = d
         .args
         .into_iter()
@@ -386,7 +387,8 @@ fn body(ty: &str, config: Option<Value>) -> Result<CapBody> {
         }
         // Its command templates matter to the agent launcher, not to the kit model.
         "agent-sessions@1" => CapBody::AgentSessions,
-        // ssh-agent, agent-skills, agent-skill, usb-device, kit-registry,
+        "ssh-agent@1" => ssh_agent(decode(config)?)?,
+        // agent-skills, agent-skill, usb-device, kit-registry,
         // agent-interactive-sessions, acp and anything unknown.
         _ => CapBody::Unsupported,
     })
@@ -586,6 +588,127 @@ fn credential(c: CredCfg) -> Result<CredReq> {
         inject,
         oauth,
     })
+}
+
+#[derive(Deserialize)]
+#[serde(deny_unknown_fields)]
+struct SshAgentCfg {
+    phase: OneOrMany,
+    unrestricted: Option<bool>,
+    sign: Option<Vec<String>>,
+    authenticate: Option<Vec<String>>,
+}
+
+fn ssh_agent(c: SshAgentCfg) -> Result<CapBody> {
+    let names = match c.phase {
+        OneOrMany::One(p) => vec![p],
+        OneOrMany::Many(p) => p,
+    };
+    let mut phases = Vec::new();
+    for p in &names {
+        let phase = match p.as_str() {
+            "install" => SshPhase::Install,
+            "runtime" => SshPhase::Runtime,
+            other => bail!("phase must be install or runtime (got {other:?})"),
+        };
+        if phases.contains(&phase) {
+            bail!("phase {p} is listed twice");
+        }
+        phases.push(phase);
+    }
+    if phases.is_empty() {
+        bail!("phase must name install, runtime or both");
+    }
+    let unrestricted = c.unrestricted.unwrap_or(true);
+    if unrestricted && (c.sign.is_some() || c.authenticate.is_some()) {
+        bail!("an unrestricted entry can't state sign or authenticate");
+    }
+    if !unrestricted && c.sign.is_none() && c.authenticate.is_none() {
+        bail!("a bounded entry (unrestricted: false) needs sign or authenticate");
+    }
+    distinct("sign", &c.sign)?;
+    distinct("authenticate", &c.authenticate)?;
+    let sign = c.sign.unwrap_or_default();
+    let authenticate = c.authenticate.unwrap_or_default();
+    for ns in &sign {
+        if ns.is_empty() || !ns.bytes().all(|b| b.is_ascii_graphic()) {
+            bail!("sign namespace {ns:?} must be printable ASCII without spaces");
+        }
+    }
+    for dest in &authenticate {
+        if !login_destination(dest) {
+            bail!(
+                "authenticate entry {dest:?} must be host or user@host, with host a lowercase DNS \
+                 name (no wildcard, port or IP address)"
+            );
+        }
+    }
+    Ok(CapBody::SshAgent {
+        phases,
+        unrestricted,
+        sign,
+        authenticate,
+    })
+}
+
+/// A present list must be non-empty and without duplicates.
+fn distinct(field: &str, list: &Option<Vec<String>>) -> Result<()> {
+    let Some(list) = list else { return Ok(()) };
+    if list.is_empty() {
+        bail!("{field} must not be empty");
+    }
+    for (i, v) in list.iter().enumerate() {
+        if list[..i].contains(v) {
+            bail!("{field} lists {v:?} twice");
+        }
+    }
+    Ok(())
+}
+
+/// `host` or `user@host`: a literal lowercase DNS name, optionally after an account name.
+fn login_destination(dest: &str) -> bool {
+    let host = match dest.split_once('@') {
+        Some((user, host)) => {
+            if user.is_empty() || !user.bytes().all(|b| b.is_ascii_graphic()) {
+                return false;
+            }
+            host
+        }
+        None => dest,
+    };
+    let label_ok = |l: &str| {
+        (1..=63).contains(&l.len())
+            && !l.starts_with('-')
+            && !l.ends_with('-')
+            && l.bytes()
+                .all(|b| b.is_ascii_lowercase() || b.is_ascii_digit() || b == b'-')
+    };
+    let labels: Vec<&str> = host.split('.').collect();
+    // An all-digit last label is an IPv4 address (or would be read as one), not a name.
+    host.len() <= 253
+        && labels.iter().all(|l| label_ok(l))
+        && !labels
+            .last()
+            .is_some_and(|l| l.bytes().all(|b| b.is_ascii_digit()))
+}
+
+/// SPEC-v3: one kit's `ssh-agent@1` entries may not name the same phase twice.
+fn check_ssh_phases(kit: &str, caps: &[Cap]) -> Result<()> {
+    let mut seen = Vec::new();
+    for c in caps {
+        if let CapBody::SshAgent { phases, .. } = &c.body {
+            for p in phases {
+                if seen.contains(p) {
+                    bail!(
+                        "kit {kit}: ssh-agent@1 entries overlap in phase {}",
+                        p.as_str()
+                    );
+                }
+                seen.push(*p);
+            }
+        }
+    }
+    Ok(())
 }
 
 #[derive(Deserialize)]
@@ -1237,6 +1360,152 @@ mod tests {
         let e = one_cap(r#"{"type":"com.docker.sandbox/credential@1","config":{"service":"s","phase":"runtime"}}"#)
             .unwrap_err();
         assert!(format!("{e:#}").contains("apiKey"), "{e:#}");
+    }
+
+    fn ssh(config: &str) -> Result<CapBody> {
+        one_cap(&format!(
+            r#"{{"type":"com.docker.sandbox/ssh-agent@1","config":{config}}}"#
+        ))
+        .map(|k| k.caps[0].body.clone())
+    }
+
+    #[test]
+    fn ssh_agent_parses_phases_and_limits() {
+        assert_eq!(
+            ssh(r#"{"phase":"runtime"}"#).unwrap(),
+            CapBody::SshAgent {
+                phases: vec![SshPhase::Runtime],
+                unrestricted: true,
+                sign: vec![],
+                authenticate: vec![],
+            }
+        );
+        assert_eq!(
+            ssh(
+                r#"{"phase":["install","runtime"],"unrestricted":false,"sign":["git","file"],
+                    "authenticate":["git@github.com","gitlab.example.org"]}"#
+            )
+            .unwrap(),
+            CapBody::SshAgent {
+                phases: vec![SshPhase::Install, SshPhase::Runtime],
+                unrestricted: false,
+                sign: vec!["git".into(), "file".into()],
+                authenticate: vec!["git@github.com".into(), "gitlab.example.org".into()],
+            }
+        );
+    }
+
+    #[test]
+    fn ssh_agent_rejects_bad_configs() {
+        let cases = [
+            (r#"{}"#, "phase"),
+            (r#"{"phase":"build"}"#, "phase must be install or runtime"),
+            (
+                r#"{"phase":[]}"#,
+                "phase must name install, runtime or both",
+            ),
+            (
+                r#"{"phase":["runtime","runtime"]}"#,
+                "phase runtime is listed twice",
+            ),
+            (
+                r#"{"phase":"runtime","sign":["git"]}"#,
+                "an unrestricted entry can't state sign or authenticate",
+            ),
+            (
+                r#"{"phase":"runtime","unrestricted":true,"authenticate":["a.com"]}"#,
+                "an unrestricted entry can't state sign or authenticate",
+            ),
+            (
+                r#"{"phase":"runtime","unrestricted":false}"#,
+                "a bounded entry (unrestricted: false) needs sign or authenticate",
+            ),
+            (
+                r#"{"phase":"runtime","unrestricted":false,"sign":[]}"#,
+                "sign must not be empty",
+            ),
+            (
+                r#"{"phase":"runtime","unrestricted":false,"sign":["git","git"]}"#,
+                "sign lists \"git\" twice",
+            ),
+            (
+                r#"{"phase":"runtime","unrestricted":false,"sign":["a b"]}"#,
+                "sign namespace \"a b\" must be printable ASCII without spaces",
+            ),
+            (
+                r#"{"phase":"runtime","unrestricted":false,"sign":[""]}"#,
+                "sign namespace \"\" must be printable ASCII without spaces",
+            ),
+            (
+                r#"{"phase":"runtime","unrestricted":false,"authenticate":[]}"#,
+                "authenticate must not be empty",
+            ),
+            (
+                r#"{"phase":"runtime","unrestricted":false,"authenticate":["a.com","a.com"]}"#,
+                "authenticate lists \"a.com\" twice",
+            ),
+            (r#"{"phase":"runtime","bogus":1}"#, "bogus"),
+        ];
+        for (config, want) in cases {
+            let e = ssh(config).unwrap_err();
+            assert!(format!("{e:#}").contains(want), "{config}: {e:#}");
+        }
+        for host in [
+            "*.github.com",
+            "github.com:22",
+            "1.2.3.4",
+            "[::1]",
+            "GitHub.com",
+            "a..com",
+            "-a.com",
+            "a-.com",
+            "a.com.",
+            "@a.com",
+            "a@b@c.com",
+            "a b@c.com",
+            "",
+        ] {
+            let e = ssh(&format!(
+                r#"{{"phase":"runtime","unrestricted":false,"authenticate":["{host}"]}}"#
+            ))
+            .unwrap_err();
+            assert!(
+                format!("{e:#}").contains(&format!("authenticate entry {host:?} must be")),
+                "{host}: {e:#}"
+            );
+        }
+        for ok in [
+            "github.com",
+            "git@github.com",
+            "localhost",
+            "a-b.x1.example",
+        ] {
+            ssh(&format!(
+                r#"{{"phase":"runtime","unrestricted":false,"authenticate":["{ok}"]}}"#
+            ))
+            .unwrap();
+        }
+    }
+
+    #[test]
+    fn ssh_agent_entries_of_one_kit_must_not_overlap_in_phase() {
+        let ty = "com.docker.sandbox/ssh-agent@1";
+        let json = format!(
+            r#"{{"schemaVersion":"3","kind":"mixin","capabilities":[
+                {{"type":"{ty}","config":{{"phase":["install","runtime"]}}}},
+                {{"type":"{ty}","config":{{"phase":"runtime","unrestricted":false,"sign":["git"]}}}}]}}"#
+        );
+        let e = parse_json(&json, local("t")).unwrap_err();
+        assert_eq!(
+            format!("{e:#}"),
+            "kit t: ssh-agent@1 entries overlap in phase runtime"
+        );
+        let json = format!(
+            r#"{{"schemaVersion":"3","kind":"mixin","capabilities":[
+                {{"type":"{ty}","config":{{"phase":"install"}}}},
+                {{"type":"{ty}","config":{{"phase":"runtime"}}}}]}}"#
+        );
+        assert_eq!(parse_json(&json, local("t")).unwrap().caps.len(), 2);
     }
 
     #[test]

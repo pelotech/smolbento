@@ -122,6 +122,8 @@ fn supported(c: &Cap) -> bool {
             .iter()
             .flat_map(|r| r.allow.iter().chain(&r.deny))
             .all(|n| n.methods.is_empty() && n.paths.is_empty()),
+        // `authenticate` limits aren't enforced yet (Phase 5g).
+        CapBody::SshAgent { authenticate, .. } => authenticate.is_empty(),
         _ => true,
     }
 }

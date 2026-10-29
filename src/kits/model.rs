@@ -133,8 +133,31 @@ pub enum CapBody {
     LongRunning,
     Privileged,
     AgentSessions,
+    /// `ssh-agent@1`: the user's SSH agent in these phases. Unrestricted signs anything; a
+    /// bounded entry signs only `sign` namespaces and `authenticate` logins.
+    SshAgent {
+        phases: Vec<SshPhase>,
+        unrestricted: bool,
+        sign: Vec<String>,
+        authenticate: Vec<String>,
+    },
     /// Known-unsupported or unknown type.
     Unsupported,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum SshPhase {
+    Install,
+    Runtime,
+}
+
+impl SshPhase {
+    pub fn as_str(self) -> &'static str {
+        match self {
+            SshPhase::Install => "install",
+            SshPhase::Runtime => "runtime",
+        }
+    }
 }
 
 #[derive(Debug, Clone, Default, PartialEq, Eq)]

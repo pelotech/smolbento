@@ -122,6 +122,7 @@ pub fn meta(req: &CreateRequest) -> Meta {
             .iter()
             .map(|(host, guest)| (guest.clone(), host.display().to_string()))
             .collect(),
+        ssh_agent: None,
     }
 }
 

@@ -4,11 +4,12 @@ use std::collections::{BTreeMap, BTreeSet};
 
 use anyhow::{Context, Result, bail};
 
+use crate::bridge::agent::{AgentGrant, PhaseGrant};
 use crate::kits::args::{ArgValues, expand};
 use crate::kits::capability;
 use crate::kits::host_mount;
 use crate::kits::model::{
-    AgentContextReq, CapBody, CredReq, FileReq, Hook, HookCmd, Kind, Kit, NetRule, Rules,
+    AgentContextReq, CapBody, CredReq, FileReq, Hook, HookCmd, Kind, Kit, NetRule, Rules, SshPhase,
 };
 
 /// The agent user's home in the platform floor; the host can't see the guest's real env.
@@ -69,6 +70,8 @@ pub struct Merged {
     pub git_identity: bool,
     pub long_running: bool,
     pub privileged: bool,
+    /// `ssh-agent@1` entries merged per phase, plus a built-in agent's implicit runtime grant.
+    pub ssh_agent: AgentGrant,
 }
 
 /// A `host-mount@1` and the kit that declared it, which keys its managed directory.
@@ -87,6 +90,16 @@ pub struct KitRules {
     pub kit: String,
     pub install: Rules,
     pub runtime: Rules,
+}
+
+/// One `ssh-agent@1` entry; `kit` is `None` for a built-in agent's implicit grant.
+struct SshEntry<'a> {
+    kit: Option<&'a str>,
+    optional: bool,
+    phases: &'a [SshPhase],
+    unrestricted: bool,
+    sign: &'a [String],
+    authenticate: &'a [String],
 }
 
 #[derive(Debug)]
@@ -191,6 +204,18 @@ pub fn resolve_for(
     env_map.insert("WORKSPACE".into(), workdir.into());
 
     let mut skipped = Vec::new();
+    // sbx's built-in agents (`shell`, …) get the agent at runtime unless it's unavailable.
+    let mut ssh_entries = Vec::new();
+    if matches!(workload.source, Source::Preset(_)) {
+        ssh_entries.push(SshEntry {
+            kit: None,
+            optional: true,
+            phases: &[SshPhase::Runtime],
+            unrestricted: true,
+            sign: &[],
+            authenticate: &[],
+        });
+    }
     // The kit that first declared each volume path: a host mount there conflicts with it.
     let mut volume_kits: BTreeMap<String, String> = BTreeMap::new();
     let one_owner = |a: &str, b: &str, path: &str| {
@@ -355,6 +380,19 @@ pub fn resolve_for(
                         },
                     ));
                 }
+                CapBody::SshAgent {
+                    phases,
+                    unrestricted,
+                    sign,
+                    authenticate,
+                } => ssh_entries.push(SshEntry {
+                    kit: Some(k.name.as_str()),
+                    optional: cap.optional,
+                    phases,
+                    unrestricted: *unrestricted,
+                    sign,
+                    authenticate,
+                }),
                 CapBody::GitIdentity => merged.git_identity = true,
                 CapBody::LongRunning => merged.long_running = true,
                 CapBody::Privileged => merged.privileged = true,
@@ -362,6 +400,11 @@ pub fn resolve_for(
             }
         }
     }
+
+    merged.ssh_agent = AgentGrant {
+        install: ssh_phase(&ssh_entries, SshPhase::Install, &mut skipped)?,
+        runtime: ssh_phase(&ssh_entries, SshPhase::Runtime, &mut skipped)?,
+    };
 
     let mut it = all.into_iter();
     let workload = it.next().expect("workload is first");
@@ -372,6 +415,59 @@ pub fn resolve_for(
         merged,
         skipped,
     })
+}
+
+/// Merges the `ssh-agent@1` entries for `phase` (kit spec "Composition"): unrestricted when any
+/// entry is, else the union of their namespaces; required when any entry is. `authenticate`
+/// limits (Phase 5g) can't be enforced yet: under a bounded merge a required entry with them
+/// refuses, an optional one is skipped.
+fn ssh_phase(
+    entries: &[SshEntry],
+    phase: SshPhase,
+    skipped: &mut Vec<String>,
+) -> Result<Option<PhaseGrant>> {
+    let mut es: Vec<&SshEntry> = entries
+        .iter()
+        .filter(|e| e.phases.contains(&phase))
+        .collect();
+    if !es.iter().any(|e| e.unrestricted) {
+        for e in es.iter().filter(|e| !e.authenticate.is_empty()) {
+            let kit = e.kit.unwrap_or("?");
+            if !e.optional {
+                bail!("kit {kit}: ssh-agent@1 authenticate limits aren't supported yet");
+            }
+            let note = format!("{kit}: com.docker.sandbox/ssh-agent@1 with authenticate limits");
+            if !skipped.contains(&note) {
+                skipped.push(note);
+            }
+        }
+        es.retain(|e| e.authenticate.is_empty());
+    }
+    if es.is_empty() {
+        return Ok(None);
+    }
+    let sign = if es.iter().any(|e| e.unrestricted) {
+        None
+    } else {
+        let mut union: Vec<String> = Vec::new();
+        for ns in es.iter().flat_map(|e| e.sign) {
+            if !union.contains(ns) {
+                union.push(ns.clone());
+            }
+        }
+        Some(union)
+    };
+    let required = es.iter().any(|e| !e.optional);
+    let kit = es
+        .iter()
+        .find(|e| !e.optional)
+        .or_else(|| es.iter().find(|e| e.kit.is_some()))
+        .and_then(|e| e.kit.map(String::from));
+    Ok(Some(PhaseGrant {
+        sign,
+        required,
+        kit,
+    }))
 }
 
 fn expand_hook(h: &Hook, ex: &dyn Fn(&str) -> Result<String>) -> Result<Hook> {
@@ -544,7 +640,10 @@ fn order(workload: &Kit, mixins: Vec<Kit>) -> Result<Vec<Kit>> {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::kits::model::{ArgDef, Cap, Content, Lifecycle, NetRule, OAuthReq, Source};
+    use crate::bridge::agent::PhaseGrant;
+    use crate::kits::model::{
+        ArgDef, Cap, Content, Lifecycle, NetRule, OAuthReq, Source, SshPhase,
+    };
 
     fn base(name: &str, kind: Kind) -> Kit {
         Kit {
@@ -861,22 +960,129 @@ mod tests {
     #[test]
     fn a_required_unsupported_capability_fails_closed() {
         let k = mixin("m").cap(
-            "com.docker.sandbox/ssh-agent@1",
+            "com.docker.sandbox/usb-device@1",
             false,
             CapBody::Unsupported,
         );
         let e = run(workload("w"), vec![k]).unwrap_err();
         assert_eq!(
             format!("{e:#}"),
-            "kit m: com.docker.sandbox/ssh-agent@1 is not supported by smolbento"
+            "kit m: com.docker.sandbox/usb-device@1 is not supported by smolbento"
         );
     }
 
     #[test]
     fn an_optional_unsupported_capability_is_skipped() {
-        let k = mixin("m").cap("com.docker.sandbox/ssh-agent@1", true, CapBody::Unsupported);
+        let k = mixin("m").cap(
+            "com.docker.sandbox/usb-device@1",
+            true,
+            CapBody::Unsupported,
+        );
         let p = run(workload("w"), vec![k]).unwrap();
-        assert_eq!(p.skipped, ["m: com.docker.sandbox/ssh-agent@1"]);
+        assert_eq!(p.skipped, ["m: com.docker.sandbox/usb-device@1"]);
+    }
+
+    const SSH: &str = "com.docker.sandbox/ssh-agent@1";
+
+    fn ssh(phases: &[SshPhase], sign: &[&str], authenticate: &[&str]) -> CapBody {
+        let list = |l: &[&str]| l.iter().map(|s| s.to_string()).collect::<Vec<_>>();
+        CapBody::SshAgent {
+            phases: phases.to_vec(),
+            unrestricted: sign.is_empty() && authenticate.is_empty(),
+            sign: list(sign),
+            authenticate: list(authenticate),
+        }
+    }
+    fn grant(sign: Option<&[&str]>, required: bool, kit: Option<&str>) -> Option<PhaseGrant> {
+        Some(PhaseGrant {
+            sign: sign.map(|s| s.iter().map(|x| x.to_string()).collect()),
+            required,
+            kit: kit.map(Into::into),
+        })
+    }
+    fn preset() -> Kit {
+        let mut w = workload("shell");
+        w.source = Source::Preset("img:1".into());
+        w
+    }
+
+    #[test]
+    fn a_built_in_agent_gets_an_implicit_optional_runtime_grant() {
+        let p = run(preset(), vec![]).unwrap();
+        assert_eq!(
+            p.merged.ssh_agent,
+            AgentGrant {
+                runtime: grant(None, false, None),
+                install: None,
+            }
+        );
+        // A workload kit gets nothing unless it asks.
+        assert!(
+            run(workload("w"), vec![])
+                .unwrap()
+                .merged
+                .ssh_agent
+                .is_empty()
+        );
+    }
+
+    #[test]
+    fn ssh_agent_grants_merge_per_phase() {
+        use SshPhase::{Install, Runtime};
+        // Bounded entries union their namespaces; required wins and names its kit.
+        let a = mixin("a").cap(SSH, true, ssh(&[Runtime], &["git"], &[]));
+        let b = mixin("b").cap(SSH, false, ssh(&[Install, Runtime], &["file", "git"], &[]));
+        let p = run(workload("w"), vec![a, b]).unwrap();
+        assert_eq!(
+            p.merged.ssh_agent,
+            AgentGrant {
+                install: grant(Some(&["file", "git"]), true, Some("b")),
+                runtime: grant(Some(&["git", "file"]), true, Some("b")),
+            }
+        );
+
+        // Unrestricted wins over bounded; optional entries name the first kit.
+        let a = mixin("a").cap(SSH, true, ssh(&[Runtime], &["git"], &[]));
+        let b = mixin("b").cap(SSH, true, ssh(&[Runtime], &[], &[]));
+        let p = run(workload("w"), vec![a, b]).unwrap();
+        assert_eq!(p.merged.ssh_agent.runtime, grant(None, false, Some("a")));
+        assert_eq!(p.merged.ssh_agent.install, None);
+
+        // A built-in agent's implicit grant is unrestricted; a kit's bounded entry joins it.
+        let m = mixin("m").cap(SSH, false, ssh(&[Runtime], &["git"], &[]));
+        let p = run(preset(), vec![m]).unwrap();
+        assert_eq!(p.merged.ssh_agent.runtime, grant(None, true, Some("m")));
+    }
+
+    #[test]
+    fn authenticate_limits_refuse_a_required_entry_and_skip_an_optional_one() {
+        use SshPhase::Runtime;
+        let req = mixin("m").cap(SSH, false, ssh(&[Runtime], &["git"], &["github.com"]));
+        let e = run(workload("w"), vec![req.clone()]).unwrap_err();
+        assert_eq!(
+            format!("{e:#}"),
+            "kit m: ssh-agent@1 authenticate limits aren't supported yet"
+        );
+
+        let opt = mixin("o").cap(SSH, true, ssh(&[Runtime], &[], &["github.com"]));
+        let plain = mixin("p").cap(SSH, true, ssh(&[Runtime], &["git"], &[]));
+        let p = run(workload("w"), vec![opt, plain]).unwrap();
+        assert_eq!(
+            p.merged.ssh_agent.runtime,
+            grant(Some(&["git"]), false, Some("p"))
+        );
+        assert_eq!(
+            p.skipped_warnings(),
+            [
+                "kit o: skipping com.docker.sandbox/ssh-agent@1 with authenticate limits (not \
+                 supported)"
+            ]
+        );
+
+        // Under an unrestricted grant for the phase, the limits don't matter.
+        let p = run(preset(), vec![req]).unwrap();
+        assert_eq!(p.merged.ssh_agent.runtime, grant(None, true, Some("m")));
+        assert!(p.skipped.is_empty());
     }
 
     fn cred(oauth: Option<OAuthReq>) -> CapBody {
