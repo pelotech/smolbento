@@ -275,9 +275,9 @@ git diff | wl-copy                          # or xclip, xsel, pbcopy, clip.exe
   in `/usr/local/bin` on every start and need `curl` in the image; without it they fall back.
 - The first attached session serves the bridge. A second one attached at the same time doesn't,
   and when the first exits the bridge stops until the next `sbt run` or `sbt exec -it`.
-- Sandboxes created before this feature have no bridge. Recreate a sandbox to get it. A sandbox
-  created while `/tmp/sbt-<uid>` isn't a private directory owned by you (0700) gets no bridge,
-  with a warning.
+- Sandboxes created before this feature have no bridge. Recreate a sandbox to get it. The
+  directory `/tmp/sbt-<uid>` is checked when a sandbox is created and at every start; while it
+  isn't a private directory owned by you (0700), the sandbox gets no bridge, with a warning.
 - Forks don't install the shims, but they keep the parent's socket mount: while the parent is
   attached, a process in a fork can still use the parent's bridge.
 

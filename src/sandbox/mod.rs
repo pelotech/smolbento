@@ -7,6 +7,8 @@ pub mod name;
 pub mod options;
 pub mod session;
 
+use std::path::Path;
+
 use anyhow::{Context, Result, anyhow};
 
 use crate::bridge;
@@ -386,6 +388,17 @@ pub fn start_with<R: Runner>(
     plan: &StartPlan,
     on: &mut dyn FnMut(Event),
 ) -> Result<()> {
+    start_checked(vm, sb, plan, on, &bridge::private_dir)
+}
+
+/// `start_with`, with `private` deciding whether the bridge's socket directory is safe.
+fn start_checked<R: Runner>(
+    vm: &Smolvm<R>,
+    sb: &Sandbox,
+    plan: &StartPlan,
+    on: &mut dyn FnMut(Event),
+    private: &dyn Fn(&Path) -> bool,
+) -> Result<()> {
     vm.update_network(&sb.machine, &plan.network)
         .context("applying the network policy")?;
     on(Event::Boot);
@@ -397,7 +410,7 @@ pub fn start_with<R: Runner>(
         &mut |p| on(Event::Pull(p)),
     )?;
     on(Event::Setup);
-    if let Err(e) = setup(vm, sb, plan) {
+    if let Err(e) = setup(vm, sb, plan, private) {
         if let Err(stop) = vm.stop(&sb.machine) {
             eprintln!(
                 "warning: stopping {} after the failed start: {stop:#}",
@@ -412,7 +425,12 @@ pub fn start_with<R: Runner>(
 /// What follows `machine start`: a v3 workload's image user's uid, then the agent user's, dockerd
 /// for a pre-4a sandbox, the clone, then the kits' startup hooks (a no-op without kits; deferred
 /// during a kit first start). A failed blocking startup hook fails the start.
-fn setup<R: Runner>(vm: &Smolvm<R>, sb: &Sandbox, plan: &StartPlan) -> Result<()> {
+fn setup<R: Runner>(
+    vm: &Smolvm<R>,
+    sb: &Sandbox,
+    plan: &StartPlan,
+    private: &dyn Fn(&Path) -> bool,
+) -> Result<()> {
     if let Some(user) = &sb.meta.user
         && let Some(w) = map_image_user(vm, sb, user, plan.uid, plan.gid)?
     {
@@ -439,7 +457,19 @@ fn setup<R: Runner>(vm: &Smolvm<R>, sb: &Sandbox, plan: &StartPlan) -> Result<()
     }
     // Not fatal either: without the shims the agent prints URLs instead of opening them. Without
     // the bridge, any shims a fork's disk came with are removed (they'd reach its parent).
-    let (shims, what) = if sb.meta.bridge {
+    // The socket directory is checked on every start: /tmp can be emptied (macOS does on reboot)
+    // and another user can create it first, then the mount would reach them.
+    let dir = bridge::socket_dir();
+    let safe = sb.meta.bridge && private(&dir);
+    if sb.meta.bridge && !safe {
+        eprintln!(
+            "warning: {} isn't a private directory owned by you; {} gets no browser or clipboard \
+             bridge until it is",
+            dir.display(),
+            sb.name()
+        );
+    }
+    let (shims, what) = if safe {
         (bridge::install_cmd(), "install")
     } else {
         (bridge::remove_cmd(), "remove")
@@ -1010,9 +1040,9 @@ mod tests {
             };
             fake.ok(&["machine", "status"], &status);
             let vm = Smolvm::new(fake);
-            let mut sb = get(&vm, "claude-myrepo").unwrap();
+            let sb = get(&vm, "claude-myrepo").unwrap();
             assert_eq!(sb.meta.bridge, bridged);
-            ensure_running(&vm, &mut sb, || Ok(plan())).unwrap();
+            start_checked(&vm, &sb, &plan(), &mut |_| {}, &|_| true).unwrap();
             let install = format!(
                 "machine exec --name sbx-claude-myrepo -u root -- sh -c {}",
                 bridge::install_cmd()
@@ -1031,6 +1061,49 @@ mod tests {
             assert_eq!(&lines[hosts + 1], expected, "{lines:#?}");
             assert_eq!(lines.contains(&install), bridged, "{lines:#?}");
         }
+    }
+
+    fn bridged_status() -> String {
+        STATUS
+            .replace("\"state\": \"running\"", "\"state\": \"stopped\"")
+            .replace(
+                "\"sbx.docker\"",
+                "\"sbx.bridge\": \"true\",\n    \"sbx.docker\"",
+            )
+    }
+
+    #[test]
+    fn a_start_checks_the_socket_dir_and_installs_the_shims_when_it_is_private() {
+        let fake = FakeRunner::new();
+        fake.ok(&["machine", "status"], &bridged_status());
+        let vm = Smolvm::new(fake);
+        let sb = get(&vm, "claude-myrepo").unwrap();
+        let checked = std::cell::RefCell::new(Vec::new());
+        start_checked(&vm, &sb, &plan(), &mut |_| {}, &|d| {
+            checked.borrow_mut().push(d.to_path_buf());
+            true
+        })
+        .unwrap();
+        assert_eq!(*checked.borrow(), vec![bridge::socket_dir()]);
+        let install = format!(
+            "machine exec --name sbx-claude-myrepo -u root -- sh -c {}",
+            bridge::install_cmd()
+        );
+        assert!(vm.runner().call_lines().contains(&install));
+    }
+
+    #[test]
+    fn a_start_with_an_unsafe_socket_dir_removes_the_shims() {
+        let fake = FakeRunner::new();
+        fake.ok(&["machine", "status"], &bridged_status());
+        let vm = Smolvm::new(fake);
+        let sb = get(&vm, "claude-myrepo").unwrap();
+        start_checked(&vm, &sb, &plan(), &mut |_| {}, &|_| false).unwrap();
+        let lines = vm.runner().call_lines();
+        let exec =
+            |cmd: String| format!("machine exec --name sbx-claude-myrepo -u root -- sh -c {cmd}");
+        assert!(lines.contains(&exec(bridge::remove_cmd())), "{lines:#?}");
+        assert!(!lines.contains(&exec(bridge::install_cmd())), "{lines:#?}");
     }
 
     #[test]

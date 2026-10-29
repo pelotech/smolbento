@@ -41,8 +41,8 @@ fn socket_in(uid: u32, name: &str) -> PathBuf {
     dir_of(uid).join(format!("{}.sock", &id[..16]))
 }
 
-/// Whether `dir` is private to this user, for a new sandbox's socket: created 0700 if missing,
-/// else a real directory (not a symlink) we own with mode 0700. In the shared `/tmp`, another
+/// Whether `dir` is private to this user, for a sandbox's socket (checked at create and at every
+/// start): created 0700 if missing, else a real directory (not a symlink) we own with mode 0700. In the shared `/tmp`, another
 /// user could create it first and receive what the sandbox sends.
 pub fn private_dir(dir: &Path) -> bool {
     private_dir_of(dir, crate::sandbox::host_uid())

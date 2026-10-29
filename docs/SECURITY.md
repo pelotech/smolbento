@@ -158,9 +158,11 @@ access, so load only kits you trust.
   this way runs in your real browser, with your logins. To stop URL opening, run
   `sbt settings set browser.enabled false`. Text the sandbox puts on your clipboard may be
   crafted to run commands when pasted into a terminal; check it before pasting it there. The
-  bridge socket lives in `/tmp/sbt-<uid>/` (mode 0700), so other users on your machine can't reach
-  it; a sandbox created while that directory isn't a private one of yours gets no bridge, so
-  another user can't create it first to receive what the sandbox sends.
+  bridge socket lives in `/tmp/sbt-<uid>/` (mode 0700). smolbento checks that directory when a
+  sandbox is created and at every start: it must be a real directory (not a symlink) owned by you
+  with mode 0700, and is created that way if missing. If it isn't, the sandbox gets no bridge for
+  that start (the shims are removed), with a warning, so another user who creates the directory
+  first (macOS empties `/tmp` on reboot) can't receive what the sandbox sends.
 - Forks don't install the bridge shims, but keep the parent's socket mount: while the parent is
   attached, a process in a fork can open URLs and copy through the parent's bridge.
 - When an opened URL's `redirect_uri` is `http://localhost:PORT` or `http://127.0.0.1:PORT`,
