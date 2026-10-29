@@ -499,6 +499,105 @@ disk keeps the build cache, and `sbt rm _builder` resets it. Builds use your glo
 image that needs a login (Docker's own examples use `dhi.io`) builds once you store a
 [registry credential](#registry-credentials) for that registry.
 
+## Skills
+
+Skills are folders with a `SKILL.md` that an agent loads on demand. smolbento keeps one shared
+store of them on your machine and links it into your sandboxes, as `sbx` does.
+
+The store is `~/.local/share/smolbento/agent-skills/` (`$XDG_DATA_HOME/smolbento/agent-skills` when
+that's set, or `$SMOLBENTO_DATA_DIR/agent-skills`), one directory per skill. It isn't `sbx`'s
+store, so bring your skills over with `import`.
+
+```sh
+sbt skills add anthropics/skills --skill pdf     # from GitHub, or any Git URL (HTTPS or SSH)
+sbt skills add anthropics/skills                 # every skill in the repository
+sbt skills import --dry-run                      # see what your agents' directories hold
+sbt skills import                                # copy them into the store
+sbt skills ls                                    # SKILL and STORE columns; --json, -q
+sbt skills update pdf                            # re-fetch a skill added from a repository
+sbt skills rm pdf
+```
+
+- `add` clones with your host `git`, so anything git can fetch works, private repositories
+  included. Every directory that holds a `SKILL.md` is a skill, named after the directory.
+  `--skill` (repeatable, or comma-separated) picks some. An existing skill asks before it's
+  replaced; `-f` skips the question, and without a terminal `-f` is required.
+- `import` copies the skills from `~/.agents/skills`, `~/.claude/skills`,
+  `~/.config/opencode/skills`, `~/.copilot/skills`, `~/.cursor/skills` and `~/.factory/skills`, in
+  that order. When two directories have the same skill, the earlier one wins and the other gets a
+  warning.
+- `update` works only for skills added from a repository (smolbento records where in
+  `agent-skills-metadata/sources.json`). Importing a skill drops that record.
+- `rm` asks first, like `add`; `-f` skips it.
+
+`sbt reset` deletes the store and its records.
+
+### Sharing the store with a sandbox
+
+`--skills` on `create` and `run` sets how a new sandbox gets the store:
+
+| Mode | In the sandbox |
+|---|---|
+| `readonly` (default) | The store is mounted read-only at `/run/sbx/skills-shared`, and the agent's skills directory (for `claude`, `~/.claude/skills`) is a normal directory with one symlink per skill, such as `pdf -> /run/sbx/skills-shared/pdf`. The agent can't change a stored skill, but can add its own directories beside the links |
+| `readwrite` | The store is mounted over the agent's skills directory. What the agent writes there lands in your store at once |
+| `off` | No store and no skills directory |
+
+```sh
+sbt create claude . --skills readwrite
+sbt settings set skills.defaultMode off          # the default for new sandboxes
+```
+
+The mode is fixed when the sandbox is created: `--skills` on `run` for an existing sandbox is
+ignored, like `--cpus`, and so is a changed `skills.defaultMode`. The order is `--skills`, then
+`sandboxOptions.skills` in an [environment file](#environments-sbxenvyaml), then the setting (see
+[Configuration](configuration.md#settings)).
+
+In `readonly` mode the links are made again at every start. A skill you add shows up in
+`/run/sbx/skills-shared` at once but is linked at the sandbox's next start; a skill you remove
+leaves a dangling link until then. A directory or file the agent made with the same name as a
+stored skill is left alone. With `readwrite`, changes in the store show up at once. Agents may read
+their skills only when a session starts, so start a new session after a change.
+
+Each agent has its own directory:
+
+| Agent | Skills directory (in the sandbox) |
+|---|---|
+| `claude` | `~/.claude/skills` |
+| `codex`, `devin` | `~/.agents/skills` |
+| `copilot` | `~/.copilot/skills` |
+| `cursor` | `~/.cursor/skills` |
+| `droid` | `~/.factory/skills` |
+| `opencode` | `~/.config/opencode/skills` |
+| `gemini`, `kiro`, `docker-agent`, `shell` | none: the store isn't shared |
+
+`~` is `/home/agent`. Sandboxes created before skills existed have none; recreate them.
+
+The links are made by the start's setup as the `agent` user. An image without an `agent` account
+(and a v3 workload kit's image user, when there's none) gets no links: the start warns
+(`couldn't link shared skills`) and goes on. `sbx` images have `agent`.
+
+### Skills from kits
+
+A kit can ask for more skills directories and ship skills of its own:
+
+- `agent-skills@1` names a directory (`path`, absolute) that gets the store, with `mode`
+  `readonly` (the default) or `readwrite`. The sandbox's mode, the agent's directory and the kit's
+  mode all apply, and the narrowest wins; `--skills off` leaves the directory empty of store
+  skills. Kits that name the same path share it, with the widest mode.
+- `agent-skill@1` bundles a skill from the kit's image: `path` is the skill's directory, `name`
+  (optional) is its name in the skills directory, defaulting to the directory's name. At first
+  start smolbento checks that `SKILL.md` is a file and that no skill of that name is there, then
+  links it into every skills directory. A required bundled skill that fails either check, or has
+  no skills directory to go in, fails the create and removes the sandbox; an optional one prints
+  `warning: skipping skill NAME: reason` (or a note) and the sandbox starts without it. A bundled
+  skill with the same name as a stored skill is a conflict too: the store link is there first.
+  smolbento only links bundled skills and never runs anything in them.
+- A directory that gets bundled skills is never mounted over, so with `readwrite` it gets
+  read-only links instead. Mounting the store over it would put the kit's skills in your store.
+- These steps run as the `agent` user, so a required bundled skill in an image without an `agent`
+  account fails the create. `kit add` refuses kits with either capability: mounts are set at
+  create, so create a new sandbox with the kit.
+
 ## Environments (sbxenv.yaml)
 
 An environment file describes a sandbox: agent, workspace, kits, ports, variables and secrets.

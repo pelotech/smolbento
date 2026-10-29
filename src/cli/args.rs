@@ -52,7 +52,7 @@ pub enum Cmd {
     Rm(RmArgs),
     /// Remove stopped sandboxes
     Prune(PruneArgs),
-    /// Remove every sandbox and smolbento's session state
+    /// Remove every sandbox, smolbento's session state and the shared skills store
     Reset(ResetArgs),
     /// Copy files between the host and a sandbox
     Cp(CpArgs),

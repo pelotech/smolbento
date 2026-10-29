@@ -1,6 +1,6 @@
 # Development status
 
-Last updated: 2026-10-28.
+Last updated: 2026-10-29.
 
 smolbento is built in phases. Each phase ships on its own.
 
@@ -35,6 +35,13 @@ your machine's `127.0.0.1` to them. See [Usage](usage.md#host-services) and
 shared by the kit's sandboxes and kept after they're removed. `--mount` and `sbxenv.yaml`
 `mounts:` choose your own directory, and the new `sbt inspect` shows where each one is. See
 [Usage](usage.md#kit-host-mounts).
+
+**Phase 5c (agent skills) is done.** `sbt skills add|import|ls|rm|update` keep a shared store of
+skills in `~/.local/share/smolbento/agent-skills`, and `--skills off|readonly|readwrite` (default
+`skills.defaultMode`) links or mounts it into a new sandbox's agent skills directory. Kits can name
+more directories (`agent-skills@1`) and bundle skills of their own (`agent-skill@1`). Sandboxes
+created before it need recreating. See [Usage](usage.md#skills) and
+[Security](SECURITY.md#skills).
 
 **Phase 5b (SSH agent forwarding) is done.** Sandboxes of the built-in agents, and kits that ask
 with `ssh-agent@1`, can list your SSH agent's keys and sign (git over SSH, commit signing), but
@@ -73,8 +80,9 @@ terminal fail until you do.
 | 4c | Host services: `localhost[:PORT]` rules reach the host as `host.docker.internal`, live (interim: every host port, until smolvm can open one) | ✅ Done (interim) |
 | 5a | Host mounts: `host-mount@1`, `--mount`, `sbxenv.yaml` `mounts:`, `inspect` | ✅ Done |
 | 5b | SSH agent forwarding: `ssh-agent@1` with `sign` limits, the built-in agents' own grant, `ssh.agentForwardingEnabled`, `ssh.agentSocketPath` | ✅ Done |
+| 5c | Agent skills: `skills add/import/ls/rm/update`, `--skills`, `skills.defaultMode`, `agent-skills@1`, `agent-skill@1` | ✅ Done |
 | 5e | Browser and clipboard bridge while attached (`xdg-open`, `wl-copy`/`xclip`/`xsel`/`pbcopy`, the login callback relay, `browser.enabled`) | ✅ Done |
-| 5 | The other parts, easiest first: 5c skills (`--skills`, `skills`, `agent-skills@1`/`agent-skill@1`); 5d `template`; 5f MCP (`--static-mcp`, `mcp`); 5g `ssh-agent@1` `authenticate` limits (logins only to named servers, checked against your known hosts); 5h `setup ssh` (`ssh NAME.sbx` into sandboxes, e.g. from VS Code Remote-SSH; the `ssh.autoCreate`, `ssh.defaultAgent`, `ssh.defaultTemplate`, `ssh.workspaceRoot` settings) | Planned |
+| 5 | The other parts, easiest first: 5d `template`; 5f MCP (`--static-mcp`, `mcp`); 5g `ssh-agent@1` `authenticate` limits (logins only to named servers, checked against your known hosts); 5h `setup ssh` (`ssh NAME.sbx` into sandboxes, e.g. from VS Code Remote-SSH; the `ssh.autoCreate`, `ssh.defaultAgent`, `ssh.defaultTemplate`, `ssh.workspaceRoot` settings) | Planned |
 | 6 | Finish `sbxenv.yaml`: `env plan`, remembered approvals (`env.rememberHostCommands`), `lifecycle`, `bindings`, `registries`, `mcp`, the remaining `sandboxOptions` | Planned |
 | 7 | Kit publishing: `kit pack/push/pull/sign/verify` | Planned |
 | 8 | The `plus` kit, built and published with smolbento itself (an end-to-end check of everything before it) | Planned |
@@ -96,6 +104,8 @@ terminal fail until you do.
   text only, and doesn't read your clipboard or paste images. Forks have no bridge.
 - The SSH agent is served only while `sbt run`, `sbt exec -it` or `sbt exec` runs for the sandbox
   (no daemon), and `ssh-agent@1` `authenticate` limits aren't supported yet (5g).
+- Shared skills are linked by a start script that runs as the `agent` user: images without that
+  account get no links (a warning), and a required bundled kit skill there fails the create.
 - Only the agent's primary group takes your gid: group-writable shared directories aren't
   writable through your other groups. Images without `groupmod` (busybox) keep their gid, so on
   Linux the agent can't create files in the workspace unless that gid already matches yours.

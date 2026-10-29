@@ -194,6 +194,22 @@ access, so load only kits you trust.
   ones stay) or run `sbt` without `SSH_AUTH_SOCK`; to use a dedicated agent with only the keys you
   want sandboxes to use, set `ssh.agentSocketPath` to its socket.
 
+## Skills
+
+The shared skills store is agent material that smolbento never runs or reads beyond directory
+names. What you share with a sandbox is what its agent will follow:
+
+- **A `readwrite` sandbox can change the skills other sandboxes load.** Its agent writes straight
+  into your store, so a skill it changes or adds is linked into every later sandbox, `readonly`
+  ones included, and into any host agent you import from the store. Use it only for work you trust.
+- **`readonly` doesn't isolate a sandbox from changes.** The agent can't edit a stored skill, but
+  it loads whatever the store holds at each start, including changes made by a `readwrite`
+  sandbox or by you.
+- **Use `--skills off` for untrusted work.** The sandbox gets no store and no skills directory.
+- **Bundled kit skills are image content.** An `agent-skill@1` skill comes from the kit's image,
+  and smolbento only links it. Its instructions reach the agent like any skill's, so trust the kit
+  as you would for its install hooks.
+
 ## Supply chain
 
 - Agent images are Docker's `docker/sandbox-templates`, pinned to version tags and updated by

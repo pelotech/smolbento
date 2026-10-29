@@ -18,6 +18,7 @@ sbt settings unset docker.enabled       # back to the default
 | `fork.enabled` | `SMOLBENTO_FORK` | `true` | Start clone and mountless sandboxes branchable so `sbt fork` can copy them; `false` also turns `sbt fork` off |
 | `kit.allowedSources` | `SMOLBENTO_KIT_ALLOWED_SOURCES` | `["docker.io/"]` | Where published kits may load from: a JSON array of prefixes (`["*"]` allows any) |
 | `kit.allowLocalKits` | `SMOLBENTO_KIT_ALLOW_LOCAL_KITS` | `true` | Allow kits from local directories, descriptor files and Smolfiles |
+| `skills.defaultMode` | `SMOLBENTO_SKILLS_DEFAULT_MODE` | `readonly` | How new sandboxes get the shared skills store: `off`, `readonly` or `readwrite` (see [Skills](usage.md#skills)) |
 | `browser.enabled` | `SMOLBENTO_BROWSER_ENABLED` | `true` | Let sandboxes open `https://` URLs in your browser while you're attached; `false` also stops in-sandbox logins that redirect to `localhost` (see [Browser and clipboard](usage.md#browser-and-clipboard)) |
 | `ssh.agentForwardingEnabled` | `SMOLBENTO_SSH_AGENT_FORWARDING` | `true` | Allow sandboxes to list SSH agent keys and sign, but not add, remove or lock keys. Disabling blocks new agent connections; existing connections remain active (see [SSH agent](usage.md#ssh-agent)) |
 | `ssh.agentSocketPath` | `SMOLBENTO_SSH_AGENT_SOCKET` | empty | Optional fixed host SSH agent socket path. Empty uses each client's current `SSH_AUTH_SOCK` |
@@ -63,6 +64,10 @@ create) and again for each new agent connection from a sandbox. A sandbox create
 was off, or without an agent, has none until it's recreated. `ssh.agentSocketPath` must name a
 socket that exists; smolbento never starts an agent itself.
 
+`skills.defaultMode` applies when a sandbox is created, when neither `--skills` nor
+`sandboxOptions.skills` says otherwise. An existing sandbox keeps the mode it was created with.
+A value other than `off`, `readonly` or `readwrite` is an error that names where it came from.
+
 ## Files
 
 | Path | Contents |
@@ -73,6 +78,8 @@ socket that exists; smolbento never starts an agent itself.
 | `~/.config/smolbento/secret-values.toml` | Secret values, mode 0600, only where no OS keychain is usable (headless Linux, CI) |
 | `~/.cache/smolbento/sessions/` | One file per attached `run` session, used to stop a sandbox when the last session ends |
 | `~/.cache/smolbento/kits/` | Downloaded and built kits, and images with kit layers added; safe to delete |
+| `~/.local/share/smolbento/agent-skills/` | The shared [skills](usage.md#skills) store, one directory per skill; `sbt reset` deletes it |
+| `~/.local/share/smolbento/agent-skills-metadata/` | Where each skill added from a repository came from (`sources.json`) |
 | `~/.local/share/smolbento/kit-host-mounts/` | Kit [host mounts](usage.md#kit-host-mounts), kept after their sandboxes are removed |
 
 `XDG_CONFIG_HOME`, `XDG_CACHE_HOME` and `XDG_DATA_HOME` are honoured (also on macOS).
@@ -112,6 +119,7 @@ smolbento keeps no database of its own. Each sandbox is a smolvm machine named `
 | `sbx.agent-file` | The agent instructions file a workload kit's own `agent-context` names, so `kit add` can index a new mixin's context in it |
 | `sbx.workdir` | A v3 workload kit's image `WORKDIR`, where install hooks run (absent for `/`) |
 | `sbx.credential-install` | Env vars of credentials a kit needs only while installing; later starts leave them out |
+| `sbx.skills` | The skills mode and each skills directory with its access (`ro` links or `rw` mount), set at create |
 | `sbx.long-running` | `true` when a kit asked not to stop the sandbox when its last session ends |
 
 `smolvm machine ls` shows them alongside any machines you made with smolvm directly; `sbt ls` shows
