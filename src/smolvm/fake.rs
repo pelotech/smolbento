@@ -12,6 +12,9 @@ struct Reply {
     once: bool,
 }
 
+/// Called with a call's args (`FakeRunner::during`).
+type Hook = Box<dyn Fn(&[String])>;
+
 #[derive(Default)]
 pub struct FakeRunner {
     replies: RefCell<Vec<Reply>>,
@@ -26,6 +29,7 @@ pub struct FakeRunner {
     uploads: RefCell<Vec<(String, String)>>,
     progress: RefCell<Vec<(Vec<String>, Vec<String>)>>,
     during_interactive: RefCell<Option<Box<dyn Fn()>>>,
+    during: RefCell<Vec<(Vec<String>, Hook)>>,
 }
 
 fn strings(items: &[&str]) -> Vec<String> {
@@ -139,6 +143,14 @@ impl FakeRunner {
         self
     }
 
+    /// Call `f` with the args during each (non-interactive) call that starts with `prefix`.
+    pub fn during(&self, prefix: &[&str], f: impl Fn(&[String]) + 'static) -> &Self {
+        self.during
+            .borrow_mut()
+            .push((strings(prefix), Box::new(f)));
+        self
+    }
+
     /// Make interactive calls fail, as when smolvm can't be spawned.
     pub fn interactive_fail(&self, message: &str) -> &Self {
         *self.interactive_error.borrow_mut() = Some(message.into());
@@ -199,6 +211,11 @@ impl Runner for FakeRunner {
             && let Ok(content) = std::fs::read_to_string(src)
         {
             self.uploads.borrow_mut().push((dst.clone(), content));
+        }
+        for (prefix, f) in self.during.borrow().iter() {
+            if args.starts_with(prefix) {
+                f(args);
+            }
         }
         let mut replies = self.replies.borrow_mut();
         let Some(index) = replies.iter().rposition(|r| args.starts_with(&r.prefix)) else {

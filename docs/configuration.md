@@ -18,6 +18,8 @@ sbt settings unset docker.enabled       # back to the default
 | `kit.allowedSources` | `SMOLBENTO_KIT_ALLOWED_SOURCES` | `["docker.io/"]` | Where published kits may load from: a JSON array of prefixes (`["*"]` allows any) |
 | `kit.allowLocalKits` | `SMOLBENTO_KIT_ALLOW_LOCAL_KITS` | `true` | Allow kits from local directories, descriptor files and Smolfiles |
 | `browser.enabled` | `SMOLBENTO_BROWSER_ENABLED` | `true` | Let sandboxes open `https://` URLs in your browser while you're attached; `false` also stops in-sandbox logins that redirect to `localhost` (see [Browser and clipboard](usage.md#browser-and-clipboard)) |
+| `ssh.agentForwardingEnabled` | `SMOLBENTO_SSH_AGENT_FORWARDING` | `true` | Allow sandboxes to list SSH agent keys and sign, but not add, remove or lock keys. Disabling blocks new agent connections; existing connections remain active (see [SSH agent](usage.md#ssh-agent)) |
+| `ssh.agentSocketPath` | `SMOLBENTO_SSH_AGENT_SOCKET` | empty | Optional fixed host SSH agent socket path. Empty uses each client's current `SSH_AUTH_SOCK` |
 
 An environment variable wins over the config file, which wins over the default. Booleans accept
 `true`/`false`, `1`/`0`, `yes`/`no` and `on`/`off`.
@@ -46,6 +48,12 @@ costs.
 
 `browser.enabled` applies from the next `run` or `exec -it`. Copying to your clipboard isn't
 affected.
+
+`ssh.agentForwardingEnabled` and `ssh.agentSocketPath` are checked when a sandbox is created
+(without an agent, or with forwarding off, it gets none, or a kit that requires one refuses the
+create) and again for each new agent connection from a sandbox. A sandbox created while forwarding
+was off, or without an agent, has none until it's recreated. `ssh.agentSocketPath` must name a
+socket that exists; smolbento never starts an agent itself.
 
 ## Files
 

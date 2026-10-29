@@ -58,6 +58,17 @@ pub fn serve(path: &Path, handlers: Handlers) -> Result<Option<Server>> {
 }
 
 fn serve_within(path: &Path, handlers: Handlers, deadline: Duration) -> Result<Option<Server>> {
+    spawn(path, move |listener, stop| {
+        accept_loop(listener, &stop, &handlers, deadline);
+    })
+}
+
+/// Binds `path` (as `serve`) and runs `accept` on a thread with the non-blocking listener and the
+/// stop flag that dropping the returned `Server` sets.
+pub(super) fn spawn(
+    path: &Path,
+    accept: impl FnOnce(&UnixListener, Arc<AtomicBool>) + Send + 'static,
+) -> Result<Option<Server>> {
     let Some(listener) = bind(path)? else {
         return Ok(None);
     };
@@ -66,7 +77,7 @@ fn serve_within(path: &Path, handlers: Handlers, deadline: Duration) -> Result<O
     let stop = Arc::new(AtomicBool::new(false));
     let thread = {
         let stop = stop.clone();
-        thread::spawn(move || accept_loop(&listener, &stop, &handlers, deadline))
+        thread::spawn(move || accept(&listener, stop))
     };
     Ok(Some(Server {
         path: path.to_path_buf(),
@@ -90,7 +101,7 @@ impl Drop for Server {
 
 fn bind(path: &Path) -> Result<Option<UnixListener>> {
     if let Some(dir) = path.parent() {
-        private_dir(dir)?;
+        make_private_dir(dir)?;
     }
     if fs::symlink_metadata(path).is_ok() {
         if UnixStream::connect(path).is_ok() {
@@ -108,7 +119,7 @@ fn bind(path: &Path) -> Result<Option<UnixListener>> {
 
 /// Creates `dir` 0700, or checks that an existing one is a directory of ours (it is under the
 /// shared `/tmp`) and tightens it to 0700.
-fn private_dir(dir: &Path) -> Result<()> {
+fn make_private_dir(dir: &Path) -> Result<()> {
     match fs::DirBuilder::new().mode(0o700).create(dir) {
         Err(e) if e.kind() != std::io::ErrorKind::AlreadyExists => {
             return Err(e).with_context(|| format!("creating {}", dir.display()));
@@ -182,10 +193,11 @@ impl Stream for std::net::TcpStream {
     }
 }
 
-struct Deadline<'a, S> {
-    stream: &'a S,
-    until: Instant,
-    stop: &'a AtomicBool,
+/// Reads from `stream` until `until` (for all reads, not each), or until `stop` is set.
+pub(super) struct Deadline<'a, S> {
+    pub stream: &'a S,
+    pub until: Instant,
+    pub stop: &'a AtomicBool,
 }
 
 impl<S: Stream> Read for Deadline<'_, S> {

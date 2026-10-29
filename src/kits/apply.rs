@@ -6,6 +6,7 @@ use std::path::Path;
 use anyhow::{Context, Result, bail};
 
 use crate::agents;
+use crate::bridge::agent;
 use crate::kits::capability;
 use crate::kits::compose;
 use crate::kits::guest;
@@ -207,6 +208,16 @@ pub fn apply(
         .map(|c| c.workdir.as_str())
         .filter(|d| !d.is_empty() && *d != "/");
     let install_dir = workdir.map_or_else(|| "/".to_string(), crate::sandbox::sh_quote);
+    // Install hooks see `SSH_AUTH_SOCK` only with an install grant (a clean-env hook only when it
+    // declares it); a runtime grant's create-time variable is unset for them.
+    let granted = req.ssh_agent.as_ref();
+    let agent_env = if granted.is_some_and(|a| a.install.is_some()) {
+        format!("export SSH_AUTH_SOCK={} && ", agent::GUEST_SOCKET)
+    } else if granted.is_some_and(|a| a.runtime.is_some()) {
+        "unset SSH_AUTH_SOCK && ".to_string()
+    } else {
+        String::new()
+    };
     let mut per_kit: Vec<(&str, usize)> = Vec::new();
     for (kit, h) in &m.install_hooks {
         let n = match per_kit.iter_mut().find(|(k, _)| k == kit) {
@@ -223,7 +234,7 @@ pub fn apply(
             label: format!("kit {kit} install hook {n}"),
             kit: Some(kit.to_string()),
             user: h.user.clone(),
-            script: format!("cd {install_dir} && {}", guest::hook_script(h)),
+            script: format!("cd {install_dir} && {agent_env}{}", guest::hook_script(h)),
         });
     }
     // The later kit (in dependency order) wins a path.

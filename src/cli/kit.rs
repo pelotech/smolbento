@@ -122,6 +122,8 @@ fn supported(c: &Cap) -> bool {
             .iter()
             .flat_map(|r| r.allow.iter().chain(&r.deny))
             .all(|n| n.methods.is_empty() && n.paths.is_empty()),
+        // `authenticate` limits aren't enforced yet (Phase 5g).
+        CapBody::SshAgent { authenticate, .. } => authenticate.is_empty(),
         _ => true,
     }
 }
@@ -272,6 +274,8 @@ fn needs_recreate(kit: &Kit) -> Result<Vec<&'static str>> {
             CapBody::Port { .. } => "ports",
             CapBody::Volume { .. } => "volumes",
             CapBody::HostMount { .. } => "host mounts",
+            // The agent socket is mounted at create.
+            CapBody::SshAgent { .. } => "SSH agent",
             CapBody::Resources { .. } => "resources",
             CapBody::LongRunning => "long-running",
             _ => continue,
@@ -287,6 +291,7 @@ fn needs_recreate(kit: &Kit) -> Result<Vec<&'static str>> {
         "ports",
         "volumes",
         "host mounts",
+        "SSH agent",
         "resources",
         "environment variables",
         "long-running",
@@ -692,7 +697,7 @@ mod tests {
     }
 
     #[test]
-    fn host_mount_is_supported() {
+    fn host_mount_and_ssh_agent_without_authenticate_are_supported() {
         let cap = |body| super::Cap {
             ty: String::new(),
             optional: false,
@@ -704,6 +709,16 @@ mod tests {
         });
         assert!(super::supported(&host));
         assert!(!super::supported(&cap(super::CapBody::Unsupported)));
+        let ssh = |authenticate: Vec<String>| {
+            cap(super::CapBody::SshAgent {
+                phases: vec![crate::kits::model::SshPhase::Runtime],
+                unrestricted: false,
+                sign: vec!["git".into()],
+                authenticate,
+            })
+        };
+        assert!(super::supported(&ssh(vec![])));
+        assert!(!super::supported(&ssh(vec!["github.com".into()])));
     }
 
     #[test]
@@ -1233,6 +1248,27 @@ mod tests {
         );
         let e = sbt(&mut t.ctx, &["kit", "add", "dev", "./hm", "--yes"]).unwrap_err();
         assert_eq!(format!("{e:#}"), "recreate required: host mounts");
+        assert!(dev_calls(&t).is_empty(), "{:#?}", dev_calls(&t));
+    }
+
+    /// The agent socket is mounted at create.
+    #[test]
+    fn adding_a_mixin_with_an_ssh_agent_needs_a_recreate() {
+        let mut t = kit_env();
+        dev_sandbox(&t, BASE);
+        v3_kit(
+            &t,
+            "sa",
+            r#"{"schemaVersion":"3","kind":"mixin","name":"sa","capabilities":[
+                {"type":"com.docker.sandbox/host-mount@1","config":{"path":"/home/agent/x"}},
+                {"type":"com.docker.sandbox/ssh-agent@1","config":{"phase":"runtime"}}]}"#,
+            &[],
+        );
+        let e = sbt(&mut t.ctx, &["kit", "add", "dev", "./sa", "--yes"]).unwrap_err();
+        assert_eq!(
+            format!("{e:#}"),
+            "recreate required: host mounts, SSH agent"
+        );
         assert!(dev_calls(&t).is_empty(), "{:#?}", dev_calls(&t));
     }
 

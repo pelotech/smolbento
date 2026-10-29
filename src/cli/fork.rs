@@ -108,7 +108,7 @@ fn add_remote_and_branch<R: Runner>(
         Some(r) => clone::add_remote(r, fork)?,
         None => false,
     };
-    let labels = [
+    let mut labels = vec![
         (labels::NAME.to_string(), fork.to_string()),
         (labels::FORK_OF.to_string(), parent.name().to_string()),
         // A child inherits its source's labels; a fork's age is its own.
@@ -118,6 +118,11 @@ fn add_remote_and_branch<R: Runner>(
         // can still reach the parent's socket while the parent is attached.
         (labels::BRIDGE.to_string(), "false".to_string()),
     ];
+    // Nor an SSH agent: an empty label reads as none (smolvm can't remove an inherited one).
+    // Like the bridge, the copy's mount still points at the parent's socket.
+    if parent.meta.ssh_agent.is_some() {
+        labels.push((labels::SSH_AGENT.to_string(), String::new()));
+    }
     // The child inherits the parent's create-time -e values: give it its own identity.
     let vars = [
         ("SANDBOX_NAME".to_string(), fork.to_string()),
@@ -276,6 +281,24 @@ mod tests {
         );
         assert_eq!(sbt(&mut t.ctx, &["fork", "a"]).unwrap(), 0);
         assert_eq!(branches(&t), vec![branch("a-fork-1")]);
+    }
+
+    /// A fork gets no SSH agent: an empty `sbx.ssh-agent` replaces the inherited grant.
+    #[test]
+    fn a_fork_drops_the_ssh_agent_grant() {
+        let mut t = test_env(&[]);
+        parent(
+            &t,
+            "running",
+            &[("sbx.ssh-agent", r#"{"runtime":{"sign":null}}"#)],
+        );
+        assert_eq!(sbt(&mut t.ctx, &["fork", "a"]).unwrap(), 0);
+        let b = branch("a-fork-1");
+        let (head, vars) = b.split_at(b.find(" -e ").unwrap());
+        assert_eq!(
+            branches(&t),
+            vec![format!("{head} --label sbx.ssh-agent={vars}")]
+        );
     }
 
     #[test]

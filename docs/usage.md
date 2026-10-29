@@ -281,6 +281,42 @@ git diff | wl-copy                          # or xclip, xsel, pbcopy, clip.exe
 - Forks don't install the shims, but they keep the parent's socket mount: while the parent is
   attached, a process in a fork can still use the parent's bridge.
 
+## SSH agent
+
+Sandboxes of the built-in agents (`shell`, `claude`, …) can use your SSH agent, as in sbx: git
+over SSH and commit signing work with your keys, which never enter the sandbox.
+
+```sh
+# inside the sandbox ($SSH_AUTH_SOCK is /run/ssh-agent.sock)
+ssh-add -l                                  # lists your keys
+git commit -S -m "signed"                   # with gpg.format=ssh
+ssh-add -D                                  # fails: the sandbox can't change your agent
+```
+
+- The agent is the one in `SSH_AUTH_SOCK` when you run `sbt`, or the socket in the
+  `ssh.agentSocketPath` setting. Without one, or with `ssh.agentForwardingEnabled` set to `false`,
+  a built-in agent's sandbox is created without it (no `SSH_AUTH_SOCK`), silently.
+- Only listing keys and signing reach your agent; everything else (adding, removing or locking
+  keys) is answered with a failure.
+- It's served while `sbt` runs for the sandbox: `sbt run`, `sbt exec -it` and plain `sbt exec`.
+  When none is running, the sandbox's agent connections fail as with an unreachable agent. The
+  first of these to start serves it; one that starts while another serves doesn't, and when the
+  first exits the agent is gone until the next `run` or `exec`.
+- Each connection from the sandbox opens its own connection to your agent, with the settings read
+  again: `sbt settings set ssh.agentForwardingEnabled false` refuses new connections at once,
+  while open ones stay open, and a changed `ssh.agentSocketPath` applies to new ones.
+- Kits ask for it with `ssh-agent@1`: `phase: install`, `runtime` or both, and `sign: [git, …]` to
+  allow only signatures in those namespaces (`ssh-keygen -Y sign -n git`, what git uses). A v3
+  workload kit gets no agent without it. A required grant with no agent to back it stops the
+  create (`kit K: ssh-agent@1 needs an SSH agent, but SSH_AUTH_SOCK is unset`); an optional one is
+  left out with a note. An `install` grant is served during the create's install steps only, and
+  an install step sees `SSH_AUTH_SOCK` only when it declares it in `env`. `authenticate` limits
+  aren't supported yet: a required entry with them is refused, an optional one skipped.
+- The grant is fixed at create: `kit add` of a kit that asks for the agent needs a recreate.
+  Sandboxes created before this feature have no agent; recreate them to get it.
+- Forks have no agent of their own, but keep the parent's socket mount: while the parent is being
+  served, a process in a fork can use the agent with the parent's grant.
+
 ## Docker inside a sandbox
 
 Every sandbox runs its own Docker engine, so agents can `docker build` and `docker compose up`

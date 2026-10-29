@@ -139,6 +139,33 @@ pub fn v3_kit(t: &TestEnv, dir: &str, descriptor: &str, layers: &[&[u8]]) {
         .download(&b.into_inner().unwrap());
 }
 
+/// A running sandbox whose `sbx.ssh-agent` label is `grant` (none when `None`), and a record of
+/// whether its agent socket was served during each interactive exec.
+pub fn agent_probe(
+    t: &TestEnv,
+    tag: &str,
+    grant: Option<&str>,
+) -> (String, std::rc::Rc<std::cell::RefCell<Vec<bool>>>) {
+    let name = format!("agent-{}-{tag}", std::process::id());
+    let mut labels = vec![
+        ("sbx.name", name.as_str()),
+        ("sbx.agent", "shell"),
+        ("sbx.workspace", "/w/proj"),
+    ];
+    if let Some(grant) = grant {
+        labels.push(("sbx.ssh-agent", grant));
+    }
+    let runner = t.ctx.vm.runner();
+    runner.ok(&["machine"], "");
+    runner.ok(
+        &["machine", "status"],
+        &machine_json(&format!("sbx-{name}"), "running", &labels),
+    );
+    let (seen, probe) = socket_probe(crate::bridge::agent_socket(&name));
+    runner.during_interactive(probe);
+    (name, seen)
+}
+
 /// A running sandbox (`sbx.bridge=true` when `bridge`) with a name of its own: its bridge socket is
 /// under the real `/tmp/sbt-<uid>`, shared with other test processes. Returns the name and, for each
 /// interactive call, whether the bridge socket answered while the user was attached.
@@ -163,11 +190,23 @@ pub fn bridge_probe(
         &["machine", "status"],
         &machine_json(&format!("sbx-{name}"), "running", &labels),
     );
+    let (seen, probe) = socket_probe(crate::bridge::host_socket(&name));
+    runner.during_interactive(probe);
+    (name, seen)
+}
+
+/// A record of whether `socket` answered, one entry per call of the returned probe.
+pub fn socket_probe(
+    socket: std::path::PathBuf,
+) -> (
+    std::rc::Rc<std::cell::RefCell<Vec<bool>>>,
+    impl Fn() + 'static,
+) {
     let seen = std::rc::Rc::new(std::cell::RefCell::new(Vec::new()));
-    let (s, socket) = (seen.clone(), crate::bridge::host_socket(&name));
-    runner.during_interactive(move || {
+    let s = seen.clone();
+    let probe = move || {
         let served = std::os::unix::net::UnixStream::connect(&socket).is_ok();
         s.borrow_mut().push(served);
-    });
-    (name, seen)
+    };
+    (seen, probe)
 }
