@@ -29,7 +29,7 @@ pub fn exec<R: Runner>(ctx: &mut Ctx<R>, a: &ExecArgs) -> Result<i32> {
         }
     };
     let mut env = options::parse_env(&a.env, &a.env_file, &ctx.env)?;
-    sandbox::env::session_tz(&ctx.env, a.tty, &mut env);
+    sandbox::env::session_env(&ctx.env, a.tty, sb.meta.bridge, &mut env);
     let spec = ExecSpec {
         name: sb.machine.clone(),
         user: Some(user),
@@ -220,6 +220,39 @@ mod tests {
             let line = t.ctx.vm.runner().interactive_calls()[0].join(" ");
             assert_eq!(line.contains(" -e TZ=Asia/Kolkata"), want, "{line}");
         }
+    }
+
+    #[test]
+    fn exec_passes_the_host_terminal_and_points_browser_at_the_bridge() {
+        // Without these an agent prints a login URL as plain, hard-wrapped text and never
+        // opens the browser.
+        let mut t = test_env(&[("TERM_PROGRAM", "iTerm.app"), ("COLORTERM", "truecolor")]);
+        t.ctx.vm.runner().ok(
+            &["machine", "status"],
+            &machine_json(
+                "sbx-claude-proj",
+                "running",
+                &[("sbx.name", "claude-proj"), ("sbx.bridge", "true")],
+            ),
+        );
+        sbt(&mut t.ctx, &["exec", "-i", "claude-proj", "id"]).unwrap();
+        let line = t.ctx.vm.runner().interactive_calls()[0].join(" ");
+        assert!(line.contains(" -e BROWSER=xdg-open"), "{line}");
+        assert!(
+            !line.contains("TERM_PROGRAM"),
+            "no TTY, no terminal: {line}"
+        );
+    }
+
+    #[test]
+    fn exec_tty_passes_the_host_terminal() {
+        let mut t = test_env(&[("TERM_PROGRAM", "iTerm.app"), ("COLORTERM", "truecolor")]);
+        running(&t);
+        sbt(&mut t.ctx, &["exec", "-it", "claude-proj", "id"]).unwrap();
+        let line = t.ctx.vm.runner().interactive_calls()[0].join(" ");
+        assert!(line.contains(" -e TERM_PROGRAM=iTerm.app"), "{line}");
+        assert!(line.contains(" -e COLORTERM=truecolor"), "{line}");
+        assert!(!line.contains("BROWSER"), "no bridge, no BROWSER: {line}");
     }
 
     #[test]

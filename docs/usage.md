@@ -273,6 +273,8 @@ git diff | wl-copy                          # or xclip, xsel, pbcopy, clip.exe
   works.
 - The shims (`xdg-open`, `xclip`, `xsel`, `wl-copy`, `wl-paste`, `pbcopy`, `clip.exe`) are put
   in `/usr/local/bin` on every start and need `curl` in the image; without it they fall back.
+- `BROWSER` is set to `xdg-open` in sessions of these sandboxes, so agents that check for a
+  browser (Claude Code's `/login`, for one) open it instead of only printing the URL.
 - The first attached session serves the bridge. A second one attached at the same time doesn't,
   and when the first exits the bridge stops until the next `sbt run` or `sbt exec -it`.
 - Sandboxes created before this feature have no bridge. Recreate a sandbox to get it. The
