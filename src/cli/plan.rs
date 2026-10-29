@@ -239,7 +239,7 @@ pub fn prepare_create<R: Runner>(
         .collect();
     // So does a required SSH agent the host can't back. Before `apply`, whose install hooks
     // need to know whether they get the agent.
-    for note in settle_agent(ctx, req, kits, bridge::private_dir)? {
+    for note in settle_agent(ctx, req, kits, bridge::is_private_dir)? {
         eprintln!("{note}");
     }
     let mut policy = ensure_policy(ctx)?;
@@ -291,7 +291,7 @@ pub fn prepare_create<R: Runner>(
             steps,
             restart_without: req.credential_install.clone(),
             rule_ids: ids,
-            agent: Some(crate::bridge::filter::Backing::new(&ctx.paths, &ctx.env)),
+            agent_backing: Some(crate::bridge::filter::Backing::new(&ctx.paths, &ctx.env)),
         });
     }
     if !denies.is_empty() {
@@ -329,20 +329,20 @@ fn settle_agent<R: Runner>(
     private: impl FnOnce(&Path) -> bool,
 ) -> Result<Vec<String>> {
     req.ssh_agent = None;
-    // No plan is the bare preset: a built-in agent's own grant (`resolve_for` adds it to a plan).
-    let built_in = agent::AgentGrant::built_in();
+    // No plan is the bare preset: a built-in agent's own grant.
+    let built_in = crate::kits::resolve::built_in_ssh_agent();
     let grant = kits.map_or(&built_in, |p| &p.merged.ssh_agent);
     if grant.is_empty() || name::is_internal(&req.name) {
         return Ok(vec![]);
     }
-    let (label, mut notes) = agent::settle(grant, &agent::host_agent(&ctx.settings, &ctx.env)?)?;
+    // The agent's socket goes in the bridge's directory, checked only when there's an agent.
+    let dir = bridge::socket_dir();
+    let backing = match agent::host_agent(&ctx.settings, &ctx.env)? {
+        Ok(_) if !private(&dir) => Err(agent::Unavailable::UnsafeDir(dir)),
+        b => b,
+    };
+    let (label, notes) = agent::settle(grant, &backing)?;
     req.ssh_agent = label;
-    let required = [&grant.install, &grant.runtime]
-        .into_iter()
-        .flatten()
-        .find(|p| p.required)
-        .map(|p| p.kit.as_deref().unwrap_or("?"));
-    notes.extend(sandbox::create::drop_unsafe_agent(req, required, private)?);
     Ok(notes)
 }
 
@@ -614,6 +614,7 @@ mod tests {
 
     use super::super::testutil::*;
     use super::*;
+    use crate::kits::model::SshPhase::{self, Install, Runtime};
     use crate::sandbox::Meta;
     use crate::secrets::{SecretEntry, Source, scope_for};
     use crate::smolvm::NetworkSpec;
@@ -1339,23 +1340,11 @@ mod tests {
     }
 
     /// An `ssh-agent@1` entry of mixin `k`.
-    fn ssh_agent(phases: &[&str], sign: &[&str], optional: bool) -> crate::kits::model::Cap {
-        use crate::kits::model::{Cap, CapBody, SshPhase};
-        Cap {
+    fn ssh_agent(phases: &[SshPhase], sign: &[&str], optional: bool) -> crate::kits::model::Cap {
+        crate::kits::model::Cap {
             ty: "com.docker.sandbox/ssh-agent@1".into(),
             optional,
-            body: CapBody::SshAgent {
-                phases: phases
-                    .iter()
-                    .map(|p| match *p {
-                        "install" => SshPhase::Install,
-                        _ => SshPhase::Runtime,
-                    })
-                    .collect(),
-                unrestricted: sign.is_empty(),
-                sign: sign.iter().map(|s| s.to_string()).collect(),
-                authenticate: vec![],
-            },
+            body: crate::kits::model::CapBody::ssh_agent(phases, sign, &[]),
         }
     }
 
@@ -1413,12 +1402,13 @@ mod tests {
         }
     }
 
-    /// Creates `s1` from `agent_plan`, with `env` as sbt's environment. Returns the env, the
-    /// result and the smolvm calls.
+    /// Creates `name` from `plan` (`None`: a bare `create`), with `env` as sbt's environment.
+    /// Returns the env, the result and the smolvm calls.
     fn agent_create(
         env: &[(&str, &str)],
+        name: &str,
         preset: bool,
-        caps: Vec<crate::kits::model::Cap>,
+        plan: Option<Plan>,
     ) -> (TestEnv, Result<Sandbox>, Vec<String>) {
         let t = test_env(env);
         let fake = t.ctx.vm.runner();
@@ -1428,20 +1418,34 @@ mod tests {
             &machine_json("sbx-s1", "created", &[("sbx.name", "s1")]),
         );
         fake.once_fail(&["machine", "status"], "NOT_FOUND", "vm not found");
-        let plan = agent_plan(preset, caps);
         let mut req = agent_request(preset);
-        let result = check_free(&t.ctx, "s1")
-            .and_then(|()| create_with(&t.ctx, &mut req, &[], Some(&plan), None, &mut |_| {}));
+        req.name = name.into();
+        let result = check_free(&t.ctx, name)
+            .and_then(|()| create_with(&t.ctx, &mut req, &[], plan.as_ref(), None, &mut |_| {}));
         let lines = t.ctx.vm.runner().call_lines();
         (t, result, lines)
     }
 
-    /// The `machine create` line, and the install hook's.
-    fn create_and_hook(lines: &[String]) -> (&str, &str) {
-        let create = lines
+    /// `agent_create` of `s1` from `agent_plan`.
+    fn kit_agent_create(
+        env: &[(&str, &str)],
+        preset: bool,
+        caps: Vec<crate::kits::model::Cap>,
+    ) -> (TestEnv, Result<Sandbox>, Vec<String>) {
+        agent_create(env, "s1", preset, Some(agent_plan(preset, caps)))
+    }
+
+    /// The `machine create` line.
+    fn create_line(lines: &[String]) -> &str {
+        lines
             .iter()
             .find(|l| l.starts_with("machine create"))
-            .unwrap_or_else(|| panic!("{lines:#?}"));
+            .unwrap_or_else(|| panic!("{lines:#?}"))
+    }
+
+    /// The `machine create` line, and the install hook's.
+    fn create_and_hook(lines: &[String]) -> (&str, &str) {
+        let create = create_line(lines);
         let hook = lines
             .iter()
             .find(|l| l.contains("ssh-add -l"))
@@ -1451,18 +1455,18 @@ mod tests {
 
     const AGENT_ENV: &str = "-e SSH_AUTH_SOCK=/run/ssh-agent.sock";
 
-    fn host_agent() -> tempfile::TempDir {
+    /// A host agent socket (only its existence is checked at create), and its path.
+    fn host_agent() -> (tempfile::TempDir, String) {
         let dir = tempfile::tempdir().unwrap();
-        // Only its existence is checked at create.
-        std::fs::write(dir.path().join("agent.sock"), "").unwrap();
-        dir
+        let sock = dir.path().join("agent.sock");
+        std::fs::write(&sock, "").unwrap();
+        (dir, sock.display().to_string())
     }
 
     #[test]
     fn a_built_in_agent_gets_the_agent_socket_and_ssh_auth_sock() {
-        let agent = host_agent();
-        let sock = agent.path().join("agent.sock").display().to_string();
-        let (_t, result, lines) = agent_create(&[("SSH_AUTH_SOCK", &sock)], true, vec![]);
+        let (_agent, sock) = host_agent();
+        let (_t, result, lines) = kit_agent_create(&[("SSH_AUTH_SOCK", &sock)], true, vec![]);
         result.unwrap();
         let (create, hook) = create_and_hook(&lines);
         let mount = format!(
@@ -1482,24 +1486,10 @@ mod tests {
     /// `create shell` with no kits has no plan, and still gets the built-in agent's grant.
     #[test]
     fn a_bare_built_in_agent_gets_the_agent_too() {
-        let agent = host_agent();
-        let sock = agent.path().join("agent.sock").display().to_string();
-        let t = test_env(&[("SSH_AUTH_SOCK", &sock)]);
-        let fake = t.ctx.vm.runner();
-        fake.fail(&["machine", "status"], "NOT_FOUND", "vm not found");
-        fake.once_ok(
-            &["machine", "status"],
-            &machine_json("sbx-s1", "created", &[("sbx.name", "s1")]),
-        );
-        fake.once_fail(&["machine", "status"], "NOT_FOUND", "vm not found");
-        let mut req = agent_request(true);
-        check_free(&t.ctx, "s1").unwrap();
-        create_with(&t.ctx, &mut req, &[], None, None, &mut |_| {}).unwrap();
-        let lines = t.ctx.vm.runner().call_lines();
-        let create = lines
-            .iter()
-            .find(|l| l.starts_with("machine create"))
-            .unwrap_or_else(|| panic!("{lines:#?}"));
+        let (_agent, sock) = host_agent();
+        let (_t, result, lines) = agent_create(&[("SSH_AUTH_SOCK", &sock)], "s1", true, None);
+        result.unwrap();
+        let create = create_line(&lines);
         assert!(create.contains(":/run/ssh-agent.sock"), "{create}");
         assert!(create.contains(AGENT_ENV), "{create}");
         assert!(
@@ -1511,22 +1501,10 @@ mod tests {
     /// With no agent available a bare preset is created without a socket, and without an error.
     #[test]
     fn a_bare_built_in_agent_without_an_agent_gets_none() {
-        let t = test_env(&[("SMOLBENTO_SSH_AGENT_FORWARDING", "false")]);
-        let fake = t.ctx.vm.runner();
-        fake.fail(&["machine", "status"], "NOT_FOUND", "vm not found");
-        fake.once_ok(
-            &["machine", "status"],
-            &machine_json("sbx-s1", "created", &[("sbx.name", "s1")]),
-        );
-        fake.once_fail(&["machine", "status"], "NOT_FOUND", "vm not found");
-        let mut req = agent_request(true);
-        check_free(&t.ctx, "s1").unwrap();
-        create_with(&t.ctx, &mut req, &[], None, None, &mut |_| {}).unwrap();
-        let lines = t.ctx.vm.runner().call_lines();
-        let create = lines
-            .iter()
-            .find(|l| l.starts_with("machine create"))
-            .unwrap_or_else(|| panic!("{lines:#?}"));
+        let env = [("SMOLBENTO_SSH_AGENT_FORWARDING", "false")];
+        let (_t, result, lines) = agent_create(&env, "s1", true, None);
+        result.unwrap();
+        let create = create_line(&lines);
         assert!(!create.contains("ssh-agent"), "{create}");
         assert!(!create.contains("SSH_AUTH_SOCK"), "{create}");
     }
@@ -1534,25 +1512,10 @@ mod tests {
     /// An internal sandbox (`_builder`) never gets the agent, even with one available.
     #[test]
     fn an_internal_name_gets_no_agent() {
-        let agent = host_agent();
-        let sock = agent.path().join("agent.sock").display().to_string();
-        let t = test_env(&[("SSH_AUTH_SOCK", &sock)]);
-        let fake = t.ctx.vm.runner();
-        fake.fail(&["machine", "status"], "NOT_FOUND", "vm not found");
-        fake.once_ok(
-            &["machine", "status"],
-            &machine_json("sbx-s1", "created", &[("sbx.name", "s1")]),
-        );
-        fake.once_fail(&["machine", "status"], "NOT_FOUND", "vm not found");
-        let mut req = agent_request(true);
-        req.name = "_builder".into();
-        check_free(&t.ctx, "s1").unwrap();
-        create_with(&t.ctx, &mut req, &[], None, None, &mut |_| {}).unwrap();
-        let lines = t.ctx.vm.runner().call_lines();
-        let create = lines
-            .iter()
-            .find(|l| l.starts_with("machine create"))
-            .unwrap_or_else(|| panic!("{lines:#?}"));
+        let (_agent, sock) = host_agent();
+        let (_t, result, lines) = agent_create(&[("SSH_AUTH_SOCK", &sock)], "_builder", true, None);
+        result.unwrap();
+        let create = create_line(&lines);
         assert!(!create.contains("ssh-agent"), "{create}");
         assert!(!create.contains("SSH_AUTH_SOCK"), "{create}");
     }
@@ -1568,7 +1531,7 @@ mod tests {
             steps: Default::default(),
             restart_without: Default::default(),
             rule_ids: vec![],
-            agent: Some(crate::bridge::filter::Backing::new(
+            agent_backing: Some(crate::bridge::filter::Backing::new(
                 &t.ctx.paths,
                 &t.ctx.env,
             )),
@@ -1581,10 +1544,9 @@ mod tests {
 
     #[test]
     fn a_kit_grant_for_both_phases_reaches_the_install_hooks_too() {
-        let agent = host_agent();
-        let sock = agent.path().join("agent.sock").display().to_string();
-        let caps = vec![ssh_agent(&["install", "runtime"], &["git"], false)];
-        let (_t, result, lines) = agent_create(&[("SSH_AUTH_SOCK", &sock)], false, caps);
+        let (_agent, sock) = host_agent();
+        let caps = vec![ssh_agent(&[Install, Runtime], &["git"], false)];
+        let (_t, result, lines) = kit_agent_create(&[("SSH_AUTH_SOCK", &sock)], false, caps);
         result.unwrap();
         let (create, hook) = create_and_hook(&lines);
         assert!(create.contains(":/run/ssh-agent.sock"), "{create}");
@@ -1603,10 +1565,9 @@ mod tests {
 
     #[test]
     fn an_install_only_grant_sets_ssh_auth_sock_only_for_install_hooks() {
-        let agent = host_agent();
-        let sock = agent.path().join("agent.sock").display().to_string();
-        let caps = vec![ssh_agent(&["install"], &[], false)];
-        let (_t, result, lines) = agent_create(&[("SSH_AUTH_SOCK", &sock)], false, caps);
+        let (_agent, sock) = host_agent();
+        let caps = vec![ssh_agent(&[Install], &[], false)];
+        let (_t, result, lines) = kit_agent_create(&[("SSH_AUTH_SOCK", &sock)], false, caps);
         result.unwrap();
         let (create, hook) = create_and_hook(&lines);
         assert!(create.contains(":/run/ssh-agent.sock"), "{create}");
@@ -1623,9 +1584,8 @@ mod tests {
 
     #[test]
     fn a_v3_workload_without_a_grant_gets_no_agent() {
-        let agent = host_agent();
-        let sock = agent.path().join("agent.sock").display().to_string();
-        let (_t, result, lines) = agent_create(&[("SSH_AUTH_SOCK", &sock)], false, vec![]);
+        let (_agent, sock) = host_agent();
+        let (_t, result, lines) = kit_agent_create(&[("SSH_AUTH_SOCK", &sock)], false, vec![]);
         result.unwrap();
         let (create, hook) = create_and_hook(&lines);
         assert!(!create.contains("ssh-agent"), "{create}");
@@ -1642,8 +1602,8 @@ mod tests {
                 "/nonexistent/agent.sock doesn't exist".to_string(),
             ),
         ] {
-            let caps = vec![ssh_agent(&["runtime"], &[], false)];
-            let (_t, result, lines) = agent_create(&env, false, caps);
+            let caps = vec![ssh_agent(&[Runtime], &[], false)];
+            let (_t, result, lines) = kit_agent_create(&env, false, caps);
             assert_eq!(
                 format!("{:#}", result.unwrap_err()),
                 format!("kit k: ssh-agent@1 needs an SSH agent, but {why}")
@@ -1653,14 +1613,13 @@ mod tests {
                 "{lines:#?}"
             );
         }
-        let agent = host_agent();
-        let sock = agent.path().join("agent.sock").display().to_string();
-        let caps = vec![ssh_agent(&["runtime"], &[], false)];
+        let (_agent, sock) = host_agent();
+        let caps = vec![ssh_agent(&[Runtime], &[], false)];
         let env = [
             ("SSH_AUTH_SOCK", sock.as_str()),
             ("SMOLBENTO_SSH_AGENT_FORWARDING", "false"),
         ];
-        let (_t, result, _) = agent_create(&env, false, caps);
+        let (_t, result, _) = kit_agent_create(&env, false, caps);
         assert_eq!(
             format!("{:#}", result.unwrap_err()),
             "kit k: ssh-agent@1 needs an SSH agent, but ssh.agentForwardingEnabled is false"
@@ -1673,9 +1632,9 @@ mod tests {
             let caps = if preset {
                 vec![]
             } else {
-                vec![ssh_agent(&["install", "runtime"], &[], true)]
+                vec![ssh_agent(&[Install, Runtime], &[], true)]
             };
-            let (_t, result, lines) = agent_create(&[], preset, caps);
+            let (_t, result, lines) = kit_agent_create(&[], preset, caps);
             result.unwrap();
             let (create, hook) = create_and_hook(&lines);
             assert!(!create.contains("ssh-agent"), "{create}");
@@ -1688,7 +1647,7 @@ mod tests {
     #[test]
     fn only_a_kit_grant_dropped_for_want_of_an_agent_leaves_a_note() {
         let t = test_env(&[]);
-        let plan = agent_plan(false, vec![ssh_agent(&["runtime"], &[], true)]);
+        let plan = agent_plan(false, vec![ssh_agent(&[Runtime], &[], true)]);
         let mut req = agent_request(false);
         let notes = settle_agent(&t.ctx, &mut req, Some(&plan), |_| panic!("checked")).unwrap();
         assert_eq!(
@@ -1709,11 +1668,10 @@ mod tests {
     /// An unsafe socket directory refuses a required grant and drops an optional or implicit one.
     #[test]
     fn an_unsafe_socket_dir_refuses_a_required_grant_and_drops_the_rest() {
-        let agent = host_agent();
-        let sock = agent.path().join("agent.sock").display().to_string();
+        let (_agent, sock) = host_agent();
         let t = test_env(&[("SSH_AUTH_SOCK", &sock)]);
         let dir = crate::bridge::socket_dir();
-        let plan = agent_plan(false, vec![ssh_agent(&["runtime"], &[], false)]);
+        let plan = agent_plan(false, vec![ssh_agent(&[Runtime], &[], false)]);
         let mut req = agent_request(false);
         let e = settle_agent(&t.ctx, &mut req, Some(&plan), |_| false).unwrap_err();
         assert_eq!(
@@ -1724,23 +1682,56 @@ mod tests {
                 dir.display()
             )
         );
-        let warning = format!(
-            "warning: {} isn't a private directory owned by you; s1 gets no SSH agent",
-            dir.display()
-        );
-        for (preset, caps) in [
-            (false, vec![ssh_agent(&["install", "runtime"], &[], true)]),
-            (true, vec![]),
+        let unsafe_dir = |phase: &str| {
+            format!(
+                "no SSH agent for the {phase} phase ({} isn't a private directory owned by you); \
+                 continuing without one",
+                dir.display()
+            )
+        };
+        for (preset, caps, want) in [
+            (
+                false,
+                vec![ssh_agent(&[Install, Runtime], &[], true)],
+                vec![
+                    format!("kit k: {}", unsafe_dir("install")),
+                    format!("kit k: {}", unsafe_dir("runtime")),
+                ],
+            ),
+            (
+                true,
+                vec![],
+                vec![format!("warning: {}", unsafe_dir("runtime"))],
+            ),
         ] {
             let plan = agent_plan(preset, caps);
             let mut req = agent_request(preset);
-            let notes = settle_agent(&t.ctx, &mut req, Some(&plan), |_| false).unwrap();
-            assert_eq!(notes, std::slice::from_ref(&warning));
+            let mut checked = None;
+            let notes = settle_agent(&t.ctx, &mut req, Some(&plan), |d| {
+                checked = Some(d.to_path_buf());
+                false
+            })
+            .unwrap();
+            assert_eq!(checked.as_deref(), Some(dir.as_path()));
+            assert_eq!(notes, want);
             assert_eq!(req.ssh_agent, None);
         }
-        // A private one keeps the required grant.
+        // A private one keeps an optional grant, and the required one; no grant checks nothing.
+        let plan = agent_plan(false, vec![ssh_agent(&[Runtime], &[], true)]);
         let mut req = agent_request(false);
-        let plan = agent_plan(false, vec![ssh_agent(&["runtime"], &[], false)]);
+        assert!(
+            settle_agent(&t.ctx, &mut req, Some(&plan), |_| true)
+                .unwrap()
+                .is_empty()
+        );
+        assert!(req.ssh_agent.is_some());
+        let plan = agent_plan(false, vec![]);
+        let mut req = agent_request(false);
+        let notes = settle_agent(&t.ctx, &mut req, Some(&plan), |_| panic!("checked")).unwrap();
+        assert!(notes.is_empty(), "{notes:?}");
+        assert_eq!(req.ssh_agent, None);
+        let mut req = agent_request(false);
+        let plan = agent_plan(false, vec![ssh_agent(&[Runtime], &[], false)]);
         assert!(
             settle_agent(&t.ctx, &mut req, Some(&plan), |_| true)
                 .unwrap()

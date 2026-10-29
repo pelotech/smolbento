@@ -59,11 +59,11 @@ fn socket_id(name: &str) -> String {
 /// Whether `dir` is private to this user, for a sandbox's socket (checked at create and at every
 /// start): created 0700 if missing, else a real directory (not a symlink) we own with mode 0700. In the shared `/tmp`, another
 /// user could create it first and receive what the sandbox sends.
-pub fn private_dir(dir: &Path) -> bool {
-    private_dir_of(dir, crate::sandbox::host_uid())
+pub fn is_private_dir(dir: &Path) -> bool {
+    is_private_dir_of(dir, crate::sandbox::host_uid())
 }
 
-fn private_dir_of(dir: &Path, uid: u32) -> bool {
+fn is_private_dir_of(dir: &Path, uid: u32) -> bool {
     let _ = fs::DirBuilder::new().mode(0o700).create(dir);
     fs::symlink_metadata(dir)
         .is_ok_and(|m| m.is_dir() && m.uid() == uid && m.mode() & 0o777 == 0o700)
@@ -119,23 +119,23 @@ mod tests {
         let me = crate::sandbox::host_uid();
         // Missing: created 0700.
         let dir = tmp.path().join("sbt");
-        assert!(private_dir_of(&dir, me));
+        assert!(is_private_dir_of(&dir, me));
         let mode = fs::metadata(&dir).unwrap().permissions().mode();
         assert_eq!(mode & 0o777, 0o700);
-        assert!(private_dir_of(&dir, me), "an existing private dir");
+        assert!(is_private_dir_of(&dir, me), "an existing private dir");
         // Someone else's (as another uid would see it).
-        assert!(!private_dir_of(&dir, me + 1));
+        assert!(!is_private_dir_of(&dir, me + 1));
         // Readable by others.
         fs::set_permissions(&dir, fs::Permissions::from_mode(0o755)).unwrap();
-        assert!(!private_dir_of(&dir, me));
+        assert!(!is_private_dir_of(&dir, me));
         // A symlink to a private dir, or a file.
         let real = tmp.path().join("real");
         fs::DirBuilder::new().mode(0o700).create(&real).unwrap();
         let link = tmp.path().join("link");
         std::os::unix::fs::symlink(&real, &link).unwrap();
-        assert!(!private_dir_of(&link, me));
+        assert!(!is_private_dir_of(&link, me));
         let file = tmp.path().join("file");
         fs::write(&file, "").unwrap();
-        assert!(!private_dir_of(&file, me));
+        assert!(!is_private_dir_of(&file, me));
     }
 }

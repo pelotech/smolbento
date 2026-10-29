@@ -132,7 +132,7 @@ pub fn run<R: Runner>(ctx: &mut Ctx<R>, a: &RunArgs) -> Result<i32> {
         // Opens URLs and copies text on the host for the agent while the user is attached.
         let _bridge = bridge::attach(&ctx.env, &ctx.settings, &sb);
         // A runtime `ssh-agent@1` grant: the filtered host agent, while the user is attached.
-        let _agent = bridge::filter::attach(&ctx.paths, &ctx.env, &sb);
+        let _agent = bridge::filter::attach(&ctx.env, &ctx.paths, &sb);
         if image_user.is_some() && !has_bash(ctx, &sb)? {
             // sbx's error for such an image, and the code its agent exits with.
             eprintln!("executable file '{BASH}' not found");

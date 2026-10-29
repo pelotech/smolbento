@@ -151,6 +151,20 @@ pub enum SshPhase {
     Runtime,
 }
 
+#[cfg(test)]
+impl CapBody {
+    /// An `ssh-agent@1` entry; unrestricted when it has neither limit.
+    pub fn ssh_agent(phases: &[SshPhase], sign: &[&str], authenticate: &[&str]) -> CapBody {
+        let list = |l: &[&str]| l.iter().map(|s| s.to_string()).collect::<Vec<_>>();
+        CapBody::SshAgent {
+            phases: phases.to_vec(),
+            unrestricted: sign.is_empty() && authenticate.is_empty(),
+            sign: list(sign),
+            authenticate: list(authenticate),
+        }
+    }
+}
+
 impl SshPhase {
     pub fn as_str(self) -> &'static str {
         match self {

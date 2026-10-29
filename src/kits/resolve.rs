@@ -102,6 +102,25 @@ struct SshEntry<'a> {
     authenticate: &'a [String],
 }
 
+/// sbx's built-in agents (`shell`, …) get the agent at runtime unless it's unavailable.
+const BUILT_IN: SshEntry<'static> = SshEntry {
+    kit: None,
+    optional: true,
+    phases: &[SshPhase::Runtime],
+    unrestricted: true,
+    sign: &[],
+    authenticate: &[],
+};
+
+/// A built-in agent's own grant, for a create with no plan (`resolve` adds it to a plan).
+pub fn built_in_ssh_agent() -> AgentGrant {
+    AgentGrant {
+        runtime: ssh_phase(&[BUILT_IN], SshPhase::Runtime, &mut vec![])
+            .expect("the built-in grant has no authenticate limits"),
+        install: None,
+    }
+}
+
 #[derive(Debug)]
 pub struct KitCred {
     pub kit: String,
@@ -204,17 +223,9 @@ pub fn resolve_for(
     env_map.insert("WORKSPACE".into(), workdir.into());
 
     let mut skipped = Vec::new();
-    // sbx's built-in agents (`shell`, …) get the agent at runtime unless it's unavailable.
     let mut ssh_entries = Vec::new();
     if matches!(workload.source, Source::Preset(_)) {
-        ssh_entries.push(SshEntry {
-            kit: None,
-            optional: true,
-            phases: &[SshPhase::Runtime],
-            unrestricted: true,
-            sign: &[],
-            authenticate: &[],
-        });
+        ssh_entries.push(BUILT_IN);
     }
     // The kit that first declared each volume path: a host mount there conflicts with it.
     let mut volume_kits: BTreeMap<String, String> = BTreeMap::new();
@@ -987,21 +998,8 @@ mod tests {
 
     const SSH: &str = "com.docker.sandbox/ssh-agent@1";
 
-    fn ssh(phases: &[SshPhase], sign: &[&str], authenticate: &[&str]) -> CapBody {
-        let list = |l: &[&str]| l.iter().map(|s| s.to_string()).collect::<Vec<_>>();
-        CapBody::SshAgent {
-            phases: phases.to_vec(),
-            unrestricted: sign.is_empty() && authenticate.is_empty(),
-            sign: list(sign),
-            authenticate: list(authenticate),
-        }
-    }
     fn grant(sign: Option<&[&str]>, required: bool, kit: Option<&str>) -> Option<PhaseGrant> {
-        Some(PhaseGrant {
-            sign: sign.map(|s| s.iter().map(|x| x.to_string()).collect()),
-            required,
-            kit: kit.map(Into::into),
-        })
+        Some(PhaseGrant::new(sign, required, kit))
     }
     fn preset() -> Kit {
         let mut w = workload("shell");
@@ -1019,6 +1017,8 @@ mod tests {
                 install: None,
             }
         );
+        // The same grant a create with no plan uses.
+        assert_eq!(built_in_ssh_agent(), p.merged.ssh_agent);
         // A workload kit gets nothing unless it asks.
         assert!(
             run(workload("w"), vec![])
@@ -1033,8 +1033,12 @@ mod tests {
     fn ssh_agent_grants_merge_per_phase() {
         use SshPhase::{Install, Runtime};
         // Bounded entries union their namespaces; required wins and names its kit.
-        let a = mixin("a").cap(SSH, true, ssh(&[Runtime], &["git"], &[]));
-        let b = mixin("b").cap(SSH, false, ssh(&[Install, Runtime], &["file", "git"], &[]));
+        let a = mixin("a").cap(SSH, true, CapBody::ssh_agent(&[Runtime], &["git"], &[]));
+        let b = mixin("b").cap(
+            SSH,
+            false,
+            CapBody::ssh_agent(&[Install, Runtime], &["file", "git"], &[]),
+        );
         let p = run(workload("w"), vec![a, b]).unwrap();
         assert_eq!(
             p.merged.ssh_agent,
@@ -1045,14 +1049,14 @@ mod tests {
         );
 
         // Unrestricted wins over bounded; optional entries name the first kit.
-        let a = mixin("a").cap(SSH, true, ssh(&[Runtime], &["git"], &[]));
-        let b = mixin("b").cap(SSH, true, ssh(&[Runtime], &[], &[]));
+        let a = mixin("a").cap(SSH, true, CapBody::ssh_agent(&[Runtime], &["git"], &[]));
+        let b = mixin("b").cap(SSH, true, CapBody::ssh_agent(&[Runtime], &[], &[]));
         let p = run(workload("w"), vec![a, b]).unwrap();
         assert_eq!(p.merged.ssh_agent.runtime, grant(None, false, Some("a")));
         assert_eq!(p.merged.ssh_agent.install, None);
 
         // A built-in agent's implicit grant is unrestricted; a kit's bounded entry joins it.
-        let m = mixin("m").cap(SSH, false, ssh(&[Runtime], &["git"], &[]));
+        let m = mixin("m").cap(SSH, false, CapBody::ssh_agent(&[Runtime], &["git"], &[]));
         let p = run(preset(), vec![m]).unwrap();
         assert_eq!(p.merged.ssh_agent.runtime, grant(None, true, Some("m")));
     }
@@ -1060,15 +1064,23 @@ mod tests {
     #[test]
     fn authenticate_limits_refuse_a_required_entry_and_skip_an_optional_one() {
         use SshPhase::Runtime;
-        let req = mixin("m").cap(SSH, false, ssh(&[Runtime], &["git"], &["github.com"]));
+        let req = mixin("m").cap(
+            SSH,
+            false,
+            CapBody::ssh_agent(&[Runtime], &["git"], &["github.com"]),
+        );
         let e = run(workload("w"), vec![req.clone()]).unwrap_err();
         assert_eq!(
             format!("{e:#}"),
             "kit m: ssh-agent@1 authenticate limits aren't supported yet"
         );
 
-        let opt = mixin("o").cap(SSH, true, ssh(&[Runtime], &[], &["github.com"]));
-        let plain = mixin("p").cap(SSH, true, ssh(&[Runtime], &["git"], &[]));
+        let opt = mixin("o").cap(
+            SSH,
+            true,
+            CapBody::ssh_agent(&[Runtime], &[], &["github.com"]),
+        );
+        let plain = mixin("p").cap(SSH, true, CapBody::ssh_agent(&[Runtime], &["git"], &[]));
         let p = run(workload("w"), vec![opt, plain]).unwrap();
         assert_eq!(
             p.merged.ssh_agent.runtime,
@@ -1095,9 +1107,9 @@ mod tests {
         let o = mixin("o").cap(
             SSH,
             true,
-            ssh(&[Install, Runtime], &["git"], &["github.com"]),
+            CapBody::ssh_agent(&[Install, Runtime], &["git"], &["github.com"]),
         );
-        let u = mixin("u").cap(SSH, true, ssh(&[Runtime], &[], &[]));
+        let u = mixin("u").cap(SSH, true, CapBody::ssh_agent(&[Runtime], &[], &[]));
         let p = run(workload("w"), vec![o, u]).unwrap();
         assert_eq!(p.merged.ssh_agent.install, None);
         assert_eq!(p.merged.ssh_agent.runtime, grant(None, false, Some("o")));

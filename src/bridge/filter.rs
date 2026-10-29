@@ -76,7 +76,7 @@ impl Backing {
 /// Serves the sandbox's runtime grant during a session (`run`, `exec`) until the result is
 /// dropped. `None` when it has no runtime grant or another session already serves it; problems
 /// only warn, and the guest's agent connections then fail.
-pub fn attach(paths: &Paths, env: &BTreeMap<String, String>, sb: &Sandbox) -> Option<Server> {
+pub fn attach(env: &BTreeMap<String, String>, paths: &Paths, sb: &Sandbox) -> Option<Server> {
     let access = sb.meta.ssh_agent.as_ref()?.runtime.clone()?;
     serve_for(sb.name(), access, Backing::new(paths, env))
 }
@@ -91,7 +91,7 @@ pub fn serve_for(name: &str, access: Access, backing: Backing) -> Option<Server>
 
 /// Serves `path` until the returned `Server` is dropped, with the bridge's bind rules: `None`
 /// when another session serves it, a stale socket is replaced, the directory must be ours.
-pub fn serve(path: &Path, access: Access, backing: Backing) -> Result<Option<Server>> {
+fn serve(path: &Path, access: Access, backing: Backing) -> Result<Option<Server>> {
     server::spawn(path, move |listener, stop| {
         accept_loop(listener, &stop, &access, &backing);
     })

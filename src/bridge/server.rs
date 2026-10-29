@@ -101,7 +101,7 @@ impl Drop for Server {
 
 fn bind(path: &Path) -> Result<Option<UnixListener>> {
     if let Some(dir) = path.parent() {
-        private_dir(dir)?;
+        make_private_dir(dir)?;
     }
     if fs::symlink_metadata(path).is_ok() {
         if UnixStream::connect(path).is_ok() {
@@ -119,7 +119,7 @@ fn bind(path: &Path) -> Result<Option<UnixListener>> {
 
 /// Creates `dir` 0700, or checks that an existing one is a directory of ours (it is under the
 /// shared `/tmp`) and tightens it to 0700.
-fn private_dir(dir: &Path) -> Result<()> {
+fn make_private_dir(dir: &Path) -> Result<()> {
     match fs::DirBuilder::new().mode(0o700).create(dir) {
         Err(e) if e.kind() != std::io::ErrorKind::AlreadyExists => {
             return Err(e).with_context(|| format!("creating {}", dir.display()));

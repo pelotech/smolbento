@@ -14,12 +14,40 @@ use crate::config::Settings;
 /// grant sets `SSH_AUTH_SOCK` to it.
 pub const GUEST_SOCKET: &str = "/run/ssh-agent.sock";
 
-/// The merged `ssh-agent@1` grant of a kit set, per phase; `None` = that phase isn't granted.
-#[derive(Debug, Clone, Default, PartialEq, Eq)]
-pub struct AgentGrant {
-    pub install: Option<PhaseGrant>,
-    pub runtime: Option<PhaseGrant>,
+/// One value per `ssh-agent@1` phase; `None` = that phase isn't granted. Serialized as the
+/// `sbx.ssh-agent` label.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct ByPhase<T> {
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub runtime: Option<T>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub install: Option<T>,
 }
+
+impl<T> Default for ByPhase<T> {
+    fn default() -> Self {
+        ByPhase {
+            runtime: None,
+            install: None,
+        }
+    }
+}
+
+impl<T> ByPhase<T> {
+    pub fn is_empty(&self) -> bool {
+        self.install.is_none() && self.runtime.is_none()
+    }
+
+    pub fn map<U>(&self, f: impl Fn(&T) -> U) -> ByPhase<U> {
+        ByPhase {
+            runtime: self.runtime.as_ref().map(&f),
+            install: self.install.as_ref().map(&f),
+        }
+    }
+}
+
+/// The merged `ssh-agent@1` grant of a kit set.
+pub type AgentGrant = ByPhase<PhaseGrant>;
 
 /// One phase of an `AgentGrant`.
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -29,51 +57,14 @@ pub struct PhaseGrant {
     /// A required entry asked for it: with no agent to back it, the create is refused.
     pub required: bool,
     /// The kit messages name: the first required entry's, else the first kit entry's. `None` for
-    /// a built-in agent's implicit grant alone, which drops silently.
+    /// a built-in agent's implicit grant alone, which drops without a note unless the socket
+    /// directory is unsafe.
     pub kit: Option<String>,
-}
-
-impl AgentGrant {
-    /// A built-in agent's own grant (sbx's `shell`): optional, runtime, unrestricted.
-    pub fn built_in() -> AgentGrant {
-        AgentGrant {
-            install: None,
-            runtime: Some(PhaseGrant {
-                sign: None,
-                required: false,
-                kit: None,
-            }),
-        }
-    }
-
-    pub fn is_empty(&self) -> bool {
-        self.install.is_none() && self.runtime.is_none()
-    }
-
-    /// The label for what's left once phases without an agent are dropped (`settle`).
-    fn label(&self) -> Option<AgentLabel> {
-        let access = |p: &Option<PhaseGrant>| {
-            p.as_ref().map(|p| Access {
-                sign: p.sign.clone(),
-            })
-        };
-        let l = AgentLabel {
-            install: access(&self.install),
-            runtime: access(&self.runtime),
-        };
-        (!l.is_empty()).then_some(l)
-    }
 }
 
 /// The `sbx.ssh-agent` label: what each phase granted at create may sign,
 /// `{"runtime":{"sign":null},"install":{"sign":["git"]}}` (`null` = unrestricted).
-#[derive(Debug, Clone, Default, PartialEq, Eq, Serialize, Deserialize)]
-pub struct AgentLabel {
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub runtime: Option<Access>,
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub install: Option<Access>,
-}
+pub type AgentLabel = ByPhase<Access>;
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct Access {
@@ -81,11 +72,29 @@ pub struct Access {
     pub sign: Option<Vec<String>>,
 }
 
-impl AgentLabel {
-    pub fn is_empty(&self) -> bool {
-        self.install.is_none() && self.runtime.is_none()
+#[cfg(test)]
+impl PhaseGrant {
+    pub fn new(sign: Option<&[&str]>, required: bool, kit: Option<&str>) -> PhaseGrant {
+        PhaseGrant {
+            sign: sign.map(|s| s.iter().map(|x| x.to_string()).collect()),
+            required,
+            kit: kit.map(Into::into),
+        }
     }
+}
 
+impl AgentGrant {
+    /// The label for what's left once phases without an agent are dropped (`settle`).
+    fn label(&self) -> Option<AgentLabel> {
+        (!self.is_empty()).then(|| {
+            self.map(|p| Access {
+                sign: p.sign.clone(),
+            })
+        })
+    }
+}
+
+impl AgentLabel {
     pub fn to_label(&self) -> String {
         serde_json::to_string(self).expect("the label serializes")
     }
@@ -104,6 +113,9 @@ pub enum Unavailable {
     Unset,
     Missing(PathBuf),
     Disabled,
+    /// The socket directory (`/tmp/sbt-<uid>`) isn't private: its socket could reach another
+    /// user.
+    UnsafeDir(PathBuf),
 }
 
 impl fmt::Display for Unavailable {
@@ -112,6 +124,9 @@ impl fmt::Display for Unavailable {
             Unavailable::Unset => write!(f, "SSH_AUTH_SOCK is unset"),
             Unavailable::Missing(p) => write!(f, "{} doesn't exist", p.display()),
             Unavailable::Disabled => write!(f, "ssh.agentForwardingEnabled is false"),
+            Unavailable::UnsafeDir(p) => {
+                write!(f, "{} isn't a private directory owned by you", p.display())
+            }
         }
     }
 }
@@ -153,8 +168,8 @@ pub fn host_agent(
 
 /// Applies availability to a grant at create: with an agent every phase stays; without one a
 /// required phase refuses the create (`kit K: ssh-agent@1 needs an SSH agent, but <reason>`), and
-/// an optional one is dropped, with a note for stderr when a kit asked for it. Returns the
-/// label to record (`None`: no agent at all) and the notes.
+/// an optional one is dropped, with a note for stderr when a kit asked for it or the socket
+/// directory is unsafe. Returns the label to record (`None`: no agent at all) and the notes.
 pub fn settle(
     grant: &AgentGrant,
     backing: &Result<PathBuf, Unavailable>,
@@ -169,11 +184,15 @@ pub fn settle(
         if p.required {
             bail!("kit {kit}: ssh-agent@1 needs an SSH agent, but {why}");
         }
-        if p.kit.is_some() {
-            notes.push(format!(
-                "kit {kit}: no SSH agent for the {name} phase ({why}); continuing without one"
-            ));
-        }
+        let who = match &p.kit {
+            Some(k) => format!("kit {k}"),
+            // The implicit grant drops silently, unless the socket directory is unsafe.
+            None if matches!(why, Unavailable::UnsafeDir(_)) => "warning".to_string(),
+            None => continue,
+        };
+        notes.push(format!(
+            "{who}: no SSH agent for the {name} phase ({why}); continuing without one"
+        ));
     }
     Ok((None, notes))
 }
@@ -181,14 +200,6 @@ pub fn settle(
 #[cfg(test)]
 mod tests {
     use super::*;
-
-    fn phase(sign: Option<&[&str]>, required: bool, kit: Option<&str>) -> PhaseGrant {
-        PhaseGrant {
-            sign: sign.map(|s| s.iter().map(|x| x.to_string()).collect()),
-            required,
-            kit: kit.map(Into::into),
-        }
-    }
 
     #[test]
     fn the_backing_agent_is_the_setting_else_ssh_auth_sock_and_must_exist() {
@@ -238,8 +249,8 @@ mod tests {
     #[test]
     fn an_available_agent_keeps_every_phase() {
         let g = AgentGrant {
-            install: Some(phase(Some(&["git"]), true, Some("k"))),
-            runtime: Some(phase(None, false, None)),
+            install: Some(PhaseGrant::new(Some(&["git"]), true, Some("k"))),
+            runtime: Some(PhaseGrant::new(None, false, None)),
         };
         let (label, notes) = settle(&g, &Ok("/a.sock".into())).unwrap();
         assert_eq!(
@@ -254,7 +265,7 @@ mod tests {
     #[test]
     fn no_agent_refuses_a_required_phase_and_drops_optional_ones() {
         let req = AgentGrant {
-            runtime: Some(phase(Some(&["git"]), true, Some("signer"))),
+            runtime: Some(PhaseGrant::new(Some(&["git"]), true, Some("signer"))),
             ..Default::default()
         };
         for (why, reason) in [
@@ -264,6 +275,10 @@ mod tests {
                 "/a.sock doesn't exist",
             ),
             (Unavailable::Disabled, "ssh.agentForwardingEnabled is false"),
+            (
+                Unavailable::UnsafeDir("/tmp/sbt-1".into()),
+                "/tmp/sbt-1 isn't a private directory owned by you",
+            ),
         ] {
             let e = settle(&req, &Err(why)).unwrap_err();
             assert_eq!(
@@ -273,8 +288,8 @@ mod tests {
         }
 
         let opt = AgentGrant {
-            install: Some(phase(None, false, Some("k"))),
-            runtime: Some(phase(None, false, None)),
+            install: Some(PhaseGrant::new(None, false, Some("k"))),
+            runtime: Some(PhaseGrant::new(None, false, None)),
         };
         let (label, notes) = settle(&opt, &Err(Unavailable::Unset)).unwrap();
         assert_eq!(label, None);
@@ -284,6 +299,18 @@ mod tests {
             [
                 "kit k: no SSH agent for the install phase (SSH_AUTH_SOCK is unset); continuing \
                  without one"
+            ]
+        );
+        // An unsafe socket directory warns for the implicit grant too.
+        let (label, notes) = settle(&opt, &Err(Unavailable::UnsafeDir("/d".into()))).unwrap();
+        assert_eq!(label, None);
+        assert_eq!(
+            notes,
+            [
+                "kit k: no SSH agent for the install phase (/d isn't a private directory owned \
+                 by you); continuing without one",
+                "warning: no SSH agent for the runtime phase (/d isn't a private directory owned \
+                 by you); continuing without one"
             ]
         );
     }

@@ -231,7 +231,7 @@ pub struct KitFirstStart {
     pub rule_ids: Vec<String>,
     /// Where an install-phase `ssh-agent@1` grant (`sbx.ssh-agent`) finds the host agent while
     /// the install hooks run.
-    pub agent: Option<bridge::filter::Backing>,
+    pub agent_backing: Option<bridge::filter::Backing>,
 }
 
 /// The first start of a clone sandbox clones the host repo inside the VM (as sbx).
@@ -391,7 +391,7 @@ pub fn start_with<R: Runner>(
     plan: &StartPlan,
     on: &mut dyn FnMut(Event),
 ) -> Result<()> {
-    start_checked(vm, sb, plan, on, &bridge::private_dir)
+    start_checked(vm, sb, plan, on, &bridge::is_private_dir)
 }
 
 /// `start_with`, with `private` deciding whether the bridge's socket directory is safe.
@@ -461,13 +461,17 @@ fn setup<R: Runner>(
     // Not fatal either: without the shims the agent prints URLs instead of opening them. Without
     // the bridge, any shims a fork's disk came with are removed (they'd reach its parent).
     // The socket directory is checked on every start: /tmp can be emptied (macOS does on reboot)
-    // and another user can create it first, then the mount would reach them.
-    // The SSH agent's socket is in the same directory: unsafe, nothing serves it this start.
-    let (safe, warnings) = check_socket_dir(sb, private);
-    for w in warnings {
-        eprintln!("{w}");
+    // and another user can create it first, then the mount would reach them. The SSH agent's
+    // socket is in the same directory; a start only warns for it, as sessions serve it and
+    // `server::bind` checks the directory again then.
+    let dir = bridge::socket_dir();
+    let safe = !(sb.meta.bridge || sb.meta.ssh_agent.is_some()) || private(&dir);
+    if !safe {
+        for w in unsafe_dir_warnings(sb, &dir) {
+            eprintln!("{w}");
+        }
     }
-    let (shims, what) = if safe {
+    let (shims, what) = if sb.meta.bridge && safe {
         (bridge::install_cmd(), "install")
     } else {
         (bridge::remove_cmd(), "remove")
@@ -507,20 +511,9 @@ fn setup<R: Runner>(
     Ok(())
 }
 
-/// Checks the socket directory (once, and only for a sandbox with the bridge or an agent):
-/// whether the bridge's shims may be installed, and the warnings a start prints.
-fn check_socket_dir(sb: &Sandbox, private: &dyn Fn(&Path) -> bool) -> (bool, Vec<String>) {
-    let dir = bridge::socket_dir();
-    let ok = (sb.meta.bridge || sb.meta.ssh_agent.is_some()) && private(&dir);
-    (sb.meta.bridge && ok, unsafe_dir_warnings(sb, &dir, ok))
-}
-
-/// What a start says when the socket directory isn't `private`: per socket the sandbox has.
-fn unsafe_dir_warnings(sb: &Sandbox, dir: &Path, private: bool) -> Vec<String> {
+/// What a start says when the socket directory isn't private: per socket the sandbox has.
+fn unsafe_dir_warnings(sb: &Sandbox, dir: &Path) -> Vec<String> {
     let mut out = Vec::new();
-    if private {
-        return out;
-    }
     let mut warn = |what: &str| {
         out.push(format!(
             "warning: {} isn't a private directory owned by you; {} gets no {what} unless \
@@ -598,7 +591,7 @@ pub fn create<R: Runner>(
     on: &mut dyn FnMut(Event),
 ) -> Result<Sandbox> {
     let mut checked = req.clone();
-    if let Some(warning) = create::drop_unsafe_bridge(&mut checked, bridge::private_dir) {
+    if let Some(warning) = create::drop_unsafe_bridge(&mut checked, bridge::is_private_dir) {
         eprintln!("{warning}");
     }
     vm.create(&create::spec(&checked))?;
@@ -700,9 +693,10 @@ fn first_start<R: Runner>(
 }
 
 /// Serves the sandbox's install-phase agent grant, if it has one and install hooks to run.
+/// `kit.agent_backing` is `None` only in tests.
 fn install_agent(sb: &Sandbox, kit: &KitFirstStart) -> Option<bridge::Server> {
     let access = sb.meta.ssh_agent.as_ref()?.install.clone()?;
-    let backing = kit.agent.clone()?;
+    let backing = kit.agent_backing.clone()?;
     if kit.steps.install.is_empty() {
         return None;
     }
@@ -1164,25 +1158,31 @@ mod tests {
                 dir.display()
             )
         };
-        // What `setup` prints: an agent-only sandbox's warning, and no shims.
+        // What `setup` prints: an agent-only sandbox's warning, and no shims, private or not.
         assert_eq!(
-            check_socket_dir(&sb, &|_| false),
-            (false, vec![unsafe_dir("SSH agent")])
+            unsafe_dir_warnings(&sb, &dir),
+            vec![unsafe_dir("SSH agent")]
         );
-        assert_eq!(check_socket_dir(&sb, &|_| true), (false, vec![]));
+        let shims =
+            |cmd: String| format!("machine exec --name sbx-claude-myrepo -u root -- sh -c {cmd}");
+        let lines = vm.runner().call_lines();
+        assert!(lines.contains(&shims(bridge::remove_cmd())), "{lines:#?}");
+        let fake = FakeRunner::new();
+        fake.ok(&["machine", "status"], &status);
+        let vm = Smolvm::new(fake);
+        start_checked(&vm, &sb, &plan(), &mut |_| {}, &|_| true).unwrap();
+        let lines = vm.runner().call_lines();
+        assert!(lines.contains(&shims(bridge::remove_cmd())), "{lines:#?}");
+        assert!(!lines.contains(&shims(bridge::install_cmd())), "{lines:#?}");
         let mut both = sb.clone();
         both.meta.bridge = true;
         assert_eq!(
-            check_socket_dir(&both, &|_| false),
-            (
-                false,
-                vec![
-                    unsafe_dir("browser or clipboard bridge"),
-                    unsafe_dir("SSH agent")
-                ]
-            )
+            unsafe_dir_warnings(&both, &dir),
+            vec![
+                unsafe_dir("browser or clipboard bridge"),
+                unsafe_dir("SSH agent")
+            ]
         );
-        assert_eq!(check_socket_dir(&both, &|_| true), (true, vec![]));
         // Neither: nothing to check.
         let mut neither = sb.clone();
         neither.meta.ssh_agent = None;
@@ -1871,7 +1871,7 @@ echo "$g""#,
                 },
                 restart_without: restart_without.iter().map(|v| v.to_string()).collect(),
                 rule_ids: vec!["r-npm".into(), "r-api".into()],
-                agent: None,
+                agent_backing: None,
             }),
             ..plan()
         }
@@ -1971,7 +1971,7 @@ echo "$g""#,
             let vm = Smolvm::new(fake);
             let (_dir, paths) = crate::config::test_paths();
             let mut plan = kit_plan(&[]);
-            plan.kit.as_mut().unwrap().agent =
+            plan.kit.as_mut().unwrap().agent_backing =
                 Some(bridge::filter::Backing::new(&paths, &Default::default()));
             let sb = create(
                 &vm,
