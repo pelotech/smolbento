@@ -26,6 +26,7 @@ create claude . --deny-network evil.com,10.0.0.0/8 --deny-network tracker.exampl
 create shell . --kit ./my-kit --kit ghcr.io/example/kit:1 --kit-arg kit.key=value
 create shell --kit ./my-kit --kit-args-file kit.env
 create --mount /tmp:/home/agent/x shell
+create claude . --skills readwrite
 exec my-sandbox ls -la
 exec -it my-sandbox bash
 exec -u root -w /tmp -e A=1 my-sandbox env

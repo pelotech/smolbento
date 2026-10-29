@@ -163,8 +163,9 @@ fn link_script_at(shared: &str, dirs: &[Dir]) -> Option<String> {
     let s = crate::sandbox::sh_quote(shared);
     Some(format!(
         r#"S={s}
+rc=0
 for d in {dirs}; do
-  mkdir -p "$d"
+  mkdir -p "$d" || {{ rc=1; continue; }}
   for l in "$d"/* "$d"/.[!.]*; do
     [ -L "$l" ] || continue
     case "$(readlink "$l")" in "$S"/*) [ -e "$l" ] || rm -f "$l" ;; esac
@@ -173,9 +174,10 @@ for d in {dirs}; do
     n=${{e##*/}}
     case "$n" in [A-Za-z0-9]*) ;; *) continue ;; esac
     case "$n" in *[!A-Za-z0-9._-]*) continue ;; esac
-    [ -e "$d/$n" ] || [ -L "$d/$n" ] || ln -s "$S/$n" "$d/$n"
+    [ -e "$d/$n" ] || [ -L "$d/$n" ] || ln -s "$S/$n" "$d/$n" || rc=1
   done
-done"#,
+done
+exit $rc"#,
         dirs = ro.join(" ")
     ))
 }
@@ -198,10 +200,16 @@ pub fn bundled_script(dirs: &[Dir], skills: &[(String, String, bool)]) -> String
         );
         // `name` is a valid skill name and `source` has no `$ " \` \\` (Task 9), so both are
         // safe inside the double-quoted messages.
-        let fail = if *optional {
-            format!(r#"echo "warning: skipping skill {name}: $why" >&2"#)
+        let (fail, unlinked) = if *optional {
+            (
+                format!(r#"echo "warning: skipping skill {name}: $why" >&2"#),
+                format!(r#"echo "warning: skipping skill {name}: couldn't link into $d" >&2"#),
+            )
         } else {
-            r#"echo "$why" >&2; rc=1"#.to_string()
+            (
+                r#"echo "$why" >&2; rc=1"#.to_string(),
+                format!(r#"echo "skill {name}: couldn't link into $d" >&2; rc=1"#),
+            )
         };
         s += &format!(
             r#"why=
@@ -209,7 +217,7 @@ if [ -L {src}/SKILL.md ] || [ ! -f {src}/SKILL.md ]; then why="{source}/SKILL.md
 for d in {dirs}; do
   if [ -z "$why" ] && {{ [ -e "$d"/{n} ] || [ -L "$d"/{n} ]; }}; then why="$d/{name} already exists"; fi
 done
-if [ -n "$why" ]; then {fail}; else for d in {dirs}; do mkdir -p "$d" && ln -s {src} "$d"/{n}; done; fi
+if [ -n "$why" ]; then {fail}; else for d in {dirs}; do mkdir -p "$d" && ln -s {src} "$d"/{n} || {{ {unlinked}; }}; done; fi
 "#
         );
     }
@@ -309,6 +317,102 @@ mod tests {
             String::from_utf8_lossy(&missing.stderr)
                 .contains("/nonexistent/x/SKILL.md is not a regular file")
         );
+    }
+
+    /// Make `p` read-only for the closure (restored on drop). None when root, which ignores mode.
+    #[cfg(unix)]
+    fn read_only<T>(p: &Path, f: impl FnOnce() -> T) -> Option<T> {
+        use std::os::unix::fs::PermissionsExt;
+        struct Restore(std::path::PathBuf);
+        impl Drop for Restore {
+            fn drop(&mut self) {
+                let _ = std::fs::set_permissions(&self.0, std::fs::Permissions::from_mode(0o755));
+            }
+        }
+        // SAFETY: geteuid has no preconditions.
+        if unsafe { libc::geteuid() } == 0 {
+            return None;
+        }
+        std::fs::set_permissions(p, std::fs::Permissions::from_mode(0o555)).unwrap();
+        let _restore = Restore(p.to_path_buf());
+        Some(f())
+    }
+
+    #[test]
+    fn bundled_script_fails_a_required_skill_it_cannot_link() {
+        let t = tempfile::tempdir().unwrap();
+        let src = t.path().join("img/review");
+        std::fs::create_dir_all(&src).unwrap();
+        std::fs::write(src.join("SKILL.md"), "s").unwrap();
+        let locked = t.path().join("locked");
+        std::fs::create_dir(&locked).unwrap();
+        let d = locked.join("skills");
+        let dirs = [dir(d.to_str().unwrap(), Access::Ro)];
+        let s = src.to_str().unwrap().to_string();
+        let run = |optional: bool| {
+            std::process::Command::new("sh")
+                .args([
+                    "-c",
+                    &bundled_script(&dirs, &[("review".into(), s.clone(), optional)]),
+                ])
+                .output()
+                .unwrap()
+        };
+        let Some((req, opt)) = read_only(&locked, || (run(false), run(true))) else {
+            return;
+        };
+        assert!(!req.status.success());
+        assert!(
+            String::from_utf8_lossy(&req.stderr)
+                .contains(&format!("skill review: couldn't link into {}", d.display())),
+            "{}",
+            String::from_utf8_lossy(&req.stderr)
+        );
+        assert!(opt.status.success());
+        assert!(
+            String::from_utf8_lossy(&opt.stderr).contains(&format!(
+                "warning: skipping skill review: couldn't link into {}",
+                d.display()
+            )),
+            "{}",
+            String::from_utf8_lossy(&opt.stderr)
+        );
+    }
+
+    #[test]
+    fn link_script_fails_for_a_dir_it_cannot_write_and_still_links_the_others() {
+        let t = tempfile::tempdir().unwrap();
+        let shared = t.path().join("shared");
+        std::fs::create_dir_all(shared.join("alpha")).unwrap();
+        let locked = t.path().join("locked");
+        std::fs::create_dir(&locked).unwrap();
+        let bad = locked.join("skills");
+        let good = t.path().join("home/.codex/skills");
+        let dirs = [
+            dir(bad.to_str().unwrap(), Access::Ro),
+            dir(good.to_str().unwrap(), Access::Ro),
+        ];
+        let script = link_script_at(shared.to_str().unwrap(), &dirs).unwrap();
+        let run = || {
+            std::process::Command::new("sh")
+                .args(["-c", &script])
+                .output()
+                .unwrap()
+        };
+        let Some(out) = read_only(&locked, run) else {
+            return;
+        };
+        assert!(!out.status.success());
+        assert_eq!(
+            std::fs::read_link(good.join("alpha")).unwrap(),
+            shared.join("alpha")
+        );
+        // An existing but unwritable directory fails too.
+        std::fs::create_dir(&bad).unwrap();
+        let Some(out) = read_only(&bad, run) else {
+            return;
+        };
+        assert!(!out.status.success());
     }
 
     #[test]

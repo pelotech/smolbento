@@ -148,7 +148,9 @@ fn private_dir(dir: &Path) -> Result<()> {
 }
 
 /// Copies directories and regular files (mode bits kept) from `src` into the existing `dst`.
-/// Symlinks and other file types are skipped, as sbx does.
+/// Symlinks and other file types are skipped, as sbx does. A directory gets its mode after its
+/// children are in, with owner rwx added, so a read-only source (a Nix store path) copies and the
+/// store can still replace and remove the tree.
 pub fn copy_tree(src: &Path, dst: &Path) -> Result<()> {
     for e in fs::read_dir(src).with_context(|| format!("reading {}", src.display()))? {
         let e = e?;
@@ -156,8 +158,9 @@ pub fn copy_tree(src: &Path, dst: &Path) -> Result<()> {
         let t = e.file_type()?;
         if t.is_dir() {
             fs::create_dir(&to)?;
-            fs::set_permissions(&to, fs::metadata(&from)?.permissions())?;
             copy_tree(&from, &to)?;
+            let mode = fs::metadata(&from)?.permissions().mode() & 0o7777 | 0o700;
+            fs::set_permissions(&to, fs::Permissions::from_mode(mode))?;
         } else if t.is_file() {
             fs::copy(&from, &to).with_context(|| format!("copying {}", from.display()))?;
         }
@@ -225,6 +228,31 @@ mod tests {
         std::os::unix::fs::symlink("/etc/passwd", src.join("leak")).unwrap();
         s.install("a", &src).unwrap();
         assert!(fs::symlink_metadata(s.dir.join("a/leak")).is_err());
+    }
+
+    #[test]
+    fn read_only_source_dirs_install_replace_and_remove() {
+        let (d, s) = store();
+        let src = skill(d.path(), "src", "one"); // like a Nix store path or read-only checkout
+        for p in [src.join("scripts"), src.clone()] {
+            fs::set_permissions(&p, fs::Permissions::from_mode(0o555)).unwrap();
+        }
+        let installed = s.install("a", &src).and_then(|_| s.install("a", &src));
+        for p in [src.clone(), src.join("scripts")] {
+            fs::set_permissions(&p, fs::Permissions::from_mode(0o755)).unwrap();
+        }
+        installed.unwrap();
+        assert_eq!(
+            fs::metadata(s.dir.join("a/scripts"))
+                .unwrap()
+                .permissions()
+                .mode()
+                & 0o777,
+            0o755
+        );
+        assert!(s.dir.join("a/scripts/run.sh").is_file());
+        s.remove("a").unwrap();
+        assert!(fs::read_dir(&s.dir).unwrap().next().is_none(), "left over");
     }
 
     #[test]

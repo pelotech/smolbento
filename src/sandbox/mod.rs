@@ -855,7 +855,7 @@ impl<R: Runner> Steps<'_, R> {
         self.remove(copied);
         let out = out.with_context(|| format!("{} failed", step.label))?;
         if out.code == 0 {
-            if step.kit.is_some() {
+            if !step.relay_stderr {
                 return Ok(Vec::new());
             }
             return Ok(out
@@ -1960,6 +1960,7 @@ echo "$g""#,
             kit: Some("k".into()),
             user: user.map(String::from),
             script: script.into(),
+            relay_stderr: false,
         }
     }
 
@@ -2256,7 +2257,7 @@ echo "$g""#,
     }
 
     #[test]
-    fn a_successful_smolbento_step_relays_its_stderr_and_a_kit_hook_does_not() {
+    fn only_the_bundled_skills_step_relays_its_stderr() {
         let fake = FakeRunner::new();
         fake.ok(&["machine", "status"], STATUS);
         fake.ok_with_stderr(
@@ -2276,12 +2277,21 @@ echo "$g""#,
             kit: None,
             user: Some("agent".into()),
             script: "true".into(),
+            relay_stderr: true,
         };
         assert_eq!(
             run.install(&own).unwrap(),
             ["warning: skipping skill review: /x/review already exists"]
         );
         assert!(run.install(&hook(1, None, "true")).unwrap().is_empty());
+        let git_identity = InstallStep {
+            label: "the git identity step".into(),
+            kit: None,
+            user: None,
+            script: "true".into(),
+            relay_stderr: false,
+        };
+        assert!(run.install(&git_identity).unwrap().is_empty());
     }
 
     #[test]

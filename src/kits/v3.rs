@@ -396,6 +396,17 @@ fn body(ty: &str, config: Option<Value>) -> Result<CapBody> {
                     c.path
                 );
             }
+            // `-v host:guest[:ro]` would misread a `:`.
+            if c.path.contains(':') {
+                bail!("agent-skills@1 path {:?} must not contain ':'", c.path);
+            }
+            let shared = crate::skills::SHARED;
+            if c.path == shared || c.path.starts_with(&format!("{shared}/")) {
+                bail!(
+                    "agent-skills@1 path {:?} must not be {shared} or under it",
+                    c.path
+                );
+            }
             let readwrite = match c.mode.as_deref() {
                 None | Some("readonly") => false,
                 Some("readwrite") => true,
@@ -409,7 +420,8 @@ fn body(ty: &str, config: Option<Value>) -> Result<CapBody> {
         "agent-skill@1" => {
             let c: AgentSkillCfg = decode(config)?;
             // Literal (no create-time `${...}`), and safe inside the bundled script's messages.
-            if !canonical_abs(&c.path) || c.path.contains(['$', '"', '`', '\\']) {
+            // No `:` either, as for agent-skills@1.
+            if !canonical_abs(&c.path) || c.path.contains(['$', '"', '`', '\\', ':']) {
                 bail!(
                     "agent-skill@1 path {:?} must be a literal absolute canonical path",
                     c.path
@@ -1072,9 +1084,13 @@ mod tests {
             json!({"path": "/"}),
             json!({"path": "/s", "mode": "rw"}),
             json!({}),
+            json!({"path": "/run/sbx/skills-shared"}),
+            json!({"path": "/run/sbx/skills-shared/x"}),
+            json!({"path": "/home/a:b/skills"}),
         ] {
             assert!(b("agent-skills@1", bad.clone()).is_err(), "{bad}");
         }
+        assert!(b("agent-skills@1", json!({"path": "/run/sbx/skills-shared2"})).is_ok());
         assert_eq!(
             b("agent-skill@1", json!({"path": "/usr/share/x/pr-review"})).unwrap(),
             CapBody::AgentSkill {
@@ -1098,6 +1114,7 @@ mod tests {
             json!({"path": "/x/y", "name": "a/b"}),
             json!({"path": "/x/${A}"}),
             json!({"path": "x"}),
+            json!({"path": "/x/a:b", "name": "ab"}),
         ] {
             assert!(b("agent-skill@1", bad.clone()).is_err(), "{bad}");
         }

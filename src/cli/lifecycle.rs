@@ -600,10 +600,12 @@ pub fn reset<R: Runner>(ctx: &mut Ctx<R>, a: &ResetArgs) -> Result<i32> {
         remove(ctx, sb, !a.preserve_secrets)?;
     }
     let _ = std::fs::remove_dir_all(ctx.paths.sessions());
-    crate::skills::store::Store::new(&ctx.paths).wipe()?;
+    // A store that won't go must not keep the secrets from being forgotten.
+    let wiped = crate::skills::store::Store::new(&ctx.paths).wipe();
     if !a.preserve_secrets {
         super::secret::forget_all(ctx)?;
     }
+    wiped?;
     Ok(0)
 }
 

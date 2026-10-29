@@ -343,6 +343,7 @@ pub fn prepare_create<R: Runner>(
                 kit: None,
                 user: Some(req.user.clone().unwrap_or_else(|| "agent".into())),
                 script: crate::skills::bundled_script(&dirs, &skills),
+                relay_stderr: true,
             },
         );
     }
@@ -1148,6 +1149,7 @@ mod tests {
                     kit: Some("k".into()),
                     user: None,
                     script: "npm i".into(),
+                    relay_stderr: false,
                 }],
                 ..Default::default()
             },

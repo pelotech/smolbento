@@ -9,12 +9,13 @@ use anyhow::{Context, Result, bail};
 
 use super::valid_name;
 
-/// `owner/repo` (GitHub) or a remote git URL, as sbx accepts them.
+/// `owner/repo` (GitHub) or a remote git URL, as sbx accepts them, except plaintext `http://`
+/// and `git://` (see docs/sbx-compatibility.md).
 pub fn parse_url(arg: &str) -> Result<String> {
     const BAD: &str = "repository must be a remote Git URL or GitHub owner/repository";
     if let Some((scheme, _)) = arg.split_once("://") {
         return match scheme {
-            "https" | "http" | "ssh" | "git" => Ok(arg.to_string()),
+            "https" | "ssh" => Ok(arg.to_string()),
             _ => bail!("{BAD}: {scheme}: invalid protocol"),
         };
     }
@@ -156,6 +157,15 @@ mod tests {
         );
         for bad in ["/tmp/x", "./x", "x", "a/b/c", "ftp://h/x"] {
             assert!(parse_url(bad).is_err(), "{bad}");
+        }
+        // Plaintext transports are refused like any other scheme.
+        for (bad, scheme) in [("http://host/x.git", "http"), ("git://host/x.git", "git")] {
+            assert_eq!(
+                parse_url(bad).unwrap_err().to_string(),
+                format!(
+                    "repository must be a remote Git URL or GitHub owner/repository: {scheme}: invalid protocol"
+                )
+            );
         }
     }
 

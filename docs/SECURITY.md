@@ -201,7 +201,7 @@ names. What you share with a sandbox is what its agent will follow:
 
 - **A `readwrite` sandbox can change the skills other sandboxes load.** Its agent writes straight
   into your store, so a skill it changes or adds is linked into every later sandbox, `readonly`
-  ones included, and into any host agent you import from the store. Use it only for work you trust.
+  ones included. Use it only for work you trust.
 - **`readonly` doesn't isolate a sandbox from changes.** The agent can't edit a stored skill, but
   it loads whatever the store holds at each start, including changes made by a `readwrite`
   sandbox or by you.

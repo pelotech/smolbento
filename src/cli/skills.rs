@@ -14,7 +14,7 @@ use super::args::{
 use super::{Ctx, confirm};
 use crate::skills::import::{Event, scan};
 use crate::skills::repo::{self, Checkout};
-use crate::skills::store::{Source, Store};
+use crate::skills::store::{Source, Sources, Store};
 use crate::smolvm::Runner;
 
 /// sbx's note after a store change.
@@ -123,6 +123,13 @@ fn add_url<R: Runner>(
 ) -> Result<()> {
     let checkout = repo::clone(url)?;
     let found = repo::discover(checkout.root())?;
+    if found.is_empty()
+        && std::fs::symlink_metadata(checkout.root().join("SKILL.md")).is_ok_and(|m| m.is_file())
+    {
+        bail!(
+            "SKILL.md at the repository root isn't a skill directory; put the skill in a directory\n  try: sbt skills add --help"
+        );
+    }
     let picked = pick(&found, only)?;
     let replacing: Vec<&str> = picked
         .keys()
@@ -292,21 +299,40 @@ fn update<R: Runner>(ctx: &Ctx<R>, store: &Store, a: &SkillsUpdateArgs) -> Resul
     }
     let mut code = 0;
     for (url, skills) in by_repo {
-        let c = repo::clone(url)?;
-        let found = repo::discover(c.root())?;
-        let mut picked = BTreeMap::new();
-        for n in skills {
-            if sources.skills[n].commit == c.commit {
-                writeln!(&ctx.out, "Skill {n:?} is already up to date")?;
-            } else if let Some(dir) = found.get(n) {
-                picked.insert(n.clone(), dir.clone());
-            } else {
-                eprintln!("error: skill {n:?} is no longer in {url}");
+        // One repository failing doesn't stop the others.
+        match update_repo(ctx, store, &sources, url, &skills) {
+            Ok(c) => code = code.max(c),
+            Err(e) => {
+                eprintln!("error: {url}: {e:#}");
                 code = 1;
             }
         }
-        install(ctx, store, &c, &picked, "Updated")?;
     }
+    Ok(code)
+}
+
+fn update_repo<R: Runner>(
+    ctx: &Ctx<R>,
+    store: &Store,
+    sources: &Sources,
+    url: &str,
+    skills: &[&String],
+) -> Result<i32> {
+    let c = repo::clone(url)?;
+    let found = repo::discover(c.root())?;
+    let mut code = 0;
+    let mut picked = BTreeMap::new();
+    for &n in skills {
+        if sources.skills[n].commit == c.commit {
+            writeln!(&ctx.out, "Skill {n:?} is already up to date")?;
+        } else if let Some(dir) = found.get(n) {
+            picked.insert(n.clone(), dir.clone());
+        } else {
+            eprintln!("error: skill {n:?} is no longer in {url}");
+            code = 1;
+        }
+    }
+    install(ctx, store, &c, &picked, "Updated")?;
     Ok(code)
 }
 
@@ -475,6 +501,71 @@ mod tests {
                 "skill \"mine\" was not installed from a repository; install it from a repository"
             ),
             "{e}"
+        );
+    }
+
+    #[test]
+    fn update_goes_on_past_a_repository_that_fails() {
+        let mut t = test_env(&[]);
+        let p = tempfile::tempdir().unwrap();
+        let (a, b) = (p.path().join("a"), p.path().join("b"));
+        skills_repo(&a, "v1"); // alpha, beta
+        std::fs::create_dir_all(b.join("gamma")).unwrap();
+        std::fs::write(b.join("gamma/SKILL.md"), "v1").unwrap();
+        crate::testgit::git(&b, &["init", "-q"]);
+        crate::testgit::git(&b, &["add", "-A"]);
+        commit(&b, &[], "v1");
+        let store = Store::new(&t.ctx.paths);
+        add_url(&t.ctx, &store, a.to_str().unwrap(), &[], false).unwrap();
+        add_url(&t.ctx, &store, b.to_str().unwrap(), &[], false).unwrap();
+        t.stdout();
+        std::fs::write(b.join("gamma/SKILL.md"), "v2").unwrap();
+        commit(&b, &["-a"], "v2");
+        std::fs::remove_dir_all(&a).unwrap(); // sorts first, fails to clone
+        assert_eq!(sbt(&mut t.ctx, &["skills", "update"]).unwrap(), 1);
+        assert_eq!(t.stdout(), "Updated skill gamma\n");
+        assert_eq!(
+            std::fs::read_to_string(store.dir.join("gamma/SKILL.md")).unwrap(),
+            "v2"
+        );
+        assert!(store.dir.join("alpha").exists());
+    }
+
+    #[test]
+    fn update_reports_a_skill_gone_from_its_repository_and_updates_the_rest() {
+        let mut t = test_env(&[]);
+        let r = tempfile::tempdir().unwrap();
+        skills_repo(r.path(), "v1");
+        let store = Store::new(&t.ctx.paths);
+        add_url(&t.ctx, &store, r.path().to_str().unwrap(), &[], false).unwrap();
+        t.stdout();
+        std::fs::remove_dir_all(r.path().join("nested")).unwrap();
+        std::fs::write(r.path().join("alpha/SKILL.md"), "v2").unwrap();
+        crate::testgit::git(r.path(), &["add", "-A"]);
+        commit(r.path(), &[], "v2");
+        assert_eq!(sbt(&mut t.ctx, &["skills", "update"]).unwrap(), 1);
+        assert_eq!(t.stdout(), "Updated skill alpha\n");
+        assert_eq!(
+            std::fs::read_to_string(store.dir.join("alpha/SKILL.md")).unwrap(),
+            "v2"
+        );
+    }
+
+    #[test]
+    fn add_explains_a_skill_md_at_the_repository_root() {
+        let t = test_env(&[]);
+        let r = tempfile::tempdir().unwrap();
+        std::fs::write(r.path().join("SKILL.md"), "s").unwrap();
+        crate::testgit::git(r.path(), &["init", "-q"]);
+        crate::testgit::git(r.path(), &["add", "-A"]);
+        commit(r.path(), &[], "v1");
+        let store = Store::new(&t.ctx.paths);
+        let e = add_url(&t.ctx, &store, r.path().to_str().unwrap(), &[], false)
+            .unwrap_err()
+            .to_string();
+        assert_eq!(
+            e,
+            "SKILL.md at the repository root isn't a skill directory; put the skill in a directory\n  try: sbt skills add --help"
         );
     }
 
