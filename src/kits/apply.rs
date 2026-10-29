@@ -44,11 +44,13 @@ pub struct KitSteps {
 pub struct InstallStep {
     /// Names the step in errors, e.g. `kit a install hook 2`.
     pub label: String,
-    /// The kit whose hook this is; `None` for smolbento's own steps (the git identity).
+    /// The kit whose hook this is; `None` for smolbento's own steps (git identity, bundled skills).
     pub kit: Option<String>,
     /// The exec user; `None` is root.
     pub user: Option<String>,
     pub script: String,
+    /// Relay a successful run's stderr as warnings (the bundled skills step's skipped skills).
+    pub relay_stderr: bool,
 }
 
 /// Fills `req` from the plan and writes the kits' policy rules (install-phase ones too: they must
@@ -184,6 +186,7 @@ pub fn apply(
                 kit: None,
                 user: None,
                 script: guest::git_identity_script(&name, &email),
+                relay_stderr: false,
             }),
             (None, Some(k)) => bail!(
                 "kit {} needs your git identity; set it with `git config --global user.name …` \
@@ -235,6 +238,7 @@ pub fn apply(
             kit: Some(kit.to_string()),
             user: h.user.clone(),
             script: format!("cd {install_dir} && {agent_env}{}", guest::hook_script(h)),
+            relay_stderr: false,
         });
     }
     // The later kit (in dependency order) wins a path.
@@ -1415,7 +1419,8 @@ mod tests {
                 kit: None,
                 user: None,
                 script: "git config --system user.name 'Ada L' && git config --system user.email 'ada@x.org'"
-                    .to_string()
+                    .to_string(),
+                relay_stderr: false,
             }]
         );
         let e = run(&p, &mut request(), &mut Policy::default()).unwrap_err();

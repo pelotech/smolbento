@@ -487,6 +487,22 @@ fn setup<R: Runner>(
             sb.name()
         );
     }
+    // Not fatal: without the links the agent just doesn't see the shared skills this start.
+    // As root, as in sbx; the script hands the directories and links to the agent's uid.
+    if let Some(script) = sb
+        .meta
+        .skills
+        .as_ref()
+        .and_then(|l| crate::skills::link_script(&l.dirs))
+        && let Err(e) = vm.exec_captured(&ExecSpec {
+            name: sb.machine.clone(),
+            user: Some("root".into()),
+            cmd: vec!["sh".into(), "-c".into(), script],
+            ..Default::default()
+        })
+    {
+        eprintln!("warning: {}: couldn't link shared skills: {e:#}", sb.name());
+    }
     // The pre-4a path: a docker sandbox created before the docker kit has no startup runner.
     // With kits, the docker kit's startup hook starts dockerd (no second start here).
     if sb.meta.docker && sb.meta.kits.is_empty() {
@@ -734,7 +750,9 @@ pub fn apply_kit_steps<R: Runner>(
             on(Event::Install(kit));
             told.push(kit);
         }
-        run.install(step).map_err(|e| (KitPhase::Install, e))?;
+        for line in run.install(step).map_err(|e| (KitPhase::Install, e))? {
+            eprintln!("{line}");
+        }
     }
     // The kits record's first column is each kit's name.
     for kit in steps
@@ -826,14 +844,25 @@ impl<R: Runner> Steps<'_, R> {
         Ok(())
     }
 
-    /// An install step; a failure names it and carries the end of its output.
-    fn install(&mut self, step: &InstallStep) -> Result<()> {
+    /// An install step; a failure names it and carries the end of its output. A successful
+    /// smolbento step (`kit: None`) returns its stderr lines for the user: the bundled skills
+    /// step warns there about an optional skill it skipped. Kit hooks' output stays quiet.
+    fn install(&mut self, step: &InstallStep) -> Result<Vec<String>> {
         let (spec, copied) = self.spec(step.user.as_deref().unwrap_or("root"), &step.script)?;
         let out = self.vm.exec_output(&spec);
         self.remove(copied);
         let out = out.with_context(|| format!("{} failed", step.label))?;
         if out.code == 0 {
-            return Ok(());
+            if !step.relay_stderr {
+                return Ok(Vec::new());
+            }
+            return Ok(out
+                .stderr
+                .lines()
+                .map(str::trim_end)
+                .filter(|l| !l.is_empty())
+                .map(String::from)
+                .collect());
         }
         let text = if out.stderr.trim().is_empty() {
             out.stdout.clone()
@@ -1259,6 +1288,88 @@ mod tests {
             lines[4],
             "machine exec --name sbx-claude-myrepo -u root -- sh -c grep -q ' host.docker.internal$' \
              /etc/hosts || printf '\\n%s\\n' '100.96.0.1 host.docker.internal' >> /etc/hosts"
+        );
+    }
+
+    fn skills_status(label: &str) -> String {
+        let l = label.replace('"', "\\\"");
+        STATUS
+            .replace("\"state\": \"running\"", "\"state\": \"stopped\"")
+            .replace(
+                "\"sbx.docker\"",
+                &format!("\"sbx.skills\": \"{l}\",\n    \"sbx.docker\""),
+            )
+    }
+
+    const RO_LABEL: &str = r#"{"mode":"readonly","shared":"ro","dirs":[{"path":"/home/agent/.claude/skills","access":"link"}]}"#;
+
+    #[test]
+    fn a_linking_skills_sandbox_links_the_store_as_root_at_start() {
+        let fake = FakeRunner::new();
+        fake.ok(&["machine", "status"], &skills_status(RO_LABEL));
+        let vm = Smolvm::new(fake);
+        let mut sb = get(&vm, "claude-myrepo").unwrap();
+        ensure_running(&vm, &mut sb, || Ok(plan())).unwrap();
+        let script = crate::skills::link_script(&sb.meta.skills.as_ref().unwrap().dirs).unwrap();
+        let lines = vm.runner().call_lines();
+        let want = format!("machine exec --name sbx-claude-myrepo -u root -- sh -c {script}");
+        assert_eq!(
+            lines.iter().filter(|l| **l == want).count(),
+            1,
+            "{lines:#?}"
+        );
+        assert!(script.contains("/home/agent/.claude/skills"));
+        let at = |f: &dyn Fn(&String) -> bool| lines.iter().position(f).unwrap();
+        let hosts = at(&|l| l.ends_with(&hosts_cmd()));
+        let link = at(&|l| *l == want);
+        assert!(hosts < link, "{lines:#?}");
+    }
+
+    #[test]
+    fn a_failed_skills_link_only_warns() {
+        let fake = FakeRunner::new();
+        fake.ok(&["machine", "status"], &skills_status(RO_LABEL));
+        let script = crate::skills::link_script(&[crate::skills::Dir {
+            path: "/home/agent/.claude/skills".into(),
+            access: crate::skills::Access::Link,
+        }])
+        .unwrap();
+        fake.fail(
+            &[
+                "machine",
+                "exec",
+                "--name",
+                "sbx-claude-myrepo",
+                "-u",
+                "root",
+                "--",
+                "sh",
+                "-c",
+                &script,
+            ],
+            "EXEC_FAILED",
+            "boom",
+        );
+        let vm = Smolvm::new(fake);
+        let mut sb = get(&vm, "claude-myrepo").unwrap();
+        ensure_running(&vm, &mut sb, || Ok(plan())).unwrap();
+        assert!(sb.is_running());
+    }
+
+    #[test]
+    fn a_sandbox_without_a_skills_label_gets_no_link_exec() {
+        let fake = FakeRunner::new();
+        fake.ok(
+            &["machine", "status"],
+            &STATUS.replace("\"state\": \"running\"", "\"state\": \"stopped\""),
+        );
+        let vm = Smolvm::new(fake);
+        let mut sb = get(&vm, "claude-myrepo").unwrap();
+        ensure_running(&vm, &mut sb, || Ok(plan())).unwrap();
+        let lines = vm.runner().call_lines();
+        assert!(
+            !lines.iter().any(|l| l.contains("skills-shared")),
+            "{lines:#?}"
         );
     }
 
@@ -1846,6 +1957,7 @@ echo "$g""#,
             kit: Some("k".into()),
             user: user.map(String::from),
             script: script.into(),
+            relay_stderr: false,
         }
     }
 
@@ -2139,6 +2251,44 @@ echo "$g""#,
         assert!(!envs[1].iter().any(|(k, _)| k == "TOK"), "{:?}", envs[1]);
         assert!(envs[1].iter().any(|(k, _)| k == "KEEP"));
         assert!(removed[1].contains(&"TOK".to_string()), "{:?}", removed[1]);
+    }
+
+    #[test]
+    fn only_the_bundled_skills_step_relays_its_stderr() {
+        let fake = FakeRunner::new();
+        fake.ok(&["machine", "status"], STATUS);
+        fake.ok_with_stderr(
+            &["machine", "exec"],
+            "",
+            "warning: skipping skill review: /x/review already exists\n",
+        );
+        let vm = Smolvm::new(fake);
+        let sb = get(&vm, "claude-myrepo").unwrap();
+        let mut run = Steps {
+            vm: &vm,
+            sb: &sb,
+            n: 0,
+        };
+        let own = InstallStep {
+            label: "bundled agent skills".into(),
+            kit: None,
+            user: None,
+            script: "true".into(),
+            relay_stderr: true,
+        };
+        assert_eq!(
+            run.install(&own).unwrap(),
+            ["warning: skipping skill review: /x/review already exists"]
+        );
+        assert!(run.install(&hook(1, None, "true")).unwrap().is_empty());
+        let git_identity = InstallStep {
+            label: "the git identity step".into(),
+            kit: None,
+            user: None,
+            script: "true".into(),
+            relay_stderr: false,
+        };
+        assert!(run.install(&git_identity).unwrap().is_empty());
     }
 
     #[test]

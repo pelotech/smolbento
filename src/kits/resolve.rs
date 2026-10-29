@@ -59,6 +59,10 @@ pub struct Merged {
     pub volumes: Vec<(String, bool, Option<String>)>,
     /// In kit order.
     pub host_mounts: Vec<HostMount>,
+    /// `agent-skills@1` directories, one per path (widest mode).
+    pub skill_dirs: Vec<SkillDir>,
+    /// `agent-skill@1` skills, one per name.
+    pub bundled: Vec<Bundled>,
     pub cpus: Option<String>,
     pub memory: Option<String>,
     pub env: Vec<(String, String)>,
@@ -83,6 +87,38 @@ pub struct HostMount {
     pub identity: String,
     pub path: String,
     pub mode: Option<String>,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct SkillDir {
+    pub path: String,
+    pub readwrite: bool,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct Bundled {
+    pub kit: String,
+    pub name: String,
+    pub source: String,
+    pub optional: bool,
+}
+
+/// Within one kit, a skills path or a bundled skill name may appear once.
+fn check_skill_caps(k: &Kit) -> Result<()> {
+    let mut paths = BTreeSet::new();
+    let mut names = BTreeSet::new();
+    for c in &k.caps {
+        match &c.body {
+            CapBody::AgentSkills { path, .. } if !paths.insert(path) => {
+                bail!("kit {}: agent-skills@1 names {path} twice", k.name)
+            }
+            CapBody::AgentSkill { name, .. } if !names.insert(name) => {
+                bail!("kit {}: two agent-skill@1 entries are named {name}", k.name)
+            }
+            _ => {}
+        }
+    }
+    Ok(())
 }
 
 #[derive(Debug)]
@@ -243,6 +279,7 @@ pub fn resolve_for(
         let ex = |s: &str| -> Result<String> {
             expand(s, a, &unresolved, &env_map).with_context(|| format!("kit {}", k.name))
         };
+        check_skill_caps(k)?;
         for cap in &k.caps {
             match &cap.body {
                 CapBody::Unsupported => {
@@ -349,6 +386,31 @@ pub fn resolve_for(
                         path: path.clone(),
                         mode: mode.clone(),
                     });
+                }
+                CapBody::AgentSkills { path, readwrite } => {
+                    match merged.skill_dirs.iter_mut().find(|d| &d.path == path) {
+                        Some(d) => d.readwrite |= readwrite,
+                        None => merged.skill_dirs.push(SkillDir {
+                            path: path.clone(),
+                            readwrite: *readwrite,
+                        }),
+                    }
+                }
+                CapBody::AgentSkill { source, name } => {
+                    match merged.bundled.iter_mut().find(|b| &b.name == name) {
+                        Some(b) if &b.source == source => b.optional &= cap.optional,
+                        Some(b) => bail!(
+                            "kits {} and {} both bundle a skill named {name:?} from different paths",
+                            b.kit,
+                            k.name
+                        ),
+                        None => merged.bundled.push(Bundled {
+                            kit: k.name.clone(),
+                            name: name.clone(),
+                            source: source.clone(),
+                            optional: cap.optional,
+                        }),
+                    }
                 }
                 CapBody::Resources { cpus, memory } => {
                     if cpus.is_some() {
@@ -1289,6 +1351,69 @@ mod tests {
             let e = run(workload("w"), vec![a, b]).unwrap_err();
             assert_eq!(format!("{e:#}"), msg);
         }
+    }
+
+    fn skills_dir(path: &str, rw: bool) -> CapBody {
+        CapBody::AgentSkills {
+            path: path.into(),
+            readwrite: rw,
+        }
+    }
+    fn skill(source: &str, name: &str) -> CapBody {
+        CapBody::AgentSkill {
+            source: source.into(),
+            name: name.into(),
+        }
+    }
+
+    #[test]
+    fn skill_dirs_merge_to_the_widest_mode_and_one_kit_names_a_path_once() {
+        const AS: &str = "com.docker.sandbox/agent-skills@1";
+        let a = mixin("a").cap(AS, false, skills_dir("/s", false));
+        let b = mixin("b").cap(AS, false, skills_dir("/s", true));
+        let p = run(workload("w"), vec![a, b]).unwrap();
+        assert_eq!(
+            p.merged.skill_dirs,
+            [SkillDir {
+                path: "/s".into(),
+                readwrite: true
+            }]
+        );
+        let k = mixin("k").cap(AS, false, skills_dir("/s", false)).cap(
+            AS,
+            false,
+            skills_dir("/s", true),
+        );
+        let e = run(workload("w"), vec![k]).unwrap_err();
+        assert_eq!(format!("{e:#}"), "kit k: agent-skills@1 names /s twice");
+    }
+
+    #[test]
+    fn bundled_skills_merge_by_name_and_conflict_on_different_sources() {
+        const AK: &str = "com.docker.sandbox/agent-skill@1";
+        let k = mixin("k")
+            .cap(AK, false, skill("/a/x", "x"))
+            .cap(AK, false, skill("/b/y", "x"));
+        let e = run(workload("w"), vec![k]).unwrap_err();
+        assert_eq!(
+            format!("{e:#}"),
+            "kit k: two agent-skill@1 entries are named x"
+        );
+
+        let a = mixin("a").cap(AK, true, skill("/s/x", "x"));
+        let b = mixin("b").cap(AK, false, skill("/s/x", "x"));
+        let p = run(workload("w"), vec![a, b]).unwrap();
+        assert_eq!(p.merged.bundled.len(), 1);
+        assert_eq!(p.merged.bundled[0].name, "x");
+        assert!(!p.merged.bundled[0].optional);
+
+        let a = mixin("a").cap(AK, false, skill("/s/x", "x"));
+        let b = mixin("b").cap(AK, false, skill("/t/x", "x"));
+        let e = run(workload("w"), vec![a, b]).unwrap_err();
+        assert_eq!(
+            format!("{e:#}"),
+            "kits a and b both bundle a skill named \"x\" from different paths"
+        );
     }
 
     #[test]

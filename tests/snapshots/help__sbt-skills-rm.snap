@@ -1,0 +1,21 @@
+---
+source: tests/help.rs
+expression: help(&path)
+---
+Remove installed skills
+
+Usage: sbt skills rm [OPTIONS] <SKILLS>...
+
+Arguments:
+  <SKILLS>...
+
+
+Options:
+  -D, --debug
+          Print each smolvm command line
+
+  -f, --force
+          Skip confirmation prompts
+
+  -h, --help
+          Print help

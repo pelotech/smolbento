@@ -35,6 +35,8 @@ pub const BRIDGE: &str = "sbx.bridge";
 pub const SSH_AGENT: &str = "sbx.ssh-agent";
 /// Kit host mounts: a JSON object of guest path to host directory.
 pub const HOST_MOUNTS: &str = "sbx.host-mounts";
+/// How the sandbox shares the skills store (`skills::Label`, JSON), fixed at create.
+pub const SKILLS: &str = "sbx.skills";
 /// Prefix of `sbx.credential-format.<ENV>`: how a kit credential's value is formatted.
 pub const CREDENTIAL_FORMAT: &str = "sbx.credential-format.";
 /// Prefix of `sbx.credential-service.<ENV>`: the secret service behind a kit credential's env var
@@ -138,6 +140,8 @@ pub struct Meta {
     pub host_mounts: BTreeMap<String, String>,
     /// The SSH agent phases granted at create and what each may sign (`sbx.ssh-agent`).
     pub ssh_agent: Option<AgentLabel>,
+    /// The skills mode and directories set at create (`sbx.skills`).
+    pub skills: Option<crate::skills::Label>,
 }
 
 impl Meta {
@@ -225,6 +229,9 @@ impl Meta {
         if let Some(a) = &self.ssh_agent {
             labels.insert(SSH_AGENT.to_string(), a.to_label());
         }
+        if let Some(s) = &self.skills {
+            labels.insert(SKILLS.to_string(), s.to_label());
+        }
         for (env, f) in &self.credential_formats {
             labels.insert(format!("{CREDENTIAL_FORMAT}{env}"), f.to_label());
         }
@@ -292,6 +299,9 @@ impl Meta {
             ssh_agent: labels
                 .get(SSH_AGENT)
                 .and_then(|j| AgentLabel::from_label(j)),
+            skills: labels
+                .get(SKILLS)
+                .and_then(|j| crate::skills::Label::from_label(j)),
         })
     }
 

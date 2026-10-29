@@ -65,6 +65,16 @@ impl Paths {
     pub fn kit_host_mounts(&self) -> PathBuf {
         self.data.join("kit-host-mounts")
     }
+
+    /// The shared agent skills store (`sbt skills`), one directory per skill.
+    pub fn skills_store(&self) -> PathBuf {
+        self.data.join("agent-skills")
+    }
+
+    /// Beside the store: `sources.json`, where repository-added skills came from.
+    pub fn skills_metadata(&self) -> PathBuf {
+        self.data.join("agent-skills-metadata")
+    }
 }
 
 pub struct SettingDef {
@@ -134,6 +144,12 @@ pub const SETTINGS: &[SettingDef] = &[
         env: "SMOLBENTO_SSH_AGENT_SOCKET",
         default: "",
         help: "Optional fixed host SSH agent socket path. Empty uses each client's current SSH_AUTH_SOCK.",
+    },
+    SettingDef {
+        key: "skills.defaultMode",
+        env: "SMOLBENTO_SKILLS_DEFAULT_MODE",
+        default: "readonly",
+        help: "Default for an omitted --skills: off, readonly or readwrite",
     },
 ];
 
@@ -216,6 +232,9 @@ impl Settings {
         }
         if key == "smolvm.image-cache-size" {
             parse_cache_size(value)?;
+        }
+        if key == "skills.defaultMode" {
+            crate::skills::Mode::parse(value)?;
         }
         self.file
             .settings
@@ -672,6 +691,32 @@ mod tests {
         let s = Settings::load(&paths, bad).0;
         let err = format!("{:#}", s.image_cache_bytes().unwrap_err());
         assert!(err.contains("smolvm.image-cache-size"), "{err}");
+    }
+
+    #[test]
+    fn skills_default_mode_is_readonly_and_must_be_a_mode() {
+        let dir = tempfile::tempdir().unwrap();
+        let e = env(&[
+            ("SMOLBENTO_CONFIG_DIR", dir.path().to_str().unwrap()),
+            ("SMOLBENTO_CACHE_DIR", "/k"),
+            ("SMOLBENTO_DATA_DIR", "/d"),
+        ]);
+        let paths = Paths::from_env(&e).unwrap();
+        let mut s = Settings::load(&paths, e.clone()).0;
+        assert_eq!(s.value("skills.defaultMode").unwrap(), "readonly");
+        assert!(s.set("skills.defaultMode", "rw").is_err());
+        s.set("skills.defaultMode", "off").unwrap();
+        assert_eq!(
+            crate::skills::resolve_mode(None, &s).unwrap(),
+            crate::skills::Mode::Off
+        );
+        let mut bad = e;
+        bad.insert("SMOLBENTO_SKILLS_DEFAULT_MODE".into(), "on".into());
+        let s = Settings::load(&paths, bad).0;
+        let err = crate::skills::resolve_mode(None, &s)
+            .unwrap_err()
+            .to_string();
+        assert!(err.contains("setting skills.defaultMode"), "{err}");
     }
 
     #[test]

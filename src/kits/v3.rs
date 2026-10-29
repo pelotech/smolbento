@@ -388,8 +388,59 @@ fn body(ty: &str, config: Option<Value>) -> Result<CapBody> {
         // Its command templates matter to the agent launcher, not to the kit model.
         "agent-sessions@1" => CapBody::AgentSessions,
         "ssh-agent@1" => ssh_agent(decode(config)?)?,
-        // agent-skills, agent-skill, usb-device, kit-registry,
-        // agent-interactive-sessions, acp and anything unknown.
+        "agent-skills@1" => {
+            let c: AgentSkillsCfg = decode(config)?;
+            if !canonical_abs(&c.path) {
+                bail!(
+                    "agent-skills@1 path {:?} must be absolute and canonical",
+                    c.path
+                );
+            }
+            // `-v host:guest[:ro]` would misread a `:`.
+            if c.path.contains(':') {
+                bail!("agent-skills@1 path {:?} must not contain ':'", c.path);
+            }
+            let shared = crate::skills::SHARED;
+            if c.path == shared || c.path.starts_with(&format!("{shared}/")) {
+                bail!(
+                    "agent-skills@1 path {:?} must not be {shared} or under it",
+                    c.path
+                );
+            }
+            let readwrite = match c.mode.as_deref() {
+                None | Some("readonly") => false,
+                Some("readwrite") => true,
+                Some(m) => bail!("agent-skills@1 mode {m:?} must be readonly or readwrite"),
+            };
+            CapBody::AgentSkills {
+                path: c.path,
+                readwrite,
+            }
+        }
+        "agent-skill@1" => {
+            let c: AgentSkillCfg = decode(config)?;
+            // Literal (no create-time `${...}`), and safe inside the bundled script's messages.
+            // No `:` either, as for agent-skills@1.
+            if !canonical_abs(&c.path) || c.path.contains(['$', '"', '`', '\\', ':']) {
+                bail!(
+                    "agent-skill@1 path {:?} must be a literal absolute canonical path",
+                    c.path
+                );
+            }
+            let name = c
+                .name
+                .unwrap_or_else(|| c.path.rsplit('/').next().unwrap_or_default().to_string());
+            if !crate::skills::valid_name(&name) {
+                bail!(
+                    "agent-skill@1 name {name:?} must match [A-Za-z0-9][A-Za-z0-9._-]* (at most 255 bytes)"
+                );
+            }
+            CapBody::AgentSkill {
+                source: c.path,
+                name,
+            }
+        }
+        // usb-device, kit-registry, agent-interactive-sessions, acp and anything unknown.
         _ => CapBody::Unsupported,
     })
 }
@@ -742,6 +793,20 @@ struct HostMountCfg {
     mode: Option<String>,
 }
 
+#[derive(Deserialize)]
+#[serde(deny_unknown_fields)]
+struct AgentSkillsCfg {
+    path: String,
+    mode: Option<String>,
+}
+
+#[derive(Deserialize)]
+#[serde(deny_unknown_fields)]
+struct AgentSkillCfg {
+    path: String,
+    name: Option<String>,
+}
+
 /// Absolute with no `.`/`..`/empty components (so no `//` or trailing `/`), not `/`, no NUL.
 fn canonical_abs(path: &str) -> bool {
     path.strip_prefix('/').is_some_and(|rest| {
@@ -990,6 +1055,71 @@ mod tests {
         );
     }
 
+    #[test]
+    fn agent_skills_caps() {
+        use serde_json::json;
+        let b = |ty: &str, c: serde_json::Value| body(&format!("com.docker.sandbox/{ty}"), Some(c));
+        assert_eq!(
+            b(
+                "agent-skills@1",
+                json!({"path": "/home/agent/.claude/skills"})
+            )
+            .unwrap(),
+            CapBody::AgentSkills {
+                path: "/home/agent/.claude/skills".into(),
+                readwrite: false
+            }
+        );
+        assert_eq!(
+            b("agent-skills@1", json!({"path": "/s", "mode": "readwrite"})).unwrap(),
+            CapBody::AgentSkills {
+                path: "/s".into(),
+                readwrite: true
+            }
+        );
+        for bad in [
+            json!({"path": "s"}),
+            json!({"path": "/s/"}),
+            json!({"path": "/a/../s"}),
+            json!({"path": "/"}),
+            json!({"path": "/s", "mode": "rw"}),
+            json!({}),
+            json!({"path": "/run/sbx/skills-shared"}),
+            json!({"path": "/run/sbx/skills-shared/x"}),
+            json!({"path": "/home/a:b/skills"}),
+        ] {
+            assert!(b("agent-skills@1", bad.clone()).is_err(), "{bad}");
+        }
+        assert!(b("agent-skills@1", json!({"path": "/run/sbx/skills-shared2"})).is_ok());
+        assert_eq!(
+            b("agent-skill@1", json!({"path": "/usr/share/x/pr-review"})).unwrap(),
+            CapBody::AgentSkill {
+                source: "/usr/share/x/pr-review".into(),
+                name: "pr-review".into()
+            }
+        );
+        assert_eq!(
+            b(
+                "agent-skill@1",
+                json!({"path": "/x/y", "name": "review-pr"})
+            )
+            .unwrap(),
+            CapBody::AgentSkill {
+                source: "/x/y".into(),
+                name: "review-pr".into()
+            }
+        );
+        for bad in [
+            json!({"path": "/x/y", "name": ""}),
+            json!({"path": "/x/y", "name": "a/b"}),
+            json!({"path": "/x/${A}"}),
+            json!({"path": "x"}),
+            json!({"path": "/x/a:b", "name": "ab"}),
+        ] {
+            assert!(b("agent-skill@1", bad.clone()).is_err(), "{bad}");
+        }
+    }
+
     fn host_mount(config: &str) -> Result<CapBody> {
         let k = one_cap(&format!(
             r#"{{"type":"com.docker.sandbox/host-mount@1","config":{config}}}"#
@@ -1208,13 +1338,12 @@ mod tests {
         assert!(l.install.iter().all(|h| h.clean_env));
         assert!(l.startup.iter().all(|h| !h.clean_env));
 
-        // agent-skills is unsupported but its optional flag survives.
         let skills = k
             .caps
             .iter()
             .find(|c| c.ty.ends_with("agent-skills@1"))
             .unwrap();
-        assert!(matches!(skills.body, CapBody::Unsupported) && skills.optional);
+        assert!(matches!(skills.body, CapBody::AgentSkills { .. }) && skills.optional);
 
         let ctx: Vec<_> = k
             .caps

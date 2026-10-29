@@ -304,8 +304,59 @@ pub fn prepare_create<R: Runner>(
             &req.credential_hosts,
         )?);
     }
+    let wants = skill_wants(&req.agent, kits);
+    let mut bundled: Vec<&crate::kits::resolve::Bundled> =
+        kits.map_or(Vec::new(), |p| p.merged.bundled.iter().collect());
+    if wants.is_empty() {
+        if let Some(b) = bundled.iter().find(|b| !b.optional) {
+            bail!(
+                "kit {}: skill {} needs a skills directory: no agent-skills@1 in this sandbox",
+                b.kit,
+                b.name
+            );
+        }
+        for b in &bundled {
+            eprintln!(
+                "note: kit {}: skipping skill {}: no skills directory in this sandbox",
+                b.kit, b.name
+            );
+        }
+        bundled.clear();
+    }
+    let label = crate::skills::plan(req.skills_mode, &wants, !bundled.is_empty());
+    // The first start's first step, so it runs before every install hook and after the start's
+    // setup linked the store (a store entry of the same name is then taken). As root, like the
+    // store's links; the script hands the links to the agent.
+    // Bundled skills come from kits, and kits always make a first start.
+    debug_assert!(bundled.is_empty() || first_start.is_some());
+    if !bundled.is_empty()
+        && let Some(first) = first_start.as_mut()
+    {
+        let skills: Vec<(String, String, bool)> = bundled
+            .iter()
+            .map(|b| (b.name.clone(), b.source.clone(), b.optional))
+            .collect();
+        first.steps.install.insert(
+            0,
+            crate::kits::apply::InstallStep {
+                label: "bundled agent skills".into(),
+                kit: None,
+                user: None,
+                script: crate::skills::bundled_script(&label.dirs, &skills),
+                relay_stderr: true,
+            },
+        );
+    }
+    req.skills = (!label.dirs.is_empty()).then(|| crate::skills::Setup {
+        store: crate::skills::store::Store::new(&ctx.paths).dir,
+        label,
+    });
     // After every check, so a refused create makes no directories.
     host_mount::create_managed(&host_dirs)?;
+    // Created empty so it can be mounted; `off` mounts nothing.
+    if req.skills.as_ref().is_some_and(|s| s.label.mounts_store()) {
+        crate::skills::store::Store::new(&ctx.paths).ensure()?;
+    }
     if !added.is_empty() {
         // The last fallible step, so an error here leaves no rules for `create` to roll back.
         policy.save(&ctx.paths)?;
@@ -317,6 +368,30 @@ pub fn prepare_create<R: Runner>(
         eprintln!("{note}");
     }
     Ok((added, first_start))
+}
+
+/// The built-in agent's skills directory (for a preset workload or no kits) as a read-write
+/// request (the user's mode decides), then the kits' `agent-skills@1` directories.
+fn skill_wants(agent: &str, kits: Option<&Plan>) -> Vec<crate::skills::Want> {
+    let preset = kits.is_none_or(|p| crate::kits::apply::is_preset(&p.workload));
+    let mut wants: Vec<crate::skills::Want> = preset
+        .then(|| crate::agents::find(agent).and_then(|a| a.skills_dir))
+        .flatten()
+        .map(|p| crate::skills::Want {
+            path: p.to_string(),
+            readwrite: true,
+            builtin: true,
+        })
+        .into_iter()
+        .collect();
+    if let Some(p) = kits {
+        wants.extend(p.merged.skill_dirs.iter().map(|d| crate::skills::Want {
+            path: d.path.clone(),
+            readwrite: d.readwrite,
+            builtin: false,
+        }));
+    }
+    wants
 }
 
 /// Sets `req.ssh_agent` from the kits' `ssh-agent@1` grant: refused when a required phase has no
@@ -1068,6 +1143,7 @@ mod tests {
                     kit: Some("k".into()),
                     user: None,
                     script: "npm i".into(),
+                    relay_stderr: false,
                 }],
                 ..Default::default()
             },

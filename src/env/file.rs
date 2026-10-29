@@ -174,7 +174,8 @@ pub struct SandboxOptions {
     #[serde(default, deserialize_with = "opt_text")]
     pub pull_policy: Option<String>,
     pub profile: Option<Value>,
-    pub skills: Option<Value>,
+    #[serde(default, deserialize_with = "opt_text")]
+    pub skills: Option<String>,
     pub display: Option<Value>,
     pub gpu: Option<Value>,
     pub usb: Option<Value>,

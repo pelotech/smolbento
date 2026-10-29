@@ -8,6 +8,7 @@ pub mod kits;
 pub mod policy;
 pub mod sandbox;
 pub mod secrets;
+pub mod skills;
 pub mod smolvm;
 pub mod workspace;
 

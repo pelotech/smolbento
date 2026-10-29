@@ -274,6 +274,7 @@ fn needs_recreate(kit: &Kit) -> Result<Vec<&'static str>> {
             CapBody::Port { .. } => "ports",
             CapBody::Volume { .. } => "volumes",
             CapBody::HostMount { .. } => "host mounts",
+            CapBody::AgentSkills { .. } | CapBody::AgentSkill { .. } => "agent skills",
             // The agent socket is mounted at create.
             CapBody::SshAgent { .. } => "SSH agent",
             CapBody::Resources { .. } => "resources",
@@ -1248,6 +1249,22 @@ mod tests {
         );
         let e = sbt(&mut t.ctx, &["kit", "add", "dev", "./hm", "--yes"]).unwrap_err();
         assert_eq!(format!("{e:#}"), "recreate required: host mounts");
+        assert!(dev_calls(&t).is_empty(), "{:#?}", dev_calls(&t));
+    }
+
+    #[test]
+    fn adding_a_mixin_with_a_bundled_skill_needs_a_recreate() {
+        let mut t = kit_env();
+        dev_sandbox(&t, BASE);
+        v3_kit(
+            &t,
+            "sk",
+            r#"{"schemaVersion":"3","kind":"mixin","name":"sk","capabilities":[
+                {"type":"com.docker.sandbox/agent-skill@1","config":{"path":"/usr/share/x/pr"}}]}"#,
+            &[],
+        );
+        let e = sbt(&mut t.ctx, &["kit", "add", "dev", "./sk", "--yes"]).unwrap_err();
+        assert_eq!(format!("{e:#}"), "recreate required: agent skills");
         assert!(dev_calls(&t).is_empty(), "{:#?}", dev_calls(&t));
     }
 

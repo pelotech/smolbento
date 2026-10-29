@@ -26,6 +26,7 @@ create claude . --deny-network evil.com,10.0.0.0/8 --deny-network tracker.exampl
 create shell . --kit ./my-kit --kit ghcr.io/example/kit:1 --kit-arg kit.key=value
 create shell --kit ./my-kit --kit-args-file kit.env
 create --mount /tmp:/home/agent/x shell
+create claude . --skills readwrite
 exec my-sandbox ls -la
 exec -it my-sandbox bash
 exec -u root -w /tmp -e A=1 my-sandbox env
@@ -131,3 +132,16 @@ diagnose
 # Docker Cloud (parse; exit 2)
 login
 move my-sandbox --to cloud
+# skills
+skills ls
+skills ls --format json
+skills ls --json -q
+skills add anthropics/skills --skill frontend-design --skill pdf
+skills add https://github.com/anthropics/skills --force
+skills add anthropics/skills -s pdf,docx
+skills import --dry-run
+skills import -f
+skills rm my-skill
+skills rm --force my-skill
+skills update
+skills update my-skill

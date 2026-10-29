@@ -1,0 +1,18 @@
+---
+source: tests/help.rs
+expression: help(&path)
+---
+Update skills added from repositories
+
+Usage: sbt skills update [OPTIONS] [SKILLS]...
+
+Arguments:
+  [SKILLS]...
+
+
+Options:
+  -D, --debug
+          Print each smolvm command line
+
+  -h, --help
+          Print help

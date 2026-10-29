@@ -52,7 +52,7 @@ pub enum Cmd {
     Rm(RmArgs),
     /// Remove stopped sandboxes
     Prune(PruneArgs),
-    /// Remove every sandbox and smolbento's session state
+    /// Remove every sandbox, smolbento's session state and the shared skills store
     Reset(ResetArgs),
     /// Copy files between the host and a sandbox
     Cp(CpArgs),
@@ -87,8 +87,9 @@ pub enum Cmd {
     Env(EnvCmd),
     /// Sandbox templates (not implemented yet)
     Template(Passthrough),
-    /// Agent skills (not implemented yet)
-    Skills(Passthrough),
+    /// Manage skills shared with agents in sandboxes (experimental)
+    #[command(subcommand)]
+    Skills(SkillsCmd),
     /// SSH access (not implemented yet)
     Setup(Passthrough),
     /// Dashboard (not implemented yet)
@@ -491,7 +492,8 @@ pub struct SandboxOpts {
     /// 'sbt policy ls <NAME>' or 'sbt policy rm network --sandbox <NAME> --resource <HOST>'
     #[arg(long = "deny-network", value_name = "HOST", value_delimiter = ',')]
     pub deny_network: Vec<String>,
-    /// Agent skills: off, readonly or readwrite (not implemented yet)
+    /// Shared skills: off, readonly (store linked in read-only) or readwrite (store mounted over
+    /// the agent's skills directory). Default: skills.defaultMode
     #[arg(long)]
     pub skills: Option<String>,
     /// Static MCP servers (not implemented yet)
@@ -514,10 +516,7 @@ pub struct SandboxOpts {
 impl SandboxOpts {
     /// Rejects flags from later phases and Docker Cloud-only flags.
     pub fn check_supported(&self) -> Result<()> {
-        let pending = [
-            (self.skills.is_some(), "--skills"),
-            (self.static_mcp.is_some(), "--static-mcp"),
-        ];
+        let pending = [(self.static_mcp.is_some(), "--static-mcp")];
         if let Some((_, flag)) = pending.iter().find(|(set, _)| *set) {
             return Err(Unsupported(format!("{flag} is not implemented yet")).into());
         }
@@ -875,6 +874,74 @@ pub enum ApprovalCmd {
         #[arg(long)]
         sandbox: Option<String>,
     },
+}
+
+/// `sbt skills` (sbx's are experimental too).
+#[derive(Debug, Subcommand)]
+pub enum SkillsCmd {
+    /// Add skills from a Git repository
+    #[command(visible_alias = "a")]
+    Add(SkillsAddArgs),
+    /// Import skills from supported agent directories
+    Import(SkillsImportArgs),
+    /// List installed skills
+    #[command(visible_alias = "list")]
+    Ls(SkillsLsArgs),
+    /// Remove installed skills
+    #[command(visible_alias = "remove")]
+    Rm(SkillsRmArgs),
+    /// Update skills added from repositories
+    #[command(visible_alias = "upgrade")]
+    Update(SkillsUpdateArgs),
+}
+
+#[derive(Debug, Args)]
+pub struct SkillsAddArgs {
+    /// Git URL or GitHub owner/repository
+    pub repository: String,
+    /// Add only the named skill (repeatable or comma-separated)
+    #[arg(short = 's', long = "skill", value_delimiter = ',')]
+    pub skill: Vec<String>,
+    /// Overwrite existing skills without prompting
+    #[arg(short = 'f', long)]
+    pub force: bool,
+}
+
+#[derive(Debug, Args)]
+pub struct SkillsImportArgs {
+    /// Preview which skills would be imported without copying anything
+    #[arg(long)]
+    pub dry_run: bool,
+    /// Overwrite existing skills without prompting
+    #[arg(short = 'f', long)]
+    pub force: bool,
+}
+
+#[derive(Debug, Args)]
+pub struct SkillsLsArgs {
+    /// Output format: table, json or yaml
+    #[arg(long, value_enum)]
+    pub format: Option<KitFormat>,
+    /// Output in JSON format
+    #[arg(long)]
+    pub json: bool,
+    /// Only display skill names
+    #[arg(short = 'q', long)]
+    pub quiet: bool,
+}
+
+#[derive(Debug, Args)]
+pub struct SkillsRmArgs {
+    #[arg(required = true)]
+    pub skills: Vec<String>,
+    /// Skip confirmation prompts
+    #[arg(short = 'f', long)]
+    pub force: bool,
+}
+
+#[derive(Debug, Args)]
+pub struct SkillsUpdateArgs {
+    pub skills: Vec<String>,
 }
 
 #[derive(Debug, Subcommand)]

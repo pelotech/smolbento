@@ -141,6 +141,16 @@ pub enum CapBody {
         sign: Vec<String>,
         authenticate: Vec<String>,
     },
+    /// `agent-skills@1`: a directory the agent reads skills from.
+    AgentSkills {
+        path: String,
+        readwrite: bool,
+    },
+    /// `agent-skill@1`: a skill in the image at `source`, exposed as `name`.
+    AgentSkill {
+        source: String,
+        name: String,
+    },
     /// Known-unsupported or unknown type.
     Unsupported,
 }

@@ -18,6 +18,7 @@ pub(crate) mod progress;
 mod run;
 pub(crate) mod secret;
 mod settings;
+mod skills;
 #[cfg(test)]
 pub(crate) mod testutil;
 mod upload_pack;
@@ -209,6 +210,7 @@ pub fn dispatch<R: Runner>(ctx: &mut Ctx<R>, cli: Cli) -> Result<i32> {
         Cmd::Settings(s) => settings::run(ctx, s),
         Cmd::Policy(p) => policy::run(ctx, p),
         Cmd::Secret(s) => secret::run(ctx, s),
+        Cmd::Skills(s) => skills::run(ctx, s),
         Cmd::Ports(a) => ports::run(ctx, &a),
         Cmd::Kit(k) => kit::run(ctx, k),
         Cmd::Env(e) => env::run(ctx, e),
@@ -351,14 +353,15 @@ mod tests {
         let err = sbt(&mut t.ctx, &["move", "x", "--to", "cloud"]).unwrap_err();
         assert!(err.to_string().contains("Docker Cloud"));
         assert_eq!(exit_code(&err), 2);
-        let Some(Cmd::Run(run)) = Cli::try_parse_from(["sbt", "run", "claude", "--skills", "off"])
-            .unwrap()
-            .command
+        let Some(Cmd::Run(run)) =
+            Cli::try_parse_from(["sbt", "run", "claude", "--static-mcp", "x"])
+                .unwrap()
+                .command
         else {
             panic!("expected run");
         };
         let err = run.opts.check_supported().unwrap_err();
-        assert_eq!(err.to_string(), "--skills is not implemented yet");
+        assert_eq!(err.to_string(), "--static-mcp is not implemented yet");
         assert_eq!(exit_code(&err), 2);
     }
 

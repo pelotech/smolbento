@@ -285,7 +285,6 @@ fn check_supported(f: &EnvFile) -> Result<()> {
     if let Some(o) = &f.sandbox_options {
         let opts = [
             ("profile", o.profile.is_some()),
-            ("skills", o.skills.is_some()),
             ("display", o.display.is_some()),
             ("gpu", o.gpu.is_some()),
             ("usb", o.usb.is_some()),

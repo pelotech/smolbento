@@ -89,6 +89,8 @@ fn base_request<R: Runner>(
         .iter()
         .map(|p| options::parse_publish(p, &options::free_port))
         .collect::<Result<Vec<_>>>()?;
+    // Before any smolvm call, so a bad value fails early.
+    let skills_mode = crate::skills::resolve_mode(opts.skills.as_deref(), &ctx.settings)?;
 
     Ok(CreateRequest {
         name,
@@ -102,6 +104,7 @@ fn base_request<R: Runner>(
         cpus_set: opts.cpus.is_some(),
         memory_set: opts.memory.is_some(),
         host_mounts,
+        skills_mode,
         ..Default::default()
     })
 }
@@ -589,7 +592,7 @@ pub fn prune<R: Runner>(ctx: &mut Ctx<R>, a: &PruneArgs) -> Result<i32> {
 pub fn reset<R: Runner>(ctx: &mut Ctx<R>, a: &ResetArgs) -> Result<i32> {
     confirm(
         ctx,
-        "Remove every sandbox and smolbento's session state?",
+        "Remove every sandbox, smolbento's session state and the shared skills store?",
         a.force,
     )?;
     let all = sandbox::list(&ctx.vm)?;
@@ -597,9 +600,12 @@ pub fn reset<R: Runner>(ctx: &mut Ctx<R>, a: &ResetArgs) -> Result<i32> {
         remove(ctx, sb, !a.preserve_secrets)?;
     }
     let _ = std::fs::remove_dir_all(ctx.paths.sessions());
+    // A store that won't go must not keep the secrets from being forgotten.
+    let wiped = crate::skills::store::Store::new(&ctx.paths).wipe();
     if !a.preserve_secrets {
         super::secret::forget_all(ctx)?;
     }
+    wiped?;
     Ok(0)
 }
 
@@ -835,6 +841,11 @@ mod tests {
             pair("-v"),
             vec![
                 format!("{ws}:{ws}"),
+                // Skills default to readonly: the store, shared read-only.
+                format!(
+                    "{}:/run/sbx/skills-shared:ro",
+                    t.ctx.paths.skills_store().display()
+                ),
                 "/var/lib/docker".into(),
                 "/var/lib/containerd".into()
             ]
@@ -1854,6 +1865,17 @@ SETUP
         assert_eq!(deletes(&t), vec!["a-fork-1", "a-fork-2", "a"]);
     }
 
+    #[test]
+    fn reset_removes_the_skills_store() {
+        let mut t = test_env(&[]);
+        t.ctx.vm.runner().ok(&["machine", "ls", "--json"], "[]");
+        let store = t.ctx.paths.skills_store();
+        std::fs::create_dir_all(store.join("a")).unwrap();
+        std::fs::create_dir_all(t.ctx.paths.skills_metadata()).unwrap();
+        sbt(&mut t.ctx, &["reset", "-f"]).unwrap();
+        assert!(!store.exists() && !t.ctx.paths.skills_metadata().exists());
+    }
+
     fn fixture(name: &str) -> String {
         format!(
             "{}/tests/fixtures/kits/v2/{name}",
@@ -2631,6 +2653,349 @@ SETUP
     fn mode(path: &std::path::Path) -> u32 {
         use std::os::unix::fs::PermissionsExt;
         std::fs::metadata(path).unwrap().permissions().mode() & 0o7777
+    }
+
+    /// Creates `args` (a `claude-proj` or `shell-proj` sandbox) with `env`; returns the env, the
+    /// skills `-v` values and the `sbx.skills` label.
+    fn skills_create(
+        env: &[(&str, &str)],
+        args: &[&str],
+    ) -> (TestEnv, anyhow::Result<i32>, Vec<String>, Option<String>) {
+        let mut all = vec![("SMOLBENTO_DOCKER", "false")];
+        all.extend_from_slice(env);
+        let mut t = test_env(&all);
+        let agent = args[1];
+        let fake = t.ctx.vm.runner();
+        fake.ok(
+            &["machine", "status"],
+            &json(
+                &format!("sbx-{agent}-proj"),
+                "created",
+                &format!("{agent}-proj"),
+            ),
+        );
+        fake.once_fail(&["machine", "status"], "NOT_FOUND", "vm not found");
+        let r = sbt(&mut t.ctx, args);
+        if r.is_err() {
+            return (t, r, vec![], None);
+        }
+        let store = t.ctx.paths.skills_store().display().to_string();
+        let call = t
+            .ctx
+            .vm
+            .runner()
+            .calls()
+            .into_iter()
+            .find(|c| c.starts_with(&["machine".to_string(), "create".to_string()]))
+            .expect("a machine create");
+        let value = |flag: &str| -> Vec<String> {
+            call.windows(2)
+                .filter(|w| w[0] == flag)
+                .map(|w| w[1].clone())
+                .collect()
+        };
+        let mounts = value("-v")
+            .into_iter()
+            .filter(|v| v.starts_with(&format!("{store}:")))
+            .collect();
+        let label = value("--label")
+            .into_iter()
+            .find_map(|l| l.strip_prefix("sbx.skills=").map(String::from));
+        (t, r, mounts, label)
+    }
+
+    #[test]
+    fn create_shares_skills_by_mode() {
+        use crate::skills::{Access, Label, Mode, Shared};
+        let claude = "/home/agent/.claude/skills";
+        // (env, args, the store's mount point, the label's mode and access)
+        type Case<'a> = (
+            &'a [(&'a str, &'a str)],
+            &'a [&'a str],
+            Option<&'a str>,
+            Mode,
+            Shared,
+            Access,
+        );
+        let cases: [Case; 5] = [
+            (
+                &[],
+                &["create", "claude", "."],
+                Some("/run/sbx/skills-shared:ro"),
+                Mode::Readonly,
+                Shared::Ro,
+                Access::Link,
+            ),
+            (
+                &[],
+                &["create", "claude", ".", "--skills", "readwrite"],
+                Some(claude),
+                Mode::Readwrite,
+                Shared::None,
+                Access::Rw,
+            ),
+            (
+                &[],
+                &["create", "claude", ".", "--skills", "off"],
+                None,
+                Mode::Off,
+                Shared::None,
+                Access::None,
+            ),
+            (
+                &[("SMOLBENTO_SKILLS_DEFAULT_MODE", "off")],
+                &["create", "claude", "."],
+                None,
+                Mode::Off,
+                Shared::None,
+                Access::None,
+            ),
+            (
+                &[("SMOLBENTO_SKILLS_DEFAULT_MODE", "off")],
+                &["create", "claude", ".", "--skills", "readonly"],
+                Some("/run/sbx/skills-shared:ro"),
+                Mode::Readonly,
+                Shared::Ro,
+                Access::Link,
+            ),
+        ];
+        for (env, args, mount, want_mode, shared, access) in cases {
+            let (t, r, mounts, label) = skills_create(env, args);
+            r.unwrap();
+            let store = t.ctx.paths.skills_store();
+            let want: Vec<String> = mount
+                .map(|m| format!("{}:{m}", store.display()))
+                .into_iter()
+                .collect();
+            assert_eq!(mounts, want, "{args:?}");
+            let label = Label::from_label(&label.expect("an sbx.skills label")).unwrap();
+            assert_eq!(label.mode, want_mode, "{args:?}");
+            assert_eq!(label.shared, shared, "{args:?}");
+            assert_eq!(label.dirs.len(), 1, "{args:?}");
+            assert_eq!(label.dirs[0].path, claude);
+            assert_eq!(label.dirs[0].access, access, "{args:?}");
+            if access == Access::None {
+                assert!(!store.exists(), "{args:?}");
+            } else {
+                assert_eq!(mode(&store), 0o700, "{args:?}");
+            }
+        }
+
+        let (t, r, mounts, label) = skills_create(&[], &["create", "shell", "."]);
+        r.unwrap();
+        assert!(mounts.is_empty() && label.is_none(), "{mounts:?} {label:?}");
+        assert!(!t.ctx.paths.skills_store().exists());
+
+        let (_, r, _, _) = skills_create(&[], &["create", "claude", ".", "--skills", "bogus"]);
+        assert_eq!(
+            r.unwrap_err().to_string(),
+            "invalid skills mode \"bogus\": use off, readonly or readwrite"
+        );
+    }
+
+    const AS: &str = "com.docker.sandbox/agent-skills@1";
+    const AK: &str = "com.docker.sandbox/agent-skill@1";
+
+    /// An `<agent>-proj` create env with a v3 mixin `./k` (named `k`) whose capabilities are
+    /// `caps` (a JSON list body).
+    fn skills_kit_env(agent: &str, caps: &str) -> TestEnv {
+        let t = kit_env();
+        let fake = t.ctx.vm.runner();
+        fake.ok(
+            &["machine", "status"],
+            &json(
+                &format!("sbx-{agent}-proj"),
+                "created",
+                &format!("{agent}-proj"),
+            ),
+        );
+        fake.once_fail(&["machine", "status"], "NOT_FOUND", "vm not found");
+        let descriptor =
+            format!(r#"{{"schemaVersion":"3","kind":"mixin","name":"k","capabilities":[{caps}]}}"#);
+        v3_kit(&t, "k", &descriptor, &[]);
+        t
+    }
+
+    /// The `sbx.skills` label of the machine create.
+    fn skills_label(t: &TestEnv) -> crate::skills::Label {
+        let call = t
+            .ctx
+            .vm
+            .runner()
+            .calls()
+            .into_iter()
+            .find(|c| c.starts_with(&["machine".to_string(), "create".to_string()]))
+            .unwrap();
+        let label = call
+            .windows(2)
+            .filter(|w| w[0] == "--label")
+            .find_map(|w| w[1].strip_prefix("sbx.skills=").map(String::from))
+            .expect("an sbx.skills label");
+        crate::skills::Label::from_label(&label).unwrap()
+    }
+
+    #[test]
+    fn a_kit_s_bundled_skill_caps_its_directory_and_links_before_install_hooks() {
+        use crate::skills::Access;
+        let caps = format!(
+            r#"{{"type":"{AS}","config":{{"path":"/home/agent/.k/skills"}}}},
+               {{"type":"{AK}","config":{{"path":"/opt/k/review"}}}},
+               {{"type":"com.docker.sandbox/lifecycle@1",
+                 "config":{{"install":[{{"command":"echo hook-ran"}}]}}}}"#
+        );
+        let mut t = skills_kit_env("shell", &caps);
+        sbt(
+            &mut t.ctx,
+            &[
+                "create",
+                "shell",
+                ".",
+                "--kit",
+                "./k",
+                "--skills",
+                "readwrite",
+            ],
+        )
+        .unwrap();
+        let label = skills_label(&t);
+        assert_eq!(label.dirs.len(), 1, "{label:?}");
+        assert_eq!(label.dirs[0].path, "/home/agent/.k/skills");
+        assert_eq!(label.dirs[0].access, Access::Link);
+        // The kit asks for readonly: the shared mount stays read-only under `readwrite`.
+        assert_eq!(label.shared, crate::skills::Shared::Ro);
+        let (mounts, _) = create_mounts(&t);
+        let store = t.ctx.paths.skills_store().display().to_string();
+        assert!(
+            mounts.contains(&format!("{store}:/run/sbx/skills-shared:ro")),
+            "{mounts:?}"
+        );
+        let lines = t.ctx.vm.runner().call_lines();
+        let bundled = lines
+            .iter()
+            .position(|l| l.starts_with("machine exec") && l.contains("ln -sn '/opt/k/review'"))
+            .expect("the bundled skills step");
+        assert!(
+            lines[bundled].contains(" -u root ") && lines[bundled].contains(" -- sh -c "),
+            "{}",
+            lines[bundled]
+        );
+        let hook = lines
+            .iter()
+            .position(|l| l.starts_with("machine exec") && l.contains("echo hook-ran"))
+            .expect("the install hook");
+        assert!(bundled < hook, "{lines:#?}");
+    }
+
+    /// The store's `-v` targets (`guest[:ro]`) of a `shell-proj` create with kit `k` and `caps`.
+    fn kit_skills_mounts(caps: &str, mode: &str) -> (Vec<String>, crate::skills::Label) {
+        let mut t = skills_kit_env("shell", caps);
+        sbt(
+            &mut t.ctx,
+            &["create", "shell", ".", "--kit", "./k", "--skills", mode],
+        )
+        .unwrap();
+        let store = format!("{}:", t.ctx.paths.skills_store().display());
+        let (mounts, _) = create_mounts(&t);
+        let mounts = mounts
+            .iter()
+            .filter_map(|m| m.strip_prefix(&store).map(String::from))
+            .collect();
+        (mounts, skills_label(&t))
+    }
+
+    /// sbx's kit table: without a bundled skill the store is mounted over each kit directory
+    /// (no links); with one, every directory links and the shared mount takes the widest access.
+    #[test]
+    fn kit_skills_directories_follow_sbx_s_table() {
+        use crate::skills::{Access, Shared};
+        let dirs = format!(
+            r#"{{"type":"{AS}","config":{{"path":"/r"}}}},
+               {{"type":"{AS}","config":{{"path":"/w","mode":"readwrite"}}}}"#
+        );
+        let bundled = format!(r#"{dirs},{{"type":"{AK}","config":{{"path":"/opt/k/review"}}}}"#);
+        let access =
+            |l: &crate::skills::Label| -> Vec<Access> { l.dirs.iter().map(|d| d.access).collect() };
+        let (m, l) = kit_skills_mounts(&dirs, "readwrite");
+        assert_eq!(m, ["/r:ro", "/w"]);
+        assert_eq!(
+            (l.shared, access(&l)),
+            (Shared::None, vec![Access::Ro, Access::Rw])
+        );
+        let (m, l) = kit_skills_mounts(&dirs, "readonly");
+        assert_eq!(m, ["/r:ro", "/w:ro"]);
+        assert_eq!(access(&l), [Access::Ro, Access::Ro]);
+        let (m, l) = kit_skills_mounts(&dirs, "off");
+        assert!(m.is_empty(), "{m:?}");
+        assert_eq!(access(&l), [Access::None, Access::None]);
+        let (m, l) = kit_skills_mounts(&bundled, "readwrite");
+        assert_eq!(m, ["/run/sbx/skills-shared"]);
+        assert_eq!(
+            (l.shared, access(&l)),
+            (Shared::Rw, vec![Access::Link, Access::Link])
+        );
+        let (m, l) = kit_skills_mounts(&bundled, "readonly");
+        assert_eq!(m, ["/run/sbx/skills-shared:ro"]);
+        assert_eq!(
+            (l.shared, access(&l)),
+            (Shared::Ro, vec![Access::Link, Access::Link])
+        );
+        let (m, l) = kit_skills_mounts(&bundled, "off");
+        assert!(m.is_empty(), "{m:?}");
+        assert_eq!(
+            (l.shared, access(&l)),
+            (Shared::None, vec![Access::None, Access::None])
+        );
+    }
+
+    #[test]
+    fn a_bundled_skill_without_a_skills_directory_fails_or_is_skipped() {
+        let required = format!(r#"{{"type":"{AK}","config":{{"path":"/opt/k/review"}}}}"#);
+        let mut t = skills_kit_env("shell", &required);
+        let e = sbt(&mut t.ctx, &["create", "shell", ".", "--kit", "./k"]).unwrap_err();
+        assert_eq!(
+            format!("{e:#}"),
+            "kit k: skill review needs a skills directory: no agent-skills@1 in this sandbox"
+        );
+        let lines = t.ctx.vm.runner().call_lines();
+        assert!(
+            !lines.iter().any(|l| l.starts_with("machine create")),
+            "{lines:#?}"
+        );
+
+        let optional =
+            format!(r#"{{"type":"{AK}","optional":true,"config":{{"path":"/opt/k/review"}}}}"#);
+        let mut t = skills_kit_env("shell", &optional);
+        // Prints `note: kit k: skipping skill review: no skills directory in this sandbox`.
+        sbt(&mut t.ctx, &["create", "shell", ".", "--kit", "./k"]).unwrap();
+        let lines = t.ctx.vm.runner().call_lines();
+        assert!(lines.iter().any(|l| l.starts_with("machine create")));
+        assert!(!lines.iter().any(|l| l.contains("ln -sn ")), "{lines:#?}");
+    }
+
+    #[test]
+    fn a_kit_s_readonly_request_does_not_cap_the_built_in_readwrite_one() {
+        use crate::skills::Access;
+        let caps = format!(
+            r#"{{"type":"{AS}","config":{{"path":"/home/agent/.claude/skills","mode":"readonly"}}}}"#
+        );
+        let mut t = skills_kit_env("claude", &caps);
+        sbt(
+            &mut t.ctx,
+            &[
+                "create",
+                "claude",
+                ".",
+                "--kit",
+                "./k",
+                "--skills",
+                "readwrite",
+            ],
+        )
+        .unwrap();
+        let label = skills_label(&t);
+        assert_eq!(label.dirs.len(), 1, "{label:?}");
+        assert_eq!(label.dirs[0].path, "/home/agent/.claude/skills");
+        assert_eq!(label.dirs[0].access, Access::Rw);
     }
 
     #[test]
