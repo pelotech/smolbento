@@ -114,7 +114,8 @@ fn add_remote_and_branch<R: Runner>(
         // A child inherits its source's labels; a fork's age is its own.
         (labels::CREATED.to_string(), ctx.now.to_string()),
         // The copy keeps the parent's bridge socket path, but a session serves each sandbox at
-        // its own (`bridge::host_socket`): a fork gets no bridge (no shims installed at starts).
+        // its own (`bridge::host_socket`): a fork gets no shims at starts, though its processes
+        // can still reach the parent's socket while the parent is attached.
         (labels::BRIDGE.to_string(), "false".to_string()),
     ];
     // The child inherits the parent's create-time -e values: give it its own identity.

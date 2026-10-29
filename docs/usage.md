@@ -262,9 +262,10 @@ git diff | wl-copy                          # or xclip, xsel, pbcopy, clip.exe
   `xsel -o` print nothing), and neither is pasting images. A copy while nobody is attached fails
   with `<command>: failed to write host clipboard`.
 - Browser logins work: when an opened URL's `redirect_uri` is `http://localhost:PORT/…` or
-  `http://127.0.0.1:PORT/…`, smolbento listens on your machine's `127.0.0.1:PORT` for the rest of
-  the session and passes the browser's callback to the agent's callback server in the sandbox.
-  If that port is already taken on your machine, it warns and the URL still opens. Callbacks
+  `http://127.0.0.1:PORT/…`, smolbento listens on your machine's `127.0.0.1:PORT` for 10 minutes
+  (or until the session ends) and passes the browser's callback to the agent's callback server
+  in the sandbox. If something on your machine already answers on that port, it warns and the
+  URL still opens. A session relays at most 4 ports; it warns once and ignores the rest. Callbacks
   that carry a body (`response_mode=form_post`) lose it; the usual query-string redirects work.
 - Over SSH without a forwarded display (on Linux, `DISPLAY` or `WAYLAND_DISPLAY`; on macOS, always
   over SSH) nothing is served, so URLs are printed instead.
@@ -272,7 +273,13 @@ git diff | wl-copy                          # or xclip, xsel, pbcopy, clip.exe
   works.
 - The shims (`xdg-open`, `xclip`, `xsel`, `wl-copy`, `wl-paste`, `pbcopy`, `clip.exe`) are put
   in `/usr/local/bin` on every start and need `curl` in the image; without it they fall back.
-- Sandboxes created before this feature, and forks, have no bridge. Recreate a sandbox to get it.
+- The first attached session serves the bridge. A second one attached at the same time doesn't,
+  and when the first exits the bridge stops until the next `sbt run` or `sbt exec -it`.
+- Sandboxes created before this feature have no bridge. Recreate a sandbox to get it. A sandbox
+  created while `/tmp/sbt-<uid>` isn't a private directory owned by you (0700) gets no bridge,
+  with a warning.
+- Forks don't install the shims, but they keep the parent's socket mount: while the parent is
+  attached, a process in a fork can still use the parent's bridge.
 
 ## Docker inside a sandbox
 
