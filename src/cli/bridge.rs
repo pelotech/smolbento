@@ -25,7 +25,7 @@ fn serve<R: Runner>(ctx: &Ctx<R>, name: &str) -> Result<Server> {
         &ctx.env,
         ctx.settings.bool("browser.enabled")?,
         &ctx.settings.value("smolvm.path")?,
-        &sb.machine,
+        &sb,
     );
     bridge::serve(&bridge::host_socket(sb.name()), handlers)?
         .with_context(|| format!("another session already serves sandbox '{name}'s bridge"))

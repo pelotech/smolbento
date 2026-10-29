@@ -27,12 +27,12 @@ pub fn has_display(env: &BTreeMap<String, String>, linux: bool) -> bool {
 }
 
 /// Handlers that run the host's browser and clipboard commands, or the env overrides, and relay
-/// login callbacks into `machine` with the `smolvm` binary.
+/// login callbacks into the sandbox with the `smolvm` binary.
 pub fn handlers(
     env: &BTreeMap<String, String>,
     browser_enabled: bool,
     smolvm: &str,
-    machine: &str,
+    sb: &Sandbox,
 ) -> Handlers {
     let open_cmd = env.get(OPEN_CMD).cloned();
     let copy_cmd = env.get(COPY_CMD).cloned();
@@ -40,14 +40,21 @@ pub fn handlers(
         browser_enabled,
         open: Box::new(move |url| open_url(open_cmd.as_deref(), url)),
         copy: Box::new(move |text| copy_text(copy_cmd.as_deref(), text)),
-        relay: relay(smolvm, machine),
+        relay: relay(smolvm, &sb.machine, relay_user(sb)),
     }
 }
 
 /// Starts the login callback relays; they stop when the handlers are dropped (the server stops).
-fn relay(smolvm: &str, machine: &str) -> Relay {
+/// Who replays a login callback: a v3 workload's image user (`sbx.user`), else `agent`, as for
+/// the session itself. Any user reaches the guest's loopback; the image may have no `agent`.
+fn relay_user(sb: &Sandbox) -> &str {
+    sb.meta.user.as_deref().unwrap_or("agent")
+}
+
+fn relay(smolvm: &str, machine: &str, user: &str) -> Relay {
     let runner = ProcessRunner::new(smolvm);
-    let relays = Mutex::new(Relays::new(Box::new(move |args| runner.run(args)), machine));
+    let exec = Box::new(move |args: &[String]| runner.run(args));
+    let relays = Mutex::new(Relays::new(exec, machine, user));
     Box::new(move |port| {
         if let Some(warning) = relays.lock().ok().and_then(|mut r| r.start(port)) {
             eprintln!("{warning}");
@@ -69,7 +76,7 @@ pub fn attach(env: &BTreeMap<String, String>, settings: &Settings, sb: &Sandbox)
     let smolvm = settings
         .value("smolvm.path")
         .unwrap_or_else(|_| "smolvm".into());
-    let h = handlers(env, browser, &smolvm, &sb.machine);
+    let h = handlers(env, browser, &smolvm, sb);
     server::serve(&super::host_socket(sb.name()), h).unwrap_or_else(|e| {
         eprintln!(
             "warning: {}: no browser and clipboard bridge: {e:#}",
@@ -231,7 +238,28 @@ mod tests {
     }
 
     fn test_handlers(vars: &[(&str, &str)], browser: bool) -> Handlers {
-        handlers(&env(vars), browser, "/nonexistent/smolvm", "sbx-test")
+        let sb = Sandbox {
+            meta: Default::default(),
+            machine: "sbx-test".into(),
+            state: crate::smolvm::MachineState::Running,
+            ports: Vec::new(),
+            image: None,
+        };
+        handlers(&env(vars), browser, "/nonexistent/smolvm", &sb)
+    }
+
+    #[test]
+    fn callbacks_are_replayed_as_the_sessions_user() {
+        let mut sb = Sandbox {
+            meta: Default::default(),
+            machine: "sbx-x".into(),
+            state: crate::smolvm::MachineState::Running,
+            ports: Vec::new(),
+            image: None,
+        };
+        assert_eq!(relay_user(&sb), "agent");
+        sb.meta.user = Some("1000:staff".into());
+        assert_eq!(relay_user(&sb), "1000:staff");
     }
 
     fn read(dir: &Path, what: &str) -> String {

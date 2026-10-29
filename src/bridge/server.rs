@@ -209,6 +209,8 @@ impl<S: Stream> Read for Deadline<'_, S> {
 pub(super) struct Request {
     pub method: String,
     pub path: String,
+    /// The `Host` header, which the login relay checks.
+    pub host: Option<String>,
     pub body: Vec<u8>,
 }
 
@@ -257,6 +259,7 @@ fn read_request(r: &mut impl BufRead) -> Result<Request, Response> {
         return Err(bad_request());
     }
     let mut len = 0;
+    let mut host = None;
     for n in 0.. {
         let header = line(r)?;
         if header.is_empty() {
@@ -270,6 +273,8 @@ fn read_request(r: &mut impl BufRead) -> Result<Request, Response> {
             len = value.trim().parse().map_err(|_| bad_request())?;
         } else if name.eq_ignore_ascii_case("transfer-encoding") {
             return Err(bad_request());
+        } else if name.eq_ignore_ascii_case("host") {
+            host = Some(value.trim().to_string());
         }
     }
     if len > MAX_BODY {
@@ -280,6 +285,7 @@ fn read_request(r: &mut impl BufRead) -> Result<Request, Response> {
     Ok(Request {
         method: method.to_string(),
         path: path.to_string(),
+        host,
         body,
     })
 }
@@ -442,6 +448,7 @@ mod tests {
         Request {
             method: "POST".into(),
             path: path.into(),
+            host: None,
             body: body.as_bytes().to_vec(),
         }
     }
@@ -457,9 +464,13 @@ mod tests {
     #[test]
     fn parses_a_post_with_a_body() {
         let raw = b"POST /copy HTTP/1.1\r\nHost: bridge\r\ncontent-length: 5\r\n\r\nhi\nyo";
-        assert_eq!(parse(raw).unwrap(), post("/copy", "hi\nyo"));
-        // No Content-Length: no body.
-        let raw = b"POST /open HTTP/1.1\r\nHost: bridge\r\n\r\n";
+        let want = Request {
+            host: Some("bridge".into()),
+            ..post("/copy", "hi\nyo")
+        };
+        assert_eq!(parse(raw).unwrap(), want);
+        // No Content-Length: no body. No Host.
+        let raw = b"POST /open HTTP/1.1\r\n\r\n";
         assert_eq!(parse(raw).unwrap(), post("/open", ""));
     }
 
