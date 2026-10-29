@@ -8,9 +8,11 @@ use anyhow::{Result, bail};
 use serde::Serialize;
 
 use super::args::{
-    KitFormat, SkillsAddArgs, SkillsCmd, SkillsLsArgs, SkillsRmArgs, SkillsUpdateArgs,
+    KitFormat, SkillsAddArgs, SkillsCmd, SkillsImportArgs, SkillsLsArgs, SkillsRmArgs,
+    SkillsUpdateArgs,
 };
 use super::{Ctx, confirm};
+use crate::skills::import::{Event, scan};
 use crate::skills::repo::{self, Checkout};
 use crate::skills::store::{Source, Store};
 use crate::smolvm::Runner;
@@ -25,8 +27,7 @@ pub fn run<R: Runner>(ctx: &mut Ctx<R>, cmd: SkillsCmd) -> Result<i32> {
         SkillsCmd::Rm(a) => rm(ctx, &store, &a)?,
         SkillsCmd::Add(a) => add(ctx, &store, &a)?,
         SkillsCmd::Update(a) => return update(ctx, &store, &a),
-        // Task 5 implements import.
-        SkillsCmd::Import(_) => bail!("not implemented yet"),
+        SkillsCmd::Import(a) => import(ctx, &store, &a)?,
     }
     Ok(0)
 }
@@ -144,6 +145,83 @@ fn add_url<R: Runner>(
         &ctx.out,
         "Added {n} skill{} into {}",
         if n == 1 { "" } else { "s" },
+        store.dir.display()
+    )?;
+    writeln!(&ctx.out, "{NOTE}")?;
+    Ok(())
+}
+
+fn import<R: Runner>(ctx: &Ctx<R>, store: &Store, a: &SkillsImportArgs) -> Result<()> {
+    let home = ctx
+        .env
+        .get("HOME")
+        .map(PathBuf::from)
+        .ok_or_else(|| anyhow::anyhow!("HOME is not set"))?;
+    let events = scan(&home);
+    let picks: Vec<(&String, &PathBuf)> = events
+        .iter()
+        .filter_map(|e| match e {
+            Event::Pick { name, from } => Some((name, from)),
+            _ => None,
+        })
+        .collect();
+    let mut missing = Vec::new();
+    for e in &events {
+        match e {
+            Event::Pick { name, .. } if a.dry_run => {
+                let verb = if store.has(name) { "replace" } else { "import" };
+                writeln!(&ctx.out, "Would {verb} skill {name:?}")?;
+            }
+            Event::Pick { .. } => {}
+            Event::Duplicate { name, dir } => eprintln!(
+                "warning: skipping skill {name:?} from {}: already imported from an earlier source",
+                dir.display()
+            ),
+            Event::Loose(n) => eprintln!("warning: skipping {n:?}: not a directory"),
+            Event::Missing(d) => missing.push(d),
+        }
+    }
+    // sbx prints the missing-source notices after the picks.
+    for d in missing {
+        eprintln!(
+            "No skills directory found at {}; nothing to import",
+            d.display()
+        );
+    }
+    let n = picks.len();
+    let s = if n == 1 { "" } else { "s" };
+    if a.dry_run {
+        writeln!(
+            &ctx.out,
+            "Dry run: {n} skill{s} would be imported into {}",
+            store.dir.display()
+        )?;
+        return Ok(());
+    }
+    let replacing: Vec<&str> = picks
+        .iter()
+        .filter(|(n, _)| store.has(n))
+        .map(|(n, _)| n.as_str())
+        .collect();
+    if !replacing.is_empty() {
+        let q = format!("Replace {}?", replacing.join(", "));
+        confirm_or_force(
+            ctx,
+            &q,
+            a.force,
+            "stdin is not a terminal; pass --force to skip the confirmation",
+            "import",
+        )?;
+    }
+    let mut sources = store.sources()?;
+    for (name, from) in &picks {
+        store.install(name, from)?;
+        sources.skills.remove(*name);
+    }
+    store.save_sources(&sources)?;
+    writeln!(
+        &ctx.out,
+        "Imported {n} skill{s} into {}",
         store.dir.display()
     )?;
     writeln!(&ctx.out, "{NOTE}")?;
@@ -398,5 +476,66 @@ mod tests {
             ),
             "{e}"
         );
+    }
+
+    #[test]
+    fn import_in_sbx_order_with_warnings() {
+        let home = tempfile::tempdir().unwrap();
+        let h = home.path();
+        for p in [
+            ".agents/skills/beta",
+            ".claude/skills/alpha/scripts",
+            ".claude/skills/beta",
+        ] {
+            std::fs::create_dir_all(h.join(p)).unwrap();
+        }
+        std::fs::write(h.join(".claude/skills/loose.txt"), "x").unwrap();
+        std::os::unix::fs::symlink(
+            h.join(".agents/skills/beta"),
+            h.join(".claude/skills/linked"),
+        )
+        .unwrap();
+        let mut t = test_env(&[("HOME", h.to_str().unwrap())]);
+        let store = t.ctx.paths.skills_store().display().to_string();
+        sbt(&mut t.ctx, &["skills", "import", "--dry-run"]).unwrap();
+        let out = t.stdout();
+        assert_eq!(out.lines().next().unwrap(), "Would import skill \"beta\"");
+        assert!(
+            out.contains("Would import skill \"alpha\"\nWould import skill \"linked\"\n"),
+            "{out}"
+        );
+        assert!(
+            out.ends_with(&format!(
+                "Dry run: 3 skills would be imported into {store}\n"
+            )),
+            "{out}"
+        );
+        assert!(!t.ctx.paths.skills_store().exists());
+        sbt(&mut t.ctx, &["skills", "import"]).unwrap();
+        assert!(
+            t.stdout()
+                .contains(&format!("Imported 3 skills into {store}\n"))
+        );
+        let e = sbt(&mut t.ctx, &["skills", "import"])
+            .unwrap_err()
+            .to_string();
+        assert!(
+            e.starts_with("stdin is not a terminal; pass --force to skip the confirmation"),
+            "{e}"
+        );
+        sbt(&mut t.ctx, &["skills", "import", "-f"]).unwrap();
+    }
+
+    #[test]
+    fn scan_events() {
+        use crate::skills::import::{Event, scan};
+        let home = tempfile::tempdir().unwrap();
+        std::fs::create_dir_all(home.path().join(".claude/skills/a")).unwrap();
+        std::fs::write(home.path().join(".claude/skills/x.txt"), "").unwrap();
+        let ev = scan(home.path());
+        assert!(matches!(&ev[0], Event::Missing(p) if p.ends_with(".agents/skills")));
+        assert!(matches!(&ev[1], Event::Pick { name, .. } if name == "a"));
+        assert!(matches!(&ev[2], Event::Loose(n) if n == "x.txt"));
+        assert_eq!(ev.len(), 7); // 5 missing sources + pick + loose
     }
 }
