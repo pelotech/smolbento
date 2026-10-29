@@ -519,9 +519,10 @@ sbt skills rm pdf
 ```
 
 - `add` clones with your host `git`, so anything git can fetch works, private repositories
-  included. Every directory below the repository root that holds a `SKILL.md` is a skill, named after the directory.
-  `--skill` (repeatable, or comma-separated) picks some. A skill that already exists
-  asks before it's replaced; `-f` skips the question, and without a terminal replacing needs `-f`.
+  included. Every directory below the repository root that holds a `SKILL.md` is a skill, named
+  after the directory. `--skill` (repeatable, or comma-separated) picks some. A skill that already
+  exists asks before it's replaced; `-f` skips the question, and without a terminal replacing
+  needs `-f`.
 - `import` copies the skills from `~/.agents/skills`, `~/.claude/skills`,
   `~/.config/opencode/skills`, `~/.copilot/skills`, `~/.cursor/skills` and `~/.factory/skills`, in
   that order. When two directories have the same skill, the earlier one wins and the other gets a
@@ -595,9 +596,9 @@ A kit can ask for more skills directories and ship skills of its own:
   smolbento only links bundled skills and never runs anything in them.
 - When a kit bundles skills, every skills directory gets read-only links, even with `readwrite`,
   and is never mounted over. Mounting the store over it would put the kit's skills in your store.
-- The bundled-skill step runs as the kit's user if it names one, else `agent`, so a required
-  bundled skill in an image with neither fails the create. `kit add` refuses kits with either capability: mounts are set at
-  create, so create a new sandbox with the kit.
+- The bundled-skill step runs as the v3 workload's image user, else `agent`, so a required
+  bundled skill in an image with neither fails the create. `kit add` refuses kits with either
+  capability: mounts are set at create, so create a new sandbox with the kit.
 
 ## Environments (sbxenv.yaml)
 

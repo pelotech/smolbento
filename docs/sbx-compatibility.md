@@ -76,7 +76,7 @@ works too). Differences:
 | `add` | Clones the repository itself | Runs your host `git` (shallow clone), so any URL git accepts over HTTPS or SSH works. `owner/repo` means GitHub; `file://` is refused as in sbx |
 | `update` message | `Skill "x" is already up to date` | Same. The line for a skill that did change, `Updated skill x`, is a guess: sbx's wording wasn't measured |
 | Bundled skills and `readwrite` | Not measured | A skills directory that receives bundled `agent-skill@1` skills is never mounted over: with `readwrite` it gets read-only links, because mounting the store over it would put the kit's skills in your store |
-| Who links | The guest's start | A start script run as the sandbox's launch user (a v3 workload's image user, else `agent`); an image with neither gets no shared links, and the start warns. The bundled-skill step runs as the kit's user, else `agent`: a required bundled skill in an image with neither fails the create; an optional one prints `warning: skipping skill NAME: reason` |
+| Who links | The guest's start | A start script run as the sandbox's launch user (a v3 workload's image user, else `agent`); an image with neither gets no shared links, and the start warns. The bundled-skill step runs as the v3 workload's image user, else `agent`: a required bundled skill in an image with neither fails the create; an optional one prints `warning: skipping skill NAME: reason` |
 | Kits | `agent-skills@1`, `agent-skill@1` | Both. Not measured in sbx: how they behave with a real bundled image. `kit add` refuses kits with either |
 | Other agents' directories | From sbx's docs table | The same table, taken from the docs and not measured for copilot, cursor, droid, opencode and devin |
 

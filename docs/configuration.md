@@ -66,7 +66,9 @@ socket that exists; smolbento never starts an agent itself.
 
 `skills.defaultMode` applies when a sandbox is created, when neither `--skills` nor
 `sandboxOptions.skills` says otherwise. An existing sandbox keeps the mode it was created with.
-A value other than `off`, `readonly` or `readwrite` is an error. A bad setting value is reported as `setting skills.defaultMode: ...`; a bad `--skills` or `sandboxOptions.skills` value as `invalid skills mode "x": use off, readonly or readwrite`.
+A value other than `off`, `readonly` or `readwrite` is an error. A bad setting value is reported
+as `setting skills.defaultMode: ...`; a bad `--skills` or `sandboxOptions.skills` value as
+`invalid skills mode "x": use off, readonly or readwrite`.
 
 ## Files
 
