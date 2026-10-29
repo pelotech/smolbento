@@ -1,5 +1,5 @@
 use std::collections::BTreeMap;
-use std::path::PathBuf;
+use std::path::{Path, PathBuf};
 
 use crate::bridge;
 use crate::smolvm::{CreateSpec, Credential, Mount, NetworkSpec, PortMap};
@@ -73,6 +73,9 @@ pub struct CreateRequest {
     pub tmpfs: Vec<String>,
     /// A Smolfile workload kit, passed with `--smolfile`.
     pub smolfile: Option<PathBuf>,
+    /// Created without the browser and clipboard bridge: the host's socket directory isn't
+    /// private (`drop_unsafe_bridge`).
+    pub no_bridge: bool,
 }
 
 impl CreateRequest {
@@ -111,7 +114,7 @@ pub fn meta(req: &CreateRequest) -> Meta {
         long_running: req.long_running,
         host_access: req.host_access,
         // Internal sandboxes (`_builder`) never have a user attached.
-        bridge: !name::is_internal(&req.name),
+        bridge: !req.no_bridge && !name::is_internal(&req.name),
         credential_formats: req.credential_formats.clone(),
         credential_services: req.credential_services.clone(),
         host_mounts: req
@@ -120,6 +123,24 @@ pub fn meta(req: &CreateRequest) -> Meta {
             .map(|(host, guest)| (guest.clone(), host.display().to_string()))
             .collect(),
     }
+}
+
+/// Leaves the bridge out when `private` says the host's socket directory (`/tmp/sbt-<uid>`)
+/// isn't private to this user; returns the warning.
+pub fn drop_unsafe_bridge(
+    req: &mut CreateRequest,
+    private: impl FnOnce(&Path) -> bool,
+) -> Option<String> {
+    let dir = bridge::socket_dir();
+    if !meta(req).bridge || private(&dir) {
+        return None;
+    }
+    req.no_bridge = true;
+    Some(format!(
+        "warning: {} isn't a private directory owned by you; {} gets no browser or clipboard bridge",
+        dir.display(),
+        req.name
+    ))
 }
 
 pub fn spec(req: &CreateRequest) -> CreateSpec {
@@ -271,6 +292,40 @@ mod tests {
             !args.iter().any(|a| a.starts_with("sbx.bridge")),
             "{args:?}"
         );
+    }
+
+    #[test]
+    fn a_socket_dir_that_isnt_private_means_no_bridge() {
+        let mut req = request(false, vec![]);
+        let mut checked = None;
+        let warning = drop_unsafe_bridge(&mut req, |dir| {
+            checked = Some(dir.to_path_buf());
+            false
+        });
+        let dir = bridge::socket_dir();
+        assert_eq!(checked.as_deref(), Some(dir.as_path()));
+        assert_eq!(
+            warning.unwrap(),
+            format!(
+                "warning: {} isn't a private directory owned by you; claude.repo gets no browser \
+                 or clipboard bridge",
+                dir.display()
+            )
+        );
+        let args = spec(&req).to_args();
+        assert!(!args.contains(&"--mount-socket".to_string()), "{args:?}");
+        assert!(
+            !args.iter().any(|a| a.starts_with("sbx.bridge")),
+            "{args:?}"
+        );
+        // A private one keeps it.
+        let mut req = request(false, vec![]);
+        assert_eq!(drop_unsafe_bridge(&mut req, |_| true), None);
+        assert!(spec(&req).to_args().contains(&"--mount-socket".to_string()));
+        // The builder has no bridge to drop: nothing checked.
+        let mut req = request(false, vec![]);
+        req.name = "_builder".into();
+        assert_eq!(drop_unsafe_bridge(&mut req, |_| panic!("checked")), None);
     }
 
     #[test]

@@ -538,7 +538,11 @@ pub fn create<R: Runner>(
     drop_install_rules: impl FnOnce(&[String]) -> Result<NetworkSpec>,
     on: &mut dyn FnMut(Event),
 ) -> Result<Sandbox> {
-    vm.create(&create::spec(req))?;
+    let mut checked = req.clone();
+    if let Some(warning) = create::drop_unsafe_bridge(&mut checked, bridge::private_dir) {
+        eprintln!("{warning}");
+    }
+    vm.create(&create::spec(&checked))?;
     let mut sb = get(vm, &req.name)?;
     let Some(kit) = &plan.kit else {
         start_with(vm, &sb, plan, on)?;
