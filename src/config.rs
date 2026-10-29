@@ -65,6 +65,16 @@ impl Paths {
     pub fn kit_host_mounts(&self) -> PathBuf {
         self.data.join("kit-host-mounts")
     }
+
+    /// The shared agent skills store (`sbt skills`), one directory per skill.
+    pub fn skills_store(&self) -> PathBuf {
+        self.data.join("agent-skills")
+    }
+
+    /// Beside the store: `sources.json`, where repository-added skills came from.
+    pub fn skills_metadata(&self) -> PathBuf {
+        self.data.join("agent-skills-metadata")
+    }
 }
 
 pub struct SettingDef {
