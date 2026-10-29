@@ -459,16 +459,14 @@ fn setup<R: Runner>(
     // the bridge, any shims a fork's disk came with are removed (they'd reach its parent).
     // The socket directory is checked on every start: /tmp can be emptied (macOS does on reboot)
     // and another user can create it first, then the mount would reach them.
+    // The SSH agent's socket is in the same directory: unsafe, nothing serves it this start.
     let dir = bridge::socket_dir();
-    let safe = sb.meta.bridge && private(&dir);
-    if sb.meta.bridge && !safe {
-        eprintln!(
-            "warning: {} isn't a private directory owned by you; {} gets no browser or clipboard \
-             bridge until it is",
-            dir.display(),
-            sb.name()
-        );
+    let agent = sb.meta.ssh_agent.is_some();
+    let dir_ok = (sb.meta.bridge || agent) && private(&dir);
+    for w in unsafe_dir_warnings(sb, &dir, dir_ok) {
+        eprintln!("{w}");
     }
+    let safe = sb.meta.bridge && dir_ok;
     let (shims, what) = if safe {
         (bridge::install_cmd(), "install")
     } else {
@@ -507,6 +505,28 @@ fn setup<R: Runner>(
         run_startup(vm, sb, None)?;
     }
     Ok(())
+}
+
+/// What a start says when the socket directory isn't `private`: per socket the sandbox has.
+fn unsafe_dir_warnings(sb: &Sandbox, dir: &Path, private: bool) -> Vec<String> {
+    let mut out = Vec::new();
+    if private {
+        return out;
+    }
+    let mut warn = |what: &str| {
+        out.push(format!(
+            "warning: {} isn't a private directory owned by you; {} gets no {what} until it is",
+            dir.display(),
+            sb.name()
+        ))
+    };
+    if sb.meta.bridge {
+        warn("browser or clipboard bridge");
+    }
+    if sb.meta.ssh_agent.is_some() {
+        warn("SSH agent");
+    }
+    out
 }
 
 /// Returns the guest's `warning:` lines for the caller to print: the detached-commit fallback's,
@@ -1090,6 +1110,62 @@ mod tests {
             bridge::install_cmd()
         );
         assert!(vm.runner().call_lines().contains(&install));
+    }
+
+    /// A sandbox with an SSH agent: the directory is checked even without the bridge, and an
+    /// unsafe one warns that this start gets no agent.
+    #[test]
+    fn a_start_checks_the_socket_dir_for_the_ssh_agent_too() {
+        let fake = FakeRunner::new();
+        let status = STATUS
+            .replace("\"state\": \"running\"", "\"state\": \"stopped\"")
+            .replace(
+                "\"sbx.docker\"",
+                "\"sbx.ssh-agent\": \"{\\\"runtime\\\":{\\\"sign\\\":null}}\",\n    \"sbx.docker\"",
+            );
+        fake.ok(&["machine", "status"], &status);
+        let vm = Smolvm::new(fake);
+        let sb = get(&vm, "claude-myrepo").unwrap();
+        assert!(sb.meta.ssh_agent.is_some() && !sb.meta.bridge);
+        let checked = std::cell::RefCell::new(Vec::new());
+        start_checked(&vm, &sb, &plan(), &mut |_| {}, &|d| {
+            checked.borrow_mut().push(d.to_path_buf());
+            false
+        })
+        .unwrap();
+        let dir = bridge::socket_dir();
+        assert_eq!(*checked.borrow(), vec![dir.clone()]);
+        let unsafe_dir = |what: &str| {
+            format!(
+                "warning: {} isn't a private directory owned by you; claude-myrepo gets no {what} \
+                 until it is",
+                dir.display()
+            )
+        };
+        assert_eq!(
+            unsafe_dir_warnings(&sb, &dir, false),
+            [unsafe_dir("SSH agent")]
+        );
+        assert!(unsafe_dir_warnings(&sb, &dir, true).is_empty());
+        let mut both = sb.clone();
+        both.meta.bridge = true;
+        assert_eq!(
+            unsafe_dir_warnings(&both, &dir, false),
+            [
+                unsafe_dir("browser or clipboard bridge"),
+                unsafe_dir("SSH agent")
+            ]
+        );
+        // Neither: nothing to check.
+        let mut neither = sb.clone();
+        neither.meta.ssh_agent = None;
+        let fake = FakeRunner::new();
+        fake.ok(
+            &["machine", "status"],
+            &STATUS.replace("\"state\": \"running\"", "\"state\": \"stopped\""),
+        );
+        let vm = Smolvm::new(fake);
+        start_checked(&vm, &neither, &plan(), &mut |_| {}, &|_| panic!("checked")).unwrap();
     }
 
     #[test]

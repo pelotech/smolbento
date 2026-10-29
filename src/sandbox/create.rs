@@ -2,6 +2,7 @@ use std::collections::BTreeMap;
 use std::path::{Path, PathBuf};
 
 use crate::bridge;
+use crate::bridge::agent::{self, AgentLabel};
 use crate::smolvm::{CreateSpec, Credential, Mount, NetworkSpec, PortMap};
 use crate::workspace::clone::{CloneSource, SOURCE_MOUNT};
 use crate::workspace::{MOUNTLESS_WORKDIR, Workspace};
@@ -76,6 +77,9 @@ pub struct CreateRequest {
     /// Created without the browser and clipboard bridge: the host's socket directory isn't
     /// private (`drop_unsafe_bridge`).
     pub no_bridge: bool,
+    /// The SSH agent granted per phase once availability and the socket directory were checked
+    /// (the `sbx.ssh-agent` label); `None`: no agent.
+    pub ssh_agent: Option<AgentLabel>,
 }
 
 impl CreateRequest {
@@ -122,7 +126,11 @@ pub fn meta(req: &CreateRequest) -> Meta {
             .iter()
             .map(|(host, guest)| (guest.clone(), host.display().to_string()))
             .collect(),
-        ssh_agent: None,
+        // Internal sandboxes run untrusted build steps: never an agent.
+        ssh_agent: req
+            .ssh_agent
+            .clone()
+            .filter(|_| !name::is_internal(&req.name)),
     }
 }
 
@@ -139,6 +147,24 @@ pub fn drop_unsafe_bridge(
     req.no_bridge = true;
     Some(format!(
         "warning: {} isn't a private directory owned by you; {} gets no browser or clipboard bridge",
+        dir.display(),
+        req.name
+    ))
+}
+
+/// Leaves the SSH agent out when `private` says the host's socket directory isn't private to
+/// this user (as `drop_unsafe_bridge`); returns the warning.
+pub fn drop_unsafe_agent(
+    req: &mut CreateRequest,
+    private: impl FnOnce(&Path) -> bool,
+) -> Option<String> {
+    let dir = bridge::socket_dir();
+    if meta(req).ssh_agent.is_none() || private(&dir) {
+        return None;
+    }
+    req.ssh_agent = None;
+    Some(format!(
+        "warning: {} isn't a private directory owned by you; {} gets no SSH agent",
         dir.display(),
         req.name
     ))
@@ -181,11 +207,19 @@ pub fn spec(req: &CreateRequest) -> CreateSpec {
             });
         }
     }
-    let mount_sockets = if meta.bridge {
-        vec![(bridge::host_socket(&req.name), bridge::GUEST_SOCKET.into())]
-    } else {
-        vec![]
-    };
+    let mut mount_sockets = Vec::new();
+    if meta.bridge {
+        mount_sockets.push((bridge::host_socket(&req.name), bridge::GUEST_SOCKET.into()));
+    }
+    let mut env = req.env.clone();
+    if let Some(grant) = &meta.ssh_agent {
+        mount_sockets.push((bridge::agent_socket(&req.name), agent::GUEST_SOCKET.into()));
+        // A runtime grant's sessions find the agent; an install-only one's hooks set it themselves
+        // (`kits::apply`). The user's -e wins.
+        if grant.runtime.is_some() && !env.iter().any(|(k, _)| k == "SSH_AUTH_SOCK") {
+            env.push(("SSH_AUTH_SOCK".into(), agent::GUEST_SOCKET.into()));
+        }
+    }
     CreateSpec {
         name: name::machine_name(&req.name),
         image: req.image.clone(),
@@ -195,7 +229,7 @@ pub fn spec(req: &CreateRequest) -> CreateSpec {
         workdir: meta.clone_repo.clone().or_else(|| meta.workspace.clone()),
         cpus: Some(req.cpus),
         memory_mib: Some(req.memory_mib),
-        env: req.env.clone(),
+        env,
         ports: req.ports.clone(),
         network: req.network.clone(),
         deny_cidrs: req.deny_cidrs.clone(),
@@ -210,6 +244,7 @@ pub fn spec(req: &CreateRequest) -> CreateSpec {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::bridge::agent::Access;
 
     fn request(docker: bool, workspaces: Vec<Workspace>) -> CreateRequest {
         CreateRequest {
@@ -423,5 +458,124 @@ mod tests {
         assert_eq!(spec.workdir, None);
         assert!(!spec.labels.contains_key("sbx.workspace"));
         assert_eq!(spec.labels["sbx.docker"], "false");
+    }
+
+    fn runtime_and_install(runtime: Option<Access>, install: Option<Access>) -> Option<AgentLabel> {
+        Some(AgentLabel { runtime, install })
+    }
+
+    fn unrestricted() -> Option<Access> {
+        Some(Access { sign: None })
+    }
+
+    fn agent_mounts(args: &[String]) -> Vec<String> {
+        args.windows(2)
+            .filter(|w| w[0] == "--mount-socket" && w[1].ends_with(":/run/ssh-agent.sock"))
+            .map(|w| w[1].clone())
+            .collect()
+    }
+
+    fn agent_env(args: &[String]) -> Vec<String> {
+        args.windows(2)
+            .filter(|w| w[0] == "-e" && w[1].starts_with("SSH_AUTH_SOCK="))
+            .map(|w| w[1].clone())
+            .collect()
+    }
+
+    /// A runtime grant: the socket, `SSH_AUTH_SOCK` in the sandbox env, and the label.
+    #[test]
+    fn a_runtime_grant_mounts_the_agent_socket_and_sets_ssh_auth_sock() {
+        let mut req = request(false, vec![]);
+        req.ssh_agent = runtime_and_install(
+            unrestricted(),
+            Some(Access {
+                sign: Some(vec!["git".into()]),
+            }),
+        );
+        let spec = spec(&req);
+        let args = spec.to_args();
+        assert_eq!(
+            agent_mounts(&args),
+            [format!(
+                "{}:/run/ssh-agent.sock",
+                bridge::agent_socket("claude.repo").display()
+            )]
+        );
+        assert_eq!(agent_env(&args), ["SSH_AUTH_SOCK=/run/ssh-agent.sock"]);
+        assert_eq!(
+            spec.labels["sbx.ssh-agent"],
+            r#"{"runtime":{"sign":null},"install":{"sign":["git"]}}"#
+        );
+        // The bridge socket is still there.
+        assert!(
+            args.iter()
+                .any(|a| a.ends_with(":/run/smolbento/bridge.sock")),
+            "{args:?}"
+        );
+        // The user's -e wins.
+        req.env.push(("SSH_AUTH_SOCK".into(), "/mine".into()));
+        assert_eq!(
+            agent_env(&super::spec(&req).to_args()),
+            ["SSH_AUTH_SOCK=/mine"]
+        );
+    }
+
+    /// An install-only grant: the socket and label, but `SSH_AUTH_SOCK` only for install hooks.
+    #[test]
+    fn an_install_only_grant_mounts_the_socket_without_ssh_auth_sock() {
+        let mut req = request(false, vec![]);
+        req.ssh_agent = runtime_and_install(None, unrestricted());
+        let spec = spec(&req);
+        let args = spec.to_args();
+        assert_eq!(agent_mounts(&args).len(), 1, "{args:?}");
+        assert!(agent_env(&args).is_empty(), "{args:?}");
+        assert_eq!(spec.labels["sbx.ssh-agent"], r#"{"install":{"sign":null}}"#);
+    }
+
+    #[test]
+    fn no_grant_means_no_agent_socket_env_or_label() {
+        let spec = spec(&request(false, vec![]));
+        let args = spec.to_args();
+        assert!(agent_mounts(&args).is_empty(), "{args:?}");
+        assert!(agent_env(&args).is_empty(), "{args:?}");
+        assert!(!spec.labels.contains_key("sbx.ssh-agent"));
+        // Nor for the internal builder, whatever it was given.
+        let mut req = request(false, vec![]);
+        req.name = "_builder".into();
+        req.ssh_agent = runtime_and_install(unrestricted(), None);
+        let args = super::spec(&req).to_args();
+        assert!(agent_mounts(&args).is_empty(), "{args:?}");
+        assert!(agent_env(&args).is_empty(), "{args:?}");
+    }
+
+    #[test]
+    fn a_socket_dir_that_isnt_private_means_no_agent() {
+        let mut req = request(false, vec![]);
+        req.ssh_agent = runtime_and_install(unrestricted(), None);
+        let mut checked = None;
+        let warning = drop_unsafe_agent(&mut req, |dir| {
+            checked = Some(dir.to_path_buf());
+            false
+        });
+        let dir = bridge::socket_dir();
+        assert_eq!(checked.as_deref(), Some(dir.as_path()));
+        assert_eq!(
+            warning.unwrap(),
+            format!(
+                "warning: {} isn't a private directory owned by you; claude.repo gets no SSH agent",
+                dir.display()
+            )
+        );
+        assert_eq!(req.ssh_agent, None);
+        let args = spec(&req).to_args();
+        assert!(agent_mounts(&args).is_empty(), "{args:?}");
+        assert!(agent_env(&args).is_empty(), "{args:?}");
+        // A private one keeps it; no grant checks nothing.
+        let mut req = request(false, vec![]);
+        req.ssh_agent = runtime_and_install(unrestricted(), None);
+        assert_eq!(drop_unsafe_agent(&mut req, |_| true), None);
+        assert!(req.ssh_agent.is_some());
+        let mut req = request(false, vec![]);
+        assert_eq!(drop_unsafe_agent(&mut req, |_| panic!("checked")), None);
     }
 }

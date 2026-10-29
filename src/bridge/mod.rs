@@ -28,6 +28,12 @@ pub fn host_socket(name: &str) -> PathBuf {
     socket_in(crate::sandbox::host_uid(), name)
 }
 
+/// The sandbox's host SSH agent socket (`ssh-agent@1`), beside its bridge socket:
+/// `/tmp/sbt-<uid>/<first 16 hex of sha256(name)>.agent.sock`.
+pub fn agent_socket(name: &str) -> PathBuf {
+    agent_socket_in(crate::sandbox::host_uid(), name)
+}
+
 /// The directory of this user's host sockets, `/tmp/sbt-<uid>`.
 pub fn socket_dir() -> PathBuf {
     dir_of(crate::sandbox::host_uid())
@@ -38,8 +44,15 @@ fn dir_of(uid: u32) -> PathBuf {
 }
 
 fn socket_in(uid: u32, name: &str) -> PathBuf {
-    let id = hex(&Sha256::digest(name.as_bytes()));
-    dir_of(uid).join(format!("{}.sock", &id[..16]))
+    dir_of(uid).join(format!("{}.sock", socket_id(name)))
+}
+
+fn agent_socket_in(uid: u32, name: &str) -> PathBuf {
+    dir_of(uid).join(format!("{}.agent.sock", socket_id(name)))
+}
+
+fn socket_id(name: &str) -> String {
+    hex(&Sha256::digest(name.as_bytes()))[..16].to_string()
 }
 
 /// Whether `dir` is private to this user, for a sandbox's socket (checked at create and at every
@@ -80,6 +93,22 @@ mod tests {
         // Well under macOS's ~104-byte socket path limit, whatever the name.
         assert!(socket_in(u32::MAX, &"x".repeat(200)).as_os_str().len() < 50);
         assert_eq!(p.parent().unwrap(), dir_of(501));
+    }
+
+    #[test]
+    fn the_agent_socket_sits_beside_the_bridge_socket() {
+        let id = &hex(&Sha256::digest(b"claude-myrepo"))[..16];
+        assert_eq!(
+            agent_socket_in(501, "claude-myrepo"),
+            PathBuf::from(format!("/tmp/sbt-501/{id}.agent.sock"))
+        );
+        assert_eq!(agent_socket("a").parent(), host_socket("a").parent());
+        assert!(
+            agent_socket_in(u32::MAX, &"x".repeat(200))
+                .as_os_str()
+                .len()
+                < 60
+        );
     }
 
     #[test]

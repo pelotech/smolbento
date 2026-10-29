@@ -10,6 +10,10 @@ use serde::{Deserialize, Serialize};
 
 use crate::config::Settings;
 
+/// Where a granted sandbox's agent socket appears in the guest (`--mount-socket`); a runtime
+/// grant sets `SSH_AUTH_SOCK` to it.
+pub const GUEST_SOCKET: &str = "/run/ssh-agent.sock";
+
 /// The merged `ssh-agent@1` grant of a kit set, per phase; `None` = that phase isn't granted.
 #[derive(Debug, Clone, Default, PartialEq, Eq)]
 pub struct AgentGrant {
