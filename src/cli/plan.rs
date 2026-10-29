@@ -323,10 +323,10 @@ pub fn prepare_create<R: Runner>(
         }
         bundled.clear();
     }
-    let dirs = crate::skills::plan_dirs(req.skills_mode, &wants, !bundled.is_empty());
+    let label = crate::skills::plan(req.skills_mode, &wants, !bundled.is_empty());
     // The first start's first step, so it runs before every install hook and after the start's
-    // setup linked the store (a store entry of the same name is then taken). As the launch user,
-    // like the store's links, so the links belong to the agent.
+    // setup linked the store (a store entry of the same name is then taken). As root, like the
+    // store's links; the script hands the links to the agent.
     // Bundled skills come from kits, and kits always make a first start.
     debug_assert!(bundled.is_empty() || first_start.is_some());
     if !bundled.is_empty()
@@ -341,28 +341,20 @@ pub fn prepare_create<R: Runner>(
             crate::kits::apply::InstallStep {
                 label: "bundled agent skills".into(),
                 kit: None,
-                user: Some(req.user.clone().unwrap_or_else(|| "agent".into())),
-                script: crate::skills::bundled_script(&dirs, &skills),
+                user: None,
+                script: crate::skills::bundled_script(&label.dirs, &skills),
                 relay_stderr: true,
             },
         );
     }
-    req.skills = (!dirs.is_empty()).then(|| crate::skills::Setup {
+    req.skills = (!label.dirs.is_empty()).then(|| crate::skills::Setup {
         store: crate::skills::store::Store::new(&ctx.paths).dir,
-        label: crate::skills::Label {
-            mode: req.skills_mode,
-            dirs,
-        },
+        label,
     });
     // After every check, so a refused create makes no directories.
     host_mount::create_managed(&host_dirs)?;
     // Created empty so it can be mounted; `off` mounts nothing.
-    if req.skills.as_ref().is_some_and(|s| {
-        s.label
-            .dirs
-            .iter()
-            .any(|d| d.access != crate::skills::Access::None)
-    }) {
+    if req.skills.as_ref().is_some_and(|s| s.label.mounts_store()) {
         crate::skills::store::Store::new(&ctx.paths).ensure()?;
     }
     if !added.is_empty() {
@@ -388,6 +380,7 @@ fn skill_wants(agent: &str, kits: Option<&Plan>) -> Vec<crate::skills::Want> {
         .map(|p| crate::skills::Want {
             path: p.to_string(),
             readwrite: true,
+            builtin: true,
         })
         .into_iter()
         .collect();
@@ -395,6 +388,7 @@ fn skill_wants(agent: &str, kits: Option<&Plan>) -> Vec<crate::skills::Want> {
         wants.extend(p.merged.skill_dirs.iter().map(|d| crate::skills::Want {
             path: d.path.clone(),
             readwrite: d.readwrite,
+            builtin: false,
         }));
     }
     wants

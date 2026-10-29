@@ -2637,8 +2637,8 @@ fn kit_ssh_agent_grants_limit_signing_and_phases() {
 
 impl Image {
     /// Appends a layer giving Alpine (`base`) an `agent` account with the host's uid and its own
-    /// home, as sbx images have one before any kit hook runs: the skills steps run as `agent` at
-    /// the first start, before install hooks could add it.
+    /// home, as sbx images have one before any kit hook runs: the skills steps hand directories
+    /// and links to it, and the tests `sbt exec` as it.
     fn with_agent_account(mut self, base: &Image) -> Image {
         let uid = smolbento::sandbox::host_uid();
         let passwd =
@@ -2703,6 +2703,38 @@ fn skills_kit(reg: &Registry, files: &[(&str, &str)], more: &[serde_json::Value]
     )
 }
 
+/// `skills_kit` that also bundles `/opt/e2e/review` as the skill `review-pr`, so its directory
+/// links into the shared mount instead of having the store mounted over it.
+fn bundled_skills_kit(reg: &Registry) -> String {
+    skills_kit(
+        reg,
+        &[("opt/e2e/review/SKILL.md", "---\nname: review-pr\n---\n")],
+        &[serde_json::json!({
+            "type": "com.docker.sandbox/agent-skill@1",
+            "config": {"path": "/opt/e2e/review", "name": "review-pr"},
+        })],
+    )
+}
+
+/// The skills mounts in `/proc/mounts`: `(mount point, "ro"|"rw")`, once each (the guest lists
+/// a mount more than once, and the VM's overlay paths too).
+fn skills_mounts(name: &str) -> Vec<(String, String)> {
+    let mut m: Vec<(String, String)> = root_out(name, "cat /proc/mounts")
+        .lines()
+        .filter_map(|l| {
+            let f: Vec<&str> = l.split_whitespace().collect();
+            let opt = f[3].split(',').next().unwrap_or_default();
+            [SHARED_SKILLS, SKILLS_DIR]
+                .contains(&f[1])
+                .then(|| (f[1].to_string(), opt.to_string()))
+        })
+        .collect();
+    m.dedup();
+    m
+}
+
+const SHARED_SKILLS: &str = "/run/sbx/skills-shared";
+
 /// A skill named `name` in the test's own shared store.
 fn store_skill(e: &E2e, name: &str) {
     let d = e.dir.path().join("data/agent-skills").join(name);
@@ -2744,8 +2776,9 @@ impl E2e {
     }
 }
 
-/// `readonly`: the store's entries are links the agent owns, writes through them fail, and every
-/// start relinks: gone entries go, new ones come and a directory the agent made wins its name.
+/// With a bundled skill the kit's directory links: `readonly` shares the store read-only, the
+/// store's entries are links the agent owns, writes through them fail, and every start relinks:
+/// gone entries go, new ones come and a directory the agent made wins its name.
 #[test]
 #[ignore = "boots real VMs and pulls alpine; run with `just e2e`"]
 fn shared_skills_read_only_links_and_relinks() {
@@ -2753,14 +2786,20 @@ fn shared_skills_read_only_links_and_relinks() {
     let reg = Registry::start(&e);
     store_skill(&e, "alpha");
     store_skill(&e, "gone");
-    let kit = skills_kit(&reg, &[], &[]);
+    let kit = bundled_skills_kit(&reg);
     e.create_skills_ok(&kit, "readonly");
+    assert_eq!(
+        skills_mounts(&e.name),
+        [("/run/sbx/skills-shared".to_string(), "ro".to_string())]
+    );
     assert_eq!(
         root_out(
             &e.name,
-            &format!("readlink {SKILLS_DIR}/alpha; stat -c %U {SKILLS_DIR}/alpha")
+            &format!(
+                "stat -c %U {SKILLS_DIR}; readlink {SKILLS_DIR}/alpha; stat -c %U {SKILLS_DIR}/alpha"
+            )
         ),
-        "/run/sbx/skills-shared/alpha\nagent\n"
+        "agent\n/run/sbx/skills-shared/alpha\nagent\n"
     );
     assert_eq!(
         root_out(&e.name, &format!("cat {SKILLS_DIR}/alpha/SKILL.md")),
@@ -2777,11 +2816,14 @@ fn shared_skills_read_only_links_and_relinks() {
     e.ok(&["start", &e.name]);
     assert_eq!(
         root_out(&e.name, &format!("ls -A {SKILLS_DIR}")),
-        "alpha\ngamma\nmine\n"
+        "alpha\ngamma\nmine\nreview-pr\n"
     );
     assert_eq!(
-        root_out(&e.name, &format!("readlink {SKILLS_DIR}/gamma")),
-        "/run/sbx/skills-shared/gamma\n"
+        root_out(
+            &e.name,
+            &format!("readlink {SKILLS_DIR}/gamma; readlink {SKILLS_DIR}/review-pr")
+        ),
+        "/run/sbx/skills-shared/gamma\n/opt/e2e/review\n"
     );
     assert!(
         root_sh(
@@ -2794,33 +2836,44 @@ fn shared_skills_read_only_links_and_relinks() {
     );
 }
 
-/// `readwrite` mounts the store over the directory, so what the agent writes lands in the store;
+/// Without a bundled skill a kit's directory has the store mounted over it: read-only under
+/// `readonly` (no links, writes fail), read-write under `readwrite` (writes land in the store);
 /// `off` mounts and links nothing.
 #[test]
 #[ignore = "boots real VMs and pulls alpine; run with `just e2e`"]
-fn shared_skills_read_write_and_off() {
+fn shared_skills_kit_dirs_are_mounted_over_and_off() {
     let e = E2e::new("skills-rw");
     let reg = Registry::start(&e);
+    store_skill(&e, "alpha");
     let kit = skills_kit(&reg, &[], &[]);
-    e.create_skills_ok(&kit, "readwrite");
-    let mounts = root_out(
-        &e.name,
-        &format!("grep -e /run/sbx/skills-shared -e {SKILLS_DIR} /proc/mounts"),
+    e.create_skills_ok(&kit, "readonly");
+    assert_eq!(
+        skills_mounts(&e.name),
+        [(SKILLS_DIR.to_string(), "ro".to_string())]
     );
     assert!(
-        mounts.contains(SKILLS_DIR) && !mounts.contains("skills-shared"),
-        "{mounts}"
+        root_sh(
+            &e.name,
+            &format!("test -d {SKILLS_DIR}/alpha && ! test -L {SKILLS_DIR}/alpha")
+        )
+        .status
+        .success(),
+        "the store itself, not a link"
+    );
+    let w = e.sbt(&["exec", &e.name, "mkdir", &format!("{SKILLS_DIR}/mine")]);
+    assert!(!w.status.success(), "a read-only mount refuses writes");
+    e.ok(&["rm", "-f", &e.name]);
+
+    e.create_skills_ok(&kit, "readwrite");
+    assert_eq!(
+        skills_mounts(&e.name),
+        [(SKILLS_DIR.to_string(), "rw".to_string())]
     );
     let write = format!("mkdir {SKILLS_DIR}/fromrw && echo x > {SKILLS_DIR}/fromrw/SKILL.md");
     e.ok(&["exec", &e.name, "sh", "-c", &write]);
     assert_eq!(
         std::fs::read_to_string(e.dir.path().join("data/agent-skills/fromrw/SKILL.md")).unwrap(),
         "x\n"
-    );
-    assert!(
-        !root_sh(&e.name, &format!("test -L {SKILLS_DIR}/fromrw"))
-            .status
-            .success()
     );
     e.ok(&["rm", "-f", &e.name]);
     assert!(
@@ -2829,14 +2882,7 @@ fn shared_skills_read_write_and_off() {
     );
 
     e.create_skills_ok(&kit, "off");
-    assert_eq!(
-        root_out(
-            &e.name,
-            &format!("grep -e /run/sbx/skills-shared -e {SKILLS_DIR} /proc/mounts")
-        ),
-        "",
-        "no skills mount"
-    );
+    assert!(skills_mounts(&e.name).is_empty(), "no skills mount");
     assert!(
         !root_sh(&e.name, &format!("test -e {SKILLS_DIR}"))
             .status
@@ -2845,21 +2891,21 @@ fn shared_skills_read_write_and_off() {
 }
 
 /// A kit's bundled skill (`agent-skill@1`) is linked into its skills directory at the first
-/// start; a store entry of the same name fails the create.
+/// start. Under `readwrite` (the kit's directory asks for it) the shared mount is read-write, so
+/// writes through a store link land in the store. A store entry named like the bundled skill
+/// fails the create with sbx's message.
 #[test]
 #[ignore = "boots real VMs and pulls alpine; run with `just e2e`"]
 fn bundled_skills_are_linked_and_a_store_clash_fails_the_create() {
     let e = E2e::new("skills-bundled");
     let reg = Registry::start(&e);
-    let kit = skills_kit(
-        &reg,
-        &[("opt/e2e/review/SKILL.md", "---\nname: review-pr\n---\n")],
-        &[serde_json::json!({
-            "type": "com.docker.sandbox/agent-skill@1",
-            "config": {"path": "/opt/e2e/review", "name": "review-pr"},
-        })],
+    store_skill(&e, "alpha");
+    let kit = bundled_skills_kit(&reg);
+    e.create_skills_ok(&kit, "readwrite");
+    assert_eq!(
+        skills_mounts(&e.name),
+        [("/run/sbx/skills-shared".to_string(), "rw".to_string())]
     );
-    e.create_skills_ok(&kit, "readonly");
     assert_eq!(
         root_out(
             &e.name,
@@ -2867,11 +2913,19 @@ fn bundled_skills_are_linked_and_a_store_clash_fails_the_create() {
         ),
         "/opt/e2e/review\nagent\n"
     );
+    e.ok(&["exec", &e.name, "touch", &format!("{SKILLS_DIR}/alpha/x")]);
+    assert!(e.dir.path().join("data/agent-skills/alpha/x").exists());
     e.ok(&["rm", "-f", &e.name]);
 
     store_skill(&e, "review-pr");
     let out = e.create_skills(&kit, "readonly");
     let err = String::from_utf8_lossy(&out.stderr);
     assert!(!out.status.success(), "the clash fails the create:\n{err}");
-    assert!(err.contains("review-pr already exists"), "{err}");
+    assert!(
+        err.contains(&format!(
+            "failed to compose shared skills into the sandbox: bundled skills review-pr cannot \
+             be exposed in {SKILLS_DIR}: another skill already uses the name"
+        )),
+        "{err}"
+    );
 }

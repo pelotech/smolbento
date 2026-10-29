@@ -488,22 +488,20 @@ fn setup<R: Runner>(
         );
     }
     // Not fatal: without the links the agent just doesn't see the shared skills this start.
-    // As the launch user (never root), so the links belong to the agent.
+    // As root, as in sbx; the script hands the directories and links to the agent's uid.
     if let Some(script) = sb
         .meta
         .skills
         .as_ref()
         .and_then(|l| crate::skills::link_script(&l.dirs))
-    {
-        let user = launch_user(vm, sb).unwrap_or_else(|| "agent".into());
-        if let Err(e) = vm.exec_captured(&ExecSpec {
+        && let Err(e) = vm.exec_captured(&ExecSpec {
             name: sb.machine.clone(),
-            user: Some(user),
+            user: Some("root".into()),
             cmd: vec!["sh".into(), "-c".into(), script],
             ..Default::default()
-        }) {
-            eprintln!("warning: {}: couldn't link shared skills: {e:#}", sb.name());
-        }
+        })
+    {
+        eprintln!("warning: {}: couldn't link shared skills: {e:#}", sb.name());
     }
     // The pre-4a path: a docker sandbox created before the docker kit has no startup runner.
     // With kits, the docker kit's startup hook starts dockerd (no second start here).
@@ -1303,11 +1301,10 @@ mod tests {
             )
     }
 
-    const RO_LABEL: &str =
-        r#"{"mode":"readonly","dirs":[{"path":"/home/agent/.claude/skills","access":"ro"}]}"#;
+    const RO_LABEL: &str = r#"{"mode":"readonly","shared":"ro","dirs":[{"path":"/home/agent/.claude/skills","access":"link"}]}"#;
 
     #[test]
-    fn a_read_only_skills_sandbox_links_the_store_as_the_launch_user_at_start() {
+    fn a_linking_skills_sandbox_links_the_store_as_root_at_start() {
         let fake = FakeRunner::new();
         fake.ok(&["machine", "status"], &skills_status(RO_LABEL));
         let vm = Smolvm::new(fake);
@@ -1315,7 +1312,7 @@ mod tests {
         ensure_running(&vm, &mut sb, || Ok(plan())).unwrap();
         let script = crate::skills::link_script(&sb.meta.skills.as_ref().unwrap().dirs).unwrap();
         let lines = vm.runner().call_lines();
-        let want = format!("machine exec --name sbx-claude-myrepo -u agent -- sh -c {script}");
+        let want = format!("machine exec --name sbx-claude-myrepo -u root -- sh -c {script}");
         assert_eq!(
             lines.iter().filter(|l| **l == want).count(),
             1,
@@ -1334,7 +1331,7 @@ mod tests {
         fake.ok(&["machine", "status"], &skills_status(RO_LABEL));
         let script = crate::skills::link_script(&[crate::skills::Dir {
             path: "/home/agent/.claude/skills".into(),
-            access: crate::skills::Access::Ro,
+            access: crate::skills::Access::Link,
         }])
         .unwrap();
         fake.fail(
@@ -1344,7 +1341,7 @@ mod tests {
                 "--name",
                 "sbx-claude-myrepo",
                 "-u",
-                "agent",
+                "root",
                 "--",
                 "sh",
                 "-c",
@@ -2275,7 +2272,7 @@ echo "$g""#,
         let own = InstallStep {
             label: "bundled agent skills".into(),
             kit: None,
-            user: Some("agent".into()),
+            user: None,
             script: "true".into(),
             relay_stderr: true,
         };

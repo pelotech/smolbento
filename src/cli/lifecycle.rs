@@ -2706,7 +2706,7 @@ SETUP
 
     #[test]
     fn create_shares_skills_by_mode() {
-        use crate::skills::{Access, Label, Mode};
+        use crate::skills::{Access, Label, Mode, Shared};
         let claude = "/home/agent/.claude/skills";
         // (env, args, the store's mount point, the label's mode and access)
         type Case<'a> = (
@@ -2714,6 +2714,7 @@ SETUP
             &'a [&'a str],
             Option<&'a str>,
             Mode,
+            Shared,
             Access,
         );
         let cases: [Case; 5] = [
@@ -2722,13 +2723,15 @@ SETUP
                 &["create", "claude", "."],
                 Some("/run/sbx/skills-shared:ro"),
                 Mode::Readonly,
-                Access::Ro,
+                Shared::Ro,
+                Access::Link,
             ),
             (
                 &[],
                 &["create", "claude", ".", "--skills", "readwrite"],
                 Some(claude),
                 Mode::Readwrite,
+                Shared::None,
                 Access::Rw,
             ),
             (
@@ -2736,6 +2739,7 @@ SETUP
                 &["create", "claude", ".", "--skills", "off"],
                 None,
                 Mode::Off,
+                Shared::None,
                 Access::None,
             ),
             (
@@ -2743,6 +2747,7 @@ SETUP
                 &["create", "claude", "."],
                 None,
                 Mode::Off,
+                Shared::None,
                 Access::None,
             ),
             (
@@ -2750,10 +2755,11 @@ SETUP
                 &["create", "claude", ".", "--skills", "readonly"],
                 Some("/run/sbx/skills-shared:ro"),
                 Mode::Readonly,
-                Access::Ro,
+                Shared::Ro,
+                Access::Link,
             ),
         ];
-        for (env, args, mount, want_mode, access) in cases {
+        for (env, args, mount, want_mode, shared, access) in cases {
             let (t, r, mounts, label) = skills_create(env, args);
             r.unwrap();
             let store = t.ctx.paths.skills_store();
@@ -2764,6 +2770,7 @@ SETUP
             assert_eq!(mounts, want, "{args:?}");
             let label = Label::from_label(&label.expect("an sbx.skills label")).unwrap();
             assert_eq!(label.mode, want_mode, "{args:?}");
+            assert_eq!(label.shared, shared, "{args:?}");
             assert_eq!(label.dirs.len(), 1, "{args:?}");
             assert_eq!(label.dirs[0].path, claude);
             assert_eq!(label.dirs[0].access, access, "{args:?}");
@@ -2853,7 +2860,9 @@ SETUP
         let label = skills_label(&t);
         assert_eq!(label.dirs.len(), 1, "{label:?}");
         assert_eq!(label.dirs[0].path, "/home/agent/.k/skills");
-        assert_eq!(label.dirs[0].access, Access::Ro);
+        assert_eq!(label.dirs[0].access, Access::Link);
+        // The kit asks for readonly: the shared mount stays read-only under `readwrite`.
+        assert_eq!(label.shared, crate::skills::Shared::Ro);
         let (mounts, _) = create_mounts(&t);
         let store = t.ctx.paths.skills_store().display().to_string();
         assert!(
@@ -2866,7 +2875,7 @@ SETUP
             .position(|l| l.starts_with("machine exec") && l.contains("ln -s '/opt/k/review'"))
             .expect("the bundled skills step");
         assert!(
-            lines[bundled].contains(" -u agent ") && lines[bundled].contains(" -- sh -c "),
+            lines[bundled].contains(" -u root ") && lines[bundled].contains(" -- sh -c "),
             "{}",
             lines[bundled]
         );
@@ -2875,6 +2884,67 @@ SETUP
             .position(|l| l.starts_with("machine exec") && l.contains("echo hook-ran"))
             .expect("the install hook");
         assert!(bundled < hook, "{lines:#?}");
+    }
+
+    /// The store's `-v` targets (`guest[:ro]`) of a `shell-proj` create with kit `k` and `caps`.
+    fn kit_skills_mounts(caps: &str, mode: &str) -> (Vec<String>, crate::skills::Label) {
+        let mut t = skills_kit_env("shell", caps);
+        sbt(
+            &mut t.ctx,
+            &["create", "shell", ".", "--kit", "./k", "--skills", mode],
+        )
+        .unwrap();
+        let store = format!("{}:", t.ctx.paths.skills_store().display());
+        let (mounts, _) = create_mounts(&t);
+        let mounts = mounts
+            .iter()
+            .filter_map(|m| m.strip_prefix(&store).map(String::from))
+            .collect();
+        (mounts, skills_label(&t))
+    }
+
+    /// sbx's kit table: without a bundled skill the store is mounted over each kit directory
+    /// (no links); with one, every directory links and the shared mount takes the widest access.
+    #[test]
+    fn kit_skills_directories_follow_sbx_s_table() {
+        use crate::skills::{Access, Shared};
+        let dirs = format!(
+            r#"{{"type":"{AS}","config":{{"path":"/r"}}}},
+               {{"type":"{AS}","config":{{"path":"/w","mode":"readwrite"}}}}"#
+        );
+        let bundled = format!(r#"{dirs},{{"type":"{AK}","config":{{"path":"/opt/k/review"}}}}"#);
+        let access =
+            |l: &crate::skills::Label| -> Vec<Access> { l.dirs.iter().map(|d| d.access).collect() };
+        let (m, l) = kit_skills_mounts(&dirs, "readwrite");
+        assert_eq!(m, ["/r:ro", "/w"]);
+        assert_eq!(
+            (l.shared, access(&l)),
+            (Shared::None, vec![Access::Ro, Access::Rw])
+        );
+        let (m, l) = kit_skills_mounts(&dirs, "readonly");
+        assert_eq!(m, ["/r:ro", "/w:ro"]);
+        assert_eq!(access(&l), [Access::Ro, Access::Ro]);
+        let (m, l) = kit_skills_mounts(&dirs, "off");
+        assert!(m.is_empty(), "{m:?}");
+        assert_eq!(access(&l), [Access::None, Access::None]);
+        let (m, l) = kit_skills_mounts(&bundled, "readwrite");
+        assert_eq!(m, ["/run/sbx/skills-shared"]);
+        assert_eq!(
+            (l.shared, access(&l)),
+            (Shared::Rw, vec![Access::Link, Access::Link])
+        );
+        let (m, l) = kit_skills_mounts(&bundled, "readonly");
+        assert_eq!(m, ["/run/sbx/skills-shared:ro"]);
+        assert_eq!(
+            (l.shared, access(&l)),
+            (Shared::Ro, vec![Access::Link, Access::Link])
+        );
+        let (m, l) = kit_skills_mounts(&bundled, "off");
+        assert!(m.is_empty(), "{m:?}");
+        assert_eq!(
+            (l.shared, access(&l)),
+            (Shared::None, vec![Access::None, Access::None])
+        );
     }
 
     #[test]
