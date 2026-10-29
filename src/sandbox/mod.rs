@@ -391,7 +391,7 @@ pub fn start_with<R: Runner>(
     plan: &StartPlan,
     on: &mut dyn FnMut(Event),
 ) -> Result<()> {
-    start_checked(vm, sb, plan, on, &bridge::is_private_dir)
+    start_checked(vm, sb, plan, on, &bridge::ensure_private_dir)
 }
 
 /// `start_with`, with `private` deciding whether the bridge's socket directory is safe.
@@ -591,7 +591,7 @@ pub fn create<R: Runner>(
     on: &mut dyn FnMut(Event),
 ) -> Result<Sandbox> {
     let mut checked = req.clone();
-    if let Some(warning) = create::drop_unsafe_bridge(&mut checked, bridge::is_private_dir) {
+    if let Some(warning) = create::drop_unsafe_bridge(&mut checked, bridge::ensure_private_dir) {
         eprintln!("{warning}");
     }
     vm.create(&create::spec(&checked))?;

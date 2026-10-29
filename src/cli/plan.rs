@@ -239,7 +239,7 @@ pub fn prepare_create<R: Runner>(
         .collect();
     // So does a required SSH agent the host can't back. Before `apply`, whose install hooks
     // need to know whether they get the agent.
-    for note in settle_agent(ctx, req, kits, bridge::is_private_dir)? {
+    for note in settle_agent(ctx, req, kits, bridge::ensure_private_dir)? {
         eprintln!("{note}");
     }
     let mut policy = ensure_policy(ctx)?;
@@ -341,7 +341,7 @@ fn settle_agent<R: Runner>(
         Ok(_) if !private(&dir) => Err(agent::Unavailable::UnsafeDir(dir)),
         b => b,
     };
-    let (label, notes) = agent::settle(grant, &backing)?;
+    let (label, notes) = agent::settle(&req.name, grant, &backing)?;
     req.ssh_agent = label;
     Ok(notes)
 }
@@ -1415,7 +1415,11 @@ mod tests {
         fake.fail(&["machine", "status"], "NOT_FOUND", "vm not found");
         fake.once_ok(
             &["machine", "status"],
-            &machine_json("sbx-s1", "created", &[("sbx.name", "s1")]),
+            &machine_json(
+                &sandbox::name::machine_name(name),
+                "created",
+                &[("sbx.name", name)],
+            ),
         );
         fake.once_fail(&["machine", "status"], "NOT_FOUND", "vm not found");
         let mut req = agent_request(preset);
@@ -1701,7 +1705,7 @@ mod tests {
             (
                 true,
                 vec![],
-                vec![format!("warning: {}", unsafe_dir("runtime"))],
+                vec![format!("warning: s1: {}", unsafe_dir("runtime"))],
             ),
         ] {
             let plan = agent_plan(preset, caps);

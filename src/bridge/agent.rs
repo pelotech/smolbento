@@ -14,8 +14,7 @@ use crate::config::Settings;
 /// grant sets `SSH_AUTH_SOCK` to it.
 pub const GUEST_SOCKET: &str = "/run/ssh-agent.sock";
 
-/// One value per `ssh-agent@1` phase; `None` = that phase isn't granted. Serialized as the
-/// `sbx.ssh-agent` label.
+/// One value per `ssh-agent@1` phase; `None` = that phase isn't granted.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct ByPhase<T> {
     #[serde(skip_serializing_if = "Option::is_none")]
@@ -62,7 +61,7 @@ pub struct PhaseGrant {
     pub kit: Option<String>,
 }
 
-/// The `sbx.ssh-agent` label: what each phase granted at create may sign,
+/// The `sbx.ssh-agent` label (serialized as it): what each phase granted at create may sign,
 /// `{"runtime":{"sign":null},"install":{"sign":["git"]}}` (`null` = unrestricted).
 pub type AgentLabel = ByPhase<Access>;
 
@@ -171,6 +170,7 @@ pub fn host_agent(
 /// an optional one is dropped, with a note for stderr when a kit asked for it or the socket
 /// directory is unsafe. Returns the label to record (`None`: no agent at all) and the notes.
 pub fn settle(
+    sandbox: &str,
     grant: &AgentGrant,
     backing: &Result<PathBuf, Unavailable>,
 ) -> Result<(Option<AgentLabel>, Vec<String>)> {
@@ -187,7 +187,7 @@ pub fn settle(
         let who = match &p.kit {
             Some(k) => format!("kit {k}"),
             // The implicit grant drops silently, unless the socket directory is unsafe.
-            None if matches!(why, Unavailable::UnsafeDir(_)) => "warning".to_string(),
+            None if matches!(why, Unavailable::UnsafeDir(_)) => format!("warning: {sandbox}"),
             None => continue,
         };
         notes.push(format!(
@@ -252,13 +252,13 @@ mod tests {
             install: Some(PhaseGrant::new(Some(&["git"]), true, Some("k"))),
             runtime: Some(PhaseGrant::new(None, false, None)),
         };
-        let (label, notes) = settle(&g, &Ok("/a.sock".into())).unwrap();
+        let (label, notes) = settle("s", &g, &Ok("/a.sock".into())).unwrap();
         assert_eq!(
             label.unwrap().to_label(),
             r#"{"runtime":{"sign":null},"install":{"sign":["git"]}}"#
         );
         assert!(notes.is_empty());
-        let (label, _) = settle(&AgentGrant::default(), &Ok("/a.sock".into())).unwrap();
+        let (label, _) = settle("s", &AgentGrant::default(), &Ok("/a.sock".into())).unwrap();
         assert_eq!(label, None);
     }
 
@@ -280,7 +280,7 @@ mod tests {
                 "/tmp/sbt-1 isn't a private directory owned by you",
             ),
         ] {
-            let e = settle(&req, &Err(why)).unwrap_err();
+            let e = settle("s", &req, &Err(why)).unwrap_err();
             assert_eq!(
                 e.to_string(),
                 format!("kit signer: ssh-agent@1 needs an SSH agent, but {reason}")
@@ -291,7 +291,7 @@ mod tests {
             install: Some(PhaseGrant::new(None, false, Some("k"))),
             runtime: Some(PhaseGrant::new(None, false, None)),
         };
-        let (label, notes) = settle(&opt, &Err(Unavailable::Unset)).unwrap();
+        let (label, notes) = settle("s", &opt, &Err(Unavailable::Unset)).unwrap();
         assert_eq!(label, None);
         // Only the kit's entry gets a note; the built-in agent's implicit grant drops silently.
         assert_eq!(
@@ -302,14 +302,14 @@ mod tests {
             ]
         );
         // An unsafe socket directory warns for the implicit grant too.
-        let (label, notes) = settle(&opt, &Err(Unavailable::UnsafeDir("/d".into()))).unwrap();
+        let (label, notes) = settle("s", &opt, &Err(Unavailable::UnsafeDir("/d".into()))).unwrap();
         assert_eq!(label, None);
         assert_eq!(
             notes,
             [
                 "kit k: no SSH agent for the install phase (/d isn't a private directory owned \
                  by you); continuing without one",
-                "warning: no SSH agent for the runtime phase (/d isn't a private directory owned \
+                "warning: s: no SSH agent for the runtime phase (/d isn't a private directory owned \
                  by you); continuing without one"
             ]
         );
