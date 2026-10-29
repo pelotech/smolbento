@@ -131,3 +131,16 @@ diagnose
 # Docker Cloud (parse; exit 2)
 login
 move my-sandbox --to cloud
+# skills
+skills ls
+skills ls --format json
+skills ls --json -q
+skills add anthropics/skills --skill frontend-design --skill pdf
+skills add https://github.com/anthropics/skills --force
+skills add anthropics/skills -s pdf,docx
+skills import --dry-run
+skills import -f
+skills rm my-skill
+skills rm --force my-skill
+skills update
+skills update my-skill

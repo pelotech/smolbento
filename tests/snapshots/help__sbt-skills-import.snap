@@ -1,0 +1,20 @@
+---
+source: tests/help.rs
+expression: help(&path)
+---
+Import skills from supported agent directories
+
+Usage: sbt skills import [OPTIONS]
+
+Options:
+  -D, --debug
+          Print each smolvm command line
+
+      --dry-run
+          Preview which skills would be imported without copying anything
+
+  -f, --force
+          Overwrite existing skills without prompting
+
+  -h, --help
+          Print help

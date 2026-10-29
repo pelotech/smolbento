@@ -1,0 +1,24 @@
+---
+source: tests/help.rs
+expression: help(&path)
+---
+Add skills from a Git repository
+
+Usage: sbt skills add [OPTIONS] <REPOSITORY>
+
+Arguments:
+  <REPOSITORY>
+          Git URL or GitHub owner/repository
+
+Options:
+  -D, --debug
+          Print each smolvm command line
+
+  -s, --skill <SKILL>
+          Add only the named skill (repeatable or comma-separated)
+
+  -f, --force
+          Overwrite existing skills without prompting
+
+  -h, --help
+          Print help
