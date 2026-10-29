@@ -180,6 +180,42 @@ done"#,
     ))
 }
 
+/// The kit first start's step for bundled skills (before install hooks; the start's setup has
+/// linked the store already, so a store entry of the same name counts as taken). Each skill
+/// needs a regular `SKILL.md` and its name free in every directory; then it's linked into all.
+/// A required skill that can't be exposed fails the step (and the create); an optional one warns.
+pub fn bundled_script(dirs: &[Dir], skills: &[(String, String, bool)]) -> String {
+    let dirs: Vec<String> = dirs
+        .iter()
+        .map(|d| crate::sandbox::sh_quote(&d.path))
+        .collect();
+    let dirs = dirs.join(" ");
+    let mut s = String::from("rc=0\n");
+    for (name, source, optional) in skills {
+        let (n, src) = (
+            crate::sandbox::sh_quote(name),
+            crate::sandbox::sh_quote(source),
+        );
+        // `name` is a valid skill name and `source` has no `$ " \` \\` (Task 9), so both are
+        // safe inside the double-quoted messages.
+        let fail = if *optional {
+            format!(r#"echo "warning: skipping skill {name}: $why" >&2"#)
+        } else {
+            r#"echo "$why" >&2; rc=1"#.to_string()
+        };
+        s += &format!(
+            r#"why=
+if [ -L {src}/SKILL.md ] || [ ! -f {src}/SKILL.md ]; then why="{source}/SKILL.md is not a regular file"; fi
+for d in {dirs}; do
+  if [ -z "$why" ] && {{ [ -e "$d"/{n} ] || [ -L "$d"/{n} ]; }}; then why="$d/{name} already exists"; fi
+done
+if [ -n "$why" ]; then {fail}; else for d in {dirs}; do mkdir -p "$d" && ln -s {src} "$d"/{n}; done; fi
+"#
+        );
+    }
+    s + "exit $rc\n"
+}
+
 /// `--skills` (or sbxenv's `sandboxOptions.skills`), else `skills.defaultMode`.
 pub fn resolve_mode(flag: Option<&str>, settings: &Settings) -> Result<Mode> {
     match flag {
@@ -232,6 +268,47 @@ mod tests {
             path: p.into(),
             access: a,
         }
+    }
+
+    #[test]
+    fn bundled_script_links_checks_and_skips_optional_conflicts() {
+        let t = tempfile::tempdir().unwrap();
+        let src = t.path().join("img/review");
+        std::fs::create_dir_all(&src).unwrap();
+        std::fs::write(src.join("SKILL.md"), "s").unwrap();
+        let d1 = t.path().join("a/skills");
+        let d2 = t.path().join("b/skills");
+        let dirs = [
+            dir(d1.to_str().unwrap(), Access::Ro),
+            dir(d2.to_str().unwrap(), Access::None),
+        ];
+        let s = src.to_str().unwrap().to_string();
+        let run = |skills: &[(String, String, bool)]| {
+            std::process::Command::new("sh")
+                .args(["-c", &bundled_script(&dirs, skills)])
+                .output()
+                .unwrap()
+        };
+        let ok = run(&[("review-pr".into(), s.clone(), false)]);
+        assert!(
+            ok.status.success(),
+            "{}",
+            String::from_utf8_lossy(&ok.stderr)
+        );
+        assert_eq!(std::fs::read_link(d1.join("review-pr")).unwrap(), src);
+        assert_eq!(std::fs::read_link(d2.join("review-pr")).unwrap(), src);
+        // Taken now: required fails, optional warns and goes on.
+        let again = run(&[("review-pr".into(), s.clone(), false)]);
+        assert!(!again.status.success());
+        assert!(String::from_utf8_lossy(&again.stderr).contains("review-pr already exists"));
+        let opt = run(&[("review-pr".into(), s.clone(), true)]);
+        assert!(opt.status.success());
+        assert!(String::from_utf8_lossy(&opt.stderr).contains("warning: skipping skill review-pr"));
+        let missing = run(&[("x".into(), "/nonexistent/x".into(), false)]);
+        assert!(
+            String::from_utf8_lossy(&missing.stderr)
+                .contains("/nonexistent/x/SKILL.md is not a regular file")
+        );
     }
 
     #[test]

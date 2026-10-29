@@ -2784,6 +2784,148 @@ SETUP
         );
     }
 
+    const AS: &str = "com.docker.sandbox/agent-skills@1";
+    const AK: &str = "com.docker.sandbox/agent-skill@1";
+
+    /// An `<agent>-proj` create env with a v3 mixin `./k` (named `k`) whose capabilities are
+    /// `caps` (a JSON list body).
+    fn skills_kit_env(agent: &str, caps: &str) -> TestEnv {
+        let t = kit_env();
+        let fake = t.ctx.vm.runner();
+        fake.ok(
+            &["machine", "status"],
+            &json(
+                &format!("sbx-{agent}-proj"),
+                "created",
+                &format!("{agent}-proj"),
+            ),
+        );
+        fake.once_fail(&["machine", "status"], "NOT_FOUND", "vm not found");
+        let descriptor =
+            format!(r#"{{"schemaVersion":"3","kind":"mixin","name":"k","capabilities":[{caps}]}}"#);
+        v3_kit(&t, "k", &descriptor, &[]);
+        t
+    }
+
+    /// The `sbx.skills` label of the machine create.
+    fn skills_label(t: &TestEnv) -> crate::skills::Label {
+        let call = t
+            .ctx
+            .vm
+            .runner()
+            .calls()
+            .into_iter()
+            .find(|c| c.starts_with(&["machine".to_string(), "create".to_string()]))
+            .unwrap();
+        let label = call
+            .windows(2)
+            .filter(|w| w[0] == "--label")
+            .find_map(|w| w[1].strip_prefix("sbx.skills=").map(String::from))
+            .expect("an sbx.skills label");
+        crate::skills::Label::from_label(&label).unwrap()
+    }
+
+    #[test]
+    fn a_kit_s_bundled_skill_caps_its_directory_and_links_before_install_hooks() {
+        use crate::skills::Access;
+        let caps = format!(
+            r#"{{"type":"{AS}","config":{{"path":"/home/agent/.k/skills"}}}},
+               {{"type":"{AK}","config":{{"path":"/opt/k/review"}}}},
+               {{"type":"com.docker.sandbox/lifecycle@1",
+                 "config":{{"install":[{{"command":"echo hook-ran"}}]}}}}"#
+        );
+        let mut t = skills_kit_env("shell", &caps);
+        sbt(
+            &mut t.ctx,
+            &[
+                "create",
+                "shell",
+                ".",
+                "--kit",
+                "./k",
+                "--skills",
+                "readwrite",
+            ],
+        )
+        .unwrap();
+        let label = skills_label(&t);
+        assert_eq!(label.dirs.len(), 1, "{label:?}");
+        assert_eq!(label.dirs[0].path, "/home/agent/.k/skills");
+        assert_eq!(label.dirs[0].access, Access::Ro);
+        let (mounts, _) = create_mounts(&t);
+        let store = t.ctx.paths.skills_store().display().to_string();
+        assert!(
+            mounts.contains(&format!("{store}:/run/sbx/skills-shared:ro")),
+            "{mounts:?}"
+        );
+        let lines = t.ctx.vm.runner().call_lines();
+        let bundled = lines
+            .iter()
+            .position(|l| l.starts_with("machine exec") && l.contains("ln -s '/opt/k/review'"))
+            .expect("the bundled skills step");
+        assert!(
+            lines[bundled].contains(" -u agent ") && lines[bundled].contains(" -- sh -c "),
+            "{}",
+            lines[bundled]
+        );
+        let hook = lines
+            .iter()
+            .position(|l| l.starts_with("machine exec") && l.contains("echo hook-ran"))
+            .expect("the install hook");
+        assert!(bundled < hook, "{lines:#?}");
+    }
+
+    #[test]
+    fn a_bundled_skill_without_a_skills_directory_fails_or_is_skipped() {
+        let required = format!(r#"{{"type":"{AK}","config":{{"path":"/opt/k/review"}}}}"#);
+        let mut t = skills_kit_env("shell", &required);
+        let e = sbt(&mut t.ctx, &["create", "shell", ".", "--kit", "./k"]).unwrap_err();
+        assert_eq!(
+            format!("{e:#}"),
+            "kit k: skill review needs a skills directory: no agent-skills@1 in this sandbox"
+        );
+        let lines = t.ctx.vm.runner().call_lines();
+        assert!(
+            !lines.iter().any(|l| l.starts_with("machine create")),
+            "{lines:#?}"
+        );
+
+        let optional =
+            format!(r#"{{"type":"{AK}","optional":true,"config":{{"path":"/opt/k/review"}}}}"#);
+        let mut t = skills_kit_env("shell", &optional);
+        // Prints `note: kit k: skipping skill review: no skills directory in this sandbox`.
+        sbt(&mut t.ctx, &["create", "shell", ".", "--kit", "./k"]).unwrap();
+        let lines = t.ctx.vm.runner().call_lines();
+        assert!(lines.iter().any(|l| l.starts_with("machine create")));
+        assert!(!lines.iter().any(|l| l.contains("ln -s ")), "{lines:#?}");
+    }
+
+    #[test]
+    fn a_kit_s_readonly_request_does_not_cap_the_built_in_readwrite_one() {
+        use crate::skills::Access;
+        let caps = format!(
+            r#"{{"type":"{AS}","config":{{"path":"/home/agent/.claude/skills","mode":"readonly"}}}}"#
+        );
+        let mut t = skills_kit_env("claude", &caps);
+        sbt(
+            &mut t.ctx,
+            &[
+                "create",
+                "claude",
+                ".",
+                "--kit",
+                "./k",
+                "--skills",
+                "readwrite",
+            ],
+        )
+        .unwrap();
+        let label = skills_label(&t);
+        assert_eq!(label.dirs.len(), 1, "{label:?}");
+        assert_eq!(label.dirs[0].path, "/home/agent/.claude/skills");
+        assert_eq!(label.dirs[0].access, Access::Rw);
+    }
+
     #[test]
     fn create_mounts_a_kit_s_managed_host_directory() {
         let mut t = host_mount_env(SHARED);
