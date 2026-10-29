@@ -1,5 +1,12 @@
 # Changelog
 
+## [0.9.0](https://github.com/pelotech/smolbento/compare/v0.8.0...v0.9.0) (2026-10-29)
+
+
+### Features
+
+* browser and clipboard bridge while attached (Phase 5e) ([#37](https://github.com/pelotech/smolbento/issues/37)) ([6bb8a48](https://github.com/pelotech/smolbento/commit/6bb8a48f3af82e7e931854eb86509b103f4d39ac))
+
 ## [0.8.0](https://github.com/pelotech/smolbento/compare/v0.7.0...v0.8.0) (2026-10-28)
 
 
