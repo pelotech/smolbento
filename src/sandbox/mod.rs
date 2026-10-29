@@ -1956,16 +1956,14 @@ echo "$g""#,
                 );
             let fake = FakeRunner::new();
             fake.ok(&["machine", "status"], &status);
-            let seen = std::rc::Rc::new(std::cell::RefCell::new(Vec::new()));
-            let (s, socket) = (seen.clone(), bridge::agent_socket(&name));
+            let (seen, probe) = crate::cli::testutil::socket_probe(bridge::agent_socket(&name));
             fake.during(&["machine", "exec"], move |args| {
                 let script = args.last().unwrap();
                 if ["install-1", "install-2", "files-1", "context-1"]
                     .iter()
                     .any(|w| script == &format!("echo {w}"))
                 {
-                    let served = std::os::unix::net::UnixStream::connect(&socket).is_ok();
-                    s.borrow_mut().push(served);
+                    probe();
                 }
             });
             let vm = Smolvm::new(fake);

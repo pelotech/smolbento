@@ -161,12 +161,8 @@ pub fn agent_probe(
         &["machine", "status"],
         &machine_json(&format!("sbx-{name}"), "running", &labels),
     );
-    let seen = std::rc::Rc::new(std::cell::RefCell::new(Vec::new()));
-    let (s, socket) = (seen.clone(), crate::bridge::agent_socket(&name));
-    runner.during_interactive(move || {
-        let served = std::os::unix::net::UnixStream::connect(&socket).is_ok();
-        s.borrow_mut().push(served);
-    });
+    let (seen, probe) = socket_probe(crate::bridge::agent_socket(&name));
+    runner.during_interactive(probe);
     (name, seen)
 }
 
@@ -194,11 +190,23 @@ pub fn bridge_probe(
         &["machine", "status"],
         &machine_json(&format!("sbx-{name}"), "running", &labels),
     );
+    let (seen, probe) = socket_probe(crate::bridge::host_socket(&name));
+    runner.during_interactive(probe);
+    (name, seen)
+}
+
+/// A record of whether `socket` answered, one entry per call of the returned probe.
+pub fn socket_probe(
+    socket: std::path::PathBuf,
+) -> (
+    std::rc::Rc<std::cell::RefCell<Vec<bool>>>,
+    impl Fn() + 'static,
+) {
     let seen = std::rc::Rc::new(std::cell::RefCell::new(Vec::new()));
-    let (s, socket) = (seen.clone(), crate::bridge::host_socket(&name));
-    runner.during_interactive(move || {
+    let s = seen.clone();
+    let probe = move || {
         let served = std::os::unix::net::UnixStream::connect(&socket).is_ok();
         s.borrow_mut().push(served);
-    });
-    (name, seen)
+    };
+    (seen, probe)
 }
