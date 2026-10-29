@@ -1,5 +1,12 @@
 # Changelog
 
+## [0.10.1](https://github.com/pelotech/smolbento/compare/v0.10.0...v0.10.1) (2026-10-29)
+
+
+### Bug Fixes
+
+* open the host browser for agent logins and keep links clickable ([#41](https://github.com/pelotech/smolbento/issues/41)) ([af96f5f](https://github.com/pelotech/smolbento/commit/af96f5f231a6a055bf9975896d22c8317a661237))
+
 ## [0.10.0](https://github.com/pelotech/smolbento/compare/v0.9.0...v0.10.0) (2026-10-29)
 
 
