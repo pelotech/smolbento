@@ -9,7 +9,7 @@ use std::path::{Path, PathBuf};
 use std::sync::Arc;
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::thread::{self, JoinHandle};
-use std::time::Duration;
+use std::time::{Duration, Instant};
 
 use anyhow::{Context, Result, bail};
 
@@ -31,12 +31,14 @@ const MAX_BODY: usize = 1 << 20;
 /// Longest request or header line.
 const MAX_LINE: u64 = 8 << 10;
 const MAX_HEADERS: usize = 100;
-/// How long a client may take to send its request or read the answer.
-const IO_TIMEOUT: Duration = Duration::from_secs(10);
-/// How often the accept loop checks for a stop.
+/// How long a client has, from its connect, to send its whole request; also how long writing the
+/// answer may take. Requests are handled one at a time, so this bounds what a slow client holds.
+const DEADLINE: Duration = Duration::from_secs(10);
+/// How often the accept loop and a request being read check for a stop.
 const POLL: Duration = Duration::from_millis(50);
 
-/// A running listener. Dropping it stops the thread and removes the socket file, if it is still
+/// A running listener. Dropping it stops the thread (within `POLL`, or once a running opener or
+/// copier returns; those have their own timeout), so no request is handled after it, and removes the socket file, if it is still
 /// the one this process bound.
 pub struct Server {
     path: PathBuf,
@@ -49,16 +51,19 @@ pub struct Server {
 /// serves it (a connect succeeds); a stale socket file is replaced. The directory is created 0700
 /// and must be the caller's.
 pub fn serve(path: &Path, handlers: Handlers) -> Result<Option<Server>> {
+    serve_within(path, handlers, DEADLINE)
+}
+
+fn serve_within(path: &Path, handlers: Handlers, deadline: Duration) -> Result<Option<Server>> {
     let Some(listener) = bind(path)? else {
         return Ok(None);
     };
     let ino = fs::symlink_metadata(path)?.ino();
     listener.set_nonblocking(true)?;
     let stop = Arc::new(AtomicBool::new(false));
-    let handlers = Arc::new(handlers);
     let thread = {
         let stop = stop.clone();
-        thread::spawn(move || accept_loop(&listener, &stop, &handlers))
+        thread::spawn(move || accept_loop(&listener, &stop, &handlers, deadline))
     };
     Ok(Some(Server {
         path: path.to_path_buf(),
@@ -117,35 +122,58 @@ fn private_dir(dir: &Path) -> Result<()> {
     Ok(())
 }
 
-fn accept_loop(listener: &UnixListener, stop: &AtomicBool, handlers: &Arc<Handlers>) {
+/// Handles one connection at a time on this thread: a guest can't make the host start more.
+fn accept_loop(listener: &UnixListener, stop: &AtomicBool, h: &Handlers, deadline: Duration) {
     while !stop.load(Ordering::Relaxed) {
         match listener.accept() {
-            Ok((stream, _)) => {
-                let handlers = handlers.clone();
-                // Its own thread: opening a browser may take a while.
-                thread::spawn(move || handle(stream, &handlers));
-            }
-            Err(e) if e.kind() == std::io::ErrorKind::WouldBlock => thread::sleep(POLL),
-            // A connection that went away before we took it, say.
+            Ok((stream, _)) => handle(&stream, h, Instant::now() + deadline, stop),
+            // Nothing waiting, or a connection that went away before we took it.
             Err(_) => thread::sleep(POLL),
         }
     }
 }
 
 /// Answers one request. Request bodies (clipboard text) are never logged.
-fn handle(stream: UnixStream, h: &Handlers) {
+fn handle(stream: &UnixStream, h: &Handlers, until: Instant, stop: &AtomicBool) {
     // Accepted sockets inherit non-blocking mode on some systems.
-    let ready = stream.set_nonblocking(false).is_ok()
-        && stream.set_read_timeout(Some(IO_TIMEOUT)).is_ok()
-        && stream.set_write_timeout(Some(IO_TIMEOUT)).is_ok();
-    if !ready {
+    if stream.set_nonblocking(false).is_err() || stream.set_write_timeout(Some(DEADLINE)).is_err() {
         return;
     }
-    let resp = match read_request(&mut BufReader::new(&stream)) {
+    let reader = Deadline {
+        stream,
+        until,
+        stop,
+    };
+    let resp = match read_request(&mut BufReader::new(reader)) {
         Ok(req) => route(h, &req),
         Err(resp) => resp,
     };
-    let _ = write_response(&mut &stream, &resp);
+    let _ = write_response(&mut &*stream, &resp);
+}
+
+/// Reads from a client until a deadline for the whole request (not per read), or a stop.
+struct Deadline<'a> {
+    stream: &'a UnixStream,
+    until: Instant,
+    stop: &'a AtomicBool,
+}
+
+impl Read for Deadline<'_> {
+    fn read(&mut self, buf: &mut [u8]) -> std::io::Result<usize> {
+        use std::io::ErrorKind::{Interrupted, TimedOut, WouldBlock};
+        loop {
+            let left = self.until.saturating_duration_since(Instant::now());
+            if left.is_zero() || self.stop.load(Ordering::Relaxed) {
+                return Err(TimedOut.into());
+            }
+            // Wake up every POLL to see a stop.
+            self.stream.set_read_timeout(Some(left.min(POLL)))?;
+            match (&mut &*self.stream).read(buf) {
+                Err(e) if matches!(e.kind(), WouldBlock | TimedOut | Interrupted) => {}
+                r => return r,
+            }
+        }
+    }
 }
 
 #[derive(Debug, PartialEq)]
@@ -596,5 +624,59 @@ mod tests {
             .err()
             .expect("refused");
         assert!(err.to_string().contains("isn't a directory"), "{err:#}");
+    }
+
+    #[test]
+    fn a_trickling_client_is_cut_off_at_the_deadline() {
+        let dir = tempfile::tempdir().unwrap();
+        let path = sock(&dir);
+        let deadline = Duration::from_millis(300);
+        let server = serve_within(&path, recording(true, false).0, deadline)
+            .unwrap()
+            .expect("bound");
+        let mut slow = UnixStream::connect(&path).unwrap();
+        slow.write_all(b"POST /copy HTTP/1.1\r\n").unwrap();
+        // One header byte every 20 ms, well inside any per-read timeout, for up to 3 s.
+        let writer = slow.try_clone().unwrap();
+        let trickle = thread::spawn(move || {
+            for _ in 0..150 {
+                if (&writer).write_all(b"X").is_err() {
+                    break;
+                }
+                thread::sleep(Duration::from_millis(20));
+            }
+        });
+        // Fails rather than hangs when the server never cuts it off.
+        slow.set_read_timeout(Some(Duration::from_secs(5))).unwrap();
+        let started = Instant::now();
+        let mut out = String::new();
+        let _ = slow.read_to_string(&mut out);
+        let took = started.elapsed();
+        assert!(took < Duration::from_secs(2), "cut off after {took:?}");
+        assert!(out.is_empty() || out.starts_with("HTTP/1.1 400 "), "{out}");
+        // The next client is served.
+        let out = request(&path, b"POST /copy HTTP/1.1\r\n\r\n");
+        assert!(out.starts_with("HTTP/1.1 204 "), "{out}");
+        drop(slow);
+        trickle.join().unwrap();
+        drop(server);
+    }
+
+    #[test]
+    fn drop_returns_promptly_while_a_slow_client_is_connected() {
+        let dir = tempfile::tempdir().unwrap();
+        let path = sock(&dir);
+        let server = serve(&path, recording(true, false).0)
+            .unwrap()
+            .expect("bound");
+        let mut slow = UnixStream::connect(&path).unwrap();
+        slow.write_all(b"POST /copy HTTP/1.1\r\n").unwrap();
+        // Let the accept loop take it and start waiting for the rest.
+        thread::sleep(POLL * 4);
+        let started = Instant::now();
+        drop(server);
+        let took = started.elapsed();
+        assert!(took < Duration::from_secs(1), "drop took {took:?}");
+        assert!(!path.exists());
     }
 }

@@ -3,6 +3,8 @@
 use std::collections::BTreeMap;
 use std::io::Write;
 use std::process::{Command, Stdio};
+use std::thread;
+use std::time::{Duration, Instant};
 
 use anyhow::{Context, Result, bail};
 
@@ -84,6 +86,14 @@ fn copy_text(cmd: Option<&str>, text: &[u8]) -> Result<()> {
 
 /// Runs a host command with nothing reaching the attached terminal; `input` goes to its stdin.
 fn run(program: &str, args: &[&str], input: Option<&[u8]>) -> Result<()> {
+    run_within(program, args, input, CMD_TIMEOUT)
+}
+
+/// How long an opener or copier may run: requests are handled one at a time.
+const CMD_TIMEOUT: Duration = Duration::from_secs(10);
+
+/// `run`, killing the command after `timeout`.
+fn run_within(program: &str, args: &[&str], input: Option<&[u8]>, timeout: Duration) -> Result<()> {
     let mut child = Command::new(program)
         .args(args)
         .stdin(if input.is_some() {
@@ -96,11 +106,23 @@ fn run(program: &str, args: &[&str], input: Option<&[u8]>) -> Result<()> {
         .spawn()
         .with_context(|| format!("running {program}"))?;
     if let (Some(input), Some(mut stdin)) = (input, child.stdin.take()) {
-        stdin
-            .write_all(input)
-            .with_context(|| format!("writing to {program}"))?;
+        // Its own thread: a command that never reads mustn't block us past the timeout. It ends
+        // when the command does (the pipe breaks).
+        let input = input.to_vec();
+        thread::spawn(move || stdin.write_all(&input));
     }
-    let status = child.wait()?;
+    let until = Instant::now() + timeout;
+    let status = loop {
+        if let Some(status) = child.try_wait()? {
+            break status;
+        }
+        if Instant::now() >= until {
+            let _ = child.kill();
+            let _ = child.wait();
+            bail!("{program} didn't finish within {}s", timeout.as_secs());
+        }
+        thread::sleep(Duration::from_millis(20));
+    };
     if !status.success() {
         bail!("{program} failed ({status})");
     }
@@ -190,5 +212,24 @@ mod tests {
     fn handlers_carry_the_browser_setting() {
         assert!(handlers(&env(&[]), true).browser_enabled);
         assert!(!handlers(&env(&[]), false).browser_enabled);
+    }
+
+    #[test]
+    fn a_hung_command_is_killed_at_the_timeout() {
+        let dir = tempfile::tempdir().unwrap();
+        let script = dir.path().join("hang");
+        // Never reads its stdin and never exits on its own.
+        std::fs::write(&script, "#!/bin/sh\nexec sleep 30\n").unwrap();
+        std::fs::set_permissions(&script, std::fs::Permissions::from_mode(0o755)).unwrap();
+        let program = script.display().to_string();
+        let started = Instant::now();
+        let big = vec![b'x'; 1 << 20];
+        let err = run_within(&program, &[], Some(&big), Duration::from_millis(300)).unwrap_err();
+        assert!(err.to_string().contains("didn't finish"), "{err:#}");
+        assert!(
+            started.elapsed() < Duration::from_secs(5),
+            "{:?}",
+            started.elapsed()
+        );
     }
 }
