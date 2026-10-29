@@ -1,17 +1,21 @@
 //! `sbt skills`: the shared skills store (spec Phase 5c §1).
 
+use std::collections::BTreeMap;
 use std::io::Write;
+use std::path::PathBuf;
 
 use anyhow::{Result, bail};
 use serde::Serialize;
 
-use super::args::{KitFormat, SkillsCmd, SkillsLsArgs, SkillsRmArgs};
+use super::args::{
+    KitFormat, SkillsAddArgs, SkillsCmd, SkillsLsArgs, SkillsRmArgs, SkillsUpdateArgs,
+};
 use super::{Ctx, confirm};
-use crate::skills::store::Store;
+use crate::skills::repo::{self, Checkout};
+use crate::skills::store::{Source, Store};
 use crate::smolvm::Runner;
 
 /// sbx's note after a store change.
-#[allow(dead_code)] // used by add/import (Tasks 4-5)
 pub const NOTE: &str = "Sandboxes sharing skills read-only link store entries at start, so a newly stored skill appears there after their next start; read-write sandboxes see it immediately. Agents may also scan skills only on startup.";
 
 pub fn run<R: Runner>(ctx: &mut Ctx<R>, cmd: SkillsCmd) -> Result<i32> {
@@ -19,10 +23,10 @@ pub fn run<R: Runner>(ctx: &mut Ctx<R>, cmd: SkillsCmd) -> Result<i32> {
     match cmd {
         SkillsCmd::Ls(a) => ls(ctx, &store, &a)?,
         SkillsCmd::Rm(a) => rm(ctx, &store, &a)?,
-        // Tasks 4 and 5 replace this arm.
-        SkillsCmd::Add(_) | SkillsCmd::Import(_) | SkillsCmd::Update(_) => {
-            bail!("not implemented yet")
-        }
+        SkillsCmd::Add(a) => add(ctx, &store, &a)?,
+        SkillsCmd::Update(a) => return update(ctx, &store, &a),
+        // Task 5 implements import.
+        SkillsCmd::Import(_) => bail!("not implemented yet"),
     }
     Ok(0)
 }
@@ -102,8 +106,135 @@ fn rm<R: Runner>(ctx: &Ctx<R>, store: &Store, a: &SkillsRmArgs) -> Result<()> {
     Ok(())
 }
 
+fn add<R: Runner>(ctx: &Ctx<R>, store: &Store, a: &SkillsAddArgs) -> Result<()> {
+    let url = repo::parse_url(&a.repository)
+        .map_err(|e| anyhow::anyhow!("{e}\n  try: sbt skills add --help"))?;
+    add_url(ctx, store, &url, &a.skill, a.force)
+}
+
+/// `add` after the URL check (tests pass a local path).
+fn add_url<R: Runner>(
+    ctx: &Ctx<R>,
+    store: &Store,
+    url: &str,
+    only: &[String],
+    force: bool,
+) -> Result<()> {
+    let checkout = repo::clone(url)?;
+    let found = repo::discover(checkout.root())?;
+    let picked = pick(&found, only)?;
+    let replacing: Vec<&str> = picked
+        .keys()
+        .filter(|n| store.has(n))
+        .map(|n| n.as_str())
+        .collect();
+    if !replacing.is_empty() {
+        let q = format!("Replace {}?", replacing.join(", "));
+        confirm_or_force(
+            ctx,
+            &q,
+            force,
+            "stdin is not a terminal; pass --force to skip the confirmation",
+            "add",
+        )?;
+    }
+    install(ctx, store, &checkout, &picked, "Added")?;
+    let n = picked.len();
+    writeln!(
+        &ctx.out,
+        "Added {n} skill{} into {}",
+        if n == 1 { "" } else { "s" },
+        store.dir.display()
+    )?;
+    writeln!(&ctx.out, "{NOTE}")?;
+    Ok(())
+}
+
+fn pick(found: &BTreeMap<String, PathBuf>, only: &[String]) -> Result<BTreeMap<String, PathBuf>> {
+    if found.is_empty() {
+        bail!("no SKILL.md found in the repository\n  try: sbt skills add --help");
+    }
+    if only.is_empty() {
+        return Ok(found.clone());
+    }
+    only.iter()
+        .map(|n| match found.get(n) {
+            Some(p) => Ok((n.clone(), p.clone())),
+            None => bail!(
+                "skill {n:?} not found in repository; available skills: {}\n  try: sbt skills add --help",
+                found.keys().cloned().collect::<Vec<_>>().join(", ")
+            ),
+        })
+        .collect()
+}
+
+/// Copies `picked` into the store and records the checkout as their source.
+fn install<R: Runner>(
+    ctx: &Ctx<R>,
+    store: &Store,
+    c: &Checkout,
+    picked: &BTreeMap<String, PathBuf>,
+    verb: &str,
+) -> Result<()> {
+    let mut sources = store.sources()?;
+    for (name, dir) in picked {
+        store.install(name, dir)?;
+        sources.skills.insert(
+            name.clone(),
+            Source {
+                repository: c.url.clone(),
+                commit: c.commit.clone(),
+            },
+        );
+        writeln!(&ctx.out, "{verb} skill {name}")?;
+    }
+    store.save_sources(&sources)
+}
+
+fn update<R: Runner>(ctx: &Ctx<R>, store: &Store, a: &SkillsUpdateArgs) -> Result<i32> {
+    let sources = store.sources()?;
+    let names: Vec<String> = if a.skills.is_empty() {
+        sources.skills.keys().cloned().collect()
+    } else {
+        a.skills.clone()
+    };
+    for n in &names {
+        if !sources.skills.contains_key(n) {
+            bail!(
+                "skill {n:?} was not installed from a repository; install it from a repository\n  try: sbt skills add --help"
+            );
+        }
+    }
+    let mut by_repo: BTreeMap<&str, Vec<&String>> = BTreeMap::new();
+    for n in &names {
+        by_repo
+            .entry(sources.skills[n].repository.as_str())
+            .or_default()
+            .push(n);
+    }
+    let mut code = 0;
+    for (url, skills) in by_repo {
+        let c = repo::clone(url)?;
+        let found = repo::discover(c.root())?;
+        let mut picked = BTreeMap::new();
+        for n in skills {
+            if sources.skills[n].commit == c.commit {
+                writeln!(&ctx.out, "Skill {n:?} is already up to date")?;
+            } else if let Some(dir) = found.get(n) {
+                picked.insert(n.clone(), dir.clone());
+            } else {
+                eprintln!("error: skill {n:?} is no longer in {url}");
+                code = 1;
+            }
+        }
+        install(ctx, store, &c, &picked, "Updated")?;
+    }
+    Ok(code)
+}
+
 #[cfg(test)]
 mod tests {
+    use super::*;
     use crate::cli::testutil::{sbt, test_env};
 
     fn put(t: &crate::cli::testutil::TestEnv, name: &str) {
@@ -160,5 +291,112 @@ mod tests {
         assert!(t.ctx.paths.skills_store().join("a").exists());
         sbt(&mut t.ctx, &["skills", "remove", "a", "b", "--force"]).unwrap();
         assert_eq!(t.stdout(), "Removed skill a\nRemoved skill b\n");
+    }
+
+    const NOSIGN: [&str; 6] = [
+        "-c",
+        "commit.gpgsign=false",
+        "-c",
+        "user.name=t",
+        "-c",
+        "user.email=t@t",
+    ];
+
+    fn commit(dir: &std::path::Path, extra: &[&str], msg: &str) {
+        let mut a: Vec<&str> = NOSIGN.to_vec();
+        a.extend(["commit", "-q"]);
+        a.extend(extra);
+        a.extend(["-m", msg]);
+        crate::testgit::git(dir, &a);
+    }
+
+    fn skills_repo(dir: &std::path::Path, body: &str) {
+        for p in ["alpha/SKILL.md", "nested/beta/SKILL.md"] {
+            let f = dir.join(p);
+            std::fs::create_dir_all(f.parent().unwrap()).unwrap();
+            std::fs::write(f, body).unwrap();
+        }
+        crate::testgit::git(dir, &["init", "-q"]);
+        crate::testgit::git(dir, &["add", "-A"]);
+        commit(dir, &[], body);
+    }
+
+    #[test]
+    fn add_installs_records_and_refuses_replacing_without_force() {
+        let t = test_env(&[]);
+        let r = tempfile::tempdir().unwrap();
+        skills_repo(r.path(), "v1");
+        let url = r.path().to_str().unwrap();
+        let store = Store::new(&t.ctx.paths);
+        add_url(&t.ctx, &store, url, &[], false).unwrap();
+        let s = store.dir.display();
+        assert_eq!(
+            t.stdout(),
+            format!("Added skill alpha\nAdded skill beta\nAdded 2 skills into {s}\n{NOTE}\n")
+        );
+        assert_eq!(store.sources().unwrap().skills["alpha"].repository, url);
+        let e = add_url(&t.ctx, &store, url, &["alpha".into()], false)
+            .unwrap_err()
+            .to_string();
+        assert!(
+            e.starts_with("stdin is not a terminal; pass --force to skip the confirmation"),
+            "{e}"
+        );
+        let e = add_url(&t.ctx, &store, url, &["nosuch".into()], true)
+            .unwrap_err()
+            .to_string();
+        assert!(
+            e.starts_with(
+                "skill \"nosuch\" not found in repository; available skills: alpha, beta"
+            ),
+            "{e}"
+        );
+        add_url(&t.ctx, &store, url, &["alpha".into()], true).unwrap();
+        assert!(
+            t.stdout()
+                .starts_with("Added skill alpha\nAdded 1 skill into ")
+        );
+    }
+
+    #[test]
+    fn add_refuses_local_paths() {
+        let mut t = test_env(&[]);
+        let e = sbt(&mut t.ctx, &["skills", "add", "file:///tmp/x"])
+            .unwrap_err()
+            .to_string();
+        assert!(e.starts_with("repository must be a remote Git URL or GitHub owner/repository: file: invalid protocol"), "{e}");
+    }
+
+    #[test]
+    fn update_refreshes_changed_repos_only() {
+        let mut t = test_env(&[]);
+        let r = tempfile::tempdir().unwrap();
+        skills_repo(r.path(), "v1");
+        let store = Store::new(&t.ctx.paths);
+        add_url(&t.ctx, &store, r.path().to_str().unwrap(), &[], false).unwrap();
+        t.stdout();
+        assert_eq!(sbt(&mut t.ctx, &["skills", "update"]).unwrap(), 0);
+        assert_eq!(
+            t.stdout(),
+            "Skill \"alpha\" is already up to date\nSkill \"beta\" is already up to date\n"
+        );
+        std::fs::write(r.path().join("alpha/SKILL.md"), "v2").unwrap();
+        commit(r.path(), &["-a"], "v2");
+        sbt(&mut t.ctx, &["skills", "upgrade", "alpha"]).unwrap();
+        assert_eq!(t.stdout(), "Updated skill alpha\n");
+        assert_eq!(
+            std::fs::read_to_string(store.dir.join("alpha/SKILL.md")).unwrap(),
+            "v2"
+        );
+        std::fs::create_dir_all(store.dir.join("mine")).unwrap();
+        let e = sbt(&mut t.ctx, &["skills", "update", "mine"])
+            .unwrap_err()
+            .to_string();
+        assert!(
+            e.starts_with(
+                "skill \"mine\" was not installed from a repository; install it from a repository"
+            ),
+            "{e}"
+        );
     }
 }
