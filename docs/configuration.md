@@ -13,6 +13,7 @@ sbt settings unset docker.enabled       # back to the default
 |---|---|---|---|
 | `docker.enabled` | `SMOLBENTO_DOCKER` | `true` | Use the Docker-enabled agent images and run a private Docker engine in each sandbox |
 | `smolvm.path` | `SMOLBENTO_SMOLVM` | `smolvm` | The smolvm binary to run |
+| `smolvm.image-cache-size` | `SMOLBENTO_IMAGE_CACHE_SIZE` | `40g` | Disk space for smolvm's cache of ready-to-boot images, which lets new sandboxes skip the image pull (see below) |
 | `clone.fetch-on-exit` | `SMOLBENTO_CLONE_FETCH_ON_EXIT` | `true` | After `run` in a clone sandbox, fetch the agent's commits into the `sandbox-<name>` remote |
 | `fork.enabled` | `SMOLBENTO_FORK` | `true` | Start clone and mountless sandboxes branchable so `sbt fork` can copy them; `false` also turns `sbt fork` off |
 | `kit.allowedSources` | `SMOLBENTO_KIT_ALLOWED_SOURCES` | `["docker.io/"]` | Where published kits may load from: a JSON array of prefixes (`["*"]` allows any) |
@@ -42,6 +43,13 @@ to) are pulled without it, like a Dockerfile's `FROM`. Registries are reached ov
 loopback ones (`localhost`, `127.0.0.0/8`, `::1`), which use plain HTTP. sbx's signature settings
 (`kit.requireSignature`, `kit.trustedSigners`, `kit.ignoreTransparencyLog`) and
 `kit.allowExtractedAgents` aren't available yet.
+
+`smolvm.image-cache-size` caps smolvm's image seed cache (`~/Library/Caches/smolvm/image-seeds` on
+macOS, `~/.cache/smolvm/image-seeds` on Linux). The first sandbox of an image fills it, so new
+sandboxes of the same image start in seconds without pulling. Beyond the cap the least recently
+used images go first, and the next sandbox of an evicted image pulls it again. An agent image
+takes about 2–3 GB. Sizes take `k`, `m`, `g` or `t` (`60g`, `1t`). smolvm's own
+`SMOLVM_IMAGE_SEED_MAX_BYTES`, if you set it, wins. smolvm checks the cap when it adds an image.
 
 `fork.enabled` applies from each sandbox's next start; see [Fork](usage.md#fork) for what it
 costs.

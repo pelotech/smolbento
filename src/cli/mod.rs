@@ -109,7 +109,11 @@ pub fn main(args: impl IntoIterator<Item = OsString>) -> Result<i32> {
     let paths = Paths::from_env(&env)?;
     let (settings, config_error) = Settings::load(&paths, env.clone());
     let store = crate::secrets::store::platform(&paths, &env);
-    let runner = ProcessRunner::new(settings.value("smolvm.path")?).debug(cli.debug);
+    let runner = with_image_cache(
+        ProcessRunner::new(settings.value("smolvm.path")?).debug(cli.debug),
+        &settings,
+        &env,
+    );
     let mut ctx = Ctx {
         vm: Smolvm::new(runner),
         settings,
@@ -131,6 +135,26 @@ pub fn main(args: impl IntoIterator<Item = OsString>) -> Result<i32> {
             .collect(),
     };
     dispatch(&mut ctx, cli)
+}
+
+/// smolvm's own `SMOLVM_IMAGE_SEED_MAX_BYTES` wins; else `smolvm.image-cache-size` sets it. A bad
+/// size only warns, so `sbt settings` can still fix it.
+fn with_image_cache(
+    runner: ProcessRunner,
+    settings: &Settings,
+    env: &BTreeMap<String, String>,
+) -> ProcessRunner {
+    const SEED_MAX: &str = "SMOLVM_IMAGE_SEED_MAX_BYTES";
+    if env.contains_key(SEED_MAX) {
+        return runner;
+    }
+    match settings.image_cache_bytes() {
+        Ok(bytes) => runner.env(SEED_MAX, bytes.to_string()),
+        Err(e) => {
+            eprintln!("warning: {e:#}; using smolvm's default");
+            runner
+        }
+    }
 }
 
 pub fn dispatch<R: Runner>(ctx: &mut Ctx<R>, cli: Cli) -> Result<i32> {

@@ -1320,7 +1320,7 @@ SANDBOX
   Memory:     1536 MiB
 
 IMAGE
-  ○ image — pulling…
+  ○ image — preparing…
   ✓ image — ready
 
 SETUP
@@ -1412,7 +1412,7 @@ SETUP
         sbt(&mut t.ctx, &["create", "claude", "."]).unwrap_err();
         let out = t.stdout();
         assert!(
-            out.ends_with("\nIMAGE\n  ○ image — pulling…\n  ✗ image — failed\n"),
+            out.ends_with("\nIMAGE\n  ○ image — preparing…\n  ✗ image — failed\n"),
             "{out}"
         );
     }
@@ -2043,7 +2043,7 @@ SANDBOX
   Memory:     1 GiB
 
 IMAGE
-  ○ image — pulling…
+  ○ image — preparing…
   ✓ image — ready
 
 SETUP

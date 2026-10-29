@@ -65,6 +65,8 @@ pub trait Runner {
 pub struct ProcessRunner {
     bin: PathBuf,
     debug: bool,
+    /// Set on every smolvm process, before each call's own `env`.
+    env: Vec<(String, String)>,
 }
 
 impl ProcessRunner {
@@ -72,7 +74,14 @@ impl ProcessRunner {
         Self {
             bin: bin.into(),
             debug: false,
+            env: Vec::new(),
         }
+    }
+
+    /// Sets `name` on every smolvm process this runner starts.
+    pub fn env(mut self, name: &str, value: impl Into<String>) -> Self {
+        self.env.push((name.to_string(), value.into()));
+        self
     }
 
     /// Print each smolvm command line to stderr.
@@ -96,7 +105,7 @@ impl ProcessRunner {
         cmd.arg("--error-format")
             .arg("json")
             .args(args)
-            .envs(env.iter().map(|(k, v)| (k, v)))
+            .envs(self.env.iter().chain(env).map(|(k, v)| (k, v)))
             .stdin(Stdio::null());
         cmd
     }
@@ -212,6 +221,7 @@ impl Runner for ProcessRunner {
         self.trace(args);
         let mut child = Command::new(&self.bin)
             .args(args)
+            .envs(self.env.iter().map(|(k, v)| (k, v)))
             .spawn()
             .with_context(|| self.spawn_error())?;
         // The child started with default signal handling; from here Ctrl-C belongs to it.
@@ -446,6 +456,15 @@ mod tests {
             .run_streaming(&[], &[pair("PROBE", "p")], &["HOME".into()], &mut |_| {})
             .unwrap();
         assert_eq!(out.stdout, "unset|p");
+    }
+
+    #[test]
+    fn runner_env_reaches_every_call_and_a_calls_env_wins() {
+        let dir = tempfile::tempdir().unwrap();
+        let runner = probe(dir.path()).env("PROBE", "all");
+        assert!(runner.run(&[]).unwrap().stdout.ends_with("|all"));
+        let out = runner.run_with_env(&[], &[pair("PROBE", "mine")], &[]);
+        assert!(out.unwrap().stdout.ends_with("|mine"));
     }
 
     /// Hands out `chunks` one read at a time, logging each read next to the lines it produced.

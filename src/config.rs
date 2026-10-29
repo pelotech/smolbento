@@ -88,6 +88,12 @@ pub const SETTINGS: &[SettingDef] = &[
         help: "smolvm binary to run",
     },
     SettingDef {
+        key: "smolvm.image-cache-size",
+        env: "SMOLBENTO_IMAGE_CACHE_SIZE",
+        default: "40g",
+        help: "Disk space for smolvm's ready-to-boot images, shared by new sandboxes so they skip the pull (least recently used go first beyond it)",
+    },
+    SettingDef {
         key: "clone.fetch-on-exit",
         env: "SMOLBENTO_CLONE_FETCH_ON_EXIT",
         default: "true",
@@ -190,6 +196,12 @@ impl Settings {
         Ok(self.get(key)?.0)
     }
 
+    /// `smolvm.image-cache-size` in bytes.
+    pub fn image_cache_bytes(&self) -> Result<u64> {
+        parse_cache_size(&self.value("smolvm.image-cache-size")?)
+            .context("setting smolvm.image-cache-size")
+    }
+
     pub fn bool(&self, key: &str) -> Result<bool> {
         parse_bool(&self.value(key)?).with_context(|| format!("setting {key}"))
     }
@@ -201,6 +213,9 @@ impl Settings {
         }
         if key == "kit.allowedSources" {
             crate::kits::trust::parse_allowed_sources(value)?;
+        }
+        if key == "smolvm.image-cache-size" {
+            parse_cache_size(value)?;
         }
         self.file
             .settings
@@ -216,6 +231,13 @@ impl Settings {
 
     fn save(&self) -> Result<()> {
         save_toml(&self.path, &self.file)
+    }
+}
+
+fn parse_cache_size(value: &str) -> Result<u64> {
+    match crate::sandbox::options::parse_size(value, "cache size")? {
+        0 => bail!("the image cache size must be more than 0"),
+        n => Ok(n),
     }
 }
 
@@ -628,6 +650,28 @@ mod tests {
         assert!(s.set("docker.enabled", "maybe").is_err());
         s.set("smolvm.path", "/opt/smolvm").unwrap();
         assert_eq!(s.value("smolvm.path").unwrap(), "/opt/smolvm");
+    }
+
+    #[test]
+    fn image_cache_size_defaults_to_40g_and_must_be_a_size() {
+        let dir = tempfile::tempdir().unwrap();
+        let e = env(&[
+            ("SMOLBENTO_CONFIG_DIR", dir.path().to_str().unwrap()),
+            ("SMOLBENTO_CACHE_DIR", "/k"),
+            ("SMOLBENTO_DATA_DIR", "/d"),
+        ]);
+        let paths = Paths::from_env(&e).unwrap();
+        let mut s = Settings::load(&paths, e.clone()).0;
+        assert_eq!(s.image_cache_bytes().unwrap(), 40 << 30);
+        assert!(s.set("smolvm.image-cache-size", "lots").is_err());
+        assert!(s.set("smolvm.image-cache-size", "0").is_err());
+        s.set("smolvm.image-cache-size", "60G").unwrap();
+        assert_eq!(s.image_cache_bytes().unwrap(), 60 << 30);
+        let mut bad = e;
+        bad.insert("SMOLBENTO_IMAGE_CACHE_SIZE".into(), "big".into());
+        let s = Settings::load(&paths, bad).0;
+        let err = format!("{:#}", s.image_cache_bytes().unwrap_err());
+        assert!(err.contains("smolvm.image-cache-size"), "{err}");
     }
 
     #[test]
