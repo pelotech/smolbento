@@ -14,6 +14,8 @@ struct E2e {
     name: String,
     /// Extra environment for every `sbt` call (e.g. `SMOLBENTO_DOCKER=true` for one test).
     vars: Vec<(&'static str, String)>,
+    /// Set by [`E2e::one_off_images`].
+    no_seeds: std::cell::Cell<bool>,
 }
 
 impl E2e {
@@ -24,9 +26,17 @@ impl E2e {
             dir,
             name: format!("e2e-{}-{test}", std::process::id()),
             vars: Vec::new(),
+            no_seeds: Default::default(),
         };
         e.ok(&["policy", "init", "allow-all"]);
         e
+    }
+
+    /// The test boots images made for it alone (kits from its registry, builder builds): smolvm
+    /// doesn't keep a ready-made copy of them (`SMOLVM_IMAGE_SEEDS=0`), which nothing would reuse
+    /// and which would push your agent images out of smolvm's image cache.
+    fn one_off_images(&self) {
+        self.no_seeds.set(true);
     }
 
     fn workspace(&self) -> PathBuf {
@@ -54,6 +64,7 @@ impl E2e {
             .env_remove("SMOLBENTO_SSH_AGENT_SOCKET")
             .env_remove("SMOLBENTO_SSH_AGENT_FORWARDING")
             .envs(self.vars.iter().map(|(k, v)| (k, v)))
+            .envs(self.no_seeds.get().then_some(("SMOLVM_IMAGE_SEEDS", "0")))
     }
 
     /// Host git in the workspace. The `sandbox-<name>` remote runs `smolbento _upload-pack`, so
@@ -957,6 +968,7 @@ struct Registry {
 
 impl Registry {
     fn start(e: &E2e) -> Registry {
+        e.one_off_images();
         e.ok(&["settings", "set", "kit.allowedSources", r#"["*"]"#]);
         let r = Registry {
             machine: format!("e2e-{}-registry", std::process::id()),
@@ -1339,6 +1351,7 @@ impl Drop for BuilderGuard {
 fn local_v3_kit_builds_in_the_builder_sandbox() {
     let e = E2e::new("build");
     let _builder = BuilderGuard::new();
+    e.one_off_images();
     let kit = e.dir.path().join("built");
     std::fs::create_dir_all(&kit).unwrap();
     std::fs::write(
@@ -1373,6 +1386,7 @@ fn kit_host_mount_shared_and_kept() {
     const SHARED: &str = "/home/agent/.e2e-shared";
     let e = E2e::new("hostmount");
     let _builder = BuilderGuard::new();
+    e.one_off_images();
     let kit = e.dir.path().join("hostmount");
     std::fs::create_dir_all(&kit).unwrap();
     std::fs::write(
@@ -1527,6 +1541,7 @@ fn local_kit_builds_from_a_registry_that_needs_a_login() {
     // recreates it again.
     let e = E2e::new("dhi");
     let _builder = BuilderGuard::new();
+    e.one_off_images();
 
     // Removed on every exit path; directly from the keychain too, in case `secret rm` refuses
     // after a partial `secret set`.

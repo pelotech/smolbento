@@ -82,7 +82,7 @@ SANDBOX
   Memory:     1536 MiB
 
 IMAGE
-  ○ image — pulling…
+  ○ image — preparing…
   ✓ image — ready
 
 SETUP
@@ -94,7 +94,10 @@ SETUP
 ```
 
 On a terminal each step is one line redrawn in place, with a spinner and, while an image is
-pulled, the percentage after it (`⠙ image — pulling… 42%`).
+pulled, the percentage after it (`⠙ image — pulling… 42%`). The image step says `preparing` until
+smolvm reports a pull: an image smolvm has cached starts without one (see
+[`smolvm.image-cache-size`](configuration.md#settings)), and the first sandbox of a new image may
+pull it before any percentage shows.
 
 Progress goes to stdout, as in sbx. A script that captures the output (such as
 `name=$(sbt run -d …)`) should pass `--no-progress` to `run` or `create`. It hides all progress,

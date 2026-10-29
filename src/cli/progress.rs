@@ -199,12 +199,15 @@ impl CreateSteps {
 
     pub fn on(&mut self, e: Event) {
         match e {
+            // "preparing" until smolvm reports a pull: a cached image needs none, and a cache
+            // miss may pull without progress (smolvm builds its cache entry silently).
             Event::Boot => {
                 self.p.section("IMAGE");
-                self.begin("image", "pulling", "ready");
+                self.begin("image", "preparing", "ready");
             }
             Event::Pull(pull) => {
                 if let Some((step, _)) = &mut self.current {
+                    step.doing = "pulling".into();
                     step.detail(&pull.to_string());
                 }
             }
@@ -292,7 +295,7 @@ mod tests {
         steps.end(true);
         assert_eq!(
             text(&out),
-            "\nIMAGE\n  ○ image — pulling…\n  ✓ image — ready\n\nSETUP\n\
+            "\nIMAGE\n  ○ image — preparing…\n  ✓ image — ready\n\nSETUP\n\
              \x20 ○ sandbox — starting…\n  ✓ sandbox — started\n\
              \x20 ○ docker — installing…\n  ✓ docker — installed\n"
         );
@@ -301,8 +304,22 @@ mod tests {
         steps.end(false);
         assert_eq!(
             text(&out),
-            "\nIMAGE\n  ○ image — pulling…\n  ✗ image — failed\n"
+            "\nIMAGE\n  ○ image — preparing…\n  ✗ image — failed\n"
         );
+    }
+
+    #[test]
+    fn the_image_step_says_pulling_only_once_smolvm_pulls() {
+        use crate::smolvm::PullProgress;
+        let (p, out) = reporter(true, false, false);
+        let mut steps = CreateSteps::new(&p);
+        steps.on(Event::Boot);
+        steps.on(Event::Pull(PullProgress::Percent(42)));
+        steps.end(true);
+        let s = text(&out);
+        assert!(s.contains("⠋ image — preparing…"), "{s:?}");
+        assert!(s.contains("⠙ image — pulling… 42%"), "{s:?}");
+        assert!(s.ends_with("  ✓ image — ready\n"), "{s:?}");
     }
 
     #[test]
