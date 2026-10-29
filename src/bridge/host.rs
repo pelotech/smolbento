@@ -60,7 +60,35 @@ fn open_url(cmd: Option<&str>, url: &str) -> Result<()> {
     } else {
         "xdg-open"
     });
-    run(program, &[url], None)
+    launch(program, &[url], OPEN_GRACE)
+}
+
+/// How long an opener has to fail before its URL counts as opened.
+const OPEN_GRACE: Duration = Duration::from_secs(2);
+
+/// Starts an opener: an exit within `grace` decides; one still running after it is left to run.
+/// `xdg-open` can run the browser itself in the foreground, so it is never killed.
+fn launch(program: &str, args: &[&str], grace: Duration) -> Result<()> {
+    let mut child = Command::new(program)
+        .args(args)
+        .stdin(Stdio::null())
+        .stdout(Stdio::null())
+        .stderr(Stdio::null())
+        .spawn()
+        .with_context(|| format!("running {program}"))?;
+    let until = Instant::now() + grace;
+    while Instant::now() < until {
+        if let Some(status) = child.try_wait()? {
+            if !status.success() {
+                bail!("{program} failed ({status})");
+            }
+            return Ok(());
+        }
+        thread::sleep(Duration::from_millis(20));
+    }
+    // Reaped when it exits, so it leaves no zombie.
+    thread::spawn(move || child.wait());
+    Ok(())
 }
 
 /// `pbcopy` on macOS; on Linux the first of `wl-copy`, `xclip`, `xsel` that works.
@@ -89,7 +117,7 @@ fn run(program: &str, args: &[&str], input: Option<&[u8]>) -> Result<()> {
     run_within(program, args, input, CMD_TIMEOUT)
 }
 
-/// How long an opener or copier may run: requests are handled one at a time.
+/// How long a copier may run: requests are handled one at a time.
 const CMD_TIMEOUT: Duration = Duration::from_secs(10);
 
 /// `run`, killing the command after `timeout`.
@@ -231,5 +259,55 @@ mod tests {
             "{:?}",
             started.elapsed()
         );
+    }
+
+    #[test]
+    fn an_opener_still_running_after_the_grace_is_left_running() {
+        let dir = tempfile::tempdir().unwrap();
+        let script = dir.path().join("browser");
+        let pid_file = dir.path().join("pid");
+        // A browser in the foreground: never exits on its own.
+        std::fs::write(
+            &script,
+            format!(
+                "#!/bin/sh\necho $$ > '{}'\nexec sleep 30\n",
+                pid_file.display()
+            ),
+        )
+        .unwrap();
+        std::fs::set_permissions(&script, std::fs::Permissions::from_mode(0o755)).unwrap();
+        let program = script.display().to_string();
+        let started = Instant::now();
+        launch(&program, &["https://x"], Duration::from_millis(300)).unwrap();
+        assert!(
+            started.elapsed() < Duration::from_secs(2),
+            "{:?}",
+            started.elapsed()
+        );
+        let pid = std::fs::read_to_string(&pid_file)
+            .unwrap()
+            .trim()
+            .to_string();
+        let alive = || {
+            Command::new("kill")
+                .args(["-0", &pid])
+                .status()
+                .unwrap()
+                .success()
+        };
+        thread::sleep(Duration::from_millis(200));
+        assert!(alive(), "the opener was killed");
+        Command::new("kill").arg(&pid).status().unwrap();
+    }
+
+    #[test]
+    fn an_opener_that_fails_early_is_an_error() {
+        let dir = tempfile::tempdir().unwrap();
+        let cmd = recorder(dir.path(), 1).display().to_string();
+        let started = Instant::now();
+        assert!(launch(&cmd, &["https://x"], OPEN_GRACE).is_err());
+        assert!(started.elapsed() < OPEN_GRACE, "{:?}", started.elapsed());
+        let ok = recorder(dir.path(), 0).display().to_string();
+        assert!(launch(&ok, &["https://x"], OPEN_GRACE).is_ok());
     }
 }
