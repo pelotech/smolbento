@@ -2,6 +2,7 @@
 //! over a socket smolvm mounts into the sandbox, served while a user is attached.
 
 pub mod agent;
+pub mod filter;
 mod host;
 mod relay;
 mod server;

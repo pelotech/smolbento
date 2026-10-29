@@ -229,6 +229,9 @@ pub struct KitFirstStart {
     /// Every policy rule id the kits added, removed again by `cli::plan::create` when the create
     /// fails.
     pub rule_ids: Vec<String>,
+    /// Where an install-phase `ssh-agent@1` grant (`sbx.ssh-agent`) finds the host agent while
+    /// the install hooks run.
+    pub agent: Option<bridge::filter::Backing>,
 }
 
 /// The first start of a clone sandbox clones the host repo inside the VM (as sbx).
@@ -648,7 +651,10 @@ fn first_start<R: Runner>(
     drop_install_rules: impl FnOnce(&[String]) -> Result<NetworkSpec>,
     on: &mut dyn FnMut(Event),
 ) -> Result<()> {
+    // An install-phase `ssh-agent@1` grant is served while the install hooks run only.
+    let agent = install_agent(sb, kit);
     let after_install = || -> Result<()> {
+        drop(agent);
         let mut network = plan.network.clone();
         if !kit.steps.install_rules.is_empty() {
             network = drop_install_rules(&kit.steps.install_rules)
@@ -690,6 +696,16 @@ fn first_start<R: Runner>(
         Ok(())
     };
     apply_kit_steps(vm, sb, &kit.steps, after_install, on).map_err(|(_, e)| e)
+}
+
+/// Serves the sandbox's install-phase agent grant, if it has one and install hooks to run.
+fn install_agent(sb: &Sandbox, kit: &KitFirstStart) -> Option<bridge::Server> {
+    let access = sb.meta.ssh_agent.as_ref()?.install.clone()?;
+    let backing = kit.agent.clone()?;
+    if kit.steps.install.is_empty() {
+        return None;
+    }
+    bridge::filter::serve_for(sb.name(), access, backing)
 }
 
 /// Where `apply_kit_steps` failed.
@@ -1854,6 +1870,7 @@ echo "$g""#,
                 },
                 restart_without: restart_without.iter().map(|v| v.to_string()).collect(),
                 rule_ids: vec!["r-npm".into(), "r-api".into()],
+                agent: None,
             }),
             ..plan()
         }
@@ -1917,6 +1934,58 @@ echo "$g""#,
                 "Install(\"docker\")"
             ]
         );
+    }
+
+    #[test]
+    fn an_install_grant_is_served_only_while_the_install_hooks_run() {
+        let both = r#"{"install":{"sign":["git"]},"runtime":{"sign":null}}"#;
+        let runtime = r#"{"runtime":{"sign":null}}"#;
+        for (tag, grant, want) in [
+            ("both", both, [true, true, false, false]),
+            ("runtime", runtime, [false; 4]),
+        ] {
+            let name = format!("agent-{}-first-{tag}", std::process::id());
+            let label = serde_json::to_string(grant).unwrap();
+            let status = STATUS
+                .replace("\"state\": \"running\"", "\"state\": \"created\"")
+                .replace("\"true\"", "\"false\"")
+                .replace(
+                    "\"sbx.name\": \"claude-myrepo\"",
+                    &format!("\"sbx.name\": \"{name}\", \"sbx.ssh-agent\": {label}"),
+                );
+            let fake = FakeRunner::new();
+            fake.ok(&["machine", "status"], &status);
+            let seen = std::rc::Rc::new(std::cell::RefCell::new(Vec::new()));
+            let (s, socket) = (seen.clone(), bridge::agent_socket(&name));
+            fake.during(&["machine", "exec"], move |args| {
+                let script = args.last().unwrap();
+                if ["install-1", "install-2", "files-1", "context-1"]
+                    .iter()
+                    .any(|w| script == &format!("echo {w}"))
+                {
+                    let served = std::os::unix::net::UnixStream::connect(&socket).is_ok();
+                    s.borrow_mut().push(served);
+                }
+            });
+            let vm = Smolvm::new(fake);
+            let (_dir, paths) = crate::config::test_paths();
+            let mut plan = kit_plan(&[]);
+            plan.kit.as_mut().unwrap().agent = Some(bridge::filter::Backing {
+                paths,
+                env: Default::default(),
+            });
+            let sb = create(
+                &vm,
+                &request(),
+                &plan,
+                |_| Ok(plan.network.clone()),
+                &mut |_| {},
+            )
+            .unwrap();
+            assert!(sb.meta.ssh_agent.is_some());
+            assert_eq!(*seen.borrow(), want, "{tag}");
+            assert!(!bridge::agent_socket(&name).exists(), "{tag}");
+        }
     }
 
     #[test]

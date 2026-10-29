@@ -131,6 +131,8 @@ pub fn run<R: Runner>(ctx: &mut Ctx<R>, a: &RunArgs) -> Result<i32> {
         let _session = session::Session::register(&sessions, sb.name())?;
         // Opens URLs and copies text on the host for the agent while the user is attached.
         let _bridge = bridge::attach(&ctx.env, &ctx.settings, &sb);
+        // A runtime `ssh-agent@1` grant: the filtered host agent, while the user is attached.
+        let _agent = bridge::filter::attach(&ctx.paths, &ctx.env, &sb);
         if image_user.is_some() && !has_bash(ctx, &sb)? {
             // sbx's error for such an image, and the code its agent exits with.
             eprintln!("executable file '{BASH}' not found");
@@ -996,6 +998,28 @@ mod tests {
         assert_eq!(*seen.borrow(), vec![true]);
         // Stopped with the session.
         assert!(!crate::bridge::host_socket(&name).exists());
+    }
+
+    #[test]
+    fn serves_a_runtime_ssh_agent_grant_while_attached() {
+        let mut t = test_env(&[]);
+        let (name, seen) = agent_probe(&t, "run", Some(r#"{"runtime":{"sign":["git"]}}"#));
+        sbt(&mut t.ctx, &["run", "--name", &name]).unwrap();
+        assert_eq!(*seen.borrow(), vec![true]);
+        assert!(!crate::bridge::agent_socket(&name).exists());
+    }
+
+    #[test]
+    fn serves_no_ssh_agent_without_a_runtime_grant() {
+        for (tag, grant) in [
+            ("run-none", None),
+            ("run-install", Some(r#"{"install":{"sign":null}}"#)),
+        ] {
+            let mut t = test_env(&[]);
+            let (name, seen) = agent_probe(&t, tag, grant);
+            sbt(&mut t.ctx, &["run", "--name", &name]).unwrap();
+            assert_eq!(*seen.borrow(), vec![false], "{tag}");
+        }
     }
 
     #[test]

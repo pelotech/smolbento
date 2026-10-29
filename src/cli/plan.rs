@@ -291,6 +291,10 @@ pub fn prepare_create<R: Runner>(
             steps,
             restart_without: req.credential_install.clone(),
             rule_ids: ids,
+            agent: Some(crate::bridge::filter::Backing {
+                paths: ctx.paths.clone(),
+                env: ctx.env.clone(),
+            }),
         });
     }
     if !denies.is_empty() {

@@ -142,6 +142,37 @@ pub fn v3_kit(t: &TestEnv, dir: &str, descriptor: &str, layers: &[&[u8]]) {
 /// A running sandbox (`sbx.bridge=true` when `bridge`) with a name of its own: its bridge socket is
 /// under the real `/tmp/sbt-<uid>`, shared with other test processes. Returns the name and, for each
 /// interactive call, whether the bridge socket answered while the user was attached.
+/// A running sandbox whose `sbx.ssh-agent` label is `grant` (none when `None`), and a record of
+/// whether its agent socket was served during each interactive exec.
+pub fn agent_probe(
+    t: &TestEnv,
+    tag: &str,
+    grant: Option<&str>,
+) -> (String, std::rc::Rc<std::cell::RefCell<Vec<bool>>>) {
+    let name = format!("agent-{}-{tag}", std::process::id());
+    let mut labels = vec![
+        ("sbx.name", name.as_str()),
+        ("sbx.agent", "shell"),
+        ("sbx.workspace", "/w/proj"),
+    ];
+    if let Some(grant) = grant {
+        labels.push(("sbx.ssh-agent", grant));
+    }
+    let runner = t.ctx.vm.runner();
+    runner.ok(&["machine"], "");
+    runner.ok(
+        &["machine", "status"],
+        &machine_json(&format!("sbx-{name}"), "running", &labels),
+    );
+    let seen = std::rc::Rc::new(std::cell::RefCell::new(Vec::new()));
+    let (s, socket) = (seen.clone(), crate::bridge::agent_socket(&name));
+    runner.during_interactive(move || {
+        let served = std::os::unix::net::UnixStream::connect(&socket).is_ok();
+        s.borrow_mut().push(served);
+    });
+    (name, seen)
+}
+
 pub fn bridge_probe(
     t: &TestEnv,
     tag: &str,

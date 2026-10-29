@@ -46,6 +46,8 @@ pub fn exec<R: Runner>(ctx: &mut Ctx<R>, a: &ExecArgs) -> Result<i32> {
     } else {
         None
     };
+    // A runtime `ssh-agent@1` grant is served for every exec (`git commit -S` runs this way too).
+    let _agent = bridge::filter::attach(&ctx.paths, &ctx.env, &sb);
     ctx.vm.exec(&spec)
 }
 
@@ -285,6 +287,32 @@ mod tests {
         sbt(&mut t.ctx, &["exec", &name, "true"]).unwrap();
         assert_eq!(*seen.borrow(), vec![true, false, false]);
         assert!(!crate::bridge::host_socket(&name).exists());
+    }
+
+    #[test]
+    fn every_exec_serves_a_runtime_ssh_agent_grant() {
+        let mut t = test_env(&[]);
+        let (name, seen) = agent_probe(&t, "exec", Some(r#"{"runtime":{"sign":null}}"#));
+        sbt(&mut t.ctx, &["exec", "-it", &name, "sh"]).unwrap();
+        sbt(&mut t.ctx, &["exec", "-i", &name, "sh"]).unwrap();
+        sbt(&mut t.ctx, &["exec", &name, "git", "commit"]).unwrap();
+        assert_eq!(*seen.borrow(), vec![true, true, true]);
+        // Stopped with the exec.
+        assert!(!crate::bridge::agent_socket(&name).exists());
+    }
+
+    #[test]
+    fn exec_serves_no_ssh_agent_without_a_runtime_grant() {
+        for (tag, grant) in [
+            ("none", None),
+            ("install", Some(r#"{"install":{"sign":null}}"#)),
+        ] {
+            let mut t = test_env(&[]);
+            let (name, seen) = agent_probe(&t, tag, grant);
+            sbt(&mut t.ctx, &["exec", "-it", &name, "sh"]).unwrap();
+            sbt(&mut t.ctx, &["exec", &name, "true"]).unwrap();
+            assert_eq!(*seen.borrow(), vec![false, false], "{tag}");
+        }
     }
 
     #[test]
