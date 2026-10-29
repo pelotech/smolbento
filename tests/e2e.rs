@@ -49,6 +49,8 @@ impl E2e {
             .env("SMOLBENTO_CACHE_DIR", self.dir.path().join("cache"))
             .env("SMOLBENTO_DATA_DIR", self.dir.path().join("data"))
             .env("SMOLBENTO_DOCKER", "false")
+            // Never your SSH agent: only the SSH tests set a throwaway one in `vars`.
+            .env_remove("SSH_AUTH_SOCK")
             .envs(self.vars.iter().map(|(k, v)| (k, v)))
     }
 
@@ -2402,4 +2404,216 @@ fn bridge_opens_urls_copies_text_and_relays_login_callbacks() {
     );
     assert_eq!(read(&opened).lines().count(), 2, "nothing more opened");
     assert!(host_get(port, "/cb").is_err(), "the relay stopped");
+}
+
+/// A throwaway `ssh-agent` on a short socket under /tmp holding one throwaway ed25519 key, so the
+/// SSH tests never talk to your agent. Killed on drop.
+struct ThrowawayAgent {
+    child: std::process::Child,
+    socket: PathBuf,
+    /// The key's comment, as `ssh-add -l` prints it.
+    comment: String,
+}
+
+impl ThrowawayAgent {
+    fn start(e: &E2e, n: u32) -> ThrowawayAgent {
+        let socket = PathBuf::from(format!("/tmp/sbt-e2e-{}-{n}.sock", std::process::id()));
+        let _ = std::fs::remove_file(&socket);
+        let child = Command::new("ssh-agent")
+            .arg("-D")
+            .arg("-a")
+            .arg(&socket)
+            .env_remove("SSH_AUTH_SOCK")
+            .stdout(std::process::Stdio::null())
+            .spawn()
+            .unwrap();
+        let mut agent = ThrowawayAgent {
+            child,
+            socket,
+            comment: format!("sbt-e2e-throwaway-{}-{n}", std::process::id()),
+        };
+        // Its socket must exist before anything talks to an agent; otherwise stop here.
+        let up = wait_until(10, || agent.socket.exists());
+        assert!(
+            up && agent.child.try_wait().unwrap().is_none(),
+            "the throwaway ssh-agent didn't start on {}",
+            agent.socket.display()
+        );
+        let key = e.dir.path().join(format!("id_ed25519_{n}"));
+        let keygen = Command::new("ssh-keygen")
+            .args(["-q", "-t", "ed25519", "-N", "", "-C", &agent.comment, "-f"])
+            .arg(&key)
+            .output()
+            .unwrap();
+        assert!(keygen.status.success(), "ssh-keygen: {keygen:?}");
+        let add = agent.ssh_add(&[key.to_str().unwrap()]);
+        assert!(add.status.success(), "ssh-add: {add:?}");
+        assert!(agent.has_key(), "the throwaway agent holds its key");
+        agent
+    }
+
+    /// `ssh-add args` against this agent only.
+    fn ssh_add(&self, args: &[&str]) -> Output {
+        Command::new("ssh-add")
+            .args(args)
+            .env("SSH_AUTH_SOCK", &self.socket)
+            .output()
+            .unwrap()
+    }
+
+    fn has_key(&self) -> bool {
+        String::from_utf8_lossy(&self.ssh_add(&["-l"]).stdout).contains(&self.comment)
+    }
+
+    /// Points every `sbt` call of `e` at this agent.
+    fn serve_to(&self, e: &mut E2e) {
+        e.vars
+            .push(("SSH_AUTH_SOCK", self.socket.to_str().unwrap().into()));
+    }
+}
+
+impl Drop for ThrowawayAgent {
+    fn drop(&mut self) {
+        let _ = self.child.kill();
+        let _ = self.child.wait();
+        let _ = std::fs::remove_file(&self.socket);
+    }
+}
+
+/// Signs a file in the guest with the agent's key (`ssh-keygen -Y sign`) in namespace `ns`.
+fn guest_sign(e: &E2e, sb: &str, ns: &str) -> Output {
+    let script = format!(
+        "set -e; cd /tmp; ssh-add -L > e2e-key.pub; echo hi > e2e-{ns}; \
+         ssh-keygen -Y sign -f e2e-key.pub -n {ns} e2e-{ns}; test -s e2e-{ns}.sig"
+    );
+    e.sbt(&["exec", sb, "sh", "-c", &script])
+}
+
+/// sbx's built-in `shell` agent forwards your SSH agent filtered: the sandbox lists keys and signs,
+/// but can't remove them.
+#[test]
+#[ignore = "boots real VMs and needs the Alpine package mirror; run with `just e2e`"]
+fn built_in_agent_lists_and_signs_but_cannot_remove_keys() {
+    let mut e = E2e::new("sshagent");
+    let agent = ThrowawayAgent::start(&e, 1);
+    agent.serve_to(&mut e);
+    e.create_alpine_with("apk add -q openssh-client openssh-keygen");
+
+    let sock = e.ok(&["exec", &e.name, "sh", "-c", "echo $SSH_AUTH_SOCK"]);
+    assert_eq!(sock, "/run/ssh-agent.sock\n");
+    let keys = e.ok(&["exec", &e.name, "ssh-add", "-l"]);
+    assert!(keys.contains(&agent.comment), "{keys}");
+    let signed = guest_sign(&e, &e.name, "file");
+    assert!(signed.status.success(), "sign -n file: {signed:?}");
+
+    let remove = e.sbt(&["exec", &e.name, "ssh-add", "-D"]);
+    assert!(
+        !remove.status.success(),
+        "ssh-add -D is refused: {remove:?}"
+    );
+    assert!(agent.has_key(), "the key is still in the agent");
+}
+
+/// Kit grants: a `sign: [git]` mixin signs only git signatures; an install-only grant reaches the
+/// install hooks that declare `SSH_AUTH_SOCK` but not the workload; a v3 workload without a grant
+/// gets no agent.
+#[test]
+#[ignore = "boots real VMs and pulls alpine; run with `just e2e`"]
+fn kit_ssh_agent_grants_limit_signing_and_phases() {
+    let mut e = E2e::new("sshkit");
+    let agent = ThrowawayAgent::start(&e, 2);
+    agent.serve_to(&mut e);
+    let reg = Registry::start(&e);
+    let workload = reg.push(
+        "ssh-workload",
+        Image::alpine(),
+        descriptor(
+            "workload",
+            &[],
+            serde_json::json!([
+                {"type": "com.docker.sandbox/sbx@1"},
+                {"type": "com.docker.sandbox/lifecycle@1",
+                 "config": {"install": [
+                     {"command": add_agent_hook(), "user": "0"},
+                     {"command": "apk add -q openssh-client openssh-keygen", "user": "0"},
+                 ]}},
+            ]),
+        ),
+    );
+    let git_only = reg.push(
+        "ssh-git",
+        Image::empty(),
+        descriptor(
+            "mixin",
+            &["e2e-ssh-git"],
+            serde_json::json!([
+                {"type": "com.docker.sandbox/ssh-agent@1",
+                 "config": {"phase": "runtime", "unrestricted": false, "sign": ["git"]}},
+            ]),
+        ),
+    );
+    let install_only = reg.push(
+        "ssh-install",
+        Image::empty(),
+        descriptor(
+            "mixin",
+            &["e2e-ssh-install"],
+            serde_json::json!([
+                {"type": "com.docker.sandbox/ssh-agent@1", "config": {"phase": "install"}},
+                {"type": "com.docker.sandbox/lifecycle@1",
+                 "config": {"install": [
+                     {"command": "apk add -q openssh-client && ssh-add -l > /etc/e2e-install-keys",
+                      "user": "0", "env": ["SSH_AUTH_SOCK"]},
+                 ]}},
+            ]),
+        ),
+    );
+    let ws = e.workspace();
+    let create = |name: &str, mixin: Option<&str>| {
+        let mut args = vec!["create"];
+        if let Some(m) = mixin {
+            args.extend(["--kit", m]);
+        }
+        args.extend([
+            &workload,
+            ws.to_str().unwrap(),
+            "--name",
+            name,
+            "--cpus",
+            "1",
+            "-m",
+            "1g",
+        ]);
+        e.ok(&args);
+    };
+    let (git, inst) = (format!("{}-git", e.name), format!("{}-inst", e.name));
+    let _cleanup = Forks(vec![git.clone(), inst.clone()]);
+    let env = "echo ${SSH_AUTH_SOCK-unset}";
+
+    create(&git, Some(&git_only));
+    let signed = guest_sign(&e, &git, "git");
+    assert!(signed.status.success(), "sign -n git: {signed:?}");
+    let refused = guest_sign(&e, &git, "file");
+    assert!(!refused.status.success(), "sign -n file is refused");
+
+    create(&inst, Some(&install_only));
+    let during = root_out(&inst, "cat /etc/e2e-install-keys");
+    assert!(
+        during.contains(&agent.comment),
+        "install hooks list keys: {during}"
+    );
+    assert_eq!(
+        e.ok(&["exec", &inst, "sh", "-c", env]),
+        "unset\n",
+        "not at runtime"
+    );
+
+    create(&e.name, None);
+    let none = format!("{env}; test -e /run/ssh-agent.sock && echo socket || true");
+    assert_eq!(
+        e.ok(&["exec", &e.name, "sh", "-c", &none]),
+        "unset\n",
+        "no grant, no agent"
+    );
+    assert!(agent.has_key(), "the key is still in the agent");
 }
