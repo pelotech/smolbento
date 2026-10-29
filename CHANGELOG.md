@@ -1,5 +1,12 @@
 # Changelog
 
+## [0.11.0](https://github.com/pelotech/smolbento/compare/v0.10.1...v0.11.0) (2026-10-29)
+
+
+### Features
+
+* keep agent images cached for new sandboxes ([#43](https://github.com/pelotech/smolbento/issues/43)) ([6bfb526](https://github.com/pelotech/smolbento/commit/6bfb52636f17f9de1e976d771fa7a3c303e04372))
+
 ## [0.10.1](https://github.com/pelotech/smolbento/compare/v0.10.0...v0.10.1) (2026-10-29)
 
 
