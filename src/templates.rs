@@ -12,6 +12,8 @@ use sha2::{Digest, Sha256};
 use crate::config::Paths;
 
 pub const INDEX: &str = "templates.json";
+pub const ARCHIVE_META: &str = "smolbento-template.json";
+pub const ARCHIVE_PACK: &str = "template.smolmachine";
 
 /// A template name as Docker reads an image ref: `chk-tpl` is `docker.io/library/chk-tpl:latest`.
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -190,6 +192,63 @@ impl Store {
         self.drop_unused(&index, e)
     }
 
+    /// `e` as a tar of its entry (without `id`) and its pack, for `template load` elsewhere.
+    pub fn export(&self, e: &Entry, out: &Path) -> Result<()> {
+        let meta = serde_json::to_vec_pretty(&Entry {
+            id: String::new(),
+            ..e.clone()
+        })?;
+        let f = std::fs::OpenOptions::new()
+            .write(true)
+            .create(true)
+            .truncate(true)
+            .mode(0o600)
+            .open(out)
+            .with_context(|| format!("creating {}", out.display()))?;
+        let mut tar = tar::Builder::new(f);
+        let mut header = tar::Header::new_gnu();
+        header.set_size(meta.len() as u64);
+        header.set_mode(0o600);
+        header.set_cksum();
+        tar.append_data(&mut header, ARCHIVE_META, meta.as_slice())?;
+        tar.append_path_with_name(self.pack(e), ARCHIVE_PACK)?;
+        tar.into_inner()?;
+        Ok(())
+    }
+
+    /// Adds the template in an `export` archive, replacing one with its ref.
+    pub fn import(&self, file: &Path) -> Result<Entry> {
+        let not_ours = || format!("{} isn't a smolbento template archive", file.display());
+        let f = std::fs::File::open(file)
+            .with_context(|| format!("failed to open {}", file.display()))?;
+        let tmp = self.temp_dir()?;
+        let mut meta: Option<Entry> = None;
+        let mut pack = None;
+        for entry in tar::Archive::new(f).entries().with_context(not_ours)? {
+            let mut entry = entry.with_context(not_ours)?;
+            let name = entry.path().with_context(not_ours)?.display().to_string();
+            match name.as_str() {
+                ARCHIVE_META => {
+                    let mut s = String::new();
+                    entry.read_to_string(&mut s)?;
+                    meta = Some(serde_json::from_str(&s).with_context(not_ours)?);
+                }
+                ARCHIVE_PACK => {
+                    let p = tmp.path().join(ARCHIVE_PACK);
+                    entry.unpack(&p)?;
+                    pack = Some(p);
+                }
+                _ => {}
+            }
+        }
+        let (Some(meta), Some(pack)) = (meta, pack) else {
+            bail!(not_ours());
+        };
+        // The name is checked as `save` checks it.
+        TemplateRef::parse(&meta.full()).with_context(not_ours)?;
+        self.add(meta, &pack)
+    }
+
     /// Deletes `e`'s pack unless another entry still names it.
     fn drop_unused(&self, index: &Index, e: &Entry) -> Result<()> {
         if index.templates.iter().all(|t| t.id != e.id) {
@@ -307,5 +366,33 @@ mod tests {
         let mode = |p: &Path| std::fs::metadata(p).unwrap().permissions().mode() & 0o777;
         assert_eq!(mode(&s.dir), 0o700);
         assert_eq!(mode(&s.dir.join(INDEX)), 0o600);
+    }
+
+    #[test]
+    fn export_then_import_round_trips() {
+        let (dir, s) = store();
+        let e = s.add(meta("t:v1"), &pack(dir.path(), "body")).unwrap();
+        let out = dir.path().join("t.tar");
+        s.export(&e, &out).unwrap();
+        s.remove(&e).unwrap();
+        let back = s.import(&out).unwrap();
+        assert_eq!(back, e);
+        assert_eq!(std::fs::read_to_string(s.pack(&back)).unwrap(), "body");
+        let names: Vec<String> = tar::Archive::new(std::fs::File::open(&out).unwrap())
+            .entries()
+            .unwrap()
+            .map(|e| e.unwrap().path().unwrap().display().to_string())
+            .collect();
+        assert_eq!(names, vec![ARCHIVE_META, ARCHIVE_PACK]);
+    }
+
+    #[test]
+    fn import_refuses_other_files() {
+        let (dir, s) = store();
+        let f = dir.path().join("x.tar");
+        std::fs::write(&f, "not a tar").unwrap();
+        let err = s.import(&f).unwrap_err().to_string();
+        assert!(err.contains("isn't a smolbento template archive"), "{err}");
+        assert!(s.list().unwrap().is_empty());
     }
 }
