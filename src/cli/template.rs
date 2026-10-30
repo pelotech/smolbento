@@ -3,17 +3,20 @@
 use std::io::Write;
 
 use anyhow::{Context, Result, bail};
+use serde::Serialize;
 
-use super::args::{TemplateCmd, TemplateSaveArgs};
+use super::args::{
+    KitFormat, TemplateCmd, TemplateLoadArgs, TemplateLsArgs, TemplateRmArgs, TemplateSaveArgs,
+};
 use super::lifecycle::stop_sandbox;
+use super::ls::age;
 use super::progress::Progress;
-use super::{Ctx, Unsupported, confirm};
+use super::{Ctx, Unsupported, confirm, table};
 use crate::sandbox;
 use crate::smolvm::Runner;
 use crate::templates::{Entry, Store, TemplateRef};
 
 pub fn run<R: Runner>(ctx: &mut Ctx<R>, cmd: TemplateCmd) -> Result<i32> {
-    let _ = ctx;
     match cmd {
         TemplateCmd::Inspect(_) => Err(Unsupported(
             "'template inspect' requires --cloud in v1; local templates are smolvm packs; \
@@ -22,8 +25,128 @@ pub fn run<R: Runner>(ctx: &mut Ctx<R>, cmd: TemplateCmd) -> Result<i32> {
         )
         .into()),
         TemplateCmd::Save(a) => save(ctx, &a).map(|()| 0),
-        _ => Err(Unsupported("`sbt template` is not implemented yet".into()).into()),
+        TemplateCmd::Ls(a) => ls(ctx, &a).map(|()| 0),
+        TemplateCmd::Rm(a) => rm(ctx, &a).map(|()| 0),
+        TemplateCmd::Load(a) => load(ctx, &a).map(|()| 0),
     }
+}
+
+#[derive(Serialize)]
+struct Row<'a> {
+    id: &'a str,
+    repository: &'a str,
+    tag: &'a str,
+    flavor: &'a str,
+    created_at: &'a str,
+    size: u64,
+}
+
+fn format(json: bool, format: Option<KitFormat>) -> KitFormat {
+    if json {
+        KitFormat::Json
+    } else {
+        format.unwrap_or(KitFormat::Table)
+    }
+}
+
+fn ls<R: Runner>(ctx: &Ctx<R>, a: &TemplateLsArgs) -> Result<()> {
+    let all = Store::new(&ctx.paths).list()?;
+    let rows: Vec<Row> = all
+        .iter()
+        .map(|e| Row {
+            id: &e.id,
+            repository: &e.repository,
+            tag: &e.tag,
+            flavor: &e.agent,
+            created_at: &e.created_at,
+            size: e.size,
+        })
+        .collect();
+    let mut out = &ctx.out;
+    match format(a.json, a.format) {
+        _ if a.quiet => all.iter().try_for_each(|e| writeln!(out, "{}", e.full()))?,
+        KitFormat::Json => writeln!(out, "{}", serde_json::to_string_pretty(&rows)?)?,
+        KitFormat::Yaml => write!(out, "{}", serde_saphyr::to_string(&rows)?)?,
+        KitFormat::Table => {
+            let head = ["REPOSITORY", "TAG", "IMAGE ID", "FLAVOR", "CREATED"];
+            let mut lines = vec![head.map(String::from).to_vec()];
+            for e in &all {
+                let created = humantime::parse_rfc3339(&e.created_at)
+                    .ok()
+                    .and_then(|t| t.duration_since(std::time::UNIX_EPOCH).ok())
+                    .map_or_else(String::new, |d| age(ctx.now - d.as_secs() as i64));
+                lines.push(vec![
+                    e.repository.clone(),
+                    e.tag.clone(),
+                    e.id.clone(),
+                    e.agent.clone(),
+                    created,
+                ]);
+            }
+            write!(out, "{}", table(lines))?;
+        }
+    }
+    Ok(())
+}
+
+#[derive(Serialize)]
+struct Removed<'a> {
+    action: &'a str,
+    resource: &'a str,
+    name: &'a str,
+}
+
+fn rm<R: Runner>(ctx: &Ctx<R>, a: &TemplateRmArgs) -> Result<()> {
+    let store = Store::new(&ctx.paths);
+    let Some(e) = store.find(&a.name)? else {
+        bail!(
+            "cannot remove template \"{n}\": no template \"{n}\"\n  try: sbt template ls",
+            n = a.name
+        );
+    };
+    if !a.force && !ctx.stdin_tty {
+        bail!(
+            "stdin is not a terminal; pass --force to skip the confirmation\n  try: sbt template rm --force"
+        );
+    }
+    let q = format!("Remove template \"{}\"? This cannot be undone.", a.name);
+    confirm(ctx, &q, a.force)?;
+    store.remove(&e)?;
+    let mut out = &ctx.out;
+    match format(a.json, a.format) {
+        KitFormat::Table => writeln!(out, "Removed template {}", a.name)?,
+        f => {
+            let doc = [Removed {
+                action: "removed",
+                resource: "template",
+                name: &a.name,
+            }];
+            if f == KitFormat::Json {
+                writeln!(out, "{}", serde_json::to_string_pretty(&doc)?)?;
+            } else {
+                write!(out, "{}", serde_saphyr::to_string(&doc)?)?;
+            }
+        }
+    }
+    Ok(())
+}
+
+fn load<R: Runner>(ctx: &Ctx<R>, a: &TemplateLoadArgs) -> Result<()> {
+    if a.name.is_some() {
+        bail!("'template load' (local) takes one argument (FILE)\n  try: sbt template load --help");
+    }
+    let f = a.file.display();
+    let p = Progress::for_ctx(ctx, false);
+    let step = p.step(&format!("image from {f}"), "loading");
+    match Store::new(&ctx.paths).import(&a.file) {
+        Ok(_) => step.done("loaded"),
+        Err(e) => {
+            step.fail();
+            return Err(e);
+        }
+    }
+    writeln!(&ctx.out, "Loaded image from {f}")?;
+    Ok(())
 }
 
 fn save<R: Runner>(ctx: &Ctx<R>, a: &TemplateSaveArgs) -> Result<()> {
@@ -223,5 +346,124 @@ mod tests {
         assert!(store.list().unwrap().is_empty());
         let left: Vec<_> = std::fs::read_dir(&store.dir).unwrap().collect();
         assert!(left.is_empty(), "temp dir removed: {left:?}");
+    }
+
+    fn with_template(t: &TestEnv, name: &str) -> crate::templates::Entry {
+        let store = Store::new(&t.ctx.paths);
+        let src = t
+            .ctx
+            .cwd
+            .join(format!("{}.smolmachine", name.replace(':', "_")));
+        std::fs::write(&src, name).unwrap();
+        let r = crate::templates::TemplateRef::parse(name).unwrap();
+        store
+            .add(
+                crate::templates::Entry {
+                    repository: r.repository,
+                    tag: r.tag,
+                    agent: "shell".into(),
+                    image: "img".into(),
+                    created_at: "1970-01-12T13:46:30Z".into(),
+                    ..Default::default()
+                },
+                &src,
+            )
+            .unwrap()
+    }
+
+    #[test]
+    fn ls_table_json_and_quiet() {
+        let mut t = test_env(&[]);
+        let e = with_template(&t, "chk-tpl:v1");
+        sbt(&mut t.ctx, &["template", "ls"]).unwrap();
+        let out = t.stdout();
+        let mut lines = out.lines();
+        let header = lines.next().unwrap();
+        assert!(
+            header.starts_with("REPOSITORY") && header.contains("IMAGE ID"),
+            "{out}"
+        );
+        let row = lines.next().unwrap();
+        assert!(row.starts_with("docker.io/library/chk-tpl"), "{row}");
+        assert!(
+            row.contains(&e.id) && row.contains("shell") && row.contains("10s"),
+            "{row}"
+        );
+        sbt(&mut t.ctx, &["template", "ls", "--json"]).unwrap();
+        let v: serde_json::Value = serde_json::from_str(&t.stdout()).unwrap();
+        assert_eq!(
+            v,
+            serde_json::json!([{"id": e.id, "repository": "docker.io/library/chk-tpl",
+                "tag": "v1", "flavor": "shell", "created_at": "1970-01-12T13:46:30Z",
+                "size": e.size}])
+        );
+        sbt(&mut t.ctx, &["template", "ls", "-q"]).unwrap();
+        assert_eq!(t.stdout(), "docker.io/library/chk-tpl:v1\n");
+    }
+
+    #[test]
+    fn rm_needs_force_without_a_terminal() {
+        let mut t = test_env(&[]);
+        with_template(&t, "t:v1");
+        let err = sbt(&mut t.ctx, &["template", "rm", "t:v1"])
+            .unwrap_err()
+            .to_string();
+        assert_eq!(
+            err,
+            "stdin is not a terminal; pass --force to skip the confirmation\n  try: sbt template rm --force"
+        );
+        sbt(&mut t.ctx, &["template", "rm", "-f", "t:v1"]).unwrap();
+        assert_eq!(t.stdout(), "Removed template t:v1\n");
+        assert!(Store::new(&t.ctx.paths).list().unwrap().is_empty());
+    }
+
+    #[test]
+    fn rm_by_id_prefix_and_json() {
+        let mut t = test_env(&[]);
+        let e = with_template(&t, "t:v2");
+        sbt(&mut t.ctx, &["template", "rm", "-f", "--json", &e.id[..6]]).unwrap();
+        let v: serde_json::Value = serde_json::from_str(&t.stdout()).unwrap();
+        assert_eq!(
+            v,
+            serde_json::json!([{"action": "removed", "resource": "template", "name": &e.id[..6]}])
+        );
+    }
+
+    #[test]
+    fn rm_missing() {
+        let mut t = test_env(&[]);
+        let err = sbt(&mut t.ctx, &["template", "rm", "-f", "t:nope"])
+            .unwrap_err()
+            .to_string();
+        assert_eq!(
+            err,
+            "cannot remove template \"t:nope\": no template \"t:nope\"\n  try: sbt template ls"
+        );
+    }
+
+    #[test]
+    fn load_round_trips_an_export() {
+        let mut t = test_env(&[]);
+        let e = with_template(&t, "t:v1");
+        let store = Store::new(&t.ctx.paths);
+        let file = t.ctx.cwd.join("t.tar");
+        store.export(&e, &file).unwrap();
+        store.remove(&e).unwrap();
+        let f = file.to_str().unwrap();
+        sbt(&mut t.ctx, &["template", "load", f]).unwrap();
+        assert!(t.stdout().ends_with(&format!("Loaded image from {f}\n")));
+        assert_eq!(store.list().unwrap(), vec![e]);
+    }
+
+    #[test]
+    fn load_refuses_a_name() {
+        let mut t = test_env(&[]);
+        let err = sbt(&mut t.ctx, &["template", "load", "x.tar", "name"])
+            .unwrap_err()
+            .to_string();
+        assert_eq!(
+            err,
+            "'template load' (local) takes one argument (FILE)\n  try: sbt template load --help"
+        );
     }
 }
