@@ -37,6 +37,8 @@ pub const SSH_AGENT: &str = "sbx.ssh-agent";
 pub const HOST_MOUNTS: &str = "sbx.host-mounts";
 /// How the sandbox shares the skills store (`skills::Label`, JSON), fixed at create.
 pub const SKILLS: &str = "sbx.skills";
+/// The saved template the sandbox was created from (`docker.io/library/t:v1`).
+pub const TEMPLATE: &str = "sbx.template";
 /// Prefix of `sbx.credential-format.<ENV>`: how a kit credential's value is formatted.
 pub const CREDENTIAL_FORMAT: &str = "sbx.credential-format.";
 /// Prefix of `sbx.credential-service.<ENV>`: the secret service behind a kit credential's env var
@@ -142,6 +144,8 @@ pub struct Meta {
     pub ssh_agent: Option<AgentLabel>,
     /// The skills mode and directories set at create (`sbx.skills`).
     pub skills: Option<crate::skills::Label>,
+    /// The saved template it was created from (`sbx.template`); `template save` refuses these.
+    pub template: Option<String>,
 }
 
 impl Meta {
@@ -232,6 +236,9 @@ impl Meta {
         if let Some(s) = &self.skills {
             labels.insert(SKILLS.to_string(), s.to_label());
         }
+        if let Some(t) = &self.template {
+            labels.insert(TEMPLATE.to_string(), t.clone());
+        }
         for (env, f) in &self.credential_formats {
             labels.insert(format!("{CREDENTIAL_FORMAT}{env}"), f.to_label());
         }
@@ -302,6 +309,7 @@ impl Meta {
             skills: labels
                 .get(SKILLS)
                 .and_then(|j| crate::skills::Label::from_label(j)),
+            template: labels.get(TEMPLATE).cloned(),
         })
     }
 
@@ -341,6 +349,18 @@ fn list(value: Option<&String>) -> Vec<String> {
 
 #[cfg(test)]
 mod tests {
+    #[test]
+    fn template_round_trips() {
+        let m = Meta {
+            name: "a".into(),
+            template: Some("docker.io/library/t:v1".into()),
+            ..Default::default()
+        };
+        let labels = m.to_labels();
+        assert_eq!(labels.get(TEMPLATE).unwrap(), "docker.io/library/t:v1");
+        assert_eq!(Meta::from_labels(&labels).unwrap().template, m.template);
+    }
+
     use super::*;
 
     fn meta() -> Meta {
