@@ -707,6 +707,74 @@ fn fork_round_trip() {
     assert!(err.contains("--clone"), "{err}");
 }
 
+#[test]
+#[ignore = "boots real VMs; run with `just e2e`"]
+fn template_round_trip() {
+    let e = E2e::new("tpl");
+    e.create_alpine_offline();
+    guest_root(&e.name, "echo kept > /etc/marker && rm /etc/motd");
+    // Running: refused without a terminal.
+    let out = e.sbt(&["template", "save", &e.name, "e2e-tpl:v1"]);
+    assert!(!out.status.success());
+    assert!(String::from_utf8_lossy(&out.stderr).contains("cannot save a running sandbox"));
+    e.ok(&["stop", &e.name]);
+    let out = e.ok(&["template", "save", &e.name, "e2e-tpl:v1", "-o", "tpl.tar"]);
+    assert!(
+        out.contains("Saved template docker.io/library/e2e-tpl:v1"),
+        "{out}"
+    );
+    assert!(
+        e.ok(&["template", "ls", "-q"])
+            .contains("docker.io/library/e2e-tpl:v1")
+    );
+
+    // A second sandbox from it has the file and the deletion.
+    let copy = format!("{}-copy", e.name);
+    let _guard = Forks(vec![copy.clone()]);
+    let ws = e.workspace();
+    e.ok(&[
+        "create",
+        "shell",
+        ws.to_str().unwrap(),
+        "--name",
+        &copy,
+        "-t",
+        "e2e-tpl:v1",
+        "--pull",
+        "never",
+        "--cpus",
+        "1",
+        "-m",
+        "1g",
+    ]);
+    let got = e.ok(&[
+        "exec",
+        &copy,
+        "sh",
+        "-c",
+        "cat /etc/marker; ls /etc/motd || true; pwd",
+    ]);
+    assert!(got.contains("kept"), "{got}");
+    assert!(
+        got.contains(ws.to_str().unwrap()),
+        "exec runs in the workspace: {got}"
+    );
+
+    // Nested saves are refused (smolvm 1.32.4).
+    e.ok(&["stop", &copy]);
+    let out = e.sbt(&["template", "save", &copy, "e2e-tpl:v2"]);
+    assert!(String::from_utf8_lossy(&out.stderr).contains("created from template"));
+
+    // rm then load restores it; the copy keeps working without the pack.
+    e.ok(&["template", "rm", "-f", "e2e-tpl:v1"]);
+    e.ok(&["start", &copy]);
+    e.ok(&["template", "load", "tpl.tar"]);
+    assert!(
+        e.ok(&["template", "ls", "-q"])
+            .contains("docker.io/library/e2e-tpl:v1")
+    );
+}
+
 /// smolvm dials host loopback when a guest connects to its gateway; smolbento denies that. Only
 /// bytes arriving prove reachability: smolvm's stack accepts every SYN, so `nc -z` can't tell.
 #[test]
