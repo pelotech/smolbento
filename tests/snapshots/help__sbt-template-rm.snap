@@ -1,0 +1,29 @@
+---
+source: tests/help.rs
+expression: help(&path)
+---
+Remove a template
+
+Usage: sbt template rm [OPTIONS] <NAME>
+
+Arguments:
+  <NAME>
+          Template name or ID (prefix)
+
+Options:
+  -D, --debug
+          Print each smolvm command line
+
+  -f, --force
+          Skip confirmation prompts
+
+      --format <FORMAT>
+          Output format: table, json or yaml
+
+          [possible values: table, json, yaml]
+
+      --json
+          Output in JSON format
+
+  -h, --help
+          Print help

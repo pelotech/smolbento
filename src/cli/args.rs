@@ -85,8 +85,9 @@ pub enum Cmd {
     /// Manage a sandbox declared in an sbxenv.yaml file
     #[command(subcommand)]
     Env(EnvCmd),
-    /// Sandbox templates (not implemented yet)
-    Template(Passthrough),
+    /// Save sandboxes as templates and manage them
+    #[command(subcommand)]
+    Template(TemplateCmd),
     /// Manage skills shared with agents in sandboxes (experimental)
     #[command(subcommand)]
     Skills(SkillsCmd),
@@ -180,6 +181,7 @@ impl Cmd {
                 | Cmd::Ports(_)
                 | Cmd::UploadPack { .. }
                 | Cmd::Bridge { .. }
+                | Cmd::Template(TemplateCmd::Save(_))
                 | Cmd::Env(EnvCmd::Create(_) | EnvCmd::Run(_) | EnvCmd::Exec(_) | EnvCmd::Rm(_))
         )
     }
@@ -464,7 +466,7 @@ pub struct SandboxOpts {
     /// Image to use instead of the agent's template
     #[arg(short = 't', long)]
     pub template: Option<String>,
-    /// Image pull policy (only `missing` is supported)
+    /// Image pull policy: missing, or never with a saved template
     #[arg(long)]
     pub pull: Option<String>,
     /// Work on a private clone of the git repo; its commits come back via the sandbox-<name> git remote
@@ -531,7 +533,11 @@ impl SandboxOpts {
         if let Some((_, flag)) = cloud.iter().find(|(set, _)| *set) {
             return Err(Unsupported(format!("{flag} is a Docker Cloud option")).into());
         }
-        if let Some(p) = self.pull.as_deref().filter(|p| *p != "missing") {
+        if let Some(p) = self
+            .pull
+            .as_deref()
+            .filter(|p| !matches!(*p, "missing" | "never"))
+        {
             return Err(Unsupported(format!(
                 "--pull {p} is not implemented yet; smolvm pulls missing images"
             ))
@@ -942,6 +948,69 @@ pub struct SkillsRmArgs {
 #[derive(Debug, Args)]
 pub struct SkillsUpdateArgs {
     pub skills: Vec<String>,
+}
+
+/// `sbt template` (local; sbx's `--cloud` templates aren't supported).
+#[derive(Debug, Subcommand)]
+pub enum TemplateCmd {
+    /// Save a snapshot of the sandbox as a template
+    Save(TemplateSaveArgs),
+    /// List templates
+    #[command(visible_alias = "list")]
+    Ls(TemplateLsArgs),
+    /// Remove a template
+    #[command(visible_aliases = ["remove", "delete"])]
+    Rm(TemplateRmArgs),
+    /// Load a template from a file made by `template save --output`
+    Load(TemplateLoadArgs),
+    #[command(hide = true)]
+    Inspect(Passthrough),
+}
+
+#[derive(Debug, Args)]
+pub struct TemplateSaveArgs {
+    pub sandbox: String,
+    /// Template name, e.g. myimage:v1.0
+    pub tag: String,
+    /// Also export the template to a file
+    #[arg(short = 'o', long)]
+    pub output: Option<PathBuf>,
+}
+
+#[derive(Debug, Args)]
+pub struct TemplateLsArgs {
+    /// Output format: table, json or yaml
+    #[arg(long, value_enum)]
+    pub format: Option<KitFormat>,
+    /// Output in JSON format
+    #[arg(long)]
+    pub json: bool,
+    /// Only display template names
+    #[arg(short = 'q', long)]
+    pub quiet: bool,
+}
+
+#[derive(Debug, Args)]
+pub struct TemplateRmArgs {
+    /// Template name or ID (prefix)
+    pub name: String,
+    /// Skip confirmation prompts
+    #[arg(short = 'f', long)]
+    pub force: bool,
+    /// Output format: table, json or yaml
+    #[arg(long, value_enum)]
+    pub format: Option<KitFormat>,
+    /// Output in JSON format
+    #[arg(long)]
+    pub json: bool,
+}
+
+#[derive(Debug, Args)]
+pub struct TemplateLoadArgs {
+    pub file: PathBuf,
+    /// sbx's cloud template name; refused for local templates
+    #[arg(hide = true)]
+    pub name: Option<String>,
 }
 
 #[derive(Debug, Subcommand)]

@@ -36,7 +36,7 @@ Options:
           Image to use instead of the agent's template
 
       --pull <PULL>
-          Image pull policy (only `missing` is supported)
+          Image pull policy: missing, or never with a saved template
 
       --clone
           Work on a private clone of the git repo; its commits come back via the sandbox-<name> git remote

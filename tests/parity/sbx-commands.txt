@@ -27,6 +27,18 @@ create shell . --kit ./my-kit --kit ghcr.io/example/kit:1 --kit-arg kit.key=valu
 create shell --kit ./my-kit --kit-args-file kit.env
 create --mount /tmp:/home/agent/x shell
 create claude . --skills readwrite
+run --pull never -t myimage:v1.0 claude ./project
+create -t chk-tpl:v1 shell .
+template save my-sandbox myimage:v1.0
+template save my-sandbox myimage:v1.0 --output /tmp/myimage.tar
+template ls
+template ls --json
+template list -q
+template rm myimage:v1.0
+template rm -f abc123
+template remove --json myimage:v1.0
+template delete myimage:v1.0
+template load /tmp/myimage.tar
 exec my-sandbox ls -la
 exec -it my-sandbox bash
 exec -u root -w /tmp -e A=1 my-sandbox env
@@ -117,7 +129,6 @@ kit pull ghcr.io/myorg/my-kit:1.0
 kit sign ghcr.io/myorg/my-kit:1.0
 kit verify ghcr.io/myorg/my-kit:1.0
 mcp add linear --url https://mcp.linear.app/sse
-template ls
 env plan
 setup ssh
 tui

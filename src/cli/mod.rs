@@ -19,6 +19,7 @@ mod run;
 pub(crate) mod secret;
 mod settings;
 mod skills;
+mod template;
 #[cfg(test)]
 pub(crate) mod testutil;
 mod upload_pack;
@@ -211,6 +212,7 @@ pub fn dispatch<R: Runner>(ctx: &mut Ctx<R>, cli: Cli) -> Result<i32> {
         Cmd::Policy(p) => policy::run(ctx, p),
         Cmd::Secret(s) => secret::run(ctx, s),
         Cmd::Skills(s) => skills::run(ctx, s),
+        Cmd::Template(t) => template::run(ctx, t),
         Cmd::Ports(a) => ports::run(ctx, &a),
         Cmd::Kit(k) => kit::run(ctx, k),
         Cmd::Env(e) => env::run(ctx, e),
