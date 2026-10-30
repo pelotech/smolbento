@@ -267,6 +267,16 @@ pub(crate) fn kit_plan<R: Runner>(
         );
     }
     let plan = resolve_for(workload, mixins, &args, &req.workdir())?;
+    if let Some(t) = &req.template {
+        let layered = crate::kits::compose::layered_names(&plan)?;
+        if !layered.is_empty() {
+            bail!(
+                "-t {t} can't be combined with kits that add image layers ({}): a template's \
+                 filesystem is saved whole",
+                layered.join(", ")
+            );
+        }
+    }
     plan.warn_skipped();
     Ok(plan)
 }
@@ -1416,6 +1426,72 @@ mod tests {
             "{create}"
         );
         assert!(!create.contains("--image"), "{create}");
+    }
+
+    #[test]
+    fn a_template_refuses_kits_that_add_image_layers() {
+        let mut t = kit_env_free();
+        saved_template(&t, "chk-tpl:v1", "shell");
+        v3_kit(
+            &t,
+            "layered",
+            r#"{"schemaVersion":"3","kind":"mixin","name":"layered"}"#,
+            &[b"layer"],
+        );
+        let err = sbt(
+            &mut t.ctx,
+            &[
+                "create",
+                "shell",
+                "-t",
+                "chk-tpl:v1",
+                "--name",
+                "bb",
+                "--kit",
+                "./layered",
+            ],
+        )
+        .unwrap_err();
+        assert_eq!(
+            err.to_string(),
+            "-t docker.io/library/chk-tpl:v1 can't be combined with kits that add image layers \
+             (layered): a template's filesystem is saved whole"
+        );
+        let lines = t.ctx.vm.runner().call_lines();
+        assert!(
+            !lines.iter().any(|l| l.contains("machine create")),
+            "{lines:?}"
+        );
+    }
+
+    #[test]
+    fn a_templates_docker_flag_follows_docker_enabled() {
+        for (enabled, want) in [("false", false), ("true", true)] {
+            let t = test_env(&[("SMOLBENTO_DOCKER", enabled)]);
+            let src = t.ctx.cwd.join("p.smolmachine");
+            std::fs::write(&src, "packed").unwrap();
+            let r = crate::templates::TemplateRef::parse("d:v1").unwrap();
+            crate::templates::Store::new(&t.ctx.paths)
+                .add(
+                    crate::templates::Entry {
+                        repository: r.repository,
+                        tag: r.tag,
+                        agent: "shell".into(),
+                        image: "img:1".into(),
+                        docker: true,
+                        created_at: "1970-01-12T13:46:30Z".into(),
+                        ..Default::default()
+                    },
+                    &src,
+                )
+                .unwrap();
+            let opts = SandboxOpts {
+                template: Some("d:v1".into()),
+                ..Default::default()
+            };
+            let req = build_request(&t.ctx, "shell", &[], &opts, false).unwrap();
+            assert_eq!(req.docker, want, "docker.enabled={enabled}");
+        }
     }
 
     #[test]
