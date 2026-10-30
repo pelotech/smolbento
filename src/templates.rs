@@ -143,6 +143,14 @@ impl Store {
             .find(|e| hex && e.id.starts_with(&name.to_ascii_lowercase())))
     }
 
+    /// `name` as a ref only (`-t`).
+    pub fn find_ref(&self, name: &str) -> Result<Option<Entry>> {
+        let Ok(r) = TemplateRef::parse(name) else {
+            return Ok(None);
+        };
+        Ok(self.list()?.into_iter().find(|e| e.full() == r.full()))
+    }
+
     pub fn pack(&self, e: &Entry) -> PathBuf {
         self.dir.join(format!("{}.smolmachine", e.id))
     }
@@ -311,6 +319,14 @@ mod tests {
         let p = dir.join(format!("{body}.smolmachine"));
         std::fs::write(&p, body).unwrap();
         p
+    }
+
+    #[test]
+    fn find_ref_ignores_id_prefixes() {
+        let (dir, s) = store();
+        let e = s.add(meta("t:v1"), &pack(dir.path(), "a")).unwrap();
+        assert_eq!(s.find_ref("t:v1").unwrap(), Some(e.clone()));
+        assert_eq!(s.find_ref(&e.id[..6]).unwrap(), None);
     }
 
     #[test]
