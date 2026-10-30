@@ -71,6 +71,11 @@ impl Paths {
         self.data.join("agent-skills")
     }
 
+    /// Saved templates: `templates.json` and the `<id>.smolmachine` packs.
+    pub fn templates(&self) -> PathBuf {
+        self.data.join("templates")
+    }
+
     /// Beside the store: `sources.json`, where repository-added skills came from.
     pub fn skills_metadata(&self) -> PathBuf {
         self.data.join("agent-skills-metadata")

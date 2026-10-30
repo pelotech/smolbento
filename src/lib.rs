@@ -10,6 +10,7 @@ pub mod sandbox;
 pub mod secrets;
 pub mod skills;
 pub mod smolvm;
+pub mod templates;
 pub mod workspace;
 
 #[cfg(test)]
