@@ -752,9 +752,10 @@ fn template_round_trip() {
         &copy,
         "sh",
         "-c",
-        "cat /etc/marker; ls /etc/motd || true; pwd",
+        "cat /etc/marker; [ -e /etc/motd ] && echo present || echo gone; pwd",
     ]);
     assert!(got.contains("kept"), "{got}");
+    assert!(got.contains("gone") && !got.contains("present"), "{got}");
     assert!(
         got.contains(ws.to_str().unwrap()),
         "exec runs in the workspace: {got}"
@@ -763,11 +764,18 @@ fn template_round_trip() {
     // Nested saves are refused (smolvm 1.32.4).
     e.ok(&["stop", &copy]);
     let out = e.sbt(&["template", "save", &copy, "e2e-tpl:v2"]);
+    assert!(!out.status.success());
     assert!(String::from_utf8_lossy(&out.stderr).contains("created from template"));
 
     // rm then load restores it; the copy keeps working without the pack.
     e.ok(&["template", "rm", "-f", "e2e-tpl:v1"]);
+    assert!(
+        !e.ok(&["template", "ls", "-q"])
+            .contains("docker.io/library/e2e-tpl:v1")
+    );
     e.ok(&["start", &copy]);
+    let again = e.ok(&["exec", &copy, "cat", "/etc/marker"]);
+    assert!(again.contains("kept"), "{again}");
     e.ok(&["template", "load", "tpl.tar"]);
     assert!(
         e.ok(&["template", "ls", "-q"])
