@@ -225,6 +225,7 @@ pub fn spec(req: &CreateRequest) -> CreateSpec {
         deny_cidrs: req.deny_cidrs.clone(),
         credentials: req.credentials.clone(),
         smolfile: req.smolfile.clone(),
+        from: None,
         // The workload runs as root so startup steps (dockerd) can; agents exec as `agent`.
         user: Some("root".into()),
         cmd: vec!["sleep".into(), "infinity".into()],
