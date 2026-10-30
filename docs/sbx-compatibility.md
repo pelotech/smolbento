@@ -26,7 +26,7 @@ something different.
 | `env plan` and the `sbxenv.yaml` fields listed under [Environment files](#environment-files) | Later |
 | `setup ssh`, `mcp`, `--static-mcp` | Later |
 | `tui` | Later |
-| `--pull always\|never` | `--pull missing` works (it's what smolvm does) |
+| `--pull always`, and `--pull never` except with a saved template | `--pull missing` works (it's what smolvm does) |
 | `exec -d`, `--detach-keys` | Not supported (sbx doesn't support `exec -d` either) |
 
 ## Never (Docker Cloud only, exit 2)
@@ -88,13 +88,13 @@ works too). Differences:
 |---|---|---|
 | `save --output` and `load` | A `docker save` tar | A smolbento archive; the two don't read each other's files |
 | `ls` | Lists Docker images and saved templates | Lists saved templates only; FLAVOR is the agent |
-| Agent mismatch | Not checked | Refused up front when the template's agent differs from the sandbox's |
+| Agent mismatch | Tries it and fails in the kit step (`failed to apply kit to sandbox`) | Refused up front when the template's agent differs from the sandbox's |
 | `/tmp` | Kept | Not kept |
-| Saving a sandbox made from a template | Not restricted | Refused (smolvm limit; see [Development status](development-status.md#needs-smolvm-support-later-decisions)) |
-| `-t` with `--kit` | Not restricted | Refused when a kit adds image layers: a template's disk is saved whole |
+| Saving a sandbox made from a template | Not measured directly; sbx adds one layer per save | Refused (smolvm limit; see [Development status](development-status.md#needs-smolvm-support-later-decisions)) |
+| `-t` with `--kit` | Not measured | Refused when a kit adds image layers: a template's disk is saved whole |
 | `save` of a running sandbox without a terminal | Suggests a nonexistent `--force` | Says to `sbt stop` it first |
 | `inspect` | Needs `--cloud`; local templates are Docker images | Not supported |
-| `--pull never` | Accepted with any image | Accepted only with a saved template (exit 2 otherwise) |
+| `--pull never` | The default for saved local snapshots; an image that isn't cached fails (`not cached locally and pull_policy=never`) | Accepted only with a saved template (exit 2 otherwise) |
 
 ## Environment files
 

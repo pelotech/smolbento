@@ -627,7 +627,7 @@ once, save, and reuse.
 
 ```sh
 sbt stop claude-myrepo
-sbt template save claude-myrepo myimage:v1     # stopped sandboxes only
+sbt template save claude-myrepo myimage:v1
 sbt template save claude-myrepo myimage:v1 -o myimage.tar   # also export to a file
 sbt run -t myimage:v1 claude .                 # or: create -t myimage:v1
 sbt template ls                                # --json, --format json|yaml, -q
@@ -636,8 +636,9 @@ sbt template load myimage.tar                  # import a file made with --outpu
 ```
 
 - The sandbox must be stopped to save it.
-- `-t` first looks for a saved template of that name, then treats it as an image. A name that is
-  only hex digits (such as `abcd`) is always an image. `--pull never` is accepted only with a
+- `-t` first looks for a saved template of that name, then treats it as an image. `-t` never takes an id
+  prefix (unlike `template rm`), so a name that is only hex digits (such as `abcd`) is always an
+  image. `--pull never` is accepted only with a
   saved template.
 - The agent must match the template's: a `claude` template can't start a `codex` sandbox.
 - `/tmp` isn't kept, and neither is the workspace (it's mounted, not part of the disk).
