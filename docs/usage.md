@@ -643,6 +643,7 @@ sbt template load myimage.tar                  # import a file made with --outpu
 - The agent must match the template's: a `claude` template can't start a `codex` sandbox.
 - `/tmp` isn't kept, and neither is the workspace (it's mounted, not part of the disk).
 - A sandbox made from a template can't be saved yet.
+- A sandbox running a kit workload (an agent that isn't a built-in preset) can't be saved yet.
 - `-t` can't be combined with `--kit` kits that add image layers, since a template's disk is saved
   whole. Kits without layers, such as the built-in `docker` kit, work.
 - Removing a template doesn't affect sandboxes made from it.

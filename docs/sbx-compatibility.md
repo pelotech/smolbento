@@ -91,6 +91,7 @@ works too). Differences:
 | Agent mismatch | Tries it and fails in the kit step (`failed to apply kit to sandbox`) | Refused up front when the template's agent differs from the sandbox's |
 | `/tmp` | Kept | Not kept |
 | Saving a sandbox made from a template | Not measured directly; sbx adds one layer per save | Refused (smolvm limit; see [Development status](development-status.md#needs-smolvm-support-later-decisions)) |
+| Saving a kit workload sandbox | Not measured | Refused: a template of one couldn't be used with `-t` yet |
 | `-t` with `--kit` | Not measured | Refused when a kit adds image layers: a template's disk is saved whole |
 | `save` of a running sandbox without a terminal | Suggests a nonexistent `--force` | Says to `sbt stop` it first |
 | `inspect` | Needs `--cloud`; local templates are Docker images | Not supported |

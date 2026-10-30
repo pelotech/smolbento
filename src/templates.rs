@@ -78,6 +78,21 @@ struct Index {
     templates: Vec<Entry>,
 }
 
+/// An id prefix that matches more than one template.
+#[derive(Debug)]
+pub struct Ambiguous;
+
+impl std::fmt::Display for Ambiguous {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        write!(f, "matches more than one template")
+    }
+}
+
+impl std::error::Error for Ambiguous {}
+
+/// Leftovers of an interrupted save or load younger than this may belong to a running one.
+const STALE: std::time::Duration = std::time::Duration::from_secs(3600);
+
 pub struct Store {
     pub dir: PathBuf,
 }
@@ -130,6 +145,7 @@ impl Store {
     }
 
     /// `name` as a ref, else as an id prefix of 4 or more hex digits (sbx accepts a prefix).
+    /// A prefix that names more than one template is an [`Ambiguous`] error.
     pub fn find(&self, name: &str) -> Result<Option<Entry>> {
         let all = self.list()?;
         if let Ok(r) = TemplateRef::parse(name)
@@ -138,9 +154,16 @@ impl Store {
             return Ok(Some(e.clone()));
         }
         let hex = name.len() >= 4 && name.bytes().all(|b| b.is_ascii_hexdigit());
-        Ok(all
-            .into_iter()
-            .find(|e| hex && e.id.starts_with(&name.to_ascii_lowercase())))
+        if !hex {
+            return Ok(None);
+        }
+        let prefix = name.to_ascii_lowercase();
+        let mut hits = all.into_iter().filter(|e| e.id.starts_with(&prefix));
+        let first = hits.next();
+        if first.is_some() && hits.next().is_some() {
+            return Err(Ambiguous.into());
+        }
+        Ok(first)
     }
 
     /// `name` as a ref only (`-t`).
@@ -156,11 +179,42 @@ impl Store {
     }
 
     /// A temp dir inside the store, so `add` renames within one filesystem.
+    /// First sweeps what an interrupted save or load left behind.
     pub fn temp_dir(&self) -> Result<tempfile::TempDir> {
         self.ensure()?;
+        let _ = self.sweep(STALE);
         Ok(tempfile::Builder::new()
             .prefix(".tmp-")
             .tempdir_in(&self.dir)?)
+    }
+
+    /// Deletes `.tmp-*` dirs and unindexed packs last modified more than `age` ago.
+    fn sweep(&self, age: std::time::Duration) -> Result<()> {
+        let indexed: Vec<String> = self.read()?.templates.into_iter().map(|e| e.id).collect();
+        for entry in std::fs::read_dir(&self.dir)?.flatten() {
+            let name = entry.file_name().to_string_lossy().into_owned();
+            let orphan = name
+                .strip_suffix(".smolmachine")
+                .is_some_and(|id| !indexed.iter().any(|i| i == id));
+            if !(name.starts_with(".tmp-") || orphan) {
+                continue;
+            }
+            let old = entry
+                .metadata()
+                .and_then(|m| m.modified())
+                .ok()
+                .and_then(|m| m.elapsed().ok())
+                .is_some_and(|e| e > age);
+            if old {
+                let p = entry.path();
+                let _ = if p.is_dir() {
+                    std::fs::remove_dir_all(&p)
+                } else {
+                    std::fs::remove_file(&p)
+                };
+            }
+        }
+        Ok(())
     }
 
     /// Moves `pack` into the store as `meta`'s template, replacing any template with its ref.
@@ -255,11 +309,20 @@ impl Store {
                 _ => {}
             }
         }
-        let (Some(meta), Some(pack)) = (meta, pack) else {
+        let (Some(mut meta), Some(pack)) = (meta, pack) else {
             bail!(not_ours());
         };
-        // The name is checked as `save` checks it.
-        TemplateRef::parse(&meta.full()).with_context(not_ours)?;
+        // The name is checked as `save` checks it, and stored normalized.
+        let r = TemplateRef::parse(&meta.full()).with_context(not_ours)?;
+        meta.repository = r.repository;
+        meta.tag = r.tag;
+        // `agent` and `image` end up in labels and argv.
+        if crate::agents::find(&meta.agent).is_none()
+            || meta.image.chars().any(char::is_control)
+            || meta.agent.chars().any(char::is_control)
+        {
+            bail!(not_ours());
+        }
         self.add(meta, &pack)
     }
 
@@ -431,6 +494,106 @@ mod tests {
         b.into_inner().unwrap();
         let err = s.import(&f).unwrap_err().to_string();
         assert!(err.contains("isn't a smolbento template archive"), "{err}");
+        assert!(s.list().unwrap().is_empty());
+    }
+
+    fn backdate(p: &Path) {
+        let old = std::time::SystemTime::now() - std::time::Duration::from_secs(2 * 3600);
+        std::fs::File::open(p).unwrap().set_modified(old).unwrap();
+    }
+
+    #[test]
+    fn temp_dir_sweeps_stale_temps_and_orphan_packs() {
+        let (dir, s) = store();
+        let kept = s.add(meta("t:v1"), &pack(dir.path(), "a")).unwrap();
+        let stale_tmp = s.dir.join(".tmp-old");
+        let fresh_tmp = s.dir.join(".tmp-new");
+        std::fs::create_dir(&stale_tmp).unwrap();
+        std::fs::create_dir(&fresh_tmp).unwrap();
+        let stale_pack = s.dir.join("deadbeef0000.smolmachine");
+        let fresh_pack = s.dir.join("cafe00000000.smolmachine");
+        std::fs::write(&stale_pack, "x").unwrap();
+        std::fs::write(&fresh_pack, "x").unwrap();
+        backdate(&stale_tmp);
+        backdate(&stale_pack);
+        backdate(&s.pack(&kept)); // old but indexed
+        let _t = s.temp_dir().unwrap();
+        assert!(!stale_tmp.exists());
+        assert!(!stale_pack.exists());
+        assert!(fresh_tmp.exists());
+        assert!(fresh_pack.exists());
+        assert!(s.pack(&kept).exists());
+    }
+
+    #[test]
+    fn find_refuses_an_ambiguous_id_prefix() {
+        let (_dir, s) = store();
+        let e = |id: &str, tag: &str| Entry {
+            id: id.into(),
+            tag: tag.into(),
+            ..meta("t")
+        };
+        s.write(&Index {
+            version: 1,
+            templates: vec![e("abcd11111111", "a"), e("abcd22222222", "b")],
+        })
+        .unwrap();
+        let err = s.find("abcd").unwrap_err();
+        assert!(err.downcast_ref::<Ambiguous>().is_some(), "{err}");
+        assert!(s.find("abcd1").unwrap().is_some());
+        // A ref match wins over prefixes.
+        assert!(s.find("t:a").unwrap().is_some());
+    }
+
+    fn archive(dir: &Path, m: &Entry) -> PathBuf {
+        let f = dir.join("x.tar");
+        let mut b = tar::Builder::new(std::fs::File::create(&f).unwrap());
+        for (name, body) in [
+            (ARCHIVE_META, serde_json::to_vec(m).unwrap()),
+            (ARCHIVE_PACK, b"body".to_vec()),
+        ] {
+            let mut h = tar::Header::new_gnu();
+            h.set_size(body.len() as u64);
+            h.set_mode(0o600);
+            h.set_cksum();
+            b.append_data(&mut h, name, body.as_slice()).unwrap();
+        }
+        b.into_inner().unwrap();
+        f
+    }
+
+    #[test]
+    fn import_normalizes_the_ref() {
+        let (dir, s) = store();
+        let m = Entry {
+            repository: "chk-tpl".into(),
+            ..meta("t")
+        };
+        let e = s.import(&archive(dir.path(), &m)).unwrap();
+        assert_eq!(e.full(), "docker.io/library/chk-tpl:latest");
+        assert_eq!(e.repository, "docker.io/library/chk-tpl");
+    }
+
+    #[test]
+    fn import_refuses_an_unknown_agent_or_control_characters() {
+        let (dir, s) = store();
+        for m in [
+            Entry {
+                agent: "nope".into(),
+                ..meta("t")
+            },
+            Entry {
+                image: "img\n:1".into(),
+                ..meta("t")
+            },
+            Entry {
+                agent: "shell\u{1b}".into(),
+                ..meta("t")
+            },
+        ] {
+            let err = s.import(&archive(dir.path(), &m)).unwrap_err().to_string();
+            assert!(err.contains("isn't a smolbento template archive"), "{err}");
+        }
         assert!(s.list().unwrap().is_empty());
     }
 }

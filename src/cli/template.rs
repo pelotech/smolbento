@@ -98,7 +98,17 @@ struct Removed<'a> {
 
 fn rm<R: Runner>(ctx: &Ctx<R>, a: &TemplateRmArgs) -> Result<()> {
     let store = Store::new(&ctx.paths);
-    let Some(e) = store.find(&a.name)? else {
+    let found = store.find(&a.name).map_err(|e| {
+        if e.downcast_ref::<crate::templates::Ambiguous>().is_some() {
+            anyhow::anyhow!(
+                "cannot remove template \"{n}\": \"{n}\" matches more than one template\n  try: sbt template ls",
+                n = a.name
+            )
+        } else {
+            e
+        }
+    })?;
+    let Some(e) = found else {
         bail!(
             "cannot remove template \"{n}\": no template \"{n}\"\n  try: sbt template ls",
             n = a.name
@@ -156,6 +166,12 @@ fn save<R: Runner>(ctx: &Ctx<R>, a: &TemplateSaveArgs) -> Result<()> {
         bail!(
             "cannot save {}: it was created from template {t}, and smolvm can't save a sandbox \
              made from a template yet",
+            sb.name()
+        );
+    }
+    if crate::agents::find(&sb.meta.agent).is_none() {
+        bail!(
+            "cannot save {}: templates of kit workload sandboxes aren't supported yet",
             sb.name()
         );
     }
@@ -316,6 +332,45 @@ mod tests {
             "cannot save a: it was created from template docker.io/library/t:v1, and smolvm \
              can't save a sandbox made from a template yet"
         );
+    }
+
+    #[test]
+    fn a_kit_workload_sandbox_is_refused_before_any_pack() {
+        let mut t = env_with_sandbox("running", &[("sbx.agent", "my-kit")]);
+        let err = sbt(&mut t.ctx, &["template", "save", "a", "t2"])
+            .unwrap_err()
+            .to_string();
+        assert_eq!(
+            err,
+            "cannot save a: templates of kit workload sandboxes aren't supported yet"
+        );
+        let calls = t.ctx.vm.runner().call_lines();
+        assert!(!calls.iter().any(|l| l.starts_with("pack")), "{calls:?}");
+        assert!(!calls.iter().any(|l| l.contains("stop")), "{calls:?}");
+    }
+
+    #[test]
+    fn rm_refuses_an_ambiguous_id_prefix() {
+        let mut t = test_env(&[]);
+        let a = with_template(&t, "t:a");
+        with_template(&t, "t:b");
+        // Give the second entry an id sharing the first's 8-char prefix, by editing the index.
+        let idx = Store::new(&t.ctx.paths).dir.join(crate::templates::INDEX);
+        let mut v: serde_json::Value =
+            serde_json::from_str(&std::fs::read_to_string(&idx).unwrap()).unwrap();
+        v["templates"][1]["id"] = format!("{}ffff", &a.id[..8]).into();
+        std::fs::write(&idx, v.to_string()).unwrap();
+        let err = sbt(&mut t.ctx, &["template", "rm", "-f", &a.id[..6]])
+            .unwrap_err()
+            .to_string();
+        let n = &a.id[..6];
+        assert_eq!(
+            err,
+            format!(
+                "cannot remove template \"{n}\": \"{n}\" matches more than one template\n  try: sbt template ls"
+            )
+        );
+        assert_eq!(Store::new(&t.ctx.paths).list().unwrap().len(), 2);
     }
 
     #[test]
