@@ -1,10 +1,16 @@
 //! `sbt template`: saved sandbox templates (spec Phase 5d).
 
-use anyhow::Result;
+use std::io::Write;
 
-use super::args::TemplateCmd;
-use super::{Ctx, Unsupported};
+use anyhow::{Context, Result, bail};
+
+use super::args::{TemplateCmd, TemplateSaveArgs};
+use super::lifecycle::stop_sandbox;
+use super::progress::Progress;
+use super::{Ctx, Unsupported, confirm};
+use crate::sandbox;
 use crate::smolvm::Runner;
+use crate::templates::{Entry, Store, TemplateRef};
 
 pub fn run<R: Runner>(ctx: &mut Ctx<R>, cmd: TemplateCmd) -> Result<i32> {
     let _ = ctx;
@@ -15,6 +21,207 @@ pub fn run<R: Runner>(ctx: &mut Ctx<R>, cmd: TemplateCmd) -> Result<i32> {
                 .into(),
         )
         .into()),
+        TemplateCmd::Save(a) => save(ctx, &a).map(|()| 0),
         _ => Err(Unsupported("`sbt template` is not implemented yet".into()).into()),
+    }
+}
+
+fn save<R: Runner>(ctx: &Ctx<R>, a: &TemplateSaveArgs) -> Result<()> {
+    let r = TemplateRef::parse(&a.tag)?;
+    let sb = sandbox::get(&ctx.vm, &a.sandbox)?;
+    if let Some(t) = &sb.meta.template {
+        bail!(
+            "cannot save {}: it was created from template {t}, and smolvm can't save a sandbox \
+             made from a template yet",
+            sb.name()
+        );
+    }
+    if sb.is_running() {
+        let refused = || {
+            anyhow::anyhow!(
+                "cannot save a running sandbox; stop it first with:\n  try: sbt stop {}",
+                sb.name()
+            )
+        };
+        if !ctx.stdin_tty {
+            return Err(refused());
+        }
+        let q = format!(
+            "Sandbox {} is running and must be stopped before saving. Stop it now?",
+            sb.name()
+        );
+        confirm(ctx, &q, false).map_err(|_| refused())?;
+        stop_sandbox(ctx, &sb)?;
+    }
+    let store = Store::new(&ctx.paths);
+    let p = Progress::for_ctx(ctx, false);
+    let step = p.step(&format!("image in sandbox {}", sb.name()), "snapshotting");
+    // The temp dir is removed on drop, so a failed pack leaves nothing behind.
+    let tmp = store.temp_dir()?;
+    let out = tmp.path().join("pack");
+    if let Err(e) = ctx.vm.pack_from_vm(&sb.machine, &out) {
+        step.fail();
+        return Err(e).context(format!("saving {}", sb.name()));
+    }
+    step.done("snapshotted");
+    let created = std::time::UNIX_EPOCH + std::time::Duration::from_secs(ctx.now.max(0) as u64);
+    let entry = store.add(
+        Entry {
+            repository: r.repository,
+            tag: r.tag,
+            agent: sb.meta.agent.clone(),
+            image: sb.image.clone().unwrap_or_default(),
+            docker: sb.meta.docker,
+            created_at: humantime::format_rfc3339_seconds(created).to_string(),
+            ..Default::default()
+        },
+        &tmp.path().join("pack.smolmachine"),
+    )?;
+    if let Some(file) = &a.output {
+        let f = file.display();
+        let step = p.step(&format!("image to {f}"), "exporting");
+        if let Err(e) = store.export(&entry, file) {
+            step.fail();
+            return Err(e);
+        }
+        step.done("exported");
+        writeln!(&ctx.out, "Exported image to {f}")?;
+    }
+    writeln!(&ctx.out, "Saved template {}", entry.full())?;
+    Ok(())
+}
+
+#[cfg(test)]
+mod tests {
+    use crate::cli::testutil::*;
+    use crate::templates::Store;
+
+    /// A sandbox `a` (machine `sbx-a`) and a pack step that writes the stub and `pack.smolmachine`.
+    fn env_with_sandbox(state: &str, extra: &[(&str, &str)]) -> TestEnv {
+        let t = test_env(&[]);
+        let mut labels = vec![
+            ("sbx.name", "a"),
+            ("sbx.agent", "shell"),
+            ("sbx.docker", "true"),
+        ];
+        labels.extend_from_slice(extra);
+        let r = t.ctx.vm.runner();
+        r.ok(
+            &["machine", "status", "-n", "sbx-a"],
+            &machine_json("sbx-a", state, &labels),
+        );
+        r.ok(&["machine", "stop"], "");
+        r.ok(&["pack", "create"], "");
+        r.during(&["pack", "create"], |args| {
+            let out = args.last().unwrap();
+            std::fs::write(out, "stub").unwrap();
+            std::fs::write(format!("{out}.smolmachine"), "packed").unwrap();
+        });
+        t
+    }
+
+    #[test]
+    fn save_packs_a_stopped_sandbox() {
+        let mut t = env_with_sandbox("stopped", &[]);
+        sbt(&mut t.ctx, &["template", "save", "a", "chk-tpl:v1"]).unwrap();
+        let out = t.stdout();
+        assert!(
+            out.ends_with("Saved template docker.io/library/chk-tpl:v1\n"),
+            "{out}"
+        );
+        let line = t
+            .ctx
+            .vm
+            .runner()
+            .call_lines()
+            .into_iter()
+            .find(|l| l.starts_with("pack"))
+            .unwrap();
+        assert!(
+            line.starts_with("pack create --from-vm sbx-a --no-sign -o "),
+            "{line}"
+        );
+        let store = Store::new(&t.ctx.paths);
+        let e = store.find("chk-tpl:v1").unwrap().unwrap();
+        assert_eq!(
+            (e.agent.as_str(), e.image.as_str(), e.docker),
+            ("shell", "img", true)
+        );
+        assert_eq!(std::fs::read_to_string(store.pack(&e)).unwrap(), "packed");
+        // Only the index and the pack are left: the stub and temp dir are gone.
+        assert_eq!(std::fs::read_dir(&store.dir).unwrap().count(), 2);
+    }
+
+    #[test]
+    fn a_bare_name_is_latest() {
+        let mut t = env_with_sandbox("stopped", &[]);
+        sbt(&mut t.ctx, &["template", "save", "a", "chk-tpl"]).unwrap();
+        assert!(
+            t.stdout()
+                .ends_with("Saved template docker.io/library/chk-tpl:latest\n")
+        );
+    }
+
+    #[test]
+    fn a_running_sandbox_without_a_terminal_is_refused() {
+        let mut t = env_with_sandbox("running", &[]);
+        let err = sbt(&mut t.ctx, &["template", "save", "a", "t"])
+            .unwrap_err()
+            .to_string();
+        assert_eq!(
+            err,
+            "cannot save a running sandbox; stop it first with:\n  try: sbt stop a"
+        );
+        assert!(
+            !t.ctx
+                .vm
+                .runner()
+                .call_lines()
+                .iter()
+                .any(|l| l.starts_with("pack"))
+        );
+    }
+
+    #[test]
+    fn a_template_sandbox_is_refused() {
+        let mut t = env_with_sandbox("stopped", &[("sbx.template", "docker.io/library/t:v1")]);
+        let err = sbt(&mut t.ctx, &["template", "save", "a", "t2"])
+            .unwrap_err()
+            .to_string();
+        assert_eq!(
+            err,
+            "cannot save a: it was created from template docker.io/library/t:v1, and smolvm \
+             can't save a sandbox made from a template yet"
+        );
+    }
+
+    #[test]
+    fn output_exports_an_archive() {
+        let mut t = env_with_sandbox("stopped", &[]);
+        let file = t.ctx.cwd.join("t.tar");
+        let f = file.to_str().unwrap();
+        sbt(
+            &mut t.ctx,
+            &["template", "save", "a", "t:v1", "--output", f],
+        )
+        .unwrap();
+        let out = t.stdout();
+        let want = format!("Exported image to {f}\nSaved template docker.io/library/t:v1\n");
+        assert!(out.ends_with(&want), "{out}");
+        assert!(file.exists());
+    }
+
+    #[test]
+    fn a_failed_pack_leaves_no_template() {
+        let mut t = env_with_sandbox("stopped", &[]);
+        t.ctx
+            .vm
+            .runner()
+            .fail(&["pack", "create"], "AGENT", "timed out");
+        assert!(sbt(&mut t.ctx, &["template", "save", "a", "t"]).is_err());
+        let store = Store::new(&t.ctx.paths);
+        assert!(store.list().unwrap().is_empty());
+        let left: Vec<_> = std::fs::read_dir(&store.dir).unwrap().collect();
+        assert!(left.is_empty(), "temp dir removed: {left:?}");
     }
 }
