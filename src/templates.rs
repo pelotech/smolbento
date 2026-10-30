@@ -227,10 +227,16 @@ impl Store {
         for entry in tar::Archive::new(f).entries().with_context(not_ours)? {
             let mut entry = entry.with_context(not_ours)?;
             let name = entry.path().with_context(not_ours)?.display().to_string();
+            if matches!(name.as_str(), ARCHIVE_META | ARCHIVE_PACK)
+                && !entry.header().entry_type().is_file()
+            {
+                bail!(not_ours());
+            }
             match name.as_str() {
                 ARCHIVE_META => {
+                    // Truncation fails the JSON parse below.
                     let mut s = String::new();
-                    entry.read_to_string(&mut s)?;
+                    (&mut entry).take(1 << 20).read_to_string(&mut s)?;
                     meta = Some(serde_json::from_str(&s).with_context(not_ours)?);
                 }
                 ARCHIVE_PACK => {
@@ -391,6 +397,22 @@ mod tests {
         let (dir, s) = store();
         let f = dir.path().join("x.tar");
         std::fs::write(&f, "not a tar").unwrap();
+        let err = s.import(&f).unwrap_err().to_string();
+        assert!(err.contains("isn't a smolbento template archive"), "{err}");
+        assert!(s.list().unwrap().is_empty());
+    }
+
+    #[test]
+    fn import_refuses_links_in_the_archive() {
+        let (dir, s) = store();
+        let f = dir.path().join("x.tar");
+        let mut b = tar::Builder::new(std::fs::File::create(&f).unwrap());
+        let mut h = tar::Header::new_gnu();
+        h.set_entry_type(tar::EntryType::Symlink);
+        h.set_size(0);
+        h.set_mode(0o600);
+        b.append_link(&mut h, ARCHIVE_PACK, "/etc/passwd").unwrap();
+        b.into_inner().unwrap();
         let err = s.import(&f).unwrap_err().to_string();
         assert!(err.contains("isn't a smolbento template archive"), "{err}");
         assert!(s.list().unwrap().is_empty());
