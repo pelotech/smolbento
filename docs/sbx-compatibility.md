@@ -24,7 +24,7 @@ something different.
 | `policy ls --created-via/--type/--protocol/--include-inactive`, `policy check --protocol` other than `tcp` | Not implemented (`policy ls --decision` and `--source` work) |
 | `kit pack`, `kit push`, `kit pull`, `kit sign`, `kit verify` | Not implemented |
 | `env plan` and the `sbxenv.yaml` fields listed under [Environment files](#environment-files) | Later |
-| `template`, `setup ssh`, `mcp`, `--static-mcp` | Later |
+| `setup ssh`, `mcp`, `--static-mcp` | Later |
 | `tui` | Later |
 | `--pull always\|never` | `--pull missing` works (it's what smolvm does) |
 | `exec -d`, `--detach-keys` | Not supported (sbx doesn't support `exec -d` either) |
@@ -62,7 +62,7 @@ something different.
 | `reset` | Deletes all its state, kit host-mount directories included | Removes sandboxes, session state and the shared skills store (and its records); kit host-mount directories stay (delete them yourself) |
 | Progress output | SANDBOX, KITS and IMAGE sections with a line per layer | Same layout, plus SETUP and `start` lines, which are smolbento's own. No per-layer lines: the image pull shows a percentage, and the image step reads `preparing` until smolvm reports a pull (a cached image has none). CPU and Memory print before a kit's `resources@1` applies. A kit's "cached" label is approximate when pulls or builds run at the same time. On a terminal the step's detail (the pull percentage) is on the step's line, not on a second line as in sbx, and a warning printed during a step follows the step's last drawn line, which stays; nothing is erased |
 | Browser and clipboard | Shims post to the daemon's proxy (`gateway.docker.internal:3128`) with `curl` and `jq`; copies work from any `exec`; image paste behind `clipboard.imagePaste`; `SBX_HOST_SESSION_ID` routes requests to a session | The same shims and texts, posting over a socket smolvm mounts at `/run/smolbento/bridge.sock` with `curl` only (no proxy, no `jq`). Served only while you're attached (`run`, `exec -it`): otherwise URLs print the fallback and copies fail. No image paste (`clipboard.imagePaste` doesn't exist) and, as in sbx, no clipboard text reads. No `SBX_HOST_SESSION_ID`: the first attached session serves the sandbox. Sandboxes created before the bridge was added don't have it (recreate them). Forks get no shims, but keep the parent's socket mount, so their processes can use the parent's bridge while the parent is attached. The login relay replays callbacks in the sandbox with `curl -g --noproxy '*'` and 10-second timeouts (or `wget` for a `GET`), without a request body (`form_post` callbacks lose theirs), and treats the response as text; a session relays at most 4 ports, each for 10 minutes. See [Usage](usage.md#browser-and-clipboard) |
-| Command aliases | `ls`, `rm`/`delete`, `secret`, `secret ls`/`rm`/`delete`/`unset`, `settings ls` | Implemented now; the `template` and `volume` aliases come with those commands |
+| Command aliases | `ls`, `rm`/`delete`, `secret`, `secret ls`/`rm`/`delete`/`unset`, `settings ls`, `template ls`/`list`, `template rm`/`remove`/`delete` | Implemented now; the `volume` aliases come with that command |
 | `--version` | `sbx version vX` | `sbt --version` prints `sbt X`; `sbt version` also shows the smolvm version |
 
 ## Skills
@@ -79,6 +79,22 @@ works too). Differences:
 | Who links | Root, giving the directory and links to uid 1000; a directory uid 1000 can't reach fails the create (`uid 1000 cannot reach it, ...`) | Root, giving them to the image's `agent` account (your uid in smolbento), else uid 1000. No reachability check: links in a directory the agent can't reach are made anyway. A skills directory whose path goes through a symlink, in itself or a parent, gets no links (the start warns; a required bundled skill fails) |
 | Kits | `agent-skills@1`, `agent-skill@1` | Both, as measured: a kit directory has the store mounted over it unless the sandbox has bundled skills, then every directory links and the shared mount is read-write if any directory is. The clash message matches; the create error starts with `kit install failed (the sandbox was removed): bundled agent skills failed:`. `kit add` refuses kits with either |
 | Other agents' directories | From sbx's docs table | The same table, taken from the docs and not measured for copilot, cursor, droid, opencode and devin |
+
+## Templates
+
+`template save|ls|rm|load` and `run/create -t` follow sbx's flags. Differences:
+
+| Area | sbx | smolbento |
+|---|---|---|
+| `save --output` and `load` | A `docker save` tar | A smolbento archive; the two don't read each other's files |
+| `ls` | Lists Docker images and saved templates | Lists saved templates only; FLAVOR is the agent |
+| Agent mismatch | Not checked | Refused up front when the template's agent differs from the sandbox's |
+| `/tmp` | Kept | Not kept |
+| Saving a sandbox made from a template | Not restricted | Refused (smolvm limit; see [Development status](development-status.md#needs-smolvm-support-later-decisions)) |
+| `-t` with `--kit` | Not restricted | Refused when a kit adds image layers: a template's disk is saved whole |
+| `save` of a running sandbox without a terminal | Suggests a nonexistent `--force` | Says to `sbt stop` it first |
+| `inspect` | Needs `--cloud`; local templates are Docker images | Not supported |
+| `--pull never` | Accepted with any image | Accepted only with a saved template (exit 2 otherwise) |
 
 ## Environment files
 
