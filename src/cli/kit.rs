@@ -1,6 +1,6 @@
 //! `sbt kit inspect|validate|add`.
 
-use std::io::{BufRead, Write};
+use std::io::Write;
 
 use anyhow::{Context, Result, anyhow, bail};
 
@@ -583,9 +583,7 @@ fn approve<R: Runner>(ctx: &Ctx<R>, kit: &str, hosts: &[String], started: bool) 
     write!(err, "Allow {kit} to reach: {}? [y/N] ", hosts.join(", "))?;
     err.flush()?;
     drop(err);
-    let mut line = String::new();
-    std::io::stdin().lock().read_line(&mut line)?;
-    if matches!(line.trim().to_ascii_lowercase().as_str(), "y" | "yes") {
+    if super::is_yes(&ctx.read_line()?) {
         Ok(())
     } else {
         // `add` notes the start itself.
@@ -1581,6 +1579,18 @@ mod tests {
                 .all(|l| l.ends_with(super::READ_KITS) && l.contains("machine exec")),
             "{lines:#?}"
         );
+        assert!(kit_rules(&t).is_empty());
+    }
+
+    #[test]
+    fn add_asks_before_granting_network_and_declining_changes_nothing() {
+        let mut t = kit_env();
+        set_policy(&t, "mode = \"deny-all\"\n");
+        dev_sandbox(&t, BASE);
+        v3_kit(&t, "net", NET_KIT, &[]);
+        t.answer("n\n");
+        let e = sbt(&mut t.ctx, &["kit", "add", "dev", "./net"]).unwrap_err();
+        assert_eq!(format!("{e:#}"), "aborted; nothing was changed");
         assert!(kit_rules(&t).is_empty());
     }
 

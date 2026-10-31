@@ -1877,6 +1877,32 @@ SETUP
     }
 
     #[test]
+    fn rm_asks_on_a_terminal_and_removes_only_on_yes() {
+        let mut t = test_env(&[]);
+        t.ctx.vm.runner().ok(
+            &["machine", "status"],
+            &json("sbx-claude-proj", "running", "claude-proj"),
+        );
+        ls_one(&t, &json("sbx-claude-proj", "running", "claude-proj"));
+        let deleted = |t: &TestEnv| {
+            t.ctx
+                .vm
+                .runner()
+                .call_lines()
+                .iter()
+                .any(|l| l.starts_with("machine delete"))
+        };
+        t.answer("n\n");
+        let e = sbt(&mut t.ctx, &["rm", "claude-proj"]).unwrap_err();
+        assert_eq!(e.to_string(), "aborted");
+        assert_eq!(t.stdout(), "Remove claude-proj? [y/N] ");
+        assert!(!deleted(&t));
+        t.answer("y\n");
+        sbt(&mut t.ctx, &["rm", "claude-proj"]).unwrap();
+        assert!(deleted(&t));
+    }
+
+    #[test]
     fn prune_removes_only_old_stopped_sandboxes() {
         let mut t = test_env(&[]);
         let ls = format!(

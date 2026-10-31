@@ -7,7 +7,7 @@ use anyhow::{Context, Result, anyhow, bail};
 
 use super::{
     Ctx, EnvApplyOpts, EnvCmd, EnvCommon, EnvExecArgs, EnvRmArgs, ExecArgs, RunArgs, SandboxOpts,
-    SecretSource, Unsupported, confirm,
+    SecretSource, Unsupported, confirm_or,
 };
 use crate::env::file::SecretDecl;
 use crate::env::load::{ArgInputs, Loaded, load};
@@ -185,10 +185,12 @@ fn env_rm<R: Runner>(ctx: &mut Ctx<R>, a: EnvRmArgs) -> Result<i32> {
         }
     }
     write!(&ctx.out, "{}", remove_summary(&loaded, &name, &scoped))?;
-    if !a.force && !ctx.stdin_tty {
-        bail!("stdin is not a terminal; use --force to skip confirmation");
-    }
-    confirm(ctx, "Remove?", a.force)?;
+    confirm_or(
+        ctx,
+        "Remove?",
+        a.force,
+        "stdin is not a terminal; use --force to skip confirmation",
+    )?;
     match sb {
         Some(sb) => {
             super::lifecycle::delete_sandbox(ctx, sb, true)?;
@@ -235,18 +237,16 @@ fn prepare<R: Runner>(
 
 /// sbx asks before every `env create` and `env run`; `--force` approves this invocation.
 fn approve<R: Runner>(ctx: &Ctx<R>, loaded: &Loaded, force: bool) -> Result<()> {
-    if !force && !ctx.stdin_tty {
-        // The command as given, quoted for the shell, with `--force` added (sbx does the same).
-        let words: Vec<String> = ctx.args.iter().map(|a| shell_word(a)).collect();
-        let command = words.join(" ");
-        bail!(
-            "{} changes things outside the sandbox that have not been approved; approve them by \
-             running this in a terminal, or approve this invocation with --force (-f)\n  \
-             try: sbt {command} --force",
-            loaded.files[0].display()
-        );
-    }
-    confirm(ctx, "Apply?", force)
+    // The command as given, quoted for the shell, with `--force` added (sbx does the same).
+    let words: Vec<String> = ctx.args.iter().map(|a| shell_word(a)).collect();
+    let refusal = format!(
+        "{} changes things outside the sandbox that have not been approved; approve them by \
+         running this in a terminal, or approve this invocation with --force (-f)\n  \
+         try: sbt {} --force",
+        loaded.files[0].display(),
+        words.join(" ")
+    );
+    confirm_or(ctx, "Apply?", force, &refusal)
 }
 
 /// `s` as one shell word: as is when that's safe, else single-quoted.

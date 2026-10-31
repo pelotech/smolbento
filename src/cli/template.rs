@@ -11,7 +11,7 @@ use super::args::{
 use super::lifecycle::stop_sandbox;
 use super::ls::age;
 use super::progress::Progress;
-use super::{Ctx, Unsupported, confirm, table};
+use super::{Ctx, Unsupported, confirm, confirm_or, table};
 use crate::sandbox;
 use crate::smolvm::Runner;
 use crate::templates::{Entry, Store, TemplateRef};
@@ -114,13 +114,13 @@ fn rm<R: Runner>(ctx: &Ctx<R>, a: &TemplateRmArgs) -> Result<()> {
             n = a.name
         );
     };
-    if !a.force && !ctx.stdin_tty {
-        bail!(
-            "stdin is not a terminal; pass --force to skip the confirmation\n  try: sbt template rm --force"
-        );
-    }
     let q = format!("Remove template \"{}\"? This cannot be undone.", a.name);
-    confirm(ctx, &q, a.force)?;
+    confirm_or(
+        ctx,
+        &q,
+        a.force,
+        "stdin is not a terminal; pass --force to skip the confirmation\n  try: sbt template rm --force",
+    )?;
     store.remove(&e)?;
     let mut out = &ctx.out;
     match format(a.json, a.format) {

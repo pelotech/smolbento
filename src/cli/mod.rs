@@ -28,7 +28,7 @@ pub use args::*;
 
 use std::collections::BTreeMap;
 use std::ffi::OsString;
-use std::io::{IsTerminal, Write};
+use std::io::{BufRead, IsTerminal, Write};
 use std::path::PathBuf;
 use std::time::{SystemTime, UNIX_EPOCH};
 
@@ -76,8 +76,28 @@ pub struct Ctx<R: Runner> {
     /// Where command output goes; write with `writeln!(&ctx.out, ..)`. Errors and warnings go to
     /// stderr (`eprintln!`).
     pub out: Out,
+    /// Where prompts read answers; read with `ctx.read_line()`.
+    pub input: In,
     /// The command-line arguments after argv[0], for hints that repeat the command.
     pub args: Vec<String>,
+}
+
+impl<R: Runner> Ctx<R> {
+    /// One line of input (a prompt's answer), with its line ending; empty at end of input.
+    pub fn read_line(&self) -> std::io::Result<String> {
+        let mut line = String::new();
+        match &self.input {
+            In::Stdin => std::io::stdin().lock().read_line(&mut line)?,
+            In::Buffer(b) => b.borrow_mut().read_line(&mut line)?,
+        };
+        Ok(line)
+    }
+}
+
+/// Prompt input: the process's stdin, or answers a test supplies.
+pub enum In {
+    Stdin,
+    Buffer(std::cell::RefCell<std::io::Cursor<Vec<u8>>>),
 }
 
 /// Command output: the process's stdout, or a buffer tests read. Clones share the same output,
@@ -130,6 +150,7 @@ pub fn main(args: impl IntoIterator<Item = OsString>) -> Result<i32> {
         store,
         config_error,
         out: Out::Stdout,
+        input: In::Stdin,
         args: args
             .iter()
             .skip(1)
@@ -286,13 +307,30 @@ pub fn confirm<R: Runner>(ctx: &Ctx<R>, question: &str, force: bool) -> Result<(
     let mut out = &ctx.out;
     write!(out, "{question} [y/N] ")?;
     out.flush()?;
-    let mut line = String::new();
-    std::io::stdin().read_line(&mut line)?;
-    if matches!(line.trim().to_ascii_lowercase().as_str(), "y" | "yes") {
+    if is_yes(&ctx.read_line()?) {
         Ok(())
     } else {
         bail!("aborted")
     }
+}
+
+/// sbx's prompt rule: unless `force`, ask on a terminal, else fail with the command's own
+/// `refusal`.
+pub fn confirm_or<R: Runner>(
+    ctx: &Ctx<R>,
+    question: &str,
+    force: bool,
+    refusal: &str,
+) -> Result<()> {
+    if !force && !ctx.stdin_tty {
+        bail!("{refusal}");
+    }
+    confirm(ctx, question, force)
+}
+
+/// Whether a prompt's answer is yes.
+pub fn is_yes(answer: &str) -> bool {
+    matches!(answer.trim().to_ascii_lowercase().as_str(), "y" | "yes")
 }
 
 /// Left-aligned columns separated by three spaces, like sbx's tables.

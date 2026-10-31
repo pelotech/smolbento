@@ -11,7 +11,7 @@ use super::args::{
     KitFormat, SkillsAddArgs, SkillsCmd, SkillsImportArgs, SkillsLsArgs, SkillsRmArgs,
     SkillsUpdateArgs,
 };
-use super::{Ctx, confirm};
+use super::{Ctx, confirm_or};
 use crate::skills::import::{Event, scan};
 use crate::skills::repo::{self, Checkout};
 use crate::skills::store::{Source, Sources, Store};
@@ -68,20 +68,6 @@ fn ls<R: Runner>(ctx: &Ctx<R>, store: &Store, a: &SkillsLsArgs) -> Result<()> {
     Ok(())
 }
 
-/// sbx's prompt rule: ask on a terminal, else require `--force`.
-pub fn confirm_or_force<R: Runner>(
-    ctx: &Ctx<R>,
-    question: &str,
-    force: bool,
-    refusal: &str,
-    cmd: &str,
-) -> Result<()> {
-    if !force && !ctx.stdin_tty {
-        bail!("{refusal}\n  try: sbt skills {cmd} --help");
-    }
-    confirm(ctx, question, force)
-}
-
 fn rm<R: Runner>(ctx: &Ctx<R>, store: &Store, a: &SkillsRmArgs) -> Result<()> {
     if let Some(n) = a.skills.iter().find(|n| !store.has(n)) {
         bail!("skill {n:?} is not installed\n  try: sbt skills ls");
@@ -90,12 +76,11 @@ fn rm<R: Runner>(ctx: &Ctx<R>, store: &Store, a: &SkillsRmArgs) -> Result<()> {
         "Remove {}? Running agents may be reading them.",
         a.skills.join(", ")
     );
-    confirm_or_force(
+    confirm_or(
         ctx,
         &q,
         a.force,
-        "stdin is not a terminal; use --force to skip confirmation",
-        "rm",
+        "stdin is not a terminal; use --force to skip confirmation\n  try: sbt skills rm --help",
     )?;
     let mut sources = store.sources()?;
     for n in &a.skills {
@@ -131,12 +116,11 @@ fn add_url<R: Runner>(
         .collect();
     if !replacing.is_empty() {
         let q = format!("Replace {}?", replacing.join(", "));
-        confirm_or_force(
+        confirm_or(
             ctx,
             &q,
             force,
-            "stdin is not a terminal; pass --force to skip the confirmation",
-            "add",
+            "stdin is not a terminal; pass --force to skip the confirmation\n  try: sbt skills add --help",
         )?;
     }
     install(ctx, store, &checkout, &picked, "Added")?;
@@ -210,12 +194,11 @@ fn import<R: Runner>(ctx: &Ctx<R>, store: &Store, a: &SkillsImportArgs) -> Resul
         .collect();
     if !replacing.is_empty() {
         let q = format!("Replace {}?", replacing.join(", "));
-        confirm_or_force(
+        confirm_or(
             ctx,
             &q,
             a.force,
-            "stdin is not a terminal; pass --force to skip the confirmation",
-            "import",
+            "stdin is not a terminal; pass --force to skip the confirmation\n  try: sbt skills import --help",
         )?;
     }
     let mut sources = store.sources()?;
