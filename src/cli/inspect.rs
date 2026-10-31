@@ -13,7 +13,7 @@ use crate::smolvm::Runner;
 pub fn run<R: Runner>(ctx: &mut Ctx<R>, a: &InspectArgs) -> Result<i32> {
     let sb = sandbox::get(&ctx.vm, &a.sandbox)?;
     let sessions = session::live_sessions(&ctx.paths.sessions(), sb.name());
-    let format = if a.json { Format::Json } else { a.format };
+    let format = Format::pick(a.json, Some(a.format));
     write!(&ctx.out, "{}", render(&sb, sessions, format)?)?;
     Ok(0)
 }

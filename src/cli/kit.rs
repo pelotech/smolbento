@@ -5,7 +5,7 @@ use std::io::Write;
 use anyhow::{Context, Result, anyhow, bail};
 
 use super::Ctx;
-use super::args::{KitArgOpts, KitCmd, KitFormat};
+use super::args::{Format, KitArgOpts, KitCmd};
 use super::kit_doc::Doc;
 use super::plan;
 use crate::kits::apply::apply;
@@ -30,14 +30,14 @@ pub fn run<R: Runner>(ctx: &mut Ctx<R>, cmd: KitCmd) -> Result<i32> {
             format,
             json,
             offline,
-        } => inspect(ctx, &reference, &args, format_of(format, json), offline),
+        } => inspect(ctx, &reference, &args, Format::pick(json, format), offline),
         KitCmd::Validate {
             reference,
             args,
             format,
             json,
             offline,
-        } => validate(ctx, &reference, &args, format_of(format, json), offline),
+        } => validate(ctx, &reference, &args, Format::pick(json, format), offline),
         KitCmd::Add {
             sandbox,
             reference,
@@ -58,14 +58,6 @@ fn pending(sub: &str) -> Result<i32> {
 }
 
 /// `--json` is `--format json`.
-fn format_of(format: Option<KitFormat>, json: bool) -> KitFormat {
-    if json {
-        KitFormat::Json
-    } else {
-        format.unwrap_or(KitFormat::Table)
-    }
-}
-
 fn arg_values(a: &KitArgOpts) -> Result<ArgValues> {
     ArgValues::parse(&a.kit_args_file, &a.kit_arg)
 }
@@ -76,7 +68,7 @@ fn inspect<R: Runner>(
     ctx: &Ctx<R>,
     reference: &str,
     args: &KitArgOpts,
-    format: KitFormat,
+    format: Format,
     offline: bool,
 ) -> Result<i32> {
     // Only checked: inspecting doesn't expand anything.
@@ -85,9 +77,9 @@ fn inspect<R: Runner>(
     let doc = Doc::new(&kit);
     let mut out = &ctx.out;
     match format {
-        KitFormat::Json => writeln!(out, "{}", doc.json()?)?,
-        KitFormat::Yaml => write!(out, "{}", doc.yaml()?)?,
-        KitFormat::Table => {
+        Format::Json => writeln!(out, "{}", doc.json()?)?,
+        Format::Yaml => write!(out, "{}", doc.yaml()?)?,
+        Format::Table => {
             write!(out, "{}", doc.table(&kit))?;
             if !kit.caps.is_empty() {
                 writeln!(out, "Capabilities:")?;
@@ -134,11 +126,11 @@ fn validate<R: Runner>(
     ctx: &Ctx<R>,
     reference: &str,
     args: &KitArgOpts,
-    format: KitFormat,
+    format: Format,
     offline: bool,
 ) -> Result<i32> {
     let checked = check_kit(ctx, reference, args, offline);
-    if format == KitFormat::Table {
+    if format == Format::Table {
         for w in checked? {
             eprintln!("warning: {w}");
         }
@@ -156,7 +148,7 @@ fn validate<R: Runner>(
         warnings,
         errors,
     };
-    if format == KitFormat::Json {
+    if format == Format::Json {
         writeln!(&ctx.out, "{}", serde_json::to_string(&report)?)?;
     } else {
         write!(&ctx.out, "{}", serde_saphyr::to_string(&report)?)?;

@@ -8,7 +8,7 @@ use anyhow::{Result, bail};
 use serde::Serialize;
 
 use super::args::{
-    KitFormat, SkillsAddArgs, SkillsCmd, SkillsImportArgs, SkillsLsArgs, SkillsRmArgs,
+    Format, SkillsAddArgs, SkillsCmd, SkillsImportArgs, SkillsLsArgs, SkillsRmArgs,
     SkillsUpdateArgs,
 };
 use super::{Ctx, confirm_or};
@@ -41,11 +41,7 @@ struct Listing<'a> {
 fn ls<R: Runner>(ctx: &Ctx<R>, store: &Store, a: &SkillsLsArgs) -> Result<()> {
     let names = store.list()?;
     let path = store.dir.display().to_string();
-    let format = if a.json {
-        KitFormat::Json
-    } else {
-        a.format.unwrap_or(KitFormat::Table)
-    };
+    let format = Format::pick(a.json, a.format);
     let mut out = &ctx.out;
     let doc = Listing {
         store: path.clone(),
@@ -53,10 +49,10 @@ fn ls<R: Runner>(ctx: &Ctx<R>, store: &Store, a: &SkillsLsArgs) -> Result<()> {
     };
     match format {
         _ if a.quiet => names.iter().try_for_each(|n| writeln!(out, "{n}"))?,
-        KitFormat::Json => writeln!(out, "{}", serde_json::to_string_pretty(&doc)?)?,
-        KitFormat::Yaml => write!(out, "{}", serde_saphyr::to_string(&doc)?)?,
-        KitFormat::Table if names.is_empty() => writeln!(out, "No skills found in {path}")?,
-        KitFormat::Table => {
+        Format::Json => writeln!(out, "{}", serde_json::to_string_pretty(&doc)?)?,
+        Format::Yaml => write!(out, "{}", serde_saphyr::to_string(&doc)?)?,
+        Format::Table if names.is_empty() => writeln!(out, "No skills found in {path}")?,
+        Format::Table => {
             // sbx pads the name column to its widest cell plus 4 spaces.
             let w = names.iter().map(|n| n.len()).chain([5]).max().unwrap_or(5) + 4;
             writeln!(out, "{:<w$}STORE", "SKILL")?;
