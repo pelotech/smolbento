@@ -6,7 +6,7 @@ use std::path::{Path, PathBuf};
 use anyhow::{Context, Result, bail};
 
 use crate::agents::Agent;
-use crate::cli::Ctx;
+use crate::ctx::Ctx;
 use crate::kits::model::{Content, Kind, Kit, Source};
 use crate::kits::registry_auth::Logins;
 use crate::kits::{builder, capability, registry, smolfile, trust, v2, v3};
