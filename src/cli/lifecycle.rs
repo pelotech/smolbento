@@ -500,11 +500,22 @@ pub(crate) fn delete_sandbox<R: Runner>(
     sb: &Sandbox,
     forget_secrets: bool,
 ) -> Result<()> {
-    ctx.vm.delete(&sb.machine)?;
+    delete_keeping_remote(ctx, sb, forget_secrets)?;
     if let Some(repo) = &sb.meta.clone_repo {
         // Best effort: the host repo may be gone.
         let _ = clone::remove_remote(Path::new(repo), sb.name());
     }
+    Ok(())
+}
+
+/// `delete_sandbox` without removing the `--clone` remote: `run --rm` keeps it, so the commits
+/// fetched when the agent exits survive.
+pub(crate) fn delete_keeping_remote<R: Runner>(
+    ctx: &Ctx<R>,
+    sb: &Sandbox,
+    forget_secrets: bool,
+) -> Result<()> {
+    ctx.vm.delete(&sb.machine)?;
     session::clear(&ctx.paths.sessions(), sb.name());
     super::secret::forget_sandbox(ctx, sb.name(), forget_secrets)
 }
