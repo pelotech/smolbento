@@ -50,9 +50,7 @@ impl Plan {
 
 #[derive(Debug, Default)]
 pub struct Merged {
-    pub install: Rules,
-    pub runtime: Rules,
-    /// The same network rules per kit (each kit's rules are tagged with it in the policy).
+    /// Network rules per kit (each kit's rules are tagged with it in the policy).
     pub network: Vec<KitRules>,
     pub credentials: Vec<KitCred>,
     pub ports: Vec<(u16, bool)>,
@@ -361,13 +359,9 @@ pub fn resolve_for(
                     };
                     merged.network.push(KitRules {
                         kit: k.name.clone(),
-                        install: install.clone(),
-                        runtime: runtime.clone(),
+                        install,
+                        runtime,
                     });
-                    merged.install.allow.extend(install.allow);
-                    merged.install.deny.extend(install.deny);
-                    merged.runtime.allow.extend(runtime.allow);
-                    merged.runtime.deny.extend(runtime.deny);
                 }
                 CapBody::Port { container, udp } => {
                     if !merged.ports.contains(&(*container, *udp)) {
@@ -572,11 +566,6 @@ fn expand_hook(h: &Hook, ex: &dyn Fn(&str) -> Result<String>) -> Result<Hook> {
     })
 }
 
-/// Stable topological sort: repeatedly take the first mixin whose requirements are provided.
-/// Checks the set's capabilities like the spec's resolver (SPEC-v3 §5.3: one provider per name,
-/// requires met by another kit, a present provider within `integrates`, no `conflicts`), then
-/// orders the mixins: providers before the kits that require or integrate with them, otherwise as
-/// given. Every problem is reported, one per line.
 /// Expands the arg references in `k.provides` (the only capability field that may carry them).
 fn expand_provides(k: &mut Kit, args: &BTreeMap<String, String>) -> Result<()> {
     if !k.provides.iter().any(|s| capability::has_arg_ref(s)) {
@@ -599,6 +588,11 @@ fn expand_provides(k: &mut Kit, args: &BTreeMap<String, String>) -> Result<()> {
     Ok(())
 }
 
+/// Stable topological sort: repeatedly take the first mixin whose requirements are provided.
+/// Checks the set's capabilities like the spec's resolver (SPEC-v3 §5.3: one provider per name,
+/// requires met by another kit, a present provider within `integrates`, no `conflicts`), then
+/// orders the mixins: providers before the kits that require or integrate with them, otherwise as
+/// given. Every problem is reported, one per line.
 fn order(workload: &Kit, mixins: Vec<Kit>) -> Result<Vec<Kit>> {
     let all: Vec<&Kit> = std::iter::once(workload).chain(&mixins).collect();
     let mut problems = Vec::new();
@@ -766,6 +760,16 @@ mod tests {
             });
             self
         }
+    }
+
+    /// Every kit's runtime network rules, in kit order.
+    fn runtime(p: &Plan) -> Rules {
+        let mut all = Rules::default();
+        for k in &p.merged.network {
+            all.allow.extend(k.runtime.allow.iter().cloned());
+            all.deny.extend(k.runtime.deny.iter().cloned());
+        }
+        all
     }
 
     /// A kit the user named by `reference`.
@@ -1238,8 +1242,8 @@ mod tests {
         let m = mixin("m").cap("n@1", false, n("b.com", "worse.com"));
         let p = run(w, vec![m]).unwrap();
         let hosts = |r: &[NetRule]| r.iter().map(|x| x.host.clone()).collect::<Vec<_>>();
-        assert_eq!(hosts(&p.merged.runtime.allow), ["a.com", "b.com"]);
-        assert_eq!(hosts(&p.merged.runtime.deny), ["bad.com", "worse.com"]);
+        assert_eq!(hosts(&runtime(&p).allow), ["a.com", "b.com"]);
+        assert_eq!(hosts(&runtime(&p).deny), ["bad.com", "worse.com"]);
         let per_kit: Vec<(&str, Vec<String>)> = p
             .merged
             .network
@@ -1278,7 +1282,7 @@ mod tests {
         let opt = mixin("m").cap(ty, true, n("a.com", &["GET"]));
         let p = run(workload("w"), vec![opt]).unwrap();
         assert_eq!(p.skipped, ["m: network-policy@2 method/path (host-only)"]);
-        assert!(p.merged.runtime.allow[0].methods.is_empty());
+        assert!(runtime(&p).allow[0].methods.is_empty());
         // Host-only entries and @1 are unaffected.
         let plain = mixin("m").cap(ty, false, n("a.com", &[]));
         assert!(run(workload("w"), vec![plain]).unwrap().skipped.is_empty());
@@ -1310,8 +1314,8 @@ mod tests {
         );
         let hosts = |l: &[NetRule]| l.iter().map(|n| n.host.clone()).collect::<Vec<_>>();
         // The allow survives, widened to its host; only the host-only deny is kept.
-        assert_eq!(hosts(&p.merged.runtime.allow), ["registry.npmjs.org"]);
-        assert_eq!(hosts(&p.merged.runtime.deny), ["evil.com"]);
+        assert_eq!(hosts(&runtime(&p).allow), ["registry.npmjs.org"]);
+        assert_eq!(hosts(&runtime(&p).deny), ["evil.com"]);
         assert_eq!(hosts(&p.merged.network[0].runtime.deny), ["evil.com"]);
     }
 
