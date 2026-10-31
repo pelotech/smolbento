@@ -13,7 +13,7 @@ use crate::kits::host_mount;
 use crate::kits::resolve::Plan;
 use crate::policy::{Mode, Policy, compile};
 use crate::sandbox::{self, CloneStep, CreateRequest, Meta, Sandbox, StartPlan, name};
-use crate::secrets::{SecretsFile, resolve::resolve};
+use crate::secrets::{SecretsFile, resolve::start_env};
 use crate::smolvm::{Credential, NetworkSpec, Runner};
 use crate::workspace::clone;
 
@@ -87,55 +87,7 @@ fn plan_for<R: Runner>(
         install_rules.unwrap_or_default(),
         meta.host_access,
     );
-    let mut env = Vec::new();
-    for name in &meta.secrets {
-        let entry = secrets.entry_for(sandbox, meta.fork_of.as_deref(), name);
-        let (Some(service), Some(entry)) = (secrets.service(name), entry) else {
-            eprintln!(
-                "warning: {sandbox} was created with a {name} secret that's no longer set; requests using it will fail"
-            );
-            continue;
-        };
-        // The service's own env vars, then kit ones bound to it (`sbx.credential-service.*`).
-        let vars: Vec<&String> = service
-            .env_vars
-            .iter()
-            .chain(
-                meta.credential_services
-                    .iter()
-                    .filter(|(_, s)| *s == name)
-                    .map(|(v, _)| v),
-            )
-            .filter(|v| install || !meta.credential_install.contains(v))
-            .collect();
-        if vars.is_empty() {
-            continue;
-        }
-        match resolve(entry, ctx.store.as_ref()) {
-            Ok(value) => env.extend(vars.into_iter().map(|v| {
-                let value = match meta.credential_formats.get(v) {
-                    Some(f) => f.apply(&value),
-                    None => value.clone(),
-                };
-                (v.clone(), value)
-            })),
-            Err(e) => eprintln!(
-                "warning: {name} secret for {sandbox}: {e:#}; requests using it will fail"
-            ),
-        }
-    }
-    // Recorded env vars without a value, even of services secrets.toml no longer defines, and
-    // install-only and kit ones: none may come from the host shell's environment instead.
-    let mut remove: Vec<String> = meta
-        .credential_env
-        .iter()
-        .chain(&meta.credential_install)
-        .chain(meta.credential_services.keys())
-        .filter(|v| !env.iter().any(|(k, _)| k == *v))
-        .cloned()
-        .collect();
-    remove.sort();
-    remove.dedup();
+    let (env, remove) = start_env(&secrets, meta, ctx.store.as_ref(), install);
     let clone = meta.clone_repo.as_ref().map(|dir| {
         let repo = Path::new(dir);
         let read =

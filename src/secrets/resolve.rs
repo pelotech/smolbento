@@ -5,7 +5,8 @@ use std::process::Command;
 use anyhow::{Context, Result, bail};
 
 use super::store::SecretStore;
-use super::{SecretEntry, Source};
+use super::{SecretEntry, SecretsFile, Source};
+use crate::sandbox::Meta;
 
 /// Runs `program` from a fresh temporary directory (as sbx does), removed when it finishes.
 fn output(program: &str, args: &[&str]) -> Result<String> {
@@ -95,11 +96,108 @@ pub fn resolve(entry: &SecretEntry, store: &dyn SecretStore) -> Result<String> {
     Ok(value)
 }
 
+/// What a sandbox's `machine start` gets for its secrets: each bound service's env vars (and kit
+/// vars bound to it, `sbx.credential-service.*`) with their values, formatted as recorded; and the
+/// recorded vars that have no value now, which must be removed from smolvm's own environment so
+/// none comes from the host shell. `install`: the first start, which also gets install-only vars.
+/// A secret that's gone or can't be read only warns: requests using it will fail.
+pub fn start_env(
+    secrets: &SecretsFile,
+    meta: &Meta,
+    store: &dyn SecretStore,
+    install: bool,
+) -> (Vec<(String, String)>, Vec<String>) {
+    let sandbox = meta.name.as_str();
+    let mut env = Vec::new();
+    for name in &meta.secrets {
+        let entry = secrets.entry_for(sandbox, meta.fork_of.as_deref(), name);
+        let (Some(service), Some(entry)) = (secrets.service(name), entry) else {
+            eprintln!(
+                "warning: {sandbox} was created with a {name} secret that's no longer set; requests using it will fail"
+            );
+            continue;
+        };
+        // The service's own env vars, then kit ones bound to it (`sbx.credential-service.*`).
+        let vars: Vec<&String> = service
+            .env_vars
+            .iter()
+            .chain(
+                meta.credential_services
+                    .iter()
+                    .filter(|(_, s)| *s == name)
+                    .map(|(v, _)| v),
+            )
+            .filter(|v| install || !meta.credential_install.contains(v))
+            .collect();
+        if vars.is_empty() {
+            continue;
+        }
+        match resolve(entry, store) {
+            Ok(value) => env.extend(vars.into_iter().map(|v| {
+                let value = match meta.credential_formats.get(v) {
+                    Some(f) => f.apply(&value),
+                    None => value.clone(),
+                };
+                (v.clone(), value)
+            })),
+            Err(e) => eprintln!(
+                "warning: {name} secret for {sandbox}: {e:#}; requests using it will fail"
+            ),
+        }
+    }
+    // Recorded env vars without a value, even of services secrets.toml no longer defines, and
+    // install-only and kit ones: none may come from the host shell's environment instead.
+    let mut remove: Vec<String> = meta
+        .credential_env
+        .iter()
+        .chain(&meta.credential_install)
+        .chain(meta.credential_services.keys())
+        .filter(|v| !env.iter().any(|(k, _)| k == *v))
+        .cloned()
+        .collect();
+    remove.sort();
+    remove.dedup();
+    (env, remove)
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
     use crate::secrets::store::MemoryStore;
     use crate::secrets::{SecretEntry, Source};
+
+    #[test]
+    fn start_env_passes_bound_values_and_removes_the_rest() {
+        let store = MemoryStore::default();
+        let entry = SecretEntry {
+            service: "github".into(),
+            scope: crate::secrets::scope_for(None),
+            source: Source::Keychain,
+        };
+        store.set(&entry.account(), "tok").unwrap();
+        let mut secrets = SecretsFile::default();
+        secrets.set(entry);
+        // GITHUB_TOKEN is install-only; openai's secret isn't set any more.
+        let meta = Meta {
+            name: "s".into(),
+            secrets: vec!["github".into(), "openai".into()],
+            credential_env: vec!["GH_TOKEN".into(), "OPENAI_API_KEY".into()],
+            credential_install: vec!["GITHUB_TOKEN".into()],
+            ..Default::default()
+        };
+        let (env, remove) = start_env(&secrets, &meta, &store, false);
+        assert_eq!(env, [("GH_TOKEN".to_string(), "tok".to_string())]);
+        assert_eq!(remove, ["GITHUB_TOKEN", "OPENAI_API_KEY"]);
+        let (env, remove) = start_env(&secrets, &meta, &store, true);
+        assert_eq!(
+            env,
+            [
+                ("GH_TOKEN".to_string(), "tok".to_string()),
+                ("GITHUB_TOKEN".to_string(), "tok".to_string())
+            ]
+        );
+        assert_eq!(remove, ["OPENAI_API_KEY"]);
+    }
 
     fn e(source: Source) -> SecretEntry {
         SecretEntry {
