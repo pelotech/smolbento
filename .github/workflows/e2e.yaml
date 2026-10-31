@@ -71,8 +71,9 @@ jobs:
 
       - name: smolvm version
         run: smolvm --version
-      # ubuntu-latest has 4 vCPUs and 16 GiB; each test VM takes 1 CPU and 1 GiB.
+      # Two at a time: four on ubuntu-latest's 4 vCPUs tripled the summed test time (nested VMs,
+      # and registry tests boot two each) and took longer overall.
       - name: End-to-end tests
-        run: just e2e 4
+        run: just e2e
         env:
           NEXTEST_PROFILE: ci
