@@ -358,14 +358,6 @@ pub struct ForkArgs {
     pub count: u32,
 }
 
-/// `kit inspect --format`.
-#[derive(Debug, Clone, Copy, PartialEq, Eq, clap::ValueEnum)]
-pub enum KitFormat {
-    Table,
-    Json,
-    Yaml,
-}
-
 #[derive(Debug, Subcommand)]
 pub enum KitCmd {
     /// Show what a kit provides and requests
@@ -376,7 +368,7 @@ pub enum KitCmd {
         args: KitArgOpts,
         /// Output format
         #[arg(long, value_enum)]
-        format: Option<KitFormat>,
+        format: Option<Format>,
         /// Output in JSON format
         #[arg(long)]
         json: bool,
@@ -392,7 +384,7 @@ pub enum KitCmd {
         args: KitArgOpts,
         /// Output format
         #[arg(long, value_enum)]
-        format: Option<KitFormat>,
+        format: Option<Format>,
         /// Output in JSON format
         #[arg(long)]
         json: bool,
@@ -547,7 +539,7 @@ impl SandboxOpts {
     }
 }
 
-#[derive(Debug, Args)]
+#[derive(Debug, Default, Args)]
 pub struct RunArgs {
     /// Agent or workload kit (registry reference or local path, e.g. ./kit), then workspace paths (default: the current directory)
     pub targets: Vec<String>,
@@ -625,6 +617,17 @@ pub enum Format {
     Table,
     Json,
     Yaml,
+}
+
+impl Format {
+    /// `--json` wins over `--format`, which defaults to a table.
+    pub fn pick(json: bool, format: Option<Format>) -> Format {
+        if json {
+            Format::Json
+        } else {
+            format.unwrap_or_default()
+        }
+    }
 }
 
 #[derive(Debug, Default, Args)]
@@ -927,7 +930,7 @@ pub struct SkillsImportArgs {
 pub struct SkillsLsArgs {
     /// Output format: table, json or yaml
     #[arg(long, value_enum)]
-    pub format: Option<KitFormat>,
+    pub format: Option<Format>,
     /// Output in JSON format
     #[arg(long)]
     pub json: bool,
@@ -981,7 +984,7 @@ pub struct TemplateSaveArgs {
 pub struct TemplateLsArgs {
     /// Output format: table, json or yaml
     #[arg(long, value_enum)]
-    pub format: Option<KitFormat>,
+    pub format: Option<Format>,
     /// Output in JSON format
     #[arg(long)]
     pub json: bool,
@@ -999,7 +1002,7 @@ pub struct TemplateRmArgs {
     pub force: bool,
     /// Output format: table, json or yaml
     #[arg(long, value_enum)]
-    pub format: Option<KitFormat>,
+    pub format: Option<Format>,
     /// Output in JSON format
     #[arg(long)]
     pub json: bool,

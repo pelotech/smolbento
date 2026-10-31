@@ -6,7 +6,7 @@ use anyhow::{Context, Result, bail};
 use serde::Serialize;
 
 use super::args::{
-    KitFormat, TemplateCmd, TemplateLoadArgs, TemplateLsArgs, TemplateRmArgs, TemplateSaveArgs,
+    Format, TemplateCmd, TemplateLoadArgs, TemplateLsArgs, TemplateRmArgs, TemplateSaveArgs,
 };
 use super::lifecycle::stop_sandbox;
 use super::ls::age;
@@ -41,14 +41,6 @@ struct Row<'a> {
     size: u64,
 }
 
-fn format(json: bool, format: Option<KitFormat>) -> KitFormat {
-    if json {
-        KitFormat::Json
-    } else {
-        format.unwrap_or(KitFormat::Table)
-    }
-}
-
 fn ls<R: Runner>(ctx: &Ctx<R>, a: &TemplateLsArgs) -> Result<()> {
     let all = Store::new(&ctx.paths).list()?;
     let rows: Vec<Row> = all
@@ -63,11 +55,11 @@ fn ls<R: Runner>(ctx: &Ctx<R>, a: &TemplateLsArgs) -> Result<()> {
         })
         .collect();
     let mut out = &ctx.out;
-    match format(a.json, a.format) {
+    match Format::pick(a.json, a.format) {
         _ if a.quiet => all.iter().try_for_each(|e| writeln!(out, "{}", e.full()))?,
-        KitFormat::Json => writeln!(out, "{}", serde_json::to_string_pretty(&rows)?)?,
-        KitFormat::Yaml => write!(out, "{}", serde_saphyr::to_string(&rows)?)?,
-        KitFormat::Table => {
+        Format::Json => writeln!(out, "{}", serde_json::to_string_pretty(&rows)?)?,
+        Format::Yaml => write!(out, "{}", serde_saphyr::to_string(&rows)?)?,
+        Format::Table => {
             let head = ["REPOSITORY", "TAG", "IMAGE ID", "FLAVOR", "CREATED"];
             let mut lines = vec![head.map(String::from).to_vec()];
             for e in &all {
@@ -123,15 +115,15 @@ fn rm<R: Runner>(ctx: &Ctx<R>, a: &TemplateRmArgs) -> Result<()> {
     )?;
     store.remove(&e)?;
     let mut out = &ctx.out;
-    match format(a.json, a.format) {
-        KitFormat::Table => writeln!(out, "Removed template {}", a.name)?,
+    match Format::pick(a.json, a.format) {
+        Format::Table => writeln!(out, "Removed template {}", a.name)?,
         f => {
             let doc = [Removed {
                 action: "removed",
                 resource: "template",
                 name: &a.name,
             }];
-            if f == KitFormat::Json {
+            if f == Format::Json {
                 writeln!(out, "{}", serde_json::to_string_pretty(&doc)?)?;
             } else {
                 write!(out, "{}", serde_saphyr::to_string(&doc)?)?;

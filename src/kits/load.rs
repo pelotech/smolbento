@@ -34,7 +34,7 @@ pub fn load<R: Runner>(ctx: &Ctx<R>, reference: &str) -> Result<Kit> {
 /// reference would be pulled and a v3 source directory built (the builder pulls its base image),
 /// so both are refused.
 pub fn load_with<R: Runner>(ctx: &Ctx<R>, reference: &str, offline: bool) -> Result<Kit> {
-    Ok(load_kit(ctx, reference, offline, &mut |_| {})?.0)
+    Ok(fetch(ctx, reference, offline, &mut |_| {})?.0)
 }
 
 /// What loading a kit fetches.
@@ -53,54 +53,46 @@ pub fn load_noting<R: Runner>(
     reference: &str,
     before: &mut dyn FnMut(Fetch),
 ) -> Result<(Kit, bool)> {
-    load_kit(ctx, reference, false, before)
+    fetch(ctx, reference, false, before)
 }
 
-fn load_kit<R: Runner>(
+/// The kit and whether loading it added nothing to the kit cache, with `reference` recorded as
+/// typed.
+fn fetch<R: Runner>(
     ctx: &Ctx<R>,
     reference: &str,
     offline: bool,
     before: &mut dyn FnMut(Fetch),
 ) -> Result<(Kit, bool)> {
-    let (mut kit, cached) = fetch_kit(ctx, reference, offline, before)?;
+    let (mut kit, cached) = if let Some(kit) = builtin(reference) {
+        (kit?, true)
+    } else {
+        match locate(ctx, reference, offline)? {
+            Located::Registry(r) => {
+                let secrets = SecretsFile::load(&ctx.paths)?;
+                let logins = Logins::new(&secrets.registries, &*ctx.store);
+                let cache = ctx.paths.kit_cache();
+                before(Fetch::Pull);
+                let blobs = entries(&registry::store_dir(&cache));
+                let kit = registry::pull(&r, &cache, logins)?;
+                (kit, entries(&registry::store_dir(&cache)) == blobs)
+            }
+            Located::V2(dir) => {
+                let spec = dir.join("spec.yaml");
+                let yaml = fs::read_to_string(&spec)
+                    .with_context(|| format!("reading {}", spec.display()))?;
+                (v2::parse(&yaml, &dir)?, true)
+            }
+            Located::V3(_) if offline => bail!(
+                "kit {reference} is a v3 source kit and --offline has no kit builder: building it \
+                 needs the network; run without --offline"
+            ),
+            Located::V3(dir) => load_v3(ctx, &dir, before)?,
+            Located::Smolfile(path) => (smolfile::load(&path)?, true),
+        }
+    };
     kit.reference = Some(reference.to_string());
     Ok((kit, cached))
-}
-
-fn fetch_kit<R: Runner>(
-    ctx: &Ctx<R>,
-    reference: &str,
-    offline: bool,
-    before: &mut dyn FnMut(Fetch),
-) -> Result<(Kit, bool)> {
-    if let Some(kit) = builtin(reference) {
-        return Ok((kit?, true));
-    }
-    match locate(ctx, reference, offline)? {
-        Located::Registry(r) => {
-            let secrets = SecretsFile::load(&ctx.paths)?;
-            let logins = Logins::new(&secrets.registries, &*ctx.store);
-            let cache = ctx.paths.kit_cache();
-            before(Fetch::Pull);
-            let blobs = entries(&registry::store_dir(&cache));
-            let kit = registry::pull(&r, &cache, logins)?;
-            Ok((kit, entries(&registry::store_dir(&cache)) == blobs))
-        }
-        Located::V2(dir) => {
-            let spec = dir.join("spec.yaml");
-            let yaml =
-                fs::read_to_string(&spec).with_context(|| format!("reading {}", spec.display()))?;
-            let mut kit = v2::parse(&yaml, &dir)?;
-            kit.source = Source::LocalV2(dir);
-            Ok((kit, true))
-        }
-        Located::V3(_) if offline => bail!(
-            "kit {reference} is a v3 source kit and --offline has no kit builder: building it \
-             needs the network; run without --offline"
-        ),
-        Located::V3(dir) => load_v3(ctx, &dir, before),
-        Located::Smolfile(path) => Ok((smolfile::load(&path)?, true)),
-    }
 }
 
 /// How many entries `dir` has (0 when it doesn't exist).

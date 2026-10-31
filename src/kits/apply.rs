@@ -105,12 +105,12 @@ pub fn apply(
         }
     }
     let mut tmpfs = Vec::new();
-    for (path, is_tmpfs, mode) in &m.volumes {
-        if *is_tmpfs {
-            req.tmpfs.push(path.clone());
-            tmpfs.push((path.clone(), mode.clone()));
+    for v in &m.volumes {
+        if v.tmpfs {
+            req.tmpfs.push(v.path.clone());
+            tmpfs.push((v.path.clone(), v.mode.clone()));
         } else {
-            req.volumes.push(path.clone());
+            req.volumes.push(v.path.clone());
         }
     }
 

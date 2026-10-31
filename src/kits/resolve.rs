@@ -24,8 +24,40 @@ pub struct Plan {
     /// Kit name to effective args.
     pub args: BTreeMap<String, BTreeMap<String, String>>,
     pub merged: Merged,
-    /// `kit: type@n` of skipped optional capabilities.
-    pub skipped: Vec<String>,
+    /// Optional capabilities that are skipped.
+    pub skipped: Vec<Skipped>,
+}
+
+/// A `volume@1` request: a directory on the sandbox's disk, or a tmpfs with `mode`.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct Volume {
+    pub path: String,
+    pub tmpfs: bool,
+    pub mode: Option<String>,
+}
+
+/// An optional capability smolbento skips: the kit, and what of it (usually its type).
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct Skipped {
+    pub kit: String,
+    pub what: String,
+}
+
+impl Skipped {
+    fn new(kit: &str, what: impl Into<String>) -> Skipped {
+        Skipped {
+            kit: kit.into(),
+            what: what.into(),
+        }
+    }
+}
+
+/// Tests compare with `"kit: what"`.
+#[cfg(test)]
+impl PartialEq<&str> for Skipped {
+    fn eq(&self, other: &&str) -> bool {
+        format!("{}: {}", self.kit, self.what) == *other
+    }
 }
 
 impl Plan {
@@ -40,23 +72,18 @@ impl Plan {
     pub fn skipped_warnings(&self) -> Vec<String> {
         self.skipped
             .iter()
-            .map(|s| {
-                let (kit, what) = s.split_once(": ").unwrap_or(("?", s));
-                format!("kit {kit}: skipping {what} (not supported)")
-            })
+            .map(|s| format!("kit {}: skipping {} (not supported)", s.kit, s.what))
             .collect()
     }
 }
 
 #[derive(Debug, Default)]
 pub struct Merged {
-    pub install: Rules,
-    pub runtime: Rules,
-    /// The same network rules per kit (each kit's rules are tagged with it in the policy).
+    /// Network rules per kit (each kit's rules are tagged with it in the policy).
     pub network: Vec<KitRules>,
     pub credentials: Vec<KitCred>,
     pub ports: Vec<(u16, bool)>,
-    pub volumes: Vec<(String, bool, Option<String>)>,
+    pub volumes: Vec<Volume>,
     /// In kit order.
     pub host_mounts: Vec<HostMount>,
     /// `agent-skills@1` directories, one per path (widest mode).
@@ -284,7 +311,7 @@ pub fn resolve_for(
             match &cap.body {
                 CapBody::Unsupported => {
                     if cap.optional {
-                        skipped.push(format!("{}: {}", k.name, cap.ty));
+                        skipped.push(Skipped::new(&k.name, &cap.ty));
                         continue;
                     }
                     bail!("kit {}: {} is not supported by smolbento", k.name, cap.ty);
@@ -292,7 +319,7 @@ pub fn resolve_for(
                 CapBody::Credential(c) => {
                     if c.oauth.as_ref().is_some_and(|o| !o.passthrough) {
                         if cap.optional {
-                            skipped.push(format!("{}: {}", k.name, cap.ty));
+                            skipped.push(Skipped::new(&k.name, &cap.ty));
                             continue;
                         }
                         bail!(
@@ -351,9 +378,9 @@ pub fn resolve_for(
                             1 => "; 1 qualified deny rule dropped".into(),
                             d => format!("; {d} qualified deny rules dropped"),
                         };
-                        skipped.push(format!(
-                            "{}: network-policy@2 method/path (host-only{note})",
-                            k.name
+                        skipped.push(Skipped::new(
+                            &k.name,
+                            format!("network-policy@2 method/path (host-only{note})"),
                         ));
                         (host_only(install), host_only(runtime))
                     } else {
@@ -361,13 +388,9 @@ pub fn resolve_for(
                     };
                     merged.network.push(KitRules {
                         kit: k.name.clone(),
-                        install: install.clone(),
-                        runtime: runtime.clone(),
+                        install,
+                        runtime,
                     });
-                    merged.install.allow.extend(install.allow);
-                    merged.install.deny.extend(install.deny);
-                    merged.runtime.allow.extend(runtime.allow);
-                    merged.runtime.deny.extend(runtime.deny);
                 }
                 CapBody::Port { container, udp } => {
                     if !merged.ports.contains(&(*container, *udp)) {
@@ -378,14 +401,18 @@ pub fn resolve_for(
                     if let Some(h) = merged.host_mounts.iter().find(|h| &h.path == path) {
                         bail!("{}", one_owner(&h.kit, &k.name, path));
                     }
-                    match merged.volumes.iter().find(|v| &v.0 == path) {
-                        Some(v) if v.1 != *tmpfs || v.2 != *mode => bail!(
+                    match merged.volumes.iter().find(|v| &v.path == path) {
+                        Some(v) if v.tmpfs != *tmpfs || v.mode != *mode => bail!(
                             "kit {}: volume {path} conflicts with another kit's request",
                             k.name
                         ),
                         Some(_) => {}
                         None => {
-                            merged.volumes.push((path.clone(), *tmpfs, mode.clone()));
+                            merged.volumes.push(Volume {
+                                path: path.clone(),
+                                tmpfs: *tmpfs,
+                                mode: mode.clone(),
+                            });
                             volume_kits.insert(path.clone(), k.name.clone());
                         }
                     }
@@ -512,7 +539,7 @@ pub fn resolve_for(
 fn ssh_phase(
     entries: &[SshEntry],
     phase: SshPhase,
-    skipped: &mut Vec<String>,
+    skipped: &mut Vec<Skipped>,
 ) -> Result<Option<PhaseGrant>> {
     let mut es: Vec<&SshEntry> = entries
         .iter()
@@ -524,9 +551,12 @@ fn ssh_phase(
             if !e.optional {
                 bail!("kit {kit}: ssh-agent@1 authenticate limits aren't supported yet");
             }
-            let note = format!(
-                "{kit}: com.docker.sandbox/ssh-agent@1 with authenticate limits in the {} phase",
-                phase.as_str()
+            let note = Skipped::new(
+                kit,
+                format!(
+                    "com.docker.sandbox/ssh-agent@1 with authenticate limits in the {} phase",
+                    phase.as_str()
+                ),
             );
             if !skipped.contains(&note) {
                 skipped.push(note);
@@ -572,11 +602,6 @@ fn expand_hook(h: &Hook, ex: &dyn Fn(&str) -> Result<String>) -> Result<Hook> {
     })
 }
 
-/// Stable topological sort: repeatedly take the first mixin whose requirements are provided.
-/// Checks the set's capabilities like the spec's resolver (SPEC-v3 §5.3: one provider per name,
-/// requires met by another kit, a present provider within `integrates`, no `conflicts`), then
-/// orders the mixins: providers before the kits that require or integrate with them, otherwise as
-/// given. Every problem is reported, one per line.
 /// Expands the arg references in `k.provides` (the only capability field that may carry them).
 fn expand_provides(k: &mut Kit, args: &BTreeMap<String, String>) -> Result<()> {
     if !k.provides.iter().any(|s| capability::has_arg_ref(s)) {
@@ -599,6 +624,11 @@ fn expand_provides(k: &mut Kit, args: &BTreeMap<String, String>) -> Result<()> {
     Ok(())
 }
 
+/// Stable topological sort: repeatedly take the first mixin whose requirements are provided.
+/// Checks the set's capabilities like the spec's resolver (SPEC-v3 §5.3: one provider per name,
+/// requires met by another kit, a present provider within `integrates`, no `conflicts`), then
+/// orders the mixins: providers before the kits that require or integrate with them, otherwise as
+/// given. Every problem is reported, one per line.
 fn order(workload: &Kit, mixins: Vec<Kit>) -> Result<Vec<Kit>> {
     let all: Vec<&Kit> = std::iter::once(workload).chain(&mixins).collect();
     let mut problems = Vec::new();
@@ -766,6 +796,16 @@ mod tests {
             });
             self
         }
+    }
+
+    /// Every kit's runtime network rules, in kit order.
+    fn runtime(p: &Plan) -> Rules {
+        let mut all = Rules::default();
+        for k in &p.merged.network {
+            all.allow.extend(k.runtime.allow.iter().cloned());
+            all.deny.extend(k.runtime.deny.iter().cloned());
+        }
+        all
     }
 
     /// A kit the user named by `reference`.
@@ -1238,8 +1278,8 @@ mod tests {
         let m = mixin("m").cap("n@1", false, n("b.com", "worse.com"));
         let p = run(w, vec![m]).unwrap();
         let hosts = |r: &[NetRule]| r.iter().map(|x| x.host.clone()).collect::<Vec<_>>();
-        assert_eq!(hosts(&p.merged.runtime.allow), ["a.com", "b.com"]);
-        assert_eq!(hosts(&p.merged.runtime.deny), ["bad.com", "worse.com"]);
+        assert_eq!(hosts(&runtime(&p).allow), ["a.com", "b.com"]);
+        assert_eq!(hosts(&runtime(&p).deny), ["bad.com", "worse.com"]);
         let per_kit: Vec<(&str, Vec<String>)> = p
             .merged
             .network
@@ -1278,7 +1318,7 @@ mod tests {
         let opt = mixin("m").cap(ty, true, n("a.com", &["GET"]));
         let p = run(workload("w"), vec![opt]).unwrap();
         assert_eq!(p.skipped, ["m: network-policy@2 method/path (host-only)"]);
-        assert!(p.merged.runtime.allow[0].methods.is_empty());
+        assert!(runtime(&p).allow[0].methods.is_empty());
         // Host-only entries and @1 are unaffected.
         let plain = mixin("m").cap(ty, false, n("a.com", &[]));
         assert!(run(workload("w"), vec![plain]).unwrap().skipped.is_empty());
@@ -1310,8 +1350,8 @@ mod tests {
         );
         let hosts = |l: &[NetRule]| l.iter().map(|n| n.host.clone()).collect::<Vec<_>>();
         // The allow survives, widened to its host; only the host-only deny is kept.
-        assert_eq!(hosts(&p.merged.runtime.allow), ["registry.npmjs.org"]);
-        assert_eq!(hosts(&p.merged.runtime.deny), ["evil.com"]);
+        assert_eq!(hosts(&runtime(&p).allow), ["registry.npmjs.org"]);
+        assert_eq!(hosts(&runtime(&p).deny), ["evil.com"]);
         assert_eq!(hosts(&p.merged.network[0].runtime.deny), ["evil.com"]);
     }
 
@@ -1322,7 +1362,14 @@ mod tests {
         assert!(run(workload("w"), vec![a.clone(), b]).is_err());
         let c = mixin("c").cap("v@1", false, vol("/data", false));
         let p = run(workload("w"), vec![a, c]).unwrap();
-        assert_eq!(p.merged.volumes, [("/data".to_string(), false, None)]);
+        assert_eq!(
+            p.merged.volumes,
+            [Volume {
+                path: "/data".into(),
+                tmpfs: false,
+                mode: None
+            }]
+        );
     }
 
     fn host(path: &str, mode: Option<&str>) -> CapBody {

@@ -64,18 +64,13 @@ fn env_run<R: Runner>(
     let args = if exists {
         // Attach as it was created, with the file's current env for this session.
         RunArgs {
-            targets: vec![],
             opts: SandboxOpts {
                 name: Some(spec.name),
                 ..Default::default()
             },
             detach,
-            rm: false,
-            no_progress: false,
-            new: false,
-            detach_keys: None,
-            agent_args: vec![],
             session_env: spec.env,
+            ..Default::default()
         }
     } else {
         provision(ctx, &mut secrets, &spec)?;
@@ -83,12 +78,7 @@ fn env_run<R: Runner>(
             targets: spec.targets,
             opts: spec.opts,
             detach,
-            rm: false,
-            no_progress: false,
-            new: false,
-            detach_keys: None,
-            agent_args: vec![],
-            session_env: vec![],
+            ..Default::default()
         }
     };
     super::run::run(ctx, &args)

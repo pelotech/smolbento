@@ -108,11 +108,7 @@ pub fn run<R: Runner>(ctx: &mut Ctx<R>, cmd: PolicyCmd) -> Result<i32> {
                 Some(s @ ("local" | "org" | "kit")) => Some(s),
                 Some(other) => bail!("--source takes local, org or kit, not '{other}'"),
             };
-            let format = if a.json {
-                Format::Json
-            } else {
-                a.format.unwrap_or_default()
-            };
+            let format = Format::pick(a.json, a.format);
             let opts = LsOpts {
                 sandbox: a.sandbox.as_deref(),
                 source,
