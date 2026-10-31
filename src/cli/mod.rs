@@ -15,6 +15,7 @@ pub(crate) mod plan;
 mod policy;
 mod ports;
 pub(crate) mod progress;
+pub(crate) mod request;
 mod run;
 pub(crate) mod secret;
 mod settings;

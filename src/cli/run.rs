@@ -6,9 +6,10 @@ use std::path::Path;
 
 use anyhow::{Context, Result, bail};
 
-use super::lifecycle::{create_reported, has_kit_flags, kit_target};
+use super::lifecycle::create_reported;
 use super::plan;
 use super::progress::Progress;
+use super::request::{has_kit_flags, kit_target};
 use super::{Ctx, RunArgs, Unsupported};
 use crate::agents;
 use crate::bridge;
@@ -32,7 +33,7 @@ pub fn check_args(a: &RunArgs) -> Result<()> {
 }
 
 pub fn run<R: Runner>(ctx: &mut Ctx<R>, a: &RunArgs) -> Result<i32> {
-    super::lifecycle::check_kit_args(&a.targets, &a.opts)?;
+    super::request::check_kit_args(&a.targets, &a.opts)?;
     let existing = match &a.opts.name {
         Some(n) => sandbox::find(&ctx.vm, n)?,
         None => None,

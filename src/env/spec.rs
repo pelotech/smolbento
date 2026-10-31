@@ -8,7 +8,7 @@ use super::file::{EnvFile, KitEntry, PinnedKit, Port, SecretDecl, Workspace};
 use super::load::Loaded;
 use crate::agents;
 use crate::cli::SandboxOpts;
-use crate::cli::lifecycle::unknown_agent;
+use crate::cli::request::unknown_agent;
 use crate::cli::secret::unknown_service;
 use crate::kits::registry::sha256_digest;
 use crate::sandbox::{name as sandbox_name, options};
