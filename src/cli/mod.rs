@@ -338,21 +338,21 @@ mod tests {
     #[test]
     fn old_smolvm_is_refused() {
         let mut t = test_env(&[]);
-        t.ctx.vm.runner().ok(&["--version"], "smolvm 1.30.0\n");
-        let err = sbt(&mut t.ctx, &["ls"]).unwrap_err();
+        t.runner().ok(&["--version"], "smolvm 1.30.0\n");
+        let err = t.sbt(&["ls"]).unwrap_err();
         assert!(err.to_string().contains("too old"));
     }
 
     #[test]
     fn pending_and_cloud_commands_exit_2() {
         let mut t = test_env(&[]);
-        let err = sbt(&mut t.ctx, &["mcp", "ls"]).unwrap_err();
+        let err = t.sbt(&["mcp", "ls"]).unwrap_err();
         assert_eq!(err.to_string(), "`sbt mcp` is not implemented yet");
         assert_eq!(exit_code(&err), 2);
-        let err = sbt(&mut t.ctx, &["kit", "pack", "./my-kit"]).unwrap_err();
+        let err = t.sbt(&["kit", "pack", "./my-kit"]).unwrap_err();
         assert_eq!(err.to_string(), "`sbt kit pack` is not implemented yet");
         assert_eq!(exit_code(&err), 2);
-        let err = sbt(&mut t.ctx, &["move", "x", "--to", "cloud"]).unwrap_err();
+        let err = t.sbt(&["move", "x", "--to", "cloud"]).unwrap_err();
         assert!(err.to_string().contains("Docker Cloud"));
         assert_eq!(exit_code(&err), 2);
         let Some(Cmd::Run(run)) =
@@ -371,8 +371,8 @@ mod tests {
     fn bare_sbt_hits_the_same_version_gate_as_ls() {
         for args in [&[][..], &["ls"][..]] {
             let mut t = test_env(&[]);
-            t.ctx.vm.runner().ok(&["--version"], "smolvm 1.30.0\n");
-            let err = sbt(&mut t.ctx, args).unwrap_err();
+            t.runner().ok(&["--version"], "smolvm 1.30.0\n");
+            let err = t.sbt(args).unwrap_err();
             assert!(err.to_string().contains("too old"), "{args:?}");
         }
     }
@@ -388,7 +388,7 @@ mod tests {
         refuse_root(501).unwrap();
         let mut t = test_env(&[]);
         t.ctx.uid = 0;
-        let err = sbt(&mut t.ctx, &["ls"]).unwrap_err();
+        let err = t.sbt(&["ls"]).unwrap_err();
         assert!(err.to_string().contains("don't run sbt as root"), "{err}");
     }
 
@@ -397,17 +397,14 @@ mod tests {
         let mut t = test_env(&[]);
         break_config(&mut t);
         let file = t.ctx.paths.config_file().display().to_string();
-        let err = sbt(&mut t.ctx, &["ls"]).unwrap_err().to_string();
+        let err = t.sbt_err(&["ls"]);
         assert!(err.starts_with(&file), "{err}");
         assert!(err.contains("TOML parse error"), "{err}");
-        assert!(t.ctx.vm.runner().calls().is_empty());
+        assert!(t.runner().calls().is_empty());
 
-        sbt(&mut t.ctx, &["diagnose"]).unwrap();
-        sbt(&mut t.ctx, &["settings", "ls"]).unwrap();
-        assert_eq!(
-            sbt(&mut t.ctx, &["settings", "unset", "docker.enabled"]).unwrap(),
-            0
-        );
+        t.sbt(&["diagnose"]).unwrap();
+        t.sbt(&["settings", "ls"]).unwrap();
+        assert_eq!(t.sbt(&["settings", "unset", "docker.enabled"]).unwrap(), 0);
         let (_, err) = Settings::load(&t.ctx.paths, t.ctx.env.clone());
         assert_eq!(err, None, "unset rewrote a valid config.toml");
     }
@@ -415,8 +412,8 @@ mod tests {
     #[test]
     fn daemon_is_a_no_op() {
         let mut t = test_env(&[]);
-        assert_eq!(sbt(&mut t.ctx, &["daemon", "status"]).unwrap(), 0);
-        assert!(t.ctx.vm.runner().calls().is_empty());
+        assert_eq!(t.sbt(&["daemon", "status"]).unwrap(), 0);
+        assert!(t.runner().calls().is_empty());
     }
 
     #[test]

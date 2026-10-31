@@ -135,14 +135,14 @@ mod tests {
             msg.starts_with(&format!("config {file}: TOML parse error")),
             "{msg}"
         );
-        assert_eq!(sbt(&mut t.ctx, &["diagnose"]).unwrap(), 1);
+        assert_eq!(t.sbt(&["diagnose"]).unwrap(), 1);
     }
 
     #[test]
     fn smolvm_version_check() {
         let t = test_env(&[]);
         assert!(smolvm_check(&t.ctx).0);
-        t.ctx.vm.runner().ok(&["--version"], "smolvm 1.0.0\n");
+        t.runner().ok(&["--version"], "smolvm 1.0.0\n");
         let (ok, msg) = smolvm_check(&t.ctx);
         assert!(!ok);
         assert!(msg.contains("minimum 1.32.4"), "{msg}");

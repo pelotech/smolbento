@@ -685,13 +685,13 @@ mod tests {
         let mut t = test_env(&[]);
         let (_d, root) = temp_repo();
         t.ctx.cwd = root.clone();
-        let fake = t.ctx.vm.runner();
+        let fake = t.runner();
         fake.ok(
             &["machine", "status"],
             &json("sbx-claude-repo", "created", "claude-repo"),
         );
         fake.once_fail(&["machine", "status"], "NOT_FOUND", "vm not found");
-        sbt(&mut t.ctx, &["create", "--clone", "claude", "."]).unwrap();
+        t.sbt(&["create", "--clone", "claude", "."]).unwrap();
         let create = t
             .ctx
             .vm
@@ -719,20 +719,13 @@ mod tests {
     }
 
     fn no_machine_created(t: &TestEnv) -> bool {
-        !t.ctx
-            .vm
-            .runner()
-            .call_lines()
-            .iter()
-            .any(|l| l.contains("machine create"))
+        !t.calls().iter().any(|l| l.contains("machine create"))
     }
 
     #[test]
     fn clone_needs_a_repo_before_smolvm_is_called() {
         let mut t = test_env(&[]);
-        let err = sbt(&mut t.ctx, &["create", "--clone", "claude", "."])
-            .unwrap_err()
-            .to_string();
+        let err = t.sbt_err(&["create", "--clone", "claude", "."]);
         assert!(err.contains("--clone needs a git repository"), "{err}");
         assert!(no_machine_created(&t));
     }
@@ -740,9 +733,7 @@ mod tests {
     #[test]
     fn clone_needs_a_workspace_path_before_smolvm_is_called() {
         let mut t = test_env(&[]);
-        let err = sbt(&mut t.ctx, &["create", "--clone", "claude"])
-            .unwrap_err()
-            .to_string();
+        let err = t.sbt_err(&["create", "--clone", "claude"]);
         assert!(err.contains("--clone needs a workspace path"), "{err}");
         assert!(no_machine_created(&t));
     }
@@ -761,13 +752,8 @@ mod tests {
             ],
         );
         t.ctx.cwd = root;
-        t.ctx
-            .vm
-            .runner()
-            .fail(&["machine", "status"], "NOT_FOUND", "vm not found");
-        let err = sbt(&mut t.ctx, &["create", "--clone", "claude", "."])
-            .unwrap_err()
-            .to_string();
+        t.no_machine();
+        let err = t.sbt_err(&["create", "--clone", "claude", "."]);
         assert!(
             err.contains("already has a remote 'sandbox-claude-repo'"),
             "{err}"
@@ -791,13 +777,13 @@ mod tests {
             ],
         );
         t.ctx.cwd = root;
-        let fake = t.ctx.vm.runner();
+        let fake = t.runner();
         fake.ok(
             &["machine", "status"],
             &json("sbx-claude-repo", "created", "claude-repo"),
         );
         fake.once_fail(&["machine", "status"], "NOT_FOUND", "vm not found");
-        sbt(&mut t.ctx, &["create", "--clone", "claude", "."]).unwrap();
+        t.sbt(&["create", "--clone", "claude", "."]).unwrap();
         assert!(!no_machine_created(&t));
     }
 
@@ -807,24 +793,24 @@ mod tests {
         let mut t = test_env(&[]);
         let (_d, root) = temp_repo();
         t.ctx.cwd = root.clone();
-        let fake = t.ctx.vm.runner();
+        let fake = t.runner();
         fake.fail(&["machine", "status"], "NOT_FOUND", "vm not found");
         fake.fail(&["machine", "create"], "CREATE_FAILED", "no space left");
-        assert!(sbt(&mut t.ctx, &["create", "--clone", "claude", "."]).is_err());
+        assert!(t.sbt(&["create", "--clone", "claude", "."]).is_err());
         assert_eq!(git_config(&root, "remote.sandbox-claude-repo.url"), "");
 
         // Created but the start failed (e.g. the clone step): the machine exists, so the remote
         // stays for the next start's retry.
         let mut t = test_env(&[]);
         t.ctx.cwd = root.clone();
-        let fake = t.ctx.vm.runner();
+        let fake = t.runner();
         fake.ok(
             &["machine", "status"],
             &json("sbx-claude-repo", "created", "claude-repo"),
         );
         fake.once_fail(&["machine", "status"], "NOT_FOUND", "vm not found");
         fake.fail(&["machine", "start"], "START_FAILED", "boot failed");
-        assert!(sbt(&mut t.ctx, &["create", "--clone", "claude", "."]).is_err());
+        assert!(t.sbt(&["create", "--clone", "claude", "."]).is_err());
         assert_eq!(
             git_config(&root, "remote.sandbox-claude-repo.url"),
             "file:///sbt/claude-repo"
@@ -838,10 +824,10 @@ mod tests {
         let (_d, root) = temp_repo();
         crate::workspace::clone::add_remote(&root, "claude-repo").unwrap();
         t.ctx.cwd = root.clone();
-        let fake = t.ctx.vm.runner();
+        let fake = t.runner();
         fake.fail(&["machine", "status"], "NOT_FOUND", "vm not found");
         fake.fail(&["machine", "create"], "CREATE_FAILED", "no space left");
-        assert!(sbt(&mut t.ctx, &["create", "--clone", "claude", "."]).is_err());
+        assert!(t.sbt(&["create", "--clone", "claude", "."]).is_err());
         assert_eq!(
             git_config(&root, "remote.sandbox-claude-repo.url"),
             "file:///sbt/claude-repo"
@@ -851,18 +837,15 @@ mod tests {
     #[test]
     fn create_builds_the_machine_from_the_preset() {
         let mut t = test_env(&[]);
-        let fake = t.ctx.vm.runner();
+        let fake = t.runner();
         fake.ok(
             &["machine", "status"],
             &json("sbx-claude-proj", "created", "claude-proj"),
         );
         fake.once_fail(&["machine", "status"], "NOT_FOUND", "vm not found");
-        sbt(
-            &mut t.ctx,
-            &[
-                "create", "claude", ".", "--cpus", "2", "-m", "4g", "-e", "A=1", "-p", "8080:80",
-            ],
-        )
+        t.sbt(&[
+            "create", "claude", ".", "--cpus", "2", "-m", "4g", "-e", "A=1", "-p", "8080:80",
+        ])
         .unwrap();
 
         let ws = t.ctx.cwd.display().to_string();
@@ -925,7 +908,7 @@ mod tests {
         assert!(pair("--label").contains(&"sbx.docker=true".to_string()));
         // Docker-in-sandbox is the shipped `docker` kit: its volumes above, its startup hook here.
         assert!(pair("--label").contains(&r#"sbx.kits=["builtin:docker"]"#.to_string()));
-        let uploads = t.ctx.vm.runner().uploads();
+        let uploads = t.runner().uploads();
         let (_, script) = uploads
             .iter()
             .find(|(to, _)| to == "sbx-claude-proj:/etc/smolbento/startup.d/01-docker.sh")
@@ -937,10 +920,7 @@ mod tests {
         );
         // A host-mounted sandbox can't be forked, so it isn't started branchable.
         assert!(
-            t.ctx
-                .vm
-                .runner()
-                .call_lines()
+            t.calls()
                 .contains(&"machine start -n sbx-claude-proj".to_string())
         );
     }
@@ -948,17 +928,12 @@ mod tests {
     #[test]
     fn create_on_an_existing_name_fails_before_touching_the_policy() {
         let mut t = test_env(&[]);
-        t.ctx.vm.runner().ok(
+        t.runner().ok(
             &["machine", "status"],
             &json("sbx-claude-proj", "stopped", "claude-proj"),
         );
         let before = std::fs::read_to_string(t.ctx.paths.policy_file()).unwrap();
-        let err = sbt(
-            &mut t.ctx,
-            &["create", "claude", ".", "--deny-network", "evil.com"],
-        )
-        .unwrap_err()
-        .to_string();
+        let err = t.sbt_err(&["create", "claude", ".", "--deny-network", "evil.com"]);
         assert!(
             err.contains("sandbox 'claude-proj' already exists"),
             "{err}"
@@ -968,10 +943,7 @@ mod tests {
             before
         );
         assert!(
-            !t.ctx
-                .vm
-                .runner()
-                .call_lines()
+            !t.calls()
                 .iter()
                 .any(|l| l.contains("create") || l.contains("start"))
         );
@@ -979,7 +951,7 @@ mod tests {
 
     /// Fake smolvm for one create of claude-proj that succeeds.
     fn creatable(t: &TestEnv) {
-        let fake = t.ctx.vm.runner();
+        let fake = t.runner();
         fake.ok(
             &["machine", "status"],
             &json("sbx-claude-proj", "created", "claude-proj"),
@@ -1028,18 +1000,15 @@ mod tests {
         set_policy(&t, "mode = \"balanced\"\n");
         global_github_secret(&t);
         creatable(&t);
-        sbt(
-            &mut t.ctx,
-            &[
-                "create",
-                "claude",
-                ".",
-                "--deny-network",
-                "evil.com,10.0.0.0/8",
-                "--deny-network",
-                "tracker.example",
-            ],
-        )
+        t.sbt(&[
+            "create",
+            "claude",
+            ".",
+            "--deny-network",
+            "evil.com,10.0.0.0/8",
+            "--deny-network",
+            "tracker.example",
+        ])
         .unwrap();
 
         // One sandbox-scoped rule per value, as `policy deny network --sandbox` adds them.
@@ -1055,7 +1024,7 @@ mod tests {
         assert!(p.rules.is_empty(), "nothing global: {p:?}");
         assert!(!p.sandboxes["claude-proj"].deny_network);
 
-        let lines = t.ctx.vm.runner().call_lines();
+        let lines = t.calls();
         let create = lines
             .iter()
             .find(|l| l.starts_with("machine create"))
@@ -1080,8 +1049,8 @@ mod tests {
                 let extra = if localhost { rule } else { "" };
                 set_policy(&t, &format!("mode = \"{mode}\"\n{extra}"));
                 creatable(&t);
-                sbt(&mut t.ctx, &["create", "claude", "."]).unwrap();
-                let lines = t.ctx.vm.runner().call_lines();
+                t.sbt(&["create", "claude", "."]).unwrap();
+                let lines = t.calls();
                 let create = lines
                     .iter()
                     .find(|l| l.starts_with("machine create"))
@@ -1120,39 +1089,32 @@ mod tests {
     fn deny_network_is_checked_before_the_machine_is_created() {
         // A bad host: nothing is created and the policy is untouched.
         let mut t = test_env(&[]);
-        let fake = t.ctx.vm.runner();
+        let fake = t.runner();
         fake.fail(&["machine", "status"], "NOT_FOUND", "vm not found");
         let before = std::fs::read_to_string(t.ctx.paths.policy_file()).unwrap();
-        let err = sbt(
-            &mut t.ctx,
-            &[
+        let err = t
+            .sbt(&[
                 "create",
                 "claude",
                 ".",
                 "--deny-network",
                 "ok.com,10.0.0.0/33",
-            ],
-        )
-        .unwrap_err();
+            ])
+            .unwrap_err();
         assert!(format!("{err:#}").contains("--deny-network"), "{err:#}");
         assert_eq!(
             std::fs::read_to_string(t.ctx.paths.policy_file()).unwrap(),
             before
         );
-        let lines = t.ctx.vm.runner().call_lines();
+        let lines = t.calls();
         assert!(!lines.iter().any(|l| l.contains("create")), "{lines:?}");
 
         // A host a secret bound at create uses: smolvm would keep it reachable.
         let mut t = test_env(&[]);
         global_github_secret(&t);
-        let fake = t.ctx.vm.runner();
+        let fake = t.runner();
         fake.fail(&["machine", "status"], "NOT_FOUND", "vm not found");
-        let err = sbt(
-            &mut t.ctx,
-            &["create", "claude", ".", "--deny-network", "github.com"],
-        )
-        .unwrap_err()
-        .to_string();
+        let err = t.sbt_err(&["create", "claude", ".", "--deny-network", "github.com"]);
         assert!(
             err.contains(
                 "can't deny github.com: sandbox claude-proj would be created with a github secret"
@@ -1160,7 +1122,7 @@ mod tests {
             "{err}"
         );
         assert!(sandbox_rules(&t, "claude-proj").is_empty());
-        let lines = t.ctx.vm.runner().call_lines();
+        let lines = t.calls();
         assert!(!lines.iter().any(|l| l.contains("create")), "{lines:?}");
     }
 
@@ -1170,14 +1132,12 @@ mod tests {
                        decision = \"deny\"\nresources = [\"old.example\"]\n";
         let mut t = test_env(&[]);
         set_policy(&t, earlier);
-        let fake = t.ctx.vm.runner();
+        let fake = t.runner();
         fake.fail(&["machine", "status"], "NOT_FOUND", "vm not found");
         fake.fail(&["machine", "create"], "CREATE_FAILED", "no space left");
-        let err = sbt(
-            &mut t.ctx,
-            &["create", "claude", ".", "--deny-network", "evil.com"],
-        )
-        .unwrap_err();
+        let err = t
+            .sbt(&["create", "claude", ".", "--deny-network", "evil.com"])
+            .unwrap_err();
         assert!(err.to_string().contains("no space left"), "{err:#}");
         assert_eq!(
             sandbox_rules(&t, "claude-proj"),
@@ -1186,15 +1146,12 @@ mod tests {
 
         // Nothing earlier: the sandbox's entry goes away.
         let mut t = test_env(&[]);
-        let fake = t.ctx.vm.runner();
+        let fake = t.runner();
         fake.fail(&["machine", "status"], "NOT_FOUND", "vm not found");
         fake.fail(&["machine", "create"], "CREATE_FAILED", "no space left");
         assert!(
-            sbt(
-                &mut t.ctx,
-                &["create", "claude", ".", "--deny-network", "evil.com"]
-            )
-            .is_err()
+            t.sbt(&["create", "claude", ".", "--deny-network", "evil.com"])
+                .is_err()
         );
         assert!(
             crate::policy::Policy::load(&t.ctx.paths)
@@ -1206,16 +1163,11 @@ mod tests {
         // Created but failed to start: the machine exists, so its rules stay.
         let mut t = test_env(&[]);
         creatable(&t);
-        t.ctx
-            .vm
-            .runner()
+        t.runner()
             .fail(&["machine", "start"], "START_FAILED", "boot failed");
         assert!(
-            sbt(
-                &mut t.ctx,
-                &["create", "claude", ".", "--deny-network", "evil.com"]
-            )
-            .is_err()
+            t.sbt(&["create", "claude", ".", "--deny-network", "evil.com"])
+                .is_err()
         );
         assert_eq!(sandbox_rules(&t, "claude-proj"), vec![deny(&["evil.com"])]);
 
@@ -1223,14 +1175,11 @@ mod tests {
         // doesn't write a policy.toml either.
         let mut t = test_env(&[]);
         std::fs::remove_file(t.ctx.paths.policy_file()).unwrap();
-        let fake = t.ctx.vm.runner();
+        let fake = t.runner();
         fake.fail(&["machine", "status"], "NOT_FOUND", "vm not found");
         assert!(
-            sbt(
-                &mut t.ctx,
-                &["create", "claude", ".", "--deny-network", "evil.com"]
-            )
-            .is_err()
+            t.sbt(&["create", "claude", ".", "--deny-network", "evil.com"])
+                .is_err()
         );
         assert!(!t.ctx.paths.policy_file().exists());
     }
@@ -1238,13 +1187,14 @@ mod tests {
     #[test]
     fn create_without_path_is_mountless_and_docker_can_be_disabled() {
         let mut t = test_env(&[("SMOLBENTO_DOCKER", "false")]);
-        let fake = t.ctx.vm.runner();
+        let fake = t.runner();
         fake.ok(
             &["machine", "status"],
             &json("sbx-shell-proj", "created", "shell-proj"),
         );
         fake.once_fail(&["machine", "status"], "NOT_FOUND", "vm not found");
-        sbt(&mut t.ctx, &["create", "shell", "--cpus", "1", "-m", "1g"]).unwrap();
+        t.sbt(&["create", "shell", "--cpus", "1", "-m", "1g"])
+            .unwrap();
         let line = t
             .ctx
             .vm
@@ -1261,10 +1211,7 @@ mod tests {
         assert!(line.contains("--label sbx.docker=false"), "{line}");
         assert!(!line.contains("sbx.kits"), "no docker kit: {line}");
         assert!(
-            t.ctx
-                .vm
-                .runner()
-                .call_lines()
+            t.calls()
                 .contains(&"machine start -n sbx-shell-proj --branchable".to_string())
         );
     }
@@ -1272,17 +1219,14 @@ mod tests {
     #[test]
     fn kit_docker_adds_dockerd_to_any_template() {
         let mut t = test_env(&[]);
-        let fake = t.ctx.vm.runner();
+        let fake = t.runner();
         fake.ok(
             &["machine", "status"],
             &json("sbx-shell-proj", "created", "shell-proj"),
         );
         fake.once_fail(&["machine", "status"], "NOT_FOUND", "vm not found");
-        sbt(
-            &mut t.ctx,
-            &["create", "-t", "alpine", "--kit", "docker", "shell", "."],
-        )
-        .unwrap();
+        t.sbt(&["create", "-t", "alpine", "--kit", "docker", "shell", "."])
+            .unwrap();
         let line = create_line(&t);
         assert!(line.contains("--image alpine "), "{line}");
         assert!(
@@ -1411,14 +1355,11 @@ mod tests {
     fn create_from_a_saved_template_passes_from_and_the_label() {
         let mut t = test_env(&[]);
         let e = saved_template(&t, "chk-tpl:v1", "shell");
-        let fake = t.ctx.vm.runner();
+        let fake = t.runner();
         fake.ok(&["machine", "status"], &json("sbx-bb", "created", "bb"));
         fake.once_fail(&["machine", "status"], "NOT_FOUND", "vm not found");
-        sbt(
-            &mut t.ctx,
-            &["create", "shell", "-t", "chk-tpl:v1", "--name", "bb"],
-        )
-        .unwrap();
+        t.sbt(&["create", "shell", "-t", "chk-tpl:v1", "--name", "bb"])
+            .unwrap();
         let create = t
             .ctx
             .vm
@@ -1449,9 +1390,8 @@ mod tests {
             r#"{"schemaVersion":"3","kind":"mixin","name":"layered"}"#,
             &[b"layer"],
         );
-        let err = sbt(
-            &mut t.ctx,
-            &[
+        let err = t
+            .sbt(&[
                 "create",
                 "shell",
                 "-t",
@@ -1460,15 +1400,14 @@ mod tests {
                 "bb",
                 "--kit",
                 "./layered",
-            ],
-        )
-        .unwrap_err();
+            ])
+            .unwrap_err();
         assert_eq!(
             err.to_string(),
             "-t docker.io/library/chk-tpl:v1 can't be combined with kits that add image layers \
              (layered): a template's filesystem is saved whole"
         );
-        let lines = t.ctx.vm.runner().call_lines();
+        let lines = t.calls();
         assert!(
             !lines.iter().any(|l| l.contains("machine create")),
             "{lines:?}"
@@ -1509,23 +1448,16 @@ mod tests {
     fn create_rejects_unknown_agents_and_bad_names() {
         let mut t = test_env(&[]);
         assert!(
-            sbt(&mut t.ctx, &["create", "nope"])
-                .unwrap_err()
-                .to_string()
+            t.sbt_err(&["create", "nope"])
                 .contains("unknown agent \"nope\"")
         );
         // Exact sbx text; a bare word with a tag is still an agent name.
         // A dotted bare word is a name too; only `.`, `..` and paths are kit refs.
         for w in ["alpine", "alpine:3", ".hidden", "...", ".kit.yaml"] {
-            assert_eq!(
-                sbt(&mut t.ctx, &["create", w]).unwrap_err().to_string(),
-                format!("unknown agent \"{w}\"")
-            );
+            assert_eq!(t.sbt_err(&["create", w]), format!("unknown agent \"{w}\""));
         }
         assert!(
-            sbt(&mut t.ctx, &["create", "claude", "--name", "a_b"])
-                .unwrap_err()
-                .to_string()
+            t.sbt_err(&["create", "claude", "--name", "a_b"])
                 .contains("'_'")
         );
     }
@@ -1533,25 +1465,22 @@ mod tests {
     #[test]
     fn create_without_kits_prints_no_kits_or_kit_steps() {
         let mut t = test_env(&[("SMOLBENTO_DOCKER", "false")]);
-        let fake = t.ctx.vm.runner();
+        let fake = t.runner();
         fake.ok(
             &["machine", "status"],
             &json("sbx-shell-proj", "created", "shell-proj"),
         );
         fake.once_fail(&["machine", "status"], "NOT_FOUND", "vm not found");
-        sbt(
-            &mut t.ctx,
-            &[
-                "create",
-                "--name",
-                "shell-proj",
-                "shell",
-                "--cpus",
-                "3",
-                "-m",
-                "1536m",
-            ],
-        )
+        t.sbt(&[
+            "create",
+            "--name",
+            "shell-proj",
+            "shell",
+            "--cpus",
+            "3",
+            "-m",
+            "1536m",
+        ])
         .unwrap();
         assert_eq!(
             t.stdout(),
@@ -1581,7 +1510,7 @@ SETUP
     #[test]
     fn create_shows_clone_and_read_only_workspaces() {
         let mut t = test_env(&[]);
-        let fake = t.ctx.vm.runner();
+        let fake = t.runner();
         fake.ok(
             &["machine", "status"],
             &json("sbx-claude-proj", "created", "claude-proj"),
@@ -1589,7 +1518,7 @@ SETUP
         fake.once_fail(&["machine", "status"], "NOT_FOUND", "vm not found");
         let docs = t.ctx.cwd.join("docs");
         std::fs::create_dir(&docs).unwrap();
-        sbt(&mut t.ctx, &["create", "claude", ".", "docs:ro"]).unwrap();
+        t.sbt(&["create", "claude", ".", "docs:ro"]).unwrap();
         let ws = t.ctx.cwd.display().to_string();
         let out = t.stdout();
         assert!(
@@ -1601,7 +1530,7 @@ SETUP
     #[test]
     fn create_of_a_taken_name_fails_before_printing_or_fetching_kits() {
         let mut t = kit_env();
-        t.ctx.vm.runner().ok(
+        t.runner().ok(
             &["machine", "status"],
             &json("sbx-shell-proj", "stopped", "shell-proj"),
         );
@@ -1611,11 +1540,13 @@ SETUP
             r#"{"schemaVersion":"3","kind":"mixin","name":"m"}"#,
             &[],
         );
-        let err = sbt(&mut t.ctx, &["create", "shell", ".", "--kit", "./kit"]).unwrap_err();
+        let err = t
+            .sbt(&["create", "shell", ".", "--kit", "./kit"])
+            .unwrap_err();
         assert_eq!(err.to_string(), "sandbox 'shell-proj' already exists");
         assert_eq!(t.stdout(), "");
         assert_eq!(
-            t.ctx.vm.runner().call_lines(),
+            t.calls(),
             ["--version", "machine status -n sbx-shell-proj --json"]
         );
     }
@@ -1624,11 +1555,8 @@ SETUP
     fn kits_without_a_fetch_wait_for_the_kits_section() {
         let mut t = host_mount_env(SHARED);
         let v2 = fixture("tool-mixin");
-        sbt(
-            &mut t.ctx,
-            &["create", "shell", ".", "--kit", &v2, "--kit", "./hm"],
-        )
-        .unwrap();
+        t.sbt(&["create", "shell", ".", "--kit", &v2, "--kit", "./hm"])
+            .unwrap();
         let out = t.stdout();
         assert!(
             out.contains(&format!(
@@ -1642,7 +1570,7 @@ SETUP
     fn create_no_progress_prints_nothing() {
         let mut t = test_env(&[]);
         creatable(&t);
-        sbt(&mut t.ctx, &["create", "claude", ".", "--no-progress"]).unwrap();
+        t.sbt(&["create", "claude", ".", "--no-progress"]).unwrap();
         assert_eq!(t.stdout(), "");
     }
 
@@ -1650,11 +1578,9 @@ SETUP
     fn a_failed_image_pull_fails_its_step() {
         let mut t = test_env(&[]);
         creatable(&t);
-        t.ctx
-            .vm
-            .runner()
+        t.runner()
             .fail(&["machine", "start"], "PULL_FAILED", "no such image");
-        sbt(&mut t.ctx, &["create", "claude", "."]).unwrap_err();
+        t.sbt(&["create", "claude", "."]).unwrap_err();
         let out = t.stdout();
         assert!(
             out.ends_with("\nIMAGE\n  ○ image — preparing…\n  ✗ image — failed\n"),
@@ -1665,31 +1591,25 @@ SETUP
     #[test]
     fn stop_and_start() {
         let mut t = test_env(&[]);
-        t.ctx.vm.runner().ok(
+        t.runner().ok(
             &["machine", "status"],
             &json("sbx-claude-proj", "running", "claude-proj"),
         );
-        sbt(&mut t.ctx, &["stop", "claude-proj"]).unwrap();
+        t.sbt(&["stop", "claude-proj"]).unwrap();
         assert!(
-            t.ctx
-                .vm
-                .runner()
-                .call_lines()
+            t.calls()
                 .contains(&"machine stop -n sbx-claude-proj".to_string())
         );
 
         let mut t = test_env(&[]);
-        t.ctx.vm.runner().ok(
+        t.runner().ok(
             &["machine", "status"],
             &json("sbx-claude-proj", "stopped", "claude-proj"),
         );
         t.stdout();
-        sbt(&mut t.ctx, &["start", "claude-proj"]).unwrap();
+        t.sbt(&["start", "claude-proj"]).unwrap();
         assert!(
-            t.ctx
-                .vm
-                .runner()
-                .call_lines()
+            t.calls()
                 .contains(&"machine start -n sbx-claude-proj --branchable".to_string())
         );
         assert_eq!(
@@ -1701,13 +1621,13 @@ SETUP
     #[test]
     fn a_failed_start_fails_its_step() {
         let mut t = test_env(&[]);
-        let fake = t.ctx.vm.runner();
+        let fake = t.runner();
         fake.ok(
             &["machine", "status"],
             &json("sbx-claude-proj", "stopped", "claude-proj"),
         );
         fake.fail(&["machine", "start"], "BOOT_FAILED", "no hypervisor");
-        let err = sbt(&mut t.ctx, &["start", "claude-proj"]).unwrap_err();
+        let err = t.sbt(&["start", "claude-proj"]).unwrap_err();
         assert!(format!("{err:#}").contains("no hypervisor"), "{err:#}");
         assert_eq!(
             t.stdout(),
@@ -1719,28 +1639,23 @@ SETUP
     fn start_needs_a_policy() {
         let mut t = test_env(&[]);
         set_policy(&t, "");
-        t.ctx.vm.runner().ok(
+        t.runner().ok(
             &["machine", "status"],
             &json("sbx-claude-proj", "stopped", "claude-proj"),
         );
-        let err = sbt(&mut t.ctx, &["start", "claude-proj"])
-            .unwrap_err()
-            .to_string();
+        let err = t.sbt_err(&["start", "claude-proj"]);
         assert!(
             err.contains("no network policy chosen yet; run `sbt policy init"),
             "{err}"
         );
         let started = |t: &TestEnv| {
-            t.ctx
-                .vm
-                .runner()
-                .call_lines()
+            t.calls()
                 .into_iter()
                 .any(|l| l.starts_with("machine update") || l.starts_with("machine start"))
         };
         assert!(!started(&t));
-        sbt(&mut t.ctx, &["policy", "init", "balanced"]).unwrap();
-        sbt(&mut t.ctx, &["start", "claude-proj"]).unwrap();
+        t.sbt(&["policy", "init", "balanced"]).unwrap();
+        t.sbt(&["start", "claude-proj"]).unwrap();
         assert!(started(&t));
     }
 
@@ -1759,9 +1674,7 @@ SETUP
 
     /// Fakes `machine ls --json` for the one sandbox a test `rm`s by name.
     fn ls_one(t: &TestEnv, json: &str) {
-        t.ctx
-            .vm
-            .runner()
+        t.runner()
             .ok(&["machine", "ls", "--json"], &format!("[{json}]"));
     }
 
@@ -1788,14 +1701,14 @@ SETUP
                     "https://example.com/x.git",
                 ],
             );
-            let fake = t.ctx.vm.runner();
+            let fake = t.runner();
             fake.ok(&["machine", "status"], &clone_json("box", "stopped", &repo));
             fake.ok(
                 &["machine", "ls", "--json"],
                 &format!("[{}]", clone_json("box", "stopped", &repo)),
             );
             assert!(!remote(&repo, "box").is_empty());
-            sbt(&mut t.ctx, &cmd).unwrap();
+            t.sbt(&cmd).unwrap();
             assert_eq!(remote(&repo, "box"), "", "{cmd:?}");
             assert!(!remote(&repo, "other").is_empty(), "{cmd:?}");
         }
@@ -1809,12 +1722,10 @@ SETUP
             &repo,
             &["remote", "add", "sandbox-box", "https://example.com/x.git"],
         );
-        t.ctx
-            .vm
-            .runner()
+        t.runner()
             .ok(&["machine", "status"], &clone_json("box", "stopped", &repo));
         ls_one(&t, &clone_json("box", "stopped", &repo));
-        sbt(&mut t.ctx, &["rm", "-f", "box"]).unwrap();
+        t.sbt(&["rm", "-f", "box"]).unwrap();
         assert!(!remote(&repo, "box").is_empty());
     }
 
@@ -1822,12 +1733,10 @@ SETUP
     fn rm_succeeds_when_the_clone_workspace_is_gone() {
         let mut t = test_env(&[]);
         let gone = t.ctx.cwd.join("deleted");
-        t.ctx
-            .vm
-            .runner()
+        t.runner()
             .ok(&["machine", "status"], &clone_json("box", "stopped", &gone));
         ls_one(&t, &clone_json("box", "stopped", &gone));
-        sbt(&mut t.ctx, &["rm", "-f", "box"]).unwrap();
+        t.sbt(&["rm", "-f", "box"]).unwrap();
     }
 
     #[test]
@@ -1846,32 +1755,24 @@ SETUP
                 ("sbx.clone-top", &repo.display().to_string()),
             ],
         );
-        t.ctx.vm.runner().ok(&["machine", "status"], &box_json);
+        t.runner().ok(&["machine", "status"], &box_json);
         ls_one(&t, &box_json);
-        sbt(&mut t.ctx, &["rm", "-f", "box"]).unwrap();
+        t.sbt(&["rm", "-f", "box"]).unwrap();
         assert_eq!(remote(&repo, "box"), "");
     }
 
     #[test]
     fn rm_needs_force_without_a_terminal() {
         let mut t = test_env(&[]);
-        t.ctx.vm.runner().ok(
+        t.runner().ok(
             &["machine", "status"],
             &json("sbx-claude-proj", "running", "claude-proj"),
         );
         ls_one(&t, &json("sbx-claude-proj", "running", "claude-proj"));
+        assert!(t.sbt_err(&["rm", "claude-proj"]).contains("pass -f"));
+        t.sbt(&["rm", "-f", "claude-proj"]).unwrap();
         assert!(
-            sbt(&mut t.ctx, &["rm", "claude-proj"])
-                .unwrap_err()
-                .to_string()
-                .contains("pass -f")
-        );
-        sbt(&mut t.ctx, &["rm", "-f", "claude-proj"]).unwrap();
-        assert!(
-            t.ctx
-                .vm
-                .runner()
-                .call_lines()
+            t.calls()
                 .contains(&"machine delete -n sbx-claude-proj -f".to_string())
         );
     }
@@ -1889,12 +1790,12 @@ SETUP
                 &[("sbx.name", "new"), ("sbx.created", "999990")]
             )
         );
-        t.ctx.vm.runner().ok(&["machine", "ls", "--json"], &ls);
-        t.ctx.vm.runner().ok(
+        t.runner().ok(&["machine", "ls", "--json"], &ls);
+        t.runner().ok(
             &["machine", "status", "-n", "sbx-live"],
             &json("sbx-live", "running", "live"),
         );
-        sbt(&mut t.ctx, &["prune", "-f", "--filter", "until=1m"]).unwrap();
+        t.sbt(&["prune", "-f", "--filter", "until=1m"]).unwrap();
         let deletes: Vec<String> = t
             .ctx
             .vm
@@ -1914,8 +1815,8 @@ SETUP
             json("sbx-a1", "stopped", "a1"),
             json("sbx-b1", "stopped", "b1")
         );
-        t.ctx.vm.runner().ok(&["machine", "ls", "--json"], &ls);
-        sbt(&mut t.ctx, &["reset", "-f"]).unwrap();
+        t.runner().ok(&["machine", "ls", "--json"], &ls);
+        t.sbt(&["reset", "-f"]).unwrap();
         let deletes = t
             .ctx
             .vm
@@ -1947,11 +1848,11 @@ SETUP
             "mode = \"balanced\"\n[[sandboxes.a1.rules]]\nid = \"r-1\"\ndecision = \"allow\"\n\
              resources = [\"a.com\"]\n",
         );
-        t.ctx.vm.runner().ok(
+        t.runner().ok(
             &["machine", "ls", "--json"],
             &format!("[{}]", json("sbx-a1", "stopped", "a1")),
         );
-        sbt(&mut t.ctx, &["reset", "-f", "--preserve-secrets"]).unwrap();
+        t.sbt(&["reset", "-f", "--preserve-secrets"]).unwrap();
         let f = SecretsFile::load(&t.ctx.paths).unwrap();
         assert_eq!(f.secrets, vec![entry.clone()]);
         assert_eq!(
@@ -1977,7 +1878,7 @@ SETUP
             fork_json("a-fork-1", f1, Some("a")),
             fork_json("a-fork-2", f2, Some("a")),
         );
-        let fake = t.ctx.vm.runner();
+        let fake = t.runner();
         fake.ok(&["machine", "ls", "--json"], &format!("[{ja},{j1},{j2}]"));
         fake.ok(&["machine", "status", "-n", "sbx-a"], &ja);
         fake.ok(&["machine", "status", "-n", "sbx-a-fork-1"], &j1);
@@ -1985,10 +1886,7 @@ SETUP
     }
 
     fn deletes(t: &TestEnv) -> Vec<String> {
-        t.ctx
-            .vm
-            .runner()
-            .call_lines()
+        t.calls()
             .into_iter()
             .filter(|l| l.contains("machine delete"))
             .map(|l| l.replace("machine delete -n sbx-", "").replace(" -f", ""))
@@ -1999,7 +1897,7 @@ SETUP
     fn rm_refuses_a_parent_that_still_has_forks() {
         let mut t = test_env(&[]);
         with_forks(&t, "stopped", "stopped", "stopped");
-        let err = sbt(&mut t.ctx, &["rm", "-f", "a"]).unwrap_err().to_string();
+        let err = t.sbt_err(&["rm", "-f", "a"]);
         assert!(
             err.contains("remove its forks first: a-fork-1, a-fork-2"),
             "{err}"
@@ -2011,10 +1909,10 @@ SETUP
     fn rm_deletes_forks_named_in_the_same_call_before_the_parent() {
         let mut t = test_env(&[]);
         with_forks(&t, "stopped", "stopped", "stopped");
-        sbt(&mut t.ctx, &["rm", "-f", "a", "a-fork-1", "a-fork-2"]).unwrap();
+        t.sbt(&["rm", "-f", "a", "a-fork-1", "a-fork-2"]).unwrap();
         assert_eq!(deletes(&t), vec!["a-fork-1", "a-fork-2", "a"]);
         // Named targets come from the one list, not a status call each.
-        let calls = t.ctx.vm.runner().call_lines();
+        let calls = t.calls();
         assert!(
             calls.iter().all(|c| !c.starts_with("machine status")),
             "{calls:?}"
@@ -2025,7 +1923,7 @@ SETUP
     fn rm_of_a_missing_sandbox_deletes_nothing() {
         let mut t = test_env(&[]);
         with_forks(&t, "stopped", "stopped", "stopped");
-        let err = sbt(&mut t.ctx, &["rm", "-f", "a-fork-1", "nope"]).unwrap_err();
+        let err = t.sbt(&["rm", "-f", "a-fork-1", "nope"]).unwrap_err();
         assert_eq!(err.to_string(), "sandbox 'nope' not found (see `sbt ls`)");
         assert!(deletes(&t).is_empty());
     }
@@ -2034,7 +1932,7 @@ SETUP
     fn rm_all_deletes_forks_before_parents_and_lists_once() {
         let mut t = test_env(&[]);
         with_forks(&t, "stopped", "stopped", "stopped");
-        sbt(&mut t.ctx, &["rm", "-f", "--all"]).unwrap();
+        t.sbt(&["rm", "-f", "--all"]).unwrap();
         assert_eq!(deletes(&t), vec!["a-fork-1", "a-fork-2", "a"]);
         let lists = t
             .ctx
@@ -2051,12 +1949,12 @@ SETUP
     fn prune_skips_a_parent_whose_fork_is_running() {
         let mut t = test_env(&[]);
         with_forks(&t, "stopped", "running", "stopped");
-        sbt(&mut t.ctx, &["prune", "-f"]).unwrap();
+        t.sbt(&["prune", "-f"]).unwrap();
         assert_eq!(deletes(&t), vec!["a-fork-2"]);
 
         let mut t = test_env(&[]);
         with_forks(&t, "stopped", "stopped", "stopped");
-        sbt(&mut t.ctx, &["prune", "-f"]).unwrap();
+        t.sbt(&["prune", "-f"]).unwrap();
         assert_eq!(deletes(&t), vec!["a-fork-1", "a-fork-2", "a"]);
     }
 
@@ -2064,7 +1962,7 @@ SETUP
     fn prune_says_which_parents_it_skipped() {
         let mut t = test_env(&[]);
         with_forks(&t, "stopped", "running", "stopped");
-        sbt(&mut t.ctx, &["prune", "-f"]).unwrap();
+        t.sbt(&["prune", "-f"]).unwrap();
         // remove() reports through the same sink, after the skips.
         assert_eq!(t.stdout(), "a has forks; skipped\nRemoved a-fork-2\n");
     }
@@ -2083,11 +1981,11 @@ SETUP
                 ("sbx.fork-of", "a"),
             ],
         );
-        let fake = t.ctx.vm.runner();
+        let fake = t.runner();
         fake.ok(&["machine", "ls", "--json"], &format!("[{parent},{fork}]"));
         fake.ok(&["machine", "status", "-n", "sbx-a"], &parent);
         fake.ok(&["machine", "status", "-n", "sbx-a-fork-1"], &fork);
-        sbt(&mut t.ctx, &["prune", "-f", "--filter", "until=1m"]).unwrap();
+        t.sbt(&["prune", "-f", "--filter", "until=1m"]).unwrap();
         assert!(deletes(&t).is_empty(), "{:?}", deletes(&t));
     }
 
@@ -2095,18 +1993,18 @@ SETUP
     fn reset_deletes_forks_before_parents() {
         let mut t = test_env(&[]);
         with_forks(&t, "stopped", "stopped", "stopped");
-        sbt(&mut t.ctx, &["reset", "-f"]).unwrap();
+        t.sbt(&["reset", "-f"]).unwrap();
         assert_eq!(deletes(&t), vec!["a-fork-1", "a-fork-2", "a"]);
     }
 
     #[test]
     fn reset_removes_the_skills_store() {
         let mut t = test_env(&[]);
-        t.ctx.vm.runner().ok(&["machine", "ls", "--json"], "[]");
+        t.runner().ok(&["machine", "ls", "--json"], "[]");
         let store = t.ctx.paths.skills_store();
         std::fs::create_dir_all(store.join("a")).unwrap();
         std::fs::create_dir_all(t.ctx.paths.skills_metadata()).unwrap();
-        sbt(&mut t.ctx, &["reset", "-f"]).unwrap();
+        t.sbt(&["reset", "-f"]).unwrap();
         assert!(!store.exists() && !t.ctx.paths.skills_metadata().exists());
     }
 
@@ -2122,10 +2020,7 @@ SETUP
     }
 
     fn create_line(t: &TestEnv) -> String {
-        t.ctx
-            .vm
-            .runner()
-            .call_lines()
+        t.calls()
             .into_iter()
             .find(|l| l.starts_with("machine create"))
             .expect("a machine create")
@@ -2133,10 +2028,7 @@ SETUP
 
     /// No machine touched: only the lookup that checks the name is free.
     fn no_machine_calls(t: &TestEnv) -> bool {
-        !t.ctx
-            .vm
-            .runner()
-            .call_lines()
+        !t.calls()
             .iter()
             .any(|l| l.starts_with("machine ") && !l.starts_with("machine status"))
     }
@@ -2144,10 +2036,7 @@ SETUP
     /// A kit env whose sandbox names are all free.
     fn kit_env_free() -> TestEnv {
         let t = kit_env();
-        t.ctx
-            .vm
-            .runner()
-            .fail(&["machine", "status"], "NOT_FOUND", "vm not found");
+        t.no_machine();
         t
     }
 
@@ -2162,7 +2051,7 @@ SETUP
         let kit = dir.path().display().to_string();
         for (flags, want) in [(vec![], "mode=pinned"), (vec!["mode=flag"], "mode=flag")] {
             let mut t = kit_env();
-            let fake = t.ctx.vm.runner();
+            let fake = t.runner();
             fake.ok(
                 &["machine", "status"],
                 &json("sbx-shell-proj", "created", "shell-proj"),
@@ -2179,7 +2068,7 @@ SETUP
                 no_progress: false,
             };
             super::create(&mut t.ctx, &a).unwrap();
-            let lines = t.ctx.vm.runner().call_lines();
+            let lines = t.calls();
             assert!(
                 lines
                     .iter()
@@ -2201,7 +2090,7 @@ SETUP
         .unwrap();
         let kit = kit.display().to_string();
         let mut t = kit_env();
-        let fake = t.ctx.vm.runner();
+        let fake = t.runner();
         fake.ok(
             &["machine", "status"],
             &json("sbx-wl-proj", "created", "wl-proj"),
@@ -2216,7 +2105,7 @@ SETUP
             no_progress: false,
         };
         super::create(&mut t.ctx, &a).unwrap();
-        let lines = t.ctx.vm.runner().call_lines();
+        let lines = t.calls();
         assert!(
             lines
                 .iter()
@@ -2241,29 +2130,26 @@ SETUP
         let mut t = kit_env();
         // allow-all would leave the kit's allow rule out of the argv.
         set_policy(&t, "mode = \"deny-all\"");
-        let fake = t.ctx.vm.runner();
+        let fake = t.runner();
         fake.ok(
             &["machine", "status"],
             &json("sbx-shell-proj", "created", "shell-proj"),
         );
         fake.once_fail(&["machine", "status"], "NOT_FOUND", "vm not found");
         let kit = fixture("tool-mixin");
-        sbt(
-            &mut t.ctx,
-            &[
-                "create",
-                "shell",
-                ".",
-                "--kit",
-                &kit,
-                "--kit-arg",
-                "mode=slow",
-                "--cpus",
-                "1",
-                "-m",
-                "1g",
-            ],
-        )
+        t.sbt(&[
+            "create",
+            "shell",
+            ".",
+            "--kit",
+            &kit,
+            "--kit-arg",
+            "mode=slow",
+            "--cpus",
+            "1",
+            "-m",
+            "1g",
+        ])
         .unwrap();
         let create = create_line(&t);
         assert!(create.contains("-e TOOL_MODE=fast"), "{create}");
@@ -2274,7 +2160,7 @@ SETUP
             "{create}"
         );
         assert!(create.contains("api.tool.example"), "{create}");
-        let lines = t.ctx.vm.runner().call_lines();
+        let lines = t.calls();
         let start = lines
             .iter()
             .position(|l| l == "machine start -n sbx-shell-proj")
@@ -2319,16 +2205,16 @@ SETUP
     #[test]
     fn create_writes_v2_workspace_files_into_the_workspace() {
         let mut t = kit_env();
-        let fake = t.ctx.vm.runner();
+        let fake = t.runner();
         fake.ok(
             &["machine", "status"],
             &json("sbx-shell-proj", "created", "shell-proj"),
         );
         fake.once_fail(&["machine", "status"], "NOT_FOUND", "vm not found");
         let kit = fixture("workspace-files");
-        sbt(&mut t.ctx, &["create", "shell", ".", "--kit", &kit]).unwrap();
+        t.sbt(&["create", "shell", ".", "--kit", &kit]).unwrap();
         let ws = t.ctx.cwd.canonicalize().unwrap().display().to_string();
-        let lines = t.ctx.vm.runner().call_lines();
+        let lines = t.calls();
         let wrote = |needle: &str| {
             lines
                 .iter()
@@ -2341,13 +2227,13 @@ SETUP
     #[test]
     fn create_with_a_workload_kit_names_the_sandbox_after_it() {
         let mut t = kit_env();
-        let fake = t.ctx.vm.runner();
+        let fake = t.runner();
         fake.ok(
             &["machine", "status"],
             &json("sbx-toolbox-proj", "created", "toolbox-proj"),
         );
         fake.once_fail(&["machine", "status"], "NOT_FOUND", "vm not found");
-        sbt(&mut t.ctx, &["create", &fixture("tool-workload"), "."]).unwrap();
+        t.sbt(&["create", &fixture("tool-workload"), "."]).unwrap();
         let create = create_line(&t);
         assert!(create.contains("-n sbx-toolbox-proj"), "{create}");
         assert!(
@@ -2373,13 +2259,13 @@ SETUP
              entrypoint: [/bin/agent]\n",
         )
         .unwrap();
-        let fake = t.ctx.vm.runner();
+        let fake = t.runner();
         fake.ok(
             &["machine", "status"],
             &json("sbx-claude-proj", "created", "claude-proj"),
         );
         fake.once_fail(&["machine", "status"], "NOT_FOUND", "vm not found");
-        sbt(&mut t.ctx, &["create", &kit.display().to_string(), "."]).unwrap();
+        t.sbt(&["create", &kit.display().to_string(), "."]).unwrap();
         let create = create_line(&t);
         assert!(create.contains("-e SBX_AGENT=claude"), "{create}");
         assert!(!create.contains("SBX_CRED_"), "{create}");
@@ -2403,22 +2289,17 @@ SETUP
             "img:1",
             r#"{"config":{"Env":["A=1"]}}"#,
         );
-        let fake = t.ctx.vm.runner();
+        let fake = t.runner();
         fake.fail(&["machine", "status"], "NOT_FOUND", "vm not found");
-        let err = sbt(&mut t.ctx, &["create", &kit.display().to_string(), "."]).unwrap_err();
+        let err = t
+            .sbt(&["create", &kit.display().to_string(), "."])
+            .unwrap_err();
         assert_eq!(
             format!("{err:#}"),
             "workload kit image declares no ENTRYPOINT or CMD; the image config is the runtime \
              contract"
         );
-        assert!(
-            !t.ctx
-                .vm
-                .runner()
-                .call_lines()
-                .iter()
-                .any(|l| l.starts_with("machine create")),
-        );
+        assert!(!t.calls().iter().any(|l| l.starts_with("machine create")),);
     }
 
     #[test]
@@ -2437,13 +2318,13 @@ SETUP
             "img:1",
             r#"{"config":{"Entrypoint":["/bin/agent"],"Cmd":["--x"]}}"#,
         );
-        let fake = t.ctx.vm.runner();
+        let fake = t.runner();
         fake.ok(
             &["machine", "status"],
             &json("sbx-bare-proj", "created", "bare-proj"),
         );
         fake.once_fail(&["machine", "status"], "NOT_FOUND", "vm not found");
-        sbt(&mut t.ctx, &["create", &kit.display().to_string(), "."]).unwrap();
+        t.sbt(&["create", &kit.display().to_string(), "."]).unwrap();
         let create = create_line(&t);
         assert!(
             create.contains(r#"--label sbx.command=["/bin/agent","--x"]"#),
@@ -2465,13 +2346,13 @@ SETUP
              entrypoint: [/bin/agent]\n",
         )
         .unwrap();
-        let fake = t.ctx.vm.runner();
+        let fake = t.runner();
         fake.ok(
             &["machine", "status"],
             &json("sbx-shell-proj", "created", "shell-proj"),
         );
         fake.once_fail(&["machine", "status"], "NOT_FOUND", "vm not found");
-        sbt(&mut t.ctx, &["create", &kit.display().to_string(), "."]).unwrap();
+        t.sbt(&["create", &kit.display().to_string(), "."]).unwrap();
         let create = create_line(&t);
         let path = kit.canonicalize().unwrap().display().to_string();
         assert!(
@@ -2488,7 +2369,7 @@ SETUP
     fn a_mixin_as_the_target_fails_before_smolvm() {
         let mut t = kit_env_free();
         let kit = fixture("tool-mixin");
-        let err = sbt(&mut t.ctx, &["create", &kit]).unwrap_err().to_string();
+        let err = t.sbt_err(&["create", &kit]);
         assert_eq!(
             err,
             format!(
@@ -2527,7 +2408,7 @@ SETUP
             ),
         ] {
             let mut t = kit_env_free();
-            let err = format!("{:#}", sbt(&mut t.ctx, &args).unwrap_err());
+            let err = format!("{:#}", t.sbt(&args).unwrap_err());
             assert!(err.contains(want), "{args:?}: {err}");
             assert!(no_machine_calls(&t), "{args:?}");
             assert!(
@@ -2542,16 +2423,11 @@ SETUP
     #[test]
     fn a_kit_create_on_an_existing_name_adds_no_rules() {
         let mut t = kit_env();
-        t.ctx.vm.runner().ok(
+        t.runner().ok(
             &["machine", "status"],
             &json("sbx-shell-proj", "stopped", "shell-proj"),
         );
-        let err = sbt(
-            &mut t.ctx,
-            &["create", "shell", ".", "--kit", &fixture("tool-mixin")],
-        )
-        .unwrap_err()
-        .to_string();
+        let err = t.sbt_err(&["create", "shell", ".", "--kit", &fixture("tool-mixin")]);
         assert!(err.contains("already exists"), "{err}");
         assert!(sandbox_rules(&t, "shell-proj").is_empty());
     }
@@ -2614,19 +2490,16 @@ SETUP
     #[test]
     fn a_kit_may_send_a_custom_secret_anywhere() {
         let mut t = kit_env();
-        sbt(
-            &mut t.ctx,
-            &[
-                "secret",
-                "set-custom",
-                "--env",
-                "CORP",
-                "--host",
-                "api.corp.example",
-                "-t",
-                "c-1",
-            ],
-        )
+        t.sbt(&[
+            "secret",
+            "set-custom",
+            "--env",
+            "CORP",
+            "--host",
+            "api.corp.example",
+            "-t",
+            "c-1",
+        ])
         .unwrap();
         let dir = inject_kit("corp", "ghe.corp.example");
         let (mut req, plan) = kit_request(&t, &["create", "shell", "--kit"], dir.path());
@@ -2840,7 +2713,7 @@ SETUP
     /// A `shell-proj` create with a v3 mixin `./hm` declaring host-mount@1 at `path`, mode 0750.
     fn host_mount_env(path: &str) -> TestEnv {
         let t = kit_env();
-        let fake = t.ctx.vm.runner();
+        let fake = t.runner();
         fake.ok(
             &["machine", "status"],
             &json("sbx-shell-proj", "created", "shell-proj"),
@@ -2899,7 +2772,7 @@ SETUP
         all.extend_from_slice(env);
         let mut t = test_env(&all);
         let agent = args[1];
-        let fake = t.ctx.vm.runner();
+        let fake = t.runner();
         fake.ok(
             &["machine", "status"],
             &json(
@@ -2909,7 +2782,7 @@ SETUP
             ),
         );
         fake.once_fail(&["machine", "status"], "NOT_FOUND", "vm not found");
-        let r = sbt(&mut t.ctx, args);
+        let r = t.sbt(args);
         if r.is_err() {
             return (t, r, vec![], None);
         }
@@ -3034,7 +2907,7 @@ SETUP
     /// `caps` (a JSON list body).
     fn skills_kit_env(agent: &str, caps: &str) -> TestEnv {
         let t = kit_env();
-        let fake = t.ctx.vm.runner();
+        let fake = t.runner();
         fake.ok(
             &["machine", "status"],
             &json(
@@ -3078,18 +2951,15 @@ SETUP
                  "config":{{"install":[{{"command":"echo hook-ran"}}]}}}}"#
         );
         let mut t = skills_kit_env("shell", &caps);
-        sbt(
-            &mut t.ctx,
-            &[
-                "create",
-                "shell",
-                ".",
-                "--kit",
-                "./k",
-                "--skills",
-                "readwrite",
-            ],
-        )
+        t.sbt(&[
+            "create",
+            "shell",
+            ".",
+            "--kit",
+            "./k",
+            "--skills",
+            "readwrite",
+        ])
         .unwrap();
         let label = skills_label(&t);
         assert_eq!(label.dirs.len(), 1, "{label:?}");
@@ -3103,7 +2973,7 @@ SETUP
             mounts.contains(&format!("{store}:/run/sbx/skills-shared:ro")),
             "{mounts:?}"
         );
-        let lines = t.ctx.vm.runner().call_lines();
+        let lines = t.calls();
         let bundled = lines
             .iter()
             .position(|l| l.starts_with("machine exec") && l.contains("ln -sn '/opt/k/review'"))
@@ -3123,11 +2993,8 @@ SETUP
     /// The store's `-v` targets (`guest[:ro]`) of a `shell-proj` create with kit `k` and `caps`.
     fn kit_skills_mounts(caps: &str, mode: &str) -> (Vec<String>, crate::skills::Label) {
         let mut t = skills_kit_env("shell", caps);
-        sbt(
-            &mut t.ctx,
-            &["create", "shell", ".", "--kit", "./k", "--skills", mode],
-        )
-        .unwrap();
+        t.sbt(&["create", "shell", ".", "--kit", "./k", "--skills", mode])
+            .unwrap();
         let store = format!("{}:", t.ctx.paths.skills_store().display());
         let (mounts, _) = create_mounts(&t);
         let mounts = mounts
@@ -3185,12 +3052,14 @@ SETUP
     fn a_bundled_skill_without_a_skills_directory_fails_or_is_skipped() {
         let required = format!(r#"{{"type":"{AK}","config":{{"path":"/opt/k/review"}}}}"#);
         let mut t = skills_kit_env("shell", &required);
-        let e = sbt(&mut t.ctx, &["create", "shell", ".", "--kit", "./k"]).unwrap_err();
+        let e = t
+            .sbt(&["create", "shell", ".", "--kit", "./k"])
+            .unwrap_err();
         assert_eq!(
             format!("{e:#}"),
             "kit k: skill review needs a skills directory: no agent-skills@1 in this sandbox"
         );
-        let lines = t.ctx.vm.runner().call_lines();
+        let lines = t.calls();
         assert!(
             !lines.iter().any(|l| l.starts_with("machine create")),
             "{lines:#?}"
@@ -3200,8 +3069,8 @@ SETUP
             format!(r#"{{"type":"{AK}","optional":true,"config":{{"path":"/opt/k/review"}}}}"#);
         let mut t = skills_kit_env("shell", &optional);
         // Prints `note: kit k: skipping skill review: no skills directory in this sandbox`.
-        sbt(&mut t.ctx, &["create", "shell", ".", "--kit", "./k"]).unwrap();
-        let lines = t.ctx.vm.runner().call_lines();
+        t.sbt(&["create", "shell", ".", "--kit", "./k"]).unwrap();
+        let lines = t.calls();
         assert!(lines.iter().any(|l| l.starts_with("machine create")));
         assert!(!lines.iter().any(|l| l.contains("ln -sn ")), "{lines:#?}");
     }
@@ -3213,18 +3082,15 @@ SETUP
             r#"{{"type":"{AS}","config":{{"path":"/home/agent/.claude/skills","mode":"readonly"}}}}"#
         );
         let mut t = skills_kit_env("claude", &caps);
-        sbt(
-            &mut t.ctx,
-            &[
-                "create",
-                "claude",
-                ".",
-                "--kit",
-                "./k",
-                "--skills",
-                "readwrite",
-            ],
-        )
+        t.sbt(&[
+            "create",
+            "claude",
+            ".",
+            "--kit",
+            "./k",
+            "--skills",
+            "readwrite",
+        ])
         .unwrap();
         let label = skills_label(&t);
         assert_eq!(label.dirs.len(), 1, "{label:?}");
@@ -3235,7 +3101,7 @@ SETUP
     #[test]
     fn create_mounts_a_kit_s_managed_host_directory() {
         let mut t = host_mount_env(SHARED);
-        sbt(&mut t.ctx, &["create", "shell", ".", "--kit", "./hm"]).unwrap();
+        t.sbt(&["create", "shell", ".", "--kit", "./hm"]).unwrap();
         let out = t.stdout();
         assert!(
             out.contains("\nKITS\n  ○ ./hm — building…\n  ✓ ./hm — ready\n\nIMAGE\n"),
@@ -3262,7 +3128,7 @@ SETUP
         std::fs::create_dir_all(&dir).unwrap();
         std::fs::set_permissions(&dir, std::fs::Permissions::from_mode(0o711)).unwrap();
         std::fs::write(dir.join("keep"), "x").unwrap();
-        sbt(&mut t.ctx, &["create", "shell", ".", "--kit", "./hm"]).unwrap();
+        t.sbt(&["create", "shell", ".", "--kit", "./hm"]).unwrap();
         assert_eq!(mode(&dir), 0o711);
         assert_eq!(std::fs::read_to_string(dir.join("keep")).unwrap(), "x");
     }
@@ -3271,11 +3137,8 @@ SETUP
     fn mount_binds_a_host_directory_instead_of_the_managed_one() {
         let mut t = host_mount_env(SHARED);
         let bind = format!("data:{SHARED}");
-        sbt(
-            &mut t.ctx,
-            &["create", "shell", ".", "--kit", "./hm", "--mount", &bind],
-        )
-        .unwrap();
+        t.sbt(&["create", "shell", ".", "--kit", "./hm", "--mount", &bind])
+            .unwrap();
         let data = t.ctx.cwd.join("data");
         let (mounts, label) = create_mounts(&t);
         assert!(
@@ -3314,7 +3177,7 @@ SETUP
             let cwd = t.ctx.cwd.display().to_string();
             let mut args = vec!["create", "shell", "."];
             args.extend(&flags);
-            let e = sbt(&mut t.ctx, &args).unwrap_err();
+            let e = t.sbt(&args).unwrap_err();
             assert_eq!(format!("{e:#}"), want.replace("{cwd}", &cwd), "{flags:?}");
             assert!(no_machine_create(&t), "{flags:?}");
             assert!(!t.ctx.paths.kit_host_mounts().exists(), "{flags:?}");
@@ -3326,11 +3189,9 @@ SETUP
         let ws = tempfile::tempdir().unwrap();
         let ws = ws.path().canonicalize().unwrap().display().to_string();
         let mut t = host_mount_env(&ws);
-        let e = sbt(
-            &mut t.ctx,
-            &["create", "shell", &ws, "--kit", "./hm", "--name", "ws"],
-        )
-        .unwrap_err();
+        let e = t
+            .sbt(&["create", "shell", &ws, "--kit", "./hm", "--name", "ws"])
+            .unwrap_err();
         assert_eq!(
             format!("{e:#}"),
             format!("host-mount@1 path {ws} is already a workspace mount")
@@ -3340,11 +3201,6 @@ SETUP
     }
 
     fn no_machine_create(t: &TestEnv) -> bool {
-        !t.ctx
-            .vm
-            .runner()
-            .call_lines()
-            .iter()
-            .any(|l| l.starts_with("machine create"))
+        !t.calls().iter().any(|l| l.starts_with("machine create"))
     }
 }

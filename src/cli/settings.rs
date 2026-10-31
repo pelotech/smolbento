@@ -47,7 +47,8 @@ mod tests {
     #[test]
     fn set_get_unset() {
         let mut t = test_env(&[]);
-        sbt(&mut t.ctx, &["settings", "set", "docker.enabled", "false"]).unwrap();
+        t.sbt(&["settings", "set", "docker.enabled", "false"])
+            .unwrap();
         assert_eq!(t.ctx.settings.value("docker.enabled").unwrap(), "false");
         let listing = render(&t.ctx.settings, true).unwrap();
         let row = listing
@@ -58,18 +59,16 @@ mod tests {
             row.split_whitespace().take(3).collect::<Vec<_>>(),
             vec!["docker.enabled", "false", "config"]
         );
-        sbt(&mut t.ctx, &["settings", "unset", "docker.enabled"]).unwrap();
+        t.sbt(&["settings", "unset", "docker.enabled"]).unwrap();
         assert_eq!(t.ctx.settings.value("docker.enabled").unwrap(), "true");
-        assert!(sbt(&mut t.ctx, &["settings", "get", "nope"]).is_err());
+        assert!(t.sbt(&["settings", "get", "nope"]).is_err());
     }
 
     #[test]
     fn set_validates_kit_allowed_sources() {
         let mut t = test_env(&[]);
         for bad in ["docker.io/", "[1]", r#"[""]"#, r#"["docker.io/", ""]"#] {
-            let e = sbt(&mut t.ctx, &["settings", "set", "kit.allowedSources", bad])
-                .unwrap_err()
-                .to_string();
+            let e = t.sbt_err(&["settings", "set", "kit.allowedSources", bad]);
             assert!(e.contains("kit.allowedSources"), "{bad}: {e}");
         }
         assert_eq!(
@@ -77,15 +76,12 @@ mod tests {
             r#"["docker.io/"]"#,
             "a refused value is not saved"
         );
-        sbt(
-            &mut t.ctx,
-            &[
-                "settings",
-                "set",
-                "kit.allowedSources",
-                r#"["ghcr.io","*"]"#,
-            ],
-        )
+        t.sbt(&[
+            "settings",
+            "set",
+            "kit.allowedSources",
+            r#"["ghcr.io","*"]"#,
+        ])
         .unwrap();
         assert_eq!(
             t.ctx.settings.value("kit.allowedSources").unwrap(),

@@ -352,7 +352,7 @@ mod tests {
         let k = load(&t.ctx, "./kit").unwrap();
         assert_eq!(k.name, "my-kit");
         assert_eq!(k.source, Source::LocalV2(dir.canonicalize().unwrap()));
-        assert!(t.ctx.vm.runner().call_lines().is_empty());
+        assert!(t.calls().is_empty());
     }
 
     #[test]
@@ -394,7 +394,7 @@ mod tests {
         assert_eq!(volumes, ["/var/lib/docker", "/var/lib/containerd"]);
         assert!(k.caps.iter().any(|c| c.body == CapBody::Privileged));
         assert_eq!(kit_name(&t.ctx, "docker").unwrap(), "docker");
-        assert!(t.ctx.vm.runner().call_lines().is_empty());
+        assert!(t.calls().is_empty());
     }
 
     #[test]
@@ -428,7 +428,7 @@ mod tests {
             format!("{e:#}").contains("local kits are disabled"),
             "{e:#}"
         );
-        assert!(t.ctx.vm.runner().call_lines().is_empty());
+        assert!(t.calls().is_empty());
     }
 
     #[test]
@@ -462,7 +462,7 @@ mod tests {
                 m.contains("several kit descriptors") && m.contains(&dir.display().to_string()),
                 "{m}"
             );
-            assert!(t.ctx.vm.runner().call_lines().is_empty(), "{r}");
+            assert!(t.calls().is_empty(), "{r}");
         }
     }
 
@@ -495,7 +495,7 @@ mod tests {
         );
         let mut b = tar::Builder::new(Vec::new());
         b.append_dir_all(".", out.path()).unwrap();
-        let fake = t.ctx.vm.runner();
+        let fake = t.runner();
         fake.ok(
             &["machine", "status"],
             &machine_json(
@@ -592,7 +592,7 @@ mod tests {
             assert_eq!(load(&t.ctx, r).unwrap().name, want, "{r}");
             assert_eq!(kit_name(&t.ctx, r).unwrap(), want, "{r}");
         }
-        assert!(t.ctx.vm.runner().call_lines().is_empty());
+        assert!(t.calls().is_empty());
     }
 
     #[test]
@@ -606,7 +606,7 @@ mod tests {
             assert_eq!(load(&t.ctx, r).unwrap_err().to_string(), want, "{r}");
             assert_eq!(kit_name(&t.ctx, r).unwrap_err().to_string(), want, "{r}");
         }
-        assert!(t.ctx.vm.runner().call_lines().is_empty());
+        assert!(t.calls().is_empty());
     }
 
     #[test]

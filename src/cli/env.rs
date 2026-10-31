@@ -365,7 +365,7 @@ mod tests {
 
     /// Sandbox `claude-proj` doesn't exist for `lookups` status calls, then exists.
     fn missing_then_created(t: &TestEnv, lookups: usize) {
-        let fake = t.ctx.vm.runner();
+        let fake = t.runner();
         let ws = t.ctx.cwd.display().to_string();
         fake.ok(
             &["machine", "status"],
@@ -386,17 +386,14 @@ mod tests {
 
     fn existing(t: &TestEnv, state: &str) {
         let ws = t.ctx.cwd.display().to_string();
-        t.ctx.vm.runner().ok(
-            &["machine", "status"],
-            &machine_json(
-                "sbx-claude-proj",
-                state,
-                &[
-                    ("sbx.name", "claude-proj"),
-                    ("sbx.agent", "claude"),
-                    ("sbx.workspace", ws.as_str()),
-                ],
-            ),
+        t.machine(
+            "sbx-claude-proj",
+            state,
+            &[
+                ("sbx.name", "claude-proj"),
+                ("sbx.agent", "claude"),
+                ("sbx.workspace", ws.as_str()),
+            ],
         );
     }
 
@@ -407,10 +404,7 @@ mod tests {
             regex_lite::Regex::new("[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}")
                 .unwrap();
         let tmp = regex_lite::Regex::new(r"/[^ :]*/\.tmp[A-Za-z0-9]+").unwrap();
-        t.ctx
-            .vm
-            .runner()
-            .call_lines()
+        t.calls()
             .iter()
             .map(|l| {
                 tmp.replace_all(&uuid.replace_all(l, "UUID"), "TMP")
@@ -501,26 +495,19 @@ mod tests {
             .env
             .insert("SMOLBENTO_KIT_ALLOW_LOCAL_KITS".into(), "true".into());
         let ws = t.ctx.cwd.display().to_string();
-        t.ctx.vm.runner().ok(
-            &["machine", "status"],
-            &machine_json(
-                "sbx-shell-proj",
-                "created",
-                &[
-                    ("sbx.name", "shell-proj"),
-                    ("sbx.agent", "shell"),
-                    ("sbx.workspace", ws.as_str()),
-                ],
-            ),
+        t.machine(
+            "sbx-shell-proj",
+            "created",
+            &[
+                ("sbx.name", "shell-proj"),
+                ("sbx.agent", "shell"),
+                ("sbx.workspace", ws.as_str()),
+            ],
         );
-        t.ctx
-            .vm
-            .runner()
+        t.runner()
             .once_fail(&["machine", "status"], "NOT_FOUND", "vm not found");
         // env create looks the name up once more, for its own "already exists" error.
-        t.ctx
-            .vm
-            .runner()
+        t.runner()
             .once_fail(&["machine", "status"], "NOT_FOUND", "vm not found");
         v3_kit(
             &t,
@@ -530,7 +517,7 @@ mod tests {
             &[],
         );
         std::fs::create_dir(t.ctx.cwd.join("data")).unwrap();
-        sbt(&mut t.ctx, &["env", "create", "--force"]).unwrap();
+        t.sbt(&["env", "create", "--force"]).unwrap();
         let create = creates(&t).remove(0);
         assert!(
             create.contains(" -v TMP/proj/data:/home/agent/.hm "),
@@ -544,7 +531,7 @@ mod tests {
             "{FILE}secrets:\n  github:\n    value: ghp_dummy\n"
         ));
         missing_then_created(&t, 2);
-        sbt(&mut t.ctx, &["env", "create", "-f"]).unwrap();
+        t.sbt(&["env", "create", "-f"]).unwrap();
         let out = t.stdout();
         assert!(
             out.contains("\nPROVISION\n  Scope:  claude-proj\n  ✓ github — secret · literal\n"),
@@ -566,7 +553,7 @@ mod tests {
         missing_then_created(&t, 2);
         let file = t.ctx.cwd.join("sbxenv.yaml").display().to_string();
         for cmd in ["create", "run"] {
-            let err = sbt(&mut t.ctx, &["env", cmd]).unwrap_err().to_string();
+            let err = t.sbt_err(&["env", cmd]);
             assert_eq!(
                 err,
                 format!(
@@ -594,20 +581,15 @@ mod tests {
         let text = format!("{FILE}args:\n  v:\n    default: a\n");
         std::fs::write(t.ctx.cwd.join("my env.yaml"), text).unwrap();
         missing_then_created(&t, 1);
-        let err = sbt(
-            &mut t.ctx,
-            &[
-                "env",
-                "create",
-                "my env.yaml",
-                "--name",
-                "box",
-                "--env-arg",
-                "v=x y",
-            ],
-        )
-        .unwrap_err()
-        .to_string();
+        let err = t.sbt_err(&[
+            "env",
+            "create",
+            "my env.yaml",
+            "--name",
+            "box",
+            "--env-arg",
+            "v=x y",
+        ]);
         assert!(
             err.ends_with(
                 "\n  try: sbt env create 'my env.yaml' --name box --env-arg 'v=x y' --force"
@@ -620,9 +602,7 @@ mod tests {
     fn create_of_an_existing_sandbox_fails() {
         let mut t = with_file(FILE);
         existing(&t, "running");
-        let err = sbt(&mut t.ctx, &["env", "create", "-f"])
-            .unwrap_err()
-            .to_string();
+        let err = t.sbt_err(&["env", "create", "-f"]);
         assert_eq!(
             err,
             "sandbox \"claude-proj\" already exists; attach to it with `sbt env run`, or remove it \
@@ -637,11 +617,9 @@ mod tests {
             "{FILE}secrets:\n  github:\n    value: ghp_dummy\n"
         ));
         missing_then_created(&t, 2);
-        t.ctx
-            .vm
-            .runner()
+        t.runner()
             .fail(&["machine", "create"], "CREATE_FAILED", "no space left");
-        assert!(sbt(&mut t.ctx, &["env", "create", "-f"]).is_err());
+        assert!(t.sbt(&["env", "create", "-f"]).is_err());
         assert_eq!(scoped(&t).len(), 1);
         assert_eq!(stored(&t, "github").as_deref(), Some("ghp_dummy"));
     }
@@ -652,7 +630,7 @@ mod tests {
             "{FILE}secrets:\n  github:\n    command: printf snap\n    snapshot: true\n"
         ));
         missing_then_created(&t, 2);
-        sbt(&mut t.ctx, &["env", "create", "-f"]).unwrap();
+        t.sbt(&["env", "create", "-f"]).unwrap();
         assert!(t.stdout().contains("  ✓ github — secret · literal\n"));
         assert_eq!(scoped(&t)[0].source, Source::Keychain);
         assert_eq!(stored(&t, "github").as_deref(), Some("snap"));
@@ -664,9 +642,7 @@ mod tests {
             "{FILE}secrets:\n  github:\n    command: \"false\"\n"
         ));
         missing_then_created(&t, 2);
-        let err = sbt(&mut t.ctx, &["env", "create", "-f"])
-            .unwrap_err()
-            .to_string();
+        let err = t.sbt_err(&["env", "create", "-f"]);
         assert!(err.starts_with("secret \"github\": "), "{err}");
         assert!(scoped(&t).is_empty());
         assert!(creates(&t).is_empty());
@@ -675,7 +651,7 @@ mod tests {
             "{FILE}secrets:\n  github:\n    command: \"false\"\n    noVerify: true\n"
         ));
         missing_then_created(&t, 2);
-        sbt(&mut t.ctx, &["env", "create", "-f"]).unwrap();
+        t.sbt(&["env", "create", "-f"]).unwrap();
         assert!(t.stdout().contains("  ✓ github — secret · command\n"));
         assert_eq!(
             scoped(&t)[0].source,
@@ -690,9 +666,9 @@ mod tests {
     fn run_of_an_existing_sandbox_attaches_with_the_files_env() {
         let mut t = with_file(&FILE.replace("X: one", "X: two"));
         existing(&t, "running");
-        t.ctx.vm.runner().interactive_exit(0);
-        assert_eq!(sbt(&mut t.ctx, &["env", "run", "-f"]).unwrap(), 0);
-        let exec = t.ctx.vm.runner().interactive_calls()[0].join(" ");
+        t.runner().interactive_exit(0);
+        assert_eq!(t.sbt(&["env", "run", "-f"]).unwrap(), 0);
+        let exec = t.runner().interactive_calls()[0].join(" ");
         assert!(exec.contains("-e X=two"), "{exec}");
         assert!(creates(&t).is_empty());
         assert!(scoped(&t).is_empty());
@@ -703,19 +679,17 @@ mod tests {
         let mut t = with_file(FILE);
         // env run looks the name up, run twice more, and plan::create once more.
         missing_then_created(&t, 4);
-        assert_eq!(sbt(&mut t.ctx, &["env", "run", "-d", "-f"]).unwrap(), 0);
+        assert_eq!(t.sbt(&["env", "run", "-d", "-f"]).unwrap(), 0);
         assert_eq!(creates(&t).len(), 1);
         assert!(t.stdout().ends_with("claude-proj\n"));
-        assert!(t.ctx.vm.runner().interactive_calls().is_empty());
+        assert!(t.runner().interactive_calls().is_empty());
     }
 
     fn listed(t: &TestEnv, extra: &[(&str, &str)]) {
         let mut labels = vec![("sbx.name", "claude-proj"), ("sbx.agent", "claude")];
         labels.extend_from_slice(extra);
         let json = machine_json("sbx-claude-proj", "created", &labels);
-        t.ctx
-            .vm
-            .runner()
+        t.runner()
             .ok(&["machine", "ls", "--json"], &format!("[{json}]"));
     }
 
@@ -723,11 +697,11 @@ mod tests {
     fn exec_splits_paths_from_the_command_at_dashes() {
         let mut t = with_file(FILE);
         existing(&t, "running");
-        t.ctx.vm.runner().interactive_exit(3);
+        t.runner().interactive_exit(3);
         let file = t.ctx.cwd.join("sbxenv.yaml").display().to_string();
-        let code = sbt(&mut t.ctx, &["env", "exec", &file, "--", "npm", "test"]).unwrap();
+        let code = t.sbt(&["env", "exec", &file, "--", "npm", "test"]).unwrap();
         assert_eq!(code, 3);
-        let call = t.ctx.vm.runner().interactive_calls()[0].join(" ");
+        let call = t.runner().interactive_calls()[0].join(" ");
         assert!(call.ends_with("-- npm test"), "{call}");
         assert!(call.contains("--name sbx-claude-proj"), "{call}");
     }
@@ -736,9 +710,9 @@ mod tests {
     fn exec_without_dashes_takes_every_positional_as_the_command() {
         let mut t = with_file(FILE);
         existing(&t, "running");
-        t.ctx.vm.runner().interactive_exit(0);
-        sbt(&mut t.ctx, &["env", "exec", "go", "test", "./..."]).unwrap();
-        let call = t.ctx.vm.runner().interactive_calls()[0].join(" ");
+        t.runner().interactive_exit(0);
+        t.sbt(&["env", "exec", "go", "test", "./..."]).unwrap();
+        let call = t.runner().interactive_calls()[0].join(" ");
         assert!(call.ends_with("-- go test ./..."), "{call}");
     }
 
@@ -746,9 +720,10 @@ mod tests {
     fn exec_passes_the_files_env_and_the_users_wins() {
         let mut t = with_file(FILE);
         existing(&t, "running");
-        t.ctx.vm.runner().interactive_exit(0);
-        sbt(&mut t.ctx, &["env", "exec", "-e", "X=mine", "--", "env"]).unwrap();
-        let call = t.ctx.vm.runner().interactive_calls()[0].join(" ");
+        t.runner().interactive_exit(0);
+        t.sbt(&["env", "exec", "-e", "X=mine", "--", "env"])
+            .unwrap();
+        let call = t.runner().interactive_calls()[0].join(" ");
         let (file, user) = (call.find("-e X=one"), call.find("-e X=mine"));
         assert!(file.is_some() && user.is_some() && file < user, "{call}");
     }
@@ -756,32 +731,27 @@ mod tests {
     #[test]
     fn exec_of_a_missing_sandbox_fails() {
         let mut t = with_file(FILE);
-        t.ctx
-            .vm
-            .runner()
-            .fail(&["machine", "status"], "NOT_FOUND", "vm not found");
-        let err = sbt(&mut t.ctx, &["env", "exec", "--", "ls"])
-            .unwrap_err()
-            .to_string();
+        t.no_machine();
+        let err = t.sbt_err(&["env", "exec", "--", "ls"]);
         assert_eq!(
             err,
             "sandbox 'claude-proj' not found for this environment\n  try: sbt env create"
         );
-        assert!(t.ctx.vm.runner().interactive_calls().is_empty());
+        assert!(t.runner().interactive_calls().is_empty());
     }
 
     #[test]
     fn exec_works_when_the_workspace_is_gone() {
         let mut t = with_file(&FILE.replace("workspace: .", "workspace: ./gone"));
         existing(&t, "running");
-        t.ctx.vm.runner().interactive_exit(0);
-        sbt(&mut t.ctx, &["env", "exec", "--", "ls"]).unwrap();
+        t.runner().interactive_exit(0);
+        t.sbt(&["env", "exec", "--", "ls"]).unwrap();
     }
 
     fn set_scoped(t: &mut TestEnv, scope: &[&str]) {
         let mut a = vec!["secret", "set", "github", "-t", "tok"];
         a.extend_from_slice(scope);
-        sbt(&mut t.ctx, &a).unwrap();
+        t.sbt(&a).unwrap();
     }
 
     fn deletes(t: &TestEnv) -> Vec<String> {
@@ -797,7 +767,7 @@ mod tests {
         set_scoped(&mut t, &["--sandbox", "claude-proj"]);
         set_scoped(&mut t, &[]);
         listed(&t, &[]);
-        assert_eq!(sbt(&mut t.ctx, &["env", "rm", "--force"]).unwrap(), 0);
+        assert_eq!(t.sbt(&["env", "rm", "--force"]).unwrap(), 0);
         let out = t.stdout();
         assert!(out.contains("ENVIRONMENT\n  Name: claude-proj\n"), "{out}");
         assert!(out.contains("  - github\n"), "{out}");
@@ -821,7 +791,7 @@ mod tests {
         let mut t = with_file(FILE);
         set_scoped(&mut t, &["--sandbox", "claude-proj"]);
         listed(&t, &[]);
-        let err = sbt(&mut t.ctx, &["env", "rm"]).unwrap_err().to_string();
+        let err = t.sbt_err(&["env", "rm"]);
         assert_eq!(
             err,
             "stdin is not a terminal; use --force to skip confirmation"
@@ -834,8 +804,8 @@ mod tests {
     #[test]
     fn rm_of_nothing_exits_0() {
         let mut t = with_file(FILE);
-        t.ctx.vm.runner().ok(&["machine", "ls", "--json"], "[]");
-        assert_eq!(sbt(&mut t.ctx, &["env", "rm", "-f"]).unwrap(), 0);
+        t.runner().ok(&["machine", "ls", "--json"], "[]");
+        assert_eq!(t.sbt(&["env", "rm", "-f"]).unwrap(), 0);
         assert_eq!(t.stdout(), "");
         assert!(deletes(&t).is_empty());
     }
@@ -844,8 +814,8 @@ mod tests {
     fn rm_with_only_scoped_secrets_removes_them() {
         let mut t = with_file(FILE);
         set_scoped(&mut t, &["--sandbox", "claude-proj"]);
-        t.ctx.vm.runner().ok(&["machine", "ls", "--json"], "[]");
-        sbt(&mut t.ctx, &["env", "rm", "-f"]).unwrap();
+        t.runner().ok(&["machine", "ls", "--json"], "[]");
+        t.sbt(&["env", "rm", "-f"]).unwrap();
         assert!(
             t.stdout()
                 .ends_with("\nRemoved secrets scoped to claude-proj\n"),
@@ -873,13 +843,9 @@ mod tests {
                 ("sbx.fork-of", "claude-proj"),
             ],
         );
-        t.ctx
-            .vm
-            .runner()
+        t.runner()
             .ok(&["machine", "ls", "--json"], &format!("[{a},{b}]"));
-        let err = sbt(&mut t.ctx, &["env", "rm", "-f"])
-            .unwrap_err()
-            .to_string();
+        let err = t.sbt_err(&["env", "rm", "-f"]);
         assert_eq!(
             err,
             "claude-proj has forks; remove its forks first: claude-proj-fork-1"
@@ -890,17 +856,19 @@ mod tests {
     #[test]
     fn rm_needs_the_required_args() {
         let mut t = with_file(&format!("{FILE}args:\n  channel:\n    required: true\n"));
-        assert!(sbt(&mut t.ctx, &["env", "rm", "-f"]).is_err());
-        assert!(sbt(&mut t.ctx, &["env", "exec", "--", "ls"]).is_err());
+        assert!(t.sbt(&["env", "rm", "-f"]).is_err());
+        assert!(t.sbt(&["env", "exec", "--", "ls"]).is_err());
     }
 
     #[test]
     fn plan_and_cloud_flags_exit_2() {
         let mut t = with_file(FILE);
-        let err = sbt(&mut t.ctx, &["env", "plan"]).unwrap_err();
+        let err = t.sbt(&["env", "plan"]).unwrap_err();
         assert_eq!(err.to_string(), "`sbt env plan` is not implemented yet");
         assert_eq!(exit_code(&err), 2);
-        let err = sbt(&mut t.ctx, &["env", "create", "--on-timeout", "stop"]).unwrap_err();
+        let err = t
+            .sbt(&["env", "create", "--on-timeout", "stop"])
+            .unwrap_err();
         assert_eq!(exit_code(&err), 2, "{err}");
         assert!(creates(&t).is_empty());
     }

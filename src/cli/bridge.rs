@@ -74,7 +74,7 @@ mod tests {
         let sub = cmd.find_subcommand("_bridge").expect("exists");
         assert!(sub.is_hide_set());
         let mut t = test_env(&[]);
-        t.ctx.vm.runner().fail(&["--version"], "E", "no smolvm");
-        assert!(sbt(&mut t.ctx, &["_bridge", "x"]).is_err());
+        t.runner().fail(&["--version"], "E", "no smolvm");
+        assert!(t.sbt(&["_bridge", "x"]).is_err());
     }
 }

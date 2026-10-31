@@ -68,18 +68,15 @@ mod tests {
     use super::*;
 
     fn sandbox(t: &TestEnv, state: &str) {
-        t.ctx.vm.runner().ok(
-            &["machine", "status"],
-            &machine_json("sbx-a1", state, &[("sbx.name", "a1")]),
-        );
+        t.machine("sbx-a1", state, &[("sbx.name", "a1")]);
     }
 
     #[test]
     fn publish_starts_a_stopped_sandbox_then_updates() {
         let mut t = test_env(&[]);
         sandbox(&t, "stopped");
-        sbt(&mut t.ctx, &["ports", "a1", "--publish", "8080:80"]).unwrap();
-        let lines = t.ctx.vm.runner().call_lines();
+        t.sbt(&["ports", "a1", "--publish", "8080:80"]).unwrap();
+        let lines = t.calls();
         assert!(lines.contains(&"machine start -n sbx-a1 --branchable".to_string()));
         assert_eq!(lines.last().unwrap(), "machine update -n sbx-a1 -p 8080:80");
     }
@@ -88,20 +85,16 @@ mod tests {
     fn unpublish_and_udp_rules() {
         let mut t = test_env(&[]);
         sandbox(&t, "running");
-        sbt(&mut t.ctx, &["ports", "a1", "--unpublish", "8080:80"]).unwrap();
+        t.sbt(&["ports", "a1", "--unpublish", "8080:80"]).unwrap();
         assert_eq!(
-            t.ctx.vm.runner().call_lines().last().unwrap(),
+            t.calls().last().unwrap(),
             "machine update -n sbx-a1 --remove-port 8080:80"
         );
         assert!(
-            sbt(&mut t.ctx, &["ports", "a1", "--unpublish", "80"])
-                .unwrap_err()
-                .to_string()
+            t.sbt_err(&["ports", "a1", "--unpublish", "80"])
                 .contains("HOST:PORT")
         );
-        let err = sbt(&mut t.ctx, &["ports", "a1", "--publish", "5353:53/udp"])
-            .unwrap_err()
-            .to_string();
+        let err = t.sbt_err(&["ports", "a1", "--publish", "5353:53/udp"]);
         assert!(err.contains("stop"), "{err}");
     }
 
@@ -109,20 +102,18 @@ mod tests {
     fn udp_ports_change_on_a_stopped_sandbox_without_starting_it() {
         let mut t = test_env(&[]);
         sandbox(&t, "stopped");
-        sbt(
-            &mut t.ctx,
-            &[
-                "ports",
-                "a1",
-                "--publish",
-                "5353:53/udp",
-                "--publish",
-                "8080:80",
-            ],
-        )
+        t.sbt(&[
+            "ports",
+            "a1",
+            "--publish",
+            "5353:53/udp",
+            "--publish",
+            "8080:80",
+        ])
         .unwrap();
-        sbt(&mut t.ctx, &["ports", "a1", "--unpublish", "5353:53/udp"]).unwrap();
-        let lines = t.ctx.vm.runner().call_lines();
+        t.sbt(&["ports", "a1", "--unpublish", "5353:53/udp"])
+            .unwrap();
+        let lines = t.calls();
         assert!(
             !lines.iter().any(|l| l.contains("machine start")),
             "{lines:?}"
@@ -141,15 +132,8 @@ mod tests {
     fn list_without_flags() {
         let mut t = test_env(&[]);
         sandbox(&t, "running");
-        assert_eq!(sbt(&mut t.ctx, &["ports", "a1"]).unwrap(), 0);
-        assert!(
-            !t.ctx
-                .vm
-                .runner()
-                .call_lines()
-                .iter()
-                .any(|l| l.contains("update"))
-        );
+        assert_eq!(t.sbt(&["ports", "a1"]).unwrap(), 0);
+        assert!(!t.calls().iter().any(|l| l.contains("update")));
     }
 
     #[test]
