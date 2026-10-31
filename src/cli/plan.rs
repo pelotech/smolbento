@@ -1,6 +1,6 @@
 //! Glue between sandboxes and the policy and secrets: what each start and create gets.
 
-use std::io::{BufRead, Write};
+use std::io::Write;
 use std::path::Path;
 
 use anyhow::{Context, Result, bail};
@@ -194,8 +194,7 @@ pub fn ensure_policy<R: Runner>(ctx: &Ctx<R>) -> Result<Policy> {
     writeln!(out, "  3) deny-all   nothing unless you allow it")?;
     write!(out, "Choice [2]: ")?;
     out.flush()?;
-    let mut line = String::new();
-    std::io::stdin().lock().read_line(&mut line)?;
+    let line = ctx.read_line()?;
     policy.mode = Some(match line.trim() {
         "1" | "allow-all" => Mode::AllowAll,
         "" | "2" | "balanced" => Mode::Balanced,
@@ -898,6 +897,24 @@ mod tests {
                 .to_string();
             assert!(err.contains("sbt policy init"), "{err}");
         }
+        assert_eq!(Policy::load(&t.ctx.paths).unwrap().mode, None);
+    }
+
+    #[test]
+    fn start_without_a_mode_asks_on_a_terminal_and_saves_the_choice() {
+        let mut t = test_env(&[]);
+        set_policy(&t, "");
+        t.answer("3\n");
+        let _ = start_plan(&t.ctx, &meta("s1", &[], &[]));
+        assert!(t.stdout().ends_with("Choice [2]: "));
+        assert_eq!(
+            Policy::load(&t.ctx.paths).unwrap().mode,
+            Some(Mode::DenyAll)
+        );
+        set_policy(&t, "");
+        t.answer("9\n");
+        let e = start_plan(&t.ctx, &meta("s1", &[], &[])).unwrap_err();
+        assert_eq!(e.to_string(), "'9' isn't 1, 2 or 3");
         assert_eq!(Policy::load(&t.ctx.paths).unwrap().mode, None);
     }
 

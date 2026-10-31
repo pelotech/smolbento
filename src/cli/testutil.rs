@@ -60,6 +60,7 @@ pub fn test_env(extra_env: &[(&str, &str)]) -> TestEnv {
             store: Box::new(crate::secrets::store::MemoryStore::default()),
             config_error,
             out: super::Out::Buffer(Default::default()),
+            input: super::In::Buffer(Default::default()),
             args: vec![],
         },
         _dir: dir,
@@ -67,6 +68,12 @@ pub fn test_env(extra_env: &[(&str, &str)]) -> TestEnv {
 }
 
 impl TestEnv {
+    /// Makes stdin a terminal that answers prompts with `answers`, one line each.
+    pub fn answer(&mut self, answers: &str) {
+        self.ctx.stdin_tty = true;
+        self.ctx.input = super::In::Buffer(std::io::Cursor::new(answers.into()).into());
+    }
+
     /// What commands have written to stdout since the last call.
     pub fn stdout(&self) -> String {
         match &self.ctx.out {
