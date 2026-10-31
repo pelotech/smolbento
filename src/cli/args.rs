@@ -539,7 +539,7 @@ impl SandboxOpts {
     }
 }
 
-#[derive(Debug, Args)]
+#[derive(Debug, Default, Args)]
 pub struct RunArgs {
     /// Agent or workload kit (registry reference or local path, e.g. ./kit), then workspace paths (default: the current directory)
     pub targets: Vec<String>,
