@@ -3,6 +3,7 @@ pub mod agents;
 pub mod bridge;
 pub mod cli;
 pub mod config;
+pub mod ctx;
 pub mod env;
 pub mod kits;
 pub mod policy;
