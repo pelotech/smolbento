@@ -186,7 +186,7 @@ mod tests {
     fn parent(t: &TestEnv, state: &str, extra: &[(&str, &str)]) {
         let mut labels = vec![("sbx.name", "a"), ("sbx.created", "999000")];
         labels.extend_from_slice(extra);
-        let fake = t.ctx.vm.runner();
+        let fake = t.runner();
         fake.fail(&["machine", "status"], "NOT_FOUND", "machine not found");
         fake.ok(
             &["machine", "status", "-n", "sbx-a"],
@@ -196,17 +196,14 @@ mod tests {
 
     fn exists(t: &TestEnv, name: &str) {
         let machine = format!("sbx-{name}");
-        t.ctx.vm.runner().ok(
+        t.runner().ok(
             &["machine", "status", "-n", &machine],
             &machine_json(&machine, "running", &[("sbx.name", name)]),
         );
     }
 
     fn branches(t: &TestEnv) -> Vec<String> {
-        t.ctx
-            .vm
-            .runner()
-            .call_lines()
+        t.calls()
             .into_iter()
             .filter(|c| c.starts_with("machine branch"))
             .map(|c| normalize_id(&c))
@@ -260,7 +257,7 @@ mod tests {
                 ("sbx.workspaces", &ws),
             ],
         );
-        assert_eq!(sbt(&mut t.ctx, &["fork", "a"]).unwrap(), 0);
+        assert_eq!(t.sbt(&["fork", "a"]).unwrap(), 0);
         assert_eq!(branches(&t), vec![branch("a-fork-1")]);
         assert_eq!(remote(&repo, "a-fork-1", "url"), "file:///sbt/a-fork-1");
         assert_eq!(
@@ -279,7 +276,7 @@ mod tests {
             "running",
             &[("sbx.host-mounts", r#"{"/home/agent/x":"/data/x"}"#)],
         );
-        assert_eq!(sbt(&mut t.ctx, &["fork", "a"]).unwrap(), 0);
+        assert_eq!(t.sbt(&["fork", "a"]).unwrap(), 0);
         assert_eq!(branches(&t), vec![branch("a-fork-1")]);
     }
 
@@ -292,7 +289,7 @@ mod tests {
             "running",
             &[("sbx.ssh-agent", r#"{"runtime":{"sign":null}}"#)],
         );
-        assert_eq!(sbt(&mut t.ctx, &["fork", "a"]).unwrap(), 0);
+        assert_eq!(t.sbt(&["fork", "a"]).unwrap(), 0);
         let b = branch("a-fork-1");
         let (head, vars) = b.split_at(b.find(" -e ").unwrap());
         assert_eq!(
@@ -306,13 +303,13 @@ mod tests {
         let mut t = test_env(&[]);
         parent(&t, "running", &[]);
         exists(&t, "a-fork-1");
-        sbt(&mut t.ctx, &["fork", "a"]).unwrap();
+        t.sbt(&["fork", "a"]).unwrap();
         assert_eq!(branches(&t), vec![branch("a-fork-2")]);
 
         let mut t = test_env(&[]);
         parent(&t, "running", &[]);
         exists(&t, "a-fork-1");
-        sbt(&mut t.ctx, &["fork", "a", "--count", "2"]).unwrap();
+        t.sbt(&["fork", "a", "--count", "2"]).unwrap();
         assert_eq!(branches(&t), vec![branch("a-fork-2"), branch("a-fork-3")]);
         assert_eq!(t.stdout(), "a-fork-2\na-fork-3\n");
     }
@@ -321,7 +318,7 @@ mod tests {
     fn name_names_the_copy() {
         let mut t = test_env(&[]);
         parent(&t, "running", &[]);
-        sbt(&mut t.ctx, &["fork", "a", "--name", "try.2"]).unwrap();
+        t.sbt(&["fork", "a", "--name", "try.2"]).unwrap();
         assert_eq!(t.stdout(), "try.2\n");
         assert_eq!(
             branches(&t),
@@ -353,8 +350,8 @@ mod tests {
                 ("sbx.credential-env", "GH_TOKEN,GITHUB_TOKEN,OLD_TOKEN"),
             ],
         );
-        sbt(&mut t.ctx, &["fork", "a"]).unwrap();
-        let fake = t.ctx.vm.runner();
+        t.sbt(&["fork", "a"]).unwrap();
+        let fake = t.runner();
         let env = fake.envs().last().unwrap().clone();
         assert!(env.contains(&("GH_TOKEN".to_string(), "gh-123".to_string())));
         assert_eq!(fake.removed().last().unwrap(), &vec!["OLD_TOKEN"]);
@@ -366,9 +363,9 @@ mod tests {
     fn fork_enabled_false_refuses() {
         let mut t = test_env(&[("SMOLBENTO_FORK", "false")]);
         parent(&t, "running", &[]);
-        let err = sbt(&mut t.ctx, &["fork", "a"]).unwrap_err().to_string();
+        let err = t.sbt_err(&["fork", "a"]);
         assert_eq!(err, "fork is turned off (fork.enabled=false)");
-        let calls = t.ctx.vm.runner().call_lines();
+        let calls = t.calls();
         assert!(calls.iter().all(|c| !c.starts_with("machine")), "{calls:?}");
     }
 
@@ -392,7 +389,7 @@ mod tests {
         }
         f.save(&t.ctx.paths).unwrap();
         parent(&t, "running", &[("sbx.secrets", "github")]);
-        sbt(&mut t.ctx, &["fork", "a"]).unwrap();
+        t.sbt(&["fork", "a"]).unwrap();
         let p = Policy::load(&t.ctx.paths).unwrap();
         assert!(!p.sandboxes.contains_key("a-fork-1"), "{:?}", p.sandboxes);
         let f = SecretsFile::load(&t.ctx.paths).unwrap();
@@ -411,7 +408,7 @@ mod tests {
         let mut t = test_env(&[]);
         deny_rule_policy(&t);
         parent(&t, "running", &[]);
-        sbt(&mut t.ctx, &["fork", "a"]).unwrap();
+        t.sbt(&["fork", "a"]).unwrap();
         let p = Policy::load(&t.ctx.paths).unwrap();
         let rules = &p.sandboxes["a-fork-1"].rules;
         assert_eq!(rules.len(), 1);
@@ -450,16 +447,11 @@ mod tests {
             let mut t = test_env(&[]);
             parent(&t, "stopped", labels);
             exists(&t, "taken");
-            let err = sbt(&mut t.ctx, args).unwrap_err();
+            let err = t.sbt(args).unwrap_err();
             assert!(format!("{err:#}").contains(msg), "{args:?}: {err:#}");
             assert!(branches(&t).is_empty(), "{args:?}");
             assert!(
-                t.ctx
-                    .vm
-                    .runner()
-                    .call_lines()
-                    .iter()
-                    .all(|c| !c.starts_with("machine start")),
+                t.calls().iter().all(|c| !c.starts_with("machine start")),
                 "{args:?}"
             );
         }
@@ -470,13 +462,13 @@ mod tests {
         let mut t = test_env(&[]);
         let long = "a".repeat(120);
         let machine = format!("sbx-{long}");
-        let fake = t.ctx.vm.runner();
+        let fake = t.runner();
         fake.fail(&["machine", "status"], "NOT_FOUND", "machine not found");
         fake.ok(
             &["machine", "status", "-n", &machine],
             &machine_json(&machine, "running", &[("sbx.name", &long)]),
         );
-        let err = sbt(&mut t.ctx, &["fork", &long]).unwrap_err().to_string();
+        let err = t.sbt_err(&["fork", &long]);
         assert!(
             err.contains("is too long (maximum 124 characters)"),
             "{err}"
@@ -497,8 +489,8 @@ mod tests {
         ] {
             let mut t = test_env(&[]);
             parent(&t, "running", &[]);
-            assert!(sbt(&mut t.ctx, args).is_err(), "{args:?}");
-            assert!(t.ctx.vm.runner().calls().is_empty(), "{args:?}");
+            assert!(t.sbt(args).is_err(), "{args:?}");
+            assert!(t.runner().calls().is_empty(), "{args:?}");
         }
     }
 
@@ -525,7 +517,7 @@ mod tests {
                 ("sbx.workspaces", &ws),
             ],
         );
-        let err = sbt(&mut t.ctx, &["fork", "a"]).unwrap_err();
+        let err = t.sbt(&["fork", "a"]).unwrap_err();
         assert!(err.to_string().contains("already has a remote"), "{err:#}");
         assert!(branches(&t).is_empty());
     }
@@ -545,12 +537,12 @@ mod tests {
                 ("sbx.workspaces", &ws),
             ],
         );
-        sbt(&mut t.ctx, &["fork", "a"]).unwrap();
+        t.sbt(&["fork", "a"]).unwrap();
         assert_eq!(branches(&t), vec![branch("a-fork-1")]);
 
         let mut t = test_env(&[]);
         parent(&t, "running", &[("sbx.workspaces", "[\"/w/docs:ro\"]")]);
-        sbt(&mut t.ctx, &["fork", "a"]).unwrap();
+        t.sbt(&["fork", "a"]).unwrap();
         assert_eq!(branches(&t), vec![branch("a-fork-1")]);
     }
 
@@ -558,8 +550,8 @@ mod tests {
     fn starts_a_stopped_parent() {
         let mut t = test_env(&[]);
         parent(&t, "stopped", &[]);
-        sbt(&mut t.ctx, &["fork", "a"]).unwrap();
-        let calls = t.ctx.vm.runner().call_lines();
+        t.sbt(&["fork", "a"]).unwrap();
+        let calls = t.calls();
         let start = calls
             .iter()
             .position(|c| c == "machine start -n sbx-a --branchable")
@@ -575,11 +567,9 @@ mod tests {
     fn not_branchable_gets_the_restart_hint() {
         let mut t = test_env(&[]);
         parent(&t, "running", &[]);
-        t.ctx
-            .vm
-            .runner()
+        t.runner()
             .fail(&["machine", "branch"], "SMOLVM_ERROR", NOT_BRANCHABLE);
-        let err = format!("{:#}", sbt(&mut t.ctx, &["fork", "a"]).unwrap_err());
+        let err = format!("{:#}", t.sbt(&["fork", "a"]).unwrap_err());
         assert!(
             err.contains(
                 "a was started without fork support; restart it once \
@@ -593,11 +583,9 @@ mod tests {
     fn chain_depth_gets_the_limit_hint() {
         let mut t = test_env(&[]);
         parent(&t, "running", &[]);
-        t.ctx
-            .vm
-            .runner()
+        t.runner()
             .fail(&["machine", "branch"], "CONFLICT", CHAIN_DEPTH);
-        let err = format!("{:#}", sbt(&mut t.ctx, &["fork", "a"]).unwrap_err());
+        let err = format!("{:#}", t.sbt(&["fork", "a"]).unwrap_err());
         assert!(
             err.contains("smolvm limits how deep a chain of copies can get: smolvm: "),
             "{err}"
@@ -605,7 +593,7 @@ mod tests {
         assert!(err.contains("the safe limit is 32"), "{err}");
         // The original error stays in the chain.
         assert!(
-            sbt(&mut t.ctx, &["fork", "a"])
+            t.sbt(&["fork", "a"])
                 .unwrap_err()
                 .chain()
                 .any(|c| c.downcast_ref::<SmolvmError>().is_some())
@@ -616,11 +604,9 @@ mod tests {
     fn other_branch_errors_pass_through() {
         let mut t = test_env(&[]);
         parent(&t, "running", &[]);
-        t.ctx
-            .vm
-            .runner()
+        t.runner()
             .fail(&["machine", "branch"], "SMOLVM_ERROR", "boom");
-        let err = format!("{:#}", sbt(&mut t.ctx, &["fork", "a"]).unwrap_err());
+        let err = format!("{:#}", t.sbt(&["fork", "a"]).unwrap_err());
         assert_eq!(err, "forking a as a-fork-1: smolvm: boom");
     }
 
@@ -636,11 +622,9 @@ mod tests {
             ("sbx.workspaces", ws.as_str()),
         ];
         parent(&t, "running", &clone);
-        t.ctx
-            .vm
-            .runner()
+        t.runner()
             .fail(&["machine", "branch"], "SMOLVM_ERROR", "boom");
-        sbt(&mut t.ctx, &["fork", "a"]).unwrap_err();
+        t.sbt(&["fork", "a"]).unwrap_err();
         let p = Policy::load(&t.ctx.paths).unwrap();
         assert!(!p.sandboxes.contains_key("a-fork-1"));
         assert!(p.sandboxes.contains_key("a"));
@@ -650,15 +634,12 @@ mod tests {
         let mut t = test_env(&[]);
         deny_rule_policy(&t);
         parent(&t, "running", &clone);
-        t.ctx.vm.runner().fail(
+        t.runner().fail(
             &["machine", "branch", "--from", "sbx-a", "-n", "sbx-a-fork-2"],
             "SMOLVM_ERROR",
             "boom",
         );
-        let err = format!(
-            "{:#}",
-            sbt(&mut t.ctx, &["fork", "a", "--count", "2"]).unwrap_err()
-        );
+        let err = format!("{:#}", t.sbt(&["fork", "a", "--count", "2"]).unwrap_err());
         assert!(err.contains("forking a as a-fork-2"), "{err}");
         assert_eq!(branches(&t), vec![branch("a-fork-1"), branch("a-fork-2")]);
         let p = Policy::load(&t.ctx.paths).unwrap();

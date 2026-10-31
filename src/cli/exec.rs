@@ -96,13 +96,10 @@ mod tests {
     use super::super::testutil::*;
 
     fn running(t: &TestEnv) {
-        t.ctx.vm.runner().ok(
-            &["machine", "status"],
-            &machine_json(
-                "sbx-claude-proj",
-                "running",
-                &[("sbx.name", "claude-proj"), ("sbx.workspace", "/w/proj")],
-            ),
+        t.machine(
+            "sbx-claude-proj",
+            "running",
+            &[("sbx.name", "claude-proj"), ("sbx.workspace", "/w/proj")],
         );
     }
 
@@ -110,13 +107,13 @@ mod tests {
     fn exec_defaults_to_agent_in_the_workspace() {
         let mut t = test_env(&[]);
         running(&t);
-        t.ctx.vm.runner().interactive_exit(7);
+        t.runner().interactive_exit(7);
         assert_eq!(
-            sbt(&mut t.ctx, &["exec", "-it", "claude-proj", "ls", "-la"]).unwrap(),
+            t.sbt(&["exec", "-it", "claude-proj", "ls", "-la"]).unwrap(),
             7
         );
         assert_eq!(
-            t.ctx.vm.runner().interactive_calls()[0].join(" "),
+            t.runner().interactive_calls()[0].join(" "),
             "machine exec --name sbx-claude-proj -u agent -w /w/proj -i -t -- ls -la"
         );
     }
@@ -124,35 +121,29 @@ mod tests {
     #[test]
     fn exec_defaults_to_a_v3_workloads_image_user() {
         let mut t = test_env(&[]);
-        t.ctx.vm.runner().ok(
-            &["machine", "status"],
-            &machine_json(
-                "sbx-tool-proj",
-                "running",
-                &[
-                    ("sbx.name", "tool-proj"),
-                    ("sbx.workspace", "/w/proj"),
-                    ("sbx.user", "somebody"),
-                ],
-            ),
+        t.machine(
+            "sbx-tool-proj",
+            "running",
+            &[
+                ("sbx.name", "tool-proj"),
+                ("sbx.workspace", "/w/proj"),
+                ("sbx.user", "somebody"),
+            ],
         );
-        sbt(&mut t.ctx, &["exec", "tool-proj", "id"]).unwrap();
+        t.sbt(&["exec", "tool-proj", "id"]).unwrap();
         // A numeric image user runs as the account the start recorded for it.
-        t.ctx.vm.runner().ok(
-            &["machine", "status"],
-            &machine_json(
-                "sbx-tool-proj",
-                "running",
-                &[
-                    ("sbx.name", "tool-proj"),
-                    ("sbx.workspace", "/w/proj"),
-                    ("sbx.user", "1001:1001"),
-                ],
-            ),
+        t.machine(
+            "sbx-tool-proj",
+            "running",
+            &[
+                ("sbx.name", "tool-proj"),
+                ("sbx.workspace", "/w/proj"),
+                ("sbx.user", "1001:1001"),
+            ],
         );
-        t.ctx.vm.runner().download(b"somebody\n");
-        sbt(&mut t.ctx, &["exec", "tool-proj", "id"]).unwrap();
-        sbt(&mut t.ctx, &["exec", "-u", "root", "tool-proj", "id"]).unwrap();
+        t.runner().download(b"somebody\n");
+        t.sbt(&["exec", "tool-proj", "id"]).unwrap();
+        t.sbt(&["exec", "-u", "root", "tool-proj", "id"]).unwrap();
         let calls: Vec<String> = t
             .ctx
             .vm
@@ -174,33 +165,24 @@ mod tests {
     #[test]
     fn exec_privileged_env_and_starts_stopped() {
         let mut t = test_env(&[("HOSTVAR", "h")]);
-        t.ctx.vm.runner().ok(
-            &["machine", "status"],
-            &machine_json("sbx-claude-proj", "stopped", &[("sbx.name", "claude-proj")]),
-        );
-        sbt(
-            &mut t.ctx,
-            &[
-                "exec",
-                "--privileged",
-                "-e",
-                "HOSTVAR",
-                "-w",
-                "/tmp",
-                "claude-proj",
-                "id",
-            ],
-        )
+        t.machine("sbx-claude-proj", "stopped", &[("sbx.name", "claude-proj")]);
+        t.sbt(&[
+            "exec",
+            "--privileged",
+            "-e",
+            "HOSTVAR",
+            "-w",
+            "/tmp",
+            "claude-proj",
+            "id",
+        ])
         .unwrap();
         assert!(
-            t.ctx
-                .vm
-                .runner()
-                .call_lines()
+            t.calls()
                 .contains(&"machine start -n sbx-claude-proj --branchable".to_string())
         );
         assert_eq!(
-            t.ctx.vm.runner().interactive_calls()[0].join(" "),
+            t.runner().interactive_calls()[0].join(" "),
             "machine exec --name sbx-claude-proj -u root -w /tmp -e HOSTVAR=h -- id"
         );
     }
@@ -209,15 +191,12 @@ mod tests {
     fn exec_passes_the_host_tz_only_with_a_tty() {
         for (flags, want) in [(&["-it"][..], true), (&["-i"][..], false)] {
             let mut t = test_env(&[("TZ", "Asia/Kolkata")]);
-            t.ctx.vm.runner().ok(
-                &["machine", "status"],
-                &machine_json("sbx-claude-proj", "running", &[("sbx.name", "claude-proj")]),
-            );
+            t.machine("sbx-claude-proj", "running", &[("sbx.name", "claude-proj")]);
             let mut args = vec!["exec"];
             args.extend(flags);
             args.extend(["claude-proj", "id"]);
-            sbt(&mut t.ctx, &args).unwrap();
-            let line = t.ctx.vm.runner().interactive_calls()[0].join(" ");
+            t.sbt(&args).unwrap();
+            let line = t.runner().interactive_calls()[0].join(" ");
             assert_eq!(line.contains(" -e TZ=Asia/Kolkata"), want, "{line}");
         }
     }
@@ -227,16 +206,13 @@ mod tests {
         // Without these an agent prints a login URL as plain, hard-wrapped text and never
         // opens the browser.
         let mut t = test_env(&[("TERM_PROGRAM", "iTerm.app"), ("COLORTERM", "truecolor")]);
-        t.ctx.vm.runner().ok(
-            &["machine", "status"],
-            &machine_json(
-                "sbx-claude-proj",
-                "running",
-                &[("sbx.name", "claude-proj"), ("sbx.bridge", "true")],
-            ),
+        t.machine(
+            "sbx-claude-proj",
+            "running",
+            &[("sbx.name", "claude-proj"), ("sbx.bridge", "true")],
         );
-        sbt(&mut t.ctx, &["exec", "-i", "claude-proj", "id"]).unwrap();
-        let line = t.ctx.vm.runner().interactive_calls()[0].join(" ");
+        t.sbt(&["exec", "-i", "claude-proj", "id"]).unwrap();
+        let line = t.runner().interactive_calls()[0].join(" ");
         assert!(line.contains(" -e BROWSER=xdg-open"), "{line}");
         assert!(
             !line.contains("TERM_PROGRAM"),
@@ -248,8 +224,8 @@ mod tests {
     fn exec_tty_passes_the_host_terminal() {
         let mut t = test_env(&[("TERM_PROGRAM", "iTerm.app"), ("COLORTERM", "truecolor")]);
         running(&t);
-        sbt(&mut t.ctx, &["exec", "-it", "claude-proj", "id"]).unwrap();
-        let line = t.ctx.vm.runner().interactive_calls()[0].join(" ");
+        t.sbt(&["exec", "-it", "claude-proj", "id"]).unwrap();
+        let line = t.runner().interactive_calls()[0].join(" ");
         assert!(line.contains(" -e TERM_PROGRAM=iTerm.app"), "{line}");
         assert!(line.contains(" -e COLORTERM=truecolor"), "{line}");
         assert!(!line.contains("BROWSER"), "no bridge, no BROWSER: {line}");
@@ -259,7 +235,7 @@ mod tests {
     fn exec_detach_is_unsupported() {
         let mut t = test_env(&[]);
         running(&t);
-        let err = sbt(&mut t.ctx, &["exec", "-d", "claude-proj", "true"]).unwrap_err();
+        let err = t.sbt(&["exec", "-d", "claude-proj", "true"]).unwrap_err();
         assert_eq!(super::super::exit_code(&err), 2);
     }
 
@@ -267,8 +243,8 @@ mod tests {
     fn cp_rewrites_sandbox_paths() {
         let mut t = test_env(&[]);
         running(&t);
-        sbt(&mut t.ctx, &["cp", "./file", "claude-proj:/tmp/file"]).unwrap();
-        sbt(&mut t.ctx, &["cp", "claude-proj:/etc/hosts", "./hosts"]).unwrap();
+        t.sbt(&["cp", "./file", "claude-proj:/tmp/file"]).unwrap();
+        t.sbt(&["cp", "claude-proj:/etc/hosts", "./hosts"]).unwrap();
         let cps: Vec<String> = t
             .ctx
             .vm
@@ -290,22 +266,13 @@ mod tests {
     fn cp_rules() {
         let mut t = test_env(&[]);
         running(&t);
+        assert!(t.sbt_err(&["cp", "a", "b"]).contains("one of"));
         assert!(
-            sbt(&mut t.ctx, &["cp", "a", "b"])
-                .unwrap_err()
-                .to_string()
+            t.sbt_err(&["cp", "claude-proj:/a", "claude-proj:/b"])
                 .contains("one of")
         );
         assert!(
-            sbt(&mut t.ctx, &["cp", "claude-proj:/a", "claude-proj:/b"])
-                .unwrap_err()
-                .to_string()
-                .contains("one of")
-        );
-        assert!(
-            sbt(&mut t.ctx, &["cp", "a", "claude-proj:rel"])
-                .unwrap_err()
-                .to_string()
+            t.sbt_err(&["cp", "a", "claude-proj:rel"])
                 .contains("absolute")
         );
     }
@@ -314,10 +281,10 @@ mod tests {
     fn exec_it_serves_the_bridge_while_attached() {
         let mut t = test_env(&[]);
         let (name, seen) = bridge_probe(&t, "exec", true);
-        sbt(&mut t.ctx, &["exec", "-it", &name, "sh"]).unwrap();
+        t.sbt(&["exec", "-it", &name, "sh"]).unwrap();
         // Without a terminal it isn't an attached session.
-        sbt(&mut t.ctx, &["exec", "-i", &name, "sh"]).unwrap();
-        sbt(&mut t.ctx, &["exec", &name, "true"]).unwrap();
+        t.sbt(&["exec", "-i", &name, "sh"]).unwrap();
+        t.sbt(&["exec", &name, "true"]).unwrap();
         assert_eq!(*seen.borrow(), vec![true, false, false]);
         assert!(!crate::bridge::host_socket(&name).exists());
     }
@@ -326,9 +293,9 @@ mod tests {
     fn every_exec_serves_a_runtime_ssh_agent_grant() {
         let mut t = test_env(&[]);
         let (name, seen) = agent_probe(&t, "exec", Some(r#"{"runtime":{"sign":null}}"#));
-        sbt(&mut t.ctx, &["exec", "-it", &name, "sh"]).unwrap();
-        sbt(&mut t.ctx, &["exec", "-i", &name, "sh"]).unwrap();
-        sbt(&mut t.ctx, &["exec", &name, "git", "commit"]).unwrap();
+        t.sbt(&["exec", "-it", &name, "sh"]).unwrap();
+        t.sbt(&["exec", "-i", &name, "sh"]).unwrap();
+        t.sbt(&["exec", &name, "git", "commit"]).unwrap();
         assert_eq!(*seen.borrow(), vec![true, true, true]);
         // Stopped with the exec.
         assert!(!crate::bridge::agent_socket(&name).exists());
@@ -342,8 +309,8 @@ mod tests {
         ] {
             let mut t = test_env(&[]);
             let (name, seen) = agent_probe(&t, tag, grant);
-            sbt(&mut t.ctx, &["exec", "-it", &name, "sh"]).unwrap();
-            sbt(&mut t.ctx, &["exec", &name, "true"]).unwrap();
+            t.sbt(&["exec", "-it", &name, "sh"]).unwrap();
+            t.sbt(&["exec", &name, "true"]).unwrap();
             assert_eq!(*seen.borrow(), vec![false, false], "{tag}");
         }
     }
@@ -352,7 +319,7 @@ mod tests {
     fn exec_it_serves_no_bridge_for_an_unlabelled_sandbox() {
         let mut t = test_env(&[]);
         let (name, seen) = bridge_probe(&t, "exec", false);
-        sbt(&mut t.ctx, &["exec", "-it", &name, "sh"]).unwrap();
+        t.sbt(&["exec", "-it", &name, "sh"]).unwrap();
         assert_eq!(*seen.borrow(), vec![false]);
     }
 
@@ -360,7 +327,7 @@ mod tests {
     fn exec_it_serves_no_bridge_over_ssh_without_a_display() {
         let mut t = test_env(&[("SSH_CONNECTION", "10.0.0.1 50000 10.0.0.2 22")]);
         let (name, seen) = bridge_probe(&t, "exec", true);
-        sbt(&mut t.ctx, &["exec", "-it", &name, "sh"]).unwrap();
+        t.sbt(&["exec", "-it", &name, "sh"]).unwrap();
         assert_eq!(*seen.borrow(), vec![false]);
     }
 }

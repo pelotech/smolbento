@@ -336,7 +336,7 @@ fn update_repo<R: Runner>(
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::cli::testutil::{sbt, test_env};
+    use crate::cli::testutil::test_env;
 
     fn put(t: &crate::cli::testutil::TestEnv, name: &str) {
         let d = t.ctx.paths.skills_store().join(name);
@@ -348,25 +348,25 @@ mod tests {
     fn ls_formats() {
         let mut t = test_env(&[]);
         let store = t.ctx.paths.skills_store().display().to_string();
-        sbt(&mut t.ctx, &["skills", "ls"]).unwrap();
+        t.sbt(&["skills", "ls"]).unwrap();
         assert_eq!(t.stdout(), format!("No skills found in {store}\n"));
-        sbt(&mut t.ctx, &["skills", "ls", "--json"]).unwrap();
+        t.sbt(&["skills", "ls", "--json"]).unwrap();
         assert_eq!(
             t.stdout(),
             format!("{{\n  \"store\": \"{store}\",\n  \"skills\": []\n}}\n")
         );
-        sbt(&mut t.ctx, &["skills", "ls", "--format", "yaml"]).unwrap();
+        t.sbt(&["skills", "ls", "--format", "yaml"]).unwrap();
         assert_eq!(t.stdout(), format!("store: {store}\nskills: []\n"));
         put(&t, "beta");
         put(&t, "alpha");
-        sbt(&mut t.ctx, &["skills", "list"]).unwrap();
+        t.sbt(&["skills", "list"]).unwrap();
         assert_eq!(
             t.stdout(),
             format!("SKILL    STORE\nalpha    {store}\nbeta     {store}\n")
         );
-        sbt(&mut t.ctx, &["skills", "ls", "-q"]).unwrap();
+        t.sbt(&["skills", "ls", "-q"]).unwrap();
         assert_eq!(t.stdout(), "alpha\nbeta\n");
-        sbt(&mut t.ctx, &["skills", "ls", "--format", "yaml"]).unwrap();
+        t.sbt(&["skills", "ls", "--format", "yaml"]).unwrap();
         assert_eq!(
             t.stdout(),
             format!("store: {store}\nskills:\n- alpha\n- beta\n")
@@ -378,19 +378,15 @@ mod tests {
         let mut t = test_env(&[]);
         put(&t, "a");
         put(&t, "b");
-        let e = sbt(&mut t.ctx, &["skills", "rm", "a"])
-            .unwrap_err()
-            .to_string();
+        let e = t.sbt_err(&["skills", "rm", "a"]);
         assert!(
             e.starts_with("stdin is not a terminal; use --force to skip confirmation"),
             "{e}"
         );
-        let e = sbt(&mut t.ctx, &["skills", "rm", "a", "nope", "-f"])
-            .unwrap_err()
-            .to_string();
+        let e = t.sbt_err(&["skills", "rm", "a", "nope", "-f"]);
         assert_eq!(e, "skill \"nope\" is not installed\n  try: sbt skills ls");
         assert!(t.ctx.paths.skills_store().join("a").exists());
-        sbt(&mut t.ctx, &["skills", "remove", "a", "b", "--force"]).unwrap();
+        t.sbt(&["skills", "remove", "a", "b", "--force"]).unwrap();
         assert_eq!(t.stdout(), "Removed skill a\nRemoved skill b\n");
     }
 
@@ -462,9 +458,7 @@ mod tests {
     #[test]
     fn add_refuses_local_paths() {
         let mut t = test_env(&[]);
-        let e = sbt(&mut t.ctx, &["skills", "add", "file:///tmp/x"])
-            .unwrap_err()
-            .to_string();
+        let e = t.sbt_err(&["skills", "add", "file:///tmp/x"]);
         assert!(e.starts_with("repository must be a remote Git URL or GitHub owner/repository: file: invalid protocol"), "{e}");
     }
 
@@ -476,14 +470,14 @@ mod tests {
         let store = Store::new(&t.ctx.paths);
         add_url(&t.ctx, &store, r.path().to_str().unwrap(), &[], false).unwrap();
         t.stdout();
-        assert_eq!(sbt(&mut t.ctx, &["skills", "update"]).unwrap(), 0);
+        assert_eq!(t.sbt(&["skills", "update"]).unwrap(), 0);
         assert_eq!(
             t.stdout(),
             "Skill \"alpha\" is already up to date\nSkill \"beta\" is already up to date\n"
         );
         std::fs::write(r.path().join("alpha/SKILL.md"), "v2").unwrap();
         commit(r.path(), &["-a"], "v2");
-        sbt(&mut t.ctx, &["skills", "upgrade", "alpha"]).unwrap();
+        t.sbt(&["skills", "upgrade", "alpha"]).unwrap();
         let s = store.dir.display();
         assert_eq!(
             t.stdout(),
@@ -494,9 +488,7 @@ mod tests {
             "v2"
         );
         std::fs::create_dir_all(store.dir.join("mine")).unwrap();
-        let e = sbt(&mut t.ctx, &["skills", "update", "mine"])
-            .unwrap_err()
-            .to_string();
+        let e = t.sbt_err(&["skills", "update", "mine"]);
         assert!(
             e.starts_with(
                 "skill \"mine\" was not installed from a repository; install it from a repository"
@@ -523,7 +515,7 @@ mod tests {
         std::fs::write(b.join("gamma/SKILL.md"), "v2").unwrap();
         commit(&b, &["-a"], "v2");
         std::fs::remove_dir_all(&a).unwrap(); // sorts first, fails to clone
-        assert_eq!(sbt(&mut t.ctx, &["skills", "update"]).unwrap(), 1);
+        assert_eq!(t.sbt(&["skills", "update"]).unwrap(), 1);
         assert_eq!(
             t.stdout(),
             format!(
@@ -550,7 +542,7 @@ mod tests {
         std::fs::write(r.path().join("alpha/SKILL.md"), "v2").unwrap();
         crate::testgit::git(r.path(), &["add", "-A"]);
         commit(r.path(), &[], "v2");
-        assert_eq!(sbt(&mut t.ctx, &["skills", "update"]).unwrap(), 1);
+        assert_eq!(t.sbt(&["skills", "update"]).unwrap(), 1);
         assert_eq!(
             t.stdout(),
             format!(
@@ -625,7 +617,7 @@ mod tests {
         )
         .unwrap();
         commit(&r, &["-a"], "v2");
-        sbt(&mut t.ctx, &["skills", "update"]).unwrap();
+        t.sbt(&["skills", "update"]).unwrap();
         assert_eq!(
             t.stdout(),
             format!(
@@ -643,7 +635,7 @@ mod tests {
     #[test]
     fn update_with_no_repository_skills_says_so() {
         let mut t = test_env(&[]);
-        assert_eq!(sbt(&mut t.ctx, &["skills", "update"]).unwrap(), 0);
+        assert_eq!(t.sbt(&["skills", "update"]).unwrap(), 0);
         assert_eq!(t.stdout(), "No repository-installed skills found\n");
     }
 
@@ -685,7 +677,7 @@ mod tests {
             &["skills", "import", "--dry-run"][..],
             &["skills", "import"],
         ] {
-            sbt(&mut t.ctx, args).unwrap();
+            t.sbt(args).unwrap();
             assert_eq!(t.stdout(), want, "{args:?}");
         }
         let store = Store::new(&t.ctx.paths);
@@ -711,7 +703,7 @@ mod tests {
         .unwrap();
         let mut t = test_env(&[("HOME", h.to_str().unwrap())]);
         let store = t.ctx.paths.skills_store().display().to_string();
-        sbt(&mut t.ctx, &["skills", "import", "--dry-run"]).unwrap();
+        t.sbt(&["skills", "import", "--dry-run"]).unwrap();
         let out = t.stdout();
         assert_eq!(out.lines().next().unwrap(), "Would import skill \"beta\"");
         assert!(
@@ -725,19 +717,17 @@ mod tests {
             "{out}"
         );
         assert!(!t.ctx.paths.skills_store().exists());
-        sbt(&mut t.ctx, &["skills", "import"]).unwrap();
+        t.sbt(&["skills", "import"]).unwrap();
         assert!(
             t.stdout()
                 .contains(&format!("Imported 3 skills into {store}\n"))
         );
-        let e = sbt(&mut t.ctx, &["skills", "import"])
-            .unwrap_err()
-            .to_string();
+        let e = t.sbt_err(&["skills", "import"]);
         assert!(
             e.starts_with("stdin is not a terminal; pass --force to skip the confirmation"),
             "{e}"
         );
-        sbt(&mut t.ctx, &["skills", "import", "-f"]).unwrap();
+        t.sbt(&["skills", "import", "-f"]).unwrap();
     }
 
     #[test]

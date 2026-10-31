@@ -45,22 +45,19 @@ pub fn run<R: Runner>(ctx: &mut Ctx<R>, sandbox: &str) -> Result<i32> {
 
 #[cfg(test)]
 mod tests {
-    use crate::cli::testutil::{TestEnv, machine_json, sbt, test_env};
+    use crate::cli::testutil::{TestEnv, test_env};
     use crate::sandbox::session;
 
     fn clone_sandbox(t: &TestEnv, state: &str) {
-        t.ctx.vm.runner().ok(
-            &["machine", "status"],
-            &machine_json(
-                "sbx-box",
-                state,
-                &[
-                    ("sbx.name", "box"),
-                    ("sbx.agent", "shell"),
-                    ("sbx.workspace", "/w/r"),
-                    ("sbx.clone", "true"),
-                ],
-            ),
+        t.machine(
+            "sbx-box",
+            state,
+            &[
+                ("sbx.name", "box"),
+                ("sbx.agent", "shell"),
+                ("sbx.workspace", "/w/r"),
+                ("sbx.clone", "true"),
+            ],
         );
     }
 
@@ -74,12 +71,7 @@ mod tests {
 
     /// Whether smolvm got a `machine <cmd>` call.
     fn called(t: &TestEnv, cmd: &str) -> bool {
-        t.ctx
-            .vm
-            .runner()
-            .call_lines()
-            .iter()
-            .any(|l| l.contains(cmd))
+        t.calls().iter().any(|l| l.contains(cmd))
     }
 
     fn stopped(t: &TestEnv) -> bool {
@@ -90,12 +82,9 @@ mod tests {
     fn pipes_git_upload_pack_with_the_protocol() {
         let mut t = test_env(&[("GIT_PROTOCOL", "version=2")]);
         clone_sandbox(&t, "running");
-        t.ctx.vm.runner().interactive_exit(0);
-        assert_eq!(
-            sbt(&mut t.ctx, &["_upload-pack", "box", "/sbt/box"]).unwrap(),
-            0
-        );
-        let calls = t.ctx.vm.runner().interactive_calls();
+        t.runner().interactive_exit(0);
+        assert_eq!(t.sbt(&["_upload-pack", "box", "/sbt/box"]).unwrap(), 0);
+        let calls = t.runner().interactive_calls();
         assert_eq!(
             calls,
             vec![vec![
@@ -120,11 +109,11 @@ mod tests {
     fn starts_a_stopped_sandbox_and_stops_it_again() {
         let mut t = test_env(&[]);
         // Later registrations win: the catch-all goes first.
-        t.ctx.vm.runner().ok(&["machine"], "");
+        t.runner().ok(&["machine"], "");
         clone_sandbox(&t, "stopped");
-        t.ctx.vm.runner().interactive_exit(0);
-        sbt(&mut t.ctx, &["_upload-pack", "box", "/sbt/box"]).unwrap();
-        let lines = t.ctx.vm.runner().call_lines();
+        t.runner().interactive_exit(0);
+        t.sbt(&["_upload-pack", "box", "/sbt/box"]).unwrap();
+        let lines = t.calls();
         let start = lines
             .iter()
             .position(|l| l.contains("machine start"))
@@ -139,45 +128,40 @@ mod tests {
     #[test]
     fn stops_it_again_when_the_exec_fails() {
         let mut t = test_env(&[]);
-        t.ctx.vm.runner().ok(&["machine"], "");
+        t.runner().ok(&["machine"], "");
         clone_sandbox(&t, "stopped");
-        t.ctx.vm.runner().interactive_fail("spawning smolvm: busy");
-        let err = sbt(&mut t.ctx, &["_upload-pack", "box"])
-            .unwrap_err()
-            .to_string();
+        t.runner().interactive_fail("spawning smolvm: busy");
+        let err = t.sbt_err(&["_upload-pack", "box"]);
         assert!(err.contains("spawning smolvm"), "{err}");
-        assert_eq!(
-            t.ctx.vm.runner().call_lines().last().unwrap(),
-            "machine stop -n sbx-box"
-        );
+        assert_eq!(t.calls().last().unwrap(), "machine stop -n sbx-box");
     }
 
     #[test]
     fn overlapping_calls_leave_the_stop_to_the_last_one() {
         let mut t = test_env(&[]);
-        t.ctx.vm.runner().ok(&["machine"], "");
+        t.runner().ok(&["machine"], "");
         clone_sandbox(&t, "stopped");
-        t.ctx.vm.runner().interactive_exit(0);
+        t.runner().interactive_exit(0);
         // Another `_upload-pack` is mid-fetch: it registered its session before this one started.
         other_session(&t);
-        sbt(&mut t.ctx, &["_upload-pack", "box"]).unwrap();
+        t.sbt(&["_upload-pack", "box"]).unwrap();
         assert!(!stopped(&t));
         // Only the other session is left; ours is gone.
         assert_eq!(session::live_sessions(&t.ctx.paths.sessions(), "box"), 1);
         // Once it's done, the next call stops the sandbox it started.
         session::clear(&t.ctx.paths.sessions(), "box");
-        sbt(&mut t.ctx, &["_upload-pack", "box"]).unwrap();
+        t.sbt(&["_upload-pack", "box"]).unwrap();
         assert!(stopped(&t));
     }
 
     #[test]
     fn a_detached_session_suppresses_the_stop() {
         let mut t = test_env(&[]);
-        t.ctx.vm.runner().ok(&["machine"], "");
+        t.runner().ok(&["machine"], "");
         clone_sandbox(&t, "stopped");
-        t.ctx.vm.runner().interactive_exit(0);
+        t.runner().interactive_exit(0);
         session::mark_detached(&t.ctx.paths.sessions(), "box").unwrap();
-        sbt(&mut t.ctx, &["_upload-pack", "box"]).unwrap();
+        t.sbt(&["_upload-pack", "box"]).unwrap();
         assert!(!stopped(&t));
     }
 
@@ -185,17 +169,17 @@ mod tests {
     fn returns_a_non_zero_upload_pack_exit() {
         let mut t = test_env(&[]);
         clone_sandbox(&t, "running");
-        t.ctx.vm.runner().interactive_exit(3);
-        assert_eq!(sbt(&mut t.ctx, &["_upload-pack", "box"]).unwrap(), 3);
+        t.runner().interactive_exit(3);
+        assert_eq!(t.sbt(&["_upload-pack", "box"]).unwrap(), 3);
     }
 
     #[test]
     fn passes_no_env_without_a_git_protocol() {
         let mut t = test_env(&[]);
         clone_sandbox(&t, "running");
-        t.ctx.vm.runner().interactive_exit(0);
-        sbt(&mut t.ctx, &["_upload-pack", "box"]).unwrap();
-        let calls = t.ctx.vm.runner().interactive_calls();
+        t.runner().interactive_exit(0);
+        t.sbt(&["_upload-pack", "box"]).unwrap();
+        let calls = t.runner().interactive_calls();
         assert!(!calls[0].contains(&"-e".to_string()), "{calls:?}");
     }
 
@@ -205,28 +189,21 @@ mod tests {
         std::fs::remove_file(t.ctx.paths.policy_file()).unwrap();
         t.ctx.stdin_tty = true;
         clone_sandbox(&t, "stopped");
-        let err = sbt(&mut t.ctx, &["_upload-pack", "box"])
-            .unwrap_err()
-            .to_string();
+        let err = t.sbt_err(&["_upload-pack", "box"]);
         assert!(err.contains("sbt policy init"), "{err}");
-        assert!(t.ctx.vm.runner().interactive_calls().is_empty());
+        assert!(t.runner().interactive_calls().is_empty());
         assert!(!called(&t, "machine start"));
     }
 
     #[test]
     fn refuses_a_sandbox_that_isnt_a_clone() {
         let mut t = test_env(&[]);
-        t.ctx.vm.runner().ok(
-            &["machine", "status"],
-            &machine_json(
-                "sbx-box",
-                "running",
-                &[("sbx.name", "box"), ("sbx.workspace", "/w/r")],
-            ),
+        t.machine(
+            "sbx-box",
+            "running",
+            &[("sbx.name", "box"), ("sbx.workspace", "/w/r")],
         );
-        let err = sbt(&mut t.ctx, &["_upload-pack", "box"])
-            .unwrap_err()
-            .to_string();
+        let err = t.sbt_err(&["_upload-pack", "box"]);
         assert!(err.contains("isn't a clone sandbox"), "{err}");
     }
 }

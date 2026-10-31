@@ -81,6 +81,40 @@ impl TestEnv {
             super::Out::Stdout => unreachable!("tests capture stdout"),
         }
     }
+
+    /// The fake smolvm.
+    pub fn runner(&self) -> &FakeRunner {
+        self.ctx.vm.runner()
+    }
+
+    /// The smolvm calls so far, each as one space-joined line.
+    pub fn calls(&self) -> Vec<String> {
+        self.runner().call_lines()
+    }
+
+    /// Runs `sbt ARGS`.
+    pub fn sbt(&mut self, args: &[&str]) -> Result<i32> {
+        sbt(&mut self.ctx, args)
+    }
+
+    /// Runs `sbt ARGS`, which must fail, and returns the error's message.
+    pub fn sbt_err(&mut self, args: &[&str]) -> String {
+        self.sbt(args).unwrap_err().to_string()
+    }
+
+    /// Makes `machine status` answer with `machine` in `state` with `labels`.
+    pub fn machine(&self, machine: &str, state: &str, labels: &[(&str, &str)]) -> &FakeRunner {
+        self.runner().ok(
+            &["machine", "status"],
+            &machine_json(machine, state, labels),
+        )
+    }
+
+    /// Makes `machine status` answer that no machine of that name exists.
+    pub fn no_machine(&self) -> &FakeRunner {
+        self.runner()
+            .fail(&["machine", "status"], "NOT_FOUND", "vm not found")
+    }
 }
 
 /// Replaces config.toml with invalid TOML and reloads the settings as `main` would.
@@ -132,9 +166,7 @@ pub fn v3_kit(t: &TestEnv, dir: &str, descriptor: &str, layers: &[&[u8]]) {
     crate::kits::registry::fixtures::oci_layout(out.path(), Some(descriptor), layers, "{}");
     let mut b = tar::Builder::new(Vec::new());
     b.append_dir_all(".", out.path()).unwrap();
-    t.ctx
-        .vm
-        .runner()
+    t.runner()
         .ok(
             &["machine", "status", "-n", "sbx-_builder"],
             &machine_json(
@@ -162,7 +194,7 @@ pub fn agent_probe(
     if let Some(grant) = grant {
         labels.push(("sbx.ssh-agent", grant));
     }
-    let runner = t.ctx.vm.runner();
+    let runner = t.runner();
     runner.ok(&["machine"], "");
     runner.ok(
         &["machine", "status"],
@@ -190,7 +222,7 @@ pub fn bridge_probe(
     if bridge {
         labels.push(("sbx.bridge", "true"));
     }
-    let runner = t.ctx.vm.runner();
+    let runner = t.runner();
     // Later registrations win: the catch-all goes first.
     runner.ok(&["machine"], "");
     runner.ok(

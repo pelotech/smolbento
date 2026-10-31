@@ -567,7 +567,7 @@ mod tests {
     #[test]
     fn first_build_creates_starts_builds_copies_back_and_stops() {
         let t = test_env(&[]);
-        let fake = t.ctx.vm.runner();
+        let fake = t.runner();
         // `once` replies win over the `ok` until used up: find, plan::create's check, then get.
         fake.ok(&["machine", "status"], &builder_json("created"))
             .once_fail(&["machine", "status"], "NOT_FOUND", "vm not found")
@@ -651,7 +651,7 @@ mod tests {
     #[test]
     fn host_temp_files_are_removed() {
         let t = test_env(&[]);
-        let fake = t.ctx.vm.runner();
+        let fake = t.runner();
         fake.ok(&["machine", "status"], &builder_json("running"))
             .download(&kit_tar());
         let kit = kit_dir();
@@ -668,7 +668,7 @@ mod tests {
     #[test]
     fn a_running_builder_stays_running() {
         let t = test_env(&[]);
-        let fake = t.ctx.vm.runner();
+        let fake = t.runner();
         fake.ok(&["machine", "status"], &builder_json("running"))
             .download(&kit_tar());
         let kit = kit_dir();
@@ -686,7 +686,7 @@ mod tests {
     #[test]
     fn a_stopped_builder_is_started_and_stopped_again() {
         let t = test_env(&[]);
-        let fake = t.ctx.vm.runner();
+        let fake = t.runner();
         fake.ok(&["machine", "status"], &builder_json("stopped"))
             .download(&kit_tar());
         let kit = kit_dir();
@@ -700,7 +700,7 @@ mod tests {
     #[test]
     fn a_second_build_of_the_same_output_reuses_the_cache() {
         let t = test_env(&[]);
-        let fake = t.ctx.vm.runner();
+        let fake = t.runner();
         fake.ok(&["machine", "status"], &builder_json("running"))
             .download(&kit_tar());
         let kit = kit_dir();
@@ -719,7 +719,7 @@ mod tests {
 
     /// A build of `kit_dir()` in the builder `status` describes whose buildx fails with `stderr`.
     fn failing_build_in(t: &TestEnv, status: &str, stderr: &str) -> String {
-        let fake = t.ctx.vm.runner();
+        let fake = t.runner();
         fake.ok(&["machine", "status"], status).on(
             &[
                 "machine",
@@ -774,7 +774,7 @@ mod tests {
             "{err}"
         );
         assert!(!err.contains("#10 step 10"), "{err}");
-        let lines = t.ctx.vm.runner().call_lines();
+        let lines = t.calls();
         let n = build_dir(&lines);
         assert!(lines.iter().any(|l| l.ends_with(&format!("-- rm -rf {n}"))));
         assert_eq!(lines.last().unwrap(), "machine stop -n sbx-_builder");
@@ -828,7 +828,7 @@ mod tests {
     #[test]
     fn dockerd_that_never_answers_times_out_pointing_at_its_log() {
         let t = test_env(&[]);
-        t.ctx.vm.runner().fail(
+        t.runner().fail(
             &[
                 "machine",
                 "exec",
@@ -847,13 +847,13 @@ mod tests {
             .unwrap_err()
             .to_string();
         assert!(err.contains("/var/log/dockerd.log"), "{err}");
-        assert_eq!(t.ctx.vm.runner().calls().len(), 3);
+        assert_eq!(t.runner().calls().len(), 3);
     }
 
     #[test]
     fn dockerd_is_waited_for() {
         let t = test_env(&[]);
-        let fake = t.ctx.vm.runner();
+        let fake = t.runner();
         fake.once_fail(&["machine", "exec"], "UNKNOWN", "not yet");
         wait_for_docker(&t.ctx.vm, "sbx-_builder", 3, Duration::ZERO).unwrap();
         assert_eq!(fake.calls().len(), 2);
@@ -926,7 +926,7 @@ mod tests {
         let mut f = SecretsFile::default();
         f.set(entry);
         f.save(&t.ctx.paths).unwrap();
-        let fake = t.ctx.vm.runner();
+        let fake = t.runner();
         fake.ok(&["machine", "status"], &builder_json("created"))
             .once_fail(&["machine", "status"], "NOT_FOUND", "vm not found")
             .once_fail(&["machine", "status"], "NOT_FOUND", "vm not found")
@@ -952,8 +952,8 @@ mod tests {
     fn the_builder_never_gets_host_access() {
         let mut t = test_env(&[]);
         fs::write(t.ctx.paths.policy_file(), "mode = \"deny-all\"\n").unwrap();
-        sbt(&mut t.ctx, &["policy", "allow", "network", "localhost"]).unwrap();
-        let fake = t.ctx.vm.runner();
+        t.sbt(&["policy", "allow", "network", "localhost"]).unwrap();
+        let fake = t.runner();
         fake.ok(&["machine", "status"], &builder_json("created"))
             .once_fail(&["machine", "status"], "NOT_FOUND", "vm not found")
             .once_fail(&["machine", "status"], "NOT_FOUND", "vm not found")
@@ -1027,7 +1027,7 @@ mod tests {
     fn the_builder_binds_stored_registry_logins_and_starts_with_a_fresh_token() {
         let t = test_env(&[]);
         with_dhi_login(&t);
-        let fake = t.ctx.vm.runner();
+        let fake = t.runner();
         fake.ok(&["machine", "status"], &dhi_builder_json("created"))
             .once_fail(&["machine", "status"], "NOT_FOUND", "vm not found")
             .once_fail(&["machine", "status"], "NOT_FOUND", "vm not found")
@@ -1081,7 +1081,7 @@ mod tests {
     fn a_running_builder_is_restarted_to_take_a_token() {
         let t = test_env(&[]);
         with_dhi_login(&t);
-        let fake = t.ctx.vm.runner();
+        let fake = t.runner();
         fake.ok(&["machine", "status"], &dhi_builder_json("running"))
             .download(&kit_tar());
         let kit = dhi_kit_dir();
@@ -1114,7 +1114,7 @@ mod tests {
     fn a_builder_without_the_stored_registries_is_recreated() {
         let t = test_env(&[]);
         with_dhi_login(&t);
-        let fake = t.ctx.vm.runner();
+        let fake = t.runner();
         fake.ok(&["machine", "status"], &dhi_builder_json("created"))
             // Later registrations answer first: find gets the old builder, create's check none.
             .once_fail(&["machine", "status"], "NOT_FOUND", "vm not found")
@@ -1148,7 +1148,7 @@ mod tests {
             });
         }
         f.save(&t.ctx.paths).unwrap();
-        let fake = t.ctx.vm.runner();
+        let fake = t.runner();
         fake.ok(&["machine", "status"], &builder_json("created"))
             .once_fail(&["machine", "status"], "NOT_FOUND", "vm not found")
             .once_fail(&["machine", "status"], "NOT_FOUND", "vm not found")
@@ -1179,7 +1179,7 @@ mod tests {
     fn a_registry_the_kit_doesnt_pull_from_gets_no_token() {
         let t = test_env(&[]);
         with_dhi_login(&t);
-        let fake = t.ctx.vm.runner();
+        let fake = t.runner();
         fake.ok(&["machine", "status"], &dhi_builder_json("running"))
             .download(&kit_tar());
         let kit = kit_dir();

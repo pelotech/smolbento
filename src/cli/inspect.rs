@@ -123,7 +123,7 @@ mod tests {
         if let Some(i) = image {
             m["image"] = i.into();
         }
-        t.ctx.vm.runner().ok(&["machine", "status"], &m.to_string());
+        t.runner().ok(&["machine", "status"], &m.to_string());
     }
 
     /// A running clone sandbox with kits, a host mount, secrets, a port and one live session.
@@ -171,7 +171,7 @@ mod tests {
     fn table_full() {
         let mut t = test_env(&[]);
         let _s = full(&t);
-        sbt(&mut t.ctx, &["inspect", "claude-proj"]).unwrap();
+        t.sbt(&["inspect", "claude-proj"]).unwrap();
         insta::assert_snapshot!(t.stdout());
     }
 
@@ -179,7 +179,7 @@ mod tests {
     fn table_bare() {
         let mut t = test_env(&[]);
         bare(&t);
-        sbt(&mut t.ctx, &["inspect", "shell-x"]).unwrap();
+        t.sbt(&["inspect", "shell-x"]).unwrap();
         let out = t.stdout();
         // insta ignores leading blank lines; sbx starts with one.
         assert!(out.starts_with("\n  Name:            shell-x\n"), "{out:?}");
@@ -190,7 +190,7 @@ mod tests {
     fn json_full() {
         let mut t = test_env(&[]);
         let _s = full(&t);
-        sbt(&mut t.ctx, &["inspect", "claude-proj", "--json"]).unwrap();
+        t.sbt(&["inspect", "claude-proj", "--json"]).unwrap();
         insta::assert_snapshot!(t.stdout());
     }
 
@@ -198,7 +198,7 @@ mod tests {
     fn json_bare() {
         let mut t = test_env(&[]);
         bare(&t);
-        sbt(&mut t.ctx, &["inspect", "shell-x", "--format", "json"]).unwrap();
+        t.sbt(&["inspect", "shell-x", "--format", "json"]).unwrap();
         insta::assert_snapshot!(t.stdout());
     }
 
@@ -206,7 +206,8 @@ mod tests {
     fn yaml_full() {
         let mut t = test_env(&[]);
         let _s = full(&t);
-        sbt(&mut t.ctx, &["inspect", "claude-proj", "--format", "yaml"]).unwrap();
+        t.sbt(&["inspect", "claude-proj", "--format", "yaml"])
+            .unwrap();
         insta::assert_snapshot!(t.stdout());
     }
 
@@ -214,18 +215,16 @@ mod tests {
     fn yaml_bare() {
         let mut t = test_env(&[]);
         bare(&t);
-        sbt(&mut t.ctx, &["inspect", "shell-x", "--format", "yaml"]).unwrap();
+        t.sbt(&["inspect", "shell-x", "--format", "yaml"]).unwrap();
         insta::assert_snapshot!(t.stdout());
     }
 
     #[test]
     fn not_found() {
         let mut t = test_env(&[]);
-        t.ctx
-            .vm
-            .runner()
+        t.runner()
             .fail(&["machine", "status"], "NOT_FOUND", "machine not found");
-        let err = sbt(&mut t.ctx, &["inspect", "nope"]).unwrap_err();
+        let err = t.sbt(&["inspect", "nope"]).unwrap_err();
         assert_eq!(err.to_string(), "sandbox 'nope' not found (see `sbt ls`)");
         assert_eq!(t.stdout(), "");
     }

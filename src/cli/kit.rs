@@ -243,21 +243,8 @@ fn reference_kind(reference: &str) -> &'static str {
 /// A synthetic preset workload with nothing in it: the existing sandbox's agent for `kit add`.
 fn empty_workload(name: &str) -> Kit {
     Kit {
-        name: name.to_string(),
-        source: Source::Preset(String::new()),
-        digest: None,
-        kind: Kind::Workload,
-        provides: vec![],
-        requires: vec![],
-        integrates: vec![],
-        conflicts: vec![],
-        args: Default::default(),
-        caps: vec![],
-        env: vec![],
         content: Content::Image(String::new()),
-        command: None,
-        config: None,
-        reference: None,
+        ..Kit::new(name, Kind::Workload, Source::Preset(String::new()))
     }
 }
 
@@ -629,7 +616,7 @@ mod tests {
 
     /// `dev` with `labels` besides its name.
     fn dev_sandbox_labeled(t: &TestEnv, state: &str, labels: &[(&str, &str)], record: &str) {
-        let fake = t.ctx.vm.runner();
+        let fake = t.runner();
         let mut all = vec![("sbx.name", "dev")];
         all.extend_from_slice(labels);
         fake.ok(
@@ -686,10 +673,7 @@ mod tests {
     }
 
     fn dev_calls(t: &TestEnv) -> Vec<String> {
-        t.ctx
-            .vm
-            .runner()
-            .call_lines()
+        t.calls()
             .into_iter()
             .filter(|l| l.contains(MACHINE) && !l.contains("machine status"))
             .collect()
@@ -724,7 +708,7 @@ mod tests {
     fn inspect_prints_sbxs_table_then_the_capability_support() {
         let mut t = kit_env();
         v3_kit(&t, "net", NET_KIT, &[]);
-        sbt(&mut t.ctx, &["kit", "inspect", "./net"]).unwrap();
+        t.sbt(&["kit", "inspect", "./net"]).unwrap();
         let out = t.stdout();
         let (head, rest) = out.split_once("Capabilities:\n").expect(&out);
         let template = head.lines().nth(3).unwrap();
@@ -747,7 +731,7 @@ mod tests {
     fn inspect_counts_a_v2_kits_credentials_and_rules() {
         let mut t = kit_env();
         let full = v2_fixture("full");
-        sbt(&mut t.ctx, &["kit", "inspect", &full]).unwrap();
+        t.sbt(&["kit", "inspect", &full]).unwrap();
         let out = t.stdout();
         let head = out.split_once("Capabilities:").expect(&out).0;
         insta::assert_snapshot!(head, @r"
@@ -759,14 +743,15 @@ mod tests {
         Credentials: 2 sources
         Commands: 2 install, 2 startup, 4 init files
         ");
-        assert!(t.ctx.vm.runner().call_lines().is_empty());
+        assert!(t.calls().is_empty());
     }
 
     #[test]
     fn inspect_json_is_the_v2_shaped_document_even_for_v3() {
         let mut t = kit_env();
         let full = v2_fixture("full");
-        sbt(&mut t.ctx, &["kit", "inspect", &full, "--format", "json"]).unwrap();
+        t.sbt(&["kit", "inspect", &full, "--format", "json"])
+            .unwrap();
         let json = t.stdout();
         let v: serde_json::Value = serde_json::from_str(&json).unwrap();
         let keys: Vec<&str> = v.as_object().unwrap().keys().map(String::as_str).collect();
@@ -806,11 +791,11 @@ mod tests {
         // Two `setup.files` plus the two static files under `files/home` and `files/workspace`.
         assert_eq!(v["setup"]["files"].as_array().unwrap().len(), 4);
 
-        sbt(&mut t.ctx, &["kit", "inspect", &full, "--json"]).unwrap();
+        t.sbt(&["kit", "inspect", &full, "--json"]).unwrap();
         assert_eq!(t.stdout(), json, "--json is --format json");
 
         v3_kit(&t, "net", NET_KIT, &[]);
-        sbt(&mut t.ctx, &["kit", "inspect", "./net", "--json"]).unwrap();
+        t.sbt(&["kit", "inspect", "./net", "--json"]).unwrap();
         let v: serde_json::Value = serde_json::from_str(&t.stdout()).unwrap();
         assert_eq!(v["schemaVersion"], "2");
         assert_eq!(v["kind"], "mixin");
@@ -828,9 +813,11 @@ mod tests {
     fn inspect_yaml_carries_the_same_document() {
         let mut t = kit_env();
         let full = v2_fixture("full");
-        sbt(&mut t.ctx, &["kit", "inspect", &full, "--format", "json"]).unwrap();
+        t.sbt(&["kit", "inspect", &full, "--format", "json"])
+            .unwrap();
         let json: serde_json::Value = serde_json::from_str(&t.stdout()).unwrap();
-        sbt(&mut t.ctx, &["kit", "inspect", &full, "--format", "yaml"]).unwrap();
+        t.sbt(&["kit", "inspect", &full, "--format", "yaml"])
+            .unwrap();
         let yaml = t.stdout();
         assert!(yaml.starts_with("schemaVersion: "), "{yaml}");
         let back: serde_json::Value = serde_saphyr::from_str(&yaml).unwrap();
@@ -854,7 +841,7 @@ mod tests {
           {"type":"com.docker.sandbox/credential@1","config":{"service":"other","phase":"runtime","apiKey":{"name":"OTHER_KEY"}}},"#,
         );
         v3_kit(&t, "net", &kit, &[]);
-        sbt(&mut t.ctx, &["kit", "inspect", "./net"]).unwrap();
+        t.sbt(&["kit", "inspect", "./net"]).unwrap();
         let out = t.stdout();
         let tail = out.split_once("Source: ").expect(&out).1;
         let tail: Vec<&str> = tail.lines().collect();
@@ -878,7 +865,7 @@ mod tests {
             "{out}"
         );
 
-        sbt(&mut t.ctx, &["kit", "inspect", "./net", "--json"]).unwrap();
+        t.sbt(&["kit", "inspect", "./net", "--json"]).unwrap();
         let v: serde_json::Value = serde_json::from_str(&t.stdout()).unwrap();
         let x = &v["smolbento"];
         assert_eq!(x["sourceType"], "local v3");
@@ -915,7 +902,7 @@ mod tests {
             if offline == "--offline" {
                 argv.push(offline);
             }
-            assert_eq!(sbt(&mut t.ctx, &argv).unwrap(), 1, "{reference}");
+            assert_eq!(t.sbt(&argv).unwrap(), 1, "{reference}");
             let v: serde_json::Value = serde_json::from_str(&t.stdout()).unwrap();
             assert_eq!(v["reference"], reference);
             assert_eq!(v["kind"], kind);
@@ -932,10 +919,7 @@ mod tests {
             {"type":"com.docker.sandbox/usb-device@1","optional":false}]}"#,
             &[],
         );
-        assert_eq!(
-            sbt(&mut t.ctx, &["kit", "validate", "./odd", "--json"]).unwrap(),
-            1
-        );
+        assert_eq!(t.sbt(&["kit", "validate", "./odd", "--json"]).unwrap(), 1);
         let v: serde_json::Value = serde_json::from_str(&t.stdout()).unwrap();
         assert!(
             v["errors"][0].as_str().unwrap().contains("usb-device"),
@@ -943,11 +927,8 @@ mod tests {
         );
         // yaml, and the plain error for a table.
         assert_eq!(
-            sbt(
-                &mut t.ctx,
-                &["kit", "validate", "./missing", "--format", "yaml"]
-            )
-            .unwrap(),
+            t.sbt(&["kit", "validate", "./missing", "--format", "yaml"])
+                .unwrap(),
             1
         );
         let y = t.stdout();
@@ -957,19 +938,16 @@ mod tests {
         );
         let back: serde_json::Value = serde_saphyr::from_str(&y).unwrap();
         assert_eq!(back["valid"], false);
-        sbt(&mut t.ctx, &["kit", "validate", "./missing"]).unwrap_err();
+        t.sbt(&["kit", "validate", "./missing"]).unwrap_err();
         assert_eq!(t.stdout(), "");
         // A success has no `errors` key.
-        sbt(
-            &mut t.ctx,
-            &[
-                "kit",
-                "validate",
-                &v2_fixture("tool-mixin"),
-                "--format",
-                "yaml",
-            ],
-        )
+        t.sbt(&[
+            "kit",
+            "validate",
+            &v2_fixture("tool-mixin"),
+            "--format",
+            "yaml",
+        ])
         .unwrap();
         assert!(!t.stdout().contains("errors"));
     }
@@ -977,11 +955,9 @@ mod tests {
     #[test]
     fn inspect_rejects_an_unknown_format() {
         let mut t = kit_env();
-        let e = sbt(
-            &mut t.ctx,
-            &["kit", "inspect", &v2_fixture("full"), "--format", "xml"],
-        )
-        .unwrap_err();
+        let e = t
+            .sbt(&["kit", "inspect", &v2_fixture("full"), "--format", "xml"])
+            .unwrap_err();
         assert!(format!("{e:#}").contains("xml"), "{e:#}");
     }
 
@@ -990,48 +966,46 @@ mod tests {
         // Local kits are refused by default: --offline skips that check, as in sbx.
         let mut t = test_env(&[("SMOLBENTO_KIT_ALLOW_LOCAL_KITS", "false")]);
         let full = v2_fixture("full");
-        sbt(&mut t.ctx, &["kit", "inspect", &full]).unwrap_err();
-        sbt(&mut t.ctx, &["kit", "inspect", &full, "--offline"]).unwrap();
+        t.sbt(&["kit", "inspect", &full]).unwrap_err();
+        t.sbt(&["kit", "inspect", &full, "--offline"]).unwrap();
         assert!(t.stdout().starts_with("Name: full-kit"));
         let tool = v2_fixture("tool-mixin");
-        sbt(&mut t.ctx, &["kit", "validate", &tool, "--offline"]).unwrap();
+        t.sbt(&["kit", "validate", &tool, "--offline"]).unwrap();
         // A workload that takes its command from an image would need a registry lookup.
-        let e = sbt(&mut t.ctx, &["kit", "validate", &full, "--offline"]).unwrap_err();
+        let e = t.sbt(&["kit", "validate", &full, "--offline"]).unwrap_err();
         assert!(format!("{e:#}").contains("--offline"), "{e:#}");
 
-        let e = sbt(
-            &mut t.ctx,
-            &["kit", "inspect", "docker.io/x/y:1", "--offline"],
-        )
-        .unwrap_err();
+        let e = t
+            .sbt(&["kit", "inspect", "docker.io/x/y:1", "--offline"])
+            .unwrap_err();
         assert!(format!("{e:#}").contains("--offline"), "{e:#}");
-        let e = sbt(
-            &mut t.ctx,
-            &["kit", "validate", "ghcr.io/x/y:1", "--offline"],
-        )
-        .unwrap_err();
+        let e = t
+            .sbt(&["kit", "validate", "ghcr.io/x/y:1", "--offline"])
+            .unwrap_err();
         assert!(format!("{e:#}").contains("--offline"), "{e:#}");
-        assert!(t.ctx.vm.runner().call_lines().is_empty());
+        assert!(t.calls().is_empty());
     }
 
     #[test]
     fn offline_refuses_a_v3_source_directory_before_building() {
         let mut t = kit_env();
         v3_kit(&t, "net", NET_KIT, &[]);
-        let e = sbt(&mut t.ctx, &["kit", "inspect", "./net", "--offline"]).unwrap_err();
+        let e = t
+            .sbt(&["kit", "inspect", "./net", "--offline"])
+            .unwrap_err();
         let msg = format!("{e:#}");
         assert!(
             msg.contains("--offline") && msg.contains("v3 source kit"),
             "{msg}"
         );
-        assert!(t.ctx.vm.runner().call_lines().is_empty());
+        assert!(t.calls().is_empty());
     }
 
     #[test]
     fn validate_json_reports_the_reference_kind_and_warnings() {
         let mut t = kit_env();
         let tool = v2_fixture("tool-mixin");
-        sbt(&mut t.ctx, &["kit", "validate", &tool, "--json"]).unwrap();
+        t.sbt(&["kit", "validate", &tool, "--json"]).unwrap();
         let v: serde_json::Value = serde_json::from_str(&t.stdout()).unwrap();
         assert_eq!(
             v,
@@ -1045,7 +1019,7 @@ mod tests {
             {"type":"com.docker.sandbox/usb-device@1","optional":true}]}"#,
             &[],
         );
-        sbt(&mut t.ctx, &["kit", "validate", "./odd", "--json"]).unwrap();
+        t.sbt(&["kit", "validate", "./odd", "--json"]).unwrap();
         let v: serde_json::Value = serde_json::from_str(&t.stdout()).unwrap();
         assert_eq!(v["reference"], "./odd");
         assert_eq!(v["kind"], "directory");
@@ -1067,7 +1041,7 @@ mod tests {
                 {"type":"com.docker.sandbox/usb-device@1","optional":true}]}"#,
             &[],
         );
-        sbt(&mut t.ctx, &["kit", "inspect", "./odd"]).unwrap();
+        t.sbt(&["kit", "inspect", "./odd"]).unwrap();
         let out = t.stdout();
         let l = out
             .lines()
@@ -1080,7 +1054,8 @@ mod tests {
     fn validate_prints_ok_or_fails_with_the_error() {
         let mut t = kit_env();
         assert_eq!(
-            sbt(&mut t.ctx, &["kit", "validate", &v2_fixture("tool-mixin")]).unwrap(),
+            t.sbt(&["kit", "validate", &v2_fixture("tool-mixin")])
+                .unwrap(),
             0
         );
         assert_eq!(
@@ -1095,7 +1070,7 @@ mod tests {
         .unwrap();
         let v: serde_json::Value = serde_saphyr::from_str(&yaml).unwrap();
         v3_kit(&t, "bad", &v.to_string(), &[]);
-        let e = sbt(&mut t.ctx, &["kit", "validate", "./bad"]).unwrap_err();
+        let e = t.sbt(&["kit", "validate", "./bad"]).unwrap_err();
         assert!(format!("{e:#}").contains("sise"), "{e:#}");
         assert_eq!(super::super::exit_code(&e), 1);
         assert_eq!(t.stdout(), "");
@@ -1111,21 +1086,15 @@ mod tests {
         .unwrap();
         let v: serde_json::Value = serde_saphyr::from_str(&yaml).unwrap();
         v3_kit(&t, "claude-mixin", &v.to_string(), &[]);
+        assert_eq!(t.sbt(&["kit", "validate", "./claude-mixin"]).unwrap(), 0);
         assert_eq!(
-            sbt(&mut t.ctx, &["kit", "validate", "./claude-mixin"]).unwrap(),
-            0
-        );
-        assert_eq!(
-            sbt(
-                &mut t.ctx,
-                &[
-                    "kit",
-                    "validate",
-                    "./claude-mixin",
-                    "--kit-arg",
-                    "version=2.2.0"
-                ]
-            )
+            t.sbt(&[
+                "kit",
+                "validate",
+                "./claude-mixin",
+                "--kit-arg",
+                "version=2.2.0"
+            ])
             .unwrap(),
             0
         );
@@ -1140,7 +1109,7 @@ mod tests {
             r#"{"schemaVersion":"3","kind":"workload","name":"nocmd"}"#,
             &[],
         );
-        let e = sbt(&mut t.ctx, &["kit", "validate", "./nocmd"]).unwrap_err();
+        let e = t.sbt(&["kit", "validate", "./nocmd"]).unwrap_err();
         assert_eq!(
             format!("{e:#}"),
             "workload kit image declares no ENTRYPOINT or CMD; the image config is the runtime \
@@ -1159,7 +1128,7 @@ mod tests {
             "schemaVersion: \"2\"\nkind: sandbox\nname: noimg\n",
         )
         .unwrap();
-        let e = sbt(&mut t.ctx, &["kit", "validate", "./noimg"]).unwrap_err();
+        let e = t.sbt(&["kit", "validate", "./noimg"]).unwrap_err();
         assert_eq!(
             format!("{e:#}"),
             "workload kit declares no image or command"
@@ -1170,24 +1139,22 @@ mod tests {
     fn validate_accepts_v2_workspace_files() {
         let mut t = kit_env();
         let ws = v2_fixture("workspace-files");
-        assert_eq!(sbt(&mut t.ctx, &["kit", "validate", &ws]).unwrap(), 0);
+        assert_eq!(t.sbt(&["kit", "validate", &ws]).unwrap(), 0);
         assert_eq!(t.stdout(), format!("✓ {ws} — valid\n"));
     }
 
     #[test]
     fn validate_checks_kit_args() {
         let mut t = kit_env();
-        let e = sbt(
-            &mut t.ctx,
-            &[
+        let e = t
+            .sbt(&[
                 "kit",
                 "validate",
                 &v2_fixture("tool-mixin"),
                 "--kit-arg",
                 "nope=1",
-            ],
-        )
-        .unwrap_err();
+            ])
+            .unwrap_err();
         assert!(format!("{e:#}").contains("nope"), "{e:#}");
     }
 
@@ -1202,18 +1169,15 @@ mod tests {
              setup:\n  install:\n    - command: echo ${{ kit.args.opt }}\n",
         )
         .unwrap();
-        let e = sbt(&mut t.ctx, &["kit", "validate", "./chk"]).unwrap_err();
+        let e = t.sbt(&["kit", "validate", "./chk"]).unwrap_err();
         assert_eq!(
             format!("{e:#}"),
             "kit chk: create-phase kit arg \"opt\" has no resolved value; \
              artifact validation failed"
         );
         assert_eq!(
-            sbt(
-                &mut t.ctx,
-                &["kit", "validate", "./chk", "--kit-arg", "opt="]
-            )
-            .unwrap(),
+            t.sbt(&["kit", "validate", "./chk", "--kit-arg", "opt="])
+                .unwrap(),
             0
         );
     }
@@ -1228,7 +1192,9 @@ mod tests {
             r#"{"schemaVersion":"3","kind":"mixin","name":"layered"}"#,
             &[b"layer"],
         );
-        let e = sbt(&mut t.ctx, &["kit", "add", "dev", "./layered", "--yes"]).unwrap_err();
+        let e = t
+            .sbt(&["kit", "add", "dev", "./layered", "--yes"])
+            .unwrap_err();
         assert_eq!(format!("{e:#}"), "recreate required: image layers");
         assert!(dev_calls(&t).is_empty(), "{:#?}", dev_calls(&t));
         assert!(kit_rules(&t).is_empty());
@@ -1245,7 +1211,7 @@ mod tests {
                 {"type":"com.docker.sandbox/host-mount@1","config":{"path":"/home/agent/x"}}]}"#,
             &[],
         );
-        let e = sbt(&mut t.ctx, &["kit", "add", "dev", "./hm", "--yes"]).unwrap_err();
+        let e = t.sbt(&["kit", "add", "dev", "./hm", "--yes"]).unwrap_err();
         assert_eq!(format!("{e:#}"), "recreate required: host mounts");
         assert!(dev_calls(&t).is_empty(), "{:#?}", dev_calls(&t));
     }
@@ -1261,7 +1227,7 @@ mod tests {
                 {"type":"com.docker.sandbox/agent-skill@1","config":{"path":"/usr/share/x/pr"}}]}"#,
             &[],
         );
-        let e = sbt(&mut t.ctx, &["kit", "add", "dev", "./sk", "--yes"]).unwrap_err();
+        let e = t.sbt(&["kit", "add", "dev", "./sk", "--yes"]).unwrap_err();
         assert_eq!(format!("{e:#}"), "recreate required: agent skills");
         assert!(dev_calls(&t).is_empty(), "{:#?}", dev_calls(&t));
     }
@@ -1279,7 +1245,7 @@ mod tests {
                 {"type":"com.docker.sandbox/ssh-agent@1","config":{"phase":"runtime"}}]}"#,
             &[],
         );
-        let e = sbt(&mut t.ctx, &["kit", "add", "dev", "./sa", "--yes"]).unwrap_err();
+        let e = t.sbt(&["kit", "add", "dev", "./sa", "--yes"]).unwrap_err();
         assert_eq!(
             format!("{e:#}"),
             "recreate required: host mounts, SSH agent"
@@ -1291,11 +1257,9 @@ mod tests {
     fn adding_a_mixin_with_ports_and_env_needs_a_recreate() {
         let mut t = kit_env();
         dev_sandbox(&t, BASE);
-        let e = sbt(
-            &mut t.ctx,
-            &["kit", "add", "dev", &v2_fixture("tool-mixin"), "--yes"],
-        )
-        .unwrap_err();
+        let e = t
+            .sbt(&["kit", "add", "dev", &v2_fixture("tool-mixin"), "--yes"])
+            .unwrap_err();
         assert_eq!(
             format!("{e:#}"),
             "recreate required: ports, environment variables"
@@ -1309,7 +1273,7 @@ mod tests {
         set_policy(&t, "mode = \"deny-all\"\n");
         dev_sandbox(&t, BASE);
         v3_kit(&t, "net", NET_KIT, &[]);
-        sbt(&mut t.ctx, &["kit", "add", "dev", "./net", "--yes"]).unwrap();
+        t.sbt(&["kit", "add", "dev", "./net", "--yes"]).unwrap();
         assert!(t.stdout().contains("Added kit net to dev"));
 
         let lines = dev_calls(&t);
@@ -1363,7 +1327,7 @@ mod tests {
         assert_eq!(lines.last(), Some(&lines[started]), "{lines:#?}");
 
         let uploads: std::collections::BTreeMap<String, String> =
-            t.ctx.vm.runner().uploads().into_iter().collect();
+            t.runner().uploads().into_iter().collect();
         let kits = &uploads[&format!("{MACHINE}:{}", guest::KITS_FILE)];
         let net_dir = t.ctx.cwd.join("net").canonicalize().unwrap();
         // The record keeps each provide with its version, for a later `kit add`'s requires.
@@ -1381,8 +1345,7 @@ mod tests {
     /// Whether `script` ran in `dev` as root, inline or copied in.
     fn ran(t: &TestEnv, script: &str) -> bool {
         let inline = format!("machine exec --name {MACHINE} -u root -- sh -c {script}");
-        dev_calls(t).contains(&inline)
-            || t.ctx.vm.runner().uploads().iter().any(|(_, c)| c == script)
+        dev_calls(t).contains(&inline) || t.runner().uploads().iter().any(|(_, c)| c == script)
     }
 
     #[test]
@@ -1399,7 +1362,7 @@ mod tests {
             BASE,
         );
         v3_kit(&t, "net", NET_KIT, &[]);
-        sbt(&mut t.ctx, &["kit", "add", "dev", "./net", "--yes"]).unwrap();
+        t.sbt(&["kit", "add", "dev", "./net", "--yes"]).unwrap();
         let path = "/w/kits-agent-context/net.md";
         assert!(ran(&t, &guest::kit_context_script(path, &["Use net."])));
         let index = guest::kits_index_script("/w/CLAUDE.md", &[("net".into(), path.into())]);
@@ -1416,7 +1379,7 @@ mod tests {
             BASE,
         );
         v3_kit(&t, "net", NET_KIT, &[]);
-        sbt(&mut t.ctx, &["kit", "add", "dev", "./net", "--yes"]).unwrap();
+        t.sbt(&["kit", "add", "dev", "./net", "--yes"]).unwrap();
         let path = "/x/kits-agent-context/net.md";
         let index = guest::kits_index_script("/x/AGENTS.md", &[("net".into(), path.into())]);
         assert!(ran(&t, &index), "{:#?}", dev_calls(&t));
@@ -1439,7 +1402,7 @@ mod tests {
                 BASE,
             );
             v3_kit(&t, "net", NET_KIT, &[]);
-            sbt(&mut t.ctx, &["kit", "add", "dev", "./net", "--yes"]).unwrap();
+            t.sbt(&["kit", "add", "dev", "./net", "--yes"]).unwrap();
             assert_no_net_context(&t);
         }
     }
@@ -1467,7 +1430,7 @@ mod tests {
         dev_sandbox(&t, BASE);
         v3_kit(&t, "net", NET_KIT, &[]);
         let script = Some("/etc/smolbento/startup.d/02-net.sh");
-        t.ctx.vm.runner().on(
+        t.runner().on(
             &[
                 "machine",
                 "exec",
@@ -1485,7 +1448,7 @@ mod tests {
                 ..Default::default()
             },
         );
-        sbt(&mut t.ctx, &["kit", "add", "dev", "./net", "--yes"]).unwrap();
+        t.sbt(&["kit", "add", "dev", "./net", "--yes"]).unwrap();
         assert!(t.stdout().contains("Added kit net to dev"));
         let lines = dev_calls(&t);
         assert!(
@@ -1499,7 +1462,7 @@ mod tests {
         let mut t = kit_env();
         set_policy(&t, "mode = \"deny-all\"\n");
         dev_sandbox(&t, BASE);
-        t.ctx.vm.runner().ok(
+        t.runner().ok(
             &["machine", "status", "-n", MACHINE],
             &machine_json(
                 MACHINE,
@@ -1512,7 +1475,7 @@ mod tests {
             ),
         );
         v3_kit(&t, "net", NET_KIT, &[]);
-        sbt(&mut t.ctx, &["kit", "add", "dev", "./net", "--yes"]).unwrap();
+        t.sbt(&["kit", "add", "dev", "./net", "--yes"]).unwrap();
         let want = format!(
             "machine exec --name {MACHINE} -u root -- sh -c {}",
             install_script().replacen("cd / ", "cd '/x' ", 1)
@@ -1544,7 +1507,7 @@ mod tests {
         policy.save(&t.ctx.paths).unwrap();
         dev_sandbox(&t, BASE);
         v3_kit(&t, "net", NET_KIT, &[]);
-        sbt(&mut t.ctx, &["kit", "add", "dev", "./net", "--yes"]).unwrap();
+        t.sbt(&["kit", "add", "dev", "./net", "--yes"]).unwrap();
 
         let lines = dev_calls(&t);
         let hook = lines
@@ -1567,7 +1530,7 @@ mod tests {
         set_policy(&t, "mode = \"deny-all\"\n");
         dev_sandbox(&t, BASE);
         v3_kit(&t, "net", NET_KIT, &[]);
-        let e = sbt(&mut t.ctx, &["kit", "add", "dev", "./net"]).unwrap_err();
+        let e = t.sbt(&["kit", "add", "dev", "./net"]).unwrap_err();
         assert_eq!(
             format!("{e:#}"),
             "kit add needs --yes to grant network access without a terminal"
@@ -1605,7 +1568,7 @@ mod tests {
                 {"type":"com.docker.sandbox/lifecycle@1","config":{"install":[{"command":"echo hi"}]}}]}"#,
             &[],
         );
-        sbt(&mut t.ctx, &["kit", "add", "dev", "./quiet"]).unwrap();
+        t.sbt(&["kit", "add", "dev", "./quiet"]).unwrap();
         let lines = dev_calls(&t);
         assert!(
             !lines.iter().any(|l| l.starts_with("machine update")),
@@ -1629,7 +1592,7 @@ mod tests {
                 "config":{"install":[{"command":"echo hi"}]}}]}"#,
             &[],
         );
-        sbt(&mut t.ctx, &["kit", "add", "dev", "./forclaude"]).unwrap();
+        t.sbt(&["kit", "add", "dev", "./forclaude"]).unwrap();
     }
 
     #[test]
@@ -1637,14 +1600,14 @@ mod tests {
         let mut t = kit_env();
         dev_sandbox(&t, "net\tghcr.io/acme/net@sha256:01\tnet\n");
         v3_kit(&t, "net", NET_KIT, &[]);
-        let e = sbt(&mut t.ctx, &["kit", "add", "dev", "./net", "--yes"]).unwrap_err();
+        let e = t.sbt(&["kit", "add", "dev", "./net", "--yes"]).unwrap_err();
         assert_eq!(format!("{e:#}"), "kit net is already in dev");
 
         // No base kit: a missing record is no kits, and `requires: base` is unmet.
         let mut t = kit_env();
         dev_sandbox(&t, "");
         v3_kit(&t, "net", NET_KIT, &[]);
-        let e = sbt(&mut t.ctx, &["kit", "add", "dev", "./net", "--yes"]).unwrap_err();
+        let e = t.sbt(&["kit", "add", "dev", "./net", "--yes"]).unwrap_err();
         assert_eq!(
             format!("{e:#}"),
             "resolve: the kit set is not coherent:\n  - ./net requires \"base\" but nothing in \
@@ -1660,7 +1623,7 @@ mod tests {
         let mut t = kit_env();
         dev_sandbox(&t, BASE);
         v3_kit(&t, "net", &kit, &[]);
-        let e = sbt(&mut t.ctx, &["kit", "add", "dev", "./net", "--yes"]).unwrap_err();
+        let e = t.sbt(&["kit", "add", "dev", "./net", "--yes"]).unwrap_err();
         assert_eq!(
             format!("{e:#}"),
             "resolve: the kit set is not coherent:\n  - ./net requires \"base >= 2, < 3\" but the \
@@ -1670,7 +1633,7 @@ mod tests {
         let mut t = kit_env();
         dev_sandbox(&t, "base\tghcr.io/acme/base@sha256:00\tbase@2.4.1\n");
         v3_kit(&t, "net", &kit, &[]);
-        sbt(&mut t.ctx, &["kit", "add", "dev", "./net", "--yes"]).unwrap();
+        t.sbt(&["kit", "add", "dev", "./net", "--yes"]).unwrap();
     }
 
     #[test]
@@ -1681,7 +1644,7 @@ mod tests {
             r#""requires":["base > 2.1, < 3","com.example/tool = 1.4"]"#,
         );
         v3_kit(&t, "net", &kit, &[]);
-        assert_eq!(sbt(&mut t.ctx, &["kit", "validate", "./net"]).unwrap(), 0);
+        assert_eq!(t.sbt(&["kit", "validate", "./net"]).unwrap(), 0);
         assert_eq!(t.stdout(), "✓ ./net — valid\n");
     }
 
@@ -1689,11 +1652,9 @@ mod tests {
     fn add_refuses_a_workload_kit() {
         let mut t = kit_env();
         dev_sandbox(&t, BASE);
-        let e = sbt(
-            &mut t.ctx,
-            &["kit", "add", "dev", &v2_fixture("tool-workload"), "--yes"],
-        )
-        .unwrap_err();
+        let e = t
+            .sbt(&["kit", "add", "dev", &v2_fixture("tool-workload"), "--yes"])
+            .unwrap_err();
         assert!(format!("{e:#}").contains("not a mixin"), "{e:#}");
     }
 
@@ -1715,7 +1676,7 @@ mod tests {
         policy.save(&t.ctx.paths).unwrap();
         dev_sandbox(&t, BASE);
         v3_kit(&t, "net", NET_KIT, &[]);
-        t.ctx.vm.runner().fail(
+        t.runner().fail(
             &[
                 "machine",
                 "exec",
@@ -1731,7 +1692,7 @@ mod tests {
             "exec",
             "apt broke",
         );
-        let e = sbt(&mut t.ctx, &["kit", "add", "dev", "./net", "--yes"]).unwrap_err();
+        let e = t.sbt(&["kit", "add", "dev", "./net", "--yes"]).unwrap_err();
         let m = format!("{e:#}");
         assert!(
             m.starts_with("kit add failed; nothing was kept, but install hooks may have changed")
@@ -1768,11 +1729,9 @@ mod tests {
         set_policy(&t, "mode = \"deny-all\"\n");
         dev_sandbox(&t, BASE);
         v3_kit(&t, "net", NET_KIT, &[]);
-        t.ctx
-            .vm
-            .runner()
+        t.runner()
             .once_fail(&["machine", "update", "-n", MACHINE], "net", "no route");
-        let e = sbt(&mut t.ctx, &["kit", "add", "dev", "./net", "--yes"]).unwrap_err();
+        let e = t.sbt(&["kit", "add", "dev", "./net", "--yes"]).unwrap_err();
         let m = format!("{e:#}");
         assert!(
             m.starts_with("kit add failed; nothing was kept: ") && !m.contains("install hooks"),
@@ -1798,7 +1757,7 @@ mod tests {
             &[],
         );
         // The startup files' `mkdir`, the first write.
-        t.ctx.vm.runner().fail(
+        t.runner().fail(
             &[
                 "machine",
                 "exec",
@@ -1814,7 +1773,7 @@ mod tests {
             "exec",
             "disk full",
         );
-        let e = sbt(&mut t.ctx, &["kit", "add", "dev", "./quiet"]).unwrap_err();
+        let e = t.sbt(&["kit", "add", "dev", "./quiet"]).unwrap_err();
         let m = format!("{e:#}");
         assert!(
             m.starts_with("kit add failed; files it wrote may remain: ") && !m.contains("rules"),
@@ -1829,9 +1788,9 @@ mod tests {
         let record = format!("{BASE}odd\n\tno-name\tx\nloose\tunpinned-ref\tl\n");
         dev_sandbox(&t, &record);
         v3_kit(&t, "net", NET_KIT, &[]);
-        sbt(&mut t.ctx, &["kit", "add", "dev", "./net", "--yes"]).unwrap();
+        t.sbt(&["kit", "add", "dev", "./net", "--yes"]).unwrap();
         let uploads: std::collections::BTreeMap<String, String> =
-            t.ctx.vm.runner().uploads().into_iter().collect();
+            t.runner().uploads().into_iter().collect();
         let kits = &uploads[&format!("{MACHINE}:{}", guest::KITS_FILE)];
         let net_dir = t.ctx.cwd.join("net").canonicalize().unwrap();
         assert_eq!(
@@ -1846,7 +1805,7 @@ mod tests {
         set_policy(&t, "mode = \"deny-all\"\n");
         dev_sandbox_in(&t, "stopped", BASE);
         v3_kit(&t, "net", NET_KIT, &[]);
-        let e = sbt(&mut t.ctx, &["kit", "add", "dev", "./net"]).unwrap_err();
+        let e = t.sbt(&["kit", "add", "dev", "./net"]).unwrap_err();
         assert_eq!(
             format!("{e:#}"),
             "kit add needs --yes to grant network access without a terminal\n\

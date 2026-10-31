@@ -244,7 +244,7 @@ mod tests {
             ("sbx.docker", "true"),
         ];
         labels.extend_from_slice(extra);
-        let r = t.ctx.vm.runner();
+        let r = t.runner();
         r.ok(
             &["machine", "status", "-n", "sbx-a"],
             &machine_json("sbx-a", state, &labels),
@@ -262,7 +262,7 @@ mod tests {
     #[test]
     fn save_packs_a_stopped_sandbox() {
         let mut t = env_with_sandbox("stopped", &[]);
-        sbt(&mut t.ctx, &["template", "save", "a", "chk-tpl:v1"]).unwrap();
+        t.sbt(&["template", "save", "a", "chk-tpl:v1"]).unwrap();
         let out = t.stdout();
         assert!(
             out.ends_with("Saved template docker.io/library/chk-tpl:v1\n"),
@@ -294,7 +294,7 @@ mod tests {
     #[test]
     fn a_bare_name_is_latest() {
         let mut t = env_with_sandbox("stopped", &[]);
-        sbt(&mut t.ctx, &["template", "save", "a", "chk-tpl"]).unwrap();
+        t.sbt(&["template", "save", "a", "chk-tpl"]).unwrap();
         assert!(
             t.stdout()
                 .ends_with("Saved template docker.io/library/chk-tpl:latest\n")
@@ -304,29 +304,18 @@ mod tests {
     #[test]
     fn a_running_sandbox_without_a_terminal_is_refused() {
         let mut t = env_with_sandbox("running", &[]);
-        let err = sbt(&mut t.ctx, &["template", "save", "a", "t"])
-            .unwrap_err()
-            .to_string();
+        let err = t.sbt_err(&["template", "save", "a", "t"]);
         assert_eq!(
             err,
             "cannot save a running sandbox; stop it first with:\n  try: sbt stop a"
         );
-        assert!(
-            !t.ctx
-                .vm
-                .runner()
-                .call_lines()
-                .iter()
-                .any(|l| l.starts_with("pack"))
-        );
+        assert!(!t.calls().iter().any(|l| l.starts_with("pack")));
     }
 
     #[test]
     fn a_template_sandbox_is_refused() {
         let mut t = env_with_sandbox("stopped", &[("sbx.template", "docker.io/library/t:v1")]);
-        let err = sbt(&mut t.ctx, &["template", "save", "a", "t2"])
-            .unwrap_err()
-            .to_string();
+        let err = t.sbt_err(&["template", "save", "a", "t2"]);
         assert_eq!(
             err,
             "cannot save a: it was created from template docker.io/library/t:v1, and smolvm \
@@ -337,14 +326,12 @@ mod tests {
     #[test]
     fn a_kit_workload_sandbox_is_refused_before_any_pack() {
         let mut t = env_with_sandbox("running", &[("sbx.agent", "my-kit")]);
-        let err = sbt(&mut t.ctx, &["template", "save", "a", "t2"])
-            .unwrap_err()
-            .to_string();
+        let err = t.sbt_err(&["template", "save", "a", "t2"]);
         assert_eq!(
             err,
             "cannot save a: templates of kit workload sandboxes aren't supported yet"
         );
-        let calls = t.ctx.vm.runner().call_lines();
+        let calls = t.calls();
         assert!(!calls.iter().any(|l| l.starts_with("pack")), "{calls:?}");
         assert!(!calls.iter().any(|l| l.contains("stop")), "{calls:?}");
     }
@@ -360,7 +347,8 @@ mod tests {
             serde_json::from_str(&std::fs::read_to_string(&idx).unwrap()).unwrap();
         v["templates"][1]["id"] = format!("{}ffff", &a.id[..8]).into();
         std::fs::write(&idx, v.to_string()).unwrap();
-        let err = sbt(&mut t.ctx, &["template", "rm", "-f", &a.id[..6]])
+        let err = t
+            .sbt(&["template", "rm", "-f", &a.id[..6]])
             .unwrap_err()
             .to_string();
         let n = &a.id[..6];
@@ -378,11 +366,8 @@ mod tests {
         let mut t = env_with_sandbox("stopped", &[]);
         let file = t.ctx.cwd.join("t.tar");
         let f = file.to_str().unwrap();
-        sbt(
-            &mut t.ctx,
-            &["template", "save", "a", "t:v1", "--output", f],
-        )
-        .unwrap();
+        t.sbt(&["template", "save", "a", "t:v1", "--output", f])
+            .unwrap();
         let out = t.stdout();
         let want = format!("Exported image to {f}\nSaved template docker.io/library/t:v1\n");
         assert!(out.ends_with(&want), "{out}");
@@ -392,11 +377,8 @@ mod tests {
     #[test]
     fn a_failed_pack_leaves_no_template() {
         let mut t = env_with_sandbox("stopped", &[]);
-        t.ctx
-            .vm
-            .runner()
-            .fail(&["pack", "create"], "AGENT", "timed out");
-        assert!(sbt(&mut t.ctx, &["template", "save", "a", "t"]).is_err());
+        t.runner().fail(&["pack", "create"], "AGENT", "timed out");
+        assert!(t.sbt(&["template", "save", "a", "t"]).is_err());
         let store = Store::new(&t.ctx.paths);
         assert!(store.list().unwrap().is_empty());
         let left: Vec<_> = std::fs::read_dir(&store.dir).unwrap().collect();
@@ -430,7 +412,7 @@ mod tests {
     fn ls_table_json_and_quiet() {
         let mut t = test_env(&[]);
         let e = with_template(&t, "chk-tpl:v1");
-        sbt(&mut t.ctx, &["template", "ls"]).unwrap();
+        t.sbt(&["template", "ls"]).unwrap();
         let out = t.stdout();
         let mut lines = out.lines();
         let header = lines.next().unwrap();
@@ -444,7 +426,7 @@ mod tests {
             row.contains(&e.id) && row.contains("shell") && row.contains("10s"),
             "{row}"
         );
-        sbt(&mut t.ctx, &["template", "ls", "--json"]).unwrap();
+        t.sbt(&["template", "ls", "--json"]).unwrap();
         let v: serde_json::Value = serde_json::from_str(&t.stdout()).unwrap();
         assert_eq!(
             v,
@@ -452,7 +434,7 @@ mod tests {
                 "tag": "v1", "flavor": "shell", "created_at": "1970-01-12T13:46:30Z",
                 "size": e.size}])
         );
-        sbt(&mut t.ctx, &["template", "ls", "-q"]).unwrap();
+        t.sbt(&["template", "ls", "-q"]).unwrap();
         assert_eq!(t.stdout(), "docker.io/library/chk-tpl:v1\n");
     }
 
@@ -460,14 +442,12 @@ mod tests {
     fn rm_needs_force_without_a_terminal() {
         let mut t = test_env(&[]);
         with_template(&t, "t:v1");
-        let err = sbt(&mut t.ctx, &["template", "rm", "t:v1"])
-            .unwrap_err()
-            .to_string();
+        let err = t.sbt_err(&["template", "rm", "t:v1"]);
         assert_eq!(
             err,
             "stdin is not a terminal; pass --force to skip the confirmation\n  try: sbt template rm --force"
         );
-        sbt(&mut t.ctx, &["template", "rm", "-f", "t:v1"]).unwrap();
+        t.sbt(&["template", "rm", "-f", "t:v1"]).unwrap();
         assert_eq!(t.stdout(), "Removed template t:v1\n");
         assert!(Store::new(&t.ctx.paths).list().unwrap().is_empty());
     }
@@ -476,7 +456,8 @@ mod tests {
     fn rm_by_id_prefix_and_json() {
         let mut t = test_env(&[]);
         let e = with_template(&t, "t:v2");
-        sbt(&mut t.ctx, &["template", "rm", "-f", "--json", &e.id[..6]]).unwrap();
+        t.sbt(&["template", "rm", "-f", "--json", &e.id[..6]])
+            .unwrap();
         let v: serde_json::Value = serde_json::from_str(&t.stdout()).unwrap();
         assert_eq!(
             v,
@@ -487,9 +468,7 @@ mod tests {
     #[test]
     fn rm_missing() {
         let mut t = test_env(&[]);
-        let err = sbt(&mut t.ctx, &["template", "rm", "-f", "t:nope"])
-            .unwrap_err()
-            .to_string();
+        let err = t.sbt_err(&["template", "rm", "-f", "t:nope"]);
         assert_eq!(
             err,
             "cannot remove template \"t:nope\": no template \"t:nope\"\n  try: sbt template ls"
@@ -505,7 +484,7 @@ mod tests {
         store.export(&e, &file).unwrap();
         store.remove(&e).unwrap();
         let f = file.to_str().unwrap();
-        sbt(&mut t.ctx, &["template", "load", f]).unwrap();
+        t.sbt(&["template", "load", f]).unwrap();
         assert!(t.stdout().ends_with(&format!("Loaded image from {f}\n")));
         assert_eq!(store.list().unwrap(), vec![e]);
     }
@@ -513,9 +492,7 @@ mod tests {
     #[test]
     fn load_refuses_a_name() {
         let mut t = test_env(&[]);
-        let err = sbt(&mut t.ctx, &["template", "load", "x.tar", "name"])
-            .unwrap_err()
-            .to_string();
+        let err = t.sbt_err(&["template", "load", "x.tar", "name"]);
         assert_eq!(
             err,
             "'template load' (local) takes one argument (FILE)\n  try: sbt template load --help"

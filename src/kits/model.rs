@@ -67,6 +67,27 @@ pub struct Kit {
 }
 
 impl Kit {
+    /// A kit with nothing in it but its name, kind and source; set the rest with `..Kit::new(..)`.
+    pub fn new(name: &str, kind: Kind, source: Source) -> Kit {
+        Kit {
+            name: name.into(),
+            source,
+            digest: None,
+            kind,
+            provides: vec![],
+            requires: vec![],
+            integrates: vec![],
+            conflicts: vec![],
+            args: BTreeMap::new(),
+            caps: vec![],
+            env: vec![],
+            content: Content::None,
+            command: None,
+            config: None,
+            reference: None,
+        }
+    }
+
     /// How messages name the kit: its reference as typed, else its name.
     pub fn label(&self) -> &str {
         self.reference.as_deref().unwrap_or(&self.name)

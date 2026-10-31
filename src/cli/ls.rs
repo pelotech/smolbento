@@ -221,16 +221,16 @@ mod tests {
 
     #[test]
     fn internal_sandboxes_are_hidden() {
-        use super::super::testutil::{machine_json, sbt, test_env};
+        use super::super::testutil::{machine_json, test_env};
         let mut t = test_env(&[]);
         let ls = format!(
             "[{},{}]",
             machine_json("sbx-_builder", "stopped", &[("sbx.name", "_builder")]),
             machine_json("sbx-a1", "stopped", &[("sbx.name", "a1")]),
         );
-        t.ctx.vm.runner().ok(&["machine", "ls", "--json"], &ls);
+        t.runner().ok(&["machine", "ls", "--json"], &ls);
         for args in [&["ls"][..], &["ls", "-q"], &["ls", "--json"]] {
-            sbt(&mut t.ctx, args).unwrap();
+            t.sbt(args).unwrap();
             let out = t.stdout();
             assert!(out.contains("a1"), "{out}");
             assert!(!out.contains("_builder"), "{args:?}: {out}");

@@ -199,28 +199,15 @@ pub fn expand(
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::kits::model::{Content, Kind, Source};
+    use crate::kits::model::{Kind, Source};
 
     fn kit(name: &str, args: &[(&str, ArgDef)]) -> Kit {
         Kit {
-            name: name.into(),
-            source: Source::Registry(name.into()),
-            digest: None,
-            kind: Kind::Mixin,
-            provides: vec![],
-            requires: vec![],
-            integrates: vec![],
-            conflicts: vec![],
             args: args
                 .iter()
                 .map(|(n, d)| (n.to_string(), d.clone()))
                 .collect(),
-            caps: vec![],
-            env: vec![],
-            content: Content::None,
-            command: None,
-            config: None,
-            reference: None,
+            ..Kit::new(name, Kind::Mixin, Source::Registry(name.into()))
         }
     }
 

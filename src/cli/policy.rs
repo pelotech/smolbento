@@ -848,14 +848,9 @@ mod tests {
 
     fn running(t: &TestEnv, labels: &[(&str, &str)]) {
         let m = machine_json("sbx-a1", "running", labels);
-        t.ctx
-            .vm
-            .runner()
+        t.runner()
             .ok(&["machine", "ls", "--json"], &format!("[{m}]"));
-        t.ctx
-            .vm
-            .runner()
-            .ok(&["machine", "status", "-n", "sbx-a1"], &m);
+        t.runner().ok(&["machine", "status", "-n", "sbx-a1"], &m);
     }
 
     fn ls(p: &Policy, opts: LsOpts) -> String {
@@ -886,10 +881,7 @@ mod tests {
     }
 
     fn updates(t: &TestEnv) -> Vec<String> {
-        t.ctx
-            .vm
-            .runner()
-            .call_lines()
+        t.calls()
             .into_iter()
             .filter(|l| l.contains("machine update"))
             .collect()
@@ -899,7 +891,7 @@ mod tests {
     fn init_saves_and_pushes() {
         let mut t = test_env(&[]);
         running(&t, &[("sbx.name", "a1")]);
-        sbt(&mut t.ctx, &["policy", "init", "deny-all"]).unwrap();
+        t.sbt(&["policy", "init", "deny-all"]).unwrap();
         assert_eq!(
             Policy::load(&t.ctx.paths).unwrap().mode,
             Some(Mode::DenyAll)
@@ -918,28 +910,20 @@ mod tests {
         let mut t = test_env(&[]);
         set_policy(&t, "mode = \"deny-all\"");
         running(&t, &[("sbx.name", "a1")]);
-        sbt(
-            &mut t.ctx,
-            &["policy", "allow", "network", "api.x.com,*.npmjs.org"],
-        )
-        .unwrap();
+        t.sbt(&["policy", "allow", "network", "api.x.com,*.npmjs.org"])
+            .unwrap();
         let last = updates(&t).pop().unwrap();
         assert!(
             last.contains("--allow-host-pattern api.x.com")
                 && last.contains("--allow-host-pattern *.npmjs.org"),
             "{last}"
         );
-        sbt(
-            &mut t.ctx,
-            &["policy", "rm", "network", "--resource", "api.x.com"],
-        )
-        .unwrap();
+        t.sbt(&["policy", "rm", "network", "--resource", "api.x.com"])
+            .unwrap();
         assert!(!updates(&t).pop().unwrap().contains("api.x.com"));
-        let err = sbt(
-            &mut t.ctx,
-            &["policy", "rm", "network", "--resource", "nope.com"],
-        )
-        .unwrap_err();
+        let err = t
+            .sbt(&["policy", "rm", "network", "--resource", "nope.com"])
+            .unwrap_err();
         assert!(err.to_string().contains("no matching"), "{err}");
     }
 
@@ -962,12 +946,12 @@ mod tests {
         });
         f.save(&t.ctx.paths).unwrap();
         for deny in ["api.github.com", "foo.api.github.com"] {
-            let err = sbt(&mut t.ctx, &["policy", "deny", "network", deny]).unwrap_err();
+            let err = t.sbt(&["policy", "deny", "network", deny]).unwrap_err();
             assert!(err.to_string().contains("github secret"), "{deny}: {err}");
         }
         // Never applied, so accepted (with a stderr note).
         for deny in ["api.github.com:8080", "foo.api.github.com:8080"] {
-            sbt(&mut t.ctx, &["policy", "deny", "network", deny]).unwrap();
+            t.sbt(&["policy", "deny", "network", deny]).unwrap();
         }
     }
 
@@ -983,13 +967,13 @@ mod tests {
             ],
         );
         for deny in ["api.notion.com", "**.notion.com", "*.notion.com"] {
-            let err = sbt(&mut t.ctx, &["policy", "deny", "network", deny]).unwrap_err();
+            let err = t.sbt(&["policy", "deny", "network", deny]).unwrap_err();
             let msg = err.to_string();
             // No secrets.toml entry names the service, so the message falls back to "a secret".
             assert!(msg.contains("can't deny *.notion.com"), "{err}");
             assert!(msg.contains("has a secret bound to it"), "{err}");
         }
-        sbt(&mut t.ctx, &["policy", "deny", "network", "notion.com"]).unwrap();
+        t.sbt(&["policy", "deny", "network", "notion.com"]).unwrap();
     }
 
     #[test]
@@ -997,11 +981,12 @@ mod tests {
         let mut t = test_env(&[]);
         set_policy(&t, "mode = \"balanced\"");
         assert_eq!(
-            sbt(&mut t.ctx, &["policy", "check", "network", "pypi.org"]).unwrap(),
+            t.sbt(&["policy", "check", "network", "pypi.org"]).unwrap(),
             0
         );
         assert_eq!(
-            sbt(&mut t.ctx, &["policy", "check", "network", "example.com"]).unwrap(),
+            t.sbt(&["policy", "check", "network", "example.com"])
+                .unwrap(),
             1
         );
     }
@@ -1070,10 +1055,11 @@ mod tests {
         let mut t = test_env(&[]);
         p.save(&t.ctx.paths).unwrap();
         assert_eq!(
-            sbt(&mut t.ctx, &["policy", "ls", "--decision", "deny", "-q"]).unwrap(),
+            t.sbt(&["policy", "ls", "--decision", "deny", "-q"])
+                .unwrap(),
             0
         );
-        assert!(sbt(&mut t.ctx, &["policy", "ls", "--decision", "maybe"]).is_err());
+        assert!(t.sbt(&["policy", "ls", "--decision", "maybe"]).is_err());
         for flag in [
             &["--created-via", "added"][..],
             &["--type", "network"],
@@ -1081,7 +1067,7 @@ mod tests {
             &["--include-inactive"],
         ] {
             let args: Vec<&str> = ["policy", "ls"].iter().chain(flag).copied().collect();
-            let err = sbt(&mut t.ctx, &args).unwrap_err();
+            let err = t.sbt(&args).unwrap_err();
             assert_eq!(super::super::exit_code(&err), 2, "{flag:?}: {err}");
             assert!(err.to_string().contains("not implemented yet"), "{err}");
         }
@@ -1115,7 +1101,7 @@ mod tests {
         p.add_kit_rules("my-sb", "gh", &install, true).unwrap();
         p.save(&t.ctx.paths).unwrap();
         let mut out = |args: &[&str]| {
-            sbt(&mut t.ctx, args).unwrap();
+            t.sbt(args).unwrap();
             t.stdout()
         };
         // One aggregated rule per sandbox, like sbx: runtime hosts only (install-phase hosts are
@@ -1156,32 +1142,27 @@ mod tests {
             !org.contains("user.com") && !org.contains("kit.com"),
             "{org}"
         );
-        assert!(sbt(&mut t.ctx, &["policy", "ls", "--source", "x"]).is_err());
+        assert!(t.sbt(&["policy", "ls", "--source", "x"]).is_err());
     }
 
     #[test]
     fn check_refuses_other_protocols_and_accepts_verbose() {
         let mut t = test_env(&[]);
-        let err = sbt(
-            &mut t.ctx,
-            &["policy", "check", "network", "x.com", "--protocol", "udp"],
-        )
-        .unwrap_err();
+        let err = t
+            .sbt(&["policy", "check", "network", "x.com", "--protocol", "udp"])
+            .unwrap_err();
         assert_eq!(super::super::exit_code(&err), 2);
         assert_eq!(
-            sbt(
-                &mut t.ctx,
-                &[
-                    "policy",
-                    "check",
-                    "network",
-                    "x.com",
-                    "--protocol",
-                    "tcp",
-                    "--verbose"
-                ],
-            )
-            .unwrap(),
+            t.sbt(&[
+                "policy",
+                "check",
+                "network",
+                "x.com",
+                "--protocol",
+                "tcp",
+                "--verbose"
+            ],)
+                .unwrap(),
             0
         );
     }
@@ -1189,20 +1170,15 @@ mod tests {
     #[test]
     fn reset_needs_force_and_refresh_is_unsupported() {
         let mut t = test_env(&[]);
-        assert!(
-            sbt(&mut t.ctx, &["policy", "reset"])
-                .unwrap_err()
-                .to_string()
-                .contains("pass -f")
-        );
-        sbt(&mut t.ctx, &["policy", "reset", "-f"]).unwrap();
+        assert!(t.sbt_err(&["policy", "reset"]).contains("pass -f"));
+        t.sbt(&["policy", "reset", "-f"]).unwrap();
         assert_eq!(Policy::load(&t.ctx.paths).unwrap(), Policy::default());
         set_policy(
             &t,
             "mode = \"allow-all\"\n[[rules]]\nid = \"r-1\"\ndecision = \"allow\"\n\
              resources = [\"a.com\"]\n[sandboxes.a1]\ndeny_network = true\n",
         );
-        sbt(&mut t.ctx, &["policy", "reset", "-f"]).unwrap();
+        t.sbt(&["policy", "reset", "-f"]).unwrap();
         let p = Policy::load(&t.ctx.paths).unwrap();
         assert!(p.mode.is_none() && p.rules.is_empty(), "{p:?}");
         assert!(p.sandboxes["a1"].deny_network);
@@ -1210,7 +1186,7 @@ mod tests {
             compile::network(&p, "a1", &[], false),
             crate::smolvm::NetworkSpec::Restricted(_)
         ));
-        let err = sbt(&mut t.ctx, &["policy", "refresh"]).unwrap_err();
+        let err = t.sbt(&["policy", "refresh"]).unwrap_err();
         assert_eq!(super::super::exit_code(&err), 2);
     }
 
@@ -1218,20 +1194,14 @@ mod tests {
     fn reset_stops_running_sandboxes() {
         let mut t = test_env(&[]);
         running(&t, &[("sbx.name", "a1")]);
-        sbt(&mut t.ctx, &["policy", "reset", "-f"]).unwrap();
-        assert!(
-            t.ctx
-                .vm
-                .runner()
-                .call_lines()
-                .contains(&"machine stop -n sbx-a1".to_string())
-        );
+        t.sbt(&["policy", "reset", "-f"]).unwrap();
+        assert!(t.calls().contains(&"machine stop -n sbx-a1".to_string()));
         assert_eq!(Policy::load(&t.ctx.paths).unwrap().mode, None);
     }
 
     fn blocked(t: &TestEnv) {
         running(t, &[("sbx.name", "a1")]);
-        t.ctx.vm.runner().ok(
+        t.runner().ok(
             &["machine", "egress-events"],
             r#"[{"timestamp":"2026-10-26T10:00:00Z","operation":"resolve","dest":"example.com"},
                 {"timestamp":"2026-10-26T11:00:00Z","operation":"resolve","dest":"example.com"}]"#,
@@ -1242,15 +1212,14 @@ mod tests {
     fn log_lists_blocked_hosts() {
         let mut t = test_env(&[]);
         blocked(&t);
-        assert_eq!(sbt(&mut t.ctx, &["policy", "log"]).unwrap(), 0);
+        assert_eq!(t.sbt(&["policy", "log"]).unwrap(), 0);
         assert!(
-            t.ctx
-                .vm
-                .runner()
-                .call_lines()
+            t.calls()
                 .contains(&"machine egress-events --name sbx-a1 --json --limit 50".to_string())
         );
-        let err = sbt(&mut t.ctx, &["policy", "log", "--type", "filesystem"]).unwrap_err();
+        let err = t
+            .sbt(&["policy", "log", "--type", "filesystem"])
+            .unwrap_err();
         assert_eq!(super::super::exit_code(&err), 2);
     }
 
@@ -1259,18 +1228,15 @@ mod tests {
         let mut t = test_env(&[]);
         set_policy(&t, "mode = \"deny-all\"");
         blocked(&t);
-        sbt(
-            &mut t.ctx,
-            &[
-                "policy",
-                "approval",
-                "respond",
-                "example.com",
-                "allow",
-                "--sandbox",
-                "a1",
-            ],
-        )
+        t.sbt(&[
+            "policy",
+            "approval",
+            "respond",
+            "example.com",
+            "allow",
+            "--sandbox",
+            "a1",
+        ])
         .unwrap();
         let p = Policy::load(&t.ctx.paths).unwrap();
         let rule = &p.sandboxes["a1"].rules[0];
@@ -1284,11 +1250,9 @@ mod tests {
                 .unwrap()
                 .contains("--allow-host-pattern example.com")
         );
-        let err = sbt(
-            &mut t.ctx,
-            &["policy", "approval", "inspect", "nothing.com"],
-        )
-        .unwrap_err();
+        let err = t
+            .sbt(&["policy", "approval", "inspect", "nothing.com"])
+            .unwrap_err();
         assert!(err.to_string().contains("no blocked request"), "{err}");
     }
 
@@ -1297,20 +1261,15 @@ mod tests {
         let mut t = test_env(&[]);
         set_policy(&t, "mode = \"deny-all\"");
         blocked(&t);
-        let err = sbt(
-            &mut t.ctx,
-            &[
-                "policy",
-                "approval",
-                "respond",
-                "example.com",
-                "allow",
-                "--sandbox",
-                "b2",
-            ],
-        )
-        .unwrap_err()
-        .to_string();
+        let err = t.sbt_err(&[
+            "policy",
+            "approval",
+            "respond",
+            "example.com",
+            "allow",
+            "--sandbox",
+            "b2",
+        ]);
         assert!(err.contains("b2") && err.contains("blocked in a1"), "{err}");
         let p = Policy::load(&t.ctx.paths).unwrap();
         assert!(p.sandboxes.is_empty() && p.rules.is_empty());
@@ -1440,18 +1399,16 @@ mod tests {
                 ("sbx.credential-hosts", "api.github.com"),
             ],
         );
-        let code = sbt(
-            &mut t.ctx,
-            &[
+        let code = t
+            .sbt(&[
                 "policy",
                 "check",
                 "network",
                 "api.github.com",
                 "--sandbox",
                 "a1",
-            ],
-        )
-        .unwrap();
+            ])
+            .unwrap();
         assert_eq!(code, 0);
     }
 
@@ -1495,8 +1452,8 @@ mod tests {
         let empty = ls(&Policy::default(), json_opts());
         assert_eq!(empty, "[]\n");
         let mut t = test_env(&[]);
-        assert_eq!(sbt(&mut t.ctx, &["policy", "ls", "--json"]).unwrap(), 0);
-        assert_eq!(sbt(&mut t.ctx, &["policy", "ls", "--quiet"]).unwrap(), 0);
+        assert_eq!(t.sbt(&["policy", "ls", "--json"]).unwrap(), 0);
+        assert_eq!(t.sbt(&["policy", "ls", "--quiet"]).unwrap(), 0);
     }
 
     #[test]
@@ -1504,9 +1461,9 @@ mod tests {
         assert_eq!(render_log(&[]), "No blocked requests\n");
         let mut t = test_env(&[]);
         running(&t, &[("sbx.name", "a1")]);
-        t.ctx.vm.runner().ok(&["machine", "egress-events"], "[]");
-        assert_eq!(sbt(&mut t.ctx, &["policy", "log"]).unwrap(), 0);
-        assert_eq!(sbt(&mut t.ctx, &["policy", "log", "--json"]).unwrap(), 0);
+        t.runner().ok(&["machine", "egress-events"], "[]");
+        assert_eq!(t.sbt(&["policy", "log"]).unwrap(), 0);
+        assert_eq!(t.sbt(&["policy", "log", "--json"]).unwrap(), 0);
     }
 
     #[test]
@@ -1514,16 +1471,14 @@ mod tests {
         // Listing sandboxes fails: the bound-secret check and the live push only warn.
         let mut t = test_env(&[]);
         set_policy(&t, "mode = \"deny-all\"");
-        t.ctx
-            .vm
-            .runner()
+        t.runner()
             .fail(&["machine", "ls"], "SMOLVM_ERROR", "db locked");
-        sbt(&mut t.ctx, &["policy", "deny", "network", "evil.com"]).unwrap();
-        sbt(&mut t.ctx, &["policy", "allow", "network", "ok.com"]).unwrap();
+        t.sbt(&["policy", "deny", "network", "evil.com"]).unwrap();
+        t.sbt(&["policy", "allow", "network", "ok.com"]).unwrap();
         assert_eq!(Policy::load(&t.ctx.paths).unwrap().rules.len(), 2);
         assert!(updates(&t).is_empty());
         // A reset still resets when the running sandboxes can't be stopped.
-        sbt(&mut t.ctx, &["policy", "reset", "-f"]).unwrap();
+        t.sbt(&["policy", "reset", "-f"]).unwrap();
         assert_eq!(Policy::load(&t.ctx.paths).unwrap(), Policy::default());
     }
 
@@ -1532,23 +1487,16 @@ mod tests {
         let mut t = test_env(&[]);
         set_policy(&t, "mode = \"deny-all\"");
         blocked(&t);
-        t.ctx
-            .vm
-            .runner()
+        t.runner()
             .fail(&["machine", "update"], "SMOLVM_ERROR", "not running");
-        sbt(
-            &mut t.ctx,
-            &["policy", "approval", "respond", "example.com", "allow"],
-        )
-        .unwrap();
+        t.sbt(&["policy", "approval", "respond", "example.com", "allow"])
+            .unwrap();
         assert_eq!(Policy::load(&t.ctx.paths).unwrap().rules.len(), 1);
         assert_eq!(updates(&t).len(), 1);
         // And a stop that fails doesn't keep a reset from happening.
-        t.ctx
-            .vm
-            .runner()
+        t.runner()
             .fail(&["machine", "stop"], "SMOLVM_ERROR", "stuck");
-        sbt(&mut t.ctx, &["policy", "reset", "-f"]).unwrap();
+        t.sbt(&["policy", "reset", "-f"]).unwrap();
         assert_eq!(Policy::load(&t.ctx.paths).unwrap().mode, None);
     }
 
@@ -1557,17 +1505,11 @@ mod tests {
         let mut t = test_env(&[]);
         set_policy(&t, "mode = \"deny-all\"");
         blocked(&t);
-        assert_eq!(sbt(&mut t.ctx, &["policy", "approval", "ls"]).unwrap(), 0);
+        assert_eq!(t.sbt(&["policy", "approval", "ls"]).unwrap(), 0);
+        assert_eq!(t.sbt(&["policy", "approval", "ls", "--json"]).unwrap(), 0);
         assert_eq!(
-            sbt(&mut t.ctx, &["policy", "approval", "ls", "--json"]).unwrap(),
-            0
-        );
-        assert_eq!(
-            sbt(
-                &mut t.ctx,
-                &["policy", "approval", "inspect", "example.com"]
-            )
-            .unwrap(),
+            t.sbt(&["policy", "approval", "inspect", "example.com"])
+                .unwrap(),
             0
         );
     }
@@ -1581,9 +1523,11 @@ mod tests {
             .add_rule(Some("a1"), Decision::Allow, "a.com", "added", None, None)
             .unwrap();
         p.save(&t.ctx.paths).unwrap();
-        sbt(&mut t.ctx, &["policy", "rm", "network", "--id", &id]).unwrap();
+        t.sbt(&["policy", "rm", "network", "--id", &id]).unwrap();
         assert!(Policy::load(&t.ctx.paths).unwrap().sandboxes.is_empty());
-        let err = sbt(&mut t.ctx, &["policy", "rm", "network", "--id", &id]).unwrap_err();
+        let err = t
+            .sbt(&["policy", "rm", "network", "--id", &id])
+            .unwrap_err();
         assert!(err.to_string().contains("no matching rules"), "{err}");
     }
 
@@ -1617,7 +1561,7 @@ mod tests {
                 "kit.com",
             ],
         ] {
-            let err = sbt(&mut t.ctx, &args).unwrap_err().to_string();
+            let err = t.sbt(&args).unwrap_err().to_string();
             assert!(err.contains("kit rules can't be removed"), "{err}");
             assert!(err.contains("policy deny network --sandbox sb"), "{err}");
         }
@@ -1629,18 +1573,13 @@ mod tests {
     fn rm_accepts_force_for_sbx_compatibility() {
         let mut t = test_env(&[]);
         set_policy(&t, "mode = \"deny-all\"");
-        sbt(&mut t.ctx, &["policy", "allow", "network", "a.com"]).unwrap();
-        sbt(
-            &mut t.ctx,
-            &["policy", "rm", "network", "--resource", "a.com", "-f"],
-        )
-        .unwrap();
+        t.sbt(&["policy", "allow", "network", "a.com"]).unwrap();
+        t.sbt(&["policy", "rm", "network", "--resource", "a.com", "-f"])
+            .unwrap();
         // Nothing left to remove: the error is the missing rule, not an unknown flag.
-        let err = sbt(
-            &mut t.ctx,
-            &["policy", "rm", "network", "--resource", "a.com", "--force"],
-        )
-        .unwrap_err();
+        let err = t
+            .sbt(&["policy", "rm", "network", "--resource", "a.com", "--force"])
+            .unwrap_err();
         assert!(err.to_string().contains("no matching rules"), "{err}");
         assert!(Policy::load(&t.ctx.paths).unwrap().rules.is_empty());
     }
@@ -1649,11 +1588,9 @@ mod tests {
     fn allow_and_deny_refuse_protocols_other_than_tcp() {
         let mut t = test_env(&[]);
         for kind in ["allow", "deny"] {
-            let err = sbt(
-                &mut t.ctx,
-                &["policy", kind, "network", "x.com", "--protocol", "udp"],
-            )
-            .unwrap_err();
+            let err = t
+                .sbt(&["policy", kind, "network", "x.com", "--protocol", "udp"])
+                .unwrap_err();
             assert_eq!(super::super::exit_code(&err), 2, "{kind}");
         }
         assert!(Policy::load(&t.ctx.paths).unwrap().rules.is_empty());
@@ -1669,17 +1606,14 @@ mod tests {
                 labels.push(("sbx.host-access", "true"));
             }
             running(&t, &labels);
-            sbt(
-                &mut t.ctx,
-                &[
-                    "policy",
-                    "allow",
-                    "network",
-                    "--sandbox",
-                    "a1",
-                    "LOCALHOST:11434",
-                ],
-            )
+            t.sbt(&[
+                "policy",
+                "allow",
+                "network",
+                "--sandbox",
+                "a1",
+                "LOCALHOST:11434",
+            ])
             .unwrap();
             // No hosts: the list is the first of the two calls (see `NO_HOSTS_PLACEHOLDER`).
             let last = resets(&t).pop().unwrap();
@@ -1689,18 +1623,15 @@ mod tests {
                 "{access}: {last}"
             );
             assert!(!last.to_lowercase().contains("localhost"), "{last}");
-            sbt(
-                &mut t.ctx,
-                &[
-                    "policy",
-                    "rm",
-                    "network",
-                    "--sandbox",
-                    "a1",
-                    "--resource",
-                    "LOCALHOST:11434",
-                ],
-            )
+            t.sbt(&[
+                "policy",
+                "rm",
+                "network",
+                "--sandbox",
+                "a1",
+                "--resource",
+                "LOCALHOST:11434",
+            ])
             .unwrap();
             let u = resets(&t);
             assert_eq!(u.len(), 2, "{u:?}");

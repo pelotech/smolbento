@@ -942,8 +942,8 @@ mod tests {
             ),
             machine_json("sbx-b1", "stopped", &[("sbx.name", "b1")]),
         );
-        t.ctx.vm.runner().ok(&["machine", "ls", "--json"], &ls);
-        t.ctx.vm.runner().ok(
+        t.runner().ok(&["machine", "ls", "--json"], &ls);
+        t.runner().ok(
             &["machine", "status", "-n", "sbx-a1"],
             &machine_json(
                 "sbx-a1",
@@ -1132,7 +1132,7 @@ mod tests {
             add("api.example.com", "kit:k"),
         ];
         policy.save(&t.ctx.paths).unwrap();
-        let fake = t.ctx.vm.runner();
+        let fake = t.runner();
         fake.fail(&["machine", "status"], "NOT_FOUND", "vm not found");
         // A bad `--deny-network` host fails before the machine exists.
         if deny_network.is_empty() {
@@ -1184,7 +1184,7 @@ mod tests {
         let p = Policy::load(&t.ctx.paths).unwrap();
         let left: Vec<&String> = p.sandboxes["s1"].rules.iter().map(|r| &r.id).collect();
         assert_eq!(left, vec![&ids[1]]);
-        let lines = t.ctx.vm.runner().call_lines();
+        let lines = t.calls();
         let create = lines
             .iter()
             .position(|l| l.starts_with("machine create"))
@@ -1211,7 +1211,7 @@ mod tests {
     fn the_first_start_opens_this_creates_install_rules() {
         let (t, result, _) = kit_create(false, &[]);
         result.unwrap();
-        let lines = t.ctx.vm.runner().call_lines();
+        let lines = t.calls();
         let start = lines
             .iter()
             .position(|l| l.starts_with("machine start"))
@@ -1290,7 +1290,7 @@ mod tests {
             )
             .unwrap();
         policy.save(&t.ctx.paths).unwrap();
-        let fake = t.ctx.vm.runner();
+        let fake = t.runner();
         fake.fail(&["machine", "status"], "NOT_FOUND", "vm not found");
         fake.once_ok(
             &["machine", "status"],
@@ -1298,21 +1298,8 @@ mod tests {
         );
         fake.once_fail(&["machine", "status"], "NOT_FOUND", "vm not found");
         let kit = |name: &str, kind| Kit {
-            name: name.into(),
-            source: Source::Registry(format!("acme/{name}:1")),
             digest: Some(format!("sha256:{}", "ab".repeat(32))),
-            kind,
-            provides: vec![],
-            requires: vec![],
-            integrates: vec![],
-            conflicts: vec![],
-            args: Default::default(),
-            caps: vec![],
-            env: vec![],
-            content: Content::None,
-            command: None,
-            config: None,
-            reference: None,
+            ..Kit::new(name, kind, Source::Registry(format!("acme/{name}:1")))
         };
         let mut wl = kit("wl", Kind::Workload);
         wl.content = Content::Image("img:1".into());
@@ -1358,7 +1345,7 @@ mod tests {
         };
         check_free(&t.ctx, "s1").unwrap();
         create_with(&t.ctx, &mut req, &[], Some(&plan), None, &mut |_| {}).unwrap();
-        let lines = t.ctx.vm.runner().call_lines();
+        let lines = t.calls();
         let create = lines
             .iter()
             .find(|l| l.starts_with("machine create"))
@@ -1382,10 +1369,7 @@ mod tests {
             "kit install failed (the sandbox was removed): kit k install hook 1 failed:\nnpm ERR! 404"
         );
         assert!(
-            t.ctx
-                .vm
-                .runner()
-                .call_lines()
+            t.calls()
                 .contains(&"machine delete -n sbx-s1 -f".to_string())
         );
         let p = Policy::load(&t.ctx.paths).unwrap();
@@ -1397,12 +1381,7 @@ mod tests {
         let (t, result, _) = kit_create(false, &["not a host!".to_string()]);
         assert!(result.is_err());
         assert!(
-            !t.ctx
-                .vm
-                .runner()
-                .call_lines()
-                .iter()
-                .any(|l| l.starts_with("machine create")),
+            !t.calls().iter().any(|l| l.starts_with("machine create")),
             "fails in prepare_create"
         );
         let p = Policy::load(&t.ctx.paths).unwrap();
@@ -1447,21 +1426,13 @@ mod tests {
         use crate::kits::args::ArgValues;
         use crate::kits::model::{Cap, CapBody, Content, Hook, HookCmd, Kind, Kit, Lifecycle};
         let kit = |name: &str, kind, content| Kit {
-            name: name.into(),
-            source: crate::kits::model::Source::Registry(format!("acme/{name}:1")),
             digest: Some(format!("sha256:{}", "ab".repeat(32))),
-            kind,
-            provides: vec![],
-            requires: vec![],
-            integrates: vec![],
-            conflicts: vec![],
-            args: Default::default(),
-            caps: vec![],
-            env: vec![],
             content,
-            command: None,
-            config: None,
-            reference: None,
+            ..Kit::new(
+                name,
+                kind,
+                crate::kits::model::Source::Registry(format!("acme/{name}:1")),
+            )
         };
         let wl = if preset {
             crate::kits::load::preset_kit(crate::agents::find("shell").unwrap(), "img:1")
@@ -1504,7 +1475,7 @@ mod tests {
         plan: Option<Plan>,
     ) -> (TestEnv, Result<Sandbox>, Vec<String>) {
         let t = test_env(env);
-        let fake = t.ctx.vm.runner();
+        let fake = t.runner();
         fake.fail(&["machine", "status"], "NOT_FOUND", "vm not found");
         fake.once_ok(
             &["machine", "status"],
@@ -1519,7 +1490,7 @@ mod tests {
         req.name = name.into();
         let result = check_free(&t.ctx, name)
             .and_then(|()| create_with(&t.ctx, &mut req, &[], plan.as_ref(), None, &mut |_| {}));
-        let lines = t.ctx.vm.runner().call_lines();
+        let lines = t.calls();
         (t, result, lines)
     }
 

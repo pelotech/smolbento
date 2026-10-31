@@ -219,17 +219,14 @@ mod tests {
 
     fn created(t: &TestEnv, state: &str) {
         let ws = t.ctx.cwd.display().to_string();
-        t.ctx.vm.runner().ok(
-            &["machine", "status"],
-            &machine_json(
-                "sbx-claude-proj",
-                state,
-                &[
-                    ("sbx.name", "claude-proj"),
-                    ("sbx.agent", "claude"),
-                    ("sbx.workspace", ws.as_str()),
-                ],
-            ),
+        t.machine(
+            "sbx-claude-proj",
+            state,
+            &[
+                ("sbx.name", "claude-proj"),
+                ("sbx.agent", "claude"),
+                ("sbx.workspace", ws.as_str()),
+            ],
         );
     }
 
@@ -237,17 +234,10 @@ mod tests {
     fn clone_is_ignored_when_run_attaches_to_an_existing_sandbox() {
         let mut t = test_env(&[]);
         created(&t, "running");
-        t.ctx.vm.runner().interactive_exit(0);
+        t.runner().interactive_exit(0);
         // cwd is not a git repo, yet --clone must not matter for an existing sandbox.
-        sbt(&mut t.ctx, &["run", "claude", "--clone"]).unwrap();
-        assert!(
-            !t.ctx
-                .vm
-                .runner()
-                .call_lines()
-                .iter()
-                .any(|l| l.contains("machine create"))
-        );
+        t.sbt(&["run", "claude", "--clone"]).unwrap();
+        assert!(!t.calls().iter().any(|l| l.contains("machine create")));
     }
 
     #[test]
@@ -255,32 +245,25 @@ mod tests {
         let mut t = test_env(&[]);
         created(&t, "created");
         // run looks the name up, then plan::create checks again before creating.
-        t.ctx
-            .vm
-            .runner()
+        t.runner()
             .once_fail(&["machine", "status"], "NOT_FOUND", "vm not found");
-        t.ctx
-            .vm
-            .runner()
+        t.runner()
             .once_fail(&["machine", "status"], "NOT_FOUND", "vm not found");
-        t.ctx.vm.runner().interactive_exit(0);
+        t.runner().interactive_exit(0);
         assert_eq!(
-            sbt(
-                &mut t.ctx,
-                &["run", "claude", "--cpus", "1", "-m", "1g", "--", "-c"]
-            )
-            .unwrap(),
+            t.sbt(&["run", "claude", "--cpus", "1", "-m", "1g", "--", "-c"])
+                .unwrap(),
             0
         );
 
         let ws = t.ctx.cwd.display().to_string();
         assert_eq!(
-            t.ctx.vm.runner().interactive_calls()[0].join(" "),
+            t.runner().interactive_calls()[0].join(" "),
             format!(
                 "machine exec --name sbx-claude-proj -u agent -w {ws} -i -- claude --dangerously-skip-permissions -c"
             )
         );
-        let lines = t.ctx.vm.runner().call_lines();
+        let lines = t.calls();
         assert!(
             lines
                 .iter()
@@ -303,16 +286,14 @@ mod tests {
         created(&t, "created");
         // run looks the name up, then plan::create checks again before creating.
         for _ in 0..2 {
-            t.ctx
-                .vm
-                .runner()
+            t.runner()
                 .once_fail(&["machine", "status"], "NOT_FOUND", "vm not found");
         }
         let args: Vec<&str> = ["run", "-d", "claude", "--cpus", "1", "-m", "1g"]
             .into_iter()
             .chain(extra.iter().copied())
             .collect();
-        sbt(&mut t.ctx, &args).unwrap();
+        t.sbt(&args).unwrap();
         t.stdout()
     }
 
@@ -341,17 +322,20 @@ mod tests {
     fn run_of_an_existing_sandbox_reports_no_progress() {
         let mut t = test_env(&[]);
         created(&t, "stopped");
-        sbt(&mut t.ctx, &["run", "-d", "--name", "claude-proj"]).unwrap();
+        t.sbt(&["run", "-d", "--name", "claude-proj"]).unwrap();
         assert_eq!(t.stdout(), "claude-proj\n");
     }
 
     #[test]
     fn a_failed_create_does_not_leave_deny_rules_behind() {
         let mut t = test_env(&[]);
-        let fake = t.ctx.vm.runner();
+        let fake = t.runner();
         fake.fail(&["machine", "status"], "NOT_FOUND", "vm not found");
         fake.fail(&["machine", "create"], "CREATE_FAILED", "no space left");
-        assert!(sbt(&mut t.ctx, &["run", "claude", "--deny-network", "evil.com"]).is_err());
+        assert!(
+            t.sbt(&["run", "claude", "--deny-network", "evil.com"])
+                .is_err()
+        );
         let p = crate::policy::Policy::load(&t.ctx.paths).unwrap();
         assert!(p.sandboxes.is_empty(), "{p:?}");
     }
@@ -362,23 +346,18 @@ mod tests {
         created(&t, "created");
         // run looks the name up, then plan::create checks again before creating.
         for _ in 0..2 {
-            t.ctx
-                .vm
-                .runner()
+            t.runner()
                 .once_fail(&["machine", "status"], "NOT_FOUND", "vm not found");
         }
-        t.ctx.vm.runner().interactive_exit(0);
-        sbt(
-            &mut t.ctx,
-            &[
-                "run",
-                "claude",
-                "--deny-network",
-                "a.example,b.example",
-                "--deny-network",
-                "c.example",
-            ],
-        )
+        t.runner().interactive_exit(0);
+        t.sbt(&[
+            "run",
+            "claude",
+            "--deny-network",
+            "a.example,b.example",
+            "--deny-network",
+            "c.example",
+        ])
         .unwrap();
         let p = crate::policy::Policy::load(&t.ctx.paths).unwrap();
         let rules: Vec<Vec<String>> = p.sandboxes["claude-proj"]
@@ -405,25 +384,24 @@ mod tests {
         let mut t = test_env(&[]);
         std::fs::remove_file(t.ctx.paths.policy_file()).unwrap();
         created(&t, "running");
-        t.ctx.vm.runner().interactive_exit(0);
+        t.runner().interactive_exit(0);
         assert_eq!(
-            sbt(&mut t.ctx, &["run", "claude", "--deny-network", "evil.com"]).unwrap(),
+            t.sbt(&["run", "claude", "--deny-network", "evil.com"])
+                .unwrap(),
             0
         );
         assert!(!t.ctx.paths.policy_file().exists());
-        let lines = t.ctx.vm.runner().call_lines();
+        let lines = t.calls();
         assert!(!lines.iter().any(|l| l.contains("create")), "{lines:?}");
 
         // A stopped one has to start, and every start needs a policy.
         let mut t = test_env(&[]);
         std::fs::remove_file(t.ctx.paths.policy_file()).unwrap();
         created(&t, "stopped");
-        let err = sbt(&mut t.ctx, &["run", "claude", "--deny-network", "evil.com"])
-            .unwrap_err()
-            .to_string();
+        let err = t.sbt_err(&["run", "claude", "--deny-network", "evil.com"]);
         assert!(err.contains("sbt policy init"), "{err}");
         assert!(!t.ctx.paths.policy_file().exists());
-        let lines = t.ctx.vm.runner().call_lines();
+        let lines = t.calls();
         assert!(
             !lines
                 .iter()
@@ -436,45 +414,28 @@ mod tests {
     fn reattaches_by_name_and_returns_the_agent_status() {
         let mut t = test_env(&[]);
         created(&t, "running");
-        t.ctx.vm.runner().interactive_exit(42);
-        assert_eq!(
-            sbt(&mut t.ctx, &["run", "--name", "claude-proj"]).unwrap(),
-            42
-        );
-        assert!(
-            !t.ctx
-                .vm
-                .runner()
-                .call_lines()
-                .iter()
-                .any(|l| l.contains("create"))
-        );
+        t.runner().interactive_exit(42);
+        assert_eq!(t.sbt(&["run", "--name", "claude-proj"]).unwrap(), 42);
+        assert!(!t.calls().iter().any(|l| l.contains("create")));
     }
 
     #[test]
     fn detach_leaves_it_running_and_later_runs_keep_it() {
         let mut t = test_env(&[]);
         created(&t, "running");
-        sbt(&mut t.ctx, &["run", "-d", "--name", "claude-proj"]).unwrap();
-        assert!(t.ctx.vm.runner().interactive_calls().is_empty());
-        sbt(&mut t.ctx, &["run", "--name", "claude-proj"]).unwrap();
-        assert!(
-            !t.ctx
-                .vm
-                .runner()
-                .call_lines()
-                .iter()
-                .any(|l| l.contains("stop"))
-        );
+        t.sbt(&["run", "-d", "--name", "claude-proj"]).unwrap();
+        assert!(t.runner().interactive_calls().is_empty());
+        t.sbt(&["run", "--name", "claude-proj"]).unwrap();
+        assert!(!t.calls().iter().any(|l| l.contains("stop")));
     }
 
     #[test]
     fn rm_deletes_after_exit() {
         let mut t = test_env(&[]);
         created(&t, "running");
-        sbt(&mut t.ctx, &["run", "--rm", "--name", "claude-proj"]).unwrap();
+        t.sbt(&["run", "--rm", "--name", "claude-proj"]).unwrap();
         assert_eq!(
-            t.ctx.vm.runner().call_lines().last().unwrap(),
+            t.calls().last().unwrap(),
             "machine delete -n sbx-claude-proj -f"
         );
     }
@@ -508,7 +469,7 @@ mod tests {
         }
         f.save(&t.ctx.paths).unwrap();
 
-        sbt(&mut t.ctx, &["run", "--rm", "--name", "claude-proj"]).unwrap();
+        t.sbt(&["run", "--rm", "--name", "claude-proj"]).unwrap();
 
         let p = Policy::load(&t.ctx.paths).unwrap();
         assert!(!p.sandboxes.contains_key("claude-proj"), "{p:?}");
@@ -521,70 +482,47 @@ mod tests {
     fn cleanup_failures_warn_and_keep_the_agent_status() {
         let mut t = test_env(&[]);
         created(&t, "running");
-        t.ctx.vm.runner().interactive_exit(7);
-        t.ctx
-            .vm
-            .runner()
+        t.runner().interactive_exit(7);
+        t.runner()
             .fail(&["machine", "stop"], "SMOLVM_ERROR", "boom");
-        assert_eq!(
-            sbt(&mut t.ctx, &["run", "--name", "claude-proj"]).unwrap(),
-            7
-        );
-        t.ctx
-            .vm
-            .runner()
+        assert_eq!(t.sbt(&["run", "--name", "claude-proj"]).unwrap(), 7);
+        t.runner()
             .fail(&["machine", "delete"], "SMOLVM_ERROR", "boom");
-        assert_eq!(
-            sbt(&mut t.ctx, &["run", "--rm", "--name", "claude-proj"]).unwrap(),
-            7
-        );
+        assert_eq!(t.sbt(&["run", "--rm", "--name", "claude-proj"]).unwrap(), 7);
     }
 
     #[test]
     fn unsupported_flags_exit_2_even_without_a_usable_smolvm() {
         let mut t = test_env(&[]);
-        t.ctx.vm.runner().ok(&["--version"], "smolvm 1.0.0\n");
+        t.runner().ok(&["--version"], "smolvm 1.0.0\n");
         for args in [
             &["run", "claude", "--static-mcp", "x"][..],
             &["create", "claude", "--static-mcp", "x"][..],
             &["run", "claude", "--new"][..],
         ] {
-            let err = sbt(&mut t.ctx, args).unwrap_err();
+            let err = t.sbt(args).unwrap_err();
             assert_eq!(super::super::exit_code(&err), 2, "{args:?}: {err}");
         }
-        assert!(t.ctx.vm.runner().calls().is_empty());
+        assert!(t.runner().calls().is_empty());
     }
 
     #[test]
     fn argument_errors() {
         let mut t = test_env(&[]);
-        assert!(
-            sbt(&mut t.ctx, &["run"])
-                .unwrap_err()
-                .to_string()
-                .contains("specify an agent")
-        );
-        assert!(
-            sbt(&mut t.ctx, &["run", "-d", "--rm", "claude"])
-                .unwrap_err()
-                .to_string()
-                .contains("--rm")
-        );
+        assert!(t.sbt_err(&["run"]).contains("specify an agent"));
+        assert!(t.sbt_err(&["run", "-d", "--rm", "claude"]).contains("--rm"));
     }
 
     fn clone_sandbox(t: &TestEnv, ws: &std::path::Path) {
-        t.ctx.vm.runner().ok(
-            &["machine", "status"],
-            &machine_json(
-                "sbx-claude-proj",
-                "running",
-                &[
-                    ("sbx.name", "claude-proj"),
-                    ("sbx.agent", "claude"),
-                    ("sbx.workspace", &ws.display().to_string()),
-                    ("sbx.clone", "true"),
-                ],
-            ),
+        t.machine(
+            "sbx-claude-proj",
+            "running",
+            &[
+                ("sbx.name", "claude-proj"),
+                ("sbx.agent", "claude"),
+                ("sbx.workspace", &ws.display().to_string()),
+                ("sbx.clone", "true"),
+            ],
         );
     }
 
@@ -612,16 +550,10 @@ mod tests {
             ],
         );
         clone_sandbox(&t, &repo);
-        t.ctx.vm.runner().interactive_exit(5);
-        assert_eq!(
-            sbt(&mut t.ctx, &["run", "--name", "claude-proj"]).unwrap(),
-            5
-        );
+        t.runner().interactive_exit(5);
+        assert_eq!(t.sbt(&["run", "--name", "claude-proj"]).unwrap(), 5);
         assert!(marker.exists(), "the fetch was never attempted");
-        assert_eq!(
-            t.ctx.vm.runner().call_lines().last().unwrap(),
-            "machine stop -n sbx-claude-proj"
-        );
+        assert_eq!(t.calls().last().unwrap(), "machine stop -n sbx-claude-proj");
     }
 
     #[test]
@@ -660,31 +592,25 @@ mod tests {
         if long_running {
             labels.push(("sbx.long-running", "true"));
         }
-        t.ctx.vm.runner().ok(
-            &["machine", "status"],
-            &machine_json("sbx-toolbox-proj", "running", &labels),
-        );
-        t.ctx.vm.runner().interactive_exit(0);
+        t.machine("sbx-toolbox-proj", "running", &labels);
+        t.runner().interactive_exit(0);
     }
 
     #[test]
     fn run_launches_a_kit_sandboxs_command() {
         let mut t = test_env(&[]);
         kit_sandbox(&t, false);
-        sbt(
-            &mut t.ctx,
-            &["run", "--name", "toolbox-proj", "--", "--y", "z"],
-        )
-        .unwrap();
+        t.sbt(&["run", "--name", "toolbox-proj", "--", "--y", "z"])
+            .unwrap();
         let ws = t.ctx.cwd.display().to_string();
         assert_eq!(
-            t.ctx.vm.runner().interactive_calls()[0].join(" "),
+            t.runner().interactive_calls()[0].join(" "),
             format!(
                 "machine exec --name sbx-toolbox-proj -u agent -w {ws} -i -- /bin/agent --x --y z"
             )
         );
         assert_eq!(
-            t.ctx.vm.runner().call_lines().last().unwrap(),
+            t.calls().last().unwrap(),
             "machine stop -n sbx-toolbox-proj"
         );
     }
@@ -692,45 +618,36 @@ mod tests {
     /// A v3 workload kit's sandbox: its image user is recorded.
     fn image_user_sandbox(t: &TestEnv) {
         let ws = t.ctx.cwd.display().to_string();
-        t.ctx.vm.runner().ok(
-            &["machine", "status"],
-            &machine_json(
-                "sbx-toolbox-proj",
-                "running",
-                &[
-                    ("sbx.name", "toolbox-proj"),
-                    ("sbx.agent", "toolbox"),
-                    ("sbx.workspace", ws.as_str()),
-                    ("sbx.command", r#"["/bin/agent","--x"]"#),
-                    ("sbx.user", "somebody"),
-                ],
-            ),
+        t.machine(
+            "sbx-toolbox-proj",
+            "running",
+            &[
+                ("sbx.name", "toolbox-proj"),
+                ("sbx.agent", "toolbox"),
+                ("sbx.workspace", ws.as_str()),
+                ("sbx.command", r#"["/bin/agent","--x"]"#),
+                ("sbx.user", "somebody"),
+            ],
         );
-        t.ctx.vm.runner().interactive_exit(0);
+        t.runner().interactive_exit(0);
     }
 
     #[test]
     fn run_launches_a_v3_workload_as_its_image_user_under_bash() {
         let mut t = test_env(&[]);
         image_user_sandbox(&t);
-        sbt(
-            &mut t.ctx,
-            &["run", "--name", "toolbox-proj", "--", "--y", "z"],
-        )
-        .unwrap();
+        t.sbt(&["run", "--name", "toolbox-proj", "--", "--y", "z"])
+            .unwrap();
         let ws = t.ctx.cwd.display().to_string();
         assert_eq!(
-            t.ctx.vm.runner().interactive_calls()[0].join(" "),
+            t.runner().interactive_calls()[0].join(" "),
             format!(
                 "machine exec --name sbx-toolbox-proj -u somebody -w {ws} -i -- \
                  /bin/bash -c exec -- \"$@\" bash /bin/agent --x --y z"
             )
         );
         assert!(
-            t.ctx
-                .vm
-                .runner()
-                .call_lines()
+            t.calls()
                 .contains(&"machine exec --name sbx-toolbox-proj -- /bin/bash -c :".into())
         );
     }
@@ -739,26 +656,23 @@ mod tests {
     fn run_launches_a_numeric_image_user_as_its_mapped_account() {
         let mut t = test_env(&[]);
         let ws = t.ctx.cwd.display().to_string();
-        t.ctx.vm.runner().ok(
-            &["machine", "status"],
-            &machine_json(
-                "sbx-toolbox-proj",
-                "running",
-                &[
-                    ("sbx.name", "toolbox-proj"),
-                    ("sbx.agent", "toolbox"),
-                    ("sbx.workspace", ws.as_str()),
-                    ("sbx.command", r#"["/bin/agent"]"#),
-                    ("sbx.user", "1000"),
-                ],
-            ),
+        t.machine(
+            "sbx-toolbox-proj",
+            "running",
+            &[
+                ("sbx.name", "toolbox-proj"),
+                ("sbx.agent", "toolbox"),
+                ("sbx.workspace", ws.as_str()),
+                ("sbx.command", r#"["/bin/agent"]"#),
+                ("sbx.user", "1000"),
+            ],
         );
-        t.ctx.vm.runner().interactive_exit(0);
+        t.runner().interactive_exit(0);
         // The start recorded uid 1000's account (`agent`, since moved to the host uid).
-        t.ctx.vm.runner().download(b"agent\n");
-        sbt(&mut t.ctx, &["run", "--name", "toolbox-proj"]).unwrap();
+        t.runner().download(b"agent\n");
+        t.sbt(&["run", "--name", "toolbox-proj"]).unwrap();
         assert_eq!(
-            t.ctx.vm.runner().interactive_calls()[0].join(" "),
+            t.runner().interactive_calls()[0].join(" "),
             format!(
                 "machine exec --name sbx-toolbox-proj -u agent -w {ws} -i -- \
                  /bin/bash -c exec -- \"$@\" bash /bin/agent"
@@ -770,7 +684,7 @@ mod tests {
     fn run_without_bash_in_the_image_fails_like_sbx() {
         let mut t = test_env(&[]);
         image_user_sandbox(&t);
-        t.ctx.vm.runner().on(
+        t.runner().on(
             &[
                 "machine",
                 "exec",
@@ -784,11 +698,11 @@ mod tests {
                 ..Default::default()
             },
         );
-        let code = sbt(&mut t.ctx, &["run", "--name", "toolbox-proj"]).unwrap();
+        let code = t.sbt(&["run", "--name", "toolbox-proj"]).unwrap();
         assert_eq!(code, 127);
-        assert!(t.ctx.vm.runner().interactive_calls().is_empty());
+        assert!(t.runner().interactive_calls().is_empty());
         assert_eq!(
-            t.ctx.vm.runner().call_lines().last().unwrap(),
+            t.calls().last().unwrap(),
             "machine stop -n sbx-toolbox-proj"
         );
     }
@@ -797,7 +711,7 @@ mod tests {
     fn a_smolvm_error_from_the_bash_probe_is_not_a_missing_bash() {
         let mut t = test_env(&[]);
         image_user_sandbox(&t);
-        t.ctx.vm.runner().fail(
+        t.runner().fail(
             &[
                 "machine",
                 "exec",
@@ -809,38 +723,32 @@ mod tests {
             "AGENT_ERROR",
             "the guest agent is not responding",
         );
-        let err = sbt(&mut t.ctx, &["run", "--name", "toolbox-proj"]).unwrap_err();
+        let err = t.sbt(&["run", "--name", "toolbox-proj"]).unwrap_err();
         assert!(
             format!("{err:#}").contains("the guest agent is not responding"),
             "{err:#}"
         );
-        assert!(t.ctx.vm.runner().interactive_calls().is_empty());
+        assert!(t.runner().interactive_calls().is_empty());
     }
 
     #[test]
     fn attaching_to_an_existing_sandbox_loads_no_kits() {
         let mut t = test_env(&[("SMOLBENTO_KIT_ALLOW_LOCAL_KITS", "true")]);
         created(&t, "running");
-        t.ctx.vm.runner().interactive_exit(0);
+        t.runner().interactive_exit(0);
         // Loading either would fail: the path doesn't exist.
-        sbt(
-            &mut t.ctx,
-            &[
-                "run",
-                "claude",
-                "--kit",
-                "./no-such-kit",
-                "--kit-arg",
-                "a=1",
-            ],
-        )
+        t.sbt(&[
+            "run",
+            "claude",
+            "--kit",
+            "./no-such-kit",
+            "--kit-arg",
+            "a=1",
+        ])
         .unwrap();
-        assert_eq!(t.ctx.vm.runner().interactive_calls().len(), 1);
+        assert_eq!(t.runner().interactive_calls().len(), 1);
         assert!(
-            !t.ctx
-                .vm
-                .runner()
-                .call_lines()
+            !t.calls()
                 .iter()
                 .any(|l| l.contains("_builder") || l.starts_with("machine create"))
         );
@@ -864,30 +772,27 @@ mod tests {
             )
             .unwrap();
             let ws = t.ctx.cwd.display().to_string();
-            t.ctx.vm.runner().ok(
-                &["machine", "status"],
-                &machine_json(
-                    &format!("sbx-{sandbox}"),
-                    "running",
-                    &[
-                        ("sbx.name", sandbox),
-                        ("sbx.agent", "kit"),
-                        ("sbx.workspace", ws.as_str()),
-                        ("sbx.command", r#"["/bin/agent"]"#),
-                    ],
-                ),
+            t.machine(
+                &format!("sbx-{sandbox}"),
+                "running",
+                &[
+                    ("sbx.name", sandbox),
+                    ("sbx.agent", "kit"),
+                    ("sbx.workspace", ws.as_str()),
+                    ("sbx.command", r#"["/bin/agent"]"#),
+                ],
             );
-            t.ctx.vm.runner().interactive_exit(0);
+            t.runner().interactive_exit(0);
             // A build would ask smolvm for `_builder`; a pull of localhost:1 would fail.
-            sbt(&mut t.ctx, &["run", kit, "."]).unwrap();
-            let lines = t.ctx.vm.runner().call_lines();
+            t.sbt(&["run", kit, "."]).unwrap();
+            let lines = t.calls();
             assert!(
                 !lines
                     .iter()
                     .any(|l| l.contains("_builder") || l.starts_with("machine create")),
                 "{lines:?}"
             );
-            assert_eq!(t.ctx.vm.runner().interactive_calls().len(), 1, "{kit}");
+            assert_eq!(t.runner().interactive_calls().len(), 1, "{kit}");
         }
     }
 
@@ -912,16 +817,10 @@ mod tests {
 
         let mut t = test_env(&[]);
         created(&t, "running");
-        t.ctx.vm.runner().interactive_exit(0);
-        sbt(&mut t.ctx, &["run", "claude", "--mount", ".:/home/agent/x"]).unwrap();
-        assert!(
-            !t.ctx
-                .vm
-                .runner()
-                .call_lines()
-                .iter()
-                .any(|l| l.contains("machine create"))
-        );
+        t.runner().interactive_exit(0);
+        t.sbt(&["run", "claude", "--mount", ".:/home/agent/x"])
+            .unwrap();
+        assert!(!t.calls().iter().any(|l| l.contains("machine create")));
     }
 
     #[test]
@@ -955,60 +854,40 @@ mod tests {
         let want = "kit arguments were supplied but no kits were referenced";
         let mut t = test_env(&[]);
         created(&t, "running");
-        t.ctx.vm.runner().interactive_exit(0);
+        t.runner().interactive_exit(0);
         for args in [
             vec!["run", "claude", "--kit-arg", "a=1"],
             vec!["run", "--name", "claude-proj", "--kit-arg", "a=1"],
             vec!["run", "--name", "claude-proj", "--kit-args-file", "f"],
         ] {
-            let err = sbt(&mut t.ctx, &args).unwrap_err();
+            let err = t.sbt(&args).unwrap_err();
             assert_eq!(format!("{err:#}"), want, "{args:?}");
         }
-        assert!(t.ctx.vm.runner().interactive_calls().is_empty());
+        assert!(t.runner().interactive_calls().is_empty());
 
         let mut t = test_env(&[]);
-        t.ctx
-            .vm
-            .runner()
-            .fail(&["machine", "status"], "NOT_FOUND", "vm not found");
-        let err = sbt(&mut t.ctx, &["run", "claude", "--kit-arg", "a=1"]).unwrap_err();
+        t.no_machine();
+        let err = t.sbt(&["run", "claude", "--kit-arg", "a=1"]).unwrap_err();
         assert_eq!(format!("{err:#}"), want);
-        assert!(
-            !t.ctx
-                .vm
-                .runner()
-                .call_lines()
-                .iter()
-                .any(|l| l.starts_with("machine create")),
-        );
+        assert!(!t.calls().iter().any(|l| l.starts_with("machine create")),);
     }
 
     #[test]
     fn existing_name_with_kit_flags_attaches_without_loading() {
         let mut t = test_env(&[("SMOLBENTO_KIT_ALLOW_LOCAL_KITS", "true")]);
         created(&t, "running");
-        t.ctx.vm.runner().interactive_exit(0);
-        sbt(
-            &mut t.ctx,
-            &["run", "--name", "claude-proj", "--kit", "./no-such-kit"],
-        )
-        .unwrap();
-        assert_eq!(t.ctx.vm.runner().interactive_calls().len(), 1);
+        t.runner().interactive_exit(0);
+        t.sbt(&["run", "--name", "claude-proj", "--kit", "./no-such-kit"])
+            .unwrap();
+        assert_eq!(t.runner().interactive_calls().len(), 1);
     }
 
     #[test]
     fn a_long_running_sandbox_keeps_running_after_the_last_session() {
         let mut t = test_env(&[]);
         kit_sandbox(&t, true);
-        sbt(&mut t.ctx, &["run", "--name", "toolbox-proj"]).unwrap();
-        assert!(
-            !t.ctx
-                .vm
-                .runner()
-                .call_lines()
-                .iter()
-                .any(|l| l.starts_with("machine stop"))
-        );
+        t.sbt(&["run", "--name", "toolbox-proj"]).unwrap();
+        assert!(!t.calls().iter().any(|l| l.starts_with("machine stop")));
     }
 
     #[test]
@@ -1016,13 +895,10 @@ mod tests {
         let mut t = test_env(&[("SMOLBENTO_CLONE_FETCH_ON_EXIT", "yes")]);
         let (_keep, repo) = temp_repo();
         clone_sandbox(&t, &repo);
-        t.ctx.vm.runner().interactive_exit(3);
+        t.runner().interactive_exit(3);
+        assert_eq!(t.sbt(&["run", "--rm", "--name", "claude-proj"]).unwrap(), 3);
         assert_eq!(
-            sbt(&mut t.ctx, &["run", "--rm", "--name", "claude-proj"]).unwrap(),
-            3
-        );
-        assert_eq!(
-            t.ctx.vm.runner().call_lines().last().unwrap(),
+            t.calls().last().unwrap(),
             "machine delete -n sbx-claude-proj -f"
         );
     }
@@ -1031,7 +907,7 @@ mod tests {
     fn serves_the_bridge_while_attached() {
         let mut t = test_env(&[]);
         let (name, seen) = bridge_probe(&t, "run", true);
-        sbt(&mut t.ctx, &["run", "--name", &name]).unwrap();
+        t.sbt(&["run", "--name", &name]).unwrap();
         assert_eq!(*seen.borrow(), vec![true]);
         // Stopped with the session.
         assert!(!crate::bridge::host_socket(&name).exists());
@@ -1041,7 +917,7 @@ mod tests {
     fn serves_a_runtime_ssh_agent_grant_while_attached() {
         let mut t = test_env(&[]);
         let (name, seen) = agent_probe(&t, "run", Some(r#"{"runtime":{"sign":["git"]}}"#));
-        sbt(&mut t.ctx, &["run", "--name", &name]).unwrap();
+        t.sbt(&["run", "--name", &name]).unwrap();
         assert_eq!(*seen.borrow(), vec![true]);
         assert!(!crate::bridge::agent_socket(&name).exists());
     }
@@ -1054,7 +930,7 @@ mod tests {
         ] {
             let mut t = test_env(&[]);
             let (name, seen) = agent_probe(&t, tag, grant);
-            sbt(&mut t.ctx, &["run", "--name", &name]).unwrap();
+            t.sbt(&["run", "--name", &name]).unwrap();
             assert_eq!(*seen.borrow(), vec![false], "{tag}");
         }
     }
@@ -1063,7 +939,7 @@ mod tests {
     fn serves_no_bridge_for_an_unlabelled_sandbox() {
         let mut t = test_env(&[]);
         let (name, seen) = bridge_probe(&t, "run", false);
-        sbt(&mut t.ctx, &["run", "--name", &name]).unwrap();
+        t.sbt(&["run", "--name", &name]).unwrap();
         assert_eq!(*seen.borrow(), vec![false]);
     }
 
@@ -1071,7 +947,7 @@ mod tests {
     fn serves_no_bridge_over_ssh_without_a_display() {
         let mut t = test_env(&[("SSH_CONNECTION", "10.0.0.1 50000 10.0.0.2 22")]);
         let (name, seen) = bridge_probe(&t, "run", true);
-        sbt(&mut t.ctx, &["run", "--name", &name]).unwrap();
+        t.sbt(&["run", "--name", &name]).unwrap();
         assert_eq!(*seen.borrow(), vec![false]);
     }
 }
