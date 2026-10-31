@@ -24,7 +24,48 @@ exist only in some checkouts). If they're there, read the relevant section befor
 - **sbx compatibility:** flags and output match the sbx CLI reference. Record intentional
   differences in `docs/sbx-compatibility.md` rather than diverging silently. smolbento-only
   commands must not collide with sbx command names, and are added only when implemented.
-- macOS + Linux now; keep path handling in `workspace` so Windows can be added later.
+- macOS + Linux now; keep path handling in `workspace` so Windows can be added later (smolvm
+  itself runs on Windows hosts, with the caveats in its `docs/limitations.md`).
+
+## smolvm behaviour to rely on
+
+As of smolvm 1.32. Check the reference source before depending on anything not listed here.
+
+- **Errors:** `--error-format json` prints `{"error":{"code":…,"message":…}}` on stderr, and the
+  exit status is unchanged. Branch on `code` (`NOT_FOUND`, `CONFLICT`, `INTERRUPTED`,
+  `CONFIG_ERROR`, `INVALID_STATE`, `STORAGE_ERROR`, `MOUNT_ERROR`, `KVM_UNAVAILABLE`,
+  `HYPERVISOR_UNAVAILABLE`, `COMMAND_FAILED`, `SMOLVM_ERROR`), never on the message. Known quirks
+  live in `src/smolvm/error.rs`.
+- **Always pass `--name`.** Without it, smolvm targets `$SMOLVM_MACHINE_NAME` (a user's direnv
+  may set it), else `default`.
+- **`machine update` needs a stopped machine.** The exception is allow-list changes
+  (`--allow-host`, `--allow-host-pattern`, `--allow-cidr`, `--allow-udp` and their `--remove-*`
+  forms) on a machine started with an allow list: those apply from its next connection or DNS
+  lookup and persist. Lifting the allow list entirely, and every other change, waits for the next
+  start.
+- **Egress:** off by default. `--allow-host` matches a host and its subdomains;
+  `--allow-host-pattern` matches an exact host, or `*.domain` for subdomains only. `--deny-cidr`
+  (create and run only) is checked before every allow. `--allow-udp CIDR[:PORT[-END]]` is the
+  only port-aware rule. Cloud metadata is always blocked. smolvm has no host-port, host-deny,
+  method or path rules: see `docs/sbx-compatibility.md`.
+- **Interception:** credential substitution (`--credential`) can't be combined with
+  `--egress-interceptor`/`--mediated-egress` or with `--trust-host-certs`. Proxy variables
+  aren't forwarded unless `--use-host-proxy` is given.
+- **Guest `/tmp`, `/run` and `/dev/shm` are tmpfs, emptied on every restart.** Anything
+  smolbento puts there (for example `/run/smolbento`) has to be recreated after each start.
+  Persistent data goes on the machine's disk or in `/workspace`.
+- **Images:** when the guest can't reach the registry, smolvm pulls the image on the host at
+  the first start. That start still needs registry authorization; later starts don't contact the
+  registry. `--image` also takes a local archive (`./img.tar`, or `-` for stdin) or an unpacked
+  rootfs dir. smolvm boots images and never builds them.
+- **Lifecycle:** read-only commands (`ls`, `status`, `images`) never change a VM's state.
+  `machine stop` sends SIGTERM and waits up to the stop timeout (`--timeout SECS`; `0` kills
+  immediately), while `delete` doesn't wait. `machine logs` has the workload's output, not
+  `exec` output. `machine mount add` mounts into a running machine until it stops.
+- **Defaults:** 4 CPUs, 8192 MiB memory, 20 GiB storage, 10 GiB overlay. Memory is elastic
+  (balloon). Disks under 20 GiB need no host tools.
+- **Secret refs** (`--secret-env GUEST=HOST_VAR`, `--secret-file`) resolve at launch and are
+  never persisted. The HTTP API and `.smolmachine` packs refuse them.
 
 ## Layout
 
@@ -65,5 +106,11 @@ image.
   a fake-`Runner` test asserting the smolvm argv, and update `--help` snapshots
   (`cargo insta review`).
 - Reference smolvm source: `../smolvm-ref` (flags in `src/cli/machine.rs`, Smolfile in
-  `docs/smolfile.md`, credentials in `docs/credential-substitution.md`).
+  `docs/smolfile.md`, credentials in `docs/credential-substitution.md`, egress rules in
+  `docs/throwaway-machine/README.md` and `docs/mediated-egress.md`, HTTP API in
+  `docs/local-api/`; `docs/README.md` indexes the rest). Its `AGENTS.md` is the CLI quick
+  reference.
+- smolvm upstream (smol-machines/smolvm) acts on focused issues fast and merges small PRs.
+  Propose a missing smolvm feature there (issue first, then a small PR) before building a
+  workaround in smolbento.
 - Conventional commits; release-please cuts releases.
