@@ -10,7 +10,7 @@ use crate::bridge::agent;
 use crate::kits::capability;
 use crate::kits::compose;
 use crate::kits::guest;
-use crate::kits::model::{CapBody, Content, CredReq, FileReq, Hook, Kit, NetRule, Rules, Source};
+use crate::kits::model::{CapBody, Content, CredReq, FileReq, Hook, Kit, Source};
 use crate::kits::registry_auth::Logins;
 use crate::kits::resolve::{KitCred, Plan};
 use crate::policy::Policy;
@@ -132,35 +132,10 @@ pub fn apply(
             (c.env_var.clone(), service)
         })
         .collect();
-    let mut kit_rules: Vec<(String, Rules, Rules)> = m
-        .network
-        .iter()
-        .map(|k| (k.kit.clone(), k.install.clone(), k.runtime.clone()))
-        .collect();
     let mut notes = Vec::new();
     for kc in &m.credentials {
-        if let Some(o) = kc.req.oauth.as_ref().filter(|o| o.passthrough) {
-            let hosts: Vec<NetRule> = o
-                .token_host
-                .iter()
-                .chain(&o.resource_hosts)
-                .map(|h| NetRule {
-                    host: h.clone(),
-                    methods: vec![],
-                    paths: vec![],
-                })
-                .collect();
-            let i = match kit_rules.iter().position(|r| r.0 == kc.kit) {
-                Some(i) => i,
-                None => {
-                    kit_rules.push((kc.kit.clone(), Rules::default(), Rules::default()));
-                    kit_rules.len() - 1
-                }
-            };
-            kit_rules[i].2.allow.extend(hosts.iter().cloned());
-            if kc.req.install {
-                kit_rules[i].1.allow.extend(hosts);
-            }
+        // `resolve` added its hosts to the kit's network rules.
+        if kc.req.oauth.as_ref().is_some_and(|o| o.passthrough) {
             let note = format!(
                 "note: kit {}: {} OAuth tokens live in the sandbox (passthrough)",
                 kc.kit, kc.req.service
@@ -316,11 +291,15 @@ pub fn apply(
     let snapshot = policy.clone();
     let mut added = Vec::new();
     let mut add = |policy: &mut Policy| -> Result<()> {
-        for (kit, _, runtime) in &kit_rules {
-            added.extend(policy.add_kit_rules(&req.name, kit, runtime, false)?.1);
+        for k in &m.network {
+            added.extend(
+                policy
+                    .add_kit_rules(&req.name, &k.kit, &k.runtime, false)?
+                    .1,
+            );
         }
-        for (kit, install, _) in &kit_rules {
-            let (all, new) = policy.add_kit_rules(&req.name, kit, install, true)?;
+        for k in &m.network {
+            let (all, new) = policy.add_kit_rules(&req.name, &k.kit, &k.install, true)?;
             // Every install rule in place opens for the first start, one an interrupted create
             // left too; only the new ones are rolled back.
             for id in all {

@@ -520,6 +520,7 @@ pub fn resolve_for(
         install: ssh_phase(&ssh_entries, SshPhase::Install, &mut skipped)?,
         runtime: ssh_phase(&ssh_entries, SshPhase::Runtime, &mut skipped)?,
     };
+    add_passthrough_hosts(&mut merged);
 
     let mut it = all.into_iter();
     let workload = it.next().expect("workload is first");
@@ -533,6 +534,47 @@ pub fn resolve_for(
 }
 
 /// Merges the `ssh-agent@1` entries for `phase` (kit spec "Composition"): unrestricted when any
+/// A passthrough OAuth credential's token and resource hosts join its kit's network rules (the
+/// first entry for that kit), and its install rules too when the credential is used during install:
+/// the guest talks to them itself.
+fn add_passthrough_hosts(merged: &mut Merged) {
+    let Merged {
+        credentials,
+        network,
+        ..
+    } = merged;
+    for kc in credentials.iter() {
+        let Some(o) = kc.req.oauth.as_ref().filter(|o| o.passthrough) else {
+            continue;
+        };
+        let hosts: Vec<NetRule> = o
+            .token_host
+            .iter()
+            .chain(&o.resource_hosts)
+            .map(|h| NetRule {
+                host: h.clone(),
+                methods: vec![],
+                paths: vec![],
+            })
+            .collect();
+        let i = match network.iter().position(|r| r.kit == kc.kit) {
+            Some(i) => i,
+            None => {
+                network.push(KitRules {
+                    kit: kc.kit.clone(),
+                    install: Rules::default(),
+                    runtime: Rules::default(),
+                });
+                network.len() - 1
+            }
+        };
+        network[i].runtime.allow.extend(hosts.iter().cloned());
+        if kc.req.install {
+            network[i].install.allow.extend(hosts);
+        }
+    }
+}
+
 /// entry is, else the union of their namespaces; required when any entry is. `authenticate`
 /// limits (Phase 5g) can't be enforced yet: under a bounded merge a required entry with them
 /// refuses, an optional one is skipped.
@@ -1237,6 +1279,26 @@ mod tests {
             token_host: None,
             resource_hosts: vec![],
         })
+    }
+
+    #[test]
+    fn oauth_passthrough_hosts_join_the_kit_s_network_rules() {
+        let ty = "com.docker.sandbox/credential@1";
+        let body = cred(Some(OAuthReq {
+            passthrough: true,
+            token_host: Some("auth.x.com".into()),
+            resource_hosts: vec!["api.x.com".into()],
+        }));
+        let p = run(workload("w"), vec![mixin("m").cap(ty, false, body)]).unwrap();
+        let hosts = |l: &[NetRule]| l.iter().map(|n| n.host.clone()).collect::<Vec<_>>();
+        assert_eq!(p.merged.network.len(), 1);
+        assert_eq!(p.merged.network[0].kit, "m");
+        assert_eq!(
+            hosts(&p.merged.network[0].runtime.allow),
+            ["auth.x.com", "api.x.com"]
+        );
+        // Not used during install: no install rules.
+        assert!(p.merged.network[0].install.allow.is_empty());
     }
 
     #[test]
