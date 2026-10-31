@@ -152,9 +152,8 @@ pub fn run<R: Runner>(ctx: &mut Ctx<R>, a: &RunArgs) -> Result<i32> {
 
     // The agent's exit code is the result; failing to clean up after it only warrants a warning.
     if a.rm {
-        match ctx.vm.delete(&sb.machine) {
-            Ok(()) => session::clear(&sessions, sb.name()),
-            Err(e) => eprintln!("warning: removing sandbox {}: {e:#}", sb.name()),
+        if let Err(e) = super::lifecycle::delete_keeping_remote(ctx, &sb, true) {
+            eprintln!("warning: removing sandbox {}: {e:#}", sb.name());
         }
     } else if !sb.meta.long_running
         && session::idle(&sessions, sb.name())
@@ -478,6 +477,44 @@ mod tests {
             t.ctx.vm.runner().call_lines().last().unwrap(),
             "machine delete -n sbx-claude-proj -f"
         );
+    }
+
+    #[test]
+    fn rm_forgets_the_sandbox_policy_and_scoped_secrets_like_sbt_rm() {
+        use crate::policy::{Decision, Policy};
+        use crate::secrets::{SecretEntry, SecretsFile, Source, scope_for};
+        let mut t = test_env(&[]);
+        created(&t, "running");
+        let mut p = Policy::load(&t.ctx.paths).unwrap();
+        p.add_rule(
+            Some("claude-proj"),
+            Decision::Allow,
+            "a.com",
+            "added",
+            None,
+            None,
+        )
+        .unwrap();
+        p.save(&t.ctx.paths).unwrap();
+        let mut f = SecretsFile::default();
+        for scope in [Some("claude-proj"), None] {
+            let entry = SecretEntry {
+                service: "github".into(),
+                scope: scope_for(scope),
+                source: Source::Keychain,
+            };
+            t.ctx.store.set(&entry.account(), "tok").unwrap();
+            f.set(entry);
+        }
+        f.save(&t.ctx.paths).unwrap();
+
+        sbt(&mut t.ctx, &["run", "--rm", "--name", "claude-proj"]).unwrap();
+
+        let p = Policy::load(&t.ctx.paths).unwrap();
+        assert!(!p.sandboxes.contains_key("claude-proj"), "{p:?}");
+        let f = SecretsFile::load(&t.ctx.paths).unwrap();
+        let scopes: Vec<_> = f.secrets.iter().map(|e| e.scope.as_str()).collect();
+        assert_eq!(scopes, [scope_for(None)]);
     }
 
     #[test]
