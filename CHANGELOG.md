@@ -1,5 +1,30 @@
 # Changelog
 
+## [0.13.1](https://github.com/pelotech/smolbento/compare/v0.13.0...v0.13.1) (2026-10-31)
+
+
+### Bug Fixes
+
+* **run:** forget the sandbox's policy and secrets on --rm ([#53](https://github.com/pelotech/smolbento/issues/53)) ([05b0e14](https://github.com/pelotech/smolbento/commit/05b0e145d0e895fede3ab90fb290bfe3c5e6e3d7))
+
+
+### Refactors
+
+* move Ctx out of cli and split lifecycle.rs ([#58](https://github.com/pelotech/smolbento/issues/58)) ([135fef6](https://github.com/pelotech/smolbento/commit/135fef613f6b7e4595e300d1e639d44d2acbc752))
+* small cleanups from the project review ([#57](https://github.com/pelotech/smolbento/issues/57)) ([e8dab3c](https://github.com/pelotech/smolbento/commit/e8dab3c74695532750cc5f7869852f2561709f62))
+
+
+### Docs
+
+* **agents:** record the smolvm behaviour smolbento relies on ([#51](https://github.com/pelotech/smolbento/issues/51)) ([20c2350](https://github.com/pelotech/smolbento/commit/20c2350368c79cf1c7a7b92ff2eda1b49524f560))
+
+
+### Tests
+
+* **e2e:** push the host-mount kit instead of building it ([#54](https://github.com/pelotech/smolbento/issues/54)) ([c4482b3](https://github.com/pelotech/smolbento/commit/c4482b3851bfccd830198459092c469ed14e9f8b))
+* read prompt answers through Ctx so prompts can be tested ([#56](https://github.com/pelotech/smolbento/issues/56)) ([23c62ee](https://github.com/pelotech/smolbento/commit/23c62ee14788a94493c3f56a84b855118fc1fe30))
+* TestEnv helpers and Kit::new ([#55](https://github.com/pelotech/smolbento/issues/55)) ([2330868](https://github.com/pelotech/smolbento/commit/2330868ed8c6c05ed9f76d3f9a8f752790afd5a6))
+
 ## [0.13.0](https://github.com/pelotech/smolbento/compare/v0.12.0...v0.13.0) (2026-10-31)
 
 
