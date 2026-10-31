@@ -243,21 +243,8 @@ fn reference_kind(reference: &str) -> &'static str {
 /// A synthetic preset workload with nothing in it: the existing sandbox's agent for `kit add`.
 fn empty_workload(name: &str) -> Kit {
     Kit {
-        name: name.to_string(),
-        source: Source::Preset(String::new()),
-        digest: None,
-        kind: Kind::Workload,
-        provides: vec![],
-        requires: vec![],
-        integrates: vec![],
-        conflicts: vec![],
-        args: Default::default(),
-        caps: vec![],
-        env: vec![],
         content: Content::Image(String::new()),
-        command: None,
-        config: None,
-        reference: None,
+        ..Kit::new(name, Kind::Workload, Source::Preset(String::new()))
     }
 }
 

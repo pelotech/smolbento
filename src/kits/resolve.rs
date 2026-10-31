@@ -732,28 +732,10 @@ fn order(workload: &Kit, mixins: Vec<Kit>) -> Result<Vec<Kit>> {
 mod tests {
     use super::*;
     use crate::bridge::agent::PhaseGrant;
-    use crate::kits::model::{
-        ArgDef, Cap, Content, Lifecycle, NetRule, OAuthReq, Source, SshPhase,
-    };
+    use crate::kits::model::{ArgDef, Cap, Lifecycle, NetRule, OAuthReq, Source, SshPhase};
 
     fn base(name: &str, kind: Kind) -> Kit {
-        Kit {
-            name: name.into(),
-            source: Source::Registry(name.into()),
-            digest: None,
-            kind,
-            provides: vec![],
-            requires: vec![],
-            integrates: vec![],
-            conflicts: vec![],
-            args: BTreeMap::new(),
-            caps: vec![],
-            env: vec![],
-            content: Content::None,
-            command: None,
-            config: None,
-            reference: None,
-        }
+        Kit::new(name, kind, Source::Registry(name.into()))
     }
     fn mixin(name: &str) -> Kit {
         base(name, Kind::Mixin)

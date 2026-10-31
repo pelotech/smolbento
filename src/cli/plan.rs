@@ -1281,21 +1281,8 @@ mod tests {
         );
         fake.once_fail(&["machine", "status"], "NOT_FOUND", "vm not found");
         let kit = |name: &str, kind| Kit {
-            name: name.into(),
-            source: Source::Registry(format!("acme/{name}:1")),
             digest: Some(format!("sha256:{}", "ab".repeat(32))),
-            kind,
-            provides: vec![],
-            requires: vec![],
-            integrates: vec![],
-            conflicts: vec![],
-            args: Default::default(),
-            caps: vec![],
-            env: vec![],
-            content: Content::None,
-            command: None,
-            config: None,
-            reference: None,
+            ..Kit::new(name, kind, Source::Registry(format!("acme/{name}:1")))
         };
         let mut wl = kit("wl", Kind::Workload);
         wl.content = Content::Image("img:1".into());
@@ -1422,21 +1409,13 @@ mod tests {
         use crate::kits::args::ArgValues;
         use crate::kits::model::{Cap, CapBody, Content, Hook, HookCmd, Kind, Kit, Lifecycle};
         let kit = |name: &str, kind, content| Kit {
-            name: name.into(),
-            source: crate::kits::model::Source::Registry(format!("acme/{name}:1")),
             digest: Some(format!("sha256:{}", "ab".repeat(32))),
-            kind,
-            provides: vec![],
-            requires: vec![],
-            integrates: vec![],
-            conflicts: vec![],
-            args: Default::default(),
-            caps: vec![],
-            env: vec![],
             content,
-            command: None,
-            config: None,
-            reference: None,
+            ..Kit::new(
+                name,
+                kind,
+                crate::kits::model::Source::Registry(format!("acme/{name}:1")),
+            )
         };
         let wl = if preset {
             crate::kits::load::preset_kit(crate::agents::find("shell").unwrap(), "img:1")

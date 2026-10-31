@@ -720,7 +720,6 @@ fn pinned_ref(k: &Kit) -> Result<String> {
 
 #[cfg(test)]
 mod tests {
-    use std::collections::BTreeMap;
 
     use super::*;
     use crate::kits::args::ArgValues;
@@ -734,21 +733,8 @@ mod tests {
 
     fn kit(name: &str, kind: Kind) -> Kit {
         Kit {
-            name: name.into(),
-            source: Source::Registry(format!("acme/{name}:1")),
             digest: Some(format!("sha256:{}", "ab".repeat(32))),
-            kind,
-            provides: vec![],
-            requires: vec![],
-            integrates: vec![],
-            conflicts: vec![],
-            args: BTreeMap::new(),
-            caps: vec![],
-            env: vec![],
-            content: Content::None,
-            command: None,
-            config: None,
-            reference: None,
+            ..Kit::new(name, kind, Source::Registry(format!("acme/{name}:1")))
         }
     }
     fn workload() -> Kit {

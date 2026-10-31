@@ -313,21 +313,14 @@ pub fn preset_provide(agent: &str, image: &str) -> String {
 
 pub fn preset_kit(agent: &Agent, image: &str) -> Kit {
     Kit {
-        name: agent.name.to_string(),
-        source: Source::Preset(image.to_string()),
-        digest: None,
-        kind: Kind::Workload,
         provides: vec![preset_provide(agent.name, image)],
-        requires: vec![],
-        integrates: vec![],
-        conflicts: vec![],
-        args: Default::default(),
-        caps: vec![],
-        env: vec![],
         content: Content::Image(image.to_string()),
         command: Some(agent.command.iter().map(|s| s.to_string()).collect()),
-        config: None,
-        reference: None,
+        ..Kit::new(
+            agent.name,
+            Kind::Workload,
+            Source::Preset(image.to_string()),
+        )
     }
 }
 

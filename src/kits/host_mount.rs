@@ -129,26 +129,10 @@ fn create_dir(host: &Path, mode: u32) -> std::io::Result<()> {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::kits::model::{Content, Kind};
+    use crate::kits::model::Kind;
 
     fn kit(source: Source) -> Kit {
-        Kit {
-            name: "k".into(),
-            source,
-            digest: None,
-            kind: Kind::Mixin,
-            provides: vec![],
-            requires: vec![],
-            integrates: vec![],
-            conflicts: vec![],
-            args: Default::default(),
-            caps: vec![],
-            env: vec![],
-            content: Content::None,
-            command: None,
-            config: None,
-            reference: None,
-        }
+        Kit::new("k", Kind::Mixin, source)
     }
 
     #[test]
