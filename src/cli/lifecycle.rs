@@ -239,7 +239,7 @@ pub(crate) fn kit_plan<R: Runner>(
         }
     };
     let mut args = ArgValues::parse(&opts.kit_args_file, &opts.kit_arg)?;
-    let mut mixins = opts
+    let mixins = opts
         .kit
         .iter()
         .map(|r| kits.load(ctx, r))
@@ -252,20 +252,7 @@ pub(crate) fn kit_plan<R: Runner>(
         };
         args.pin(&kit.name, pins)?;
     }
-    // First, added or given with `--kit docker`: other kits' startup steps may use the dockerd it
-    // starts (in sbx it's in the image).
-    if let Some(i) = mixins
-        .iter()
-        .position(|k| k.source == Source::Builtin("docker"))
-    {
-        let docker = mixins.remove(i);
-        mixins.insert(0, docker);
-    } else if needs_docker_kit(req.docker, &workload, &mixins) {
-        mixins.insert(
-            0,
-            load::builtin("docker").expect("the docker kit is shipped")?,
-        );
-    }
+    let mixins = order_mixins(req.docker, &workload, mixins)?;
     let plan = resolve_for(workload, mixins, &args, &req.workdir())?;
     if let Some(t) = &req.template {
         let layered = crate::kits::compose::layered_names(&plan)?;
@@ -341,6 +328,25 @@ impl<'a> KitsSection<'a> {
             }
         }
     }
+}
+
+/// The mixins with the shipped docker kit first, whether given with `--kit docker` or added
+/// because the image is Docker-enabled (`needs_docker_kit`): other kits' startup steps may use the
+/// dockerd it starts (in sbx it's in the image).
+fn order_mixins(docker_image: bool, workload: &Kit, mut mixins: Vec<Kit>) -> Result<Vec<Kit>> {
+    if let Some(i) = mixins
+        .iter()
+        .position(|k| k.source == Source::Builtin("docker"))
+    {
+        let docker = mixins.remove(i);
+        mixins.insert(0, docker);
+    } else if needs_docker_kit(docker_image, workload, &mixins) {
+        mixins.insert(
+            0,
+            load::builtin("docker").expect("the docker kit is shipped")?,
+        );
+    }
+    Ok(mixins)
 }
 
 /// A Docker-enabled image gets dockerd through the shipped kit, unless `--kit docker` added it or
@@ -2691,6 +2697,33 @@ SETUP
             .map(|k| k.name.clone())
             .collect();
         assert_eq!(names, ["docker", "akit"]);
+    }
+
+    #[test]
+    fn order_mixins_puts_the_docker_kit_first() {
+        use super::order_mixins;
+        use crate::kits::load;
+        use crate::kits::model::{Kind, Kit, Source};
+        let wl = Kit::new("wl", Kind::Workload, Source::Registry("acme/wl:1".into()));
+        let mixin = |n: &str| Kit::new(n, Kind::Mixin, Source::Registry(format!("acme/{n}:1")));
+        let names = |ks: Vec<Kit>| ks.into_iter().map(|k| k.name).collect::<Vec<_>>();
+        let docker = load::builtin("docker").unwrap().unwrap();
+        // No Docker image: as given.
+        assert_eq!(
+            names(order_mixins(false, &wl, vec![mixin("a")]).unwrap()),
+            ["a"]
+        );
+        // A Docker image gets the shipped kit, first.
+        assert_eq!(
+            names(order_mixins(true, &wl, vec![mixin("a")]).unwrap()),
+            [docker.name.as_str(), "a"]
+        );
+        // `--kit docker` after another kit moves first, and isn't added twice.
+        let given = vec![mixin("a"), docker.clone()];
+        assert_eq!(
+            names(order_mixins(true, &wl, given).unwrap()),
+            [docker.name.as_str(), "a"]
+        );
     }
 
     /// `kit_target` and a quiet `kit_plan` for `args` followed by `kit`.
