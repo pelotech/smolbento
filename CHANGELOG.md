@@ -1,5 +1,22 @@
 # Changelog
 
+## [0.13.1](https://github.com/pelotech/smolbento/compare/v0.13.0...v0.13.1) (2026-10-31)
+
+
+### Bug Fixes
+
+* **run:** forget the sandbox's policy and secrets on --rm ([#53](https://github.com/pelotech/smolbento/issues/53)) ([05b0e14](https://github.com/pelotech/smolbento/commit/05b0e145d0e895fede3ab90fb290bfe3c5e6e3d7))
+
+
+### Docs
+
+* **agents:** record the smolvm behaviour smolbento relies on ([#51](https://github.com/pelotech/smolbento/issues/51)) ([20c2350](https://github.com/pelotech/smolbento/commit/20c2350368c79cf1c7a7b92ff2eda1b49524f560))
+
+
+### Tests
+
+* **e2e:** push the host-mount kit instead of building it ([#54](https://github.com/pelotech/smolbento/issues/54)) ([c4482b3](https://github.com/pelotech/smolbento/commit/c4482b3851bfccd830198459092c469ed14e9f8b))
+
 ## [0.13.0](https://github.com/pelotech/smolbento/compare/v0.12.0...v0.13.0) (2026-10-31)
 
 
