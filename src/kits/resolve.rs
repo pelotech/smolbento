@@ -9,7 +9,8 @@ use crate::kits::args::{ArgValues, expand};
 use crate::kits::capability;
 use crate::kits::host_mount;
 use crate::kits::model::{
-    AgentContextReq, CapBody, CredReq, FileReq, Hook, HookCmd, Kind, Kit, NetRule, Rules, SshPhase,
+    AgentContextReq, Cap, CapBody, CredReq, FileReq, Hook, HookCmd, Kind, Kit, Lifecycle, NetRule,
+    Rules, Source, SshPhase,
 };
 
 /// The agent user's home in the platform floor; the host can't see the guest's real env.
@@ -214,42 +215,7 @@ pub fn resolve_for(
             capability::incoherent(&[capability::NO_WORKLOAD.to_string()])
         );
     }
-    // Names scope `--kit-arg`s and tag policy rules. An agent preset isn't a kit, so a kit may
-    // share its name.
-    use crate::kits::model::Source;
-    let named: Vec<&Kit> = std::iter::once(&workload)
-        .filter(|w| !matches!(w.source, Source::Preset(_)))
-        .chain(&mixins)
-        .collect();
-    for (i, k) in named.iter().enumerate() {
-        if named[..i].iter().any(|o| o.source == k.source) {
-            bail!("{}", capability::listed_twice(k.label()));
-        }
-    }
-    let mut seen = BTreeSet::new();
-    for k in named {
-        if !seen.insert(k.name.as_str()) {
-            // Most likely a user's own docker kit beside the shipped one a Docker image gets.
-            let shipped = std::iter::once(&workload)
-                .chain(&mixins)
-                .any(|k| k.source == Source::Builtin("docker"));
-            if k.name == "docker" && shipped {
-                bail!(
-                    "two kits are named docker: yours and the shipped one a Docker-enabled image \
-                     gets; rename your kit, or have it provide docker \
-                     (`provides: [docker@<version>]`) to replace the shipped one"
-                );
-            }
-            bail!("two kits are named {}", k.name);
-        }
-    }
-    if let Some(m) = mixins.iter().find(|m| m.kind == Kind::Workload) {
-        bail!(
-            "two workloads: {} and {}; pass a workload kit as the agent argument",
-            workload.name,
-            m.name
-        );
-    }
+    check_names(&workload, &mixins)?;
     // Args first: a `provides` entry may name one (`claude@${{ kit.args.version }}`), and
     // ordering parses the expanded entries.
     let mut workload = workload;
@@ -272,15 +238,10 @@ pub fn resolve_for(
         .chain(mixins.iter().cloned())
         .collect();
 
-    let mut merged = Merged::default();
-    for k in &all {
-        for (name, value) in &k.env {
-            match merged.env.iter_mut().find(|(n, _)| n == name) {
-                Some(e) => e.1 = value.clone(),
-                None => merged.env.push((name.clone(), value.clone())),
-            }
-        }
-    }
+    let mut merged = Merged {
+        env: merge_env(&all),
+        ..Default::default()
+    };
     let mut env_map: BTreeMap<String, String> = merged.env.iter().cloned().collect();
     env_map.insert("HOME".into(), AGENT_HOME.into());
     env_map.insert("WORKSPACE".into(), workdir.into());
@@ -335,57 +296,8 @@ pub fn resolve_for(
                     });
                 }
                 CapBody::Network { install, runtime } => {
-                    // Method and path qualifiers can't be enforced, only hosts can.
-                    let is_qualified = |n: &NetRule| !n.methods.is_empty() || !n.paths.is_empty();
-                    let qualified = [install, runtime]
-                        .iter()
-                        .flat_map(|r| r.allow.iter().chain(&r.deny))
-                        .any(is_qualified);
-                    // Allows widen to their host. Qualified denies are dropped: widening one
-                    // would block the whole host, the opposite of what the kit asked for.
-                    let host_only = |r: &Rules| Rules {
-                        allow: r
-                            .allow
-                            .iter()
-                            .map(|n| NetRule {
-                                host: n.host.clone(),
-                                methods: vec![],
-                                paths: vec![],
-                            })
-                            .collect(),
-                        deny: r
-                            .deny
-                            .iter()
-                            .filter(|n| !is_qualified(n))
-                            .cloned()
-                            .collect(),
-                    };
-                    let (install, runtime) = if qualified && cap.ty.ends_with("network-policy@2") {
-                        if !cap.optional {
-                            bail!(
-                                "kit {}: network-policy@2 method/path rules are not enforced by \
-                                 smolbento",
-                                k.name
-                            );
-                        }
-                        let dropped = [install, runtime]
-                            .iter()
-                            .flat_map(|r| &r.deny)
-                            .filter(|n| is_qualified(n))
-                            .count();
-                        let note = match dropped {
-                            0 => String::new(),
-                            1 => "; 1 qualified deny rule dropped".into(),
-                            d => format!("; {d} qualified deny rules dropped"),
-                        };
-                        skipped.push(Skipped::new(
-                            &k.name,
-                            format!("network-policy@2 method/path (host-only{note})"),
-                        ));
-                        (host_only(install), host_only(runtime))
-                    } else {
-                        (install.clone(), runtime.clone())
-                    };
+                    let (install, runtime, skip) = enforceable(k, cap, install, runtime)?;
+                    skipped.extend(skip);
                     merged.network.push(KitRules {
                         kit: k.name.clone(),
                         install,
@@ -462,30 +374,7 @@ pub fn resolve_for(
                         merged.memory = memory.clone();
                     }
                 }
-                CapBody::Lifecycle(l) => {
-                    for h in &l.install {
-                        merged
-                            .install_hooks
-                            .push((k.name.clone(), expand_hook(h, &ex)?));
-                    }
-                    for h in &l.startup {
-                        merged
-                            .startup_hooks
-                            .push((k.name.clone(), expand_hook(h, &ex)?));
-                    }
-                    for f in &l.files {
-                        // Only text can hold `${{ }}` references; other bytes pass through.
-                        let content = match std::str::from_utf8(&f.content) {
-                            Ok(text) => ex(text)?.into_bytes(),
-                            Err(_) => f.content.clone(),
-                        };
-                        merged.files.push(FileReq {
-                            path: ex(&f.path)?,
-                            content,
-                            ..f.clone()
-                        });
-                    }
-                }
+                CapBody::Lifecycle(l) => add_lifecycle(&mut merged, &k.name, l, &ex)?,
                 CapBody::AgentContext(c) => {
                     merged.contexts.push((
                         k.name.clone(),
@@ -534,6 +423,146 @@ pub fn resolve_for(
 }
 
 /// Merges the `ssh-agent@1` entries for `phase` (kit spec "Composition"): unrestricted when any
+/// Each kit once, names unique (they scope `--kit-arg`s and tag policy rules; an agent preset
+/// isn't a kit, so a kit may share its name), and one workload.
+fn check_names(workload: &Kit, mixins: &[Kit]) -> Result<()> {
+    let named: Vec<&Kit> = std::iter::once(workload)
+        .filter(|w| !matches!(w.source, Source::Preset(_)))
+        .chain(mixins)
+        .collect();
+    for (i, k) in named.iter().enumerate() {
+        if named[..i].iter().any(|o| o.source == k.source) {
+            bail!("{}", capability::listed_twice(k.label()));
+        }
+    }
+    let mut seen = BTreeSet::new();
+    for k in named {
+        if !seen.insert(k.name.as_str()) {
+            // Most likely a user's own docker kit beside the shipped one a Docker image gets.
+            let shipped = std::iter::once(workload)
+                .chain(mixins)
+                .any(|k| k.source == Source::Builtin("docker"));
+            if k.name == "docker" && shipped {
+                bail!(
+                    "two kits are named docker: yours and the shipped one a Docker-enabled image \
+                     gets; rename your kit, or have it provide docker \
+                     (`provides: [docker@<version>]`) to replace the shipped one"
+                );
+            }
+            bail!("two kits are named {}", k.name);
+        }
+    }
+    if let Some(m) = mixins.iter().find(|m| m.kind == Kind::Workload) {
+        bail!(
+            "two workloads: {} and {}; pass a workload kit as the agent argument",
+            workload.name,
+            m.name
+        );
+    }
+    Ok(())
+}
+
+/// The kits' plain env vars in kit order; a later kit's value wins.
+fn merge_env(kits: &[Kit]) -> Vec<(String, String)> {
+    let mut env: Vec<(String, String)> = Vec::new();
+    for k in kits {
+        for (name, value) in &k.env {
+            match env.iter_mut().find(|(n, _)| n == name) {
+                Some(e) => e.1 = value.clone(),
+                None => env.push((name.clone(), value.clone())),
+            }
+        }
+    }
+    env
+}
+
+/// What of a kit's network rules smolbento can enforce: hosts, not methods or paths. A
+/// `network-policy@2` capability with method or path qualifiers is refused, or, when optional,
+/// downgraded to host-only (with a `Skipped` note): allows widen to their host, and qualified
+/// denies are dropped, since widening one would block the whole host, the opposite of what the
+/// kit asked for.
+fn enforceable(
+    k: &Kit,
+    cap: &Cap,
+    install: &Rules,
+    runtime: &Rules,
+) -> Result<(Rules, Rules, Option<Skipped>)> {
+    let is_qualified = |n: &NetRule| !n.methods.is_empty() || !n.paths.is_empty();
+    let qualified = [install, runtime]
+        .iter()
+        .flat_map(|r| r.allow.iter().chain(&r.deny))
+        .any(is_qualified);
+    if !qualified || !cap.ty.ends_with("network-policy@2") {
+        return Ok((install.clone(), runtime.clone(), None));
+    }
+    if !cap.optional {
+        bail!(
+            "kit {}: network-policy@2 method/path rules are not enforced by smolbento",
+            k.name
+        );
+    }
+    let host_only = |r: &Rules| Rules {
+        allow: r
+            .allow
+            .iter()
+            .map(|n| NetRule {
+                host: n.host.clone(),
+                methods: vec![],
+                paths: vec![],
+            })
+            .collect(),
+        deny: r
+            .deny
+            .iter()
+            .filter(|n| !is_qualified(n))
+            .cloned()
+            .collect(),
+    };
+    let dropped = [install, runtime]
+        .iter()
+        .flat_map(|r| &r.deny)
+        .filter(|n| is_qualified(n))
+        .count();
+    let note = match dropped {
+        0 => String::new(),
+        1 => "; 1 qualified deny rule dropped".into(),
+        d => format!("; {d} qualified deny rules dropped"),
+    };
+    let skip = Skipped::new(
+        &k.name,
+        format!("network-policy@2 method/path (host-only{note})"),
+    );
+    Ok((host_only(install), host_only(runtime), Some(skip)))
+}
+
+/// A kit's install and startup hooks and init files, with `${{ }}` references expanded by `ex`.
+fn add_lifecycle(
+    merged: &mut Merged,
+    kit: &str,
+    l: &Lifecycle,
+    ex: &dyn Fn(&str) -> Result<String>,
+) -> Result<()> {
+    for h in &l.install {
+        merged.install_hooks.push((kit.into(), expand_hook(h, ex)?));
+    }
+    for h in &l.startup {
+        merged.startup_hooks.push((kit.into(), expand_hook(h, ex)?));
+    }
+    for f in &l.files {
+        // Only text can hold `${{ }}` references; other bytes pass through.
+        let content = match std::str::from_utf8(&f.content) {
+            Ok(text) => ex(text)?.into_bytes(),
+            Err(_) => f.content.clone(),
+        };
+        merged.files.push(FileReq {
+            path: ex(&f.path)?,
+            content,
+            ..f.clone()
+        });
+    }
+    Ok(())
+}
+
 /// A passthrough OAuth credential's token and resource hosts join its kit's network rules (the
 /// first entry for that kit), and its install rules too when the credential is used during install:
 /// the guest talks to them itself.
