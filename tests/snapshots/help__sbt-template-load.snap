@@ -1,0 +1,18 @@
+---
+source: tests/help.rs
+expression: help(&path)
+---
+Load a template from a file made by `template save --output`
+
+Usage: sbt template load [OPTIONS] <FILE>
+
+Arguments:
+  <FILE>
+
+
+Options:
+  -D, --debug
+          Print each smolvm command line
+
+  -h, --help
+          Print help

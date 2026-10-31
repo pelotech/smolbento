@@ -1,5 +1,5 @@
 use std::collections::BTreeMap;
-use std::path::PathBuf;
+use std::path::{Path, PathBuf};
 
 use anyhow::{Context, Result, anyhow};
 
@@ -87,6 +87,8 @@ pub struct CreateSpec {
     pub credentials: Vec<Credential>,
     /// `--smolfile`: a Smolfile kit's configuration, which may also name the image.
     pub smolfile: Option<PathBuf>,
+    /// `--from`: a saved template's pack, which stands in for `--image` (smolvm refuses both).
+    pub from: Option<PathBuf>,
     pub mounts: Vec<Mount>,
     /// `--mount-socket`: (host socket, guest path), connected to the host path at connect time.
     pub mount_sockets: Vec<(PathBuf, String)>,
@@ -108,8 +110,10 @@ impl CreateSpec {
     pub fn to_args(&self) -> Vec<String> {
         let mut a = vec!["machine".to_string(), "create".to_string()];
         flag(&mut a, "-n", &self.name);
+        if let Some(p) = &self.from {
+            flag(&mut a, "--from", p.display().to_string());
         // smolvm takes the image from the Smolfile when `--image` is left out.
-        if self.smolfile.is_none() || !self.image.is_empty() {
+        } else if self.smolfile.is_none() || !self.image.is_empty() {
             flag(&mut a, "--image", &self.image);
         }
         if let Some(s) = &self.smolfile {
@@ -300,6 +304,14 @@ impl<R: Runner> Smolvm<R> {
             }
         };
         checked(self.runner.run_streaming(&a, env, remove, &mut on_line)?).map(drop)
+    }
+
+    /// Packs the stopped machine's filesystem into `<out>.smolmachine` (and an executable stub
+    /// at `out`, which callers delete). Unsigned: the stub is never run.
+    pub fn pack_from_vm(&self, machine: &str, out: &Path) -> Result<()> {
+        let mut a = args(&["pack", "create", "--from-vm", machine, "--no-sign"]);
+        flag(&mut a, "-o", out.display().to_string());
+        self.call(a).map(drop)
     }
 
     /// A copy-on-write child of the running, branchable `from`: its memory, processes and disk. Its
@@ -593,6 +605,34 @@ mod tests {
         vm.publish("m", &[]).unwrap();
         vm.unpublish("m", &[]).unwrap();
         assert!(vm.runner().call_lines().is_empty());
+    }
+
+    #[test]
+    fn create_from_a_pack_replaces_the_image() {
+        let spec = CreateSpec {
+            name: "sbx-b".into(),
+            image: "img:1".into(),
+            from: Some("/d/templates/abc.smolmachine".into()),
+            ..Default::default()
+        };
+        let line = spec.to_args().join(" ");
+        assert!(
+            line.starts_with("machine create -n sbx-b --from /d/templates/abc.smolmachine"),
+            "{line}"
+        );
+        assert!(!line.contains("--image"), "{line}");
+    }
+
+    #[test]
+    fn pack_from_vm_args() {
+        let fake = FakeRunner::new();
+        fake.ok(&["pack", "create"], "");
+        let vm = Smolvm::new(fake);
+        vm.pack_from_vm("sbx-a", Path::new("/t/pack")).unwrap();
+        assert_eq!(
+            vm.runner().call_lines(),
+            vec!["pack create --from-vm sbx-a --no-sign -o /t/pack"]
+        );
     }
 
     #[test]

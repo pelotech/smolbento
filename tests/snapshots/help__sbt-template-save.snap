@@ -1,0 +1,24 @@
+---
+source: tests/help.rs
+expression: help(&path)
+---
+Save a snapshot of the sandbox as a template
+
+Usage: sbt template save [OPTIONS] <SANDBOX> <TAG>
+
+Arguments:
+  <SANDBOX>
+
+
+  <TAG>
+          Template name, e.g. myimage:v1.0
+
+Options:
+  -D, --debug
+          Print each smolvm command line
+
+  -o, --output <OUTPUT>
+          Also export the template to a file
+
+  -h, --help
+          Print help

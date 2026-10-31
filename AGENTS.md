@@ -40,6 +40,7 @@ exist only in some checkouts). If they're there, read the relevant section befor
 | `policy` | network rules, presets, compile to smolvm flags |
 | `secrets` | sources, stores, resolve at start |
 | `skills` | shared skills store; --skills modes; kit skill capabilities |
+| `templates` | saved templates: smolvm packs, index, export archive |
 
 Planned for later phases: `kits`, `hostsvc`
 (host services and `_relay`), `mcp`, `tui`; `kits/` for shipped kits and `images/plus/` for the plus

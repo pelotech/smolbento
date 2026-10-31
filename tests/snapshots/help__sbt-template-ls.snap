@@ -1,0 +1,25 @@
+---
+source: tests/help.rs
+expression: help(&path)
+---
+List templates
+
+Usage: sbt template ls [OPTIONS]
+
+Options:
+  -D, --debug
+          Print each smolvm command line
+
+      --format <FORMAT>
+          Output format: table, json or yaml
+
+          [possible values: table, json, yaml]
+
+      --json
+          Output in JSON format
+
+  -q, --quiet
+          Only display template names
+
+  -h, --help
+          Print help

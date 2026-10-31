@@ -30,7 +30,7 @@ Commands:
   kit         Inspect, validate and add kits
   mcp         MCP servers (not implemented yet)
   env         Manage a sandbox declared in an sbxenv.yaml file
-  template    Sandbox templates (not implemented yet)
+  template    Save sandboxes as templates and manage them
   skills      Manage skills shared with agents in sandboxes (experimental)
   setup       SSH access (not implemented yet)
   tui         Dashboard (not implemented yet)

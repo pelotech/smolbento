@@ -61,6 +61,14 @@ pub fn has_layers(kit: &Kit) -> Result<bool> {
     })
 }
 
+/// Names of the mixins that add image layers.
+pub fn layered_names(plan: &Plan) -> Result<Vec<String>> {
+    Ok(layered_mixins(plan)?
+        .into_iter()
+        .map(|(k, _)| k.name.clone())
+        .collect())
+}
+
 fn layered_mixins(plan: &Plan) -> Result<Vec<(&Kit, Layout)>> {
     let mut layered = Vec::new();
     for m in &plan.mixins {

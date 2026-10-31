@@ -36,6 +36,10 @@ shared by the kit's sandboxes and kept after they're removed. `--mount` and `sbx
 `mounts:` choose your own directory, and the new `sbt inspect` shows where each one is. See
 [Usage](usage.md#kit-host-mounts).
 
+**Phase 5d (templates) is done.** `sbt template save|ls|rm|load` save a stopped sandbox's disk as a
+named template (smolvm pack), list and remove them, and export or import them as archives.
+`run -t` and `create -t` start a sandbox from one. See [Usage](usage.md#templates).
+
 **Phase 5c (agent skills) is done.** `sbt skills add|import|ls|rm|update` keep a shared store of
 skills in `~/.local/share/smolbento/agent-skills`, and `--skills off|readonly|readwrite` (default
 `skills.defaultMode`) links or mounts it into a new sandbox's agent skills directory. Kits can name
@@ -81,8 +85,9 @@ terminal fail until you do.
 | 5a | Host mounts: `host-mount@1`, `--mount`, `sbxenv.yaml` `mounts:`, `inspect` | ✅ Done |
 | 5b | SSH agent forwarding: `ssh-agent@1` with `sign` limits, the built-in agents' own grant, `ssh.agentForwardingEnabled`, `ssh.agentSocketPath` | ✅ Done |
 | 5c | Agent skills: `skills add/import/ls/rm/update`, `--skills`, `skills.defaultMode`, `agent-skills@1`, `agent-skill@1` | ✅ Done |
+| 5d | Templates: `template save/ls/rm/load`, `run/create -t` with a saved template | ✅ Done |
 | 5e | Browser and clipboard bridge while attached (`xdg-open`, `wl-copy`/`xclip`/`xsel`/`pbcopy`, the login callback relay, `browser.enabled`) | ✅ Done |
-| 5 | The other parts, easiest first: 5d `template`; 5f MCP (`--static-mcp`, `mcp`); 5g `ssh-agent@1` `authenticate` limits (logins only to named servers, checked against your known hosts); 5h `setup ssh` (`ssh NAME.sbx` into sandboxes, e.g. from VS Code Remote-SSH; the `ssh.autoCreate`, `ssh.defaultAgent`, `ssh.defaultTemplate`, `ssh.workspaceRoot` settings) | Planned |
+| 5 | The other parts, easiest first: 5f MCP (`--static-mcp`, `mcp`); 5g `ssh-agent@1` `authenticate` limits (logins only to named servers, checked against your known hosts); 5h `setup ssh` (`ssh NAME.sbx` into sandboxes, e.g. from VS Code Remote-SSH; the `ssh.autoCreate`, `ssh.defaultAgent`, `ssh.defaultTemplate`, `ssh.workspaceRoot` settings) | Planned |
 | 6 | Finish `sbxenv.yaml`: `env plan`, remembered approvals (`env.rememberHostCommands`), `lifecycle`, `bindings`, `registries`, `mcp`, the remaining `sandboxOptions` | Planned |
 | 7 | Kit publishing: `kit pack/push/pull/sign/verify` | Planned |
 | 8 | The `plus` kit, built and published with smolbento itself (an end-to-end check of everything before it) | Planned |
@@ -104,6 +109,7 @@ terminal fail until you do.
   text only, and doesn't read your clipboard or paste images. Forks have no bridge.
 - The SSH agent is served only while `sbt run`, `sbt exec -it` or `sbt exec` runs for the sandbox
   (no daemon), and `ssh-agent@1` `authenticate` limits aren't supported yet (5g).
+- Templates don't keep `/tmp`.
 - Shared skills are linked by a start script that runs as the `agent` user: images without that
   account get no links (a warning), and a required bundled kit skill there fails the create.
 - Only the agent's primary group takes your gid: group-writable shared directories aren't
@@ -115,6 +121,8 @@ terminal fail until you do.
 Changes we'd propose to smolvm (none filed yet). What smolvm 1.32.4 lacks, and what smolbento does
 meanwhile:
 
+- **Saving a sandbox made from a template.** Packing a machine created from a pack times out in
+  smolvm 1.32.4, and `--rebase-from-image` drops the first template's files. Meanwhile it's refused.
 - **Per-port host access.** smolvm can open the host's loopback to a guest only as a whole (the
   gateway CIDR `100.96.0.1/32`). Meanwhile a `localhost:PORT` rule opens every host port to
   sandboxes created with host access (documented).

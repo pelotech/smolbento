@@ -84,6 +84,10 @@ pub struct CreateRequest {
     pub skills_mode: crate::skills::Mode,
     /// The store mount and `sbx.skills` label; `None` without skills directories.
     pub skills: Option<crate::skills::Setup>,
+    /// `-t` named a saved template: its full ref (the `sbx.template` label) and its pack,
+    /// created with `--from` in place of the image.
+    pub template: Option<String>,
+    pub template_pack: Option<PathBuf>,
 }
 
 impl CreateRequest {
@@ -136,6 +140,7 @@ pub fn meta(req: &CreateRequest) -> Meta {
             .clone()
             .filter(|_| !name::is_internal(&req.name)),
         skills: req.skills.as_ref().map(|s| s.label.clone()),
+        template: req.template.clone(),
     }
 }
 
@@ -225,6 +230,7 @@ pub fn spec(req: &CreateRequest) -> CreateSpec {
         deny_cidrs: req.deny_cidrs.clone(),
         credentials: req.credentials.clone(),
         smolfile: req.smolfile.clone(),
+        from: req.template_pack.clone(),
         // The workload runs as root so startup steps (dockerd) can; agents exec as `agent`.
         user: Some("root".into()),
         cmd: vec!["sleep".into(), "infinity".into()],
@@ -254,6 +260,22 @@ mod tests {
             created: 1000,
             ..Default::default()
         }
+    }
+
+    #[test]
+    fn a_template_sandbox_is_created_from_its_pack() {
+        let mut req = request(false, vec![]);
+        req.template = Some("docker.io/library/t:v1".into());
+        req.template_pack = Some("/d/templates/abc.smolmachine".into());
+        let spec = spec(&req);
+        assert_eq!(
+            spec.from,
+            Some(PathBuf::from("/d/templates/abc.smolmachine"))
+        );
+        assert_eq!(
+            spec.labels.get("sbx.template").unwrap(),
+            "docker.io/library/t:v1"
+        );
     }
 
     /// Docker's storage comes from the docker kit's `volume@1`s (`req.volumes`).

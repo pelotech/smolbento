@@ -114,7 +114,7 @@ Options for `run` and `create`:
 | `-e, --env KEY=VALUE` | Environment variable; a bare `KEY` copies the host's value |
 | `--env-file FILE` | Read `KEY=VALUE` lines |
 | `-p, --publish [[127.0.0.1:]HOST:]PORT[/udp]` | Publish a port on `127.0.0.1`; with no host port, a free one is picked |
-| `-t, --template IMAGE` | Use another image |
+| `-t, --template TEMPLATE` | Use another image, or a saved [template](#templates) |
 | `--no-progress` | Don't print progress |
 | `--clone` | Give the agent its own clone of the repo instead of mounting it (see [Clone mode](#clone-mode)) |
 
@@ -619,6 +619,35 @@ A kit can ask for more skills directories and ship skills of its own:
 - The bundled-skill step runs as root and gives the links to the agent, like the start's links.
   `kit add` refuses kits with either capability: mounts are set at create, so create a new
   sandbox with the kit.
+
+## Templates
+
+A template is a snapshot of a sandbox's disk that new sandboxes can start from. Install your tools
+once, save, and reuse.
+
+```sh
+sbt stop claude-myrepo
+sbt template save claude-myrepo myimage:v1
+sbt template save claude-myrepo myimage:v1 -o myimage.tar   # also export to a file
+sbt run -t myimage:v1 claude .                 # or: create -t myimage:v1
+sbt template ls                                # --json, --format json|yaml, -q
+sbt template rm myimage:v1                     # name, or a 4+ hex character id prefix; -f skips the prompt
+sbt template load myimage.tar                  # import a file made with --output
+```
+
+- The sandbox must be stopped to save it.
+- `-t` first looks for a saved template of that name, then treats it as an image. `-t` never takes an id
+  prefix (unlike `template rm`), so a name that is only hex digits (such as `abcd`) is always an
+  image. `--pull never` is accepted only with a
+  saved template.
+- The agent must match the template's: a `claude` template can't start a `codex` sandbox.
+- `/tmp` isn't kept, and neither is the workspace (it's mounted, not part of the disk).
+- A sandbox made from a template can't be saved yet.
+- A sandbox running a kit workload (an agent that isn't a built-in preset) can't be saved yet.
+- `-t` can't be combined with `--kit` kits that add image layers, since a template's disk is saved
+  whole. Kits without layers, such as the built-in `docker` kit, work.
+- Removing a template doesn't affect sandboxes made from it.
+- Kit install steps run again for each new sandbox.
 
 ## Environments (sbxenv.yaml)
 
