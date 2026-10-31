@@ -1457,36 +1457,37 @@ build: |
 /// A kit's `host-mount@1` directory is shared by its sandboxes and outlives them; `--mount`
 /// replaces it with your own directory.
 #[test]
-#[ignore = "boots real VMs, builds in the builder sandbox and pulls debian; run with `just e2e`"]
+#[ignore = "boots real VMs and pulls debian; run with `just e2e`"]
 fn kit_host_mount_shared_and_kept() {
     const SHARED: &str = "/home/agent/.e2e-shared";
     let e = E2e::new("hostmount");
-    let _builder = BuilderGuard::new();
-    e.one_off_images();
-    let kit = e.dir.path().join("hostmount");
-    std::fs::create_dir_all(&kit).unwrap();
-    std::fs::write(
-        kit.join("hostmount.yaml"),
-        format!(
-            r#"# syntax=docker/sandbox-kit:3
-schemaVersion: "3"
-kind: workload
-version: "1.0.0"
-capabilities:
-  - type: com.docker.sandbox/sbx@1
-  - type: com.docker.sandbox/host-mount@1
-    config:
-      path: {SHARED}
-build: |
-  FROM debian:bookworm-slim
-  RUN useradd -m -u 1000 -s /bin/bash agent
-  USER agent
-  CMD ["bash"]
-"#
+    // A pushed kit rather than a `build:` one, so this test stays out of the serial builder group
+    // (building is covered by `local_v3_kit_builds_in_the_builder_sandbox`).
+    let reg = Registry::start(&e);
+    let base = Image::pull("debian:bookworm-slim");
+    let passwd = base.file("etc/passwd") + "agent:x:1000:1000::/home/agent:/bin/bash\n";
+    let group = base.file("etc/group") + "agent:x:1000:\n";
+    let mut image = base.with_files(&[
+        ("etc/passwd", &passwd),
+        ("etc/group", &group),
+        ("home/agent/.keep", ""),
+    ]);
+    let c = &mut image.config["config"];
+    c["User"] = "agent".into();
+    c["Entrypoint"] = serde_json::Value::Null;
+    c["Cmd"] = serde_json::json!(["bash"]);
+    let kit = reg.push(
+        "hostmount",
+        image,
+        descriptor(
+            "workload",
+            &[],
+            serde_json::json!([
+                {"type": "com.docker.sandbox/sbx@1"},
+                {"type": "com.docker.sandbox/host-mount@1", "config": {"path": SHARED}},
+            ]),
         ),
-    )
-    .unwrap();
-    let kit = kit.canonicalize().unwrap();
+    );
     let (a, b) = (format!("{}-a", e.name), format!("{}-b", e.name));
     struct Cleanup<'a>([&'a str; 2]);
     impl Drop for Cleanup<'_> {
@@ -1503,7 +1504,7 @@ build: |
     let create = |name: &str, extra: &[&str]| {
         let mut args = vec![
             "create",
-            kit.to_str().unwrap(),
+            &kit,
             ws.to_str().unwrap(),
             "--name",
             name,
@@ -1523,9 +1524,11 @@ build: |
     // The agent in one sandbox writes; another sandbox of the same kit reads it.
     create(&a, &[]);
     create(&b, &[]);
+    // A published kit's directories are keyed by `<registry>/<repository>`, as in sbx.
+    let r: oci_client::Reference = kit.parse().unwrap();
     let managed = smolbento::kits::host_mount::managed_dir(
         &e.dir.path().join("data/kit-host-mounts"),
-        kit.to_str().unwrap(),
+        &format!("{}/{}", r.registry(), r.repository()),
         SHARED,
     );
     assert_eq!(mounts(&a)[SHARED], managed.to_str().unwrap());

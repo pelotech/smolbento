@@ -71,6 +71,8 @@ jobs:
 
       - name: smolvm version
         run: smolvm --version
+      # Two at a time: four on ubuntu-latest's 4 vCPUs tripled the summed test time (nested VMs,
+      # and registry tests boot two each) and took longer overall.
       - name: End-to-end tests
         run: just e2e
         env:
