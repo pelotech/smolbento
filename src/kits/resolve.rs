@@ -309,24 +309,29 @@ pub fn resolve_for(
                 }
                 CapBody::Network { install, runtime } => {
                     // Method and path qualifiers can't be enforced, only hosts can.
+                    let is_qualified = |n: &NetRule| !n.methods.is_empty() || !n.paths.is_empty();
                     let qualified = [install, runtime]
                         .iter()
                         .flat_map(|r| r.allow.iter().chain(&r.deny))
-                        .any(|n| !n.methods.is_empty() || !n.paths.is_empty());
-                    let host_only = |r: &Rules| {
-                        let strip = |l: &[NetRule]| -> Vec<NetRule> {
-                            l.iter()
-                                .map(|n| NetRule {
-                                    host: n.host.clone(),
-                                    methods: vec![],
-                                    paths: vec![],
-                                })
-                                .collect()
-                        };
-                        Rules {
-                            allow: strip(&r.allow),
-                            deny: strip(&r.deny),
-                        }
+                        .any(is_qualified);
+                    // Allows widen to their host. Qualified denies are dropped: widening one
+                    // would block the whole host, the opposite of what the kit asked for.
+                    let host_only = |r: &Rules| Rules {
+                        allow: r
+                            .allow
+                            .iter()
+                            .map(|n| NetRule {
+                                host: n.host.clone(),
+                                methods: vec![],
+                                paths: vec![],
+                            })
+                            .collect(),
+                        deny: r
+                            .deny
+                            .iter()
+                            .filter(|n| !is_qualified(n))
+                            .cloned()
+                            .collect(),
                     };
                     let (install, runtime) = if qualified && cap.ty.ends_with("network-policy@2") {
                         if !cap.optional {
@@ -336,8 +341,18 @@ pub fn resolve_for(
                                 k.name
                             );
                         }
+                        let dropped = [install, runtime]
+                            .iter()
+                            .flat_map(|r| &r.deny)
+                            .filter(|n| is_qualified(n))
+                            .count();
+                        let note = match dropped {
+                            0 => String::new(),
+                            1 => "; 1 qualified deny rule dropped".into(),
+                            d => format!("; {d} qualified deny rules dropped"),
+                        };
                         skipped.push(format!(
-                            "{}: network-policy@2 method/path (host-only)",
+                            "{}: network-policy@2 method/path (host-only{note})",
                             k.name
                         ));
                         (host_only(install), host_only(runtime))
@@ -1285,6 +1300,37 @@ mod tests {
         // Host-only entries and @1 are unaffected.
         let plain = mixin("m").cap(ty, false, n("a.com", &[]));
         assert!(run(workload("w"), vec![plain]).unwrap().skipped.is_empty());
+    }
+
+    #[test]
+    fn host_only_downgrade_drops_qualified_denies_instead_of_widening_them() {
+        let rule = |host: &str, methods: &[&str], paths: &[&str]| NetRule {
+            host: host.into(),
+            methods: methods.iter().map(|s| s.to_string()).collect(),
+            paths: paths.iter().map(|s| s.to_string()).collect(),
+        };
+        let body = CapBody::Network {
+            install: Rules::default(),
+            runtime: Rules {
+                allow: vec![rule("registry.npmjs.org", &["GET", "HEAD"], &[])],
+                deny: vec![
+                    rule("registry.npmjs.org", &["POST", "PUT"], &[]),
+                    rule("github.com", &["POST"], &["/**/git-receive-pack"]),
+                    rule("evil.com", &[], &[]),
+                ],
+            },
+        };
+        let ty = "com.docker.sandbox/network-policy@2";
+        let p = run(workload("w"), vec![mixin("m").cap(ty, true, body)]).unwrap();
+        assert_eq!(
+            p.skipped,
+            ["m: network-policy@2 method/path (host-only; 2 qualified deny rules dropped)"]
+        );
+        let hosts = |l: &[NetRule]| l.iter().map(|n| n.host.clone()).collect::<Vec<_>>();
+        // The allow survives, widened to its host; only the host-only deny is kept.
+        assert_eq!(hosts(&p.merged.runtime.allow), ["registry.npmjs.org"]);
+        assert_eq!(hosts(&p.merged.runtime.deny), ["evil.com"]);
+        assert_eq!(hosts(&p.merged.network[0].runtime.deny), ["evil.com"]);
     }
 
     #[test]
