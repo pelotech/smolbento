@@ -1,5 +1,17 @@
 # Changelog
 
+## [0.13.0](https://github.com/pelotech/smolbento/compare/v0.12.0...v0.13.0) (2026-10-31)
+
+
+### Features
+
+* **template:** save, list, remove and load templates, and run from them with -t ([#48](https://github.com/pelotech/smolbento/issues/48)) ([074664b](https://github.com/pelotech/smolbento/commit/074664b249392268892ec1c8d5ce23d35c3d9c99))
+
+
+### Bug Fixes
+
+* **kits:** drop qualified deny rules on network-policy@2 host-only fallback ([#49](https://github.com/pelotech/smolbento/issues/49)) ([f2e14cd](https://github.com/pelotech/smolbento/commit/f2e14cdf49b83751952a77e816d96600450d9c65))
+
 ## [0.12.0](https://github.com/pelotech/smolbento/compare/v0.11.0...v0.12.0) (2026-10-29)
 
 
