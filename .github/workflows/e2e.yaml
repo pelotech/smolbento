@@ -71,7 +71,8 @@ jobs:
 
       - name: smolvm version
         run: smolvm --version
+      # ubuntu-latest has 4 vCPUs and 16 GiB; each test VM takes 1 CPU and 1 GiB.
       - name: End-to-end tests
-        run: just e2e
+        run: just e2e 4
         env:
           NEXTEST_PROFILE: ci
