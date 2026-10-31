@@ -24,8 +24,40 @@ pub struct Plan {
     /// Kit name to effective args.
     pub args: BTreeMap<String, BTreeMap<String, String>>,
     pub merged: Merged,
-    /// `kit: type@n` of skipped optional capabilities.
-    pub skipped: Vec<String>,
+    /// Optional capabilities that are skipped.
+    pub skipped: Vec<Skipped>,
+}
+
+/// A `volume@1` request: a directory on the sandbox's disk, or a tmpfs with `mode`.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct Volume {
+    pub path: String,
+    pub tmpfs: bool,
+    pub mode: Option<String>,
+}
+
+/// An optional capability smolbento skips: the kit, and what of it (usually its type).
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct Skipped {
+    pub kit: String,
+    pub what: String,
+}
+
+impl Skipped {
+    fn new(kit: &str, what: impl Into<String>) -> Skipped {
+        Skipped {
+            kit: kit.into(),
+            what: what.into(),
+        }
+    }
+}
+
+/// Tests compare with `"kit: what"`.
+#[cfg(test)]
+impl PartialEq<&str> for Skipped {
+    fn eq(&self, other: &&str) -> bool {
+        format!("{}: {}", self.kit, self.what) == *other
+    }
 }
 
 impl Plan {
@@ -40,10 +72,7 @@ impl Plan {
     pub fn skipped_warnings(&self) -> Vec<String> {
         self.skipped
             .iter()
-            .map(|s| {
-                let (kit, what) = s.split_once(": ").unwrap_or(("?", s));
-                format!("kit {kit}: skipping {what} (not supported)")
-            })
+            .map(|s| format!("kit {}: skipping {} (not supported)", s.kit, s.what))
             .collect()
     }
 }
@@ -54,7 +83,7 @@ pub struct Merged {
     pub network: Vec<KitRules>,
     pub credentials: Vec<KitCred>,
     pub ports: Vec<(u16, bool)>,
-    pub volumes: Vec<(String, bool, Option<String>)>,
+    pub volumes: Vec<Volume>,
     /// In kit order.
     pub host_mounts: Vec<HostMount>,
     /// `agent-skills@1` directories, one per path (widest mode).
@@ -282,7 +311,7 @@ pub fn resolve_for(
             match &cap.body {
                 CapBody::Unsupported => {
                     if cap.optional {
-                        skipped.push(format!("{}: {}", k.name, cap.ty));
+                        skipped.push(Skipped::new(&k.name, &cap.ty));
                         continue;
                     }
                     bail!("kit {}: {} is not supported by smolbento", k.name, cap.ty);
@@ -290,7 +319,7 @@ pub fn resolve_for(
                 CapBody::Credential(c) => {
                     if c.oauth.as_ref().is_some_and(|o| !o.passthrough) {
                         if cap.optional {
-                            skipped.push(format!("{}: {}", k.name, cap.ty));
+                            skipped.push(Skipped::new(&k.name, &cap.ty));
                             continue;
                         }
                         bail!(
@@ -349,9 +378,9 @@ pub fn resolve_for(
                             1 => "; 1 qualified deny rule dropped".into(),
                             d => format!("; {d} qualified deny rules dropped"),
                         };
-                        skipped.push(format!(
-                            "{}: network-policy@2 method/path (host-only{note})",
-                            k.name
+                        skipped.push(Skipped::new(
+                            &k.name,
+                            format!("network-policy@2 method/path (host-only{note})"),
                         ));
                         (host_only(install), host_only(runtime))
                     } else {
@@ -372,14 +401,18 @@ pub fn resolve_for(
                     if let Some(h) = merged.host_mounts.iter().find(|h| &h.path == path) {
                         bail!("{}", one_owner(&h.kit, &k.name, path));
                     }
-                    match merged.volumes.iter().find(|v| &v.0 == path) {
-                        Some(v) if v.1 != *tmpfs || v.2 != *mode => bail!(
+                    match merged.volumes.iter().find(|v| &v.path == path) {
+                        Some(v) if v.tmpfs != *tmpfs || v.mode != *mode => bail!(
                             "kit {}: volume {path} conflicts with another kit's request",
                             k.name
                         ),
                         Some(_) => {}
                         None => {
-                            merged.volumes.push((path.clone(), *tmpfs, mode.clone()));
+                            merged.volumes.push(Volume {
+                                path: path.clone(),
+                                tmpfs: *tmpfs,
+                                mode: mode.clone(),
+                            });
                             volume_kits.insert(path.clone(), k.name.clone());
                         }
                     }
@@ -506,7 +539,7 @@ pub fn resolve_for(
 fn ssh_phase(
     entries: &[SshEntry],
     phase: SshPhase,
-    skipped: &mut Vec<String>,
+    skipped: &mut Vec<Skipped>,
 ) -> Result<Option<PhaseGrant>> {
     let mut es: Vec<&SshEntry> = entries
         .iter()
@@ -518,9 +551,12 @@ fn ssh_phase(
             if !e.optional {
                 bail!("kit {kit}: ssh-agent@1 authenticate limits aren't supported yet");
             }
-            let note = format!(
-                "{kit}: com.docker.sandbox/ssh-agent@1 with authenticate limits in the {} phase",
-                phase.as_str()
+            let note = Skipped::new(
+                kit,
+                format!(
+                    "com.docker.sandbox/ssh-agent@1 with authenticate limits in the {} phase",
+                    phase.as_str()
+                ),
             );
             if !skipped.contains(&note) {
                 skipped.push(note);
@@ -1326,7 +1362,14 @@ mod tests {
         assert!(run(workload("w"), vec![a.clone(), b]).is_err());
         let c = mixin("c").cap("v@1", false, vol("/data", false));
         let p = run(workload("w"), vec![a, c]).unwrap();
-        assert_eq!(p.merged.volumes, [("/data".to_string(), false, None)]);
+        assert_eq!(
+            p.merged.volumes,
+            [Volume {
+                path: "/data".into(),
+                tmpfs: false,
+                mode: None
+            }]
+        );
     }
 
     fn host(path: &str, mode: Option<&str>) -> CapBody {
