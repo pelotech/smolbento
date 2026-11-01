@@ -10,9 +10,9 @@ use crate::bridge::agent;
 use crate::kits::capability;
 use crate::kits::compose;
 use crate::kits::guest;
-use crate::kits::model::{CapBody, Content, CredReq, FileReq, Hook, Kit, NetRule, Rules, Source};
+use crate::kits::model::{CapBody, Content, CredReq, FileReq, Hook, Kit, Source};
 use crate::kits::registry_auth::Logins;
-use crate::kits::resolve::{KitCred, Plan};
+use crate::kits::resolve::{KitCred, Merged, Plan};
 use crate::policy::Policy;
 use crate::policy::rules::is_under;
 use crate::sandbox::CreateRequest;
@@ -132,35 +132,10 @@ pub fn apply(
             (c.env_var.clone(), service)
         })
         .collect();
-    let mut kit_rules: Vec<(String, Rules, Rules)> = m
-        .network
-        .iter()
-        .map(|k| (k.kit.clone(), k.install.clone(), k.runtime.clone()))
-        .collect();
     let mut notes = Vec::new();
     for kc in &m.credentials {
-        if let Some(o) = kc.req.oauth.as_ref().filter(|o| o.passthrough) {
-            let hosts: Vec<NetRule> = o
-                .token_host
-                .iter()
-                .chain(&o.resource_hosts)
-                .map(|h| NetRule {
-                    host: h.clone(),
-                    methods: vec![],
-                    paths: vec![],
-                })
-                .collect();
-            let i = match kit_rules.iter().position(|r| r.0 == kc.kit) {
-                Some(i) => i,
-                None => {
-                    kit_rules.push((kc.kit.clone(), Rules::default(), Rules::default()));
-                    kit_rules.len() - 1
-                }
-            };
-            kit_rules[i].2.allow.extend(hosts.iter().cloned());
-            if kc.req.install {
-                kit_rules[i].1.allow.extend(hosts);
-            }
+        // `resolve` added its hosts to the kit's network rules.
+        if kc.req.oauth.as_ref().is_some_and(|o| o.passthrough) {
             let note = format!(
                 "note: kit {}: {} OAuth tokens live in the sandbox (passthrough)",
                 kc.kit, kc.req.service
@@ -203,44 +178,8 @@ pub fn apply(
             bail!("kit {kit}: hook env '{v}' is not a valid variable name");
         }
     }
-    // Install hooks run in the workload image's WORKDIR, as sbx runs them (`/` without one).
-    let workdir = plan
-        .workload
-        .config
-        .as_ref()
-        .map(|c| c.workdir.as_str())
-        .filter(|d| !d.is_empty() && *d != "/");
-    let install_dir = workdir.map_or_else(|| "/".to_string(), crate::sandbox::sh_quote);
-    // Install hooks see `SSH_AUTH_SOCK` only with an install grant (a clean-env hook only when it
-    // declares it); a runtime grant's create-time variable is unset for them.
-    let granted = req.ssh_agent.as_ref();
-    let agent_env = if granted.is_some_and(|a| a.install.is_some()) {
-        format!("export SSH_AUTH_SOCK={} && ", agent::GUEST_SOCKET)
-    } else if granted.is_some_and(|a| a.runtime.is_some()) {
-        "unset SSH_AUTH_SOCK && ".to_string()
-    } else {
-        String::new()
-    };
-    let mut per_kit: Vec<(&str, usize)> = Vec::new();
-    for (kit, h) in &m.install_hooks {
-        let n = match per_kit.iter_mut().find(|(k, _)| k == kit) {
-            Some((_, n)) => {
-                *n += 1;
-                *n
-            }
-            None => {
-                per_kit.push((kit, 1));
-                1
-            }
-        };
-        steps.install.push(InstallStep {
-            label: format!("kit {kit} install hook {n}"),
-            kit: Some(kit.to_string()),
-            user: h.user.clone(),
-            script: format!("cd {install_dir} && {agent_env}{}", guest::hook_script(h)),
-            relay_stderr: false,
-        });
-    }
+    let workdir = image_workdir(plan);
+    steps.install.extend(kit_install_steps(plan, req));
     // The later kit (in dependency order) wins a path.
     let mut files: Vec<&FileReq> = Vec::new();
     for f in &m.files {
@@ -254,27 +193,7 @@ pub fn apply(
     };
     let mounts: Vec<&Path> = req.workspaces.iter().map(|w| w.path.as_path()).collect();
     steps.context = context_scripts(plan, agent_file.as_deref(), &mounts);
-    if !tmpfs.is_empty() {
-        steps
-            .startup_d
-            .push(("00-volumes.sh".into(), guest::tmpfs_script(&tmpfs)));
-    }
-    let mut n = 0;
-    for k in &kits {
-        let hooks: Vec<&Hook> = m
-            .startup_hooks
-            .iter()
-            .filter(|(kit, _)| *kit == k.name)
-            .map(|(_, h)| h)
-            .collect();
-        if !hooks.is_empty() {
-            n += 1;
-            steps.startup_d.push((
-                format!("{n:02}-{}.sh", k.name),
-                guest::startup_script(&k.name, &hooks),
-            ));
-        }
-    }
+    steps.startup_d = startup_d(&kits, m, &tmpfs);
 
     // A preset agent isn't a kit: nothing to record, and its command is the agent's own. A v3
     // workload's agent runs as its image's user, root when the image names none.
@@ -310,25 +229,115 @@ pub fn apply(
                 .any(|p| capability::provides_name(p, "docker"))
     });
 
-    // Last, so an error above leaves the policy untouched; a failure part-way through (a bad
-    // host) restores the snapshot. Runtime rules go first: an install rule that is also a runtime
-    // rule must outlive the install phase.
+    // Last, so an error above leaves the policy untouched.
+    let added = add_policy(policy, &req.name, m, &mut steps.install_rules)?;
+    for note in notes {
+        eprintln!("{note}");
+    }
+    Ok((steps, added))
+}
+
+/// The workload image's WORKDIR, unless it's unset or `/`.
+fn image_workdir(plan: &Plan) -> Option<&str> {
+    plan.workload
+        .config
+        .as_ref()
+        .map(|c| c.workdir.as_str())
+        .filter(|d| !d.is_empty() && *d != "/")
+}
+
+/// The kits' install hooks as steps, numbered per kit. They run in the workload image's WORKDIR,
+/// as sbx runs them (`/` without one), and see `SSH_AUTH_SOCK` only with an install grant (a
+/// clean-env hook only when it declares it); a runtime grant's create-time variable is unset for
+/// them.
+fn kit_install_steps(plan: &Plan, req: &CreateRequest) -> Vec<InstallStep> {
+    let install_dir = image_workdir(plan).map_or_else(|| "/".to_string(), crate::sandbox::sh_quote);
+    let granted = req.ssh_agent.as_ref();
+    let agent_env = if granted.is_some_and(|a| a.install.is_some()) {
+        format!("export SSH_AUTH_SOCK={} && ", agent::GUEST_SOCKET)
+    } else if granted.is_some_and(|a| a.runtime.is_some()) {
+        "unset SSH_AUTH_SOCK && ".to_string()
+    } else {
+        String::new()
+    };
+    let mut steps = Vec::new();
+    let mut per_kit: Vec<(&str, usize)> = Vec::new();
+    for (kit, h) in &plan.merged.install_hooks {
+        let n = match per_kit.iter_mut().find(|(k, _)| k == kit) {
+            Some((_, n)) => {
+                *n += 1;
+                *n
+            }
+            None => {
+                per_kit.push((kit, 1));
+                1
+            }
+        };
+        steps.push(InstallStep {
+            label: format!("kit {kit} install hook {n}"),
+            kit: Some(kit.to_string()),
+            user: h.user.clone(),
+            script: format!("cd {install_dir} && {agent_env}{}", guest::hook_script(h)),
+            relay_stderr: false,
+        });
+    }
+    steps
+}
+
+/// The `startup.d` scripts: tmpfs volumes first, then each kit's startup hooks, in kit order.
+fn startup_d(
+    kits: &[&Kit],
+    m: &Merged,
+    tmpfs: &[(String, Option<String>)],
+) -> Vec<(String, String)> {
+    let mut out = Vec::new();
+    if !tmpfs.is_empty() {
+        out.push(("00-volumes.sh".into(), guest::tmpfs_script(tmpfs)));
+    }
+    let mut n = 0;
+    for k in kits {
+        let hooks: Vec<&Hook> = m
+            .startup_hooks
+            .iter()
+            .filter(|(kit, _)| *kit == k.name)
+            .map(|(_, h)| h)
+            .collect();
+        if !hooks.is_empty() {
+            n += 1;
+            out.push((
+                format!("{n:02}-{}.sh", k.name),
+                guest::startup_script(&k.name, &hooks),
+            ));
+        }
+    }
+    out
+}
+
+/// Writes the kits' rules for sandbox `sandbox` and returns the ids it added, for rollback. Runtime
+/// rules go first: an install rule that is also a runtime rule must outlive the install phase.
+/// Every install rule in place goes into `install_rules`, as it opens for the first start (one an
+/// interrupted create left too); only new ones are returned. A failure part-way through (a bad
+/// host) restores the policy as it was.
+fn add_policy(
+    policy: &mut Policy,
+    sandbox: &str,
+    m: &Merged,
+    install_rules: &mut Vec<String>,
+) -> Result<Vec<String>> {
     let snapshot = policy.clone();
     let mut added = Vec::new();
     let mut add = |policy: &mut Policy| -> Result<()> {
-        for (kit, _, runtime) in &kit_rules {
-            added.extend(policy.add_kit_rules(&req.name, kit, runtime, false)?.1);
+        for k in &m.network {
+            added.extend(policy.add_kit_rules(sandbox, &k.kit, &k.runtime, false)?.1);
         }
-        for (kit, install, _) in &kit_rules {
-            let (all, new) = policy.add_kit_rules(&req.name, kit, install, true)?;
-            // Every install rule in place opens for the first start, one an interrupted create
-            // left too; only the new ones are rolled back.
+        for k in &m.network {
+            let (all, new) = policy.add_kit_rules(sandbox, &k.kit, &k.install, true)?;
             for id in all {
                 let is_install = policy
-                    .rules_for(Some(&req.name))
+                    .rules_for(Some(sandbox))
                     .any(|(r, s)| s.is_some() && r.id == id && r.is_kit_install());
-                if is_install && !steps.install_rules.contains(&id) {
-                    steps.install_rules.push(id);
+                if is_install && !install_rules.contains(&id) {
+                    install_rules.push(id);
                 }
             }
             added.extend(new);
@@ -339,10 +348,7 @@ pub fn apply(
         *policy = snapshot;
         return Err(e);
     }
-    for note in notes {
-        eprintln!("{note}");
-    }
-    Ok((steps, added))
+    Ok(added)
 }
 
 /// Whether a kit's inject `host` is one of a service's own `hosts`: the same host, or one its
