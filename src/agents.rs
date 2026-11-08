@@ -26,28 +26,28 @@ pub const AGENTS: &[Agent] = &[
     },
     Agent {
         name: "codex",
-        image: "docker/sandbox-templates:codex-docker-0.7.0",
+        image: "docker/sandbox-templates:codex-docker-0.11.0",
         context_file: DEFAULT_CONTEXT_FILE,
         skills_dir: Some("/home/agent/.agents/skills"),
         command: &["codex", "--dangerously-bypass-approvals-and-sandbox"],
     },
     Agent {
         name: "copilot",
-        image: "docker/sandbox-templates:copilot-docker-0.4.0",
+        image: "docker/sandbox-templates:copilot-docker-0.11.0",
         context_file: DEFAULT_CONTEXT_FILE,
         skills_dir: Some("/home/agent/.copilot/skills"),
         command: &["copilot", "--yolo"],
     },
     Agent {
         name: "cursor",
-        image: "docker/sandbox-templates:cursor-agent-docker-0.7.0",
+        image: "docker/sandbox-templates:cursor-agent-docker-0.11.0",
         context_file: DEFAULT_CONTEXT_FILE,
         skills_dir: Some("/home/agent/.cursor/skills"),
         command: &["cursor-agent", "--yolo"],
     },
     Agent {
         name: "devin",
-        image: "docker/sandbox-templates:devin-docker-0.7.0",
+        image: "docker/sandbox-templates:devin-docker-0.11.0",
         context_file: DEFAULT_CONTEXT_FILE,
         skills_dir: Some("/home/agent/.agents/skills"),
         command: &[
@@ -59,14 +59,14 @@ pub const AGENTS: &[Agent] = &[
     },
     Agent {
         name: "docker-agent",
-        image: "docker/sandbox-templates:docker-agent-docker-0.7.0",
+        image: "docker/sandbox-templates:docker-agent-docker-0.11.0",
         context_file: DEFAULT_CONTEXT_FILE,
         skills_dir: None,
         command: &["docker-agent", "run", "--yolo"],
     },
     Agent {
         name: "droid",
-        image: "docker/sandbox-templates:droid-docker-0.4.0",
+        image: "docker/sandbox-templates:droid-docker-0.11.0",
         context_file: DEFAULT_CONTEXT_FILE,
         skills_dir: Some("/home/agent/.factory/skills"),
         command: &["droid"],
@@ -87,7 +87,7 @@ pub const AGENTS: &[Agent] = &[
     },
     Agent {
         name: "opencode",
-        image: "docker/sandbox-templates:opencode-docker-0.7.0",
+        image: "docker/sandbox-templates:opencode-docker-0.11.0",
         context_file: DEFAULT_CONTEXT_FILE,
         skills_dir: Some("/home/agent/.config/opencode/skills"),
         command: &["opencode"],
@@ -197,10 +197,10 @@ mod tests {
     fn docker_image_detection() {
         assert!(is_docker_image("docker/sandbox-templates:shell-docker"));
         assert!(is_docker_image(
-            "docker/sandbox-templates:docker-agent-docker-0.7.0"
+            "docker/sandbox-templates:docker-agent-docker-0.11.0"
         ));
         assert!(!is_docker_image(
-            "docker/sandbox-templates:docker-agent-0.7.0"
+            "docker/sandbox-templates:docker-agent-0.11.0"
         ));
         assert!(!is_docker_image("alpine"));
         assert!(!is_docker_image("localhost:5000/x"));
@@ -213,8 +213,8 @@ mod tests {
             "docker/sandbox-templates:shell-0.10.0"
         );
         assert_eq!(
-            plain_image("docker/sandbox-templates:docker-agent-docker-0.7.0"),
-            "docker/sandbox-templates:docker-agent-0.7.0"
+            plain_image("docker/sandbox-templates:docker-agent-docker-0.11.0"),
+            "docker/sandbox-templates:docker-agent-0.11.0"
         );
         assert_eq!(
             plain_image("docker/sandbox-templates:shell-docker"),
