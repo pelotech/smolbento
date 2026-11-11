@@ -12,7 +12,7 @@ the VM is the boundary.
 ## Quick start
 
 ```sh
-# smolvm 1.32.4 or newer
+# smolvm 1.34.1 or newer
 brew install smol-machines/tap/smolvm
 # from a checkout of this repo
 just install

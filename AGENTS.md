@@ -29,7 +29,7 @@ exist only in some checkouts). If they're there, read the relevant section befor
 
 ## smolvm behaviour to rely on
 
-As of smolvm 1.32. Check the reference source before depending on anything not listed here.
+As of smolvm 1.34. Check the reference source before depending on anything not listed here.
 
 - **Errors:** `--error-format json` prints `{"error":{"code":…,"message":…}}` on stderr, and the
   exit status is unchanged. Branch on `code` (`NOT_FOUND`, `CONFLICT`, `INTERRUPTED`,
@@ -51,7 +51,8 @@ As of smolvm 1.32. Check the reference source before depending on anything not l
 - **Interception:** credential substitution (`--credential`) can't be combined with
   `--egress-interceptor`/`--mediated-egress` or with `--trust-host-certs`. Proxy variables
   aren't forwarded unless `--use-host-proxy` is given.
-- **Guest `/tmp`, `/run` and `/dev/shm` are tmpfs, emptied on every restart.** Anything
+- **Guest `/tmp`, `/run` and `/dev/shm` are emptied on every restart** and never enter a pack.
+  `/run` and `/dev/shm` are tmpfs; `/tmp` is on the machine's root disk since 1.33. Anything
   smolbento puts there (for example `/run/smolbento`) has to be recreated after each start.
   Persistent data goes on the machine's disk or in `/workspace`.
 - **Images:** when the guest can't reach the registry, smolvm pulls the image on the host at
@@ -62,8 +63,13 @@ As of smolvm 1.32. Check the reference source before depending on anything not l
   `machine stop` sends SIGTERM and waits up to the stop timeout (`--timeout SECS`; `0` kills
   immediately), while `delete` doesn't wait. `machine logs` has the workload's output, not
   `exec` output. `machine mount add` mounts into a running machine until it stops.
-- **Defaults:** 4 CPUs, 8192 MiB memory, 20 GiB storage, 10 GiB overlay. Memory is elastic
-  (balloon). Disks under 20 GiB need no host tools.
+- **Defaults:** 4 CPUs, memory of half the host's RAM up to 8192 MiB, 20 GiB storage, 10 GiB
+  overlay. Memory is elastic (balloon). Disks under 20 GiB need no host tools.
+- **Exec output:** a plain `machine exec` prints when the command ends and fails past 11 MiB of
+  output. `--stream` prints as it arrives with no cap, and `-i` streams too.
+- **Published ports** listen on `127.0.0.1` and `[::1]`, up to 4096 per machine; ports below
+  1024 work on macOS too. `machine cp` uploads a directory like `cp -r` (following symlinks) but
+  downloads single files only.
 - **Secret refs** (`--secret-env GUEST=HOST_VAR`, `--secret-file`) resolve at launch and are
   never persisted. The HTTP API and `.smolmachine` packs refuse them.
 

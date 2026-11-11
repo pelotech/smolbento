@@ -38,6 +38,9 @@ pub fn exec<R: Runner>(ctx: &mut Ctx<R>, a: &ExecArgs) -> Result<i32> {
         interactive: a.interactive,
         tty: a.tty,
         detach: false,
+        // Without stdin or a TTY smolvm buffers the output until the command ends and fails it
+        // past 11 MiB; streamed, it arrives as it's written and has no cap.
+        stream: !a.interactive && !a.tty,
         cmd: a.command.clone(),
     };
     // `exec -it` is an attached session: serve the browser and clipboard bridge during it.
@@ -155,9 +158,9 @@ mod tests {
         assert_eq!(
             calls,
             [
-                "machine exec --name sbx-tool-proj -u somebody -w /w/proj -- id",
-                "machine exec --name sbx-tool-proj -u somebody:1001 -w /w/proj -- id",
-                "machine exec --name sbx-tool-proj -u root -w /w/proj -- id",
+                "machine exec --name sbx-tool-proj -u somebody -w /w/proj --stream -- id",
+                "machine exec --name sbx-tool-proj -u somebody:1001 -w /w/proj --stream -- id",
+                "machine exec --name sbx-tool-proj -u root -w /w/proj --stream -- id",
             ]
         );
     }
@@ -183,7 +186,7 @@ mod tests {
         );
         assert_eq!(
             t.runner().interactive_calls()[0].join(" "),
-            "machine exec --name sbx-claude-proj -u root -w /tmp -e HOSTVAR=h -- id"
+            "machine exec --name sbx-claude-proj -u root -w /tmp -e HOSTVAR=h --stream -- id"
         );
     }
 

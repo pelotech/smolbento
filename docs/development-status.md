@@ -97,7 +97,7 @@ terminal fail until you do.
 ## Known limitations
 
 - Workspaces are mounted read-write unless you use `--clone`.
-- Published ports bind `127.0.0.1` only, and directories (not single files) can be mounted. Both are
+- Published ports bind loopback only (`127.0.0.1` and `[::1]`), and directories (not single files) can be mounted. Both are
   smolvm limits; see [sbx compatibility](sbx-compatibility.md).
 - A `localhost` rule opens every port on the host's `127.0.0.1`, not just the one it names, and
   only to sandboxes created while one of your `localhost` rules applied; others need recreating.
@@ -118,11 +118,12 @@ terminal fail until you do.
 
 ## Needs smolvm support (later decisions)
 
-Changes we'd propose to smolvm (none filed yet). What smolvm 1.32.4 lacks, and what smolbento does
-meanwhile:
+Changes we'd propose to smolvm. What smolvm 1.34.1 lacks, and what smolbento does meanwhile:
 
-- **Saving a sandbox made from a template.** Packing a machine created from a pack times out in
-  smolvm 1.32.4, and `--rebase-from-image` drops the first template's files. Meanwhile it's refused.
+- **Saving a sandbox made from a template.** Packing a machine created from a pack fails in
+  smolvm 1.34.1 ("no flattened rootfs was found") when the pack's own machine was created with
+  `--deny-cidr`, which every sandbox is; without that flag it works. `--rebase-from-image` drops
+  the first template's files. Meanwhile it's refused.
 - **Per-port host access.** smolvm can open the host's loopback to a guest only as a whole (the
   gateway CIDR `100.96.0.1/32`). Meanwhile a `localhost:PORT` rule opens every host port to
   sandboxes created with host access (documented).
@@ -142,9 +143,12 @@ meanwhile:
   that's declined: smolbento's own egress proxy, a phase of its own.
 - **`machine update --label`.** Labels are create-time only. Meanwhile kits added with `kit add`
   aren't listed on a stopped sandbox without starting it. Cosmetic.
-- **Guest DNS upstream order.** Guest DNS forwards to the host's first IPv4 resolver only, so a
-  name that resolver refuses fails in every VM even when the host resolves it. Meanwhile nothing
-  (the e2e tests avoid such names).
+- **Guest DNS upstream order.** Since smolvm 1.34 guest DNS moves on to the host's next resolver
+  when one doesn't answer. Not yet checked: a name the first resolver refuses, which before 1.34
+  failed in every VM even when the host resolved it. Meanwhile nothing (the e2e tests avoid such
+  names).
+- **Copying a directory out of a sandbox.** `machine cp` uploads a directory but downloads single
+  files only. Meanwhile `sbt cp SANDBOX:/dir ./dir` fails with smolvm's "is a directory".
 - **Install-only credentials after install.** smolvm answers `502 credential unavailable` when a
   binding has no value; sbx sends the request without the credential. Meanwhile a documented
   difference.
