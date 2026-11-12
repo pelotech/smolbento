@@ -340,13 +340,21 @@ pub fn create<R: Runner>(
     }
     vm.create(&create::spec(&checked))?;
     let mut sb = get(vm, &req.name)?;
+    // A sandbox whose first start failed isn't usable, and left behind it makes the same command
+    // fail with "already exists": it is removed, so the command can simply run again.
+    let removed = |what: &str, e: anyhow::Error| match vm.delete(&sb.machine) {
+        Ok(()) => anyhow!("{what} (the sandbox was removed): {e:#}"),
+        Err(d) => anyhow!(
+            "{what}: {e:#}\nremoving the sandbox failed too ({d:#}); remove it with `sbt rm {}`",
+            sb.name()
+        ),
+    };
     let Some(kit) = &plan.kit else {
-        start_with(vm, &sb, plan, on)?;
+        start_with(vm, &sb, plan, on).map_err(|e| removed("the first start failed", e))?;
         sb.state = MachineState::Running;
         return Ok(sb);
     };
-    // A kit sandbox isn't usable until its steps ran, so a failed first start removes it too and
-    // the same command can simply run again.
+    // A kit sandbox isn't usable until its steps ran either.
     let steps = start_with(vm, &sb, plan, on)
         .and_then(|()| first_start(vm, &sb, plan, kit, drop_install_rules, on));
     if let Err(e) = steps {
@@ -356,13 +364,7 @@ pub fn create<R: Runner>(
         } else {
             "kit install failed"
         };
-        return Err(match vm.delete(&sb.machine) {
-            Ok(()) => anyhow!("{what} (the sandbox was removed): {e:#}"),
-            Err(d) => anyhow!(
-                "{what}: {e:#}\nremoving the sandbox failed too ({d:#}); remove it with `sbt rm {}`",
-                sb.name()
-            ),
-        });
+        return Err(removed(what, e));
     }
     sb.state = MachineState::Running;
     if let Err(e) = run_startup(vm, &sb, None) {

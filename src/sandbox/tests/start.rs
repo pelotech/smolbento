@@ -224,3 +224,22 @@ fn a_failed_setup_step_stops_the_machine() {
         "machine stop -n sbx-claude-myrepo"
     );
 }
+
+#[test]
+fn a_create_whose_first_start_fails_removes_the_sandbox() {
+    // Without kits too: a machine left behind makes a retry fail with "already exists".
+    let vm = created_vm();
+    vm.runner()
+        .fail(&["machine", "start"], "SMOLVM_ERROR", "image pull failed");
+    let err = create(&vm, &request(), &plan(), |_| unreachable!(), &mut |_| {}).unwrap_err();
+    assert!(
+        err.to_string()
+            .starts_with("the first start failed (the sandbox was removed): ")
+            && format!("{err:#}").contains("image pull failed"),
+        "{err:#}"
+    );
+    assert_eq!(
+        vm.runner().call_lines().last().unwrap(),
+        &format!("machine delete -n {MACHINE} -f")
+    );
+}
