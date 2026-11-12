@@ -9,6 +9,9 @@ fn main() -> ExitCode {
         Ok(code) => ExitCode::from(u8::try_from(code).unwrap_or(1)),
         Err(err) => {
             eprintln!("sbt: {err:#}");
+            if let Some(hint) = smolbento::cli::hint(&err) {
+                eprintln!("hint: {hint}");
+            }
             ExitCode::from(smolbento::cli::exit_code(&err))
         }
     }

@@ -62,6 +62,7 @@ pub fn test_env(extra_env: &[(&str, &str)]) -> TestEnv {
             out: crate::ctx::Out::Buffer(Default::default()),
             input: crate::ctx::In::Buffer(Default::default()),
             args: vec![],
+            program: "sbt".into(),
         },
         _dir: dir,
     }
