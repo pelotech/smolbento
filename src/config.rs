@@ -33,10 +33,11 @@ impl Paths {
     /// macOS).
     pub fn from_env(env: &BTreeMap<String, String>) -> Result<Paths> {
         let pick = |own: &str, xdg: &str, fallback: &str| -> Result<PathBuf> {
-            if let Some(dir) = env.get(own) {
+            // An empty value is as if unset; so is a relative XDG one (the XDG spec).
+            if let Some(dir) = env.get(own).filter(|d| !d.is_empty()) {
                 return Ok(PathBuf::from(dir));
             }
-            if let Some(dir) = env.get(xdg) {
+            if let Some(dir) = env.get(xdg).filter(|d| Path::new(d).is_absolute()) {
                 return Ok(Path::new(dir).join("smolbento"));
             }
             let home = env.get("HOME").context("HOME is not set")?;
@@ -582,6 +583,22 @@ mod tests {
             .iter()
             .map(|(k, v)| (k.to_string(), v.to_string()))
             .collect()
+    }
+
+    #[test]
+    fn empty_or_relative_dir_variables_are_ignored() {
+        // The XDG spec: an empty or relative value is as if unset.
+        let p = Paths::from_env(&env(&[
+            ("HOME", "/h"),
+            ("XDG_CONFIG_HOME", ""),
+            ("XDG_CACHE_HOME", "relative/cache"),
+            ("SMOLBENTO_DATA_DIR", ""),
+            ("XDG_DATA_HOME", "/xd"),
+        ]))
+        .unwrap();
+        assert_eq!(p.config, PathBuf::from("/h/.config/smolbento"));
+        assert_eq!(p.cache, PathBuf::from("/h/.cache/smolbento"));
+        assert_eq!(p.data, PathBuf::from("/xd/smolbento"));
     }
 
     #[test]
