@@ -217,18 +217,47 @@ fn ignored_kits_warning(a: &RunArgs, name: &str) -> Option<String> {
 /// The warning for the other create options given to `run` of a sandbox that already exists:
 /// they would be silently dropped otherwise.
 fn ignored_options_warning(a: &RunArgs, name: &str) -> Option<String> {
-    let o = &a.opts;
+    // Every field is named, with no `..`: a new create option fails to compile here until someone
+    // decides whether `run` on an existing sandbox warns about it.
+    let super::SandboxOpts {
+        // Selects the sandbox.
+        name: _,
+        cpus,
+        memory,
+        env,
+        env_file,
+        publish,
+        template,
+        pull,
+        clone,
+        skills,
+        static_mcp,
+        // Kits, --mount and --deny-network have their own warnings.
+        kit: _,
+        kit_arg: _,
+        kit_args_file: _,
+        kit_pins: _,
+        mount: _,
+        deny_network: _,
+        // Docker Cloud options: refused before any sandbox is looked up.
+        allow_network: _,
+        image_ref: _,
+        platform: _,
+        ttl: _,
+        on_timeout: _,
+        volume: _,
+    } = &a.opts;
     let given: Vec<&str> = [
-        (o.cpus.is_some(), "--cpus"),
-        (o.memory.is_some(), "--memory"),
-        (!o.env.is_empty(), "--env"),
-        (!o.env_file.is_empty(), "--env-file"),
-        (!o.publish.is_empty(), "--publish"),
-        (o.template.is_some(), "--template"),
-        (o.pull.is_some(), "--pull"),
-        (o.clone, "--clone"),
-        (o.skills.is_some(), "--skills"),
-        (o.static_mcp.is_some(), "--static-mcp"),
+        (cpus.is_some(), "--cpus"),
+        (memory.is_some(), "--memory"),
+        (!env.is_empty(), "--env"),
+        (!env_file.is_empty(), "--env-file"),
+        (!publish.is_empty(), "--publish"),
+        (template.is_some(), "--template"),
+        (pull.is_some(), "--pull"),
+        (*clone, "--clone"),
+        (skills.is_some(), "--skills"),
+        (static_mcp.is_some(), "--static-mcp"),
     ]
     .into_iter()
     .filter_map(|(on, flag)| on.then_some(flag))
