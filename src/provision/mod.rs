@@ -1362,7 +1362,7 @@ mod tests {
     #[test]
     fn a_failed_kit_install_removes_the_sandbox_and_every_kit_rule() {
         let (t, result, _) = kit_create(true, &[]);
-        let err = result.unwrap_err().to_string();
+        let err = format!("{:#}", result.unwrap_err());
         assert_eq!(
             err,
             "kit install failed (the sandbox was removed): kit k install hook 1 failed:\nnpm ERR! 404"

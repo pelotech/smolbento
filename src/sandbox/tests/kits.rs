@@ -342,10 +342,9 @@ fn a_failed_install_hook_removes_the_sandbox() {
         |_| panic!("install rules stay until the hooks succeed"),
         &mut |_| {},
     )
-    .unwrap_err()
-    .to_string();
+    .unwrap_err();
     assert_eq!(
-        err,
+        format!("{err:#}"),
         format!(
             "kit install failed (the sandbox was removed): kit k install hook 1 failed:\n{}",
             stderr[5..].join("\n")
@@ -371,8 +370,7 @@ fn failing_to_drop_the_install_rules_or_write_files_removes_the_sandbox() {
     )
     .unwrap_err();
     assert!(
-        err.to_string()
-            .starts_with("kit install failed (the sandbox was removed): "),
+        format!("{err:#}").starts_with("kit install failed (the sandbox was removed): "),
         "{err}"
     );
     assert!(format!("{err:#}").contains("permission denied"), "{err:#}");
@@ -404,6 +402,36 @@ fn failing_to_drop_the_install_rules_or_write_files_removes_the_sandbox() {
 }
 
 #[test]
+fn a_removed_sandboxs_error_keeps_the_smolvm_error_for_its_hint() {
+    // Every Docker-enabled sandbox takes the kit path: without the smolvm error in the chain,
+    // a missing hypervisor at the first start prints no hint.
+    let vm = created_vm();
+    vm.runner().fail(
+        &["machine", "start"],
+        "HYPERVISOR_UNAVAILABLE",
+        "no available backend",
+    );
+    let err = create(
+        &vm,
+        &request(),
+        &kit_plan(&[]),
+        |_| unreachable!(),
+        &mut |_| {},
+    )
+    .unwrap_err();
+    let text = format!("{err:#}");
+    assert!(
+        text.ends_with("(the sandbox was removed): smolvm: no available backend"),
+        "{text}"
+    );
+    let smolvm = err
+        .chain()
+        .find_map(|e| e.downcast_ref::<crate::smolvm::SmolvmError>())
+        .expect("the smolvm error is still in the chain");
+    assert!(smolvm.hint().is_some());
+}
+
+#[test]
 fn a_failed_first_start_without_install_hooks_says_so_neutrally() {
     // Like a default Docker sandbox: the docker kit has no install hooks.
     let vm = created_vm();
@@ -415,8 +443,7 @@ fn a_failed_first_start_without_install_hooks_says_so_neutrally() {
     kit.steps.install_rules.clear();
     let err = create(&vm, &request(), &plan, |_| unreachable!(), &mut |_| {}).unwrap_err();
     assert!(
-        err.to_string()
-            .starts_with("the first start failed (the sandbox was removed): ")
+        format!("{err:#}").starts_with("the first start failed (the sandbox was removed): ")
             && format!("{err:#}").contains("no space left"),
         "{err:#}"
     );
@@ -471,10 +498,9 @@ fn a_failed_hook_with_no_stderr_reports_its_stdout() {
         |_| unreachable!(),
         &mut |_| {},
     )
-    .unwrap_err()
-    .to_string();
+    .unwrap_err();
     assert_eq!(
-        err,
+        format!("{err:#}"),
         "kit install failed (the sandbox was removed): kit k install hook 1 failed:\n\
          resolving\nE: package not found"
     );
@@ -497,8 +523,7 @@ fn a_failed_first_start_of_a_kit_sandbox_removes_it() {
     )
     .unwrap_err();
     assert!(
-        err.to_string()
-            .starts_with("kit install failed (the sandbox was removed): "),
+        format!("{err:#}").starts_with("kit install failed (the sandbox was removed): "),
         "{err:#}"
     );
     assert!(format!("{err:#}").contains("usermod: busy"), "{err:#}");

@@ -366,7 +366,8 @@ pub fn create<R: Runner>(
             "kit install failed"
         };
         return Err(match vm.delete(&sb.machine) {
-            Ok(()) => anyhow!("{what} (the sandbox was removed): {e:#}"),
+            // The cause stays in the chain, where a smolvm error's hint is looked up.
+            Ok(()) => e.context(format!("{what} (the sandbox was removed)")),
             Err(d) => anyhow!(
                 "{what}: {e:#}\nremoving the sandbox failed too ({d:#}); remove it with `sbt rm {}`",
                 sb.name()
