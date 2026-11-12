@@ -39,6 +39,11 @@ pub(crate) fn create_reported<R: Runner>(
 ) -> Result<Sandbox> {
     resolve_clone(req, opts)?;
     provision::check_free(ctx, &req.name)?;
+    // A bad `--static-mcp` fails here, not after the kits were fetched and built.
+    let preset = workload
+        .as_ref()
+        .is_none_or(|w| matches!(w, Workload::Preset(_)));
+    provision::mcp_attachment(ctx, req, preset)?;
     report_sandbox(p, req, workload.as_ref(), opts.clone);
     let kits = workload
         .map(|w| kit_plan(ctx, req, w, opts, p))

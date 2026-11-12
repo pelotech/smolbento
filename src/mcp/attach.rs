@@ -5,7 +5,7 @@ use std::collections::BTreeMap;
 use anyhow::{Context, Result, bail};
 
 use super::registrar::{has_registrar, register_script};
-use super::{McpFile, Server, env_var, placeholder, secret_name};
+use super::{McpFile, Server, check_server, env_var, placeholder, secret_name};
 use crate::kits::apply::InstallStep;
 use crate::smolvm::Credential;
 
@@ -60,6 +60,12 @@ pub fn attach(
                 } else {
                     format!("no MCP server named '{n}' (see `sbt mcp ls`)")
                 }
+            })?;
+            check_server(n, server).with_context(|| {
+                format!(
+                    "MCP server '{n}' in mcp.toml isn't valid (fix the file, or `sbt mcp rm` it \
+                     and add it again)"
+                )
             })?;
             Ok((*n, server))
         })
@@ -234,5 +240,45 @@ mod tests {
             "MCP servers my-db and my_db both use the variable SBX_MCP_MY_DB_K for their secret; \
              rename one of them"
         );
+    }
+
+    #[test]
+    fn a_hand_edited_server_is_checked_like_mcp_add() {
+        for (name, server, want) in [
+            (
+                "local",
+                Server::Remote {
+                    url: "http://localhost:8080/mcp".into(),
+                    headers: BTreeMap::new(),
+                },
+                "that address is the sandbox itself",
+            ),
+            (
+                "empty",
+                Server::Command {
+                    command: " ".into(),
+                    args: Vec::new(),
+                },
+                "the command is empty",
+            ),
+            (
+                "bad name",
+                Server::Command {
+                    command: "npx".into(),
+                    args: Vec::new(),
+                },
+                "invalid MCP server name",
+            ),
+        ] {
+            let mut f = McpFile::default();
+            f.servers.insert(name.into(), server);
+            let err = attach(&f, name, Some("claude"), &|_| true).unwrap_err();
+            let err = format!("{err:#}");
+            assert!(
+                err.starts_with(&format!("MCP server '{name}' in mcp.toml isn't valid")),
+                "{err}"
+            );
+            assert!(err.contains(want), "{err}");
+        }
     }
 }

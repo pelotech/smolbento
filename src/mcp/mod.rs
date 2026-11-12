@@ -29,6 +29,18 @@ pub fn check_name(name: &str) -> Result<()> {
     Ok(())
 }
 
+/// Checks a registration as `mcp add` does: the file can be edited by hand.
+pub fn check_server(name: &str, server: &Server) -> Result<()> {
+    check_name(name)?;
+    match server {
+        Server::Remote { url, headers } => check_remote(url, headers),
+        Server::Command { command, .. } if command.trim().is_empty() => {
+            bail!("the command is empty")
+        }
+        Server::Command { .. } => Ok(()),
+    }
+}
+
 /// The secret a header's `${placeholder}` takes its value from.
 pub fn secret_name(server: &str, placeholder: &str) -> String {
     format!("mcp:{server}:{placeholder}")

@@ -342,31 +342,24 @@ pub fn create<R: Runner>(
     vm.create(&create::spec(&checked))?;
     let mut sb = get(vm, &req.name)?;
     // A sandbox whose first start failed isn't usable, so it is removed (as sbx does) and the
-    // same command can simply be run again. The cause stays in the chain, where a smolvm error's
-    // hint is looked up.
-    let removed = |what: &str, e: anyhow::Error| match vm.delete(&sb.machine) {
-        Ok(()) => e.context(format!("{what} (the sandbox was removed)")),
+    // same command can simply be run again. The cause, which names the step that failed, stays
+    // in the chain, where a smolvm error's hint is looked up.
+    let removed = |e: anyhow::Error| match vm.delete(&sb.machine) {
+        Ok(()) => e.context("the first start failed (the sandbox was removed)"),
         Err(d) => anyhow!(
-            "{what}: {e:#}\nremoving the sandbox failed too ({d:#}); remove it with `sbt rm -f {}`",
+            "the first start failed: {e:#}\nremoving the sandbox failed too ({d:#}); remove it \
+             with `sbt rm -f {}`",
             sb.name()
         ),
     };
     let Some(kit) = &plan.kit else {
-        start_with(vm, &sb, plan, on).map_err(|e| removed("the first start failed", e))?;
+        start_with(vm, &sb, plan, on).map_err(removed)?;
         sb.state = MachineState::Running;
         return Ok(sb);
     };
-    let steps = start_with(vm, &sb, plan, on)
-        .and_then(|()| first_start(vm, &sb, plan, kit, drop_install_rules, on));
-    if let Err(e) = steps {
-        // Every Docker sandbox takes this path (the docker kit), most without install hooks.
-        let what = if kit.steps.install.is_empty() {
-            "the first start failed"
-        } else {
-            "kit install failed"
-        };
-        return Err(removed(what, e));
-    }
+    start_with(vm, &sb, plan, on)
+        .and_then(|()| first_start(vm, &sb, plan, kit, drop_install_rules, on))
+        .map_err(removed)?;
     sb.state = MachineState::Running;
     if let Err(e) = run_startup(vm, &sb, None) {
         // Kept, as in sbx, but stopped: the next start runs the hooks again and fails until

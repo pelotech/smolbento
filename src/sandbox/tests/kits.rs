@@ -346,7 +346,7 @@ fn a_failed_install_hook_removes_the_sandbox() {
     assert_eq!(
         format!("{err:#}"),
         format!(
-            "kit install failed (the sandbox was removed): kit k install hook 1 failed:\n{}",
+            "the first start failed (the sandbox was removed): kit k install hook 1 failed:\n{}",
             stderr[5..].join("\n")
         )
     );
@@ -370,7 +370,7 @@ fn failing_to_drop_the_install_rules_or_write_files_removes_the_sandbox() {
     )
     .unwrap_err();
     assert!(
-        format!("{err:#}").starts_with("kit install failed (the sandbox was removed): "),
+        format!("{err:#}").starts_with("the first start failed (the sandbox was removed): "),
         "{err}"
     );
     assert!(format!("{err:#}").contains("permission denied"), "{err:#}");
@@ -391,7 +391,7 @@ fn failing_to_drop_the_install_rules_or_write_files_removes_the_sandbox() {
     )
     .unwrap_err();
     assert!(
-        err.to_string().starts_with("kit install failed")
+        err.to_string().starts_with("the first start failed")
             && format!("{err:#}").contains("no space left"),
         "{err:#}"
     );
@@ -501,7 +501,7 @@ fn a_failed_hook_with_no_stderr_reports_its_stdout() {
     .unwrap_err();
     assert_eq!(
         format!("{err:#}"),
-        "kit install failed (the sandbox was removed): kit k install hook 1 failed:\n\
+        "the first start failed (the sandbox was removed): kit k install hook 1 failed:\n\
          resolving\nE: package not found"
     );
 }
@@ -523,7 +523,7 @@ fn a_failed_first_start_of_a_kit_sandbox_removes_it() {
     )
     .unwrap_err();
     assert!(
-        format!("{err:#}").starts_with("kit install failed (the sandbox was removed): "),
+        format!("{err:#}").starts_with("the first start failed (the sandbox was removed): "),
         "{err:#}"
     );
     assert!(format!("{err:#}").contains("usermod: busy"), "{err:#}");

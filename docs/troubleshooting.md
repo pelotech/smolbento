@@ -25,8 +25,9 @@ make the agent root too. Run `sbt` as your normal user. On Linux, give that user
 
 ## `diagnose` says `FAIL /dev/kvm` (Linux)
 
-Enable virtualization in the BIOS/firmware, load the KVM module, and add your user to the `kvm`
-group (log out and back in afterwards). In a VM, nested virtualization must be enabled.
+Check `ls -l /dev/kvm`. If it is missing, enable virtualization in the BIOS/firmware (in a VM,
+nested virtualization) and load the module (`sudo modprobe kvm_intel` or `kvm_amd`). If it exists,
+add your user to its group (`sudo usermod -aG kvm $USER`) and log out and back in.
 
 ## `diagnose` says the hypervisor entitlement is missing (macOS)
 
@@ -65,6 +66,11 @@ smolvm machine delete -n sbx-<name> -f
 
 A sandbox whose first start fails is removed, so the same command can be run again. If the removal
 failed too (the error says so), `sbt rm -f <name>` cleans it up.
+
+## A storage error from smolvm
+
+Most often the disk is full: check `df -h ~`. `sbt prune` removes stopped sandboxes, `sbt rm NAME`
+one sandbox and `sbt template rm` a saved template.
 
 ## `Refusing without a terminal; pass -f`
 
