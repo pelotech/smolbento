@@ -63,8 +63,8 @@ smolvm machine ls            # smolbento's machines are named sbx-<name>
 smolvm machine delete -n sbx-<name> -f
 ```
 
-If creating a sandbox failed halfway, the machine may exist but not be started; `sbt rm -f <name>`
-cleans it up.
+A sandbox whose first start fails is removed again, so the same command can be run again. If the
+removal failed too (the error says so), `sbt rm -f <name>` cleans it up.
 
 ## `Refusing without a terminal; pass -f`
 

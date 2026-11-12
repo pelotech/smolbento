@@ -189,15 +189,7 @@ verified on a Mac).
 
 Small issues found in review and deferred; none affect normal use.
 
-- `run --rm` deletes the sandbox even if another session is still attached.
-- If `exec` itself fails inside `run`, the auto-stop and `--rm` cleanup are skipped.
-- `run --name` on an existing sandbox silently ignores create options such as `--cpus`.
-- If creating a sandbox fails after the machine exists, a retry says "already exists" until
-  `sbt rm -f`.
-- smolvm error codes aren't mapped to friendlier hints yet.
-- Settings don't yet accept sbx's `DOCKER_SANDBOXES_*` and `SBX_*` environment names.
-- Shell completions are generated for `sbt` only (not `sbx`/`bento`).
-- Input parsing hardening: memory sizes can overflow on absurd values, malformed `.env` lines
-  are dropped silently, and empty `XDG_*` variables are treated as set.
+- Settings don't yet accept sbx's `DOCKER_SANDBOXES_*` and `SBX_*` environment names (sbx's
+  names for each setting still need to be recorded).
 - More tests for: `cp -L`, `exec --privileged -u`, session cleanup on `rm`/`prune`/`reset`,
   `ProcessRunner` itself.

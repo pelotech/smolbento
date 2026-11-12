@@ -80,3 +80,5 @@ Linux, smolvm's hypervisor entitlement on macOS) and your config file. See
 # also: bash, fish, powershell
 sbt completion zsh > "${fpath[1]}/_sbt"
 ```
+
+Run as `sbx` or `bento`, it generates completions for that name (`sbx completion zsh`).
