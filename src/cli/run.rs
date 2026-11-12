@@ -220,6 +220,7 @@ fn ignored_options_warning(a: &RunArgs, name: &str) -> Option<String> {
         (o.pull.is_some(), "--pull"),
         (o.clone, "--clone"),
         (o.skills.is_some(), "--skills"),
+        (o.static_mcp.is_some(), "--static-mcp"),
     ]
     .into_iter()
     .filter_map(|(on, flag)| on.then_some(flag))
@@ -502,6 +503,14 @@ mod tests {
             )
         );
         assert_eq!(
+            super::ignored_options_warning(
+                &parse(&["sbt", "run", "--name", "s1", "--static-mcp", "linear"]),
+                "s1"
+            )
+            .as_deref(),
+            Some("warning: --static-mcp only applies when a sandbox is created; s1 already exists")
+        );
+        assert_eq!(
             super::ignored_options_warning(&parse(&["sbt", "run", "--name", "s1"]), "s1"),
             None
         );
@@ -597,8 +606,8 @@ mod tests {
         let mut t = test_env(&[]);
         t.runner().ok(&["--version"], "smolvm 1.0.0\n");
         for args in [
-            &["run", "claude", "--static-mcp", "x"][..],
-            &["create", "claude", "--static-mcp", "x"][..],
+            &["run", "claude", "--ttl", "1h"][..],
+            &["create", "claude", "--ttl", "1h"][..],
             &["run", "claude", "--new"][..],
         ] {
             let err = t.sbt(args).unwrap_err();

@@ -87,7 +87,8 @@ terminal fail until you do.
 | 5c | Agent skills: `skills add/import/ls/rm/update`, `--skills`, `skills.defaultMode`, `agent-skills@1`, `agent-skill@1` | ✅ Done |
 | 5d | Templates: `template save/ls/rm/load`, `run/create -t` with a saved template | ✅ Done |
 | 5e | Browser and clipboard bridge while attached (`xdg-open`, `wl-copy`/`xclip`/`xsel`/`pbcopy`, the login callback relay, `browser.enabled`) | ✅ Done |
-| 5 | The other parts, easiest first: 5f MCP (`--static-mcp`, `mcp`); 5g `ssh-agent@1` `authenticate` limits (logins only to named servers, checked against your known hosts); 5h `setup ssh` (`ssh NAME.sbx` into sandboxes, e.g. from VS Code Remote-SSH; the `ssh.autoCreate`, `ssh.defaultAgent`, `ssh.defaultTemplate`, `ssh.workspaceRoot` settings) | Planned |
+| 5f | Static MCP: `mcp add/ls/inspect/rm`, `run/create --static-mcp`, header secrets as smolvm credentials, Claude Code only. No gateway, OAuth, dynamic mode or live load/unload | ✅ Done |
+| 5 | The other parts, easiest first: 5g `ssh-agent@1` `authenticate` limits (logins only to named servers, checked against your known hosts); 5h `setup ssh` (`ssh NAME.sbx` into sandboxes, e.g. from VS Code Remote-SSH; the `ssh.autoCreate`, `ssh.defaultAgent`, `ssh.defaultTemplate`, `ssh.workspaceRoot` settings) | Planned |
 | 6 | Finish `sbxenv.yaml`: `env plan`, remembered approvals (`env.rememberHostCommands`), `lifecycle`, `bindings`, `registries`, `mcp`, the remaining `sandboxOptions` | Planned |
 | 7 | Kit publishing: `kit pack/push/pull/sign/verify` | Planned |
 | 8 | The `plus` kit, built and published with smolbento itself (an end-to-end check of everything before it) | Planned |
@@ -134,6 +135,10 @@ Changes we'd propose to smolvm. What smolvm 1.34.1 lacks, and what smolbento doe
   login for a sandbox's own `docker pull`. smolvm reads credential values only at start and
   registry tokens last minutes, so it needs smolvm to mint or refresh the token itself. Meanwhile
   registry logins are host-only and the builder gets a fresh token before each build.
+- **MCP header secrets.** They are smolvm credentials, so the server needs an `https://` host
+  name without a port. An MCP gateway (OAuth servers, host-run servers, dynamic mode, live
+  `mcp load`) would also need a way for a sandbox to reach one host port, and a process that
+  outlives the attached session.
 - **Credential hosts with a port.** `--credential` can't bind a host with a port. Meanwhile the
   builder skips logins for registries on a port (documented).
 - **OAuth sentinel tokens and enforced method/path rules.** Both need something that reads

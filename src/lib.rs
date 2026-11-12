@@ -6,6 +6,7 @@ pub mod config;
 pub mod ctx;
 pub mod env;
 pub mod kits;
+pub mod mcp;
 pub mod policy;
 pub mod provision;
 pub mod sandbox;

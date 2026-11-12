@@ -39,6 +39,9 @@ pub const HOST_MOUNTS: &str = "sbx.host-mounts";
 pub const SKILLS: &str = "sbx.skills";
 /// The saved template the sandbox was created from (`docker.io/library/t:v1`).
 pub const TEMPLATE: &str = "sbx.template";
+/// The registered MCP servers chosen with `--static-mcp` (comma list; empty for `none`). Absent
+/// when the flag wasn't given.
+pub const MCP: &str = "sbx.mcp";
 /// Prefix of `sbx.credential-format.<ENV>`: how a kit credential's value is formatted.
 pub const CREDENTIAL_FORMAT: &str = "sbx.credential-format.";
 /// Prefix of `sbx.credential-service.<ENV>`: the secret service behind a kit credential's env var
@@ -146,6 +149,8 @@ pub struct Meta {
     pub skills: Option<crate::skills::Label>,
     /// The saved template it was created from (`sbx.template`); `template save` refuses these.
     pub template: Option<String>,
+    /// The registered MCP servers chosen at create (`sbx.mcp`); `None` without `--static-mcp`.
+    pub mcp: Option<Vec<String>>,
 }
 
 impl Meta {
@@ -193,6 +198,7 @@ impl Meta {
             (SSH_AGENT, self.ssh_agent.as_ref().map(|a| a.to_label())),
             (SKILLS, self.skills.as_ref().map(|s| s.to_label())),
             (TEMPLATE, self.template.clone()),
+            (MCP, self.mcp.as_ref().map(|names| names.join(","))),
         ];
         for (key, value) in optional {
             if let Some(value) = value {
@@ -262,6 +268,7 @@ impl Meta {
             ssh_agent: text(SSH_AGENT).and_then(|j| AgentLabel::from_label(&j)),
             skills: text(SKILLS).and_then(|j| crate::skills::Label::from_label(&j)),
             template: text(TEMPLATE),
+            mcp: labels.get(MCP).map(|names| list(Some(names))),
         })
     }
 
@@ -375,6 +382,7 @@ mod tests {
             credential_env: vec!["GH_TOKEN".into(), "GITHUB_TOKEN".into()],
             registries: vec!["dhi.io".into(), "ghcr.io".into()],
             fork_of: Some("a".into()),
+            mcp: Some(vec!["linear".into(), "files".into()]),
             kits: vec!["acme/a:1@sha256:ab".into(), "/k/b".into()],
             command: Some(vec!["wl".into(), "--a b".into()]),
             user: Some("somebody".into()),
@@ -407,6 +415,7 @@ mod tests {
             ("sbx.credential-env", "GH_TOKEN,GITHUB_TOKEN"),
             ("sbx.registries", "dhi.io,ghcr.io"),
             ("sbx.fork-of", "a"),
+            ("sbx.mcp", "linear,files"),
             ("sbx.kits", r#"["acme/a:1@sha256:ab","/k/b"]"#),
             ("sbx.command", r#"["wl","--a b"]"#),
             ("sbx.user", "somebody"),
@@ -424,6 +433,19 @@ mod tests {
         // None of them is written for a sandbox that doesn't use it, so its labels don't change.
         let plain = meta().to_labels();
         assert_eq!(plain.len(), 6, "{plain:?}");
+    }
+
+    #[test]
+    fn static_mcp_none_is_recorded_as_an_empty_label() {
+        // `--static-mcp none` differs from no flag: the set was chosen, and it is empty.
+        let m = Meta {
+            mcp: Some(vec![]),
+            ..meta()
+        };
+        let labels = m.to_labels();
+        assert_eq!(labels["sbx.mcp"], "");
+        assert_eq!(Meta::from_labels(&labels), Some(m));
+        assert_eq!(Meta::from_labels(&meta().to_labels()).unwrap().mcp, None);
     }
 
     #[test]

@@ -161,6 +161,13 @@ fn save<R: Runner>(ctx: &Ctx<R>, a: &TemplateSaveArgs) -> Result<()> {
             sb.name()
         );
     }
+    if sb.meta.mcp.is_some() {
+        bail!(
+            "cannot save {}: it was created with --static-mcp, and a sandbox made from the \
+             template would list those MCP servers without their secrets or network access",
+            sb.name()
+        );
+    }
     if crate::agents::find(&sb.meta.agent).is_none() {
         bail!(
             "cannot save {}: templates of kit workload sandboxes aren't supported yet",
@@ -281,6 +288,16 @@ mod tests {
         assert_eq!(std::fs::read_to_string(store.pack(&e)).unwrap(), "packed");
         // Only the index and the pack are left: the stub and temp dir are gone.
         assert_eq!(std::fs::read_dir(&store.dir).unwrap().count(), 2);
+    }
+
+    #[test]
+    fn save_refuses_a_sandbox_created_with_static_mcp() {
+        for label in ["linear,files", ""] {
+            let mut t = env_with_sandbox("stopped", &[("sbx.mcp", label)]);
+            let err = t.sbt_err(&["template", "save", "a", "t:1"]);
+            assert!(err.contains("--static-mcp"), "{err}");
+            assert!(!t.made("pack create"), "{:#?}", t.calls());
+        }
     }
 
     #[test]

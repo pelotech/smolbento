@@ -91,12 +91,13 @@ As of smolvm 1.34. Check the reference source before depending on anything not l
 | `secrets` | sources, stores, resolve at start |
 | `skills` | shared skills store; --skills modes; kit skill capabilities |
 | `templates` | saved templates: smolvm packs, index, export archive |
+| `mcp` | registered MCP servers; `--static-mcp`: hosts, credentials and agent config steps |
 | `kits` | kit files: load, resolve, compose the image, apply to a sandbox; registry pulls |
 | `env` | `sbxenv.yaml` environment files |
 | `bridge` | host services for a sandbox: browser and clipboard shims, login relay; the socket listener |
 | `ssh_agent` | SSH agent forwarding: grants, the label, the filtering proxy |
 
-Shipped kits live in `kits/`. Planned for later phases: `mcp`, `tui`, and `images/plus/` for the
+Shipped kits live in `kits/`. Planned for later phases: `tui`, and `images/plus/` for the
 plus image.
 
 ## Working

@@ -36,10 +36,14 @@ pub fn run<R: Runner>(ctx: &mut Ctx<R>, cmd: SecretCmd) -> Result<i32> {
             let service = a
                 .service
                 .context("specify a service, e.g. `sbt secret set anthropic`")?;
-            if file.service(&service).is_none() {
-                bail!(services::unknown(&service));
+            if service.starts_with("mcp:") {
+                set_mcp(ctx, &mut file, &service, a.source)?;
+            } else {
+                if file.service(&service).is_none() {
+                    bail!(services::unknown(&service));
+                }
+                set(ctx, &mut file, &service, a.source)?;
             }
-            set(ctx, &mut file, &service, a.source)?;
         }
         SecretCmd::SetCustom(a) => {
             if a.placeholder.is_some() {
@@ -190,6 +194,33 @@ fn set<R: Runner>(
     let described = store(ctx, file, service, src)?;
     writeln!(&ctx.out, "Saved {service} secret ({described}; {scope})")?;
     explain_impact(ctx, service, sandbox.as_deref())
+}
+
+/// `secret set mcp:<server>:<name>`: the value of a registered MCP server's header placeholder
+/// (`sbt mcp add --header 'Name: ${name}'`). Global only, and never bound to a sandbox as an
+/// ordinary secret: `--static-mcp` binds it to the server's host.
+fn set_mcp<R: Runner>(
+    ctx: &Ctx<R>,
+    file: &mut SecretsFile,
+    service: &str,
+    src: SecretSource,
+) -> Result<()> {
+    let shape = service
+        .strip_prefix("mcp:")
+        .and_then(|rest| rest.split_once(':'))
+        .filter(|(server, name)| {
+            crate::mcp::check_name(server).is_ok()
+                && crate::mcp::placeholder(&format!("${{{name}}}")).is_some()
+        });
+    if shape.is_none() {
+        bail!("'{service}': an MCP secret is named mcp:<server>:<name>");
+    }
+    if src.sandbox.is_some() {
+        bail!("MCP secrets are global: drop --sandbox");
+    }
+    let described = store(ctx, file, service, src)?;
+    writeln!(&ctx.out, "Saved {service} secret ({described}; global)")?;
+    Ok(())
 }
 
 /// `secret set` without its output: stores the value (if any) and saves the entry. Returns where
@@ -567,6 +598,52 @@ mod tests {
             None,
             input.as_bytes(),
         )
+    }
+
+    #[test]
+    fn an_mcp_secret_is_stored_like_any_other() {
+        let mut t = test_env(&[]);
+        t.machine("sbx-s1", "running", &[("sbx.name", "s1")]);
+        t.sbt(&["secret", "set", "mcp:linear:api-key", "-t", "tok"])
+            .unwrap();
+        // No "created without it" note: MCP secrets aren't offered to sandboxes as secrets.
+        let out = t.stdout();
+        assert!(
+            out.starts_with("Saved mcp:linear:api-key secret ("),
+            "{out}"
+        );
+        assert_eq!(out.lines().count(), 1, "{out}");
+        let file = SecretsFile::load(&t.ctx.paths).unwrap();
+        let entry = file
+            .secrets
+            .iter()
+            .find(|e| e.service == "mcp:linear:api-key")
+            .expect("an entry");
+        assert_eq!(entry.scope, crate::secrets::scope_for(None));
+        assert_eq!(
+            t.ctx.store.get(&entry.account()).unwrap().as_deref(),
+            Some("tok")
+        );
+        // Never bound to a sandbox as an ordinary secret.
+        assert!(
+            file.services_for("s1")
+                .iter()
+                .all(|s| !s.starts_with("mcp:") || file.service(s).is_none())
+        );
+        let err = t.sbt_err(&[
+            "secret",
+            "set",
+            "mcp:linear:api-key",
+            "--sandbox",
+            "s1",
+            "-t",
+            "x",
+        ]);
+        assert!(err.contains("MCP secrets are global"), "{err}");
+        for bad in ["mcp:linear", "mcp::k", "mcp:bad name:k", "mcp:linear:a b"] {
+            let err = t.sbt_err(&["secret", "set", bad, "-t", "x"]);
+            assert!(err.contains("mcp:<server>:<name>"), "{bad}: {err}");
+        }
     }
 
     #[test]

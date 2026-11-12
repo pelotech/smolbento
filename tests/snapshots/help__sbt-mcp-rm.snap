@@ -1,0 +1,18 @@
+---
+source: tests/help.rs
+expression: help(&path)
+---
+Remove a registered MCP server
+
+Usage: sbt mcp rm [OPTIONS] <NAME>
+
+Arguments:
+  <NAME>
+          Server name
+
+Options:
+  -D, --debug
+          Print each smolvm command line
+
+  -h, --help
+          Print help

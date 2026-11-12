@@ -122,6 +122,24 @@ access, so load only kits you trust.
   token for that registry until it expires, and some registries (`dhi.io`) honour it for
   repositories outside its scope.
 
+## MCP servers
+
+- `--static-mcp` allows each selected remote server's host for that sandbox (rule source `mcp`)
+  and no other host. As for any rule, the port isn't part of it; and a server with a header
+  secret is allowed as a credential host, which includes its subdomains. The rules go away with
+  the sandbox.
+- A header secret (`mcp:<server>:<name>`) is bound to the server's host as a smolvm credential.
+  The sandbox, and the agent's MCP config in it, hold only smolvm's placeholder; the real value
+  is sent only on HTTPS requests to that host. Anything in the sandbox can make such requests, so
+  the secret's reach is whatever that server allows its holder.
+- A header without `${...}` is not a secret: it is written into the agent's config as given. So
+  is the URL; one with credentials in it is refused at `mcp add`.
+- A kit can't ask for an `mcp:` secret as its own credential.
+- A `--command` server runs inside the sandbox with the agent's privileges and network policy. It
+  never runs on your machine.
+- Registered names, URLs and header values are quoted into the registration script; a header
+  value is never executed in the guest.
+
 ## Environment files
 
 - An `sbxenv.yaml` from a repository can run commands on your machine, outside the sandbox: a

@@ -1,0 +1,30 @@
+---
+source: tests/help.rs
+expression: help(&path)
+---
+Register an MCP server
+
+Usage: sbt mcp add [OPTIONS] <NAME>
+
+Arguments:
+  <NAME>
+          Server name
+
+Options:
+  -D, --debug
+          Print each smolvm command line
+
+      --url <URL>
+          The server's URL
+
+      --header <NAME: VALUE>
+          A request header, `Name: value` (repeatable). `${name}` in the value is the secret `mcp:<server>:<name>`
+
+      --command <COMMAND>
+          A command that runs the server inside the sandbox
+
+      --args <ARGS>
+          An argument of --command (repeatable)
+
+  -h, --help
+          Print help

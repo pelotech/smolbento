@@ -12,7 +12,8 @@ something different.
 `env create|run|exec|rm` (see [Environment files](#environment-files)), `run/create
 --deny-network` (per-sandbox deny rules, as in sbx), `run/create --clone`, kits (`run/create
 --kit`, `--kit-arg`, `--kit-args-file`, `--mount`, `kit inspect`, `kit validate`, `kit add`; see
-[Kits](#kits)) and `policy ls --source`.
+[Kits](#kits)), `mcp add|ls|inspect|rm` and `run/create --static-mcp` (see
+[MCP servers](#mcp-servers)) and `policy ls --source`.
 `fork` is a smolbento extension: sbx has no fork (its `template save` saves the disk only).
 `daemon` is accepted and does nothing: smolbento has no daemon.
 
@@ -24,7 +25,8 @@ something different.
 | `policy ls --created-via/--type/--protocol/--include-inactive`, `policy check --protocol` other than `tcp` | Not implemented (`policy ls --decision` and `--source` work) |
 | `kit pack`, `kit push`, `kit pull`, `kit sign`, `kit verify` | Not implemented |
 | `env plan` and the `sbxenv.yaml` fields listed under [Environment files](#environment-files) | Later |
-| `setup ssh`, `mcp`, `--static-mcp` | Later |
+| `setup ssh` | Later |
+| `mcp auth`, `mcp load`, `mcp unload`; `mcp add --local`, `--dir`, `--client-id`, `--oauth-authorization-server`, `--resource`, `--skip-auth` | Not supported: smolbento has no MCP gateway (see [MCP servers](#mcp-servers)) |
 | `tui` | Later |
 | `--pull always`, and `--pull never` except with a saved template | `--pull missing` works (it's what smolvm does) |
 | `exec -d`, `--detach-keys` | Not supported (sbx doesn't support `exec -d` either) |
@@ -79,6 +81,25 @@ works too). Differences:
 | Who links | Root, giving the directory and links to uid 1000; a directory uid 1000 can't reach fails the create (`uid 1000 cannot reach it, ...`) | Root, giving them to the image's `agent` account (your uid in smolbento), else uid 1000. No reachability check: links in a directory the agent can't reach are made anyway. A skills directory whose path goes through a symlink, in itself or a parent, gets no links (the start warns; a required bundled skill fails) |
 | Kits | `agent-skills@1`, `agent-skill@1` | Both, as measured: a kit directory has the store mounted over it unless the sandbox has bundled skills, then every directory links and the shared mount is read-write if any directory is. The clash message matches; the create error starts with `kit install failed (the sandbox was removed): bundled agent skills failed:`. `kit add` refuses kits with either |
 | Other agents' directories | From sbx's docs table | The same table, taken from the docs and not measured for copilot, cursor, droid, opencode and devin |
+
+## MCP servers
+
+sbx runs an MCP gateway on the host for each sandbox: the agent sees one endpoint, and sbx connects
+it to the registered servers, holds their OAuth tokens and runs local servers on the host.
+smolbento has no gateway. `sbt mcp add|ls|inspect|rm` and `run|create --static-mcp` take sbx's
+flags, and the registered servers are written into the agent's own MCP config at create.
+
+| | sbx | smolbento |
+|---|---|---|
+| Where a `--command` server runs | On the host | Inside the sandbox; the command must exist in the image |
+| Header secrets (`${name}`, `sbx secret set mcp:<server>:<name>`) | Added by the gateway | Same syntax; the agent's config holds smolvm's placeholder, replaced on HTTPS requests to the server's host. Needs an `https://` host name without a port; one secret header per server |
+| OAuth servers | Authorized by `sbx` on the host | Not supported |
+| Without `--static-mcp` | Dynamic mode: the agent can find and attach registered servers | No MCP servers |
+| `mcp load` / `mcp unload` on a running sandbox | Yes | Not supported; the set is fixed at create |
+| Agents | Any whose kit registers the gateway | `claude` only so far |
+| `localhost` server URLs | Reach the host through the gateway | Refused at `mcp add` |
+| `mcp ls` / `mcp inspect` output | Has a `GATEWAY` column and each server's state | `NAME`, `TYPE`, `TARGET`; JSON and YAML with `name`, `type`, `url`/`command`, `headers`, `args`, `secrets`. sbx's reference shows no sample output to match |
+| `MCP_GATEWAY_URL`, `MCP_SENTINEL_TOKEN_NAME` in the sandbox | Set | Not set |
 
 ## Templates
 

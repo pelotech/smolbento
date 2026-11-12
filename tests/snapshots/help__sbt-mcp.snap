@@ -1,0 +1,24 @@
+---
+source: tests/help.rs
+expression: help(&path)
+---
+Register MCP servers for sandboxes
+
+Usage: sbt mcp [OPTIONS] <COMMAND>
+
+Commands:
+  add      Register an MCP server
+  ls       List registered MCP servers [alias: list]
+  inspect  Show a registered MCP server
+  rm       Remove a registered MCP server [alias: remove]
+  auth     Authorize OAuth servers (not supported: smolbento has no MCP gateway)
+  load     Attach a server to a running sandbox (not supported: smolbento has no MCP gateway)
+  unload   Detach a server from a running sandbox (not supported: smolbento has no MCP gateway)
+  help     Print this message or the help of the given subcommand(s)
+
+Options:
+  -D, --debug
+          Print each smolvm command line
+
+  -h, --help
+          Print help
