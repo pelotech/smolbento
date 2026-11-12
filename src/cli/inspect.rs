@@ -37,6 +37,9 @@ struct Details<'a> {
     secrets: &'a [String],
     #[serde(skip_serializing_if = "Vec::is_empty")]
     ports: Vec<String>,
+    /// The registered MCP servers chosen with `--static-mcp`; absent without the flag.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    mcp_servers: Option<&'a [String]>,
     sessions: usize,
 }
 
@@ -62,6 +65,7 @@ pub fn render(sb: &Sandbox, sessions: usize, format: Format) -> Result<String> {
             .iter()
             .map(|p| format!("127.0.0.1:{}->{}/tcp4", p.host, p.guest))
             .collect(),
+        mcp_servers: m.mcp.as_deref(),
         sessions,
     };
     match format {
@@ -96,8 +100,11 @@ fn table(d: &Details) -> String {
     rows.extend([
         ("Secrets", list(d.secrets, "none")),
         ("Ports", list(&d.ports, "none published")),
-        ("Sessions", d.sessions.to_string()),
     ]);
+    if let Some(servers) = d.mcp_servers {
+        rows.push(("MCP servers", list(servers, "none")));
+    }
+    rows.push(("Sessions", d.sessions.to_string()));
     let mut out = String::from("\n");
     for (key, value) in rows {
         out.push_str(&format!("  {:<17}{value}\n", format!("{key}:")));
@@ -165,6 +172,49 @@ mod tests {
             ..Default::default()
         };
         status(t, &meta, "stopped", None, "[]");
+    }
+
+    #[test]
+    fn mcp_servers_are_shown_when_they_were_chosen() {
+        let chosen = |servers: Option<Vec<String>>| Meta {
+            name: "shell-x".into(),
+            agent: "shell".into(),
+            created: 999_000,
+            mcp: servers,
+            ..Default::default()
+        };
+        let mut t = test_env(&[]);
+        status(
+            &t,
+            &chosen(Some(vec!["linear".into(), "files".into()])),
+            "stopped",
+            None,
+            "[]",
+        );
+        t.sbt(&["inspect", "shell-x"]).unwrap();
+        let out = t.stdout();
+        assert!(
+            out.contains("\n  MCP servers:     linear, files\n"),
+            "{out}"
+        );
+        t.sbt(&["inspect", "shell-x", "--json"]).unwrap();
+        let json: serde_json::Value = serde_json::from_str(&t.stdout()).unwrap();
+        assert_eq!(json["mcp_servers"], serde_json::json!(["linear", "files"]));
+
+        // `--static-mcp none`: chosen, and empty.
+        let mut t = test_env(&[]);
+        status(&t, &chosen(Some(vec![])), "stopped", None, "[]");
+        t.sbt(&["inspect", "shell-x"]).unwrap();
+        assert!(t.stdout().contains("\n  MCP servers:     none\n"));
+
+        // Without the flag there is no row and no key.
+        let mut t = test_env(&[]);
+        status(&t, &chosen(None), "stopped", None, "[]");
+        t.sbt(&["inspect", "shell-x"]).unwrap();
+        assert!(!t.stdout().contains("MCP servers"));
+        t.sbt(&["inspect", "shell-x", "--json"]).unwrap();
+        let json: serde_json::Value = serde_json::from_str(&t.stdout()).unwrap();
+        assert!(json.get("mcp_servers").is_none(), "{json}");
     }
 
     #[test]

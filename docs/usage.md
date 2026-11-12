@@ -620,6 +620,44 @@ A kit can ask for more skills directories and ship skills of its own:
   `kit add` refuses kits with either capability: mounts are set at create, so create a new
   sandbox with the kit.
 
+## MCP servers
+
+Register MCP servers once on your machine, then give them to a sandbox's agent when you create it.
+
+```sh
+# A remote server. ${api-key} is a secret, set separately.
+sbt mcp add linear --url https://mcp.linear.app/sse --header 'Authorization: Bearer ${api-key}'
+sbt secret set mcp:linear:api-key
+
+# A server that runs as a command, inside the sandbox.
+sbt mcp add files --command npx --args -y --args @modelcontextprotocol/server-filesystem --args /workspace
+
+sbt mcp ls
+sbt mcp inspect linear
+sbt mcp rm linear
+
+sbt run claude --static-mcp linear,files
+```
+
+- `--static-mcp` only applies when the sandbox is created; the set can't be changed afterwards.
+  `--static-mcp none` records that the sandbox has no MCP servers. `sbt inspect` shows the set.
+- At create, smolbento allows each remote server's host for that sandbox and writes the servers
+  into the agent's own MCP config (for Claude Code, with `claude mcp add --scope user`).
+- A header secret never enters the sandbox. The agent's config holds a placeholder from smolvm,
+  which replaces it with the real value only on HTTPS requests to that server's host. The secret
+  is stored like any other (`-t`, `--ref`, `--command` work) and is global.
+- A command server runs inside the sandbox, so the command has to exist in the image.
+
+Limits:
+
+- Only the `claude` agent so far; other agents fail the create with a clear error.
+- No OAuth: a server that only offers an OAuth login can't be registered with a token header.
+- A header secret needs an `https://` URL with a host name and no port.
+- `localhost` URLs are refused: inside a sandbox that is the sandbox, not your machine.
+- `sbt template save` refuses a sandbox created with `--static-mcp`.
+- `mcp auth`, `mcp load` and `mcp unload` are not supported (see
+  [sbx compatibility](sbx-compatibility.md#mcp-servers)).
+
 ## Templates
 
 A template is a snapshot of a sandbox's disk that new sandboxes can start from. Install your tools

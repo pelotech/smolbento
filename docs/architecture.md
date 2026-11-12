@@ -69,8 +69,9 @@ started with `run -d`.
 | `src/env/` | `sbxenv.yaml` environment files |
 | `src/skills/` | The shared skills store |
 | `src/templates.rs` | Saved templates |
+| `src/mcp/` | Registered MCP servers and what `--static-mcp` applies at create |
 | `src/bridge/` | Host services for a sandbox: browser and clipboard shims, login relay; the socket listener |
 | `src/ssh_agent/` | SSH agent forwarding: grants, the label, the filtering proxy |
 | `src/util.rs` | Leaf helpers: shell quoting, hashing, size parsing |
 
-See [Development status](development-status.md) for what later phases add (MCP, the dashboard).
+See [Development status](development-status.md) for what later phases add (the dashboard).
