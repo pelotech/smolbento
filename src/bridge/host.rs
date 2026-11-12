@@ -345,10 +345,16 @@ mod tests {
             "{:?}",
             started.elapsed()
         );
-        let pid = std::fs::read_to_string(&pid_file)
-            .unwrap()
-            .trim()
-            .to_string();
+        // The shell may not have started within the grace on a busy machine: wait for its pid
+        // rather than assume it is written by now.
+        let waited = Instant::now();
+        let pid = loop {
+            match std::fs::read_to_string(&pid_file) {
+                Ok(p) if p.ends_with('\n') => break p.trim().to_string(),
+                _ if waited.elapsed() > Duration::from_secs(20) => panic!("the opener never ran"),
+                _ => thread::sleep(Duration::from_millis(20)),
+            }
+        };
         let alive = || {
             Command::new("kill")
                 .args(["-0", &pid])
