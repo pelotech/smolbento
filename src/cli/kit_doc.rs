@@ -9,7 +9,7 @@ use anyhow::Result;
 use serde::Serialize;
 use serde_json::Value;
 
-use crate::kits::model::{CapBody, Content, HookCmd, Kind, Kit, Source};
+use crate::kits::model::{CapBody, Content, Format, HookCmd, Kind, Kit, Source};
 use crate::secrets::services;
 
 #[derive(Serialize)]
@@ -386,10 +386,10 @@ fn kind_word(k: Kind) -> &'static str {
 }
 
 fn schema(s: &Source) -> &'static str {
-    match s {
-        Source::LocalV2(_) => "v2",
-        Source::Smolfile(_) => "smolfile",
-        _ => "v3",
+    match s.format() {
+        Some(Format::V2) => "v2",
+        Some(Format::V3) => "v3",
+        None => "smolfile",
     }
 }
 

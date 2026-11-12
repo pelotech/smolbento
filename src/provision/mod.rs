@@ -1362,7 +1362,7 @@ mod tests {
         let err = format!("{:#}", result.unwrap_err());
         assert_eq!(
             err,
-            "kit install failed (the sandbox was removed): kit k install hook 1 failed:\nnpm ERR! 404"
+            "the first start failed (the sandbox was removed): kit k install hook 1 failed:\nnpm ERR! 404"
         );
         assert!(
             t.calls()

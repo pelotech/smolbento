@@ -8,8 +8,8 @@ use crate::kits::args::{ArgValues, expand};
 use crate::kits::capability;
 use crate::kits::host_mount;
 use crate::kits::model::{
-    AgentContextReq, Cap, CapBody, CredReq, FileReq, Hook, HookCmd, Kind, Kit, Lifecycle, NetRule,
-    Rules, Source, SshPhase,
+    AgentContextReq, Cap, CapBody, CredReq, FileReq, Format, Hook, HookCmd, Kind, Kit, Lifecycle,
+    NetRule, Rules, Source, SshPhase,
 };
 use crate::ssh_agent::{AgentGrant, PhaseGrant};
 
@@ -425,22 +425,21 @@ pub fn resolve_for(
 
 /// Each kit once, names unique (they scope `--kit-arg`s and tag policy rules; an agent preset
 /// isn't a kit, so a kit may share its name), and one workload.
-/// As in sbx, v2 and v3 kits don't go into one sandbox. An agent preset, the shipped docker kit
-/// and a Smolfile have no format of their own (in sbx the agents are v3 kits: see
+/// As in sbx, v2 and v3 kits don't go into one sandbox. Only the kits the user named count: an
+/// agent preset and the shipped docker kit go with either (in sbx the agents are v3 kits: see
 /// docs/sbx-compatibility.md).
 fn check_formats(workload: &Kit, mixins: &[Kit]) -> Result<()> {
-    let names = |v3: bool| -> Vec<&str> {
-        std::iter::once(workload)
-            .chain(mixins)
-            .filter(|k| match k.source {
-                Source::LocalV3(_) | Source::Registry(_) => v3,
-                Source::LocalV2(_) => !v3,
-                Source::Preset(_) | Source::Builtin(_) | Source::Smolfile(_) => false,
-            })
-            .map(|k| k.name.as_str())
-            .collect()
-    };
-    let (v3, v2) = (names(true), names(false));
+    let (mut v2, mut v3) = (Vec::new(), Vec::new());
+    for k in std::iter::once(workload).chain(mixins) {
+        if matches!(k.source, Source::Preset(_) | Source::Builtin(_)) {
+            continue;
+        }
+        match k.source.format() {
+            Some(Format::V2) => v2.push(k.name.as_str()),
+            Some(Format::V3) => v3.push(k.name.as_str()),
+            None => {}
+        }
+    }
     if !v3.is_empty() && !v2.is_empty() {
         bail!(
             "cannot mix v3 kits with v1/v2 kits in one sandbox; compositions are single-format \

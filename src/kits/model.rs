@@ -25,6 +25,26 @@ pub enum Source {
     Builtin(&'static str),
 }
 
+/// The kit file format a kit was written in.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum Format {
+    V2,
+    V3,
+}
+
+impl Source {
+    /// `None` for a Smolfile, which isn't a kit file. An agent preset counts as v3, as in sbx.
+    pub fn format(&self) -> Option<Format> {
+        match self {
+            Source::LocalV2(_) => Some(Format::V2),
+            Source::Smolfile(_) => None,
+            Source::Registry(_) | Source::LocalV3(_) | Source::Preset(_) | Source::Builtin(_) => {
+                Some(Format::V3)
+            }
+        }
+    }
+}
+
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum Content {
     /// Declaration-only.
