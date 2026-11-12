@@ -4,6 +4,7 @@ mod args;
 mod bridge;
 mod diagnose;
 mod env;
+mod env_spec;
 mod exec;
 mod fork;
 mod inspect;
@@ -11,7 +12,6 @@ mod kit;
 mod kit_doc;
 pub(crate) mod lifecycle;
 mod ls;
-pub(crate) mod plan;
 mod policy;
 mod ports;
 pub(crate) mod progress;
@@ -23,7 +23,7 @@ mod skills;
 mod template;
 mod upload_pack;
 
-pub use crate::ctx::{Ctx, In, Out};
+pub use crate::ctx::{Ctx, In, Out, Unsupported};
 pub use args::*;
 
 use std::collections::BTreeMap;
@@ -39,11 +39,6 @@ use crate::smolvm::{ProcessRunner, Runner, Smolvm};
 
 /// The oldest smolvm smolbento supports.
 pub const MIN_SMOLVM: &str = "1.34.1";
-
-/// A command or flag that smolbento doesn't support (yet, or ever). Exits with status 2.
-#[derive(Debug, thiserror::Error)]
-#[error("{0}")]
-pub struct Unsupported(pub String);
 
 pub fn exit_code(err: &anyhow::Error) -> u8 {
     if err.downcast_ref::<Unsupported>().is_some() {

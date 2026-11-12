@@ -6,8 +6,9 @@ use std::path::Path;
 
 use anyhow::{Context, Result, anyhow, bail};
 
-use super::{Ctx, ForkArgs, plan};
+use super::{Ctx, ForkArgs};
 use crate::policy::Policy;
+use crate::provision;
 use crate::sandbox::{self, Sandbox, labels, name};
 use crate::smolvm::{Runner, SmolvmError};
 use crate::workspace::clone;
@@ -35,7 +36,7 @@ pub fn run<R: Runner>(ctx: &mut Ctx<R>, a: &ForkArgs) -> Result<i32> {
         }
     }
     // One secrets resolution (one Touch ID) for the parent's start, if needed, and every copy.
-    let start = plan::start_plan(ctx, &parent.meta)?;
+    let start = provision::start_plan(ctx, &parent.meta)?;
     sandbox::ensure_running(&ctx.vm, &mut parent, || Ok(start.clone()))?;
     for n in &names {
         fork_one(ctx, &parent, n, &start.env, &start.remove)

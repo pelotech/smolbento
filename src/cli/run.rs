@@ -7,12 +7,12 @@ use std::path::Path;
 use anyhow::{Context, Result, bail};
 
 use super::lifecycle::create_reported;
-use super::plan;
 use super::progress::Progress;
 use super::request::{has_kit_flags, kit_target};
 use super::{Ctx, RunArgs, Unsupported};
 use crate::agents;
 use crate::bridge;
+use crate::provision;
 use crate::sandbox::{self, Sandbox, session};
 use crate::smolvm::{ExecSpec, Runner, SmolvmError};
 use crate::workspace::clone;
@@ -82,7 +82,7 @@ pub fn run<R: Runner>(ctx: &mut Ctx<R>, a: &RunArgs) -> Result<i32> {
             sb.name()
         );
     }
-    plan::ensure_running(ctx, &mut sb)?;
+    provision::ensure_running(ctx, &mut sb)?;
 
     let sessions = ctx.paths.sessions();
     if a.detach {

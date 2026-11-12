@@ -2,6 +2,7 @@
 
 pub mod compile;
 pub mod log;
+pub mod notes;
 pub mod presets;
 pub mod rules;
 

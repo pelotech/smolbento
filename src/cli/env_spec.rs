@@ -4,12 +4,10 @@ use std::path::{Path, PathBuf};
 
 use anyhow::{Context, Result, bail};
 
-use super::file::{EnvFile, KitEntry, PinnedKit, Port, SecretDecl, Workspace};
-use super::load::Loaded;
+use super::SandboxOpts;
 use crate::agents;
-use crate::cli::SandboxOpts;
-use crate::cli::request::unknown_agent;
-use crate::cli::secret::unknown_service;
+use crate::env::file::{EnvFile, KitEntry, PinnedKit, Port, SecretDecl, Workspace};
+use crate::env::load::Loaded;
 use crate::sandbox::{name as sandbox_name, options};
 use crate::secrets::SecretsFile;
 use crate::util::sha256_digest;
@@ -88,7 +86,7 @@ pub fn spec(loaded: &Loaded, overrides: &Overrides, secrets: &SecretsFile) -> Re
         let i = kits
             .iter()
             .position(|k| kit_name(k) == agent)
-            .with_context(|| unknown_agent(agent))?;
+            .with_context(|| agents::unknown(agent))?;
         kits.remove(i)
     };
     let kit_pins = f
@@ -144,7 +142,7 @@ pub fn spec(loaded: &Loaded, overrides: &Overrides, secrets: &SecretsFile) -> Re
         .iter()
         .find(|(s, _)| secrets.service(s).is_none())
     {
-        bail!(unknown_service(service));
+        bail!(crate::secrets::services::unknown(service));
     }
 
     let env: Vec<(String, String)> = f.env.clone().unwrap_or_default().into_iter().collect();

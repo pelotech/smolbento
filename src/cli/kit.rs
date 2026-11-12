@@ -7,13 +7,13 @@ use anyhow::{Context, Result, anyhow, bail};
 use super::Ctx;
 use super::args::{Format, KitArgOpts, KitCmd};
 use super::kit_doc::Doc;
-use super::plan;
 use crate::kits::apply::apply;
 use crate::kits::args::{ArgValues, NoResolvedValue};
 use crate::kits::model::{Cap, CapBody, Content, ImageConfig, Kind, Kit, Source};
 use crate::kits::resolve::{resolve, resolve_for};
 use crate::kits::{capability, compose, guest, load};
 use crate::policy::{Decision, Policy, compile};
+use crate::provision;
 use crate::sandbox::{self, CreateRequest, KitPhase, Sandbox};
 use crate::secrets::SecretsFile;
 use crate::smolvm::{ExecSpec, Runner};
@@ -350,7 +350,7 @@ fn add<R: Runner>(
         bail!("recreate required: {}", recreate.join(", "));
     }
     let started = !sb.is_running();
-    plan::ensure_running(ctx, &mut sb)?;
+    provision::ensure_running(ctx, &mut sb)?;
     add_running(ctx, &sb, kit, &values, yes, started).map_err(|e| {
         if started {
             anyhow!("{e:#}\n({name} was started for this and is still running)")
@@ -404,7 +404,7 @@ fn add_running<R: Runner>(
     plan.warn_skipped();
 
     // In memory until approved.
-    let mut policy = plan::ensure_policy(ctx)?;
+    let mut policy = provision::ensure_policy(ctx)?;
     let secrets = SecretsFile::load(&ctx.paths)?;
     // The workspaces place the agent file (and keep context out of mounts); a workload kit's
     // agent file was recorded at create.
@@ -426,7 +426,7 @@ fn add_running<R: Runner>(
         &secrets,
         &*ctx.store,
         &ctx.paths.kit_cache(),
-        &|| plan::host_git_identity(ctx),
+        &|| provision::host_git_identity(ctx),
     )?;
     let mut hosts: Vec<String> = added
         .iter()

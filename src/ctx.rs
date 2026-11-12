@@ -78,3 +78,8 @@ impl Write for &Out {
         }
     }
 }
+
+/// A command or flag that smolbento doesn't support (yet, or ever). Exits with status 2.
+#[derive(Debug, thiserror::Error)]
+#[error("{0}")]
+pub struct Unsupported(pub String);

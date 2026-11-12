@@ -7,6 +7,7 @@ pub mod ctx;
 pub mod env;
 pub mod kits;
 pub mod policy;
+pub mod provision;
 pub mod sandbox;
 pub mod secrets;
 pub mod skills;

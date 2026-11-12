@@ -8,7 +8,7 @@ use regex_lite::Regex;
 use serde_json::Value;
 
 use super::file::{ArgDecl, EnvFile, RawFile, lexical, read};
-use crate::cli::Unsupported;
+use crate::ctx::Unsupported;
 
 pub struct Loaded {
     pub files: Vec<PathBuf>,

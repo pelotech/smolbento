@@ -6,10 +6,10 @@ use std::time::UNIX_EPOCH;
 
 use anyhow::{Context, Result, bail};
 
-use super::plan;
-use super::progress::Progress;
+use super::progress::{CreateSteps, Progress};
 use super::request::{Workload, check_kit_args, kit_plan, kit_target, resolve_clone};
 use super::{CreateArgs, Ctx, PruneArgs, ResetArgs, RmArgs, SandboxOpts, confirm};
+use crate::provision;
 use crate::sandbox::{self, CreateRequest, Event, Sandbox, session};
 use crate::smolvm::Runner;
 use crate::workspace::clone;
@@ -38,12 +38,22 @@ pub(crate) fn create_reported<R: Runner>(
     opts: &SandboxOpts,
 ) -> Result<Sandbox> {
     resolve_clone(req, opts)?;
-    plan::check_free(ctx, &req.name)?;
+    provision::check_free(ctx, &req.name)?;
     report_sandbox(p, req, workload.as_ref(), opts.clone);
     let kits = workload
         .map(|w| kit_plan(ctx, req, w, opts, p))
         .transpose()?;
-    plan::create_reported(ctx, req, &opts.deny_network, kits.as_ref(), p)
+    let mut steps = CreateSteps::new(p);
+    let created = provision::create_with(
+        ctx,
+        req,
+        &opts.deny_network,
+        kits.as_ref(),
+        None,
+        &mut |e| steps.on(e),
+    );
+    steps.end(created.is_ok());
+    created
 }
 
 /// The `SANDBOX` section, before any kit loads: a workload kit's image is known only once it
@@ -98,7 +108,7 @@ pub fn start<R: Runner>(ctx: &mut Ctx<R>, names: &[String]) -> Result<i32> {
             writeln!(&ctx.out, "{n} is already running")?;
             continue;
         }
-        let start_plan = plan::start_plan(ctx, &sb.meta)?;
+        let start_plan = provision::start_plan(ctx, &sb.meta)?;
         let mut step = p.step(n, "starting");
         let started = sandbox::start_with(&ctx.vm, &sb, &start_plan, &mut |e| {
             if let Event::Pull(pull) = e {

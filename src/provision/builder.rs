@@ -9,11 +9,12 @@ use std::time::Duration;
 use anyhow::{Context, Result, bail};
 
 use crate::agents;
-use crate::cli::{Ctx, plan};
+use crate::ctx::Ctx;
 use crate::kits::args::ArgValues;
-use crate::kits::load;
+use crate::kits::load::{self, SYNTAX, starts_with_syntax};
 use crate::kits::registry_auth;
 use crate::kits::resolve::{Plan, resolve};
+use crate::provision;
 use crate::sandbox::{self, CreateRequest, Sandbox, options};
 use crate::secrets::{RegistryEntry, SecretsFile, registry_secret};
 use crate::smolvm::{Credential, ExecSpec, MachineState, Runner, Smolvm, SmolvmError};
@@ -24,7 +25,7 @@ pub const BUILDER: &str = "_builder";
 pub const BUILDER_IMAGE: &str = "docker/sandbox-templates:shell-docker-0.10.0";
 
 const MEMORY_MIB: u64 = 4096;
-pub(crate) const SYNTAX: &str = "# syntax=docker/sandbox-kit:3";
+
 /// `docker info` tries, a second apart, before dockerd counts as not starting.
 const DOCKER_WAIT: u32 = 30;
 /// How much of a failed build's output the error shows.
@@ -109,7 +110,9 @@ fn build_with<R: Runner>(ctx: &Ctx<R>, dir: &Path, mint: Minter) -> Result<PathB
         }
         None => (
             docker_plan()
-                .and_then(|kits| plan::create(ctx, &mut request(ctx, &hosts), &[], Some(&kits)))
+                .and_then(|kits| {
+                    provision::create(ctx, &mut request(ctx, &hosts), &[], Some(&kits))
+                })
                 .context("creating the kit builder sandbox")?,
             false,
         ),
@@ -203,7 +206,7 @@ fn repos_in(text: &str, host: &str) -> Vec<String> {
 /// values at start only. The tokens go in `machine start`'s environment only.
 fn start<R: Runner>(ctx: &Ctx<R>, sb: &mut Sandbox, tokens: Vec<(String, String)>) -> Result<()> {
     if tokens.is_empty() {
-        return plan::ensure_running(ctx, sb);
+        return provision::ensure_running(ctx, sb);
     }
     if sb.is_running() {
         ctx.vm.stop(&sb.machine)?;
@@ -211,7 +214,7 @@ fn start<R: Runner>(ctx: &Ctx<R>, sb: &mut Sandbox, tokens: Vec<(String, String)
     }
     let meta = sb.meta.clone();
     sandbox::ensure_running(&ctx.vm, sb, || {
-        let mut plan = plan::start_plan(ctx, &meta)?;
+        let mut plan = provision::start_plan(ctx, &meta)?;
         plan.remove.retain(|v| !tokens.iter().any(|(k, _)| k == v));
         plan.env.extend(tokens);
         Ok(plan)
@@ -243,13 +246,6 @@ fn request<R: Runner>(ctx: &Ctx<R>, registries: &[String]) -> CreateRequest {
         registries: registries.to_vec(),
         ..Default::default()
     }
-}
-
-/// Whether a file's first line is the v3 syntax line, after an optional UTF-8 BOM.
-pub(crate) fn starts_with_syntax(bytes: &[u8]) -> bool {
-    let bytes = bytes.strip_prefix(b"\xEF\xBB\xBF").unwrap_or(bytes);
-    let first = bytes.split(|b| *b == b'\n').next().unwrap_or_default();
-    String::from_utf8_lossy(first).trim_end() == SYNTAX
 }
 
 /// The kit's descriptor file name: the single `*.yaml`/`*.yml` whose first line is the v3 syntax

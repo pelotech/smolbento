@@ -24,7 +24,7 @@ pub(crate) fn build_request<R: Runner>(
     opts: &SandboxOpts,
     default_to_cwd: bool,
 ) -> Result<CreateRequest> {
-    let agent = agents::find(agent_name).with_context(|| unknown_agent(agent_name))?;
+    let agent = agents::find(agent_name).with_context(|| agents::unknown(agent_name))?;
     let mut req = base_request(ctx, agent.name, paths, opts, default_to_cwd)?;
     let docker_enabled = ctx.settings.bool("docker.enabled")?;
     let store = crate::templates::Store::new(&ctx.paths);
@@ -64,10 +64,6 @@ pub(crate) fn build_request<R: Runner>(
     // Asks for the docker kit; `apply` sets it again from the kits actually applied.
     req.docker = docker_enabled && agents::is_docker_image(&req.image);
     Ok(req)
-}
-
-pub(crate) fn unknown_agent(name: &str) -> String {
-    format!("unknown agent \"{name}\"")
 }
 
 /// Everything but the image: `agent` is the preset or workload kit name (the `sbx.agent` label
@@ -171,7 +167,7 @@ pub(crate) fn kit_target<R: Runner>(
         }
         None => {
             if !looks_like_kit(target) {
-                bail!(unknown_agent(target));
+                bail!(agents::unknown(target));
             }
             if opts.template.is_some() {
                 bail!("-t can't be combined with a workload kit");
@@ -781,7 +777,7 @@ SETUP
         )
         .unwrap();
         let (mut req, plan) = kit_request(&t, &["create", "shell", "--kit"], dir.path());
-        crate::cli::plan::prepare_create(&t.ctx, &mut req, &[], plan.as_ref()).unwrap();
+        crate::provision::prepare_create(&t.ctx, &mut req, &[], plan.as_ref()).unwrap();
         let gh: Vec<_> = req
             .credentials
             .iter()
@@ -813,7 +809,7 @@ SETUP
         global_github_secret(&t);
         let dir = inject_kit("github", "evil.example.com");
         let (mut req, plan) = kit_request(&t, &["create", "shell", "--kit"], dir.path());
-        let err = crate::cli::plan::prepare_create(&t.ctx, &mut req, &[], plan.as_ref())
+        let err = crate::provision::prepare_create(&t.ctx, &mut req, &[], plan.as_ref())
             .unwrap_err()
             .to_string();
         assert_eq!(
@@ -840,7 +836,7 @@ SETUP
         .unwrap();
         let dir = inject_kit("corp", "ghe.corp.example");
         let (mut req, plan) = kit_request(&t, &["create", "shell", "--kit"], dir.path());
-        crate::cli::plan::prepare_create(&t.ctx, &mut req, &[], plan.as_ref()).unwrap();
+        crate::provision::prepare_create(&t.ctx, &mut req, &[], plan.as_ref()).unwrap();
         let c = req
             .credentials
             .iter()
@@ -862,7 +858,7 @@ SETUP
         )
         .unwrap();
         let (mut req, plan) = kit_request(&t, &["create", "shell", "--kit"], dir.path());
-        let err = crate::cli::plan::prepare_create(&t.ctx, &mut req, &[], plan.as_ref())
+        let err = crate::provision::prepare_create(&t.ctx, &mut req, &[], plan.as_ref())
             .unwrap_err()
             .to_string();
         assert!(err.contains("GH_TOKEN"), "{err}");
@@ -898,7 +894,7 @@ SETUP
             global_github_secret(&t);
             let dir = gh_kit("GH_TOKEN", inject);
             let (mut req, plan) = kit_request(&t, &["create", "shell", "--kit"], dir.path());
-            let r = crate::cli::plan::prepare_create(&t.ctx, &mut req, &[], plan.as_ref());
+            let r = crate::provision::prepare_create(&t.ctx, &mut req, &[], plan.as_ref());
             match ok {
                 true => {
                     r.unwrap();
@@ -937,7 +933,7 @@ SETUP
                 &["create", "shell", "--kit", other.as_str(), "--kit"],
                 dir.path(),
             );
-            let r = crate::cli::plan::prepare_create(&t.ctx, &mut req, &[], plan.as_ref());
+            let r = crate::provision::prepare_create(&t.ctx, &mut req, &[], plan.as_ref());
             assert_eq!(r.is_ok(), ok, "{second}: {r:?}");
             if ok {
                 let kit: Vec<_> = req

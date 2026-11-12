@@ -105,6 +105,11 @@ pub fn find(name: &str) -> Option<&'static Agent> {
     AGENTS.iter().find(|a| a.name == name)
 }
 
+/// The error for a name that is no agent.
+pub fn unknown(name: &str) -> String {
+    format!("unknown agent \"{name}\"")
+}
+
 fn split_tag(image: &str) -> Option<(&str, &str)> {
     image.rsplit_once(':').filter(|(_, tag)| !tag.contains('/'))
 }

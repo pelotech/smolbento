@@ -9,9 +9,20 @@ use crate::agents::Agent;
 use crate::ctx::Ctx;
 use crate::kits::model::{Content, Kind, Kit, Source};
 use crate::kits::registry_auth::Logins;
-use crate::kits::{builder, capability, registry, smolfile, trust, v2, v3};
+use crate::kits::{capability, registry, smolfile, trust, v2, v3};
+use crate::provision::builder;
 use crate::secrets::SecretsFile;
 use crate::smolvm::Runner;
+
+/// The first line of a v3 kit descriptor.
+pub(crate) const SYNTAX: &str = "# syntax=docker/sandbox-kit:3";
+
+/// Whether a file's first line is the v3 syntax line, after an optional UTF-8 BOM.
+pub(crate) fn starts_with_syntax(bytes: &[u8]) -> bool {
+    let bytes = bytes.strip_prefix(b"\xEF\xBB\xBF").unwrap_or(bytes);
+    let first = bytes.split(|b| *b == b'\n').next().unwrap_or_default();
+    String::from_utf8_lossy(first).trim_end() == SYNTAX
+}
 
 /// Kits shipped inside smolbento, by the bare name that loads them.
 const BUILTINS: [(&str, &str); 1] = [("docker", include_str!("../../kits/docker/docker.yaml"))];
@@ -230,7 +241,7 @@ fn load_v3<R: Runner>(
         _ => bail!(
             "{} has several kit descriptors; keep one *.yaml starting with `{}`",
             dir.display(),
-            builder::SYNTAX
+            SYNTAX
         ),
     }
     before(Fetch::Build);
@@ -250,7 +261,7 @@ fn is_descriptor(path: &Path) -> bool {
     if !yaml || !path.is_file() {
         return false;
     }
-    fs::read(path).is_ok_and(|b| builder::starts_with_syntax(&b))
+    fs::read(path).is_ok_and(|b| starts_with_syntax(&b))
 }
 
 /// Gives a workload kit its command or refuses it with sbx's error. v3 has its image config's;

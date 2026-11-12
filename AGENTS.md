@@ -78,7 +78,8 @@ As of smolvm 1.34. Check the reference source before depending on anything not l
 | Module | Responsibility |
 |---|---|
 | `main.rs` | process entry; `sbt`, `sbx` and `bento` are links to the one binary |
-| `cli` | clap definitions mirroring sbx; handlers; create and start orchestration |
+| `cli` | clap definitions mirroring sbx; handlers |
+| `provision` | create and start: binds policy, secrets and kits to a sandbox; the kit builder |
 | `ctx` | the context every command gets: paths, settings, smolvm, stdio |
 | `smolvm` | `Runner` trait, command builder, JSON types |
 | `sandbox` | naming, labels, lifecycle, session tracking |
@@ -86,6 +87,7 @@ As of smolvm 1.34. Check the reference source before depending on anything not l
 | `workspace` | mounts; clone mode (host git, `sandbox-<name>` remote) |
 | `config` | settings and precedence |
 | `policy` | network rules, presets, compile to smolvm flags |
+| `util` | leaf helpers: shell quoting, hashing, size parsing |
 | `secrets` | sources, stores, resolve at start |
 | `skills` | shared skills store; --skills modes; kit skill capabilities |
 | `templates` | saved templates: smolvm packs, index, export archive |

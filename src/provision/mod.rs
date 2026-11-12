@@ -1,13 +1,14 @@
 //! Glue between sandboxes and the policy and secrets: what each start and create gets.
 
+pub mod builder;
+
 use std::io::Write;
 use std::path::Path;
 
 use anyhow::{Context, Result, bail};
 
-use super::Ctx;
-use super::progress::{CreateSteps, Progress};
 use crate::bridge::{self, agent};
+use crate::ctx::Ctx;
 use crate::kits::apply::apply;
 use crate::kits::host_mount;
 use crate::kits::resolve::Plan;
@@ -169,7 +170,7 @@ pub fn prepare_create<R: Runner>(
     kits: Option<&Plan>,
 ) -> Result<(Vec<String>, Option<sandbox::KitFirstStart>)> {
     // Bad hosts fail before the policy prompt and before smolvm is asked for anything.
-    let denies = super::policy::parse_create_denies(deny_network)?;
+    let denies = crate::policy::notes::parse_create_denies(deny_network)?;
     // So do `--mount` paths no kit declares. The managed directories are made last.
     let workspaces: Vec<String> = req
         .workspaces
@@ -209,8 +210,7 @@ pub fn prepare_create<R: Runner>(
     req.credentials = credentials(&secrets, &services)?;
     req.credential_hosts = credential_hosts(&secrets, &services);
     for (i, host) in req.registries.iter().enumerate() {
-        req.credentials
-            .push(crate::kits::builder::registry_credential(i, host));
+        req.credentials.push(builder::registry_credential(i, host));
         req.credential_hosts.push(host.clone());
     }
     req.credential_hosts.sort();
@@ -246,7 +246,7 @@ pub fn prepare_create<R: Runner>(
         });
     }
     if !denies.is_empty() {
-        added.extend(super::policy::add_create_denies(
+        added.extend(crate::policy::notes::add_create_denies(
             &mut policy,
             &req.name,
             &denies,
@@ -416,24 +416,9 @@ pub fn check_free<R: Runner>(ctx: &Ctx<R>, name: &str) -> Result<()> {
     Ok(())
 }
 
-/// `create`, reporting its `IMAGE` and `SETUP` steps to `p`; a failure fails the running step.
-/// The caller has run `check_free`, before printing anything.
-pub fn create_reported<R: Runner>(
-    ctx: &Ctx<R>,
-    req: &mut CreateRequest,
-    deny_network: &[String],
-    kits: Option<&Plan>,
-    p: &Progress,
-) -> Result<Sandbox> {
-    let mut steps = CreateSteps::new(p);
-    let created = create_with(ctx, req, deny_network, kits, None, &mut |e| steps.on(e));
-    steps.end(created.is_ok());
-    created
-}
-
 /// `create` once the name is known to be free, or with `prepared` steps whose rules are already
 /// in the policy (tests); `on` hears what the start and the kit steps are doing.
-fn create_with<R: Runner>(
+pub fn create_with<R: Runner>(
     ctx: &Ctx<R>,
     req: &mut CreateRequest,
     deny_network: &[String],
