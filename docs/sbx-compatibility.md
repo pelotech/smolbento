@@ -237,8 +237,9 @@ What works as in sbx:
   `--kit-arg` without a kit is an error, and a `KIT.NAME` value for a kit that isn't in the set
   is ignored. Unquoted numbers and booleans in `default:` and `enum:` become strings. A v3
   argument that declares `env:` is exported into the sandbox's environment under that name
-  whenever it has a value (a default counts, an empty one too; whether sbx exports an empty value
-  isn't checked). A later kit's value and your own `-e` still win.
+  whenever it has a value: a default counts, an empty one too, and an optional argument with no
+  value exports nothing. The name may be `PATH`, which then replaces the image's. All as measured
+  on sbx v0.53.0. A later kit's value and your own `-e` still win.
 - **Kit references.** A bare word is an agent name, never a kit, even when a directory of that name
   exists, and so is a dotted one: `sbt create alpine` fails with `unknown agent "alpine"`,
   `sbt create .hidden` with `unknown agent ".hidden"`, and `--kit alpine` with
