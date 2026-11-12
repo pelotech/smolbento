@@ -549,7 +549,7 @@ mod tests {
     fn first_build_creates_starts_builds_copies_back_and_stops() {
         let t = test_env(&[]);
         let fake = t.runner();
-        // `once` replies win over the `ok` until used up: find, plan::create's check, then get.
+        // `once` replies win over the `ok` until used up: find, provision::create's check, then get.
         fake.ok(&["machine", "status"], &builder_json("created"))
             .once_fail(&["machine", "status"], "NOT_FOUND", "vm not found")
             .once_fail(&["machine", "status"], "NOT_FOUND", "vm not found")

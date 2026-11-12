@@ -405,7 +405,7 @@ mod tests {
         t.ctx.cwd = root;
         creatable_as(&t, "claude-repo");
         t.sbt(&["create", "--clone", "claude", "."]).unwrap();
-        assert!(!!t.made("machine create"));
+        assert!(t.made("machine create"));
     }
 
     #[test]

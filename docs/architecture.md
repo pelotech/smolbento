@@ -55,12 +55,21 @@ started with `run -d`.
 | Path | Responsibility |
 |---|---|
 | `src/main.rs` | Entry point: runs the CLI and maps errors to exit codes |
-| `src/cli/` | Command definitions mirroring sbx, and thin handlers (`upload_pack.rs`: the hidden `_upload-pack` that clone remotes run) |
+| `src/cli/` | Command definitions mirroring sbx, and their handlers (`upload_pack.rs`: the hidden `_upload-pack` that clone remotes run) |
+| `src/ctx.rs` | The context every command gets: paths, settings, smolvm, stdio |
+| `src/provision/` | Create and start: binds policy, secrets and kits to a sandbox; `builder.rs`: the kit builder sandbox |
 | `src/smolvm/` | `Runner`, the typed smolvm client, JSON types, the test fake |
-| `src/sandbox/` | Names, labels, create plan, start steps, sessions, option parsing |
+| `src/sandbox/` | Names, labels, create plan, start steps, guest identity, kit steps, sessions, option parsing |
 | `src/agents.rs` | Agent presets |
 | `src/workspace/` | Workspace paths and mounts; `clone.rs`: clone mode on the host (repo, `sandbox-<name>` remote, fetch) |
 | `src/config.rs` | Paths and settings |
+| `src/policy/` | Network rules, presets, compiling them to smolvm flags |
+| `src/secrets/` | Secret sources, stores, resolving at start |
+| `src/kits/` | Kit files: load, resolve, compose the image, apply; registry pulls |
+| `src/env/` | `sbxenv.yaml` environment files |
+| `src/skills/` | The shared skills store |
+| `src/templates.rs` | Saved templates |
+| `src/bridge/` | Host services for a sandbox: browser and clipboard shims, login relay, ssh agent |
+| `src/util.rs` | Leaf helpers: shell quoting, hashing, size parsing |
 
-See [Development status](development-status.md) for the modules later phases add (network policy,
-secrets, kits, host services, MCP, the dashboard).
+See [Development status](development-status.md) for what later phases add (MCP, the dashboard).

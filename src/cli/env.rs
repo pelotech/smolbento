@@ -641,7 +641,7 @@ mod tests {
     #[test]
     fn run_of_a_new_sandbox_creates_it_and_detaches() {
         let mut t = with_file(FILE);
-        // env run looks the name up, run twice more, and plan::create once more.
+        // env run looks the name up, run twice more, and provision::create once more.
         missing_then_created(&t, 4);
         assert_eq!(t.sbt(&["env", "run", "-d", "-f"]).unwrap(), 0);
         assert_eq!(creates(&t).len(), 1);

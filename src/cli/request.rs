@@ -191,7 +191,7 @@ fn has_kit_args(opts: &SandboxOpts) -> bool {
 /// The second half of `kit_target`, for a sandbox about to be created: loads the workload kit
 /// (filling `req`'s image) and the `--kit` mixins, each a step under `KITS`, and resolves them
 /// with the kit args and `req`'s working directory. Touches neither smolvm's machines nor the
-/// policy: `plan::create` applies the plan.
+/// policy: `provision::create` applies the plan.
 pub(crate) fn kit_plan<R: Runner>(
     ctx: &Ctx<R>,
     req: &mut CreateRequest,

@@ -71,7 +71,7 @@ pub struct KitFirstStart {
     /// Install-only credential env vars (`sbx.credential-install`): set for the install hooks,
     /// then the machine restarts without them.
     pub restart_without: Vec<String>,
-    /// Every policy rule id the kits added, removed again by `cli::plan::create` when the create
+    /// Every policy rule id the kits added, removed again by `provision::create` when the create
     /// fails.
     pub rule_ids: Vec<String>,
     /// Where an install-phase `ssh-agent@1` grant (`sbx.ssh-agent`) finds the host agent while

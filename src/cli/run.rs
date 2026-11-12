@@ -236,7 +236,7 @@ mod tests {
     fn creates_attaches_and_stops_after_the_last_session() {
         let mut t = test_env(&[]);
         created(&t, "created");
-        // run looks the name up, then plan::create checks again before creating.
+        // run looks the name up, then provision::create checks again before creating.
         t.runner()
             .once_fail(&["machine", "status"], "NOT_FOUND", "vm not found");
         t.runner()
@@ -276,7 +276,7 @@ mod tests {
     fn run_new(extra: &[&str]) -> String {
         let mut t = test_env(&[]);
         created(&t, "created");
-        // run looks the name up, then plan::create checks again before creating.
+        // run looks the name up, then provision::create checks again before creating.
         for _ in 0..2 {
             t.runner()
                 .once_fail(&["machine", "status"], "NOT_FOUND", "vm not found");
@@ -336,7 +336,7 @@ mod tests {
     fn deny_network_adds_sandbox_deny_rules_at_create() {
         let mut t = test_env(&[]);
         created(&t, "created");
-        // run looks the name up, then plan::create checks again before creating.
+        // run looks the name up, then provision::create checks again before creating.
         for _ in 0..2 {
             t.runner()
                 .once_fail(&["machine", "status"], "NOT_FOUND", "vm not found");
