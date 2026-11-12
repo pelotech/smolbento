@@ -79,7 +79,10 @@ pub fn apply(
             req.image.clear();
             req.smolfile = Some(path.clone());
         }
-        _ => req.image = compose::image_for(plan, cache, Logins::new(&secrets.registries, store))?,
+        _ => {
+            let registries = secrets.registries_for(&req.name);
+            req.image = compose::image_for(plan, cache, Logins::new(&registries, store))?
+        }
     }
 
     if let Some(c) = m.cpus.as_deref().filter(|_| !req.cpus_set) {

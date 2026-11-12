@@ -71,7 +71,8 @@ fn build_with<R: Runner>(ctx: &Ctx<R>, dir: &Path, mint: Minter) -> Result<PathB
     let text = fs::read(dir.join(&desc))
         .with_context(|| format!("reading {}", dir.join(&desc).display()))?;
     let text = String::from_utf8_lossy(&text);
-    let mut registries = SecretsFile::load(&ctx.paths)?.registries;
+    // Host-wide logins only: the builder is shared by every sandbox.
+    let mut registries = SecretsFile::load(&ctx.paths)?.host_registries();
     // smolvm's `--credential` can't carry a port in HOST, and the builder's Docker Hub pulls
     // (the `docker/sandbox-kit` frontend) go to a host no descriptor names.
     registries.retain(|r| !r.host.contains(':') && !registry_auth::is_docker_hub(&r.host));
@@ -964,6 +965,7 @@ mod tests {
             host: "dhi.io".into(),
             username: Some("josmo".into()),
             auth_endpoint: None,
+            sandbox: None,
         });
         f.save(&t.ctx.paths).unwrap();
     }
@@ -1126,6 +1128,7 @@ mod tests {
                 host: (*h).into(),
                 username: None,
                 auth_endpoint: None,
+                sandbox: None,
             });
         }
         f.save(&t.ctx.paths).unwrap();

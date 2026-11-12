@@ -19,7 +19,9 @@ use crate::env::lifecycle::{self as host_lifecycle, Phase, Vars};
 use crate::env::load::{ArgInputs, Loaded, load};
 use crate::env::plan::{HOST_COMMANDS, Line, Resource, UNCHANGED_HOST_COMMANDS, When, render};
 use crate::sandbox;
-use crate::secrets::{SecretEntry, SecretsFile, Source, resolve::resolve, scope_for};
+use crate::secrets::{
+    RegistryEntry, SecretEntry, SecretsFile, Source, resolve::resolve, scope_for,
+};
 use crate::smolvm::Runner;
 
 pub fn run<R: Runner>(ctx: &mut Ctx<R>, cmd: EnvCmd) -> Result<i32> {
@@ -305,6 +307,11 @@ fn env_rm<R: Runner>(ctx: &mut Ctx<R>, a: EnvRmArgs) -> Result<i32> {
         .filter(|e| e.scope == scope)
         .map(|e| e.service)
         .collect();
+    let registries: Vec<String> = SecretsFile::load(&ctx.paths)?
+        .remove_sandbox_registries(&name)
+        .into_iter()
+        .map(|r| r.host)
+        .collect();
     let all = sandbox::list(&ctx.vm)?;
     let sb = all.iter().find(|sb| sb.name() == name);
     // `preRemove` runs whether or not the sandbox is still there, as in sbx.
@@ -314,7 +321,7 @@ fn env_rm<R: Runner>(ctx: &mut Ctx<R>, a: EnvRmArgs) -> Result<i32> {
     } else {
         &lifecycle.pre_remove
     };
-    let nothing_left = sb.is_none() && scoped.is_empty();
+    let nothing_left = sb.is_none() && scoped.is_empty() && registries.is_empty();
     if nothing_left && pre_remove.is_empty() {
         // Nothing to remove but the approval, which a plain `rm` of the sandbox leaves.
         approval::forget(&ctx.paths, &name)?;
@@ -334,7 +341,7 @@ fn env_rm<R: Runner>(ctx: &mut Ctx<R>, a: EnvRmArgs) -> Result<i32> {
         .into_iter()
         .filter(|r| r.when == When::Removal && !a.skip_host_commands)
         .collect();
-    let summary = remove_summary(sb.map(|_| name.as_str()), &scoped, &[], &to_run);
+    let summary = remove_summary(sb.map(|_| name.as_str()), &scoped, &registries, &to_run);
     write!(&ctx.out, "{}{summary}", header(&loaded, &name))?;
     confirm_or(
         ctx,
@@ -363,7 +370,7 @@ fn env_rm<R: Runner>(ctx: &mut Ctx<R>, a: EnvRmArgs) -> Result<i32> {
         None => super::secret::forget_sandbox(ctx, &name, true)?,
     }
     approval::forget(&ctx.paths, &name)?;
-    if !scoped.is_empty() {
+    if !scoped.is_empty() || !registries.is_empty() {
         writeln!(&ctx.out, "Removed secrets scoped to {name}")?;
     }
     Ok(0)
@@ -445,7 +452,7 @@ fn shell_word(s: &str) -> String {
 /// Stores the file's secrets at the sandbox's scope. Every source is checked before any is
 /// stored; a later failure (the create, say) leaves them for `env rm`, as in sbx.
 fn provision<R: Runner>(ctx: &Ctx<R>, secrets: &mut SecretsFile, spec: &EnvSpec) -> Result<()> {
-    if spec.secrets.is_empty() {
+    if spec.secrets.is_empty() && spec.registries.is_empty() {
         return Ok(());
     }
     let scope = scope_for(Some(&spec.name));
@@ -454,6 +461,24 @@ fn provision<R: Runner>(ctx: &Ctx<R>, secrets: &mut SecretsFile, spec: &EnvSpec)
         let source = source(ctx, service, &scope, decl)
             .map_err(|e| anyhow!("secret \"{service}\": {e:#}"))?;
         sources.push((service, source));
+    }
+    // A registry login is a stored value: its sources are resolved once, now.
+    let mut logins = Vec::new();
+    for (host, decl) in &spec.registries {
+        let resolve = |what: &str, d: &SecretDecl| {
+            source_value(ctx, d).map_err(|e| anyhow!("registry \"{host}\": {what}: {e:#}"))
+        };
+        let entry = RegistryEntry {
+            host: host.to_ascii_lowercase(),
+            username: decl
+                .username
+                .as_ref()
+                .map(|u| resolve("username", u))
+                .transpose()?,
+            auth_endpoint: None,
+            sandbox: Some(spec.name.clone()),
+        };
+        logins.push((entry, resolve("secret", &decl.secret)?));
     }
     let mut out = &ctx.out;
     writeln!(out, "\nPROVISION\n  Scope:  {}", spec.name)?;
@@ -466,7 +491,30 @@ fn provision<R: Runner>(ctx: &Ctx<R>, secrets: &mut SecretsFile, spec: &EnvSpec)
         super::secret::store(ctx, secrets, service, source)?;
         writeln!(out, "  ✓ {service} — secret · {kind}")?;
     }
+    for (entry, value) in logins {
+        let host = entry.host.clone();
+        super::secret::put_registry(ctx, secrets, entry, &value)?;
+        writeln!(out, "  ✓ {host} — registry")?;
+    }
     Ok(())
+}
+
+/// The value of a registry source now: a literal, or what its reference or command gives.
+fn source_value<R: Runner>(ctx: &Ctx<R>, decl: &SecretDecl) -> Result<String> {
+    let source = match (&decl.value, &decl.r#ref, &decl.command) {
+        (Some(v), _, _) => return Ok(v.clone()),
+        (_, Some(r), _) => Source::Ref {
+            reference: r.clone(),
+        },
+        (_, _, Some(c)) => Source::Command { command: c.clone() },
+        _ => bail!("needs a value, ref or command"),
+    };
+    let entry = SecretEntry {
+        service: "registry".into(),
+        scope: "global".into(),
+        source,
+    };
+    resolve(&entry, &*ctx.store)
 }
 
 /// What `secret set --sandbox` would take for `decl`: a snapshot becomes its value now; a
@@ -1380,6 +1428,80 @@ mod tests {
         t.sbt(&["run", "--name", "claude-proj"]).unwrap();
         let call = t.runner().interactive_calls()[0].join(" ");
         assert!(!call.contains("/bin/sh -c echo hi"), "{call}");
+    }
+
+    const REGISTRY: &str = "registries:\n  GHCR.io:\n    username:\n      value: me\n    \
+        secret:\n      command: printf 'reg-%s' tok3n\n";
+
+    fn registries(t: &TestEnv) -> Vec<crate::secrets::RegistryEntry> {
+        SecretsFile::load(&t.ctx.paths).unwrap().registries
+    }
+
+    #[test]
+    fn registries_are_stored_for_the_sandbox_and_removed_with_it() {
+        let mut t = with_file(&format!("{FILE}{REGISTRY}"));
+        // A host-wide login for the same host stays as it is.
+        t.ctx.store.set("registry:ghcr.io", "host-wide").unwrap();
+        missing_then_created(&t, 2);
+        t.sbt(&["env", "create", "--force"]).unwrap();
+        let out = t.stdout();
+        assert!(
+            out.contains("\nPROVISION\n  Scope:  claude-proj\n  ✓ ghcr.io — registry\n"),
+            "{out}"
+        );
+        assert!(!out.contains("reg-tok3n"), "{out}");
+        let stored = registries(&t);
+        assert_eq!(stored.len(), 1);
+        assert_eq!(stored[0].host, "ghcr.io");
+        assert_eq!(stored[0].username.as_deref(), Some("me"));
+        assert_eq!(stored[0].sandbox.as_deref(), Some("claude-proj"));
+        let get = |t: &TestEnv, key: &str| t.ctx.store.get(key).unwrap();
+        assert_eq!(
+            get(&t, "registry:sandbox:claude-proj:ghcr.io").as_deref(),
+            Some("reg-tok3n")
+        );
+        t.sbt(&["secret", "ls"]).unwrap();
+        let ls = t.stdout();
+        assert!(
+            ls.contains("claude-proj   registry   ghcr.io   (stored)"),
+            "{ls}"
+        );
+
+        listed(&t, &[]);
+        t.sbt(&["env", "rm", "--force"]).unwrap();
+        let out = t.stdout();
+        assert!(out.contains("\nREGISTRIES\n  - ghcr.io\n"), "{out}");
+        assert!(out.contains(" · 2 to destroy\n"), "{out}");
+        assert!(
+            out.ends_with("Removed secrets scoped to claude-proj\n"),
+            "{out}"
+        );
+        assert!(registries(&t).is_empty());
+        assert_eq!(get(&t, "registry:sandbox:claude-proj:ghcr.io"), None);
+        assert_eq!(get(&t, "registry:ghcr.io").as_deref(), Some("host-wide"));
+    }
+
+    #[test]
+    fn a_plain_rm_removes_the_sandboxs_registry_login() {
+        let mut t = with_file(&format!("{FILE}{REGISTRY}"));
+        missing_then_created(&t, 2);
+        t.sbt(&["env", "create", "--force"]).unwrap();
+        listed(&t, &[]);
+        t.sbt(&["rm", "-f", "claude-proj"]).unwrap();
+        assert!(registries(&t).is_empty());
+        let key = "registry:sandbox:claude-proj:ghcr.io";
+        assert_eq!(t.ctx.store.get(key).unwrap(), None);
+    }
+
+    #[test]
+    fn a_registry_source_that_fails_stops_before_the_create() {
+        let bad = REGISTRY.replace("printf 'reg-%s' tok3n", "exit 1");
+        let mut t = with_file(&format!("{FILE}{bad}"));
+        missing_then_created(&t, 2);
+        let err = t.sbt_err(&["env", "create", "--force"]);
+        assert!(err.starts_with("registry \"GHCR.io\": secret: "), "{err}");
+        assert!(creates(&t).is_empty());
+        assert!(registries(&t).is_empty());
     }
 
     #[test]

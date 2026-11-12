@@ -119,7 +119,7 @@ pub struct HostCommand {
 }
 
 /// A registry login: a required password or token, and an optional user name.
-#[derive(Deserialize, Debug)]
+#[derive(Deserialize, Debug, Clone)]
 #[serde(rename_all = "camelCase", deny_unknown_fields)]
 pub struct RegistryDecl {
     pub username: Option<SecretDecl>,

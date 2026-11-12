@@ -6,7 +6,9 @@ use anyhow::{Context, Result, bail};
 
 use super::SandboxOpts;
 use crate::agents;
-use crate::env::file::{EnvFile, KitEntry, Lifecycle, PinnedKit, Port, SecretDecl, Workspace};
+use crate::env::file::{
+    EnvFile, KitEntry, Lifecycle, PinnedKit, Port, RegistryDecl, SecretDecl, Workspace,
+};
 use crate::env::lifecycle::{Phase, Vars};
 use crate::env::load::Loaded;
 use crate::env::plan::{HOST_COMMANDS, Line, Marker, Resource, When, render};
@@ -24,6 +26,8 @@ pub struct EnvSpec {
     pub env: Vec<(String, String)>,
     /// Sorted by service.
     pub secrets: Vec<(String, SecretDecl)>,
+    /// Registry host to its login, sorted by host.
+    pub registries: Vec<(String, RegistryDecl)>,
     /// Host commands, each with an absolute working directory.
     pub lifecycle: Lifecycle,
     /// What `env run` launches in place of the agent's program, and with which arguments.
@@ -179,6 +183,12 @@ pub fn spec(loaded: &Loaded, overrides: &Overrides, secrets: &SecretsFile) -> Re
         opts,
         env,
         secrets: secret_decls,
+        registries: f
+            .registries
+            .clone()
+            .unwrap_or_default()
+            .into_iter()
+            .collect(),
         lifecycle: lifecycle(loaded),
         entrypoint: f.entrypoint.clone(),
         cmd: f.cmd.clone(),
@@ -313,7 +323,7 @@ pub fn resources(loaded: &Loaded, spec: &EnvSpec) -> Vec<Resource> {
         });
     }
 
-    for (host, r) in f.registries.iter().flatten() {
+    for (host, r) in &spec.registries {
         let mut fields = source_fields("secret.", &r.secret);
         if let Some(u) = &r.username {
             fields.extend(source_fields("username.", u));

@@ -108,7 +108,7 @@ fn ls<R: Runner>(ctx: &Ctx<R>, file: &SecretsFile, a: &SecretLsArgs) -> Result<(
         ];
         for r in &file.registries {
             rows.push(vec![
-                "(host only)".into(),
+                r.sandbox.clone().unwrap_or_else(|| "(host only)".into()),
                 "registry".into(),
                 r.host.clone(),
                 "(stored)".into(),
@@ -424,7 +424,7 @@ fn rm<R: Runner>(ctx: &Ctx<R>, file: &mut SecretsFile, a: SecretRmArgs) -> Resul
         let i = file
             .registries
             .iter()
-            .position(|r| r.host == host)
+            .position(|r| r.host == host && r.sandbox.is_none())
             .with_context(|| format!("no {host} secret (host only)"))?;
         file.registries.remove(i);
         file.save(&ctx.paths)?;
@@ -463,8 +463,10 @@ pub fn forget_sandbox<R: Runner>(ctx: &Ctx<R>, name: &str, secrets: bool) -> Res
     if secrets {
         let mut file = SecretsFile::load(&ctx.paths)?;
         let gone = file.remove_sandbox(name);
+        let registries = file.remove_sandbox_registries(name);
         file.save(&ctx.paths)?;
         forget(ctx, &gone)?;
+        forget_registries(ctx, &registries)?;
     }
     let mut policy = Policy::load(&ctx.paths)?;
     policy.forget_sandbox(name);
@@ -481,7 +483,7 @@ pub fn forget_all<R: Runner>(ctx: &Ctx<R>) -> Result<()> {
 
 fn forget_registries<R: Runner>(ctx: &Ctx<R>, entries: &[RegistryEntry]) -> Result<()> {
     for r in entries {
-        ctx.store.delete(&registry_account(&r.host))?;
+        ctx.store.delete(&r.account())?;
     }
     Ok(())
 }
@@ -556,25 +558,39 @@ fn set_registry<R: Runner>(
     if value.is_empty() {
         bail!("empty password or token on stdin");
     }
-    let account = registry_account(&host);
-    // Kept in memory to put back if secrets.toml can't be saved.
-    let previous = ctx.store.get(&account)?;
-    ctx.store.set(&account, value)?;
     let who = username.clone().unwrap_or_else(|| "(token-only)".into());
-    file.registries.retain(|r| r.host != host);
-    file.registries.push(RegistryEntry {
+    let entry = RegistryEntry {
         host: host.clone(),
         username,
         auth_endpoint,
-    });
-    if let Err(e) = file.save(&ctx.paths) {
-        restore(ctx, &account, previous.as_deref());
-        return Err(e);
-    }
+        sandbox: None,
+    };
+    put_registry(ctx, file, entry, value)?;
     writeln!(
         &ctx.out,
         "Saved registry secret {host} (host only, username {who})"
     )?;
+    Ok(())
+}
+
+/// Stores a registry login and its value, replacing the one for the same host and scope.
+pub fn put_registry<R: Runner>(
+    ctx: &Ctx<R>,
+    file: &mut SecretsFile,
+    entry: RegistryEntry,
+    value: &str,
+) -> Result<()> {
+    let account = entry.account();
+    // Kept in memory to put back if secrets.toml can't be saved.
+    let previous = ctx.store.get(&account)?;
+    ctx.store.set(&account, value)?;
+    file.registries
+        .retain(|r| !(r.host == entry.host && r.sandbox == entry.sandbox));
+    file.registries.push(entry);
+    if let Err(e) = file.save(&ctx.paths) {
+        restore(ctx, &account, previous.as_deref());
+        return Err(e);
+    }
     Ok(())
 }
 
