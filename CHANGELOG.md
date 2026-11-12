@@ -1,5 +1,12 @@
 # Changelog
 
+## [0.16.0](https://github.com/pelotech/smolbento/compare/v0.15.3...v0.16.0) (2026-11-12)
+
+
+### Features
+
+* **env:** add env plan and remember approvals ([#82](https://github.com/pelotech/smolbento/issues/82)) ([f538ea1](https://github.com/pelotech/smolbento/commit/f538ea15c7093a6b740316cc9219d59a9875cb4a))
+
 ## [0.15.3](https://github.com/pelotech/smolbento/compare/v0.15.2...v0.15.3) (2026-11-12)
 
 
