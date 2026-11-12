@@ -162,6 +162,12 @@ pub const SETTINGS: &[SettingDef] = &[
         help: "Optional fixed host SSH agent socket path. Empty uses each client's current SSH_AUTH_SOCK.",
     },
     SettingDef {
+        key: "env.rememberHostCommands",
+        env: "SMOLBENTO_ENV_REMEMBER_HOST_COMMANDS",
+        default: "false",
+        help: "Let an approval of an environment's host commands stand until the commands change, instead of asking on every run.",
+    },
+    SettingDef {
         key: "skills.defaultMode",
         env: "SMOLBENTO_SKILLS_DEFAULT_MODE",
         default: "readonly",
@@ -766,5 +772,15 @@ mod tests {
         assert!(err.unwrap().contains("TOML parse error"));
         assert_eq!(s.get("docker.enabled").unwrap().1, Source::Default);
         assert_eq!(s.get("smolvm.path").unwrap().1, Source::Env);
+    }
+
+    #[test]
+    fn remember_host_commands_defaults_to_false() {
+        let (_d, paths) = test_paths();
+        let (mut s, _) = Settings::load(&paths, BTreeMap::new());
+        assert!(!s.bool("env.rememberHostCommands").unwrap());
+        assert!(s.set("env.rememberHostCommands", "maybe").is_err());
+        s.set("env.rememberHostCommands", "true").unwrap();
+        assert!(s.bool("env.rememberHostCommands").unwrap());
     }
 }
