@@ -42,6 +42,7 @@ pub fn run<R: Runner>(ctx: &mut Ctx<R>, a: &RunArgs) -> Result<i32> {
         let warnings = [
             ignored_kits_warning(a, sb.name()),
             ignored_mount_warning(a, sb.name()),
+            ignored_options_warning(a, sb.name()),
         ];
         for w in warnings.into_iter().flatten() {
             eprintln!("{w}");
@@ -128,18 +129,22 @@ pub fn run<R: Runner>(ctx: &mut Ctx<R>, a: &RunArgs) -> Result<i32> {
             .chain(spec.cmd)
             .collect();
     }
-    let code = {
+    // The attach's result is kept until the sandbox is cleaned up: a failure to attach must not
+    // leave it running, or skip `--rm`.
+    let result = {
         let _session = session::Session::register(&sessions, sb.name())?;
         // Opens URLs and copies text on the host for the agent while the user is attached.
         let _bridge = bridge::attach(&ctx.env, &ctx.settings, &sb);
         // A runtime `ssh-agent@1` grant: the filtered host agent, while the user is attached.
         let _agent = crate::ssh_agent::filter::attach(&ctx.env, &ctx.paths, &sb);
-        if image_user.is_some() && !has_bash(ctx, &sb)? {
-            // sbx's error for such an image, and the code its agent exits with.
-            eprintln!("executable file '{BASH}' not found");
-            127
-        } else {
-            ctx.vm.exec(&spec)?
+        match image_user.is_some().then(|| has_bash(ctx, &sb)) {
+            Some(Err(e)) => Err(e),
+            Some(Ok(false)) => {
+                // sbx's error for such an image, and the code its agent exits with.
+                eprintln!("executable file '{BASH}' not found");
+                Ok(127)
+            }
+            _ => ctx.vm.exec(&spec),
         }
     };
 
@@ -152,7 +157,14 @@ pub fn run<R: Runner>(ctx: &mut Ctx<R>, a: &RunArgs) -> Result<i32> {
     }
 
     // The agent's exit code is the result; failing to clean up after it only warrants a warning.
-    if a.rm {
+    if session::live_sessions(&sessions, sb.name()) > 0 {
+        if a.rm {
+            eprintln!(
+                "warning: sandbox {} is in use by another session; not removed",
+                sb.name()
+            );
+        }
+    } else if a.rm {
         if let Err(e) = super::lifecycle::delete_keeping_remote(ctx, &sb, true) {
             eprintln!("warning: removing sandbox {}: {e:#}", sb.name());
         }
@@ -162,7 +174,7 @@ pub fn run<R: Runner>(ctx: &mut Ctx<R>, a: &RunArgs) -> Result<i32> {
     {
         eprintln!("warning: stopping sandbox {}: {e:#}", sb.name());
     }
-    Ok(code)
+    result
 }
 
 const BASH: &str = "/bin/bash";
@@ -192,6 +204,35 @@ fn ignored_kits_warning(a: &RunArgs, name: &str) -> Option<String> {
     (has_kit_flags(&a.opts) || kit_target).then(|| {
         format!("warning: kits only apply when a sandbox is created; {name} already exists")
     })
+}
+
+/// The warning for the other create options given to `run` of a sandbox that already exists:
+/// they would be silently dropped otherwise.
+fn ignored_options_warning(a: &RunArgs, name: &str) -> Option<String> {
+    let o = &a.opts;
+    let given: Vec<&str> = [
+        (o.cpus.is_some(), "--cpus"),
+        (o.memory.is_some(), "--memory"),
+        (!o.env.is_empty(), "--env"),
+        (!o.env_file.is_empty(), "--env-file"),
+        (!o.publish.is_empty(), "--publish"),
+        (o.template.is_some(), "--template"),
+        (o.pull.is_some(), "--pull"),
+        (o.clone, "--clone"),
+        (o.skills.is_some(), "--skills"),
+    ]
+    .into_iter()
+    .filter_map(|(on, flag)| on.then_some(flag))
+    .collect();
+    let verb = match given.len() {
+        0 => return None,
+        1 => "applies",
+        _ => "apply",
+    };
+    Some(format!(
+        "warning: {} only {verb} when a sandbox is created; {name} already exists",
+        given.join(", ")
+    ))
 }
 
 /// The warning for `--mount` given to `run` of a sandbox that already exists.
@@ -430,6 +471,74 @@ mod tests {
             t.calls().last().unwrap(),
             "machine delete -n sbx-claude-proj -f"
         );
+    }
+
+    #[test]
+    fn create_options_on_an_existing_sandbox_get_a_warning() {
+        use clap::Parser;
+        let parse = |args: &[&str]| match super::super::Cli::try_parse_from(args).unwrap().command {
+            Some(super::super::Cmd::Run(a)) => a,
+            _ => unreachable!(),
+        };
+        assert_eq!(
+            super::ignored_options_warning(
+                &parse(&["sbt", "run", "--name", "s1", "--cpus", "8"]),
+                "s1"
+            )
+            .as_deref(),
+            Some("warning: --cpus only applies when a sandbox is created; s1 already exists")
+        );
+        assert_eq!(
+            super::ignored_options_warning(
+                &parse(&[
+                    "sbt", "run", "--name", "s1", "-m", "4g", "-e", "A=1", "--clone"
+                ]),
+                "s1"
+            )
+            .as_deref(),
+            Some(
+                "warning: --memory, --env, --clone only apply when a sandbox is created; s1 \
+                 already exists"
+            )
+        );
+        assert_eq!(
+            super::ignored_options_warning(&parse(&["sbt", "run", "--name", "s1"]), "s1"),
+            None
+        );
+    }
+
+    #[test]
+    fn rm_keeps_a_sandbox_another_session_is_using() {
+        let mut t = test_env(&[]);
+        created(&t, "running");
+        // A live session of another process (this test's parent).
+        let dir = t.ctx.paths.sessions().join("claude-proj");
+        std::fs::create_dir_all(&dir).unwrap();
+        let pid = std::os::unix::process::parent_id();
+        std::fs::write(dir.join(pid.to_string()), b"").unwrap();
+        t.sbt(&["run", "--rm", "--name", "claude-proj"]).unwrap();
+        assert!(!t.made("machine delete"), "{:#?}", t.calls());
+        assert!(!t.made("machine stop"), "{:#?}", t.calls());
+    }
+
+    #[test]
+    fn a_failed_attach_still_stops_or_removes_the_sandbox() {
+        for (flags, cleanup) in [
+            (vec![], "machine stop -n sbx-claude-proj"),
+            (vec!["--rm"], "machine delete -n sbx-claude-proj -f"),
+        ] {
+            let mut t = test_env(&[]);
+            created(&t, "running");
+            t.runner().interactive_fail("can't run smolvm");
+            let mut args = vec!["run"];
+            args.extend(flags);
+            args.extend(["--name", "claude-proj"]);
+            let err = t.sbt_err(&args);
+            assert!(err.contains("can't run smolvm"), "{err}");
+            assert_eq!(t.calls().last().unwrap(), cleanup);
+            // No session of ours is left behind either.
+            assert!(session::idle(&t.ctx.paths.sessions(), "claude-proj"));
+        }
     }
 
     #[test]
