@@ -116,31 +116,37 @@ pub fn run<R: Runner>(ctx: &mut Ctx<R>, a: &RunArgs) -> Result<i32> {
     // return early and leave it running, or skip `--rm`.
     let result = attach(ctx, a, &sb, command);
 
+    // After a hang-up the terminal is gone and a write to stderr fails: a warning must not
+    // panic and cut the cleanup short.
+    let warn = |message: String| {
+        let _ = writeln!(std::io::stderr(), "warning: {message}");
+    };
+
     // Fetch before `--rm` deletes the sandbox, and while it still runs for `_upload-pack`.
     if fetch_on_exit(ctx, &sb)
         && let Some(repo) = &sb.meta.clone_repo
         && let Err(e) = clone::fetch(Path::new(repo), sb.name())
     {
-        eprintln!("warning: fetching the agent's commits: {e:#}");
+        warn(format!("fetching the agent's commits: {e:#}"));
     }
 
     // The agent's exit code is the result; failing to clean up after it only warrants a warning.
     if session::live_sessions(&sessions, sb.name()) > 0 {
         if a.rm {
-            eprintln!(
-                "warning: sandbox {} is in use by another session; not removed",
+            warn(format!(
+                "sandbox {} is in use by another session; not removed",
                 sb.name()
-            );
+            ));
         }
     } else if a.rm {
         if let Err(e) = super::lifecycle::delete_keeping_remote(ctx, &sb, true) {
-            eprintln!("warning: removing sandbox {}: {e:#}", sb.name());
+            warn(format!("removing sandbox {}: {e:#}", sb.name()));
         }
     } else if !sb.meta.long_running
         && session::idle(&sessions, sb.name())
         && let Err(e) = ctx.vm.stop(&sb.machine)
     {
-        eprintln!("warning: stopping sandbox {}: {e:#}", sb.name());
+        warn(format!("stopping sandbox {}: {e:#}", sb.name()));
     }
     result
 }

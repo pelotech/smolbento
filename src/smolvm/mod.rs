@@ -224,8 +224,9 @@ impl Runner for ProcessRunner {
             .envs(self.env.iter().map(|(k, v)| (k, v)))
             .spawn()
             .with_context(|| self.spawn_error())?;
-        // The child started with default signal handling; from here Ctrl-C belongs to it.
-        let _guard = IgnoreInterrupt::new();
+        // The child started with default signal handling; from here Ctrl-C belongs to it, and a
+        // hang-up ends it, not us: the caller still has a sandbox to stop.
+        let _guard = IgnoreInterrupt::with_hangup();
         let status = child.wait().context("waiting for smolvm")?;
         Ok(exit_code(status))
     }
@@ -293,26 +294,62 @@ fn exit_code(status: ExitStatus) -> i32 {
         .unwrap_or_else(|| 128 + status.signal().unwrap_or(0))
 }
 
-/// Ignores SIGINT in this process until dropped.
-pub(crate) struct IgnoreInterrupt(libc::sighandler_t);
+/// Ignores signals in this process until dropped, when their previous handling is restored.
+pub(crate) struct IgnoreInterrupt(Vec<(libc::c_int, libc::sighandler_t)>);
 
 impl IgnoreInterrupt {
+    /// SIGINT: Ctrl-C belongs to whoever reads the terminal meanwhile.
     pub(crate) fn new() -> Self {
-        // SAFETY: swaps the SIGINT disposition; Drop restores the previous one.
-        Self(unsafe { libc::signal(libc::SIGINT, libc::SIG_IGN) })
+        Self::ignoring(&[libc::SIGINT])
+    }
+
+    /// SIGINT, and SIGHUP and SIGTERM too: while an attached child runs, closing the terminal
+    /// (or a supervisor's stop) must not end this process before the child does, or nothing
+    /// stops or removes the sandbox afterwards.
+    pub(crate) fn with_hangup() -> Self {
+        Self::ignoring(&[libc::SIGINT, libc::SIGHUP, libc::SIGTERM])
+    }
+
+    fn ignoring(signals: &[libc::c_int]) -> Self {
+        Self(
+            signals
+                .iter()
+                // SAFETY: swaps a signal's disposition; Drop restores the previous one.
+                .map(|&sig| (sig, unsafe { libc::signal(sig, libc::SIG_IGN) }))
+                .collect(),
+        )
     }
 }
 
 impl Drop for IgnoreInterrupt {
     fn drop(&mut self) {
-        // SAFETY: restores the disposition saved in `new`.
-        unsafe { libc::signal(libc::SIGINT, self.0) };
+        for &(sig, previous) in &self.0 {
+            // SAFETY: restores the disposition saved when it was ignored.
+            unsafe { libc::signal(sig, previous) };
+        }
     }
 }
 
 #[cfg(all(test, unix))]
 mod tests {
     use super::*;
+
+    #[test]
+    fn the_wait_for_an_attached_child_survives_a_hangup() {
+        // Closing the terminal sends SIGHUP (and a supervisor may send SIGTERM). The process has
+        // to outlive the child to stop or remove the sandbox, as it does for Ctrl-C.
+        let guard = IgnoreInterrupt::with_hangup();
+        for sig in [libc::SIGINT, libc::SIGHUP, libc::SIGTERM] {
+            // SAFETY: raises a signal this process is set to ignore.
+            unsafe { libc::raise(sig) };
+        }
+        drop(guard);
+        for sig in [libc::SIGHUP, libc::SIGTERM] {
+            // SAFETY: reads the disposition back by setting the default, which it should be.
+            let restored = unsafe { libc::signal(sig, libc::SIG_DFL) };
+            assert_eq!(restored, libc::SIG_DFL, "signal {sig}");
+        }
+    }
     use std::os::unix::fs::PermissionsExt;
 
     /// A stand-in for smolvm that prints `$HOME|$PROBE`, with `unset` for missing variables.

@@ -13,7 +13,8 @@ sbt run claude
 agent. The sandbox is named `<agent>-<directory name>` (here `claude-myrepo`), so running the same
 agent in the same directory again reattaches to the same sandbox.
 
-When the last session attached to a sandbox exits, the sandbox stops. Its disk is kept, so the next
+When the last session attached to a sandbox exits, the sandbox stops; closing the terminal counts
+as exiting (and `--rm` still removes the sandbox). Its disk is kept, so the next
 `run` resumes with everything the agent installed.
 
 | Form | Effect |
@@ -656,8 +657,6 @@ Limits:
 - A URL with credentials in it (`https://user:pass@host/`) is refused; put them in a header. A
   URL is stored and shown as given, so don't put a secret in its query string.
 - `localhost` URLs are refused: inside a sandbox that is the sandbox, not your machine.
-- If the first start of a sandbox created with `--static-mcp` fails, the sandbox is removed (as
-  for one with kits), so run the same command again.
 - `sbt template save` refuses a sandbox created with `--static-mcp`.
 - `mcp auth`, `mcp load` and `mcp unload` are not supported (see
   [sbx compatibility](sbx-compatibility.md#mcp-servers)).
