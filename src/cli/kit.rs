@@ -1553,6 +1553,29 @@ mod tests {
     }
 
     #[test]
+    fn add_takes_a_v2_kit_whatever_the_sandbox_already_has() {
+        // The record doesn't say which format a kit had, so nothing in it is taken for v3.
+        for (labels, record) in [
+            (
+                &[("sbx.agent", "shell")][..],
+                "docker\tbuiltin:docker\tdocker@1.0.0\n",
+            ),
+            (
+                &[("sbx.agent", "wl"), ("sbx.command", "wl")][..],
+                "other\t/k/other\t\n",
+            ),
+        ] {
+            let mut t = kit_env();
+            dev_sandbox_labeled(&t, "running", labels, record);
+            let dir = t.ctx.cwd.join("plain");
+            std::fs::create_dir_all(&dir).unwrap();
+            let spec = "schemaVersion: \"2\"\nkind: mixin\nname: plain\n";
+            std::fs::write(dir.join("spec.yaml"), spec).unwrap();
+            t.sbt(&["kit", "add", "dev", "./plain", "-y"]).unwrap();
+        }
+    }
+
+    #[test]
     fn add_refuses_a_kit_already_in_the_sandbox_and_unmet_requirements() {
         let mut t = kit_env();
         dev_sandbox(&t, "net\tghcr.io/acme/net@sha256:01\tnet\n");

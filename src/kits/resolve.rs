@@ -215,7 +215,6 @@ pub fn resolve_for(
             capability::incoherent(&[capability::NO_WORKLOAD.to_string()])
         );
     }
-    check_formats(&workload, &mixins)?;
     check_names(&workload, &mixins)?;
     // Args first: a `provides` entry may name one (`claude@${{ kit.args.version }}`), and
     // ordering parses the expanded entries.
@@ -427,8 +426,9 @@ pub fn resolve_for(
 /// isn't a kit, so a kit may share its name), and one workload.
 /// As in sbx, v2 and v3 kits don't go into one sandbox. Only the kits the user named count: an
 /// agent preset and the shipped docker kit go with either (in sbx the agents are v3 kits: see
-/// docs/sbx-compatibility.md).
-fn check_formats(workload: &Kit, mixins: &[Kit]) -> Result<()> {
+/// docs/sbx-compatibility.md). For a create, where every kit was just loaded: `kit add` can't
+/// tell the format of the kits a sandbox already has.
+pub fn check_formats(workload: &Kit, mixins: &[Kit]) -> Result<()> {
     let (mut v2, mut v3) = (Vec::new(), Vec::new());
     for k in std::iter::once(workload).chain(mixins) {
         if matches!(k.source, Source::Preset(_) | Source::Builtin(_)) {
@@ -1842,18 +1842,17 @@ mod tests {
         let preset = || Kit::new("shell", Kind::Workload, Source::Preset("img".into()));
         let v2 = |name: &str| Kit::new(name, Kind::Mixin, Source::LocalV2(name.into()));
         let docker = || Kit::new("docker", Kind::Mixin, Source::Builtin("docker"));
-        let none = ArgValues::default();
         // sbx's wording.
-        let err = resolve(preset(), vec![v2("old"), mixin("new")], &none).unwrap_err();
+        let err = check_formats(&preset(), &[v2("old"), mixin("new")]).unwrap_err();
         assert_eq!(
             err.to_string(),
             "cannot mix v3 kits with v1/v2 kits in one sandbox; compositions are single-format \
              (v3: new; v1/v2: old). Use a v3 version of the v1/v2 kit"
         );
-        let err = resolve(workload("w"), vec![v2("old")], &none).unwrap_err();
+        let err = check_formats(&workload("w"), &[v2("old")]).unwrap_err();
         assert!(err.to_string().contains("(v3: w; v1/v2: old)"), "{err}");
         // A preset and the shipped docker kit have no format of their own.
-        resolve(preset(), vec![docker(), v2("old"), v2("older")], &none).unwrap();
-        resolve(preset(), vec![docker(), mixin("new")], &none).unwrap();
+        check_formats(&preset(), &[docker(), v2("old"), v2("older")]).unwrap();
+        check_formats(&preset(), &[docker(), mixin("new")]).unwrap();
     }
 }

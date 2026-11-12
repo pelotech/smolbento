@@ -246,6 +246,7 @@ pub(crate) fn kit_plan<R: Runner>(
         args.pin(&kit.name, pins)?;
     }
     let mixins = order_mixins(req.docker, &workload, mixins)?;
+    crate::kits::resolve::check_formats(&workload, &mixins)?;
     let plan = resolve_for(workload, mixins, &args, &req.workdir())?;
     if let Some(t) = &req.template {
         let layered = crate::kits::compose::layered_names(&plan)?;
@@ -1643,5 +1644,17 @@ SETUP
             ),
             "{out}"
         );
+    }
+
+    #[test]
+    fn create_refuses_v2_and_v3_kits_together() {
+        let mut t = host_mount_env(SHARED);
+        let v2 = fixture("tool-mixin");
+        let err = t.sbt_err(&["create", "shell", ".", "--kit", &v2, "--kit", "./hm"]);
+        assert!(
+            err.starts_with("cannot mix v3 kits with v1/v2 kits in one sandbox"),
+            "{err}"
+        );
+        assert!(!t.made("machine create"));
     }
 }
