@@ -109,6 +109,36 @@ impl E2e {
         self.create_alpine_with("apk add -q bash");
     }
 
+    /// Saves a template of Alpine with git and an `agent` user (the host's uid) and returns its
+    /// tag. Clone sandboxes need both from their first start, and plain Alpine has neither.
+    pub(crate) fn git_template(&self) -> String {
+        let base = format!("{}-base", self.name);
+        let ws = self.workspace();
+        self.ok(&[
+            "create",
+            "shell",
+            ws.to_str().unwrap(),
+            "--name",
+            &base,
+            "-t",
+            "alpine",
+            "--cpus",
+            "1",
+            "-m",
+            "1g",
+        ]);
+        let setup = format!(
+            "adduser -D -u {} agent && apk add -q git",
+            smolbento::util::host_uid()
+        );
+        guest_root(&base, &setup);
+        self.ok(&["stop", &base]);
+        let tag = format!("{}-git:v1", self.name);
+        self.ok(&["template", "save", &base, &tag]);
+        self.ok(&["rm", "-f", &base]);
+        tag
+    }
+
     /// `create_alpine` without bash, so it needs no network (busybox has `wget`).
     pub(crate) fn create_alpine_offline(&self) {
         self.create_alpine_with("true");

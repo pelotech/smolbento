@@ -340,22 +340,21 @@ pub fn create<R: Runner>(
     }
     vm.create(&create::spec(&checked))?;
     let mut sb = get(vm, &req.name)?;
+    // A sandbox whose first start failed isn't usable, so it is removed (as sbx does) and the
+    // same command can simply be run again. The cause stays in the chain, where a smolvm error's
+    // hint is looked up.
+    let removed = |what: &str, e: anyhow::Error| match vm.delete(&sb.machine) {
+        Ok(()) => e.context(format!("{what} (the sandbox was removed)")),
+        Err(d) => anyhow!(
+            "{what}: {e:#}\nremoving the sandbox failed too ({d:#}); remove it with `sbt rm {}`",
+            sb.name()
+        ),
+    };
     let Some(kit) = &plan.kit else {
-        // Kept, stopped, for the next start to try again (a `--clone` into an image that needs
-        // git installed first, say). The error says so: `create` again would only fail with
-        // "already exists".
-        start_with(vm, &sb, plan, on).with_context(|| {
-            format!(
-                "the first start failed (the sandbox is kept: `sbt start {0}` tries again, \
-                 `sbt rm {0}` removes it)",
-                sb.name()
-            )
-        })?;
+        start_with(vm, &sb, plan, on).map_err(|e| removed("the first start failed", e))?;
         sb.state = MachineState::Running;
         return Ok(sb);
     };
-    // A kit sandbox isn't usable until its steps ran, so a failed first start removes it too and
-    // the same command can simply run again.
     let steps = start_with(vm, &sb, plan, on)
         .and_then(|()| first_start(vm, &sb, plan, kit, drop_install_rules, on));
     if let Err(e) = steps {
@@ -365,14 +364,7 @@ pub fn create<R: Runner>(
         } else {
             "kit install failed"
         };
-        return Err(match vm.delete(&sb.machine) {
-            // The cause stays in the chain, where a smolvm error's hint is looked up.
-            Ok(()) => e.context(format!("{what} (the sandbox was removed)")),
-            Err(d) => anyhow!(
-                "{what}: {e:#}\nremoving the sandbox failed too ({d:#}); remove it with `sbt rm {}`",
-                sb.name()
-            ),
-        });
+        return Err(removed(what, e));
     }
     sb.state = MachineState::Running;
     if let Err(e) = run_startup(vm, &sb, None) {

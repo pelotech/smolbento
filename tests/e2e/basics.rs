@@ -279,7 +279,8 @@ pub(crate) fn clone_round_trip() {
         "printf real-secret-xyz",
     ]);
 
-    // Alpine has no `agent` user or git, so the first-start clone fails and stops the machine.
+    // Alpine has no `agent` user or git, so the first-start clone fails. The sandbox is removed,
+    // and with it the remote the create added.
     let out = e.sbt(&[
         "create", "--clone", "shell", ws, "--name", &e.name, "-t", "alpine", "--cpus", "1", "-m",
         "1g",
@@ -290,21 +291,23 @@ pub(crate) fn clone_round_trip() {
         "create without git in the image fails"
     );
     assert!(err.contains("cloning the repo in the sandbox"), "{err}");
+    assert!(err.contains("the sandbox was removed"), "{err}");
+    assert!(!e.ok(&["ls", "-q"]).lines().any(|n| n == e.name), "removed");
     assert!(
-        e.git_ok(&["remote"]).lines().any(|r| r == remote),
-        "remote kept"
+        !e.git_ok(&["remote"]).lines().any(|r| r == remote),
+        "remote dropped with the sandbox"
     );
 
-    smolvm(&["machine", "start", "-n", &e.machine()]);
-    guest_root(
-        &e.name,
-        &format!(
-            "adduser -D -u {} agent && apk add -q git",
-            smolbento::util::host_uid()
-        ),
+    // The same command works once the image has git and the agent user.
+    let template = e.git_template();
+    e.ok(&[
+        "create", "--clone", "shell", ws, "--name", &e.name, "-t", &template, "--pull", "never",
+        "--cpus", "1", "-m", "1g",
+    ]);
+    assert!(
+        e.git_ok(&["remote"]).lines().any(|r| r == remote),
+        "remote added"
     );
-    smolvm(&["machine", "stop", "-n", &e.machine()]);
-    e.ok(&["start", &e.name]);
 
     let url = e.ok(&[
         "exec", &e.name, "git", "-C", ws, "remote", "get-url", "origin",

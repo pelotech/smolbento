@@ -175,9 +175,8 @@ Good to know:
   `PATH` (every install puts it there; the `sbt`, `sbx` and `bento` names are links to it).
 - `--clone` needs a workspace path in a git repository, and git 2.31 or newer on your machine. The
   image needs git too: the built-in agent images have it, but with `-t` pick an image with git
-  installed. If the clone fails, the start fails with git's error. On a sandbox's first start with
-  kits (every Docker-enabled sandbox has the `docker` kit) the sandbox is then removed, so run the
-  same `create` or `run` again; otherwise the next start tries again.
+  installed. If the clone fails, the start fails with git's error. A sandbox whose first start
+  fails is removed, so fix the cause and run the same `create` or `run` again.
 - `--clone` only applies when the sandbox is created; `run` on an existing sandbox ignores it.
 - `sbt rm`, `prune` and `reset` remove the `sandbox-<name>` remote, and with it the
   `sandbox-<name>/…` branches, as sbx does. Merge what you want first, or keep a branch:
