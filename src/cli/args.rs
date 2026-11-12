@@ -191,7 +191,7 @@ pub struct EnvOverrideOpts {
     /// File of name=value kit arguments, one per line (can be repeated); --kit-arg overrides
     #[arg(long = "kit-args-file", value_name = "FILE")]
     pub kit_args_file: Vec<PathBuf>,
-    /// Skip the host lifecycle commands the environment declares (smolbento runs none)
+    /// Skip the host lifecycle commands the environment declares
     #[arg(long = "skip-host-commands")]
     pub skip_host_commands: bool,
 }
@@ -294,7 +294,7 @@ pub struct EnvRmArgs {
     /// Also remove this environment's bindings from the global credentials.yaml (smolbento keeps none)
     #[arg(long = "prune-bindings")]
     pub prune_bindings: bool,
-    /// Skip the host lifecycle commands the environment declares (smolbento runs none)
+    /// Skip the host lifecycle commands the environment declares
     #[arg(long = "skip-host-commands")]
     pub skip_host_commands: bool,
 }
@@ -525,6 +525,9 @@ pub struct RunArgs {
     /// Extra env for the agent's session (`env run` of an existing sandbox: the file's env).
     #[arg(skip)]
     pub session_env: Vec<(String, String)>,
+    /// What to launch in place of the agent's program (`env run`: the file's `entrypoint`).
+    #[arg(skip)]
+    pub entrypoint: Option<Vec<String>>,
 }
 
 #[derive(Debug, Args)]

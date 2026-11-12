@@ -7,6 +7,7 @@ use anyhow::{Context, Result, bail};
 use super::SandboxOpts;
 use crate::agents;
 use crate::env::file::{EnvFile, KitEntry, Lifecycle, PinnedKit, Port, SecretDecl, Workspace};
+use crate::env::lifecycle::{Phase, Vars};
 use crate::env::load::Loaded;
 use crate::env::plan::{HOST_COMMANDS, Line, Marker, Resource, When, render};
 use crate::sandbox::{name as sandbox_name, options};
@@ -172,37 +173,37 @@ pub fn spec(loaded: &Loaded, overrides: &Overrides, secrets: &SecretsFile) -> Re
         kit_pins,
         ..Default::default()
     };
-    let mut lifecycle = f.lifecycle.clone().unwrap_or_default();
-    let project = loaded.project_dir.display().to_string();
-    let phases = [
-        &mut lifecycle.initialize,
-        &mut lifecycle.post_create,
-        &mut lifecycle.pre_remove,
-    ];
-    for c in phases.into_iter().flatten() {
-        c.workdir.get_or_insert_with(|| project.clone());
-    }
     Ok(EnvSpec {
         name,
         targets,
         opts,
         env,
         secrets: secret_decls,
-        lifecycle,
+        lifecycle: lifecycle(loaded),
         entrypoint: f.entrypoint.clone(),
         cmd: f.cmd.clone(),
     })
 }
 
-/// The `rm` plan: the sandbox and the services scoped to it, all to destroy. Needs only the name,
-/// so it works when the rest of the file (workspace, kits) no longer checks out.
-pub fn remove_summary(loaded: &Loaded, name: &str, scoped: &[String]) -> String {
-    let resource = |section: &str, name: &str| {
+/// The plan section of the host commands.
+pub const LIFECYCLE: &str = "LIFECYCLE";
+
+/// The `rm` plan: the sandbox and what is scoped to it (`secrets`, `registries`), all to
+/// destroy, and the `pre_remove` commands to run.
+pub fn remove_summary(
+    sandbox: Option<&str>,
+    secrets: &[String],
+    registries: &[String],
+    pre_remove: &[Resource],
+) -> String {
+    let gone = |section: &str, name: &str| {
         Line::new(Marker::Destroy, &Resource::new(section, name, Vec::new()))
     };
-    let mut lines = vec![resource("SANDBOX", name)];
-    lines.extend(scoped.iter().map(|s| resource("SECRETS", s)));
-    header(loaded, name) + &render(&lines, HOST_COMMANDS)
+    let mut lines: Vec<Line> = sandbox.iter().map(|n| gone("SANDBOX", n)).collect();
+    lines.extend(secrets.iter().map(|s| gone("SECRETS", s)));
+    lines.extend(registries.iter().map(|h| gone("REGISTRIES", h)));
+    lines.extend(pre_remove.iter().map(|r| Line::new(Marker::Run, r)));
+    render(&lines, HOST_COMMANDS)
 }
 
 /// The `ENVIRONMENT` block: name and file(s).
@@ -336,12 +337,49 @@ pub fn resources(loaded: &Loaded, spec: &EnvSpec) -> Vec<Resource> {
             fields,
         ));
     }
+    out.extend(lifecycle_resources(loaded, &spec.lifecycle));
+    out
+}
+
+/// The file's host commands, each with its working directory: the project directory unless it
+/// names one.
+pub fn lifecycle(loaded: &Loaded) -> Lifecycle {
+    let mut lifecycle = loaded.file.lifecycle.clone().unwrap_or_default();
+    let project = loaded.project_dir.display().to_string();
     let phases = [
-        ("initialize", &spec.lifecycle.initialize, When::EveryRun),
-        ("postCreate", &spec.lifecycle.post_create, When::Create),
-        ("preRemove", &spec.lifecycle.pre_remove, When::Removal),
+        &mut lifecycle.initialize,
+        &mut lifecycle.post_create,
+        &mut lifecycle.pre_remove,
     ];
+    for c in phases.into_iter().flatten() {
+        c.workdir.get_or_insert_with(|| project.clone());
+    }
+    lifecycle
+}
+
+/// What host commands learn about the environment (`SBX_*`).
+pub fn vars(loaded: &Loaded, name: &str) -> Vars {
+    let f = &loaded.file;
+    Vars {
+        files: loaded.files.clone(),
+        project_dir: loaded.project_dir.clone(),
+        sandbox: name.to_string(),
+        agent: f.agent.clone().unwrap_or_default(),
+        workspace: workspace(f).map(|(path, _)| path.to_string()),
+    }
+}
+
+/// The `LIFECYCLE` section: one resource per command, identified by its phase and position.
+pub fn lifecycle_resources(loaded: &Loaded, lifecycle: &Lifecycle) -> Vec<Resource> {
+    let field = |label: &str, value: &str| (label.to_string(), value.to_string());
+    let phases = [
+        (Phase::Initialize, &lifecycle.initialize, When::EveryRun),
+        (Phase::PostCreate, &lifecycle.post_create, When::Create),
+        (Phase::PreRemove, &lifecycle.pre_remove, When::Removal),
+    ];
+    let mut out = Vec::new();
     for (phase, commands, when) in phases {
+        let phase = phase.name();
         for (i, c) in commands.iter().enumerate() {
             let mut fields = vec![field("workdir", c.workdir.as_deref().unwrap_or_default())];
             if let Some(name) = &c.name {
@@ -360,7 +398,7 @@ pub fn resources(loaded: &Loaded, spec: &EnvSpec) -> Vec<Resource> {
                 id: format!("{phase}[{i}]"),
                 when,
                 host_command: true,
-                ..Resource::new("LIFECYCLE", &format!("{phase}: {}", c.command), fields)
+                ..Resource::new(LIFECYCLE, &format!("{phase}: {}", c.command), fields)
             });
         }
     }
@@ -722,7 +760,9 @@ mod tests {
         t.write("proj/sbxenv.yaml", &format!("{HEAD}agent: claude\n"));
         insta::assert_snapshot!(summarise(&t, &["sbxenv.yaml"]));
         let l = t.loaded(&["sbxenv.yaml"]);
-        let removed = remove_summary(&l, "claude-proj", &["github".into(), "openai".into()]);
+        let secrets = ["github".to_string(), "openai".to_string()];
+        let removed =
+            header(&l, "claude-proj") + &remove_summary(Some("claude-proj"), &secrets, &[], &[]);
         insta::assert_snapshot!(removed.replace(&t.root(), "<root>"));
     }
 

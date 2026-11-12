@@ -85,10 +85,12 @@ pub fn run<R: Runner>(ctx: &mut Ctx<R>, a: &RunArgs) -> Result<i32> {
     }
     // The agent's command: a workload kit's, else the preset's. Looked up before the start, so a
     // sandbox with no known agent isn't started and left running.
-    let command: Option<Vec<String>> = match (&sb.meta.command, a.detach) {
-        (_, true) => None,
-        (Some(c), false) => Some(c.clone()),
-        (None, false) => Some(
+    let command: Option<Vec<String>> = match (&a.entrypoint, &sb.meta.command, a.detach) {
+        (_, _, true) => None,
+        // An environment's `entrypoint`, with its `cmd` as the arguments.
+        (Some(e), _, false) => Some([e.as_slice(), a.agent_args.as_slice()].concat()),
+        (None, Some(c), false) => Some(c.clone()),
+        (None, None, false) => Some(
             agents::find(&sb.meta.agent)
                 .with_context(|| {
                     format!(
@@ -159,7 +161,10 @@ fn attach<R: Runner>(ctx: &Ctx<R>, a: &RunArgs, sb: &Sandbox, command: Vec<Strin
         workdir: Some(sb.workdir()),
         interactive: true,
         tty: ctx.stdin_tty,
-        cmd: agents::command_with_args(&command, &a.agent_args),
+        cmd: match &a.entrypoint {
+            Some(_) => command,
+            None => agents::command_with_args(&command, &a.agent_args),
+        },
         ..Default::default()
     };
     spec.env.extend(a.session_env.iter().cloned());

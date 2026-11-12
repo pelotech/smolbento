@@ -30,7 +30,7 @@ Options:
           Also remove this environment's bindings from the global credentials.yaml (smolbento keeps none)
 
       --skip-host-commands
-          Skip the host lifecycle commands the environment declares (smolbento runs none)
+          Skip the host lifecycle commands the environment declares
 
   -h, --help
           Print help

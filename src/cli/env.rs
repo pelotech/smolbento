@@ -5,15 +5,19 @@ use std::path::Path;
 
 use anyhow::{Context, Result, anyhow, bail};
 
-use super::env_spec::{EnvSpec, Overrides, header, name, remove_summary, resources, spec};
+use super::env_spec::{
+    EnvSpec, LIFECYCLE, Overrides, header, lifecycle, lifecycle_resources, name, remove_summary,
+    resources, spec, vars,
+};
 use super::{
     Ctx, EnvApplyOpts, EnvCmd, EnvCommon, EnvExecArgs, EnvOverrideOpts, EnvRmArgs, ExecArgs,
     RunArgs, SandboxOpts, SecretSource, Unsupported, confirm_or,
 };
 use crate::env::approval::{self, Need};
-use crate::env::file::SecretDecl;
+use crate::env::file::{HostCommand, SecretDecl};
+use crate::env::lifecycle::{self as host_lifecycle, Phase, Vars};
 use crate::env::load::{ArgInputs, Loaded, load};
-use crate::env::plan::{HOST_COMMANDS, Line, Resource, UNCHANGED_HOST_COMMANDS, render};
+use crate::env::plan::{HOST_COMMANDS, Line, Resource, UNCHANGED_HOST_COMMANDS, When, render};
 use crate::sandbox;
 use crate::secrets::{SecretEntry, SecretsFile, Source, resolve::resolve, scope_for};
 use crate::smolvm::Runner;
@@ -50,14 +54,30 @@ impl Planned {
     }
 }
 
+/// `skip_host_commands` leaves the lifecycle commands out of the plan and of both sides of the
+/// approval: skipping them neither approves nor forgets them.
 fn planned<R: Runner>(
     ctx: &Ctx<R>,
     loaded: &Loaded,
     spec: &EnvSpec,
     exists: bool,
+    skip_host_commands: bool,
 ) -> Result<Planned> {
-    let resources = resources(loaded, spec);
-    let record = approval::load(&ctx.paths, &spec.name);
+    let mut resources = resources(loaded, spec);
+    let mut record = approval::load(&ctx.paths, &spec.name);
+    let mut kept = Vec::new();
+    if skip_host_commands {
+        resources.retain(|r| r.section != LIFECYCLE);
+        if let Some(r) = record.take() {
+            kept = r
+                .approved
+                .iter()
+                .filter(|r| r.section == LIFECYCLE)
+                .cloned()
+                .collect();
+            record = Some(r.without(LIFECYCLE));
+        }
+    }
     let need = approval::need(
         record.as_ref(),
         &loaded.files,
@@ -67,16 +87,37 @@ fn planned<R: Runner>(
     Ok(Planned {
         lines: approval::lines(record.as_ref(), &resources, exists),
         header: header(loaded, &spec.name),
-        resources,
+        // What a yes records: the plan shown, and the approved commands it left out.
+        resources: resources.into_iter().chain(kept).collect(),
         need,
     })
+}
+
+/// Runs a lifecycle phase, or says it was skipped.
+fn host_phase<R: Runner>(
+    ctx: &Ctx<R>,
+    phase: Phase,
+    commands: &[HostCommand],
+    vars: &Vars,
+    skip: bool,
+) -> Result<()> {
+    if skip {
+        if !commands.is_empty() {
+            eprintln!(
+                "warning: skipping the host commands declared for {} (--skip-host-commands)",
+                phase.name()
+            );
+        }
+        return Ok(());
+    }
+    host_lifecycle::run(&ctx.out, ctx.stdout_tty, phase, commands, vars)
 }
 
 /// Prints what applying would do and whether it would ask. Changes nothing.
 fn env_plan<R: Runner>(ctx: &mut Ctx<R>, c: &EnvCommon, o: &EnvOverrideOpts) -> Result<i32> {
     let (loaded, spec, _) = prepare(ctx, c, o)?;
     let exists = sandbox::find(&ctx.vm, &spec.name)?.is_some();
-    let plan = planned(ctx, &loaded, &spec, exists)?;
+    let plan = planned(ctx, &loaded, &spec, exists, o.skip_host_commands)?;
     let status = match plan.need {
         Need::Changed => "○ not approved yet — applying asks once",
         Need::HostCommands => {
@@ -110,16 +151,42 @@ fn create<R: Runner>(ctx: &mut Ctx<R>, c: &EnvCommon, a: &EnvApplyOpts) -> Resul
             spec.name
         );
     }
-    let plan = planned(ctx, &loaded, &spec, false)?;
+    let skip = a.overrides.skip_host_commands;
+    let plan = planned(ctx, &loaded, &spec, false, skip)?;
     write!(&ctx.out, "{}", plan.text(true))?;
     approve(ctx, &loaded, &spec.name, &plan, a.force)?;
+    let vars = vars(&loaded, &spec.name);
+    host_phase(
+        ctx,
+        Phase::Initialize,
+        &spec.lifecycle.initialize,
+        &vars,
+        skip,
+    )?;
     provision(ctx, &mut secrets, &spec)?;
+    create_sandbox(ctx, &spec, &vars, skip)?;
+    Ok(0)
+}
+
+/// Creates the sandbox and runs `postCreate`. A failure there keeps the sandbox, as in sbx.
+fn create_sandbox<R: Runner>(
+    ctx: &mut Ctx<R>,
+    spec: &EnvSpec,
+    vars: &Vars,
+    skip_host_commands: bool,
+) -> Result<()> {
     let args = super::CreateArgs {
-        targets: spec.targets,
-        opts: spec.opts,
+        targets: spec.targets.clone(),
+        opts: spec.opts.clone(),
         no_progress: false,
     };
-    super::lifecycle::create(ctx, &args)
+    super::lifecycle::create(ctx, &args)?;
+    let commands = &spec.lifecycle.post_create;
+    host_phase(ctx, Phase::PostCreate, commands, vars, skip_host_commands).map_err(|e| {
+        anyhow!(
+            "{e:#}; remove this environment's sandbox and provisioned secrets\n  try: sbt env rm"
+        )
+    })
 }
 
 fn env_run<R: Runner>(
@@ -131,28 +198,34 @@ fn env_run<R: Runner>(
     refuse_cloud(a)?;
     let (loaded, spec, mut secrets) = prepare(ctx, c, &a.overrides)?;
     let exists = sandbox::find(&ctx.vm, &spec.name)?.is_some();
-    let plan = planned(ctx, &loaded, &spec, exists)?;
+    let skip = a.overrides.skip_host_commands;
+    let plan = planned(ctx, &loaded, &spec, exists, skip)?;
     write!(&ctx.out, "{}", plan.text(true))?;
     approve(ctx, &loaded, &spec.name, &plan, a.force)?;
-    let args = if exists {
-        // Attach as it was created, with the file's current env for this session.
-        RunArgs {
-            opts: SandboxOpts {
-                name: Some(spec.name),
-                ..Default::default()
-            },
-            detach,
-            session_env: spec.env,
-            ..Default::default()
-        }
-    } else {
+    let vars = vars(&loaded, &spec.name);
+    host_phase(
+        ctx,
+        Phase::Initialize,
+        &spec.lifecycle.initialize,
+        &vars,
+        skip,
+    )?;
+    if !exists {
+        // Created first and attached to afterwards, so `postCreate` runs in between.
         provision(ctx, &mut secrets, &spec)?;
-        RunArgs {
-            targets: spec.targets,
-            opts: spec.opts,
-            detach,
+        create_sandbox(ctx, &spec, &vars, skip)?;
+    }
+    // Attach as it was created, with the file's current env and launch command for this session.
+    let args = RunArgs {
+        opts: SandboxOpts {
+            name: Some(spec.name),
             ..Default::default()
-        }
+        },
+        detach,
+        session_env: spec.env,
+        entrypoint: spec.entrypoint,
+        agent_args: spec.cmd.unwrap_or_default(),
+        ..Default::default()
     };
     super::run::run(ctx, &args)
 }
@@ -234,7 +307,15 @@ fn env_rm<R: Runner>(ctx: &mut Ctx<R>, a: EnvRmArgs) -> Result<i32> {
         .collect();
     let all = sandbox::list(&ctx.vm)?;
     let sb = all.iter().find(|sb| sb.name() == name);
-    if sb.is_none() && scoped.is_empty() {
+    // `preRemove` runs whether or not the sandbox is still there, as in sbx.
+    let lifecycle = lifecycle(&loaded);
+    let pre_remove: &[HostCommand] = if a.skip_host_commands {
+        &[]
+    } else {
+        &lifecycle.pre_remove
+    };
+    let nothing_left = sb.is_none() && scoped.is_empty();
+    if nothing_left && pre_remove.is_empty() {
         // Nothing to remove but the approval, which a plain `rm` of the sandbox leaves.
         approval::forget(&ctx.paths, &name)?;
         eprintln!("error: sandbox '{name}' not found\n  try: sbt ls");
@@ -249,13 +330,30 @@ fn env_rm<R: Runner>(ctx: &mut Ctx<R>, a: EnvRmArgs) -> Result<i32> {
             );
         }
     }
-    write!(&ctx.out, "{}", remove_summary(&loaded, &name, &scoped))?;
+    let to_run: Vec<Resource> = lifecycle_resources(&loaded, &lifecycle)
+        .into_iter()
+        .filter(|r| r.when == When::Removal && !a.skip_host_commands)
+        .collect();
+    let summary = remove_summary(sb.map(|_| name.as_str()), &scoped, &[], &to_run);
+    write!(&ctx.out, "{}{summary}", header(&loaded, &name))?;
     confirm_or(
         ctx,
         "Remove?",
         a.force,
         "stdin is not a terminal; use --force to skip confirmation",
     )?;
+    if nothing_left {
+        eprintln!("error: sandbox '{name}' not found\n  try: sbt ls");
+    }
+    let vars = vars(&loaded, &name);
+    let commands = &lifecycle.pre_remove;
+    if let Err(e) = host_phase(ctx, Phase::PreRemove, commands, &vars, a.skip_host_commands) {
+        eprintln!("warning: the preRemove commands did not finish: {e:#}");
+    }
+    if nothing_left {
+        approval::forget(&ctx.paths, &name)?;
+        return Ok(0);
+    }
     match sb {
         Some(sb) => {
             super::lifecycle::delete_sandbox(ctx, sb, true)?;
@@ -736,8 +834,8 @@ mod tests {
     #[test]
     fn run_of_a_new_sandbox_creates_it_and_detaches() {
         let mut t = with_file(FILE);
-        // env run looks the name up, run twice more, and provision::create once more.
-        missing_then_created(&t, 4);
+        // env run looks the name up, and the create once more; the attach finds it.
+        missing_then_created(&t, 2);
         assert_eq!(t.sbt(&["env", "run", "-d", "-f"]).unwrap(), 0);
         assert_eq!(creates(&t).len(), 1);
         assert!(t.stdout().ends_with("claude-proj\n"));
@@ -1131,6 +1229,157 @@ mod tests {
         let path = t.ctx.paths.env_records().join("claude-proj.toml");
         let mode = std::fs::metadata(path).unwrap().permissions().mode();
         assert_eq!(mode & 0o777, 0o600);
+    }
+
+    /// A file whose lifecycle commands append their phase to `<cwd>/log`.
+    fn lifecycle_file(extra: &str) -> String {
+        format!(
+            "{FILE}lifecycle:\n  initialize:\n    - command: echo init >> log\n  \
+             postCreate:\n    - command: echo post >> log\n  \
+             preRemove:\n    - command: echo pre >> log\n{extra}"
+        )
+    }
+
+    fn log(t: &TestEnv) -> String {
+        std::fs::read_to_string(t.ctx.cwd.join("log")).unwrap_or_default()
+    }
+
+    #[test]
+    fn lifecycle_phases_run_around_the_create_and_on_every_run() {
+        let mut t = with_file(&lifecycle_file(""));
+        missing_then_created(&t, 2);
+        t.sbt(&["env", "create", "--force"]).unwrap();
+        assert_eq!(log(&t), "init\npost\n");
+        let out = t.stdout();
+        let (init, created, post) = (
+            out.find("\nHOST INITIALIZE\n  ○ echo init >> log\n")
+                .unwrap(),
+            out.find("Created sandbox claude-proj").unwrap(),
+            out.find("\nHOST POST-CREATE\n").unwrap(),
+        );
+        assert!(init < created && created < post, "{out}");
+
+        // Attaching: `initialize` again, nothing else.
+        t.sbt(&["env", "run", "-d", "--force"]).unwrap();
+        assert_eq!(log(&t), "init\npost\ninit\n");
+        // `env exec` runs none.
+        t.sbt(&["env", "exec", "--", "true"]).unwrap();
+        assert_eq!(log(&t), "init\npost\ninit\n");
+    }
+
+    #[test]
+    fn a_failing_initialize_creates_and_stores_nothing() {
+        let mut t = with_file(&format!(
+            "{FILE}secrets:\n  github:\n    value: ghp_dummy\nlifecycle:\n  initialize:\n    \
+             - command: exit 7\n"
+        ));
+        missing_then_created(&t, 2);
+        for cmd in ["create", "run"] {
+            assert_eq!(
+                t.sbt_err(&["env", cmd, "--force"]),
+                "initialize[0] (exit 7): exit status 7"
+            );
+        }
+        assert!(creates(&t).is_empty());
+        assert!(scoped(&t).is_empty());
+    }
+
+    #[test]
+    fn a_failing_post_create_keeps_the_sandbox() {
+        let mut t = with_file(&format!(
+            "{FILE}lifecycle:\n  postCreate:\n    - command: exit 4\n"
+        ));
+        missing_then_created(&t, 2);
+        assert_eq!(
+            t.sbt_err(&["env", "run", "--force"]),
+            "postCreate[0] (exit 4): exit status 4; remove this environment's sandbox and \
+             provisioned secrets\n  try: sbt env rm"
+        );
+        assert_eq!(creates(&t).len(), 1);
+        assert!(deletes(&t).is_empty());
+        assert!(t.runner().interactive_calls().is_empty(), "not attached");
+    }
+
+    #[test]
+    fn pre_remove_runs_with_or_without_the_sandbox_and_never_stops_the_removal() {
+        let mut t = with_file(&lifecycle_file("    - command: exit 3\n"));
+        listed(&t, &[]);
+        t.sbt(&["env", "rm", "--force"]).unwrap();
+        assert_eq!(log(&t), "pre\n");
+        let out = t.stdout();
+        assert!(
+            out.contains("\nLIFECYCLE\n  > preRemove: echo pre >> log\n      workdir: "),
+            "{out}"
+        );
+        assert!(out.contains(" · 1 to destroy · 2 to run\n"), "{out}");
+        assert!(out.contains("\nHOST PRE-REMOVE\n"), "{out}");
+        assert!(out.ends_with("Removed sandbox claude-proj\n"), "{out}");
+        assert_eq!(deletes(&t).len(), 1);
+
+        // The sandbox is gone already: the commands still run.
+        t.runner().ok(&["machine", "ls", "--json"], "[]");
+        t.sbt(&["env", "rm", "--force"]).unwrap();
+        assert_eq!(log(&t), "pre\npre\n");
+        assert_eq!(deletes(&t).len(), 1);
+    }
+
+    #[test]
+    fn skip_host_commands_skips_every_phase_and_leaves_the_approval() {
+        let mut t = approved(&lifecycle_file(""));
+        assert_eq!(log(&t), "init\npost\n");
+        let before = record(&t);
+        // Approved, and the lifecycle commands (which would ask every time) are left out.
+        t.sbt(&["env", "run", "-d", "--skip-host-commands"])
+            .unwrap();
+        listed(&t, &[]);
+        t.sbt(&["env", "rm", "--force", "--skip-host-commands"])
+            .unwrap();
+        assert_eq!(log(&t), "init\npost\n", "nothing more ran");
+        let out = t.stdout();
+        assert!(!out.contains("LIFECYCLE"), "{out}");
+        assert!(!out.contains("HOST "), "{out}");
+        // Until the `env rm`, the record was untouched.
+        assert!(before.unwrap().contains("initialize[0]"));
+
+        // A yes given with the flag keeps the approved commands in the record.
+        let mut t = approved(&lifecycle_file(""));
+        let changed = lifecycle_file("").replace("X: one", "X: two");
+        std::fs::write(t.ctx.cwd.join("sbxenv.yaml"), changed).unwrap();
+        t.answer("y\n");
+        t.sbt(&["env", "run", "-d", "--skip-host-commands"])
+            .unwrap();
+        let record = record(&t).unwrap();
+        assert!(record.contains("value\", \"two"), "{record}");
+        assert!(record.contains("initialize[0]"), "{record}");
+    }
+
+    #[test]
+    fn env_run_launches_the_entrypoint_and_cmd() {
+        let launch = "entrypoint: [\"/bin/sh\", \"-c\"]\ncmd: [\"echo hi\"]\n";
+        let mut t = with_file(&format!("{FILE}{launch}"));
+        existing(&t, "running");
+        t.sbt(&["env", "run", "--force"]).unwrap();
+        let call = t.runner().interactive_calls()[0].join(" ");
+        assert!(call.ends_with(" -- /bin/sh -c echo hi"), "{call}");
+        assert!(t.stdout().contains("\nAGENT LAUNCH\n  + entrypoint\n"));
+
+        // Only `cmd`: the agent's own command with those arguments, as `-- ARGS` (measured: sbx
+        // treats the two alike).
+        let mut t = with_file(&format!("{FILE}cmd: [\"--version\"]\n"));
+        existing(&t, "running");
+        t.sbt(&["env", "run", "--force"]).unwrap();
+        let call = t.runner().interactive_calls()[0].join(" ");
+        assert!(
+            call.ends_with(" -- claude --dangerously-skip-permissions --version"),
+            "{call}"
+        );
+
+        // Plain `run` doesn't know the file.
+        let mut t = with_file(&format!("{FILE}{launch}"));
+        existing(&t, "running");
+        t.sbt(&["run", "--name", "claude-proj"]).unwrap();
+        let call = t.runner().interactive_calls()[0].join(" ");
+        assert!(!call.contains("/bin/sh -c echo hi"), "{call}");
     }
 
     #[test]
