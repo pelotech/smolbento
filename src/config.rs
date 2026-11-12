@@ -71,6 +71,12 @@ impl Paths {
         self.data.join("kit-host-mounts")
     }
 
+    /// What the user approved for each environment file (`env::approval`), one file per sandbox
+    /// name.
+    pub fn env_records(&self) -> PathBuf {
+        self.data.join("env")
+    }
+
     /// The shared agent skills store (`sbt skills`), one directory per skill.
     pub fn skills_store(&self) -> PathBuf {
         self.data.join("agent-skills")
