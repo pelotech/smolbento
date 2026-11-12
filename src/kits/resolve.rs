@@ -215,6 +215,7 @@ pub fn resolve_for(
             capability::incoherent(&[capability::NO_WORKLOAD.to_string()])
         );
     }
+    check_formats(&workload, &mixins)?;
     check_names(&workload, &mixins)?;
     // Args first: a `provides` entry may name one (`claude@${{ kit.args.version }}`), and
     // ordering parses the expanded entries.
@@ -424,6 +425,33 @@ pub fn resolve_for(
 
 /// Each kit once, names unique (they scope `--kit-arg`s and tag policy rules; an agent preset
 /// isn't a kit, so a kit may share its name), and one workload.
+/// As in sbx, v2 and v3 kits don't go into one sandbox. An agent preset, the shipped docker kit
+/// and a Smolfile have no format of their own (in sbx the agents are v3 kits: see
+/// docs/sbx-compatibility.md).
+fn check_formats(workload: &Kit, mixins: &[Kit]) -> Result<()> {
+    let names = |v3: bool| -> Vec<&str> {
+        std::iter::once(workload)
+            .chain(mixins)
+            .filter(|k| match k.source {
+                Source::LocalV3(_) | Source::Registry(_) => v3,
+                Source::LocalV2(_) => !v3,
+                Source::Preset(_) | Source::Builtin(_) | Source::Smolfile(_) => false,
+            })
+            .map(|k| k.name.as_str())
+            .collect()
+    };
+    let (v3, v2) = (names(true), names(false));
+    if !v3.is_empty() && !v2.is_empty() {
+        bail!(
+            "cannot mix v3 kits with v1/v2 kits in one sandbox; compositions are single-format \
+             (v3: {}; v1/v2: {}). Use a v3 version of the v1/v2 kit",
+            v3.join(", "),
+            v2.join(", ")
+        );
+    }
+    Ok(())
+}
+
 fn check_names(workload: &Kit, mixins: &[Kit]) -> Result<()> {
     let named: Vec<&Kit> = std::iter::once(workload)
         .filter(|w| !matches!(w.source, Source::Preset(_)))
@@ -1780,6 +1808,7 @@ mod tests {
         let dir = std::path::Path::new("tests/fixtures/kits/v2/workspace-files");
         let yaml = std::fs::read_to_string(dir.join("spec.yaml")).unwrap();
         let kit = crate::kits::v2::parse(&yaml, dir).unwrap();
+        let v2_workload = || Kit::new("w", Kind::Workload, Source::LocalV2("w".into()));
         let files = |p: &Plan| -> Vec<(String, Vec<u8>)> {
             p.merged
                 .files
@@ -1788,7 +1817,7 @@ mod tests {
                 .collect()
         };
         let p = resolve_for(
-            workload("w"),
+            v2_workload(),
             vec![kit.clone()],
             &ArgValues::default(),
             "/w/repo",
@@ -1805,7 +1834,27 @@ mod tests {
             ]
         );
         // Without a sandbox (`kit validate`): the mountless directory.
-        let p = resolve(workload("w"), vec![kit], &ArgValues::default()).unwrap();
+        let p = resolve(v2_workload(), vec![kit], &ArgValues::default()).unwrap();
         assert_eq!(files(&p)[1].0, "/home/agent/workspace/docs/NOTES.md");
+    }
+
+    #[test]
+    fn v2_and_v3_kits_are_not_mixed() {
+        let preset = || Kit::new("shell", Kind::Workload, Source::Preset("img".into()));
+        let v2 = |name: &str| Kit::new(name, Kind::Mixin, Source::LocalV2(name.into()));
+        let docker = || Kit::new("docker", Kind::Mixin, Source::Builtin("docker"));
+        let none = ArgValues::default();
+        // sbx's wording.
+        let err = resolve(preset(), vec![v2("old"), mixin("new")], &none).unwrap_err();
+        assert_eq!(
+            err.to_string(),
+            "cannot mix v3 kits with v1/v2 kits in one sandbox; compositions are single-format \
+             (v3: new; v1/v2: old). Use a v3 version of the v1/v2 kit"
+        );
+        let err = resolve(workload("w"), vec![v2("old")], &none).unwrap_err();
+        assert!(err.to_string().contains("(v3: w; v1/v2: old)"), "{err}");
+        // A preset and the shipped docker kit have no format of their own.
+        resolve(preset(), vec![docker(), v2("old"), v2("older")], &none).unwrap();
+        resolve(preset(), vec![docker(), mixin("new")], &none).unwrap();
     }
 }

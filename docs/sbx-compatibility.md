@@ -294,7 +294,10 @@ Differences:
 | Unmeasured parts of `kit inspect`/`validate` | | Inferred, not measured against sbx: `kind` values other than `directory` (we use `file`, `registry`, `builtin`); `Schema:` for registry (`v3`), builtin (`v3`) and Smolfile (`smolfile`) kits; the network rule counts (install and runtime rules merged, hosts deduplicated) and init-file count (v2 `files/home` and `files/workspace` files included); the JSON layout under sandbox, permissions, credentials and setup; the failure object above; `Template:` shown only for a built local v3 kit |
 | The name `docker` | A registry ref (the `docker` image) | The shipped Docker kit; write `docker.io/library/docker` for the image |
 | Docker in the sandbox | Run by the `-docker` images | The shipped `docker` kit, first before your kits (added to Docker-enabled images, or given with `--kit docker`), so their startup steps can use Docker. Its `dockerd` step runs in the background, so a failing `dockerd` is only logged (`/var/log/dockerd.log`) and doesn't stop the start |
-| v3 mixins on built-in agents | Refused (`no workload kit in the set`) | Allowed |
+| v3 mixins on built-in agents | Allowed since the agents ship as v3 kits (sbx 0.53; earlier: `no workload kit in the set`) | Allowed |
+| v2 and v3 kits in one sandbox | Refused: `cannot mix v3 kits with v1/v2 kits in one sandbox; compositions are single-format (v3: …; v1/v2: …)` | Refused with the same message |
+| v2 mixins on built-in agents | Refused by the rule above, because the agents are v3 kits (sbx 0.53) | Allowed: an agent preset, the shipped `docker` kit and a Smolfile have no kit format, so a v2 kit works with them |
+| Descriptor file names | `.yaml` only | `.yaml` and `.yml` |
 | `--mount` with a file as `HOST` | Not measured | The workspace error, `workspace X is a file; …` (smolvm mounts directories only) |
 | `--mount` path no kit declares | `request failed: 400 Bad Request: no kit declares host-mount@1 at "PATH"`, after the image is prepared | `no kit declares host-mount@1 at "PATH"`; a local kit is still built first, but a published kit's image isn't prepared |
 | Where host-mount directories live | `~/Library/Application Support/com.docker.sandboxes/sandboxes/kit-host-mounts/` on macOS | Under smolbento's data directory, so sbx's directories aren't shared |

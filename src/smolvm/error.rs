@@ -58,16 +58,20 @@ impl SmolvmError {
     pub fn hint(&self) -> Option<&'static str> {
         match self.code.as_str() {
             "KVM_UNAVAILABLE" => Some(
-                "KVM isn't available: enable virtualization, load the KVM module and add your \
-                 user to the `kvm` group (`sbt diagnose` checks /dev/kvm)",
+                "your user can't use KVM. Check `ls -l /dev/kvm`. Missing: enable virtualization \
+                 in the firmware (nested virtualization, inside a VM) and load the module (`sudo \
+                 modprobe kvm_intel` or `kvm_amd`). Present: join its group (`sudo usermod -aG \
+                 kvm $USER`) and log in again. `sbt diagnose` checks it",
             ),
             "HYPERVISOR_UNAVAILABLE" => Some(
                 "the hypervisor isn't available: run `sbt diagnose`; on macOS the smolvm binary \
                  needs the hypervisor entitlement (reinstall smolvm)",
             ),
-            "STORAGE_ERROR" => {
-                Some("check free disk space; `sbt rm` removes sandboxes you no longer need")
-            }
+            "STORAGE_ERROR" => Some(
+                "smolvm couldn't use its storage, most often because the disk is full: check `df \
+                 -h ~`. To free space: `sbt prune` removes stopped sandboxes, `sbt rm NAME` one \
+                 sandbox, `sbt template rm` a saved template",
+            ),
             _ => None,
         }
     }
@@ -92,14 +96,18 @@ mod tests {
             code: code.into(),
             message: "m".into(),
         };
-        assert!(with("KVM_UNAVAILABLE").hint().unwrap().contains("kvm"));
+        let kvm = with("KVM_UNAVAILABLE").hint().unwrap();
+        assert!(kvm.contains("ls -l /dev/kvm"), "{kvm}");
+        assert!(kvm.contains("usermod -aG kvm"), "{kvm}");
         assert!(
             with("HYPERVISOR_UNAVAILABLE")
                 .hint()
                 .unwrap()
                 .contains("sbt diagnose")
         );
-        assert!(with("STORAGE_ERROR").hint().unwrap().contains("disk space"));
+        let storage = with("STORAGE_ERROR").hint().unwrap();
+        assert!(storage.contains("df -h"), "{storage}");
+        assert!(storage.contains("sbt prune"), "{storage}");
         assert_eq!(with("SMOLVM_ERROR").hint(), None);
         assert_eq!(with("NOT_FOUND").hint(), None);
     }

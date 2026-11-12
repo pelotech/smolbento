@@ -159,6 +159,27 @@ pub fn ensure_policy<R: Runner>(ctx: &Ctx<R>) -> Result<Policy> {
     Ok(policy)
 }
 
+/// What `req`'s `--static-mcp` attaches, if given; `preset` says the agent is a built-in one, not
+/// a workload kit. An error is the selection's: an unknown or invalid server, an agent without
+/// MCP support, a secret that isn't set. The CLI also calls this before it loads any kit.
+pub fn mcp_attachment<R: Runner>(
+    ctx: &Ctx<R>,
+    req: &CreateRequest,
+    preset: bool,
+) -> Result<Option<crate::mcp::Attachment>> {
+    let Some(selection) = &req.mcp else {
+        return Ok(None);
+    };
+    let secrets = SecretsFile::load(&ctx.paths)?;
+    crate::mcp::attach(
+        &crate::mcp::McpFile::load(&ctx.paths)?,
+        selection,
+        preset.then_some(req.agent.as_str()),
+        &|secret| secrets.global_entry(secret).is_some(),
+    )
+    .map(Some)
+}
+
 /// Fills a new sandbox's network, deny CIDRs and credentials from the policy and secrets, after
 /// adding its `--deny-network` rules, and applies the resolved `kits` on top: their credentials
 /// merge with the user's secrets and their rules join the policy, and their host mounts get a
@@ -225,21 +246,13 @@ pub fn prepare_create<R: Runner>(
         let preset = kits.is_none_or(|p| crate::kits::apply::is_preset(&p.workload));
         sandbox::env::apply(req, preset)?;
     }
-    // `--static-mcp`: checked here, before the policy is saved or smolvm creates anything.
-    let attachment = match &req.mcp {
-        // A workload kit named like a preset isn't that agent.
-        Some(selection) => {
-            let preset = kits.is_none_or(|p| crate::kits::apply::is_preset(&p.workload));
-            let attachment = crate::mcp::attach(
-                &crate::mcp::McpFile::load(&ctx.paths)?,
-                selection,
-                preset.then_some(req.agent.as_str()),
-                &|secret| secrets.global_entry(secret).is_some(),
-            )?;
-            Some(attachment)
-        }
-        None => None,
-    };
+    // Before the policy is saved or smolvm creates anything. A workload kit named like a preset
+    // isn't that agent.
+    let attachment = mcp_attachment(
+        ctx,
+        req,
+        kits.is_none_or(|p| crate::kits::apply::is_preset(&p.workload)),
+    )?;
     let mut added = Vec::new();
     let mut first_start = None;
     if let Some(plan) = kits {

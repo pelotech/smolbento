@@ -355,6 +355,9 @@ path; `sbt exec` uses the same user. The user gets your uid so it can write the 
 numeric `USER` runs as the account with that uid). A workload whose image has no `ENTRYPOINT` or
 `CMD` is refused, and one without `/bin/bash` fails to start its agent. A kit reference is one of:
 
+v2 and v3 kits can't be combined in one sandbox (as in sbx). An agent preset, the shipped `docker`
+kit and a Smolfile go with either.
+
 | Reference | Kit |
 |---|---|
 | `docker` | The shipped Docker kit |
@@ -658,6 +661,8 @@ Limits:
   URL is stored and shown as given, so don't put a secret in its query string.
 - `localhost` URLs are refused: inside a sandbox that is the sandbox, not your machine.
 - `sbt template save` refuses a sandbox created with `--static-mcp`.
+- `mcp.toml` can be edited by hand. A selected server is checked as `mcp add` checks it, before
+  anything is created.
 - `mcp auth`, `mcp load` and `mcp unload` are not supported (see
   [sbx compatibility](sbx-compatibility.md#mcp-servers)).
 

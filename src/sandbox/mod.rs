@@ -360,10 +360,11 @@ pub fn create<R: Runner>(
         .and_then(|()| first_start(vm, &sb, plan, kit, drop_install_rules, on));
     if let Err(e) = steps {
         // Every Docker sandbox takes this path (the docker kit), most without install hooks.
-        let what = if kit.steps.install.is_empty() {
-            "the first start failed"
-        } else {
+        // smolbento's own steps (an MCP registration) aren't a kit's.
+        let what = if kit.steps.install.iter().any(|s| s.kit.is_some()) {
             "kit install failed"
+        } else {
+            "the first start failed"
         };
         return Err(removed(what, e));
     }

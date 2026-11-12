@@ -1634,14 +1634,13 @@ SETUP
     #[test]
     fn kits_without_a_fetch_wait_for_the_kits_section() {
         let mut t = host_mount_env(SHARED);
-        let v2 = fixture("tool-mixin");
-        t.sbt(&["create", "shell", ".", "--kit", &v2, "--kit", "./hm"])
+        t.sbt(&["create", "shell", ".", "--kit", "docker", "--kit", "./hm"])
             .unwrap();
         let out = t.stdout();
         assert!(
-            out.contains(&format!(
-                "\nKITS\n  ✓ {v2} — cached\n  ○ ./hm — building…\n  ✓ ./hm — ready\n\nIMAGE\n"
-            )),
+            out.contains(
+                "\nKITS\n  ✓ docker — cached\n  ○ ./hm — building…\n  ✓ ./hm — ready\n\nIMAGE\n"
+            ),
             "{out}"
         );
     }

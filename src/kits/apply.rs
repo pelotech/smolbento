@@ -1663,23 +1663,25 @@ mod tests {
             ("gemini", "GEMINI.md"),
             ("shell", "AGENTS.md"),
         ] {
-            // A v2 and a v3 mixin get the same layout.
-            let p = preset_plan(
-                agent,
-                vec![
-                    context_mixin("m2", Source::LocalV2("/k/m2".into()), "use m2"),
-                    context_mixin("m3", Source::LocalV3("/k/m3".into()), "use m3"),
-                ],
-            );
-            let mut req = in_workspace("/w/proj");
-            let (steps, _) = run(&p, &mut req, &mut Policy::default()).unwrap();
-            assert_eq!(
-                steps.context,
-                mixin_layout(&format!("/w/{file}"), &[("m2", "use m2"), ("m3", "use m3")]),
-                "{agent}"
-            );
-            // A preset's file follows from its name: no label.
-            assert_eq!(req.agent_file, None);
+            // v2 and v3 mixins get the same layout.
+            for source in [Source::LocalV2, Source::LocalV3] {
+                let p = preset_plan(
+                    agent,
+                    vec![
+                        context_mixin("m1", source("/k/m1".into()), "use m1"),
+                        context_mixin("m2", source("/k/m2".into()), "use m2"),
+                    ],
+                );
+                let mut req = in_workspace("/w/proj");
+                let (steps, _) = run(&p, &mut req, &mut Policy::default()).unwrap();
+                assert_eq!(
+                    steps.context,
+                    mixin_layout(&format!("/w/{file}"), &[("m1", "use m1"), ("m2", "use m2")]),
+                    "{agent}"
+                );
+                // A preset's file follows from its name: no label.
+                assert_eq!(req.agent_file, None);
+            }
         }
     }
 

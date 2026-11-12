@@ -617,4 +617,28 @@ mod tests {
         t.sbt(&FILES).unwrap();
         assert_eq!(t.stdout(), "Registered MCP server files\n");
     }
+
+    #[test]
+    fn a_failed_registration_without_kits_is_not_called_a_kit_install() {
+        let mut t = mcp_env(&[("SMOLBENTO_DOCKER", "false")]);
+        t.runner()
+            .fail(&["machine", "exec"], "COMMAND_FAILED", "boom");
+        let err = t.sbt_err(&["create", "claude", ".", "--static-mcp", "files"]);
+        assert_eq!(err, "the first start failed (the sandbox was removed)");
+    }
+
+    #[test]
+    fn a_bad_selection_fails_before_any_kit_is_loaded() {
+        let mut t = mcp_env(&[]);
+        let err = t.sbt_err(&[
+            "create",
+            "claude",
+            ".",
+            "--static-mcp",
+            "nope",
+            "--kit",
+            "./no-such-kit",
+        ]);
+        assert!(err.contains("no MCP server named 'nope'"), "{err}");
+    }
 }
