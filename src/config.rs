@@ -16,6 +16,10 @@ pub struct Paths {
 }
 
 impl Paths {
+    pub fn mcp_file(&self) -> PathBuf {
+        self.config.join("mcp.toml")
+    }
+
     pub fn policy_file(&self) -> PathBuf {
         self.config.join("policy.toml")
     }
