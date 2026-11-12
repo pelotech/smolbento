@@ -225,6 +225,37 @@ pub fn prepare_create<R: Runner>(
         let preset = kits.is_none_or(|p| crate::kits::apply::is_preset(&p.workload));
         sandbox::env::apply(req, preset)?;
     }
+    // `--static-mcp`: checked here, before the policy is saved or smolvm creates anything.
+    let attachment = match &req.mcp {
+        // A workload kit named like a preset isn't that agent.
+        Some(selection) => {
+            let preset = kits.is_none_or(|p| crate::kits::apply::is_preset(&p.workload));
+            let agent = if preset { req.agent.as_str() } else { "" };
+            let global = crate::secrets::scope_for(None);
+            let attachment = crate::mcp::attach(
+                &crate::mcp::McpFile::load(&ctx.paths)?,
+                selection,
+                agent,
+                &|secret| {
+                    secrets
+                        .secrets
+                        .iter()
+                        .any(|e| e.service == secret && e.scope == global)
+                },
+            )
+            .map_err(|e| {
+                match (preset, e.to_string().contains("isn't supported for agent")) {
+                    (false, true) => anyhow::anyhow!(
+                        "--static-mcp isn't supported for a workload kit ({}) yet",
+                        req.agent
+                    ),
+                    _ => e,
+                }
+            })?;
+            Some(attachment)
+        }
+        None => None,
+    };
     let mut added = Vec::new();
     let mut first_start = None;
     if let Some(plan) = kits {
@@ -245,6 +276,46 @@ pub fn prepare_create<R: Runner>(
             rule_ids: ids,
             agent_backing: Some(crate::ssh_agent::filter::Backing::new(&ctx.paths, &ctx.env)),
         });
+    }
+    if let Some(mcp) = attachment {
+        for host in &mcp.hosts {
+            let id = policy.add_rule(
+                Some(&req.name),
+                crate::policy::Decision::Allow,
+                host,
+                crate::policy::MCP_VIA,
+                None,
+                None,
+            )?;
+            if !added.contains(&id) {
+                added.push(id);
+            }
+        }
+        for c in &mcp.credentials {
+            req.credential_hosts.extend(c.hosts.iter().cloned());
+            req.credential_env.push(c.env_var.clone());
+        }
+        req.credential_hosts.sort();
+        req.credential_hosts.dedup();
+        req.credential_env.sort();
+        req.credential_env.dedup();
+        req.credentials.extend(mcp.credentials);
+        req.credential_services.extend(mcp.credential_services);
+        req.mcp_servers = Some(mcp.names);
+        if !mcp.steps.is_empty() {
+            // After the kits' install hooks. A sandbox without kits gets a first start for these
+            // steps alone.
+            first_start
+                .get_or_insert_with(|| sandbox::KitFirstStart {
+                    steps: Default::default(),
+                    restart_without: Vec::new(),
+                    rule_ids: Vec::new(),
+                    agent_backing: None,
+                })
+                .steps
+                .install
+                .extend(mcp.steps);
+        }
     }
     if !denies.is_empty() {
         added.extend(crate::policy::notes::add_create_denies(

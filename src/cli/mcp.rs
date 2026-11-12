@@ -306,6 +306,158 @@ mod tests {
         );
     }
 
+    /// `claude-proj` can be created, with `linear` (a header secret) and `files` registered.
+    fn mcp_env(settings: &[(&str, &str)]) -> TestEnv {
+        let mut t = test_env(settings);
+        t.sbt(&LINEAR).unwrap();
+        t.sbt(&FILES).unwrap();
+        t.sbt(&["secret", "set", "mcp:linear:api-key", "-t", "s3cr3t-value"])
+            .unwrap();
+        t.stdout();
+        creatable_as(&t, "claude-proj");
+        t
+    }
+
+    #[test]
+    fn static_mcp_adds_rules_credentials_and_steps() {
+        let mut t = mcp_env(&[]);
+        t.sbt(&["create", "claude", ".", "--static-mcp", "linear,files"])
+            .unwrap();
+        let create = t.calls_of("machine create").remove(0);
+        for want in [
+            " --credential mcp_linear_api_key=SBX_MCP_LINEAR_API_KEY@mcp.linear.app ",
+            " --label sbx.mcp=linear,files ",
+            " --label sbx.credential-service.SBX_MCP_LINEAR_API_KEY=mcp:linear:api-key ",
+            "mcp.linear.app",
+        ] {
+            assert!(create.contains(want), "{want}: {create}");
+        }
+        let execs = t.calls_of("machine exec");
+        for script in [
+            "claude mcp add --transport sse --scope user 'linear' 'https://mcp.linear.app/sse' \
+             --header \"Authorization: Bearer ${SBX_MCP_LINEAR_API_KEY}\"",
+            "claude mcp add --scope user 'files' -- 'npx' '-y' 'srv'",
+        ] {
+            let call = execs
+                .iter()
+                .find(|l| l.ends_with(script))
+                .unwrap_or_else(|| panic!("no exec of {script} in {execs:#?}"));
+            assert!(call.contains(" -u agent "), "{call}");
+        }
+        // The value goes to `machine start` as env, and nowhere else.
+        assert!(
+            t.calls().iter().all(|l| !l.contains("s3cr3t-value")),
+            "{:#?}",
+            t.calls()
+        );
+        assert!(
+            t.runner()
+                .envs()
+                .iter()
+                .flatten()
+                .any(|(k, v)| k == "SBX_MCP_LINEAR_API_KEY" && v == "s3cr3t-value")
+        );
+        let policy = crate::policy::Policy::load(&t.ctx.paths).unwrap();
+        let rules = &policy.sandboxes["claude-proj"].rules;
+        let mcp: Vec<&crate::policy::Rule> =
+            rules.iter().filter(|r| r.created_via == "mcp").collect();
+        assert_eq!(mcp.len(), 1, "{rules:?}");
+        assert_eq!(mcp[0].resources, ["mcp.linear.app"]);
+        assert_eq!(mcp[0].source(), "mcp");
+    }
+
+    #[test]
+    fn static_mcp_without_kits_still_registers() {
+        let mut t = mcp_env(&[("SMOLBENTO_DOCKER", "false")]);
+        t.sbt(&["create", "claude", ".", "--static-mcp", "files"])
+            .unwrap();
+        let create = t.calls_of("machine create").remove(0);
+        assert!(!create.contains("sbx.kits"), "{create}");
+        assert!(
+            t.calls_of("machine exec")
+                .iter()
+                .any(|l| l.ends_with("claude mcp add --scope user 'files' -- 'npx' '-y' 'srv'")),
+            "{:#?}",
+            t.calls()
+        );
+    }
+
+    #[test]
+    fn static_mcp_none_records_an_empty_set() {
+        let mut t = mcp_env(&[]);
+        t.sbt(&["create", "claude", ".", "--static-mcp", "none"])
+            .unwrap();
+        let create = t.calls_of("machine create").remove(0);
+        assert!(create.contains(" --label sbx.mcp= "), "{create}");
+        assert!(!t.calls().iter().any(|l| l.contains("claude mcp add")));
+        // Without the flag there is no label at all.
+        let mut t = mcp_env(&[]);
+        t.sbt(&["create", "claude", "."]).unwrap();
+        assert!(!t.calls_of("machine create")[0].contains("sbx.mcp"));
+    }
+
+    #[test]
+    fn static_mcp_checks_fail_before_smolvm_creates_anything() {
+        for (args, want) in [
+            (
+                &["create", "claude", ".", "--static-mcp", "nope"][..],
+                "no MCP server named 'nope'",
+            ),
+            (
+                &[
+                    "create",
+                    "codex",
+                    ".",
+                    "--static-mcp",
+                    "files",
+                    "--name",
+                    "claude-proj",
+                ],
+                "--static-mcp isn't supported for agent codex yet",
+            ),
+        ] {
+            let mut t = mcp_env(&[]);
+            let err = t.sbt_err(args);
+            assert!(err.contains(want), "{err}");
+            assert!(!t.made("machine create"), "{:#?}", t.calls());
+            let policy = crate::policy::Policy::load(&t.ctx.paths).unwrap();
+            assert!(policy.sandboxes.is_empty(), "{policy:?}");
+        }
+        // The secret was never set.
+        let mut t = test_env(&[]);
+        t.sbt(&LINEAR).unwrap();
+        creatable_as(&t, "claude-proj");
+        let err = t.sbt_err(&["create", "claude", ".", "--static-mcp", "linear"]);
+        assert!(err.contains("needs the secret mcp:linear:api-key"), "{err}");
+        assert!(!t.made("machine create"));
+    }
+
+    #[test]
+    fn a_failed_create_drops_the_mcp_rules() {
+        let mut t = mcp_env(&[]);
+        t.runner()
+            .fail(&["machine", "start"], "SMOLVM_ERROR", "boom");
+        // Later registrations answer first: the name is free, the machine exists once created,
+        // and after the failed first start removed it smolvm no longer has it.
+        t.runner()
+            .fail(&["machine", "status"], "NOT_FOUND", "vm not found")
+            .once_ok(
+                &["machine", "status"],
+                &json("sbx-claude-proj", "created", "claude-proj"),
+            )
+            .once_fail(&["machine", "status"], "NOT_FOUND", "vm not found");
+        let err = t.sbt_err(&["create", "claude", ".", "--static-mcp", "linear"]);
+        assert!(err.contains("boom"), "{err}");
+        let policy = crate::policy::Policy::load(&t.ctx.paths).unwrap();
+        let left: Vec<_> = policy
+            .sandboxes
+            .values()
+            .flat_map(|s| &s.rules)
+            .filter(|r| r.created_via == "mcp")
+            .collect();
+        assert!(left.is_empty(), "{left:?}");
+    }
+
     #[test]
     fn an_empty_list_says_so() {
         let mut t = test_env(&[]);

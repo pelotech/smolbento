@@ -62,8 +62,8 @@ Options:
       --skills <SKILLS>
           Shared skills: off, readonly (store linked in read-only) or readwrite (store mounted over the agent's skills directory). Default: skills.defaultMode
 
-      --static-mcp <STATIC_MCP>
-          Static MCP servers (not implemented yet)
+      --static-mcp <SERVERS>
+          Registered MCP servers for the agent, comma-separated (see `sbt mcp`), or `none`
 
   -d, --detach
           Start the sandbox and leave it running

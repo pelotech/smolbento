@@ -348,15 +348,14 @@ mod tests {
         let err = t.sbt(&["move", "x", "--to", "cloud"]).unwrap_err();
         assert!(err.to_string().contains("Docker Cloud"));
         assert_eq!(exit_code(&err), 2);
-        let Some(Cmd::Run(run)) =
-            Cli::try_parse_from(["sbt", "run", "claude", "--static-mcp", "x"])
-                .unwrap()
-                .command
+        let Some(Cmd::Run(run)) = Cli::try_parse_from(["sbt", "run", "claude", "--ttl", "1h"])
+            .unwrap()
+            .command
         else {
             panic!("expected run");
         };
         let err = run.opts.check_supported().unwrap_err();
-        assert_eq!(err.to_string(), "--static-mcp is not implemented yet");
+        assert_eq!(err.to_string(), "--ttl is a Docker Cloud option");
         assert_eq!(exit_code(&err), 2);
     }
 

@@ -88,6 +88,10 @@ pub struct CreateRequest {
     /// created with `--from` in place of the image.
     pub template: Option<String>,
     pub template_pack: Option<PathBuf>,
+    /// The `--static-mcp` value as given; `provision` resolves it into `mcp_servers`.
+    pub mcp: Option<String>,
+    /// The registered MCP servers attached (the `sbx.mcp` label); `None` without the flag.
+    pub mcp_servers: Option<Vec<String>>,
 }
 
 impl CreateRequest {
@@ -141,6 +145,7 @@ pub fn meta(req: &CreateRequest) -> Meta {
             .filter(|_| !name::is_internal(&req.name)),
         skills: req.skills.as_ref().map(|s| s.label.clone()),
         template: req.template.clone(),
+        mcp: req.mcp_servers.clone(),
     }
 }
 

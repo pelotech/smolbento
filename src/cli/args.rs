@@ -439,8 +439,8 @@ pub struct SandboxOpts {
     /// the agent's skills directory). Default: skills.defaultMode
     #[arg(long)]
     pub skills: Option<String>,
-    /// Static MCP servers (not implemented yet)
-    #[arg(long = "static-mcp")]
+    /// Registered MCP servers for the agent, comma-separated (see `sbt mcp`), or `none`
+    #[arg(long = "static-mcp", value_name = "SERVERS")]
     pub static_mcp: Option<String>,
     #[arg(long = "allow-network", hide = true)]
     pub allow_network: Option<String>,
@@ -459,10 +459,6 @@ pub struct SandboxOpts {
 impl SandboxOpts {
     /// Rejects flags from later phases and Docker Cloud-only flags.
     pub fn check_supported(&self) -> Result<()> {
-        let pending = [(self.static_mcp.is_some(), "--static-mcp")];
-        if let Some((_, flag)) = pending.iter().find(|(set, _)| *set) {
-            return Err(Unsupported(format!("{flag} is not implemented yet")).into());
-        }
         let cloud = [
             (self.allow_network.is_some(), "--allow-network"),
             (self.image_ref.is_some(), "--image-ref"),

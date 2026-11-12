@@ -125,6 +125,7 @@ fn base_request<R: Runner>(
         memory_set: opts.memory.is_some(),
         host_mounts,
         skills_mode,
+        mcp: opts.static_mcp.clone(),
         ..Default::default()
     })
 }

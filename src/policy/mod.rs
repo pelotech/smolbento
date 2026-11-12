@@ -62,6 +62,8 @@ pub struct Rule {
     pub path: Option<String>,
 }
 
+/// `created_via` of the allow rule for a `--static-mcp` server's host.
+pub const MCP_VIA: &str = "mcp";
 /// `created_via` of a kit's runtime rules: `kit:<kit>`.
 pub const KIT_VIA: &str = "kit:";
 /// `created_via` of a kit's install-phase rules: `kit-install:<kit>`. Only the steps that run the
@@ -77,11 +79,13 @@ impl Rule {
             .filter_map(|x| rules::Resource::parse(x).ok())
     }
 
-    /// Where the rule came from: "kit" when a kit added it (runtime or install phase), else
-    /// "local".
+    /// Where the rule came from: "kit" when a kit added it (runtime or install phase), "mcp" for
+    /// a `--static-mcp` server's host, else "local".
     pub fn source(&self) -> &'static str {
         if self.created_via.starts_with(KIT_VIA) || self.is_kit_install() {
             "kit"
+        } else if self.created_via == MCP_VIA {
+            "mcp"
         } else {
             "local"
         }
