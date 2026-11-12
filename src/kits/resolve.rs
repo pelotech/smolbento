@@ -239,7 +239,7 @@ pub fn resolve_for(
         .collect();
 
     let mut merged = Merged {
-        env: merge_env(&all),
+        env: merge_env(&all, &kit_args),
         ..Default::default()
     };
     let mut env_map: BTreeMap<String, String> = merged.env.iter().cloned().collect();
@@ -461,14 +461,26 @@ fn check_names(workload: &Kit, mixins: &[Kit]) -> Result<()> {
     Ok(())
 }
 
-/// The kits' plain env vars in kit order; a later kit's value wins.
-fn merge_env(kits: &[Kit]) -> Vec<(String, String)> {
+/// The kits' env vars in kit order; a later kit's value wins. A kit's own are its plain ones (v2
+/// `environment.variables`), then each arg that declares `env:` and has a value (v3, as Docker's
+/// claude mixin exports `model` as `CLAUDE_MODEL`); a default counts as a value, an empty one too.
+fn merge_env(
+    kits: &[Kit],
+    kit_args: &BTreeMap<String, BTreeMap<String, String>>,
+) -> Vec<(String, String)> {
     let mut env: Vec<(String, String)> = Vec::new();
+    let mut set = |name: &String, value: &String| match env.iter_mut().find(|(n, _)| n == name) {
+        Some(e) => e.1 = value.clone(),
+        None => env.push((name.clone(), value.clone())),
+    };
     for k in kits {
         for (name, value) in &k.env {
-            match env.iter_mut().find(|(n, _)| n == name) {
-                Some(e) => e.1 = value.clone(),
-                None => env.push((name.clone(), value.clone())),
+            set(name, value);
+        }
+        let values = kit_args.get(&k.name);
+        for (arg, def) in &k.args {
+            if let (Some(name), Some(value)) = (&def.env, values.and_then(|v| v.get(arg))) {
+                set(name, value);
             }
         }
     }
@@ -1585,6 +1597,75 @@ mod tests {
         assert_eq!(p.merged.cpus.as_deref(), Some("4"));
         assert_eq!(p.merged.memory.as_deref(), Some("1g"));
         assert!(p.merged.git_identity && p.merged.long_running && p.merged.privileged);
+    }
+
+    #[test]
+    fn an_arg_with_env_is_exported_into_the_sandbox() {
+        // As Docker's claude mixin does with `model` -> CLAUDE_MODEL.
+        let arg = |env: Option<&str>, default: Option<&str>| ArgDef {
+            env: env.map(String::from),
+            default: default.map(String::from),
+            ..Default::default()
+        };
+        let mut w = workload("w");
+        w.env = vec![("CLAUDE_MODEL".into(), "from-env".into())];
+        w.args
+            .insert("model".into(), arg(Some("CLAUDE_MODEL"), Some("")));
+        w.args.insert("effort".into(), arg(Some("EFFORT"), None));
+        w.args.insert("plain".into(), arg(None, Some("p")));
+        let mut m = mixin("m");
+        m.args
+            .insert("region".into(), arg(Some("REGION"), Some("us")));
+        let v = ArgValues::parse(&[], &["model=opus".into()]).unwrap();
+        let p = resolve(w, vec![m.clone()], &v).unwrap();
+        // The arg's value replaces the same kit's plain env of that name; an arg with no value
+        // (`effort`) or no `env:` (`plain`) exports nothing.
+        assert_eq!(
+            p.merged.env,
+            [
+                ("CLAUDE_MODEL".into(), "opus".into()),
+                ("REGION".into(), "us".into())
+            ]
+        );
+        // A default counts as a value, an empty one included.
+        let mut w = workload("w");
+        w.args
+            .insert("model".into(), arg(Some("CLAUDE_MODEL"), Some("")));
+        let p = run(w, vec![]).unwrap();
+        assert_eq!(p.merged.env, [("CLAUDE_MODEL".into(), String::new())]);
+        // A later kit still overrides an earlier one.
+        let mut w = workload("w");
+        w.args
+            .insert("region".into(), arg(Some("REGION"), Some("eu")));
+        let p = run(w, vec![m]).unwrap();
+        assert_eq!(p.merged.env, [("REGION".into(), "us".into())]);
+    }
+
+    #[test]
+    fn the_claude_mixin_exports_its_model_arg() {
+        let text = std::fs::read_to_string(format!(
+            "{}/tests/fixtures/kits/v3/claude-mixin.yaml",
+            env!("CARGO_MANIFEST_DIR")
+        ))
+        .unwrap();
+        let mixin = crate::kits::v3::parse(
+            &text,
+            Source::LocalV3(std::path::PathBuf::from("/k/claude-mixin")),
+        )
+        .unwrap();
+        let name = mixin.name.clone();
+        let v = ArgValues::parse(&[], &["model=x".into()]).unwrap();
+        let mut w = workload("w");
+        // Whatever the mixin requires of its base.
+        w.provides = mixin.requires.clone();
+        let p = resolve(w, vec![mixin], &v).unwrap_or_else(|e| panic!("{name}: {e:#}"));
+        assert!(
+            p.merged
+                .env
+                .contains(&("CLAUDE_MODEL".to_string(), "x".to_string())),
+            "{:?}",
+            p.merged.env
+        );
     }
 
     #[test]
