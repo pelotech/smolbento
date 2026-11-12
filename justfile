@@ -38,7 +38,7 @@ release-build target builder:
         rust_ver=$(rustc -V | cut -d' ' -f2)
         docker run --rm -v "$PWD":/io -w /io -e MACOSX_DEPLOYMENT_TARGET=13.0 \
             -e RUSTUP_TOOLCHAIN="$rust_ver" \
-            ghcr.io/rust-cross/cargo-zigbuild:0.23.4 \
+            ghcr.io/rust-cross/cargo-zigbuild:0.23.4@sha256:d8313491ec5798de0633fdc1c5753761bff79967bea69076020dc78121b2cca8 \
             sh -c "rustup toolchain install $rust_ver --profile minimal --no-self-update -t {{target}} && cargo zigbuild --locked --release --target $zig_target"
         sudo chown -R "$(id -u):$(id -g)" target
         case "{{target}}" in *-apple-darwin)

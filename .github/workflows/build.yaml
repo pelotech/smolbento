@@ -64,6 +64,34 @@ jobs:
       - name: Test
         run: just test
 
+  # The release binaries are cross-compiled in a container, for targets the tests never build
+  # (macOS among them). Building them here finds a break before a release is tagged; nothing is
+  # signed or uploaded.
+  release-build:
+    needs: changes
+    if: ${{ (needs.changes.outputs.code == 'true' && github.event_name == 'pull_request') || github.event_name == 'workflow_dispatch' }}
+    strategy:
+      fail-fast: false
+      matrix:
+        target:
+          - x86_64-unknown-linux-gnu
+          - aarch64-unknown-linux-gnu
+          - aarch64-apple-darwin
+    runs-on: ubuntu-latest
+    timeout-minutes: 45
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      - uses: $/.github/actions/nix-devshell
+        with:
+          gh-token: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: Build
+        run: just release-build "${TARGET}" zigbuild
+        env:
+          TARGET: ${{ matrix.target }}
+
   test-macos:
     if: ${{ github.event_name == 'workflow_dispatch' && inputs.macos }}
     runs-on: macos-latest
