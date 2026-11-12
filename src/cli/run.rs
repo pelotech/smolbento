@@ -103,6 +103,10 @@ pub fn run<R: Runner>(ctx: &mut Ctx<R>, a: &RunArgs) -> Result<i32> {
                 .collect(),
         ),
     };
+    // A closed terminal must not end this process once the sandbox may be running: it has the
+    // cleanup below to do. The agent still ends with the terminal (`interactive` gives it the
+    // default handling back).
+    let _hangup = crate::smolvm::IgnoreSignals::new(&[libc::SIGHUP]);
     provision::ensure_running(ctx, &mut sb)?;
 
     let sessions = ctx.paths.sessions();
@@ -114,13 +118,8 @@ pub fn run<R: Runner>(ctx: &mut Ctx<R>, a: &RunArgs) -> Result<i32> {
 
     // Whatever `attach` returns, the sandbox is cleaned up below: nothing after the start may
     // return early and leave it running, or skip `--rm`.
+    // Closing the terminal ends the agent, not this process, which has the cleanup still to do.
     let result = attach(ctx, a, &sb, command);
-
-    // After a hang-up the terminal is gone and a write to stderr fails: a warning must not
-    // panic and cut the cleanup short.
-    let warn = |message: String| {
-        let _ = writeln!(std::io::stderr(), "warning: {message}");
-    };
 
     // Fetch before `--rm` deletes the sandbox, and while it still runs for `_upload-pack`.
     if fetch_on_exit(ctx, &sb)
@@ -286,6 +285,12 @@ fn ignored_mount_warning(a: &RunArgs, name: &str) -> Option<String> {
     })
 }
 
+/// A warning from the cleanup after the agent exits. After a hang-up the terminal is gone and a
+/// write to stderr fails; `eprintln!` would panic and cut the cleanup short.
+fn warn(message: String) {
+    let _ = writeln!(std::io::stderr(), "warning: {message}");
+}
+
 /// A bad setting value only skips the fetch: the stop or `--rm` and the agent's status still apply.
 fn fetch_on_exit<R: Runner>(ctx: &Ctx<R>, sb: &Sandbox) -> bool {
     sb.meta.clone_repo.is_some()
@@ -293,7 +298,7 @@ fn fetch_on_exit<R: Runner>(ctx: &Ctx<R>, sb: &Sandbox) -> bool {
             .settings
             .bool("clone.fetch-on-exit")
             .unwrap_or_else(|e| {
-                eprintln!("warning: not fetching the agent's commits: {e:#}");
+                warn(format!("not fetching the agent's commits: {e:#}"));
                 false
             })
 }

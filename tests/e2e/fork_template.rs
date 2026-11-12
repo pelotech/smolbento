@@ -35,12 +35,7 @@ pub(crate) fn fork_round_trip() {
         "printf real-secret-xyz",
     ]);
 
-    // As in clone_round_trip: a clone sandbox needs git and the agent user from its first start.
-    let template = e.git_template();
-    e.ok(&[
-        "create", "--clone", "shell", ws, "--name", &e.name, "-t", &template, "--pull", "never",
-        "--cpus", "1", "-m", "1g",
-    ]);
+    e.create_clone();
 
     let guest_commit = |sb: &str, msg: &str| {
         e.ok(&[

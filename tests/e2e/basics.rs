@@ -251,6 +251,35 @@ pub(crate) fn guest_root(sb: &str, script: &str) {
     );
 }
 
+/// A create whose first start fails removes the sandbox, and the remote `--clone` added with it:
+/// Alpine has no `agent` user or git, so the clone inside the VM fails.
+#[test]
+#[ignore = "boots real VMs; run with `just e2e`"]
+pub(crate) fn a_failed_clone_create_removes_the_sandbox() {
+    let e = E2e::new("clonefail");
+    let ws = e.workspace();
+    let ws = ws.to_str().unwrap();
+    let remote = format!("sandbox-{}", e.name);
+    std::fs::write(e.workspace().join("README"), "host\n").unwrap();
+    e.git_ok(&["init", "-q", "-b", "main"]);
+    e.git_ok(&["add", "README"]);
+    e.git_ok(&["commit", "-q", "-m", "host commit"]);
+
+    let out = e.sbt(&[
+        "create", "--clone", "shell", ws, "--name", &e.name, "-t", "alpine", "--cpus", "1", "-m",
+        "1g",
+    ]);
+    let err = String::from_utf8_lossy(&out.stderr);
+    assert!(!out.status.success(), "{err}");
+    assert!(err.contains("cloning the repo in the sandbox"), "{err}");
+    assert!(err.contains("the sandbox was removed"), "{err}");
+    assert!(!e.ok(&["ls", "-q"]).lines().any(|n| n == e.name), "removed");
+    assert!(
+        !e.git_ok(&["remote"]).lines().any(|r| r == remote),
+        "remote dropped with the sandbox"
+    );
+}
+
 #[test]
 #[ignore = "boots real VMs; run with `just e2e`"]
 pub(crate) fn clone_round_trip() {
@@ -279,31 +308,7 @@ pub(crate) fn clone_round_trip() {
         "printf real-secret-xyz",
     ]);
 
-    // Alpine has no `agent` user or git, so the first-start clone fails. The sandbox is removed,
-    // and with it the remote the create added.
-    let out = e.sbt(&[
-        "create", "--clone", "shell", ws, "--name", &e.name, "-t", "alpine", "--cpus", "1", "-m",
-        "1g",
-    ]);
-    let err = String::from_utf8_lossy(&out.stderr);
-    assert!(
-        !out.status.success(),
-        "create without git in the image fails"
-    );
-    assert!(err.contains("cloning the repo in the sandbox"), "{err}");
-    assert!(err.contains("the sandbox was removed"), "{err}");
-    assert!(!e.ok(&["ls", "-q"]).lines().any(|n| n == e.name), "removed");
-    assert!(
-        !e.git_ok(&["remote"]).lines().any(|r| r == remote),
-        "remote dropped with the sandbox"
-    );
-
-    // The same command works once the image has git and the agent user.
-    let template = e.git_template();
-    e.ok(&[
-        "create", "--clone", "shell", ws, "--name", &e.name, "-t", &template, "--pull", "never",
-        "--cpus", "1", "-m", "1g",
-    ]);
+    e.create_clone();
     assert!(
         e.git_ok(&["remote"]).lines().any(|r| r == remote),
         "remote added"

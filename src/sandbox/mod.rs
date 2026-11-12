@@ -325,7 +325,8 @@ pub fn ensure_running<R: Runner>(
 
 /// Creates and starts a new sandbox (the caller checked the name is free), then runs its kit
 /// steps. `drop_install_rules` removes the install-phase rules from the policy and returns this
-/// sandbox's network without them. A failing kit step removes the sandbox (spec Decision 6).
+/// sandbox's network without them. A failed first start (the start itself, its setup, or a kit
+/// step) removes the sandbox.
 /// `on` hears what the start and the kit steps are doing.
 pub fn create<R: Runner>(
     vm: &Smolvm<R>,
@@ -346,7 +347,7 @@ pub fn create<R: Runner>(
     let removed = |what: &str, e: anyhow::Error| match vm.delete(&sb.machine) {
         Ok(()) => e.context(format!("{what} (the sandbox was removed)")),
         Err(d) => anyhow!(
-            "{what}: {e:#}\nremoving the sandbox failed too ({d:#}); remove it with `sbt rm {}`",
+            "{what}: {e:#}\nremoving the sandbox failed too ({d:#}); remove it with `sbt rm -f {}`",
             sb.name()
         ),
     };
