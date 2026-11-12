@@ -9,7 +9,7 @@ use std::time::{Duration, UNIX_EPOCH};
 use anyhow::{Context, Result};
 use serde::{Deserialize, Serialize};
 
-use super::plan::{ENV, Line, Marker, Resource};
+use super::plan::{Line, Marker, Resource, When};
 use crate::config::{self, Paths};
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
@@ -18,6 +18,14 @@ pub struct Record {
     pub files: Vec<String>,
     pub approved_at: String,
     pub approved: Vec<Resource>,
+}
+
+impl Record {
+    /// The record without the resources of `section`.
+    pub fn without(mut self, section: &str) -> Record {
+        self.approved.retain(|r| r.section != section);
+        self
+    }
 }
 
 /// Why applying has to ask.
@@ -42,7 +50,12 @@ fn file_names(files: &[PathBuf]) -> Vec<String> {
 /// The record for sandbox `name`. A missing or unreadable one is no approval.
 pub fn load(paths: &Paths, name: &str) -> Option<Record> {
     let text = std::fs::read_to_string(path(paths, name)).ok()?;
-    toml::from_str(&text).ok()
+    let mut record: Record = toml::from_str(&text).ok()?;
+    // Records written before resources had an id: it was the name.
+    for r in record.approved.iter_mut().filter(|r| r.id.is_empty()) {
+        r.id = r.name.clone();
+    }
+    Some(record)
 }
 
 /// Records `resources` as approved, at `now` (seconds since the epoch).
@@ -79,20 +92,18 @@ pub fn forget(paths: &Paths, name: &str) -> Result<()> {
     }
 }
 
-/// Whether applying `current` (from `files`) has to ask. `exists` says the sandbox does: the
-/// file's host commands are taken up only when it is created (an existing sandbox keeps the
-/// ones stored at its create).
+/// Whether applying `current` (from `files`) has to ask. As in sbx, a file that declares host
+/// commands asks on every invocation, whether or not they run in it.
 pub fn need(
     record: Option<&Record>,
     files: &[PathBuf],
     current: &[Resource],
-    exists: bool,
     remember_host_commands: bool,
 ) -> Need {
     let approved = record.is_some_and(|r| r.files == file_names(files) && r.approved == current);
     if !approved {
         Need::Changed
-    } else if !exists && !remember_host_commands && current.iter().any(|r| r.host_command) {
+    } else if !remember_host_commands && current.iter().any(|r| r.host_command) {
         Need::HostCommands
     } else {
         Need::No
@@ -111,50 +122,73 @@ pub fn lines(record: Option<&Record>, current: &[Resource], exists: bool) -> Vec
 }
 
 fn find<'a>(list: &'a [Resource], r: &Resource) -> Option<&'a Resource> {
-    list.iter()
-        .find(|o| o.section == r.section && o.name == r.name)
+    list.iter().find(|o| o.section == r.section && o.id == r.id)
 }
 
-/// Everything is to add, except paths on the host: those are there already, so one is either
-/// approved (and not listed) or needs approval.
+const PRESENT: &str = "present, not recorded as applied, needs your approval";
+const AT_REMOVAL: &str = "waiting for this environment's removal, needs your approval";
+
+fn noted(marker: Marker, r: &Resource, note: &'static str) -> Line {
+    Line {
+        note: Some(note),
+        ..Line::new(marker, r)
+    }
+}
+
+/// Everything is to add, with two exceptions. A path on the host is there already and a removal
+/// command runs later, so each is either approved (and not listed) or needs approval. An
+/// approved command of every run is to run again.
 fn before_create(approved: &[Resource], current: &[Resource]) -> Vec<Line> {
     current
         .iter()
         .filter_map(|r| {
-            if !r.host_path {
-                Some(Line::new(Marker::Add, r))
-            } else if find(approved, r) == Some(r) {
+            let same = find(approved, r) == Some(r);
+            let later = r.host_path || r.when == When::Removal;
+            if later && same {
                 None
+            } else if r.when == When::Removal {
+                Some(noted(Marker::Approve, r, AT_REMOVAL))
+            } else if r.host_path {
+                Some(noted(Marker::Approve, r, PRESENT))
+            } else if same && r.host_command && r.when == When::EveryRun {
+                Some(Line::new(Marker::Run, r))
             } else {
-                Some(Line {
-                    note: Some("present, not recorded as applied, needs your approval"),
-                    ..Line::new(Marker::Approve, r)
-                })
+                Some(Line::new(Marker::Add, r))
             }
         })
         .collect()
 }
 
-/// What was added, changed or removed since the approval. Only `env` reaches a sandbox that
-/// exists, so the other lines say they wait.
+/// What was added, changed or removed since the approval, plus what every run applies again.
+/// A change that only a create applies says it waits.
 fn differences(approved: &[Resource], current: &[Resource]) -> Vec<Line> {
     let waits = |r: &Resource, line: Line| Line {
-        note: (r.section != ENV).then_some("waits for the next create"),
+        note: line
+            .note
+            .or((r.when == When::Create).then_some("waits for the next create")),
         ..line
     };
     let mut out = Vec::new();
     for r in current {
-        match find(approved, r) {
-            Some(a) if a == r => {}
-            Some(a) => out.push(waits(
-                r,
-                Line {
-                    fields: changed_fields(a, r),
-                    ..Line::new(Marker::Change, r)
-                },
-            )),
-            None => out.push(waits(r, Line::new(Marker::Add, r))),
-        }
+        let old = find(approved, r);
+        let same = old == Some(r);
+        let changed = |marker| Line {
+            fields: old.map_or_else(|| Line::new(marker, r).fields, |a| changed_fields(a, r)),
+            ..Line::new(marker, r)
+        };
+        let line = match r.when {
+            // The launch command: applied by every run, so listed every time (as sbx does).
+            When::EveryRun if !r.host_command => Line::new(Marker::Add, r),
+            When::EveryRun if same => Line::new(Marker::Run, r),
+            When::Removal if !same => Line {
+                note: Some(AT_REMOVAL),
+                ..changed(Marker::Approve)
+            },
+            _ if same => continue,
+            _ if old.is_some() => changed(Marker::Change),
+            _ => Line::new(Marker::Add, r),
+        };
+        out.push(waits(r, line));
     }
     let gone = approved.iter().filter(|a| find(current, a).is_none());
     out.extend(gone.map(|a| waits(a, Line::new(Marker::Destroy, a))));
@@ -162,6 +196,7 @@ fn differences(approved: &[Resource], current: &[Resource]) -> Vec<Line> {
 }
 
 /// Each field whose value differs, as `label: old -> new`; a side without the field is empty.
+/// A resource whose name changed (a lifecycle command's text) says so first.
 fn changed_fields(old: &Resource, new: &Resource) -> Vec<String> {
     let value = |r: &Resource, label: &str| {
         r.fields
@@ -176,10 +211,21 @@ fn changed_fields(old: &Resource, new: &Resource) -> Vec<String> {
             labels.push(l);
         }
     }
-    labels
+    let command = |r: &'_ Resource| {
+        r.name
+            .split_once(": ")
+            .map_or(r.name.clone(), |(_, c)| c.to_string())
+    };
+    let renamed =
+        (old.name != new.name).then(|| format!("command: {} -> {}", command(old), command(new)));
+    renamed
         .into_iter()
-        .filter(|l| value(old, l) != value(new, l))
-        .map(|l| format!("{l}: {} -> {}", value(old, l), value(new, l)))
+        .chain(
+            labels
+                .into_iter()
+                .filter(|l| value(old, l) != value(new, l))
+                .map(|l| format!("{l}: {} -> {}", value(old, l), value(new, l))),
+        )
         .collect()
 }
 
@@ -207,11 +253,18 @@ mod tests {
         }
     }
 
+    fn env(name: &str, value: &str) -> Resource {
+        Resource {
+            when: When::Live,
+            ..resource("ENV", name, &[("value", value)])
+        }
+    }
+
     fn current() -> Vec<Resource> {
         vec![
             resource("SANDBOX", "web", &[("agent", "claude")]),
             workspace(),
-            resource("ENV", "GOFLAGS", &[("value", "-mod=mod")]),
+            env("GOFLAGS", "-mod=mod"),
             resource("PORTS", "8080/tcp", &[("host", "18080")]),
         ]
     }
@@ -226,17 +279,14 @@ mod tests {
 
     #[test]
     fn no_record_needs_approval() {
-        assert_eq!(
-            need(None, &files(), &current(), false, false),
-            Need::Changed
-        );
-        assert_eq!(need(None, &files(), &current(), true, true), Need::Changed);
+        assert_eq!(need(None, &files(), &current(), false), Need::Changed);
+        assert_eq!(need(None, &files(), &current(), true), Need::Changed);
     }
 
     #[test]
     fn an_equal_record_needs_none() {
         let r = record(current());
-        assert_eq!(need(Some(&r), &files(), &current(), false, false), Need::No);
+        assert_eq!(need(Some(&r), &files(), &current(), false), Need::No);
     }
 
     #[test]
@@ -244,30 +294,119 @@ mod tests {
         let r = record(current());
         let mut changed = current();
         changed[2].fields[0].1 = "-mod=readonly".into();
-        assert_eq!(
-            need(Some(&r), &files(), &changed, true, false),
-            Need::Changed
-        );
+        assert_eq!(need(Some(&r), &files(), &changed, false), Need::Changed);
         let other = vec![
             PathBuf::from("/p/sbxenv.yaml"),
             PathBuf::from("/p/local.yaml"),
         ];
+        assert_eq!(need(Some(&r), &other, &current(), false), Need::Changed);
+    }
+
+    #[test]
+    fn host_commands_ask_every_time_unless_remembered() {
+        let mut with_command = current();
+        with_command.push(command());
+        let r = record(with_command.clone());
         assert_eq!(
-            need(Some(&r), &other, &current(), true, false),
-            Need::Changed
+            need(Some(&r), &files(), &with_command, false),
+            Need::HostCommands
+        );
+        assert_eq!(need(Some(&r), &files(), &with_command, true), Need::No);
+    }
+
+    fn lifecycle(phase: &str, i: usize, command: &str, when: When) -> Resource {
+        Resource {
+            id: format!("{phase}[{i}]"),
+            when,
+            host_command: true,
+            ..resource(
+                "LIFECYCLE",
+                &format!("{phase}: {command}"),
+                &[("workdir", "/p")],
+            )
+        }
+    }
+
+    fn launch() -> Resource {
+        Resource {
+            when: When::EveryRun,
+            ..resource("AGENT LAUNCH", "cmd", &[("argv", "x")])
+        }
+    }
+
+    fn signs(lines: &[Line]) -> String {
+        lines.iter().map(|l| l.marker.sign()).collect()
+    }
+
+    #[test]
+    fn lifecycle_and_launch_before_a_create() {
+        let all = vec![
+            launch(),
+            lifecycle("initialize", 0, "a", When::EveryRun),
+            lifecycle("postCreate", 0, "b", When::Create),
+            lifecycle("preRemove", 0, "c", When::Removal),
+        ];
+        let fresh = lines(None, &all, false);
+        assert_eq!(signs(&fresh), "+++!");
+        assert_eq!(
+            fresh[3].note,
+            Some("waiting for this environment's removal, needs your approval")
+        );
+        // Approved: the every-run command runs again, the removal command is not listed.
+        assert_eq!(
+            signs(&lines(Some(&record(all.clone())), &all, false)),
+            "+>+"
         );
     }
 
     #[test]
-    fn host_commands_ask_only_before_a_create_and_without_the_setting() {
-        let mut with_command = current();
-        with_command.push(command());
-        let r = record(with_command.clone());
-        let ask = |exists, remember| need(Some(&r), &files(), &with_command, exists, remember);
-        assert_eq!(ask(false, false), Need::HostCommands);
-        assert_eq!(ask(false, true), Need::No);
-        assert_eq!(ask(true, false), Need::No);
-        assert_eq!(ask(true, true), Need::No);
+    fn lifecycle_and_launch_for_an_existing_sandbox() {
+        let all = vec![
+            launch(),
+            lifecycle("initialize", 0, "a", When::EveryRun),
+            lifecycle("postCreate", 0, "b", When::Create),
+            lifecycle("preRemove", 0, "c", When::Removal),
+        ];
+        let r = record(all.clone());
+        // Unchanged: the launch is applied again, `initialize` runs again.
+        let same = lines(Some(&r), &all, true);
+        assert_eq!(signs(&same), "+>");
+        assert_eq!(same[0].note, None);
+
+        let changed = vec![
+            launch(),
+            lifecycle("initialize", 0, "a2", When::EveryRun),
+            lifecycle("postCreate", 0, "b2", When::Create),
+            lifecycle("preRemove", 0, "c2", When::Removal),
+        ];
+        let lines = lines(Some(&r), &changed, true);
+        assert_eq!(signs(&lines), "+~~!");
+        assert_eq!(lines[1].resource.name, "initialize: a2");
+        assert_eq!(lines[1].fields, ["command: a -> a2"]);
+        assert_eq!(lines[1].note, None, "it runs on this invocation");
+        assert_eq!(lines[2].note, Some("waits for the next create"));
+        assert_eq!(
+            lines[3].note,
+            Some("waiting for this environment's removal, needs your approval")
+        );
+        assert_eq!(lines[3].fields, ["command: c -> c2"]);
+    }
+
+    #[test]
+    fn a_record_without_ids_still_matches() {
+        let (_d, paths) = test_paths();
+        save(&paths, "web", &files(), &current(), 0).unwrap();
+        let path = paths.env_records().join("web.toml");
+        let text = std::fs::read_to_string(&path).unwrap();
+        let old: String = text
+            .lines()
+            .filter(|l| !l.starts_with("id = "))
+            .map(|l| format!("{l}\n"))
+            .collect();
+        assert_ne!(old, text);
+        std::fs::write(&path, old).unwrap();
+        let r = load(&paths, "web").unwrap();
+        assert_eq!(need(Some(&r), &files(), &current(), false), Need::No);
     }
 
     #[test]
@@ -328,7 +467,7 @@ mod tests {
         changed[2].fields[0].1 = "-mod=readonly".into();
         changed[3].fields[0].1 = "18081".into();
         changed.remove(1);
-        changed.push(resource("ENV", "NEW", &[("value", "1")]));
+        changed.push(env("NEW", "1"));
         let lines = lines(Some(&r), &changed, true);
         let shown: Vec<(char, &str, Option<&str>, &[String])> = lines
             .iter()

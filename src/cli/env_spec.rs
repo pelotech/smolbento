@@ -8,7 +8,7 @@ use super::SandboxOpts;
 use crate::agents;
 use crate::env::file::{EnvFile, KitEntry, PinnedKit, Port, SecretDecl, Workspace};
 use crate::env::load::Loaded;
-use crate::env::plan::{self, HOST_COMMANDS, Line, Marker, Resource, render};
+use crate::env::plan::{HOST_COMMANDS, Line, Marker, Resource, When, render};
 use crate::sandbox::{name as sandbox_name, options};
 use crate::secrets::SecretsFile;
 use crate::util::sha256_digest;
@@ -257,7 +257,10 @@ pub fn resources(loaded: &Loaded, spec: &EnvSpec) -> Vec<Resource> {
     }
 
     for (k, v) in &spec.env {
-        out.push(Resource::new(plan::ENV, k, vec![field("value", v)]));
+        out.push(Resource {
+            when: When::Live,
+            ..Resource::new("ENV", k, vec![field("value", v)])
+        });
     }
 
     for (service, s) in &spec.secrets {

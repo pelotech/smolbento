@@ -62,7 +62,6 @@ fn planned<R: Runner>(
         record.as_ref(),
         &loaded.files,
         &resources,
-        exists,
         ctx.settings.bool("env.rememberHostCommands")?,
     );
     Ok(Planned {
@@ -1039,24 +1038,23 @@ mod tests {
     }
 
     #[test]
-    fn unchanged_host_commands_ask_before_a_create_unless_remembered() {
+    fn unchanged_host_commands_ask_every_time_unless_remembered() {
         let mut t = approved(&format!("{FILE}{COMMAND_SECRET}"));
-        // Attaching runs no command: nothing to ask.
-        t.sbt(&["env", "run", "-d"]).unwrap();
-        t.stdout();
-
-        missing_then_created(&t, 2);
         let file = t.ctx.cwd.join("sbxenv.yaml").display().to_string();
-        assert_eq!(
-            t.sbt_err(&["env", "create"]),
+        let refusal = |cmd: &str| {
             format!(
                 "{file} declares commands that run on this machine, which must be approved on \
                  every invocation; approve the plan by running it in a terminal or with --force \
                  (-f), or remember approval until the plan changes with the setting below\n  \
-                 try: sbt env create --force\n   \
+                 try: sbt env {cmd} --force\n   \
                  or: sbt settings set env.rememberHostCommands true"
             )
-        );
+        };
+        // As in sbx: also when attaching, where the secret's command doesn't run again.
+        assert_eq!(t.sbt_err(&["env", "run", "-d"]), refusal("run -d"));
+        t.stdout();
+        missing_then_created(&t, 2);
+        assert_eq!(t.sbt_err(&["env", "create"]), refusal("create"));
         let out = t.stdout();
         assert!(
             out.ends_with(
@@ -1071,6 +1069,8 @@ mod tests {
             .settings
             .set("env.rememberHostCommands", "true")
             .unwrap();
+        existing(&t, "running");
+        t.sbt(&["env", "run", "-d"]).unwrap();
         missing_then_created(&t, 2);
         t.sbt(&["env", "create"]).unwrap();
     }
@@ -1107,6 +1107,10 @@ mod tests {
         const IP: &str = "    hostIP: 127.0.0.1\n";
         for changed in [file(false, IP), file(true, "")] {
             let mut t = approved(&file(true, IP));
+            t.ctx
+                .settings
+                .set("env.rememberHostCommands", "true")
+                .unwrap();
             t.sbt(&["env", "run", "-d"]).unwrap();
             std::fs::write(t.ctx.cwd.join("sbxenv.yaml"), changed).unwrap();
             let err = t.sbt_err(&["env", "run", "-d"]);
