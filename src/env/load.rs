@@ -288,15 +288,21 @@ fn check_merged(f: &EnvFile, first: &str) -> Result<()> {
                     bail!("{at}: command is empty");
                 }
                 if let Some(t) = &c.timeout
-                    && humantime::parse_duration(t).is_err()
+                    && let Err(e) = super::lifecycle::parse_timeout(t)
                 {
-                    bail!("{at}: timeout \"{t}\" isn't a duration like 90s or 5m");
+                    bail!("{at}: invalid timeout \"{t}\": {e}");
                 }
             }
         }
     }
+    let mut hosts: Vec<String> = Vec::new();
     for (host, r) in f.registries.iter().flatten() {
         let at = format!("invalid {first}: registry \"{host}\"");
+        let lower = host.to_ascii_lowercase();
+        if hosts.contains(&lower) {
+            bail!("{at}: the host is listed twice (hosts don't differ by case)");
+        }
+        hosts.push(lower);
         if host.is_empty() || host.contains("://") || host.contains(['/', '@', ' ']) {
             bail!("{at}: use a bare registry host like ghcr.io (no scheme or path)");
         }
@@ -827,11 +833,15 @@ mod tests {
             ),
             (
                 "lifecycle:\n  preRemove:\n    - command: x\n      timeout: soon\n",
-                "lifecycle.preRemove[0]: timeout \"soon\" isn't a duration like 90s or 5m",
+                "lifecycle.preRemove[0]: invalid timeout \"soon\": invalid duration \"soon\"",
             ),
             (
                 "registries:\n  https://ghcr.io:\n    secret: {value: x}\n",
                 "registry \"https://ghcr.io\": use a bare registry host like ghcr.io",
+            ),
+            (
+                "registries:\n  ghcr.io:\n    secret: {value: x}\n  GHCR.io:\n    secret: {value: y}\n",
+                "the host is listed twice",
             ),
             (
                 "registries:\n  ghcr.io:\n    secret: {value: x, command: y}\n",

@@ -1389,16 +1389,25 @@ mod tests {
         // Until the `env rm`, the record was untouched.
         assert!(before.unwrap().contains("initialize[0]"));
 
-        // A yes given with the flag keeps the approved commands in the record.
+        // A yes given with the flag approves what was shown and nothing else: a command changed
+        // meanwhile stays unapproved, and the record keeps the one approved before.
         let mut t = approved(&lifecycle_file(""));
-        let changed = lifecycle_file("").replace("X: one", "X: two");
+        let changed = lifecycle_file("")
+            .replace("X: one", "X: two")
+            .replace("echo init >> log", "echo CHANGED >> log");
         std::fs::write(t.ctx.cwd.join("sbxenv.yaml"), changed).unwrap();
         t.answer("y\n");
         t.sbt(&["env", "run", "-d", "--skip-host-commands"])
             .unwrap();
+        assert!(!t.stdout().contains("CHANGED"), "the plan left it out");
         let record = record(&t).unwrap();
         assert!(record.contains("value\", \"two"), "{record}");
-        assert!(record.contains("initialize[0]"), "{record}");
+        assert!(record.contains("initialize: echo init >> log"), "{record}");
+        assert!(!record.contains("CHANGED"), "{record}");
+        t.ctx.stdin_tty = false;
+        let err = t.sbt_err(&["env", "run", "-d"]);
+        assert!(err.contains("have not been approved"), "{err}");
+        assert_eq!(log(&t), "init\npost\n", "the changed command never ran");
     }
 
     #[test]
@@ -1457,7 +1466,7 @@ mod tests {
         assert_eq!(stored[0].sandbox.as_deref(), Some("claude-proj"));
         let get = |t: &TestEnv, key: &str| t.ctx.store.get(key).unwrap();
         assert_eq!(
-            get(&t, "registry:sandbox:claude-proj:ghcr.io").as_deref(),
+            get(&t, "sandbox-registry:claude-proj/ghcr.io").as_deref(),
             Some("reg-tok3n")
         );
         t.sbt(&["secret", "ls"]).unwrap();
@@ -1477,7 +1486,7 @@ mod tests {
             "{out}"
         );
         assert!(registries(&t).is_empty());
-        assert_eq!(get(&t, "registry:sandbox:claude-proj:ghcr.io"), None);
+        assert_eq!(get(&t, "sandbox-registry:claude-proj/ghcr.io"), None);
         assert_eq!(get(&t, "registry:ghcr.io").as_deref(), Some("host-wide"));
     }
 
@@ -1489,7 +1498,7 @@ mod tests {
         listed(&t, &[]);
         t.sbt(&["rm", "-f", "claude-proj"]).unwrap();
         assert!(registries(&t).is_empty());
-        let key = "registry:sandbox:claude-proj:ghcr.io";
+        let key = "sandbox-registry:claude-proj/ghcr.io";
         assert_eq!(t.ctx.store.get(key).unwrap(), None);
     }
 

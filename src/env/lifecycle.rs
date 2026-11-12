@@ -7,8 +7,9 @@ use std::io::{BufRead, BufReader, Write};
 use std::os::unix::process::CommandExt;
 use std::path::PathBuf;
 use std::process::{Command, Stdio};
+use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::mpsc;
-use std::time::Instant;
+use std::time::{Duration, Instant};
 
 use anyhow::{Context, Result, bail};
 
@@ -108,6 +109,74 @@ pub fn run(
     Ok(())
 }
 
+/// How long a command's background children get to let go of its output once it has exited
+/// (sbx's grace).
+const HELD_OUTPUT_GRACE: Duration = Duration::from_secs(5);
+const TICK: Duration = Duration::from_millis(50);
+
+/// Set by SIGINT or SIGTERM while a command runs: it is in its own process group, so the
+/// terminal's Ctrl-C doesn't reach it and has to be passed on.
+static INTERRUPTED: AtomicBool = AtomicBool::new(false);
+
+extern "C" fn interrupted(_signal: libc::c_int) {
+    INTERRUPTED.store(true, Ordering::SeqCst);
+}
+
+/// Routes SIGINT and SIGTERM to `INTERRUPTED` until dropped.
+struct Interrupts([(libc::c_int, libc::sighandler_t); 2]);
+
+impl Interrupts {
+    fn catch() -> Interrupts {
+        INTERRUPTED.store(false, Ordering::SeqCst);
+        let handler = interrupted as extern "C" fn(libc::c_int) as libc::sighandler_t;
+        // SAFETY: the handler only stores to an atomic; Drop restores the previous handlers.
+        Interrupts([libc::SIGINT, libc::SIGTERM].map(|s| (s, unsafe { libc::signal(s, handler) })))
+    }
+}
+
+impl Drop for Interrupts {
+    fn drop(&mut self) {
+        for (signal, previous) in self.0 {
+            // SAFETY: restores the handler saved in `catch`.
+            unsafe { libc::signal(signal, previous) };
+        }
+    }
+}
+
+/// A Go-style duration as sbx takes it: `90s`, `1.5s`, `1m30s`, `2h`.
+pub fn parse_timeout(text: &str) -> Result<Duration> {
+    let mut rest = text;
+    let mut total = 0.0;
+    if rest.is_empty() {
+        bail!("invalid duration \"{text}\"");
+    }
+    while !rest.is_empty() {
+        let digits = rest
+            .find(|c: char| !c.is_ascii_digit() && c != '.')
+            .unwrap_or(rest.len());
+        let number: f64 = rest[..digits]
+            .parse()
+            .map_err(|_| anyhow::anyhow!("invalid duration \"{text}\""))?;
+        rest = &rest[digits..];
+        let end = rest
+            .find(|c: char| c.is_ascii_digit() || c == '.')
+            .unwrap_or(rest.len());
+        let seconds = match &rest[..end] {
+            "ns" => 1e-9,
+            "us" | "µs" | "μs" => 1e-6,
+            "ms" => 1e-3,
+            "s" => 1.0,
+            "m" => 60.0,
+            "h" => 3600.0,
+            "" => bail!("missing unit in duration \"{text}\""),
+            unit => bail!("unknown unit \"{unit}\" in duration \"{text}\""),
+        };
+        total += number * seconds;
+        rest = &rest[end..];
+    }
+    Ok(Duration::from_secs_f64(total))
+}
+
 /// One command through `sh -c`, its output written as it arrives. The error says how it failed.
 fn run_one(
     out: &mut impl Write,
@@ -116,12 +185,7 @@ fn run_one(
     c: &HostCommand,
     vars: &Vars,
 ) -> Result<()> {
-    let timeout = c
-        .timeout
-        .as_deref()
-        .map(humantime::parse_duration)
-        .transpose()
-        .context("timeout")?;
+    let timeout = c.timeout.as_deref().map(parse_timeout).transpose()?;
     let mut command = Command::new("sh");
     command
         // One stream, in the order the command wrote it.
@@ -129,12 +193,35 @@ fn run_one(
         .envs(vars.env(phase))
         .stdin(Stdio::null())
         .stdout(Stdio::piped())
-        // Its own group, so a timeout ends what it started too.
+        // Its own group, so ending it ends what it started too.
         .process_group(0);
     if let Some(dir) = &c.workdir {
         command.current_dir(dir);
     }
-    let mut child = command.spawn().context("running sh")?;
+    let _interrupts = Interrupts::catch();
+    let mut child = command.spawn().with_context(|| match &c.workdir {
+        Some(dir) => format!("running sh in {dir}"),
+        None => "running sh".to_string(),
+    })?;
+    let result = watch(out, terminal, &mut child, timeout, c);
+    if result.is_err() {
+        // SAFETY: signals the group this child leads; nothing else is in it.
+        unsafe { libc::kill(-(child.id() as libc::pid_t), libc::SIGKILL) };
+    }
+    let _ = child.wait();
+    result
+}
+
+/// Copies the child's output until it has exited and let go of it. An error means the caller
+/// must end the child's group: a timeout, an interrupt, or output still held by a background
+/// child after the grace.
+fn watch(
+    out: &mut impl Write,
+    terminal: bool,
+    child: &mut std::process::Child,
+    timeout: Option<Duration>,
+    c: &HostCommand,
+) -> Result<()> {
     let stdout = child.stdout.take().context("the command's output")?;
     let (lines, received) = mpsc::channel();
     std::thread::spawn(move || {
@@ -146,43 +233,55 @@ fn run_one(
     });
     let deadline = timeout.map(|t| Instant::now() + t);
     let indent = if terminal { "" } else { "      " };
-    let timed_out = loop {
-        let line = match deadline {
-            None => received
-                .recv()
-                .map_err(|_| mpsc::RecvTimeoutError::Disconnected),
-            Some(d) => received.recv_timeout(d.saturating_duration_since(Instant::now())),
-        };
-        match line {
+    let mut output_open = true;
+    // The exit status, and when the output must have been let go of.
+    let mut exited: Option<(std::process::ExitStatus, Instant)> = None;
+    loop {
+        match received.recv_timeout(TICK) {
             Ok(line) => {
                 writeln!(out, "{indent}{}", String::from_utf8_lossy(&line))?;
                 out.flush()?;
+                continue;
             }
-            Err(mpsc::RecvTimeoutError::Disconnected) => break false,
-            Err(mpsc::RecvTimeoutError::Timeout) => break true,
+            Err(mpsc::RecvTimeoutError::Disconnected) => output_open = false,
+            Err(mpsc::RecvTimeoutError::Timeout) => {}
         }
-    };
-    if timed_out {
-        // SAFETY: signals the group this child leads; nothing else is in it.
-        unsafe { libc::kill(-(child.id() as libc::pid_t), libc::SIGKILL) };
-        let _ = child.wait();
-        bail!(
-            "timed out after {}",
-            c.timeout.as_deref().unwrap_or_default()
-        );
-    }
-    let status = child.wait().context("waiting for the command")?;
-    match status.code() {
-        Some(0) => Ok(()),
-        Some(code) => bail!("exit status {code}"),
-        None => bail!("ended by a signal"),
+        if INTERRUPTED.load(Ordering::SeqCst) {
+            bail!("interrupted");
+        }
+        if exited.is_none()
+            && let Some(status) = child.try_wait().context("waiting for the command")?
+        {
+            exited = Some((status, Instant::now() + HELD_OUTPUT_GRACE));
+        }
+        match exited {
+            Some((status, _)) if !output_open => {
+                return match status.code() {
+                    Some(0) => Ok(()),
+                    Some(code) => bail!("exit status {code}"),
+                    None => bail!("ended by a signal"),
+                };
+            }
+            Some((_, grace)) if Instant::now() >= grace => bail!(
+                "exited while a background child still held its output; redirect that child's \
+                 output (e.g. >/dev/null 2>&1) so the command can finish"
+            ),
+            None if deadline.is_some_and(|d| Instant::now() >= d) => {
+                bail!(
+                    "timed out after {}",
+                    c.timeout.as_deref().unwrap_or_default()
+                )
+            }
+            // A closed output with the command still running: only the exit ends the wait.
+            _ if !output_open => std::thread::sleep(TICK),
+            _ => {}
+        }
     }
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
-    use std::time::Duration;
 
     fn command(command: &str) -> HostCommand {
         HostCommand {
@@ -338,5 +437,84 @@ mod tests {
         };
         run(&mut out, true, Phase::Initialize, &[show], &mountless).unwrap();
         assert!(!String::from_utf8(out).unwrap().contains("SBX_WORKSPACE"));
+    }
+
+    #[test]
+    fn a_timeout_holds_when_the_command_closed_its_output() {
+        let d = tempfile::tempdir().unwrap();
+        let quiet = HostCommand {
+            timeout: Some("1s".into()),
+            ..command("exec >/dev/null 2>&1; sleep 30")
+        };
+        let started = Instant::now();
+        let (_, result) = run_in(d.path(), false, Phase::Initialize, &[quiet]);
+        assert!(
+            result
+                .unwrap_err()
+                .to_string()
+                .ends_with(": timed out after 1s"),
+        );
+        assert!(started.elapsed() < Duration::from_secs(10));
+    }
+
+    #[test]
+    fn a_background_child_may_outlive_the_command_if_it_lets_go_of_the_output() {
+        let d = tempfile::tempdir().unwrap();
+        // Redirected: the command is done at once, and the child is left alone.
+        let quiet = command("sleep 2 >/dev/null 2>&1 & echo started");
+        let started = Instant::now();
+        let (out, result) = run_in(d.path(), false, Phase::Initialize, &[quiet]);
+        result.unwrap();
+        assert!(out.contains("      started\n"), "{out}");
+        assert!(started.elapsed() < Duration::from_secs(2), "it didn't wait");
+    }
+
+    #[test]
+    fn a_background_child_that_holds_the_output_fails_the_command_after_the_grace() {
+        let d = tempfile::tempdir().unwrap();
+        let held = command("sleep 60 & echo started");
+        let started = Instant::now();
+        let (_, result) = run_in(d.path(), false, Phase::Initialize, &[held]);
+        assert_eq!(
+            result.unwrap_err().to_string(),
+            "initialize[0] (sleep 60 & echo started): exited while a background child still held \
+             its output; redirect that child's output (e.g. >/dev/null 2>&1) so the command can \
+             finish"
+        );
+        let took = started.elapsed();
+        assert!(
+            took >= HELD_OUTPUT_GRACE && took < Duration::from_secs(20),
+            "{took:?}"
+        );
+    }
+
+    #[test]
+    fn timeouts_are_go_durations() {
+        let secs = |t: &str| parse_timeout(t).unwrap().as_secs_f64();
+        assert_eq!(secs("90s"), 90.0);
+        assert_eq!(secs("1.5s"), 1.5);
+        assert_eq!(secs("1m30s"), 90.0);
+        assert_eq!(secs("2h"), 7200.0);
+        assert_eq!(secs("250ms"), 0.25);
+        for (bad, why) in [
+            ("1day", "unknown unit \"day\" in duration \"1day\""),
+            ("5", "missing unit in duration \"5\""),
+            ("soon", "invalid duration \"soon\""),
+            ("", "invalid duration \"\""),
+        ] {
+            assert_eq!(parse_timeout(bad).unwrap_err().to_string(), why);
+        }
+    }
+
+    #[test]
+    fn a_missing_workdir_is_named() {
+        let d = tempfile::tempdir().unwrap();
+        let lost = HostCommand {
+            workdir: Some("/no/such/dir".into()),
+            ..command("true")
+        };
+        let (_, result) = run_in(d.path(), false, Phase::Initialize, &[lost]);
+        let err = format!("{:#}", result.unwrap_err());
+        assert!(err.contains("running sh in /no/such/dir"), "{err}");
     }
 }

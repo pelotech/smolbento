@@ -131,6 +131,7 @@ the field: `bindings`, `mcp`, `sandboxOptions.profile|display|gpu|usb|writableEn
 | Approval | Remembered per environment until the plan changes; `--force` approves one call | Same, measured on sbx 0.53. The record is smolbento's own file; sbx's records aren't read |
 | Unchanged host commands | Ask on every `env create` and `env run` unless `env.rememberHostCommands` is on | Same |
 | Lifecycle commands | `initialize` on every create and run, `postCreate` after a create, `preRemove` on `env rm` (also when the sandbox is gone); `SBX_*` variables; the first failure stops the phase | Same, with sbx's output for a terminal and without one, and its error texts |
+| Lifecycle timeouts and background children | Go durations (`90s`, `1.5s`, `1m30s`); a command whose background child still holds its output five seconds after it exits fails, and the child is ended | Same, with sbx's error texts. Ctrl-C ends the running command and what it started (sbx not measured) |
 | Lifecycle in the plan of an existing sandbox | Lists unchanged `postCreate`/`preRemove` commands as `○ … — unchanged`; a changed command repeats its unchanged fields | Unchanged ones aren't listed; a changed command shows `command: old -> new` and the fields that changed |
 | The removal plan after `preRemove` | Regenerated, and the removal stops if the commands changed it (documented, not measured) | Not regenerated |
 | `entrypoint`, `cmd` | What `env run` launches; plain `run` ignores them; `AGENT LAUNCH` is listed as `+` in every plan | Same |

@@ -51,9 +51,13 @@ fn file_names(files: &[PathBuf]) -> Vec<String> {
 pub fn load(paths: &Paths, name: &str) -> Option<Record> {
     let text = std::fs::read_to_string(path(paths, name)).ok()?;
     let mut record: Record = toml::from_str(&text).ok()?;
-    // Records written before resources had an id: it was the name.
+    // Records written before resources had an id and a time they apply: the id was the name,
+    // and only `ENV` reached an existing sandbox.
     for r in record.approved.iter_mut().filter(|r| r.id.is_empty()) {
         r.id = r.name.clone();
+        if r.section == "ENV" {
+            r.when = When::Live;
+        }
     }
     Some(record)
 }
@@ -393,18 +397,38 @@ mod tests {
     }
 
     #[test]
-    fn a_record_without_ids_still_matches() {
+    fn a_record_from_before_ids_still_matches() {
+        // As 0.16.0 wrote it: no `id`, no `when`.
         let (_d, paths) = test_paths();
-        save(&paths, "web", &files(), &current(), 0).unwrap();
-        let path = paths.env_records().join("web.toml");
-        let text = std::fs::read_to_string(&path).unwrap();
-        let old: String = text
-            .lines()
-            .filter(|l| !l.starts_with("id = "))
-            .map(|l| format!("{l}\n"))
-            .collect();
-        assert_ne!(old, text);
-        std::fs::write(&path, old).unwrap();
+        std::fs::create_dir_all(paths.env_records()).unwrap();
+        std::fs::write(
+            paths.env_records().join("web.toml"),
+            r#"files = ["/p/sbxenv.yaml"]
+approved_at = "2026-11-12T00:00:00Z"
+
+[[approved]]
+section = "SANDBOX"
+name = "web"
+fields = [["agent", "claude"]]
+
+[[approved]]
+section = "WORKSPACES"
+name = "/p"
+fields = []
+host_path = true
+
+[[approved]]
+section = "ENV"
+name = "GOFLAGS"
+fields = [["value", "-mod=mod"]]
+
+[[approved]]
+section = "PORTS"
+name = "8080/tcp"
+fields = [["host", "18080"]]
+"#,
+        )
+        .unwrap();
         let r = load(&paths, "web").unwrap();
         assert_eq!(need(Some(&r), &files(), &current(), false), Need::No);
     }

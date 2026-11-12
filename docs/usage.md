@@ -756,9 +756,12 @@ sbt env rm                           # remove the sandbox and the secrets scoped
 - **Name.** `name:` or `--name`; otherwise `<agent>-<workspace directory>`. The name links a file
   to its sandbox, so give every command the same `--name` you created it with.
 - **Plan.** `env plan` prints what applying would do and whether it would ask, and changes
-  nothing. `+` adds, `~` changes, `-` removes, and `!` is a path on your machine that isn't
-  approved yet. For a sandbox that exists it shows only what differs from what you approved;
-  only `env` values reach an existing sandbox, so other lines say `waits for the next create`.
+  nothing. `+` adds, `~` changes, `-` removes, `>` is a host command that runs again, and `!` is
+  something not approved yet that the plan doesn't add: a path on your machine, or a `preRemove`
+  command. For a sandbox that exists it shows what differs from what you approved, plus what
+  every `env run` applies (`initialize` commands, `entrypoint` and `cmd`). A change that only a
+  new sandbox picks up says `waits for the next create`; `env` values and `initialize` commands
+  apply at once.
 - **Approval.** `env create` and `env run` print the plan and ask `Approve this plan? (y/N)`.
   A yes is remembered for that environment: later runs apply without asking, with or without a
   terminal, until the files or anything in the plan changes. `-f/--force` approves one invocation
@@ -781,7 +784,10 @@ sbt env rm                           # remove the sandbox and the secrets scoped
     preRemove: [...]       # `env rm`, after you confirm, before anything is removed
   ```
 
-  A phase runs its commands in order and stops at the first that fails or times out. A failing
+  A phase runs its commands in order and stops at the first that fails or times out
+  (`timeout` is a duration like `90s`, `1.5s` or `1m30s`). A command that starts something in the
+  background has to redirect its output (`cmd >/dev/null 2>&1 &`); otherwise it fails five seconds
+  after it exits. Ctrl-C ends the running command and what it started. A failing
   `initialize` stops the command before anything is created. A failing `postCreate` keeps the
   sandbox and tells you to `sbt env rm`. A failing `preRemove` is a warning and the removal goes
   on; `preRemove` also runs when the sandbox is already gone. Commands get `sbt`'s environment

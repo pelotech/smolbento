@@ -76,7 +76,8 @@ impl RegistryEntry {
     pub fn account(&self) -> String {
         match &self.sandbox {
             None => registry_account(&self.host),
-            Some(sandbox) => format!("registry:sandbox:{sandbox}:{}", self.host),
+            // Not under `registry:`, where a host-wide login's host could spell the same key.
+            Some(sandbox) => format!("sandbox-registry:{sandbox}/{}", self.host),
         }
     }
 }
@@ -374,7 +375,7 @@ mod tests {
         assert_eq!(entry("ghcr.io", None).account(), "registry:ghcr.io");
         assert_eq!(
             entry("ghcr.io", Some("web")).account(),
-            "registry:sandbox:web:ghcr.io"
+            "sandbox-registry:web/ghcr.io"
         );
         assert_eq!(
             f.remove_sandbox_registries("web"),
