@@ -1,5 +1,17 @@
 # Changelog
 
+## [0.15.0](https://github.com/pelotech/smolbento/compare/v0.14.0...v0.15.0) (2026-11-12)
+
+
+### Features
+
+* **mcp:** static MCP servers (sbt mcp, --static-mcp) ([#72](https://github.com/pelotech/smolbento/issues/72)) ([9a02769](https://github.com/pelotech/smolbento/commit/9a02769b486ca0621b35924408128d5c248e7916))
+
+
+### Bug Fixes
+
+* run and create cleanups, input checks, error hints and sbx/bento completions ([#70](https://github.com/pelotech/smolbento/issues/70)) ([fbd2b0a](https://github.com/pelotech/smolbento/commit/fbd2b0ad9eb791fcf356775accfb121b5b77ed79))
+
 ## [0.14.0](https://github.com/pelotech/smolbento/compare/v0.13.0...v0.14.0) (2026-11-12)
 
 
