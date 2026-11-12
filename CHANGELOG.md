@@ -1,5 +1,13 @@
 # Changelog
 
+## [0.15.3](https://github.com/pelotech/smolbento/compare/v0.15.2...v0.15.3) (2026-11-12)
+
+
+### Bug Fixes
+
+* check MCP selections early, refuse mixed v2/v3 kits, clearer hints ([#81](https://github.com/pelotech/smolbento/issues/81)) ([35f4b00](https://github.com/pelotech/smolbento/commit/35f4b00a7631859c30d2accc6e582a9b4658b551))
+* match sbx on failed creates and closed terminals ([#79](https://github.com/pelotech/smolbento/issues/79)) ([f54f1bf](https://github.com/pelotech/smolbento/commit/f54f1bf7d961d856a3232d9f4603c9f318eb1ece))
+
 ## [0.15.2](https://github.com/pelotech/smolbento/compare/v0.15.1...v0.15.2) (2026-11-12)
 
 
