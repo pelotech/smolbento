@@ -1245,11 +1245,7 @@ mod tests {
                 "network-policy@2",
                 CapBody::Network {
                     install: Rules {
-                        allow: vec![NetRule {
-                            host: "registry.npmjs.org".into(),
-                            methods: vec![],
-                            paths: vec![],
-                        }],
+                        allow: vec![NetRule::host("registry.npmjs.org")],
                         deny: vec![],
                     },
                     runtime: Rules::default(),

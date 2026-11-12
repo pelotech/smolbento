@@ -1451,11 +1451,7 @@ mod tests {
         set_policy(&t, "mode = \"deny-all\"\n");
         // Both of net's rules are already there, so this add adds none.
         let rules = |h: &str| Rules {
-            allow: vec![NetRule {
-                host: h.into(),
-                methods: vec![],
-                paths: vec![],
-            }],
+            allow: vec![NetRule::host(h)],
             deny: vec![],
         };
         let mut policy = Policy::load(&t.ctx.paths).unwrap();

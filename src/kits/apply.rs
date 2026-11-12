@@ -759,14 +759,7 @@ mod tests {
     }
     fn rules(hosts: &[&str]) -> Rules {
         Rules {
-            allow: hosts
-                .iter()
-                .map(|h| NetRule {
-                    host: h.to_string(),
-                    methods: vec![],
-                    paths: vec![],
-                })
-                .collect(),
+            allow: hosts.iter().map(|h| NetRule::host(*h)).collect(),
             deny: vec![],
         }
     }

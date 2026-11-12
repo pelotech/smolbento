@@ -4,6 +4,7 @@ pub mod apply;
 pub mod args;
 pub mod capability;
 pub mod compose;
+mod descriptor;
 pub mod guest;
 pub mod host_mount;
 pub mod load;

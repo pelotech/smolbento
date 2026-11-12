@@ -974,11 +974,7 @@ mod tests {
         )
         .unwrap();
         let rules = Rules {
-            allow: vec![NetRule {
-                host: "kit.com".into(),
-                methods: vec![],
-                paths: vec![],
-            }],
+            allow: vec![NetRule::host("kit.com")],
             deny: vec![],
         };
         p.add_kit_rules("my-sb", "gh", &rules, false).unwrap();
@@ -1424,11 +1420,7 @@ mod tests {
         set_policy(&t, "mode = \"deny-all\"");
         let mut p = Policy::load(&t.ctx.paths).unwrap();
         let rules = Rules {
-            allow: vec![NetRule {
-                host: "kit.com".into(),
-                methods: vec![],
-                paths: vec![],
-            }],
+            allow: vec![NetRule::host("kit.com")],
             deny: vec![],
         };
         let (ids, _) = p.add_kit_rules("sb", "gh", &rules, false).unwrap();

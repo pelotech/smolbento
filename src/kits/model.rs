@@ -218,6 +218,17 @@ pub struct NetRule {
     pub paths: Vec<String>,
 }
 
+impl NetRule {
+    /// A rule for a whole host: any method, any path.
+    pub fn host(host: impl Into<String>) -> Self {
+        Self {
+            host: host.into(),
+            methods: vec![],
+            paths: vec![],
+        }
+    }
+}
+
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct CredReq {
     pub service: String,

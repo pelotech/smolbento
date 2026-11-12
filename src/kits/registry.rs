@@ -301,6 +301,14 @@ pub(crate) fn hex_of(digest: &str) -> Result<&str> {
         .ok_or_else(|| anyhow!("unsupported digest '{digest}'"))
 }
 
+/// Renames a finished temp file to `path`.
+pub(crate) fn persist(tmp: tempfile::NamedTempFile, path: &Path) -> Result<()> {
+    tmp.persist(path)
+        .map_err(|e| e.error)
+        .with_context(|| format!("writing {}", path.display()))?;
+    Ok(())
+}
+
 pub(crate) fn store_dir(cache: &Path) -> PathBuf {
     cache.join("blobs").join("sha256")
 }
@@ -317,9 +325,7 @@ pub(crate) fn put_bytes(cache: &Path, digest: &str, data: &[u8]) -> Result<()> {
     }
     let mut tmp = tempfile::NamedTempFile::new_in(store_dir(cache))?;
     tmp.write_all(data)?;
-    tmp.persist(&path)
-        .map_err(|e| e.error)
-        .with_context(|| format!("writing {}", path.display()))?;
+    persist(tmp, &path)?;
     Ok(())
 }
 
@@ -374,9 +380,7 @@ async fn fetch_blob(client: &Client, r: &Reference, digest: &str, cache: &Path) 
     if got != digest {
         bail!("blob {digest} downloaded as {got}");
     }
-    tmp.persist(&path)
-        .map_err(|e| e.error)
-        .with_context(|| format!("writing {}", path.display()))?;
+    persist(tmp, &path)?;
     Ok(())
 }
 
@@ -401,9 +405,7 @@ fn build_layout(cache: &Path, manifest: &[u8], digest: &str, reference: &str) ->
             let tmp = tempfile::NamedTempFile::new_in(&blobs)?;
             fs::copy(&src, tmp.path()).with_context(|| format!("copying {}", src.display()))?;
             tmp.as_file().sync_all()?;
-            tmp.persist(&dst)
-                .map_err(|e| e.error)
-                .with_context(|| format!("writing {}", dst.display()))?;
+            persist(tmp, &dst)?;
         }
     }
     fs::write(dir.join("oci-layout"), r#"{"imageLayoutVersion":"1.0.0"}"#)?;
@@ -424,9 +426,7 @@ fn build_layout(cache: &Path, manifest: &[u8], digest: &str, reference: &str) ->
     let tmp = tempfile::NamedTempFile::new_in(&dir)?;
     fs::write(tmp.path(), serde_json::to_vec(&index)?)?;
     let target = dir.join("index.json");
-    tmp.persist(&target)
-        .map_err(|e| e.error)
-        .with_context(|| format!("writing {}", target.display()))?;
+    persist(tmp, &target)?;
     Ok(dir)
 }
 

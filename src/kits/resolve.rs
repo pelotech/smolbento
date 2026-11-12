@@ -504,11 +504,7 @@ fn enforceable(
         allow: r
             .allow
             .iter()
-            .map(|n| NetRule {
-                host: n.host.clone(),
-                methods: vec![],
-                paths: vec![],
-            })
+            .map(|n| NetRule::host(n.host.clone()))
             .collect(),
         deny: r
             .deny
@@ -579,11 +575,7 @@ fn add_passthrough_hosts(merged: &mut Merged) {
             .token_host
             .iter()
             .chain(&o.resource_hosts)
-            .map(|h| NetRule {
-                host: h.clone(),
-                methods: vec![],
-                paths: vec![],
-            })
+            .map(|h| NetRule::host(h.clone()))
             .collect();
         let i = match network.iter().position(|r| r.kit == kc.kit) {
             Some(i) => i,
@@ -895,11 +887,7 @@ mod tests {
         p.mixins.iter().map(|k| k.name.as_str()).collect()
     }
     fn rule(host: &str) -> NetRule {
-        NetRule {
-            host: host.into(),
-            methods: vec![],
-            paths: vec![],
-        }
+        NetRule::host(host)
     }
     fn vol(path: &str, tmpfs: bool) -> CapBody {
         CapBody::Volume {
