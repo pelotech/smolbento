@@ -48,6 +48,23 @@ pub fn exit_code(err: &anyhow::Error) -> u8 {
     }
 }
 
+/// The name completions are generated for: the one the binary was run as when it is one of ours
+/// (`sbx` and `bento` are links to it), else `sbt`.
+fn program_name(argv0: Option<&OsString>) -> String {
+    argv0
+        .and_then(|a| std::path::Path::new(a).file_name()?.to_str())
+        .filter(|n| ["sbt", "sbx", "bento"].contains(n))
+        .unwrap_or("sbt")
+        .to_string()
+}
+
+/// A hint to print under an error: what to do about the smolvm error it came from, if anything.
+pub fn hint(err: &anyhow::Error) -> Option<&'static str> {
+    err.chain()
+        .find_map(|e| e.downcast_ref::<crate::smolvm::SmolvmError>())
+        .and_then(|e| e.hint())
+}
+
 pub fn main(args: impl IntoIterator<Item = OsString>) -> Result<i32> {
     let args: Vec<OsString> = args.into_iter().collect();
     let cli = Cli::parse_from(&args);
@@ -80,6 +97,7 @@ pub fn main(args: impl IntoIterator<Item = OsString>) -> Result<i32> {
             .skip(1)
             .map(|a| a.to_string_lossy().into_owned())
             .collect(),
+        program: program_name(args.first()),
     };
     dispatch(&mut ctx, cli)
 }
@@ -142,7 +160,7 @@ pub fn dispatch<R: Runner>(ctx: &mut Ctx<R>, cli: Cli) -> Result<i32> {
         Cmd::Reset(a) => lifecycle::reset(ctx, &a),
         Cmd::Version => version(ctx),
         Cmd::Completion { shell } => {
-            clap_complete::generate(shell, &mut Cli::command(), "sbt", &mut &ctx.out);
+            clap_complete::generate(shell, &mut Cli::command(), &ctx.program, &mut &ctx.out);
             Ok(0)
         }
         Cmd::Diagnose => diagnose::run(ctx),
@@ -388,6 +406,39 @@ mod tests {
         let mut t = test_env(&[]);
         assert_eq!(t.sbt(&["daemon", "status"]).unwrap(), 0);
         assert!(t.runner().calls().is_empty());
+    }
+
+    #[test]
+    fn a_hint_is_found_through_added_context() {
+        use anyhow::Context;
+        let err = crate::smolvm::SmolvmError {
+            code: "KVM_UNAVAILABLE".into(),
+            message: "no kvm".into(),
+        };
+        let wrapped = Err::<(), _>(err)
+            .context("starting the sandbox")
+            .unwrap_err();
+        assert!(hint(&wrapped).unwrap().contains("kvm"));
+        assert_eq!(hint(&anyhow::anyhow!("plain")), None);
+    }
+
+    #[test]
+    fn completions_are_for_the_name_the_binary_was_run_as() {
+        for (argv0, name) in [
+            ("/usr/local/bin/sbx", "sbx"),
+            ("bento", "bento"),
+            ("sbt", "sbt"),
+            ("/x/smolbento", "sbt"),
+        ] {
+            assert_eq!(program_name(Some(&OsString::from(argv0))), name);
+        }
+        assert_eq!(program_name(None), "sbt");
+        let mut t = test_env(&[]);
+        t.ctx.program = "sbx".into();
+        t.sbt(&["completion", "zsh"]).unwrap();
+        let out = t.stdout();
+        assert!(out.starts_with("#compdef sbx\n"), "{}", &out[..40]);
+        assert!(out.contains("_sbx"), "{}", &out[..200]);
     }
 
     #[test]

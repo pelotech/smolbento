@@ -23,7 +23,7 @@ When the last session attached to a sandbox exits, the sandbox stops. Its disk i
 | `sbt run --name claude-myrepo` | Reattach to an existing sandbox by name |
 | `sbt run --name review claude .` | A second sandbox on the same directory, under another name |
 | `sbt run -d claude` | Start it and leave it running; prints the name |
-| `sbt run --rm claude` | Delete the sandbox when the agent exits |
+| `sbt run --rm claude` | Delete the sandbox when the agent exits (kept, with a warning, while another session is attached) |
 | `sbt run claude -- -c` | Pass arguments to the agent (see below) |
 
 `run` exits with the agent's exit status.

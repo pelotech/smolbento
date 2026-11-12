@@ -341,7 +341,16 @@ pub fn create<R: Runner>(
     vm.create(&create::spec(&checked))?;
     let mut sb = get(vm, &req.name)?;
     let Some(kit) = &plan.kit else {
-        start_with(vm, &sb, plan, on)?;
+        // Kept, stopped, for the next start to try again (a `--clone` into an image that needs
+        // git installed first, say). The error says so: `create` again would only fail with
+        // "already exists".
+        start_with(vm, &sb, plan, on).with_context(|| {
+            format!(
+                "the first start failed (the sandbox is kept: `sbt start {0}` tries again, \
+                 `sbt rm {0}` removes it)",
+                sb.name()
+            )
+        })?;
         sb.state = MachineState::Running;
         return Ok(sb);
     };

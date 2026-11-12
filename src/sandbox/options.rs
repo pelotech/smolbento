@@ -99,35 +99,39 @@ pub fn host_cpus() -> u32 {
 }
 
 /// `--env-file` lines, then `-e` items. `KEY=VALUE` is taken as is; a bare `KEY` copies the
-/// host's value and is skipped when the host doesn't have it.
+/// host's value and is skipped when the host doesn't have it. A line that is neither (no name,
+/// or a name with spaces) is an error, named by its file and line.
 pub fn parse_env(
     items: &[String],
     files: &[PathBuf],
     host: &BTreeMap<String, String>,
 ) -> Result<Vec<(String, String)>> {
     let mut out = Vec::new();
-    let mut add = |item: &str| match item.split_once('=') {
-        Some((k, v)) if !k.is_empty() => out.push((k.to_string(), v.to_string())),
-        Some(_) => {}
-        None => {
-            if let Some(v) = host.get(item) {
-                out.push((item.to_string(), v.clone()));
-            }
+    let mut add = |item: &str, origin: &dyn Fn() -> String| -> Result<()> {
+        let (key, value) = match item.split_once('=') {
+            Some((k, v)) => (k, Some(v)),
+            None => (item, None),
+        };
+        if key.is_empty() || key.contains(char::is_whitespace) {
+            bail!("{}: expected KEY=VALUE or KEY", origin());
         }
+        match value {
+            Some(v) => out.push((key.to_string(), v.to_string())),
+            None => out.extend(host.get(key).map(|v| (key.to_string(), v.clone()))),
+        }
+        Ok(())
     };
     for file in files {
         let text =
             fs::read_to_string(file).with_context(|| format!("reading {}", file.display()))?;
-        for line in text
-            .lines()
-            .map(str::trim)
-            .filter(|l| !l.is_empty() && !l.starts_with('#'))
-        {
-            add(line);
+        for (n, line) in text.lines().map(str::trim).enumerate() {
+            if !line.is_empty() && !line.starts_with('#') {
+                add(line, &|| format!("{}:{}", file.display(), n + 1))?;
+            }
         }
     }
     for item in items {
-        add(item);
+        add(item, &|| format!("--env '{item}'"))?;
     }
     Ok(out)
 }
@@ -224,6 +228,31 @@ mod tests {
             pairs,
             vec![("A", "1"), ("HOSTONLY", "h"), ("C", "3"), ("B", "b")]
         );
+    }
+
+    #[test]
+    fn a_malformed_env_line_is_an_error_not_dropped() {
+        let dir = tempfile::tempdir().unwrap();
+        let file = dir.path().join(".env");
+        let host = BTreeMap::new();
+        for (text, line) in [("A=1\n=novalue\n", 2), ("# c\n\nnot a name\n", 3)] {
+            std::fs::write(&file, text).unwrap();
+            let err = parse_env(&[], std::slice::from_ref(&file), &host)
+                .unwrap_err()
+                .to_string();
+            assert!(
+                err.starts_with(&format!("{}:{line}: ", file.display())),
+                "{err}"
+            );
+            assert!(err.contains("KEY=VALUE"), "{err}");
+        }
+        let err = parse_env(&["=x".into()], &[], &host)
+            .unwrap_err()
+            .to_string();
+        assert!(err.starts_with("--env '=x': "), "{err}");
+        // A value may hold anything, `=` and spaces included.
+        let env = parse_env(&["A=b c=d".into()], &[], &host).unwrap();
+        assert_eq!(env, vec![("A".to_string(), "b c=d".to_string())]);
     }
 
     #[test]

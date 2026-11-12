@@ -53,6 +53,25 @@ impl SmolvmError {
         }
     }
 
+    /// What the user can do about it, for the codes that have an answer (see
+    /// docs/troubleshooting.md).
+    pub fn hint(&self) -> Option<&'static str> {
+        match self.code.as_str() {
+            "KVM_UNAVAILABLE" => Some(
+                "KVM isn't available: enable virtualization, load the KVM module and add your \
+                 user to the `kvm` group (`sbt diagnose` checks /dev/kvm)",
+            ),
+            "HYPERVISOR_UNAVAILABLE" => Some(
+                "the hypervisor isn't available: run `sbt diagnose`; on macOS the smolvm binary \
+                 needs the hypervisor entitlement (reinstall smolvm)",
+            ),
+            "STORAGE_ERROR" => {
+                Some("check free disk space; `sbt rm` removes sandboxes you no longer need")
+            }
+            _ => None,
+        }
+    }
+
     /// smolvm 1.32.2 reports a missing machine as `CONFIG_ERROR` ("machine 'x' not found"), not
     /// `NOT_FOUND`, so a `CONFIG_ERROR` naming a missing machine counts too.
     pub fn is_not_found(&self) -> bool {
@@ -66,6 +85,24 @@ impl SmolvmError {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn hints_for_the_codes_a_user_can_act_on() {
+        let with = |code: &str| SmolvmError {
+            code: code.into(),
+            message: "m".into(),
+        };
+        assert!(with("KVM_UNAVAILABLE").hint().unwrap().contains("kvm"));
+        assert!(
+            with("HYPERVISOR_UNAVAILABLE")
+                .hint()
+                .unwrap()
+                .contains("sbt diagnose")
+        );
+        assert!(with("STORAGE_ERROR").hint().unwrap().contains("disk space"));
+        assert_eq!(with("SMOLVM_ERROR").hint(), None);
+        assert_eq!(with("NOT_FOUND").hint(), None);
+    }
 
     #[test]
     fn missing_machine_reported_as_config_error_is_not_found() {
