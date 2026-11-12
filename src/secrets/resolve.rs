@@ -148,12 +148,15 @@ pub fn start_env(
     // A `--static-mcp` server's header secret: a global `mcp:<server>:<name>` secret bound to its
     // own env var. It is no service, so the loop above doesn't see it.
     for (var, secret) in &meta.credential_services {
-        if !secret.starts_with("mcp:") {
+        // Only the variables `--static-mcp` binds (`mcp::env_var`): never a kit's.
+        if !secret.starts_with("mcp:") || !var.starts_with("SBX_MCP_") {
             continue;
         }
+        let global = crate::secrets::scope_for(None);
         let value = secrets
-            .entry_for(sandbox, None, secret)
-            .filter(|e| e.scope == crate::secrets::scope_for(None))
+            .secrets
+            .iter()
+            .find(|e| e.service == *secret && e.scope == global)
             .map(|e| resolve(e, store));
         match value {
             Some(Ok(value)) => env.push((var.clone(), value)),
@@ -246,6 +249,19 @@ mod tests {
             [("SBX_MCP_LINEAR_API_KEY".to_string(), "tok".to_string())]
         );
         assert!(remove.is_empty(), "{remove:?}");
+        // Only the variable `--static-mcp` binds gets the value: a kit that names an `mcp:`
+        // secret as its own credential service doesn't.
+        let kit = Meta {
+            credential_env: vec!["SBX_KIT_X".into()],
+            credential_services: std::collections::BTreeMap::from([(
+                "SBX_KIT_X".to_string(),
+                "mcp:linear:api-key".to_string(),
+            )]),
+            ..meta.clone()
+        };
+        let (env, remove) = start_env(&secrets, &kit, &store, false);
+        assert!(env.is_empty(), "{env:?}");
+        assert_eq!(remove, ["SBX_KIT_X"]);
         // The secret was removed since: the start goes on, without the value.
         let (env, remove) = start_env(&SecretsFile::default(), &meta, &store, false);
         assert!(env.is_empty(), "{env:?}");

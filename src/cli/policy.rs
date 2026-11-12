@@ -107,8 +107,8 @@ pub fn run<R: Runner>(ctx: &mut Ctx<R>, cmd: PolicyCmd) -> Result<i32> {
             };
             let source = match a.source.as_deref() {
                 None => None,
-                Some(s @ ("local" | "org" | "kit")) => Some(s),
-                Some(other) => bail!("--source takes local, org or kit, not '{other}'"),
+                Some(s @ ("local" | "org" | "kit" | "mcp")) => Some(s),
+                Some(other) => bail!("--source takes local, org, kit or mcp, not '{other}'"),
             };
             let format = Format::pick(a.json, a.format);
             let opts = LsOpts {
@@ -960,6 +960,15 @@ mod tests {
             assert_eq!(super::super::exit_code(&err), 2, "{flag:?}: {err}");
             assert!(err.to_string().contains("not implemented yet"), "{err}");
         }
+    }
+
+    #[test]
+    fn ls_source_accepts_mcp() {
+        let mut t = test_env(&[]);
+        set_policy(&t, "mode = \"deny-all\"");
+        t.sbt(&["policy", "ls", "--source", "mcp"]).unwrap();
+        let err = t.sbt_err(&["policy", "ls", "--source", "nope"]);
+        assert!(err.contains("local, org, kit or mcp"), "{err}");
     }
 
     #[test]

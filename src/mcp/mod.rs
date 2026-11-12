@@ -86,14 +86,25 @@ pub fn check_remote(url: &str, headers: &BTreeMap<String, String>) -> Result<()>
     if !matches!(parsed.scheme(), "http" | "https") {
         bail!("'{url}': an MCP server URL starts with https:// or http://");
     }
+    if !parsed.username().is_empty() || parsed.password().is_some() {
+        bail!(
+            "'{url}' has credentials in it; they would be stored and passed around in clear. \
+             Send them in a header instead: --header 'Authorization: Bearer ${{name}}'"
+        );
+    }
     let host = parsed
         .host_str()
         .with_context(|| format!("'{url}' has no host"))?
         .trim_start_matches('[')
         .trim_end_matches(']')
+        .trim_end_matches('.')
         .to_ascii_lowercase();
     let (is_ip, local) = match host.parse::<std::net::IpAddr>() {
-        Ok(a) => (true, a.is_loopback() || a.is_unspecified()),
+        Ok(a) => {
+            // `::ffff:127.0.0.1` is 127.0.0.1.
+            let a = a.to_canonical();
+            (true, a.is_loopback() || a.is_unspecified())
+        }
         Err(_) => (
             false,
             host == "localhost" || host.ends_with(".localhost") || host == "host.docker.internal",
@@ -105,14 +116,23 @@ pub fn check_remote(url: &str, headers: &BTreeMap<String, String>) -> Result<()>
              to run the server in the sandbox, register it with --command"
         );
     }
+    let mut seen: Vec<String> = Vec::new();
+    let mut secret_header: Option<&str> = None;
     for (name, value) in headers {
+        // A leading `-` would read as an option of the agent's own `mcp add` command.
         let token = !name.is_empty()
+            && !name.starts_with('-')
             && name
                 .chars()
                 .all(|c| c.is_ascii_alphanumeric() || "!#$%&'*+-.^_`|~".contains(c));
         if !token {
             bail!("'{name}' isn't a valid header name");
         }
+        let lower = name.to_ascii_lowercase();
+        if seen.contains(&lower) {
+            bail!("header {name} is given twice");
+        }
+        seen.push(lower);
         if value.chars().any(char::is_control) {
             bail!("header {name}: the value has control characters");
         }
@@ -122,6 +142,14 @@ pub fn check_remote(url: &str, headers: &BTreeMap<String, String>) -> Result<()>
         }
         if secrets.is_empty() {
             continue;
+        }
+        // smolvm refuses a request that carries two placeholders, and every request to the
+        // server carries all its headers.
+        if let Some(other) = secret_header.replace(name) {
+            bail!(
+                "headers {other} and {name} both have a secret: only one header of a server \
+                 can carry one"
+            );
         }
         // smolvm substitutes a secret only on HTTPS (port 443) requests to a host name.
         if parsed.scheme() != "https" {
@@ -173,6 +201,12 @@ mod tests {
             "http://127.0.0.1:9/",
             "https://[::1]/",
             "https://host.docker.internal/x",
+            "https://localhost./mcp",
+            "https://host.docker.internal./x",
+            "http://[::ffff:127.0.0.1]/",
+            // Credentials in a URL would be stored and passed around in clear.
+            "https://user:pass@mcp.example.com/mcp",
+            "https://token@mcp.example.com/mcp",
         ] {
             assert!(check_remote(bad, &none).is_err(), "{bad}");
         }
@@ -193,6 +227,7 @@ mod tests {
             ("Authorization", "Bearer ${a b}"),
             ("Authorization", "Bearer ${open"),
             ("Bad Name", "x"),
+            ("-x", "v"),
             ("", "x"),
             ("X", "line\nbreak"),
         ] {
@@ -202,6 +237,17 @@ mod tests {
                 "{name}: {value}"
             );
         }
+        // One secret per server: smolvm refuses a request that carries two placeholders.
+        let two = headers(&[("Authorization", "Bearer ${a}"), ("X-Key", "${b}")]);
+        let err = check_remote("https://x.com/", &two)
+            .unwrap_err()
+            .to_string();
+        assert!(err.contains("one header"), "{err}");
+        let same = headers(&[("Authorization", "Bearer ${a}"), ("X-Key", "${a}")]);
+        assert!(check_remote("https://x.com/", &same).is_err());
+        // Header names differing only in case are one header.
+        let dup = headers(&[("Authorization", "a"), ("authorization", "b")]);
+        assert!(check_remote("https://x.com/", &dup).is_err());
         // A plain header needs no HTTPS host name.
         check_remote("http://10.0.0.5/", &headers(&[("X-Team", "a b")])).unwrap();
     }

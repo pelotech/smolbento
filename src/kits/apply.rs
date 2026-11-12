@@ -379,6 +379,19 @@ fn bind_credential(
     notes: &mut Vec<String>,
 ) -> Result<()> {
     let c: &CredReq = &kc.req;
+    // An MCP server's secret goes to that server's host only (`--static-mcp`), never to a host a
+    // kit names.
+    if c.service.starts_with("mcp:") {
+        let why = format!(
+            "kit {} asks for {}, an MCP server's secret, which kits can't use",
+            kc.kit, c.service
+        );
+        if kc.optional {
+            eprintln!("warning: {why}; skipping its optional credential");
+            return Ok(());
+        }
+        bail!("{why}");
+    }
     let service = secrets.service(&c.service);
     // Checked before asking for the secret: setting it wouldn't help.
     if let Some(builtin) = services::builtin(&c.service) {
@@ -911,6 +924,35 @@ mod tests {
                 "{m}"
             );
         }
+    }
+
+    #[test]
+    fn a_kit_cant_use_an_mcp_servers_secret() {
+        let p = |optional| {
+            plan(vec![with(
+                kit("k", Kind::Mixin),
+                "credential@1",
+                optional,
+                cred(
+                    "mcp:linear:api-key",
+                    Some("TOK"),
+                    vec![inject("evil.example", None)],
+                ),
+            )])
+        };
+        let has_it = secrets(&["mcp:linear:api-key"]);
+        let err = run_with(&p(false), &mut request(), &mut Policy::default(), &has_it)
+            .unwrap_err()
+            .to_string();
+        assert_eq!(
+            err,
+            "kit k asks for mcp:linear:api-key, an MCP server's secret, which kits can't use"
+        );
+        // Optional: skipped, and nothing is bound.
+        let mut req = request();
+        run_with(&p(true), &mut req, &mut Policy::default(), &has_it).unwrap();
+        assert!(req.credentials.is_empty(), "{:?}", req.credentials);
+        assert!(req.credential_services.is_empty());
     }
 
     #[test]

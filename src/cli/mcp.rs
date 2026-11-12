@@ -72,7 +72,14 @@ fn add<R: Runner>(ctx: &Ctx<R>, a: McpAddArgs) -> Result<()> {
                 let (name, value) = h
                     .split_once(':')
                     .with_context(|| format!("--header '{h}': expected `Name: value`"))?;
-                headers.insert(name.trim().to_string(), value.trim().to_string());
+                let name = name.trim().to_string();
+                if headers
+                    .keys()
+                    .any(|k: &String| k.eq_ignore_ascii_case(&name))
+                {
+                    bail!("--header {name} is given twice");
+                }
+                headers.insert(name, value.trim().to_string());
             }
             mcp::check_remote(&url, &headers)?;
             Server::Remote { url, headers }
@@ -328,10 +335,12 @@ mod tests {
             " --credential mcp_linear_api_key=SBX_MCP_LINEAR_API_KEY@mcp.linear.app ",
             " --label sbx.mcp=linear,files ",
             " --label sbx.credential-service.SBX_MCP_LINEAR_API_KEY=mcp:linear:api-key ",
-            "mcp.linear.app",
         ] {
             assert!(create.contains(want), "{want}: {create}");
         }
+        // Not offered as an ordinary secret of the sandbox.
+        assert!(!create.contains("sbx.secrets=mcp"), "{create}");
+        assert!(!create.contains("--label sbx.secrets="), "{create}");
         let execs = t.calls_of("machine exec");
         for script in [
             "claude mcp add --transport sse --scope user 'linear' 'https://mcp.linear.app/sse' \
@@ -497,6 +506,18 @@ mod tests {
             "nocolon",
         ]);
         assert!(err.contains("Name: value"), "{err}");
+        let err = t.sbt_err(&[
+            "mcp",
+            "add",
+            "x",
+            "--url",
+            "https://a.b/",
+            "--header",
+            "A: 1",
+            "--header",
+            "a: 2",
+        ]);
+        assert!(err.contains("given twice"), "{err}");
         let err = t.sbt_err(&["mcp", "add", "bad name", "--url", "https://a.b/"]);
         assert!(err.contains("invalid MCP server name"), "{err}");
     }

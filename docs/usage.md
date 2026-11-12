@@ -652,8 +652,13 @@ Limits:
 
 - Only the `claude` agent so far; other agents fail the create with a clear error.
 - No OAuth: a server that only offers an OAuth login can't be registered with a token header.
-- A header secret needs an `https://` URL with a host name and no port.
+- A header secret needs an `https://` URL with a host name and no port, and a server can have
+  only one header with a secret.
+- A URL with credentials in it (`https://user:pass@host/`) is refused; put them in a header. A
+  URL is stored and shown as given, so don't put a secret in its query string.
 - `localhost` URLs are refused: inside a sandbox that is the sandbox, not your machine.
+- If the first start of a sandbox created with `--static-mcp` fails, the sandbox is removed (as
+  for one with kits), so run the same command again.
 - `sbt template save` refuses a sandbox created with `--static-mcp`.
 - `mcp auth`, `mcp load` and `mcp unload` are not supported (see
   [sbx compatibility](sbx-compatibility.md#mcp-servers)).

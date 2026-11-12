@@ -92,7 +92,7 @@ flags, and the registered servers are written into the agent's own MCP config at
 | | sbx | smolbento |
 |---|---|---|
 | Where a `--command` server runs | On the host | Inside the sandbox; the command must exist in the image |
-| Header secrets (`${name}`, `sbx secret set mcp:<server>:<name>`) | Added by the gateway | Same syntax; the agent's config holds smolvm's placeholder, replaced on HTTPS requests to the server's host. Needs an `https://` host name without a port; one placeholder per header |
+| Header secrets (`${name}`, `sbx secret set mcp:<server>:<name>`) | Added by the gateway | Same syntax; the agent's config holds smolvm's placeholder, replaced on HTTPS requests to the server's host. Needs an `https://` host name without a port; one secret header per server |
 | OAuth servers | Authorized by `sbx` on the host | Not supported |
 | Without `--static-mcp` | Dynamic mode: the agent can find and attach registered servers | No MCP servers |
 | `mcp load` / `mcp unload` on a running sandbox | Yes | Not supported; the set is fixed at create |

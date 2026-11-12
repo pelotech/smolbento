@@ -66,6 +66,8 @@ pub fn attach(
     if !has_registrar(agent) {
         bail!("--static-mcp isn't supported for agent {agent} yet");
     }
+    // Guest variable to the server whose secret it holds.
+    let mut owners: BTreeMap<String, &str> = BTreeMap::new();
     for (name, server) in servers {
         if let Server::Remote { headers, .. } = server {
             let host = server.host().context("a registered URL has a host")?;
@@ -78,6 +80,12 @@ pub fn attach(
                     );
                 }
                 let var = env_var(name, p);
+                if let Some(other) = owners.insert(var.clone(), name) {
+                    bail!(
+                        "MCP servers {other} and {name} both use the variable {var} for their \
+                         secret; rename one of them"
+                    );
+                }
                 a.credentials.push(Credential {
                     name: var.trim_start_matches("SBX_").to_ascii_lowercase(),
                     env_var: var.clone(),
@@ -193,5 +201,24 @@ mod tests {
             assert_eq!(a, Attachment::default(), "{sel:?}");
         }
         assert!(err("none,docs", "claude", true).contains("none"));
+        // Two servers whose secrets map to the same guest variable.
+        let mut f = file();
+        for name in ["my-db", "my_db"] {
+            f.servers.insert(
+                name.into(),
+                Server::Remote {
+                    url: format!("https://{name}.example.com/mcp").replace('_', "-"),
+                    headers: BTreeMap::from([("Authorization".into(), "Bearer ${k}".into())]),
+                },
+            );
+        }
+        let e = attach(&f, "my-db,my_db", "claude", &|_| true)
+            .unwrap_err()
+            .to_string();
+        assert_eq!(
+            e,
+            "MCP servers my-db and my_db both use the variable SBX_MCP_MY_DB_K for their secret; \
+             rename one of them"
+        );
     }
 }
