@@ -152,6 +152,11 @@ impl SecretsFile {
             .find(|e| e.service == service && e.scope == scope)
     }
 
+    /// The global entry for a name, whatever a sandbox's own scope holds.
+    pub fn global_entry(&self, service: &str) -> Option<&SecretEntry> {
+        self.scoped_entry(None, service)
+    }
+
     /// The entry a sandbox uses for a service: its own scope, then its fork parent's (`fork_of`),
     /// then global.
     pub fn entry_for(

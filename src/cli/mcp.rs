@@ -334,10 +334,11 @@ mod tests {
         for want in [
             " --credential mcp_linear_api_key=SBX_MCP_LINEAR_API_KEY@mcp.linear.app ",
             " --label sbx.mcp=linear,files ",
-            " --label sbx.credential-service.SBX_MCP_LINEAR_API_KEY=mcp:linear:api-key ",
+            " --label sbx.mcp-secret.SBX_MCP_LINEAR_API_KEY=mcp:linear:api-key ",
         ] {
             assert!(create.contains(want), "{want}: {create}");
         }
+        assert!(!create.contains("sbx.credential-service."), "{create}");
         // Not offered as an ordinary secret of the sandbox.
         assert!(!create.contains("sbx.secrets=mcp"), "{create}");
         assert!(!create.contains("--label sbx.secrets="), "{create}");
