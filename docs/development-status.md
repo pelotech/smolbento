@@ -90,7 +90,8 @@ terminal fail until you do.
 | 5f | Static MCP: `mcp add/ls/inspect/rm`, `run/create --static-mcp`, header secrets as smolvm credentials, Claude Code only. No gateway, OAuth, dynamic mode or live load/unload | ✅ Done |
 | 5 | The other parts, easiest first: 5g `ssh-agent@1` `authenticate` limits (logins only to named servers, checked against your known hosts); 5h `setup ssh` (`ssh NAME.sbx` into sandboxes, e.g. from VS Code Remote-SSH; the `ssh.autoCreate`, `ssh.defaultAgent`, `ssh.defaultTemplate`, `ssh.workspaceRoot` settings) | Planned |
 | 6a | `env plan`, remembered approvals, `env.rememberHostCommands` | ✅ Done |
-| 6b | Finish `sbxenv.yaml`: `lifecycle`, `bindings`, `registries`, `mcp`, the remaining `sandboxOptions` | Planned |
+| 6b | `sbxenv.yaml` `lifecycle`, `registries`, `entrypoint` and `cmd`; registry logins scoped to a sandbox | ✅ Done |
+| 6c | Finish `sbxenv.yaml`: `bindings`, `mcp`, the remaining `sandboxOptions` | Planned |
 | 7 | Kit publishing: `kit pack/push/pull/sign/verify` | Planned |
 | 8 | The `plus` kit, built and published with smolbento itself (an end-to-end check of everything before it) | Planned |
 | 9 | `tui` dashboard (bare `sbt` opens it on a terminal) | Planned |

@@ -122,6 +122,9 @@ env exec -it -- bash
 env exec sbxenv.yaml override.yaml -- npm test
 env plan
 env plan --clone ./project
+env plan --skip-host-commands
+env run --skip-host-commands ./project
+env rm --force --skip-host-commands
 env rm
 env rm --force --prune-bindings ./project
 # Later phases (must parse; exit 2 for now)

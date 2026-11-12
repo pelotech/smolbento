@@ -764,10 +764,47 @@ sbt env rm                           # remove the sandbox and the secrets scoped
   terminal, until the files or anything in the plan changes. `-f/--force` approves one invocation
   and is not remembered; without a terminal and without `--force` an unapproved plan is refused.
   `env rm` asks `Remove? [y/N]` and forgets the approval. `env exec` never asks.
-- **Host commands.** A secret with a `command:` source runs that command on your machine. The
-  file's commands are taken up when the sandbox is created, so such a create asks every time,
-  even when nothing changed. To let an approval stand until the commands change:
-  `sbt settings set env.rememberHostCommands true`.
+- **Host commands.** Lifecycle commands and `command:` sources of secrets and registries run on
+  your machine with your privileges. As in sbx, a file that declares any asks on every
+  `env create` and `env run`, even when nothing changed. To let an approval stand until the
+  commands change: `sbt settings set env.rememberHostCommands true`.
+- **Lifecycle.** Commands that run on your machine, through `sh -c`:
+
+  ```yaml
+  lifecycle:
+    initialize:            # every `env create` and `env run`, before anything else
+      - name: deps         # optional label
+        command: ./scripts/setup.sh
+        workdir: ./tools   # optional; default: the project directory
+        timeout: 90s       # optional
+    postCreate: [...]      # after a new sandbox is created, before `env run` attaches
+    preRemove: [...]       # `env rm`, after you confirm, before anything is removed
+  ```
+
+  A phase runs its commands in order and stops at the first that fails or times out. A failing
+  `initialize` stops the command before anything is created. A failing `postCreate` keeps the
+  sandbox and tells you to `sbt env rm`. A failing `preRemove` is a warning and the removal goes
+  on; `preRemove` also runs when the sandbox is already gone. Commands get `sbt`'s environment
+  plus `SBX_LIFECYCLE_PHASE`, `SBX_ENV_FILE`, `SBX_ENV_FILES` (joined with `:`), `SBX_ENV_DIR`,
+  `SBX_SANDBOX_NAME`, `SBX_AGENT` and `SBX_WORKSPACE`; they don't get the file's `env` or any
+  secret. Make `initialize` safe to run more than once. `env exec` runs none of them.
+  `--skip-host-commands` (on `env create`, `run`, `rm` and `plan`) skips all three phases
+  without changing what you approved; `command:` sources of secrets and registries still run.
+- **`entrypoint` and `cmd`.** What `env run` launches when it attaches, in place of the agent:
+  `entrypoint` followed by `cmd`. With only `cmd`, the agent's own command gets it as arguments
+  (like `sbt run NAME -- ARGS`). Plain `sbt run NAME` is not affected. When several files set
+  them, the last one wins.
+- **Registries.** Logins for pulling this sandbox's image and kits:
+
+  ```yaml
+  registries:
+    ghcr.io:
+      username: { value: me }             # optional
+      secret: { command: gh auth token }  # value, ref or command
+  ```
+
+  They are resolved once when the sandbox is created, stored for that sandbox only (ahead of a
+  host-wide `sbt secret set --registry` login for the same host), and removed with it.
 - **`env create`** refuses a sandbox that already exists (use `env run`, or `env rm` first).
   Secrets are stored at the sandbox's scope before the sandbox is made. A failed create leaves
   them; `env rm` with the same files removes them.
@@ -790,10 +827,9 @@ sbt env rm                           # remove the sandbox and the secrets scoped
     /home/agent/.cache/tool: ./cache
   ```
 
-Not supported yet (exit 2, naming the field or command): `env plan`, `lifecycle`, `bindings`,
-`registries`, `mcp`, and the `sandboxOptions` other than `cpus`, `memory`, `template` and
-`pullPolicy: missing`. `refresh` and `backend` on a secret, `--skip-host-commands` and
-`--prune-bindings` are accepted and do nothing. Secret service names must be ones `sbt secret set`
+Not supported yet (exit 2, naming the field): `bindings`, `mcp`, and the `sandboxOptions` other
+than `cpus`, `memory`, `template`, `skills` and `pullPolicy: missing`. `refresh` and `backend` on
+a secret and `--prune-bindings` are accepted and do nothing. Secret service names must be ones `sbt secret set`
 knows; others are refused. See [sbx compatibility](sbx-compatibility.md#environment-files).
 
 ## Files and ownership
