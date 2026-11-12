@@ -28,9 +28,6 @@ Options:
 
           [possible values: true, false]
 
-  -f, --force
-          Apply the environment plan without asking
-
       --kit-arg <NAME=VALUE>
           Value for an argument a kit declares, as name=value for every kit or kit.name=value for one (can be repeated); overrides the args a kits: entry pins in sbxenv.yaml
 
@@ -39,6 +36,9 @@ Options:
 
       --skip-host-commands
           Skip the host lifecycle commands the environment declares (smolbento runs none)
+
+  -f, --force
+          Apply the environment plan without asking
 
   -d, --detach
           Create/start the sandbox without attaching

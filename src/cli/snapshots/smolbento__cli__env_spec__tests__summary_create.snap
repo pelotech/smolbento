@@ -13,6 +13,11 @@ SANDBOX
       sandboxOptions.cpus: 4
       sandboxOptions.memory: 8g
 
+KITS
+  + org/tool
+  + org/pinned
+      args.region: us
+
 WORKSPACES
   + <root>/proj/web
       clone: true
@@ -21,9 +26,6 @@ WORKSPACES
 
 MOUNTS
   + <root>/proj/cache -> /home/agent/.cache
-
-KITS
-  + org/tool
 
 ENV
   + LOG_LEVEL
@@ -46,5 +48,5 @@ PORTS
   + 53/udp
       host: ephemeral
 
-  12 to add · 0 to change · 0 to destroy
+  13 to add · 0 to change · 0 to destroy
   ! this plan runs commands on this machine, outside the sandbox, with your own privileges

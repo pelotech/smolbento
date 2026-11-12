@@ -3,8 +3,8 @@ source: src/cli/env_spec.rs
 expression: "summarise(&t, &[\"sbxenv.yaml\"], Op::Remove,\n&[\"github\".into(), \"openai\".into()])"
 ---
 ENVIRONMENT
-  Name: claude-proj
-  File: <root>/proj/sbxenv.yaml
+  Name:  claude-proj
+  File:  <root>/proj/sbxenv.yaml
 
 SANDBOX
   - claude-proj

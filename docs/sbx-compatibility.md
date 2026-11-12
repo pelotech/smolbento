@@ -24,7 +24,7 @@ something different.
 | `policy refresh`, `secret import`, `secret set --oauth/--refresh`, `secret set/rm --registry` with `--sandbox`/`--all-sandboxes` | Not implemented |
 | `policy ls --created-via/--type/--protocol/--include-inactive`, `policy check --protocol` other than `tcp` | Not implemented (`policy ls --decision` and `--source` work) |
 | `kit pack`, `kit push`, `kit pull`, `kit sign`, `kit verify` | Not implemented |
-| `env plan` and the `sbxenv.yaml` fields listed under [Environment files](#environment-files) | Later |
+| The `sbxenv.yaml` fields listed under [Environment files](#environment-files) | Later |
 | `setup ssh` | Later |
 | `mcp auth`, `mcp load`, `mcp unload`; `mcp add --local`, `--dir`, `--client-id`, `--oauth-authorization-server`, `--resource`, `--skip-auth` | Not supported: smolbento has no MCP gateway (see [MCP servers](#mcp-servers)) |
 | `tui` | Later |
@@ -122,13 +122,20 @@ flags, and the registered servers are written into the agent's own MCP config at
 
 `env create`, `env run`, `env exec` and `env rm` read `sbxenv.yaml` as sbx v0.49.2 does (v0.50.1
 for `mounts`), for the fields smolbento supports. These exit 2 and name the field or command:
-`env plan`, `lifecycle`, `bindings`, `registries`, `mcp`, `sandboxOptions.profile|display|
+`lifecycle`, `bindings`, `registries`, `mcp`, `sandboxOptions.profile|display|
 gpu|usb|writableEnvFiles`, and `pullPolicy` other than `missing`.
 
 | Area | sbx | smolbento |
 |---|---|---|
-| Approval | Asks until you approve once, then remembers | Nothing is remembered: `env create` and `env run` ask on every call; `--force` approves one call (scripts, no terminal) |
-| Plan diffs | The summary shows changes against the last apply | No diff; the summary lists what the call will do |
+| Approval | Remembered per environment until the plan changes; `--force` approves one call | Same, measured on sbx 0.53. The record is smolbento's own file; sbx's records aren't read |
+| Unchanged host commands | Ask on every `env create` and `env run`, also when attaching to an existing sandbox, unless `env.rememberHostCommands` is on | Ask only when the sandbox is about to be created: that is when the file's commands are taken up. An existing sandbox keeps running the commands stored at the create you approved. The same setting turns the question off |
+| Plan against the last apply | Keeps a list of what was applied: after a `--force` apply the plan shows `! NAME — unchanged, needs your approval`; a change that waits for a re-create keeps showing as `recorded as applied, no longer present, waits for the next create`; an unchanged secret shows as `○ NAME — unchanged` | Compares with what was approved and asks smolvm whether the sandbox exists: a change shows as `~` (outside `ENV` with `— waits for the next create`) until it is approved, then no longer; unchanged resources aren't listed |
+| `--clone` in the plan | A `GIT REMOTE` section | `clone: true` on the workspace |
+| Port names in the plan | `8080/tcp4` | `8080/tcp` |
+| The plan after a plain `rm` | Lines end with `— recorded as applied, no longer present` | A bare `+` |
+| Kit arguments in the plan | The file's pinned `args.NAME`; `--kit-arg` isn't shown | Same |
+| A local kit's contents | Not measured | Not part of the approval: the plan names the kit's path |
+| Plain `rm` of an environment's sandbox | Keeps the approval | Same; `env rm` forgets it |
 | `refresh`, `backend` on a secret | Used | Accepted, no effect: smolbento resolves at every start |
 | `--skip-host-commands`, `--prune-bindings` | Skip lifecycle and MCP commands; remove bindings | Accepted, no effect (there are no lifecycle commands or bindings yet). Secret `command:` sources run either way, as in sbx |
 | Unknown secret service | Accepted by `env plan` | Refused at create, with the error `sbt secret set` gives |

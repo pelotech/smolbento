@@ -19,6 +19,7 @@ sbt settings unset docker.enabled       # back to the default
 | `kit.allowedSources` | `SMOLBENTO_KIT_ALLOWED_SOURCES` | `["docker.io/"]` | Where published kits may load from: a JSON array of prefixes (`["*"]` allows any) |
 | `kit.allowLocalKits` | `SMOLBENTO_KIT_ALLOW_LOCAL_KITS` | `true` | Allow kits from local directories, descriptor files and Smolfiles |
 | `skills.defaultMode` | `SMOLBENTO_SKILLS_DEFAULT_MODE` | `readonly` | How new sandboxes get the shared skills store: `off`, `readonly` or `readwrite` (see [Skills](usage.md#skills)) |
+| `env.rememberHostCommands` | `SMOLBENTO_ENV_REMEMBER_HOST_COMMANDS` | `false` | Let an approval of an environment file's host commands stand until they change, instead of asking on every `sbt env create` or `sbt env run` that runs them |
 | `browser.enabled` | `SMOLBENTO_BROWSER_ENABLED` | `true` | Let sandboxes open `https://` URLs in your browser while you're attached; `false` also stops in-sandbox logins that redirect to `localhost` (see [Browser and clipboard](usage.md#browser-and-clipboard)) |
 | `ssh.agentForwardingEnabled` | `SMOLBENTO_SSH_AGENT_FORWARDING` | `true` | Allow sandboxes to list SSH agent keys and sign, but not add, remove or lock keys. Disabling blocks new agent connections; existing connections remain active (see [SSH agent](usage.md#ssh-agent)) |
 | `ssh.agentSocketPath` | `SMOLBENTO_SSH_AGENT_SOCKET` | empty | Optional fixed host SSH agent socket path. Empty uses each client's current `SSH_AUTH_SOCK` |

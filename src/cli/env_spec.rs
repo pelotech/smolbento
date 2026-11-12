@@ -8,6 +8,7 @@ use super::SandboxOpts;
 use crate::agents;
 use crate::env::file::{EnvFile, KitEntry, PinnedKit, Port, SecretDecl, Workspace};
 use crate::env::load::Loaded;
+use crate::env::plan::{self, HOST_COMMANDS, Line, Marker, Resource, render};
 use crate::sandbox::{name as sandbox_name, options};
 use crate::secrets::SecretsFile;
 use crate::util::sha256_digest;
@@ -31,13 +32,6 @@ pub struct Overrides {
     pub clone: Option<bool>,
     pub kit_arg: Vec<String>,
     pub kit_args_file: Vec<PathBuf>,
-}
-
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub enum Op {
-    Create,
-    Run,
-    Remove,
 }
 
 /// The sandbox name: `overrides_name`, the file's `name`, or `<agent>-<basename>` of the
@@ -185,39 +179,35 @@ pub fn spec(loaded: &Loaded, overrides: &Overrides, secrets: &SecretsFile) -> Re
 /// The `rm` plan: the sandbox and the services scoped to it, all to destroy. Needs only the name,
 /// so it works when the rest of the file (workspace, kits) no longer checks out.
 pub fn remove_summary(loaded: &Loaded, name: &str, scoped: &[String]) -> String {
-    let mut out = header(loaded, name);
-    let mut n = section(&mut out, "SANDBOX", '-', vec![(name.to_string(), vec![])]);
-    let secrets = scoped.iter().map(|s| (s.clone(), vec![])).collect();
-    n += section(&mut out, "SECRETS", '-', secrets);
-    out += &format!("\n  0 to add · 0 to change · {n} to destroy\n");
-    out
+    let resource = |section: &str, name: &str| {
+        Line::new(Marker::Destroy, &Resource::new(section, name, Vec::new()))
+    };
+    let mut lines = vec![resource("SANDBOX", name)];
+    lines.extend(scoped.iter().map(|s| resource("SECRETS", s)));
+    header(loaded, name) + &render(&lines, HOST_COMMANDS)
 }
 
 /// The `ENVIRONMENT` block: name and file(s).
-fn header(loaded: &Loaded, name: &str) -> String {
+pub fn header(loaded: &Loaded, name: &str) -> String {
     let files: Vec<String> = loaded
         .files
         .iter()
         .map(|p| p.display().to_string())
         .collect();
-    let mut out = String::from("ENVIRONMENT\n");
-    if let [file] = files.as_slice() {
-        out += &format!("  Name: {name}\n  File: {file}\n");
-    } else {
-        out += &format!("  Name:  {name}\n  Files: {}\n", files.join("\n         "));
-    }
-    out
+    let label = if files.len() == 1 { "File: " } else { "Files:" };
+    format!(
+        "ENVIRONMENT\n  Name:  {name}\n  {label} {}\n",
+        files.join("\n         ")
+    )
 }
 
-/// sbx's plan layout, without diffs. `scoped` is the services stored for the sandbox (rm only).
-pub fn summary(loaded: &Loaded, spec: &EnvSpec, op: Op, scoped: &[String]) -> String {
-    if op == Op::Remove {
-        return remove_summary(loaded, &spec.name, scoped);
-    }
+/// What applying the file sets up, in the plan's order.
+pub fn resources(loaded: &Loaded, spec: &EnvSpec) -> Vec<Resource> {
     let f = &loaded.file;
-    let mut out = header(loaded, &spec.name);
+    let field = |label: &str, value: &str| (label.to_string(), value.to_string());
+    let mut out = Vec::new();
 
-    let mut sandbox = vec![format!("agent: {}", f.agent.as_deref().unwrap_or_default())];
+    let mut sandbox = vec![field("agent", f.agent.as_deref().unwrap_or_default())];
     if let Some(o) = &f.sandbox_options {
         let opts = [
             ("cpus", o.cpus.map(|c| c.to_string())),
@@ -228,108 +218,85 @@ pub fn summary(loaded: &Loaded, spec: &EnvSpec, op: Op, scoped: &[String]) -> St
         ];
         for (k, v) in opts {
             if let Some(v) = v {
-                sandbox.push(format!("sandboxOptions.{k}: {v}"));
+                sandbox.push(field(&format!("sandboxOptions.{k}"), &v));
             }
         }
     }
-    let mut n = section(&mut out, "SANDBOX", '+', vec![(spec.name.clone(), sandbox)]);
+    out.push(Resource::new("SANDBOX", &spec.name, sandbox));
 
-    let mut workspaces = Vec::new();
+    for k in f.kits.iter().flatten() {
+        let args = match k {
+            KitEntry::Pinned(PinnedKit {
+                args: Some(args), ..
+            }) => args
+                .iter()
+                .map(|(name, value)| field(&format!("args.{name}"), value))
+                .collect(),
+            _ => Vec::new(),
+        };
+        out.push(Resource::new("KITS", source(k), args));
+    }
+
+    let host_path = |name: &str, fields| Resource {
+        host_path: true,
+        ..Resource::new("WORKSPACES", name, fields)
+    };
     if let Some((path, _)) = workspace(f) {
-        let clone = spec.opts.clone.then(|| "clone: true".to_string());
-        workspaces.push((path.to_string(), clone.into_iter().collect()));
+        let clone = spec.opts.clone.then(|| field("clone", "true"));
+        out.push(host_path(path, clone.into_iter().collect()));
     }
     for w in f.additional_workspaces.iter().flatten() {
-        let ro = (w.read_only == Some(true)).then(|| "readOnly: true".to_string());
-        workspaces.push((w.path.clone(), ro.into_iter().collect()));
+        let ro = (w.read_only == Some(true)).then(|| field("readOnly", "true"));
+        out.push(host_path(&w.path, ro.into_iter().collect()));
     }
-    n += section(&mut out, "WORKSPACES", '+', workspaces);
+    for (guest, host) in f.mounts.iter().flatten() {
+        out.push(Resource {
+            host_path: true,
+            ..Resource::new("MOUNTS", &format!("{host} -> {guest}"), Vec::new())
+        });
+    }
 
-    let mounts = f
-        .mounts
-        .iter()
-        .flatten()
-        .map(|(guest, host)| (format!("{host} -> {guest}"), vec![]))
-        .collect();
-    n += section(&mut out, "MOUNTS", '+', mounts);
+    for (k, v) in &spec.env {
+        out.push(Resource::new(plan::ENV, k, vec![field("value", v)]));
+    }
 
-    let kits = f
-        .kits
-        .iter()
-        .flatten()
-        .map(|k| (source(k).to_string(), vec![]))
-        .collect();
-    n += section(&mut out, "KITS", '+', kits);
+    for (service, s) in &spec.secrets {
+        let mut fields = match (&s.value, &s.r#ref, &s.command) {
+            // Never the value: the plan is printed, and recorded when approved.
+            (Some(v), _, _) => vec![field("value", &sha256_digest(v.as_bytes()))],
+            (_, Some(r), _) => vec![field("ref", r)],
+            (_, _, Some(c)) => vec![
+                field("command", c),
+                field("workdir", "fresh host temporary directory"),
+            ],
+            _ => vec![],
+        };
+        // Whether a command or reference is resolved once or at every start.
+        if s.snapshot == Some(true) {
+            fields.push(field("snapshot", "true"));
+        }
+        if s.no_verify == Some(true) {
+            fields.push(field("noVerify", "true"));
+        }
+        out.push(Resource {
+            host_command: s.command.is_some(),
+            ..Resource::new("SECRETS", service, fields)
+        });
+    }
 
-    let env = spec
-        .env
-        .iter()
-        .map(|(k, v)| (k.clone(), vec![format!("value: {v}")]))
-        .collect();
-    n += section(&mut out, "ENV", '+', env);
-
-    let mut commands = false;
-    let secrets = spec
-        .secrets
-        .iter()
-        .map(|(service, s)| {
-            let detail = match (&s.value, &s.r#ref, &s.command) {
-                (Some(v), _, _) => vec![format!("value: {}", sha256_digest(v.as_bytes()))],
-                (_, Some(r), _) => vec![format!("ref: {r}")],
-                (_, _, Some(c)) => {
-                    commands = true;
-                    vec![
-                        format!("command: {c}"),
-                        "workdir: fresh host temporary directory".to_string(),
-                    ]
-                }
-                _ => vec![],
-            };
-            (service.clone(), detail)
-        })
-        .collect();
-    n += section(&mut out, "SECRETS", '+', secrets);
-
-    let ports = f
-        .ports
-        .iter()
-        .flatten()
-        .map(|p| {
-            let host = p.host.map_or("ephemeral".to_string(), |h| h.to_string());
-            (
-                format!("{}/{}", p.sandbox, protocol(p)),
-                vec![format!("host: {host}")],
-            )
-        })
-        .collect();
-    n += section(&mut out, "PORTS", '+', ports);
-
-    out += &format!("\n  {n} to add · 0 to change · 0 to destroy\n");
-    if commands {
-        out += "  ! this plan runs commands on this machine, outside the sandbox, with your own privileges\n";
+    for p in f.ports.iter().flatten() {
+        let host = p.host.map_or("ephemeral".to_string(), |h| h.to_string());
+        let mut fields = vec![field("host", &host)];
+        if let Some(ip) = &p.host_ip {
+            fields.push(field("hostIP", ip));
+        }
+        out.push(Resource::new(
+            "PORTS",
+            &format!("{}/{}", p.sandbox, protocol(p)),
+            fields,
+        ));
     }
     out
-}
-
-/// A titled section of `sign` entries, each with indented details; nothing when empty.
-/// Returns the number of entries.
-fn section(
-    out: &mut String,
-    title: &str,
-    sign: char,
-    entries: Vec<(String, Vec<String>)>,
-) -> usize {
-    if entries.is_empty() {
-        return 0;
-    }
-    *out += &format!("\n{title}\n");
-    for (head, details) in &entries {
-        *out += &format!("  {sign} {head}\n");
-        for d in details {
-            *out += &format!("      {d}\n");
-        }
-    }
-    entries.len()
 }
 
 /// The primary workspace's path and `clone`.
@@ -643,10 +610,15 @@ mod tests {
         assert!(e.starts_with("unknown service 'notaservice'"), "{e}");
     }
 
-    fn summarise(t: &T, files: &[&str], op: Op, scoped: &[String]) -> String {
+    /// The plan of a fresh environment: every resource to add.
+    fn summarise(t: &T, files: &[&str]) -> String {
         let l = t.loaded(files);
         let s = spec(&l, &Overrides::default(), &SecretsFile::default()).unwrap();
-        summary(&l, &s, op, scoped).replace(&t.root(), "<root>")
+        let lines: Vec<Line> = resources(&l, &s)
+            .iter()
+            .map(|r| Line::new(Marker::Add, r))
+            .collect();
+        (header(&l, &s.name) + &render(&lines, HOST_COMMANDS)).replace(&t.root(), "<root>")
     }
 
     #[test]
@@ -655,28 +627,20 @@ mod tests {
         t.write(
             "proj/sbxenv.yaml",
             &format!(
-                "{HEAD}name: web-app\nagent: claude\nworkspace:\n  path: ./web\n  clone: true\nadditionalWorkspaces:\n  - path: ./docs\n    readOnly: true\nkits:\n  - org/tool\nmounts:\n  /home/agent/.cache: ./cache\nenv:\n  NODE_ENV: development\nports:\n  - sandbox: 3000\n    host: 3000\n  - sandbox: 53\n    protocol: udp\nsecrets:\n  github:\n    command: gh auth token\n  openai:\n    value: sk-dummy\n  google:\n    ref: op://vault/item/field\nsandboxOptions:\n  cpus: 4\n  memory: 8g\n"
+                "{HEAD}name: web-app\nagent: claude\nworkspace:\n  path: ./web\n  clone: true\nadditionalWorkspaces:\n  - path: ./docs\n    readOnly: true\nkits:\n  - org/tool\n  - source: org/pinned\n    args:\n      region: us\nmounts:\n  /home/agent/.cache: ./cache\nenv:\n  NODE_ENV: development\nports:\n  - sandbox: 3000\n    host: 3000\n  - sandbox: 53\n    protocol: udp\nsecrets:\n  github:\n    command: gh auth token\n  openai:\n    value: sk-dummy\n  google:\n    ref: op://vault/item/field\nsandboxOptions:\n  cpus: 4\n  memory: 8g\n"
             ),
         );
         t.write("proj/local.yaml", "env:\n  LOG_LEVEL: debug\n");
-        insta::assert_snapshot!(summarise(
-            &t,
-            &["sbxenv.yaml", "local.yaml"],
-            Op::Create,
-            &[]
-        ));
+        insta::assert_snapshot!(summarise(&t, &["sbxenv.yaml", "local.yaml"]));
     }
 
     #[test]
     fn summary_minimal_and_remove() {
         let t = T::new();
         t.write("proj/sbxenv.yaml", &format!("{HEAD}agent: claude\n"));
-        insta::assert_snapshot!(summarise(&t, &["sbxenv.yaml"], Op::Run, &[]));
-        insta::assert_snapshot!(summarise(
-            &t,
-            &["sbxenv.yaml"],
-            Op::Remove,
-            &["github".into(), "openai".into()]
-        ));
+        insta::assert_snapshot!(summarise(&t, &["sbxenv.yaml"]));
+        let l = t.loaded(&["sbxenv.yaml"]);
+        let removed = remove_summary(&l, "claude-proj", &["github".into(), "openai".into()]);
+        insta::assert_snapshot!(removed.replace(&t.root(), "<root>"));
     }
 }

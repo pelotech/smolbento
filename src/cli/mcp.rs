@@ -61,7 +61,6 @@ fn add<R: Runner>(ctx: &Ctx<R>, a: McpAddArgs) -> Result<()> {
         ))
         .into());
     }
-    mcp::check_name(&a.name)?;
     let server = match (a.url, a.command) {
         (Some(url), None) => {
             if !a.args.is_empty() {
@@ -81,15 +80,11 @@ fn add<R: Runner>(ctx: &Ctx<R>, a: McpAddArgs) -> Result<()> {
                 }
                 headers.insert(name, value.trim().to_string());
             }
-            mcp::check_remote(&url, &headers)?;
             Server::Remote { url, headers }
         }
         (None, Some(command)) => {
             if !a.header.is_empty() {
                 bail!("--header needs --url");
-            }
-            if command.trim().is_empty() {
-                bail!("--command is empty");
             }
             Server::Command {
                 command,
@@ -98,6 +93,8 @@ fn add<R: Runner>(ctx: &Ctx<R>, a: McpAddArgs) -> Result<()> {
         }
         _ => bail!("specify --url or --command (one of them)"),
     };
+    // The same check a sandbox makes when it selects the server (the file can be hand-edited).
+    mcp::check_server(&a.name, &server)?;
     let mut file = McpFile::load(&ctx.paths)?;
     match file.servers.get(&a.name) {
         Some(existing) if *existing == server => {}

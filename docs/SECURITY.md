@@ -144,9 +144,17 @@ access, so load only kits you trust.
 
 - An `sbxenv.yaml` from a repository can run commands on your machine, outside the sandbox: a
   secret's `command:` source runs with your privileges (at `env create`, to check it, and at each
-  start). `env create` and `env run` show every such command in their summary and ask
-  `Apply? [y/N]` before running anything. Nothing is remembered, so they ask each time. `--force`
-  skips the question; use it only on files you trust.
+  start). `env create` and `env run` show every such command in their plan and ask
+  `Approve this plan? (y/N)` before running anything. `--force` skips the question; use it only
+  on files you trust.
+- An approval is remembered for that environment and covers exactly the plan you saw: any change
+  to the files or to a resource asks again. A create that would run host commands asks every
+  time, changed or not, unless you turn on `env.rememberHostCommands`.
+- The file's commands are taken up only when the sandbox is created. Attaching to an existing
+  sandbox with `env run` doesn't ask about them: its starts run the commands stored when it was
+  created (which you approved, or let through with `--force`), not what the file says now.
+- The approval record (`<data dir>/env/<name>.toml`) holds what the plan shows. A literal secret
+  appears there only as its SHA-256 digest.
 - Every secret `command:` source (here and in `sbt secret set --command`) runs from a fresh
   temporary directory, so a command can't pick up a script from the directory you are in. Use an
   absolute path or `PATH`.

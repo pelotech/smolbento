@@ -1,0 +1,33 @@
+---
+source: src/cli/env.rs
+expression: plan(&mut t)
+---
+ENVIRONMENT
+  Name:  claude-proj
+  File:  <proj>/sbxenv.yaml
+
+SANDBOX
+  + claude-proj
+      agent: claude
+      sandboxOptions.cpus: 2
+      sandboxOptions.memory: 4g
+
+WORKSPACES
+  ! <proj> — present, not recorded as applied, needs your approval
+
+ENV
+  + X
+      value: one
+
+SECRETS
+  + github
+      command: printf tok
+      workdir: fresh host temporary directory
+
+PORTS
+  + 80/tcp
+      host: 8080
+
+  4 to add · 0 to change · 0 to destroy · 1 needs approval
+  ! this plan runs commands on this machine, outside the sandbox, with your own privileges
+  ○ not approved yet — applying asks once
