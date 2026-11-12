@@ -34,9 +34,12 @@ release-build target builder:
         zig_target="{{target}}"
         case "{{target}}" in *-linux-gnu) zig_target="{{target}}.2.28" ;; esac
         # The image carries the macOS SDK (keyring links Security.framework in later phases).
+        # Match the Nix dev shell's rustc so release builds use the same compiler tested in CI.
+        rust_ver=$(rustc -V | cut -d' ' -f2)
         docker run --rm -v "$PWD":/io -w /io -e MACOSX_DEPLOYMENT_TARGET=13.0 \
+            -e RUSTUP_TOOLCHAIN="$rust_ver" \
             ghcr.io/rust-cross/cargo-zigbuild:0.23.4 \
-            sh -c "rustup target add {{target}} && cargo zigbuild --locked --release --target $zig_target"
+            sh -c "rustup toolchain install $rust_ver --profile minimal --no-self-update -t {{target}} && cargo zigbuild --locked --release --target $zig_target"
         sudo chown -R "$(id -u):$(id -g)" target
         case "{{target}}" in *-apple-darwin)
             # Apple Silicon refuses unsigned binaries; an ad-hoc signature is enough for a CLI.
