@@ -334,10 +334,11 @@ mod tests {
         for want in [
             " --credential mcp_linear_api_key=SBX_MCP_LINEAR_API_KEY@mcp.linear.app ",
             " --label sbx.mcp=linear,files ",
-            " --label sbx.credential-service.SBX_MCP_LINEAR_API_KEY=mcp:linear:api-key ",
+            " --label sbx.mcp-secret.SBX_MCP_LINEAR_API_KEY=mcp:linear:api-key ",
         ] {
             assert!(create.contains(want), "{want}: {create}");
         }
+        assert!(!create.contains("sbx.credential-service."), "{create}");
         // Not offered as an ordinary secret of the sandbox.
         assert!(!create.contains("sbx.secrets=mcp"), "{create}");
         assert!(!create.contains("--label sbx.secrets="), "{create}");
@@ -455,7 +456,11 @@ mod tests {
                 &json("sbx-claude-proj", "created", "claude-proj"),
             )
             .once_fail(&["machine", "status"], "NOT_FOUND", "vm not found");
-        let err = t.sbt_err(&["create", "claude", ".", "--static-mcp", "linear"]);
+        let err = t
+            .sbt(&["create", "claude", ".", "--static-mcp", "linear"])
+            .unwrap_err();
+        // As printed: the whole chain.
+        let err = format!("{err:#}");
         assert!(err.contains("boom"), "{err}");
         let policy = crate::policy::Policy::load(&t.ctx.paths).unwrap();
         let left: Vec<_> = policy

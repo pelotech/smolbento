@@ -7,7 +7,6 @@ mod registrar;
 mod store;
 
 pub use attach::{Attachment, attach};
-pub use registrar::has_registrar;
 pub use store::{McpFile, Server};
 
 use std::collections::BTreeMap;
@@ -268,6 +267,12 @@ mod tests {
             headers: BTreeMap::new(),
         };
         assert_eq!(s.host().as_deref(), Some("mcp.linear.app"));
+        // A trailing dot names the same host; the rule and the credential use the plain name.
+        let dotted = Server::Remote {
+            url: "https://mcp.linear.app./sse".into(),
+            headers: BTreeMap::new(),
+        };
+        assert_eq!(dotted.host().as_deref(), Some("mcp.linear.app"));
         let c = Server::Command {
             command: "npx".into(),
             args: vec![],

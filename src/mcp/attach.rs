@@ -19,18 +19,19 @@ pub struct Attachment {
     pub hosts: Vec<String>,
     /// One per header secret: the guest gets a placeholder, the server's host gets the value.
     pub credentials: Vec<Credential>,
-    /// Guest env var to the `mcp:` secret it stands for (`sbx.credential-service.*`).
-    pub credential_services: BTreeMap<String, String>,
+    /// Guest env var to the `mcp:` secret it stands for (the `sbx.mcp-secret.*` labels).
+    pub secrets: BTreeMap<String, String>,
     /// First-start steps, after the kits' install hooks.
     pub steps: Vec<InstallStep>,
 }
 
-/// Resolves a `--static-mcp` value (`none`, or comma-separated registered names) for `agent`.
-/// `has_secret` says whether an `mcp:` secret is set.
+/// Resolves a `--static-mcp` value (`none`, or comma-separated registered names) for `agent`: a
+/// preset's name, or `None` when a workload kit is the agent. `has_secret` says whether an `mcp:`
+/// secret is set.
 pub fn attach(
     file: &McpFile,
     selection: &str,
-    agent: &str,
+    agent: Option<&str>,
     has_secret: &dyn Fn(&str) -> bool,
 ) -> Result<Attachment> {
     let mut names: Vec<&str> = Vec::new();
@@ -63,6 +64,9 @@ pub fn attach(
             Ok((*n, server))
         })
         .collect::<Result<_>>()?;
+    let Some(agent) = agent else {
+        bail!("--static-mcp isn't supported for a workload kit yet");
+    };
     if !has_registrar(agent) {
         bail!("--static-mcp isn't supported for agent {agent} yet");
     }
@@ -92,7 +96,7 @@ pub fn attach(
                     hosts: vec![host.clone()],
                     set_header: None,
                 });
-                a.credential_services.insert(var, secret);
+                a.secrets.insert(var, secret);
             }
             a.hosts.push(host);
         }
@@ -143,7 +147,10 @@ mod tests {
 
     #[test]
     fn attach_collects_hosts_credentials_and_steps() {
-        let a = attach(&file(), "linear,files,docs,linear", "claude", &|_| true).unwrap();
+        let a = attach(&file(), "linear,files,docs,linear", Some("claude"), &|_| {
+            true
+        })
+        .unwrap();
         assert_eq!(a.names, ["linear", "files", "docs"]);
         assert_eq!(a.hosts, ["docs.example.com", "mcp.linear.app"]);
         assert_eq!(
@@ -156,7 +163,7 @@ mod tests {
             }]
         );
         assert_eq!(
-            a.credential_services,
+            a.secrets,
             BTreeMap::from([(
                 "SBX_MCP_LINEAR_API_KEY".to_string(),
                 "mcp:linear:api-key".to_string()
@@ -179,7 +186,9 @@ mod tests {
     fn attach_refusals() {
         let f = file();
         let err = |sel: &str, agent: &str, has: bool| {
-            attach(&f, sel, agent, &|_| has).unwrap_err().to_string()
+            attach(&f, sel, Some(agent), &|_| has)
+                .unwrap_err()
+                .to_string()
         };
         assert_eq!(
             err("nope", "claude", true),
@@ -195,9 +204,14 @@ mod tests {
             "--static-mcp isn't supported for agent codex yet"
         );
         // The secret is only asked about when a selected server needs it.
-        attach(&f, "docs", "claude", &|_| false).unwrap();
+        attach(&f, "docs", Some("claude"), &|_| false).unwrap();
+        // A workload kit as the agent: no preset to register with.
+        assert_eq!(
+            attach(&f, "docs", None, &|_| true).unwrap_err().to_string(),
+            "--static-mcp isn't supported for a workload kit yet"
+        );
         for sel in ["none", "", " "] {
-            let a = attach(&f, sel, "codex", &|_| false).unwrap();
+            let a = attach(&f, sel, Some("codex"), &|_| false).unwrap();
             assert_eq!(a, Attachment::default(), "{sel:?}");
         }
         assert!(err("none,docs", "claude", true).contains("none"));
@@ -212,7 +226,7 @@ mod tests {
                 },
             );
         }
-        let e = attach(&f, "my-db,my_db", "claude", &|_| true)
+        let e = attach(&f, "my-db,my_db", Some("claude"), &|_| true)
             .unwrap_err()
             .to_string();
         assert_eq!(

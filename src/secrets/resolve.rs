@@ -145,20 +145,10 @@ pub fn start_env(
             ),
         }
     }
-    // A `--static-mcp` server's header secret: a global `mcp:<server>:<name>` secret bound to its
-    // own env var. It is no service, so the loop above doesn't see it.
-    for (var, secret) in &meta.credential_services {
-        // Only the variables `--static-mcp` binds (`mcp::env_var`): never a kit's.
-        if !secret.starts_with("mcp:") || !var.starts_with("SBX_MCP_") {
-            continue;
-        }
-        let global = crate::secrets::scope_for(None);
-        let value = secrets
-            .secrets
-            .iter()
-            .find(|e| e.service == *secret && e.scope == global)
-            .map(|e| resolve(e, store));
-        match value {
+    // A `--static-mcp` server's header secrets (`sbx.mcp-secret.*`, which only `--static-mcp`
+    // writes): each a global `mcp:<server>:<name>` secret bound to its own env var.
+    for (var, secret) in &meta.mcp_secrets {
+        match secrets.global_entry(secret).map(|e| resolve(e, store)) {
             Some(Ok(value)) => env.push((var.clone(), value)),
             Some(Err(e)) => eprintln!(
                 "warning: MCP secret {secret} for {sandbox}: {e:#}; requests using it will fail"
@@ -176,6 +166,7 @@ pub fn start_env(
         .iter()
         .chain(&meta.credential_install)
         .chain(meta.credential_services.keys())
+        .chain(meta.mcp_secrets.keys())
         .filter(|v| !env.iter().any(|(k, _)| k == *v))
         .cloned()
         .collect();
@@ -234,13 +225,14 @@ mod tests {
         store.set(&entry.account(), "tok").unwrap();
         let mut secrets = SecretsFile::default();
         secrets.set(entry);
+        let bound = std::collections::BTreeMap::from([(
+            "SBX_MCP_LINEAR_API_KEY".to_string(),
+            "mcp:linear:api-key".to_string(),
+        )]);
         let meta = Meta {
             name: "s".into(),
             credential_env: vec!["SBX_MCP_LINEAR_API_KEY".into()],
-            credential_services: std::collections::BTreeMap::from([(
-                "SBX_MCP_LINEAR_API_KEY".to_string(),
-                "mcp:linear:api-key".to_string(),
-            )]),
+            mcp_secrets: bound.clone(),
             ..Default::default()
         };
         let (env, remove) = start_env(&secrets, &meta, &store, false);
@@ -249,19 +241,17 @@ mod tests {
             [("SBX_MCP_LINEAR_API_KEY".to_string(), "tok".to_string())]
         );
         assert!(remove.is_empty(), "{remove:?}");
-        // Only the variable `--static-mcp` binds gets the value: a kit that names an `mcp:`
-        // secret as its own credential service doesn't.
+        // Only what `--static-mcp` recorded gets the value: the same binding among a kit's
+        // credential services (which kits write) gets nothing.
         let kit = Meta {
-            credential_env: vec!["SBX_KIT_X".into()],
-            credential_services: std::collections::BTreeMap::from([(
-                "SBX_KIT_X".to_string(),
-                "mcp:linear:api-key".to_string(),
-            )]),
-            ..meta.clone()
+            name: "s".into(),
+            credential_env: vec!["SBX_MCP_LINEAR_API_KEY".into()],
+            credential_services: bound,
+            ..Default::default()
         };
         let (env, remove) = start_env(&secrets, &kit, &store, false);
         assert!(env.is_empty(), "{env:?}");
-        assert_eq!(remove, ["SBX_KIT_X"]);
+        assert_eq!(remove, ["SBX_MCP_LINEAR_API_KEY"]);
         // The secret was removed since: the start goes on, without the value.
         let (env, remove) = start_env(&SecretsFile::default(), &meta, &store, false);
         assert!(env.is_empty(), "{env:?}");

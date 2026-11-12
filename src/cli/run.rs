@@ -83,70 +83,38 @@ pub fn run<R: Runner>(ctx: &mut Ctx<R>, a: &RunArgs) -> Result<i32> {
             sb.name()
         );
     }
+    // The agent's command: a workload kit's, else the preset's. Looked up before the start, so a
+    // sandbox with no known agent isn't started and left running.
+    let command: Option<Vec<String>> = match (&sb.meta.command, a.detach) {
+        (_, true) => None,
+        (Some(c), false) => Some(c.clone()),
+        (None, false) => Some(
+            agents::find(&sb.meta.agent)
+                .with_context(|| {
+                    format!(
+                        "sandbox '{}' has no known agent ('{}')",
+                        sb.name(),
+                        sb.meta.agent
+                    )
+                })?
+                .command
+                .iter()
+                .map(|s| s.to_string())
+                .collect(),
+        ),
+    };
     provision::ensure_running(ctx, &mut sb)?;
 
     let sessions = ctx.paths.sessions();
-    if a.detach {
+    let Some(command) = command else {
         session::mark_detached(&sessions, sb.name())?;
         writeln!(&ctx.out, "{}", sb.name())?;
         return Ok(0);
-    }
+    };
 
-    // A workload kit's command, else the preset's.
-    let command: Vec<String> = match &sb.meta.command {
-        Some(c) => c.clone(),
-        None => agents::find(&sb.meta.agent)
-            .with_context(|| {
-                format!(
-                    "sandbox '{}' has no known agent ('{}')",
-                    sb.name(),
-                    sb.meta.agent
-                )
-            })?
-            .command
-            .iter()
-            .map(|s| s.to_string())
-            .collect(),
-    };
-    let mut spec = ExecSpec {
-        name: sb.machine.clone(),
-        user: Some("agent".into()),
-        workdir: Some(sb.workdir()),
-        interactive: true,
-        tty: ctx.stdin_tty,
-        cmd: agents::command_with_args(&command, &a.agent_args),
-        ..Default::default()
-    };
-    spec.env.extend(a.session_env.iter().cloned());
-    sandbox::env::session_env(&ctx.env, spec.tty, sb.meta.bridge, &mut spec.env);
-    // A v3 workload runs as its image user, through bash so the image's BASH_ENV is sourced.
-    let image_user = sandbox::launch_user(&ctx.vm, &sb);
-    if let Some(user) = &image_user {
-        spec.user = Some(user.clone());
-        spec.cmd = [BASH, "-c", "exec -- \"$@\"", "bash"]
-            .into_iter()
-            .map(String::from)
-            .chain(spec.cmd)
-            .collect();
-    }
-    // The attach's result is kept until the sandbox is cleaned up: a failure to attach must not
-    // leave it running, or skip `--rm`.
-    let result = {
-        let _session = session::Session::register(&sessions, sb.name())?;
-        // Opens URLs and copies text on the host for the agent while the user is attached.
-        let _bridge = bridge::attach(&ctx.env, &ctx.settings, &sb);
-        // A runtime `ssh-agent@1` grant: the filtered host agent, while the user is attached.
-        let _agent = crate::ssh_agent::filter::attach(&ctx.env, &ctx.paths, &sb);
-        match image_user.is_some().then(|| has_bash(ctx, &sb)) {
-            Some(Err(e)) => Err(e),
-            Some(Ok(false)) => {
-                // sbx's error for such an image, and the code its agent exits with.
-                eprintln!("executable file '{BASH}' not found");
-                Ok(127)
-            }
-            _ => ctx.vm.exec(&spec),
-        }
-    };
+    // Whatever `attach` returns, the sandbox is cleaned up below: nothing after the start may
+    // return early and leave it running, or skip `--rm`.
+    let result = attach(ctx, a, &sb, command);
 
     // Fetch before `--rm` deletes the sandbox, and while it still runs for `_upload-pack`.
     if fetch_on_exit(ctx, &sb)
@@ -175,6 +143,46 @@ pub fn run<R: Runner>(ctx: &mut Ctx<R>, a: &RunArgs) -> Result<i32> {
         eprintln!("warning: stopping sandbox {}: {e:#}", sb.name());
     }
     result
+}
+
+/// Attaches the user to the agent and returns its exit code.
+fn attach<R: Runner>(ctx: &Ctx<R>, a: &RunArgs, sb: &Sandbox, command: Vec<String>) -> Result<i32> {
+    let sessions = ctx.paths.sessions();
+    let mut spec = ExecSpec {
+        name: sb.machine.clone(),
+        user: Some("agent".into()),
+        workdir: Some(sb.workdir()),
+        interactive: true,
+        tty: ctx.stdin_tty,
+        cmd: agents::command_with_args(&command, &a.agent_args),
+        ..Default::default()
+    };
+    spec.env.extend(a.session_env.iter().cloned());
+    sandbox::env::session_env(&ctx.env, spec.tty, sb.meta.bridge, &mut spec.env);
+    // A v3 workload runs as its image user, through bash so the image's BASH_ENV is sourced.
+    let image_user = sandbox::launch_user(&ctx.vm, sb);
+    if let Some(user) = &image_user {
+        spec.user = Some(user.clone());
+        spec.cmd = [BASH, "-c", "exec -- \"$@\"", "bash"]
+            .into_iter()
+            .map(String::from)
+            .chain(spec.cmd)
+            .collect();
+    }
+    let _session = session::Session::register(&sessions, sb.name())?;
+    // Opens URLs and copies text on the host for the agent while the user is attached.
+    let _bridge = bridge::attach(&ctx.env, &ctx.settings, sb);
+    // A runtime `ssh-agent@1` grant: the filtered host agent, while the user is attached.
+    let _agent = crate::ssh_agent::filter::attach(&ctx.env, &ctx.paths, sb);
+    match image_user.is_some().then(|| has_bash(ctx, sb)) {
+        Some(Err(e)) => Err(e),
+        Some(Ok(false)) => {
+            // sbx's error for such an image, and the code its agent exits with.
+            eprintln!("executable file '{BASH}' not found");
+            Ok(127)
+        }
+        _ => ctx.vm.exec(&spec),
+    }
 }
 
 const BASH: &str = "/bin/bash";
@@ -209,18 +217,47 @@ fn ignored_kits_warning(a: &RunArgs, name: &str) -> Option<String> {
 /// The warning for the other create options given to `run` of a sandbox that already exists:
 /// they would be silently dropped otherwise.
 fn ignored_options_warning(a: &RunArgs, name: &str) -> Option<String> {
-    let o = &a.opts;
+    // Every field is named, with no `..`: a new create option fails to compile here until someone
+    // decides whether `run` on an existing sandbox warns about it.
+    let super::SandboxOpts {
+        // Selects the sandbox.
+        name: _,
+        cpus,
+        memory,
+        env,
+        env_file,
+        publish,
+        template,
+        pull,
+        clone,
+        skills,
+        static_mcp,
+        // Kits, --mount and --deny-network have their own warnings.
+        kit: _,
+        kit_arg: _,
+        kit_args_file: _,
+        kit_pins: _,
+        mount: _,
+        deny_network: _,
+        // Docker Cloud options: refused before any sandbox is looked up.
+        allow_network: _,
+        image_ref: _,
+        platform: _,
+        ttl: _,
+        on_timeout: _,
+        volume: _,
+    } = &a.opts;
     let given: Vec<&str> = [
-        (o.cpus.is_some(), "--cpus"),
-        (o.memory.is_some(), "--memory"),
-        (!o.env.is_empty(), "--env"),
-        (!o.env_file.is_empty(), "--env-file"),
-        (!o.publish.is_empty(), "--publish"),
-        (o.template.is_some(), "--template"),
-        (o.pull.is_some(), "--pull"),
-        (o.clone, "--clone"),
-        (o.skills.is_some(), "--skills"),
-        (o.static_mcp.is_some(), "--static-mcp"),
+        (cpus.is_some(), "--cpus"),
+        (memory.is_some(), "--memory"),
+        (!env.is_empty(), "--env"),
+        (!env_file.is_empty(), "--env-file"),
+        (!publish.is_empty(), "--publish"),
+        (template.is_some(), "--template"),
+        (pull.is_some(), "--pull"),
+        (*clone, "--clone"),
+        (skills.is_some(), "--skills"),
+        (static_mcp.is_some(), "--static-mcp"),
     ]
     .into_iter()
     .filter_map(|(on, flag)| on.then_some(flag))
@@ -513,6 +550,35 @@ mod tests {
         assert_eq!(
             super::ignored_options_warning(&parse(&["sbt", "run", "--name", "s1"]), "s1"),
             None
+        );
+    }
+
+    #[test]
+    fn a_sandbox_with_no_known_agent_is_not_started() {
+        let mut t = test_env(&[]);
+        t.sandbox("x", "stopped", &[("sbx.agent", "nope")]);
+        let err = t.sbt_err(&["run", "--name", "x"]);
+        assert!(err.contains("has no known agent ('nope')"), "{err}");
+        // Checked before the start: nothing to stop afterwards.
+        assert!(!t.made("machine start"), "{:#?}", t.calls());
+    }
+
+    #[test]
+    fn a_session_that_cant_be_registered_still_stops_the_sandbox() {
+        let mut t = test_env(&[]);
+        created(&t, "stopped");
+        // The sessions directory can't be created: a file is in its place.
+        let sessions = t.ctx.paths.sessions();
+        std::fs::create_dir_all(sessions.parent().unwrap()).unwrap();
+        std::fs::write(&sessions, b"").unwrap();
+        let err = t.sbt(&["run", "--name", "claude-proj"]).unwrap_err();
+        assert!(!format!("{err:#}").is_empty());
+        assert!(t.made("machine start"), "{:#?}", t.calls());
+        assert_eq!(
+            t.calls().last().unwrap(),
+            "machine stop -n sbx-claude-proj",
+            "{:#?}",
+            t.calls()
         );
     }
 

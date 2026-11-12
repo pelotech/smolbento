@@ -92,6 +92,8 @@ pub struct CreateRequest {
     pub mcp: Option<String>,
     /// The registered MCP servers attached (the `sbx.mcp` label); `None` without the flag.
     pub mcp_servers: Option<Vec<String>>,
+    /// Guest env var to the `mcp:` secret it stands for (the `sbx.mcp-secret.*` labels).
+    pub mcp_secrets: BTreeMap<String, String>,
 }
 
 impl CreateRequest {
@@ -146,6 +148,7 @@ pub fn meta(req: &CreateRequest) -> Meta {
         skills: req.skills.as_ref().map(|s| s.label.clone()),
         template: req.template.clone(),
         mcp: req.mcp_servers.clone(),
+        mcp_secrets: req.mcp_secrets.clone(),
     }
 }
 
