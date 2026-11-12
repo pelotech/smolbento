@@ -1,11 +1,9 @@
 //! The browser and clipboard bridge: guest shims (`xdg-open`, `wl-copy`, …) that reach the host
 //! over a socket smolvm mounts into the sandbox, served while a user is attached.
 
-pub mod agent;
-pub mod filter;
 mod host;
 mod http;
-mod listener;
+pub(crate) mod listener;
 mod relay;
 mod shims;
 
@@ -59,16 +57,40 @@ fn socket_id(name: &str) -> String {
 }
 
 /// Whether `dir` is private to this user, for a sandbox's socket (checked at create and at every
-/// start): created 0700 if missing, else a real directory (not a symlink) we own with mode 0700.
-/// In the shared `/tmp`, another user could create it first and receive what the sandbox sends.
+/// start): see `private_dir`.
 pub fn ensure_private_dir(dir: &Path) -> bool {
     ensure_private_dir_of(dir, crate::util::host_uid())
 }
 
 fn ensure_private_dir_of(dir: &Path, uid: u32) -> bool {
-    let _ = fs::DirBuilder::new().mode(0o700).create(dir);
-    fs::symlink_metadata(dir)
-        .is_ok_and(|m| m.is_dir() && m.uid() == uid && m.mode() & 0o777 == 0o700)
+    private_dir(dir, uid).is_ok()
+}
+
+/// Creates `dir` 0700 if it is missing; otherwise it must be a real directory (not a symlink)
+/// that `uid` owns with mode 0700. In the shared `/tmp`, another user could create it first and
+/// receive what the sandbox sends. One that is ours but open to others is refused rather than
+/// tightened: a socket may have been planted in it while it was open.
+fn private_dir(dir: &Path, uid: u32) -> anyhow::Result<()> {
+    use anyhow::Context;
+    match fs::DirBuilder::new().mode(0o700).create(dir) {
+        Err(e) if e.kind() != std::io::ErrorKind::AlreadyExists => {
+            return Err(e).with_context(|| format!("creating {}", dir.display()));
+        }
+        _ => {}
+    }
+    let m = fs::symlink_metadata(dir)?;
+    if !m.is_dir() || m.uid() != uid {
+        anyhow::bail!("{} isn't a directory owned by you", dir.display());
+    }
+    let mode = m.mode() & 0o777;
+    if mode != 0o700 {
+        anyhow::bail!(
+            "{} has mode {mode:o}, not 700: others may have changed what is in it; remove it and \
+             try again",
+            dir.display()
+        );
+    }
+    Ok(())
 }
 
 #[cfg(test)]

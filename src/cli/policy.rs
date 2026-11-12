@@ -494,12 +494,15 @@ fn approval<R: Runner>(ctx: &Ctx<R>, policy: &mut Policy, cmd: ApprovalCmd) -> R
                     seen.join(", ")
                 );
             }
+            let parsed = parse_list(&id)?;
+            if decision == Decision::Deny {
+                guard_bound_secrets(ctx, sandbox.as_deref(), &parsed)?;
+            }
             let before = policy.clone();
             let rule =
                 policy.add_rule(sandbox.as_deref(), decision, &id, "approval", None, None)?;
             policy.save(&ctx.paths)?;
             writeln!(&ctx.out, "{} rule {rule}: {id}", decision.name())?;
-            let parsed = parse_list(&id)?;
             if decision == Decision::Deny {
                 print_deny_notes(ctx, policy, sandbox.as_deref(), &parsed)?;
             }
@@ -1136,6 +1139,29 @@ mod tests {
             .sbt(&["policy", "approval", "inspect", "nothing.com"])
             .unwrap_err();
         assert!(err.to_string().contains("no blocked request"), "{err}");
+    }
+
+    #[test]
+    fn approval_respond_refuses_to_deny_a_bound_secret_host() {
+        let mut t = test_env(&[]);
+        set_policy(&t, "mode = \"deny-all\"");
+        blocked(&t);
+        // Blocked earlier, and since bound to a secret of the same sandbox.
+        running(
+            &t,
+            &[
+                ("sbx.name", "a1"),
+                ("sbx.secrets", "internal"),
+                ("sbx.credential-hosts", "example.com"),
+            ],
+        );
+        let err = t.sbt_err(&["policy", "approval", "respond", "example.com", "deny"]);
+        assert!(err.contains("can't deny example.com"), "{err}");
+        let p = Policy::load(&t.ctx.paths).unwrap();
+        assert!(p.sandboxes.is_empty() && p.rules.is_empty());
+        // Allowing it is still fine.
+        t.sbt(&["policy", "approval", "respond", "example.com", "allow"])
+            .unwrap();
     }
 
     #[test]

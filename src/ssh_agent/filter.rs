@@ -13,8 +13,8 @@ use std::time::{Duration, Instant};
 
 use anyhow::Result;
 
-use super::agent::{self, Access};
-use super::listener::{self, DEADLINE, Deadline, POLL, Server};
+use super::{self as agent, Access};
+use crate::bridge::listener::{self, DEADLINE, Deadline, POLL, Server};
 use crate::config::{Paths, Settings};
 use crate::sandbox::Sandbox;
 
@@ -83,7 +83,7 @@ pub fn attach(env: &BTreeMap<String, String>, paths: &Paths, sb: &Sandbox) -> Op
 
 /// Serves `access` on the sandbox `name`'s agent socket; problems only warn.
 pub fn serve_for(name: &str, access: Access, backing: Backing) -> Option<Server> {
-    serve(&super::agent_socket(name), access, backing).unwrap_or_else(|e| {
+    serve(&crate::bridge::agent_socket(name), access, backing).unwrap_or_else(|e| {
         eprintln!("warning: {name}: no SSH agent: {e:#}");
         None
     })
@@ -370,10 +370,13 @@ mod tests {
         }
     }
 
-    /// macOS caps socket paths near 104 bytes: keep them under /tmp.
+    /// macOS caps socket paths near 104 bytes: keep them under /tmp. Private, as a socket's
+    /// directory must be.
     fn short_dir() -> tempfile::TempDir {
+        use std::os::unix::fs::PermissionsExt;
         tempfile::Builder::new()
             .prefix("sbt")
+            .permissions(std::fs::Permissions::from_mode(0o700))
             .tempdir_in("/tmp")
             .unwrap()
     }

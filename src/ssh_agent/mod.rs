@@ -1,6 +1,8 @@
 //! SSH agent forwarding (`ssh-agent@1`): the grant a kit set asks for, the `sbx.ssh-agent` label
 //! that records it, and whether the host has an agent to back it.
 
+pub mod filter;
+
 use std::collections::BTreeMap;
 use std::fmt;
 use std::path::{Path, PathBuf};

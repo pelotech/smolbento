@@ -118,12 +118,7 @@ fn ls<R: Runner>(ctx: &Ctx<R>, file: &SecretsFile, a: &SecretLsArgs) -> Result<(
 
 /// `--env` of `secret set-custom`: a name a shell (and smolvm's credential flag) accepts.
 fn check_env_name(env: &str) -> Result<()> {
-    let mut bytes = env.bytes();
-    let valid = bytes
-        .next()
-        .is_some_and(|b| b.is_ascii_alphabetic() || b == b'_')
-        && bytes.all(|b| b.is_ascii_alphanumeric() || b == b'_');
-    if !valid {
+    if !crate::kits::guest::is_env_name(env) {
         bail!(
             "'{env}' isn't a valid env var name: use letters, digits and '_', not starting with \
              a digit (e.g. MY_API_KEY)"
@@ -262,13 +257,8 @@ pub(crate) fn store<R: Runner>(
         source,
     });
     if let Err(e) = file.save(&ctx.paths) {
-        // Put the store back as the unchanged entry expects: the earlier value, or none. Best
-        // effort; the save error is the one to report.
         if value.is_some() {
-            let _ = match &previous {
-                Some(v) => ctx.store.set(&account, v),
-                None => ctx.store.delete(&account),
-            };
+            restore(ctx, &account, previous.as_deref());
         }
         return Err(e);
     }
@@ -279,6 +269,15 @@ pub(crate) fn store<R: Runner>(
         forget(ctx, &[old])?;
     }
     Ok(described)
+}
+
+/// Puts a stored value back as it was before a `set` whose secrets.toml save then failed: the
+/// earlier value, or none. Best effort; the save error is the one the caller reports.
+fn restore<R: Runner>(ctx: &Ctx<R>, account: &str, previous: Option<&str>) {
+    let _ = match previous {
+        Some(v) => ctx.store.set(account, v),
+        None => ctx.store.delete(account),
+    };
 }
 
 /// Which sandboxes pick the change up on their next start, and which would need recreating.
@@ -538,10 +537,7 @@ fn set_registry<R: Runner>(
         auth_endpoint,
     });
     if let Err(e) = file.save(&ctx.paths) {
-        let _ = match &previous {
-            Some(v) => ctx.store.set(&account, v),
-            None => ctx.store.delete(&account),
-        };
+        restore(ctx, &account, previous.as_deref());
         return Err(e);
     }
     writeln!(

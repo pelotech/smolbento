@@ -4,7 +4,6 @@ use std::collections::{BTreeMap, BTreeSet};
 
 use anyhow::{Context, Result, bail};
 
-use crate::bridge::agent::{AgentGrant, PhaseGrant};
 use crate::kits::args::{ArgValues, expand};
 use crate::kits::capability;
 use crate::kits::host_mount;
@@ -12,6 +11,7 @@ use crate::kits::model::{
     AgentContextReq, Cap, CapBody, CredReq, FileReq, Hook, HookCmd, Kind, Kit, Lifecycle, NetRule,
     Rules, Source, SshPhase,
 };
+use crate::ssh_agent::{AgentGrant, PhaseGrant};
 
 /// The agent user's home in the platform floor; the host can't see the guest's real env.
 const AGENT_HOME: &str = "/home/agent";
@@ -823,8 +823,8 @@ fn order(workload: &Kit, mixins: Vec<Kit>) -> Result<Vec<Kit>> {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::bridge::agent::PhaseGrant;
     use crate::kits::model::{ArgDef, Cap, Lifecycle, NetRule, OAuthReq, Source, SshPhase};
+    use crate::ssh_agent::PhaseGrant;
 
     fn base(name: &str, kind: Kind) -> Kit {
         Kit::new(name, kind, Source::Registry(name.into()))

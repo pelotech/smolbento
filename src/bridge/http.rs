@@ -300,7 +300,7 @@ mod tests {
     use anyhow::bail;
     use std::fs;
     use std::io::Cursor;
-    use std::os::unix::fs::{MetadataExt, PermissionsExt};
+    use std::os::unix::fs::{DirBuilderExt, MetadataExt, PermissionsExt};
     use std::path::PathBuf;
     use std::sync::Arc;
     use std::sync::Mutex;
@@ -692,7 +692,10 @@ mod tests {
     fn a_stale_socket_is_replaced() {
         let dir = tempfile::tempdir().unwrap();
         let path = sock(&dir);
-        fs::create_dir_all(path.parent().unwrap()).unwrap();
+        fs::DirBuilder::new()
+            .mode(0o700)
+            .create(path.parent().unwrap())
+            .unwrap();
         // A socket file nobody listens on, as a crashed session leaves.
         drop(UnixListener::bind(&path).unwrap());
         assert!(path.exists());
@@ -721,14 +724,18 @@ mod tests {
     }
 
     #[test]
-    fn tightens_its_own_directory_and_refuses_another_kind() {
+    fn refuses_a_directory_that_isnt_private() {
         let dir = tempfile::tempdir().unwrap();
         let path = sock(&dir);
         let parent = path.parent().unwrap();
+        // Open to others: whatever is in it may have been planted, so it isn't tightened and used.
         fs::create_dir(parent).unwrap();
         fs::set_permissions(parent, fs::Permissions::from_mode(0o755)).unwrap();
-        drop(serve(&path, recording(true, false).0).unwrap());
-        assert_eq!(fs::metadata(parent).unwrap().mode() & 0o777, 0o700);
+        let err = serve(&path, recording(true, false).0)
+            .err()
+            .expect("refused");
+        assert!(err.to_string().contains("mode 755"), "{err:#}");
+        assert_eq!(fs::metadata(parent).unwrap().mode() & 0o777, 0o755);
         // A symlink planted in its place is refused.
         fs::remove_dir(parent).unwrap();
         std::os::unix::fs::symlink(dir.path(), parent).unwrap();

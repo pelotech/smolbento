@@ -12,6 +12,7 @@ pub mod sandbox;
 pub mod secrets;
 pub mod skills;
 pub mod smolvm;
+pub mod ssh_agent;
 pub mod templates;
 pub mod util;
 pub mod workspace;

@@ -3,7 +3,7 @@
 
 use std::fs;
 use std::io::Read;
-use std::os::unix::fs::{DirBuilderExt, MetadataExt, PermissionsExt};
+use std::os::unix::fs::MetadataExt;
 use std::os::unix::net::{UnixListener, UnixStream};
 use std::path::{Path, PathBuf};
 use std::sync::Arc;
@@ -11,14 +11,14 @@ use std::sync::atomic::{AtomicBool, Ordering};
 use std::thread::{self, JoinHandle};
 use std::time::{Duration, Instant};
 
-use anyhow::{Context, Result, bail};
+use anyhow::{Context, Result};
 
 /// How long a client has, from its connect, to send its whole request; also how long writing the
 /// answer may take. Requests are handled one at a time, so this bounds what a slow client holds.
-pub(super) const DEADLINE: Duration = Duration::from_secs(10);
+pub(crate) const DEADLINE: Duration = Duration::from_secs(10);
 
 /// How often the accept loop and a request being read check for a stop.
-pub(super) const POLL: Duration = Duration::from_millis(50);
+pub(crate) const POLL: Duration = Duration::from_millis(50);
 
 /// A running listener. Dropping it stops the thread (within `POLL`, or once a running opener or
 /// copier returns; those have their own timeout), so no request is handled after it, and removes
@@ -32,7 +32,7 @@ pub struct Server {
 
 /// Binds `path` (as `serve`) and runs `accept` on a thread with the non-blocking listener and the
 /// stop flag that dropping the returned `Server` sets.
-pub(super) fn spawn(
+pub(crate) fn spawn(
     path: &Path,
     accept: impl FnOnce(&UnixListener, Arc<AtomicBool>) + Send + 'static,
 ) -> Result<Option<Server>> {
@@ -68,7 +68,7 @@ impl Drop for Server {
 
 fn bind(path: &Path) -> Result<Option<UnixListener>> {
     if let Some(dir) = path.parent() {
-        make_private_dir(dir)?;
+        super::private_dir(dir, crate::util::host_uid())?;
     }
     if fs::symlink_metadata(path).is_ok() {
         if UnixStream::connect(path).is_ok() {
@@ -84,27 +84,8 @@ fn bind(path: &Path) -> Result<Option<UnixListener>> {
     }
 }
 
-/// Creates `dir` 0700, or checks that an existing one is a directory of ours (it is under the
-/// shared `/tmp`) and tightens it to 0700.
-fn make_private_dir(dir: &Path) -> Result<()> {
-    match fs::DirBuilder::new().mode(0o700).create(dir) {
-        Err(e) if e.kind() != std::io::ErrorKind::AlreadyExists => {
-            return Err(e).with_context(|| format!("creating {}", dir.display()));
-        }
-        _ => {}
-    }
-    let m = fs::symlink_metadata(dir)?;
-    if !m.is_dir() || m.uid() != crate::util::host_uid() {
-        bail!("{} isn't a directory owned by you", dir.display());
-    }
-    if m.mode() & 0o777 != 0o700 {
-        fs::set_permissions(dir, fs::Permissions::from_mode(0o700))?;
-    }
-    Ok(())
-}
-
 /// A socket that can wait a while for data: Unix (the bridge) or TCP (the login relay).
-pub(super) trait Stream {
+pub(crate) trait Stream {
     fn read_for(&self, buf: &mut [u8], timeout: Duration) -> std::io::Result<usize>;
 }
 
@@ -123,7 +104,7 @@ impl Stream for std::net::TcpStream {
 }
 
 /// Reads from `stream` until `until` (for all reads, not each), or until `stop` is set.
-pub(super) struct Deadline<'a, S> {
+pub(crate) struct Deadline<'a, S> {
     pub stream: &'a S,
     pub until: Instant,
     pub stop: &'a AtomicBool,
