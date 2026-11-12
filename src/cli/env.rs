@@ -407,7 +407,7 @@ mod tests {
         sbt(&mut env.ctx, &["env", "create", "--force"]).unwrap();
         let out = env.stdout();
         assert!(
-            out.starts_with("ENVIRONMENT\n  Name: claude-proj\n"),
+            out.starts_with("ENVIRONMENT\n  Name:  claude-proj\n"),
             "{out}"
         );
         assert!(
@@ -733,7 +733,7 @@ mod tests {
         listed(&t, &[]);
         assert_eq!(t.sbt(&["env", "rm", "--force"]).unwrap(), 0);
         let out = t.stdout();
-        assert!(out.contains("ENVIRONMENT\n  Name: claude-proj\n"), "{out}");
+        assert!(out.contains("ENVIRONMENT\n  Name:  claude-proj\n"), "{out}");
         assert!(out.contains("  - github\n"), "{out}");
         assert!(
             out.ends_with("Removed sandbox claude-proj\nRemoved secrets scoped to claude-proj\n"),
