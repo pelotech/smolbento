@@ -1,5 +1,12 @@
 # Changelog
 
+## [0.15.1](https://github.com/pelotech/smolbento/compare/v0.15.0...v0.15.1) (2026-11-12)
+
+
+### Bug Fixes
+
+* **release:** match cargo-zigbuild rustc version to the Nix dev shell ([#73](https://github.com/pelotech/smolbento/issues/73)) ([2b9ce39](https://github.com/pelotech/smolbento/commit/2b9ce394823eb4e95915642621855d6911ac7203))
+
 ## [0.15.0](https://github.com/pelotech/smolbento/compare/v0.14.0...v0.15.0) (2026-11-12)
 
 
