@@ -82,12 +82,18 @@ impl Line {
     }
 }
 
+/// The section whose resources reach a sandbox that already exists.
+pub const ENV: &str = "ENV";
+
+/// The warning under a plan that runs commands on the host.
 pub const HOST_COMMANDS: &str =
     "  ! this plan runs commands on this machine, outside the sandbox, with your own privileges\n";
+/// The same, when those commands are approved and unchanged but ask all the same.
+pub const UNCHANGED_HOST_COMMANDS: &str = "  ! nothing in this plan has changed, but its commands run on this machine, outside the sandbox, with your own privileges, which needs explicit approval on each run\n";
 
-/// The sections (in the order their first line arrives), the count line, and the host-command
-/// warning when a line runs one.
-pub fn render(lines: &[Line]) -> String {
+/// The sections (in the order their first line arrives), the count line, and `host_warning` when
+/// a line runs a command on the host.
+pub fn render(lines: &[Line], host_warning: &str) -> String {
     let mut out = String::new();
     let mut sections: Vec<&str> = Vec::new();
     for l in lines {
@@ -121,7 +127,7 @@ pub fn render(lines: &[Line]) -> String {
     }
     out.push('\n');
     if lines.iter().any(|l| l.resource.host_command) {
-        out += HOST_COMMANDS;
+        out += host_warning;
     }
     out
 }
@@ -157,7 +163,7 @@ mod tests {
             Line::new(Marker::Destroy, &env("C")),
         ];
         assert_eq!(
-            render(&lines),
+            render(&lines, HOST_COMMANDS),
             "\nSANDBOX\n  + web\n      agent: claude\n\
              \nWORKSPACES\n  ! /w — present, not recorded as applied, needs your approval\n\
              \nENV\n  + A\n      value: 1\n  ~ B\n      value: 1 -> 2\n  - C\n      value: 1\n\
@@ -169,6 +175,9 @@ mod tests {
 
     #[test]
     fn render_omits_a_zero_approval_count() {
-        assert_eq!(render(&[]), "\n  0 to add · 0 to change · 0 to destroy\n");
+        assert_eq!(
+            render(&[], HOST_COMMANDS),
+            "\n  0 to add · 0 to change · 0 to destroy\n"
+        );
     }
 }

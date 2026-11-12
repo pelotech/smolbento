@@ -8,7 +8,7 @@ use super::SandboxOpts;
 use crate::agents;
 use crate::env::file::{EnvFile, KitEntry, PinnedKit, Port, SecretDecl, Workspace};
 use crate::env::load::Loaded;
-use crate::env::plan::{Line, Marker, Resource, render};
+use crate::env::plan::{self, HOST_COMMANDS, Line, Marker, Resource, render};
 use crate::sandbox::{name as sandbox_name, options};
 use crate::secrets::SecretsFile;
 use crate::util::sha256_digest;
@@ -184,7 +184,7 @@ pub fn remove_summary(loaded: &Loaded, name: &str, scoped: &[String]) -> String 
     };
     let mut lines = vec![resource("SANDBOX", name)];
     lines.extend(scoped.iter().map(|s| resource("SECRETS", s)));
-    header(loaded, name) + &render(&lines)
+    header(loaded, name) + &render(&lines, HOST_COMMANDS)
 }
 
 /// The `ENVIRONMENT` block: name and file(s).
@@ -257,7 +257,7 @@ pub fn resources(loaded: &Loaded, spec: &EnvSpec) -> Vec<Resource> {
     }
 
     for (k, v) in &spec.env {
-        out.push(Resource::new("ENV", k, vec![field("value", v)]));
+        out.push(Resource::new(plan::ENV, k, vec![field("value", v)]));
     }
 
     for (service, s) in &spec.secrets {
@@ -618,7 +618,7 @@ mod tests {
             .iter()
             .map(|r| Line::new(Marker::Add, r))
             .collect();
-        (header(&l, &s.name) + &render(&lines)).replace(&t.root(), "<root>")
+        (header(&l, &s.name) + &render(&lines, HOST_COMMANDS)).replace(&t.root(), "<root>")
     }
 
     #[test]

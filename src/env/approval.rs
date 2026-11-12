@@ -9,7 +9,7 @@ use std::time::{Duration, UNIX_EPOCH};
 use anyhow::{Context, Result};
 use serde::{Deserialize, Serialize};
 
-use super::plan::{Line, Marker, Resource};
+use super::plan::{ENV, Line, Marker, Resource};
 use crate::config::{self, Paths};
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
@@ -99,59 +99,65 @@ pub fn need(
     }
 }
 
-/// The plan's lines for `current`. Without a sandbox everything is to add; with one, only what
-/// differs from the record is shown.
+/// The plan's lines for `current`: what a create would set up when the sandbox doesn't exist,
+/// else what differs from the record.
 pub fn lines(record: Option<&Record>, current: &[Resource], exists: bool) -> Vec<Line> {
     let approved: &[Resource] = record.map_or(&[], |r| &r.approved);
-    let recorded = |r: &Resource| {
-        approved
-            .iter()
-            .find(|a| a.section == r.section && a.name == r.name)
-    };
-    if !exists {
-        return current
-            .iter()
-            .filter_map(|r| {
-                // A path on the host is there already: it is approved, not added.
-                if !r.host_path {
-                    Some(Line::new(Marker::Add, r))
-                } else if recorded(r) == Some(r) {
-                    None
-                } else {
-                    Some(Line {
-                        note: Some("present, not recorded as applied, needs your approval"),
-                        ..Line::new(Marker::Approve, r)
-                    })
-                }
-            })
-            .collect();
+    if exists {
+        differences(approved, current)
+    } else {
+        before_create(approved, current)
     }
-    // Only `env` reaches a sandbox that exists.
-    let note = |r: &Resource| (r.section != "ENV").then_some("waits for the next create");
+}
+
+fn find<'a>(list: &'a [Resource], r: &Resource) -> Option<&'a Resource> {
+    list.iter()
+        .find(|o| o.section == r.section && o.name == r.name)
+}
+
+/// Everything is to add, except paths on the host: those are there already, so one is either
+/// approved (and not listed) or needs approval.
+fn before_create(approved: &[Resource], current: &[Resource]) -> Vec<Line> {
+    current
+        .iter()
+        .filter_map(|r| {
+            if !r.host_path {
+                Some(Line::new(Marker::Add, r))
+            } else if find(approved, r) == Some(r) {
+                None
+            } else {
+                Some(Line {
+                    note: Some("present, not recorded as applied, needs your approval"),
+                    ..Line::new(Marker::Approve, r)
+                })
+            }
+        })
+        .collect()
+}
+
+/// What was added, changed or removed since the approval. Only `env` reaches a sandbox that
+/// exists, so the other lines say they wait.
+fn differences(approved: &[Resource], current: &[Resource]) -> Vec<Line> {
+    let waits = |r: &Resource, line: Line| Line {
+        note: (r.section != ENV).then_some("waits for the next create"),
+        ..line
+    };
     let mut out = Vec::new();
     for r in current {
-        let line = match recorded(r) {
-            Some(a) if a == r => continue,
-            Some(a) => Line {
-                fields: changed_fields(a, r),
-                ..Line::new(Marker::Change, r)
-            },
-            None => Line::new(Marker::Add, r),
-        };
-        out.push(Line {
-            note: note(r),
-            ..line
-        });
+        match find(approved, r) {
+            Some(a) if a == r => {}
+            Some(a) => out.push(waits(
+                r,
+                Line {
+                    fields: changed_fields(a, r),
+                    ..Line::new(Marker::Change, r)
+                },
+            )),
+            None => out.push(waits(r, Line::new(Marker::Add, r))),
+        }
     }
-    let gone = approved.iter().filter(|a| {
-        !current
-            .iter()
-            .any(|r| r.section == a.section && r.name == a.name)
-    });
-    out.extend(gone.map(|a| Line {
-        note: note(a),
-        ..Line::new(Marker::Destroy, a)
-    }));
+    let gone = approved.iter().filter(|a| find(current, a).is_none());
+    out.extend(gone.map(|a| waits(a, Line::new(Marker::Destroy, a))));
     out
 }
 

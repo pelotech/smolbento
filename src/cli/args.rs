@@ -179,15 +179,12 @@ pub struct EnvCommon {
     pub env_args_file: Vec<PathBuf>,
 }
 
-/// What `env create` and `env run` take besides `EnvCommon`.
+/// Flags of `env create`, `env run` and `env plan` that override the file.
 #[derive(Debug, Clone, Default, Args)]
-pub struct EnvApplyOpts {
+pub struct EnvOverrideOpts {
     /// Override workspace.clone in sbxenv.yaml (see 'sbt create --clone')
     #[arg(long, num_args = 0..=1, require_equals = true, default_missing_value = "true")]
     pub clone: Option<bool>,
-    /// Apply the environment plan without asking
-    #[arg(short = 'f', long)]
-    pub force: bool,
     /// Value for an argument a kit declares, as name=value for every kit or kit.name=value for one (can be repeated); overrides the args a kits: entry pins in sbxenv.yaml
     #[arg(long = "kit-arg", value_name = "NAME=VALUE")]
     pub kit_arg: Vec<String>,
@@ -197,6 +194,16 @@ pub struct EnvApplyOpts {
     /// Skip the host lifecycle commands the environment declares (smolbento runs none)
     #[arg(long = "skip-host-commands")]
     pub skip_host_commands: bool,
+}
+
+/// What `env create` and `env run` take besides `EnvCommon`.
+#[derive(Debug, Clone, Default, Args)]
+pub struct EnvApplyOpts {
+    #[command(flatten)]
+    pub overrides: EnvOverrideOpts,
+    /// Apply the environment plan without asking
+    #[arg(short = 'f', long)]
+    pub force: bool,
     #[arg(long = "on-timeout", hide = true)]
     pub on_timeout: Option<String>,
     #[arg(long, hide = true)]
@@ -216,18 +223,8 @@ pub struct EnvCreateArgs {
 pub struct EnvPlanArgs {
     #[command(flatten)]
     pub common: EnvCommon,
-    /// Override workspace.clone in sbxenv.yaml (see 'sbt create --clone')
-    #[arg(long, num_args = 0..=1, require_equals = true, default_missing_value = "true")]
-    pub clone: Option<bool>,
-    /// Value for an argument a kit declares, as name=value for every kit or kit.name=value for one (can be repeated); overrides the args a kits: entry pins in sbxenv.yaml
-    #[arg(long = "kit-arg", value_name = "NAME=VALUE")]
-    pub kit_arg: Vec<String>,
-    /// File of name=value kit arguments, one per line (can be repeated); --kit-arg overrides
-    #[arg(long = "kit-args-file", value_name = "FILE")]
-    pub kit_args_file: Vec<PathBuf>,
-    /// Plan without the host lifecycle commands the environment declares (smolbento runs none)
-    #[arg(long = "skip-host-commands")]
-    pub skip_host_commands: bool,
+    #[command(flatten)]
+    pub overrides: EnvOverrideOpts,
 }
 
 #[derive(Debug, Args)]

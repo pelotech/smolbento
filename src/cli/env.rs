@@ -7,13 +7,13 @@ use anyhow::{Context, Result, anyhow, bail};
 
 use super::env_spec::{EnvSpec, Overrides, header, name, remove_summary, resources, spec};
 use super::{
-    Ctx, EnvApplyOpts, EnvCmd, EnvCommon, EnvExecArgs, EnvRmArgs, ExecArgs, RunArgs, SandboxOpts,
-    SecretSource, Unsupported, confirm_or,
+    Ctx, EnvApplyOpts, EnvCmd, EnvCommon, EnvExecArgs, EnvOverrideOpts, EnvRmArgs, ExecArgs,
+    RunArgs, SandboxOpts, SecretSource, Unsupported, confirm_or,
 };
 use crate::env::approval::{self, Need};
 use crate::env::file::SecretDecl;
 use crate::env::load::{ArgInputs, Loaded, load};
-use crate::env::plan::{HOST_COMMANDS, Resource, render};
+use crate::env::plan::{HOST_COMMANDS, Line, Resource, UNCHANGED_HOST_COMMANDS, render};
 use crate::sandbox;
 use crate::secrets::{SecretEntry, SecretsFile, Source, resolve::resolve, scope_for};
 use crate::smolvm::Runner;
@@ -24,15 +24,7 @@ pub fn run<R: Runner>(ctx: &mut Ctx<R>, cmd: EnvCmd) -> Result<i32> {
         EnvCmd::Run(a) => env_run(ctx, &a.common, &a.apply, a.detach),
         EnvCmd::Exec(a) => env_exec(ctx, a),
         EnvCmd::Rm(a) => env_rm(ctx, a),
-        EnvCmd::Plan(a) => {
-            let apply = EnvApplyOpts {
-                clone: a.clone,
-                kit_arg: a.kit_arg,
-                kit_args_file: a.kit_args_file,
-                ..Default::default()
-            };
-            env_plan(ctx, &a.common, &apply)
-        }
+        EnvCmd::Plan(a) => env_plan(ctx, &a.common, &a.overrides),
     }
 }
 
@@ -40,8 +32,22 @@ pub fn run<R: Runner>(ctx: &mut Ctx<R>, cmd: EnvCmd) -> Result<i32> {
 struct Planned {
     resources: Vec<Resource>,
     need: Need,
-    /// The `ENVIRONMENT` block and the plan.
-    text: String,
+    /// The `ENVIRONMENT` block.
+    header: String,
+    lines: Vec<Line>,
+}
+
+impl Planned {
+    /// The plan as printed. An apply whose approved commands ask all the same says so, in place
+    /// of the plain warning.
+    fn text(&self, applying: bool) -> String {
+        let warning = if applying && self.need == Need::HostCommands {
+            UNCHANGED_HOST_COMMANDS
+        } else {
+            HOST_COMMANDS
+        };
+        format!("{}{}", self.header, render(&self.lines, warning))
+    }
 }
 
 fn planned<R: Runner>(
@@ -59,32 +65,17 @@ fn planned<R: Runner>(
         exists,
         ctx.settings.bool("env.rememberHostCommands")?,
     );
-    let lines = approval::lines(record.as_ref(), &resources, exists);
-    let text = header(loaded, &spec.name) + &render(&lines);
     Ok(Planned {
+        lines: approval::lines(record.as_ref(), &resources, exists),
+        header: header(loaded, &spec.name),
         resources,
         need,
-        text,
     })
 }
 
-impl Planned {
-    /// The plan as an apply prints it: approved commands that ask all the same say so, in place
-    /// of the plain warning.
-    fn before_applying(&self) -> String {
-        if self.need == Need::HostCommands {
-            self.text.replace(HOST_COMMANDS, UNCHANGED_HOST_COMMANDS)
-        } else {
-            self.text.clone()
-        }
-    }
-}
-
-const UNCHANGED_HOST_COMMANDS: &str = "  ! nothing in this plan has changed, but its commands run on this machine, outside the sandbox, with your own privileges, which needs explicit approval on each run\n";
-
 /// Prints what applying would do and whether it would ask. Changes nothing.
-fn env_plan<R: Runner>(ctx: &mut Ctx<R>, c: &EnvCommon, a: &EnvApplyOpts) -> Result<i32> {
-    let (loaded, spec, _) = prepare(ctx, c, a)?;
+fn env_plan<R: Runner>(ctx: &mut Ctx<R>, c: &EnvCommon, o: &EnvOverrideOpts) -> Result<i32> {
+    let (loaded, spec, _) = prepare(ctx, c, o)?;
     let exists = sandbox::find(&ctx.vm, &spec.name)?.is_some();
     let plan = planned(ctx, &loaded, &spec, exists)?;
     let status = match plan.need {
@@ -94,12 +85,25 @@ fn env_plan<R: Runner>(ctx: &mut Ctx<R>, c: &EnvCommon, a: &EnvApplyOpts) -> Res
         }
         Need::No => "✓ already approved — applying asks nothing",
     };
-    writeln!(&ctx.out, "{}  {status}", plan.text)?;
+    writeln!(&ctx.out, "{}  {status}", plan.text(false))?;
     Ok(0)
 }
 
+/// Refuses the flags that only Docker Cloud has.
+fn refuse_cloud(a: &EnvApplyOpts) -> Result<()> {
+    let cloud = [
+        (a.on_timeout.is_some(), "--on-timeout"),
+        (a.ttl.is_some(), "--ttl"),
+    ];
+    match cloud.iter().find(|(set, _)| *set) {
+        Some((_, flag)) => Err(Unsupported(format!("{flag} is a Docker Cloud option")).into()),
+        None => Ok(()),
+    }
+}
+
 fn create<R: Runner>(ctx: &mut Ctx<R>, c: &EnvCommon, a: &EnvApplyOpts) -> Result<i32> {
-    let (loaded, spec, mut secrets) = prepare(ctx, c, a)?;
+    refuse_cloud(a)?;
+    let (loaded, spec, mut secrets) = prepare(ctx, c, &a.overrides)?;
     if sandbox::find(&ctx.vm, &spec.name)?.is_some() {
         bail!(
             "sandbox \"{}\" already exists; attach to it with `sbt env run`, or remove it with \
@@ -108,7 +112,7 @@ fn create<R: Runner>(ctx: &mut Ctx<R>, c: &EnvCommon, a: &EnvApplyOpts) -> Resul
         );
     }
     let plan = planned(ctx, &loaded, &spec, false)?;
-    write!(&ctx.out, "{}", plan.before_applying())?;
+    write!(&ctx.out, "{}", plan.text(true))?;
     approve(ctx, &loaded, &spec.name, &plan, a.force)?;
     provision(ctx, &mut secrets, &spec)?;
     let args = super::CreateArgs {
@@ -125,10 +129,11 @@ fn env_run<R: Runner>(
     a: &EnvApplyOpts,
     detach: bool,
 ) -> Result<i32> {
-    let (loaded, spec, mut secrets) = prepare(ctx, c, a)?;
+    refuse_cloud(a)?;
+    let (loaded, spec, mut secrets) = prepare(ctx, c, &a.overrides)?;
     let exists = sandbox::find(&ctx.vm, &spec.name)?.is_some();
     let plan = planned(ctx, &loaded, &spec, exists)?;
-    write!(&ctx.out, "{}", plan.before_applying())?;
+    write!(&ctx.out, "{}", plan.text(true))?;
     approve(ctx, &loaded, &spec.name, &plan, a.force)?;
     let args = if exists {
         // Attach as it was created, with the file's current env for this session.
@@ -267,19 +272,12 @@ fn env_rm<R: Runner>(ctx: &mut Ctx<R>, a: EnvRmArgs) -> Result<i32> {
     Ok(0)
 }
 
-/// Loads the files and turns them into create options, refusing cloud-only flags first.
+/// Loads the files and turns them into create options.
 fn prepare<R: Runner>(
     ctx: &Ctx<R>,
     c: &EnvCommon,
-    a: &EnvApplyOpts,
+    o: &EnvOverrideOpts,
 ) -> Result<(Loaded, EnvSpec, SecretsFile)> {
-    let cloud = [
-        (a.on_timeout.is_some(), "--on-timeout"),
-        (a.ttl.is_some(), "--ttl"),
-    ];
-    if let Some((_, flag)) = cloud.iter().find(|(set, _)| *set) {
-        return Err(Unsupported(format!("{flag} is a Docker Cloud option")).into());
-    }
     let home = ctx.env.get("HOME").context("HOME is not set")?;
     let inputs = ArgInputs {
         files: c.env_args_file.clone(),
@@ -289,9 +287,9 @@ fn prepare<R: Runner>(
     let secrets = SecretsFile::load(&ctx.paths)?;
     let overrides = Overrides {
         name: c.name.clone(),
-        clone: a.clone,
-        kit_arg: a.kit_arg.clone(),
-        kit_args_file: a.kit_args_file.clone(),
+        clone: o.clone,
+        kit_arg: o.kit_arg.clone(),
+        kit_args_file: o.kit_args_file.clone(),
     };
     let spec = spec(&loaded, &overrides, &secrets)?;
     Ok((loaded, spec, secrets))
@@ -1154,7 +1152,7 @@ mod tests {
         let clone = |args: &[&str]| {
             let cli = Cli::try_parse_from(["sbt", "env", "create"].iter().chain(args)).unwrap();
             match cli.command {
-                Some(Cmd::Env(EnvCmd::Create(a))) => (a.apply.clone, a.common.paths),
+                Some(Cmd::Env(EnvCmd::Create(a))) => (a.apply.overrides.clone, a.common.paths),
                 other => panic!("{other:?}"),
             }
         };
