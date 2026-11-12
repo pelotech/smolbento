@@ -477,9 +477,9 @@ fn merge_env(
         for (name, value) in &k.env {
             set(name, value);
         }
-        let values = kit_args.get(&k.name);
+        let values = &kit_args[&k.name];
         for (arg, def) in &k.args {
-            if let (Some(name), Some(value)) = (&def.env, values.and_then(|v| v.get(arg))) {
+            if let (Some(name), Some(value)) = (&def.env, values.get(arg)) {
                 set(name, value);
             }
         }
@@ -1609,36 +1609,30 @@ mod tests {
         };
         let mut w = workload("w");
         w.env = vec![("CLAUDE_MODEL".into(), "from-env".into())];
+        // Given on the command line: replaces the kit's own variable of that name.
         w.args
             .insert("model".into(), arg(Some("CLAUDE_MODEL"), Some("")));
+        // A default counts as a value, an empty one included.
+        w.args.insert("empty".into(), arg(Some("EMPTY"), Some("")));
+        // Overridden by the later kit below.
+        w.args
+            .insert("region".into(), arg(Some("REGION"), Some("eu")));
+        // No value, and no `env:`: neither is exported.
         w.args.insert("effort".into(), arg(Some("EFFORT"), None));
         w.args.insert("plain".into(), arg(None, Some("p")));
         let mut m = mixin("m");
         m.args
             .insert("region".into(), arg(Some("REGION"), Some("us")));
         let v = ArgValues::parse(&[], &["model=opus".into()]).unwrap();
-        let p = resolve(w, vec![m.clone()], &v).unwrap();
-        // The arg's value replaces the same kit's plain env of that name; an arg with no value
-        // (`effort`) or no `env:` (`plain`) exports nothing.
+        let p = resolve(w, vec![m], &v).unwrap();
         assert_eq!(
             p.merged.env,
             [
                 ("CLAUDE_MODEL".into(), "opus".into()),
+                ("EMPTY".into(), String::new()),
                 ("REGION".into(), "us".into())
             ]
         );
-        // A default counts as a value, an empty one included.
-        let mut w = workload("w");
-        w.args
-            .insert("model".into(), arg(Some("CLAUDE_MODEL"), Some("")));
-        let p = run(w, vec![]).unwrap();
-        assert_eq!(p.merged.env, [("CLAUDE_MODEL".into(), String::new())]);
-        // A later kit still overrides an earlier one.
-        let mut w = workload("w");
-        w.args
-            .insert("region".into(), arg(Some("REGION"), Some("eu")));
-        let p = run(w, vec![m]).unwrap();
-        assert_eq!(p.merged.env, [("REGION".into(), "us".into())]);
     }
 
     #[test]
@@ -1653,12 +1647,11 @@ mod tests {
             Source::LocalV3(std::path::PathBuf::from("/k/claude-mixin")),
         )
         .unwrap();
-        let name = mixin.name.clone();
         let v = ArgValues::parse(&[], &["model=x".into()]).unwrap();
         let mut w = workload("w");
         // Whatever the mixin requires of its base.
         w.provides = mixin.requires.clone();
-        let p = resolve(w, vec![mixin], &v).unwrap_or_else(|e| panic!("{name}: {e:#}"));
+        let p = resolve(w, vec![mixin], &v).unwrap();
         assert!(
             p.merged
                 .env

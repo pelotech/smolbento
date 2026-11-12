@@ -103,6 +103,10 @@ pub fn run<R: Runner>(ctx: &mut Ctx<R>, a: &RunArgs) -> Result<i32> {
                 .collect(),
         ),
     };
+    // A closed terminal must not end this process once the sandbox may be running: it has the
+    // cleanup below to do. The agent still ends with the terminal (`interactive` gives it the
+    // default handling back).
+    let _hangup = crate::smolvm::IgnoreSignals::new(&[libc::SIGHUP]);
     provision::ensure_running(ctx, &mut sb)?;
 
     let sessions = ctx.paths.sessions();
@@ -114,6 +118,7 @@ pub fn run<R: Runner>(ctx: &mut Ctx<R>, a: &RunArgs) -> Result<i32> {
 
     // Whatever `attach` returns, the sandbox is cleaned up below: nothing after the start may
     // return early and leave it running, or skip `--rm`.
+    // Closing the terminal ends the agent, not this process, which has the cleanup still to do.
     let result = attach(ctx, a, &sb, command);
 
     // Fetch before `--rm` deletes the sandbox, and while it still runs for `_upload-pack`.
@@ -121,26 +126,26 @@ pub fn run<R: Runner>(ctx: &mut Ctx<R>, a: &RunArgs) -> Result<i32> {
         && let Some(repo) = &sb.meta.clone_repo
         && let Err(e) = clone::fetch(Path::new(repo), sb.name())
     {
-        eprintln!("warning: fetching the agent's commits: {e:#}");
+        warn(format!("fetching the agent's commits: {e:#}"));
     }
 
     // The agent's exit code is the result; failing to clean up after it only warrants a warning.
     if session::live_sessions(&sessions, sb.name()) > 0 {
         if a.rm {
-            eprintln!(
-                "warning: sandbox {} is in use by another session; not removed",
+            warn(format!(
+                "sandbox {} is in use by another session; not removed",
                 sb.name()
-            );
+            ));
         }
     } else if a.rm {
         if let Err(e) = super::lifecycle::delete_keeping_remote(ctx, &sb, true) {
-            eprintln!("warning: removing sandbox {}: {e:#}", sb.name());
+            warn(format!("removing sandbox {}: {e:#}", sb.name()));
         }
     } else if !sb.meta.long_running
         && session::idle(&sessions, sb.name())
         && let Err(e) = ctx.vm.stop(&sb.machine)
     {
-        eprintln!("warning: stopping sandbox {}: {e:#}", sb.name());
+        warn(format!("stopping sandbox {}: {e:#}", sb.name()));
     }
     result
 }
@@ -280,6 +285,12 @@ fn ignored_mount_warning(a: &RunArgs, name: &str) -> Option<String> {
     })
 }
 
+/// A warning from the cleanup after the agent exits. After a hang-up the terminal is gone and a
+/// write to stderr fails; `eprintln!` would panic and cut the cleanup short.
+fn warn(message: String) {
+    let _ = writeln!(std::io::stderr(), "warning: {message}");
+}
+
 /// A bad setting value only skips the fetch: the stop or `--rm` and the agent's status still apply.
 fn fetch_on_exit<R: Runner>(ctx: &Ctx<R>, sb: &Sandbox) -> bool {
     sb.meta.clone_repo.is_some()
@@ -287,7 +298,7 @@ fn fetch_on_exit<R: Runner>(ctx: &Ctx<R>, sb: &Sandbox) -> bool {
             .settings
             .bool("clone.fetch-on-exit")
             .unwrap_or_else(|e| {
-                eprintln!("warning: not fetching the agent's commits: {e:#}");
+                warn(format!("not fetching the agent's commits: {e:#}"));
                 false
             })
 }

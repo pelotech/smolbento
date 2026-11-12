@@ -351,7 +351,7 @@ fn read_value<R: Runner>(ctx: &Ctx<R>, service: &str) -> Result<String> {
     }
     let mut line = String::new();
     // Ctrl-C must not kill the process while echo is off.
-    let _guard = crate::smolvm::IgnoreInterrupt::new();
+    let _guard = crate::smolvm::IgnoreSignals::new(&[libc::SIGINT]);
     let read = std::io::stdin().lock().read_line(&mut line);
     if have_term {
         unsafe { libc::tcsetattr(fd, libc::TCSANOW, &saved) };

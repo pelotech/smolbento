@@ -13,7 +13,7 @@ pub use network::{AllowList, LOOPBACK, NetworkSpec};
 pub use pull::{PullProgress, pull_progress};
 pub use types::{EgressEvent, Machine, MachineState, PublishedPort};
 
-use std::io::Read;
+use std::io::{Read, Write};
 use std::path::PathBuf;
 use std::process::{Child, Command, ExitStatus, Stdio};
 use std::time::{Duration, Instant};
@@ -92,7 +92,14 @@ impl ProcessRunner {
 
     fn trace(&self, args: &[String]) {
         if self.debug {
-            eprintln!("+ {} {}", self.bin.display(), args.join(" "));
+            // Not `eprintln!`: after a hang-up stderr is gone, and the calls that stop or remove
+            // the sandbox still have to run.
+            let _ = writeln!(
+                std::io::stderr(),
+                "+ {} {}",
+                self.bin.display(),
+                args.join(" ")
+            );
         }
     }
 
@@ -218,14 +225,26 @@ impl Runner for ProcessRunner {
     }
 
     fn interactive(&self, args: &[String]) -> Result<i32> {
+        use std::os::unix::process::CommandExt;
         self.trace(args);
-        let mut child = Command::new(&self.bin)
+        let mut command = Command::new(&self.bin);
+        command
             .args(args)
-            .envs(self.env.iter().map(|(k, v)| (k, v)))
-            .spawn()
-            .with_context(|| self.spawn_error())?;
-        // The child started with default signal handling; from here Ctrl-C belongs to it.
-        let _guard = IgnoreInterrupt::new();
+            .envs(self.env.iter().map(|(k, v)| (k, v)));
+        // A caller with a sandbox to stop or remove ignores the hang-up before calling (see
+        // `cli::run`), and an ignored signal is inherited: the child would outlive a closed
+        // terminal. It has to end with the terminal, so it gets the default back.
+        // SAFETY: `signal` is async-signal-safe, and nothing else runs between fork and exec.
+        unsafe {
+            command.pre_exec(|| {
+                libc::signal(libc::SIGHUP, libc::SIG_DFL);
+                Ok(())
+            });
+        }
+        let mut child = command.spawn().with_context(|| self.spawn_error())?;
+        // Set after the spawn, so the child keeps the default. From here Ctrl-C belongs to it,
+        // and a hang-up ends it, not us: we return when it exits.
+        let _guard = IgnoreSignals::new(&[libc::SIGINT, libc::SIGHUP]);
         let status = child.wait().context("waiting for smolvm")?;
         Ok(exit_code(status))
     }
@@ -293,27 +312,49 @@ fn exit_code(status: ExitStatus) -> i32 {
         .unwrap_or_else(|| 128 + status.signal().unwrap_or(0))
 }
 
-/// Ignores SIGINT in this process until dropped.
-pub(crate) struct IgnoreInterrupt(libc::sighandler_t);
+/// Ignores the given signals in this process until dropped, when their previous handling is
+/// restored.
+pub(crate) struct IgnoreSignals(Vec<(libc::c_int, libc::sighandler_t)>);
 
-impl IgnoreInterrupt {
-    pub(crate) fn new() -> Self {
-        // SAFETY: swaps the SIGINT disposition; Drop restores the previous one.
-        Self(unsafe { libc::signal(libc::SIGINT, libc::SIG_IGN) })
+impl IgnoreSignals {
+    pub(crate) fn new(signals: &[libc::c_int]) -> Self {
+        Self(
+            signals
+                .iter()
+                // SAFETY: swaps a signal's disposition; Drop restores the previous one.
+                .map(|&sig| (sig, unsafe { libc::signal(sig, libc::SIG_IGN) }))
+                .collect(),
+        )
     }
 }
 
-impl Drop for IgnoreInterrupt {
+impl Drop for IgnoreSignals {
     fn drop(&mut self) {
-        // SAFETY: restores the disposition saved in `new`.
-        unsafe { libc::signal(libc::SIGINT, self.0) };
+        for &(sig, previous) in &self.0 {
+            // SAFETY: restores the disposition saved when it was ignored.
+            unsafe { libc::signal(sig, previous) };
+        }
     }
 }
 
 #[cfg(all(test, unix))]
 mod tests {
     use super::*;
+
     use std::os::unix::fs::PermissionsExt;
+
+    #[test]
+    fn ignored_signals_are_survived_and_then_restored() {
+        let guard = IgnoreSignals::new(&[libc::SIGINT, libc::SIGHUP]);
+        for sig in [libc::SIGINT, libc::SIGHUP] {
+            // SAFETY: raises a signal this process is set to ignore; unignored, it would end it.
+            unsafe { libc::raise(sig) };
+        }
+        drop(guard);
+        // SAFETY: reads the disposition back by setting the default, which it should be.
+        let restored = unsafe { libc::signal(libc::SIGHUP, libc::SIG_DFL) };
+        assert_eq!(restored, libc::SIG_DFL);
+    }
 
     /// A stand-in for smolvm that prints `$HOME|$PROBE`, with `unset` for missing variables.
     fn probe(dir: &std::path::Path) -> ProcessRunner {

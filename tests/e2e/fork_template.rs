@@ -35,25 +35,7 @@ pub(crate) fn fork_round_trip() {
         "printf real-secret-xyz",
     ]);
 
-    // As in clone_round_trip: the first-start clone fails on Alpine until git and agent exist.
-    let out = e.sbt(&[
-        "create", "--clone", "shell", ws, "--name", &e.name, "-t", "alpine", "--cpus", "1", "-m",
-        "1g",
-    ]);
-    assert!(
-        !out.status.success(),
-        "create without git in the image fails"
-    );
-    smolvm(&["machine", "start", "-n", &e.machine()]);
-    guest_root(
-        &e.name,
-        &format!(
-            "adduser -D -u {} agent && apk add -q git",
-            smolbento::util::host_uid()
-        ),
-    );
-    smolvm(&["machine", "stop", "-n", &e.machine()]);
-    e.ok(&["start", &e.name]);
+    e.create_clone();
 
     let guest_commit = |sb: &str, msg: &str| {
         e.ok(&[

@@ -13,7 +13,8 @@ sbt run claude
 agent. The sandbox is named `<agent>-<directory name>` (here `claude-myrepo`), so running the same
 agent in the same directory again reattaches to the same sandbox.
 
-When the last session attached to a sandbox exits, the sandbox stops. Its disk is kept, so the next
+When the last session attached to a sandbox exits, the sandbox stops; closing the terminal counts
+as exiting (and `--rm` still removes the sandbox). Its disk is kept, so the next
 `run` resumes with everything the agent installed.
 
 | Form | Effect |
@@ -175,9 +176,8 @@ Good to know:
   `PATH` (every install puts it there; the `sbt`, `sbx` and `bento` names are links to it).
 - `--clone` needs a workspace path in a git repository, and git 2.31 or newer on your machine. The
   image needs git too: the built-in agent images have it, but with `-t` pick an image with git
-  installed. If the clone fails, the start fails with git's error. On a sandbox's first start with
-  kits (every Docker-enabled sandbox has the `docker` kit) the sandbox is then removed, so run the
-  same `create` or `run` again; otherwise the next start tries again.
+  installed. If the clone fails, the start fails with git's error. A sandbox whose first start
+  fails is removed, so fix the cause and run the same `create` or `run` again.
 - `--clone` only applies when the sandbox is created; `run` on an existing sandbox ignores it.
 - `sbt rm`, `prune` and `reset` remove the `sandbox-<name>` remote, and with it the
   `sandbox-<name>/…` branches, as sbx does. Merge what you want first, or keep a branch:
@@ -657,8 +657,6 @@ Limits:
 - A URL with credentials in it (`https://user:pass@host/`) is refused; put them in a header. A
   URL is stored and shown as given, so don't put a secret in its query string.
 - `localhost` URLs are refused: inside a sandbox that is the sandbox, not your machine.
-- If the first start of a sandbox created with `--static-mcp` fails, the sandbox is removed (as
-  for one with kits), so run the same command again.
 - `sbt template save` refuses a sandbox created with `--static-mcp`.
 - `mcp auth`, `mcp load` and `mcp unload` are not supported (see
   [sbx compatibility](sbx-compatibility.md#mcp-servers)).

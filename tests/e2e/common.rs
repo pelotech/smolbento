@@ -115,13 +115,18 @@ impl E2e {
     }
 
     pub(crate) fn create_alpine_with(&self, then: &str) {
+        self.create_alpine_named(&self.name, then);
+    }
+
+    /// An Alpine sandbox `name` with an `agent` user of the host's uid, then `then` run as root.
+    fn create_alpine_named(&self, name: &str, then: &str) {
         let ws = self.workspace();
         self.ok(&[
             "create",
             "shell",
             ws.to_str().unwrap(),
             "--name",
-            &self.name,
+            name,
             "-t",
             "alpine",
             "--cpus",
@@ -133,17 +138,36 @@ impl E2e {
             "adduser -D -u {} agent && {then}",
             smolbento::util::host_uid()
         );
-        smolvm(&[
-            "machine",
-            "exec",
+        guest_root(name, &setup);
+    }
+
+    /// Creates this test's sandbox as a `--clone` of its workspace. A clone sandbox needs git and
+    /// the `agent` user from its first start, and plain Alpine has neither (a create that fails
+    /// its first start removes the sandbox), so it comes from a template saved with both.
+    pub(crate) fn create_clone(&self) {
+        let base = format!("{}-base", self.name);
+        // Removed below; the guard covers a panic in between.
+        let _base = Forks(vec![base.clone()]);
+        self.create_alpine_named(&base, "apk add -q git");
+        self.ok(&["stop", &base]);
+        self.ok(&["template", "save", &base, "e2e-git:v1"]);
+        self.ok(&["rm", "-f", &base]);
+        let ws = self.workspace();
+        self.ok(&[
+            "create",
+            "--clone",
+            "shell",
+            ws.to_str().unwrap(),
             "--name",
-            &self.machine(),
-            "-u",
-            "root",
-            "--",
-            "sh",
-            "-c",
-            &setup,
+            &self.name,
+            "-t",
+            "e2e-git:v1",
+            "--pull",
+            "never",
+            "--cpus",
+            "1",
+            "-m",
+            "1g",
         ]);
     }
 

@@ -63,9 +63,8 @@ smolvm machine ls            # smolbento's machines are named sbx-<name>
 smolvm machine delete -n sbx-<name> -f
 ```
 
-If a sandbox's first start fails, the error says what happened to it. One created with kits (every
-Docker-enabled sandbox) is removed, so the same command can be run again. Otherwise it is kept:
-`sbt start <name>` tries again, and `sbt rm <name>` removes it.
+A sandbox whose first start fails is removed, so the same command can be run again. If the removal
+failed too (the error says so), `sbt rm -f <name>` cleans it up.
 
 ## `Refusing without a terminal; pass -f`
 
