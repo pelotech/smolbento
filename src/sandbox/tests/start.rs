@@ -226,20 +226,28 @@ fn a_failed_setup_step_stops_the_machine() {
 }
 
 #[test]
-fn a_create_whose_first_start_fails_removes_the_sandbox() {
-    // Without kits too: a machine left behind makes a retry fail with "already exists".
+fn a_create_whose_first_start_fails_keeps_the_sandbox_and_says_how_to_retry() {
+    // Without kits the sandbox is kept for the next start to try again; the error has to say
+    // so, or running `create` again just fails with "already exists".
     let vm = created_vm();
     vm.runner()
         .fail(&["machine", "start"], "SMOLVM_ERROR", "image pull failed");
     let err = create(&vm, &request(), &plan(), |_| unreachable!(), &mut |_| {}).unwrap_err();
+    let text = format!("{err:#}");
+    assert!(text.contains("image pull failed"), "{text}");
     assert!(
-        err.to_string()
-            .starts_with("the first start failed (the sandbox was removed): ")
-            && format!("{err:#}").contains("image pull failed"),
-        "{err:#}"
+        text.starts_with(
+            "the first start failed (the sandbox is kept: `sbt start claude-myrepo` tries \
+             again, `sbt rm claude-myrepo` removes it): "
+        ),
+        "{text}"
     );
-    assert_eq!(
-        vm.runner().call_lines().last().unwrap(),
-        &format!("machine delete -n {MACHINE} -f")
+    assert!(
+        !vm.runner()
+            .call_lines()
+            .iter()
+            .any(|l| l.starts_with("machine delete")),
     );
+    // The smolvm error stays reachable, for its hint.
+    assert!(err.chain().any(|e| e.is::<crate::smolvm::SmolvmError>()));
 }
