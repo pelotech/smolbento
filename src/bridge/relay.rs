@@ -14,8 +14,8 @@ use std::time::{Duration, Instant};
 use anyhow::Result;
 
 use super::server::{self, DEADLINE, POLL, Request, Response};
-use crate::sandbox::sh_quote;
 use crate::smolvm::{ExecSpec, Output};
+use crate::util::sh_quote;
 
 /// Runs `smolvm ARGS`. Its own, not the session's runner, which can't move to another thread.
 /// The guest is untrusted: it must be bounded by `REPLAY_TIMEOUT` and `MAX_REPLAY`.
@@ -179,12 +179,11 @@ fn replay(exec: &Exec, guest: &Guest, port: u16, req: &Request) -> Vec<u8> {
     {
         return ours(&server::bad_request());
     }
-    let spec = ExecSpec {
-        name: guest.machine.clone(),
-        user: Some(guest.user.clone()),
-        cmd: vec!["sh".into(), "-c".into(), replay_cmd(port, method, target)],
-        ..Default::default()
-    };
+    let spec = ExecSpec::sh(
+        &guest.machine,
+        &guest.user,
+        replay_cmd(port, method, target),
+    );
     match exec(&spec.to_args()) {
         Ok(out) if out.code == 0 => pass_through(&out.stdout),
         _ => None,

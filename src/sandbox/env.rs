@@ -34,7 +34,7 @@ pub fn new_uuid() -> Result<String> {
         .context("reading /dev/urandom for the sandbox id")?;
     b[6] = (b[6] & 0x0f) | 0x40;
     b[8] = (b[8] & 0x3f) | 0x80;
-    let h: String = b.iter().map(|x| format!("{x:02x}")).collect();
+    let h = crate::util::hex(&b);
     Ok(format!(
         "{}-{}-{}-{}-{}",
         &h[0..8],

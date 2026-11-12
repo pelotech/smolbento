@@ -2,13 +2,11 @@
 //! frontend in its own private dockerd, so the host needs no Docker.
 
 use std::fs::{self, File};
-use std::io::Read;
 use std::path::{Path, PathBuf};
 use std::sync::atomic::{AtomicU32, Ordering};
 use std::time::Duration;
 
 use anyhow::{Context, Result, bail};
-use sha2::{Digest, Sha256};
 
 use crate::agents;
 use crate::cli::{Ctx, plan};
@@ -19,8 +17,7 @@ use crate::kits::resolve::{Plan, resolve};
 use crate::sandbox::{self, CreateRequest, Sandbox, options};
 use crate::secrets::{RegistryEntry, SecretsFile, registry_secret};
 use crate::smolvm::{Credential, ExecSpec, MachineState, Runner, Smolvm, SmolvmError};
-
-use super::registry::hex;
+use crate::util;
 
 pub const BUILDER: &str = "_builder";
 /// Renovate bumps this (see renovate.json5).
@@ -447,7 +444,9 @@ fn registry_host(output: &str) -> Option<String> {
 
 /// Unpacks the OCI layout tar into `<built>/<sha256 of the tar>`, unless that exists already.
 fn unpack(kit_tar: &Path, built: &Path, tmp: &Path) -> Result<PathBuf> {
-    let dest = built.join(sha256_file(kit_tar)?);
+    let dest = built.join(
+        util::sha256_file(kit_tar).with_context(|| format!("opening {}", kit_tar.display()))?,
+    );
     if dest.is_dir() {
         return Ok(dest);
     }
@@ -487,20 +486,6 @@ fn unpack(kit_tar: &Path, built: &Path, tmp: &Path) -> Result<PathBuf> {
         return Err(e).with_context(|| format!("moving the built kit to {}", dest.display()));
     }
     Ok(dest)
-}
-
-fn sha256_file(path: &Path) -> Result<String> {
-    let mut f = File::open(path).with_context(|| format!("opening {}", path.display()))?;
-    let mut hasher = Sha256::new();
-    let mut buf = [0u8; 64 * 1024];
-    loop {
-        let n = f.read(&mut buf)?;
-        if n == 0 {
-            break;
-        }
-        hasher.update(&buf[..n]);
-    }
-    Ok(hex(&hasher.finalize()))
 }
 
 #[cfg(test)]
@@ -577,7 +562,7 @@ mod tests {
         let out = build(&t.ctx, kit.path()).unwrap();
 
         let tar = kit_tar();
-        let digest = registry::sha256_digest(&tar);
+        let digest = util::sha256_digest(&tar);
         assert_eq!(
             out,
             t.ctx

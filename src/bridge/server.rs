@@ -127,7 +127,7 @@ fn make_private_dir(dir: &Path) -> Result<()> {
         _ => {}
     }
     let m = fs::symlink_metadata(dir)?;
-    if !m.is_dir() || m.uid() != crate::sandbox::host_uid() {
+    if !m.is_dir() || m.uid() != crate::util::host_uid() {
         bail!("{} isn't a directory owned by you", dir.display());
     }
     if m.mode() & 0o777 != 0o700 {

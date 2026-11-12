@@ -7,7 +7,6 @@ use std::path::{Path, PathBuf};
 
 use anyhow::{Context, Result, bail};
 use serde::{Deserialize, Serialize};
-use sha2::{Digest, Sha256};
 
 use crate::config::{self, Paths};
 
@@ -327,17 +326,8 @@ impl Store {
 }
 
 fn sha256_prefix(path: &Path) -> Result<String> {
-    let mut f = std::fs::File::open(path).with_context(|| format!("reading {}", path.display()))?;
-    let mut h = Sha256::new();
-    let mut buf = vec![0u8; 1 << 20];
-    loop {
-        let n = f.read(&mut buf)?;
-        if n == 0 {
-            break;
-        }
-        h.update(&buf[..n]);
-    }
-    let hex: String = h.finalize().iter().map(|b| format!("{b:02x}")).collect();
+    let hex =
+        crate::util::sha256_file(path).with_context(|| format!("reading {}", path.display()))?;
     Ok(hex[..12].to_string())
 }
 

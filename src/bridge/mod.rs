@@ -14,7 +14,7 @@ use std::path::{Path, PathBuf};
 
 use sha2::{Digest, Sha256};
 
-use crate::kits::registry::hex;
+use crate::util::hex;
 
 pub use host::{attach, handlers};
 pub use server::{Handlers, Server, serve};
@@ -26,18 +26,18 @@ pub const GUEST_SOCKET: &str = "/run/smolbento/bridge.sock";
 /// The sandbox's host socket: `/tmp/sbt-<uid>/<first 16 hex of sha256(name)>.sock`. Short on every
 /// OS (macOS caps socket paths near 104 bytes) and fixed at create, so it can't follow `TMPDIR`.
 pub fn host_socket(name: &str) -> PathBuf {
-    socket_in(crate::sandbox::host_uid(), name)
+    socket_in(crate::util::host_uid(), name)
 }
 
 /// The sandbox's host SSH agent socket (`ssh-agent@1`), beside its bridge socket:
 /// `/tmp/sbt-<uid>/<first 16 hex of sha256(name)>.agent.sock`.
 pub fn agent_socket(name: &str) -> PathBuf {
-    agent_socket_in(crate::sandbox::host_uid(), name)
+    agent_socket_in(crate::util::host_uid(), name)
 }
 
 /// The directory of this user's host sockets, `/tmp/sbt-<uid>`.
 pub fn socket_dir() -> PathBuf {
-    dir_of(crate::sandbox::host_uid())
+    dir_of(crate::util::host_uid())
 }
 
 fn dir_of(uid: u32) -> PathBuf {
@@ -60,7 +60,7 @@ fn socket_id(name: &str) -> String {
 /// start): created 0700 if missing, else a real directory (not a symlink) we own with mode 0700.
 /// In the shared `/tmp`, another user could create it first and receive what the sandbox sends.
 pub fn ensure_private_dir(dir: &Path) -> bool {
-    ensure_private_dir_of(dir, crate::sandbox::host_uid())
+    ensure_private_dir_of(dir, crate::util::host_uid())
 }
 
 fn ensure_private_dir_of(dir: &Path, uid: u32) -> bool {
@@ -116,7 +116,7 @@ mod tests {
     fn a_socket_dir_must_be_ours_a_real_dir_and_0700() {
         use std::os::unix::fs::PermissionsExt;
         let tmp = tempfile::tempdir().unwrap();
-        let me = crate::sandbox::host_uid();
+        let me = crate::util::host_uid();
         // Missing: created 0700.
         let dir = tmp.path().join("sbt");
         assert!(ensure_private_dir_of(&dir, me));

@@ -140,7 +140,7 @@ impl E2e {
         ]);
         let setup = format!(
             "adduser -D -u {} agent && {then}",
-            smolbento::sandbox::host_uid()
+            smolbento::util::host_uid()
         );
         smolvm(&[
             "machine",
@@ -485,7 +485,7 @@ fn clone_round_trip() {
         &e.name,
         &format!(
             "adduser -D -u {} agent && apk add -q git",
-            smolbento::sandbox::host_uid()
+            smolbento::util::host_uid()
         ),
     );
     smolvm(&["machine", "stop", "-n", &e.machine()]);
@@ -599,7 +599,7 @@ fn fork_round_trip() {
         &e.name,
         &format!(
             "adduser -D -u {} agent && apk add -q git",
-            smolbento::sandbox::host_uid()
+            smolbento::util::host_uid()
         ),
     );
     smolvm(&["machine", "stop", "-n", &e.machine()]);
@@ -1318,7 +1318,7 @@ fn descriptor(kind: &str, provides: &[&str], caps: serde_json::Value) -> serde_j
 fn add_agent_hook() -> String {
     format!(
         "id agent >/dev/null 2>&1 || adduser -D -u {} agent",
-        smolbento::sandbox::host_uid()
+        smolbento::util::host_uid()
     )
 }
 
@@ -1963,7 +1963,7 @@ impl E2e {
         let meta = std::fs::metadata(&written)
             .unwrap_or_else(|e| panic!("{} on the host: {e}", written.display()));
         use std::os::unix::fs::MetadataExt;
-        assert_eq!(meta.uid(), smolbento::sandbox::host_uid(), "owned by you");
+        assert_eq!(meta.uid(), smolbento::util::host_uid(), "owned by you");
     }
 }
 
@@ -2090,7 +2090,7 @@ setup:
     e.create_with_kits(&[kit.to_str().unwrap()]);
     e.ok(&["start", &e.name]);
     assert_eq!(e.state(), "running");
-    let uid = smolbento::sandbox::host_uid();
+    let uid = smolbento::util::host_uid();
     assert_eq!(
         root_out(
             &e.name,
@@ -2283,7 +2283,7 @@ fn sbx_sandbox_variables_reach_the_agent_exec_and_forks() {
         &format!(
             "adduser -D -u {} agent && apk add -q bash \
              && install -d -o agent /home/agent/workspace",
-            smolbento::sandbox::host_uid()
+            smolbento::util::host_uid()
         ),
     );
     let fork = format!("{}-fork-1", m.name);
@@ -2368,7 +2368,7 @@ fn env_files_create_exec_and_remove() {
         &e.name,
         &format!(
             "adduser -D -u {} agent && apk add -q bash",
-            smolbento::sandbox::host_uid()
+            smolbento::util::host_uid()
         ),
     );
 
@@ -2737,7 +2737,7 @@ impl Image {
     /// home, as sbx images have one before any kit hook runs: the skills steps hand directories
     /// and links to it, and the tests `sbt exec` as it.
     fn with_agent_account(mut self, base: &Image) -> Image {
-        let uid = smolbento::sandbox::host_uid();
+        let uid = smolbento::util::host_uid();
         let passwd =
             base.file("etc/passwd") + &format!("agent:x:{uid}:{uid}::/home/agent:/bin/sh\n");
         let group = base.file("etc/group") + &format!("agent:x:{uid}:\n");

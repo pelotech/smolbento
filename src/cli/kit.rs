@@ -372,12 +372,7 @@ fn add_running<R: Runner>(
     let name = sb.name();
     let record = ctx
         .vm
-        .exec_captured(&ExecSpec {
-            name: sb.machine.clone(),
-            user: Some("root".into()),
-            cmd: vec!["sh".into(), "-c".into(), READ_KITS.into()],
-            ..Default::default()
-        })
+        .exec_captured(&ExecSpec::sh(&sb.machine, "root", READ_KITS))
         .context("reading the sandbox's kits")?
         .stdout;
     let existing = parse_record(&record);

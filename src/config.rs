@@ -259,7 +259,7 @@ impl Settings {
 }
 
 fn parse_cache_size(value: &str) -> Result<u64> {
-    match crate::sandbox::options::parse_size(value, "cache size")? {
+    match crate::util::parse_size(value, "cache size")? {
         0 => bail!("the image cache size must be more than 0"),
         n => Ok(n),
     }

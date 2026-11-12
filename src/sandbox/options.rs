@@ -52,31 +52,11 @@ pub fn free_port() -> Result<u16> {
 
 /// Parses `4g`, `512m`, `512MiB` or a byte count into MiB (minimum 512).
 pub fn parse_memory(value: &str) -> Result<u64> {
-    let mib = parse_size(value, "memory")? >> 20;
+    let mib = crate::util::parse_size(value, "memory")? >> 20;
     if mib < 512 {
         bail!("memory must be at least 512MiB, got '{value}'");
     }
     Ok(mib)
-}
-
-/// Parses `40g`, `512m`, `1TiB` or a byte count into bytes; `what` names the value in errors.
-pub fn parse_size(value: &str, what: &str) -> Result<u64> {
-    let v = value.trim().to_ascii_lowercase();
-    let split = v.find(|c: char| !c.is_ascii_digit()).unwrap_or(v.len());
-    let (num, unit) = v.split_at(split);
-    let n: u64 = num
-        .parse()
-        .with_context(|| format!("invalid {what} '{value}'"))?;
-    let shift = match unit.trim_end_matches(['b', 'i']) {
-        "" => 0,
-        "k" => 10,
-        "m" => 20,
-        "g" => 30,
-        "t" => 40,
-        _ => bail!("invalid {what} unit in '{value}' (use k, m, g or t)"),
-    };
-    n.checked_mul(1 << shift)
-        .with_context(|| format!("{what} '{value}' is too large"))
 }
 
 /// sbx's default: half of host memory, clamped to 512 MiB–32 GiB.
@@ -215,17 +195,6 @@ mod tests {
         );
         assert!(parse_memory("lots").is_err());
         assert!(parse_memory("99999999999999t").is_err());
-    }
-
-    #[test]
-    fn size_units() {
-        assert_eq!(parse_size("40g", "size").unwrap(), 40 << 30);
-        assert_eq!(parse_size("1TiB", "size").unwrap(), 1 << 40);
-        assert_eq!(parse_size(" 7 ", "size").unwrap(), 7);
-        let err = parse_size("20x", "cache size").unwrap_err().to_string();
-        assert!(err.contains("invalid cache size unit"), "{err}");
-        assert!(parse_size("", "size").is_err());
-        assert!(parse_size("-1g", "size").is_err());
     }
 
     #[test]

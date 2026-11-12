@@ -17,6 +17,7 @@ use std::process::{Command, Stdio};
 use anyhow::{Context, Result, bail};
 
 use crate::config::Paths;
+use crate::util::hex;
 
 const SERVICE: &str = "smolbento";
 
@@ -82,10 +83,6 @@ const KEYCHAIN_LINE_MAX: usize = 4000;
 /// hex itself for any password with non-printable or non-ASCII bytes, so the stored password is
 /// always printable.
 const KEYCHAIN_PREFIX: &str = "sbx1:";
-
-fn hex(bytes: &[u8]) -> String {
-    bytes.iter().map(|b| format!("{b:02x}")).collect()
-}
 
 /// The one `security -i` command that stores a value: `sbx1:` plus the value's bytes as hex, so
 /// no quoting applies and the raw value never appears.

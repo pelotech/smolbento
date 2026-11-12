@@ -10,9 +10,9 @@ use crate::agents;
 use crate::cli::SandboxOpts;
 use crate::cli::request::unknown_agent;
 use crate::cli::secret::unknown_service;
-use crate::kits::registry::sha256_digest;
 use crate::sandbox::{name as sandbox_name, options};
 use crate::secrets::SecretsFile;
+use crate::util::sha256_digest;
 
 #[derive(Debug)]
 pub struct EnvSpec {

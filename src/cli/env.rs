@@ -245,7 +245,7 @@ fn shell_word(s: &str) -> String {
     if !s.is_empty() && s.chars().all(plain) {
         s.to_string()
     } else {
-        sandbox::sh_quote(s)
+        crate::util::sh_quote(s)
     }
 }
 

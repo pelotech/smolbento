@@ -19,6 +19,7 @@ use crate::smolvm::{
     ExecSpec, Machine, MachineState, NetworkSpec, PublishedPort, PullProgress, Runner, Smolvm,
     SmolvmError,
 };
+use crate::util::sh_quote;
 use crate::workspace::MOUNTLESS_WORKDIR;
 use crate::workspace::clone::{SOURCE_MOUNT, WorktreeHead};
 
@@ -158,12 +159,11 @@ pub fn map_image_user<R: Runner>(
     uid: u32,
     gid: u32,
 ) -> Result<Option<String>> {
-    let out = vm.exec_output(&ExecSpec {
-        name: sb.machine.clone(),
-        user: Some("root".into()),
-        cmd: vec!["sh".into(), "-c".into(), image_user_cmd(user, uid, gid)],
-        ..Default::default()
-    })?;
+    let out = vm.exec_output(&ExecSpec::sh(
+        &sb.machine,
+        "root",
+        image_user_cmd(user, uid, gid),
+    ))?;
     match out.code {
         0 => Ok(None),
         UNMAPPED => Ok(Some(format!(
@@ -174,16 +174,6 @@ pub fn map_image_user<R: Runner>(
         _ => Err(anyhow::anyhow!(SmolvmError::from_output(&out).message))
             .context("matching the sandbox's image user to your host uid"),
     }
-}
-
-pub fn host_uid() -> u32 {
-    // SAFETY: getuid has no preconditions and cannot fail.
-    unsafe { libc::getuid() }
-}
-
-pub fn host_gid() -> u32 {
-    // SAFETY: getgid has no preconditions and cannot fail.
-    unsafe { libc::getgid() }
 }
 
 /// What a create or start is doing, for the caller's progress output.
@@ -250,11 +240,6 @@ impl CloneStep {
     fn quoted(&self) -> (String, String) {
         (sh_quote(&self.dir), sh_quote(&format!("{}/.git", self.dir)))
     }
-}
-
-/// Single-quotes `s` for `sh -c`.
-pub(crate) fn sh_quote(s: &str) -> String {
-    format!("'{}'", s.replace('\'', r"'\''"))
 }
 
 /// As root: the volume is root-owned and may hold `lost+found`, which `git clone` won't clone into.
@@ -439,20 +424,14 @@ fn setup<R: Runner>(
     {
         eprintln!("{w}");
     }
-    vm.exec_captured(&ExecSpec {
-        name: sb.machine.clone(),
-        user: Some("root".into()),
-        cmd: vec!["sh".into(), "-c".into(), identity_cmd(plan.uid, plan.gid)],
-        ..Default::default()
-    })
+    vm.exec_captured(&ExecSpec::sh(
+        &sb.machine,
+        "root",
+        identity_cmd(plan.uid, plan.gid),
+    ))
     .context("matching the sandbox's agent user to your host uid")?;
     // Not fatal: an image without a writable /etc/hosts still works, just without the name.
-    if let Err(e) = vm.exec_captured(&ExecSpec {
-        name: sb.machine.clone(),
-        user: Some("root".into()),
-        cmd: vec!["sh".into(), "-c".into(), hosts_cmd()],
-        ..Default::default()
-    }) {
+    if let Err(e) = vm.exec_captured(&ExecSpec::sh(&sb.machine, "root", hosts_cmd())) {
         eprintln!(
             "warning: {}: couldn't add host.docker.internal to /etc/hosts: {e:#}",
             sb.name()
@@ -476,12 +455,7 @@ fn setup<R: Runner>(
     } else {
         (bridge::remove_cmd(), "remove")
     };
-    if let Err(e) = vm.exec_captured(&ExecSpec {
-        name: sb.machine.clone(),
-        user: Some("root".into()),
-        cmd: vec!["sh".into(), "-c".into(), shims],
-        ..Default::default()
-    }) {
+    if let Err(e) = vm.exec_captured(&ExecSpec::sh(&sb.machine, "root", shims)) {
         eprintln!(
             "warning: {}: couldn't {what} the browser and clipboard shims: {e:#}",
             sb.name()
@@ -494,12 +468,7 @@ fn setup<R: Runner>(
         .skills
         .as_ref()
         .and_then(|l| crate::skills::link_script(&l.dirs))
-        && let Err(e) = vm.exec_captured(&ExecSpec {
-            name: sb.machine.clone(),
-            user: Some("root".into()),
-            cmd: vec!["sh".into(), "-c".into(), script],
-            ..Default::default()
-        })
+        && let Err(e) = vm.exec_captured(&ExecSpec::sh(&sb.machine, "root", script))
     {
         eprintln!("warning: {}: couldn't link shared skills: {e:#}", sb.name());
     }
@@ -507,11 +476,8 @@ fn setup<R: Runner>(
     // With kits, the docker kit's startup hook starts dockerd (no second start here).
     if sb.meta.docker && sb.meta.kits.is_empty() {
         vm.exec_captured(&ExecSpec {
-            name: sb.machine.clone(),
-            user: Some("root".into()),
             detach: true,
-            cmd: vec!["sh".into(), "-c".into(), DOCKER_START.into()],
-            ..Default::default()
+            ..ExecSpec::sh(&sb.machine, "root", DOCKER_START)
         })
         .context("starting dockerd")?;
     }
@@ -553,12 +519,7 @@ fn run_clone<R: Runner>(vm: &Smolvm<R>, sb: &Sandbox, step: &CloneStep) -> Resul
     let mut warnings = Vec::new();
     for (user, cmd) in [("root", clone_prep_cmd(step)), ("agent", clone_cmd(step))] {
         let out = vm
-            .exec_captured(&ExecSpec {
-                name: sb.machine.clone(),
-                user: Some(user.into()),
-                cmd: vec!["sh".into(), "-c".into(), cmd],
-                ..Default::default()
-            })
+            .exec_captured(&ExecSpec::sh(&sb.machine, user, cmd))
             .map_err(|e| {
                 // git's first error line, not the whole stderr.
                 let text = match e.downcast_ref::<SmolvmError>() {
@@ -884,14 +845,7 @@ fn put_files<R: Runner>(
     sb: &Sandbox,
     files: &[(String, &str, &str)],
 ) -> Result<()> {
-    let root = |script: String| {
-        vm.exec_captured(&ExecSpec {
-            name: sb.machine.clone(),
-            user: Some("root".into()),
-            cmd: vec!["sh".into(), "-c".into(), script],
-            ..Default::default()
-        })
-    };
+    let root = |script: String| vm.exec_captured(&ExecSpec::sh(&sb.machine, "root", script));
     let mut dirs: Vec<String> = files
         .iter()
         .filter_map(|(p, _, _)| std::path::Path::new(p).parent())
@@ -943,12 +897,7 @@ pub fn startup_cmd(script: Option<&str>) -> String {
 pub fn run_startup<R: Runner>(vm: &Smolvm<R>, sb: &Sandbox, script: Option<&str>) -> Result<()> {
     let what = "running the kits' startup hooks";
     let out = vm
-        .exec_output(&ExecSpec {
-            name: sb.machine.clone(),
-            user: Some("root".into()),
-            cmd: vec!["sh".into(), "-c".into(), startup_cmd(script)],
-            ..Default::default()
-        })
+        .exec_output(&ExecSpec::sh(&sb.machine, "root", startup_cmd(script)))
         .context(what)?;
     if out.code != 0 {
         // The runner writes only to its log; a smolvm error envelope means smolvm failed. Any

@@ -30,6 +30,7 @@ use tokio::io::AsyncWrite;
 use crate::kits::model::{Content, ImageConfig, Kit, Source};
 use crate::kits::registry_auth::Logins;
 use crate::kits::{trust, v3};
+use crate::util::{hex, sha256_digest};
 
 const DESCRIPTOR_ANNOTATION: &str = "vnd.docker.sandbox.kit.descriptor";
 const SCHEMA_ANNOTATION: &str = "vnd.docker.sandbox.kit.schema-version";
@@ -298,14 +299,6 @@ pub(crate) fn hex_of(digest: &str) -> Result<&str> {
         .strip_prefix("sha256:")
         .filter(|h| h.len() == 64 && h.bytes().all(|c| matches!(c, b'0'..=b'9' | b'a'..=b'f')))
         .ok_or_else(|| anyhow!("unsupported digest '{digest}'"))
-}
-
-pub(crate) fn hex(bytes: &[u8]) -> String {
-    bytes.iter().map(|b| format!("{b:02x}")).collect()
-}
-
-pub(crate) fn sha256_digest(data: &[u8]) -> String {
-    format!("sha256:{}", hex(&Sha256::digest(data)))
 }
 
 pub(crate) fn store_dir(cache: &Path) -> PathBuf {

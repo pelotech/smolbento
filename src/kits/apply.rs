@@ -251,7 +251,7 @@ fn image_workdir(plan: &Plan) -> Option<&str> {
 /// clean-env hook only when it declares it); a runtime grant's create-time variable is unset for
 /// them.
 fn kit_install_steps(plan: &Plan, req: &CreateRequest) -> Vec<InstallStep> {
-    let install_dir = image_workdir(plan).map_or_else(|| "/".to_string(), crate::sandbox::sh_quote);
+    let install_dir = image_workdir(plan).map_or_else(|| "/".to_string(), crate::util::sh_quote);
     let granted = req.ssh_agent.as_ref();
     let agent_env = if granted.is_some_and(|a| a.install.is_some()) {
         format!("export SSH_AUTH_SOCK={} && ", agent::GUEST_SOCKET)
