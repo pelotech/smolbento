@@ -422,7 +422,6 @@ pub fn resolve_for(
     })
 }
 
-/// Merges the `ssh-agent@1` entries for `phase` (kit spec "Composition"): unrestricted when any
 /// Each kit once, names unique (they scope `--kit-arg`s and tag policy rules; an agent preset
 /// isn't a kit, so a kit may share its name), and one workload.
 fn check_names(workload: &Kit, mixins: &[Kit]) -> Result<()> {
@@ -604,6 +603,7 @@ fn add_passthrough_hosts(merged: &mut Merged) {
     }
 }
 
+/// Merges the `ssh-agent@1` entries for `phase` (kit spec "Composition"): unrestricted when any
 /// entry is, else the union of their namespaces; required when any entry is. `authenticate`
 /// limits (Phase 5g) can't be enforced yet: under a bounded merge a required entry with them
 /// refuses, an optional one is skipped.
@@ -695,7 +695,6 @@ fn expand_provides(k: &mut Kit, args: &BTreeMap<String, String>) -> Result<()> {
     Ok(())
 }
 
-/// Stable topological sort: repeatedly take the first mixin whose requirements are provided.
 /// Checks the set's capabilities like the spec's resolver (SPEC-v3 §5.3: one provider per name,
 /// requires met by another kit, a present provider within `integrates`, no `conflicts`), then
 /// orders the mixins: providers before the kits that require or integrate with them, otherwise as

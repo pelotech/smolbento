@@ -38,42 +38,30 @@ const REF_NAME_ANNOTATION: &str = "org.opencontainers.image.ref.name";
 /// Fetches REF's manifest and config and its layers into the cache. A manifest without the kit
 /// descriptor annotation is a plain image and an error.
 pub fn pull(reference: &str, cache: &Path, logins: Logins) -> Result<Kit> {
-    pull_kit(reference, None, cache, logins)
-}
-
-/// Same, pinned to a manifest digest; used again when a cache entry is missing.
-pub fn pull_digest(reference: &str, digest: &str, cache: &Path, logins: Logins) -> Result<Kit> {
-    hex_of(digest)?;
-    pull_kit(reference, Some(digest), cache, logins)
+    let dir = pull_layout(reference, cache, true, logins)?;
+    read_layout(&dir, Source::Registry(reference.to_string()))
 }
 
 /// Pulls a plain image (no kit annotation required) into an OCI layout; returns its directory.
 pub fn pull_image(reference: &str, cache: &Path, logins: Logins) -> Result<PathBuf> {
-    pull_layout(reference, None, cache, false, logins)
-}
-
-fn pull_kit(reference: &str, pin: Option<&str>, cache: &Path, logins: Logins) -> Result<Kit> {
-    let dir = pull_layout(reference, pin, cache, true, logins)?;
-    read_layout(&dir, Source::Registry(reference.to_string()))
+    pull_layout(reference, cache, false, logins)
 }
 
 /// Downloads REF into an OCI layout under the cache and returns its directory. With
 /// `require_kit` the kit annotation is checked before any layer is fetched.
 fn pull_layout(
     reference: &str,
-    pin: Option<&str>,
     cache: &Path,
     require_kit: bool,
     logins: Logins,
 ) -> Result<PathBuf> {
-    let fetched = fetch_ref(reference, pin, cache, require_kit, true, logins)?;
+    let fetched = fetch_ref(reference, cache, require_kit, true, logins)?;
     build_layout(cache, &fetched.manifest, &fetched.digest, reference)
 }
 
 /// Fetches REF's manifest and config into the cache's blob store, and its layers with `layers`.
 fn fetch_ref(
     reference: &str,
-    pin: Option<&str>,
     cache: &Path,
     require_kit: bool,
     layers: bool,
@@ -81,12 +69,9 @@ fn fetch_ref(
 ) -> Result<Fetched> {
     // The same normaliser the trust check uses, so both read the ref alike.
     trust::normalise(reference)?;
-    let mut r: Reference = reference
+    let r: Reference = reference
         .parse()
         .with_context(|| format!("invalid kit reference '{reference}'"))?;
-    if let Some(d) = pin {
-        r = Reference::with_digest(r.registry().into(), r.repository().into(), d.into());
-    }
     let rt = tokio::runtime::Builder::new_current_thread()
         .enable_all()
         .build()
@@ -503,7 +488,7 @@ pub fn image_command(reference: &str, cache: &Path, logins: Logins) -> Result<Op
     let manifest_digest = match cached_manifest(reference, cache) {
         Some(d) => d,
         None => {
-            fetch_ref(reference, None, cache, false, false, logins)
+            fetch_ref(reference, cache, false, false, logins)
                 .with_context(|| format!("reading the image config of {reference}"))?
                 .digest
         }

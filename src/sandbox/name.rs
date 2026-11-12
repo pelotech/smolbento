@@ -44,12 +44,6 @@ pub fn machine_name(name: &str) -> String {
     format!("{MACHINE_PREFIX}{}", name.replace('.', "_"))
 }
 
-pub fn sandbox_name(machine: &str) -> Option<String> {
-    machine
-        .strip_prefix(MACHINE_PREFIX)
-        .map(|s| s.replace('_', "."))
-}
-
 /// sbx's default name, `<agent>-<workspace basename>`, with disallowed characters turned into `-`.
 pub fn default_name(agent: &str, workspace: &Path) -> String {
     let base = workspace
@@ -110,8 +104,6 @@ mod tests {
     #[test]
     fn machine_name_round_trip() {
         assert_eq!(machine_name("my.app"), "sbx-my_app");
-        assert_eq!(sandbox_name("sbx-my_app").as_deref(), Some("my.app"));
-        assert_eq!(sandbox_name("vm-1"), None);
     }
 
     #[test]

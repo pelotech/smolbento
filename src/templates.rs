@@ -9,7 +9,7 @@ use anyhow::{Context, Result, bail};
 use serde::{Deserialize, Serialize};
 use sha2::{Digest, Sha256};
 
-use crate::config::Paths;
+use crate::config::{self, Paths};
 
 pub const INDEX: &str = "templates.json";
 pub const ARCHIVE_META: &str = "smolbento-template.json";
@@ -79,16 +79,9 @@ struct Index {
 }
 
 /// An id prefix that matches more than one template.
-#[derive(Debug)]
+#[derive(Debug, thiserror::Error)]
+#[error("matches more than one template")]
 pub struct Ambiguous;
-
-impl std::fmt::Display for Ambiguous {
-    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        write!(f, "matches more than one template")
-    }
-}
-
-impl std::error::Error for Ambiguous {}
 
 /// Leftovers of an interrupted save or load younger than this may belong to a running one.
 const STALE: std::time::Duration = std::time::Duration::from_secs(3600);
@@ -125,19 +118,14 @@ impl Store {
         }
     }
 
-    /// Written to a temp file and renamed over the index.
     fn write(&self, index: &Index) -> Result<()> {
         self.ensure()?;
-        let tmp = self.dir.join(format!("{INDEX}.tmp"));
-        let mut f = std::fs::OpenOptions::new()
-            .write(true)
-            .create(true)
-            .truncate(true)
-            .mode(0o600)
-            .open(&tmp)?;
-        std::io::Write::write_all(&mut f, serde_json::to_string_pretty(index)?.as_bytes())?;
-        std::fs::rename(&tmp, self.dir.join(INDEX))?;
-        Ok(())
+        config::write_atomic(
+            &self.dir.join(INDEX),
+            serde_json::to_string_pretty(index)?.as_bytes(),
+            Some(0o600),
+            config::Symlink::Replace,
+        )
     }
 
     pub fn list(&self) -> Result<Vec<Entry>> {

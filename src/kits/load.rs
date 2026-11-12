@@ -287,7 +287,6 @@ pub fn check_launchable<R: Runner>(ctx: &Ctx<R>, kit: &mut Kit) -> Result<()> {
     Ok(())
 }
 
-/// A preset as a workload kit: the image and command, no capabilities.
 /// What a preset provides: its agent name, so v2 `requires.agent` (and v3 `requires`) entries
 /// naming it are met, as in sbx. The version is the image tag's (`:1.2`, or a trailing
 /// `-0.10.0` as in `claude-code-docker-0.10.0`), else `0`; v2 requires carry no version.
@@ -303,6 +302,7 @@ pub fn preset_provide(agent: &str, image: &str) -> String {
     format!("{agent}@{version}")
 }
 
+/// A preset as a workload kit: the image and command, no capabilities.
 pub fn preset_kit(agent: &Agent, image: &str) -> Kit {
     Kit {
         provides: vec![preset_provide(agent.name, image)],

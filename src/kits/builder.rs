@@ -248,8 +248,6 @@ fn request<R: Runner>(ctx: &Ctx<R>, registries: &[String]) -> CreateRequest {
     }
 }
 
-/// The kit's descriptor file name: the single `*.yaml`/`*.yml` whose first line is the v3 syntax
-/// line (upstream names it after the kit, e.g. `claude-mixin.yaml`).
 /// Whether a file's first line is the v3 syntax line, after an optional UTF-8 BOM.
 pub(crate) fn starts_with_syntax(bytes: &[u8]) -> bool {
     let bytes = bytes.strip_prefix(b"\xEF\xBB\xBF").unwrap_or(bytes);
@@ -257,6 +255,8 @@ pub(crate) fn starts_with_syntax(bytes: &[u8]) -> bool {
     String::from_utf8_lossy(first).trim_end() == SYNTAX
 }
 
+/// The kit's descriptor file name: the single `*.yaml`/`*.yml` whose first line is the v3 syntax
+/// line (upstream names it after the kit, e.g. `claude-mixin.yaml`).
 fn descriptor(dir: &Path) -> Result<String> {
     let mut found = Vec::new();
     for entry in fs::read_dir(dir).with_context(|| format!("reading {}", dir.display()))? {

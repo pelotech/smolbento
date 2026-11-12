@@ -17,19 +17,7 @@ pub struct CloneSource {
     pub git_dir: PathBuf,
 }
 
-/// The git binary isn't installed (as opposed to git failing).
-#[derive(Debug)]
-struct GitMissing;
-
-impl std::fmt::Display for GitMissing {
-    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        f.write_str("clone mode needs git on the host")
-    }
-}
-
-impl std::error::Error for GitMissing {}
-
-/// Spawns `program -C repo args`; a missing binary is [`GitMissing`].
+/// Spawns `program -C repo args`; a missing binary gets its own message.
 fn git_output(program: &str, repo: &Path, args: &[&str]) -> Result<Output> {
     Command::new(program)
         .arg("-C")
@@ -37,7 +25,7 @@ fn git_output(program: &str, repo: &Path, args: &[&str]) -> Result<Output> {
         .args(args)
         .output()
         .map_err(|e| match e.kind() {
-            std::io::ErrorKind::NotFound => anyhow::Error::new(GitMissing),
+            std::io::ErrorKind::NotFound => anyhow::anyhow!("clone mode needs git on the host"),
             _ => anyhow::Error::new(e).context("running git"),
         })
 }

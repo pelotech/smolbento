@@ -57,7 +57,6 @@ fn pending(sub: &str) -> Result<i32> {
     Err(super::Unsupported(format!("`sbt kit {sub}` is not implemented yet")).into())
 }
 
-/// `--json` is `--format json`.
 fn arg_values(a: &KitArgOpts) -> Result<ArgValues> {
     ArgValues::parse(&a.kit_args_file, &a.kit_arg)
 }

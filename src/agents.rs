@@ -105,10 +105,6 @@ pub fn find(name: &str) -> Option<&'static Agent> {
     AGENTS.iter().find(|a| a.name == name)
 }
 
-pub fn names() -> Vec<&'static str> {
-    AGENTS.iter().map(|a| a.name).collect()
-}
-
 fn split_tag(image: &str) -> Option<(&str, &str)> {
     image.rsplit_once(':').filter(|(_, tag)| !tag.contains('/'))
 }

@@ -22,9 +22,6 @@ pub struct Machine {
     pub image: Option<String>,
     #[serde(default)]
     pub labels: BTreeMap<String, String>,
-    /// Unix seconds.
-    #[serde(default)]
-    pub created_at: i64,
     /// Only `machine status --json` reports these.
     #[serde(default)]
     pub published_ports: Vec<PublishedPort>,

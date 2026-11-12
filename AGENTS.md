@@ -17,7 +17,7 @@ exist only in some checkouts). If they're there, read the relevant section befor
   read it with `t.stdout()`. Errors and warnings stay `eprintln!`.
 - **Interactive exec inherits stdio.** `run` and `exec -it` exec `smolvm machine exec -it`
   directly; never pipe a TTY through buffers.
-- **Secrets (when they land):** store sources only (keychain, `op://`/aws ref, command). Resolve
+- **Secrets:** store sources only (keychain, `op://`/aws ref, command). Resolve
   at `start` and pass as env to `smolvm machine start`. Never write values to disk, logs or argv.
 - **Never use smolvm `--docker-socket`.** Docker in a sandbox is its own private dockerd, started
   by smolbento after each start.
@@ -77,8 +77,9 @@ As of smolvm 1.34. Check the reference source before depending on anything not l
 
 | Module | Responsibility |
 |---|---|
-| `main.rs` | argv[0] dispatch |
-| `cli` | clap definitions mirroring sbx; thin handlers |
+| `main.rs` | process entry; `sbt`, `sbx` and `bento` are links to the one binary |
+| `cli` | clap definitions mirroring sbx; handlers; create and start orchestration |
+| `ctx` | the context every command gets: paths, settings, smolvm, stdio |
 | `smolvm` | `Runner` trait, command builder, JSON types |
 | `sandbox` | naming, labels, lifecycle, session tracking |
 | `agents` | agent presets (data) |
@@ -88,10 +89,12 @@ As of smolvm 1.34. Check the reference source before depending on anything not l
 | `secrets` | sources, stores, resolve at start |
 | `skills` | shared skills store; --skills modes; kit skill capabilities |
 | `templates` | saved templates: smolvm packs, index, export archive |
+| `kits` | kit files: load, resolve, compose the image, apply to a sandbox; registry pulls |
+| `env` | `sbxenv.yaml` environment files |
+| `bridge` | host services for a sandbox: browser and clipboard shims, login relay, ssh agent |
 
-Planned for later phases: `kits`, `hostsvc`
-(host services and `_relay`), `mcp`, `tui`; `kits/` for shipped kits and `images/plus/` for the plus
-image.
+Shipped kits live in `kits/`. Planned for later phases: `mcp`, `tui`, and `images/plus/` for the
+plus image.
 
 ## Working
 
