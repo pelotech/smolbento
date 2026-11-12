@@ -122,46 +122,6 @@ pub enum Cmd {
 }
 
 impl Cmd {
-    pub fn name(&self) -> &'static str {
-        match self {
-            Cmd::Run(_) => "run",
-            Cmd::Create(_) => "create",
-            Cmd::Exec(_) => "exec",
-            Cmd::Ls(_) => "ls",
-            Cmd::Inspect(_) => "inspect",
-            Cmd::Start { .. } => "start",
-            Cmd::Stop { .. } => "stop",
-            Cmd::Rm(_) => "rm",
-            Cmd::Prune(_) => "prune",
-            Cmd::Reset(_) => "reset",
-            Cmd::Cp(_) => "cp",
-            Cmd::Fork(_) => "fork",
-            Cmd::Version => "version",
-            Cmd::Completion { .. } => "completion",
-            Cmd::Diagnose => "diagnose",
-            Cmd::Settings(_) => "settings",
-            Cmd::Daemon(_) => "daemon",
-            Cmd::Ports(_) => "ports",
-            Cmd::Policy(_) => "policy",
-            Cmd::Secret(_) => "secret",
-            Cmd::Kit(_) => "kit",
-            Cmd::Mcp(_) => "mcp",
-            Cmd::Env(_) => "env",
-            Cmd::Template(_) => "template",
-            Cmd::Skills(_) => "skills",
-            Cmd::Setup(_) => "setup",
-            Cmd::Tui(_) => "tui",
-            Cmd::Login(_) => "login",
-            Cmd::Logout(_) => "logout",
-            Cmd::Move(_) => "move",
-            Cmd::Ttl(_) => "ttl",
-            Cmd::Attach(_) => "attach",
-            Cmd::Volume(_) => "volume",
-            Cmd::UploadPack { .. } => "_upload-pack",
-            Cmd::Bridge { .. } => "_bridge",
-        }
-    }
-
     /// Commands that talk to smolvm (and so check its version first).
     pub fn needs_smolvm(&self) -> bool {
         matches!(
@@ -183,18 +143,6 @@ impl Cmd {
                 | Cmd::Bridge { .. }
                 | Cmd::Template(TemplateCmd::Save(_))
                 | Cmd::Env(EnvCmd::Create(_) | EnvCmd::Run(_) | EnvCmd::Exec(_) | EnvCmd::Rm(_))
-        )
-    }
-
-    pub fn is_cloud_only(&self) -> bool {
-        matches!(
-            self,
-            Cmd::Login(_)
-                | Cmd::Logout(_)
-                | Cmd::Move(_)
-                | Cmd::Ttl(_)
-                | Cmd::Attach(_)
-                | Cmd::Volume(_)
         )
     }
 }

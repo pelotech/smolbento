@@ -23,9 +23,7 @@ pub fn run<R: Runner>(ctx: &mut Ctx<R>, a: &ForkArgs) -> Result<i32> {
     let names = match &a.name {
         Some(n) => {
             name::validate(n)?;
-            if sandbox::find(&ctx.vm, n)?.is_some() {
-                bail!("sandbox '{n}' already exists");
-            }
+            provision::check_free(ctx, n)?;
             vec![n.clone()]
         }
         None => free_names(ctx, parent.name(), a.count)?,

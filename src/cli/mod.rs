@@ -127,13 +127,6 @@ pub fn dispatch<R: Runner>(ctx: &mut Ctx<R>, cli: Cli) -> Result<i32> {
         refuse_root(ctx.uid)?;
         check_smolvm(&ctx.vm)?;
     }
-    if cmd.is_cloud_only() {
-        return Err(Unsupported(format!(
-            "`sbt {}` is a Docker Cloud feature and is not supported",
-            cmd.name()
-        ))
-        .into());
-    }
     match cmd {
         Cmd::Run(a) => run::run(ctx, &a),
         Cmd::Create(a) => lifecycle::create(ctx, &a),
@@ -170,8 +163,27 @@ pub fn dispatch<R: Runner>(ctx: &mut Ctx<R>, cli: Cli) -> Result<i32> {
             )?;
             Ok(0)
         }
-        other => Err(Unsupported(format!("`sbt {}` is not implemented yet", other.name())).into()),
+        Cmd::Login(_) => cloud("login"),
+        Cmd::Logout(_) => cloud("logout"),
+        Cmd::Move(_) => cloud("move"),
+        Cmd::Ttl(_) => cloud("ttl"),
+        Cmd::Attach(_) => cloud("attach"),
+        Cmd::Volume(_) => cloud("volume"),
+        Cmd::Mcp(_) => pending("mcp"),
+        Cmd::Setup(_) => pending("setup"),
+        Cmd::Tui(_) => pending("tui"),
     }
+}
+
+fn cloud(cmd: &str) -> Result<i32> {
+    Err(Unsupported(format!(
+        "`sbt {cmd}` is a Docker Cloud feature and is not supported"
+    ))
+    .into())
+}
+
+fn pending(cmd: &str) -> Result<i32> {
+    Err(Unsupported(format!("`sbt {cmd}` is not implemented yet")).into())
 }
 
 fn version<R: Runner>(ctx: &Ctx<R>) -> Result<i32> {

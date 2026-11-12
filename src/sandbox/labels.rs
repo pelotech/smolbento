@@ -150,94 +150,54 @@ pub struct Meta {
 
 impl Meta {
     pub fn to_labels(&self) -> BTreeMap<String, String> {
+        fn json(v: &impl serde::Serialize) -> String {
+            serde_json::to_string(v).expect("strings serialize")
+        }
+        let list = |v: &[String]| (!v.is_empty()).then(|| v.join(","));
+        let flag = |on: bool| on.then(|| "true".to_string());
         let mut labels = BTreeMap::from([
             (NAME.to_string(), self.name.clone()),
             (AGENT.to_string(), self.agent.clone()),
-            (
-                WORKSPACES.to_string(),
-                serde_json::to_string(&self.workspaces).expect("strings serialize"),
-            ),
+            (WORKSPACES.to_string(), json(&self.workspaces)),
             (CREATED.to_string(), self.created.to_string()),
             (DOCKER.to_string(), self.docker.to_string()),
         ]);
-        if let Some(w) = &self.workspace {
-            labels.insert(WORKSPACE.to_string(), w.clone());
-        }
-        if !self.secrets.is_empty() {
-            labels.insert(SECRETS.to_string(), self.secrets.join(","));
-        }
-        if !self.credential_hosts.is_empty() {
-            labels.insert(
-                CREDENTIAL_HOSTS.to_string(),
-                self.credential_hosts.join(","),
-            );
-        }
-        if !self.credential_env.is_empty() {
-            labels.insert(CREDENTIAL_ENV.to_string(), self.credential_env.join(","));
-        }
-        if !self.registries.is_empty() {
-            labels.insert(REGISTRIES.to_string(), self.registries.join(","));
-        }
-        if let Some(top) = &self.clone_repo {
-            labels.insert(CLONE.to_string(), "true".into());
-            if Some(top) != self.workspace.as_ref() {
-                labels.insert(CLONE_TOP.to_string(), top.clone());
+        // Everything else is written only when set, so a sandbox's labels don't change when a
+        // field it doesn't use is added. Kit labels exist only on sandboxes created with kits.
+        let clone_top = self
+            .clone_repo
+            .as_ref()
+            .filter(|top| Some(*top) != self.workspace.as_ref());
+        let optional = [
+            (WORKSPACE, self.workspace.clone()),
+            (SECRETS, list(&self.secrets)),
+            (CREDENTIAL_HOSTS, list(&self.credential_hosts)),
+            (CREDENTIAL_ENV, list(&self.credential_env)),
+            (REGISTRIES, list(&self.registries)),
+            (CLONE, flag(self.clone_repo.is_some())),
+            (CLONE_TOP, clone_top.cloned()),
+            (FORK_OF, self.fork_of.clone()),
+            (KITS, (!self.kits.is_empty()).then(|| json(&self.kits))),
+            (COMMAND, self.command.as_ref().map(json)),
+            (USER, self.user.clone()),
+            (WORKDIR, self.image_workdir.clone()),
+            (AGENT_FILE, self.agent_file.clone()),
+            (CREDENTIAL_INSTALL, list(&self.credential_install)),
+            (LONG_RUNNING, flag(self.long_running)),
+            (HOST_ACCESS, flag(self.host_access)),
+            (BRIDGE, flag(self.bridge)),
+            (
+                HOST_MOUNTS,
+                (!self.host_mounts.is_empty()).then(|| json(&self.host_mounts)),
+            ),
+            (SSH_AGENT, self.ssh_agent.as_ref().map(|a| a.to_label())),
+            (SKILLS, self.skills.as_ref().map(|s| s.to_label())),
+            (TEMPLATE, self.template.clone()),
+        ];
+        for (key, value) in optional {
+            if let Some(value) = value {
+                labels.insert(key.to_string(), value);
             }
-        }
-        if let Some(f) = &self.fork_of {
-            labels.insert(FORK_OF.to_string(), f.clone());
-        }
-        // Kit labels exist only on sandboxes created with kits.
-        if !self.kits.is_empty() {
-            labels.insert(
-                KITS.to_string(),
-                serde_json::to_string(&self.kits).expect("strings serialize"),
-            );
-        }
-        if let Some(c) = &self.command {
-            labels.insert(
-                COMMAND.to_string(),
-                serde_json::to_string(c).expect("strings serialize"),
-            );
-        }
-        if let Some(u) = &self.user {
-            labels.insert(USER.to_string(), u.clone());
-        }
-        if let Some(w) = &self.image_workdir {
-            labels.insert(WORKDIR.to_string(), w.clone());
-        }
-        if let Some(f) = &self.agent_file {
-            labels.insert(AGENT_FILE.to_string(), f.clone());
-        }
-        if !self.credential_install.is_empty() {
-            labels.insert(
-                CREDENTIAL_INSTALL.to_string(),
-                self.credential_install.join(","),
-            );
-        }
-        if self.long_running {
-            labels.insert(LONG_RUNNING.to_string(), "true".into());
-        }
-        if self.host_access {
-            labels.insert(HOST_ACCESS.to_string(), "true".into());
-        }
-        if self.bridge {
-            labels.insert(BRIDGE.to_string(), "true".into());
-        }
-        if !self.host_mounts.is_empty() {
-            labels.insert(
-                HOST_MOUNTS.to_string(),
-                serde_json::to_string(&self.host_mounts).expect("strings serialize"),
-            );
-        }
-        if let Some(a) = &self.ssh_agent {
-            labels.insert(SSH_AGENT.to_string(), a.to_label());
-        }
-        if let Some(s) = &self.skills {
-            labels.insert(SKILLS.to_string(), s.to_label());
-        }
-        if let Some(t) = &self.template {
-            labels.insert(TEMPLATE.to_string(), t.clone());
         }
         for (env, f) in &self.credential_formats {
             labels.insert(format!("{CREDENTIAL_FORMAT}{env}"), f.to_label());
@@ -250,42 +210,41 @@ impl Meta {
 
     /// `None` for machines smolbento didn't create.
     pub fn from_labels(labels: &BTreeMap<String, String>) -> Option<Meta> {
+        fn json<T: serde::de::DeserializeOwned>(
+            labels: &BTreeMap<String, String>,
+            key: &str,
+        ) -> Option<T> {
+            labels.get(key).and_then(|j| serde_json::from_str(j).ok())
+        }
+        let text = |key: &str| labels.get(key).cloned();
+        let flag = |key: &str| labels.get(key).is_some_and(|v| v == "true");
         Some(Meta {
             name: labels.get(NAME)?.clone(),
-            agent: labels.get(AGENT).cloned().unwrap_or_default(),
-            workspace: labels.get(WORKSPACE).cloned(),
-            workspaces: labels
-                .get(WORKSPACES)
-                .and_then(|j| serde_json::from_str(j).ok())
-                .unwrap_or_default(),
+            agent: text(AGENT).unwrap_or_default(),
+            workspace: text(WORKSPACE),
+            workspaces: json(labels, WORKSPACES).unwrap_or_default(),
             created: labels
                 .get(CREATED)
                 .and_then(|c| c.parse().ok())
                 .unwrap_or(0),
-            docker: labels.get(DOCKER).is_some_and(|d| d == "true"),
+            docker: flag(DOCKER),
             secrets: list(labels.get(SECRETS)),
             credential_hosts: list(labels.get(CREDENTIAL_HOSTS)),
             credential_env: list(labels.get(CREDENTIAL_ENV)),
             registries: list(labels.get(REGISTRIES)),
-            clone_repo: labels
-                .get(CLONE)
-                .filter(|c| *c == "true")
-                .and_then(|_| labels.get(CLONE_TOP).or(labels.get(WORKSPACE)).cloned()),
-            fork_of: labels.get(FORK_OF).cloned(),
-            kits: labels
-                .get(KITS)
-                .and_then(|j| serde_json::from_str(j).ok())
-                .unwrap_or_default(),
-            command: labels
-                .get(COMMAND)
-                .and_then(|j| serde_json::from_str(j).ok()),
-            user: labels.get(USER).cloned(),
-            image_workdir: labels.get(WORKDIR).cloned(),
-            agent_file: labels.get(AGENT_FILE).cloned(),
+            clone_repo: flag(CLONE)
+                .then(|| text(CLONE_TOP).or(text(WORKSPACE)))
+                .flatten(),
+            fork_of: text(FORK_OF),
+            kits: json(labels, KITS).unwrap_or_default(),
+            command: json(labels, COMMAND),
+            user: text(USER),
+            image_workdir: text(WORKDIR),
+            agent_file: text(AGENT_FILE),
             credential_install: list(labels.get(CREDENTIAL_INSTALL)),
-            long_running: labels.get(LONG_RUNNING).is_some_and(|v| v == "true"),
-            host_access: labels.get(HOST_ACCESS).is_some_and(|v| v == "true"),
-            bridge: labels.get(BRIDGE).is_some_and(|v| v == "true"),
+            long_running: flag(LONG_RUNNING),
+            host_access: flag(HOST_ACCESS),
+            bridge: flag(BRIDGE),
             credential_formats: labels
                 .iter()
                 .filter_map(|(k, v)| {
@@ -299,17 +258,10 @@ impl Meta {
                     Some((k.strip_prefix(CREDENTIAL_SERVICE)?.to_string(), v.clone()))
                 })
                 .collect(),
-            host_mounts: labels
-                .get(HOST_MOUNTS)
-                .and_then(|j| serde_json::from_str(j).ok())
-                .unwrap_or_default(),
-            ssh_agent: labels
-                .get(SSH_AGENT)
-                .and_then(|j| AgentLabel::from_label(j)),
-            skills: labels
-                .get(SKILLS)
-                .and_then(|j| crate::skills::Label::from_label(j)),
-            template: labels.get(TEMPLATE).cloned(),
+            host_mounts: json(labels, HOST_MOUNTS).unwrap_or_default(),
+            ssh_agent: text(SSH_AGENT).and_then(|j| AgentLabel::from_label(&j)),
+            skills: text(SKILLS).and_then(|j| crate::skills::Label::from_label(&j)),
+            template: text(TEMPLATE),
         })
     }
 
