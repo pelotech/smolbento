@@ -80,8 +80,9 @@ pub enum Cmd {
     /// Inspect, validate and add kits
     #[command(subcommand)]
     Kit(KitCmd),
-    /// MCP servers (not implemented yet)
-    Mcp(Passthrough),
+    /// Register MCP servers for sandboxes
+    #[command(subcommand)]
+    Mcp(McpCmd),
     /// Manage a sandbox declared in an sbxenv.yaml file
     #[command(subcommand)]
     Env(EnvCmd),
@@ -831,6 +832,86 @@ pub enum ApprovalCmd {
         #[arg(long)]
         sandbox: Option<String>,
     },
+}
+
+/// `sbt mcp`: MCP servers registered on the host, attached with `run|create --static-mcp`.
+#[derive(Debug, Subcommand)]
+pub enum McpCmd {
+    /// Register an MCP server
+    Add(McpAddArgs),
+    /// List registered MCP servers
+    #[command(visible_alias = "list")]
+    Ls(McpLsArgs),
+    /// Show a registered MCP server
+    Inspect(McpInspectArgs),
+    /// Remove a registered MCP server
+    #[command(visible_alias = "remove")]
+    Rm {
+        /// Server name
+        name: String,
+    },
+    /// Authorize OAuth servers (not supported: smolbento has no MCP gateway)
+    Auth(Passthrough),
+    /// Attach a server to a running sandbox (not supported: smolbento has no MCP gateway)
+    Load(Passthrough),
+    /// Detach a server from a running sandbox (not supported: smolbento has no MCP gateway)
+    Unload(Passthrough),
+}
+
+#[derive(Debug, Args)]
+pub struct McpAddArgs {
+    /// Server name
+    pub name: String,
+    /// The server's URL
+    #[arg(long)]
+    pub url: Option<String>,
+    /// A request header, `Name: value` (repeatable). `${name}` in the value is the secret
+    /// `mcp:<server>:<name>`
+    #[arg(long = "header", value_name = "NAME: VALUE")]
+    pub header: Vec<String>,
+    /// A command that runs the server inside the sandbox
+    #[arg(long)]
+    pub command: Option<String>,
+    /// An argument of --command (repeatable)
+    #[arg(long = "args", allow_hyphen_values = true)]
+    pub args: Vec<String>,
+    #[arg(long, hide = true)]
+    pub local: bool,
+    #[arg(long, hide = true)]
+    pub dir: Option<String>,
+    #[arg(long = "client-id", hide = true)]
+    pub client_id: Option<String>,
+    #[arg(long = "oauth-authorization-server", hide = true)]
+    pub oauth_authorization_server: Option<String>,
+    #[arg(long, hide = true)]
+    pub resource: Option<String>,
+    #[arg(long = "skip-auth", hide = true)]
+    pub skip_auth: bool,
+}
+
+#[derive(Debug, Args)]
+pub struct McpLsArgs {
+    /// Output format: table, json or yaml
+    #[arg(long, value_enum)]
+    pub format: Option<Format>,
+    /// Output in JSON format
+    #[arg(long)]
+    pub json: bool,
+    /// Only display server names
+    #[arg(short = 'q', long)]
+    pub quiet: bool,
+}
+
+#[derive(Debug, Args)]
+pub struct McpInspectArgs {
+    /// Server name
+    pub name: String,
+    /// Output format: table, json or yaml
+    #[arg(long, value_enum)]
+    pub format: Option<Format>,
+    /// Output in JSON format
+    #[arg(long)]
+    pub json: bool,
 }
 
 /// `sbt skills` (sbx's are experimental too).

@@ -129,6 +129,14 @@ kit pull ghcr.io/myorg/my-kit:1.0
 kit sign ghcr.io/myorg/my-kit:1.0
 kit verify ghcr.io/myorg/my-kit:1.0
 mcp add linear --url https://mcp.linear.app/sse
+mcp add files --command npx --args -y --args @modelcontextprotocol/server-filesystem
+mcp ls
+mcp ls --json
+mcp inspect linear
+mcp rm linear
+mcp auth status
+mcp load linear --sandbox my-sandbox
+mcp unload linear --sandbox my-sandbox
 env plan
 setup ssh
 tui

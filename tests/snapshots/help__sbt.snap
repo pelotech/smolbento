@@ -28,7 +28,7 @@ Commands:
   policy      Network policy
   secret      Secrets for agents: sandboxes see placeholders, smolvm sends the real value [alias: secrets]
   kit         Inspect, validate and add kits
-  mcp         MCP servers (not implemented yet)
+  mcp         Register MCP servers for sandboxes
   env         Manage a sandbox declared in an sbxenv.yaml file
   template    Save sandboxes as templates and manage them
   skills      Manage skills shared with agents in sandboxes (experimental)

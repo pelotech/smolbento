@@ -12,6 +12,7 @@ mod kit;
 mod kit_doc;
 pub(crate) mod lifecycle;
 mod ls;
+mod mcp;
 mod policy;
 mod ports;
 pub(crate) mod progress;
@@ -168,6 +169,7 @@ pub fn dispatch<R: Runner>(ctx: &mut Ctx<R>, cli: Cli) -> Result<i32> {
         Cmd::Policy(p) => policy::run(ctx, p),
         Cmd::Secret(s) => secret::run(ctx, s),
         Cmd::Skills(s) => skills::run(ctx, s),
+        Cmd::Mcp(m) => mcp::run(ctx, m),
         Cmd::Template(t) => template::run(ctx, t),
         Cmd::Ports(a) => ports::run(ctx, &a),
         Cmd::Kit(k) => kit::run(ctx, k),
@@ -187,7 +189,6 @@ pub fn dispatch<R: Runner>(ctx: &mut Ctx<R>, cli: Cli) -> Result<i32> {
         Cmd::Ttl(_) => cloud("ttl"),
         Cmd::Attach(_) => cloud("attach"),
         Cmd::Volume(_) => cloud("volume"),
-        Cmd::Mcp(_) => pending("mcp"),
         Cmd::Setup(_) => pending("setup"),
         Cmd::Tui(_) => pending("tui"),
     }
@@ -338,8 +339,8 @@ mod tests {
     #[test]
     fn pending_and_cloud_commands_exit_2() {
         let mut t = test_env(&[]);
-        let err = t.sbt(&["mcp", "ls"]).unwrap_err();
-        assert_eq!(err.to_string(), "`sbt mcp` is not implemented yet");
+        let err = t.sbt(&["tui"]).unwrap_err();
+        assert_eq!(err.to_string(), "`sbt tui` is not implemented yet");
         assert_eq!(exit_code(&err), 2);
         let err = t.sbt(&["kit", "pack", "./my-kit"]).unwrap_err();
         assert_eq!(err.to_string(), "`sbt kit pack` is not implemented yet");

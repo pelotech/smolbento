@@ -1,0 +1,26 @@
+---
+source: tests/help.rs
+expression: help(&path)
+---
+Show a registered MCP server
+
+Usage: sbt mcp inspect [OPTIONS] <NAME>
+
+Arguments:
+  <NAME>
+          Server name
+
+Options:
+  -D, --debug
+          Print each smolvm command line
+
+      --format <FORMAT>
+          Output format: table, json or yaml
+
+          [possible values: table, json, yaml]
+
+      --json
+          Output in JSON format
+
+  -h, --help
+          Print help
