@@ -151,8 +151,8 @@ access, so load only kits you trust.
   to the files or to a resource asks again. A create that would run host commands asks every
   time, changed or not, unless you turn on `env.rememberHostCommands`.
 - The file's commands are taken up only when the sandbox is created. Attaching to an existing
-  sandbox with `env run` doesn't ask about them: its starts run the commands stored at the
-  create you approved, not what the file says now.
+  sandbox with `env run` doesn't ask about them: its starts run the commands stored when it was
+  created (which you approved, or let through with `--force`), not what the file says now.
 - The approval record (`<data dir>/env/<name>.toml`) holds what the plan shows. A literal secret
   appears there only as its SHA-256 digest.
 - Every secret `command:` source (here and in `sbt secret set --command`) runs from a fresh

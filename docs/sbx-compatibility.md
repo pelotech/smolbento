@@ -131,6 +131,8 @@ gpu|usb|writableEnvFiles`, and `pullPolicy` other than `missing`.
 | Unchanged host commands | Ask on every `env create` and `env run`, also when attaching to an existing sandbox, unless `env.rememberHostCommands` is on | Ask only when the sandbox is about to be created: that is when the file's commands are taken up. An existing sandbox keeps running the commands stored at the create you approved. The same setting turns the question off |
 | Plan against the last apply | Keeps a list of what was applied: after a `--force` apply the plan shows `! NAME — unchanged, needs your approval`; a change that waits for a re-create keeps showing as `recorded as applied, no longer present, waits for the next create`; an unchanged secret shows as `○ NAME — unchanged` | Compares with what was approved and asks smolvm whether the sandbox exists: a change shows as `~` (outside `ENV` with `— waits for the next create`) until it is approved, then no longer; unchanged resources aren't listed |
 | `--clone` in the plan | A `GIT REMOTE` section | `clone: true` on the workspace |
+| Port names in the plan | `8080/tcp4` | `8080/tcp` |
+| The plan after a plain `rm` | Lines end with `— recorded as applied, no longer present` | A bare `+` |
 | Kit arguments in the plan | The file's pinned `args.NAME`; `--kit-arg` isn't shown | Same |
 | A local kit's contents | Not measured | Not part of the approval: the plan names the kit's path |
 | Plain `rm` of an environment's sandbox | Keeps the approval | Same; `env rm` forgets it |

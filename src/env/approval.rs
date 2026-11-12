@@ -3,7 +3,7 @@
 //! One record per environment, named after its sandbox. It holds the approved resources and
 //! nothing about the sandbox itself: whether that exists is smolvm's to say.
 
-use std::path::{Path, PathBuf};
+use std::path::PathBuf;
 use std::time::{Duration, UNIX_EPOCH};
 
 use anyhow::{Context, Result};
@@ -59,14 +59,13 @@ pub fn save(
         approved_at: humantime::format_rfc3339_seconds(at).to_string(),
         approved: resources.to_vec(),
     };
-    let path = path(paths, name);
-    create_parent(&path)?;
-    config::save_toml(&path, &record)
-}
-
-fn create_parent(path: &Path) -> Result<()> {
-    let dir = path.parent().context("a record path has a parent")?;
-    std::fs::create_dir_all(dir).with_context(|| format!("creating {}", dir.display()))
+    // Private: it holds what the plan shows, env values and commands included.
+    config::write_atomic(
+        &path(paths, name),
+        toml::to_string(&record)?.as_bytes(),
+        Some(0o600),
+        config::Symlink::Follow,
+    )
 }
 
 /// Forgets the approval for sandbox `name`, if there is one.

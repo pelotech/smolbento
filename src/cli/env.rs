@@ -60,16 +60,24 @@ fn planned<R: Runner>(
         ctx.settings.bool("env.rememberHostCommands")?,
     );
     let lines = approval::lines(record.as_ref(), &resources, exists);
-    let mut text = header(loaded, &spec.name) + &render(&lines);
-    if need == Need::HostCommands {
-        // In place of the plain warning: these commands are approved, and ask all the same.
-        text = text.replace(HOST_COMMANDS, UNCHANGED_HOST_COMMANDS);
-    }
+    let text = header(loaded, &spec.name) + &render(&lines);
     Ok(Planned {
         resources,
         need,
         text,
     })
+}
+
+impl Planned {
+    /// The plan as an apply prints it: approved commands that ask all the same say so, in place
+    /// of the plain warning.
+    fn before_applying(&self) -> String {
+        if self.need == Need::HostCommands {
+            self.text.replace(HOST_COMMANDS, UNCHANGED_HOST_COMMANDS)
+        } else {
+            self.text.clone()
+        }
+    }
 }
 
 const UNCHANGED_HOST_COMMANDS: &str = "  ! nothing in this plan has changed, but its commands run on this machine, outside the sandbox, with your own privileges, which needs explicit approval on each run\n";
@@ -86,9 +94,7 @@ fn env_plan<R: Runner>(ctx: &mut Ctx<R>, c: &EnvCommon, a: &EnvApplyOpts) -> Res
         }
         Need::No => "✓ already approved — applying asks nothing",
     };
-    // The "nothing has changed" line belongs to an apply that is about to ask.
-    let text = plan.text.replace(UNCHANGED_HOST_COMMANDS, HOST_COMMANDS);
-    writeln!(&ctx.out, "{text}  {status}")?;
+    writeln!(&ctx.out, "{}  {status}", plan.text)?;
     Ok(0)
 }
 
@@ -102,7 +108,7 @@ fn create<R: Runner>(ctx: &mut Ctx<R>, c: &EnvCommon, a: &EnvApplyOpts) -> Resul
         );
     }
     let plan = planned(ctx, &loaded, &spec, false)?;
-    write!(&ctx.out, "{}", plan.text)?;
+    write!(&ctx.out, "{}", plan.before_applying())?;
     approve(ctx, &loaded, &spec.name, &plan, a.force)?;
     provision(ctx, &mut secrets, &spec)?;
     let args = super::CreateArgs {
@@ -122,7 +128,7 @@ fn env_run<R: Runner>(
     let (loaded, spec, mut secrets) = prepare(ctx, c, a)?;
     let exists = sandbox::find(&ctx.vm, &spec.name)?.is_some();
     let plan = planned(ctx, &loaded, &spec, exists)?;
-    write!(&ctx.out, "{}", plan.text)?;
+    write!(&ctx.out, "{}", plan.before_applying())?;
     approve(ctx, &loaded, &spec.name, &plan, a.force)?;
     let args = if exists {
         // Attach as it was created, with the file's current env for this session.
@@ -225,6 +231,8 @@ fn env_rm<R: Runner>(ctx: &mut Ctx<R>, a: EnvRmArgs) -> Result<i32> {
     let all = sandbox::list(&ctx.vm)?;
     let sb = all.iter().find(|sb| sb.name() == name);
     if sb.is_none() && scoped.is_empty() {
+        // Nothing to remove but the approval, which a plain `rm` of the sandbox leaves.
+        approval::forget(&ctx.paths, &name)?;
         eprintln!("error: sandbox '{name}' not found\n  try: sbt ls");
         return Ok(0);
     }
@@ -1076,6 +1084,51 @@ mod tests {
         listed(&t, &[]);
         t.sbt(&["env", "rm", "--force"]).unwrap();
         assert_eq!(record(&t), None);
+    }
+
+    #[test]
+    fn env_rm_forgets_the_approval_when_nothing_else_is_left() {
+        // The sandbox went with a plain `rm`, which leaves the approval.
+        let mut t = approved(FILE);
+        t.runner().ok(&["machine", "ls", "--json"], "[]");
+        t.sbt(&["env", "rm", "--force"]).unwrap();
+        assert_eq!(record(&t), None);
+    }
+
+    #[test]
+    fn what_a_secret_or_a_port_does_is_part_of_the_approval() {
+        // `snapshot` decides whether the command runs once or at every start; `hostIP` where
+        // the port listens.
+        let file = |snapshot: bool, host_ip: &str| {
+            format!(
+                "schemaVersion: \"1\"\nagent: claude\nworkspace: .\nports:\n  - sandbox: 80\n    \
+                 host: 8080\n{host_ip}secrets:\n  github:\n    command: printf tok\n    \
+                 snapshot: {snapshot}\n"
+            )
+        };
+        const IP: &str = "    hostIP: 127.0.0.1\n";
+        for changed in [file(false, IP), file(true, "")] {
+            let mut t = approved(&file(true, IP));
+            t.sbt(&["env", "run", "-d"]).unwrap();
+            std::fs::write(t.ctx.cwd.join("sbxenv.yaml"), changed).unwrap();
+            let err = t.sbt_err(&["env", "run", "-d"]);
+            assert!(err.contains("have not been approved"), "{err}");
+        }
+        let mut t = approved(&file(true, IP));
+        t.no_machine();
+        let plan = plan(&mut t);
+        assert!(plan.contains("      snapshot: true\n"), "{plan}");
+        assert!(plan.contains("      hostIP: 127.0.0.1\n"), "{plan}");
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn the_record_is_private() {
+        use std::os::unix::fs::PermissionsExt;
+        let t = approved(FILE);
+        let path = t.ctx.paths.env_records().join("claude-proj.toml");
+        let mode = std::fs::metadata(path).unwrap().permissions().mode();
+        assert_eq!(mode & 0o777, 0o600);
     }
 
     #[test]

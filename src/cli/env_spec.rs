@@ -271,6 +271,10 @@ pub fn resources(loaded: &Loaded, spec: &EnvSpec) -> Vec<Resource> {
             ],
             _ => vec![],
         };
+        // Whether a command or reference is resolved once or at every start.
+        if s.snapshot == Some(true) {
+            fields.push(field("snapshot", "true"));
+        }
         if s.no_verify == Some(true) {
             fields.push(field("noVerify", "true"));
         }
@@ -282,10 +286,14 @@ pub fn resources(loaded: &Loaded, spec: &EnvSpec) -> Vec<Resource> {
 
     for p in f.ports.iter().flatten() {
         let host = p.host.map_or("ephemeral".to_string(), |h| h.to_string());
+        let mut fields = vec![field("host", &host)];
+        if let Some(ip) = &p.host_ip {
+            fields.push(field("hostIP", ip));
+        }
         out.push(Resource::new(
             "PORTS",
             &format!("{}/{}", p.sandbox, protocol(p)),
-            vec![field("host", &host)],
+            fields,
         ));
     }
     out
