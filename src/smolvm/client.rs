@@ -175,6 +175,9 @@ pub struct ExecSpec {
     pub interactive: bool,
     pub tty: bool,
     pub detach: bool,
+    /// Prints output as it arrives rather than when the command ends, and without the 11 MiB
+    /// cap of a buffered exec. For an exec whose output goes straight to the user.
+    pub stream: bool,
     pub cmd: Vec<String>,
 }
 
@@ -195,6 +198,7 @@ impl ExecSpec {
             (self.interactive, "-i"),
             (self.tty, "-t"),
             (self.detach, "-d"),
+            (self.stream, "--stream"),
         ] {
             if on {
                 a.push(f.into());
@@ -236,7 +240,7 @@ impl<R: Runner> Smolvm<R> {
         checked(self.runner.run(&args)?)
     }
 
-    /// The smolvm version, e.g. `1.32.4`.
+    /// The smolvm version, e.g. `1.34.1`.
     pub fn version(&self) -> Result<String> {
         let out = self.call(args(&["--version"]))?;
         out.stdout
@@ -751,19 +755,30 @@ mod tests {
             interactive: true,
             tty: true,
             detach: false,
+            stream: false,
             cmd: vec!["ls".into(), "-la".into()],
         };
         assert_eq!(
             spec.to_args().join(" "),
             "machine exec --name sbx-a -u agent -w /w -e K=v -i -t -- ls -la"
         );
+        let plain = ExecSpec {
+            name: "sbx-a".into(),
+            stream: true,
+            cmd: vec!["ls".into()],
+            ..Default::default()
+        };
+        assert_eq!(
+            plain.to_args().join(" "),
+            "machine exec --name sbx-a --stream -- ls"
+        );
     }
 
     #[test]
     fn version_takes_last_word() {
         let fake = FakeRunner::new();
-        fake.ok(&["--version"], "smolvm 1.32.4\n");
-        assert_eq!(Smolvm::new(fake).version().unwrap(), "1.32.4");
+        fake.ok(&["--version"], "smolvm 1.34.1\n");
+        assert_eq!(Smolvm::new(fake).version().unwrap(), "1.34.1");
     }
 
     #[test]

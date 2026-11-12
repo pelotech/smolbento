@@ -204,6 +204,13 @@ fn lifecycle_exec_and_same_path_mount() {
         e.ok(&["exec", "--privileged", &e.name, "id", "-un"]).trim(),
         "root"
     );
+    // A plain exec is streamed: output past smolvm's 11 MiB buffered cap arrives whole, and the
+    // command's exit status is sbt's.
+    let big = e.ok(&["exec", &e.name, "head", "-c", "12000000", "/dev/zero"]);
+    assert_eq!(big.len(), 12_000_000);
+    let out = e.sbt(&["exec", &e.name, "sh", "-c", "echo to-err >&2; exit 7"]);
+    assert_eq!(out.status.code(), Some(7));
+    assert_eq!(String::from_utf8_lossy(&out.stderr), "to-err\n");
 
     e.ok(&["stop", &e.name]);
     assert_eq!(e.state(), "stopped");
@@ -240,6 +247,17 @@ fn cp_round_trip() {
         back.to_str().unwrap(),
     ]);
     assert_eq!(std::fs::read_to_string(Path::new(&back)).unwrap(), "copied");
+
+    // A directory copies in like `cp -r`.
+    let tree = e.dir.path().join("tree");
+    std::fs::create_dir_all(tree.join("sub")).unwrap();
+    std::fs::write(tree.join("sub/f"), "nested").unwrap();
+    e.ok(&[
+        "cp",
+        tree.to_str().unwrap(),
+        &format!("{}:/tmp/tree", e.name),
+    ]);
+    assert_eq!(e.ok(&["exec", &e.name, "cat", "/tmp/tree/sub/f"]), "nested");
 }
 
 #[test]
@@ -761,7 +779,7 @@ fn template_round_trip() {
         "exec runs in the workspace: {got}"
     );
 
-    // Nested saves are refused (smolvm 1.32.4).
+    // Nested saves are refused (smolvm 1.34.1 can't pack them: see development-status.md).
     e.ok(&["stop", &copy]);
     let out = e.sbt(&["template", "save", &copy, "e2e-tpl:v2"]);
     assert!(!out.status.success());

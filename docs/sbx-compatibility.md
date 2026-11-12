@@ -46,7 +46,7 @@ something different.
 | Policy changes | Live everywhere | Live, except switching a running sandbox between allow-all and a restricted mode, which applies on its next start, and deny-CIDR rules, which apply only to sandboxes created afterwards (`policy check` says so) |
 | Approvals | Queue | Derived from smolvm's blocked-request (egress) log; the host is the approval id |
 | Host services | Reachable per port as `host.docker.internal` when the policy allows `localhost:PORT`, live; a blocked request gets `403 Approval required…` | Works, as `host.docker.internal`, live. Differences: a `localhost` rule opens **every** port on the host's `127.0.0.1` (smolvm can't open one port yet), not `::1`; only sandboxes created while one of your `localhost` rules applied get it (others need recreating; kit rules never grant it, and `_builder` never has it); an allow-all sandbox with host access keeps it until recreated; a blocked request gets connection refused (no proxy), so no approval entry. See [Security](SECURITY.md#host-services-localhost-rules). Under allow-all the host's LAN IP is reachable, so services listening on `0.0.0.0` are reachable through it (sbx blocks it) |
-| Published ports | Any host IP | `127.0.0.1` only (smolvm publishes on loopback) |
+| Published ports | Any host IP | Loopback only: `127.0.0.1` and `[::1]` (smolvm publishes on loopback) |
 | Single-file `:ro` mounts | Supported | Directories only (smolvm mounts directories) |
 | Machine names | `.` allowed | Names can't contain `--` or end in `-` (smolvm rules) |
 | Daemon | `sandboxd` | None; each command talks to smolvm directly |

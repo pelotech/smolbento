@@ -919,7 +919,7 @@ sbt ports claude-myrepo                         # list
 sbt ports claude-myrepo --unpublish 8080:80
 ```
 
-Ports bind `127.0.0.1`. UDP ports can only be changed while the sandbox is stopped, so a change
+Ports bind `127.0.0.1` and `[::1]`. UDP ports can only be changed while the sandbox is stopped, so a change
 that includes one doesn't start it.
 
 ## Copy files
@@ -931,6 +931,8 @@ sbt cp -L ./linked-file claude-myrepo:/tmp/f     # follow a symlink on your side
 ```
 
 One side must be `SANDBOX:/absolute/path`. Copying between two sandboxes isn't supported.
+A directory copies into a sandbox like `cp -r`, with symlinks inside it copied as the files they
+point to . Out of a sandbox, only single files copy.
 
 ## List
 
