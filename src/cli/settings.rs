@@ -41,8 +41,8 @@ pub fn render(settings: &Settings, no_trunc: bool) -> Result<String> {
 
 #[cfg(test)]
 mod tests {
-    use super::super::testutil::*;
     use super::*;
+    use crate::testutil::*;
 
     #[test]
     fn set_get_unset() {

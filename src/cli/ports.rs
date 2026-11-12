@@ -64,11 +64,11 @@ fn render_list(ports: &[PublishedPort]) -> String {
 
 #[cfg(test)]
 mod tests {
-    use super::super::testutil::*;
     use super::*;
+    use crate::testutil::*;
 
     fn sandbox(t: &TestEnv, state: &str) {
-        t.machine("sbx-a1", state, &[("sbx.name", "a1")]);
+        t.sandbox("a1", state, &[]);
     }
 
     #[test]

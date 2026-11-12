@@ -838,9 +838,9 @@ fn render_ls(policy: &Policy, rows: &[LsRow], opts: &LsOpts) -> Result<String> {
 
 #[cfg(test)]
 mod tests {
-    use super::super::testutil::*;
     use super::*;
     use crate::secrets::{SecretEntry, Source};
+    use crate::testutil::*;
 
     fn running(t: &TestEnv, labels: &[(&str, &str)]) {
         let m = machine_json("sbx-a1", "running", labels);

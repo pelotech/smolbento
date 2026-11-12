@@ -17,3 +17,5 @@ pub mod workspace;
 
 #[cfg(test)]
 pub(crate) mod testgit;
+#[cfg(test)]
+pub(crate) mod testutil;

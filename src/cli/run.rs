@@ -215,20 +215,11 @@ fn fetch_on_exit<R: Runner>(ctx: &Ctx<R>, sb: &Sandbox) -> bool {
 
 #[cfg(test)]
 mod tests {
-    use super::super::testutil::*;
     use crate::sandbox::session;
+    use crate::testutil::*;
 
     fn created(t: &TestEnv, state: &str) {
-        let ws = t.ctx.cwd.display().to_string();
-        t.machine(
-            "sbx-claude-proj",
-            state,
-            &[
-                ("sbx.name", "claude-proj"),
-                ("sbx.agent", "claude"),
-                ("sbx.workspace", ws.as_str()),
-            ],
-        );
+        t.project(state);
     }
 
     #[test]

@@ -493,9 +493,9 @@ mod tests {
     use std::fs;
 
     use super::*;
-    use crate::cli::testutil::*;
     use crate::kits::model::Source;
     use crate::kits::registry::{self, fixtures::oci_layout};
+    use crate::testutil::*;
 
     const MIXIN: &str = "# syntax=docker/sandbox-kit:3\nschemaVersion: \"3\"\nkind: mixin\n";
 

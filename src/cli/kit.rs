@@ -572,10 +572,10 @@ fn approve<R: Runner>(ctx: &Ctx<R>, kit: &str, hosts: &[String], started: bool) 
 mod tests {
     use std::fs;
 
-    use super::super::testutil::*;
     use crate::kits::guest;
     use crate::kits::model::{Hook, HookCmd};
     use crate::policy::Policy;
+    use crate::testutil::*;
 
     const MACHINE: &str = "sbx-dev";
     const BASE: &str = "base\tghcr.io/acme/base@sha256:00\tbase\n";
@@ -609,21 +609,7 @@ mod tests {
             &["machine", "status", "-n", MACHINE],
             &machine_json(MACHINE, state, &all),
         );
-        fake.ok(
-            &[
-                "machine",
-                "exec",
-                "--name",
-                MACHINE,
-                "-u",
-                "root",
-                "--",
-                "sh",
-                "-c",
-                super::READ_KITS,
-            ],
-            record,
-        );
+        fake.ok(&root_sh(MACHINE, super::READ_KITS), record);
     }
 
     const NET_KIT: &str = r#"{"schemaVersion":"3","kind":"mixin","name":"net",
@@ -1417,18 +1403,7 @@ mod tests {
         v3_kit(&t, "net", NET_KIT, &[]);
         let script = Some("/etc/smolbento/startup.d/02-net.sh");
         t.runner().on(
-            &[
-                "machine",
-                "exec",
-                "--name",
-                MACHINE,
-                "-u",
-                "root",
-                "--",
-                "sh",
-                "-c",
-                &crate::sandbox::startup_cmd(script),
-            ],
+            &root_sh(MACHINE, &crate::sandbox::startup_cmd(script)),
             crate::smolvm::Output {
                 code: 2,
                 ..Default::default()
@@ -1662,22 +1637,8 @@ mod tests {
         policy.save(&t.ctx.paths).unwrap();
         dev_sandbox(&t, BASE);
         v3_kit(&t, "net", NET_KIT, &[]);
-        t.runner().fail(
-            &[
-                "machine",
-                "exec",
-                "--name",
-                MACHINE,
-                "-u",
-                "root",
-                "--",
-                "sh",
-                "-c",
-                &install_script(),
-            ],
-            "exec",
-            "apt broke",
-        );
+        t.runner()
+            .fail(&root_sh(MACHINE, &install_script()), "exec", "apt broke");
         let e = t.sbt(&["kit", "add", "dev", "./net", "--yes"]).unwrap_err();
         let m = format!("{e:#}");
         assert!(
@@ -1744,18 +1705,7 @@ mod tests {
         );
         // The startup files' `mkdir`, the first write.
         t.runner().fail(
-            &[
-                "machine",
-                "exec",
-                "--name",
-                MACHINE,
-                "-u",
-                "root",
-                "--",
-                "sh",
-                "-c",
-                "mkdir -p '/etc/smolbento'",
-            ],
+            &root_sh(MACHINE, "mkdir -p '/etc/smolbento'"),
             "exec",
             "disk full",
         );

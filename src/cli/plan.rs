@@ -638,12 +638,12 @@ mod tests {
         assert_eq!(host_access_note("s1", false), None);
     }
 
-    use super::super::testutil::*;
     use super::*;
     use crate::kits::model::SshPhase::{self, Install, Runtime};
     use crate::sandbox::Meta;
     use crate::secrets::{SecretEntry, Source, scope_for};
     use crate::smolvm::NetworkSpec;
+    use crate::testutil::*;
 
     /// A sandbox's labels as recorded at create: `credential_env` holds the built-in services'
     /// env vars.
@@ -1096,13 +1096,7 @@ mod tests {
         // `create` checks the name is free first.
         fake.once_fail(&["machine", "status"], "NOT_FOUND", "vm not found");
         if fail_install {
-            fake.fail(
-                &[
-                    "machine", "exec", "--name", "sbx-s1", "-u", "root", "--", "sh", "-c", "npm i",
-                ],
-                "EXEC_FAILED",
-                "npm ERR! 404",
-            );
+            fake.fail(&root_sh("sbx-s1", "npm i"), "EXEC_FAILED", "npm ERR! 404");
         }
         let kit = KitFirstStart {
             steps: KitSteps {

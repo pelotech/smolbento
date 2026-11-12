@@ -349,18 +349,6 @@ fn list(value: Option<&String>) -> Vec<String> {
 
 #[cfg(test)]
 mod tests {
-    #[test]
-    fn template_round_trips() {
-        let m = Meta {
-            name: "a".into(),
-            template: Some("docker.io/library/t:v1".into()),
-            ..Default::default()
-        };
-        let labels = m.to_labels();
-        assert_eq!(labels.get(TEMPLATE).unwrap(), "docker.io/library/t:v1");
-        assert_eq!(Meta::from_labels(&labels).unwrap().template, m.template);
-    }
-
     use super::*;
 
     fn meta() -> Meta {
@@ -384,63 +372,6 @@ mod tests {
     }
 
     #[test]
-    fn host_access_label_round_trips() {
-        assert!(!meta().to_labels().contains_key("sbx.host-access"));
-        let m = Meta {
-            host_access: true,
-            ..meta()
-        };
-        let labels = m.to_labels();
-        assert_eq!(labels["sbx.host-access"], "true");
-        assert_eq!(Meta::from_labels(&labels), Some(m));
-    }
-
-    #[test]
-    fn bridge_label_round_trips() {
-        assert!(!meta().to_labels().contains_key("sbx.bridge"));
-        let m = Meta {
-            bridge: true,
-            ..meta()
-        };
-        let labels = m.to_labels();
-        assert_eq!(labels["sbx.bridge"], "true");
-        assert_eq!(Meta::from_labels(&labels), Some(m));
-    }
-
-    #[test]
-    fn ssh_agent_label_round_trips() {
-        use crate::bridge::agent::Access;
-        assert!(!meta().to_labels().contains_key("sbx.ssh-agent"));
-        let m = Meta {
-            ssh_agent: Some(AgentLabel {
-                runtime: Some(Access { sign: None }),
-                install: Some(Access {
-                    sign: Some(vec!["git".into()]),
-                }),
-            }),
-            ..meta()
-        };
-        let labels = m.to_labels();
-        assert_eq!(
-            labels["sbx.ssh-agent"],
-            r#"{"runtime":{"sign":null},"install":{"sign":["git"]}}"#
-        );
-        assert_eq!(Meta::from_labels(&labels), Some(m));
-    }
-
-    #[test]
-    fn host_mounts_label_round_trips() {
-        assert!(!meta().to_labels().contains_key("sbx.host-mounts"));
-        let m = Meta {
-            host_mounts: BTreeMap::from([("/home/agent/x".into(), "/data/x".into())]),
-            ..meta()
-        };
-        let labels = m.to_labels();
-        assert_eq!(labels["sbx.host-mounts"], r#"{"/home/agent/x":"/data/x"}"#);
-        assert_eq!(Meta::from_labels(&labels), Some(m));
-    }
-
-    #[test]
     fn mountless_has_no_workspace_label() {
         let m = Meta {
             workspace: None,
@@ -450,53 +381,6 @@ mod tests {
         let labels = m.to_labels();
         assert!(!labels.contains_key("sbx.workspace"));
         assert_eq!(Meta::from_labels(&labels), Some(m));
-    }
-
-    #[test]
-    fn secrets_label_round_trips() {
-        let m = Meta {
-            secrets: vec!["anthropic".into(), "github".into()],
-            ..meta()
-        };
-        let labels = m.to_labels();
-        assert_eq!(labels["sbx.secrets"], "anthropic,github");
-        assert_eq!(Meta::from_labels(&labels).unwrap().secrets, m.secrets);
-    }
-
-    #[test]
-    fn credential_hosts_label_round_trips() {
-        let m = Meta {
-            credential_hosts: vec!["api.github.com".into(), "github.com".into()],
-            ..meta()
-        };
-        let labels = m.to_labels();
-        assert_eq!(labels["sbx.credential-hosts"], "api.github.com,github.com");
-        assert_eq!(Meta::from_labels(&labels), Some(m));
-        assert!(!meta().to_labels().contains_key("sbx.credential-hosts"));
-    }
-
-    #[test]
-    fn credential_env_label_round_trips() {
-        let m = Meta {
-            credential_env: vec!["GH_TOKEN".into(), "GITHUB_TOKEN".into()],
-            ..meta()
-        };
-        let labels = m.to_labels();
-        assert_eq!(labels["sbx.credential-env"], "GH_TOKEN,GITHUB_TOKEN");
-        assert_eq!(Meta::from_labels(&labels), Some(m));
-        assert!(!meta().to_labels().contains_key("sbx.credential-env"));
-    }
-
-    #[test]
-    fn registries_label_round_trips() {
-        let m = Meta {
-            registries: vec!["dhi.io".into(), "ghcr.io".into()],
-            ..meta()
-        };
-        let labels = m.to_labels();
-        assert_eq!(labels["sbx.registries"], "dhi.io,ghcr.io");
-        assert_eq!(Meta::from_labels(&labels), Some(m));
-        assert!(!meta().to_labels().contains_key("sbx.registries"));
     }
 
     #[test]
@@ -521,20 +405,24 @@ mod tests {
     }
 
     #[test]
-    fn fork_of_label_round_trips() {
+    fn optional_fields_round_trip() {
+        use crate::bridge::agent::Access;
         let m = Meta {
+            template: Some("docker.io/library/t:v1".into()),
+            host_access: true,
+            bridge: true,
+            ssh_agent: Some(AgentLabel {
+                runtime: Some(Access { sign: None }),
+                install: Some(Access {
+                    sign: Some(vec!["git".into()]),
+                }),
+            }),
+            host_mounts: BTreeMap::from([("/home/agent/x".into(), "/data/x".into())]),
+            secrets: vec!["anthropic".into(), "github".into()],
+            credential_hosts: vec!["api.github.com".into(), "github.com".into()],
+            credential_env: vec!["GH_TOKEN".into(), "GITHUB_TOKEN".into()],
+            registries: vec!["dhi.io".into(), "ghcr.io".into()],
             fork_of: Some("a".into()),
-            ..meta()
-        };
-        let labels = m.to_labels();
-        assert_eq!(labels["sbx.fork-of"], "a");
-        assert_eq!(Meta::from_labels(&labels), Some(m));
-        assert!(!meta().to_labels().contains_key("sbx.fork-of"));
-    }
-
-    #[test]
-    fn kit_labels_round_trip() {
-        let m = Meta {
             kits: vec!["acme/a:1@sha256:ab".into(), "/k/b".into()],
             command: Some(vec!["wl".into(), "--a b".into()]),
             user: Some("somebody".into()),
@@ -553,24 +441,35 @@ mod tests {
             ..meta()
         };
         let labels = m.to_labels();
-        assert_eq!(labels["sbx.kits"], r#"["acme/a:1@sha256:ab","/k/b"]"#);
-        assert_eq!(labels["sbx.command"], r#"["wl","--a b"]"#);
-        assert_eq!(labels["sbx.user"], "somebody");
-        assert_eq!(labels["sbx.workdir"], "/x");
-        assert_eq!(labels["sbx.agent-file"], "/w/AGENTS.md");
-        assert_eq!(labels["sbx.credential-install"], "GH_TOKEN,NPM_TOKEN");
-        assert_eq!(labels["sbx.long-running"], "true");
-        assert_eq!(
-            labels["sbx.credential-format.SBX_KIT_X"],
-            "format:Bearer %s"
-        );
-        assert_eq!(
-            labels["sbx.credential-format.GH_TOKEN"],
-            "basic:x-access-token"
-        );
-        assert_eq!(labels["sbx.credential-service.SBX_KIT_X"], "x");
+        for (key, want) in [
+            ("sbx.template", "docker.io/library/t:v1"),
+            ("sbx.host-access", "true"),
+            ("sbx.bridge", "true"),
+            (
+                "sbx.ssh-agent",
+                r#"{"runtime":{"sign":null},"install":{"sign":["git"]}}"#,
+            ),
+            ("sbx.host-mounts", r#"{"/home/agent/x":"/data/x"}"#),
+            ("sbx.secrets", "anthropic,github"),
+            ("sbx.credential-hosts", "api.github.com,github.com"),
+            ("sbx.credential-env", "GH_TOKEN,GITHUB_TOKEN"),
+            ("sbx.registries", "dhi.io,ghcr.io"),
+            ("sbx.fork-of", "a"),
+            ("sbx.kits", r#"["acme/a:1@sha256:ab","/k/b"]"#),
+            ("sbx.command", r#"["wl","--a b"]"#),
+            ("sbx.user", "somebody"),
+            ("sbx.workdir", "/x"),
+            ("sbx.agent-file", "/w/AGENTS.md"),
+            ("sbx.credential-install", "GH_TOKEN,NPM_TOKEN"),
+            ("sbx.long-running", "true"),
+            ("sbx.credential-format.SBX_KIT_X", "format:Bearer %s"),
+            ("sbx.credential-format.GH_TOKEN", "basic:x-access-token"),
+            ("sbx.credential-service.SBX_KIT_X", "x"),
+        ] {
+            assert_eq!(labels[key], want, "{key}");
+        }
         assert_eq!(Meta::from_labels(&labels), Some(m));
-        // Absent when empty, so sandboxes without kits keep their labels.
+        // None of them is written for a sandbox that doesn't use it, so its labels don't change.
         let plain = meta().to_labels();
         assert_eq!(plain.len(), 6, "{plain:?}");
     }

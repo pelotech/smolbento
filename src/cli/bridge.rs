@@ -36,8 +36,8 @@ mod tests {
     use std::io::{Read, Write};
     use std::os::unix::net::UnixStream;
 
-    use super::super::testutil::*;
     use crate::bridge::host_socket;
+    use crate::testutil::*;
 
     #[test]
     fn serves_a_labelled_sandbox() {

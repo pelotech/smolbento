@@ -320,7 +320,7 @@ pub fn preset_kit(agent: &Agent, image: &str) -> Kit {
 mod tests {
     use super::*;
     use crate::agents;
-    use crate::cli::testutil::*;
+    use crate::testutil::*;
 
     fn allow_local() -> TestEnv {
         test_env(&[("SMOLBENTO_KIT_ALLOW_LOCAL_KITS", "true")])

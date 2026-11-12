@@ -45,15 +45,14 @@ pub fn run<R: Runner>(ctx: &mut Ctx<R>, sandbox: &str) -> Result<i32> {
 
 #[cfg(test)]
 mod tests {
-    use crate::cli::testutil::{TestEnv, test_env};
     use crate::sandbox::session;
+    use crate::testutil::{TestEnv, test_env};
 
     fn clone_sandbox(t: &TestEnv, state: &str) {
-        t.machine(
-            "sbx-box",
+        t.sandbox(
+            "box",
             state,
             &[
-                ("sbx.name", "box"),
                 ("sbx.agent", "shell"),
                 ("sbx.workspace", "/w/r"),
                 ("sbx.clone", "true"),

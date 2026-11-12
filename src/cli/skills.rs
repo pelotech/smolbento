@@ -332,9 +332,9 @@ fn update_repo<R: Runner>(
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::cli::testutil::test_env;
+    use crate::testutil::test_env;
 
-    fn put(t: &crate::cli::testutil::TestEnv, name: &str) {
+    fn put(t: &crate::testutil::TestEnv, name: &str) {
         let d = t.ctx.paths.skills_store().join(name);
         std::fs::create_dir_all(&d).unwrap();
         std::fs::write(d.join("SKILL.md"), "s").unwrap();

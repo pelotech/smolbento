@@ -336,9 +336,9 @@ fn source<R: Runner>(
 
 #[cfg(test)]
 mod tests {
-    use super::super::testutil::*;
     use super::super::{Cli, Cmd, EnvCmd, exit_code};
     use crate::secrets::{SecretEntry, SecretsFile, Source};
+    use crate::testutil::*;
     use clap::Parser;
 
     const FILE: &str = "schemaVersion: \"1\"\nagent: claude\nworkspace: .\n\
@@ -353,38 +353,12 @@ mod tests {
         t
     }
 
-    /// Sandbox `claude-proj` doesn't exist for `lookups` status calls, then exists.
     fn missing_then_created(t: &TestEnv, lookups: usize) {
-        let fake = t.runner();
-        let ws = t.ctx.cwd.display().to_string();
-        fake.ok(
-            &["machine", "status"],
-            &machine_json(
-                "sbx-claude-proj",
-                "created",
-                &[
-                    ("sbx.name", "claude-proj"),
-                    ("sbx.agent", "claude"),
-                    ("sbx.workspace", ws.as_str()),
-                ],
-            ),
-        );
-        for _ in 0..lookups {
-            fake.once_fail(&["machine", "status"], "NOT_FOUND", "vm not found");
-        }
+        t.project_creatable(lookups);
     }
 
     fn existing(t: &TestEnv, state: &str) {
-        let ws = t.ctx.cwd.display().to_string();
-        t.machine(
-            "sbx-claude-proj",
-            state,
-            &[
-                ("sbx.name", "claude-proj"),
-                ("sbx.agent", "claude"),
-                ("sbx.workspace", ws.as_str()),
-            ],
-        );
+        t.project(state);
     }
 
     /// Call lines with what differs between test envs masked: fresh UUIDs (SANDBOX_ID) and

@@ -217,7 +217,7 @@ mod tests {
 
     #[test]
     fn internal_sandboxes_are_hidden() {
-        use super::super::testutil::{machine_json, test_env};
+        use crate::testutil::{machine_json, test_env};
         let mut t = test_env(&[]);
         let ls = format!(
             "[{},{}]",

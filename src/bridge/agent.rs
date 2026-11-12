@@ -233,13 +233,13 @@ mod tests {
 
     #[test]
     fn host_agent_reads_the_settings_and_env() {
-        let t = crate::cli::testutil::test_env(&[("SMOLBENTO_SSH_AGENT_FORWARDING", "false")]);
+        let t = crate::testutil::test_env(&[("SMOLBENTO_SSH_AGENT_FORWARDING", "false")]);
         let env = BTreeMap::from([("SSH_AUTH_SOCK".to_string(), "/nonexistent".to_string())]);
         assert_eq!(
             host_agent(&t.ctx.settings, &env).unwrap(),
             Err(Unavailable::Disabled)
         );
-        let t = crate::cli::testutil::test_env(&[("SMOLBENTO_SSH_AGENT_SOCKET", "/nope.sock")]);
+        let t = crate::testutil::test_env(&[("SMOLBENTO_SSH_AGENT_SOCKET", "/nope.sock")]);
         assert_eq!(
             host_agent(&t.ctx.settings, &env).unwrap(),
             Err(Unavailable::Missing("/nope.sock".into()))

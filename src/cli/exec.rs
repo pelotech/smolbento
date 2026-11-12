@@ -96,14 +96,10 @@ pub fn cp<R: Runner>(ctx: &mut Ctx<R>, a: &CpArgs) -> Result<i32> {
 
 #[cfg(test)]
 mod tests {
-    use super::super::testutil::*;
+    use crate::testutil::*;
 
     fn running(t: &TestEnv) {
-        t.machine(
-            "sbx-claude-proj",
-            "running",
-            &[("sbx.name", "claude-proj"), ("sbx.workspace", "/w/proj")],
-        );
+        t.sandbox("claude-proj", "running", &[("sbx.workspace", "/w/proj")]);
     }
 
     #[test]

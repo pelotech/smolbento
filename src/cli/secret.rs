@@ -561,8 +561,8 @@ fn set_registry<R: Runner>(
 
 #[cfg(test)]
 mod tests {
-    use super::super::testutil::*;
     use super::*;
+    use crate::testutil::*;
 
     fn set_registry_from(
         t: &mut TestEnv,

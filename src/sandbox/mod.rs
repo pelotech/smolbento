@@ -944,8 +944,21 @@ mod tests {
     use super::*;
     use crate::smolvm::NetworkSpec;
     use crate::smolvm::fake::FakeRunner;
+    use crate::testutil::root_sh;
 
     const STATUS: &str = include_str!("../../tests/fixtures/smolvm/status.json");
+
+    /// The fixture sandbox, stopped.
+    fn stopped() -> String {
+        STATUS.replace("\"state\": \"running\"", "\"state\": \"stopped\"")
+    }
+
+    /// A fake smolvm whose `machine status` answers with `status`.
+    fn vm_with(status: &str) -> Smolvm<FakeRunner> {
+        let fake = FakeRunner::new();
+        fake.ok(&["machine", "status"], status);
+        Smolvm::new(fake)
+    }
 
     #[test]
     fn find_maps_name_and_reads_labels() {
@@ -998,12 +1011,7 @@ mod tests {
     /// starts dockerd itself.
     #[test]
     fn start_applies_network_then_starts_with_env_then_setup() {
-        let fake = FakeRunner::new();
-        fake.ok(
-            &["machine", "status"],
-            &STATUS.replace("\"state\": \"running\"", "\"state\": \"stopped\""),
-        );
-        let vm = Smolvm::new(fake);
+        let vm = vm_with(&stopped());
         let mut sb = get(&vm, "claude-myrepo").unwrap();
         ensure_running(&vm, &mut sb, || Ok(plan())).unwrap();
         assert!(sb.is_running());
@@ -1043,7 +1051,7 @@ mod tests {
     fn starts_install_the_bridge_shims_or_remove_ours() {
         for bridged in [true, false] {
             let fake = FakeRunner::new();
-            let status = STATUS.replace("\"state\": \"running\"", "\"state\": \"stopped\"");
+            let status = stopped();
             let status = if bridged {
                 status.replace(
                     "\"sbx.docker\"",
@@ -1078,19 +1086,15 @@ mod tests {
     }
 
     fn bridged_status() -> String {
-        STATUS
-            .replace("\"state\": \"running\"", "\"state\": \"stopped\"")
-            .replace(
-                "\"sbx.docker\"",
-                "\"sbx.bridge\": \"true\",\n    \"sbx.docker\"",
-            )
+        stopped().replace(
+            "\"sbx.docker\"",
+            "\"sbx.bridge\": \"true\",\n    \"sbx.docker\"",
+        )
     }
 
     #[test]
     fn a_start_checks_the_socket_dir_and_installs_the_shims_when_it_is_private() {
-        let fake = FakeRunner::new();
-        fake.ok(&["machine", "status"], &bridged_status());
-        let vm = Smolvm::new(fake);
+        let vm = vm_with(&bridged_status());
         let sb = get(&vm, "claude-myrepo").unwrap();
         let checked = std::cell::RefCell::new(Vec::new());
         start_checked(&vm, &sb, &plan(), &mut |_| {}, &|d| {
@@ -1111,12 +1115,10 @@ mod tests {
     #[test]
     fn a_start_checks_the_socket_dir_for_the_ssh_agent_too() {
         let fake = FakeRunner::new();
-        let status = STATUS
-            .replace("\"state\": \"running\"", "\"state\": \"stopped\"")
-            .replace(
-                "\"sbx.docker\"",
-                "\"sbx.ssh-agent\": \"{\\\"runtime\\\":{\\\"sign\\\":null}}\",\n    \"sbx.docker\"",
-            );
+        let status = stopped().replace(
+            "\"sbx.docker\"",
+            "\"sbx.ssh-agent\": \"{\\\"runtime\\\":{\\\"sign\\\":null}}\",\n    \"sbx.docker\"",
+        );
         fake.ok(&["machine", "status"], &status);
         let vm = Smolvm::new(fake);
         let sb = get(&vm, "claude-myrepo").unwrap();
@@ -1145,9 +1147,7 @@ mod tests {
             |cmd: String| format!("machine exec --name sbx-claude-myrepo -u root -- sh -c {cmd}");
         let lines = vm.runner().call_lines();
         assert!(lines.contains(&shims(bridge::remove_cmd())), "{lines:#?}");
-        let fake = FakeRunner::new();
-        fake.ok(&["machine", "status"], &status);
-        let vm = Smolvm::new(fake);
+        let vm = vm_with(&status);
         start_checked(&vm, &sb, &plan(), &mut |_| {}, &|_| true).unwrap();
         let lines = vm.runner().call_lines();
         assert!(lines.contains(&shims(bridge::remove_cmd())), "{lines:#?}");
@@ -1164,20 +1164,13 @@ mod tests {
         // Neither: nothing to check.
         let mut neither = sb.clone();
         neither.meta.ssh_agent = None;
-        let fake = FakeRunner::new();
-        fake.ok(
-            &["machine", "status"],
-            &STATUS.replace("\"state\": \"running\"", "\"state\": \"stopped\""),
-        );
-        let vm = Smolvm::new(fake);
+        let vm = vm_with(&stopped());
         start_checked(&vm, &neither, &plan(), &mut |_| {}, &|_| panic!("checked")).unwrap();
     }
 
     #[test]
     fn a_start_with_an_unsafe_socket_dir_removes_the_shims() {
-        let fake = FakeRunner::new();
-        fake.ok(&["machine", "status"], &bridged_status());
-        let vm = Smolvm::new(fake);
+        let vm = vm_with(&bridged_status());
         let sb = get(&vm, "claude-myrepo").unwrap();
         start_checked(&vm, &sb, &plan(), &mut |_| {}, &|_| false).unwrap();
         let lines = vm.runner().call_lines();
@@ -1192,26 +1185,13 @@ mod tests {
         let fake = FakeRunner::new();
         fake.ok(
             &["machine", "status"],
-            &STATUS
-                .replace("\"state\": \"running\"", "\"state\": \"stopped\"")
-                .replace(
-                    "\"sbx.docker\"",
-                    "\"sbx.bridge\": \"true\",\n    \"sbx.docker\"",
-                ),
+            &stopped().replace(
+                "\"sbx.docker\"",
+                "\"sbx.bridge\": \"true\",\n    \"sbx.docker\"",
+            ),
         );
         fake.fail(
-            &[
-                "machine",
-                "exec",
-                "--name",
-                "sbx-claude-myrepo",
-                "-u",
-                "root",
-                "--",
-                "sh",
-                "-c",
-                &bridge::install_cmd(),
-            ],
+            &root_sh("sbx-claude-myrepo", &bridge::install_cmd()),
             "EXEC_FAILED",
             "Read-only file system",
         );
@@ -1223,12 +1203,7 @@ mod tests {
 
     #[test]
     fn every_start_names_the_host_after_the_agent_user() {
-        let fake = FakeRunner::new();
-        fake.ok(
-            &["machine", "status"],
-            &STATUS.replace("\"state\": \"running\"", "\"state\": \"stopped\""),
-        );
-        let vm = Smolvm::new(fake);
+        let vm = vm_with(&stopped());
         let mut sb = get(&vm, "claude-myrepo").unwrap();
         ensure_running(&vm, &mut sb, || Ok(plan())).unwrap();
         let lines = vm.runner().call_lines();
@@ -1242,21 +1217,17 @@ mod tests {
 
     fn skills_status(label: &str) -> String {
         let l = label.replace('"', "\\\"");
-        STATUS
-            .replace("\"state\": \"running\"", "\"state\": \"stopped\"")
-            .replace(
-                "\"sbx.docker\"",
-                &format!("\"sbx.skills\": \"{l}\",\n    \"sbx.docker\""),
-            )
+        stopped().replace(
+            "\"sbx.docker\"",
+            &format!("\"sbx.skills\": \"{l}\",\n    \"sbx.docker\""),
+        )
     }
 
     const RO_LABEL: &str = r#"{"mode":"readonly","shared":"ro","dirs":[{"path":"/home/agent/.claude/skills","access":"link"}]}"#;
 
     #[test]
     fn a_linking_skills_sandbox_links_the_store_as_root_at_start() {
-        let fake = FakeRunner::new();
-        fake.ok(&["machine", "status"], &skills_status(RO_LABEL));
-        let vm = Smolvm::new(fake);
+        let vm = vm_with(&skills_status(RO_LABEL));
         let mut sb = get(&vm, "claude-myrepo").unwrap();
         ensure_running(&vm, &mut sb, || Ok(plan())).unwrap();
         let script = crate::skills::link_script(&sb.meta.skills.as_ref().unwrap().dirs).unwrap();
@@ -1284,18 +1255,7 @@ mod tests {
         }])
         .unwrap();
         fake.fail(
-            &[
-                "machine",
-                "exec",
-                "--name",
-                "sbx-claude-myrepo",
-                "-u",
-                "root",
-                "--",
-                "sh",
-                "-c",
-                &script,
-            ],
+            &root_sh("sbx-claude-myrepo", &script),
             "EXEC_FAILED",
             "boom",
         );
@@ -1307,12 +1267,7 @@ mod tests {
 
     #[test]
     fn a_sandbox_without_a_skills_label_gets_no_link_exec() {
-        let fake = FakeRunner::new();
-        fake.ok(
-            &["machine", "status"],
-            &STATUS.replace("\"state\": \"running\"", "\"state\": \"stopped\""),
-        );
-        let vm = Smolvm::new(fake);
+        let vm = vm_with(&stopped());
         let mut sb = get(&vm, "claude-myrepo").unwrap();
         ensure_running(&vm, &mut sb, || Ok(plan())).unwrap();
         let lines = vm.runner().call_lines();
@@ -1325,23 +1280,9 @@ mod tests {
     #[test]
     fn a_read_only_etc_hosts_warns_and_the_start_goes_on() {
         let fake = FakeRunner::new();
-        fake.ok(
-            &["machine", "status"],
-            &STATUS.replace("\"state\": \"running\"", "\"state\": \"stopped\""),
-        );
+        fake.ok(&["machine", "status"], &stopped());
         fake.fail(
-            &[
-                "machine",
-                "exec",
-                "--name",
-                "sbx-claude-myrepo",
-                "-u",
-                "root",
-                "--",
-                "sh",
-                "-c",
-                &hosts_cmd(),
-            ],
+            &root_sh("sbx-claude-myrepo", &hosts_cmd()),
             "EXEC_FAILED",
             "Read-only file system",
         );
@@ -1362,12 +1303,7 @@ mod tests {
 
     #[test]
     fn a_v3_workloads_image_user_is_resolved_before_agent_moves() {
-        let fake = FakeRunner::new();
-        fake.ok(
-            &["machine", "status"],
-            &STATUS.replace("\"state\": \"running\"", "\"state\": \"stopped\""),
-        );
-        let vm = Smolvm::new(fake);
+        let vm = vm_with(&stopped());
         let mut sb = get(&vm, "claude-myrepo").unwrap();
         sb.meta.user = Some("1000".into());
         ensure_running(&vm, &mut sb, || Ok(plan())).unwrap();
@@ -1516,9 +1452,7 @@ echo "$g""#,
 
     #[test]
     fn launch_user_names_a_numeric_image_users_account() {
-        let fake = FakeRunner::new();
-        fake.ok(&["machine", "status"], STATUS);
-        let vm = Smolvm::new(fake);
+        let vm = vm_with(STATUS);
         let mut sb = get(&vm, "claude-myrepo").unwrap();
         assert_eq!(launch_user(&vm, &sb), None);
         sb.meta.user = Some("somebody".into());
@@ -1553,9 +1487,7 @@ echo "$g""#,
 
     #[test]
     fn an_unmappable_image_user_is_a_warning() {
-        let fake = FakeRunner::new();
-        fake.ok(&["machine", "status"], STATUS);
-        let vm = Smolvm::new(fake);
+        let vm = vm_with(STATUS);
         let sb = get(&vm, "claude-myrepo").unwrap();
         assert_eq!(map_image_user(&vm, &sb, "somebody", 501, 20).unwrap(), None);
         vm.runner().on(
@@ -1585,17 +1517,10 @@ echo "$g""#,
 
     #[test]
     fn a_docker_kit_sandbox_leaves_dockerd_to_its_startup_runner() {
-        let fake = FakeRunner::new();
-        fake.ok(
-            &["machine", "status"],
-            &STATUS
-                .replace("\"state\": \"running\"", "\"state\": \"stopped\"")
-                .replace(
-                    "\"sbx.docker\": \"true\",",
-                    "\"sbx.docker\": \"true\", \"sbx.kits\": \"[\\\"builtin:docker\\\"]\",",
-                ),
-        );
-        let vm = Smolvm::new(fake);
+        let vm = vm_with(&stopped().replace(
+            "\"sbx.docker\": \"true\",",
+            "\"sbx.docker\": \"true\", \"sbx.kits\": \"[\\\"builtin:docker\\\"]\",",
+        ));
         let mut sb = get(&vm, "claude-myrepo").unwrap();
         assert_eq!(sb.meta.kits, ["builtin:docker"]);
         ensure_running(&vm, &mut sb, || Ok(plan())).unwrap();
@@ -1612,9 +1537,7 @@ echo "$g""#,
 
     #[test]
     fn running_sandboxes_skip_the_plan() {
-        let fake = FakeRunner::new();
-        fake.ok(&["machine", "status"], STATUS);
-        let vm = Smolvm::new(fake);
+        let vm = vm_with(STATUS);
         let mut sb = get(&vm, "claude-myrepo").unwrap();
         ensure_running(&vm, &mut sb, || panic!("plan must not be computed")).unwrap();
     }
@@ -1622,10 +1545,7 @@ echo "$g""#,
     #[test]
     fn a_failed_setup_step_stops_the_machine() {
         let fake = FakeRunner::new();
-        fake.ok(
-            &["machine", "status"],
-            &STATUS.replace("\"state\": \"running\"", "\"state\": \"stopped\""),
-        );
+        fake.ok(&["machine", "status"], &stopped());
         fake.fail(
             &[
                 "machine",
@@ -1845,9 +1765,7 @@ echo "$g""#,
         let prep = clone_prep_cmd(&step("/w/r"));
         let fake = FakeRunner::new();
         fake.spawn_fail(
-            &[
-                "machine", "exec", "--name", "sbx-r", "-u", "root", "--", "sh", "-c", &prep,
-            ],
+            &root_sh("sbx-r", &prep),
             "could not run smolvm\nsecond line",
         );
         let vm = Smolvm::new(fake);
@@ -2017,7 +1935,7 @@ echo "$g""#,
                 );
             let fake = FakeRunner::new();
             fake.ok(&["machine", "status"], &status);
-            let (seen, probe) = crate::cli::testutil::socket_probe(bridge::agent_socket(&name));
+            let (seen, probe) = crate::testutil::socket_probe(bridge::agent_socket(&name));
             fake.during(&["machine", "exec"], move |args| {
                 let script = args.last().unwrap();
                 if ["install-1", "install-2", "files-1", "context-1"]
@@ -2245,18 +2163,7 @@ echo "$g""#,
         let vm = created_vm();
         let stderr: Vec<String> = (1..=25).map(|i| format!("line {i}")).collect();
         vm.runner().fail(
-            &[
-                "machine",
-                "exec",
-                "--name",
-                MACHINE,
-                "-u",
-                "root",
-                "--",
-                "sh",
-                "-c",
-                "echo install-1",
-            ],
+            &root_sh(MACHINE, "echo install-1"),
             "EXEC_FAILED",
             &stderr.join("\n"),
         );
@@ -2416,18 +2323,7 @@ echo "$g""#,
     /// The startup runner in `machine`, answering with exit `code`.
     fn failing_startup(fake: &FakeRunner, machine: &str, code: i32) {
         fake.on(
-            &[
-                "machine",
-                "exec",
-                "--name",
-                machine,
-                "-u",
-                "root",
-                "--",
-                "sh",
-                "-c",
-                &startup_cmd(None),
-            ],
+            &root_sh(machine, &startup_cmd(None)),
             crate::smolvm::Output {
                 code,
                 ..Default::default()
@@ -2547,18 +2443,7 @@ echo "$g""#,
     fn a_failed_hook_with_no_stderr_reports_its_stdout() {
         let vm = created_vm();
         vm.runner().on(
-            &[
-                "machine",
-                "exec",
-                "--name",
-                MACHINE,
-                "-u",
-                "root",
-                "--",
-                "sh",
-                "-c",
-                "echo install-1",
-            ],
+            &root_sh(MACHINE, "echo install-1"),
             crate::smolvm::Output {
                 code: 2,
                 stdout: "resolving\nE: package not found\n".into(),
@@ -2585,18 +2470,7 @@ echo "$g""#,
     fn a_failed_first_start_of_a_kit_sandbox_removes_it() {
         let vm = created_vm();
         vm.runner().fail(
-            &[
-                "machine",
-                "exec",
-                "--name",
-                MACHINE,
-                "-u",
-                "root",
-                "--",
-                "sh",
-                "-c",
-                &identity_cmd(501, 20),
-            ],
+            &root_sh(MACHINE, &identity_cmd(501, 20)),
             "EXEC_FAILED",
             "usermod: busy",
         );

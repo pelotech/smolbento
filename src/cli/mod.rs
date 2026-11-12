@@ -21,8 +21,6 @@ pub(crate) mod secret;
 mod settings;
 mod skills;
 mod template;
-#[cfg(test)]
-pub(crate) mod testutil;
 mod upload_pack;
 
 pub use crate::ctx::{Ctx, In, Out};
@@ -293,8 +291,8 @@ pub fn table(rows: Vec<Vec<String>>) -> String {
 
 #[cfg(test)]
 mod tests {
-    use super::testutil::*;
     use super::*;
+    use crate::testutil::*;
 
     #[test]
     fn versions_compare_numerically() {

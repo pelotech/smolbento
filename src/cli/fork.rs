@@ -169,10 +169,10 @@ fn branch_hint(e: anyhow::Error, parent: &str) -> anyhow::Error {
 
 #[cfg(test)]
 mod tests {
-    use super::super::testutil::*;
     use crate::policy::Policy;
     use crate::secrets::{SecretEntry, SecretsFile, Source, scope_for};
     use crate::smolvm::SmolvmError;
+    use crate::testutil::*;
 
     const NOT_BRANCHABLE: &str = "agent operation failed: fork: machine 'sbx-a' was not started \
         as branchable, so it has no copy-on-write memory to branch from. Restart it with \
