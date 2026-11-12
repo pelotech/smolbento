@@ -148,16 +148,9 @@ fn validate(def: &ArgDef, pattern: Option<&Regex>, value: &str) -> Result<()> {
 
 /// A declared optional arg with no value and no default, used in a placeholder (sbx errors the
 /// same way). An explicit empty value is a value.
-#[derive(Debug)]
+#[derive(Debug, thiserror::Error)]
+#[error("create-phase kit arg {0:?} has no resolved value")]
 pub struct NoResolvedValue(pub String);
-
-impl std::fmt::Display for NoResolvedValue {
-    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        write!(f, "create-phase kit arg {:?} has no resolved value", self.0)
-    }
-}
-
-impl std::error::Error for NoResolvedValue {}
 
 /// Expands `${{ kit.args.NAME }}` and `${{ kit.env.NAME }}`; undeclared names are errors, and so
 /// are declared ones in `unresolved` (no value, no default). `$VAR` and `${VAR}` are left for

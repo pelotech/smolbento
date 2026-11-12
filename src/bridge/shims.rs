@@ -2,7 +2,7 @@
 //! is the raw URL or text) and falls back when that fails or there is no `curl`. Option handling
 //! follows sbx's shims where it's simple.
 
-use crate::sandbox::sh_quote;
+use crate::util::sh_quote;
 
 use super::GUEST_SOCKET;
 

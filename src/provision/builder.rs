@@ -2,32 +2,30 @@
 //! frontend in its own private dockerd, so the host needs no Docker.
 
 use std::fs::{self, File};
-use std::io::Read;
 use std::path::{Path, PathBuf};
 use std::sync::atomic::{AtomicU32, Ordering};
 use std::time::Duration;
 
 use anyhow::{Context, Result, bail};
-use sha2::{Digest, Sha256};
 
 use crate::agents;
-use crate::cli::{Ctx, plan};
+use crate::ctx::Ctx;
 use crate::kits::args::ArgValues;
-use crate::kits::load;
+use crate::kits::load::{self, SYNTAX, starts_with_syntax};
 use crate::kits::registry_auth;
 use crate::kits::resolve::{Plan, resolve};
+use crate::provision;
 use crate::sandbox::{self, CreateRequest, Sandbox, options};
 use crate::secrets::{RegistryEntry, SecretsFile, registry_secret};
 use crate::smolvm::{Credential, ExecSpec, MachineState, Runner, Smolvm, SmolvmError};
-
-use super::registry::hex;
+use crate::util;
 
 pub const BUILDER: &str = "_builder";
 /// Renovate bumps this (see renovate.json5).
 pub const BUILDER_IMAGE: &str = "docker/sandbox-templates:shell-docker-0.10.0";
 
 const MEMORY_MIB: u64 = 4096;
-pub(crate) const SYNTAX: &str = "# syntax=docker/sandbox-kit:3";
+
 /// `docker info` tries, a second apart, before dockerd counts as not starting.
 const DOCKER_WAIT: u32 = 30;
 /// How much of a failed build's output the error shows.
@@ -112,7 +110,9 @@ fn build_with<R: Runner>(ctx: &Ctx<R>, dir: &Path, mint: Minter) -> Result<PathB
         }
         None => (
             docker_plan()
-                .and_then(|kits| plan::create(ctx, &mut request(ctx, &hosts), &[], Some(&kits)))
+                .and_then(|kits| {
+                    provision::create(ctx, &mut request(ctx, &hosts), &[], Some(&kits))
+                })
                 .context("creating the kit builder sandbox")?,
             false,
         ),
@@ -206,7 +206,7 @@ fn repos_in(text: &str, host: &str) -> Vec<String> {
 /// values at start only. The tokens go in `machine start`'s environment only.
 fn start<R: Runner>(ctx: &Ctx<R>, sb: &mut Sandbox, tokens: Vec<(String, String)>) -> Result<()> {
     if tokens.is_empty() {
-        return plan::ensure_running(ctx, sb);
+        return provision::ensure_running(ctx, sb);
     }
     if sb.is_running() {
         ctx.vm.stop(&sb.machine)?;
@@ -214,7 +214,7 @@ fn start<R: Runner>(ctx: &Ctx<R>, sb: &mut Sandbox, tokens: Vec<(String, String)
     }
     let meta = sb.meta.clone();
     sandbox::ensure_running(&ctx.vm, sb, || {
-        let mut plan = plan::start_plan(ctx, &meta)?;
+        let mut plan = provision::start_plan(ctx, &meta)?;
         plan.remove.retain(|v| !tokens.iter().any(|(k, _)| k == v));
         plan.env.extend(tokens);
         Ok(plan)
@@ -250,13 +250,6 @@ fn request<R: Runner>(ctx: &Ctx<R>, registries: &[String]) -> CreateRequest {
 
 /// The kit's descriptor file name: the single `*.yaml`/`*.yml` whose first line is the v3 syntax
 /// line (upstream names it after the kit, e.g. `claude-mixin.yaml`).
-/// Whether a file's first line is the v3 syntax line, after an optional UTF-8 BOM.
-pub(crate) fn starts_with_syntax(bytes: &[u8]) -> bool {
-    let bytes = bytes.strip_prefix(b"\xEF\xBB\xBF").unwrap_or(bytes);
-    let first = bytes.split(|b| *b == b'\n').next().unwrap_or_default();
-    String::from_utf8_lossy(first).trim_end() == SYNTAX
-}
-
 fn descriptor(dir: &Path) -> Result<String> {
     let mut found = Vec::new();
     for entry in fs::read_dir(dir).with_context(|| format!("reading {}", dir.display()))? {
@@ -447,7 +440,9 @@ fn registry_host(output: &str) -> Option<String> {
 
 /// Unpacks the OCI layout tar into `<built>/<sha256 of the tar>`, unless that exists already.
 fn unpack(kit_tar: &Path, built: &Path, tmp: &Path) -> Result<PathBuf> {
-    let dest = built.join(sha256_file(kit_tar)?);
+    let dest = built.join(
+        util::sha256_file(kit_tar).with_context(|| format!("opening {}", kit_tar.display()))?,
+    );
     if dest.is_dir() {
         return Ok(dest);
     }
@@ -489,28 +484,14 @@ fn unpack(kit_tar: &Path, built: &Path, tmp: &Path) -> Result<PathBuf> {
     Ok(dest)
 }
 
-fn sha256_file(path: &Path) -> Result<String> {
-    let mut f = File::open(path).with_context(|| format!("opening {}", path.display()))?;
-    let mut hasher = Sha256::new();
-    let mut buf = [0u8; 64 * 1024];
-    loop {
-        let n = f.read(&mut buf)?;
-        if n == 0 {
-            break;
-        }
-        hasher.update(&buf[..n]);
-    }
-    Ok(hex(&hasher.finalize()))
-}
-
 #[cfg(test)]
 mod tests {
     use std::fs;
 
     use super::*;
-    use crate::cli::testutil::*;
     use crate::kits::model::Source;
     use crate::kits::registry::{self, fixtures::oci_layout};
+    use crate::testutil::*;
 
     const MIXIN: &str = "# syntax=docker/sandbox-kit:3\nschemaVersion: \"3\"\nkind: mixin\n";
 
@@ -568,7 +549,7 @@ mod tests {
     fn first_build_creates_starts_builds_copies_back_and_stops() {
         let t = test_env(&[]);
         let fake = t.runner();
-        // `once` replies win over the `ok` until used up: find, plan::create's check, then get.
+        // `once` replies win over the `ok` until used up: find, provision::create's check, then get.
         fake.ok(&["machine", "status"], &builder_json("created"))
             .once_fail(&["machine", "status"], "NOT_FOUND", "vm not found")
             .once_fail(&["machine", "status"], "NOT_FOUND", "vm not found")
@@ -577,7 +558,7 @@ mod tests {
         let out = build(&t.ctx, kit.path()).unwrap();
 
         let tar = kit_tar();
-        let digest = registry::sha256_digest(&tar);
+        let digest = util::sha256_digest(&tar);
         assert_eq!(
             out,
             t.ctx

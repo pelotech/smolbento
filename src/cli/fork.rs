@@ -6,8 +6,9 @@ use std::path::Path;
 
 use anyhow::{Context, Result, anyhow, bail};
 
-use super::{Ctx, ForkArgs, plan};
+use super::{Ctx, ForkArgs};
 use crate::policy::Policy;
+use crate::provision;
 use crate::sandbox::{self, Sandbox, labels, name};
 use crate::smolvm::{Runner, SmolvmError};
 use crate::workspace::clone;
@@ -22,9 +23,7 @@ pub fn run<R: Runner>(ctx: &mut Ctx<R>, a: &ForkArgs) -> Result<i32> {
     let names = match &a.name {
         Some(n) => {
             name::validate(n)?;
-            if sandbox::find(&ctx.vm, n)?.is_some() {
-                bail!("sandbox '{n}' already exists");
-            }
+            provision::check_free(ctx, n)?;
             vec![n.clone()]
         }
         None => free_names(ctx, parent.name(), a.count)?,
@@ -35,7 +34,7 @@ pub fn run<R: Runner>(ctx: &mut Ctx<R>, a: &ForkArgs) -> Result<i32> {
         }
     }
     // One secrets resolution (one Touch ID) for the parent's start, if needed, and every copy.
-    let start = plan::start_plan(ctx, &parent.meta)?;
+    let start = provision::start_plan(ctx, &parent.meta)?;
     sandbox::ensure_running(&ctx.vm, &mut parent, || Ok(start.clone()))?;
     for n in &names {
         fork_one(ctx, &parent, n, &start.env, &start.remove)
@@ -169,10 +168,10 @@ fn branch_hint(e: anyhow::Error, parent: &str) -> anyhow::Error {
 
 #[cfg(test)]
 mod tests {
-    use super::super::testutil::*;
     use crate::policy::Policy;
     use crate::secrets::{SecretEntry, SecretsFile, Source, scope_for};
     use crate::smolvm::SmolvmError;
+    use crate::testutil::*;
 
     const NOT_BRANCHABLE: &str = "agent operation failed: fork: machine 'sbx-a' was not started \
         as branchable, so it has no copy-on-write memory to branch from. Restart it with \

@@ -5,13 +5,13 @@ use std::path::Path;
 
 use anyhow::{Context, Result, anyhow, bail};
 
+use super::env_spec::{EnvSpec, Op, Overrides, name, remove_summary, spec, summary};
 use super::{
     Ctx, EnvApplyOpts, EnvCmd, EnvCommon, EnvExecArgs, EnvRmArgs, ExecArgs, RunArgs, SandboxOpts,
     SecretSource, Unsupported, confirm_or,
 };
 use crate::env::file::SecretDecl;
 use crate::env::load::{ArgInputs, Loaded, load};
-use crate::env::spec::{EnvSpec, Op, Overrides, name, remove_summary, spec, summary};
 use crate::sandbox;
 use crate::secrets::{SecretEntry, SecretsFile, Source, resolve::resolve, scope_for};
 use crate::smolvm::Runner;
@@ -245,7 +245,7 @@ fn shell_word(s: &str) -> String {
     if !s.is_empty() && s.chars().all(plain) {
         s.to_string()
     } else {
-        sandbox::sh_quote(s)
+        crate::util::sh_quote(s)
     }
 }
 
@@ -336,9 +336,9 @@ fn source<R: Runner>(
 
 #[cfg(test)]
 mod tests {
-    use super::super::testutil::*;
     use super::super::{Cli, Cmd, EnvCmd, exit_code};
     use crate::secrets::{SecretEntry, SecretsFile, Source};
+    use crate::testutil::*;
     use clap::Parser;
 
     const FILE: &str = "schemaVersion: \"1\"\nagent: claude\nworkspace: .\n\
@@ -353,38 +353,12 @@ mod tests {
         t
     }
 
-    /// Sandbox `claude-proj` doesn't exist for `lookups` status calls, then exists.
     fn missing_then_created(t: &TestEnv, lookups: usize) {
-        let fake = t.runner();
-        let ws = t.ctx.cwd.display().to_string();
-        fake.ok(
-            &["machine", "status"],
-            &machine_json(
-                "sbx-claude-proj",
-                "created",
-                &[
-                    ("sbx.name", "claude-proj"),
-                    ("sbx.agent", "claude"),
-                    ("sbx.workspace", ws.as_str()),
-                ],
-            ),
-        );
-        for _ in 0..lookups {
-            fake.once_fail(&["machine", "status"], "NOT_FOUND", "vm not found");
-        }
+        t.project_creatable(lookups);
     }
 
     fn existing(t: &TestEnv, state: &str) {
-        let ws = t.ctx.cwd.display().to_string();
-        t.machine(
-            "sbx-claude-proj",
-            state,
-            &[
-                ("sbx.name", "claude-proj"),
-                ("sbx.agent", "claude"),
-                ("sbx.workspace", ws.as_str()),
-            ],
-        );
+        t.project(state);
     }
 
     /// Call lines with what differs between test envs masked: fresh UUIDs (SANDBOX_ID) and
@@ -667,7 +641,7 @@ mod tests {
     #[test]
     fn run_of_a_new_sandbox_creates_it_and_detaches() {
         let mut t = with_file(FILE);
-        // env run looks the name up, run twice more, and plan::create once more.
+        // env run looks the name up, run twice more, and provision::create once more.
         missing_then_created(&t, 4);
         assert_eq!(t.sbt(&["env", "run", "-d", "-f"]).unwrap(), 0);
         assert_eq!(creates(&t).len(), 1);

@@ -224,8 +224,8 @@ fn save<R: Runner>(ctx: &Ctx<R>, a: &TemplateSaveArgs) -> Result<()> {
 
 #[cfg(test)]
 mod tests {
-    use crate::cli::testutil::*;
     use crate::templates::Store;
+    use crate::testutil::*;
 
     /// A sandbox `a` (machine `sbx-a`) and a pack step that writes the stub and `pack.smolmachine`.
     fn env_with_sandbox(state: &str, extra: &[(&str, &str)]) -> TestEnv {

@@ -30,6 +30,7 @@ use tokio::io::AsyncWrite;
 use crate::kits::model::{Content, ImageConfig, Kit, Source};
 use crate::kits::registry_auth::Logins;
 use crate::kits::{trust, v3};
+use crate::util::{hex, sha256_digest};
 
 const DESCRIPTOR_ANNOTATION: &str = "vnd.docker.sandbox.kit.descriptor";
 const SCHEMA_ANNOTATION: &str = "vnd.docker.sandbox.kit.schema-version";
@@ -38,42 +39,30 @@ const REF_NAME_ANNOTATION: &str = "org.opencontainers.image.ref.name";
 /// Fetches REF's manifest and config and its layers into the cache. A manifest without the kit
 /// descriptor annotation is a plain image and an error.
 pub fn pull(reference: &str, cache: &Path, logins: Logins) -> Result<Kit> {
-    pull_kit(reference, None, cache, logins)
-}
-
-/// Same, pinned to a manifest digest; used again when a cache entry is missing.
-pub fn pull_digest(reference: &str, digest: &str, cache: &Path, logins: Logins) -> Result<Kit> {
-    hex_of(digest)?;
-    pull_kit(reference, Some(digest), cache, logins)
+    let dir = pull_layout(reference, cache, true, logins)?;
+    read_layout(&dir, Source::Registry(reference.to_string()))
 }
 
 /// Pulls a plain image (no kit annotation required) into an OCI layout; returns its directory.
 pub fn pull_image(reference: &str, cache: &Path, logins: Logins) -> Result<PathBuf> {
-    pull_layout(reference, None, cache, false, logins)
-}
-
-fn pull_kit(reference: &str, pin: Option<&str>, cache: &Path, logins: Logins) -> Result<Kit> {
-    let dir = pull_layout(reference, pin, cache, true, logins)?;
-    read_layout(&dir, Source::Registry(reference.to_string()))
+    pull_layout(reference, cache, false, logins)
 }
 
 /// Downloads REF into an OCI layout under the cache and returns its directory. With
 /// `require_kit` the kit annotation is checked before any layer is fetched.
 fn pull_layout(
     reference: &str,
-    pin: Option<&str>,
     cache: &Path,
     require_kit: bool,
     logins: Logins,
 ) -> Result<PathBuf> {
-    let fetched = fetch_ref(reference, pin, cache, require_kit, true, logins)?;
+    let fetched = fetch_ref(reference, cache, require_kit, true, logins)?;
     build_layout(cache, &fetched.manifest, &fetched.digest, reference)
 }
 
 /// Fetches REF's manifest and config into the cache's blob store, and its layers with `layers`.
 fn fetch_ref(
     reference: &str,
-    pin: Option<&str>,
     cache: &Path,
     require_kit: bool,
     layers: bool,
@@ -81,12 +70,9 @@ fn fetch_ref(
 ) -> Result<Fetched> {
     // The same normaliser the trust check uses, so both read the ref alike.
     trust::normalise(reference)?;
-    let mut r: Reference = reference
+    let r: Reference = reference
         .parse()
         .with_context(|| format!("invalid kit reference '{reference}'"))?;
-    if let Some(d) = pin {
-        r = Reference::with_digest(r.registry().into(), r.repository().into(), d.into());
-    }
     let rt = tokio::runtime::Builder::new_current_thread()
         .enable_all()
         .build()
@@ -315,12 +301,12 @@ pub(crate) fn hex_of(digest: &str) -> Result<&str> {
         .ok_or_else(|| anyhow!("unsupported digest '{digest}'"))
 }
 
-pub(crate) fn hex(bytes: &[u8]) -> String {
-    bytes.iter().map(|b| format!("{b:02x}")).collect()
-}
-
-pub(crate) fn sha256_digest(data: &[u8]) -> String {
-    format!("sha256:{}", hex(&Sha256::digest(data)))
+/// Renames a finished temp file to `path`.
+pub(crate) fn persist(tmp: tempfile::NamedTempFile, path: &Path) -> Result<()> {
+    tmp.persist(path)
+        .map_err(|e| e.error)
+        .with_context(|| format!("writing {}", path.display()))?;
+    Ok(())
 }
 
 pub(crate) fn store_dir(cache: &Path) -> PathBuf {
@@ -339,9 +325,7 @@ pub(crate) fn put_bytes(cache: &Path, digest: &str, data: &[u8]) -> Result<()> {
     }
     let mut tmp = tempfile::NamedTempFile::new_in(store_dir(cache))?;
     tmp.write_all(data)?;
-    tmp.persist(&path)
-        .map_err(|e| e.error)
-        .with_context(|| format!("writing {}", path.display()))?;
+    persist(tmp, &path)?;
     Ok(())
 }
 
@@ -396,9 +380,7 @@ async fn fetch_blob(client: &Client, r: &Reference, digest: &str, cache: &Path) 
     if got != digest {
         bail!("blob {digest} downloaded as {got}");
     }
-    tmp.persist(&path)
-        .map_err(|e| e.error)
-        .with_context(|| format!("writing {}", path.display()))?;
+    persist(tmp, &path)?;
     Ok(())
 }
 
@@ -423,9 +405,7 @@ fn build_layout(cache: &Path, manifest: &[u8], digest: &str, reference: &str) ->
             let tmp = tempfile::NamedTempFile::new_in(&blobs)?;
             fs::copy(&src, tmp.path()).with_context(|| format!("copying {}", src.display()))?;
             tmp.as_file().sync_all()?;
-            tmp.persist(&dst)
-                .map_err(|e| e.error)
-                .with_context(|| format!("writing {}", dst.display()))?;
+            persist(tmp, &dst)?;
         }
     }
     fs::write(dir.join("oci-layout"), r#"{"imageLayoutVersion":"1.0.0"}"#)?;
@@ -446,9 +426,7 @@ fn build_layout(cache: &Path, manifest: &[u8], digest: &str, reference: &str) ->
     let tmp = tempfile::NamedTempFile::new_in(&dir)?;
     fs::write(tmp.path(), serde_json::to_vec(&index)?)?;
     let target = dir.join("index.json");
-    tmp.persist(&target)
-        .map_err(|e| e.error)
-        .with_context(|| format!("writing {}", target.display()))?;
+    persist(tmp, &target)?;
     Ok(dir)
 }
 
@@ -503,7 +481,7 @@ pub fn image_command(reference: &str, cache: &Path, logins: Logins) -> Result<Op
     let manifest_digest = match cached_manifest(reference, cache) {
         Some(d) => d,
         None => {
-            fetch_ref(reference, None, cache, false, false, logins)
+            fetch_ref(reference, cache, false, false, logins)
                 .with_context(|| format!("reading the image config of {reference}"))?
                 .digest
         }

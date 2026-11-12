@@ -6,12 +6,14 @@ use std::io::Write;
 
 use super::{
     ApprovalCmd, CheckArgs, CheckKind, Ctx, Format, PolicyCmd, PolicyRmKind, RuleArgs, RuleKind,
-    Unsupported, confirm, plan, table,
+    Unsupported, confirm, table,
 };
-use crate::kits::builder::BUILDER;
 use crate::policy::log;
-use crate::policy::rules::{Allow, Resource, parse_list};
+use crate::policy::notes::{bound_conflict, deny_notes};
+use crate::policy::rules::{Resource, parse_list};
 use crate::policy::{Decision, Mode, Policy, compile, presets};
+use crate::provision;
+use crate::provision::builder::BUILDER;
 use crate::sandbox::{self, name};
 use crate::secrets::SecretsFile;
 use crate::smolvm::{NetworkSpec, Runner};
@@ -45,7 +47,7 @@ pub fn run<R: Runner>(ctx: &mut Ctx<R>, cmd: PolicyCmd) -> Result<i32> {
             policy.mode = Some(mode);
             policy.save(&ctx.paths)?;
             writeln!(&ctx.out, "Network policy: {}", mode.name())?;
-            plan::push_network(ctx, &policy)?;
+            provision::push_network(ctx, &policy)?;
         }
         PolicyCmd::Allow {
             kind: RuleKind::Network(a),
@@ -81,7 +83,7 @@ pub fn run<R: Runner>(ctx: &mut Ctx<R>, cmd: PolicyCmd) -> Result<i32> {
             policy.save(&ctx.paths)?;
             writeln!(&ctx.out, "Removed")?;
             print_host_notes(ctx, &before, &policy, None, Decision::Deny, &[]);
-            plan::push_network(ctx, &policy)?;
+            provision::push_network(ctx, &policy)?;
         }
         PolicyCmd::Ls(a) => {
             for (flag, set) in [
@@ -237,7 +239,7 @@ fn add<R: Runner>(
         decision,
         &parsed,
     );
-    plan::push_network(ctx, policy)
+    provision::push_network(ctx, policy)
 }
 
 /// For an allow of `localhost[:PORT]` (host services, see `compile::HOST_GATEWAY`): smolvm opens
@@ -346,70 +348,6 @@ fn print_deny_notes<R: Runner>(
     Ok(())
 }
 
-/// What to tell the user about a new deny: whether it has a port-less deny CIDR (applied at
-/// create), and a note for each port-scoped entry, which smolvm can't enforce (see `compile`).
-fn deny_notes(policy: &Policy, scope: Option<&str>, denies: &[Resource]) -> (bool, Vec<String>) {
-    // A global deny applies with the global rules alone and in every sandbox.
-    let sandboxes: Vec<Option<&str>> = match scope {
-        Some(s) => vec![Some(s)],
-        None => std::iter::once(None)
-            .chain(policy.sandboxes.keys().map(|s| Some(s.as_str())))
-            .collect(),
-    };
-    let allows: Vec<Resource> = sandboxes
-        .iter()
-        .flat_map(|s| compile::allows(policy, *s))
-        .collect();
-    let cidr = denies
-        .iter()
-        .any(|r| r.port.is_none() && matches!(r.to_allow(), Allow::Cidr(_)));
-    let notes = denies
-        .iter()
-        .filter(|r| r.port.is_some())
-        .map(|r| {
-            let host = r.without_port();
-            if allows.iter().any(|a| compile::cancels(r, a)) {
-                format!(
-                    "note: smolvm can't filter by port, so {} only cancels the allow rule with \
-                     the same text; it doesn't block {host} otherwise",
-                    r.raw
-                )
-            } else {
-                format!(
-                    "note: smolvm can't filter by port, so {} isn't enforced ({host} stays \
-                     reachable on every port); deny {host} to block it",
-                    r.raw
-                )
-            }
-        })
-        .collect();
-    (cidr, notes)
-}
-
-/// The first of a sandbox's credential `hosts` that one of `denies` reaches, with what's bound to
-/// it ("a github secret", or "a secret" when secrets.toml no longer names the service).
-fn bound_conflict(
-    hosts: &[String],
-    services: &[String],
-    secrets: Option<&SecretsFile>,
-    denies: &[Resource],
-) -> Option<(String, String)> {
-    let host = hosts.iter().find(|h| {
-        denies
-            .iter()
-            .any(|d| compile::deny_reaches_credential_host(d, h))
-    })?;
-    let service = services
-        .iter()
-        .find(|name| {
-            secrets
-                .and_then(|f| f.service(name))
-                .is_some_and(|s| s.hosts.iter().any(|h| h == host))
-        })
-        .map_or_else(|| "a secret".to_string(), |s| format!("a {s} secret"));
-    Some((host.clone(), service))
-}
-
 /// smolvm keeps a bound credential's hosts reachable, so a deny on them can't be honoured.
 fn guard_bound_secrets<R: Runner>(
     ctx: &Ctx<R>,
@@ -443,54 +381,6 @@ fn guard_bound_secrets<R: Runner>(
         }
     }
     Ok(())
-}
-
-/// `--deny-network` values, each parsed as `sbt policy deny network` parses its resources.
-pub(super) fn parse_create_denies(values: &[String]) -> Result<Vec<(String, Vec<Resource>)>> {
-    values
-        .iter()
-        .map(|v| {
-            let parsed = parse_list(v).with_context(|| format!("--deny-network {v}"))?;
-            Ok((v.clone(), parsed))
-        })
-        .collect()
-}
-
-/// `run`/`create --deny-network`: adds each value as a deny rule of the new sandbox `sandbox`, as
-/// `sbt policy deny network --sandbox <sandbox> <value>` would, with the same checks and stderr
-/// notes. `services` and `credential_hosts` are the secrets the sandbox is about to be created
-/// with. Returns the ids of the rules that weren't there yet; the caller saves the policy.
-pub(super) fn add_create_denies(
-    policy: &mut Policy,
-    sandbox: &str,
-    denies: &[(String, Vec<Resource>)],
-    secrets: &SecretsFile,
-    services: &[String],
-    credential_hosts: &[String],
-) -> Result<Vec<String>> {
-    let all: Vec<Resource> = denies.iter().flat_map(|(_, p)| p.iter().cloned()).collect();
-    if let Some((host, service)) = bound_conflict(credential_hosts, services, Some(secrets), &all) {
-        bail!(
-            "can't deny {host}: sandbox {sandbox} would be created with {service} bound to it; remove the secret first"
-        );
-    }
-    let before: Vec<String> = policy
-        .sandboxes
-        .get(sandbox)
-        .map(|s| s.rules.iter().map(|r| r.id.clone()).collect())
-        .unwrap_or_default();
-    let mut added = Vec::new();
-    for (value, _) in denies {
-        let id = policy.add_rule(Some(sandbox), Decision::Deny, value, "added", None, None)?;
-        if !before.contains(&id) && !added.contains(&id) {
-            added.push(id);
-        }
-    }
-    // Only the stderr notes: port-less deny CIDRs are in place before this sandbox is created.
-    for n in deny_notes(policy, Some(sandbox), &all).1 {
-        eprintln!("{n}");
-    }
-    Ok(added)
 }
 
 fn blocked_rows<R: Runner>(
@@ -614,7 +504,7 @@ fn approval<R: Runner>(ctx: &Ctx<R>, policy: &mut Policy, cmd: ApprovalCmd) -> R
                 print_deny_notes(ctx, policy, sandbox.as_deref(), &parsed)?;
             }
             print_host_notes(ctx, &before, policy, sandbox.as_deref(), decision, &parsed);
-            plan::push_network(ctx, policy)?;
+            provision::push_network(ctx, policy)?;
         }
     }
     Ok(0)
@@ -838,9 +728,9 @@ fn render_ls(policy: &Policy, rows: &[LsRow], opts: &LsOpts) -> Result<String> {
 
 #[cfg(test)]
 mod tests {
-    use super::super::testutil::*;
     use super::*;
     use crate::secrets::{SecretEntry, Source};
+    use crate::testutil::*;
 
     fn running(t: &TestEnv, labels: &[(&str, &str)]) {
         let m = machine_json("sbx-a1", "running", labels);
@@ -1084,11 +974,7 @@ mod tests {
         )
         .unwrap();
         let rules = Rules {
-            allow: vec![NetRule {
-                host: "kit.com".into(),
-                methods: vec![],
-                paths: vec![],
-            }],
+            allow: vec![NetRule::host("kit.com")],
             deny: vec![],
         };
         p.add_kit_rules("my-sb", "gh", &rules, false).unwrap();
@@ -1534,11 +1420,7 @@ mod tests {
         set_policy(&t, "mode = \"deny-all\"");
         let mut p = Policy::load(&t.ctx.paths).unwrap();
         let rules = Rules {
-            allow: vec![NetRule {
-                host: "kit.com".into(),
-                methods: vec![],
-                paths: vec![],
-            }],
+            allow: vec![NetRule::host("kit.com")],
             deny: vec![],
         };
         let (ids, _) = p.add_kit_rules("sb", "gh", &rules, false).unwrap();

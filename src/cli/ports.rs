@@ -4,7 +4,8 @@
 use anyhow::{Result, bail};
 use std::io::Write;
 
-use super::{Ctx, PortsArgs, plan, table};
+use super::{Ctx, PortsArgs, table};
+use crate::provision;
 use crate::sandbox::{self, options};
 use crate::smolvm::{PortMap, PublishedPort, Runner};
 
@@ -34,7 +35,7 @@ pub fn run<R: Runner>(ctx: &mut Ctx<R>, a: &PortsArgs) -> Result<i32> {
     }
     if !publish.is_empty() && !udp {
         // sbx starts a stopped sandbox to publish on it; UDP ports can only change while stopped.
-        plan::ensure_running(ctx, &mut sb)?;
+        provision::ensure_running(ctx, &mut sb)?;
     }
     if !publish.is_empty() {
         ctx.vm.publish(&sb.machine, &publish)?;
@@ -64,11 +65,11 @@ fn render_list(ports: &[PublishedPort]) -> String {
 
 #[cfg(test)]
 mod tests {
-    use super::super::testutil::*;
     use super::*;
+    use crate::testutil::*;
 
     fn sandbox(t: &TestEnv, state: &str) {
-        t.machine("sbx-a1", state, &[("sbx.name", "a1")]);
+        t.sandbox("a1", state, &[]);
     }
 
     #[test]

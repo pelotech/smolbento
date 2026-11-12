@@ -4,6 +4,7 @@ mod args;
 mod bridge;
 mod diagnose;
 mod env;
+mod env_spec;
 mod exec;
 mod fork;
 mod inspect;
@@ -11,7 +12,6 @@ mod kit;
 mod kit_doc;
 pub(crate) mod lifecycle;
 mod ls;
-pub(crate) mod plan;
 mod policy;
 mod ports;
 pub(crate) mod progress;
@@ -21,11 +21,9 @@ pub(crate) mod secret;
 mod settings;
 mod skills;
 mod template;
-#[cfg(test)]
-pub(crate) mod testutil;
 mod upload_pack;
 
-pub use crate::ctx::{Ctx, In, Out};
+pub use crate::ctx::{Ctx, In, Out, Unsupported};
 pub use args::*;
 
 use std::collections::BTreeMap;
@@ -41,11 +39,6 @@ use crate::smolvm::{ProcessRunner, Runner, Smolvm};
 
 /// The oldest smolvm smolbento supports.
 pub const MIN_SMOLVM: &str = "1.34.1";
-
-/// A command or flag that smolbento doesn't support (yet, or ever). Exits with status 2.
-#[derive(Debug, thiserror::Error)]
-#[error("{0}")]
-pub struct Unsupported(pub String);
 
 pub fn exit_code(err: &anyhow::Error) -> u8 {
     if err.downcast_ref::<Unsupported>().is_some() {
@@ -76,8 +69,8 @@ pub fn main(args: impl IntoIterator<Item = OsString>) -> Result<i32> {
         now: SystemTime::now().duration_since(UNIX_EPOCH)?.as_secs() as i64,
         stdin_tty: std::io::stdin().is_terminal(),
         stdout_tty: std::io::stdout().is_terminal(),
-        uid: crate::sandbox::host_uid(),
-        gid: crate::sandbox::host_gid(),
+        uid: crate::util::host_uid(),
+        gid: crate::util::host_gid(),
         store,
         config_error,
         out: Out::Stdout,
@@ -134,13 +127,6 @@ pub fn dispatch<R: Runner>(ctx: &mut Ctx<R>, cli: Cli) -> Result<i32> {
         refuse_root(ctx.uid)?;
         check_smolvm(&ctx.vm)?;
     }
-    if cmd.is_cloud_only() {
-        return Err(Unsupported(format!(
-            "`sbt {}` is a Docker Cloud feature and is not supported",
-            cmd.name()
-        ))
-        .into());
-    }
     match cmd {
         Cmd::Run(a) => run::run(ctx, &a),
         Cmd::Create(a) => lifecycle::create(ctx, &a),
@@ -177,8 +163,27 @@ pub fn dispatch<R: Runner>(ctx: &mut Ctx<R>, cli: Cli) -> Result<i32> {
             )?;
             Ok(0)
         }
-        other => Err(Unsupported(format!("`sbt {}` is not implemented yet", other.name())).into()),
+        Cmd::Login(_) => cloud("login"),
+        Cmd::Logout(_) => cloud("logout"),
+        Cmd::Move(_) => cloud("move"),
+        Cmd::Ttl(_) => cloud("ttl"),
+        Cmd::Attach(_) => cloud("attach"),
+        Cmd::Volume(_) => cloud("volume"),
+        Cmd::Mcp(_) => pending("mcp"),
+        Cmd::Setup(_) => pending("setup"),
+        Cmd::Tui(_) => pending("tui"),
     }
+}
+
+fn cloud(cmd: &str) -> Result<i32> {
+    Err(Unsupported(format!(
+        "`sbt {cmd}` is a Docker Cloud feature and is not supported"
+    ))
+    .into())
+}
+
+fn pending(cmd: &str) -> Result<i32> {
+    Err(Unsupported(format!("`sbt {cmd}` is not implemented yet")).into())
 }
 
 fn version<R: Runner>(ctx: &Ctx<R>) -> Result<i32> {
@@ -293,8 +298,8 @@ pub fn table(rows: Vec<Vec<String>>) -> String {
 
 #[cfg(test)]
 mod tests {
-    use super::testutil::*;
     use super::*;
+    use crate::testutil::*;
 
     #[test]
     fn versions_compare_numerically() {

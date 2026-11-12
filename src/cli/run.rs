@@ -7,12 +7,12 @@ use std::path::Path;
 use anyhow::{Context, Result, bail};
 
 use super::lifecycle::create_reported;
-use super::plan;
 use super::progress::Progress;
 use super::request::{has_kit_flags, kit_target};
 use super::{Ctx, RunArgs, Unsupported};
 use crate::agents;
 use crate::bridge;
+use crate::provision;
 use crate::sandbox::{self, Sandbox, session};
 use crate::smolvm::{ExecSpec, Runner, SmolvmError};
 use crate::workspace::clone;
@@ -82,7 +82,7 @@ pub fn run<R: Runner>(ctx: &mut Ctx<R>, a: &RunArgs) -> Result<i32> {
             sb.name()
         );
     }
-    plan::ensure_running(ctx, &mut sb)?;
+    provision::ensure_running(ctx, &mut sb)?;
 
     let sessions = ctx.paths.sessions();
     if a.detach {
@@ -215,20 +215,11 @@ fn fetch_on_exit<R: Runner>(ctx: &Ctx<R>, sb: &Sandbox) -> bool {
 
 #[cfg(test)]
 mod tests {
-    use super::super::testutil::*;
     use crate::sandbox::session;
+    use crate::testutil::*;
 
     fn created(t: &TestEnv, state: &str) {
-        let ws = t.ctx.cwd.display().to_string();
-        t.machine(
-            "sbx-claude-proj",
-            state,
-            &[
-                ("sbx.name", "claude-proj"),
-                ("sbx.agent", "claude"),
-                ("sbx.workspace", ws.as_str()),
-            ],
-        );
+        t.project(state);
     }
 
     #[test]
@@ -245,7 +236,7 @@ mod tests {
     fn creates_attaches_and_stops_after_the_last_session() {
         let mut t = test_env(&[]);
         created(&t, "created");
-        // run looks the name up, then plan::create checks again before creating.
+        // run looks the name up, then provision::create checks again before creating.
         t.runner()
             .once_fail(&["machine", "status"], "NOT_FOUND", "vm not found");
         t.runner()
@@ -285,7 +276,7 @@ mod tests {
     fn run_new(extra: &[&str]) -> String {
         let mut t = test_env(&[]);
         created(&t, "created");
-        // run looks the name up, then plan::create checks again before creating.
+        // run looks the name up, then provision::create checks again before creating.
         for _ in 0..2 {
             t.runner()
                 .once_fail(&["machine", "status"], "NOT_FOUND", "vm not found");
@@ -345,7 +336,7 @@ mod tests {
     fn deny_network_adds_sandbox_deny_rules_at_create() {
         let mut t = test_env(&[]);
         created(&t, "created");
-        // run looks the name up, then plan::create checks again before creating.
+        // run looks the name up, then provision::create checks again before creating.
         for _ in 0..2 {
             t.runner()
                 .once_fail(&["machine", "status"], "NOT_FOUND", "vm not found");

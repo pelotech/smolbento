@@ -2,6 +2,7 @@
 
 pub mod compile;
 pub mod log;
+pub mod notes;
 pub mod presets;
 pub mod rules;
 
@@ -404,6 +405,7 @@ impl Policy {
         self.all_rules().find(|(r, _)| r.id == id)
     }
 
+    #[cfg(test)]
     pub fn set_deny_network(&mut self, sandbox: &str, on: bool) {
         self.sandboxes
             .entry(sandbox.to_string())

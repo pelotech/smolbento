@@ -9,8 +9,9 @@ use std::time::{Duration, Instant};
 
 use anyhow::{Context, Result, bail};
 
+use super::http::{self, Handlers, Relay};
+use super::listener::Server;
 use super::relay::{self, Relays};
-use super::server::{self, Handlers, Relay, Server};
 use crate::config::Settings;
 use crate::sandbox::Sandbox;
 use crate::smolvm::ProcessRunner;
@@ -80,7 +81,7 @@ pub fn attach(env: &BTreeMap<String, String>, settings: &Settings, sb: &Sandbox)
         .value("smolvm.path")
         .unwrap_or_else(|_| "smolvm".into());
     let h = handlers(env, browser, &smolvm, sb);
-    server::serve(&super::host_socket(sb.name()), h).unwrap_or_else(|e| {
+    http::serve(&super::host_socket(sb.name()), h).unwrap_or_else(|e| {
         eprintln!(
             "warning: {}: no browser and clipboard bridge: {e:#}",
             sb.name()

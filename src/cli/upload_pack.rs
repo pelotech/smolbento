@@ -3,7 +3,8 @@
 
 use anyhow::{Result, bail};
 
-use super::{Ctx, plan};
+use super::Ctx;
+use crate::provision;
 use crate::sandbox::{self, session};
 use crate::smolvm::{ExecSpec, Runner};
 
@@ -18,7 +19,7 @@ pub fn run<R: Runner>(ctx: &mut Ctx<R>, sandbox: &str) -> Result<i32> {
     let sessions = ctx.paths.sessions();
     // Registered while git runs, so a concurrent `_upload-pack` won't stop the sandbox under it.
     let live = session::Session::register(&sessions, sb.name())?;
-    plan::ensure_running(ctx, &mut sb)?;
+    provision::ensure_running(ctx, &mut sb)?;
     let env = ctx
         .env
         .get("GIT_PROTOCOL")
@@ -45,15 +46,14 @@ pub fn run<R: Runner>(ctx: &mut Ctx<R>, sandbox: &str) -> Result<i32> {
 
 #[cfg(test)]
 mod tests {
-    use crate::cli::testutil::{TestEnv, test_env};
     use crate::sandbox::session;
+    use crate::testutil::{TestEnv, test_env};
 
     fn clone_sandbox(t: &TestEnv, state: &str) {
-        t.machine(
-            "sbx-box",
+        t.sandbox(
+            "box",
             state,
             &[
-                ("sbx.name", "box"),
                 ("sbx.agent", "shell"),
                 ("sbx.workspace", "/w/r"),
                 ("sbx.clone", "true"),

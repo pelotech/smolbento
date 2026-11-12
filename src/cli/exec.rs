@@ -4,9 +4,9 @@ use std::path::Path;
 
 use anyhow::{Context, Result, bail};
 
-use super::plan;
 use super::{CpArgs, Ctx, ExecArgs, Unsupported};
 use crate::bridge;
+use crate::provision;
 use crate::sandbox::{self, name, options};
 use crate::smolvm::{ExecSpec, Runner};
 
@@ -18,7 +18,7 @@ pub fn exec<R: Runner>(ctx: &mut Ctx<R>, a: &ExecArgs) -> Result<i32> {
         return Err(Unsupported("--detach-keys is not supported".into()).into());
     }
     let mut sb = sandbox::get(&ctx.vm, &a.sandbox)?;
-    plan::ensure_running(ctx, &mut sb)?;
+    provision::ensure_running(ctx, &mut sb)?;
     let user = if a.privileged {
         "root".to_string()
     } else {
@@ -75,7 +75,7 @@ pub fn cp<R: Runner>(ctx: &mut Ctx<R>, a: &CpArgs) -> Result<i32> {
         bail!("sandbox paths must be absolute: {sandbox_name}:{guest_path}");
     }
     let mut sb = sandbox::get(&ctx.vm, sandbox_name)?;
-    plan::ensure_running(ctx, &mut sb)?;
+    provision::ensure_running(ctx, &mut sb)?;
     let guest = format!("{}:{guest_path}", name::machine_name(sandbox_name));
     if sandbox_is_src {
         ctx.vm.cp(&guest, &a.dst)?;
@@ -96,14 +96,10 @@ pub fn cp<R: Runner>(ctx: &mut Ctx<R>, a: &CpArgs) -> Result<i32> {
 
 #[cfg(test)]
 mod tests {
-    use super::super::testutil::*;
+    use crate::testutil::*;
 
     fn running(t: &TestEnv) {
-        t.machine(
-            "sbx-claude-proj",
-            "running",
-            &[("sbx.name", "claude-proj"), ("sbx.workspace", "/w/proj")],
-        );
+        t.sandbox("claude-proj", "running", &[("sbx.workspace", "/w/proj")]);
     }
 
     #[test]

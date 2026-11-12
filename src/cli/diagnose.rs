@@ -112,8 +112,8 @@ fn entitlement_check(
 
 #[cfg(test)]
 mod tests {
-    use super::super::testutil::*;
     use super::*;
+    use crate::testutil::*;
 
     #[test]
     fn report_formats_and_fails_on_any_failure() {

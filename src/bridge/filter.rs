@@ -14,7 +14,7 @@ use std::time::{Duration, Instant};
 use anyhow::Result;
 
 use super::agent::{self, Access};
-use super::server::{self, DEADLINE, Deadline, POLL, Server};
+use super::listener::{self, DEADLINE, Deadline, POLL, Server};
 use crate::config::{Paths, Settings};
 use crate::sandbox::Sandbox;
 
@@ -92,7 +92,7 @@ pub fn serve_for(name: &str, access: Access, backing: Backing) -> Option<Server>
 /// Serves `path` until the returned `Server` is dropped, with the bridge's bind rules: `None`
 /// when another session serves it, a stale socket is replaced, the directory must be ours.
 fn serve(path: &Path, access: Access, backing: Backing) -> Result<Option<Server>> {
-    server::spawn(path, move |listener, stop| {
+    listener::spawn(path, move |listener, stop| {
         accept_loop(listener, &stop, &access, &backing);
     })
 }

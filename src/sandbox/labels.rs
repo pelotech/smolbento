@@ -150,94 +150,54 @@ pub struct Meta {
 
 impl Meta {
     pub fn to_labels(&self) -> BTreeMap<String, String> {
+        fn json(v: &impl serde::Serialize) -> String {
+            serde_json::to_string(v).expect("strings serialize")
+        }
+        let list = |v: &[String]| (!v.is_empty()).then(|| v.join(","));
+        let flag = |on: bool| on.then(|| "true".to_string());
         let mut labels = BTreeMap::from([
             (NAME.to_string(), self.name.clone()),
             (AGENT.to_string(), self.agent.clone()),
-            (
-                WORKSPACES.to_string(),
-                serde_json::to_string(&self.workspaces).expect("strings serialize"),
-            ),
+            (WORKSPACES.to_string(), json(&self.workspaces)),
             (CREATED.to_string(), self.created.to_string()),
             (DOCKER.to_string(), self.docker.to_string()),
         ]);
-        if let Some(w) = &self.workspace {
-            labels.insert(WORKSPACE.to_string(), w.clone());
-        }
-        if !self.secrets.is_empty() {
-            labels.insert(SECRETS.to_string(), self.secrets.join(","));
-        }
-        if !self.credential_hosts.is_empty() {
-            labels.insert(
-                CREDENTIAL_HOSTS.to_string(),
-                self.credential_hosts.join(","),
-            );
-        }
-        if !self.credential_env.is_empty() {
-            labels.insert(CREDENTIAL_ENV.to_string(), self.credential_env.join(","));
-        }
-        if !self.registries.is_empty() {
-            labels.insert(REGISTRIES.to_string(), self.registries.join(","));
-        }
-        if let Some(top) = &self.clone_repo {
-            labels.insert(CLONE.to_string(), "true".into());
-            if Some(top) != self.workspace.as_ref() {
-                labels.insert(CLONE_TOP.to_string(), top.clone());
+        // Everything else is written only when set, so a sandbox's labels don't change when a
+        // field it doesn't use is added. Kit labels exist only on sandboxes created with kits.
+        let clone_top = self
+            .clone_repo
+            .as_ref()
+            .filter(|top| Some(*top) != self.workspace.as_ref());
+        let optional = [
+            (WORKSPACE, self.workspace.clone()),
+            (SECRETS, list(&self.secrets)),
+            (CREDENTIAL_HOSTS, list(&self.credential_hosts)),
+            (CREDENTIAL_ENV, list(&self.credential_env)),
+            (REGISTRIES, list(&self.registries)),
+            (CLONE, flag(self.clone_repo.is_some())),
+            (CLONE_TOP, clone_top.cloned()),
+            (FORK_OF, self.fork_of.clone()),
+            (KITS, (!self.kits.is_empty()).then(|| json(&self.kits))),
+            (COMMAND, self.command.as_ref().map(json)),
+            (USER, self.user.clone()),
+            (WORKDIR, self.image_workdir.clone()),
+            (AGENT_FILE, self.agent_file.clone()),
+            (CREDENTIAL_INSTALL, list(&self.credential_install)),
+            (LONG_RUNNING, flag(self.long_running)),
+            (HOST_ACCESS, flag(self.host_access)),
+            (BRIDGE, flag(self.bridge)),
+            (
+                HOST_MOUNTS,
+                (!self.host_mounts.is_empty()).then(|| json(&self.host_mounts)),
+            ),
+            (SSH_AGENT, self.ssh_agent.as_ref().map(|a| a.to_label())),
+            (SKILLS, self.skills.as_ref().map(|s| s.to_label())),
+            (TEMPLATE, self.template.clone()),
+        ];
+        for (key, value) in optional {
+            if let Some(value) = value {
+                labels.insert(key.to_string(), value);
             }
-        }
-        if let Some(f) = &self.fork_of {
-            labels.insert(FORK_OF.to_string(), f.clone());
-        }
-        // Kit labels exist only on sandboxes created with kits.
-        if !self.kits.is_empty() {
-            labels.insert(
-                KITS.to_string(),
-                serde_json::to_string(&self.kits).expect("strings serialize"),
-            );
-        }
-        if let Some(c) = &self.command {
-            labels.insert(
-                COMMAND.to_string(),
-                serde_json::to_string(c).expect("strings serialize"),
-            );
-        }
-        if let Some(u) = &self.user {
-            labels.insert(USER.to_string(), u.clone());
-        }
-        if let Some(w) = &self.image_workdir {
-            labels.insert(WORKDIR.to_string(), w.clone());
-        }
-        if let Some(f) = &self.agent_file {
-            labels.insert(AGENT_FILE.to_string(), f.clone());
-        }
-        if !self.credential_install.is_empty() {
-            labels.insert(
-                CREDENTIAL_INSTALL.to_string(),
-                self.credential_install.join(","),
-            );
-        }
-        if self.long_running {
-            labels.insert(LONG_RUNNING.to_string(), "true".into());
-        }
-        if self.host_access {
-            labels.insert(HOST_ACCESS.to_string(), "true".into());
-        }
-        if self.bridge {
-            labels.insert(BRIDGE.to_string(), "true".into());
-        }
-        if !self.host_mounts.is_empty() {
-            labels.insert(
-                HOST_MOUNTS.to_string(),
-                serde_json::to_string(&self.host_mounts).expect("strings serialize"),
-            );
-        }
-        if let Some(a) = &self.ssh_agent {
-            labels.insert(SSH_AGENT.to_string(), a.to_label());
-        }
-        if let Some(s) = &self.skills {
-            labels.insert(SKILLS.to_string(), s.to_label());
-        }
-        if let Some(t) = &self.template {
-            labels.insert(TEMPLATE.to_string(), t.clone());
         }
         for (env, f) in &self.credential_formats {
             labels.insert(format!("{CREDENTIAL_FORMAT}{env}"), f.to_label());
@@ -250,42 +210,41 @@ impl Meta {
 
     /// `None` for machines smolbento didn't create.
     pub fn from_labels(labels: &BTreeMap<String, String>) -> Option<Meta> {
+        fn json<T: serde::de::DeserializeOwned>(
+            labels: &BTreeMap<String, String>,
+            key: &str,
+        ) -> Option<T> {
+            labels.get(key).and_then(|j| serde_json::from_str(j).ok())
+        }
+        let text = |key: &str| labels.get(key).cloned();
+        let flag = |key: &str| labels.get(key).is_some_and(|v| v == "true");
         Some(Meta {
             name: labels.get(NAME)?.clone(),
-            agent: labels.get(AGENT).cloned().unwrap_or_default(),
-            workspace: labels.get(WORKSPACE).cloned(),
-            workspaces: labels
-                .get(WORKSPACES)
-                .and_then(|j| serde_json::from_str(j).ok())
-                .unwrap_or_default(),
+            agent: text(AGENT).unwrap_or_default(),
+            workspace: text(WORKSPACE),
+            workspaces: json(labels, WORKSPACES).unwrap_or_default(),
             created: labels
                 .get(CREATED)
                 .and_then(|c| c.parse().ok())
                 .unwrap_or(0),
-            docker: labels.get(DOCKER).is_some_and(|d| d == "true"),
+            docker: flag(DOCKER),
             secrets: list(labels.get(SECRETS)),
             credential_hosts: list(labels.get(CREDENTIAL_HOSTS)),
             credential_env: list(labels.get(CREDENTIAL_ENV)),
             registries: list(labels.get(REGISTRIES)),
-            clone_repo: labels
-                .get(CLONE)
-                .filter(|c| *c == "true")
-                .and_then(|_| labels.get(CLONE_TOP).or(labels.get(WORKSPACE)).cloned()),
-            fork_of: labels.get(FORK_OF).cloned(),
-            kits: labels
-                .get(KITS)
-                .and_then(|j| serde_json::from_str(j).ok())
-                .unwrap_or_default(),
-            command: labels
-                .get(COMMAND)
-                .and_then(|j| serde_json::from_str(j).ok()),
-            user: labels.get(USER).cloned(),
-            image_workdir: labels.get(WORKDIR).cloned(),
-            agent_file: labels.get(AGENT_FILE).cloned(),
+            clone_repo: flag(CLONE)
+                .then(|| text(CLONE_TOP).or(text(WORKSPACE)))
+                .flatten(),
+            fork_of: text(FORK_OF),
+            kits: json(labels, KITS).unwrap_or_default(),
+            command: json(labels, COMMAND),
+            user: text(USER),
+            image_workdir: text(WORKDIR),
+            agent_file: text(AGENT_FILE),
             credential_install: list(labels.get(CREDENTIAL_INSTALL)),
-            long_running: labels.get(LONG_RUNNING).is_some_and(|v| v == "true"),
-            host_access: labels.get(HOST_ACCESS).is_some_and(|v| v == "true"),
-            bridge: labels.get(BRIDGE).is_some_and(|v| v == "true"),
+            long_running: flag(LONG_RUNNING),
+            host_access: flag(HOST_ACCESS),
+            bridge: flag(BRIDGE),
             credential_formats: labels
                 .iter()
                 .filter_map(|(k, v)| {
@@ -299,17 +258,10 @@ impl Meta {
                     Some((k.strip_prefix(CREDENTIAL_SERVICE)?.to_string(), v.clone()))
                 })
                 .collect(),
-            host_mounts: labels
-                .get(HOST_MOUNTS)
-                .and_then(|j| serde_json::from_str(j).ok())
-                .unwrap_or_default(),
-            ssh_agent: labels
-                .get(SSH_AGENT)
-                .and_then(|j| AgentLabel::from_label(j)),
-            skills: labels
-                .get(SKILLS)
-                .and_then(|j| crate::skills::Label::from_label(j)),
-            template: labels.get(TEMPLATE).cloned(),
+            host_mounts: json(labels, HOST_MOUNTS).unwrap_or_default(),
+            ssh_agent: text(SSH_AGENT).and_then(|j| AgentLabel::from_label(&j)),
+            skills: text(SKILLS).and_then(|j| crate::skills::Label::from_label(&j)),
+            template: text(TEMPLATE),
         })
     }
 
@@ -349,18 +301,6 @@ fn list(value: Option<&String>) -> Vec<String> {
 
 #[cfg(test)]
 mod tests {
-    #[test]
-    fn template_round_trips() {
-        let m = Meta {
-            name: "a".into(),
-            template: Some("docker.io/library/t:v1".into()),
-            ..Default::default()
-        };
-        let labels = m.to_labels();
-        assert_eq!(labels.get(TEMPLATE).unwrap(), "docker.io/library/t:v1");
-        assert_eq!(Meta::from_labels(&labels).unwrap().template, m.template);
-    }
-
     use super::*;
 
     fn meta() -> Meta {
@@ -384,63 +324,6 @@ mod tests {
     }
 
     #[test]
-    fn host_access_label_round_trips() {
-        assert!(!meta().to_labels().contains_key("sbx.host-access"));
-        let m = Meta {
-            host_access: true,
-            ..meta()
-        };
-        let labels = m.to_labels();
-        assert_eq!(labels["sbx.host-access"], "true");
-        assert_eq!(Meta::from_labels(&labels), Some(m));
-    }
-
-    #[test]
-    fn bridge_label_round_trips() {
-        assert!(!meta().to_labels().contains_key("sbx.bridge"));
-        let m = Meta {
-            bridge: true,
-            ..meta()
-        };
-        let labels = m.to_labels();
-        assert_eq!(labels["sbx.bridge"], "true");
-        assert_eq!(Meta::from_labels(&labels), Some(m));
-    }
-
-    #[test]
-    fn ssh_agent_label_round_trips() {
-        use crate::bridge::agent::Access;
-        assert!(!meta().to_labels().contains_key("sbx.ssh-agent"));
-        let m = Meta {
-            ssh_agent: Some(AgentLabel {
-                runtime: Some(Access { sign: None }),
-                install: Some(Access {
-                    sign: Some(vec!["git".into()]),
-                }),
-            }),
-            ..meta()
-        };
-        let labels = m.to_labels();
-        assert_eq!(
-            labels["sbx.ssh-agent"],
-            r#"{"runtime":{"sign":null},"install":{"sign":["git"]}}"#
-        );
-        assert_eq!(Meta::from_labels(&labels), Some(m));
-    }
-
-    #[test]
-    fn host_mounts_label_round_trips() {
-        assert!(!meta().to_labels().contains_key("sbx.host-mounts"));
-        let m = Meta {
-            host_mounts: BTreeMap::from([("/home/agent/x".into(), "/data/x".into())]),
-            ..meta()
-        };
-        let labels = m.to_labels();
-        assert_eq!(labels["sbx.host-mounts"], r#"{"/home/agent/x":"/data/x"}"#);
-        assert_eq!(Meta::from_labels(&labels), Some(m));
-    }
-
-    #[test]
     fn mountless_has_no_workspace_label() {
         let m = Meta {
             workspace: None,
@@ -450,53 +333,6 @@ mod tests {
         let labels = m.to_labels();
         assert!(!labels.contains_key("sbx.workspace"));
         assert_eq!(Meta::from_labels(&labels), Some(m));
-    }
-
-    #[test]
-    fn secrets_label_round_trips() {
-        let m = Meta {
-            secrets: vec!["anthropic".into(), "github".into()],
-            ..meta()
-        };
-        let labels = m.to_labels();
-        assert_eq!(labels["sbx.secrets"], "anthropic,github");
-        assert_eq!(Meta::from_labels(&labels).unwrap().secrets, m.secrets);
-    }
-
-    #[test]
-    fn credential_hosts_label_round_trips() {
-        let m = Meta {
-            credential_hosts: vec!["api.github.com".into(), "github.com".into()],
-            ..meta()
-        };
-        let labels = m.to_labels();
-        assert_eq!(labels["sbx.credential-hosts"], "api.github.com,github.com");
-        assert_eq!(Meta::from_labels(&labels), Some(m));
-        assert!(!meta().to_labels().contains_key("sbx.credential-hosts"));
-    }
-
-    #[test]
-    fn credential_env_label_round_trips() {
-        let m = Meta {
-            credential_env: vec!["GH_TOKEN".into(), "GITHUB_TOKEN".into()],
-            ..meta()
-        };
-        let labels = m.to_labels();
-        assert_eq!(labels["sbx.credential-env"], "GH_TOKEN,GITHUB_TOKEN");
-        assert_eq!(Meta::from_labels(&labels), Some(m));
-        assert!(!meta().to_labels().contains_key("sbx.credential-env"));
-    }
-
-    #[test]
-    fn registries_label_round_trips() {
-        let m = Meta {
-            registries: vec!["dhi.io".into(), "ghcr.io".into()],
-            ..meta()
-        };
-        let labels = m.to_labels();
-        assert_eq!(labels["sbx.registries"], "dhi.io,ghcr.io");
-        assert_eq!(Meta::from_labels(&labels), Some(m));
-        assert!(!meta().to_labels().contains_key("sbx.registries"));
     }
 
     #[test]
@@ -521,20 +357,24 @@ mod tests {
     }
 
     #[test]
-    fn fork_of_label_round_trips() {
+    fn optional_fields_round_trip() {
+        use crate::bridge::agent::Access;
         let m = Meta {
+            template: Some("docker.io/library/t:v1".into()),
+            host_access: true,
+            bridge: true,
+            ssh_agent: Some(AgentLabel {
+                runtime: Some(Access { sign: None }),
+                install: Some(Access {
+                    sign: Some(vec!["git".into()]),
+                }),
+            }),
+            host_mounts: BTreeMap::from([("/home/agent/x".into(), "/data/x".into())]),
+            secrets: vec!["anthropic".into(), "github".into()],
+            credential_hosts: vec!["api.github.com".into(), "github.com".into()],
+            credential_env: vec!["GH_TOKEN".into(), "GITHUB_TOKEN".into()],
+            registries: vec!["dhi.io".into(), "ghcr.io".into()],
             fork_of: Some("a".into()),
-            ..meta()
-        };
-        let labels = m.to_labels();
-        assert_eq!(labels["sbx.fork-of"], "a");
-        assert_eq!(Meta::from_labels(&labels), Some(m));
-        assert!(!meta().to_labels().contains_key("sbx.fork-of"));
-    }
-
-    #[test]
-    fn kit_labels_round_trip() {
-        let m = Meta {
             kits: vec!["acme/a:1@sha256:ab".into(), "/k/b".into()],
             command: Some(vec!["wl".into(), "--a b".into()]),
             user: Some("somebody".into()),
@@ -553,24 +393,35 @@ mod tests {
             ..meta()
         };
         let labels = m.to_labels();
-        assert_eq!(labels["sbx.kits"], r#"["acme/a:1@sha256:ab","/k/b"]"#);
-        assert_eq!(labels["sbx.command"], r#"["wl","--a b"]"#);
-        assert_eq!(labels["sbx.user"], "somebody");
-        assert_eq!(labels["sbx.workdir"], "/x");
-        assert_eq!(labels["sbx.agent-file"], "/w/AGENTS.md");
-        assert_eq!(labels["sbx.credential-install"], "GH_TOKEN,NPM_TOKEN");
-        assert_eq!(labels["sbx.long-running"], "true");
-        assert_eq!(
-            labels["sbx.credential-format.SBX_KIT_X"],
-            "format:Bearer %s"
-        );
-        assert_eq!(
-            labels["sbx.credential-format.GH_TOKEN"],
-            "basic:x-access-token"
-        );
-        assert_eq!(labels["sbx.credential-service.SBX_KIT_X"], "x");
+        for (key, want) in [
+            ("sbx.template", "docker.io/library/t:v1"),
+            ("sbx.host-access", "true"),
+            ("sbx.bridge", "true"),
+            (
+                "sbx.ssh-agent",
+                r#"{"runtime":{"sign":null},"install":{"sign":["git"]}}"#,
+            ),
+            ("sbx.host-mounts", r#"{"/home/agent/x":"/data/x"}"#),
+            ("sbx.secrets", "anthropic,github"),
+            ("sbx.credential-hosts", "api.github.com,github.com"),
+            ("sbx.credential-env", "GH_TOKEN,GITHUB_TOKEN"),
+            ("sbx.registries", "dhi.io,ghcr.io"),
+            ("sbx.fork-of", "a"),
+            ("sbx.kits", r#"["acme/a:1@sha256:ab","/k/b"]"#),
+            ("sbx.command", r#"["wl","--a b"]"#),
+            ("sbx.user", "somebody"),
+            ("sbx.workdir", "/x"),
+            ("sbx.agent-file", "/w/AGENTS.md"),
+            ("sbx.credential-install", "GH_TOKEN,NPM_TOKEN"),
+            ("sbx.long-running", "true"),
+            ("sbx.credential-format.SBX_KIT_X", "format:Bearer %s"),
+            ("sbx.credential-format.GH_TOKEN", "basic:x-access-token"),
+            ("sbx.credential-service.SBX_KIT_X", "x"),
+        ] {
+            assert_eq!(labels[key], want, "{key}");
+        }
         assert_eq!(Meta::from_labels(&labels), Some(m));
-        // Absent when empty, so sandboxes without kits keep their labels.
+        // None of them is written for a sandbox that doesn't use it, so its labels don't change.
         let plain = meta().to_labels();
         assert_eq!(plain.len(), 6, "{plain:?}");
     }

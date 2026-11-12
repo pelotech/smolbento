@@ -10,6 +10,7 @@ use anyhow::{Context, Result, anyhow, bail};
 use serde::Deserialize;
 use serde_json::Value;
 
+use super::descriptor::{ApiKeyCfg, ResourcesCfg, TokenEndpoint};
 use crate::kits::capability;
 use crate::kits::model::*;
 
@@ -543,31 +544,6 @@ enum OneOrMany {
 
 #[derive(Deserialize)]
 #[serde(rename_all = "camelCase", deny_unknown_fields)]
-struct ApiKeyCfg {
-    #[serde(default)]
-    name: String,
-    // The proxy always keeps real values off the guest, so the flag changes nothing here.
-    #[allow(dead_code)]
-    #[serde(default)]
-    proxy_managed: bool,
-    #[serde(default)]
-    inject: Vec<InjectCfg>,
-}
-
-#[derive(Deserialize)]
-#[serde(deny_unknown_fields)]
-struct InjectCfg {
-    domain: String,
-    header: Option<String>,
-    format: Option<String>,
-    // `scheme: basic` is implied by a username; the scheme string itself is not kept.
-    #[allow(dead_code)]
-    scheme: Option<String>,
-    username: Option<String>,
-}
-
-#[derive(Deserialize)]
-#[serde(rename_all = "camelCase", deny_unknown_fields)]
 struct OAuthCfg {
     token_endpoint: Option<TokenEndpoint>,
     #[serde(default)]
@@ -581,14 +557,6 @@ struct OAuthCfg {
     credential_file: Option<Value>,
     #[allow(dead_code)]
     response_fields: Option<Value>,
-}
-
-#[derive(Deserialize)]
-#[serde(deny_unknown_fields)]
-struct TokenEndpoint {
-    host: String,
-    #[allow(dead_code)]
-    path: Option<String>,
 }
 
 fn credential(c: CredCfg) -> Result<CredReq> {
@@ -812,15 +780,6 @@ fn canonical_abs(path: &str) -> bool {
     path.strip_prefix('/').is_some_and(|rest| {
         !path.contains('\0') && rest.split('/').all(|c| !matches!(c, "" | "." | ".."))
     })
-}
-
-#[derive(Deserialize)]
-#[serde(deny_unknown_fields)]
-struct ResourcesCfg {
-    cpu: Option<f64>,
-    memory: Option<String>,
-    #[allow(dead_code)]
-    gpu: Option<String>,
 }
 
 #[derive(Deserialize)]

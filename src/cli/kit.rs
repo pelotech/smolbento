@@ -7,13 +7,13 @@ use anyhow::{Context, Result, anyhow, bail};
 use super::Ctx;
 use super::args::{Format, KitArgOpts, KitCmd};
 use super::kit_doc::Doc;
-use super::plan;
 use crate::kits::apply::apply;
 use crate::kits::args::{ArgValues, NoResolvedValue};
 use crate::kits::model::{Cap, CapBody, Content, ImageConfig, Kind, Kit, Source};
 use crate::kits::resolve::{resolve, resolve_for};
 use crate::kits::{capability, compose, guest, load};
 use crate::policy::{Decision, Policy, compile};
+use crate::provision;
 use crate::sandbox::{self, CreateRequest, KitPhase, Sandbox};
 use crate::secrets::SecretsFile;
 use crate::smolvm::{ExecSpec, Runner};
@@ -57,7 +57,6 @@ fn pending(sub: &str) -> Result<i32> {
     Err(super::Unsupported(format!("`sbt kit {sub}` is not implemented yet")).into())
 }
 
-/// `--json` is `--format json`.
 fn arg_values(a: &KitArgOpts) -> Result<ArgValues> {
     ArgValues::parse(&a.kit_args_file, &a.kit_arg)
 }
@@ -351,7 +350,7 @@ fn add<R: Runner>(
         bail!("recreate required: {}", recreate.join(", "));
     }
     let started = !sb.is_running();
-    plan::ensure_running(ctx, &mut sb)?;
+    provision::ensure_running(ctx, &mut sb)?;
     add_running(ctx, &sb, kit, &values, yes, started).map_err(|e| {
         if started {
             anyhow!("{e:#}\n({name} was started for this and is still running)")
@@ -373,12 +372,7 @@ fn add_running<R: Runner>(
     let name = sb.name();
     let record = ctx
         .vm
-        .exec_captured(&ExecSpec {
-            name: sb.machine.clone(),
-            user: Some("root".into()),
-            cmd: vec!["sh".into(), "-c".into(), READ_KITS.into()],
-            ..Default::default()
-        })
+        .exec_captured(&ExecSpec::sh(&sb.machine, "root", READ_KITS))
         .context("reading the sandbox's kits")?
         .stdout;
     let existing = parse_record(&record);
@@ -410,7 +404,7 @@ fn add_running<R: Runner>(
     plan.warn_skipped();
 
     // In memory until approved.
-    let mut policy = plan::ensure_policy(ctx)?;
+    let mut policy = provision::ensure_policy(ctx)?;
     let secrets = SecretsFile::load(&ctx.paths)?;
     // The workspaces place the agent file (and keep context out of mounts); a workload kit's
     // agent file was recorded at create.
@@ -432,7 +426,7 @@ fn add_running<R: Runner>(
         &secrets,
         &*ctx.store,
         &ctx.paths.kit_cache(),
-        &|| plan::host_git_identity(ctx),
+        &|| provision::host_git_identity(ctx),
     )?;
     let mut hosts: Vec<String> = added
         .iter()
@@ -578,10 +572,10 @@ fn approve<R: Runner>(ctx: &Ctx<R>, kit: &str, hosts: &[String], started: bool) 
 mod tests {
     use std::fs;
 
-    use super::super::testutil::*;
     use crate::kits::guest;
     use crate::kits::model::{Hook, HookCmd};
     use crate::policy::Policy;
+    use crate::testutil::*;
 
     const MACHINE: &str = "sbx-dev";
     const BASE: &str = "base\tghcr.io/acme/base@sha256:00\tbase\n";
@@ -615,21 +609,7 @@ mod tests {
             &["machine", "status", "-n", MACHINE],
             &machine_json(MACHINE, state, &all),
         );
-        fake.ok(
-            &[
-                "machine",
-                "exec",
-                "--name",
-                MACHINE,
-                "-u",
-                "root",
-                "--",
-                "sh",
-                "-c",
-                super::READ_KITS,
-            ],
-            record,
-        );
+        fake.ok(&root_sh(MACHINE, super::READ_KITS), record);
     }
 
     const NET_KIT: &str = r#"{"schemaVersion":"3","kind":"mixin","name":"net",
@@ -1423,18 +1403,7 @@ mod tests {
         v3_kit(&t, "net", NET_KIT, &[]);
         let script = Some("/etc/smolbento/startup.d/02-net.sh");
         t.runner().on(
-            &[
-                "machine",
-                "exec",
-                "--name",
-                MACHINE,
-                "-u",
-                "root",
-                "--",
-                "sh",
-                "-c",
-                &crate::sandbox::startup_cmd(script),
-            ],
+            &root_sh(MACHINE, &crate::sandbox::startup_cmd(script)),
             crate::smolvm::Output {
                 code: 2,
                 ..Default::default()
@@ -1482,11 +1451,7 @@ mod tests {
         set_policy(&t, "mode = \"deny-all\"\n");
         // Both of net's rules are already there, so this add adds none.
         let rules = |h: &str| Rules {
-            allow: vec![NetRule {
-                host: h.into(),
-                methods: vec![],
-                paths: vec![],
-            }],
+            allow: vec![NetRule::host(h)],
             deny: vec![],
         };
         let mut policy = Policy::load(&t.ctx.paths).unwrap();
@@ -1668,22 +1633,8 @@ mod tests {
         policy.save(&t.ctx.paths).unwrap();
         dev_sandbox(&t, BASE);
         v3_kit(&t, "net", NET_KIT, &[]);
-        t.runner().fail(
-            &[
-                "machine",
-                "exec",
-                "--name",
-                MACHINE,
-                "-u",
-                "root",
-                "--",
-                "sh",
-                "-c",
-                &install_script(),
-            ],
-            "exec",
-            "apt broke",
-        );
+        t.runner()
+            .fail(&root_sh(MACHINE, &install_script()), "exec", "apt broke");
         let e = t.sbt(&["kit", "add", "dev", "./net", "--yes"]).unwrap_err();
         let m = format!("{e:#}");
         assert!(
@@ -1750,18 +1701,7 @@ mod tests {
         );
         // The startup files' `mkdir`, the first write.
         t.runner().fail(
-            &[
-                "machine",
-                "exec",
-                "--name",
-                MACHINE,
-                "-u",
-                "root",
-                "--",
-                "sh",
-                "-c",
-                "mkdir -p '/etc/smolbento'",
-            ],
+            &root_sh(MACHINE, "mkdir -p '/etc/smolbento'"),
             "exec",
             "disk full",
         );

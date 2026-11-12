@@ -105,8 +105,9 @@ pub fn find(name: &str) -> Option<&'static Agent> {
     AGENTS.iter().find(|a| a.name == name)
 }
 
-pub fn names() -> Vec<&'static str> {
-    AGENTS.iter().map(|a| a.name).collect()
+/// The error for a name that is no agent.
+pub fn unknown(name: &str) -> String {
+    format!("unknown agent \"{name}\"")
 }
 
 fn split_tag(image: &str) -> Option<(&str, &str)> {

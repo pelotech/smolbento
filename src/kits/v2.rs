@@ -9,6 +9,7 @@ use anyhow::{Context, Result, bail};
 use serde::Deserialize;
 use serde_json::Value;
 
+use super::descriptor::{ApiKeyCfg, InjectCfg, ResourcesCfg, TokenEndpoint};
 use crate::kits::model::*;
 use crate::kits::v3::{check_name, name_from_source};
 
@@ -379,15 +380,6 @@ impl CommandCfg {
 
 #[derive(Deserialize)]
 #[serde(deny_unknown_fields)]
-struct ResourcesCfg {
-    cpu: Option<f64>,
-    memory: Option<String>,
-    // Not supported: a warning.
-    gpu: Option<String>,
-}
-
-#[derive(Deserialize)]
-#[serde(deny_unknown_fields)]
 struct CredCfg {
     service: String,
     #[allow(dead_code)]
@@ -400,29 +392,6 @@ struct CredCfg {
     #[serde(rename = "apiKey")]
     api_key: Option<ApiKeyCfg>,
     oauth: Option<OAuthCfg>,
-}
-
-#[derive(Deserialize)]
-#[serde(rename_all = "camelCase", deny_unknown_fields)]
-struct ApiKeyCfg {
-    #[serde(default)]
-    name: String,
-    // The proxy always keeps real values off the guest, so the flag changes nothing here.
-    #[allow(dead_code)]
-    #[serde(default)]
-    proxy_managed: bool,
-    #[serde(default)]
-    inject: Vec<InjectCfg>,
-}
-
-#[derive(Deserialize)]
-#[serde(deny_unknown_fields)]
-struct InjectCfg {
-    domain: String,
-    header: Option<String>,
-    format: Option<String>,
-    scheme: Option<String>,
-    username: Option<String>,
 }
 
 #[derive(Deserialize)]
@@ -442,14 +411,6 @@ struct OAuthCfg {
     response_fields: Option<Value>,
     #[allow(dead_code)]
     skip_if_env: Option<String>,
-}
-
-#[derive(Deserialize)]
-#[serde(deny_unknown_fields)]
-struct TokenEndpoint {
-    host: String,
-    #[allow(dead_code)]
-    path: Option<String>,
 }
 
 /// v2 credentials are always a runtime concern; install-phase injection is a v3 notion.

@@ -214,12 +214,12 @@ fn link_script_at(shared: &str, owner: &str, dirs: &[Dir]) -> Option<String> {
     let link: Vec<String> = dirs
         .iter()
         .filter(|d| d.access == Access::Link)
-        .map(|d| crate::sandbox::sh_quote(&d.path))
+        .map(|d| crate::util::sh_quote(&d.path))
         .collect();
     if link.is_empty() {
         return None;
     }
-    let s = crate::sandbox::sh_quote(shared);
+    let s = crate::util::sh_quote(shared);
     Some(format!(
         r#"S={s}
 {owner}
@@ -256,15 +256,12 @@ pub fn bundled_script(dirs: &[Dir], skills: &[(String, String, bool)]) -> String
 fn bundled_script_as(owner: &str, dirs: &[Dir], skills: &[(String, String, bool)]) -> String {
     let dirs: Vec<String> = dirs
         .iter()
-        .map(|d| crate::sandbox::sh_quote(&d.path))
+        .map(|d| crate::util::sh_quote(&d.path))
         .collect();
     let dirs = dirs.join(" ");
     let mut s = format!("{owner}\n{REAL}\nrc=0\n");
     for (name, source, optional) in skills {
-        let (n, src) = (
-            crate::sandbox::sh_quote(name),
-            crate::sandbox::sh_quote(source),
-        );
+        let (n, src) = (crate::util::sh_quote(name), crate::util::sh_quote(source));
         // `name` is a valid skill name and `source` has no `$ " \` \\` (Task 9), so both are
         // safe inside the double-quoted messages.
         let (fail, unlinked) = if *optional {

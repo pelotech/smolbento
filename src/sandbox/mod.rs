@@ -1,7 +1,10 @@
 //! Sandboxes: smolvm machines that smolbento created, identified by their `sbx.*` labels.
 
+mod clone_step;
 pub mod create;
 pub mod env;
+mod identity;
+mod kit_steps;
 pub mod labels;
 pub mod name;
 pub mod options;
@@ -12,179 +15,21 @@ use std::path::Path;
 use anyhow::{Context, Result, anyhow};
 
 use crate::bridge;
-use crate::kits::apply::{InstallStep, KitSteps};
-use crate::kits::guest;
-use crate::policy::compile::HOST_GATEWAY;
+use crate::kits::apply::KitSteps;
 use crate::smolvm::{
     ExecSpec, Machine, MachineState, NetworkSpec, PublishedPort, PullProgress, Runner, Smolvm,
-    SmolvmError,
 };
 use crate::workspace::MOUNTLESS_WORKDIR;
-use crate::workspace::clone::{SOURCE_MOUNT, WorktreeHead};
 
+pub use clone_step::*;
 pub use create::CreateRequest;
+pub use identity::*;
+pub use kit_steps::*;
 pub use labels::Meta;
 
 /// Started detached as root after each start of a pre-4a docker sandbox (`sbx.docker=true`, no
 /// `sbx.kits`). Newer ones get dockerd from the docker kit's startup hook (`kits/docker`).
 pub const DOCKER_START: &str = "pgrep -x dockerd >/dev/null || { rm -f /var/run/docker.pid; exec dockerd >/var/log/dockerd.log 2>&1; }";
-
-/// Gives the image's `agent` user the host user's uid and its primary group the host gid.
-/// virtiofs passes host uids through, so without this uid 1000 can't write a workspace owned by,
-/// say, uid 501 (verified on smolvm 1.32.2). Idempotent; skipped for images without an `agent`
-/// user.
-pub fn identity_cmd(uid: u32, gid: u32) -> String {
-    format!(
-        "id -u agent >/dev/null 2>&1 || exit 0; {group}[ \"$(id -u agent)\" = {uid} ] || usermod -o -u {uid} agent",
-        group = group_cmd("agent", gid),
-    )
-}
-
-/// Gives `user`'s primary group the host gid. On Linux, virtiofs creates files as the caller's
-/// uid and gid, and the unprivileged VMM can't take on another gid, so any other gid gets EPERM
-/// even in a workspace the uid owns. Root's group stays 0; images without `groupmod` (busybox)
-/// are left alone. `user` is a shell word.
-fn group_cmd(user: &str, gid: u32) -> String {
-    format!(
-        "g=$(id -g {user}); [ \"$g\" = 0 ] || [ \"$g\" = {gid} ] || \
-         ! command -v groupmod >/dev/null 2>&1 || groupmod -o -g {gid} \"$(id -gn {user})\" || exit; "
-    )
-}
-
-/// Names the host `host.docker.internal` in the guest, as sbx does: the guest gateway reaches the
-/// host's loopback for sandboxes with host access (`policy::compile::HOST_GATEWAY`). Idempotent.
-pub fn hosts_cmd() -> String {
-    hosts_script("/etc/hosts")
-}
-
-/// `hosts_cmd` against the hosts file at `file` (tests use a temp file). The leading newline keeps
-/// the line apart when the file doesn't end in one.
-fn hosts_script(file: &str) -> String {
-    format!(
-        "grep -q ' host.docker.internal$' {file} || \
-         printf '\\n%s\\n' '{HOST_GATEWAY} host.docker.internal' >> {file}"
-    )
-}
-
-/// Where a start records the account a v3 workload's image user resolved to, so a numeric
-/// `USER` still names it after its uid moved to the host's (or `agent`'s move took it).
-pub const IMAGE_USER_FILE: &str = "/etc/smolbento/image-user";
-
-/// `identity_cmd` for a v3 workload's image user (`sbx.user`: `name`, `uid` or either with
-/// `:group`). Run before `identity_cmd`, so a `USER 1000` image still finds `agent` there.
-pub fn image_user_cmd(user: &str, uid: u32, gid: u32) -> String {
-    image_user_script(user, uid, gid, "/etc")
-}
-
-/// `image_user_cmd` against the passwd file and record under `etc` (tests use a temp dir). The
-/// first start resolves the user (a uid through `passwd`) and records the account; later starts
-/// read the record. Root keeps uid 0. Exits `UNMAPPED` when there's no account or no `usermod`.
-fn image_user_script(user: &str, uid: u32, gid: u32, etc: &str) -> String {
-    let token = user.split(':').next().unwrap_or(user);
-    format!(
-        "f={file}; n=; [ -r \"$f\" ] && read -r n < \"$f\"; \
-         if [ -z \"$n\" ]; then n={token}; case \"$n\" in *[!0-9]*) ;; \
-         *) n=$(awk -F: -v u=\"$n\" '$3 == u {{ print $1; exit }}' {passwd});; esac; \
-         [ -n \"$n\" ] && mkdir -p {dir} && echo \"$n\" > \"$f\"; fi; \
-         [ -n \"$n\" ] && u=$(id -u \"$n\" 2>/dev/null) || exit {UNMAPPED}; \
-         [ \"$u\" = 0 ] && exit 0; {group}[ \"$u\" = {uid} ] && exit 0; \
-         command -v usermod >/dev/null 2>&1 || exit {UNMAPPED}; usermod -o -u {uid} \"$n\"",
-        group = group_cmd("\"$n\"", gid),
-        file = sh_quote(&format!("{etc}/smolbento/image-user")),
-        dir = sh_quote(&format!("{etc}/smolbento")),
-        passwd = sh_quote(&format!("{etc}/passwd")),
-        token = sh_quote(token),
-    )
-}
-
-/// The user `run` and `exec` use for a v3 workload: `sbx.user`, except that a non-root uid is
-/// replaced by the account the start recorded for it (keeping any `:group`). Without a record
-/// (the uid has no passwd entry; the start warned) the raw uid.
-pub fn launch_user<R: Runner>(vm: &Smolvm<R>, sb: &Sandbox) -> Option<String> {
-    let spec = sb.meta.user.clone()?;
-    let (user, group) = match spec.split_once(':') {
-        Some((u, g)) => (u, Some(g)),
-        None => (spec.as_str(), None),
-    };
-    if user.is_empty() || !user.bytes().all(|b| b.is_ascii_digit()) || user.parse() == Ok(0u32) {
-        return Some(spec);
-    }
-    // The guest wrote the record, so it only counts as a plain account name.
-    let Some(name) = read_guest_file(vm, sb, IMAGE_USER_FILE).filter(|n| is_account_name(n)) else {
-        return Some(spec);
-    };
-    Some(match group {
-        Some(g) => format!("{name}:{g}"),
-        None => name,
-    })
-}
-
-/// A POSIX-style account name: `[A-Za-z_][A-Za-z0-9_.-]*` with an optional trailing `$`, at
-/// most 32 characters. Nothing that `-u` could read as a flag, a group or more than one word.
-fn is_account_name(name: &str) -> bool {
-    let body = name.strip_suffix('$').unwrap_or(name);
-    let mut bytes = body.bytes();
-    name.len() <= 32
-        && bytes
-            .next()
-            .is_some_and(|b| b.is_ascii_alphabetic() || b == b'_')
-        && bytes.all(|b| b.is_ascii_alphanumeric() || matches!(b, b'_' | b'.' | b'-'))
-}
-
-/// A small guest file's first line via `machine cp` (no guest shell needed); `None` when it's
-/// missing or empty.
-fn read_guest_file<R: Runner>(vm: &Smolvm<R>, sb: &Sandbox, path: &str) -> Option<String> {
-    let dir = tempfile::tempdir().ok()?;
-    let local = dir.path().join("file");
-    vm.cp(
-        &format!("{}:{path}", sb.machine),
-        &local.display().to_string(),
-    )
-    .ok()?;
-    let text = std::fs::read_to_string(&local).ok()?;
-    let line = text.lines().next()?.trim();
-    (!line.is_empty()).then(|| line.to_string())
-}
-
-/// `image_user_cmd`'s exit code when it can't map the user.
-const UNMAPPED: i32 = 3;
-
-/// Runs `image_user_cmd` as root. Returns the warning for a user it couldn't map: the agent then
-/// runs with the image's uid, which may not be able to write the host workspace.
-pub fn map_image_user<R: Runner>(
-    vm: &Smolvm<R>,
-    sb: &Sandbox,
-    user: &str,
-    uid: u32,
-    gid: u32,
-) -> Result<Option<String>> {
-    let out = vm.exec_output(&ExecSpec {
-        name: sb.machine.clone(),
-        user: Some("root".into()),
-        cmd: vec!["sh".into(), "-c".into(), image_user_cmd(user, uid, gid)],
-        ..Default::default()
-    })?;
-    match out.code {
-        0 => Ok(None),
-        UNMAPPED => Ok(Some(format!(
-            "warning: {}: couldn't map the image user {user} to your uid; the workspace may not \
-             be writable",
-            sb.name()
-        ))),
-        _ => Err(anyhow::anyhow!(SmolvmError::from_output(&out).message))
-            .context("matching the sandbox's image user to your host uid"),
-    }
-}
-
-pub fn host_uid() -> u32 {
-    // SAFETY: getuid has no preconditions and cannot fail.
-    unsafe { libc::getuid() }
-}
-
-pub fn host_gid() -> u32 {
-    // SAFETY: getgid has no preconditions and cannot fail.
-    unsafe { libc::getgid() }
-}
 
 /// What a create or start is doing, for the caller's progress output.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -226,76 +71,12 @@ pub struct KitFirstStart {
     /// Install-only credential env vars (`sbx.credential-install`): set for the install hooks,
     /// then the machine restarts without them.
     pub restart_without: Vec<String>,
-    /// Every policy rule id the kits added, removed again by `cli::plan::create` when the create
+    /// Every policy rule id the kits added, removed again by `provision::create` when the create
     /// fails.
     pub rule_ids: Vec<String>,
     /// Where an install-phase `ssh-agent@1` grant (`sbx.ssh-agent`) finds the host agent while
     /// the install hooks run.
     pub agent_backing: Option<bridge::filter::Backing>,
-}
-
-/// The first start of a clone sandbox clones the host repo inside the VM (as sbx).
-#[derive(Debug, Clone, PartialEq, Eq)]
-pub struct CloneStep {
-    /// Where the clone goes: a guest-only volume at the host repo's path.
-    pub dir: String,
-    /// Only for a linked worktree, whose source HEAD is the main worktree's.
-    pub head: Option<WorktreeHead>,
-    /// Host remotes to copy (local ones and credentials already left out).
-    pub remotes: Vec<(String, String)>,
-}
-
-impl CloneStep {
-    /// The clone dir and its `.git`, quoted for `sh -c`.
-    fn quoted(&self) -> (String, String) {
-        (sh_quote(&self.dir), sh_quote(&format!("{}/.git", self.dir)))
-    }
-}
-
-/// Single-quotes `s` for `sh -c`.
-pub(crate) fn sh_quote(s: &str) -> String {
-    format!("'{}'", s.replace('\'', r"'\''"))
-}
-
-/// As root: the volume is root-owned and may hold `lost+found`, which `git clone` won't clone into.
-fn clone_prep_cmd(step: &CloneStep) -> String {
-    let (d, git) = step.quoted();
-    let lf = sh_quote(&format!("{}/lost+found", step.dir));
-    format!("[ -d {git} ] && exit 0; rmdir {lf} 2>/dev/null; chown agent {d}")
-}
-
-/// As `agent`: sbx's clone command (skipped once cloned), then its remote copy, which runs on
-/// every start so a failed add is retried and host remote changes arrive (as sbx's setup script).
-/// A detached worktree's commit is checked out after the clone (a local clone copies every object,
-/// so commits made while detached are there too). If that checkout still fails, the clone keeps
-/// its default HEAD, with a warning, rather than failing every start. Only a hex commit id takes
-/// that path: it's echoed unquoted inside the warning.
-fn clone_cmd(step: &CloneStep) -> String {
-    let (d, git) = step.quoted();
-    let clone = format!("git -c safe.directory={SOURCE_MOUNT} clone -q");
-    let clone = match &step.head {
-        Some(WorktreeHead::Branch(b)) => {
-            format!("{clone} --branch {} {SOURCE_MOUNT} {d}", sh_quote(b))
-        }
-        Some(WorktreeHead::Detached(c)) if c.bytes().all(|b| b.is_ascii_hexdigit()) => format!(
-            "{{ {clone} --no-checkout {SOURCE_MOUNT} {d} || exit 1; \
-             git -C {d} checkout -q --detach {q} -- 2>/dev/null || {{ \
-             git -C {d} reset -q --hard || {{ rm -rf {git}; exit 1; }}; \
-             echo \"warning: commit {short} isn't in the clone; the agent starts \
-             from $(git -C {d} symbolic-ref -q --short HEAD || echo HEAD) instead\" >&2; }}; }}",
-            q = sh_quote(c),
-            short = c.get(..12).unwrap_or(c),
-        ),
-        _ => format!("{clone} {SOURCE_MOUNT} {d}"),
-    };
-    let mut s = format!("set -e; [ -d {git} ] || {clone}; cd {d}");
-    for (n, u) in &step.remotes {
-        let (n, u) = (sh_quote(n), sh_quote(u));
-        s.push_str(&format!(
-            "; git remote set-url -- {n} {u} 2>/dev/null || git remote add -- {n} {u}"
-        ));
-    }
-    s
 }
 
 #[derive(Debug, Clone, PartialEq)]
@@ -439,20 +220,14 @@ fn setup<R: Runner>(
     {
         eprintln!("{w}");
     }
-    vm.exec_captured(&ExecSpec {
-        name: sb.machine.clone(),
-        user: Some("root".into()),
-        cmd: vec!["sh".into(), "-c".into(), identity_cmd(plan.uid, plan.gid)],
-        ..Default::default()
-    })
+    vm.exec_captured(&ExecSpec::sh(
+        &sb.machine,
+        "root",
+        identity_cmd(plan.uid, plan.gid),
+    ))
     .context("matching the sandbox's agent user to your host uid")?;
     // Not fatal: an image without a writable /etc/hosts still works, just without the name.
-    if let Err(e) = vm.exec_captured(&ExecSpec {
-        name: sb.machine.clone(),
-        user: Some("root".into()),
-        cmd: vec!["sh".into(), "-c".into(), hosts_cmd()],
-        ..Default::default()
-    }) {
+    if let Err(e) = vm.exec_captured(&ExecSpec::sh(&sb.machine, "root", hosts_cmd())) {
         eprintln!(
             "warning: {}: couldn't add host.docker.internal to /etc/hosts: {e:#}",
             sb.name()
@@ -463,7 +238,7 @@ fn setup<R: Runner>(
     // The socket directory is checked on every start: /tmp can be emptied (macOS does on reboot)
     // and another user can create it first, then the mount would reach them. The SSH agent's
     // socket is in the same directory; a start only warns for it, as sessions serve it and
-    // `server::bind` checks the directory again then.
+    // `listener::bind` checks the directory again then.
     let dir = bridge::socket_dir();
     let safe = !(sb.meta.bridge || sb.meta.ssh_agent.is_some()) || private(&dir);
     if !safe {
@@ -476,12 +251,7 @@ fn setup<R: Runner>(
     } else {
         (bridge::remove_cmd(), "remove")
     };
-    if let Err(e) = vm.exec_captured(&ExecSpec {
-        name: sb.machine.clone(),
-        user: Some("root".into()),
-        cmd: vec!["sh".into(), "-c".into(), shims],
-        ..Default::default()
-    }) {
+    if let Err(e) = vm.exec_captured(&ExecSpec::sh(&sb.machine, "root", shims)) {
         eprintln!(
             "warning: {}: couldn't {what} the browser and clipboard shims: {e:#}",
             sb.name()
@@ -494,12 +264,7 @@ fn setup<R: Runner>(
         .skills
         .as_ref()
         .and_then(|l| crate::skills::link_script(&l.dirs))
-        && let Err(e) = vm.exec_captured(&ExecSpec {
-            name: sb.machine.clone(),
-            user: Some("root".into()),
-            cmd: vec!["sh".into(), "-c".into(), script],
-            ..Default::default()
-        })
+        && let Err(e) = vm.exec_captured(&ExecSpec::sh(&sb.machine, "root", script))
     {
         eprintln!("warning: {}: couldn't link shared skills: {e:#}", sb.name());
     }
@@ -507,11 +272,8 @@ fn setup<R: Runner>(
     // With kits, the docker kit's startup hook starts dockerd (no second start here).
     if sb.meta.docker && sb.meta.kits.is_empty() {
         vm.exec_captured(&ExecSpec {
-            name: sb.machine.clone(),
-            user: Some("root".into()),
             detach: true,
-            cmd: vec!["sh".into(), "-c".into(), DOCKER_START.into()],
-            ..Default::default()
+            ..ExecSpec::sh(&sb.machine, "root", DOCKER_START)
         })
         .context("starting dockerd")?;
     }
@@ -545,40 +307,6 @@ fn unsafe_dir_warnings(sb: &Sandbox, dir: &Path) -> Vec<String> {
         warn("SSH agent");
     }
     out
-}
-
-/// Returns the guest's `warning:` lines for the caller to print: the detached-commit fallback's,
-/// and any git prints itself (worth seeing too). The rest of git's stderr stays quiet.
-fn run_clone<R: Runner>(vm: &Smolvm<R>, sb: &Sandbox, step: &CloneStep) -> Result<Vec<String>> {
-    let mut warnings = Vec::new();
-    for (user, cmd) in [("root", clone_prep_cmd(step)), ("agent", clone_cmd(step))] {
-        let out = vm
-            .exec_captured(&ExecSpec {
-                name: sb.machine.clone(),
-                user: Some(user.into()),
-                cmd: vec!["sh".into(), "-c".into(), cmd],
-                ..Default::default()
-            })
-            .map_err(|e| {
-                // git's first error line, not the whole stderr.
-                let text = match e.downcast_ref::<SmolvmError>() {
-                    Some(s) => s.message.clone(),
-                    None => format!("{e:#}"),
-                };
-                let line = text
-                    .lines()
-                    .find(|l| !l.trim().is_empty())
-                    .unwrap_or("failed");
-                anyhow::anyhow!("cloning the repo in the sandbox: {}", line.trim())
-            })?;
-        warnings.extend(
-            out.stderr
-                .lines()
-                .filter(|l| l.starts_with("warning: "))
-                .map(String::from),
-        );
-    }
-    Ok(warnings)
 }
 
 /// Starts the sandbox if needed. The plan is only computed for a start, because resolving secrets
@@ -719,248 +447,6 @@ fn install_agent(sb: &Sandbox, kit: &KitFirstStart) -> Option<bridge::Server> {
     bridge::filter::serve_for(sb.name(), access, backing)
 }
 
-/// Where `apply_kit_steps` failed.
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub enum KitPhase {
-    /// An install hook (hooks that ran may have changed the guest).
-    Install,
-    /// The caller's step between the hooks and the files.
-    AfterInstall,
-    /// Files, agent context, startup scripts or the kits record.
-    Write,
-}
-
-/// Applies kit steps to a running sandbox, for a create's first start and for `kit add`: install
-/// hooks, then `after_install` (dropping the install-phase rules), then files, agent context, the
-/// `startup.d` scripts, the startup runner and the kits record (written whole). `on` hears
-/// `Install` for each kit: before its first install hook, and after the hooks for kits with none.
-pub fn apply_kit_steps<R: Runner>(
-    vm: &Smolvm<R>,
-    sb: &Sandbox,
-    steps: &KitSteps,
-    after_install: impl FnOnce() -> Result<()>,
-    on: &mut dyn FnMut(Event),
-) -> std::result::Result<(), (KitPhase, anyhow::Error)> {
-    let mut run = Steps { vm, sb, n: 0 };
-    let mut told: Vec<&str> = Vec::new();
-    for step in &steps.install {
-        if let Some(kit) = step.kit.as_deref()
-            && !told.contains(&kit)
-        {
-            on(Event::Install(kit));
-            told.push(kit);
-        }
-        for line in run.install(step).map_err(|e| (KitPhase::Install, e))? {
-            eprintln!("{line}");
-        }
-    }
-    // The kits record's first column is each kit's name.
-    for kit in steps
-        .kits_record
-        .lines()
-        .filter_map(|l| l.split('\t').next())
-    {
-        if !told.contains(&kit) {
-            on(Event::Install(kit));
-            told.push(kit);
-        }
-    }
-    after_install().map_err(|e| (KitPhase::AfterInstall, e))?;
-    let mut write = || -> Result<()> {
-        for script in &steps.files {
-            run.run("root", script).context("writing kit files")?;
-        }
-        for script in &steps.context {
-            run.run("root", script).context("writing agent context")?;
-        }
-        let mut files: Vec<(String, &str, &str)> = steps
-            .startup_d
-            .iter()
-            .map(|(name, body)| {
-                (
-                    format!("{}/{name}", guest::STARTUP_DIR),
-                    body.as_str(),
-                    "644",
-                )
-            })
-            .collect();
-        files.push((guest::STARTUP_PATH.into(), guest::STARTUP_RUNNER, "755"));
-        files.push((guest::KITS_FILE.into(), &steps.kits_record, "644"));
-        put_files(vm, sb, &files).context("writing the kits' startup scripts")
-    };
-    write().map_err(|e| (KitPhase::Write, e))
-}
-
-/// Larger scripts are copied in rather than passed as `sh -c` argv, well under Linux's 128 KiB
-/// limit per argument.
-const INLINE_MAX: usize = 64 * 1024;
-const STEP_DIR: &str = "/run/smolbento";
-
-/// Runs guest scripts, numbering the ones copied in.
-struct Steps<'a, R: Runner> {
-    vm: &'a Smolvm<R>,
-    sb: &'a Sandbox,
-    n: usize,
-}
-
-impl<R: Runner> Steps<'_, R> {
-    /// The exec for `script`, and the guest path it was copied to (if it was).
-    fn spec(&mut self, user: &str, script: &str) -> Result<(ExecSpec, Option<String>)> {
-        let (cmd, copied) = if script.len() > INLINE_MAX {
-            self.n += 1;
-            let path = format!("{STEP_DIR}/step-{}.sh", self.n);
-            put_files(self.vm, self.sb, &[(path.clone(), script, "644")])?;
-            (vec!["sh".into(), path.clone()], Some(path))
-        } else {
-            (vec!["sh".into(), "-c".into(), script.into()], None)
-        };
-        let spec = ExecSpec {
-            name: self.sb.machine.clone(),
-            user: Some(user.into()),
-            cmd,
-            ..Default::default()
-        };
-        Ok((spec, copied))
-    }
-
-    /// Removes a copied-in script once it ran, as root (`/run/smolbento` is root's). Best effort:
-    /// the step's own result is what matters.
-    fn remove(&self, copied: Option<String>) {
-        if let Some(path) = copied {
-            let _ = self.vm.exec_captured(&ExecSpec {
-                name: self.sb.machine.clone(),
-                user: Some("root".into()),
-                cmd: vec!["rm".into(), "-f".into(), path],
-                ..Default::default()
-            });
-        }
-    }
-
-    fn run(&mut self, user: &str, script: &str) -> Result<()> {
-        let (spec, copied) = self.spec(user, script)?;
-        let result = self.vm.exec_captured(&spec);
-        self.remove(copied);
-        result?;
-        Ok(())
-    }
-
-    /// An install step; a failure names it and carries the end of its output. A successful
-    /// smolbento step (`kit: None`) returns its stderr lines for the user: the bundled skills
-    /// step warns there about an optional skill it skipped. Kit hooks' output stays quiet.
-    fn install(&mut self, step: &InstallStep) -> Result<Vec<String>> {
-        let (spec, copied) = self.spec(step.user.as_deref().unwrap_or("root"), &step.script)?;
-        let out = self.vm.exec_output(&spec);
-        self.remove(copied);
-        let out = out.with_context(|| format!("{} failed", step.label))?;
-        if out.code == 0 {
-            if !step.relay_stderr {
-                return Ok(Vec::new());
-            }
-            return Ok(out
-                .stderr
-                .lines()
-                .map(str::trim_end)
-                .filter(|l| !l.is_empty())
-                .map(String::from)
-                .collect());
-        }
-        let text = if out.stderr.trim().is_empty() {
-            out.stdout.clone()
-        } else {
-            SmolvmError::from_output(&out).message
-        };
-        let tail = last_lines(&text, 20);
-        if tail.is_empty() {
-            anyhow::bail!("{} failed (exit {})", step.label, out.code);
-        }
-        anyhow::bail!("{} failed:\n{tail}", step.label)
-    }
-}
-
-/// Writes `(guest path, content, mode)` files as root via host temp files and `machine cp`
-/// (which copies single files only).
-fn put_files<R: Runner>(
-    vm: &Smolvm<R>,
-    sb: &Sandbox,
-    files: &[(String, &str, &str)],
-) -> Result<()> {
-    let root = |script: String| {
-        vm.exec_captured(&ExecSpec {
-            name: sb.machine.clone(),
-            user: Some("root".into()),
-            cmd: vec!["sh".into(), "-c".into(), script],
-            ..Default::default()
-        })
-    };
-    let mut dirs: Vec<String> = files
-        .iter()
-        .filter_map(|(p, _, _)| std::path::Path::new(p).parent())
-        .map(|d| sh_quote(&d.display().to_string()))
-        .collect();
-    dirs.sort();
-    dirs.dedup();
-    root(format!("mkdir -p {}", dirs.join(" ")))?;
-    let tmp = tempfile::tempdir().context("creating a temp dir")?;
-    for (i, (path, content, _)) in files.iter().enumerate() {
-        let host = tmp.path().join(i.to_string());
-        std::fs::write(&host, content).with_context(|| format!("writing {}", host.display()))?;
-        vm.cp(
-            &host.display().to_string(),
-            &format!("{}:{path}", sb.machine),
-        )
-        .with_context(|| format!("copying {path} into the sandbox"))?;
-    }
-    let chmod: Vec<String> = files
-        .iter()
-        .map(|(p, _, mode)| format!("chmod {mode} {}", sh_quote(p)))
-        .collect();
-    root(chmod.join(" && "))?;
-    Ok(())
-}
-
-/// The last `n` lines of `text`.
-fn last_lines(text: &str, n: usize) -> String {
-    let lines: Vec<&str> = text.trim_end().lines().collect();
-    lines[lines.len().saturating_sub(n)..].join("\n")
-}
-
-/// The startup runner's command, as root; `script` limits it to one kit's `startup.d` script. A
-/// no-op without kits.
-pub fn startup_cmd(script: Option<&str>) -> String {
-    let script = script
-        .map(|s| format!(" {}", sh_quote(s)))
-        .unwrap_or_default();
-    format!(
-        "[ -x {p} ] || exit 0; exec {p}{script}",
-        p = guest::STARTUP_PATH
-    )
-}
-
-/// Runs the kits' startup hooks (or one kit's `script`) as sbx does on every start: one pass in
-/// kit order that waits for each blocking hook and starts each background one detached at its
-/// position. A failed blocking hook is an error with sbx's text (its output is in the guest's
-/// startup log).
-pub fn run_startup<R: Runner>(vm: &Smolvm<R>, sb: &Sandbox, script: Option<&str>) -> Result<()> {
-    let what = "running the kits' startup hooks";
-    let out = vm
-        .exec_output(&ExecSpec {
-            name: sb.machine.clone(),
-            user: Some("root".into()),
-            cmd: vec!["sh".into(), "-c".into(), startup_cmd(script)],
-            ..Default::default()
-        })
-        .context(what)?;
-    if out.code != 0 {
-        // The runner writes only to its log; a smolvm error envelope means smolvm failed. Any
-        // other stderr comes from the guest, so the start gets sbx's text.
-        if let Some(e) = SmolvmError::from_json(&out) {
-            return Err(anyhow!(e.message).context(what));
-        }
-        anyhow::bail!("kit startup exited with code {}", out.code);
-    }
-    Ok(())
-}
-
 /// sbx's warning when a create's startup hooks fail (the sandbox is kept).
 fn create_warning(e: &anyhow::Error) -> String {
     format!(
@@ -993,10 +479,27 @@ mod tests {
     }
 
     use super::*;
+    use crate::kits::apply::InstallStep;
+    use crate::kits::guest;
     use crate::smolvm::NetworkSpec;
     use crate::smolvm::fake::FakeRunner;
+    use crate::testutil::root_sh;
+    use crate::util::sh_quote;
+    use crate::workspace::clone::WorktreeHead;
 
     const STATUS: &str = include_str!("../../tests/fixtures/smolvm/status.json");
+
+    /// The fixture sandbox, stopped.
+    fn stopped() -> String {
+        STATUS.replace("\"state\": \"running\"", "\"state\": \"stopped\"")
+    }
+
+    /// A fake smolvm whose `machine status` answers with `status`.
+    fn vm_with(status: &str) -> Smolvm<FakeRunner> {
+        let fake = FakeRunner::new();
+        fake.ok(&["machine", "status"], status);
+        Smolvm::new(fake)
+    }
 
     #[test]
     fn find_maps_name_and_reads_labels() {
@@ -1049,12 +552,7 @@ mod tests {
     /// starts dockerd itself.
     #[test]
     fn start_applies_network_then_starts_with_env_then_setup() {
-        let fake = FakeRunner::new();
-        fake.ok(
-            &["machine", "status"],
-            &STATUS.replace("\"state\": \"running\"", "\"state\": \"stopped\""),
-        );
-        let vm = Smolvm::new(fake);
+        let vm = vm_with(&stopped());
         let mut sb = get(&vm, "claude-myrepo").unwrap();
         ensure_running(&vm, &mut sb, || Ok(plan())).unwrap();
         assert!(sb.is_running());
@@ -1094,7 +592,7 @@ mod tests {
     fn starts_install_the_bridge_shims_or_remove_ours() {
         for bridged in [true, false] {
             let fake = FakeRunner::new();
-            let status = STATUS.replace("\"state\": \"running\"", "\"state\": \"stopped\"");
+            let status = stopped();
             let status = if bridged {
                 status.replace(
                     "\"sbx.docker\"",
@@ -1129,19 +627,15 @@ mod tests {
     }
 
     fn bridged_status() -> String {
-        STATUS
-            .replace("\"state\": \"running\"", "\"state\": \"stopped\"")
-            .replace(
-                "\"sbx.docker\"",
-                "\"sbx.bridge\": \"true\",\n    \"sbx.docker\"",
-            )
+        stopped().replace(
+            "\"sbx.docker\"",
+            "\"sbx.bridge\": \"true\",\n    \"sbx.docker\"",
+        )
     }
 
     #[test]
     fn a_start_checks_the_socket_dir_and_installs_the_shims_when_it_is_private() {
-        let fake = FakeRunner::new();
-        fake.ok(&["machine", "status"], &bridged_status());
-        let vm = Smolvm::new(fake);
+        let vm = vm_with(&bridged_status());
         let sb = get(&vm, "claude-myrepo").unwrap();
         let checked = std::cell::RefCell::new(Vec::new());
         start_checked(&vm, &sb, &plan(), &mut |_| {}, &|d| {
@@ -1162,12 +656,10 @@ mod tests {
     #[test]
     fn a_start_checks_the_socket_dir_for_the_ssh_agent_too() {
         let fake = FakeRunner::new();
-        let status = STATUS
-            .replace("\"state\": \"running\"", "\"state\": \"stopped\"")
-            .replace(
-                "\"sbx.docker\"",
-                "\"sbx.ssh-agent\": \"{\\\"runtime\\\":{\\\"sign\\\":null}}\",\n    \"sbx.docker\"",
-            );
+        let status = stopped().replace(
+            "\"sbx.docker\"",
+            "\"sbx.ssh-agent\": \"{\\\"runtime\\\":{\\\"sign\\\":null}}\",\n    \"sbx.docker\"",
+        );
         fake.ok(&["machine", "status"], &status);
         let vm = Smolvm::new(fake);
         let sb = get(&vm, "claude-myrepo").unwrap();
@@ -1196,9 +688,7 @@ mod tests {
             |cmd: String| format!("machine exec --name sbx-claude-myrepo -u root -- sh -c {cmd}");
         let lines = vm.runner().call_lines();
         assert!(lines.contains(&shims(bridge::remove_cmd())), "{lines:#?}");
-        let fake = FakeRunner::new();
-        fake.ok(&["machine", "status"], &status);
-        let vm = Smolvm::new(fake);
+        let vm = vm_with(&status);
         start_checked(&vm, &sb, &plan(), &mut |_| {}, &|_| true).unwrap();
         let lines = vm.runner().call_lines();
         assert!(lines.contains(&shims(bridge::remove_cmd())), "{lines:#?}");
@@ -1215,20 +705,13 @@ mod tests {
         // Neither: nothing to check.
         let mut neither = sb.clone();
         neither.meta.ssh_agent = None;
-        let fake = FakeRunner::new();
-        fake.ok(
-            &["machine", "status"],
-            &STATUS.replace("\"state\": \"running\"", "\"state\": \"stopped\""),
-        );
-        let vm = Smolvm::new(fake);
+        let vm = vm_with(&stopped());
         start_checked(&vm, &neither, &plan(), &mut |_| {}, &|_| panic!("checked")).unwrap();
     }
 
     #[test]
     fn a_start_with_an_unsafe_socket_dir_removes_the_shims() {
-        let fake = FakeRunner::new();
-        fake.ok(&["machine", "status"], &bridged_status());
-        let vm = Smolvm::new(fake);
+        let vm = vm_with(&bridged_status());
         let sb = get(&vm, "claude-myrepo").unwrap();
         start_checked(&vm, &sb, &plan(), &mut |_| {}, &|_| false).unwrap();
         let lines = vm.runner().call_lines();
@@ -1243,26 +726,13 @@ mod tests {
         let fake = FakeRunner::new();
         fake.ok(
             &["machine", "status"],
-            &STATUS
-                .replace("\"state\": \"running\"", "\"state\": \"stopped\"")
-                .replace(
-                    "\"sbx.docker\"",
-                    "\"sbx.bridge\": \"true\",\n    \"sbx.docker\"",
-                ),
+            &stopped().replace(
+                "\"sbx.docker\"",
+                "\"sbx.bridge\": \"true\",\n    \"sbx.docker\"",
+            ),
         );
         fake.fail(
-            &[
-                "machine",
-                "exec",
-                "--name",
-                "sbx-claude-myrepo",
-                "-u",
-                "root",
-                "--",
-                "sh",
-                "-c",
-                &bridge::install_cmd(),
-            ],
+            &root_sh("sbx-claude-myrepo", &bridge::install_cmd()),
             "EXEC_FAILED",
             "Read-only file system",
         );
@@ -1274,12 +744,7 @@ mod tests {
 
     #[test]
     fn every_start_names_the_host_after_the_agent_user() {
-        let fake = FakeRunner::new();
-        fake.ok(
-            &["machine", "status"],
-            &STATUS.replace("\"state\": \"running\"", "\"state\": \"stopped\""),
-        );
-        let vm = Smolvm::new(fake);
+        let vm = vm_with(&stopped());
         let mut sb = get(&vm, "claude-myrepo").unwrap();
         ensure_running(&vm, &mut sb, || Ok(plan())).unwrap();
         let lines = vm.runner().call_lines();
@@ -1293,21 +758,17 @@ mod tests {
 
     fn skills_status(label: &str) -> String {
         let l = label.replace('"', "\\\"");
-        STATUS
-            .replace("\"state\": \"running\"", "\"state\": \"stopped\"")
-            .replace(
-                "\"sbx.docker\"",
-                &format!("\"sbx.skills\": \"{l}\",\n    \"sbx.docker\""),
-            )
+        stopped().replace(
+            "\"sbx.docker\"",
+            &format!("\"sbx.skills\": \"{l}\",\n    \"sbx.docker\""),
+        )
     }
 
     const RO_LABEL: &str = r#"{"mode":"readonly","shared":"ro","dirs":[{"path":"/home/agent/.claude/skills","access":"link"}]}"#;
 
     #[test]
     fn a_linking_skills_sandbox_links_the_store_as_root_at_start() {
-        let fake = FakeRunner::new();
-        fake.ok(&["machine", "status"], &skills_status(RO_LABEL));
-        let vm = Smolvm::new(fake);
+        let vm = vm_with(&skills_status(RO_LABEL));
         let mut sb = get(&vm, "claude-myrepo").unwrap();
         ensure_running(&vm, &mut sb, || Ok(plan())).unwrap();
         let script = crate::skills::link_script(&sb.meta.skills.as_ref().unwrap().dirs).unwrap();
@@ -1335,18 +796,7 @@ mod tests {
         }])
         .unwrap();
         fake.fail(
-            &[
-                "machine",
-                "exec",
-                "--name",
-                "sbx-claude-myrepo",
-                "-u",
-                "root",
-                "--",
-                "sh",
-                "-c",
-                &script,
-            ],
+            &root_sh("sbx-claude-myrepo", &script),
             "EXEC_FAILED",
             "boom",
         );
@@ -1358,12 +808,7 @@ mod tests {
 
     #[test]
     fn a_sandbox_without_a_skills_label_gets_no_link_exec() {
-        let fake = FakeRunner::new();
-        fake.ok(
-            &["machine", "status"],
-            &STATUS.replace("\"state\": \"running\"", "\"state\": \"stopped\""),
-        );
-        let vm = Smolvm::new(fake);
+        let vm = vm_with(&stopped());
         let mut sb = get(&vm, "claude-myrepo").unwrap();
         ensure_running(&vm, &mut sb, || Ok(plan())).unwrap();
         let lines = vm.runner().call_lines();
@@ -1376,23 +821,9 @@ mod tests {
     #[test]
     fn a_read_only_etc_hosts_warns_and_the_start_goes_on() {
         let fake = FakeRunner::new();
-        fake.ok(
-            &["machine", "status"],
-            &STATUS.replace("\"state\": \"running\"", "\"state\": \"stopped\""),
-        );
+        fake.ok(&["machine", "status"], &stopped());
         fake.fail(
-            &[
-                "machine",
-                "exec",
-                "--name",
-                "sbx-claude-myrepo",
-                "-u",
-                "root",
-                "--",
-                "sh",
-                "-c",
-                &hosts_cmd(),
-            ],
+            &root_sh("sbx-claude-myrepo", &hosts_cmd()),
             "EXEC_FAILED",
             "Read-only file system",
         );
@@ -1413,12 +844,7 @@ mod tests {
 
     #[test]
     fn a_v3_workloads_image_user_is_resolved_before_agent_moves() {
-        let fake = FakeRunner::new();
-        fake.ok(
-            &["machine", "status"],
-            &STATUS.replace("\"state\": \"running\"", "\"state\": \"stopped\""),
-        );
-        let vm = Smolvm::new(fake);
+        let vm = vm_with(&stopped());
         let mut sb = get(&vm, "claude-myrepo").unwrap();
         sb.meta.user = Some("1000".into());
         ensure_running(&vm, &mut sb, || Ok(plan())).unwrap();
@@ -1567,9 +993,7 @@ echo "$g""#,
 
     #[test]
     fn launch_user_names_a_numeric_image_users_account() {
-        let fake = FakeRunner::new();
-        fake.ok(&["machine", "status"], STATUS);
-        let vm = Smolvm::new(fake);
+        let vm = vm_with(STATUS);
         let mut sb = get(&vm, "claude-myrepo").unwrap();
         assert_eq!(launch_user(&vm, &sb), None);
         sb.meta.user = Some("somebody".into());
@@ -1604,9 +1028,7 @@ echo "$g""#,
 
     #[test]
     fn an_unmappable_image_user_is_a_warning() {
-        let fake = FakeRunner::new();
-        fake.ok(&["machine", "status"], STATUS);
-        let vm = Smolvm::new(fake);
+        let vm = vm_with(STATUS);
         let sb = get(&vm, "claude-myrepo").unwrap();
         assert_eq!(map_image_user(&vm, &sb, "somebody", 501, 20).unwrap(), None);
         vm.runner().on(
@@ -1636,17 +1058,10 @@ echo "$g""#,
 
     #[test]
     fn a_docker_kit_sandbox_leaves_dockerd_to_its_startup_runner() {
-        let fake = FakeRunner::new();
-        fake.ok(
-            &["machine", "status"],
-            &STATUS
-                .replace("\"state\": \"running\"", "\"state\": \"stopped\"")
-                .replace(
-                    "\"sbx.docker\": \"true\",",
-                    "\"sbx.docker\": \"true\", \"sbx.kits\": \"[\\\"builtin:docker\\\"]\",",
-                ),
-        );
-        let vm = Smolvm::new(fake);
+        let vm = vm_with(&stopped().replace(
+            "\"sbx.docker\": \"true\",",
+            "\"sbx.docker\": \"true\", \"sbx.kits\": \"[\\\"builtin:docker\\\"]\",",
+        ));
         let mut sb = get(&vm, "claude-myrepo").unwrap();
         assert_eq!(sb.meta.kits, ["builtin:docker"]);
         ensure_running(&vm, &mut sb, || Ok(plan())).unwrap();
@@ -1663,9 +1078,7 @@ echo "$g""#,
 
     #[test]
     fn running_sandboxes_skip_the_plan() {
-        let fake = FakeRunner::new();
-        fake.ok(&["machine", "status"], STATUS);
-        let vm = Smolvm::new(fake);
+        let vm = vm_with(STATUS);
         let mut sb = get(&vm, "claude-myrepo").unwrap();
         ensure_running(&vm, &mut sb, || panic!("plan must not be computed")).unwrap();
     }
@@ -1673,10 +1086,7 @@ echo "$g""#,
     #[test]
     fn a_failed_setup_step_stops_the_machine() {
         let fake = FakeRunner::new();
-        fake.ok(
-            &["machine", "status"],
-            &STATUS.replace("\"state\": \"running\"", "\"state\": \"stopped\""),
-        );
+        fake.ok(&["machine", "status"], &stopped());
         fake.fail(
             &[
                 "machine",
@@ -1896,9 +1306,7 @@ echo "$g""#,
         let prep = clone_prep_cmd(&step("/w/r"));
         let fake = FakeRunner::new();
         fake.spawn_fail(
-            &[
-                "machine", "exec", "--name", "sbx-r", "-u", "root", "--", "sh", "-c", &prep,
-            ],
+            &root_sh("sbx-r", &prep),
             "could not run smolvm\nsecond line",
         );
         let vm = Smolvm::new(fake);
@@ -2068,7 +1476,7 @@ echo "$g""#,
                 );
             let fake = FakeRunner::new();
             fake.ok(&["machine", "status"], &status);
-            let (seen, probe) = crate::cli::testutil::socket_probe(bridge::agent_socket(&name));
+            let (seen, probe) = crate::testutil::socket_probe(bridge::agent_socket(&name));
             fake.during(&["machine", "exec"], move |args| {
                 let script = args.last().unwrap();
                 if ["install-1", "install-2", "files-1", "context-1"]
@@ -2296,18 +1704,7 @@ echo "$g""#,
         let vm = created_vm();
         let stderr: Vec<String> = (1..=25).map(|i| format!("line {i}")).collect();
         vm.runner().fail(
-            &[
-                "machine",
-                "exec",
-                "--name",
-                MACHINE,
-                "-u",
-                "root",
-                "--",
-                "sh",
-                "-c",
-                "echo install-1",
-            ],
+            &root_sh(MACHINE, "echo install-1"),
             "EXEC_FAILED",
             &stderr.join("\n"),
         );
@@ -2467,18 +1864,7 @@ echo "$g""#,
     /// The startup runner in `machine`, answering with exit `code`.
     fn failing_startup(fake: &FakeRunner, machine: &str, code: i32) {
         fake.on(
-            &[
-                "machine",
-                "exec",
-                "--name",
-                machine,
-                "-u",
-                "root",
-                "--",
-                "sh",
-                "-c",
-                &startup_cmd(None),
-            ],
+            &root_sh(machine, &startup_cmd(None)),
             crate::smolvm::Output {
                 code,
                 ..Default::default()
@@ -2598,18 +1984,7 @@ echo "$g""#,
     fn a_failed_hook_with_no_stderr_reports_its_stdout() {
         let vm = created_vm();
         vm.runner().on(
-            &[
-                "machine",
-                "exec",
-                "--name",
-                MACHINE,
-                "-u",
-                "root",
-                "--",
-                "sh",
-                "-c",
-                "echo install-1",
-            ],
+            &root_sh(MACHINE, "echo install-1"),
             crate::smolvm::Output {
                 code: 2,
                 stdout: "resolving\nE: package not found\n".into(),
@@ -2636,18 +2011,7 @@ echo "$g""#,
     fn a_failed_first_start_of_a_kit_sandbox_removes_it() {
         let vm = created_vm();
         vm.runner().fail(
-            &[
-                "machine",
-                "exec",
-                "--name",
-                MACHINE,
-                "-u",
-                "root",
-                "--",
-                "sh",
-                "-c",
-                &identity_cmd(501, 20),
-            ],
+            &root_sh(MACHINE, &identity_cmd(501, 20)),
             "EXEC_FAILED",
             "usermod: busy",
         );

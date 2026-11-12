@@ -393,8 +393,8 @@ mod tests {
 
     #[test]
     fn for_ctx_colours_only_a_tty_without_no_color() {
-        let mut t = super::super::testutil::test_env(&[]);
-        let colour = |t: &super::super::testutil::TestEnv| Progress::for_ctx(&t.ctx, false).color;
+        let mut t = crate::testutil::test_env(&[]);
+        let colour = |t: &crate::testutil::TestEnv| Progress::for_ctx(&t.ctx, false).color;
         assert!(!colour(&t));
         t.ctx.stdout_tty = true;
         assert!(colour(&t));

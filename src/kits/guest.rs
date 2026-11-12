@@ -3,7 +3,7 @@
 use std::path::Path;
 
 use crate::kits::model::{FileReq, Hook, HookCmd};
-use crate::sandbox::sh_quote;
+use crate::util::sh_quote;
 
 pub const STARTUP_PATH: &str = "/etc/smolbento/startup";
 pub const STARTUP_DIR: &str = "/etc/smolbento/startup.d";

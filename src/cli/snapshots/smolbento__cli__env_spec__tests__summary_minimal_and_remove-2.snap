@@ -1,5 +1,5 @@
 ---
-source: src/env/spec.rs
+source: src/cli/env_spec.rs
 expression: "summarise(&t, &[\"sbxenv.yaml\"], Op::Remove,\n&[\"github\".into(), \"openai\".into()])"
 ---
 ENVIRONMENT

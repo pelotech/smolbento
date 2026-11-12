@@ -7,8 +7,8 @@ use oci_client::Reference;
 use sha2::{Digest, Sha256};
 
 use super::model::{Kit, Source};
-use super::registry::hex;
 use super::resolve::HostMount;
+use crate::util::hex;
 
 /// What keys a kit's host mounts (sbx): a local kit's canonical path; a published kit's
 /// `<registry>/<repository>`, without tag or digest so updates keep its directories.

@@ -9,9 +9,10 @@ use anyhow::{Context, Result, anyhow, bail};
 use serde_json::{Value, json};
 
 use crate::kits::model::{Content, Kit};
-use crate::kits::registry::{self, hex_of, put_bytes, sha256_digest, store_dir};
+use crate::kits::registry::{self, hex_of, persist, put_bytes, store_dir};
 use crate::kits::registry_auth::Logins;
 use crate::kits::resolve::Plan;
+use crate::util::sha256_digest;
 
 /// The `--image` for a plan: the workload's ref or path when no mixin has layers; otherwise a
 /// cached archive at `<cache>/composed/<sha256 of input manifest digests>.tar`.
@@ -299,9 +300,7 @@ fn ensure_tar(path: &Path, build: impl FnOnce(&mut fs::File) -> Result<()>) -> R
     let mut tmp = tempfile::NamedTempFile::new_in(dir)?;
     build(tmp.as_file_mut())?;
     tmp.as_file().sync_all()?;
-    tmp.persist(path)
-        .map_err(|e| e.error)
-        .with_context(|| format!("writing {}", path.display()))?;
+    persist(tmp, path)?;
     Ok(())
 }
 

@@ -96,6 +96,14 @@ pub fn builtin(name: &str) -> Option<Service> {
         })
 }
 
+/// `secret set`'s error for a service that is neither built in nor custom.
+pub fn unknown(service: &str) -> String {
+    format!(
+        "unknown service '{service}' (built-in: {}; or use `sbt secret set-custom`)",
+        builtin_names().join(", ")
+    )
+}
+
 pub fn builtin_names() -> Vec<&'static str> {
     BUILTIN.iter().map(|(n, _, _)| *n).collect()
 }

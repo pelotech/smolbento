@@ -182,6 +182,16 @@ pub struct ExecSpec {
 }
 
 impl ExecSpec {
+    /// `sh -c script` in `machine` as `user`.
+    pub fn sh(machine: &str, user: &str, script: impl Into<String>) -> Self {
+        Self {
+            name: machine.into(),
+            user: Some(user.into()),
+            cmd: vec!["sh".into(), "-c".into(), script.into()],
+            ..Default::default()
+        }
+    }
+
     pub fn to_args(&self) -> Vec<String> {
         let mut a = vec!["machine".to_string(), "exec".to_string()];
         flag(&mut a, "--name", &self.name);
@@ -742,6 +752,14 @@ mod tests {
         assert_eq!(
             vm.runner().call_lines(),
             vec!["machine egress-events --name m --json --limit 50"]
+        );
+    }
+
+    #[test]
+    fn sh_builds_a_shell_exec_as_a_user() {
+        assert_eq!(
+            ExecSpec::sh("sbx-a", "root", "id").to_args().join(" "),
+            "machine exec --name sbx-a -u root -- sh -c id"
         );
     }
 

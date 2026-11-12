@@ -107,9 +107,9 @@ fn table(d: &Details) -> String {
 
 #[cfg(test)]
 mod tests {
-    use super::super::testutil::*;
     use super::*;
     use crate::sandbox::Meta;
+    use crate::testutil::*;
 
     /// `machine status --json` for a sandbox with `meta`'s labels.
     fn status(t: &TestEnv, meta: &Meta, state: &str, image: Option<&str>, ports: &str) {
