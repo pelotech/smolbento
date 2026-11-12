@@ -26,7 +26,9 @@
       // cross-compile image used by `just release-build`
       customType: 'regex',
       managerFilePatterns: ['/^justfile$/'],
-      matchStrings: ['(?<depName>ghcr\\.io/rust-cross/cargo-zigbuild):(?<currentValue>[0-9.]+)'],
+      matchStrings: [
+        '(?<depName>ghcr\\.io/rust-cross/cargo-zigbuild):(?<currentValue>[0-9.]+)@(?<currentDigest>sha256:[a-f0-9]+)',
+      ],
       datasourceTemplate: 'docker',
     },
   ],
