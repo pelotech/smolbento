@@ -2,8 +2,12 @@
 //! (`--static-mcp`). smolbento doesn't speak MCP: a server is written into the agent's own MCP
 //! config, and a header secret travels as a smolvm credential placeholder.
 
+mod attach;
+mod registrar;
 mod store;
 
+pub use attach::{Attachment, attach};
+pub use registrar::has_registrar;
 pub use store::{McpFile, Server};
 
 use std::collections::BTreeMap;
