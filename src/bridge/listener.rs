@@ -15,10 +15,10 @@ use anyhow::{Context, Result};
 
 /// How long a client has, from its connect, to send its whole request; also how long writing the
 /// answer may take. Requests are handled one at a time, so this bounds what a slow client holds.
-pub(super) const DEADLINE: Duration = Duration::from_secs(10);
+pub(crate) const DEADLINE: Duration = Duration::from_secs(10);
 
 /// How often the accept loop and a request being read check for a stop.
-pub(super) const POLL: Duration = Duration::from_millis(50);
+pub(crate) const POLL: Duration = Duration::from_millis(50);
 
 /// A running listener. Dropping it stops the thread (within `POLL`, or once a running opener or
 /// copier returns; those have their own timeout), so no request is handled after it, and removes
@@ -32,7 +32,7 @@ pub struct Server {
 
 /// Binds `path` (as `serve`) and runs `accept` on a thread with the non-blocking listener and the
 /// stop flag that dropping the returned `Server` sets.
-pub(super) fn spawn(
+pub(crate) fn spawn(
     path: &Path,
     accept: impl FnOnce(&UnixListener, Arc<AtomicBool>) + Send + 'static,
 ) -> Result<Option<Server>> {
@@ -85,7 +85,7 @@ fn bind(path: &Path) -> Result<Option<UnixListener>> {
 }
 
 /// A socket that can wait a while for data: Unix (the bridge) or TCP (the login relay).
-pub(super) trait Stream {
+pub(crate) trait Stream {
     fn read_for(&self, buf: &mut [u8], timeout: Duration) -> std::io::Result<usize>;
 }
 
@@ -104,7 +104,7 @@ impl Stream for std::net::TcpStream {
 }
 
 /// Reads from `stream` until `until` (for all reads, not each), or until `stop` is set.
-pub(super) struct Deadline<'a, S> {
+pub(crate) struct Deadline<'a, S> {
     pub stream: &'a S,
     pub until: Instant,
     pub stop: &'a AtomicBool,

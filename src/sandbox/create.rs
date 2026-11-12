@@ -2,8 +2,8 @@ use std::collections::BTreeMap;
 use std::path::{Path, PathBuf};
 
 use crate::bridge;
-use crate::bridge::agent::{self, AgentLabel};
 use crate::smolvm::{CreateSpec, Credential, Mount, NetworkSpec, PortMap};
+use crate::ssh_agent::{self as agent, AgentLabel};
 use crate::workspace::clone::{CloneSource, SOURCE_MOUNT};
 use crate::workspace::{MOUNTLESS_WORKDIR, Workspace};
 
@@ -240,7 +240,7 @@ pub fn spec(req: &CreateRequest) -> CreateSpec {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::bridge::agent::Access;
+    use crate::ssh_agent::Access;
 
     fn request(docker: bool, workspaces: Vec<Workspace>) -> CreateRequest {
         CreateRequest {

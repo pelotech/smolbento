@@ -69,7 +69,8 @@ started with `run -d`.
 | `src/env/` | `sbxenv.yaml` environment files |
 | `src/skills/` | The shared skills store |
 | `src/templates.rs` | Saved templates |
-| `src/bridge/` | Host services for a sandbox: browser and clipboard shims, login relay, ssh agent |
+| `src/bridge/` | Host services for a sandbox: browser and clipboard shims, login relay; the socket listener |
+| `src/ssh_agent/` | SSH agent forwarding: grants, the label, the filtering proxy |
 | `src/util.rs` | Leaf helpers: shell quoting, hashing, size parsing |
 
 See [Development status](development-status.md) for what later phases add (MCP, the dashboard).

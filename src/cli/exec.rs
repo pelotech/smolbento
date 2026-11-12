@@ -50,7 +50,7 @@ pub fn exec<R: Runner>(ctx: &mut Ctx<R>, a: &ExecArgs) -> Result<i32> {
         None
     };
     // A runtime `ssh-agent@1` grant is served for every exec (`git commit -S` runs this way too).
-    let _agent = bridge::filter::attach(&ctx.env, &ctx.paths, &sb);
+    let _agent = crate::ssh_agent::filter::attach(&ctx.env, &ctx.paths, &sb);
     ctx.vm.exec(&spec)
 }
 

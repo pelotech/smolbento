@@ -76,7 +76,7 @@ pub struct KitFirstStart {
     pub rule_ids: Vec<String>,
     /// Where an install-phase `ssh-agent@1` grant (`sbx.ssh-agent`) finds the host agent while
     /// the install hooks run.
-    pub agent_backing: Option<bridge::filter::Backing>,
+    pub agent_backing: Option<crate::ssh_agent::filter::Backing>,
 }
 
 #[derive(Debug, Clone, PartialEq)]
@@ -444,7 +444,7 @@ fn install_agent(sb: &Sandbox, kit: &KitFirstStart) -> Option<bridge::Server> {
     if kit.steps.install.is_empty() {
         return None;
     }
-    bridge::filter::serve_for(sb.name(), access, backing)
+    crate::ssh_agent::filter::serve_for(sb.name(), access, backing)
 }
 
 /// sbx's warning when a create's startup hooks fail (the sandbox is kept).
@@ -1489,8 +1489,9 @@ echo "$g""#,
             let vm = Smolvm::new(fake);
             let (_dir, paths) = crate::config::test_paths();
             let mut plan = kit_plan(&[]);
-            plan.kit.as_mut().unwrap().agent_backing =
-                Some(bridge::filter::Backing::new(&paths, &Default::default()));
+            plan.kit.as_mut().unwrap().agent_backing = Some(
+                crate::ssh_agent::filter::Backing::new(&paths, &Default::default()),
+            );
             let sb = create(
                 &vm,
                 &request(),

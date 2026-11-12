@@ -1,6 +1,6 @@
 use std::collections::BTreeMap;
 
-use crate::bridge::agent::AgentLabel;
+use crate::ssh_agent::AgentLabel;
 
 pub const NAME: &str = "sbx.name";
 pub const AGENT: &str = "sbx.agent";
@@ -31,7 +31,7 @@ pub const LONG_RUNNING: &str = "sbx.long-running";
 pub const HOST_ACCESS: &str = "sbx.host-access";
 /// Created with the browser and clipboard bridge socket (`bridge::GUEST_SOCKET`).
 pub const BRIDGE: &str = "sbx.bridge";
-/// The SSH agent granted at create, per phase (`bridge::agent::AgentLabel`, JSON).
+/// The SSH agent granted at create, per phase (`ssh_agent::AgentLabel`, JSON).
 pub const SSH_AGENT: &str = "sbx.ssh-agent";
 /// Kit host mounts: a JSON object of guest path to host directory.
 pub const HOST_MOUNTS: &str = "sbx.host-mounts";
@@ -358,7 +358,7 @@ mod tests {
 
     #[test]
     fn optional_fields_round_trip() {
-        use crate::bridge::agent::Access;
+        use crate::ssh_agent::Access;
         let m = Meta {
             template: Some("docker.io/library/t:v1".into()),
             host_access: true,

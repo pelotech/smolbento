@@ -6,7 +6,6 @@ use std::path::Path;
 use anyhow::{Context, Result, bail};
 
 use crate::agents;
-use crate::bridge::agent;
 use crate::kits::capability;
 use crate::kits::compose;
 use crate::kits::guest;
@@ -21,6 +20,7 @@ use crate::sandbox::options::{free_port, parse_memory};
 use crate::secrets::store::SecretStore;
 use crate::secrets::{SecretsFile, services};
 use crate::smolvm::{Credential, PortMap};
+use crate::ssh_agent as agent;
 
 /// Guest steps for a sandbox's first start (and `kit add`).
 #[derive(Debug, Clone, Default, PartialEq, Eq)]

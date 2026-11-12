@@ -7,7 +7,7 @@ use std::path::Path;
 
 use anyhow::{Context, Result, bail};
 
-use crate::bridge::{self, agent};
+use crate::bridge;
 use crate::ctx::Ctx;
 use crate::kits::apply::apply;
 use crate::kits::host_mount;
@@ -16,6 +16,7 @@ use crate::policy::{Mode, Policy, compile};
 use crate::sandbox::{self, CloneStep, CreateRequest, Meta, Sandbox, StartPlan, name};
 use crate::secrets::{SecretsFile, resolve::start_env};
 use crate::smolvm::{Credential, NetworkSpec, Runner};
+use crate::ssh_agent as agent;
 use crate::workspace::clone;
 
 /// Hosts of the given services' credentials.
@@ -242,7 +243,7 @@ pub fn prepare_create<R: Runner>(
             steps,
             restart_without: req.credential_install.clone(),
             rule_ids: ids,
-            agent_backing: Some(crate::bridge::filter::Backing::new(&ctx.paths, &ctx.env)),
+            agent_backing: Some(crate::ssh_agent::filter::Backing::new(&ctx.paths, &ctx.env)),
         });
     }
     if !denies.is_empty() {
@@ -1526,7 +1527,7 @@ mod tests {
             steps: Default::default(),
             restart_without: Default::default(),
             rule_ids: vec![],
-            agent_backing: Some(crate::bridge::filter::Backing::new(
+            agent_backing: Some(crate::ssh_agent::filter::Backing::new(
                 &t.ctx.paths,
                 &t.ctx.env,
             )),
