@@ -34,13 +34,6 @@ pub struct Overrides {
     pub kit_args_file: Vec<PathBuf>,
 }
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub enum Op {
-    Create,
-    Run,
-    Remove,
-}
-
 /// The sandbox name: `overrides_name`, the file's `name`, or `<agent>-<basename>` of the
 /// workspace (mountless: of the project directory). Checks nothing else.
 pub fn name(loaded: &Loaded, overrides_name: Option<&str>) -> Result<String> {
@@ -268,7 +261,7 @@ pub fn resources(loaded: &Loaded, spec: &EnvSpec) -> Vec<Resource> {
     }
 
     for (service, s) in &spec.secrets {
-        let fields = match (&s.value, &s.r#ref, &s.command) {
+        let mut fields = match (&s.value, &s.r#ref, &s.command) {
             // Never the value: the plan is printed, and recorded when approved.
             (Some(v), _, _) => vec![field("value", &sha256_digest(v.as_bytes()))],
             (_, Some(r), _) => vec![field("ref", r)],
@@ -278,6 +271,9 @@ pub fn resources(loaded: &Loaded, spec: &EnvSpec) -> Vec<Resource> {
             ],
             _ => vec![],
         };
+        if s.no_verify == Some(true) {
+            fields.push(field("noVerify", "true"));
+        }
         out.push(Resource {
             host_command: s.command.is_some(),
             ..Resource::new("SECRETS", service, fields)
@@ -293,18 +289,6 @@ pub fn resources(loaded: &Loaded, spec: &EnvSpec) -> Vec<Resource> {
         ));
     }
     out
-}
-
-/// sbx's plan layout, without diffs. `scoped` is the services stored for the sandbox (rm only).
-pub fn summary(loaded: &Loaded, spec: &EnvSpec, op: Op, scoped: &[String]) -> String {
-    if op == Op::Remove {
-        return remove_summary(loaded, &spec.name, scoped);
-    }
-    let lines: Vec<Line> = resources(loaded, spec)
-        .iter()
-        .map(|r| Line::new(Marker::Add, r))
-        .collect();
-    header(loaded, &spec.name) + &render(&lines)
 }
 
 /// The primary workspace's path and `clone`.
@@ -618,10 +602,15 @@ mod tests {
         assert!(e.starts_with("unknown service 'notaservice'"), "{e}");
     }
 
-    fn summarise(t: &T, files: &[&str], op: Op, scoped: &[String]) -> String {
+    /// The plan of a fresh environment: every resource to add.
+    fn summarise(t: &T, files: &[&str]) -> String {
         let l = t.loaded(files);
         let s = spec(&l, &Overrides::default(), &SecretsFile::default()).unwrap();
-        summary(&l, &s, op, scoped).replace(&t.root(), "<root>")
+        let lines: Vec<Line> = resources(&l, &s)
+            .iter()
+            .map(|r| Line::new(Marker::Add, r))
+            .collect();
+        (header(&l, &s.name) + &render(&lines)).replace(&t.root(), "<root>")
     }
 
     #[test]
@@ -634,24 +623,16 @@ mod tests {
             ),
         );
         t.write("proj/local.yaml", "env:\n  LOG_LEVEL: debug\n");
-        insta::assert_snapshot!(summarise(
-            &t,
-            &["sbxenv.yaml", "local.yaml"],
-            Op::Create,
-            &[]
-        ));
+        insta::assert_snapshot!(summarise(&t, &["sbxenv.yaml", "local.yaml"]));
     }
 
     #[test]
     fn summary_minimal_and_remove() {
         let t = T::new();
         t.write("proj/sbxenv.yaml", &format!("{HEAD}agent: claude\n"));
-        insta::assert_snapshot!(summarise(&t, &["sbxenv.yaml"], Op::Run, &[]));
-        insta::assert_snapshot!(summarise(
-            &t,
-            &["sbxenv.yaml"],
-            Op::Remove,
-            &["github".into(), "openai".into()]
-        ));
+        insta::assert_snapshot!(summarise(&t, &["sbxenv.yaml"]));
+        let l = t.loaded(&["sbxenv.yaml"]);
+        let removed = remove_summary(&l, "claude-proj", &["github".into(), "openai".into()]);
+        insta::assert_snapshot!(removed.replace(&t.root(), "<root>"));
     }
 }

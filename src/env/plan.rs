@@ -40,8 +40,6 @@ pub enum Marker {
     Add,
     Change,
     Destroy,
-    /// A host command that runs again.
-    Run,
     /// Present already, and not approved.
     Approve,
 }
@@ -52,7 +50,6 @@ impl Marker {
             Marker::Add => '+',
             Marker::Change => '~',
             Marker::Destroy => '-',
-            Marker::Run => '>',
             Marker::Approve => '!',
         }
     }
@@ -118,13 +115,9 @@ pub fn render(lines: &[Line]) -> String {
         count(Marker::Change),
         count(Marker::Destroy)
     );
-    for (n, what) in [
-        (count(Marker::Run), "to run"),
-        (count(Marker::Approve), "needs approval"),
-    ] {
-        if n > 0 {
-            out += &format!(" · {n} {what}");
-        }
+    let approve = count(Marker::Approve);
+    if approve > 0 {
+        out += &format!(" · {approve} needs approval");
     }
     out.push('\n');
     if lines.iter().any(|l| l.resource.host_command) {
@@ -159,7 +152,7 @@ mod tests {
             ),
             approve,
             Line::new(Marker::Add, &env("A")),
-            Line::new(Marker::Run, &command),
+            Line::new(Marker::Add, &command),
             changed,
             Line::new(Marker::Destroy, &env("C")),
         ];
@@ -168,14 +161,14 @@ mod tests {
             "\nSANDBOX\n  + web\n      agent: claude\n\
              \nWORKSPACES\n  ! /w — present, not recorded as applied, needs your approval\n\
              \nENV\n  + A\n      value: 1\n  ~ B\n      value: 1 -> 2\n  - C\n      value: 1\n\
-             \nSECRETS\n  > github\n      command: gh auth token\n\
-             \n  2 to add · 1 to change · 1 to destroy · 1 to run · 1 needs approval\n\
+             \nSECRETS\n  + github\n      command: gh auth token\n\
+             \n  3 to add · 1 to change · 1 to destroy · 1 needs approval\n\
              \x20 ! this plan runs commands on this machine, outside the sandbox, with your own privileges\n"
         );
     }
 
     #[test]
-    fn render_omits_zero_run_and_approval_counts() {
+    fn render_omits_a_zero_approval_count() {
         assert_eq!(render(&[]), "\n  0 to add · 0 to change · 0 to destroy\n");
     }
 }

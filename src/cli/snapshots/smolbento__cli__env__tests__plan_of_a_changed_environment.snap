@@ -1,0 +1,18 @@
+---
+source: src/cli/env.rs
+expression: plan(&mut t)
+---
+ENVIRONMENT
+  Name:  claude-proj
+  File:  <proj>/sbxenv.yaml
+
+ENV
+  ~ X
+      value: one -> two
+
+PORTS
+  ~ 80/tcp — waits for the next create
+      host: 8080 -> 8081
+
+  0 to add · 2 to change · 0 to destroy
+  ○ not approved yet — applying asks once

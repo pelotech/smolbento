@@ -5,13 +5,15 @@ use std::path::Path;
 
 use anyhow::{Context, Result, anyhow, bail};
 
-use super::env_spec::{EnvSpec, Op, Overrides, name, remove_summary, spec, summary};
+use super::env_spec::{EnvSpec, Overrides, header, name, remove_summary, resources, spec};
 use super::{
     Ctx, EnvApplyOpts, EnvCmd, EnvCommon, EnvExecArgs, EnvRmArgs, ExecArgs, RunArgs, SandboxOpts,
     SecretSource, Unsupported, confirm_or,
 };
+use crate::env::approval::{self, Need};
 use crate::env::file::SecretDecl;
 use crate::env::load::{ArgInputs, Loaded, load};
+use crate::env::plan::{HOST_COMMANDS, Resource, render};
 use crate::sandbox;
 use crate::secrets::{SecretEntry, SecretsFile, Source, resolve::resolve, scope_for};
 use crate::smolvm::Runner;
@@ -22,12 +24,72 @@ pub fn run<R: Runner>(ctx: &mut Ctx<R>, cmd: EnvCmd) -> Result<i32> {
         EnvCmd::Run(a) => env_run(ctx, &a.common, &a.apply, a.detach),
         EnvCmd::Exec(a) => env_exec(ctx, a),
         EnvCmd::Rm(a) => env_rm(ctx, a),
-        EnvCmd::Plan(_) => not_yet("plan"),
+        EnvCmd::Plan(a) => {
+            let apply = EnvApplyOpts {
+                clone: a.clone,
+                kit_arg: a.kit_arg,
+                kit_args_file: a.kit_args_file,
+                ..Default::default()
+            };
+            env_plan(ctx, &a.common, &apply)
+        }
     }
 }
 
-fn not_yet(cmd: &str) -> Result<i32> {
-    Err(Unsupported(format!("`sbt env {cmd}` is not implemented yet")).into())
+/// What applying would do, against what was approved and whether the sandbox exists.
+struct Planned {
+    resources: Vec<Resource>,
+    need: Need,
+    /// The `ENVIRONMENT` block and the plan.
+    text: String,
+}
+
+fn planned<R: Runner>(
+    ctx: &Ctx<R>,
+    loaded: &Loaded,
+    spec: &EnvSpec,
+    exists: bool,
+) -> Result<Planned> {
+    let resources = resources(loaded, spec);
+    let record = approval::load(&ctx.paths, &spec.name);
+    let need = approval::need(
+        record.as_ref(),
+        &loaded.files,
+        &resources,
+        exists,
+        ctx.settings.bool("env.rememberHostCommands")?,
+    );
+    let lines = approval::lines(record.as_ref(), &resources, exists);
+    let mut text = header(loaded, &spec.name) + &render(&lines);
+    if need == Need::HostCommands {
+        // In place of the plain warning: these commands are approved, and ask all the same.
+        text = text.replace(HOST_COMMANDS, UNCHANGED_HOST_COMMANDS);
+    }
+    Ok(Planned {
+        resources,
+        need,
+        text,
+    })
+}
+
+const UNCHANGED_HOST_COMMANDS: &str = "  ! nothing in this plan has changed, but its commands run on this machine, outside the sandbox, with your own privileges, which needs explicit approval on each run\n";
+
+/// Prints what applying would do and whether it would ask. Changes nothing.
+fn env_plan<R: Runner>(ctx: &mut Ctx<R>, c: &EnvCommon, a: &EnvApplyOpts) -> Result<i32> {
+    let (loaded, spec, _) = prepare(ctx, c, a)?;
+    let exists = sandbox::find(&ctx.vm, &spec.name)?.is_some();
+    let plan = planned(ctx, &loaded, &spec, exists)?;
+    let status = match plan.need {
+        Need::Changed => "○ not approved yet — applying asks once",
+        Need::HostCommands => {
+            "✓ approved as it stands — applying asks again for the commands it declares here"
+        }
+        Need::No => "✓ already approved — applying asks nothing",
+    };
+    // The "nothing has changed" line belongs to an apply that is about to ask.
+    let text = plan.text.replace(UNCHANGED_HOST_COMMANDS, HOST_COMMANDS);
+    writeln!(&ctx.out, "{text}  {status}")?;
+    Ok(0)
 }
 
 fn create<R: Runner>(ctx: &mut Ctx<R>, c: &EnvCommon, a: &EnvApplyOpts) -> Result<i32> {
@@ -39,8 +101,9 @@ fn create<R: Runner>(ctx: &mut Ctx<R>, c: &EnvCommon, a: &EnvApplyOpts) -> Resul
             spec.name
         );
     }
-    write!(&ctx.out, "{}", summary(&loaded, &spec, Op::Create, &[]))?;
-    approve(ctx, &loaded, a.force)?;
+    let plan = planned(ctx, &loaded, &spec, false)?;
+    write!(&ctx.out, "{}", plan.text)?;
+    approve(ctx, &loaded, &spec.name, &plan, a.force)?;
     provision(ctx, &mut secrets, &spec)?;
     let args = super::CreateArgs {
         targets: spec.targets,
@@ -58,9 +121,9 @@ fn env_run<R: Runner>(
 ) -> Result<i32> {
     let (loaded, spec, mut secrets) = prepare(ctx, c, a)?;
     let exists = sandbox::find(&ctx.vm, &spec.name)?.is_some();
-    let op = if exists { Op::Run } else { Op::Create };
-    write!(&ctx.out, "{}", summary(&loaded, &spec, op, &[]))?;
-    approve(ctx, &loaded, a.force)?;
+    let plan = planned(ctx, &loaded, &spec, exists)?;
+    write!(&ctx.out, "{}", plan.text)?;
+    approve(ctx, &loaded, &spec.name, &plan, a.force)?;
     let args = if exists {
         // Attach as it was created, with the file's current env for this session.
         RunArgs {
@@ -189,6 +252,7 @@ fn env_rm<R: Runner>(ctx: &mut Ctx<R>, a: EnvRmArgs) -> Result<i32> {
         // No sandbox: only the secrets (and any stale policy) are left to forget.
         None => super::secret::forget_sandbox(ctx, &name, true)?,
     }
+    approval::forget(&ctx.paths, &name)?;
     if !scoped.is_empty() {
         writeln!(&ctx.out, "Removed secrets scoped to {name}")?;
     }
@@ -225,18 +289,44 @@ fn prepare<R: Runner>(
     Ok((loaded, spec, secrets))
 }
 
-/// sbx asks before every `env create` and `env run`; `--force` approves this invocation.
-fn approve<R: Runner>(ctx: &Ctx<R>, loaded: &Loaded, force: bool) -> Result<()> {
-    // The command as given, quoted for the shell, with `--force` added (sbx does the same).
-    let words: Vec<String> = ctx.args.iter().map(|a| shell_word(a)).collect();
-    let refusal = format!(
-        "{} changes things outside the sandbox that have not been approved; approve them by \
-         running this in a terminal, or approve this invocation with --force (-f)\n  \
-         try: sbt {} --force",
-        loaded.files[0].display(),
-        words.join(" ")
-    );
-    confirm_or(ctx, "Apply?", force, &refusal)
+/// Applying an approved, unchanged environment asks nothing. Otherwise `--force` approves this
+/// invocation only, and a yes on a terminal is recorded: before applying, so a create that then
+/// fails doesn't ask again.
+fn approve<R: Runner>(
+    ctx: &Ctx<R>,
+    loaded: &Loaded,
+    name: &str,
+    plan: &Planned,
+    force: bool,
+) -> Result<()> {
+    if plan.need == Need::No || force {
+        return Ok(());
+    }
+    if !ctx.stdin_tty {
+        // The command as given, quoted for the shell, with `--force` added (sbx does the same).
+        let words: Vec<String> = ctx.args.iter().map(|a| shell_word(a)).collect();
+        let file = loaded.files[0].display();
+        let retry = format!("\n  try: sbt {} --force", words.join(" "));
+        if plan.need == Need::HostCommands {
+            bail!(
+                "{file} declares commands that run on this machine, which must be approved on \
+                 every invocation; approve the plan by running it in a terminal or with --force \
+                 (-f), or remember approval until the plan changes with the setting below{retry}\n   \
+                 or: sbt settings set env.rememberHostCommands true"
+            );
+        }
+        bail!(
+            "{file} changes things outside the sandbox that have not been approved; approve them \
+             by running this in a terminal, or approve this invocation with --force (-f){retry}"
+        );
+    }
+    let mut out = &ctx.out;
+    write!(out, "  Approve this plan? (y/N) ")?;
+    out.flush()?;
+    if !super::is_yes(&ctx.read_line()?) {
+        bail!("aborted");
+    }
+    approval::save(&ctx.paths, name, &loaded.files, &plan.resources, ctx.now)
 }
 
 /// `s` as one shell word: as is when that's safe, else single-quoted.
@@ -825,16 +915,185 @@ mod tests {
     }
 
     #[test]
-    fn plan_and_cloud_flags_exit_2() {
+    fn cloud_flags_exit_2() {
         let mut t = with_file(FILE);
-        let err = t.sbt(&["env", "plan"]).unwrap_err();
-        assert_eq!(err.to_string(), "`sbt env plan` is not implemented yet");
-        assert_eq!(exit_code(&err), 2);
         let err = t
             .sbt(&["env", "create", "--on-timeout", "stop"])
             .unwrap_err();
         assert_eq!(exit_code(&err), 2, "{err}");
         assert!(creates(&t).is_empty());
+    }
+
+    const COMMAND_SECRET: &str = "secrets:\n  github:\n    command: printf tok\n";
+
+    /// `text` as the file, approved on a terminal and created. Afterwards there is no terminal
+    /// and the sandbox exists.
+    fn approved(text: &str) -> TestEnv {
+        let mut t = with_file(text);
+        missing_then_created(&t, 2);
+        t.answer("y\n");
+        t.sbt(&["env", "create"]).unwrap();
+        assert!(t.stdout().contains("\n  Approve this plan? (y/N) "));
+        t.ctx.stdin_tty = false;
+        t
+    }
+
+    fn record(t: &TestEnv) -> Option<String> {
+        std::fs::read_to_string(t.ctx.paths.env_records().join("claude-proj.toml")).ok()
+    }
+
+    /// `env plan`'s output with the project directory masked.
+    fn plan(t: &mut TestEnv) -> String {
+        t.sbt(&["env", "plan"]).unwrap();
+        t.stdout()
+            .replace(&t.ctx.cwd.display().to_string(), "<proj>")
+    }
+
+    #[test]
+    fn plan_of_a_fresh_environment() {
+        let mut t = with_file(&format!("{FILE}{COMMAND_SECRET}"));
+        t.no_machine();
+        insta::assert_snapshot!(plan(&mut t));
+        assert!(creates(&t).is_empty());
+        assert_eq!(record(&t), None, "a plan records nothing");
+    }
+
+    #[test]
+    fn plan_of_an_approved_environment() {
+        let mut t = approved(FILE);
+        assert_eq!(
+            plan(&mut t),
+            "ENVIRONMENT\n  Name:  claude-proj\n  File:  <proj>/sbxenv.yaml\n\n  \
+             0 to add · 0 to change · 0 to destroy\n  \
+             ✓ already approved — applying asks nothing\n"
+        );
+    }
+
+    #[test]
+    fn plan_of_a_changed_environment() {
+        let mut t = approved(FILE);
+        let changed = FILE.replace("X: one", "X: two").replace("8080", "8081");
+        std::fs::write(t.ctx.cwd.join("sbxenv.yaml"), changed).unwrap();
+        insta::assert_snapshot!(plan(&mut t));
+    }
+
+    #[test]
+    fn plan_of_approved_host_commands_before_a_create() {
+        let mut t = approved(&format!("{FILE}{COMMAND_SECRET}"));
+        t.no_machine();
+        insta::assert_snapshot!(plan(&mut t));
+    }
+
+    #[test]
+    fn an_approved_environment_applies_without_a_terminal() {
+        let mut t = approved(FILE);
+        // Attaching, and creating it again after a plain `rm`.
+        t.sbt(&["env", "run", "-d"]).unwrap();
+        missing_then_created(&t, 2);
+        t.sbt(&["env", "create"]).unwrap();
+        assert_eq!(creates(&t).len(), 2);
+    }
+
+    #[test]
+    fn force_approves_nothing() {
+        let mut t = with_file(FILE);
+        missing_then_created(&t, 2);
+        t.sbt(&["env", "create", "--force"]).unwrap();
+        assert_eq!(record(&t), None);
+        let err = t.sbt_err(&["env", "run", "-d"]);
+        assert!(err.contains("have not been approved"), "{err}");
+
+        // Nor does it replace an earlier approval.
+        let mut t = approved(FILE);
+        let before = record(&t);
+        std::fs::write(
+            t.ctx.cwd.join("sbxenv.yaml"),
+            FILE.replace("X: one", "X: two"),
+        )
+        .unwrap();
+        t.sbt(&["env", "run", "-d", "--force"]).unwrap();
+        assert_eq!(record(&t), before);
+    }
+
+    #[test]
+    fn a_changed_file_asks_again() {
+        let mut t = approved(FILE);
+        std::fs::write(
+            t.ctx.cwd.join("sbxenv.yaml"),
+            FILE.replace("X: one", "X: two"),
+        )
+        .unwrap();
+        let err = t.sbt_err(&["env", "run", "-d"]);
+        assert!(err.contains("have not been approved"), "{err}");
+        // Declining on a terminal records nothing new.
+        let before = record(&t);
+        t.answer("n\n");
+        assert_eq!(t.sbt_err(&["env", "run", "-d"]), "aborted");
+        assert_eq!(record(&t), before);
+    }
+
+    #[test]
+    fn unchanged_host_commands_ask_before_a_create_unless_remembered() {
+        let mut t = approved(&format!("{FILE}{COMMAND_SECRET}"));
+        // Attaching runs no command: nothing to ask.
+        t.sbt(&["env", "run", "-d"]).unwrap();
+        t.stdout();
+
+        missing_then_created(&t, 2);
+        let file = t.ctx.cwd.join("sbxenv.yaml").display().to_string();
+        assert_eq!(
+            t.sbt_err(&["env", "create"]),
+            format!(
+                "{file} declares commands that run on this machine, which must be approved on \
+                 every invocation; approve the plan by running it in a terminal or with --force \
+                 (-f), or remember approval until the plan changes with the setting below\n  \
+                 try: sbt env create --force\n   \
+                 or: sbt settings set env.rememberHostCommands true"
+            )
+        );
+        let out = t.stdout();
+        assert!(
+            out.ends_with(
+                "  ! nothing in this plan has changed, but its commands run on this machine, \
+                 outside the sandbox, with your own privileges, which needs explicit approval on \
+                 each run\n"
+            ),
+            "{out}"
+        );
+
+        t.ctx
+            .settings
+            .set("env.rememberHostCommands", "true")
+            .unwrap();
+        missing_then_created(&t, 2);
+        t.sbt(&["env", "create"]).unwrap();
+    }
+
+    #[test]
+    fn env_rm_forgets_the_approval() {
+        let mut t = approved(FILE);
+        assert!(record(&t).is_some());
+        listed(&t, &[]);
+        t.sbt(&["env", "rm", "--force"]).unwrap();
+        assert_eq!(record(&t), None);
+    }
+
+    #[test]
+    fn the_record_never_holds_a_secret_value() {
+        let t = approved(&format!(
+            "{FILE}secrets:\n  github:\n    value: s3cr3t-value\n"
+        ));
+        let record = record(&t).unwrap();
+        assert!(!record.contains("s3cr3t-value"), "{record}");
+        assert!(record.contains("sha256:"), "{record}");
+    }
+
+    #[test]
+    fn a_broken_record_is_no_approval() {
+        let mut t = approved(FILE);
+        std::fs::write(t.ctx.paths.env_records().join("claude-proj.toml"), "x = [").unwrap();
+        let err = t.sbt_err(&["env", "run", "-d"]);
+        assert!(err.contains("have not been approved"), "{err}");
     }
 
     #[test]

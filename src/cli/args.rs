@@ -158,8 +158,8 @@ pub enum EnvCmd {
     Exec(EnvExecArgs),
     /// Remove a sandbox environment and its scoped resources
     Rm(EnvRmArgs),
-    /// Show what an environment would change outside the sandbox (not implemented yet)
-    Plan(Passthrough),
+    /// Show what applying an environment would change, without changing anything
+    Plan(EnvPlanArgs),
 }
 
 /// What every `env` command takes.
@@ -209,6 +209,25 @@ pub struct EnvCreateArgs {
     pub common: EnvCommon,
     #[command(flatten)]
     pub apply: EnvApplyOpts,
+}
+
+/// `env plan`: what `env create` takes, without `--force`.
+#[derive(Debug, Args)]
+pub struct EnvPlanArgs {
+    #[command(flatten)]
+    pub common: EnvCommon,
+    /// Override workspace.clone in sbxenv.yaml (see 'sbt create --clone')
+    #[arg(long, num_args = 0..=1, require_equals = true, default_missing_value = "true")]
+    pub clone: Option<bool>,
+    /// Value for an argument a kit declares, as name=value for every kit or kit.name=value for one (can be repeated); overrides the args a kits: entry pins in sbxenv.yaml
+    #[arg(long = "kit-arg", value_name = "NAME=VALUE")]
+    pub kit_arg: Vec<String>,
+    /// File of name=value kit arguments, one per line (can be repeated); --kit-arg overrides
+    #[arg(long = "kit-args-file", value_name = "FILE")]
+    pub kit_args_file: Vec<PathBuf>,
+    /// Plan without the host lifecycle commands the environment declares (smolbento runs none)
+    #[arg(long = "skip-host-commands")]
+    pub skip_host_commands: bool,
 }
 
 #[derive(Debug, Args)]

@@ -80,8 +80,9 @@ pub fn forget(paths: &Paths, name: &str) -> Result<()> {
     }
 }
 
-/// Whether applying `current` (from `files`) has to ask. `exists` says the sandbox does: a host
-/// command only runs when it is created.
+/// Whether applying `current` (from `files`) has to ask. `exists` says the sandbox does: the
+/// file's host commands are taken up only when it is created (an existing sandbox keeps the
+/// ones stored at its create).
 pub fn need(
     record: Option<&Record>,
     files: &[PathBuf],
@@ -111,17 +112,17 @@ pub fn lines(record: Option<&Record>, current: &[Resource], exists: bool) -> Vec
     if !exists {
         return current
             .iter()
-            .map(|r| {
-                let same = recorded(r) == Some(r);
-                if r.host_path && !same {
-                    Line {
+            .filter_map(|r| {
+                // A path on the host is there already: it is approved, not added.
+                if !r.host_path {
+                    Some(Line::new(Marker::Add, r))
+                } else if recorded(r) == Some(r) {
+                    None
+                } else {
+                    Some(Line {
                         note: Some("present, not recorded as applied, needs your approval"),
                         ..Line::new(Marker::Approve, r)
-                    }
-                } else if r.host_command && same {
-                    Line::new(Marker::Run, r)
-                } else {
-                    Line::new(Marker::Add, r)
+                    })
                 }
             })
             .collect();
@@ -306,13 +307,11 @@ mod tests {
     }
 
     #[test]
-    fn an_approved_host_command_is_run_before_a_create() {
+    fn an_approved_host_path_is_not_listed_before_a_create() {
         let resources = vec![workspace(), command()];
         let r = record(resources.clone());
         let lines = lines(Some(&r), &resources, false);
-        let markers: Vec<Marker> = lines.iter().map(|l| l.marker).collect();
-        // An approved workspace is to add again: the sandbox is gone.
-        assert_eq!(markers, [Marker::Add, Marker::Run]);
+        assert_eq!(lines, [Line::new(Marker::Add, &command())]);
     }
 
     #[test]

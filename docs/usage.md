@@ -722,7 +722,8 @@ sandboxOptions:
 ```
 
 ```sh
-sbt env create                       # from ./sbxenv.yaml: summary, ask, create (no attach)
+sbt env plan                         # show what applying would do; changes nothing
+sbt env create                       # from ./sbxenv.yaml: plan, ask once, create (no attach)
 sbt env run -f ./team ./local.yaml   # create if missing, then attach; -f skips the question
 sbt env exec -- make test            # run a command in the environment's sandbox
 sbt env rm                           # remove the sandbox and the secrets scoped to it
@@ -736,18 +737,37 @@ sbt env rm                           # remove the sandbox and the secrets scoped
   `${{ env.fileDir }}` is the declaring file's directory.
 - **Values.** As in YAML 1.2, only `true` and `false` are booleans. Text fields take numbers and
   booleans as written: `PORT: 8080` and `DEBUG: on` are the strings `8080` and `on`.
-- **User defaults.** `~/.sbxenv.yaml` applies to every environment. It can't set `name`, and its
-  `workspace` must be `${{ env.projectDir }}` or below it.
+- **User defaults.** `~/.sbxenv.yaml` applies to every environment, and is enough on its own: with
+  it, `sbt env run` works in a directory that has no `sbxenv.yaml`. It can't set `name`, and its
+  `workspace` must be `${{ env.projectDir }}` or below it. For example, to give the agent a clone
+  of whatever repo you are in:
+
+  ```yaml
+  schemaVersion: "1"
+  agent: claude
+  workspace:
+    path: ${{ env.projectDir }}
+    clone: true
+  ```
 - **Args.** A file declares `args:` and uses them as `${{ env.args.NAME }}`. Each arg needs
   exactly one of `default` or `required: true`, and may limit its values with `enum` or `pattern`
   (not both). Give values with `--env-arg NAME=VALUE` or
   `--env-args-file FILE` (`--env-arg` wins).
 - **Name.** `name:` or `--name`; otherwise `<agent>-<workspace directory>`. The name links a file
   to its sandbox, so give every command the same `--name` you created it with.
-- **Approval.** `env create` and `env run` print a summary of what they will create, including any
-  host commands, and ask `Apply? [y/N]` every time (nothing is remembered yet). `-f/--force`
-  approves that one invocation; without a terminal and without `--force` they refuse. `env rm`
-  asks `Remove? [y/N]` the same way. `env exec` never asks.
+- **Plan.** `env plan` prints what applying would do and whether it would ask, and changes
+  nothing. `+` adds, `~` changes, `-` removes, and `!` is a path on your machine that isn't
+  approved yet. For a sandbox that exists it shows only what differs from what you approved;
+  only `env` values reach an existing sandbox, so other lines say `waits for the next create`.
+- **Approval.** `env create` and `env run` print the plan and ask `Approve this plan? (y/N)`.
+  A yes is remembered for that environment: later runs apply without asking, with or without a
+  terminal, until the files or anything in the plan changes. `-f/--force` approves one invocation
+  and is not remembered; without a terminal and without `--force` an unapproved plan is refused.
+  `env rm` asks `Remove? [y/N]` and forgets the approval. `env exec` never asks.
+- **Host commands.** A secret with a `command:` source runs that command on your machine. The
+  file's commands are taken up when the sandbox is created, so such a create asks every time,
+  even when nothing changed. To let an approval stand until the commands change:
+  `sbt settings set env.rememberHostCommands true`.
 - **`env create`** refuses a sandbox that already exists (use `env run`, or `env rm` first).
   Secrets are stored at the sandbox's scope before the sandbox is made. A failed create leaves
   them; `env rm` with the same files removes them.
