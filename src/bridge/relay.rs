@@ -13,7 +13,8 @@ use std::time::{Duration, Instant};
 
 use anyhow::Result;
 
-use super::server::{self, DEADLINE, POLL, Request, Response};
+use super::http::{self, Request, Response};
+use super::listener::{DEADLINE, POLL};
 use crate::smolvm::{ExecSpec, Output};
 use crate::util::sh_quote;
 
@@ -155,7 +156,7 @@ fn answer(stream: &TcpStream, port: u16, exec: &Exec, guest: &Guest, stop: &Atom
     if stream.set_nonblocking(false).is_err() || stream.set_write_timeout(Some(DEADLINE)).is_err() {
         return;
     }
-    let resp = match server::read_within(stream, Instant::now() + DEADLINE, stop) {
+    let resp = match http::read_within(stream, Instant::now() + DEADLINE, stop) {
         Ok(req) => replay(exec, guest, port, &req),
         Err(resp) => ours(&resp),
     };
@@ -177,7 +178,7 @@ fn replay(exec: &Exec, guest: &Guest, port: u16, req: &Request) -> Vec<u8> {
         || !method.bytes().all(|b| b.is_ascii_uppercase())
         || !target.starts_with('/')
     {
-        return ours(&server::bad_request());
+        return ours(&http::bad_request());
     }
     let spec = ExecSpec::sh(
         &guest.machine,
@@ -243,7 +244,7 @@ fn pass_through(guest: &str) -> Option<Vec<u8>> {
 /// One of our own (error) responses, as bytes.
 fn ours(resp: &Response) -> Vec<u8> {
     let mut out = Vec::new();
-    let _ = server::write_response(&mut out, resp);
+    let _ = http::write_response(&mut out, resp);
     out
 }
 

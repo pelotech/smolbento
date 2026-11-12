@@ -4,8 +4,9 @@
 pub mod agent;
 pub mod filter;
 mod host;
+mod http;
+mod listener;
 mod relay;
-mod server;
 mod shims;
 
 use std::fs;
@@ -17,7 +18,8 @@ use sha2::{Digest, Sha256};
 use crate::util::hex;
 
 pub use host::{attach, handlers};
-pub use server::{Handlers, Server, serve};
+pub use http::{Handlers, serve};
+pub use listener::Server;
 pub use shims::{install_cmd, remove_cmd};
 
 /// Where the host socket appears in the guest (`--mount-socket`).
