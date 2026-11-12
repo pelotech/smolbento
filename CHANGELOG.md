@@ -1,5 +1,18 @@
 # Changelog
 
+## [0.15.2](https://github.com/pelotech/smolbento/compare/v0.15.1...v0.15.2) (2026-11-12)
+
+
+### Bug Fixes
+
+* keep error hints, close run's early returns, and give MCP secrets their own label ([#75](https://github.com/pelotech/smolbento/issues/75)) ([2a05e5f](https://github.com/pelotech/smolbento/commit/2a05e5f9d92e1e0b379e564852c6f85bb1bcefc7))
+* **kits:** export a v3 kit argument that declares env ([#78](https://github.com/pelotech/smolbento/issues/78)) ([46cde51](https://github.com/pelotech/smolbento/commit/46cde51d4a8f342ffcba155ad4e2b36cabd19aeb))
+
+
+### Chores
+
+* build the release targets on pull requests; pin the cross-compile image ([#76](https://github.com/pelotech/smolbento/issues/76)) ([76794ac](https://github.com/pelotech/smolbento/commit/76794ac27ace0947580ae078d82fd8cc61858425))
+
 ## [0.15.1](https://github.com/pelotech/smolbento/compare/v0.15.0...v0.15.1) (2026-11-12)
 
 
