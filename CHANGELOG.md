@@ -1,5 +1,49 @@
 # Changelog
 
+## [0.14.0](https://github.com/pelotech/smolbento/compare/v0.13.0...v0.14.0) (2026-11-12)
+
+
+### Features
+
+* require smolvm 1.34.1 and stream plain exec output ([#67](https://github.com/pelotech/smolbento/issues/67)) ([3493942](https://github.com/pelotech/smolbento/commit/34939428368e6fd0a761b9152fce05869172785d))
+
+
+### Bug Fixes
+
+* guard approval denies and refuse a non-private bridge socket directory ([#69](https://github.com/pelotech/smolbento/issues/69)) ([bc4bcb4](https://github.com/pelotech/smolbento/commit/bc4bcb4b3fb12e18865883c3dbb72efcf4b321f3))
+* **run:** forget the sandbox's policy and secrets on --rm ([#53](https://github.com/pelotech/smolbento/issues/53)) ([05b0e14](https://github.com/pelotech/smolbento/commit/05b0e145d0e895fede3ab90fb290bfe3c5e6e3d7))
+
+
+### Refactors
+
+* decouple cli from domain modules and remove duplication ([#68](https://github.com/pelotech/smolbento/issues/68)) ([0ae8d45](https://github.com/pelotech/smolbento/commit/0ae8d4530a55cb5cfd04448ba0e39b2082515f97))
+* **kits:** split resolve_for and apply into named steps ([#59](https://github.com/pelotech/smolbento/issues/59)) ([1c19de1](https://github.com/pelotech/smolbento/commit/1c19de103ae2ce0a0f31fc7ae22987b8629d82df))
+* move Ctx out of cli and split lifecycle.rs ([#58](https://github.com/pelotech/smolbento/issues/58)) ([135fef6](https://github.com/pelotech/smolbento/commit/135fef613f6b7e4595e300d1e639d44d2acbc752))
+* small cleanups from the project review ([#57](https://github.com/pelotech/smolbento/issues/57)) ([e8dab3c](https://github.com/pelotech/smolbento/commit/e8dab3c74695532750cc5f7869852f2561709f62))
+
+
+### Chores
+
+* **deps:** lock file maintenance ([#63](https://github.com/pelotech/smolbento/issues/63)) ([7513714](https://github.com/pelotech/smolbento/commit/7513714183dc36be3a0707645ae58eb56df3e2c3))
+* **deps:** update cachix/install-nix-action action to v31.11.3 ([#60](https://github.com/pelotech/smolbento/issues/60)) ([c310c1a](https://github.com/pelotech/smolbento/commit/c310c1a77bb7982932188a7caf69c73d30a6add1))
+* **deps:** update dependency smol-machines/smolvm to v1.33.0 ([#61](https://github.com/pelotech/smolbento/issues/61)) ([2c8500f](https://github.com/pelotech/smolbento/commit/2c8500f4409fff23fcc2ec63a5d7d15ee218760b))
+* **deps:** update docker/sandbox-templates docker tag ([#62](https://github.com/pelotech/smolbento/issues/62)) ([18e4225](https://github.com/pelotech/smolbento/commit/18e4225b149273e7d3ec2cf001793bd2003d1650))
+* **deps:** update pre-commit hook zizmorcore/zizmor-pre-commit to v1.32.0 ([#64](https://github.com/pelotech/smolbento/issues/64)) ([ddee5d1](https://github.com/pelotech/smolbento/commit/ddee5d113c35c281a5f3b656ddb543e76feabed6))
+* **deps:** update rust crate toml to v1.2.0 ([#65](https://github.com/pelotech/smolbento/issues/65)) ([8f7a8be](https://github.com/pelotech/smolbento/commit/8f7a8be6c1a0e05e5f7fb5b78137aa3d6dcb82ee))
+* **deps:** update sigstore/cosign-installer action to v4.1.3 ([#66](https://github.com/pelotech/smolbento/issues/66)) ([8f7a2ea](https://github.com/pelotech/smolbento/commit/8f7a2ea3acfdba7167e9dedf9c564c655e59ec99))
+
+
+### Docs
+
+* **agents:** record the smolvm behaviour smolbento relies on ([#51](https://github.com/pelotech/smolbento/issues/51)) ([20c2350](https://github.com/pelotech/smolbento/commit/20c2350368c79cf1c7a7b92ff2eda1b49524f560))
+
+
+### Tests
+
+* **e2e:** push the host-mount kit instead of building it ([#54](https://github.com/pelotech/smolbento/issues/54)) ([c4482b3](https://github.com/pelotech/smolbento/commit/c4482b3851bfccd830198459092c469ed14e9f8b))
+* read prompt answers through Ctx so prompts can be tested ([#56](https://github.com/pelotech/smolbento/issues/56)) ([23c62ee](https://github.com/pelotech/smolbento/commit/23c62ee14788a94493c3f56a84b855118fc1fe30))
+* TestEnv helpers and Kit::new ([#55](https://github.com/pelotech/smolbento/issues/55)) ([2330868](https://github.com/pelotech/smolbento/commit/2330868ed8c6c05ed9f76d3f9a8f752790afd5a6))
+
 ## [0.13.0](https://github.com/pelotech/smolbento/compare/v0.12.0...v0.13.0) (2026-10-31)
 
 
