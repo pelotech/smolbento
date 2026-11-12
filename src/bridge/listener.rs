@@ -3,7 +3,7 @@
 
 use std::fs;
 use std::io::Read;
-use std::os::unix::fs::{DirBuilderExt, MetadataExt, PermissionsExt};
+use std::os::unix::fs::MetadataExt;
 use std::os::unix::net::{UnixListener, UnixStream};
 use std::path::{Path, PathBuf};
 use std::sync::Arc;
@@ -11,7 +11,7 @@ use std::sync::atomic::{AtomicBool, Ordering};
 use std::thread::{self, JoinHandle};
 use std::time::{Duration, Instant};
 
-use anyhow::{Context, Result, bail};
+use anyhow::{Context, Result};
 
 /// How long a client has, from its connect, to send its whole request; also how long writing the
 /// answer may take. Requests are handled one at a time, so this bounds what a slow client holds.
@@ -68,7 +68,7 @@ impl Drop for Server {
 
 fn bind(path: &Path) -> Result<Option<UnixListener>> {
     if let Some(dir) = path.parent() {
-        make_private_dir(dir)?;
+        super::private_dir(dir, crate::util::host_uid())?;
     }
     if fs::symlink_metadata(path).is_ok() {
         if UnixStream::connect(path).is_ok() {
@@ -82,25 +82,6 @@ fn bind(path: &Path) -> Result<Option<UnixListener>> {
         Err(e) if e.kind() == std::io::ErrorKind::AddrInUse => Ok(None),
         Err(e) => Err(e).with_context(|| format!("listening on {}", path.display())),
     }
-}
-
-/// Creates `dir` 0700, or checks that an existing one is a directory of ours (it is under the
-/// shared `/tmp`) and tightens it to 0700.
-fn make_private_dir(dir: &Path) -> Result<()> {
-    match fs::DirBuilder::new().mode(0o700).create(dir) {
-        Err(e) if e.kind() != std::io::ErrorKind::AlreadyExists => {
-            return Err(e).with_context(|| format!("creating {}", dir.display()));
-        }
-        _ => {}
-    }
-    let m = fs::symlink_metadata(dir)?;
-    if !m.is_dir() || m.uid() != crate::util::host_uid() {
-        bail!("{} isn't a directory owned by you", dir.display());
-    }
-    if m.mode() & 0o777 != 0o700 {
-        fs::set_permissions(dir, fs::Permissions::from_mode(0o700))?;
-    }
-    Ok(())
 }
 
 /// A socket that can wait a while for data: Unix (the bridge) or TCP (the login relay).

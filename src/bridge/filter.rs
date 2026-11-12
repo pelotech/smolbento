@@ -370,10 +370,13 @@ mod tests {
         }
     }
 
-    /// macOS caps socket paths near 104 bytes: keep them under /tmp.
+    /// macOS caps socket paths near 104 bytes: keep them under /tmp. Private, as a socket's
+    /// directory must be.
     fn short_dir() -> tempfile::TempDir {
+        use std::os::unix::fs::PermissionsExt;
         tempfile::Builder::new()
             .prefix("sbt")
+            .permissions(std::fs::Permissions::from_mode(0o700))
             .tempdir_in("/tmp")
             .unwrap()
     }
