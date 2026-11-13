@@ -187,6 +187,30 @@ impl Resource {
     }
 }
 
+/// A host as smolvm reads it in an allow entry or a credential host: `x` covers x and its
+/// subdomains (`--allow-host`), `*.x` only the subdomains of x (a pattern).
+pub(crate) enum SmolvmHost<'a> {
+    Exact(&'a str),
+    Subdomains(&'a str),
+}
+
+impl<'a> SmolvmHost<'a> {
+    /// `host` must already be lowercase.
+    pub(crate) fn parse(host: &'a str) -> Self {
+        match host.strip_prefix("*.") {
+            Some(domain) => Self::Subdomains(domain),
+            None => Self::Exact(host),
+        }
+    }
+
+    pub(crate) fn covers(&self, host: &str) -> bool {
+        match *self {
+            Self::Exact(h) => host == h || is_under(host, h),
+            Self::Subdomains(d) => is_under(host, d),
+        }
+    }
+}
+
 /// Whether `host` is a subdomain (at any depth) of `domain`.
 pub(crate) fn is_under(host: &str, domain: &str) -> bool {
     host.strip_suffix(domain)
