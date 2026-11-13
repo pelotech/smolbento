@@ -1,5 +1,13 @@
 # Changelog
 
+## [0.21.0](https://github.com/pelotech/smolbento/compare/v0.20.1...v0.21.0) (2026-11-13)
+
+
+### Features
+
+* **kit:** kit pack, push and pull for v2 kits ([#98](https://github.com/pelotech/smolbento/issues/98)) ([91c22b1](https://github.com/pelotech/smolbento/commit/91c22b1e455912501879bfd6632402eb6d1a29e7))
+* **kit:** kit sign, kit verify and kit push --sign ([#100](https://github.com/pelotech/smolbento/issues/100)) ([3e6a72c](https://github.com/pelotech/smolbento/commit/3e6a72cf7d2eebd172e78cd445d54b7be760aa4d))
+
 ## [0.20.1](https://github.com/pelotech/smolbento/compare/v0.20.0...v0.20.1) (2026-11-13)
 
 
