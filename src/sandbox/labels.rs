@@ -20,6 +20,9 @@ pub const KITS: &str = "sbx.kits";
 pub const COMMAND: &str = "sbx.command";
 /// The image config's `User` a v3 workload kit's agent runs as (`0` for root).
 pub const USER: &str = "sbx.user";
+/// Created with the workload user set to the session user, so smolvm maps the workspace to it
+/// (smolvm 1.34.2+). Sandboxes without it are from an older smolbento and must be recreated.
+pub const MAPPED: &str = "sbx.mapped";
 /// A v3 workload kit's image WORKDIR, when not `/`.
 pub const WORKDIR: &str = "sbx.workdir";
 /// The agent file in the guest of a workload kit that declares one (`kit add` indexes into it).
@@ -131,6 +134,8 @@ pub struct Meta {
     pub command: Option<Vec<String>>,
     /// A v3 workload kit's image user: the agent and `exec` run as it, the agent under `/bin/bash`.
     pub user: Option<String>,
+    /// Created with the workload user set to the session user (`sbx.mapped`).
+    pub mapped: bool,
     /// A v3 workload's image WORKDIR, where install hooks run (`kit add` too); `None` for `/`.
     pub image_workdir: Option<String>,
     /// A workload kit's agent file in the guest; `None` for a preset (its file follows from its
@@ -199,6 +204,7 @@ impl Meta {
             (KITS, (!self.kits.is_empty()).then(|| json(&self.kits))),
             (COMMAND, self.command.as_ref().map(json)),
             (USER, self.user.clone()),
+            (MAPPED, flag(self.mapped)),
             (WORKDIR, self.image_workdir.clone()),
             (AGENT_FILE, self.agent_file.clone()),
             (CREDENTIAL_INSTALL, list(&self.credential_install)),
@@ -267,6 +273,7 @@ impl Meta {
             kits: json(labels, KITS).unwrap_or_default(),
             command: json(labels, COMMAND),
             user: text(USER),
+            mapped: flag(MAPPED),
             image_workdir: text(WORKDIR),
             agent_file: text(AGENT_FILE),
             credential_install: list(labels.get(CREDENTIAL_INSTALL)),

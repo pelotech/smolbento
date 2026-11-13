@@ -14,25 +14,20 @@ fn start_applies_network_then_starts_with_env_then_setup() {
         "machine update -n sbx-claude-myrepo --net --reset-allow-list"
     );
     assert_eq!(lines[2], "machine start -n sbx-claude-myrepo --branchable");
-    assert!(
-        lines[3].ends_with("usermod -o -u 501 agent"),
-        "{}",
-        lines[3]
-    );
-    assert!(lines[4].ends_with(&hosts_cmd()), "{lines:#?}");
-    assert!(lines[5].ends_with(&bridge::remove_cmd()), "{lines:#?}");
+    assert!(lines[3].ends_with(&hosts_cmd()), "{lines:#?}");
+    assert!(lines[4].ends_with(&bridge::remove_cmd()), "{lines:#?}");
     assert_eq!(
-        lines[6],
+        lines[5],
         format!("machine exec --name sbx-claude-myrepo -u root -d -- sh -c {DOCKER_START}")
     );
     assert_eq!(
-        lines[7],
+        lines[6],
         format!(
             "machine exec --name sbx-claude-myrepo -u root -- sh -c {}",
             startup_cmd(None)
         )
     );
-    assert_eq!(lines.len(), 8, "{lines:#?}");
+    assert_eq!(lines.len(), 7, "{lines:#?}");
     assert_eq!(
         vm.runner().envs(),
         vec![vec![("TOK".to_string(), "secret".to_string())]]
@@ -98,7 +93,7 @@ fn create_creates_and_starts() {
     let fake = FakeRunner::new();
     let created = STATUS
         .replace("\"state\": \"running\"", "\"state\": \"created\"")
-        .replace("\"true\"", "\"false\"");
+        .replace("\"sbx.docker\": \"true\"", "\"sbx.docker\": \"false\"");
     fake.ok(&["machine", "status"], &created);
     let vm = Smolvm::new(fake);
     let sb = create(&vm, &req, &plan(), |_| unreachable!(), &mut |_| {}).unwrap();
@@ -116,10 +111,10 @@ fn create_creates_and_starts() {
     assert_eq!(lines[3], "machine start -n sbx-claude-myrepo --branchable");
     assert_eq!(
         lines.len(),
-        8,
+        7,
         "no dockerd for a non-docker sandbox: {lines:?}"
     );
-    assert!(lines[7].ends_with(&startup_cmd(None)), "{lines:?}");
+    assert!(lines[6].ends_with(&startup_cmd(None)), "{lines:?}");
 }
 
 #[test]
@@ -134,7 +129,7 @@ fn an_install_grant_is_served_only_while_the_install_hooks_run() {
         let label = serde_json::to_string(grant).unwrap();
         let status = STATUS
             .replace("\"state\": \"running\"", "\"state\": \"created\"")
-            .replace("\"true\"", "\"false\"")
+            .replace("\"sbx.docker\": \"true\"", "\"sbx.docker\": \"false\"")
             .replace(
                 "\"sbx.name\": \"claude-myrepo\"",
                 &format!("\"sbx.name\": \"{name}\", \"sbx.ssh-agent\": {label}"),
@@ -190,9 +185,7 @@ fn create_runs_kit_steps_in_lifecycle_order() {
     assert_eq!(*dropped.borrow(), vec!["r-npm".to_string()]);
     let lines = vm.runner().call_lines();
     let start = position(&lines, "start", |l| l.starts_with("machine start"));
-    let uid = position(&lines, "usermod", |l| {
-        l.ends_with("usermod -o -u 501 agent")
-    });
+    let hosts = position(&lines, "hosts", |l| l.ends_with(&hosts_cmd()));
     let install1 = position(&lines, "install 1", |l| {
         *l == exec_line("root", false, "echo install-1")
     });
@@ -216,8 +209,8 @@ fn create_runs_kit_steps_in_lifecycle_order() {
     });
     let runner = exec_line("root", false, &startup_cmd(None));
     assert!(
-        start < uid
-            && uid < install1
+        start < hosts
+            && hosts < install1
             && install1 < install2
             && install2 < update
             && update < files
@@ -303,7 +296,7 @@ fn install_only_credentials_restart_the_machine_without_them() {
     assert!(
         lines[restart..files]
             .iter()
-            .any(|l| l.ends_with("usermod -o -u 501 agent")),
+            .any(|l| l.ends_with(&hosts_cmd())),
         "setup runs again: {lines:#?}"
     );
     assert_eq!(
@@ -509,11 +502,8 @@ fn a_failed_hook_with_no_stderr_reports_its_stdout() {
 #[test]
 fn a_failed_first_start_of_a_kit_sandbox_removes_it() {
     let vm = created_vm();
-    vm.runner().fail(
-        &root_sh(MACHINE, &identity_cmd(501, 20)),
-        "EXEC_FAILED",
-        "usermod: busy",
-    );
+    vm.runner()
+        .fail(&["machine", "start"], "EXEC_FAILED", "boot: busy");
     let err = create(
         &vm,
         &request(),
@@ -526,7 +516,7 @@ fn a_failed_first_start_of_a_kit_sandbox_removes_it() {
         format!("{err:#}").starts_with("the first start failed (the sandbox was removed): "),
         "{err:#}"
     );
-    assert!(format!("{err:#}").contains("usermod: busy"), "{err:#}");
+    assert!(format!("{err:#}").contains("boot: busy"), "{err:#}");
     let lines = vm.runner().call_lines();
     assert_eq!(
         lines.last().unwrap(),

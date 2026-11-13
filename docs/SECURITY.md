@@ -101,7 +101,7 @@ access, so load only kits you trust.
   variables, but those hold placeholders, not the values, as everywhere in the sandbox. A failing
   startup step stops the sandbox from starting until it's fixed.
 - **A workload kit's agent** runs as the image's `USER`, or as root if the image sets none, as in
-  sbx. A non-root user gets your uid so it can write the workspace, like the built-in agents'
+  sbx. smolvm maps your workspace to that user so it can write it, like the built-in agents'
   `agent` user.
 - **Kit host mounts** (`host-mount@1`) are directories on your machine. What the sandbox writes
   there lands on your disk, outside the VM, and every other sandbox of the same kit reads it, now
@@ -187,7 +187,7 @@ access, so load only kits you trust.
   you can read its memory, including secret values; on every platform smolvm stops handing their
   idle memory back. Turn it off with `sbt settings set fork.enabled false` (from each sandbox's
   next start).
-- smolbento refuses to run as root on the host, because the agent takes the caller's uid.
+- smolbento refuses to run as root on the host, because smolvm doesn't map a workspace owned by root to the agent user.
 - While you're attached (`sbt run`, `sbt exec -it`), anything in the sandbox can open `https://`
   URLs in your browser and overwrite your clipboard (it can't read it). A malicious page opened
   this way runs in your real browser, with your logins. To stop URL opening, run

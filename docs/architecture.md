@@ -32,12 +32,13 @@ same paths, CPU and memory, published ports, labels, and a `sleep infinity` work
 VM up between sessions. Every sandbox uses smolvm's `virtio-net` network backend, which later phases
 need to change network policy and ports on a running sandbox.
 
-**Start** runs `smolvm machine start`, then two setup steps as root inside the VM:
+The machine's workload user is the one sessions run as (`agent`, or a workload kit's image user).
+smolvm 1.34.2+ shows a mounted host directory as owned by that user through an idmapped mount, so
+the agent can write your workspace and its files stay yours on the host.
 
-1. *Identity:* the image's `agent` user is given your uid (`usermod -o -u <uid> agent`). smolvm's
-   file sharing passes host uids through, so this is what lets the agent write your workspace and
-   makes its files yours on the host.
-2. *Docker:* Docker-enabled sandboxes get the shipped `docker` kit (`kits/docker/docker.yaml`, or
+**Start** runs `smolvm machine start`, then setup steps as root inside the VM:
+
+1. *Docker:* Docker-enabled sandboxes get the shipped `docker` kit (`kits/docker/docker.yaml`, or
    `--kit docker` on any image). Its startup hook starts `dockerd` in the background on every start.
    Its data lives in `/var/lib/docker` and `/var/lib/containerd`, the kit's volumes: directories on
    the VM's own disk rather than the image's overlay filesystem, because Docker's storage can't sit

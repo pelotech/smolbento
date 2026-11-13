@@ -115,9 +115,6 @@ terminal fail until you do.
 - Templates don't keep `/tmp`.
 - Shared skills are linked by a start script that runs as the `agent` user: images without that
   account get no links (a warning), and a required bundled kit skill there fails the create.
-- Only the agent's primary group takes your gid: group-writable shared directories aren't
-  writable through your other groups. Images without `groupmod` (busybox) keep their gid, so on
-  Linux the agent can't create files in the workspace unless that gid already matches yours.
 
 ## Needs smolvm support (later decisions)
 

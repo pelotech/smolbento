@@ -6,6 +6,7 @@
     "sbx.agent": "claude",
     "sbx.created": "1793026356",
     "sbx.docker": "true",
+    "sbx.mapped": "true",
     "sbx.name": "claude-myrepo",
     "sbx.workspace": "/Users/dev/myrepo",
     "sbx.workspaces": "[\"/Users/dev/myrepo\"]"

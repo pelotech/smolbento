@@ -110,8 +110,6 @@ fn plan_for<R: Runner>(
         network,
         env,
         remove,
-        uid: ctx.uid,
-        gid: ctx.gid,
         clone,
         branchable: meta.forkable() && ctx.settings.bool("fork.enabled")?,
         kit: None,
@@ -751,7 +749,6 @@ mod tests {
             panic!("restricted")
         };
         assert!(list.hosts().contains(&"api.github.com".to_string()));
-        assert_eq!(plan.uid, 501);
     }
 
     #[test]

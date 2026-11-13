@@ -93,10 +93,9 @@ pub fn hook_script(h: &Hook) -> String {
 }
 
 /// `script` as `user` from a root shell. `runuser` where the image has it (util-linux), else `su`.
-/// A numeric user runs as the account with that uid (`agent` has moved off uid 1000 to the host's
-/// uid, so a uid alone can't name it); a uid with no account runs through `setpriv`, if present.
-/// Exactly `1000` is sbx's image `agent` (uid 1000 there), so it runs as `agent` when the guest
-/// has that account, whatever uid it holds now.
+/// A numeric user runs as the account with that uid (`runuser` and `su` take names); a uid with
+/// no account runs through `setpriv`, if present. Exactly `1000` is sbx's image `agent`, so it
+/// runs as `agent` when the guest has that account, whatever uid the image gave it.
 pub fn as_user(user: Option<&str>, script: &str) -> String {
     as_user_in(user, script, "/etc/passwd")
 }

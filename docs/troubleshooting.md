@@ -10,7 +10,7 @@ and add `-D` to any command to print the smolvm commands it runs, for example `s
 
 ## `smolvm 1.x is too old`
 
-smolbento needs smolvm 1.34.1 or newer: `brew upgrade smolvm`.
+smolbento needs smolvm 1.34.4 or newer: `brew upgrade smolvm`.
 
 ## `could not run smolvm`
 
@@ -19,8 +19,8 @@ smolbento at it: `sbt settings set smolvm.path /path/to/smolvm`.
 
 ## `don't run sbt as root`
 
-Inside a sandbox, the `agent` user takes the uid of whoever runs `sbt`, so running as root would
-make the agent root too. Run `sbt` as your normal user. On Linux, give that user access to
+smolvm maps your workspace to the sandbox's agent user only when it runs as a normal user and the
+directory isn't owned by root, so the agent couldn't write it. Run `sbt` as your normal user. On Linux, give that user access to
 `/dev/kvm` instead of using `sudo`.
 
 ## `diagnose` says `FAIL /dev/kvm` (Linux)
@@ -41,8 +41,15 @@ reset a setting with `sbt settings unset <key>`.
 
 ## `Permission denied` writing the workspace
 
-smolbento gives the sandbox's `agent` user your uid each time the sandbox starts. If you see this
-with a custom `-t` image, check that the image has an `agent` user and the `usermod` command.
+smolvm shows your workspace as owned by the sandbox's workload user (`agent`). If you see this,
+check that the sandbox was created by this smolbento version and that your workspace isn't owned
+by root. A custom `-t` image must have an `agent` user, or the sandbox won't start.
+
+## `was created by an older smolbento`
+
+Sandboxes made before smolvm 1.34.4 idmapped mounts were set up differently and can't be started.
+Recreate them: `sbt rm NAME`, then create it again. `ls`, `inspect`, `rm`, `prune` and `reset`
+still work on them. Saved templates keep working.
 
 ## The first run is slow
 

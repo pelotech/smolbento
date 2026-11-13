@@ -111,6 +111,15 @@ impl CreateRequest {
     }
 }
 
+/// The machine's workload user: what `run` and `exec` use (a v3 workload's image user, else
+/// `agent`); root for an internal sandbox (`_builder`). smolvm maps the workspace to it.
+fn workload_user(req: &CreateRequest) -> String {
+    if name::is_internal(&req.name) {
+        return "root".into();
+    }
+    req.user.clone().unwrap_or_else(|| "agent".into())
+}
+
 /// The labels the sandbox gets.
 pub fn meta(req: &CreateRequest) -> Meta {
     let primary = req.workspaces.first().map(|w| w.path.display().to_string());
@@ -130,6 +139,7 @@ pub fn meta(req: &CreateRequest) -> Meta {
         kits: req.kits.clone(),
         command: req.command.clone(),
         user: req.user.clone(),
+        mapped: true,
         image_workdir: req.image_workdir.clone(),
         agent_file: req.agent_file.clone(),
         credential_install: req.credential_install.clone(),
@@ -245,8 +255,9 @@ pub fn spec(req: &CreateRequest) -> CreateSpec {
         credentials: req.credentials.clone(),
         smolfile: req.smolfile.clone(),
         from: req.template_pack.clone(),
-        // The workload runs as root so startup steps (dockerd) can; agents exec as `agent`.
-        user: Some("root".into()),
+        // The workload user is the one sessions run as: smolvm shows the workspace as owned by
+        // it. Startup steps exec as root explicitly.
+        user: Some(workload_user(req)),
         cmd: vec!["sleep".into(), "infinity".into()],
     }
 }
@@ -274,6 +285,25 @@ mod tests {
             created: 1000,
             ..Default::default()
         }
+    }
+
+    #[test]
+    fn the_workload_user_is_the_session_user() {
+        let user = |name: &str, user: Option<&str>| {
+            let mut req = request(false, vec![]);
+            req.name = name.into();
+            req.user = user.map(String::from);
+            (spec(&req).user, meta(&req).mapped)
+        };
+        // Presets: `agent`. A v3 workload: its image user, `0` when the image names none.
+        assert_eq!(user("claude.repo", None), (Some("agent".into()), true));
+        assert_eq!(
+            user("tool", Some("somebody:1001")).0.as_deref(),
+            Some("somebody:1001")
+        );
+        assert_eq!(user("tool", Some("0")).0.as_deref(), Some("0"));
+        // The internal builder stays root.
+        assert_eq!(user("_builder", None).0.as_deref(), Some("root"));
     }
 
     #[test]
@@ -328,7 +358,7 @@ mod tests {
             ]
         );
         assert_eq!(spec.workdir.as_deref(), Some("/w/repo"));
-        assert_eq!(spec.user.as_deref(), Some("root"));
+        assert_eq!(spec.user.as_deref(), Some("agent"));
         assert_eq!(spec.cmd, vec!["sleep", "infinity"]);
     }
 

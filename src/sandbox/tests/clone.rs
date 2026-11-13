@@ -313,13 +313,12 @@ fn a_plain_start_runs_the_startup_hooks_in_one_blocking_exec() {
     )
     .unwrap();
     let lines = vm.runner().call_lines();
-    assert_eq!(lines.len(), 6, "{lines:#?}");
-    assert!(lines[2].ends_with("usermod -o -u 501 agent"), "{lines:#?}");
-    assert!(lines[3].ends_with(&hosts_cmd()), "{lines:#?}");
-    assert!(lines[4].ends_with(&bridge::remove_cmd()), "{lines:#?}");
+    assert_eq!(lines.len(), 5, "{lines:#?}");
+    assert!(lines[2].ends_with(&hosts_cmd()), "{lines:#?}");
+    assert!(lines[3].ends_with(&bridge::remove_cmd()), "{lines:#?}");
     // A no-op without kits (no runner).
     assert_eq!(
-        lines[5],
+        lines[4],
         "machine exec --name sbx-r -u root -- sh -c \
          [ -x /etc/smolbento/startup ] || exit 0; exec /etc/smolbento/startup"
     );

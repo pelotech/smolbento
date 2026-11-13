@@ -265,8 +265,19 @@ pub(crate) fn a_failed_clone_create_removes_the_sandbox() {
     e.git_ok(&["add", "README"]);
     e.git_ok(&["commit", "-q", "-m", "host commit"]);
 
+    let archive = Image::alpine_agent_archive();
     let out = e.sbt(&[
-        "create", "--clone", "shell", ws, "--name", &e.name, "-t", "alpine", "--cpus", "1", "-m",
+        "create",
+        "--clone",
+        "shell",
+        ws,
+        "--name",
+        &e.name,
+        "-t",
+        archive.to_str().unwrap(),
+        "--cpus",
+        "1",
+        "-m",
         "1g",
     ]);
     let err = String::from_utf8_lossy(&out.stderr);

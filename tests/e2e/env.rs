@@ -46,15 +46,20 @@ pub(crate) fn sbx_sandbox_variables_reach_the_agent_exec_and_forks() {
     // (sbx images have it; Alpine doesn't).
     let m = E2e::new("envm");
     m.ok(&[
-        "create", "shell", "--name", &m.name, "-t", "alpine", "--cpus", "1", "-m", "1g",
+        "create",
+        "shell",
+        "--name",
+        &m.name,
+        "-t",
+        Image::alpine_agent_archive().to_str().unwrap(),
+        "--cpus",
+        "1",
+        "-m",
+        "1g",
     ]);
     guest_root(
         &m.name,
-        &format!(
-            "adduser -D -u {} agent && apk add -q bash \
-             && install -d -o agent /home/agent/workspace",
-            smolbento::util::host_uid()
-        ),
+        "apk add -q bash && install -d -o agent /home/agent/workspace",
     );
     let fork = format!("{}-fork-1", m.name);
     let forks = Forks(vec![fork.clone()]);
@@ -97,8 +102,9 @@ pub(crate) fn env_files_create_exec_and_remove() {
              args:\n  greeting:\n    required: true\n\
              env:\n  GREETING: ${{{{ env.args.greeting }}}}\n\
              secrets:\n  github:\n    value: dummy-token\n\
-             sandboxOptions:\n  template: alpine\n  cpus: 1\n  memory: 1g\n",
-            e.name
+             sandboxOptions:\n  template: {}\n  cpus: 1\n  memory: 1g\n",
+            e.name,
+            Image::alpine_agent_archive().display()
         ),
     )
     .unwrap();
@@ -133,14 +139,8 @@ pub(crate) fn env_files_create_exec_and_remove() {
         "greeting=hi",
     ]);
     assert_ne!(e.state(), "absent");
-    // Alpine has no `agent` user or bash; add them as `create_alpine` does.
-    guest_root(
-        &e.name,
-        &format!(
-            "adduser -D -u {} agent && apk add -q bash",
-            smolbento::util::host_uid()
-        ),
-    );
+    // Alpine has no bash; add it as `create_alpine` does.
+    guest_root(&e.name, "apk add -q bash");
 
     let out = e.ok(&[
         "env",
