@@ -1,5 +1,12 @@
 # Changelog
 
+## [0.18.0](https://github.com/pelotech/smolbento/compare/v0.17.1...v0.18.0) (2026-11-13)
+
+
+### Features
+
+* **env:** pass arguments after -- to env run, as sbx does ([#88](https://github.com/pelotech/smolbento/issues/88)) ([0210f05](https://github.com/pelotech/smolbento/commit/0210f0502abf71fd0592396aad143ccb41dfcb8c))
+
 ## [0.17.1](https://github.com/pelotech/smolbento/compare/v0.17.0...v0.17.1) (2026-11-13)
 
 
