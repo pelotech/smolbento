@@ -38,6 +38,8 @@ const REF_NAME_ANNOTATION: &str = "org.opencontainers.image.ref.name";
 /// The config of a v2 kit published as an OCI artifact: the kit's spec.yaml.
 const V2_SPEC_MEDIA_TYPE: &str = "application/vnd.docker.sandbox.kit.v2.spec+yaml";
 const EMPTY_MEDIA_TYPE: &str = "application/vnd.oci.empty.v1+json";
+/// A published v2 kit's `files/`, as `home/agent/...`.
+const V2_FILES_MEDIA_TYPE: &str = "application/vnd.oci.image.layer.v1.tar+gzip";
 
 /// Fetches REF's manifest and config and its layers into the cache. A manifest without the kit
 /// descriptor annotation is a plain image and an error.
@@ -283,20 +285,46 @@ fn blob_digests(manifest: &Value) -> Result<Vec<String>> {
 }
 
 /// The descriptor JSON in the manifest annotation.
-/// The digest of a published v2 kit's spec (its config), or None for any other manifest. Only a
-/// spec is read: a v2 kit that also publishes files is refused.
-fn v2_spec(manifest: &Value, what: &str) -> Result<Option<String>> {
+/// A published v2 kit's spec digest (its config) and files layer digest (`None` for the empty
+/// layer), or None for any other manifest.
+fn v2_spec(manifest: &Value, what: &str) -> Result<Option<(String, Option<String>)>> {
     if manifest["config"]["mediaType"] != V2_SPEC_MEDIA_TYPE {
         return Ok(None);
     }
-    let layers = manifest["layers"].as_array().map_or(&[][..], Vec::as_slice);
-    if layers.iter().any(|l| l["mediaType"] != EMPTY_MEDIA_TYPE) {
-        bail!("{what} is a v2 kit with files; a published v2 kit's files aren't supported yet");
+    let mut files = None;
+    for l in manifest["layers"].as_array().map_or(&[][..], Vec::as_slice) {
+        match l["mediaType"].as_str().unwrap_or_default() {
+            EMPTY_MEDIA_TYPE => {}
+            V2_FILES_MEDIA_TYPE if files.is_none() => {
+                files = Some(
+                    l["digest"]
+                        .as_str()
+                        .context("a layer has no digest")?
+                        .to_string(),
+                );
+            }
+            other => bail!("{what} is a v2 kit with a layer of type {other}"),
+        }
     }
     let digest = manifest["config"]["digest"].as_str();
-    Ok(Some(
+    Ok(Some((
         digest.context("the manifest has no config")?.to_string(),
-    ))
+        files,
+    )))
+}
+
+/// Unpacks a v2 kit's files layer into `dir/files` once; later reads reuse it.
+fn unpack_v2_files(dir: &Path, layer: &[u8]) -> Result<()> {
+    if dir.join("files").is_dir() {
+        return Ok(());
+    }
+    let tmp = tempfile::tempdir_in(dir)?;
+    crate::kits::artifact::unpack_files(layer, tmp.path())?;
+    match fs::rename(tmp.path().join("files"), dir.join("files")) {
+        // Another process unpacked it first.
+        Err(_) if dir.join("files").is_dir() => Ok(()),
+        r => r.context("unpacking the kit's files"),
+    }
 }
 
 fn kit_descriptor(manifest: &Value, what: &str) -> Result<String> {
@@ -470,7 +498,14 @@ pub fn read_layout(dir: &Path, source: Source) -> Result<Kit> {
         bail!("manifest {digest} in {} is corrupt", dir.display());
     }
     let manifest: Value = serde_json::from_slice(&bytes).context("reading the manifest")?;
-    if let Some(spec) = v2_spec(&manifest, &what)? {
+    if let Some((spec, files)) = v2_spec(&manifest, &what)? {
+        if let Some(files) = files {
+            let layer = read(blobs.join(hex_of(&files)?))?;
+            if sha256_digest(&layer) != files {
+                bail!("layer {files} in {} is corrupt", dir.display());
+            }
+            unpack_v2_files(dir, &layer).with_context(|| format!("reading the v2 kit {what}"))?;
+        }
         let yaml = String::from_utf8(read(blobs.join(hex_of(&spec)?))?)
             .context("reading the v2 kit's spec")?;
         let mut kit = crate::kits::v2::parse(&yaml, dir)
@@ -1033,7 +1068,16 @@ mod tests {
 
     /// A v2 kit as sbx publishes one (docker.io/sbx/gemini-kit): an OCI artifact whose config is
     /// the spec, with one empty layer. `layer` replaces the empty layer.
-    fn v2_artifact(dir: &Path, layer: Option<&[u8]>) {
+    const GEMINI_SPEC: &str = "schemaVersion: \"2\"\nkind: sandbox\nname: gemini\nversion: \"1.0.0\"\n\
+                    sandbox:\n  image: docker.io/sbx/gemini-image:latest\n  entrypoint:\n    - gemini\n  \
+                    command:\n    default:\n      - --yolo\n\
+                    agentInstructions:\n  filename: GEMINI.md\n";
+
+    fn v2_artifact(dir: &Path, layer: Option<(&str, &[u8])>) {
+        v2_artifact_with(dir, GEMINI_SPEC, layer)
+    }
+
+    fn v2_artifact_with(dir: &Path, spec: &str, layer: Option<(&str, &[u8])>) {
         let blobs = dir.join("blobs").join("sha256");
         fs::create_dir_all(&blobs).unwrap();
         let put = |data: &[u8]| {
@@ -1041,15 +1085,11 @@ mod tests {
             fs::write(blobs.join(hex_of(&d).unwrap()), data).unwrap();
             d
         };
-        let spec = "schemaVersion: \"2\"\nkind: sandbox\nname: gemini\nversion: \"1.0.0\"\n\
-                    sandbox:\n  image: docker.io/sbx/gemini-image:latest\n  entrypoint:\n    - gemini\n  \
-                    command:\n    default:\n      - --yolo\n\
-                    agentInstructions:\n  filename: GEMINI.md\n";
         let config = put(spec.as_bytes());
         let layer = match layer {
             None => json!({"mediaType": "application/vnd.oci.empty.v1+json",
                            "digest": put(b"{}"), "size": 2}),
-            Some(l) => json!({"mediaType": "application/vnd.oci.image.layer.v1.tar",
+            Some((media_type, l)) => json!({"mediaType": media_type,
                               "digest": put(l), "size": l.len()}),
         };
         let manifest = json!({
@@ -1085,14 +1125,61 @@ mod tests {
         assert!(kit.digest.is_some());
     }
 
-    #[test]
-    fn a_published_v2_kit_with_files_is_refused() {
+    /// A files layer holding `home/agent/<path>` for each `(path, body)`.
+    fn files_layer(files: &[(&str, &str)]) -> Vec<u8> {
         let d = tempfile::tempdir().unwrap();
-        v2_artifact(d.path(), Some(b"some files"));
+        fs::write(
+            d.path().join("spec.yaml"),
+            "schemaVersion: \"2\"\nkind: mixin\n",
+        )
+        .unwrap();
+        for (path, body) in files {
+            let p = d.path().join("files/home").join(path);
+            fs::create_dir_all(p.parent().unwrap()).unwrap();
+            fs::write(p, body).unwrap();
+        }
+        crate::kits::artifact::read_dir(d.path())
+            .unwrap()
+            .files
+            .unwrap()
+    }
+
+    const TAR_GZ: &str = "application/vnd.oci.image.layer.v1.tar+gzip";
+
+    #[test]
+    fn a_published_v2_kit_with_files_is_read() {
+        let d = tempfile::tempdir().unwrap();
+        let layer = files_layer(&[(".cfg", "hello")]);
+        v2_artifact(d.path(), Some((TAR_GZ, &layer)));
+        let kit = read_layout(d.path(), Source::Registry("acme/k:1".into())).unwrap();
+        assert!(format!("{kit:?}").contains("/home/agent/.cfg"), "{kit:?}");
+        assert_eq!(
+            fs::read_to_string(d.path().join("files/home/.cfg")).unwrap(),
+            "hello"
+        );
+        // Read again from the unpacked files.
+        let again = read_layout(d.path(), Source::Registry("acme/k:1".into())).unwrap();
+        assert_eq!(again, kit);
+    }
+
+    #[test]
+    fn a_crlf_spec_reads_back() {
+        let d = tempfile::tempdir().unwrap();
+        let spec = "schemaVersion: \"2\"\r\nkind: mixin\r\nname: crlf\r\n";
+        v2_artifact_with(d.path(), spec, None);
+        let kit = read_layout(d.path(), Source::Registry("acme/k:1".into())).unwrap();
+        assert_eq!(kit.name, "crlf");
+    }
+
+    #[test]
+    fn a_v2_layer_of_another_type_is_refused() {
+        let d = tempfile::tempdir().unwrap();
+        let media_type = "application/vnd.oci.image.layer.v1.tar";
+        v2_artifact(d.path(), Some((media_type, b"some files")));
         let err = read_layout(d.path(), Source::Registry("acme/k:1".into())).unwrap_err();
         assert_eq!(
             err.to_string(),
-            "acme/k:1 is a v2 kit with files; a published v2 kit's files aren't supported yet"
+            format!("acme/k:1 is a v2 kit with a layer of type {media_type}")
         );
     }
 }
