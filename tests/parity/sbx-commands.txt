@@ -117,6 +117,8 @@ env create
 env create --force ./project
 env run -d ./project
 env run --env-arg channel=beta
+env run . -- --base HEAD
+env run --env-arg agent=opencode -- -c
 env exec go test ./...
 env exec -it -- bash
 env exec sbxenv.yaml override.yaml -- npm test

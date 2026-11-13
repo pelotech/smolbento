@@ -10,8 +10,8 @@ use super::env_spec::{
     resources, spec, vars,
 };
 use super::{
-    Ctx, EnvApplyOpts, EnvCmd, EnvCommon, EnvExecArgs, EnvOverrideOpts, EnvRmArgs, ExecArgs,
-    RunArgs, SandboxOpts, SecretSource, Unsupported, confirm_or,
+    Ctx, EnvApplyOpts, EnvCmd, EnvCommon, EnvExecArgs, EnvOverrideOpts, EnvRmArgs, EnvRunArgs,
+    ExecArgs, RunArgs, SandboxOpts, SecretSource, Unsupported, confirm_or,
 };
 use crate::env::approval::{self, Need};
 use crate::env::file::{HostCommand, SecretDecl};
@@ -27,7 +27,7 @@ use crate::smolvm::Runner;
 pub fn run<R: Runner>(ctx: &mut Ctx<R>, cmd: EnvCmd) -> Result<i32> {
     match cmd {
         EnvCmd::Create(a) => create(ctx, &a.common, &a.apply),
-        EnvCmd::Run(a) => env_run(ctx, &a.common, &a.apply, a.detach),
+        EnvCmd::Run(a) => env_run(ctx, a),
         EnvCmd::Exec(a) => env_exec(ctx, a),
         EnvCmd::Rm(a) => env_rm(ctx, a),
         EnvCmd::Plan(a) => env_plan(ctx, &a.common, &a.overrides),
@@ -190,14 +190,10 @@ fn create_sandbox<R: Runner>(
     })
 }
 
-fn env_run<R: Runner>(
-    ctx: &mut Ctx<R>,
-    c: &EnvCommon,
-    a: &EnvApplyOpts,
-    detach: bool,
-) -> Result<i32> {
+fn env_run<R: Runner>(ctx: &mut Ctx<R>, run: EnvRunArgs) -> Result<i32> {
+    let a = &run.apply;
     refuse_cloud(a)?;
-    let (loaded, spec, mut secrets) = prepare(ctx, c, &a.overrides)?;
+    let (loaded, spec, mut secrets) = prepare(ctx, &run.common, &a.overrides)?;
     let exists = sandbox::find(&ctx.vm, &spec.name)?.is_some();
     let skip = a.overrides.skip_host_commands;
     let plan = planned(ctx, &loaded, &spec, exists, skip)?;
@@ -222,10 +218,15 @@ fn env_run<R: Runner>(
             name: Some(spec.name),
             ..Default::default()
         },
-        detach,
+        detach: run.detach,
         session_env: spec.env,
         entrypoint: spec.entrypoint,
-        agent_args: spec.cmd.unwrap_or_default(),
+        // Arguments given after `--` take `cmd`'s place, as in sbx.
+        agent_args: if run.args.is_empty() {
+            spec.cmd.unwrap_or_default()
+        } else {
+            run.args
+        },
         ..Default::default()
     };
     super::run::run(ctx, &args)
@@ -1612,6 +1613,41 @@ mod tests {
         assert!(created < post, "{out}");
         let call = t.runner().interactive_calls()[0].join(" ");
         assert!(call.ends_with(" -- /bin/sh -c echo hi"), "{call}");
+    }
+
+    #[test]
+    fn arguments_after_dashes_replace_cmd_or_go_to_the_agent() {
+        // Both measured on sbx 0.53: with an override they replace `cmd` (the plan still shows
+        // the file's), without one the agent gets them.
+        let launch = "entrypoint: [\"/bin/sh\", \"-c\"]\ncmd: [\"echo from-file\"]\n";
+        let mut t = with_file(&format!("{FILE}{launch}"));
+        existing(&t, "running");
+        t.sbt(&["env", "run", "--force", "--", "echo from-args"])
+            .unwrap();
+        let call = t.runner().interactive_calls()[0].join(" ");
+        assert!(call.ends_with(" -- /bin/sh -c echo from-args"), "{call}");
+        assert!(t.stdout().contains("argv: \"[\\\"echo from-file\\\"]\""));
+
+        let mut t = with_file(FILE);
+        existing(&t, "running");
+        t.sbt(&["env", "run", "--force", "--", "--version"])
+            .unwrap();
+        let call = t.runner().interactive_calls()[0].join(" ");
+        assert!(
+            call.ends_with(" -- claude --dangerously-skip-permissions --version"),
+            "{call}"
+        );
+
+        // Paths still come before the dashes.
+        let mut t = with_file(FILE);
+        existing(&t, "running");
+        t.sbt(&["env", "run", "--force", "sbxenv.yaml", "--", "-c"])
+            .unwrap();
+        let call = t.runner().interactive_calls()[0].join(" ");
+        assert!(
+            call.ends_with(" -- claude --dangerously-skip-permissions -c"),
+            "{call}"
+        );
     }
 
     #[test]
