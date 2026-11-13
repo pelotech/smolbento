@@ -304,7 +304,7 @@ impl Store {
         meta.repository = r.repository;
         meta.tag = r.tag;
         // `agent` and `image` end up in labels and argv.
-        if crate::agents::find(&meta.agent).is_none()
+        if crate::agents::find_any(&meta.agent).is_none()
             || meta.image.chars().any(char::is_control)
             || meta.agent.chars().any(char::is_control)
         {

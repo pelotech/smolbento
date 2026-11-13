@@ -142,6 +142,10 @@ access, so load only kits you trust.
 
 ## Environment files
 
+- `bindings` in an environment file add domains a service's credential may be sent to. As in sbx
+  they are global: once you approve that plan, every sandbox created afterwards may send, say,
+  your GitHub token to the bound domains too. They are listed in the plan, stored in your
+  secrets file, and removed with `sbt env rm --prune-bindings`.
 - An `sbxenv.yaml` from a repository can run commands on your machine, outside the sandbox: a
   secret's `command:` source runs with your privileges (at `env create`, to check it, and at each
   start). `env create` and `env run` show every such command in their plan and ask

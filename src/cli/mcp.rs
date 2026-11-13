@@ -97,18 +97,7 @@ fn add<R: Runner>(ctx: &Ctx<R>, a: McpAddArgs) -> Result<()> {
     };
     // The same check a sandbox makes when it selects the server (the file can be hand-edited).
     mcp::check_server(&a.name, &server)?;
-    let mut file = McpFile::load(&ctx.paths)?;
-    match file.servers.get(&a.name) {
-        Some(existing) if *existing == server => {}
-        Some(_) => bail!(
-            "MCP server {0} is already registered differently; `sbt mcp rm {0}` first",
-            a.name
-        ),
-        None => {
-            file.servers.insert(a.name.clone(), server.clone());
-            file.save(&ctx.paths)?;
-        }
-    }
+    mcp::register(&ctx.paths, &a.name, server.clone())?;
     let mut out = &ctx.out;
     writeln!(out, "Registered MCP server {}", a.name)?;
     for secret in secrets(&a.name, &server) {

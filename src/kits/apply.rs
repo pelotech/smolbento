@@ -625,7 +625,7 @@ pub fn agent_file(plan: &Plan, workdir: &str) -> Result<Option<String>> {
     let join = |dir: &str, name: &str| format!("{}/{name}", dir.trim_end_matches('/'));
     let w = &plan.workload;
     if is_preset(w) {
-        return Ok(agents::find(&w.name).map(|a| join(&parent, a.context_file)));
+        return Ok(agents::find_any(&w.name).map(|a| join(&parent, a.context_file)));
     }
     let Some((_, c)) = plan.merged.contexts.iter().find(|(k, _)| *k == w.name) else {
         return Ok(None);
@@ -794,6 +794,7 @@ mod tests {
                 .collect(),
             custom: vec![],
             registries: vec![],
+            bindings: Default::default(),
         }
     }
     fn request() -> CreateRequest {
@@ -1639,7 +1640,7 @@ mod tests {
     }
 
     fn preset_plan(agent: &str, mixins: Vec<Kit>) -> Plan {
-        let w = crate::kits::load::preset_kit(agents::find(agent).unwrap(), "img:1");
+        let w = crate::kits::load::preset_kit(agents::find_any(agent).unwrap(), "img:1");
         resolve(w, mixins, &ArgValues::default()).unwrap()
     }
 
@@ -1663,6 +1664,7 @@ mod tests {
         for (agent, file) in [
             ("claude", "CLAUDE.md"),
             ("codex", "AGENTS.md"),
+            // Retired, but a sandbox created with it still gets its file (`kit add`).
             ("gemini", "GEMINI.md"),
             ("shell", "AGENTS.md"),
         ] {

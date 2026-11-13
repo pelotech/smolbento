@@ -35,6 +35,9 @@ use crate::util::{hex, sha256_digest};
 const DESCRIPTOR_ANNOTATION: &str = "vnd.docker.sandbox.kit.descriptor";
 const SCHEMA_ANNOTATION: &str = "vnd.docker.sandbox.kit.schema-version";
 const REF_NAME_ANNOTATION: &str = "org.opencontainers.image.ref.name";
+/// The config of a v2 kit published as an OCI artifact: the kit's spec.yaml.
+const V2_SPEC_MEDIA_TYPE: &str = "application/vnd.docker.sandbox.kit.v2.spec+yaml";
+const EMPTY_MEDIA_TYPE: &str = "application/vnd.oci.empty.v1+json";
 
 /// Fetches REF's manifest and config and its layers into the cache. A manifest without the kit
 /// descriptor annotation is a plain image and an error.
@@ -185,7 +188,7 @@ async fn fetch(
         (bytes, digest) = fetch_manifest(client, &r, auth).await?;
         manifest = serde_json::from_slice(&bytes).context("reading the manifest")?;
     }
-    if require_kit {
+    if require_kit && v2_spec(&manifest, &r.whole())?.is_none() {
         kit_descriptor(&manifest, &r.whole())?;
     }
     let store = store_dir(cache);
@@ -280,6 +283,22 @@ fn blob_digests(manifest: &Value) -> Result<Vec<String>> {
 }
 
 /// The descriptor JSON in the manifest annotation.
+/// The digest of a published v2 kit's spec (its config), or None for any other manifest. Only a
+/// spec is read: a v2 kit that also publishes files is refused.
+fn v2_spec(manifest: &Value, what: &str) -> Result<Option<String>> {
+    if manifest["config"]["mediaType"] != V2_SPEC_MEDIA_TYPE {
+        return Ok(None);
+    }
+    let layers = manifest["layers"].as_array().map_or(&[][..], Vec::as_slice);
+    if layers.iter().any(|l| l["mediaType"] != EMPTY_MEDIA_TYPE) {
+        bail!("{what} is a v2 kit with files; a published v2 kit's files aren't supported yet");
+    }
+    let digest = manifest["config"]["digest"].as_str();
+    Ok(Some(
+        digest.context("the manifest has no config")?.to_string(),
+    ))
+}
+
 fn kit_descriptor(manifest: &Value, what: &str) -> Result<String> {
     let ann = &manifest["annotations"];
     let Some(desc) = ann[DESCRIPTOR_ANNOTATION].as_str() else {
@@ -451,6 +470,16 @@ pub fn read_layout(dir: &Path, source: Source) -> Result<Kit> {
         bail!("manifest {digest} in {} is corrupt", dir.display());
     }
     let manifest: Value = serde_json::from_slice(&bytes).context("reading the manifest")?;
+    if let Some(spec) = v2_spec(&manifest, &what)? {
+        let yaml = String::from_utf8(read(blobs.join(hex_of(&spec)?))?)
+            .context("reading the v2 kit's spec")?;
+        let mut kit = crate::kits::v2::parse(&yaml, dir)
+            .with_context(|| format!("reading the v2 kit {what}"))?;
+        // Its image is named in the spec (`Content::Image`) and pulled when a sandbox is made.
+        kit.source = source;
+        kit.digest = Some(digest);
+        return Ok(kit);
+    }
     let descriptor = kit_descriptor(&manifest, &what)?;
     let mut kit = v3::parse_json(&descriptor, source)?;
     let config_digest = manifest["config"]["digest"]
@@ -979,5 +1008,70 @@ mod tests {
     fn missing_helper_binary_is_skipped() {
         assert!(credential_helper("definitely-not-installed-xyz", "ghcr.io").is_none());
         assert!(credential_helper("../evil", "ghcr.io").is_none());
+    }
+
+    /// A v2 kit as sbx publishes one (docker.io/sbx/gemini-kit): an OCI artifact whose config is
+    /// the spec, with one empty layer. `layer` replaces the empty layer.
+    fn v2_artifact(dir: &Path, layer: Option<&[u8]>) {
+        let blobs = dir.join("blobs").join("sha256");
+        fs::create_dir_all(&blobs).unwrap();
+        let put = |data: &[u8]| {
+            let d = sha256_digest(data);
+            fs::write(blobs.join(hex_of(&d).unwrap()), data).unwrap();
+            d
+        };
+        let spec = "schemaVersion: \"2\"\nkind: sandbox\nname: gemini\nversion: \"1.0.0\"\n\
+                    sandbox:\n  image: docker.io/sbx/gemini-image:latest\n  entrypoint:\n    - gemini\n  \
+                    command:\n    default:\n      - --yolo\n\
+                    agentInstructions:\n  filename: GEMINI.md\n";
+        let config = put(spec.as_bytes());
+        let layer = match layer {
+            None => json!({"mediaType": "application/vnd.oci.empty.v1+json",
+                           "digest": put(b"{}"), "size": 2}),
+            Some(l) => json!({"mediaType": "application/vnd.oci.image.layer.v1.tar",
+                              "digest": put(l), "size": l.len()}),
+        };
+        let manifest = json!({
+            "schemaVersion": 2,
+            "mediaType": OCI_IMAGE_MEDIA_TYPE,
+            "artifactType": "application/vnd.docker.sandbox.kit.v2",
+            "config": {"mediaType": V2_SPEC_MEDIA_TYPE, "digest": config, "size": spec.len()},
+            "layers": [layer],
+            "annotations": {"vnd.docker.sandbox.kit.name": "gemini"},
+        });
+        let bytes = serde_json::to_vec(&manifest).unwrap();
+        let digest = put(&bytes);
+        let index = json!({"schemaVersion": 2, "manifests": [
+            {"mediaType": OCI_IMAGE_MEDIA_TYPE, "digest": digest, "size": bytes.len()}]});
+        fs::write(dir.join("index.json"), index.to_string()).unwrap();
+    }
+
+    #[test]
+    fn a_published_v2_kit_is_read_from_its_spec() {
+        let d = tempfile::tempdir().unwrap();
+        v2_artifact(d.path(), None);
+        let r = "docker.io/sbx/gemini-kit:latest";
+        let kit = read_layout(d.path(), Source::Registry(r.into())).unwrap();
+        assert_eq!(kit.name, "gemini");
+        assert_eq!(kit.kind, crate::kits::model::Kind::Workload);
+        assert_eq!(
+            kit.content,
+            Content::Image("docker.io/sbx/gemini-image:latest".into())
+        );
+        assert_eq!(kit.command, Some(vec!["gemini".into(), "--yolo".into()]));
+        assert_eq!(kit.source, Source::Registry(r.into()));
+        assert_eq!(kit.format(), Some(crate::kits::model::Format::V2));
+        assert!(kit.digest.is_some());
+    }
+
+    #[test]
+    fn a_published_v2_kit_with_files_is_refused() {
+        let d = tempfile::tempdir().unwrap();
+        v2_artifact(d.path(), Some(b"some files"));
+        let err = read_layout(d.path(), Source::Registry("acme/k:1".into())).unwrap_err();
+        assert_eq!(
+            err.to_string(),
+            "acme/k:1 is a v2 kit with files; a published v2 kit's files aren't supported yet"
+        );
     }
 }

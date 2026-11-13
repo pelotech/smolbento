@@ -168,7 +168,7 @@ fn save<R: Runner>(ctx: &Ctx<R>, a: &TemplateSaveArgs) -> Result<()> {
             sb.name()
         );
     }
-    if crate::agents::find(&sb.meta.agent).is_none() {
+    if crate::agents::find_any(&sb.meta.agent).is_none() {
         bail!(
             "cannot save {}: templates of kit workload sandboxes aren't supported yet",
             sb.name()

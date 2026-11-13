@@ -84,9 +84,57 @@ pub struct EnvFile {
     pub lifecycle: Option<Lifecycle>,
     /// Registry host to its login.
     pub registries: Option<BTreeMap<String, RegistryDecl>>,
-    // Out of scope: kept as raw values so they can be refused by name.
-    pub bindings: Option<Value>,
-    pub mcp: Option<Value>,
+    /// Service name to the domains its credential may be sent to.
+    pub bindings: Option<BTreeMap<String, Binding>>,
+    pub mcp: Option<McpDecl>,
+}
+
+/// Which domains a service's credential may be sent to, by kind of credential.
+#[derive(Deserialize, Debug, Clone, Default, PartialEq, Eq)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+pub struct Binding {
+    pub api_key: Option<Domains>,
+    pub oauth: Option<Domains>,
+}
+
+impl Binding {
+    /// The API-key and OAuth domains, each in the file's order.
+    pub fn domains(&self) -> (Vec<String>, Vec<String>) {
+        let list = |d: &Option<Domains>| {
+            d.as_ref()
+                .and_then(|d| d.domains.clone())
+                .unwrap_or_default()
+        };
+        (list(&self.api_key), list(&self.oauth))
+    }
+}
+
+#[derive(Deserialize, Debug, Clone, Default, PartialEq, Eq)]
+#[serde(deny_unknown_fields)]
+pub struct Domains {
+    #[serde(default, deserialize_with = "opt_text_list")]
+    pub domains: Option<Vec<String>>,
+}
+
+#[derive(Deserialize, Debug, Clone, Default)]
+#[serde(deny_unknown_fields)]
+pub struct McpDecl {
+    #[serde(default)]
+    pub servers: Vec<McpServerDecl>,
+}
+
+/// An MCP server: reached at `url`, or run as `command` (which sbx runs on the host).
+#[derive(Deserialize, Debug, Clone)]
+#[serde(deny_unknown_fields)]
+pub struct McpServerDecl {
+    #[serde(deserialize_with = "text")]
+    pub name: String,
+    #[serde(default, deserialize_with = "opt_text")]
+    pub url: Option<String>,
+    #[serde(default, deserialize_with = "opt_text")]
+    pub command: Option<String>,
+    #[serde(default, deserialize_with = "opt_text_list")]
+    pub args: Option<Vec<String>>,
 }
 
 /// Commands that run on the host, with the user's privileges.
@@ -256,7 +304,8 @@ pub struct SandboxOptions {
     pub display: Option<Value>,
     pub gpu: Option<Value>,
     pub usb: Option<Value>,
-    pub writable_env_files: Option<Value>,
+    pub fuse: Option<bool>,
+    pub writable_env_files: Option<bool>,
 }
 
 /// A YAML scalar as text: a string as is, a number or bool as written. Null and collections are
