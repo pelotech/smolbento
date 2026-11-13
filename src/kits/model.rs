@@ -32,6 +32,22 @@ pub enum Format {
     V3,
 }
 
+impl Format {
+    /// `v2` or `v3`, as `kit inspect` and the sandbox's kits record write it.
+    pub fn name(self) -> &'static str {
+        match self {
+            Format::V2 => "v2",
+            Format::V3 => "v3",
+        }
+    }
+
+    pub fn from_name(name: &str) -> Option<Format> {
+        [Format::V2, Format::V3]
+            .into_iter()
+            .find(|f| f.name() == name)
+    }
+}
+
 impl Source {
     /// `None` for a Smolfile, which isn't a kit file. An agent preset counts as v3, as in sbx.
     pub fn format(&self) -> Option<Format> {

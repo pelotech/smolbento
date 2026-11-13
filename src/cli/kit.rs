@@ -311,11 +311,7 @@ fn parse_record(text: &str) -> Vec<Recorded> {
                 .filter(|p| !p.is_empty())
                 .map(String::from)
                 .collect();
-            let format = match f.next() {
-                Some("v2") => Some(KitFormat::V2),
-                Some("v3") => Some(KitFormat::V3),
-                _ => None,
-            };
+            let format = f.next().and_then(KitFormat::from_name);
             Recorded {
                 name,
                 reference,

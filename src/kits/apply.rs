@@ -56,15 +56,6 @@ pub struct InstallStep {
 
 /// Fills `req` from the plan and writes the kits' policy rules (install-phase ones too: they must
 /// be in place while install hooks run). Returns the steps for the first start and the ids of
-/// A kit's format in the kits record: `v2`, `v3`, or empty for one that mixes with either.
-pub fn format_word(f: Option<Format>) -> &'static str {
-    match f {
-        Some(Format::V2) => "v2",
-        Some(Format::V3) => "v3",
-        None => "",
-    }
-}
-
 /// The kits' variables, with a variable's reference to itself (`PATH: /x:$PATH`) replaced by the
 /// image's value (`env_ref`). The image's environment is read only when one does.
 fn expand_self_references(
@@ -265,7 +256,8 @@ pub fn apply(
             "{}\t{pinned}\t{}\t{}\n",
             k.name,
             k.provides.join(","),
-            format_word(crate::kits::resolve::mixing_format(k))
+            // Empty for a kit that mixes with either.
+            crate::kits::resolve::mixing_format(k).map_or("", Format::name)
         ));
         req.kits.push(pinned);
     }
