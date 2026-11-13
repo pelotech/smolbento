@@ -173,9 +173,8 @@ another look:
   CPU, memory, uptime, digest, auth, policy, proxy, MCP and daemon rows.
 - **Kit volume `size`.** sbx gives the volume a block device of that size; smolbento ignores it.
 - **Kit signing and publishing.** Signing a local directory (`kit.sig.bundle`, sbx's directory
-  digest isn't decoded), keyless signing without Rekor, `kit provenance/builder`, push
-  provenance, and the settings `kit.requireSignature`, `kit.trustedSigners`, `kit.ignoreTransparencyLog`,
-  `kit.allowExtractedAgents`.
+  digest isn't decoded, so local kits are refused under `kit.requireSignature`), keyless signing
+  without Rekor, `kit provenance/builder`, push provenance, and `kit.allowExtractedAgents`.
 - **Sandbox variables.** smolbento leaves out sbx's fake credential values, `MCP_*`, its proxy
   settings, `GIT_CONFIG_*` and the SSH/display variables, and sets `SBX_CRED_*_MODE` only for
   `shell` and `claude` (the only agents measured).

@@ -9,7 +9,7 @@ use crate::agents::Agent;
 use crate::ctx::Ctx;
 use crate::kits::model::{Content, Kind, Kit, Source};
 use crate::kits::registry_auth::Logins;
-use crate::kits::{capability, registry, smolfile, trust, v2, v3};
+use crate::kits::{capability, registry, signers, smolfile, trust, v2, v3};
 use crate::provision::builder;
 use crate::secrets::{RegistryEntry, SecretsFile};
 use crate::smolvm::Runner;
@@ -101,14 +101,26 @@ fn fetch<R: Runner>(
     let (mut kit, cached) = if let Some(kit) = builtin(reference) {
         (kit?, true)
     } else {
-        match locate(ctx, reference, offline, position)? {
+        let located = locate(ctx, reference, offline, position)?;
+        // kit.requireSignature, checked before anything is pulled, built or read. --offline
+        // skips it, as sbx documents (and never reaches a registry).
+        let require = !offline && ctx.settings.bool("kit.requireSignature")?;
+        if require && let Located::V2(p) | Located::V3(p) | Located::Smolfile(p) = &located {
+            return Err(signers::refuse_local(reference, p));
+        }
+        match located {
             Located::Registry(r) => {
                 let registries = registries(&SecretsFile::load(&ctx.paths)?, sandbox);
                 let logins = Logins::new(&registries, &*ctx.store);
+                let verified = if require {
+                    Some(signers::verify_registry(&r, &ctx.settings, logins)?)
+                } else {
+                    None
+                };
                 let cache = ctx.paths.kit_cache();
                 before(Fetch::Pull);
                 let blobs = entries(&registry::store_dir(&cache));
-                let kit = registry::pull(&r, &cache, logins)?;
+                let kit = registry::pull(&r, verified.as_deref(), &cache, logins)?;
                 (kit, entries(&registry::store_dir(&cache)) == blobs)
             }
             Located::V2(dir) => {
@@ -377,6 +389,57 @@ mod tests {
     }
 
     const V2: &str = "schemaVersion: \"2\"\nkind: mixin\nname: my-kit\n";
+
+    /// Local kits allowed and signatures required, with these trusted signers.
+    fn require_signatures(signers: &str) -> TestEnv {
+        test_env(&[
+            ("SMOLBENTO_KIT_ALLOW_LOCAL_KITS", "true"),
+            ("SMOLBENTO_KIT_REQUIRE_SIGNATURE", "true"),
+            ("SMOLBENTO_KIT_TRUSTED_SIGNERS", signers),
+            ("SMOLBENTO_KIT_ALLOWED_SOURCES", r#"["*"]"#),
+        ])
+    }
+
+    const POLICY: &str = "cannot be installed \u{2014} kit.requireSignature=true and no trusted \
+                          signature was found: kit signature required by policy: ";
+
+    #[test]
+    fn required_signatures_refuse_local_kits() {
+        let t = require_signatures(r#"[{"key":"/k.pub"}]"#);
+        let dir = t.ctx.cwd.join("mykit");
+        fs::create_dir(&dir).unwrap();
+        fs::write(dir.join("spec.yaml"), V2).unwrap();
+        let e = load(&t.ctx, "./mykit").unwrap_err().to_string();
+        assert!(
+            e.starts_with(&format!(
+                "kit \"./mykit\" {POLICY}./mykit is not signed; sign it"
+            )),
+            "{e}"
+        );
+        assert!(e.contains("\ntry: sbt kit sign --help"), "{e}");
+        fs::write(dir.join("kit.sig.bundle"), "{}").unwrap();
+        let e = load(&t.ctx, "./mykit").unwrap_err().to_string();
+        assert!(
+            e.contains("./mykit: verifying a local kit's kit.sig.bundle isn't supported yet"),
+            "{e}"
+        );
+        // --offline skips the policy, as sbx documents; shipped kits are exempt.
+        load_with(&t.ctx, "./mykit", true).unwrap();
+        load(&t.ctx, "docker").unwrap();
+    }
+
+    #[test]
+    fn required_signatures_with_no_signers_stop_before_the_registry() {
+        let t = require_signatures("[]");
+        let e = load(&t.ctx, "localhost:1/k:1").unwrap_err().to_string();
+        assert!(
+            e.starts_with(&format!(
+                "kit \"localhost:1/k:1\" {POLICY}no trusted signers are configured; set \
+                 kit.trustedSigners, or disable kit.requireSignature"
+            )),
+            "{e}"
+        );
+    }
 
     #[test]
     fn a_v2_directory_loads_as_v2() {

@@ -44,9 +44,11 @@ const EMPTY_MEDIA_TYPE: &str = "application/vnd.oci.empty.v1+json";
 const V2_FILES_MEDIA_TYPE: &str = "application/vnd.oci.image.layer.v1.tar+gzip";
 
 /// Fetches REF's manifest and config and its layers into the cache. A manifest without the kit
-/// descriptor annotation is a plain image and an error.
-pub fn pull(reference: &str, cache: &Path, logins: Logins) -> Result<Kit> {
-    let dir = pull_layout(reference, cache, true, logins)?;
+/// descriptor annotation is a plain image and an error. A DIGEST (one a signature check
+/// verified) pins the fetch to that manifest; the kit's source is still REF.
+pub fn pull(reference: &str, digest: Option<&str>, cache: &Path, logins: Logins) -> Result<Kit> {
+    let pinned = digest.map(|d| pinned(reference, d)).transpose()?;
+    let dir = pull_layout(pinned.as_deref().unwrap_or(reference), cache, true, logins)?;
     read_layout(&dir, Source::Registry(reference.to_string()))
 }
 
@@ -77,9 +79,7 @@ fn fetch_ref(
 ) -> Result<Fetched> {
     // The same normaliser the trust check uses, so both read the ref alike.
     trust::normalise(reference)?;
-    let r: Reference = reference
-        .parse()
-        .with_context(|| format!("invalid kit reference '{reference}'"))?;
+    let r = parse_ref(reference)?;
     let rt = tokio::runtime::Builder::new_current_thread()
         .enable_all()
         .build()
@@ -138,8 +138,8 @@ pub fn push_v2(reference: &str, payload: &artifact::Payload, logins: Logins) -> 
     Ok(manifest)
 }
 
-/// Runs F with a client logged in to R\'s registry for OP: with the stored registry secret (a
-/// token scoped to OP), else the host\'s docker login, else anonymously.
+/// Runs F with a client logged in to R's registry for OP: with the stored registry secret (a
+/// token scoped to OP), else the host's docker login, else anonymously.
 fn with_client<T>(
     r: &Reference,
     logins: Logins,
@@ -171,14 +171,51 @@ fn with_client<T>(
 const SIGNATURE_ARTIFACT: &str = "application/vnd.docker.sandbox.kit.signature.v1";
 const BUNDLE_MEDIA_TYPE: &str = "application/vnd.dev.sigstore.bundle.v0.3+json";
 
-/// The bytes and digest of the v2 kit manifest REF names, as `kit sign` and `kit verify` read it.
-pub fn manifest_of(reference: &str, cache: &Path, logins: Logins) -> Result<(Vec<u8>, String)> {
-    let f = fetch_ref(reference, cache, false, false, logins)?;
-    payload_layer(&serde_json::from_slice(&f.manifest)?, reference)?;
-    Ok((f.manifest, f.digest))
+/// The manifest a signature on REF covers, as `kit sign` and `kit verify` read it: the one REF
+/// resolves to (an index stays an index, as `kit.requireSignature` checks it), and a plain
+/// manifest must be a v2 kit artifact.
+pub fn kit_manifest(reference: &str, logins: Logins) -> Result<(Vec<u8>, String)> {
+    let (bytes, digest) = top_manifest(reference, logins)?;
+    let m: Value = serde_json::from_slice(&bytes)?;
+    if m.get("manifests").is_none() {
+        payload_layer(&m, reference)?;
+    }
+    Ok((bytes, digest))
 }
 
-/// sbx\'s signature referrer: the bundle as its one layer, the kit manifest as its subject.
+/// REF pinned to DIGEST (`registry/repo@sha256:…`), so a pull gets exactly what was verified.
+fn pinned(reference: &str, digest: &str) -> Result<String> {
+    let r = parse_ref(reference)?;
+    hex_of(digest)?;
+    Ok(format!("{}/{}@{digest}", r.registry(), r.repository()))
+}
+
+fn parse_ref(reference: &str) -> Result<Reference> {
+    reference
+        .parse()
+        .with_context(|| format!("invalid kit reference '{reference}'"))
+}
+
+/// The bytes and digest of the manifest REF resolves to, an index left as it is: what a
+/// signature on REF covers.
+pub fn top_manifest(reference: &str, logins: Logins) -> Result<(Vec<u8>, String)> {
+    let r = parse_ref(reference)?;
+    let accepted = [
+        OCI_IMAGE_MEDIA_TYPE,
+        OCI_IMAGE_INDEX_MEDIA_TYPE,
+        IMAGE_MANIFEST_MEDIA_TYPE,
+        IMAGE_MANIFEST_LIST_MEDIA_TYPE,
+    ];
+    with_client(&r, logins, RegistryOperation::Pull, async |client| {
+        let (bytes, digest) = client
+            .pull_manifest_raw(&r, &RegistryAuth::Anonymous, &accepted)
+            .await
+            .with_context(|| format!("pulling the manifest of {reference}"))?;
+        Ok((bytes.to_vec(), digest))
+    })
+}
+
+/// sbx's signature referrer: the bundle as its one layer, the kit manifest as its subject.
 fn signature_manifest(
     subject: &Value,
     bundle_digest: &str,
@@ -239,9 +276,7 @@ pub fn push_signature(
     bundle: &[u8],
     logins: Logins,
 ) -> Result<()> {
-    let r: Reference = reference
-        .parse()
-        .with_context(|| format!("invalid reference: {reference}"))?;
+    let r = parse_ref(reference)?;
     let subject_digest = sha256_digest(manifest);
     let media_type = serde_json::from_slice::<Value>(manifest)?["mediaType"]
         .as_str()
@@ -318,9 +353,7 @@ pub fn push_signature(
 
 /// The signature bundles attached to the kit manifest DIGEST at REF.
 pub fn signatures_of(reference: &str, digest: &str, logins: Logins) -> Result<Vec<Vec<u8>>> {
-    let r: Reference = reference
-        .parse()
-        .with_context(|| format!("invalid reference: {reference}"))?;
+    let r = parse_ref(reference)?;
     let at = |d: &str| Reference::with_digest(r.registry().into(), r.repository().into(), d.into());
     with_client(&r, logins, RegistryOperation::Pull, async |client| {
         let index = client
@@ -349,7 +382,7 @@ pub fn signatures_of(reference: &str, digest: &str, logins: Logins) -> Result<Ve
                 let mut out = Vec::new();
                 client.pull_blob(&at(digest), d, &mut out).await?;
                 if sha256_digest(&out) != d {
-                    bail!("signature bundle {d} doesn\'t match its digest");
+                    bail!("signature bundle {d} doesn't match its digest");
                 }
                 bundles.push(out);
             }
@@ -402,9 +435,7 @@ pub(crate) fn tagged_reference(reference: &str) -> Result<Reference> {
         bail!("invalid reference: {reference} needs a tag (registry/repo:tag)");
     }
     trust::normalise(reference)?;
-    reference
-        .parse()
-        .with_context(|| format!("invalid reference: {reference}"))
+    parse_ref(reference)
 }
 
 /// The ring provider is installed once; reqwest's no-provider rustls build needs a default.
@@ -1421,6 +1452,20 @@ mod tests {
         assert_eq!(kit.source, Source::Registry(r.into()));
         assert_eq!(kit.format(), Some(crate::kits::model::Format::V2));
         assert!(kit.digest.is_some());
+    }
+
+    #[test]
+    fn a_pinned_reference_names_the_digest() {
+        let d = format!("sha256:{}", "a".repeat(64));
+        assert_eq!(
+            pinned("docker.io/sbx/gemini-kit:latest", &d).unwrap(),
+            format!("docker.io/sbx/gemini-kit@{d}")
+        );
+        assert_eq!(
+            pinned("localhost:5000/e2e/k:1", &d).unwrap(),
+            format!("localhost:5000/e2e/k@{d}")
+        );
+        assert!(pinned("localhost:5000/e2e/k:1", "sha256:short").is_err());
     }
 
     #[test]

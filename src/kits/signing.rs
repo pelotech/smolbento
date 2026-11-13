@@ -11,7 +11,7 @@ use std::os::unix::fs::PermissionsExt;
 use std::path::{Path, PathBuf};
 use std::process::{Command, Stdio};
 
-use anyhow::{Context, Result, bail};
+use anyhow::{Context, Result, anyhow, bail};
 
 const MISSING: &str = "kit signing needs cosign on PATH; install it from \
                        https://docs.sigstore.dev/cosign/system_config/installation/";
@@ -35,6 +35,15 @@ pub enum Signer {
 pub enum Match {
     Exact(String),
     Regexp(String),
+}
+
+impl Match {
+    /// The value or pattern, without saying which.
+    pub fn as_str(&self) -> &str {
+        match self {
+            Match::Exact(v) | Match::Regexp(v) => v,
+        }
+    }
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -157,6 +166,26 @@ pub fn verify_blob(cosign: &Path, blob: &[u8], bundle: &[u8], policy: &Policy) -
     Ok(())
 }
 
+/// The first of POLICIES that one of BUNDLES verifies BLOB for; else the last verification
+/// failure, or `kit is not signed` when there is nothing to try.
+pub fn verify_any<'p>(
+    cosign: &Path,
+    blob: &[u8],
+    bundles: &[Vec<u8>],
+    policies: &'p [Policy],
+) -> Result<&'p Policy> {
+    let mut last = anyhow!("kit is not signed");
+    for policy in policies {
+        for b in bundles {
+            match verify_blob(cosign, blob, b, policy) {
+                Ok(()) => return Ok(policy),
+                Err(e) => last = e,
+            }
+        }
+    }
+    Err(last)
+}
+
 /// Runs a cosign command whose stdout isn't needed; its stderr is shown on failure.
 fn run(cmd: &mut Command, what: &str) -> Result<()> {
     let program = cmd.get_program().to_owned();
@@ -187,7 +216,7 @@ mod tests {
 
     /// A fake cosign that logs each call's argv (one per line) and `COSIGN_PASSWORD`, writes
     /// `import.key` for `import-key-pair` and a bundle for `sign-blob`, and fails `verify-blob`
-    /// when `FAIL_VERIFY` exists.
+    /// when `FAIL_VERIFY` exists or the bundle reads `bad`.
     fn fake() -> (tempfile::TempDir, PathBuf) {
         let d = tempfile::tempdir().unwrap();
         let log = d.path().join("log");
@@ -209,7 +238,9 @@ case "$1" in
       shift
     done ;;
   verify-blob)
-    if [ -e {fail} ]; then echo "Error: failed to verify signature: bad" >&2; exit 1; fi ;;
+    if [ -e {fail} ] || grep -q bad "$3"; then
+      echo "Error: failed to verify signature: bad" >&2; exit 1
+    fi ;;
 esac
 "#,
                 log = log.display(),
@@ -298,6 +329,22 @@ esac
             e.to_string(),
             "kit signature verification failed: failed to verify signature: bad"
         );
+    }
+
+    #[test]
+    fn any_bundle_verifying_for_any_policy_is_enough() {
+        let (_d, cosign) = fake();
+        let policies = [Policy::Key("/a.pub".into()), Policy::Key("/b.pub".into())];
+        let bundles = [b"bad".to_vec(), b"good".to_vec()];
+        let p = verify_any(&cosign, b"m", &bundles, &policies).unwrap();
+        assert_eq!(p, &policies[0]);
+        let e = verify_any(&cosign, b"m", &bundles[..1], &policies).unwrap_err();
+        assert_eq!(
+            e.to_string(),
+            "kit signature verification failed: failed to verify signature: bad"
+        );
+        let e = verify_any(&cosign, b"m", &[], &policies).unwrap_err();
+        assert_eq!(e.to_string(), "kit is not signed");
     }
 
     #[test]
