@@ -233,6 +233,15 @@ fn setup<R: Runner>(
             sb.name()
         );
     }
+    // Not fatal: an image without `mount` keeps the files writable, as they were before.
+    if let Some(cmd) = lockdown_cmd(sb.meta.no_fuse, &sb.meta.read_only_files)
+        && let Err(e) = vm.exec_captured(&ExecSpec::sh(&sb.machine, "root", cmd))
+    {
+        eprintln!(
+            "warning: {}: couldn't apply the environment file's sandbox options: {e:#}",
+            sb.name()
+        );
+    }
     // Not fatal either: without the shims the agent prints URLs instead of opening them. Without
     // the bridge, any shims a fork's disk came with are removed (they'd reach its parent).
     // The socket directory is checked on every start: /tmp can be emptied (macOS does on reboot)

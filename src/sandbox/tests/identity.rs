@@ -230,3 +230,37 @@ fn identity_cmd_targets_the_host_uid_and_gid() {
          [ \"$(id -u agent)\" = 501 ] || usermod -o -u 501 agent"
     );
 }
+
+#[test]
+fn a_start_takes_fuse_away_and_keeps_env_files_read_only_when_asked() {
+    let vm = vm_with(&stopped());
+    let mut sb = get(&vm, "claude-myrepo").unwrap();
+    sb.meta.no_fuse = true;
+    sb.meta.read_only_files = vec!["/w/sbxenv.yaml".into()];
+    ensure_running(&vm, &mut sb, || Ok(plan())).unwrap();
+    let lines = vm.runner().call_lines();
+    let script = crate::sandbox::lockdown_cmd(true, &sb.meta.read_only_files).unwrap();
+    assert!(script.contains("rm -f /dev/fuse"), "{script}");
+    assert!(
+        script.contains("mount --bind '/w/sbxenv.yaml' '/w/sbxenv.yaml'"),
+        "{script}"
+    );
+    let want = format!("machine exec --name sbx-claude-myrepo -u root -- sh -c {script}");
+    assert_eq!(
+        lines.iter().filter(|l| **l == want).count(),
+        1,
+        "{lines:#?}"
+    );
+
+    // Nothing to do without either.
+    let vm = vm_with(&stopped());
+    let mut sb = get(&vm, "claude-myrepo").unwrap();
+    ensure_running(&vm, &mut sb, || Ok(plan())).unwrap();
+    assert!(crate::sandbox::lockdown_cmd(false, &[]).is_none());
+    assert!(
+        !vm.runner()
+            .call_lines()
+            .iter()
+            .any(|l| l.contains("/dev/fuse"))
+    );
+}

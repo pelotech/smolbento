@@ -162,6 +162,10 @@ pub fn spec(loaded: &Loaded, overrides: &Overrides, secrets: &SecretsFile) -> Re
 
     let env: Vec<(String, String)> = f.env.clone().unwrap_or_default().into_iter().collect();
     let o = f.sandbox_options.as_ref();
+    let clone = overrides
+        .clone
+        .or(workspace(f).and_then(|(_, c)| c))
+        .unwrap_or(false);
     let opts = SandboxOpts {
         name: Some(name.clone()),
         cpus: o.and_then(|o| o.cpus),
@@ -185,10 +189,13 @@ pub fn spec(loaded: &Loaded, overrides: &Overrides, secrets: &SecretsFile) -> Re
                 .collect::<Vec<_>>()
                 .join(",")
         }),
-        clone: overrides
-            .clone
-            .or(workspace(f).and_then(|(_, c)| c))
-            .unwrap_or(false),
+        clone,
+        no_fuse: o.and_then(|o| o.fuse) == Some(false),
+        read_only_files: if o.and_then(|o| o.writable_env_files) == Some(true) {
+            Vec::new()
+        } else {
+            files_in_mounted_workspaces(loaded, clone)
+        },
         kit: kits,
         kit_arg: overrides.kit_arg.clone(),
         kit_args_file: overrides.kit_args_file.clone(),
@@ -475,6 +482,29 @@ fn source_fields(prefix: &str, s: &SecretDecl) -> Vec<(String, String)> {
         ],
         _ => vec![],
     }
+}
+
+/// The environment's files that a writable mounted workspace holds: sbx mounts them read-only
+/// unless `writableEnvFiles`, and smolvm can't mount a single file, so starts make them read-only
+/// in the guest instead. A cloned workspace is a copy, and a read-only one is read-only already.
+fn files_in_mounted_workspaces(loaded: &Loaded, clone: bool) -> Vec<String> {
+    let f = &loaded.file;
+    let primary = workspace(f).filter(|_| !clone).map(|(p, _)| p.to_string());
+    let extra = f.additional_workspaces.iter().flatten();
+    let writable: Vec<String> = primary
+        .into_iter()
+        .chain(
+            extra
+                .filter(|w| w.read_only != Some(true))
+                .map(|w| w.path.clone()),
+        )
+        .collect();
+    loaded
+        .files
+        .iter()
+        .filter(|file| writable.iter().any(|w| file.starts_with(w)))
+        .map(|file| file.display().to_string())
+        .collect()
 }
 
 /// The primary workspace's path and `clone`.
@@ -867,6 +897,37 @@ mod tests {
             .unwrap();
         assert_eq!(s.targets[0], "docker.io/sbx/gemini-kit:latest");
         assert!(s.name.starts_with("gemini-"), "{}", s.name);
+    }
+
+    #[test]
+    fn env_files_in_a_writable_workspace_are_kept_read_only() {
+        let t = T::new();
+        let file = t.dir.path().join("proj/sbxenv.yaml").display().to_string();
+        let spec = |extra: &str| {
+            t.spec(&format!("{HEAD}agent: claude\nworkspace: .\n{extra}"))
+                .unwrap()
+                .opts
+        };
+        let o = spec("");
+        assert_eq!(o.read_only_files, [file]);
+        assert!(!o.no_fuse);
+        assert!(
+            spec("sandboxOptions:\n  writableEnvFiles: true\n")
+                .read_only_files
+                .is_empty()
+        );
+        // A clone is a copy in the sandbox: the file on the host isn't reachable.
+        let s = t
+            .spec_with(
+                &format!("{HEAD}agent: claude\nworkspace: .\n"),
+                &Overrides {
+                    clone: Some(true),
+                    ..Default::default()
+                },
+            )
+            .unwrap();
+        assert!(s.opts.read_only_files.is_empty());
+        assert!(spec("sandboxOptions:\n  fuse: false\n").no_fuse);
     }
 
     #[test]

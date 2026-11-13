@@ -729,6 +729,15 @@ mod tests {
             .position(|l| l.starts_with("machine status"))
             .unwrap();
         env_lines.remove(lookup);
+        // It also keeps the file read-only in the sandbox, as sbx does (the label; starts apply it).
+        // (`lines` shows temporary directories as TMP.)
+        let label = " --label sbx.read-only-files=[\"TMP/proj/sbxenv.yaml\"]";
+        let create = env_lines
+            .iter()
+            .position(|l| l.starts_with("machine create"))
+            .unwrap();
+        assert!(env_lines[create].contains(label), "{}", env_lines[create]);
+        env_lines[create] = env_lines[create].replace(label, "");
         assert_eq!(env_lines, lines(&plain));
     }
 
