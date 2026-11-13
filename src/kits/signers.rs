@@ -2,10 +2,107 @@
 //! one of the trusted signers signed it, as in sbx 0.53. smolbento's presets and shipped kits
 //! are exempt; `--offline` skips the check, as sbx documents.
 
-use anyhow::{Result, bail};
+use std::path::Path;
+
+use anyhow::{Result, anyhow, bail};
 use serde::Deserialize;
 
-use crate::kits::signing::{Match, Policy};
+use crate::config::Settings;
+use crate::kits::registry;
+use crate::kits::registry_auth::Logins;
+use crate::kits::signing::{self, Match, Policy};
+
+/// sbx's refusal, with DETAIL saying what was wrong.
+fn refused(reference: &str, detail: &str) -> anyhow::Error {
+    anyhow!(
+        "kit \"{reference}\" cannot be installed \u{2014} kit.requireSignature=true and no trusted \
+         signature was found: kit signature required by policy: {detail}; sign it with a trusted \
+         signer and re-push; if administrator policy permits, add the signer to the trusted \
+         signers or disable the requirement; otherwise ask your administrator to update the \
+         policy\n\
+         try: sbt kit sign --help\n \
+         or: sbt settings set kit.trustedSigners <signers>\n \
+         or: sbt settings set kit.requireSignature false"
+    )
+}
+
+/// A local kit (directory or Smolfile at PATH) under the requirement: refused, as smolbento
+/// can't check a directory's `kit.sig.bundle` yet.
+pub fn check_local(reference: &str, path: &Path, settings: &Settings) -> Result<()> {
+    if !settings.bool("kit.requireSignature")? {
+        return Ok(());
+    }
+    let dir = if path.is_dir() {
+        path
+    } else {
+        path.parent().unwrap_or(path)
+    };
+    let detail = if dir.join("kit.sig.bundle").exists() {
+        format!("{reference}: verifying a local kit's kit.sig.bundle isn't supported yet")
+    } else {
+        format!("{reference} is not signed")
+    };
+    Err(refused(reference, &detail))
+}
+
+/// A registry kit under the requirement: one of its signatures must verify for a trusted signer.
+/// Returns sbx's line for stderr when one does, `None` when signatures aren't required.
+pub fn check_registry(
+    reference: &str,
+    settings: &Settings,
+    logins: Logins,
+) -> Result<Option<String>> {
+    if !settings.bool("kit.requireSignature")? {
+        return Ok(None);
+    }
+    let mut signers = parse(&settings.value("kit.trustedSigners")?)?;
+    if signers.is_empty() {
+        let detail = "no trusted signers are configured; set kit.trustedSigners, or disable \
+                      kit.requireSignature";
+        return Err(refused(reference, detail));
+    }
+    let ignore = settings.bool("kit.ignoreTransparencyLog")?;
+    for s in &mut signers {
+        if let Policy::Keyless { ignore_tlog, .. } = s {
+            *ignore_tlog = ignore;
+        }
+    }
+    let cosign = signing::cosign()?;
+    let (manifest, digest) = registry::top_manifest(reference, logins)?;
+    let bundles = registry::signatures_of(reference, &digest, logins)?;
+    let mut last = None;
+    for signer in &signers {
+        for b in &bundles {
+            match signing::verify_blob(&cosign, &manifest, b, signer) {
+                Ok(()) => {
+                    return Ok(Some(format!(
+                        "  \u{2713} {reference} \u{2014} signature verified ({})",
+                        shown(signer)
+                    )));
+                }
+                Err(e) => last = Some(e),
+            }
+        }
+    }
+    let detail = match last {
+        Some(e) => format!("{reference}: {e:#}"),
+        None => format!("{reference} is not signed"),
+    };
+    Err(refused(reference, &detail))
+}
+
+/// The signer that matched, as the success line names it.
+fn shown(p: &Policy) -> String {
+    let m = |m: &Match| match m {
+        Match::Exact(v) | Match::Regexp(v) => v.clone(),
+    };
+    match p {
+        Policy::Key(k) => format!("key {}", k.display()),
+        Policy::Keyless {
+            identity, issuer, ..
+        } => format!("{} via {}", m(identity), m(issuer)),
+    }
+}
 
 #[derive(Deserialize)]
 #[serde(deny_unknown_fields, rename_all = "camelCase")]

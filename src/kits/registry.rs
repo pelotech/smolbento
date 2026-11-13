@@ -138,8 +138,8 @@ pub fn push_v2(reference: &str, payload: &artifact::Payload, logins: Logins) -> 
     Ok(manifest)
 }
 
-/// Runs F with a client logged in to R\'s registry for OP: with the stored registry secret (a
-/// token scoped to OP), else the host\'s docker login, else anonymously.
+/// Runs F with a client logged in to R's registry for OP: with the stored registry secret (a
+/// token scoped to OP), else the host's docker login, else anonymously.
 fn with_client<T>(
     r: &Reference,
     logins: Logins,
@@ -178,7 +178,28 @@ pub fn manifest_of(reference: &str, cache: &Path, logins: Logins) -> Result<(Vec
     Ok((f.manifest, f.digest))
 }
 
-/// sbx\'s signature referrer: the bundle as its one layer, the kit manifest as its subject.
+/// The bytes and digest of the manifest REF resolves to, an index left as it is: what a
+/// signature on REF covers.
+pub fn top_manifest(reference: &str, logins: Logins) -> Result<(Vec<u8>, String)> {
+    let r: Reference = reference
+        .parse()
+        .with_context(|| format!("invalid kit reference '{reference}'"))?;
+    let accepted = [
+        OCI_IMAGE_MEDIA_TYPE,
+        OCI_IMAGE_INDEX_MEDIA_TYPE,
+        IMAGE_MANIFEST_MEDIA_TYPE,
+        IMAGE_MANIFEST_LIST_MEDIA_TYPE,
+    ];
+    with_client(&r, logins, RegistryOperation::Pull, async |client| {
+        let (bytes, digest) = client
+            .pull_manifest_raw(&r, &RegistryAuth::Anonymous, &accepted)
+            .await
+            .with_context(|| format!("pulling the manifest of {reference}"))?;
+        Ok((bytes.to_vec(), digest))
+    })
+}
+
+/// sbx's signature referrer: the bundle as its one layer, the kit manifest as its subject.
 fn signature_manifest(
     subject: &Value,
     bundle_digest: &str,
@@ -349,7 +370,7 @@ pub fn signatures_of(reference: &str, digest: &str, logins: Logins) -> Result<Ve
                 let mut out = Vec::new();
                 client.pull_blob(&at(digest), d, &mut out).await?;
                 if sha256_digest(&out) != d {
-                    bail!("signature bundle {d} doesn\'t match its digest");
+                    bail!("signature bundle {d} doesn't match its digest");
                 }
                 bundles.push(out);
             }

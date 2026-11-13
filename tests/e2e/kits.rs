@@ -1147,4 +1147,33 @@ pub(crate) fn a_signed_kit_verifies_with_its_key() {
     ]);
     assert!(out.ends_with(&format!("Signed {r2}\n")), "{out}");
     e.ok(&["kit", "verify", &r2, "--key", &public]);
+
+    // kit.requireSignature with this key trusted: the signed kit loads, an unsigned one doesn't.
+    let unsigned = reg.reference("unsigned");
+    e.ok(&["kit", "push", kit.to_str().unwrap(), &unsigned]);
+    e.ok(&["settings", "set", "kit.requireSignature", "true"]);
+    let trust = |key: &str| format!(r#"[{{"key":"{key}"}}]"#);
+    e.ok(&["settings", "set", "kit.trustedSigners", &trust(&public)]);
+    let out = e.sbt(&["kit", "inspect", &r]);
+    let stderr = String::from_utf8_lossy(&out.stderr);
+    assert!(out.status.success(), "{stderr}");
+    assert!(
+        stderr.contains(&format!("✓ {r} — signature verified (key {public})")),
+        "{stderr}"
+    );
+    let out = e.sbt(&["kit", "inspect", &unsigned]);
+    assert!(!out.status.success());
+    let stderr = String::from_utf8_lossy(&out.stderr);
+    assert!(
+        stderr.contains(&format!("{unsigned} is not signed")),
+        "{stderr}"
+    );
+    e.ok(&["settings", "set", "kit.trustedSigners", &trust(&other)]);
+    let out = e.sbt(&["kit", "inspect", &r]);
+    assert!(!out.status.success());
+    let stderr = String::from_utf8_lossy(&out.stderr);
+    assert!(
+        stderr.contains("kit signature verification failed"),
+        "{stderr}"
+    );
 }
