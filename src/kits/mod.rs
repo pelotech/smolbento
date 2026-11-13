@@ -5,6 +5,7 @@ pub mod args;
 pub mod capability;
 pub mod compose;
 mod descriptor;
+pub mod env_ref;
 pub mod guest;
 pub mod host_mount;
 pub mod load;
