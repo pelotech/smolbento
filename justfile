@@ -11,8 +11,8 @@ test:
     cargo nextest run --locked
 
 # Run end-to-end tests against real smolvm VMs (needs a hypervisor), `threads` VMs at a time
-e2e threads="2":
-    cargo nextest run --locked --run-ignored only --test-threads {{threads}} --no-fail-fast -E 'binary(e2e)'
+e2e threads="2" partition="":
+    cargo nextest run --locked --run-ignored only --test-threads {{threads}} --no-fail-fast -E 'binary(e2e)' {{ if partition == "" { "" } else { "--partition " + partition } }}
 
 # Run all pre-commit hooks
 lint:
