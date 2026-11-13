@@ -1,5 +1,12 @@
 # Changelog
 
+## [0.20.1](https://github.com/pelotech/smolbento/compare/v0.20.0...v0.20.1) (2026-11-13)
+
+
+### Bug Fixes
+
+* **kits:** read an existing directory as a kit without ./ where only a kit goes ([#96](https://github.com/pelotech/smolbento/issues/96)) ([57b1f34](https://github.com/pelotech/smolbento/commit/57b1f3450f6dac90a8cbcc2660333d41f4bf5928))
+
 ## [0.20.0](https://github.com/pelotech/smolbento/compare/v0.19.1...v0.20.0) (2026-11-13)
 
 
