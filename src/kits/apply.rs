@@ -793,10 +793,7 @@ mod tests {
     use crate::secrets::{SecretEntry, Source as SecretSource};
 
     fn kit(name: &str, kind: Kind) -> Kit {
-        Kit {
-            digest: Some(format!("sha256:{}", "ab".repeat(32))),
-            ..Kit::new(name, kind, Source::Registry(format!("acme/{name}:1")))
-        }
+        Kit::test(name, kind)
     }
     fn workload() -> Kit {
         let mut w = kit("wl", Kind::Workload);

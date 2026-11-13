@@ -1272,7 +1272,7 @@ mod tests {
     fn a_re_create_after_an_interrupted_one_opens_then_drops_its_install_rules() {
         use crate::kits::args::ArgValues;
         use crate::kits::model::{
-            Cap, CapBody, Content, Hook, HookCmd, Kind, Kit, Lifecycle, NetRule, Rules, Source,
+            Cap, CapBody, Content, Hook, HookCmd, Kind, Kit, Lifecycle, NetRule, Rules,
         };
         use crate::policy::Decision;
         let t = test_env(&[]);
@@ -1297,10 +1297,7 @@ mod tests {
             &machine_json("sbx-s1", "created", &[("sbx.name", "s1")]),
         );
         fake.once_fail(&["machine", "status"], "NOT_FOUND", "vm not found");
-        let kit = |name: &str, kind| Kit {
-            digest: Some(format!("sha256:{}", "ab".repeat(32))),
-            ..Kit::new(name, kind, Source::Registry(format!("acme/{name}:1")))
-        };
+        let kit = Kit::test;
         let mut wl = kit("wl", Kind::Workload);
         wl.content = Content::Image("img:1".into());
         let mut k = kit("k", Kind::Mixin);
@@ -1422,13 +1419,8 @@ mod tests {
         use crate::kits::args::ArgValues;
         use crate::kits::model::{Cap, CapBody, Content, Hook, HookCmd, Kind, Kit, Lifecycle};
         let kit = |name: &str, kind, content| Kit {
-            digest: Some(format!("sha256:{}", "ab".repeat(32))),
             content,
-            ..Kit::new(
-                name,
-                kind,
-                crate::kits::model::Source::Registry(format!("acme/{name}:1")),
-            )
+            ..Kit::test(name, kind)
         };
         let wl = if preset {
             crate::kits::load::preset_kit(crate::agents::find("shell").unwrap(), "img:1")

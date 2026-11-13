@@ -124,6 +124,15 @@ impl Kit {
         }
     }
 
+    /// A published, digested kit for tests: `Registry("acme/<name>:1")`, `sha256:abab…`.
+    #[cfg(test)]
+    pub fn test(name: &str, kind: Kind) -> Kit {
+        Kit {
+            digest: Some(format!("sha256:{}", "ab".repeat(32))),
+            ..Kit::new(name, kind, Source::Registry(format!("acme/{name}:1")))
+        }
+    }
+
     /// The kit file format it was written in. A published kit is v3 unless it carries a v2
     /// spec, which names its image instead of holding one (`registry::read_layout`).
     pub fn format(&self) -> Option<Format> {
