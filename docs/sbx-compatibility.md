@@ -314,6 +314,7 @@ Differences:
 | The name `docker` | A registry ref (the `docker` image) | The shipped Docker kit; write `docker.io/library/docker` for the image |
 | Docker in the sandbox | Run by the `-docker` images | The shipped `docker` kit, first before your kits (added to Docker-enabled images, or given with `--kit docker`), so their startup steps can use Docker. Its `dockerd` step runs in the background, so a failing `dockerd` is only logged (`/var/log/dockerd.log`) and doesn't stop the start |
 | v3 mixins on built-in agents | Allowed since the agents ship as v3 kits (sbx 0.53; earlier: `no workload kit in the set`) | Allowed |
+| A kit variable that refers to itself | `PATH: /opt/kit/bin:$PATH` gets the image's PATH in place of `$PATH` | Same, for `$NAME` and `${NAME}` in NAME's own value (a value with the image's environment read at create; smolvm doesn't expand variables yet). Unlike sbx, `${PATH}` in another variable (`BRACED: /opt/b:${PATH}`) stays as written; sbx puts the kit's unexpanded PATH there |
 | v2 and v3 kits in one sandbox | Refused: `cannot mix v3 kits with v1/v2 kits in one sandbox; compositions are single-format (v3: …; v1/v2: …)` | Refused with the same message |
 | v2 mixins on built-in agents | Refused by the rule above, because the agents are v3 kits (sbx 0.53) | Allowed: an agent preset, the shipped `docker` kit and a Smolfile have no kit format, so a v2 kit works with them |
 | Descriptor file names | `.yaml` only | `.yaml` and `.yml` |

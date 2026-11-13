@@ -473,6 +473,27 @@ pub fn read_layout(dir: &Path, source: Source) -> Result<Kit> {
 /// already in the cache (`pull_image`) answers offline; otherwise only its manifest and config
 /// are fetched.
 pub fn image_command(reference: &str, cache: &Path, logins: Logins) -> Result<Option<Vec<String>>> {
+    Ok(command_of(&image_config(reference, cache, logins)?))
+}
+
+/// The image's `KEY=VALUE` environment, read as `image_command` reads its command.
+pub fn image_env(reference: &str, cache: &Path, logins: Logins) -> Result<Vec<String>> {
+    Ok(env_of(&image_config(reference, cache, logins)?))
+}
+
+/// The `Env` of an image config.
+pub(crate) fn env_of(config: &Value) -> Vec<String> {
+    let env = config["config"]["Env"]
+        .as_array()
+        .map_or(&[][..], Vec::as_slice);
+    env.iter()
+        .filter_map(|v| v.as_str().map(String::from))
+        .collect()
+}
+
+/// An image's config: from the cache when a layout for `reference` is there, else its manifest
+/// and config are fetched.
+fn image_config(reference: &str, cache: &Path, logins: Logins) -> Result<Value> {
     let blobs = store_dir(cache);
     let read_json = |p: PathBuf| -> Result<Value> {
         let bytes = fs::read(&p).with_context(|| format!("reading {}", p.display()))?;
@@ -490,7 +511,7 @@ pub fn image_command(reference: &str, cache: &Path, logins: Logins) -> Result<Op
     let config_digest = manifest["config"]["digest"]
         .as_str()
         .ok_or_else(|| anyhow!("the manifest of {reference} has no config"))?;
-    Ok(command_of(&read_json(blobs.join(hex_of(config_digest)?))?))
+    read_json(blobs.join(hex_of(config_digest)?))
 }
 
 /// The manifest digest of a layout in the cache made for `reference`.

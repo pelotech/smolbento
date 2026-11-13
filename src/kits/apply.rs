@@ -8,6 +8,7 @@ use anyhow::{Context, Result, bail};
 use crate::agents;
 use crate::kits::capability;
 use crate::kits::compose;
+use crate::kits::env_ref;
 use crate::kits::guest;
 use crate::kits::model::{CapBody, Content, CredReq, FileReq, Hook, Kit, Source};
 use crate::kits::registry_auth::Logins;
@@ -55,6 +56,36 @@ pub struct InstallStep {
 
 /// Fills `req` from the plan and writes the kits' policy rules (install-phase ones too: they must
 /// be in place while install hooks run). Returns the steps for the first start and the ids of
+/// The kits' variables, with a variable's reference to itself (`PATH: /x:$PATH`) replaced by the
+/// image's value (`env_ref`). The image's environment is read only when one does.
+fn expand_self_references(
+    plan: &Plan,
+    env: &[(String, String)],
+    image_env: impl FnOnce() -> Result<Option<Vec<String>>>,
+) -> Result<Vec<(String, String)>> {
+    let Some((first, _)) = env.iter().find(|(k, v)| env_ref::refers_to_itself(k, v)) else {
+        return Ok(env.to_vec());
+    };
+    let image = image_env()
+        .with_context(|| format!("reading the image's environment for the kits' {first}"))?
+        .with_context(|| {
+            format!(
+                "a kit's {first} refers to the image's {first}, which smolbento can't read for \
+                 {}'s image",
+                plan.workload.name
+            )
+        })?;
+    Ok(env
+        .iter()
+        .map(|(k, v)| {
+            (
+                k.clone(),
+                env_ref::expand(k, v, env_ref::image_value(&image, k)),
+            )
+        })
+        .collect())
+}
+
 /// every rule this call added, for rollback. Nothing is written to `policy` on error.
 pub fn apply(
     plan: &Plan,
@@ -84,6 +115,10 @@ pub fn apply(
             req.image = compose::image_for(plan, cache, Logins::new(&registries, store))?
         }
     }
+    let kit_env = expand_self_references(plan, &m.env, || {
+        let registries = secrets.registries_for(&req.name);
+        compose::image_env(plan, cache, Logins::new(&registries, store))
+    })?;
 
     if let Some(c) = m.cpus.as_deref().filter(|_| !req.cpus_set) {
         let n: f64 = c
@@ -96,7 +131,7 @@ pub fn apply(
         req.memory_mib = parse_memory(mem).context("kit resources")?;
     }
     // The user's -e wins over a kit's variable.
-    for (k, v) in &m.env {
+    for (k, v) in &kit_env {
         if !req.env.iter().any(|(n, _)| n == k) {
             req.env.push((k.clone(), v.clone()));
         }
@@ -1798,5 +1833,57 @@ mod tests {
         };
         let (steps, _) = run(&p, &mut req, &mut Policy::default()).unwrap();
         assert!(steps.context.is_empty(), "{:?}", steps.context);
+    }
+
+    #[test]
+    fn a_kit_variable_that_refers_to_itself_gets_the_images_value() {
+        // As sbx gives it: the measured repro of a kit adding to PATH.
+        let d = tempfile::tempdir().unwrap();
+        let layout = d.path().join("layout");
+        crate::kits::registry::fixtures::oci_layout(
+            &layout,
+            Some(r#"{"schemaVersion":"3","kind":"workload","name":"wl"}"#),
+            &[],
+            r#"{"config":{"Env":["PATH=/usr/local/bin:/usr/bin","HOME=/home/agent"]}}"#,
+        );
+        let mut w = workload();
+        w.content = Content::Oci(layout);
+        let arg = |default: &str, env: &str| crate::kits::model::ArgDef {
+            default: Some(default.into()),
+            env: Some(env.into()),
+            ..Default::default()
+        };
+        let mut m = kit("pathtest", Kind::Mixin);
+        m.args
+            .insert("PATH".into(), arg("/opt/pathtest/bin:$PATH", "PATH"));
+        m.args
+            .insert("BRACED".into(), arg("/opt/b:${PATH}", "BRACED"));
+        let p = resolve(w, vec![m], &ArgValues::default()).unwrap();
+        let mut req = request();
+        let store = crate::secrets::store::MemoryStore::default();
+        let cache = d.path().join("cache");
+        let s = secrets(&[]);
+        apply(
+            &p,
+            &mut req,
+            &mut Policy::default(),
+            &s,
+            &store,
+            &cache,
+            &no_git,
+        )
+        .unwrap();
+        let value = |n: &str| {
+            req.env
+                .iter()
+                .find(|(k, _)| k == n)
+                .map(|(_, v)| v.as_str())
+        };
+        assert_eq!(
+            value("PATH"),
+            Some("/opt/pathtest/bin:/usr/local/bin:/usr/bin")
+        );
+        // Only a variable's reference to itself is expanded.
+        assert_eq!(value("BRACED"), Some("/opt/b:${PATH}"));
     }
 }

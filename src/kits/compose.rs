@@ -49,6 +49,16 @@ pub fn image_for(plan: &Plan, cache: &Path, logins: Logins) -> Result<String> {
     Ok(tar.display().to_string())
 }
 
+/// The `KEY=VALUE` environment of the workload's image, which `image_for` builds on; None for a
+/// Smolfile, whose image smolvm reads.
+pub fn image_env(plan: &Plan, cache: &Path, logins: Logins) -> Result<Option<Vec<String>>> {
+    Ok(match &plan.workload.content {
+        Content::Image(r) => Some(registry::image_env(r, cache, logins)?),
+        Content::Oci(dir) => Some(registry::env_of(&Layout::read(dir)?.config)),
+        Content::Smolfile(_) | Content::None => None,
+    })
+}
+
 /// Whether any mixin brings image layers (a Smolfile workload can't take them).
 pub fn has_mixin_layers(plan: &Plan) -> Result<bool> {
     Ok(!layered_mixins(plan)?.is_empty())
