@@ -18,7 +18,7 @@ use base64::engine::general_purpose::STANDARD;
 use oci_client::Reference;
 use oci_client::RegistryOperation;
 use oci_client::client::{Client, ClientConfig, ClientProtocol};
-use oci_client::errors::OciDistributionError;
+use oci_client::errors::{OciDistributionError, OciErrorCode};
 use oci_client::manifest::{
     IMAGE_MANIFEST_LIST_MEDIA_TYPE, IMAGE_MANIFEST_MEDIA_TYPE, OCI_IMAGE_INDEX_MEDIA_TYPE,
     OCI_IMAGE_MEDIA_TYPE,
@@ -111,14 +111,13 @@ fn fetch_ref(
     })
 }
 
-/// Pushes a v2 kit to REF (`registry/repo:tag`) and returns its manifest digest. Logs in with
+/// Pushes a v2 kit to REF (`registry/repo:tag`) and returns the manifest it pushed. Logs in with
 /// the stored registry secret (a push-scoped token), else the host's docker login, else
 /// anonymously.
-pub fn push_v2(reference: &str, payload: &artifact::Payload, logins: Logins) -> Result<String> {
+pub fn push_v2(reference: &str, payload: &artifact::Payload, logins: Logins) -> Result<Vec<u8>> {
     let r = tagged_reference(reference)?;
     let created = humantime::format_rfc3339_seconds(std::time::SystemTime::now()).to_string();
     let (manifest, blobs) = artifact::manifest(payload, &created);
-    let digest = sha256_digest(&manifest);
     with_client(&r, logins, RegistryOperation::Push, async |client| {
         for (d, bytes) in blobs {
             client
@@ -127,12 +126,16 @@ pub fn push_v2(reference: &str, payload: &artifact::Payload, logins: Logins) -> 
                 .with_context(|| format!("pushing blob {d}"))?;
         }
         client
-            .push_manifest_raw(&r, manifest, HeaderValue::from_static(OCI_IMAGE_MEDIA_TYPE))
+            .push_manifest_raw(
+                &r,
+                manifest.clone(),
+                HeaderValue::from_static(OCI_IMAGE_MEDIA_TYPE),
+            )
             .await
             .with_context(|| format!("pushing the manifest of {reference}"))?;
         Ok(())
     })?;
-    Ok(digest)
+    Ok(manifest)
 }
 
 /// Runs F with a client logged in to R\'s registry for OP: with the stored registry secret (a
@@ -198,17 +201,34 @@ fn signature_manifest(
     })
 }
 
-/// The referrers tag-schema index with DESCRIPTOR added (once).
-fn add_to_referrers_index(index: Option<Value>, descriptor: Value) -> Value {
+/// The referrers tag-schema index with DESCRIPTOR added (once). An index that isn't one is
+/// refused rather than replaced: it holds other referrers.
+fn add_to_referrers_index(index: Option<Value>, descriptor: Value) -> Result<Value> {
     let mut index = index.unwrap_or_else(
         || json!({"schemaVersion": 2, "mediaType": OCI_IMAGE_INDEX_MEDIA_TYPE, "manifests": []}),
     );
-    if let Some(list) = index["manifests"].as_array_mut()
-        && !list.iter().any(|m| m["digest"] == descriptor["digest"])
-    {
+    let Some(list) = index["manifests"].as_array_mut() else {
+        bail!("the referrers index has no manifest list; it was left as it is");
+    };
+    if !list.iter().any(|m| m["digest"] == descriptor["digest"]) {
         list.push(descriptor);
     }
-    index
+    Ok(index)
+}
+
+/// Whether E means the manifest isn't there, rather than that it couldn't be read.
+fn is_not_found(e: &OciDistributionError) -> bool {
+    match e {
+        OciDistributionError::ImageManifestNotFoundError(_)
+        | OciDistributionError::ServerError { code: 404, .. } => true,
+        OciDistributionError::RegistryError { envelope, .. } => envelope.errors.iter().any(|x| {
+            matches!(
+                x.code,
+                OciErrorCode::ManifestUnknown | OciErrorCode::NameUnknown
+            )
+        }),
+        _ => false,
+    }
 }
 
 /// Attaches BUNDLE to the kit MANIFEST at REF as a signature referrer. A registry without the
@@ -269,8 +289,12 @@ pub fn push_signature(
             .pull_manifest_raw(&tag, &RegistryAuth::Anonymous, &accepted)
             .await
         {
-            Ok((bytes, _)) => Some(serde_json::from_slice(&bytes)?),
-            Err(_) => None,
+            Ok((bytes, _)) => {
+                Some(serde_json::from_slice(&bytes).context("reading the referrers index")?)
+            }
+            Err(e) if is_not_found(&e) => None,
+            // Replacing an index that couldn't be read would drop the referrers in it.
+            Err(e) => return Err(e).context("reading the referrers index"),
         };
         let descriptor = json!({
             "mediaType": OCI_IMAGE_MEDIA_TYPE,
@@ -279,7 +303,7 @@ pub fn push_signature(
             "size": sig.len(),
             "annotations": {"org.opencontainers.image.created": created},
         });
-        let index = serde_json::to_vec(&add_to_referrers_index(existing, descriptor))?;
+        let index = serde_json::to_vec(&add_to_referrers_index(existing, descriptor)?)?;
         client
             .push_manifest_raw(
                 &tag,
@@ -1431,14 +1455,16 @@ mod tests {
     fn the_fallback_index_keeps_earlier_referrers() {
         let a = json!({"mediaType": OCI_IMAGE_MEDIA_TYPE, "digest": "sha256:a", "size": 1});
         let b = json!({"mediaType": OCI_IMAGE_MEDIA_TYPE, "digest": "sha256:b", "size": 2});
-        let first = add_to_referrers_index(None, a.clone());
+        let first = add_to_referrers_index(None, a.clone()).unwrap();
         assert_eq!(first["mediaType"], OCI_IMAGE_INDEX_MEDIA_TYPE);
         assert_eq!(first["schemaVersion"], 2);
         assert_eq!(first["manifests"], json!([a.clone()]));
-        let both = add_to_referrers_index(Some(first), b.clone());
+        let both = add_to_referrers_index(Some(first), b.clone()).unwrap();
         assert_eq!(both["manifests"], json!([a.clone(), b]));
-        let again = add_to_referrers_index(Some(both.clone()), a);
+        let again = add_to_referrers_index(Some(both.clone()), a.clone()).unwrap();
         assert_eq!(again, both);
+        let odd = json!({"schemaVersion": 2, "manifests": "not a list"});
+        assert!(add_to_referrers_index(Some(odd), a).is_err());
     }
 
     #[test]

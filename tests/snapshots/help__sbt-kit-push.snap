@@ -29,7 +29,7 @@ Options:
       --identity-token-file <IDENTITY_TOKEN_FILE>
           File holding the OIDC identity token; keeps it out of the process arguments
 
-      --tlog-upload [<TLOG_UPLOAD>]
+      --tlog-upload[=<TLOG_UPLOAD>]
           Upload the keyless signature to the Rekor transparency log; set false for private kits
 
           [default: true]

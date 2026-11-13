@@ -413,7 +413,8 @@ pub enum KitCmd {
         /// Kit: registry/repo:tag or registry/repo@sha256:digest
         reference: String,
         /// Public key for key-based verification (PEM)
-        #[arg(long)]
+        #[arg(long, conflicts_with_all = ["certificate_identity", "certificate_identity_regexp",
+              "certificate_oidc_issuer", "certificate_oidc_issuer_regexp"])]
         key: Option<PathBuf>,
         /// Exact keyless signer identity (certificate SAN)
         #[arg(long, conflicts_with = "certificate_identity_regexp")]
@@ -443,7 +444,7 @@ pub enum KitCmd {
 #[derive(Debug, Clone, Default, Args)]
 pub struct SignOpts {
     /// Private key for key-based signing (PEM); omit for keyless signing
-    #[arg(long)]
+    #[arg(long, conflicts_with_all = ["identity_token", "identity_token_file"])]
     pub key: Option<PathBuf>,
     /// OIDC identity token for keyless signing; defaults to the ambient CI provider, then an
     /// interactive browser login
@@ -454,7 +455,7 @@ pub struct SignOpts {
     pub identity_token_file: Option<PathBuf>,
     /// Upload the keyless signature to the Rekor transparency log; set false for private kits
     #[arg(long, default_value_t = true, num_args = 0..=1, default_missing_value = "true",
-          action = clap::ArgAction::Set)]
+          require_equals = true, action = clap::ArgAction::Set)]
     pub tlog_upload: bool,
 }
 

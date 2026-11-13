@@ -1052,10 +1052,11 @@ pub(crate) fn a_signed_kit_verifies_with_its_key() {
             .output()
             .is_ok()
     };
-    if !has("cosign") || !has("openssl") {
-        eprintln!("skipped: needs cosign and openssl on PATH");
-        return;
-    }
+    // The dev shell has both; a missing one fails rather than skips, so CI can't pass unchecked.
+    assert!(
+        has("cosign") && has("openssl"),
+        "needs cosign and openssl on PATH"
+    );
     let e = E2e::new("sign");
     let reg = Registry::start(&e);
     let dir = e.dir.path();
