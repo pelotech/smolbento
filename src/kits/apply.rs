@@ -779,6 +779,47 @@ fn pinned_ref(k: &Kit) -> Result<String> {
     })
 }
 
+/// What in `kit` only a create can apply (spec "Data flow", `kit add`), in a fixed order.
+pub fn needs_recreate(kit: &Kit) -> Result<Vec<&'static str>> {
+    let mut what = Vec::new();
+    if compose::has_layers(kit)? {
+        what.push("image layers");
+    }
+    for c in &kit.caps {
+        let need = match &c.body {
+            // A passthrough OAuth credential only adds network rules.
+            CapBody::Credential(r) if r.env.is_some() || !r.inject.is_empty() => "credentials",
+            CapBody::Port { .. } => "ports",
+            CapBody::Volume { .. } => "volumes",
+            CapBody::HostMount { .. } => "host mounts",
+            CapBody::AgentSkills { .. } | CapBody::AgentSkill { .. } => "agent skills",
+            // The agent socket is mounted at create.
+            CapBody::SshAgent { .. } => "SSH agent",
+            CapBody::Resources { .. } => "resources",
+            CapBody::LongRunning => "long-running",
+            _ => continue,
+        };
+        what.push(need);
+    }
+    if !kit.env.is_empty() {
+        what.push("environment variables");
+    }
+    let order = [
+        "image layers",
+        "credentials",
+        "ports",
+        "volumes",
+        "host mounts",
+        "SSH agent",
+        "resources",
+        "environment variables",
+        "long-running",
+    ];
+    what.sort_by_key(|w| order.iter().position(|o| o == w));
+    what.dedup();
+    Ok(what)
+}
+
 #[cfg(test)]
 mod tests {
 

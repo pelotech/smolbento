@@ -2,7 +2,7 @@
 
 use std::path::Path;
 
-use crate::kits::model::{FileReq, Hook, HookCmd};
+use crate::kits::model::{FileReq, Format, Hook, HookCmd};
 use crate::util::sh_quote;
 
 pub const STARTUP_PATH: &str = "/etc/smolbento/startup";
@@ -354,6 +354,49 @@ pub fn kits_index_script(file: &str, entries: &[(String, String)]) -> String {
         start = sh_quote(KITS_SECTION_START),
         end = sh_quote(KITS_SECTION_END),
     )
+}
+
+/// Reads the guest's kits record; a sandbox without one has no kits.
+pub const READ_KITS: &str = "[ ! -e /etc/smolbento/kits ] || cat /etc/smolbento/kits";
+
+/// One `/etc/smolbento/kits` line: `name<TAB>ref<TAB>provides`.
+pub struct Recorded {
+    pub name: String,
+    pub reference: String,
+    pub provides: Vec<String>,
+    /// None when the record doesn't say (an older record), or for a kit that mixes with either.
+    pub format: Option<Format>,
+}
+
+pub fn parse_record(text: &str) -> Vec<Recorded> {
+    text.lines()
+        .filter(|l| {
+            let named = !l.split('\t').next().unwrap_or_default().trim().is_empty();
+            if !named && !l.trim().is_empty() {
+                eprintln!("warning: ignoring a malformed line in /etc/smolbento/kits: {l:?}");
+            }
+            named
+        })
+        .map(|l| {
+            let mut f = l.split('\t');
+            let name = f.next().unwrap_or_default().to_string();
+            let reference = f.next().unwrap_or_default().to_string();
+            let provides = f
+                .next()
+                .unwrap_or_default()
+                .split(',')
+                .filter(|p| !p.is_empty())
+                .map(String::from)
+                .collect();
+            let format = f.next().and_then(Format::from_name);
+            Recorded {
+                name,
+                reference,
+                provides,
+                format,
+            }
+        })
+        .collect()
 }
 
 #[cfg(test)]

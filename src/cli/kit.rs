@@ -14,16 +14,13 @@ use crate::kits::model::{
 };
 use crate::kits::registry_auth::Logins;
 use crate::kits::resolve::{check_named_formats, mixing_format, resolve, resolve_for};
-use crate::kits::{artifact, capability, compose, guest, load, registry, signing};
+use crate::kits::{apply, artifact, capability, guest, load, registry, signing};
 use crate::policy::{Decision, Policy, compile};
 use crate::provision;
 use crate::sandbox::{self, CreateRequest, KitPhase, Sandbox};
 use crate::secrets::SecretsFile;
 use crate::smolvm::{ExecSpec, Runner};
 use crate::workspace::Workspace;
-
-/// Reads the guest's kits record; a sandbox without one has no kits.
-const READ_KITS: &str = "[ ! -e /etc/smolbento/kits ] || cat /etc/smolbento/kits";
 
 pub fn run<R: Runner>(ctx: &mut Ctx<R>, cmd: KitCmd) -> Result<i32> {
     match cmd {
@@ -523,89 +520,8 @@ fn empty_workload(name: &str) -> Kit {
     }
 }
 
-/// What in `kit` only a create can apply (spec "Data flow", `kit add`), in a fixed order.
-fn needs_recreate(kit: &Kit) -> Result<Vec<&'static str>> {
-    let mut what = Vec::new();
-    if compose::has_layers(kit)? {
-        what.push("image layers");
-    }
-    for c in &kit.caps {
-        let need = match &c.body {
-            // A passthrough OAuth credential only adds network rules.
-            CapBody::Credential(r) if r.env.is_some() || !r.inject.is_empty() => "credentials",
-            CapBody::Port { .. } => "ports",
-            CapBody::Volume { .. } => "volumes",
-            CapBody::HostMount { .. } => "host mounts",
-            CapBody::AgentSkills { .. } | CapBody::AgentSkill { .. } => "agent skills",
-            // The agent socket is mounted at create.
-            CapBody::SshAgent { .. } => "SSH agent",
-            CapBody::Resources { .. } => "resources",
-            CapBody::LongRunning => "long-running",
-            _ => continue,
-        };
-        what.push(need);
-    }
-    if !kit.env.is_empty() {
-        what.push("environment variables");
-    }
-    let order = [
-        "image layers",
-        "credentials",
-        "ports",
-        "volumes",
-        "host mounts",
-        "SSH agent",
-        "resources",
-        "environment variables",
-        "long-running",
-    ];
-    what.sort_by_key(|w| order.iter().position(|o| o == w));
-    what.dedup();
-    Ok(what)
-}
-
-/// One `/etc/smolbento/kits` line: `name<TAB>ref<TAB>provides`.
-struct Recorded {
-    name: String,
-    reference: String,
-    provides: Vec<String>,
-    /// None when the record doesn't say (an older record), or for a kit that mixes with either.
-    format: Option<KitFormat>,
-}
-
-fn parse_record(text: &str) -> Vec<Recorded> {
-    text.lines()
-        .filter(|l| {
-            let named = !l.split('\t').next().unwrap_or_default().trim().is_empty();
-            if !named && !l.trim().is_empty() {
-                eprintln!("warning: ignoring a malformed line in /etc/smolbento/kits: {l:?}");
-            }
-            named
-        })
-        .map(|l| {
-            let mut f = l.split('\t');
-            let name = f.next().unwrap_or_default().to_string();
-            let reference = f.next().unwrap_or_default().to_string();
-            let provides = f
-                .next()
-                .unwrap_or_default()
-                .split(',')
-                .filter(|p| !p.is_empty())
-                .map(String::from)
-                .collect();
-            let format = f.next().and_then(KitFormat::from_name);
-            Recorded {
-                name,
-                reference,
-                provides,
-                format,
-            }
-        })
-        .collect()
-}
-
 /// A recorded kit as a mixin that only provides: its capabilities were applied already.
-fn recorded_kit(r: &Recorded) -> Kit {
+fn recorded_kit(r: &guest::Recorded) -> Kit {
     // Only `provides` matters; the placeholder digest lets `apply` record any ref, even one a
     // hand-edited record left unpinned or empty (its line is dropped again below).
     Kit {
@@ -633,7 +549,7 @@ fn add<R: Runner>(
         bail!("{reference} is a workload kit, not a mixin; only mixins can be added to a sandbox");
     }
     // Before anything changes, the sandbox's start included.
-    let recreate = needs_recreate(&kit)?;
+    let recreate = apply::needs_recreate(&kit)?;
     if !recreate.is_empty() {
         bail!("recreate required: {}", recreate.join(", "));
     }
@@ -660,10 +576,10 @@ fn add_running<R: Runner>(
     let name = sb.name();
     let record = ctx
         .vm
-        .exec_captured(&ExecSpec::sh(&sb.machine, "root", READ_KITS))
+        .exec_captured(&ExecSpec::sh(&sb.machine, "root", guest::READ_KITS))
         .context("reading the sandbox's kits")?
         .stdout;
-    let existing = parse_record(&record);
+    let existing = guest::parse_record(&record);
     if existing.iter().any(|r| r.name == kit.name) {
         bail!("kit {} is already in {name}", kit.name);
     }
@@ -905,7 +821,7 @@ mod tests {
             &["machine", "status", "-n", MACHINE],
             &machine_json(MACHINE, state, &all),
         );
-        fake.ok(&root_sh(MACHINE, super::READ_KITS), record);
+        fake.ok(&root_sh(MACHINE, guest::READ_KITS), record);
     }
 
     const NET_KIT: &str = r#"{"schemaVersion":"3","kind":"mixin","name":"net",
@@ -1805,7 +1721,7 @@ mod tests {
                 .position(pred)
                 .unwrap_or_else(|| panic!("no {what} in {lines:#?}"))
         };
-        let read = pos("read", &|l| l.ends_with(super::READ_KITS));
+        let read = pos("read", &|l| l.ends_with(guest::READ_KITS));
         let open = pos("install network", &|l| {
             l.starts_with("machine update")
                 && l.contains(" pkg.example.com")
@@ -2046,7 +1962,7 @@ mod tests {
         assert!(
             lines
                 .iter()
-                .all(|l| l.ends_with(super::READ_KITS) && l.contains("machine exec")),
+                .all(|l| l.ends_with(guest::READ_KITS) && l.contains("machine exec")),
             "{lines:#?}"
         );
         assert!(kit_rules(&t).is_empty());
