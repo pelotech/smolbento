@@ -195,7 +195,6 @@ pub(crate) enum SmolvmHost<'a> {
 }
 
 impl<'a> SmolvmHost<'a> {
-    /// `host` must already be lowercase.
     pub(crate) fn parse(host: &'a str) -> Self {
         match host.strip_prefix("*.") {
             Some(domain) => Self::Subdomains(domain),
@@ -203,6 +202,7 @@ impl<'a> SmolvmHost<'a> {
         }
     }
 
+    /// Compares as written: callers lowercase both sides first.
     pub(crate) fn covers(&self, host: &str) -> bool {
         match *self {
             Self::Exact(h) => host == h || is_under(host, h),
