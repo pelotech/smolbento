@@ -4,11 +4,14 @@ expression: help(&path)
 ---
 Create (if needed) and attach to a sandbox environment
 
-Usage: sbt env run [OPTIONS] [PATH]...
+Usage: sbt env run [OPTIONS] [PATH]... [-- <ARG>...]
 
 Arguments:
   [PATH]...
           sbxenv.yaml files, or directories holding one (default: the current directory)
+
+  [ARG]...
+          Arguments after --: they replace the file's cmd when it sets entrypoint or cmd, else go to the agent
 
 Options:
   -D, --debug

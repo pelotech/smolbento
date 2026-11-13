@@ -799,7 +799,19 @@ sbt env rm                           # remove the sandbox and the secrets scoped
 - **`entrypoint` and `cmd`.** What `env run` launches when it attaches, in place of the agent:
   `entrypoint` followed by `cmd`. With only `cmd`, the agent's own command gets it as arguments
   (like `sbt run NAME -- ARGS`). Plain `sbt run NAME` is not affected. When several files set
-  them, the last one wins.
+  them, the last one wins. Arguments after `--` (`sbt env run . -- --base HEAD`) take `cmd`'s
+  place for that run; the plan still shows the file's `cmd`.
+- **Choosing the agent per run.** There is no `--agent` flag (sbx has none either), but `agent:`
+  can use an argument the file declares:
+
+  ```yaml
+  agent: ${{ env.args.agent }}
+  args:
+    agent:
+      default: claude
+  ```
+
+  `sbt env run --env-arg agent=opencode -- -c` then runs `opencode` with `-c`.
 - **Registries.** Logins for pulling this sandbox's image and kits:
 
   ```yaml

@@ -236,6 +236,10 @@ pub struct EnvRunArgs {
     /// Create/start the sandbox without attaching
     #[arg(short = 'd', long)]
     pub detach: bool,
+    /// Arguments after --: they replace the file's cmd when it sets entrypoint or cmd, else go to
+    /// the agent
+    #[arg(last = true, value_name = "ARG")]
+    pub args: Vec<String>,
 }
 
 /// `env exec`: `ExecArgs`' flags, the `EnvCommon` ones, then `[PATH...] -- CMD...`.
