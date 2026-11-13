@@ -22,7 +22,7 @@ SECRETS
       workdir: fresh host temporary directory
 
 PORTS
-  + 80/tcp
+  + 80/tcp4
       host: 8080
 
   4 to add · 0 to change · 0 to destroy

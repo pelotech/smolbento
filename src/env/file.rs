@@ -197,6 +197,17 @@ pub struct Port {
     pub host_ip: Option<String>,
 }
 
+impl Port {
+    /// The protocol as sbx names it: as written, else `tcp4`, or `tcp6` for an IPv6 host IP.
+    pub fn protocol_name(&self) -> &str {
+        match &self.protocol {
+            Some(p) => p,
+            None if self.host_ip.as_deref().is_some_and(|ip| ip.contains(':')) => "tcp6",
+            None => "tcp4",
+        }
+    }
+}
+
 #[derive(Deserialize, Clone)]
 #[serde(rename_all = "camelCase", deny_unknown_fields)]
 pub struct SecretDecl {

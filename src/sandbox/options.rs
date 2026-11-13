@@ -28,7 +28,7 @@ pub fn parse_publish(spec: &str, free_port: &dyn Fn() -> Result<u16>) -> Result<
         && ip != "127.0.0.1"
         && ip != "localhost"
     {
-        bail!("can't bind {ip}: smolvm publishes on 127.0.0.1 only");
+        bail!("can't bind {ip}: smolvm publishes on 127.0.0.1 and ::1 only");
     }
     let guest = parse_port(guest, spec)?;
     let host = match host {
@@ -180,7 +180,7 @@ mod tests {
             parse_publish("0.0.0.0:80:80", &fixed)
                 .unwrap_err()
                 .to_string()
-                .contains("127.0.0.1 only")
+                .contains("127.0.0.1 and ::1 only")
         );
         assert!(parse_publish("80/sctp", &fixed).is_err());
         assert!(parse_publish("0", &fixed).is_err());

@@ -128,16 +128,7 @@ pub fn spec(loaded: &Loaded, overrides: &Overrides, secrets: &SecretsFile) -> Re
 
     let mut publish = Vec::new();
     for p in f.ports.iter().flatten() {
-        let proto = protocol(p);
-        // `-p`'s parser refuses what smolvm can't publish; the free port isn't needed here.
-        let host = p.host.map(|h| h.to_string()).unwrap_or_default();
-        let ip = p.host_ip.as_deref().unwrap_or("127.0.0.1");
-        options::parse_publish(&format!("{ip}:{host}:{}/{proto}", p.sandbox), &|| Ok(0))?;
-        publish.push(match (&p.host_ip, p.host) {
-            (Some(_), Some(h)) => format!("127.0.0.1:{h}:{}/{proto}", p.sandbox),
-            (None, Some(h)) => format!("{h}:{}/{proto}", p.sandbox),
-            (_, None) => format!("{}/{proto}", p.sandbox),
-        });
+        publish.push(publish_spec(p)?);
     }
 
     let secret_decls: Vec<(String, SecretDecl)> =
@@ -343,7 +334,7 @@ pub fn resources(loaded: &Loaded, spec: &EnvSpec) -> Vec<Resource> {
         }
         out.push(Resource::new(
             "PORTS",
-            &format!("{}/{}", p.sandbox, protocol(p)),
+            &format!("{}/{}", p.sandbox, p.protocol_name()),
             fields,
         ));
     }
@@ -453,12 +444,31 @@ fn kit_name(source: &str) -> &str {
 }
 
 /// `tcp4`/`udp4` are `tcp`/`udp`; anything else is left for `-p`'s parser to refuse.
-fn protocol(p: &Port) -> &str {
-    match p.protocol.as_deref().unwrap_or("tcp") {
-        "tcp4" => "tcp",
-        "udp4" => "udp",
-        other => other,
+/// `-p`'s form of an environment's port. smolvm publishes every port on both 127.0.0.1 and ::1,
+/// so a loopback host IP of either family needs no address, and `tcp4`/`tcp6` are `tcp`.
+fn publish_spec(p: &Port) -> Result<String> {
+    let proto = match p.protocol_name() {
+        "tcp" | "tcp4" | "tcp6" => "tcp",
+        "udp" | "udp4" | "udp6" => "udp",
+        other => bail!(
+            "unknown protocol '{other}' in port {} (use tcp or udp)",
+            p.sandbox
+        ),
+    };
+    if let Some(ip) = &p.host_ip
+        && !ip
+            .parse::<std::net::IpAddr>()
+            .is_ok_and(|a| a.is_loopback() && (a.is_ipv6() || ip == "127.0.0.1"))
+    {
+        bail!("can't bind {ip}: smolvm publishes on 127.0.0.1 and ::1 only");
     }
+    let spec = match p.host {
+        Some(h) => format!("{h}:{}/{proto}", p.sandbox),
+        None => format!("{}/{proto}", p.sandbox),
+    };
+    // `-p`'s parser checks the rest; the free port isn't needed here.
+    options::parse_publish(&spec, &|| Ok(0))?;
+    Ok(spec)
 }
 
 #[cfg(test)]
@@ -685,12 +695,13 @@ mod tests {
         let t = T::new();
         let s = t
             .spec(&format!(
-                "{HEAD}agent: claude\nports:\n  - sandbox: 3000\n    host: 3000\n  - sandbox: 53\n    protocol: udp4\n  - sandbox: 80\n    host: 8080\n    hostIP: localhost\n    protocol: tcp4\nenv:\n  B: two\n  A: one\nsandboxOptions:\n  cpus: 4\n  memory: 8g\n  template: img:1\n  pullPolicy: missing\n"
+                "{HEAD}agent: claude\nports:\n  - sandbox: 3000\n    host: 3000\n  - sandbox: 53\n    protocol: udp4\n  - sandbox: 80\n    host: 8080\n    hostIP: 127.0.0.1\n    protocol: tcp4\n  - sandbox: 81\n    hostIP: \"::1\"\n  - sandbox: 3000\n    host: 3001\nenv:\n  B: two\n  A: one\nsandboxOptions:\n  cpus: 4\n  memory: 8g\n  template: img:1\n  pullPolicy: missing\n"
             ))
             .unwrap();
         assert_eq!(
             s.opts.publish,
-            vec!["3000:3000/tcp", "53/udp", "127.0.0.1:8080:80/tcp"]
+            // The later 3000 replaces the earlier one, in its place.
+            vec!["3001:3000/tcp", "53/udp", "8080:80/tcp", "81/tcp"]
         );
         assert_eq!(s.opts.env, vec!["A=one", "B=two"]);
         assert_eq!(
@@ -710,13 +721,68 @@ mod tests {
         assert_eq!(s.opts.skills.as_deref(), Some("off"));
 
         let e = t.err(&format!(
-            "{HEAD}agent: claude\nports:\n  - sandbox: 80\n    protocol: tcp6\n"
+            "{HEAD}agent: claude\nports:\n  - sandbox: 80\n    protocol: sctp\n"
         ));
-        assert!(e.starts_with("unknown protocol 'tcp6'"), "{e}");
+        assert!(e.starts_with("unknown protocol 'sctp'"), "{e}");
         let e = t.err(&format!(
             "{HEAD}agent: claude\nports:\n  - sandbox: 80\n    hostIP: 0.0.0.0\n"
         ));
-        assert!(e.starts_with("can't bind 0.0.0.0"), "{e}");
+        assert_eq!(
+            e,
+            "can't bind 0.0.0.0: smolvm publishes on 127.0.0.1 and ::1 only"
+        );
+    }
+
+    #[test]
+    fn ports_are_named_and_checked_as_sbx_does() {
+        let t = T::new();
+        t.write(
+            "proj/sbxenv.yaml",
+            &format!(
+                "{HEAD}agent: claude\nports:\n  - sandbox: 1\n  - sandbox: 2\n    protocol: tcp\n  \
+                 - sandbox: 4\n    protocol: tcp6\n  - sandbox: 5\n    protocol: udp\n  \
+                 - sandbox: 7\n    protocol: udp6\n  - sandbox: 9\n    hostIP: \"::1\"\n"
+            ),
+        );
+        let l = t.loaded(&["sbxenv.yaml"]);
+        let s = spec(&l, &Overrides::default(), &SecretsFile::default()).unwrap();
+        let names: Vec<String> = resources(&l, &s)
+            .into_iter()
+            .filter(|r| r.section == "PORTS")
+            .map(|r| r.name)
+            .collect();
+        assert_eq!(
+            names,
+            ["1/tcp4", "2/tcp", "4/tcp6", "5/udp", "7/udp6", "9/tcp6"]
+        );
+        t.write(
+            "proj/sbxenv.yaml",
+            &format!("{HEAD}agent: claude\nports:\n  - sandbox: 80\n    hostIP: localhost\n"),
+        );
+        let cwd = t.dir.path().join("proj");
+        let e = load(
+            &["sbxenv.yaml".into()],
+            &ArgInputs::default(),
+            &cwd,
+            t.dir.path(),
+        );
+        let e = e.err().unwrap().to_string();
+        assert!(
+            e.ends_with(": ports[0]: invalid host IP \"localhost\""),
+            "{e}"
+        );
+    }
+
+    #[test]
+    fn a_later_additional_workspace_with_the_same_path_wins() {
+        let t = T::new();
+        let s = t
+            .spec(&format!(
+                "{HEAD}agent: claude\nadditionalWorkspaces:\n  - path: ./docs\n  - path: ./docs\n    readOnly: true\n"
+            ))
+            .unwrap();
+        let docs = t.dir.path().join("proj/docs").display().to_string();
+        assert_eq!(s.targets[1..], [format!("{docs}:ro")]);
     }
 
     #[test]

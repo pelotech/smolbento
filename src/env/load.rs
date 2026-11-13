@@ -60,9 +60,10 @@ pub fn load(paths: &[String], args: &ArgInputs, cwd: &Path, home: &Path) -> Resu
         }
         merge(&mut merged, v);
     }
-    let file: EnvFile =
+    let mut file: EnvFile =
         serde_json::from_value(merged).map_err(|e| anyhow::anyhow!("invalid {first}: {e}"))?;
     check_merged(&file, &first)?;
+    later_wins(&mut file);
     check_supported(&file)?;
     Ok(Loaded {
         files,
@@ -250,6 +251,30 @@ fn merge(base: &mut Value, over: Value) {
     }
 }
 
+/// As in sbx, a later port with the same sandbox port and protocol, or a later additional
+/// workspace with the same path, replaces the earlier one (also within one file). It keeps the
+/// earlier one's place.
+fn later_wins(f: &mut EnvFile) {
+    fn keep_last<T>(list: &mut Vec<T>, same: impl Fn(&T, &T) -> bool) {
+        let mut out: Vec<T> = Vec::new();
+        for item in list.drain(..) {
+            match out.iter().position(|o| same(o, &item)) {
+                Some(i) => out[i] = item,
+                None => out.push(item),
+            }
+        }
+        *list = out;
+    }
+    if let Some(ports) = &mut f.ports {
+        keep_last(ports, |a, b| {
+            a.sandbox == b.sandbox && a.protocol_name() == b.protocol_name()
+        });
+    }
+    if let Some(workspaces) = &mut f.additional_workspaces {
+        keep_last(workspaces, |a, b| a.path == b.path);
+    }
+}
+
 fn check_merged(f: &EnvFile, first: &str) -> Result<()> {
     let Some(version) = &f.schema_version else {
         bail!("invalid {first}: schemaVersion is required");
@@ -259,6 +284,13 @@ fn check_merged(f: &EnvFile, first: &str) -> Result<()> {
     }
     if f.agent.is_none() {
         bail!("invalid {first}: agent is required");
+    }
+    for (i, p) in f.ports.iter().flatten().enumerate() {
+        if let Some(ip) = &p.host_ip
+            && ip.parse::<std::net::IpAddr>().is_err()
+        {
+            bail!("invalid {first}: ports[{i}]: invalid host IP \"{ip}\"");
+        }
     }
     for (name, s) in f.secrets.iter().flatten() {
         let sources = [s.value.is_some(), s.r#ref.is_some(), s.command.is_some()];

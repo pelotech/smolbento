@@ -11,7 +11,7 @@ ENV
       value: one -> two
 
 PORTS
-  ~ 80/tcp — waits for the next create
+  ~ 80/tcp4 — waits for the next create
       host: 8080 -> 8081
 
   0 to add · 2 to change · 0 to destroy
