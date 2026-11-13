@@ -1,5 +1,12 @@
 # Changelog
 
+## [0.17.1](https://github.com/pelotech/smolbento/compare/v0.17.0...v0.17.1) (2026-11-13)
+
+
+### Bug Fixes
+
+* **env:** match sbx on ports, file sets and lifecycle output; split e2e over three runners ([#86](https://github.com/pelotech/smolbento/issues/86)) ([dd4eba8](https://github.com/pelotech/smolbento/commit/dd4eba8780338d772f3c78d1948bfd6188694f99))
+
 ## [0.17.0](https://github.com/pelotech/smolbento/compare/v0.16.0...v0.17.0) (2026-11-13)
 
 
