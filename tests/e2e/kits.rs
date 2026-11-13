@@ -1040,3 +1040,110 @@ pub(crate) fn a_pushed_kit_pulls_and_runs() {
         .unwrap();
     assert_eq!(pulled, pushed);
 }
+
+/// `kit sign --key` and `kit verify --key` on a pushed kit, through the referrers tag schema
+/// (`registry:2` has no referrers API), and `kit push --sign`.
+#[test]
+#[ignore = "runs a registry VM and cosign; run with `just e2e`"]
+pub(crate) fn a_signed_kit_verifies_with_its_key() {
+    let has = |tool: &str| {
+        std::process::Command::new(tool)
+            .arg("version")
+            .output()
+            .is_ok()
+    };
+    if !has("cosign") || !has("openssl") {
+        eprintln!("skipped: needs cosign and openssl on PATH");
+        return;
+    }
+    let e = E2e::new("sign");
+    let reg = Registry::start(&e);
+    let dir = e.dir.path();
+    let keypair = |name: &str| {
+        let key = dir.join(format!("{name}.pem"));
+        let public = dir.join(format!("{name}.pub"));
+        let run = |args: &[&str]| {
+            let ok = std::process::Command::new("openssl")
+                .args(args)
+                .status()
+                .unwrap();
+            assert!(ok.success(), "openssl {args:?}");
+        };
+        run(&[
+            "genpkey",
+            "-algorithm",
+            "EC",
+            "-pkeyopt",
+            "ec_paramgen_curve:P-256",
+            "-out",
+            key.to_str().unwrap(),
+        ]);
+        run(&[
+            "pkey",
+            "-in",
+            key.to_str().unwrap(),
+            "-pubout",
+            "-out",
+            public.to_str().unwrap(),
+        ]);
+        (key.display().to_string(), public.display().to_string())
+    };
+    let (key, public) = keypair("signer");
+    let (_, other) = keypair("other");
+    let kit = dir.join("signed");
+    std::fs::create_dir_all(&kit).unwrap();
+    std::fs::write(
+        kit.join("spec.yaml"),
+        "schemaVersion: \"2\"\nkind: mixin\nname: signed\n",
+    )
+    .unwrap();
+    let r = reg.reference("signed");
+    e.ok(&["kit", "push", kit.to_str().unwrap(), &r]);
+
+    let out = e.sbt(&["kit", "verify", &r, "--key", &public]);
+    assert!(!out.status.success());
+    assert!(String::from_utf8_lossy(&out.stderr).contains("kit is not signed"));
+
+    assert_eq!(
+        e.ok(&["kit", "sign", &r, "--key", &key]),
+        format!("Signed {r}\n")
+    );
+    assert_eq!(
+        e.ok(&["kit", "verify", &r, "--key", &public]),
+        format!("  ✓ {r} — verified (oci)\n")
+    );
+    let json: serde_json::Value =
+        serde_json::from_str(&e.ok(&["kit", "verify", &r, "--key", &public, "--json"])).unwrap();
+    assert_eq!(json["verified"], true, "{json}");
+
+    let out = e.sbt(&["kit", "verify", &r, "--key", &other, "--json"]);
+    assert_eq!(out.status.code(), Some(1));
+    let json: serde_json::Value = serde_json::from_slice(&out.stdout).unwrap();
+    assert_eq!(json["verified"], false, "{json}");
+    assert!(
+        json["error"]
+            .as_str()
+            .unwrap()
+            .starts_with("kit signature verification failed"),
+        "{json}"
+    );
+
+    // A second signature keeps the first in the referrers index.
+    let (key2, public2) = keypair("second");
+    e.ok(&["kit", "sign", &r, "--key", &key2]);
+    e.ok(&["kit", "verify", &r, "--key", &public]);
+    e.ok(&["kit", "verify", &r, "--key", &public2]);
+
+    let r2 = reg.reference("signed-at-push");
+    let out = e.ok(&[
+        "kit",
+        "push",
+        kit.to_str().unwrap(),
+        &r2,
+        "--sign",
+        "--key",
+        &key,
+    ]);
+    assert!(out.ends_with(&format!("Signed {r2}\n")), "{out}");
+    e.ok(&["kit", "verify", &r2, "--key", &public]);
+}

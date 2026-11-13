@@ -1,0 +1,44 @@
+---
+source: tests/help.rs
+expression: help(&path)
+---
+Verify a kit artifact's signature
+
+Usage: sbt kit verify [OPTIONS] <REFERENCE>
+
+Arguments:
+  <REFERENCE>
+          Kit: registry/repo:tag or registry/repo@sha256:digest
+
+Options:
+  -D, --debug
+          Print each smolvm command line
+
+      --key <KEY>
+          Public key for key-based verification (PEM)
+
+      --certificate-identity <CERTIFICATE_IDENTITY>
+          Exact keyless signer identity (certificate SAN)
+
+      --certificate-identity-regexp <CERTIFICATE_IDENTITY_REGEXP>
+          Keyless signer identity regexp (certificate SAN)
+
+      --certificate-oidc-issuer <CERTIFICATE_OIDC_ISSUER>
+          Exact keyless OIDC issuer
+
+      --certificate-oidc-issuer-regexp <CERTIFICATE_OIDC_ISSUER_REGEXP>
+          Keyless OIDC issuer regexp
+
+      --insecure-ignore-tlog
+          Do not require a Rekor transparency-log entry (for private keyless signatures)
+
+      --format <FORMAT>
+          Output format
+
+          [possible values: table, json, yaml]
+
+      --json
+          Output in JSON format
+
+  -h, --help
+          Print help

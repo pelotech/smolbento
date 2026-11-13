@@ -387,6 +387,11 @@ pub enum KitCmd {
         directory: String,
         /// Where to push it: registry/repo:tag
         reference: String,
+        /// Sign the pushed kit and attach the signature as an OCI referrer
+        #[arg(long)]
+        sign: bool,
+        #[command(flatten)]
+        signing: SignOpts,
     },
     /// Pull a kit artifact from an OCI registry
     Pull {
@@ -396,10 +401,61 @@ pub enum KitCmd {
         #[arg(short, long)]
         output: Option<String>,
     },
-    #[command(hide = true)]
-    Sign(Passthrough),
-    #[command(hide = true)]
-    Verify(Passthrough),
+    /// Sign a kit artifact
+    Sign {
+        /// Kit: registry/repo:tag or registry/repo@sha256:digest
+        reference: String,
+        #[command(flatten)]
+        signing: SignOpts,
+    },
+    /// Verify a kit artifact's signature
+    Verify {
+        /// Kit: registry/repo:tag or registry/repo@sha256:digest
+        reference: String,
+        /// Public key for key-based verification (PEM)
+        #[arg(long)]
+        key: Option<PathBuf>,
+        /// Exact keyless signer identity (certificate SAN)
+        #[arg(long, conflicts_with = "certificate_identity_regexp")]
+        certificate_identity: Option<String>,
+        /// Keyless signer identity regexp (certificate SAN)
+        #[arg(long)]
+        certificate_identity_regexp: Option<String>,
+        /// Exact keyless OIDC issuer
+        #[arg(long, conflicts_with = "certificate_oidc_issuer_regexp")]
+        certificate_oidc_issuer: Option<String>,
+        /// Keyless OIDC issuer regexp
+        #[arg(long)]
+        certificate_oidc_issuer_regexp: Option<String>,
+        /// Do not require a Rekor transparency-log entry (for private keyless signatures)
+        #[arg(long)]
+        insecure_ignore_tlog: bool,
+        /// Output format
+        #[arg(long, value_enum)]
+        format: Option<Format>,
+        /// Output in JSON format
+        #[arg(long)]
+        json: bool,
+    },
+}
+
+/// How `kit sign` and `kit push --sign` sign.
+#[derive(Debug, Clone, Default, Args)]
+pub struct SignOpts {
+    /// Private key for key-based signing (PEM); omit for keyless signing
+    #[arg(long)]
+    pub key: Option<PathBuf>,
+    /// OIDC identity token for keyless signing; defaults to the ambient CI provider, then an
+    /// interactive browser login
+    #[arg(long, conflicts_with = "identity_token_file")]
+    pub identity_token: Option<String>,
+    /// File holding the OIDC identity token; keeps it out of the process arguments
+    #[arg(long)]
+    pub identity_token_file: Option<PathBuf>,
+    /// Upload the keyless signature to the Rekor transparency log; set false for private kits
+    #[arg(long, default_value_t = true, num_args = 0..=1, default_missing_value = "true",
+          action = clap::ArgAction::Set)]
+    pub tlog_upload: bool,
 }
 
 /// Kit argument flags, as on `run` and `create`.
