@@ -388,8 +388,14 @@ pub enum KitCmd {
         /// Where to push it: registry/repo:tag
         reference: String,
     },
-    #[command(hide = true)]
-    Pull(Passthrough),
+    /// Pull a kit artifact from an OCI registry
+    Pull {
+        /// Kit: registry/repo:tag or registry/repo@sha256:digest
+        reference: String,
+        /// Output file path (default: derived from the reference)
+        #[arg(short, long)]
+        output: Option<String>,
+    },
     #[command(hide = true)]
     Sign(Passthrough),
     #[command(hide = true)]

@@ -105,6 +105,11 @@ fn gzip(data: &[u8]) -> Result<Vec<u8>> {
     Ok(gz.finish()?)
 }
 
+/// The payload `kit pull` saves for a kit without files: an empty tar, gzip'd.
+pub fn empty_files_layer() -> Result<Vec<u8>> {
+    gzip(&[0; 1024])
+}
+
 /// The files layer: `files/home/X` as `home/agent/X`, owned by 1000, mtime 0.
 fn files_layer(home: &Path) -> Result<Option<Vec<u8>>> {
     let files = files_under(home)?;

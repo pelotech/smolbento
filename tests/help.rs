@@ -59,6 +59,7 @@ fn help_snapshots() {
         vec!["kit", "add"],
         vec!["kit", "pack"],
         vec!["kit", "push"],
+        vec!["kit", "pull"],
         vec!["env"],
         vec!["env", "create"],
         vec!["env", "run"],

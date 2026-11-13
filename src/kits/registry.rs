@@ -151,6 +151,51 @@ pub fn push_v2(reference: &str, payload: &artifact::Payload, logins: Logins) -> 
     Ok(digest)
 }
 
+/// `kit pull`: the payload of the v2 kit at REF, its files layer (an empty tar.gz when it has
+/// none), as sbx saves it.
+pub fn fetch_payload(reference: &str, cache: &Path, logins: Logins) -> Result<Vec<u8>> {
+    let f = fetch_ref(reference, cache, false, false, logins)?;
+    let manifest: Value = serde_json::from_slice(&f.manifest)?;
+    let Some(layer) = payload_layer(&manifest, reference)? else {
+        return artifact::empty_files_layer();
+    };
+    fetch_ref(reference, cache, false, true, logins)?;
+    let path = blob_path(cache, &layer)?;
+    fs::read(&path).with_context(|| format!("reading {}", path.display()))
+}
+
+/// The files layer digest of a v2 kit artifact, `None` when it has no files; any other manifest
+/// is refused.
+fn payload_layer(manifest: &Value, what: &str) -> Result<Option<String>> {
+    if manifest["artifactType"] != artifact::KIT_V2_ARTIFACT {
+        bail!("{what} is not a v2 kit artifact");
+    }
+    Ok(v2_spec(manifest, what)?.and_then(|(_, files)| files))
+}
+
+/// `kit pull`'s default file name: the repository's last part and the tag (or the digest's
+/// first 12 hex digits), `.tar.gz`.
+pub fn pull_name(reference: &str) -> String {
+    let (path, version) = match reference.split_once('@') {
+        Some((p, d)) => (
+            p,
+            d.trim_start_matches("sha256:").chars().take(12).collect(),
+        ),
+        None => {
+            let last = reference.rsplit('/').next().unwrap_or(reference);
+            match last.split_once(':') {
+                Some((_, tag)) => (
+                    &reference[..reference.len() - tag.len() - 1],
+                    tag.to_string(),
+                ),
+                None => (reference, "latest".to_string()),
+            }
+        }
+    };
+    let repo = path.rsplit('/').next().unwrap_or(path);
+    format!("{repo}-{version}.tar.gz")
+}
+
 /// REF parsed for a push, which needs an explicit tag.
 pub(crate) fn tagged_reference(reference: &str) -> Result<Reference> {
     let last = reference.rsplit('/').next().unwrap_or_default();
@@ -1177,6 +1222,39 @@ mod tests {
         assert_eq!(kit.source, Source::Registry(r.into()));
         assert_eq!(kit.format(), Some(crate::kits::model::Format::V2));
         assert!(kit.digest.is_some());
+    }
+
+    #[test]
+    fn only_a_v2_kit_artifact_has_a_payload() {
+        let files = "sha256:".to_string() + &"a".repeat(64);
+        let v2 = json!({"artifactType": artifact::KIT_V2_ARTIFACT,
+            "config": {"mediaType": V2_SPEC_MEDIA_TYPE, "digest": files.clone()},
+            "layers": [{"mediaType": TAR_GZ, "digest": files.clone()}]});
+        assert_eq!(payload_layer(&v2, "r").unwrap(), Some(files.clone()));
+        let empty = json!({"artifactType": artifact::KIT_V2_ARTIFACT,
+            "config": {"mediaType": V2_SPEC_MEDIA_TYPE, "digest": files},
+            "layers": [{"mediaType": EMPTY_MEDIA_TYPE}]});
+        assert_eq!(payload_layer(&empty, "r").unwrap(), None);
+        let image = json!({"config": {"mediaType": "application/vnd.oci.image.config.v1+json"},
+            "annotations": {DESCRIPTOR_ANNOTATION: "{}"}});
+        assert_eq!(
+            payload_layer(&image, "acme/k:1").unwrap_err().to_string(),
+            "acme/k:1 is not a v2 kit artifact"
+        );
+    }
+
+    #[test]
+    fn pull_names_follow_the_reference() {
+        assert_eq!(
+            pull_name("docker.io/sbx/gemini-kit:latest"),
+            "gemini-kit-latest.tar.gz"
+        );
+        assert_eq!(pull_name("acme/kit"), "kit-latest.tar.gz");
+        let hex = "0123456789ab".to_string() + &"c".repeat(52);
+        assert_eq!(
+            pull_name(&format!("localhost:5000/a/b@sha256:{hex}")),
+            "b-0123456789ab.tar.gz"
+        );
     }
 
     /// A files layer holding `home/agent/<path>` for each `(path, body)`.

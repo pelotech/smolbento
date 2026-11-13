@@ -52,7 +52,7 @@ pub fn run<R: Runner>(ctx: &mut Ctx<R>, cmd: KitCmd) -> Result<i32> {
             directory,
             reference,
         } => push(ctx, &directory, &reference),
-        KitCmd::Pull(_) => pending("pull"),
+        KitCmd::Pull { reference, output } => pull(ctx, &reference, output.as_deref()),
         KitCmd::Sign(_) => pending("sign"),
         KitCmd::Verify(_) => pending("verify"),
     }
@@ -81,6 +81,21 @@ fn push<R: Runner>(ctx: &Ctx<R>, directory: &str, reference: &str) -> Result<i32
     let logins = Logins::new(&registries, &*ctx.store);
     let digest = crate::kits::registry::push_v2(reference, &payload, logins)?;
     writeln!(&ctx.out, "Pushed {reference} ({digest})")?;
+    Ok(0)
+}
+
+/// `kit pull`: saves the payload of the v2 kit at REFERENCE (its files, as a tar.gz).
+fn pull<R: Runner>(ctx: &Ctx<R>, reference: &str, output: Option<&str>) -> Result<i32> {
+    let registries = SecretsFile::load(&ctx.paths)?.host_registries();
+    let logins = Logins::new(&registries, &*ctx.store);
+    let payload = crate::kits::registry::fetch_payload(reference, &ctx.paths.kit_cache(), logins)?;
+    let shown = output.map_or_else(|| crate::kits::registry::pull_name(reference), String::from);
+    let path = ctx.cwd.join(&shown);
+    let tmp = tempfile::NamedTempFile::new_in(path.parent().unwrap_or(&ctx.cwd))
+        .with_context(|| format!("writing {shown}"))?;
+    std::fs::write(tmp.path(), payload)?;
+    crate::kits::registry::persist(tmp, &path)?;
+    writeln!(&ctx.out, "Pulled {reference} to {shown}")?;
     Ok(0)
 }
 

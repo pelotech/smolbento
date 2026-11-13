@@ -92,7 +92,7 @@ terminal fail until you do.
 | 6a | `env plan`, remembered approvals, `env.rememberHostCommands` | ✅ Done |
 | 6b | `sbxenv.yaml` `lifecycle`, `registries`, `entrypoint` and `cmd`; registry logins scoped to a sandbox | ✅ Done |
 | 6c | `sbxenv.yaml` `bindings`, `mcp` url servers, `fuse`, `pullPolicy: never`, `writableEnvFiles`; `gemini` retired | ✅ Done |
-| 7 | Kit publishing: `kit pack/push/pull/sign/verify` | Planned |
+| 7 | Kit publishing: `kit pack/push/pull` (v2 kits) ✅; `kit sign/verify` and `push --sign` through cosign | In progress |
 | 8 | The `plus` kit, built and published with smolbento itself (an end-to-end check of everything before it) | Planned |
 | 9 | `tui` dashboard (bare `sbt` opens it on a terminal) | Planned |
 | 10 | Warm-start pool for near-instant creates; Windows | Planned |
@@ -172,7 +172,7 @@ another look:
   measured), `reset` keeps the directories (sbx deletes them), and `inspect` leaves out sbx's
   CPU, memory, uptime, digest, auth, policy, proxy, MCP and daemon rows.
 - **Kit volume `size`.** sbx gives the volume a block device of that size; smolbento ignores it.
-- **Kit signing and publishing.** `kit pack/push/pull/sign/verify/provenance/builder` and the
+- **Kit signing and publishing.** `kit sign/verify/provenance/builder`, push provenance, and the
   settings `kit.requireSignature`, `kit.trustedSigners`, `kit.ignoreTransparencyLog`,
   `kit.allowExtractedAgents`.
 - **Sandbox variables.** smolbento leaves out sbx's fake credential values, `MCP_*`, its proxy

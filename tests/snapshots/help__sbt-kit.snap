@@ -12,6 +12,7 @@ Commands:
   add       Add a mixin kit to an existing sandbox
   pack      Package a directory as a kit artifact
   push      Push a kit artifact to an OCI registry
+  pull      Pull a kit artifact from an OCI registry
   help      Print this message or the help of the given subcommand(s)
 
 Options:

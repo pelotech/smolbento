@@ -1031,4 +1031,12 @@ pub(crate) fn a_pushed_kit_pulls_and_runs() {
         root_out(&e.name, "cat /home/agent/hello"),
         "from-the-registry\n"
     );
+    let out = e.ok(&["kit", "pull", &r, "-o", "out.tar.gz"]);
+    assert_eq!(out, format!("Pulled {r} to out.tar.gz\n"));
+    let pulled = std::fs::read(e.workspace().join("out.tar.gz")).unwrap();
+    let pushed = smolbento::kits::artifact::read_dir(&kit)
+        .unwrap()
+        .files
+        .unwrap();
+    assert_eq!(pulled, pushed);
 }

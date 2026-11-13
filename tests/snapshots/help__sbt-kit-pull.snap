@@ -1,0 +1,21 @@
+---
+source: tests/help.rs
+expression: help(&path)
+---
+Pull a kit artifact from an OCI registry
+
+Usage: sbt kit pull [OPTIONS] <REFERENCE>
+
+Arguments:
+  <REFERENCE>
+          Kit: registry/repo:tag or registry/repo@sha256:digest
+
+Options:
+  -D, --debug
+          Print each smolvm command line
+
+  -o, --output <OUTPUT>
+          Output file path (default: derived from the reference)
+
+  -h, --help
+          Print help
