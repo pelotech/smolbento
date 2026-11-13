@@ -2,7 +2,7 @@
 
 use std::collections::BTreeSet;
 
-use super::rules::{Allow, Pattern, Resource, is_under, split_port};
+use super::rules::{Allow, Pattern, Resource, SmolvmHost, is_under, split_port};
 use super::{Decision, Mode, Policy, Rule, presets};
 use crate::sandbox::name::is_internal;
 use crate::smolvm::{AllowList, NetworkSpec};
@@ -160,11 +160,7 @@ fn network_for(
 /// Whether a bound credential host admits `host`: an exact one (`--allow-host`) the host and its
 /// subdomains, a `*.x` one (a pattern) only the subdomains of x.
 fn credential_admits(cred: &str, host: &str) -> bool {
-    let cred = cred.to_ascii_lowercase();
-    match cred.strip_prefix("*.") {
-        Some(domain) => is_under(host, domain),
-        None => host == cred || is_under(host, &cred),
-    }
+    SmolvmHost::parse(&cred.to_ascii_lowercase()).covers(host)
 }
 
 /// Whether `deny` names a host a bound credential host keeps reachable, so it can't be honoured.
@@ -177,9 +173,9 @@ pub fn deny_reaches_credential_host(deny: &Resource, cred: &str) -> bool {
         return false;
     }
     let cred = cred.to_ascii_lowercase();
-    match cred.strip_prefix("*.") {
-        Some(x) => reaches_under(deny, x),
-        None => deny.matches(&cred) || reaches_under(deny, &cred),
+    match SmolvmHost::parse(&cred) {
+        SmolvmHost::Subdomains(x) => reaches_under(deny, x),
+        SmolvmHost::Exact(h) => deny.matches(h) || reaches_under(deny, h),
     }
 }
 

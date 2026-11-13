@@ -120,16 +120,7 @@ pub fn apply(
         compose::image_env(plan, cache, Logins::new(&registries, store))
     })?;
 
-    if let Some(c) = m.cpus.as_deref().filter(|_| !req.cpus_set) {
-        let n: f64 = c
-            .trim()
-            .parse()
-            .with_context(|| format!("kit resources: invalid cpus '{c}'"))?;
-        req.cpus = (n.ceil() as u32).max(1);
-    }
-    if let Some(mem) = m.memory.as_deref().filter(|_| !req.memory_set) {
-        req.memory_mib = parse_memory(mem).context("kit resources")?;
-    }
+    apply_resources(req, m)?;
     // The user's -e wins over a kit's variable.
     for (k, v) in &kit_env {
         if !req.env.iter().any(|(n, _)| n == k) {
@@ -142,34 +133,10 @@ pub fn apply(
             req.ports.push(PortMap { host, guest, udp });
         }
     }
-    let mut tmpfs = Vec::new();
-    for v in &m.volumes {
-        if v.tmpfs {
-            req.tmpfs.push(v.path.clone());
-            tmpfs.push((v.path.clone(), v.mode.clone()));
-        } else {
-            req.volumes.push(v.path.clone());
-        }
-    }
+    let tmpfs = add_volumes(req, &m.volumes);
 
     // The user's own secrets' credentials, already in `req`: kit bindings merge with them.
-    let user_creds: Vec<(String, String)> = req
-        .credentials
-        .iter()
-        .map(|c| {
-            let service = req
-                .secrets
-                .iter()
-                .find(|s| {
-                    secrets
-                        .service(s)
-                        .is_some_and(|sv| sv.env_vars.contains(&c.env_var))
-                })
-                .cloned()
-                .unwrap_or_default();
-            (c.env_var.clone(), service)
-        })
-        .collect();
+    let user_creds = user_credentials(req, secrets);
     let mut notes = Vec::new();
     for kc in &m.credentials {
         // `resolve` added its hosts to the kit's network rules.
@@ -188,28 +155,7 @@ pub fn apply(
     }
 
     if m.git_identity {
-        let required = kits.iter().find(|k| {
-            k.caps
-                .iter()
-                .any(|c| matches!(c.body, CapBody::GitIdentity) && !c.optional)
-        });
-        match (host_git(), required) {
-            (Some((name, email)), _) => steps.install.push(InstallStep {
-                label: "the git identity step".into(),
-                kit: None,
-                user: None,
-                script: guest::git_identity_script(&name, &email),
-                relay_stderr: false,
-            }),
-            (None, Some(k)) => bail!(
-                "kit {} needs your git identity; set it with `git config --global user.name …` \
-                 and `git config --global user.email …`",
-                k.name
-            ),
-            (None, None) => {
-                eprintln!("warning: no git user.name/user.email on the host; skipping git-identity")
-            }
-        }
+        steps.install.extend(git_identity_step(&kits, host_git())?);
     }
     for (kit, h) in m.install_hooks.iter().chain(&m.startup_hooks) {
         if let Some(v) = h.env.iter().find(|v| !guest::is_env_name(v)) {
@@ -218,13 +164,10 @@ pub fn apply(
     }
     let workdir = image_workdir(plan);
     steps.install.extend(kit_install_steps(plan, req));
-    // The later kit (in dependency order) wins a path.
-    let mut files: Vec<&FileReq> = Vec::new();
-    for f in &m.files {
-        files.retain(|x| x.path != f.path);
-        files.push(f);
-    }
-    steps.files = files.into_iter().map(guest::file_script).collect();
+    steps.files = last_wins(&m.files)
+        .into_iter()
+        .map(guest::file_script)
+        .collect();
     let agent_file = match req.agent_file.clone() {
         Some(f) => Some(f),
         None => agent_file(plan, &req.workdir())?,
@@ -237,30 +180,9 @@ pub fn apply(
     // workload's agent runs as its image's user, root when the image names none.
     let preset = is_preset(&plan.workload);
     if !preset {
-        req.command = plan.workload.command.clone();
-        req.image_workdir = workdir.map(String::from);
-        // `kit add` can't reload the workload: it reads this back from `sbx.agent-file`.
-        req.agent_file = agent_file;
-        req.user = plan
-            .workload
-            .config
-            .as_ref()
-            .map(|c| match c.user.as_str() {
-                "" => "0".to_string(),
-                u => u.to_string(),
-            });
+        set_workload_fields(req, &plan.workload, workdir, agent_file);
     }
-    for k in kits.iter().skip(usize::from(preset)) {
-        let pinned = pinned_ref(k)?;
-        steps.kits_record.push_str(&format!(
-            "{}\t{pinned}\t{}\t{}\n",
-            k.name,
-            k.provides.join(","),
-            // Empty for a kit that mixes with either.
-            crate::kits::resolve::mixing_format(k).map_or("", Format::name)
-        ));
-        req.kits.push(pinned);
-    }
+    steps.kits_record = record_kits(&kits, preset, req)?;
     req.long_running = m.long_running;
     // `sbx.docker` (shown by `ls`) says the sandbox has a private dockerd: the docker kit's, or
     // that of a kit providing `docker` in its place.
@@ -277,6 +199,134 @@ pub fn apply(
         eprintln!("{note}");
     }
     Ok((steps, added))
+}
+
+/// Kit `resources@1` fill the cpus and memory the user didn't set.
+fn apply_resources(req: &mut CreateRequest, m: &Merged) -> Result<()> {
+    if let Some(c) = m.cpus.as_deref().filter(|_| !req.cpus_set) {
+        let n: f64 = c
+            .trim()
+            .parse()
+            .with_context(|| format!("kit resources: invalid cpus '{c}'"))?;
+        req.cpus = (n.ceil() as u32).max(1);
+    }
+    if let Some(mem) = m.memory.as_deref().filter(|_| !req.memory_set) {
+        req.memory_mib = parse_memory(mem).context("kit resources")?;
+    }
+    Ok(())
+}
+
+/// Adds the kits' volumes to `req`; returns the tmpfs ones with their modes.
+fn add_volumes(
+    req: &mut CreateRequest,
+    volumes: &[crate::kits::resolve::Volume],
+) -> Vec<(String, Option<String>)> {
+    let mut tmpfs = Vec::new();
+    for v in volumes {
+        if v.tmpfs {
+            req.tmpfs.push(v.path.clone());
+            tmpfs.push((v.path.clone(), v.mode.clone()));
+        } else {
+            req.volumes.push(v.path.clone());
+        }
+    }
+    tmpfs
+}
+
+/// `(env var, service)` for each credential already in `req`; the service is empty when the
+/// credential isn't one of the user's own secrets.
+fn user_credentials(req: &CreateRequest, secrets: &SecretsFile) -> Vec<(String, String)> {
+    req.credentials
+        .iter()
+        .map(|c| {
+            let service = req
+                .secrets
+                .iter()
+                .find(|s| {
+                    secrets
+                        .service(s)
+                        .is_some_and(|sv| sv.env_vars.contains(&c.env_var))
+                })
+                .cloned()
+                .unwrap_or_default();
+            (c.env_var.clone(), service)
+        })
+        .collect()
+}
+
+/// The install step setting the guest's git identity from the host's `git`. Without one on the
+/// host it's an error when a kit requires it, else a warning.
+fn git_identity_step(kits: &[&Kit], host: Option<(String, String)>) -> Result<Option<InstallStep>> {
+    let required = kits.iter().find(|k| {
+        k.caps
+            .iter()
+            .any(|c| matches!(c.body, CapBody::GitIdentity) && !c.optional)
+    });
+    match (host, required) {
+        (Some((name, email)), _) => Ok(Some(InstallStep {
+            label: "the git identity step".into(),
+            kit: None,
+            user: None,
+            script: guest::git_identity_script(&name, &email),
+            relay_stderr: false,
+        })),
+        (None, Some(k)) => bail!(
+            "kit {} needs your git identity; set it with `git config --global user.name …` \
+             and `git config --global user.email …`",
+            k.name
+        ),
+        (None, None) => {
+            eprintln!("warning: no git user.name/user.email on the host; skipping git-identity");
+            Ok(None)
+        }
+    }
+}
+
+/// The files with a repeated path kept once: the later kit (in dependency order) wins it.
+fn last_wins(files: &[FileReq]) -> Vec<&FileReq> {
+    let mut out: Vec<&FileReq> = Vec::new();
+    for f in files {
+        out.retain(|x| x.path != f.path);
+        out.push(f);
+    }
+    out
+}
+
+/// The request fields a non-preset workload sets. A preset agent isn't a kit and its command is
+/// the agent's own. A v3 workload's agent runs as its image's user, root when the image names
+/// none.
+fn set_workload_fields(
+    req: &mut CreateRequest,
+    workload: &Kit,
+    workdir: Option<&str>,
+    agent_file: Option<String>,
+) {
+    req.command = workload.command.clone();
+    req.image_workdir = workdir.map(String::from);
+    // `kit add` can't reload the workload: it reads this back from `sbx.agent-file`.
+    req.agent_file = agent_file;
+    req.user = workload.config.as_ref().map(|c| match c.user.as_str() {
+        "" => "0".to_string(),
+        u => u.to_string(),
+    });
+}
+
+/// The `/etc/smolbento/kits` record (a preset isn't a kit), pushing each kit's pinned ref on
+/// `req.kits`.
+fn record_kits(kits: &[&Kit], preset: bool, req: &mut CreateRequest) -> Result<String> {
+    let mut record = String::new();
+    for k in kits.iter().skip(usize::from(preset)) {
+        let pinned = pinned_ref(k)?;
+        record.push_str(&format!(
+            "{}\t{pinned}\t{}\t{}\n",
+            k.name,
+            k.provides.join(","),
+            // Empty for a kit that mixes with either.
+            crate::kits::resolve::mixing_format(k).map_or("", Format::name)
+        ));
+        req.kits.push(pinned);
+    }
+    Ok(record)
 }
 
 /// The workload image's WORKDIR, unless it's unset or `/`.
@@ -779,6 +829,47 @@ fn pinned_ref(k: &Kit) -> Result<String> {
     })
 }
 
+/// What in `kit` only a create can apply (spec "Data flow", `kit add`), in a fixed order.
+pub fn needs_recreate(kit: &Kit) -> Result<Vec<&'static str>> {
+    let mut what = Vec::new();
+    if compose::has_layers(kit)? {
+        what.push("image layers");
+    }
+    for c in &kit.caps {
+        let need = match &c.body {
+            // A passthrough OAuth credential only adds network rules.
+            CapBody::Credential(r) if r.env.is_some() || !r.inject.is_empty() => "credentials",
+            CapBody::Port { .. } => "ports",
+            CapBody::Volume { .. } => "volumes",
+            CapBody::HostMount { .. } => "host mounts",
+            CapBody::AgentSkills { .. } | CapBody::AgentSkill { .. } => "agent skills",
+            // The agent socket is mounted at create.
+            CapBody::SshAgent { .. } => "SSH agent",
+            CapBody::Resources { .. } => "resources",
+            CapBody::LongRunning => "long-running",
+            _ => continue,
+        };
+        what.push(need);
+    }
+    if !kit.env.is_empty() {
+        what.push("environment variables");
+    }
+    let order = [
+        "image layers",
+        "credentials",
+        "ports",
+        "volumes",
+        "host mounts",
+        "SSH agent",
+        "resources",
+        "environment variables",
+        "long-running",
+    ];
+    what.sort_by_key(|w| order.iter().position(|o| o == w));
+    what.dedup();
+    Ok(what)
+}
+
 #[cfg(test)]
 mod tests {
 
@@ -793,10 +884,7 @@ mod tests {
     use crate::secrets::{SecretEntry, Source as SecretSource};
 
     fn kit(name: &str, kind: Kind) -> Kit {
-        Kit {
-            digest: Some(format!("sha256:{}", "ab".repeat(32))),
-            ..Kit::new(name, kind, Source::Registry(format!("acme/{name}:1")))
-        }
+        Kit::test(name, kind)
     }
     fn workload() -> Kit {
         let mut w = kit("wl", Kind::Workload);
@@ -1892,5 +1980,55 @@ mod tests {
         );
         // Only a variable's reference to itself is expanded.
         assert_eq!(value("BRACED"), Some("/opt/b:${PATH}"));
+    }
+
+    #[test]
+    fn kit_resources_fill_only_what_the_user_left_unset() {
+        let mut m = Merged::default();
+        m.cpus = Some("2.5".into());
+        m.memory = Some("1g".into());
+        let mut req = request();
+        req.cpus_set = true;
+        req.cpus = 1;
+        apply_resources(&mut req, &m).unwrap();
+        assert_eq!(req.cpus, 1);
+        assert_eq!(req.memory_mib, 1024);
+        req.cpus_set = false;
+        apply_resources(&mut req, &m).unwrap();
+        assert_eq!(req.cpus, 3);
+        let mut bad = Merged::default();
+        bad.cpus = Some("lots".into());
+        let e = apply_resources(&mut request(), &bad).unwrap_err();
+        assert!(format!("{e:#}").starts_with("kit resources: invalid cpus 'lots'"));
+    }
+
+    #[test]
+    fn volumes_split_into_tmpfs_and_disk() {
+        let vol = |path: &str, tmpfs| crate::kits::resolve::Volume {
+            path: path.into(),
+            tmpfs,
+            mode: tmpfs.then(|| "1777".into()),
+        };
+        let mut req = request();
+        let tmpfs = add_volumes(&mut req, &[vol("/a", true), vol("/b", false)]);
+        assert_eq!(req.tmpfs, ["/a"]);
+        assert_eq!(req.volumes, ["/b"]);
+        assert_eq!(tmpfs, [("/a".to_string(), Some("1777".to_string()))]);
+    }
+
+    #[test]
+    fn the_later_kit_wins_a_file_path() {
+        let file = |path: &str, c: &str| FileReq {
+            path: path.into(),
+            content: c.as_bytes().to_vec(),
+            mode: None,
+            overwrite: true,
+        };
+        let files = [file("/x", "1"), file("/y", "2"), file("/x", "3")];
+        let got: Vec<_> = last_wins(&files)
+            .iter()
+            .map(|f| (f.path.as_str(), f.content.clone()))
+            .collect();
+        assert_eq!(got, [("/y", b"2".to_vec()), ("/x", b"3".to_vec())]);
     }
 }

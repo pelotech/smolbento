@@ -36,6 +36,38 @@ direnv, use `nix develop`.
   mounts, `run` auto-stop, `cp`, `diagnose`, network policy, ports and secrets. The policy test
   needs outbound internet (it reaches `example.com`) and the secrets test needs `httpbin.org`.
 
+## Running tests
+
+```sh
+cargo nextest run publish_starts        # one unit test, by name substring
+just e2e 2 bundled_skills_are             # one e2e test (boots VMs), by name substring
+cargo insta test --accept               # run and accept changed snapshots
+cargo insta review                      # or review them one by one
+```
+
+Prefix each with `direnv exec .` in shells without the direnv hook.
+
+A handler test sets up a fake smolvm machine, runs the command and asserts the smolvm command
+lines (from `src/cli/ports.rs`):
+
+```rust
+#[test]
+fn publish_starts_a_stopped_sandbox_then_updates() {
+    let mut t = test_env(&[]);
+    t.sandbox("a1", "stopped", &[]);       // fake machine `sbx-a1`, state and labels
+    t.sbt(&["ports", "a1", "--publish", "8080:80"]).unwrap();
+    let lines = t.calls();                 // every smolvm call, as one line each
+    assert!(lines.contains(&"machine start -n sbx-a1 --branchable".to_string()));
+    assert_eq!(lines.last().unwrap(), "machine update -n sbx-a1 -p 8080:80");
+}
+```
+
+Use `t.sbt_err` for a command that must fail (it returns the error text) and `t.stdout()` for
+output. Helpers live in `src/testutil.rs`.
+
+IDEs (rust-analyzer, RustRover) should use their own `CARGO_TARGET_DIR`, or the Nix toolchain.
+Two toolchains sharing `target/` rebuild everything each time you switch, and it grows past 40 GB.
+
 ## CI
 
 | Workflow | When | What |

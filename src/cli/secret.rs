@@ -9,6 +9,7 @@ use super::{
     table,
 };
 use crate::policy::Policy;
+use crate::policy::rules::{SmolvmHost, check_host};
 use crate::sandbox::{self, name};
 use crate::secrets::{
     CustomService, RegistryEntry, SecretEntry, SecretsFile, Source, registry_account, scope_for,
@@ -146,9 +147,9 @@ fn custom_hosts(raw: &[String]) -> Result<Vec<String>> {
             bail!("'{r}': use a bare host name like api.x.com (no scheme, port or path)");
         }
         // smolvm takes `*.domain` (every subdomain, not the domain itself) and no other wildcard.
-        let (prefix, name) = match host.strip_prefix("*.") {
-            Some(name) => ("*.", name),
-            None => ("", host.as_str()),
+        let (prefix, name) = match SmolvmHost::parse(&host) {
+            SmolvmHost::Subdomains(name) => ("*.", name),
+            SmolvmHost::Exact(name) => ("", name),
         };
         if name.contains(['*', '?', '[', ']']) {
             bail!(
@@ -156,7 +157,7 @@ fn custom_hosts(raw: &[String]) -> Result<Vec<String>> {
                  (every subdomain of x.com)"
             );
         }
-        crate::policy::rules::check_host(name, r)?;
+        check_host(name, r)?;
         let name = name.strip_suffix('.').unwrap_or(name);
         if !prefix.is_empty() && !name.contains('.') {
             bail!("'{r}': a wildcard needs a domain below the top level, like *.x.com");
