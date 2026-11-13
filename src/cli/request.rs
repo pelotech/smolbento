@@ -215,7 +215,7 @@ pub(crate) fn kit_plan<R: Runner>(
     let workload = match workload {
         Workload::Preset(kit) => *kit,
         Workload::Ref(target) => {
-            let mut kit = kits.load(ctx, &target)?;
+            let mut kit = kits.load(ctx, &target, load::Position::Agent)?;
             if kit.kind == Kind::Mixin {
                 // sbx's report, then how to use the mixin.
                 bail!(
@@ -242,7 +242,7 @@ pub(crate) fn kit_plan<R: Runner>(
     let mixins = opts
         .kit
         .iter()
-        .map(|r| kits.load(ctx, r))
+        .map(|r| kits.load(ctx, r, load::Position::Kit))
         .collect::<Result<Vec<_>>>()?;
     for (source, pins) in &opts.kit_pins {
         let kit = match opts.kit.iter().position(|k| k == source) {
@@ -292,10 +292,15 @@ impl<'a> KitsSection<'a> {
 
     /// Loads kit `reference`: a pull or build is a step, `○ REF — pulling…` or `building…`,
     /// then `✓ REF — ready`, or `cached` when the kit cache already had it all.
-    fn load<R: Runner>(&mut self, ctx: &Ctx<R>, reference: &str) -> Result<Kit> {
+    fn load<R: Runner>(
+        &mut self,
+        ctx: &Ctx<R>,
+        reference: &str,
+        position: load::Position,
+    ) -> Result<Kit> {
         let mut step = None;
         let sandbox = self.sandbox.clone();
-        let loaded = load::load_noting(ctx, reference, Some(&sandbox), &mut |fetch| {
+        let loaded = load::load_noting(ctx, reference, Some(&sandbox), position, &mut |fetch| {
             self.open_section();
             let doing = match fetch {
                 load::Fetch::Pull => "pulling",

@@ -964,7 +964,7 @@ setup:
     // An empty value is a value, and unquoted numbers are strings.
     e.ok(&["kit", "validate", kit, "--kit-arg", "opt="]);
 
-    // As in sbx: a local kit is a path (`../e2e-args` from the workspace), a bare word never is.
+    // As in sbx: a local kit is a path (`../e2e-args` from the workspace).
     let out = e.ok(&["kit", "validate", "../e2e-args", "--kit-arg", "opt="]);
     assert_eq!(out, "✓ ../e2e-args — valid\n");
     let out = e.ok(&[
@@ -982,6 +982,8 @@ setup:
         out.starts_with("Name: e2e-args\nKind: mixin\nSchema: v2\n"),
         "{out}"
     );
+    // Where the agent goes, a bare word is an agent even with that directory present; where
+    // only a kit goes, the directory is read (here an empty one, so it isn't a kit).
     std::fs::create_dir_all(e.workspace().join("e2e-args")).unwrap();
     fails(
         &["create", "e2e-args", ws, "--name", &e.name],
@@ -990,6 +992,18 @@ setup:
     fails(
         &[
             "create", "shell", ws, "--name", &e.name, "--kit", "e2e-args",
+        ],
+        "isn't a kit: no spec.yaml or kit descriptor",
+    );
+    fails(
+        &[
+            "create",
+            "shell",
+            ws,
+            "--name",
+            &e.name,
+            "--kit",
+            "e2e-missing",
         ],
         "not a local path and does not look like a registry reference",
     );

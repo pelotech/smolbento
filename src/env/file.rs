@@ -602,7 +602,12 @@ impl RawFile {
                 *s = lexical(&p).display().to_string();
             }
         };
-        let local = |s: &str| s == "." || s == ".." || s.starts_with("./") || s.starts_with("../");
+        // A kit source is local when it's a relative path, or names something beside the file
+        // (sbx 0.53 reads `kits: [mykit]` as that directory).
+        let local = |s: &str| {
+            let relative = s == "." || s == ".." || s.starts_with("./") || s.starts_with("../");
+            relative || (!s.is_empty() && self.dir.join(s).exists())
+        };
         let fix = |v: &mut Value, key: &str, only_local: bool| {
             let slot = match v {
                 Value::Object(m) => m.get_mut(key),

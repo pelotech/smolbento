@@ -263,12 +263,18 @@ What works as in sbx:
   whenever it has a value: a default counts, an empty one too, and an optional argument with no
   value exports nothing. The name may be `PATH`, which then replaces the image's. All as measured
   on sbx v0.53.0. A later kit's value and your own `-e` still win.
-- **Kit references.** A bare word is an agent name, never a kit, even when a directory of that name
-  exists, and so is a dotted one: `sbt create alpine` fails with `unknown agent "alpine"`,
-  `sbt create .hidden` with `unknown agent ".hidden"`, and `--kit alpine` with
-  `kit reference "alpine": not a local path and does not look like a registry reference`. A local
-  kit is a path (`.`, `..`, `./kit`, `../kit`, `/abs/kit`); a registry reference has a `/`
-  (`docker.io/acme/kit:1`). ZIP kits and `git+` sources are refused.
+- **Kit references.** Where the agent goes (`create REF`), a bare word is an agent name even when
+  a directory of that name exists, and so is a dotted one: `sbt create alpine` fails with
+  `unknown agent "alpine"`, `sbt create .hidden` with `unknown agent ".hidden"`; `a/b` there is a
+  registry reference even when the directory exists. Where only a kit goes (`--kit`,
+  `kit validate`, `kit inspect`, `kit add`, an environment file's `kits:`), an existing path is
+  read as a local kit without `./` (`--kit mykit`, `kit validate sandbox/nix-tools`; in an
+  environment file, relative to the file). Otherwise a local kit is a path (`.`, `..`, `./kit`,
+  `../kit`, `/abs/kit`), a registry reference has a `/` (`docker.io/acme/kit:1`), and `--kit alpine`
+  with no such directory fails with `kit reference "alpine": not a local path and does not look
+  like a registry reference`. ZIP kits and `git+` sources are refused. All as measured on sbx
+  v0.53.0. One difference: sbx's `kit validate` refuses registry references ("OCI references are
+  not supported for validation"); smolbento pulls and validates them.
 - **Versions.** `provides: [name@1.2.0]` and `requires: ["name >= 1.0"]` follow the kit spec's
   version grammar. The agent presets provide their name at their image tag's version, so a v2
   mixin's `requires.agent: claude` works on `claude`.
