@@ -1008,3 +1008,35 @@ setup:
         "not a local path and does not look like a registry reference",
     );
 }
+
+/// A kit `kit push`es loads with `--kit`, its files included, and comes back with `kit pull`.
+#[test]
+#[ignore = "boots real VMs and pulls alpine; run with `just e2e`"]
+pub(crate) fn a_pushed_kit_pulls_and_runs() {
+    let e = E2e::new("push");
+    let reg = Registry::start(&e);
+    let kit = e.dir.path().join("pushed");
+    std::fs::create_dir_all(kit.join("files/home")).unwrap();
+    std::fs::write(
+        kit.join("spec.yaml"),
+        "schemaVersion: \"2\"\nkind: mixin\nname: pushed\n",
+    )
+    .unwrap();
+    std::fs::write(kit.join("files/home/hello"), "from-the-registry\n").unwrap();
+    let r = reg.reference("pushed");
+    let out = e.ok(&["kit", "push", kit.to_str().unwrap(), &r]);
+    assert!(out.starts_with(&format!("Pushed {r} (sha256:")), "{out}");
+    e.create_with_kits(&[&r]);
+    assert_eq!(
+        root_out(&e.name, "cat /home/agent/hello"),
+        "from-the-registry\n"
+    );
+    let out = e.ok(&["kit", "pull", &r, "-o", "out.tar.gz"]);
+    assert_eq!(out, format!("Pulled {r} to out.tar.gz\n"));
+    let pulled = std::fs::read(e.workspace().join("out.tar.gz")).unwrap();
+    let pushed = smolbento::kits::artifact::read_dir(&kit)
+        .unwrap()
+        .files
+        .unwrap();
+    assert_eq!(pulled, pushed);
+}

@@ -373,12 +373,29 @@ pub enum KitCmd {
         #[arg(long, short = 'y')]
         yes: bool,
     },
-    #[command(hide = true)]
-    Pack(Passthrough),
-    #[command(hide = true)]
-    Push(Passthrough),
-    #[command(hide = true)]
-    Pull(Passthrough),
+    /// Package a directory as a kit artifact
+    Pack {
+        /// Kit directory: spec.yaml and an optional files/
+        directory: String,
+        /// Output file path; must end in .zip (default: <name>.zip)
+        #[arg(short, long)]
+        output: Option<String>,
+    },
+    /// Push a kit artifact to an OCI registry
+    Push {
+        /// Kit directory: spec.yaml and an optional files/
+        directory: String,
+        /// Where to push it: registry/repo:tag
+        reference: String,
+    },
+    /// Pull a kit artifact from an OCI registry
+    Pull {
+        /// Kit: registry/repo:tag or registry/repo@sha256:digest
+        reference: String,
+        /// Output file path (default: derived from the reference)
+        #[arg(short, long)]
+        output: Option<String>,
+    },
     #[command(hide = true)]
     Sign(Passthrough),
     #[command(hide = true)]

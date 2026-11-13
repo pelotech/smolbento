@@ -12,8 +12,9 @@ use crate::kits::args::{ArgValues, NoResolvedValue};
 use crate::kits::model::{
     Cap, CapBody, Content, Format as KitFormat, ImageConfig, Kind, Kit, Source,
 };
+use crate::kits::registry_auth::Logins;
 use crate::kits::resolve::{check_named_formats, mixing_format, resolve, resolve_for};
-use crate::kits::{capability, compose, guest, load};
+use crate::kits::{artifact, capability, compose, guest, load};
 use crate::policy::{Decision, Policy, compile};
 use crate::provision;
 use crate::sandbox::{self, CreateRequest, KitPhase, Sandbox};
@@ -46,12 +47,94 @@ pub fn run<R: Runner>(ctx: &mut Ctx<R>, cmd: KitCmd) -> Result<i32> {
             args,
             yes,
         } => add(ctx, &sandbox, &reference, &args, yes),
-        KitCmd::Pack(_) => pending("pack"),
-        KitCmd::Push(_) => pending("push"),
-        KitCmd::Pull(_) => pending("pull"),
+        KitCmd::Pack { directory, output } => pack(ctx, &directory, output.as_deref()),
+        KitCmd::Push {
+            directory,
+            reference,
+        } => push(ctx, &directory, &reference),
+        KitCmd::Pull { reference, output } => pull(ctx, &reference, output.as_deref()),
         KitCmd::Sign(_) => pending("sign"),
         KitCmd::Verify(_) => pending("verify"),
     }
+}
+
+/// DIRECTORY read as a v2 kit after the loader's own checks, as `kit pack` and `kit push` check
+/// it; errors read like sbx's (`invalid artifact: …`).
+fn checked_payload<R: Runner>(ctx: &Ctx<R>, directory: &str) -> Result<artifact::Payload> {
+    let dir = ctx.cwd.join(directory);
+    (|| {
+        if !dir.is_dir() {
+            bail!("artifact directory: stat {directory}: no such file or directory");
+        }
+        let payload = artifact::read_dir(&dir).context("manifest")?;
+        // The directory itself, never a shipped kit or registry ref that shares its name.
+        load::load_with(ctx, &dir.display().to_string(), true)?;
+        Ok(payload)
+    })()
+    .context("invalid artifact")
+}
+
+/// `kit push`: publishes DIRECTORY to REFERENCE as sbx's v2 kit artifact.
+fn push<R: Runner>(ctx: &Ctx<R>, directory: &str, reference: &str) -> Result<i32> {
+    crate::kits::registry::tagged_reference(reference)?;
+    let payload = checked_payload(ctx, directory)?;
+    let registries = SecretsFile::load(&ctx.paths)?.host_registries();
+    let logins = Logins::new(&registries, &*ctx.store);
+    let digest = crate::kits::registry::push_v2(reference, &payload, logins)?;
+    writeln!(&ctx.out, "Pushed {reference} ({digest})")?;
+    Ok(0)
+}
+
+/// Writes a file `kit pack` or `kit pull` produces, whole or not at all, mode 0644.
+fn write_output(path: &std::path::Path, bytes: &[u8]) -> Result<()> {
+    use std::os::unix::fs::PermissionsExt;
+    let parent = path.parent().context("an output path has a directory")?;
+    let tmp = tempfile::NamedTempFile::new_in(parent)?;
+    std::fs::write(tmp.path(), bytes)?;
+    std::fs::set_permissions(tmp.path(), std::fs::Permissions::from_mode(0o644))?;
+    crate::kits::registry::persist(tmp, path)
+}
+
+/// `kit pull`: saves the payload of the v2 kit at REFERENCE (its files, as a tar.gz).
+fn pull<R: Runner>(ctx: &Ctx<R>, reference: &str, output: Option<&str>) -> Result<i32> {
+    // As in sbx, the source policy applies to a pull (not to a push).
+    crate::kits::trust::check(&Source::Registry(reference.into()), &ctx.settings)?;
+    let registries = SecretsFile::load(&ctx.paths)?.host_registries();
+    let logins = Logins::new(&registries, &*ctx.store);
+    let payload = crate::kits::registry::fetch_payload(reference, &ctx.paths.kit_cache(), logins)?;
+    let shown = output.map_or_else(|| crate::kits::registry::pull_name(reference), String::from);
+    let path = ctx.cwd.join(&shown);
+    write_output(&path, &payload).with_context(|| format!("writing {shown}"))?;
+    writeln!(&ctx.out, "Pulled {reference} to {shown}")?;
+    Ok(0)
+}
+
+/// `kit pack`: validates DIRECTORY as a v2 kit and writes its ZIP, as sbx does.
+fn pack<R: Runner>(ctx: &Ctx<R>, directory: &str, output: Option<&str>) -> Result<i32> {
+    let dir = ctx.cwd.join(directory);
+    checked_payload(ctx, directory)?;
+    let bytes = artifact::zip(&dir)?;
+    let shown = match output {
+        Some(o) if !o.ends_with(".zip") => {
+            bail!("pack: destination {o} must have a .zip extension")
+        }
+        Some(o) => o.to_string(),
+        None => {
+            let yaml = std::fs::read_to_string(dir.join("spec.yaml"))?;
+            format!("{}.zip", crate::kits::v2::name_in(&yaml, &dir)?)
+        }
+    };
+    let path = ctx.cwd.join(&shown);
+    let parent = path.parent().unwrap_or(&ctx.cwd);
+    if !parent.is_dir() {
+        bail!(
+            "pack: resolve directory of {shown}: lstat {}: no such file or directory",
+            parent.display()
+        );
+    }
+    write_output(&path, &bytes)?;
+    writeln!(&ctx.out, "Packed artifact {shown}")?;
+    Ok(0)
 }
 
 /// sbx kit subcommands smolbento doesn't have yet: exit 2, like other pending commands.
@@ -863,6 +946,128 @@ mod tests {
             serde_json::json!({"required": false, "default": "fast", "enum": ["fast", "slow"]})
         );
         assert!(x["digest"].as_str().unwrap().starts_with("sha256:"));
+    }
+
+    fn v2_dir(t: &TestEnv, dir: &str, spec: &str) -> std::path::PathBuf {
+        let d = t.ctx.cwd.join(dir);
+        std::fs::create_dir_all(d.join("files/home")).unwrap();
+        std::fs::write(d.join("spec.yaml"), spec).unwrap();
+        std::fs::write(d.join("files/home/hello"), "hi").unwrap();
+        d
+    }
+
+    #[test]
+    fn pack_writes_name_zip() {
+        let mut t = kit_env();
+        v2_dir(&t, "k", "schemaVersion: \"2\"\nkind: mixin\nname: demo\n");
+        assert_eq!(t.sbt(&["kit", "pack", "./k"]).unwrap(), 0);
+        assert_eq!(t.stdout(), "Packed artifact demo.zip\n");
+        let z = std::fs::read(t.ctx.cwd.join("demo.zip")).unwrap();
+        assert_eq!(z, crate::kits::artifact::zip(&t.ctx.cwd.join("k")).unwrap());
+        assert_eq!(t.sbt(&["kit", "pack", "k", "-o", "out.zip"]).unwrap(), 0);
+        assert_eq!(t.stdout(), "Packed artifact out.zip\n");
+        assert!(t.ctx.cwd.join("out.zip").exists());
+    }
+
+    #[test]
+    fn pack_output_must_be_zip_in_an_existing_directory() {
+        let mut t = kit_env();
+        v2_dir(&t, "k", "schemaVersion: \"2\"\nkind: mixin\nname: demo\n");
+        let e = t
+            .sbt(&["kit", "pack", "./k", "-o", "out.tar.gz"])
+            .unwrap_err();
+        assert_eq!(
+            e.to_string(),
+            "pack: destination out.tar.gz must have a .zip extension"
+        );
+        let e = t
+            .sbt(&["kit", "pack", "./k", "-o", "missing/x.zip"])
+            .unwrap_err();
+        let want = format!(
+            "pack: resolve directory of missing/x.zip: lstat {}: no such file or directory",
+            t.ctx.cwd.join("missing").display()
+        );
+        assert_eq!(e.to_string(), want);
+    }
+
+    #[test]
+    fn pack_refuses_a_missing_dir_and_a_bad_spec() {
+        let mut t = kit_env();
+        let e = t.sbt(&["kit", "pack", "./nope"]).unwrap_err();
+        assert_eq!(
+            format!("{e:#}"),
+            "invalid artifact: artifact directory: stat ./nope: no such file or directory"
+        );
+        v2_dir(&t, "bad", "kind: mixin\n");
+        let e = t.sbt(&["kit", "pack", "./bad"]).unwrap_err();
+        assert_eq!(
+            format!("{e:#}"),
+            "invalid artifact: manifest: schemaVersion is required"
+        );
+        v2_dir(&t, "v3", "schemaVersion: \"3\"\nkind: mixin\n");
+        let e = t.sbt(&["kit", "pack", "./v3"]).unwrap_err();
+        assert_eq!(
+            format!("{e:#}"),
+            "invalid artifact: manifest: unsupported schemaVersion \"3\" (supported: [1 2])"
+        );
+        assert!(!t.ctx.cwd.join("demo.zip").exists());
+    }
+
+    #[test]
+    fn push_requires_a_tag_and_a_valid_kit_before_any_network_call() {
+        let mut t = kit_env();
+        v2_dir(&t, "k", "schemaVersion: \"2\"\nkind: mixin\nname: demo\n");
+        for r in [
+            "localhost:5000/k",
+            "localhost:5000/k@sha256:0000000000000000000000000000000000000000000000000000000000000000",
+        ] {
+            let e = t.sbt(&["kit", "push", "./k", r]).unwrap_err();
+            assert_eq!(
+                e.to_string(),
+                format!("invalid reference: {r} needs a tag (registry/repo:tag)")
+            );
+        }
+        let e = t
+            .sbt(&["kit", "push", "./nope", "localhost:5000/k:1"])
+            .unwrap_err();
+        assert!(format!("{e:#}").starts_with("invalid artifact: "), "{e:#}");
+    }
+
+    #[test]
+    fn pack_validates_the_directory_even_when_it_shares_a_shipped_kit_name() {
+        let mut t = kit_env();
+        v2_dir(&t, "docker", "schemaVersion: \"2\"\nkind: bogus\nname: d\n");
+        let e = t.sbt(&["kit", "pack", "docker"]).unwrap_err();
+        assert!(format!("{e:#}").starts_with("invalid artifact: "), "{e:#}");
+        assert!(!t.ctx.cwd.join("d.zip").exists());
+    }
+
+    #[test]
+    fn pack_output_is_readable_like_any_new_file() {
+        use std::os::unix::fs::PermissionsExt;
+        let mut t = kit_env();
+        v2_dir(&t, "k", "schemaVersion: \"2\"\nkind: mixin\nname: demo\n");
+        t.sbt(&["kit", "pack", "./k"]).unwrap();
+        let mode = std::fs::metadata(t.ctx.cwd.join("demo.zip"))
+            .unwrap()
+            .permissions()
+            .mode();
+        assert_eq!(mode & 0o777, 0o644);
+    }
+
+    #[test]
+    fn pull_applies_the_source_policy_and_push_does_not() {
+        // sbx 0.53: `kit pull` of a source outside kit.allowedSources is refused before any
+        // download; `kit push` doesn't check the policy.
+        let mut t = test_env(&[("SMOLBENTO_KIT_ALLOWED_SOURCES", r#"["dhi.io/"]"#)]);
+        let e = t
+            .sbt(&["kit", "pull", "docker.io/sbx/gemini-kit:latest"])
+            .unwrap_err();
+        assert!(e.to_string().contains("not in your allowlist"), "{e}");
+        assert!(!t.ctx.cwd.join("gemini-kit-latest.tar.gz").exists());
+        v2_dir(&t, "k", "schemaVersion: \"2\"\nkind: mixin\nname: demo\n");
+        let e = t.sbt(&["kit", "push", "./k", "k:1"]).unwrap_err();
+        assert!(!e.to_string().contains("allowlist"), "{e}");
     }
 
     #[test]

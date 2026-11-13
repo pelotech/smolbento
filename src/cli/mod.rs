@@ -342,8 +342,8 @@ mod tests {
         let err = t.sbt(&["tui"]).unwrap_err();
         assert_eq!(err.to_string(), "`sbt tui` is not implemented yet");
         assert_eq!(exit_code(&err), 2);
-        let err = t.sbt(&["kit", "pack", "./my-kit"]).unwrap_err();
-        assert_eq!(err.to_string(), "`sbt kit pack` is not implemented yet");
+        let err = t.sbt(&["kit", "sign", "./my-kit"]).unwrap_err();
+        assert_eq!(err.to_string(), "`sbt kit sign` is not implemented yet");
         assert_eq!(exit_code(&err), 2);
         let err = t.sbt(&["move", "x", "--to", "cloud"]).unwrap_err();
         assert!(err.to_string().contains("Docker Cloud"));

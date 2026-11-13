@@ -2,6 +2,7 @@
 
 pub mod apply;
 pub mod args;
+pub mod artifact;
 pub mod capability;
 pub mod compose;
 mod descriptor;

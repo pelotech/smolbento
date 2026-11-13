@@ -1,0 +1,21 @@
+---
+source: tests/help.rs
+expression: help(&path)
+---
+Push a kit artifact to an OCI registry
+
+Usage: sbt kit push [OPTIONS] <DIRECTORY> <REFERENCE>
+
+Arguments:
+  <DIRECTORY>
+          Kit directory: spec.yaml and an optional files/
+
+  <REFERENCE>
+          Where to push it: registry/repo:tag
+
+Options:
+  -D, --debug
+          Print each smolvm command line
+
+  -h, --help
+          Print help
