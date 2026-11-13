@@ -12,6 +12,7 @@ use crate::kits::args::{ArgValues, NoResolvedValue};
 use crate::kits::model::{
     Cap, CapBody, Content, Format as KitFormat, ImageConfig, Kind, Kit, Source,
 };
+use crate::kits::registry_auth::Logins;
 use crate::kits::resolve::{check_named_formats, mixing_format, resolve, resolve_for};
 use crate::kits::{artifact, capability, compose, guest, load};
 use crate::policy::{Decision, Policy, compile};
@@ -47,25 +48,47 @@ pub fn run<R: Runner>(ctx: &mut Ctx<R>, cmd: KitCmd) -> Result<i32> {
             yes,
         } => add(ctx, &sandbox, &reference, &args, yes),
         KitCmd::Pack { directory, output } => pack(ctx, &directory, output.as_deref()),
-        KitCmd::Push(_) => pending("push"),
+        KitCmd::Push {
+            directory,
+            reference,
+        } => push(ctx, &directory, &reference),
         KitCmd::Pull(_) => pending("pull"),
         KitCmd::Sign(_) => pending("sign"),
         KitCmd::Verify(_) => pending("verify"),
     }
 }
 
-/// `kit pack`: validates DIRECTORY as a v2 kit and writes its ZIP, as sbx does.
-fn pack<R: Runner>(ctx: &Ctx<R>, directory: &str, output: Option<&str>) -> Result<i32> {
+/// DIRECTORY read as a v2 kit after the loader's own checks, as `kit pack` and `kit push` check
+/// it; errors read like sbx's (`invalid artifact: …`).
+fn checked_payload<R: Runner>(ctx: &Ctx<R>, directory: &str) -> Result<artifact::Payload> {
     let dir = ctx.cwd.join(directory);
-    let bytes = (|| -> Result<Vec<u8>> {
+    (|| {
         if !dir.is_dir() {
             bail!("artifact directory: stat {directory}: no such file or directory");
         }
-        artifact::read_dir(&dir).context("manifest")?;
+        let payload = artifact::read_dir(&dir).context("manifest")?;
         load::load_with(ctx, directory, true)?;
-        artifact::zip(&dir)
+        Ok(payload)
     })()
-    .context("invalid artifact")?;
+    .context("invalid artifact")
+}
+
+/// `kit push`: publishes DIRECTORY to REFERENCE as sbx's v2 kit artifact.
+fn push<R: Runner>(ctx: &Ctx<R>, directory: &str, reference: &str) -> Result<i32> {
+    crate::kits::registry::tagged_reference(reference)?;
+    let payload = checked_payload(ctx, directory)?;
+    let registries = SecretsFile::load(&ctx.paths)?.host_registries();
+    let logins = Logins::new(&registries, &*ctx.store);
+    let digest = crate::kits::registry::push_v2(reference, &payload, logins)?;
+    writeln!(&ctx.out, "Pushed {reference} ({digest})")?;
+    Ok(0)
+}
+
+/// `kit pack`: validates DIRECTORY as a v2 kit and writes its ZIP, as sbx does.
+fn pack<R: Runner>(ctx: &Ctx<R>, directory: &str, output: Option<&str>) -> Result<i32> {
+    let dir = ctx.cwd.join(directory);
+    checked_payload(ctx, directory)?;
+    let bytes = artifact::zip(&dir)?;
     let shown = match output {
         Some(o) if !o.ends_with(".zip") => {
             bail!("pack: destination {o} must have a .zip extension")
@@ -965,6 +988,23 @@ mod tests {
             "invalid artifact: manifest: unsupported schemaVersion \"3\" (supported: [1 2])"
         );
         assert!(!t.ctx.cwd.join("demo.zip").exists());
+    }
+
+    #[test]
+    fn push_requires_a_tag_and_a_valid_kit_before_any_network_call() {
+        let mut t = kit_env();
+        v2_dir(&t, "k", "schemaVersion: \"2\"\nkind: mixin\nname: demo\n");
+        for r in ["localhost:5000/k", "k:1", "localhost:5000/k@sha256:00"] {
+            let e = t.sbt(&["kit", "push", "./k", r]).unwrap_err();
+            assert_eq!(
+                e.to_string(),
+                format!("invalid reference: {r} needs a tag (registry/repo:tag)")
+            );
+        }
+        let e = t
+            .sbt(&["kit", "push", "./nope", "localhost:5000/k:1"])
+            .unwrap_err();
+        assert!(format!("{e:#}").starts_with("invalid artifact: "), "{e:#}");
     }
 
     #[test]

@@ -381,8 +381,13 @@ pub enum KitCmd {
         #[arg(short, long)]
         output: Option<String>,
     },
-    #[command(hide = true)]
-    Push(Passthrough),
+    /// Push a kit artifact to an OCI registry
+    Push {
+        /// Kit directory: spec.yaml and an optional files/
+        directory: String,
+        /// Where to push it: registry/repo:tag
+        reference: String,
+    },
     #[command(hide = true)]
     Pull(Passthrough),
     #[command(hide = true)]

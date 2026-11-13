@@ -16,6 +16,7 @@ use anyhow::{Context, Result, anyhow, bail};
 use base64::Engine;
 use base64::engine::general_purpose::STANDARD;
 use oci_client::Reference;
+use oci_client::RegistryOperation;
 use oci_client::client::{Client, ClientConfig, ClientProtocol};
 use oci_client::errors::OciDistributionError;
 use oci_client::manifest::{
@@ -23,13 +24,14 @@ use oci_client::manifest::{
     OCI_IMAGE_MEDIA_TYPE,
 };
 use oci_client::secrets::RegistryAuth;
+use reqwest::header::HeaderValue;
 use serde_json::{Value, json};
 use sha2::{Digest, Sha256};
 use tokio::io::AsyncWrite;
 
 use crate::kits::model::{Content, ImageConfig, Kit, Source};
 use crate::kits::registry_auth::Logins;
-use crate::kits::{trust, v3};
+use crate::kits::{artifact, trust, v3};
 use crate::util::{hex, sha256_digest};
 
 const DESCRIPTOR_ANNOTATION: &str = "vnd.docker.sandbox.kit.descriptor";
@@ -107,6 +109,58 @@ fn fetch_ref(
             Err(e) => Err(e),
         }
     })
+}
+
+/// Pushes a v2 kit to REF (`registry/repo:tag`) and returns its manifest digest. Logs in with
+/// the stored registry secret (a push-scoped token), else the host's docker login, else
+/// anonymously.
+pub fn push_v2(reference: &str, payload: &artifact::Payload, logins: Logins) -> Result<String> {
+    let r = tagged_reference(reference)?;
+    let created = humantime::format_rfc3339_seconds(std::time::SystemTime::now()).to_string();
+    let (manifest, blobs) = artifact::manifest(payload, &created);
+    let digest = sha256_digest(&manifest);
+    let auth = match logins
+        .push_auth(r.registry(), r.repository())
+        .with_context(|| format!("logging in to {} with its registry secret", r.registry()))?
+    {
+        Some(a) => a,
+        None => docker_auth(r.resolve_registry()).unwrap_or(RegistryAuth::Anonymous),
+    };
+    let rt = tokio::runtime::Builder::new_current_thread()
+        .enable_all()
+        .build()
+        .context("starting the registry client")?;
+    let client = new_client(&r);
+    rt.block_on(async {
+        client
+            .auth(&r, &auth, RegistryOperation::Push)
+            .await
+            .with_context(|| format!("logging in to {} to push", r.registry()))?;
+        for (d, bytes) in blobs {
+            client
+                .push_blob(&r, bytes, &d)
+                .await
+                .with_context(|| format!("pushing blob {d}"))?;
+        }
+        client
+            .push_manifest_raw(&r, manifest, HeaderValue::from_static(OCI_IMAGE_MEDIA_TYPE))
+            .await
+            .with_context(|| format!("pushing the manifest of {reference}"))?;
+        anyhow::Ok(())
+    })?;
+    Ok(digest)
+}
+
+/// REF parsed for a push, which needs an explicit tag.
+pub(crate) fn tagged_reference(reference: &str) -> Result<Reference> {
+    let last = reference.rsplit('/').next().unwrap_or_default();
+    if reference.contains('@') || !last.contains(':') || !reference.contains('/') {
+        bail!("invalid reference: {reference} needs a tag (registry/repo:tag)");
+    }
+    trust::normalise(reference)?;
+    reference
+        .parse()
+        .with_context(|| format!("invalid reference: {reference}"))
 }
 
 /// The ring provider is installed once; reqwest's no-provider rustls build needs a default.

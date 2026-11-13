@@ -63,11 +63,22 @@ pub(crate) fn mint(
     password: &str,
     repos: &[String],
 ) -> Result<Option<String>> {
+    mint_for(host, entry, password, repos, "pull")
+}
+
+/// `mint` for ACTIONS on each repository (`pull`, or `pull,push` for `kit push`).
+pub(crate) fn mint_for(
+    host: &str,
+    entry: &RegistryEntry,
+    password: &str,
+    repos: &[String],
+    actions: &str,
+) -> Result<Option<String>> {
     tokio::runtime::Builder::new_current_thread()
         .enable_all()
         .build()
         .context("starting the registry client")?
-        .block_on(mint_async(host, entry, password, repos))
+        .block_on(mint_async(host, entry, password, repos, actions))
 }
 
 async fn mint_async(
@@ -75,6 +86,7 @@ async fn mint_async(
     entry: &RegistryEntry,
     password: &str,
     repos: &[String],
+    actions: &str,
 ) -> Result<Option<String>> {
     // Same TLS setup as `registry::new_client`. Err means a provider is already installed.
     let _ = rustls::crypto::ring::default_provider().install_default();
@@ -124,7 +136,7 @@ async fn mint_async(
             q.append_pair("service", s);
         }
         for r in repos {
-            q.append_pair("scope", &format!("repository:{r}:pull"));
+            q.append_pair("scope", &format!("repository:{r}:{actions}"));
         }
     }
     // The login goes in the Authorization header only; the URL carries no credential.
@@ -311,6 +323,15 @@ impl<'a> Logins<'a> {
     /// only when `/v2/` has no Bearer challenge, the Basic login itself (oci-client then sends
     /// it to that registry only). `None` without a stored login. Sync; call outside a runtime.
     pub(crate) fn auth_for(&self, registry: &str, repo: &str) -> Result<Option<RegistryAuth>> {
+        self.auth_with(registry, repo, "pull")
+    }
+
+    /// `auth_for`, with a token that may also push to REPO.
+    pub(crate) fn push_auth(&self, registry: &str, repo: &str) -> Result<Option<RegistryAuth>> {
+        self.auth_with(registry, repo, "pull,push")
+    }
+
+    fn auth_with(&self, registry: &str, repo: &str, actions: &str) -> Result<Option<RegistryAuth>> {
         let Some(store) = self.store else {
             return Ok(None);
         };
@@ -320,7 +341,7 @@ impl<'a> Logins<'a> {
             return Ok(None);
         };
         Ok(Some(
-            match mint(&entry.host, &entry, &password, &[repo.to_string()])? {
+            match mint_for(&entry.host, &entry, &password, &[repo.to_string()], actions)? {
                 Some(token) => RegistryAuth::Bearer(token),
                 None => RegistryAuth::Basic(user, password),
             },
@@ -504,6 +525,25 @@ mod tests {
                 body.len()
             )
         })
+    }
+
+    #[test]
+    fn mints_a_push_token() {
+        let (port, rx) = serve(vec![
+            challenge("127.0.0.1"),
+            json("200 OK", r#"{"token":"minted"}"#),
+        ]);
+        let host = format!("127.0.0.1:{port}");
+        let e = entry(&host, Some("josmo"), None);
+        let t = mint_for(&host, &e, "s3cret", &["a/b".into()], "pull,push").unwrap();
+        assert_eq!(t.as_deref(), Some("minted"));
+        rx.recv().unwrap();
+        let tok = rx.recv().unwrap();
+        let first = tok.lines().next().unwrap();
+        assert!(
+            first.contains("scope=repository%3Aa%2Fb%3Apull%2Cpush"),
+            "{first}"
+        );
     }
 
     #[test]
