@@ -356,12 +356,7 @@ pub fn resources(loaded: &Loaded, spec: &EnvSpec) -> Vec<Resource> {
 pub fn lifecycle(loaded: &Loaded) -> Lifecycle {
     let mut lifecycle = loaded.file.lifecycle.clone().unwrap_or_default();
     let project = loaded.project_dir.display().to_string();
-    let phases = [
-        &mut lifecycle.initialize,
-        &mut lifecycle.post_create,
-        &mut lifecycle.pre_remove,
-    ];
-    for c in phases.into_iter().flatten() {
+    for c in lifecycle.commands_mut() {
         c.workdir.get_or_insert_with(|| project.clone());
     }
     lifecycle
@@ -382,13 +377,13 @@ pub fn vars(loaded: &Loaded, name: &str) -> Vars {
 /// The `LIFECYCLE` section: one resource per command, identified by its phase and position.
 pub fn lifecycle_resources(loaded: &Loaded, lifecycle: &Lifecycle) -> Vec<Resource> {
     let field = |label: &str, value: &str| (label.to_string(), value.to_string());
-    let phases = [
-        (Phase::Initialize, &lifecycle.initialize, When::EveryRun),
-        (Phase::PostCreate, &lifecycle.post_create, When::Create),
-        (Phase::PreRemove, &lifecycle.pre_remove, When::Removal),
-    ];
     let mut out = Vec::new();
-    for (phase, commands, when) in phases {
+    for (phase, commands) in lifecycle.phases() {
+        let when = match phase {
+            Phase::Initialize => When::EveryRun,
+            Phase::PostCreate => When::Create,
+            Phase::PreRemove => When::Removal,
+        };
         let phase = phase.name();
         for (i, c) in commands.iter().enumerate() {
             let mut fields = vec![field("workdir", c.workdir.as_deref().unwrap_or_default())];

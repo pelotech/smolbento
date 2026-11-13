@@ -276,14 +276,9 @@ fn check_merged(f: &EnvFile, first: &str) -> Result<()> {
         bail!("invalid {first}: secret \"{name}\": {why}");
     }
     if let Some(l) = &f.lifecycle {
-        let phases = [
-            ("initialize", &l.initialize),
-            ("postCreate", &l.post_create),
-            ("preRemove", &l.pre_remove),
-        ];
-        for (phase, commands) in phases {
+        for (phase, commands) in l.phases() {
             for (i, c) in commands.iter().enumerate() {
-                let at = format!("invalid {first}: lifecycle.{phase}[{i}]");
+                let at = format!("invalid {first}: lifecycle.{}[{i}]", phase.name());
                 if c.command.trim().is_empty() {
                     bail!("{at}: command is empty");
                 }

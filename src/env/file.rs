@@ -7,6 +7,7 @@ use std::collections::BTreeMap;
 use std::path::{Path, PathBuf};
 use std::sync::LazyLock;
 
+use super::lifecycle::Phase;
 use anyhow::{Context, Result, bail};
 use regex_lite::Regex;
 use serde::Deserialize;
@@ -101,6 +102,26 @@ pub struct Lifecycle {
     /// `env rm`, before anything is removed.
     #[serde(default)]
     pub pre_remove: Vec<HostCommand>,
+}
+
+impl Lifecycle {
+    /// The three phases with their commands, in the order they run.
+    pub fn phases(&self) -> [(Phase, &[HostCommand]); 3] {
+        [
+            (Phase::Initialize, &self.initialize),
+            (Phase::PostCreate, &self.post_create),
+            (Phase::PreRemove, &self.pre_remove),
+        ]
+    }
+
+    pub fn commands_mut(&mut self) -> impl Iterator<Item = &mut HostCommand> {
+        let phases = [
+            &mut self.initialize,
+            &mut self.post_create,
+            &mut self.pre_remove,
+        ];
+        phases.into_iter().flatten()
+    }
 }
 
 #[derive(Deserialize, Debug, Clone, PartialEq, Eq)]

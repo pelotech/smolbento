@@ -254,27 +254,28 @@ fn watch(
         {
             exited = Some((status, Instant::now() + HELD_OUTPUT_GRACE));
         }
-        match exited {
-            Some((status, _)) if !output_open => {
+        if let Some((status, grace)) = exited {
+            if !output_open {
                 return match status.code() {
                     Some(0) => Ok(()),
                     Some(code) => bail!("exit status {code}"),
                     None => bail!("ended by a signal"),
                 };
             }
-            Some((_, grace)) if Instant::now() >= grace => bail!(
-                "exited while a background child still held its output; redirect that child's \
-                 output (e.g. >/dev/null 2>&1) so the command can finish"
-            ),
-            None if deadline.is_some_and(|d| Instant::now() >= d) => {
+            if Instant::now() >= grace {
                 bail!(
-                    "timed out after {}",
-                    c.timeout.as_deref().unwrap_or_default()
-                )
+                    "exited while a background child still held its output; redirect that \
+                     child's output (e.g. >/dev/null 2>&1) so the command can finish"
+                );
             }
-            // A closed output with the command still running: only the exit ends the wait.
-            _ if !output_open => std::thread::sleep(TICK),
-            _ => {}
+        } else if deadline.is_some_and(|d| Instant::now() >= d) {
+            bail!(
+                "timed out after {}",
+                c.timeout.as_deref().unwrap_or_default()
+            );
+        } else if !output_open {
+            // Still running with its output closed: there is nothing to wait on but time.
+            std::thread::sleep(TICK);
         }
     }
 }

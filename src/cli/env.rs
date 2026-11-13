@@ -300,34 +300,24 @@ fn env_rm<R: Runner>(ctx: &mut Ctx<R>, a: EnvRmArgs) -> Result<i32> {
         &c.env_arg,
         &c.env_args_file,
     )?;
+    // What is stored for the sandbox, removed with it.
+    let stored = SecretsFile::load(&ctx.paths)?;
     let scope = scope_for(Some(&name));
-    let scoped: Vec<String> = SecretsFile::load(&ctx.paths)?
-        .secrets
-        .into_iter()
-        .filter(|e| e.scope == scope)
-        .map(|e| e.service)
-        .collect();
-    let registries: Vec<String> = SecretsFile::load(&ctx.paths)?
-        .remove_sandbox_registries(&name)
-        .into_iter()
-        .map(|r| r.host)
-        .collect();
+    let scoped = stored.secrets.iter().filter(|e| e.scope == scope);
+    let scoped: Vec<String> = scoped.map(|e| e.service.clone()).collect();
+    let registries = stored.registries.iter();
+    let registries = registries.filter(|r| r.sandbox.as_deref() == Some(name.as_str()));
+    let registries: Vec<String> = registries.map(|r| r.host.clone()).collect();
     let all = sandbox::list(&ctx.vm)?;
     let sb = all.iter().find(|sb| sb.name() == name);
     // `preRemove` runs whether or not the sandbox is still there, as in sbx.
     let lifecycle = lifecycle(&loaded);
-    let pre_remove: &[HostCommand] = if a.skip_host_commands {
-        &[]
-    } else {
-        &lifecycle.pre_remove
-    };
-    let nothing_left = sb.is_none() && scoped.is_empty() && registries.is_empty();
-    if nothing_left && pre_remove.is_empty() {
-        // Nothing to remove but the approval, which a plain `rm` of the sandbox leaves.
-        approval::forget(&ctx.paths, &name)?;
-        eprintln!("error: sandbox '{name}' not found\n  try: sbt ls");
-        return Ok(0);
-    }
+    let skip = a.skip_host_commands;
+    let to_run: Vec<Resource> = lifecycle_resources(&loaded, &lifecycle)
+        .into_iter()
+        .filter(|r| r.when == When::Removal && !skip)
+        .collect();
+    let nothing_stored = sb.is_none() && scoped.is_empty() && registries.is_empty();
     if let Some(sb) = sb {
         let forks = super::lifecycle::remaining_forks(sb, &all, &[&name]);
         if !forks.is_empty() {
@@ -337,29 +327,23 @@ fn env_rm<R: Runner>(ctx: &mut Ctx<R>, a: EnvRmArgs) -> Result<i32> {
             );
         }
     }
-    let to_run: Vec<Resource> = lifecycle_resources(&loaded, &lifecycle)
-        .into_iter()
-        .filter(|r| r.when == When::Removal && !a.skip_host_commands)
-        .collect();
-    let summary = remove_summary(sb.map(|_| name.as_str()), &scoped, &registries, &to_run);
-    write!(&ctx.out, "{}{summary}", header(&loaded, &name))?;
-    confirm_or(
-        ctx,
-        "Remove?",
-        a.force,
-        "stdin is not a terminal; use --force to skip confirmation",
-    )?;
-    if nothing_left {
+    // With nothing to remove and nothing to run there is nothing to confirm.
+    if !(nothing_stored && to_run.is_empty()) {
+        let summary = remove_summary(sb.map(|_| name.as_str()), &scoped, &registries, &to_run);
+        write!(&ctx.out, "{}{summary}", header(&loaded, &name))?;
+        confirm_or(
+            ctx,
+            "Remove?",
+            a.force,
+            "stdin is not a terminal; use --force to skip confirmation",
+        )?;
+    }
+    if nothing_stored {
         eprintln!("error: sandbox '{name}' not found\n  try: sbt ls");
     }
     let vars = vars(&loaded, &name);
-    let commands = &lifecycle.pre_remove;
-    if let Err(e) = host_phase(ctx, Phase::PreRemove, commands, &vars, a.skip_host_commands) {
+    if let Err(e) = host_phase(ctx, Phase::PreRemove, &lifecycle.pre_remove, &vars, skip) {
         eprintln!("warning: the preRemove commands did not finish: {e:#}");
-    }
-    if nothing_left {
-        approval::forget(&ctx.paths, &name)?;
-        return Ok(0);
     }
     match sb {
         Some(sb) => {
@@ -367,8 +351,10 @@ fn env_rm<R: Runner>(ctx: &mut Ctx<R>, a: EnvRmArgs) -> Result<i32> {
             writeln!(&ctx.out, "Removed sandbox {name}")?;
         }
         // No sandbox: only the secrets (and any stale policy) are left to forget.
-        None => super::secret::forget_sandbox(ctx, &name, true)?,
+        None if !nothing_stored => super::secret::forget_sandbox(ctx, &name, true)?,
+        None => {}
     }
+    // Also when nothing else was left: a plain `rm` of the sandbox leaves the approval.
     approval::forget(&ctx.paths, &name)?;
     if !scoped.is_empty() || !registries.is_empty() {
         writeln!(&ctx.out, "Removed secrets scoped to {name}")?;
