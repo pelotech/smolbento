@@ -67,7 +67,8 @@ fn checked_payload<R: Runner>(ctx: &Ctx<R>, directory: &str) -> Result<artifact:
             bail!("artifact directory: stat {directory}: no such file or directory");
         }
         let payload = artifact::read_dir(&dir).context("manifest")?;
-        load::load_with(ctx, directory, true)?;
+        // The directory itself, never a shipped kit or registry ref that shares its name.
+        load::load_with(ctx, &dir.display().to_string(), true)?;
         Ok(payload)
     })()
     .context("invalid artifact")
@@ -84,6 +85,16 @@ fn push<R: Runner>(ctx: &Ctx<R>, directory: &str, reference: &str) -> Result<i32
     Ok(0)
 }
 
+/// Writes a file `kit pack` or `kit pull` produces, whole or not at all, mode 0644.
+fn write_output(path: &std::path::Path, bytes: &[u8]) -> Result<()> {
+    use std::os::unix::fs::PermissionsExt;
+    let parent = path.parent().context("an output path has a directory")?;
+    let tmp = tempfile::NamedTempFile::new_in(parent)?;
+    std::fs::write(tmp.path(), bytes)?;
+    std::fs::set_permissions(tmp.path(), std::fs::Permissions::from_mode(0o644))?;
+    crate::kits::registry::persist(tmp, path)
+}
+
 /// `kit pull`: saves the payload of the v2 kit at REFERENCE (its files, as a tar.gz).
 fn pull<R: Runner>(ctx: &Ctx<R>, reference: &str, output: Option<&str>) -> Result<i32> {
     // As in sbx, the source policy applies to a pull (not to a push).
@@ -93,10 +104,7 @@ fn pull<R: Runner>(ctx: &Ctx<R>, reference: &str, output: Option<&str>) -> Resul
     let payload = crate::kits::registry::fetch_payload(reference, &ctx.paths.kit_cache(), logins)?;
     let shown = output.map_or_else(|| crate::kits::registry::pull_name(reference), String::from);
     let path = ctx.cwd.join(&shown);
-    let tmp = tempfile::NamedTempFile::new_in(path.parent().unwrap_or(&ctx.cwd))
-        .with_context(|| format!("writing {shown}"))?;
-    std::fs::write(tmp.path(), payload)?;
-    crate::kits::registry::persist(tmp, &path)?;
+    write_output(&path, &payload).with_context(|| format!("writing {shown}"))?;
     writeln!(&ctx.out, "Pulled {reference} to {shown}")?;
     Ok(0)
 }
@@ -124,9 +132,7 @@ fn pack<R: Runner>(ctx: &Ctx<R>, directory: &str, output: Option<&str>) -> Resul
             parent.display()
         );
     }
-    let tmp = tempfile::NamedTempFile::new_in(parent)?;
-    std::fs::write(tmp.path(), bytes)?;
-    crate::kits::registry::persist(tmp, &path)?;
+    write_output(&path, &bytes)?;
     writeln!(&ctx.out, "Packed artifact {shown}")?;
     Ok(0)
 }
@@ -1022,6 +1028,28 @@ mod tests {
             .sbt(&["kit", "push", "./nope", "localhost:5000/k:1"])
             .unwrap_err();
         assert!(format!("{e:#}").starts_with("invalid artifact: "), "{e:#}");
+    }
+
+    #[test]
+    fn pack_validates_the_directory_even_when_it_shares_a_shipped_kit_name() {
+        let mut t = kit_env();
+        v2_dir(&t, "docker", "schemaVersion: \"2\"\nkind: bogus\nname: d\n");
+        let e = t.sbt(&["kit", "pack", "docker"]).unwrap_err();
+        assert!(format!("{e:#}").starts_with("invalid artifact: "), "{e:#}");
+        assert!(!t.ctx.cwd.join("d.zip").exists());
+    }
+
+    #[test]
+    fn pack_output_is_readable_like_any_new_file() {
+        use std::os::unix::fs::PermissionsExt;
+        let mut t = kit_env();
+        v2_dir(&t, "k", "schemaVersion: \"2\"\nkind: mixin\nname: demo\n");
+        t.sbt(&["kit", "pack", "./k"]).unwrap();
+        let mode = std::fs::metadata(t.ctx.cwd.join("demo.zip"))
+            .unwrap()
+            .permissions()
+            .mode();
+        assert_eq!(mode & 0o777, 0o644);
     }
 
     #[test]

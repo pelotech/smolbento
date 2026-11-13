@@ -136,7 +136,8 @@ fn files_layer(home: &Path) -> Result<Option<Vec<u8>>> {
 /// `kit pack`'s ZIP of `spec.yaml` and `files/`: stored entries, directories included, sorted,
 /// every time 1980-01-01 00:00.
 pub fn zip(dir: &Path) -> Result<Vec<u8>> {
-    let mut entries: Vec<(String, Option<Vec<u8>>)> = Vec::new();
+    // (name, contents (None for a directory), Unix mode)
+    let mut entries: Vec<(String, Option<Vec<u8>>, u32)> = Vec::new();
     let files = dir.join("files");
     if files.is_dir() {
         let mut dirs = std::collections::BTreeSet::from(["files/".to_string()]);
@@ -147,18 +148,25 @@ pub fn zip(dir: &Path) -> Result<Vec<u8>> {
                 dirs.insert(format!("files/{}/", p.display()));
                 parent = p.parent();
             }
-            entries.push((name, Some(fs::read(files.join(&rel))?)));
+            let path = files.join(&rel);
+            let exec = fs::metadata(&path)?.permissions().mode() & 0o111 != 0;
+            let mode = if exec { 0o100755 } else { 0o100644 };
+            entries.push((name, Some(fs::read(&path)?), mode));
         }
-        entries.extend(dirs.into_iter().map(|d| (d, None)));
+        entries.extend(dirs.into_iter().map(|d| (d, None, 0o40755)));
     }
-    entries.push(("spec.yaml".into(), Some(fs::read(dir.join("spec.yaml"))?)));
+    entries.push((
+        "spec.yaml".into(),
+        Some(fs::read(dir.join("spec.yaml"))?),
+        0o100644,
+    ));
     entries.sort_by(|a, b| a.0.cmp(&b.0));
 
     let (mut out, mut central) = (Vec::new(), Vec::new());
     let le16 = |v: &mut Vec<u8>, n: u16| v.extend_from_slice(&n.to_le_bytes());
     let le32 = |v: &mut Vec<u8>, n: u32| v.extend_from_slice(&n.to_le_bytes());
     const DATE: u16 = (1 << 5) | 1; // 1980-01-01
-    for (name, data) in &entries {
+    for (name, data, mode) in &entries {
         let body = data.as_deref().unwrap_or_default();
         let mut crc = flate2::Crc::new();
         crc.update(body);
@@ -181,7 +189,6 @@ pub fn zip(dir: &Path) -> Result<Vec<u8>> {
         out.extend_from_slice(name.as_bytes());
         out.extend_from_slice(body);
         // Central directory entry, made on Unix with the file's mode.
-        let mode: u32 = if data.is_some() { 0o100644 } else { 0o40755 };
         let dos_dir = if data.is_none() { 0x10 } else { 0 };
         let attrs = (mode << 16) | dos_dir;
         le32(&mut central, 0x0201_4b50);
@@ -466,6 +473,29 @@ mod tests {
         if let Ok(o) = listed {
             assert_eq!(o.stdout, SPEC.as_bytes());
         }
+    }
+
+    #[test]
+    fn the_zip_keeps_the_execute_bit() {
+        let d = kit(SPEC);
+        put(d.path(), "files/home/bin/x", "x", 0o755);
+        put(d.path(), "files/home/a", "a", 0o600);
+        let z = zip(d.path()).unwrap();
+        // Unix mode from each central directory entry's external attributes, by name.
+        let end = z.len() - 22;
+        let mut at = u32::from_le_bytes(z[end + 16..end + 20].try_into().unwrap()) as usize;
+        let mut modes = std::collections::BTreeMap::new();
+        while &z[at..at + 4] == b"PK\x01\x02" {
+            let n = u16::from_le_bytes([z[at + 28], z[at + 29]]) as usize;
+            let attrs = u32::from_le_bytes(z[at + 38..at + 42].try_into().unwrap());
+            modes.insert(
+                String::from_utf8(z[at + 46..at + 46 + n].to_vec()).unwrap(),
+                (attrs >> 16) & 0o777,
+            );
+            at += 46 + n;
+        }
+        assert_eq!(modes["files/home/bin/x"], 0o755);
+        assert_eq!(modes["files/home/a"], 0o644);
     }
 
     fn tar_gz(entries: &[(&str, &[u8])]) -> Vec<u8> {
