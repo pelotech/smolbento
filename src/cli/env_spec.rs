@@ -86,6 +86,13 @@ pub fn spec(loaded: &Loaded, overrides: &Overrides, secrets: &SecretsFile) -> Re
     }
     let target = if agents::find(agent).is_some() {
         agent.to_string()
+    } else if let Some((refusal, kit)) = agents::retired_in_env_file(agent) {
+        // As in sbx: a retired agent runs from the kit that keeps it, listed in `kits:`.
+        let i = kits
+            .iter()
+            .position(|k| kit_name(k) == kit_name(kit))
+            .with_context(|| refusal)?;
+        kits.remove(i)
     } else {
         let i = kits
             .iter()
@@ -787,6 +794,26 @@ mod tests {
             .unwrap();
         let docs = t.dir.path().join("proj/docs").display().to_string();
         assert_eq!(s.targets[1..], [format!("{docs}:ro")]);
+    }
+
+    #[test]
+    fn a_retired_agent_needs_the_kit_that_keeps_it() {
+        let t = T::new();
+        let e = t.err(&format!("{HEAD}agent: gemini\n"));
+        assert_eq!(
+            e,
+            "\"gemini\" is retired and is no longer a built-in agent; its replacement is \
+             antigravity (docker.io/sbx/antigravity:latest). To keep running gemini, add \
+             docker.io/sbx/gemini-kit:latest to the environment file's `kits:` (beside `agent: \
+             gemini`)"
+        );
+        let s = t
+            .spec(&format!(
+                "{HEAD}agent: gemini\nkits:\n  - docker.io/sbx/gemini-kit:latest\n"
+            ))
+            .unwrap();
+        assert_eq!(s.targets[0], "docker.io/sbx/gemini-kit:latest");
+        assert!(s.name.starts_with("gemini-"), "{}", s.name);
     }
 
     #[test]
