@@ -61,6 +61,8 @@ fn add<R: Runner>(ctx: &Ctx<R>, a: McpAddArgs) -> Result<()> {
         ))
         .into());
     }
+    // The name first, as before the shared check: a bad name is reported over a flag error.
+    mcp::check_name(&a.name)?;
     let server = match (a.url, a.command) {
         (Some(url), None) => {
             if !a.args.is_empty() {
@@ -637,5 +639,23 @@ mod tests {
             "./no-such-kit",
         ]);
         assert!(err.contains("no MCP server named 'nope'"), "{err}");
+    }
+
+    #[test]
+    fn a_bad_name_is_reported_before_a_flag_error() {
+        let mut t = test_env(&[]);
+        let err = t.sbt_err(&[
+            "mcp",
+            "add",
+            "bad name",
+            "--url",
+            "https://a.b/",
+            "--args",
+            "x",
+        ]);
+        assert!(
+            err.starts_with("invalid MCP server name 'bad name'"),
+            "{err}"
+        );
     }
 }
