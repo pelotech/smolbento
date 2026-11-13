@@ -457,10 +457,12 @@ fn publish_spec(p: &Port) -> Result<String> {
             p.sandbox
         ),
     };
+    let loopback = [
+        std::net::IpAddr::from(std::net::Ipv4Addr::LOCALHOST),
+        std::net::IpAddr::from(std::net::Ipv6Addr::LOCALHOST),
+    ];
     if let Some(ip) = &p.host_ip
-        && !ip
-            .parse::<std::net::IpAddr>()
-            .is_ok_and(|a| a.is_loopback() && (a.is_ipv6() || ip == "127.0.0.1"))
+        && !ip.parse().is_ok_and(|a| loopback.contains(&a))
     {
         bail!("can't bind {ip}: smolvm publishes on 127.0.0.1 and ::1 only");
     }
@@ -858,7 +860,7 @@ mod tests {
         );
         let l = t.loaded(&["sbxenv.yaml"]);
         let s = spec(&l, &Overrides::default(), &SecretsFile::default()).unwrap();
-        let lines = crate::env::approval::lines(None, &l.files, &resources(&l, &s), false);
+        let lines = crate::env::approval::lines(None, &resources(&l, &s), false);
         let plan = header(&l, &s.name) + &render(&lines, HOST_COMMANDS);
         insta::assert_snapshot!(plan.replace(&t.root(), "<root>"));
     }

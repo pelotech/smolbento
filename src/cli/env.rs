@@ -66,7 +66,7 @@ fn planned<R: Runner>(
     skip_host_commands: bool,
 ) -> Result<Planned> {
     let mut resources = resources(loaded, spec);
-    let mut record = approval::load(&ctx.paths, &spec.name);
+    let mut record = approval::load(&ctx.paths, &spec.name, &loaded.files);
     let mut kept = Vec::new();
     if skip_host_commands {
         resources.retain(|r| r.section != LIFECYCLE);
@@ -82,12 +82,11 @@ fn planned<R: Runner>(
     }
     let need = approval::need(
         record.as_ref(),
-        &loaded.files,
         &resources,
         ctx.settings.bool("env.rememberHostCommands")?,
     );
     Ok(Planned {
-        lines: approval::lines(record.as_ref(), &loaded.files, &resources, exists),
+        lines: approval::lines(record.as_ref(), &resources, exists),
         header: header(loaded, &spec.name),
         // What a yes records: the plan shown, and the approved commands it left out.
         resources: resources.into_iter().chain(kept).collect(),

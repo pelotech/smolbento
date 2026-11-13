@@ -47,10 +47,15 @@ fn file_names(files: &[PathBuf]) -> Vec<String> {
     files.iter().map(|f| f.display().to_string()).collect()
 }
 
-/// The record for sandbox `name`. A missing or unreadable one is no approval.
-pub fn load(paths: &Paths, name: &str) -> Option<Record> {
+/// What was approved for sandbox `name` from `files`. A missing or unreadable record is no
+/// approval, and so is one for another set of files: as in sbx, each set of files is an
+/// environment of its own.
+pub fn load(paths: &Paths, name: &str, files: &[PathBuf]) -> Option<Record> {
     let text = std::fs::read_to_string(path(paths, name)).ok()?;
     let mut record: Record = toml::from_str(&text).ok()?;
+    if record.files != file_names(files) {
+        return None;
+    }
     // Records written before resources had an id and a time they apply: the id was the name,
     // and only `ENV` reached an existing sandbox.
     for r in record.approved.iter_mut().filter(|r| r.id.is_empty()) {
@@ -96,15 +101,10 @@ pub fn forget(paths: &Paths, name: &str) -> Result<()> {
     }
 }
 
-/// Whether applying `current` (from `files`) has to ask. As in sbx, a file that declares host
-/// commands asks on every invocation, whether or not they run in it.
-pub fn need(
-    record: Option<&Record>,
-    files: &[PathBuf],
-    current: &[Resource],
-    remember_host_commands: bool,
-) -> Need {
-    let approved = record.is_some_and(|r| r.files == file_names(files) && r.approved == current);
+/// Whether applying `current` has to ask. As in sbx, a file that declares host commands asks on
+/// every invocation, whether or not they run in it.
+pub fn need(record: Option<&Record>, current: &[Resource], remember_host_commands: bool) -> Need {
+    let approved = record.is_some_and(|r| r.approved == current);
     if !approved {
         Need::Changed
     } else if !remember_host_commands && current.iter().any(|r| r.host_command) {
@@ -115,15 +115,8 @@ pub fn need(
 }
 
 /// The plan's lines for `current`: what a create would set up when the sandbox doesn't exist,
-/// else what differs from the record. A record for another set of files is no record: as in sbx,
-/// each set of files is an environment of its own.
-pub fn lines(
-    record: Option<&Record>,
-    files: &[PathBuf],
-    current: &[Resource],
-    exists: bool,
-) -> Vec<Line> {
-    let record = record.filter(|r| r.files == file_names(files));
+/// else what differs from the record.
+pub fn lines(record: Option<&Record>, current: &[Resource], exists: bool) -> Vec<Line> {
     match (record, exists) {
         (Some(r), true) => differences(&r.approved, current),
         (Some(r), false) => before_create(&r.approved, current),
@@ -303,14 +296,14 @@ mod tests {
 
     #[test]
     fn no_record_needs_approval() {
-        assert_eq!(need(None, &files(), &current(), false), Need::Changed);
-        assert_eq!(need(None, &files(), &current(), true), Need::Changed);
+        assert_eq!(need(None, &current(), false), Need::Changed);
+        assert_eq!(need(None, &current(), true), Need::Changed);
     }
 
     #[test]
     fn an_equal_record_needs_none() {
         let r = record(current());
-        assert_eq!(need(Some(&r), &files(), &current(), false), Need::No);
+        assert_eq!(need(Some(&r), &current(), false), Need::No);
     }
 
     #[test]
@@ -318,12 +311,7 @@ mod tests {
         let r = record(current());
         let mut changed = current();
         changed[2].fields[0].1 = "-mod=readonly".into();
-        assert_eq!(need(Some(&r), &files(), &changed, false), Need::Changed);
-        let other = vec![
-            PathBuf::from("/p/sbxenv.yaml"),
-            PathBuf::from("/p/local.yaml"),
-        ];
-        assert_eq!(need(Some(&r), &other, &current(), false), Need::Changed);
+        assert_eq!(need(Some(&r), &changed, false), Need::Changed);
     }
 
     #[test]
@@ -331,11 +319,8 @@ mod tests {
         let mut with_command = current();
         with_command.push(command());
         let r = record(with_command.clone());
-        assert_eq!(
-            need(Some(&r), &files(), &with_command, false),
-            Need::HostCommands
-        );
-        assert_eq!(need(Some(&r), &files(), &with_command, true), Need::No);
+        assert_eq!(need(Some(&r), &with_command, false), Need::HostCommands);
+        assert_eq!(need(Some(&r), &with_command, true), Need::No);
     }
 
     fn lifecycle(phase: &str, i: usize, command: &str, when: When) -> Resource {
@@ -370,7 +355,7 @@ mod tests {
             lifecycle("postCreate", 0, "b", When::Create),
             lifecycle("preRemove", 0, "c", When::Removal),
         ];
-        let fresh = lines(None, &files(), &all, false);
+        let fresh = lines(None, &all, false);
         assert_eq!(signs(&fresh), "+++!");
         assert_eq!(
             fresh[3].note,
@@ -378,7 +363,7 @@ mod tests {
         );
         // Approved: the every-run command runs again, the removal command is not listed.
         assert_eq!(
-            signs(&lines(Some(&record(all.clone())), &files(), &all, false)),
+            signs(&lines(Some(&record(all.clone())), &all, false)),
             "+>+"
         );
     }
@@ -393,7 +378,7 @@ mod tests {
         ];
         let r = record(all.clone());
         // Unchanged: the launch is applied again, `initialize` runs again.
-        let same = lines(Some(&r), &files(), &all, true);
+        let same = lines(Some(&r), &all, true);
         assert_eq!(signs(&same), "+>");
         assert_eq!(same[0].note, None);
 
@@ -403,7 +388,7 @@ mod tests {
             lifecycle("postCreate", 0, "b2", When::Create),
             lifecycle("preRemove", 0, "c2", When::Removal),
         ];
-        let lines = lines(Some(&r), &files(), &changed, true);
+        let lines = lines(Some(&r), &changed, true);
         assert_eq!(signs(&lines), "+~~!");
         assert_eq!(lines[1].resource.name, "initialize: a2");
         assert_eq!(lines[1].fields, ["command: a -> a2"]);
@@ -449,23 +434,23 @@ fields = [["host", "18080"]]
 "#,
         )
         .unwrap();
-        let r = load(&paths, "web").unwrap();
-        assert_eq!(need(Some(&r), &files(), &current(), false), Need::No);
+        let r = load(&paths, "web", &files()).unwrap();
+        assert_eq!(need(Some(&r), &current(), false), Need::No);
     }
 
     #[test]
     fn save_then_load_round_trips_and_forget_removes() {
         let (_d, paths) = test_paths();
-        assert_eq!(load(&paths, "web"), None);
+        assert_eq!(load(&paths, "web", &files()), None);
         let mut resources = current();
         resources.push(command());
         save(&paths, "web", &files(), &resources, 1_794_441_600).unwrap();
-        let r = load(&paths, "web").unwrap();
+        let r = load(&paths, "web", &files()).unwrap();
         assert_eq!(r.approved, resources);
         assert_eq!(r.files, ["/p/sbxenv.yaml"]);
         assert_eq!(r.approved_at, "2026-11-12T00:00:00Z");
         forget(&paths, "web").unwrap();
-        assert_eq!(load(&paths, "web"), None);
+        assert_eq!(load(&paths, "web", &files()), None);
         forget(&paths, "web").unwrap();
     }
 
@@ -475,13 +460,13 @@ fields = [["host", "18080"]]
         std::fs::create_dir_all(paths.env_records()).unwrap();
         for text in ["not toml [", ""] {
             std::fs::write(paths.env_records().join("web.toml"), text).unwrap();
-            assert_eq!(load(&paths, "web"), None, "{text:?}");
+            assert_eq!(load(&paths, "web", &files()), None, "{text:?}");
         }
     }
 
     #[test]
     fn a_fresh_plan_marks_host_paths_for_approval() {
-        let lines = lines(None, &files(), &current(), false);
+        let lines = lines(None, &current(), false);
         let markers: Vec<Marker> = lines.iter().map(|l| l.marker).collect();
         assert_eq!(
             markers,
@@ -498,21 +483,21 @@ fields = [["host", "18080"]]
     fn an_approved_host_path_is_not_listed_before_a_create() {
         let resources = vec![workspace(), command()];
         let r = record(resources.clone());
-        let lines = lines(Some(&r), &files(), &resources, false);
+        let lines = lines(Some(&r), &resources, false);
         assert_eq!(lines, [Line::new(Marker::Add, &command())]);
     }
 
     #[test]
     fn an_existing_sandbox_shows_only_differences() {
         let r = record(current());
-        assert_eq!(lines(Some(&r), &files(), &current(), true), []);
+        assert_eq!(lines(Some(&r), &current(), true), []);
 
         let mut changed = current();
         changed[2].fields[0].1 = "-mod=readonly".into();
         changed[3].fields[0].1 = "18081".into();
         changed.remove(1);
         changed.push(env("NEW", "1"));
-        let lines = lines(Some(&r), &files(), &changed, true);
+        let lines = lines(Some(&r), &changed, true);
         let shown: Vec<(char, &str, Option<&str>, &[String])> = lines
             .iter()
             .map(|l| {
@@ -548,18 +533,19 @@ fields = [["host", "18080"]]
 
     #[test]
     fn another_file_set_is_another_environment() {
-        let r = record(current());
+        let (_d, paths) = test_paths();
+        save(&paths, "web", &files(), &current(), 0).unwrap();
         let other = vec![
             PathBuf::from("/p/sbxenv.yaml"),
             PathBuf::from("/p/same.yaml"),
         ];
-        // The sandbox exists: what it has needs approval, `env` is to add (measured on sbx).
-        let lines = lines(Some(&r), &other, &current(), true);
+        assert_eq!(load(&paths, "web", &other), None);
+        // So the sandbox's resources need approval and `env` is to add (measured on sbx).
+        let lines = lines(None, &current(), true);
         assert_eq!(signs(&lines), "!!+!");
         assert_eq!(
             lines[0].note,
             Some("present, not recorded as applied, needs your approval")
         );
-        assert_eq!(need(Some(&r), &other, &current(), false), Need::Changed);
     }
 }
