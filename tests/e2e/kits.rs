@@ -997,7 +997,13 @@ setup:
     );
     fails(
         &[
-            "create", "shell", ws, "--name", &e.name, "--kit", "e2e-missing",
+            "create",
+            "shell",
+            ws,
+            "--name",
+            &e.name,
+            "--kit",
+            "e2e-missing",
         ],
         "not a local path and does not look like a registry reference",
     );
