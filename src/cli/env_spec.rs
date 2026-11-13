@@ -90,12 +90,12 @@ pub fn spec(loaded: &Loaded, overrides: &Overrides, secrets: &SecretsFile) -> Re
     }
     let target = if agents::find(agent).is_some() {
         agent.to_string()
-    } else if let Some((refusal, kit)) = agents::retired_in_env_file(agent) {
+    } else if let Some(r) = agents::retired(agent) {
         // As in sbx: a retired agent runs from the kit that keeps it, listed in `kits:`.
         let i = kits
             .iter()
-            .position(|k| kit_name(k) == kit_name(kit))
-            .with_context(|| refusal)?;
+            .position(|k| kit_name(k) == kit_name(r.kit))
+            .with_context(|| r.env_file_refusal())?;
         kits.remove(i)
     } else {
         let i = kits

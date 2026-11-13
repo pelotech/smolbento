@@ -25,7 +25,7 @@ pub(crate) fn build_request<R: Runner>(
     default_to_cwd: bool,
 ) -> Result<CreateRequest> {
     let agent = agents::find(agent_name).with_context(|| {
-        agents::retired(agent_name).unwrap_or_else(|| agents::unknown(agent_name))
+        agents::retired(agent_name).map_or_else(|| agents::unknown(agent_name), |r| r.refusal())
     })?;
     let mut req = base_request(ctx, agent.name, paths, opts, default_to_cwd)?;
     let docker_enabled = ctx.settings.bool("docker.enabled")?;
@@ -169,8 +169,8 @@ pub(crate) fn kit_target<R: Runner>(
             (req, Some(Workload::Preset(Box::new(workload))))
         }
         None => {
-            if let Some(refusal) = agents::retired(target) {
-                bail!(refusal);
+            if let Some(r) = agents::retired(target) {
+                bail!(r.refusal());
             }
             if !looks_like_kit(target) {
                 bail!(agents::unknown(target));

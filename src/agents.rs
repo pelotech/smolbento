@@ -109,12 +109,35 @@ const RETIRED: &[Retired] = &[Retired {
     kit: "docker.io/sbx/gemini-kit:latest",
 }];
 
-struct Retired {
+pub struct Retired {
     agent: Agent,
     replacement: &'static str,
     replacement_kit: &'static str,
     /// The kit that still runs it.
-    kit: &'static str,
+    pub kit: &'static str,
+}
+
+impl Retired {
+    /// sbx's refusal of a new sandbox with this agent.
+    pub fn refusal(&self) -> String {
+        let name = self.agent.name;
+        format!(
+            "\"{name}\" is retired and is no longer a built-in agent; prefer {} with `sbt create \
+             \"{}\"`, or keep running {name} with `sbt create \"{}\"`",
+            self.replacement, self.replacement_kit, self.kit
+        )
+    }
+
+    /// The same, for an environment file, which keeps it with the kit in `kits:`.
+    pub fn env_file_refusal(&self) -> String {
+        let name = self.agent.name;
+        format!(
+            "\"{name}\" is retired and is no longer a built-in agent; its replacement is {} ({}). \
+             To keep running {name}, add {} to the environment file's `kits:` (beside `agent: \
+             {name}`)",
+            self.replacement, self.replacement_kit, self.kit
+        )
+    }
 }
 
 /// A built-in agent a new sandbox can have.
@@ -127,25 +150,9 @@ pub fn find_any(name: &str) -> Option<&'static Agent> {
     find(name).or_else(|| RETIRED.iter().map(|r| &r.agent).find(|a| a.name == name))
 }
 
-/// sbx's refusal of a retired agent, if `name` is one.
-pub fn retired(name: &str) -> Option<String> {
-    let r = RETIRED.iter().find(|r| r.agent.name == name)?;
-    Some(format!(
-        "\"{name}\" is retired and is no longer a built-in agent; prefer {} with `sbt create \
-         \"{}\"`, or keep running {name} with `sbt create \"{}\"`",
-        r.replacement, r.replacement_kit, r.kit
-    ))
-}
-
-/// sbx's refusal of a retired agent in an environment file, and the kit that keeps it running.
-pub fn retired_in_env_file(name: &str) -> Option<(String, &'static str)> {
-    let r = RETIRED.iter().find(|r| r.agent.name == name)?;
-    let message = format!(
-        "\"{name}\" is retired and is no longer a built-in agent; its replacement is {} ({}). To \
-         keep running {name}, add {} to the environment file's `kits:` (beside `agent: {name}`)",
-        r.replacement, r.replacement_kit, r.kit
-    );
-    Some((message, r.kit))
+/// The retired agent called `name`, if it is one.
+pub fn retired(name: &str) -> Option<&'static Retired> {
+    RETIRED.iter().find(|r| r.agent.name == name)
 }
 
 /// The error for a name that is no agent.
@@ -248,12 +255,12 @@ mod tests {
     fn gemini_is_retired_as_in_sbx() {
         assert!(find("gemini").is_none(), "no new gemini sandboxes");
         assert_eq!(
-            retired("gemini").unwrap(),
+            retired("gemini").unwrap().refusal(),
             "\"gemini\" is retired and is no longer a built-in agent; prefer antigravity with \
              `sbt create \"docker.io/sbx/antigravity:latest\"`, or keep running gemini with `sbt \
              create \"docker.io/sbx/gemini-kit:latest\"`"
         );
-        assert_eq!(retired("claude"), None);
+        assert!(retired("claude").is_none());
         // Sandboxes created before keep their agent.
         assert_eq!(find_any("gemini").unwrap().command, &["gemini", "--yolo"]);
         assert!(find_any("claude").is_some());

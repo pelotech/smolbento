@@ -318,21 +318,10 @@ fn env_rm<R: Runner>(ctx: &mut Ctx<R>, a: EnvRmArgs) -> Result<i32> {
         .filter(|r| r.when == When::Removal && !skip)
         .collect();
     // `--prune-bindings` removes each service's whole binding, as in sbx.
-    let declared: Vec<(String, Binding)> = loaded
-        .file
-        .bindings
-        .clone()
-        .unwrap_or_default()
-        .into_iter()
+    let pruned: Vec<(String, Binding)> = (loaded.file.bindings.iter().flatten())
+        .filter(|(service, _)| a.prune_bindings && stored.bindings.contains_key(*service))
+        .map(|(service, b)| (service.clone(), b.clone()))
         .collect();
-    let pruned: Vec<(String, Binding)> = if a.prune_bindings {
-        declared
-            .into_iter()
-            .filter(|(service, _)| stored.bindings.contains_key(service))
-            .collect()
-    } else {
-        Vec::new()
-    };
     let nothing_stored =
         sb.is_none() && scoped.is_empty() && registries.is_empty() && pruned.is_empty();
     if let Some(sb) = sb {
@@ -480,8 +469,11 @@ fn shell_word(s: &str) -> String {
 /// Stores the file's secrets at the sandbox's scope. Every source is checked before any is
 /// stored; a later failure (the create, say) leaves them for `env rm`, as in sbx.
 fn provision<R: Runner>(ctx: &Ctx<R>, secrets: &mut SecretsFile, spec: &EnvSpec) -> Result<()> {
-    let nothing = spec.secrets.is_empty() && spec.registries.is_empty();
-    if nothing && spec.mcp.is_empty() && spec.bindings.is_empty() {
+    if spec.secrets.is_empty()
+        && spec.registries.is_empty()
+        && spec.mcp.is_empty()
+        && spec.bindings.is_empty()
+    {
         return Ok(());
     }
     let scope = scope_for(Some(&spec.name));
