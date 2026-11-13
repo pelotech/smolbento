@@ -10,7 +10,7 @@ use crate::kits::capability;
 use crate::kits::compose;
 use crate::kits::env_ref;
 use crate::kits::guest;
-use crate::kits::model::{CapBody, Content, CredReq, FileReq, Hook, Kit, Source};
+use crate::kits::model::{CapBody, Content, CredReq, FileReq, Format, Hook, Kit, Source};
 use crate::kits::registry_auth::Logins;
 use crate::kits::resolve::{KitCred, Merged, Plan};
 use crate::policy::Policy;
@@ -56,6 +56,15 @@ pub struct InstallStep {
 
 /// Fills `req` from the plan and writes the kits' policy rules (install-phase ones too: they must
 /// be in place while install hooks run). Returns the steps for the first start and the ids of
+/// A kit's format in the kits record: `v2`, `v3`, or empty for one that mixes with either.
+pub fn format_word(f: Option<Format>) -> &'static str {
+    match f {
+        Some(Format::V2) => "v2",
+        Some(Format::V3) => "v3",
+        None => "",
+    }
+}
+
 /// The kits' variables, with a variable's reference to itself (`PATH: /x:$PATH`) replaced by the
 /// image's value (`env_ref`). The image's environment is read only when one does.
 fn expand_self_references(
@@ -252,9 +261,12 @@ pub fn apply(
     }
     for k in kits.iter().skip(usize::from(preset)) {
         let pinned = pinned_ref(k)?;
-        steps
-            .kits_record
-            .push_str(&format!("{}\t{pinned}\t{}\n", k.name, k.provides.join(",")));
+        steps.kits_record.push_str(&format!(
+            "{}\t{pinned}\t{}\t{}\n",
+            k.name,
+            k.provides.join(","),
+            format_word(crate::kits::resolve::mixing_format(k))
+        ));
         req.kits.push(pinned);
     }
     req.long_running = m.long_running;
@@ -1292,9 +1304,10 @@ mod tests {
         let pinned = |n: &str| format!("acme/{n}:1@sha256:{}", "ab".repeat(32));
         assert_eq!(req.kits, [pinned("wl"), pinned("m")]);
         assert!(req.long_running);
+        // The fixture workload is a published kit that names an image: a v2 one.
         assert_eq!(
             steps.kits_record,
-            format!("wl\t{}\t\nm\t{}\ta,b\n", pinned("wl"), pinned("m"))
+            format!("wl\t{}\t\tv2\nm\t{}\ta,b\tv3\n", pinned("wl"), pinned("m"))
         );
         let labels = create::spec(&req).labels;
         assert_eq!(labels["sbx.long-running"], "true");
