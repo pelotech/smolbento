@@ -1,5 +1,12 @@
 # Changelog
 
+## [0.22.1](https://github.com/pelotech/smolbento/compare/v0.22.0...v0.22.1) (2026-11-13)
+
+
+### Refactors
+
+* remaining project review cleanups ([#103](https://github.com/pelotech/smolbento/issues/103)) ([aa24eab](https://github.com/pelotech/smolbento/commit/aa24eabd4890d20c8d88380d73cdd74e7731f080))
+
 ## [0.22.0](https://github.com/pelotech/smolbento/compare/v0.21.0...v0.22.0) (2026-11-13)
 
 
