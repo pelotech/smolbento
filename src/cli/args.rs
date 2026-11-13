@@ -373,8 +373,14 @@ pub enum KitCmd {
         #[arg(long, short = 'y')]
         yes: bool,
     },
-    #[command(hide = true)]
-    Pack(Passthrough),
+    /// Package a directory as a kit artifact
+    Pack {
+        /// Kit directory: spec.yaml and an optional files/
+        directory: String,
+        /// Output file path; must end in .zip (default: <name>.zip)
+        #[arg(short, long)]
+        output: Option<String>,
+    },
     #[command(hide = true)]
     Push(Passthrough),
     #[command(hide = true)]

@@ -1,0 +1,21 @@
+---
+source: tests/help.rs
+expression: help(&path)
+---
+Package a directory as a kit artifact
+
+Usage: sbt kit pack [OPTIONS] <DIRECTORY>
+
+Arguments:
+  <DIRECTORY>
+          Kit directory: spec.yaml and an optional files/
+
+Options:
+  -D, --debug
+          Print each smolvm command line
+
+  -o, --output <OUTPUT>
+          Output file path; must end in .zip (default: <name>.zip)
+
+  -h, --help
+          Print help

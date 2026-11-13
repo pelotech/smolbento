@@ -13,7 +13,7 @@ use crate::kits::model::{
     Cap, CapBody, Content, Format as KitFormat, ImageConfig, Kind, Kit, Source,
 };
 use crate::kits::resolve::{check_named_formats, mixing_format, resolve, resolve_for};
-use crate::kits::{capability, compose, guest, load};
+use crate::kits::{artifact, capability, compose, guest, load};
 use crate::policy::{Decision, Policy, compile};
 use crate::provision;
 use crate::sandbox::{self, CreateRequest, KitPhase, Sandbox};
@@ -46,12 +46,49 @@ pub fn run<R: Runner>(ctx: &mut Ctx<R>, cmd: KitCmd) -> Result<i32> {
             args,
             yes,
         } => add(ctx, &sandbox, &reference, &args, yes),
-        KitCmd::Pack(_) => pending("pack"),
+        KitCmd::Pack { directory, output } => pack(ctx, &directory, output.as_deref()),
         KitCmd::Push(_) => pending("push"),
         KitCmd::Pull(_) => pending("pull"),
         KitCmd::Sign(_) => pending("sign"),
         KitCmd::Verify(_) => pending("verify"),
     }
+}
+
+/// `kit pack`: validates DIRECTORY as a v2 kit and writes its ZIP, as sbx does.
+fn pack<R: Runner>(ctx: &Ctx<R>, directory: &str, output: Option<&str>) -> Result<i32> {
+    let dir = ctx.cwd.join(directory);
+    let bytes = (|| -> Result<Vec<u8>> {
+        if !dir.is_dir() {
+            bail!("artifact directory: stat {directory}: no such file or directory");
+        }
+        artifact::read_dir(&dir).context("manifest")?;
+        load::load_with(ctx, directory, true)?;
+        artifact::zip(&dir)
+    })()
+    .context("invalid artifact")?;
+    let shown = match output {
+        Some(o) if !o.ends_with(".zip") => {
+            bail!("pack: destination {o} must have a .zip extension")
+        }
+        Some(o) => o.to_string(),
+        None => {
+            let yaml = std::fs::read_to_string(dir.join("spec.yaml"))?;
+            format!("{}.zip", crate::kits::v2::name_in(&yaml, &dir)?)
+        }
+    };
+    let path = ctx.cwd.join(&shown);
+    let parent = path.parent().unwrap_or(&ctx.cwd);
+    if !parent.is_dir() {
+        bail!(
+            "pack: resolve directory of {shown}: lstat {}: no such file or directory",
+            parent.display()
+        );
+    }
+    let tmp = tempfile::NamedTempFile::new_in(parent)?;
+    std::fs::write(tmp.path(), bytes)?;
+    crate::kits::registry::persist(tmp, &path)?;
+    writeln!(&ctx.out, "Packed artifact {shown}")?;
+    Ok(0)
 }
 
 /// sbx kit subcommands smolbento doesn't have yet: exit 2, like other pending commands.
@@ -863,6 +900,71 @@ mod tests {
             serde_json::json!({"required": false, "default": "fast", "enum": ["fast", "slow"]})
         );
         assert!(x["digest"].as_str().unwrap().starts_with("sha256:"));
+    }
+
+    fn v2_dir(t: &TestEnv, dir: &str, spec: &str) -> std::path::PathBuf {
+        let d = t.ctx.cwd.join(dir);
+        std::fs::create_dir_all(d.join("files/home")).unwrap();
+        std::fs::write(d.join("spec.yaml"), spec).unwrap();
+        std::fs::write(d.join("files/home/hello"), "hi").unwrap();
+        d
+    }
+
+    #[test]
+    fn pack_writes_name_zip() {
+        let mut t = kit_env();
+        v2_dir(&t, "k", "schemaVersion: \"2\"\nkind: mixin\nname: demo\n");
+        assert_eq!(t.sbt(&["kit", "pack", "./k"]).unwrap(), 0);
+        assert_eq!(t.stdout(), "Packed artifact demo.zip\n");
+        let z = std::fs::read(t.ctx.cwd.join("demo.zip")).unwrap();
+        assert_eq!(z, crate::kits::artifact::zip(&t.ctx.cwd.join("k")).unwrap());
+        assert_eq!(t.sbt(&["kit", "pack", "k", "-o", "out.zip"]).unwrap(), 0);
+        assert_eq!(t.stdout(), "Packed artifact out.zip\n");
+        assert!(t.ctx.cwd.join("out.zip").exists());
+    }
+
+    #[test]
+    fn pack_output_must_be_zip_in_an_existing_directory() {
+        let mut t = kit_env();
+        v2_dir(&t, "k", "schemaVersion: \"2\"\nkind: mixin\nname: demo\n");
+        let e = t
+            .sbt(&["kit", "pack", "./k", "-o", "out.tar.gz"])
+            .unwrap_err();
+        assert_eq!(
+            e.to_string(),
+            "pack: destination out.tar.gz must have a .zip extension"
+        );
+        let e = t
+            .sbt(&["kit", "pack", "./k", "-o", "missing/x.zip"])
+            .unwrap_err();
+        let want = format!(
+            "pack: resolve directory of missing/x.zip: lstat {}: no such file or directory",
+            t.ctx.cwd.join("missing").display()
+        );
+        assert_eq!(e.to_string(), want);
+    }
+
+    #[test]
+    fn pack_refuses_a_missing_dir_and_a_bad_spec() {
+        let mut t = kit_env();
+        let e = t.sbt(&["kit", "pack", "./nope"]).unwrap_err();
+        assert_eq!(
+            format!("{e:#}"),
+            "invalid artifact: artifact directory: stat ./nope: no such file or directory"
+        );
+        v2_dir(&t, "bad", "kind: mixin\n");
+        let e = t.sbt(&["kit", "pack", "./bad"]).unwrap_err();
+        assert_eq!(
+            format!("{e:#}"),
+            "invalid artifact: manifest: schemaVersion is required"
+        );
+        v2_dir(&t, "v3", "schemaVersion: \"3\"\nkind: mixin\n");
+        let e = t.sbt(&["kit", "pack", "./v3"]).unwrap_err();
+        assert_eq!(
+            format!("{e:#}"),
+            "invalid artifact: manifest: unsupported schemaVersion \"3\" (supported: [1 2])"
+        );
+        assert!(!t.ctx.cwd.join("demo.zip").exists());
     }
 
     #[test]

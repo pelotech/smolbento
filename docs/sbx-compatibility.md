@@ -23,7 +23,7 @@ something different.
 |---|---|
 | `policy refresh`, `secret import`, `secret set --oauth/--refresh`, `secret set/rm --registry` with `--sandbox`/`--all-sandboxes` | Not implemented |
 | `policy ls --created-via/--type/--protocol/--include-inactive`, `policy check --protocol` other than `tcp` | Not implemented (`policy ls --decision` and `--source` work) |
-| `kit pack`, `kit push`, `kit pull`, `kit sign`, `kit verify` | Not implemented |
+| `kit push`, `kit pull`, `kit sign`, `kit verify` | Not implemented |
 | The `sbxenv.yaml` fields listed under [Environment files](#environment-files) | Later |
 | `setup ssh` | Later |
 | `mcp auth`, `mcp load`, `mcp unload`; `mcp add --local`, `--dir`, `--client-id`, `--oauth-authorization-server`, `--resource`, `--skip-auth` | Not supported: smolbento has no MCP gateway (see [MCP servers](#mcp-servers)) |
