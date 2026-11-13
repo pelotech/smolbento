@@ -290,7 +290,7 @@ impl Doc {
             .as_ref()
             .map_or((0, 0), |n| (n.allow.len(), n.deny.len()));
         let mut s = format!("Name: {}\nKind: {}\n", kit.name, kind_word(kit.kind));
-        s += &format!("Schema: {}\n", schema(&kit.source));
+        s += &format!("Schema: {}\n", schema(kit));
         if let Some(t) = template(kit) {
             s += &format!("Template: {t}\n");
         }
@@ -385,8 +385,8 @@ fn kind_word(k: Kind) -> &'static str {
     }
 }
 
-fn schema(s: &Source) -> &'static str {
-    match s.format() {
+fn schema(kit: &Kit) -> &'static str {
+    match kit.format() {
         Some(Format::V2) => "v2",
         Some(Format::V3) => "v3",
         None => "smolfile",

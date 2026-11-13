@@ -314,6 +314,9 @@ Differences:
 | The name `docker` | A registry ref (the `docker` image) | The shipped Docker kit; write `docker.io/library/docker` for the image |
 | Docker in the sandbox | Run by the `-docker` images | The shipped `docker` kit, first before your kits (added to Docker-enabled images, or given with `--kit docker`), so their startup steps can use Docker. Its `dockerd` step runs in the background, so a failing `dockerd` is only logged (`/var/log/dockerd.log`) and doesn't stop the start |
 | v3 mixins on built-in agents | Allowed since the agents ship as v3 kits (sbx 0.53; earlier: `no workload kit in the set`) | Allowed |
+| Published v2 kits | Pulled from a registry as an OCI artifact whose config is the spec (`docker.io/sbx/gemini-kit`) | Same, for a spec alone: one that also publishes files is refused. The sandbox's agent is named after the reference (`gemini-kit`), not the kit's name |
+| A published kit's build arguments | Not required at create (`docker.io/sbx/antigravity`'s `version`) | Same |
+| Retired agents | `gemini` (0.53): refused for a new sandbox, pointing to `antigravity` and `docker.io/sbx/gemini-kit` | Same wording; sandboxes created with `gemini` before keep working (not measured on sbx) |
 | v2 and v3 kits in one sandbox | Refused: `cannot mix v3 kits with v1/v2 kits in one sandbox; compositions are single-format (v3: …; v1/v2: …)` | Refused with the same message |
 | v2 mixins on built-in agents | Refused by the rule above, because the agents are v3 kits (sbx 0.53) | Allowed: an agent preset, the shipped `docker` kit and a Smolfile have no kit format, so a v2 kit works with them |
 | Descriptor file names | `.yaml` only | `.yaml` and `.yml` |

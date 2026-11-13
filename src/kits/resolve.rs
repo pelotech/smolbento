@@ -434,7 +434,7 @@ pub fn check_formats(workload: &Kit, mixins: &[Kit]) -> Result<()> {
         if matches!(k.source, Source::Preset(_) | Source::Builtin(_)) {
             continue;
         }
-        match k.source.format() {
+        match k.format() {
             Some(Format::V2) => v2.push(k.name.as_str()),
             Some(Format::V3) => v3.push(k.name.as_str()),
             None => {}
