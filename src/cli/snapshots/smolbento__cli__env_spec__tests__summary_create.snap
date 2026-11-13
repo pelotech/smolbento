@@ -3,9 +3,9 @@ source: src/cli/env_spec.rs
 expression: "summarise(&t, &[\"sbxenv.yaml\", \"local.yaml\"])"
 ---
 ENVIRONMENT
-  Name:  web-app
-  Files: <root>/proj/sbxenv.yaml
-         <root>/proj/local.yaml
+  Name:   web-app
+  Files:  <root>/proj/sbxenv.yaml
+          <root>/proj/local.yaml
 
 SANDBOX
   + web-app

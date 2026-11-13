@@ -115,14 +115,34 @@ pub fn need(
 }
 
 /// The plan's lines for `current`: what a create would set up when the sandbox doesn't exist,
-/// else what differs from the record.
-pub fn lines(record: Option<&Record>, current: &[Resource], exists: bool) -> Vec<Line> {
-    let approved: &[Resource] = record.map_or(&[], |r| &r.approved);
-    if exists {
-        differences(approved, current)
-    } else {
-        before_create(approved, current)
+/// else what differs from the record. A record for another set of files is no record: as in sbx,
+/// each set of files is an environment of its own.
+pub fn lines(
+    record: Option<&Record>,
+    files: &[PathBuf],
+    current: &[Resource],
+    exists: bool,
+) -> Vec<Line> {
+    let record = record.filter(|r| r.files == file_names(files));
+    match (record, exists) {
+        (Some(r), true) => differences(&r.approved, current),
+        (Some(r), false) => before_create(&r.approved, current),
+        (None, true) => unrecorded(current),
+        (None, false) => before_create(&[], current),
     }
+}
+
+/// A sandbox that exists with nothing recorded for these files: what it already has needs
+/// approval, and what reaches it at once (`env`, the launch command) is to add.
+fn unrecorded(current: &[Resource]) -> Vec<Line> {
+    current
+        .iter()
+        .map(|r| match r.when {
+            When::Live | When::EveryRun => Line::new(Marker::Add, r),
+            When::Removal => noted(Marker::Approve, r, AT_REMOVAL),
+            When::Create => noted(Marker::Approve, r, PRESENT),
+        })
+        .collect()
 }
 
 fn find<'a>(list: &'a [Resource], r: &Resource) -> Option<&'a Resource> {
@@ -350,7 +370,7 @@ mod tests {
             lifecycle("postCreate", 0, "b", When::Create),
             lifecycle("preRemove", 0, "c", When::Removal),
         ];
-        let fresh = lines(None, &all, false);
+        let fresh = lines(None, &files(), &all, false);
         assert_eq!(signs(&fresh), "+++!");
         assert_eq!(
             fresh[3].note,
@@ -358,7 +378,7 @@ mod tests {
         );
         // Approved: the every-run command runs again, the removal command is not listed.
         assert_eq!(
-            signs(&lines(Some(&record(all.clone())), &all, false)),
+            signs(&lines(Some(&record(all.clone())), &files(), &all, false)),
             "+>+"
         );
     }
@@ -373,7 +393,7 @@ mod tests {
         ];
         let r = record(all.clone());
         // Unchanged: the launch is applied again, `initialize` runs again.
-        let same = lines(Some(&r), &all, true);
+        let same = lines(Some(&r), &files(), &all, true);
         assert_eq!(signs(&same), "+>");
         assert_eq!(same[0].note, None);
 
@@ -383,7 +403,7 @@ mod tests {
             lifecycle("postCreate", 0, "b2", When::Create),
             lifecycle("preRemove", 0, "c2", When::Removal),
         ];
-        let lines = lines(Some(&r), &changed, true);
+        let lines = lines(Some(&r), &files(), &changed, true);
         assert_eq!(signs(&lines), "+~~!");
         assert_eq!(lines[1].resource.name, "initialize: a2");
         assert_eq!(lines[1].fields, ["command: a -> a2"]);
@@ -461,7 +481,7 @@ fields = [["host", "18080"]]
 
     #[test]
     fn a_fresh_plan_marks_host_paths_for_approval() {
-        let lines = lines(None, &current(), false);
+        let lines = lines(None, &files(), &current(), false);
         let markers: Vec<Marker> = lines.iter().map(|l| l.marker).collect();
         assert_eq!(
             markers,
@@ -478,21 +498,21 @@ fields = [["host", "18080"]]
     fn an_approved_host_path_is_not_listed_before_a_create() {
         let resources = vec![workspace(), command()];
         let r = record(resources.clone());
-        let lines = lines(Some(&r), &resources, false);
+        let lines = lines(Some(&r), &files(), &resources, false);
         assert_eq!(lines, [Line::new(Marker::Add, &command())]);
     }
 
     #[test]
     fn an_existing_sandbox_shows_only_differences() {
         let r = record(current());
-        assert_eq!(lines(Some(&r), &current(), true), []);
+        assert_eq!(lines(Some(&r), &files(), &current(), true), []);
 
         let mut changed = current();
         changed[2].fields[0].1 = "-mod=readonly".into();
         changed[3].fields[0].1 = "18081".into();
         changed.remove(1);
         changed.push(env("NEW", "1"));
-        let lines = lines(Some(&r), &changed, true);
+        let lines = lines(Some(&r), &files(), &changed, true);
         let shown: Vec<(char, &str, Option<&str>, &[String])> = lines
             .iter()
             .map(|l| {
@@ -524,5 +544,22 @@ fields = [["host", "18080"]]
                 ('-', "/p", waits, &[][..]),
             ]
         );
+    }
+
+    #[test]
+    fn another_file_set_is_another_environment() {
+        let r = record(current());
+        let other = vec![
+            PathBuf::from("/p/sbxenv.yaml"),
+            PathBuf::from("/p/same.yaml"),
+        ];
+        // The sandbox exists: what it has needs approval, `env` is to add (measured on sbx).
+        let lines = lines(Some(&r), &other, &current(), true);
+        assert_eq!(signs(&lines), "!!+!");
+        assert_eq!(
+            lines[0].note,
+            Some("present, not recorded as applied, needs your approval")
+        );
+        assert_eq!(need(Some(&r), &other, &current(), false), Need::Changed);
     }
 }

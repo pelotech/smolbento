@@ -214,11 +214,13 @@ pub fn header(loaded: &Loaded, name: &str) -> String {
         .iter()
         .map(|p| p.display().to_string())
         .collect();
-    let label = if files.len() == 1 { "File: " } else { "Files:" };
-    format!(
-        "ENVIRONMENT\n  Name:  {name}\n  {label} {}\n",
-        files.join("\n         ")
-    )
+    match files.as_slice() {
+        [file] => format!("ENVIRONMENT\n  Name:  {name}\n  File:  {file}\n"),
+        _ => format!(
+            "ENVIRONMENT\n  Name:   {name}\n  Files:  {}\n",
+            files.join("\n          ")
+        ),
+    }
 }
 
 /// What applying the file sets up, in the plan's order.
@@ -856,7 +858,7 @@ mod tests {
         );
         let l = t.loaded(&["sbxenv.yaml"]);
         let s = spec(&l, &Overrides::default(), &SecretsFile::default()).unwrap();
-        let lines = crate::env::approval::lines(None, &resources(&l, &s), false);
+        let lines = crate::env::approval::lines(None, &l.files, &resources(&l, &s), false);
         let plan = header(&l, &s.name) + &render(&lines, HOST_COMMANDS);
         insta::assert_snapshot!(plan.replace(&t.root(), "<root>"));
     }

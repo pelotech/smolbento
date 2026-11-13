@@ -87,7 +87,7 @@ fn planned<R: Runner>(
         ctx.settings.bool("env.rememberHostCommands")?,
     );
     Ok(Planned {
-        lines: approval::lines(record.as_ref(), &resources, exists),
+        lines: approval::lines(record.as_ref(), &loaded.files, &resources, exists),
         header: header(loaded, &spec.name),
         // What a yes records: the plan shown, and the approved commands it left out.
         resources: resources.into_iter().chain(kept).collect(),
@@ -401,7 +401,13 @@ fn approve<R: Runner>(
     if !ctx.stdin_tty {
         // The command as given, quoted for the shell, with `--force` added (sbx does the same).
         let words: Vec<String> = ctx.args.iter().map(|a| shell_word(a)).collect();
-        let file = loaded.files[0].display();
+        let file = match loaded.files.as_slice() {
+            [one] => one.display().to_string(),
+            all => {
+                let all: Vec<String> = all.iter().map(|f| f.display().to_string()).collect();
+                format!("the merged environment ({})", all.join(", "))
+            }
+        };
         let retry = format!("\n  try: sbt {} --force", words.join(" "));
         if plan.need == Need::HostCommands {
             bail!(
@@ -1521,6 +1527,92 @@ mod tests {
         let create = &creates(&t)[0];
         let cwd = t.ctx.cwd.display().to_string();
         assert!(!create.contains(&cwd), "no workspace mount: {create}");
+    }
+
+    #[test]
+    fn another_set_of_files_is_another_environment() {
+        let mut t = approved(FILE);
+        std::fs::write(t.ctx.cwd.join("same.yaml"), "env:\n  X: one\n").unwrap();
+        let err = t.sbt_err(&["env", "run", "-d", "sbxenv.yaml", "same.yaml"]);
+        let dir = t.ctx.cwd.display().to_string();
+        assert!(
+            err.starts_with(&format!(
+                "the merged environment ({dir}/sbxenv.yaml, {dir}/same.yaml) changes things \
+                 outside the sandbox that have not been approved"
+            )),
+            "{err}"
+        );
+        let out = t.stdout();
+        assert!(
+            out.contains(&format!(
+                "  Name:   claude-proj\n  Files:  {dir}/sbxenv.yaml\n          {dir}/same.yaml\n"
+            )),
+            "{out}"
+        );
+        assert!(
+            out.contains("  ! claude-proj — present, not recorded as applied"),
+            "{out}"
+        );
+    }
+
+    #[test]
+    fn env_plan_stores_nothing() {
+        let mut t = with_file(&format!(
+            "{FILE}secrets:\n  github:\n    value: ghp_dummy\n{REGISTRY}"
+        ));
+        t.no_machine();
+        t.sbt(&["env", "plan"]).unwrap();
+        assert!(scoped(&t).is_empty());
+        assert!(registries(&t).is_empty());
+        assert_eq!(record(&t), None);
+    }
+
+    #[test]
+    fn unchanged_host_commands_ask_on_a_terminal_too() {
+        let mut t = approved(&lifecycle_file(""));
+        t.answer("y\n");
+        t.sbt(&["env", "run", "-d"]).unwrap();
+        let out = t.stdout();
+        assert!(
+            out.contains(
+                "  ! nothing in this plan has changed, but its commands run on this machine, \
+                 outside the sandbox, with your own privileges, which needs explicit approval on \
+                 each run\n  Approve this plan? (y/N) "
+            ),
+            "{out}"
+        );
+    }
+
+    #[test]
+    fn a_failing_initialize_stores_no_registry_login() {
+        let mut t = with_file(&format!(
+            "{FILE}{REGISTRY}lifecycle:\n  initialize:\n    - command: exit 7\n"
+        ));
+        missing_then_created(&t, 2);
+        assert!(
+            t.sbt_err(&["env", "create", "--force"])
+                .ends_with("exit status 7")
+        );
+        assert!(registries(&t).is_empty());
+    }
+
+    #[test]
+    fn env_run_creates_runs_post_create_then_attaches_with_the_launch_command() {
+        let launch = "entrypoint: [\"/bin/sh\", \"-c\"]\ncmd: [\"echo hi\"]\n";
+        let mut t = with_file(&format!(
+            "{FILE}{launch}lifecycle:\n  postCreate:\n    - command: echo post >> log\n"
+        ));
+        missing_then_created(&t, 2);
+        t.sbt(&["env", "run", "--force"]).unwrap();
+        assert_eq!(log(&t), "post\n");
+        let out = t.stdout();
+        let (created, post) = (
+            out.find("Created sandbox claude-proj").unwrap(),
+            out.find("HOST POST-CREATE").unwrap(),
+        );
+        assert!(created < post, "{out}");
+        let call = t.runner().interactive_calls()[0].join(" ");
+        assert!(call.ends_with(" -- /bin/sh -c echo hi"), "{call}");
     }
 
     #[test]
