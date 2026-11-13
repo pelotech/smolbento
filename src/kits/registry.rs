@@ -44,9 +44,11 @@ const EMPTY_MEDIA_TYPE: &str = "application/vnd.oci.empty.v1+json";
 const V2_FILES_MEDIA_TYPE: &str = "application/vnd.oci.image.layer.v1.tar+gzip";
 
 /// Fetches REF's manifest and config and its layers into the cache. A manifest without the kit
-/// descriptor annotation is a plain image and an error.
-pub fn pull(reference: &str, cache: &Path, logins: Logins) -> Result<Kit> {
-    let dir = pull_layout(reference, cache, true, logins)?;
+/// descriptor annotation is a plain image and an error. A DIGEST (one a signature check
+/// verified) pins the fetch to that manifest; the kit's source is still REF.
+pub fn pull(reference: &str, digest: Option<&str>, cache: &Path, logins: Logins) -> Result<Kit> {
+    let pinned = digest.map(|d| pinned(reference, d)).transpose()?;
+    let dir = pull_layout(pinned.as_deref().unwrap_or(reference), cache, true, logins)?;
     read_layout(&dir, Source::Registry(reference.to_string()))
 }
 
@@ -77,9 +79,7 @@ fn fetch_ref(
 ) -> Result<Fetched> {
     // The same normaliser the trust check uses, so both read the ref alike.
     trust::normalise(reference)?;
-    let r: Reference = reference
-        .parse()
-        .with_context(|| format!("invalid kit reference '{reference}'"))?;
+    let r = parse_ref(reference)?;
     let rt = tokio::runtime::Builder::new_current_thread()
         .enable_all()
         .build()
@@ -184,20 +184,22 @@ pub fn kit_manifest(reference: &str, logins: Logins) -> Result<(Vec<u8>, String)
 }
 
 /// REF pinned to DIGEST (`registry/repo@sha256:…`), so a pull gets exactly what was verified.
-pub fn pinned(reference: &str, digest: &str) -> Result<String> {
-    let r: Reference = reference
-        .parse()
-        .with_context(|| format!("invalid kit reference '{reference}'"))?;
+fn pinned(reference: &str, digest: &str) -> Result<String> {
+    let r = parse_ref(reference)?;
     hex_of(digest)?;
     Ok(format!("{}/{}@{digest}", r.registry(), r.repository()))
+}
+
+fn parse_ref(reference: &str) -> Result<Reference> {
+    reference
+        .parse()
+        .with_context(|| format!("invalid kit reference '{reference}'"))
 }
 
 /// The bytes and digest of the manifest REF resolves to, an index left as it is: what a
 /// signature on REF covers.
 pub fn top_manifest(reference: &str, logins: Logins) -> Result<(Vec<u8>, String)> {
-    let r: Reference = reference
-        .parse()
-        .with_context(|| format!("invalid kit reference '{reference}'"))?;
+    let r = parse_ref(reference)?;
     let accepted = [
         OCI_IMAGE_MEDIA_TYPE,
         OCI_IMAGE_INDEX_MEDIA_TYPE,
@@ -274,9 +276,7 @@ pub fn push_signature(
     bundle: &[u8],
     logins: Logins,
 ) -> Result<()> {
-    let r: Reference = reference
-        .parse()
-        .with_context(|| format!("invalid reference: {reference}"))?;
+    let r = parse_ref(reference)?;
     let subject_digest = sha256_digest(manifest);
     let media_type = serde_json::from_slice::<Value>(manifest)?["mediaType"]
         .as_str()
@@ -353,9 +353,7 @@ pub fn push_signature(
 
 /// The signature bundles attached to the kit manifest DIGEST at REF.
 pub fn signatures_of(reference: &str, digest: &str, logins: Logins) -> Result<Vec<Vec<u8>>> {
-    let r: Reference = reference
-        .parse()
-        .with_context(|| format!("invalid reference: {reference}"))?;
+    let r = parse_ref(reference)?;
     let at = |d: &str| Reference::with_digest(r.registry().into(), r.repository().into(), d.into());
     with_client(&r, logins, RegistryOperation::Pull, async |client| {
         let index = client
@@ -437,9 +435,7 @@ pub(crate) fn tagged_reference(reference: &str) -> Result<Reference> {
         bail!("invalid reference: {reference} needs a tag (registry/repo:tag)");
     }
     trust::normalise(reference)?;
-    reference
-        .parse()
-        .with_context(|| format!("invalid reference: {reference}"))
+    parse_ref(reference)
 }
 
 /// The ring provider is installed once; reqwest's no-provider rustls build needs a default.

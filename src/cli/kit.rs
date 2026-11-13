@@ -255,28 +255,19 @@ fn verify<R: Runner>(
         let logins = Logins::new(&registries, &*ctx.store);
         let (manifest, digest) = registry::kit_manifest(reference, logins)?;
         let bundles = registry::signatures_of(reference, &digest, logins)?;
-        let mut last = anyhow::anyhow!("kit is not signed");
-        for b in &bundles {
-            match signing::verify_blob(&cosign, &manifest, b, &policy) {
-                Ok(()) => return Ok(()),
-                Err(e) => last = e,
-            }
-        }
-        Err(last)
+        signing::verify_any(&cosign, &manifest, &bundles, std::slice::from_ref(&policy))?;
+        anyhow::Ok(())
     })();
-    let shown = |m: &signing::Match| match m {
-        signing::Match::Exact(v) | signing::Match::Regexp(v) => v.clone(),
-    };
     let (identity, issuer) = match &policy {
         signing::Policy::Keyless {
             identity, issuer, ..
-        } => (Some(shown(identity)), Some(shown(issuer))),
+        } => (Some(identity.as_str()), Some(issuer.as_str())),
         signing::Policy::Key(_) => (None, None),
     };
     if format == Format::Table {
         checked?;
         writeln!(&ctx.out, "  ✓ {reference} — verified (oci)")?;
-        if let (Some(id), Some(iss)) = (&identity, &issuer) {
+        if let (Some(id), Some(iss)) = (identity, issuer) {
             writeln!(&ctx.out, "      identity {id}")?;
             writeln!(&ctx.out, "      issuer {iss}")?;
         }
@@ -286,8 +277,8 @@ fn verify<R: Runner>(
         reference,
         kind: "oci",
         verified: checked.is_ok(),
-        identity: identity.as_deref().filter(|_| checked.is_ok()),
-        issuer: issuer.as_deref().filter(|_| checked.is_ok()),
+        identity: identity.filter(|_| checked.is_ok()),
+        issuer: issuer.filter(|_| checked.is_ok()),
         error: checked.as_ref().err().map(|e| format!("{e:#}")),
     };
     if format == Format::Json {

@@ -102,29 +102,25 @@ fn fetch<R: Runner>(
         (kit?, true)
     } else {
         let located = locate(ctx, reference, offline, position)?;
-        // kit.requireSignature, before anything is pulled, built or read; --offline skips it.
-        if let Located::V2(p) | Located::V3(p) | Located::Smolfile(p) = &located
-            && !offline
-        {
-            signers::check_local(reference, p, &ctx.settings)?;
+        // kit.requireSignature, checked before anything is pulled, built or read. --offline
+        // skips it, as sbx documents (and never reaches a registry).
+        let require = !offline && ctx.settings.bool("kit.requireSignature")?;
+        if require && let Located::V2(p) | Located::V3(p) | Located::Smolfile(p) = &located {
+            return Err(signers::refuse_local(reference, p));
         }
         match located {
             Located::Registry(r) => {
                 let registries = registries(&SecretsFile::load(&ctx.paths)?, sandbox);
                 let logins = Logins::new(&registries, &*ctx.store);
-                // With signatures required, the pull is pinned to the digest that verified.
-                let pull = match signers::check_registry(&r, &ctx.settings, logins)? {
-                    Some(v) => {
-                        eprintln!("{}", v.line);
-                        registry::pinned(&r, &v.digest)?
-                    }
-                    None => r.clone(),
+                let verified = if require {
+                    Some(signers::verify_registry(&r, &ctx.settings, logins)?)
+                } else {
+                    None
                 };
                 let cache = ctx.paths.kit_cache();
                 before(Fetch::Pull);
                 let blobs = entries(&registry::store_dir(&cache));
-                let mut kit = registry::pull(&pull, &cache, logins)?;
-                kit.source = Source::Registry(r);
+                let kit = registry::pull(&r, verified.as_deref(), &cache, logins)?;
                 (kit, entries(&registry::store_dir(&cache)) == blobs)
             }
             Located::V2(dir) => {

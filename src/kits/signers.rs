@@ -26,12 +26,9 @@ fn refused(reference: &str, detail: &str) -> anyhow::Error {
     )
 }
 
-/// A local kit (directory or Smolfile at PATH) under the requirement: refused, as smolbento
-/// can't check a directory's `kit.sig.bundle` yet.
-pub fn check_local(reference: &str, path: &Path, settings: &Settings) -> Result<()> {
-    if !settings.bool("kit.requireSignature")? {
-        return Ok(());
-    }
+/// A local kit (directory or Smolfile at PATH) when signatures are required: refused, as
+/// smolbento can't check a directory's `kit.sig.bundle` yet.
+pub fn refuse_local(reference: &str, path: &Path) -> anyhow::Error {
     let dir = if path.is_dir() {
         path
     } else {
@@ -42,86 +39,44 @@ pub fn check_local(reference: &str, path: &Path, settings: &Settings) -> Result<
     } else {
         format!("{reference} is not signed")
     };
-    Err(refused(reference, &detail))
+    refused(reference, &detail)
 }
 
-/// What `check_registry` verified: the manifest digest a pull must use, and sbx's line for
-/// stderr.
-#[derive(Debug, Clone, PartialEq, Eq)]
-pub struct Verified {
-    pub digest: String,
-    pub line: String,
-}
-
-/// A registry kit under the requirement: one of its signatures must verify for a trusted signer.
-/// `None` when signatures aren't required. The caller pulls `Verified::digest`, not the tag
-/// again, so what loads is what was verified.
-pub fn check_registry(
-    reference: &str,
-    settings: &Settings,
-    logins: Logins,
-) -> Result<Option<Verified>> {
-    if !settings.bool("kit.requireSignature")? {
-        return Ok(None);
-    }
-    let mut signers = parse(&settings.value("kit.trustedSigners")?)?;
+/// A registry kit when signatures are required: one of its signatures must verify for a trusted
+/// signer. Prints sbx's success line and returns the manifest digest that verified, for the
+/// caller to pull, so what loads is what was verified.
+pub fn verify_registry(reference: &str, settings: &Settings, logins: Logins) -> Result<String> {
+    let signers = parse(
+        &settings.value("kit.trustedSigners")?,
+        settings.bool("kit.ignoreTransparencyLog")?,
+    )?;
     if signers.is_empty() {
         let detail = "no trusted signers are configured; set kit.trustedSigners, or disable \
                       kit.requireSignature";
         return Err(refused(reference, detail));
     }
-    let ignore = settings.bool("kit.ignoreTransparencyLog")?;
-    for s in &mut signers {
-        if let Policy::Keyless { ignore_tlog, .. } = s {
-            *ignore_tlog = ignore;
-        }
-    }
     let cosign = signing::cosign()?;
     let (manifest, digest) = registry::top_manifest(reference, logins)?;
     let bundles = registry::signatures_of(reference, &digest, logins)?;
-    let line = verify_any(&cosign, reference, &manifest, &bundles, &signers)?;
-    Ok(Some(Verified { digest, line }))
-}
-
-/// sbx's success line when a bundle verifies MANIFEST for one of SIGNERS, else its refusal.
-fn verify_any(
-    cosign: &Path,
-    reference: &str,
-    manifest: &[u8],
-    bundles: &[Vec<u8>],
-    signers: &[Policy],
-) -> Result<String> {
-    let mut last = None;
-    for signer in signers {
-        for b in bundles {
-            match signing::verify_blob(cosign, manifest, b, signer) {
-                Ok(()) => {
-                    return Ok(format!(
-                        "  \u{2713} {reference} \u{2014} signature verified ({})",
-                        shown(signer)
-                    ));
-                }
-                Err(e) => last = Some(e),
-            }
-        }
+    if bundles.is_empty() {
+        return Err(refused(reference, &format!("{reference} is not signed")));
     }
-    let detail = match last {
-        Some(e) => format!("{reference}: {e:#}"),
-        None => format!("{reference} is not signed"),
-    };
-    Err(refused(reference, &detail))
+    let signer = signing::verify_any(&cosign, &manifest, &bundles, &signers)
+        .map_err(|e| refused(reference, &format!("{reference}: {e:#}")))?;
+    eprintln!(
+        "  \u{2713} {reference} \u{2014} signature verified ({})",
+        shown(signer)
+    );
+    Ok(digest)
 }
 
 /// The signer that matched, as the success line names it.
 fn shown(p: &Policy) -> String {
-    let m = |m: &Match| match m {
-        Match::Exact(v) | Match::Regexp(v) => v.clone(),
-    };
     match p {
         Policy::Key(k) => format!("key {}", k.display()),
         Policy::Keyless {
             identity, issuer, ..
-        } => format!("{} via {}", m(identity), m(issuer)),
+        } => format!("{} via {}", identity.as_str(), issuer.as_str()),
     }
 }
 
@@ -136,15 +91,19 @@ struct Entry {
 }
 
 /// `kit.trustedSigners`: `{"key": PATH}` entries and keyless `issuer`/`identity` entries (exact
-/// or `…Regexp`), as verification policies. Also checked by `sbt settings set`.
-pub fn parse(raw: &str) -> Result<Vec<Policy>> {
+/// or `…Regexp`), as verification policies; keyless ones skip Rekor when IGNORE_TLOG
+/// (`kit.ignoreTransparencyLog`). Also checked by `sbt settings set`.
+pub fn parse(raw: &str, ignore_tlog: bool) -> Result<Vec<Policy>> {
     let entries: Vec<Entry> = serde_json::from_str(raw).map_err(|e| {
         anyhow::anyhow!("kit.trustedSigners must be a JSON array of signer objects: {e}")
     })?;
-    entries.into_iter().map(policy).collect()
+    entries
+        .into_iter()
+        .map(|e| policy(e, ignore_tlog))
+        .collect()
 }
 
-fn policy(e: Entry) -> Result<Policy> {
+fn policy(e: Entry, ignore_tlog: bool) -> Result<Policy> {
     let pick = |exact: Option<String>, regexp: Option<String>| {
         exact.map(Match::Exact).or(regexp.map(Match::Regexp))
     };
@@ -165,7 +124,7 @@ fn policy(e: Entry) -> Result<Policy> {
     Ok(Policy::Keyless {
         identity,
         issuer,
-        ignore_tlog: false,
+        ignore_tlog,
     })
 }
 
@@ -177,6 +136,7 @@ mod tests {
     fn the_default_trusts_docker_employees() {
         let p = parse(
             r#"[{"identityRegexp":"^.*@docker\\.com$","issuer":"https://accounts.google.com"}]"#,
+            false,
         )
         .unwrap();
         assert_eq!(
@@ -191,8 +151,11 @@ mod tests {
 
     #[test]
     fn keys_and_keyless_entries_mix() {
-        let p = parse(r#"[{"key":"/k.pub"},{"identity":"me@x.io","issuerRegexp":"^https://iss"}]"#)
-            .unwrap();
+        let p = parse(
+            r#"[{"key":"/k.pub"},{"identity":"me@x.io","issuerRegexp":"^https://iss"}]"#,
+            true,
+        )
+        .unwrap();
         assert_eq!(
             p,
             [
@@ -200,68 +163,16 @@ mod tests {
                 Policy::Keyless {
                     identity: Match::Exact("me@x.io".into()),
                     issuer: Match::Regexp("^https://iss".into()),
-                    ignore_tlog: false,
+                    ignore_tlog: true,
                 }
             ]
         );
-        assert_eq!(parse("[]").unwrap(), []);
-    }
-
-    #[cfg(unix)]
-    /// A fake cosign whose verify-blob passes only for a bundle reading `good`.
-    fn fake_cosign() -> (tempfile::TempDir, std::path::PathBuf) {
-        use std::os::unix::fs::PermissionsExt;
-        let d = tempfile::tempdir().unwrap();
-        let script = d.path().join("cosign");
-        std::fs::write(
-            &script,
-            r#"#!/bin/sh
-while [ $# -gt 0 ]; do [ "$1" = --bundle ] && bundle="$2"; shift; done
-grep -q good "$bundle" || { echo "Error: failed to verify signature: bad" >&2; exit 1; }
-"#,
-        )
-        .unwrap();
-        std::fs::set_permissions(&script, std::fs::Permissions::from_mode(0o755)).unwrap();
-        (d, script)
-    }
-
-    #[cfg(unix)]
-    #[test]
-    fn any_bundle_verifying_for_any_signer_is_enough() {
-        let (_d, cosign) = fake_cosign();
-        let signers = [Policy::Key("/a.pub".into()), Policy::Key("/b.pub".into())];
-        let bundles = [b"bad".to_vec(), b"good".to_vec()];
-        let line = verify_any(&cosign, "r/k:1", b"m", &bundles, &signers).unwrap();
-        assert_eq!(
-            line,
-            "  \u{2713} r/k:1 \u{2014} signature verified (key /a.pub)"
-        );
-    }
-
-    #[cfg(unix)]
-    #[test]
-    fn no_bundle_is_not_signed_and_a_bad_one_names_the_failure() {
-        let (_d, cosign) = fake_cosign();
-        let signers = [Policy::Key("/a.pub".into())];
-        let e = verify_any(&cosign, "r/k:1", b"m", &[], &signers)
-            .unwrap_err()
-            .to_string();
-        assert!(
-            e.contains("kit signature required by policy: r/k:1 is not signed;"),
-            "{e}"
-        );
-        let e = verify_any(&cosign, "r/k:1", b"m", &[b"bad".to_vec()], &signers)
-            .unwrap_err()
-            .to_string();
-        assert!(
-            e.contains("policy: r/k:1: kit signature verification failed: failed to verify"),
-            "{e}"
-        );
+        assert_eq!(parse("[]", false).unwrap(), []);
     }
 
     #[test]
     fn bad_entries_are_named() {
-        let err = |raw: &str| parse(raw).unwrap_err().to_string();
+        let err = |raw: &str| parse(raw, false).unwrap_err().to_string();
         assert_eq!(
             err(r#"[{"issuer":"https://i"}]"#),
             r#"keyless signer must set "identity" or "identityRegexp""#
