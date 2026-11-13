@@ -1,5 +1,12 @@
 # Changelog
 
+## [0.17.0](https://github.com/pelotech/smolbento/compare/v0.16.0...v0.17.0) (2026-11-13)
+
+
+### Features
+
+* **env:** lifecycle, registries, entrypoint and cmd in sbxenv.yaml ([#84](https://github.com/pelotech/smolbento/issues/84)) ([66f6c82](https://github.com/pelotech/smolbento/commit/66f6c82a468fa12d919ebc95ad8d030b17eb7346))
+
 ## [0.16.0](https://github.com/pelotech/smolbento/compare/v0.15.3...v0.16.0) (2026-11-12)
 
 
