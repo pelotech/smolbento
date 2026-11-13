@@ -104,6 +104,98 @@ pub struct Merged {
     pub privileged: bool,
     /// `ssh-agent@1` entries merged per phase, plus a built-in agent's implicit runtime grant.
     pub ssh_agent: AgentGrant,
+    /// The kit that first declared each volume path: a host mount there conflicts with it.
+    volume_kits: BTreeMap<String, String>,
+}
+
+impl Merged {
+    fn add_port(&mut self, container: u16, udp: bool) {
+        if !self.ports.contains(&(container, udp)) {
+            self.ports.push((container, udp));
+        }
+    }
+
+    fn add_volume(
+        &mut self,
+        kit: &str,
+        path: &str,
+        tmpfs: bool,
+        mode: &Option<String>,
+    ) -> Result<()> {
+        if let Some(h) = self.host_mounts.iter().find(|h| h.path == path) {
+            bail!("{}", one_owner(&h.kit, kit, path));
+        }
+        match self.volumes.iter().find(|v| v.path == path) {
+            Some(v) if v.tmpfs != tmpfs || v.mode != *mode => {
+                bail!("kit {kit}: volume {path} conflicts with another kit's request")
+            }
+            Some(_) => {}
+            None => {
+                self.volumes.push(Volume {
+                    path: path.into(),
+                    tmpfs,
+                    mode: mode.clone(),
+                });
+                self.volume_kits.insert(path.into(), kit.into());
+            }
+        }
+        Ok(())
+    }
+
+    fn add_host_mount(&mut self, k: &Kit, path: &str, mode: &Option<String>) -> Result<()> {
+        let owner = self.host_mounts.iter().find(|h| h.path == path);
+        if let Some(a) = owner.map(|h| &h.kit).or(self.volume_kits.get(path)) {
+            bail!("{}", one_owner(a, &k.name, path));
+        }
+        self.host_mounts.push(HostMount {
+            kit: k.name.clone(),
+            identity: host_mount::identity(k)?,
+            path: path.into(),
+            mode: mode.clone(),
+        });
+        Ok(())
+    }
+
+    fn add_skill_dir(&mut self, path: &str, readwrite: bool) {
+        match self.skill_dirs.iter_mut().find(|d| d.path == path) {
+            Some(d) => d.readwrite |= readwrite,
+            None => self.skill_dirs.push(SkillDir {
+                path: path.into(),
+                readwrite,
+            }),
+        }
+    }
+
+    fn add_bundled(&mut self, kit: &str, name: &str, source: &str, optional: bool) -> Result<()> {
+        match self.bundled.iter_mut().find(|b| b.name == name) {
+            Some(b) if b.source == source => b.optional &= optional,
+            Some(b) => bail!(
+                "kits {} and {kit} both bundle a skill named {name:?} from different paths",
+                b.kit
+            ),
+            None => self.bundled.push(Bundled {
+                kit: kit.into(),
+                name: name.into(),
+                source: source.into(),
+                optional,
+            }),
+        }
+        Ok(())
+    }
+
+    /// The last kit to set a value wins.
+    fn set_resources(&mut self, cpus: &Option<String>, memory: &Option<String>) {
+        if cpus.is_some() {
+            self.cpus.clone_from(cpus);
+        }
+        if memory.is_some() {
+            self.memory.clone_from(memory);
+        }
+    }
+}
+
+fn one_owner(a: &str, b: &str, path: &str) -> String {
+    format!("kits {a} and {b} both declare storage at {path}; a host mount has one owner")
 }
 
 /// A `host-mount@1` and the kit that declared it, which keys its managed directory.
@@ -251,11 +343,6 @@ pub fn resolve_for(
     if matches!(workload.source, Source::Preset(_)) {
         ssh_entries.push(BUILT_IN);
     }
-    // The kit that first declared each volume path: a host mount there conflicts with it.
-    let mut volume_kits: BTreeMap<String, String> = BTreeMap::new();
-    let one_owner = |a: &str, b: &str, path: &str| {
-        format!("kits {a} and {b} both declare storage at {path}; a host mount has one owner")
-    };
     for k in &all {
         let a = &kit_args[&k.name];
         let unresolved: BTreeSet<String> = k
@@ -304,76 +391,18 @@ pub fn resolve_for(
                         runtime,
                     });
                 }
-                CapBody::Port { container, udp } => {
-                    if !merged.ports.contains(&(*container, *udp)) {
-                        merged.ports.push((*container, *udp));
-                    }
-                }
+                CapBody::Port { container, udp } => merged.add_port(*container, *udp),
                 CapBody::Volume { path, tmpfs, mode } => {
-                    if let Some(h) = merged.host_mounts.iter().find(|h| &h.path == path) {
-                        bail!("{}", one_owner(&h.kit, &k.name, path));
-                    }
-                    match merged.volumes.iter().find(|v| &v.path == path) {
-                        Some(v) if v.tmpfs != *tmpfs || v.mode != *mode => bail!(
-                            "kit {}: volume {path} conflicts with another kit's request",
-                            k.name
-                        ),
-                        Some(_) => {}
-                        None => {
-                            merged.volumes.push(Volume {
-                                path: path.clone(),
-                                tmpfs: *tmpfs,
-                                mode: mode.clone(),
-                            });
-                            volume_kits.insert(path.clone(), k.name.clone());
-                        }
-                    }
+                    merged.add_volume(&k.name, path, *tmpfs, mode)?;
                 }
-                CapBody::HostMount { path, mode } => {
-                    let owner = merged.host_mounts.iter().find(|h| &h.path == path);
-                    if let Some(a) = owner.map(|h| &h.kit).or(volume_kits.get(path)) {
-                        bail!("{}", one_owner(a, &k.name, path));
-                    }
-                    merged.host_mounts.push(HostMount {
-                        kit: k.name.clone(),
-                        identity: host_mount::identity(k)?,
-                        path: path.clone(),
-                        mode: mode.clone(),
-                    });
-                }
+                CapBody::HostMount { path, mode } => merged.add_host_mount(k, path, mode)?,
                 CapBody::AgentSkills { path, readwrite } => {
-                    match merged.skill_dirs.iter_mut().find(|d| &d.path == path) {
-                        Some(d) => d.readwrite |= readwrite,
-                        None => merged.skill_dirs.push(SkillDir {
-                            path: path.clone(),
-                            readwrite: *readwrite,
-                        }),
-                    }
+                    merged.add_skill_dir(path, *readwrite);
                 }
                 CapBody::AgentSkill { source, name } => {
-                    match merged.bundled.iter_mut().find(|b| &b.name == name) {
-                        Some(b) if &b.source == source => b.optional &= cap.optional,
-                        Some(b) => bail!(
-                            "kits {} and {} both bundle a skill named {name:?} from different paths",
-                            b.kit,
-                            k.name
-                        ),
-                        None => merged.bundled.push(Bundled {
-                            kit: k.name.clone(),
-                            name: name.clone(),
-                            source: source.clone(),
-                            optional: cap.optional,
-                        }),
-                    }
+                    merged.add_bundled(&k.name, name, source, cap.optional)?;
                 }
-                CapBody::Resources { cpus, memory } => {
-                    if cpus.is_some() {
-                        merged.cpus = cpus.clone();
-                    }
-                    if memory.is_some() {
-                        merged.memory = memory.clone();
-                    }
-                }
+                CapBody::Resources { cpus, memory } => merged.set_resources(cpus, memory),
                 CapBody::Lifecycle(l) => add_lifecycle(&mut merged, &k.name, l, &ex)?,
                 CapBody::AgentContext(c) => {
                     merged.contexts.push((
