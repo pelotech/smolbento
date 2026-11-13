@@ -400,8 +400,6 @@ fn check_supported(f: &EnvFile) -> Result<()> {
             ("display", o.display.is_some()),
             ("gpu", o.gpu.is_some()),
             ("usb", o.usb.is_some()),
-            // Every smolvm guest has /dev/fuse.
-            ("fuse: false", o.fuse == Some(false)),
             // smolvm pulls an image only when it has none.
             (
                 "pullPolicy",
@@ -856,7 +854,7 @@ mod tests {
             "proj/a.yaml",
             &format!(
                 "{MIN}mcp:\n  servers:\n    - name: local\n      command: npx\n\
-                 sandboxOptions:\n  gpu: true\n  fuse: false\n  pullPolicy: always\n"
+                 sandboxOptions:\n  gpu: true\n  pullPolicy: always\n"
             ),
         );
         let e = t.load(&["a.yaml"], &none()).err().unwrap();
@@ -865,13 +863,12 @@ mod tests {
             e.to_string(),
             "env: mcp command server local (smolbento has no MCP gateway) is not supported yet\n\
              env: sandboxOptions.gpu is not supported yet\n\
-             env: sandboxOptions.fuse: false is not supported yet\n\
              env: sandboxOptions.pullPolicy is not supported yet"
         );
         t.write(
             "proj/a.yaml",
             &format!(
-                "{MIN}sandboxOptions:\n  pullPolicy: never\n  fuse: true\n  writableEnvFiles: true\n"
+                "{MIN}sandboxOptions:\n  pullPolicy: never\n  fuse: false\n  writableEnvFiles: true\n"
             ),
         );
         t.load(&["a.yaml"], &none()).unwrap();

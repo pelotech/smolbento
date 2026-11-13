@@ -476,6 +476,10 @@ fn provision<R: Runner>(ctx: &Ctx<R>, secrets: &mut SecretsFile, spec: &EnvSpec)
     {
         return Ok(());
     }
+    // Before anything is stored, as sbx checks a server when it registers it.
+    for (name, url) in &spec.mcp {
+        crate::mcp::check_reachable(name, url)?;
+    }
     let scope = scope_for(Some(&spec.name));
     let mut sources = Vec::new();
     for (service, decl) in &spec.secrets {
@@ -729,6 +733,15 @@ mod tests {
             .position(|l| l.starts_with("machine status"))
             .unwrap();
         env_lines.remove(lookup);
+        // It also keeps the file read-only in the sandbox, as sbx does (the label; starts apply it).
+        // (`lines` shows temporary directories as TMP.)
+        let label = " --label sbx.read-only-files=[\"TMP/proj/sbxenv.yaml\"]";
+        let create = env_lines
+            .iter()
+            .position(|l| l.starts_with("machine create"))
+            .unwrap();
+        assert!(env_lines[create].contains(label), "{}", env_lines[create]);
+        env_lines[create] = env_lines[create].replace(label, "");
         assert_eq!(env_lines, lines(&plain));
     }
 
@@ -1782,6 +1795,32 @@ mod tests {
         t.sbt(&["env", "rm", "--force"]).unwrap();
         let registered = crate::mcp::McpFile::load(&t.ctx.paths).unwrap();
         assert!(registered.servers.contains_key("deep"));
+    }
+
+    #[test]
+    fn an_unreachable_mcp_server_fails_the_create_before_anything_is_stored() {
+        // As sbx, which contacts the server when it registers it.
+        let mut t = with_file(&format!(
+            "{FILE}secrets:\n  github:\n    value: ghp_dummy\n\
+             mcp:\n  servers:\n    - name: gone\n      url: https://mcp.example.invalid/mcp\n"
+        ));
+        missing_then_created(&t, 2);
+        let err = t.sbt_err(&["env", "create", "--force"]);
+        assert!(
+            err.starts_with(
+                "register mcp server \"gone\": server \"gone\": discovery failed: connecting to \
+                 server https://mcp.example.invalid/mcp: "
+            ),
+            "{err}"
+        );
+        assert!(creates(&t).is_empty());
+        assert!(scoped(&t).is_empty());
+        assert!(
+            crate::mcp::McpFile::load(&t.ctx.paths)
+                .unwrap()
+                .servers
+                .is_empty()
+        );
     }
 
     #[test]

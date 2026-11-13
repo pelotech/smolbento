@@ -867,9 +867,11 @@ sbt env rm                           # remove the sandbox and the secrets scoped
   ```
 
 Not supported yet (exit 2, naming the field): `mcp` servers with a `command`,
-`sandboxOptions.profile`, `display`, `gpu` and `usb`, `fuse: false` (every sandbox has
-`/dev/fuse`), and `pullPolicy: always` (smolvm pulls only a missing image). `fuse: true`,
-`pullPolicy: missing|never` and `writableEnvFiles` are accepted. `refresh` and `backend` on a
+`sandboxOptions.profile`, `display`, `gpu` and `usb`, and `pullPolicy: always` (smolvm pulls
+only a missing image). `fuse` (`false` takes `/dev/fuse` away at each start) and
+`pullPolicy: missing|never` are accepted. The environment's files inside a writable mounted
+workspace are made read-only in the sandbox at each start, as sbx mounts them, unless
+`writableEnvFiles: true`. `refresh` and `backend` on a
 secret are accepted and do nothing. Secret service names must be ones `sbt secret set`
 knows; others are refused. See [sbx compatibility](sbx-compatibility.md#environment-files).
 

@@ -429,17 +429,29 @@ pub fn resolve_for(
 /// docs/sbx-compatibility.md). For a create, where every kit was just loaded: `kit add` can't
 /// tell the format of the kits a sandbox already has.
 pub fn check_formats(workload: &Kit, mixins: &[Kit]) -> Result<()> {
-    let (mut v2, mut v3) = (Vec::new(), Vec::new());
-    for k in std::iter::once(workload).chain(mixins) {
-        if matches!(k.source, Source::Preset(_) | Source::Builtin(_)) {
-            continue;
-        }
-        match k.format() {
-            Some(Format::V2) => v2.push(k.name.as_str()),
-            Some(Format::V3) => v3.push(k.name.as_str()),
-            None => {}
-        }
+    let named: Vec<(&str, Option<Format>)> = std::iter::once(workload)
+        .chain(mixins)
+        .map(|k| (k.name.as_str(), mixing_format(k)))
+        .collect();
+    check_named_formats(&named)
+}
+
+/// The format `check_formats` counts a kit as: none for an agent preset, the shipped docker kit
+/// or a Smolfile. `kit add` records it for each kit of a sandbox.
+pub fn mixing_format(k: &Kit) -> Option<Format> {
+    match k.source {
+        Source::Preset(_) | Source::Builtin(_) => None,
+        _ => k.format(),
     }
+}
+
+/// `check_formats` for kits known by name and format (`kit add`: the sandbox's record).
+pub fn check_named_formats(kits: &[(&str, Option<Format>)]) -> Result<()> {
+    let names = |want: Format| -> Vec<&str> {
+        let of = kits.iter().filter(|(_, f)| *f == Some(want));
+        of.map(|(name, _)| *name).collect()
+    };
+    let (v2, v3) = (names(Format::V2), names(Format::V3));
     if !v3.is_empty() && !v2.is_empty() {
         bail!(
             "cannot mix v3 kits with v1/v2 kits in one sandbox; compositions are single-format \

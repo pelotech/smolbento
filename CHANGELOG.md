@@ -1,5 +1,12 @@
 # Changelog
 
+## [0.20.0](https://github.com/pelotech/smolbento/compare/v0.19.1...v0.20.0) (2026-11-13)
+
+
+### Features
+
+* **env:** read-only env files, fuse: false, MCP reachability, kit add format check ([#94](https://github.com/pelotech/smolbento/issues/94)) ([681aa48](https://github.com/pelotech/smolbento/commit/681aa48cab7a66ecbe54520a8ed67bc27a073671))
+
 ## [0.19.1](https://github.com/pelotech/smolbento/compare/v0.19.0...v0.19.1) (2026-11-13)
 
 

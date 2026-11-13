@@ -128,6 +128,8 @@ fn base_request<R: Runner>(
         host_mounts,
         skills_mode,
         mcp: opts.static_mcp.clone(),
+        no_fuse: opts.no_fuse,
+        read_only_files: opts.read_only_files.clone(),
         ..Default::default()
     })
 }

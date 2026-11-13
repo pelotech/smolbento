@@ -446,6 +446,12 @@ pub struct SandboxOpts {
     /// `--kit-arg` and `--kit-args-file`.
     #[arg(skip)]
     pub kit_pins: Vec<(String, Vec<String>)>,
+    /// An environment file's `sandboxOptions.fuse: false`.
+    #[arg(skip)]
+    pub no_fuse: bool,
+    /// An environment's files in its mounted workspaces, kept read-only in the guest.
+    #[arg(skip)]
+    pub read_only_files: Vec<String>,
     /// Bind a host directory to a kit host-mount@1 path (can be repeated): HOST:SANDBOX_PATH. Can
     /// only be used when creating a new sandbox.
     #[arg(long, value_name = "HOST:SANDBOX_PATH")]
