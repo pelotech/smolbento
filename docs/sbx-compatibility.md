@@ -139,7 +139,10 @@ the field: `bindings`, `mcp`, `sandboxOptions.profile|display|gpu|usb|writableEn
 | `PROVISION` output | Ends with `✓ environment — provisioned` | That line isn't printed |
 | Plan against the last apply | Keeps a list of what was applied: after a `--force` apply the plan shows `! NAME — unchanged, needs your approval`; a change that waits for a re-create keeps showing as `recorded as applied, no longer present, waits for the next create`; an unchanged secret shows as `○ NAME — unchanged` | Compares with what was approved and asks smolvm whether the sandbox exists: a change shows as `~` (outside `ENV` with `— waits for the next create`) until it is approved, then no longer; unchanged resources aren't listed |
 | `--clone` in the plan | A `GIT REMOTE` section | `clone: true` on the workspace |
-| Port names in the plan | `8080/tcp4` | `8080/tcp` |
+| Ports in an environment file | Named by protocol as written, else `tcp4` (`tcp6` for an IPv6 `hostIP`); `hostIP` must be an address; a later port with the same sandbox port and protocol replaces the earlier one | Same. smolvm publishes every port on both `127.0.0.1` and `::1`, so `tcp4`/`tcp6`/`udp4`/`udp6` all publish on both, and a `hostIP` other than those two is refused |
+| `additionalWorkspaces` with the same path | The later one replaces the earlier one | Same |
+| A different set of environment files | An environment of its own: nothing is approved for it, and what an existing sandbox has needs approval; the refusal names `the merged environment (a, b)` | Same |
+| Environment files in the sandbox | Mounted into the sandbox (read-only unless `writableEnvFiles`), with a plan line when one is writable | Not mounted |
 | The plan after a plain `rm` | Lines end with `— recorded as applied, no longer present` | A bare `+` |
 | Kit arguments in the plan | The file's pinned `args.NAME`; `--kit-arg` isn't shown | Same |
 | A local kit's contents | Not measured | Not part of the approval: the plan names the kit's path |

@@ -196,7 +196,5 @@ verified on a Mac).
 
 Small issues found in review and deferred; none affect normal use.
 
-- Settings don't yet accept sbx's `DOCKER_SANDBOXES_*` and `SBX_*` environment names (sbx's
-  names for each setting still need to be recorded).
 - More tests for: `cp -L`, `exec --privileged -u`, session cleanup on `rm`/`prune`/`reset`,
   `ProcessRunner` itself.

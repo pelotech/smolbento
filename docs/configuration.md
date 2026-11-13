@@ -24,6 +24,11 @@ sbt settings unset docker.enabled       # back to the default
 | `ssh.agentForwardingEnabled` | `SMOLBENTO_SSH_AGENT_FORWARDING` | `true` | Allow sandboxes to list SSH agent keys and sign, but not add, remove or lock keys. Disabling blocks new agent connections; existing connections remain active (see [SSH agent](usage.md#ssh-agent)) |
 | `ssh.agentSocketPath` | `SMOLBENTO_SSH_AGENT_SOCKET` | empty | Optional fixed host SSH agent socket path. Empty uses each client's current `SSH_AUTH_SOCK` |
 
+These `SMOLBENTO_*` names are smolbento's own. sbx has no environment variable per setting: its
+settings are read by its daemon, and the few variables it reads (such as `DOCKER_SANDBOXES_PROXY`
+for `proxy`, or `SBX_NO_TELEMETRY`) belong to settings smolbento doesn't have (measured on sbx
+v0.53.0).
+
 An environment variable wins over the config file, which wins over the default. Booleans accept
 `true`/`false`, `1`/`0`, `yes`/`no` and `on`/`off`.
 
