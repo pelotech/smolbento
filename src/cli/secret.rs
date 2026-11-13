@@ -90,12 +90,13 @@ fn ls<R: Runner>(ctx: &Ctx<R>, file: &SecretsFile, a: &SecretLsArgs) -> Result<(
         .and_then(|s| sandbox::find(&ctx.vm, s).ok().flatten())
         .and_then(|sb| sb.meta.fork_of);
     let mut text = render_ls(file, a, parent.as_deref());
-    if !a.quiet
-        && !a.global
-        && a.sandbox.is_none()
-        && a.service.is_none()
-        && !file.registries.is_empty()
-    {
+    // Every registry login, or with `--sandbox` that sandbox's own (as sbx lists them).
+    let registries: Vec<&RegistryEntry> = file
+        .registries
+        .iter()
+        .filter(|r| a.sandbox.is_none() || r.sandbox == a.sandbox)
+        .collect();
+    if !a.quiet && !a.global && a.service.is_none() && !registries.is_empty() {
         if text == "No secrets\n" {
             text.clear();
         } else {
@@ -106,7 +107,7 @@ fn ls<R: Runner>(ctx: &Ctx<R>, file: &SecretsFile, a: &SecretLsArgs) -> Result<(
                 .map(String::from)
                 .to_vec(),
         ];
-        for r in &file.registries {
+        for r in registries {
             rows.push(vec![
                 r.sandbox.clone().unwrap_or_else(|| "(host only)".into()),
                 "registry".into(),

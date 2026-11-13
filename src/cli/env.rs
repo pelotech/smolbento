@@ -1475,6 +1475,16 @@ mod tests {
             ls.contains("claude-proj   registry   ghcr.io   (stored)"),
             "{ls}"
         );
+        // As in sbx, the sandbox's own listing has it too, and only it.
+        t.sbt(&["secret", "ls", "--sandbox", "claude-proj"])
+            .unwrap();
+        let ls = t.stdout();
+        assert!(
+            ls.contains("claude-proj   registry   ghcr.io   (stored)"),
+            "{ls}"
+        );
+        t.sbt(&["secret", "ls", "--sandbox", "other"]).unwrap();
+        assert!(!t.stdout().contains("ghcr.io"));
 
         listed(&t, &[]);
         t.sbt(&["env", "rm", "--force"]).unwrap();
@@ -1511,6 +1521,20 @@ mod tests {
         assert!(err.starts_with("registry \"GHCR.io\": secret: "), "{err}");
         assert!(creates(&t).is_empty());
         assert!(registries(&t).is_empty());
+    }
+
+    #[test]
+    fn env_run_detached_launches_nothing_and_no_workspace_means_mountless() {
+        // Both measured on sbx 0.53.
+        let file = "schemaVersion: \"1\"\nagent: claude\nname: claude-proj\n\
+                    entrypoint: [\"/bin/sh\", \"-c\"]\ncmd: [\"echo hi\"]\n";
+        let mut t = with_file(file);
+        missing_then_created(&t, 2);
+        t.sbt(&["env", "run", "-d", "--force"]).unwrap();
+        assert!(t.runner().interactive_calls().is_empty());
+        let create = &creates(&t)[0];
+        let cwd = t.ctx.cwd.display().to_string();
+        assert!(!create.contains(&cwd), "no workspace mount: {create}");
     }
 
     #[test]
