@@ -837,8 +837,7 @@ pub fn read_layout(dir: &Path, source: Source) -> Result<Kit> {
         }
         let yaml = String::from_utf8(read(blobs.join(hex_of(&spec)?))?)
             .context("reading the v2 kit's spec")?;
-        let mut kit = crate::kits::v2::read_static_files(dir)
-            .and_then(|files| crate::kits::v2::parse(&yaml, dir, &files))
+        let mut kit = crate::kits::v2::parse(&yaml, dir)
             .with_context(|| format!("reading the v2 kit {what}"))?;
         // Its image is named in the spec (`Content::Image`) and pulled when a sandbox is made.
         kit.source = source;

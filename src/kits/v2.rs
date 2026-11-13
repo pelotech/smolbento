@@ -36,10 +36,10 @@ fn name_or_source(name: Option<String>, dir: &Path) -> Result<String> {
     }
 }
 
-/// `dir` is the kit directory, used for naming. `files` is what `read_static_files(dir)` found.
-/// Fields smolbento ignores are warnings on stderr.
-pub fn parse(yaml: &str, dir: &Path, files: &StaticFiles) -> Result<Kit> {
-    let (kit, warnings) = parse_warn(yaml, dir, files)?;
+/// `dir` is the kit directory: `spec.yaml` sits in it, with optional `files/home` and
+/// `files/workspace` beside it. Fields smolbento ignores are warnings on stderr.
+pub fn parse(yaml: &str, dir: &Path) -> Result<Kit> {
+    let (kit, warnings) = parse_warn(yaml, dir)?;
     for w in warnings {
         eprintln!("{w}");
     }
@@ -47,7 +47,7 @@ pub fn parse(yaml: &str, dir: &Path, files: &StaticFiles) -> Result<Kit> {
 }
 
 /// `parse`, returning its warnings instead of printing them.
-fn parse_warn(yaml: &str, dir: &Path, files: &StaticFiles) -> Result<(Kit, Vec<String>)> {
+fn parse_warn(yaml: &str, dir: &Path) -> Result<(Kit, Vec<String>)> {
     let v: Value = serde_saphyr::from_str(yaml).context("reading the v2 kit descriptor")?;
     let s: Spec = serde_json::from_value(v).context("reading the v2 kit descriptor")?;
     if s.schema_version != "2" {
@@ -142,7 +142,7 @@ fn parse_warn(yaml: &str, dir: &Path, files: &StaticFiles) -> Result<(Kit, Vec<S
             },
         ));
     }
-    if let Some(l) = lifecycle(s.setup.unwrap_or_default(), files, &name, &mut warnings)? {
+    if let Some(l) = lifecycle(s.setup.unwrap_or_default(), dir, &name, &mut warnings)? {
         caps.push(cap("lifecycle@1", CapBody::Lifecycle(l)));
     }
     // No content, nothing to write.
@@ -517,7 +517,7 @@ struct FileCfg {
 /// `files/workspace`. Install and startup stay separate lists, so only the files need ordering.
 fn lifecycle(
     s: Setup,
-    static_files: &StaticFiles,
+    dir: &Path,
     kit: &str,
     warnings: &mut Vec<String>,
 ) -> Result<Option<Lifecycle>> {
@@ -537,30 +537,26 @@ fn lifecycle(
         background: h.background,
         clean_env: false,
     });
-    let mut tree = |t: &Tree, sub: &str, dest: &str| -> Vec<FileReq> {
-        warnings.extend(
-            t.symlinks
-                .iter()
-                .map(|rel| format!("warning: kit {kit}: {sub}/{rel} is a symlink; skipped")),
-        );
-        t.files
-            .iter()
-            .map(|(rel, content)| FileReq {
-                path: format!("{dest}/{rel}"),
-                content: content.clone(),
-                mode: None,
-                overwrite: true,
-            })
-            .collect()
+    let mut static_files = |sub: &str, dest: &str| -> Result<Vec<FileReq>> {
+        let root = dir.join(sub);
+        let mut out = Vec::new();
+        if root.is_dir() {
+            walk(&root, &root, dest, &mut out, &mut |rel| {
+                warnings.push(format!(
+                    "warning: kit {kit}: {sub}/{rel} is a symlink; skipped"
+                ))
+            })?;
+        }
+        Ok(out)
     };
-    let mut files = tree(&static_files.home, "files/home", HOME);
+    let mut files = static_files("files/home", HOME)?;
     files.extend(s.files.into_iter().map(|f| FileReq {
         path: f.path,
         content: f.content.replace("${WORKDIR}", WORKSPACE).into_bytes(),
         mode: f.mode,
         overwrite: !f.only_if_missing,
     }));
-    files.extend(tree(&static_files.workspace, "files/workspace", WORKSPACE));
+    files.extend(static_files("files/workspace", WORKSPACE)?);
     let l = Lifecycle {
         install: install.collect(),
         startup: startup.collect(),
@@ -571,39 +567,15 @@ fn lifecycle(
     Ok((!empty).then_some(l))
 }
 
-/// A kit's static files: `files/home` and `files/workspace` beside `spec.yaml`.
-#[derive(Default)]
-pub struct StaticFiles {
-    home: Tree,
-    workspace: Tree,
-}
-
-/// The files under one directory, as (path relative to it, content) in path order, and the
-/// relative paths of the symlinks skipped.
-#[derive(Default)]
-struct Tree {
-    files: Vec<(String, Vec<u8>)>,
-    symlinks: Vec<String>,
-}
-
-/// Read the static files of the kit in `dir`; absent directories are empty.
-pub fn read_static_files(dir: &Path) -> Result<StaticFiles> {
-    let tree = |sub: &str| -> Result<Tree> {
-        let root = dir.join(sub);
-        let mut t = Tree::default();
-        if root.is_dir() {
-            walk(&root, &root, &mut t)?;
-        }
-        Ok(t)
-    };
-    Ok(StaticFiles {
-        home: tree("files/home")?,
-        workspace: tree("files/workspace")?,
-    })
-}
-
-/// Every file under `dir` goes to `out`, in path order; each symlink is skipped and noted.
-fn walk(root: &Path, dir: &Path, out: &mut Tree) -> Result<()> {
+/// Every file under `root`, in path order, targeted at `dest` plus its relative path. Each
+/// skipped symlink's path relative to `root` goes to `symlink`.
+fn walk(
+    root: &Path,
+    dir: &Path,
+    dest: &str,
+    out: &mut Vec<FileReq>,
+    symlink: &mut dyn FnMut(&str),
+) -> Result<()> {
     let mut entries = std::fs::read_dir(dir)
         .with_context(|| format!("reading {}", dir.display()))?
         .collect::<std::io::Result<Vec<_>>>()?;
@@ -614,7 +586,7 @@ fn walk(root: &Path, dir: &Path, out: &mut Tree) -> Result<()> {
         // pull in files from outside the kit (sbx rejects `../` traversal for the same reason).
         let ty = e.file_type()?;
         if ty.is_dir() {
-            walk(root, &p, out)?;
+            walk(root, &p, dest, out, symlink)?;
             continue;
         }
         let rel = p
@@ -624,14 +596,19 @@ fn walk(root: &Path, dir: &Path, out: &mut Tree) -> Result<()> {
             .collect::<Vec<_>>()
             .join("/");
         if ty.is_symlink() {
-            out.symlinks.push(rel);
+            symlink(&rel);
             continue;
         }
         if !ty.is_file() {
             continue;
         }
         let content = std::fs::read(&p).with_context(|| format!("reading {}", p.display()))?;
-        out.files.push((rel, content));
+        out.push(FileReq {
+            path: format!("{dest}/{rel}"),
+            content,
+            mode: None,
+            overwrite: true,
+        });
     }
     Ok(())
 }
@@ -646,7 +623,6 @@ mod tests {
         let v2 = parse(
             &std::fs::read_to_string(dir.join("spec.yaml")).unwrap(),
             dir,
-            &read_static_files(dir).unwrap(),
         )
         .unwrap();
         let v3 = crate::kits::v3::parse(
@@ -678,7 +654,6 @@ mod tests {
         let e = parse(
             "schemaVersion: \"2\"\nkind: mixin\nnetwork:\n  allowedDomains: [a.com]\n",
             Path::new("."),
-            &StaticFiles::default(),
         )
         .unwrap_err();
         assert!(format!("{e:#}").contains("network"), "{e:#}");
@@ -690,7 +665,6 @@ mod tests {
         let k = parse(
             &std::fs::read_to_string(dir.join("spec.yaml")).unwrap(),
             dir,
-            &read_static_files(dir).unwrap(),
         )
         .unwrap();
         assert_eq!(k.name, "full-kit");
@@ -708,7 +682,6 @@ mod tests {
             let e = parse(
                 &format!("schemaVersion: \"2\"\nkind: mixin\nname: {name}\n"),
                 Path::new("kits/x"),
-                &StaticFiles::default(),
             )
             .unwrap_err();
             assert!(format!("{e:#}").contains("may only contain"), "{e:#}");
@@ -720,7 +693,6 @@ mod tests {
         let k = parse(
             "schemaVersion: \"2\"\nkind: mixin\n",
             Path::new("kits/my-tools"),
-            &StaticFiles::default(),
         )
         .unwrap();
         assert_eq!(k.name, "my-tools");
@@ -732,7 +704,7 @@ mod tests {
     fn unknown_nested_keys_are_errors() {
         let e = parse(
             "schemaVersion: \"2\"\nkind: mixin\nsetup:\n  install:\n    - command: x\n      shell: y\n",
-            Path::new("."), &StaticFiles::default()
+            Path::new("."),
         )
         .unwrap_err();
         assert!(format!("{e:#}").contains("shell"), "{e:#}");
@@ -741,7 +713,7 @@ mod tests {
     #[test]
     fn bearer_scheme_expands_to_an_authorization_header() {
         let y = "schemaVersion: \"2\"\nkind: mixin\ncredentials:\n  - service: s\n    apiKey:\n      name: K\n      inject:\n        - domain: a.com\n          scheme: bearer\n";
-        let k = parse(y, Path::new("."), &StaticFiles::default()).unwrap();
+        let k = parse(y, Path::new(".")).unwrap();
         let CapBody::Credential(c) = &k.caps[0].body else {
             panic!()
         };
@@ -759,12 +731,7 @@ mod tests {
         std::fs::write(home.join("sub/a.txt"), "a").unwrap();
         std::os::unix::fs::symlink(&home, home.join("sub/loop")).unwrap();
         std::os::unix::fs::symlink(home.join("sub/a.txt"), home.join("link.txt")).unwrap();
-        let (k, warnings) = parse_warn(
-            "schemaVersion: \"2\"\nkind: mixin\n",
-            d.path(),
-            &read_static_files(d.path()).unwrap(),
-        )
-        .unwrap();
+        let (k, warnings) = parse_warn("schemaVersion: \"2\"\nkind: mixin\n", d.path()).unwrap();
         let CapBody::Lifecycle(l) = &k.caps[0].body else {
             panic!()
         };
@@ -789,12 +756,7 @@ mod tests {
         std::fs::create_dir_all(&ws).unwrap();
         std::fs::write(ws.join("AGENTS.md"), "# agents\n").unwrap();
         std::fs::write(ws.join(".AGENTS.md.swp"), swap).unwrap();
-        let k = parse(
-            "schemaVersion: \"2\"\nkind: mixin\n",
-            d.path(),
-            &read_static_files(d.path()).unwrap(),
-        )
-        .unwrap();
+        let k = parse("schemaVersion: \"2\"\nkind: mixin\n", d.path()).unwrap();
         let CapBody::Lifecycle(l) = &k.caps[0].body else {
             panic!()
         };
@@ -820,7 +782,7 @@ mod tests {
             "agentInstructions:\n  content: \"  \"\n",
         ] {
             let yaml = format!("schemaVersion: \"2\"\nkind: mixin\nname: m\n{body}");
-            let k = parse(&yaml, Path::new("/nonexistent"), &StaticFiles::default()).unwrap();
+            let k = parse(&yaml, Path::new("/nonexistent")).unwrap();
             assert!(k.caps.is_empty(), "{body}: {:?}", k.caps);
         }
     }
@@ -829,8 +791,7 @@ mod tests {
     fn ignored_fields_warn_once_each() {
         let yaml = "schemaVersion: \"2\"\nkind: mixin\nname: m\nsandbox:\n  build: {context: .}\n  \
                     entrypoint: [a]\n  command: [b]\n  resources:\n    gpu: all\n";
-        let (k, warnings) =
-            parse_warn(yaml, Path::new("/nonexistent"), &StaticFiles::default()).unwrap();
+        let (k, warnings) = parse_warn(yaml, Path::new("/nonexistent")).unwrap();
         assert_eq!(k.command, None);
         assert_eq!(
             warnings,
@@ -843,8 +804,7 @@ mod tests {
         );
         // A workload's command runs.
         let yaml = yaml.replace("kind: mixin", "kind: sandbox");
-        let (k, warnings) =
-            parse_warn(&yaml, Path::new("/nonexistent"), &StaticFiles::default()).unwrap();
+        let (k, warnings) = parse_warn(&yaml, Path::new("/nonexistent")).unwrap();
         assert_eq!(k.command, Some(vec!["a".to_string(), "b".to_string()]));
         assert_eq!(warnings.len(), 2, "{warnings:?}");
     }
@@ -853,7 +813,7 @@ mod tests {
     fn unquoted_numbers_and_bools_in_default_and_enum_become_strings() {
         let yaml = "schemaVersion: \"2\"\nkind: mixin\nname: m\nargs:\n  a:\n    default: 5\n    \
                     enum: [5, true, x]\n";
-        let k = parse(yaml, Path::new("/nonexistent"), &StaticFiles::default()).unwrap();
+        let k = parse(yaml, Path::new("/nonexistent")).unwrap();
         assert_eq!(k.args["a"].default.as_deref(), Some("5"));
         assert_eq!(k.args["a"].enum_values, ["5", "true", "x"]);
     }
@@ -875,7 +835,7 @@ mod tests {
             ),
         ] {
             let yaml = format!("schemaVersion: \"2\"\nkind: mixin\nname: m\nsetup:\n  {setup}");
-            let e = parse(&yaml, Path::new("/nonexistent"), &StaticFiles::default()).unwrap_err();
+            let e = parse(&yaml, Path::new("/nonexistent")).unwrap_err();
             assert_eq!(format!("{e:#}"), want);
         }
     }
@@ -884,7 +844,7 @@ mod tests {
     fn a_mixin_agent_instructions_filename_warns() {
         let y = "schemaVersion: \"2\"\nkind: mixin\nname: m\nagentInstructions:\n  filename: X.md\n  \
                  content: hi\n";
-        let (_, w) = parse_warn(y, Path::new("/nonexistent"), &StaticFiles::default()).unwrap();
+        let (_, w) = parse_warn(y, Path::new("/nonexistent")).unwrap();
         assert_eq!(
             w,
             [
@@ -894,7 +854,7 @@ mod tests {
         let y = y
             .replace("mixin", "sandbox")
             .replace("name: m", "name: m\nsandbox:\n  image: a:1");
-        let (_, w) = parse_warn(&y, Path::new("/nonexistent"), &StaticFiles::default()).unwrap();
+        let (_, w) = parse_warn(&y, Path::new("/nonexistent")).unwrap();
         assert!(w.is_empty(), "{w:?}");
     }
 }

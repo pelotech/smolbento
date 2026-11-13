@@ -127,7 +127,7 @@ fn fetch<R: Runner>(
                 let spec = dir.join("spec.yaml");
                 let yaml = fs::read_to_string(&spec)
                     .with_context(|| format!("reading {}", spec.display()))?;
-                (v2::parse(&yaml, &dir, &v2::read_static_files(&dir)?)?, true)
+                (v2::parse(&yaml, &dir)?, true)
             }
             Located::V3(_) if offline => bail!(
                 "kit {reference} is a v3 source kit and --offline has no kit builder: building it \
@@ -787,9 +787,7 @@ mod tests {
     #[test]
     fn a_v2_mixin_requiring_its_agent_resolves_on_that_preset() {
         let y = "schemaVersion: \"2\"\nkind: mixin\nname: m\nrequires:\n  agent: claude\n";
-        let m =
-            crate::kits::v2::parse(y, std::path::Path::new("/nonexistent"), &Default::default())
-                .unwrap();
+        let m = crate::kits::v2::parse(y, std::path::Path::new("/nonexistent")).unwrap();
         assert_eq!(m.requires, ["claude"]);
         let claude = agents::find("claude").unwrap();
         let w = preset_kit(claude, claude.image);

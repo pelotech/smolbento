@@ -1847,12 +1847,7 @@ mod tests {
     fn v2_workspace_files_and_workdir_expand_to_the_workdir() {
         let dir = std::path::Path::new("tests/fixtures/kits/v2/workspace-files");
         let yaml = std::fs::read_to_string(dir.join("spec.yaml")).unwrap();
-        let kit = crate::kits::v2::parse(
-            &yaml,
-            dir,
-            &crate::kits::v2::read_static_files(dir).unwrap(),
-        )
-        .unwrap();
+        let kit = crate::kits::v2::parse(&yaml, dir).unwrap();
         let v2_workload = || Kit::new("w", Kind::Workload, Source::LocalV2("w".into()));
         let files = |p: &Plan| -> Vec<(String, Vec<u8>)> {
             p.merged
