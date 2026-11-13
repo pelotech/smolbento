@@ -86,6 +86,8 @@ fn push<R: Runner>(ctx: &Ctx<R>, directory: &str, reference: &str) -> Result<i32
 
 /// `kit pull`: saves the payload of the v2 kit at REFERENCE (its files, as a tar.gz).
 fn pull<R: Runner>(ctx: &Ctx<R>, reference: &str, output: Option<&str>) -> Result<i32> {
+    // As in sbx, the source policy applies to a pull (not to a push).
+    crate::kits::trust::check(&Source::Registry(reference.into()), &ctx.settings)?;
     let registries = SecretsFile::load(&ctx.paths)?.host_registries();
     let logins = Logins::new(&registries, &*ctx.store);
     let payload = crate::kits::registry::fetch_payload(reference, &ctx.paths.kit_cache(), logins)?;
@@ -1020,6 +1022,21 @@ mod tests {
             .sbt(&["kit", "push", "./nope", "localhost:5000/k:1"])
             .unwrap_err();
         assert!(format!("{e:#}").starts_with("invalid artifact: "), "{e:#}");
+    }
+
+    #[test]
+    fn pull_applies_the_source_policy_and_push_does_not() {
+        // sbx 0.53: `kit pull` of a source outside kit.allowedSources is refused before any
+        // download; `kit push` doesn't check the policy.
+        let mut t = test_env(&[("SMOLBENTO_KIT_ALLOWED_SOURCES", r#"["dhi.io/"]"#)]);
+        let e = t
+            .sbt(&["kit", "pull", "docker.io/sbx/gemini-kit:latest"])
+            .unwrap_err();
+        assert!(e.to_string().contains("not in your allowlist"), "{e}");
+        assert!(!t.ctx.cwd.join("gemini-kit-latest.tar.gz").exists());
+        v2_dir(&t, "k", "schemaVersion: \"2\"\nkind: mixin\nname: demo\n");
+        let e = t.sbt(&["kit", "push", "./k", "k:1"]).unwrap_err();
+        assert!(!e.to_string().contains("allowlist"), "{e}");
     }
 
     #[test]
