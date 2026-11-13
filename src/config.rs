@@ -490,7 +490,6 @@ mod tests {
         v
     }
 
-    #[cfg(unix)]
     #[test]
     fn a_bad_trusted_signer_list_is_refused_and_not_saved() {
         let dir = tempfile::tempdir().unwrap();
@@ -517,6 +516,7 @@ mod tests {
         );
     }
 
+    #[cfg(unix)]
     #[test]
     fn write_atomic_can_write_through_a_symlink() {
         use std::os::unix::fs::PermissionsExt;

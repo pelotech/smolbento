@@ -45,13 +45,22 @@ pub fn check_local(reference: &str, path: &Path, settings: &Settings) -> Result<
     Err(refused(reference, &detail))
 }
 
+/// What `check_registry` verified: the manifest digest a pull must use, and sbx's line for
+/// stderr.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct Verified {
+    pub digest: String,
+    pub line: String,
+}
+
 /// A registry kit under the requirement: one of its signatures must verify for a trusted signer.
-/// Returns sbx's line for stderr when one does, `None` when signatures aren't required.
+/// `None` when signatures aren't required. The caller pulls `Verified::digest`, not the tag
+/// again, so what loads is what was verified.
 pub fn check_registry(
     reference: &str,
     settings: &Settings,
     logins: Logins,
-) -> Result<Option<String>> {
+) -> Result<Option<Verified>> {
     if !settings.bool("kit.requireSignature")? {
         return Ok(None);
     }
@@ -70,15 +79,27 @@ pub fn check_registry(
     let cosign = signing::cosign()?;
     let (manifest, digest) = registry::top_manifest(reference, logins)?;
     let bundles = registry::signatures_of(reference, &digest, logins)?;
+    let line = verify_any(&cosign, reference, &manifest, &bundles, &signers)?;
+    Ok(Some(Verified { digest, line }))
+}
+
+/// sbx's success line when a bundle verifies MANIFEST for one of SIGNERS, else its refusal.
+fn verify_any(
+    cosign: &Path,
+    reference: &str,
+    manifest: &[u8],
+    bundles: &[Vec<u8>],
+    signers: &[Policy],
+) -> Result<String> {
     let mut last = None;
-    for signer in &signers {
-        for b in &bundles {
-            match signing::verify_blob(&cosign, &manifest, b, signer) {
+    for signer in signers {
+        for b in bundles {
+            match signing::verify_blob(cosign, manifest, b, signer) {
                 Ok(()) => {
-                    return Ok(Some(format!(
+                    return Ok(format!(
                         "  \u{2713} {reference} \u{2014} signature verified ({})",
                         shown(signer)
-                    )));
+                    ));
                 }
                 Err(e) => last = Some(e),
             }
@@ -184,6 +205,58 @@ mod tests {
             ]
         );
         assert_eq!(parse("[]").unwrap(), []);
+    }
+
+    #[cfg(unix)]
+    /// A fake cosign whose verify-blob passes only for a bundle reading `good`.
+    fn fake_cosign() -> (tempfile::TempDir, std::path::PathBuf) {
+        use std::os::unix::fs::PermissionsExt;
+        let d = tempfile::tempdir().unwrap();
+        let script = d.path().join("cosign");
+        std::fs::write(
+            &script,
+            r#"#!/bin/sh
+while [ $# -gt 0 ]; do [ "$1" = --bundle ] && bundle="$2"; shift; done
+grep -q good "$bundle" || { echo "Error: failed to verify signature: bad" >&2; exit 1; }
+"#,
+        )
+        .unwrap();
+        std::fs::set_permissions(&script, std::fs::Permissions::from_mode(0o755)).unwrap();
+        (d, script)
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn any_bundle_verifying_for_any_signer_is_enough() {
+        let (_d, cosign) = fake_cosign();
+        let signers = [Policy::Key("/a.pub".into()), Policy::Key("/b.pub".into())];
+        let bundles = [b"bad".to_vec(), b"good".to_vec()];
+        let line = verify_any(&cosign, "r/k:1", b"m", &bundles, &signers).unwrap();
+        assert_eq!(
+            line,
+            "  \u{2713} r/k:1 \u{2014} signature verified (key /a.pub)"
+        );
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn no_bundle_is_not_signed_and_a_bad_one_names_the_failure() {
+        let (_d, cosign) = fake_cosign();
+        let signers = [Policy::Key("/a.pub".into())];
+        let e = verify_any(&cosign, "r/k:1", b"m", &[], &signers)
+            .unwrap_err()
+            .to_string();
+        assert!(
+            e.contains("kit signature required by policy: r/k:1 is not signed;"),
+            "{e}"
+        );
+        let e = verify_any(&cosign, "r/k:1", b"m", &[b"bad".to_vec()], &signers)
+            .unwrap_err()
+            .to_string();
+        assert!(
+            e.contains("policy: r/k:1: kit signature verification failed: failed to verify"),
+            "{e}"
+        );
     }
 
     #[test]

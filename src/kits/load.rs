@@ -112,13 +112,19 @@ fn fetch<R: Runner>(
             Located::Registry(r) => {
                 let registries = registries(&SecretsFile::load(&ctx.paths)?, sandbox);
                 let logins = Logins::new(&registries, &*ctx.store);
-                if let Some(verified) = signers::check_registry(&r, &ctx.settings, logins)? {
-                    eprintln!("{verified}");
-                }
+                // With signatures required, the pull is pinned to the digest that verified.
+                let pull = match signers::check_registry(&r, &ctx.settings, logins)? {
+                    Some(v) => {
+                        eprintln!("{}", v.line);
+                        registry::pinned(&r, &v.digest)?
+                    }
+                    None => r.clone(),
+                };
                 let cache = ctx.paths.kit_cache();
                 before(Fetch::Pull);
                 let blobs = entries(&registry::store_dir(&cache));
-                let kit = registry::pull(&r, &cache, logins)?;
+                let mut kit = registry::pull(&pull, &cache, logins)?;
+                kit.source = Source::Registry(r);
                 (kit, entries(&registry::store_dir(&cache)) == blobs)
             }
             Located::V2(dir) => {

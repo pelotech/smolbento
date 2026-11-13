@@ -171,11 +171,25 @@ fn with_client<T>(
 const SIGNATURE_ARTIFACT: &str = "application/vnd.docker.sandbox.kit.signature.v1";
 const BUNDLE_MEDIA_TYPE: &str = "application/vnd.dev.sigstore.bundle.v0.3+json";
 
-/// The bytes and digest of the v2 kit manifest REF names, as `kit sign` and `kit verify` read it.
-pub fn manifest_of(reference: &str, cache: &Path, logins: Logins) -> Result<(Vec<u8>, String)> {
-    let f = fetch_ref(reference, cache, false, false, logins)?;
-    payload_layer(&serde_json::from_slice(&f.manifest)?, reference)?;
-    Ok((f.manifest, f.digest))
+/// The manifest a signature on REF covers, as `kit sign` and `kit verify` read it: the one REF
+/// resolves to (an index stays an index, as `kit.requireSignature` checks it), and a plain
+/// manifest must be a v2 kit artifact.
+pub fn kit_manifest(reference: &str, logins: Logins) -> Result<(Vec<u8>, String)> {
+    let (bytes, digest) = top_manifest(reference, logins)?;
+    let m: Value = serde_json::from_slice(&bytes)?;
+    if m.get("manifests").is_none() {
+        payload_layer(&m, reference)?;
+    }
+    Ok((bytes, digest))
+}
+
+/// REF pinned to DIGEST (`registry/repo@sha256:…`), so a pull gets exactly what was verified.
+pub fn pinned(reference: &str, digest: &str) -> Result<String> {
+    let r: Reference = reference
+        .parse()
+        .with_context(|| format!("invalid kit reference '{reference}'"))?;
+    hex_of(digest)?;
+    Ok(format!("{}/{}@{digest}", r.registry(), r.repository()))
 }
 
 /// The bytes and digest of the manifest REF resolves to, an index left as it is: what a
@@ -1442,6 +1456,20 @@ mod tests {
         assert_eq!(kit.source, Source::Registry(r.into()));
         assert_eq!(kit.format(), Some(crate::kits::model::Format::V2));
         assert!(kit.digest.is_some());
+    }
+
+    #[test]
+    fn a_pinned_reference_names_the_digest() {
+        let d = format!("sha256:{}", "a".repeat(64));
+        assert_eq!(
+            pinned("docker.io/sbx/gemini-kit:latest", &d).unwrap(),
+            format!("docker.io/sbx/gemini-kit@{d}")
+        );
+        assert_eq!(
+            pinned("localhost:5000/e2e/k:1", &d).unwrap(),
+            format!("localhost:5000/e2e/k@{d}")
+        );
+        assert!(pinned("localhost:5000/e2e/k:1", "sha256:short").is_err());
     }
 
     #[test]

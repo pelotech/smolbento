@@ -348,7 +348,6 @@ Differences:
 | Kit settings | Also `kit.requireSignature`, `kit.trustedSigners`, `kit.ignoreTransparencyLog`, `kit.allowExtractedAgents` | All but `kit.allowExtractedAgents` (built-in agents aren't kits) |
 | `kit.requireSignature` | Wherever a kit loads (`create`/`run --kit`, `kit inspect`, `kit validate`, `kit add`), a registry or local kit needs a signature that verifies for one of `kit.trustedSigners` (`{"key": PATH}` or keyless `issuer`/`identity`, each also `…Regexp`); `kit pull` and `--offline` skip it. Success prints `✓ REF — signature verified (IDENTITY via ISSUER)` on stderr | Same for registry kits, checked on the digest the reference resolves to. smolbento's presets and shipped kits (`claude`, `docker`) are exempt. Local directories and Smolfiles are refused (`… is not signed`, or with a `kit.sig.bundle`, `… isn't supported yet`: sbx's directory digest isn't decoded). The success line names the trusted signer entry that matched (as written, or `key PATH`), not the certificate's identity |
 
-
 Not compared with sbx yet:
 
 - How arguments with float or unusual literal values (`1.0`, `0x10`, `True`) become strings

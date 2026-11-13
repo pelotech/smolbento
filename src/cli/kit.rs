@@ -194,7 +194,7 @@ fn sign<R: Runner>(ctx: &Ctx<R>, reference: &str, opts: &SignOpts) -> Result<i32
     let cosign = signing::cosign()?;
     let registries = SecretsFile::load(&ctx.paths)?.host_registries();
     let logins = Logins::new(&registries, &*ctx.store);
-    let (manifest, _) = registry::manifest_of(reference, &ctx.paths.kit_cache(), logins)?;
+    let (manifest, _) = registry::kit_manifest(reference, logins)?;
     sign_manifest(ctx, reference, &manifest, &signer, &cosign, logins)?;
     Ok(0)
 }
@@ -253,7 +253,7 @@ fn verify<R: Runner>(
         let cosign = signing::cosign()?;
         let registries = SecretsFile::load(&ctx.paths)?.host_registries();
         let logins = Logins::new(&registries, &*ctx.store);
-        let (manifest, digest) = registry::manifest_of(reference, &ctx.paths.kit_cache(), logins)?;
+        let (manifest, digest) = registry::kit_manifest(reference, logins)?;
         let bundles = registry::signatures_of(reference, &digest, logins)?;
         let mut last = anyhow::anyhow!("kit is not signed");
         for b in &bundles {
