@@ -119,23 +119,7 @@ pub fn push_v2(reference: &str, payload: &artifact::Payload, logins: Logins) -> 
     let created = humantime::format_rfc3339_seconds(std::time::SystemTime::now()).to_string();
     let (manifest, blobs) = artifact::manifest(payload, &created);
     let digest = sha256_digest(&manifest);
-    let auth = match logins
-        .push_auth(r.registry(), r.repository())
-        .with_context(|| format!("logging in to {} with its registry secret", r.registry()))?
-    {
-        Some(a) => a,
-        None => docker_auth(r.resolve_registry()).unwrap_or(RegistryAuth::Anonymous),
-    };
-    let rt = tokio::runtime::Builder::new_current_thread()
-        .enable_all()
-        .build()
-        .context("starting the registry client")?;
-    let client = new_client(&r);
-    rt.block_on(async {
-        client
-            .auth(&r, &auth, RegistryOperation::Push)
-            .await
-            .with_context(|| format!("logging in to {} to push", r.registry()))?;
+    with_client(&r, logins, RegistryOperation::Push, async |client| {
         for (d, bytes) in blobs {
             client
                 .push_blob(&r, bytes, &d)
@@ -146,9 +130,208 @@ pub fn push_v2(reference: &str, payload: &artifact::Payload, logins: Logins) -> 
             .push_manifest_raw(&r, manifest, HeaderValue::from_static(OCI_IMAGE_MEDIA_TYPE))
             .await
             .with_context(|| format!("pushing the manifest of {reference}"))?;
-        anyhow::Ok(())
+        Ok(())
     })?;
     Ok(digest)
+}
+
+/// Runs F with a client logged in to R\'s registry for OP: with the stored registry secret (a
+/// token scoped to OP), else the host\'s docker login, else anonymously.
+fn with_client<T>(
+    r: &Reference,
+    logins: Logins,
+    op: RegistryOperation,
+    f: impl AsyncFnOnce(&Client) -> Result<T>,
+) -> Result<T> {
+    let stored = match op {
+        RegistryOperation::Push => logins.push_auth(r.registry(), r.repository()),
+        RegistryOperation::Pull => logins.auth_for(r.registry(), r.repository()),
+    }
+    .with_context(|| format!("logging in to {} with its registry secret", r.registry()))?;
+    let auth = stored
+        .or_else(|| docker_auth(r.resolve_registry()))
+        .unwrap_or(RegistryAuth::Anonymous);
+    let rt = tokio::runtime::Builder::new_current_thread()
+        .enable_all()
+        .build()
+        .context("starting the registry client")?;
+    let client = new_client(r);
+    rt.block_on(async {
+        client
+            .auth(r, &auth, op)
+            .await
+            .with_context(|| format!("logging in to {}", r.registry()))?;
+        f(&client).await
+    })
+}
+
+const SIGNATURE_ARTIFACT: &str = "application/vnd.docker.sandbox.kit.signature.v1";
+const BUNDLE_MEDIA_TYPE: &str = "application/vnd.dev.sigstore.bundle.v0.3+json";
+
+/// The bytes and digest of the v2 kit manifest REF names, as `kit sign` and `kit verify` read it.
+pub fn manifest_of(reference: &str, cache: &Path, logins: Logins) -> Result<(Vec<u8>, String)> {
+    let f = fetch_ref(reference, cache, false, false, logins)?;
+    payload_layer(&serde_json::from_slice(&f.manifest)?, reference)?;
+    Ok((f.manifest, f.digest))
+}
+
+/// sbx\'s signature referrer: the bundle as its one layer, the kit manifest as its subject.
+fn signature_manifest(
+    subject: &Value,
+    bundle_digest: &str,
+    bundle_len: usize,
+    created: &str,
+) -> Value {
+    json!({
+        "schemaVersion": 2,
+        "mediaType": OCI_IMAGE_MEDIA_TYPE,
+        "artifactType": SIGNATURE_ARTIFACT,
+        "config": {
+            "mediaType": EMPTY_MEDIA_TYPE,
+            "digest": sha256_digest(b"{}"),
+            "size": 2,
+            "data": STANDARD.encode(b"{}"),
+        },
+        "layers": [{"mediaType": BUNDLE_MEDIA_TYPE, "digest": bundle_digest, "size": bundle_len}],
+        "subject": subject,
+        "annotations": {"org.opencontainers.image.created": created},
+    })
+}
+
+/// The referrers tag-schema index with DESCRIPTOR added (once).
+fn add_to_referrers_index(index: Option<Value>, descriptor: Value) -> Value {
+    let mut index = index.unwrap_or_else(
+        || json!({"schemaVersion": 2, "mediaType": OCI_IMAGE_INDEX_MEDIA_TYPE, "manifests": []}),
+    );
+    if let Some(list) = index["manifests"].as_array_mut()
+        && !list.iter().any(|m| m["digest"] == descriptor["digest"])
+    {
+        list.push(descriptor);
+    }
+    index
+}
+
+/// Attaches BUNDLE to the kit MANIFEST at REF as a signature referrer. A registry without the
+/// referrers API gets the tag-schema index (`sha256-<hex>`) too.
+pub fn push_signature(
+    reference: &str,
+    manifest: &[u8],
+    bundle: &[u8],
+    logins: Logins,
+) -> Result<()> {
+    let r: Reference = reference
+        .parse()
+        .with_context(|| format!("invalid reference: {reference}"))?;
+    let subject_digest = sha256_digest(manifest);
+    let media_type = serde_json::from_slice::<Value>(manifest)?["mediaType"]
+        .as_str()
+        .unwrap_or(OCI_IMAGE_MEDIA_TYPE)
+        .to_string();
+    let subject =
+        json!({"mediaType": media_type, "digest": subject_digest, "size": manifest.len()});
+    let created = humantime::format_rfc3339_seconds(std::time::SystemTime::now()).to_string();
+    let bundle_digest = sha256_digest(bundle);
+    let sig = serde_json::to_vec(&signature_manifest(
+        &subject,
+        &bundle_digest,
+        bundle.len(),
+        &created,
+    ))?;
+    let sig_digest = sha256_digest(&sig);
+    let at = |d: &str| Reference::with_digest(r.registry().into(), r.repository().into(), d.into());
+    with_client(&r, logins, RegistryOperation::Push, async |client| {
+        client
+            .push_blob(&r, b"{}".to_vec(), &sha256_digest(b"{}"))
+            .await?;
+        client
+            .push_blob(&r, bundle.to_vec(), &bundle_digest)
+            .await?;
+        client
+            .push_manifest_raw(
+                &at(&sig_digest),
+                sig.clone(),
+                HeaderValue::from_static(OCI_IMAGE_MEDIA_TYPE),
+            )
+            .await
+            .context("pushing the signature")?;
+        let listed = client.pull_referrers(&at(&subject_digest), None).await?;
+        if listed.manifests.iter().any(|m| m.digest == sig_digest) {
+            return Ok(());
+        }
+        // No referrers API: keep the tag-schema index, as oras (and so sbx) reads it.
+        let tag = Reference::with_tag(
+            r.registry().into(),
+            r.repository().into(),
+            subject_digest.replace(':', "-"),
+        );
+        let accepted = [OCI_IMAGE_INDEX_MEDIA_TYPE];
+        let existing = match client
+            .pull_manifest_raw(&tag, &RegistryAuth::Anonymous, &accepted)
+            .await
+        {
+            Ok((bytes, _)) => Some(serde_json::from_slice(&bytes)?),
+            Err(_) => None,
+        };
+        let descriptor = json!({
+            "mediaType": OCI_IMAGE_MEDIA_TYPE,
+            "artifactType": SIGNATURE_ARTIFACT,
+            "digest": sig_digest,
+            "size": sig.len(),
+            "annotations": {"org.opencontainers.image.created": created},
+        });
+        let index = serde_json::to_vec(&add_to_referrers_index(existing, descriptor))?;
+        client
+            .push_manifest_raw(
+                &tag,
+                index,
+                HeaderValue::from_static(OCI_IMAGE_INDEX_MEDIA_TYPE),
+            )
+            .await
+            .context("pushing the referrers index")?;
+        Ok(())
+    })
+}
+
+/// The signature bundles attached to the kit manifest DIGEST at REF.
+pub fn signatures_of(reference: &str, digest: &str, logins: Logins) -> Result<Vec<Vec<u8>>> {
+    let r: Reference = reference
+        .parse()
+        .with_context(|| format!("invalid reference: {reference}"))?;
+    let at = |d: &str| Reference::with_digest(r.registry().into(), r.repository().into(), d.into());
+    with_client(&r, logins, RegistryOperation::Pull, async |client| {
+        let index = client
+            .pull_referrers(&at(digest), Some(SIGNATURE_ARTIFACT))
+            .await?;
+        let mut bundles = Vec::new();
+        for entry in index.manifests {
+            let (bytes, _) = client
+                .pull_manifest_raw(
+                    &at(&entry.digest),
+                    &RegistryAuth::Anonymous,
+                    &[OCI_IMAGE_MEDIA_TYPE],
+                )
+                .await?;
+            let m: Value = serde_json::from_slice(&bytes)?;
+            if m["artifactType"] != SIGNATURE_ARTIFACT {
+                continue;
+            }
+            for layer in m["layers"].as_array().into_iter().flatten() {
+                if layer["mediaType"] != BUNDLE_MEDIA_TYPE {
+                    continue;
+                }
+                let d = layer["digest"]
+                    .as_str()
+                    .context("a bundle layer has no digest")?;
+                let mut out = Vec::new();
+                client.pull_blob(&at(digest), d, &mut out).await?;
+                if sha256_digest(&out) != d {
+                    bail!("signature bundle {d} doesn\'t match its digest");
+                }
+                bundles.push(out);
+            }
+        }
+        Ok(bundles)
+    })
 }
 
 /// `kit pull`: the payload of the v2 kit at REF, its files layer (an empty tar.gz when it has
@@ -1214,6 +1397,48 @@ mod tests {
         assert_eq!(kit.source, Source::Registry(r.into()));
         assert_eq!(kit.format(), Some(crate::kits::model::Format::V2));
         assert!(kit.digest.is_some());
+    }
+
+    #[test]
+    fn the_signature_manifest_matches_sbx() {
+        let subject =
+            json!({"mediaType": OCI_IMAGE_MEDIA_TYPE, "digest": "sha256:aa", "size": 824});
+        let m = signature_manifest(&subject, "sha256:bb", 712, "2026-11-13T00:00:00Z");
+        assert_eq!(
+            m,
+            json!({
+                "schemaVersion": 2,
+                "mediaType": OCI_IMAGE_MEDIA_TYPE,
+                "artifactType": "application/vnd.docker.sandbox.kit.signature.v1",
+                "config": {
+                    "mediaType": EMPTY_MEDIA_TYPE,
+                    "digest": "sha256:44136fa355b3678a1146ad16f7e8649e94fb4fc21fe77e8310c060f61caaff8a",
+                    "size": 2,
+                    "data": "e30=",
+                },
+                "layers": [{
+                    "mediaType": "application/vnd.dev.sigstore.bundle.v0.3+json",
+                    "digest": "sha256:bb",
+                    "size": 712,
+                }],
+                "subject": subject,
+                "annotations": {"org.opencontainers.image.created": "2026-11-13T00:00:00Z"},
+            })
+        );
+    }
+
+    #[test]
+    fn the_fallback_index_keeps_earlier_referrers() {
+        let a = json!({"mediaType": OCI_IMAGE_MEDIA_TYPE, "digest": "sha256:a", "size": 1});
+        let b = json!({"mediaType": OCI_IMAGE_MEDIA_TYPE, "digest": "sha256:b", "size": 2});
+        let first = add_to_referrers_index(None, a.clone());
+        assert_eq!(first["mediaType"], OCI_IMAGE_INDEX_MEDIA_TYPE);
+        assert_eq!(first["schemaVersion"], 2);
+        assert_eq!(first["manifests"], json!([a.clone()]));
+        let both = add_to_referrers_index(Some(first), b.clone());
+        assert_eq!(both["manifests"], json!([a.clone(), b]));
+        let again = add_to_referrers_index(Some(both.clone()), a);
+        assert_eq!(again, both);
     }
 
     #[test]
