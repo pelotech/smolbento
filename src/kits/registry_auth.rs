@@ -651,6 +651,31 @@ mod tests {
     }
 
     #[test]
+    fn a_sandboxs_pulls_use_its_own_login_first() {
+        let store = MemoryStore::default();
+        let mut scoped = entry("ghcr.io", Some("me"), None);
+        scoped.sandbox = Some("web".into());
+        store.set(&scoped.account(), "scoped").unwrap();
+        store
+            .set(&registry_account("ghcr.io"), "host-wide")
+            .unwrap();
+        let f = crate::secrets::SecretsFile {
+            registries: vec![entry("ghcr.io", None, None), scoped],
+            ..Default::default()
+        };
+        let password =
+            |registries: &[RegistryEntry]| match stored_login(registries, &store, "ghcr.io")
+                .unwrap()
+            {
+                Some((_, RegistryAuth::Basic(_, p))) => p,
+                other => panic!("{other:?}"),
+            };
+        assert_eq!(password(&f.registries_for("web")), "scoped");
+        assert_eq!(password(&f.registries_for("other")), "host-wide");
+        assert_eq!(password(&f.host_registries()), "host-wide");
+    }
+
+    #[test]
     fn kit_pull_uses_a_minted_bearer_token() {
         let (auth, reqs) = kit_auth(vec![
             challenge("127.0.0.1"),

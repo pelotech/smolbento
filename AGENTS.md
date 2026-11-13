@@ -108,8 +108,9 @@ plus image.
   `just e2e` (boots real VMs; needs a hypervisor). e2e tests run two at a time (`just e2e 4` for
   more), so each needs its own sandbox names and config/cache dirs; one that changes global state
   (like the shared `_builder`) must be the only test that does.
-- CI runs Linux only by default. VM tests (`just e2e`) run in CI only on x64 Linux: GitHub's
-  arm64 Linux and macOS runners can't boot VMs. Run `just test` and `just e2e` on your Mac before
+- CI runs Linux only by default. VM tests (`just e2e`) run in CI only on x64 Linux, split over
+  three runners by nextest's `--partition slice:N/3`, so an e2e test can't rely on another having
+  run on the same machine. GitHub's arm64 Linux and macOS runners can't boot VMs. Run `just test` and `just e2e` on your Mac before
   pushing changes that affect macOS. A macOS unit-test job runs only on manual
   `workflow_dispatch` with `macos: true`.
 - The macOS release binary is cross-compiled on Linux and never run in CI. Before merging a

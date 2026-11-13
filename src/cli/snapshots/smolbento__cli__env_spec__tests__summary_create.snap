@@ -1,11 +1,11 @@
 ---
 source: src/cli/env_spec.rs
-expression: "summarise(&t, &[\"sbxenv.yaml\", \"local.yaml\"], Op::Create, &[])"
+expression: "summarise(&t, &[\"sbxenv.yaml\", \"local.yaml\"])"
 ---
 ENVIRONMENT
-  Name:  web-app
-  Files: <root>/proj/sbxenv.yaml
-         <root>/proj/local.yaml
+  Name:   web-app
+  Files:  <root>/proj/sbxenv.yaml
+          <root>/proj/local.yaml
 
 SANDBOX
   + web-app
@@ -43,7 +43,7 @@ SECRETS
       value: sha256:1eaa840f0577b0dbef7d091e41827c315610880057abaffd31736cac13356010
 
 PORTS
-  + 3000/tcp
+  + 3000/tcp4
       host: 3000
   + 53/udp
       host: ephemeral

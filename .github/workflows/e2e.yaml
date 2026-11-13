@@ -41,6 +41,13 @@ jobs:
     if: ${{ needs.changes.outputs.code == 'true' }}
     runs-on: ubuntu-latest
     timeout-minutes: 30
+    # Three runners, each with its own 4 vCPUs: about half the time of one. More barely helps,
+    # as the two longest tests take about 100s each.
+    strategy:
+      fail-fast: false
+      matrix:
+        shard: [1, 2, 3]
+    name: e2e-linux (${{ matrix.shard }}/3)
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
@@ -48,10 +55,10 @@ jobs:
       - uses: $/.github/actions/nix-devshell
         with:
           gh-token: ${{ secrets.GITHUB_TOKEN }}
-      # Saved from main only: PRs reuse main's cache without crowding it out.
+      # Saved from main only, by one shard: PRs reuse main's cache without crowding it out.
       - uses: Swatinem/rust-cache@d1527c8f67ef9af357290475d4af4b0fab8f12e0 # v2.9.3
         with:
-          save-if: ${{ github.ref == 'refs/heads/main' }}
+          save-if: ${{ github.ref == 'refs/heads/main' && matrix.shard == 1 }}
 
       - name: Enable KVM for the runner user
         run: |
@@ -74,6 +81,7 @@ jobs:
       # Two at a time: four on ubuntu-latest's 4 vCPUs tripled the summed test time (nested VMs,
       # and registry tests boot two each) and took longer overall.
       - name: End-to-end tests
-        run: just e2e
+        run: just e2e 2 --partition "slice:${SHARD}/3"
         env:
           NEXTEST_PROFILE: ci
+          SHARD: ${{ matrix.shard }}

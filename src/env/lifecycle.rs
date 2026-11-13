@@ -3,7 +3,7 @@
 //! They run with the user's privileges and sbt's own environment plus the `SBX_*` variables. They
 //! get neither the file's `env` values nor any secret.
 
-use std::io::{BufRead, BufReader, Write};
+use std::io::{Read, Write};
 use std::os::unix::process::CommandExt;
 use std::path::PathBuf;
 use std::process::{Command, Stdio};
@@ -186,13 +186,15 @@ fn run_one(
     vars: &Vars,
 ) -> Result<()> {
     let timeout = c.timeout.as_deref().map(parse_timeout).transpose()?;
+    // One stream, in the order the command wrote it: stdout and stderr share a pipe.
+    let (output, writer) = std::io::pipe().context("making a pipe for the command's output")?;
     let mut command = Command::new("sh");
     command
-        // One stream, in the order the command wrote it.
-        .args(["-c", &format!("exec 2>&1\n{}", c.command)])
+        .args(["-c", &c.command])
         .envs(vars.env(phase))
         .stdin(Stdio::null())
-        .stdout(Stdio::piped())
+        .stdout(writer.try_clone().context("sharing the output pipe")?)
+        .stderr(writer)
         // Its own group, so ending it ends what it started too.
         .process_group(0);
     if let Some(dir) = &c.workdir {
@@ -203,13 +205,44 @@ fn run_one(
         Some(dir) => format!("running sh in {dir}"),
         None => "running sh".to_string(),
     })?;
-    let result = watch(out, terminal, &mut child, timeout, c);
+    // Our copies of the pipe's write end: the output ends only once the command's are closed.
+    drop(command);
+    let result = watch(out, terminal, &mut child, output, timeout, c);
     if result.is_err() {
         // SAFETY: signals the group this child leads; nothing else is in it.
         unsafe { libc::kill(-(child.id() as libc::pid_t), libc::SIGKILL) };
     }
     let _ = child.wait();
     result
+}
+
+/// The longest line passed on whole; a longer one (binary output, a progress bar without newlines)
+/// is passed on in pieces of this size, so memory stays bounded.
+const MAX_LINE: usize = 64 * 1024;
+
+/// Sends `output` line by line, without the newline, until it ends or nobody listens.
+fn read_lines(mut output: impl Read, lines: &mpsc::Sender<Vec<u8>>) {
+    let mut line = Vec::new();
+    let mut chunk = [0u8; 8192];
+    loop {
+        let n = match output.read(&mut chunk) {
+            Ok(0) | Err(_) => break,
+            Ok(n) => n,
+        };
+        for &byte in &chunk[..n] {
+            if byte != b'\n' {
+                line.push(byte);
+            }
+            if (byte == b'\n' || line.len() >= MAX_LINE)
+                && lines.send(std::mem::take(&mut line)).is_err()
+            {
+                return;
+            }
+        }
+    }
+    if !line.is_empty() {
+        let _ = lines.send(line);
+    }
 }
 
 /// Copies the child's output until it has exited and let go of it. An error means the caller
@@ -219,18 +252,12 @@ fn watch(
     out: &mut impl Write,
     terminal: bool,
     child: &mut std::process::Child,
+    output: std::io::PipeReader,
     timeout: Option<Duration>,
     c: &HostCommand,
 ) -> Result<()> {
-    let stdout = child.stdout.take().context("the command's output")?;
     let (lines, received) = mpsc::channel();
-    std::thread::spawn(move || {
-        for line in BufReader::new(stdout).split(b'\n') {
-            if line.is_err() || lines.send(line.unwrap_or_default()).is_err() {
-                break;
-            }
-        }
-    });
+    std::thread::spawn(move || read_lines(output, &lines));
     let deadline = timeout.map(|t| Instant::now() + t);
     let indent = if terminal { "" } else { "      " };
     let mut output_open = true;
@@ -517,5 +544,29 @@ mod tests {
         let (_, result) = run_in(d.path(), false, Phase::Initialize, &[lost]);
         let err = format!("{:#}", result.unwrap_err());
         assert!(err.contains("running sh in /no/such/dir"), "{err}");
+    }
+
+    #[test]
+    fn a_long_line_is_passed_on_in_pieces() {
+        let (tx, rx) = mpsc::channel();
+        let input = [vec![b'x'; MAX_LINE + 10], b"\nend".to_vec()].concat();
+        read_lines(&input[..], &tx);
+        drop(tx);
+        let lengths: Vec<usize> = rx.iter().map(|l| l.len()).collect();
+        assert_eq!(lengths, [MAX_LINE, 10, 3]);
+    }
+
+    #[test]
+    fn the_command_runs_as_written() {
+        // No line is added before it: `$LINENO` and syntax errors count from its first line.
+        let d = tempfile::tempdir().unwrap();
+        let (out, result) = run_in(
+            d.path(),
+            false,
+            Phase::Initialize,
+            &[command("echo $LINENO")],
+        );
+        result.unwrap();
+        assert!(out.contains("      1\n"), "{out}");
     }
 }

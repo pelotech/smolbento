@@ -858,6 +858,53 @@ mod tests {
         assert!(e.downcast_ref::<Unsupported>().is_some(), "{e}");
     }
 
+    /// A login for `ghcr.io` scoped to sandbox `web`, as an environment file's `registries`.
+    fn scoped_login(t: &TestEnv) {
+        let mut file = SecretsFile::load(&t.ctx.paths).unwrap();
+        let entry = RegistryEntry {
+            host: "ghcr.io".into(),
+            username: None,
+            auth_endpoint: None,
+            sandbox: Some("web".into()),
+        };
+        put_registry(&t.ctx, &mut file, entry, "scoped").unwrap();
+    }
+
+    const SCOPED_KEY: &str = "sandbox-registry:web/ghcr.io";
+
+    #[test]
+    fn registry_set_and_rm_leave_a_sandboxs_login_alone() {
+        let mut t = test_env(&[]);
+        scoped_login(&t);
+        set_registry_from(&mut t, "ghcr.io", None, "host-wide\n").unwrap();
+        let hosts = |t: &TestEnv| -> Vec<Option<String>> {
+            let f = SecretsFile::load(&t.ctx.paths).unwrap();
+            f.registries.into_iter().map(|r| r.sandbox).collect()
+        };
+        assert_eq!(hosts(&t), [Some("web".to_string()), None]);
+        t.sbt(&["secret", "rm", "--registry", "ghcr.io"]).unwrap();
+        assert_eq!(hosts(&t), [Some("web".to_string())]);
+        assert_eq!(
+            t.ctx.store.get(SCOPED_KEY).unwrap().as_deref(),
+            Some("scoped")
+        );
+        assert_eq!(t.ctx.store.get("registry:ghcr.io").unwrap(), None);
+    }
+
+    #[test]
+    fn forgetting_everything_takes_a_sandboxs_login_too() {
+        let t = test_env(&[]);
+        scoped_login(&t);
+        forget_all(&t.ctx).unwrap();
+        assert_eq!(t.ctx.store.get(SCOPED_KEY).unwrap(), None);
+        assert!(
+            SecretsFile::load(&t.ctx.paths)
+                .unwrap()
+                .registries
+                .is_empty()
+        );
+    }
+
     #[test]
     fn rm_all_clears_registries() {
         let mut t = test_env(&[]);
