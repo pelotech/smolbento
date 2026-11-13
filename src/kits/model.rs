@@ -108,6 +108,15 @@ impl Kit {
         }
     }
 
+    /// The kit file format it was written in. A published kit is v3 unless it carries a v2
+    /// spec, which names its image instead of holding one (`registry::read_layout`).
+    pub fn format(&self) -> Option<Format> {
+        match (&self.source, &self.content) {
+            (Source::Registry(_), Content::Image(_)) => Some(Format::V2),
+            (source, _) => source.format(),
+        }
+    }
+
     /// How messages name the kit: its reference as typed, else its name.
     pub fn label(&self) -> &str {
         self.reference.as_deref().unwrap_or(&self.name)

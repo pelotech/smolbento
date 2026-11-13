@@ -21,7 +21,7 @@ run --no-progress shell
 create claude .
 create --clone claude .
 create shell
-create --name dev gemini . --no-progress
+create --name dev kiro . --no-progress
 create claude . --deny-network evil.com,10.0.0.0/8 --deny-network tracker.example
 create shell . --kit ./my-kit --kit ghcr.io/example/kit:1 --kit-arg kit.key=value
 create shell --kit ./my-kit --kit-args-file kit.env

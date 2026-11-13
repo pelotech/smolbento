@@ -74,10 +74,10 @@ struct Arg {
     #[serde(default, rename = "enum", deserialize_with = "scalar_list")]
     enum_values: Vec<String>,
     env: Option<String>,
-    // Build-time only; accepted so published descriptors parse.
+    // Accepted so published descriptors parse.
     #[allow(dead_code)]
     description: Option<String>,
-    #[allow(dead_code)]
+    /// Set for an argument the build takes.
     build_arg: Option<String>,
 }
 
@@ -111,13 +111,16 @@ fn from_value(v: Value, source: Source) -> Result<Kit> {
         }
     }
     check_ssh_phases(&name, &caps)?;
+    // A published kit is built: an argument that only fed the build needs no value now (sbx
+    // creates docker.io/sbx/antigravity without its required `version`).
+    let published = matches!(source, Source::Registry(_));
     let args = d
         .args
         .into_iter()
         .map(|(name, a)| {
             let def = ArgDef {
                 default: a.default,
-                required: a.required,
+                required: a.required && !(published && a.build_arg.is_some()),
                 pattern: a.pattern,
                 enum_values: a.enum_values,
                 env: a.env,
@@ -1645,5 +1648,24 @@ mod tests {
         let want = root.file_name().unwrap().to_str().unwrap();
         assert_eq!(name(Source::Smolfile(via_dotdot)), want);
         assert_eq!(name(Source::Smolfile("proj/dev.smolfile".into())), "dev");
+    }
+
+    #[test]
+    fn a_published_kits_build_arguments_are_not_required() {
+        // As sbx 0.53 creates docker.io/sbx/antigravity with no --kit-arg: its required
+        // `version` only fed the build, which is done.
+        let d = r#"{"schemaVersion":"3","kind":"workload","name":"w",
+            "args":{"version":{"required":true,"buildArg":"VERSION"},"run":{"required":true}}}"#;
+        let published = parse_json(d, Source::Registry("acme/w:1".into())).unwrap();
+        assert!(!published.args["version"].required);
+        assert!(
+            published.args["run"].required,
+            "a runtime argument stays required"
+        );
+        let local = parse_json(d, Source::LocalV3("/k/w".into())).unwrap();
+        assert!(
+            local.args["version"].required,
+            "a kit still to build needs it"
+        );
     }
 }

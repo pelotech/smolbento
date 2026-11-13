@@ -295,7 +295,7 @@ pub struct EnvRmArgs {
     /// Skip confirmation prompts and delete even if in use (e.g. an open SSH connection)
     #[arg(short = 'f', long)]
     pub force: bool,
-    /// Also remove this environment's bindings from the global credentials.yaml (smolbento keeps none)
+    /// Also remove the bindings this environment declares from the global ones (other sandboxes may use them)
     #[arg(long = "prune-bindings")]
     pub prune_bindings: bool,
     /// Skip the host lifecycle commands the environment declares

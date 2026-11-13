@@ -13,6 +13,23 @@ use std::collections::BTreeMap;
 
 use anyhow::{Context, Result, bail};
 
+/// Registers `server` as `name`: nothing to do when it is already, refused when `name` is
+/// registered differently.
+pub fn register(paths: &crate::config::Paths, name: &str, server: Server) -> Result<()> {
+    check_server(name, &server)?;
+    let mut file = McpFile::load(paths)?;
+    match file.servers.get(name) {
+        Some(existing) if *existing == server => Ok(()),
+        Some(_) => {
+            bail!("MCP server {name} is already registered differently; `sbt mcp rm {name}` first")
+        }
+        None => {
+            file.servers.insert(name.to_string(), server);
+            file.save(paths)
+        }
+    }
+}
+
 /// A server's name: what `--static-mcp` and the agent's config call it.
 pub fn check_name(name: &str) -> Result<()> {
     let ok = (1..=64).contains(&name.len())

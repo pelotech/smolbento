@@ -6,15 +6,15 @@ use std::path::Path;
 use anyhow::{Context, Result, anyhow, bail};
 
 use super::env_spec::{
-    EnvSpec, LIFECYCLE, Overrides, header, lifecycle, lifecycle_resources, name, remove_summary,
-    resources, spec, vars,
+    EnvSpec, LIFECYCLE, Overrides, binding_resources, header, lifecycle, lifecycle_resources, name,
+    remove_summary, resources, spec, vars,
 };
 use super::{
     Ctx, EnvApplyOpts, EnvCmd, EnvCommon, EnvExecArgs, EnvOverrideOpts, EnvRmArgs, EnvRunArgs,
     ExecArgs, RunArgs, SandboxOpts, SecretSource, Unsupported, confirm_or,
 };
 use crate::env::approval::{self, Need};
-use crate::env::file::{HostCommand, SecretDecl};
+use crate::env::file::{Binding, HostCommand, SecretDecl};
 use crate::env::lifecycle::{self as host_lifecycle, Phase, Vars};
 use crate::env::load::{ArgInputs, Loaded, load};
 use crate::env::plan::{HOST_COMMANDS, Line, Resource, UNCHANGED_HOST_COMMANDS, When, render};
@@ -317,7 +317,13 @@ fn env_rm<R: Runner>(ctx: &mut Ctx<R>, a: EnvRmArgs) -> Result<i32> {
         .into_iter()
         .filter(|r| r.when == When::Removal && !skip)
         .collect();
-    let nothing_stored = sb.is_none() && scoped.is_empty() && registries.is_empty();
+    // `--prune-bindings` removes each service's whole binding, as in sbx.
+    let pruned: Vec<(String, Binding)> = (loaded.file.bindings.iter().flatten())
+        .filter(|(service, _)| a.prune_bindings && stored.bindings.contains_key(*service))
+        .map(|(service, b)| (service.clone(), b.clone()))
+        .collect();
+    let nothing_stored =
+        sb.is_none() && scoped.is_empty() && registries.is_empty() && pruned.is_empty();
     if let Some(sb) = sb {
         let forks = super::lifecycle::remaining_forks(sb, &all, &[&name]);
         if !forks.is_empty() {
@@ -329,7 +335,13 @@ fn env_rm<R: Runner>(ctx: &mut Ctx<R>, a: EnvRmArgs) -> Result<i32> {
     }
     // With nothing to remove and nothing to run there is nothing to confirm.
     if !(nothing_stored && to_run.is_empty()) {
-        let summary = remove_summary(sb.map(|_| name.as_str()), &scoped, &registries, &to_run);
+        let summary = remove_summary(
+            sb.map(|_| name.as_str()),
+            &scoped,
+            &binding_resources(&pruned),
+            &registries,
+            &to_run,
+        );
         write!(&ctx.out, "{}{summary}", header(&loaded, &name))?;
         confirm_or(
             ctx,
@@ -353,6 +365,19 @@ fn env_rm<R: Runner>(ctx: &mut Ctx<R>, a: EnvRmArgs) -> Result<i32> {
         // No sandbox: only the secrets (and any stale policy) are left to forget.
         None if !nothing_stored => super::secret::forget_sandbox(ctx, &name, true)?,
         None => {}
+    }
+    if !pruned.is_empty() {
+        let mut secrets = SecretsFile::load(&ctx.paths)?;
+        for (service, _) in &pruned {
+            secrets.bindings.remove(service);
+        }
+        secrets.save(&ctx.paths)?;
+        let file = ctx.paths.secrets_file();
+        writeln!(
+            &ctx.out,
+            "Removed declared bindings from {}",
+            file.display()
+        )?;
     }
     // Also when nothing else was left: a plain `rm` of the sandbox leaves the approval.
     approval::forget(&ctx.paths, &name)?;
@@ -444,7 +469,11 @@ fn shell_word(s: &str) -> String {
 /// Stores the file's secrets at the sandbox's scope. Every source is checked before any is
 /// stored; a later failure (the create, say) leaves them for `env rm`, as in sbx.
 fn provision<R: Runner>(ctx: &Ctx<R>, secrets: &mut SecretsFile, spec: &EnvSpec) -> Result<()> {
-    if spec.secrets.is_empty() && spec.registries.is_empty() {
+    if spec.secrets.is_empty()
+        && spec.registries.is_empty()
+        && spec.mcp.is_empty()
+        && spec.bindings.is_empty()
+    {
         return Ok(());
     }
     let scope = scope_for(Some(&spec.name));
@@ -487,6 +516,26 @@ fn provision<R: Runner>(ctx: &Ctx<R>, secrets: &mut SecretsFile, spec: &EnvSpec)
         let host = entry.host.clone();
         super::secret::put_registry(ctx, secrets, entry, &value)?;
         writeln!(out, "  ✓ {host} — registry")?;
+    }
+    // As in sbx, an MCP server is registered for the host and stays after `env rm`.
+    for (name, url) in &spec.mcp {
+        let server = crate::mcp::Server::Remote {
+            url: url.clone(),
+            headers: Default::default(),
+        };
+        crate::mcp::register(&ctx.paths, name, server)?;
+        writeln!(out, "  ✓ {name} — mcp")?;
+    }
+    if !spec.bindings.is_empty() {
+        // Merged into the global ones, as sbx does: every sandbox created afterwards uses them.
+        for (service, b) in &spec.bindings {
+            let (api_key, oauth) = b.domains();
+            secrets.bind(service, &api_key, &oauth);
+            writeln!(out, "  ✓ {service} — binding")?;
+        }
+        secrets.save(&ctx.paths)?;
+        let file = ctx.paths.secrets_file();
+        writeln!(out, "  ✓ Binding saved to {}", file.display())?;
     }
     Ok(())
 }
@@ -1648,6 +1697,91 @@ mod tests {
             call.ends_with(" -- claude --dangerously-skip-permissions -c"),
             "{call}"
         );
+    }
+
+    const BINDING: &str = "secrets:\n  github:\n    value: ghp_dummy\nbindings:\n  github:\n    apiKey:\n      domains: [uploads.github.com]\n";
+
+    fn bindings(t: &TestEnv) -> Vec<String> {
+        let f = SecretsFile::load(&t.ctx.paths).unwrap();
+        f.bindings.keys().cloned().collect()
+    }
+
+    #[test]
+    fn bindings_are_saved_globally_and_send_the_credential_there() {
+        let mut t = with_file(&format!("{FILE}{BINDING}"));
+        missing_then_created(&t, 2);
+        t.sbt(&["env", "create", "--force"]).unwrap();
+        let out = t.stdout();
+        assert!(
+            out.contains("\nBINDINGS\n  + github\n      apiKey.domains: uploads.github.com\n"),
+            "{out}"
+        );
+        let file = t.ctx.paths.secrets_file().display().to_string();
+        assert!(
+            out.contains(&format!(
+                "  ✓ github — binding\n  ✓ Binding saved to {file}\n"
+            )),
+            "{out}"
+        );
+        assert_eq!(bindings(&t), ["github"]);
+        let create = &creates(&t)[0];
+        assert!(create.contains("uploads.github.com"), "{create}");
+    }
+
+    #[test]
+    fn env_rm_keeps_bindings_unless_pruned() {
+        let mut t = with_file(&format!("{FILE}{BINDING}"));
+        missing_then_created(&t, 2);
+        t.sbt(&["env", "create", "--force"]).unwrap();
+        listed(&t, &[]);
+        t.sbt(&["env", "rm", "--force"]).unwrap();
+        assert_eq!(bindings(&t), ["github"]);
+        t.stdout();
+        // The sandbox is gone: only the binding is left to prune.
+        t.runner().ok(&["machine", "ls", "--json"], "[]");
+        t.sbt(&["env", "rm", "--force", "--prune-bindings"])
+            .unwrap();
+        let out = t.stdout();
+        assert!(
+            out.contains("\nBINDINGS\n  - github\n      apiKey.domains: uploads.github.com\n"),
+            "{out}"
+        );
+        assert!(out.contains("Removed declared bindings from "), "{out}");
+        assert!(bindings(&t).is_empty());
+    }
+
+    #[test]
+    fn a_binding_for_an_unknown_service_is_refused() {
+        let mut t = with_file(&format!(
+            "{FILE}bindings:\n  nosuch:\n    apiKey:\n      domains: [a.example]\n"
+        ));
+        missing_then_created(&t, 2);
+        let err = t.sbt_err(&["env", "create", "--force"]);
+        assert!(err.starts_with("unknown service 'nosuch'"), "{err}");
+    }
+
+    #[test]
+    fn mcp_url_servers_are_registered_and_attached() {
+        let mut t = with_file(&format!(
+            "{FILE}mcp:\n  servers:\n    - name: deep\n      url: https://mcp.deepwiki.com/mcp\n"
+        ));
+        missing_then_created(&t, 2);
+        t.sbt(&["env", "create", "--force"]).unwrap();
+        let out = t.stdout();
+        assert!(
+            out.contains("\nMCP SERVERS\n  + deep\n      url: https://mcp.deepwiki.com/mcp\n"),
+            "{out}"
+        );
+        assert!(out.contains("  ✓ deep — mcp\n"), "{out}");
+        let registered = crate::mcp::McpFile::load(&t.ctx.paths).unwrap();
+        assert!(registered.servers.contains_key("deep"));
+        let create = &creates(&t)[0];
+        assert!(create.contains("sbx.mcp=deep"), "{create}");
+        // It stays after `env rm`, as in sbx.
+        listed(&t, &[]);
+        t.sbt(&["env", "rm", "--force"]).unwrap();
+        let registered = crate::mcp::McpFile::load(&t.ctx.paths).unwrap();
+        assert!(registered.servers.contains_key("deep"));
     }
 
     #[test]
