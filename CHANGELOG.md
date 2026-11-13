@@ -1,5 +1,12 @@
 # Changelog
 
+## [0.19.0](https://github.com/pelotech/smolbento/compare/v0.18.0...v0.19.0) (2026-11-13)
+
+
+### Features
+
+* retire gemini, read published v2 kits, finish sbxenv.yaml bindings and mcp ([#90](https://github.com/pelotech/smolbento/issues/90)) ([a668e95](https://github.com/pelotech/smolbento/commit/a668e95c9264a2defaf979a40597e65d9994f153))
+
 ## [0.18.0](https://github.com/pelotech/smolbento/compare/v0.17.1...v0.18.0) (2026-11-13)
 
 
