@@ -1,5 +1,12 @@
 # Changelog
 
+## [0.22.0](https://github.com/pelotech/smolbento/compare/v0.21.0...v0.22.0) (2026-11-13)
+
+
+### Features
+
+* **kits:** kit.requireSignature and kit.trustedSigners ([#101](https://github.com/pelotech/smolbento/issues/101)) ([2fe3d9a](https://github.com/pelotech/smolbento/commit/2fe3d9a694edfc8b6d05dac31a14a9691b0c58f2))
+
 ## [0.21.0](https://github.com/pelotech/smolbento/compare/v0.20.1...v0.21.0) (2026-11-13)
 
 
