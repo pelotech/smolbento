@@ -14,6 +14,7 @@ pub mod model;
 pub mod registry;
 pub mod registry_auth;
 pub mod resolve;
+pub mod signing;
 pub mod smolfile;
 pub mod trust;
 pub mod v2;

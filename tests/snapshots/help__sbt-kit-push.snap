@@ -17,5 +17,23 @@ Options:
   -D, --debug
           Print each smolvm command line
 
+      --sign
+          Sign the pushed kit and attach the signature as an OCI referrer
+
+      --key <KEY>
+          Private key for key-based signing (PEM); omit for keyless signing
+
+      --identity-token <IDENTITY_TOKEN>
+          OIDC identity token for keyless signing; defaults to the ambient CI provider, then an interactive browser login
+
+      --identity-token-file <IDENTITY_TOKEN_FILE>
+          File holding the OIDC identity token; keeps it out of the process arguments
+
+      --tlog-upload[=<TLOG_UPLOAD>]
+          Upload the keyless signature to the Rekor transparency log; set false for private kits
+
+          [default: true]
+          [possible values: true, false]
+
   -h, --help
           Print help

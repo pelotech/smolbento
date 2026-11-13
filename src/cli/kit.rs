@@ -5,7 +5,7 @@ use std::io::Write;
 use anyhow::{Context, Result, anyhow, bail};
 
 use super::Ctx;
-use super::args::{Format, KitArgOpts, KitCmd};
+use super::args::{Format, KitArgOpts, KitCmd, SignOpts};
 use super::kit_doc::Doc;
 use crate::kits::apply::apply;
 use crate::kits::args::{ArgValues, NoResolvedValue};
@@ -14,7 +14,7 @@ use crate::kits::model::{
 };
 use crate::kits::registry_auth::Logins;
 use crate::kits::resolve::{check_named_formats, mixing_format, resolve, resolve_for};
-use crate::kits::{artifact, capability, compose, guest, load};
+use crate::kits::{artifact, capability, compose, guest, load, registry, signing};
 use crate::policy::{Decision, Policy, compile};
 use crate::provision;
 use crate::sandbox::{self, CreateRequest, KitPhase, Sandbox};
@@ -51,10 +51,37 @@ pub fn run<R: Runner>(ctx: &mut Ctx<R>, cmd: KitCmd) -> Result<i32> {
         KitCmd::Push {
             directory,
             reference,
-        } => push(ctx, &directory, &reference),
+            sign,
+            signing,
+        } => push(ctx, &directory, &reference, sign, &signing),
         KitCmd::Pull { reference, output } => pull(ctx, &reference, output.as_deref()),
-        KitCmd::Sign(_) => pending("sign"),
-        KitCmd::Verify(_) => pending("verify"),
+        KitCmd::Sign { reference, signing } => sign(ctx, &reference, &signing),
+        KitCmd::Verify {
+            reference,
+            key,
+            certificate_identity,
+            certificate_identity_regexp,
+            certificate_oidc_issuer,
+            certificate_oidc_issuer_regexp,
+            insecure_ignore_tlog,
+            format,
+            json,
+        } => {
+            let pick = |exact: Option<String>, regexp: Option<String>| {
+                exact
+                    .map(signing::Match::Exact)
+                    .or(regexp.map(signing::Match::Regexp))
+            };
+            let policy = match key {
+                Some(k) => VerifyPolicy::Key(k),
+                None => VerifyPolicy::Keyless {
+                    identity: pick(certificate_identity, certificate_identity_regexp),
+                    issuer: pick(certificate_oidc_issuer, certificate_oidc_issuer_regexp),
+                    ignore_tlog: insecure_ignore_tlog,
+                },
+            };
+            verify(ctx, &reference, policy, Format::pick(json, format))
+        }
     }
 }
 
@@ -74,15 +101,201 @@ fn checked_payload<R: Runner>(ctx: &Ctx<R>, directory: &str) -> Result<artifact:
     .context("invalid artifact")
 }
 
-/// `kit push`: publishes DIRECTORY to REFERENCE as sbx's v2 kit artifact.
-fn push<R: Runner>(ctx: &Ctx<R>, directory: &str, reference: &str) -> Result<i32> {
-    crate::kits::registry::tagged_reference(reference)?;
+/// `kit push`: publishes DIRECTORY to REFERENCE as sbx's v2 kit artifact, signed with `--sign`.
+fn push<R: Runner>(
+    ctx: &Ctx<R>,
+    directory: &str,
+    reference: &str,
+    sign: bool,
+    opts: &SignOpts,
+) -> Result<i32> {
+    registry::tagged_reference(reference)?;
+    let given = opts.key.is_some()
+        || opts.identity_token.is_some()
+        || opts.identity_token_file.is_some()
+        || !opts.tlog_upload;
+    if given && !sign {
+        bail!("--key, --identity-token, --identity-token-file and --tlog-upload need --sign");
+    }
+    // Everything signing needs is checked before anything is published.
+    let signing = match sign {
+        true => Some((signer(opts)?, signing::cosign()?)),
+        false => None,
+    };
     let payload = checked_payload(ctx, directory)?;
     let registries = SecretsFile::load(&ctx.paths)?.host_registries();
     let logins = Logins::new(&registries, &*ctx.store);
-    let digest = crate::kits::registry::push_v2(reference, &payload, logins)?;
+    let manifest = registry::push_v2(reference, &payload, logins)?;
+    let digest = crate::util::sha256_digest(&manifest);
     writeln!(&ctx.out, "Pushed {reference} ({digest})")?;
+    if let Some((signer, cosign)) = signing {
+        // The manifest just pushed, not whatever the tag points at by now.
+        sign_manifest(ctx, reference, &manifest, &signer, &cosign, logins)?;
+    }
     Ok(0)
+}
+
+const LOCAL_SIGNING: &str = "signing and verifying a local kit directory isn't supported yet; \
+                             push it and use the registry reference";
+
+/// The signer `--key`, `--identity-token(-file)` and `--tlog-upload` describe.
+fn signer(o: &SignOpts) -> Result<signing::Signer> {
+    if let Some(k) = &o.key {
+        return Ok(signing::Signer::Key(k.clone()));
+    }
+    if !o.tlog_upload {
+        return Err(super::Unsupported(
+            "keyless signing without the transparency log isn't supported yet (it needs a \
+             timestamp authority); sign with --key for a private kit"
+                .into(),
+        )
+        .into());
+    }
+    let token = match (&o.identity_token, &o.identity_token_file) {
+        (Some(v), _) => Some(signing::Token::Value(v.clone())),
+        (None, Some(f)) => Some(signing::Token::File(f.clone())),
+        (None, None) => None,
+    };
+    Ok(signing::Signer::Keyless { token })
+}
+
+/// Signs MANIFEST, the kit at REFERENCE, and attaches the signature.
+fn sign_manifest<R: Runner>(
+    ctx: &Ctx<R>,
+    reference: &str,
+    manifest: &[u8],
+    signer: &signing::Signer,
+    cosign: &std::path::Path,
+    logins: Logins,
+) -> Result<()> {
+    let bundle = signing::sign_blob(cosign, manifest, signer)?;
+    registry::push_signature(reference, manifest, &bundle, logins)?;
+    writeln!(&ctx.out, "Signed {reference}")?;
+    Ok(())
+}
+
+/// A published kit's reference, for `sign` and `verify`: a local path is refused (exit 2), and
+/// one without a tag or digest is invalid, as in sbx.
+fn published(reference: &str) -> Result<()> {
+    if reference_kind(reference) != "registry" {
+        return Err(super::Unsupported(LOCAL_SIGNING.into()).into());
+    }
+    let name = reference.rsplit('/').next().unwrap_or_default();
+    if !reference.contains('@') && !name.contains(':') {
+        bail!("fetch kit manifest: invalid reference");
+    }
+    Ok(())
+}
+
+/// `kit sign`: signs a published kit, as sbx does for an OCI reference.
+fn sign<R: Runner>(ctx: &Ctx<R>, reference: &str, opts: &SignOpts) -> Result<i32> {
+    published(reference)?;
+    let signer = signer(opts)?;
+    let cosign = signing::cosign()?;
+    let registries = SecretsFile::load(&ctx.paths)?.host_registries();
+    let logins = Logins::new(&registries, &*ctx.store);
+    let (manifest, _) = registry::manifest_of(reference, &ctx.paths.kit_cache(), logins)?;
+    sign_manifest(ctx, reference, &manifest, &signer, &cosign, logins)?;
+    Ok(0)
+}
+
+/// `kit verify`'s policy before its keyless parts are checked.
+enum VerifyPolicy {
+    Key(std::path::PathBuf),
+    Keyless {
+        identity: Option<signing::Match>,
+        issuer: Option<signing::Match>,
+        ignore_tlog: bool,
+    },
+}
+
+/// `kit verify --format json|yaml`: sbx's result.
+#[derive(serde::Serialize)]
+struct Verified<'a> {
+    reference: &'a str,
+    kind: &'static str,
+    verified: bool,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    identity: Option<&'a str>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    issuer: Option<&'a str>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    error: Option<String>,
+}
+
+/// `kit verify`: checks the signatures attached to a published kit; verified when any passes.
+fn verify<R: Runner>(
+    ctx: &Ctx<R>,
+    reference: &str,
+    policy: VerifyPolicy,
+    format: Format,
+) -> Result<i32> {
+    published(reference)?;
+    let policy = match policy {
+        VerifyPolicy::Key(k) => signing::Policy::Key(k),
+        VerifyPolicy::Keyless {
+            identity,
+            issuer,
+            ignore_tlog,
+        } => signing::Policy::Keyless {
+            identity: identity.context(
+                "keyless verification requires --certificate-identity or \
+                 --certificate-identity-regexp (or --key for a key-based signature)",
+            )?,
+            issuer: issuer.context(
+                "keyless verification requires --certificate-oidc-issuer or \
+                 --certificate-oidc-issuer-regexp",
+            )?,
+            ignore_tlog,
+        },
+    };
+    let checked = (|| {
+        let cosign = signing::cosign()?;
+        let registries = SecretsFile::load(&ctx.paths)?.host_registries();
+        let logins = Logins::new(&registries, &*ctx.store);
+        let (manifest, digest) = registry::manifest_of(reference, &ctx.paths.kit_cache(), logins)?;
+        let bundles = registry::signatures_of(reference, &digest, logins)?;
+        let mut last = anyhow::anyhow!("kit is not signed");
+        for b in &bundles {
+            match signing::verify_blob(&cosign, &manifest, b, &policy) {
+                Ok(()) => return Ok(()),
+                Err(e) => last = e,
+            }
+        }
+        Err(last)
+    })();
+    let shown = |m: &signing::Match| match m {
+        signing::Match::Exact(v) | signing::Match::Regexp(v) => v.clone(),
+    };
+    let (identity, issuer) = match &policy {
+        signing::Policy::Keyless {
+            identity, issuer, ..
+        } => (Some(shown(identity)), Some(shown(issuer))),
+        signing::Policy::Key(_) => (None, None),
+    };
+    if format == Format::Table {
+        checked?;
+        writeln!(&ctx.out, "  ✓ {reference} — verified (oci)")?;
+        if let (Some(id), Some(iss)) = (&identity, &issuer) {
+            writeln!(&ctx.out, "      identity {id}")?;
+            writeln!(&ctx.out, "      issuer {iss}")?;
+        }
+        return Ok(0);
+    }
+    let report = Verified {
+        reference,
+        kind: "oci",
+        verified: checked.is_ok(),
+        identity: identity.as_deref().filter(|_| checked.is_ok()),
+        issuer: issuer.as_deref().filter(|_| checked.is_ok()),
+        error: checked.as_ref().err().map(|e| format!("{e:#}")),
+    };
+    if format == Format::Json {
+        writeln!(&ctx.out, "{}", serde_json::to_string_pretty(&report)?)?;
+    } else {
+        write!(&ctx.out, "{}", serde_saphyr::to_string(&report)?)?;
+    }
+    Ok(if checked.is_ok() { 0 } else { 1 })
 }
 
 /// Writes a file `kit pack` or `kit pull` produces, whole or not at all, mode 0644.
@@ -135,11 +348,6 @@ fn pack<R: Runner>(ctx: &Ctx<R>, directory: &str, output: Option<&str>) -> Resul
     write_output(&path, &bytes)?;
     writeln!(&ctx.out, "Packed artifact {shown}")?;
     Ok(0)
-}
-
-/// sbx kit subcommands smolbento doesn't have yet: exit 2, like other pending commands.
-fn pending(sub: &str) -> Result<i32> {
-    Err(super::Unsupported(format!("`sbt kit {sub}` is not implemented yet")).into())
 }
 
 fn arg_values(a: &KitArgOpts) -> Result<ArgValues> {
@@ -1068,6 +1276,138 @@ mod tests {
         v2_dir(&t, "k", "schemaVersion: \"2\"\nkind: mixin\nname: demo\n");
         let e = t.sbt(&["kit", "push", "./k", "k:1"]).unwrap_err();
         assert!(!e.to_string().contains("allowlist"), "{e}");
+    }
+
+    #[test]
+    fn sign_and_verify_refuse_a_local_directory() {
+        let mut t = kit_env();
+        v2_dir(&t, "k", "schemaVersion: \"2\"\nkind: mixin\nname: demo\n");
+        for argv in [
+            &["kit", "sign", "./k", "--key", "k.pem"][..],
+            &["kit", "verify", "./k", "--key", "k.pub"][..],
+        ] {
+            let e = t.sbt(argv).unwrap_err();
+            assert_eq!(
+                e.to_string(),
+                "signing and verifying a local kit directory isn't supported yet; push it and \
+                 use the registry reference"
+            );
+            assert_eq!(super::super::exit_code(&e), 2);
+        }
+    }
+
+    #[test]
+    fn keyless_verify_needs_an_identity_and_an_issuer() {
+        let mut t = kit_env();
+        let e = t.sbt(&["kit", "verify", "localhost:5000/k:1"]).unwrap_err();
+        assert_eq!(
+            e.to_string(),
+            "keyless verification requires --certificate-identity or \
+             --certificate-identity-regexp (or --key for a key-based signature)"
+        );
+        let e = t
+            .sbt(&[
+                "kit",
+                "verify",
+                "localhost:5000/k:1",
+                "--certificate-identity",
+                "me",
+            ])
+            .unwrap_err();
+        assert_eq!(
+            e.to_string(),
+            "keyless verification requires --certificate-oidc-issuer or \
+             --certificate-oidc-issuer-regexp"
+        );
+    }
+
+    #[test]
+    fn signing_flags_need_sign_on_push() {
+        let mut t = kit_env();
+        v2_dir(&t, "k", "schemaVersion: \"2\"\nkind: mixin\nname: demo\n");
+        let e = t
+            .sbt(&["kit", "push", "./k", "localhost:5000/k:1", "--key", "k.pem"])
+            .unwrap_err();
+        assert_eq!(
+            e.to_string(),
+            "--key, --identity-token, --identity-token-file and --tlog-upload need --sign"
+        );
+    }
+
+    #[test]
+    fn sign_and_verify_need_a_tag_or_digest() {
+        let mut t = kit_env();
+        for argv in [
+            &["kit", "sign", "localhost:5000/k", "--key", "k.pem"][..],
+            &["kit", "verify", "localhost:5000/k", "--key", "k.pub"][..],
+        ] {
+            let e = t.sbt(argv).unwrap_err();
+            assert_eq!(e.to_string(), "fetch kit manifest: invalid reference");
+        }
+    }
+
+    #[test]
+    fn tlog_upload_takes_its_value_only_with_equals() {
+        use super::super::args::KitCmd;
+        use clap::Parser;
+        let cli = crate::cli::Cli::try_parse_from([
+            "sbt",
+            "kit",
+            "sign",
+            "--tlog-upload",
+            "localhost:5000/k:1",
+            "--key",
+            "k.pem",
+        ])
+        .unwrap();
+        let Some(crate::cli::Cmd::Kit(KitCmd::Sign { reference, signing })) = cli.command else {
+            panic!("expected kit sign");
+        };
+        assert_eq!(reference, "localhost:5000/k:1");
+        assert!(signing.tlog_upload);
+    }
+
+    #[test]
+    fn a_key_conflicts_with_keyless_flags() {
+        use clap::Parser;
+        for argv in [
+            &[
+                "sbt",
+                "kit",
+                "sign",
+                "r:1",
+                "--key",
+                "k",
+                "--identity-token",
+                "t",
+            ][..],
+            &[
+                "sbt",
+                "kit",
+                "verify",
+                "r:1",
+                "--key",
+                "k",
+                "--certificate-identity",
+                "me",
+            ][..],
+        ] {
+            assert!(crate::cli::Cli::try_parse_from(argv).is_err(), "{argv:?}");
+        }
+    }
+
+    #[test]
+    fn keyless_sign_without_tlog_is_refused() {
+        let mut t = kit_env();
+        let e = t
+            .sbt(&["kit", "sign", "localhost:5000/k:1", "--tlog-upload=false"])
+            .unwrap_err();
+        assert_eq!(
+            e.to_string(),
+            "keyless signing without the transparency log isn't supported yet (it needs a \
+             timestamp authority); sign with --key for a private kit"
+        );
+        assert_eq!(super::super::exit_code(&e), 2);
     }
 
     #[test]

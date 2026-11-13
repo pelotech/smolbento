@@ -40,6 +40,9 @@
               # release
               rcodesign
 
+              # kit signing (`sbt kit sign/verify`, e2e)
+              cosign
+
               # tasks
               just
 
