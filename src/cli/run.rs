@@ -241,6 +241,9 @@ fn ignored_options_warning(a: &RunArgs, name: &str) -> Option<String> {
         kit_arg: _,
         kit_args_file: _,
         kit_pins: _,
+        // Set only by an environment file, which `env run` applies at create.
+        no_fuse: _,
+        read_only_files: _,
         mount: _,
         deny_network: _,
         // Docker Cloud options: refused before any sandbox is looked up.

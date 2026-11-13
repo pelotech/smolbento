@@ -386,11 +386,7 @@ fn kind_word(k: Kind) -> &'static str {
 }
 
 fn schema(kit: &Kit) -> &'static str {
-    match kit.format() {
-        Some(Format::V2) => "v2",
-        Some(Format::V3) => "v3",
-        None => "smolfile",
-    }
+    kit.format().map_or("smolfile", Format::name)
 }
 
 /// sbx's name for a built local v3 kit: `sbx-kit-src:<dir>-<hash>`; the hash is the build's.

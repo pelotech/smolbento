@@ -68,6 +68,10 @@ pub struct CreateRequest {
     /// `(host, guest)`: the `--mount` bindings until kits are applied; then every kit
     /// `host-mount@1`, in kit order (the `sbx.host-mounts` label).
     pub host_mounts: Vec<(PathBuf, String)>,
+    /// Take `/dev/fuse` away at each start (the `sbx.no-fuse` label).
+    pub no_fuse: bool,
+    /// Guest files made read-only at each start (the `sbx.read-only-files` label).
+    pub read_only_files: Vec<String>,
     /// Extra guest-only volumes (kit `volume@1`, non-tmpfs).
     pub volumes: Vec<String>,
     /// tmpfs volumes, mounted by a kit startup step (`mount -t tmpfs`), not by smolvm.
@@ -140,6 +144,8 @@ pub fn meta(req: &CreateRequest) -> Meta {
             .iter()
             .map(|(host, guest)| (guest.clone(), host.display().to_string()))
             .collect(),
+        no_fuse: req.no_fuse,
+        read_only_files: req.read_only_files.clone(),
         // Internal sandboxes run untrusted build steps: never an agent.
         ssh_agent: req
             .ssh_agent

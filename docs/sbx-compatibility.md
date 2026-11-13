@@ -124,7 +124,7 @@ flags, and the registered servers are written into the agent's own MCP config at
 (measured on v0.49.2, v0.50.1 for `mounts`, and v0.53.0 for the plan, approvals, `lifecycle`,
 `registries`, `entrypoint`, `cmd`, `bindings` and `mcp`), for the fields smolbento supports. These
 exit 2 and name the field: `mcp` servers with a `command`, `sandboxOptions.profile|display|gpu|usb`,
-`fuse: false`, and `pullPolicy: always`.
+and `pullPolicy: always`.
 
 | Area | sbx | smolbento |
 |---|---|---|
@@ -142,9 +142,10 @@ exit 2 and name the field: `mcp` servers with a `command`, `sandboxOptions.profi
 | Ports in an environment file | Named by protocol as written, else `tcp4` (`tcp6` for an IPv6 `hostIP`); `hostIP` must be an address; a later port with the same sandbox port and protocol replaces the earlier one | Same. smolvm publishes every port on both `127.0.0.1` and `::1`, so `tcp4`/`tcp6`/`udp4`/`udp6` all publish on both, and a `hostIP` other than those two is refused |
 | `additionalWorkspaces` with the same path | The later one replaces the earlier one | Same |
 | A different set of environment files | An environment of its own: nothing is approved for it, and what an existing sandbox has needs approval; the refusal names `the merged environment (a, b)` | Same |
-| Environment files in the sandbox | Mounted into the sandbox at their host path (read-only unless `writableEnvFiles`), with a plan line when one is writable | Not mounted (smolvm mounts directories only); a file inside a workspace is readable and writable through it, whatever `writableEnvFiles` says |
+| Environment files in the sandbox | Mounted into the sandbox at their host path (read-only unless `writableEnvFiles`), with a plan line when one is writable | A file inside a writable mounted workspace is made read-only in the guest at each start (a read-only bind over itself), unless `writableEnvFiles`; root in the guest can undo it. A file outside the workspaces isn't mounted (smolvm mounts directories only). No plan line for a writable one |
+| `sandboxOptions.fuse: false` | `/dev/fuse` absent and no `SYS_ADMIN` | `/dev/fuse` taken away at each start |
 | `bindings` | Merged into the global `credentials.yaml`; kept by `env rm`; `--prune-bindings` removes each declared service's whole entry; an unknown service is accepted by `env plan` | Same, in smolbento's secrets file. An unknown service is refused at create, as for `secrets` |
-| `mcp` url servers | Registered for the host (after an OAuth discovery that fails the create when the server can't be reached) and served to the sandbox by the MCP gateway; kept by `env rm` | Registered in `mcp.toml` and written into the agent's config, as `--static-mcp` does (only `claude` so far); the server isn't contacted at create; kept by `env rm` |
+| `mcp` url servers | Registered for the host (after an OAuth discovery that fails the create when the server can't be reached) and served to the sandbox by the MCP gateway; kept by `env rm` | Registered in `mcp.toml` and written into the agent's config, as `--static-mcp` does (only `claude` so far); the create fails before anything is made when nothing answers at the URL (any HTTP answer counts, no OAuth discovery); kept by `env rm` |
 | `mcp` command servers | Run on the host from the MCP gateway, approved like lifecycle commands | Refused (exit 2) |
 | The plan after a plain `rm` | Lines end with `— recorded as applied, no longer present` | A bare `+` |
 | Kit arguments in the plan | The file's pinned `args.NAME`; `--kit-arg` isn't shown | Same |
@@ -321,7 +322,7 @@ Differences:
 | A published kit's build arguments | Not required at create (`docker.io/sbx/antigravity`'s `version`) | Same |
 | Retired agents | `gemini` (0.53): refused for a new sandbox, pointing to `antigravity` and `docker.io/sbx/gemini-kit` | Same wording; sandboxes created with `gemini` before keep working (not measured on sbx) |
 | A kit variable that refers to itself | `PATH: /opt/kit/bin:$PATH` gets the image's PATH in place of `$PATH` | Same, for `$NAME` and `${NAME}` in NAME's own value (a value with the image's environment read at create; smolvm doesn't expand variables yet). Unlike sbx, `${PATH}` in another variable (`BRACED: /opt/b:${PATH}`) stays as written; sbx puts the kit's unexpanded PATH there |
-| v2 and v3 kits in one sandbox | Refused: `cannot mix v3 kits with v1/v2 kits in one sandbox; compositions are single-format (v3: …; v1/v2: …)` | Refused with the same message |
+| v2 and v3 kits in one sandbox | Refused: `cannot mix v3 kits with v1/v2 kits in one sandbox; compositions are single-format (v3: …; v1/v2: …)` | Refused with the same message, at create and by `kit add` (which reads each kit's format from the sandbox's kits record; a sandbox created before 0.20 has none recorded, so `kit add` doesn't check it) |
 | v2 mixins on built-in agents | Refused by the rule above, because the agents are v3 kits (sbx 0.53) | Allowed: an agent preset, the shipped `docker` kit and a Smolfile have no kit format, so a v2 kit works with them |
 | Descriptor file names | `.yaml` only | `.yaml` and `.yml` |
 | `--mount` with a file as `HOST` | Not measured | The workspace error, `workspace X is a file; …` (smolvm mounts directories only) |

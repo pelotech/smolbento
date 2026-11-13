@@ -9,8 +9,10 @@ use super::args::{Format, KitArgOpts, KitCmd};
 use super::kit_doc::Doc;
 use crate::kits::apply::apply;
 use crate::kits::args::{ArgValues, NoResolvedValue};
-use crate::kits::model::{Cap, CapBody, Content, ImageConfig, Kind, Kit, Source};
-use crate::kits::resolve::{resolve, resolve_for};
+use crate::kits::model::{
+    Cap, CapBody, Content, Format as KitFormat, ImageConfig, Kind, Kit, Source,
+};
+use crate::kits::resolve::{check_named_formats, mixing_format, resolve, resolve_for};
 use crate::kits::{capability, compose, guest, load};
 use crate::policy::{Decision, Policy, compile};
 use crate::provision;
@@ -285,6 +287,8 @@ struct Recorded {
     name: String,
     reference: String,
     provides: Vec<String>,
+    /// None when the record doesn't say (an older record), or for a kit that mixes with either.
+    format: Option<KitFormat>,
 }
 
 fn parse_record(text: &str) -> Vec<Recorded> {
@@ -307,10 +311,12 @@ fn parse_record(text: &str) -> Vec<Recorded> {
                 .filter(|p| !p.is_empty())
                 .map(String::from)
                 .collect();
+            let format = f.next().and_then(KitFormat::from_name);
             Recorded {
                 name,
                 reference,
                 provides,
+                format,
             }
         })
         .collect()
@@ -379,6 +385,14 @@ fn add_running<R: Runner>(
     if existing.iter().any(|r| r.name == kit.name) {
         bail!("kit {} is already in {name}", kit.name);
     }
+    // The record says each kit's format since 0.20; an older one leaves the check to sbx's rule
+    // at create.
+    let mut named: Vec<(&str, Option<KitFormat>)> = existing
+        .iter()
+        .map(|r| (r.name.as_str(), r.format))
+        .collect();
+    named.push((kit.name.as_str(), mixing_format(&kit)));
+    check_named_formats(&named)?;
     let kit_name = kit.name.clone();
     let mixins: Vec<Kit> = existing
         .iter()
@@ -1305,7 +1319,7 @@ mod tests {
         // The record keeps each provide with its version, for a later `kit add`'s requires.
         assert_eq!(
             *kits,
-            format!("{BASE}net\t{}\tnet@1.0.0\n", net_dir.display())
+            format!("{BASE}net\t{}\tnet@1.0.0\tv3\n", net_dir.display())
         );
         assert_eq!(
             uploads[&format!("{MACHINE}:{}", guest::STARTUP_PATH)],
@@ -1576,6 +1590,31 @@ mod tests {
     }
 
     #[test]
+    fn add_refuses_mixing_formats_with_what_the_record_says() {
+        // A record from this release says each kit's format; the shipped docker kit has none.
+        let plain = |t: &TestEnv| {
+            let dir = t.ctx.cwd.join("plain");
+            std::fs::create_dir_all(&dir).unwrap();
+            let spec = "schemaVersion: \"2\"\nkind: mixin\nname: plain\n";
+            std::fs::write(dir.join("spec.yaml"), spec).unwrap();
+        };
+        let mut t = kit_env();
+        dev_sandbox(&t, "net\tghcr.io/acme/net@sha256:01\tnet\tv3\n");
+        plain(&t);
+        let e = t.sbt(&["kit", "add", "dev", "./plain", "-y"]).unwrap_err();
+        assert_eq!(
+            format!("{e:#}"),
+            "cannot mix v3 kits with v1/v2 kits in one sandbox; compositions are single-format \
+             (v3: net; v1/v2: plain). Use a v3 version of the v1/v2 kit"
+        );
+
+        let mut t = kit_env();
+        dev_sandbox(&t, "docker\tbuiltin:docker\tdocker@1.0.0\t\n");
+        plain(&t);
+        t.sbt(&["kit", "add", "dev", "./plain", "-y"]).unwrap();
+    }
+
+    #[test]
     fn add_refuses_a_kit_already_in_the_sandbox_and_unmet_requirements() {
         let mut t = kit_env();
         dev_sandbox(&t, "net\tghcr.io/acme/net@sha256:01\tnet\n");
@@ -1750,7 +1789,7 @@ mod tests {
         let net_dir = t.ctx.cwd.join("net").canonicalize().unwrap();
         assert_eq!(
             *kits,
-            format!("{record}net\t{}\tnet@1.0.0\n", net_dir.display())
+            format!("{record}net\t{}\tnet@1.0.0\tv3\n", net_dir.display())
         );
     }
 

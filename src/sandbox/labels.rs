@@ -35,6 +35,11 @@ pub const BRIDGE: &str = "sbx.bridge";
 pub const SSH_AGENT: &str = "sbx.ssh-agent";
 /// Kit host mounts: a JSON object of guest path to host directory.
 pub const HOST_MOUNTS: &str = "sbx.host-mounts";
+/// Created with `/dev/fuse` taken away (an environment file's `sandboxOptions.fuse: false`).
+pub const NO_FUSE: &str = "sbx.no-fuse";
+/// Files in mounted workspaces made read-only in the guest at each start: an environment's
+/// files, as sbx mounts them unless `writableEnvFiles` (a JSON list).
+pub const READ_ONLY_FILES: &str = "sbx.read-only-files";
 /// How the sandbox shares the skills store (`skills::Label`, JSON), fixed at create.
 pub const SKILLS: &str = "sbx.skills";
 /// The saved template the sandbox was created from (`docker.io/library/t:v1`).
@@ -145,6 +150,10 @@ pub struct Meta {
     pub credential_services: BTreeMap<String, String>,
     /// Kit host mounts: guest path to host directory.
     pub host_mounts: BTreeMap<String, String>,
+    /// Starts take `/dev/fuse` away (`sbx.no-fuse`).
+    pub no_fuse: bool,
+    /// Starts make these guest files read-only (`sbx.read-only-files`).
+    pub read_only_files: Vec<String>,
     /// The SSH agent phases granted at create and what each may sign (`sbx.ssh-agent`).
     pub ssh_agent: Option<AgentLabel>,
     /// The skills mode and directories set at create (`sbx.skills`).
@@ -199,6 +208,11 @@ impl Meta {
             (
                 HOST_MOUNTS,
                 (!self.host_mounts.is_empty()).then(|| json(&self.host_mounts)),
+            ),
+            (NO_FUSE, flag(self.no_fuse)),
+            (
+                READ_ONLY_FILES,
+                (!self.read_only_files.is_empty()).then(|| json(&self.read_only_files)),
             ),
             (SSH_AGENT, self.ssh_agent.as_ref().map(|a| a.to_label())),
             (SKILLS, self.skills.as_ref().map(|s| s.to_label())),
@@ -284,6 +298,8 @@ impl Meta {
                 })
                 .collect(),
             host_mounts: json(labels, HOST_MOUNTS).unwrap_or_default(),
+            no_fuse: flag(NO_FUSE),
+            read_only_files: json(labels, READ_ONLY_FILES).unwrap_or_default(),
             ssh_agent: text(SSH_AGENT).and_then(|j| AgentLabel::from_label(&j)),
             skills: text(SKILLS).and_then(|j| crate::skills::Label::from_label(&j)),
             template: text(TEMPLATE),
