@@ -45,7 +45,17 @@ pub fn load<R: Runner>(ctx: &Ctx<R>, reference: &str) -> Result<Kit> {
 /// reference would be pulled and a v3 source directory built (the builder pulls its base image),
 /// so both are refused.
 pub fn load_with<R: Runner>(ctx: &Ctx<R>, reference: &str, offline: bool) -> Result<Kit> {
-    Ok(fetch(ctx, reference, offline, None, &mut |_| {})?.0)
+    Ok(fetch(ctx, reference, offline, None, Position::Kit, &mut |_| {})?.0)
+}
+
+/// Where a reference was given, which decides how a name without `./` is read (sbx 0.53).
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum Position {
+    /// Where an agent goes (`create REF`): a bare word is an agent, and anything else without
+    /// `./` a registry reference, even when a directory of that name exists.
+    Agent,
+    /// Where only a kit goes (`--kit`, `kit validate|inspect|add`): an existing path wins.
+    Kit,
 }
 
 /// What loading a kit fetches.
@@ -63,9 +73,10 @@ pub fn load_noting<R: Runner>(
     ctx: &Ctx<R>,
     reference: &str,
     sandbox: Option<&str>,
+    position: Position,
     before: &mut dyn FnMut(Fetch),
 ) -> Result<(Kit, bool)> {
-    fetch(ctx, reference, false, sandbox, before)
+    fetch(ctx, reference, false, sandbox, position, before)
 }
 
 /// The registry logins a pull may use: those of the sandbox being created, else the host-wide
@@ -84,12 +95,13 @@ fn fetch<R: Runner>(
     reference: &str,
     offline: bool,
     sandbox: Option<&str>,
+    position: Position,
     before: &mut dyn FnMut(Fetch),
 ) -> Result<(Kit, bool)> {
     let (mut kit, cached) = if let Some(kit) = builtin(reference) {
         (kit?, true)
     } else {
-        match locate(ctx, reference, offline)? {
+        match locate(ctx, reference, offline, position)? {
             Located::Registry(r) => {
                 let registries = registries(&SecretsFile::load(&ctx.paths)?, sandbox);
                 let logins = Logins::new(&registries, &*ctx.store);
@@ -122,13 +134,14 @@ fn entries(dir: &Path) -> usize {
     fs::read_dir(dir).map_or(0, |d| d.count())
 }
 
-/// The name `load` gives the kit REF names, without pulling or building it: trust is checked,
-/// then the name comes from the source (or a v2 `spec.yaml`'s `name`).
+/// The name `load` gives the kit REF names where the agent goes (the sandbox is named after it),
+/// without pulling or building it: trust is checked, then the name comes from the source (or a
+/// v2 `spec.yaml`'s `name`).
 pub fn kit_name<R: Runner>(ctx: &Ctx<R>, reference: &str) -> Result<String> {
     if let Some((name, _)) = BUILTINS.iter().find(|(n, _)| *n == reference) {
         return v3::name_from_source(&Source::Builtin(name));
     }
-    match locate(ctx, reference, false)? {
+    match locate(ctx, reference, false, Position::Agent)? {
         Located::Registry(r) => v3::name_from_source(&Source::Registry(r)),
         Located::V2(dir) => {
             let spec = dir.join("spec.yaml");
@@ -164,9 +177,14 @@ pub fn check_kind(reference: &str) -> Result<()> {
     Ok(())
 }
 
-fn locate<R: Runner>(ctx: &Ctx<R>, reference: &str, offline: bool) -> Result<Located> {
+fn locate<R: Runner>(
+    ctx: &Ctx<R>,
+    reference: &str,
+    offline: bool,
+    position: Position,
+) -> Result<Located> {
     check_kind(reference)?;
-    let Some(path) = local_path(ctx, reference)? else {
+    let Some(path) = local_path(ctx, reference, position)? else {
         // Like sbx, a registry reference has a `/` (a tag alone isn't one: `alpine:3` is not).
         if !reference.contains('/') {
             bail!(
@@ -211,7 +229,11 @@ fn locate<R: Runner>(ctx: &Ctx<R>, reference: &str, offline: bool) -> Result<Loc
 
 /// A canonical host path when REF is an explicit path (`/x`, `./x`, `../x`, `~/x`, `.`, `..`),
 /// else `None`. A relative name is never a path, even if it exists, as in sbx.
-fn local_path<R: Runner>(ctx: &Ctx<R>, reference: &str) -> Result<Option<PathBuf>> {
+fn local_path<R: Runner>(
+    ctx: &Ctx<R>,
+    reference: &str,
+    position: Position,
+) -> Result<Option<PathBuf>> {
     let path = if let Some(rest) = reference.strip_prefix("~/") {
         let home = ctx.env.get("HOME").context("HOME is not set")?;
         Path::new(home).join(rest)
@@ -221,7 +243,8 @@ fn local_path<R: Runner>(ctx: &Ctx<R>, reference: &str) -> Result<Option<PathBuf
     let looks_local = [".", ".."].contains(&reference)
         || ["/", "./", "../", "~/"]
             .iter()
-            .any(|p| reference.starts_with(p));
+            .any(|p| reference.starts_with(p))
+        || (position == Position::Kit && path.exists());
     if !looks_local {
         return Ok(None);
     }
@@ -368,13 +391,15 @@ mod tests {
     }
 
     #[test]
-    fn a_dot_slash_name_is_a_path_and_a_bare_one_is_not() {
+    fn a_dot_slash_name_is_a_path_in_either_position() {
         let t = allow_local();
         let dir = t.ctx.cwd.join("kit");
         fs::create_dir(&dir).unwrap();
         fs::write(dir.join("spec.yaml"), V2).unwrap();
         assert_eq!(load(&t.ctx, "./kit").unwrap().name, "my-kit");
-        assert!(load(&t.ctx, "kit").is_err());
+        assert_eq!(kit_name(&t.ctx, "./kit").unwrap(), "my-kit");
+        // Bare, only where a kit goes (see the two tests below).
+        assert!(kit_name(&t.ctx, "kit").is_err());
     }
 
     #[test]
@@ -543,7 +568,10 @@ mod tests {
         );
         let fetched = |reference: &str| {
             let mut seen = Vec::new();
-            let (_, cached) = load_noting(&t.ctx, reference, None, &mut |f| seen.push(f)).unwrap();
+            let (_, cached) = load_noting(&t.ctx, reference, None, Position::Kit, &mut |f| {
+                seen.push(f)
+            })
+            .unwrap();
             (seen, cached)
         };
         assert_eq!(fetched("./kit"), (vec![Fetch::Build], false));
@@ -608,17 +636,34 @@ mod tests {
     }
 
     #[test]
-    fn bare_words_are_not_kits_even_when_a_directory_exists() {
+    fn where_a_kit_goes_an_existing_directory_is_read_without_dot_slash() {
+        // sbx 0.53: `--kit`, `kit validate` and `kit inspect` read `mykit` and `sandbox/mykit`
+        // as the directories they name; with no such directory they are what they look like.
         let t = allow_local();
-        fs::create_dir(t.ctx.cwd.join("alpine")).unwrap();
-        for r in ["alpine", "alpine:3", "mykit"] {
-            let want = format!(
-                "kit reference \"{r}\": not a local path and does not look like a registry reference"
-            );
-            assert_eq!(load(&t.ctx, r).unwrap_err().to_string(), want, "{r}");
-            assert_eq!(kit_name(&t.ctx, r).unwrap_err().to_string(), want, "{r}");
+        for dir in ["mykit", "sandbox/v2kit"] {
+            fs::create_dir_all(t.ctx.cwd.join(dir)).unwrap();
+            fs::write(t.ctx.cwd.join(dir).join("spec.yaml"), V2).unwrap();
+            assert_eq!(load(&t.ctx, dir).unwrap().name, "my-kit", "{dir}");
         }
+        let want = "kit reference \"alpine\": not a local path and does not look like a registry \
+                    reference";
+        assert_eq!(load(&t.ctx, "alpine").unwrap_err().to_string(), want);
         assert!(t.calls().is_empty());
+    }
+
+    #[test]
+    fn where_the_agent_goes_a_bare_name_is_not_a_directory() {
+        // sbx 0.53: `create mykit` is an unknown agent and `create sandbox/v2kit` a registry
+        // kit, even with those directories present.
+        let t = allow_local();
+        fs::create_dir(t.ctx.cwd.join("mykit")).unwrap();
+        fs::write(t.ctx.cwd.join("mykit/spec.yaml"), V2).unwrap();
+        let e = kit_name(&t.ctx, "mykit").unwrap_err().to_string();
+        assert!(e.contains("not a local path"), "{e}");
+        let e = load_noting(&t.ctx, "mykit", None, Position::Agent, &mut |_| {})
+            .unwrap_err()
+            .to_string();
+        assert!(e.contains("not a local path"), "{e}");
     }
 
     #[test]

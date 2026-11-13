@@ -870,6 +870,24 @@ mod tests {
     }
 
     #[test]
+    fn a_kits_entry_naming_an_existing_directory_is_a_path() {
+        // sbx 0.53 reads `kits: [mykit]` as the directory beside the file.
+        let t = T::new();
+        let dir = t.dir.path().join("proj/mykit");
+        std::fs::create_dir(&dir).unwrap();
+        std::fs::write(dir.join("spec.yaml"), "schemaVersion: \"2\"\nkind: mixin\n").unwrap();
+        let s = t
+            .spec(&format!(
+                "{HEAD}agent: claude\nkits:\n  - mykit\n  - acme/tool:1\n"
+            ))
+            .unwrap();
+        assert_eq!(
+            s.opts.kit,
+            [dir.display().to_string(), "acme/tool:1".into()]
+        );
+    }
+
+    #[test]
     fn secrets_are_sorted_and_checked() {
         let t = T::new();
         let s = t
