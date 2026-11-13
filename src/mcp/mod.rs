@@ -13,6 +13,49 @@ use std::collections::BTreeMap;
 
 use anyhow::{Context, Result, bail};
 
+/// Fails when nothing answers at `url`: any HTTP response will do, as only reaching the server
+/// is checked (sbx contacts it when it registers it, for OAuth discovery).
+pub fn check_reachable(name: &str, url: &str) -> Result<()> {
+    connect(url).map_err(|e| {
+        anyhow::anyhow!(
+            "register mcp server \"{name}\": server \"{name}\": discovery failed: connecting to \
+             server {url}: {e:#}"
+        )
+    })
+}
+
+#[cfg(not(test))]
+fn connect(url: &str) -> Result<()> {
+    let rt = tokio::runtime::Builder::new_current_thread()
+        .enable_all()
+        .build()
+        .context("starting the HTTP client")?;
+    rt.block_on(async {
+        // Same TLS setup as the registry client. Err means a provider is already installed.
+        let _ = rustls::crypto::ring::default_provider().install_default();
+        let client = reqwest::Client::builder()
+            .redirect(reqwest::redirect::Policy::none())
+            .connect_timeout(std::time::Duration::from_secs(15))
+            .timeout(std::time::Duration::from_secs(30))
+            .build()?;
+        client.get(url).send().await?;
+        Ok(())
+    })
+}
+
+/// Tests don't reach the network: a `.invalid` host is unreachable, any other answers.
+#[cfg(test)]
+fn connect(url: &str) -> Result<()> {
+    let host = reqwest::Url::parse(url)?
+        .host_str()
+        .unwrap_or_default()
+        .to_string();
+    if host.ends_with(".invalid") {
+        bail!("dns error: failed to lookup address information");
+    }
+    Ok(())
+}
+
 /// Registers `server` as `name`: nothing to do when it is already, refused when `name` is
 /// registered differently.
 pub fn register(paths: &crate::config::Paths, name: &str, server: Server) -> Result<()> {
