@@ -1,5 +1,12 @@
 # Changelog
 
+## [0.19.1](https://github.com/pelotech/smolbento/compare/v0.19.0...v0.19.1) (2026-11-13)
+
+
+### Bug Fixes
+
+* **kits:** expand a kit variable's reference to itself, as sbx does ([#92](https://github.com/pelotech/smolbento/issues/92)) ([5c7422f](https://github.com/pelotech/smolbento/commit/5c7422f99339527d76412a6920ff379f989edba8))
+
 ## [0.19.0](https://github.com/pelotech/smolbento/compare/v0.18.0...v0.19.0) (2026-11-13)
 
 
