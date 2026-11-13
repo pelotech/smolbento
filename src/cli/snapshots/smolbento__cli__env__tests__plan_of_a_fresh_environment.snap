@@ -9,8 +9,8 @@ ENVIRONMENT
 SANDBOX
   + claude-proj
       agent: claude
-      sandboxOptions.cpus: 2
       sandboxOptions.memory: 4g
+      sandboxOptions.cpus: 2
 
 WORKSPACES
   ! <proj> — present, not recorded as applied, needs your approval

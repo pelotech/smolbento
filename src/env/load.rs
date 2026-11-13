@@ -323,6 +323,38 @@ fn check_merged(f: &EnvFile, first: &str) -> Result<()> {
         }
     }
     let mut hosts: Vec<String> = Vec::new();
+    for (service, b) in f.bindings.iter().flatten() {
+        let at = format!("invalid {first}: bindings.{service}");
+        let kinds = [("apiKey", &b.api_key), ("oauth", &b.oauth)];
+        if kinds.iter().all(|(_, d)| d.is_none()) {
+            bail!("{at}: give apiKey or oauth domains");
+        }
+        for (kind, d) in kinds {
+            for domain in d.iter().flat_map(|d| d.domains.iter().flatten()) {
+                if domain.is_empty() || domain.contains("://") || domain.contains(['/', ' ', '@']) {
+                    bail!("{at}.{kind}.domains: \"{domain}\" isn't a domain");
+                }
+            }
+        }
+    }
+    let mut names: Vec<&str> = Vec::new();
+    for (i, s) in f.mcp.iter().flat_map(|m| &m.servers).enumerate() {
+        let at = format!("invalid {first}: mcp.servers[{i}]");
+        if names.contains(&s.name.as_str()) {
+            bail!("{at}: the name {} is used twice", s.name);
+        }
+        names.push(&s.name);
+        crate::mcp::check_name(&s.name).map_err(|e| anyhow::anyhow!("{at}: {e}"))?;
+        match (&s.url, &s.command) {
+            (Some(url), None) if s.args.is_none() => {
+                crate::mcp::check_remote(url, &Default::default())
+                    .map_err(|e| anyhow::anyhow!("{at}: {e}"))?;
+            }
+            (Some(_), None) => bail!("{at}: args go with command, not url"),
+            (None, Some(_)) => {}
+            _ => bail!("{at}: give exactly one of url or command"),
+        }
+    }
     for (host, r) in f.registries.iter().flatten() {
         let at = format!("invalid {first}: registry \"{host}\"");
         let lower = host.to_ascii_lowercase();
@@ -349,10 +381,18 @@ fn check_merged(f: &EnvFile, first: &str) -> Result<()> {
 
 /// Fields that parse but aren't implemented: one line each, exit 2.
 fn check_supported(f: &EnvFile) -> Result<()> {
-    let mut bad: Vec<String> = [("bindings", f.bindings.is_some()), ("mcp", f.mcp.is_some())]
+    // sbx runs a command server on the host, from its MCP gateway; smolbento has neither.
+    let mut bad: Vec<String> = f
+        .mcp
         .iter()
-        .filter(|(_, set)| *set)
-        .map(|(n, _)| n.to_string())
+        .flat_map(|m| &m.servers)
+        .filter(|s| s.command.is_some())
+        .map(|s| {
+            format!(
+                "mcp command server {} (smolbento has no MCP gateway)",
+                s.name
+            )
+        })
         .collect();
     if let Some(o) = &f.sandbox_options {
         let opts = [
@@ -360,10 +400,14 @@ fn check_supported(f: &EnvFile) -> Result<()> {
             ("display", o.display.is_some()),
             ("gpu", o.gpu.is_some()),
             ("usb", o.usb.is_some()),
-            ("writableEnvFiles", o.writable_env_files.is_some()),
+            // Every smolvm guest has /dev/fuse.
+            ("fuse: false", o.fuse == Some(false)),
+            // smolvm pulls an image only when it has none.
             (
                 "pullPolicy",
-                o.pull_policy.as_deref().is_some_and(|p| p != "missing"),
+                o.pull_policy
+                    .as_deref()
+                    .is_some_and(|p| !matches!(p, "missing" | "never")),
             ),
         ];
         bad.extend(
@@ -810,19 +854,58 @@ mod tests {
         let t = T::new();
         t.write(
             "proj/a.yaml",
-            &format!("{MIN}bindings:\n  github: {{}}\nmcp:\n  - a\nsandboxOptions:\n  gpu: true\n  pullPolicy: always\n"),
+            &format!(
+                "{MIN}mcp:\n  servers:\n    - name: local\n      command: npx\n\
+                 sandboxOptions:\n  gpu: true\n  fuse: false\n  pullPolicy: always\n"
+            ),
         );
         let e = t.load(&["a.yaml"], &none()).err().unwrap();
         assert!(e.downcast_ref::<Unsupported>().is_some());
         assert_eq!(
             e.to_string(),
-            "env: bindings is not supported yet\nenv: mcp is not supported yet\nenv: sandboxOptions.gpu is not supported yet\nenv: sandboxOptions.pullPolicy is not supported yet"
+            "env: mcp command server local (smolbento has no MCP gateway) is not supported yet\n\
+             env: sandboxOptions.gpu is not supported yet\n\
+             env: sandboxOptions.fuse: false is not supported yet\n\
+             env: sandboxOptions.pullPolicy is not supported yet"
         );
         t.write(
             "proj/a.yaml",
-            &format!("{MIN}sandboxOptions:\n  pullPolicy: missing\n"),
+            &format!(
+                "{MIN}sandboxOptions:\n  pullPolicy: never\n  fuse: true\n  writableEnvFiles: true\n"
+            ),
         );
         t.load(&["a.yaml"], &none()).unwrap();
+    }
+
+    #[test]
+    fn bindings_and_mcp_servers_are_checked() {
+        let t = T::new();
+        for (body, want) in [
+            (
+                "bindings:\n  github: {}\n",
+                "bindings.github: give apiKey or oauth domains",
+            ),
+            (
+                "bindings:\n  github:\n    apiKey:\n      domains: [\"https://a.b\"]\n",
+                "bindings.github.apiKey.domains: \"https://a.b\" isn't a domain",
+            ),
+            (
+                "mcp:\n  servers:\n    - name: a\n      url: https://a.b/mcp\n    - name: a\n      url: https://c.d/mcp\n",
+                "mcp.servers[1]: the name a is used twice",
+            ),
+            (
+                "mcp:\n  servers:\n    - name: a\n",
+                "mcp.servers[0]: give exactly one of url or command",
+            ),
+            (
+                "mcp:\n  servers:\n    - name: a\n      url: http://localhost:1/mcp\n",
+                "mcp.servers[0]: 'http://localhost:1/mcp': inside a sandbox",
+            ),
+        ] {
+            t.write("proj/a.yaml", &format!("{MIN}{body}"));
+            let e = t.load(&["a.yaml"], &none()).err().unwrap().to_string();
+            assert!(e.contains(want), "{e}");
+        }
     }
 
     #[test]

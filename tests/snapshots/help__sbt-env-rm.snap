@@ -27,7 +27,7 @@ Options:
           Skip confirmation prompts and delete even if in use (e.g. an open SSH connection)
 
       --prune-bindings
-          Also remove this environment's bindings from the global credentials.yaml (smolbento keeps none)
+          Also remove the bindings this environment declares from the global ones (other sandboxes may use them)
 
       --skip-host-commands
           Skip the host lifecycle commands the environment declares

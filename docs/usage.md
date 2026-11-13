@@ -828,6 +828,22 @@ sbt env rm                           # remove the sandbox and the secrets scoped
 
   They are resolved once when the sandbox is created, stored for that sandbox only (ahead of a
   host-wide `sbt secret set --registry` login for the same host), and removed with it.
+- **Bindings.** More domains a service's credential may be sent to:
+
+  ```yaml
+  bindings:
+    github:
+      apiKey:
+        domains: [uploads.github.com]
+  ```
+
+  As in sbx they are global: at create they are added to the service's hosts in your secrets file,
+  for every sandbox created afterwards, and `env rm` leaves them. `env rm --prune-bindings`
+  removes each declared service's whole binding. The service must be one `sbt secret set` knows.
+- **MCP servers.** `mcp.servers` entries with a `url` are registered as `sbt mcp add` would
+  (they stay after `env rm`, as in sbx) and given to the agent as `--static-mcp` gives them, so
+  the same limits apply (only `claude` so far). Entries with a `command` are refused: sbx runs
+  them on your machine from its MCP gateway, which smolbento doesn't have.
 - **`env create`** refuses a sandbox that already exists (use `env run`, or `env rm` first).
   Secrets are stored at the sandbox's scope before the sandbox is made. A failed create leaves
   them; `env rm` with the same files removes them.
@@ -850,9 +866,11 @@ sbt env rm                           # remove the sandbox and the secrets scoped
     /home/agent/.cache/tool: ./cache
   ```
 
-Not supported yet (exit 2, naming the field): `bindings`, `mcp`, and the `sandboxOptions` other
-than `cpus`, `memory`, `template`, `skills` and `pullPolicy: missing`. `refresh` and `backend` on
-a secret and `--prune-bindings` are accepted and do nothing. Secret service names must be ones `sbt secret set`
+Not supported yet (exit 2, naming the field): `mcp` servers with a `command`,
+`sandboxOptions.profile`, `display`, `gpu` and `usb`, `fuse: false` (every sandbox has
+`/dev/fuse`), and `pullPolicy: always` (smolvm pulls only a missing image). `fuse: true`,
+`pullPolicy: missing|never` and `writableEnvFiles` are accepted. `refresh` and `backend` on a
+secret are accepted and do nothing. Secret service names must be ones `sbt secret set`
 knows; others are refused. See [sbx compatibility](sbx-compatibility.md#environment-files).
 
 ## Files and ownership

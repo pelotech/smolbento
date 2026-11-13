@@ -7,7 +7,7 @@ use anyhow::{Context, Result, bail};
 use super::SandboxOpts;
 use crate::agents;
 use crate::env::file::{
-    EnvFile, KitEntry, Lifecycle, PinnedKit, Port, RegistryDecl, SecretDecl, Workspace,
+    Binding, EnvFile, KitEntry, Lifecycle, PinnedKit, Port, RegistryDecl, SecretDecl, Workspace,
 };
 use crate::env::lifecycle::{Phase, Vars};
 use crate::env::load::Loaded;
@@ -28,6 +28,10 @@ pub struct EnvSpec {
     pub secrets: Vec<(String, SecretDecl)>,
     /// Registry host to its login, sorted by host.
     pub registries: Vec<(String, RegistryDecl)>,
+    /// Service to the domains bound to it, sorted by service.
+    pub bindings: Vec<(String, Binding)>,
+    /// MCP server name and URL, in the file's order.
+    pub mcp: Vec<(String, String)>,
     /// Host commands, each with an absolute working directory.
     pub lifecycle: Lifecycle,
     /// What `env run` launches in place of the agent's program, and with which arguments.
@@ -140,12 +144,21 @@ pub fn spec(loaded: &Loaded, overrides: &Overrides, secrets: &SecretsFile) -> Re
 
     let secret_decls: Vec<(String, SecretDecl)> =
         f.secrets.clone().unwrap_or_default().into_iter().collect();
-    if let Some((service, _)) = secret_decls
+    let bound = f.bindings.iter().flatten().map(|(s, _)| s);
+    if let Some(service) = secret_decls
         .iter()
-        .find(|(s, _)| secrets.service(s).is_none())
+        .map(|(s, _)| s)
+        .chain(bound)
+        .find(|s| secrets.service(s).is_none())
     {
         bail!(crate::secrets::services::unknown(service));
     }
+    let mcp: Vec<(String, String)> = f
+        .mcp
+        .iter()
+        .flat_map(|m| &m.servers)
+        .filter_map(|s| Some((s.name.clone(), s.url.clone()?)))
+        .collect();
 
     let env: Vec<(String, String)> = f.env.clone().unwrap_or_default().into_iter().collect();
     let o = f.sandbox_options.as_ref();
@@ -163,8 +176,15 @@ pub fn spec(loaded: &Loaded, overrides: &Overrides, secrets: &SecretsFile) -> Re
             .collect(),
         template: o.and_then(|o| o.template.clone()),
         skills: o.and_then(|o| o.skills.clone()),
-        // `load` refuses every policy but `missing`.
+        // `load` refuses every policy but `missing` and `never`.
         pull: o.and_then(|o| o.pull_policy.clone()),
+        // The file's servers, given to the agent as `--static-mcp` gives them.
+        static_mcp: (!mcp.is_empty()).then(|| {
+            mcp.iter()
+                .map(|(n, _)| n.as_str())
+                .collect::<Vec<_>>()
+                .join(",")
+        }),
         clone: overrides
             .clone
             .or(workspace(f).and_then(|(_, c)| c))
@@ -187,6 +207,8 @@ pub fn spec(loaded: &Loaded, overrides: &Overrides, secrets: &SecretsFile) -> Re
             .unwrap_or_default()
             .into_iter()
             .collect(),
+        bindings: f.bindings.clone().unwrap_or_default().into_iter().collect(),
+        mcp,
         lifecycle: lifecycle(loaded),
         entrypoint: f.entrypoint.clone(),
         cmd: f.cmd.clone(),
@@ -201,6 +223,7 @@ pub const LIFECYCLE: &str = "LIFECYCLE";
 pub fn remove_summary(
     sandbox: Option<&str>,
     secrets: &[String],
+    bindings: &[Resource],
     registries: &[String],
     pre_remove: &[Resource],
 ) -> String {
@@ -209,6 +232,7 @@ pub fn remove_summary(
     };
     let mut lines: Vec<Line> = sandbox.iter().map(|n| gone("SANDBOX", n)).collect();
     lines.extend(secrets.iter().map(|s| gone("SECRETS", s)));
+    lines.extend(bindings.iter().map(|r| Line::new(Marker::Destroy, r)));
     lines.extend(registries.iter().map(|h| gone("REGISTRIES", h)));
     lines.extend(pre_remove.iter().map(|r| Line::new(Marker::Run, r)));
     render(&lines, HOST_COMMANDS)
@@ -238,12 +262,18 @@ pub fn resources(loaded: &Loaded, spec: &EnvSpec) -> Vec<Resource> {
 
     let mut sandbox = vec![field("agent", f.agent.as_deref().unwrap_or_default())];
     if let Some(o) = &f.sandbox_options {
+        // sbx's order; `writableEnvFiles` only when set.
         let opts = [
-            ("cpus", o.cpus.map(|c| c.to_string())),
-            ("memory", o.memory.clone()),
             ("template", o.template.clone()),
-            ("skills", o.skills.clone()),
+            ("memory", o.memory.clone()),
+            ("cpus", o.cpus.map(|c| c.to_string())),
             ("pullPolicy", o.pull_policy.clone()),
+            ("skills", o.skills.clone()),
+            ("fuse", o.fuse.map(|f| f.to_string())),
+            (
+                "writableEnvFiles",
+                o.writable_env_files.filter(|w| *w).map(|w| w.to_string()),
+            ),
         ];
         for (k, v) in opts {
             if let Some(v) = v {
@@ -323,6 +353,8 @@ pub fn resources(loaded: &Loaded, spec: &EnvSpec) -> Vec<Resource> {
         });
     }
 
+    out.extend(binding_resources(&spec.bindings));
+
     for (host, r) in &spec.registries {
         let mut fields = source_fields("secret.", &r.secret);
         if let Some(u) = &r.username {
@@ -333,6 +365,10 @@ pub fn resources(loaded: &Loaded, spec: &EnvSpec) -> Vec<Resource> {
                 || r.username.as_ref().is_some_and(|u| u.command.is_some()),
             ..Resource::new("REGISTRIES", host, fields)
         });
+    }
+
+    for (name, url) in &spec.mcp {
+        out.push(Resource::new("MCP SERVERS", name, vec![field("url", url)]));
     }
 
     for p in f.ports.iter().flatten() {
@@ -408,6 +444,23 @@ pub fn lifecycle_resources(loaded: &Loaded, lifecycle: &Lifecycle) -> Vec<Resour
         }
     }
     out
+}
+
+/// The `BINDINGS` section: one resource per service.
+pub fn binding_resources(bindings: &[(String, Binding)]) -> Vec<Resource> {
+    bindings
+        .iter()
+        .map(|(service, b)| {
+            let (api_key, oauth) = b.domains();
+            let kinds = [("apiKey", &b.api_key, api_key), ("oauth", &b.oauth, oauth)];
+            let fields = kinds
+                .into_iter()
+                .filter(|(_, given, _)| given.is_some())
+                .map(|(kind, _, d)| (format!("{kind}.domains"), d.join(", ")))
+                .collect();
+            Resource::new("BINDINGS", service, fields)
+        })
+        .collect()
 }
 
 /// A secret source as the plan shows it, under `prefix`: never a literal value.
@@ -863,8 +916,8 @@ mod tests {
         insta::assert_snapshot!(summarise(&t, &["sbxenv.yaml"]));
         let l = t.loaded(&["sbxenv.yaml"]);
         let secrets = ["github".to_string(), "openai".to_string()];
-        let removed =
-            header(&l, "claude-proj") + &remove_summary(Some("claude-proj"), &secrets, &[], &[]);
+        let removed = header(&l, "claude-proj")
+            + &remove_summary(Some("claude-proj"), &secrets, &[], &[], &[]);
         insta::assert_snapshot!(removed.replace(&t.root(), "<root>"));
     }
 

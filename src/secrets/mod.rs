@@ -6,6 +6,8 @@ pub mod services;
 pub mod store;
 
 use anyhow::Result;
+use std::collections::BTreeMap;
+
 use serde::{Deserialize, Serialize};
 
 use crate::config::Paths;
@@ -107,6 +109,19 @@ pub struct SecretsFile {
     pub custom: Vec<CustomService>,
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub registries: Vec<RegistryEntry>,
+    /// Service name to more domains its credential may be sent to (sbx's bindings, from an
+    /// environment file). Global: every sandbox created afterwards uses them.
+    #[serde(default, skip_serializing_if = "BTreeMap::is_empty")]
+    pub bindings: BTreeMap<String, ServiceBinding>,
+}
+
+/// The domains bound to one service, by kind of credential.
+#[derive(Debug, Clone, Default, PartialEq, Eq, Serialize, Deserialize)]
+pub struct ServiceBinding {
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub api_key: Vec<String>,
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub oauth: Vec<String>,
 }
 
 impl SecretsFile {
@@ -119,8 +134,9 @@ impl SecretsFile {
     }
 
     /// A built-in or custom service.
+    /// A built-in or custom service, with the domains bound to it added to its hosts.
     pub fn service(&self, name: &str) -> Option<Service> {
-        services::builtin(name).or_else(|| {
+        let mut service = services::builtin(name).or_else(|| {
             self.custom
                 .iter()
                 .find(|c| c.name == name)
@@ -129,7 +145,28 @@ impl SecretsFile {
                     env_vars: vec![c.env.clone()],
                     hosts: c.hosts.clone(),
                 })
-        })
+        })?;
+        if let Some(b) = self.bindings.get(name) {
+            for domain in b.api_key.iter().chain(&b.oauth) {
+                if !service.hosts.contains(domain) {
+                    service.hosts.push(domain.clone());
+                }
+            }
+        }
+        Some(service)
+    }
+
+    /// Adds `domains` to the service's bindings (sbx merges an environment's bindings into
+    /// the global ones).
+    pub fn bind(&mut self, service: &str, api_key: &[String], oauth: &[String]) {
+        let b = self.bindings.entry(service.to_string()).or_default();
+        for (list, add) in [(&mut b.api_key, api_key), (&mut b.oauth, oauth)] {
+            for d in add {
+                if !list.contains(d) {
+                    list.push(d.clone());
+                }
+            }
+        }
     }
 
     /// Adds or replaces the entry for the same service and scope.

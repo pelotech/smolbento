@@ -10,8 +10,8 @@ ENVIRONMENT
 SANDBOX
   + web-app
       agent: claude
-      sandboxOptions.cpus: 4
       sandboxOptions.memory: 8g
+      sandboxOptions.cpus: 4
 
 KITS
   + org/tool

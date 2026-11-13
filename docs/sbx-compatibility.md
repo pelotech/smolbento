@@ -122,9 +122,9 @@ flags, and the registered servers are written into the agent's own MCP config at
 
 `env plan`, `env create`, `env run`, `env exec` and `env rm` read `sbxenv.yaml` as sbx does
 (measured on v0.49.2, v0.50.1 for `mounts`, and v0.53.0 for the plan, approvals, `lifecycle`,
-`registries`, `entrypoint` and `cmd`), for the fields smolbento supports. These exit 2 and name
-the field: `bindings`, `mcp`, `sandboxOptions.profile|display|gpu|usb|writableEnvFiles`, and
-`pullPolicy` other than `missing`.
+`registries`, `entrypoint`, `cmd`, `bindings` and `mcp`), for the fields smolbento supports. These
+exit 2 and name the field: `mcp` servers with a `command`, `sandboxOptions.profile|display|gpu|usb`,
+`fuse: false`, and `pullPolicy: always`.
 
 | Area | sbx | smolbento |
 |---|---|---|
@@ -142,7 +142,10 @@ the field: `bindings`, `mcp`, `sandboxOptions.profile|display|gpu|usb|writableEn
 | Ports in an environment file | Named by protocol as written, else `tcp4` (`tcp6` for an IPv6 `hostIP`); `hostIP` must be an address; a later port with the same sandbox port and protocol replaces the earlier one | Same. smolvm publishes every port on both `127.0.0.1` and `::1`, so `tcp4`/`tcp6`/`udp4`/`udp6` all publish on both, and a `hostIP` other than those two is refused |
 | `additionalWorkspaces` with the same path | The later one replaces the earlier one | Same |
 | A different set of environment files | An environment of its own: nothing is approved for it, and what an existing sandbox has needs approval; the refusal names `the merged environment (a, b)` | Same |
-| Environment files in the sandbox | Mounted into the sandbox (read-only unless `writableEnvFiles`), with a plan line when one is writable | Not mounted |
+| Environment files in the sandbox | Mounted into the sandbox at their host path (read-only unless `writableEnvFiles`), with a plan line when one is writable | Not mounted (smolvm mounts directories only); a file inside a workspace is readable and writable through it, whatever `writableEnvFiles` says |
+| `bindings` | Merged into the global `credentials.yaml`; kept by `env rm`; `--prune-bindings` removes each declared service's whole entry; an unknown service is accepted by `env plan` | Same, in smolbento's secrets file. An unknown service is refused at create, as for `secrets` |
+| `mcp` url servers | Registered for the host (after an OAuth discovery that fails the create when the server can't be reached) and served to the sandbox by the MCP gateway; kept by `env rm` | Registered in `mcp.toml` and written into the agent's config, as `--static-mcp` does (only `claude` so far); the server isn't contacted at create; kept by `env rm` |
+| `mcp` command servers | Run on the host from the MCP gateway, approved like lifecycle commands | Refused (exit 2) |
 | The plan after a plain `rm` | Lines end with `— recorded as applied, no longer present` | A bare `+` |
 | Kit arguments in the plan | The file's pinned `args.NAME`; `--kit-arg` isn't shown | Same |
 | A local kit's contents | Not measured | Not part of the approval: the plan names the kit's path |

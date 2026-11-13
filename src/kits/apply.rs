@@ -794,6 +794,7 @@ mod tests {
                 .collect(),
             custom: vec![],
             registries: vec![],
+            bindings: Default::default(),
         }
     }
     fn request() -> CreateRequest {
