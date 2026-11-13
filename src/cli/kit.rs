@@ -1017,7 +1017,10 @@ mod tests {
     fn push_requires_a_tag_and_a_valid_kit_before_any_network_call() {
         let mut t = kit_env();
         v2_dir(&t, "k", "schemaVersion: \"2\"\nkind: mixin\nname: demo\n");
-        for r in ["localhost:5000/k", "k:1", "localhost:5000/k@sha256:00"] {
+        for r in [
+            "localhost:5000/k",
+            "localhost:5000/k@sha256:0000000000000000000000000000000000000000000000000000000000000000",
+        ] {
             let e = t.sbt(&["kit", "push", "./k", r]).unwrap_err();
             assert_eq!(
                 e.to_string(),

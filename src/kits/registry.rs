@@ -176,30 +176,22 @@ fn payload_layer(manifest: &Value, what: &str) -> Result<Option<String>> {
 /// `kit pull`'s default file name: the repository's last part and the tag (or the digest's
 /// first 12 hex digits), `.tar.gz`.
 pub fn pull_name(reference: &str) -> String {
-    let (path, version) = match reference.split_once('@') {
-        Some((p, d)) => (
-            p,
-            d.trim_start_matches("sha256:").chars().take(12).collect(),
-        ),
-        None => {
-            let last = reference.rsplit('/').next().unwrap_or(reference);
-            match last.split_once(':') {
-                Some((_, tag)) => (
-                    &reference[..reference.len() - tag.len() - 1],
-                    tag.to_string(),
-                ),
-                None => (reference, "latest".to_string()),
-            }
-        }
+    let Ok(r) = reference.parse::<Reference>() else {
+        return "kit.tar.gz".into();
     };
-    let repo = path.rsplit('/').next().unwrap_or(path);
+    let repo = r.repository().rsplit('/').next().unwrap_or("kit");
+    let version: String = match r.digest() {
+        Some(d) => d.trim_start_matches("sha256:").chars().take(12).collect(),
+        None => r.tag().unwrap_or("latest").into(),
+    };
     format!("{repo}-{version}.tar.gz")
 }
 
-/// REF parsed for a push, which needs an explicit tag.
+/// REF parsed for a push, which needs a tag written out (`Reference` would default it to
+/// `latest`) and no digest.
 pub(crate) fn tagged_reference(reference: &str) -> Result<Reference> {
-    let last = reference.rsplit('/').next().unwrap_or_default();
-    if reference.contains('@') || !last.contains(':') || !reference.contains('/') {
+    let name = reference.rsplit('/').next().unwrap_or_default();
+    if reference.contains('@') || !name.contains(':') {
         bail!("invalid reference: {reference} needs a tag (registry/repo:tag)");
     }
     trust::normalise(reference)?;

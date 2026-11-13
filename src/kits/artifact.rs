@@ -261,21 +261,16 @@ pub fn unpack_files(tar_gz: &[u8], into: &Path) -> Result<()> {
     let mut a = tar::Archive::new(flate2::read::GzDecoder::new(tar_gz));
     for e in a.entries().context("reading the kit's files layer")? {
         let mut e = e.context("reading the kit's files layer")?;
-        let raw = e.path_bytes().into_owned();
-        let shown = String::from_utf8_lossy(&raw).into_owned();
+        let shown = String::from_utf8_lossy(&e.path_bytes()).into_owned();
         let kind = e.header().entry_type();
         if kind.is_dir() {
             continue;
         }
-        let rel = Path::new(std::str::from_utf8(&raw).unwrap_or_default())
-            .strip_prefix(HOME_IN_LAYER)
+        let rel = std::str::from_utf8(&e.path_bytes())
             .ok()
-            .filter(|r| {
-                !r.as_os_str().is_empty()
-                    && r.components().all(|c| matches!(c, Component::Normal(_)))
-            })
-            .map(Path::to_path_buf);
-        let (Some(rel), true) = (rel, kind.is_file()) else {
+            .and_then(home_relative)
+            .filter(|_| kind.is_file());
+        let Some(rel) = rel else {
             bail!("the kit's files layer has {shown}, outside home/agent or not a regular file");
         };
         let mode = e.header().mode().unwrap_or(0o644) & 0o777;
@@ -291,6 +286,14 @@ pub fn unpack_files(tar_gz: &[u8], into: &Path) -> Result<()> {
         fs::set_permissions(&path, fs::Permissions::from_mode(mode))?;
     }
     Ok(())
+}
+
+/// `X` of a layer path `home/agent/X`; `None` for anything else (`..`, an absolute path,
+/// `home/agent` itself).
+fn home_relative(path: &str) -> Option<PathBuf> {
+    let rel = Path::new(path).strip_prefix(HOME_IN_LAYER).ok()?;
+    let plain = rel.components().all(|c| matches!(c, Component::Normal(_)));
+    (plain && !rel.as_os_str().is_empty()).then(|| rel.to_path_buf())
 }
 
 #[cfg(test)]
