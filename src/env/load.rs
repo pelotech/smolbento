@@ -50,6 +50,14 @@ pub fn load(paths: &[String], args: &ArgInputs, cwd: &Path, home: &Path) -> Resu
         if let Some(Value::String(s)) = v.get("workspace") {
             v["workspace"] = serde_json::json!({ "path": s });
         }
+        // These two replace the earlier value; other lists concatenate.
+        for key in ["entrypoint", "cmd"] {
+            if v.get(key).is_some_and(Value::is_array)
+                && let Some(base) = merged.as_object_mut()
+            {
+                base.remove(key);
+            }
+        }
         merge(&mut merged, v);
     }
     let file: EnvFile =
@@ -267,21 +275,53 @@ fn check_merged(f: &EnvFile, first: &str) -> Result<()> {
         };
         bail!("invalid {first}: secret \"{name}\": {why}");
     }
+    if let Some(l) = &f.lifecycle {
+        for (phase, commands) in l.phases() {
+            for (i, c) in commands.iter().enumerate() {
+                let at = format!("invalid {first}: lifecycle.{}[{i}]", phase.name());
+                if c.command.trim().is_empty() {
+                    bail!("{at}: command is empty");
+                }
+                if let Some(t) = &c.timeout
+                    && let Err(e) = super::lifecycle::parse_timeout(t)
+                {
+                    bail!("{at}: invalid timeout \"{t}\": {e}");
+                }
+            }
+        }
+    }
+    let mut hosts: Vec<String> = Vec::new();
+    for (host, r) in f.registries.iter().flatten() {
+        let at = format!("invalid {first}: registry \"{host}\"");
+        let lower = host.to_ascii_lowercase();
+        if hosts.contains(&lower) {
+            bail!("{at}: the host is listed twice (hosts don't differ by case)");
+        }
+        hosts.push(lower);
+        if host.is_empty() || host.contains("://") || host.contains(['/', '@', ' ']) {
+            bail!("{at}: use a bare registry host like ghcr.io (no scheme or path)");
+        }
+        for (what, s) in [
+            ("secret", Some(&r.secret)),
+            ("username", r.username.as_ref()),
+        ] {
+            let Some(s) = s else { continue };
+            let sources = [s.value.is_some(), s.r#ref.is_some(), s.command.is_some()];
+            if sources.iter().filter(|set| **set).count() != 1 {
+                bail!("{at}: {what} needs exactly one of value, ref or command");
+            }
+        }
+    }
     Ok(())
 }
 
 /// Fields that parse but aren't implemented: one line each, exit 2.
 fn check_supported(f: &EnvFile) -> Result<()> {
-    let mut bad: Vec<String> = [
-        ("lifecycle", f.lifecycle.is_some()),
-        ("bindings", f.bindings.is_some()),
-        ("registries", f.registries.is_some()),
-        ("mcp", f.mcp.is_some()),
-    ]
-    .iter()
-    .filter(|(_, set)| *set)
-    .map(|(n, _)| n.to_string())
-    .collect();
+    let mut bad: Vec<String> = [("bindings", f.bindings.is_some()), ("mcp", f.mcp.is_some())]
+        .iter()
+        .filter(|(_, set)| *set)
+        .map(|(n, _)| n.to_string())
+        .collect();
     if let Some(o) = &f.sandbox_options {
         let opts = [
             ("profile", o.profile.is_some()),
@@ -738,18 +778,78 @@ mod tests {
         let t = T::new();
         t.write(
             "proj/a.yaml",
-            &format!("{MIN}lifecycle:\n  onCreate: x\nmcp:\n  - a\nsandboxOptions:\n  gpu: true\n  pullPolicy: always\n"),
+            &format!("{MIN}bindings:\n  github: {{}}\nmcp:\n  - a\nsandboxOptions:\n  gpu: true\n  pullPolicy: always\n"),
         );
         let e = t.load(&["a.yaml"], &none()).err().unwrap();
         assert!(e.downcast_ref::<Unsupported>().is_some());
         assert_eq!(
             e.to_string(),
-            "env: lifecycle is not supported yet\nenv: mcp is not supported yet\nenv: sandboxOptions.gpu is not supported yet\nenv: sandboxOptions.pullPolicy is not supported yet"
+            "env: bindings is not supported yet\nenv: mcp is not supported yet\nenv: sandboxOptions.gpu is not supported yet\nenv: sandboxOptions.pullPolicy is not supported yet"
         );
         t.write(
             "proj/a.yaml",
             &format!("{MIN}sandboxOptions:\n  pullPolicy: missing\n"),
         );
         t.load(&["a.yaml"], &none()).unwrap();
+    }
+
+    #[test]
+    fn entrypoint_and_cmd_replace_while_lifecycle_lists_concatenate() {
+        let t = T::new();
+        t.write(
+            "proj/a.yaml",
+            &format!(
+                "{MIN}entrypoint: [a, b]\ncmd: [c]\nlifecycle:\n  initialize:\n    - command: one\n      workdir: ./sub\n"
+            ),
+        );
+        t.write(
+            "proj/b.yaml",
+            "entrypoint: [z]\nlifecycle:\n  initialize:\n    - command: two\n      timeout: 5s\n",
+        );
+        let l = t.load(&["a.yaml", "b.yaml"], &none()).unwrap();
+        assert_eq!(l.file.entrypoint, Some(vec!["z".to_string()]));
+        assert_eq!(l.file.cmd, Some(vec!["c".to_string()]));
+        let init = &l.file.lifecycle.as_ref().unwrap().initialize;
+        let commands: Vec<&str> = init.iter().map(|c| c.command.as_str()).collect();
+        assert_eq!(commands, ["one", "two"]);
+        // Relative to the declaring file.
+        let sub = l.project_dir.join("sub").display().to_string();
+        assert_eq!(init[0].workdir.as_deref(), Some(sub.as_str()));
+        assert_eq!(init[1].timeout.as_deref(), Some("5s"));
+    }
+
+    #[test]
+    fn lifecycle_and_registries_are_checked() {
+        let t = T::new();
+        for (body, want) in [
+            (
+                "lifecycle:\n  initialize:\n    - command: \" \"\n",
+                "lifecycle.initialize[0]: command is empty",
+            ),
+            (
+                "lifecycle:\n  preRemove:\n    - command: x\n      timeout: soon\n",
+                "lifecycle.preRemove[0]: invalid timeout \"soon\": invalid duration \"soon\"",
+            ),
+            (
+                "registries:\n  https://ghcr.io:\n    secret: {value: x}\n",
+                "registry \"https://ghcr.io\": use a bare registry host like ghcr.io",
+            ),
+            (
+                "registries:\n  ghcr.io:\n    secret: {value: x}\n  GHCR.io:\n    secret: {value: y}\n",
+                "the host is listed twice",
+            ),
+            (
+                "registries:\n  ghcr.io:\n    secret: {value: x, command: y}\n",
+                "registry \"ghcr.io\": secret needs exactly one of value, ref or command",
+            ),
+            (
+                "registries:\n  ghcr.io:\n    secret: {value: x}\n    username: {}\n",
+                "registry \"ghcr.io\": username needs exactly one of value, ref or command",
+            ),
+        ] {
+            t.write("proj/a.yaml", &format!("{MIN}{body}"));
+            let e = t.load(&["a.yaml"], &none()).err().unwrap().to_string();
+            assert!(e.contains(want), "{e}");
+        }
     }
 }

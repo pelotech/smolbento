@@ -83,25 +83,24 @@ pub fn run<R: Runner>(ctx: &mut Ctx<R>, a: &RunArgs) -> Result<i32> {
             sb.name()
         );
     }
-    // The agent's command: a workload kit's, else the preset's. Looked up before the start, so a
-    // sandbox with no known agent isn't started and left running.
-    let command: Option<Vec<String>> = match (&sb.meta.command, a.detach) {
-        (_, true) => None,
-        (Some(c), false) => Some(c.clone()),
-        (None, false) => Some(
-            agents::find(&sb.meta.agent)
-                .with_context(|| {
-                    format!(
-                        "sandbox '{}' has no known agent ('{}')",
-                        sb.name(),
-                        sb.meta.agent
-                    )
-                })?
-                .command
-                .iter()
-                .map(|s| s.to_string())
-                .collect(),
-        ),
+    // What to launch, with the arguments given: an environment's `entrypoint`, else the agent's
+    // command (a workload kit's, else the preset's). Looked up before the start, so a sandbox
+    // with no known agent isn't started and left running.
+    let command: Option<Vec<String>> = match (&a.entrypoint, &sb.meta.command, a.detach) {
+        (_, _, true) => None,
+        (Some(e), _, false) => Some([e.as_slice(), a.agent_args.as_slice()].concat()),
+        (None, Some(c), false) => Some(agents::command_with_args(c, &a.agent_args)),
+        (None, None, false) => {
+            let preset = agents::find(&sb.meta.agent).with_context(|| {
+                format!(
+                    "sandbox '{}' has no known agent ('{}')",
+                    sb.name(),
+                    sb.meta.agent
+                )
+            })?;
+            let command: Vec<String> = preset.command.iter().map(|s| s.to_string()).collect();
+            Some(agents::command_with_args(&command, &a.agent_args))
+        }
     };
     // A closed terminal must not end this process once the sandbox may be running: it has the
     // cleanup below to do. The agent still ends with the terminal (`interactive` gives it the
@@ -159,7 +158,7 @@ fn attach<R: Runner>(ctx: &Ctx<R>, a: &RunArgs, sb: &Sandbox, command: Vec<Strin
         workdir: Some(sb.workdir()),
         interactive: true,
         tty: ctx.stdin_tty,
-        cmd: agents::command_with_args(&command, &a.agent_args),
+        cmd: command,
         ..Default::default()
     };
     spec.env.extend(a.session_env.iter().cloned());

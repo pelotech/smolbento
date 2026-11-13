@@ -1,0 +1,45 @@
+---
+source: src/cli/env_spec.rs
+expression: "plan.replace(&t.root(), \"<root>\")"
+---
+ENVIRONMENT
+  Name:  envm-life
+  File:  <root>/proj/sbxenv.yaml
+
+SANDBOX
+  + envm-life
+      agent: shell
+
+WORKSPACES
+  ! <root>/proj — present, not recorded as applied, needs your approval
+
+AGENT LAUNCH
+  + entrypoint
+      argv: "[\"/bin/sh\",\"-c\"]"
+  + cmd
+      argv: "[\"echo started; sleep 600\"]"
+
+REGISTRIES
+  + registry.example.invalid
+      secret.command: echo not-a-real-token
+      secret.workdir: fresh host temporary directory
+      username.value: sha256:2a59d59e3809f827ce709d3815e3950eef4a6a93af5557a93a7fdfba71460843
+
+LIFECYCLE
+  + initialize: pwd
+      workdir: <root>/proj
+      name: vars
+      envFiles[0]: <root>/proj/sbxenv.yaml
+  + initialize: echo second
+      workdir: <root>/proj/sub
+      timeout: 5s
+      envFiles[0]: <root>/proj/sbxenv.yaml
+  + postCreate: echo post-create
+      workdir: <root>/proj
+      envFiles[0]: <root>/proj/sbxenv.yaml
+  ! preRemove: echo pre-remove; exit 3 — waiting for this environment's removal, needs your approval
+      workdir: <root>/proj
+      envFiles[0]: <root>/proj/sbxenv.yaml
+
+  7 to add · 0 to change · 0 to destroy · 2 need approval
+  ! this plan runs commands on this machine, outside the sandbox, with your own privileges

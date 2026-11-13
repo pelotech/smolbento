@@ -6,9 +6,12 @@ use anyhow::{Context, Result, bail};
 
 use super::SandboxOpts;
 use crate::agents;
-use crate::env::file::{EnvFile, KitEntry, PinnedKit, Port, SecretDecl, Workspace};
+use crate::env::file::{
+    EnvFile, KitEntry, Lifecycle, PinnedKit, Port, RegistryDecl, SecretDecl, Workspace,
+};
+use crate::env::lifecycle::{Phase, Vars};
 use crate::env::load::Loaded;
-use crate::env::plan::{self, HOST_COMMANDS, Line, Marker, Resource, render};
+use crate::env::plan::{HOST_COMMANDS, Line, Marker, Resource, When, render};
 use crate::sandbox::{name as sandbox_name, options};
 use crate::secrets::SecretsFile;
 use crate::util::sha256_digest;
@@ -23,6 +26,13 @@ pub struct EnvSpec {
     pub env: Vec<(String, String)>,
     /// Sorted by service.
     pub secrets: Vec<(String, SecretDecl)>,
+    /// Registry host to its login, sorted by host.
+    pub registries: Vec<(String, RegistryDecl)>,
+    /// Host commands, each with an absolute working directory.
+    pub lifecycle: Lifecycle,
+    /// What `env run` launches in place of the agent's program, and with which arguments.
+    pub entrypoint: Option<Vec<String>>,
+    pub cmd: Option<Vec<String>>,
 }
 
 /// Command-line flags that override the file.
@@ -173,18 +183,37 @@ pub fn spec(loaded: &Loaded, overrides: &Overrides, secrets: &SecretsFile) -> Re
         opts,
         env,
         secrets: secret_decls,
+        registries: f
+            .registries
+            .clone()
+            .unwrap_or_default()
+            .into_iter()
+            .collect(),
+        lifecycle: lifecycle(loaded),
+        entrypoint: f.entrypoint.clone(),
+        cmd: f.cmd.clone(),
     })
 }
 
-/// The `rm` plan: the sandbox and the services scoped to it, all to destroy. Needs only the name,
-/// so it works when the rest of the file (workspace, kits) no longer checks out.
-pub fn remove_summary(loaded: &Loaded, name: &str, scoped: &[String]) -> String {
-    let resource = |section: &str, name: &str| {
+/// The plan section of the host commands.
+pub const LIFECYCLE: &str = "LIFECYCLE";
+
+/// The `rm` plan: the sandbox and what is scoped to it (`secrets`, `registries`), all to
+/// destroy, and the `pre_remove` commands to run.
+pub fn remove_summary(
+    sandbox: Option<&str>,
+    secrets: &[String],
+    registries: &[String],
+    pre_remove: &[Resource],
+) -> String {
+    let gone = |section: &str, name: &str| {
         Line::new(Marker::Destroy, &Resource::new(section, name, Vec::new()))
     };
-    let mut lines = vec![resource("SANDBOX", name)];
-    lines.extend(scoped.iter().map(|s| resource("SECRETS", s)));
-    header(loaded, name) + &render(&lines, HOST_COMMANDS)
+    let mut lines: Vec<Line> = sandbox.iter().map(|n| gone("SANDBOX", n)).collect();
+    lines.extend(secrets.iter().map(|s| gone("SECRETS", s)));
+    lines.extend(registries.iter().map(|h| gone("REGISTRIES", h)));
+    lines.extend(pre_remove.iter().map(|r| Line::new(Marker::Run, r)));
+    render(&lines, HOST_COMMANDS)
 }
 
 /// The `ENVIRONMENT` block: name and file(s).
@@ -256,21 +285,31 @@ pub fn resources(loaded: &Loaded, spec: &EnvSpec) -> Vec<Resource> {
         });
     }
 
+    // Applied by every `env run`, so listed every time. sbx prints the list as quoted JSON.
+    for (name, argv) in [("entrypoint", &spec.entrypoint), ("cmd", &spec.cmd)] {
+        if let Some(argv) = argv {
+            let json = serde_json::to_string(argv).unwrap_or_default();
+            out.push(Resource {
+                when: When::EveryRun,
+                ..Resource::new(
+                    "AGENT LAUNCH",
+                    name,
+                    vec![field("argv", &format!("{json:?}"))],
+                )
+            });
+        }
+    }
+
     for (k, v) in &spec.env {
-        out.push(Resource::new(plan::ENV, k, vec![field("value", v)]));
+        out.push(Resource {
+            when: When::Live,
+            ..Resource::new("ENV", k, vec![field("value", v)])
+        });
     }
 
     for (service, s) in &spec.secrets {
-        let mut fields = match (&s.value, &s.r#ref, &s.command) {
-            // Never the value: the plan is printed, and recorded when approved.
-            (Some(v), _, _) => vec![field("value", &sha256_digest(v.as_bytes()))],
-            (_, Some(r), _) => vec![field("ref", r)],
-            (_, _, Some(c)) => vec![
-                field("command", c),
-                field("workdir", "fresh host temporary directory"),
-            ],
-            _ => vec![],
-        };
+        // Never the value: the plan is printed, and recorded when approved.
+        let mut fields = source_fields("", s);
         // Whether a command or reference is resolved once or at every start.
         if s.snapshot == Some(true) {
             fields.push(field("snapshot", "true"));
@@ -281,6 +320,18 @@ pub fn resources(loaded: &Loaded, spec: &EnvSpec) -> Vec<Resource> {
         out.push(Resource {
             host_command: s.command.is_some(),
             ..Resource::new("SECRETS", service, fields)
+        });
+    }
+
+    for (host, r) in &spec.registries {
+        let mut fields = source_fields("secret.", &r.secret);
+        if let Some(u) = &r.username {
+            fields.extend(source_fields("username.", u));
+        }
+        out.push(Resource {
+            host_command: r.secret.command.is_some()
+                || r.username.as_ref().is_some_and(|u| u.command.is_some()),
+            ..Resource::new("REGISTRIES", host, fields)
         });
     }
 
@@ -296,7 +347,81 @@ pub fn resources(loaded: &Loaded, spec: &EnvSpec) -> Vec<Resource> {
             fields,
         ));
     }
+    out.extend(lifecycle_resources(loaded, &spec.lifecycle));
     out
+}
+
+/// The file's host commands, each with its working directory: the project directory unless it
+/// names one.
+pub fn lifecycle(loaded: &Loaded) -> Lifecycle {
+    let mut lifecycle = loaded.file.lifecycle.clone().unwrap_or_default();
+    let project = loaded.project_dir.display().to_string();
+    for c in lifecycle.commands_mut() {
+        c.workdir.get_or_insert_with(|| project.clone());
+    }
+    lifecycle
+}
+
+/// What host commands learn about the environment (`SBX_*`).
+pub fn vars(loaded: &Loaded, name: &str) -> Vars {
+    let f = &loaded.file;
+    Vars {
+        files: loaded.files.clone(),
+        project_dir: loaded.project_dir.clone(),
+        sandbox: name.to_string(),
+        agent: f.agent.clone().unwrap_or_default(),
+        workspace: workspace(f).map(|(path, _)| path.to_string()),
+    }
+}
+
+/// The `LIFECYCLE` section: one resource per command, identified by its phase and position.
+pub fn lifecycle_resources(loaded: &Loaded, lifecycle: &Lifecycle) -> Vec<Resource> {
+    let field = |label: &str, value: &str| (label.to_string(), value.to_string());
+    let mut out = Vec::new();
+    for (phase, commands) in lifecycle.phases() {
+        let when = match phase {
+            Phase::Initialize => When::EveryRun,
+            Phase::PostCreate => When::Create,
+            Phase::PreRemove => When::Removal,
+        };
+        let phase = phase.name();
+        for (i, c) in commands.iter().enumerate() {
+            let mut fields = vec![field("workdir", c.workdir.as_deref().unwrap_or_default())];
+            if let Some(name) = &c.name {
+                fields.push(field("name", name));
+            }
+            if let Some(timeout) = &c.timeout {
+                fields.push(field("timeout", timeout));
+            }
+            for (n, file) in loaded.files.iter().enumerate() {
+                fields.push(field(
+                    &format!("envFiles[{n}]"),
+                    &file.display().to_string(),
+                ));
+            }
+            out.push(Resource {
+                id: format!("{phase}[{i}]"),
+                when,
+                host_command: true,
+                ..Resource::new(LIFECYCLE, &format!("{phase}: {}", c.command), fields)
+            });
+        }
+    }
+    out
+}
+
+/// A secret source as the plan shows it, under `prefix`: never a literal value.
+fn source_fields(prefix: &str, s: &SecretDecl) -> Vec<(String, String)> {
+    let field = |label: &str, value: &str| (format!("{prefix}{label}"), value.to_string());
+    match (&s.value, &s.r#ref, &s.command) {
+        (Some(v), _, _) => vec![field("value", &sha256_digest(v.as_bytes()))],
+        (_, Some(r), _) => vec![field("ref", r)],
+        (_, _, Some(c)) => vec![
+            field("command", c),
+            field("workdir", "fresh host temporary directory"),
+        ],
+        _ => vec![],
+    }
 }
 
 /// The primary workspace's path and `clone`.
@@ -640,7 +765,33 @@ mod tests {
         t.write("proj/sbxenv.yaml", &format!("{HEAD}agent: claude\n"));
         insta::assert_snapshot!(summarise(&t, &["sbxenv.yaml"]));
         let l = t.loaded(&["sbxenv.yaml"]);
-        let removed = remove_summary(&l, "claude-proj", &["github".into(), "openai".into()]);
+        let secrets = ["github".to_string(), "openai".to_string()];
+        let removed =
+            header(&l, "claude-proj") + &remove_summary(Some("claude-proj"), &secrets, &[], &[]);
         insta::assert_snapshot!(removed.replace(&t.root(), "<root>"));
+    }
+
+    #[test]
+    fn summary_of_lifecycle_registries_and_launch() {
+        // The measured sbx plan for this file is in the notes.
+        let t = T::new();
+        t.write(
+            "proj/sbxenv.yaml",
+            &format!(
+                "{HEAD}name: envm-life\nagent: shell\nworkspace: .\n\
+                 entrypoint: [\"/bin/sh\", \"-c\"]\ncmd: [\"echo started; sleep 600\"]\n\
+                 registries:\n  registry.example.invalid:\n    username:\n      value: someone\n    \
+                 secret:\n      command: echo not-a-real-token\n\
+                 lifecycle:\n  initialize:\n    - name: vars\n      command: pwd\n    \
+                 - command: echo second\n      workdir: ./sub\n      timeout: 5s\n  \
+                 postCreate:\n    - command: echo post-create\n  \
+                 preRemove:\n    - command: echo pre-remove; exit 3\n"
+            ),
+        );
+        let l = t.loaded(&["sbxenv.yaml"]);
+        let s = spec(&l, &Overrides::default(), &SecretsFile::default()).unwrap();
+        let lines = crate::env::approval::lines(None, &resources(&l, &s), false);
+        let plan = header(&l, &s.name) + &render(&lines, HOST_COMMANDS);
+        insta::assert_snapshot!(plan.replace(&t.root(), "<root>"));
     }
 }

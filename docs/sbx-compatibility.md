@@ -120,15 +120,23 @@ flags, and the registered servers are written into the agent's own MCP config at
 
 ## Environment files
 
-`env create`, `env run`, `env exec` and `env rm` read `sbxenv.yaml` as sbx v0.49.2 does (v0.50.1
-for `mounts`), for the fields smolbento supports. These exit 2 and name the field or command:
-`lifecycle`, `bindings`, `registries`, `mcp`, `sandboxOptions.profile|display|
-gpu|usb|writableEnvFiles`, and `pullPolicy` other than `missing`.
+`env plan`, `env create`, `env run`, `env exec` and `env rm` read `sbxenv.yaml` as sbx does
+(measured on v0.49.2, v0.50.1 for `mounts`, and v0.53.0 for the plan, approvals, `lifecycle`,
+`registries`, `entrypoint` and `cmd`), for the fields smolbento supports. These exit 2 and name
+the field: `bindings`, `mcp`, `sandboxOptions.profile|display|gpu|usb|writableEnvFiles`, and
+`pullPolicy` other than `missing`.
 
 | Area | sbx | smolbento |
 |---|---|---|
 | Approval | Remembered per environment until the plan changes; `--force` approves one call | Same, measured on sbx 0.53. The record is smolbento's own file; sbx's records aren't read |
-| Unchanged host commands | Ask on every `env create` and `env run`, also when attaching to an existing sandbox, unless `env.rememberHostCommands` is on | Ask only when the sandbox is about to be created: that is when the file's commands are taken up. An existing sandbox keeps running the commands stored at the create you approved. The same setting turns the question off |
+| Unchanged host commands | Ask on every `env create` and `env run` unless `env.rememberHostCommands` is on | Same |
+| Lifecycle commands | `initialize` on every create and run, `postCreate` after a create, `preRemove` on `env rm` (also when the sandbox is gone); `SBX_*` variables; the first failure stops the phase | Same, with sbx's output for a terminal and without one, and its error texts |
+| Lifecycle timeouts and background children | Go durations (`90s`, `1.5s`, `1m30s`); a command whose background child still holds its output five seconds after it exits fails, and the child is ended | Same, with sbx's error texts. Ctrl-C ends the running command and what it started (sbx not measured) |
+| Lifecycle in the plan of an existing sandbox | Lists unchanged `postCreate`/`preRemove` commands as `○ … — unchanged`; a changed command repeats its unchanged fields | Unchanged ones aren't listed; a changed command shows `command: old -> new` and the fields that changed |
+| The removal plan after `preRemove` | Regenerated, and the removal stops if the commands changed it (documented, not measured) | Not regenerated |
+| `entrypoint`, `cmd` | What `env run` launches; plain `run` ignores them; `AGENT LAUNCH` is listed as `+` in every plan | Same |
+| `registries` | Stored for the sandbox, removed by `env rm` | Same. Resolved once at create and stored as a value; used for that sandbox's image and kit pulls ahead of a host-wide login. sbx's stored form wasn't examined |
+| `PROVISION` output | Ends with `✓ environment — provisioned` | That line isn't printed |
 | Plan against the last apply | Keeps a list of what was applied: after a `--force` apply the plan shows `! NAME — unchanged, needs your approval`; a change that waits for a re-create keeps showing as `recorded as applied, no longer present, waits for the next create`; an unchanged secret shows as `○ NAME — unchanged` | Compares with what was approved and asks smolvm whether the sandbox exists: a change shows as `~` (outside `ENV` with `— waits for the next create`) until it is approved, then no longer; unchanged resources aren't listed |
 | `--clone` in the plan | A `GIT REMOTE` section | `clone: true` on the workspace |
 | Port names in the plan | `8080/tcp4` | `8080/tcp` |
@@ -137,7 +145,8 @@ gpu|usb|writableEnvFiles`, and `pullPolicy` other than `missing`.
 | A local kit's contents | Not measured | Not part of the approval: the plan names the kit's path |
 | Plain `rm` of an environment's sandbox | Keeps the approval | Same; `env rm` forgets it |
 | `refresh`, `backend` on a secret | Used | Accepted, no effect: smolbento resolves at every start |
-| `--skip-host-commands`, `--prune-bindings` | Skip lifecycle and MCP commands; remove bindings | Accepted, no effect (there are no lifecycle commands or bindings yet). Secret `command:` sources run either way, as in sbx |
+| `--skip-host-commands` | Skips lifecycle (and MCP) commands with a warning per phase; an approved environment still applies without asking, and the record keeps its lifecycle entries | Same for lifecycle. Secret and registry `command:` sources run either way, as in sbx |
+| `--prune-bindings` | Removes the environment's bindings | Accepted, no effect (there are no bindings yet) |
 | Unknown secret service | Accepted by `env plan` | Refused at create, with the error `sbt secret set` gives |
 | `secret ls` with registry credentials | `SECRET` shows the first characters | A separate `SCOPE TYPE NAME SECRET` table; `SECRET` is always `(stored)`, never part of a value. No `--json` on `secret ls` yet |
 | Workload kit as `agent` | The kit whose name equals `agent` | A local kit is matched by its directory name, a registry kit by the last part of its repository name |

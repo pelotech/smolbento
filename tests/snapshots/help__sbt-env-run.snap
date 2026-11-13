@@ -35,7 +35,7 @@ Options:
           File of name=value kit arguments, one per line (can be repeated); --kit-arg overrides
 
       --skip-host-commands
-          Skip the host lifecycle commands the environment declares (smolbento runs none)
+          Skip the host lifecycle commands the environment declares
 
   -f, --force
           Apply the environment plan without asking

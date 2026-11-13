@@ -148,11 +148,16 @@ access, so load only kits you trust.
   `Approve this plan? (y/N)` before running anything. `--force` skips the question; use it only
   on files you trust.
 - An approval is remembered for that environment and covers exactly the plan you saw: any change
-  to the files or to a resource asks again. A create that would run host commands asks every
-  time, changed or not, unless you turn on `env.rememberHostCommands`.
-- The file's commands are taken up only when the sandbox is created. Attaching to an existing
-  sandbox with `env run` doesn't ask about them: its starts run the commands stored when it was
-  created (which you approved, or let through with `--force`), not what the file says now.
+  to the files or to a resource asks again. A file that declares host commands (lifecycle
+  commands, or `command:` sources of secrets and registries) asks on every `env create` and
+  `env run`, changed or not, unless you turn on `env.rememberHostCommands`.
+- Lifecycle commands run on your machine with your privileges and `sbt`'s environment. They get
+  neither the file's `env` values nor any secret. `--skip-host-commands` skips them. A command
+  with a `timeout` is killed with everything it started when the time is up.
+- `entrypoint` and `cmd` choose what `env run` launches inside the sandbox; they don't run on
+  your machine.
+- A `registries` login is resolved once at create and stored like other secret values, for that
+  sandbox only. It is removed with the sandbox (`env rm` or `rm`).
 - The approval record (`<data dir>/env/<name>.toml`) holds what the plan shows. A literal secret
   appears there only as its SHA-256 digest.
 - Every secret `command:` source (here and in `sbt secret set --command`) runs from a fresh

@@ -2,15 +2,42 @@
 
 use serde::{Deserialize, Serialize};
 
+/// When a resource takes effect.
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum When {
+    /// When the sandbox is created: a change waits for the next create.
+    #[default]
+    Create,
+    /// At once, also in a sandbox that exists (`env`).
+    Live,
+    /// On every `env run`, sandbox or not (`initialize`, the launch command).
+    EveryRun,
+    /// When the environment is removed (`preRemove`).
+    Removal,
+}
+
+impl When {
+    fn is_create(&self) -> bool {
+        *self == When::Create
+    }
+}
+
 /// One thing an environment sets up: a line of the plan with its details. The summary, the plan
 /// and the approval check are all computed from the same list of these.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct Resource {
-    /// The plan section it is listed under (`ENV`, `PORTS`, …). With `name`, its identity.
+    /// The plan section it is listed under (`ENV`, `PORTS`, …). With `id`, its identity.
     pub section: String,
+    /// What tells it from the others of its section when the name can change: a lifecycle
+    /// command is `initialize[0]` whatever its text. Otherwise the name.
+    #[serde(default)]
+    pub id: String,
     pub name: String,
     /// The detail lines, as label and value. A literal secret is its digest, never its value.
     pub fields: Vec<(String, String)>,
+    #[serde(default, skip_serializing_if = "When::is_create")]
+    pub when: When,
     /// A path on the user's machine (a workspace, a mount).
     #[serde(default, skip_serializing_if = "is_false")]
     pub host_path: bool,
@@ -23,8 +50,10 @@ impl Resource {
     pub fn new(section: &str, name: &str, fields: Vec<(String, String)>) -> Resource {
         Resource {
             section: section.into(),
+            id: name.into(),
             name: name.into(),
             fields,
+            when: When::Create,
             host_path: false,
             host_command: false,
         }
@@ -40,7 +69,9 @@ pub enum Marker {
     Add,
     Change,
     Destroy,
-    /// Present already, and not approved.
+    /// A host command that runs again.
+    Run,
+    /// Present already or run later, and not approved.
     Approve,
 }
 
@@ -50,6 +81,7 @@ impl Marker {
             Marker::Add => '+',
             Marker::Change => '~',
             Marker::Destroy => '-',
+            Marker::Run => '>',
             Marker::Approve => '!',
         }
     }
@@ -81,9 +113,6 @@ impl Line {
         }
     }
 }
-
-/// The section whose resources reach a sandbox that already exists.
-pub const ENV: &str = "ENV";
 
 /// The warning under a plan that runs commands on the host.
 pub const HOST_COMMANDS: &str =
@@ -121,9 +150,14 @@ pub fn render(lines: &[Line], host_warning: &str) -> String {
         count(Marker::Change),
         count(Marker::Destroy)
     );
-    let approve = count(Marker::Approve);
-    if approve > 0 {
-        out += &format!(" · {approve} needs approval");
+    let run = count(Marker::Run);
+    if run > 0 {
+        out += &format!(" · {run} to run");
+    }
+    match count(Marker::Approve) {
+        0 => {}
+        1 => out += " · 1 needs approval",
+        n => out += &format!(" · {n} need approval"),
     }
     out.push('\n');
     if lines.iter().any(|l| l.resource.host_command) {
@@ -158,7 +192,8 @@ mod tests {
             ),
             approve,
             Line::new(Marker::Add, &env("A")),
-            Line::new(Marker::Add, &command),
+            Line::new(Marker::Run, &command),
+            Line::new(Marker::Approve, &resource("MOUNTS", "/m", &[])),
             changed,
             Line::new(Marker::Destroy, &env("C")),
         ];
@@ -167,8 +202,9 @@ mod tests {
             "\nSANDBOX\n  + web\n      agent: claude\n\
              \nWORKSPACES\n  ! /w — present, not recorded as applied, needs your approval\n\
              \nENV\n  + A\n      value: 1\n  ~ B\n      value: 1 -> 2\n  - C\n      value: 1\n\
-             \nSECRETS\n  + github\n      command: gh auth token\n\
-             \n  3 to add · 1 to change · 1 to destroy · 1 needs approval\n\
+             \nSECRETS\n  > github\n      command: gh auth token\n\
+             \nMOUNTS\n  ! /m\n\
+             \n  2 to add · 1 to change · 1 to destroy · 1 to run · 2 need approval\n\
              \x20 ! this plan runs commands on this machine, outside the sandbox, with your own privileges\n"
         );
     }

@@ -12,8 +12,8 @@ use reqwest::{StatusCode, Url};
 use serde_json::Value;
 
 use crate::kits::registry::is_loopback;
+use crate::secrets::RegistryEntry;
 use crate::secrets::store::SecretStore;
-use crate::secrets::{RegistryEntry, registry_secret};
 
 /// Docker Hub's names; its token server is `auth.docker.io`.
 const DOCKER_HUB: [&str; 3] = ["docker.io", "index.docker.io", "registry-1.docker.io"];
@@ -273,7 +273,7 @@ pub(crate) fn stored_login(
         return Ok(None);
     };
     let host = &entry.host;
-    let Some(password) = registry_secret(store, host)? else {
+    let Some(password) = store.get(&entry.account())? else {
         bail!(
             "registry secret {host} has no value in {}; set it again with \
              `sbt secret set --registry {host} --password-stdin`",
@@ -342,6 +342,7 @@ mod tests {
             host: host.into(),
             username: user.map(String::from),
             auth_endpoint: endpoint.map(String::from),
+            sandbox: None,
         }
     }
 

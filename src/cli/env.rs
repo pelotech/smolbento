@@ -5,17 +5,23 @@ use std::path::Path;
 
 use anyhow::{Context, Result, anyhow, bail};
 
-use super::env_spec::{EnvSpec, Overrides, header, name, remove_summary, resources, spec};
+use super::env_spec::{
+    EnvSpec, LIFECYCLE, Overrides, header, lifecycle, lifecycle_resources, name, remove_summary,
+    resources, spec, vars,
+};
 use super::{
     Ctx, EnvApplyOpts, EnvCmd, EnvCommon, EnvExecArgs, EnvOverrideOpts, EnvRmArgs, ExecArgs,
     RunArgs, SandboxOpts, SecretSource, Unsupported, confirm_or,
 };
 use crate::env::approval::{self, Need};
-use crate::env::file::SecretDecl;
+use crate::env::file::{HostCommand, SecretDecl};
+use crate::env::lifecycle::{self as host_lifecycle, Phase, Vars};
 use crate::env::load::{ArgInputs, Loaded, load};
-use crate::env::plan::{HOST_COMMANDS, Line, Resource, UNCHANGED_HOST_COMMANDS, render};
+use crate::env::plan::{HOST_COMMANDS, Line, Resource, UNCHANGED_HOST_COMMANDS, When, render};
 use crate::sandbox;
-use crate::secrets::{SecretEntry, SecretsFile, Source, resolve::resolve, scope_for};
+use crate::secrets::{
+    RegistryEntry, SecretEntry, SecretsFile, Source, resolve::resolve, scope_for,
+};
 use crate::smolvm::Runner;
 
 pub fn run<R: Runner>(ctx: &mut Ctx<R>, cmd: EnvCmd) -> Result<i32> {
@@ -50,34 +56,70 @@ impl Planned {
     }
 }
 
+/// `skip_host_commands` leaves the lifecycle commands out of the plan and of both sides of the
+/// approval: skipping them neither approves nor forgets them.
 fn planned<R: Runner>(
     ctx: &Ctx<R>,
     loaded: &Loaded,
     spec: &EnvSpec,
     exists: bool,
+    skip_host_commands: bool,
 ) -> Result<Planned> {
-    let resources = resources(loaded, spec);
-    let record = approval::load(&ctx.paths, &spec.name);
+    let mut resources = resources(loaded, spec);
+    let mut record = approval::load(&ctx.paths, &spec.name);
+    let mut kept = Vec::new();
+    if skip_host_commands {
+        resources.retain(|r| r.section != LIFECYCLE);
+        if let Some(r) = record.take() {
+            kept = r
+                .approved
+                .iter()
+                .filter(|r| r.section == LIFECYCLE)
+                .cloned()
+                .collect();
+            record = Some(r.without(LIFECYCLE));
+        }
+    }
     let need = approval::need(
         record.as_ref(),
         &loaded.files,
         &resources,
-        exists,
         ctx.settings.bool("env.rememberHostCommands")?,
     );
     Ok(Planned {
         lines: approval::lines(record.as_ref(), &resources, exists),
         header: header(loaded, &spec.name),
-        resources,
+        // What a yes records: the plan shown, and the approved commands it left out.
+        resources: resources.into_iter().chain(kept).collect(),
         need,
     })
+}
+
+/// Runs a lifecycle phase, or says it was skipped.
+fn host_phase<R: Runner>(
+    ctx: &Ctx<R>,
+    phase: Phase,
+    commands: &[HostCommand],
+    vars: &Vars,
+    skip: bool,
+) -> Result<()> {
+    if skip {
+        if !commands.is_empty() {
+            eprintln!(
+                "warning: skipping the host commands declared for {} (--skip-host-commands)",
+                phase.name()
+            );
+        }
+        return Ok(());
+    }
+    host_lifecycle::run(&ctx.out, ctx.stdout_tty, phase, commands, vars)
 }
 
 /// Prints what applying would do and whether it would ask. Changes nothing.
 fn env_plan<R: Runner>(ctx: &mut Ctx<R>, c: &EnvCommon, o: &EnvOverrideOpts) -> Result<i32> {
     let (loaded, spec, _) = prepare(ctx, c, o)?;
     let exists = sandbox::find(&ctx.vm, &spec.name)?.is_some();
-    let plan = planned(ctx, &loaded, &spec, exists)?;
+    let plan = planned(ctx, &loaded, &spec, exists, o.skip_host_commands)?;
     let status = match plan.need {
         Need::Changed => "○ not approved yet — applying asks once",
         Need::HostCommands => {
@@ -111,16 +153,42 @@ fn create<R: Runner>(ctx: &mut Ctx<R>, c: &EnvCommon, a: &EnvApplyOpts) -> Resul
             spec.name
         );
     }
-    let plan = planned(ctx, &loaded, &spec, false)?;
+    let skip = a.overrides.skip_host_commands;
+    let plan = planned(ctx, &loaded, &spec, false, skip)?;
     write!(&ctx.out, "{}", plan.text(true))?;
     approve(ctx, &loaded, &spec.name, &plan, a.force)?;
+    let vars = vars(&loaded, &spec.name);
+    host_phase(
+        ctx,
+        Phase::Initialize,
+        &spec.lifecycle.initialize,
+        &vars,
+        skip,
+    )?;
     provision(ctx, &mut secrets, &spec)?;
+    create_sandbox(ctx, &spec, &vars, skip)?;
+    Ok(0)
+}
+
+/// Creates the sandbox and runs `postCreate`. A failure there keeps the sandbox, as in sbx.
+fn create_sandbox<R: Runner>(
+    ctx: &mut Ctx<R>,
+    spec: &EnvSpec,
+    vars: &Vars,
+    skip_host_commands: bool,
+) -> Result<()> {
     let args = super::CreateArgs {
-        targets: spec.targets,
-        opts: spec.opts,
+        targets: spec.targets.clone(),
+        opts: spec.opts.clone(),
         no_progress: false,
     };
-    super::lifecycle::create(ctx, &args)
+    super::lifecycle::create(ctx, &args)?;
+    let commands = &spec.lifecycle.post_create;
+    host_phase(ctx, Phase::PostCreate, commands, vars, skip_host_commands).map_err(|e| {
+        anyhow!(
+            "{e:#}; remove this environment's sandbox and provisioned secrets\n  try: sbt env rm"
+        )
+    })
 }
 
 fn env_run<R: Runner>(
@@ -132,28 +200,34 @@ fn env_run<R: Runner>(
     refuse_cloud(a)?;
     let (loaded, spec, mut secrets) = prepare(ctx, c, &a.overrides)?;
     let exists = sandbox::find(&ctx.vm, &spec.name)?.is_some();
-    let plan = planned(ctx, &loaded, &spec, exists)?;
+    let skip = a.overrides.skip_host_commands;
+    let plan = planned(ctx, &loaded, &spec, exists, skip)?;
     write!(&ctx.out, "{}", plan.text(true))?;
     approve(ctx, &loaded, &spec.name, &plan, a.force)?;
-    let args = if exists {
-        // Attach as it was created, with the file's current env for this session.
-        RunArgs {
-            opts: SandboxOpts {
-                name: Some(spec.name),
-                ..Default::default()
-            },
-            detach,
-            session_env: spec.env,
-            ..Default::default()
-        }
-    } else {
+    let vars = vars(&loaded, &spec.name);
+    host_phase(
+        ctx,
+        Phase::Initialize,
+        &spec.lifecycle.initialize,
+        &vars,
+        skip,
+    )?;
+    if !exists {
+        // Created first and attached to afterwards, so `postCreate` runs in between.
         provision(ctx, &mut secrets, &spec)?;
-        RunArgs {
-            targets: spec.targets,
-            opts: spec.opts,
-            detach,
+        create_sandbox(ctx, &spec, &vars, skip)?;
+    }
+    // Attach as it was created, with the file's current env and launch command for this session.
+    let args = RunArgs {
+        opts: SandboxOpts {
+            name: Some(spec.name),
             ..Default::default()
-        }
+        },
+        detach,
+        session_env: spec.env,
+        entrypoint: spec.entrypoint,
+        agent_args: spec.cmd.unwrap_or_default(),
+        ..Default::default()
     };
     super::run::run(ctx, &args)
 }
@@ -226,21 +300,24 @@ fn env_rm<R: Runner>(ctx: &mut Ctx<R>, a: EnvRmArgs) -> Result<i32> {
         &c.env_arg,
         &c.env_args_file,
     )?;
+    // What is stored for the sandbox, removed with it.
+    let stored = SecretsFile::load(&ctx.paths)?;
     let scope = scope_for(Some(&name));
-    let scoped: Vec<String> = SecretsFile::load(&ctx.paths)?
-        .secrets
-        .into_iter()
-        .filter(|e| e.scope == scope)
-        .map(|e| e.service)
-        .collect();
+    let scoped = stored.secrets.iter().filter(|e| e.scope == scope);
+    let scoped: Vec<String> = scoped.map(|e| e.service.clone()).collect();
+    let registries = stored.registries.iter();
+    let registries = registries.filter(|r| r.sandbox.as_deref() == Some(name.as_str()));
+    let registries: Vec<String> = registries.map(|r| r.host.clone()).collect();
     let all = sandbox::list(&ctx.vm)?;
     let sb = all.iter().find(|sb| sb.name() == name);
-    if sb.is_none() && scoped.is_empty() {
-        // Nothing to remove but the approval, which a plain `rm` of the sandbox leaves.
-        approval::forget(&ctx.paths, &name)?;
-        eprintln!("error: sandbox '{name}' not found\n  try: sbt ls");
-        return Ok(0);
-    }
+    // `preRemove` runs whether or not the sandbox is still there, as in sbx.
+    let lifecycle = lifecycle(&loaded);
+    let skip = a.skip_host_commands;
+    let to_run: Vec<Resource> = lifecycle_resources(&loaded, &lifecycle)
+        .into_iter()
+        .filter(|r| r.when == When::Removal && !skip)
+        .collect();
+    let nothing_stored = sb.is_none() && scoped.is_empty() && registries.is_empty();
     if let Some(sb) = sb {
         let forks = super::lifecycle::remaining_forks(sb, &all, &[&name]);
         if !forks.is_empty() {
@@ -250,23 +327,36 @@ fn env_rm<R: Runner>(ctx: &mut Ctx<R>, a: EnvRmArgs) -> Result<i32> {
             );
         }
     }
-    write!(&ctx.out, "{}", remove_summary(&loaded, &name, &scoped))?;
-    confirm_or(
-        ctx,
-        "Remove?",
-        a.force,
-        "stdin is not a terminal; use --force to skip confirmation",
-    )?;
+    // With nothing to remove and nothing to run there is nothing to confirm.
+    if !(nothing_stored && to_run.is_empty()) {
+        let summary = remove_summary(sb.map(|_| name.as_str()), &scoped, &registries, &to_run);
+        write!(&ctx.out, "{}{summary}", header(&loaded, &name))?;
+        confirm_or(
+            ctx,
+            "Remove?",
+            a.force,
+            "stdin is not a terminal; use --force to skip confirmation",
+        )?;
+    }
+    if nothing_stored {
+        eprintln!("error: sandbox '{name}' not found\n  try: sbt ls");
+    }
+    let vars = vars(&loaded, &name);
+    if let Err(e) = host_phase(ctx, Phase::PreRemove, &lifecycle.pre_remove, &vars, skip) {
+        eprintln!("warning: the preRemove commands did not finish: {e:#}");
+    }
     match sb {
         Some(sb) => {
             super::lifecycle::delete_sandbox(ctx, sb, true)?;
             writeln!(&ctx.out, "Removed sandbox {name}")?;
         }
         // No sandbox: only the secrets (and any stale policy) are left to forget.
-        None => super::secret::forget_sandbox(ctx, &name, true)?,
+        None if !nothing_stored => super::secret::forget_sandbox(ctx, &name, true)?,
+        None => {}
     }
+    // Also when nothing else was left: a plain `rm` of the sandbox leaves the approval.
     approval::forget(&ctx.paths, &name)?;
-    if !scoped.is_empty() {
+    if !scoped.is_empty() || !registries.is_empty() {
         writeln!(&ctx.out, "Removed secrets scoped to {name}")?;
     }
     Ok(0)
@@ -348,7 +438,7 @@ fn shell_word(s: &str) -> String {
 /// Stores the file's secrets at the sandbox's scope. Every source is checked before any is
 /// stored; a later failure (the create, say) leaves them for `env rm`, as in sbx.
 fn provision<R: Runner>(ctx: &Ctx<R>, secrets: &mut SecretsFile, spec: &EnvSpec) -> Result<()> {
-    if spec.secrets.is_empty() {
+    if spec.secrets.is_empty() && spec.registries.is_empty() {
         return Ok(());
     }
     let scope = scope_for(Some(&spec.name));
@@ -357,6 +447,24 @@ fn provision<R: Runner>(ctx: &Ctx<R>, secrets: &mut SecretsFile, spec: &EnvSpec)
         let source = source(ctx, service, &scope, decl)
             .map_err(|e| anyhow!("secret \"{service}\": {e:#}"))?;
         sources.push((service, source));
+    }
+    // A registry login is a stored value: its sources are resolved once, now.
+    let mut logins = Vec::new();
+    for (host, decl) in &spec.registries {
+        let resolve = |what: &str, d: &SecretDecl| {
+            source_value(ctx, d).map_err(|e| anyhow!("registry \"{host}\": {what}: {e:#}"))
+        };
+        let entry = RegistryEntry {
+            host: host.to_ascii_lowercase(),
+            username: decl
+                .username
+                .as_ref()
+                .map(|u| resolve("username", u))
+                .transpose()?,
+            auth_endpoint: None,
+            sandbox: Some(spec.name.clone()),
+        };
+        logins.push((entry, resolve("secret", &decl.secret)?));
     }
     let mut out = &ctx.out;
     writeln!(out, "\nPROVISION\n  Scope:  {}", spec.name)?;
@@ -369,7 +477,30 @@ fn provision<R: Runner>(ctx: &Ctx<R>, secrets: &mut SecretsFile, spec: &EnvSpec)
         super::secret::store(ctx, secrets, service, source)?;
         writeln!(out, "  ✓ {service} — secret · {kind}")?;
     }
+    for (entry, value) in logins {
+        let host = entry.host.clone();
+        super::secret::put_registry(ctx, secrets, entry, &value)?;
+        writeln!(out, "  ✓ {host} — registry")?;
+    }
     Ok(())
+}
+
+/// The value of a registry source now: a literal, or what its reference or command gives.
+fn source_value<R: Runner>(ctx: &Ctx<R>, decl: &SecretDecl) -> Result<String> {
+    let source = match (&decl.value, &decl.r#ref, &decl.command) {
+        (Some(v), _, _) => return Ok(v.clone()),
+        (_, Some(r), _) => Source::Ref {
+            reference: r.clone(),
+        },
+        (_, _, Some(c)) => Source::Command { command: c.clone() },
+        _ => bail!("needs a value, ref or command"),
+    };
+    let entry = SecretEntry {
+        service: "registry".into(),
+        scope: "global".into(),
+        source,
+    };
+    resolve(&entry, &*ctx.store)
 }
 
 /// What `secret set --sandbox` would take for `decl`: a snapshot becomes its value now; a
@@ -737,8 +868,8 @@ mod tests {
     #[test]
     fn run_of_a_new_sandbox_creates_it_and_detaches() {
         let mut t = with_file(FILE);
-        // env run looks the name up, run twice more, and provision::create once more.
-        missing_then_created(&t, 4);
+        // env run looks the name up, and the create once more; the attach finds it.
+        missing_then_created(&t, 2);
         assert_eq!(t.sbt(&["env", "run", "-d", "-f"]).unwrap(), 0);
         assert_eq!(creates(&t).len(), 1);
         assert!(t.stdout().ends_with("claude-proj\n"));
@@ -1039,24 +1170,23 @@ mod tests {
     }
 
     #[test]
-    fn unchanged_host_commands_ask_before_a_create_unless_remembered() {
+    fn unchanged_host_commands_ask_every_time_unless_remembered() {
         let mut t = approved(&format!("{FILE}{COMMAND_SECRET}"));
-        // Attaching runs no command: nothing to ask.
-        t.sbt(&["env", "run", "-d"]).unwrap();
-        t.stdout();
-
-        missing_then_created(&t, 2);
         let file = t.ctx.cwd.join("sbxenv.yaml").display().to_string();
-        assert_eq!(
-            t.sbt_err(&["env", "create"]),
+        let refusal = |cmd: &str| {
             format!(
                 "{file} declares commands that run on this machine, which must be approved on \
                  every invocation; approve the plan by running it in a terminal or with --force \
                  (-f), or remember approval until the plan changes with the setting below\n  \
-                 try: sbt env create --force\n   \
+                 try: sbt env {cmd} --force\n   \
                  or: sbt settings set env.rememberHostCommands true"
             )
-        );
+        };
+        // As in sbx: also when attaching, where the secret's command doesn't run again.
+        assert_eq!(t.sbt_err(&["env", "run", "-d"]), refusal("run -d"));
+        t.stdout();
+        missing_then_created(&t, 2);
+        assert_eq!(t.sbt_err(&["env", "create"]), refusal("create"));
         let out = t.stdout();
         assert!(
             out.ends_with(
@@ -1071,6 +1201,8 @@ mod tests {
             .settings
             .set("env.rememberHostCommands", "true")
             .unwrap();
+        existing(&t, "running");
+        t.sbt(&["env", "run", "-d"]).unwrap();
         missing_then_created(&t, 2);
         t.sbt(&["env", "create"]).unwrap();
     }
@@ -1107,6 +1239,10 @@ mod tests {
         const IP: &str = "    hostIP: 127.0.0.1\n";
         for changed in [file(false, IP), file(true, "")] {
             let mut t = approved(&file(true, IP));
+            t.ctx
+                .settings
+                .set("env.rememberHostCommands", "true")
+                .unwrap();
             t.sbt(&["env", "run", "-d"]).unwrap();
             std::fs::write(t.ctx.cwd.join("sbxenv.yaml"), changed).unwrap();
             let err = t.sbt_err(&["env", "run", "-d"]);
@@ -1127,6 +1263,264 @@ mod tests {
         let path = t.ctx.paths.env_records().join("claude-proj.toml");
         let mode = std::fs::metadata(path).unwrap().permissions().mode();
         assert_eq!(mode & 0o777, 0o600);
+    }
+
+    /// A file whose lifecycle commands append their phase to `<cwd>/log`.
+    fn lifecycle_file(extra: &str) -> String {
+        format!(
+            "{FILE}lifecycle:\n  initialize:\n    - command: echo init >> log\n  \
+             postCreate:\n    - command: echo post >> log\n  \
+             preRemove:\n    - command: echo pre >> log\n{extra}"
+        )
+    }
+
+    fn log(t: &TestEnv) -> String {
+        std::fs::read_to_string(t.ctx.cwd.join("log")).unwrap_or_default()
+    }
+
+    #[test]
+    fn lifecycle_phases_run_around_the_create_and_on_every_run() {
+        let mut t = with_file(&lifecycle_file(""));
+        missing_then_created(&t, 2);
+        t.sbt(&["env", "create", "--force"]).unwrap();
+        assert_eq!(log(&t), "init\npost\n");
+        let out = t.stdout();
+        let (init, created, post) = (
+            out.find("\nHOST INITIALIZE\n  ○ echo init >> log\n")
+                .unwrap(),
+            out.find("Created sandbox claude-proj").unwrap(),
+            out.find("\nHOST POST-CREATE\n").unwrap(),
+        );
+        assert!(init < created && created < post, "{out}");
+
+        // Attaching: `initialize` again, nothing else.
+        t.sbt(&["env", "run", "-d", "--force"]).unwrap();
+        assert_eq!(log(&t), "init\npost\ninit\n");
+        // `env exec` runs none.
+        t.sbt(&["env", "exec", "--", "true"]).unwrap();
+        assert_eq!(log(&t), "init\npost\ninit\n");
+    }
+
+    #[test]
+    fn a_failing_initialize_creates_and_stores_nothing() {
+        let mut t = with_file(&format!(
+            "{FILE}secrets:\n  github:\n    value: ghp_dummy\nlifecycle:\n  initialize:\n    \
+             - command: exit 7\n"
+        ));
+        missing_then_created(&t, 2);
+        for cmd in ["create", "run"] {
+            assert_eq!(
+                t.sbt_err(&["env", cmd, "--force"]),
+                "initialize[0] (exit 7): exit status 7"
+            );
+        }
+        assert!(creates(&t).is_empty());
+        assert!(scoped(&t).is_empty());
+    }
+
+    #[test]
+    fn a_failing_post_create_keeps_the_sandbox() {
+        let mut t = with_file(&format!(
+            "{FILE}lifecycle:\n  postCreate:\n    - command: exit 4\n"
+        ));
+        missing_then_created(&t, 2);
+        assert_eq!(
+            t.sbt_err(&["env", "run", "--force"]),
+            "postCreate[0] (exit 4): exit status 4; remove this environment's sandbox and \
+             provisioned secrets\n  try: sbt env rm"
+        );
+        assert_eq!(creates(&t).len(), 1);
+        assert!(deletes(&t).is_empty());
+        assert!(t.runner().interactive_calls().is_empty(), "not attached");
+    }
+
+    #[test]
+    fn pre_remove_runs_with_or_without_the_sandbox_and_never_stops_the_removal() {
+        let mut t = with_file(&lifecycle_file("    - command: exit 3\n"));
+        listed(&t, &[]);
+        t.sbt(&["env", "rm", "--force"]).unwrap();
+        assert_eq!(log(&t), "pre\n");
+        let out = t.stdout();
+        assert!(
+            out.contains("\nLIFECYCLE\n  > preRemove: echo pre >> log\n      workdir: "),
+            "{out}"
+        );
+        assert!(out.contains(" · 1 to destroy · 2 to run\n"), "{out}");
+        assert!(out.contains("\nHOST PRE-REMOVE\n"), "{out}");
+        assert!(out.ends_with("Removed sandbox claude-proj\n"), "{out}");
+        assert_eq!(deletes(&t).len(), 1);
+
+        // The sandbox is gone already: the commands still run.
+        t.runner().ok(&["machine", "ls", "--json"], "[]");
+        t.sbt(&["env", "rm", "--force"]).unwrap();
+        assert_eq!(log(&t), "pre\npre\n");
+        assert_eq!(deletes(&t).len(), 1);
+    }
+
+    #[test]
+    fn skip_host_commands_skips_every_phase_and_leaves_the_approval() {
+        let mut t = approved(&lifecycle_file(""));
+        assert_eq!(log(&t), "init\npost\n");
+        let before = record(&t);
+        // Approved, and the lifecycle commands (which would ask every time) are left out.
+        t.sbt(&["env", "run", "-d", "--skip-host-commands"])
+            .unwrap();
+        listed(&t, &[]);
+        t.sbt(&["env", "rm", "--force", "--skip-host-commands"])
+            .unwrap();
+        assert_eq!(log(&t), "init\npost\n", "nothing more ran");
+        let out = t.stdout();
+        assert!(!out.contains("LIFECYCLE"), "{out}");
+        assert!(!out.contains("HOST "), "{out}");
+        // Until the `env rm`, the record was untouched.
+        assert!(before.unwrap().contains("initialize[0]"));
+
+        // A yes given with the flag approves what was shown and nothing else: a command changed
+        // meanwhile stays unapproved, and the record keeps the one approved before.
+        let mut t = approved(&lifecycle_file(""));
+        let changed = lifecycle_file("")
+            .replace("X: one", "X: two")
+            .replace("echo init >> log", "echo CHANGED >> log");
+        std::fs::write(t.ctx.cwd.join("sbxenv.yaml"), changed).unwrap();
+        t.answer("y\n");
+        t.sbt(&["env", "run", "-d", "--skip-host-commands"])
+            .unwrap();
+        assert!(!t.stdout().contains("CHANGED"), "the plan left it out");
+        let record = record(&t).unwrap();
+        assert!(record.contains("value\", \"two"), "{record}");
+        assert!(record.contains("initialize: echo init >> log"), "{record}");
+        assert!(!record.contains("CHANGED"), "{record}");
+        t.ctx.stdin_tty = false;
+        let err = t.sbt_err(&["env", "run", "-d"]);
+        assert!(err.contains("have not been approved"), "{err}");
+        assert_eq!(log(&t), "init\npost\n", "the changed command never ran");
+    }
+
+    #[test]
+    fn env_run_launches_the_entrypoint_and_cmd() {
+        let launch = "entrypoint: [\"/bin/sh\", \"-c\"]\ncmd: [\"echo hi\"]\n";
+        let mut t = with_file(&format!("{FILE}{launch}"));
+        existing(&t, "running");
+        t.sbt(&["env", "run", "--force"]).unwrap();
+        let call = t.runner().interactive_calls()[0].join(" ");
+        assert!(call.ends_with(" -- /bin/sh -c echo hi"), "{call}");
+        assert!(t.stdout().contains("\nAGENT LAUNCH\n  + entrypoint\n"));
+
+        // Only `cmd`: the agent's own command with those arguments, as `-- ARGS` (measured: sbx
+        // treats the two alike).
+        let mut t = with_file(&format!("{FILE}cmd: [\"--version\"]\n"));
+        existing(&t, "running");
+        t.sbt(&["env", "run", "--force"]).unwrap();
+        let call = t.runner().interactive_calls()[0].join(" ");
+        assert!(
+            call.ends_with(" -- claude --dangerously-skip-permissions --version"),
+            "{call}"
+        );
+
+        // Plain `run` doesn't know the file.
+        let mut t = with_file(&format!("{FILE}{launch}"));
+        existing(&t, "running");
+        t.sbt(&["run", "--name", "claude-proj"]).unwrap();
+        let call = t.runner().interactive_calls()[0].join(" ");
+        assert!(!call.contains("/bin/sh -c echo hi"), "{call}");
+    }
+
+    const REGISTRY: &str = "registries:\n  GHCR.io:\n    username:\n      value: me\n    \
+        secret:\n      command: printf 'reg-%s' tok3n\n";
+
+    fn registries(t: &TestEnv) -> Vec<crate::secrets::RegistryEntry> {
+        SecretsFile::load(&t.ctx.paths).unwrap().registries
+    }
+
+    #[test]
+    fn registries_are_stored_for_the_sandbox_and_removed_with_it() {
+        let mut t = with_file(&format!("{FILE}{REGISTRY}"));
+        // A host-wide login for the same host stays as it is.
+        t.ctx.store.set("registry:ghcr.io", "host-wide").unwrap();
+        missing_then_created(&t, 2);
+        t.sbt(&["env", "create", "--force"]).unwrap();
+        let out = t.stdout();
+        assert!(
+            out.contains("\nPROVISION\n  Scope:  claude-proj\n  ✓ ghcr.io — registry\n"),
+            "{out}"
+        );
+        assert!(!out.contains("reg-tok3n"), "{out}");
+        let stored = registries(&t);
+        assert_eq!(stored.len(), 1);
+        assert_eq!(stored[0].host, "ghcr.io");
+        assert_eq!(stored[0].username.as_deref(), Some("me"));
+        assert_eq!(stored[0].sandbox.as_deref(), Some("claude-proj"));
+        let get = |t: &TestEnv, key: &str| t.ctx.store.get(key).unwrap();
+        assert_eq!(
+            get(&t, "sandbox-registry:claude-proj/ghcr.io").as_deref(),
+            Some("reg-tok3n")
+        );
+        t.sbt(&["secret", "ls"]).unwrap();
+        let ls = t.stdout();
+        assert!(
+            ls.contains("claude-proj   registry   ghcr.io   (stored)"),
+            "{ls}"
+        );
+        // As in sbx, the sandbox's own listing has it too, and only it.
+        t.sbt(&["secret", "ls", "--sandbox", "claude-proj"])
+            .unwrap();
+        let ls = t.stdout();
+        assert!(
+            ls.contains("claude-proj   registry   ghcr.io   (stored)"),
+            "{ls}"
+        );
+        t.sbt(&["secret", "ls", "--sandbox", "other"]).unwrap();
+        assert!(!t.stdout().contains("ghcr.io"));
+
+        listed(&t, &[]);
+        t.sbt(&["env", "rm", "--force"]).unwrap();
+        let out = t.stdout();
+        assert!(out.contains("\nREGISTRIES\n  - ghcr.io\n"), "{out}");
+        assert!(out.contains(" · 2 to destroy\n"), "{out}");
+        assert!(
+            out.ends_with("Removed secrets scoped to claude-proj\n"),
+            "{out}"
+        );
+        assert!(registries(&t).is_empty());
+        assert_eq!(get(&t, "sandbox-registry:claude-proj/ghcr.io"), None);
+        assert_eq!(get(&t, "registry:ghcr.io").as_deref(), Some("host-wide"));
+    }
+
+    #[test]
+    fn a_plain_rm_removes_the_sandboxs_registry_login() {
+        let mut t = with_file(&format!("{FILE}{REGISTRY}"));
+        missing_then_created(&t, 2);
+        t.sbt(&["env", "create", "--force"]).unwrap();
+        listed(&t, &[]);
+        t.sbt(&["rm", "-f", "claude-proj"]).unwrap();
+        assert!(registries(&t).is_empty());
+        let key = "sandbox-registry:claude-proj/ghcr.io";
+        assert_eq!(t.ctx.store.get(key).unwrap(), None);
+    }
+
+    #[test]
+    fn a_registry_source_that_fails_stops_before_the_create() {
+        let bad = REGISTRY.replace("printf 'reg-%s' tok3n", "exit 1");
+        let mut t = with_file(&format!("{FILE}{bad}"));
+        missing_then_created(&t, 2);
+        let err = t.sbt_err(&["env", "create", "--force"]);
+        assert!(err.starts_with("registry \"GHCR.io\": secret: "), "{err}");
+        assert!(creates(&t).is_empty());
+        assert!(registries(&t).is_empty());
+    }
+
+    #[test]
+    fn env_run_detached_launches_nothing_and_no_workspace_means_mountless() {
+        // Both measured on sbx 0.53.
+        let file = "schemaVersion: \"1\"\nagent: claude\nname: claude-proj\n\
+                    entrypoint: [\"/bin/sh\", \"-c\"]\ncmd: [\"echo hi\"]\n";
+        let mut t = with_file(file);
+        missing_then_created(&t, 2);
+        t.sbt(&["env", "run", "-d", "--force"]).unwrap();
+        assert!(t.runner().interactive_calls().is_empty());
+        let create = &creates(&t)[0];
+        let cwd = t.ctx.cwd.display().to_string();
+        assert!(!create.contains(&cwd), "no workspace mount: {create}");
     }
 
     #[test]

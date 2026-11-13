@@ -200,7 +200,7 @@ pub(crate) fn kit_plan<R: Runner>(
     opts: &SandboxOpts,
     p: &Progress,
 ) -> Result<Plan> {
-    let mut kits = KitsSection::new(p);
+    let mut kits = KitsSection::new(p, &req.name);
     let workload_source = match &workload {
         Workload::Ref(target) => Some(target.clone()),
         Workload::Preset(_) => None,
@@ -217,7 +217,7 @@ pub(crate) fn kit_plan<R: Runner>(
                     capability::incoherent(&[capability::NO_WORKLOAD.to_string()])
                 );
             }
-            load::check_launchable(ctx, &mut kit)?;
+            load::check_launchable(ctx, &mut kit, Some(&req.name))?;
             // A Smolfile kit gets the shell preset's command, recorded in `sbx.command` so every
             // attach launches the same thing.
             if kit.command.is_none() {
@@ -266,15 +266,18 @@ pub(crate) fn kit_plan<R: Runner>(
 /// (shipped, v2 or Smolfile) wait for it and are listed `✓ REF — cached` when it opens.
 struct KitsSection<'a> {
     p: &'a Progress,
+    /// The sandbox being created: its registry logins may be used for the pulls.
+    sandbox: String,
     open: bool,
     /// Kits loaded without a fetch before the section opened.
     waiting: Vec<String>,
 }
 
 impl<'a> KitsSection<'a> {
-    fn new(p: &'a Progress) -> Self {
+    fn new(p: &'a Progress, sandbox: &str) -> Self {
         Self {
             p,
+            sandbox: sandbox.to_string(),
             open: false,
             waiting: Vec::new(),
         }
@@ -284,7 +287,8 @@ impl<'a> KitsSection<'a> {
     /// then `✓ REF — ready`, or `cached` when the kit cache already had it all.
     fn load<R: Runner>(&mut self, ctx: &Ctx<R>, reference: &str) -> Result<Kit> {
         let mut step = None;
-        let loaded = load::load_noting(ctx, reference, &mut |fetch| {
+        let sandbox = self.sandbox.clone();
+        let loaded = load::load_noting(ctx, reference, Some(&sandbox), &mut |fetch| {
             self.open_section();
             let doing = match fetch {
                 load::Fetch::Pull => "pulling",

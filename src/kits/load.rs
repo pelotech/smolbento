@@ -11,7 +11,7 @@ use crate::kits::model::{Content, Kind, Kit, Source};
 use crate::kits::registry_auth::Logins;
 use crate::kits::{capability, registry, smolfile, trust, v2, v3};
 use crate::provision::builder;
-use crate::secrets::SecretsFile;
+use crate::secrets::{RegistryEntry, SecretsFile};
 use crate::smolvm::Runner;
 
 /// The first line of a v3 kit descriptor.
@@ -45,7 +45,7 @@ pub fn load<R: Runner>(ctx: &Ctx<R>, reference: &str) -> Result<Kit> {
 /// reference would be pulled and a v3 source directory built (the builder pulls its base image),
 /// so both are refused.
 pub fn load_with<R: Runner>(ctx: &Ctx<R>, reference: &str, offline: bool) -> Result<Kit> {
-    Ok(fetch(ctx, reference, offline, &mut |_| {})?.0)
+    Ok(fetch(ctx, reference, offline, None, &mut |_| {})?.0)
 }
 
 /// What loading a kit fetches.
@@ -62,9 +62,19 @@ pub enum Fetch {
 pub fn load_noting<R: Runner>(
     ctx: &Ctx<R>,
     reference: &str,
+    sandbox: Option<&str>,
     before: &mut dyn FnMut(Fetch),
 ) -> Result<(Kit, bool)> {
-    fetch(ctx, reference, false, before)
+    fetch(ctx, reference, false, sandbox, before)
+}
+
+/// The registry logins a pull may use: those of the sandbox being created, else the host-wide
+/// ones.
+fn registries(secrets: &SecretsFile, sandbox: Option<&str>) -> Vec<RegistryEntry> {
+    match sandbox {
+        Some(s) => secrets.registries_for(s),
+        None => secrets.host_registries(),
+    }
 }
 
 /// The kit and whether loading it added nothing to the kit cache, with `reference` recorded as
@@ -73,6 +83,7 @@ fn fetch<R: Runner>(
     ctx: &Ctx<R>,
     reference: &str,
     offline: bool,
+    sandbox: Option<&str>,
     before: &mut dyn FnMut(Fetch),
 ) -> Result<(Kit, bool)> {
     let (mut kit, cached) = if let Some(kit) = builtin(reference) {
@@ -80,8 +91,8 @@ fn fetch<R: Runner>(
     } else {
         match locate(ctx, reference, offline)? {
             Located::Registry(r) => {
-                let secrets = SecretsFile::load(&ctx.paths)?;
-                let logins = Logins::new(&secrets.registries, &*ctx.store);
+                let registries = registries(&SecretsFile::load(&ctx.paths)?, sandbox);
+                let logins = Logins::new(&registries, &*ctx.store);
                 let cache = ctx.paths.kit_cache();
                 before(Fetch::Pull);
                 let blobs = entries(&registry::store_dir(&cache));
@@ -267,13 +278,18 @@ fn is_descriptor(path: &Path) -> bool {
 /// Gives a workload kit its command or refuses it with sbx's error. v3 has its image config's;
 /// a v2 kit without `sandbox.entrypoint`/`command` takes its `sandbox.image`'s Entrypoint+Cmd.
 /// A Smolfile is smolvm's, so its sandbox keeps the `shell` preset's command.
-pub fn check_launchable<R: Runner>(ctx: &Ctx<R>, kit: &mut Kit) -> Result<()> {
+/// `sandbox` is the one being created, whose registry logins the image lookup may use.
+pub fn check_launchable<R: Runner>(
+    ctx: &Ctx<R>,
+    kit: &mut Kit,
+    sandbox: Option<&str>,
+) -> Result<()> {
     if kit.kind == Kind::Workload
         && kit.command.is_none()
         && let (Source::LocalV2(_), Content::Image(image)) = (&kit.source, &kit.content)
     {
-        let secrets = SecretsFile::load(&ctx.paths)?;
-        let logins = Logins::new(&secrets.registries, &*ctx.store);
+        let registries = registries(&SecretsFile::load(&ctx.paths)?, sandbox);
+        let logins = Logins::new(&registries, &*ctx.store);
         kit.command = registry::image_command(image, &ctx.paths.kit_cache(), logins)?;
     }
     if kit.kind == Kind::Workload
@@ -527,7 +543,7 @@ mod tests {
         );
         let fetched = |reference: &str| {
             let mut seen = Vec::new();
-            let (_, cached) = load_noting(&t.ctx, reference, &mut |f| seen.push(f)).unwrap();
+            let (_, cached) = load_noting(&t.ctx, reference, None, &mut |f| seen.push(f)).unwrap();
             (seen, cached)
         };
         assert_eq!(fetched("./kit"), (vec![Fetch::Build], false));

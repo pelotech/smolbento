@@ -58,8 +58,7 @@ pub struct CustomService {
     pub hosts: Vec<String>,
 }
 
-/// A registry pull credential. Host only: the value is in the secret store under
-/// `registry_account(host)`.
+/// A registry pull credential. The value is in the secret store under `account()`.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct RegistryEntry {
     pub host: String,
@@ -67,9 +66,23 @@ pub struct RegistryEntry {
     pub username: Option<String>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub auth_endpoint: Option<String>,
+    /// The sandbox it belongs to (an environment file's `registries`); `None` is host-wide.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub sandbox: Option<String>,
 }
 
-/// Key in the secret store for a registry's password or token.
+impl RegistryEntry {
+    /// Key in the secret store for its password or token.
+    pub fn account(&self) -> String {
+        match &self.sandbox {
+            None => registry_account(&self.host),
+            // Not under `registry:`, where a host-wide login's host could spell the same key.
+            Some(sandbox) => format!("sandbox-registry:{sandbox}/{}", self.host),
+        }
+    }
+}
+
+/// Key in the secret store for a host-wide registry login's password or token.
 pub fn registry_account(host: &str) -> String {
     format!("registry:{host}")
 }
@@ -182,6 +195,34 @@ impl SecretsFile {
         out.sort();
         out.dedup();
         out
+    }
+
+    /// The host-wide registry logins: what host-side pulls with no sandbox use.
+    pub fn host_registries(&self) -> Vec<RegistryEntry> {
+        let host_wide = self.registries.iter().filter(|r| r.sandbox.is_none());
+        host_wide.cloned().collect()
+    }
+
+    /// The registry logins a sandbox's pulls use: its own, then the host-wide ones for hosts it
+    /// has none for.
+    pub fn registries_for(&self, sandbox: &str) -> Vec<RegistryEntry> {
+        let own = |r: &&RegistryEntry| r.sandbox.as_deref() == Some(sandbox);
+        let mut out: Vec<RegistryEntry> = self.registries.iter().filter(own).cloned().collect();
+        for r in self.host_registries() {
+            if !out.iter().any(|o| o.host == r.host) {
+                out.push(r);
+            }
+        }
+        out
+    }
+
+    /// Removes and returns the registry logins scoped to `sandbox`.
+    pub fn remove_sandbox_registries(&mut self, sandbox: &str) -> Vec<RegistryEntry> {
+        let (gone, kept) = std::mem::take(&mut self.registries)
+            .into_iter()
+            .partition(|r| r.sandbox.as_deref() == Some(sandbox));
+        self.registries = kept;
+        gone
     }
 
     pub fn remove_sandbox(&mut self, sandbox: &str) -> Vec<SecretEntry> {
@@ -307,5 +348,39 @@ mod tests {
         );
         assert!(f.service("anthropic").is_some());
         assert!(f.service("nope").is_none());
+    }
+
+    #[test]
+    fn a_sandboxs_registry_login_comes_before_the_host_wide_one() {
+        let entry = |host: &str, sandbox: Option<&str>| RegistryEntry {
+            host: host.into(),
+            username: None,
+            auth_endpoint: None,
+            sandbox: sandbox.map(String::from),
+        };
+        let mut f = SecretsFile {
+            registries: vec![
+                entry("ghcr.io", None),
+                entry("quay.io", None),
+                entry("ghcr.io", Some("web")),
+                entry("ghcr.io", Some("other")),
+            ],
+            ..Default::default()
+        };
+        assert_eq!(
+            f.registries_for("web"),
+            [entry("ghcr.io", Some("web")), entry("quay.io", None)]
+        );
+        assert_eq!(f.host_registries().len(), 2);
+        assert_eq!(entry("ghcr.io", None).account(), "registry:ghcr.io");
+        assert_eq!(
+            entry("ghcr.io", Some("web")).account(),
+            "sandbox-registry:web/ghcr.io"
+        );
+        assert_eq!(
+            f.remove_sandbox_registries("web"),
+            [entry("ghcr.io", Some("web"))]
+        );
+        assert_eq!(f.registries.len(), 3);
     }
 }

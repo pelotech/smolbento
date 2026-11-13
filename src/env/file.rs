@@ -7,6 +7,7 @@ use std::collections::BTreeMap;
 use std::path::{Path, PathBuf};
 use std::sync::LazyLock;
 
+use super::lifecycle::Phase;
 use anyhow::{Context, Result, bail};
 use regex_lite::Regex;
 use serde::Deserialize;
@@ -74,11 +75,76 @@ pub struct EnvFile {
     pub mounts: Option<BTreeMap<String, String>>,
     pub secrets: Option<BTreeMap<String, SecretDecl>>,
     pub sandbox_options: Option<SandboxOptions>,
+    /// What `env run` launches in place of the agent's own program.
+    #[serde(default, deserialize_with = "opt_text_list")]
+    pub entrypoint: Option<Vec<String>>,
+    /// The arguments `env run` launches the program with.
+    #[serde(default, deserialize_with = "opt_text_list")]
+    pub cmd: Option<Vec<String>>,
+    pub lifecycle: Option<Lifecycle>,
+    /// Registry host to its login.
+    pub registries: Option<BTreeMap<String, RegistryDecl>>,
     // Out of scope: kept as raw values so they can be refused by name.
-    pub lifecycle: Option<Value>,
     pub bindings: Option<Value>,
-    pub registries: Option<Value>,
     pub mcp: Option<Value>,
+}
+
+/// Commands that run on the host, with the user's privileges.
+#[derive(Deserialize, Default, Debug, Clone, PartialEq, Eq)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+pub struct Lifecycle {
+    /// Every `env create` and `env run`, before anything else.
+    #[serde(default)]
+    pub initialize: Vec<HostCommand>,
+    /// After a new sandbox is created.
+    #[serde(default)]
+    pub post_create: Vec<HostCommand>,
+    /// `env rm`, before anything is removed.
+    #[serde(default)]
+    pub pre_remove: Vec<HostCommand>,
+}
+
+impl Lifecycle {
+    /// The three phases with their commands, in the order they run.
+    pub fn phases(&self) -> [(Phase, &[HostCommand]); 3] {
+        [
+            (Phase::Initialize, &self.initialize),
+            (Phase::PostCreate, &self.post_create),
+            (Phase::PreRemove, &self.pre_remove),
+        ]
+    }
+
+    pub fn commands_mut(&mut self) -> impl Iterator<Item = &mut HostCommand> {
+        let phases = [
+            &mut self.initialize,
+            &mut self.post_create,
+            &mut self.pre_remove,
+        ];
+        phases.into_iter().flatten()
+    }
+}
+
+#[derive(Deserialize, Debug, Clone, PartialEq, Eq)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+pub struct HostCommand {
+    #[serde(default, deserialize_with = "opt_text")]
+    pub name: Option<String>,
+    #[serde(deserialize_with = "text")]
+    pub command: String,
+    /// Absolute once loaded; the project directory when not given.
+    #[serde(default, deserialize_with = "opt_text")]
+    pub workdir: Option<String>,
+    /// As written (`90s`, `5m`).
+    #[serde(default, deserialize_with = "opt_text")]
+    pub timeout: Option<String>,
+}
+
+/// A registry login: a required password or token, and an optional user name.
+#[derive(Deserialize, Debug, Clone)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+pub struct RegistryDecl {
+    pub username: Option<SecretDecl>,
+    pub secret: SecretDecl,
 }
 
 /// A kit source, or `{source, args}`.
@@ -467,8 +533,9 @@ impl RawFile {
         Ok(Value::String(out))
     }
 
-    /// Relative `workspace`, `additionalWorkspaces[].path`, `mounts` host paths and local kit
-    /// sources become absolute against the file's directory (symlinks are not resolved).
+    /// Relative `workspace`, `additionalWorkspaces[].path`, `mounts` host paths, lifecycle
+    /// `workdir`s and local kit sources become absolute against the file's directory (symlinks
+    /// are not resolved).
     fn absolutize(&self, value: &mut Value) {
         let abs = |s: &mut String| {
             if let Ok(p) = std::path::absolute(self.dir.join(&*s)) {
@@ -502,6 +569,13 @@ impl RawFile {
                     abs(s)
                 }
             });
+        }
+        if let Some(Value::Object(phases)) = top.get_mut("lifecycle") {
+            for phase in phases.values_mut() {
+                if let Value::Array(commands) = phase {
+                    commands.iter_mut().for_each(|c| fix(c, "workdir", false));
+                }
+            }
         }
         if let Some(Value::Array(list)) = top.get_mut("kits") {
             for k in list {

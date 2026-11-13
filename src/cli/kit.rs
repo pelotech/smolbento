@@ -185,7 +185,7 @@ fn check_kit<R: Runner>(
              lookup; --offline can't validate it"
         );
     }
-    load::check_launchable(ctx, &mut kit)?;
+    load::check_launchable(ctx, &mut kit, None)?;
     let resolved = match kit.kind {
         Kind::Workload => resolve(kit, vec![], &values),
         Kind::Mixin => {
