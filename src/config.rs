@@ -144,6 +144,24 @@ pub const SETTINGS: &[SettingDef] = &[
         help: "Allow kits from local directories and Smolfiles",
     },
     SettingDef {
+        key: "kit.requireSignature",
+        env: "SMOLBENTO_KIT_REQUIRE_SIGNATURE",
+        default: "false",
+        help: "Require a valid signature from a trusted signer (kit.trustedSigners) before loading a registry kit; local kits are then refused",
+    },
+    SettingDef {
+        key: "kit.trustedSigners",
+        env: "SMOLBENTO_KIT_TRUSTED_SIGNERS",
+        default: r#"[{"identityRegexp":"^.*@docker\\.com$","issuer":"https://accounts.google.com"}]"#,
+        help: "JSON array of trusted signer policies (key-based {\"key\":path} or keyless {\"issuer\":...,\"identity\":...}, each also as ...Regexp). Defaults to Docker employee identities (*@docker.com via https://accounts.google.com)",
+    },
+    SettingDef {
+        key: "kit.ignoreTransparencyLog",
+        env: "SMOLBENTO_KIT_IGNORE_TRANSPARENCY_LOG",
+        default: "false",
+        help: "Verify keyless kit signatures without requiring a Rekor transparency-log entry",
+    },
+    SettingDef {
         key: "browser.enabled",
         env: "SMOLBENTO_BROWSER_ENABLED",
         default: "true",
@@ -251,6 +269,9 @@ impl Settings {
         }
         if key == "kit.allowedSources" {
             crate::kits::trust::parse_allowed_sources(value)?;
+        }
+        if key == "kit.trustedSigners" {
+            crate::kits::signers::parse(value)?;
         }
         if key == "smolvm.image-cache-size" {
             parse_cache_size(value)?;
@@ -470,6 +491,32 @@ mod tests {
     }
 
     #[cfg(unix)]
+    #[test]
+    fn a_bad_trusted_signer_list_is_refused_and_not_saved() {
+        let dir = tempfile::tempdir().unwrap();
+        let e = env(&[
+            ("SMOLBENTO_CONFIG_DIR", dir.path().to_str().unwrap()),
+            ("SMOLBENTO_CACHE_DIR", "/k"),
+            ("SMOLBENTO_DATA_DIR", "/d"),
+        ]);
+        let paths = Paths::from_env(&e).unwrap();
+        let mut s = Settings::load(&paths, e).0;
+        let e = s
+            .set("kit.trustedSigners", r#"[{"issuer":"https://i"}]"#)
+            .unwrap_err();
+        assert_eq!(
+            e.to_string(),
+            r#"keyless signer must set "identity" or "identityRegexp""#
+        );
+        assert!(s.value("kit.trustedSigners").unwrap().contains("docker"));
+        s.set("kit.trustedSigners", r#"[{"key":"/k.pub"}]"#)
+            .unwrap();
+        assert_eq!(
+            s.value("kit.trustedSigners").unwrap(),
+            r#"[{"key":"/k.pub"}]"#
+        );
+    }
+
     #[test]
     fn write_atomic_can_write_through_a_symlink() {
         use std::os::unix::fs::PermissionsExt;
