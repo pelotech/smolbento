@@ -227,7 +227,7 @@ pub fn host_agent(
 }
 
 /// Applies availability to a grant at create: with an agent every phase stays; without one a
-/// required phase refuses the create (`kit K: ssh-agent@1 needs an SSH agent, but <reason>`), and
+/// required phase refuses the create (`kit K: com.docker.sandbox/ssh-agent@1 needs an SSH agent, but <reason>`), and
 /// an optional one is dropped, with a note for stderr when a kit asked for it or the socket
 /// directory is unsafe. Returns the label to record (`None`: no agent at all) and the notes.
 pub fn settle(
@@ -243,7 +243,7 @@ pub fn settle(
         let Some(p) = phase else { continue };
         let kit = p.kit.as_deref().unwrap_or("?");
         if p.required {
-            bail!("kit {kit}: ssh-agent@1 needs an SSH agent, but {why}");
+            bail!("kit {kit}: com.docker.sandbox/ssh-agent@1 needs an SSH agent, but {why}");
         }
         let who = match &p.kit {
             Some(k) => format!("kit {k}"),
@@ -344,7 +344,9 @@ mod tests {
             let e = settle("s", &req, &Err(why)).unwrap_err();
             assert_eq!(
                 e.to_string(),
-                format!("kit signer: ssh-agent@1 needs an SSH agent, but {reason}")
+                format!(
+                    "kit signer: com.docker.sandbox/ssh-agent@1 needs an SSH agent, but {reason}"
+                )
             );
         }
 

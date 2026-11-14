@@ -258,8 +258,9 @@ fn verdict(
         REQUEST_IDENTITIES => Verdict::Relay,
         SIGN_REQUEST => match sign_data(payload) {
             None => Verdict::Close,
-            Some(data)
-                if admitted(access, data) || login_admitted(access, conn, known_hosts, data) =>
+            Some((key, data))
+                if admitted(access, data)
+                    || login_admitted(access, conn, known_hosts, key, data) =>
             {
                 Verdict::Relay
             }
@@ -333,12 +334,13 @@ fn login_admitted(
     access: &Access,
     conn: &Conn,
     known_hosts: &dyn Fn() -> Option<String>,
+    key: &[u8],
     data: &[u8],
 ) -> bool {
     if access.sign.is_none() || access.authenticate.is_empty() {
         return false;
     }
-    let Some(login) = login(data) else {
+    let Some(login) = login(key, data) else {
         return false;
     };
     let bound: Vec<&Binding> = conn
@@ -373,8 +375,9 @@ struct Login<'a> {
 
 /// Parses `string session_id, byte 50, string user, string service, string method, bool true,
 /// string algorithm, string key` and, for the hostbound method, `string hostkey`, with nothing
-/// after. `None` for other methods and anything else.
-fn login(data: &[u8]) -> Option<Login<'_>> {
+/// after. The key in the data must be the key the request signs with, and the algorithm must be
+/// one that key makes. `None` for other methods and anything else.
+fn login<'a>(request_key: &[u8], data: &'a [u8]) -> Option<Login<'a>> {
     let (session_id, rest) = string(data)?;
     let (&kind, rest) = rest.split_first()?;
     if kind != USERAUTH_REQUEST {
@@ -384,9 +387,9 @@ fn login(data: &[u8]) -> Option<Login<'_>> {
     let (_service, rest) = string(rest)?;
     let (method, rest) = string(rest)?;
     let (&has_signature, rest) = rest.split_first()?;
-    let (_algorithm, rest) = string(rest)?;
-    let (_key, rest) = string(rest)?;
-    if has_signature != 1 {
+    let (algorithm, rest) = string(rest)?;
+    let (key, rest) = string(rest)?;
+    if has_signature != 1 || key != request_key || !algorithm_fits(algorithm, key) {
         return None;
     }
     let host_key = match method {
@@ -407,11 +410,31 @@ fn login(data: &[u8]) -> Option<Login<'_>> {
     })
 }
 
-/// A sign request's data: `string key_blob, string data, uint32 flags`.
-fn sign_data(payload: &[u8]) -> Option<&[u8]> {
-    let (_key, rest) = string(payload)?;
+/// Whether `algorithm` is one the public key blob `key` signs with: its own type name, and for
+/// RSA also the SHA-2 variants (certificates likewise with their suffix).
+fn algorithm_fits(algorithm: &[u8], key: &[u8]) -> bool {
+    let Some((key_type, _)) = string(key) else {
+        return false;
+    };
+    if algorithm == key_type {
+        return true;
+    }
+    let cert = b"-cert-v01@openssh.com";
+    let (base, suffix): (&[u8], &[u8]) = match key_type.strip_suffix(&cert[..]) {
+        Some(base) => (base, &cert[..]),
+        None => (key_type, b""),
+    };
+    base == b"ssh-rsa"
+        && [&b"rsa-sha2-256"[..], b"rsa-sha2-512"]
+            .iter()
+            .any(|a| algorithm == [a, suffix].concat())
+}
+
+/// A sign request's key blob and data: `string key_blob, string data, uint32 flags`.
+fn sign_data(payload: &[u8]) -> Option<(&[u8], &[u8])> {
+    let (key, rest) = string(payload)?;
     let (data, rest) = string(rest)?;
-    (rest.len() == 4).then_some(data)
+    (rest.len() == 4).then_some((key, data))
 }
 
 /// The SSH string (`uint32` length, bytes) at the start of `b`, and what follows it.
@@ -433,7 +456,10 @@ mod tests {
     fn sign(data: &[u8]) -> Vec<u8> {
         [
             &[SIGN_REQUEST][..],
-            &s(b"key"),
+            &s(&crate::ssh_agent::known_hosts::testkeys::key(99)
+                .public_key()
+                .to_bytes()
+                .unwrap()),
             &s(data),
             &0u32.to_be_bytes(),
         ]
@@ -696,6 +722,40 @@ mod tests {
         let many = logins(&["gitlab.com", "github.com"]);
         let kh = known(&[("github.com", 7), ("github.com", 1)]);
         assert_eq!(run(&many, &kh, &msgs), Verdict::Relay);
+    }
+
+    #[test]
+    fn a_login_must_sign_with_the_key_it_names_and_an_algorithm_that_key_makes() {
+        let gh = key(1);
+        let a = logins(&["github.com"]);
+        let kh = known(&[("github.com", 1)]);
+        let data = login_data(SESSION, "git", PK, None);
+        let bound = bind(&gh, SESSION, false);
+        let with_key =
+            |k: &[u8]| [&[SIGN_REQUEST][..], &s(k), &s(&data), &0u32.to_be_bytes()].concat();
+        let other = key(98).public_key().to_bytes().unwrap();
+        assert_eq!(
+            run(&a, &kh, &[bound.clone(), with_key(&other)]),
+            Verdict::Fail
+        );
+        // An algorithm the key doesn't make.
+        let wrong_alg = {
+            let mut d = login_data(SESSION, "git", PK, None);
+            let pos = d.windows(11).position(|w| w == b"ssh-ed25519").unwrap();
+            d[pos..pos + 11].copy_from_slice(b"ssh-ed25518");
+            d
+        };
+        assert_eq!(
+            run(&a, &kh, &[bound.clone(), sign(&wrong_alg)]),
+            Verdict::Fail
+        );
+        assert!(algorithm_fits(b"rsa-sha2-512", &s(b"ssh-rsa")));
+        assert!(algorithm_fits(
+            b"rsa-sha2-256-cert-v01@openssh.com",
+            &s(b"ssh-rsa-cert-v01@openssh.com")
+        ));
+        assert!(!algorithm_fits(b"ssh-rsa", &s(b"ssh-ed25519")));
+        assert!(!algorithm_fits(b"ssh-ed25519", b"\x00"));
     }
 
     #[test]

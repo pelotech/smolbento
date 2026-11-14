@@ -1659,7 +1659,7 @@ mod tests {
             let (_t, result, lines) = kit_agent_create(&env, false, caps);
             assert_eq!(
                 format!("{:#}", result.unwrap_err()),
-                format!("kit k: ssh-agent@1 needs an SSH agent, but {why}")
+                format!("kit k: com.docker.sandbox/ssh-agent@1 needs an SSH agent, but {why}")
             );
             assert!(
                 !lines.iter().any(|l| l.starts_with("machine create")),
@@ -1675,7 +1675,7 @@ mod tests {
         let (_t, result, _) = kit_agent_create(&env, false, caps);
         assert_eq!(
             format!("{:#}", result.unwrap_err()),
-            "kit k: ssh-agent@1 needs an SSH agent, but ssh.agentForwardingEnabled is false"
+            "kit k: com.docker.sandbox/ssh-agent@1 needs an SSH agent, but ssh.agentForwardingEnabled is false"
         );
     }
 
@@ -1730,7 +1730,7 @@ mod tests {
         assert_eq!(
             e.to_string(),
             format!(
-                "kit k: ssh-agent@1 needs an SSH agent, but {} isn't a private directory owned \
+                "kit k: com.docker.sandbox/ssh-agent@1 needs an SSH agent, but {} isn't a private directory owned \
                  by you",
                 dir.display()
             )
