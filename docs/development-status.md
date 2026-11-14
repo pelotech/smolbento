@@ -138,6 +138,9 @@ in [sbx compatibility](sbx-compatibility.md). Worth another look:
 Proven on GitHub: e2e on `ubuntu-latest`, and the v0.1.1 release (all three binaries; macOS binary
 verified on a Mac).
 
+- russh from git (commit b541663a8838) until a release pins ssh-key 0.7.0-rc.12 or later: then switch
+  to crates.io, drop the `deny.toml` allow-git entry and the flake `outputHashes`.
+
 ## Cleanups to do
 
 Small issues found in review and deferred. None affect normal use.
