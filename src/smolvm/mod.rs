@@ -12,7 +12,7 @@ pub use client::{CreateSpec, Credential, ExecSpec, Mount, PortMap, Smolvm};
 pub use error::SmolvmError;
 pub use network::{AllowList, LOOPBACK, NetworkSpec};
 pub use pull::{PullProgress, pull_progress};
-pub use spawn::{Proc, ProcCtl, ProcessSpawner, Pty, Spawner};
+pub use spawn::{Proc, ProcCtl, ProcessSpawner, Pty};
 pub use types::{EgressEvent, Machine, MachineState, PublishedPort};
 
 use std::io::{Read, Write};
@@ -63,7 +63,7 @@ pub trait Runner {
     fn interactive(&self, args: &[String]) -> Result<i32>;
     /// A spawner of smolvm processes with piped or pty stdio (the SSH server's), if this runner
     /// can start them.
-    fn spawner(&self) -> Option<std::sync::Arc<dyn Spawner>> {
+    fn spawner(&self) -> Option<ProcessSpawner> {
         None
     }
 }
@@ -231,11 +231,11 @@ impl Runner for ProcessRunner {
         })
     }
 
-    fn spawner(&self) -> Option<std::sync::Arc<dyn Spawner>> {
-        Some(std::sync::Arc::new(ProcessSpawner {
+    fn spawner(&self) -> Option<ProcessSpawner> {
+        Some(ProcessSpawner {
             bin: self.bin.clone(),
             env: self.env.clone(),
-        }))
+        })
     }
 
     fn interactive(&self, args: &[String]) -> Result<i32> {

@@ -80,7 +80,6 @@ mod tests {
     use russh::{Channel, ChannelMsg};
 
     use super::sandbox_of;
-    use crate::smolvm::fake::Script;
     use crate::testutil::*;
 
     #[test]
@@ -162,118 +161,299 @@ mod tests {
         t.sandbox("claude-proj", "running", &[("sbx.workspace", "/w/proj")]);
     }
 
+    /// A fake `smolvm` that records its arguments (one line per call) in `log`, drops everything up
+    /// to and including the first `--`, and runs the rest on this host. `path`, when given, is the
+    /// `PATH` the guest command sees.
+    struct FakeSmolvm {
+        dir: tempfile::TempDir,
+    }
+
+    impl FakeSmolvm {
+        fn install(t: &TestEnv, path: Option<&str>) -> FakeSmolvm {
+            use std::os::unix::fs::PermissionsExt;
+            let dir = tempfile::tempdir().unwrap();
+            let bin = dir.path().join("smolvm");
+            let export = path
+                .map(|p| format!("PATH='{p}'; export PATH\n"))
+                .unwrap_or_default();
+            let log = dir.path().join("argv");
+            let script = format!(
+                "#!/bin/sh\nprintf '%s\\n' \"$*\" >> '{}'\n{export}\
+while [ \"$1\" != \"--\" ]; do shift; done\nshift\nexec \"$@\"\n",
+                log.display()
+            );
+            std::fs::write(&bin, script).unwrap();
+            std::fs::set_permissions(&bin, std::fs::Permissions::from_mode(0o755)).unwrap();
+            t.runner().set_spawn_bin(&bin);
+            FakeSmolvm { dir }
+        }
+
+        /// The arguments of each call so far.
+        fn calls(&self) -> Vec<String> {
+            std::fs::read_to_string(self.dir.path().join("argv"))
+                .unwrap_or_default()
+                .lines()
+                .map(str::to_string)
+                .collect()
+        }
+    }
+
+    /// Symlinks to the named host programs in a new directory, for a `PATH` with only those.
+    fn tools(names: &[&str]) -> (tempfile::TempDir, String) {
+        let dir = tempfile::tempdir().unwrap();
+        for n in names {
+            let found = std::env::split_paths(&std::env::var_os("PATH").unwrap())
+                .map(|d| d.join(n))
+                .find(|p| p.is_file())
+                .unwrap_or_else(|| panic!("{n} not installed"));
+            std::os::unix::fs::symlink(found, dir.path().join(n)).unwrap();
+        }
+        let path = dir.path().display().to_string();
+        (dir, path)
+    }
+
+    /// Reads from `ch` until the output holds `marker`; everything read so far.
+    async fn read_until(ch: &mut Channel<client::Msg>, marker: &str) -> String {
+        let mut seen = String::new();
+        while !seen.contains(marker) {
+            match ch.wait().await {
+                Some(ChannelMsg::Data { data }) => seen.push_str(&String::from_utf8_lossy(&data)),
+                Some(_) => {}
+                None => panic!("channel ended before {marker:?}: {seen:?}"),
+            }
+        }
+        seen
+    }
+
+    /// The next reply to a request on `ch`.
+    async fn reply(ch: &mut Channel<client::Msg>) -> ChannelMsg {
+        loop {
+            match ch.wait().await {
+                Some(m @ (ChannelMsg::Success | ChannelMsg::Failure)) => return m,
+                Some(_) => {}
+                None => panic!("channel ended without a reply"),
+            }
+        }
+    }
+
     #[test]
-    fn exec_returns_output_and_exit_status_as_the_session_user() {
+    fn exec_returns_output_stderr_and_exit_status_as_the_session_user() {
         let mut t = test_env(&[]);
         running(&t);
-        t.runner().spawns().on(
-            "echo hi",
-            Script {
-                stdout: b"hi\n".to_vec(),
-                stderr: b"warn\n".to_vec(),
-                code: 3,
-                ..Script::default()
-            },
-        );
+        let fake = FakeSmolvm::install(&t, None);
         let got = drive(&mut t, "claude-proj.sbx", |h| async move {
             let mut ch = h.channel_open_session().await.unwrap();
             // sbx ignores env requests; so do we, and says yes.
             ch.set_env(true, "FOO", "bar").await.unwrap();
-            assert!(matches!(ch.wait().await, Some(ChannelMsg::Success)));
-            ch.exec(true, "echo hi").await.unwrap();
-            assert!(matches!(ch.wait().await, Some(ChannelMsg::Success)));
+            assert!(matches!(reply(&mut ch).await, ChannelMsg::Success));
+            ch.exec(true, "echo hi \"[$FOO]\"; echo to-err >&2; exit 3")
+                .await
+                .unwrap();
+            assert!(matches!(reply(&mut ch).await, ChannelMsg::Success));
             collect(&mut ch).await
         });
-        assert_eq!(got, (b"hi\n".to_vec(), b"warn\n".to_vec(), Some(3)));
-        let spawned = t.runner().spawns().spawned();
-        let line = spawned[0].args.join(" ");
+        assert_eq!(got, (b"hi []\n".to_vec(), b"to-err\n".to_vec(), Some(3)));
+        let calls = fake.calls();
+        assert_eq!(calls.len(), 1);
+        let line = &calls[0];
         assert!(
             line.starts_with("machine exec --name sbx-claude-proj -u agent -w /w/proj -i -- sh -c"),
             "{line}"
         );
-        assert!(line.ends_with(" sh echo hi"), "{line}");
-        assert!(!line.contains("FOO") && !line.contains(" -t "), "{line}");
-        assert_eq!(spawned[0].pty, None);
+        assert!(!line.contains("-e FOO") && !line.contains(" -t"), "{line}");
     }
 
     #[test]
-    fn a_shell_on_a_pty_is_the_login_shell_and_follows_window_changes() {
+    fn stdin_reaches_the_command_and_its_end_ends_it() {
+        let mut t = test_env(&[]);
+        running(&t);
+        let _fake = FakeSmolvm::install(&t, None);
+        let got = drive(&mut t, "claude-proj.sbx", |h| async move {
+            let mut ch = h.channel_open_session().await.unwrap();
+            ch.exec(true, "cat").await.unwrap();
+            assert!(matches!(reply(&mut ch).await, ChannelMsg::Success));
+            ch.data_bytes(&b"piped in"[..]).await.unwrap();
+            ch.eof().await.unwrap();
+            collect(&mut ch).await
+        });
+        assert_eq!(got, (b"piped in".to_vec(), Vec::new(), Some(0)));
+    }
+
+    #[test]
+    fn a_shell_on_a_pty_follows_window_changes_and_returns_its_exit_status() {
         let mut t = test_env(&[("TZ", "Asia/Kolkata")]);
         running(&t);
-        t.runner().spawns().on(
-            "-l",
-            Script {
-                stdout: b"$ ".to_vec(),
-                echo: true,
-                exit_on: Some(b"exit\r".to_vec()),
-                ..Script::default()
-            },
-        );
-        let (out, code) = drive(&mut t, "claude-proj.sbx", |h| async move {
+        let fake = FakeSmolvm::install(&t, None);
+        let (first, second, tty, code) = drive(&mut t, "claude-proj.sbx", |h| async move {
             let mut ch = h.channel_open_session().await.unwrap();
             ch.request_pty(true, "xterm-256color", 100, 30, 0, 0, &[])
                 .await
                 .unwrap();
-            assert!(matches!(ch.wait().await, Some(ChannelMsg::Success)));
+            assert!(matches!(reply(&mut ch).await, ChannelMsg::Success));
             ch.request_shell(true).await.unwrap();
-            assert!(matches!(ch.wait().await, Some(ChannelMsg::Success)));
-            ch.data_bytes(&b"ls\r"[..]).await.unwrap();
+            assert!(matches!(reply(&mut ch).await, ChannelMsg::Success));
+            // The markers are computed, so the echo of the typed line doesn't match them.
+            ch.data_bytes(&b"stty size; echo A$((20+22))\r"[..])
+                .await
+                .unwrap();
+            let first = read_until(&mut ch, "A42").await;
             ch.window_change(120, 40, 0, 0).await.unwrap();
-            let mut seen = Vec::new();
-            while !String::from_utf8_lossy(&seen).contains("ls\r") {
-                if let Some(ChannelMsg::Data { data }) = ch.wait().await {
-                    seen.extend_from_slice(&data);
-                }
-            }
-            // The shell exits on `exit`; the fake sees it on stdin.
-            ch.data_bytes(&b"exit\r"[..]).await.unwrap();
+            ch.data_bytes(&b"stty size; echo B$((20+22))\r"[..])
+                .await
+                .unwrap();
+            let second = read_until(&mut ch, "B42").await;
+            ch.data_bytes(&b"test -t 0 && echo C$((20+22)); exit 5\r"[..])
+                .await
+                .unwrap();
             let (rest, _, code) = collect(&mut ch).await;
-            seen.extend(rest);
-            (seen, code)
+            (
+                first,
+                second,
+                String::from_utf8_lossy(&rest).into_owned(),
+                code,
+            )
         });
-        assert!(String::from_utf8_lossy(&out).starts_with("$ "));
-        assert_eq!(code, Some(0));
-        let spawned = t.runner().spawns().spawned();
-        let line = spawned[0].args.join(" ");
+        assert!(first.contains("30 100"), "{first:?}");
+        assert!(second.contains("40 120"), "{second:?}");
+        assert!(tty.contains("C42"), "{tty:?}");
+        assert_eq!(code, Some(5));
+        let line = &fake.calls()[0];
         assert!(
-            line.contains(" -w /w/proj -e TERM=xterm-256color -e TZ=Asia/Kolkata -i -t -- sh -c ")
+            line.contains(" -w /w/proj -e TERM=xterm-256color -e TZ=Asia/Kolkata -i -t -- sh -c "),
+            "{line}"
         );
         assert!(line.ends_with("exec \"$s\" -l"), "{line}");
-        let size = |cols, rows| crate::smolvm::Pty { cols, rows };
-        assert_eq!(spawned[0].pty, Some(size(100, 30)));
-        assert_eq!(*spawned[0].resizes.lock().unwrap(), vec![size(120, 40)]);
-        assert_eq!(*spawned[0].stdin.lock().unwrap(), b"ls\rexit\r");
     }
 
     #[test]
     fn subsystems_x11_and_remote_forwarding_are_refused() {
         let mut t = test_env(&[]);
         running(&t);
-        let (sftp, forward) = drive(&mut t, "claude-proj.sbx", |h| async move {
+        let fake = FakeSmolvm::install(&t, None);
+        let (sftp, x11, forward) = drive(&mut t, "claude-proj.sbx", |h| async move {
             let mut ch = h.channel_open_session().await.unwrap();
             ch.request_subsystem(true, "sftp").await.unwrap();
-            let sftp = ch.wait().await;
+            let sftp = reply(&mut ch).await;
+            ch.request_x11(true, false, "MIT-MAGIC-COOKIE-1", "00", 0)
+                .await
+                .unwrap();
+            let x11 = reply(&mut ch).await;
             let forward = h.tcpip_forward("127.0.0.1", 0).await;
-            (sftp, forward.is_err())
+            (sftp, x11, forward.is_err())
         });
-        assert!(matches!(sftp, Some(ChannelMsg::Failure)));
+        assert!(matches!(sftp, ChannelMsg::Failure));
+        assert!(matches!(x11, ChannelMsg::Failure));
         assert!(forward);
-        assert!(t.runner().spawns().spawned().is_empty());
+        assert!(fake.calls().is_empty());
     }
 
     #[test]
-    fn local_forwards_reach_guest_loopback_through_exec_and_other_targets_are_refused() {
+    fn a_second_command_on_one_channel_is_refused() {
         let mut t = test_env(&[]);
         running(&t);
-        t.runner().spawns().on(
-            "nc 127.0.0.1 8080",
-            Script {
-                stdout: b"hello ".to_vec(),
-                echo: true,
-                ..Script::default()
-            },
+        let _fake = FakeSmolvm::install(&t, None);
+        let (second, out) = drive(&mut t, "claude-proj.sbx", |h| async move {
+            let mut ch = h.channel_open_session().await.unwrap();
+            ch.exec(true, "cat").await.unwrap();
+            assert!(matches!(reply(&mut ch).await, ChannelMsg::Success));
+            ch.exec(true, "echo second").await.unwrap();
+            let second = reply(&mut ch).await;
+            ch.eof().await.unwrap();
+            (second, collect(&mut ch).await.0)
+        });
+        assert!(matches!(second, ChannelMsg::Failure));
+        assert!(out.is_empty());
+    }
+
+    #[test]
+    fn at_most_64_channels_are_open_at_once() {
+        let mut t = test_env(&[]);
+        running(&t);
+        let _fake = FakeSmolvm::install(&t, None);
+        let (first_64, the_65th) = drive(&mut t, "claude-proj.sbx", |h| async move {
+            let mut open = Vec::new();
+            for _ in 0..64 {
+                open.push(h.channel_open_session().await);
+            }
+            let extra = h.channel_open_session().await.is_ok();
+            (open.iter().all(Result::is_ok), extra)
+        });
+        assert!(first_64);
+        assert!(!the_65th);
+    }
+
+    /// A local server that sends "hello ", reads 5 bytes, sends them back and closes. Returns its port.
+    fn echo_server() -> u16 {
+        use std::io::{Read, Write};
+        let listener = std::net::TcpListener::bind("127.0.0.1:0").unwrap();
+        let port = listener.local_addr().unwrap().port();
+        std::thread::spawn(move || {
+            if let Ok((mut s, _)) = listener.accept() {
+                let _ = s.write_all(b"hello ");
+                let mut buf = [0u8; 5];
+                if s.read_exact(&mut buf).is_ok() {
+                    let _ = s.write_all(&buf);
+                }
+            }
+        });
+        port
+    }
+
+    /// Forwards to `echo_server` through the proxy, with `path` as the guest's PATH; what comes
+    /// back, and the calls made.
+    fn forward(path: Option<&str>) -> (Vec<u8>, Vec<String>) {
+        let mut t = test_env(&[]);
+        running(&t);
+        let fake = FakeSmolvm::install(&t, path);
+        let port = echo_server();
+        let out = drive(&mut t, "claude-proj.sbx", move |h| async move {
+            let mut ch = h
+                .channel_open_direct_tcpip("localhost", u32::from(port), "127.0.0.1", 1)
+                .await
+                .unwrap();
+            ch.data_bytes(&b"world"[..]).await.unwrap();
+            ch.eof().await.unwrap();
+            let (out, _, code) = collect(&mut ch).await;
+            // A forward has no exit status.
+            assert_eq!(code, None);
+            out
+        });
+        (out, fake.calls())
+    }
+
+    #[test]
+    fn local_forwards_use_nc_in_the_guest() {
+        let (_nc, path) = tools(&["sh", "nc"]);
+        let (out, calls) = forward(Some(&path));
+        assert_eq!(out, b"hello world");
+        assert_eq!(calls.len(), 1);
+        assert!(
+            calls[0].starts_with(
+                "machine exec --name sbx-claude-proj -u agent -w /w/proj -i -- sh -c "
+            ),
+            "{calls:?}"
         );
-        let (out, refused) = drive(&mut t, "claude-proj.sbx", |h| async move {
+        assert!(calls[0].contains("exec nc 127.0.0.1 "), "{calls:?}");
+    }
+
+    #[test]
+    fn local_forwards_fall_back_to_bash_dev_tcp() {
+        let (_d, path) = tools(&["sh", "bash", "cat"]);
+        assert_eq!(forward(Some(&path)).0, b"hello world");
+    }
+
+    #[test]
+    fn a_forward_fails_when_the_guest_has_neither_nc_nor_bash() {
+        let (_d, path) = tools(&["sh", "cat"]);
+        assert_eq!(forward(Some(&path)).0, b"");
+    }
+
+    #[test]
+    fn forwards_to_anything_but_guest_loopback_are_refused_and_start_nothing() {
+        let mut t = test_env(&[]);
+        running(&t);
+        let fake = FakeSmolvm::install(&t, None);
+        let refused = drive(&mut t, "claude-proj.sbx", |h| async move {
             let mut refused = Vec::new();
             for (host, port) in [("10.0.0.5", 80), ("example.com", 80), ("0.0.0.0", 80)] {
                 refused.push(
@@ -282,39 +462,17 @@ mod tests {
                         .is_err(),
                 );
             }
-            let mut ch = h
-                .channel_open_direct_tcpip("localhost", 8080, "127.0.0.1", 1)
-                .await
-                .unwrap();
-            ch.data_bytes(&b"world"[..]).await.unwrap();
-            ch.eof().await.unwrap();
-            let (out, _, code) = collect(&mut ch).await;
-            // A forward has no exit status.
-            assert_eq!(code, None);
-            (out, refused)
+            refused
         });
         assert_eq!(refused, [true, true, true]);
-        assert_eq!(out, b"hello world");
-        let spawned = t.runner().spawns().spawned();
-        assert_eq!(spawned.len(), 1, "refused targets start nothing");
-        let line = spawned[0].args.join(" ");
-        assert!(
-            line.starts_with(
-                "machine exec --name sbx-claude-proj -u agent -w /w/proj -i -- sh -c "
-            ),
-            "{line}"
-        );
-        assert!(
-            line.contains("exec nc 127.0.0.1 8080;") && line.contains("/dev/tcp/127.0.0.1/8080"),
-            "{line}"
-        );
-        assert_eq!(*spawned[0].stdin.lock().unwrap(), b"world");
+        assert!(fake.calls().is_empty());
     }
 
     #[test]
     fn only_auth_none_is_accepted() {
         let mut t = test_env(&[]);
         running(&t);
+        let _fake = FakeSmolvm::install(&t, None);
         let ok = drive_as(&mut t, "claude-proj.sbx", false, |mut h| async move {
             let password = h.authenticate_password("agent", "x").await.unwrap();
             let none = h.authenticate_none("agent").await.unwrap();
@@ -327,6 +485,7 @@ mod tests {
     fn a_stopped_sandbox_is_started_and_a_missing_one_is_an_error() {
         let mut t = test_env(&[]);
         t.machine("sbx-claude-proj", "stopped", &[("sbx.name", "claude-proj")]);
+        let _fake = FakeSmolvm::install(&t, None);
         drive(&mut t, "claude-proj.sbx", |_| async {});
         assert!(
             t.calls()

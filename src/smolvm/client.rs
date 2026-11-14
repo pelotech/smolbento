@@ -415,7 +415,7 @@ impl<R: Runner> Smolvm<R> {
     }
 
     /// Starts processes with piped or pty stdio (`None` when the runner can't).
-    pub fn spawner(&self) -> Option<std::sync::Arc<dyn crate::smolvm::Spawner>> {
+    pub fn spawner(&self) -> Option<crate::smolvm::ProcessSpawner> {
         self.runner.spawner()
     }
 

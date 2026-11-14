@@ -14,7 +14,7 @@ use tokio::io::{AsyncRead, AsyncWrite};
 use tokio::sync::mpsc;
 
 use crate::sandbox::env::session_env;
-use crate::smolvm::{ExecSpec, Proc, ProcCtl, Pty, Spawner};
+use crate::smolvm::{ExecSpec, Proc, ProcCtl, ProcessSpawner, Pty};
 
 /// Concurrent channels (sessions and forwards) per connection. The client is the local user, but
 /// each channel is a process.
@@ -22,7 +22,7 @@ const MAX_CHANNELS: usize = 64;
 
 /// What the server connects clients to.
 pub struct Target {
-    pub spawner: Arc<dyn Spawner>,
+    pub spawner: ProcessSpawner,
     /// The smolvm machine name.
     pub machine: String,
     /// The session user (`Meta::session_user`).
@@ -117,7 +117,7 @@ struct Chan {
 struct Running {
     /// Bytes for the process's stdin; dropped on the client's EOF.
     stdin: Option<mpsc::Sender<Vec<u8>>>,
-    ctl: Arc<dyn ProcCtl>,
+    ctl: Arc<ProcCtl>,
     pty: bool,
 }
 
@@ -535,11 +535,7 @@ impl Conn {
 
 #[cfg(test)]
 mod tests {
-    use std::io::{Read, Write};
-    use std::net::{IpAddr, TcpListener};
-    use std::process::{Command, Stdio};
-
-    use super::{forward_address, forward_command, shell_command};
+    use super::{forward_address, shell_command};
 
     #[test]
     fn forwards_go_to_guest_loopback_only() {
@@ -574,77 +570,5 @@ mod tests {
         assert_eq!(&c[3..], ["sh", "echo 'hi'; id"]);
         assert!(!c[2].contains("echo"));
         assert!(shell_command(None)[2].ends_with("exec \"$s\" -l"));
-    }
-
-    /// Runs the forward command with `path` as PATH against a one-shot echo server.
-    fn forward_with(path: &str) -> (Option<i32>, String) {
-        let server = TcpListener::bind("127.0.0.1:0").unwrap();
-        let port = server.local_addr().unwrap().port();
-        let echo = std::thread::spawn(move || {
-            if let Ok((mut s, _)) = server.accept() {
-                let mut buf = [0u8; 64];
-                if let Ok(n) = s.read(&mut buf) {
-                    let _ = s.write_all(&buf[..n]);
-                }
-                // The peer closing ends the forward, as a real service would.
-            }
-        });
-        let cmd = forward_command((IpAddr::from([127, 0, 0, 1]), port));
-        let mut child = Command::new("/bin/sh")
-            .args(&cmd[1..])
-            .env("PATH", path)
-            .stdin(Stdio::piped())
-            .stdout(Stdio::piped())
-            .stderr(Stdio::null())
-            .spawn()
-            .unwrap();
-        let mut stdin = child.stdin.take().unwrap();
-        let _ = stdin.write_all(b"ping");
-        let mut out = String::new();
-        let mut buf = [0u8; 4];
-        let mut stdout = child.stdout.take().unwrap();
-        if let Ok(4) = stdout.read(&mut buf) {
-            out.push_str(&String::from_utf8_lossy(&buf));
-        }
-        drop(stdin);
-        let code = child.wait().unwrap().code();
-        drop(echo);
-        (code, out)
-    }
-
-    fn tools(names: &[&str]) -> (tempfile::TempDir, String) {
-        let dir = tempfile::tempdir().unwrap();
-        for n in names {
-            let found = std::env::split_paths(&std::env::var_os("PATH").unwrap())
-                .map(|d| d.join(n))
-                .find(|p| p.is_file())
-                .unwrap_or_else(|| panic!("{n} not installed"));
-            std::os::unix::fs::symlink(found, dir.path().join(n)).unwrap();
-        }
-        let path = dir.path().display().to_string();
-        (dir, path)
-    }
-
-    #[test]
-    fn the_forward_script_uses_nc_when_there_is_one() {
-        if std::env::split_paths(&std::env::var_os("PATH").unwrap())
-            .all(|d| !d.join("nc").is_file())
-        {
-            return;
-        }
-        let (_d, path) = tools(&["nc"]);
-        assert_eq!(forward_with(&path), (Some(0), "ping".into()));
-    }
-
-    #[test]
-    fn the_forward_script_falls_back_to_bash_dev_tcp() {
-        let (_d, path) = tools(&["bash", "cat"]);
-        assert_eq!(forward_with(&path), (Some(0), "ping".into()));
-    }
-
-    #[test]
-    fn the_forward_script_says_so_when_there_is_neither() {
-        let (_d, path) = tools(&["cat"]);
-        assert_eq!(forward_with(&path), (Some(127), String::new()));
     }
 }

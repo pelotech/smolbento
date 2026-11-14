@@ -19,11 +19,32 @@ pub struct Pty {
 }
 
 /// What can be done to a running [`Proc`] from another thread.
-pub trait ProcCtl: Send + Sync {
+pub struct ProcCtl {
+    pid: libc::pid_t,
+    master: Option<File>,
+}
+
+impl ProcCtl {
     /// Sets the terminal size (a pty process only).
-    fn resize(&self, size: Pty);
+    pub fn resize(&self, size: Pty) {
+        if let Some(m) = &self.master {
+            let ws = winsize(size);
+            // SAFETY: TIOCSWINSZ reads a `winsize` from a valid pointer; the fd is a pty master
+            // this struct keeps open.
+            unsafe { libc::ioctl(m.as_raw_fd(), libc::TIOCSWINSZ as _, &ws) };
+        }
+    }
+
     /// Ends the process (a hang-up for a terminal session, else a termination).
-    fn kill(&self);
+    pub fn kill(&self) {
+        let sig = if self.master.is_some() {
+            libc::SIGHUP
+        } else {
+            libc::SIGTERM
+        };
+        // SAFETY: signalling a pid we spawned; at worst it has exited (ESRCH).
+        unsafe { libc::kill(self.pid, sig) };
+    }
 }
 
 /// A running process. With a pty, `stdout` and `stdin` are the master side and there is no
@@ -32,18 +53,13 @@ pub struct Proc {
     pub stdin: Box<dyn Write + Send>,
     pub stdout: Box<dyn Read + Send>,
     pub stderr: Option<Box<dyn Read + Send>>,
-    pub ctl: Arc<dyn ProcCtl>,
+    pub ctl: Arc<ProcCtl>,
     /// Waits for the process to end and returns its exit code (`128 + n` after signal `n`).
     pub wait: Box<dyn FnOnce() -> Result<i32> + Send>,
 }
 
-/// Starts smolvm processes (owned, so it can move to other threads).
-pub trait Spawner: Send + Sync {
-    /// Runs smolvm with `args`, on a new pty of the given size when there is one.
-    fn spawn(&self, args: &[String], pty: Option<Pty>) -> Result<Proc>;
-}
-
-/// Spawns the real smolvm binary.
+/// Starts smolvm processes with piped or pty stdio. Owned, so it can move to other threads.
+#[derive(Clone)]
 pub struct ProcessSpawner {
     pub(super) bin: PathBuf,
     pub(super) env: Vec<(String, String)>,
@@ -54,32 +70,6 @@ impl ProcessSpawner {
         let mut cmd = Command::new(&self.bin);
         cmd.args(args).envs(self.env.iter().map(|(k, v)| (k, v)));
         cmd
-    }
-}
-
-struct Signals {
-    pid: libc::pid_t,
-    master: Option<File>,
-}
-
-impl ProcCtl for Signals {
-    fn resize(&self, size: Pty) {
-        if let Some(m) = &self.master {
-            let ws = winsize(size);
-            // SAFETY: TIOCSWINSZ reads a `winsize` from a valid pointer; the fd is a pty master
-            // this struct keeps open.
-            unsafe { libc::ioctl(m.as_raw_fd(), libc::TIOCSWINSZ as _, &ws) };
-        }
-    }
-
-    fn kill(&self) {
-        let sig = if self.master.is_some() {
-            libc::SIGHUP
-        } else {
-            libc::SIGTERM
-        };
-        // SAFETY: signalling a pid we spawned; at worst it has exited (ESRCH).
-        unsafe { libc::kill(self.pid, sig) };
     }
 }
 
@@ -121,8 +111,9 @@ fn open_pty(size: Pty) -> Result<(OwnedFd, OwnedFd)> {
     Ok((master, slave))
 }
 
-impl Spawner for ProcessSpawner {
-    fn spawn(&self, args: &[String], pty: Option<Pty>) -> Result<Proc> {
+impl ProcessSpawner {
+    /// Runs smolvm with `args`, on a new pty of the given size when there is one.
+    pub fn spawn(&self, args: &[String], pty: Option<Pty>) -> Result<Proc> {
         let mut cmd = self.command(args);
         let spawn_error = || format!("could not run {}", self.bin.display());
         let Some(size) = pty else {
@@ -137,7 +128,7 @@ impl Spawner for ProcessSpawner {
                 stdin: Box::new(child.stdin.take().context("smolvm stdin")?),
                 stdout: Box::new(child.stdout.take().context("smolvm stdout")?),
                 stderr: Some(Box::new(child.stderr.take().context("smolvm stderr")?)),
-                ctl: Arc::new(Signals { pid, master: None }),
+                ctl: Arc::new(ProcCtl { pid, master: None }),
                 wait: Box::new(move || Ok(super::exit_code(child.wait()?))),
             });
         };
@@ -165,7 +156,7 @@ impl Spawner for ProcessSpawner {
             stdin: Box::new(master.try_clone()?),
             stdout: Box::new(PtyReader(master.try_clone()?)),
             stderr: None,
-            ctl: Arc::new(Signals {
+            ctl: Arc::new(ProcCtl {
                 pid,
                 master: Some(master),
             }),
@@ -233,7 +224,7 @@ mod tests {
 
     fn pty_check(
         mut out: Box<dyn Read + Send>,
-        ctl: Arc<dyn ProcCtl>,
+        ctl: Arc<ProcCtl>,
         wait: Box<dyn FnOnce() -> Result<i32> + Send>,
     ) {
         let mut seen = String::new();
