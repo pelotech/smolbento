@@ -1,7 +1,7 @@
 //! Tests of starting and creating sandboxes, by topic, with the fixtures they share.
 
 mod clone;
-mod identity;
+mod guest_cmd;
 mod kits;
 mod start;
 

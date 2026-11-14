@@ -154,7 +154,7 @@ fn attach<R: Runner>(ctx: &Ctx<R>, a: &RunArgs, sb: &Sandbox, command: Vec<Strin
     let sessions = ctx.paths.sessions();
     let mut spec = ExecSpec {
         name: sb.machine.clone(),
-        user: Some("agent".into()),
+        user: Some(sb.meta.session_user().into()),
         workdir: Some(sb.workdir()),
         interactive: true,
         tty: ctx.stdin_tty,
@@ -164,9 +164,8 @@ fn attach<R: Runner>(ctx: &Ctx<R>, a: &RunArgs, sb: &Sandbox, command: Vec<Strin
     spec.env.extend(a.session_env.iter().cloned());
     sandbox::env::session_env(&ctx.env, spec.tty, sb.meta.bridge, &mut spec.env);
     // A v3 workload runs as its image user, through bash so the image's BASH_ENV is sourced.
-    let image_user = sb.meta.user.clone();
-    if let Some(user) = &image_user {
-        spec.user = Some(user.clone());
+    let image_user = sb.meta.user.is_some();
+    if image_user {
         spec.cmd = [BASH, "-c", "exec -- \"$@\"", "bash"]
             .into_iter()
             .map(String::from)
@@ -178,7 +177,7 @@ fn attach<R: Runner>(ctx: &Ctx<R>, a: &RunArgs, sb: &Sandbox, command: Vec<Strin
     let _bridge = bridge::attach(&ctx.env, &ctx.settings, sb);
     // A runtime `ssh-agent@1` grant: the filtered host agent, while the user is attached.
     let _agent = crate::ssh_agent::filter::attach(&ctx.env, &ctx.paths, sb);
-    match image_user.is_some().then(|| has_bash(ctx, sb)) {
+    match image_user.then(|| has_bash(ctx, sb)) {
         Some(Err(e)) => Err(e),
         Some(Ok(false)) => {
             // sbx's error for such an image, and the code its agent exits with.

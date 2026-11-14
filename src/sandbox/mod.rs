@@ -3,7 +3,7 @@
 mod clone_step;
 pub mod create;
 pub mod env;
-mod identity;
+mod guest_cmd;
 mod kit_steps;
 pub mod labels;
 pub mod name;
@@ -23,7 +23,7 @@ use crate::workspace::MOUNTLESS_WORKDIR;
 
 pub use clone_step::*;
 pub use create::CreateRequest;
-pub use identity::*;
+pub use guest_cmd::*;
 pub use kit_steps::*;
 pub use labels::Meta;
 

@@ -173,6 +173,12 @@ pub struct Meta {
 }
 
 impl Meta {
+    /// The user agent sessions run as, and so the machine's workload user, which smolvm maps the
+    /// workspace to: a v3 workload's image user, else `agent`.
+    pub fn session_user(&self) -> &str {
+        self.user.as_deref().unwrap_or("agent")
+    }
+
     pub fn to_labels(&self) -> BTreeMap<String, String> {
         fn json(v: &impl serde::Serialize) -> String {
             serde_json::to_string(v).expect("strings serialize")
