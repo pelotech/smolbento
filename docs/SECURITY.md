@@ -184,7 +184,7 @@ kits you trust.
   `sbt settings set browser.enabled false`. Clipboard text may be crafted to run commands when
   pasted, so check it first.
 - Host service units. Per sandbox with a bridge or a runtime SSH agent grant, smolbento writes a
-  launchd user agent (`~/Library/LaunchAgents/dev.smolbento.*`) or `systemd --user` socket and
+  launchd user agent (`~/Library/Application Support/smolbento/launchd/dev.smolbento.*`) or `systemd --user` socket and
   service units. They run as you, never as root, listen on a `0600` socket and start
   `sbt _serve KIND SANDBOX` for each connection, with the connection as stdin and stdout and stderr
   on `/dev/null`. `_serve` is the same filter and bridge handler as before, reading the grant from

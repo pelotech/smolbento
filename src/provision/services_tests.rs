@@ -68,12 +68,12 @@ fn create_installs_the_units_before_the_first_start_and_mounts_their_sockets() {
         .position(|c| c.starts_with("machine start"))
         .unwrap();
     assert!(create < start);
-    let id = &crate::util::hex(&sha2::Sha256::digest(b"claude-proj"))[..16];
+    let id = &crate::util::hex(&sha2::Sha256::digest(b"claude-proj"))[..10];
     let sock = t
         .ctx
         .services
         .sock_dir()
-        .join(format!("ns1-{id}.bridge.sock"));
+        .join(format!("ns1{id}.bridge.sock"));
     let line = &calls[create];
     assert!(
         line.contains(&format!(

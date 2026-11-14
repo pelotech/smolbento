@@ -287,8 +287,9 @@ ssh-add -D                                  # fails: the sandbox can't change yo
   else the `SSH_AUTH_SOCK` of the user session (launchd supplies macOS's; on Linux the unit gets
   that of the last `sbt` that wrote it). Without a service manager, or for a sandbox created before
   units, it is served only while `sbt` runs for the sandbox (`run`, `exec -it`, plain `exec`; the
-  first `sbt` to start serves it).
-- Units live in `~/Library/LaunchAgents` (`dev.smolbento.<id>.<sandbox>.agent`) or
+  first `sbt` to start serves it). A socket path of 104 bytes or more (a very long home
+  directory) also means no units.
+- Units live in `~/Library/Application Support/smolbento/launchd` (`dev.smolbento.<id>.<sandbox>.agent.plist`; not in `~/Library/LaunchAgents`, which makes macOS announce a background item per sandbox, and not persistent: they're loaded again when `create`, `start`, `run` or `exec` find them unloaded after a reboot) or
   `~/.config/systemd/user` (`smolbento-<id>-<sandbox>-agent.socket`), named with a short hash of
   smolbento's data dir; they exist only for sandboxes with a runtime grant or the bridge, and go with
   the sandbox (see [Browser and clipboard](#browser-and-clipboard)). The socket is `0600` in a

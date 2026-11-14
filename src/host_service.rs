@@ -72,6 +72,9 @@ pub trait Control {
     fn usable(&self) -> bool;
     /// Loads the unit (again, if it was loaded) once its files are written.
     fn load(&self, unit: &UnitPaths) -> Result<()>;
+    /// Whether the unit is loaded now (a launchd job is gone after a reboot: its plist is not in
+    /// `~/Library/LaunchAgents`, which would raise a "Background Items Added" notice).
+    fn loaded(&self, unit: &UnitPaths) -> bool;
     /// Unloads the unit; its files and socket are deleted after.
     fn unload(&self, unit: &UnitPaths);
     /// After unit files were deleted.
@@ -87,6 +90,9 @@ impl Control for Unavailable {
     }
     fn load(&self, _: &UnitPaths) -> Result<()> {
         Ok(())
+    }
+    fn loaded(&self, _: &UnitPaths) -> bool {
+        false
     }
     fn unload(&self, _: &UnitPaths) {}
 }
@@ -107,8 +113,8 @@ pub fn namespace(paths: &Paths) -> String {
     hex(&Sha256::digest(paths.data.as_os_str().as_encoded_bytes()))[..8].to_string()
 }
 
-/// The longest socket path used: macOS caps them at 104 bytes including the NUL.
-const MAX_SOCKET_PATH: usize = 100;
+/// Socket paths must be shorter than this: macOS caps them at 104 bytes including the NUL.
+const MAX_SOCKET_PATH: usize = 104;
 
 impl HostServices {
     /// This host's service manager (launchd on macOS, `systemd --user` on Linux), if it has one
@@ -126,7 +132,7 @@ impl HostServices {
             if cfg!(target_os = "macos") {
                 (
                     Flavor::Launchd,
-                    home.join("Library/LaunchAgents"),
+                    home.join("Library/Application Support/smolbento/launchd"),
                     home.join("Library/Application Support/smolbento/sock"),
                     Box::new(Launchctl {
                         uid: crate::util::host_uid(),
@@ -196,9 +202,10 @@ impl HostServices {
     }
 
     fn socket_path(&self, name: &str, kind: Kind) -> PathBuf {
-        let id = &hex(&Sha256::digest(name.as_bytes()))[..16];
+        // Short: the isolated setups of the conformance adapter put the directory near the limit.
+        let id = &hex(&Sha256::digest(name.as_bytes()))[..10];
         self.sock_dir
-            .join(format!("{}-{id}.{}.sock", self.ns, kind.as_str()))
+            .join(format!("{}{id}.{}.sock", self.ns, kind.as_str()))
     }
 
     /// The sockets a new sandbox `name` gets, or `None` (served while attached, as before) when
@@ -300,6 +307,7 @@ impl HostServices {
             .iter()
             .zip(&texts)
             .all(|(f, t)| current(f).as_deref() == Some(t))
+            && self.ctl.loaded(&unit)
         {
             return Ok(());
         }
@@ -615,6 +623,14 @@ impl Control for Launchctl {
         )
     }
 
+    fn loaded(&self, unit: &UnitPaths) -> bool {
+        run(
+            "launchctl",
+            &["print", &format!("{}/{}", self.domain(), unit.id)],
+        )
+        .is_ok()
+    }
+
     fn unload(&self, unit: &UnitPaths) {
         let _ = run(
             "launchctl",
@@ -634,6 +650,10 @@ impl Control for Systemctl {
         run("systemctl", &["--user", "daemon-reload"])?;
         run("systemctl", &["--user", "enable", &unit.id])?;
         run("systemctl", &["--user", "restart", &unit.id])
+    }
+
+    fn loaded(&self, unit: &UnitPaths) -> bool {
+        run("systemctl", &["--user", "is-active", &unit.id]).is_ok()
     }
 
     fn unload(&self, unit: &UnitPaths) {
@@ -662,6 +682,15 @@ pub(crate) mod fake {
         fn load(&self, u: &UnitPaths) -> Result<()> {
             self.0.borrow_mut().push(format!("load {}", u.id));
             Ok(())
+        }
+        fn loaded(&self, u: &UnitPaths) -> bool {
+            let last = self
+                .0
+                .borrow()
+                .iter()
+                .rfind(|c| c.ends_with(&format!(" {}", u.id)))
+                .cloned();
+            last.is_some_and(|c| c.starts_with("load "))
         }
         fn unload(&self, u: &UnitPaths) {
             self.0.borrow_mut().push(format!("unload {}", u.id));
@@ -854,6 +883,27 @@ mod tests {
         assert_eq!(ctl.calls().len(), 2, "unchanged: no reload");
         sync(&[("PATH", "/usr/bin")]);
         assert_eq!(ctl.calls().len(), 4, "a changed PATH rewrites and reloads");
+    }
+
+    #[test]
+    fn sync_loads_an_unchanged_unit_that_is_no_longer_loaded() {
+        let tmp = tempfile::tempdir().unwrap();
+        let (s, ctl) = services(tmp.path(), Flavor::Launchd, "ns1");
+        let sync = || {
+            s.sync("s1", &[Kind::Agent], &paths("/d"), &envs(&[]))
+                .unwrap()
+        };
+        sync();
+        // A reboot unloads launchd jobs that aren't in ~/Library/LaunchAgents (we don't write there).
+        ctl.0
+            .borrow_mut()
+            .push("unload dev.smolbento.ns1.s1.agent".into());
+        sync();
+        assert_eq!(
+            ctl.calls().last().unwrap(),
+            "load dev.smolbento.ns1.s1.agent"
+        );
+        assert_eq!(ctl.calls().len(), 3);
     }
 
     #[test]

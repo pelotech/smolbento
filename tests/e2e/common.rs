@@ -186,6 +186,9 @@ impl Drop for E2e {
         let _ = Command::new("smolvm")
             .args(["machine", "delete", "-n", &self.machine(), "-f"])
             .output();
+        // Machines deleted with smolvm leave host service units behind: any state-changing
+        // command sweeps the ones of this test's own data dir (here `rm` of a name that is gone).
+        let _ = self.sbt(&["rm", "-f", &self.name]);
     }
 }
 

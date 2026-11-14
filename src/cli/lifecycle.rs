@@ -208,6 +208,9 @@ pub(crate) fn remaining_forks<'a>(
 }
 
 pub fn rm<R: Runner>(ctx: &mut Ctx<R>, a: &RmArgs) -> Result<i32> {
+    // First, so it happens even when a name isn't found: that is how leftovers of a sandbox
+    // deleted with `smolvm machine delete` get cleaned by naming it.
+    provision::sweep_orphans(ctx);
     let all = sandbox::list(&ctx.vm)?;
     let targets: Vec<&Sandbox> = if a.all {
         all.iter().collect()
@@ -239,7 +242,6 @@ pub fn rm<R: Runner>(ctx: &mut Ctx<R>, a: &RmArgs) -> Result<i32> {
     for sb in forks_first(targets) {
         remove(ctx, sb, true)?;
     }
-    provision::sweep_orphans(ctx);
     Ok(0)
 }
 

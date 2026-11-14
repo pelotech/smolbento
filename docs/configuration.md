@@ -124,7 +124,7 @@ Sign a kit with `sbt kit sign --help`.
 | `~/.local/share/smolbento/env/` | Your approval record for each environment file (`<name>.toml`) |
 | `~/.local/share/smolbento/templates/` | Saved templates: `templates.json` and the `<id>.smolmachine` packs |
 | `~/.local/share/smolbento/kit-host-mounts/` | Kit [host mounts](usage.md#kit-host-mounts), kept after their sandboxes are removed |
-| `~/Library/LaunchAgents/dev.smolbento.<id>.<sandbox>.<agent\|bridge>.plist` (macOS), `~/.config/systemd/user/smolbento-<id>-<sandbox>-<agent\|bridge>.socket` and `…@.service` (Linux) | [Host service](usage.md#browser-and-clipboard) units, one per socket of a sandbox; `<id>` is a short hash of the data dir. Removed with the sandbox. |
+| `~/Library/Application Support/smolbento/launchd/dev.smolbento.<id>.<sandbox>.<agent\|bridge>.plist` (macOS), `~/.config/systemd/user/smolbento-<id>-<sandbox>-<agent\|bridge>.socket` and `…@.service` (Linux) | [Host service](usage.md#browser-and-clipboard) units, one per socket of a sandbox; `<id>` is a short hash of the data dir. Removed with the sandbox. |
 | `~/Library/Application Support/smolbento/sock/` (macOS), `$XDG_RUNTIME_DIR/smolbento/` (Linux) | Their sockets, mode 0600 in a private (0700) directory. Without a service manager, sockets are `/tmp/sbt-<uid>/`, served while attached. |
 
 `XDG_CONFIG_HOME`, `XDG_CACHE_HOME` and `XDG_DATA_HOME` are honoured, also on macOS.
