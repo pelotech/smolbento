@@ -23,6 +23,7 @@ mod serve;
 mod settings;
 mod setup;
 mod skills;
+mod ssh;
 mod template;
 mod upload_pack;
 
@@ -182,6 +183,7 @@ pub fn dispatch<R: Runner>(ctx: &mut Ctx<R>, cli: Cli) -> Result<i32> {
         Cmd::Env(e) => env::run(ctx, e),
         Cmd::UploadPack { sandbox, .. } => upload_pack::run(ctx, &sandbox),
         Cmd::Bridge { sandbox } => bridge::run(ctx, &sandbox),
+        Cmd::Ssh(s) => ssh::run(ctx, s),
         Cmd::Serve { kind, sandbox } => serve::run(ctx, &kind, &sandbox),
         Cmd::Daemon(_) => {
             writeln!(

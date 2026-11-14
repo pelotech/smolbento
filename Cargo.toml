@@ -21,6 +21,7 @@ hmac = "0.13.0"
 humantime = "2.4.0"
 libc = "0.2.191"
 oci-client = { version = "0.18.0", default-features = false, features = ["rustls-tls-no-provider"] }
+rand = "0.10.3"
 regex-lite = "0.1.9"
 # Temporary git pin: russh main pins ssh-key =0.7.0-rc.12 (the 0.65.1 release pins rc.11). Switch to crates.io once released.
 russh = { version = "0.65.1", git = "https://github.com/Eugeny/russh", rev = "b541663a8838", default-features = false, features = ["ring"] }
@@ -39,7 +40,7 @@ tar = { version = "0.4.46", default-features = false }
 tempfile = "3.27.0"
 thiserror = "2.0.21"
 toml = "1.1.8"
-tokio = { version = "1.54.1", features = ["rt"] }
+tokio = { version = "1.54.1", features = ["rt", "io-util", "io-std", "sync", "time", "macros"] }
 
 [profile.release]
 opt-level = 3

@@ -121,6 +121,9 @@ pub enum Cmd {
     /// (for e2e tests, which can't attach)
     #[command(name = "_bridge", hide = true)]
     Bridge { sandbox: String },
+    /// The SSH server `ssh NAME.sbx` talks to, run by the `ProxyCommand` that `setup ssh` writes
+    #[command(subcommand, hide = true)]
+    Ssh(SshCmd),
     /// Serves one connection to a sandbox's agent or bridge socket on stdin (run by the unit that
     /// owns the socket)
     #[command(name = "_serve", hide = true)]
@@ -147,10 +150,17 @@ impl Cmd {
                 | Cmd::Ports(_)
                 | Cmd::UploadPack { .. }
                 | Cmd::Bridge { .. }
+                | Cmd::Ssh(_)
                 | Cmd::Template(TemplateCmd::Save(_))
                 | Cmd::Env(EnvCmd::Create(_) | EnvCmd::Run(_) | EnvCmd::Exec(_) | EnvCmd::Rm(_))
         )
     }
+}
+
+#[derive(Debug, Subcommand)]
+pub enum SshCmd {
+    /// Serves SSH for the sandbox named by HOST (NAME.sbx) on stdin and stdout
+    Proxy { host: String },
 }
 
 #[derive(Debug, Subcommand)]

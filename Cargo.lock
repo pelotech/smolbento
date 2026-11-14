@@ -2542,6 +2542,7 @@ dependencies = [
  "insta",
  "libc",
  "oci-client",
+ "rand",
  "regex-lite",
  "reqwest",
  "russh",

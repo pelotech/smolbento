@@ -148,6 +148,7 @@ env plan
 setup ssh
 setup ssh remove
 setup ssh --auto-create
+ssh proxy my-sandbox.sbx
 tui
 # Native
 settings ls

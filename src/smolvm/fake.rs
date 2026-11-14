@@ -1,10 +1,14 @@
 //! A scripted [`Runner`] for tests: records every call and answers by argument prefix.
 
 use std::cell::RefCell;
+use std::io::{Read, Write};
+use std::sync::atomic::{AtomicBool, Ordering};
+use std::sync::mpsc::{Receiver, Sender, channel};
+use std::sync::{Arc, Mutex};
 
 use anyhow::Result;
 
-use super::{Output, Runner};
+use super::{Output, Proc, ProcCtl, Pty, Runner, Spawner};
 
 struct Reply {
     prefix: Vec<String>,
@@ -30,6 +34,7 @@ pub struct FakeRunner {
     progress: RefCell<Vec<(Vec<String>, Vec<String>)>>,
     during_interactive: RefCell<Option<Box<dyn Fn()>>>,
     during: RefCell<Vec<(Vec<String>, Hook)>>,
+    spawner: Arc<FakeSpawner>,
 }
 
 fn strings(items: &[&str]) -> Vec<String> {
@@ -181,6 +186,11 @@ impl FakeRunner {
         self.uploads.borrow().clone()
     }
 
+    /// The fake process spawner (what `ssh proxy` runs sessions with).
+    pub fn spawns(&self) -> &Arc<FakeSpawner> {
+        &self.spawner
+    }
+
     pub fn interactive_calls(&self) -> Vec<Vec<String>> {
         self.interactive_calls.borrow().clone()
     }
@@ -258,6 +268,10 @@ impl Runner for FakeRunner {
         self.run_with_env(args, env, remove)
     }
 
+    fn spawner(&self) -> Option<Arc<dyn Spawner>> {
+        Some(self.spawner.clone())
+    }
+
     fn interactive(&self, args: &[String]) -> Result<i32> {
         self.interactive_calls.borrow_mut().push(args.to_vec());
         if let Some(f) = self.during_interactive.borrow().as_ref() {
@@ -267,6 +281,165 @@ impl Runner for FakeRunner {
             anyhow::bail!("{message}");
         }
         Ok(*self.interactive_code.borrow())
+    }
+}
+
+/// What a fake spawned process does.
+#[derive(Clone, Default)]
+pub struct Script {
+    pub stdout: Vec<u8>,
+    pub stderr: Vec<u8>,
+    pub code: i32,
+    /// Echoes its stdin to stdout and exits when stdin closes (or it is killed).
+    pub echo: bool,
+    /// Exits when its stdin has received these bytes.
+    pub exit_on: Option<Vec<u8>>,
+}
+
+/// One process the fake spawner started, with what was done to it.
+pub struct Spawned {
+    pub args: Vec<String>,
+    pub pty: Option<Pty>,
+    pub resizes: Arc<Mutex<Vec<Pty>>>,
+    pub stdin: Arc<Mutex<Vec<u8>>>,
+    pub killed: Arc<AtomicBool>,
+}
+
+/// Answers spawns by a substring of the joined args (later registrations win; no match runs a
+/// process that exits 0 silently).
+#[derive(Default)]
+pub struct FakeSpawner {
+    scripts: Mutex<Vec<(String, Script)>>,
+    spawned: Mutex<Vec<Arc<Spawned>>>,
+}
+
+impl FakeSpawner {
+    pub fn on(&self, contains: &str, script: Script) {
+        self.scripts.lock().unwrap().push((contains.into(), script));
+    }
+
+    /// The processes started so far.
+    pub fn spawned(&self) -> Vec<Arc<Spawned>> {
+        self.spawned.lock().unwrap().clone()
+    }
+}
+
+struct Chan(Receiver<Vec<u8>>, Vec<u8>);
+
+impl Read for Chan {
+    fn read(&mut self, buf: &mut [u8]) -> std::io::Result<usize> {
+        if self.1.is_empty() {
+            match self.0.recv() {
+                Ok(b) => self.1 = b,
+                Err(_) => return Ok(0),
+            }
+        }
+        let n = buf.len().min(self.1.len());
+        buf[..n].copy_from_slice(&self.1[..n]);
+        self.1.drain(..n);
+        Ok(n)
+    }
+}
+
+struct Stdin {
+    seen: Arc<Mutex<Vec<u8>>>,
+    echo: Option<Sender<Vec<u8>>>,
+    closed: Arc<AtomicBool>,
+    exit_on: Option<Vec<u8>>,
+}
+
+impl Write for Stdin {
+    fn write(&mut self, buf: &[u8]) -> std::io::Result<usize> {
+        let mut seen = self.seen.lock().unwrap();
+        seen.extend_from_slice(buf);
+        if let Some(m) = &self.exit_on
+            && seen.windows(m.len()).any(|w| w == m.as_slice())
+        {
+            self.closed.store(true, Ordering::SeqCst);
+        }
+        let exited = self.closed.load(Ordering::SeqCst);
+        drop(seen);
+        if let Some(tx) = &self.echo {
+            let _ = tx.send(buf.to_vec());
+        }
+        if exited {
+            // The process is gone: its output ends.
+            self.echo = None;
+        }
+        Ok(buf.len())
+    }
+
+    fn flush(&mut self) -> std::io::Result<()> {
+        Ok(())
+    }
+}
+
+impl Drop for Stdin {
+    fn drop(&mut self) {
+        self.closed.store(true, Ordering::SeqCst);
+    }
+}
+
+struct Ctl(Arc<Spawned>);
+
+impl ProcCtl for Ctl {
+    fn resize(&self, size: Pty) {
+        self.0.resizes.lock().unwrap().push(size);
+    }
+
+    fn kill(&self) {
+        self.0.killed.store(true, Ordering::SeqCst);
+    }
+}
+
+impl Spawner for FakeSpawner {
+    fn spawn(&self, args: &[String], pty: Option<Pty>) -> Result<Proc> {
+        let line = args.join(" ");
+        let script = self
+            .scripts
+            .lock()
+            .unwrap()
+            .iter()
+            .rfind(|(p, _)| line.contains(p.as_str()))
+            .map(|(_, s)| s.clone())
+            .unwrap_or_default();
+        let rec = Arc::new(Spawned {
+            args: args.to_vec(),
+            pty,
+            resizes: Arc::default(),
+            stdin: Arc::default(),
+            killed: Arc::default(),
+        });
+        self.spawned.lock().unwrap().push(rec.clone());
+        let (out_tx, out_rx) = channel();
+        let _ = out_tx.send(script.stdout.clone());
+        let (err_tx, err_rx) = channel();
+        let _ = err_tx.send(script.stderr.clone());
+        let closed = Arc::new(AtomicBool::new(false));
+        let stdin = Stdin {
+            seen: rec.stdin.clone(),
+            echo: script.echo.then(|| out_tx.clone()),
+            closed: closed.clone(),
+            exit_on: script.exit_on.clone(),
+        };
+        drop(out_tx);
+        drop(err_tx);
+        let killed = rec.killed.clone();
+        let (echo, code) = (script.echo, script.code);
+        Ok(Proc {
+            stdin: Box::new(stdin),
+            stdout: Box::new(Chan(out_rx, Vec::new())),
+            stderr: pty
+                .is_none()
+                .then(|| Box::new(Chan(err_rx, Vec::new())) as _),
+            ctl: Arc::new(Ctl(rec)),
+            wait: Box::new(move || {
+                while echo && !closed.load(Ordering::SeqCst) && !killed.load(Ordering::SeqCst) {
+                    std::thread::sleep(std::time::Duration::from_millis(5));
+                }
+                Ok(code)
+            }),
+        })
     }
 }
 

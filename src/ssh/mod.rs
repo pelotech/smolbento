@@ -2,3 +2,4 @@
 //! (`ssh proxy`) that OpenSSH's `ProxyCommand` runs for each connection.
 
 pub mod block;
+pub mod server;
