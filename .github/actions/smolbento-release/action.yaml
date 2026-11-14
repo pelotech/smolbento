@@ -1,0 +1,49 @@
+---
+name: smolbento-release
+description: "install cosign and the newest released smolbento (x86_64 Linux), verified, on PATH"
+inputs:
+  minimum:
+    description: oldest smolbento version the caller can use
+    required: true
+  gh-token:
+    description: token for reading the repository's releases
+    default: ${{ github.token }}
+
+runs:
+  using: 'composite'
+  steps:
+    - uses: sigstore/cosign-installer@756fe2d284c7292c4e9b62c8a28f1e5629c59532 # v4.1.3
+      with:
+        cosign-release: 'v3.1.4'
+
+    # The newest `v*` release: other packages (nix-kit-v*) release from this repository too. Its
+    # tarball is checked against the release workflow's signature before anything runs.
+    - name: Download smolbento
+      shell: bash
+      env:
+        GH_TOKEN: ${{ inputs.gh-token }}
+        MINIMUM: ${{ inputs.minimum }}
+        TARGET: x86_64-unknown-linux-gnu
+      # Writes only the extracted, signature-checked directory to GITHUB_PATH.
+      run: | # zizmor: ignore[github-env]
+        tag=$(gh release list --repo "$GITHUB_REPOSITORY" --exclude-drafts --exclude-pre-releases \
+          --limit 50 --json tagName --jq '[.[].tagName | select(startswith("v"))][0]')
+        version="${tag#v}"
+        if [ "$(printf '%s\n%s\n' "$MINIMUM" "$version" | sort -V | head -1)" != "$MINIMUM" ]; then
+          echo "::error::the newest smolbento release ($tag) is older than $MINIMUM"
+          exit 1
+        fi
+        dir="$RUNNER_TEMP/smolbento-release"
+        mkdir -p "$dir"
+        cd "$dir"
+        f="smolbento-${TARGET}.tar.gz"
+        gh release download "$tag" --repo "$GITHUB_REPOSITORY" -p "$f" -p "$f.sigstore.json"
+        cosign verify-blob --bundle "$f.sigstore.json" \
+          --certificate-identity "https://github.com/${GITHUB_REPOSITORY}/.github/workflows/release-please.yaml@refs/heads/main" \
+          --certificate-oidc-issuer https://token.actions.githubusercontent.com "$f"
+        tar xzf "$f"
+        echo "$dir/smolbento-${TARGET}" >> "$GITHUB_PATH" # zizmor: ignore[github-env]
+
+    - name: smolbento version
+      shell: bash
+      run: sbt --version

@@ -103,12 +103,16 @@ jobs:
 
   # The nix kit, built with Buildx as sbx documents for v3 kits, then signed by smolbento.
   nix-kit:
-    if: ${{ needs.release-please.outputs.nix_kit_created == 'true' }}
-    needs: [release-please]
+    # After the binaries when smolbento releases in the same push (it signs with that release's
+    # binary); a kit-only release skips them and runs at once.
+    if: >-
+      ${{ !cancelled() && needs.release-please.outputs.nix_kit_created == 'true'
+      && needs.binaries.result != 'failure' }}
+    needs: [release-please, binaries]
     runs-on: ubuntu-latest
     timeout-minutes: 60
     permissions:
-      contents: read
+      contents: write # mark the newest smolbento release as GitHub's "Latest" again
       packages: write
       id-token: write
     env:
@@ -141,49 +145,51 @@ jobs:
             -t "$IMAGE:$VERSION" -t "$IMAGE:latest" --metadata-file meta.json
           echo "digest=$(jq -r '."containerimage.digest"' meta.json)" >> "$GITHUB_OUTPUT"
 
-      - uses: $/.github/actions/nix-devshell
+      # Signed with the released smolbento users run (0.26.0 has the alias and default signers).
+      - uses: $/.github/actions/smolbento-release
         if: ${{ steps.push.outputs.digest != '' }}
         with:
-          gh-token: ${{ secrets.GITHUB_TOKEN }}
+          minimum: "0.26.0"
       - name: Sign
         if: ${{ steps.push.outputs.digest != '' }}
-        run: |
-          just build
-          ./target/debug/smolbento kit sign "$IMAGE@$DIGEST"
+        run: sbt kit sign "$IMAGE@$DIGEST"
         env:
           DIGEST: ${{ steps.push.outputs.digest }}
 
-  # A sandbox from the published kit, with signatures required and the default trusted signers.
+      # release-please marks every new release "Latest", kits included; that badge belongs to
+      # smolbento's newest release, which has the binaries.
+      - name: Keep smolbento's release as Latest
+        run: |
+          tag=$(gh release list --repo "$GITHUB_REPOSITORY" --exclude-drafts --exclude-pre-releases \
+            --limit 50 --json tagName --jq '[.[].tagName | select(startswith("v"))][0]')
+          gh release edit "$tag" --repo "$GITHUB_REPOSITORY" --latest
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+
+  # A sandbox from the published kit, pulled without a login, with signatures required and the
+  # default trusted signers.
   nix-kit-verify:
+    if: ${{ !cancelled() && needs.nix-kit.result == 'success' }}
     needs: [release-please, nix-kit]
     runs-on: ubuntu-latest
     timeout-minutes: 30
     permissions:
       contents: read
-      packages: read
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
           persist-credentials: false
-      - uses: $/.github/actions/nix-devshell
+      - uses: $/.github/actions/smolbento-release
         with:
-          gh-token: ${{ secrets.GITHUB_TOKEN }}
-      # Until an org admin makes the package public, pulls need a login.
-      - uses: docker/login-action@8aa5831fb8d48d8f76594c7ddde61ae58019f550 # v4.8.0
-        with:
-          registry: ghcr.io
-          username: ${{ github.actor }}
-          password: ${{ secrets.GITHUB_TOKEN }}
+          minimum: "0.26.0"
 
       - uses: $/.github/actions/smolvm
 
       - name: Create a sandbox with the published kit
         run: |
-          just build
-          sbt=./target/debug/smolbento
-          "$sbt" policy init balanced
-          "$sbt" create shell --kit nix --name verify
-          "$sbt" exec verify nix --version
-          "$sbt" rm -f verify
+          sbt policy init balanced
+          sbt create shell --kit nix --name verify
+          sbt exec verify nix --version
+          sbt rm -f verify
         env:
           SMOLBENTO_KIT_REQUIRE_SIGNATURE: "true"
