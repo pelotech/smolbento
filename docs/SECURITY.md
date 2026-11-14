@@ -177,21 +177,35 @@ kits you trust.
   with `sbt settings set fork.enabled false`, from each sandbox's next start.
 - smolbento refuses to run as root on the host, because smolvm doesn't map a root-owned workspace
   to the agent user.
-- While you're attached (`sbt run`, `sbt exec -it`), the sandbox can open `https://` URLs in your
+- While the sandbox runs (a service unit serves the bridge; without one, while you're attached
+  with `sbt run` or `sbt exec -it`), it can open `https://` URLs in your
   browser and overwrite your clipboard, but it can't read the clipboard. A malicious page opened
   this way runs in your real browser, with your logins. Turn off URL opening with
   `sbt settings set browser.enabled false`. Clipboard text may be crafted to run commands when
   pasted, so check it first.
-- The bridge socket lives in `/tmp/sbt-<uid>/` (mode 0700). At create and at each start, smolbento
-  checks that it's a real directory (not a symlink), owned by you, with mode 0700, and creates it
-  that way if missing. If the check fails, the sandbox gets no bridge for that start, with a
-  warning. This stops another user from receiving what the sandbox sends by creating the directory
-  first (macOS empties `/tmp` on reboot).
-- Forks don't install bridge shims, but they keep the parent's socket mount. While the parent is
-  attached, a process in a fork can open URLs and copy through the parent's bridge.
+- Host service units. Per sandbox with a bridge or a runtime SSH agent grant, smolbento writes a
+  launchd user agent (`~/Library/LaunchAgents/dev.smolbento.*`) or `systemd --user` socket and
+  service units. They run as you, never as root, listen on a `0600` socket and start
+  `sbt _serve KIND SANDBOX` for each connection, with the connection as stdin and stdout and stderr
+  on `/dev/null`. `_serve` is the same filter and bridge handler as before, reading the grant from
+  the sandbox's labels; the unit carries your `PATH`, `HOME`, `SMOLBENTO_*` variables and, on Linux,
+  `SSH_AUTH_SOCK`, never secrets. Anyone who can write your unit files or your `PATH` can run
+  commands as you, as with any launch agent. Units go with the sandbox (`rm`, `prune`, `reset`,
+  `env rm`, a failed first start) and, for a sandbox deleted with `smolvm machine delete`, with the
+  next state-changing command. Names carry a hash of the data dir, so separate setups don't touch
+  each other's units.
+- The sockets live in `~/Library/Application Support/smolbento/sock/` (macOS) or
+  `$XDG_RUNTIME_DIR/smolbento/` (Linux), or `/tmp/sbt-<uid>/` when there is no service manager
+  (served while attached). At create and at each start, smolbento checks that the directory is a
+  real directory (not a symlink), owned by you, with mode 0700, and creates it that way if missing.
+  If the check fails, the sandbox gets no bridge for that start, with a warning. This stops another
+  user from receiving what the sandbox sends by creating the directory first (macOS empties `/tmp`
+  on reboot).
+- Forks don't install bridge shims or get units, but they keep the parent's socket mount. While the
+  parent is served, a process in a fork can open URLs and copy through the parent's bridge.
 - OAuth callback ports. For an opened URL whose `redirect_uri` is `http://localhost:PORT` or
   `http://127.0.0.1:PORT`, smolbento listens on your `127.0.0.1:PORT` (never other interfaces) for
-  10 minutes or until the session ends. It opens at most 4 ports a session, and not if something
+  10 minutes (or until the session ends, in attached-only serving). It opens at most 4 ports a session, and not if something
   already answers on `localhost:PORT`. It passes requests whose `Host` is `localhost:PORT` or
   `127.0.0.1:PORT` into the sandbox. Known gaps:
   - Other local programs can reach that port while it's open, as they could reach an agent's
@@ -201,8 +215,8 @@ kits you trust.
     can read and set the cookies of your other `localhost` apps.
   - Each replay is cut off after 15 seconds or 1 MiB of response.
   - `browser.enabled false` also turns the relay off.
-- Built-in agents, and kits that ask with `ssh-agent@1`, can use your SSH agent while `sbt run`,
-  `sbt exec -it` or `sbt exec` runs for them, and during a kit's `install` grant. They can list
+- Built-in agents, and kits that ask with `ssh-agent@1`, can use your SSH agent whenever the sandbox runs (a service unit serves it; without one, while
+  `sbt run`, `sbt exec -it` or `sbt exec` runs for them), and during a kit's `install` grant. They can list
   your agent's public keys and have it sign with any of them. That covers git commit signatures and
   SSH logins to any server your keys open. A kit's `sign: [...]` list allows only signatures in
   those namespaces, not logins. An `authenticate: [...]` list allows logins only to those servers:
@@ -215,8 +229,8 @@ kits you trust.
   sandbox.
   While the agent is served, code in the sandbox can sign as you and log in wherever your keys
   work. Don't run untrusted work with it. A fork keeps the parent's socket mount, so while the
-  parent is served, a fork can use the agent with the parent's grant. The socket lives in
-  `/tmp/sbt-<uid>/` and gets the bridge's checks: no agent for a start while that directory isn't
+  parent is served, a fork can use the agent with the parent's grant. The socket's
+  directory gets the bridge's checks: no agent for a start while that directory isn't
   private, and a kit that requires an agent is refused at create.
   To turn it off, run `sbt settings set ssh.agentForwardingEnabled false`. New connections are
   refused at once, and open ones stay. Or run `sbt` without `SSH_AUTH_SOCK`. For a dedicated agent
