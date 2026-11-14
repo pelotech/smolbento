@@ -56,8 +56,9 @@ pub type AgentGrant = ByPhase<PhaseGrant>;
 pub struct PhaseGrant {
     /// `None`: unrestricted (signs anything); else the namespaces it may sign.
     pub sign: Option<Vec<String>>,
-    /// The servers it may log in to (a bounded grant only; empty = no logins).
-    pub authenticate: Vec<Dest>,
+    /// The servers it may log in to, as `host` or `user@host` (a bounded grant only; empty = no
+    /// logins).
+    pub authenticate: Vec<String>,
     /// A required entry asked for it: with no agent to back it, the create is refused.
     pub required: bool,
     /// The kit messages name: the first required entry's, else the first kit entry's. `None` for
@@ -77,52 +78,7 @@ pub struct Access {
     /// The servers a bounded grant may log in to. A label without it (written before logins were
     /// supported) means none.
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
-    pub authenticate: Vec<Dest>,
-}
-
-/// An `authenticate` entry: `host` or `user@host`.
-#[derive(Debug, Clone, PartialEq, Eq)]
-pub struct Dest {
-    pub user: Option<String>,
-    pub host: String,
-}
-
-impl Dest {
-    /// Splits `[user@]host`; the kit parser has already validated the entry.
-    pub fn parse(entry: &str) -> Dest {
-        match entry.split_once('@') {
-            Some((user, host)) => Dest {
-                user: Some(user.to_string()),
-                host: host.to_string(),
-            },
-            None => Dest {
-                user: None,
-                host: entry.to_string(),
-            },
-        }
-    }
-}
-
-impl fmt::Display for Dest {
-    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
-        match &self.user {
-            Some(u) => write!(f, "{u}@{}", self.host),
-            None => f.write_str(&self.host),
-        }
-    }
-}
-
-// Serialized as the entry string (`git@github.com`), as in the kit.
-impl Serialize for Dest {
-    fn serialize<S: serde::Serializer>(&self, s: S) -> Result<S::Ok, S::Error> {
-        s.collect_str(self)
-    }
-}
-
-impl<'de> Deserialize<'de> for Dest {
-    fn deserialize<D: serde::Deserializer<'de>>(d: D) -> Result<Dest, D::Error> {
-        String::deserialize(d).map(|s| Dest::parse(&s))
-    }
+    pub authenticate: Vec<String>,
 }
 
 #[cfg(test)]
@@ -137,7 +93,7 @@ impl PhaseGrant {
     }
 
     pub fn authenticating(mut self, entries: &[&str]) -> PhaseGrant {
-        self.authenticate = entries.iter().map(|e| Dest::parse(e)).collect();
+        self.authenticate = entries.iter().map(|e| e.to_string()).collect();
         self
     }
 }
@@ -406,7 +362,7 @@ mod tests {
         let l = AgentLabel {
             runtime: Some(Access {
                 sign: Some(vec![]),
-                authenticate: vec![Dest::parse("git@github.com"), Dest::parse("example.org")],
+                authenticate: vec!["git@github.com".into(), "example.org".into()],
             }),
             install: None,
         };
@@ -417,13 +373,6 @@ mod tests {
         assert_eq!(AgentLabel::from_label(&l.to_label()), Some(l));
         let old = AgentLabel::from_label(r#"{"runtime":{"sign":["git"]}}"#).unwrap();
         assert!(old.runtime.unwrap().authenticate.is_empty());
-        assert_eq!(
-            Dest::parse("git@github.com"),
-            Dest {
-                user: Some("git".into()),
-                host: "github.com".into()
-            }
-        );
     }
 
     #[test]

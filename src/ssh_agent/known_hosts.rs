@@ -35,7 +35,9 @@ fn names(patterns: &HostPatterns, host: &str) -> bool {
     match patterns {
         // A negated pattern excludes hosts in OpenSSH's rules; never trust such a line.
         HostPatterns::Patterns(list) => {
-            !list.iter().any(|p| p.starts_with('!')) && list.iter().any(|p| p == host && literal(p))
+            // `host` is a literal name (the kit parser checked it), so only a literal pattern can
+            // equal it: wildcard and `[host]:port` patterns never match.
+            !list.iter().any(|p| p.starts_with('!')) && list.iter().any(|p| p == host)
         }
         HostPatterns::HashedName { salt, hash } => Hmac::<Sha1>::new_from_slice(salt)
             .map(|mut mac| {
@@ -44,11 +46,6 @@ fn names(patterns: &HostPatterns, host: &str) -> bool {
             })
             .unwrap_or(false),
     }
-}
-
-/// A plain name: no wildcard, negation or `[host]:port` form.
-fn literal(p: &str) -> bool {
-    !p.is_empty() && !p.contains(['*', '?', '!', '[', ']'])
 }
 
 #[cfg(test)]
@@ -156,14 +153,8 @@ mod tests {
             line(6),
             line(7)
         );
-        for h in [
-            "a.com",
-            "x.a.com",
-            "b.a.com",
-            "*.a.com",
-            "*",
-            "[a.com]:2222",
-        ] {
+        // Only literal names reach `host_keys` (the kit parser rejects the rest).
+        for h in ["a.com", "x.a.com", "b.a.com"] {
             assert!(host_keys(&t, h).is_empty(), "{h}");
         }
     }

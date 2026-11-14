@@ -11,7 +11,7 @@ use crate::kits::model::{
     AgentContextReq, Cap, CapBody, CredReq, FileReq, Format, Hook, HookCmd, Kind, Kit, Lifecycle,
     NetRule, Rules, Source, SshPhase,
 };
-use crate::ssh_agent::{AgentGrant, Dest, PhaseGrant};
+use crate::ssh_agent::{AgentGrant, PhaseGrant};
 
 /// The agent user's home in the platform floor; the host can't see the guest's real env.
 const AGENT_HOME: &str = "/home/agent";
@@ -697,15 +697,11 @@ fn ssh_phase(entries: &[SshEntry], phase: SshPhase) -> Result<Option<PhaseGrant>
         Some(union)
     };
     let unrestricted = es.iter().any(|e| e.unrestricted);
-    let mut authenticate: Vec<Dest> = Vec::new();
+    let mut authenticate: Vec<String> = Vec::new();
     if !unrestricted {
-        for d in es
-            .iter()
-            .flat_map(|e| e.authenticate)
-            .map(|d| Dest::parse(d))
-        {
-            if !authenticate.contains(&d) {
-                authenticate.push(d);
+        for d in es.iter().flat_map(|e| e.authenticate) {
+            if !authenticate.contains(d) {
+                authenticate.push(d.clone());
             }
         }
     }

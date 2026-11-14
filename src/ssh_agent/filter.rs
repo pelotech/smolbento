@@ -356,10 +356,12 @@ fn login_admitted(
         return false;
     };
     access.authenticate.iter().any(|dest| {
-        dest.user
-            .as_ref()
-            .is_none_or(|u| u.as_bytes() == login.user)
-            && host_keys(&text, &dest.host)
+        // `user@host` or `host`, as the kit parser validated it.
+        let (user, host) = dest
+            .split_once('@')
+            .map_or((None, dest.as_str()), |(u, h)| (Some(u), h));
+        user.is_none_or(|u| u.as_bytes() == login.user)
+            && host_keys(&text, host)
                 .iter()
                 .any(|k| bound.iter().any(|b| b.host_key == *k))
     })
@@ -552,7 +554,6 @@ mod tests {
         }
     }
 
-    use crate::ssh_agent::Dest;
     use crate::ssh_agent::known_hosts::testkeys::{key, line};
     use signature::Signer;
     use ssh_key::PrivateKey;
@@ -624,7 +625,7 @@ mod tests {
     fn logins(entries: &[&str]) -> Access {
         Access {
             sign: Some(vec!["git".into()]),
-            authenticate: entries.iter().map(|e| Dest::parse(e)).collect(),
+            authenticate: entries.iter().map(|e| e.to_string()).collect(),
         }
     }
 
