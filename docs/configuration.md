@@ -19,10 +19,10 @@ An environment variable beats the config file, which beats the default. Booleans
 | `smolvm.image-cache-size` | `SMOLBENTO_IMAGE_CACHE_SIZE` | `40g` | Disk for smolvm's cache of ready-to-boot images. See [Details](#details). |
 | `clone.fetch-on-exit` | `SMOLBENTO_CLONE_FETCH_ON_EXIT` | `true` | After `run` in a clone sandbox, fetch the agent's commits into the `sandbox-<name>` remote. |
 | `fork.enabled` | `SMOLBENTO_FORK` | `true` | Start clone and mountless sandboxes branchable so `sbt fork` can copy them. `false` also turns `sbt fork` off. Applies from each sandbox's next start; see [Fork](usage.md#fork). |
-| `kit.allowedSources` | `SMOLBENTO_KIT_ALLOWED_SOURCES` | `["docker.io/"]` | Registry prefixes published kits may load from, as a JSON array. See [Kit sources](#kit-sources). |
+| `kit.allowedSources` | `SMOLBENTO_KIT_ALLOWED_SOURCES` | `["docker.io/","ghcr.io/pelotech/smolbento/"]` | Registry prefixes published kits may load from, as a JSON array. See [Kit sources](#kit-sources). |
 | `kit.allowLocalKits` | `SMOLBENTO_KIT_ALLOW_LOCAL_KITS` | `true` | Allow kits from local directories, descriptor files and Smolfiles. |
 | `kit.requireSignature` | `SMOLBENTO_KIT_REQUIRE_SIGNATURE` | `false` | Load registry kits only when a trusted signer signed them. Refuses local kits. See [Kit signatures](#kit-signatures). |
-| `kit.trustedSigners` | `SMOLBENTO_KIT_TRUSTED_SIGNERS` | Docker employees: `identityRegexp` `^.*@docker\.com$`, `issuer` `https://accounts.google.com` | JSON array of trusted signers. See [Kit signatures](#kit-signatures). |
+| `kit.trustedSigners` | `SMOLBENTO_KIT_TRUSTED_SIGNERS` | Docker employees (`identityRegexp` `^.*@docker\.com$`, `issuer` `https://accounts.google.com`) and smolbento's kit releases (see [Kit signatures](#kit-signatures)) | JSON array of trusted signers. See [Kit signatures](#kit-signatures). |
 | `kit.ignoreTransparencyLog` | `SMOLBENTO_KIT_IGNORE_TRANSPARENCY_LOG` | `false` | Verify keyless kit signatures without requiring a Rekor transparency-log entry. |
 | `browser.enabled` | `SMOLBENTO_BROWSER_ENABLED` | `true` | Let sandboxes open `https://` URLs in your browser. `false` also stops in-sandbox logins that redirect to `localhost`. See [Details](#details). |
 | `ssh.agentForwardingEnabled` | `SMOLBENTO_SSH_AGENT_FORWARDING` | `true` | Let sandboxes list your SSH agent's keys and sign with them, but not add, remove or lock keys. See [SSH agent](usage.md#ssh-agent). |
@@ -70,6 +70,9 @@ readwrite`. See [Skills](usage.md#skills).
 repository, with the tag or digest dropped and Docker Hub spelled out. `alpine` is
 `docker.io/library/alpine`, and `ghcr.io/acme/kit:1` is `ghcr.io/acme/kit`.
 
+The default allows Docker Hub, as in sbx, and `ghcr.io/pelotech/smolbento/`, where smolbento
+publishes its own kits (such as [`nix`](usage.md#the-nix-kit)). Nothing else on GHCR.
+
 - End a prefix with `/` to match whole names. `ghcr.io/acme/` doesn't match `ghcr.io/acmex/kit`.
 - An entry without `/` is a registry host and matches only that host. `ghcr.io` allows
   `ghcr.io/acme/kit` but not `ghcr.io.evil.com/kit`. `localhost:5000` doesn't allow other ports.
@@ -105,6 +108,10 @@ in sbx. Presets and shipped kits are exempt.
   `issuerRegexp` or `identityRegexp`.
 
 `kit.ignoreTransparencyLog` relaxes only the keyless check, which otherwise needs a Rekor entry.
+
+The default trusts Docker employees, as in sbx, and smolbento's own kit releases: issuer
+`https://token.actions.githubusercontent.com`, identity
+`https://github.com/pelotech/smolbento/.github/workflows/release-please.yaml@refs/heads/main`.
 
 Sign a kit with `sbt kit sign --help`.
 

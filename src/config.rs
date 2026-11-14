@@ -134,7 +134,7 @@ pub const SETTINGS: &[SettingDef] = &[
     SettingDef {
         key: "kit.allowedSources",
         env: "SMOLBENTO_KIT_ALLOWED_SOURCES",
-        default: "[\"docker.io/\"]",
+        default: "[\"docker.io/\",\"ghcr.io/pelotech/smolbento/\"]",
         help: "Registry prefixes kits may load from, as a JSON array (`[\"*\"]` = any)",
     },
     SettingDef {
@@ -152,8 +152,8 @@ pub const SETTINGS: &[SettingDef] = &[
     SettingDef {
         key: "kit.trustedSigners",
         env: "SMOLBENTO_KIT_TRUSTED_SIGNERS",
-        default: r#"[{"identityRegexp":"^.*@docker\\.com$","issuer":"https://accounts.google.com"}]"#,
-        help: "JSON array of trusted signer policies (key-based {\"key\":path} or keyless {\"issuer\":...,\"identity\":...}, each also as ...Regexp). Defaults to Docker employee identities (*@docker.com via https://accounts.google.com)",
+        default: r#"[{"identityRegexp":"^.*@docker\\.com$","issuer":"https://accounts.google.com"},{"identity":"https://github.com/pelotech/smolbento/.github/workflows/release-please.yaml@refs/heads/main","issuer":"https://token.actions.githubusercontent.com"}]"#,
+        help: "JSON array of trusted signer policies (key-based {\"key\":path} or keyless {\"issuer\":...,\"identity\":...}, each also as ...Regexp). Defaults to Docker employee identities (*@docker.com via https://accounts.google.com) and smolbento's own kit releases (its release workflow via GitHub Actions)",
     },
     SettingDef {
         key: "kit.ignoreTransparencyLog",

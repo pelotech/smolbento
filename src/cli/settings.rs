@@ -73,7 +73,7 @@ mod tests {
         }
         assert_eq!(
             t.ctx.settings.value("kit.allowedSources").unwrap(),
-            r#"["docker.io/"]"#,
+            r#"["docker.io/","ghcr.io/pelotech/smolbento/"]"#,
             "a refused value is not saved"
         );
         t.sbt(&[

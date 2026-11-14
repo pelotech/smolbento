@@ -146,6 +146,32 @@ mod tests {
     const KEY: &str = "SMOLBENTO_KIT_ALLOWED_SOURCES";
 
     #[test]
+    fn kit_defaults_allow_and_trust_this_project() {
+        let (_d, s) = settings(&[]);
+        assert_eq!(
+            s.value("kit.allowedSources").unwrap(),
+            r#"["docker.io/","ghcr.io/pelotech/smolbento/"]"#
+        );
+        check(&registry("ghcr.io/pelotech/smolbento/kits/nix:latest"), &s).unwrap();
+        assert!(check(&registry("ghcr.io/someone/x:1"), &s).is_err());
+        let signers = s.value("kit.trustedSigners").unwrap();
+        assert!(
+            signers.contains(
+                r#"{"identity":"https://github.com/pelotech/smolbento/.github/workflows/release-please.yaml@refs/heads/main","issuer":"https://token.actions.githubusercontent.com"}"#
+            ),
+            "{signers}"
+        );
+        assert!(
+            signers.contains("docker"),
+            "Docker's signers stay: {signers}"
+        );
+        assert_eq!(
+            crate::kits::signers::parse(&signers, false).unwrap().len(),
+            2
+        );
+    }
+
+    #[test]
     fn pattern_hosts_are_case_insensitive_and_aliases_are_not_folded() {
         let (_d, s) = settings(&[(KEY, r#"["GHCR.IO/acme/"]"#)]);
         check(&registry("ghcr.io/acme/k:1"), &s).unwrap();
@@ -160,7 +186,7 @@ mod tests {
     }
 
     #[test]
-    fn default_allows_docker_hub_only() {
+    fn default_allows_docker_hub_and_refuses_other_registries() {
         let (_d, s) = settings(&[]);
         for r in [
             "docker/sandbox-kit-x:1",
@@ -175,9 +201,9 @@ mod tests {
         assert_eq!(
             err,
             "kit \"ghcr.io/x/y:1\" cannot be installed \u{2014} its source is not in your allowlist; \
-             current kit.allowedSources: [\"docker.io/\"]\n\
-             try: sbt settings set kit.allowedSources '[\"docker.io/\",\"ghcr.io/x/\"]' \
-             (or '[\"*\"]')"
+             current kit.allowedSources: [\"docker.io/\",\"ghcr.io/pelotech/smolbento/\"]\n\
+             try: sbt settings set kit.allowedSources \
+             '[\"docker.io/\",\"ghcr.io/pelotech/smolbento/\",\"ghcr.io/x/\"]' (or '[\"*\"]')"
         );
     }
 
