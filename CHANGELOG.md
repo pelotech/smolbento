@@ -1,5 +1,12 @@
 # Changelog
 
+## [0.25.0](https://github.com/pelotech/smolbento/compare/v0.24.0...v0.25.0) (2026-11-14)
+
+
+### Features
+
+* **ssh:** setup ssh and ssh NAME.sbx (5h) ([#111](https://github.com/pelotech/smolbento/issues/111)) ([57c96c1](https://github.com/pelotech/smolbento/commit/57c96c1bb42d17dd951b1c8c516c476f4ce2417e))
+
 ## [0.24.0](https://github.com/pelotech/smolbento/compare/v0.23.0...v0.24.0) (2026-11-14)
 
 

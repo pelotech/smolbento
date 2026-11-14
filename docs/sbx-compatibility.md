@@ -27,7 +27,7 @@ smolbento-only:
 | `policy refresh`, `secret import`, `secret set --oauth/--refresh`, `secret set/rm --registry` with `--sandbox`/`--all-sandboxes` | Not implemented |
 | `policy ls --created-via/--type/--protocol/--include-inactive`, `policy check --protocol` other than `tcp` | Not implemented (`--decision` and `--source` work) |
 | `sbxenv.yaml` fields under [Environment files](#environment-files) | Later |
-| `setup ssh` | Later (Phase 5h) |
+| `setup ssh --auto-create` (desktop app connections) | Not supported |
 | `mcp auth`, `mcp load`, `mcp unload`; `mcp add --local`, `--dir`, `--client-id`, `--oauth-authorization-server`, `--resource`, `--skip-auth` | Not supported: no MCP gateway |
 | `tui` | Later |
 | `--pull always`; `--pull never` without a saved template ([Templates](#templates)) | Not implemented. `--pull missing` works, as in smolvm |
@@ -38,6 +38,22 @@ smolbento-only:
 `login`, `logout`, `move`, `ttl`, `attach`, `volume`, the global `--cloud` flag, and the cloud-only
 `run`/`create` flags (`--allow-network`, `--image-ref`, `--platform`, `--ttl`, `--on-timeout`,
 `-v/--volume`, `--new`).
+
+## SSH
+
+`sbt setup ssh` and `ssh NAME.sbx` follow sbx's documented behaviour (sbx's own reference page for
+`setup ssh` was empty when this was written, so none of it is measured against a real sbx).
+
+| | sbx | smolbento |
+|---|---|---|
+| Config block | `# >>> docker sandboxes (managed) >>>` in `~/.ssh/config`, `ProxyCommand "sbx" ssh proxy %n`, `KnownHostsCommand`, `UserKnownHostsFile ~/.ssh/sbx_known_hosts`, `StrictHostKeyChecking yes` | Own markers `# >>> smolbento (managed) >>>`, so it never edits sbx's block (`setup ssh` warns when both exist: the first `Host *.sbx` wins). Added at the top of the file, ending with `Host *` so your own top-level options keep their scope. The same options, except `StrictHostKeyChecking no`, `UserKnownHostsFile /dev/null` and `LogLevel ERROR` replace the known-hosts ones: the server is `sbt ssh proxy`, a child process of `ssh` on a pipe, so there is no network path to impersonate and a host key protects nothing. There is no `ssh known-hosts` command and no host key file; each connection uses a new key. `ProxyCommand` uses absolute paths, `env SMOLBENTO_SMOLVM='<smolvm>' '<sbt>' ssh proxy %n`, found when you run `setup ssh` (an IDE started from the Dock runs it with a minimal PATH); run it again after moving either. No `IdentityAgent none` (IDEs such as IntelliJ warn about it; `IdentityFile /dev/null` and `IdentitiesOnly yes` already keep keys out) |
+| `setup ssh remove` | Removes the block | Same; touches nothing outside our markers |
+| `--auto-create` | Adds desktop app connections | Not supported |
+| Sessions | The daemon terminates SSH; an unknown sandbox is an error; a stopped one is started | Same, in the `ProxyCommand` process. The shell is the session user's login shell in the workspace, on a pty from your terminal |
+| Local forwarding (`ssh -L`) | To the sandbox's loopback | Same, `localhost`, `127.0.0.0/8` and `::1` only. Each connection runs `nc` in the sandbox, else bash's `/dev/tcp`; with neither, the forward fails with a message |
+| SFTP, `scp`, agent forwarding, X11, remote forwarding | Not documented | Refused |
+| `env` requests | Acknowledged and ignored | Same |
+| Signals, exit signals | Not documented | A signal sent over SSH isn't delivered; a command killed by signal `n` exits with `128+n` |
 
 ## Differences you'll notice
 
@@ -193,7 +209,6 @@ your agent (`ssh-add -D` fails with `Failed to remove all identities.`). The set
 | Which agent | The sbx client's `SSH_AUTH_SOCK` | `ssh.agentSocketPath`, else the user session's `SSH_AUTH_SOCK` (launchd supplies macOS's; on Linux, that of the last `sbt` that wrote the unit). Attached-only serving: the serving `sbt`'s |
 | `SSH_AUTH_SOCK_GATEWAY` | `gateway.docker.internal:3129` | Not set (no TCP gateway) |
 | `authenticate` limits | Logins only to the named servers | Supported. Host keys come from `ssh.knownHostsFile` (smolbento-only setting, default `~/.ssh/known_hosts`), read at each login. A server known only through `@cert-authority`, or by a wildcard or negated pattern, is refused, as is a `[host]:port` entry; hashed names work |
-| `setup ssh` | `ssh NAME.sbx` into sandboxes | Not yet (Phase 5h) |
 | Forks | No forks | No agent or units of its own, but it keeps the parent's socket mount, so it can use the agent (with the parent's grant) while the parent is served |
 | `kit add` of an `ssh-agent@1` kit | Recreates the container | `recreate required: … SSH agent` |
 

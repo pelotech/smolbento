@@ -6,7 +6,7 @@ smolbento is built in phases. Each phase ships on its own.
 
 ## Current state
 
-Phases 0 to 4, 5a to 5g, and 6 and 7 are done. Phases 5h, 8, 9 and 10 are planned. Each feature's
+Phases 0 to 4, 5a to 5h, and 6 and 7 are done. Phases 8, 9 and 10 are planned. Each feature's
 usage guide is linked from its row in the [Phases](#phases) table.
 
 - Before 1.0, recreate sandboxes after upgrading smolbento ([Install](install.md#upgrading)).
@@ -35,7 +35,8 @@ usage guide is linked from its row in the [Phases](#phases) table.
 | 5e | Browser and clipboard bridge while attached (`xdg-open`, `wl-copy`/`xclip`/`xsel`/`pbcopy`, the login callback relay, `browser.enabled`). See [Usage](usage.md#browser-and-clipboard) | Done |
 | 5f | Static MCP: `mcp add/ls/inspect/rm`, `run/create --static-mcp`, header secrets as smolvm credentials, Claude Code only. No gateway, OAuth, dynamic mode or live load/unload | Done |
 | 5g | `ssh-agent@1` `authenticate` limits: logins only to named servers, checked against your known hosts (`ssh.knownHostsFile`). See [Usage](usage.md#ssh-agent) | Done |
-| 5 | The rest. 5h: `setup ssh` (`ssh NAME.sbx`, e.g. from VS Code Remote-SSH) and the `ssh.autoCreate`, `ssh.defaultAgent`, `ssh.defaultTemplate`, `ssh.workspaceRoot` settings | Planned |
+| 5h | `setup ssh` and `ssh NAME.sbx`: shells, exec and `-L` forwards through `sbt ssh proxy`. See [Usage](usage.md#ssh-into-a-sandbox). Not done: `--auto-create`, and the `ssh.autoCreate`, `ssh.defaultAgent`, `ssh.defaultTemplate`, `ssh.workspaceRoot` settings (sbx doesn't document them) | Done |
+| 5 | The rest | Planned |
 | 6a | `env plan`, remembered approvals, `env.rememberHostCommands` | Done |
 | 6b | `sbxenv.yaml` `lifecycle`, `registries`, `entrypoint` and `cmd`; registry logins scoped to a sandbox | Done |
 | 6c | `sbxenv.yaml` `bindings`, `mcp` url servers, `fuse`, `pullPolicy: never`, `writableEnvFiles`; `gemini` retired | Done |
@@ -71,6 +72,9 @@ usage guide is linked from its row in the [Phases](#phases) table.
 Changes we'd propose to smolvm. Each item says what smolvm 1.35 lacks and what smolbento does
 meanwhile.
 
+- **`smolvm machine connect NAME PORT`** (stdin and stdout to a guest port). `ssh -L` forwards run
+  `nc`, else bash's `/dev/tcp`, in the sandbox, so they need one of them. Meanwhile: that. Proposal
+  to file upstream first, then a small PR.
 - **Saving a sandbox made from a template.** Packing fails in smolvm 1.34.1 ("no flattened rootfs was
   found") when the pack's machine was created with `--deny-cidr`, as every sandbox is. `--rebase-from-image`
   drops the first template's files. Meanwhile: saving is refused.
@@ -142,6 +146,8 @@ verified on a Mac).
   `just e2e-known-broken` (a non-blocking CI step) runs them. Remove everything tagged
   `WORKAROUND(smolvm 1.35.0 idmap)` once a fixed smolvm is the minimum. Upstream fix:
   [smolvm#2189](https://github.com/smol-machines/smolvm/pull/2189).
+- russh from git (commit b541663a8838) until a release pins ssh-key 0.7.0-rc.12 or later: then switch
+  to crates.io, drop the `deny.toml` allow-git entry and the flake `outputHashes`.
 
 ## Cleanups to do
 

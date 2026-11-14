@@ -1,10 +1,11 @@
 //! A scripted [`Runner`] for tests: records every call and answers by argument prefix.
 
 use std::cell::RefCell;
+use std::path::PathBuf;
 
 use anyhow::Result;
 
-use super::{Output, Runner};
+use super::{Output, ProcessSpawner, Runner};
 
 struct Reply {
     prefix: Vec<String>,
@@ -30,6 +31,7 @@ pub struct FakeRunner {
     progress: RefCell<Vec<(Vec<String>, Vec<String>)>>,
     during_interactive: RefCell<Option<Box<dyn Fn()>>>,
     during: RefCell<Vec<(Vec<String>, Hook)>>,
+    spawn_bin: RefCell<Option<PathBuf>>,
 }
 
 fn strings(items: &[&str]) -> Vec<String> {
@@ -181,6 +183,12 @@ impl FakeRunner {
         self.uploads.borrow().clone()
     }
 
+    /// The program `spawner()` runs in place of smolvm: a test's script that stands in for it.
+    pub fn set_spawn_bin(&self, bin: impl Into<PathBuf>) -> &Self {
+        *self.spawn_bin.borrow_mut() = Some(bin.into());
+        self
+    }
+
     pub fn interactive_calls(&self) -> Vec<Vec<String>> {
         self.interactive_calls.borrow().clone()
     }
@@ -256,6 +264,13 @@ impl Runner for FakeRunner {
             on_line(line);
         }
         self.run_with_env(args, env, remove)
+    }
+
+    fn spawner(&self) -> Option<ProcessSpawner> {
+        self.spawn_bin.borrow().clone().map(|bin| ProcessSpawner {
+            bin,
+            env: Vec::new(),
+        })
     }
 
     fn interactive(&self, args: &[String]) -> Result<i32> {

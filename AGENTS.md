@@ -109,6 +109,7 @@ As of smolvm 1.35. Check the reference source before depending on anything not l
 | `env` | `sbxenv.yaml` environment files |
 | `bridge` | host services for a sandbox: browser and clipboard shims, login relay; the socket listener |
 | `ssh_agent` | SSH agent forwarding: grants, the label, the filtering proxy |
+| `ssh` | `setup ssh` config block; the SSH server `ssh proxy` runs (sessions on a pty, `-L` forwards) |
 
 Shipped kits live in `kits/`. Planned for later phases: `tui`, and `images/plus/` for the plus image.
 

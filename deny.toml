@@ -28,3 +28,5 @@ wildcards = "deny"
 [sources]
 unknown-registry = "deny"
 unknown-git = "deny"
+# Temporary: russh from git until a release pins ssh-key 0.7.0-rc.12+; then drop this, the flake outputHashes, and use crates.io.
+allow-git = ["https://github.com/Eugeny/russh"]

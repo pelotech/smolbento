@@ -427,6 +427,11 @@ impl<R: Runner> Smolvm<R> {
         self.runner.interactive(&spec.to_args())
     }
 
+    /// Starts processes with piped or pty stdio (`None` when the runner can't).
+    pub fn spawner(&self) -> Option<crate::smolvm::ProcessSpawner> {
+        self.runner.spawner()
+    }
+
     /// Runs an exec with captured output; fails if it exits non-zero.
     pub fn exec_captured(&self, spec: &ExecSpec) -> Result<Output> {
         self.call(spec.to_args())

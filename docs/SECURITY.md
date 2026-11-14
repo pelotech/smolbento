@@ -159,6 +159,13 @@ kits you trust.
 
 ## Other things to know
 
+- `ssh NAME.sbx` (after `sbt setup ssh`) runs `sbt ssh proxy` as a child of `ssh`, on a pipe:
+  no listener, no key, no password. It accepts the `none` method only and nothing else, so only the
+  user who runs `ssh` reaches it, and it can do what `sbt exec` does. It turns down SFTP, agent
+  forwarding, X11 and remote forwarding. `-L` forwards reach only the sandbox's own loopback
+  (`localhost`, `127.0.0.0/8`, `::1`), never the host or another address. The host key is new for each
+  connection and not checked, since nothing sits between `ssh` and its child. Session data is not
+  logged. A sandbox's processes can see what you send through a forward, as with any `exec`.
 - The agent runs with permission prompts disabled, so the VM is the only boundary.
 - Workspaces are mounted read-write by default. Anything the agent writes, including git hooks or
   config in a mounted repo, lands on your machine. With `--clone`, the agent can't write to your
