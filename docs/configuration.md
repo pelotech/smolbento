@@ -27,6 +27,7 @@ An environment variable beats the config file, which beats the default. Booleans
 | `browser.enabled` | `SMOLBENTO_BROWSER_ENABLED` | `true` | Let sandboxes open `https://` URLs in your browser while you're attached. `false` also stops in-sandbox logins that redirect to `localhost`. See [Details](#details). |
 | `ssh.agentForwardingEnabled` | `SMOLBENTO_SSH_AGENT_FORWARDING` | `true` | Let sandboxes list your SSH agent's keys and sign with them, but not add, remove or lock keys. See [SSH agent](usage.md#ssh-agent). |
 | `ssh.agentSocketPath` | `SMOLBENTO_SSH_AGENT_SOCKET` | empty | Fixed host SSH agent socket. Empty uses each client's current `SSH_AUTH_SOCK`. |
+| `ssh.knownHostsFile` | `SMOLBENTO_SSH_KNOWN_HOSTS_FILE` | `~/.ssh/known_hosts` | `known_hosts` file whose host keys decide which servers a kit's `ssh-agent@1` `authenticate` list admits. Read at each login. smolbento-only. |
 | `env.rememberHostCommands` | `SMOLBENTO_ENV_REMEMBER_HOST_COMMANDS` | `false` | Keep an approval of an environment file's host commands until they change. Otherwise `sbt env create` and `sbt env run` ask every time. |
 | `skills.defaultMode` | `SMOLBENTO_SKILLS_DEFAULT_MODE` | `readonly` | Default for a sandbox created without `--skills`: `off`, `readonly` or `readwrite`. See [Details](#details). |
 
@@ -52,6 +53,10 @@ affected. See [Browser and clipboard](usage.md#browser-and-clipboard).
 again for each new agent connection from it. If forwarding is off, or there's no agent, at create,
 the sandbox gets none until it's recreated. A kit that requires an agent refuses the create in that
 case. `ssh.agentSocketPath` must name an existing socket; smolbento never starts an agent itself.
+
+**`ssh.knownHostsFile`** is read each time a sandbox asks the agent to log in, so edits apply to the
+next login. A missing or unreadable file means no server is trusted and logins are refused. See
+[SSH agent](usage.md#ssh-agent).
 
 **`skills.defaultMode`** applies when a sandbox is created and neither `--skills` nor
 `sandboxOptions.skills` says otherwise. An existing sandbox keeps the mode it was created with. A

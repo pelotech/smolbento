@@ -72,3 +72,23 @@ release-build target builder:
             grep -q 'interpreter /lib/ld-linux-aarch64.so.1' <<<"$info"
             ;;
     esac
+
+# Run Docker's kit-spec conformance suite (ssh-agent@1 only) against the adapter in
+# tests/conformance. Boots real VMs and builds the suite's workload image (needs a hypervisor
+# and the image builder); further arguments go to `kit-tck runtime` (e.g. `--verbose`).
+conformance *args:
+    #!/usr/bin/env bash
+    set -euo pipefail
+    # sandbox-kit-spec commit the suite is taken from; bump it deliberately.
+    spec_commit=06ac386a1b5d570daff36bba4232fb9e71e45d50
+    cache="${XDG_CACHE_HOME:-$HOME/.cache}/smolbento/conformance"
+    spec="$cache/sandbox-kit-spec"
+    mkdir -p "$cache"
+    [ -d "$spec/.git" ] || git clone --quiet https://github.com/docker/sandbox-kit-spec "$spec"
+    git -C "$spec" cat-file -e "$spec_commit^{commit}" 2>/dev/null || git -C "$spec" fetch --quiet origin
+    git -C "$spec" checkout --quiet --detach "$spec_commit"
+    cargo build --locked
+    export SMOLBENTO_BIN="$PWD/target/debug/smolbento"
+    adapter="$PWD/tests/conformance/smolbento-adapter"
+    cd "$spec"
+    GOWORK=off nix shell nixpkgs#go -c go run ./cmd/kit-tck runtime --adapter "$adapter" --timeout 2h {{args}}

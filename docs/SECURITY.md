@@ -205,7 +205,12 @@ kits you trust.
   `sbt exec -it` or `sbt exec` runs for them, and during a kit's `install` grant. They can list
   your agent's public keys and have it sign with any of them. That covers git commit signatures and
   SSH logins to any server your keys open. A kit's `sign: [...]` list allows only signatures in
-  those namespaces, not logins. They can't add, remove or lock keys or do anything else;
+  those namespaces, not logins. An `authenticate: [...]` list allows logins only to those servers:
+  smolbento verifies the session binding the client sends, and signs only when the binding's host
+  key is one your `ssh.knownHostsFile` (default `~/.ssh/known_hosts`) lists for a named server;
+  anything else is refused without reaching your agent. A server known only through a
+  `@cert-authority` line, or by a wildcard or negated pattern, isn't trusted for this. A kit
+  without `authenticate` can't log in at all. They can't add, remove or lock keys or do anything else;
   smolbento answers those requests itself with a failure. Your private keys never enter the
   sandbox.
   While the agent is served, code in the sandbox can sign as you and log in wherever your keys

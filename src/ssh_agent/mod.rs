@@ -2,6 +2,7 @@
 //! that records it, and whether the host has an agent to back it.
 
 pub mod filter;
+pub mod known_hosts;
 
 use std::collections::BTreeMap;
 use std::fmt;
@@ -55,6 +56,9 @@ pub type AgentGrant = ByPhase<PhaseGrant>;
 pub struct PhaseGrant {
     /// `None`: unrestricted (signs anything); else the namespaces it may sign.
     pub sign: Option<Vec<String>>,
+    /// The servers it may log in to, as `host` or `user@host` (a bounded grant only; empty = no
+    /// logins).
+    pub authenticate: Vec<String>,
     /// A required entry asked for it: with no agent to back it, the create is refused.
     pub required: bool,
     /// The kit messages name: the first required entry's, else the first kit entry's. `None` for
@@ -71,6 +75,10 @@ pub type AgentLabel = ByPhase<Access>;
 pub struct Access {
     /// `None`: unrestricted; else the namespaces the filter admits.
     pub sign: Option<Vec<String>>,
+    /// The servers a bounded grant may log in to. A label without it (written before logins were
+    /// supported) means none.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub authenticate: Vec<String>,
 }
 
 #[cfg(test)]
@@ -78,9 +86,15 @@ impl PhaseGrant {
     pub fn new(sign: Option<&[&str]>, required: bool, kit: Option<&str>) -> PhaseGrant {
         PhaseGrant {
             sign: sign.map(|s| s.iter().map(|x| x.to_string()).collect()),
+            authenticate: vec![],
             required,
             kit: kit.map(Into::into),
         }
+    }
+
+    pub fn authenticating(mut self, entries: &[&str]) -> PhaseGrant {
+        self.authenticate = entries.iter().map(|e| e.to_string()).collect();
+        self
     }
 }
 
@@ -90,6 +104,7 @@ impl AgentGrant {
         (!self.is_empty()).then(|| {
             self.map(|p| Access {
                 sign: p.sign.clone(),
+                authenticate: p.authenticate.clone(),
             })
         })
     }
@@ -168,7 +183,7 @@ pub fn host_agent(
 }
 
 /// Applies availability to a grant at create: with an agent every phase stays; without one a
-/// required phase refuses the create (`kit K: ssh-agent@1 needs an SSH agent, but <reason>`), and
+/// required phase refuses the create (`kit K: com.docker.sandbox/ssh-agent@1 needs an SSH agent, but <reason>`), and
 /// an optional one is dropped, with a note for stderr when a kit asked for it or the socket
 /// directory is unsafe. Returns the label to record (`None`: no agent at all) and the notes.
 pub fn settle(
@@ -184,7 +199,7 @@ pub fn settle(
         let Some(p) = phase else { continue };
         let kit = p.kit.as_deref().unwrap_or("?");
         if p.required {
-            bail!("kit {kit}: ssh-agent@1 needs an SSH agent, but {why}");
+            bail!("kit {kit}: com.docker.sandbox/ssh-agent@1 needs an SSH agent, but {why}");
         }
         let who = match &p.kit {
             Some(k) => format!("kit {k}"),
@@ -285,7 +300,9 @@ mod tests {
             let e = settle("s", &req, &Err(why)).unwrap_err();
             assert_eq!(
                 e.to_string(),
-                format!("kit signer: ssh-agent@1 needs an SSH agent, but {reason}")
+                format!(
+                    "kit signer: com.docker.sandbox/ssh-agent@1 needs an SSH agent, but {reason}"
+                )
             );
         }
 
@@ -322,14 +339,52 @@ mod tests {
         let l = AgentLabel {
             runtime: Some(Access {
                 sign: Some(vec!["git".into()]),
+                authenticate: vec![],
             }),
             install: None,
         };
         assert_eq!(l.to_label(), r#"{"runtime":{"sign":["git"]}}"#);
         assert_eq!(AgentLabel::from_label(&l.to_label()), Some(l));
         let unrestricted = AgentLabel::from_label(r#"{"install":{"sign":null}}"#).unwrap();
-        assert_eq!(unrestricted.install, Some(Access { sign: None }));
+        assert_eq!(
+            unrestricted.install,
+            Some(Access {
+                sign: None,
+                authenticate: vec![]
+            })
+        );
         assert_eq!(AgentLabel::from_label("{}"), None);
         assert_eq!(AgentLabel::from_label("nope"), None);
+    }
+
+    #[test]
+    fn logins_round_trip_and_an_old_label_means_no_logins() {
+        let l = AgentLabel {
+            runtime: Some(Access {
+                sign: Some(vec![]),
+                authenticate: vec!["git@github.com".into(), "example.org".into()],
+            }),
+            install: None,
+        };
+        assert_eq!(
+            l.to_label(),
+            r#"{"runtime":{"sign":[],"authenticate":["git@github.com","example.org"]}}"#
+        );
+        assert_eq!(AgentLabel::from_label(&l.to_label()), Some(l));
+        let old = AgentLabel::from_label(r#"{"runtime":{"sign":["git"]}}"#).unwrap();
+        assert!(old.runtime.unwrap().authenticate.is_empty());
+    }
+
+    #[test]
+    fn a_grant_carries_its_logins_into_the_label() {
+        let g = AgentGrant {
+            runtime: Some(PhaseGrant::new(Some(&[]), true, Some("k")).authenticating(&["a.com"])),
+            install: None,
+        };
+        let (label, _) = settle("s", &g, &Ok("/a.sock".into())).unwrap();
+        assert_eq!(
+            label.unwrap().to_label(),
+            r#"{"runtime":{"sign":[],"authenticate":["a.com"]}}"#
+        );
     }
 }

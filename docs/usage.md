@@ -279,10 +279,16 @@ ssh-add -D                                  # fails: the sandbox can't change yo
   connections at once; open ones stay. A changed `ssh.agentSocketPath` applies to new connections.
 - Kits request it with `ssh-agent@1`: `phase: install`, `runtime` or both, and `sign: [git, …]` to
   allow only those namespaces. A v3 workload kit gets no agent without it. A required grant with no
-  agent stops the create (`kit K: ssh-agent@1 needs an SSH agent, but SSH_AUTH_SOCK is unset`); an
+  agent stops the create (`kit K: com.docker.sandbox/ssh-agent@1 needs an SSH agent, but SSH_AUTH_SOCK is unset`); an
   optional one is left out with a note. An `install` grant is served only during install steps, and
-  a step sees `SSH_AUTH_SOCK` only if it lists it in `env`. `authenticate` limits aren't supported:
-  a required entry with them is refused, an optional one skipped.
+  a step sees `SSH_AUTH_SOCK` only if it lists it in `env`.
+- `authenticate: [host | user@host]` (with `unrestricted: false`) allows logins to those servers
+  and nothing else. A login is signed only when the same connection first sent a session binding
+  (OpenSSH 8.9+ does) that smolbento verified, for that login's session, with a host key your
+  `known_hosts` lists for a named server (and the named user, if the entry has one). Host keys come
+  from `ssh.knownHostsFile` (default `~/.ssh/known_hosts`), read at each login, never from the
+  sandbox; log in once from your own shell, or add the key, first. Entries merge per phase like
+  `sign`.
 - The grant is fixed at create. Sandboxes created before this feature have no agent; recreate them.
 - Forks keep the parent's socket mount, so they can use the parent's grant while the parent is
   served.

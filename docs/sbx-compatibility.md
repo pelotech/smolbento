@@ -191,11 +191,19 @@ your agent (`ssh-add -D` fails with `Failed to remove all identities.`). The set
 | Sessions | Every session reaches the agent | The first session serves it; a concurrent second uses it. When the first exits, the agent is gone until the next `run` or `exec` |
 | Which agent | The sbx client's `SSH_AUTH_SOCK` | The `SSH_AUTH_SOCK` of the serving `sbt`, or `ssh.agentSocketPath` |
 | `SSH_AUTH_SOCK_GATEWAY` | `gateway.docker.internal:3129` | Not set (no TCP gateway) |
-| `authenticate` limits | Logins only to the named servers | Not yet (Phase 5g). A required entry is refused (`kit K: ssh-agent@1 authenticate limits aren't supported yet`); an optional one is skipped |
+| `authenticate` limits | Logins only to the named servers | Supported. Host keys come from `ssh.knownHostsFile` (smolbento-only setting, default `~/.ssh/known_hosts`), read at each login. A server known only through `@cert-authority`, or by a wildcard or negated pattern, is refused, as is a `[host]:port` entry; hashed names work |
 | `setup ssh` | `ssh NAME.sbx` into sandboxes | Not yet (Phase 5h) |
 | Forks | No forks | No agent of its own, but it keeps the parent's socket mount, so it can use the agent (with the parent's grant) while the parent is served |
 | `kit add` of an `ssh-agent@1` kit | Recreates the container | `recreate required: … SSH agent` |
 | Sandboxes from before | n/a | Created before smolbento had the agent, so they have none. Recreate them |
+
+Docker's kit-spec conformance suite checks this capability through `tests/conformance/smolbento-adapter`
+(`just conformance`, pinned to sandbox-kit-spec `06ac386`). `logins-bounded`, `binding-verified`,
+`destination-keys-outside-sandbox` and `unavailable-refuses-required` pass; `phase-scoped` is skipped
+(needs `lifecycle@1`). `agent-reachable`, `operations-restricted`, `signatures-bounded`,
+`absent-without-grant`, `every-boot` and `unavailable-skips-optional` fail: their probe runs as the
+workload image's `Entrypoint` at boot, which smolbento doesn't run, and needs the agent served while
+nobody is attached.
 
 ## Kits
 
@@ -221,7 +229,7 @@ anything is created. An optional one is skipped with a warning.
 | `privileged@1` | Yes | Yes |
 | `agent-sessions@1` | Declaration only | Declaration only |
 | `host-mount@1` | Yes | Yes: a directory on your machine, shared by the kit's sandboxes and kept after `rm` (see below) |
-| `ssh-agent@1` | Yes | Yes, with `sign` limits, served while `sbt` runs ([SSH agent](#ssh-agent)). `authenticate` limits: later (Phase 5g) |
+| `ssh-agent@1` | Yes | Yes, with `sign` and `authenticate` limits, served while `sbt` runs ([SSH agent](#ssh-agent)) |
 | `agent-skills@1`, `agent-skill@1` | Yes | Yes ([Skills](#skills)). `kit add` refuses a kit with either, as it does `host-mount@1`. `agent-skill@1` with `name: null` means no name |
 | `kit-registry@1` | Approved builder kits only | No |
 | `agent-interactive-sessions@1`, `usb-device@1` | No | No |

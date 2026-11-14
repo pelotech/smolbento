@@ -12,13 +12,26 @@ use std::thread;
 use std::time::{Duration, Instant};
 
 use anyhow::Result;
+use signature::Verifier;
+use ssh_key::public::KeyData;
+use ssh_key::{PublicKey, Signature};
 
+use super::known_hosts::host_keys;
 use super::{self as agent, Access};
 use crate::bridge::listener::{self, DEADLINE, Deadline, POLL, Server};
 use crate::config::{Paths, Settings};
 use crate::sandbox::Sandbox;
 
 const FAILURE: u8 = 5;
+/// `SSH_MSG_USERAUTH_REQUEST` (RFC 4252 section 7), the byte after the session id in a login's
+/// signed data.
+const USERAUTH_REQUEST: u8 = 50;
+const PUBLICKEY: &[u8] = b"publickey";
+const HOSTBOUND: &[u8] = b"publickey-hostbound-v00@openssh.com";
+/// Verified bindings kept per connection; the oldest go first.
+const MAX_BINDINGS: usize = 16;
+/// The largest `known_hosts` file read.
+const MAX_KNOWN_HOSTS: u64 = 16 << 20;
 const REQUEST_IDENTITIES: u8 = 11;
 const SIGN_REQUEST: u8 = 13;
 const EXTENSION: u8 = 27;
@@ -47,10 +60,12 @@ impl Backing {
     /// Keeps only the env vars the host agent lookup reads, so the rest of the process env (which
     /// may hold secrets) is never carried in a plan, or printed with it.
     pub fn new(paths: &Paths, env: &BTreeMap<String, String>) -> Self {
-        const KEPT: [&str; 3] = [
+        const KEPT: [&str; 5] = [
             "SSH_AUTH_SOCK",
             "SMOLBENTO_SSH_AGENT_SOCKET",
             "SMOLBENTO_SSH_AGENT_FORWARDING",
+            "SMOLBENTO_SSH_KNOWN_HOSTS_FILE",
+            "HOME",
         ];
         Backing {
             paths: paths.clone(),
@@ -70,6 +85,24 @@ impl Backing {
             return None;
         }
         agent::host_agent(&settings, &self.env).ok()?.ok()
+    }
+
+    /// The text of the host's `known_hosts` file (`ssh.knownHostsFile`), read afresh each time so
+    /// edits apply to the next login. `None` (no keys, so no login) when it can't be read.
+    fn known_hosts(&self) -> Option<String> {
+        let (settings, error) = Settings::load(&self.paths, self.env.clone());
+        if error.is_some() {
+            return None;
+        }
+        let path = settings.value("ssh.knownHostsFile").ok()?;
+        let path = match path.strip_prefix("~/") {
+            Some(rest) => Path::new(self.env.get("HOME")?).join(rest),
+            None => PathBuf::from(path),
+        };
+        let file = std::fs::File::open(path).ok()?;
+        let mut text = String::new();
+        file.take(MAX_KNOWN_HOSTS).read_to_string(&mut text).ok()?;
+        Some(text)
     }
 }
 
@@ -114,9 +147,9 @@ fn accept_loop(listener: &UnixListener, stop: &Arc<AtomicBool>, access: &Access,
             continue;
         };
         open.fetch_add(1, Ordering::Relaxed);
-        let (open, stop, access) = (open.clone(), stop.clone(), access.clone());
+        let (open, stop, access, b) = (open.clone(), stop.clone(), access.clone(), b.clone());
         thread::spawn(move || {
-            relay(&guest, &host, &access, &stop);
+            relay(&guest, &host, &access, &b, &stop);
             open.fetch_sub(1, Ordering::Relaxed);
         });
     }
@@ -124,7 +157,13 @@ fn accept_loop(listener: &UnixListener, stop: &Arc<AtomicBool>, access: &Access,
 
 /// Relays one guest connection's requests, one at a time, until either side closes, a message is
 /// malformed or too large, a deadline passes or the server stops.
-fn relay(guest: &UnixStream, host: &UnixStream, access: &Access, stop: &AtomicBool) {
+fn relay(
+    guest: &UnixStream,
+    host: &UnixStream,
+    access: &Access,
+    backing: &Backing,
+    stop: &AtomicBool,
+) {
     // Accepted sockets inherit non-blocking mode on some systems.
     let blocking = |s: &UnixStream| {
         s.set_nonblocking(false)
@@ -133,8 +172,9 @@ fn relay(guest: &UnixStream, host: &UnixStream, access: &Access, stop: &AtomicBo
     if blocking(guest).is_err() || blocking(host).is_err() {
         return;
     }
+    let mut conn = Conn::default();
     while let Some(msg) = read_message(guest, IDLE, stop) {
-        let reply = match verdict(access, &msg) {
+        let reply = match verdict(access, &mut conn, &|| backing.known_hosts(), &msg) {
             Verdict::Relay => {
                 if write_message(host, &msg).is_err() {
                     return;
@@ -188,8 +228,29 @@ enum Verdict {
     Close,
 }
 
-/// What to do with one guest message (type byte and payload, never empty).
-fn verdict(access: &Access, msg: &[u8]) -> Verdict {
+/// A session binding this connection carried that checked out: the server's host key and the
+/// session it signed.
+#[derive(Debug, Clone, PartialEq)]
+struct Binding {
+    session_id: Vec<u8>,
+    host_key: KeyData,
+}
+
+/// What one guest connection has told the agent so far.
+#[derive(Debug, Default)]
+struct Conn {
+    /// Verified, non-forwarding bindings, newest last.
+    bindings: Vec<Binding>,
+}
+
+/// What to do with one guest message (type byte and payload, never empty). `known_hosts` reads
+/// the host's file only when a login needs it.
+fn verdict(
+    access: &Access,
+    conn: &mut Conn,
+    known_hosts: &dyn Fn() -> Option<String>,
+    msg: &[u8],
+) -> Verdict {
     let Some((&kind, payload)) = msg.split_first() else {
         return Verdict::Close;
     };
@@ -197,12 +258,36 @@ fn verdict(access: &Access, msg: &[u8]) -> Verdict {
         REQUEST_IDENTITIES => Verdict::Relay,
         SIGN_REQUEST => match sign_data(payload) {
             None => Verdict::Close,
-            Some(data) if admitted(access, data) => Verdict::Relay,
+            Some((key, data))
+                if admitted(access, data)
+                    || login_admitted(access, conn, known_hosts, key, data) =>
+            {
+                Verdict::Relay
+            }
             Some(_) => Verdict::Fail,
         },
         EXTENSION => match string(payload) {
             None => Verdict::Close,
-            Some((name, _)) if name == SESSION_BIND => Verdict::Relay,
+            Some((name, rest)) if name == SESSION_BIND => {
+                // Bindings matter only to a grant with logins; others relay them as before.
+                if access.authenticate.is_empty() {
+                    return Verdict::Relay;
+                }
+                match binding(rest) {
+                    // Remembered when verified and not for a forwarded agent. The host agent
+                    // still gets it and answers as it would, so its own limits apply.
+                    Some((b, forwarding)) => {
+                        if !forwarding {
+                            conn.bindings.push(b);
+                            if conn.bindings.len() > MAX_BINDINGS {
+                                conn.bindings.remove(0);
+                            }
+                        }
+                        Verdict::Relay
+                    }
+                    None => Verdict::Fail,
+                }
+            }
             Some(_) => Verdict::Fail,
         },
         _ => Verdict::Fail,
@@ -220,11 +305,138 @@ fn admitted(access: &Access, data: &[u8]) -> bool {
         .is_some_and(|(ns, _)| namespaces.iter().any(|n| n.as_bytes() == ns))
 }
 
-/// A sign request's data: `string key_blob, string data, uint32 flags`.
-fn sign_data(payload: &[u8]) -> Option<&[u8]> {
-    let (_key, rest) = string(payload)?;
+/// A `session-bind@openssh.com` body after the extension name (`string hostkey, string
+/// session_id, string signature, bool is_forwarding`, PROTOCOL.agent): the binding when the host
+/// key's signature over the session id verifies, and whether it is for a forwarded agent. `None`
+/// for anything malformed or unverifiable.
+fn binding(body: &[u8]) -> Option<(Binding, bool)> {
+    let (key, rest) = string(body)?;
+    let (session_id, rest) = string(rest)?;
+    let (sig, rest) = string(rest)?;
+    let [forwarding] = rest else { return None };
+    let host_key = PublicKey::from_bytes(key).ok()?.key_data().clone();
+    let sig = Signature::try_from(sig).ok()?;
+    host_key.verify(session_id, &sig).ok()?;
+    Some((
+        Binding {
+            session_id: session_id.to_vec(),
+            host_key,
+        },
+        *forwarding != 0,
+    ))
+}
+
+/// A login signature (RFC 4252 section 7 data) the grant admits, by the spec's rules: a binding
+/// this connection verified for the data's session id, whose host key is one `known_hosts` lists
+/// for a server in `authenticate` (an entry naming a user needs that user), and for the hostbound
+/// method the data's host key is the binding's. Anything unparseable or unknown is refused.
+fn login_admitted(
+    access: &Access,
+    conn: &Conn,
+    known_hosts: &dyn Fn() -> Option<String>,
+    key: &[u8],
+    data: &[u8],
+) -> bool {
+    if access.sign.is_none() || access.authenticate.is_empty() {
+        return false;
+    }
+    let Some(login) = login(key, data) else {
+        return false;
+    };
+    let bound: Vec<&Binding> = conn
+        .bindings
+        .iter()
+        .filter(|b| b.session_id == login.session_id)
+        .filter(|b| login.host_key.as_ref().is_none_or(|k| *k == b.host_key))
+        .collect();
+    if bound.is_empty() {
+        return false;
+    }
+    let Some(text) = known_hosts() else {
+        return false;
+    };
+    access.authenticate.iter().any(|dest| {
+        // `user@host` or `host`, as the kit parser validated it.
+        let (user, host) = dest
+            .split_once('@')
+            .map_or((None, dest.as_str()), |(u, h)| (Some(u), h));
+        user.is_none_or(|u| u.as_bytes() == login.user)
+            && host_keys(&text, host)
+                .iter()
+                .any(|k| bound.iter().any(|b| b.host_key == *k))
+    })
+}
+
+/// The parts of a login's signed data the rules look at.
+struct Login<'a> {
+    session_id: &'a [u8],
+    user: &'a [u8],
+    /// The host key in the data, for the hostbound method.
+    host_key: Option<KeyData>,
+}
+
+/// Parses `string session_id, byte 50, string user, string service, string method, bool true,
+/// string algorithm, string key` and, for the hostbound method, `string hostkey`, with nothing
+/// after. The key in the data must be the key the request signs with, and the algorithm must be
+/// one that key makes. `None` for other methods and anything else.
+fn login<'a>(request_key: &[u8], data: &'a [u8]) -> Option<Login<'a>> {
+    let (session_id, rest) = string(data)?;
+    let (&kind, rest) = rest.split_first()?;
+    if kind != USERAUTH_REQUEST {
+        return None;
+    }
+    let (user, rest) = string(rest)?;
+    let (_service, rest) = string(rest)?;
+    let (method, rest) = string(rest)?;
+    let (&has_signature, rest) = rest.split_first()?;
+    let (algorithm, rest) = string(rest)?;
+    let (key, rest) = string(rest)?;
+    if has_signature != 1 || key != request_key || !algorithm_fits(algorithm, key) {
+        return None;
+    }
+    let host_key = match method {
+        m if m == PUBLICKEY && rest.is_empty() => None,
+        m if m == HOSTBOUND => {
+            let (host_key, rest) = string(rest)?;
+            if !rest.is_empty() {
+                return None;
+            }
+            Some(PublicKey::from_bytes(host_key).ok()?.key_data().clone())
+        }
+        _ => return None,
+    };
+    Some(Login {
+        session_id,
+        user,
+        host_key,
+    })
+}
+
+/// Whether `algorithm` is one the public key blob `key` signs with: its own type name, and for
+/// RSA also the SHA-2 variants (certificates likewise with their suffix).
+fn algorithm_fits(algorithm: &[u8], key: &[u8]) -> bool {
+    let Some((key_type, _)) = string(key) else {
+        return false;
+    };
+    if algorithm == key_type {
+        return true;
+    }
+    let cert = b"-cert-v01@openssh.com";
+    let (base, suffix): (&[u8], &[u8]) = match key_type.strip_suffix(&cert[..]) {
+        Some(base) => (base, &cert[..]),
+        None => (key_type, b""),
+    };
+    base == b"ssh-rsa"
+        && [&b"rsa-sha2-256"[..], b"rsa-sha2-512"]
+            .iter()
+            .any(|a| algorithm == [a, suffix].concat())
+}
+
+/// A sign request's key blob and data: `string key_blob, string data, uint32 flags`.
+fn sign_data(payload: &[u8]) -> Option<(&[u8], &[u8])> {
+    let (key, rest) = string(payload)?;
     let (data, rest) = string(rest)?;
-    (rest.len() == 4).then_some(data)
+    (rest.len() == 4).then_some((key, data))
 }
 
 /// The SSH string (`uint32` length, bytes) at the start of `b`, and what follows it.
@@ -246,7 +458,10 @@ mod tests {
     fn sign(data: &[u8]) -> Vec<u8> {
         [
             &[SIGN_REQUEST][..],
-            &s(b"key"),
+            &s(&crate::ssh_agent::known_hosts::testkeys::key(99)
+                .public_key()
+                .to_bytes()
+                .unwrap()),
             &s(data),
             &0u32.to_be_bytes(),
         ]
@@ -261,13 +476,22 @@ mod tests {
         [&[EXTENSION][..], &s(name), b"rest"].concat()
     }
 
+    /// `verdict` with a fresh connection and no `known_hosts`: for what needs neither.
+    fn verdict(access: &Access, msg: &[u8]) -> Verdict {
+        super::verdict(access, &mut Conn::default(), &|| None, msg)
+    }
+
     fn all() -> Access {
-        Access { sign: None }
+        Access {
+            sign: None,
+            authenticate: vec![],
+        }
     }
 
     fn only(namespaces: &[&str]) -> Access {
         Access {
             sign: Some(namespaces.iter().map(|n| n.to_string()).collect()),
+            authenticate: vec![],
         }
     }
 
@@ -330,6 +554,350 @@ mod tests {
         }
     }
 
+    use crate::ssh_agent::known_hosts::testkeys::{key, line};
+    use signature::Signer;
+    use ssh_key::PrivateKey;
+
+    const SESSION: &[u8] = b"0123456789abcdef0123456789abcdef";
+
+    fn wire_sig(k: &PrivateKey, data: &[u8]) -> Vec<u8> {
+        let sig: Signature = k.try_sign(data).unwrap();
+        Vec::try_from(sig).unwrap()
+    }
+
+    /// A `session-bind@openssh.com` request: `host` signs `session`.
+    fn bind(host: &PrivateKey, session: &[u8], forwarding: bool) -> Vec<u8> {
+        bind_signed_by(host, host, session, forwarding)
+    }
+
+    fn bind_signed_by(
+        host: &PrivateKey,
+        signer: &PrivateKey,
+        session: &[u8],
+        fwd: bool,
+    ) -> Vec<u8> {
+        [
+            &[EXTENSION][..],
+            &s(SESSION_BIND),
+            &s(&host.public_key().to_bytes().unwrap()),
+            &s(session),
+            &s(&wire_sig(signer, session)),
+            &[u8::from(fwd)],
+        ]
+        .concat()
+    }
+
+    /// The signed data of a login with `user_key` as `user`.
+    fn login_data(
+        session: &[u8],
+        user: &str,
+        method: &[u8],
+        hostkey: Option<&PrivateKey>,
+    ) -> Vec<u8> {
+        login_data_flag(session, user, method, hostkey, 1)
+    }
+
+    fn login_data_flag(
+        session: &[u8],
+        user: &str,
+        method: &[u8],
+        hostkey: Option<&PrivateKey>,
+        flag: u8,
+    ) -> Vec<u8> {
+        let user_key = key(99).public_key().to_bytes().unwrap();
+        let mut d = [
+            &s(session)[..],
+            &[USERAUTH_REQUEST],
+            &s(user.as_bytes()),
+            &s(b"ssh-connection"),
+            &s(method),
+            &[flag],
+            &s(b"ssh-ed25519"),
+            &s(&user_key),
+        ]
+        .concat();
+        if let Some(h) = hostkey {
+            d.extend(s(&h.public_key().to_bytes().unwrap()));
+        }
+        d
+    }
+
+    fn logins(entries: &[&str]) -> Access {
+        Access {
+            sign: Some(vec!["git".into()]),
+            authenticate: entries.iter().map(|e| e.to_string()).collect(),
+        }
+    }
+
+    fn known(hosts: &[(&str, u8)]) -> String {
+        hosts
+            .iter()
+            .map(|(h, n)| format!("{h} {}\n", line(*n)))
+            .collect()
+    }
+
+    /// Asks, on one connection, a sequence of messages and returns the last verdict.
+    fn run(access: &Access, kh: &str, msgs: &[Vec<u8>]) -> Verdict {
+        let mut conn = Conn::default();
+        let text = kh.to_string();
+        let mut last = Verdict::Close;
+        for m in msgs {
+            last = super::verdict(access, &mut conn, &|| Some(text.clone()), m);
+        }
+        last
+    }
+
+    const PK: &[u8] = PUBLICKEY;
+
+    #[test]
+    fn a_login_needs_a_verified_binding_to_a_listed_server() {
+        let gh = key(1);
+        let a = logins(&["github.com"]);
+        let kh = known(&[("github.com", 1)]);
+        let login = sign(&login_data(SESSION, "git", PK, None));
+        let ok = [bind(&gh, SESSION, false), login.clone()];
+        assert_eq!(run(&a, &kh, &ok), Verdict::Relay);
+
+        // No binding at all.
+        assert_eq!(run(&a, &kh, std::slice::from_ref(&login)), Verdict::Fail);
+        // A binding another connection carried.
+        let mut other = Conn::default();
+        super::verdict(&a, &mut other, &|| None, &bind(&gh, SESSION, false));
+        assert_eq!(
+            super::verdict(&a, &mut Conn::default(), &|| Some(kh.clone()), &login),
+            Verdict::Fail
+        );
+        // A binding whose signature is by another key, or over other data.
+        let forged = bind_signed_by(&gh, &key(2), SESSION, false);
+        assert_eq!(run(&a, &kh, &[forged, login.clone()]), Verdict::Fail);
+        let mut tampered = bind(&gh, SESSION, false);
+        let at = tampered.len() - 3;
+        tampered[at] ^= 1;
+        assert_eq!(run(&a, &kh, &[tampered, login.clone()]), Verdict::Fail);
+        // A forwarding binding never counts.
+        assert_eq!(
+            run(&a, &kh, &[bind(&gh, SESSION, true), login.clone()]),
+            Verdict::Fail
+        );
+        // A binding for another session.
+        assert_eq!(
+            run(
+                &a,
+                &kh,
+                &[bind(&gh, b"another session id", false), login.clone()]
+            ),
+            Verdict::Fail
+        );
+    }
+
+    #[test]
+    fn the_binding_s_host_key_must_be_a_listed_servers_known_key() {
+        let gh = key(1);
+        let b = bind(&gh, SESSION, false);
+        let login = sign(&login_data(SESSION, "git", PK, None));
+        let msgs = [b.clone(), login.clone()];
+        // Not named in authenticate, or named only as another host.
+        assert_eq!(
+            run(
+                &logins(&["gitlab.com"]),
+                &known(&[("github.com", 1)]),
+                &msgs
+            ),
+            Verdict::Fail
+        );
+        // The file doesn't list the key for that name (another key, another host), or revokes it.
+        let a = logins(&["github.com"]);
+        assert_eq!(run(&a, &known(&[("github.com", 2)]), &msgs), Verdict::Fail);
+        assert_eq!(run(&a, &known(&[("gitlab.com", 1)]), &msgs), Verdict::Fail);
+        let revoked = format!("github.com {}\n@revoked * {}\n", line(1), line(1));
+        assert_eq!(run(&a, &revoked, &msgs), Verdict::Fail);
+        assert_eq!(run(&a, "", &msgs), Verdict::Fail);
+        // An unreadable file is no keys.
+        let mut conn = Conn::default();
+        super::verdict(&a, &mut conn, &|| None, &b);
+        assert_eq!(
+            super::verdict(&a, &mut conn, &|| None, &login),
+            Verdict::Fail
+        );
+        // One of several listed servers, with the server's key among several.
+        let many = logins(&["gitlab.com", "github.com"]);
+        let kh = known(&[("github.com", 7), ("github.com", 1)]);
+        assert_eq!(run(&many, &kh, &msgs), Verdict::Relay);
+    }
+
+    #[test]
+    fn a_login_must_sign_with_the_key_it_names_and_an_algorithm_that_key_makes() {
+        let gh = key(1);
+        let a = logins(&["github.com"]);
+        let kh = known(&[("github.com", 1)]);
+        let data = login_data(SESSION, "git", PK, None);
+        let bound = bind(&gh, SESSION, false);
+        let with_key =
+            |k: &[u8]| [&[SIGN_REQUEST][..], &s(k), &s(&data), &0u32.to_be_bytes()].concat();
+        let other = key(98).public_key().to_bytes().unwrap();
+        assert_eq!(
+            run(&a, &kh, &[bound.clone(), with_key(&other)]),
+            Verdict::Fail
+        );
+        // An algorithm the key doesn't make.
+        let wrong_alg = {
+            let mut d = login_data(SESSION, "git", PK, None);
+            let pos = d.windows(11).position(|w| w == b"ssh-ed25519").unwrap();
+            d[pos..pos + 11].copy_from_slice(b"ssh-ed25518");
+            d
+        };
+        assert_eq!(
+            run(&a, &kh, &[bound.clone(), sign(&wrong_alg)]),
+            Verdict::Fail
+        );
+        assert!(algorithm_fits(b"rsa-sha2-512", &s(b"ssh-rsa")));
+        assert!(algorithm_fits(
+            b"rsa-sha2-256-cert-v01@openssh.com",
+            &s(b"ssh-rsa-cert-v01@openssh.com")
+        ));
+        assert!(!algorithm_fits(b"ssh-rsa", &s(b"ssh-ed25519")));
+        assert!(!algorithm_fits(b"ssh-ed25519", b"\x00"));
+    }
+
+    #[test]
+    fn a_user_entry_admits_only_that_user() {
+        let gh = key(1);
+        let kh = known(&[("github.com", 1)]);
+        let b = bind(&gh, SESSION, false);
+        let as_user = |u: &str| sign(&login_data(SESSION, u, PK, None));
+        let a = logins(&["git@github.com"]);
+        assert_eq!(run(&a, &kh, &[b.clone(), as_user("git")]), Verdict::Relay);
+        for u in ["root", "gi", "git2", "", "GIT"] {
+            assert_eq!(run(&a, &kh, &[b.clone(), as_user(u)]), Verdict::Fail, "{u}");
+        }
+        // A bare host admits any user; another entry for the host can admit another one.
+        assert_eq!(
+            run(&logins(&["github.com"]), &kh, &[b.clone(), as_user("root")]),
+            Verdict::Relay
+        );
+        let two = logins(&["git@github.com", "root@github.com"]);
+        assert_eq!(run(&two, &kh, &[b, as_user("root")]), Verdict::Relay);
+    }
+
+    #[test]
+    fn the_hostbound_method_must_name_the_bindings_host_key() {
+        let (gh, evil) = (key(1), key(2));
+        let kh = known(&[("github.com", 1)]);
+        let a = logins(&["github.com"]);
+        let b = bind(&gh, SESSION, false);
+        let hb = |h: &PrivateKey| sign(&login_data(SESSION, "git", HOSTBOUND, Some(h)));
+        assert_eq!(run(&a, &kh, &[b.clone(), hb(&gh)]), Verdict::Relay);
+        assert_eq!(run(&a, &kh, &[b.clone(), hb(&evil)]), Verdict::Fail);
+        // The hostbound method without its host key, and the plain one with a stray one.
+        let bare = sign(&login_data(SESSION, "git", HOSTBOUND, None));
+        assert_eq!(run(&a, &kh, &[b.clone(), bare]), Verdict::Fail);
+        let stray = sign(&login_data(SESSION, "git", PK, Some(&gh)));
+        assert_eq!(run(&a, &kh, &[b, stray]), Verdict::Fail);
+    }
+
+    #[test]
+    fn other_login_data_is_refused() {
+        let gh = key(1);
+        let kh = known(&[("github.com", 1)]);
+        let a = logins(&["github.com"]);
+        let b = bind(&gh, SESSION, false);
+        let good = login_data(SESSION, "git", PK, None);
+        let refused = |data: Vec<u8>| run(&a, &kh, &[b.clone(), sign(&data)]);
+        assert_eq!(refused(good.clone()), Verdict::Relay);
+        // Other methods, a missing-signature flag, trailing bytes, truncations, garbage.
+        for m in [
+            &b"hostbased"[..],
+            b"password",
+            b"none",
+            b"keyboard-interactive",
+            b"",
+        ] {
+            assert_eq!(refused(login_data(SESSION, "git", m, None)), Verdict::Fail);
+        }
+        let no_sig = login_data_flag(SESSION, "git", PK, None, 0);
+        assert_eq!(refused(no_sig), Verdict::Fail);
+        assert_eq!(refused([&good[..], b"x"].concat()), Verdict::Fail);
+        for cut in 0..good.len() {
+            assert_eq!(refused(good[..cut].to_vec()), Verdict::Fail, "{cut}");
+        }
+        let mut wrong_type = good.clone();
+        wrong_type[SESSION.len() + 4] = 51;
+        assert_eq!(refused(wrong_type), Verdict::Fail);
+        assert_eq!(refused(b"garbage".to_vec()), Verdict::Fail);
+        assert_eq!(refused(vec![]), Verdict::Fail);
+        // Certificate-signed data and other bytes are neither SSHSIG nor a login.
+        assert_eq!(refused(b"\0\0\0\x05ca-signed cert".to_vec()), Verdict::Fail);
+    }
+
+    #[test]
+    fn a_grant_without_logins_never_admits_one_and_sshsig_is_unchanged() {
+        let gh = key(1);
+        let kh = known(&[("github.com", 1)]);
+        let b = bind(&gh, SESSION, false);
+        let login = sign(&login_data(SESSION, "git", PK, None));
+        assert_eq!(
+            run(&only(&["git"]), &kh, &[b.clone(), login.clone()]),
+            Verdict::Fail
+        );
+        let a = logins(&["github.com"]);
+        assert_eq!(
+            run(&a, &kh, &[b.clone(), sign(&sshsig(b"git"))]),
+            Verdict::Relay
+        );
+        assert_eq!(
+            run(&a, &kh, &[b.clone(), sign(&sshsig(b"file"))]),
+            Verdict::Fail
+        );
+        // A logins-only grant (empty sign list) signs no SSHSIG.
+        let only_logins = Access {
+            sign: Some(vec![]),
+            authenticate: a.authenticate.clone(),
+        };
+        assert_eq!(
+            run(&only_logins, &kh, &[b.clone(), sign(&sshsig(b"git"))]),
+            Verdict::Fail
+        );
+        assert_eq!(run(&only_logins, &kh, &[b, login]), Verdict::Relay);
+        // An unrestricted grant relays logins without bindings.
+        assert_eq!(
+            run(&all(), "", &[sign(&login_data(SESSION, "x", PK, None))]),
+            Verdict::Relay
+        );
+    }
+
+    #[test]
+    fn a_malformed_binding_fails_under_a_grant_with_logins_and_relays_otherwise() {
+        let a = logins(&["github.com"]);
+        assert_eq!(run(&a, "", &[extension(SESSION_BIND)]), Verdict::Fail);
+        let good = bind(&key(1), SESSION, false);
+        assert_eq!(run(&a, "", std::slice::from_ref(&good)), Verdict::Relay);
+        assert_eq!(run(&a, "", &[[&good[..], b"x"].concat()]), Verdict::Fail);
+        assert_eq!(
+            run(&a, "", &[good[..good.len() - 1].to_vec()]),
+            Verdict::Fail
+        );
+        assert_eq!(
+            run(&only(&["git"]), "", &[extension(SESSION_BIND)]),
+            Verdict::Relay
+        );
+    }
+
+    #[test]
+    fn rsa_and_ecdsa_host_keys_bind() {
+        let fixtures =
+            std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("src/ssh_agent/fixtures");
+        for name in ["rsa2048", "ecdsa_p256"] {
+            let host = PrivateKey::read_openssh_file(fixtures.join(name)).unwrap();
+            let kh = format!("github.com {}\n", host.public_key().to_openssh().unwrap());
+            let a = logins(&["github.com"]);
+            let login = sign(&login_data(SESSION, "git", PK, None));
+            let msgs = [bind(&host, SESSION, false), login.clone()];
+            assert_eq!(run(&a, &kh, &msgs), Verdict::Relay, "{name}");
+            let wrong = [bind_signed_by(&host, &key(1), SESSION, false), login];
+            assert_eq!(run(&a, &kh, &wrong), Verdict::Fail, "{name}");
+        }
+    }
+
     /// A fake host agent on a Unix socket under /tmp (never the developer's): answers every
     /// message with its type plus one, and records what it received.
     struct FakeAgent {
@@ -351,9 +919,16 @@ mod tests {
                         let stop = AtomicBool::new(false);
                         while let Some(msg) = read_message(&conn, IDLE, &stop) {
                             s.lock().unwrap().push(msg.clone());
-                            let reply = [msg[0] + 1, b'k'];
-                            conn.write_all(&[&2u32.to_be_bytes()[..], &reply].concat())
-                                .unwrap();
+                            // The reply to an extension (a session binding) is `SSH_AGENT_SUCCESS`.
+                            let reply = if msg[0] == EXTENSION {
+                                vec![6]
+                            } else {
+                                vec![msg[0] + 1, b'k']
+                            };
+                            conn.write_all(
+                                &[&(reply.len() as u32).to_be_bytes()[..], &reply].concat(),
+                            )
+                            .unwrap();
                         }
                     });
                 }
@@ -457,7 +1032,7 @@ mod tests {
         assert_eq!(ask(&mut c, &sign(&sshsig(b"file"))).unwrap(), [FAILURE]);
         assert_eq!(ask(&mut c, &sign(b"login")).unwrap(), [FAILURE]);
         assert_eq!(ask(&mut c, &[19]).unwrap(), [FAILURE], "remove all");
-        assert_eq!(ask(&mut c, &extension(SESSION_BIND)).unwrap(), [28, b'k']);
+        assert_eq!(ask(&mut c, &extension(SESSION_BIND)).unwrap(), [6]);
         assert_eq!(ask(&mut c, &extension(b"query")).unwrap(), [FAILURE]);
         // Only the admitted ones reached the host agent, unchanged.
         assert_eq!(
@@ -468,6 +1043,46 @@ mod tests {
                 extension(SESSION_BIND)
             ]
         );
+    }
+
+    #[test]
+    fn a_login_is_relayed_only_with_a_binding_from_this_connection_and_the_known_hosts_file() {
+        let agent = FakeAgent::start();
+        let home = tempfile::tempdir().unwrap();
+        std::fs::create_dir(home.path().join(".ssh")).unwrap();
+        let hosts = home.path().join(".ssh/known_hosts");
+        let env = [("HOME", home.path().to_str().unwrap())];
+        let served = serve_with(logins(&["github.com"]), &agent, &env);
+        let b = bind(&key(1), SESSION, false);
+        let login = sign(&login_data(SESSION, "git", PK, None));
+
+        // The default `~/.ssh/known_hosts` is missing: no keys, no login.
+        let mut c = served.connect();
+        assert_eq!(ask(&mut c, &b).unwrap(), [6]);
+        assert_eq!(ask(&mut c, &login).unwrap(), [FAILURE]);
+        // Edits apply to the next login on the same connection.
+        std::fs::write(&hosts, known(&[("github.com", 1)])).unwrap();
+        assert_eq!(ask(&mut c, &login).unwrap(), [14, b'k']);
+        // Another connection has no binding.
+        let mut other = served.connect();
+        assert_eq!(ask(&mut other, &login).unwrap(), [FAILURE]);
+        assert_eq!(agent.seen(), vec![b, login]);
+
+        // The setting names another file.
+        let other_file = home.path().join("hosts2");
+        std::fs::write(&other_file, known(&[("github.com", 2)])).unwrap();
+        let env = [
+            ("HOME", home.path().to_str().unwrap()),
+            (
+                "SMOLBENTO_SSH_KNOWN_HOSTS_FILE",
+                other_file.to_str().unwrap(),
+            ),
+        ];
+        let served = serve_with(logins(&["github.com"]), &agent, &env);
+        let mut c = served.connect();
+        ask(&mut c, &bind(&key(1), SESSION, false)).unwrap();
+        let again = sign(&login_data(SESSION, "git", PK, None));
+        assert_eq!(ask(&mut c, &again).unwrap(), [FAILURE]);
     }
 
     #[test]

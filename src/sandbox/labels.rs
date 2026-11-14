@@ -426,9 +426,13 @@ mod tests {
             host_access: true,
             bridge: true,
             ssh_agent: Some(AgentLabel {
-                runtime: Some(Access { sign: None }),
+                runtime: Some(Access {
+                    sign: None,
+                    authenticate: vec![],
+                }),
                 install: Some(Access {
                     sign: Some(vec!["git".into()]),
+                    authenticate: vec![],
                 }),
             }),
             host_mounts: BTreeMap::from([("/home/agent/x".into(), "/data/x".into())]),

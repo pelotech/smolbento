@@ -17,6 +17,7 @@ base64 = "0.23.0"
 clap = { version = "4.6.7", features = ["derive"] }
 clap_complete = "4.6.11"
 flate2 = { version = "1", default-features = false, features = ["rust_backend"] }
+hmac = "0.13.0"
 humantime = "2.4.0"
 libc = "0.2.191"
 oci-client = { version = "0.18.0", default-features = false, features = ["rustls-tls-no-provider"] }
@@ -27,7 +28,11 @@ rustls = { version = "0.23.46", default-features = false, features = ["ring", "s
 serde = { version = "1.0.229", features = ["derive"] }
 serde-saphyr = "2.0.0"
 serde_json = "1.0.154"
+sha1 = "0.11.0"
 sha2 = "0.11.1"
+signature = "3.0.0"
+# Pinned exactly while it is a release candidate; Renovate moves it to 0.7.0.
+ssh-key = { version = "=0.7.0-rc.12", default-features = false, features = ["std", "ed25519", "p256", "p384", "p521", "rsa"] }
 tar = { version = "0.4.46", default-features = false }
 tempfile = "3.27.0"
 thiserror = "2.0.21"

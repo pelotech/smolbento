@@ -6,7 +6,7 @@ smolbento is built in phases. Each phase ships on its own.
 
 ## Current state
 
-Phases 0 to 4, 5a to 5f, and 6 and 7 are done. Phases 5g, 5h, 8, 9 and 10 are planned. Each feature's
+Phases 0 to 4, 5a to 5g, and 6 and 7 are done. Phases 5h, 8, 9 and 10 are planned. Each feature's
 usage guide is linked from its row in the [Phases](#phases) table.
 
 - Sandboxes created before Phase 5b, 5c or 5e need recreating.
@@ -37,7 +37,8 @@ usage guide is linked from its row in the [Phases](#phases) table.
 | 5d | Templates: `template save/ls/rm/load` (saves a stopped sandbox as a smolvm pack), `run/create -t`. See [Usage](usage.md#templates) | Done |
 | 5e | Browser and clipboard bridge while attached (`xdg-open`, `wl-copy`/`xclip`/`xsel`/`pbcopy`, the login callback relay, `browser.enabled`). See [Usage](usage.md#browser-and-clipboard) | Done |
 | 5f | Static MCP: `mcp add/ls/inspect/rm`, `run/create --static-mcp`, header secrets as smolvm credentials, Claude Code only. No gateway, OAuth, dynamic mode or live load/unload | Done |
-| 5 | The rest, easiest first. 5g: `ssh-agent@1` `authenticate` limits (logins only to named servers, checked against your known hosts). 5h: `setup ssh` (`ssh NAME.sbx`, e.g. from VS Code Remote-SSH) and the `ssh.autoCreate`, `ssh.defaultAgent`, `ssh.defaultTemplate`, `ssh.workspaceRoot` settings | Planned |
+| 5g | `ssh-agent@1` `authenticate` limits: logins only to named servers, checked against your known hosts (`ssh.knownHostsFile`). See [Usage](usage.md#ssh-agent) | Done |
+| 5 | The rest. 5h: `setup ssh` (`ssh NAME.sbx`, e.g. from VS Code Remote-SSH) and the `ssh.autoCreate`, `ssh.defaultAgent`, `ssh.defaultTemplate`, `ssh.workspaceRoot` settings | Planned |
 | 6a | `env plan`, remembered approvals, `env.rememberHostCommands` | Done |
 | 6b | `sbxenv.yaml` `lifecycle`, `registries`, `entrypoint` and `cmd`; registry logins scoped to a sandbox | Done |
 | 6c | `sbxenv.yaml` `bindings`, `mcp` url servers, `fuse`, `pullPolicy: never`, `writableEnvFiles`; `gemini` retired | Done |
@@ -59,7 +60,6 @@ usage guide is linked from its row in the [Phases](#phases) table.
 - The browser and clipboard bridge works only while attached (`run`, `exec -it`). It copies text
   only, and never reads the clipboard or pastes images. Forks have no bridge.
 - The SSH agent is served only while `sbt run`, `sbt exec -it` or `sbt exec` runs (no daemon).
-  `ssh-agent@1` `authenticate` limits aren't supported yet (5g).
 - Templates don't keep `/tmp`.
 - Shared skills are linked by a start script running as `agent`. Images without that account get no
   links (a warning). A required bundled kit skill there fails the create.
@@ -106,6 +106,12 @@ meanwhile.
 Measured against sbx v0.49.2, and v0.50.1 for kit host mounts, `--mount` and `inspect`. The full list is
 in [sbx compatibility](sbx-compatibility.md). Worth another look:
 
+- **Workload and agent lifetime.** sbx runs a workload image's `Entrypoint` + `Cmd` when the sandbox
+  starts and serves the SSH agent whenever the sandbox runs. smolbento runs `sleep infinity`, starts the
+  workload on `sbt run`, and serves the agent only while `sbt` is attached (no daemon). Docker's
+  conformance suite fails six `ssh-agent@1` checks for this reason (see
+  [sbx compatibility](sbx-compatibility.md#ssh-agent)). Closing it means running the workload at boot
+  and serving the agent for the sandbox's life: in effect a daemon. Decide together.
 - **Secrets sent to other hosts.** sbx lets a kit send a built-in secret (e.g. GitHub) to another host
   after you approve it once per host. smolbento refuses. An approval flow would close the gap.
 - **Kit host mounts.** A published kit's directory is keyed on its repository (sbx's key isn't measured).
