@@ -60,7 +60,9 @@ As of smolvm 1.35. Check the reference source before depending on anything not l
   `docs/sbx-compatibility.md`.
 - **Interception:** credential substitution (`--credential`) can't be combined with
   `--egress-interceptor`/`--mediated-egress` or with `--trust-host-certs`. Proxy variables aren't
-  forwarded unless `--use-host-proxy` is given.
+  forwarded unless `--use-host-proxy` is given. Since 1.35, a credential host's responses have the
+  injected value replaced by the placeholder, so an echo can't prove substitution: check the
+  server's answer instead (the e2e tests use httpbin's `/basic-auth`).
 - **Guest `/tmp`, `/run` and `/dev/shm` are emptied on every restart,** and never enter a pack. `/run`
   and `/dev/shm` are tmpfs. `/tmp` is on the machine's root disk since 1.33. Anything smolbento puts
   there (for example `/run/smolbento`) must be recreated after each start. Persistent data goes on the

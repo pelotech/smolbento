@@ -32,7 +32,7 @@ pub(crate) fn fork_round_trip() {
         "--env",
         "TOK",
         "--command",
-        "printf real-secret-xyz",
+        &format!("printf {BASIC_SECRET}"),
     ]);
 
     e.create_clone();
@@ -101,24 +101,15 @@ pub(crate) fn fork_round_trip() {
         "the parent doesn't see fork writes"
     );
 
-    let echo_tok = |sb: &str| {
-        e.ok(&[
-            "exec",
-            sb,
-            "sh",
-            "-c",
-            "wget -q -T 20 -O - --header \"Authorization: Bearer $TOK\" \
-             https://httpbin.org/headers",
-        ])
-    };
-    let echoed = echo_tok(f1);
-    assert!(echoed.contains("Bearer real-secret-xyz"), "{echoed}");
+    assert!(
+        basic_auth_ok(&e, f1, "TOK", "real-secret-xyz"),
+        "the fork's secret"
+    );
     e.ok(&["stop", f1]);
     e.ok(&["start", f1]);
-    let echoed = echo_tok(f1);
     assert!(
-        echoed.contains("Bearer real-secret-xyz"),
-        "after restart: {echoed}"
+        basic_auth_ok(&e, f1, "TOK", "real-secret-xyz"),
+        "the fork's secret after a restart"
     );
 
     guest_commit(f1, "in-fork-1");

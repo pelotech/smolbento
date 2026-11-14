@@ -537,7 +537,7 @@ pub(crate) fn install_only_credential_is_gone_after_install() {
         "--env",
         "E2E_TOK",
         "--command",
-        "printf real-secret-xyz",
+        &format!("printf {BASIC_SECRET}"),
     ]);
     let reg = Registry::start(&e);
     let kit = reg.push(
@@ -551,32 +551,36 @@ pub(crate) fn install_only_credential_is_gone_after_install() {
                  "config": {"service": "e2e-tok", "phase": "install",
                             "apiKey": {"name": "KIT_TOK", "inject": [
                                 {"domain": "httpbin.org", "header": "authorization",
-                                 "format": "Bearer %s"}]}}},
+                                 "format": "Basic %s"}]}}},
                 {"type": "com.docker.sandbox/lifecycle@1",
                  "config": {"install": [
                      {"command": add_agent_hook(), "user": "0"},
-                     {"command": "wget -q -T 20 -O /etc/e2e-install-echo https://httpbin.org/headers",
+                     {"command": "wget -q -T 20 -O /dev/null \
+                                  https://httpbin.org/basic-auth/user/real-secret-xyz \
+                                  && touch /etc/e2e-install-authorized",
                       "user": "0"},
                  ]}},
             ]),
         ),
     );
     e.create_with_kits(&[&kit]);
-    let during = root_out(&e.name, "cat /etc/e2e-install-echo");
+    // smolvm scrubs the value out of responses, so httpbin's answer is the proof.
     assert!(
-        during.contains("Bearer real-secret-xyz"),
-        "substituted during install: {during}"
+        root_sh(&e.name, "test -f /etc/e2e-install-authorized")
+            .status
+            .success(),
+        "substituted during install"
     );
     let after = e.sbt(&[
         "exec",
         &e.name,
         "sh",
         "-c",
-        "wget -S -T 20 -O - https://httpbin.org/headers 2>&1",
+        "wget -S -T 20 -O - https://httpbin.org/basic-auth/user/real-secret-xyz 2>&1",
     ]);
     let after = String::from_utf8_lossy(&after.stdout);
     assert!(after.contains("502"), "502 after install: {after}");
-    assert!(!after.contains("real-secret-xyz"), "{after}");
+    assert!(!after.contains(BASIC_SECRET), "{after}");
 }
 
 #[test]
