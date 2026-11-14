@@ -589,3 +589,17 @@ impl E2e {
 pub(crate) fn root_out(sb: &str, script: &str) -> String {
     String::from_utf8_lossy(&root_sh(sb, script).stdout).into_owned()
 }
+
+/// A secret httpbin can check: the base64 of `user:real-secret-xyz`, for `Authorization: Basic`.
+pub(crate) const BASIC_SECRET: &str = "dXNlcjpyZWFsLXNlY3JldC14eXo=";
+
+/// Whether httpbin accepts `Authorization: Basic $VAR` from sandbox `sb` as the password `pass`
+/// of `user`. smolvm (1.35+) scrubs an injected value out of what the host sends back, so an echo
+/// shows the placeholder; the server's answer is what proves the substitution.
+pub(crate) fn basic_auth_ok(e: &E2e, sb: &str, var: &str, pass: &str) -> bool {
+    let cmd = format!(
+        "wget -q -T 20 -O /dev/null --header \"Authorization: Basic ${var}\" \
+         https://httpbin.org/basic-auth/user/{pass}"
+    );
+    e.sbt(&["exec", sb, "sh", "-c", &cmd]).status.success()
+}

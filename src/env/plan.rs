@@ -31,7 +31,6 @@ pub struct Resource {
     pub section: String,
     /// What tells it from the others of its section when the name can change: a lifecycle
     /// command is `initialize[0]` whatever its text. Otherwise the name.
-    #[serde(default)]
     pub id: String,
     pub name: String,
     /// The detail lines, as label and value. A literal secret is its digest, never its value.

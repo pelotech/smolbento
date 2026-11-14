@@ -158,18 +158,9 @@ pub fn run<R: Runner>(ctx: &mut Ctx<R>, cmd: PolicyCmd) -> Result<i32> {
             kind: CheckKind::Network(a),
         } => return check(ctx, &policy, &a),
         PolicyCmd::Reset { force } => {
-            // Sandboxes created with smolbento 0.2.0's `--deny-network` stay deny-all.
-            let legacy = if policy.sandboxes.values().any(|s| s.deny_network) {
-                " (sandboxes created with smolbento 0.2.0's --deny-network stay deny-all)"
-            } else {
-                ""
-            };
             confirm(
                 ctx,
-                &format!(
-                    "Remove every policy rule and the chosen mode? Running sandboxes will be \
-                     stopped{legacy}."
-                ),
+                "Remove every policy rule and the chosen mode? Running sandboxes will be stopped.",
                 force,
             )?;
             stop_running(ctx);
@@ -177,7 +168,7 @@ pub fn run<R: Runner>(ctx: &mut Ctx<R>, cmd: PolicyCmd) -> Result<i32> {
             policy.save(&ctx.paths)?;
             writeln!(
                 &ctx.out,
-                "Policy reset; the next start or create asks for a mode{legacy}"
+                "Policy reset; the next start or create asks for a mode"
             )?;
         }
         PolicyCmd::Log(a) => {
@@ -1070,16 +1061,10 @@ mod tests {
         set_policy(
             &t,
             "mode = \"allow-all\"\n[[rules]]\nid = \"r-1\"\ndecision = \"allow\"\n\
-             resources = [\"a.com\"]\n[sandboxes.a1]\ndeny_network = true\n",
+             resources = [\"a.com\"]\n",
         );
         t.sbt(&["policy", "reset", "-f"]).unwrap();
-        let p = Policy::load(&t.ctx.paths).unwrap();
-        assert!(p.mode.is_none() && p.rules.is_empty(), "{p:?}");
-        assert!(p.sandboxes["a1"].deny_network);
-        assert!(matches!(
-            compile::network(&p, "a1", &[], false),
-            crate::smolvm::NetworkSpec::Restricted(_)
-        ));
+        assert_eq!(Policy::load(&t.ctx.paths).unwrap(), Policy::default());
         let err = t.sbt(&["policy", "refresh"]).unwrap_err();
         assert_eq!(super::super::exit_code(&err), 2);
     }

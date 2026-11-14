@@ -56,7 +56,6 @@ takes a minute or two.
 `gemini` is retired, as in sbx 0.53, and a new sandbox can't use it. Use the `antigravity` kit (`sbt
 create docker.io/sbx/antigravity:latest .`) or `docker.io/sbx/gemini-kit:latest`, which keeps Gemini
 CLI running. In an environment file, keep `agent: gemini` and add the gemini kit to `kits:`.
-Existing `gemini` sandboxes keep working.
 
 ## Create without attaching
 
@@ -276,10 +275,9 @@ git diff | wl-copy                          # or xclip, xsel, pbcopy, clip.exe
   `xdg-open`, so agents such as Claude Code's `/login` open the browser.
 - The unit runs `sbt _serve bridge NAME` for each connection, with the settings and `PATH` of the
   last `sbt` that touched the sandbox (`create`, `start`, `run`, `exec` rewrite a unit that
-  differs, so an upgraded binary or a new `PATH` follows). Units are written at create for sandboxes
-  created by this version; earlier ones, and without a service manager, are served only while
-  attached (the first attached session serves it).
-- Sandboxes created before the bridge have none; recreate them. The socket directory must be
+  differs, so an upgraded binary or a new `PATH` follows). Units are written at create. Without a
+  service manager, it is served only while attached (the first attached session serves it).
+- The socket directory must be
   private and yours (0700), checked at create and at start (macOS: `~/Library/Application
   Support/smolbento/sock`; Linux: `$XDG_RUNTIME_DIR/smolbento`; attached-only serving:
   `/tmp/sbt-<uid>`), or the bridge is skipped with a warning.
@@ -309,8 +307,7 @@ ssh-add -D                                  # fails: the sandbox can't change yo
   agent socket and runs `sbt _serve agent NAME` for each connection, so the agent answers whenever
   the sandbox runs, attached or not, across stop and start. The unit uses `ssh.agentSocketPath`,
   else the `SSH_AUTH_SOCK` of the user session (launchd supplies macOS's; on Linux the unit gets
-  that of the last `sbt` that wrote it). Without a service manager, or for a sandbox created before
-  units, it is served only while `sbt` runs for the sandbox (`run`, `exec -it`, plain `exec`; the
+  that of the last `sbt` that wrote it). Without a service manager, it is served only while `sbt` runs for the sandbox (`run`, `exec -it`, plain `exec`; the
   first `sbt` to start serves it). A socket path of 104 bytes or more (a very long home
   directory) also means no units.
 - Units live in `~/Library/Application Support/smolbento/launchd` (`dev.smolbento.<id>.<sandbox>.agent.plist`; not in `~/Library/LaunchAgents`, which makes macOS announce a background item per sandbox, and not persistent: they're loaded again when `create`, `start`, `run` or `exec` find them unloaded after a reboot) or
@@ -332,7 +329,7 @@ ssh-add -D                                  # fails: the sandbox can't change yo
   from `ssh.knownHostsFile` (default `~/.ssh/known_hosts`), read at each login, never from the
   sandbox; log in once from your own shell, or add the key, first. Entries merge per phase like
   `sign`.
-- The grant is fixed at create. Sandboxes created before this feature have no agent; recreate them.
+- The grant is fixed at create.
 - Forks keep the parent's socket mount, so they can use the parent's grant while the parent is
   served.
 
@@ -570,7 +567,7 @@ new session after a change.
 | `opencode` | `~/.config/opencode/skills` |
 | `kiro`, `docker-agent`, `shell` | none: the store isn't shared |
 
-`~` is `/home/agent`. Sandboxes created before skills existed have none; recreate them. Links are
+`~` is `/home/agent`. Links are
 made as root at each start, owned by the image's `agent` account (uid 1000 without one). A skills
 directory reached through a symlink gets no links, and a required bundled skill for it fails the
 create. If linking fails, the start warns (`couldn't link shared skills`) and goes on.
@@ -844,9 +841,6 @@ compatibility](sbx-compatibility.md).
 - `run` and `create --deny-network <HOST>` add a deny rule for the new sandbox only, as `sbt policy
   deny network --sandbox <NAME> <HOST>` does. It applies only at create; on an existing sandbox
   `run` warns and changes nothing. If the create fails, its rules are removed.
-- smolbento 0.2.0's `--deny-network` took no host and made the sandbox deny-all (`deny_network =
-  true` under `[sandboxes.<NAME>]` in `policy.toml`). Those stay deny-all, `policy reset` included;
-  delete the line to restore the global mode.
 - A sandbox's secret hosts, and their subdomains, are always reachable. `policy deny` of one is
   refused, naming the secret's service.
 - A deny with a port (`host.example.com:8080`) isn't enforced: smolvm can't filter by port. Deny the

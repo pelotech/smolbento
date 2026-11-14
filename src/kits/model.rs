@@ -25,26 +25,21 @@ pub enum Source {
     Builtin(&'static str),
 }
 
-/// The kit file format a kit was written in.
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+/// The kit file format a kit was written in; `v2` or `v3` in a sandbox's kit records.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
+#[serde(rename_all = "lowercase")]
 pub enum Format {
     V2,
     V3,
 }
 
 impl Format {
-    /// `v2` or `v3`, as `kit inspect` and the sandbox's kits record write it.
+    /// `v2` or `v3`, as `kit inspect` writes it.
     pub fn name(self) -> &'static str {
         match self {
             Format::V2 => "v2",
             Format::V3 => "v3",
         }
-    }
-
-    pub fn from_name(name: &str) -> Option<Format> {
-        [Format::V2, Format::V3]
-            .into_iter()
-            .find(|f| f.name() == name)
     }
 }
 

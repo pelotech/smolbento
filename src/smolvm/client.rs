@@ -361,6 +361,19 @@ impl<R: Runner> Smolvm<R> {
         Ok(())
     }
 
+    /// Sets one label; works running or stopped (smolvm 1.35).
+    pub fn set_label(&self, name: &str, key: &str, value: &str) -> Result<()> {
+        self.call(args(&[
+            "machine",
+            "update",
+            "-n",
+            name,
+            "--label",
+            &format!("{key}={value}"),
+        ]))?;
+        Ok(())
+    }
+
     pub fn publish(&self, name: &str, ports: &[PortMap]) -> Result<()> {
         self.update_ports(name, "-p", ports)
     }
@@ -600,6 +613,16 @@ mod tests {
                 "machine update -n m -p 8080:80",
                 "machine update -n m --remove-port 8080:80",
             ]
+        );
+    }
+
+    #[test]
+    fn set_label_updates_one_label() {
+        let vm = Smolvm::new(FakeRunner::new());
+        vm.set_label("sbx-x", "sbx.kits", "[]").unwrap();
+        assert_eq!(
+            vm.runner().call_lines(),
+            ["machine update -n sbx-x --label sbx.kits=[]"]
         );
     }
 

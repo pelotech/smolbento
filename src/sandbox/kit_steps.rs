@@ -43,12 +43,7 @@ pub fn apply_kit_steps<R: Runner>(
             eprintln!("{line}");
         }
     }
-    // The kits record's first column is each kit's name.
-    for kit in steps
-        .kits_record
-        .lines()
-        .filter_map(|l| l.split('\t').next())
-    {
+    for kit in steps.kit_names.iter().map(String::as_str) {
         if !told.contains(&kit) {
             on(Event::Install(kit));
             told.push(kit);
@@ -74,7 +69,6 @@ pub fn apply_kit_steps<R: Runner>(
             })
             .collect();
         files.push((guest::STARTUP_PATH.into(), guest::STARTUP_RUNNER, "755"));
-        files.push((guest::KITS_FILE.into(), &steps.kits_record, "644"));
         put_files(vm, sb, &files).context("writing the kits' startup scripts")
     };
     write().map_err(|e| (KitPhase::Write, e))

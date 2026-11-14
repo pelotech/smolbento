@@ -37,8 +37,7 @@ the host.
 **Start** runs `smolvm machine start`, then setup steps as root in the VM. Docker-enabled sandboxes get
 the shipped `docker` kit (`kits/docker/docker.yaml`, or `--kit docker` on any image). Its startup hook
 starts `dockerd` on every start. Its data lives in the kit volumes `/var/lib/docker` and
-`/var/lib/containerd`, on the VM's own disk, since Docker's storage can't sit on an overlay. Sandboxes
-created before kits (`sbx.docker=true`, no `sbx.kits`) still get `dockerd` started directly.
+`/var/lib/containerd`, on the VM's own disk, since Docker's storage can't sit on an overlay.
 
 **Run** creates and starts as needed, then execs the agent as `agent` in the workspace. A v3 workload
 kit's agent runs as its image user through `/bin/bash`. While attached, the session writes

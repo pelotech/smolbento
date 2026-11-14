@@ -17,12 +17,28 @@ pub const CLONE: &str = "sbx.clone";
 pub const CLONE_TOP: &str = "sbx.clone-top";
 pub const FORK_OF: &str = "sbx.fork-of";
 pub const KITS: &str = "sbx.kits";
+
+/// The `sbx.kits` value for `kits`.
+pub fn kits_value(kits: &[KitRecord]) -> String {
+    serde_json::to_string(kits).expect("kit records serialize")
+}
+
+/// One applied kit in the `sbx.kits` label: what `kit add` checks a new kit against.
+#[derive(Debug, Clone, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
+pub struct KitRecord {
+    pub name: String,
+    /// The pinned ref (`REF@sha256:…`), or a local kit's path.
+    #[serde(rename = "ref")]
+    pub reference: String,
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub provides: Vec<String>,
+    /// The workload format the kit mixes with; none when it mixes with either.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub format: Option<crate::kits::model::Format>,
+}
 pub const COMMAND: &str = "sbx.command";
 /// The image config's `User` a v3 workload kit's agent runs as (`0` for root).
 pub const USER: &str = "sbx.user";
-/// Created with the workload user set to the session user, so smolvm maps the workspace to it
-/// (smolvm 1.34.2+). Sandboxes without it are from an older smolbento and must be recreated.
-pub const MAPPED: &str = "sbx.mapped";
 /// A v3 workload kit's image WORKDIR, when not `/`.
 pub const WORKDIR: &str = "sbx.workdir";
 /// The agent file in the guest of a workload kit that declares one (`kit add` indexes into it).
@@ -131,14 +147,12 @@ pub struct Meta {
     pub clone_repo: Option<String>,
     /// The sandbox this one was forked from.
     pub fork_of: Option<String>,
-    /// Applied kits as pinned refs (`REF@sha256:…`, or a local kit's path), dependency order.
-    pub kits: Vec<String>,
+    /// Applied kits in dependency order (a preset agent isn't a kit), as `kit add` added to them.
+    pub kits: Vec<KitRecord>,
     /// The workload kit's launch argv, when it replaced the agent preset's.
     pub command: Option<Vec<String>>,
     /// A v3 workload kit's image user: the agent and `exec` run as it, the agent under `/bin/bash`.
     pub user: Option<String>,
-    /// Created with the workload user set to the session user (`sbx.mapped`).
-    pub mapped: bool,
     /// A v3 workload's image WORKDIR, where install hooks run (`kit add` too); `None` for `/`.
     pub image_workdir: Option<String>,
     /// A workload kit's agent file in the guest; `None` for a preset (its file follows from its
@@ -215,7 +229,6 @@ impl Meta {
             (KITS, (!self.kits.is_empty()).then(|| json(&self.kits))),
             (COMMAND, self.command.as_ref().map(json)),
             (USER, self.user.clone()),
-            (MAPPED, flag(self.mapped)),
             (WORKDIR, self.image_workdir.clone()),
             (AGENT_FILE, self.agent_file.clone()),
             (CREDENTIAL_INSTALL, list(&self.credential_install)),
@@ -285,7 +298,6 @@ impl Meta {
             kits: json(labels, KITS).unwrap_or_default(),
             command: json(labels, COMMAND),
             user: text(USER),
-            mapped: flag(MAPPED),
             image_workdir: text(WORKDIR),
             agent_file: text(AGENT_FILE),
             credential_install: list(labels.get(CREDENTIAL_INSTALL)),
@@ -385,6 +397,13 @@ mod tests {
     }
 
     #[test]
+    fn a_sandbox_without_kits_has_no_kits_label() {
+        let labels = meta().to_labels();
+        assert!(!labels.contains_key("sbx.kits"), "{labels:?}");
+        assert!(Meta::from_labels(&labels).unwrap().kits.is_empty());
+    }
+
+    #[test]
     fn round_trip() {
         let labels = meta().to_labels();
         assert_eq!(labels["sbx.workspaces"], r#"["/w/repo","/w/docs:ro"]"#);
@@ -450,7 +469,20 @@ mod tests {
             registries: vec!["dhi.io".into(), "ghcr.io".into()],
             fork_of: Some("a".into()),
             mcp: Some(vec!["linear".into(), "files".into()]),
-            kits: vec!["acme/a:1@sha256:ab".into(), "/k/b".into()],
+            kits: vec![
+                KitRecord {
+                    name: "a".into(),
+                    reference: "acme/a:1@sha256:ab".into(),
+                    provides: vec!["agent".into()],
+                    format: Some(crate::kits::model::Format::V3),
+                },
+                KitRecord {
+                    name: "b".into(),
+                    reference: "/k/b".into(),
+                    provides: vec![],
+                    format: None,
+                },
+            ],
             command: Some(vec!["wl".into(), "--a b".into()]),
             user: Some("somebody".into()),
             image_workdir: Some("/x".into()),
@@ -488,7 +520,10 @@ mod tests {
             ("sbx.registries", "dhi.io,ghcr.io"),
             ("sbx.fork-of", "a"),
             ("sbx.mcp", "linear,files"),
-            ("sbx.kits", r#"["acme/a:1@sha256:ab","/k/b"]"#),
+            (
+                "sbx.kits",
+                r#"[{"name":"a","ref":"acme/a:1@sha256:ab","provides":["agent"],"format":"v3"},{"name":"b","ref":"/k/b"}]"#,
+            ),
             ("sbx.command", r#"["wl","--a b"]"#),
             ("sbx.user", "somebody"),
             ("sbx.workdir", "/x"),

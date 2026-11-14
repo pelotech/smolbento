@@ -47,24 +47,13 @@ fn file_names(files: &[PathBuf]) -> Vec<String> {
     files.iter().map(|f| f.display().to_string()).collect()
 }
 
-/// What was approved for sandbox `name` from `files`. A missing or unreadable record is no
-/// approval, and so is one for another set of files: as in sbx, each set of files is an
+/// What was approved for sandbox `name` from `files`. A missing or unreadable record (one written
+/// before resources had ids, too) is no approval, and so is one for another set of files: as in sbx, each set of files is an
 /// environment of its own.
 pub fn load(paths: &Paths, name: &str, files: &[PathBuf]) -> Option<Record> {
     let text = std::fs::read_to_string(path(paths, name)).ok()?;
-    let mut record: Record = toml::from_str(&text).ok()?;
-    if record.files != file_names(files) {
-        return None;
-    }
-    // Records written before resources had an id and a time they apply: the id was the name,
-    // and only `ENV` reached an existing sandbox.
-    for r in record.approved.iter_mut().filter(|r| r.id.is_empty()) {
-        r.id = r.name.clone();
-        if r.section == "ENV" {
-            r.when = When::Live;
-        }
-    }
-    Some(record)
+    let record: Record = toml::from_str(&text).ok()?;
+    (record.files == file_names(files)).then_some(record)
 }
 
 /// Records `resources` as approved, at `now` (seconds since the epoch).
@@ -402,8 +391,8 @@ mod tests {
     }
 
     #[test]
-    fn a_record_from_before_ids_still_matches() {
-        // As 0.16.0 wrote it: no `id`, no `when`.
+    fn an_old_format_record_reads_as_not_approved() {
+        // As 0.16.0 wrote it: no `id`, no `when`. `env` asks again, as for a new environment.
         let (_d, paths) = test_paths();
         std::fs::create_dir_all(paths.env_records()).unwrap();
         std::fs::write(
@@ -434,8 +423,7 @@ fields = [["host", "18080"]]
 "#,
         )
         .unwrap();
-        let r = load(&paths, "web", &files()).unwrap();
-        assert_eq!(need(Some(&r), &current(), false), Need::No);
+        assert_eq!(load(&paths, "web", &files()), None);
     }
 
     #[test]

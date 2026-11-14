@@ -73,7 +73,7 @@ pub fn allows(policy: &Policy, sandbox: Option<&str>) -> Vec<Resource> {
 }
 
 fn allows_with(policy: &Policy, sandbox: Option<&str>, install: &[String]) -> Vec<Resource> {
-    let mut allows = if policy.mode_for(sandbox) == Mode::Balanced {
+    let mut allows = if policy.current_mode() == Mode::Balanced {
         presets::balanced()
     } else {
         Vec::new()
@@ -119,7 +119,7 @@ fn network_for(
     install: &[String],
     host_access: bool,
 ) -> NetworkSpec {
-    if policy.mode_for(sandbox) == Mode::AllowAll {
+    if policy.current_mode() == Mode::AllowAll {
         return NetworkSpec::Open;
     }
     let allows = allows_with(policy, sandbox, install);
@@ -375,7 +375,7 @@ pub fn check(
         return verdict(true, "a secret bound to this sandbox uses this host");
     }
     // No sandbox: the global rules only.
-    let mode = policy.mode_for(sandbox);
+    let mode = policy.current_mode();
     let hits = |decision: Decision| {
         active(policy, sandbox, &[])
             .filter(move |(r, _)| r.decision == decision)
@@ -521,7 +521,7 @@ mod tests {
     }
 
     #[test]
-    fn deny_rules_subtract_and_sandbox_deny_network_wins() {
+    fn deny_rules_subtract() {
         let mut p = policy(Mode::Balanced);
         p.add_rule(
             None,
@@ -537,8 +537,6 @@ mod tests {
                 .patterns()
                 .contains(&"registry.npmjs.org".to_string())
         );
-        p.set_deny_network("s2", true);
-        assert_eq!(list(&network(&p, "s2", &[], false)).patterns().len(), 0);
     }
 
     #[test]

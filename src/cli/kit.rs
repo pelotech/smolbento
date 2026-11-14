@@ -17,9 +17,10 @@ use crate::kits::resolve::{check_named_formats, mixing_format, resolve, resolve_
 use crate::kits::{apply, artifact, capability, guest, load, registry, signing};
 use crate::policy::{Decision, Policy, compile};
 use crate::provision;
+use crate::sandbox::labels::{self, KitRecord};
 use crate::sandbox::{self, CreateRequest, KitPhase, Sandbox};
 use crate::secrets::SecretsFile;
-use crate::smolvm::{ExecSpec, Runner};
+use crate::smolvm::Runner;
 use crate::workspace::Workspace;
 
 pub fn run<R: Runner>(ctx: &mut Ctx<R>, cmd: KitCmd) -> Result<i32> {
@@ -521,7 +522,7 @@ fn empty_workload(name: &str) -> Kit {
 }
 
 /// A recorded kit as a mixin that only provides: its capabilities were applied already.
-fn recorded_kit(r: &guest::Recorded) -> Kit {
+fn recorded_kit(r: &KitRecord) -> Kit {
     // Only `provides` matters; the placeholder digest lets `apply` record any ref, even one a
     // hand-edited record left unpinned or empty (its line is dropped again below).
     Kit {
@@ -574,17 +575,10 @@ fn add_running<R: Runner>(
     started: bool,
 ) -> Result<i32> {
     let name = sb.name();
-    let record = ctx
-        .vm
-        .exec_captured(&ExecSpec::sh(&sb.machine, "root", guest::READ_KITS))
-        .context("reading the sandbox's kits")?
-        .stdout;
-    let existing = guest::parse_record(&record);
+    let existing = &sb.meta.kits;
     if existing.iter().any(|r| r.name == kit.name) {
         bail!("kit {} is already in {name}", kit.name);
     }
-    // The record says each kit's format since 0.20; an older one leaves the check to sbx's rule
-    // at create.
     let mut named: Vec<(&str, Option<KitFormat>)> = existing
         .iter()
         .map(|r| (r.name.as_str(), r.format))
@@ -652,18 +646,11 @@ fn add_running<R: Runner>(
         approve(ctx, &kit_name, &hosts, started)?;
     }
 
-    // The record and startup script go after the existing ones.
-    let line = steps
-        .kits_record
-        .lines()
-        .find(|l| l.split('\t').next() == Some(kit_name.as_str()))
-        .context("the kit's record line")?
-        .to_string();
-    let mut record = record;
-    if !record.is_empty() && !record.ends_with('\n') {
-        record.push('\n');
-    }
-    steps.kits_record = format!("{record}{line}\n");
+    // The record (`sbx.kits`) and startup script go after the existing ones. The recorded kits'
+    // records in `req` carry the placeholder digest, so only the new kit's is taken.
+    let mut kits = existing.clone();
+    kits.extend(req.kits.iter().find(|k| k.name == kit_name).cloned());
+    steps.kit_names = kits.iter().map(|k| k.name.clone()).collect();
     let startup = steps.startup_d.pop().map(|(_, body)| {
         let file = format!("{:02}-{kit_name}.sh", existing.len() + 1);
         (format!("{}/{file}", guest::STARTUP_DIR), file, body)
@@ -745,6 +732,9 @@ fn add_running<R: Runner>(
         }
         bail!(msg);
     }
+    ctx.vm
+        .set_label(&sb.machine, labels::KITS, &labels::kits_value(&kits))
+        .context("recording the kit in the sandbox's labels")?;
     // Like a create (R30): the kit stays, and later starts fail until its hooks succeed.
     if let Some((path, _, _)) = &startup
         && let Err(e) = sandbox::run_startup(&ctx.vm, sb, Some(path))
@@ -785,12 +775,27 @@ mod tests {
     use std::fs;
 
     use crate::kits::guest;
+    use crate::kits::model::Format;
     use crate::kits::model::{Hook, HookCmd};
     use crate::policy::Policy;
+    use crate::sandbox::labels::{self, KitRecord};
     use crate::testutil::*;
 
     const MACHINE: &str = "sbx-dev";
-    const BASE: &str = "base\tghcr.io/acme/base@sha256:00\tbase\n";
+    /// A kit record, as `sbx.kits` holds it.
+    fn rec(name: &str, reference: &str, provides: &[&str], format: Option<Format>) -> KitRecord {
+        KitRecord {
+            name: name.into(),
+            reference: reference.into(),
+            provides: provides.iter().map(|p| p.to_string()).collect(),
+            format,
+        }
+    }
+
+    /// The kits of most `dev` sandboxes: just `base`.
+    fn base() -> Vec<KitRecord> {
+        vec![rec("base", "ghcr.io/acme/base@sha256:00", &["base"], None)]
+    }
 
     fn kit_env() -> TestEnv {
         test_env(&[("SMOLBENTO_KIT_ALLOW_LOCAL_KITS", "true")])
@@ -803,25 +808,28 @@ mod tests {
         )
     }
 
-    /// A running shell sandbox `dev` whose guest kits record is `record`.
-    fn dev_sandbox(t: &TestEnv, record: &str) {
-        dev_sandbox_in(t, "running", record);
+    /// A running shell sandbox `dev` whose `sbx.kits` holds `kits`.
+    fn dev_sandbox(t: &TestEnv, kits: &[KitRecord]) {
+        dev_sandbox_in(t, "running", kits);
     }
 
-    fn dev_sandbox_in(t: &TestEnv, state: &str, record: &str) {
-        dev_sandbox_labeled(t, state, &[("sbx.agent", "shell")], record);
+    fn dev_sandbox_in(t: &TestEnv, state: &str, kits: &[KitRecord]) {
+        dev_sandbox_labeled(t, state, &[("sbx.agent", "shell")], kits);
     }
 
     /// `dev` with `labels` besides its name.
-    fn dev_sandbox_labeled(t: &TestEnv, state: &str, labels: &[(&str, &str)], record: &str) {
+    fn dev_sandbox_labeled(t: &TestEnv, state: &str, labels: &[(&str, &str)], kits: &[KitRecord]) {
         let fake = t.runner();
+        let value = labels::kits_value(kits);
         let mut all = vec![("sbx.name", "dev")];
         all.extend_from_slice(labels);
+        if !kits.is_empty() {
+            all.push(("sbx.kits", &value));
+        }
         fake.ok(
             &["machine", "status", "-n", MACHINE],
             &machine_json(MACHINE, state, &all),
         );
-        fake.ok(&root_sh(MACHINE, guest::READ_KITS), record);
     }
 
     const NET_KIT: &str = r#"{"schemaVersion":"3","kind":"mixin","name":"net",
@@ -1623,7 +1631,7 @@ mod tests {
     #[test]
     fn adding_a_layered_mixin_needs_a_recreate() {
         let mut t = kit_env();
-        dev_sandbox(&t, BASE);
+        dev_sandbox(&t, &base());
         v3_kit(
             &t,
             "layered",
@@ -1641,7 +1649,7 @@ mod tests {
     #[test]
     fn adding_a_mixin_with_a_host_mount_needs_a_recreate() {
         let mut t = kit_env();
-        dev_sandbox(&t, BASE);
+        dev_sandbox(&t, &base());
         v3_kit(
             &t,
             "hm",
@@ -1657,7 +1665,7 @@ mod tests {
     #[test]
     fn adding_a_mixin_with_a_bundled_skill_needs_a_recreate() {
         let mut t = kit_env();
-        dev_sandbox(&t, BASE);
+        dev_sandbox(&t, &base());
         v3_kit(
             &t,
             "sk",
@@ -1674,7 +1682,7 @@ mod tests {
     #[test]
     fn adding_a_mixin_with_an_ssh_agent_needs_a_recreate() {
         let mut t = kit_env();
-        dev_sandbox(&t, BASE);
+        dev_sandbox(&t, &base());
         v3_kit(
             &t,
             "sa",
@@ -1694,7 +1702,7 @@ mod tests {
     #[test]
     fn adding_a_mixin_with_ports_and_env_needs_a_recreate() {
         let mut t = kit_env();
-        dev_sandbox(&t, BASE);
+        dev_sandbox(&t, &base());
         let e = t
             .sbt(&["kit", "add", "dev", &v2_fixture("tool-mixin"), "--yes"])
             .unwrap_err();
@@ -1709,7 +1717,7 @@ mod tests {
     fn add_applies_a_network_and_hook_mixin_live() {
         let mut t = kit_env();
         set_policy(&t, "mode = \"deny-all\"\n");
-        dev_sandbox(&t, BASE);
+        dev_sandbox(&t, &base());
         v3_kit(&t, "net", NET_KIT, &[]);
         t.sbt(&["kit", "add", "dev", "./net", "--yes"]).unwrap();
         assert!(t.stdout().contains("Added kit net to dev"));
@@ -1721,7 +1729,6 @@ mod tests {
                 .position(pred)
                 .unwrap_or_else(|| panic!("no {what} in {lines:#?}"))
         };
-        let read = pos("read", &|l| l.ends_with(guest::READ_KITS));
         let open = pos("install network", &|l| {
             l.starts_with("machine update")
                 && l.contains(" pkg.example.com")
@@ -1753,8 +1760,7 @@ mod tests {
             )
         });
         assert!(
-            read < open
-                && open < hook
+            open < hook
                 && hook < close
                 && close < file
                 && file < context
@@ -1764,15 +1770,27 @@ mod tests {
         );
         assert_eq!(lines.last(), Some(&lines[started]), "{lines:#?}");
 
-        let uploads: std::collections::BTreeMap<String, String> =
-            t.runner().uploads().into_iter().collect();
-        let kits = &uploads[&format!("{MACHINE}:{}", guest::KITS_FILE)];
         let net_dir = t.ctx.cwd.join("net").canonicalize().unwrap();
         // The record keeps each provide with its version, for a later `kit add`'s requires.
+        let mut kits = base();
+        kits.push(rec(
+            "net",
+            &net_dir.display().to_string(),
+            &["net@1.0.0"],
+            Some(Format::V3),
+        ));
+        let want = labels::kits_value(&kits);
+        let record = pos("record", &|l| {
+            l.starts_with("machine update") && l.contains("--label")
+        });
         assert_eq!(
-            *kits,
-            format!("{BASE}net\t{}\tnet@1.0.0\tv3\n", net_dir.display())
+            lines[record],
+            format!("machine update -n {MACHINE} --label sbx.kits={want}"),
+            "{lines:#?}"
         );
+        assert!(startup_cp < record && record < started, "{lines:#?}");
+        let uploads: std::collections::BTreeMap<String, String> =
+            t.runner().uploads().into_iter().collect();
         assert_eq!(
             uploads[&format!("{MACHINE}:{}", guest::STARTUP_PATH)],
             guest::STARTUP_RUNNER
@@ -1797,7 +1815,7 @@ mod tests {
                 ("sbx.workspace", "/w/proj"),
                 ("sbx.workspaces", r#"["/w/proj"]"#),
             ],
-            BASE,
+            &base(),
         );
         v3_kit(&t, "net", NET_KIT, &[]);
         t.sbt(&["kit", "add", "dev", "./net", "--yes"]).unwrap();
@@ -1814,7 +1832,7 @@ mod tests {
             &t,
             "running",
             &[("sbx.agent", "wl"), ("sbx.agent-file", "/x/AGENTS.md")],
-            BASE,
+            &base(),
         );
         v3_kit(&t, "net", NET_KIT, &[]);
         t.sbt(&["kit", "add", "dev", "./net", "--yes"]).unwrap();
@@ -1837,7 +1855,7 @@ mod tests {
                     ("sbx.workspace", "/w/proj"),
                     ("sbx.workspaces", r#"["/w/proj"]"#),
                 ],
-                BASE,
+                &base(),
             );
             v3_kit(&t, "net", NET_KIT, &[]);
             t.sbt(&["kit", "add", "dev", "./net", "--yes"]).unwrap();
@@ -1865,7 +1883,7 @@ mod tests {
     fn a_failing_startup_hook_on_kit_add_only_warns() {
         let mut t = kit_env();
         set_policy(&t, "mode = \"deny-all\"\n");
-        dev_sandbox(&t, BASE);
+        dev_sandbox(&t, &base());
         v3_kit(&t, "net", NET_KIT, &[]);
         let script = Some("/etc/smolbento/startup.d/02-net.sh");
         t.runner().on(
@@ -1888,18 +1906,11 @@ mod tests {
     fn add_runs_install_hooks_in_the_recorded_image_workdir() {
         let mut t = kit_env();
         set_policy(&t, "mode = \"deny-all\"\n");
-        dev_sandbox(&t, BASE);
-        t.runner().ok(
-            &["machine", "status", "-n", MACHINE],
-            &machine_json(
-                MACHINE,
-                "running",
-                &[
-                    ("sbx.name", "dev"),
-                    ("sbx.agent", "shell"),
-                    ("sbx.workdir", "/x"),
-                ],
-            ),
+        dev_sandbox_labeled(
+            &t,
+            "running",
+            &[("sbx.agent", "shell"), ("sbx.workdir", "/x")],
+            &base(),
         );
         v3_kit(&t, "net", NET_KIT, &[]);
         t.sbt(&["kit", "add", "dev", "./net", "--yes"]).unwrap();
@@ -1928,7 +1939,7 @@ mod tests {
             .add_kit_rules("dev", "net", &rules("pkg.example.com"), true)
             .unwrap();
         policy.save(&t.ctx.paths).unwrap();
-        dev_sandbox(&t, BASE);
+        dev_sandbox(&t, &base());
         v3_kit(&t, "net", NET_KIT, &[]);
         t.sbt(&["kit", "add", "dev", "./net", "--yes"]).unwrap();
 
@@ -1951,20 +1962,14 @@ mod tests {
     fn add_without_yes_and_without_a_terminal_changes_nothing() {
         let mut t = kit_env();
         set_policy(&t, "mode = \"deny-all\"\n");
-        dev_sandbox(&t, BASE);
+        dev_sandbox(&t, &base());
         v3_kit(&t, "net", NET_KIT, &[]);
         let e = t.sbt(&["kit", "add", "dev", "./net"]).unwrap_err();
         assert_eq!(
             format!("{e:#}"),
             "kit add needs --yes to grant network access without a terminal"
         );
-        let lines = dev_calls(&t);
-        assert!(
-            lines
-                .iter()
-                .all(|l| l.ends_with(guest::READ_KITS) && l.contains("machine exec")),
-            "{lines:#?}"
-        );
+        assert!(dev_calls(&t).is_empty(), "{:#?}", dev_calls(&t));
         assert!(kit_rules(&t).is_empty());
     }
 
@@ -1972,7 +1977,7 @@ mod tests {
     fn add_asks_before_granting_network_and_declining_changes_nothing() {
         let mut t = kit_env();
         set_policy(&t, "mode = \"deny-all\"\n");
-        dev_sandbox(&t, BASE);
+        dev_sandbox(&t, &base());
         v3_kit(&t, "net", NET_KIT, &[]);
         t.answer("n\n");
         let e = sbt(&mut t.ctx, &["kit", "add", "dev", "./net"]).unwrap_err();
@@ -1983,7 +1988,7 @@ mod tests {
     #[test]
     fn a_mixin_without_network_needs_no_approval() {
         let mut t = kit_env();
-        dev_sandbox(&t, BASE);
+        dev_sandbox(&t, &base());
         v3_kit(
             &t,
             "quiet",
@@ -1993,8 +1998,12 @@ mod tests {
         );
         t.sbt(&["kit", "add", "dev", "./quiet"]).unwrap();
         let lines = dev_calls(&t);
+        // The only update records the kit; there is no network change.
         assert!(
-            !lines.iter().any(|l| l.starts_with("machine update")),
+            lines
+                .iter()
+                .filter(|l| l.starts_with("machine update"))
+                .all(|l| l.contains("--label sbx.kits=")),
             "{lines:#?}"
         );
         assert!(
@@ -2006,7 +2015,7 @@ mod tests {
     #[test]
     fn add_meets_a_requires_on_the_sandboxs_agent_preset() {
         let mut t = kit_env();
-        dev_sandbox_labeled(&t, "running", &[("sbx.agent", "claude")], "");
+        dev_sandbox_labeled(&t, "running", &[("sbx.agent", "claude")], &[]);
         v3_kit(
             &t,
             "forclaude",
@@ -2024,15 +2033,15 @@ mod tests {
         for (labels, record) in [
             (
                 &[("sbx.agent", "shell")][..],
-                "docker\tbuiltin:docker\tdocker@1.0.0\n",
+                vec![rec("docker", "builtin:docker", &["docker@1.0.0"], None)],
             ),
             (
                 &[("sbx.agent", "wl"), ("sbx.command", "wl")][..],
-                "other\t/k/other\t\n",
+                vec![rec("other", "/k/other", &[], None)],
             ),
         ] {
             let mut t = kit_env();
-            dev_sandbox_labeled(&t, "running", labels, record);
+            dev_sandbox_labeled(&t, "running", labels, &record);
             let dir = t.ctx.cwd.join("plain");
             std::fs::create_dir_all(&dir).unwrap();
             let spec = "schemaVersion: \"2\"\nkind: mixin\nname: plain\n";
@@ -2051,7 +2060,15 @@ mod tests {
             std::fs::write(dir.join("spec.yaml"), spec).unwrap();
         };
         let mut t = kit_env();
-        dev_sandbox(&t, "net\tghcr.io/acme/net@sha256:01\tnet\tv3\n");
+        dev_sandbox(
+            &t,
+            &[rec(
+                "net",
+                "ghcr.io/acme/net@sha256:01",
+                &["net"],
+                Some(Format::V3),
+            )],
+        );
         plain(&t);
         let e = t.sbt(&["kit", "add", "dev", "./plain", "-y"]).unwrap_err();
         assert_eq!(
@@ -2061,7 +2078,10 @@ mod tests {
         );
 
         let mut t = kit_env();
-        dev_sandbox(&t, "docker\tbuiltin:docker\tdocker@1.0.0\t\n");
+        dev_sandbox(
+            &t,
+            &[rec("docker", "builtin:docker", &["docker@1.0.0"], None)],
+        );
         plain(&t);
         t.sbt(&["kit", "add", "dev", "./plain", "-y"]).unwrap();
     }
@@ -2069,14 +2089,17 @@ mod tests {
     #[test]
     fn add_refuses_a_kit_already_in_the_sandbox_and_unmet_requirements() {
         let mut t = kit_env();
-        dev_sandbox(&t, "net\tghcr.io/acme/net@sha256:01\tnet\n");
+        dev_sandbox(
+            &t,
+            &[rec("net", "ghcr.io/acme/net@sha256:01", &["net"], None)],
+        );
         v3_kit(&t, "net", NET_KIT, &[]);
         let e = t.sbt(&["kit", "add", "dev", "./net", "--yes"]).unwrap_err();
         assert_eq!(format!("{e:#}"), "kit net is already in dev");
 
         // No base kit: a missing record is no kits, and `requires: base` is unmet.
         let mut t = kit_env();
-        dev_sandbox(&t, "");
+        dev_sandbox(&t, &[]);
         v3_kit(&t, "net", NET_KIT, &[]);
         let e = t.sbt(&["kit", "add", "dev", "./net", "--yes"]).unwrap_err();
         assert_eq!(
@@ -2092,7 +2115,7 @@ mod tests {
         let kit = NET_KIT.replace(r#""requires":["base"]"#, r#""requires":["base >= 2, < 3"]"#);
         // An old record's bare provide has no version: it meets only unconstrained requires.
         let mut t = kit_env();
-        dev_sandbox(&t, BASE);
+        dev_sandbox(&t, &base());
         v3_kit(&t, "net", &kit, &[]);
         let e = t.sbt(&["kit", "add", "dev", "./net", "--yes"]).unwrap_err();
         assert_eq!(
@@ -2102,7 +2125,15 @@ mod tests {
         );
 
         let mut t = kit_env();
-        dev_sandbox(&t, "base\tghcr.io/acme/base@sha256:00\tbase@2.4.1\n");
+        dev_sandbox(
+            &t,
+            &[rec(
+                "base",
+                "ghcr.io/acme/base@sha256:00",
+                &["base@2.4.1"],
+                None,
+            )],
+        );
         v3_kit(&t, "net", &kit, &[]);
         t.sbt(&["kit", "add", "dev", "./net", "--yes"]).unwrap();
     }
@@ -2122,7 +2153,7 @@ mod tests {
     #[test]
     fn add_refuses_a_workload_kit() {
         let mut t = kit_env();
-        dev_sandbox(&t, BASE);
+        dev_sandbox(&t, &base());
         let e = t
             .sbt(&["kit", "add", "dev", &v2_fixture("tool-workload"), "--yes"])
             .unwrap_err();
@@ -2145,7 +2176,7 @@ mod tests {
             )
             .unwrap();
         policy.save(&t.ctx.paths).unwrap();
-        dev_sandbox(&t, BASE);
+        dev_sandbox(&t, &base());
         v3_kit(&t, "net", NET_KIT, &[]);
         t.runner()
             .fail(&root_sh(MACHINE, &install_script()), "exec", "apt broke");
@@ -2172,19 +2203,14 @@ mod tests {
         assert!(!last_update.contains("api.net.example"), "{lines:#?}");
         assert!(last_update.contains("mine.example"), "{lines:#?}");
         assert!(!lines.iter().any(|l| l.contains("machine delete")));
-        assert!(
-            !lines
-                .iter()
-                .any(|l| l.starts_with("machine cp") && l.ends_with(guest::KITS_FILE)),
-            "{lines:#?}"
-        );
+        assert!(!lines.iter().any(|l| l.contains("--label")), "{lines:#?}");
     }
 
     #[test]
     fn a_failed_network_push_is_not_blamed_on_hooks() {
         let mut t = kit_env();
         set_policy(&t, "mode = \"deny-all\"\n");
-        dev_sandbox(&t, BASE);
+        dev_sandbox(&t, &base());
         v3_kit(&t, "net", NET_KIT, &[]);
         t.runner()
             .once_fail(&["machine", "update", "-n", MACHINE], "net", "no route");
@@ -2205,7 +2231,7 @@ mod tests {
     #[test]
     fn a_failed_write_without_kit_rules_claims_no_rule_removal() {
         let mut t = kit_env();
-        dev_sandbox(&t, BASE);
+        dev_sandbox(&t, &base());
         v3_kit(
             &t,
             "quiet",
@@ -2228,28 +2254,10 @@ mod tests {
     }
 
     #[test]
-    fn a_malformed_kits_record_line_does_not_block_adding() {
-        let mut t = kit_env();
-        set_policy(&t, "mode = \"deny-all\"\n");
-        let record = format!("{BASE}odd\n\tno-name\tx\nloose\tunpinned-ref\tl\n");
-        dev_sandbox(&t, &record);
-        v3_kit(&t, "net", NET_KIT, &[]);
-        t.sbt(&["kit", "add", "dev", "./net", "--yes"]).unwrap();
-        let uploads: std::collections::BTreeMap<String, String> =
-            t.runner().uploads().into_iter().collect();
-        let kits = &uploads[&format!("{MACHINE}:{}", guest::KITS_FILE)];
-        let net_dir = t.ctx.cwd.join("net").canonicalize().unwrap();
-        assert_eq!(
-            *kits,
-            format!("{record}net\t{}\tnet@1.0.0\tv3\n", net_dir.display())
-        );
-    }
-
-    #[test]
     fn a_refusal_after_starting_a_stopped_sandbox_says_so() {
         let mut t = kit_env();
         set_policy(&t, "mode = \"deny-all\"\n");
-        dev_sandbox_in(&t, "stopped", BASE);
+        dev_sandbox_in(&t, "stopped", &base());
         v3_kit(&t, "net", NET_KIT, &[]);
         let e = t.sbt(&["kit", "add", "dev", "./net"]).unwrap_err();
         assert_eq!(

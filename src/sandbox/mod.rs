@@ -4,6 +4,7 @@ mod clone_step;
 pub mod create;
 pub mod env;
 mod guest_cmd;
+mod idmap_workaround; // WORKAROUND(smolvm 1.35.0 idmap)
 mod kit_steps;
 pub mod labels;
 pub mod name;
@@ -26,10 +27,6 @@ pub use create::CreateRequest;
 pub use guest_cmd::*;
 pub use kit_steps::*;
 pub use labels::Meta;
-
-/// Started detached as root after each start of a pre-4a docker sandbox (`sbx.docker=true`, no
-/// `sbx.kits`). Newer ones get dockerd from the docker kit's startup hook (`kits/docker`).
-pub const DOCKER_START: &str = "pgrep -x dockerd >/dev/null || { rm -f /var/run/docker.pid; exec dockerd >/var/log/dockerd.log 2>&1; }";
 
 /// What a create or start is doing, for the caller's progress output.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -162,19 +159,6 @@ pub fn list<R: Runner>(vm: &Smolvm<R>) -> Result<Vec<Sandbox>> {
     Ok(out)
 }
 
-/// Refuses a sandbox made by a smolbento before workspaces were mapped to the workload user
-/// (`sbx.mapped`): it can't be started or entered, only listed, inspected and removed. The
-/// internal `_builder` has no workspace, so it needs no mapping.
-pub fn require_current(sb: &Sandbox) -> Result<()> {
-    if sb.meta.mapped || name::is_internal(sb.name()) {
-        return Ok(());
-    }
-    Err(anyhow!(
-        "sandbox {0} was created by an older smolbento; recreate it (sbt rm {0}, then create it again)",
-        sb.name()
-    ))
-}
-
 /// Applies the network to the stopped machine, starts it with the secret env, then its setup steps.
 /// A failed setup step stops the machine again: left running half set up, later commands would
 /// skip `start` and never retry it.
@@ -189,7 +173,6 @@ pub fn start_with<R: Runner>(
     plan: &StartPlan,
     on: &mut dyn FnMut(Event),
 ) -> Result<()> {
-    require_current(sb)?;
     start_checked(vm, sb, plan, on, &bridge::ensure_private_dir)
 }
 
@@ -224,9 +207,9 @@ fn start_checked<R: Runner>(
     Ok(())
 }
 
-/// What follows `machine start`: the guest's hosts file, dockerd
-/// for a pre-4a sandbox, the clone, then the kits' startup hooks (a no-op without kits; deferred
-/// during a kit first start). A failed blocking startup hook fails the start.
+/// What follows `machine start`: the guest's hosts file, the clone, then the kits' startup
+/// hooks (a no-op without kits; deferred during a kit first start). A failed blocking startup
+/// hook fails the start.
 fn setup<R: Runner>(
     vm: &Smolvm<R>,
     sb: &Sandbox,
@@ -237,6 +220,16 @@ fn setup<R: Runner>(
     if let Err(e) = vm.exec_captured(&ExecSpec::sh(&sb.machine, "root", hosts_cmd())) {
         eprintln!(
             "warning: {}: couldn't add host.docker.internal to /etc/hosts: {e:#}",
+            sb.name()
+        );
+    }
+    // WORKAROUND(smolvm 1.35.0 idmap): not fatal; an unmapped workspace is still readable.
+    if let Some(script) = idmap_workaround::script(&sb.meta)
+        && let Err(e) = vm.exec_captured(&ExecSpec::sh(&sb.machine, "root", script))
+    {
+        eprintln!(
+            "warning: {}: couldn't map the workspace to the sandbox user, so it may not be \
+             writable (smolvm 1.35.0 bug): {e:#}",
             sb.name()
         );
     }
@@ -285,15 +278,6 @@ fn setup<R: Runner>(
     {
         eprintln!("warning: {}: couldn't link shared skills: {e:#}", sb.name());
     }
-    // The pre-4a path: a docker sandbox created before the docker kit has no startup runner.
-    // With kits, the docker kit's startup hook starts dockerd (no second start here).
-    if sb.meta.docker && sb.meta.kits.is_empty() {
-        vm.exec_captured(&ExecSpec {
-            detach: true,
-            ..ExecSpec::sh(&sb.machine, "root", DOCKER_START)
-        })
-        .context("starting dockerd")?;
-    }
     if let Some(step) = &plan.clone {
         for w in run_clone(vm, sb, step)? {
             eprintln!("{w}");
@@ -333,7 +317,6 @@ pub fn ensure_running<R: Runner>(
     sb: &mut Sandbox,
     plan: impl FnOnce() -> Result<StartPlan>,
 ) -> Result<()> {
-    require_current(sb)?;
     if !sb.is_running() {
         start(vm, sb, &plan()?)?;
         sb.state = MachineState::Running;

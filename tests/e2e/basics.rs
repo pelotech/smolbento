@@ -203,32 +203,19 @@ pub(crate) fn secrets_are_placeholders_in_the_guest() {
         "--env",
         "TOK",
         "--command",
-        "printf real-secret-xyz",
+        &format!("printf {BASIC_SECRET}"),
     ]);
     e.create_alpine();
     let seen = e.ok(&["exec", &e.name, "sh", "-c", "printf %s \"$TOK\""]);
     assert!(seen.starts_with("SMOL_PLACEHOLDER_"), "{seen}");
-    smolvm(&[
-        "machine",
-        "exec",
-        "--name",
-        &e.machine(),
-        "-u",
-        "root",
-        "--",
-        "apk",
-        "add",
-        "-q",
-        "curl",
-    ]);
-    let echoed = e.ok(&[
-        "exec",
-        &e.name,
-        "sh",
-        "-c",
-        "curl -s -m 20 -H \"Authorization: Bearer $TOK\" https://httpbin.org/headers",
-    ]);
-    assert!(echoed.contains("Bearer real-secret-xyz"), "{echoed}");
+    assert!(
+        basic_auth_ok(&e, &e.name, "TOK", "real-secret-xyz"),
+        "the host substitutes the secret"
+    );
+    assert!(
+        !basic_auth_ok(&e, &e.name, "TOK", "other"),
+        "httpbin checks the password"
+    );
 }
 
 /// Runs `script` as root in the guest, straight through smolvm.

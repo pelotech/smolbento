@@ -10,10 +10,19 @@ build:
 test:
     cargo nextest run --locked
 
+# WORKAROUND(smolvm 1.35.0 idmap): e2e tests that fail until smolvm maps `-v` directories again
+# (their images' util-linux is too old for smolbento's workaround). `e2e` leaves them out;
+# `e2e-known-broken` runs them without failing.
+known_broken := "test(kit_host_mount_shared_and_kept) | test(numeric_image_user_runs_as_its_account) | test(v3_workload_runs_as_its_image_user_with_bash_env)"
+
 # Run end-to-end tests against real smolvm VMs (needs a hypervisor), `threads` VMs at a time;
 # further arguments go to nextest (e.g. `--partition slice:1/3`)
 e2e threads="2" *args:
-    cargo nextest run --locked --run-ignored only --test-threads {{threads}} --no-fail-fast -E 'binary(e2e)' {{args}}
+    cargo nextest run --locked --run-ignored only --test-threads {{threads}} --no-fail-fast -E 'binary(e2e) & !({{known_broken}})' {{args}}
+
+# Run the e2e tests a smolvm bug breaks; reports their result but never fails
+e2e-known-broken threads="2" *args:
+    -cargo nextest run --locked --run-ignored only --test-threads {{threads}} --no-fail-fast -E 'binary(e2e) & ({{known_broken}})' {{args}}
 
 # Run all pre-commit hooks
 lint:

@@ -69,7 +69,6 @@ pub(super) fn clone_sandbox() -> (Sandbox, StartPlan) {
     let sb = Sandbox {
         meta: Meta {
             name: "r".into(),
-            mapped: true,
             workspace: Some("/w/r".into()),
             clone_repo: Some("/w/r".into()),
             ..Default::default()
@@ -146,7 +145,7 @@ pub(super) fn kit_plan(restart_without: &[&str]) -> StartPlan {
                 files: vec!["echo files-1".into()],
                 context: vec!["echo context-1".into()],
                 startup_d: vec![("01-k.sh".into(), "echo startup".into())],
-                kits_record: "k\tref@sha256:00\tnpm\n".into(),
+                kit_names: vec!["k".into()],
             },
             restart_without: restart_without.iter().map(|v| v.to_string()).collect(),
             rule_ids: vec!["r-npm".into(), "r-api".into()],
@@ -178,4 +177,12 @@ pub(super) fn failing_startup(fake: &FakeRunner, machine: &str, code: i32) {
             ..Default::default()
         },
     );
+}
+
+/// The fake's call lines without the idmap step.
+/// WORKAROUND(smolvm 1.35.0 idmap): back to `call_lines()` when it's removed.
+pub(super) fn lines_without_idmap(vm: &Smolvm<FakeRunner>) -> Vec<String> {
+    let mut lines = vm.runner().call_lines();
+    lines.retain(|l| !l.contains("X-mount.idmap"));
+    lines
 }

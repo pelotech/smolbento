@@ -43,8 +43,8 @@ pub struct CreateRequest {
     /// The user gave `--cpus` / `-m`, which a kit's `resources@1` doesn't override.
     pub cpus_set: bool,
     pub memory_set: bool,
-    /// Pinned refs of the applied kits (the `sbx.kits` label).
-    pub kits: Vec<String>,
+    /// The applied kits (the `sbx.kits` label).
+    pub kits: Vec<crate::sandbox::labels::KitRecord>,
     /// The workload kit's launch argv (the `sbx.command` label).
     pub command: Option<Vec<String>>,
     /// A v3 workload kit's image user (the `sbx.user` label).
@@ -142,7 +142,6 @@ pub fn meta(req: &CreateRequest) -> Meta {
         kits: req.kits.clone(),
         command: req.command.clone(),
         user: req.user.clone(),
-        mapped: true,
         image_workdir: req.image_workdir.clone(),
         agent_file: req.agent_file.clone(),
         credential_install: req.credential_install.clone(),
@@ -317,17 +316,17 @@ mod tests {
             let mut req = request(false, vec![]);
             req.name = name.into();
             req.user = user.map(String::from);
-            (spec(&req).user, meta(&req).mapped)
+            spec(&req).user
         };
         // Presets: `agent`. A v3 workload: its image user, `0` when the image names none.
-        assert_eq!(user("claude.repo", None), (Some("agent".into()), true));
+        assert_eq!(user("claude.repo", None).as_deref(), Some("agent"));
         assert_eq!(
-            user("tool", Some("somebody:1001")).0.as_deref(),
+            user("tool", Some("somebody:1001")).as_deref(),
             Some("somebody:1001")
         );
-        assert_eq!(user("tool", Some("0")).0.as_deref(), Some("0"));
+        assert_eq!(user("tool", Some("0")).as_deref(), Some("0"));
         // The internal builder stays root.
-        assert_eq!(user("_builder", None).0.as_deref(), Some("root"));
+        assert_eq!(user("_builder", None).as_deref(), Some("root"));
     }
 
     #[test]

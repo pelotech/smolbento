@@ -532,7 +532,10 @@ mod tests {
         assert!(create.contains(":8080 "), "{create}");
         // The shell preset's image is Docker-enabled, so the docker kit comes too, first.
         assert!(
-            create.contains(&format!("--label sbx.kits=[\"builtin:docker\",\"{kit}\"]")),
+            create.contains(&format!(
+                "--label sbx.kits=[{},{{\"name\":\"tool\",\"ref\":\"{kit}\",\"format\":\"v2\"}}]",
+                r#"{"name":"docker","ref":"builtin:docker","provides":["docker@1.0.0"]}"#
+            )),
             "{create}"
         );
         assert!(create.contains("api.tool.example"), "{create}");
@@ -707,7 +710,9 @@ SETUP
         let create = create_line(&t);
         let path = kit.canonicalize().unwrap().display().to_string();
         assert!(
-            create.contains(&format!("--label sbx.kits=[\"{path}\"]")),
+            create.contains(&format!(
+                "--label sbx.kits=[{{\"name\":\"shell\",\"ref\":\"{path}\",\"format\":\"v2\"}}]"
+            )),
             "{create}"
         );
         assert!(
@@ -1585,7 +1590,10 @@ SETUP
         );
         assert!(line.contains("--label sbx.docker=true"), "{line}");
         assert!(
-            line.contains(r#"--label sbx.kits=["builtin:docker"]"#),
+            line.contains(&format!(
+                "--label sbx.kits=[{}]",
+                r#"{"name":"docker","ref":"builtin:docker","provides":["docker@1.0.0"]}"#
+            )),
             "{line}"
         );
     }

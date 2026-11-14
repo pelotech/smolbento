@@ -9,15 +9,12 @@ smolbento is built in phases. Each phase ships on its own.
 Phases 0 to 4, 5a to 5h, and 6 and 7 are done. Phases 8, 9 and 10 are planned. Each feature's
 usage guide is linked from its row in the [Phases](#phases) table.
 
-- Sandboxes created before Phase 5b, 5c or 5e need recreating.
+- Before 1.0, recreate sandboxes after upgrading smolbento ([Install](install.md#upgrading)).
 - Docker in a sandbox is the shipped `docker` kit. If its first start fails, the sandbox is removed;
   fix the cause and run the same command again.
 - Secret `command:` sources (`sbt secret set --command`, and `command:` in an environment file) run in
   a fresh temporary directory. Use absolute paths or put helpers on `PATH`. Relative paths no longer
   work.
-- If you're upgrading from v0.1.x, a sandbox start needs a network policy. Run
-  `sbt policy init balanced` (or answer the prompt) first. Scripts without a terminal fail until you
-  do.
 
 ## Phases
 
@@ -54,8 +51,8 @@ usage guide is linked from its row in the [Phases](#phases) table.
 - Published ports bind loopback only (`127.0.0.1`, `[::1]`). Only directories, not single files, can be
   mounted. Both are smolvm limits; see [sbx compatibility](sbx-compatibility.md).
 - A `localhost` rule opens every port on the host's `127.0.0.1`, including ones it doesn't name.
-  Only sandboxes created while a `localhost` rule applied get it; recreate others. Closing it is
-  best-effort until recreated. See [Security](SECURITY.md#host-services-localhost-rules). Under
+  Only sandboxes created while a `localhost` rule applied get it. Closing it is best-effort until
+  the sandbox is recreated. See [Security](SECURITY.md#host-services-localhost-rules). Under
   `allow-all`, services on `0.0.0.0` are reachable through the host's LAN IP.
 - Linux stores secret values in a 0600 file where no Secret Service runs.
 - The browser and clipboard bridge copies text only, and never reads the clipboard or pastes
@@ -72,7 +69,7 @@ usage guide is linked from its row in the [Phases](#phases) table.
 
 ## Needs smolvm support (later decisions)
 
-Changes we'd propose to smolvm. Each item says what smolvm 1.34.4 lacks and what smolbento does
+Changes we'd propose to smolvm. Each item says what smolvm 1.35 lacks and what smolbento does
 meanwhile.
 
 - **`smolvm machine connect NAME PORT`** (stdin and stdout to a guest port). `ssh -L` forwards run
@@ -84,7 +81,8 @@ meanwhile.
 - **Per-port host access.** smolvm opens the host's loopback to a guest only as a whole (gateway CIDR
   `100.96.0.1/32`). Meanwhile: a `localhost:PORT` rule opens every host port (documented).
 - **Live allow list with no hosts left.** A `machine update` that leaves CIDRs but no hosts doesn't revoke
-  removed hosts until restart. Meanwhile: every allow list keeps the placeholder host `smolbento.invalid`.
+  removed hosts until restart (still in 1.35). Meanwhile: smolbento sets the placeholder host
+  `smolbento.invalid` first, then removes it.
 - **Registry credentials for sandboxes.** `secret set --registry --sandbox/--all-sandboxes` would give a
   sandbox's own `docker pull` a login. smolvm reads credentials only at start, and registry tokens last
   minutes, so smolvm must mint or refresh the token. Meanwhile: registry logins are host-only, and the
@@ -98,8 +96,6 @@ meanwhile.
   smolvm's proxy only substitutes credentials. Meanwhile: kits get passthrough OAuth only, and method/path
   rules (kits' and `policy allow --method/--path`) aren't enforced. Preferred: method/path matching and
   an OAuth sentinel mode upstream in smolvm. If declined: smolbento's own egress proxy, as its own phase.
-- **`machine update --label`.** Labels are create-time only. Meanwhile: kits added with `kit add` aren't
-  listed on a stopped sandbox until it starts. Cosmetic.
 - **Guest DNS upstream order.** Since smolvm 1.34, guest DNS moves to the host's next resolver when one
   doesn't answer. Not yet checked: a name the first resolver refuses (before 1.34 that failed in every VM,
   even when the host resolved it). Meanwhile: no workaround; the e2e tests avoid such names.
@@ -142,6 +138,14 @@ in [sbx compatibility](sbx-compatibility.md). Worth another look:
 Proven on GitHub: e2e on `ubuntu-latest`, and the v0.1.1 release (all three binaries; macOS binary
 verified on a Mac).
 
+- **smolvm 1.35.0 doesn't map `-v` directories to the workload user** (macOS), so the session user
+  can't write its workspace. Meanwhile: after each start smolbento binds each workspace and kit host
+  mount onto itself with an idmap (`src/sandbox/idmap_workaround.rs`). It needs util-linux 2.39 or
+  newer in the image (the sbx agent images have it); older images, and folders added while running,
+  get a warning. Three e2e tests on such images fail meanwhile: `just e2e` leaves them out and
+  `just e2e-known-broken` (a non-blocking CI step) runs them. Remove everything tagged
+  `WORKAROUND(smolvm 1.35.0 idmap)` once a fixed smolvm is the minimum. Upstream fix:
+  [smolvm#2189](https://github.com/smol-machines/smolvm/pull/2189).
 - russh from git (commit b541663a8838) until a release pins ssh-key 0.7.0-rc.12 or later: then switch
   to crates.io, drop the `deny.toml` allow-git entry and the flake `outputHashes`.
 

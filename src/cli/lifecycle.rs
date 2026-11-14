@@ -547,7 +547,10 @@ mod tests {
         assert!(pair("--label").contains(&"sbx.created=1000000".to_string()));
         assert!(pair("--label").contains(&"sbx.docker=true".to_string()));
         // Docker-in-sandbox is the shipped `docker` kit: its volumes above, its startup hook here.
-        assert!(pair("--label").contains(&r#"sbx.kits=["builtin:docker"]"#.to_string()));
+        assert!(pair("--label").contains(&format!(
+            "sbx.kits=[{}]",
+            r#"{"name":"docker","ref":"builtin:docker","provides":["docker@1.0.0"]}"#
+        )));
         let uploads = t.runner().uploads();
         let (_, script) = uploads
             .iter()
@@ -621,7 +624,6 @@ mod tests {
         );
         let p = crate::policy::Policy::load(&t.ctx.paths).unwrap();
         assert!(p.rules.is_empty(), "nothing global: {p:?}");
-        assert!(!p.sandboxes["claude-proj"].deny_network);
 
         let lines = t.calls();
         let create = lines
@@ -1099,49 +1101,6 @@ SETUP
         assert_eq!(
             t.stdout(),
             "  ○ claude-proj — starting…\n  ✗ claude-proj — failed\n"
-        );
-    }
-
-    #[test]
-    fn a_sandbox_from_an_older_smolbento_can_only_be_listed_inspected_and_removed() {
-        let mut t = test_env(&[]);
-        let ws = t.ctx.cwd.display().to_string();
-        let old = machine_json(
-            "sbx-claude-proj",
-            "stopped",
-            &[
-                ("sbx.name", "claude-proj"),
-                ("sbx.agent", "claude"),
-                ("sbx.workspace", &ws),
-                ("sbx.mapped", "false"),
-            ],
-        );
-        t.runner().ok(&["machine", "status"], &old);
-        ls_one(&t, &old);
-        let recreate = "sandbox claude-proj was created by an older smolbento; recreate it \
-                        (sbt rm claude-proj, then create it again)";
-        for args in [
-            &["start", "claude-proj"][..],
-            &["run", "--name", "claude-proj"],
-            &["exec", "claude-proj", "id"],
-            &["exec", "--privileged", "claude-proj", "id"],
-        ] {
-            assert_eq!(t.sbt_err(args), recreate, "{args:?}");
-        }
-        assert!(
-            !t.calls().iter().any(|l| l.starts_with("machine start")),
-            "{:?}",
-            t.calls()
-        );
-        t.sbt(&["ls"]).unwrap();
-        assert!(t.stdout().contains("claude-proj"), "{}", t.stdout());
-        t.sbt(&["inspect", "claude-proj"]).unwrap();
-        t.sbt(&["rm", "-f", "claude-proj"]).unwrap();
-        assert!(
-            t.calls()
-                .contains(&"machine delete -n sbx-claude-proj -f".to_string()),
-            "{:?}",
-            t.calls()
         );
     }
 

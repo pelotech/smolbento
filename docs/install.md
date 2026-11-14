@@ -3,7 +3,7 @@
 ## Requirements
 
 - macOS on Apple Silicon, or Linux (x86_64 or arm64) with KVM. Windows is planned.
-- smolvm 1.34.4 or newer: `brew install smol-machines/tap/smolvm`, or a release tarball from
+- smolvm 1.35 or newer: `brew install smol-machines/tap/smolvm`, or a release tarball from
   [smol-machines/smolvm](https://github.com/smol-machines/smolvm/releases).
 - On Linux, read/write access to `/dev/kvm` (usually through the `kvm` group).
 - A normal user account. smolbento refuses to run as root (see [Security](SECURITY.md)).
@@ -63,13 +63,11 @@ tar xzf smolbento-<target>.tar.gz
 
 Linux binaries need glibc 2.28 or newer.
 
-## Upgrading sandboxes from an older smolbento
+## Upgrading
 
-Sandboxes made by an older smolbento can't start. `sbt` fails with `was created by an older
-smolbento`. Remove each one with `sbt rm NAME`, then create it again. Saved templates keep working.
-
-To keep what's inside a sandbox (installed tools, agent logins), save it as a template first. A
-stopped sandbox is saved without starting it:
+Before 1.0, recreate your sandboxes after upgrading smolbento: a sandbox from an older version may
+not start or work fully. Settings, secrets, policies and saved templates carry over. To keep what's
+inside a sandbox (installed tools, agent logins), save it as a template first:
 
 ```sh
 sbt stop NAME
