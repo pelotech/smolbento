@@ -246,7 +246,8 @@ top of `~/.ssh/config`). See [sbx compatibility](sbx-compatibility.md#ssh).
 
 ## Browser and clipboard
 
-The sandbox can open URLs in your browser and copy text to your clipboard, whenever it runs. On
+The sandbox can open URLs in your browser and, once you allow it, copy text to your clipboard,
+whenever it runs. On
 macOS (launchd) and Linux (`systemd --user`) a service unit owns the socket, so nothing needs to be
 attached; without a usable service manager (a container, CI without a user session) it works only
 while `sbt run` or `sbt exec -it` is attached.
@@ -259,9 +260,10 @@ git diff | wl-copy                          # or xclip, xsel, pbcopy, clip.exe
 
 - Only `https://` URLs open. Others, or any URL when nothing serves the socket, print `Open this URL
   in your browser: URL`.
-- Copying is text only. Reading the clipboard (`wl-paste`, `xclip -o`, `xsel -o`) prints nothing,
-  and images can't be pasted. Copying when nothing serves the socket fails with `<command>: failed
-  to write host clipboard`.
+- Copying is off until you run `sbt settings set clipboard.textCopy true`, as in sbx. It's text
+  only. Reading the clipboard (`wl-paste`, `xclip -o`, `xsel -o`) prints nothing, and images can't
+  be pasted. A copy that's off, or made when nothing serves the socket, fails with `<command>:
+  failed to write host clipboard (copying may be off: …)`.
 - Browser logins work. For a `redirect_uri` of `http://localhost:PORT/…` or
   `http://127.0.0.1:PORT/…`, smolbento listens on your `127.0.0.1:PORT` for 10 minutes (the
   connection's process stays that long) and relays the callback. If something else answers that port, it warns and still

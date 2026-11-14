@@ -24,6 +24,7 @@ fn serve<R: Runner>(ctx: &Ctx<R>, name: &str) -> Result<Server> {
     let handlers = bridge::handlers(
         &ctx.env,
         ctx.settings.bool("browser.enabled")?,
+        ctx.settings.bool("clipboard.textCopy")?,
         &ctx.settings.value("smolvm.path")?,
         &sb,
         false,

@@ -23,6 +23,8 @@ pub type Relay = Box<dyn Fn(u16) + Send + Sync>;
 pub struct Handlers {
     /// The `browser.enabled` setting.
     pub browser_enabled: bool,
+    /// The `clipboard.textCopy` setting.
+    pub copy_enabled: bool,
     pub open: Opener,
     pub copy: Copier,
     pub relay: Relay,
@@ -189,6 +191,12 @@ fn route(h: &Handlers, req: &Request) -> Response {
     }
     if req.path == "/open" {
         open(h, &req.body)
+    } else if !h.copy_enabled {
+        Response::new(
+            403,
+            "copying to the host clipboard is off; enable it with \
+             `sbt settings set clipboard.textCopy true`",
+        )
     } else {
         done((h.copy)(&req.body))
     }
@@ -322,6 +330,7 @@ mod tests {
         let (o, c, r) = (seen.clone(), seen.clone(), seen.clone());
         let h = Handlers {
             browser_enabled: enabled,
+            copy_enabled: true,
             open: Box::new(move |url| {
                 o.lock().unwrap().push(format!("open {url}"));
                 if fail {
@@ -587,6 +596,24 @@ mod tests {
         };
         assert_eq!(route(&h, &bad_utf8).status, 400);
         assert!(seen.lock().unwrap().is_empty());
+    }
+
+    #[test]
+    fn copy_is_forbidden_unless_text_copy_is_enabled() {
+        let (mut h, seen) = recording(true, false);
+        h.copy_enabled = false;
+        let r = route(&h, &post("/copy", "secret"));
+        assert_eq!(
+            (r.status, r.body.as_str()),
+            (
+                403,
+                "copying to the host clipboard is off; enable it with \
+                 `sbt settings set clipboard.textCopy true`\n"
+            )
+        );
+        assert!(seen.lock().unwrap().is_empty());
+        // Opening URLs still works.
+        assert_eq!(route(&h, &post("/open", "https://example.com")).status, 204);
     }
 
     #[test]

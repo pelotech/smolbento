@@ -30,7 +30,10 @@ copy() {{
     printf %s "$t" | post copy
   else
     post copy
-  fi || {{ echo "$n: failed to write host clipboard" >&2; exit 1; }}
+  fi || {{
+    echo "$n: failed to write host clipboard (copying may be off: on the host, sbt settings set clipboard.textCopy true)" >&2
+    exit 1
+  }}
 }}
 trim=
 "#
@@ -416,7 +419,10 @@ mod tests {
                     (
                         1,
                         "".into(),
-                        format!("{shim}: failed to write host clipboard\n")
+                        format!(
+                            "{shim}: failed to write host clipboard (copying may be off: on the \
+                             host, sbt settings set clipboard.textCopy true)\n"
+                        )
                     )
                 );
             }

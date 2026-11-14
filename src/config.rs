@@ -168,6 +168,12 @@ pub const SETTINGS: &[SettingDef] = &[
         help: "Verify keyless kit signatures without requiring a Rekor transparency-log entry",
     },
     SettingDef {
+        key: "clipboard.textCopy",
+        env: "SMOLBENTO_CLIPBOARD_TEXT_COPY",
+        default: "false",
+        help: "Allow sandboxed processes to copy text to the host clipboard (pbcopy, xclip and the like in the sandbox)",
+    },
+    SettingDef {
         key: "browser.enabled",
         env: "SMOLBENTO_BROWSER_ENABLED",
         default: "true",

@@ -33,6 +33,7 @@ pub fn has_display(env: &BTreeMap<String, String>, linux: bool) -> bool {
 pub fn handlers(
     env: &BTreeMap<String, String>,
     browser_enabled: bool,
+    copy_enabled: bool,
     smolvm: &str,
     sb: &Sandbox,
     linger: bool,
@@ -41,6 +42,7 @@ pub fn handlers(
     let copy_cmd = env.get(COPY_CMD).cloned();
     Handlers {
         browser_enabled,
+        copy_enabled,
         open: Box::new(move |url| open_url(open_cmd.as_deref(), url)),
         copy: Box::new(move |text| copy_text(copy_cmd.as_deref(), text)),
         relay: relay(smolvm, &sb.machine, relay_user(sb), linger),
@@ -80,10 +82,14 @@ pub fn attach(env: &BTreeMap<String, String>, settings: &Settings, sb: &Sandbox)
         eprintln!("warning: not opening URLs from the sandbox: {e:#}");
         false
     });
+    let copy = settings.bool("clipboard.textCopy").unwrap_or_else(|e| {
+        eprintln!("warning: not copying to the host clipboard: {e:#}");
+        false
+    });
     let smolvm = settings
         .value("smolvm.path")
         .unwrap_or_else(|_| "smolvm".into());
-    let h = handlers(env, browser, &smolvm, sb, false);
+    let h = handlers(env, browser, copy, &smolvm, sb, false);
     http::serve(&super::host_socket(sb.name()), h).unwrap_or_else(|e| {
         eprintln!(
             "warning: {}: no browser and clipboard bridge: {e:#}",
@@ -252,7 +258,7 @@ mod tests {
             ports: Vec::new(),
             image: None,
         };
-        handlers(&env(vars), browser, "/nonexistent/smolvm", &sb, false)
+        handlers(&env(vars), browser, true, "/nonexistent/smolvm", &sb, false)
     }
 
     #[test]
