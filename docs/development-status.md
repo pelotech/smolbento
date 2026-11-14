@@ -140,7 +140,8 @@ verified on a Mac).
   newer in the image (the sbx agent images have it); older images, and folders added while running,
   get a warning. Three e2e tests on such images fail meanwhile: `just e2e` leaves them out and
   `just e2e-known-broken` (a non-blocking CI step) runs them. Remove everything tagged
-  `WORKAROUND(smolvm 1.35.0 idmap)` once a fixed smolvm is the minimum.
+  `WORKAROUND(smolvm 1.35.0 idmap)` once a fixed smolvm is the minimum. Upstream fix:
+  [smolvm#2189](https://github.com/smol-machines/smolvm/pull/2189).
 
 ## Cleanups to do
 

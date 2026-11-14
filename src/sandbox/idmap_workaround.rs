@@ -3,7 +3,7 @@
 //! each start, the script below binds each writable host directory onto itself with that mapping,
 //! as smolvm would. A directory smolvm already mapped is skipped, so with a fixed smolvm it does
 //! nothing. Remove this file, its call in `setup` and the tests marked with the same tag once a
-//! fixed smolvm is the minimum.
+//! fixed smolvm is the minimum. Upstream fix: smol-machines/smolvm#2189.
 
 use super::Meta;
 use crate::util::sh_quote;
