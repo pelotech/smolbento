@@ -127,6 +127,9 @@ Sign a kit with `sbt kit sign --help`.
 | `~/Library/Application Support/smolbento/launchd/dev.smolbento.<id>.<sandbox>.<agent\|bridge>.plist` (macOS), `~/.config/systemd/user/smolbento-<id>-<sandbox>-<agent\|bridge>.socket` and `…@.service` (Linux) | [Host service](usage.md#browser-and-clipboard) units, one per socket of a sandbox; `<id>` is a short hash of the data dir. Removed with the sandbox. |
 | `~/Library/Application Support/smolbento/sock/` (macOS), `$XDG_RUNTIME_DIR/smolbento/` (Linux) | Their sockets, mode 0600 in a private (0700) directory. Without a service manager, sockets are `/tmp/sbt-<uid>/`, served while attached. |
 
+`sbt setup ssh` also edits one file outside these directories: `~/.ssh/config`, between its
+`# >>> smolbento (managed) >>>` markers only. smolbento keeps no SSH host key or known-hosts file.
+
 `XDG_CONFIG_HOME`, `XDG_CACHE_HOME` and `XDG_DATA_HOME` are honoured, also on macOS.
 `SMOLBENTO_CONFIG_DIR`, `SMOLBENTO_CACHE_DIR` and `SMOLBENTO_DATA_DIR` override them. An empty
 `SMOLBENTO_*_DIR`, or an empty or relative XDG variable, counts as unset.

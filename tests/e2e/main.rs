@@ -14,6 +14,7 @@ mod fork_template;
 mod kits;
 mod network;
 mod skills;
+mod ssh;
 
 use std::path::{Path, PathBuf};
 use std::process::{Command, Output};

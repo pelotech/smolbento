@@ -221,6 +221,30 @@ the `shell` and `claude` presets (not kits of those names) `SBX_CRED_<SERVICE>_M
 that secret was set at create, else `none`). The `claude` preset also gets `IS_SANDBOX=1`. Your `-e`
 wins. Differences from sbx are in [sbx compatibility](sbx-compatibility.md#sandbox-environment).
 
+## SSH into a sandbox
+
+```sh
+sbt setup ssh                 # once: adds a managed block to ~/.ssh/config
+ssh claude-myrepo.sbx         # a shell in the workspace
+ssh claude-myrepo.sbx git status
+ssh -L 8080:localhost:3000 claude-myrepo.sbx   # reach a port inside the sandbox
+sbt setup ssh remove          # removes the block
+```
+
+`ssh NAME.sbx` starts a stopped sandbox, and fails for one that doesn't exist (create it first). It
+runs as the sandbox's session user (`agent`) in the workspace, like `exec`. There is nothing to
+install in the sandbox and no key or password: `ssh` runs `sbt ssh proxy`, which speaks SSH for that
+one connection, so only you can use it.
+
+VS Code Remote-SSH works with `ssh NAME.sbx` as the host: it installs its server through exec, then
+forwards ports (the sandbox needs network access to download it, per your policy). It isn't
+tested here, as VS Code can't be scripted.
+
+Port forwarding (`ssh -L`) reaches `localhost`, `127.0.0.0/8` and `::1` inside the sandbox only. The
+sandbox needs `nc` or bash. SFTP and `scp`, agent forwarding, X11 and remote forwarding (`-R`) are
+refused; use `sbt cp` for files. `setup ssh` never edits anything outside its own block (put at the
+top of `~/.ssh/config`). See [sbx compatibility](sbx-compatibility.md#ssh).
+
 ## Browser and clipboard
 
 The sandbox can open URLs in your browser and copy text to your clipboard, whenever it runs. On
