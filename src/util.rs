@@ -15,11 +15,6 @@ pub fn host_uid() -> u32 {
     unsafe { libc::getuid() }
 }
 
-pub fn host_gid() -> u32 {
-    // SAFETY: getgid has no preconditions and cannot fail.
-    unsafe { libc::getgid() }
-}
-
 pub fn hex(bytes: &[u8]) -> String {
     bytes.iter().map(|b| format!("{b:02x}")).collect()
 }

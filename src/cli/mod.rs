@@ -39,7 +39,7 @@ use crate::config::{Paths, Settings};
 use crate::smolvm::{ProcessRunner, Runner, Smolvm};
 
 /// The oldest smolvm smolbento supports.
-pub const MIN_SMOLVM: &str = "1.34.1";
+pub const MIN_SMOLVM: &str = "1.34.4";
 
 pub fn exit_code(err: &anyhow::Error) -> u8 {
     if err.downcast_ref::<Unsupported>().is_some() {
@@ -88,7 +88,6 @@ pub fn main(args: impl IntoIterator<Item = OsString>) -> Result<i32> {
         stdin_tty: std::io::stdin().is_terminal(),
         stdout_tty: std::io::stdout().is_terminal(),
         uid: crate::util::host_uid(),
-        gid: crate::util::host_gid(),
         store,
         config_error,
         out: Out::Stdout,
@@ -215,12 +214,13 @@ fn version<R: Runner>(ctx: &Ctx<R>) -> Result<i32> {
     Ok(0)
 }
 
-/// The sandbox's `agent` takes the caller's uid (see `sandbox::identity_cmd`), so running as root
-/// would make the agent root too.
+/// smolvm shows a workspace as owned by the sandbox's workload user only when it runs as a normal
+/// user: as root, or on a directory owned by root, it maps nothing, so the agent couldn't write.
 fn refuse_root(uid: u32) -> Result<()> {
     if uid == 0 {
         bail!(
-            "don't run sbt as root: the sandbox's agent user takes your uid; run it as your normal user"
+            "don't run sbt as root: smolvm doesn't map a workspace owned by root to the agent user, so \
+the agent couldn't write it; run it as your normal user"
         );
     }
     Ok(())

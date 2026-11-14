@@ -77,7 +77,7 @@ works too). Differences:
 | `add` | Clones the repository itself | Runs your host `git` (shallow clone, no prompts: `GIT_TERMINAL_PROMPT=0` and no stdin), so your credential helpers and SSH agent apply. URLs, skill discovery and names, and the clone error (`clone skills repository: exit status N: <git output>`) match sbx |
 | `update` | `Updated skill x`, `Skill "x" is already up to date`, then `Updated N skill(s) in <store>`; `No repository-installed skills found` | Same. A repository that fails (clone, or a skill gone from it) prints an error and the others still update; the exit code is 1 (not measured in sbx) |
 | A path that is the agent's directory and a kit's | Can't happen: a v3 mixin can't join a built-in agent | Allowed (a kit mixin on a preset agent); the path behaves like the agent's own directory |
-| Who links | Root, giving the directory and links to uid 1000; a directory uid 1000 can't reach fails the create (`uid 1000 cannot reach it, ...`) | Root, giving them to the image's `agent` account (your uid in smolbento), else uid 1000. No reachability check: links in a directory the agent can't reach are made anyway. A skills directory whose path goes through a symlink, in itself or a parent, gets no links (the start warns; a required bundled skill fails) |
+| Who links | Root, giving the directory and links to uid 1000; a directory uid 1000 can't reach fails the create (`uid 1000 cannot reach it, ...`) | Root, giving them to the image's `agent` account, else uid 1000. No reachability check: links in a directory the agent can't reach are made anyway. A skills directory whose path goes through a symlink, in itself or a parent, gets no links (the start warns; a required bundled skill fails) |
 | Kits | `agent-skills@1`, `agent-skill@1` | Both, as measured: a kit directory has the store mounted over it unless the sandbox has bundled skills, then every directory links and the shared mount is read-write if any directory is. The clash message matches; the create error starts with `the first start failed (the sandbox was removed): bundled agent skills failed:`. `kit add` refuses kits with either |
 | Other agents' directories | From sbx's docs table | The same table, taken from the docs and not measured for copilot, cursor, droid, opencode and devin |
 
@@ -241,8 +241,7 @@ What works as in sbx:
 - **Launch.** A workload kit's command runs as the image's `USER` (root when it has none) under
   `/bin/bash`, so `BASH_ENV` is sourced, in the workspace path rather than `WORKDIR`. `sbt exec`
   uses the same user. An image without `/bin/bash` fails with `executable file '/bin/bash' not
-  found` (exit 127). The image user gets your uid so it can write the workspace; a numeric `USER`
-  runs as the account that has that uid. A workload whose image declares no `ENTRYPOINT` or `CMD`
+  found` (exit 127). smolvm maps the workspace to the image user so it can write it. A workload whose image declares no `ENTRYPOINT` or `CMD`
   is refused at create and `kit validate`.
 - **Hooks.** Install steps run as root in a workload kit's image `WORKDIR` (`/` otherwise);
   startup steps and kit files default to `agent`, not the image user. v3 install steps get a clean

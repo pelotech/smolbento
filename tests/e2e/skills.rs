@@ -115,10 +115,11 @@ impl E2e {
     /// `create_with_kits` with `--skills mode`, returning the output whatever the status.
     pub(crate) fn create_skills(&self, kit: &str, mode: &str) -> Output {
         let ws = self.workspace();
+        let template = self.alpine_template();
         self.sbt(&[
             "create",
             "-t",
-            "alpine",
+            &template,
             "--kit",
             kit,
             "--skills",

@@ -29,13 +29,19 @@ exist only in some checkouts). If they're there, read the relevant section befor
 
 ## smolvm behaviour to rely on
 
-As of smolvm 1.34. Check the reference source before depending on anything not listed here.
+As of smolvm 1.34.4. Check the reference source before depending on anything not listed here.
 
 - **Errors:** `--error-format json` prints `{"error":{"code":…,"message":…}}` on stderr, and the
   exit status is unchanged. Branch on `code` (`NOT_FOUND`, `CONFLICT`, `INTERRUPTED`,
   `CONFIG_ERROR`, `INVALID_STATE`, `STORAGE_ERROR`, `MOUNT_ERROR`, `KVM_UNAVAILABLE`,
   `HYPERVISOR_UNAVAILABLE`, `COMMAND_FAILED`, `SMOLVM_ERROR`), never on the message. Known quirks
   live in `src/smolvm/error.rs`.
+- **Idmapped mounts (1.34.2+):** a `-v` host directory is shown as owned by the machine's workload
+  user (`-u` at `machine create`) when that user isn't root and the directory isn't owned by root
+  (nor smolvm run as root). Files stay owned by the host user, live `machine mount add` mounts are
+  mapped too, and `--mount-socket` sockets are unaffected. So create with the session user
+  (`agent`, a workload's image user; `_builder` stays root) and never remap uids. The user must
+  exist in the image, or the start fails. Startup steps exec as root.
 - **Always pass `--name`.** Without it, smolvm targets `$SMOLVM_MACHINE_NAME` (a user's direnv
   may set it), else `default`.
 - **`machine update` needs a stopped machine.** The exception is allow-list changes

@@ -588,6 +588,10 @@ mod tests {
         );
         assert!(c.contains("--mem 4096"), "{c}");
         assert!(c.contains("--net-backend virtio-net"), "{c}");
+        assert!(
+            c.contains(" -u root -- sleep infinity"),
+            "the builder stays root: {c}"
+        );
         assert!(!c.contains(" -w "), "mountless: {c}");
 
         let n = build_dir(&lines);
@@ -599,7 +603,6 @@ mod tests {
         };
         let order = [
             i("machine start -n sbx-_builder"),
-            i("usermod -o -u 501 agent"),
             i("sbx-_builder:/etc/smolbento/startup.d/01-docker.sh"),
             i(&format!("-u root -- sh -c {}", sandbox::startup_cmd(None))),
             i("-u root -- docker info"),

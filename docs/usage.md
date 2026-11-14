@@ -356,8 +356,7 @@ sbt kit add claude-myrepo ./my-mixin                    # add a mixin to an exis
 A **mixin** kit adds to an agent (`--kit`, repeatable). A **workload** kit is the agent: pass it
 where the agent name goes, and the sandbox is named after it. Its image's command runs as the
 image's `USER` (root if it sets none) under `/bin/bash`, so `BASH_ENV` is sourced, in the workspace
-path; `sbt exec` uses the same user. The user gets your uid so it can write the workspace (a
-numeric `USER` runs as the account with that uid). A workload whose image has no `ENTRYPOINT` or
+path; `sbt exec` uses the same user. smolvm maps the workspace to that user so it can write it. A workload whose image has no `ENTRYPOINT` or
 `CMD` is refused, and one without `/bin/bash` fails to start its agent. A kit reference is one of:
 
 v2 and v3 kits can't be combined in one sandbox (as in sbx). An agent preset, the shipped `docker`
@@ -594,7 +593,7 @@ Each agent has its own directory:
 `~` is `/home/agent`. Sandboxes created before skills existed have none; recreate them.
 
 The links are made by the start's setup as root, as in `sbx`. The skills directory and each link
-belong to the image's `agent` account (your uid, in smolbento), or to uid 1000 in an image without
+belong to the image's `agent` account, or to uid 1000 in an image without
 one; parent directories it has to create belong to root. A skills directory whose path goes
 through a symlink (the directory or any parent) gets no links, and a required bundled skill for it
 fails the create. If linking fails the start warns (`couldn't link shared skills`) and goes on.
@@ -878,7 +877,7 @@ knows; others are refused. See [sbx compatibility](sbx-compatibility.md#environm
 ## Files and ownership
 
 Workspaces are mounted at the same absolute path as on your machine, so paths in errors and logs
-match. Inside the sandbox the `agent` user has your uid, so files the agent creates show up on your
+match. Inside the sandbox smolvm shows the workspace as owned by the `agent` user; files the agent creates show up on your
 machine owned by you. Files the agent creates are private to you (mode 600/700).
 
 ## Network policy

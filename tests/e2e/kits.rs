@@ -205,7 +205,8 @@ impl Drop for BuilderGuard {
 pub(crate) fn local_v3_kit_builds_in_the_builder_sandbox() {
     let e = E2e::new("build");
     let _builder = BuilderGuard::new();
-    e.one_off_images();
+    // Layers are composed onto the base image, which must then be a registry reference.
+    let _reg = Registry::start(&e);
     let kit = e.dir.path().join("built");
     std::fs::create_dir_all(&kit).unwrap();
     std::fs::write(
@@ -700,7 +701,7 @@ impl E2e {
         ]);
     }
 
-    /// Runs the workload's agent; asserts it ran as `user` (its uid mapped to the host's) with
+    /// Runs the workload's agent; asserts it ran as `user` with
     /// `BASH_ENV` sourced, in the workspace, and could write there.
     pub(crate) fn assert_agent_runs_as(&self, user: &str) {
         let ws = self.workspace();
@@ -709,7 +710,7 @@ impl E2e {
             // What the guest saw, so a failure on another host (e.g. Linux CI) explains itself.
             let probe = "id; id agent; ls -lnd . ..; grep -E ' virtiofs | 9p ' /proc/mounts; \
                          cat /proc/self/uid_map /proc/self/gid_map 2>&1; \
-                         cat /etc/smolbento/image-user 2>&1; touch probe-$(id -u) 2>&1; ls -ln";
+                         touch probe-$(id -u) 2>&1; ls -ln";
             let as_root = self.sbt(&["exec", "--privileged", &self.name, "sh", "-c", probe]);
             let as_user = self.sbt(&["exec", "-u", user, &self.name, "sh", "-c", probe]);
             panic!(
@@ -800,7 +801,7 @@ setup:
     let out = e.sbt(&[
         "create",
         "-t",
-        "alpine",
+        Image::alpine_agent_archive().to_str().unwrap(),
         "--kit",
         kit.to_str().unwrap(),
         "shell",
@@ -828,8 +829,7 @@ setup:
     assert_eq!(e.state(), "stopped");
 }
 
-/// sbx #13: a v2 startup hook without `user:` runs as the agent account (sbx's uid 1000; here
-/// `agent` has the host's uid), and it doesn't keep the sandbox from starting.
+/// sbx #13: a v2 startup hook without `user:` runs as the agent account, and it doesn't keep the sandbox from starting.
 #[test]
 #[ignore = "boots real VMs and pulls alpine; run with `just e2e`"]
 pub(crate) fn v2_startup_hook_runs_as_agent_by_default() {
@@ -838,18 +838,13 @@ pub(crate) fn v2_startup_hook_runs_as_agent_by_default() {
     std::fs::create_dir_all(&kit).unwrap();
     std::fs::write(
         kit.join("spec.yaml"),
-        format!(
-            r#"schemaVersion: "2"
+        r#"schemaVersion: "2"
 kind: mixin
 name: e2e-v2-user
 setup:
-  install:
-    - command: "{}"
   startup:
     - command: [sh, -c, "id -un > /tmp/e2e-started-as"]
 "#,
-            add_agent_hook()
-        ),
     )
     .unwrap();
     e.create_with_kits(&[kit.to_str().unwrap()]);
@@ -875,18 +870,12 @@ pub(crate) fn mixin_agent_context_sits_beside_the_workspace() {
     std::fs::create_dir_all(&kit).unwrap();
     std::fs::write(
         kit.join("spec.yaml"),
-        format!(
-            r#"schemaVersion: "2"
+        r#"schemaVersion: "2"
 kind: mixin
 name: e2e-ctx
 agentInstructions:
   content: "Use the e2e tools."
-setup:
-  install:
-    - command: "{}"
 "#,
-            add_agent_hook()
-        ),
     )
     .unwrap();
     e.create_with_kits(&[kit.to_str().unwrap()]);

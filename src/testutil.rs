@@ -16,7 +16,7 @@ pub struct TestEnv {
 }
 
 /// A context with temp config/cache/data dirs, cwd `<tmp>/proj`, `now` = 1_000_000, uid 501 and smolvm
-/// 1.34.1.
+/// 1.34.4.
 pub fn test_env(extra_env: &[(&str, &str)]) -> TestEnv {
     let dir = tempfile::tempdir().unwrap();
     let mut env = BTreeMap::from([
@@ -41,7 +41,7 @@ pub fn test_env(extra_env: &[(&str, &str)]) -> TestEnv {
     std::fs::write(paths.policy_file(), "mode = \"allow-all\"\n").unwrap();
     let (settings, config_error) = Settings::load(&paths, env.clone());
     let fake = FakeRunner::new();
-    fake.ok(&["--version"], "smolvm 1.34.1\n");
+    fake.ok(&["--version"], "smolvm 1.34.4\n");
     let cwd = dir.path().join("proj");
     std::fs::create_dir_all(&cwd).unwrap();
     let cwd = cwd.canonicalize().unwrap();
@@ -56,7 +56,6 @@ pub fn test_env(extra_env: &[(&str, &str)]) -> TestEnv {
             stdin_tty: false,
             stdout_tty: false,
             uid: 501,
-            gid: 20,
             store: Box::new(crate::secrets::store::MemoryStore::default()),
             config_error,
             out: crate::ctx::Out::Buffer(Default::default()),
@@ -190,9 +189,10 @@ pub fn root_sh<'a>(machine: &'a str, script: &'a str) -> [&'a str; 10] {
     ]
 }
 
-/// `machine status --json` output for a smolbento sandbox.
+/// `machine status --json` output for a smolbento sandbox; `sbx.mapped` is `true` unless given.
 pub fn machine_json(machine: &str, state: &str, labels: &[(&str, &str)]) -> String {
-    let labels: BTreeMap<&str, &str> = labels.iter().copied().collect();
+    let mut labels: BTreeMap<&str, &str> = labels.iter().copied().collect();
+    labels.entry("sbx.mapped").or_insert("true");
     serde_json::json!({
         "name": machine,
         "state": state,

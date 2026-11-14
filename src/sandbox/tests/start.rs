@@ -13,6 +13,35 @@ fn find_maps_name_and_reads_labels() {
 }
 
 #[test]
+fn a_sandbox_from_an_older_smolbento_is_refused_before_smolvm_starts_it() {
+    let old = stopped().replace("\"sbx.mapped\": \"true\",", "");
+    let vm = vm_with(&old);
+    let mut sb = get(&vm, "claude-myrepo").unwrap();
+    assert!(!sb.meta.mapped);
+    let want = "sandbox claude-myrepo was created by an older smolbento; recreate it \
+                (sbt rm claude-myrepo, then create it again)";
+    assert_eq!(start(&vm, &sb, &plan()).unwrap_err().to_string(), want);
+    assert_eq!(
+        ensure_running(&vm, &mut sb, || Ok(plan()))
+            .unwrap_err()
+            .to_string(),
+        want
+    );
+    // Even when it's running: entering it is refused too.
+    let mut running = get(
+        &vm_with(&STATUS.replace("\"sbx.mapped\": \"true\",", "")),
+        "claude-myrepo",
+    )
+    .unwrap();
+    assert!(ensure_running(&vm, &mut running, || Ok(plan())).is_err());
+    let lines = vm.runner().call_lines();
+    assert!(
+        !lines.iter().any(|l| l.starts_with("machine start")),
+        "{lines:#?}"
+    );
+}
+
+#[test]
 fn get_missing_is_a_clear_error() {
     let fake = FakeRunner::new();
     fake.fail(&["machine", "status"], "NOT_FOUND", "vm not found");
@@ -144,14 +173,13 @@ fn failing_to_install_the_shims_warns_and_the_start_goes_on() {
 }
 
 #[test]
-fn every_start_names_the_host_after_the_agent_user() {
+fn every_start_names_the_host() {
     let vm = vm_with(&stopped());
     let mut sb = get(&vm, "claude-myrepo").unwrap();
     ensure_running(&vm, &mut sb, || Ok(plan())).unwrap();
     let lines = vm.runner().call_lines();
-    assert!(lines[3].ends_with("usermod -o -u 501 agent"), "{lines:#?}");
     assert_eq!(
-        lines[4],
+        lines[3],
         "machine exec --name sbx-claude-myrepo -u root -- sh -c grep -q ' host.docker.internal$' \
          /etc/hosts || printf '\\n%s\\n' '100.96.0.1 host.docker.internal' >> /etc/hosts"
     );

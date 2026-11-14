@@ -3,7 +3,7 @@
 mod clone_step;
 pub mod create;
 pub mod env;
-mod identity;
+mod guest_cmd;
 mod kit_steps;
 pub mod labels;
 pub mod name;
@@ -23,7 +23,7 @@ use crate::workspace::MOUNTLESS_WORKDIR;
 
 pub use clone_step::*;
 pub use create::CreateRequest;
-pub use identity::*;
+pub use guest_cmd::*;
 pub use kit_steps::*;
 pub use labels::Meta;
 
@@ -46,7 +46,7 @@ pub enum Event<'a> {
 }
 
 /// What a start needs beyond the machine: its network, the secret values for its credentials
-/// (only ever passed as env to `machine start`), and the uid and gid for the agent user.
+/// (only ever passed as env to `machine start`).
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct StartPlan {
     pub network: NetworkSpec,
@@ -54,8 +54,6 @@ pub struct StartPlan {
     /// Credential env vars without a value, removed from the inherited environment so the host
     /// shell's same-named variables can't stand in for them.
     pub remove: Vec<String>,
-    pub uid: u32,
-    pub gid: u32,
     /// Set for a clone sandbox; the clone itself is skipped once it exists, the remote copy is not.
     pub clone: Option<CloneStep>,
     /// Start with `--branchable` so `sbt fork` can copy it; only for forkable sandboxes.
@@ -158,6 +156,19 @@ pub fn list<R: Runner>(vm: &Smolvm<R>) -> Result<Vec<Sandbox>> {
     Ok(out)
 }
 
+/// Refuses a sandbox made by a smolbento before workspaces were mapped to the workload user
+/// (`sbx.mapped`): it can't be started or entered, only listed, inspected and removed. The
+/// internal `_builder` has no workspace, so it needs no mapping.
+pub fn require_current(sb: &Sandbox) -> Result<()> {
+    if sb.meta.mapped || name::is_internal(sb.name()) {
+        return Ok(());
+    }
+    Err(anyhow!(
+        "sandbox {0} was created by an older smolbento; recreate it (sbt rm {0}, then create it again)",
+        sb.name()
+    ))
+}
+
 /// Applies the network to the stopped machine, starts it with the secret env, then its setup steps.
 /// A failed setup step stops the machine again: left running half set up, later commands would
 /// skip `start` and never retry it.
@@ -172,6 +183,7 @@ pub fn start_with<R: Runner>(
     plan: &StartPlan,
     on: &mut dyn FnMut(Event),
 ) -> Result<()> {
+    require_current(sb)?;
     start_checked(vm, sb, plan, on, &bridge::ensure_private_dir)
 }
 
@@ -206,7 +218,7 @@ fn start_checked<R: Runner>(
     Ok(())
 }
 
-/// What follows `machine start`: a v3 workload's image user's uid, then the agent user's, dockerd
+/// What follows `machine start`: the guest's hosts file, dockerd
 /// for a pre-4a sandbox, the clone, then the kits' startup hooks (a no-op without kits; deferred
 /// during a kit first start). A failed blocking startup hook fails the start.
 fn setup<R: Runner>(
@@ -215,17 +227,6 @@ fn setup<R: Runner>(
     plan: &StartPlan,
     private: &dyn Fn(&Path) -> bool,
 ) -> Result<()> {
-    if let Some(user) = &sb.meta.user
-        && let Some(w) = map_image_user(vm, sb, user, plan.uid, plan.gid)?
-    {
-        eprintln!("{w}");
-    }
-    vm.exec_captured(&ExecSpec::sh(
-        &sb.machine,
-        "root",
-        identity_cmd(plan.uid, plan.gid),
-    ))
-    .context("matching the sandbox's agent user to your host uid")?;
     // Not fatal: an image without a writable /etc/hosts still works, just without the name.
     if let Err(e) = vm.exec_captured(&ExecSpec::sh(&sb.machine, "root", hosts_cmd())) {
         eprintln!(
@@ -325,6 +326,7 @@ pub fn ensure_running<R: Runner>(
     sb: &mut Sandbox,
     plan: impl FnOnce() -> Result<StartPlan>,
 ) -> Result<()> {
+    require_current(sb)?;
     if !sb.is_running() {
         start(vm, sb, &plan()?)?;
         sb.state = MachineState::Running;

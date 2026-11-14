@@ -154,7 +154,7 @@ fn attach<R: Runner>(ctx: &Ctx<R>, a: &RunArgs, sb: &Sandbox, command: Vec<Strin
     let sessions = ctx.paths.sessions();
     let mut spec = ExecSpec {
         name: sb.machine.clone(),
-        user: Some("agent".into()),
+        user: Some(sb.meta.session_user().into()),
         workdir: Some(sb.workdir()),
         interactive: true,
         tty: ctx.stdin_tty,
@@ -164,9 +164,8 @@ fn attach<R: Runner>(ctx: &Ctx<R>, a: &RunArgs, sb: &Sandbox, command: Vec<Strin
     spec.env.extend(a.session_env.iter().cloned());
     sandbox::env::session_env(&ctx.env, spec.tty, sb.meta.bridge, &mut spec.env);
     // A v3 workload runs as its image user, through bash so the image's BASH_ENV is sourced.
-    let image_user = sandbox::launch_user(&ctx.vm, sb);
-    if let Some(user) = &image_user {
-        spec.user = Some(user.clone());
+    let image_user = sb.meta.user.is_some();
+    if image_user {
         spec.cmd = [BASH, "-c", "exec -- \"$@\"", "bash"]
             .into_iter()
             .map(String::from)
@@ -178,7 +177,7 @@ fn attach<R: Runner>(ctx: &Ctx<R>, a: &RunArgs, sb: &Sandbox, command: Vec<Strin
     let _bridge = bridge::attach(&ctx.env, &ctx.settings, sb);
     // A runtime `ssh-agent@1` grant: the filtered host agent, while the user is attached.
     let _agent = crate::ssh_agent::filter::attach(&ctx.env, &ctx.paths, sb);
-    match image_user.is_some().then(|| has_bash(ctx, sb)) {
+    match image_user.then(|| has_bash(ctx, sb)) {
         Some(Err(e)) => Err(e),
         Some(Ok(false)) => {
             // sbx's error for such an image, and the code its agent exits with.
@@ -354,8 +353,11 @@ mod tests {
                 .any(|l| l.starts_with("machine create -n sbx-claude-proj"))
         );
         assert!(
-            lines.iter().any(|l| l.ends_with("usermod -o -u 501 agent")),
-            "the agent takes ctx.uid: {lines:?}"
+            lines
+                .iter()
+                .any(|l| l.starts_with("machine create ")
+                    && l.ends_with(" -u agent -- sleep infinity")),
+            "the workload user is the session user: {lines:?}"
         );
         assert_eq!(lines.last().unwrap(), "machine stop -n sbx-claude-proj");
         assert_eq!(
@@ -842,7 +844,7 @@ mod tests {
     }
 
     #[test]
-    fn run_launches_a_numeric_image_user_as_its_mapped_account() {
+    fn run_launches_a_numeric_image_user_as_given() {
         let mut t = test_env(&[]);
         let ws = t.ctx.cwd.display().to_string();
         t.machine(
@@ -857,13 +859,11 @@ mod tests {
             ],
         );
         t.runner().interactive_exit(0);
-        // The start recorded uid 1000's account (`agent`, since moved to the host uid).
-        t.runner().download(b"agent\n");
         t.sbt(&["run", "--name", "toolbox-proj"]).unwrap();
         assert_eq!(
             t.runner().interactive_calls()[0].join(" "),
             format!(
-                "machine exec --name sbx-toolbox-proj -u agent -w {ws} -i -- \
+                "machine exec --name sbx-toolbox-proj -u 1000 -w {ws} -i -- \
                  /bin/bash -c exec -- \"$@\" bash /bin/agent"
             )
         );

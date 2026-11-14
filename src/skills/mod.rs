@@ -193,7 +193,7 @@ pub fn mounts(store: &Path, label: &Label) -> Vec<Mount> {
 }
 
 /// Sets `o` to the owner of skills directories and links: the `agent` account if the image has
-/// one, else uid 1000, as sbx does (smolbento remaps `agent` to the host user).
+/// one, else uid 1000, as sbx does.
 const OWNER: &str = r#"if u=$(id -u agent 2>/dev/null) && g=$(id -g agent 2>/dev/null); then o=$u:$g; else o=1000:1000; fi"#;
 
 /// `real DIR` succeeds when DIR's longest existing prefix resolves to itself: no symlink anywhere

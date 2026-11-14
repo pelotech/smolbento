@@ -1,7 +1,7 @@
 //! Tests of starting and creating sandboxes, by topic, with the fixtures they share.
 
 mod clone;
-mod identity;
+mod guest_cmd;
 mod kits;
 mod start;
 
@@ -33,8 +33,6 @@ pub(super) fn plan() -> StartPlan {
         network: NetworkSpec::Open,
         env: vec![("TOK".into(), "secret".into())],
         remove: vec!["GONE".into()],
-        uid: 501,
-        gid: 20,
         clone: None,
         branchable: true,
         kit: None,
@@ -58,39 +56,6 @@ pub(super) fn skills_status(label: &str) -> String {
 
 pub(super) const RO_LABEL: &str = r#"{"mode":"readonly","shared":"ro","dirs":[{"path":"/home/agent/.claude/skills","access":"link"}]}"#;
 
-/// Runs `image_user_script` (uid 501, gid 20) on the host against `etc`, with `id`, `usermod`
-/// and `groupmod` shims that read `etc/passwd` and `etc/group` and log to
-/// `etc/<command>.log`. Returns the exit code.
-pub(super) fn run_image_user_script(etc: &std::path::Path, user: &str) -> i32 {
-    let bin = etc.join("bin");
-    std::fs::create_dir_all(&bin).unwrap();
-    let shim = |name: &str, body: &str| {
-        let p = bin.join(name);
-        std::fs::write(&p, format!("#!/bin/sh\n{body}\n")).unwrap();
-        use std::os::unix::fs::PermissionsExt;
-        std::fs::set_permissions(&p, std::fs::Permissions::from_mode(0o755)).unwrap();
-    };
-    shim(
-        "id",
-        r#"case $1 in -u) f=3;; *) f=4;; esac
-g=$(awk -F: -v n="$2" -v f=$f '$1 == n { print $f; x = 1 } END { exit !x }' "$ETC/passwd") || exit 1
-[ "$1" = -gn ] && g=$(awk -F: -v g="$g" '$3 == g { print $1 }' "$ETC/group")
-echo "$g""#,
-    );
-    shim("usermod", r#"echo "$@" >> "$ETC/usermod.log""#);
-    shim("groupmod", r#"echo "$@" >> "$ETC/groupmod.log""#);
-    let script = image_user_script(user, 501, 20, &etc.display().to_string());
-    let path = format!("{}:{}", bin.display(), std::env::var("PATH").unwrap());
-    std::process::Command::new("sh")
-        .args(["-c", &script])
-        .env("PATH", path)
-        .env("ETC", etc)
-        .status()
-        .unwrap()
-        .code()
-        .unwrap()
-}
-
 pub(super) fn step(dir: &str) -> CloneStep {
     CloneStep {
         dir: dir.into(),
@@ -104,6 +69,7 @@ pub(super) fn clone_sandbox() -> (Sandbox, StartPlan) {
     let sb = Sandbox {
         meta: Meta {
             name: "r".into(),
+            mapped: true,
             workspace: Some("/w/r".into()),
             clone_repo: Some("/w/r".into()),
             ..Default::default()
@@ -127,7 +93,7 @@ pub(super) fn created_vm() -> Smolvm<FakeRunner> {
     let fake = FakeRunner::new();
     let created = STATUS
         .replace("\"state\": \"running\"", "\"state\": \"created\"")
-        .replace("\"true\"", "\"false\"");
+        .replace("\"sbx.docker\": \"true\"", "\"sbx.docker\": \"false\"");
     fake.ok(&["machine", "status"], &created);
     Smolvm::new(fake)
 }

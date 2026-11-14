@@ -7,6 +7,9 @@ pub(crate) struct E2e {
     pub(crate) vars: Vec<(&'static str, String)>,
     /// Set by [`E2e::one_off_images`].
     pub(crate) no_seeds: std::cell::Cell<bool>,
+    /// Alpine with an `agent` user in the test's registry, set by [`Registry::start`]: a kit
+    /// from a registry only combines with a `-t` that is a registry reference, not an archive.
+    pub(crate) base: std::cell::RefCell<Option<String>>,
 }
 
 impl E2e {
@@ -18,6 +21,7 @@ impl E2e {
             name: format!("e2e-{}-{test}", std::process::id()),
             vars: Vec::new(),
             no_seeds: Default::default(),
+            base: Default::default(),
         };
         e.ok(&["policy", "init", "allow-all"]);
         e
@@ -103,8 +107,7 @@ impl E2e {
         String::from_utf8_lossy(&out.stdout).into_owned()
     }
 
-    /// Alpine has no `agent` user or bash; add them as root, straight through smolvm. The user
-    /// gets the host uid, as smolbento's identity step does for sbx images.
+    /// Alpine with an `agent` user, the sandbox's workload user, and bash installed as root.
     pub(crate) fn create_alpine(&self) {
         self.create_alpine_with("apk add -q bash");
     }
@@ -118,7 +121,7 @@ impl E2e {
         self.create_alpine_named(&self.name, then);
     }
 
-    /// An Alpine sandbox `name` with an `agent` user of the host's uid, then `then` run as root.
+    /// An Alpine sandbox `name` (with its `agent` user), then `then` run as root.
     fn create_alpine_named(&self, name: &str, then: &str) {
         let ws = self.workspace();
         self.ok(&[
@@ -128,17 +131,13 @@ impl E2e {
             "--name",
             name,
             "-t",
-            "alpine",
+            Image::alpine_agent_archive().to_str().unwrap(),
             "--cpus",
             "1",
             "-m",
             "1g",
         ]);
-        let setup = format!(
-            "adduser -D -u {} agent && {then}",
-            smolbento::util::host_uid()
-        );
-        guest_root(name, &setup);
+        guest_root(name, then);
     }
 
     /// Creates this test's sandbox as a `--clone` of its workspace. A clone sandbox needs git and
@@ -234,6 +233,13 @@ impl Registry {
             &publish,
         ]);
         assert!(wait_until(60, || r.answers()), "the local registry answers");
+        let base = Image::alpine().with_agent_account(&Image::alpine());
+        let base = r.push(
+            "base",
+            base,
+            descriptor("mixin", &[], serde_json::json!([])),
+        );
+        *e.base.borrow_mut() = Some(base);
         r
     }
 
@@ -283,7 +289,9 @@ impl Registry {
                 "3".to_string(),
             ),
         ]);
-        let manifest = OciImageManifest::build(&layers, &config, Some(annotations));
+        let mut manifest = OciImageManifest::build(&layers, &config, Some(annotations));
+        // smolvm's puller (for the `-t` base image) needs it; `build` leaves it out.
+        manifest.media_type = Some(oci_client::manifest::OCI_IMAGE_MEDIA_TYPE.to_string());
         let rt = tokio::runtime::Builder::new_current_thread()
             .enable_all()
             .build()
@@ -420,6 +428,74 @@ impl Image {
 }
 
 impl Image {
+    /// Writes the image as an OCI layout archive smolvm takes as `--image PATH`.
+    pub(crate) fn save_oci(&self, path: &Path) {
+        let mut b = tar::Builder::new(Vec::new());
+        let mut add = |name: &str, data: &[u8]| {
+            let mut h = tar::Header::new_gnu();
+            h.set_mode(0o644);
+            h.set_size(data.len() as u64);
+            h.set_cksum();
+            b.append_data(&mut h, name, data).unwrap();
+        };
+        let blob = |data: &[u8]| (sha256(data), data.len());
+        let hex = |digest: &str| digest.trim_start_matches("sha256:").to_string();
+        let config = serde_json::to_vec(&self.config).unwrap();
+        let (config_digest, config_len) = blob(&config);
+        add(&format!("blobs/sha256/{}", hex(&config_digest)), &config);
+        let mut layers = Vec::new();
+        for (data, media) in &self.layers {
+            let (digest, len) = blob(data);
+            add(&format!("blobs/sha256/{}", hex(&digest)), data);
+            layers.push(serde_json::json!({"mediaType": media, "digest": digest, "size": len}));
+        }
+        let manifest = serde_json::to_vec(&serde_json::json!({
+            "schemaVersion": 2,
+            "mediaType": "application/vnd.oci.image.manifest.v1+json",
+            "config": {
+                "mediaType": "application/vnd.oci.image.config.v1+json",
+                "digest": config_digest,
+                "size": config_len,
+            },
+            "layers": layers,
+        }))
+        .unwrap();
+        let (manifest_digest, manifest_len) = blob(&manifest);
+        add(
+            &format!("blobs/sha256/{}", hex(&manifest_digest)),
+            &manifest,
+        );
+        add("oci-layout", br#"{"imageLayoutVersion":"1.0.0"}"#);
+        let index = serde_json::json!({
+            "schemaVersion": 2,
+            "manifests": [{
+                "mediaType": "application/vnd.oci.image.manifest.v1+json",
+                "digest": manifest_digest,
+                "size": manifest_len,
+            }],
+        });
+        add("index.json", index.to_string().as_bytes());
+        std::fs::write(path, b.into_inner().unwrap()).unwrap();
+    }
+
+    /// Alpine with an `agent` account (`with_agent_account`) as an archive for `-t`: the
+    /// sandbox's workload user is `agent`, so the image must have it before the first start.
+    /// Built once per run and shared by every test.
+    pub(crate) fn alpine_agent_archive() -> PathBuf {
+        let path = std::env::temp_dir().join(format!(
+            "smolbento-e2e-alpine-agent-{}.tar",
+            smolbento::util::host_uid()
+        ));
+        if !path.exists() {
+            let tmp = path.with_extension(format!("tmp{}", std::process::id()));
+            Image::alpine()
+                .with_agent_account(&Image::alpine())
+                .save_oci(&tmp);
+            std::fs::rename(&tmp, &path).unwrap();
+        }
+        path
+    }
+
     /// The image's `path` (e.g. `etc/passwd`) from its topmost layer that has it, read with the
     /// host's `tar` (which detects gzip itself).
     pub(crate) fn file(&self, path: &str) -> String {
@@ -466,7 +542,7 @@ pub(crate) fn descriptor(
     })
 }
 
-/// Install hook (as root) giving an Alpine guest the `agent` user, as the identity step would.
+/// Install hook (as root) giving a plain Alpine workload image the `agent` user.
 pub(crate) fn add_agent_hook() -> String {
     format!(
         "id agent >/dev/null 2>&1 || adduser -D -u {} agent",
@@ -475,10 +551,20 @@ pub(crate) fn add_agent_hook() -> String {
 }
 
 impl E2e {
-    /// `sbt create` of an Alpine-based shell sandbox with `kits` (`-t alpine --kit ...`).
+    /// The `-t` of an Alpine sandbox with an `agent` user: the registry's copy once a test has
+    /// one, else the local archive.
+    pub(crate) fn alpine_template(&self) -> String {
+        self.base
+            .borrow()
+            .clone()
+            .unwrap_or_else(|| Image::alpine_agent_archive().to_str().unwrap().to_string())
+    }
+
+    /// `sbt create` of an Alpine-based shell sandbox with `kits` (`-t <alpine> --kit ...`).
     pub(crate) fn create_with_kits(&self, kits: &[&str]) {
         let ws = self.workspace();
-        let mut args = vec!["create", "-t", "alpine"];
+        let template = self.alpine_template();
+        let mut args = vec!["create", "-t", &template];
         for k in kits {
             args.extend(["--kit", k]);
         }
