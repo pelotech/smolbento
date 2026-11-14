@@ -370,6 +370,7 @@ exits, and `sbt run` still starts its own interactive session.
 | Reference | Kit |
 |---|---|
 | `docker` | The shipped Docker kit |
+| `nix` | smolbento's [Nix kit](#the-nix-kit), pulled from `ghcr.io/pelotech/smolbento/kits/nix:latest` |
 | `docker.io/acme/kit:1`, `ghcr.io/acme/kit@sha256:…` | A published kit, pulled from its registry |
 | `./my-kit` (a directory with one `*.yaml` starting `# syntax=docker/sandbox-kit:3`), or that file | A local v3 kit, built in the builder sandbox (below) |
 | `./my-kit` (a directory with a `spec.yaml`) | A local v2 kit |
@@ -378,7 +379,7 @@ exits, and `sbt run` still starts its own interactive session.
 v2 and v3 kits can't share a sandbox. Agent presets, `docker` and a Smolfile can go with either.
 
 A local kit is always a path (`./my-kit`, `../kits/my-kit`, `.`, or absolute). A bare word is never
-a kit, even if a directory has that name. `sbt create my-kit` fails with `unknown agent "my-kit"`,
+a local kit, even if a directory has that name; only `docker` and `nix` are bare kit names. `sbt create my-kit` fails with `unknown agent "my-kit"`,
 and `--kit my-kit` says `not a local path and does not look like a registry reference`. Write
 `docker.io/library/alpine` for the alpine image.
 
@@ -429,9 +430,32 @@ What a kit does, and when:
 - Volumes live on the sandbox's disk and are removed with it. Host mounts are shared and kept ([kit
   host mounts](#kit-host-mounts)).
 
-Only Docker Hub kits load by default, plus local kits. See [Configuration](configuration.md) for
+Only Docker Hub kits and smolbento's own (`ghcr.io/pelotech/smolbento/`) load by default, plus local
+kits. See [Configuration](configuration.md) for
 `kit.allowedSources` and `kit.allowLocalKits`, and [Security](SECURITY.md#kits) for what a kit can
 open.
+
+### The `nix` kit
+
+`nix` adds Nix (flakes on), direnv with nix-direnv, and xz to any agent, with nothing downloaded at
+create:
+
+```sh
+sbt create claude . --kit nix
+sbt create docker.io/sbx/antigravity:latest . --kit nix
+```
+
+- `nix-daemon` starts with the sandbox and runs builds as root; you use `nix` as yourself. Flakes'
+  own binary caches are honoured.
+- A workspace `.envrc` is allowed at each start. Agents run commands in shells that don't load it,
+  so the kit tells them (in `CLAUDE.md`/`AGENTS.md`) to use `direnv exec . <cmd>` or
+  `nix develop -c <cmd>`.
+- It brings its own network rules for the Nix caches and GitHub, for policies other than `balanced`.
+- The store is on the sandbox's disk, smolvm's 10 GiB overlay by default; smolbento can't size it
+  yet, so very large dev shells may run out of space.
+- `nix` is `:latest` while the kit is 0.x and may change; pin a version
+  (`ghcr.io/pelotech/smolbento/kits/nix:0.0.1`) or a digest in environment files. Each release
+  notes the smolbento it needs.
 
 ### Agent instructions from kits
 
