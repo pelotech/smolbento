@@ -547,7 +547,10 @@ mod tests {
         assert!(pair("--label").contains(&"sbx.created=1000000".to_string()));
         assert!(pair("--label").contains(&"sbx.docker=true".to_string()));
         // Docker-in-sandbox is the shipped `docker` kit: its volumes above, its startup hook here.
-        assert!(pair("--label").contains(&r#"sbx.kits=["builtin:docker"]"#.to_string()));
+        assert!(pair("--label").contains(&format!(
+            "sbx.kits=[{}]",
+            r#"{"name":"docker","ref":"builtin:docker","provides":["docker@1.0.0"]}"#
+        )));
         let uploads = t.runner().uploads();
         let (_, script) = uploads
             .iter()

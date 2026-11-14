@@ -63,10 +63,10 @@ fn a_read_only_etc_hosts_warns_and_the_start_goes_on() {
 fn a_docker_kit_sandbox_leaves_dockerd_to_its_startup_runner() {
     let vm = vm_with(&stopped().replace(
         "\"sbx.docker\": \"true\",",
-        "\"sbx.docker\": \"true\", \"sbx.kits\": \"[\\\"builtin:docker\\\"]\",",
+        "\"sbx.docker\": \"true\", \"sbx.kits\": \"[{\\\"name\\\":\\\"docker\\\",\\\"ref\\\":\\\"builtin:docker\\\"}]\",",
     ));
     let mut sb = get(&vm, "claude-myrepo").unwrap();
-    assert_eq!(sb.meta.kits, ["builtin:docker"]);
+    assert_eq!(sb.meta.kits[0].reference, "builtin:docker");
     ensure_running(&vm, &mut sb, || Ok(plan())).unwrap();
     let lines = vm.runner().call_lines();
     assert!(
@@ -246,10 +246,7 @@ fn create_runs_kit_steps_in_lifecycle_order() {
         at(guest::STARTUP_PATH).as_deref(),
         Some(guest::STARTUP_RUNNER)
     );
-    assert_eq!(
-        at(guest::KITS_FILE).as_deref(),
-        Some("k\tref@sha256:00\tnpm\n")
-    );
+    assert_eq!(at("/etc/smolbento/kits"), None, "no guest kits record");
     assert!(
         lines[startup_d..]
             .iter()

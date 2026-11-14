@@ -25,7 +25,8 @@ struct Details<'a> {
     mounts: BTreeMap<&'a str, &'a str>,
     name: &'a str,
     agent: &'a str,
-    kits: &'a [String],
+    /// The kits' refs, as sbx lists them.
+    kits: Vec<String>,
     state: &'static str,
     #[serde(skip_serializing_if = "Option::is_none")]
     image: Option<&'a str>,
@@ -53,7 +54,7 @@ pub fn render(sb: &Sandbox, sessions: usize, format: Format) -> Result<String> {
             .collect(),
         name: sb.name(),
         agent: &m.agent,
-        kits: &m.kits,
+        kits: m.kits.iter().map(|k| k.reference.clone()).collect(),
         state: super::ls::status(sb.state),
         image: sb.image.as_deref(),
         workspace: m.workspace.as_deref(),
@@ -88,7 +89,7 @@ fn table(d: &Details) -> String {
     let mut rows = vec![
         ("Name", d.name.to_string()),
         ("Agent", d.agent.to_string()),
-        ("Kits", list(d.kits, "none")),
+        ("Kits", list(&d.kits, "none")),
         ("State", d.state.to_string()),
         ("Image", d.image.unwrap_or("-").to_string()),
         ("Workspace", d.workspace.unwrap_or("-").to_string()),
@@ -116,6 +117,7 @@ fn table(d: &Details) -> String {
 mod tests {
     use super::*;
     use crate::sandbox::Meta;
+    use crate::sandbox::labels::KitRecord;
     use crate::testutil::*;
 
     /// `machine status --json` for a sandbox with `meta`'s labels.
@@ -143,10 +145,14 @@ mod tests {
             created: 999_000,
             secrets: vec!["anthropic".into(), "github".into()],
             clone_repo: Some("/Users/dev/proj".into()),
-            kits: vec![
-                "ghcr.io/example/kit:1@sha256:abc".into(),
-                "/Users/dev/kits/cache".into(),
-            ],
+            kits: ["ghcr.io/example/kit:1@sha256:abc", "/Users/dev/kits/cache"]
+                .map(|r| KitRecord {
+                    name: "k".into(),
+                    reference: r.into(),
+                    provides: vec![],
+                    format: None,
+                })
+                .to_vec(),
             host_mounts: BTreeMap::from([(
                 "/home/agent/.cache/x".into(),
                 "/Users/dev/.local/share/smolbento/kit-host-mounts/aa/bb".into(),

@@ -531,7 +531,10 @@ mod tests {
             &[
                 ("sbx.name", "_builder"),
                 ("sbx.docker", "true"),
-                ("sbx.kits", r#"["builtin:docker"]"#),
+                (
+                    "sbx.kits",
+                    r#"[{"name":"docker","ref":"builtin:docker","provides":["docker@1.0.0"]}]"#,
+                ),
             ],
         )
     }
@@ -581,7 +584,7 @@ mod tests {
         assert!(c.contains("--label sbx.name=_builder"), "{c}");
         assert!(c.contains("--label sbx.docker=true"), "{c}");
         // dockerd comes from the shipped docker kit, not the pre-4a `setup` fallback.
-        assert!(c.contains(r#"--label sbx.kits=["builtin:docker"]"#), "{c}");
+        assert!(c.contains(r#"--label sbx.kits=[{"name":"docker","ref":"builtin:docker","provides":["docker@1.0.0"]}]"#), "{c}");
         assert!(
             c.contains("-v /var/lib/docker -v /var/lib/containerd"),
             "{c}"
@@ -1001,7 +1004,10 @@ mod tests {
             &[
                 ("sbx.name", "_builder"),
                 ("sbx.docker", "true"),
-                ("sbx.kits", r#"["builtin:docker"]"#),
+                (
+                    "sbx.kits",
+                    r#"[{"name":"docker","ref":"builtin:docker","provides":["docker@1.0.0"]}]"#,
+                ),
                 ("sbx.registries", "dhi.io"),
                 ("sbx.credential-hosts", "dhi.io"),
                 ("sbx.credential-env", "SBX_REGISTRY_0_AUTH"),

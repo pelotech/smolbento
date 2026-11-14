@@ -628,13 +628,17 @@ setup:
             .success()),
         "the startup hook ran"
     );
-    assert!(root_out(&e.name, "cat /etc/smolbento/kits").contains("e2e-add"));
     // As in sbx: one `kit:<sandbox>` row, its hosts counted (listed with --wide).
     let rules = e.ok(&["policy", "ls", "--source", "kit"]);
     assert!(rules.contains("network: 1 allow"), "{rules}");
     let wide = e.ok(&["policy", "ls", "--source", "kit", "--wide"]);
     assert!(wide.contains(&format!("kit:{}", e.name)), "{wide}");
     assert!(wide.contains("httpbin.org"), "{wide}");
+    // Recorded in the sandbox's labels, so a stopped sandbox lists it too.
+    e.ok(&["stop", &e.name]);
+    let out = e.ok(&["inspect", "--json", &e.name]);
+    let kits = serde_json::from_str::<serde_json::Value>(&out).unwrap()["kits"].to_string();
+    assert!(kits.contains("e2e-add"), "{kits}");
 }
 
 /// Debian (it has bash and `usermod`) plus accounts `somebody` (uid 1234) and `numbered`

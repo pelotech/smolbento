@@ -10,13 +10,14 @@ use crate::kits::capability;
 use crate::kits::compose;
 use crate::kits::env_ref;
 use crate::kits::guest;
-use crate::kits::model::{CapBody, Content, CredReq, FileReq, Format, Hook, Kit, Source};
+use crate::kits::model::{CapBody, Content, CredReq, FileReq, Hook, Kit, Source};
 use crate::kits::registry_auth::Logins;
 use crate::kits::resolve::{KitCred, Merged, Plan};
 use crate::policy::Policy;
 use crate::policy::rules::is_under;
 use crate::sandbox::CreateRequest;
 use crate::sandbox::labels::CredFormat;
+use crate::sandbox::labels::KitRecord;
 use crate::sandbox::options::{free_port, parse_memory};
 use crate::secrets::store::SecretStore;
 use crate::secrets::{SecretsFile, services};
@@ -36,8 +37,8 @@ pub struct KitSteps {
     pub context: Vec<String>,
     /// `(file name "NN-<kit>.sh", body)` for `/etc/smolbento/startup.d`, in run order.
     pub startup_d: Vec<(String, String)>,
-    /// `/etc/smolbento/kits`: `name<TAB>ref<TAB>provides` per kit.
-    pub kits_record: String,
+    /// Every kit's name, in order: each gets an install progress event.
+    pub kit_names: Vec<String>,
 }
 
 /// One install-time guest script.
@@ -182,7 +183,8 @@ pub fn apply(
     if !preset {
         set_workload_fields(req, &plan.workload, workdir, agent_file);
     }
-    steps.kits_record = record_kits(&kits, preset, req)?;
+    record_kits(&kits, preset, req)?;
+    steps.kit_names = req.kits.iter().map(|k| k.name.clone()).collect();
     req.long_running = m.long_running;
     // `sbx.docker` (shown by `ls`) says the sandbox has a private dockerd: the docker kit's, or
     // that of a kit providing `docker` in its place.
@@ -311,22 +313,23 @@ fn set_workload_fields(
     });
 }
 
-/// The `/etc/smolbento/kits` record (a preset isn't a kit), pushing each kit's pinned ref on
-/// `req.kits`.
-fn record_kits(kits: &[&Kit], preset: bool, req: &mut CreateRequest) -> Result<String> {
-    let mut record = String::new();
+/// Each kit's record (a preset isn't a kit), pushed on `req.kits` (the `sbx.kits` label).
+fn record_kits(kits: &[&Kit], preset: bool, req: &mut CreateRequest) -> Result<()> {
     for k in kits.iter().skip(usize::from(preset)) {
-        let pinned = pinned_ref(k)?;
-        record.push_str(&format!(
-            "{}\t{pinned}\t{}\t{}\n",
-            k.name,
-            k.provides.join(","),
-            // Empty for a kit that mixes with either.
-            crate::kits::resolve::mixing_format(k).map_or("", Format::name)
-        ));
-        req.kits.push(pinned);
+        req.kits.push(kit_record(k)?);
     }
-    Ok(record)
+    Ok(())
+}
+
+/// The `sbx.kits` record of an applied kit.
+pub fn kit_record(k: &Kit) -> Result<KitRecord> {
+    Ok(KitRecord {
+        name: k.name.clone(),
+        reference: pinned_ref(k)?,
+        provides: k.provides.clone(),
+        // None for a kit that mixes with either.
+        format: crate::kits::resolve::mixing_format(k).map(|f| f.name().to_string()),
+    })
 }
 
 /// The workload image's WORKDIR, unless it's unset or `/`.
@@ -1382,13 +1385,19 @@ mod tests {
         assert_eq!(req.image, "img:1");
         assert_eq!(req.command, Some(vec!["wl".to_string(), "--go".into()]));
         let pinned = |n: &str| format!("acme/{n}:1@sha256:{}", "ab".repeat(32));
-        assert_eq!(req.kits, [pinned("wl"), pinned("m")]);
+        let record = |name: &str, provides: &[&str], format: &str| KitRecord {
+            name: name.into(),
+            reference: pinned(name),
+            provides: provides.iter().map(|p| p.to_string()).collect(),
+            format: Some(format.into()),
+        };
+        assert_eq!(
+            req.kits,
+            [record("wl", &[], "v2"), record("m", &["a", "b"], "v3")]
+        );
         assert!(req.long_running);
         // The fixture workload is a published kit that names an image: a v2 one.
-        assert_eq!(
-            steps.kits_record,
-            format!("wl\t{}\t\tv2\nm\t{}\ta,b\tv3\n", pinned("wl"), pinned("m"))
-        );
+        assert_eq!(steps.kit_names, ["wl", "m"]);
         let labels = create::spec(&req).labels;
         assert_eq!(labels["sbx.long-running"], "true");
         assert_eq!(labels["sbx.command"], r#"["wl","--go"]"#);
@@ -1458,7 +1467,7 @@ mod tests {
         let mut req = request();
         let (steps, _) = run(&p, &mut req, &mut Policy::default()).unwrap();
         assert_eq!(req.command, None);
-        assert!(req.kits.is_empty() && steps.kits_record.is_empty());
+        assert!(req.kits.is_empty() && steps.kit_names.is_empty());
         assert_eq!(
             create::spec(&req).labels,
             create::meta(&request()).to_labels()

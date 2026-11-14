@@ -187,7 +187,7 @@ fn create_tells_what_it_is_doing() {
     let mut plan = kit_plan(&[]);
     let kit = plan.kit.as_mut().unwrap();
     // The docker kit, without install hooks, comes after the kit whose hooks run.
-    kit.steps.kits_record = "docker\tbuiltin:docker\tdocker\nk\tref@sha256:00\tnpm\n".into();
+    kit.steps.kit_names = vec!["docker".into(), "k".into()];
     kit.steps.install.insert(
         0,
         InstallStep {

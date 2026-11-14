@@ -361,6 +361,19 @@ impl<R: Runner> Smolvm<R> {
         Ok(())
     }
 
+    /// Sets and removes labels in one call; works running or stopped (smolvm 1.35).
+    pub fn update_labels(&self, name: &str, set: &[(&str, String)], remove: &[&str]) -> Result<()> {
+        let mut a = args(&["machine", "update", "-n", name]);
+        for (k, v) in set {
+            a.extend(["--label".to_string(), format!("{k}={v}")]);
+        }
+        for k in remove {
+            a.extend(["--remove-label".to_string(), (*k).to_string()]);
+        }
+        self.call(a)?;
+        Ok(())
+    }
+
     pub fn publish(&self, name: &str, ports: &[PortMap]) -> Result<()> {
         self.update_ports(name, "-p", ports)
     }
@@ -595,6 +608,17 @@ mod tests {
                 "machine update -n m -p 8080:80",
                 "machine update -n m --remove-port 8080:80",
             ]
+        );
+    }
+
+    #[test]
+    fn update_labels_sets_and_removes_in_one_call() {
+        let vm = Smolvm::new(FakeRunner::new());
+        vm.update_labels("sbx-x", &[("sbx.kits", "[]".to_string())], &["sbx.old"])
+            .unwrap();
+        assert_eq!(
+            vm.runner().call_lines(),
+            ["machine update -n sbx-x --label sbx.kits=[] --remove-label sbx.old"]
         );
     }
 
