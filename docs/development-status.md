@@ -41,7 +41,7 @@ usage guide is linked from its row in the [Phases](#phases) table.
 | 6b | `sbxenv.yaml` `lifecycle`, `registries`, `entrypoint` and `cmd`; registry logins scoped to a sandbox | Done |
 | 6c | `sbxenv.yaml` `bindings`, `mcp` url servers, `fuse`, `pullPolicy: never`, `writableEnvFiles`; `gemini` retired | Done |
 | 7 | Kit publishing: `kit pack/push/pull/sign/verify` and `push --sign` (v2 kits; cosign signing) | Done |
-| 8 | The `plus` kit, built and published with smolbento itself (an end-to-end check of everything before it) | Planned |
+| 8 | The `nix` kit: Nix, direnv and xz for any agent (`--kit nix`), published to GHCR and signed. See [Usage](usage.md#the-nix-kit) | In progress (publishing in CI) |
 | 9 | `tui` dashboard (bare `sbt` opens it on a terminal) | Planned |
 | 10 | Warm-start pool for near-instant creates; Windows | Planned |
 
