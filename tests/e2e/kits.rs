@@ -1174,3 +1174,63 @@ pub(crate) fn a_signed_kit_verifies_with_its_key() {
         "{stderr}"
     );
 }
+
+/// The shipped `kits/nix` source, built in the builder sandbox.
+fn nix_kit_dir() -> String {
+    format!("{}/kits/nix", env!("CARGO_MANIFEST_DIR"))
+}
+
+/// A trivial build: exercises nix-daemon (the store is root's) without nixpkgs.
+const NIX_BUILD: &str = r#"nix build --impure --no-link --expr 'builtins.derivation { name = "x"; system = builtins.currentSystem; builder = "/bin/sh"; args = [ "-c" "echo ok > $out" ]; }'"#;
+
+/// `kits/nix` on an agent: Nix and its daemon, direnv on the workspace's `.envrc`, the kit's agent
+/// instructions, and the image's accounts left alone.
+#[test]
+#[ignore = "boots real VMs, builds in the builder sandbox and downloads Nix; run with `just e2e`"]
+pub(crate) fn nix_kit_gives_agents_nix_and_direnv() {
+    let e = E2e::new("nixkit");
+    let _builder = BuilderGuard::new();
+    let _reg = Registry::start(&e);
+    std::fs::write(e.workspace().join(".envrc"), "export E2E_DIRENV=yes\n").unwrap();
+    e.create_with_kits(&[&nix_kit_dir()]);
+    let as_agent = |script: &str| e.ok(&["exec", &e.name, "sh", "-c", script]);
+    assert!(as_agent("nix --version").contains("nix"));
+    as_agent(NIX_BUILD);
+    assert_eq!(
+        as_agent("direnv exec . sh -c 'echo $E2E_DIRENV'").trim(),
+        "yes"
+    );
+    assert!(root_sh(&e.name, "getent passwd agent").status.success());
+    let ws = e.workspace();
+    let parent = ws.parent().unwrap().display().to_string();
+    // The agent file lists the kit; its text is beside it.
+    let text = root_out(&e.name, &format!("cat {parent}/kits-agent-context/nix.md"));
+    assert!(text.contains("direnv exec"), "{text}");
+}
+
+/// `kits/nix` on a workload whose image user isn't `agent`.
+#[test]
+#[ignore = "boots real VMs, builds in the builder sandbox and downloads Nix; run with `just e2e`"]
+pub(crate) fn nix_kit_works_for_a_workload_image_user() {
+    let e = E2e::new("nixwl");
+    let _builder = BuilderGuard::new();
+    let reg = Registry::start(&e);
+    let kit = image_user_kit(&reg, "nix-image-user", "somebody", serde_json::Value::Null);
+    let ws = e.workspace();
+    e.ok(&[
+        "create",
+        &kit,
+        ws.to_str().unwrap(),
+        "--kit",
+        &nix_kit_dir(),
+        "--name",
+        &e.name,
+        "--cpus",
+        "1",
+        "-m",
+        "1g",
+    ]);
+    assert_eq!(e.ok(&["exec", &e.name, "id", "-un"]).trim(), "somebody");
+    assert!(e.ok(&["exec", &e.name, "nix", "--version"]).contains("nix"));
+    e.ok(&["exec", &e.name, "sh", "-c", NIX_BUILD]);
+}

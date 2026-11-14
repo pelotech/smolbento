@@ -27,6 +27,18 @@ pub(crate) fn starts_with_syntax(bytes: &[u8]) -> bool {
 /// Kits shipped inside smolbento, by the bare name that loads them.
 const BUILTINS: [(&str, &str); 1] = [("docker", include_str!("../../kits/docker/docker.yaml"))];
 
+/// Bare names for kits smolbento publishes, loaded from their registry like any registry kit
+/// (pulled, source- and signature-checked). The tag follows the kit's 0.x releases.
+const ALIASES: [(&str, &str); 1] = [("nix", "ghcr.io/pelotech/smolbento/kits/nix:latest")];
+
+/// The registry reference a bare alias names. Only the bare word: `./nix` is a path.
+pub fn alias(reference: &str) -> Option<&'static str> {
+    ALIASES
+        .iter()
+        .find(|(n, _)| *n == reference)
+        .map(|(_, r)| *r)
+}
+
 /// The shipped kit a bare REF names. Only the bare word: `./docker` is a path.
 pub fn builtin(reference: &str) -> Option<Result<Kit>> {
     let (name, yaml) = BUILTINS.iter().find(|(n, _)| *n == reference)?;
@@ -98,6 +110,7 @@ fn fetch<R: Runner>(
     position: Position,
     before: &mut dyn FnMut(Fetch),
 ) -> Result<(Kit, bool)> {
+    let reference = alias(reference).unwrap_or(reference);
     let (mut kit, cached) = if let Some(kit) = builtin(reference) {
         (kit?, true)
     } else {
@@ -150,6 +163,7 @@ fn entries(dir: &Path) -> usize {
 /// without pulling or building it: trust is checked, then the name comes from the source (or a
 /// v2 `spec.yaml`'s `name`).
 pub fn kit_name<R: Runner>(ctx: &Ctx<R>, reference: &str) -> Result<String> {
+    let reference = alias(reference).unwrap_or(reference);
     if let Some((name, _)) = BUILTINS.iter().find(|(n, _)| *n == reference) {
         return v3::name_from_source(&Source::Builtin(name));
     }
@@ -495,6 +509,51 @@ mod tests {
         assert!(k.caps.iter().any(|c| c.body == CapBody::Privileged));
         assert_eq!(kit_name(&t.ctx, "docker").unwrap(), "docker");
         assert!(t.calls().is_empty());
+    }
+
+    #[test]
+    fn nix_is_an_alias_for_the_published_kit() {
+        assert_eq!(
+            alias("nix"),
+            Some("ghcr.io/pelotech/smolbento/kits/nix:latest")
+        );
+        assert_eq!(alias("./nix"), None);
+        assert_eq!(alias("docker"), None);
+    }
+
+    #[test]
+    fn an_alias_is_checked_as_its_registry_reference() {
+        let t = test_env(&[("SMOLBENTO_KIT_ALLOWED_SOURCES", r#"["docker.io/"]"#)]);
+        let err = load(&t.ctx, "nix").unwrap_err().to_string();
+        assert!(
+            err.contains("ghcr.io/pelotech/smolbento/kits/nix:latest")
+                && err.contains("kit.allowedSources"),
+            "{err}"
+        );
+        assert!(
+            t.calls().is_empty(),
+            "refused before any pull: {:?}",
+            t.calls()
+        );
+        // With the default sources, the alias names the published kit.
+        assert_eq!(kit_name(&test_env(&[]).ctx, "nix").unwrap(), "nix");
+    }
+
+    #[test]
+    fn a_nix_directory_doesnt_shadow_the_alias() {
+        let t = test_env(&[
+            ("SMOLBENTO_KIT_ALLOW_LOCAL_KITS", "true"),
+            ("SMOLBENTO_KIT_ALLOWED_SOURCES", r#"["docker.io/"]"#),
+        ]);
+        let dir = t.ctx.cwd.join("nix");
+        fs::create_dir(&dir).unwrap();
+        fs::write(dir.join("spec.yaml"), V2).unwrap();
+        assert_eq!(load(&t.ctx, "./nix").unwrap().name, "my-kit");
+        let err = load(&t.ctx, "nix").unwrap_err().to_string();
+        assert!(
+            err.contains("ghcr.io/pelotech/smolbento/kits/nix:latest"),
+            "{err}"
+        );
     }
 
     #[test]

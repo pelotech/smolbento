@@ -6,7 +6,7 @@ smolbento is built in phases. Each phase ships on its own.
 
 ## Current state
 
-Phases 0 to 4, 5a to 5h, and 6 and 7 are done. Phases 8, 9 and 10 are planned. Each feature's
+Phases 0 to 4, 5a to 5h, and 6 to 8 are done. Phases 9 and 10 are planned. Each feature's
 usage guide is linked from its row in the [Phases](#phases) table.
 
 - Before 1.0, recreate sandboxes after upgrading smolbento ([Install](install.md#upgrading)).
@@ -41,7 +41,7 @@ usage guide is linked from its row in the [Phases](#phases) table.
 | 6b | `sbxenv.yaml` `lifecycle`, `registries`, `entrypoint` and `cmd`; registry logins scoped to a sandbox | Done |
 | 6c | `sbxenv.yaml` `bindings`, `mcp` url servers, `fuse`, `pullPolicy: never`, `writableEnvFiles`; `gemini` retired | Done |
 | 7 | Kit publishing: `kit pack/push/pull/sign/verify` and `push --sign` (v2 kits; cosign signing) | Done |
-| 8 | The `plus` kit, built and published with smolbento itself (an end-to-end check of everything before it) | Planned |
+| 8 | The `nix` kit: Nix, direnv and xz for any agent (`--kit nix`), published to GHCR and signed. See [Usage](usage.md#the-nix-kit) | Done |
 | 9 | `tui` dashboard (bare `sbt` opens it on a terminal) | Planned |
 | 10 | Warm-start pool for near-instant creates; Windows | Planned |
 
@@ -75,9 +75,9 @@ meanwhile.
 - **`smolvm machine connect NAME PORT`** (stdin and stdout to a guest port). `ssh -L` forwards run
   `nc`, else bash's `/dev/tcp`, in the sandbox, so they need one of them. Meanwhile: that. Proposal
   to file upstream first, then a small PR.
-- **Saving a sandbox made from a template.** Packing fails in smolvm 1.34.1 ("no flattened rootfs was
-  found") when the pack's machine was created with `--deny-cidr`, as every sandbox is. `--rebase-from-image`
-  drops the first template's files. Meanwhile: saving is refused.
+- **Saving a sandbox made from a template.** Packing a machine created from a pack fails ("no flattened
+  rootfs was found"), with or without `--deny-cidr` (rechecked on 1.35.0; like the closed smolvm#954).
+  `--rebase-from-image` drops the first template's files. Meanwhile: saving is refused.
 - **Per-port host access.** smolvm opens the host's loopback to a guest only as a whole (gateway CIDR
   `100.96.0.1/32`). Meanwhile: a `localhost:PORT` rule opens every host port (documented).
 - **Live allow list with no hosts left.** A `machine update` that leaves CIDRs but no hosts doesn't revoke
@@ -100,7 +100,7 @@ meanwhile.
   doesn't answer. Not yet checked: a name the first resolver refuses (before 1.34 that failed in every VM,
   even when the host resolved it). Meanwhile: no workaround; the e2e tests avoid such names.
 - **Copying a directory out of a sandbox.** `machine cp` uploads directories but downloads single files
-  only. Meanwhile: `sbt cp SANDBOX:/dir ./dir` fails with smolvm's "is a directory".
+  only (rechecked on 1.35.0). Meanwhile: `sbt cp SANDBOX:/dir ./dir` fails with smolvm's "is a directory".
 - **Install-only credentials after install.** smolvm answers `502 credential unavailable` when a binding
   has no value; sbx sends the request without the credential. Meanwhile: a documented difference.
 
@@ -146,6 +146,10 @@ verified on a Mac).
   `just e2e-known-broken` (a non-blocking CI step) runs them. Remove everything tagged
   `WORKAROUND(smolvm 1.35.0 idmap)` once a fixed smolvm is the minimum. Upstream fix:
   [smolvm#2189](https://github.com/smol-machines/smolvm/pull/2189).
+- The `nix` kit's first release: new GHCR packages are private, so an org admin makes
+  `ghcr.io/pelotech/smolbento/kits/nix` public once after it's pushed. The release workflow's
+  verify job logs in, so it passes before that. The kit releases on its own (`nix-kit-v*`); its
+  version starts at 0.0.1.
 - russh from git (commit b541663a8838) until a release pins ssh-key 0.7.0-rc.12 or later: then switch
   to crates.io, drop the `deny.toml` allow-git entry and the flake `outputHashes`.
 

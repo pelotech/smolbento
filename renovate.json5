@@ -6,9 +6,9 @@
   },
   customManagers: [
     {
-      // smolvm installed by the e2e workflow
+      // the smolvm version CI installs (e2e and the nix kit check)
       customType: 'regex',
-      managerFilePatterns: ['/^\\.github/workflows/e2e\\.yaml$/'],
+      managerFilePatterns: ['/^\\.github/actions/smolvm/action\\.yaml$/'],
       matchStrings: ['SMOLVM_VERSION: "(?<currentValue>[^"]+)"'],
       datasourceTemplate: 'github-releases',
       depNameTemplate: 'smol-machines/smolvm',
