@@ -71,7 +71,7 @@ usage guide is linked from its row in the [Phases](#phases) table.
 
 ## Needs smolvm support (later decisions)
 
-Changes we'd propose to smolvm. Each item says what smolvm 1.34.4 lacks and what smolbento does
+Changes we'd propose to smolvm. Each item says what smolvm 1.35 lacks and what smolbento does
 meanwhile.
 
 - **Saving a sandbox made from a template.** Packing fails in smolvm 1.34.1 ("no flattened rootfs was

@@ -5,7 +5,7 @@ Start with `sbt diagnose`. Add `-D` to any command to print the smolvm commands 
 
 ## `smolvm 1.x is too old`
 
-Cause: smolvm is older than 1.34.4.
+Cause: smolvm is older than 1.35.0.
 
 ```sh
 brew upgrade smolvm

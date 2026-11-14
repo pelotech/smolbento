@@ -31,7 +31,7 @@ only some checkouts have it. If it's there, read the relevant section before cha
 
 ## smolvm behaviour to rely on
 
-As of smolvm 1.34.4. Check the reference source before depending on anything not listed here.
+As of smolvm 1.35. Check the reference source before depending on anything not listed here.
 
 - **Errors:** `--error-format json` prints `{"error":{"code":…,"message":…}}` on stderr. The exit
   status is unchanged. Branch on `code` (`NOT_FOUND`, `CONFLICT`, `INTERRUPTED`, `CONFIG_ERROR`,
@@ -44,6 +44,9 @@ As of smolvm 1.34.4. Check the reference source before depending on anything not
   too. `--mount-socket` sockets are unaffected. So create with the session user (`agent`, or a
   workload's image user; `_builder` stays root), and never remap uids. The user must exist in the
   image, or the start fails. Startup steps exec as root.
+- **Labels change in any state (1.35):** `machine update --label KEY=VALUE` and `--remove-label KEY`
+  work on a running or stopped machine and need no restart, so sandbox metadata can change after
+  create.
 - **Always pass `--name`.** Without it, smolvm targets `$SMOLVM_MACHINE_NAME` (a user's direnv may set
   it), else `default`.
 - **`machine update` needs a stopped machine.** The exception is allow-list changes (`--allow-host`,
