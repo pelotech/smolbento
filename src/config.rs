@@ -180,6 +180,12 @@ pub const SETTINGS: &[SettingDef] = &[
         help: "Optional fixed host SSH agent socket path. Empty uses each client's current SSH_AUTH_SOCK.",
     },
     SettingDef {
+        key: "ssh.knownHostsFile",
+        env: "SMOLBENTO_SSH_KNOWN_HOSTS_FILE",
+        default: "~/.ssh/known_hosts",
+        help: "known_hosts file whose host keys decide which servers an ssh-agent@1 `authenticate` list admits. Read at each login.",
+    },
+    SettingDef {
         key: "env.rememberHostCommands",
         env: "SMOLBENTO_ENV_REMEMBER_HOST_COMMANDS",
         default: "false",
