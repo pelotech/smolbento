@@ -95,6 +95,10 @@ pub struct CreateSpec {
     pub workdir: Option<String>,
     pub cpus: Option<u32>,
     pub memory_mib: Option<u64>,
+    /// `--storage`: the disk with image layers and guest-only volumes (Docker's data); GiB.
+    pub storage_gib: Option<u32>,
+    /// `--overlay`: the disk with the root filesystem's changes; GiB.
+    pub overlay_gib: Option<u32>,
     pub env: Vec<(String, String)>,
     pub ports: Vec<PortMap>,
     pub user: Option<String>,
@@ -147,6 +151,12 @@ impl CreateSpec {
         }
         if let Some(m) = self.memory_mib {
             flag(&mut a, "--mem", m.to_string());
+        }
+        if let Some(s) = self.storage_gib {
+            flag(&mut a, "--storage", s.to_string());
+        }
+        if let Some(o) = self.overlay_gib {
+            flag(&mut a, "--overlay", o.to_string());
         }
         for (k, v) in &self.env {
             flag(&mut a, "-e", format!("{k}={v}"));
@@ -663,6 +673,24 @@ mod tests {
             "{line}"
         );
         assert!(!line.contains("--image"), "{line}");
+    }
+
+    #[test]
+    fn create_sizes_the_disks_in_gib() {
+        let spec = CreateSpec {
+            name: "sbx-d".into(),
+            image: "img:1".into(),
+            storage_gib: Some(30),
+            overlay_gib: Some(24),
+            ..Default::default()
+        };
+        let line = spec.to_args().join(" ");
+        assert!(line.contains(" --storage 30 --overlay 24"), "{line}");
+        let plain = CreateSpec::default().to_args().join(" ");
+        assert!(
+            !plain.contains("--storage") && !plain.contains("--overlay"),
+            "{plain}"
+        );
     }
 
     #[test]

@@ -14,6 +14,7 @@ An environment variable beats the config file, which beats the default. Booleans
 
 | Setting | Env var | Default | Meaning |
 |---|---|---|---|
+| `sandbox.disk.dockerVolume` | `SMOLBENTO_SANDBOX_DISK_DOCKER_VOLUME` | (smolvm's default, 20 GiB) | Disk for Docker's data in new sandboxes, such as `30g`. smolvm keeps image layers on the same disk. An environment file's `dockerSize` wins. |
 | `docker.enabled` | `SMOLBENTO_DOCKER` | `true` | Docker-enabled agent images, and a private Docker engine in each sandbox. Applies to sandboxes created afterwards. |
 | `smolvm.path` | `SMOLBENTO_SMOLVM` | `smolvm` | The smolvm binary to run. |
 | `smolvm.image-cache-size` | `SMOLBENTO_IMAGE_CACHE_SIZE` | `40g` | Disk for smolvm's cache of ready-to-boot images. See [Details](#details). |

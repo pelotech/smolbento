@@ -13,6 +13,7 @@ use crate::kits::model::{Content, Kind, Kit, Source};
 use crate::kits::resolve::{Plan, resolve_for};
 use crate::sandbox::{CreateRequest, name, options};
 use crate::smolvm::Runner;
+use crate::util;
 use crate::workspace::{self, Workspace, clone};
 
 /// Turns sbx's create options into a [`CreateRequest`]. `default_to_cwd`: `run` mounts the current
@@ -105,6 +106,19 @@ fn base_request<R: Runner>(
         Some(m) => options::parse_memory(m)?,
         None => options::default_memory_mib(options::host_memory_mib()?),
     };
+    let size = |v: &Option<String>, what| v.as_deref().map(|v| util::size_gib(v, what)).transpose();
+    let overlay_gib = size(&opts.root_size, "sandboxOptions.rootSize")?;
+    // Docker's data and a clone's workspace both live on the storage disk: the larger size wins.
+    let setting = Some(ctx.settings.value("sandbox.disk.dockerVolume")?).filter(|v| !v.is_empty());
+    let docker = match &opts.docker_size {
+        Some(_) => size(&opts.docker_size, "sandboxOptions.dockerSize")?,
+        None => size(&setting, "sandbox.disk.dockerVolume")?,
+    };
+    let cloned = size(
+        &opts.cloned_workspace_size,
+        "sandboxOptions.clonedWorkspaceSize",
+    )?;
+    let storage_gib = docker.max(cloned);
     let env = options::parse_env(&opts.env, &opts.env_file, &ctx.env)?;
     let ports = opts
         .publish
@@ -120,6 +134,8 @@ fn base_request<R: Runner>(
         workspaces,
         cpus,
         memory_mib,
+        storage_gib,
+        overlay_gib,
         env,
         ports,
         created: ctx.now,

@@ -559,6 +559,14 @@ pub struct SandboxOpts {
     /// An environment file's `sandboxOptions.fuse: false`.
     #[arg(skip)]
     pub no_fuse: bool,
+    /// An environment file's `sandboxOptions` disk sizes (`rootSize`, `dockerSize`,
+    /// `clonedWorkspaceSize`), as written.
+    #[arg(skip)]
+    pub root_size: Option<String>,
+    #[arg(skip)]
+    pub docker_size: Option<String>,
+    #[arg(skip)]
+    pub cloned_workspace_size: Option<String>,
     /// An environment's files in its mounted workspaces, kept read-only in the guest.
     #[arg(skip)]
     pub read_only_files: Vec<String>,

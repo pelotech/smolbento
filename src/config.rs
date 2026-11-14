@@ -102,6 +102,12 @@ pub struct SettingDef {
 
 pub const SETTINGS: &[SettingDef] = &[
     SettingDef {
+        key: "sandbox.disk.dockerVolume",
+        env: "SMOLBENTO_SANDBOX_DISK_DOCKER_VOLUME",
+        default: "",
+        help: "Disk for Docker's data (and image layers) in new sandboxes, e.g. 30g; empty keeps smolvm's default (20g)",
+    },
+    SettingDef {
         key: "docker.enabled",
         env: "SMOLBENTO_DOCKER",
         default: "true",

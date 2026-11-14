@@ -857,6 +857,43 @@ mod tests {
     }
 
     #[test]
+    fn disk_sizes_come_from_the_options_and_the_docker_volume_setting() {
+        let t = test_env(&[]);
+        let req = build_request(&t.ctx, "shell", &[], &SandboxOpts::default(), false).unwrap();
+        assert_eq!(
+            (req.storage_gib, req.overlay_gib),
+            (None, None),
+            "smolvm's own sizes"
+        );
+
+        let t = test_env(&[("SMOLBENTO_SANDBOX_DISK_DOCKER_VOLUME", "40g")]);
+        let req = build_request(&t.ctx, "shell", &[], &SandboxOpts::default(), false).unwrap();
+        assert_eq!(req.storage_gib, Some(40));
+
+        // An environment file's sizes: the larger storage size wins, and sizes round up to GiB.
+        let opts = SandboxOpts {
+            root_size: Some("24g".into()),
+            docker_size: Some("30g".into()),
+            cloned_workspace_size: Some("35500m".into()),
+            ..Default::default()
+        };
+        let req = build_request(&t.ctx, "shell", &[], &opts, false).unwrap();
+        assert_eq!((req.storage_gib, req.overlay_gib), (Some(35), Some(24)));
+        let opts = SandboxOpts {
+            root_size: Some("512m".into()),
+            ..Default::default()
+        };
+        let req = build_request(&t.ctx, "shell", &[], &opts, false).unwrap();
+        assert_eq!(req.overlay_gib, Some(1));
+        let opts = SandboxOpts {
+            root_size: Some("lots".into()),
+            ..Default::default()
+        };
+        let err = build_request(&t.ctx, "shell", &[], &opts, false).unwrap_err();
+        assert!(err.to_string().contains("rootSize"), "{err}");
+    }
+
+    #[test]
     fn a_template_saved_from_another_agent_is_refused() {
         let t = test_env(&[]);
         saved_template(&t, "t:v1", "shell");

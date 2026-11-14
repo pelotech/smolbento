@@ -456,8 +456,8 @@ sbt create docker.io/sbx/antigravity:latest . --kit nix
 - Nix's default profile and `/home/agent/.nix-profile/bin` come first on `PATH`; on a workload image
   whose user isn't `agent`, add that user's `~/.nix-profile/bin` yourself for `nix profile add`.
 - It brings its own network rules for the Nix caches and GitHub, for policies other than `balanced`.
-- The store is on the sandbox's disk, smolvm's 10 GiB overlay by default; smolbento can't size it
-  yet, so very large dev shells may run out of space.
+- The store is on the root filesystem's disk, smolvm's 10 GiB overlay by default. For large dev
+  shells, raise it with `sandboxOptions.rootSize` in an environment file.
 - `nix` is `:latest` while the kit is 0.x and may change; pin a version
   (`ghcr.io/pelotech/smolbento/kits/nix:0.0.1`) or a digest in environment files. Each release
   notes the smolbento it needs.
@@ -824,7 +824,9 @@ bindings:
 
 Not supported yet (exit 2, naming the field): `mcp` servers with a `command`,
 `sandboxOptions.profile`, `display`, `gpu` and `usb`, and `pullPolicy: always`. `fuse` and
-`pullPolicy: missing|never` are accepted. Environment files inside a writable mounted workspace are
+`pullPolicy: missing|never` are accepted. `rootSize` sizes the disk for the root filesystem's
+changes, and `dockerSize` and `clonedWorkspaceSize` the disk for Docker's data and a clone's
+workspace (the larger wins), in sizes such as `30g`, rounded up to whole GiB. Environment files inside a writable mounted workspace are
 made read-only at each start, unless `writableEnvFiles: true`. `refresh` and `backend` on a secret
 do nothing. Secret service names must be ones `sbt secret set` knows. See [sbx
 compatibility](sbx-compatibility.md#environment-files).
