@@ -81,22 +81,6 @@ pub trait Control {
     fn settle(&self) {}
 }
 
-/// No service manager: every operation is a no-op.
-struct Unavailable;
-
-impl Control for Unavailable {
-    fn usable(&self) -> bool {
-        false
-    }
-    fn load(&self, _: &UnitPaths) -> Result<()> {
-        Ok(())
-    }
-    fn loaded(&self, _: &UnitPaths) -> bool {
-        false
-    }
-    fn unload(&self, _: &UnitPaths) {}
-}
-
 pub struct HostServices {
     flavor: Flavor,
     ns: String,
@@ -104,7 +88,8 @@ pub struct HostServices {
     sock_dir: PathBuf,
     /// The smolbento the units run, as found on PATH.
     exe: PathBuf,
-    ctl: Box<dyn Control>,
+    /// `None`: no service manager (units off).
+    ctl: Option<Box<dyn Control>>,
     usable: OnceLock<bool>,
 }
 
@@ -180,24 +165,32 @@ impl HostServices {
             unit_dir,
             sock_dir,
             exe,
-            ctl,
+            ctl: Some(ctl),
             usable: OnceLock::new(),
         }
     }
 
+    /// No service manager: nothing is ever written or loaded.
     pub fn disabled() -> Self {
-        HostServices::new(
-            Flavor::Launchd,
-            String::new(),
-            PathBuf::new(),
-            PathBuf::new(),
-            PathBuf::new(),
-            Box::new(Unavailable),
-        )
+        HostServices {
+            flavor: Flavor::Launchd,
+            ns: String::new(),
+            unit_dir: PathBuf::new(),
+            sock_dir: PathBuf::new(),
+            exe: PathBuf::new(),
+            ctl: None,
+            usable: OnceLock::new(),
+        }
     }
 
     pub fn usable(&self) -> bool {
-        *self.usable.get_or_init(|| self.ctl.usable())
+        self.active().is_some()
+    }
+
+    /// The service manager, when there is one and it can be used.
+    fn active(&self) -> Option<&dyn Control> {
+        let ctl = self.ctl.as_deref()?;
+        (*self.usable.get_or_init(|| ctl.usable())).then_some(ctl)
     }
 
     /// The directory of the sockets, which must be private and ours.
@@ -287,24 +280,25 @@ impl HostServices {
         paths: &Paths,
         env: &BTreeMap<String, String>,
     ) -> Result<()> {
-        if !self.usable() {
+        let Some(ctl) = self.active() else {
             return Ok(());
-        }
-        let mut first_error = None;
-        for kind in Kind::ALL {
-            let done = if kinds.contains(&kind) {
-                self.ensure(name, kind, &service_env(paths, env, self.flavor))
+        };
+        first_error(Kind::ALL.map(|kind| {
+            if kinds.contains(&kind) {
+                self.ensure(ctl, name, kind, &service_env(paths, env, self.flavor))
             } else {
-                self.remove_kind(name, kind)
-            };
-            if let Err(e) = done {
-                first_error.get_or_insert(e);
+                self.remove_kind(ctl, name, kind)
             }
-        }
-        first_error.map_or(Ok(()), Err)
+        }))
     }
 
-    fn ensure(&self, name: &str, kind: Kind, env: &[(String, String)]) -> Result<()> {
+    fn ensure(
+        &self,
+        ctl: &dyn Control,
+        name: &str,
+        kind: Kind,
+        env: &[(String, String)],
+    ) -> Result<()> {
         if !crate::bridge::ensure_private_dir(&self.sock_dir) {
             bail!(
                 "{} isn't a private directory owned by you",
@@ -319,7 +313,7 @@ impl HostServices {
             .iter()
             .zip(&texts)
             .all(|(f, t)| current(f).as_deref() == Some(t))
-            && self.ctl.loaded(&unit)
+            && ctl.loaded(&unit)
         {
             return Ok(());
         }
@@ -328,24 +322,18 @@ impl HostServices {
         for (f, t) in unit.files.iter().zip(&texts) {
             fs::write(f, t).with_context(|| format!("writing {}", f.display()))?;
         }
-        self.ctl.load(&unit)
+        ctl.load(&unit)
     }
 
     /// Unloads and deletes the units and sockets of sandbox `name`.
     pub fn remove(&self, name: &str) -> Result<()> {
-        if !self.usable() {
+        let Some(ctl) = self.active() else {
             return Ok(());
-        }
-        let mut first_error = None;
-        for kind in Kind::ALL {
-            if let Err(e) = self.remove_kind(name, kind) {
-                first_error.get_or_insert(e);
-            }
-        }
-        first_error.map_or(Ok(()), Err)
+        };
+        first_error(Kind::ALL.map(|kind| self.remove_kind(ctl, name, kind)))
     }
 
-    fn remove_kind(&self, name: &str, kind: Kind) -> Result<()> {
+    fn remove_kind(&self, ctl: &dyn Control, name: &str, kind: Kind) -> Result<()> {
         let unit = self.paths_of(name, kind);
         for slot in self.slot_files(name, kind) {
             let _ = fs::remove_file(slot);
@@ -356,7 +344,7 @@ impl HostServices {
         if !present {
             return Ok(());
         }
-        self.ctl.unload(&unit);
+        ctl.unload(&unit);
         let mut result = Ok(());
         for f in &unit.files {
             if let Err(e) = fs::remove_file(f)
@@ -368,7 +356,7 @@ impl HostServices {
         if socket_kind.is_ok_and(|t| t.is_socket()) {
             let _ = fs::remove_file(&unit.socket);
         }
-        self.ctl.settle();
+        ctl.settle();
         result
     }
 
@@ -407,17 +395,11 @@ impl HostServices {
         names.dedup();
         names
     }
+}
 
-    /// Removes the units of `orphans(live)`; returns the sandbox names. Problems only warn.
-    pub fn sweep(&self, live: &[String]) -> Vec<String> {
-        let gone = self.orphans(live);
-        for name in &gone {
-            if let Err(e) = self.remove(name) {
-                eprintln!("warning: removing the leftover host services of {name}: {e:#}");
-            }
-        }
-        gone
-    }
+/// The first error of `results`; an array, so every one has already run.
+fn first_error<const N: usize>(results: [Result<()>; N]) -> Result<()> {
+    results.into_iter().find(Result::is_err).unwrap_or(Ok(()))
 }
 
 /// The environment `_serve` needs: this setup's directories and settings, `HOME` and `PATH`
@@ -974,7 +956,9 @@ mod tests {
         }
         let live = vec!["live".to_string()];
         assert_eq!(s.orphans(&live), ["also-gone", "gone"]);
-        assert_eq!(s.sweep(&live), ["also-gone", "gone"]);
+        for n in s.orphans(&live) {
+            s.remove(&n).unwrap();
+        }
         assert_eq!(s.units().len(), 2);
         assert!(s.orphans(&live).is_empty());
     }

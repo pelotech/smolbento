@@ -157,13 +157,13 @@ pub fn refresh_services<R: Runner>(ctx: &Ctx<R>, sb: &Sandbox) {
 /// Removes the units of sandboxes smolvm no longer has (deleted with `smolvm machine delete`,
 /// which gives no hook). Called by commands that change state; names are returned.
 pub fn sweep_orphans<R: Runner>(ctx: &Ctx<R>) -> Vec<String> {
-    if ctx.services.units().is_empty() {
-        return Vec::new();
+    let gone = orphan_services(ctx);
+    for name in &gone {
+        if let Err(e) = ctx.services.remove(name) {
+            eprintln!("warning: removing the leftover host services of {name}: {e:#}");
+        }
     }
-    match live_sandboxes(ctx) {
-        Some(live) => ctx.services.sweep(&live),
-        None => Vec::new(),
-    }
+    gone
 }
 
 /// Sandbox names with units here and no machine in smolvm: `sweep_orphans` without removing.
