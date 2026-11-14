@@ -92,8 +92,6 @@ meanwhile.
   smolvm's proxy only substitutes credentials. Meanwhile: kits get passthrough OAuth only, and method/path
   rules (kits' and `policy allow --method/--path`) aren't enforced. Preferred: method/path matching and
   an OAuth sentinel mode upstream in smolvm. If declined: smolbento's own egress proxy, as its own phase.
-- **`machine update --label`.** Labels are create-time only. Meanwhile: kits added with `kit add` aren't
-  listed on a stopped sandbox until it starts. Cosmetic.
 - **Guest DNS upstream order.** Since smolvm 1.34, guest DNS moves to the host's next resolver when one
   doesn't answer. Not yet checked: a name the first resolver refuses (before 1.34 that failed in every VM,
   even when the host resolved it). Meanwhile: no workaround; the e2e tests avoid such names.
