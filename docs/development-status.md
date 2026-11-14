@@ -1,6 +1,6 @@
 # Development status
 
-Last updated: 2026-11-13.
+Last updated: 2026-11-14.
 
 smolbento is built in phases. Each phase ships on its own.
 
@@ -36,7 +36,6 @@ usage guide is linked from its row in the [Phases](#phases) table.
 | 5f | Static MCP: `mcp add/ls/inspect/rm`, `run/create --static-mcp`, header secrets as smolvm credentials, Claude Code only. No gateway, OAuth, dynamic mode or live load/unload | Done |
 | 5g | `ssh-agent@1` `authenticate` limits: logins only to named servers, checked against your known hosts (`ssh.knownHostsFile`). See [Usage](usage.md#ssh-agent) | Done |
 | 5h | `setup ssh` and `ssh NAME.sbx`: shells, exec and `-L` forwards through `sbt ssh proxy`. See [Usage](usage.md#ssh-into-a-sandbox). Not done: `--auto-create`, and the `ssh.autoCreate`, `ssh.defaultAgent`, `ssh.defaultTemplate`, `ssh.workspaceRoot` settings (sbx doesn't document them) | Done |
-| 5 | The rest | Planned |
 | 6a | `env plan`, remembered approvals, `env.rememberHostCommands` | Done |
 | 6b | `sbxenv.yaml` `lifecycle`, `registries`, `entrypoint` and `cmd`; registry logins scoped to a sandbox | Done |
 | 6c | `sbxenv.yaml` `bindings`, `mcp` url servers, `fuse`, `pullPolicy: never`, `writableEnvFiles`; `gemini` retired | Done |
@@ -124,6 +123,16 @@ in [sbx compatibility](sbx-compatibility.md). Worth another look:
 - **Sandbox variables.** smolbento omits sbx's fake credential values, `MCP_*`, proxy settings,
   `GIT_CONFIG_*` and the SSH/display variables. It sets `SBX_CRED_*_MODE` only for `shell` and `claude`,
   the only agents measured.
+- **From sbx 0.51–0.53, for later:**
+  - Built-in agents are published kits (`docker.io/sbx/<agent>:latest`) in sbx 0.51; Docker no
+    longer publishes the `docker/sandbox-templates` images for codex, cursor, devin, docker-agent
+    and opencode, and no longer refreshes `shell`. smolbento's presets still pin those images, so
+    those agents get no updates. Moving presets to the published kits is a phase of its own.
+  - `kit add` installs a kit's image layers into a running v3 sandbox; smolbento says `recreate
+    required` (smolvm can't add layers to a running machine).
+  - `sbx df` (disk usage of images, sandboxes and volumes).
+  - HTTP rules with `--query` parameters, and case-insensitive path matching: stored only, like
+    `--method`/`--path`, until smolvm enforces request rules.
 - **Kept on purpose; recheck if sbx changes:** `kit add` applies live (sbx recreates the sandbox and
   refuses some kits); plain HTTP for loopback registries (sbx: HTTPS only); the `_builder` sandbox (sbx:
   host buildx); the built-in `docker` kit; v3 mixins on built-in agents (sbx refuses).
