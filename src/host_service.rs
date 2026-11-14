@@ -113,6 +113,10 @@ pub fn namespace(paths: &Paths) -> String {
     hex(&Sha256::digest(paths.data.as_os_str().as_encoded_bytes()))[..8].to_string()
 }
 
+/// Connections a unit serves at once per sandbox and kind (`_serve` holds one `flock`ed slot file
+/// each; the in-process agent server allowed the same). More are closed on arrival.
+pub const MAX_CONNECTIONS: usize = 8;
+
 /// Socket paths must be shorter than this: macOS caps them at 104 bytes including the NUL.
 const MAX_SOCKET_PATH: usize = 104;
 
@@ -221,6 +225,14 @@ impl HostServices {
         (s.bridge.as_os_str().len() < MAX_SOCKET_PATH
             && s.agent.as_os_str().len() < MAX_SOCKET_PATH)
             .then_some(s)
+    }
+
+    /// The slot files `_serve` locks for sandbox `name`'s `kind`, beside its socket.
+    pub fn slot_files(&self, name: &str, kind: Kind) -> Vec<PathBuf> {
+        let sock = self.socket_path(name, kind);
+        (0..MAX_CONNECTIONS)
+            .map(|i| sock.with_extension(format!("slot{i}")))
+            .collect()
     }
 
     fn paths_of(&self, name: &str, kind: Kind) -> UnitPaths {
@@ -335,6 +347,9 @@ impl HostServices {
 
     fn remove_kind(&self, name: &str, kind: Kind) -> Result<()> {
         let unit = self.paths_of(name, kind);
+        for slot in self.slot_files(name, kind) {
+            let _ = fs::remove_file(slot);
+        }
         let socket_kind = fs::symlink_metadata(&unit.socket).map(|m| m.file_type());
         let present = unit.files.iter().any(|f| f.exists())
             || socket_kind.as_ref().is_ok_and(FileTypeExt::is_socket);
@@ -549,7 +564,7 @@ fn systemd_quote(s: &str) -> String {
 pub fn render_systemd_socket(sandbox: &str, kind: Kind, socket: &Path) -> String {
     format!(
         "[Unit]\nDescription=smolbento {} socket for sandbox {}\n\n[Socket]\nListenStream={}\n\
-         SocketMode=0600\nDirectoryMode=0700\nAccept=yes\n\n[Install]\nWantedBy=sockets.target\n",
+         SocketMode=0600\nDirectoryMode=0700\nAccept=yes\nMaxConnections={MAX_CONNECTIONS}\n\n[Install]\nWantedBy=sockets.target\n",
         kind.as_str(),
         sandbox.replace('%', "%%"),
         socket.display().to_string().replace('%', "%%"),
@@ -790,6 +805,7 @@ mod tests {
             "SocketMode=0600\n",
             "DirectoryMode=0700\n",
             "Accept=yes\n",
+            "MaxConnections=8\n",
             "WantedBy=sockets.target",
             "sandbox a%%b",
         ] {
@@ -931,8 +947,11 @@ mod tests {
         // The socket launchd leaves behind after bootout.
         let sock = s.plan("s1").unwrap().agent;
         let _l = UnixListener::bind(&sock).unwrap();
+        let slot = s.slot_files("s1", Kind::Agent).remove(0);
+        fs::write(&slot, "").unwrap();
         s.remove("s1").unwrap();
         assert!(!sock.exists());
+        assert!(!slot.exists(), "the slot files go too");
         assert_eq!(s.units(), [("s2".to_string(), Kind::Agent)]);
         assert!(
             ctl.calls()
