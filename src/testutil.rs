@@ -190,10 +190,9 @@ pub fn root_sh<'a>(machine: &'a str, script: &'a str) -> [&'a str; 10] {
     ]
 }
 
-/// `machine status --json` output for a smolbento sandbox; `sbx.mapped` is `true` unless given.
+/// `machine status --json` output for a smolbento sandbox.
 pub fn machine_json(machine: &str, state: &str, labels: &[(&str, &str)]) -> String {
-    let mut labels: BTreeMap<&str, &str> = labels.iter().copied().collect();
-    labels.entry("sbx.mapped").or_insert("true");
+    let labels: BTreeMap<&str, &str> = labels.iter().copied().collect();
     serde_json::json!({
         "name": machine,
         "state": state,

@@ -10,8 +10,7 @@ engine stay off your machine. The agent reaches your machine only through:
 - the network.
 
 In every policy mode, sandboxes can't reach your machine's localhost (`127.0.0.1` or `::1`) unless
-you add a `localhost` rule. Sandboxes created with smolbento 0.2.1 or earlier can. Recreate them
-with `sbt rm`, then create them again.
+you add a `localhost` rule.
 
 ### Host services (`localhost` rules)
 
@@ -23,8 +22,7 @@ names:
   `policy allow` warns about this each time.
 - A sandbox gets host access only if a `localhost` allow rule applies to it at create. Any other
   sandbox keeps your loopback blocked for its life, and a later rule doesn't open it. `policy allow`
-  names those sandboxes. Sandboxes created before smolbento had host services keep the block until
-  recreated.
+  names those sandboxes.
 - Closing is best-effort. `policy rm` closes the port in a running sandbox at once. A sandbox
   created with host access can still reach your localhost by other routes: a broad allow CIDR, a
   DNS answer covering `100.96.0.1`, the always-allowed `127.0.0.0/8` in restricted allow lists, or

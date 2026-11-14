@@ -13,35 +13,6 @@ fn find_maps_name_and_reads_labels() {
 }
 
 #[test]
-fn a_sandbox_from_an_older_smolbento_is_refused_before_smolvm_starts_it() {
-    let old = stopped().replace("\"sbx.mapped\": \"true\",", "");
-    let vm = vm_with(&old);
-    let mut sb = get(&vm, "claude-myrepo").unwrap();
-    assert!(!sb.meta.mapped);
-    let want = "sandbox claude-myrepo was created by an older smolbento; recreate it \
-                (sbt rm claude-myrepo, then create it again)";
-    assert_eq!(start(&vm, &sb, &plan()).unwrap_err().to_string(), want);
-    assert_eq!(
-        ensure_running(&vm, &mut sb, || Ok(plan()))
-            .unwrap_err()
-            .to_string(),
-        want
-    );
-    // Even when it's running: entering it is refused too.
-    let mut running = get(
-        &vm_with(&STATUS.replace("\"sbx.mapped\": \"true\",", "")),
-        "claude-myrepo",
-    )
-    .unwrap();
-    assert!(ensure_running(&vm, &mut running, || Ok(plan())).is_err());
-    let lines = vm.runner().call_lines();
-    assert!(
-        !lines.iter().any(|l| l.starts_with("machine start")),
-        "{lines:#?}"
-    );
-}
-
-#[test]
 fn get_missing_is_a_clear_error() {
     let fake = FakeRunner::new();
     fake.fail(&["machine", "status"], "NOT_FOUND", "vm not found");
@@ -229,23 +200,17 @@ fn a_failed_setup_step_stops_the_machine() {
     let fake = FakeRunner::new();
     fake.ok(&["machine", "status"], &stopped());
     fake.fail(
-        &[
-            "machine",
-            "exec",
-            "--name",
-            "sbx-claude-myrepo",
-            "-u",
-            "root",
-            "-d",
-        ],
+        &root_sh("sbx-claude-myrepo", &startup_cmd(None)),
         "EXEC_FAILED",
-        "dockerd: not found",
+        "startup hook failed",
     );
     let vm = Smolvm::new(fake);
     let mut sb = get(&vm, "claude-myrepo").unwrap();
-    assert!(sb.meta.docker);
     let err = ensure_running(&vm, &mut sb, || Ok(plan())).unwrap_err();
-    assert!(format!("{err:#}").contains("starting dockerd"), "{err:#}");
+    assert!(
+        format!("{err:#}").contains("startup hook failed"),
+        "{err:#}"
+    );
     assert!(!sb.is_running());
     assert_eq!(
         vm.runner().call_lines().last().unwrap(),

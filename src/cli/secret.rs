@@ -1328,7 +1328,15 @@ mod tests {
         t.sbt(&["secret", "set", "github", "-t", "g", "--sandbox", "a1"])
             .unwrap();
         let mut p = crate::policy::Policy::load(&t.ctx.paths).unwrap();
-        p.set_deny_network("a1", true);
+        p.add_rule(
+            Some("a1"),
+            crate::policy::Decision::Deny,
+            "evil.com",
+            "added",
+            None,
+            None,
+        )
+        .unwrap();
         p.save(&t.ctx.paths).unwrap();
         let a1 = machine_json("sbx-a1", "stopped", &[("sbx.name", "a1")]);
         t.runner().ok(&["machine", "status"], &a1);

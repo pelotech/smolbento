@@ -969,12 +969,11 @@ mod tests {
         assert!(list.patterns().contains(&"registry.npmjs.org".to_string()));
         let p = Policy::load(&t.ctx.paths).unwrap();
         assert_eq!(added, vec![p.sandboxes["s1"].rules[0].id.clone()]);
-        assert!(!p.sandboxes["s1"].deny_network);
     }
 
     #[test]
-    fn legacy_deny_network_still_compiles_to_deny_all() {
-        // Written by v0.2.0's `--deny-network`.
+    fn a_0_2_0_policy_file_still_loads() {
+        // v0.2.0's `--deny-network` wrote this; the field is ignored now.
         let t = test_env(&[]);
         set_policy(
             &t,
@@ -985,38 +984,24 @@ mod tests {
             name: "s1".into(),
             ..Default::default()
         };
-        assert!(
-            prepare_create(&t.ctx, &mut req, &[], None)
-                .unwrap()
-                .0
-                .is_empty()
-        );
+        prepare_create(&t.ctx, &mut req, &[], None).unwrap();
         let NetworkSpec::Restricted(list) = &req.network else {
             panic!("restricted")
         };
-        assert!(list.hosts().contains(&"api.anthropic.com".to_string()));
         assert!(
-            !list.patterns().contains(&"registry.npmjs.org".to_string()),
-            "deny-all ignores balanced"
+            list.patterns().contains(&"registry.npmjs.org".to_string()),
+            "balanced, like any sandbox without rules"
         );
-        let plan = start_plan(&t.ctx, &meta("s1", &[], &[])).unwrap();
-        assert!(matches!(plan.network, NetworkSpec::Restricted(_)));
-        let mut p = Policy::load(&t.ctx.paths).unwrap();
-        assert!(p.sandboxes["s1"].deny_network, "still read");
-        p.reset();
-        assert!(p.sandboxes["s1"].deny_network, "reset keeps it");
     }
 
     #[test]
     fn start_without_a_mode_and_without_a_terminal_is_an_error() {
         let t = test_env(&[]);
-        set_policy(&t, "[sandboxes.d1]\ndeny_network = true\n");
-        for name in ["s1", "d1"] {
-            let err = start_plan(&t.ctx, &meta(name, &[], &[]))
-                .unwrap_err()
-                .to_string();
-            assert!(err.contains("sbt policy init"), "{err}");
-        }
+        set_policy(&t, "");
+        let err = start_plan(&t.ctx, &meta("s1", &[], &[]))
+            .unwrap_err()
+            .to_string();
+        assert!(err.contains("sbt policy init"), "{err}");
         assert_eq!(Policy::load(&t.ctx.paths).unwrap().mode, None);
     }
 

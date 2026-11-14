@@ -58,22 +58,10 @@ sbt settings unset <key>       # reset one setting, or fix the file by hand
 
 Cause: the sandbox was created by an older smolbento, or the workspace is owned by root.
 
-- Recreate sandboxes made by an older smolbento (see the next section).
+- Recreate sandboxes made by an older smolbento (see [Install](install.md#upgrading)).
 - Make sure the workspace isn't owned by root.
 
 A custom `-t` image must have an `agent` user, or the sandbox won't start.
-
-## `was created by an older smolbento`
-
-Cause: the sandbox predates workspace mapping (no `sbx.mapped` label), so it can't start.
-
-```sh
-sbt rm NAME
-sbt create AGENT PATH --name NAME
-```
-
-`ls`, `inspect`, `rm`, `prune` and `reset` still work on it. To keep what's installed inside, save it
-as a template first (see [Install](install.md#upgrading-sandboxes-from-an-older-smolbento)).
 
 ## The first run is slow
 

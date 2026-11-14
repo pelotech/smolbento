@@ -69,7 +69,6 @@ pub(super) fn clone_sandbox() -> (Sandbox, StartPlan) {
     let sb = Sandbox {
         meta: Meta {
             name: "r".into(),
-            mapped: true,
             workspace: Some("/w/r".into()),
             clone_repo: Some("/w/r".into()),
             ..Default::default()

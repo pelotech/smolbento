@@ -1,7 +1,7 @@
 use super::*;
 
-/// The fixture is a pre-4a docker sandbox: `sbx.docker=true` and no `sbx.kits`, so `setup`
-/// starts dockerd itself.
+/// The fixture has `sbx.docker=true` and no kits: dockerd comes only from the docker kit's
+/// startup hook, so `setup` never starts it.
 #[test]
 fn start_applies_network_then_starts_with_env_then_setup() {
     let vm = vm_with(&stopped());
@@ -18,16 +18,12 @@ fn start_applies_network_then_starts_with_env_then_setup() {
     assert!(lines[4].ends_with(&bridge::remove_cmd()), "{lines:#?}");
     assert_eq!(
         lines[5],
-        format!("machine exec --name sbx-claude-myrepo -u root -d -- sh -c {DOCKER_START}")
-    );
-    assert_eq!(
-        lines[6],
         format!(
             "machine exec --name sbx-claude-myrepo -u root -- sh -c {}",
             startup_cmd(None)
         )
     );
-    assert_eq!(lines.len(), 7, "{lines:#?}");
+    assert_eq!(lines.len(), 6, "{lines:#?}");
     assert_eq!(
         vm.runner().envs(),
         vec![vec![("TOK".to_string(), "secret".to_string())]]
@@ -55,26 +51,6 @@ fn a_read_only_etc_hosts_warns_and_the_start_goes_on() {
     );
     assert!(
         !lines.iter().any(|l| l.starts_with("machine stop")),
-        "{lines:#?}"
-    );
-}
-
-#[test]
-fn a_docker_kit_sandbox_leaves_dockerd_to_its_startup_runner() {
-    let vm = vm_with(&stopped().replace(
-        "\"sbx.docker\": \"true\",",
-        "\"sbx.docker\": \"true\", \"sbx.kits\": \"[{\\\"name\\\":\\\"docker\\\",\\\"ref\\\":\\\"builtin:docker\\\"}]\",",
-    ));
-    let mut sb = get(&vm, "claude-myrepo").unwrap();
-    assert_eq!(sb.meta.kits[0].reference, "builtin:docker");
-    ensure_running(&vm, &mut sb, || Ok(plan())).unwrap();
-    let lines = vm.runner().call_lines();
-    assert!(
-        !lines.iter().any(|l| l.ends_with(DOCKER_START)),
-        "no second dockerd start: {lines:#?}"
-    );
-    assert!(
-        lines.last().unwrap().ends_with(&startup_cmd(None)),
         "{lines:#?}"
     );
 }

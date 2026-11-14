@@ -103,10 +103,6 @@ fn default_created_via() -> String {
 
 #[derive(Debug, Clone, Default, PartialEq, Eq, Serialize, Deserialize)]
 pub struct SandboxPolicy {
-    /// Deny-all whatever the global mode. Kept for policy files written by v0.2.0, whose
-    /// `--deny-network` set it; nothing sets it any more.
-    #[serde(default, skip_serializing_if = "std::ops::Not::not")]
-    pub deny_network: bool,
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub rules: Vec<Rule>,
 }
@@ -186,15 +182,9 @@ impl Policy {
         crate::config::save_toml(&paths.policy_file(), self)
     }
 
-    /// The mode a sandbox (or, for `None`, the global policy) runs under. Before any mode was
-    /// chosen, sandboxes stay open as they were before policies existed.
-    pub fn mode_for(&self, sandbox: Option<&str>) -> Mode {
-        if sandbox
-            .and_then(|s| self.sandboxes.get(s))
-            .is_some_and(|s| s.deny_network)
-        {
-            return Mode::DenyAll;
-        }
+    /// The mode sandboxes run under. Before any mode was chosen, sandboxes stay open as they
+    /// were before policies existed.
+    pub fn current_mode(&self) -> Mode {
         self.mode.unwrap_or(Mode::AllowAll)
     }
 
@@ -377,7 +367,7 @@ impl Policy {
         if self
             .sandboxes
             .get(sandbox)
-            .is_some_and(|p| p.rules.is_empty() && !p.deny_network)
+            .is_some_and(|p| p.rules.is_empty())
         {
             self.sandboxes.remove(sandbox);
         }
@@ -409,16 +399,7 @@ impl Policy {
         self.all_rules().find(|(r, _)| r.id == id)
     }
 
-    #[cfg(test)]
-    pub fn set_deny_network(&mut self, sandbox: &str, on: bool) {
-        self.sandboxes
-            .entry(sandbox.to_string())
-            .or_default()
-            .deny_network = on;
-        self.prune(sandbox);
-    }
-
-    /// Copies `from`'s per-sandbox entry (rules and `deny_network`) to `to`, e.g. for a fork.
+    /// Copies `from`'s per-sandbox entry (its rules) to `to`, e.g. for a fork.
     /// Rule ids hash their scope, so the copies get ids derived for `to`. Replaces any existing
     /// entry for `to`; without an entry for `from` it does nothing (`to`'s entry stays).
     pub fn copy_sandbox(&mut self, from: &str, to: &str) {
@@ -439,15 +420,11 @@ impl Policy {
         self.sandboxes.insert(to.to_string(), entry);
     }
 
-    /// `policy reset`: drops the mode and every rule, but a sandbox with the v0.2.0
-    /// `deny_network` flag stays deny-all.
+    /// `policy reset`: drops the mode and every rule.
     pub fn reset(&mut self) {
         self.mode = None;
         self.rules.clear();
-        self.sandboxes.retain(|_, s| s.deny_network);
-        for s in self.sandboxes.values_mut() {
-            s.rules.clear();
-        }
+        self.sandboxes.clear();
     }
 
     pub fn forget_sandbox(&mut self, sandbox: &str) {
@@ -460,14 +437,12 @@ mod tests {
     use super::*;
 
     #[test]
-    fn copy_sandbox_clones_rules_and_deny_network() {
+    fn copy_sandbox_clones_rules() {
         let mut p = Policy::default();
         p.add_rule(Some("a"), Decision::Deny, "evil.com", "added", None, None)
             .unwrap();
-        p.set_deny_network("a", true);
         p.copy_sandbox("a", "a-fork-1");
         assert_eq!(p.sandboxes["a-fork-1"].rules.len(), 1);
-        assert!(p.sandboxes["a-fork-1"].deny_network);
         assert_ne!(
             p.sandboxes["a-fork-1"].rules[0].id,
             p.sandboxes["a"].rules[0].id
@@ -493,17 +468,15 @@ mod tests {
     }
 
     #[test]
-    fn copy_sandbox_copies_a_deny_network_only_entry_and_replaces_the_target() {
+    fn copy_sandbox_replaces_the_target() {
         let mut p = Policy::default();
-        p.set_deny_network("a", true);
+        p.add_rule(Some("a"), Decision::Deny, "new.com", "added", None, None)
+            .unwrap();
         p.add_rule(Some("b"), Decision::Deny, "old.com", "added", None, None)
             .unwrap();
-        p.copy_sandbox("a", "a-fork-1");
-        assert!(p.sandboxes["a-fork-1"].deny_network);
-        assert!(p.sandboxes["a-fork-1"].rules.is_empty());
         p.copy_sandbox("a", "b");
-        assert!(p.sandboxes["b"].deny_network);
-        assert!(p.sandboxes["b"].rules.is_empty(), "replaced, not merged");
+        assert_eq!(p.sandboxes["b"].rules.len(), 1, "replaced, not merged");
+        assert_eq!(p.sandboxes["b"].rules[0].resources, ["new.com"]);
     }
 
     #[test]
@@ -531,7 +504,6 @@ mod tests {
             None,
         )
         .unwrap();
-        p.set_deny_network("claude-repo", true);
         p.save(&paths).unwrap();
         let back = Policy::load(&paths).unwrap();
         assert_eq!(back, p);
@@ -559,19 +531,11 @@ mod tests {
     }
 
     #[test]
-    fn modes_per_sandbox() {
+    fn without_a_mode_sandboxes_stay_open() {
         let mut p = Policy::default();
-        assert_eq!(p.mode_for(Some("a1")), Mode::AllowAll);
+        assert_eq!(p.current_mode(), Mode::AllowAll);
         p.mode = Some(Mode::Balanced);
-        p.set_deny_network("a1", true);
-        assert_eq!(p.mode_for(Some("a1")), Mode::DenyAll);
-        assert_eq!(p.mode_for(Some("b1")), Mode::Balanced);
-        assert_eq!(p.mode_for(None), Mode::Balanced);
-        p.set_deny_network("a1", false);
-        assert!(
-            p.sandboxes.is_empty(),
-            "an entry holding nothing is dropped"
-        );
+        assert_eq!(p.current_mode(), Mode::Balanced);
     }
 
     #[test]
@@ -675,7 +639,7 @@ mod tests {
     }
 
     #[test]
-    fn reset_keeps_deny_network_and_clears_the_rest() {
+    fn reset_clears_the_mode_and_every_rule() {
         let mut p = Policy {
             mode: Some(Mode::Balanced),
             ..Default::default()
@@ -686,21 +650,8 @@ mod tests {
             .unwrap();
         p.add_rule(Some("s2"), Decision::Allow, "t.com", "added", None, None)
             .unwrap();
-        p.set_deny_network("s2", true);
         p.reset();
-        assert_eq!(p.mode, None);
-        assert!(p.rules.is_empty());
-        assert_eq!(
-            p.sandboxes,
-            BTreeMap::from([(
-                "s2".to_string(),
-                SandboxPolicy {
-                    deny_network: true,
-                    rules: vec![]
-                }
-            )])
-        );
-        assert_eq!(p.mode_for(Some("s2")), Mode::DenyAll);
+        assert_eq!(p, Policy::default());
     }
 
     #[test]
@@ -725,10 +676,6 @@ mod tests {
         let mut p = Policy::default();
         assert!(!p.remove_rules(Some("ghost"), None, Some("a.com")));
         assert!(p.sandboxes.is_empty());
-        // A sandbox kept for deny_network survives an empty removal.
-        p.sandboxes.entry("s1".into()).or_default().deny_network = true;
-        assert!(!p.remove_rules(Some("s1"), Some("r-nope"), None));
-        assert!(p.sandboxes["s1"].deny_network);
     }
 
     fn net(host: &str, methods: &[&str], paths: &[&str]) -> crate::kits::model::NetRule {

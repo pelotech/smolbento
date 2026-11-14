@@ -91,7 +91,7 @@ pub fn run<R: Runner>(ctx: &mut Ctx<R>, a: &RunArgs) -> Result<i32> {
         (Some(e), _, false) => Some([e.as_slice(), a.agent_args.as_slice()].concat()),
         (None, Some(c), false) => Some(agents::command_with_args(c, &a.agent_args)),
         (None, None, false) => {
-            let preset = agents::find_any(&sb.meta.agent).with_context(|| {
+            let preset = agents::find(&sb.meta.agent).with_context(|| {
                 format!(
                     "sandbox '{}' has no known agent ('{}')",
                     sb.name(),
@@ -921,7 +921,7 @@ mod tests {
     }
 
     #[test]
-    fn gemini_is_refused_for_a_new_sandbox_and_still_runs_an_old_one() {
+    fn gemini_is_refused_for_a_new_sandbox_and_an_old_one_has_no_known_agent() {
         let mut t = test_env(&[]);
         t.no_machine();
         let err = t.sbt_err(&["run", "gemini", "."]);
@@ -935,10 +935,9 @@ mod tests {
             "running",
             &[("sbx.agent", "gemini"), ("sbx.workspace", &ws)],
         );
-        t.runner().interactive_exit(0);
-        t.sbt(&["run", "--name", "old"]).unwrap();
-        let call = t.runner().interactive_calls()[0].join(" ");
-        assert!(call.ends_with(" -- gemini --yolo"), "{call}");
+        let err = t.sbt_err(&["run", "--name", "old"]);
+        assert!(err.contains("has no known agent ('gemini')"), "{err}");
+        assert!(t.runner().interactive_calls().is_empty());
     }
 
     #[test]

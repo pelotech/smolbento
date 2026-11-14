@@ -195,7 +195,6 @@ your agent (`ssh-add -D` fails with `Failed to remove all identities.`). The set
 | `setup ssh` | `ssh NAME.sbx` into sandboxes | Not yet (Phase 5h) |
 | Forks | No forks | No agent or units of its own, but it keeps the parent's socket mount, so it can use the agent (with the parent's grant) while the parent is served |
 | `kit add` of an `ssh-agent@1` kit | Recreates the container | `recreate required: … SSH agent` |
-| Sandboxes from before | n/a | Created before smolbento had the agent, so they have none. Recreate them |
 
 Docker's kit-spec conformance suite checks this capability through `tests/conformance/smolbento-adapter`
 (`just conformance`, pinned to sandbox-kit-spec `06ac386`). Ten `ssh-agent@1` checks pass
@@ -323,10 +322,10 @@ anything is created. An optional one is skipped with a warning.
 | The name `docker` | A registry ref (the `docker` image) | The shipped Docker kit. Write `docker.io/library/docker` for the image |
 | Docker in the sandbox | Run by the `-docker` images | The shipped `docker` kit comes first, before your kits (added to Docker-enabled images, or `--kit docker`). Its `dockerd` step runs in the background: a failure is only logged (`/var/log/dockerd.log`) |
 | v3 mixins on built-in agents | Allowed since sbx 0.53 (earlier: `no workload kit in the set`) | Allowed |
-| v2 and v3 kits in one sandbox | Refused: `cannot mix v3 kits with v1/v2 kits in one sandbox; compositions are single-format (v3: …; v1/v2: …)` | Same message, at create and by `kit add`. A sandbox created before 0.20 has no recorded format, so `kit add` doesn't check it |
+| v2 and v3 kits in one sandbox | Refused: `cannot mix v3 kits with v1/v2 kits in one sandbox; compositions are single-format (v3: …; v1/v2: …)` | Same message, at create and by `kit add`. |
 | v2 mixins on built-in agents | Refused, since the agents are v3 kits (sbx 0.53) | Allowed. Presets, the shipped `docker` kit and Smolfiles have no kit format |
 | Published v2 kits | OCI artifact: config is the spec, one layer is `files/` as tar.gz under `home/agent/` | A files-layer entry outside `home/agent/` is refused (other mappings unmeasured). The agent is named after the reference (`gemini-kit`), not the kit |
-| Retired agents | `gemini` (0.53) refused for new sandboxes, pointing to `antigravity` and `docker.io/sbx/gemini-kit` | Same wording. Sandboxes created with `gemini` earlier keep working (not measured on sbx) |
+| Retired agents | `gemini` (0.53) refused for new sandboxes, pointing to `antigravity` and `docker.io/sbx/gemini-kit` | Same wording |
 | Self-referencing kit variable | `PATH: /opt/kit/bin:$PATH` gets the image's PATH | Same for `$NAME` and `${NAME}` in NAME's own value (read at create; smolvm doesn't expand variables yet). `${PATH}` in another variable stays as written; sbx substitutes the kit's unexpanded PATH |
 | `--mount` with a file as `HOST` | Not measured | `workspace X is a file; …` (smolvm mounts directories only) |
 | `--mount` path no kit declares | `request failed: 400 Bad Request: no kit declares host-mount@1 at "PATH"`, after the image is prepared | Same text without the prefix. A local kit is still built first; a published kit's image isn't prepared |

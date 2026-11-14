@@ -583,7 +583,6 @@ mod tests {
         assert!(c.contains(&format!("--image {BUILDER_IMAGE}")), "{c}");
         assert!(c.contains("--label sbx.name=_builder"), "{c}");
         assert!(c.contains("--label sbx.docker=true"), "{c}");
-        // dockerd comes from the shipped docker kit, not the pre-4a `setup` fallback.
         assert!(c.contains(r#"--label sbx.kits=[{"name":"docker","ref":"builtin:docker","provides":["docker@1.0.0"]}]"#), "{c}");
         assert!(
             c.contains("-v /var/lib/docker -v /var/lib/containerd"),
@@ -621,10 +620,6 @@ mod tests {
             i("machine stop -n sbx-_builder"),
         ];
         assert!(order.is_sorted(), "{order:?} in {rest:#?}");
-        assert!(
-            !rest.iter().any(|l| l.contains("pgrep -x dockerd")),
-            "dockerd is started once, by the startup runner: {rest:#?}"
-        );
         assert!(
             rest.contains(&"machine start -n sbx-_builder".to_string()),
             "not branchable: {rest:#?}"

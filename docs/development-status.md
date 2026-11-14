@@ -9,15 +9,12 @@ smolbento is built in phases. Each phase ships on its own.
 Phases 0 to 4, 5a to 5g, and 6 and 7 are done. Phases 5h, 8, 9 and 10 are planned. Each feature's
 usage guide is linked from its row in the [Phases](#phases) table.
 
-- Sandboxes created before Phase 5b, 5c or 5e need recreating.
+- Before 1.0, recreate sandboxes after upgrading smolbento ([Install](install.md#upgrading)).
 - Docker in a sandbox is the shipped `docker` kit. If its first start fails, the sandbox is removed;
   fix the cause and run the same command again.
 - Secret `command:` sources (`sbt secret set --command`, and `command:` in an environment file) run in
   a fresh temporary directory. Use absolute paths or put helpers on `PATH`. Relative paths no longer
   work.
-- If you're upgrading from v0.1.x, a sandbox start needs a network policy. Run
-  `sbt policy init balanced` (or answer the prompt) first. Scripts without a terminal fail until you
-  do.
 
 ## Phases
 
@@ -53,8 +50,8 @@ usage guide is linked from its row in the [Phases](#phases) table.
 - Published ports bind loopback only (`127.0.0.1`, `[::1]`). Only directories, not single files, can be
   mounted. Both are smolvm limits; see [sbx compatibility](sbx-compatibility.md).
 - A `localhost` rule opens every port on the host's `127.0.0.1`, including ones it doesn't name.
-  Only sandboxes created while a `localhost` rule applied get it; recreate others. Closing it is
-  best-effort until recreated. See [Security](SECURITY.md#host-services-localhost-rules). Under
+  Only sandboxes created while a `localhost` rule applied get it. Closing it is best-effort until
+  the sandbox is recreated. See [Security](SECURITY.md#host-services-localhost-rules). Under
   `allow-all`, services on `0.0.0.0` are reachable through the host's LAN IP.
 - Linux stores secret values in a 0600 file where no Secret Service runs.
 - The browser and clipboard bridge copies text only, and never reads the clipboard or pastes
