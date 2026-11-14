@@ -521,7 +521,10 @@ mod tests {
     }
 
     fn unrestricted() -> Option<Access> {
-        Some(Access { sign: None })
+        Some(Access {
+            sign: None,
+            authenticate: vec![],
+        })
     }
 
     fn agent_mounts(args: &[String]) -> Vec<String> {
@@ -546,6 +549,7 @@ mod tests {
             unrestricted(),
             Some(Access {
                 sign: Some(vec!["git".into()]),
+                authenticate: vec![],
             }),
         );
         let spec = spec(&req);

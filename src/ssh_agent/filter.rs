@@ -262,12 +262,16 @@ mod tests {
     }
 
     fn all() -> Access {
-        Access { sign: None }
+        Access {
+            sign: None,
+            authenticate: vec![],
+        }
     }
 
     fn only(namespaces: &[&str]) -> Access {
         Access {
             sign: Some(namespaces.iter().map(|n| n.to_string()).collect()),
+            authenticate: vec![],
         }
     }
 

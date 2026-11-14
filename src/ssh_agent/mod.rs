@@ -55,6 +55,8 @@ pub type AgentGrant = ByPhase<PhaseGrant>;
 pub struct PhaseGrant {
     /// `None`: unrestricted (signs anything); else the namespaces it may sign.
     pub sign: Option<Vec<String>>,
+    /// The servers it may log in to (a bounded grant only; empty = no logins).
+    pub authenticate: Vec<Dest>,
     /// A required entry asked for it: with no agent to back it, the create is refused.
     pub required: bool,
     /// The kit messages name: the first required entry's, else the first kit entry's. `None` for
@@ -71,6 +73,55 @@ pub type AgentLabel = ByPhase<Access>;
 pub struct Access {
     /// `None`: unrestricted; else the namespaces the filter admits.
     pub sign: Option<Vec<String>>,
+    /// The servers a bounded grant may log in to. A label without it (written before logins were
+    /// supported) means none.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub authenticate: Vec<Dest>,
+}
+
+/// An `authenticate` entry: `host` or `user@host`.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct Dest {
+    pub user: Option<String>,
+    pub host: String,
+}
+
+impl Dest {
+    /// Splits `[user@]host`; the kit parser has already validated the entry.
+    pub fn parse(entry: &str) -> Dest {
+        match entry.split_once('@') {
+            Some((user, host)) => Dest {
+                user: Some(user.to_string()),
+                host: host.to_string(),
+            },
+            None => Dest {
+                user: None,
+                host: entry.to_string(),
+            },
+        }
+    }
+}
+
+impl fmt::Display for Dest {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        match &self.user {
+            Some(u) => write!(f, "{u}@{}", self.host),
+            None => f.write_str(&self.host),
+        }
+    }
+}
+
+// Serialized as the entry string (`git@github.com`), as in the kit.
+impl Serialize for Dest {
+    fn serialize<S: serde::Serializer>(&self, s: S) -> Result<S::Ok, S::Error> {
+        s.collect_str(self)
+    }
+}
+
+impl<'de> Deserialize<'de> for Dest {
+    fn deserialize<D: serde::Deserializer<'de>>(d: D) -> Result<Dest, D::Error> {
+        String::deserialize(d).map(|s| Dest::parse(&s))
+    }
 }
 
 #[cfg(test)]
@@ -78,9 +129,15 @@ impl PhaseGrant {
     pub fn new(sign: Option<&[&str]>, required: bool, kit: Option<&str>) -> PhaseGrant {
         PhaseGrant {
             sign: sign.map(|s| s.iter().map(|x| x.to_string()).collect()),
+            authenticate: vec![],
             required,
             kit: kit.map(Into::into),
         }
+    }
+
+    pub fn authenticating(mut self, entries: &[&str]) -> PhaseGrant {
+        self.authenticate = entries.iter().map(|e| Dest::parse(e)).collect();
+        self
     }
 }
 
@@ -90,6 +147,7 @@ impl AgentGrant {
         (!self.is_empty()).then(|| {
             self.map(|p| Access {
                 sign: p.sign.clone(),
+                authenticate: p.authenticate.clone(),
             })
         })
     }
@@ -322,14 +380,59 @@ mod tests {
         let l = AgentLabel {
             runtime: Some(Access {
                 sign: Some(vec!["git".into()]),
+                authenticate: vec![],
             }),
             install: None,
         };
         assert_eq!(l.to_label(), r#"{"runtime":{"sign":["git"]}}"#);
         assert_eq!(AgentLabel::from_label(&l.to_label()), Some(l));
         let unrestricted = AgentLabel::from_label(r#"{"install":{"sign":null}}"#).unwrap();
-        assert_eq!(unrestricted.install, Some(Access { sign: None }));
+        assert_eq!(
+            unrestricted.install,
+            Some(Access {
+                sign: None,
+                authenticate: vec![]
+            })
+        );
         assert_eq!(AgentLabel::from_label("{}"), None);
         assert_eq!(AgentLabel::from_label("nope"), None);
+    }
+
+    #[test]
+    fn logins_round_trip_and_an_old_label_means_no_logins() {
+        let l = AgentLabel {
+            runtime: Some(Access {
+                sign: Some(vec![]),
+                authenticate: vec![Dest::parse("git@github.com"), Dest::parse("example.org")],
+            }),
+            install: None,
+        };
+        assert_eq!(
+            l.to_label(),
+            r#"{"runtime":{"sign":[],"authenticate":["git@github.com","example.org"]}}"#
+        );
+        assert_eq!(AgentLabel::from_label(&l.to_label()), Some(l));
+        let old = AgentLabel::from_label(r#"{"runtime":{"sign":["git"]}}"#).unwrap();
+        assert!(old.runtime.unwrap().authenticate.is_empty());
+        assert_eq!(
+            Dest::parse("git@github.com"),
+            Dest {
+                user: Some("git".into()),
+                host: "github.com".into()
+            }
+        );
+    }
+
+    #[test]
+    fn a_grant_carries_its_logins_into_the_label() {
+        let g = AgentGrant {
+            runtime: Some(PhaseGrant::new(Some(&[]), true, Some("k")).authenticating(&["a.com"])),
+            install: None,
+        };
+        let (label, _) = settle("s", &g, &Ok("/a.sock".into())).unwrap();
+        assert_eq!(
+            label.unwrap().to_label(),
+            r#"{"runtime":{"sign":[],"authenticate":["a.com"]}}"#
+        );
     }
 }

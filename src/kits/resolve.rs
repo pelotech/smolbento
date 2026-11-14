@@ -11,7 +11,7 @@ use crate::kits::model::{
     AgentContextReq, Cap, CapBody, CredReq, FileReq, Format, Hook, HookCmd, Kind, Kit, Lifecycle,
     NetRule, Rules, Source, SshPhase,
 };
-use crate::ssh_agent::{AgentGrant, PhaseGrant};
+use crate::ssh_agent::{AgentGrant, Dest, PhaseGrant};
 
 /// The agent user's home in the platform floor; the host can't see the guest's real env.
 const AGENT_HOME: &str = "/home/agent";
@@ -271,8 +271,7 @@ const BUILT_IN: SshEntry<'static> = SshEntry {
 /// A built-in agent's own grant, for a create with no plan (`resolve` adds it to a plan).
 pub fn built_in_ssh_agent() -> AgentGrant {
     AgentGrant {
-        runtime: ssh_phase(&[BUILT_IN], SshPhase::Runtime, &mut vec![])
-            .expect("the built-in grant has no authenticate limits"),
+        runtime: ssh_phase(&[BUILT_IN], SshPhase::Runtime).expect("the built-in grant merges"),
         install: None,
     }
 }
@@ -435,8 +434,8 @@ pub fn resolve_for(
     }
 
     merged.ssh_agent = AgentGrant {
-        install: ssh_phase(&ssh_entries, SshPhase::Install, &mut skipped)?,
-        runtime: ssh_phase(&ssh_entries, SshPhase::Runtime, &mut skipped)?,
+        install: ssh_phase(&ssh_entries, SshPhase::Install)?,
+        runtime: ssh_phase(&ssh_entries, SshPhase::Runtime)?,
     };
     add_passthrough_hosts(&mut merged);
 
@@ -676,37 +675,13 @@ fn add_passthrough_hosts(merged: &mut Merged) {
 }
 
 /// Merges the `ssh-agent@1` entries for `phase` (kit spec "Composition"): unrestricted when any
-/// entry is, else the union of their namespaces; required when any entry is. `authenticate`
-/// limits (Phase 5g) can't be enforced yet: under a bounded merge a required entry with them
-/// refuses, an optional one is skipped.
-fn ssh_phase(
-    entries: &[SshEntry],
-    phase: SshPhase,
-    skipped: &mut Vec<Skipped>,
-) -> Result<Option<PhaseGrant>> {
-    let mut es: Vec<&SshEntry> = entries
+/// entry is, else the union of their namespaces and of their `authenticate` entries; required when
+/// any entry is.
+fn ssh_phase(entries: &[SshEntry], phase: SshPhase) -> Result<Option<PhaseGrant>> {
+    let es: Vec<&SshEntry> = entries
         .iter()
         .filter(|e| e.phases.contains(&phase))
         .collect();
-    if !es.iter().any(|e| e.unrestricted) {
-        for e in es.iter().filter(|e| !e.authenticate.is_empty()) {
-            let kit = e.kit.unwrap_or("?");
-            if !e.optional {
-                bail!("kit {kit}: ssh-agent@1 authenticate limits aren't supported yet");
-            }
-            let note = Skipped::new(
-                kit,
-                format!(
-                    "com.docker.sandbox/ssh-agent@1 with authenticate limits in the {} phase",
-                    phase.as_str()
-                ),
-            );
-            if !skipped.contains(&note) {
-                skipped.push(note);
-            }
-        }
-        es.retain(|e| e.authenticate.is_empty());
-    }
     if es.is_empty() {
         return Ok(None);
     }
@@ -721,6 +696,19 @@ fn ssh_phase(
         }
         Some(union)
     };
+    let unrestricted = es.iter().any(|e| e.unrestricted);
+    let mut authenticate: Vec<Dest> = Vec::new();
+    if !unrestricted {
+        for d in es
+            .iter()
+            .flat_map(|e| e.authenticate)
+            .map(|d| Dest::parse(d))
+        {
+            if !authenticate.contains(&d) {
+                authenticate.push(d);
+            }
+        }
+    }
     let required = es.iter().any(|e| !e.optional);
     let kit = es
         .iter()
@@ -729,6 +717,7 @@ fn ssh_phase(
         .and_then(|e| e.kit.map(String::from));
     Ok(Some(PhaseGrant {
         sign,
+        authenticate,
         required,
         kit,
     }))
@@ -1299,64 +1288,48 @@ mod tests {
     }
 
     #[test]
-    fn authenticate_limits_refuse_a_required_entry_and_skip_an_optional_one() {
-        use SshPhase::Runtime;
-        let req = mixin("m").cap(
+    fn authenticate_entries_union_like_sign_and_unrestricted_drops_them() {
+        use SshPhase::{Install, Runtime};
+        let a = mixin("a").cap(
             SSH,
             false,
-            CapBody::ssh_agent(&[Runtime], &["git"], &["github.com"]),
+            CapBody::ssh_agent(&[Install, Runtime], &["git"], &["git@github.com", "a.com"]),
         );
-        let e = run(workload("w"), vec![req.clone()]).unwrap_err();
-        assert_eq!(
-            format!("{e:#}"),
-            "kit m: ssh-agent@1 authenticate limits aren't supported yet"
-        );
-
-        let opt = mixin("o").cap(
+        let b = mixin("b").cap(
             SSH,
             true,
-            CapBody::ssh_agent(&[Runtime], &[], &["github.com"]),
+            CapBody::ssh_agent(&[Runtime], &[], &["a.com", "b.org"]),
         );
-        let plain = mixin("p").cap(SSH, true, CapBody::ssh_agent(&[Runtime], &["git"], &[]));
-        let p = run(workload("w"), vec![opt, plain]).unwrap();
+        let p = run(workload("w"), vec![a.clone(), b]).unwrap();
+        assert_eq!(
+            p.merged.ssh_agent,
+            AgentGrant {
+                install: Some(
+                    PhaseGrant::new(Some(&["git"]), true, Some("a"))
+                        .authenticating(&["git@github.com", "a.com"])
+                ),
+                runtime: Some(
+                    PhaseGrant::new(Some(&["git"]), true, Some("a")).authenticating(&[
+                        "git@github.com",
+                        "a.com",
+                        "b.org"
+                    ])
+                ),
+            }
+        );
+        assert!(p.skipped.is_empty());
+
+        // An authenticate-only entry is bounded with no namespaces.
+        let only = mixin("o").cap(SSH, true, CapBody::ssh_agent(&[Runtime], &[], &["a.com"]));
+        let p = run(workload("w"), vec![only]).unwrap();
         assert_eq!(
             p.merged.ssh_agent.runtime,
-            grant(Some(&["git"]), false, Some("p"))
-        );
-        assert_eq!(
-            p.skipped_warnings(),
-            [
-                "kit o: skipping com.docker.sandbox/ssh-agent@1 with authenticate limits in the \
-                 runtime phase (not supported)"
-            ]
+            Some(PhaseGrant::new(Some(&[]), false, Some("o")).authenticating(&["a.com"]))
         );
 
         // Under an unrestricted grant for the phase, the limits don't matter.
-        let p = run(preset(), vec![req]).unwrap();
-        assert_eq!(p.merged.ssh_agent.runtime, grant(None, true, Some("m")));
-        assert!(p.skipped.is_empty());
-    }
-
-    #[test]
-    fn an_optional_authenticate_entry_is_skipped_only_in_bounded_phases() {
-        use SshPhase::{Install, Runtime};
-        // `o` spans both phases; `u` makes runtime unrestricted, so only install skips `o`.
-        let o = mixin("o").cap(
-            SSH,
-            true,
-            CapBody::ssh_agent(&[Install, Runtime], &["git"], &["github.com"]),
-        );
-        let u = mixin("u").cap(SSH, true, CapBody::ssh_agent(&[Runtime], &[], &[]));
-        let p = run(workload("w"), vec![o, u]).unwrap();
-        assert_eq!(p.merged.ssh_agent.install, None);
-        assert_eq!(p.merged.ssh_agent.runtime, grant(None, false, Some("o")));
-        assert_eq!(
-            p.skipped_warnings(),
-            [
-                "kit o: skipping com.docker.sandbox/ssh-agent@1 with authenticate limits in the \
-                 install phase (not supported)"
-            ]
-        );
+        let p = run(preset(), vec![a]).unwrap();
+        assert_eq!(p.merged.ssh_agent.runtime, grant(None, true, Some("a")));
     }
 
     fn cred(oauth: Option<OAuthReq>) -> CapBody {
