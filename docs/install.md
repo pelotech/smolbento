@@ -22,7 +22,7 @@ brew install pelotech/tap/smolbento
 
 This installs `smolbento` and links `sbt` and `bento` to it. `sbx` isn't linked, so it can't clash
 with Docker's `sbx`. Add `alias sbx=sbt` to your shell to use that name. `brew upgrade` picks up new
-releases. Run `brew tap` before `brew trust`, as above: Homebrew rejects tapping a tap that is
+releases. Run `brew tap` before `brew trust`, as above. Homebrew rejects tapping a tap that is
 already trusted (see [pelotech/homebrew-tap](https://github.com/pelotech/homebrew-tap)).
 
 !!! note "Linux"
@@ -65,8 +65,8 @@ Linux binaries need glibc 2.28 or newer.
 
 ## Upgrading sandboxes from an older smolbento
 
-Sandboxes made by an older smolbento can't start: `sbt` reports `was created by an older smolbento`.
-Remove each one with `sbt rm NAME`, then create it again. Saved templates keep working.
+Sandboxes made by an older smolbento can't start. `sbt` fails with `was created by an older
+smolbento`. Remove each one with `sbt rm NAME`, then create it again. Saved templates keep working.
 
 To keep what's inside a sandbox (installed tools, agent logins), save it as a template first. A
 stopped sandbox is saved without starting it:

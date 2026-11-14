@@ -2,8 +2,8 @@
 
 ## Shape
 
-smolbento is one Rust binary that drives the `smolvm` CLI. It doesn't link smolvm as a library: that
-would mean shipping libkrun and signing our binary with Apple's hypervisor entitlement.
+smolbento is one Rust binary that drives the `smolvm` CLI. It doesn't link smolvm as a library.
+Doing so would mean shipping libkrun and signing our binary with Apple's hypervisor entitlement.
 
 ```
 sbt ── clap CLI (mirrors sbx) ── sandbox logic ── Runner ──> smolvm ──> microVM
@@ -17,7 +17,7 @@ mode, resizes and colours work unchanged.
 
 ## State
 
-There is no smolbento database. A sandbox is a smolvm machine named `sbx-<name>`. Its agent, workspaces,
+smolbento has no database. A sandbox is a smolvm machine named `sbx-<name>`. Its agent, workspaces,
 creation time and Docker flag are labels set at create. `sbt ls` is `smolvm machine ls --json`, filtered
 to machines with an `sbx.name` label.
 

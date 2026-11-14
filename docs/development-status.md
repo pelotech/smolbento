@@ -15,8 +15,9 @@ usage guide is linked from its row in the [Phases](#phases) table.
 - Secret `command:` sources (`sbt secret set --command`, and `command:` in an environment file) run in
   a fresh temporary directory. Use absolute paths or put helpers on `PATH`. Relative paths no longer
   work.
-- Upgrading from v0.1.x: a sandbox start needs a network policy. Run `sbt policy init balanced` (or
-  answer the prompt) first. Scripts without a terminal fail until you do.
+- If you're upgrading from v0.1.x, a sandbox start needs a network policy. Run
+  `sbt policy init balanced` (or answer the prompt) first. Scripts without a terminal fail until you
+  do.
 
 ## Phases
 
@@ -50,8 +51,8 @@ usage guide is linked from its row in the [Phases](#phases) table.
 - Workspaces are mounted read-write unless you use `--clone`.
 - Published ports bind loopback only (`127.0.0.1`, `[::1]`). Only directories, not single files, can be
   mounted. Both are smolvm limits; see [sbx compatibility](sbx-compatibility.md).
-- A `localhost` rule opens every port on the host's `127.0.0.1`, not just the one it names. Only
-  sandboxes created while a `localhost` rule applied get it; recreate others. Closing it is
+- A `localhost` rule opens every port on the host's `127.0.0.1`, including ones it doesn't name.
+  Only sandboxes created while a `localhost` rule applied get it; recreate others. Closing it is
   best-effort until recreated. See [Security](SECURITY.md#host-services-localhost-rules). Under
   `allow-all`, services on `0.0.0.0` are reachable through the host's LAN IP.
 - Linux stores secret values in a 0600 file where no Secret Service runs.
@@ -67,7 +68,8 @@ usage guide is linked from its row in the [Phases](#phases) table.
 
 ## Needs smolvm support (later decisions)
 
-Changes we'd propose to smolvm. What smolvm 1.34.4 lacks, and what smolbento does meanwhile:
+Changes we'd propose to smolvm. Each item says what smolvm 1.34.4 lacks and what smolbento does
+meanwhile.
 
 - **Saving a sandbox made from a template.** Packing fails in smolvm 1.34.1 ("no flattened rootfs was
   found") when the pack's machine was created with `--deny-cidr`, as every sandbox is. `--rebase-from-image`

@@ -24,12 +24,14 @@ Without the direnv hook, prefix commands with `direnv exec .`. Without direnv, u
 
 ## Tests
 
-- **Unit tests** sit next to the code. Handlers run against a fake runner and assert the smolvm command lines.
-- **Snapshots** (`insta`) cover every `--help` and `ls` output. Review with `cargo insta review`.
-- **Parity:** `tests/parity/sbx-commands.txt` lists sbx command lines that must keep parsing.
-- **End-to-end** (`tests/e2e/`, ignored by default) boots small Alpine VMs. It covers lifecycle, exec,
-  mounts, `run` auto-stop, `cp`, `diagnose`, network policy, ports and secrets. The policy test reaches
-  `example.com`; the secrets test reaches `httpbin.org`.
+- Unit tests sit next to the code. Handlers run against a fake runner and assert the smolvm command
+  lines.
+- Snapshots (`insta`) cover every `--help` and `ls` output. Review them with `cargo insta review`.
+- The parity list, `tests/parity/sbx-commands.txt`, names the sbx command lines that must keep
+  parsing.
+- End-to-end tests (`tests/e2e/`, ignored by default) boot small Alpine VMs. They cover lifecycle,
+  exec, mounts, `run` auto-stop, `cp`, `diagnose`, network policy, ports and secrets. The policy
+  test reaches `example.com`; the secrets test reaches `httpbin.org`.
 
 ## Running tests
 
@@ -81,7 +83,7 @@ Runner time savings:
   `main` run slow.
 - Every job has a `timeout-minutes`.
 
-macOS isn't tested in CI: it's expensive, and GitHub's Apple Silicon runners can't boot VMs. Run
+macOS isn't tested in CI. It's expensive, and GitHub's Apple Silicon runners can't boot VMs. Run
 `just test` and `just e2e` on a Mac before merging changes that affect macOS and before merging a
 release PR.
 

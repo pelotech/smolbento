@@ -37,8 +37,8 @@ sudo modprobe kvm_intel        # or kvm_amd, if the device is missing
 sudo usermod -aG kvm $USER     # if the device exists; then log out and back in
 ```
 
-If the device is missing, enable virtualization in the BIOS or firmware (in a VM, enable nested
-virtualization) first.
+If the device is missing, first enable virtualization in the BIOS or firmware. In a VM, enable
+nested virtualization instead.
 
 ## `diagnose` says the hypervisor entitlement is missing (macOS)
 

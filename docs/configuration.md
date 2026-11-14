@@ -9,7 +9,7 @@ sbt settings set docker.enabled false
 sbt settings unset docker.enabled       # back to the default
 ```
 
-An environment variable overrides the config file, which overrides the default. Booleans accept
+An environment variable beats the config file, which beats the default. Booleans accept
 `true`/`false`, `1`/`0`, `yes`/`no` and `on`/`off`.
 
 | Setting | Env var | Default | Meaning |
@@ -79,7 +79,8 @@ To also allow one organisation's kits on GitHub:
 sbt settings set kit.allowedSources '["docker.io/","ghcr.io/acme/"]'
 ```
 
-`settings set` checks the value first. A refused kit's error suggests the setting that would allow it.
+`settings set` checks the value first. A refused kit's error suggests the setting that would allow
+it.
 
 The setting covers kits only. The images a kit names (a workload kit's image, and the base image its
 layers are added to) are pulled without it, like a Dockerfile's `FROM`. Registries are reached over

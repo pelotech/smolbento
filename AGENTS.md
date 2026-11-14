@@ -9,7 +9,7 @@ only some checkouts have it. If it's there, read the relevant section before cha
 ## Rules
 
 - **Shell out to smolvm; never link it.** Every smolvm call goes through the `Runner` trait in
-  `src/smolvm/`. Pass `--error-format json`; parse `--json` output, not tables.
+  `src/smolvm/`. Pass `--error-format json`; parse `--json` output, never tables.
 - **smolvm is the state.** Per-sandbox metadata lives in `sbx.*` machine labels, set at create. Do not
   add a sandbox state file. Global settings and lists live in `~/.config/smolbento/*.toml`. Other
   global data is listed in [docs/configuration.md](docs/configuration.md#files).

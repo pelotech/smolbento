@@ -1,6 +1,6 @@
 # Contributing
 
-Thanks for helping. Set up the dev shell first: see [Development](development.md).
+Set up the dev shell first. See [Development](development.md).
 
 ## Before you open a PR
 
@@ -14,16 +14,16 @@ On a Mac, run all three. CI runs Linux only by default (see [CI](development.md#
 
 ## Conventions
 
-- **Conventional commits** for commit messages and PR titles (`feat:`, `fix:`, `docs:`, `ci:`,
+- Use conventional commits for commit messages and PR titles (`feat:`, `fix:`, `docs:`, `ci:`,
   `refactor:`, …). commitlint checks them, and release-please builds the changelog from them.
-- **sbx compatibility first.** New flags and output should match the
+- sbx compatibility comes first. New flags and output should match the
   [sbx CLI reference](https://docs.docker.com/reference/cli/sbx/). If you must differ, document it in
   [sbx compatibility](sbx-compatibility.md). smolbento-only commands must not reuse sbx command names.
-- **Only `src/smolvm/` runs smolvm**, through the `Runner` trait. Parse `--json` output, never tables.
-- **No sandbox state files.** Per-sandbox data goes in `sbx.*` machine labels.
-- **Never pass smolvm `--docker-socket`.** It would hand the host's Docker to the agent.
-- **Dependencies** go in with `cargo add`. Never add a `cargo deny` advisory ignore to get a build
-  green. Pick a maintained crate instead.
+- Only `src/smolvm/` runs smolvm, through the `Runner` trait. Parse `--json` output, never tables.
+- No sandbox state files. Per-sandbox data goes in `sbx.*` machine labels.
+- Never pass smolvm `--docker-socket`. It would hand the host's Docker to the agent.
+- Add dependencies with `cargo add`. Never add a `cargo deny` advisory ignore to get a build green.
+  Pick a maintained crate instead.
 
 ## Adding a command or flag
 
