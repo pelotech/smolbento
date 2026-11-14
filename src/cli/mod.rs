@@ -21,6 +21,7 @@ mod run;
 pub(crate) mod secret;
 mod serve;
 mod settings;
+mod setup;
 mod skills;
 mod template;
 mod upload_pack;
@@ -195,7 +196,7 @@ pub fn dispatch<R: Runner>(ctx: &mut Ctx<R>, cli: Cli) -> Result<i32> {
         Cmd::Ttl(_) => cloud("ttl"),
         Cmd::Attach(_) => cloud("attach"),
         Cmd::Volume(_) => cloud("volume"),
-        Cmd::Setup(_) => pending("setup"),
+        Cmd::Setup(s) => setup::run(ctx, s),
         Cmd::Tui(_) => pending("tui"),
     }
 }

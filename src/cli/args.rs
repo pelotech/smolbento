@@ -92,8 +92,9 @@ pub enum Cmd {
     /// Manage skills shared with agents in sandboxes (experimental)
     #[command(subcommand)]
     Skills(SkillsCmd),
-    /// SSH access (not implemented yet)
-    Setup(Passthrough),
+    /// Set up host integrations
+    #[command(subcommand)]
+    Setup(SetupCmd),
     /// Dashboard (not implemented yet)
     Tui(Passthrough),
     #[command(hide = true)]
@@ -150,6 +151,27 @@ impl Cmd {
                 | Cmd::Env(EnvCmd::Create(_) | EnvCmd::Run(_) | EnvCmd::Exec(_) | EnvCmd::Rm(_))
         )
     }
+}
+
+#[derive(Debug, Subcommand)]
+pub enum SetupCmd {
+    /// Let `ssh NAME.sbx` reach a sandbox (adds a managed block to ~/.ssh/config)
+    Ssh(SetupSshArgs),
+}
+
+#[derive(Debug, Args)]
+pub struct SetupSshArgs {
+    /// Add connections for desktop apps (not supported)
+    #[arg(long)]
+    pub auto_create: bool,
+    #[command(subcommand)]
+    pub cmd: Option<SetupSshCmd>,
+}
+
+#[derive(Debug, Subcommand)]
+pub enum SetupSshCmd {
+    /// Remove the managed block from ~/.ssh/config
+    Remove,
 }
 
 #[derive(Debug, Subcommand)]

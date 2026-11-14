@@ -1,0 +1,21 @@
+---
+source: tests/help.rs
+expression: help(&path)
+---
+Let `ssh NAME.sbx` reach a sandbox (adds a managed block to ~/.ssh/config)
+
+Usage: sbt setup ssh [OPTIONS] [COMMAND]
+
+Commands:
+  remove  Remove the managed block from ~/.ssh/config
+  help    Print this message or the help of the given subcommand(s)
+
+Options:
+      --auto-create
+          Add connections for desktop apps (not supported)
+
+  -D, --debug
+          Print each smolvm command line
+
+  -h, --help
+          Print help

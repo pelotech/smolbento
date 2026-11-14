@@ -1,0 +1,193 @@
+//! `setup ssh`: the managed block in `~/.ssh/config`.
+
+use std::fs;
+use std::io::Write;
+use std::os::unix::fs::DirBuilderExt;
+use std::path::{Path, PathBuf};
+
+use anyhow::{Context, Result};
+
+use super::{Ctx, SetupCmd, SetupSshCmd, Unsupported};
+use crate::config::{Symlink, write_atomic};
+use crate::smolvm::Runner;
+use crate::ssh::block;
+
+pub fn run<R: Runner>(ctx: &Ctx<R>, cmd: SetupCmd) -> Result<i32> {
+    let SetupCmd::Ssh(a) = cmd;
+    if a.auto_create {
+        return Err(
+            Unsupported("--auto-create (desktop app connections) is not supported".into()).into(),
+        );
+    }
+    let ssh_dir = Path::new(ctx.env.get("HOME").context("HOME is not set")?).join(".ssh");
+    match a.cmd {
+        None => install(ctx, &ssh_dir),
+        Some(SetupSshCmd::Remove) => remove(ctx, &ssh_dir),
+    }
+}
+
+fn read(path: &Path) -> Result<String> {
+    match fs::read_to_string(path) {
+        Ok(s) => Ok(s),
+        Err(e) if e.kind() == std::io::ErrorKind::NotFound => Ok(String::new()),
+        Err(e) => Err(e).with_context(|| format!("reading {}", path.display())),
+    }
+}
+
+fn install<R: Runner>(ctx: &Ctx<R>, ssh_dir: &Path) -> Result<i32> {
+    let config = ssh_dir.join("config");
+    if !ssh_dir.exists() {
+        fs::DirBuilder::new()
+            .mode(0o700)
+            .recursive(true)
+            .create(ssh_dir)
+            .with_context(|| format!("creating {}", ssh_dir.display()))?;
+    }
+    let old = read(&config)?;
+    let new = block::upsert(&old, &block::render(&binary(ctx)))?;
+    if new != old {
+        // A new file is private; an existing one keeps its mode.
+        write_atomic(
+            &config,
+            new.as_bytes(),
+            (!config.exists()).then_some(0o600),
+            Symlink::Follow,
+        )?;
+    }
+    if block::has_sbx_block(&new) {
+        eprintln!(
+            "warning: {} also has a docker sandboxes (sbx) block; both claim `Host *.sbx` and \
+the first one in the file wins (smolbento's is first unless you moved it)",
+            config.display()
+        );
+    }
+    writeln!(
+        &ctx.out,
+        "ssh NAME.sbx now reaches sandbox NAME ({})",
+        config.display()
+    )?;
+    Ok(0)
+}
+
+fn remove<R: Runner>(ctx: &Ctx<R>, ssh_dir: &Path) -> Result<i32> {
+    let config = ssh_dir.join("config");
+    let old = read(&config)?;
+    match block::remove(&old)? {
+        Some(new) => {
+            write_atomic(&config, new.as_bytes(), None, Symlink::Follow)?;
+            writeln!(
+                &ctx.out,
+                "removed the smolbento block from {}",
+                config.display()
+            )?;
+        }
+        None => writeln!(&ctx.out, "no smolbento block in {}", config.display())?,
+    }
+    Ok(0)
+}
+
+/// How `ssh` should call us: the name this binary was run as, when that name on PATH is this very
+/// binary (not a versioned Cellar path); else its absolute path.
+fn binary<R: Runner>(ctx: &Ctx<R>) -> String {
+    let exe = std::env::current_exe()
+        .ok()
+        .and_then(|e| e.canonicalize().ok());
+    let path = ctx.env.get("PATH").cloned().unwrap_or_default();
+    let on_path = |name: &str| -> Option<PathBuf> {
+        std::env::split_paths(&path)
+            .map(|d| d.join(name))
+            .find(|p| p.is_file())
+    };
+    for name in [ctx.program.as_str(), "sbt", "smolbento"] {
+        if let (Some(found), Some(exe)) = (on_path(name), &exe)
+            && found.canonicalize().ok().as_ref() == Some(exe)
+        {
+            return name.to_string();
+        }
+    }
+    exe.map_or_else(|| "sbt".into(), |e| e.display().to_string())
+}
+
+#[cfg(test)]
+mod tests {
+    use crate::ssh::block::{BEGIN, END};
+    use crate::testutil::*;
+
+    fn home(t: &mut TestEnv) -> std::path::PathBuf {
+        let h = t.ctx.paths.config.parent().unwrap().join("home");
+        std::fs::create_dir_all(&h).unwrap();
+        t.ctx.env.insert("HOME".into(), h.display().to_string());
+        h
+    }
+
+    #[test]
+    fn creates_the_private_dir_and_config_then_removes_the_block() {
+        use std::os::unix::fs::PermissionsExt;
+        let mut t = test_env(&[]);
+        let h = home(&mut t);
+        assert_eq!(t.sbt(&["setup", "ssh"]).unwrap(), 0);
+        let mode = |p: &std::path::Path| std::fs::metadata(p).unwrap().permissions().mode() & 0o777;
+        assert_eq!(mode(&h.join(".ssh")), 0o700);
+        assert_eq!(mode(&h.join(".ssh/config")), 0o600);
+        let cfg = std::fs::read_to_string(h.join(".ssh/config")).unwrap();
+        assert!(cfg.starts_with(BEGIN) && cfg.contains(" ssh proxy %n") && cfg.contains(END));
+        t.sbt(&["setup", "ssh", "remove"]).unwrap();
+        assert_eq!(std::fs::read_to_string(h.join(".ssh/config")).unwrap(), "");
+    }
+
+    #[test]
+    fn keeps_the_users_config_and_mode_and_is_rerunnable() {
+        use std::os::unix::fs::PermissionsExt;
+        let mut t = test_env(&[]);
+        let h = home(&mut t);
+        std::fs::create_dir_all(h.join(".ssh")).unwrap();
+        let user = "Host gh\n  User git\n";
+        std::fs::write(h.join(".ssh/config"), user).unwrap();
+        std::fs::set_permissions(
+            h.join(".ssh/config"),
+            std::fs::Permissions::from_mode(0o644),
+        )
+        .unwrap();
+        t.sbt(&["setup", "ssh"]).unwrap();
+        let first = std::fs::read_to_string(h.join(".ssh/config")).unwrap();
+        t.sbt(&["setup", "ssh"]).unwrap();
+        assert_eq!(
+            std::fs::read_to_string(h.join(".ssh/config")).unwrap(),
+            first
+        );
+        assert!(first.ends_with(user));
+        let mode = std::fs::metadata(h.join(".ssh/config"))
+            .unwrap()
+            .permissions()
+            .mode()
+            & 0o777;
+        assert_eq!(mode, 0o644);
+        t.sbt(&["setup", "ssh", "remove"]).unwrap();
+        assert_eq!(
+            std::fs::read_to_string(h.join(".ssh/config")).unwrap(),
+            user
+        );
+    }
+
+    #[test]
+    fn leaves_an_sbx_block_alone() {
+        let mut t = test_env(&[]);
+        let h = home(&mut t);
+        std::fs::create_dir_all(h.join(".ssh")).unwrap();
+        let sbx = "# >>> docker sandboxes (managed) >>>\nHost *.sbx\n# <<< docker sandboxes (managed) <<<\n";
+        std::fs::write(h.join(".ssh/config"), sbx).unwrap();
+        t.sbt(&["setup", "ssh"]).unwrap();
+        t.sbt(&["setup", "ssh", "remove"]).unwrap();
+        assert_eq!(std::fs::read_to_string(h.join(".ssh/config")).unwrap(), sbx);
+    }
+
+    #[test]
+    fn auto_create_is_unsupported() {
+        let mut t = test_env(&[]);
+        home(&mut t);
+        assert!(
+            t.sbt_err(&["setup", "ssh", "--auto-create"])
+                .contains("not supported")
+        );
+    }
+}

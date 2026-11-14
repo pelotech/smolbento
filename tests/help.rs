@@ -62,6 +62,8 @@ fn help_snapshots() {
         vec!["kit", "pull"],
         vec!["kit", "sign"],
         vec!["kit", "verify"],
+        vec!["setup"],
+        vec!["setup", "ssh"],
         vec!["env"],
         vec!["env", "create"],
         vec!["env", "run"],
