@@ -1,5 +1,12 @@
 # Changelog
 
+## [0.25.1](https://github.com/pelotech/smolbento/compare/v0.25.0...v0.25.1) (2026-11-14)
+
+
+### Bug Fixes
+
+* move to smolvm 1.35 and idmap fix ([#113](https://github.com/pelotech/smolbento/issues/113)) ([882e4fa](https://github.com/pelotech/smolbento/commit/882e4fa7bf150d276e230964752110bfada5302b))
+
 ## [0.25.0](https://github.com/pelotech/smolbento/compare/v0.24.0...v0.25.0) (2026-11-14)
 
 
