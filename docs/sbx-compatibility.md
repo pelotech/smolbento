@@ -64,7 +64,7 @@ smolbento-only:
 | `inspect` | Also CPUs, memory, uptime, image digest, auth mode, network, mount and proxy policy, runtime mounts, MCP gateway, daemon | Those are left out. The rest matches sbx's layout and JSON keys |
 | `reset` | Deletes all state, kit host-mount directories included | Removes sandboxes, session state and the shared skills store. Kit host-mount directories stay: delete them yourself |
 | Progress output | A line per image layer | No per-layer lines. The pull shows a percentage, and the image step reads `preparing` until smolvm reports a pull (a cached image has none). CPU and Memory print before a kit's `resources@1`. A kit's "cached" label is approximate when pulls or builds overlap. On a terminal, a step's detail stays on the step's line, and a warning follows the step's last drawn line |
-| Browser and clipboard | Shims post to the daemon's proxy with `curl` and `jq`; copies work from any `exec`; image paste behind `clipboard.imagePaste`; `SBX_HOST_SESSION_ID` routes requests | Same shims and texts over a socket smolvm mounts at `/run/smolbento/bridge.sock`, with `curl` only. Served only while attached (`run`, `exec -it`); otherwise URLs print the fallback and copies fail. No image paste. sbx doesn't read clipboard text either. No `SBX_HOST_SESSION_ID`: the first attached session serves. Sandboxes created before the bridge need recreating. Forks keep the parent's socket, so they use its bridge while it's attached. Login relay: `curl -g --noproxy '*'` with 10-second timeouts (`wget` for a `GET`); no request body (`form_post` callbacks lose theirs); text responses only; at most 4 ports per session, each for 10 minutes. See [Usage](usage.md#browser-and-clipboard) |
+| Browser and clipboard | Shims post to the daemon's proxy with `curl` and `jq`; copies work from any `exec`; image paste behind `clipboard.imagePaste`; `SBX_HOST_SESSION_ID` routes requests | Same shims and texts over a socket smolvm mounts at `/run/smolbento/bridge.sock`, with `curl` only. Served by a launchd or `systemd --user` unit whenever the sandbox runs; without a usable service manager, only while attached (`run`, `exec -it`), and then URLs print the fallback and copies fail otherwise. No image paste. sbx doesn't read clipboard text either. No `SBX_HOST_SESSION_ID`: with units each connection is served alone; attached-only serving: the first attached session. Sandboxes created before the bridge need recreating. Forks keep the parent's socket, so they use its bridge while it is served. Login relay: `curl -g --noproxy '*'` with 10-second timeouts (`wget` for a `GET`); no request body (`form_post` callbacks lose theirs); text responses only; at most 4 ports per session (with units, per connection), each for 10 minutes. See [Usage](usage.md#browser-and-clipboard) |
 | Command aliases | `ls`, `rm`/`delete`, `secret ls`/`rm`/`delete`/`unset`, `settings ls`, `template ls`/`list`, `template rm`/`remove`/`delete` | Implemented. `volume` aliases come with that command |
 | `--version` | `sbx version vX` | `sbt --version` prints `sbt X`; `sbt version` also shows the smolvm version |
 
@@ -187,23 +187,25 @@ your agent (`ssh-add -D` fails with `Failed to remove all identities.`). The set
 
 | Area | sbx | smolbento |
 |---|---|---|
-| Serving | The daemon, whenever the sandbox runs | Only while `sbt` runs for the sandbox: `sbt run`, `sbt exec -it`, plain `sbt exec`, and the create's install steps for an `install` grant. At other times (a `long-running` sandbox with nobody attached) agent connections fail |
-| Sessions | Every session reaches the agent | The first session serves it; a concurrent second uses it. When the first exits, the agent is gone until the next `run` or `exec` |
-| Which agent | The sbx client's `SSH_AUTH_SOCK` | The `SSH_AUTH_SOCK` of the serving `sbt`, or `ssh.agentSocketPath` |
+| Serving | The daemon, whenever the sandbox runs | A launchd or `systemd --user` unit owns the socket and runs `sbt _serve agent` per connection, whenever the sandbox runs (no smolbento daemon). The create's install steps serve an `install` grant themselves. Without a usable service manager, and for sandboxes made before units, only while `sbt` runs for the sandbox (`run`, `exec -it`, plain `exec`), and agent connections fail at other times |
+| Sessions | Every session reaches the agent | Every connection is served alone. Attached-only serving: the first session serves it and a concurrent second uses it |
+| Which agent | The sbx client's `SSH_AUTH_SOCK` | `ssh.agentSocketPath`, else the user session's `SSH_AUTH_SOCK` (launchd supplies macOS's; on Linux, that of the last `sbt` that wrote the unit). Attached-only serving: the serving `sbt`'s |
 | `SSH_AUTH_SOCK_GATEWAY` | `gateway.docker.internal:3129` | Not set (no TCP gateway) |
 | `authenticate` limits | Logins only to the named servers | Supported. Host keys come from `ssh.knownHostsFile` (smolbento-only setting, default `~/.ssh/known_hosts`), read at each login. A server known only through `@cert-authority`, or by a wildcard or negated pattern, is refused, as is a `[host]:port` entry; hashed names work |
 | `setup ssh` | `ssh NAME.sbx` into sandboxes | Not yet (Phase 5h) |
-| Forks | No forks | No agent of its own, but it keeps the parent's socket mount, so it can use the agent (with the parent's grant) while the parent is served |
+| Forks | No forks | No agent or units of its own, but it keeps the parent's socket mount, so it can use the agent (with the parent's grant) while the parent is served |
 | `kit add` of an `ssh-agent@1` kit | Recreates the container | `recreate required: … SSH agent` |
 | Sandboxes from before | n/a | Created before smolbento had the agent, so they have none. Recreate them |
 
 Docker's kit-spec conformance suite checks this capability through `tests/conformance/smolbento-adapter`
-(`just conformance`, pinned to sandbox-kit-spec `06ac386`). `logins-bounded`, `binding-verified`,
-`destination-keys-outside-sandbox` and `unavailable-refuses-required` pass; `phase-scoped` is skipped
-(needs `lifecycle@1`). `agent-reachable`, `operations-restricted`, `signatures-bounded`,
-`absent-without-grant`, `every-boot` and `unavailable-skips-optional` fail: their probe runs as the
-workload image's `Entrypoint` at boot, which smolbento doesn't run, and needs the agent served while
-nobody is attached.
+(`just conformance`, pinned to sandbox-kit-spec `06ac386`). Ten `ssh-agent@1` checks pass
+(`agent-reachable`, `operations-restricted`, `signatures-bounded`, `logins-bounded`,
+`binding-verified`, `destination-keys-outside-sandbox`, `absent-without-grant`, `every-boot`,
+`unavailable-refuses-required`, `unavailable-skips-optional`); `phase-scoped` is
+skipped (needs `lifecycle@1`). Two other checks fail in the run, neither about the agent:
+`host-mount@1/unadvertised-is-unmet` and `SPEC-v3 §7.1.2/exact-version`. The suite's isolated
+setup needs the units' socket path under 104 bytes (a short `SMOLBENTO_TCK_HOME`); a longer one
+falls back to attached-only serving and the boot-time checks fail.
 
 ## Kits
 
@@ -229,7 +231,7 @@ anything is created. An optional one is skipped with a warning.
 | `privileged@1` | Yes | Yes |
 | `agent-sessions@1` | Declaration only | Declaration only |
 | `host-mount@1` | Yes | Yes: a directory on your machine, shared by the kit's sandboxes and kept after `rm` (see below) |
-| `ssh-agent@1` | Yes | Yes, with `sign` and `authenticate` limits, served while `sbt` runs ([SSH agent](#ssh-agent)) |
+| `ssh-agent@1` | Yes | Yes, with `sign` and `authenticate` limits, served by a service unit ([SSH agent](#ssh-agent)) |
 | `agent-skills@1`, `agent-skill@1` | Yes | Yes ([Skills](#skills)). `kit add` refuses a kit with either, as it does `host-mount@1`. `agent-skill@1` with `name: null` means no name |
 | `kit-registry@1` | Approved builder kits only | No |
 | `agent-interactive-sessions@1`, `usb-device@1` | No | No |
@@ -241,6 +243,9 @@ anything is created. An optional one is skipped with a warning.
   user. Without `/bin/bash` the error is `executable file '/bin/bash' not found` (exit 127).
   smolvm maps the workspace to the image user so it can write it. An image with no `ENTRYPOINT`
   or `CMD` is refused at create and by `kit validate`.
+- A v3 workload's `ENTRYPOINT` + `CMD` also run at every boot, as the image user, as the kit
+  spec's default launch mode says (the machine's command; smolvm keeps the machine up after it
+  exits). Not measured against sbx. `sbt run` is unchanged: an interactive session through `exec`.
 - Install steps run as root in the image `WORKDIR` (`/` otherwise). Startup steps and kit files
   default to `agent`. v3 install steps get a clean environment: `PATH`, `HOME`, `USER`, `TERM`,
   the proxy and CA variables, and the step's own `env`. v3 startup steps and all v2 steps get the

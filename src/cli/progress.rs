@@ -201,6 +201,7 @@ impl CreateSteps {
         match e {
             // "preparing" until smolvm reports a pull: a cached image needs none, and a cache
             // miss may pull without progress (smolvm builds its cache entry silently).
+            Event::Created | Event::Booted => {}
             Event::Boot => {
                 self.p.section("IMAGE");
                 self.begin("image", "preparing", "ready");

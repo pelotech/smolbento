@@ -116,6 +116,8 @@ fn add_remote_and_branch<R: Runner>(
         // its own (`bridge::host_socket`): a fork gets no shims at starts, though its processes
         // can still reach the parent's socket while the parent is attached.
         (labels::BRIDGE.to_string(), "false".to_string()),
+        // Nor units: they serve their own sandbox's sockets.
+        (labels::SERVICE.to_string(), "false".to_string()),
     ];
     // Nor an SSH agent: an empty label reads as none (smolvm can't remove an inherited one).
     // Like the bridge, the copy's mount still points at the parent's socket.
@@ -219,7 +221,7 @@ mod tests {
     fn branch(fork: &str) -> String {
         format!(
             "machine branch --from sbx-a -n sbx-{fork} --label sbx.name={fork} \
-             --label sbx.fork-of=a --label sbx.created=1000000 --label sbx.bridge=false \
+             --label sbx.fork-of=a --label sbx.created=1000000 --label sbx.bridge=false --label sbx.service=false \
              -e SANDBOX_NAME={fork} -e SANDBOX_VM_ID={fork} -e SANDBOX_ID=ID"
         )
     }
@@ -323,7 +325,7 @@ mod tests {
             branches(&t),
             vec![
                 "machine branch --from sbx-a -n sbx-try_2 --label sbx.name=try.2 \
-                 --label sbx.fork-of=a --label sbx.created=1000000 --label sbx.bridge=false \
+                 --label sbx.fork-of=a --label sbx.created=1000000 --label sbx.bridge=false --label sbx.service=false \
                  -e SANDBOX_NAME=try.2 -e SANDBOX_VM_ID=try.2 -e SANDBOX_ID=ID"
             ]
         );

@@ -34,6 +34,10 @@ pub const DOCKER_START: &str = "pgrep -x dockerd >/dev/null || { rm -f /var/run/
 /// What a create or start is doing, for the caller's progress output.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum Event<'a> {
+    /// The machine exists and hasn't started: the host's units for its sockets can be installed.
+    Created,
+    /// The first start, with its kit install hooks, is done; the startup hooks follow.
+    Booted,
     /// `machine start` begins; smolvm pulls the image first when it's missing.
     Boot,
     /// smolvm's image pull progress.
@@ -75,6 +79,8 @@ pub struct KitFirstStart {
     /// Where an install-phase `ssh-agent@1` grant (`sbx.ssh-agent`) finds the host agent while
     /// the install hooks run.
     pub agent_backing: Option<crate::ssh_agent::filter::Backing>,
+    /// The agent socket the install hooks' grant is served at; `None`: `bridge::agent_socket`.
+    pub agent_socket: Option<std::path::PathBuf>,
 }
 
 #[derive(Debug, Clone, PartialEq)]
@@ -250,7 +256,8 @@ fn setup<R: Runner>(
     // socket is in the same directory; a start only warns for it, as sessions serve it and
     // `listener::bind` checks the directory again then.
     let dir = bridge::socket_dir();
-    let safe = !(sb.meta.bridge || sb.meta.ssh_agent.is_some()) || private(&dir);
+    // Units own the sockets of a `service` sandbox, in a directory `host_service` keeps private.
+    let safe = !(sb.meta.bridge || sb.meta.ssh_agent.is_some()) || sb.meta.service || private(&dir);
     if !safe {
         for w in unsafe_dir_warnings(sb, &dir) {
             eprintln!("{w}");
@@ -352,6 +359,7 @@ pub fn create<R: Runner>(
     }
     vm.create(&create::spec(&checked))?;
     let mut sb = get(vm, &req.name)?;
+    on(Event::Created);
     // A sandbox whose first start failed isn't usable, so it is removed (as sbx does) and the
     // same command can simply be run again. The cause, which names the step that failed, stays
     // in the chain, where a smolvm error's hint is looked up.
@@ -365,12 +373,14 @@ pub fn create<R: Runner>(
     };
     let Some(kit) = &plan.kit else {
         start_with(vm, &sb, plan, on).map_err(removed)?;
+        on(Event::Booted);
         sb.state = MachineState::Running;
         return Ok(sb);
     };
     start_with(vm, &sb, plan, on)
         .and_then(|()| first_start(vm, &sb, plan, kit, drop_install_rules, on))
         .map_err(removed)?;
+    on(Event::Booted);
     sb.state = MachineState::Running;
     if let Err(e) = run_startup(vm, &sb, None) {
         // Kept, as in sbx, but stopped: the next start runs the hooks again and fails until
@@ -451,7 +461,11 @@ fn install_agent(sb: &Sandbox, kit: &KitFirstStart) -> Option<bridge::Server> {
     if kit.steps.install.is_empty() {
         return None;
     }
-    crate::ssh_agent::filter::serve_for(sb.name(), access, backing)
+    let socket = kit
+        .agent_socket
+        .clone()
+        .unwrap_or_else(|| bridge::agent_socket(sb.name()));
+    crate::ssh_agent::filter::serve_for(sb.name(), &socket, access, backing)
 }
 
 /// sbx's warning when a create's startup hooks fail (the sandbox is kept).

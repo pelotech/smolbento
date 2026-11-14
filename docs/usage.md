@@ -223,8 +223,10 @@ wins. Differences from sbx are in [sbx compatibility](sbx-compatibility.md#sandb
 
 ## Browser and clipboard
 
-Attach with `sbt run` or `sbt exec -it`, and the sandbox can open URLs in your browser and copy text
-to your clipboard:
+The sandbox can open URLs in your browser and copy text to your clipboard, whenever it runs. On
+macOS (launchd) and Linux (`systemd --user`) a service unit owns the socket, so nothing needs to be
+attached; without a usable service manager (a container, CI without a user session) it works only
+while `sbt run` or `sbt exec -it` is attached.
 
 ```sh
 # inside the sandbox
@@ -232,14 +234,14 @@ xdg-open https://github.com/login/device    # opens in your host browser
 git diff | wl-copy                          # or xclip, xsel, pbcopy, clip.exe
 ```
 
-- Only `https://` URLs open. Others, or any URL opened with nobody attached, print `Open this URL in
-  your browser: URL`.
+- Only `https://` URLs open. Others, or any URL when nothing serves the socket, print `Open this URL
+  in your browser: URL`.
 - Copying is text only. Reading the clipboard (`wl-paste`, `xclip -o`, `xsel -o`) prints nothing,
-  and images can't be pasted. Copying with nobody attached fails with `<command>: failed to write
-  host clipboard`.
+  and images can't be pasted. Copying when nothing serves the socket fails with `<command>: failed
+  to write host clipboard`.
 - Browser logins work. For a `redirect_uri` of `http://localhost:PORT/…` or
-  `http://127.0.0.1:PORT/…`, smolbento listens on your `127.0.0.1:PORT` for 10 minutes (or until the
-  session ends) and relays the callback. If something else answers that port, it warns and still
+  `http://127.0.0.1:PORT/…`, smolbento listens on your `127.0.0.1:PORT` for 10 minutes (the
+  connection's process stays that long) and relays the callback. If something else answers that port, it warns and still
   opens the URL. A session relays at most 4 ports. A callback with a body
   (`response_mode=form_post`) loses it; query-string redirects work.
 - Over SSH without a forwarded display (Linux: no `DISPLAY` or `WAYLAND_DISPLAY`; macOS: always over
@@ -248,13 +250,20 @@ git diff | wl-copy                          # or xclip, xsel, pbcopy, clip.exe
   works.
 - The shims go in `/usr/local/bin` on every start and need `curl` in the image. `BROWSER` is
   `xdg-open`, so agents such as Claude Code's `/login` open the browser.
-- Only the first attached session serves the bridge. When it exits, the bridge stops until the next
-  `run` or `exec -it`.
-- Sandboxes created before this feature have no bridge; recreate them. The bridge needs
-  `/tmp/sbt-<uid>` to be a private directory owned by you (0700), checked at create and at every
-  start, or it's skipped with a warning.
-- Forks don't install the shims, but keep the parent's socket mount, so they can use the parent's
-  bridge while the parent is attached.
+- The unit runs `sbt _serve bridge NAME` for each connection, with the settings and `PATH` of the
+  last `sbt` that touched the sandbox (`create`, `start`, `run`, `exec` rewrite a unit that
+  differs, so an upgraded binary or a new `PATH` follows). Units are written at create for sandboxes
+  created by this version; earlier ones, and without a service manager, are served only while
+  attached (the first attached session serves it).
+- Sandboxes created before the bridge have none; recreate them. The socket directory must be
+  private and yours (0700), checked at create and at start (macOS: `~/Library/Application
+  Support/smolbento/sock`; Linux: `$XDG_RUNTIME_DIR/smolbento`; attached-only serving:
+  `/tmp/sbt-<uid>`), or the bridge is skipped with a warning.
+- Forks don't install the shims or get units, but keep the parent's socket mount, so they can use
+  the parent's bridge while the parent's unit (or attached session) serves it.
+- `sbt rm`, `prune`, `reset` and `env rm` remove a sandbox's units and sockets. Units of a sandbox
+  deleted with `smolvm machine delete` are removed by the next `create`, `start`, `run`, `exec`,
+  `rm` or `prune` (never by `ls`); `prune --dry-run` lists them and `diagnose` reports them.
 
 ## SSH agent
 
@@ -272,9 +281,19 @@ ssh-add -D                                  # fails: the sandbox can't change yo
   none, or with `ssh.agentForwardingEnabled` set to `false`, the sandbox is created without one,
   silently.
 - Only listing keys and signing get through. Adding, removing or locking keys fails.
-- It's served while `sbt` runs for the sandbox (`run`, `exec -it`, plain `exec`). Otherwise the
-  sandbox's connections fail as with an unreachable agent. Only the first `sbt` to start serves it;
-  when that one exits, the agent is gone until the next `run` or `exec`.
+- With a service manager (launchd on macOS, `systemd --user` on Linux) a unit owns the sandbox's
+  agent socket and runs `sbt _serve agent NAME` for each connection, so the agent answers whenever
+  the sandbox runs, attached or not, across stop and start. The unit uses `ssh.agentSocketPath`,
+  else the `SSH_AUTH_SOCK` of the user session (launchd supplies macOS's; on Linux the unit gets
+  that of the last `sbt` that wrote it). Without a service manager, or for a sandbox created before
+  units, it is served only while `sbt` runs for the sandbox (`run`, `exec -it`, plain `exec`; the
+  first `sbt` to start serves it). A socket path of 104 bytes or more (a very long home
+  directory) also means no units.
+- Units live in `~/Library/Application Support/smolbento/launchd` (`dev.smolbento.<id>.<sandbox>.agent.plist`; not in `~/Library/LaunchAgents`, which makes macOS announce a background item per sandbox, and not persistent: they're loaded again when `create`, `start`, `run` or `exec` find them unloaded after a reboot) or
+  `~/.config/systemd/user` (`smolbento-<id>-<sandbox>-agent.socket`), named with a short hash of
+  smolbento's data dir; they exist only for sandboxes with a runtime grant or the bridge, and go with
+  the sandbox (see [Browser and clipboard](#browser-and-clipboard)). The socket is `0600` in a
+  private directory of yours.
 - Each connection re-reads settings. `sbt settings set ssh.agentForwardingEnabled false` refuses new
   connections at once; open ones stay. A changed `ssh.agentSocketPath` applies to new connections.
 - Kits request it with `ssh-agent@1`: `phase: install`, `runtime` or both, and `sign: [git, …]` to
@@ -323,7 +342,9 @@ A **mixin** adds to an agent (`--kit`, repeatable). A **workload** kit replaces 
 where the agent name goes, and the sandbox takes its name. Its image's command runs as the image's
 `USER` (root if none) under `/bin/bash`, in the workspace path, and `sbt exec` uses the same user.
 smolvm maps the workspace to that user. A workload with no `ENTRYPOINT` or `CMD` is refused, and one
-without `/bin/bash` can't start its agent.
+without `/bin/bash` can't start its agent. A v3 workload's `ENTRYPOINT` + `CMD` also run at every
+boot (as the image user), as the kit spec's default launch mode says; the machine stays up if it
+exits, and `sbt run` still starts its own interactive session.
 
 | Reference | Kit |
 |---|---|
@@ -967,10 +988,13 @@ shell-scratch   shell    ○ stopped                         -                  
 sbt stop claude-myrepo                 # keeps the disk
 sbt start claude-myrepo
 sbt rm claude-myrepo                   # asks first; -f to skip; --all for every sandbox
-sbt prune                              # remove all stopped sandboxes
+sbt prune                              # remove all stopped sandboxes, and leftover host services
 sbt prune --dry-run --filter until=24h # stopped sandboxes created more than 24h ago
 sbt reset -f                           # remove every sandbox
 ```
+
+`prune --dry-run` also lists host service units left by sandboxes deleted with `smolvm machine
+delete` (`Would remove NAME (leftover host services)`), and `prune` removes them without asking.
 
 Commands that delete things ask for confirmation, and refuse to run without a terminal unless you
 pass `-f`.

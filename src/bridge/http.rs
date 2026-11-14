@@ -58,6 +58,16 @@ fn accept_loop(listener: &UnixListener, stop: &AtomicBool, h: &Handlers, deadlin
     }
 }
 
+/// Answers the one request on `stream`, as a unit's `_serve bridge` does.
+pub fn serve_connection(stream: &UnixStream, h: &Handlers) {
+    handle(
+        stream,
+        h,
+        Instant::now() + DEADLINE,
+        &AtomicBool::new(false),
+    );
+}
+
 /// Answers one request. Request bodies (clipboard text) are never logged.
 fn handle(stream: &UnixStream, h: &Handlers, until: Instant, stop: &AtomicBool) {
     // Accepted sockets inherit non-blocking mode on some systems.
@@ -644,6 +654,21 @@ mod tests {
 
     fn sock(dir: &tempfile::TempDir) -> PathBuf {
         dir.path().join("sbt").join("x.sock")
+    }
+
+    #[test]
+    fn one_connection_on_any_socket_is_answered() {
+        let (h, seen) = recording(true, false);
+        let (mut client, server) = UnixStream::pair().unwrap();
+        let t = thread::spawn(move || serve_connection(&server, &h));
+        client
+            .write_all(b"POST /copy HTTP/1.1\r\nHost: bridge\r\nContent-Length: 2\r\n\r\nhi")
+            .unwrap();
+        let mut out = String::new();
+        client.read_to_string(&mut out).unwrap();
+        t.join().unwrap();
+        assert!(out.starts_with("HTTP/1.1 204 "), "{out}");
+        assert_eq!(*seen.lock().unwrap(), ["copy hi"]);
     }
 
     #[test]

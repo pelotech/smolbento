@@ -9,6 +9,7 @@ use anyhow::{Context, Result, bail};
 
 use crate::bridge;
 use crate::ctx::Ctx;
+use crate::host_service::Kind;
 use crate::kits::apply::apply;
 use crate::kits::host_mount;
 use crate::kits::resolve::Plan;
@@ -116,10 +117,73 @@ fn plan_for<R: Runner>(
     })
 }
 
-/// `sandbox::ensure_running` with this context's plan.
+/// `sandbox::ensure_running` with this context's plan; also brings the sandbox's host service
+/// units up to date and sweeps the leftovers of removed sandboxes.
 pub fn ensure_running<R: Runner>(ctx: &Ctx<R>, sb: &mut Sandbox) -> Result<()> {
+    sweep_orphans(ctx);
+    refresh_services(ctx, sb);
     let meta = sb.meta.clone();
     sandbox::ensure_running(&ctx.vm, sb, || start_plan(ctx, &meta))
+}
+
+/// The units a sandbox's sockets need: the bridge, and the agent when a runtime phase is granted.
+pub(crate) fn service_kinds(meta: &Meta) -> Vec<Kind> {
+    let mut kinds = Vec::new();
+    if meta.ssh_agent.as_ref().is_some_and(|a| a.runtime.is_some()) {
+        kinds.push(Kind::Agent);
+    }
+    if meta.bridge {
+        kinds.push(Kind::Bridge);
+    }
+    kinds
+}
+
+/// Writes (and loads) the units of the sandbox `name`, or removes the other kind's. Failures only
+/// warn: without a unit the sockets are served while a session is attached only, if at all.
+pub(crate) fn sync_services<R: Runner>(ctx: &Ctx<R>, name: &str, kinds: &[Kind]) {
+    if let Err(e) = ctx.services.sync(name, kinds, &ctx.paths, &ctx.env) {
+        eprintln!("warning: {name}: host services for the browser, clipboard and SSH agent: {e:#}");
+    }
+}
+
+/// Rewrites the units of a sandbox served by them if they differ (a new binary path, a new
+/// `SSH_AUTH_SOCK`), so a stale unit mends itself on next use.
+pub fn refresh_services<R: Runner>(ctx: &Ctx<R>, sb: &Sandbox) {
+    if sb.meta.service {
+        sync_services(ctx, sb.name(), &service_kinds(&sb.meta));
+    }
+}
+
+/// Removes the units of sandboxes smolvm no longer has (deleted with `smolvm machine delete`,
+/// which gives no hook). Called by commands that change state; names are returned.
+pub fn sweep_orphans<R: Runner>(ctx: &Ctx<R>) -> Vec<String> {
+    let gone = orphan_services(ctx);
+    for name in &gone {
+        if let Err(e) = ctx.services.remove(name) {
+            eprintln!("warning: removing the leftover host services of {name}: {e:#}");
+        }
+    }
+    gone
+}
+
+/// Sandbox names with units here and no machine in smolvm: `sweep_orphans` without removing.
+pub fn orphan_services<R: Runner>(ctx: &Ctx<R>) -> Vec<String> {
+    if ctx.services.units().is_empty() {
+        return Vec::new();
+    }
+    live_sandboxes(ctx).map_or_else(Vec::new, |live| ctx.services.orphans(&live))
+}
+
+/// The names of smolvm's sandboxes; `None` when it can't say (nothing is then removed).
+fn live_sandboxes<R: Runner>(ctx: &Ctx<R>) -> Option<Vec<String>> {
+    let machines = ctx.vm.list().ok()?;
+    Some(
+        machines
+            .iter()
+            .filter_map(Sandbox::from_machine)
+            .map(|sb| sb.meta.name)
+            .collect(),
+    )
 }
 
 /// The policy, asking for a network policy the first time one is needed (sbx behaviour).
@@ -270,6 +334,7 @@ pub fn prepare_create<R: Runner>(
             restart_without: req.credential_install.clone(),
             rule_ids: ids,
             agent_backing: Some(crate::ssh_agent::filter::Backing::new(&ctx.paths, &ctx.env)),
+            agent_socket: None,
         });
     }
     if let Some(mcp) = attachment {
@@ -306,6 +371,7 @@ pub fn prepare_create<R: Runner>(
                     restart_without: Vec::new(),
                     rule_ids: Vec::new(),
                     agent_backing: None,
+                    agent_socket: None,
                 })
                 .steps
                 .install
@@ -428,8 +494,13 @@ fn settle_agent<R: Runner>(
     if grant.is_empty() || name::is_internal(&req.name) {
         return Ok(vec![]);
     }
-    // The agent's socket goes in the bridge's directory, checked only when there's an agent.
-    let dir = bridge::socket_dir();
+    // The agent's socket goes where the bridge's does, checked only when there's an agent: in
+    // the units' directory when the host has a service manager.
+    let dir = if ctx.services.usable() {
+        ctx.services.sock_dir().to_path_buf()
+    } else {
+        bridge::socket_dir()
+    };
     let backing = match agent::host_agent(&ctx.settings, &ctx.env)? {
         Ok(_) if !private(&dir) => Err(agent::Unavailable::UnsafeDir(dir)),
         b => b,
@@ -493,6 +564,7 @@ pub fn create_with<R: Runner>(
     prepared: Option<sandbox::KitFirstStart>,
     on: &mut dyn FnMut(sandbox::Event),
 ) -> Result<Sandbox> {
+    sweep_orphans(ctx);
     // The repo a `--clone` copies, at its top.
     let repo = req.clone.as_ref().map(|c| c.top.clone());
     if let Some(repo) = &repo {
@@ -520,7 +592,13 @@ pub fn create_with<R: Runner>(
     let result = (|| {
         let (ids, kit) = prepare_create(ctx, req, deny_network, kits)?;
         added.extend(ids);
-        let kit = kit.or(prepared);
+        let mut kit = kit.or(prepared);
+        // Units serve the sockets when the host has a service manager, for the bridge and a
+        // runtime agent grant (known now that the agent was settled).
+        req.host_services = plan_services(ctx, req);
+        if let Some(k) = &mut kit {
+            k.agent_socket = req.host_services.as_ref().map(|s| s.agent.clone());
+        }
         // The machine is created with this create's install-phase rules open: the first start's
         // setup and install hooks run under them, until `drop_install_rules`.
         if let Some(k) = &kit
@@ -566,14 +644,38 @@ pub fn create_with<R: Runner>(
             None => start_plan(ctx, &meta)?,
         };
         let req: &CreateRequest = req;
+        // The units go in once the machine exists (the orphan sweep would remove them before)
+        // and before its first start, so a boot-time workload reaches the agent and the bridge.
+        // An install-phase agent grant is served by the install hooks alone on the same socket,
+        // so the units wait until they are done.
+        let kinds = service_kinds(&meta);
+        let install_grant = meta.ssh_agent.as_ref().is_some_and(|a| a.install.is_some());
+        let at = if install_grant {
+            sandbox::Event::Booted
+        } else {
+            sandbox::Event::Created
+        };
+        let mut on_event = |e: sandbox::Event| {
+            if e == at && req.host_services.is_some() {
+                sync_services(ctx, &req.name, &kinds);
+            }
+            on(e);
+        };
         sandbox::create(
             &ctx.vm,
             req,
             &plan,
             |ids| drop_install_rules(ctx, req, ids),
-            on,
+            &mut on_event,
         )
     })();
+    if result.is_err() && req.host_services.is_some() {
+        // A failed first start removes the machine, and the units that were installed with it.
+        let gone = matches!(sandbox::find(&ctx.vm, &req.name), Ok(None));
+        if gone && let Err(e) = ctx.services.remove(&req.name) {
+            eprintln!("warning: removing the host services of {}: {e:#}", req.name);
+        }
+    }
     let rollback = result.is_err() && (!added.is_empty() || added_remote.is_some());
     let gone = rollback
         && match sandbox::find(&ctx.vm, &req.name) {
@@ -610,6 +712,18 @@ pub fn create_with<R: Runner>(
         }
     }
     result
+}
+
+/// The sockets units serve for a new sandbox: the host has a service manager and the sandbox gets
+/// a bridge or a runtime agent grant.
+fn plan_services<R: Runner>(
+    ctx: &Ctx<R>,
+    req: &CreateRequest,
+) -> Option<crate::host_service::Sockets> {
+    let meta = sandbox::create::meta(req);
+    (!service_kinds(&meta).is_empty() && !name::is_internal(&req.name))
+        .then(|| ctx.services.plan(&req.name))
+        .flatten()
 }
 
 /// Removes the install-phase kit rules an interrupted create of `name` left in the policy.
@@ -678,6 +792,9 @@ pub fn push_network<R: Runner>(ctx: &Ctx<R>, policy: &Policy) -> Result<()> {
     }
     Ok(())
 }
+
+#[cfg(test)]
+mod services_tests;
 
 #[cfg(test)]
 mod tests {
@@ -1588,6 +1705,7 @@ mod tests {
                 &t.ctx.paths,
                 &t.ctx.env,
             )),
+            agent_socket: None,
         };
         let shown = format!("{first:?}");
         assert!(shown.contains("/a.sock"), "{shown}");

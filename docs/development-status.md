@@ -57,9 +57,12 @@ usage guide is linked from its row in the [Phases](#phases) table.
   best-effort until recreated. See [Security](SECURITY.md#host-services-localhost-rules). Under
   `allow-all`, services on `0.0.0.0` are reachable through the host's LAN IP.
 - Linux stores secret values in a 0600 file where no Secret Service runs.
-- The browser and clipboard bridge works only while attached (`run`, `exec -it`). It copies text
-  only, and never reads the clipboard or pastes images. Forks have no bridge.
-- The SSH agent is served only while `sbt run`, `sbt exec -it` or `sbt exec` runs (no daemon).
+- The browser and clipboard bridge copies text only, and never reads the clipboard or pastes
+  images. Forks have no bridge of their own.
+- The bridge and the SSH agent are served by launchd or `systemd --user` units for sandboxes created
+  by this version. Without a usable service manager, or for earlier sandboxes, they are served only
+  while `sbt run`, `sbt exec -it` or `sbt exec` runs. A sandbox deleted with `smolvm machine delete`
+  leaves its units until the next state-changing command sweeps them (`prune`, `diagnose`).
 - Templates don't keep `/tmp`.
 - Shared skills are linked by a start script running as `agent`. Images without that account get no
   links (a warning). A required bundled kit skill there fails the create.
@@ -106,12 +109,9 @@ meanwhile.
 Measured against sbx v0.49.2, and v0.50.1 for kit host mounts, `--mount` and `inspect`. The full list is
 in [sbx compatibility](sbx-compatibility.md). Worth another look:
 
-- **Workload and agent lifetime.** sbx runs a workload image's `Entrypoint` + `Cmd` when the sandbox
-  starts and serves the SSH agent whenever the sandbox runs. smolbento runs `sleep infinity`, starts the
-  workload on `sbt run`, and serves the agent only while `sbt` is attached (no daemon). Docker's
-  conformance suite fails six `ssh-agent@1` checks for this reason (see
-  [sbx compatibility](sbx-compatibility.md#ssh-agent)). Closing it means running the workload at boot
-  and serving the agent for the sandbox's life: in effect a daemon. Decide together.
+- **Workload boot.** A v3 workload's image `Entrypoint` + `Cmd` now run at every boot, as the kit
+  spec's default launch mode says, and the agent and bridge are served by service units for the
+  sandbox's life (no smolbento daemon). The boot launch isn't measured against sbx.
 - **Secrets sent to other hosts.** sbx lets a kit send a built-in secret (e.g. GitHub) to another host
   after you approve it once per host. smolbento refuses. An approval flow would close the gap.
 - **Kit host mounts.** A published kit's directory is keyed on its repository (sbx's key isn't measured).

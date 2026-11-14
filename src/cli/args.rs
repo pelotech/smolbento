@@ -120,6 +120,10 @@ pub enum Cmd {
     /// (for e2e tests, which can't attach)
     #[command(name = "_bridge", hide = true)]
     Bridge { sandbox: String },
+    /// Serves one connection to a sandbox's agent or bridge socket on stdin (run by the unit that
+    /// owns the socket)
+    #[command(name = "_serve", hide = true)]
+    Serve { kind: String, sandbox: String },
 }
 
 impl Cmd {

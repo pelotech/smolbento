@@ -16,6 +16,7 @@ pub fn run<R: Runner>(ctx: &mut Ctx<R>) -> Result<i32> {
         &ctx.env,
     ));
     checks.push(config_check(ctx));
+    checks.extend(services_check(ctx));
     let (text, code) = report(&checks);
     write!(&ctx.out, "{text}")?;
     Ok(code)
@@ -50,6 +51,21 @@ fn config_check<R: Runner>(ctx: &Ctx<R>) -> (bool, String) {
         Some(err) => (false, format!("config {}: {err}", path.display())),
         None => (true, format!("config {}", path.display())),
     }
+}
+
+/// Units whose sandbox smolvm no longer has (deleted with `smolvm machine delete`).
+fn services_check<R: Runner>(ctx: &Ctx<R>) -> Option<(bool, String)> {
+    let orphans = crate::provision::orphan_services(ctx);
+    (!orphans.is_empty()).then(|| {
+        (
+            false,
+            format!(
+                "host services left by removed sandboxes: {}; `{} prune` removes them",
+                orphans.join(", "),
+                ctx.program
+            ),
+        )
+    })
 }
 
 #[cfg(target_os = "linux")]

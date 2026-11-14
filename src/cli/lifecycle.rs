@@ -107,8 +107,10 @@ fn memory(mib: u64) -> String {
 /// `start NAME` reports one step per sandbox: `○ NAME — starting…`, then `✓ Started NAME`.
 pub fn start<R: Runner>(ctx: &mut Ctx<R>, names: &[String]) -> Result<i32> {
     let p = Progress::for_ctx(ctx, false);
+    provision::sweep_orphans(ctx);
     for n in names {
         let sb = sandbox::get(&ctx.vm, n)?;
+        provision::refresh_services(ctx, &sb);
         if sb.is_running() {
             writeln!(&ctx.out, "{n} is already running")?;
             continue;
@@ -170,6 +172,13 @@ pub(crate) fn delete_keeping_remote<R: Runner>(
     forget_secrets: bool,
 ) -> Result<()> {
     ctx.vm.delete(&sb.machine)?;
+    // The units serving its sockets go with it.
+    if let Err(e) = ctx.services.remove(sb.name()) {
+        eprintln!(
+            "warning: removing the host services of {}: {e:#}",
+            sb.name()
+        );
+    }
     session::clear(&ctx.paths.sessions(), sb.name());
     super::secret::forget_sandbox(ctx, sb.name(), forget_secrets)
 }
@@ -199,6 +208,9 @@ pub(crate) fn remaining_forks<'a>(
 }
 
 pub fn rm<R: Runner>(ctx: &mut Ctx<R>, a: &RmArgs) -> Result<i32> {
+    // First, so it happens even when a name isn't found: that is how leftovers of a sandbox
+    // deleted with `smolvm machine delete` get cleaned by naming it.
+    provision::sweep_orphans(ctx);
     let all = sandbox::list(&ctx.vm)?;
     let targets: Vec<&Sandbox> = if a.all {
         all.iter().collect()
@@ -271,7 +283,9 @@ pub fn prune<R: Runner>(ctx: &mut Ctx<R>, a: &PruneArgs) -> Result<i32> {
         writeln!(&ctx.out, "{} has forks; skipped", sb.name())?;
     }
     let targets = forks_first(targets);
-    if targets.is_empty() {
+    // Units of sandboxes deleted with `smolvm machine delete`: leftovers, not sandboxes.
+    let orphans = provision::orphan_services(ctx);
+    if targets.is_empty() && orphans.is_empty() {
         writeln!(&ctx.out, "Nothing to prune")?;
         return Ok(0);
     }
@@ -279,15 +293,23 @@ pub fn prune<R: Runner>(ctx: &mut Ctx<R>, a: &PruneArgs) -> Result<i32> {
         for sb in &targets {
             writeln!(&ctx.out, "Would remove {}", sb.name())?;
         }
+        for name in &orphans {
+            writeln!(&ctx.out, "Would remove {name} (leftover host services)")?;
+        }
         return Ok(0);
     }
-    confirm(
-        ctx,
-        &format!("Remove {} stopped sandbox(es)?", targets.len()),
-        a.force,
-    )?;
-    for sb in &targets {
-        remove(ctx, sb, true)?;
+    if !targets.is_empty() {
+        confirm(
+            ctx,
+            &format!("Remove {} stopped sandbox(es)?", targets.len()),
+            a.force,
+        )?;
+        for sb in &targets {
+            remove(ctx, sb, true)?;
+        }
+    }
+    for name in provision::sweep_orphans(ctx) {
+        writeln!(&ctx.out, "Removed {name} (leftover host services)")?;
     }
     Ok(0)
 }
@@ -302,6 +324,7 @@ pub fn reset<R: Runner>(ctx: &mut Ctx<R>, a: &ResetArgs) -> Result<i32> {
     for sb in forks_first(all.iter().collect()) {
         remove(ctx, sb, !a.preserve_secrets)?;
     }
+    provision::sweep_orphans(ctx);
     let _ = std::fs::remove_dir_all(ctx.paths.sessions());
     // A store that won't go must not keep the secrets from being forgotten.
     let wiped = crate::skills::store::Store::new(&ctx.paths).wipe();

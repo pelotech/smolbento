@@ -24,9 +24,9 @@ An environment variable beats the config file, which beats the default. Booleans
 | `kit.requireSignature` | `SMOLBENTO_KIT_REQUIRE_SIGNATURE` | `false` | Load registry kits only when a trusted signer signed them. Refuses local kits. See [Kit signatures](#kit-signatures). |
 | `kit.trustedSigners` | `SMOLBENTO_KIT_TRUSTED_SIGNERS` | Docker employees: `identityRegexp` `^.*@docker\.com$`, `issuer` `https://accounts.google.com` | JSON array of trusted signers. See [Kit signatures](#kit-signatures). |
 | `kit.ignoreTransparencyLog` | `SMOLBENTO_KIT_IGNORE_TRANSPARENCY_LOG` | `false` | Verify keyless kit signatures without requiring a Rekor transparency-log entry. |
-| `browser.enabled` | `SMOLBENTO_BROWSER_ENABLED` | `true` | Let sandboxes open `https://` URLs in your browser while you're attached. `false` also stops in-sandbox logins that redirect to `localhost`. See [Details](#details). |
+| `browser.enabled` | `SMOLBENTO_BROWSER_ENABLED` | `true` | Let sandboxes open `https://` URLs in your browser. `false` also stops in-sandbox logins that redirect to `localhost`. See [Details](#details). |
 | `ssh.agentForwardingEnabled` | `SMOLBENTO_SSH_AGENT_FORWARDING` | `true` | Let sandboxes list your SSH agent's keys and sign with them, but not add, remove or lock keys. See [SSH agent](usage.md#ssh-agent). |
-| `ssh.agentSocketPath` | `SMOLBENTO_SSH_AGENT_SOCKET` | empty | Fixed host SSH agent socket. Empty uses each client's current `SSH_AUTH_SOCK`. |
+| `ssh.agentSocketPath` | `SMOLBENTO_SSH_AGENT_SOCKET` | empty | Fixed host SSH agent socket. Empty uses the user session's `SSH_AUTH_SOCK` (the `sbt` client's, while attached). |
 | `ssh.knownHostsFile` | `SMOLBENTO_SSH_KNOWN_HOSTS_FILE` | `~/.ssh/known_hosts` | `known_hosts` file whose host keys decide which servers a kit's `ssh-agent@1` `authenticate` list admits. Read at each login. smolbento-only. |
 | `env.rememberHostCommands` | `SMOLBENTO_ENV_REMEMBER_HOST_COMMANDS` | `false` | Keep an approval of an environment file's host commands until they change. Otherwise `sbt env create` and `sbt env run` ask every time. |
 | `skills.defaultMode` | `SMOLBENTO_SKILLS_DEFAULT_MODE` | `readonly` | Default for a sandbox created without `--skills`: `off`, `readonly` or `readwrite`. See [Details](#details). |
@@ -46,7 +46,7 @@ images go first, and the next sandbox of an evicted image pulls again. An agent 
 2 to 3 GB. Sizes take `k`, `m`, `g` or `t` (`60g`, `1t`). Zero is refused. If you set smolvm's own
 `SMOLVM_IMAGE_SEED_MAX_BYTES`, it wins. smolvm checks the cap when it adds an image.
 
-**`browser.enabled`** applies from the next `run` or `exec -it`. Copying to your clipboard isn't
+**`browser.enabled`** applies to each new connection (the service unit reads settings per connection). Copying to your clipboard isn't
 affected. See [Browser and clipboard](usage.md#browser-and-clipboard).
 
 **`ssh.agentForwardingEnabled` and `ssh.agentSocketPath`** are checked when a sandbox is created and
@@ -124,6 +124,8 @@ Sign a kit with `sbt kit sign --help`.
 | `~/.local/share/smolbento/env/` | Your approval record for each environment file (`<name>.toml`) |
 | `~/.local/share/smolbento/templates/` | Saved templates: `templates.json` and the `<id>.smolmachine` packs |
 | `~/.local/share/smolbento/kit-host-mounts/` | Kit [host mounts](usage.md#kit-host-mounts), kept after their sandboxes are removed |
+| `~/Library/Application Support/smolbento/launchd/dev.smolbento.<id>.<sandbox>.<agent\|bridge>.plist` (macOS), `~/.config/systemd/user/smolbento-<id>-<sandbox>-<agent\|bridge>.socket` and `…@.service` (Linux) | [Host service](usage.md#browser-and-clipboard) units, one per socket of a sandbox; `<id>` is a short hash of the data dir. Removed with the sandbox. |
+| `~/Library/Application Support/smolbento/sock/` (macOS), `$XDG_RUNTIME_DIR/smolbento/` (Linux) | Their sockets, mode 0600 in a private (0700) directory. Without a service manager, sockets are `/tmp/sbt-<uid>/`, served while attached. |
 
 `XDG_CONFIG_HOME`, `XDG_CACHE_HOME` and `XDG_DATA_HOME` are honoured, also on macOS.
 `SMOLBENTO_CONFIG_DIR`, `SMOLBENTO_CACHE_DIR` and `SMOLBENTO_DATA_DIR` override them. An empty

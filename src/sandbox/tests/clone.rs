@@ -211,13 +211,15 @@ fn create_tells_what_it_is_doing() {
     assert_eq!(
         events,
         [
+            "Created",
             "Boot",
             "Pull(Percent(10))",
             "Pull(Syncing)",
             "Setup",
             "Install(\"k\")",
             "Install(\"j\")",
-            "Install(\"docker\")"
+            "Install(\"docker\")",
+            "Booted"
         ]
     );
 }

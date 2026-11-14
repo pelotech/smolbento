@@ -81,6 +81,9 @@ pub struct CreateRequest {
     /// Created without the browser and clipboard bridge: the host's socket directory isn't
     /// private (`drop_unsafe_bridge`).
     pub no_bridge: bool,
+    /// The host sockets units serve for this sandbox (`host_service`); `None`: they are served
+    /// while a session is attached, at the `bridge::host_socket` paths.
+    pub host_services: Option<crate::host_service::Sockets>,
     /// The SSH agent granted per phase once availability and the socket directory were checked
     /// (the `sbx.ssh-agent` label); `None`: no agent.
     pub ssh_agent: Option<AgentLabel>,
@@ -147,6 +150,7 @@ pub fn meta(req: &CreateRequest) -> Meta {
         host_access: req.host_access,
         // Internal sandboxes (`_builder`) never have a user attached.
         bridge: !req.no_bridge && !name::is_internal(&req.name),
+        service: req.host_services.is_some() && !name::is_internal(&req.name),
         credential_formats: req.credential_formats.clone(),
         credential_services: req.credential_services.clone(),
         host_mounts: req
@@ -175,7 +179,8 @@ pub fn drop_unsafe_bridge(
     private: impl FnOnce(&Path) -> bool,
 ) -> Option<String> {
     let dir = bridge::socket_dir();
-    if !meta(req).bridge || private(&dir) {
+    // Units serve a sandbox's sockets from their own directory, checked by `HostServices::plan`.
+    if !meta(req).bridge || req.host_services.is_some() || private(&dir) {
         return None;
     }
     req.no_bridge = true;
@@ -228,11 +233,19 @@ pub fn spec(req: &CreateRequest) -> CreateSpec {
     }
     let mut mount_sockets = Vec::new();
     if meta.bridge {
-        mount_sockets.push((bridge::host_socket(&req.name), bridge::GUEST_SOCKET.into()));
+        let host = match &req.host_services {
+            Some(s) => s.bridge.clone(),
+            None => bridge::host_socket(&req.name),
+        };
+        mount_sockets.push((host, bridge::GUEST_SOCKET.into()));
     }
     let mut env = req.env.clone();
     if let Some(grant) = &meta.ssh_agent {
-        mount_sockets.push((bridge::agent_socket(&req.name), agent::GUEST_SOCKET.into()));
+        let host = match &req.host_services {
+            Some(s) => s.agent.clone(),
+            None => bridge::agent_socket(&req.name),
+        };
+        mount_sockets.push((host, agent::GUEST_SOCKET.into()));
         // A runtime grant's sessions find the agent; an install-only one's hooks set it themselves
         // (`kits::apply`). The user's -e wins.
         if grant.runtime.is_some() && !env.iter().any(|(k, _)| k == "SSH_AUTH_SOCK") {
@@ -258,7 +271,18 @@ pub fn spec(req: &CreateRequest) -> CreateSpec {
         // The workload user is the one sessions run as: smolvm shows the workspace as owned by
         // it. Startup steps exec as root explicitly.
         user: Some(workload_user(&meta)),
-        cmd: vec!["sleep".into(), "infinity".into()],
+        cmd: boot_command(req),
+    }
+}
+
+/// What the machine runs at every boot (smolvm reruns it on each start, and keeps the machine up
+/// after it exits). A v3 workload kit launches its image's `Entrypoint` + `Cmd`, as the kit spec's
+/// default launch mode says (an image user, `sbx.user`, marks a v3 workload); every other sandbox,
+/// presets and the internal builder included, just idles for `exec` and sessions.
+fn boot_command(req: &CreateRequest) -> Vec<String> {
+    match (&req.user, &req.command) {
+        (Some(_), Some(c)) if !c.is_empty() && !name::is_internal(&req.name) => c.clone(),
+        _ => vec!["sleep".into(), "infinity".into()],
     }
 }
 
@@ -304,6 +328,38 @@ mod tests {
         assert_eq!(user("tool", Some("0")).0.as_deref(), Some("0"));
         // The internal builder stays root.
         assert_eq!(user("_builder", None).0.as_deref(), Some("root"));
+    }
+
+    #[test]
+    fn a_v3_workload_boots_its_image_command_and_everything_else_idles() {
+        let cmd = |name: &str, user: Option<&str>, command: Option<&[&str]>| {
+            let mut req = request(false, vec![]);
+            req.name = name.into();
+            req.user = user.map(String::from);
+            req.command = command.map(|c| c.iter().map(|s| s.to_string()).collect());
+            spec(&req)
+        };
+        let idle = ["sleep", "infinity"];
+        // A v3 workload (an image user): its Entrypoint + Cmd, as that user, after `--`.
+        let wl = cmd(
+            "tool",
+            Some("somebody:1001"),
+            Some(&["/bin/agent", "--x", "run"]),
+        );
+        assert_eq!(wl.cmd, ["/bin/agent", "--x", "run"]);
+        let args = wl.to_args();
+        let tail = &args[args.len() - 6..];
+        assert_eq!(
+            tail,
+            ["-u", "somebody:1001", "--", "/bin/agent", "--x", "run"]
+        );
+        // A preset, a v2 workload (a command but no image user), a v3 image without a command,
+        // and the internal builder keep `sleep infinity`.
+        assert_eq!(cmd("claude.repo", None, None).cmd, idle);
+        assert_eq!(cmd("tool", None, Some(&["wl"])).cmd, idle);
+        assert_eq!(cmd("tool", Some("0"), None).cmd, idle);
+        assert_eq!(cmd("tool", Some("0"), Some(&[])).cmd, idle);
+        assert_eq!(cmd("_builder", Some("0"), Some(&["wl"])).cmd, idle);
     }
 
     #[test]

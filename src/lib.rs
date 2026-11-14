@@ -5,6 +5,7 @@ pub mod cli;
 pub mod config;
 pub mod ctx;
 pub mod env;
+pub mod host_service;
 pub mod kits;
 pub mod mcp;
 pub mod policy;

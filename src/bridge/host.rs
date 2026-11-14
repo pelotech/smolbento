@@ -28,12 +28,14 @@ pub fn has_display(env: &BTreeMap<String, String>, linux: bool) -> bool {
 }
 
 /// Handlers that run the host's browser and clipboard commands, or the env overrides, and relay
-/// login callbacks into the sandbox with the `smolvm` binary.
+/// login callbacks into the sandbox with the `smolvm` binary. With `linger` a login's relay
+/// outlives the handlers (for a process that serves one connection).
 pub fn handlers(
     env: &BTreeMap<String, String>,
     browser_enabled: bool,
     smolvm: &str,
     sb: &Sandbox,
+    linger: bool,
 ) -> Handlers {
     let open_cmd = env.get(OPEN_CMD).cloned();
     let copy_cmd = env.get(COPY_CMD).cloned();
@@ -41,7 +43,7 @@ pub fn handlers(
         browser_enabled,
         open: Box::new(move |url| open_url(open_cmd.as_deref(), url)),
         copy: Box::new(move |text| copy_text(copy_cmd.as_deref(), text)),
-        relay: relay(smolvm, &sb.machine, relay_user(sb)),
+        relay: relay(smolvm, &sb.machine, relay_user(sb), linger),
     }
 }
 
@@ -53,12 +55,13 @@ fn relay_user(sb: &Sandbox) -> &str {
 
 /// Starts the login callback relays; they stop when the handlers are dropped (the server stops).
 /// Each replay is bounded: the guest is untrusted.
-fn relay(smolvm: &str, machine: &str, user: &str) -> Relay {
+fn relay(smolvm: &str, machine: &str, user: &str, linger: bool) -> Relay {
     let runner = ProcessRunner::new(smolvm);
     let exec = Box::new(move |args: &[String]| {
         runner.run_bounded(args, relay::REPLAY_TIMEOUT, relay::MAX_REPLAY)
     });
-    let relays = Mutex::new(Relays::new(exec, machine, user));
+    let relays = Relays::new(exec, machine, user);
+    let relays = Mutex::new(if linger { relays.lingering() } else { relays });
     Box::new(move |port| {
         if let Some(warning) = relays.lock().ok().and_then(|mut r| r.start(port)) {
             eprintln!("{warning}");
@@ -70,7 +73,7 @@ fn relay(smolvm: &str, machine: &str, user: &str) -> Relay {
 /// dropped. `None` when the sandbox has no bridge, the host has no display, or another session
 /// already serves it. Problems only warn: the session goes on and the shims fall back.
 pub fn attach(env: &BTreeMap<String, String>, settings: &Settings, sb: &Sandbox) -> Option<Server> {
-    if !sb.meta.bridge || !has_display(env, cfg!(target_os = "linux")) {
+    if !sb.meta.bridge || sb.meta.service || !has_display(env, cfg!(target_os = "linux")) {
         return None;
     }
     let browser = settings.bool("browser.enabled").unwrap_or_else(|e| {
@@ -80,7 +83,7 @@ pub fn attach(env: &BTreeMap<String, String>, settings: &Settings, sb: &Sandbox)
     let smolvm = settings
         .value("smolvm.path")
         .unwrap_or_else(|_| "smolvm".into());
-    let h = handlers(env, browser, &smolvm, sb);
+    let h = handlers(env, browser, &smolvm, sb, false);
     http::serve(&super::host_socket(sb.name()), h).unwrap_or_else(|e| {
         eprintln!(
             "warning: {}: no browser and clipboard bridge: {e:#}",
@@ -249,7 +252,7 @@ mod tests {
             ports: Vec::new(),
             image: None,
         };
-        handlers(&env(vars), browser, "/nonexistent/smolvm", &sb)
+        handlers(&env(vars), browser, "/nonexistent/smolvm", &sb, false)
     }
 
     #[test]

@@ -29,6 +29,41 @@ impl Drop for Bridge {
     }
 }
 
+/// The unit files of this test's sandbox `name` (launchd plists, or systemd socket and service
+/// files), in this test's namespace. Empty when the host has no usable service manager, which
+/// serves sockets while attached only.
+pub(crate) fn unit_files(e: &E2e, name: &str) -> Vec<PathBuf> {
+    let paths = smolbento::config::Paths {
+        config: e.dir.path().join("config"),
+        cache: e.dir.path().join("cache"),
+        data: e.dir.path().join("data"),
+    };
+    let ns = smolbento::host_service::namespace(&paths);
+    let home = PathBuf::from(std::env::var_os("HOME").unwrap());
+    let (dir, prefix) = if cfg!(target_os = "macos") {
+        (
+            home.join("Library/Application Support/smolbento/launchd"),
+            format!("dev.smolbento.{ns}.{name}."),
+        )
+    } else {
+        (
+            home.join(".config/systemd/user"),
+            format!("smolbento-{ns}-{name}-"),
+        )
+    };
+    std::fs::read_dir(dir)
+        .into_iter()
+        .flatten()
+        .flatten()
+        .map(|f| f.path())
+        .filter(|p| {
+            p.file_name()
+                .and_then(|f| f.to_str())
+                .is_some_and(|f| f.starts_with(&prefix))
+        })
+        .collect()
+}
+
 /// An executable `sh` script.
 pub(crate) fn sh_script(path: &Path, body: &str) {
     use std::os::unix::fs::PermissionsExt;
@@ -50,16 +85,17 @@ pub(crate) fn host_get(port: u16, path: &str) -> std::io::Result<String> {
     Ok(out)
 }
 
-/// The browser and clipboard bridge while "attached": https URLs reach the host opener, other
-/// URLs and a stopped bridge print the fallback, copies reach the host clipboard, and a login
-/// redirect to `http://127.0.0.1:PORT` relays the host's callback to a guest loopback listener.
+/// The browser and clipboard bridge: https URLs reach the host opener, other URLs print the
+/// fallback, copies reach the host clipboard, and a login redirect to `http://127.0.0.1:PORT`
+/// relays the host's callback to a guest loopback listener. With a service manager (launchd,
+/// `systemd --user`) a unit serves the socket with nobody attached, across stop and start, and
+/// goes with the sandbox; without one it is served while attached (`_bridge` stands in).
 /// The host commands are scripts that record what they get; no browser or clipboard is touched.
 #[test]
 #[ignore = "boots real VMs and needs the Alpine package mirror; run with `just e2e`"]
 pub(crate) fn bridge_opens_urls_copies_text_and_relays_login_callbacks() {
-    let e = E2e::new("brg");
-    e.create_alpine_with("apk add -q curl busybox-extras");
-    let dir = e.dir.path();
+    let mut e = E2e::new("brg");
+    let dir = e.dir.path().to_path_buf();
     let (opened, copied) = (dir.join("opened"), dir.join("copied"));
     let (opener, copier) = (dir.join("open.sh"), dir.join("copy.sh"));
     sh_script(
@@ -67,10 +103,17 @@ pub(crate) fn bridge_opens_urls_copies_text_and_relays_login_callbacks() {
         &format!("printf '%s\\n' \"$1\" >> '{}'", opened.display()),
     );
     sh_script(&copier, &format!("cat > '{}'", copied.display()));
+    // In the units' environment too: they read it from the `sbt` that wrote them.
+    e.vars
+        .push(("SMOLBENTO_OPEN_CMD", opener.display().to_string()));
+    e.vars
+        .push(("SMOLBENTO_COPY_CMD", copier.display().to_string()));
+    e.create_alpine_with("apk add -q curl busybox-extras");
     let guest = |script: &str| e.ok(&["exec", &e.name, "sh", "-c", script]);
     let read = |p: &Path| std::fs::read_to_string(p).unwrap_or_default();
 
-    let bridge = Bridge::start(&e, &opener, &copier);
+    let units = !unit_files(&e, &e.name).is_empty();
+    let bridge = (!units).then(|| Bridge::start(&e, &opener, &copier));
     assert_eq!(guest("xdg-open https://example.invalid/x"), "");
     assert_eq!(read(&opened), "https://example.invalid/x\n");
     assert_eq!(
@@ -103,14 +146,117 @@ pub(crate) fn bridge_opens_urls_copies_text_and_relays_login_callbacks() {
     assert!(answer.starts_with("HTTP/1.1 200"), "{answer}");
     assert!(answer.contains("callback-ok"), "{answer}");
 
-    // Nobody attached: the shims fall back and the relay is gone.
-    drop(bridge);
-    assert_eq!(
-        guest("xdg-open https://example.invalid/z"),
-        "Open this URL in your browser: https://example.invalid/z\n"
+    if units {
+        // Nobody is attached at any point: a stop and start keeps the units serving, and `rm`
+        // takes them and their sockets away.
+        e.ok(&["stop", &e.name]);
+        e.ok(&["start", &e.name]);
+        assert_eq!(guest("xdg-open https://example.invalid/again"), "");
+        assert_eq!(read(&opened).lines().count(), 3, "{}", read(&opened));
+        e.ok(&["rm", "-f", &e.name]);
+        assert_eq!(unit_files(&e, &e.name), Vec::<PathBuf>::new());
+    } else {
+        // Nobody attached: the shims fall back and the relay is gone.
+        drop(bridge);
+        assert_eq!(
+            guest("xdg-open https://example.invalid/z"),
+            "Open this URL in your browser: https://example.invalid/z\n"
+        );
+        assert_eq!(read(&opened).lines().count(), 2, "nothing more opened");
+        assert!(host_get(port, "/cb").is_err(), "the relay stopped");
+    }
+}
+
+/// With a service manager the SSH agent and the bridge answer with nobody attached, after a stop
+/// and start; the units and sockets go with `rm`, and the leftovers of a sandbox deleted with
+/// `smolvm machine delete` go with the next state-changing command.
+#[test]
+#[ignore = "boots real VMs and needs the Alpine package mirror; run with `just e2e`"]
+pub(crate) fn host_services_serve_a_detached_sandbox_and_are_removed_with_it() {
+    let mut e = E2e::new("hsvc");
+    let agent = ThrowawayAgent::start(&e, 3);
+    agent.serve_to(&mut e);
+    let dir = e.dir.path().to_path_buf();
+    let (opened, opener) = (dir.join("opened"), dir.join("open.sh"));
+    sh_script(
+        &opener,
+        &format!("printf '%s\\n' \"$1\" >> '{}'", opened.display()),
     );
-    assert_eq!(read(&opened).lines().count(), 2, "nothing more opened");
-    assert!(host_get(port, "/cb").is_err(), "the relay stopped");
+    e.vars
+        .push(("SMOLBENTO_OPEN_CMD", opener.display().to_string()));
+    e.create_alpine_with("apk add -q curl openssh-client");
+    if unit_files(&e, &e.name).is_empty() {
+        eprintln!("no usable service manager here: sockets are served while attached only");
+        return;
+    }
+    let reachable = |e: &E2e, tag: &str| {
+        let keys = e.ok(&["exec", &e.name, "ssh-add", "-l"]);
+        assert!(keys.contains(&agent.comment), "{tag}: agent: {keys}");
+        assert_eq!(
+            e.ok(&[
+                "exec",
+                &e.name,
+                "sh",
+                "-c",
+                "xdg-open https://example.invalid/hs"
+            ]),
+            "",
+            "{tag}: bridge"
+        );
+    };
+    reachable(&e, "detached");
+    e.ok(&["stop", &e.name]);
+    e.ok(&["start", &e.name]);
+    reachable(&e, "after stop and start");
+    assert_eq!(std::fs::read_to_string(&opened).unwrap().lines().count(), 2);
+
+    // `rm`: units, files and sockets are gone.
+    let files = unit_files(&e, &e.name);
+    assert_eq!(
+        files.len(),
+        if cfg!(target_os = "macos") { 2 } else { 4 },
+        "{files:?}"
+    );
+    e.ok(&["rm", "-f", &e.name]);
+    assert_eq!(unit_files(&e, &e.name), Vec::<PathBuf>::new());
+
+    // `smolvm machine delete` gives no hook: the next state-changing command sweeps (not `ls`).
+    let ws = e.workspace();
+    let second = format!("{}-b", e.name);
+    let _cleanup = Forks(vec![second.clone()]);
+    e.ok(&[
+        "create",
+        "shell",
+        ws.to_str().unwrap(),
+        "--name",
+        &second,
+        "-t",
+        Image::alpine_agent_archive().to_str().unwrap(),
+        "--cpus",
+        "1",
+        "-m",
+        "1g",
+    ]);
+    assert!(!unit_files(&e, &second).is_empty());
+    smolvm(&["machine", "delete", "-n", &format!("sbx-{second}"), "-f"]);
+    e.ok(&["ls"]);
+    assert!(!unit_files(&e, &second).is_empty(), "ls is read-only");
+    let diagnose = e.sbt(&["diagnose"]);
+    let report = String::from_utf8_lossy(&diagnose.stdout);
+    assert!(
+        report.contains(&format!(
+            "host services left by removed sandboxes: {second}; `sbt prune` removes them"
+        )),
+        "{report}"
+    );
+    assert!(!unit_files(&e, &second).is_empty(), "diagnose is read-only");
+    let found = e.ok(&["prune", "--dry-run"]);
+    assert!(
+        found.contains(&format!("Would remove {second} (leftover host services)")),
+        "{found}"
+    );
+    e.ok(&["prune", "-f"]);
+    assert_eq!(unit_files(&e, &second), Vec::<PathBuf>::new());
 }
 
 /// A throwaway `ssh-agent` on a short socket under /tmp holding one throwaway ed25519 key, so the
@@ -174,8 +320,11 @@ impl ThrowawayAgent {
 
     /// Points every `sbt` call of `e` at this agent.
     pub(crate) fn serve_to(&self, e: &mut E2e) {
-        e.vars
-            .push(("SSH_AUTH_SOCK", self.socket.to_str().unwrap().into()));
+        let socket: String = self.socket.to_str().unwrap().into();
+        // The setting too: a unit's environment has no `SSH_AUTH_SOCK` of this process's (launchd
+        // supplies the user's own, never the test's).
+        e.vars.push(("SMOLBENTO_SSH_AGENT_SOCKET", socket.clone()));
+        e.vars.push(("SSH_AUTH_SOCK", socket));
     }
 }
 

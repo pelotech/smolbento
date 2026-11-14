@@ -15,8 +15,8 @@ use sha2::{Digest, Sha256};
 
 use crate::util::hex;
 
-pub use host::{attach, handlers};
-pub use http::{Handlers, serve};
+pub use host::{attach, handlers, has_display};
+pub use http::{Handlers, serve, serve_connection};
 pub use listener::Server;
 pub use shims::{install_cmd, remove_cmd};
 
@@ -72,7 +72,11 @@ fn ensure_private_dir_of(dir: &Path, uid: u32) -> bool {
 /// tightened: a socket may have been planted in it while it was open.
 fn private_dir(dir: &Path, uid: u32) -> anyhow::Result<()> {
     use anyhow::Context;
-    match fs::DirBuilder::new().mode(0o700).create(dir) {
+    match fs::DirBuilder::new()
+        .recursive(true)
+        .mode(0o700)
+        .create(dir)
+    {
         Err(e) if e.kind() != std::io::ErrorKind::AlreadyExists => {
             return Err(e).with_context(|| format!("creating {}", dir.display()));
         }
