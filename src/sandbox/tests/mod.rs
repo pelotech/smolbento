@@ -151,6 +151,7 @@ pub(super) fn kit_plan(restart_without: &[&str]) -> StartPlan {
             restart_without: restart_without.iter().map(|v| v.to_string()).collect(),
             rule_ids: vec!["r-npm".into(), "r-api".into()],
             agent_backing: None,
+            agent_socket: None,
         }),
         ..plan()
     }

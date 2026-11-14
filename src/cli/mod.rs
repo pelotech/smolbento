@@ -19,6 +19,7 @@ pub(crate) mod progress;
 pub(crate) mod request;
 mod run;
 pub(crate) mod secret;
+mod serve;
 mod settings;
 mod skills;
 mod template;
@@ -81,6 +82,11 @@ pub fn main(args: impl IntoIterator<Item = OsString>) -> Result<i32> {
     let mut ctx = Ctx {
         vm: Smolvm::new(runner),
         settings,
+        services: crate::host_service::HostServices::detect(
+            &paths,
+            &env,
+            args.first().map(OsString::as_os_str),
+        ),
         paths,
         cwd: std::env::current_dir()?,
         env,
@@ -175,6 +181,7 @@ pub fn dispatch<R: Runner>(ctx: &mut Ctx<R>, cli: Cli) -> Result<i32> {
         Cmd::Env(e) => env::run(ctx, e),
         Cmd::UploadPack { sandbox, .. } => upload_pack::run(ctx, &sandbox),
         Cmd::Bridge { sandbox } => bridge::run(ctx, &sandbox),
+        Cmd::Serve { kind, sandbox } => serve::run(ctx, &kind, &sandbox),
         Cmd::Daemon(_) => {
             writeln!(
                 &ctx.out,

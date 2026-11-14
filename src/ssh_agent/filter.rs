@@ -107,16 +107,34 @@ impl Backing {
 }
 
 /// Serves the sandbox's runtime grant during a session (`run`, `exec`) until the result is
-/// dropped. `None` when it has no runtime grant or another session already serves it; problems
-/// only warn, and the guest's agent connections then fail.
+/// dropped. `None` when it has no runtime grant, a unit serves it (`sbx.service`) or another
+/// session already serves it; problems only warn, and the guest's agent connections then fail.
 pub fn attach(env: &BTreeMap<String, String>, paths: &Paths, sb: &Sandbox) -> Option<Server> {
+    if sb.meta.service {
+        return None;
+    }
     let access = sb.meta.ssh_agent.as_ref()?.runtime.clone()?;
-    serve_for(sb.name(), access, Backing::new(paths, env))
+    serve_for(
+        sb.name(),
+        &crate::bridge::agent_socket(sb.name()),
+        access,
+        Backing::new(paths, env),
+    )
+}
+
+/// Serves the one guest connection `guest`, as a unit's `_serve agent` does: relays it to the
+/// host agent with the grant's filter until either side closes. A connection with no host agent
+/// (forwarding off, none running) is closed.
+pub fn serve_connection(guest: &UnixStream, access: &Access, backing: &Backing) {
+    let Some(host) = backing.agent().and_then(|p| UnixStream::connect(p).ok()) else {
+        return;
+    };
+    relay(guest, &host, access, backing, &AtomicBool::new(false));
 }
 
 /// Serves `access` on the sandbox `name`'s agent socket; problems only warn.
-pub fn serve_for(name: &str, access: Access, backing: Backing) -> Option<Server> {
-    serve(&crate::bridge::agent_socket(name), access, backing).unwrap_or_else(|e| {
+pub fn serve_for(name: &str, socket: &Path, access: Access, backing: Backing) -> Option<Server> {
+    serve(socket, access, backing).unwrap_or_else(|e| {
         eprintln!("warning: {name}: no SSH agent: {e:#}");
         None
     })
@@ -1119,6 +1137,36 @@ mod tests {
         settings.set("ssh.agentForwardingEnabled", "true").unwrap();
         let mut again = served.connect();
         assert!(ask(&mut again, &[REQUEST_IDENTITIES]).is_some());
+    }
+
+    #[test]
+    fn one_connection_on_any_socket_is_relayed_as_a_unit_serves_it() {
+        let agent = FakeAgent::start();
+        let (_config, paths) = crate::config::test_paths();
+        let backing = |sock: &str| Backing {
+            paths: paths.clone(),
+            env: BTreeMap::from([("SSH_AUTH_SOCK".to_string(), sock.to_string())]),
+        };
+        let (mut client, server) = UnixStream::pair().unwrap();
+        client
+            .set_read_timeout(Some(Duration::from_secs(5)))
+            .unwrap();
+        let b = backing(agent.path().to_str().unwrap());
+        let t = thread::spawn(move || serve_connection(&server, &only(&["git"]), &b));
+        assert_eq!(ask(&mut client, &[REQUEST_IDENTITIES]).unwrap(), [12, b'k']);
+        assert_eq!(
+            ask(&mut client, &sign(&sshsig(b"file"))).unwrap(),
+            [FAILURE]
+        );
+        drop(client);
+        t.join().unwrap();
+        assert_eq!(agent.seen(), vec![vec![REQUEST_IDENTITIES]]);
+        // With no host agent the connection is closed.
+        let (mut client, server) = UnixStream::pair().unwrap();
+        let b = backing("/tmp/sbt-no-such-agent.sock");
+        serve_connection(&server, &all(), &b);
+        drop(server);
+        assert_eq!(ask(&mut client, &[REQUEST_IDENTITIES]), None);
     }
 
     #[test]

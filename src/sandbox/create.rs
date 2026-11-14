@@ -81,6 +81,9 @@ pub struct CreateRequest {
     /// Created without the browser and clipboard bridge: the host's socket directory isn't
     /// private (`drop_unsafe_bridge`).
     pub no_bridge: bool,
+    /// The host sockets units serve for this sandbox (`host_service`); `None`: they are served
+    /// while a session is attached, at the `bridge::host_socket` paths.
+    pub host_services: Option<crate::host_service::Sockets>,
     /// The SSH agent granted per phase once availability and the socket directory were checked
     /// (the `sbx.ssh-agent` label); `None`: no agent.
     pub ssh_agent: Option<AgentLabel>,
@@ -147,6 +150,7 @@ pub fn meta(req: &CreateRequest) -> Meta {
         host_access: req.host_access,
         // Internal sandboxes (`_builder`) never have a user attached.
         bridge: !req.no_bridge && !name::is_internal(&req.name),
+        service: req.host_services.is_some() && !name::is_internal(&req.name),
         credential_formats: req.credential_formats.clone(),
         credential_services: req.credential_services.clone(),
         host_mounts: req
@@ -175,7 +179,8 @@ pub fn drop_unsafe_bridge(
     private: impl FnOnce(&Path) -> bool,
 ) -> Option<String> {
     let dir = bridge::socket_dir();
-    if !meta(req).bridge || private(&dir) {
+    // Units serve a sandbox's sockets from their own directory, checked by `HostServices::plan`.
+    if !meta(req).bridge || req.host_services.is_some() || private(&dir) {
         return None;
     }
     req.no_bridge = true;
@@ -228,11 +233,19 @@ pub fn spec(req: &CreateRequest) -> CreateSpec {
     }
     let mut mount_sockets = Vec::new();
     if meta.bridge {
-        mount_sockets.push((bridge::host_socket(&req.name), bridge::GUEST_SOCKET.into()));
+        let host = match &req.host_services {
+            Some(s) => s.bridge.clone(),
+            None => bridge::host_socket(&req.name),
+        };
+        mount_sockets.push((host, bridge::GUEST_SOCKET.into()));
     }
     let mut env = req.env.clone();
     if let Some(grant) = &meta.ssh_agent {
-        mount_sockets.push((bridge::agent_socket(&req.name), agent::GUEST_SOCKET.into()));
+        let host = match &req.host_services {
+            Some(s) => s.agent.clone(),
+            None => bridge::agent_socket(&req.name),
+        };
+        mount_sockets.push((host, agent::GUEST_SOCKET.into()));
         // A runtime grant's sessions find the agent; an install-only one's hooks set it themselves
         // (`kits::apply`). The user's -e wins.
         if grant.runtime.is_some() && !env.iter().any(|(k, _)| k == "SSH_AUTH_SOCK") {

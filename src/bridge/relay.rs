@@ -48,6 +48,9 @@ pub struct Relays {
     /// Warned that `MAX_RELAYS` were started.
     warned_full: bool,
     lifetime: Duration,
+    /// Dropping waits for the relays to run their `lifetime` out instead of stopping them: a unit's
+    /// `_serve bridge` handles one connection, and a login's relay outlives it.
+    linger: bool,
     stop: Arc<AtomicBool>,
     /// One per started relay.
     threads: Vec<JoinHandle<()>>,
@@ -65,9 +68,16 @@ impl Relays {
             tried: BTreeSet::new(),
             warned_full: false,
             lifetime: LIFETIME,
+            linger: false,
             stop: Arc::default(),
             threads: Vec::new(),
         }
+    }
+
+    /// Relays outlive the `Relays` value: dropping it waits for them (see `linger`).
+    pub fn lingering(mut self) -> Relays {
+        self.linger = true;
+        self
     }
 
     /// Starts relaying `port` to the sandbox for `LIFETIME`, once, up to `MAX_RELAYS` a session.
@@ -105,7 +115,9 @@ impl Relays {
 impl Drop for Relays {
     /// Stops the listeners (within `POLL`, or once a running replay returns).
     fn drop(&mut self) {
-        self.stop.store(true, Ordering::Relaxed);
+        if !self.linger {
+            self.stop.store(true, Ordering::Relaxed);
+        }
         for t in self.threads.drain(..) {
             let _ = t.join();
         }

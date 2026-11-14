@@ -49,6 +49,7 @@ pub fn test_env(extra_env: &[(&str, &str)]) -> TestEnv {
         ctx: Ctx {
             vm: Smolvm::new(fake),
             settings,
+            services: crate::host_service::HostServices::disabled(),
             paths,
             cwd,
             env,

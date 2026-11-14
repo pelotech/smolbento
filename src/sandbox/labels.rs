@@ -34,6 +34,9 @@ pub const LONG_RUNNING: &str = "sbx.long-running";
 pub const HOST_ACCESS: &str = "sbx.host-access";
 /// Created with the browser and clipboard bridge socket (`bridge::GUEST_SOCKET`).
 pub const BRIDGE: &str = "sbx.bridge";
+/// The host sockets are owned by service-manager units (`host_service`), so they answer while the
+/// sandbox runs, not only while a session is attached.
+pub const SERVICE: &str = "sbx.service";
 /// The SSH agent granted at create, per phase (`ssh_agent::AgentLabel`, JSON).
 pub const SSH_AGENT: &str = "sbx.ssh-agent";
 /// Kit host mounts: a JSON object of guest path to host directory.
@@ -149,6 +152,8 @@ pub struct Meta {
     pub host_access: bool,
     /// Created with the bridge socket mounted: starts install the guest shims (`sbx.bridge`).
     pub bridge: bool,
+    /// Its host sockets are served by units, not by an attached session (`sbx.service`).
+    pub service: bool,
     /// Kit credentials whose value is formatted before smolvm sets it as a header, by env var.
     pub credential_formats: BTreeMap<String, CredFormat>,
     /// Kit credential env vars outside their service's own env vars, to their service.
@@ -217,6 +222,7 @@ impl Meta {
             (LONG_RUNNING, flag(self.long_running)),
             (HOST_ACCESS, flag(self.host_access)),
             (BRIDGE, flag(self.bridge)),
+            (SERVICE, flag(self.service)),
             (
                 HOST_MOUNTS,
                 (!self.host_mounts.is_empty()).then(|| json(&self.host_mounts)),
@@ -286,6 +292,7 @@ impl Meta {
             long_running: flag(LONG_RUNNING),
             host_access: flag(HOST_ACCESS),
             bridge: flag(BRIDGE),
+            service: flag(SERVICE),
             credential_formats: labels
                 .iter()
                 .filter_map(|(k, v)| {
@@ -425,6 +432,7 @@ mod tests {
             template: Some("docker.io/library/t:v1".into()),
             host_access: true,
             bridge: true,
+            service: true,
             ssh_agent: Some(AgentLabel {
                 runtime: Some(Access {
                     sign: None,
@@ -468,6 +476,7 @@ mod tests {
             ("sbx.template", "docker.io/library/t:v1"),
             ("sbx.host-access", "true"),
             ("sbx.bridge", "true"),
+            ("sbx.service", "true"),
             (
                 "sbx.ssh-agent",
                 r#"{"runtime":{"sign":null},"install":{"sign":["git"]}}"#,

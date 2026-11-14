@@ -14,6 +14,8 @@ pub struct Ctx<R: Runner> {
     pub vm: Smolvm<R>,
     pub settings: Settings,
     pub paths: Paths,
+    /// The OS service manager's units for sandboxes' host sockets (off without one).
+    pub services: crate::host_service::HostServices,
     pub cwd: PathBuf,
     pub env: BTreeMap<String, String>,
     /// Unix seconds.
