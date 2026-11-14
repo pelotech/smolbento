@@ -8,7 +8,7 @@ fn start_applies_network_then_starts_with_env_then_setup() {
     let mut sb = get(&vm, "claude-myrepo").unwrap();
     ensure_running(&vm, &mut sb, || Ok(plan())).unwrap();
     assert!(sb.is_running());
-    let lines = vm.runner().call_lines();
+    let lines = lines_without_idmap(&vm);
     assert_eq!(
         lines[1],
         "machine update -n sbx-claude-myrepo --net --reset-allow-list"
@@ -74,7 +74,7 @@ fn create_creates_and_starts() {
     let vm = Smolvm::new(fake);
     let sb = create(&vm, &req, &plan(), |_| unreachable!(), &mut |_| {}).unwrap();
     assert!(sb.is_running());
-    let lines = vm.runner().call_lines();
+    let lines = lines_without_idmap(&vm);
     assert!(
         lines[0].starts_with("machine create -n sbx-claude-myrepo --image img"),
         "{}",
