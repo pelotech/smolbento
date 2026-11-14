@@ -154,20 +154,30 @@ mod tests {
         );
         check(&registry("ghcr.io/pelotech/smolbento/kits/nix:latest"), &s).unwrap();
         assert!(check(&registry("ghcr.io/someone/x:1"), &s).is_err());
-        let signers = s.value("kit.trustedSigners").unwrap();
-        assert!(
-            signers.contains(
-                r#"{"identity":"https://github.com/pelotech/smolbento/.github/workflows/release-please.yaml@refs/heads/main","issuer":"https://token.actions.githubusercontent.com"}"#
-            ),
-            "{signers}"
-        );
-        assert!(
-            signers.contains("docker"),
-            "Docker's signers stay: {signers}"
-        );
+        use crate::kits::signing::{Match, Policy};
+        let signers =
+            crate::kits::signers::parse(&s.value("kit.trustedSigners").unwrap(), false).unwrap();
+        let keyless = |identity: Match, issuer: &str| Policy::Keyless {
+            identity,
+            issuer: Match::Exact(issuer.into()),
+            ignore_tlog: false,
+        };
         assert_eq!(
-            crate::kits::signers::parse(&signers, false).unwrap().len(),
-            2
+            signers,
+            [
+                keyless(
+                    Match::Regexp(r"^.*@docker\.com$".into()),
+                    "https://accounts.google.com"
+                ),
+                keyless(
+                    Match::Exact(
+                        "https://github.com/pelotech/smolbento/.github/workflows/\
+                         release-please.yaml@refs/heads/main"
+                            .into()
+                    ),
+                    "https://token.actions.githubusercontent.com"
+                ),
+            ]
         );
     }
 

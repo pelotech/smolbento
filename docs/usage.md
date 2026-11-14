@@ -447,9 +447,14 @@ sbt create docker.io/sbx/antigravity:latest . --kit nix
 
 - `nix-daemon` starts with the sandbox and runs builds as root; you use `nix` as yourself. Flakes'
   own binary caches are honoured.
-- A workspace `.envrc` is allowed at each start. Agents run commands in shells that don't load it,
-  so the kit tells them (in `CLAUDE.md`/`AGENTS.md`) to use `direnv exec . <cmd>` or
-  `nix develop -c <cmd>`.
+- A workspace `.envrc` is allowed at each start (direnv records that under `~/.local/share`, not in
+  the repo). Agents run commands in shells that don't load it, so the kit tells them (in
+  `CLAUDE.md`/`AGENTS.md`) to use `direnv exec . <cmd>` or `nix develop -c <cmd>`. On an image
+  without `runuser` or `su`, run `direnv allow` once yourself.
+- direnv reads its config from `/etc/direnv` (`DIRENV_CONFIG`), where the kit loads nix-direnv, so a
+  `~/.config/direnv` of your own isn't read.
+- Nix's default profile and `/home/agent/.nix-profile/bin` come first on `PATH`; on a workload image
+  whose user isn't `agent`, add that user's `~/.nix-profile/bin` yourself for `nix profile add`.
 - It brings its own network rules for the Nix caches and GitHub, for policies other than `balanced`.
 - The store is on the sandbox's disk, smolvm's 10 GiB overlay by default; smolbento can't size it
   yet, so very large dev shells may run out of space.
