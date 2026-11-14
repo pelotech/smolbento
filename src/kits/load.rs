@@ -488,6 +488,22 @@ mod tests {
         assert_eq!(k.source, Source::Smolfile(p.canonicalize().unwrap()));
     }
 
+    /// `kits/nix/nix.yaml` is built by Buildx from its `# syntax` line, and its `build:` is a
+    /// literal block; a tool that rewrites the YAML (release-please's YAML updater did) breaks
+    /// both, and the published build with them.
+    #[test]
+    fn the_nix_kit_source_keeps_its_syntax_line_and_build_block() {
+        let yaml = include_str!("../../kits/nix/nix.yaml");
+        assert!(
+            yaml.starts_with("# syntax=docker/sandbox-kit:3\n"),
+            "{yaml}"
+        );
+        assert!(yaml.contains("\nbuild: |\n"), "{yaml}");
+        assert!(yaml.contains("# x-release-please-version"), "{yaml}");
+        let kit = v3::parse(yaml, Source::LocalV3("kits/nix".into())).unwrap();
+        assert_eq!(kit.name, "nix");
+    }
+
     #[test]
     fn docker_is_the_shipped_mixin_and_trusted_without_local_kits() {
         use crate::kits::model::{CapBody, Kind};

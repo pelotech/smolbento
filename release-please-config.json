@@ -11,7 +11,7 @@
       "component": "nix-kit",
       "include-component-in-tag": true,
       "initial-version": "0.0.1",
-      "extra-files": ["nix.yaml"]
+      "extra-files": [{ "type": "generic", "path": "nix.yaml" }]
     }
   },
   "changelog-sections": [
