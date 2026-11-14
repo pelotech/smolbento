@@ -91,14 +91,15 @@ fn cloexec(fd: &OwnedFd) {
 fn open_pty(size: Pty) -> Result<(OwnedFd, OwnedFd)> {
     let (mut master, mut slave) = (0, 0);
     let mut ws = winsize(size);
-    // SAFETY: openpty writes two fds through valid pointers; the winsize is read.
+    // SAFETY: openpty writes two fds through valid pointers; the winsize is read. It is passed as a
+    // raw pointer: macOS declares the parameter `*mut winsize`, glibc `*const winsize`.
     let rc = unsafe {
         libc::openpty(
             &mut master,
             &mut slave,
             std::ptr::null_mut(),
             std::ptr::null_mut(),
-            &mut ws,
+            &raw mut ws,
         )
     };
     if rc != 0 {
