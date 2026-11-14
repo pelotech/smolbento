@@ -24,7 +24,8 @@ runs:
         GH_TOKEN: ${{ inputs.gh-token }}
         MINIMUM: ${{ inputs.minimum }}
         TARGET: x86_64-unknown-linux-gnu
-      run: |
+      # Writes only the extracted, signature-checked directory to GITHUB_PATH.
+      run: | # zizmor: ignore[github-env]
         tag=$(gh release list --repo "$GITHUB_REPOSITORY" --exclude-drafts --exclude-pre-releases \
           --limit 50 --json tagName --jq '[.[].tagName | select(startswith("v"))][0]')
         version="${tag#v}"

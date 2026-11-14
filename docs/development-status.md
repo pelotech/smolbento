@@ -146,10 +146,6 @@ verified on a Mac).
   `just e2e-known-broken` (a non-blocking CI step) runs them. Remove everything tagged
   `WORKAROUND(smolvm 1.35.0 idmap)` once a fixed smolvm is the minimum. Upstream fix:
   [smolvm#2189](https://github.com/smol-machines/smolvm/pull/2189).
-- The `nix` kit's first release: new GHCR packages are private, so an org admin makes
-  `ghcr.io/pelotech/smolbento/kits/nix` public once after it's pushed. The release workflow's
-  verify job logs in, so it passes before that. The kit releases on its own (`nix-kit-v*`); its
-  version starts at 0.0.1.
 - russh from git (commit b541663a8838) until a release pins ssh-key 0.7.0-rc.12 or later: then switch
   to crates.io, drop the `deny.toml` allow-git entry and the flake `outputHashes`.
 
