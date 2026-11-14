@@ -174,3 +174,10 @@ skills rm my-skill
 skills rm --force my-skill
 skills update
 skills update my-skill
+ports my-sandbox -p 8080
+ports my-sandbox -p 3000:8080 --unpublish 8080:80
+setup ssh rm
+run claude -w src
+run --name my-sandbox --workdir /tmp
+secret set-custom --host api.example.com --env API_KEY --value-stdin
+--no-input reset

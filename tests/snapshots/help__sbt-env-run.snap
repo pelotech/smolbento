@@ -26,6 +26,9 @@ Options:
       --env-args-file <FILE>
           File of name=value environment arguments, one per line (can be repeated); --env-arg overrides
 
+      --no-input
+          Never prompt; commands that need an answer fail with the command to run instead
+
       --clone[=<CLONE>]
           Override workspace.clone in sbxenv.yaml (see 'sbt create --clone')
 

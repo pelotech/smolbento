@@ -1340,6 +1340,14 @@ SETUP
     }
 
     #[test]
+    fn no_input_never_prompts() {
+        let mut t = test_env(&[]);
+        t.answer("y\n");
+        let err = t.sbt(&["--no-input", "reset"]).unwrap_err();
+        assert!(err.to_string().contains("pass -f"), "{err}");
+    }
+
+    #[test]
     fn reset_deletes_everything() {
         let mut t = test_env(&[]);
         let ls = format!(

@@ -26,6 +26,9 @@ Options:
       --identity-token <IDENTITY_TOKEN>
           OIDC identity token for keyless signing; defaults to the ambient CI provider, then an interactive browser login
 
+      --no-input
+          Never prompt; commands that need an answer fail with the command to run instead
+
       --identity-token-file <IDENTITY_TOKEN_FILE>
           File holding the OIDC identity token; keeps it out of the process arguments
 

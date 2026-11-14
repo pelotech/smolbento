@@ -135,6 +135,7 @@ pub fn meta(req: &CreateRequest) -> Meta {
         workspace: primary,
         workspaces: req.workspaces.iter().map(Workspace::label).collect(),
         created: req.created,
+        version: Some(env!("CARGO_PKG_VERSION").into()),
         docker: req.docker,
         secrets: req.secrets.clone(),
         credential_hosts: req.credential_hosts.clone(),

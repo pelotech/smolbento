@@ -25,5 +25,8 @@ Options:
       --json
           Output in JSON format
 
+      --no-input
+          Never prompt; commands that need an answer fail with the command to run instead
+
   -h, --help
           Print help

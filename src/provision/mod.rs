@@ -192,7 +192,7 @@ pub fn ensure_policy<R: Runner>(ctx: &Ctx<R>) -> Result<Policy> {
     if policy.mode.is_some() {
         return Ok(policy);
     }
-    if !ctx.stdin_tty {
+    if !ctx.can_prompt() {
         bail!(
             "no network policy chosen yet; run `sbt policy init allow-all|balanced|deny-all` first"
         );

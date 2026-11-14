@@ -23,6 +23,9 @@ Options:
       --certificate-identity-regexp <CERTIFICATE_IDENTITY_REGEXP>
           Keyless signer identity regexp (certificate SAN)
 
+      --no-input
+          Never prompt; commands that need an answer fail with the command to run instead
+
       --certificate-oidc-issuer <CERTIFICATE_OIDC_ISSUER>
           Exact keyless OIDC issuer
 

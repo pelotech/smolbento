@@ -97,11 +97,13 @@ On a terminal, each step redraws in place with a spinner, and a pull shows its p
 cached doesn't pull (see [`smolvm.image-cache-size`](configuration.md#settings)).
 
 Progress goes to stdout. Scripts that capture output (`name=$(sbt run -d …)`) pass `--no-progress`,
-which also hides the `Created` and `try:` lines. `run -d --no-progress` then prints only the name.
+which also hides the `Created` and `try:` lines. `--no-input`, on any command, never prompts: a
+command that would ask fails with the flag or command to use instead. `run -d --no-progress` then prints only the name.
 
 | Option | Meaning |
 |---|---|
 | `--name NAME` | Letters, digits, `-` and `.`; at least 2 characters |
+| `-w, --workdir DIR` | `run` only: start the session in `DIR`, absolute or relative to the workspace; applies on a re-attach too |
 | `--cpus N` | `0` or unset: all host CPUs |
 | `-m, --memory SIZE` | Such as `4g` or `512m`. Default: half of host memory, from 512 MiB to 32 GiB |
 | `-e, --env KEY=VALUE` | A bare `KEY` copies the host's value |
@@ -926,6 +928,7 @@ sbt secret set claude --ref op://Private/claude-sandbox/credential   # 1Password
 sbt secret set github --command 'gh auth token'                      # run at each start
 sbt secret set openai --sandbox claude-myrepo -t sk-…                # one sandbox only
 sbt secret set-custom --host api.example.com --env EXAMPLE_TOKEN --command 'pass show example'
+printf %s "$TOKEN" | sbt secret set github --value-stdin           # keeps it out of argv
 sbt secret ls
 sbt secret rm github
 ```

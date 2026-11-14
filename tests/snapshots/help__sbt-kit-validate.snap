@@ -25,6 +25,9 @@ Options:
 
           [possible values: table, json, yaml]
 
+      --no-input
+          Never prompt; commands that need an answer fail with the command to run instead
+
       --json
           Output in JSON format
 

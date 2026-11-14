@@ -7,6 +7,8 @@ pub const AGENT: &str = "sbx.agent";
 pub const WORKSPACE: &str = "sbx.workspace";
 pub const WORKSPACES: &str = "sbx.workspaces";
 pub const CREATED: &str = "sbx.created";
+/// The smolbento version that created the sandbox (sbx's `created_version`).
+pub const VERSION: &str = "sbx.version";
 pub const DOCKER: &str = "sbx.docker";
 pub const SECRETS: &str = "sbx.secrets";
 pub const CREDENTIAL_HOSTS: &str = "sbx.credential-hosts";
@@ -129,6 +131,8 @@ pub struct Meta {
     pub workspaces: Vec<String>,
     /// Unix seconds.
     pub created: i64,
+    /// The smolbento version that created it; `None` for a sandbox from before 0.27.
+    pub version: Option<String>,
     /// Whether the sandbox runs a private dockerd.
     pub docker: bool,
     /// Services whose credentials were bound at create.
@@ -227,6 +231,7 @@ impl Meta {
             (CLONE_TOP, clone_top.cloned()),
             (FORK_OF, self.fork_of.clone()),
             (KITS, (!self.kits.is_empty()).then(|| json(&self.kits))),
+            (VERSION, self.version.clone()),
             (COMMAND, self.command.as_ref().map(json)),
             (USER, self.user.clone()),
             (WORKDIR, self.image_workdir.clone()),
@@ -286,6 +291,7 @@ impl Meta {
                 .get(CREATED)
                 .and_then(|c| c.parse().ok())
                 .unwrap_or(0),
+            version: text(VERSION),
             docker: flag(DOCKER),
             secrets: list(labels.get(SECRETS)),
             credential_hosts: list(labels.get(CREDENTIAL_HOSTS)),

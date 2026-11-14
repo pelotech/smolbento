@@ -23,6 +23,9 @@ Options:
       --kit-args-file <FILE>
           Read kit arguments (NAME=VALUE lines) from a file (repeatable)
 
+      --no-input
+          Never prompt; commands that need an answer fail with the command to run instead
+
   -y, --yes
           Grant the kit's network access without asking
 

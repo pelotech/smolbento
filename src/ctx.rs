@@ -3,7 +3,7 @@
 //! of these takes a `Ctx` too.
 
 use std::collections::BTreeMap;
-use std::io::{BufRead, Write};
+use std::io::{BufRead, Read, Write};
 use std::path::PathBuf;
 
 use crate::config::{Paths, Settings};
@@ -21,6 +21,8 @@ pub struct Ctx<R: Runner> {
     /// Unix seconds.
     pub now: i64,
     pub stdin_tty: bool,
+    /// `--no-input`: never prompt, even on a terminal.
+    pub no_input: bool,
     /// Whether stdout is a terminal: progress redraws in place and uses colour only then.
     pub stdout_tty: bool,
     /// The host user's uid.
@@ -42,6 +44,21 @@ pub struct Ctx<R: Runner> {
 
 impl<R: Runner> Ctx<R> {
     /// One line of input (a prompt's answer), with its line ending; empty at end of input.
+    /// Whether a prompt may ask: stdin is a terminal and `--no-input` wasn't given.
+    pub fn can_prompt(&self) -> bool {
+        self.stdin_tty && !self.no_input
+    }
+
+    /// All of stdin (or a test's input), for `--value-stdin`.
+    pub fn read_to_end(&self) -> std::io::Result<String> {
+        let mut all = String::new();
+        match &self.input {
+            In::Stdin => std::io::stdin().lock().read_to_string(&mut all)?,
+            In::Buffer(b) => b.borrow_mut().read_to_string(&mut all)?,
+        };
+        Ok(all)
+    }
+
     pub fn read_line(&self) -> std::io::Result<String> {
         let mut line = String::new();
         match &self.input {

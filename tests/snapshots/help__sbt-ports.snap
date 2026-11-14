@@ -14,11 +14,14 @@ Options:
   -D, --debug
           Print each smolvm command line
 
-      --publish <PUBLISH>
+  -p, --publish <PUBLISH>
           [[127.0.0.1:]HOST:]PORT[/proto]; no host port picks a free one
 
       --unpublish <UNPUBLISH>
           HOST:PORT[/proto]
+
+      --no-input
+          Never prompt; commands that need an answer fail with the command to run instead
 
   -h, --help
           Print help

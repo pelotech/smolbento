@@ -149,13 +149,23 @@ pub fn run<R: Runner>(ctx: &mut Ctx<R>, a: &RunArgs) -> Result<i32> {
     result
 }
 
+/// Where the session starts: `--workdir` (absolute, or relative to the workspace), else the
+/// workspace.
+fn session_dir(sb: &Sandbox, workdir: Option<&str>) -> String {
+    match workdir {
+        Some(w) if w.starts_with('/') => w.to_string(),
+        Some(w) => format!("{}/{w}", sb.workdir().trim_end_matches('/')),
+        None => sb.workdir(),
+    }
+}
+
 /// Attaches the user to the agent and returns its exit code.
 fn attach<R: Runner>(ctx: &Ctx<R>, a: &RunArgs, sb: &Sandbox, command: Vec<String>) -> Result<i32> {
     let sessions = ctx.paths.sessions();
     let mut spec = ExecSpec {
         name: sb.machine.clone(),
         user: Some(sb.meta.session_user().into()),
-        workdir: Some(sb.workdir()),
+        workdir: Some(session_dir(sb, a.workdir.as_deref())),
         interactive: true,
         tty: ctx.stdin_tty,
         cmd: command,
@@ -324,6 +334,29 @@ mod tests {
         // cwd is not a git repo, yet --clone must not matter for an existing sandbox.
         t.sbt(&["run", "claude", "--clone"]).unwrap();
         assert!(!t.calls().iter().any(|l| l.contains("machine create")));
+    }
+
+    #[test]
+    fn workdir_starts_the_session_in_a_directory_of_the_workspace() {
+        for (given, want) in [("src/app", "/src/app"), ("/tmp/x", "")] {
+            let mut t = test_env(&[]);
+            created(&t, "created");
+            t.runner()
+                .once_fail(&["machine", "status"], "NOT_FOUND", "vm not found");
+            t.runner()
+                .once_fail(&["machine", "status"], "NOT_FOUND", "vm not found");
+            t.runner().interactive_exit(0);
+            t.sbt(&["run", "claude", "--cpus", "1", "-m", "1g", "-w", given])
+                .unwrap();
+            let ws = t.ctx.cwd.display().to_string();
+            let dir = if want.is_empty() {
+                given.to_string()
+            } else {
+                format!("{ws}{want}")
+            };
+            let call = t.runner().interactive_calls()[0].join(" ");
+            assert!(call.contains(&format!(" -w {dir} -i ")), "{call}");
+        }
     }
 
     #[test]

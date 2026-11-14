@@ -750,7 +750,7 @@ fn add_running<R: Runner>(
 
 /// Asks before a kit widens the sandbox's network access (SPEC-v3 §7.4); declining is an error.
 fn approve<R: Runner>(ctx: &Ctx<R>, kit: &str, hosts: &[String], started: bool) -> Result<()> {
-    if !ctx.stdin_tty {
+    if !ctx.can_prompt() {
         bail!("kit add needs --yes to grant network access without a terminal");
     }
     // A question, not command output: stderr, like the secret value prompt.
