@@ -1,5 +1,18 @@
 # Changelog
 
+## [0.26.1](https://github.com/pelotech/smolbento/compare/v0.26.0...v0.26.1) (2026-11-14)
+
+
+### Bug Fixes
+
+* **kits:** keep release-please from rewriting nix.yaml ([#119](https://github.com/pelotech/smolbento/issues/119)) ([d5cc377](https://github.com/pelotech/smolbento/commit/d5cc377a758839709f6842f7a1e55a5ba49aad7b))
+
+
+### Chores
+
+* **main:** release nix-kit 0.0.1 ([#116](https://github.com/pelotech/smolbento/issues/116)) ([3ff5fcc](https://github.com/pelotech/smolbento/commit/3ff5fcca51c50b122fdc6c5f81193acb9084c736))
+* **main:** release nix-kit 0.0.2 ([#120](https://github.com/pelotech/smolbento/issues/120)) ([c58c17d](https://github.com/pelotech/smolbento/commit/c58c17df917595faffc176b676231ea5e0977aea))
+
 ## [0.26.0](https://github.com/pelotech/smolbento/compare/v0.25.1...v0.26.0) (2026-11-14)
 
 
