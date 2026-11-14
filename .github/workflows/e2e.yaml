@@ -85,3 +85,9 @@ jobs:
         env:
           NEXTEST_PROFILE: ci
           SHARD: ${{ matrix.shard }}
+      # WORKAROUND(smolvm 1.35.0 idmap): known failures, reported without failing the build.
+      - name: End-to-end tests broken by smolvm 1.35.0 (non-blocking)
+        if: ${{ matrix.shard == 1 }}
+        run: just e2e-known-broken 2
+        env:
+          NEXTEST_PROFILE: ci

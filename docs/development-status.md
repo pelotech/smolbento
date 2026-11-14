@@ -138,8 +138,9 @@ verified on a Mac).
   can't write its workspace. Meanwhile: after each start smolbento binds each workspace and kit host
   mount onto itself with an idmap (`src/sandbox/idmap_workaround.rs`). It needs util-linux 2.39 or
   newer in the image (the sbx agent images have it); older images, and folders added while running,
-  get a warning. Remove everything tagged `WORKAROUND(smolvm 1.35.0 idmap)` once a fixed smolvm is the
-  minimum.
+  get a warning. Three e2e tests on such images fail meanwhile: `just e2e` leaves them out and
+  `just e2e-known-broken` (a non-blocking CI step) runs them. Remove everything tagged
+  `WORKAROUND(smolvm 1.35.0 idmap)` once a fixed smolvm is the minimum.
 
 ## Cleanups to do
 
