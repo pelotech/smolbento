@@ -117,12 +117,12 @@ impl NetworkSpec {
     }
 }
 
-/// Workaround for smolvm 1.32.3: a running machine's live allow list without hosts turns DNS
-/// filtering off, and the IPs it learned from earlier allowed DNS answers stay allowed until
-/// their TTL (up to an hour). So a host removed by `--reset-allow-list` that leaves only CIDRs
-/// stays reachable by name and IP until a restart; `--remove-allow-host` of the last host does
-/// the same. Repro: create with `--net-backend virtio-net --allow-host-pattern example.com
-/// --allow-cidr 127.0.0.0/8`, start, `wget https://example.com`, then `machine update
+/// Workaround for smolvm 1.32.3 (still in 1.35.0): a running machine's live allow list without
+/// hosts turns DNS filtering off, and the IPs it learned from earlier allowed DNS answers stay
+/// allowed until their TTL (up to an hour). So a host removed by `--reset-allow-list` that leaves
+/// only CIDRs stays reachable by name and IP until a restart; `--remove-allow-host` of the last
+/// host does the same. Repro: create with `--net-backend virtio-net --allow-host-pattern
+/// example.com --allow-cidr 127.0.0.0/8`, start, `wget https://example.com`, then `machine update
 /// --reset-allow-list --allow-cidr 127.0.0.0/8`: `wget` still works by name and by IP.
 ///
 /// A list with at least one host is applied correctly (learned IPs of names it no longer allows
