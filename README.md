@@ -1,35 +1,29 @@
 # smolbento
 
-A [Docker Sandboxes](https://docs.docker.com/ai/sandboxes/) (`sbx`) compatible CLI for running
-coding agents in [smolvm](https://github.com/smol-machines/smolvm) microVMs. One binary, invoked
-as `sbt`, `sbx` or `bento`; no daemon and no Docker needed on the host.
+Run coding agents in [smolvm](https://github.com/smol-machines/smolvm) microVMs, with the command
+line of Docker [Sandboxes](https://docs.docker.com/ai/sandboxes/) (`sbx`). One binary, invoked as
+`sbt`, `sbx` or `bento`. It has no daemon and needs no Docker on the host.
+
+## Install
+
+Needs smolvm 1.34.4 or newer. Install smolbento with Homebrew, from source, or from a release. See
+[Install](docs/install.md).
+
+## First run
 
 ```sh
-# smolvm, installed as a dependency
-brew tap smol-machines/tap
-# Homebrew 7+ only loads trusted third-party taps
-brew trust pelotech/tap smol-machines/tap
-# installs smolbento, sbt and bento
-brew install pelotech/tap/smolbento
 cd ~/code/myrepo
-# sandbox for this directory, attach to Claude Code
+# create a sandbox for this directory and attach Claude Code
 sbt run claude
 ```
 
-Building from source and release tarballs are covered in [Install](docs/install.md).
-
-> Choose a network policy when asked (`balanced` suits most work), and give agents API keys with
-> `sbt secret set`: they only ever see placeholders. See
-> [Development status](docs/development-status.md).
+Choose a network policy when asked (`balanced` suits most work). Give agents their API keys with
+`sbt secret set`. They see only placeholders. When the last session ends, the sandbox stops. Run
+`sbt run claude` again to pick up where you left off. See [Usage](docs/usage.md#secrets).
 
 ## Documentation
 
-- [Install](docs/install.md)
-- [Usage](docs/usage.md)
+- [Usage](docs/usage.md): running agents, workspaces, files, cleaning up
 - [Configuration](docs/configuration.md)
-- [sbx compatibility](docs/sbx-compatibility.md)
 - [Troubleshooting](docs/troubleshooting.md)
-- [Architecture](docs/architecture.md)
-- [Security](docs/SECURITY.md)
-- [Development](docs/development.md) and [Contributing](docs/CONTRIBUTING.md)
-- [Development status](docs/development-status.md)
+- [Full index](docs/README.md): architecture, security, development and contributing

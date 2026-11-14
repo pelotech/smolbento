@@ -1,33 +1,36 @@
 # sbx compatibility
 
-smolbento accepts Docker Sandboxes command lines flag for flag (sbx v0.49 reference; kit host
-mounts, `--mount` and `inspect` against v0.50.1). Anything not implemented yet still parses, then
-exits with status **2** and a message saying so, so scripts fail clearly rather than doing
-something different.
+smolbento takes Docker Sandboxes (sbx) command lines flag for flag. The reference is sbx v0.49;
+kit host mounts, `--mount` and `inspect` are checked against v0.50.1.
+
+Anything not implemented yet still parses and exits with status **2** and prints a message, so
+scripts fail clearly instead of doing something different.
 
 ## Works today
 
-`run`, `create`, `exec`, `ls`, `inspect`, `start`, `stop`, `rm`, `prune`, `reset`, `cp`,
-`version`, `completion`, `diagnose`, `settings`, `policy`, `secret`, `ports`,
-`env create|run|exec|rm` (see [Environment files](#environment-files)), `run/create
---deny-network` (per-sandbox deny rules, as in sbx), `run/create --clone`, kits (`run/create
---kit`, `--kit-arg`, `--kit-args-file`, `--mount`, `kit inspect`, `kit validate`, `kit add`; see
-[Kits](#kits)), `mcp add|ls|inspect|rm` and `run/create --static-mcp` (see
-[MCP servers](#mcp-servers)) and `policy ls --source`.
-`fork` is a smolbento extension: sbx has no fork (its `template save` saves the disk only).
-`daemon` is accepted and does nothing: smolbento has no daemon.
+`run`, `create`, `exec`, `ls`, `inspect`, `start`, `stop`, `rm`, `prune`, `reset`, `cp`, `version`,
+`completion`, `diagnose`, `settings`, `policy`, `secret`, `ports`, `env create|run|exec|rm` (see
+[Environment files](#environment-files)), `run/create --deny-network`, `run/create --clone`, kits
+(`--kit`, `--kit-arg`, `--kit-args-file`, `--mount`, `kit inspect|validate|add`; see [Kits](#kits)),
+`mcp add|ls|inspect|rm` and `--static-mcp` (see [MCP servers](#mcp-servers)), and
+`policy ls --source`.
+
+smolbento-only:
+
+- `fork`. sbx has none; its `template save` saves only the disk.
+- `daemon`. Accepted and does nothing.
 
 ## Parses, not implemented yet (exit 2)
 
-| Command or flag | Planned |
+| Command or flag | Status |
 |---|---|
 | `policy refresh`, `secret import`, `secret set --oauth/--refresh`, `secret set/rm --registry` with `--sandbox`/`--all-sandboxes` | Not implemented |
-| `policy ls --created-via/--type/--protocol/--include-inactive`, `policy check --protocol` other than `tcp` | Not implemented (`policy ls --decision` and `--source` work) |
-| The `sbxenv.yaml` fields listed under [Environment files](#environment-files) | Later |
-| `setup ssh` | Later |
-| `mcp auth`, `mcp load`, `mcp unload`; `mcp add --local`, `--dir`, `--client-id`, `--oauth-authorization-server`, `--resource`, `--skip-auth` | Not supported: smolbento has no MCP gateway (see [MCP servers](#mcp-servers)) |
+| `policy ls --created-via/--type/--protocol/--include-inactive`, `policy check --protocol` other than `tcp` | Not implemented (`--decision` and `--source` work) |
+| `sbxenv.yaml` fields under [Environment files](#environment-files) | Later |
+| `setup ssh` | Later (Phase 5h) |
+| `mcp auth`, `mcp load`, `mcp unload`; `mcp add --local`, `--dir`, `--client-id`, `--oauth-authorization-server`, `--resource`, `--skip-auth` | Not supported: no MCP gateway |
 | `tui` | Later |
-| `--pull always`, and `--pull never` except with a saved template | `--pull missing` works (it's what smolvm does) |
+| `--pull always`; `--pull never` without a saved template ([Templates](#templates)) | Not implemented. `--pull missing` works, as in smolvm |
 | `exec -d`, `--detach-keys` | Not supported (sbx doesn't support `exec -d` either) |
 
 ## Never (Docker Cloud only, exit 2)
@@ -40,329 +43,308 @@ something different.
 
 | Area | sbx | smolbento |
 |---|---|---|
-| Network | Default-deny policy | Same three modes and rule syntax. Looser: `*.x.com` matches any depth (sbx: one label); wildcards inside a label (`crl*.x.com`, `?`, `[..]`) widen to `*.x.com`; ports, methods and paths aren't enforced (`policy ls --wide` shows which). `balanced` is sbx's 195 rules plus Nix caches, on any port |
-| Host deny rules | Always enforced | Under allow-all, host deny rules aren't enforced (only deny CIDRs are, at create), and a host deny that a broader allow still covers isn't either; `sbt policy check` says "isn't enforced". A deny with a port isn't enforced at all (smolvm can't filter by port, and denying the host would block its other ports), except that one with exactly the same text as an allow cancels that allow; `sbt policy deny` notes this on stderr |
-| Secrets | Proxy injects on the wire | smolvm substitutes on the wire; a secret's hosts, and their subdomains, are always reachable from sandboxes that bound it (`policy deny` of one is refused); new values apply on the next start |
-| `secret set-custom --host` | Exact host, IP or wildcard pattern | Exact host names, or `*.domain` for every subdomain of it (not the domain itself; any depth); other wildcards are refused, and so are IPs: smolvm only substitutes secrets for host names |
-| Policy changes | Live everywhere | Live, except switching a running sandbox between allow-all and a restricted mode, which applies on its next start, and deny-CIDR rules, which apply only to sandboxes created afterwards (`policy check` says so) |
+| Network | Default-deny policy | Same modes and rule syntax, but looser: `*.x.com` matches any depth (sbx: one label), and wildcards inside a label (`crl*.x.com`, `?`, `[..]`) widen to `*.x.com`. Ports, methods and paths aren't enforced (`policy ls --wide` shows which). `balanced` is sbx's 195 rules plus Nix caches, on any port |
+| Host deny rules | Always enforced | Not enforced under allow-all, nor where a broader allow covers the host. Only deny CIDRs are enforced (at create). A deny with a port isn't enforced, because smolvm can't filter by port. The exception: a deny with the same text as an allow cancels that allow. `policy check` and `policy deny` say so |
+| Secrets | Proxy injects on the wire | smolvm substitutes on the wire. A secret's hosts and their subdomains are always reachable from sandboxes that bound it (`policy deny` of one is refused). New values apply on the next start |
+| `secret set-custom --host` | Exact host, IP or wildcard pattern | Exact host, or `*.domain` for any depth (not the apex). Other wildcards and IPs are refused: smolvm substitutes secrets only for host names |
+| Policy changes | Live everywhere | Live, except: switching a running sandbox between allow-all and a restricted mode applies on its next start, and deny-CIDR rules apply only to sandboxes created afterwards |
 | Approvals | Queue | Derived from smolvm's blocked-request (egress) log; the host is the approval id |
-| Host services | Reachable per port as `host.docker.internal` when the policy allows `localhost:PORT`, live; a blocked request gets `403 Approval required…` | Works, as `host.docker.internal`, live. Differences: a `localhost` rule opens **every** port on the host's `127.0.0.1` (smolvm can't open one port yet), not `::1`; only sandboxes created while one of your `localhost` rules applied get it (others need recreating; kit rules never grant it, and `_builder` never has it); an allow-all sandbox with host access keeps it until recreated; a blocked request gets connection refused (no proxy), so no approval entry. See [Security](SECURITY.md#host-services-localhost-rules). Under allow-all the host's LAN IP is reachable, so services listening on `0.0.0.0` are reachable through it (sbx blocks it) |
-| Published ports | Any host IP | Loopback only: `127.0.0.1` and `[::1]` (smolvm publishes on loopback) |
+| Host services | Per-port `host.docker.internal` when the policy allows `localhost:PORT`, live; a blocked request gets `403 Approval required…` | Live `host.docker.internal`, but a `localhost` rule opens **every** port on the host's `127.0.0.1` (smolvm can't open one port), not `::1`. Only sandboxes created while a `localhost` rule applied get it; others need recreating. Kit rules never grant it, and `_builder` never has it. A blocked request gets connection refused, with no approval entry. Under allow-all the host's LAN IP is reachable, so services on `0.0.0.0` are too (sbx blocks this). See [Security](SECURITY.md#host-services-localhost-rules) |
+| Published ports | Any host IP | Loopback only: `127.0.0.1` and `[::1]` |
 | Single-file `:ro` mounts | Supported | Directories only (smolvm mounts directories) |
-| Machine names | `.` allowed | Names can't contain `--` or end in `-` (smolvm rules) |
+| Machine names | `.` allowed | No `--`, no trailing `-` (smolvm rules) |
 | Daemon | `sandboxd` | None; each command talks to smolvm directly |
-| Clone transport | A git daemon in the sandbox on a published port; the remote URL changes on every start, and fetch fails while the sandbox is stopped | No daemon or port: the `sandbox-<name>` remote's `uploadpack` runs `smolbento _upload-pack <name>` (so `smolbento` must be on `PATH`), which runs `git-upload-pack` in the sandbox through `smolvm machine exec`. `git remote -v` shows a placeholder `file:///sbt/<name>` URL |
-| Tags from the sandbox | The `sandbox-<name>` remote follows tags | The remote has `tagOpt = --no-tags`; only branches come back |
-| Fetch on exit | None | `sbt run` fetches `sandbox-<name>` when the agent exits (setting `clone.fetch-on-exit`, default `true`) |
-| Object checking | Plain `git fetch` | The fetch on exit runs with `fetch.fsckObjects=true`; manual `git fetch` is unchanged, and your repo config isn't touched beyond the remote |
-| Fetch from a stopped sandbox | Fails | Starts the sandbox, fetches, stops it again |
-| Linked worktrees as the clone source | Not supported | Supported; the clone checks out the worktree's branch, or its commit when detached |
-| `policy ls --wide` | sbx's wide layout | Columns differ: a NAME column is added; sbx's other wide columns aren't shown |
-| Install-phase kit rules in `policy ls` | Not listed after create | Never listed, also while a create is still installing (they're in effect then, but `policy ls` doesn't show them) |
-| `inspect` | Also shows CPUs, memory, uptime, image digest, auth mode, network policy, mount policy, runtime mounts, proxy, MCP gateway and daemon | Those are left out; the rest follows sbx's layout and JSON keys |
-| `reset` | Deletes all its state, kit host-mount directories included | Removes sandboxes, session state and the shared skills store (and its records); kit host-mount directories stay (delete them yourself) |
-| Progress output | SANDBOX, KITS and IMAGE sections with a line per layer | Same layout, plus SETUP and `start` lines, which are smolbento's own. No per-layer lines: the image pull shows a percentage, and the image step reads `preparing` until smolvm reports a pull (a cached image has none). CPU and Memory print before a kit's `resources@1` applies. A kit's "cached" label is approximate when pulls or builds run at the same time. On a terminal the step's detail (the pull percentage) is on the step's line, not on a second line as in sbx, and a warning printed during a step follows the step's last drawn line, which stays; nothing is erased |
-| Browser and clipboard | Shims post to the daemon's proxy (`gateway.docker.internal:3128`) with `curl` and `jq`; copies work from any `exec`; image paste behind `clipboard.imagePaste`; `SBX_HOST_SESSION_ID` routes requests to a session | The same shims and texts, posting over a socket smolvm mounts at `/run/smolbento/bridge.sock` with `curl` only (no proxy, no `jq`). Served only while you're attached (`run`, `exec -it`): otherwise URLs print the fallback and copies fail. No image paste (`clipboard.imagePaste` doesn't exist) and, as in sbx, no clipboard text reads. No `SBX_HOST_SESSION_ID`: the first attached session serves the sandbox. Sandboxes created before the bridge was added don't have it (recreate them). Forks get no shims, but keep the parent's socket mount, so their processes can use the parent's bridge while the parent is attached. The login relay replays callbacks in the sandbox with `curl -g --noproxy '*'` and 10-second timeouts (or `wget` for a `GET`), without a request body (`form_post` callbacks lose theirs), and treats the response as text; a session relays at most 4 ports, each for 10 minutes. See [Usage](usage.md#browser-and-clipboard) |
-| Command aliases | `ls`, `rm`/`delete`, `secret`, `secret ls`/`rm`/`delete`/`unset`, `settings ls`, `template ls`/`list`, `template rm`/`remove`/`delete` | Implemented now; the `volume` aliases come with that command |
+| Clone transport | Git daemon in the sandbox on a published port; the remote URL changes on every start, and fetch fails while stopped | No daemon or port. The `sandbox-<name>` remote's `uploadpack` runs `smolbento _upload-pack <name>` (so `smolbento` must be on `PATH`) through `smolvm machine exec`. `git remote -v` shows a placeholder `file:///sbt/<name>` |
+| Tags from the sandbox | Remote follows tags | `tagOpt = --no-tags`; only branches come back |
+| Fetch on exit | None | `sbt run` fetches `sandbox-<name>` when the agent exits (`clone.fetch-on-exit`, default `true`), with `fetch.fsckObjects=true`. Manual `git fetch` is unchanged |
+| Fetch from a stopped sandbox | Fails | Starts it, fetches, stops it again |
+| Linked worktrees as clone source | Not supported | Supported: the branch, or the commit when detached |
+| `policy ls --wide` | sbx's wide layout | Adds a NAME column; sbx's other wide columns aren't shown |
+| Install-phase kit rules in `policy ls` | Not listed after create | Never listed, even while a create installs (they're in effect then) |
+| `inspect` | Also CPUs, memory, uptime, image digest, auth mode, network, mount and proxy policy, runtime mounts, MCP gateway, daemon | Those are left out. The rest matches sbx's layout and JSON keys |
+| `reset` | Deletes all state, kit host-mount directories included | Removes sandboxes, session state and the shared skills store. Kit host-mount directories stay: delete them yourself |
+| Progress output | A line per image layer | No per-layer lines. The pull shows a percentage, and the image step reads `preparing` until smolvm reports a pull (a cached image has none). CPU and Memory print before a kit's `resources@1`. A kit's "cached" label is approximate when pulls or builds overlap. On a terminal, a step's detail stays on the step's line, and a warning follows the step's last drawn line |
+| Browser and clipboard | Shims post to the daemon's proxy with `curl` and `jq`; copies work from any `exec`; image paste behind `clipboard.imagePaste`; `SBX_HOST_SESSION_ID` routes requests | Same shims and texts over a socket smolvm mounts at `/run/smolbento/bridge.sock`, with `curl` only. Served only while attached (`run`, `exec -it`); otherwise URLs print the fallback and copies fail. No image paste. sbx doesn't read clipboard text either. No `SBX_HOST_SESSION_ID`: the first attached session serves. Sandboxes created before the bridge need recreating. Forks keep the parent's socket, so they use its bridge while it's attached. Login relay: `curl -g --noproxy '*'` with 10-second timeouts (`wget` for a `GET`); no request body (`form_post` callbacks lose theirs); text responses only; at most 4 ports per session, each for 10 minutes. See [Usage](usage.md#browser-and-clipboard) |
+| Command aliases | `ls`, `rm`/`delete`, `secret ls`/`rm`/`delete`/`unset`, `settings ls`, `template ls`/`list`, `template rm`/`remove`/`delete` | Implemented. `volume` aliases come with that command |
 | `--version` | `sbx version vX` | `sbt --version` prints `sbt X`; `sbt version` also shows the smolvm version |
 
 ## Skills
 
-`skills add|import|ls|rm|update` and `--skills` follow sbx v0.50.1's output and flags (`sandboxOptions.skills`
-works too). Differences:
+`skills add|import|ls|rm|update` and `--skills` follow sbx v0.50.1's output and flags, and
+`sandboxOptions.skills` works too.
 
 | Area | sbx | smolbento |
 |---|---|---|
-| Store path | `~/Library/Application Support/com.docker.sandboxes/sandboxes/agent-skills` (macOS), `$XDG_STATE_HOME/sandboxes/sandboxes/agent-skills` or `~/.local/state/...` (Linux) | `~/.local/share/smolbento/agent-skills` (`$XDG_DATA_HOME` and `$SMOLBENTO_DATA_DIR` respected). A separate store: use `sbt skills import` to bring skills over |
-| `add` | Clones the repository itself | Runs your host `git` (shallow clone, no prompts: `GIT_TERMINAL_PROMPT=0` and no stdin), so your credential helpers and SSH agent apply. URLs, skill discovery and names, and the clone error (`clone skills repository: exit status N: <git output>`) match sbx |
-| `update` | `Updated skill x`, `Skill "x" is already up to date`, then `Updated N skill(s) in <store>`; `No repository-installed skills found` | Same. A repository that fails (clone, or a skill gone from it) prints an error and the others still update; the exit code is 1 (not measured in sbx) |
-| A path that is the agent's directory and a kit's | Can't happen: a v3 mixin can't join a built-in agent | Allowed (a kit mixin on a preset agent); the path behaves like the agent's own directory |
-| Who links | Root, giving the directory and links to uid 1000; a directory uid 1000 can't reach fails the create (`uid 1000 cannot reach it, ...`) | Root, giving them to the image's `agent` account, else uid 1000. No reachability check: links in a directory the agent can't reach are made anyway. A skills directory whose path goes through a symlink, in itself or a parent, gets no links (the start warns; a required bundled skill fails) |
-| Kits | `agent-skills@1`, `agent-skill@1` | Both, as measured: a kit directory has the store mounted over it unless the sandbox has bundled skills, then every directory links and the shared mount is read-write if any directory is. The clash message matches; the create error starts with `the first start failed (the sandbox was removed): bundled agent skills failed:`. `kit add` refuses kits with either |
-| Other agents' directories | From sbx's docs table | The same table, taken from the docs and not measured for copilot, cursor, droid, opencode and devin |
+| Store path | macOS: `~/Library/Application Support/com.docker.sandboxes/sandboxes/agent-skills`. Linux: under `$XDG_STATE_HOME` | `~/.local/share/smolbento/agent-skills` (`$XDG_DATA_HOME` and `$SMOLBENTO_DATA_DIR` respected). A separate store: run `sbt skills import` to bring skills over |
+| `add` | Clones the repository itself | Runs your host `git` (shallow, no prompts), so credential helpers and the SSH agent apply |
+| `update` | Per-skill messages; `No repository-installed skills found` | A failing repository prints an error and the others still update. Exit code 1 (not measured in sbx) |
+| Path that is both the agent's and a kit's directory | Can't happen: a v3 mixin can't join a built-in agent | Allowed; the path behaves like the agent's own directory |
+| Who links | Root; links to uid 1000. Fails the create when uid 1000 can't reach the directory | Root; links to the image's `agent` account, else uid 1000. No reachability check. A skills path that goes through a symlink gets no links (the start warns; a required bundled skill fails) |
+| Kits | `agent-skills@1`, `agent-skill@1` | Both, as measured. A kit directory gets the store mounted over it unless the sandbox has bundled skills; then every directory links, read-write if any directory is. `kit add` refuses kits with either |
+| Other agents' directories | sbx's docs table | The same table, from the docs. Not measured for copilot, cursor, droid, opencode or devin |
 
 ## MCP servers
 
-sbx runs an MCP gateway on the host for each sandbox: the agent sees one endpoint, and sbx connects
-it to the registered servers, holds their OAuth tokens and runs local servers on the host.
-smolbento has no gateway. `sbt mcp add|ls|inspect|rm` and `run|create --static-mcp` take sbx's
-flags, and the registered servers are written into the agent's own MCP config at create.
+sbx runs an MCP gateway on the host per sandbox. The agent sees one endpoint. sbx connects it to
+the registered servers, holding their OAuth tokens and running local ones on the host.
+
+smolbento has no gateway. `mcp add|ls|inspect|rm` and `--static-mcp` take sbx's flags, and the
+servers are written into the agent's own MCP config at create.
 
 | | sbx | smolbento |
 |---|---|---|
-| Where a `--command` server runs | On the host | Inside the sandbox; the command must exist in the image |
-| Header secrets (`${name}`, `sbx secret set mcp:<server>:<name>`) | Added by the gateway | Same syntax; the agent's config holds smolvm's placeholder, replaced on HTTPS requests to the server's host. Needs an `https://` host name without a port; one secret header per server |
+| `--command` server runs | On the host | Inside the sandbox; the command must exist in the image |
+| Header secrets (`${name}`, `sbx secret set mcp:<server>:<name>`) | Added by the gateway | Same syntax. The config holds smolvm's placeholder, replaced on HTTPS requests to the server's host. Needs an `https://` host without a port; one secret header per server |
 | OAuth servers | Authorized by `sbx` on the host | Not supported |
 | Without `--static-mcp` | Dynamic mode: the agent can find and attach registered servers | No MCP servers |
-| `mcp load` / `mcp unload` on a running sandbox | Yes | Not supported; the set is fixed at create |
+| `mcp load` / `mcp unload` | Work on a running sandbox | Not supported; the set is fixed at create |
 | Agents | Any whose kit registers the gateway | `claude` only so far |
 | `localhost` server URLs | Reach the host through the gateway | Refused at `mcp add` |
-| `mcp ls` / `mcp inspect` output | Has a `GATEWAY` column and each server's state | `NAME`, `TYPE`, `TARGET`; JSON and YAML with `name`, `type`, `url`/`command`, `headers`, `args`, `secrets`. sbx's reference shows no sample output to match |
-| `MCP_GATEWAY_URL`, `MCP_SENTINEL_TOKEN_NAME` in the sandbox | Set | Not set |
+| `mcp ls` / `mcp inspect` output | `GATEWAY` column and each server's state | `NAME`, `TYPE`, `TARGET`; JSON and YAML have `name`, `type`, `url`/`command`, `headers`, `args`, `secrets`. sbx's reference has no sample to match |
+| `MCP_GATEWAY_URL`, `MCP_SENTINEL_TOKEN_NAME` | Set in the sandbox | Not set |
 
 ## Templates
 
-`template save|ls|rm|load` and `run/create -t` follow sbx's flags. Differences:
+`template save|ls|rm|load` and `run/create -t` follow sbx's flags.
 
 | Area | sbx | smolbento |
 |---|---|---|
 | `save --output` and `load` | A `docker save` tar | A smolbento archive; the two don't read each other's files |
-| `ls` | Lists Docker images and saved templates | Lists saved templates only; FLAVOR is the agent |
-| Agent mismatch | Tries it and fails in the kit step (`failed to apply kit to sandbox`) | Refused up front when the template's agent differs from the sandbox's |
+| `ls` | Docker images and saved templates | Saved templates only. FLAVOR is the agent |
+| Agent mismatch | Fails in the kit step (`failed to apply kit to sandbox`) | Refused up front |
 | `/tmp` | Kept | Not kept |
-| Saving a sandbox made from a template | Not measured directly; sbx adds one layer per save | Refused (smolvm limit; see [Development status](development-status.md#needs-smolvm-support-later-decisions)) |
-| Saving a kit workload sandbox | Not measured | Refused: a template of one couldn't be used with `-t` yet |
-| `-t` with `--kit` | Not measured | Refused when a kit adds image layers: a template's disk is saved whole |
-| `save` of a running sandbox without a terminal | Suggests a nonexistent `--force` | Says to `sbt stop` it first |
+| Saving a sandbox made from a template | Not measured; sbx adds a layer per save | Refused (smolvm limit; see [Development status](development-status.md#needs-smolvm-support-later-decisions)) |
+| Saving a kit workload sandbox | Not measured | Refused: a template of one can't be used with `-t` yet |
+| `-t` with `--kit` | Not measured | Refused when a kit adds image layers (a template's disk is saved whole) |
+| `save` of a running sandbox, no terminal | Suggests a nonexistent `--force` | Says to `sbt stop` it first |
 | `inspect` | Needs `--cloud`; local templates are Docker images | Not supported |
-| `--pull never` | The default for saved local snapshots; an image that isn't cached fails (`not cached locally and pull_policy=never`) | Accepted only with a saved template (exit 2 otherwise) |
+| `--pull never` | Default for saved local snapshots; an uncached image fails (`not cached locally and pull_policy=never`) | Accepted only with a saved template; exit 2 otherwise |
 
 ## Environment files
 
-`env plan`, `env create`, `env run`, `env exec` and `env rm` read `sbxenv.yaml` as sbx does
-(measured on v0.49.2, v0.50.1 for `mounts`, and v0.53.0 for the plan, approvals, `lifecycle`,
-`registries`, `entrypoint`, `cmd`, `bindings` and `mcp`), for the fields smolbento supports. These
-exit 2 and name the field: `mcp` servers with a `command`, `sandboxOptions.profile|display|gpu|usb`,
+`env plan|create|run|exec|rm` read `sbxenv.yaml` as sbx does, for the fields smolbento supports.
+Measured on sbx v0.49.2 (v0.50.1 for `mounts`; v0.53.0 for the plan, approvals, `lifecycle`,
+`registries`, `entrypoint`, `cmd`, `bindings` and `mcp`). Everything not listed below matches.
+
+Unsupported fields exit 2 and name the field. They are `sandboxOptions.profile|display|gpu|usb`
 and `pullPolicy: always`.
 
 | Area | sbx | smolbento |
 |---|---|---|
-| Approval | Remembered per environment until the plan changes; `--force` approves one call | Same, measured on sbx 0.53. The record is smolbento's own file; sbx's records aren't read |
-| Unchanged host commands | Ask on every `env create` and `env run` unless `env.rememberHostCommands` is on | Same |
-| Lifecycle commands | `initialize` on every create and run, `postCreate` after a create, `preRemove` on `env rm` (also when the sandbox is gone); `SBX_*` variables; the first failure stops the phase | Same, with sbx's output for a terminal and without one, and its error texts |
-| Lifecycle timeouts and background children | Go durations (`90s`, `1.5s`, `1m30s`); a command whose background child still holds its output five seconds after it exits fails, and the child is ended | Same, with sbx's error texts. Ctrl-C ends the running command and what it started (sbx not measured) |
-| Lifecycle in the plan of an existing sandbox | Lists unchanged `postCreate`/`preRemove` commands as `○ … — unchanged`; a changed command repeats its unchanged fields | Unchanged ones aren't listed; a changed command shows `command: old -> new` and the fields that changed |
-| The removal plan after `preRemove` | Regenerated, and the removal stops if the commands changed it (documented, not measured) | Not regenerated |
-| `entrypoint`, `cmd` | What `env run` launches; plain `run` ignores them; `AGENT LAUNCH` is listed as `+` in every plan | Same |
-| `registries` | Stored for the sandbox, removed by `env rm` | Same. Resolved once at create and stored as a value; used for that sandbox's image and kit pulls ahead of a host-wide login. sbx's stored form wasn't examined |
-| `PROVISION` output | Ends with `✓ environment — provisioned` | That line isn't printed |
-| Plan against the last apply | Keeps a list of what was applied: after a `--force` apply the plan shows `! NAME — unchanged, needs your approval`; a change that waits for a re-create keeps showing as `recorded as applied, no longer present, waits for the next create`; an unchanged secret shows as `○ NAME — unchanged` | Compares with what was approved and asks smolvm whether the sandbox exists: a change shows as `~` (outside `ENV` with `— waits for the next create`) until it is approved, then no longer; unchanged resources aren't listed |
+| Approval | Remembered per environment until the plan changes | Kept in smolbento's own file; sbx's records aren't read |
+| Lifecycle timeouts | Go durations (`90s`, `1m30s`). A background child that holds output five seconds after exit fails the command | Ctrl-C ends the running command and what it started (sbx not measured) |
+| Lifecycle in the plan of an existing sandbox | Lists unchanged `postCreate`/`preRemove` as `○ … — unchanged` | Unchanged commands aren't listed. A changed one shows `command: old -> new` and its changed fields |
+| Removal plan after `preRemove` | Regenerated; removal stops if the commands changed it (documented, not measured) | Not regenerated |
+| `registries` | Stored for the sandbox | Resolved once at create and stored as a value; used ahead of a host-wide login for that sandbox's pulls. sbx's stored form wasn't examined |
+| `PROVISION` output | Ends with `✓ environment — provisioned` | Line not printed |
+| Plan against the last apply | Lists applied items: `! NAME — unchanged, needs your approval`, `recorded as applied, no longer present, waits for the next create`, `○ NAME — unchanged` | Compares with what was approved and asks smolvm whether the sandbox exists. A change shows as `~` (outside `ENV`: `— waits for the next create`) until approved. Unchanged resources aren't listed |
 | `--clone` in the plan | A `GIT REMOTE` section | `clone: true` on the workspace |
-| Ports in an environment file | Named by protocol as written, else `tcp4` (`tcp6` for an IPv6 `hostIP`); `hostIP` must be an address; a later port with the same sandbox port and protocol replaces the earlier one | Same. smolvm publishes every port on both `127.0.0.1` and `::1`, so `tcp4`/`tcp6`/`udp4`/`udp6` all publish on both, and a `hostIP` other than those two is refused |
-| `additionalWorkspaces` with the same path | The later one replaces the earlier one | Same |
-| A different set of environment files | An environment of its own: nothing is approved for it, and what an existing sandbox has needs approval; the refusal names `the merged environment (a, b)` | Same |
-| Environment files in the sandbox | Mounted into the sandbox at their host path (read-only unless `writableEnvFiles`), with a plan line when one is writable | A file inside a writable mounted workspace is made read-only in the guest at each start (a read-only bind over itself), unless `writableEnvFiles`; root in the guest can undo it. A file outside the workspaces isn't mounted (smolvm mounts directories only). No plan line for a writable one |
-| `sandboxOptions.fuse: false` | `/dev/fuse` absent and no `SYS_ADMIN` | `/dev/fuse` taken away at each start |
-| `bindings` | Merged into the global `credentials.yaml`; kept by `env rm`; `--prune-bindings` removes each declared service's whole entry; an unknown service is accepted by `env plan` | Same, in smolbento's secrets file. An unknown service is refused at create, as for `secrets` |
-| `mcp` url servers | Registered for the host (after an OAuth discovery that fails the create when the server can't be reached) and served to the sandbox by the MCP gateway; kept by `env rm` | Registered in `mcp.toml` and written into the agent's config, as `--static-mcp` does (only `claude` so far); the create fails before anything is made when nothing answers at the URL (any HTTP answer counts, no OAuth discovery); kept by `env rm` |
-| `mcp` command servers | Run on the host from the MCP gateway, approved like lifecycle commands | Refused (exit 2) |
-| The plan after a plain `rm` | Lines end with `— recorded as applied, no longer present` | A bare `+` |
-| Kit arguments in the plan | The file's pinned `args.NAME`; `--kit-arg` isn't shown | Same |
-| A local kit's contents | Not measured | Not part of the approval: the plan names the kit's path |
-| Plain `rm` of an environment's sandbox | Keeps the approval | Same; `env rm` forgets it |
+| Ports | `tcp4`, or `tcp6` for an IPv6 `hostIP` | smolvm publishes on both `127.0.0.1` and `::1`, so `tcp4`/`tcp6`/`udp4`/`udp6` all publish on both. Any other `hostIP` is refused |
+| Environment files in the sandbox | Mounted at their host path, read-only unless `writableEnvFiles` | Files in a writable mounted workspace are made read-only in the guest at each start (unless `writableEnvFiles`); root in the guest can undo it. Files outside the workspaces aren't mounted (smolvm mounts directories only). No plan line for a writable one |
+| `sandboxOptions.fuse: false` | `/dev/fuse` absent, no `SYS_ADMIN` | `/dev/fuse` removed at each start |
+| `bindings` | Merged into the global `credentials.yaml`; `--prune-bindings` removes the service's entry; an unknown service is accepted by `env plan` | Stored in smolbento's secrets file; `--prune-bindings` works the same. An unknown service is refused at create, with the `sbt secret set` error |
+| `mcp` url servers | Registered for the host, after an OAuth discovery that fails the create if the server is unreachable | Registered in `mcp.toml` and written into the agent's config (`claude` only). Create fails before anything is made when nothing answers at the URL (any HTTP answer counts; no OAuth discovery) |
+| `mcp` command servers | Run on the host, approved like lifecycle commands | Refused (exit 2) |
+| Plan after a plain `rm` | Lines end `— recorded as applied, no longer present` | A bare `+` |
+| A local kit's contents | Not measured | Not part of the approval; the plan names the kit's path |
 | `refresh`, `backend` on a secret | Used | Accepted, no effect: smolbento resolves at every start |
-| `--skip-host-commands` | Skips lifecycle (and MCP) commands with a warning per phase; an approved environment still applies without asking, and the record keeps its lifecycle entries | Same for lifecycle. Secret and registry `command:` sources run either way, as in sbx |
-| `--prune-bindings` | Removes the environment's bindings | Accepted, no effect (there are no bindings yet) |
-| Unknown secret service | Accepted by `env plan` | Refused at create, with the error `sbt secret set` gives |
-| `secret ls` with registry credentials | `SECRET` shows the first characters | A separate `SCOPE TYPE NAME SECRET` table; `SECRET` is always `(stored)`, never part of a value. No `--json` on `secret ls` yet |
-| Workload kit as `agent` | The kit whose name equals `agent` | A local kit is matched by its directory name, a registry kit by the last part of its repository name |
+| `secret ls` with registry credentials | `SECRET` shows the first characters | A separate `SCOPE TYPE NAME SECRET` table; `SECRET` is always `(stored)`. No `--json` on `secret ls` yet |
+| Workload kit as `agent` | The kit whose name equals `agent` | A local kit matches by directory name; a registry kit by the last part of its repository name |
 | Secret `command:` source | Runs on the host | Runs from a fresh temporary directory, so a relative helper path fails (also for `secret set --command`) |
-| `env run` on an existing sandbox | Passes `env`, applies nothing else | Same |
-| `mounts:` path no kit declares | `no kit declares host-mount@1 at "PATH"; remove this environment's sandbox and provisioned secrets`, then `try: sbx env rm`; checked after the kit image is prepared | The first part only (the secrets are stored by then, and `env rm` removes them); checked before a registry kit's image is prepared |
-| Kits that can't be loaded | Checked before secrets are stored | A local kit path that doesn't exist, a `.zip` or a `git+` source is refused before secrets are stored. A registry kit isn't checked without the network: one that can't be pulled fails after the secrets were stored; `env rm` removes them |
+| `mounts:` path no kit declares | Error includes `remove this environment's sandbox and provisioned secrets` and `try: sbx env rm`; checked after the kit image is prepared | First sentence only (secrets are stored by then, and `env rm` removes them); checked before a registry kit's image is prepared |
+| Kits that can't be loaded | Checked before secrets are stored | A missing local path, a `.zip` or a `git+` source is refused before secrets are stored. An unpullable registry kit fails after they're stored; `env rm` removes them |
 
 ## Sandbox environment
 
-As in sbx, every sandbox gets these variables, set at create (`-e`, so every process sees them,
-agent and `exec` alike; your own `-e` wins). None of them holds a secret value.
+Every sandbox gets the variables below, the same set sbx sets. They are passed with `-e` at create
+so every process sees them. Your own `-e` wins. None holds a secret value.
 
-- `SANDBOX_NAME`, `SANDBOX_VM_ID` (the name) and `SANDBOX_ID` (a new UUID on every create). A
-  `fork` gets its own name and a new id, not its parent's.
-- `WORKSPACE_DIR`: the host path of the primary workspace; the guest workdir when mountless.
+- `SANDBOX_NAME`, `SANDBOX_VM_ID` (the name), `SANDBOX_ID` (a new UUID per create). A `fork`
+  gets its own name and id.
+- `WORKSPACE_DIR`: the host path of the primary workspace (the guest workdir when mountless).
 - `SBX_AGENT`: the preset or kit name. `IS_SANDBOX=1` for the `claude` preset.
-- `SBX_CRED_<SVC>_MODE`: `apikey` when the service's secret is bound at create, else `none`.
-  `shell` gets all eight services and `claude` only `ANTHROPIC`, as in sbx; the other presets and
-  kits get none, even one named `claude` or `shell` (sbx's set for them hasn't been compared).
-- `TZ` is passed from the host's `TZ` in TTY sessions (`run`, `exec -it`) only when it's set; sbx
-  derives one when it isn't.
-- `TERM_PROGRAM`, `TERM_PROGRAM_VERSION` and `COLORTERM` are passed from the host in TTY sessions,
-  as in sbx, so agents can tell your terminal shows clickable links.
-- `BROWSER=xdg-open` in every `run`/`exec` of a sandbox with the browser bridge. Without a display
-  a Linux agent (Claude Code, for one) assumes there's no browser and only prints the URL; sbx sets
-  `WAYLAND_DISPLAY` for its compositor instead.
+- `SBX_CRED_<SVC>_MODE`: `apikey` when the service's secret is bound at create, else `none`. `shell`
+  gets all eight services and `claude` only `ANTHROPIC`. Other presets and kits get none, even one
+  named `claude` or `shell`.
+- `TZ`: from the host, in TTY sessions (`run`, `exec -it`), when set. sbx derives one when unset.
+- `TERM_PROGRAM`, `TERM_PROGRAM_VERSION`, `COLORTERM`: from the host in TTY sessions, so agents know
+  your terminal shows clickable links.
+- `BROWSER=xdg-open` in `run` and `exec` of a sandbox with the browser bridge. A Linux agent without
+  a display would otherwise only print the URL. sbx sets `WAYLAND_DISPLAY` instead.
 
-Left out: `*_API_KEY=proxy-managed` and the `GH_TOKEN` sentinel (smolvm uses its own
-placeholders), `MCP_*` (no MCP gateway), `GIT_CONFIG_*`, the proxy specifics
-(`PROXY_CA_CERT_B64`, `JAVA_TOOL_OPTIONS`, `NODE_USE_ENV_PROXY`), `CLAUDE_ENV_FILE`,
-`SSH_AUTH_SOCK_GATEWAY` (`SSH_AUTH_SOCK` is set with an [SSH agent](#ssh-agent) grant),
-`WAYLAND_DISPLAY`/`XDG_RUNTIME_DIR`, the PAM-style startup-hook environment and
-`LC_ALL=C` for startup hooks. Kits relying on those see them unset.
+Left out: `*_API_KEY=proxy-managed` and the `GH_TOKEN` sentinel (smolvm uses its own placeholders);
+`MCP_*`; `GIT_CONFIG_*`; the proxy variables (`PROXY_CA_CERT_B64`, `JAVA_TOOL_OPTIONS`,
+`NODE_USE_ENV_PROXY`); `CLAUDE_ENV_FILE`; `SSH_AUTH_SOCK_GATEWAY` (`SSH_AUTH_SOCK` is set with an
+[SSH agent](#ssh-agent) grant); `WAYLAND_DISPLAY`; `XDG_RUNTIME_DIR`; the PAM-style startup-hook
+environment; and `LC_ALL=C` for startup hooks. Kits that rely on these see them unset.
 
 ## SSH agent
 
-As in sbx, sandboxes of the built-in agents get your SSH agent at runtime when you have one, kits
-ask with `ssh-agent@1`, `SSH_AUTH_SOCK` is `/run/ssh-agent.sock`, and only listing keys and
-signing reach your agent (`ssh-add -D` fails with `Failed to remove all identities.`). The
-settings are sbx's: `ssh.agentForwardingEnabled` and `ssh.agentSocketPath`.
+Built-in agent sandboxes get your SSH agent at runtime when you have one, as sbx does. Kits ask
+with `ssh-agent@1`. `SSH_AUTH_SOCK` is `/run/ssh-agent.sock`. Only listing keys and signing reach
+your agent (`ssh-add -D` fails with `Failed to remove all identities.`). The settings are sbx's:
+`ssh.agentForwardingEnabled` and `ssh.agentSocketPath`.
 
 | Area | sbx | smolbento |
 |---|---|---|
-| Serving | The daemon, whenever the sandbox runs | `sbt` itself, only while it runs for the sandbox: `sbt run` (attached), `sbt exec -it` and plain `sbt exec`, and the create's install steps for an `install` grant. No daemon: at other times (the workload running on its own, a `long-running` sandbox nobody is attached to) the sandbox's agent connections fail |
-| Sessions | Every session reaches the agent | The first session serves it; a second one at the same time uses that one, and when the first exits the agent is gone until the next `run` or `exec` |
-| Which agent | The sbx client's `SSH_AUTH_SOCK` | The `SSH_AUTH_SOCK` of the `sbt` that serves it, or `ssh.agentSocketPath` |
+| Serving | The daemon, whenever the sandbox runs | Only while `sbt` runs for the sandbox: `sbt run`, `sbt exec -it`, plain `sbt exec`, and the create's install steps for an `install` grant. At other times (a `long-running` sandbox with nobody attached) agent connections fail |
+| Sessions | Every session reaches the agent | The first session serves it; a concurrent second uses it. When the first exits, the agent is gone until the next `run` or `exec` |
+| Which agent | The sbx client's `SSH_AUTH_SOCK` | The `SSH_AUTH_SOCK` of the serving `sbt`, or `ssh.agentSocketPath` |
 | `SSH_AUTH_SOCK_GATEWAY` | `gateway.docker.internal:3129` | Not set (no TCP gateway) |
-| `authenticate` limits | Logins only to the named servers | Not yet (Phase 5g): a required entry with them is refused (`kit K: ssh-agent@1 authenticate limits aren't supported yet`), an optional one skipped |
+| `authenticate` limits | Logins only to the named servers | Not yet (Phase 5g). A required entry is refused (`kit K: ssh-agent@1 authenticate limits aren't supported yet`); an optional one is skipped |
 | `setup ssh` | `ssh NAME.sbx` into sandboxes | Not yet (Phase 5h) |
-| Forks | No forks | A fork has no agent of its own, but keeps the parent's socket mount, so its processes can use the agent, with the parent's grant, while the parent is served |
-| `kit add` of an `ssh-agent@1` kit | Recreates the container | "recreate required: … SSH agent" |
-| Sandboxes from before | n/a | Sandboxes created before smolbento had the agent have none; recreate them |
+| Forks | No forks | No agent of its own, but it keeps the parent's socket mount, so it can use the agent (with the parent's grant) while the parent is served |
+| `kit add` of an `ssh-agent@1` kit | Recreates the container | `recreate required: … SSH agent` |
+| Sandboxes from before | n/a | Created before smolbento had the agent, so they have none. Recreate them |
 
 ## Kits
 
 smolbento implements the [sandbox kit spec](https://github.com/docker/sandbox-kit-spec) at commit
 `198d50b5fd57b216b511fd7200010a3636cb3f01` (`SPEC_COMMIT` in the code). v3 is still experimental
-upstream. v2 `spec.yaml` kits are read into the same model, and smolvm Smolfiles work as kits too.
+upstream. v2 `spec.yaml` kits and smolvm Smolfiles work too.
 
-What each capability does in smolbento. A kit that **requires** one marked "no" or "later" fails
-with its `type@version` before anything is created; an optional one is skipped with a warning.
+A kit that **requires** a capability marked "no" or "later" fails, with its `type@version`, before
+anything is created. An optional one is skipped with a warning.
 
 | Capability | sbx (local) | smolbento |
 |---|---|---|
-| `network-policy@1`, `@2` | Yes | Yes: per-sandbox rules with source `kit`. Install-phase rules are in place from the sandbox's creation through its first start's setup and install steps, removed when install finishes, and never used by later starts. An install-phase deny of a CIDR is the exception: smolvm takes CIDR denies only at create, so it stays enforced for the sandbox's life (create prints a note) though `policy ls` doesn't show it. `@2` method and path rules aren't enforced, so a kit that requires them is refused. When the capability is optional, its allow rules apply to their whole host and its deny rules with methods or paths are dropped rather than widened to the host; the kit's skipped line says how many were dropped |
-| `credential@1` | Yes | API keys: yes, through your secrets. OAuth with `passthrough: true`: yes (the token and resource hosts are allowed; the agent's own login keeps its tokens in the sandbox). OAuth without passthrough: no |
+| `network-policy@1`, `@2` | Yes | Yes, source `kit`. Install-phase rules last through the first start's install steps only. An install-phase CIDR deny stays enforced for the sandbox's life (smolvm takes CIDR denies only at create; create prints a note), though `policy ls` doesn't show it. `@2` method and path rules aren't enforced, so a kit requiring them is refused. Optional: allow rules cover the whole host, and deny rules with methods or paths are dropped (the skipped line says how many) |
+| `credential@1` | Yes | API keys: yes, through your secrets. OAuth with `passthrough: true`: yes (the agent's own login keeps its tokens in the sandbox). OAuth without passthrough: no |
 | `port@1` | Yes | Yes, on `127.0.0.1` |
-| `volume@1` | Yes, removed with the sandbox | Yes, on the sandbox's disk; removed with the sandbox (`rm`, `reset`, recreate), kept across stop and start; each fork gets its own copy |
-| `resources@1` | Limited (no GPU) | CPUs and memory; GPU ignored, as in sbx |
-| `lifecycle@1` | Yes | Yes: install steps on the first start, startup steps on every start (see below). `interactive` is ignored, as in sbx |
-| `agent-context@1`, `@2` | Yes | Yes, in the same places as sbx (see below) |
-| `sbx@1` | Yes | Yes: the workload's command is the agent, run as in sbx (see below) |
+| `volume@1` | Yes, removed with the sandbox | Yes, on the sandbox's disk. Removed with the sandbox (`rm`, `reset`, recreate); kept across stop and start; each fork gets a copy |
+| `resources@1` | Limited (no GPU) | CPUs and memory. GPU ignored |
+| `lifecycle@1` | Yes | Yes: install steps on first start, startup steps on every start. `interactive` ignored |
+| `agent-context@1`, `@2` | Yes | Yes, in the same places (see below) |
+| `sbx@1` | Yes | Yes: the workload's command is the agent (see below) |
 | `git-identity@1` | Yes | Yes: your `git config user.name/email` |
 | `long-running@1` | Yes | Yes: no auto-stop when the last session ends |
 | `privileged@1` | Yes | Yes |
 | `agent-sessions@1` | Declaration only | Declaration only |
 | `host-mount@1` | Yes | Yes: a directory on your machine, shared by the kit's sandboxes and kept after `rm` (see below) |
-| `ssh-agent@1` | Yes | Yes, with `sign` limits, served while `sbt` runs (see [SSH agent](#ssh-agent)). `authenticate` limits: later (a required entry with them is refused, an optional one skipped) |
-| `agent-skills@1`, `agent-skill@1` | Yes | Yes, see [Skills](#skills). `kit add` refuses a kit with either, as it does `host-mount@1` (mounts are set at create). An `agent-skill@1` with `name: null` is treated as no name |
+| `ssh-agent@1` | Yes | Yes, with `sign` limits, served while `sbt` runs ([SSH agent](#ssh-agent)). `authenticate` limits: later (Phase 5g) |
+| `agent-skills@1`, `agent-skill@1` | Yes | Yes ([Skills](#skills)). `kit add` refuses a kit with either, as it does `host-mount@1`. `agent-skill@1` with `name: null` means no name |
 | `kit-registry@1` | Approved builder kits only | No |
 | `agent-interactive-sessions@1`, `usb-device@1` | No | No |
 
-What works as in sbx:
+### What works as in sbx
 
-- **Launch.** A workload kit's command runs as the image's `USER` (root when it has none) under
-  `/bin/bash`, so `BASH_ENV` is sourced, in the workspace path rather than `WORKDIR`. `sbt exec`
-  uses the same user. An image without `/bin/bash` fails with `executable file '/bin/bash' not
-  found` (exit 127). smolvm maps the workspace to the image user so it can write it. A workload whose image declares no `ENTRYPOINT` or `CMD`
-  is refused at create and `kit validate`.
-- **Hooks.** Install steps run as root in a workload kit's image `WORKDIR` (`/` otherwise);
-  startup steps and kit files default to `agent`, not the image user. v3 install steps get a clean
-  environment: `PATH`, `HOME`, `USER`, `TERM`, the proxy and CA variables, and the variables the
-  step declares in `env`. v3 startup steps and all v2 steps get the sandbox's full environment.
-- **Startup steps** block, in kit order, and a failing one fails the start
-  (`kit startup exited with code N`); one marked `background: true` is started at its place and
-  only logged if it fails. A blocking step that never finishes holds up the start (no timeout).
-  The log is `/var/log/sbx-kit-startup.log`. If a startup step fails during create, the sandbox is
-  still created, with sbx's `StartRuntime after create failed` warning, and left stopped; later
-  starts fail until the step succeeds.
-- **Kit arguments.** An optional argument a kit uses with no value and no default is an error
-  (`create-phase kit arg "x" has no resolved value`); `--kit-arg x=` sets it to empty.
-  `--kit-arg` without a kit is an error, and a `KIT.NAME` value for a kit that isn't in the set
-  is ignored. Unquoted numbers and booleans in `default:` and `enum:` become strings. A v3
-  argument that declares `env:` is exported into the sandbox's environment under that name
-  whenever it has a value: a default counts, an empty one too, and an optional argument with no
-  value exports nothing. The name may be `PATH`, which then replaces the image's. All as measured
-  on sbx v0.53.0. A later kit's value and your own `-e` still win.
-- **Kit references.** Where the agent goes (`create REF`), a bare word is an agent name even when
-  a directory of that name exists, and so is a dotted one: `sbt create alpine` fails with
-  `unknown agent "alpine"`, `sbt create .hidden` with `unknown agent ".hidden"`; `a/b` there is a
-  registry reference even when the directory exists. Where only a kit goes (`--kit`,
-  `kit validate`, `kit inspect`, `kit add`, an environment file's `kits:`), an existing path is
-  read as a local kit without `./` (`--kit mykit`, `kit validate sandbox/nix-tools`; in an
-  environment file, relative to the file). Otherwise a local kit is a path (`.`, `..`, `./kit`,
-  `../kit`, `/abs/kit`), a registry reference has a `/` (`docker.io/acme/kit:1`), and `--kit alpine`
-  with no such directory fails with `kit reference "alpine": not a local path and does not look
-  like a registry reference`. ZIP kits and `git+` sources are refused. All as measured on sbx
-  v0.53.0. One difference: sbx's `kit validate` refuses registry references ("OCI references are
-  not supported for validation"); smolbento pulls and validates them.
-- **Versions.** `provides: [name@1.2.0]` and `requires: ["name >= 1.0"]` follow the kit spec's
-  version grammar. The agent presets provide their name at their image tag's version, so a v2
-  mixin's `requires.agent: claude` works on `claude`.
-- **Composition errors** use sbx's texts and name each kit by its reference as typed:
-  `resolve: the kit set is not coherent:` followed by one `  - <problem>` line per problem,
+- A workload kit's command runs as the image's `USER` (root if none), under `/bin/bash` so
+  `BASH_ENV` is sourced, in the workspace path rather than `WORKDIR`. `sbt exec` uses the same
+  user. Without `/bin/bash` the error is `executable file '/bin/bash' not found` (exit 127).
+  smolvm maps the workspace to the image user so it can write it. An image with no `ENTRYPOINT`
+  or `CMD` is refused at create and by `kit validate`.
+- Install steps run as root in the image `WORKDIR` (`/` otherwise). Startup steps and kit files
+  default to `agent`. v3 install steps get a clean environment: `PATH`, `HOME`, `USER`, `TERM`,
+  the proxy and CA variables, and the step's own `env`. v3 startup steps and all v2 steps get the
+  full sandbox environment.
+- Startup steps block, in kit order. A failure fails the start (`kit startup exited with code N`).
+  `background: true` steps start in place and are only logged if they fail. A blocking step that
+  never ends holds the start (no timeout). The log is `/var/log/sbx-kit-startup.log`. A step that
+  fails during create still creates the sandbox (with sbx's `StartRuntime after create failed`
+  warning), which is left stopped; later starts fail until the step succeeds.
+- An optional kit argument used with no value and no default is an error
+  (`create-phase kit arg "x" has no resolved value`). `--kit-arg x=` sets it empty. `--kit-arg`
+  without a kit is an error. A `KIT.NAME` value for a kit not in the set is ignored. Unquoted
+  numbers and booleans in `default:` and `enum:` become strings. A v3 argument with `env:` is
+  exported under that name whenever it has a value (defaults and empty values count; no value
+  exports nothing). The name may be `PATH`. A later kit's value and your own `-e` still win.
+- For `create REF`, a bare or dotted word is an agent name even when a directory of that name
+  exists: `sbt create alpine` fails with `unknown agent "alpine"`, `sbt create .hidden` with
+  `unknown agent ".hidden"`. `a/b` is a registry reference even if the directory exists. For
+  `--kit`, `kit validate|inspect|add` and an environment file's `kits:`, an existing path is a
+  local kit without `./` (in an environment file, relative to the file). Otherwise a local kit is
+  a path (`.`, `..`, `./kit`, `../kit`, `/abs/kit`), and a registry reference has a `/`. With no
+  such directory, `--kit alpine` fails with
+  `kit reference "alpine": not a local path and does not look like a registry reference`. ZIP kits
+  and `git+` sources are refused. All measured on v0.53.0.
+- Versions in `provides: [name@1.2.0]` and `requires: ["name >= 1.0"]` follow the spec's version
+  grammar. Agent presets provide their name at their image tag's version, so
+  `requires.agent: claude` works on `claude`.
+- Composition errors use sbx's texts, with kits named as typed. They are
+  `resolve: the kit set is not coherent:` with one `  - <problem>` line each,
   `resolve: dependency cycle among ./a, ./b`, and `kit ./x is listed more than once`.
-- **Unbound credentials.** A required kit credential whose secret isn't set doesn't stop the
-  create: it warns `WARN: required credential not found for service SERVICE` and the kit's
-  requests go out without it. smolbento adds a line with the `sbt secret set` command to run.
-- **`kit inspect` and `kit validate`** print sbx's summary (`Name:`, `Kind:`, `Schema:`,
-  `Policies:`, `Credentials:`, `Commands:`) and `✓ <ref> — valid`; `kit inspect --format json` is
-  the v2-shaped descriptor and `kit validate --json` is `{reference, kind, valid, warnings}`.
-- **Kit rules in `policy ls`** are one `kit:<sandbox>` row per sandbox (source `kit`), whatever
-  kits made them. They can't be removed with `policy rm`; deny a host instead.
-- **Agent context** goes in the agent's file in the parent directory of the workspace path, inside
-  the sandbox only (nothing is written on your machine): `CLAUDE.md` for claude, `GEMINI.md` for
-  gemini, `AGENTS.md` for the others, or the file a workload kit's own `agent-context` names, with
-  its text appended. A v2 mixin's text goes to `kits-agent-context/<kit>.md` next to that file,
-  which lists it between `<!-- sbx:kits-section start -->` and `<!-- sbx:kits-section end -->`.
-- **Settings.** `kit.allowedSources` and `kit.allowLocalKits` (see
-  [Configuration](configuration.md#settings)).
-- **Host mounts.** A `host-mount@1` directory is `kit-host-mounts/<sha256(kit)>/<sha256(path)>`
-  under smolbento's data directory (`~/.local/share/smolbento`), keyed on the kit that declares it
-  (a mixin's own, not the workload's); for a local kit, `kit` is its canonical directory. Parents
-  are `0700`, the directory gets the kit's `mode` (`0755` by default), and an existing one is
-  reused as is. Sandboxes of the same kit share it, and `rm` keeps it. `--mount HOST:SANDBOX_PATH`
-  and `sbxenv.yaml` `mounts:` replace it, at create only, with sbx's errors
-  (`--mount "X" requires HOST:SANDBOX_PATH`, `HOST "X" does not exist on the host`,
-  `no kit declares host-mount@1 at "PATH"`). Two kits declaring storage at the same path fail with
-  a shorter form of sbx's message: `kits A and B both declare storage at PATH; a host mount has
-  one owner`.
+- A required credential with no secret warns
+  `WARN: required credential not found for service SERVICE`, and the requests go out without it.
+  The warning adds the `sbt secret set` command to run.
+- `kit inspect` and `kit validate` print sbx's summary (`Name:`, `Kind:`, `Schema:`, `Policies:`,
+  `Credentials:`, `Commands:`) and `✓ <ref> — valid`. `kit inspect --format json` is the
+  v2-shaped descriptor; `kit validate --json` is `{reference, kind, valid, warnings}`.
+- `policy ls` shows kit rules as one `kit:<sandbox>` row per sandbox (source `kit`). `policy rm`
+  can't remove them; deny a host instead.
+- Agent context goes in the agent's file in the workspace's parent directory, inside the sandbox
+  only: `CLAUDE.md` (claude), `GEMINI.md` (gemini), `AGENTS.md` (others), or the file a workload
+  kit's `agent-context` names, with its text appended. A v2 mixin's text goes to
+  `kits-agent-context/<kit>.md` beside it, listed between `<!-- sbx:kits-section start -->` and
+  `<!-- sbx:kits-section end -->`.
+- The settings are `kit.allowedSources` and `kit.allowLocalKits`
+  ([Configuration](configuration.md#settings)).
+- A `host-mount@1` directory is `kit-host-mounts/<sha256(kit)>/<sha256(path)>` under
+  `~/.local/share/smolbento`, keyed on the kit that declares it (a mixin's own, not the workload's;
+  a local kit's key is its canonical directory). Parents are `0700`; the directory takes the kit's
+  `mode` (default `0755`) and an existing one is reused. Sandboxes of the same kit share it, and
+  `rm` keeps it. `--mount HOST:SANDBOX_PATH` and `sbxenv.yaml` `mounts:` replace it, at create
+  only, with sbx's errors (`--mount "X" requires HOST:SANDBOX_PATH`,
+  `HOST "X" does not exist on the host`, `no kit declares host-mount@1 at "PATH"`). Two kits
+  declaring storage at one path fail with
+  `kits A and B both declare storage at PATH; a host mount has one owner`.
 
-Differences:
+### Differences
 
 | Area | sbx | smolbento |
 |---|---|---|
-| Building local v3 kits | BuildKit on your machine | BuildKit in a hidden `_builder` sandbox; no Docker on your machine needed. It never gets your secrets. Base images that need a login pull with your `secret set --registry` credentials, which stay on the host: the builder gets a short-lived pull token for the `HOST/<repo>` references in the descriptor as a header smolvm sets, can reach those registries whatever the policy, and is recreated when the set of registries changes. A build that reaches a stored-login registry without naming `HOST/<repo>` gets `502 credential unavailable` and fails (remove the login or name the image that way); Docker Hub logins don't apply to builds yet |
-| Where a kit sends a secret | Any host the kit names, after you approve it | A built-in service's secret only to that service's own hosts (else the kit is refused); a custom service's anywhere, with a note at `create` and `kit add` |
-| Install-only credentials | Not injected after install: the placeholder stays and requests go out without the credential | The sandbox restarts once after install, without them; later requests to their hosts get `502` |
+| Building local v3 kits | BuildKit on your machine | BuildKit in a hidden `_builder` sandbox; no Docker needed locally. It never gets your secrets. Base images that need a login pull with `secret set --registry` credentials: the builder gets a short-lived pull token for the `HOST/<repo>` references in the descriptor, reaches those registries whatever the policy, and is recreated when the registry set changes. A build reaching a stored-login registry without naming `HOST/<repo>` fails with `502 credential unavailable`. Docker Hub logins don't apply yet |
+| Where a kit sends a secret | Any host the kit names, after you approve | A built-in service's secret goes only to that service's hosts (else the kit is refused). A custom service's can go anywhere, with a note at `create` and `kit add` |
+| Install-only credentials | Not injected after install; requests go out without the credential | The sandbox restarts once after install without them; later requests to their hosts get `502` |
 | OAuth credentials | Passthrough and sentinel tokens | Passthrough only (sentinel tokens need smolvm support) |
-| Method and path rules | Enforced (`403` outside the rule) | Not enforced (as for `policy allow --method/--path`); a kit that requires them is refused |
-| `kit add` | Recreates the container; refuses v2 kits with files and v3 mixins on a v3 workload; asks before opening network access, with no flag to skip the question | Applies to the running sandbox, files and deny rules included. Image layers, credentials, ports, volumes, resources, environment variables and `long-running` need a recreate ("recreate required"); asks before opening network access, and `-y/--yes` skips the question. A new startup step that fails only warns |
-| `kit inspect --offline`, `kit validate --offline` | Skips the daemon policy (`kit.allowedSources`, `kit.allowLocalKits`, `kit.requireSignature`); local directory or ZIP only; v3 source directories refused (no builder) | Skips the source policy, `kit.allowLocalKits` included, as sbx documents. Local v2 kits and Smolfiles only. Registry refs and v3 source directories are refused (they need the network); `validate` of a v2 workload whose command comes from its image is refused too. No ZIP or git references |
-| `kit inspect` output | Summary table; `--format json` is the v2-shaped descriptor; `--kit-arg` shows substituted content | Same shape, plus `--format yaml` and `--json`. After sbx's lines the table adds `Capabilities:` (what smolbento supports), then Source, Digest, Provides, Requires, Integrates, Conflicts, Credentials (each service and the hosts its secret is sent to) and Args when present; JSON/YAML carry those under a top-level `smolbento` key. `--kit-arg` is only checked, not substituted into the output |
-| `kit pack`, `kit push` | v1 and v2 kits; v3 refused (`unsupported schemaVersion "3" (supported: [1 2])`) | v2 kits only (smolbento doesn't load v1); v3 refused with sbx's message. A kit with `files/workspace` is refused (sbx's mapping for it isn't measured) |
-| Kit archives | `kit pack`'s ZIP and the pushed files layer are byte-stable | Deterministic too, but not byte-identical to sbx's (Go's and Rust's deflate differ), so the same kit gets another digest from each tool. The ZIP stores entries uncompressed |
-| `kit push` | HTTPS only; every push attaches a provenance referrer; success line not measured | Plain HTTP for loopback registries, as for pulls. No provenance yet. Prints `Pushed REF (sha256:…)`. The reference needs a tag. Logs in with the registry secret (`sbt secret set --registry`), else the host's docker login |
-| `kit pull` | Saves the payload: the files layer (`.tar.gz`), named `<repo>-<tag>.tar.gz` | Same. With a digest, the default name is `<repo>-<first 12 hex>.tar.gz` (sbx's not measured). Any other artifact, a v3 image kit included, is refused (`… is not a v2 kit artifact`). As in sbx, `kit.allowedSources` applies to `pull` (not to `push`) |
-| `kit sign`, `kit verify`, `kit push --sign` | Sigstore bundles over the kit manifest, attached as `application/vnd.docker.sandbox.kit.signature.v1` referrers; keyless (Fulcio and Rekor) or `--key` (unencrypted PEM, no Rekor upload) | Same bundles and referrers, made and checked by `cosign` (it must be on PATH; the `--key` PEM is imported into a private temp directory first). A registry without the referrers API gets the `sha256-<hex>` tag-schema index, which sbx reads too. A local directory (`kit.sig.bundle`) and keyless `--tlog-upload=false` are refused (exit 2). `verify --key` checks no transparency log entry (a key-based signature has none, as sbx makes it). `push --sign` attaches no provenance. `sign` prints `Signed REF`; keyless `verify` prints the identity and issuer it was given (a pattern for `-regexp`), not the certificate's |
-| `kit validate` output | `✓ <ref> — valid`; `--json` gives `{reference, kind, valid, warnings}` | Same, with `--format table\|json\|yaml`. A failure with `--json`/`--format json\|yaml` prints the same object with `valid: false` and `errors: [<message>]` on stdout and exits 1; table output prints the plain error |
-| Unmeasured parts of `kit inspect`/`validate` | | Inferred, not measured against sbx: `kind` values other than `directory` (we use `file`, `registry`, `builtin`); `Schema:` for registry (`v3`), builtin (`v3`) and Smolfile (`smolfile`) kits; the network rule counts (install and runtime rules merged, hosts deduplicated) and init-file count (v2 `files/home` and `files/workspace` files included); the JSON layout under sandbox, permissions, credentials and setup; the failure object above; `Template:` shown only for a built local v3 kit |
-| The name `docker` | A registry ref (the `docker` image) | The shipped Docker kit; write `docker.io/library/docker` for the image |
-| Docker in the sandbox | Run by the `-docker` images | The shipped `docker` kit, first before your kits (added to Docker-enabled images, or given with `--kit docker`), so their startup steps can use Docker. Its `dockerd` step runs in the background, so a failing `dockerd` is only logged (`/var/log/dockerd.log`) and doesn't stop the start |
-| v3 mixins on built-in agents | Allowed since the agents ship as v3 kits (sbx 0.53; earlier: `no workload kit in the set`) | Allowed |
-| Published v2 kits | Pulled from a registry as an OCI artifact whose config is the spec and whose one layer is `files/` as a tar.gz under `home/agent/` (`docker.io/sbx/gemini-kit`, `docker.io/sbx/git-ssh-sign-kit`) | Same. A files layer entry outside `home/agent/` is refused (sbx's other mappings aren't measured). The sandbox's agent is named after the reference (`gemini-kit`), not the kit's name |
-| A published kit's build arguments | Not required at create (`docker.io/sbx/antigravity`'s `version`) | Same |
-| Retired agents | `gemini` (0.53): refused for a new sandbox, pointing to `antigravity` and `docker.io/sbx/gemini-kit` | Same wording; sandboxes created with `gemini` before keep working (not measured on sbx) |
-| A kit variable that refers to itself | `PATH: /opt/kit/bin:$PATH` gets the image's PATH in place of `$PATH` | Same, for `$NAME` and `${NAME}` in NAME's own value (a value with the image's environment read at create; smolvm doesn't expand variables yet). Unlike sbx, `${PATH}` in another variable (`BRACED: /opt/b:${PATH}`) stays as written; sbx puts the kit's unexpanded PATH there |
-| v2 and v3 kits in one sandbox | Refused: `cannot mix v3 kits with v1/v2 kits in one sandbox; compositions are single-format (v3: …; v1/v2: …)` | Refused with the same message, at create and by `kit add` (which reads each kit's format from the sandbox's kits record; a sandbox created before 0.20 has none recorded, so `kit add` doesn't check it) |
-| v2 mixins on built-in agents | Refused by the rule above, because the agents are v3 kits (sbx 0.53) | Allowed: an agent preset, the shipped `docker` kit and a Smolfile have no kit format, so a v2 kit works with them |
-| Descriptor file names | `.yaml` only | `.yaml` and `.yml` |
-| `--mount` with a file as `HOST` | Not measured | The workspace error, `workspace X is a file; …` (smolvm mounts directories only) |
-| `--mount` path no kit declares | `request failed: 400 Bad Request: no kit declares host-mount@1 at "PATH"`, after the image is prepared | `no kit declares host-mount@1 at "PATH"`; a local kit is still built first, but a published kit's image isn't prepared |
-| Where host-mount directories live | `~/Library/Application Support/com.docker.sandboxes/sandboxes/kit-host-mounts/` on macOS | Under smolbento's data directory, so sbx's directories aren't shared |
+| Method and path rules | Enforced (`403` outside the rule) | Not enforced (as with `policy allow --method/--path`); a kit requiring them is refused |
+| `kit validate` on registry references | Refused: "OCI references are not supported for validation" | Pulled and validated |
+| `kit add` | Recreates the container; refuses v2 kits with files and v3 mixins on a v3 workload; asks before opening network access, no skip flag | Applies to the running sandbox, files and deny rules included. Image layers, credentials, ports, volumes, resources, environment variables and `long-running` need a recreate (`recreate required`). Asks before opening network access; `-y/--yes` skips it. A new startup step that fails only warns |
+| `--offline` on `kit inspect`/`validate` | Skips the daemon policy; local directory or ZIP only; v3 source directories refused | Skips the source policy (`kit.allowLocalKits` included). Local v2 kits and Smolfiles only. Registry references and v3 source directories are refused. `validate` of a v2 workload whose command comes from its image is refused too. No ZIP or git references |
+| `kit inspect` output | Summary table; `--format json` is the v2-shaped descriptor | Same shape, plus `--format yaml` and `--json`. The table adds `Capabilities:`, Source, Digest, Provides, Requires, Integrates, Conflicts, Credentials (each service and where its secret goes), and Args when present; JSON and YAML carry these under a `smolbento` key. `--kit-arg` is checked but not substituted into the output |
+| `kit pack`, `kit push` | v1 and v2; v3 refused (`unsupported schemaVersion "3" (supported: [1 2])`) | v2 only (v1 isn't loaded); v3 refused with sbx's message. A kit with `files/workspace` is refused (sbx's mapping isn't measured) |
+| Kit archives | `kit pack`'s ZIP and pushed layer are byte-stable | Deterministic but not byte-identical (Go and Rust deflate differ), so each tool gives the same kit a different digest. The ZIP stores entries uncompressed |
+| `kit push` | HTTPS only; every push attaches a provenance referrer | Plain HTTP for loopback registries. No provenance yet. Prints `Pushed REF (sha256:…)`. Needs a tag. Logs in with `sbt secret set --registry` credentials, else the host's docker login |
+| `kit pull` | Saves the files layer as `<repo>-<tag>.tar.gz` | With a digest, the default name is `<repo>-<first 12 hex>.tar.gz` (sbx's not measured). Other artifacts, including v3 image kits, are refused (`… is not a v2 kit artifact`). `kit.allowedSources` applies to `pull`, not `push` |
+| `kit sign`, `kit verify`, `kit push --sign` | Sigstore bundles as `application/vnd.docker.sandbox.kit.signature.v1` referrers; keyless (Fulcio and Rekor) or `--key` (unencrypted PEM, no Rekor upload) | Same bundles and referrers, made and checked by `cosign` (must be on PATH; `--key` PEM is imported into a private temp directory). Registries without the referrers API get the `sha256-<hex>` tag index, which sbx reads. A local directory (`kit.sig.bundle`) and `--tlog-upload=false` are refused (exit 2). `verify --key` checks no transparency log entry. `push --sign` attaches no provenance. `sign` prints `Signed REF`; keyless `verify` prints the identity and issuer you gave, not the certificate's |
+| `kit validate` output | `✓ <ref> — valid`; `--json` is `{reference, kind, valid, warnings}` | Adds `--format table\|json\|yaml`. A failure with `--json` or `--format json\|yaml` prints the object with `valid: false` and `errors: [...]` on stdout and exits 1; table output prints the plain error |
+| The name `docker` | A registry ref (the `docker` image) | The shipped Docker kit. Write `docker.io/library/docker` for the image |
+| Docker in the sandbox | Run by the `-docker` images | The shipped `docker` kit comes first, before your kits (added to Docker-enabled images, or `--kit docker`). Its `dockerd` step runs in the background: a failure is only logged (`/var/log/dockerd.log`) |
+| v3 mixins on built-in agents | Allowed since sbx 0.53 (earlier: `no workload kit in the set`) | Allowed |
+| v2 and v3 kits in one sandbox | Refused: `cannot mix v3 kits with v1/v2 kits in one sandbox; compositions are single-format (v3: …; v1/v2: …)` | Same message, at create and by `kit add`. A sandbox created before 0.20 has no recorded format, so `kit add` doesn't check it |
+| v2 mixins on built-in agents | Refused, since the agents are v3 kits (sbx 0.53) | Allowed. Presets, the shipped `docker` kit and Smolfiles have no kit format |
+| Published v2 kits | OCI artifact: config is the spec, one layer is `files/` as tar.gz under `home/agent/` | A files-layer entry outside `home/agent/` is refused (other mappings unmeasured). The agent is named after the reference (`gemini-kit`), not the kit |
+| Retired agents | `gemini` (0.53) refused for new sandboxes, pointing to `antigravity` and `docker.io/sbx/gemini-kit` | Same wording. Sandboxes created with `gemini` earlier keep working (not measured on sbx) |
+| Self-referencing kit variable | `PATH: /opt/kit/bin:$PATH` gets the image's PATH | Same for `$NAME` and `${NAME}` in NAME's own value (read at create; smolvm doesn't expand variables yet). `${PATH}` in another variable stays as written; sbx substitutes the kit's unexpanded PATH |
+| `--mount` with a file as `HOST` | Not measured | `workspace X is a file; …` (smolvm mounts directories only) |
+| `--mount` path no kit declares | `request failed: 400 Bad Request: no kit declares host-mount@1 at "PATH"`, after the image is prepared | Same text without the prefix. A local kit is still built first; a published kit's image isn't prepared |
+| Host-mount location | `~/Library/Application Support/com.docker.sandboxes/sandboxes/kit-host-mounts/` on macOS | Under smolbento's data directory, so sbx's directories aren't shared |
 | Loopback registries | HTTPS only | Plain HTTP for `localhost`, `127.0.0.0/8` and `::1`, as in Docker |
-| Smolfile kits | None | A Smolfile defines its own workload, so one without a command keeps the shell agent's |
-| Agent context file | Starts with a long platform preamble | No preamble: only kit text and the index |
-| Mixin context when the workload declares no agent file | Dropped silently | Dropped with a warning |
+| Smolfile kits | None | A Smolfile defines its own workload; one without a command keeps the shell agent's |
+| Agent context file | Starts with a long platform preamble | No preamble: kit text and the index only |
+| Mixin context with no agent file in the workload | Dropped silently | Dropped with a warning |
 | Startup log lines | `ok /etc/durable-startup.d/…` | `ok /etc/smolbento/startup.d/NN-<kit>.sh hook N`, one per step and start |
-| v2 kits' `requires.agent` | A base-agent name | A capability name with no version, so any version of it meets it (v2 has no versioned provides); the presets provide theirs |
-| `kit add` and earlier kits | Recreates with the whole set | Matches the new kit against the provides recorded at create, with their versions; records written before versions existed hold bare names, which meet only unconstrained requires. An agent preset's own name counts as version `0` (`claude@0`), so a versioned require on it can pass at create and fail at `kit add`. Errors name earlier kits by kit name (their references aren't recorded). The earlier kits' own requires and conflicts aren't checked again |
+| v2 kits' `requires.agent` | A base-agent name | A capability name with no version, so any version meets it (v2 has no versioned provides) |
+| `kit add` and earlier kits | Recreates with the whole set | Checks the new kit against the provides recorded at create, with versions. Older records hold bare names, which meet only unconstrained requires. A preset's own name counts as `claude@0`, so a versioned require can pass at create and fail at `kit add`. Errors name kits by kit name. Earlier kits' requires and conflicts aren't rechecked |
 | Kit settings | Also `kit.requireSignature`, `kit.trustedSigners`, `kit.ignoreTransparencyLog`, `kit.allowExtractedAgents` | All but `kit.allowExtractedAgents` (built-in agents aren't kits) |
-| `kit.requireSignature` | Wherever a kit loads (`create`/`run --kit`, `kit inspect`, `kit validate`, `kit add`), a registry or local kit needs a signature that verifies for one of `kit.trustedSigners` (`{"key": PATH}` or keyless `issuer`/`identity`, each also `…Regexp`); `kit pull` and `--offline` skip it. Success prints `✓ REF — signature verified (IDENTITY via ISSUER)` on stderr | Same for registry kits, checked on the digest the reference resolves to. smolbento's presets and shipped kits (`claude`, `docker`) are exempt. Local directories and Smolfiles are refused (`… is not signed`, or with a `kit.sig.bundle`, `… isn't supported yet`: sbx's directory digest isn't decoded). The success line names the trusted signer entry that matched (as written, or `key PATH`), not the certificate's identity |
+| `kit.requireSignature` | Enforced wherever a kit loads (not `kit pull` or `--offline`): a registry or local kit needs a signature verifying against `kit.trustedSigners` (`{"key": PATH}`, or keyless `issuer`/`identity`, each also `…Regexp`). Success: `✓ REF — signature verified (IDENTITY via ISSUER)` on stderr | Registry kits only, checked on the resolved digest. Presets and shipped kits (`claude`, `docker`) are exempt. Local directories and Smolfiles are refused (`… is not signed`, or `… isn't supported yet` with a `kit.sig.bundle`). The success line names the matching signer entry, not the certificate's identity |
 
-Not compared with sbx yet:
+### Not measured against sbx yet
 
-- How arguments with float or unusual literal values (`1.0`, `0x10`, `True`) become strings
-  (smolbento writes `1.0` as `1`).
-- A startup step or v2 step run as a non-root user: it keeps the sandbox's environment, except
-  that `HOME`, `USER`, `LOGNAME` and `SHELL` are that user's (through `runuser`, or `su` without
-  `-` on images without `runuser`, which resets them too).
-- A v3 mixin's agent context: smolbento puts it in `kits-agent-context/<kit>.md` and the index, as
-  for a v2 mixin.
-- `integrates` and `conflicts` errors (texts from the kit spec's resolver), and a published kit
-  whose provides have no version (read as is; it meets only unconstrained requires).
+- How float or unusual literals (`1.0`, `0x10`, `True`) become argument strings (smolbento writes
+  `1.0` as `1`).
+- A v2 or startup step run as a non-root user keeps the sandbox environment, except `HOME`, `USER`,
+  `LOGNAME` and `SHELL`, which are that user's (via `runuser`, or `su` without `-`, which resets
+  them).
+- A v3 mixin's agent context: smolbento writes it to `kits-agent-context/<kit>.md`, as for v2.
+- `integrates` and `conflicts` error texts, and a published kit whose provides have no version.
 - An optional argument a kit declares but doesn't use, with no value and no default.
-- A published kit's host-mount identity: smolbento keys it on `<registry>/<repository>` (no tag or
-  digest, as the kit spec asks); sbx's choice hasn't been measured.
-- The agent file's kits index after hand edits, such as a removed or duplicated marker or text
-  added inside the block.
+- A published kit's host-mount identity: keyed on `<registry>/<repository>`; sbx's choice isn't
+  measured.
+- The kits index after hand edits (a removed or duplicated marker, or text inside the block).
+- Inferred, not measured: `kind` values other than `directory` (smolbento uses `file`, `registry`,
+  `builtin`); `Schema:` for registry, builtin and Smolfile kits; network rule counts; the init-file
+  count; the JSON layout under sandbox, permissions, credentials and setup; the failure object; and
+  `Template:`, shown only for a built local v3 kit.
 
 ## Exit codes
 

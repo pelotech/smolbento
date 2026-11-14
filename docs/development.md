@@ -2,53 +2,47 @@
 
 ## Dev shell
 
-Tooling (Rust, cargo-nextest, cargo-insta, cargo-deny, just, prek, yamllint, actionlint, zizmor,
-trivy, rcodesign) comes from the Nix flake. With [Nix](https://nixos.org) and
-[direnv](https://direnv.net):
+The Nix flake provides the tooling. With [Nix](https://nixos.org) and [direnv](https://direnv.net):
 
 ```sh
 direnv allow
 prek install --hook-type pre-commit --hook-type commit-msg
 ```
 
-In shells without the direnv hook, run commands through it: `direnv exec . just test`. Without
-direnv, use `nix develop`.
+Without the direnv hook, prefix commands with `direnv exec .`. Without direnv, use `nix develop`.
 
 ## Recipes
 
-| Command | What it does |
+| Command | Purpose |
 |---|---|
 | `just build` | Build the binary |
 | `just test` | Unit, snapshot and sbx parity tests (nextest) |
-| `just e2e` | End-to-end tests that boot real VMs, two at a time (`just e2e 4` for more; `just e2e 2 --partition slice:1/3` for one third, as each CI shard runs); needs smolvm and a hypervisor |
+| `just e2e` | Real-VM tests, two at a time. `just e2e 4` runs four; `just e2e 2 --partition slice:1/3` is one CI shard. Needs smolvm and a hypervisor |
 | `just lint` | All pre-commit hooks: fmt, clippy, cargo-deny, yamllint, actionlint, zizmor |
-| `just install` | Install into `~/.cargo/bin` with the `sbt`/`sbx`/`bento` links |
+| `just install` | Install to `~/.cargo/bin`, with the `sbt`/`sbx`/`bento` links |
 | `just release-build TARGET BUILDER` | Build a release tarball into `dist/` |
 
 ## Tests
 
-- **Unit tests** sit next to the code. Command handlers are tested against a fake smolvm runner
-  and assert the exact smolvm command lines.
-- **Snapshots** (`insta`) cover every `--help` and the `ls` output. Review changes with
-  `cargo insta review`.
-- **Parity:** `tests/parity/sbx-commands.txt` lists sbx command lines that must keep parsing.
-- **End-to-end** (`tests/e2e/`, ignored by default) boots small Alpine VMs: lifecycle, exec, same-path
-  mounts, `run` auto-stop, `cp`, `diagnose`, network policy, ports and secrets. The policy test
-  needs outbound internet (it reaches `example.com`) and the secrets test needs `httpbin.org`.
+- Unit tests sit next to the code. Handlers run against a fake runner and assert the smolvm command
+  lines.
+- Snapshots (`insta`) cover every `--help` and `ls` output. Review them with `cargo insta review`.
+- The parity list, `tests/parity/sbx-commands.txt`, names the sbx command lines that must keep
+  parsing.
+- End-to-end tests (`tests/e2e/`, ignored by default) boot small Alpine VMs. They cover lifecycle,
+  exec, mounts, `run` auto-stop, `cp`, `diagnose`, network policy, ports and secrets. The policy
+  test reaches `example.com`; the secrets test reaches `httpbin.org`.
 
 ## Running tests
 
 ```sh
 cargo nextest run publish_starts        # one unit test, by name substring
-just e2e 2 bundled_skills_are             # one e2e test (boots VMs), by name substring
+just e2e 2 bundled_skills_are           # one e2e test (boots VMs), by name substring
 cargo insta test --accept               # run and accept changed snapshots
 cargo insta review                      # or review them one by one
 ```
 
-Prefix each with `direnv exec .` in shells without the direnv hook.
-
-A handler test sets up a fake smolvm machine, runs the command and asserts the smolvm command
-lines (from `src/cli/ports.rs`):
+A handler test, from `src/cli/ports.rs`:
 
 ```rust
 #[test]
@@ -62,44 +56,44 @@ fn publish_starts_a_stopped_sandbox_then_updates() {
 }
 ```
 
-Use `t.sbt_err` for a command that must fail (it returns the error text) and `t.stdout()` for
-output. Helpers live in `src/testutil.rs`.
+`t.sbt_err` returns the error text of a command that must fail; `t.stdout()` returns output. Helpers
+are in `src/testutil.rs`.
 
-IDEs (rust-analyzer, RustRover) should use their own `CARGO_TARGET_DIR`, or the Nix toolchain.
-Two toolchains sharing `target/` rebuild everything each time you switch, and it grows past 40 GB.
+IDEs should use their own `CARGO_TARGET_DIR` or the Nix toolchain. Sharing `target/` between toolchains
+forces a full rebuild on every switch, and it grows past 40 GB.
 
 ## CI
 
-| Workflow | When | What |
+| Workflow | Runs on | Does |
 |---|---|---|
 | `build` | PRs, main | Build and test on Linux x86_64 and arm64; macOS only on manual dispatch with `macos: true` |
-| `e2e` | PRs, main | Real-VM tests on `ubuntu-latest` (the only GitHub runner that can boot VMs) |
+| `e2e` | PRs, main | Real-VM tests on `ubuntu-latest`, the only GitHub runner that boots VMs |
 | `pre-commit` | PRs, main | `prek run --all-files` |
-| `lint-pr-title` | PRs | Conventional-commit PR titles |
+| `lint-pr-title` | PRs | Checks conventional-commit PR titles |
 | `plan-nix-devshell` | PRs touching the flake | Comments the dev-shell package diff |
-| `Release Please` | main | Release PRs; on release, signed binaries for all targets |
+| `Release Please` | main | Opens release PRs; on release, builds signed binaries for all targets |
 
-To save runner time:
+Runner time savings:
 
-- A new push to a PR cancels that PR's runs still in progress. Runs on `main` queue instead, so
-  every merged commit gets a result, and a release is never cancelled mid-way.
-- `build` and `e2e` run only when code or tooling changes (the paths in `.github/filters.yaml`).
-  On a docs-only PR they show as skipped, which counts as passing for required checks.
-- Cargo builds are cached with `Swatinem/rust-cache`. The cache is saved from `main` only; PRs
-  restore it, so the first run after a dependency change on `main` is the slow one.
+- A new push cancels that PR's runs in progress. Runs on `main` queue, so every merged commit gets a
+  result and a release is never cancelled.
+- `build` and `e2e` run only for code or tooling changes (paths in `.github/filters.yaml`). They show as
+  skipped on docs-only PRs, which passes required checks.
+- Cargo caches (`Swatinem/rust-cache`) are saved from `main` only. A dependency change makes the first
+  `main` run slow.
 - Every job has a `timeout-minutes`.
 
-macOS isn't tested in CI by default (it's expensive, and GitHub's Apple Silicon runners can't boot
-VMs). Run `just test` and `just e2e` on a Mac before merging changes that affect macOS, and before
-merging a release PR.
+macOS isn't tested in CI. It's expensive, and GitHub's Apple Silicon runners can't boot VMs. Run
+`just test` and `just e2e` on a Mac before merging changes that affect macOS and before merging a
+release PR.
 
 ## Releases
 
-release-please opens a release PR from conventional commits. Merging it tags the release, and the
-workflow builds all three targets on Linux with cargo-zigbuild:
+Merging the release-please PR tags the release. The workflow then builds all three targets on Linux with
+cargo-zigbuild:
 
 - Linux binaries target glibc 2.28 and are smoke-tested in a plain Debian container.
-- The macOS binary is cross-compiled and ad-hoc signed with `rcodesign`. To build it natively
-  instead, change its matrix entry to `runner: macos-latest, builder: cargo`.
+- The macOS binary is cross-compiled and ad-hoc signed with `rcodesign`. To build it natively, change its
+  matrix entry to `runner: macos-latest, builder: cargo`.
 
 Each tarball is signed with `cosign sign-blob` and uploaded to the release.
