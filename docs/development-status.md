@@ -37,7 +37,8 @@ usage guide is linked from its row in the [Phases](#phases) table.
 | 5d | Templates: `template save/ls/rm/load` (saves a stopped sandbox as a smolvm pack), `run/create -t`. See [Usage](usage.md#templates) | Done |
 | 5e | Browser and clipboard bridge while attached (`xdg-open`, `wl-copy`/`xclip`/`xsel`/`pbcopy`, the login callback relay, `browser.enabled`). See [Usage](usage.md#browser-and-clipboard) | Done |
 | 5f | Static MCP: `mcp add/ls/inspect/rm`, `run/create --static-mcp`, header secrets as smolvm credentials, Claude Code only. No gateway, OAuth, dynamic mode or live load/unload | Done |
-| 5 | The rest, easiest first. 5g: `ssh-agent@1` `authenticate` limits (logins only to named servers, checked against your known hosts). 5h: `setup ssh` (`ssh NAME.sbx`, e.g. from VS Code Remote-SSH) and the `ssh.autoCreate`, `ssh.defaultAgent`, `ssh.defaultTemplate`, `ssh.workspaceRoot` settings | Planned |
+| 5g | `ssh-agent@1` `authenticate` limits: logins only to named servers, checked against your known hosts (`ssh.knownHostsFile`). See [Usage](usage.md#ssh-agent) | Done |
+| 5 | The rest. 5h: `setup ssh` (`ssh NAME.sbx`, e.g. from VS Code Remote-SSH) and the `ssh.autoCreate`, `ssh.defaultAgent`, `ssh.defaultTemplate`, `ssh.workspaceRoot` settings | Planned |
 | 6a | `env plan`, remembered approvals, `env.rememberHostCommands` | Done |
 | 6b | `sbxenv.yaml` `lifecycle`, `registries`, `entrypoint` and `cmd`; registry logins scoped to a sandbox | Done |
 | 6c | `sbxenv.yaml` `bindings`, `mcp` url servers, `fuse`, `pullPolicy: never`, `writableEnvFiles`; `gemini` retired | Done |
@@ -59,7 +60,6 @@ usage guide is linked from its row in the [Phases](#phases) table.
 - The browser and clipboard bridge works only while attached (`run`, `exec -it`). It copies text
   only, and never reads the clipboard or pastes images. Forks have no bridge.
 - The SSH agent is served only while `sbt run`, `sbt exec -it` or `sbt exec` runs (no daemon).
-  `ssh-agent@1` `authenticate` limits aren't supported yet (5g).
 - Templates don't keep `/tmp`.
 - Shared skills are linked by a start script running as `agent`. Images without that account get no
   links (a warning). A required bundled kit skill there fails the create.
