@@ -361,16 +361,16 @@ impl<R: Runner> Smolvm<R> {
         Ok(())
     }
 
-    /// Sets and removes labels in one call; works running or stopped (smolvm 1.35).
-    pub fn update_labels(&self, name: &str, set: &[(&str, String)], remove: &[&str]) -> Result<()> {
-        let mut a = args(&["machine", "update", "-n", name]);
-        for (k, v) in set {
-            a.extend(["--label".to_string(), format!("{k}={v}")]);
-        }
-        for k in remove {
-            a.extend(["--remove-label".to_string(), (*k).to_string()]);
-        }
-        self.call(a)?;
+    /// Sets one label; works running or stopped (smolvm 1.35).
+    pub fn set_label(&self, name: &str, key: &str, value: &str) -> Result<()> {
+        self.call(args(&[
+            "machine",
+            "update",
+            "-n",
+            name,
+            "--label",
+            &format!("{key}={value}"),
+        ]))?;
         Ok(())
     }
 
@@ -612,13 +612,12 @@ mod tests {
     }
 
     #[test]
-    fn update_labels_sets_and_removes_in_one_call() {
+    fn set_label_updates_one_label() {
         let vm = Smolvm::new(FakeRunner::new());
-        vm.update_labels("sbx-x", &[("sbx.kits", "[]".to_string())], &["sbx.old"])
-            .unwrap();
+        vm.set_label("sbx-x", "sbx.kits", "[]").unwrap();
         assert_eq!(
             vm.runner().call_lines(),
-            ["machine update -n sbx-x --label sbx.kits=[] --remove-label sbx.old"]
+            ["machine update -n sbx-x --label sbx.kits=[]"]
         );
     }
 

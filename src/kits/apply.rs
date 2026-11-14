@@ -328,7 +328,7 @@ pub fn kit_record(k: &Kit) -> Result<KitRecord> {
         reference: pinned_ref(k)?,
         provides: k.provides.clone(),
         // None for a kit that mixes with either.
-        format: crate::kits::resolve::mixing_format(k).map(|f| f.name().to_string()),
+        format: crate::kits::resolve::mixing_format(k),
     })
 }
 
@@ -879,8 +879,8 @@ mod tests {
     use super::*;
     use crate::kits::args::ArgValues;
     use crate::kits::model::{
-        AgentContextReq, Cap, CapBody, Content, CredReq, FileReq, Hook, HookCmd, Inject, Kind, Kit,
-        Lifecycle, NetRule, OAuthReq, Rules, Source,
+        AgentContextReq, Cap, CapBody, Content, CredReq, FileReq, Format, Hook, HookCmd, Inject,
+        Kind, Kit, Lifecycle, NetRule, OAuthReq, Rules, Source,
     };
     use crate::kits::resolve::resolve;
     use crate::sandbox::create;
@@ -1385,15 +1385,18 @@ mod tests {
         assert_eq!(req.image, "img:1");
         assert_eq!(req.command, Some(vec!["wl".to_string(), "--go".into()]));
         let pinned = |n: &str| format!("acme/{n}:1@sha256:{}", "ab".repeat(32));
-        let record = |name: &str, provides: &[&str], format: &str| KitRecord {
+        let record = |name: &str, provides: &[&str], format| KitRecord {
             name: name.into(),
             reference: pinned(name),
             provides: provides.iter().map(|p| p.to_string()).collect(),
-            format: Some(format.into()),
+            format: Some(format),
         };
         assert_eq!(
             req.kits,
-            [record("wl", &[], "v2"), record("m", &["a", "b"], "v3")]
+            [
+                record("wl", &[], Format::V2),
+                record("m", &["a", "b"], Format::V3)
+            ]
         );
         assert!(req.long_running);
         // The fixture workload is a published kit that names an image: a v2 one.

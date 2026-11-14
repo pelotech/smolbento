@@ -32,9 +32,9 @@ pub struct KitRecord {
     pub reference: String,
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub provides: Vec<String>,
-    /// The workload format the kit mixes with (`Format::name`); none when it mixes with either.
+    /// The workload format the kit mixes with; none when it mixes with either.
     #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub format: Option<String>,
+    pub format: Option<crate::kits::model::Format>,
 }
 pub const COMMAND: &str = "sbx.command";
 /// The image config's `User` a v3 workload kit's agent runs as (`0` for root).
@@ -474,7 +474,7 @@ mod tests {
                     name: "a".into(),
                     reference: "acme/a:1@sha256:ab".into(),
                     provides: vec!["agent".into()],
-                    format: Some("v3".into()),
+                    format: Some(crate::kits::model::Format::V3),
                 },
                 KitRecord {
                     name: "b".into(),
