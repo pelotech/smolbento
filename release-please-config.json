@@ -3,8 +3,16 @@
   "include-component-in-tag": false,
   "include-v-in-tag": true,
   "release-type": "rust",
+  "separate-pull-requests": true,
   "packages": {
-    ".": {}
+    ".": { "exclude-paths": ["kits/nix"] },
+    "kits/nix": {
+      "release-type": "simple",
+      "component": "nix-kit",
+      "include-component-in-tag": true,
+      "initial-version": "0.0.1",
+      "extra-files": ["nix.yaml"]
+    }
   },
   "changelog-sections": [
     { "type": "feat", "section": "Features" },
