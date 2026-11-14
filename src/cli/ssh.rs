@@ -262,6 +262,56 @@ mod tests {
     }
 
     #[test]
+    fn local_forwards_reach_guest_loopback_through_exec_and_other_targets_are_refused() {
+        let mut t = test_env(&[]);
+        running(&t);
+        t.runner().spawns().on(
+            "nc 127.0.0.1 8080",
+            Script {
+                stdout: b"hello ".to_vec(),
+                echo: true,
+                ..Script::default()
+            },
+        );
+        let (out, refused) = drive(&mut t, "claude-proj.sbx", |h| async move {
+            let mut refused = Vec::new();
+            for (host, port) in [("10.0.0.5", 80), ("example.com", 80), ("0.0.0.0", 80)] {
+                refused.push(
+                    h.channel_open_direct_tcpip(host, port, "127.0.0.1", 1)
+                        .await
+                        .is_err(),
+                );
+            }
+            let mut ch = h
+                .channel_open_direct_tcpip("localhost", 8080, "127.0.0.1", 1)
+                .await
+                .unwrap();
+            ch.data_bytes(&b"world"[..]).await.unwrap();
+            ch.eof().await.unwrap();
+            let (out, _, code) = collect(&mut ch).await;
+            // A forward has no exit status.
+            assert_eq!(code, None);
+            (out, refused)
+        });
+        assert_eq!(refused, [true, true, true]);
+        assert_eq!(out, b"hello world");
+        let spawned = t.runner().spawns().spawned();
+        assert_eq!(spawned.len(), 1, "refused targets start nothing");
+        let line = spawned[0].args.join(" ");
+        assert!(
+            line.starts_with(
+                "machine exec --name sbx-claude-proj -u agent -w /w/proj -i -- sh -c "
+            ),
+            "{line}"
+        );
+        assert!(
+            line.contains("exec nc 127.0.0.1 8080;") && line.contains("/dev/tcp/127.0.0.1/8080"),
+            "{line}"
+        );
+        assert_eq!(*spawned[0].stdin.lock().unwrap(), b"world");
+    }
+
+    #[test]
     fn only_auth_none_is_accepted() {
         let mut t = test_env(&[]);
         running(&t);

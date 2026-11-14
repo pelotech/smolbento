@@ -5,6 +5,7 @@
 
 use std::collections::{BTreeMap, HashMap};
 use std::io::{Read, Write};
+use std::net::IpAddr;
 use std::sync::Arc;
 
 use russh::server::{Auth, Config, Handle, Handler, Msg, Session};
@@ -73,6 +74,34 @@ pub fn shell_command(command: Option<&str>) -> Vec<String> {
         }
     }
 }
+
+/// Where a `direct-tcpip` request may go: the sandbox's own loopback (`localhost`, `127.0.0.0/8`,
+/// `::1`), nothing else. Returns the address to connect to in the guest.
+pub fn forward_address(host: &str, port: u32) -> Option<(IpAddr, u16)> {
+    let port = u16::try_from(port).ok().filter(|&p| p != 0)?;
+    let addr = if host.eq_ignore_ascii_case("localhost") {
+        IpAddr::from([127, 0, 0, 1])
+    } else {
+        host.parse::<IpAddr>().ok().filter(IpAddr::is_loopback)?
+    };
+    Some((addr, port))
+}
+
+/// The guest command that connects its stdin and stdout to `addr:port`: `nc` if there is one, else
+/// bash's `/dev/tcp`, else it says so and exits 127. `addr` and `port` are parsed values, so
+/// nothing in them is shell syntax.
+pub fn forward_command((addr, port): (IpAddr, u16)) -> Vec<String> {
+    let script = format!(
+        "if command -v nc >/dev/null 2>&1; then exec nc {addr} {port}; \
+elif command -v bash >/dev/null 2>&1; then exec bash -c \
+'exec 3<>/dev/tcp/{addr}/{port} || exit 1; cat <&3 & r=$!; cat <&0 >&3 & w=$!; wait $r; kill $w 2>/dev/null; exit 0'; \
+else exit {NO_FORWARD_TOOLS}; fi"
+    );
+    vec!["sh".into(), "-c".into(), script]
+}
+
+/// The exit code of a forward command when the guest has neither `nc` nor bash.
+const NO_FORWARD_TOOLS: i32 = 127;
 
 struct PtyReq {
     term: String,
@@ -148,9 +177,18 @@ impl Conn {
             .spawner
             .spawn(&spec.to_args(), chan.pty.as_ref().map(|p| p.size))
             .map_err(|e| format!("{e:#}"))?;
-        chan.run = Some(relay(proc, handle, ch, tty));
+        chan.run = Some(relay(proc, handle, ch, tty, Kind::Session));
         Ok(())
     }
+}
+
+/// What a relayed process is for.
+#[derive(Clone, Copy)]
+enum Kind {
+    Session,
+    /// A forward to this guest address; the guest's stderr is never passed on, and a failure is
+    /// reported on our own stderr in fixed words.
+    Forward(IpAddr, u16),
 }
 
 enum Ev {
@@ -161,7 +199,7 @@ enum Ev {
 
 /// Relays between `proc` and channel `ch`: threads read its output (blocking pipes) into one
 /// ordered queue that a task writes to the channel, followed by the exit status, EOF and close.
-fn relay(proc: Proc, handle: Handle, ch: ChannelId, pty: bool) -> Running {
+fn relay(proc: Proc, handle: Handle, ch: ChannelId, pty: bool, kind: Kind) -> Running {
     let Proc {
         stdin,
         stdout,
@@ -200,21 +238,43 @@ fn relay(proc: Proc, handle: Handle, ch: ChannelId, pty: bool) -> Running {
     });
     let killer = ctl.clone();
     tokio::spawn(async move {
-        let mut open = true;
+        let (mut open, mut sent) = (true, false);
         while let Some(ev) = rx.recv().await {
             // Once the client is gone keep draining, so the pump threads can finish.
-            match ev {
-                Ev::Out(b) if open => open = handle.data(ch, b).await.is_ok(),
-                Ev::Err(b) if open => open = handle.extended_data(ch, 1, b).await.is_ok(),
-                Ev::Exit(code) if open => {
-                    let _ = handle
-                        .exit_status_request(ch, u32::try_from(code).unwrap_or(255))
-                        .await;
+            match (ev, kind) {
+                (Ev::Out(b), _) if open => {
+                    sent = true;
+                    open = handle.data(ch, b).await.is_ok();
+                }
+                (Ev::Err(b), Kind::Session) if open => {
+                    open = handle.extended_data(ch, 1, b).await.is_ok();
+                }
+                (Ev::Exit(code), kind) => {
+                    if !open {
+                        break;
+                    }
+                    match kind {
+                        Kind::Session => {
+                            let status = u32::try_from(code).unwrap_or(255);
+                            let _ = handle.exit_status_request(ch, status).await;
+                        }
+                        Kind::Forward(addr, port) if code != 0 && !sent => {
+                            if code == NO_FORWARD_TOOLS {
+                                eprintln!(
+                                    "sbt: can't forward to {addr}:{port}: the sandbox has neither nc nor bash"
+                                );
+                            } else {
+                                eprintln!(
+                                    "sbt: can't forward to {addr}:{port}: the connection failed in the sandbox"
+                                );
+                            }
+                        }
+                        Kind::Forward(..) => {}
+                    }
                     let _ = handle.eof(ch).await;
                     let _ = handle.close(ch).await;
                     break;
                 }
-                Ev::Exit(_) => break,
                 _ => {}
             }
             if !open {
@@ -250,6 +310,63 @@ impl Handler for Conn {
         }
         self.chans.insert(channel.id(), Chan::default());
         reply.accept().await;
+        Ok(())
+    }
+
+    /// Local port forwarding, to the sandbox's loopback only.
+    async fn channel_open_direct_tcpip(
+        &mut self,
+        channel: Channel<Msg>,
+        host_to_connect: &str,
+        port_to_connect: u32,
+        _originator_address: &str,
+        _originator_port: u32,
+        reply: russh::server::ChannelOpenHandle,
+        session: &mut Session,
+    ) -> Result<(), Self::Error> {
+        use russh::ChannelOpenFailure::{
+            AdministrativelyProhibited, ConnectFailed, ResourceShortage,
+        };
+        let Some(to) = forward_address(host_to_connect, port_to_connect) else {
+            reply.reject(AdministrativelyProhibited).await;
+            return Ok(());
+        };
+        if self.chans.len() >= MAX_CHANNELS {
+            reply.reject(ResourceShortage).await;
+            return Ok(());
+        }
+        let t = &self.target;
+        let spec = ExecSpec {
+            name: t.machine.clone(),
+            user: Some(t.user.clone()),
+            workdir: Some(t.workdir.clone()),
+            interactive: true,
+            cmd: forward_command(to),
+            ..ExecSpec::default()
+        };
+        match t.spawner.spawn(&spec.to_args(), None) {
+            Ok(proc) => {
+                let run = relay(
+                    proc,
+                    session.handle(),
+                    channel.id(),
+                    false,
+                    Kind::Forward(to.0, to.1),
+                );
+                self.chans.insert(
+                    channel.id(),
+                    Chan {
+                        pty: None,
+                        run: Some(run),
+                    },
+                );
+                reply.accept().await;
+            }
+            Err(e) => {
+                eprintln!("sbt: can't forward to {}:{}: {e:#}", to.0, to.1);
+                reply.reject(ConnectFailed).await;
+            }
+        }
         Ok(())
     }
 
@@ -413,5 +530,121 @@ impl Conn {
                 session.channel_failure(channel)
             }
         }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use std::io::{Read, Write};
+    use std::net::{IpAddr, TcpListener};
+    use std::process::{Command, Stdio};
+
+    use super::{forward_address, forward_command, shell_command};
+
+    #[test]
+    fn forwards_go_to_guest_loopback_only() {
+        let ok = |h: &str, p| forward_address(h, p).map(|(a, p)| format!("{a}:{p}"));
+        assert_eq!(ok("localhost", 80).as_deref(), Some("127.0.0.1:80"));
+        assert_eq!(ok("LocalHost", 80).as_deref(), Some("127.0.0.1:80"));
+        assert_eq!(ok("127.0.0.1", 8080).as_deref(), Some("127.0.0.1:8080"));
+        assert_eq!(ok("127.9.9.9", 1).as_deref(), Some("127.9.9.9:1"));
+        assert_eq!(ok("::1", 65535).as_deref(), Some("::1:65535"));
+        for (host, port) in [
+            ("10.0.0.1", 80),
+            ("192.168.1.1", 80),
+            ("0.0.0.0", 80),
+            ("169.254.169.254", 80),
+            ("example.com", 80),
+            ("localhost.example.com", 80),
+            ("::ffff:127.0.0.1", 80),
+            ("::", 80),
+            ("127.0.0.1; id", 80),
+            ("127.1", 80),
+            ("", 80),
+            ("127.0.0.1", 0),
+            ("127.0.0.1", 65536),
+        ] {
+            assert!(forward_address(host, port).is_none(), "{host}:{port}");
+        }
+    }
+
+    #[test]
+    fn shell_commands_pass_the_command_as_an_argument_not_as_script() {
+        let c = shell_command(Some("echo 'hi'; id"));
+        assert_eq!(&c[3..], ["sh", "echo 'hi'; id"]);
+        assert!(!c[2].contains("echo"));
+        assert!(shell_command(None)[2].ends_with("exec \"$s\" -l"));
+    }
+
+    /// Runs the forward command with `path` as PATH against a one-shot echo server.
+    fn forward_with(path: &str) -> (Option<i32>, String) {
+        let server = TcpListener::bind("127.0.0.1:0").unwrap();
+        let port = server.local_addr().unwrap().port();
+        let echo = std::thread::spawn(move || {
+            if let Ok((mut s, _)) = server.accept() {
+                let mut buf = [0u8; 64];
+                if let Ok(n) = s.read(&mut buf) {
+                    let _ = s.write_all(&buf[..n]);
+                }
+                // The peer closing ends the forward, as a real service would.
+            }
+        });
+        let cmd = forward_command((IpAddr::from([127, 0, 0, 1]), port));
+        let mut child = Command::new("/bin/sh")
+            .args(&cmd[1..])
+            .env("PATH", path)
+            .stdin(Stdio::piped())
+            .stdout(Stdio::piped())
+            .stderr(Stdio::null())
+            .spawn()
+            .unwrap();
+        let mut stdin = child.stdin.take().unwrap();
+        let _ = stdin.write_all(b"ping");
+        let mut out = String::new();
+        let mut buf = [0u8; 4];
+        let mut stdout = child.stdout.take().unwrap();
+        if let Ok(4) = stdout.read(&mut buf) {
+            out.push_str(&String::from_utf8_lossy(&buf));
+        }
+        drop(stdin);
+        let code = child.wait().unwrap().code();
+        drop(echo);
+        (code, out)
+    }
+
+    fn tools(names: &[&str]) -> (tempfile::TempDir, String) {
+        let dir = tempfile::tempdir().unwrap();
+        for n in names {
+            let found = std::env::split_paths(&std::env::var_os("PATH").unwrap())
+                .map(|d| d.join(n))
+                .find(|p| p.is_file())
+                .unwrap_or_else(|| panic!("{n} not installed"));
+            std::os::unix::fs::symlink(found, dir.path().join(n)).unwrap();
+        }
+        let path = dir.path().display().to_string();
+        (dir, path)
+    }
+
+    #[test]
+    fn the_forward_script_uses_nc_when_there_is_one() {
+        if std::env::split_paths(&std::env::var_os("PATH").unwrap())
+            .all(|d| !d.join("nc").is_file())
+        {
+            return;
+        }
+        let (_d, path) = tools(&["nc"]);
+        assert_eq!(forward_with(&path), (Some(0), "ping".into()));
+    }
+
+    #[test]
+    fn the_forward_script_falls_back_to_bash_dev_tcp() {
+        let (_d, path) = tools(&["bash", "cat"]);
+        assert_eq!(forward_with(&path), (Some(0), "ping".into()));
+    }
+
+    #[test]
+    fn the_forward_script_says_so_when_there_is_neither() {
+        let (_d, path) = tools(&["cat"]);
+        assert_eq!(forward_with(&path), (Some(127), String::new()));
     }
 }
