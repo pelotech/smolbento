@@ -2,6 +2,7 @@
 //! that records it, and whether the host has an agent to back it.
 
 pub mod filter;
+pub mod known_hosts;
 
 use std::collections::BTreeMap;
 use std::fmt;
