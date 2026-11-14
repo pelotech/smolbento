@@ -197,6 +197,14 @@ your agent (`ssh-add -D` fails with `Failed to remove all identities.`). The set
 | `kit add` of an `ssh-agent@1` kit | Recreates the container | `recreate required: … SSH agent` |
 | Sandboxes from before | n/a | Created before smolbento had the agent, so they have none. Recreate them |
 
+Docker's kit-spec conformance suite checks this capability through `tests/conformance/smolbento-adapter`
+(`just conformance`, pinned to sandbox-kit-spec `06ac386`). `logins-bounded`, `binding-verified`,
+`destination-keys-outside-sandbox` and `unavailable-refuses-required` pass; `phase-scoped` is skipped
+(needs `lifecycle@1`). `agent-reachable`, `operations-restricted`, `signatures-bounded`,
+`absent-without-grant`, `every-boot` and `unavailable-skips-optional` fail: their probe runs as the
+workload image's `Entrypoint` at boot, which smolbento doesn't run, and needs the agent served while
+nobody is attached.
+
 ## Kits
 
 smolbento implements the [sandbox kit spec](https://github.com/docker/sandbox-kit-spec) at commit

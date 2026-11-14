@@ -6,7 +6,7 @@ smolbento is built in phases. Each phase ships on its own.
 
 ## Current state
 
-Phases 0 to 4, 5a to 5f, and 6 and 7 are done. Phases 5g, 5h, 8, 9 and 10 are planned. Each feature's
+Phases 0 to 4, 5a to 5g, and 6 and 7 are done. Phases 5h, 8, 9 and 10 are planned. Each feature's
 usage guide is linked from its row in the [Phases](#phases) table.
 
 - Sandboxes created before Phase 5b, 5c or 5e need recreating.
@@ -106,6 +106,12 @@ meanwhile.
 Measured against sbx v0.49.2, and v0.50.1 for kit host mounts, `--mount` and `inspect`. The full list is
 in [sbx compatibility](sbx-compatibility.md). Worth another look:
 
+- **Workload and agent lifetime.** sbx runs a workload image's `Entrypoint` + `Cmd` when the sandbox
+  starts and serves the SSH agent whenever the sandbox runs. smolbento runs `sleep infinity`, starts the
+  workload on `sbt run`, and serves the agent only while `sbt` is attached (no daemon). Docker's
+  conformance suite fails six `ssh-agent@1` checks for this reason (see
+  [sbx compatibility](sbx-compatibility.md#ssh-agent)). Closing it means running the workload at boot
+  and serving the agent for the sandbox's life: in effect a daemon. Decide together.
 - **Secrets sent to other hosts.** sbx lets a kit send a built-in secret (e.g. GitHub) to another host
   after you approve it once per host. smolbento refuses. An approval flow would close the gap.
 - **Kit host mounts.** A published kit's directory is keyed on its repository (sbx's key isn't measured).
