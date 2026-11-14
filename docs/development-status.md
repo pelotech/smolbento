@@ -75,9 +75,9 @@ meanwhile.
 - **`smolvm machine connect NAME PORT`** (stdin and stdout to a guest port). `ssh -L` forwards run
   `nc`, else bash's `/dev/tcp`, in the sandbox, so they need one of them. Meanwhile: that. Proposal
   to file upstream first, then a small PR.
-- **Saving a sandbox made from a template.** Packing fails in smolvm 1.34.1 ("no flattened rootfs was
-  found") when the pack's machine was created with `--deny-cidr`, as every sandbox is. `--rebase-from-image`
-  drops the first template's files. Meanwhile: saving is refused.
+- **Saving a sandbox made from a template.** Packing a machine created from a pack fails ("no flattened
+  rootfs was found"), with or without `--deny-cidr` (rechecked on 1.35.0; like the closed smolvm#954).
+  `--rebase-from-image` drops the first template's files. Meanwhile: saving is refused.
 - **Per-port host access.** smolvm opens the host's loopback to a guest only as a whole (gateway CIDR
   `100.96.0.1/32`). Meanwhile: a `localhost:PORT` rule opens every host port (documented).
 - **Live allow list with no hosts left.** A `machine update` that leaves CIDRs but no hosts doesn't revoke
@@ -100,7 +100,7 @@ meanwhile.
   doesn't answer. Not yet checked: a name the first resolver refuses (before 1.34 that failed in every VM,
   even when the host resolved it). Meanwhile: no workaround; the e2e tests avoid such names.
 - **Copying a directory out of a sandbox.** `machine cp` uploads directories but downloads single files
-  only. Meanwhile: `sbt cp SANDBOX:/dir ./dir` fails with smolvm's "is a directory".
+  only (rechecked on 1.35.0). Meanwhile: `sbt cp SANDBOX:/dir ./dir` fails with smolvm's "is a directory".
 - **Install-only credentials after install.** smolvm answers `502 credential unavailable` when a binding
   has no value; sbx sends the request without the credential. Meanwhile: a documented difference.
 
