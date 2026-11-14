@@ -9,74 +9,68 @@ cd ~/code/myrepo
 sbt run claude
 ```
 
-`run` creates the sandbox if it doesn't exist, starts it if it's stopped, and attaches you to the
-agent. The sandbox is named `<agent>-<directory name>` (here `claude-myrepo`), so running the same
-agent in the same directory again reattaches to the same sandbox.
+`run` creates the sandbox if needed, starts it if stopped, and attaches you. The sandbox is named
+`<agent>-<directory name>` (here `claude-myrepo`), so the same agent in the same directory
+reattaches.
 
-When the last session attached to a sandbox exits, the sandbox stops; closing the terminal counts
-as exiting (and `--rm` still removes the sandbox). Its disk is kept, so the next
-`run` resumes with everything the agent installed.
+When the last attached session exits (closing the terminal counts), the sandbox stops. Its disk is
+kept, so the next `run` resumes with what the agent installed.
 
 | Form | Effect |
 |---|---|
 | `sbt run claude` | Sandbox for the current directory |
-| `sbt run claude ~/code/api ~/code/docs:ro` | First path is the workspace; more paths are mounted too; `:ro` mounts read-only |
-| `sbt run --name claude-myrepo` | Reattach to an existing sandbox by name |
-| `sbt run --name review claude .` | A second sandbox on the same directory, under another name |
-| `sbt run -d claude` | Start it and leave it running; prints the name |
-| `sbt run --rm claude` | Delete the sandbox when the agent exits (kept, with a warning, while another session is attached) |
-| `sbt run claude -- -c` | Pass arguments to the agent (see below) |
+| `sbt run claude ~/code/api ~/code/docs:ro` | First path is the workspace; more paths are mounted; `:ro` is read-only |
+| `sbt run --name claude-myrepo` | Reattach by name |
+| `sbt run --name review claude .` | A second sandbox on the same directory |
+| `sbt run -d claude` | Start and leave running; prints the name |
+| `sbt run --rm claude` | Delete on exit (kept, with a warning, while another session is attached) |
+| `sbt run claude -- -c` | Pass arguments to the agent |
 
 `run` exits with the agent's exit status.
 
 ### Agent arguments
 
-Arguments after `--` follow sbx's rule: if the first one starts with `-`, they're **appended** to the
-agent's default command; otherwise they **replace** its flags. With `claude`:
-
-- `sbt run claude -- -c` runs `claude --dangerously-skip-permissions -c`
-- `sbt run claude -- mcp list` runs `claude mcp list`
+After `--`: if the first argument starts with `-`, they're **appended** to the agent's default
+command; otherwise they **replace** its flags. `sbt run claude -- -c` runs `claude
+--dangerously-skip-permissions -c`.
 
 ### Agents
 
 | Agent | Runs | Image (`docker/sandbox-templates:`) |
 |---|---|---|
 | `claude` | `claude --dangerously-skip-permissions` | `claude-code-docker-0.10.0` |
-| `codex` | `codex --dangerously-bypass-approvals-and-sandbox` | `codex-docker-0.7.0` |
-| `copilot` | `copilot --yolo` | `copilot-docker-0.4.0` |
-| `cursor` | `cursor-agent --yolo` | `cursor-agent-docker-0.7.0` |
-| `devin` | `devin --permission-mode dangerous --respect-workspace-trust=false` | `devin-docker-0.7.0` |
-| `docker-agent` | `docker-agent run --yolo` | `docker-agent-docker-0.7.0` |
-| `droid` | `droid` | `droid-docker-0.4.0` |
+| `codex` | `codex --dangerously-bypass-approvals-and-sandbox` | `codex-docker-0.11.0` |
+| `copilot` | `copilot --yolo` | `copilot-docker-0.11.0` |
+| `cursor` | `cursor-agent --yolo` | `cursor-agent-docker-0.11.0` |
+| `devin` | `devin --permission-mode dangerous --respect-workspace-trust=false` | `devin-docker-0.11.0` |
+| `docker-agent` | `docker-agent run --yolo` | `docker-agent-docker-0.11.0` |
+| `droid` | `droid` | `droid-docker-0.11.0` |
 | `kiro` | `kiro chat --trust-all-tools` | `kiro-docker-0.4.0` |
-| `opencode` | `opencode` | `opencode-docker-0.7.0` |
+| `opencode` | `opencode` | `opencode-docker-0.11.0` |
 | `shell` | `bash -l` | `shell-docker-0.10.0` |
 
-`gemini` is retired, as in sbx 0.53: a new sandbox can't have it, and the error points to its
-replacement, the `antigravity` kit (`sbt create docker.io/sbx/antigravity:latest .`), and to
-`docker.io/sbx/gemini-kit:latest`, which keeps running Gemini CLI. In an environment file, keep
-`agent: gemini` and add `docker.io/sbx/gemini-kit:latest` to `kits:`. Sandboxes created with
-`gemini` before keep working.
+These are Docker's sandbox images, the ones `sbx` uses; Renovate keeps the tags current. For another
+image, use `-t <image>`; it needs an `agent` user. The first run of an agent pulls its image, which
+takes a minute or two.
 
-These are Docker's own sandbox images, the same ones `sbx` uses. Tags are pinned and updated by
-Renovate. Use `-t <image>` to run a different image; it needs an `agent` user, like Docker's images.
-
-The first run of an agent pulls its image, which takes a minute or two.
+`gemini` is retired, as in sbx 0.53, and a new sandbox can't use it. Use the `antigravity` kit (`sbt
+create docker.io/sbx/antigravity:latest .`) or `docker.io/sbx/gemini-kit:latest`, which keeps Gemini
+CLI running. In an environment file, keep `agent: gemini` and add the gemini kit to `kits:`.
+Existing `gemini` sandboxes keep working.
 
 ## Create without attaching
 
 ```sh
 sbt create claude .            # create and start; workspace = current directory
-sbt create shell               # no path: a sandbox with no host directory mounted
+sbt create shell               # no path: no host directory mounted
 ```
 
-A sandbox made by `create` stays running until you stop it (as in sbx).
+A sandbox made by `create` runs until you stop it.
 
-`run` and `create` print their progress as they go: a SANDBOX summary, KITS (only when a kit was
-pulled or built), IMAGE and SETUP, then `Created sandbox NAME`. On `create` a last line suggests
-`try: sbt run --name NAME`. `env create` and `env run` show the same steps when they create a
-sandbox. `start` prints one line per sandbox instead (`○ NAME — starting…`, then
-`✓ Started NAME`). Without a terminal each step prints a line when it starts and one when it ends:
+`run` and `create` print their steps (SANDBOX, KITS when a kit was pulled or built, IMAGE, SETUP)
+and then `Created sandbox NAME`. `create` adds `try: sbt run --name NAME`. `start` prints `○ NAME —
+starting…`, then `✓ Started NAME`. Without a terminal, each step prints a line when it starts and
+another when it ends:
 
 ```
 SANDBOX
@@ -99,32 +93,29 @@ SETUP
         try: sbt run --name shell-proj
 ```
 
-On a terminal each step is one line redrawn in place, with a spinner and, while an image is
-pulled, the percentage after it (`⠙ image — pulling… 42%`). The image step says `preparing` until
-smolvm reports a pull: an image smolvm has cached starts without one (see
-[`smolvm.image-cache-size`](configuration.md#settings)), and the first sandbox of a new image may
-pull it before any percentage shows.
+On a terminal, each step redraws in place with a spinner, and a pull shows its percentage (`⠙ image
+— pulling… 42%`). The image step says `preparing` until smolvm reports a pull; an image smolvm has
+cached doesn't pull (see [`smolvm.image-cache-size`](configuration.md#settings)).
 
-Progress goes to stdout, as in sbx. A script that captures the output (such as
-`name=$(sbt run -d …)`) should pass `--no-progress` to `run` or `create`. It hides all progress,
-including the `Created sandbox NAME` and `try:` lines, so `create --no-progress` prints nothing and
-`run -d --no-progress` prints only the sandbox name.
-
-Options for `run` and `create`:
+Progress goes to stdout. Scripts that capture output (`name=$(sbt run -d …)`) pass `--no-progress`,
+which also hides the `Created` and `try:` lines. `run -d --no-progress` then prints only the name.
 
 | Option | Meaning |
 |---|---|
-| `--name NAME` | Sandbox name (letters, digits, `-` and `.`; at least 2 characters) |
-| `--cpus N` | CPUs; `0` or unset means all host CPUs |
-| `-m, --memory SIZE` | Memory such as `4g` or `512m`; default half of host memory, between 512 MiB and 32 GiB |
-| `-e, --env KEY=VALUE` | Environment variable; a bare `KEY` copies the host's value |
-| `--env-file FILE` | Read `KEY=VALUE` lines |
-| `-p, --publish [[127.0.0.1:]HOST:]PORT[/udp]` | Publish a port on `127.0.0.1`; with no host port, a free one is picked |
-| `-t, --template TEMPLATE` | Use another image, or a saved [template](#templates) |
-| `--no-progress` | Don't print progress |
-| `--clone` | Give the agent its own clone of the repo instead of mounting it (see [Clone mode](#clone-mode)) |
+| `--name NAME` | Letters, digits, `-` and `.`; at least 2 characters |
+| `--cpus N` | `0` or unset: all host CPUs |
+| `-m, --memory SIZE` | Such as `4g` or `512m`. Default: half of host memory, from 512 MiB to 32 GiB |
+| `-e, --env KEY=VALUE` | A bare `KEY` copies the host's value |
+| `--env-file FILE` | `KEY=VALUE` lines |
+| `-p, --publish [[127.0.0.1:]HOST:]PORT[/udp]` | Published on `127.0.0.1`; with no host port, a free one is picked |
+| `-t, --template TEMPLATE` | Another image, or a saved [template](#templates) |
+| `--clone` | The agent works on its own clone of the repo ([Clone mode](#clone-mode)) |
 
-These are fixed when the sandbox is created; changing them later means `rm` and create again.
+Other create-time options have their own sections: `--kit` ([Kits](#kits)), `--mount` ([Kit host
+mounts](#kit-host-mounts)), `--deny-network` ([Network policy](#network-policy)), `--skills`
+([Sharing the store](#sharing-the-store-with-a-sandbox)) and `--static-mcp` ([MCP
+servers](#mcp-servers)). These options are fixed at create. To change one, `rm` the sandbox and
+create it again.
 
 ## Clone mode
 
@@ -133,28 +124,26 @@ cd ~/code/myrepo
 sbt run --clone claude .
 ```
 
-With `--clone` the agent doesn't write to your checkout. Your repo is mounted read-only at
-`/run/sandbox/source`, and on the sandbox's first start it is cloned to the same path as on your
-machine, on the sandbox's own disk. The clone starts from your repo's current `HEAD` (for a linked
-worktree, its branch, or its commit when its `HEAD` is detached; should that checkout fail, it
-starts from the source repo's default `HEAD` with a warning); uncommitted changes aren't carried
-over. The clone survives stop and start. The clone is writable, so `:ro` on the `--clone` workspace
-is ignored (the mounted repo is read-only anyway).
+The agent works on a clone, not your checkout. Your repo is mounted read-only at
+`/run/sandbox/source`, and on first start it's cloned to the same path on the sandbox's own disk.
+The clone survives stop and start and is writable, so `:ro` on a `--clone` workspace is ignored.
 
-Your remotes (`origin`, `upstream`, …) are copied into the clone, except local-path and `file://`
-ones. Any user name and token in an HTTPS remote URL is left out of the clone's copies. SSH remotes
-are copied but won't work in the sandbox (no keys); use an HTTPS remote with
-`sbt secret set github` if the agent should push. The copy is redone on every start, so remotes you
-add or change on your machine reach the clone the next time the sandbox starts. A remote the
-agent changes in the clone is reset to the host's URL on the next start, and remotes you delete on
-your machine stay in the clone.
+The clone starts from your repo's `HEAD` (for a linked worktree, its branch, or its commit when
+detached). If that checkout fails, it starts from the source repo's default `HEAD` with a warning.
+Uncommitted changes aren't carried over.
 
-The agent can read your repo's whole `.git` at `/run/sandbox/source`, as in sbx, including
-`.git/config` with any token in a remote URL or an `http.extraHeader`. Don't keep credentials
-there; use a credential helper on your machine, or `sbt secret` for the sandbox. `create --clone`
-warns when a remote URL has a user name or token in it.
+Remotes (`origin`, `upstream`, …) are copied, except local-path and `file://` ones. User names and
+tokens in HTTPS URLs are left out. SSH remotes are copied but have no keys in the sandbox, so for
+pushes use an HTTPS remote with `sbt secret set github`. The copy is redone on every start: remotes
+you add or change reach the clone then, and a remote the agent changed is reset to your URL.
 
-The agent's commits come back through a remote `sandbox-<name>` added to your repo:
+The agent can read your whole `.git` at `/run/sandbox/source`, including tokens in remote URLs and
+`http.extraHeader` (see [sbx compatibility](sbx-compatibility.md)). Keep credentials out of it: use
+a credential helper on your machine, or `sbt secret`. `create --clone` warns about a token in a
+remote URL.
+
+The agent's commits come back through a remote named `sandbox-<name>`. Only branches come back; tags
+stay in the sandbox (`--no-tags`).
 
 ```sh
 git fetch sandbox-claude-myrepo
@@ -162,34 +151,25 @@ git log sandbox-claude-myrepo/main
 git merge sandbox-claude-myrepo/main          # or check out, cherry-pick, …
 ```
 
-Only branches come back: the remote is set to `--no-tags`, so tags the agent makes stay in the
-sandbox (sbx's remote follows tags).
-
 Good to know:
 
-- `run` fetches `sandbox-<name>` when the agent exits and prints git's summary. Turn it off with
-  `sbt settings set clone.fetch-on-exit false`. A failed fetch only warns.
-- That automatic fetch checks the objects it receives (`fetch.fsckObjects`) and doesn't recurse
-  into submodules. A manual `git fetch` uses your git config; to check it too, run
-  `git -c fetch.fsckObjects=true fetch sandbox-<name>`.
-- Fetching from a stopped sandbox starts it, fetches, and stops it again. So does anything that
-  fetches every remote (`git fetch --all`, `git remote update`, an IDE's background fetch), one
-  stopped clone sandbox after another.
-- Known limitation: if a `git fetch` overlaps a `run` exiting (or another fetch), the sandbox can
-  be left running; `sbt stop <name>` stops it.
-- `git fetch` runs `smolbento _upload-pack <name>` for that remote, so `smolbento` must be on your
-  `PATH` (every install puts it there; the `sbt`, `sbx` and `bento` names are links to it).
-- `--clone` needs a workspace path in a git repository, and git 2.31 or newer on your machine. The
-  image needs git too: the built-in agent images have it, but with `-t` pick an image with git
-  installed. If the clone fails, the start fails with git's error. A sandbox whose first start
-  fails is removed, so fix the cause and run the same `create` or `run` again.
-- `--clone` only applies when the sandbox is created; `run` on an existing sandbox ignores it.
-- `sbt rm`, `prune` and `reset` remove the `sandbox-<name>` remote, and with it the
-  `sandbox-<name>/…` branches, as sbx does. Merge what you want first, or keep a branch:
-  `git branch keep sandbox-<name>/main`. Nothing else in your repo's config changes.
-- `run --rm` keeps the remote, so the commits fetched when the agent exits survive. Its fetch fails
-  from then on (the sandbox is gone); remove it with `git remote remove sandbox-<name>` when you're
-  done.
+- `run` fetches `sandbox-<name>` on exit and prints git's summary. Turn it off with `sbt settings
+  set clone.fetch-on-exit false`. A failed fetch only warns. The automatic fetch checks objects
+  (`fetch.fsckObjects`) and doesn't recurse into submodules.
+- Any fetch from a stopped clone sandbox starts it, fetches, and stops it again. That includes `git
+  fetch --all`, `git remote update` and an IDE's background fetch.
+- A `git fetch` that overlaps a `run` exiting can leave the sandbox running. `sbt stop <name>` stops
+  it.
+- `git fetch` runs `smolbento _upload-pack <name>`, so `smolbento` must be on your `PATH`.
+- `--clone` needs a workspace in a git repository and git 2.31 or newer on your machine. The image
+  needs git too; the built-in images have it, and with `-t` pick one that does. A failed clone fails
+  the start with git's error, and the sandbox from a failed first start is removed. Fix the cause
+  and rerun `create` or `run`.
+- `--clone` applies only at create.
+- `sbt rm`, `prune` and `reset` remove the `sandbox-<name>` remote and its branches, as sbx does. To
+  keep a branch: `git branch keep sandbox-<name>/main`.
+- `run --rm` keeps the remote, so fetched commits survive; later fetches fail. Remove it with `git
+  remote remove sandbox-<name>` when done.
 
 ## Fork
 
@@ -199,39 +179,33 @@ sbt fork claude-myrepo --count 3              # three copies, for parallel attem
 sbt fork claude-myrepo --name claude-try-b    # pick the copy's name
 ```
 
-`fork` copies a running sandbox (memory, processes and disk) into new sandboxes and prints their
-names, one per line. A stopped sandbox is started first. Copies are copy-on-write, so they're quick
-and small, and from then on each one changes on its own: a file written in one isn't seen in the
-others or in the original.
+`fork` copies a running sandbox (memory, processes and disk) and prints the new names, one per line.
+A stopped sandbox is started first. Copies are copy-on-write, so they're quick and small, then
+diverge: a file written in one isn't seen in the others or the original.
 
-Use it for parallel attempts (fork once per idea, keep the best) or as an undo point: fork before
-risky work, and if it goes wrong, `sbt rm` the copy you worked in and fork the original again.
+Use forks for parallel attempts, or as an undo point: fork before risky work, and if it goes wrong,
+`sbt rm` the copy and fork the original again.
 
 Good to know:
 
-- Only clone sandboxes (`--clone`) and sandboxes without a writable host folder can be forked:
-  a host folder would be shared by every copy. Read-only (`:ro`) workspaces are fine.
-- Forks of forks aren't supported yet; fork the original again instead.
-- Secrets carry over: a fork uses its original's sandbox secrets (a secret set for the fork itself
-  wins), then the global ones. It gets a copy of the original's per-sandbox policy rules (such as
-  `--deny-network`), which you can change per fork afterwards. `sbt secret ls --sandbox FORK`
-  lists the original's secrets too, under the original's scope.
-- Each fork of a clone sandbox has its own `sandbox-<fork>` remote in your repo:
-  `git fetch sandbox-claude-myrepo-fork-1`.
-- Remove a sandbox's forks before the sandbox itself: `sbt rm` of a sandbox with forks fails unless
-  its forks are removed in the same command. `prune` and `reset` remove forks first, and `prune`
-  keeps a stopped sandbox while it still has forks.
-- `sbt ls --json` shows a fork's original in `fork_of`. A fork's created time is its own.
-- A fork's published ports get new host ports, picked by smolvm; see `sbt ports <fork>`.
-- smolvm limits how deep a chain of copies can get, and says so if a fork would go past it.
-- Sandboxes started before fork support, or while `fork.enabled` was off, need one restart
-  (`sbt stop NAME && sbt start NAME`) before they can be forked; `fork` says so.
+- Only clone sandboxes and sandboxes without a writable host folder can be forked. `:ro` workspaces
+  are fine.
+- Forks of forks aren't supported. Fork the original.
+- A fork uses its original's sandbox secrets (its own wins), then the global ones. It gets a copy of
+  the original's per-sandbox policy rules, which you can change per fork. `sbt secret ls --sandbox
+  FORK` lists the original's secrets too.
+- A clone fork has its own remote: `git fetch sandbox-claude-myrepo-fork-1`.
+- `sbt rm` of a sandbox with forks fails unless the forks go in the same command. `prune` and
+  `reset` remove forks first; `prune` keeps a stopped sandbox while it has forks.
+- `sbt ls --json` shows `fork_of`. Published ports get new host ports; see `sbt ports <fork>`.
+- smolvm limits how deep copies can chain, and `fork` says so.
+- Sandboxes started before fork support, or while `fork.enabled` was off, need one restart (`sbt
+  stop NAME && sbt start NAME`) first.
 
-Sandboxes that can be forked (clone and mountless ones, not forks) are started branchable, which
-has two costs: smolvm doesn't hand their idle memory back to your machine, and on Linux the VM
-process's memory, which holds secret values, is readable by other processes running as you. If
-you don't use fork, turn it off with `sbt settings set fork.enabled false`; it applies from each
-sandbox's next start.
+Clone and mountless sandboxes start branchable, which costs idle memory (smolvm doesn't return it to
+your machine) and has a Linux secret-exposure risk (see [Security](SECURITY.md)). If you don't use
+fork, turn it off with `sbt settings set fork.enabled false`; it applies from each sandbox's next
+start.
 
 ## Run commands inside
 
@@ -242,21 +216,19 @@ sbt exec --privileged claude-myrepo apt-get install -y ripgrep
 sbt exec -u root -w /tmp -e DEBUG=1 claude-myrepo env
 ```
 
-`exec` starts a stopped sandbox first. It runs as the `agent` user in the workspace directory
-unless you pass `-u` or `-w`; `--privileged` runs as root. It exits with the command's status.
+`exec` starts a stopped sandbox first and runs as `agent` in the workspace, unless you pass `-u` or
+`-w`. `--privileged` runs as root. It exits with the command's status.
 
-The agent and every `exec` see the sandbox variables sbx sets: `SANDBOX_NAME`, `SANDBOX_VM_ID`
-(the name), `SANDBOX_ID` (a UUID, new for each sandbox and each fork), `WORKSPACE_DIR` (the host
-path of the primary workspace), `SBX_AGENT` (the agent or kit name) and, for the `shell` and
-`claude` presets (not kits of those names), `SBX_CRED_<SERVICE>_MODE` (`apikey` when that
-service's secret was set at create, else `none`). The `claude` preset also gets `IS_SANDBOX=1`.
-Your own `-e` wins. See
-[sbx compatibility](sbx-compatibility.md#sandbox-environment) for what's left out.
+The agent and every `exec` see the sbx sandbox variables: `SANDBOX_NAME`, `SANDBOX_VM_ID` (the
+name), `SANDBOX_ID` (a UUID, new per sandbox and per fork), `WORKSPACE_DIR`, `SBX_AGENT`, and for
+the `shell` and `claude` presets (not kits of those names) `SBX_CRED_<SERVICE>_MODE` (`apikey` if
+that secret was set at create, else `none`). The `claude` preset also gets `IS_SANDBOX=1`. Your `-e`
+wins. Differences from sbx are in [sbx compatibility](sbx-compatibility.md#sandbox-environment).
 
 ## Browser and clipboard
 
-While you're attached (`sbt run`, `sbt exec -it`), the sandbox can open URLs in your browser and
-copy text to your clipboard, as in sbx:
+Attach with `sbt run` or `sbt exec -it`, and the sandbox can open URLs in your browser and copy text
+to your clipboard:
 
 ```sh
 # inside the sandbox
@@ -264,37 +236,34 @@ xdg-open https://github.com/login/device    # opens in your host browser
 git diff | wl-copy                          # or xclip, xsel, pbcopy, clip.exe
 ```
 
-- Only `https://` URLs open. Anything else, or a URL opened while nobody is attached, prints
-  `Open this URL in your browser: URL` for you to open yourself.
-- Copying is text only. Reading your clipboard isn't supported (`wl-paste`, `xclip -o` and
-  `xsel -o` print nothing), and neither is pasting images. A copy while nobody is attached fails
-  with `<command>: failed to write host clipboard`.
-- Browser logins work: when an opened URL's `redirect_uri` is `http://localhost:PORT/…` or
-  `http://127.0.0.1:PORT/…`, smolbento listens on your machine's `127.0.0.1:PORT` for 10 minutes
-  (or until the session ends) and passes the browser's callback to the agent's callback server
-  in the sandbox. If something on your machine already answers on that port, it warns and the
-  URL still opens. A session relays at most 4 ports; it warns once and ignores the rest. Callbacks
-  that carry a body (`response_mode=form_post`) lose it; the usual query-string redirects work.
-- Over SSH without a forwarded display (on Linux, `DISPLAY` or `WAYLAND_DISPLAY`; on macOS, always
-  over SSH) nothing is served, so URLs are printed instead.
-- `sbt settings set browser.enabled false` stops URL opening and the login relay; copying still
+- Only `https://` URLs open. Others, or any URL opened with nobody attached, print `Open this URL in
+  your browser: URL`.
+- Copying is text only. Reading the clipboard (`wl-paste`, `xclip -o`, `xsel -o`) prints nothing,
+  and images can't be pasted. Copying with nobody attached fails with `<command>: failed to write
+  host clipboard`.
+- Browser logins work. For a `redirect_uri` of `http://localhost:PORT/…` or
+  `http://127.0.0.1:PORT/…`, smolbento listens on your `127.0.0.1:PORT` for 10 minutes (or until the
+  session ends) and relays the callback. If something else answers that port, it warns and still
+  opens the URL. A session relays at most 4 ports. A callback with a body
+  (`response_mode=form_post`) loses it; query-string redirects work.
+- Over SSH without a forwarded display (Linux: no `DISPLAY` or `WAYLAND_DISPLAY`; macOS: always over
+  SSH), URLs are printed instead.
+- `sbt settings set browser.enabled false` stops URL opening and the login relay. Copying still
   works.
-- The shims (`xdg-open`, `xclip`, `xsel`, `wl-copy`, `wl-paste`, `pbcopy`, `clip.exe`) are put
-  in `/usr/local/bin` on every start and need `curl` in the image; without it they fall back.
-- `BROWSER` is set to `xdg-open` in sessions of these sandboxes, so agents that check for a
-  browser (Claude Code's `/login`, for one) open it instead of only printing the URL.
-- The first attached session serves the bridge. A second one attached at the same time doesn't,
-  and when the first exits the bridge stops until the next `sbt run` or `sbt exec -it`.
-- Sandboxes created before this feature have no bridge. Recreate a sandbox to get it. The
-  directory `/tmp/sbt-<uid>` is checked when a sandbox is created and at every start; while it
-  isn't a private directory owned by you (0700), the sandbox gets no bridge, with a warning.
-- Forks don't install the shims, but they keep the parent's socket mount: while the parent is
-  attached, a process in a fork can still use the parent's bridge.
+- The shims go in `/usr/local/bin` on every start and need `curl` in the image. `BROWSER` is
+  `xdg-open`, so agents such as Claude Code's `/login` open the browser.
+- Only the first attached session serves the bridge. When it exits, the bridge stops until the next
+  `run` or `exec -it`.
+- Sandboxes created before this feature have no bridge; recreate them. The bridge needs
+  `/tmp/sbt-<uid>` to be a private directory owned by you (0700), checked at create and at every
+  start, or it's skipped with a warning.
+- Forks don't install the shims, but keep the parent's socket mount, so they can use the parent's
+  bridge while the parent is attached.
 
 ## SSH agent
 
-Sandboxes of the built-in agents (`shell`, `claude`, …) can use your SSH agent, as in sbx: git
-over SSH and commit signing work with your keys, which never enter the sandbox.
+Sandboxes of the built-in agents can use your SSH agent, as in sbx: git over SSH and commit signing
+work, and your keys never enter the sandbox.
 
 ```sh
 # inside the sandbox ($SSH_AUTH_SOCK is /run/ssh-agent.sock)
@@ -303,46 +272,41 @@ git commit -S -m "signed"                   # with gpg.format=ssh
 ssh-add -D                                  # fails: the sandbox can't change your agent
 ```
 
-- The agent is the one in `SSH_AUTH_SOCK` when you run `sbt`, or the socket in the
-  `ssh.agentSocketPath` setting. Without one, or with `ssh.agentForwardingEnabled` set to `false`,
-  a built-in agent's sandbox is created without it (no `SSH_AUTH_SOCK`), silently.
-- Only listing keys and signing reach your agent; everything else (adding, removing or locking
-  keys) is answered with a failure.
-- It's served while `sbt` runs for the sandbox: `sbt run`, `sbt exec -it` and plain `sbt exec`.
-  When none is running, the sandbox's agent connections fail as with an unreachable agent. The
-  first of these to start serves it; one that starts while another serves doesn't, and when the
-  first exits the agent is gone until the next `run` or `exec`.
-- Each connection from the sandbox opens its own connection to your agent, with the settings read
-  again: `sbt settings set ssh.agentForwardingEnabled false` refuses new connections at once,
-  while open ones stay open, and a changed `ssh.agentSocketPath` applies to new ones.
-- Kits ask for it with `ssh-agent@1`: `phase: install`, `runtime` or both, and `sign: [git, …]` to
-  allow only signatures in those namespaces (`ssh-keygen -Y sign -n git`, what git uses). A v3
-  workload kit gets no agent without it. A required grant with no agent to back it stops the
-  create (`kit K: ssh-agent@1 needs an SSH agent, but SSH_AUTH_SOCK is unset`); an optional one is
-  left out with a note. An `install` grant is served during the create's install steps only, and
-  an install step sees `SSH_AUTH_SOCK` only when it declares it in `env`. `authenticate` limits
-  aren't supported yet: a required entry with them is refused, an optional one skipped.
-- The grant is fixed at create: `kit add` of a kit that asks for the agent needs a recreate.
-  Sandboxes created before this feature have no agent; recreate them to get it.
-- Forks have no agent of their own, but keep the parent's socket mount: while the parent is being
-  served, a process in a fork can use the agent with the parent's grant.
+- The agent is `SSH_AUTH_SOCK` when you run `sbt`, or the socket in `ssh.agentSocketPath`. With
+  none, or with `ssh.agentForwardingEnabled` set to `false`, the sandbox is created without one,
+  silently.
+- Only listing keys and signing get through. Adding, removing or locking keys fails.
+- It's served while `sbt` runs for the sandbox (`run`, `exec -it`, plain `exec`). Otherwise the
+  sandbox's connections fail as with an unreachable agent. Only the first `sbt` to start serves it;
+  when that one exits, the agent is gone until the next `run` or `exec`.
+- Each connection re-reads settings. `sbt settings set ssh.agentForwardingEnabled false` refuses new
+  connections at once; open ones stay. A changed `ssh.agentSocketPath` applies to new connections.
+- Kits request it with `ssh-agent@1`: `phase: install`, `runtime` or both, and `sign: [git, …]` to
+  allow only those namespaces. A v3 workload kit gets no agent without it. A required grant with no
+  agent stops the create (`kit K: ssh-agent@1 needs an SSH agent, but SSH_AUTH_SOCK is unset`); an
+  optional one is left out with a note. An `install` grant is served only during install steps, and
+  a step sees `SSH_AUTH_SOCK` only if it lists it in `env`. `authenticate` limits aren't supported:
+  a required entry with them is refused, an optional one skipped.
+- The grant is fixed at create. Sandboxes created before this feature have no agent; recreate them.
+- Forks keep the parent's socket mount, so they can use the parent's grant while the parent is
+  served.
 
 ## Docker inside a sandbox
 
 Every sandbox runs its own Docker engine, so agents can `docker build` and `docker compose up`
-without touching your host's Docker. Its storage is on the sandbox's own disk and survives restarts.
+without touching your host's Docker. Its storage lives on the sandbox's disk and survives restarts.
 
-To skip Docker (smaller images, faster first pull), set `sbt settings set docker.enabled false`
+To skip Docker (smaller images, faster first pull), run `sbt settings set docker.enabled false`
 before creating sandboxes; agents then use the plain image variants.
 
-The engine comes from the shipped `docker` kit (see [Kits](#kits)): Docker-enabled images get it
-automatically, and `--kit docker` adds it to any image, e.g. `sbt create -t alpine --kit docker
-shell .`. dockerd starts on every start of the sandbox; its log is `/var/log/dockerd.log`.
+The engine comes from the shipped `docker` kit ([Kits](#kits)). Docker-enabled images get it
+automatically; add it to any image with `--kit docker`, as in `sbt create -t alpine --kit docker
+shell .`. dockerd starts on every start, and logs to `/var/log/dockerd.log`.
 
 ## Kits
 
-Kits add tools, files, network rules, credentials and setup steps to a sandbox. smolbento runs
-Docker Sandboxes kits (v3, and v2 `spec.yaml`) and smolvm Smolfiles.
+Kits add tools, files, network rules, credentials and setup steps. smolbento runs Docker Sandboxes
+kits (v3, and v2 `spec.yaml`) and smolvm Smolfiles.
 
 ```sh
 sbt run claude . --kit docker.io/acme/postgres-kit:1    # add a mixin kit to an agent
@@ -353,14 +317,11 @@ sbt kit validate ./my-kit                               # check it without runni
 sbt kit add claude-myrepo ./my-mixin                    # add a mixin to an existing sandbox
 ```
 
-A **mixin** kit adds to an agent (`--kit`, repeatable). A **workload** kit is the agent: pass it
-where the agent name goes, and the sandbox is named after it. Its image's command runs as the
-image's `USER` (root if it sets none) under `/bin/bash`, so `BASH_ENV` is sourced, in the workspace
-path; `sbt exec` uses the same user. smolvm maps the workspace to that user so it can write it. A workload whose image has no `ENTRYPOINT` or
-`CMD` is refused, and one without `/bin/bash` fails to start its agent. A kit reference is one of:
-
-v2 and v3 kits can't be combined in one sandbox (as in sbx). An agent preset, the shipped `docker`
-kit and a Smolfile go with either.
+A **mixin** adds to an agent (`--kit`, repeatable). A **workload** kit replaces the agent: pass it
+where the agent name goes, and the sandbox takes its name. Its image's command runs as the image's
+`USER` (root if none) under `/bin/bash`, in the workspace path, and `sbt exec` uses the same user.
+smolvm maps the workspace to that user. A workload with no `ENTRYPOINT` or `CMD` is refused, and one
+without `/bin/bash` can't start its agent.
 
 | Reference | Kit |
 |---|---|
@@ -370,196 +331,172 @@ kit and a Smolfile go with either.
 | `./my-kit` (a directory with a `spec.yaml`) | A local v2 kit |
 | `./Smolfile`, `./x.smolfile` | A smolvm Smolfile |
 
-A local kit is always written as a path: `./my-kit`, `../kits/my-kit`, `.` or an absolute path.
-As in sbx, a bare word is never a kit, even when a directory of that name exists: `sbt create
-my-kit` is `unknown agent "my-kit"`, and `--kit my-kit` says it's `not a local path and does not
-look like a registry reference`. A registry reference has a `/`, so for the `alpine` image write
-`docker.io/library/alpine`. `docker` is always the shipped kit.
+v2 and v3 kits can't share a sandbox. Agent presets, `docker` and a Smolfile can go with either.
 
-Kits can version what they provide and what they need, as in the kit spec:
-`provides: [postgres@16.2.0]` and `requires: ["postgres >= 16"]`. A missing or mismatched
-capability stops the create with sbx's `resolve: the kit set is not coherent:` and one line per
-problem. The agent presets provide their own name, so a v2 mixin's `requires.agent: claude` works
-on `claude`.
+A local kit is always a path (`./my-kit`, `../kits/my-kit`, `.`, or absolute). A bare word is never
+a kit, even if a directory has that name: `sbt create my-kit` fails with `unknown agent "my-kit"`,
+and `--kit my-kit` says `not a local path and does not look like a registry reference`. Write
+`docker.io/library/alpine` for the alpine image.
 
-`sbt kit inspect REF` prints a summary (name, kind, schema, network rule counts, credentials and
-commands), then the capabilities and what smolbento supports of each, then the source and the
-kit's provides, requires, credentials (each service and the hosts its secret is sent to) and
-arguments. `--format json` (or `--json`) and `--format yaml` give the
-kit as a v2-shaped descriptor, with smolbento's extras under a `smolbento` key; the credential
-entries there list the hosts each secret is sent to. `sbt kit validate REF` prints
-`✓ REF — valid`, or the error and exit status 1; with `--json` or `--format json|yaml` it prints
-`{reference, kind, valid, warnings}`, plus `errors` when it isn't valid. `--offline` checks a local
-v2 kit or Smolfile without the network or the source policy.
+Kits declare versions: `provides: [postgres@16.2.0]` and `requires: ["postgres >= 16"]`. A missing
+or mismatched capability stops the create with `resolve: the kit set is not coherent:` and one line
+per problem. Agent presets provide their own name, so a v2 mixin's `requires.agent: claude` works on
+`claude`.
 
-Kit arguments: `--kit-arg NAME=VALUE` sets an argument for every kit, `--kit-arg KIT.NAME=VALUE`
-for one kit, and `--kit-args-file FILE` reads `NAME=VALUE` lines. Files are read in order, then
-`--kit-arg`; the last value wins, and a value for one kit beats a value for all. Argument values
-aren't secret: they can end up in the sandbox's environment and smolvm's machine config, so put
-secrets in [credentials](#secrets) instead. An argument a kit uses that has no value and no default
-is an error (`create-phase kit arg "x" has no resolved value`); `--kit-arg x=` sets it to empty.
-`--kit-arg` without any kit is an error too. As in sbx, a `KIT.NAME` value for a kit that isn't in
-the sandbox is ignored. Unquoted numbers and booleans in a kit's `default:` and `enum:` are read
-as strings.
+`sbt kit inspect REF` prints the kit's summary, capabilities, source, provides, requires,
+credentials (with the hosts each secret goes to) and arguments. `--format json` (or `--json`) and
+`--format yaml` print a v2-shaped descriptor with smolbento's extras under `smolbento`. `sbt kit
+validate REF` prints `✓ REF — valid`, or the error and exits 1; with `--json` or `--format
+json|yaml` it prints `{reference, kind, valid, warnings}`, plus `errors` when invalid. `--offline`
+checks a local v2 kit or Smolfile without the network or source policy.
+
+Kit arguments: `--kit-arg NAME=VALUE` applies to every kit, `--kit-arg KIT.NAME=VALUE` to one, and
+`--kit-args-file FILE` reads `NAME=VALUE` lines. Files are read first, then `--kit-arg`; the last
+value wins, and a per-kit value beats an all-kits one. A `KIT.NAME` for a kit not in the sandbox is
+ignored. Argument values aren't secret (they reach the environment and smolvm's machine config), so
+put secrets in [credentials](#secrets). An argument with no value and no default fails with
+`create-phase kit arg "x" has no resolved value`; `--kit-arg x=` sets it empty. `--kit-arg` without
+a kit is an error. Unquoted numbers and booleans in `default:` and `enum:` are read as strings.
 
 What a kit does, and when:
 
-- **First start**: its install steps run once, as root in a workload kit's image `WORKDIR` (`/`
-  otherwise), with any network access the kit needs only for installing. If one fails, or a kit
-  file can't be written, the sandbox is removed and the error printed, so the same command works
-  again once it's fixed. A failing startup step doesn't remove it (see below). Its files and agent
-  instructions are written once (see [agent instructions](#agent-instructions-from-kits)); a v2
-  kit's `files/workspace` and `${WORKDIR}` are the sandbox's primary workspace, or
-  `/home/agent/workspace` without one.
-- **Every start**: the kits' startup steps run in kit order before the agent, and a failing one
-  fails the start (`kit startup exited with code N`). A step marked `background: true` (such as
-  the `docker` kit's `dockerd`) is started at its place in that order and keeps running, so later
-  steps can use it; one of those failing is only logged. A step that doesn't finish (and isn't
-  marked `background`) holds up the start: there's no timeout, as in sbx.
-  Output goes to `/var/log/sbx-kit-startup.log` in the sandbox: a `=== dispatcher run … ===` line
-  per start, then `ok /etc/smolbento/startup.d/NN-<kit>.sh hook N` for each step that finished (or
-  was started, for a background one), and a failing step's output and exit code. If a step fails
-  during create, the sandbox is still created, with a warning, and stopped: each later start fails
-  until the step succeeds, as in sbx. `kit add` only warns. Startup steps run as `agent` unless
-  they name a user; a numeric user runs as the account that has that uid. The shipped `docker` kit
-  comes before your kits, so your startup steps can use Docker.
-- **Environment**: a v3 install step gets a clean environment (`PATH`, `HOME`, `USER`, `TERM`, the
-  proxy and CA variables, and the variables it lists in `env`). Startup steps and every v2 step
-  get the sandbox's full environment, as in sbx.
-- **Credentials** come from your secrets. If a kit needs one you haven't set, the sandbox is still
-  created, as in sbx: you get `WARN: required credential not found for service SERVICE` and the
-  `sbt secret set` command to run, and the kit's requests go out without the credential until you
-  set it and recreate the sandbox. A built-in service's secret only goes to that service's own
-  hosts; see [Security](SECURITY.md#kits). A credential the kit needs only while installing is
-  available during install; the sandbox then restarts once without it, and later requests to its
-  hosts get `502`.
-- **Volumes** a kit declares are on the sandbox's own disk: they survive stop and start, and are
-  removed with the sandbox.
-- **Host mounts** a kit declares are directories on your machine, shared by the kit's sandboxes
-  and kept after they're removed (see [kit host mounts](#kit-host-mounts)).
+- **First start**: install steps run once, as root, in a workload image's `WORKDIR` (`/` otherwise),
+  with network only for installing. A failing step, or a kit file that can't be written, removes the
+  sandbox. Fix the cause and run the same command. In a v2 kit, `files/workspace` and `${WORKDIR}`
+  are the primary workspace, or `/home/agent/workspace` without one.
+- **Every start**: startup steps run in kit order, before the agent. A failing one fails the start
+  (`kit startup exited with code N`). A `background: true` step (such as the `docker` kit's
+  `dockerd`) keeps running; if it fails, only the log records it. A step that doesn't finish holds
+  up the start; there is no timeout, as in sbx.
+- **Logs**: `/var/log/sbx-kit-startup.log` in the sandbox, with a `=== dispatcher run … ===` line
+  per start, an `ok /etc/smolbento/startup.d/NN-<kit>.sh hook N` line per finished step, and a
+  failing step's output and exit code.
+- **A failing startup step at create** leaves the sandbox created, with a warning, and stopped. Each
+  later start fails until the step succeeds. `kit add` only warns.
+- Startup steps run as `agent` unless they name a user (a numeric user runs as the account with that
+  uid). The `docker` kit runs before your kits.
+- **Environment**: a v3 install step gets a clean one (`PATH`, `HOME`, `USER`, `TERM`, the proxy and
+  CA variables, and what its `env` lists). Startup steps and v2 steps get the full sandbox
+  environment.
+- **Credentials**: a missing one doesn't block create. You get `WARN: required credential not found
+  for service SERVICE` and the `sbt secret set` command. Requests go out without it until you set it
+  and recreate the sandbox. A built-in service's secret goes only to its own hosts
+  ([Security](SECURITY.md#kits)). A credential needed only for install is available during install;
+  the sandbox then restarts once without it, and later requests to its hosts get `502`.
+- **Volumes** live on the sandbox's disk and are removed with it. **Host mounts** are shared and
+  kept ([kit host mounts](#kit-host-mounts)).
 
-Only kits from Docker Hub load by default, plus local kits; see [Configuration](configuration.md)
-for `kit.allowedSources` and `kit.allowLocalKits`, and [Security](SECURITY.md#kits) for what a kit
-can open.
+Only Docker Hub kits load by default, plus local kits. See [Configuration](configuration.md) for
+`kit.allowedSources` and `kit.allowLocalKits`, and [Security](SECURITY.md#kits) for what a kit can
+open.
 
 ### Agent instructions from kits
 
-Kit instructions for the agent go where sbx puts them: in the agent's file in the parent directory
-of the workspace path, inside the sandbox only. With workspace `~/src/app`, claude reads
-`~/src/CLAUDE.md`, gemini `~/src/GEMINI.md` and other agents `~/src/AGENTS.md`; a sandbox without a
-workspace uses `/home/agent`. A workload kit can name its own file, and its text is appended to it.
-Each mixin's text goes to `kits-agent-context/<kit>.md` next to that file, and the file gets a
-`## Kits` list pointing at them, between `<!-- sbx:kits-section start -->` and
-`<!-- sbx:kits-section end -->`. `kit add` adds a line to that list. Unlike sbx, smolbento writes no
-platform preamble of its own.
+Kit instructions go in the agent's file in the workspace's parent directory, inside the sandbox
+only. For workspace `~/src/app`, claude reads `~/src/CLAUDE.md`, gemini `~/src/GEMINI.md`, and other
+agents `~/src/AGENTS.md`. With no workspace, `/home/agent` is used. A workload kit can name its own
+file, and its text is appended.
 
-- Nothing is written on your machine: if the file would land in a mounted workspace (say you also
-  mounted the parent directory), smolbento skips it with a warning.
-- If a workload kit declares no agent file, mixin instructions are dropped, with a warning.
-- The files are owned by `agent`, except a file the image already has owned by root, which keeps
-  its owner.
-- With `--clone` and a workspace that is a subdirectory of the repo, the parent directory is inside
-  the sandbox's clone, so the files show up there as untracked files.
+Each mixin's text goes to `kits-agent-context/<kit>.md` beside that file, and the file gets a `##
+Kits` list between `<!-- sbx:kits-section start -->` and `<!-- sbx:kits-section end -->`. `kit add`
+adds a line to the list. Unlike sbx, smolbento writes no platform preamble.
+
+- Nothing is written on your machine. A file that would land in a mounted workspace is skipped with
+  a warning.
+- A workload kit with no agent file drops mixin instructions, with a warning.
+- Files are owned by `agent`, except a file the image already has owned by root, which keeps its
+  owner.
+- With `--clone` and a subdirectory workspace, the parent directory is in the clone, so the files
+  show up as untracked.
 
 ### Adding a kit to a sandbox
 
-`sbt kit add SANDBOX REF` adds a mixin to an existing sandbox without restarting it: network rules,
-install and startup steps, files and agent instructions apply at once (a stopped sandbox is started
-for it). A kit that would change the image, credentials, ports, volumes, resources, environment
-variables or auto-stop needs a new sandbox: `kit add` says "recreate required" and changes nothing.
-If the kit opens network access, `kit add` asks first; `-y` grants it, and without a terminal it
-fails.
+`sbt kit add SANDBOX REF` applies a mixin to an existing sandbox without restarting it; a stopped
+sandbox is started for it. A kit that changes the image, credentials, ports, volumes, resources,
+environment variables or auto-stop needs a new sandbox. `kit add` then says `recreate required` and
+changes nothing. A kit that opens network access asks first; `-y` grants it, and without a terminal
+it fails.
 
 ### Kit host mounts
 
-A kit that declares `host-mount@1` gets a directory on your machine mounted at the path it names,
-for something the agent should keep, such as a cache. smolbento creates it on first use under
-`~/.local/share/smolbento/kit-host-mounts/` (`$XDG_DATA_HOME/smolbento/…` when that's set, or
-`$SMOLBENTO_DATA_DIR/kit-host-mounts/`), one directory per kit and path. Every sandbox of the same
-kit shares it, the agent can write it, and it's kept when the sandboxes are removed. A local kit is keyed by its
-directory, a published kit by its repository, so a new tag or digest keeps the same directory.
+A kit that declares `host-mount@1` gets a directory on your machine at the path it names, such as a
+cache. It's created on first use under `~/.local/share/smolbento/kit-host-mounts/`
+(`$XDG_DATA_HOME/smolbento/…`, or `$SMOLBENTO_DATA_DIR/kit-host-mounts/`), one per kit and path. All
+of a kit's sandboxes share it, the agent can write it, and it survives sandbox removal. A local kit
+is keyed by its directory and a published kit by its repository, so a new tag keeps the same
+directory.
 
-To use a directory of your own instead, bind it when you create the sandbox:
+To bind your own directory, pass `--mount` at create:
 
 ```sh
 sbt create ./my-kit . --mount ~/agent-cache:/home/agent/.cache/tool
 ```
 
-`--mount HOST:SANDBOX_PATH` can be repeated, and each `SANDBOX_PATH` must be one a kit declares
-(`no kit declares host-mount@1 at "PATH"` otherwise). `HOST` is resolved from the current directory
-and must be an existing directory. Mounts are set at create only: `sbt run --mount` on an existing
-sandbox still checks `HOST` (a missing or invalid one is an error), then warns and ignores the
-mount, and `kit add` of a kit that declares one says "recreate required".
-In an [environment file](#environments-sbxenvyaml), `mounts:` does the same.
+`--mount HOST:SANDBOX_PATH` is repeatable. `SANDBOX_PATH` must be one a kit declares (`no kit
+declares host-mount@1 at "PATH"` otherwise). `HOST` is resolved from the current directory and must
+exist. Mounts are set at create only: `sbt run --mount` on an existing sandbox still checks `HOST`
+(an error if missing or invalid), then warns and ignores it. `kit add` of such a kit says `recreate
+required`. `mounts:` in an [environment file](#environments-sbxenvyaml) does the same.
 
-`sbt inspect SANDBOX` shows a sandbox's details, with each host mount as `Host mounts: HOST:PATH`
-(`--json` or `--format json|yaml`: `mounts`, sandbox path to host path). There's no command to
-remove the directories: `rm`, `prune` and `reset` leave them alone. Delete one yourself when no
-sandbox needs it.
+`sbt inspect` shows `Host mounts: HOST:PATH` (`mounts` in JSON). `rm`, `prune` and `reset` never
+delete these directories; delete one yourself when no sandbox needs it.
 
 ### The builder sandbox
 
-Local v3 kits are built with BuildKit in a hidden sandbox, `_builder`, so you don't need Docker on
-your machine. It's created on first use, stopped after each build and not shown by `sbt ls`; its
-disk keeps the build cache, and `sbt rm _builder` resets it. Builds use your global network policy
-(`sbt policy log _builder` shows what was blocked) and never get your secrets. A kit built on an
-image that needs a login (Docker's own examples use `dhi.io`) builds once you store a
-[registry credential](#registry-credentials) for that registry.
+Local v3 kits build with BuildKit in a hidden sandbox, `_builder`, so Docker isn't needed on your
+machine. It's created on first use, stopped after each build, hidden from `sbt ls`, and keeps the
+build cache; `sbt rm _builder` resets it. Builds use your global network policy (`sbt policy log
+_builder` shows blocks) and never get your secrets. An image that needs a login (Docker's examples
+use `dhi.io`) needs a [registry credential](#registry-credentials).
 
 ## Skills
 
-Skills are folders with a `SKILL.md` that an agent loads on demand. smolbento keeps one shared
-store of them on your machine and links it into your sandboxes, as `sbx` does.
-
-The store is `~/.local/share/smolbento/agent-skills/` (`$XDG_DATA_HOME/smolbento/agent-skills` when
-that's set, or `$SMOLBENTO_DATA_DIR/agent-skills`), one directory per skill. It isn't `sbx`'s
-store, so bring your skills over with `import`.
+Skills are folders with a `SKILL.md` that agents load on demand. smolbento keeps one shared store
+and links it into sandboxes, as `sbx` does.
 
 ```sh
 sbt skills add anthropics/skills --skill pdf     # from GitHub, or any Git URL
 sbt skills add anthropics/skills                 # every skill in the repository
-sbt skills import --dry-run                      # see what your agents' directories hold
-sbt skills import                                # copy them into the store
+sbt skills import                                # copy skills from your agents' directories
 sbt skills ls                                    # SKILL and STORE columns; --json, -q
 sbt skills update pdf                            # re-fetch a skill added from a repository
 sbt skills rm pdf
 ```
 
-- `add` clones with your host `git` (HTTPS, SSH, `http://` or `git://`), so anything git can
-  fetch works, private repositories included. git never prompts: set up a credential helper or
-  SSH agent for private repositories. A failed clone prints git's own message, as
-  `clone skills repository: exit status N: ...`.
-- Every directory below the repository root that holds a `SKILL.md` is a skill; directories
-  inside a skill aren't searched. A `SKILL.md` at the repository root makes the whole repository
-  one skill (its regular files and directories, `.git` excepted; symlinks and special files
-  aren't copied, in any skill). A skill is named by the `name:` in its `SKILL.md`
-  frontmatter, else after its directory (the repository, for a root skill): anthropics/skills'
-  `template/` is `template-skill`. A name that isn't a valid directory name is skipped with a
-  warning, and two skills with one name are an error. `--skill` (repeatable, or comma-separated)
-  picks some by that name. A skill that already exists asks before it's replaced; `-f` skips the
-  question, and without a terminal replacing needs `-f`.
-- `import` copies the skills from `~/.agents/skills`, `~/.claude/skills`,
-  `~/.config/opencode/skills`, `~/.copilot/skills`, `~/.cursor/skills` and `~/.factory/skills`, in
-  that order, each named after its directory. When two directories have the same skill, the
-  earlier one wins and the other gets a warning. With nothing to import it only says where it
-  looked.
-- `update` works only for skills added from a repository (smolbento records where in
-  `agent-skills-metadata/sources.json`). Importing a skill drops that record. It finds skills the
-  same way as `add`, prints `Updated skill x` or `Skill "x" is already up to date` for each, then
-  `Updated N skills in <store>` if any changed. With none added from a repository it prints
-  `No repository-installed skills found`.
-- `rm` always asks first; `-f` skips it. `import` asks only when it would replace a skill, like `add`.
+The store is `~/.local/share/smolbento/agent-skills/` (`$XDG_DATA_HOME/smolbento/agent-skills`, or
+`$SMOLBENTO_DATA_DIR/agent-skills`), one directory per skill. It isn't sbx's store; `import` brings
+skills over, and `import --dry-run` previews them.
+
+- `add` clones with your host `git` (HTTPS, SSH, `http://`, `git://`), so private repositories work.
+  git never prompts, so set up a credential helper or SSH agent first. A failed clone prints `clone
+  skills repository: exit status N: ...`.
+- Each directory below the repository root with a `SKILL.md` is a skill; directories inside a skill
+  aren't searched. A root `SKILL.md` makes the whole repository one skill. Symlinks and special
+  files are never copied.
+- The name is the `SKILL.md` `name:`, else the directory's (the repository's, for a root skill):
+  anthropics/skills' `template/` becomes `template-skill`. An invalid name is skipped with a
+  warning; two skills with one name is an error.
+- `--skill` (repeatable, or comma-separated) picks skills by name. An existing skill asks before
+  it's replaced. `-f` skips the question, and without a terminal replacing needs `-f`.
+- `import` reads `~/.agents/skills`, `~/.claude/skills`, `~/.config/opencode/skills`,
+  `~/.copilot/skills`, `~/.cursor/skills` and `~/.factory/skills`, in that order. On a clash the
+  earlier one wins, with a warning.
+- `update` works only for skills added from a repository (recorded in
+  `agent-skills-metadata/sources.json`; `import` drops that record). It prints `Updated skill x` or
+  `Skill "x" is already up to date` for each, then `Updated N skills in <store>`. With none, it
+  prints `No repository-installed skills found`.
+- `rm` asks first; `-f` skips. `import` asks only before replacing a skill.
 
 `sbt reset` deletes the store and its records.
 
 ### Sharing the store with a sandbox
 
-`--skills` on `create` and `run` sets how a new sandbox gets the store:
+`--skills` on `create` sets how the sandbox gets the store (on `run`, for a new sandbox):
 
 | Mode | In the sandbox |
 |---|---|
-| `readonly` (default) | The store is mounted read-only at `/run/sbx/skills-shared`, and the agent's skills directory (for `claude`, `~/.claude/skills`) is a normal directory with one symlink per skill, such as `pdf -> /run/sbx/skills-shared/pdf`. The agent can't change a stored skill, but can add its own directories beside the links. A [kit's directory](#skills-from-kits) differs |
-| `readwrite` | The store is mounted over the agent's skills directory. What the agent writes there lands in your store at once |
+| `readonly` (default) | The store is mounted read-only at `/run/sbx/skills-shared`. The agent's skills directory holds one symlink per skill, such as `pdf -> /run/sbx/skills-shared/pdf`. The agent can add its own directories beside them. |
+| `readwrite` | The store is mounted over the agent's skills directory. Writes there land in your store at once. |
 | `off` | No store and no skills directory |
 
 ```sh
@@ -567,18 +504,15 @@ sbt create claude . --skills readwrite
 sbt settings set skills.defaultMode off          # the default for new sandboxes
 ```
 
-The mode is fixed when the sandbox is created: `--skills` on `run` for an existing sandbox is
-ignored, like `--cpus`, and so is a changed `skills.defaultMode`. The order is `--skills`, then
-`sandboxOptions.skills` in an [environment file](#environments-sbxenvyaml), then the setting (see
-[Configuration](configuration.md#settings)).
+The mode is fixed at create. On an existing sandbox, `--skills` is ignored, like `--cpus`, and so is
+a changed `skills.defaultMode`. Precedence: `--skills`, then `sandboxOptions.skills` in an
+[environment file](#environments-sbxenvyaml), then the setting
+([Configuration](configuration.md#settings)).
 
-In `readonly` mode the links are made again at every start. A skill you add shows up in
-`/run/sbx/skills-shared` at once but is linked at the sandbox's next start; a skill you remove
-leaves a dangling link until then. A directory or file the agent made with the same name as a
-stored skill is left alone. With `readwrite`, changes in the store show up at once. Agents may read
-their skills only when a session starts, so start a new session after a change.
-
-Each agent has its own directory:
+In `readonly`, links are remade at every start: a new skill is linked at the next start, and a
+removed one leaves a dangling link until then. An agent-made file with a stored skill's name is left
+alone. In `readwrite`, changes show at once. Agents read skills when a session starts, so start a
+new session after a change.
 
 | Agent | Skills directory (in the sandbox) |
 |---|---|
@@ -590,46 +524,36 @@ Each agent has its own directory:
 | `opencode` | `~/.config/opencode/skills` |
 | `kiro`, `docker-agent`, `shell` | none: the store isn't shared |
 
-`~` is `/home/agent`. Sandboxes created before skills existed have none; recreate them.
-
-The links are made by the start's setup as root, as in `sbx`. The skills directory and each link
-belong to the image's `agent` account, or to uid 1000 in an image without
-one; parent directories it has to create belong to root. A skills directory whose path goes
-through a symlink (the directory or any parent) gets no links, and a required bundled skill for it
-fails the create. If linking fails the start warns (`couldn't link shared skills`) and goes on.
+`~` is `/home/agent`. Sandboxes created before skills existed have none; recreate them. Links are
+made as root at each start, owned by the image's `agent` account (uid 1000 without one). A skills
+directory reached through a symlink gets no links, and a required bundled skill for it fails the
+create. If linking fails, the start warns (`couldn't link shared skills`) and goes on.
 
 ### Skills from kits
 
-A kit can ask for more skills directories and ship skills of its own:
-
-- `agent-skills@1` names a directory (`path`, absolute) that gets the store, with `mode`
-  `readonly` (the default) or `readwrite`. Its access is the narrower of the kit's `mode` (the
-  widest, when several kits name the path) and the sandbox's `--skills` mode. Unlike the agent's
-  own directory, the store is mounted over it, read-only or read-write, with no links; `off`
-  leaves it out. A path that is also the agent's own directory behaves like the agent's.
-- `agent-skill@1` bundles a skill from the kit's image: `path` is the skill's directory, `name`
-  (optional) is its name in the skills directory, defaulting to the directory's name. At first
-  start smolbento checks that `SKILL.md` is a file and that no skill of that name is there, then
-  links it into every skills directory. A required bundled skill that fails either check, or has
-  no skills directory to go in, fails the create and removes the sandbox; an optional one prints
-  `warning: skipping skill NAME: reason` (or a note) and the sandbox starts without it. A bundled
-  skill with the same name as a stored skill is a conflict too: the store link is there first.
-  smolbento only links bundled skills and never runs anything in them.
-- When a sandbox has bundled skills, no skills directory is mounted over (that would put the
-  kit's skills in your store): every one, the agent's own included, gets links into
-  `/run/sbx/skills-shared`. That mount is read-write if any directory would have been
-  read-write (so the agent can change stored skills through the links), else read-only. With
-  `off` there is no mount and the directories hold only the bundled skills.
+- `agent-skills@1` names a `path` (absolute) that gets the store, with `mode` `readonly` (default)
+  or `readwrite`. Access is the narrower of the kit's mode (the widest across kits) and `--skills`.
+  The store is mounted over that path, with no links. `off` leaves it out.
+- `agent-skill@1` bundles a skill from the kit's image. `path` is its directory; `name` (optional)
+  is its name, defaulting to the directory's. At first start smolbento checks that `SKILL.md` is a
+  file and no skill of that name exists, then links it into every skills directory. A required
+  bundled skill that fails either check, or has nowhere to go, fails the create and removes the
+  sandbox. An optional one prints `warning: skipping skill NAME: reason` and the sandbox starts
+  without it. A name that matches a stored skill is a conflict: the store link comes first.
+  smolbento links bundled skills and never runs them.
+- With bundled skills, no skills directory is mounted over, since that would put the kit's skills in
+  your store. Every directory instead links into `/run/sbx/skills-shared`. That mount is read-write
+  if any directory would have been, else read-only. With `off`, the directories hold only the
+  bundled skills.
 - A bundled skill named like a stored skill fails the create with `failed to compose shared skills
   into the sandbox: bundled skills NAME cannot be exposed in DIR: another skill already uses the
   name`.
-- The bundled-skill step runs as root and gives the links to the agent, like the start's links.
-  `kit add` refuses kits with either capability: mounts are set at create, so create a new
+- `kit add` refuses kits with either capability, since mounts are set at create. Create a new
   sandbox with the kit.
 
 ## MCP servers
 
-Register MCP servers once on your machine, then give them to a sandbox's agent when you create it.
+Register servers once, then give them to a sandbox's agent at create.
 
 ```sh
 # A remote server. ${api-key} is a secret, set separately.
@@ -646,34 +570,33 @@ sbt mcp rm linear
 sbt run claude --static-mcp linear,files
 ```
 
-- `--static-mcp` only applies when the sandbox is created; the set can't be changed afterwards.
-  `--static-mcp none` records that the sandbox has no MCP servers. `sbt inspect` shows the set.
-- At create, smolbento allows each remote server's host for that sandbox and writes the servers
-  into the agent's own MCP config (for Claude Code, with `claude mcp add --scope user`).
-- A header secret never enters the sandbox. The agent's config holds a placeholder from smolvm,
-  which replaces it with the real value only on HTTPS requests to that server's host. The secret
-  is stored like any other (`-t`, `--ref`, `--command` work) and is global.
-- A command server runs inside the sandbox, so the command has to exist in the image.
+- `--static-mcp` applies only at create; `--static-mcp none` records no servers. `sbt inspect` shows
+  the set.
+- At create, each remote server's host is allowed for that sandbox, and the servers are written into
+  the agent's MCP config (for Claude Code, with `claude mcp add --scope user`).
+- A header secret never enters the sandbox. The agent's config holds a smolvm placeholder, which
+  smolvm swaps for the real value only on HTTPS requests to that server's host. Secrets are stored
+  like any other (`-t`, `--ref`, `--command` work) and are global.
+- A command server runs inside the sandbox, so the command must exist in the image.
 
 Limits:
 
-- Only the `claude` agent so far; other agents fail the create with a clear error.
-- No OAuth: a server that only offers an OAuth login can't be registered with a token header.
-- A header secret needs an `https://` URL with a host name and no port, and a server can have
-  only one header with a secret.
-- A URL with credentials in it (`https://user:pass@host/`) is refused; put them in a header. A
-  URL is stored and shown as given, so don't put a secret in its query string.
-- `localhost` URLs are refused: inside a sandbox that is the sandbox, not your machine.
+- Only the `claude` agent so far. Other agents fail the create with a clear error.
+- No OAuth: a server that only offers OAuth login can't take a token header.
+- A header secret needs an `https://` URL with a host name and no port. A server can have one header
+  with a secret.
+- URLs with credentials (`https://user:pass@host/`) are refused. URLs are stored as given, so keep
+  secrets out of query strings.
+- `localhost` URLs are refused: inside a sandbox, that means the sandbox itself.
 - `sbt template save` refuses a sandbox created with `--static-mcp`.
-- `mcp.toml` can be edited by hand. A selected server is checked as `mcp add` checks it, before
+- You can edit `mcp.toml` by hand; a selected server is checked as `mcp add` checks it, before
   anything is created.
-- `mcp auth`, `mcp load` and `mcp unload` are not supported (see
-  [sbx compatibility](sbx-compatibility.md#mcp-servers)).
+- `mcp auth`, `mcp load` and `mcp unload` aren't supported ([sbx
+  compatibility](sbx-compatibility.md#mcp-servers)).
 
 ## Templates
 
-A template is a snapshot of a sandbox's disk that new sandboxes can start from. Install your tools
-once, save, and reuse.
+Install your tools once in a sandbox, save it as a template, and start new sandboxes from it.
 
 ```sh
 sbt stop claude-myrepo
@@ -686,23 +609,22 @@ sbt template load myimage.tar                  # import a file made with --outpu
 ```
 
 - The sandbox must be stopped to save it.
-- `-t` first looks for a saved template of that name, then treats it as an image. `-t` never takes an id
-  prefix (unlike `template rm`), so a name that is only hex digits (such as `abcd`) is always an
-  image. `--pull never` is accepted only with a
-  saved template.
-- The agent must match the template's: a `claude` template can't start a `codex` sandbox.
-- `/tmp` isn't kept, and neither is the workspace (it's mounted, not part of the disk).
-- A sandbox made from a template can't be saved yet.
-- A sandbox running a kit workload (an agent that isn't a built-in preset) can't be saved yet.
-- `-t` can't be combined with `--kit` kits that add image layers, since a template's disk is saved
-  whole. Kits without layers, such as the built-in `docker` kit, work.
-- Removing a template doesn't affect sandboxes made from it.
-- Kit install steps run again for each new sandbox.
+- `-t` looks for a saved template of that name first, then treats the value as an image. It never
+  takes an id prefix (unlike `template rm`), so a name of only hex digits, such as `abcd`, is an
+  image. `--pull never` works only with a saved template.
+- The agent must match: a `claude` template can't start a `codex` sandbox.
+- `/tmp` and the workspace (mounted, not on the disk) aren't kept.
+- A sandbox made from a template, or running a kit workload (an agent that isn't a built-in preset),
+  can't be saved yet.
+- `-t` can't combine with `--kit` kits that add image layers, since the disk is saved whole.
+  Layer-free kits such as `docker` work.
+- Removing a template doesn't affect sandboxes made from it. Kit install steps run again for each
+  new sandbox.
 
 ## Environments (sbxenv.yaml)
 
-An environment file describes a sandbox: agent, workspace, kits, ports, variables and secrets.
-`sbt env` reads the same `sbxenv.yaml` files as Docker's `sbx env` (schema `"1"`).
+`sbt env` reads the same `sbxenv.yaml` files as `sbx env` (schema `"1"`) to describe a sandbox:
+agent, workspace, kits, ports, variables and secrets.
 
 ```yaml
 schemaVersion: "1"
@@ -733,166 +655,128 @@ sbt env exec -- make test            # run a command in the environment's sandbo
 sbt env rm                           # remove the sandbox and the secrets scoped to it
 ```
 
-- **Files.** Each `PATH` is a file or a directory holding `sbxenv.yaml`. With none, smolbento reads
-  `~/.sbxenv.yaml` (if present) and then `./sbxenv.yaml`. Files merge in order: maps merge by key,
-  lists concatenate, later values win (an empty `key:` keeps the earlier value). Relative paths
-  are relative to the file that names them. `${{ env.projectDir }}` is the first `PATH`'s directory
-  (the current directory when no `PATH` is given, even when `~/.sbxenv.yaml` is read);
-  `${{ env.fileDir }}` is the declaring file's directory.
-- **Values.** As in YAML 1.2, only `true` and `false` are booleans. Text fields take numbers and
-  booleans as written: `PORT: 8080` and `DEBUG: on` are the strings `8080` and `on`.
-- **User defaults.** `~/.sbxenv.yaml` applies to every environment, and is enough on its own: with
-  it, `sbt env run` works in a directory that has no `sbxenv.yaml`. It can't set `name`, and its
-  `workspace` must be `${{ env.projectDir }}` or below it. For example, to give the agent a clone
-  of whatever repo you are in:
-
-  ```yaml
-  schemaVersion: "1"
-  agent: claude
-  workspace:
-    path: ${{ env.projectDir }}
-    clone: true
-  ```
-- **Args.** A file declares `args:` and uses them as `${{ env.args.NAME }}`. Each arg needs
-  exactly one of `default` or `required: true`, and may limit its values with `enum` or `pattern`
-  (not both). Give values with `--env-arg NAME=VALUE` or
-  `--env-args-file FILE` (`--env-arg` wins).
-- **Name.** `name:` or `--name`; otherwise `<agent>-<workspace directory>`. The name links a file
-  to its sandbox, so give every command the same `--name` you created it with.
-- **Plan.** `env plan` prints what applying would do and whether it would ask, and changes
-  nothing. `+` adds, `~` changes, `-` removes, `>` is a host command that runs again, and `!` is
-  something not approved yet that the plan doesn't add: a path on your machine, or a `preRemove`
-  command. For a sandbox that exists it shows what differs from what you approved, plus what
-  every `env run` applies (`initialize` commands, `entrypoint` and `cmd`). A change that only a
-  new sandbox picks up says `waits for the next create`; `env` values and `initialize` commands
-  apply at once.
-- **Approval.** `env create` and `env run` print the plan and ask `Approve this plan? (y/N)`.
-  A yes is remembered for that environment: later runs apply without asking, with or without a
-  terminal, until the files or anything in the plan changes. `-f/--force` approves one invocation
-  and is not remembered; without a terminal and without `--force` an unapproved plan is refused.
-  `env rm` asks `Remove? [y/N]` and forgets the approval. `env exec` never asks.
-- **Host commands.** Lifecycle commands and `command:` sources of secrets and registries run on
-  your machine with your privileges. As in sbx, a file that declares any asks on every
-  `env create` and `env run`, even when nothing changed. To let an approval stand until the
-  commands change: `sbt settings set env.rememberHostCommands true`.
-- **Lifecycle.** Commands that run on your machine, through `sh -c`:
-
-  ```yaml
-  lifecycle:
-    initialize:            # every `env create` and `env run`, before anything else
-      - name: deps         # optional label
-        command: ./scripts/setup.sh
-        workdir: ./tools   # optional; default: the project directory
-        timeout: 90s       # optional
-    postCreate: [...]      # after a new sandbox is created, before `env run` attaches
-    preRemove: [...]       # `env rm`, after you confirm, before anything is removed
-  ```
-
-  A phase runs its commands in order and stops at the first that fails or times out
-  (`timeout` is a duration like `90s`, `1.5s` or `1m30s`). A command that starts something in the
-  background has to redirect its output (`cmd >/dev/null 2>&1 &`); otherwise it fails five seconds
-  after it exits. Ctrl-C ends the running command and what it started. A failing
-  `initialize` stops the command before anything is created. A failing `postCreate` keeps the
-  sandbox and tells you to `sbt env rm`. A failing `preRemove` is a warning and the removal goes
-  on; `preRemove` also runs when the sandbox is already gone. Commands get `sbt`'s environment
-  plus `SBX_LIFECYCLE_PHASE`, `SBX_ENV_FILE`, `SBX_ENV_FILES` (joined with `:`), `SBX_ENV_DIR`,
-  `SBX_SANDBOX_NAME`, `SBX_AGENT` and `SBX_WORKSPACE`; they don't get the file's `env` or any
-  secret. Make `initialize` safe to run more than once. `env exec` runs none of them.
-  `--skip-host-commands` (on `env create`, `run`, `rm` and `plan`) skips all three phases
-  without changing what you approved; `command:` sources of secrets and registries still run.
-- **`entrypoint` and `cmd`.** What `env run` launches when it attaches, in place of the agent:
-  `entrypoint` followed by `cmd`. With only `cmd`, the agent's own command gets it as arguments
-  (like `sbt run NAME -- ARGS`). Plain `sbt run NAME` is not affected. When several files set
-  them, the last one wins. Arguments after `--` (`sbt env run . -- --base HEAD`) take `cmd`'s
-  place for that run; the plan still shows the file's `cmd`.
-- **Choosing the agent per run.** There is no `--agent` flag (sbx has none either), but `agent:`
-  can use an argument the file declares:
-
-  ```yaml
-  agent: ${{ env.args.agent }}
-  args:
-    agent:
-      default: claude
-  ```
-
-  `sbt env run --env-arg agent=opencode -- -c` then runs `opencode` with `-c`.
-- **Registries.** Logins for pulling this sandbox's image and kits:
-
-  ```yaml
-  registries:
-    ghcr.io:
-      username: { value: me }             # optional
-      secret: { command: gh auth token }  # value, ref or command
-  ```
-
-  They are resolved once when the sandbox is created, stored for that sandbox only (ahead of a
-  host-wide `sbt secret set --registry` login for the same host), and removed with it.
-- **Bindings.** More domains a service's credential may be sent to:
-
-  ```yaml
-  bindings:
-    github:
-      apiKey:
-        domains: [uploads.github.com]
-  ```
-
-  As in sbx they are global: at create they are added to the service's hosts in your secrets file,
-  for every sandbox created afterwards, and `env rm` leaves them. `env rm --prune-bindings`
+- **Files**: Each `PATH` is a file or a directory holding `sbxenv.yaml`. With none, `~/.sbxenv.yaml`
+  (if present) then `./sbxenv.yaml` are read. Maps merge by key, lists concatenate, later values
+  win; an empty `key:` keeps the earlier value. Relative paths are relative to the file naming them.
+  `${{ env.projectDir }}` is the first `PATH`'s directory (the current directory with no `PATH`,
+  even when `~/.sbxenv.yaml` is read). `${{ env.fileDir }}` is the declaring file's directory.
+- **Values**: Only `true` and `false` are booleans. Text fields take numbers and booleans as
+  written: `PORT: 8080` and `DEBUG: on` are the strings `8080` and `on`.
+- **User defaults**: `~/.sbxenv.yaml` applies to every environment and can be enough alone: `sbt env
+  run` then works in a directory with no `sbxenv.yaml`. It can't set `name`, and its `workspace`
+  must be `${{ env.projectDir }}` or below, as in `workspace: {path: ${{ env.projectDir }}, clone:
+  true}`.
+- **Args**: Declared under `args:` and used as `${{ env.args.NAME }}`. Each needs exactly one of
+  `default` or `required: true`, and may set `enum` or `pattern` (not both). Set values with
+  `--env-arg NAME=VALUE` or `--env-args-file FILE`; `--env-arg` wins.
+- **Name**: `name:` or `--name`; otherwise `<agent>-<workspace directory>`. Give every command the
+  `--name` you created the sandbox with.
+- **Plan**: `env plan` prints the changes and whether applying would ask. `+` adds, `~` changes, `-`
+  removes, `>` is a host command that runs again, `!` is an unapproved item the plan doesn't add (a
+  path on your machine, or a `preRemove` command). A change only a new sandbox picks up says `waits
+  for the next create`; `env` values and `initialize` apply at once.
+- **Approval**: `env create` and `env run` ask `Approve this plan? (y/N)`. A yes is remembered until
+  the files or the plan change. `-f/--force` approves one invocation without remembering it. Without
+  a terminal and without `--force`, an unapproved plan is refused. `env rm` asks `Remove? [y/N]` and
+  forgets the approval. `env exec` never asks.
+- **Host commands**: Lifecycle commands and `command:` sources of secrets and registries run on your
+  machine with your privileges. A file that declares any asks on every `env create` and `env run`.
+  `sbt settings set env.rememberHostCommands true` keeps an approval until the commands change.
+- **Lifecycle**: Commands run through `sh -c`, in `initialize` (every create and run, before
+  anything), `postCreate` (after a new sandbox is created) and `preRemove` (`env rm`, after you
+  confirm). A phase stops at the first failure or timeout. A failing `initialize` stops before
+  anything is created; a failing `postCreate` keeps the sandbox and says to `sbt env rm`; a failing
+  `preRemove` only warns and removal goes on. Commands get `sbt`'s environment plus
+  `SBX_LIFECYCLE_PHASE`, `SBX_ENV_FILE`, `SBX_ENV_FILES` (joined with `:`), `SBX_ENV_DIR`,
+  `SBX_SANDBOX_NAME`, `SBX_AGENT` and `SBX_WORKSPACE`, but not the file's `env` or any secret. Make
+  `initialize` safe to run twice. `--skip-host-commands` (on `env create`, `run`, `rm` and `plan`)
+  skips all three phases without changing your approval.
+- **`entrypoint` and `cmd`**: `env run` launches them in place of the agent. With only `cmd`, the
+  agent's own command gets it as arguments. Plain `sbt run NAME` is unaffected. The last file wins.
+  Arguments after `--` (`sbt env run . -- --base HEAD`) replace `cmd` for that run.
+- **Agent per run**: No `--agent` flag (sbx has none either), but `agent: ${{ env.args.agent }}`
+  with a declared `agent` arg does it: `sbt env run --env-arg agent=opencode -- -c` runs `opencode
+  -c`.
+- **Registries**: Logins for pulling this sandbox's image and kits. Resolved at create and stored
+  for that sandbox only, ahead of a host-wide `sbt secret set --registry` login. Removed with the
+  sandbox.
+- **Bindings**: Extra domains a service's credential may go to. Global, as in sbx: added to your
+  secrets file at create, for every later sandbox. `env rm` leaves them; `env rm --prune-bindings`
   removes each declared service's whole binding. The service must be one `sbt secret set` knows.
-- **MCP servers.** `mcp.servers` entries with a `url` are registered as `sbt mcp add` would
-  (they stay after `env rm`, as in sbx) and given to the agent as `--static-mcp` gives them, so
-  the same limits apply (only `claude` so far). Entries with a `command` are refused: sbx runs
-  them on your machine from its MCP gateway, which smolbento doesn't have.
-- **`env create`** refuses a sandbox that already exists (use `env run`, or `env rm` first).
-  Secrets are stored at the sandbox's scope before the sandbox is made. A failed create leaves
-  them; `env rm` with the same files removes them.
-- **`env run`** on an existing sandbox starts it if needed and attaches, passing the file's
-  current `env` values to the session. It doesn't apply other changes (kits, ports, workspaces,
-  secrets, options): recreate with `env rm` and `env create`, as in sbx.
-- **`env exec`** takes the `sbt exec` flags, and the command after `--`. Without `--`, every
-  argument is the command and the files come from the current directory. A command with options
-  needs the `--` (`sbt env exec -- ls -la`), or they are read as `env exec`'s own.
-- **Kits.** `agent` can name a built-in agent, or a workload kit from `kits:`: a local kit by its
-  directory name, a registry kit by the last part of its repository name. The other kits are added
-  to it. A local kit path that doesn't exist, a `.zip` or a `git+` source is refused before any
-  secret is stored; a registry kit that can't be pulled fails after (`env rm` removes the secrets).
-- **Mounts.** `mounts:` maps a kit's [host mount](#kit-host-mounts) path to a directory of yours,
-  as `--mount` does; a relative directory is relative to the file that names it. Later files win
-  per path.
+- **MCP servers**: `mcp.servers` entries with a `url` are registered as `sbt mcp add` would (they
+  stay after `env rm`) and given to the agent as `--static-mcp` does, with the same limits. Entries
+  with a `command` are refused.
+- **`env create`**: Refuses an existing sandbox (use `env run`, or `env rm` first). Secrets are
+  stored before the sandbox is made; a failed create leaves them, and `env rm` with the same files
+  removes them.
+- **`env run`**: On an existing sandbox, starts it if needed and attaches, passing the file's
+  current `env` values. Other changes (kits, ports, workspaces, secrets, options) need `env rm` and
+  `env create`.
+- **`env exec`**: Takes the `sbt exec` flags and the command after `--`. Without `--`, every
+  argument is the command and files come from the current directory. A command with options needs
+  `--` (`sbt env exec -- ls -la`).
+- **Kits**: `agent` names a built-in agent, or a workload kit from `kits:` (a local kit by directory
+  name, a registry kit by the last part of its repository name). Other kits are added to it. A
+  missing local path, a `.zip` or a `git+` source is refused before any secret is stored. An
+  unpullable registry kit fails after that; `env rm` removes the secrets.
+- **Mounts**: `mounts:` maps a kit's [host mount](#kit-host-mounts) path to your directory, as
+  `--mount` does. Relative paths are relative to the file naming them; later files win per path.
 
-  ```yaml
-  mounts:
-    /home/agent/.cache/tool: ./cache
-  ```
+Lifecycle, as written in a file:
+
+```yaml
+lifecycle:
+  initialize:            # every `env create` and `env run`, before anything else
+    - name: deps         # optional label
+      command: ./scripts/setup.sh
+      workdir: ./tools   # optional; default: the project directory
+      timeout: 90s       # optional; a duration such as 1.5s or 1m30s
+  postCreate: [...]
+  preRemove: [...]
+```
+
+A background command must redirect its output (`cmd >/dev/null 2>&1 &`), or it fails five seconds
+after it exits. Ctrl-C ends the running command and what it started.
+
+Registry logins and bindings:
+
+```yaml
+registries:
+  ghcr.io:
+    username: {value: me}
+    secret: {command: gh auth token}
+bindings:
+  github:
+    apiKey:
+      domains: [uploads.github.com]
+```
 
 Not supported yet (exit 2, naming the field): `mcp` servers with a `command`,
-`sandboxOptions.profile`, `display`, `gpu` and `usb`, and `pullPolicy: always` (smolvm pulls
-only a missing image). `fuse` (`false` takes `/dev/fuse` away at each start) and
-`pullPolicy: missing|never` are accepted. The environment's files inside a writable mounted
-workspace are made read-only in the sandbox at each start, as sbx mounts them, unless
-`writableEnvFiles: true`. `refresh` and `backend` on a
-secret are accepted and do nothing. Secret service names must be ones `sbt secret set`
-knows; others are refused. See [sbx compatibility](sbx-compatibility.md#environment-files).
+`sandboxOptions.profile`, `display`, `gpu` and `usb`, and `pullPolicy: always`. `fuse` and
+`pullPolicy: missing|never` are accepted. Environment files inside a writable mounted workspace are
+made read-only at each start, unless `writableEnvFiles: true`. `refresh` and `backend` on a secret
+do nothing. Secret service names must be ones `sbt secret set` knows. See [sbx
+compatibility](sbx-compatibility.md#environment-files).
 
 ## Files and ownership
 
 Workspaces are mounted at the same absolute path as on your machine, so paths in errors and logs
-match. Inside the sandbox smolvm shows the workspace as owned by the `agent` user; files the agent creates show up on your
-machine owned by you. Files the agent creates are private to you (mode 600/700).
+match. In the sandbox, smolvm shows the workspace as owned by `agent`, and files the agent creates
+appear on your machine owned by you. On macOS, the virtiofs mount also makes them private to you:
+files are mode 600 and directories mode 700.
 
 ## Network policy
 
-Creating or starting a sandbox needs a network policy. The first time, `sbt` asks which one your
-sandboxes get, and saves the answer:
+Creating or starting a sandbox needs a network policy. The first time, `sbt` asks which one to use
+and saves the answer:
 
 | Mode | Meaning |
 |---|---|
 | `allow-all` | Open network |
-| `balanced` | Default deny, plus Docker Sandboxes' baseline: AI APIs, package registries, code hosts, container registries, cloud services, OS packages, certificate checks (and the Nix caches) |
+| `balanced` | Default deny, plus Docker Sandboxes' baseline of 195 rules (AI APIs, package registries, code hosts, container registries, cloud services, OS packages, certificate checks, Nix caches) |
 | `deny-all` | Nothing, unless you allow it |
 
-Without a terminal it can't ask and fails instead, so scripts and CI choose it up front:
-`sbt policy init balanced`.
+Without a terminal, `sbt` fails rather than ask: run `sbt policy init balanced` in scripts and CI.
 
 ```sh
 sbt policy allow network api.example.com,*.example.org   # applies to running sandboxes at once
@@ -907,39 +791,34 @@ sbt policy rm network --resource api.example.com
 sbt create claude . --deny-network evil.com,tracker.example   # deny rules for this sandbox only
 ```
 
-Rules take hosts (`api.x.com`), wildcards (`*.x.com`, `**.x.com`), IPs and CIDRs,
-comma-separated; `**` allows everything. See [sbx compatibility](sbx-compatibility.md) for where
-smolvm enforces a rule more loosely.
+Rules take hosts (`api.x.com`), wildcards (`*.x.com`, `**.x.com`), IPs and CIDRs, comma-separated.
+`**` allows everything. Where smolvm enforces a rule more loosely than sbx, see [sbx
+compatibility](sbx-compatibility.md).
 
 Good to know:
 
-- `run`/`create --deny-network <HOST>` adds a deny rule for the new sandbox only, exactly as
-  `sbt policy deny network --sandbox <NAME> <HOST>` does; repeat it or comma-separate hosts. It
-  applies only when the sandbox is created: on an existing sandbox `run` warns and changes nothing
-  (use `policy deny network --sandbox`). If the create fails, the rules it added are removed.
-- smolbento 0.2.0's `--deny-network` took no host and made the sandbox deny-all
-  (`deny_network = true` under `[sandboxes.<NAME>]` in `policy.toml`). Such sandboxes stay
-  deny-all, `policy reset` included; delete that line to give one the global mode again.
-- Hosts used by a sandbox's secrets, and their subdomains, are always reachable from it, so
-  `policy deny` of such a host, or of one under it, is refused and names the secret's service.
-- `balanced` is Docker's list of 195 rules; smolbento allows those hosts on any port (sbx limits
-  them to 443).
-- A deny with a port (`host.example.com:8080`, `10.0.0.0/8:22`) isn't enforced at all: smolvm can't
-  filter by port, so the host stays reachable on every port. Deny the host without a port to block
-  it. The one exception: a deny with exactly the same text as an allow rule cancels that allow.
-  `policy deny` says so when you add one, `policy ls` notes rules that aren't fully enforced, and
-  `policy ls --wide` and `policy check` show the details. `policy check` takes a port the same way
-  (`host.example.com:8080`); without one it checks port 443.
-- `sbt policy reset` stops running sandboxes, then removes the mode and every rule;
-  sandboxes deny-all from smolbento 0.2.0's `--deny-network` stay so. The next create or start
-  asks for a mode again.
-- Blocked requests come from smolvm's egress log. `policy approval` lists the hosts with no rule
-  yet; the host is the approval id.
+- `run` and `create --deny-network <HOST>` add a deny rule for the new sandbox only, as `sbt policy
+  deny network --sandbox <NAME> <HOST>` does. It applies only at create; on an existing sandbox
+  `run` warns and changes nothing. If the create fails, its rules are removed.
+- smolbento 0.2.0's `--deny-network` took no host and made the sandbox deny-all (`deny_network =
+  true` under `[sandboxes.<NAME>]` in `policy.toml`). Those stay deny-all, `policy reset` included;
+  delete the line to restore the global mode.
+- A sandbox's secret hosts, and their subdomains, are always reachable. `policy deny` of one is
+  refused, naming the secret's service.
+- A deny with a port (`host.example.com:8080`) isn't enforced: smolvm can't filter by port. Deny the
+  host without a port. The exception is a deny with exactly the same text as an allow, which cancels
+  that allow. `policy ls` notes rules that aren't fully enforced; `policy check` without a port
+  checks 443. Details are in [sbx compatibility](sbx-compatibility.md).
+- `balanced` allows its hosts on any port. sbx limits them to 443.
+- `sbt policy reset` stops running sandboxes, then removes the mode and every rule. The next create
+  or start asks for a mode again.
+- Blocked requests come from smolvm's egress log. `policy approval` lists hosts with no rule yet;
+  the host is the approval ID.
 
 ### Host services
 
-A sandbox reaches your machine's localhost as `host.docker.internal`, as in sbx, once a
-`localhost` rule allows it:
+A sandbox reaches your machine's localhost as `host.docker.internal` once a `localhost` rule allows
+it:
 
 ```sh
 sbt policy allow network --sandbox claude-myrepo localhost   # before the sandbox is created
@@ -949,27 +828,23 @@ sbt policy rm network --sandbox claude-myrepo --resource localhost   # closes it
 sbt policy allow network --sandbox claude-myrepo localhost           # opens it again, live
 ```
 
-- **The rule must apply when the sandbox is created.** Only your own `localhost` rules (global, or
-  `--sandbox NAME` for that name) give a sandbox host access, and only at create; it's recorded on
-  the sandbox. For it, later `localhost` rules open and close the host live. Any other sandbox is
-  created with your machine's loopback blocked for its life: a rule added afterwards prints
-  `note: NAME were created without host access; recreate them to use it`.
-- **Every port opens.** smolvm can't open a single host port yet, so `localhost:11434` opens every
-  port on your machine's `127.0.0.1` to those sandboxes, and `policy allow` warns
-  (`warning: smolvm can't open a single host port yet; …`). See
-  [Security](SECURITY.md#host-services-localhost-rules).
-- Kit rules never grant host access, and the `_builder` sandbox never has it.
-- An `allow-all` sandbox created with host access keeps it until it's recreated; `policy rm`
-  of its rule says so.
-- Each start adds `100.96.0.1 host.docker.internal` to the sandbox's `/etc/hosts`. The name
-  resolves in every sandbox, but only those created with host access can connect. An image
-  without a writable `/etc/hosts` gets a warning and no name. `127.0.0.1`, `::1` and
-  `host.docker.internal` rules aren't host-services rules (as in sbx, the rule must say
-  `localhost`). A blocked request gets connection refused, not sbx's `403 Approval required`.
+- Only your `localhost` rules (global, or `--sandbox NAME`) give host access, and only at create.
+  For such a sandbox, later `localhost` rules open and close access live. Other sandboxes have
+  loopback blocked for life; a rule added later prints `note: NAME were created without host access;
+  recreate them to use it`.
+- smolvm can't open a single host port yet, so `localhost:11434` opens every port on your
+  `127.0.0.1` to those sandboxes, and `policy allow` warns (`warning: smolvm can't open a single
+  host port yet; …`). See [Security](SECURITY.md#host-services-localhost-rules).
+- Kit rules never grant host access, and `_builder` never has it. An `allow-all` sandbox keeps host
+  access until recreated.
+- Each start adds `100.96.0.1 host.docker.internal` to `/etc/hosts`. The name resolves everywhere,
+  but only sandboxes created with host access can connect.
+- `127.0.0.1`, `::1` and `host.docker.internal` rules aren't host-services rules; the rule must say
+  `localhost`. A blocked request gets connection refused, not sbx's `403 Approval required`.
 
 ## Secrets
 
-Agents never see your API keys: inside the sandbox the variable holds a placeholder, and smolvm
+Agents never see your API keys. The variable holds a placeholder inside the sandbox, and smolvm
 swaps in the real value only on HTTPS requests to that service's hosts.
 
 ```sh
@@ -982,37 +857,30 @@ sbt secret ls
 sbt secret rm github
 ```
 
-`--ref` takes an `op://…` reference or an AWS Secrets Manager ARN (the ARN's region is used).
-Values typed at the prompt or given with `-t` go to your OS keychain; see
-[Configuration](configuration.md#secret-values).
-
-`set-custom` takes bare host names (`api.example.com`, no scheme, port, path or IP; repeat
-`--host` for more), or `*.example.com` for every subdomain of a domain (`*.com` is refused, as smolvm
-refuses it; smolvm has no public suffix list, so `*.co.uk` is accepted). It warns when a host name
-doesn't resolve: smolvm looks them up when it creates a sandbox, and the create fails while one
-doesn't resolve.
-Removing a custom service's last secret (in any scope) removes the service too.
-
-A `--command` source runs from a fresh temporary directory, not your current one: give helper
-scripts by absolute path or put them on `PATH`. A relative path such as `./get-token.sh` no longer
-works.
-
-Built-in services: `anthropic`, `claude` (Claude Code's `claude setup-token` token), `cursor`,
-`droid`, `github`, `google`, `groq`, `mistral`, `nebius`, `openai`, `openrouter`, `xai`.
+- `--ref` takes an `op://…` reference or an AWS Secrets Manager ARN (its region is used). Typed or
+  `-t` values go to your OS keychain ([Configuration](configuration.md#secret-values)).
+- `set-custom` takes bare host names (no scheme, port, path or IP; repeat `--host`), or
+  `*.example.com` for every subdomain. `*.com` is refused, as smolvm refuses it; `*.co.uk` is
+  accepted, since smolvm has no public suffix list. It warns about a name that doesn't resolve, and
+  the create fails while one doesn't resolve. Removing a custom service's last secret removes the
+  service too.
+- A `--command` source runs in a fresh temporary directory: give helper scripts an absolute path or
+  put them on `PATH`. `./get-token.sh` no longer works.
+- Built-in services: `anthropic`, `claude` (Claude Code's `claude setup-token` token), `cursor`,
+  `droid`, `github`, `google`, `groq`, `mistral`, `nebius`, `openai`, `openrouter`, `xai`.
 
 When things take effect:
 
-- A sandbox binds the services that have a secret when it's **created**, and can always reach
-  those services' hosts.
-- A new value for a bound service applies on the sandbox's **next start** (sandboxes stop after each
-  session, so usually the next `sbt run`).
-- A secret for a service a sandbox wasn't created with needs the sandbox **recreated**; `secret set`
-  tells you which.
+- A sandbox binds the services that have a secret when it's **created**, and can always reach their
+  hosts.
+- A new value for a bound service applies at the **next start**, usually the next `sbt run`.
+- A secret for a service the sandbox wasn't created with needs a **recreate**; `secret set` tells
+  you which.
 
 ### Registry credentials
 
 A registry credential lets smolbento pull kits and images that need a login. It stays on your
-machine: sandboxes never get it.
+machine; sandboxes never get it.
 
 ```sh
 sbt secret set --registry dhi.io --username alice --password-stdin < token.txt   # Docker Hub token
@@ -1021,38 +889,34 @@ sbt secret ls
 sbt secret rm --registry dhi.io
 ```
 
-The password or token goes to your OS keychain; `secrets.toml` keeps only the host and user name.
-Omit `--username` for registries that take a token alone (e.g. ghcr.io); Docker Hub,
-`dhi.io` and Quay robots need it. An empty `--username` counts as none. A registry whose token server is on another host needs
-`--registry-auth-endpoint https://…`, the exact URL to trust: the login is only ever sent over
-HTTPS (or plain HTTP to a registry on localhost) to the registry itself, `auth.docker.io` for Docker Hub, or that URL.
+The token goes to your OS keychain; `secrets.toml` keeps the host and user name. Omit `--username`
+for token-only registries such as ghcr.io. Docker Hub, `dhi.io` and Quay robots need it; an empty
+`--username` counts as none. For a token server on another host, pass `--registry-auth-endpoint
+https://…` with the exact URL. The login goes only over HTTPS (or plain HTTP to a localhost
+registry), and only to the registry, `auth.docker.io` for Docker Hub, or that URL.
 
-It's used for:
+Used for:
 
-- **Published kits** pulled from that registry. A stored login replaces anonymous pulls for that
-  registry, so an expired token also breaks pulls of its public kits; remove it with
-  `sbt secret rm --registry HOST`.
-- **Local kit builds.** The `_builder` sandbox can reach every registry you stored a credential for,
-  and smolvm sets the `Authorization` header on its requests there. Before each build that names
-  `HOST/<repo>` in its descriptor, smolbento gets a short-lived pull token for those repositories
-  on your machine and starts the builder fresh with it, so a build must start pulling within a few
-  minutes. Only `HOST/…` references count: an image named without its registry gets no token.
-  A build that reaches a registry you stored a login for without naming it that way gets
-  `502 credential unavailable` from it (not an anonymous pull) and fails, naming the registry: write
-  the image as `HOST/<repo>` in the kit, or remove the login with `sbt secret rm --registry HOST`.
-  Docker Hub logins don't apply to local kit builds yet (`FROM debian` gets no token), nor do
-  logins for registries on a non-default port (`registry.corp:5000`). Registries that answer with
-  Basic only (no Bearer token service) work for kit pulls but not for local builds.
-  Concurrent local kit builds that use a registry login restart the builder; run them one at a time.
-  Adding or removing a registry credential recreates the builder (and its build cache) at the next
-  build.
+- **Published kits** from that registry. A stored login replaces anonymous pulls, so an expired
+  token also breaks that registry's public kits. Remove it with `sbt secret rm --registry HOST`.
+- **Local kit builds.** The `_builder` sandbox can reach every logged-in registry, and smolvm sets
+  the `Authorization` header there. Before a build that names `HOST/<repo>` in its descriptor,
+  smolbento gets a short-lived pull token and starts the builder with it, so a build must start
+  pulling within a few minutes. Only `HOST/…` references count.
+- A build that reaches a logged-in registry without naming it that way gets `502 credential
+  unavailable` and fails, naming the registry. Write the image as `HOST/<repo>`, or remove the
+  login.
+- Not yet for local builds: Docker Hub logins (`FROM debian` gets no token) and non-default ports
+  (`registry.corp:5000`). Registries that accept Basic auth only work for kit pulls, not builds.
+- Concurrent builds that use a registry login restart the builder, so run them one at a time. Adding
+  or removing a login recreates the builder and its cache at the next build.
 
-Registry logins are listed in plain `sbt secret ls` only (not with `-g`, `--sandbox` or a service
-filter). `--sandbox` and `--all-sandboxes` (a login for a sandbox's own `docker pull`) aren't supported
-yet.
+Registry logins appear only in plain `sbt secret ls`, not with `-g`, `--sandbox` or a service
+filter. `--sandbox` and `--all-sandboxes` (a login for a sandbox's own `docker pull`) aren't
+supported yet.
 
-`sbt rm` removes that sandbox's own secrets and its per-sandbox policy. `sbt reset` removes all
-secrets too, unless you pass `--preserve-secrets`.
+`sbt rm` removes that sandbox's own secrets and per-sandbox policy. `sbt reset` removes all secrets
+too, unless you pass `--preserve-secrets`.
 
 ## Ports
 
@@ -1063,7 +927,7 @@ sbt ports claude-myrepo                         # list
 sbt ports claude-myrepo --unpublish 8080:80
 ```
 
-Ports bind `127.0.0.1` and `[::1]`. UDP ports can only be changed while the sandbox is stopped, so a change
+Ports bind `127.0.0.1` and `[::1]`. UDP ports change only while the sandbox is stopped, so a change
 that includes one doesn't start it.
 
 ## Copy files
@@ -1074,9 +938,9 @@ sbt cp claude-myrepo:/home/agent/.bash_history ./history
 sbt cp -L ./linked-file claude-myrepo:/tmp/f     # follow a symlink on your side
 ```
 
-One side must be `SANDBOX:/absolute/path`. Copying between two sandboxes isn't supported.
-A directory copies into a sandbox like `cp -r`, with symlinks inside it copied as the files they
-point to . Out of a sandbox, only single files copy.
+One side must be `SANDBOX:/absolute/path`; sandbox-to-sandbox copies aren't supported. A directory
+copies in like `cp -r`, with symlinks copied as the files they point to. Out of a sandbox, only
+single files copy.
 
 ## List
 
@@ -1086,9 +950,9 @@ sbt ls --json            # or --format json|yaml
 sbt ls -q                # names only
 ```
 
-`sbt` with no arguments also lists sandboxes. `sbt inspect NAME` shows one sandbox: agent, kits,
-state, image, workspace, host mounts, secrets, ports and sessions (`--json` or
-`--format json|yaml` for scripts).
+`sbt` with no arguments also lists sandboxes. `sbt inspect NAME` shows one sandbox's agent, kits,
+state, image, workspace, host mounts, secrets, ports and sessions (`--json` or `--format
+json|yaml`).
 
 ```
 SANDBOX         AGENT    STATUS      PORTS                 WORKSPACE             CREATED

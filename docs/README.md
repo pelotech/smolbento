@@ -1,28 +1,13 @@
 # smolbento
 
-smolbento runs coding agents (Claude Code, Codex, Gemini, OpenCode and others) inside
-[smolvm](https://github.com/smol-machines/smolvm) microVMs, with the same command line as
-Docker's [Sandboxes](https://docs.docker.com/ai/sandboxes/) (`sbx`). It's one binary, invoked as
-`sbt`, `sbx` or `bento`, and it needs no daemon and no Docker on the host.
+smolbento runs coding agents (Claude Code, Codex, Cursor and others) in
+[smolvm](https://github.com/smol-machines/smolvm) microVMs, with the command line of Docker
+[Sandboxes](https://docs.docker.com/ai/sandboxes/) (`sbx`). Start with [Install](install.md), then
+read [Usage](usage.md).
 
-Each sandbox is a small VM with its own kernel and its own Docker engine. Your project directory is
-mounted at the same path inside it, and the agent runs with permission prompts turned off, because
-the VM is the boundary.
-
-## Quick start
-
-```sh
-# smolvm 1.34.4 or newer
-brew install smol-machines/tap/smolvm
-# from a checkout of this repo
-just install
-cd ~/code/myrepo
-# create a sandbox for this directory and attach
-sbt run claude
-```
-
-When you exit the agent, the sandbox stops; run `sbt run claude` again to pick up where you left
-off. See [Usage](usage.md) for everything else.
+Each sandbox is a small VM with its own kernel and Docker engine. Your project directory is mounted
+at the same path inside it. The agent runs with permission prompts off, because the VM is the
+boundary.
 
 ## Pages
 
