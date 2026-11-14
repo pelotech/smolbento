@@ -1,5 +1,22 @@
 # Changelog
 
+## [0.23.0](https://github.com/pelotech/smolbento/compare/v0.22.1...v0.23.0) (2026-11-14)
+
+
+### Features
+
+* **ssh-agent:** ssh-agent@1 authenticate limits (5g) ([#108](https://github.com/pelotech/smolbento/issues/108)) ([75d5f31](https://github.com/pelotech/smolbento/commit/75d5f315bb47f2a3e7b706323a1e13d1f0dd843d))
+
+
+### Refactors
+
+* **sandbox:** map the workspace through smolvm instead of remapping uids ([#105](https://github.com/pelotech/smolbento/issues/105)) ([36d20e3](https://github.com/pelotech/smolbento/commit/36d20e3a5e80d3a343eaf692ea06a071d32dbaab))
+
+
+### Docs
+
+* make the docs concise and direct ([#107](https://github.com/pelotech/smolbento/issues/107)) ([06be613](https://github.com/pelotech/smolbento/commit/06be613c66438f653a7d380a2d0de58ef13dc836))
+
 ## [0.22.1](https://github.com/pelotech/smolbento/compare/v0.22.0...v0.22.1) (2026-11-13)
 
 
