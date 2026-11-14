@@ -44,7 +44,14 @@ fn install<R: Runner>(ctx: &Ctx<R>, ssh_dir: &Path) -> Result<i32> {
             .with_context(|| format!("creating {}", ssh_dir.display()))?;
     }
     let old = read(&config)?;
-    let new = block::upsert(&old, &block::render(&binary(ctx)))?;
+    let smolvm = smolvm_path(ctx);
+    if smolvm.is_none() {
+        eprintln!(
+            "warning: smolvm isn't on your PATH; IDEs started from the Dock or a launcher may not \
+find it (set smolvm.path, then run `sbt setup ssh` again)"
+        );
+    }
+    let new = block::upsert(&old, &block::render(&binary(ctx), smolvm.as_deref()))?;
     if new != old {
         // A new file is private; an existing one keeps its mode.
         write_atomic(
@@ -86,8 +93,9 @@ fn remove<R: Runner>(ctx: &Ctx<R>, ssh_dir: &Path) -> Result<i32> {
     Ok(0)
 }
 
-/// How `ssh` should call us: the name this binary was run as, when that name on PATH is this very
-/// binary (not a versioned Cellar path); else its absolute path.
+/// How `ssh` should call us, as an absolute path (IDEs run the ProxyCommand with a minimal PATH):
+/// where the name this binary was run as is found on PATH, when that is this very binary (a stable
+/// link such as `/opt/homebrew/bin/sbt`, not a versioned Cellar path); else this binary's path.
 fn binary<R: Runner>(ctx: &Ctx<R>) -> String {
     let exe = std::env::current_exe()
         .ok()
@@ -102,10 +110,25 @@ fn binary<R: Runner>(ctx: &Ctx<R>) -> String {
         if let (Some(found), Some(exe)) = (on_path(name), &exe)
             && found.canonicalize().ok().as_ref() == Some(exe)
         {
-            return name.to_string();
+            return found.display().to_string();
         }
     }
     exe.map_or_else(|| "sbt".into(), |e| e.display().to_string())
+}
+
+/// smolvm's absolute path, as smolbento would run it now (`smolvm.path`, looked up on PATH when
+/// it's a bare name), so the ProxyCommand doesn't depend on the IDE's PATH. `None` if not found.
+fn smolvm_path<R: Runner>(ctx: &Ctx<R>) -> Option<String> {
+    let configured = ctx.settings.value("smolvm.path").ok()?;
+    let p = Path::new(&configured);
+    if p.is_absolute() {
+        return p.is_file().then(|| configured.clone());
+    }
+    let path = ctx.env.get("PATH")?;
+    std::env::split_paths(path)
+        .map(|d| d.join(&configured))
+        .find(|c| c.is_file() && c.is_absolute())
+        .map(|c| c.display().to_string())
 }
 
 #[cfg(test)]
