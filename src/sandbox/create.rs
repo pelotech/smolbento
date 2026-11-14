@@ -271,7 +271,18 @@ pub fn spec(req: &CreateRequest) -> CreateSpec {
         // The workload user is the one sessions run as: smolvm shows the workspace as owned by
         // it. Startup steps exec as root explicitly.
         user: Some(workload_user(&meta)),
-        cmd: vec!["sleep".into(), "infinity".into()],
+        cmd: boot_command(req),
+    }
+}
+
+/// What the machine runs at every boot (smolvm reruns it on each start, and keeps the machine up
+/// after it exits). A v3 workload kit launches its image's `Entrypoint` + `Cmd`, as the kit spec's
+/// default launch mode says (an image user, `sbx.user`, marks a v3 workload); every other sandbox,
+/// presets and the internal builder included, just idles for `exec` and sessions.
+fn boot_command(req: &CreateRequest) -> Vec<String> {
+    match (&req.user, &req.command) {
+        (Some(_), Some(c)) if !c.is_empty() && !name::is_internal(&req.name) => c.clone(),
+        _ => vec!["sleep".into(), "infinity".into()],
     }
 }
 
@@ -317,6 +328,38 @@ mod tests {
         assert_eq!(user("tool", Some("0")).0.as_deref(), Some("0"));
         // The internal builder stays root.
         assert_eq!(user("_builder", None).0.as_deref(), Some("root"));
+    }
+
+    #[test]
+    fn a_v3_workload_boots_its_image_command_and_everything_else_idles() {
+        let cmd = |name: &str, user: Option<&str>, command: Option<&[&str]>| {
+            let mut req = request(false, vec![]);
+            req.name = name.into();
+            req.user = user.map(String::from);
+            req.command = command.map(|c| c.iter().map(|s| s.to_string()).collect());
+            spec(&req)
+        };
+        let idle = ["sleep", "infinity"];
+        // A v3 workload (an image user): its Entrypoint + Cmd, as that user, after `--`.
+        let wl = cmd(
+            "tool",
+            Some("somebody:1001"),
+            Some(&["/bin/agent", "--x", "run"]),
+        );
+        assert_eq!(wl.cmd, ["/bin/agent", "--x", "run"]);
+        let args = wl.to_args();
+        let tail = &args[args.len() - 6..];
+        assert_eq!(
+            tail,
+            ["-u", "somebody:1001", "--", "/bin/agent", "--x", "run"]
+        );
+        // A preset, a v2 workload (a command but no image user), a v3 image without a command,
+        // and the internal builder keep `sleep infinity`.
+        assert_eq!(cmd("claude.repo", None, None).cmd, idle);
+        assert_eq!(cmd("tool", None, Some(&["wl"])).cmd, idle);
+        assert_eq!(cmd("tool", Some("0"), None).cmd, idle);
+        assert_eq!(cmd("tool", Some("0"), Some(&[])).cmd, idle);
+        assert_eq!(cmd("_builder", Some("0"), Some(&["wl"])).cmd, idle);
     }
 
     #[test]
