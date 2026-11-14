@@ -1,0 +1,195 @@
+#!/usr/bin/env bash
+# Conformance adapter: drives smolbento through docs/spec/conformance.md of docker/sandbox-kit-spec.
+# It claims only com.docker.sandbox/ssh-agent@1 and implements the verbs those checks call.
+#
+# Environment:
+#   SMOLBENTO_BIN      the binary to drive (default: smolbento on PATH)
+#   SMOLBENTO_TCK_HOME where the adapter keeps its isolated HOME, config, data, cache and
+#                      per-sandbox state (default: /tmp/sbt-tck-<uid>). Keep it short: the suite
+#                      runs the adapter with a long sentinel HOME, and smolvm puts machine sockets
+#                      under HOME, where unix socket paths top out near 100 bytes. The runs also
+#                      keep smolvm's own state (machines, images) here, apart from the user's.
+#
+# smolbento's own config, sandboxes and secrets are never touched: every call runs with
+# SMOLBENTO_CONFIG_DIR/DATA_DIR/CACHE_DIR under SMOLBENTO_TCK_HOME. The suite's --ssh-agent and
+# --ssh-known-hosts are stored per sandbox id and set as smolbento's ssh.agentSocketPath and
+# ssh.knownHostsFile environment on every later verb (smolbento serves the agent while exec runs).
+set -eu
+
+bin=${SMOLBENTO_BIN:-smolbento}
+home=${SMOLBENTO_TCK_HOME:-/tmp/sbt-tck-$(id -u)}
+mkdir -p "$home/home"
+export HOME=$home/home
+unset XDG_CACHE_HOME XDG_DATA_HOME XDG_CONFIG_HOME
+state=$home/state
+mkdir -p "$home/config" "$home/data" "$home/cache" "$state"
+
+die() {
+	echo "smolbento-adapter: $*" >&2
+	exit 1
+}
+
+# Runs smolbento isolated, with the sandbox's agent and host keys when it has them.
+sbt() {
+	id=$1
+	shift
+	if [ -f "$state/$id.agent" ]; then
+		SMOLBENTO_SSH_AGENT_SOCKET=$(cat "$state/$id.agent")
+		export SMOLBENTO_SSH_AGENT_SOCKET
+	else
+		# Never fall back to the operator's agent.
+		unset SMOLBENTO_SSH_AGENT_SOCKET SSH_AUTH_SOCK || true
+	fi
+	if [ -f "$state/$id.known-hosts" ]; then
+		SMOLBENTO_SSH_KNOWN_HOSTS_FILE=$(cat "$state/$id.known-hosts")
+		export SMOLBENTO_SSH_KNOWN_HOSTS_FILE
+	fi
+	SMOLBENTO_CONFIG_DIR=$home/config SMOLBENTO_DATA_DIR=$home/data SMOLBENTO_CACHE_DIR=$home/cache \
+		SMOLBENTO_KIT_ALLOW_LOCAL_KITS=true \
+		"$bin" "$@"
+}
+
+# The isolated config starts with no network policy; the kit builder needs the network.
+if [ ! -f "$home/config/policy.toml" ]; then
+	sbt none policy init allow-all >&2 || die "could not initialise the network policy"
+fi
+
+# Capability types a kit file requires (entries not marked `optional: true`) that this adapter
+# doesn't claim; prints the first. Reads the fixtures' plain `- type:` list layout.
+required_unclaimed() {
+	awk -v claimed="$($0 capabilities)" '
+		function flush() { if (ty != "" && !opt && index("\n" claimed "\n", "\n" ty "\n") == 0 && ty ~ /^com\.docker\.sandbox\//) { print ty; exit } }
+		/^[[:space:]]*- type:/ { flush(); ty = $3; opt = 0; next }
+		/^[[:space:]]+optional:[[:space:]]*true/ { opt = 1 }
+		/^[^[:space:]-]/ { flush(); ty = "" }
+		END { flush() }
+	' "$1"
+}
+
+[ $# -gt 0 ] || die "usage: smolbento-adapter <verb> [args]"
+verb=$1
+shift
+
+case "$verb" in
+capabilities)
+	echo com.docker.sandbox/ssh-agent@1
+	;;
+
+create)
+	name="" agent="" known_hosts="" first=""
+	extra=()
+	while [ $# -gt 0 ]; do
+		case "$1" in
+		--name) name=$2; shift 2 ;;
+		--ssh-agent) agent=$2; shift 2 ;;
+		--ssh-known-hosts) known_hosts=$2; shift 2 ;;
+		--workspace-mode)
+			case "$2" in
+			none) ;;
+			internal | host | cloned)
+				echo "unsupported workspace mode: $2" >&2
+				exit 2
+				;;
+			*) die "unknown workspace mode: $2" ;;
+			esac
+			shift 2
+			;;
+		--arg) extra+=(--kit-arg "$2"); shift 2 ;;
+		--env) extra+=(--env "$2"); shift 2 ;;
+		--skills-host-mode | --skills-host-store | --git-identity-config | --docker-auth-config | --open-url-budget)
+			echo "unsupported option: $1" >&2
+			exit 2
+			;;
+		--open-url-isolated)
+			echo "unsupported option: $1" >&2
+			exit 2
+			;;
+		-*) die "unknown create option: $1" ;;
+		*)
+			# A local kit reference has to say so: smolbento reads a bare name as a registry one.
+			ref=$1
+			case "$ref" in /* | ./* | ../*) ;; *) [ ! -e "$ref" ] || ref=./$ref ;; esac
+			if [ -z "$first" ]; then first=$ref; else extra+=(--kit "$ref"); fi
+			shift
+			;;
+		esac
+	done
+	[ -n "$first" ] || die "create needs at least one kit reference"
+	[ -n "$name" ] || name=kit-tck-$(od -An -tx1 -N5 /dev/urandom | tr -d ' \n')
+	case "$name" in *[!a-zA-Z0-9_-]*) die "invalid sandbox name: $name" ;; esac
+	id=$name
+	rm -f "$state/$id.agent" "$state/$id.known-hosts"
+	[ -z "$agent" ] || printf '%s\n' "$agent" >"$state/$id.agent"
+	[ -z "$known_hosts" ] || printf '%s\n' "$known_hosts" >"$state/$id.known-hosts"
+	# A kit requiring a capability type this adapter doesn't claim is refused, even where
+	# smolbento could provide it: the claim is what the suite judges.
+	for ref in "$first" ${extra[@]+"${extra[@]}"}; do
+		[ -f "$ref/kit.yaml" ] || [ -d "$ref" ] || continue
+		for f in "$ref"/*.yaml; do
+			[ -f "$f" ] || continue
+			t=$(required_unclaimed "$f")
+			if [ -n "$t" ]; then
+				echo "refusing: $f requires unclaimed $t" >&2
+				rm -f "$state/$id.agent" "$state/$id.known-hosts"
+				exit 2
+			fi
+		done
+	done
+	# The first reference is the workload; no workspace path makes a mountless sandbox.
+	status=0
+	err=$(mktemp)
+	sbt "$id" create --no-progress --name "$id" "$first" ${extra[@]+"${extra[@]}"} 2>"$err" >&2 || status=$?
+	cat "$err" >&2
+	if [ "$status" -ne 0 ]; then
+		rm -f "$state/$id.agent" "$state/$id.known-hosts"
+		# smolbento exits 1 for every error; its refusals are told apart by message, which is
+		# why this lives in the adapter.
+		if grep -qE 'is not supported by smolbento|needs an SSH agent, but' "$err"; then
+			status=2
+		fi
+		rm -f "$err"
+		exit "$status"
+	fi
+	rm -f "$err"
+	echo "$id"
+	;;
+
+exec)
+	id=$1
+	shift
+	opts=()
+	while [ $# -gt 0 ] && [ "$1" != -- ]; do
+		case "$1" in
+		--cwd) opts+=(--workdir "$2"); shift 2 ;;
+		--env) opts+=(--env "$2"); shift 2 ;;
+		*) die "unknown exec option: $1" ;;
+		esac
+	done
+	[ "${1:-}" = -- ] && shift
+	# No -t and no -i: the contract promises neither a TTY nor stdin. The status is proxied.
+	exec_status=0
+	sbt "$id" exec ${opts[@]+"${opts[@]}"} "$id" "$@" || exec_status=$?
+	exit "$exec_status"
+	;;
+
+stop)
+	sbt "$1" stop "$1" >&2
+	;;
+
+start)
+	sbt "$1" start "$1" >&2
+	;;
+
+rm)
+	id=$1
+	status=0
+	sbt "$id" rm --force "$id" >&2 || status=$?
+	rm -f "$state/$id.agent" "$state/$id.known-hosts"
+	exit "$status"
+	;;
+
+*)
+	echo "unsupported verb: $verb" >&2
+	exit 1
+	;;
+esac
