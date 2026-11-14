@@ -92,8 +92,9 @@ pub enum Cmd {
     /// Manage skills shared with agents in sandboxes (experimental)
     #[command(subcommand)]
     Skills(SkillsCmd),
-    /// SSH access (not implemented yet)
-    Setup(Passthrough),
+    /// Set up host integrations
+    #[command(subcommand)]
+    Setup(SetupCmd),
     /// Dashboard (not implemented yet)
     Tui(Passthrough),
     #[command(hide = true)]
@@ -120,6 +121,9 @@ pub enum Cmd {
     /// (for e2e tests, which can't attach)
     #[command(name = "_bridge", hide = true)]
     Bridge { sandbox: String },
+    /// The SSH server `ssh NAME.sbx` talks to, run by the `ProxyCommand` that `setup ssh` writes
+    #[command(subcommand, hide = true)]
+    Ssh(SshCmd),
     /// Serves one connection to a sandbox's agent or bridge socket on stdin (run by the unit that
     /// owns the socket)
     #[command(name = "_serve", hide = true)]
@@ -146,10 +150,38 @@ impl Cmd {
                 | Cmd::Ports(_)
                 | Cmd::UploadPack { .. }
                 | Cmd::Bridge { .. }
+                | Cmd::Ssh(_)
                 | Cmd::Template(TemplateCmd::Save(_))
                 | Cmd::Env(EnvCmd::Create(_) | EnvCmd::Run(_) | EnvCmd::Exec(_) | EnvCmd::Rm(_))
         )
     }
+}
+
+#[derive(Debug, Subcommand)]
+pub enum SshCmd {
+    /// Serves SSH for the sandbox named by HOST (NAME.sbx) on stdin and stdout
+    Proxy { host: String },
+}
+
+#[derive(Debug, Subcommand)]
+pub enum SetupCmd {
+    /// Let `ssh NAME.sbx` reach a sandbox (adds a managed block to ~/.ssh/config)
+    Ssh(SetupSshArgs),
+}
+
+#[derive(Debug, Args)]
+pub struct SetupSshArgs {
+    /// Add connections for desktop apps (not supported)
+    #[arg(long)]
+    pub auto_create: bool,
+    #[command(subcommand)]
+    pub cmd: Option<SetupSshCmd>,
+}
+
+#[derive(Debug, Subcommand)]
+pub enum SetupSshCmd {
+    /// Remove the managed block from ~/.ssh/config
+    Remove,
 }
 
 #[derive(Debug, Subcommand)]

@@ -5,12 +5,14 @@ mod error;
 pub mod fake;
 mod network;
 mod pull;
+mod spawn;
 mod types;
 
 pub use client::{CreateSpec, Credential, ExecSpec, Mount, PortMap, Smolvm};
 pub use error::SmolvmError;
 pub use network::{AllowList, LOOPBACK, NetworkSpec};
 pub use pull::{PullProgress, pull_progress};
+pub use spawn::{Proc, ProcCtl, ProcessSpawner, Pty};
 pub use types::{EgressEvent, Machine, MachineState, PublishedPort};
 
 use std::io::{Read, Write};
@@ -59,6 +61,11 @@ pub trait Runner {
     /// Runs smolvm attached to this terminal (stdio inherited) and returns its exit code.
     /// Used for `exec`, so raw mode, resizes and colour pass straight through.
     fn interactive(&self, args: &[String]) -> Result<i32>;
+    /// A spawner of smolvm processes with piped or pty stdio (the SSH server's), if this runner
+    /// can start them.
+    fn spawner(&self) -> Option<ProcessSpawner> {
+        None
+    }
 }
 
 /// Spawns the real smolvm binary.
@@ -221,6 +228,13 @@ impl Runner for ProcessRunner {
             code: exit_code(status),
             stdout: String::from_utf8_lossy(&stdout.context("reading smolvm stdout")?).into_owned(),
             stderr: String::from_utf8_lossy(&stderr.context("reading smolvm stderr")?).into_owned(),
+        })
+    }
+
+    fn spawner(&self) -> Option<ProcessSpawner> {
+        Some(ProcessSpawner {
+            bin: self.bin.clone(),
+            env: self.env.clone(),
         })
     }
 

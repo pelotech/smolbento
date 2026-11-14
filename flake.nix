@@ -62,7 +62,16 @@
             pname = "smolbento";
             version = (builtins.fromTOML (builtins.readFile ./Cargo.toml)).package.version;
             src = ./.;
-            cargoLock.lockFile = ./Cargo.lock;
+            cargoLock = {
+              lockFile = ./Cargo.lock;
+              # Temporary: russh from git until a release pins ssh-key 0.7.0-rc.12+; then drop this.
+              outputHashes = {
+                "russh-0.65.1" = "sha256-4972RiU0ayW6snBUsJ2ju3yR9dwsGBeaKwOWsJrmprA=";
+                "russh-cryptovec-0.62.0" = "sha256-4972RiU0ayW6snBUsJ2ju3yR9dwsGBeaKwOWsJrmprA=";
+                "russh-util-0.52.0" = "sha256-4972RiU0ayW6snBUsJ2ju3yR9dwsGBeaKwOWsJrmprA=";
+                "pageant-0.2.5" = "sha256-4972RiU0ayW6snBUsJ2ju3yR9dwsGBeaKwOWsJrmprA=";
+              };
+            };
             # Some unit tests read host facts (memory, free ports) the build sandbox hides; CI runs them.
             doCheck = false;
             postInstall = ''

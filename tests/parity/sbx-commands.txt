@@ -146,6 +146,9 @@ mcp load linear --sandbox my-sandbox
 mcp unload linear --sandbox my-sandbox
 env plan
 setup ssh
+setup ssh remove
+setup ssh --auto-create
+ssh proxy my-sandbox.sbx
 tui
 # Native
 settings ls
