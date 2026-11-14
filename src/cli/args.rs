@@ -517,6 +517,15 @@ pub struct Passthrough {
     pub args: Vec<String>,
 }
 
+/// An environment file's `sandboxOptions.rootSize`, `dockerSize` and `clonedWorkspaceSize`, as
+/// written (such as `30g`).
+#[derive(Debug, Clone, Default, PartialEq, Eq)]
+pub struct DiskSizes {
+    pub root: Option<String>,
+    pub docker: Option<String>,
+    pub cloned_workspace: Option<String>,
+}
+
 /// Options shared by `run` and `create`.
 #[derive(Debug, Clone, Default, Args)]
 pub struct SandboxOpts {
@@ -563,14 +572,9 @@ pub struct SandboxOpts {
     /// An environment file's `sandboxOptions.fuse: false`.
     #[arg(skip)]
     pub no_fuse: bool,
-    /// An environment file's `sandboxOptions` disk sizes (`rootSize`, `dockerSize`,
-    /// `clonedWorkspaceSize`), as written.
+    /// An environment file's `sandboxOptions` disk sizes.
     #[arg(skip)]
-    pub root_size: Option<String>,
-    #[arg(skip)]
-    pub docker_size: Option<String>,
-    #[arg(skip)]
-    pub cloned_workspace_size: Option<String>,
+    pub disk: DiskSizes,
     /// An environment's files in its mounted workspaces, kept read-only in the guest.
     #[arg(skip)]
     pub read_only_files: Vec<String>,
@@ -1212,7 +1216,7 @@ pub enum SecretCmd {
     Import(Passthrough),
 }
 
-#[derive(Debug, Args)]
+#[derive(Debug, Default, Args)]
 pub struct SecretSource {
     /// The value (prefer the prompt: values on the command line reach shell history)
     #[arg(short = 't', long = "token", alias = "value")]

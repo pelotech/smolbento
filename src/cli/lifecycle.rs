@@ -343,7 +343,7 @@ mod tests {
     use clap::Parser;
 
     use super::super::request::*;
-    use super::super::{Cli, Cmd, SandboxOpts};
+    use super::super::{Cli, Cmd, DiskSizes, SandboxOpts};
     use crate::testutil::*;
 
     #[test]
@@ -875,21 +875,29 @@ mod tests {
 
         // An environment file's sizes: the larger storage size wins, and sizes round up to GiB.
         let opts = SandboxOpts {
-            root_size: Some("24g".into()),
-            docker_size: Some("30g".into()),
-            cloned_workspace_size: Some("35500m".into()),
+            disk: DiskSizes {
+                root: Some("24g".into()),
+                docker: Some("30g".into()),
+                cloned_workspace: Some("35500m".into()),
+            },
             ..Default::default()
         };
         let req = build_request(&t.ctx, "shell", &[], &opts, false).unwrap();
         assert_eq!((req.storage_gib, req.overlay_gib), (Some(35), Some(24)));
         let opts = SandboxOpts {
-            root_size: Some("512m".into()),
+            disk: DiskSizes {
+                root: Some("512m".into()),
+                ..Default::default()
+            },
             ..Default::default()
         };
         let req = build_request(&t.ctx, "shell", &[], &opts, false).unwrap();
         assert_eq!(req.overlay_gib, Some(1));
         let opts = SandboxOpts {
-            root_size: Some("lots".into()),
+            disk: DiskSizes {
+                root: Some("lots".into()),
+                ..Default::default()
+            },
             ..Default::default()
         };
         let err = build_request(&t.ctx, "shell", &[], &opts, false).unwrap_err();

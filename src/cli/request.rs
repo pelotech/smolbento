@@ -4,7 +4,7 @@
 use anyhow::{Context, Result, bail};
 
 use super::progress::Progress;
-use super::{Ctx, SandboxOpts};
+use super::{Ctx, DiskSizes, SandboxOpts};
 use crate::agents;
 use crate::kits::args::ArgValues;
 use crate::kits::capability;
@@ -106,19 +106,7 @@ fn base_request<R: Runner>(
         Some(m) => options::parse_memory(m)?,
         None => options::default_memory_mib(options::host_memory_mib()?),
     };
-    let size = |v: &Option<String>, what| v.as_deref().map(|v| util::size_gib(v, what)).transpose();
-    let overlay_gib = size(&opts.root_size, "sandboxOptions.rootSize")?;
-    // Docker's data and a clone's workspace both live on the storage disk: the larger size wins.
-    let setting = Some(ctx.settings.value("sandbox.disk.dockerVolume")?).filter(|v| !v.is_empty());
-    let docker = match &opts.docker_size {
-        Some(_) => size(&opts.docker_size, "sandboxOptions.dockerSize")?,
-        None => size(&setting, "sandbox.disk.dockerVolume")?,
-    };
-    let cloned = size(
-        &opts.cloned_workspace_size,
-        "sandboxOptions.clonedWorkspaceSize",
-    )?;
-    let storage_gib = docker.max(cloned);
+    let (storage_gib, overlay_gib) = disk_sizes(ctx, &opts.disk)?;
     let env = options::parse_env(&opts.env, &opts.env_file, &ctx.env)?;
     let ports = opts
         .publish
@@ -166,10 +154,28 @@ pub(crate) enum Workload {
     Ref(String),
 }
 
-/// `build_request` for `targets` (an agent preset or a workload kit REF, then workspace paths),
-/// and the workload: the request (so its name) without loading any kit; a workload kit's name
-/// comes from `load::kit_name`. `kit_plan` loads the kits. `None` when there are no kits: a
-/// preset without `--kit`, unless its image gets the `docker` kit.
+/// smolvm's disk sizes in GiB, `(storage, overlay)`; `None` keeps smolvm's default. The root
+/// filesystem's changes are the overlay. Docker's data and a clone's workspace share the storage
+/// disk, so the larger of their sizes wins; without an environment file's `dockerSize`, the
+/// `sandbox.disk.dockerVolume` setting applies.
+fn disk_sizes<R: Runner>(ctx: &Ctx<R>, d: &DiskSizes) -> Result<(Option<u32>, Option<u32>)> {
+    let gib = |v: Option<&str>, what| v.map(|v| util::size_gib(v, what)).transpose();
+    let setting = ctx.settings.value("sandbox.disk.dockerVolume")?;
+    let docker = match &d.docker {
+        Some(v) => gib(Some(v), "sandboxOptions.dockerSize")?,
+        None => gib(
+            Some(setting.as_str()).filter(|v| !v.is_empty()),
+            "sandbox.disk.dockerVolume",
+        )?,
+    };
+    let cloned = gib(
+        d.cloned_workspace.as_deref(),
+        "sandboxOptions.clonedWorkspaceSize",
+    )?;
+    let overlay = gib(d.root.as_deref(), "sandboxOptions.rootSize")?;
+    Ok((docker.max(cloned), overlay))
+}
+
 /// What `run` and `create` do about a default name (no `--name`), as sbx 0.53 does for two folders
 /// with the same name. With `reuse` (`run`), the sandbox for this folder and agent is returned
 /// whatever it's called. Otherwise a default name that another folder's sandbox holds is refused
@@ -180,12 +186,12 @@ pub(crate) fn settle_default_name<R: Runner>(
     opts: &SandboxOpts,
     reuse: bool,
 ) -> Result<Option<Sandbox>> {
-    let Some(ws) = req.workspaces.first().map(|w| w.path.clone()) else {
-        return Ok(None);
-    };
     if opts.name.is_some() {
         return Ok(None);
     }
+    let Some(ws) = req.workspaces.first().map(|w| w.path.clone()) else {
+        return Ok(None);
+    };
     let here = ws.display().to_string();
     let all = sandbox::list(&ctx.vm)?;
     let mine =
@@ -213,6 +219,10 @@ pub(crate) fn settle_default_name<R: Runner>(
     )
 }
 
+/// `build_request` for `targets` (an agent preset or a workload kit REF, then workspace paths),
+/// and the workload: the request (so its name) without loading any kit; a workload kit's name
+/// comes from `load::kit_name`. `kit_plan` loads the kits. `None` when there are no kits: a
+/// preset without `--kit`, unless its image gets the `docker` kit.
 pub(crate) fn kit_target<R: Runner>(
     ctx: &Ctx<R>,
     targets: &[String],

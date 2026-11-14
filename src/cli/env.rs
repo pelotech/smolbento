@@ -574,10 +574,8 @@ fn source<R: Runner>(
     if let Some(v) = &decl.value {
         return Ok(SecretSource {
             token: Some(v.clone()),
-            reference: None,
-            command: None,
-            value_stdin: false,
             sandbox,
+            ..Default::default()
         });
     }
     let source = match (&decl.r#ref, &decl.command) {
@@ -601,24 +599,18 @@ fn source<R: Runner>(
     Ok(match source {
         _ if snapshot => SecretSource {
             token: resolved,
-            reference: None,
-            command: None,
-            value_stdin: false,
             sandbox,
+            ..Default::default()
         },
         Source::Ref { reference } => SecretSource {
-            token: None,
             reference: Some(reference),
-            command: None,
-            value_stdin: false,
             sandbox,
+            ..Default::default()
         },
         Source::Command { command } => SecretSource {
-            token: None,
-            reference: None,
             command: Some(command),
-            value_stdin: false,
             sandbox,
+            ..Default::default()
         },
         Source::Keychain => unreachable!("built from a ref or command"),
     })

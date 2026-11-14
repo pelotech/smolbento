@@ -257,9 +257,7 @@ fn ignored_options_warning(a: &RunArgs, name: &str) -> Option<String> {
         // Set only by an environment file, which `env run` applies at create.
         no_fuse: _,
         read_only_files: _,
-        root_size: _,
-        docker_size: _,
-        cloned_workspace_size: _,
+        disk: _,
         mount: _,
         deny_network: _,
         // Docker Cloud options: refused before any sandbox is looked up.

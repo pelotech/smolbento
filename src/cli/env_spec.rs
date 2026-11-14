@@ -4,7 +4,7 @@ use std::path::{Path, PathBuf};
 
 use anyhow::{Context, Result, bail};
 
-use super::SandboxOpts;
+use super::{DiskSizes, SandboxOpts};
 use crate::agents;
 use crate::env::file::{
     Binding, EnvFile, KitEntry, Lifecycle, PinnedKit, Port, RegistryDecl, SecretDecl, Workspace,
@@ -191,9 +191,11 @@ pub fn spec(loaded: &Loaded, overrides: &Overrides, secrets: &SecretsFile) -> Re
         }),
         clone,
         no_fuse: o.and_then(|o| o.fuse) == Some(false),
-        root_size: o.and_then(|o| o.root_size.clone()),
-        docker_size: o.and_then(|o| o.docker_size.clone()),
-        cloned_workspace_size: o.and_then(|o| o.cloned_workspace_size.clone()),
+        disk: DiskSizes {
+            root: o.and_then(|o| o.root_size.clone()),
+            docker: o.and_then(|o| o.docker_size.clone()),
+            cloned_workspace: o.and_then(|o| o.cloned_workspace_size.clone()),
+        },
         read_only_files: if o.and_then(|o| o.writable_env_files) == Some(true) {
             Vec::new()
         } else {
@@ -819,9 +821,14 @@ mod tests {
                  clonedWorkspaceSize: 8g\n"
             ))
             .unwrap();
-        assert_eq!(s.opts.root_size.as_deref(), Some("24g"));
-        assert_eq!(s.opts.docker_size.as_deref(), Some("30g"));
-        assert_eq!(s.opts.cloned_workspace_size.as_deref(), Some("8g"));
+        assert_eq!(
+            s.opts.disk,
+            DiskSizes {
+                root: Some("24g".into()),
+                docker: Some("30g".into()),
+                cloned_workspace: Some("8g".into()),
+            }
+        );
 
         let s = t
             .spec(&format!(
