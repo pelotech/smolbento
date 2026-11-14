@@ -1,30 +1,25 @@
-schemaVersion: '3'
+# syntax=docker/sandbox-kit:3
+schemaVersion: "3"
 kind: mixin
 displayName: nix
-version: 0.0.1
-provides:
-  - nix
-  - direnv
+version: "0.0.1" # x-release-please-version
+provides: [nix, direnv]
 args:
+  # Nix's default profile first; `nix profile install` as agent lands in ~/.nix-profile.
   path:
-    default: /nix/var/nix/profiles/default/bin:/home/agent/.nix-profile/bin:$PATH
+    default: "/nix/var/nix/profiles/default/bin:/home/agent/.nix-profile/bin:$PATH"
     env: PATH
+  # direnv reads its rc (nix-direnv) from here rather than each user's ~/.config.
   direnv_config:
     default: /etc/direnv
     env: DIRENV_CONFIG
-build: >
-  FROM
-  nixos/nix:2.35.6@sha256:b49cb33f3a7e5cf3933ad8774529de0e3807ec5cf54987aa7ccdfb49f2fc55ed
-  AS build
-
+# One layer: /nix (root-owned store and default profile) and new files under /etc. Nothing the
+# agent image already has, so its accounts and config stay as they are.
+build: |
+  FROM nixos/nix:2.35.6@sha256:b49cb33f3a7e5cf3933ad8774529de0e3807ec5cf54987aa7ccdfb49f2fc55ed AS build
   ARG NIXPKGS=github:NixOS/nixpkgs/f1e5c356f35d07e7b71a6b5e6c9338e0b029e0c0
-
-  # Replace the image's default profile (bash, coreutils, git, …) with only the
-  kit's tools. The
-
-  # old profile's store paths stay on PATH until the GC, which runs in its own
-  step.
-
+  # Replace the image's default profile (bash, coreutils, git, …) with only the kit's tools. The
+  # old profile's store paths stay on PATH until the GC, which runs in its own step.
   RUN set -eu; \
       export PATH="$(readlink -f /root/.nix-profile)/bin:$PATH" \
         NIX_SSL_CERT_FILE="$(readlink -f "$NIX_SSL_CERT_FILE")"; \
@@ -38,37 +33,27 @@ build: >
       nix --extra-experimental-features 'nix-command flakes' profile add \
         --profile /nix/var/nix/profiles/default \
         "$NIXPKGS#nix" "$NIXPKGS#direnv" "$NIXPKGS#nix-direnv" "$NIXPKGS#xz" "$NIXPKGS#cacert"
-  RUN ["/nix/var/nix/profiles/default/bin/nix", "--extra-experimental-features",
-  "nix-command", "store", "gc"]
-
+  RUN ["/nix/var/nix/profiles/default/bin/nix", "--extra-experimental-features", "nix-command", "store", "gc"]
   FROM scratch
-
   COPY --from=build /nix /nix
-
   COPY --from=build /out/ /
 capabilities:
   - type: com.docker.sandbox/lifecycle@1
     config:
       startup:
-        - command: >-
-            pgrep -x nix-daemon >/dev/null || exec
-            /nix/var/nix/profiles/default/bin/nix-daemon
-            >/var/log/nix-daemon.log 2>&1
-          user: '0'
+        # Store writes and builds go through the daemon, as root; users run nix as themselves.
+        - command: "pgrep -x nix-daemon >/dev/null || exec /nix/var/nix/profiles/default/bin/nix-daemon >/var/log/nix-daemon.log 2>&1"
+          user: "0"
           background: true
-        - command: >
-            cd "${WORKSPACE_DIR:-/nonexistent}" 2>/dev/null && [ -f .envrc ] ||
-            exit 0
-
+        # Trust the workspace's .envrc for its owner (the session user); nothing lands in the repo.
+        - command: |
+            cd "${WORKSPACE_DIR:-/nonexistent}" 2>/dev/null && [ -f .envrc ] || exit 0
             owner=$(stat -c %U .)
-
             home=$(getent passwd "$owner" | cut -d: -f6)
-
             [ -n "$home" ] || exit 0
-
             runuser -u "$owner" -- env HOME="$home" direnv allow . 2>/dev/null \
               || su "$owner" -s /bin/sh -c "HOME='$home' direnv allow ." || true
-          user: '0'
+          user: "0"
   - type: com.docker.sandbox/network-policy@1
     config:
       runtime:
@@ -83,6 +68,5 @@ capabilities:
   - type: com.docker.sandbox/agent-context@1
     config:
       content: >-
-        Nix and direnv are installed. Run project commands with `direnv exec .
-        <cmd>` (or `nix develop -c <cmd>`); non-interactive shells don't load
-        `.envrc` on their own.
+        Nix and direnv are installed. Run project commands with `direnv exec . <cmd>` (or
+        `nix develop -c <cmd>`); non-interactive shells don't load `.envrc` on their own.
