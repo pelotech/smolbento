@@ -284,8 +284,10 @@ fn setup<R: Runner>(
         }
     }
     // A kit first start runs them once its startup scripts are written.
-    if plan.kit.is_none() {
-        run_startup(vm, sb, None)?;
+    if plan.kit.is_none()
+        && let Err(e) = run_startup(vm, sb, None)
+    {
+        eprintln!("{}", startup_failure_warning(vm, sb, &e));
     }
     Ok(())
 }
@@ -366,16 +368,7 @@ pub fn create<R: Runner>(
     on(Event::Booted);
     sb.state = MachineState::Running;
     if let Err(e) = run_startup(vm, &sb, None) {
-        // Kept, as in sbx, but stopped: the next start runs the hooks again and fails until
-        // they succeed, rather than running the agent without them.
-        eprintln!("{}", create_warning(&e));
-        match vm.stop(&sb.machine) {
-            Ok(()) => sb.state = MachineState::Stopped,
-            Err(stop) => eprintln!(
-                "warning: stopping {} after its startup hooks failed: {stop:#}",
-                sb.name()
-            ),
-        }
+        eprintln!("{}", startup_failure_warning(vm, &sb, &e));
     }
     Ok(sb)
 }
@@ -452,12 +445,5 @@ fn install_agent(sb: &Sandbox, kit: &KitFirstStart) -> Option<bridge::Server> {
 }
 
 /// sbx's warning when a create's startup hooks fail (the sandbox is kept).
-fn create_warning(e: &anyhow::Error) -> String {
-    format!(
-        "warning: StartRuntime after create failed; kit commands.startup will fire on first run: \
-         {e:#}"
-    )
-}
-
 #[cfg(test)]
 mod tests;

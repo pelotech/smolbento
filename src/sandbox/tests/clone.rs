@@ -327,28 +327,6 @@ fn a_plain_start_runs_the_startup_hooks_in_one_blocking_exec() {
 }
 
 #[test]
-fn a_failing_startup_hook_fails_the_start_and_stops_the_machine() {
-    let fake = FakeRunner::new();
-    fake.ok(&["machine"], "");
-    failing_startup(&fake, "sbx-r", 3);
-    let vm = Smolvm::new(fake);
-    let (mut sb, plan) = clone_sandbox();
-    sb.meta.clone_repo = None;
-    let err = start(
-        &vm,
-        &sb,
-        &StartPlan {
-            clone: None,
-            ..plan
-        },
-    )
-    .unwrap_err();
-    assert_eq!(format!("{err:#}"), "kit startup exited with code 3");
-    let lines = vm.runner().call_lines();
-    assert_eq!(lines.last().unwrap(), "machine stop -n sbx-r", "{lines:#?}");
-}
-
-#[test]
 fn one_kits_startup_hooks_run_by_script() {
     let fake = FakeRunner::new();
     fake.ok(&["machine"], "");

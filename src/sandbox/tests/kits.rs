@@ -416,7 +416,7 @@ fn a_failed_first_start_without_install_hooks_says_so_neutrally() {
 }
 
 #[test]
-fn a_failing_startup_hook_at_create_warns_and_keeps_the_sandbox_stopped() {
+fn a_failing_startup_hook_at_create_warns_and_keeps_the_sandbox_running() {
     let vm = created_vm();
     failing_startup(vm.runner(), MACHINE, 1);
     let sb = create(
@@ -427,22 +427,18 @@ fn a_failing_startup_hook_at_create_warns_and_keeps_the_sandbox_stopped() {
         &mut |_| {},
     )
     .unwrap();
-    // Stopped, so the next run starts it and runs the hooks again (and fails like sbx).
-    assert_eq!(sb.state, MachineState::Stopped);
+    // sbx 0.51: a warning, and the sandbox stays up for its agent.
+    assert_eq!(sb.state, MachineState::Running);
     let lines = vm.runner().call_lines();
-    assert_eq!(
-        lines.last().unwrap(),
-        &format!("machine stop -n {MACHINE}"),
+    assert!(
+        !lines
+            .iter()
+            .any(|l| l.starts_with("machine stop") || l.starts_with("machine delete")),
         "{lines:#?}"
     );
     assert!(
-        !lines.iter().any(|l| l.starts_with("machine delete")),
+        lines.last().unwrap().ends_with(&startup_log_tail_cmd()),
         "{lines:#?}"
-    );
-    assert_eq!(
-        create_warning(&anyhow!("kit startup exited with code 1")),
-        "warning: StartRuntime after create failed; kit commands.startup will fire on first \
-         run: kit startup exited with code 1"
     );
 }
 

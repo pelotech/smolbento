@@ -266,11 +266,12 @@ anything is created. An optional one is skipped with a warning.
   default to `agent`. v3 install steps get a clean environment: `PATH`, `HOME`, `USER`, `TERM`,
   the proxy and CA variables, and the step's own `env`. v3 startup steps and all v2 steps get the
   full sandbox environment.
-- Startup steps block, in kit order. A failure fails the start (`kit startup exited with code N`).
-  `background: true` steps start in place and are only logged if they fail. A blocking step that
-  never ends holds the start (no timeout). The log is `/var/log/sbx-kit-startup.log`. A step that
-  fails during create still creates the sandbox (with sbx's `StartRuntime after create failed`
-  warning), which is left stopped; later starts fail until the step succeeds.
+- Startup steps block, in kit order. A failure is a warning with the log's last lines
+  (`a kit startup step failed (kit startup exited with code N); starting anyway`), and the start,
+  create or `kit add` goes on, as in sbx 0.51 (sbx's wording not measured). `background: true`
+  steps start in place and are only logged if they fail. A blocking step that never ends holds the
+  start (no timeout). The log is `/var/log/sbx-kit-startup.log`; sbx 0.51 also keeps install logs at
+  `/var/log/sbx-kits/<kit>/install-<n>.log`, which smolbento doesn't.
 - An optional kit argument used with no value and no default is an error
   (`create-phase kit arg "x" has no resolved value`). `--kit-arg x=` sets it empty. `--kit-arg`
   without a kit is an error. A `KIT.NAME` value for a kit not in the set is ignored. Unquoted

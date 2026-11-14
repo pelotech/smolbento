@@ -411,15 +411,16 @@ What a kit does, and when:
   with network only for installing. A failing step, or a kit file that can't be written, removes the
   sandbox. Fix the cause and run the same command. In a v2 kit, `files/workspace` and `${WORKDIR}`
   are the primary workspace, or `/home/agent/workspace` without one.
-- On every start, startup steps run in kit order, before the agent. A failing one fails the start
-  (`kit startup exited with code N`). A `background: true` step (such as the `docker` kit's
+- On every start, startup steps run in kit order, before the agent. A failing one is a warning
+  with the log's last lines, and the sandbox starts anyway, as in sbx 0.51. A `background: true`
+  step (such as the `docker` kit's
   `dockerd`) keeps running; if it fails, only the log records it. A step that doesn't finish holds
   up the start; there is no timeout, as in sbx.
 - Logs go to `/var/log/sbx-kit-startup.log` in the sandbox. Each start adds a `=== dispatcher run …
   ===` line, each finished step an `ok /etc/smolbento/startup.d/NN-<kit>.sh hook N` line, and a
   failing step its output and exit code.
-- A failing startup step at create leaves the sandbox created, with a warning, and stopped. Each
-  later start fails until the step succeeds. `kit add` only warns.
+- At create and `kit add`, a failing startup step is the same warning; the sandbox is created and
+  runs.
 - Startup steps run as `agent` unless they name a user (a numeric user runs as the account with that
   uid). The `docker` kit runs before your kits.
 - A v3 install step gets a clean environment (`PATH`, `HOME`, `USER`, `TERM`, the proxy and CA
