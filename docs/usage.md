@@ -13,6 +13,18 @@ sbt run claude
 `<agent>-<directory name>` (here `claude-myrepo`), so the same agent in the same directory
 reattaches.
 
+Two directories with the same name (`pelotech/infrastructure` and `uki-code/infrastructure`) would
+get the same default name. Without `--name`, `run` and `create` refuse a name another directory's
+sandbox holds, and suggest one with the parent directory:
+
+```console
+$ sbt run claude
+error: sandbox name "claude-infrastructure" is already used by workspace "/src/pelotech/infrastructure"; pass --name to choose a different name, such as --name claude-uki-code-infrastructure
+```
+
+`sbt settings set sandbox.autoName true` takes the suggested name instead of refusing. Either way, a
+later `sbt run claude` in that directory finds its sandbox by the directory, whatever it's called.
+
 When the last attached session exits (closing the terminal counts), the sandbox stops. Its disk is
 kept, so the next `run` resumes with what the agent installed.
 

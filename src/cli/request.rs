@@ -11,7 +11,7 @@ use crate::kits::capability;
 use crate::kits::load;
 use crate::kits::model::{Content, Kind, Kit, Source};
 use crate::kits::resolve::{Plan, resolve_for};
-use crate::sandbox::{CreateRequest, name, options};
+use crate::sandbox::{self, CreateRequest, Sandbox, name, options};
 use crate::smolvm::Runner;
 use crate::util;
 use crate::workspace::{self, Workspace, clone};
@@ -170,6 +170,49 @@ pub(crate) enum Workload {
 /// and the workload: the request (so its name) without loading any kit; a workload kit's name
 /// comes from `load::kit_name`. `kit_plan` loads the kits. `None` when there are no kits: a
 /// preset without `--kit`, unless its image gets the `docker` kit.
+/// What `run` and `create` do about a default name (no `--name`), as sbx 0.53 does for two folders
+/// with the same name. With `reuse` (`run`), the sandbox for this folder and agent is returned
+/// whatever it's called. Otherwise a default name that another folder's sandbox holds is refused
+/// with a suggested name, or, with `sandbox.autoName`, replaced by it.
+pub(crate) fn settle_default_name<R: Runner>(
+    ctx: &Ctx<R>,
+    req: &mut CreateRequest,
+    opts: &SandboxOpts,
+    reuse: bool,
+) -> Result<Option<Sandbox>> {
+    let Some(ws) = req.workspaces.first().map(|w| w.path.clone()) else {
+        return Ok(None);
+    };
+    if opts.name.is_some() {
+        return Ok(None);
+    }
+    let here = ws.display().to_string();
+    let all = sandbox::list(&ctx.vm)?;
+    let mine =
+        |s: &&Sandbox| s.meta.agent == req.agent && s.meta.workspace.as_deref() == Some(&here);
+    if reuse && let Some(sb) = all.iter().find(mine) {
+        return Ok(Some(sb.clone()));
+    }
+    let Some(owner) = all.iter().find(|s| s.name() == req.name && !mine(s)) else {
+        return Ok(None);
+    };
+    let used_by = owner.meta.workspace.as_deref().unwrap_or("(none)");
+    let suggested = name::suggest_name(&req.agent, &ws, |n| all.iter().any(|s| s.name() == n));
+    if ctx.settings.bool("sandbox.autoName")? {
+        eprintln!(
+            "note: {} is used by workspace {used_by}; naming this sandbox {suggested}",
+            req.name
+        );
+        req.name = suggested;
+        return Ok(None);
+    }
+    bail!(
+        "sandbox name \"{}\" is already used by workspace \"{used_by}\"; pass --name to choose a \
+         different name, such as --name {suggested}",
+        req.name
+    )
+}
+
 pub(crate) fn kit_target<R: Runner>(
     ctx: &Ctx<R>,
     targets: &[String],
@@ -1668,7 +1711,11 @@ SETUP
         assert_eq!(t.stdout(), "");
         assert_eq!(
             t.calls(),
-            ["--version", "machine status -n sbx-shell-proj --json"]
+            [
+                "--version",
+                "machine ls --json",
+                "machine status -n sbx-shell-proj --json"
+            ]
         );
     }
 

@@ -8,7 +8,7 @@ use anyhow::{Context, Result, bail};
 
 use super::lifecycle::create_reported;
 use super::progress::Progress;
-use super::request::{has_kit_flags, kit_target};
+use super::request::{has_kit_flags, kit_target, settle_default_name};
 use super::{Ctx, RunArgs, Unsupported};
 use crate::agents;
 use crate::bridge;
@@ -61,7 +61,11 @@ pub fn run<R: Runner>(ctx: &mut Ctx<R>, a: &RunArgs) -> Result<i32> {
             }
             // The name first: attaching to an existing sandbox loads no kits.
             let (mut req, workload) = kit_target(ctx, &a.targets, &a.opts, true)?;
-            match sandbox::find(&ctx.vm, &req.name)? {
+            let existing = match settle_default_name(ctx, &mut req, &a.opts, true)? {
+                Some(sb) => Some(sb),
+                None => sandbox::find(&ctx.vm, &req.name)?,
+            };
+            match existing {
                 Some(sb) => {
                     warn_ignored(&sb);
                     (sb, false)
@@ -357,6 +361,82 @@ mod tests {
             let call = t.runner().interactive_calls()[0].join(" ");
             assert!(call.contains(&format!(" -w {dir} -i ")), "{call}");
         }
+    }
+
+    /// Two folders with the same name (sbx 0.53): a plain `run` attaches to this folder's sandbox,
+    /// whatever it's called, and never to the other folder's.
+    #[test]
+    fn run_reuses_this_folders_sandbox_under_another_name() {
+        let mut t = test_env(&[]);
+        let ws = t.ctx.cwd.display().to_string();
+        let mine = machine_json(
+            "sbx-claude-proj-2",
+            "running",
+            &[
+                ("sbx.name", "claude-proj-2"),
+                ("sbx.agent", "claude"),
+                ("sbx.workspace", &ws),
+            ],
+        );
+        let theirs = machine_json(
+            "sbx-claude-proj",
+            "running",
+            &[
+                ("sbx.name", "claude-proj"),
+                ("sbx.agent", "claude"),
+                ("sbx.workspace", "/other/proj"),
+            ],
+        );
+        t.runner()
+            .ok(&["machine", "ls", "--json"], &format!("[{mine},{theirs}]"));
+        t.runner()
+            .ok(&["machine", "status", "-n", "sbx-claude-proj-2"], &mine);
+        t.runner()
+            .ok(&["machine", "status", "-n", "sbx-claude-proj"], &theirs);
+        t.runner().interactive_exit(0);
+        t.sbt(&["run", "claude"]).unwrap();
+        let call = t.runner().interactive_calls()[0].join(" ");
+        assert!(
+            call.starts_with("machine exec --name sbx-claude-proj-2 "),
+            "{call}"
+        );
+        assert!(!t.made("machine create"));
+    }
+
+    #[test]
+    fn run_refuses_a_default_name_another_folder_uses_and_suggests_one() {
+        let mut t = test_env(&[]);
+        let theirs = machine_json(
+            "sbx-claude-proj",
+            "running",
+            &[
+                ("sbx.name", "claude-proj"),
+                ("sbx.agent", "claude"),
+                ("sbx.workspace", "/other/proj"),
+            ],
+        );
+        t.runner()
+            .ok(&["machine", "ls", "--json"], &format!("[{theirs}]"));
+        t.runner()
+            .ok(&["machine", "status", "-n", "sbx-claude-proj"], &theirs);
+        let err = t.sbt_err(&["run", "claude"]);
+        assert!(
+            err.starts_with(
+                "sandbox name \"claude-proj\" is already used by workspace \"/other/proj\"; pass \
+                 --name to choose a different name, such as --name claude-"
+            ) && err.ends_with("-proj"),
+            "{err}"
+        );
+        assert!(t.runner().interactive_calls().is_empty());
+        assert!(!t.made("machine create"));
+        // `--name` is taken as given: it attaches to that sandbox.
+        t.runner().interactive_exit(0);
+        t.sbt(&["run", "--name", "claude-proj"]).unwrap();
+        let call = t.runner().interactive_calls()[0].join(" ");
+        assert!(
+            call.starts_with("machine exec --name sbx-claude-proj "),
+            "{call}"
+        );
     }
 
     #[test]

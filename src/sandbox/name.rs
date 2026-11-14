@@ -65,6 +65,27 @@ pub fn default_name(agent: &str, workspace: &Path) -> String {
     out.trim_matches('-').to_string()
 }
 
+/// A name for a sandbox of `workspace` when its default name belongs to another folder's:
+/// `<agent>-<parent>-<folder>`, then `-2`, `-3`… past names `taken` says are in use.
+pub fn suggest_name(agent: &str, workspace: &Path, taken: impl Fn(&str) -> bool) -> String {
+    let folder = |p: &Path| p.file_name().map(|b| b.to_string_lossy().into_owned());
+    let joined = match (workspace.parent().and_then(folder), folder(workspace)) {
+        (Some(parent), Some(base)) => format!("{parent}-{base}"),
+        (_, base) => base.unwrap_or_else(|| "root".into()),
+    };
+    let first = default_name(agent, Path::new(&joined));
+    (1..)
+        .map(|n| {
+            if n == 1 {
+                first.clone()
+            } else {
+                format!("{first}-{n}")
+            }
+        })
+        .find(|n| !taken(n))
+        .expect("an unused name")
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -104,6 +125,19 @@ mod tests {
     #[test]
     fn machine_name_round_trip() {
         assert_eq!(machine_name("my.app"), "sbx-my_app");
+    }
+
+    #[test]
+    fn a_suggested_name_adds_the_parent_folder_then_a_number() {
+        let ws = Path::new("/src/uki-code/infrastructure");
+        assert_eq!(
+            suggest_name("claude", ws, |_| false),
+            "claude-uki-code-infrastructure"
+        );
+        assert_eq!(
+            suggest_name("claude", ws, |n| n == "claude-uki-code-infrastructure"),
+            "claude-uki-code-infrastructure-2"
+        );
     }
 
     #[test]

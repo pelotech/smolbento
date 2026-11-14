@@ -102,6 +102,12 @@ pub struct SettingDef {
 
 pub const SETTINGS: &[SettingDef] = &[
     SettingDef {
+        key: "sandbox.autoName",
+        env: "SMOLBENTO_SANDBOX_AUTO_NAME",
+        default: "false",
+        help: "When a default sandbox name belongs to another folder's sandbox, use the suggested name (agent-parent-folder) instead of refusing",
+    },
+    SettingDef {
         key: "sandbox.disk.dockerVolume",
         env: "SMOLBENTO_SANDBOX_DISK_DOCKER_VOLUME",
         default: "",

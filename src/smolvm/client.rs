@@ -272,6 +272,9 @@ impl<R: Runner> Smolvm<R> {
 
     pub fn list(&self) -> Result<Vec<Machine>> {
         let out = self.call(args(&["machine", "ls", "--json"]))?;
+        if out.stdout.trim().is_empty() {
+            return Ok(Vec::new());
+        }
         Ok(serde_json::from_str(&out.stdout)?)
     }
 
