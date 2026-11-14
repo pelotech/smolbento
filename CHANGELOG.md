@@ -1,5 +1,12 @@
 # Changelog
 
+## [0.24.0](https://github.com/pelotech/smolbento/compare/v0.23.0...v0.24.0) (2026-11-14)
+
+
+### Features
+
+* **sandbox:** serve the SSH agent and bridge for the sandbox's life, and run a workload's Entrypoint at boot ([#109](https://github.com/pelotech/smolbento/issues/109)) ([d5e78f6](https://github.com/pelotech/smolbento/commit/d5e78f6d7232fa22f96f913e55b6fa12cb46339d))
+
 ## [0.23.0](https://github.com/pelotech/smolbento/compare/v0.22.1...v0.23.0) (2026-11-14)
 
 
