@@ -49,7 +49,8 @@ by root. A custom `-t` image must have an `agent` user, or the sandbox won't sta
 
 Sandboxes made before smolvm 1.34.4 idmapped mounts were set up differently and can't be started.
 Recreate them: `sbt rm NAME`, then create it again. `ls`, `inspect`, `rm`, `prune` and `reset`
-still work on them. Saved templates keep working.
+still work on them. Saved templates keep working, so saving one as a template before `sbt rm`
+keeps what's installed inside (see [Install](install.md#upgrading-from-before-smolvm-1344)).
 
 ## The first run is slow
 

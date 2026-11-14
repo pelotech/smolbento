@@ -115,10 +115,13 @@ terminal fail until you do.
 - Templates don't keep `/tmp`.
 - Shared skills are linked by a start script that runs as the `agent` user: images without that
   account get no links (a warning), and a required bundled kit skill there fails the create.
+- smolvm maps only the owner and group of a mounted directory itself to the agent. A directory
+  inside it that belongs to another of your groups keeps that group, which the agent isn't in, so
+  it isn't writable through the group.
 
 ## Needs smolvm support (later decisions)
 
-Changes we'd propose to smolvm. What smolvm 1.34.1 lacks, and what smolbento does meanwhile:
+Changes we'd propose to smolvm. What smolvm 1.34.4 lacks, and what smolbento does meanwhile:
 
 - **Saving a sandbox made from a template.** Packing a machine created from a pack fails in
   smolvm 1.34.1 ("no flattened rootfs was found") when the pack's own machine was created with

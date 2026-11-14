@@ -69,6 +69,16 @@ Linux binaries need glibc 2.28 or newer.
 Sandboxes created by an older smolbento can't be started (`was created by an older smolbento`).
 Remove each with `sbt rm NAME` and create it again. Saved templates keep working.
 
+To keep what's inside one (installed tools, agent logins), save it as a template first. A stopped
+sandbox is saved without starting it:
+
+```sh
+sbt stop NAME
+sbt template save NAME NAME-saved:v1
+sbt rm NAME
+sbt create AGENT PATH --name NAME -t NAME-saved:v1
+```
+
 ## Check your setup
 
 ```sh
