@@ -420,8 +420,11 @@ mod tests {
             assert_eq!(k.kind, Kind::Workload, "{name}");
             assert_eq!(k.command, Some(vec![name.to_string()]), "{name}");
         }
-        let claude = read_layout(&dir.path().join("claude"), Source::Registry("claude".into()))
-            .unwrap();
+        let claude = read_layout(
+            &dir.path().join("claude"),
+            Source::Registry("claude".into()),
+        )
+        .unwrap();
         let cred = claude
             .caps
             .iter()
