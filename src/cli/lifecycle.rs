@@ -324,12 +324,22 @@ pub fn prune<R: Runner>(ctx: &mut Ctx<R>, a: &PruneArgs) -> Result<i32> {
 /// `--preserve-secrets`, and last `~/.smolbento` (smolvm's state and the downloaded smolvm, which
 /// does the deleting before that).
 pub fn reset<R: Runner>(ctx: &mut Ctx<R>, a: &ResetArgs) -> Result<i32> {
+    let smolvm = crate::smolvm::locate::locate(&ctx.settings, &ctx.env)?;
+    // A home the user chose may hold their own files: only the smolvm in it goes.
+    let home = if smolvm.home_explicit {
+        smolvm.home.join("engine")
+    } else {
+        smolvm.home.clone()
+    };
     confirm(
         ctx,
-        "Reset smolbento to a freshly installed state? This removes every sandbox (also \
-         smolbento's in smolvm's default location), ~/.smolbento (smolvm's state and the downloaded \
-         smolvm), settings and network policy, templates, kits and skills, the SSH config block, \
-         background services, and stored secrets (unless --preserve-secrets)",
+        &format!(
+            "Reset smolbento to a freshly installed state? This removes every sandbox (also \
+             smolbento's in smolvm's default location), {} (smolvm's state and the downloaded \
+             smolvm), settings and network policy, templates, kits and skills, the SSH config \
+             block, background services, and stored secrets (unless --preserve-secrets)",
+            home.display()
+        ),
         a.force,
     )?;
     let all = sandbox::list(&ctx.vm)?;
@@ -367,8 +377,14 @@ pub fn reset<R: Runner>(ctx: &mut Ctx<R>, a: &ResetArgs) -> Result<i32> {
     for dir in [&ctx.paths.cache, &ctx.paths.data, &ctx.paths.config] {
         remove_tree(dir, &keep)?;
     }
-    let smolvm = crate::smolvm::locate::locate(&ctx.settings, &ctx.env)?;
-    remove_tree(&smolvm.home, &[])?;
+    remove_tree(&home, &[])?;
+    if smolvm.home_explicit {
+        writeln!(
+            &ctx.out,
+            "Kept {}: it's your smolvm.home. Delete it if it holds nothing else.",
+            smolvm.home.display()
+        )?;
+    }
     Ok(0)
 }
 
@@ -1933,6 +1949,19 @@ SETUP
         ] {
             assert!(!d.exists(), "{} is left", d.display());
         }
+    }
+
+    #[test]
+    fn reset_keeps_a_smolvm_home_you_chose_but_removes_its_smolvm() {
+        // Short, for the macOS socket check.
+        let home = tempfile::tempdir_in("/tmp").unwrap();
+        std::fs::create_dir_all(home.path().join("engine/1.0.0")).unwrap();
+        std::fs::write(home.path().join("notes.txt"), "mine").unwrap();
+        let mut t = test_env(&[("SMOLBENTO_SMOLVM_HOME", home.path().to_str().unwrap())]);
+        t.runner().ok(&["machine", "ls", "--json"], "[]");
+        t.sbt(&["reset", "-f"]).unwrap();
+        assert!(!home.path().join("engine").exists());
+        assert!(home.path().join("notes.txt").exists());
     }
 
     #[test]
