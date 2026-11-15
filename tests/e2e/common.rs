@@ -671,7 +671,7 @@ pub(crate) fn smolvm_home() -> String {
 }
 
 /// `smolbento smolvm`: the pinned smolvm (downloaded on first use) on the tests' shared home, or
-/// `SMOLBENTO_SMOLVM` when the run sets one (`just smolvm-try`).
+/// `SMOLBENTO_SMOLVM` when the run sets one (a local build).
 pub(crate) fn smolvm_command() -> Command {
     let mut cmd = Command::new(env!("CARGO_BIN_EXE_smolbento"));
     cmd.arg("smolvm")

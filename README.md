@@ -12,12 +12,12 @@ Engine on the host. smolbento keeps sbx's commands and kits, and differs in:
 | | smolbento | Docker Sandboxes (`sbx`) |
 |---|---|---|
 | Account | None. Agent kits pull from Docker Hub without a login | Docker sign-in (`sbx login`) |
-| Source | Open source, Apache-2.0 | Binary releases |
+| Source | Open source, Apache-2.0 | Binary releases; Docker's docs state no license |
 | Background process | None. Each command calls smolvm directly | A local daemon |
 | MicroVM | [smolvm](https://github.com/smol-machines/smolvm) (libkrun: Hypervisor.framework on macOS, KVM on Linux) | Docker's hypervisor sandbox |
 | Hosts | macOS on Apple Silicon; Linux x86_64 or arm64 with KVM | macOS 14+ on Apple Silicon, Windows 11, Ubuntu 24.04+ |
 | Command line | sbx's commands and flags; `alias sbx=bento` makes it a drop-in | `sbx` |
-| Cloud sandboxes | No | Yes (paid) |
+| Cloud sandboxes | No | Yes |
 
 Every intentional difference is listed in [sbx compatibility](docs/sbx-compatibility.md).
 
@@ -36,7 +36,8 @@ Every intentional difference is listed in [sbx compatibility](docs/sbx-compatibi
  │       ┌─ microVM: its own kernel ───────────────────────────────────────────────┐   │
  │       │  agent (claude, codex, …)       ANTHROPIC_API_KEY=<placeholder>         │   │
  │       │  /your/workspace                the only host folder it gets by default │   │
- │       │  no host processes, sockets, keychain or Docker engine                  │   │
+ │       │  no host processes, keychain or Docker engine; host sockets only for    │   │
+ │       │  the browser bridge and SSH agent forwarding, when you enable them      │   │
  │       └─────────────────────────────────────────────────────────────────────────┘   │
  ───────────────────────────────────────────────────────────────────────────────────────
 ```

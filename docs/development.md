@@ -79,7 +79,7 @@ smolbento runs the smolvm release pinned in `smolvm.lock`. It downloads it on fi
   bumps the version; CI fails it until someone runs `just smolvm-pin` on that branch.
 - **Try a smolvm you built:** `SMOLBENTO_SMOLVM=../smolvm/target/release/smolvm just e2e`. Every
   test uses that binary except `the_pinned_smolvm_runs_from_smolbentos_home`.
-- **Debug a test's VMs:** `SMOLBENTO_SMOLVM_HOME=/tmp/sbt-e2e-$(id -u) sbt smolvm machine ls --json`.
+- **Debug a test's VMs:** `SMOLBENTO_SMOLVM_HOME=/tmp/sbt-e2e-$(id -u) bento smolvm machine ls --json`.
 
 ## CI
 
