@@ -17,7 +17,8 @@ sandboxes. To download it ahead (before going offline, say), run `bento smolvm -
 ## Install with Homebrew
 
 ```sh
-brew tap pelotech/tap && brew trust pelotech/tap   # once: Homebrew 7+ only loads trusted taps
+# once: Homebrew 7+ only loads trusted taps
+brew tap pelotech/tap && brew trust pelotech/tap
 brew install pelotech/tap/smolbento
 ```
 

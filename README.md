@@ -74,7 +74,8 @@ See [Kits](docs/usage.md#kits) to add your own.
 macOS (Apple Silicon) or Linux (x86_64, arm64) with Homebrew:
 
 ```sh
-brew tap pelotech/tap && brew trust pelotech/tap   # once: Homebrew 7+ only loads trusted taps
+# once: Homebrew 7+ only loads trusted taps
+brew tap pelotech/tap && brew trust pelotech/tap
 brew install pelotech/tap/smolbento
 ```
 
