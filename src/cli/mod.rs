@@ -42,7 +42,6 @@ use crate::config::{Paths, Settings};
 use crate::smolvm::{ProcessRunner, Runner, Smolvm};
 
 /// The oldest smolvm smolbento supports.
-pub const MIN_SMOLVM: &str = "1.35.1";
 
 pub fn exit_code(err: &anyhow::Error) -> u8 {
     if err.downcast_ref::<Unsupported>().is_some() {
@@ -76,8 +75,9 @@ pub fn main(args: impl IntoIterator<Item = OsString>) -> Result<i32> {
     let paths = Paths::from_env(&env)?;
     let (settings, config_error) = Settings::load(&paths, env.clone());
     let store = crate::secrets::store::platform(&paths, &env);
+    let smolvm = crate::smolvm::locate::locate(&settings, &env)?;
     let runner = with_image_cache(
-        ProcessRunner::new(settings.value("smolvm.path")?).debug(cli.debug),
+        ProcessRunner::for_cmd(&smolvm).debug(cli.debug),
         &settings,
         &env,
     );
@@ -153,7 +153,9 @@ pub fn dispatch<R: Runner>(ctx: &mut Ctx<R>, cli: Cli) -> Result<i32> {
     }
     if cmd.needs_smolvm() {
         refuse_root(ctx.uid)?;
-        check_smolvm(&ctx.vm)?;
+        let smolvm = crate::smolvm::locate::locate(&ctx.settings, &ctx.env)?;
+        crate::smolvm::locate::check_home(&smolvm)?;
+        crate::smolvm::locate::ensure_installed(&smolvm, &ctx.env)?;
     }
     match cmd {
         Cmd::Run(a) => run::run(ctx, &a),
@@ -238,30 +240,6 @@ the agent couldn't write it; run it as your normal user"
     Ok(())
 }
 
-fn check_smolvm<R: Runner>(vm: &Smolvm<R>) -> Result<()> {
-    let v = vm.version()?;
-    if !version_at_least(&v, MIN_SMOLVM) {
-        bail!("smolvm {v} is too old; smolbento needs {MIN_SMOLVM} or newer (brew upgrade smolvm)");
-    }
-    Ok(())
-}
-
-pub fn version_at_least(version: &str, min: &str) -> bool {
-    let parse = |s: &str| -> Vec<u64> {
-        s.trim_start_matches('v')
-            .split('.')
-            .map(|p| {
-                p.chars()
-                    .take_while(char::is_ascii_digit)
-                    .collect::<String>()
-                    .parse()
-                    .unwrap_or(0)
-            })
-            .collect()
-    };
-    parse(version) >= parse(min)
-}
-
 /// Asks before destructive actions. sbx behaviour: fails without a terminal unless forced, and
 /// declining is an error.
 pub fn confirm<R: Runner>(ctx: &Ctx<R>, question: &str, force: bool) -> Result<()> {
@@ -329,24 +307,37 @@ pub fn table(rows: Vec<Vec<String>>) -> String {
 
 #[cfg(test)]
 mod tests {
+
+    #[test]
+    fn a_command_that_needs_smolvm_installs_it_first() {
+        // Short, so its sockets fit macOS's limit (an explicit home is checked).
+        let home = tempfile::tempdir_in("/tmp").unwrap();
+        // Not the pinned release, so it fails the checksum: proof that `ls` went to download it.
+        let (url, seen) = crate::testutil::http_server(b"not smolvm".to_vec());
+        let home_s = home.path().display().to_string();
+        let mut t = crate::testutil::test_env(&[
+            ("SMOLBENTO_SMOLVM_HOME", &home_s),
+            ("SMOLBENTO_SMOLVM_URL", &url),
+        ]);
+        t.ctx.env.remove("SMOLBENTO_SMOLVM");
+        t.ctx.settings = crate::config::Settings::load(&t.ctx.paths, t.ctx.env.clone()).0;
+        let err = t.sbt_err(&["ls"]);
+        assert!(err.contains("checksum"), "{err}");
+        assert_eq!(seen.lock().unwrap().len(), 1);
+    }
+
+    #[test]
+    fn settings_and_help_never_download() {
+        let (url, seen) = crate::testutil::http_server(b"not smolvm".to_vec());
+        let mut t = crate::testutil::test_env(&[("SMOLBENTO_SMOLVM_URL", &url)]);
+        t.ctx.env.remove("SMOLBENTO_SMOLVM");
+        t.ctx.settings = crate::config::Settings::load(&t.ctx.paths, t.ctx.env.clone()).0;
+        t.sbt(&["settings", "ls"]).unwrap();
+        t.sbt(&["version"]).unwrap();
+        assert!(seen.lock().unwrap().is_empty(), "nothing was downloaded");
+    }
     use super::*;
     use crate::testutil::*;
-
-    #[test]
-    fn versions_compare_numerically() {
-        assert!(version_at_least("1.32.2", "1.32.2"));
-        assert!(version_at_least("1.32.10", "1.32.2"));
-        assert!(version_at_least("v2.0.0", "1.32.2"));
-        assert!(!version_at_least("1.31.9", "1.32.2"));
-    }
-
-    #[test]
-    fn old_smolvm_is_refused() {
-        let mut t = test_env(&[]);
-        t.runner().ok(&["--version"], "smolvm 1.30.0\n");
-        let err = t.sbt(&["ls"]).unwrap_err();
-        assert!(err.to_string().contains("too old"));
-    }
 
     #[test]
     fn pending_and_cloud_commands_exit_2() {
@@ -369,12 +360,15 @@ mod tests {
     }
 
     #[test]
-    fn bare_sbt_hits_the_same_version_gate_as_ls() {
+    fn bare_sbt_installs_smolvm_like_ls() {
         for args in [&[][..], &["ls"][..]] {
-            let mut t = test_env(&[]);
-            t.runner().ok(&["--version"], "smolvm 1.30.0\n");
+            let (url, seen) = http_server(b"not smolvm".to_vec());
+            let mut t = test_env(&[("SMOLBENTO_SMOLVM_URL", &url)]);
+            t.ctx.env.remove("SMOLBENTO_SMOLVM");
+            t.ctx.settings = crate::config::Settings::load(&t.ctx.paths, t.ctx.env.clone()).0;
             let err = t.sbt(args).unwrap_err();
-            assert!(err.to_string().contains("too old"), "{args:?}");
+            assert!(format!("{err:#}").contains("checksum"), "{args:?}: {err:#}");
+            assert_eq!(seen.lock().unwrap().len(), 1, "{args:?}");
         }
     }
 

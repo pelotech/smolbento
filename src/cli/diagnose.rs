@@ -3,7 +3,7 @@
 use anyhow::Result;
 use std::io::Write;
 
-use super::{Ctx, MIN_SMOLVM, version_at_least};
+use super::Ctx;
 use crate::smolvm::Runner;
 
 pub fn run<R: Runner>(ctx: &mut Ctx<R>) -> Result<i32> {
@@ -12,7 +12,10 @@ pub fn run<R: Runner>(ctx: &mut Ctx<R>) -> Result<i32> {
     checks.push(kvm_check());
     #[cfg(target_os = "macos")]
     checks.push(entitlement_check(
-        &ctx.settings.value("smolvm.path")?,
+        &crate::smolvm::locate::locate(&ctx.settings, &ctx.env)?
+            .bin
+            .display()
+            .to_string(),
         &ctx.env,
     ));
     checks.push(config_check(ctx));
@@ -37,10 +40,7 @@ pub fn report(checks: &[(bool, String)]) -> (String, i32) {
 
 pub fn smolvm_check<R: Runner>(ctx: &Ctx<R>) -> (bool, String) {
     match ctx.vm.version() {
-        Ok(v) => (
-            version_at_least(&v, MIN_SMOLVM),
-            format!("smolvm {v} (minimum {MIN_SMOLVM})"),
-        ),
+        Ok(v) => (true, format!("smolvm {v}")),
         Err(e) => (false, format!("smolvm: {e:#}")),
     }
 }
@@ -159,8 +159,9 @@ mod tests {
         let t = test_env(&[]);
         assert!(smolvm_check(&t.ctx).0);
         t.runner().ok(&["--version"], "smolvm 1.0.0\n");
+        // No floor: the managed smolvm is the pinned one, an explicit one is the user's.
         let (ok, msg) = smolvm_check(&t.ctx);
-        assert!(!ok);
-        assert!(msg.contains("minimum 1.35.1"), "{msg}");
+        assert!(ok);
+        assert_eq!(msg, "smolvm 1.0.0");
     }
 }

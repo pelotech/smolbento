@@ -24,7 +24,7 @@ fn serve<R: Runner>(ctx: &Ctx<R>, name: &str) -> Result<Server> {
     let handlers = bridge::handlers(
         &ctx.env,
         bridge::Allowed::from_settings(&ctx.settings)?,
-        &ctx.settings.value("smolvm.path")?,
+        &crate::smolvm::locate::locate(&ctx.settings, &ctx.env)?,
         &sb,
         false,
     );

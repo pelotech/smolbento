@@ -4,6 +4,7 @@ mod client;
 mod error;
 pub mod fake;
 pub mod install;
+pub mod locate;
 mod network;
 pub mod pin;
 mod pull;
@@ -87,6 +88,13 @@ impl ProcessRunner {
         }
     }
 
+    /// A runner for `cmd`: its smolvm, with its env on every process.
+    pub fn for_cmd(cmd: &locate::SmolvmCmd) -> Self {
+        cmd.env
+            .iter()
+            .fold(Self::new(&cmd.bin), |r, (k, v)| r.env(k, v.clone()))
+    }
+
     /// Sets `name` on every smolvm process this runner starts.
     pub fn env(mut self, name: &str, value: impl Into<String>) -> Self {
         self.env.push((name.to_string(), value.into()));
@@ -112,16 +120,18 @@ impl ProcessRunner {
         }
     }
 
-    /// `smolvm --error-format json ARGS` with stdin closed, `remove` unset and then `env` set.
+    /// `smolvm --error-format json ARGS` with stdin closed: the runner's env, then `remove` unset
+    /// (it can unset the runner's own), then the call's `env` set.
     fn command(&self, args: &[String], env: &[(String, String)], remove: &[String]) -> Command {
         let mut cmd = Command::new(&self.bin);
+        cmd.envs(self.env.iter().map(|(k, v)| (k, v)));
         for name in remove {
             cmd.env_remove(name);
         }
         cmd.arg("--error-format")
             .arg("json")
             .args(args)
-            .envs(self.env.iter().chain(env).map(|(k, v)| (k, v)))
+            .envs(env.iter().map(|(k, v)| (k, v)))
             .stdin(Stdio::null());
         cmd
     }
@@ -167,7 +177,7 @@ impl ProcessRunner {
 
     fn spawn_error(&self) -> String {
         format!(
-            "could not run {}; install smolvm with `brew install smol-machines/tap/smolvm` or set smolvm.path",
+            "could not run {}; unset smolvm.path to use the smolvm smolbento downloads, or point it at an installed smolvm",
             self.bin.display()
         )
     }
@@ -394,6 +404,25 @@ mod tests {
 
     fn pair(k: &str, v: &str) -> (String, String) {
         (k.to_string(), v.to_string())
+    }
+
+    #[test]
+    fn the_runners_env_reaches_smolvm_and_a_call_can_remove_it() {
+        let dir = tempfile::tempdir().unwrap();
+        let runner = script(dir.path(), "printf '%s' \"${SMOLVM_DATA_DIR-unset}\"")
+            .env("SMOLVM_DATA_DIR", "/h/.smolbento");
+        assert_eq!(runner.run(&[]).unwrap().stdout, "/h/.smolbento");
+        let names = ["SMOLVM_DATA_DIR".to_string()];
+        assert_eq!(
+            runner.run_with_env(&[], &[], &names).unwrap().stdout,
+            "unset"
+        );
+        // A call's own env still wins over a removal.
+        let mine = [pair("SMOLVM_DATA_DIR", "/other")];
+        assert_eq!(
+            runner.run_with_env(&[], &mine, &names).unwrap().stdout,
+            "/other"
+        );
     }
 
     #[test]

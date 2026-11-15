@@ -33,6 +33,16 @@ pub fn test_env(extra_env: &[(&str, &str)]) -> TestEnv {
             dir.path().join("data").display().to_string(),
         ),
     ]);
+    // A home of its own (smolbento's `~/.smolbento` lives under it); a test may set another.
+    env.insert(
+        "HOME".to_string(),
+        dir.path().join("home").display().to_string(),
+    );
+    // An explicit smolvm, so no command downloads one (FakeRunner answers instead).
+    env.insert(
+        "SMOLBENTO_SMOLVM".to_string(),
+        "/nonexistent/smolvm".to_string(),
+    );
     // Built-in agents load these stand-ins, never Docker Hub.
     let agent_kits_dir = dir.path().join("agent-kits");
     crate::agents::write_stand_ins(&agent_kits_dir).unwrap();

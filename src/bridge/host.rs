@@ -50,7 +50,7 @@ impl Allowed {
 pub fn handlers(
     env: &BTreeMap<String, String>,
     allowed: Allowed,
-    smolvm: &str,
+    smolvm: &crate::smolvm::locate::SmolvmCmd,
     sb: &Sandbox,
     linger: bool,
 ) -> Handlers {
@@ -73,8 +73,13 @@ fn relay_user(sb: &Sandbox) -> &str {
 
 /// Starts the login callback relays; they stop when the handlers are dropped (the server stops).
 /// Each replay is bounded: the guest is untrusted.
-fn relay(smolvm: &str, machine: &str, user: &str, linger: bool) -> Relay {
-    let runner = ProcessRunner::new(smolvm);
+fn relay(
+    smolvm: &crate::smolvm::locate::SmolvmCmd,
+    machine: &str,
+    user: &str,
+    linger: bool,
+) -> Relay {
+    let runner = ProcessRunner::for_cmd(smolvm);
     let exec = Box::new(move |args: &[String]| {
         runner.run_bounded(args, relay::REPLAY_TIMEOUT, relay::MAX_REPLAY)
     });
@@ -98,9 +103,16 @@ pub fn attach(env: &BTreeMap<String, String>, settings: &Settings, sb: &Sandbox)
         eprintln!("warning: not opening URLs or copying from the sandbox: {e:#}");
         Allowed::default()
     });
-    let smolvm = settings
-        .value("smolvm.path")
-        .unwrap_or_else(|_| "smolvm".into());
+    let smolvm = match crate::smolvm::locate::locate(settings, env) {
+        Ok(s) => s,
+        Err(e) => {
+            eprintln!(
+                "warning: {}: no browser and clipboard bridge: {e:#}",
+                sb.name()
+            );
+            return None;
+        }
+    };
     let h = handlers(env, allowed, &smolvm, sb, false);
     http::serve(&super::host_socket(sb.name()), h).unwrap_or_else(|e| {
         eprintln!(
@@ -274,7 +286,14 @@ mod tests {
             browser,
             copy: true,
         };
-        handlers(&env(vars), allowed, "/nonexistent/smolvm", &sb, false)
+        let smolvm = crate::smolvm::locate::SmolvmCmd {
+            bin: "/nonexistent/smolvm".into(),
+            env: Vec::new(),
+            managed: false,
+            home: "/nonexistent".into(),
+            home_explicit: false,
+        };
+        handlers(&env(vars), allowed, &smolvm, &sb, false)
     }
 
     #[test]

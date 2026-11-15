@@ -1837,7 +1837,6 @@ SETUP
         assert_eq!(
             t.calls(),
             [
-                "--version",
                 "machine ls --json",
                 "machine status -n sbx-shell-proj --json"
             ]

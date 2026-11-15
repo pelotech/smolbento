@@ -122,8 +122,15 @@ pub const SETTINGS: &[SettingDef] = &[
     SettingDef {
         key: "smolvm.path",
         env: "SMOLBENTO_SMOLVM",
-        default: "smolvm",
-        help: "smolvm binary to run",
+        default: "",
+        help: "smolvm to run instead of the pinned release smolbento downloads (empty: the pinned one)",
+    },
+    SettingDef {
+        key: "smolvm.home",
+        env: "SMOLBENTO_SMOLVM_HOME",
+        default: "",
+        help: "Where smolbento keeps smolvm's state and the downloaded smolvm (empty: ~/.smolbento; \
+               `-`: smolvm's own default state)",
     },
     SettingDef {
         key: "smolvm.image-cache-size",
