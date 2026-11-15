@@ -20,7 +20,7 @@ pub(crate) fn lifecycle_exec_and_same_path_mount() {
         "root"
     );
     // A plain exec is streamed: output past smolvm's 11 MiB buffered cap arrives whole, and the
-    // command's exit status is sbt's.
+    // command's exit status is bento's.
     let big = e.ok(&["exec", &e.name, "head", "-c", "12000000", "/dev/zero"]);
     assert_eq!(big.len(), 12_000_000);
     let out = e.sbt(&["exec", &e.name, "sh", "-c", "echo to-err >&2; exit 7"]);
@@ -81,6 +81,32 @@ pub(crate) fn diagnose_passes() {
     let e = E2e::new("diag");
     let out = e.ok(&["diagnose"]);
     assert!(!out.contains("FAIL"), "{out}");
+}
+
+#[test]
+#[ignore = "boots real VMs; run with `just e2e`"]
+pub(crate) fn the_pinned_smolvm_runs_from_smolbentos_home() {
+    // Even when the run picks its own smolvm (`SMOLBENTO_SMOLVM`), this checks the pinned one.
+    let out = smolvm_command()
+        .arg("--version")
+        .env_remove("SMOLBENTO_SMOLVM")
+        .output()
+        .unwrap();
+    assert!(
+        out.status.success(),
+        "{}",
+        String::from_utf8_lossy(&out.stderr)
+    );
+    let version = smolbento::smolvm::pin::pin().version.as_str();
+    assert!(
+        String::from_utf8_lossy(&out.stdout).contains(version),
+        "{out:?}"
+    );
+    let bin = Path::new(&smolvm_home())
+        .join("engine")
+        .join(version)
+        .join("smolvm");
+    assert!(bin.is_file(), "{} missing", bin.display());
 }
 
 pub(crate) fn reachable(e: &E2e, url: &str) -> bool {
@@ -219,13 +245,14 @@ pub(crate) fn secrets_are_placeholders_in_the_guest() {
 }
 
 /// Runs `script` as root in the guest, straight through smolvm.
-/// Runs `script` as root in sandbox `sb`, with smolvm (not sbt) so it works before setup.
+/// Runs `script` as root in sandbox `sb`, with `bento smolvm` (not `bento exec`) so it works before
+/// setup.
 pub(crate) fn root_sh(sb: &str, script: &str) -> std::process::Output {
     let machine = format!("sbx-{sb}");
     let args = [
         "machine", "exec", "--name", &machine, "-u", "root", "--", "sh", "-c", script,
     ];
-    Command::new("smolvm").args(args).output().unwrap()
+    smolvm_command().args(args).output().unwrap()
 }
 
 /// `root_sh` that must succeed.

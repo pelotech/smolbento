@@ -3,7 +3,7 @@ use super::*;
 impl Image {
     /// Appends a layer giving Alpine (`base`) an `agent` account with the host's uid and its own
     /// home, as sbx images have one before any kit hook runs: the skills steps hand directories
-    /// and links to it, and the tests `sbt exec` as it.
+    /// and links to it, and the tests `bento exec` as it.
     pub(crate) fn with_agent_account(mut self, base: &Image) -> Image {
         let uid = smolbento::util::host_uid();
         let passwd =

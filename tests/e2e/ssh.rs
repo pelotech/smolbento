@@ -18,7 +18,7 @@ fn stdout(out: &Output) -> String {
     String::from_utf8_lossy(&out.stdout).into_owned()
 }
 
-/// `sbt setup ssh` against a throwaway HOME, so your `~/.ssh/config` is never touched. Returns the
+/// `bento setup ssh` against a throwaway HOME, so your `~/.ssh/config` is never touched. Returns the
 /// config path to hand to `ssh -F`. (smolvm runs with the real HOME: only this call has the fake.)
 fn setup(e: &E2e, args: &[&str]) -> PathBuf {
     let home = e.dir.path().join("home");
