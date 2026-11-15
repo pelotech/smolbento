@@ -4,6 +4,7 @@ mod client;
 mod error;
 pub mod fake;
 mod network;
+pub mod pin;
 mod pull;
 mod spawn;
 mod types;

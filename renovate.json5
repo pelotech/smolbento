@@ -6,10 +6,11 @@
   },
   customManagers: [
     {
-      // the smolvm version CI installs (e2e and the nix kit check)
+      // the pinned smolvm; its PR fails `smolvm-lock-check` until `just smolvm-pin` adds the
+      // checksums
       customType: 'regex',
-      managerFilePatterns: ['/^\\.github/actions/smolvm/action\\.yaml$/'],
-      matchStrings: ['SMOLVM_VERSION: "(?<currentValue>[^"]+)"'],
+      managerFilePatterns: ['/^smolvm\\.lock$/'],
+      matchStrings: ['version = "(?<currentValue>[^"]+)"'],
       datasourceTemplate: 'github-releases',
       depNameTemplate: 'smol-machines/smolvm',
       extractVersionTemplate: '^v(?<version>.*)$',

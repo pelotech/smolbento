@@ -12,19 +12,20 @@ runs:
         sudo udevadm control --reload-rules
         sudo udevadm trigger --name-match=kvm
 
-    # The one smolvm version CI uses; Renovate bumps it here.
+    # The pinned smolvm (smolvm.lock), checked against the lock's own checksum.
     - name: Install smolvm
       shell: bash
-      env:
-        SMOLVM_VERSION: "1.35.1"
-      run: |
+      # Puts the checksum-verified smolvm directory on PATH.
+      run: | # zizmor: ignore[github-env]
+        SMOLVM_VERSION=$(sed -n 's/^version = "\(.*\)"/\1/p' smolvm.lock)
+        sha=$(sed -n 's/^linux-x86_64 = "\(.*\)"/\1/p' smolvm.lock)
         base="https://github.com/smol-machines/smolvm/releases/download/v${SMOLVM_VERSION}"
         tarball="smolvm-${SMOLVM_VERSION}-linux-x86_64.tar.gz"
         cd "$RUNNER_TEMP"
         curl -fsSLO "$base/$tarball"
-        curl -fsSL "$base/checksums.sha256" | grep " ${tarball}\$" | sha256sum -c -
+        echo "${sha}  ${tarball}" | sha256sum -c -
         tar xzf "$tarball"
-        echo "$RUNNER_TEMP/smolvm-${SMOLVM_VERSION}-linux-x86_64" >> "$GITHUB_PATH" # zizmor: ignore[github-env]
+        echo "$RUNNER_TEMP/smolvm-${SMOLVM_VERSION}-linux-x86_64" >> "$GITHUB_PATH"
 
     - name: smolvm version
       shell: bash

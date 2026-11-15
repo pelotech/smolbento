@@ -23,6 +23,37 @@ e2e threads="2" *args:
 e2e-dhi *args:
     cargo nextest run --locked --run-ignored only --no-fail-fast -E 'binary(e2e) & ({{needs_dhi}})' {{args}}
 
+# Pin smolvm VERSION: rewrite smolvm.lock from that release's checksums.sha256
+smolvm-pin version:
+    #!/usr/bin/env bash
+    set -euo pipefail
+    sums=$(curl -fsSL "https://github.com/smol-machines/smolvm/releases/download/v{{version}}/checksums.sha256")
+    hash() { echo "$sums" | awk -v f="smolvm-{{version}}-$1.tar.gz" '$2 == f { print $1 }'; }
+    {
+        echo "# smolvm release smolbento runs; \`just smolvm-pin VERSION\` rewrites this file."
+        echo 'version = "{{version}}"'
+        echo
+        echo '[sha256]'
+        for p in darwin-arm64 linux-arm64 linux-x86_64; do
+            h=$(hash "$p"); [ -n "$h" ] || { echo "error: no $p asset in v{{version}}" >&2; exit 1; }
+            echo "$p = \"$h\""
+        done
+    } > smolvm.lock
+    echo "pinned smolvm {{version}}"
+
+# Check smolvm.lock's checksums against its version's release (fails a version bump until pinned)
+smolvm-lock-check:
+    #!/usr/bin/env bash
+    set -euo pipefail
+    v=$(sed -n 's/^version = "\(.*\)"/\1/p' smolvm.lock)
+    cp smolvm.lock "${TMPDIR:-/tmp}/smolvm.lock.want"
+    just smolvm-pin "$v" > /dev/null
+    if ! diff -u "${TMPDIR:-/tmp}/smolvm.lock.want" smolvm.lock; then
+        cp "${TMPDIR:-/tmp}/smolvm.lock.want" smolvm.lock
+        echo "error: smolvm.lock doesn't match smolvm $v's checksums; run \`just smolvm-pin $v\`" >&2
+        exit 1
+    fi
+
 # Run all pre-commit hooks
 lint:
     prek run --all-files

@@ -60,6 +60,10 @@ jobs:
         with:
           save-if: ${{ github.ref == 'refs/heads/main' }}
 
+      # A smolvm version bump (Renovate) fails here until `just smolvm-pin` adds its checksums.
+      - name: smolvm.lock matches its release
+        if: ${{ matrix.runner == 'ubuntu-latest' }}
+        run: just smolvm-lock-check
       # The CLI tests build the binary, so there's no separate build step.
       - name: Test
         run: just test

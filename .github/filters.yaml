@@ -9,4 +9,5 @@ code:
   - 'flake.nix'
   - 'flake.lock'
   - 'justfile'
+  - 'smolvm.lock'
   - '.github/**'
