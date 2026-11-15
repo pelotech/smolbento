@@ -775,6 +775,10 @@ fn drop_install_rules<R: Runner>(
 /// Pushes the policy (as just saved) to running sandboxes. Failures are warnings: the policy
 /// applies on each sandbox's next start anyway.
 pub fn push_network<R: Runner>(ctx: &Ctx<R>, policy: &Policy) -> Result<()> {
+    // Before the first download there is no smolvm to ask, and no sandbox to update.
+    if ctx.smolvm.managed && !ctx.smolvm.bin.is_file() {
+        return Ok(());
+    }
     let sandboxes = match sandbox::list(&ctx.vm) {
         Ok(s) => s,
         Err(e) => {

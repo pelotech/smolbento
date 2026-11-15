@@ -129,6 +129,17 @@ fn deny_refuses_hosts_under_a_wildcard_secret_host() {
 }
 
 #[test]
+fn a_policy_change_before_smolvm_is_downloaded_asks_smolvm_nothing() {
+    // A fresh install: no smolvm yet, so no sandbox to update (and nothing to warn about).
+    let mut t = test_env(&[]);
+    t.use_managed_smolvm();
+    t.sbt(&["policy", "init", "balanced"]).unwrap();
+    t.sbt(&["policy", "allow", "network", "example.com"])
+        .unwrap();
+    assert_eq!(t.calls(), Vec::<String>::new());
+}
+
+#[test]
 fn check_exit_codes() {
     let mut t = test_env(&[]);
     set_policy(&t, "mode = \"balanced\"");
