@@ -58,6 +58,11 @@ pub fn run<R: Runner>(ctx: &mut Ctx<R>, cmd: PolicyCmd) -> Result<i32> {
         PolicyCmd::Rm {
             kind: PolicyRmKind::Network(a),
         } => {
+            super::refuse(&[
+                (a.method.is_some(), "--method"),
+                (a.path.is_some(), "--path"),
+                (a.query.is_some(), "--query"),
+            ])?;
             if a.id.is_none() && a.resource.is_none() {
                 bail!("pass --id or --resource");
             }
@@ -91,6 +96,7 @@ pub fn run<R: Runner>(ctx: &mut Ctx<R>, cmd: PolicyCmd) -> Result<i32> {
                 ("--type", a.kind.is_some()),
                 ("--protocol", a.protocol.is_some()),
                 ("--include-inactive", a.include_inactive),
+                ("--profile", a.profile.is_some()),
             ] {
                 if set {
                     return Err(Unsupported(format!(

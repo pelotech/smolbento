@@ -272,6 +272,8 @@ fn ignored_options_warning(a: &RunArgs, name: &str) -> Option<String> {
         ttl: _,
         on_timeout: _,
         volume: _,
+        // Not implemented: refused the same way.
+        profile: _,
     } = &a.opts;
     let given: Vec<&str> = [
         (cpus.is_some(), "--cpus"),

@@ -42,6 +42,11 @@ struct Row<'a> {
 }
 
 fn ls<R: Runner>(ctx: &Ctx<R>, a: &TemplateLsArgs) -> Result<()> {
+    super::refuse(&[
+        (a.all, "--all"),
+        (a.digests, "--digests"),
+        (a.no_trunc, "--no-trunc"),
+    ])?;
     let all = Store::new(&ctx.paths).list()?;
     let rows: Vec<Row> = all
         .iter()
@@ -134,6 +139,10 @@ fn rm<R: Runner>(ctx: &Ctx<R>, a: &TemplateRmArgs) -> Result<()> {
 }
 
 fn load<R: Runner>(ctx: &Ctx<R>, a: &TemplateLoadArgs) -> Result<()> {
+    super::refuse(&[
+        (a.capture_mode.is_some(), "--capture-mode"),
+        (a.description.is_some(), "--description"),
+    ])?;
     if a.name.is_some() {
         bail!(
             "'template load' (local) takes one argument (FILE)\n  try: bento template load --help"
@@ -154,6 +163,10 @@ fn load<R: Runner>(ctx: &Ctx<R>, a: &TemplateLoadArgs) -> Result<()> {
 }
 
 fn save<R: Runner>(ctx: &Ctx<R>, a: &TemplateSaveArgs) -> Result<()> {
+    super::refuse(&[
+        (a.capture_mode.is_some(), "--capture-mode"),
+        (a.description.is_some(), "--description"),
+    ])?;
     let r = TemplateRef::parse(&a.tag)?;
     let sb = sandbox::get(&ctx.vm, &a.sandbox)?;
     if let Some(t) = &sb.meta.template {

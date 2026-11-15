@@ -200,3 +200,9 @@ policy check network -v api.example.com
 policy approval ls -q
 policy log --format yaml
 skills import -v
+create claude . --profile strict
+template ls --digests
+template save my-sandbox myimage:v1 --description notes
+policy rm network --resource example.com --method GET
+policy ls --profile strict
+secret set-custom --host api.example.com --env API_KEY --no-verify

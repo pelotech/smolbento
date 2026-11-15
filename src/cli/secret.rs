@@ -47,6 +47,10 @@ pub fn run<R: Runner>(ctx: &mut Ctx<R>, cmd: SecretCmd) -> Result<i32> {
             }
         }
         SecretCmd::SetCustom(a) => {
+            super::refuse(&[
+                (a.refresh.is_some(), "--refresh"),
+                (a.no_verify || a.show_error, "--no-verify/--show-error"),
+            ])?;
             if a.placeholder.is_some() {
                 return Err(Unsupported(
                     "--placeholder is not supported; smolvm chooses the placeholder".into(),

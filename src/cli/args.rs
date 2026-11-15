@@ -539,6 +539,8 @@ pub struct DiskSizes {
 /// Options shared by `run` and `create`.
 #[derive(Debug, Clone, Default, Args)]
 pub struct SandboxOpts {
+    #[arg(long, hide = true)]
+    pub profile: Option<String>,
     /// Sandbox name (default: <agent>-<workspace basename>)
     #[arg(long)]
     pub name: Option<String>,
@@ -632,6 +634,7 @@ impl SandboxOpts {
         if let Some((_, flag)) = cloud.iter().find(|(set, _)| *set) {
             return Err(Unsupported(format!("{flag} is a Docker Cloud option")).into());
         }
+        super::refuse(&[(self.profile.is_some(), "--profile")])?;
         if let Some(p) = self
             .pull
             .as_deref()
@@ -956,6 +959,12 @@ pub enum PolicyRmKind {
 
 #[derive(Debug, Args)]
 pub struct PolicyRmArgs {
+    #[arg(long, hide = true)]
+    pub method: Option<String>,
+    #[arg(long, hide = true)]
+    pub path: Option<String>,
+    #[arg(long, hide = true)]
+    pub query: Option<String>,
     /// Rule id
     #[arg(long)]
     pub id: Option<String>,
@@ -972,6 +981,8 @@ pub struct PolicyRmArgs {
 
 #[derive(Debug, Default, Args)]
 pub struct PolicyLsArgs {
+    #[arg(long, hide = true)]
+    pub profile: Option<String>,
     /// Only rules that apply to this sandbox
     pub sandbox: Option<String>,
     /// Show every resource and enforcement notes
@@ -1088,6 +1099,16 @@ pub enum McpCmd {
 
 #[derive(Debug, Args)]
 pub struct McpAddArgs {
+    #[arg(long = "disable-http2", hide = true)]
+    pub disable_http2: bool,
+    #[arg(long = "skip-ssrf-check", hide = true)]
+    pub skip_ssrf_check: bool,
+    #[arg(long = "callback-port", hide = true)]
+    pub callback_port: Option<String>,
+    #[arg(long, hide = true)]
+    pub scope: Vec<String>,
+    #[arg(long = "no-scope", hide = true)]
+    pub no_scope: bool,
     /// Server name
     pub name: String,
     /// The server's URL
@@ -1222,6 +1243,10 @@ pub enum TemplateCmd {
 
 #[derive(Debug, Args)]
 pub struct TemplateSaveArgs {
+    #[arg(long = "capture-mode", hide = true)]
+    pub capture_mode: Option<String>,
+    #[arg(long, hide = true)]
+    pub description: Option<String>,
     /// Sandbox to save
     pub sandbox: String,
     /// Template name, e.g. myimage:v1.0
@@ -1233,6 +1258,12 @@ pub struct TemplateSaveArgs {
 
 #[derive(Debug, Args)]
 pub struct TemplateLsArgs {
+    #[arg(long, short = 'a', hide = true)]
+    pub all: bool,
+    #[arg(long, hide = true)]
+    pub digests: bool,
+    #[arg(long = "no-trunc", hide = true)]
+    pub no_trunc: bool,
     #[command(flatten)]
     pub output: OutputArgs,
     /// Only display template names
@@ -1253,6 +1284,10 @@ pub struct TemplateRmArgs {
 
 #[derive(Debug, Args)]
 pub struct TemplateLoadArgs {
+    #[arg(long = "capture-mode", hide = true)]
+    pub capture_mode: Option<String>,
+    #[arg(long, hide = true)]
+    pub description: Option<String>,
     /// File made by `bento template save --output`
     pub file: PathBuf,
     /// sbx's cloud template name; refused for local templates
@@ -1333,6 +1368,12 @@ pub struct SecretSetArgs {
 
 #[derive(Debug, Args)]
 pub struct SecretCustomArgs {
+    #[arg(long = "no-verify", hide = true)]
+    pub no_verify: bool,
+    #[arg(long = "show-error", hide = true)]
+    pub show_error: bool,
+    #[arg(long, hide = true)]
+    pub refresh: Option<String>,
     /// Hosts the secret is sent to (repeatable)
     #[arg(long = "host", required = true)]
     pub hosts: Vec<String>,

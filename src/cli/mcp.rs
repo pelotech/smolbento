@@ -50,6 +50,10 @@ fn add<R: Runner>(ctx: &Ctx<R>, a: McpAddArgs) -> Result<()> {
         ),
         (a.resource.is_some(), "--resource"),
         (a.skip_auth, "--skip-auth"),
+        (a.disable_http2, "--disable-http2"),
+        (a.skip_ssrf_check, "--skip-ssrf-check"),
+        (a.callback_port.is_some(), "--callback-port"),
+        (!a.scope.is_empty() || a.no_scope, "--scope/--no-scope"),
     ];
     if let Some((_, flag)) = unsupported.iter().find(|(set, _)| *set) {
         return Err(Unsupported(format!(
