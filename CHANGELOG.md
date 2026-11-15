@@ -1,5 +1,17 @@
 # Changelog
 
+## [0.27.0](https://github.com/pelotech/smolbento/compare/v0.26.1...v0.27.0) (2026-11-15)
+
+
+### Features
+
+* sbx 0.51–0.53 parity and same-name folder fix ([#123](https://github.com/pelotech/smolbento/issues/123)) ([ed91121](https://github.com/pelotech/smolbento/commit/ed911217e075d28441456b28bf7ade879c84573a))
+
+
+### Chores
+
+* sign and check the nix kit with the released smolbento ([#121](https://github.com/pelotech/smolbento/issues/121)) ([8c08972](https://github.com/pelotech/smolbento/commit/8c08972da65f0cbd6524c3419edd1318c4b39b5f))
+
 ## [0.26.1](https://github.com/pelotech/smolbento/compare/v0.26.0...v0.26.1) (2026-11-14)
 
 
