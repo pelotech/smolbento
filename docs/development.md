@@ -38,10 +38,14 @@ Without the direnv hook, prefix commands with `direnv exec .`. Without direnv, u
 ## Running tests
 
 ```sh
-cargo nextest run publish_starts        # one unit test, by name substring
-just e2e 2 bundled_skills_are           # one e2e test (boots VMs), by name substring
-cargo insta test --accept               # run and accept changed snapshots
-cargo insta review                      # or review them one by one
+# one unit test, by name substring
+cargo nextest run publish_starts
+# one e2e test (boots VMs), by name substring
+just e2e 2 bundled_skills_are
+# run and accept changed snapshots
+cargo insta test --accept
+# or review them one by one
+cargo insta review
 ```
 
 A handler test, from `src/cli/ports.rs`:

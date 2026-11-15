@@ -3,10 +3,12 @@
 ## Settings
 
 ```sh
-bento settings ls                         # every setting, its value and where it came from
+# every setting, its value and where it came from
+bento settings ls
 bento settings get docker.enabled
 bento settings set docker.enabled false
-bento settings unset docker.enabled       # back to the default
+# back to the default
+bento settings unset docker.enabled
 ```
 
 An environment variable beats the config file, which beats the default. Booleans accept

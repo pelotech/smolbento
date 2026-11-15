@@ -7,7 +7,8 @@ Set up the dev shell first. See [Development](development.md).
 ```sh
 just test
 just lint
-just e2e        # if you touched anything that talks to smolvm
+# if you touched anything that talks to smolvm
+just e2e
 ```
 
 On a Mac, run all three. CI runs Linux only by default (see [CI](development.md#ci)).

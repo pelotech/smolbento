@@ -52,8 +52,10 @@ Cause: KVM is missing or not accessible.
 
 ```sh
 ls -l /dev/kvm
-sudo modprobe kvm_intel        # or kvm_amd, if the device is missing
-sudo usermod -aG kvm $USER     # if the device exists; then log out and back in
+# or kvm_amd, if the device is missing
+sudo modprobe kvm_intel
+# if the device exists; then log out and back in
+sudo usermod -aG kvm $USER
 ```
 
 If the device is missing, first enable virtualization in the BIOS or firmware. In a VM, enable
@@ -71,7 +73,8 @@ the next command downloads smolvm again.
 Cause: `~/.config/smolbento/config.toml` doesn't parse. The message shows the error.
 
 ```sh
-bento settings unset <key>       # reset one setting, or fix the file by hand
+# reset one setting, or fix the file by hand
+bento settings unset <key>
 ```
 
 ## `Permission denied` writing the workspace
@@ -106,7 +109,8 @@ Cause: a leftover sandbox or smolvm machine.
 ```sh
 bento ls
 bento rm -f <name>
-bento smolvm machine delete --name sbx-<name> -f   # if it's still listed by `bento smolvm machine ls`
+# if it's still listed by `bento smolvm machine ls`
+bento smolvm machine delete --name sbx-<name> -f
 ```
 
 A sandbox whose first start fails is removed, so you can rerun the command. If the removal fails too,
@@ -118,9 +122,12 @@ Cause: usually a full disk.
 
 ```sh
 df -h ~
-bento prune                # remove stopped sandboxes
-bento rm NAME              # remove one sandbox
-bento template rm NAME     # remove a saved template
+# remove stopped sandboxes
+bento prune
+# remove one sandbox
+bento rm NAME
+# remove a saved template
+bento template rm NAME
 ```
 
 ## `Refusing without a terminal; pass -f`

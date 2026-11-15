@@ -84,7 +84,8 @@ Remove smolbento's sandboxes and files first, then smolbento:
 
 ```sh
 bento reset --force
-brew uninstall smolbento    # or delete the binary and its links
+# or delete the binary and its links
+brew uninstall smolbento
 ```
 
 `bento reset` deletes every sandbox (including ones from before smolbento downloaded its own smolvm),

@@ -69,8 +69,10 @@ CLI running. In an environment file, keep `agent: gemini` and add the gemini kit
 ## Create without attaching
 
 ```sh
-bento create claude .            # create and start; workspace = current directory
-bento create shell               # no path: no host directory mounted
+# create and start; workspace = current directory
+bento create claude .
+# no path: no host directory mounted
+bento create shell
 ```
 
 A sandbox made by `create` runs until you stop it.
@@ -158,7 +160,8 @@ stay in the sandbox (`--no-tags`).
 ```sh
 git fetch sandbox-claude-myrepo
 git log sandbox-claude-myrepo/main
-git merge sandbox-claude-myrepo/main          # or check out, cherry-pick, …
+# or check out, cherry-pick, …
+git merge sandbox-claude-myrepo/main
 ```
 
 - `run` fetches `sandbox-<name>` on exit and prints git's summary. Turn it off with `bento settings
@@ -182,9 +185,12 @@ git merge sandbox-claude-myrepo/main          # or check out, cherry-pick, …
 ## Fork
 
 ```sh
-bento fork claude-myrepo                        # one copy: claude-myrepo-fork-1
-bento fork claude-myrepo --count 3              # three copies, for parallel attempts
-bento fork claude-myrepo --name claude-try-b    # pick the copy's name
+# one copy: claude-myrepo-fork-1
+bento fork claude-myrepo
+# three copies, for parallel attempts
+bento fork claude-myrepo --count 3
+# pick the copy's name
+bento fork claude-myrepo --name claude-try-b
 ```
 
 `fork` copies a running sandbox (memory, processes and disk) and prints the new names, one per line.
@@ -217,7 +223,8 @@ sandbox's next start.
 
 ```sh
 bento exec claude-myrepo git status
-bento exec -it claude-myrepo bash               # interactive shell
+# interactive shell
+bento exec -it claude-myrepo bash
 bento exec --privileged claude-myrepo apt-get install -y ripgrep
 bento exec -u root -w /tmp -e DEBUG=1 claude-myrepo env
 ```
@@ -233,11 +240,15 @@ was set at create, else `none`; `claude` has `ANTHROPIC`). Your `-e` wins. Diffe
 ## SSH into a sandbox
 
 ```sh
-bento setup ssh                 # once: adds a managed block to ~/.ssh/config
-ssh claude-myrepo.sbx         # a shell in the workspace
+# once: adds a managed block to ~/.ssh/config
+bento setup ssh
+# a shell in the workspace
+ssh claude-myrepo.sbx
 ssh claude-myrepo.sbx git status
-ssh -L 8080:localhost:3000 claude-myrepo.sbx   # reach a port inside the sandbox
-bento setup ssh remove          # removes the block
+# reach a port inside the sandbox
+ssh -L 8080:localhost:3000 claude-myrepo.sbx
+# removes the block
+bento setup ssh remove
 ```
 
 `ssh NAME.sbx` starts a stopped sandbox, and fails for one that doesn't exist (create it first). It
@@ -264,8 +275,10 @@ while `bento run` or `bento exec -it` is attached.
 
 ```sh
 # inside the sandbox
-xdg-open https://github.com/login/device    # opens in your host browser
-git diff | wl-copy                          # or xclip, xsel, pbcopy, clip.exe
+# opens in your host browser
+xdg-open https://github.com/login/device
+# or xclip, xsel, pbcopy, clip.exe
+git diff | wl-copy
 ```
 
 - Only `https://` URLs open. Others, or any URL when nothing serves the socket, print `Open this URL
@@ -306,9 +319,12 @@ your keys never enter the sandbox.
 
 ```sh
 # inside the sandbox ($SSH_AUTH_SOCK is /run/ssh-agent.sock)
-ssh-add -l                                  # lists your keys
-git commit -S -m "signed"                   # with gpg.format=ssh
-ssh-add -D                                  # fails: the sandbox can't change your agent
+# lists your keys
+ssh-add -l
+# with gpg.format=ssh
+git commit -S -m "signed"
+# fails: the sandbox can't change your agent
+ssh-add -D
 ```
 
 - The agent is `SSH_AUTH_SOCK` when you run `bento`, or the socket in `ssh.agentSocketPath`. With
@@ -363,12 +379,18 @@ Kits add tools, files, network rules, credentials and setup steps. smolbento run
 kits (v3, and v2 `spec.yaml`) and smolvm Smolfiles.
 
 ```sh
-bento run claude . --kit docker.io/acme/postgres-kit:1    # add a mixin kit to an agent
-bento run docker.io/acme/my-agent:1 .                     # a workload kit replaces the agent
-bento create shell . --kit ./my-kit --kit-arg region=eu   # a local kit, with an argument
-bento kit inspect ./my-kit                                # what it provides and asks for
-bento kit validate ./my-kit                               # check it without running it
-bento kit add claude-myrepo ./my-mixin                    # add a mixin to an existing sandbox
+# add a mixin kit to an agent
+bento run claude . --kit docker.io/acme/postgres-kit:1
+# a workload kit replaces the agent
+bento run docker.io/acme/my-agent:1 .
+# a local kit, with an argument
+bento create shell . --kit ./my-kit --kit-arg region=eu
+# what it provides and asks for
+bento kit inspect ./my-kit
+# check it without running it
+bento kit validate ./my-kit
+# add a mixin to an existing sandbox
+bento kit add claude-myrepo ./my-mixin
 ```
 
 A **mixin** adds to an agent (`--kit`, repeatable). A **workload** kit replaces the agent. Pass it
@@ -543,11 +565,16 @@ Skills are folders with a `SKILL.md` that agents load on demand. smolbento keeps
 and links it into sandboxes.
 
 ```sh
-bento skills add anthropics/skills --skill pdf     # from GitHub, or any Git URL
-bento skills add anthropics/skills                 # every skill in the repository
-bento skills import                                # copy skills from your agents' directories
-bento skills ls                                    # SKILL and STORE columns; --json, -q
-bento skills update pdf                            # re-fetch a skill added from a repository
+# from GitHub, or any Git URL
+bento skills add anthropics/skills --skill pdf
+# every skill in the repository
+bento skills add anthropics/skills
+# copy skills from your agents' directories
+bento skills import
+# SKILL and STORE columns; --json, -q
+bento skills ls
+# re-fetch a skill added from a repository
+bento skills update pdf
 bento skills rm pdf
 ```
 
@@ -589,7 +616,8 @@ skills over, and `import --dry-run` previews them.
 
 ```sh
 bento create claude . --skills readwrite
-bento settings set skills.defaultMode off          # the default for new sandboxes
+# the default for new sandboxes
+bento settings set skills.defaultMode off
 ```
 
 The mode is fixed at create. On an existing sandbox, `--skills` is ignored, like `--cpus`, and so is
@@ -689,11 +717,16 @@ Install your tools once in a sandbox, save it as a template, and start new sandb
 ```sh
 bento stop claude-myrepo
 bento template save claude-myrepo myimage:v1
-bento template save claude-myrepo myimage:v1 -o myimage.tar   # also export to a file
-bento run -t myimage:v1 claude .                 # or: create -t myimage:v1
-bento template ls                                # --json, --format json|yaml, -q
-bento template rm myimage:v1                     # name, or a 4+ hex character id prefix; -f skips the prompt
-bento template load myimage.tar                  # import a file made with --output
+# also export to a file
+bento template save claude-myrepo myimage:v1 -o myimage.tar
+# or: create -t myimage:v1
+bento run -t myimage:v1 claude .
+# --json, --format json|yaml, -q
+bento template ls
+# name, or a 4+ hex character id prefix; -f skips the prompt
+bento template rm myimage:v1
+# import a file made with --output
+bento template load myimage.tar
 ```
 
 - The sandbox must be stopped to save it.
@@ -741,11 +774,16 @@ sandboxOptions:
 ```
 
 ```sh
-bento env plan                         # show what applying would do; changes nothing
-bento env create                       # from ./sbxenv.yaml: plan, ask once, create (no attach)
-bento env run -f ./team ./local.yaml   # create if missing, then attach; -f skips the question
-bento env exec -- make test            # run a command in the environment's sandbox
-bento env rm                           # remove the sandbox and the secrets scoped to it
+# show what applying would do; changes nothing
+bento env plan
+# from ./sbxenv.yaml: plan, ask once, create (no attach)
+bento env create
+# create if missing, then attach; -f skips the question
+bento env run -f ./team ./local.yaml
+# run a command in the environment's sandbox
+bento env exec -- make test
+# remove the sandbox and the secrets scoped to it
+bento env rm
 ```
 
 - Each `PATH` is a file or a directory holding `sbxenv.yaml`. With none, `~/.sbxenv.yaml` (if
@@ -874,16 +912,22 @@ Without a terminal, `bento` fails rather than asking. In scripts and CI, run `be
 balanced`.
 
 ```sh
-bento policy allow network api.example.com,*.example.org   # applies to running sandboxes at once
+# applies to running sandboxes at once
+bento policy allow network api.example.com,*.example.org
 bento policy deny network tracking.example.com
 bento policy allow network internal.example.com --sandbox claude-myrepo
-bento policy ls                       # --wide shows every host and enforcement notes
-bento policy check network pypi.org   # exits 1 when denied, and says which rule decided
-bento policy log                      # requests sandboxes made that were blocked
-bento policy approval ls              # blocked hosts with no rule yet
+# --wide shows every host and enforcement notes
+bento policy ls
+# exits 1 when denied, and says which rule decided
+bento policy check network pypi.org
+# requests sandboxes made that were blocked
+bento policy log
+# blocked hosts with no rule yet
+bento policy approval ls
 bento policy approval respond registry.example.com allow
 bento policy rm network --resource api.example.com
-bento create claude . --deny-network evil.com,tracker.example   # deny rules for this sandbox only
+# deny rules for this sandbox only
+bento create claude . --deny-network evil.com,tracker.example
 ```
 
 Rules take hosts (`api.x.com`), wildcards (`*.x.com`, `**.x.com`), IPs and CIDRs, comma-separated.
@@ -911,11 +955,14 @@ A sandbox reaches your machine's localhost as `host.docker.internal` once a `loc
 it:
 
 ```sh
-bento policy allow network --sandbox claude-myrepo localhost   # before the sandbox is created
+# before the sandbox is created
+bento policy allow network --sandbox claude-myrepo localhost
 bento run --name claude-myrepo claude .
 # inside: curl http://host.docker.internal:11434/
-bento policy rm network --sandbox claude-myrepo --resource localhost   # closes it, live
-bento policy allow network --sandbox claude-myrepo localhost           # opens it again, live
+# closes it, live
+bento policy rm network --sandbox claude-myrepo --resource localhost
+# opens it again, live
+bento policy allow network --sandbox claude-myrepo localhost
 ```
 
 - Only your `localhost` rules (global, or `--sandbox NAME`) give host access, and only at create.
@@ -939,12 +986,17 @@ Agents never see your API keys. The variable holds a placeholder inside the sand
 swaps in the real value only on HTTPS requests to that service's hosts.
 
 ```sh
-bento secret set anthropic                    # prompts (hidden input; an empty line cancels)
-bento secret set claude --ref op://Private/claude-sandbox/credential   # 1Password, read at each start
-bento secret set github --command 'gh auth token'                      # run at each start
-bento secret set openai --sandbox claude-myrepo -t sk-…                # one sandbox only
+# prompts (hidden input; an empty line cancels)
+bento secret set anthropic
+# 1Password, read at each start
+bento secret set claude --ref op://Private/claude-sandbox/credential
+# run at each start
+bento secret set github --command 'gh auth token'
+# one sandbox only
+bento secret set openai --sandbox claude-myrepo -t sk-…
 bento secret set-custom --host api.example.com --env EXAMPLE_TOKEN --command 'pass show example'
-printf %s "$TOKEN" | bento secret set github --value-stdin           # keeps it out of argv
+# keeps it out of argv
+printf %s "$TOKEN" | bento secret set github --value-stdin
 bento secret ls
 bento secret rm github
 ```
@@ -975,8 +1027,10 @@ A registry credential lets smolbento pull kits and images that need a login. It 
 machine; sandboxes never get it.
 
 ```sh
-bento secret set --registry dhi.io --username alice --password-stdin < token.txt   # Docker Hub token
-gh auth token | bento secret set --registry ghcr.io --password-stdin               # token-only
+# Docker Hub token
+bento secret set --registry dhi.io --username alice --password-stdin < token.txt
+# token-only
+gh auth token | bento secret set --registry ghcr.io --password-stdin
 bento secret ls
 bento secret rm --registry dhi.io
 ```
@@ -1014,9 +1068,11 @@ too, unless you pass `--preserve-secrets`.
 ## Ports
 
 ```sh
-bento ports claude-myrepo --publish 3000          # picks a free host port; works while running
+# picks a free host port; works while running
+bento ports claude-myrepo --publish 3000
 bento ports claude-myrepo --publish 8080:80
-bento ports claude-myrepo                         # list
+# list
+bento ports claude-myrepo
 bento ports claude-myrepo --unpublish 8080:80
 ```
 
@@ -1028,7 +1084,8 @@ that includes one doesn't start it.
 ```sh
 bento cp ./notes.md claude-myrepo:/tmp/notes.md
 bento cp claude-myrepo:/home/agent/.bash_history ./history
-bento cp -L ./linked-file claude-myrepo:/tmp/f     # follow a symlink on your side
+# follow a symlink on your side
+bento cp -L ./linked-file claude-myrepo:/tmp/f
 ```
 
 One side must be `SANDBOX:/absolute/path`; sandbox-to-sandbox copies aren't supported. A directory
@@ -1039,8 +1096,10 @@ single files copy.
 
 ```sh
 bento ls
-bento ls --json            # or --format json|yaml
-bento ls -q                # names only
+# or --format json|yaml
+bento ls --json
+# names only
+bento ls -q
 ```
 
 `bento` with no arguments also lists sandboxes. `bento inspect NAME` shows one sandbox's agent, kits,
@@ -1056,12 +1115,17 @@ shell-scratch   shell    ○ stopped                         -                  
 ## Stop, start and remove
 
 ```sh
-bento stop claude-myrepo                 # keeps the disk
+# keeps the disk
+bento stop claude-myrepo
 bento start claude-myrepo
-bento rm claude-myrepo                   # asks first; -f to skip; --all for every sandbox
-bento prune                              # remove all stopped sandboxes, and leftover host services
-bento prune --dry-run --filter until=24h # stopped sandboxes created more than 24h ago
-bento reset -f                           # remove every sandbox
+# asks first; -f to skip; --all for every sandbox
+bento rm claude-myrepo
+# remove all stopped sandboxes, and leftover host services
+bento prune
+# stopped sandboxes created more than 24h ago
+bento prune --dry-run --filter until=24h
+# remove every sandbox
+bento reset -f
 ```
 
 `prune --dry-run` also lists host service units left by sandboxes deleted with `bento smolvm
