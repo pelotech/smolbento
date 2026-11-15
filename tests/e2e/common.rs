@@ -10,6 +10,9 @@ pub(crate) struct E2e {
     /// Alpine with an `agent` user in the test's registry, set by [`Registry::start`]: a kit
     /// from a registry only combines with a `-t` that is a registry reference, not an archive.
     pub(crate) base: std::cell::RefCell<Option<String>>,
+    /// Built-in agents load sbx's published kits from Docker Hub instead of the stand-ins
+    /// ([`E2e::real_agent_kits`]).
+    pub(crate) real_kits: std::cell::Cell<bool>,
 }
 
 impl E2e {
@@ -22,9 +25,17 @@ impl E2e {
             vars: Vec::new(),
             no_seeds: Default::default(),
             base: Default::default(),
+            real_kits: Default::default(),
         };
+        agent_stand_ins(&e.dir.path().join("agent-kits"));
         e.ok(&["policy", "init", "allow-all"]);
         e
+    }
+
+    /// Built-in agents load sbx's published kits (`docker.io/sbx/<name>:latest`), not the
+    /// stand-ins every other test uses with `-t <image>`.
+    pub(crate) fn real_agent_kits(&self) {
+        self.real_kits.set(true);
     }
 
     /// The test boots images made for it alone (kits from its registry, builder builds): smolvm
@@ -60,6 +71,10 @@ impl E2e {
             .env_remove("SMOLBENTO_SSH_AGENT_FORWARDING")
             .envs(self.vars.iter().map(|(k, v)| (k, v)))
             .envs(self.no_seeds.get().then_some(("SMOLVM_IMAGE_SEEDS", "0")))
+            .envs((!self.real_kits.get()).then(|| {
+                let dir = self.dir.path().join("agent-kits");
+                ("SMOLBENTO_AGENT_KITS_DIR", dir.display().to_string())
+            }))
     }
 
     /// Host git in the workspace. The `sandbox-<name>` remote runs `smolbento _upload-pack`, so
@@ -121,12 +136,46 @@ impl E2e {
         self.create_alpine_named(&self.name, then);
     }
 
+    /// `create_alpine` from [`E2e::v2_shell`], for tests that add v2 mixins.
+    pub(crate) fn create_alpine_v2(&self) {
+        self.create_alpine_from(&self.v2_shell(), &self.name, "apk add -q bash");
+    }
+
+    /// A v2 workload named `shell` with an agent file (`AGENTS.md`), written once: v2 mixins
+    /// need a v2 workload, as in sbx, and the built-in agents are v3 kits. Boot it with `-t`.
+    pub(crate) fn v2_shell(&self) -> String {
+        let dir = self.dir.path().join("v2-shell");
+        if !dir.exists() {
+            std::fs::create_dir_all(&dir).unwrap();
+            std::fs::write(
+                dir.join("spec.yaml"),
+                r#"schemaVersion: "2"
+kind: sandbox
+name: shell
+sandbox:
+  image: alpine
+  entrypoint: [bash, -l]
+agentInstructions:
+  filename: AGENTS.md
+  content: "An e2e sandbox."
+"#,
+            )
+            .unwrap();
+        }
+        dir.display().to_string()
+    }
+
     /// An Alpine sandbox `name` (with its `agent` user), then `then` run as root.
     fn create_alpine_named(&self, name: &str, then: &str) {
+        self.create_alpine_from("shell", name, then);
+    }
+
+    /// `create_alpine_named` with `target` as the agent.
+    fn create_alpine_from(&self, target: &str, name: &str, then: &str) {
         let ws = self.workspace();
         self.ok(&[
             "create",
-            "shell",
+            target,
             ws.to_str().unwrap(),
             "--name",
             name,
@@ -565,14 +614,24 @@ impl E2e {
 
     /// `sbt create` of an Alpine-based shell sandbox with `kits` (`-t <alpine> --kit ...`).
     pub(crate) fn create_with_kits(&self, kits: &[&str]) {
+        self.create_with_kits_as("shell", kits);
+    }
+
+    /// `create_with_kits` with `agent` (v2 mixins get the v2 `shell` instead).
+    pub(crate) fn create_with_kits_as(&self, agent: &str, kits: &[&str]) {
         let ws = self.workspace();
         let template = self.alpine_template();
         let mut args = vec!["create", "-t", &template];
         for k in kits {
             args.extend(["--kit", k]);
         }
+        // v2 mixins need a v2 workload.
+        let v2 = kits
+            .iter()
+            .all(|k| std::path::Path::new(k).join("spec.yaml").is_file());
+        let v2_shell = self.v2_shell();
         args.extend([
-            "shell",
+            if v2 { v2_shell.as_str() } else { agent },
             ws.to_str().unwrap(),
             "--name",
             &self.name,
@@ -602,4 +661,70 @@ pub(crate) fn basic_auth_ok(e: &E2e, sb: &str, var: &str, pass: &str) -> bool {
          https://httpbin.org/basic-auth/user/{pass}"
     );
     e.sbt(&["exec", sb, "sh", "-c", &cmd]).status.success()
+}
+
+/// Stand-ins for the built-in agents' published kits, one prebuilt OCI layout per name under
+/// `dir`, as smolbento reads them with `SMOLBENTO_AGENT_KITS_DIR`: a v3 workload with no layers
+/// that launches its own name as `agent`. Tests boot them with `-t <image>`, so nothing is pulled.
+pub(crate) fn agent_stand_ins(dir: &Path) {
+    use sha2::{Digest, Sha256};
+    let names = [
+        "claude",
+        "codex",
+        "copilot",
+        "cursor",
+        "devin",
+        "docker-agent",
+        "droid",
+        "kiro",
+        "opencode",
+        "shell",
+    ];
+    for name in names {
+        let kit = dir.join(name);
+        let blobs = kit.join("blobs").join("sha256");
+        std::fs::create_dir_all(&blobs).unwrap();
+        let put = |data: &[u8]| {
+            let hex: String = Sha256::digest(data)
+                .iter()
+                .map(|b| format!("{b:02x}"))
+                .collect();
+            std::fs::write(blobs.join(&hex), data).unwrap();
+            format!("sha256:{hex}")
+        };
+        // As sbx's kits launch them; `shell` is a login bash.
+        let entrypoint = if name == "shell" {
+            vec!["bash", "-l"]
+        } else {
+            vec![name]
+        };
+        let config = serde_json::json!({"config": {"Entrypoint": entrypoint, "User": "agent"}});
+        let config = config.to_string();
+        // `claude` keeps its agent file where the real kit does; sbx's `shell` kit has none.
+        let descriptor = if name == "claude" {
+            r#"{"schemaVersion":"3","kind":"workload","capabilities":[
+                {"type":"com.docker.sandbox/agent-context@1","optional":true,"config":{
+                 "content":"","directory":"/home/agent/.claude","filename":"CLAUDE.md"}}]}"#
+        } else {
+            r#"{"schemaVersion":"3","kind":"workload"}"#
+        };
+        let manifest = serde_json::json!({
+            "schemaVersion": 2,
+            "mediaType": "application/vnd.oci.image.manifest.v1+json",
+            "config": {"mediaType": "application/vnd.oci.image.config.v1+json",
+                       "digest": put(config.as_bytes()), "size": config.len()},
+            "layers": [],
+            "annotations": {
+                "vnd.docker.sandbox.kit.descriptor": descriptor,
+                "vnd.docker.sandbox.kit.schema-version": "3",
+            },
+        })
+        .to_string();
+        let digest = put(manifest.as_bytes());
+        std::fs::write(kit.join("oci-layout"), r#"{"imageLayoutVersion":"1.0.0"}"#).unwrap();
+        let index = serde_json::json!({"schemaVersion": 2, "manifests": [{
+            "mediaType": "application/vnd.oci.image.manifest.v1+json",
+            "digest": digest, "size": manifest.len()}]});
+        std::fs::write(kit.join("index.json"), index.to_string()).unwrap();
+    }
 }

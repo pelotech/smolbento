@@ -21,9 +21,12 @@ use crate::smolvm::{Credential, ExecSpec, MachineState, Runner, Smolvm, SmolvmEr
 use crate::util;
 
 pub const BUILDER: &str = "_builder";
-/// Renovate bumps this (see renovate.json5).
-pub const BUILDER_IMAGE: &str = "docker.io/sbx/shell-docker-image:latest@sha256:\
-                                 78bbd3aa71057e907f70a81c23456ab5476c8b6ec66c7d2bb356181fa3f94a1f";
+
+/// The kit builder's image: sbx's `shell` agent kit, which has Docker with buildx (214 MB, a
+/// quarter of sbx's shell-docker-image), booted as a plain image. Pinned by digest; Renovate
+/// bumps it.
+#[rustfmt::skip] // one line, so Renovate can match it
+pub const BUILDER_IMAGE: &str = "docker.io/sbx/shell:latest@sha256:89ed5d63def6bfb2373d408e3ab6ad55aa5c010f884a182a78299fcf85ea42d1";
 
 const MEMORY_MIB: u64 = 4096;
 
@@ -223,8 +226,9 @@ fn start<R: Runner>(ctx: &Ctx<R>, sb: &mut Sandbox, tokens: Vec<(String, String)
     })
 }
 
-/// The builder's kits: sbx's shell image with Docker (its recommended base for custom workloads)
-/// and the shipped docker kit, whose startup hook starts dockerd on every start of the builder.
+/// The builder's kits: the `shell` agent's image as a plain image, and the shipped docker kit,
+/// whose startup hook starts dockerd on every start of the builder. It runs as root, like every
+/// internal sandbox.
 fn docker_plan() -> Result<Plan> {
     let workload = Kit {
         content: Content::Image(BUILDER_IMAGE.into()),
@@ -580,11 +584,10 @@ mod tests {
             .position(|l| l.starts_with("machine create -n sbx-_builder"))
             .expect("create");
         let c = &lines[create];
-        assert!(c.contains(&format!("--image {BUILDER_IMAGE}")), "{c}");
         assert!(
             c.contains(
-                "--image docker.io/sbx/shell-docker-image:latest@sha256:\
-                 78bbd3aa71057e907f70a81c23456ab5476c8b6ec66c7d2bb356181fa3f94a1f"
+                "--image docker.io/sbx/shell:latest@sha256:\
+                 89ed5d63def6bfb2373d408e3ab6ad55aa5c010f884a182a78299fcf85ea42d1"
             ),
             "{c}"
         );
