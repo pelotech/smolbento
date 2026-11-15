@@ -133,3 +133,33 @@ conformance *args:
     adapter="$PWD/tests/conformance/smolbento-adapter"
     cd "$spec"
     GOWORK=off nix shell nixpkgs#go -c go run ./cmd/kit-tck runtime --adapter "$adapter" --timeout 2h {{args}}
+
+# Record the README demo into dist/demo.gif with VHS (boots a VM; needs Nix). Your own sandboxes,
+# settings and secrets are untouched: the demo has its own dirs and a sandbox-scoped dummy secret.
+demo:
+    #!/usr/bin/env bash
+    set -euo pipefail
+    cargo build --release --locked
+    # The demo sandbox's scoped secret is a keychain item every smolbento shares: never take over one.
+    if [ "$(uname)" = Darwin ] &&
+        security find-generic-password -s smolbento -a sandbox:claude-bento-demo/anthropic >/dev/null 2>&1; then
+        echo "error: a secret for sandbox claude-bento-demo already exists; remove it first" >&2
+        exit 1
+    fi
+    # A fixed path, since Claude shows it on screen; emptied first.
+    export DEMO_DIR=/tmp/bento-demo
+    rm -rf "$DEMO_DIR" && mkdir -p "$DEMO_DIR/bin" "$DEMO_DIR/bento-demo" dist
+    ln -s "$PWD/target/release/smolbento" "$DEMO_DIR/bin/bento"
+    export PATH="$DEMO_DIR/bin:$PATH"
+    export SMOLBENTO_CONFIG_DIR="$DEMO_DIR/config" SMOLBENTO_DATA_DIR="$DEMO_DIR/data"
+    # Short, and kept between recordings so the VM image stays warm.
+    export SMOLBENTO_SMOLVM_HOME="/tmp/bento-demo-$(id -u)"
+    cleanup() { bento rm -f claude-bento-demo >/dev/null 2>&1 || true; }
+    trap 'cleanup; rm -rf "$DEMO_DIR"' EXIT
+    # A run that was killed may have left its sandbox in the demo's smolvm home.
+    cleanup
+    # Off camera: boot once so the VM image is warm, then forget the policy so its prompt shows.
+    (cd "$DEMO_DIR/bento-demo" && bento policy init balanced >/dev/null && bento create claude && cleanup)
+    rm -f "$SMOLBENTO_CONFIG_DIR/policy.toml"
+    nix run --inputs-from . nixpkgs#vhs -- docs/demo.tape
+    ls -lh dist/demo.gif
