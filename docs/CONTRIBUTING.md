@@ -33,7 +33,10 @@ On a Mac, run all three. CI runs Linux only by default (see [CI](development.md#
 4. Update the `--help` snapshots (`cargo insta review`) and the docs.
 5. Update [Development status](development-status.md) if it moves a phase forward.
 
-## Agent images
+## Agents
 
-Agent presets live in `src/agents.rs` as pinned `docker/sandbox-templates` tags. Renovate proposes
-updates. Check a new tag with `sbt run <agent>` before merging.
+Built-in agents are sbx's published kits, `docker.io/sbx/<agent>:latest`; `src/agents.rs` lists only
+their names. A kit change reaches users at their next create. The `real_*_kit` e2e tests pull the
+real `claude` and `shell` kits; every other test uses stand-ins (`SMOLBENTO_AGENT_KITS_DIR`). The
+kit builder's image (`BUILDER_IMAGE`, the `shell` kit as a plain image) is pinned by digest;
+Renovate bumps it.

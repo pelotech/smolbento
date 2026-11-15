@@ -168,12 +168,7 @@ fn save<R: Runner>(ctx: &Ctx<R>, a: &TemplateSaveArgs) -> Result<()> {
             sb.name()
         );
     }
-    if crate::agents::find(&sb.meta.agent).is_none() {
-        bail!(
-            "cannot save {}: templates of kit workload sandboxes aren't supported yet",
-            sb.name()
-        );
-    }
+    sb.check_current()?;
     if sb.is_running() {
         let refused = || {
             anyhow::anyhow!(
@@ -210,6 +205,7 @@ fn save<R: Runner>(ctx: &Ctx<R>, a: &TemplateSaveArgs) -> Result<()> {
             agent: sb.meta.agent.clone(),
             image: sb.image.clone().unwrap_or_default(),
             docker: sb.meta.docker,
+            kits: sb.meta.kits.clone(),
             created_at: humantime::format_rfc3339_seconds(created).to_string(),
             ..Default::default()
         },
@@ -241,6 +237,11 @@ mod tests {
             ("sbx.name", "a"),
             ("sbx.agent", "shell"),
             ("sbx.docker", "true"),
+            ("sbx.command", r#"["shell"]"#),
+            (
+                "sbx.kits",
+                r#"[{"name":"shell","ref":"docker.io/sbx/shell:latest@sha256:ab"}]"#,
+            ),
         ];
         labels.extend_from_slice(extra);
         let r = t.runner();
@@ -333,12 +334,19 @@ mod tests {
     }
 
     #[test]
-    fn a_kit_workload_sandbox_is_refused_before_any_pack() {
-        let mut t = env_with_sandbox("running", &[("sbx.agent", "my-kit")]);
+    fn an_old_preset_sandbox_is_refused_before_any_pack() {
+        // No `sbx.command`: made when built-in agents weren't kits.
+        let mut t = test_env(&[]);
+        let labels = [("sbx.name", "a"), ("sbx.agent", "shell")];
+        t.runner().ok(
+            &["machine", "status", "-n", "sbx-a"],
+            &machine_json("sbx-a", "running", &labels),
+        );
         let err = t.sbt_err(&["template", "save", "a", "t2"]);
         assert_eq!(
             err,
-            "cannot save a: templates of kit workload sandboxes aren't supported yet"
+            "sandbox a was created by an older smolbento whose built-in agents weren't kits; \
+             recreate it (sbt rm a, then sbt create …)"
         );
         let calls = t.calls();
         assert!(!calls.iter().any(|l| l.starts_with("pack")), "{calls:?}");
@@ -410,6 +418,7 @@ mod tests {
                     agent: "shell".into(),
                     image: "img".into(),
                     created_at: "1970-01-12T13:46:30Z".into(),
+                    kits: crate::testutil::saved_template_kits(t, "shell"),
                     ..Default::default()
                 },
                 &src,

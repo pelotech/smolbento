@@ -37,6 +37,8 @@ use crate::util::{hex, sha256_digest};
 const DESCRIPTOR_ANNOTATION: &str = "vnd.docker.sandbox.kit.descriptor";
 const SCHEMA_ANNOTATION: &str = "vnd.docker.sandbox.kit.schema-version";
 const REF_NAME_ANNOTATION: &str = "org.opencontainers.image.ref.name";
+/// sbx's published kits set it to `"true"` when the image's Docker engine should start.
+const START_DOCKER_ANNOTATION: &str = "com.docker.sandboxes.start-docker";
 /// The config of a v2 kit published as an OCI artifact: the kit's spec.yaml.
 const V2_SPEC_MEDIA_TYPE: &str = "application/vnd.docker.sandbox.kit.v2.spec+yaml";
 const EMPTY_MEDIA_TYPE: &str = "application/vnd.oci.empty.v1+json";
@@ -47,9 +49,26 @@ const V2_FILES_MEDIA_TYPE: &str = "application/vnd.oci.image.layer.v1.tar+gzip";
 /// descriptor annotation is a plain image and an error. A DIGEST (one a signature check
 /// verified) pins the fetch to that manifest; the kit's source is still REF.
 pub fn pull(reference: &str, digest: Option<&str>, cache: &Path, logins: Logins) -> Result<Kit> {
+    if let Some(kit) = cached(reference, digest, cache)? {
+        return Ok(kit);
+    }
     let pinned = digest.map(|d| pinned(reference, d)).transpose()?;
     let dir = pull_layout(pinned.as_deref().unwrap_or(reference), cache, true, logins)?;
     read_layout(&dir, Source::Registry(reference.to_string()))
+}
+
+/// A pinned kit already in the cache, read with no registry call; `None` when unpinned or not
+/// cached. Layouts are named by manifest digest only, so the same content pulled from another
+/// repository answers too: identical bytes, recorded here under `reference`.
+pub fn cached(reference: &str, digest: Option<&str>, cache: &Path) -> Result<Option<Kit>> {
+    let Some(d) = digest else {
+        return Ok(None);
+    };
+    let dir = cache.join("oci").join(hex_of(d)?);
+    if !dir.join("index.json").is_file() {
+        return Ok(None);
+    }
+    read_layout(&dir, Source::Registry(reference.to_string())).map(Some)
 }
 
 /// Pulls a plain image (no kit annotation required) into an OCI layout; returns its directory.
@@ -810,7 +829,7 @@ fn build_layout(cache: &Path, manifest: &[u8], digest: &str, reference: &str) ->
 /// command, user and working directory from the image config. Also used for local builds, with their own `source`.
 pub fn read_layout(dir: &Path, source: Source) -> Result<Kit> {
     let what = match &source {
-        Source::Registry(r) | Source::Preset(r) => r.clone(),
+        Source::Registry(r) | Source::Agent(r) => r.clone(),
         Source::Builtin(n) => format!("builtin:{n}"),
         Source::LocalV3(p) | Source::LocalV2(p) | Source::Smolfile(p) => p.display().to_string(),
     };
@@ -857,6 +876,7 @@ pub fn read_layout(dir: &Path, source: Source) -> Result<Kit> {
         user: text("User"),
         workdir: text("WorkingDir"),
     });
+    kit.starts_docker = manifest["annotations"][START_DOCKER_ANNOTATION].as_str() == Some("true");
     kit.digest = Some(digest);
     kit.content = Content::Oci(dir.to_path_buf());
     Ok(kit)
@@ -1048,6 +1068,17 @@ pub(crate) mod fixtures {
         layers: &[&[u8]],
         config_json: &str,
     ) -> String {
+        oci_layout_with(dir, annotation_json, &[], layers, config_json)
+    }
+
+    /// `oci_layout` with `extra` manifest annotations beside the descriptor.
+    pub fn oci_layout_with(
+        dir: &Path,
+        annotation_json: Option<&str>,
+        extra: &[(&str, &str)],
+        layers: &[&[u8]],
+        config_json: &str,
+    ) -> String {
         let blobs = dir.join("blobs").join("sha256");
         fs::create_dir_all(&blobs).unwrap();
         let put = |data: &[u8]| {
@@ -1073,6 +1104,9 @@ pub(crate) mod fixtures {
         if let Some(a) = annotation_json {
             manifest["annotations"] = json!({DESCRIPTOR_ANNOTATION: a, SCHEMA_ANNOTATION: "3"});
         }
+        for (k, v) in extra {
+            manifest["annotations"][*k] = json!(v);
+        }
         let bytes = serde_json::to_vec(&manifest).unwrap();
         let digest = put(&bytes);
         fs::write(dir.join("oci-layout"), r#"{"imageLayoutVersion":"1.0.0"}"#).unwrap();
@@ -1093,6 +1127,43 @@ mod tests {
 
     fn src() -> Source {
         Source::Registry("docker.io/acme/kit:1".into())
+    }
+
+    #[test]
+    fn a_cached_pinned_ref_loads_without_the_registry() {
+        let cache = tempfile::tempdir().unwrap();
+        let tmp = tempfile::tempdir().unwrap();
+        let digest = fixtures::oci_layout(tmp.path(), Some(DESC), &[], "{}");
+        fs::create_dir_all(store_dir(cache.path())).unwrap();
+        for e in fs::read_dir(store_dir(tmp.path())).unwrap() {
+            let data = fs::read(e.unwrap().path()).unwrap();
+            put_bytes(cache.path(), &sha256_digest(&data), &data).unwrap();
+        }
+        let manifest = fs::read(store_dir(tmp.path()).join(hex_of(&digest).unwrap())).unwrap();
+        // Nothing listens on 127.0.0.1:1: only the cache can answer.
+        let r = "127.0.0.1:1/acme/kit:1";
+        build_layout(cache.path(), &manifest, &digest, r).unwrap();
+        let k = pull(r, Some(&digest), cache.path(), Logins::none()).unwrap();
+        assert_eq!(k.digest.as_deref(), Some(digest.as_str()));
+        assert_eq!(k.source, Source::Registry(r.into()));
+        // Unpinned, it asks the registry.
+        assert!(pull(r, None, cache.path(), Logins::none()).is_err());
+    }
+
+    #[test]
+    fn start_docker_annotation_is_read() {
+        let flagged = tempfile::tempdir().unwrap();
+        fixtures::oci_layout_with(
+            flagged.path(),
+            Some(DESC),
+            &[("com.docker.sandboxes.start-docker", "true")],
+            &[],
+            "{}",
+        );
+        assert!(read_layout(flagged.path(), src()).unwrap().starts_docker);
+        let plain = tempfile::tempdir().unwrap();
+        fixtures::oci_layout(plain.path(), Some(DESC), &[], "{}");
+        assert!(!read_layout(plain.path(), src()).unwrap().starts_docker);
     }
 
     #[test]

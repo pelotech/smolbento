@@ -221,13 +221,13 @@ pub fn ensure_policy<R: Runner>(ctx: &Ctx<R>) -> Result<Policy> {
     Ok(policy)
 }
 
-/// What `req`'s `--static-mcp` attaches, if given; `preset` says the agent is a built-in one, not
-/// a workload kit. An error is the selection's: an unknown or invalid server, an agent without
+/// What `req`'s `--static-mcp` attaches, if given; `builtin` says the agent is a built-in one,
+/// not a workload kit. An error is the selection's: an unknown or invalid server, an agent without
 /// MCP support, a secret that isn't set. The CLI also calls this before it loads any kit.
 pub fn mcp_attachment<R: Runner>(
     ctx: &Ctx<R>,
     req: &CreateRequest,
-    preset: bool,
+    builtin: bool,
 ) -> Result<Option<crate::mcp::Attachment>> {
     let Some(selection) = &req.mcp else {
         return Ok(None);
@@ -236,7 +236,7 @@ pub fn mcp_attachment<R: Runner>(
     crate::mcp::attach(
         &crate::mcp::McpFile::load(&ctx.paths)?,
         selection,
-        preset.then_some(req.agent.as_str()),
+        builtin.then_some(req.agent.as_str()),
         &|secret| secrets.global_entry(secret).is_some(),
     )
     .map(Some)
@@ -304,16 +304,26 @@ pub fn prepare_create<R: Runner>(
     req.credential_env.dedup();
     req.secrets = services;
     if !name::is_internal(&req.name) {
-        // No plan is the bare preset; a workload kit named like one isn't it.
-        let preset = kits.is_none_or(|p| crate::kits::apply::is_preset(&p.workload));
-        sandbox::env::apply(req, preset)?;
+        // The services the kits declare a credential for get a mode.
+        let mut services: Vec<String> = kits
+            .map(|p| {
+                p.merged
+                    .credentials
+                    .iter()
+                    .map(|c| c.req.service.clone())
+                    .collect()
+            })
+            .unwrap_or_default();
+        services.sort();
+        services.dedup();
+        sandbox::env::apply(req, &services)?;
     }
-    // Before the policy is saved or smolvm creates anything. A workload kit named like a preset
-    // isn't that agent.
+    // Before the policy is saved or smolvm creates anything. A workload kit named like a built-in
+    // agent isn't that agent.
     let attachment = mcp_attachment(
         ctx,
         req,
-        kits.is_none_or(|p| crate::kits::apply::is_preset(&p.workload)),
+        kits.is_none_or(|p| crate::kits::apply::is_builtin_agent(&p.workload)),
     )?;
     let mut added = Vec::new();
     let mut first_start = None;
@@ -388,7 +398,7 @@ pub fn prepare_create<R: Runner>(
             &req.credential_hosts,
         )?);
     }
-    let wants = skill_wants(&req.agent, kits);
+    let wants = skill_wants(kits);
     let mut bundled: Vec<&crate::kits::resolve::Bundled> =
         kits.map_or(Vec::new(), |p| p.merged.bundled.iter().collect());
     if wants.is_empty() {
@@ -454,21 +464,24 @@ pub fn prepare_create<R: Runner>(
     Ok((added, first_start))
 }
 
-/// The built-in agent's skills directory (for a preset workload or no kits) as a read-write
-/// request (the user's mode decides), then the kits' `agent-skills@1` directories.
-fn skill_wants(agent: &str, kits: Option<&Plan>) -> Vec<crate::skills::Want> {
-    let preset = kits.is_none_or(|p| crate::kits::apply::is_preset(&p.workload));
-    let mut wants: Vec<crate::skills::Want> = preset
-        .then(|| crate::agents::find(agent).and_then(|a| a.skills_dir))
-        .flatten()
-        .map(|p| crate::skills::Want {
-            path: p.to_string(),
-            readwrite: true,
-            builtin: true,
-        })
-        .into_iter()
-        .collect();
+/// A built-in agent's own `agent-skills@1` directories as read-write requests (the user's mode
+/// decides), then every kit's.
+fn skill_wants(kits: Option<&Plan>) -> Vec<crate::skills::Want> {
+    let mut wants = Vec::new();
     if let Some(p) = kits {
+        // A built-in agent's own skills directories are the agent's.
+        if matches!(p.workload.source, crate::kits::model::Source::Agent(_)) {
+            wants.extend(p.workload.caps.iter().filter_map(|c| match &c.body {
+                crate::kits::model::CapBody::AgentSkills { path, .. } => {
+                    Some(crate::skills::Want {
+                        path: path.clone(),
+                        readwrite: true,
+                        builtin: true,
+                    })
+                }
+                _ => None,
+            }));
+        }
         wants.extend(p.merged.skill_dirs.iter().map(|d| crate::skills::Want {
             path: d.path.clone(),
             readwrite: d.readwrite,
@@ -488,7 +501,7 @@ fn settle_agent<R: Runner>(
     private: impl FnOnce(&Path) -> bool,
 ) -> Result<Vec<String>> {
     req.ssh_agent = None;
-    // No plan is the bare preset: a built-in agent's own grant.
+    // No plan: a built-in agent's own grant.
     let built_in = crate::kits::resolve::built_in_ssh_agent();
     let grant = kits.map_or(&built_in, |p| &p.merged.ssh_agent);
     if grant.is_empty() || name::is_internal(&req.name) {
@@ -1521,7 +1534,7 @@ mod tests {
             ..Kit::test(name, kind)
         };
         let wl = if preset {
-            crate::kits::load::preset_kit(crate::agents::find("shell").unwrap(), "img:1")
+            Kit::agent_test("shell")
         } else {
             kit("wl", Kind::Workload, Content::Image("img:1".into()))
         };

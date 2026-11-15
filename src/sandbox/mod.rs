@@ -4,7 +4,6 @@ mod clone_step;
 pub mod create;
 pub mod env;
 mod guest_cmd;
-mod idmap_workaround; // WORKAROUND(smolvm 1.35.0 idmap)
 mod kit_steps;
 pub mod labels;
 pub mod name;
@@ -92,6 +91,19 @@ pub struct Sandbox {
 }
 
 impl Sandbox {
+    /// Refuses a sandbox made when built-in agents weren't kits: it records no command
+    /// (`sbx.command`), which every kit sandbox has.
+    pub fn check_current(&self) -> Result<()> {
+        if self.meta.command.is_none() {
+            return Err(anyhow!(
+                "sandbox {n} was created by an older smolbento whose built-in agents weren't \
+                 kits; recreate it (sbt rm {n}, then sbt create …)",
+                n = self.name()
+            ));
+        }
+        Ok(())
+    }
+
     pub fn from_machine(m: &Machine) -> Option<Sandbox> {
         Some(Sandbox {
             meta: Meta::from_labels(&m.labels)?,
@@ -220,16 +232,6 @@ fn setup<R: Runner>(
     if let Err(e) = vm.exec_captured(&ExecSpec::sh(&sb.machine, "root", hosts_cmd())) {
         eprintln!(
             "warning: {}: couldn't add host.docker.internal to /etc/hosts: {e:#}",
-            sb.name()
-        );
-    }
-    // WORKAROUND(smolvm 1.35.0 idmap): not fatal; an unmapped workspace is still readable.
-    if let Some(script) = idmap_workaround::script(&sb.meta)
-        && let Err(e) = vm.exec_captured(&ExecSpec::sh(&sb.machine, "root", script))
-    {
-        eprintln!(
-            "warning: {}: couldn't map the workspace to the sandbox user, so it may not be \
-             writable (smolvm 1.35.0 bug): {e:#}",
             sb.name()
         );
     }

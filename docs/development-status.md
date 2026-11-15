@@ -92,7 +92,7 @@ meanwhile.
 - **Credential hosts with a port.** `--credential` can't bind a host with a port. Meanwhile: the builder
   skips logins for registries on a port (documented).
 - **OAuth sentinel tokens and enforced method/path rules.** Both need to read decrypted HTTPS requests;
-  smolvm's proxy only substitutes credentials. Meanwhile: kits get passthrough OAuth only, and method/path
+  smolvm's proxy only substitutes credentials. Meanwhile: sentinel OAuth binds only its API key (logins happen in the sandbox), and method/path
   rules (kits' and `policy allow --method/--path`) aren't enforced. Preferred: method/path matching and
   an OAuth sentinel mode upstream in smolvm. If declined: smolbento's own egress proxy, as its own phase.
 - **Guest DNS upstream order.** Since smolvm 1.34, guest DNS moves to the host's next resolver when one
@@ -121,13 +121,9 @@ in [sbx compatibility](sbx-compatibility.md). Worth another look:
   decoded, so local kits are refused under `kit.requireSignature`), keyless signing without Rekor,
   `kit provenance/builder`, push provenance, and `kit.allowExtractedAgents`.
 - **Sandbox variables.** smolbento omits sbx's fake credential values, `MCP_*`, proxy settings,
-  `GIT_CONFIG_*` and the SSH/display variables. It sets `SBX_CRED_*_MODE` only for `shell` and `claude`,
-  the only agents measured.
+  `GIT_CONFIG_*` and the SSH/display variables. It sets `SBX_CRED_*_MODE` for the services the
+  kits declare credentials for (measured on sbx 0.53's `claude` and `shell`).
 - **From sbx 0.51–0.53, for later:**
-  - Built-in agents are published kits (`docker.io/sbx/<agent>:latest`) in sbx 0.51; Docker no
-    longer publishes the `docker/sandbox-templates` images for codex, cursor, devin, docker-agent
-    and opencode, and no longer refreshes `shell`. smolbento's presets still pin those images, so
-    those agents get no updates. Moving presets to the published kits is a phase of its own.
   - `kit add` installs a kit's image layers into a running v3 sandbox; smolbento says `recreate
     required` (smolvm can't add layers to a running machine).
   - `sbx df` (disk usage of images, sandboxes and volumes).
@@ -147,15 +143,9 @@ in [sbx compatibility](sbx-compatibility.md). Worth another look:
 Proven on GitHub: e2e on `ubuntu-latest`, and the v0.1.1 release (all three binaries; macOS binary
 verified on a Mac).
 
-- **smolvm 1.35.0 doesn't map `-v` directories to the workload user** (macOS), so the session user
-  can't write its workspace. Meanwhile: after each start smolbento binds each workspace and kit host
-  mount onto itself with an idmap (`src/sandbox/idmap_workaround.rs`). It needs util-linux 2.39 or
-  newer in the image (the sbx agent images have it); older images, images without `mount` (Docker's
-  hardened `docker.io/sbx/antigravity`), and folders added while running get a warning, and their
-  workspace isn't writable; `--clone` works there, since the agent works in its own clone. Three e2e tests on such images fail meanwhile: `just e2e` leaves them out and
-  `just e2e-known-broken` (a non-blocking CI step) runs them. Remove everything tagged
-  `WORKAROUND(smolvm 1.35.0 idmap)` once a fixed smolvm is the minimum. Upstream fix:
-  [smolvm#2189](https://github.com/smol-machines/smolvm/pull/2189).
+- Refusals of sandboxes and templates from before built-in agents were kits
+  (`Sandbox::check_current`, `templates::Entry::check_current`, and their tests): remove them one
+  release after the agents-as-kits change ships, once users have had a release to recreate them.
 - russh from git (commit b541663a8838) until a release pins ssh-key 0.7.0-rc.12 or later: then switch
   to crates.io, drop the `deny.toml` allow-git entry and the flake `outputHashes`.
 

@@ -63,6 +63,35 @@ pub struct Entry {
     pub created_at: String,
     #[serde(default)]
     pub size: u64,
+    /// The source sandbox's kit records, workload first: a create from the template loads them
+    /// by their pinned refs, with their args. Empty for a template from before kits were
+    /// recorded, which is refused.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub kits: Vec<crate::sandbox::labels::KitRecord>,
+}
+
+impl Entry {
+    /// Whether the template is of a built-in agent: its agent is one, and its workload record is
+    /// that agent's own kit, not a kit merely named like it.
+    pub fn is_agent_template(&self, env: &std::collections::BTreeMap<String, String>) -> bool {
+        let agent_ref = crate::agents::kit_ref(env, &self.agent);
+        let workload = self
+            .kits
+            .first()
+            .map(|r| crate::kits::load::unpinned(&r.reference));
+        agent_ref.is_some() && agent_ref.as_deref() == workload
+    }
+
+    /// Refuses a template saved before agents were kits (no kit records).
+    pub fn check_current(&self) -> Result<()> {
+        if self.kits.is_empty() {
+            bail!(
+                "template {} was saved by an older smolbento; save it again from a new sandbox",
+                self.full()
+            );
+        }
+        Ok(())
+    }
 }
 
 impl Entry {
@@ -303,13 +332,13 @@ impl Store {
         let r = TemplateRef::parse(&meta.full()).with_context(not_ours)?;
         meta.repository = r.repository;
         meta.tag = r.tag;
-        // `agent` and `image` end up in labels and argv.
-        if crate::agents::find(&meta.agent).is_none()
+        // `agent` and `image` end up in labels and argv; the agent is a kit's name.
+        if crate::kits::v3::check_name(meta.agent.clone()).is_err()
             || meta.image.chars().any(char::is_control)
-            || meta.agent.chars().any(char::is_control)
         {
             bail!(not_ours());
         }
+        meta.check_current()?;
         self.add(meta, &pack)
     }
 
@@ -352,6 +381,13 @@ mod tests {
             image: "img:1".into(),
             docker: true,
             created_at: "2026-10-30T00:00:00Z".into(),
+            kits: vec![crate::sandbox::labels::KitRecord {
+                name: "shell".into(),
+                reference: "docker.io/sbx/shell:latest@sha256:ab".into(),
+                provides: vec![],
+                format: None,
+                args: Default::default(),
+            }],
             ..Default::default()
         }
     }
@@ -553,11 +589,32 @@ mod tests {
     }
 
     #[test]
-    fn import_refuses_an_unknown_agent_or_control_characters() {
+    fn import_refuses_an_old_template() {
+        let (dir, s) = store();
+        let old = Entry {
+            kits: vec![],
+            ..meta("t")
+        };
+        let err = s
+            .import(&archive(dir.path(), &old))
+            .unwrap_err()
+            .to_string();
+        assert!(err.contains("saved by an older smolbento"), "{err}");
+        assert!(s.list().unwrap().is_empty());
+    }
+
+    #[test]
+    fn import_refuses_a_bad_agent_name_or_control_characters() {
         let (dir, s) = store();
         for m in [
             Entry {
-                agent: "nope".into(),
+                agent: "".into(),
+                ..meta("t")
+            },
+            // The agent becomes the `sbx.agent` label and the default name's prefix: kit names'
+            // rule.
+            Entry {
+                agent: "../x y".into(),
                 ..meta("t")
             },
             Entry {

@@ -10,6 +10,9 @@ pub(crate) struct E2e {
     /// Alpine with an `agent` user in the test's registry, set by [`Registry::start`]: a kit
     /// from a registry only combines with a `-t` that is a registry reference, not an archive.
     pub(crate) base: std::cell::RefCell<Option<String>>,
+    /// Built-in agents load sbx's published kits from Docker Hub instead of the stand-ins
+    /// ([`E2e::real_agent_kits`]).
+    pub(crate) real_kits: std::cell::Cell<bool>,
 }
 
 impl E2e {
@@ -22,9 +25,17 @@ impl E2e {
             vars: Vec::new(),
             no_seeds: Default::default(),
             base: Default::default(),
+            real_kits: Default::default(),
         };
+        smolbento::agents::write_stand_ins(&e.dir.path().join("agent-kits")).unwrap();
         e.ok(&["policy", "init", "allow-all"]);
         e
+    }
+
+    /// Built-in agents load sbx's published kits (`docker.io/sbx/<name>:latest`), not the
+    /// stand-ins every other test uses with `-t <image>`.
+    pub(crate) fn real_agent_kits(&self) {
+        self.real_kits.set(true);
     }
 
     /// The test boots images made for it alone (kits from its registry, builder builds): smolvm
@@ -60,6 +71,10 @@ impl E2e {
             .env_remove("SMOLBENTO_SSH_AGENT_FORWARDING")
             .envs(self.vars.iter().map(|(k, v)| (k, v)))
             .envs(self.no_seeds.get().then_some(("SMOLVM_IMAGE_SEEDS", "0")))
+            .envs((!self.real_kits.get()).then(|| {
+                let dir = self.dir.path().join("agent-kits");
+                ("SMOLBENTO_AGENT_KITS_DIR", dir.display().to_string())
+            }))
     }
 
     /// Host git in the workspace. The `sandbox-<name>` remote runs `smolbento _upload-pack`, so
@@ -121,12 +136,46 @@ impl E2e {
         self.create_alpine_named(&self.name, then);
     }
 
+    /// `create_alpine` from [`E2e::v2_shell`], for tests that add v2 mixins.
+    pub(crate) fn create_alpine_v2(&self) {
+        self.create_alpine_from(&self.v2_shell(), &self.name, "apk add -q bash");
+    }
+
+    /// A v2 workload named `shell` with an agent file (`AGENTS.md`), written once: v2 mixins
+    /// need a v2 workload, as in sbx, and the built-in agents are v3 kits. Boot it with `-t`.
+    pub(crate) fn v2_shell(&self) -> String {
+        let dir = self.dir.path().join("v2-shell");
+        if !dir.exists() {
+            std::fs::create_dir_all(&dir).unwrap();
+            std::fs::write(
+                dir.join("spec.yaml"),
+                r#"schemaVersion: "2"
+kind: sandbox
+name: shell
+sandbox:
+  image: alpine
+  entrypoint: [bash, -l]
+agentInstructions:
+  filename: AGENTS.md
+  content: "An e2e sandbox."
+"#,
+            )
+            .unwrap();
+        }
+        dir.display().to_string()
+    }
+
     /// An Alpine sandbox `name` (with its `agent` user), then `then` run as root.
     fn create_alpine_named(&self, name: &str, then: &str) {
+        self.create_alpine_from("shell", name, then);
+    }
+
+    /// `create_alpine_named` with `target` as the agent.
+    fn create_alpine_from(&self, target: &str, name: &str, then: &str) {
         let ws = self.workspace();
         self.ok(&[
             "create",
-            "shell",
+            target,
             ws.to_str().unwrap(),
             "--name",
             name,
@@ -565,14 +614,24 @@ impl E2e {
 
     /// `sbt create` of an Alpine-based shell sandbox with `kits` (`-t <alpine> --kit ...`).
     pub(crate) fn create_with_kits(&self, kits: &[&str]) {
+        self.create_with_kits_as("shell", kits);
+    }
+
+    /// `create_with_kits` with `agent` (v2 mixins get the v2 `shell` instead).
+    pub(crate) fn create_with_kits_as(&self, agent: &str, kits: &[&str]) {
         let ws = self.workspace();
         let template = self.alpine_template();
         let mut args = vec!["create", "-t", &template];
         for k in kits {
             args.extend(["--kit", k]);
         }
+        // v2 mixins need a v2 workload.
+        let v2 = kits
+            .iter()
+            .all(|k| std::path::Path::new(k).join("spec.yaml").is_file());
+        let v2_shell = self.v2_shell();
         args.extend([
-            "shell",
+            if v2 { v2_shell.as_str() } else { agent },
             ws.to_str().unwrap(),
             "--name",
             &self.name,

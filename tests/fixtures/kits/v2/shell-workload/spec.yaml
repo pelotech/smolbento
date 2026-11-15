@@ -1,0 +1,8 @@
+# A v2 workload named `shell`, for tests that add v2 mixins: since built-in agents are v3 kits,
+# sbx's rule keeps v2 mixins off them.
+schemaVersion: "2"
+kind: sandbox
+name: shell
+sandbox:
+  image: docker/sandbox-templates:shell-docker-0.10.0
+  entrypoint: [bash, -l]

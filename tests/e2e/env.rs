@@ -36,9 +36,10 @@ pub(crate) fn sbx_sandbox_variables_reach_the_agent_exec_and_forks() {
     assert!(is_uuid(&exec["SANDBOX_ID"]), "{exec:?}");
     assert_eq!(exec["WORKSPACE_DIR"], ws.to_str().unwrap(), "{exec:?}");
     assert_eq!(exec["SBX_AGENT"], "shell", "{exec:?}");
-    assert_eq!(exec["SBX_CRED_ANTHROPIC_MODE"], "none", "{exec:?}");
+    // sbx 0.53's shell kit declares no credentials, so it has no modes.
+    assert_eq!(exec["SBX_CRED_ANTHROPIC_MODE"], "", "{exec:?}");
 
-    // The agent (the shell preset's shell) sees the same values.
+    // The agent (the shell kit's login shell) sees the same values.
     let agent = sbx_vars(&e.ok(&["run", "--name", &e.name, "--", "-c", SBX_VARS]));
     assert_eq!(agent, exec, "the agent's variables match exec's");
 

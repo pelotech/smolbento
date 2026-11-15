@@ -37,6 +37,10 @@ pub struct KitRecord {
     /// The workload format the kit mixes with; none when it mixes with either.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub format: Option<crate::kits::model::Format>,
+    /// The kit's arguments as the sandbox was created with them (defaults included): a template
+    /// recreates the kit with these.
+    #[serde(default, skip_serializing_if = "BTreeMap::is_empty")]
+    pub args: BTreeMap<String, String>,
 }
 pub const COMMAND: &str = "sbx.command";
 /// The image config's `User` a v3 workload kit's agent runs as (`0` for root).
@@ -481,12 +485,14 @@ mod tests {
                     reference: "acme/a:1@sha256:ab".into(),
                     provides: vec!["agent".into()],
                     format: Some(crate::kits::model::Format::V3),
+                    args: [("model".to_string(), "x".to_string())].into(),
                 },
                 KitRecord {
                     name: "b".into(),
                     reference: "/k/b".into(),
                     provides: vec![],
                     format: None,
+                    args: Default::default(),
                 },
             ],
             command: Some(vec!["wl".into(), "--a b".into()]),
@@ -528,7 +534,7 @@ mod tests {
             ("sbx.mcp", "linear,files"),
             (
                 "sbx.kits",
-                r#"[{"name":"a","ref":"acme/a:1@sha256:ab","provides":["agent"],"format":"v3"},{"name":"b","ref":"/k/b"}]"#,
+                r#"[{"name":"a","ref":"acme/a:1@sha256:ab","provides":["agent"],"format":"v3","args":{"model":"x"}},{"name":"b","ref":"/k/b"}]"#,
             ),
             ("sbx.command", r#"["wl","--a b"]"#),
             ("sbx.user", "somebody"),

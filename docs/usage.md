@@ -48,22 +48,19 @@ Arguments after `--` are **appended** to the agent's default command if the firs
 
 ### Agents
 
-| Agent | Runs | Image (`docker/sandbox-templates:`) |
-|---|---|---|
-| `claude` | `claude --dangerously-skip-permissions` | `claude-code-docker-0.10.0` |
-| `codex` | `codex --dangerously-bypass-approvals-and-sandbox` | `codex-docker-0.11.0` |
-| `copilot` | `copilot --yolo` | `copilot-docker-0.11.0` |
-| `cursor` | `cursor-agent --yolo` | `cursor-agent-docker-0.11.0` |
-| `devin` | `devin --permission-mode dangerous --respect-workspace-trust=false` | `devin-docker-0.11.0` |
-| `docker-agent` | `docker-agent run --yolo` | `docker-agent-docker-0.11.0` |
-| `droid` | `droid` | `droid-docker-0.11.0` |
-| `kiro` | `kiro chat --trust-all-tools` | `kiro-docker-0.4.0` |
-| `opencode` | `opencode` | `opencode-docker-0.11.0` |
-| `shell` | `bash -l` | `shell-docker-0.10.0` |
+Each built-in agent is the kit sbx publishes for it, `docker.io/sbx/<agent>:latest`: `claude`,
+`codex`, `copilot`, `cursor`, `devin`, `docker-agent`, `droid`, `kiro`, `opencode` and `shell`. The
+kit brings the agent's image, command, network rules, credential hosts, settings (for `claude`:
+the workspace trust and permission prompts, `--kit-arg model=…`, `--kit-arg reasoningEffort=…`),
+agent file and skills directory, so agents are set up as in sbx and stay current. The first create
+of an agent pulls its kit, which takes a minute or two; later creates use the kit cache.
 
-These are the Docker sandbox images that `sbx` uses. Renovate keeps the tags current. For another
-image, use `-t <image>`; it needs an `agent` user. The first run of an agent pulls its image, which
-takes a minute or two.
+`-t <image>` keeps the agent's kit and replaces its image (sbx allows this only for `shell`); the
+image needs the kit's user (`agent`).
+
+An agent kit's subscription login (`claude`'s claude.ai account) happens inside the sandbox, and
+its tokens stay there: smolvm can't yet swap them for placeholders as sbx does. With an API key
+set (`sbt secret set anthropic`), the key stays on the host and the agent uses it.
 
 `gemini` is retired, as in sbx 0.53, and a new sandbox can't use it. Use the `antigravity` kit (`sbt
 create docker.io/sbx/antigravity:latest .`) or `docker.io/sbx/gemini-kit:latest`, which keeps Gemini
@@ -88,7 +85,7 @@ SANDBOX
   Name:       shell-proj
   Agent:      shell
   Workspace:  -
-  Image:      docker/sandbox-templates:shell-0.10.0
+  Image:      from docker.io/sbx/shell:latest
   CPU:        3
   Memory:     1536 MiB
 
@@ -229,10 +226,9 @@ sbt exec -u root -w /tmp -e DEBUG=1 claude-myrepo env
 `-w`. `--privileged` runs as root. It exits with the command's status.
 
 The agent and every `exec` see the sbx sandbox variables: `SANDBOX_NAME`, `SANDBOX_VM_ID` (the
-name), `SANDBOX_ID` (a UUID, new per sandbox and per fork), `WORKSPACE_DIR`, `SBX_AGENT`, and for
-the `shell` and `claude` presets (not kits of those names) `SBX_CRED_<SERVICE>_MODE` (`apikey` if
-that secret was set at create, else `none`). The `claude` preset also gets `IS_SANDBOX=1`. Your `-e`
-wins. Differences from sbx are in [sbx compatibility](sbx-compatibility.md#sandbox-environment).
+name), `SANDBOX_ID` (a UUID, new per sandbox and per fork), `WORKSPACE_DIR`, `SBX_AGENT`, and
+`SBX_CRED_<SERVICE>_MODE` for each service a kit declares a credential for (`apikey` if that secret
+was set at create, else `none`; `claude` has `ANTHROPIC`). Your `-e` wins. Differences from sbx are in [sbx compatibility](sbx-compatibility.md#sandbox-environment).
 
 ## SSH into a sandbox
 
@@ -392,7 +388,8 @@ exits, and `sbt run` still starts its own interactive session.
 | `./my-kit` (a directory with a `spec.yaml`) | A local v2 kit |
 | `./Smolfile`, `./x.smolfile` | A smolvm Smolfile |
 
-v2 and v3 kits can't share a sandbox. Agent presets, `docker` and a Smolfile can go with either.
+v2 and v3 kits can't share a sandbox. The built-in agents are v3 kits; `docker` and a Smolfile can
+go with either.
 
 A local kit is always a path (`./my-kit`, `../kits/my-kit`, `.`, or absolute). A bare word is never
 a local kit, even if a directory has that name; only `docker` and `nix` are bare kit names. `sbt create my-kit` fails with `unknown agent "my-kit"`,
@@ -401,8 +398,8 @@ and `--kit my-kit` says `not a local path and does not look like a registry refe
 
 Kits declare versions with `provides: [postgres@16.2.0]` and `requires: ["postgres >= 16"]`. A
 missing or mismatched capability stops the create with `resolve: the kit set is not coherent:` and
-one line per problem. Agent presets provide their own name, so a v2 mixin's `requires.agent: claude`
-works on `claude`.
+one line per problem. sbx's agent kits provide their own name (`claude@2.1.325`), so
+`requires: [claude]` works on `claude`.
 
 `sbt kit inspect REF` prints the kit's summary, capabilities, source, provides, requires,
 credentials (with the hosts each secret goes to) and arguments. `--format json` (or `--json`) and
@@ -414,7 +411,9 @@ checks a local v2 kit or Smolfile without the network or source policy.
 `--kit-arg NAME=VALUE` applies to every kit, `--kit-arg KIT.NAME=VALUE` to one, and `--kit-args-file
 FILE` reads `NAME=VALUE` lines. Files are read first, then `--kit-arg`; the last value wins, and a
 per-kit value beats an all-kits one. A `KIT.NAME` for a kit not in the sandbox is ignored. Argument
-values aren't secret (they reach the environment and smolvm's machine config), so put secrets in
+values aren't secret: they reach the environment and smolvm's machine config, and each kit's values
+(defaults included) are kept with the sandbox (its `sbx.kits` label, shown by `smolvm machine
+status`), in templates saved from it, and in their `--output` archives. Put secrets in
 [credentials](#secrets). An argument with no value and no default fails with `create-phase kit arg
 "x" has no resolved value`; `--kit-arg x=` sets it empty. `--kit-arg` without a kit is an error.
 Unquoted numbers and booleans in `default:` and `enum:` are read as strings.
@@ -700,11 +699,16 @@ sbt template load myimage.tar                  # import a file made with --outpu
 - The sandbox must be stopped to save it.
 - `-t` looks for a saved template of that name first, then treats the value as an image. It never
   takes an id prefix (unlike `template rm`), so a name of only hex digits, such as `abcd`, is an
-  image. `--pull never` works only with a saved template.
+  image. `--pull never` works only with a saved template whose kits are in the kit cache.
 - The agent must match: a `claude` template can't start a `codex` sandbox.
 - `/tmp` and the workspace (mounted, not on the disk) aren't kept.
-- A sandbox made from a template, or running a kit workload (an agent that isn't a built-in preset),
-  can't be saved yet.
+- A template keeps the sandbox's kits (pinned) and their args (not secret: they're in exported
+  archives too). A create from it loads them again and
+  reruns their install and startup steps, under the same kit settings as any create:
+  `kit.allowedSources`, `kit.allowLocalKits`, and `kit.requireSignature` (which needs the registry,
+  even with `--pull never`). With `docker.enabled=false` the docker kit is left out. A sandbox made
+  from a template can't be saved yet.
+- Templates and sandboxes from before agents were kits are refused: save or create them again.
 - `-t` can't combine with `--kit` kits that add image layers, since the disk is saved whole.
   Layer-free kits such as `docker` work.
 - Removing a template doesn't affect sandboxes made from it. Kit install steps run again for each

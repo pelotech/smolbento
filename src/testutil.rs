@@ -16,7 +16,7 @@ pub struct TestEnv {
 }
 
 /// A context with temp config/cache/data dirs, cwd `<tmp>/proj`, `now` = 1_000_000, uid 501 and smolvm
-/// 1.35.0.
+/// 1.35.1.
 pub fn test_env(extra_env: &[(&str, &str)]) -> TestEnv {
     let dir = tempfile::tempdir().unwrap();
     let mut env = BTreeMap::from([
@@ -33,6 +33,13 @@ pub fn test_env(extra_env: &[(&str, &str)]) -> TestEnv {
             dir.path().join("data").display().to_string(),
         ),
     ]);
+    // Built-in agents load these stand-ins, never Docker Hub.
+    let agent_kits_dir = dir.path().join("agent-kits");
+    crate::agents::write_stand_ins(&agent_kits_dir).unwrap();
+    env.insert(
+        "SMOLBENTO_AGENT_KITS_DIR".to_string(),
+        agent_kits_dir.display().to_string(),
+    );
     for (k, v) in extra_env {
         env.insert(k.to_string(), v.to_string());
     }
@@ -41,7 +48,7 @@ pub fn test_env(extra_env: &[(&str, &str)]) -> TestEnv {
     std::fs::write(paths.policy_file(), "mode = \"allow-all\"\n").unwrap();
     let (settings, config_error) = Settings::load(&paths, env.clone());
     let fake = FakeRunner::new();
-    fake.ok(&["--version"], "smolvm 1.35.0\n");
+    fake.ok(&["--version"], "smolvm 1.35.1\n");
     let cwd = dir.path().join("proj");
     std::fs::create_dir_all(&cwd).unwrap();
     let cwd = cwd.canonicalize().unwrap();
@@ -112,8 +119,19 @@ impl TestEnv {
         )
     }
 
-    /// Makes `machine status` answer with sandbox `name` (machine `sbx-<name>`) in `state`.
+    /// Makes `machine status` answer with sandbox `name` (machine `sbx-<name>`) in `state`. It
+    /// launches `bash` unless `labels` give an `sbx.command`, as every kit sandbox records one.
     pub fn sandbox(&self, name: &str, state: &str, labels: &[(&str, &str)]) -> &FakeRunner {
+        let mut all = vec![("sbx.name", name)];
+        if !labels.iter().any(|(k, _)| *k == "sbx.command") {
+            all.push(("sbx.command", r#"["bash"]"#));
+        }
+        all.extend_from_slice(labels);
+        self.machine(&crate::sandbox::name::machine_name(name), state, &all)
+    }
+
+    /// A sandbox from before agents were kits: no `sbx.command`.
+    pub fn old_sandbox(&self, name: &str, state: &str, labels: &[(&str, &str)]) -> &FakeRunner {
         let mut all = vec![("sbx.name", name)];
         all.extend_from_slice(labels);
         self.machine(&crate::sandbox::name::machine_name(name), state, &all)
@@ -137,8 +155,15 @@ impl TestEnv {
         self.creatable("claude-proj", &Self::project_labels(&ws))
     }
 
-    fn project_labels(ws: &str) -> [(&str, &str); 2] {
-        [("sbx.agent", "claude"), ("sbx.workspace", ws)]
+    fn project_labels(ws: &str) -> [(&str, &str); 3] {
+        [
+            ("sbx.agent", "claude"),
+            ("sbx.workspace", ws),
+            (
+                "sbx.command",
+                r#"["claude","--dangerously-skip-permissions"]"#,
+            ),
+        ]
     }
 
     /// The smolvm calls that start with `prefix`.
@@ -299,14 +324,19 @@ pub fn creatable_as(t: &TestEnv, name: &str) {
 }
 
 pub fn global_github_secret(t: &TestEnv) {
+    global_secret(t, "github", "gh-123");
+}
+
+/// A global secret for `service` in the keychain store.
+pub fn global_secret(t: &TestEnv, service: &str, value: &str) {
     use crate::secrets::{SecretEntry, SecretsFile, Source, scope_for};
     let entry = SecretEntry {
-        service: "github".into(),
+        service: service.into(),
         scope: scope_for(None),
         source: Source::Keychain,
     };
-    t.ctx.store.set(&entry.account(), "gh-123").unwrap();
-    let mut f = SecretsFile::default();
+    t.ctx.store.set(&entry.account(), value).unwrap();
+    let mut f = SecretsFile::load(&t.ctx.paths).unwrap_or_default();
     f.set(entry);
     f.save(&t.ctx.paths).unwrap();
 }
@@ -333,7 +363,33 @@ pub fn deny(resources: &[&str]) -> (String, Vec<String>) {
     )
 }
 
+/// A saved template of agent `agent`'s stand-in kit (unpinned: it's a local layout).
 pub fn saved_template(t: &TestEnv, name: &str, agent: &str) -> crate::templates::Entry {
+    add_template(t, name, agent, saved_template_kits(t, agent))
+}
+
+/// The kit records of a template of agent `agent`: its stand-in kit.
+pub fn saved_template_kits(t: &TestEnv, agent: &str) -> Vec<crate::sandbox::labels::KitRecord> {
+    vec![crate::sandbox::labels::KitRecord {
+        name: agent.into(),
+        reference: crate::agents::kit_ref(&t.ctx.env, agent).unwrap(),
+        provides: vec![],
+        format: Some(crate::kits::model::Format::V3),
+        args: Default::default(),
+    }]
+}
+
+/// A template saved before agents were kits: no kit records.
+pub fn legacy_template(t: &TestEnv, name: &str, agent: &str) -> crate::templates::Entry {
+    add_template(t, name, agent, vec![])
+}
+
+fn add_template(
+    t: &TestEnv,
+    name: &str,
+    agent: &str,
+    kits: Vec<crate::sandbox::labels::KitRecord>,
+) -> crate::templates::Entry {
     let src = t.ctx.cwd.join("p.smolmachine");
     std::fs::write(&src, "packed").unwrap();
     let r = crate::templates::TemplateRef::parse(name).unwrap();
@@ -346,9 +402,83 @@ pub fn saved_template(t: &TestEnv, name: &str, agent: &str) -> crate::templates:
                 image: "docker/sandbox-templates:shell-docker-0.10.0".into(),
                 docker: false,
                 created_at: "1970-01-12T13:46:30Z".into(),
+                kits,
                 ..Default::default()
             },
             &src,
         )
         .unwrap()
+}
+
+/// The `claude` stand-in's descriptor: the published kit's shape, trimmed (an API key with a
+/// non-passthrough OAuth part, its agent file and skills, an install step that shows the mode).
+pub const CLAUDE_STAND_IN: &str = r#"{
+  "schemaVersion": "3",
+  "kind": "workload",
+  "args": {"model": {"default": "", "description": "Claude model to use"}},
+  "capabilities": [
+    {"type": "com.docker.sandbox/sbx@1"},
+    {"type": "com.docker.sandbox/network-policy@1",
+     "config": {"runtime": {"allow": ["api.anthropic.com:443", "platform.claude.com:443"]}}},
+    {"type": "com.docker.sandbox/credential@1", "optional": true, "config": {
+      "service": "anthropic", "phase": "runtime",
+      "apiKey": {"inject": [{"domain": "api.anthropic.com", "header": "x-api-key", "format": "%s"}]},
+      "oauth": {"tokenEndpoint": {"host": "platform.claude.com", "path": "/v1/oauth/token"},
+                "sentinels": {"accessToken": "sk-ant-oat01-proxy-managed"}}}},
+    {"type": "com.docker.sandbox/lifecycle@1", "config": {"install": [
+      {"command": "echo mode=$SBX_CRED_ANTHROPIC_MODE", "env": ["SBX_CRED_ANTHROPIC_MODE"],
+       "user": "agent"}]}},
+    {"type": "com.docker.sandbox/agent-skills@1", "optional": true,
+     "config": {"path": "/home/agent/.claude/skills"}},
+    {"type": "com.docker.sandbox/agent-context@1", "optional": true,
+     "config": {"content": "Claude Code notes\n", "directory": "/home/agent/.claude",
+                "filename": "CLAUDE.md"}}
+  ]
+}"#;
+
+/// Replaces agent `name`'s stand-in in `t` with one whose descriptor is `descriptor`.
+pub fn agent_stand_in(t: &TestEnv, name: &str, descriptor: &str) {
+    let dir = std::path::Path::new(&t.ctx.env[crate::agents::KITS_DIR_ENV]);
+    crate::agents::write_stand_in(dir, name, descriptor).unwrap();
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::kits::model::{CapBody, Kind, Source};
+    use crate::kits::registry::read_layout;
+
+    #[test]
+    fn agent_stand_ins_read_as_kits() {
+        let dir = tempfile::tempdir().unwrap();
+        crate::agents::write_stand_ins(dir.path()).unwrap();
+        for name in crate::agents::NAMES {
+            let k = read_layout(&dir.path().join(name), Source::Registry(name.into())).unwrap();
+            assert_eq!(k.kind, Kind::Workload, "{name}");
+            assert!(k.starts_docker, "{name}");
+            let want: Vec<String> = match name {
+                "shell" => vec!["bash".into(), "-l".into()],
+                _ => vec![name.into()],
+            };
+            assert_eq!(k.command, Some(want), "{name}");
+        }
+        let claude = tempfile::tempdir().unwrap();
+        crate::kits::registry::fixtures::oci_layout(
+            claude.path(),
+            Some(CLAUDE_STAND_IN),
+            &[],
+            "{}",
+        );
+        let claude = read_layout(claude.path(), Source::Registry("claude".into())).unwrap();
+        let cred = claude
+            .caps
+            .iter()
+            .find_map(|c| match &c.body {
+                CapBody::Credential(r) => Some(r),
+                _ => None,
+            })
+            .expect("a credential");
+        assert_eq!(cred.service, "anthropic");
+        assert!(!cred.oauth.as_ref().unwrap().passthrough);
+    }
 }

@@ -18,7 +18,7 @@ const AGENT_HOME: &str = "/home/agent";
 
 #[derive(Debug)]
 pub struct Plan {
-    /// The agent preset as a synthetic workload kit, or a workload kit.
+    /// The workload kit: a built-in agent's or the one given.
     pub workload: Kit,
     /// Dependency order.
     pub mixins: Vec<Kit>,
@@ -339,7 +339,7 @@ pub fn resolve_for(
 
     let mut skipped = Vec::new();
     let mut ssh_entries = Vec::new();
-    if matches!(workload.source, Source::Preset(_)) {
+    if matches!(workload.source, Source::Agent(_)) {
         ssh_entries.push(BUILT_IN);
     }
     for k in &all {
@@ -364,17 +364,8 @@ pub fn resolve_for(
                     bail!("kit {}: {} is not supported by smolbento", k.name, cap.ty);
                 }
                 CapBody::Credential(c) => {
-                    if c.oauth.as_ref().is_some_and(|o| !o.passthrough) {
-                        if cap.optional {
-                            skipped.push(Skipped::new(&k.name, &cap.ty));
-                            continue;
-                        }
-                        bail!(
-                            "kit {}: {} oauth without passthrough is not supported by smolbento",
-                            k.name,
-                            cap.ty
-                        );
-                    }
+                    // OAuth without passthrough (sbx's sentinel tokens) needs smolvm support: its
+                    // API key part binds as usual, and logins happen inside the sandbox.
                     merged.credentials.push(KitCred {
                         kit: k.name.clone(),
                         optional: cap.optional,
@@ -437,7 +428,7 @@ pub fn resolve_for(
         install: ssh_phase(&ssh_entries, SshPhase::Install)?,
         runtime: ssh_phase(&ssh_entries, SshPhase::Runtime)?,
     };
-    add_passthrough_hosts(&mut merged);
+    add_oauth_hosts(&mut merged);
 
     let mut it = all.into_iter();
     let workload = it.next().expect("workload is first");
@@ -450,12 +441,10 @@ pub fn resolve_for(
     })
 }
 
-/// Each kit once, names unique (they scope `--kit-arg`s and tag policy rules; an agent preset
-/// isn't a kit, so a kit may share its name), and one workload.
-/// As in sbx, v2 and v3 kits don't go into one sandbox. Only the kits the user named count: an
-/// agent preset and the shipped docker kit go with either (in sbx the agents are v3 kits: see
-/// docs/sbx-compatibility.md). For a create, where every kit was just loaded: `kit add` can't
-/// tell the format of the kits a sandbox already has.
+/// Each kit once, names unique (they scope `--kit-arg`s and tag policy rules), and one workload.
+/// As in sbx, v2 and v3 kits don't go into one sandbox; the built-in agents are v3 kits, and the
+/// shipped docker kit goes with either. For a create, where every kit was just loaded: `kit add`
+/// can't tell the format of the kits a sandbox already has.
 pub fn check_formats(workload: &Kit, mixins: &[Kit]) -> Result<()> {
     let named: Vec<(&str, Option<Format>)> = std::iter::once(workload)
         .chain(mixins)
@@ -464,11 +453,11 @@ pub fn check_formats(workload: &Kit, mixins: &[Kit]) -> Result<()> {
     check_named_formats(&named)
 }
 
-/// The format `check_formats` counts a kit as: none for an agent preset, the shipped docker kit
-/// or a Smolfile. `kit add` records it for each kit of a sandbox.
+/// The format `check_formats` counts a kit as: none for the shipped docker kit or a Smolfile.
+/// `kit add` records it for each kit of a sandbox.
 pub fn mixing_format(k: &Kit) -> Option<Format> {
     match k.source {
-        Source::Preset(_) | Source::Builtin(_) => None,
+        Source::Builtin(_) => None,
         _ => k.format(),
     }
 }
@@ -492,10 +481,7 @@ pub fn check_named_formats(kits: &[(&str, Option<Format>)]) -> Result<()> {
 }
 
 fn check_names(workload: &Kit, mixins: &[Kit]) -> Result<()> {
-    let named: Vec<&Kit> = std::iter::once(workload)
-        .filter(|w| !matches!(w.source, Source::Preset(_)))
-        .chain(mixins)
-        .collect();
+    let named: Vec<&Kit> = std::iter::once(workload).chain(mixins).collect();
     for (i, k) in named.iter().enumerate() {
         if named[..i].iter().any(|o| o.source == k.source) {
             bail!("{}", capability::listed_twice(k.label()));
@@ -637,17 +623,17 @@ fn add_lifecycle(
     Ok(())
 }
 
-/// A passthrough OAuth credential's token and resource hosts join its kit's network rules (the
-/// first entry for that kit), and its install rules too when the credential is used during install:
-/// the guest talks to them itself.
-fn add_passthrough_hosts(merged: &mut Merged) {
+/// An OAuth credential's token and resource hosts join its kit's network rules (the first entry
+/// for that kit), and its install rules too when the credential is used during install: the guest
+/// talks to them itself (passthrough, or a login inside the sandbox).
+fn add_oauth_hosts(merged: &mut Merged) {
     let Merged {
         credentials,
         network,
         ..
     } = merged;
     for kc in credentials.iter() {
-        let Some(o) = kc.req.oauth.as_ref().filter(|o| o.passthrough) else {
+        let Some(o) = kc.req.oauth.as_ref() else {
             continue;
         };
         let hosts: Vec<NetRule> = o
@@ -1178,10 +1164,9 @@ mod tests {
              rename your kit, or have it provide docker (`provides: [docker@<version>]`) to \
              replace the shipped one"
         );
-        // A preset agent's name is free for a kit.
-        let mut preset = workload("claude");
-        preset.source = Source::Preset("img:1".into());
-        run(preset, vec![mixin("claude")]).unwrap();
+        // A built-in agent is a kit like any other: its name is taken.
+        let e = run(Kit::agent_test("claude"), vec![mixin("claude")]).unwrap_err();
+        assert_eq!(format!("{e:#}"), "two kits are named claude");
     }
 
     #[test]
@@ -1225,7 +1210,7 @@ mod tests {
     }
     fn preset() -> Kit {
         let mut w = workload("shell");
-        w.source = Source::Preset("img:1".into());
+        w.source = Source::Agent("docker.io/sbx/shell:latest".into());
         w
     }
 
@@ -1241,6 +1226,20 @@ mod tests {
         );
         // The same grant a create with no plan uses.
         assert_eq!(built_in_ssh_agent(), p.merged.ssh_agent);
+        // A built-in agent's published kit gets it too; a kit merely named like one doesn't.
+        let mut agent = workload("claude");
+        agent.source = Source::Agent("docker.io/sbx/claude:latest".into());
+        assert_eq!(
+            run(agent, vec![]).unwrap().merged.ssh_agent,
+            built_in_ssh_agent()
+        );
+        assert!(
+            run(workload("claude"), vec![])
+                .unwrap()
+                .merged
+                .ssh_agent
+                .is_empty()
+        );
         // A workload kit gets nothing unless it asks.
         assert!(
             run(workload("w"), vec![])
@@ -1367,8 +1366,29 @@ mod tests {
     }
 
     #[test]
-    fn oauth_passthrough_is_accepted_and_without_is_not() {
+    fn oauth_without_passthrough_is_kept() {
         let ty = "com.docker.sandbox/credential@1";
+        let body = || {
+            cred(Some(OAuthReq {
+                passthrough: false,
+                token_host: Some("auth.x.com".into()),
+                resource_hosts: vec![],
+            }))
+        };
+        // Required or optional, it binds its API key part; the login happens in the sandbox.
+        for optional in [false, true] {
+            let p = run(workload("w"), vec![mixin("m").cap(ty, optional, body())]).unwrap();
+            assert_eq!(p.merged.credentials.len(), 1, "{optional}");
+            assert!(p.skipped.is_empty(), "{:?}", p.skipped);
+            let hosts: Vec<_> = p.merged.network[0]
+                .runtime
+                .allow
+                .iter()
+                .map(|n| n.host.clone())
+                .collect();
+            assert_eq!(hosts, ["auth.x.com"]);
+        }
+        // Passthrough still works as before.
         let ok = mixin("m").cap(ty, false, cred(oauth(true)));
         assert_eq!(
             run(workload("w"), vec![ok])
@@ -1378,18 +1398,6 @@ mod tests {
                 .len(),
             1
         );
-
-        let bad = mixin("m").cap(ty, false, cred(oauth(false)));
-        let e = run(workload("w"), vec![bad]).unwrap_err();
-        assert!(
-            format!("{e:#}").contains("kit m: com.docker.sandbox/credential@1 oauth without passthrough is not supported by smolbento"),
-            "{e:#}"
-        );
-
-        let opt = mixin("m").cap(ty, true, cred(oauth(false)));
-        let p = run(workload("w"), vec![opt]).unwrap();
-        assert_eq!(p.skipped, ["m: com.docker.sandbox/credential@1"]);
-        assert!(p.merged.credentials.is_empty());
     }
 
     #[test]
@@ -1849,20 +1857,23 @@ mod tests {
 
     #[test]
     fn v2_and_v3_kits_are_not_mixed() {
-        let preset = || Kit::new("shell", Kind::Workload, Source::Preset("img".into()));
+        let v2_workload = || Kit::new("w2", Kind::Workload, Source::LocalV2("w2".into()));
         let v2 = |name: &str| Kit::new(name, Kind::Mixin, Source::LocalV2(name.into()));
         let docker = || Kit::new("docker", Kind::Mixin, Source::Builtin("docker"));
         // sbx's wording.
-        let err = check_formats(&preset(), &[v2("old"), mixin("new")]).unwrap_err();
+        let err = check_formats(&v2_workload(), &[v2("old"), mixin("new")]).unwrap_err();
         assert_eq!(
             err.to_string(),
             "cannot mix v3 kits with v1/v2 kits in one sandbox; compositions are single-format \
-             (v3: new; v1/v2: old). Use a v3 version of the v1/v2 kit"
+             (v3: new; v1/v2: w2, old). Use a v3 version of the v1/v2 kit"
         );
+        // A built-in agent's kit is v3, as in sbx.
+        let agent = Kit::agent_test("shell");
+        assert!(check_formats(&agent, &[v2("old")]).is_err());
         let err = check_formats(&workload("w"), &[v2("old")]).unwrap_err();
         assert!(err.to_string().contains("(v3: w; v1/v2: old)"), "{err}");
-        // A preset and the shipped docker kit have no format of their own.
-        check_formats(&preset(), &[docker(), v2("old"), v2("older")]).unwrap();
-        check_formats(&preset(), &[docker(), mixin("new")]).unwrap();
+        // The shipped docker kit has no format of its own.
+        check_formats(&v2_workload(), &[docker(), v2("old"), v2("older")]).unwrap();
+        check_formats(&agent, &[docker(), mixin("new")]).unwrap();
     }
 }

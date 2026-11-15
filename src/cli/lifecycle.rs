@@ -37,20 +37,21 @@ pub(crate) fn create_reported<R: Runner>(
     ctx: &Ctx<R>,
     p: &Progress,
     req: &mut CreateRequest,
-    workload: Option<Workload>,
+    workload: Workload,
     opts: &SandboxOpts,
 ) -> Result<Sandbox> {
     resolve_clone(req, opts)?;
     provision::check_free(ctx, &req.name)?;
     // A bad `--static-mcp` fails here, not after the kits were fetched and built.
-    let preset = workload
-        .as_ref()
-        .is_none_or(|w| matches!(w, Workload::Preset(_)));
-    provision::mcp_attachment(ctx, req, preset)?;
-    report_sandbox(p, req, workload.as_ref(), opts.clone);
-    let kits = workload
-        .map(|w| kit_plan(ctx, req, w, opts, p))
-        .transpose()?;
+    // A built-in agent, not a kit named like one, gets its MCP config written.
+    let agent = match &workload {
+        Workload::Agent { .. } => true,
+        Workload::Template(e) => e.is_agent_template(&ctx.env),
+        Workload::Ref(_) => false,
+    };
+    provision::mcp_attachment(ctx, req, agent)?;
+    report_sandbox(p, req, &workload, opts.clone);
+    let kits = Some(kit_plan(ctx, req, workload, opts, p)?);
     let mut steps = CreateSteps::new(p);
     let created = provision::create_with(
         ctx,
@@ -66,7 +67,7 @@ pub(crate) fn create_reported<R: Runner>(
 
 /// The `SANDBOX` section, before any kit loads: a workload kit's image is known only once it
 /// has, and CPU and memory are what smolbento passes unless a kit's resources change them.
-fn report_sandbox(p: &Progress, req: &CreateRequest, workload: Option<&Workload>, clone: bool) {
+fn report_sandbox(p: &Progress, req: &CreateRequest, workload: &Workload, clone: bool) {
     p.section("SANDBOX");
     p.field("Name", &req.name);
     p.field("Agent", &req.agent);
@@ -90,8 +91,8 @@ fn report_sandbox(p: &Progress, req: &CreateRequest, workload: Option<&Workload>
     };
     p.field("Workspace", &workspaces);
     let image = match workload {
-        Some(Workload::Ref(r)) => format!("from {r}"),
-        _ => req.image.clone(),
+        Workload::Ref(r) | Workload::Agent { reference: r, .. } => format!("from {r}"),
+        Workload::Template(_) => req.image.clone(),
     };
     p.field("Image", &image);
     p.field("CPU", &req.cpus.to_string());
@@ -342,7 +343,6 @@ pub fn reset<R: Runner>(ctx: &mut Ctx<R>, a: &ResetArgs) -> Result<i32> {
 mod tests {
     use clap::Parser;
 
-    use super::super::request::*;
     use super::super::{Cli, Cmd, DiskSizes, SandboxOpts};
     use crate::testutil::*;
 
@@ -508,9 +508,11 @@ mod tests {
                 .collect()
         };
         assert_eq!(pair("-n"), vec!["sbx-claude-proj"]);
-        assert_eq!(
-            pair("--image"),
-            vec!["docker/sandbox-templates:claude-code-docker-0.10.0"]
+        // The agent kit's image, archived in the kit cache.
+        let image = pair("--image");
+        assert!(
+            image[0].starts_with(&t.ctx.paths.kit_cache().join("images").display().to_string()),
+            "{image:?}"
         );
         assert_eq!(
             pair("-v"),
@@ -541,19 +543,25 @@ mod tests {
                 "SANDBOX_NAME=claude-proj".into(),
                 "SANDBOX_VM_ID=claude-proj".into(),
                 format!("WORKSPACE_DIR={ws}"),
+                // The default stand-in declares no credential, so no mode; IS_SANDBOX is the
+                // image's own.
                 "SBX_AGENT=claude".into(),
-                "SBX_CRED_ANTHROPIC_MODE=none".into(),
-                "IS_SANDBOX=1".into(),
             ]
         );
         assert_eq!(pair("-p"), vec!["8080:80"]);
         assert!(pair("--label").contains(&"sbx.created=1000000".to_string()));
         assert!(pair("--label").contains(&"sbx.docker=true".to_string()));
         // Docker-in-sandbox is the shipped `docker` kit: its volumes above, its startup hook here.
-        assert!(pair("--label").contains(&format!(
-            "sbx.kits=[{}]",
-            r#"{"name":"docker","ref":"builtin:docker","provides":["docker@1.0.0"]}"#
-        )));
+        // The agent's kit, then the shipped docker kit.
+        let kits = pair("--label");
+        let kits = kits.iter().find(|l| l.starts_with("sbx.kits=")).unwrap();
+        assert!(
+            kits.ends_with(&format!(
+                ",{}]",
+                r#"{"name":"docker","ref":"builtin:docker","provides":["docker@1.0.0"]}"#
+            )),
+            "{kits}"
+        );
         let uploads = t.runner().uploads();
         let (_, script) = uploads
             .iter()
@@ -595,8 +603,349 @@ mod tests {
         );
     }
 
+    /// The request `create AGENT` makes once its kits are planned (no machine touched).
+    fn planned(
+        t: &TestEnv,
+        agent: &str,
+        opts: &SandboxOpts,
+    ) -> anyhow::Result<crate::sandbox::CreateRequest> {
+        let (mut req, w) = super::kit_target(&t.ctx, &[agent.to_string()], opts, false)?;
+        let quiet = crate::cli::progress::Progress::new(t.ctx.out.clone(), false, false, true);
+        super::kit_plan(&t.ctx, &mut req, w, opts, &quiet)?;
+        Ok(req)
+    }
+
     fn creatable(t: &TestEnv) {
         creatable_as(t, "claude-proj");
+    }
+
+    #[test]
+    fn t_replaces_a_kit_image() {
+        let mut t = test_env(&[]);
+        creatable_as(&t, "shell-proj");
+        t.sbt(&["create", "shell", "-t", "alpine:3"]).unwrap();
+        let create = t.calls_of("machine create").remove(0);
+        assert!(create.contains("--image alpine:3 "), "{create}");
+        // The kit stays, with its command; an image whose name isn't Docker-enabled gets no dockerd.
+        assert!(create.contains(r#"sbx.kits=[{"name":"shell""#), "{create}");
+        assert!(create.contains(r#"sbx.command=["bash","-l"]"#), "{create}");
+        assert!(create.contains("sbx.docker=false"), "{create}");
+        // Any workload kit, not only an agent.
+        let mut t = test_env(&[("SMOLBENTO_KIT_ALLOW_LOCAL_KITS", "true")]);
+        creatable_as(&t, "toolbox-proj");
+        let kit = format!(
+            "{}/tests/fixtures/kits/v2/tool-workload",
+            env!("CARGO_MANIFEST_DIR")
+        );
+        t.sbt(&["create", &kit, "-t", "img:2"]).unwrap();
+        let create = t.calls_of("machine create").remove(0);
+        assert!(create.contains("--image img:2 "), "{create}");
+    }
+
+    #[test]
+    fn claude_without_a_key_installs_with_mode_none() {
+        let mut t = test_env(&[]);
+        agent_stand_in(&t, "claude", CLAUDE_STAND_IN);
+        creatable(&t);
+        t.sbt(&["create", "claude", "."]).unwrap();
+        let create = t.calls_of("machine create").remove(0);
+        assert!(
+            create.contains("-e SBX_CRED_ANTHROPIC_MODE=none "),
+            "{create}"
+        );
+        assert!(!create.contains("--credential"), "{create}");
+        assert!(
+            t.calls_of("machine exec")
+                .iter()
+                .any(|l| l.contains("echo mode=")),
+            "the install step runs"
+        );
+    }
+
+    #[test]
+    fn an_oauth_credential_binds_its_api_key() {
+        let mut t = test_env(&[]);
+        agent_stand_in(&t, "claude", CLAUDE_STAND_IN);
+        global_secret(&t, "anthropic", "sk-ant-test");
+        creatable(&t);
+        t.sbt(&["create", "claude", "."]).unwrap();
+        let create = t.calls_of("machine create").remove(0);
+        assert!(
+            create.contains("-e SBX_CRED_ANTHROPIC_MODE=apikey "),
+            "{create}"
+        );
+        assert!(create.contains("api.anthropic.com"), "{create}");
+        assert!(!create.contains("sk-ant-test"), "never in argv: {create}");
+    }
+
+    /// Creates `claude-proj` with `create_args` (the full claude stand-in), then saves it,
+    /// stopped, as template `t:v1`.
+    fn kit_template(create_args: &[&str]) -> TestEnv {
+        let mut t = test_env(&[]);
+        agent_stand_in(&t, "claude", CLAUDE_STAND_IN);
+        creatable(&t);
+        t.sbt(create_args).unwrap();
+        // The create's labels, as smolvm reports them for the stopped sandbox (later replies win).
+        let calls = t.ctx.vm.runner().calls();
+        let create = calls
+            .iter()
+            .find(|c| c.get(1).is_some_and(|a| a == "create"))
+            .unwrap();
+        let labels: Vec<(String, String)> = create
+            .windows(2)
+            .filter(|w| w[0] == "--label")
+            .filter_map(|w| w[1].split_once('=').map(|(k, v)| (k.into(), v.into())))
+            .collect();
+        let labels: Vec<(&str, &str)> = labels
+            .iter()
+            .map(|(k, v)| (k.as_str(), v.as_str()))
+            .collect();
+        t.sandbox("claude-proj", "stopped", &labels);
+        let r = t.runner();
+        r.ok(&["pack", "create"], "");
+        r.during(&["pack", "create"], |args| {
+            let out = args.last().unwrap();
+            std::fs::write(out, "stub").unwrap();
+            std::fs::write(format!("{out}.smolmachine"), "packed").unwrap();
+        });
+        t.sbt(&["template", "save", "claude-proj", "t:v1"]).unwrap();
+        t
+    }
+
+    #[test]
+    fn save_records_the_kits_and_args() {
+        let t = kit_template(&["create", "claude", ".", "--kit-arg", "model=x"]);
+        let e = crate::templates::Store::new(&t.ctx.paths)
+            .find_ref("t:v1")
+            .unwrap()
+            .unwrap();
+        assert_eq!(e.agent, "claude");
+        let kits = &t.ctx.env["SMOLBENTO_AGENT_KITS_DIR"];
+        assert!(
+            e.kits[0]
+                .reference
+                .starts_with(&format!("{kits}/claude@sha256:"))
+        );
+        assert_eq!(e.kits[0].args.get("model").map(String::as_str), Some("x"));
+        assert!(e.kits.iter().any(|k| k.reference == "builtin:docker"));
+    }
+
+    #[test]
+    fn a_kit_template_reruns_install_steps_from_the_cache() {
+        let mut t = kit_template(&["create", "claude", "."]);
+        let fake = t.runner();
+        fake.ok(&["machine", "status"], &json("sbx-bb", "created", "bb"));
+        fake.missing_until_created("sbx-bb");
+        t.sbt(&[
+            "create", "claude", "-t", "t:v1", "--pull", "never", "--name", "bb",
+        ])
+        .unwrap();
+        let create = t
+            .calls_of("machine create")
+            .into_iter()
+            .find(|l| l.contains("-n sbx-bb "))
+            .unwrap();
+        assert!(create.contains(" --from "), "{create}");
+        assert!(!create.contains("--image"), "{create}");
+        assert!(
+            create.contains("-e SBX_CRED_ANTHROPIC_MODE=none "),
+            "{create}"
+        );
+        let execs = t.calls_of("machine exec");
+        assert!(
+            execs
+                .iter()
+                .any(|l| l.contains("sbx-bb") && l.contains("echo mode=")),
+            "the install step runs again: {execs:#?}"
+        );
+    }
+
+    /// A current template of the `shell` stand-in plus `extra` records, saved as `x:v1`.
+    fn template_with(t: &TestEnv, extra: Vec<crate::sandbox::labels::KitRecord>, docker: bool) {
+        let mut kits = saved_template_kits(t, "shell");
+        kits.extend(extra);
+        let src = t.ctx.cwd.join("x.smolmachine");
+        std::fs::write(&src, "packed").unwrap();
+        crate::templates::Store::new(&t.ctx.paths)
+            .add(
+                crate::templates::Entry {
+                    repository: "docker.io/library/x".into(),
+                    tag: "v1".into(),
+                    agent: "shell".into(),
+                    image: "img:1".into(),
+                    docker,
+                    created_at: "1970-01-12T13:46:30Z".into(),
+                    kits,
+                    ..Default::default()
+                },
+                &src,
+            )
+            .unwrap();
+    }
+
+    fn record(reference: &str) -> crate::sandbox::labels::KitRecord {
+        crate::sandbox::labels::KitRecord {
+            name: "k".into(),
+            reference: reference.into(),
+            provides: vec![],
+            format: None,
+            args: Default::default(),
+        }
+    }
+
+    #[test]
+    fn a_template_never_reads_a_layout_outside_the_stand_ins() {
+        // A prebuilt layout anywhere else (a planted directory) isn't a kit to load as-is.
+        let t = test_env(&[]);
+        let planted = t.ctx.cwd.join("planted");
+        std::fs::create_dir_all(&planted).unwrap();
+        crate::kits::registry::fixtures::oci_layout(
+            &planted,
+            Some(r#"{"schemaVersion":"3","kind":"mixin"}"#),
+            &[],
+            "{}",
+        );
+        let r = crate::kits::load::pinned(
+            &t.ctx,
+            &planted.display().to_string(),
+            true,
+            None,
+            None,
+            &mut |_| {},
+        );
+        assert!(r.is_err(), "loaded a planted layout");
+    }
+
+    #[test]
+    fn a_template_drops_its_docker_kit_when_docker_is_disabled() {
+        let mut t = test_env(&[("SMOLBENTO_DOCKER", "false")]);
+        let mut docker = record("builtin:docker");
+        docker.name = "docker".into();
+        template_with(&t, vec![docker], true);
+        let fake = t.runner();
+        fake.ok(&["machine", "status"], &json("sbx-bb", "created", "bb"));
+        fake.missing_until_created("sbx-bb");
+        t.sbt(&["create", "shell", "-t", "x:v1", "--name", "bb"])
+            .unwrap();
+        let create = t.calls_of("machine create").remove(0);
+        assert!(!create.contains("builtin:docker"), "{create}");
+        assert!(create.contains("--label sbx.docker=false"), "{create}");
+    }
+
+    #[test]
+    fn pull_never_names_itself_for_a_template_kit_that_needs_a_build() {
+        let mut t = test_env(&[]);
+        let kit = t.ctx.cwd.join("src-kit");
+        std::fs::create_dir_all(&kit).unwrap();
+        std::fs::write(
+            kit.join("kit.yaml"),
+            "# syntax=docker/sandbox-kit:3\nschemaVersion: \"3\"\nkind: mixin\n",
+        )
+        .unwrap();
+        template_with(&t, vec![record(&kit.display().to_string())], false);
+        creatable_as(&t, "bb");
+        let err = t.sbt_err(&[
+            "create", "shell", "-t", "x:v1", "--pull", "never", "--name", "bb",
+        ]);
+        assert!(err.contains("--pull never"), "{err}");
+        assert!(!err.contains("--offline"), "{err}");
+    }
+
+    #[test]
+    fn template_kits_follow_kit_policy() {
+        let tool = format!(
+            "{}/tests/fixtures/kits/v2/tool-mixin",
+            env!("CARGO_MANIFEST_DIR")
+        );
+        // A local kit, under --pull never, still needs kit.allowLocalKits.
+        let mut t = test_env(&[("SMOLBENTO_KIT_ALLOW_LOCAL_KITS", "false")]);
+        template_with(&t, vec![record(&tool)], false);
+        creatable_as(&t, "bb");
+        let err = t.sbt_err(&[
+            "create", "shell", "-t", "x:v1", "--pull", "never", "--name", "bb",
+        ]);
+        assert!(err.contains("local"), "{err}");
+        // kit.requireSignature: a local kit is refused, and a registry kit can't be verified
+        // without the registry.
+        for (kit, want) in [
+            (tool.as_str(), "not signed"),
+            ("acme/k:1@sha256:ab", "requireSignature"),
+        ] {
+            let mut t = test_env(&[
+                ("SMOLBENTO_KIT_ALLOW_LOCAL_KITS", "true"),
+                ("SMOLBENTO_KIT_REQUIRE_SIGNATURE", "true"),
+                ("SMOLBENTO_KIT_ALLOWED_SOURCES", r#"["docker.io/acme/"]"#),
+            ]);
+            template_with(&t, vec![record(kit)], false);
+            creatable_as(&t, "bb");
+            let err = t.sbt_err(&[
+                "create", "shell", "-t", "x:v1", "--pull", "never", "--name", "bb",
+            ]);
+            assert!(err.contains(want), "{kit}: {err}");
+        }
+    }
+
+    #[test]
+    fn an_old_template_is_refused_on_create() {
+        let mut t = test_env(&[]);
+        legacy_template(&t, "old:v1", "shell");
+        let err = t.sbt_err(&["create", "shell", "-t", "old:v1"]);
+        assert_eq!(
+            err,
+            "template docker.io/library/old:v1 was saved by an older smolbento; save it again \
+             from a new sandbox"
+        );
+    }
+
+    #[test]
+    fn a_built_in_name_loads_its_kit() {
+        let mut t = test_env(&[]);
+        creatable(&t);
+        t.sbt(&["create", "claude", "."]).unwrap();
+        let calls = t.calls();
+        let create = calls
+            .iter()
+            .find(|l| l.starts_with("machine create"))
+            .unwrap();
+        let kits = t.ctx.env["SMOLBENTO_AGENT_KITS_DIR"].clone();
+        assert!(
+            create.contains(&format!("{kits}/claude@sha256:")),
+            "{create}"
+        );
+        assert!(create.contains("--label sbx.agent=claude "), "{create}");
+        assert!(create.contains("sbx.command="), "{create}");
+        assert!(
+            create.contains("sbx.agent-file=/home/agent/.claude/CLAUDE.md"),
+            "{create}"
+        );
+    }
+
+    #[test]
+    fn built_in_agents_skip_the_kit_trust_checks() {
+        let mut t = test_env(&[]);
+        t.sbt(&["settings", "set", "kit.allowedSources", r#"["ghcr.io/x/"]"#])
+            .unwrap();
+        t.sbt(&["settings", "set", "kit.requireSignature", "true"])
+            .unwrap();
+        creatable(&t);
+        t.sbt(&["create", "claude", "."]).unwrap();
+        assert!(t.made("machine create"));
+    }
+
+    #[test]
+    fn a_missing_agent_kit_names_its_ref() {
+        let empty = tempfile::tempdir().unwrap();
+        let dir = empty.path().display().to_string();
+        let mut t = test_env(&[("SMOLBENTO_AGENT_KITS_DIR", &dir)]);
+        t.sbt(&["settings", "set", "kit.requireSignature", "true"])
+            .unwrap();
+        creatable(&t);
+        let err = t.sbt_err(&["create", "claude", "."]);
+        assert!(err.contains(&format!("{dir}/claude")), "{err}");
+        assert!(
+            !err.contains("allowedSources") && !err.contains("signature"),
+            "{err}"
+        );
     }
 
     #[test]
@@ -802,13 +1151,10 @@ mod tests {
             .into_iter()
             .find(|l| l.starts_with("machine create"))
             .unwrap();
-        assert!(
-            line.contains("--image docker/sandbox-templates:shell-0.10.0"),
-            "{line}"
-        );
+        assert!(line.contains("/kits/images/"), "{line}");
         assert!(!line.contains(" -v "), "{line}");
         assert!(line.contains("--label sbx.docker=false"), "{line}");
-        assert!(!line.contains("sbx.kits"), "no docker kit: {line}");
+        assert!(!line.contains("builtin:docker"), "no docker kit: {line}");
         assert!(
             t.calls()
                 .contains(&"machine start -n sbx-shell-proj --branchable".to_string())
@@ -834,7 +1180,7 @@ mod tests {
         else {
             panic!("expected create");
         };
-        let req = build_request(&t.ctx, "shell", &[], &a.opts, false).unwrap();
+        let req = planned(&t, "shell", &a.opts).unwrap();
         assert_eq!(req.image, "docker/sandbox-templates:shell-docker-0.10.0");
         assert!(!req.docker, "docker.enabled=false still skips dockerd");
     }
@@ -848,7 +1194,7 @@ mod tests {
             pull: Some("never".into()),
             ..Default::default()
         };
-        let req = build_request(&t.ctx, "shell", &[], &opts, false).unwrap();
+        let req = planned(&t, "shell", &opts).unwrap();
         let pack = crate::templates::Store::new(&t.ctx.paths).pack(&e);
         assert_eq!(req.template_pack, Some(pack));
         assert_eq!(
@@ -862,7 +1208,7 @@ mod tests {
     #[test]
     fn disk_sizes_come_from_the_options_and_the_docker_volume_setting() {
         let t = test_env(&[]);
-        let req = build_request(&t.ctx, "shell", &[], &SandboxOpts::default(), false).unwrap();
+        let req = planned(&t, "shell", &SandboxOpts::default()).unwrap();
         assert_eq!(
             (req.storage_gib, req.overlay_gib),
             (None, None),
@@ -870,7 +1216,7 @@ mod tests {
         );
 
         let t = test_env(&[("SMOLBENTO_SANDBOX_DISK_DOCKER_VOLUME", "40g")]);
-        let req = build_request(&t.ctx, "shell", &[], &SandboxOpts::default(), false).unwrap();
+        let req = planned(&t, "shell", &SandboxOpts::default()).unwrap();
         assert_eq!(req.storage_gib, Some(40));
 
         // An environment file's sizes: the larger storage size wins, and sizes round up to GiB.
@@ -882,7 +1228,7 @@ mod tests {
             },
             ..Default::default()
         };
-        let req = build_request(&t.ctx, "shell", &[], &opts, false).unwrap();
+        let req = planned(&t, "shell", &opts).unwrap();
         assert_eq!((req.storage_gib, req.overlay_gib), (Some(35), Some(24)));
         let opts = SandboxOpts {
             disk: DiskSizes {
@@ -891,7 +1237,7 @@ mod tests {
             },
             ..Default::default()
         };
-        let req = build_request(&t.ctx, "shell", &[], &opts, false).unwrap();
+        let req = planned(&t, "shell", &opts).unwrap();
         assert_eq!(req.overlay_gib, Some(1));
         let opts = SandboxOpts {
             disk: DiskSizes {
@@ -900,7 +1246,7 @@ mod tests {
             },
             ..Default::default()
         };
-        let err = build_request(&t.ctx, "shell", &[], &opts, false).unwrap_err();
+        let err = planned(&t, "shell", &opts).unwrap_err();
         assert!(err.to_string().contains("rootSize"), "{err}");
     }
 
@@ -912,9 +1258,7 @@ mod tests {
             template: Some("t:v1".into()),
             ..Default::default()
         };
-        let err = build_request(&t.ctx, "claude", &[], &opts, false)
-            .unwrap_err()
-            .to_string();
+        let err = planned(&t, "claude", &opts).unwrap_err().to_string();
         assert_eq!(
             err,
             "template docker.io/library/t:v1 was saved from a shell sandbox; run it with shell"
@@ -929,7 +1273,7 @@ mod tests {
             pull: Some("never".into()),
             ..Default::default()
         };
-        let err = build_request(&t.ctx, "shell", &[], &opts, false).unwrap_err();
+        let err = planned(&t, "shell", &opts).unwrap_err();
         assert_eq!(
             err.to_string(),
             "--pull never works only with a saved template (see `sbt template ls`); smolvm pulls missing images"
@@ -944,7 +1288,7 @@ mod tests {
             template: Some("alpine".into()),
             ..Default::default()
         };
-        let req = build_request(&t.ctx, "shell", &[], &opts, false).unwrap();
+        let req = planned(&t, "shell", &opts).unwrap();
         assert_eq!(
             (req.image.as_str(), req.template_pack.is_none()),
             ("alpine", true)
@@ -984,6 +1328,7 @@ mod tests {
     fn a_templates_docker_flag_follows_docker_enabled() {
         for (enabled, want) in [("false", false), ("true", true)] {
             let t = test_env(&[("SMOLBENTO_DOCKER", enabled)]);
+            let kits = saved_template(&t, "s:v1", "shell").kits;
             let src = t.ctx.cwd.join("p.smolmachine");
             std::fs::write(&src, "packed").unwrap();
             let r = crate::templates::TemplateRef::parse("d:v1").unwrap();
@@ -996,6 +1341,7 @@ mod tests {
                         image: "img:1".into(),
                         docker: true,
                         created_at: "1970-01-12T13:46:30Z".into(),
+                        kits,
                         ..Default::default()
                     },
                     &src,
@@ -1005,7 +1351,7 @@ mod tests {
                 template: Some("d:v1".into()),
                 ..Default::default()
             };
-            let req = build_request(&t.ctx, "shell", &[], &opts, false).unwrap();
+            let req = planned(&t, "shell", &opts).unwrap();
             assert_eq!(req.docker, want, "docker.enabled={enabled}");
         }
     }
@@ -1029,7 +1375,7 @@ mod tests {
     }
 
     #[test]
-    fn create_without_kits_prints_no_kits_or_kit_steps() {
+    fn create_with_only_a_cached_agent_kit_prints_no_kits_section() {
         let mut t = test_env(&[("SMOLBENTO_DOCKER", "false")]);
         creatable_as(&t, "shell-proj");
         t.sbt(&[
@@ -1043,14 +1389,15 @@ mod tests {
             "1536m",
         ])
         .unwrap();
+        let kits = t.ctx.env["SMOLBENTO_AGENT_KITS_DIR"].clone();
         assert_eq!(
-            t.stdout(),
+            t.stdout().replace(&kits, "KITS"),
             "
 SANDBOX
   Name:       shell-proj
   Agent:      shell
   Workspace:  -
-  Image:      docker/sandbox-templates:shell-0.10.0
+  Image:      from KITS/shell
   CPU:        3
   Memory:     1536 MiB
 
@@ -1061,6 +1408,8 @@ IMAGE
 SETUP
   ○ sandbox — starting…
   ✓ sandbox — started
+  ○ shell — installing…
+  ✓ shell — installed
 
   ✓ Created sandbox shell-proj
         try: sbt run --name shell-proj

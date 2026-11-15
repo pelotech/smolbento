@@ -167,6 +167,7 @@ mod tests {
                     reference: r.into(),
                     provides: vec![],
                     format: None,
+                    args: Default::default(),
                 })
                 .to_vec(),
             host_mounts: BTreeMap::from([(

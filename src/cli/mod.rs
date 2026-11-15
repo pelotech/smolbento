@@ -42,7 +42,7 @@ use crate::config::{Paths, Settings};
 use crate::smolvm::{ProcessRunner, Runner, Smolvm};
 
 /// The oldest smolvm smolbento supports.
-pub const MIN_SMOLVM: &str = "1.35.0";
+pub const MIN_SMOLVM: &str = "1.35.1";
 
 pub fn exit_code(err: &anyhow::Error) -> u8 {
     if err.downcast_ref::<Unsupported>().is_some() {

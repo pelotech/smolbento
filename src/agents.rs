@@ -1,98 +1,119 @@
-//! sbx agent presets. Tags are pinned; Renovate bumps them (see renovate.json5). Real sbx uses
-//! the `-docker` variants (verified against sbx v0.49.2), so every preset does too.
+//! Built-in agent names: each is a kit sbx publishes as `docker.io/sbx/<name>:latest`, loaded like
+//! any registry kit (`kits::load::agent`). Retired agents are refused with sbx's message.
 
-pub struct Agent {
-    pub name: &'static str,
-    pub image: &'static str,
-    pub command: &'static [&'static str],
-    /// The agent file's name. Like sbx, it sits in the parent of the workspace path in the
-    /// guest; kit agent context goes there.
-    pub context_file: &'static str,
-    /// Where the agent reads skills (sbx's table); `None` for agents without skills.
-    pub skills_dir: Option<&'static str>,
+/// The built-in agent names, each a kit sbx publishes as `docker.io/sbx/<name>:latest`.
+pub const NAMES: [&str; 10] = [
+    "claude",
+    "codex",
+    "copilot",
+    "cursor",
+    "devin",
+    "docker-agent",
+    "droid",
+    "kiro",
+    "opencode",
+    "shell",
+];
+
+/// Set (by tests) to a directory of prebuilt stand-in kits, one OCI layout per agent name, read
+/// instead of Docker Hub.
+pub const KITS_DIR_ENV: &str = "SMOLBENTO_AGENT_KITS_DIR";
+
+/// Writes a stand-in for every built-in agent's kit under `dir`, for tests (unit and e2e), which
+/// read them with `SMOLBENTO_AGENT_KITS_DIR` instead of Docker Hub: a prebuilt v3 workload with
+/// no layers (booted with `-t <image>`), launching as sbx's kits do as `agent`, asking for Docker,
+/// and declaring `sbx@1`. Their agent files and skills directories are where the real kits keep
+/// them: `shell`'s `AGENTS.md` beside the workspace, `claude`'s in `~/.claude`.
+#[doc(hidden)]
+pub fn write_stand_ins(dir: &std::path::Path) -> std::io::Result<()> {
+    for name in NAMES {
+        let descriptor = match name {
+            "claude" => STAND_IN_CLAUDE,
+            "shell" => STAND_IN_SHELL,
+            _ => {
+                r#"{"schemaVersion":"3","kind":"workload","capabilities":[
+                {"type":"com.docker.sandbox/sbx@1"}]}"#
+            }
+        };
+        write_stand_in(dir, name, descriptor)?;
+    }
+    Ok(())
 }
 
-/// The agent file's name for presets without their own, and for a workload kit's
-/// `agent-context` without a `filename`.
-pub const DEFAULT_CONTEXT_FILE: &str = "AGENTS.md";
+/// The `shell` stand-in's descriptor: the real kit's `sbx@1` and agent file.
+#[doc(hidden)]
+pub const STAND_IN_SHELL: &str = r#"{"schemaVersion":"3","kind":"workload","capabilities":[
+  {"type":"com.docker.sandbox/sbx@1"},
+  {"type":"com.docker.sandbox/agent-context@1","optional":true,
+   "config":{"content":"","filename":"AGENTS.md"}}]}"#;
 
-pub const AGENTS: &[Agent] = &[
-    Agent {
-        name: "claude",
-        image: "docker/sandbox-templates:claude-code-docker-0.10.0",
-        context_file: "CLAUDE.md",
-        skills_dir: Some("/home/agent/.claude/skills"),
-        command: &["claude", "--dangerously-skip-permissions"],
-    },
-    Agent {
-        name: "codex",
-        image: "docker/sandbox-templates:codex-docker-0.11.0",
-        context_file: DEFAULT_CONTEXT_FILE,
-        skills_dir: Some("/home/agent/.agents/skills"),
-        command: &["codex", "--dangerously-bypass-approvals-and-sandbox"],
-    },
-    Agent {
-        name: "copilot",
-        image: "docker/sandbox-templates:copilot-docker-0.11.0",
-        context_file: DEFAULT_CONTEXT_FILE,
-        skills_dir: Some("/home/agent/.copilot/skills"),
-        command: &["copilot", "--yolo"],
-    },
-    Agent {
-        name: "cursor",
-        image: "docker/sandbox-templates:cursor-agent-docker-0.11.0",
-        context_file: DEFAULT_CONTEXT_FILE,
-        skills_dir: Some("/home/agent/.cursor/skills"),
-        command: &["cursor-agent", "--yolo"],
-    },
-    Agent {
-        name: "devin",
-        image: "docker/sandbox-templates:devin-docker-0.11.0",
-        context_file: DEFAULT_CONTEXT_FILE,
-        skills_dir: Some("/home/agent/.agents/skills"),
-        command: &[
-            "devin",
-            "--permission-mode",
-            "dangerous",
-            "--respect-workspace-trust=false",
-        ],
-    },
-    Agent {
-        name: "docker-agent",
-        image: "docker/sandbox-templates:docker-agent-docker-0.11.0",
-        context_file: DEFAULT_CONTEXT_FILE,
-        skills_dir: None,
-        command: &["docker-agent", "run", "--yolo"],
-    },
-    Agent {
-        name: "droid",
-        image: "docker/sandbox-templates:droid-docker-0.11.0",
-        context_file: DEFAULT_CONTEXT_FILE,
-        skills_dir: Some("/home/agent/.factory/skills"),
-        command: &["droid"],
-    },
-    Agent {
-        name: "kiro",
-        image: "docker/sandbox-templates:kiro-docker-0.4.0",
-        context_file: DEFAULT_CONTEXT_FILE,
-        skills_dir: None,
-        command: &["kiro", "chat", "--trust-all-tools"],
-    },
-    Agent {
-        name: "opencode",
-        image: "docker/sandbox-templates:opencode-docker-0.11.0",
-        context_file: DEFAULT_CONTEXT_FILE,
-        skills_dir: Some("/home/agent/.config/opencode/skills"),
-        command: &["opencode"],
-    },
-    Agent {
-        name: "shell",
-        image: "docker/sandbox-templates:shell-docker-0.10.0",
-        context_file: DEFAULT_CONTEXT_FILE,
-        skills_dir: None,
-        command: &["bash", "-l"],
-    },
-];
+/// The `claude` stand-in's descriptor: the real kit's `sbx@1`, agent file and skills directory.
+#[doc(hidden)]
+pub const STAND_IN_CLAUDE: &str = r#"{"schemaVersion":"3","kind":"workload","capabilities":[
+  {"type":"com.docker.sandbox/sbx@1"},
+  {"type":"com.docker.sandbox/agent-skills@1","optional":true,
+   "config":{"path":"/home/agent/.claude/skills"}},
+  {"type":"com.docker.sandbox/agent-context@1","optional":true,
+   "config":{"content":"","directory":"/home/agent/.claude","filename":"CLAUDE.md"}}]}"#;
+
+/// Writes (or replaces) agent `name`'s stand-in under `dir` with `descriptor`.
+#[doc(hidden)]
+pub fn write_stand_in(dir: &std::path::Path, name: &str, descriptor: &str) -> std::io::Result<()> {
+    use crate::util::sha256_digest;
+    let kit = dir.join(name);
+    if kit.exists() {
+        std::fs::remove_dir_all(&kit)?;
+    }
+    let blobs = kit.join("blobs").join("sha256");
+    std::fs::create_dir_all(&blobs)?;
+    let put = |data: &[u8]| -> std::io::Result<String> {
+        let digest = sha256_digest(data);
+        std::fs::write(blobs.join(digest.trim_start_matches("sha256:")), data)?;
+        Ok(digest)
+    };
+    let entrypoint: &[&str] = if name == "shell" {
+        &["bash", "-l"]
+    } else {
+        &[name]
+    };
+    let config =
+        serde_json::json!({"config": {"Entrypoint": entrypoint, "User": "agent"}}).to_string();
+    let manifest = serde_json::json!({
+        "schemaVersion": 2,
+        "mediaType": "application/vnd.oci.image.manifest.v1+json",
+        "config": {"mediaType": "application/vnd.oci.image.config.v1+json",
+                   "digest": put(config.as_bytes())?, "size": config.len()},
+        "layers": [],
+        "annotations": {
+            "vnd.docker.sandbox.kit.descriptor": descriptor,
+            "vnd.docker.sandbox.kit.schema-version": "3",
+            "com.docker.sandboxes.start-docker": "true",
+        },
+    })
+    .to_string();
+    let index = serde_json::json!({"schemaVersion": 2, "manifests": [{
+        "mediaType": "application/vnd.oci.image.manifest.v1+json",
+        "digest": put(manifest.as_bytes())?, "size": manifest.len()}]});
+    std::fs::write(kit.join("oci-layout"), r#"{"imageLayoutVersion":"1.0.0"}"#)?;
+    std::fs::write(kit.join("index.json"), index.to_string())
+}
+
+/// Whether `name` is a built-in agent.
+pub fn is_agent(name: &str) -> bool {
+    NAMES.contains(&name)
+}
+
+/// The kit a built-in agent name loads: sbx's published `docker.io/sbx/<name>:latest`, or its
+/// stand-in under `SMOLBENTO_AGENT_KITS_DIR`. `None` for any other name.
+pub fn kit_ref(env: &std::collections::BTreeMap<String, String>, name: &str) -> Option<String> {
+    if !is_agent(name) {
+        return None;
+    }
+    Some(match env.get(KITS_DIR_ENV) {
+        Some(dir) => format!("{}/{name}", dir.trim_end_matches('/')),
+        None => format!("docker.io/sbx/{name}:latest"),
+    })
+}
 
 /// Agents sbx no longer offers (v0.53): a new sandbox with one is refused.
 const RETIRED: &[Retired] = &[Retired {
@@ -133,11 +154,6 @@ impl Retired {
     }
 }
 
-/// A built-in agent a new sandbox can have.
-pub fn find(name: &str) -> Option<&'static Agent> {
-    AGENTS.iter().find(|a| a.name == name)
-}
-
 /// The retired agent called `name`, if it is one.
 pub fn retired(name: &str) -> Option<&'static Retired> {
     RETIRED.iter().find(|r| r.name == name)
@@ -148,100 +164,13 @@ pub fn unknown(name: &str) -> String {
     format!("unknown agent \"{name}\"")
 }
 
-fn split_tag(image: &str) -> Option<(&str, &str)> {
-    image.rsplit_once(':').filter(|(_, tag)| !tag.contains('/'))
-}
-
-/// True for Docker's `-docker` template variants, which bundle a Docker engine.
-pub fn is_docker_image(image: &str) -> bool {
-    split_tag(image).is_some_and(|(_, tag)| tag.ends_with("-docker") || tag.contains("-docker-"))
-}
-
-/// The plain variant of a `-docker` tag (`shell-docker-0.10.0` → `shell-0.10.0`).
-pub fn plain_image(image: &str) -> String {
-    let Some((repo, tag)) = split_tag(image) else {
-        return image.to_string();
-    };
-    let plain = if let Some(base) = tag.strip_suffix("-docker") {
-        base.to_string()
-    } else if let Some(i) = tag.rfind("-docker-") {
-        format!("{}{}", &tag[..i], &tag[i + "-docker".len()..])
-    } else {
-        tag.to_string()
-    };
-    format!("{repo}:{plain}")
-}
-
-/// sbx's rule for `-- ARGS`: flags are appended to the preset; a bare word replaces its flags.
-pub fn command_with_args<S: AsRef<str>>(command: &[S], args: &[String]) -> Vec<String> {
-    let mut cmd: Vec<String> = command.iter().map(|s| s.as_ref().to_string()).collect();
-    match args.first() {
-        None => {}
-        Some(first) if first.starts_with('-') => cmd.extend(args.iter().cloned()),
-        Some(_) => {
-            cmd.truncate(1);
-            cmd.extend(args.iter().cloned());
-        }
-    }
-    cmd
-}
-
 #[cfg(test)]
 mod tests {
     use super::*;
 
     #[test]
-    fn every_preset_is_a_pinned_docker_variant() {
-        // sbx 0.53's built-in agents.
-        let names: Vec<&str> = AGENTS.iter().map(|a| a.name).collect();
-        assert_eq!(
-            names,
-            [
-                "claude",
-                "codex",
-                "copilot",
-                "cursor",
-                "devin",
-                "docker-agent",
-                "droid",
-                "kiro",
-                "opencode",
-                "shell"
-            ]
-        );
-        for a in AGENTS {
-            assert!(
-                a.image.starts_with("docker/sandbox-templates:"),
-                "{}",
-                a.name
-            );
-            assert!(is_docker_image(a.image), "{}", a.image);
-            assert!(
-                a.image.rsplit('-').next().unwrap().contains('.'),
-                "{} is not pinned",
-                a.image
-            );
-        }
-    }
-
-    #[test]
-    fn skills_dirs_follow_sbx() {
-        let d = |n: &str| find(n).unwrap().skills_dir;
-        assert_eq!(d("claude"), Some("/home/agent/.claude/skills"));
-        assert_eq!(d("codex"), Some("/home/agent/.agents/skills"));
-        assert_eq!(d("devin"), Some("/home/agent/.agents/skills"));
-        assert_eq!(d("copilot"), Some("/home/agent/.copilot/skills"));
-        assert_eq!(d("cursor"), Some("/home/agent/.cursor/skills"));
-        assert_eq!(d("droid"), Some("/home/agent/.factory/skills"));
-        assert_eq!(d("opencode"), Some("/home/agent/.config/opencode/skills"));
-        for n in ["kiro", "docker-agent", "shell"] {
-            assert_eq!(d(n), None, "{n}");
-        }
-    }
-
-    #[test]
     fn gemini_is_retired_as_in_sbx() {
-        assert!(find("gemini").is_none(), "no new gemini sandboxes");
+        assert!(!is_agent("gemini"), "no new gemini sandboxes");
         assert_eq!(
             retired("gemini").unwrap().refusal(),
             "\"gemini\" is retired and is no longer a built-in agent; prefer antigravity with \
@@ -252,56 +181,16 @@ mod tests {
     }
 
     #[test]
-    fn find_by_name() {
+    fn kit_ref_defaults_to_docker_hub() {
+        let mut env = std::collections::BTreeMap::new();
         assert_eq!(
-            find("claude").unwrap().command,
-            &["claude", "--dangerously-skip-permissions"]
+            kit_ref(&env, "codex").as_deref(),
+            Some("docker.io/sbx/codex:latest")
         );
-        assert!(find("nope").is_none());
-    }
-
-    #[test]
-    fn docker_image_detection() {
-        assert!(is_docker_image("docker/sandbox-templates:shell-docker"));
-        assert!(is_docker_image(
-            "docker/sandbox-templates:docker-agent-docker-0.11.0"
-        ));
-        assert!(!is_docker_image(
-            "docker/sandbox-templates:docker-agent-0.11.0"
-        ));
-        assert!(!is_docker_image("alpine"));
-        assert!(!is_docker_image("localhost:5000/x"));
-    }
-
-    #[test]
-    fn plain_variants() {
-        assert_eq!(
-            plain_image("docker/sandbox-templates:shell-docker-0.10.0"),
-            "docker/sandbox-templates:shell-0.10.0"
-        );
-        assert_eq!(
-            plain_image("docker/sandbox-templates:docker-agent-docker-0.11.0"),
-            "docker/sandbox-templates:docker-agent-0.11.0"
-        );
-        assert_eq!(
-            plain_image("docker/sandbox-templates:shell-docker"),
-            "docker/sandbox-templates:shell"
-        );
-        assert_eq!(plain_image("alpine"), "alpine");
-    }
-
-    #[test]
-    fn agent_args_rule() {
-        let base = &["claude", "--dangerously-skip-permissions"];
-        let s = |v: &[&str]| v.iter().map(|x| x.to_string()).collect::<Vec<_>>();
-        assert_eq!(command_with_args(base, &[]), s(base));
-        assert_eq!(
-            command_with_args(base, &s(&["-c"])),
-            s(&["claude", "--dangerously-skip-permissions", "-c"])
-        );
-        assert_eq!(
-            command_with_args(base, &s(&["mcp", "list"])),
-            s(&["claude", "mcp", "list"])
-        );
+        assert_eq!(kit_ref(&env, "nope"), None);
+        assert_eq!(kit_ref(&env, "gemini"), None);
+        env.insert("SMOLBENTO_AGENT_KITS_DIR".to_string(), "/kits".to_string());
+        assert_eq!(kit_ref(&env, "codex").as_deref(), Some("/kits/codex"));
+        assert!(is_agent("docker-agent") && !is_agent("antigravity"));
     }
 }

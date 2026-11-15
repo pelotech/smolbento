@@ -18,13 +18,13 @@ pub fn identity(kit: &Kit) -> Result<String> {
         Source::LocalV3(p) | Source::LocalV2(p) | Source::Smolfile(p) => {
             Ok(p.to_string_lossy().into_owned())
         }
-        Source::Registry(r) => {
+        Source::Registry(r) | Source::Agent(r) => {
             let r: Reference = r
                 .parse()
                 .with_context(|| format!("invalid kit reference '{r}'"))?;
             Ok(format!("{}/{}", r.registry(), r.repository()))
         }
-        Source::Preset(_) | Source::Builtin(_) => {
+        Source::Builtin(_) => {
             bail!("kit {} has no identity for host-mount@1", kit.name)
         }
     }
@@ -162,7 +162,6 @@ mod tests {
 
     #[test]
     fn presets_and_builtins_have_no_identity() {
-        assert!(identity(&kit(Source::Preset("img:1".into()))).is_err());
         assert!(identity(&kit(Source::Builtin("docker"))).is_err());
     }
 

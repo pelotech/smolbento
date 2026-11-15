@@ -54,7 +54,7 @@ other session is live, unless the sandbox was started with `run -d`.
 | `src/provision/` | Create and start: binds policy, secrets and kits; `builder.rs` is the kit builder sandbox |
 | `src/smolvm/` | `Runner`, the typed client, JSON types, the test fake |
 | `src/sandbox/` | Names, labels, create plan, start steps, guest identity, kit steps, sessions, options |
-| `src/agents.rs` | Agent presets |
+| `src/agents.rs` | Built-in agent names → sbx's published kits; retired agents |
 | `src/workspace/` | Workspace paths and mounts; `clone.rs` is clone mode on the host |
 | `src/config.rs` | Paths and settings |
 | `src/policy/` | Network rules, presets, compilation to smolvm flags |

@@ -5,11 +5,10 @@ use std::path::{Path, PathBuf};
 
 use anyhow::{Context, Result, bail};
 
-use crate::agents::Agent;
 use crate::ctx::Ctx;
 use crate::kits::model::{Content, Kind, Kit, Source};
 use crate::kits::registry_auth::Logins;
-use crate::kits::{capability, registry, signers, smolfile, trust, v2, v3};
+use crate::kits::{registry, signers, smolfile, trust, v2, v3};
 use crate::provision::builder;
 use crate::secrets::{RegistryEntry, SecretsFile};
 use crate::smolvm::Runner;
@@ -46,7 +45,7 @@ pub fn builtin(reference: &str) -> Option<Result<Kit>> {
 }
 
 /// Loads the kit REF names. `trust::check` runs on the source before anything is read, built
-/// or pulled. Presets (`agents::find`) are the caller's business, so `claude` never lands here;
+/// or pulled. Built-in agent names are `agent`'s business, so `claude` never lands here;
 /// shipped kits (`docker`) are found before any path or registry.
 pub fn load<R: Runner>(ctx: &Ctx<R>, reference: &str) -> Result<Kit> {
     load_with(ctx, reference, false)
@@ -151,6 +150,125 @@ fn fetch<R: Runner>(
         }
     };
     kit.reference = Some(reference.to_string());
+    Ok((kit, cached))
+}
+
+/// Loads built-in agent `name`'s published kit (`agents::kit_ref`): pulled from Docker Hub, or
+/// read from its stand-in under `SMOLBENTO_AGENT_KITS_DIR` (the only place a stand-in is read).
+/// `pin` (a template's recorded digest) loads that version, from the kit cache when it's there;
+/// `offline` (`--pull never`) refuses a pull. Like smolbento's own kits it skips
+/// `kit.allowedSources` and `kit.requireSignature` (sbx's kits are unsigned). Also returns
+/// whether loading it added nothing to the kit cache. `before` is called just before a pull.
+pub fn agent<R: Runner>(
+    ctx: &Ctx<R>,
+    name: &str,
+    pin: Option<&str>,
+    offline: bool,
+    sandbox: Option<&str>,
+    before: &mut dyn FnMut(Fetch),
+) -> Result<(Kit, bool)> {
+    let reference =
+        crate::agents::kit_ref(&ctx.env, name).with_context(|| crate::agents::unknown(name))?;
+    let source = Source::Agent(reference.clone());
+    let cache = ctx.paths.kit_cache();
+    let (mut kit, cached) = if ctx.env.contains_key(crate::agents::KITS_DIR_ENV) {
+        let kit = registry::read_layout(Path::new(&reference), source.clone())
+            .with_context(|| format!("loading agent kit {reference}"))?;
+        (kit, true)
+    } else if let Some(kit) = registry::cached(&reference, pin, &cache)? {
+        (kit, true)
+    } else {
+        if offline {
+            bail!("kit {reference} isn't in the kit cache, and --pull never can't fetch it");
+        }
+        let registries = registries(&SecretsFile::load(&ctx.paths)?, sandbox);
+        let logins = Logins::new(&registries, &*ctx.store);
+        before(Fetch::Pull);
+        let blobs = entries(&registry::store_dir(&cache));
+        let kit = registry::pull(&reference, pin, &cache, logins)
+            .with_context(|| format!("pulling agent kit {reference}"))?;
+        (kit, entries(&registry::store_dir(&cache)) == blobs)
+    };
+    kit.source = source;
+    kit.reference = Some(name.to_string());
+    Ok((kit, cached))
+}
+
+/// A kit record's ref without its `@sha256:…` pin.
+pub fn unpinned(reference: &str) -> &str {
+    match reference.rsplit_once('@') {
+        Some((base, d)) if d.starts_with("sha256:") => base,
+        _ => reference,
+    }
+}
+
+/// Loads a template's recorded kit by its record `reference` (`ref@sha256:…`, a local path, or
+/// `builtin:NAME`). A pinned registry kit already in the kit cache needs no network; `offline`
+/// (`--pull never`) refuses one that isn't. `agent`: the record is built-in agent `agent`'s kit,
+/// loaded by `agent` (exempt from kit policy, as at create). Every other kit meets kit
+/// policy as at create (an imported template may come from someone else): `kit.allowedSources`
+/// and `kit.allowLocalKits`, and `kit.requireSignature`, which refuses local kits and verifies a
+/// registry kit's pinned digest (so it needs the registry, even with `--pull never`).
+pub fn pinned<R: Runner>(
+    ctx: &Ctx<R>,
+    reference: &str,
+    offline: bool,
+    agent: Option<&str>,
+    sandbox: Option<&str>,
+    before: &mut dyn FnMut(Fetch),
+) -> Result<(Kit, bool)> {
+    if let Some(name) = reference.strip_prefix("builtin:") {
+        let kit = builtin(name).with_context(|| format!("unknown shipped kit {name}"))??;
+        return Ok((kit, true));
+    }
+    let base = unpinned(reference);
+    let digest = (base != reference).then(|| &reference[base.len() + 1..]);
+    if let Some(name) = agent {
+        return self::agent(ctx, name, digest, offline, sandbox, before);
+    }
+    let path = Path::new(base);
+    let require = ctx.settings.bool("kit.requireSignature")?;
+    let (mut kit, cached) = if path.is_absolute() {
+        trust::check(&Source::LocalV3(path.into()), &ctx.settings)?;
+        if require {
+            return Err(signers::refuse_local(base, path));
+        }
+        let v3_source = (path.is_dir() && !path.join("spec.yaml").is_file()) || is_descriptor(path);
+        if offline && v3_source {
+            bail!(
+                "kit {base} is a v3 source kit: --pull never can't build it (the kit builder \
+                 needs the network); run without --pull never"
+            );
+        }
+        fetch(ctx, base, offline, sandbox, Position::Kit, before)?
+    } else {
+        trust::check(&Source::Registry(base.into()), &ctx.settings)?;
+        if require {
+            if offline {
+                bail!(
+                    "kit {base}: kit.requireSignature verifies it at the registry, which --pull \
+                     never can't reach"
+                );
+            }
+            let registries = registries(&SecretsFile::load(&ctx.paths)?, sandbox);
+            let logins = Logins::new(&registries, &*ctx.store);
+            signers::verify_registry(reference, &ctx.settings, logins)?;
+        }
+        let cache = ctx.paths.kit_cache();
+        match registry::cached(base, digest, &cache)? {
+            Some(kit) => (kit, true),
+            None if offline => {
+                bail!("kit {base} isn't in the kit cache, and --pull never can't fetch it")
+            }
+            None => {
+                before(Fetch::Pull);
+                let registries = registries(&SecretsFile::load(&ctx.paths)?, sandbox);
+                let logins = Logins::new(&registries, &*ctx.store);
+                (registry::pull(base, digest, &cache, logins)?, false)
+            }
+        }
+    };
+    kit.reference = Some(base.to_string());
     Ok((kit, cached))
 }
 
@@ -326,7 +444,7 @@ fn is_descriptor(path: &Path) -> bool {
 
 /// Gives a workload kit its command or refuses it with sbx's error. v3 has its image config's;
 /// a v2 kit without `sandbox.entrypoint`/`command` takes its `sandbox.image`'s Entrypoint+Cmd.
-/// A Smolfile is smolvm's, so its sandbox keeps the `shell` preset's command.
+/// A Smolfile is smolvm's, so its sandbox gets a login shell (`kit_plan`).
 /// `sandbox` is the one being created, whose registry logins the image lookup may use.
 pub fn check_launchable<R: Runner>(
     ctx: &Ctx<R>,
@@ -363,39 +481,9 @@ pub fn check_launchable<R: Runner>(
     Ok(())
 }
 
-/// What a preset provides: its agent name, so v2 `requires.agent` (and v3 `requires`) entries
-/// naming it are met, as in sbx. The version is the image tag's (`:1.2`, or a trailing
-/// `-0.10.0` as in `claude-code-docker-0.10.0`), else `0`; v2 requires carry no version.
-pub fn preset_provide(agent: &str, image: &str) -> String {
-    let tag_suffix = || {
-        let (_, tag) = image.rsplit_once(':')?;
-        let (_, v) = tag.rsplit_once('-')?;
-        (!tag.contains('/') && capability::is_version(v)).then(|| v.to_string())
-    };
-    let version = capability::version_from_reference(image)
-        .or_else(tag_suffix)
-        .unwrap_or_else(|| "0".into());
-    format!("{agent}@{version}")
-}
-
-/// A preset as a workload kit: the image and command, no capabilities.
-pub fn preset_kit(agent: &Agent, image: &str) -> Kit {
-    Kit {
-        provides: vec![preset_provide(agent.name, image)],
-        content: Content::Image(image.to_string()),
-        command: Some(agent.command.iter().map(|s| s.to_string()).collect()),
-        ..Kit::new(
-            agent.name,
-            Kind::Workload,
-            Source::Preset(image.to_string()),
-        )
-    }
-}
-
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::agents;
     use crate::testutil::*;
 
     fn allow_local() -> TestEnv {
@@ -827,45 +915,5 @@ mod tests {
         let t = test_env(&[("SMOLBENTO_KIT_ALLOWED_SOURCES", r#"["ghcr.io/ok/"]"#)]);
         let e = load(&t.ctx, "evil.example/x/y:1").unwrap_err();
         assert!(format!("{e:#}").contains("not in your allowlist"), "{e:#}");
-    }
-
-    #[test]
-    fn preset_kit_keeps_image_and_command() {
-        let a = agents::find("claude").unwrap();
-        let k = preset_kit(a, "img:1");
-        assert_eq!(k.name, "claude");
-        assert_eq!(k.kind, Kind::Workload);
-        assert_eq!(k.content, Content::Image("img:1".into()));
-        assert_eq!(k.source, Source::Preset("img:1".into()));
-        assert_eq!(
-            k.command.unwrap(),
-            a.command.iter().map(|s| s.to_string()).collect::<Vec<_>>()
-        );
-    }
-
-    #[test]
-    fn a_preset_provides_its_agent_name_at_its_image_version() {
-        let claude = agents::find("claude").unwrap();
-        assert_eq!(preset_kit(claude, "img:1.2").provides, ["claude@1.2"]);
-        assert_eq!(
-            preset_kit(claude, "docker/sandbox-templates:claude-code-docker-0.10.0").provides,
-            ["claude@0.10.0"]
-        );
-        assert_eq!(preset_kit(claude, "img:latest").provides, ["claude@0"]);
-        assert_eq!(
-            preset_kit(claude, "localhost:5000/img").provides,
-            ["claude@0"]
-        );
-        assert_eq!(preset_provide("shell", ""), "shell@0");
-    }
-
-    #[test]
-    fn a_v2_mixin_requiring_its_agent_resolves_on_that_preset() {
-        let y = "schemaVersion: \"2\"\nkind: mixin\nname: m\nrequires:\n  agent: claude\n";
-        let m = crate::kits::v2::parse(y, std::path::Path::new("/nonexistent")).unwrap();
-        assert_eq!(m.requires, ["claude"]);
-        let claude = agents::find("claude").unwrap();
-        let w = preset_kit(claude, claude.image);
-        crate::kits::resolve::resolve(w, vec![m], &Default::default()).unwrap();
     }
 }

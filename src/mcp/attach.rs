@@ -26,7 +26,7 @@ pub struct Attachment {
 }
 
 /// Resolves a `--static-mcp` value (`none`, or comma-separated registered names) for `agent`: a
-/// preset's name, or `None` when a workload kit is the agent. `has_secret` says whether an `mcp:`
+/// built-in agent's name, or `None` when a workload kit is the agent. `has_secret` says whether an `mcp:`
 /// secret is set.
 pub fn attach(
     file: &McpFile,
@@ -211,7 +211,7 @@ mod tests {
         );
         // The secret is only asked about when a selected server needs it.
         attach(&f, "docs", Some("claude"), &|_| false).unwrap();
-        // A workload kit as the agent: no preset to register with.
+        // A workload kit as the agent: no built-in agent to register with.
         assert_eq!(
             attach(&f, "docs", None, &|_| true).unwrap_err().to_string(),
             "--static-mcp isn't supported for a workload kit yet"

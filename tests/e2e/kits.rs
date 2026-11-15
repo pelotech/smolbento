@@ -12,33 +12,16 @@ pub(crate) fn dockerds(e: &E2e) -> usize {
     String::from_utf8_lossy(&out.stdout).lines().count()
 }
 
-/// Docker-in-sandbox is the shipped `docker` kit: its background startup hook starts dockerd in
-/// its own session, inside the blocking startup runner's exec, so dockerd must outlive that exec.
-/// A `--kit` mixin's blocking startup hook waits for it: the shipped kit comes before the user's
-/// kits and hooks run in kit order, so it sees the daemon the earlier background hook started, and
-/// `create` and `start` return only once it's up.
+/// The real `shell` agent kit (sbx's `docker.io/sbx/shell:latest`, pulled from Docker Hub) runs
+/// Docker through the shipped `docker` kit, as its `start-docker` annotation asks: its background
+/// startup hook starts dockerd in its own session, inside the startup runner's exec, so dockerd
+/// must outlive that exec and start again, once, on every start.
 #[test]
-#[ignore = "boots real VMs and pulls the shell-docker image; run with `just e2e`"]
-pub(crate) fn docker_kit_runs_dockerd_across_restarts() {
+#[ignore = "boots real VMs and pulls sbx's shell kit; run with `just e2e`"]
+pub(crate) fn real_shell_kit_runs_dockerd_across_restarts() {
     let mut e = E2e::new("dock");
+    e.real_agent_kits();
     e.vars.push(("SMOLBENTO_DOCKER", "true".into()));
-    let kit = e.dir.path().join("e2e-wait-docker");
-    std::fs::create_dir_all(&kit).unwrap();
-    std::fs::write(
-        kit.join("spec.yaml"),
-        r#"schemaVersion: "2"
-kind: mixin
-name: e2e-wait-docker
-setup:
-  startup:
-    - command:
-        - sh
-        - -c
-        - "i=0; until docker info >/dev/null 2>&1; do i=$((i+1)); [ $i -lt 90 ] || exit 9; sleep 1; done"
-      user: "0"
-"#,
-    )
-    .unwrap();
     let ws = e.workspace();
     e.ok(&[
         "create",
@@ -46,36 +29,44 @@ setup:
         ws.to_str().unwrap(),
         "--name",
         &e.name,
-        "--kit",
-        kit.to_str().unwrap(),
         "--cpus",
         "1",
         "-m",
-        "1g",
+        "2g",
     ]);
     assert_eq!(e.state(), "running");
+    let inspect = e.ok(&["inspect", &e.name, "--json"]);
     assert!(
-        root_sh(&e.name, "command -v setsid").status.success(),
-        "the shipped image has setsid"
+        inspect.contains("docker.io/sbx/shell:latest@sha256:"),
+        "{inspect}"
     );
+    assert!(inspect.contains("builtin:docker"), "{inspect}");
     let docker_info = || {
         e.sbt(&["exec", "--privileged", &e.name, "docker", "info"])
             .status
             .success()
     };
-    // No waiting: the blocking hook already saw dockerd, and the exec that ran it has ended.
+    // dockerd starts in the background: wait for it, as an agent would.
+    let wait = || {
+        for _ in 0..90 {
+            if docker_info() {
+                return true;
+            }
+            std::thread::sleep(std::time::Duration::from_secs(1));
+        }
+        false
+    };
     assert!(
-        docker_info(),
-        "docker info right after create:\n{}\n{}",
+        wait(),
+        "docker info after create:\n{}\n{}",
         startup_log(&e),
         String::from_utf8_lossy(&root_sh(&e.name, "cat /var/log/dockerd.log; ps -ef").stdout)
     );
     assert_one_dockerd(&e, "dockerd survives the startup runner's exec");
-    assert!(docker_info(), "docker info from a later exec");
 
     e.ok(&["stop", &e.name]);
     e.ok(&["start", &e.name]);
-    assert!(docker_info(), "docker info right after a restart");
+    assert!(wait(), "docker info after a restart");
     assert_one_dockerd(&e, "exactly one dockerd after a restart");
     let log = startup_log(&e);
     let count = |line: &str| log.lines().filter(|l| l.trim() == line).count();
@@ -84,16 +75,67 @@ setup:
         "dockerd started on both starts:\n{log}"
     );
     assert!(
-        log.lines()
-            .filter(|l| l.starts_with("ok ") && l.ends_with("-e2e-wait-docker.sh hook 1"))
-            .count()
-            >= 2,
-        "the blocking hook finished on both starts:\n{log}"
-    );
-    assert!(
         log.matches("=== dispatcher run ").count() >= 2,
         "one dispatcher run per start:\n{log}"
     );
+}
+
+/// The real `claude` agent kit: pulled from Docker Hub, its API key bound from your secret (the
+/// value stays on the host), its install steps writing Claude's settings, its agent file in
+/// place, the agent idle until `run` starts it, and the mounted workspace writable by the agent
+/// (smolvm maps it to the kit's image user).
+#[test]
+#[ignore = "boots real VMs and pulls sbx's claude kit; run with `just e2e`"]
+pub(crate) fn real_claude_kit_binds_its_api_key_and_seeds_its_settings() {
+    let e = E2e::new("claude");
+    e.real_agent_kits();
+    let ws = e.workspace();
+    // A host command, so no keychain is needed.
+    e.ok(&[
+        "secret",
+        "set",
+        "anthropic",
+        "--command",
+        "printf sk-ant-e2e-not-a-real-key",
+    ]);
+    e.ok(&[
+        "create",
+        "claude",
+        ws.to_str().unwrap(),
+        "--name",
+        &e.name,
+        "--cpus",
+        "1",
+        "-m",
+        "2g",
+    ]);
+    let sh = |script: &str| {
+        let out = e.sbt(&["exec", &e.name, "sh", "-c", script]);
+        String::from_utf8_lossy(&out.stdout).into_owned()
+    };
+    let settings = sh("cat ~/.claude/settings.json");
+    assert!(
+        settings.contains("apiKeyHelper"),
+        "API-key mode seeds the helper:\n{settings}"
+    );
+    assert!(sh("env").contains("SBX_CRED_ANTHROPIC_MODE=apikey"));
+    assert!(
+        !sh("env").contains("sk-ant-e2e-not-a-real-key"),
+        "the key never enters the guest"
+    );
+    assert!(
+        !sh("cat ~/.claude/CLAUDE.md").is_empty(),
+        "the kit's agent file"
+    );
+    // The agent idles at boot: nothing runs claude until `run`.
+    assert_eq!(sh("pgrep -x claude || true"), "", "{}", sh("ps -ef"));
+    // The workspace is the agent's to write, and the file is yours on the host.
+    assert_eq!(
+        sh("touch e2e-written && echo ok"),
+        "ok\n",
+        "the agent writes its workspace"
+    );
+    assert!(ws.join("e2e-written").exists());
 }
 
 /// Checks the sandbox runs exactly one dockerd, again and again for about 5 s: a second one
@@ -585,7 +627,8 @@ pub(crate) fn install_only_credential_is_gone_after_install() {
 #[ignore = "boots real VMs and needs httpbin.org; run with `just e2e`"]
 pub(crate) fn kit_add_applies_network_and_hooks_live() {
     let e = E2e::new("kitadd");
-    e.create_alpine();
+    // A v2 mixin is added below: a v2 workload.
+    e.create_alpine_v2();
     e.ok(&["policy", "init", "deny-all"]);
     e.ok(&["stop", &e.name]); // allow-all -> restricted applies on the next start
     e.ok(&["start", &e.name]);
@@ -810,7 +853,8 @@ setup:
         Image::alpine_agent_archive().to_str().unwrap(),
         "--kit",
         kit.to_str().unwrap(),
-        "shell",
+        // A v2 mixin needs a v2 workload.
+        &e.v2_shell(),
         ws.to_str().unwrap(),
         "--name",
         &e.name,
@@ -926,10 +970,20 @@ pub(crate) fn kit_arg_errors_stop_create() {
         assert!(err.contains(want), "{args:?}: want {want:?} in:\n{err}");
         assert_eq!(e.state(), "absent", "{args:?} made no sandbox");
     };
+    // `shell` is a kit too (sbx 0.53: "no kit declares this argument").
     fails(
         &["create", "shell", ws, "--name", &e.name, "--kit-arg", "a=1"],
-        "kit arguments were supplied but no kits were referenced",
+        "unknown kit argument a",
     );
+    // A v2 mixin needs a v2 workload: the built-in agents are v3 kits.
+    let wl = e.dir.path().join("e2e-wl");
+    std::fs::create_dir_all(&wl).unwrap();
+    std::fs::write(
+        wl.join("spec.yaml"),
+        "schemaVersion: \"2\"\nkind: sandbox\nname: wl\nsandbox:\n  image: alpine\n  entrypoint: [sh]\n",
+    )
+    .unwrap();
+    let wl = wl.to_str().unwrap();
 
     let kit = e.dir.path().join("e2e-args");
     std::fs::create_dir_all(&kit).unwrap();
@@ -953,7 +1007,7 @@ setup:
     let kit = kit.to_str().unwrap();
     fails(
         &[
-            "create", "-t", "alpine", "--kit", kit, "shell", ws, "--name", &e.name,
+            "create", "-t", "alpine", "--kit", kit, wl, ws, "--name", &e.name,
         ],
         "create-phase kit arg \"opt\" has no resolved value",
     );
@@ -1191,7 +1245,8 @@ pub(crate) fn nix_kit_gives_agents_nix_and_direnv() {
     let _builder = BuilderGuard::new();
     let _reg = Registry::start(&e);
     std::fs::write(e.workspace().join(".envrc"), "export E2E_DIRENV=yes\n").unwrap();
-    e.create_with_kits(&[&nix_kit_dir()]);
+    // `claude`'s agent file is in `~/.claude`, so the kit's instructions are there too.
+    e.create_with_kits_as("claude", &[&nix_kit_dir()]);
     let as_agent = |script: &str| e.ok(&["exec", &e.name, "sh", "-c", script]);
     assert!(as_agent("nix --version").contains("nix"));
     as_agent(NIX_BUILD);
@@ -1200,10 +1255,8 @@ pub(crate) fn nix_kit_gives_agents_nix_and_direnv() {
         "yes"
     );
     assert!(root_sh(&e.name, "getent passwd agent").status.success());
-    let ws = e.workspace();
-    let parent = ws.parent().unwrap().display().to_string();
     // The agent file lists the kit; its text is beside it.
-    let text = root_out(&e.name, &format!("cat {parent}/kits-agent-context/nix.md"));
+    let text = root_out(&e.name, "cat /home/agent/.claude/kits-agent-context/nix.md");
     assert!(text.contains("direnv exec"), "{text}");
 }
 

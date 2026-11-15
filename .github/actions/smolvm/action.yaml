@@ -16,7 +16,7 @@ runs:
     - name: Install smolvm
       shell: bash
       env:
-        SMOLVM_VERSION: "1.35.0"
+        SMOLVM_VERSION: "1.35.1"
       run: |
         base="https://github.com/smol-machines/smolvm/releases/download/v${SMOLVM_VERSION}"
         tarball="smolvm-${SMOLVM_VERSION}-linux-x86_64.tar.gz"

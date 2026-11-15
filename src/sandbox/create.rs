@@ -52,6 +52,9 @@ pub struct CreateRequest {
     pub command: Option<Vec<String>>,
     /// A v3 workload kit's image user (the `sbx.user` label).
     pub user: Option<String>,
+    /// The workload declares `sbx@1`: the host launches its agent (in `run` or `exec`, under
+    /// bash), so its image entrypoint isn't started at boot.
+    pub launched_by_host: bool,
     /// A v3 workload kit's image WORKDIR, when not `/` (the `sbx.workdir` label).
     pub image_workdir: Option<String>,
     /// A workload kit's agent file in the guest (the `sbx.agent-file` label). `kits::apply`
@@ -282,11 +285,16 @@ pub fn spec(req: &CreateRequest) -> CreateSpec {
 
 /// What the machine runs at every boot (smolvm reruns it on each start, and keeps the machine up
 /// after it exits). A v3 workload kit launches its image's `Entrypoint` + `Cmd`, as the kit spec's
-/// default launch mode says (an image user, `sbx.user`, marks a v3 workload); every other sandbox,
-/// presets and the internal builder included, just idles for `exec` and sessions.
+/// default launch mode says (an image user, `sbx.user`, marks a v3 workload), unless it declares
+/// `sbx@1` (the host launches its agent, as for every built-in agent); every other sandbox, the
+/// internal builder included, just idles for `exec` and sessions.
 fn boot_command(req: &CreateRequest) -> Vec<String> {
     match (&req.user, &req.command) {
-        (Some(_), Some(c)) if !c.is_empty() && !name::is_internal(&req.name) => c.clone(),
+        (Some(_), Some(c))
+            if !c.is_empty() && !req.launched_by_host && !name::is_internal(&req.name) =>
+        {
+            c.clone()
+        }
         _ => vec!["sleep".into(), "infinity".into()],
     }
 }
@@ -324,7 +332,7 @@ mod tests {
             req.user = user.map(String::from);
             spec(&req).user
         };
-        // Presets: `agent`. A v3 workload: its image user, `0` when the image names none.
+        // No image user: `agent`. A v3 workload: its image user, `0` when the image names none.
         assert_eq!(user("claude.repo", None).as_deref(), Some("agent"));
         assert_eq!(
             user("tool", Some("somebody:1001")).as_deref(),
@@ -358,9 +366,16 @@ mod tests {
             tail,
             ["-u", "somebody:1001", "--", "/bin/agent", "--x", "run"]
         );
-        // A preset, a v2 workload (a command but no image user), a v3 image without a command,
+        // No image user, a v2 workload (a command but no image user), a v3 image without a command,
         // and the internal builder keep `sleep infinity`.
         assert_eq!(cmd("claude.repo", None, None).cmd, idle);
+        // A built-in agent's kit idles too: its agent starts in `run` or `exec`, on a terminal.
+        let mut req = request(false, vec![]);
+        req.name = "claude-x".into();
+        req.user = Some("agent".into());
+        req.command = Some(vec!["claude".into()]);
+        req.launched_by_host = true;
+        assert_eq!(spec(&req).cmd, idle);
         assert_eq!(cmd("tool", None, Some(&["wl"])).cmd, idle);
         assert_eq!(cmd("tool", Some("0"), None).cmd, idle);
         assert_eq!(cmd("tool", Some("0"), Some(&[])).cmd, idle);

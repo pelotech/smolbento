@@ -143,6 +143,7 @@ fn from_value(v: Value, source: Source) -> Result<Kit> {
         content: Content::None,
         command: None,
         config: None,
+        starts_docker: false,
         reference: None,
     })
 }
@@ -212,7 +213,7 @@ pub(crate) fn check_name(name: String) -> Result<String> {
 
 fn raw_name(source: &Source) -> String {
     match source {
-        Source::Registry(r) | Source::Preset(r) => {
+        Source::Registry(r) | Source::Agent(r) => {
             let last = r.rsplit('/').next().unwrap_or(r);
             let last = last.split('@').next().unwrap_or(last);
             last.split(':').next().unwrap_or(last).to_string()
