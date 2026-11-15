@@ -90,7 +90,7 @@ fn fork_one<R: Runner>(
     if result.is_err()
         && let Err(e) = super::secret::forget_sandbox(ctx, fork, false)
     {
-        eprintln!("warning: removing {fork}'s policy entry: {e:#}");
+        crate::warning!("removing {fork}'s policy entry: {e:#}");
     }
     result
 }
@@ -146,7 +146,7 @@ fn add_remote_and_branch<R: Runner>(
         && let Some(r) = repo
         && let Err(e) = clone::remove_remote(r, fork)
     {
-        eprintln!("warning: removing the sandbox-{fork} remote: {e:#}");
+        crate::warning!("removing the sandbox-{fork} remote: {e:#}");
     }
     result
 }

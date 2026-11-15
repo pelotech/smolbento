@@ -58,7 +58,8 @@ pub enum Cmd {
     Rm(RmArgs),
     /// Remove stopped sandboxes
     Prune(PruneArgs),
-    /// Remove every sandbox, smolbento's session state and the shared skills store
+    /// Reset smolbento to a fresh install: removes every sandbox, settings, policy, templates,
+    /// kits, skills and secrets
     Reset(ResetArgs),
     /// Copy files between the host and a sandbox
     Cp(CpArgs),

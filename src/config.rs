@@ -270,7 +270,7 @@ impl Settings {
         SETTINGS
             .iter()
             .find(|d| d.key == key)
-            .with_context(|| format!("unknown setting '{key}' (see `bento settings ls`)"))
+            .with_context(|| format!("unknown setting '{key}'\n  try: bento settings ls"))
     }
 
     /// Env var, then config file, then default.

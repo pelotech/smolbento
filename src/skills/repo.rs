@@ -174,8 +174,8 @@ pub fn discover(root: &Path, repo: &str) -> Result<BTreeMap<String, PathBuf>> {
     let mut add = |dir: &Path, fallback: &str| -> Result<()> {
         let name = skill_name(dir, fallback);
         if !valid_name(&name) {
-            eprintln!(
-                "warning: skipping {}: {name:?} is not a valid skill name",
+            crate::warning!(
+                "skipping {}: {name:?} is not a valid skill name",
                 dir.display()
             );
             return Ok(());

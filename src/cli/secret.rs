@@ -184,8 +184,8 @@ fn warn_unresolved(hosts: &[String]) {
     // `*.x` names no single host to look up.
     for host in hosts.iter().filter(|h| !h.starts_with("*.")) {
         if (host.as_str(), 443).to_socket_addrs().is_err() {
-            eprintln!(
-                "warning: {host} doesn't resolve right now; sandboxes created with this secret \
+            crate::warning!(
+                "{host} doesn't resolve right now; sandboxes created with this secret \
                  will fail to start until it does"
             );
         }

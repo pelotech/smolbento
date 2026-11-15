@@ -104,8 +104,8 @@ fn host_phase<R: Runner>(
 ) -> Result<()> {
     if skip {
         if !commands.is_empty() {
-            eprintln!(
-                "warning: skipping the host commands declared for {} (--skip-host-commands)",
+            crate::warning!(
+                "skipping the host commands declared for {} (--skip-host-commands)",
                 phase.name()
             );
         }
@@ -355,7 +355,7 @@ fn env_rm<R: Runner>(ctx: &mut Ctx<R>, a: EnvRmArgs) -> Result<i32> {
     }
     let vars = vars(&loaded, &name);
     if let Err(e) = host_phase(ctx, Phase::PreRemove, &lifecycle.pre_remove, &vars, skip) {
-        eprintln!("warning: the preRemove commands did not finish: {e:#}");
+        crate::warning!("the preRemove commands did not finish: {e:#}");
     }
     match sb {
         Some(sb) => {

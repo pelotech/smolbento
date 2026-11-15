@@ -16,7 +16,7 @@ Commands:
   stop        Stop sandboxes, keeping their state
   rm          Remove sandboxes [aliases: remove, delete]
   prune       Remove stopped sandboxes
-  reset       Remove every sandbox, smolbento's session state and the shared skills store
+  reset       Reset smolbento to a fresh install: removes every sandbox, settings, policy, templates, kits, skills and secrets
   cp          Copy files between the host and a sandbox
   fork        Copy a running sandbox (memory, processes, disk) for parallel attempts
   version     Show smolbento and smolvm versions

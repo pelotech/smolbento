@@ -18,7 +18,7 @@ pub fn run<R: Runner>(ctx: &Ctx<R>, cmd: McpCmd) -> Result<i32> {
         McpCmd::Rm { name, force: _ } => {
             let mut file = McpFile::load(&ctx.paths)?;
             if file.servers.remove(&name).is_none() {
-                bail!(unknown(&name));
+                bail!(crate::mcp::unknown(&name));
             }
             file.save(&ctx.paths)?;
             writeln!(&ctx.out, "Removed MCP server {name}")?;
@@ -28,10 +28,6 @@ pub fn run<R: Runner>(ctx: &Ctx<R>, cmd: McpCmd) -> Result<i32> {
         McpCmd::Unload(_) => return Err(no_gateway("mcp unload")),
     }
     Ok(0)
-}
-
-fn unknown(name: &str) -> String {
-    format!("no MCP server named '{name}' (see `bento mcp ls`)")
 }
 
 /// What sbx does through its MCP gateway, which smolbento doesn't have.
@@ -203,7 +199,7 @@ fn inspect<R: Runner>(ctx: &Ctx<R>, a: &McpInspectArgs) -> Result<()> {
     let server = file
         .servers
         .get(&a.name)
-        .with_context(|| unknown(&a.name))?;
+        .with_context(|| crate::mcp::unknown(&a.name))?;
     let row = Row::new(&a.name, server);
     let mut out = &ctx.out;
     match a.output.pick() {
@@ -293,11 +289,11 @@ mod tests {
         assert_eq!(listed(&mut t, &["mcp", "ls", "-q"]), "files\n");
         assert_eq!(
             t.sbt_err(&["mcp", "rm", "linear"]),
-            "no MCP server named 'linear' (see `bento mcp ls`)"
+            "no MCP server named 'linear'\n  try: bento mcp ls"
         );
         assert_eq!(
             t.sbt_err(&["mcp", "inspect", "linear"]),
-            "no MCP server named 'linear' (see `bento mcp ls`)"
+            "no MCP server named 'linear'\n  try: bento mcp ls"
         );
     }
 

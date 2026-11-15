@@ -410,7 +410,7 @@ fn validate<R: Runner>(
     let checked = check_kit(ctx, reference, args, offline);
     if format == Format::Table {
         for w in checked? {
-            eprintln!("warning: {w}");
+            crate::warning!("{w}");
         }
         writeln!(&ctx.out, "✓ {reference} — valid")?;
         return Ok(0);
@@ -735,8 +735,8 @@ fn add_running<R: Runner>(
     if let Some((path, _, _)) = &startup
         && let Err(e) = sandbox::run_startup(&ctx.vm, sb, Some(path))
     {
-        eprintln!(
-            "warning: kit {kit_name}'s startup hooks failed: {e:#}; later starts fail until they \
+        crate::warning!(
+            "kit {kit_name}'s startup hooks failed: {e:#}; later starts fail until they \
              succeed"
         );
     }

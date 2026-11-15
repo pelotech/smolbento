@@ -24,13 +24,13 @@ fn stop_running<R: Runner>(ctx: &Ctx<R>) {
     let sandboxes = match sandbox::list(&ctx.vm) {
         Ok(s) => s,
         Err(e) => {
-            eprintln!("warning: couldn't list sandboxes to stop them ({e:#})");
+            crate::warning!("couldn't list sandboxes to stop them ({e:#})");
             return;
         }
     };
     for sb in sandboxes.iter().filter(|s| s.is_running()) {
         if let Err(e) = super::lifecycle::stop_sandbox(ctx, sb) {
-            eprintln!("warning: couldn't stop {} ({e:#})", sb.name());
+            crate::warning!("couldn't stop {} ({e:#})", sb.name());
         }
     }
 }
@@ -340,8 +340,8 @@ fn guard_bound_secrets<R: Runner>(
     let sandboxes = match sandbox::list(&ctx.vm) {
         Ok(s) => s,
         Err(e) => {
-            eprintln!(
-                "warning: couldn't check sandboxes for bound secrets ({e:#}); adding the rule anyway"
+            crate::warning!(
+                "couldn't check sandboxes for bound secrets ({e:#}); adding the rule anyway"
             );
             return Ok(());
         }
@@ -471,7 +471,7 @@ fn approval<R: Runner>(ctx: &Ctx<R>, policy: &mut Policy, cmd: ApprovalCmd) -> R
                 .map(|r| r.sandbox.as_str())
                 .collect();
             if seen.is_empty() {
-                bail!("no blocked request for '{id}' (see `bento policy approval ls`)");
+                bail!("no blocked request for '{id}'\n  try: bento policy approval ls");
             }
             if let Some(s) = sandbox.as_deref()
                 && !seen.contains(&s)

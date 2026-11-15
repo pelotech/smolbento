@@ -112,8 +112,8 @@ pub fn start_env(
     for name in &meta.secrets {
         let entry = secrets.entry_for(sandbox, meta.fork_of.as_deref(), name);
         let (Some(service), Some(entry)) = (secrets.service(name), entry) else {
-            eprintln!(
-                "warning: {sandbox} was created with a {name} secret that's no longer set; requests using it will fail"
+            crate::warning!(
+                "{sandbox} was created with a {name} secret that's no longer set; requests using it will fail"
             );
             continue;
         };
@@ -140,9 +140,9 @@ pub fn start_env(
                 };
                 (v.clone(), value)
             })),
-            Err(e) => eprintln!(
-                "warning: {name} secret for {sandbox}: {e:#}; requests using it will fail"
-            ),
+            Err(e) => {
+                crate::warning!("{name} secret for {sandbox}: {e:#}; requests using it will fail")
+            }
         }
     }
     // A `--static-mcp` server's header secrets (`sbx.mcp-secret.*`, which only `--static-mcp`
@@ -150,11 +150,11 @@ pub fn start_env(
     for (var, secret) in &meta.mcp_secrets {
         match secrets.global_entry(secret).map(|e| resolve(e, store)) {
             Some(Ok(value)) => env.push((var.clone(), value)),
-            Some(Err(e)) => eprintln!(
-                "warning: MCP secret {secret} for {sandbox}: {e:#}; requests using it will fail"
+            Some(Err(e)) => crate::warning!(
+                "MCP secret {secret} for {sandbox}: {e:#}; requests using it will fail"
             ),
-            None => eprintln!(
-                "warning: {sandbox} was created with MCP secret {secret} that's no longer set; \
+            None => crate::warning!(
+                "{sandbox} was created with MCP secret {secret} that's no longer set; \
                  requests using it will fail"
             ),
         }

@@ -152,11 +152,11 @@ fn import<R: Runner>(ctx: &Ctx<R>, store: &Store, a: &SkillsImportArgs) -> Resul
                 writeln!(&ctx.out, "Would {verb} skill {name:?}")?;
             }
             Event::Pick { .. } => {}
-            Event::Duplicate { name, dir } => eprintln!(
-                "warning: skipping skill {name:?} from {}: already imported from an earlier source",
+            Event::Duplicate { name, dir } => crate::warning!(
+                "skipping skill {name:?} from {}: already imported from an earlier source",
                 dir.display()
             ),
-            Event::Loose(n) => eprintln!("warning: skipping {n:?}: not a directory"),
+            Event::Loose(n) => crate::warning!("skipping {n:?}: not a directory"),
             // As sbx 0.53: only with -v, on stdout, where the directory comes in the scan.
             Event::Missing(d) if a.verbose => writeln!(
                 &ctx.out,

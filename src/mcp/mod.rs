@@ -354,3 +354,8 @@ mod tests {
         assert_eq!(c.host(), None);
     }
 }
+
+/// The error for a server name that isn't registered.
+pub fn unknown(name: &str) -> String {
+    format!("no MCP server named '{name}'\n  try: bento mcp ls")
+}

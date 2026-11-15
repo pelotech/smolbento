@@ -274,10 +274,7 @@ pub(crate) fn delete_keeping_remote<R: Runner>(
     ctx.vm.delete(&sb.machine)?;
     // The units serving its sockets go with it.
     if let Err(e) = ctx.services.remove(sb.name()) {
-        eprintln!(
-            "warning: removing the host services of {}: {e:#}",
-            sb.name()
-        );
+        crate::warning!("removing the host services of {}: {e:#}", sb.name());
     }
     session::clear(&ctx.paths.sessions(), sb.name());
     super::secret::forget_sandbox(ctx, sb.name(), forget_secrets)
@@ -477,14 +474,14 @@ pub fn reset<R: Runner>(ctx: &mut Ctx<R>, a: &ResetArgs) -> Result<i32> {
             machines.sort_by_key(|m| !m.labels.contains_key("sbx.fork-of"));
             for m in machines {
                 if let Err(e) = ctx.vm.delete_default_state(&m.name) {
-                    eprintln!(
-                        "warning: couldn't remove {} from smolvm's default location: {e:#}",
+                    crate::warning!(
+                        "couldn't remove {} from smolvm's default location: {e:#}",
                         m.name
                     );
                 }
             }
         }
-        Err(e) => eprintln!("warning: couldn't list smolvm's default location: {e:#}"),
+        Err(e) => crate::warning!("couldn't list smolvm's default location: {e:#}"),
     }
     provision::sweep_orphans(ctx);
     if let Some(home) = ctx.env.get("HOME") {

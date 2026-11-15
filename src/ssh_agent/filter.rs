@@ -135,7 +135,7 @@ pub fn serve_connection(guest: &UnixStream, access: &Access, backing: &Backing) 
 /// Serves `access` on the sandbox `name`'s agent socket; problems only warn.
 pub fn serve_for(name: &str, socket: &Path, access: Access, backing: Backing) -> Option<Server> {
     serve(socket, access, backing).unwrap_or_else(|e| {
-        eprintln!("warning: {name}: no SSH agent: {e:#}");
+        crate::warning!("{name}: no SSH agent: {e:#}");
         None
     })
 }

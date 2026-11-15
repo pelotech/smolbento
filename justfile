@@ -75,7 +75,7 @@ release-build target builder:
         # host's, so they run on any mainstream distro; the output still lands in target/{{target}}.
         zig_target="{{target}}"
         case "{{target}}" in *-linux-gnu) zig_target="{{target}}.2.28" ;; esac
-        # The image carries the macOS SDK (keyring links Security.framework in later phases).
+        # The image carries the macOS SDK, which the darwin target links against.
         # Match the Nix dev shell's rustc so release builds use the same compiler tested in CI.
         rust_ver=$(rustc -V | cut -d' ' -f2)
         docker run --rm -v "$PWD":/io -w /io -e MACOSX_DEPLOYMENT_TARGET=13.0 \

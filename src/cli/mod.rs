@@ -124,7 +124,7 @@ fn with_image_cache(
     match settings.image_cache_bytes() {
         Ok(bytes) => runner.env(SEED_MAX, bytes.to_string()),
         Err(e) => {
-            eprintln!("warning: {e:#}; using smolvm's default");
+            crate::warning!("{e:#}; using smolvm's default");
             runner
         }
     }
@@ -148,7 +148,7 @@ pub fn dispatch<R: Runner>(ctx: &mut Ctx<R>, cli: Cli) -> Result<i32> {
             bail!("{}: {err}", path.display());
         }
         if matches!(cmd, Cmd::Settings(_)) {
-            eprintln!("warning: ignoring {}: {err}", path.display());
+            crate::warning!("ignoring {}: {err}", path.display());
         }
     }
     if cmd.needs_smolvm() {

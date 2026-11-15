@@ -39,7 +39,7 @@ pub fn run<R: Runner>(ctx: &mut Ctx<R>, sandbox: &str) -> Result<i32> {
         && session::idle(&sessions, sb.name())
         && let Err(e) = ctx.vm.stop(&sb.machine)
     {
-        eprintln!("warning: stopping sandbox {}: {e:#}", sb.name());
+        crate::warning!("stopping sandbox {}: {e:#}", sb.name());
     }
     code
 }

@@ -31,7 +31,8 @@ pub fn shown() -> bool {
 macro_rules! kit_warning {
     ($($arg:tt)*) => {
         if $crate::kits::warn::shown() {
-            eprintln!($($arg)*);
+            use std::io::Write as _;
+            let _ = writeln!(std::io::stderr(), $($arg)*);
         }
     };
 }

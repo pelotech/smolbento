@@ -93,3 +93,13 @@ mod tests {
         );
     }
 }
+
+/// `crate::warning!("…")` that can't panic: `eprintln!` does when stderr is gone (the terminal
+/// hung up), and warnings are printed from cleanup paths that must finish.
+#[macro_export]
+macro_rules! warning {
+    ($($arg:tt)*) => {{
+        use std::io::Write as _;
+        let _ = writeln!(std::io::stderr(), "warning: {}", format_args!($($arg)*));
+    }};
+}

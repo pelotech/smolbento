@@ -213,8 +213,9 @@ fn oauth_note(kc: &KitCred, bound: bool) -> Option<String> {
     }
     (!bound).then(|| {
         format!(
-            "note: kit {kit}: {svc} subscription logins happen inside the sandbox (tokens stay \
-             there); set an API key with `bento secret set {svc}` to keep it on the host"
+            "note: no {svc} API key is set, so {kit} asks you to log in inside the sandbox (its \
+             tokens stay there). To use a key kept on the host: `bento secret set {svc}`, then \
+             recreate the sandbox"
         )
     })
 }
@@ -323,7 +324,7 @@ fn git_identity_step(kits: &[&Kit], host: Option<(String, String)>) -> Result<Op
             k.name
         ),
         (None, None) => {
-            eprintln!("warning: no git user.name/user.email on the host; skipping git-identity");
+            crate::warning!("no git user.name/user.email on the host; skipping git-identity");
             Ok(None)
         }
     }
@@ -832,8 +833,8 @@ fn context_scripts(plan: &Plan, agent_file: Option<&str>, mounts: &[&Path]) -> V
         .iter()
         .any(|m| Path::new(file).starts_with(m) || Path::new(&index_dir).starts_with(m))
     {
-        eprintln!(
-            "warning: agent context not written: {file} is in a mounted workspace, outside the \
+        crate::warning!(
+            "agent context not written: {file} is in a mounted workspace, outside the \
              sandbox"
         );
         return Vec::new();
