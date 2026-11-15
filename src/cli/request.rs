@@ -273,6 +273,11 @@ pub(crate) fn kit_plan<R: Runner>(
                     // Its layers are in the pack already.
                     kit.content = Content::None;
                 }
+                // docker.enabled=false drops the docker kit the source sandbox had.
+                if kit.source == Source::Builtin("docker") && !req.docker {
+                    recorded_args.pop();
+                    continue;
+                }
                 recorded.push(kit);
             }
             (None, recorded.remove(0))

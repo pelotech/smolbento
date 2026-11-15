@@ -760,6 +760,112 @@ mod tests {
         );
     }
 
+    /// A current template of the `shell` stand-in plus `extra` records, saved as `x:v1`.
+    fn template_with(t: &TestEnv, extra: Vec<crate::sandbox::labels::KitRecord>, docker: bool) {
+        let mut kits = saved_template_kits(t, "shell");
+        kits.extend(extra);
+        let src = t.ctx.cwd.join("x.smolmachine");
+        std::fs::write(&src, "packed").unwrap();
+        crate::templates::Store::new(&t.ctx.paths)
+            .add(
+                crate::templates::Entry {
+                    repository: "docker.io/library/x".into(),
+                    tag: "v1".into(),
+                    agent: "shell".into(),
+                    image: "img:1".into(),
+                    docker,
+                    created_at: "1970-01-12T13:46:30Z".into(),
+                    kits,
+                    ..Default::default()
+                },
+                &src,
+            )
+            .unwrap();
+    }
+
+    fn record(reference: &str) -> crate::sandbox::labels::KitRecord {
+        crate::sandbox::labels::KitRecord {
+            name: "k".into(),
+            reference: reference.into(),
+            provides: vec![],
+            format: None,
+            args: Default::default(),
+        }
+    }
+
+    #[test]
+    fn a_template_never_reads_a_layout_outside_the_stand_ins() {
+        // A prebuilt layout anywhere else (a planted directory) isn't a kit to load as-is.
+        let t = test_env(&[]);
+        let planted = t.ctx.cwd.join("planted");
+        std::fs::create_dir_all(&planted).unwrap();
+        crate::kits::registry::fixtures::oci_layout(
+            &planted,
+            Some(r#"{"schemaVersion":"3","kind":"mixin"}"#),
+            &[],
+            "{}",
+        );
+        let r = crate::kits::load::pinned(
+            &t.ctx,
+            &planted.display().to_string(),
+            true,
+            false,
+            None,
+            &mut |_| {},
+        );
+        assert!(r.is_err(), "loaded a planted layout");
+    }
+
+    #[test]
+    fn a_template_drops_its_docker_kit_when_docker_is_disabled() {
+        let mut t = test_env(&[("SMOLBENTO_DOCKER", "false")]);
+        let mut docker = record("builtin:docker");
+        docker.name = "docker".into();
+        template_with(&t, vec![docker], true);
+        let fake = t.runner();
+        fake.ok(&["machine", "status"], &json("sbx-bb", "created", "bb"));
+        fake.missing_until_created("sbx-bb");
+        t.sbt(&["create", "shell", "-t", "x:v1", "--name", "bb"])
+            .unwrap();
+        let create = t.calls_of("machine create").remove(0);
+        assert!(!create.contains("builtin:docker"), "{create}");
+        assert!(create.contains("--label sbx.docker=false"), "{create}");
+    }
+
+    #[test]
+    fn template_kits_follow_kit_policy() {
+        let tool = format!(
+            "{}/tests/fixtures/kits/v2/tool-mixin",
+            env!("CARGO_MANIFEST_DIR")
+        );
+        // A local kit, under --pull never, still needs kit.allowLocalKits.
+        let mut t = test_env(&[("SMOLBENTO_KIT_ALLOW_LOCAL_KITS", "false")]);
+        template_with(&t, vec![record(&tool)], false);
+        creatable_as(&t, "bb");
+        let err = t.sbt_err(&[
+            "create", "shell", "-t", "x:v1", "--pull", "never", "--name", "bb",
+        ]);
+        assert!(err.contains("local"), "{err}");
+        // kit.requireSignature: a local kit is refused, and a registry kit can't be verified
+        // without the registry.
+        for (kit, want) in [
+            (tool.as_str(), "not signed"),
+            ("acme/k:1@sha256:ab", "requireSignature"),
+        ] {
+            let mut t = test_env(&[
+                ("SMOLBENTO_KIT_ALLOW_LOCAL_KITS", "true"),
+                ("SMOLBENTO_KIT_REQUIRE_SIGNATURE", "true"),
+                ("SMOLBENTO_KIT_ALLOWED_SOURCES", r#"["docker.io/acme/"]"#),
+            ]);
+            template_with(&t, vec![record(kit)], false);
+            creatable_as(&t, "bb");
+            let err = t.sbt_err(&[
+                "create", "shell", "-t", "x:v1", "--pull", "never", "--name", "bb",
+            ]);
+            assert!(err.contains(want), "{kit}: {err}");
+        }
+    }
+
     #[test]
     fn an_old_template_is_refused_on_create() {
         let mut t = test_env(&[]);

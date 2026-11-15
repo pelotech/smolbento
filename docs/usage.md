@@ -701,7 +701,10 @@ sbt template load myimage.tar                  # import a file made with --outpu
 - The agent must match: a `claude` template can't start a `codex` sandbox.
 - `/tmp` and the workspace (mounted, not on the disk) aren't kept.
 - A template keeps the sandbox's kits (pinned) and their args. A create from it loads them again and
-  reruns their install and startup steps. A sandbox made from a template can't be saved yet.
+  reruns their install and startup steps, under the same kit settings as any create:
+  `kit.allowedSources`, `kit.allowLocalKits`, and `kit.requireSignature` (which needs the registry,
+  even with `--pull never`). With `docker.enabled=false` the docker kit is left out. A sandbox made
+  from a template can't be saved yet.
 - Templates and sandboxes from before agents were kits are refused: save or create them again.
 - `-t` can't combine with `--kit` kits that add image layers, since the disk is saved whole.
   Layer-free kits such as `docker` work.

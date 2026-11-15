@@ -196,8 +196,10 @@ pub fn unpinned(reference: &str) -> &str {
 /// Loads a template's recorded kit by its record `reference` (`ref@sha256:…`, a local path, or
 /// `builtin:NAME`). A pinned registry kit already in the kit cache needs no network; `offline`
 /// (`--pull never`) refuses one that isn't. `agent`: it is the template's built-in agent kit,
-/// tagged `Source::Agent` and not trust-checked; other registry kits are checked against
-/// `kit.allowedSources` (an imported template may come from someone else).
+/// tagged `Source::Agent` and exempt from kit policy, as at create. Every other kit meets kit
+/// policy as at create (an imported template may come from someone else): `kit.allowedSources`
+/// and `kit.allowLocalKits`, and `kit.requireSignature`, which refuses local kits and verifies a
+/// registry kit's pinned digest (so it needs the registry, even with `--pull never`).
 pub fn pinned<R: Runner>(
     ctx: &Ctx<R>,
     reference: &str,
@@ -213,17 +215,38 @@ pub fn pinned<R: Runner>(
     let base = unpinned(reference);
     let digest = (base != reference).then(|| &reference[base.len() + 1..]);
     let path = Path::new(base);
-    let (mut kit, cached) = if path.join("oci-layout").is_file() {
-        // A prebuilt layout: an agent's stand-in.
+    let require = ctx.settings.bool("kit.requireSignature")?;
+    // Only an agent's stand-in (tests) is read as a prebuilt layout.
+    let stand_in = agent
+        && ctx
+            .env
+            .get(crate::agents::KITS_DIR_ENV)
+            .is_some_and(|dir| path.parent() == Some(Path::new(dir.trim_end_matches('/'))));
+    let (mut kit, cached) = if stand_in {
         (
             registry::read_layout(path, Source::Registry(base.into()))?,
             true,
         )
     } else if path.is_absolute() {
+        trust::check(&Source::LocalV3(path.into()), &ctx.settings)?;
+        if require {
+            return Err(signers::refuse_local(base, path));
+        }
         fetch(ctx, base, offline, sandbox, Position::Kit, before)?
     } else {
         if !agent {
             trust::check(&Source::Registry(base.into()), &ctx.settings)?;
+            if require {
+                if offline {
+                    bail!(
+                        "kit {base}: kit.requireSignature verifies it at the registry, which \
+                         --pull never can't reach"
+                    );
+                }
+                let registries = registries(&SecretsFile::load(&ctx.paths)?, sandbox);
+                let logins = Logins::new(&registries, &*ctx.store);
+                signers::verify_registry(reference, &ctx.settings, logins)?;
+            }
         }
         let cache = ctx.paths.kit_cache();
         let hit = match digest {
