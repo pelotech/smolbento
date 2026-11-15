@@ -134,6 +134,7 @@ servers are written into the agent's own MCP config at create.
 | Saving a sandbox made from a template | Not measured; sbx adds a layer per save | Refused (smolvm limit; see [Development status](development-status.md#needs-smolvm-support-later-decisions)) |
 | What a template keeps | The disk | The disk, and the sandbox's kits by pinned ref with their args. A create from it loads them again (from the kit cache when they're there) and reruns their install and startup steps. Templates and sandboxes from before agents were kits are refused: save or create them again |
 | `-t` with `--kit` | Not measured | Refused when a kit adds image layers (a template's disk is saved whole) |
+| Kit args | Not measured where sbx keeps them | Kept with the sandbox (`sbx.kits`), in its templates and their archives, defaults included |
 | `-t IMAGE` with a workload kit | Only for `shell` | Any workload kit, built-in agents included: the image replaces the kit's, its capabilities and command stay |
 | `save` of a running sandbox, no terminal | Suggests a nonexistent `--force` | Says to `sbt stop` it first |
 | `inspect` | Needs `--cloud`; local templates are Docker images | Not supported |

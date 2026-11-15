@@ -260,9 +260,9 @@ pub(crate) fn kit_plan<R: Runner>(
     let (workload_source, workload) = match workload {
         Workload::Template(e) => {
             let offline = opts.pull.as_deref() == Some("never");
-            let agent_ref = agents::kit_ref(&ctx.env, &e.agent);
+            let agent_template = e.is_agent_template(&ctx.env);
             for (i, rec) in e.kits.iter().enumerate() {
-                let agent = i == 0 && agent_ref.as_deref() == Some(load::unpinned(&rec.reference));
+                let agent = i == 0 && agent_template;
                 let mut kit = kits.load_pinned(ctx, &rec.reference, offline, agent)?;
                 let args = rec.args.iter().map(|(k, v)| format!("{k}={v}")).collect();
                 recorded_args.push((kit.name.clone(), args));

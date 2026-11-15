@@ -71,6 +71,17 @@ pub struct Entry {
 }
 
 impl Entry {
+    /// Whether the template is of a built-in agent: its agent is one, and its workload record is
+    /// that agent's own kit, not a kit merely named like it.
+    pub fn is_agent_template(&self, env: &std::collections::BTreeMap<String, String>) -> bool {
+        let agent_ref = crate::agents::kit_ref(env, &self.agent);
+        let workload = self
+            .kits
+            .first()
+            .map(|r| crate::kits::load::unpinned(&r.reference));
+        agent_ref.is_some() && agent_ref.as_deref() == workload
+    }
+
     /// Refuses a template saved before agents were kits (no kit records).
     pub fn check_current(&self) -> Result<()> {
         if self.kits.is_empty() {
@@ -321,10 +332,9 @@ impl Store {
         let r = TemplateRef::parse(&meta.full()).with_context(not_ours)?;
         meta.repository = r.repository;
         meta.tag = r.tag;
-        // `agent` and `image` end up in labels and argv.
-        if meta.agent.is_empty()
+        // `agent` and `image` end up in labels and argv; the agent is a kit's name.
+        if crate::kits::v3::check_name(meta.agent.clone()).is_err()
             || meta.image.chars().any(char::is_control)
-            || meta.agent.chars().any(char::is_control)
         {
             bail!(not_ours());
         }
@@ -594,11 +604,17 @@ mod tests {
     }
 
     #[test]
-    fn import_refuses_a_missing_agent_or_control_characters() {
+    fn import_refuses_a_bad_agent_name_or_control_characters() {
         let (dir, s) = store();
         for m in [
             Entry {
                 agent: "".into(),
+                ..meta("t")
+            },
+            // The agent becomes the `sbx.agent` label and the default name's prefix: kit names'
+            // rule.
+            Entry {
+                agent: "../x y".into(),
                 ..meta("t")
             },
             Entry {

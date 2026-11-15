@@ -232,6 +232,13 @@ pub fn pinned<R: Runner>(
         if require {
             return Err(signers::refuse_local(base, path));
         }
+        let v3_source = (path.is_dir() && !path.join("spec.yaml").is_file()) || is_descriptor(path);
+        if offline && v3_source {
+            bail!(
+                "kit {base} is a v3 source kit: --pull never can't build it (the kit builder \
+                 needs the network); run without --pull never"
+            );
+        }
         fetch(ctx, base, offline, sandbox, Position::Kit, before)?
     } else {
         if !agent {
@@ -249,23 +256,18 @@ pub fn pinned<R: Runner>(
             }
         }
         let cache = ctx.paths.kit_cache();
-        let hit = match digest {
-            Some(d) => cache
-                .join("oci")
-                .join(registry::hex_of(d)?)
-                .join("index.json")
-                .is_file(),
-            None => false,
-        };
-        if !hit && offline {
-            bail!("kit {base} isn't in the kit cache, and --pull never can't fetch it");
+        match registry::cached(base, digest, &cache)? {
+            Some(kit) => (kit, true),
+            None if offline => {
+                bail!("kit {base} isn't in the kit cache, and --pull never can't fetch it")
+            }
+            None => {
+                before(Fetch::Pull);
+                let registries = registries(&SecretsFile::load(&ctx.paths)?, sandbox);
+                let logins = Logins::new(&registries, &*ctx.store);
+                (registry::pull(base, digest, &cache, logins)?, false)
+            }
         }
-        if !hit {
-            before(Fetch::Pull);
-        }
-        let registries = registries(&SecretsFile::load(&ctx.paths)?, sandbox);
-        let logins = Logins::new(&registries, &*ctx.store);
-        (registry::pull(base, digest, &cache, logins)?, hit)
     };
     if agent {
         kit.source = Source::Agent(base.into());

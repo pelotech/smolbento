@@ -314,6 +314,36 @@ mod tests {
     }
 
     #[test]
+    fn a_template_of_a_kit_named_claude_is_refused_before_any_kit_loads() {
+        let mut t = mcp_env(&[]);
+        // A third-party kit called `claude`, not the built-in agent's.
+        let src = t.ctx.cwd.join("x.smolmachine");
+        std::fs::write(&src, "packed").unwrap();
+        crate::templates::Store::new(&t.ctx.paths)
+            .add(
+                crate::templates::Entry {
+                    repository: "docker.io/library/x".into(),
+                    tag: "v1".into(),
+                    agent: "claude".into(),
+                    image: "img:1".into(),
+                    created_at: "1970-01-12T13:46:30Z".into(),
+                    kits: vec![crate::sandbox::labels::KitRecord {
+                        name: "claude".into(),
+                        reference: "evil.example/claude:1@sha256:ab".into(),
+                        provides: vec![],
+                        format: None,
+                        args: Default::default(),
+                    }],
+                    ..Default::default()
+                },
+                &src,
+            )
+            .unwrap();
+        let err = t.sbt_err(&["create", "claude", "-t", "x:v1", "--static-mcp", "files"]);
+        assert_eq!(err, "--static-mcp isn't supported for a workload kit yet");
+    }
+
+    #[test]
     fn static_mcp_adds_rules_credentials_and_steps() {
         let mut t = mcp_env(&[]);
         t.sbt(&["create", "claude", ".", "--static-mcp", "linear,files"])

@@ -46,7 +46,7 @@ pub(crate) fn create_reported<R: Runner>(
     // A built-in agent, not a kit named like one, gets its MCP config written.
     let agent = match &workload {
         Workload::Agent { .. } => true,
-        Workload::Template(e) => crate::agents::is_agent(&e.agent),
+        Workload::Template(e) => e.is_agent_template(&ctx.env),
         Workload::Ref(_) => false,
     };
     provision::mcp_attachment(ctx, req, agent)?;
@@ -830,6 +830,25 @@ mod tests {
         let create = t.calls_of("machine create").remove(0);
         assert!(!create.contains("builtin:docker"), "{create}");
         assert!(create.contains("--label sbx.docker=false"), "{create}");
+    }
+
+    #[test]
+    fn pull_never_names_itself_for_a_template_kit_that_needs_a_build() {
+        let mut t = test_env(&[]);
+        let kit = t.ctx.cwd.join("src-kit");
+        std::fs::create_dir_all(&kit).unwrap();
+        std::fs::write(
+            kit.join("kit.yaml"),
+            "# syntax=docker/sandbox-kit:3\nschemaVersion: \"3\"\nkind: mixin\n",
+        )
+        .unwrap();
+        template_with(&t, vec![record(&kit.display().to_string())], false);
+        creatable_as(&t, "bb");
+        let err = t.sbt_err(&[
+            "create", "shell", "-t", "x:v1", "--pull", "never", "--name", "bb",
+        ]);
+        assert!(err.contains("--pull never"), "{err}");
+        assert!(!err.contains("--offline"), "{err}");
     }
 
     #[test]

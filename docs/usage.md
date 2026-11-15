@@ -411,7 +411,9 @@ checks a local v2 kit or Smolfile without the network or source policy.
 `--kit-arg NAME=VALUE` applies to every kit, `--kit-arg KIT.NAME=VALUE` to one, and `--kit-args-file
 FILE` reads `NAME=VALUE` lines. Files are read first, then `--kit-arg`; the last value wins, and a
 per-kit value beats an all-kits one. A `KIT.NAME` for a kit not in the sandbox is ignored. Argument
-values aren't secret (they reach the environment and smolvm's machine config), so put secrets in
+values aren't secret: they reach the environment and smolvm's machine config, and each kit's values
+(defaults included) are kept with the sandbox (its `sbx.kits` label, shown by `smolvm machine
+status`), in templates saved from it, and in their `--output` archives. Put secrets in
 [credentials](#secrets). An argument with no value and no default fails with `create-phase kit arg
 "x" has no resolved value`; `--kit-arg x=` sets it empty. `--kit-arg` without a kit is an error.
 Unquoted numbers and booleans in `default:` and `enum:` are read as strings.
@@ -700,7 +702,8 @@ sbt template load myimage.tar                  # import a file made with --outpu
   image. `--pull never` works only with a saved template whose kits are in the kit cache.
 - The agent must match: a `claude` template can't start a `codex` sandbox.
 - `/tmp` and the workspace (mounted, not on the disk) aren't kept.
-- A template keeps the sandbox's kits (pinned) and their args. A create from it loads them again and
+- A template keeps the sandbox's kits (pinned) and their args (not secret: they're in exported
+  archives too). A create from it loads them again and
   reruns their install and startup steps, under the same kit settings as any create:
   `kit.allowedSources`, `kit.allowLocalKits`, and `kit.requireSignature` (which needs the registry,
   even with `--pull never`). With `docker.enabled=false` the docker kit is left out. A sandbox made

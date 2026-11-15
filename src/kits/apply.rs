@@ -142,23 +142,10 @@ pub fn apply(
     let mut notes = Vec::new();
     for kc in &m.credentials {
         // `resolve` added its hosts to the kit's network rules.
-        if let Some(o) = &kc.req.oauth {
-            let note = if o.passthrough {
-                format!(
-                    "note: kit {}: {} OAuth tokens live in the sandbox (passthrough)",
-                    kc.kit, kc.req.service
-                )
-            } else {
-                format!(
-                    "note: kit {kit}: {svc} subscription logins happen inside the sandbox (tokens \
-                     stay there); set an API key with `sbt secret set {svc}` to keep it on the host",
-                    kit = kc.kit,
-                    svc = kc.req.service
-                )
-            };
-            if !notes.contains(&note) {
-                notes.push(note);
-            }
+        if let Some(note) = oauth_note(kc, req.secrets.contains(&kc.req.service))
+            && !notes.contains(&note)
+        {
+            notes.push(note);
         }
         if kc.req.env.is_some() || !kc.req.inject.is_empty() {
             bind_credential(kc, req, secrets, &user_creds, &mut notes)?;
@@ -208,6 +195,24 @@ pub fn apply(
         eprintln!("{note}");
     }
     Ok((steps, added))
+}
+
+/// What to say about an OAuth credential: passthrough tokens live in the sandbox; otherwise its
+/// subscription login happens there, unless the service's API key is `bound` (then nothing).
+fn oauth_note(kc: &KitCred, bound: bool) -> Option<String> {
+    let o = kc.req.oauth.as_ref()?;
+    let (kit, svc) = (&kc.kit, &kc.req.service);
+    if o.passthrough {
+        return Some(format!(
+            "note: kit {kit}: {svc} OAuth tokens live in the sandbox (passthrough)"
+        ));
+    }
+    (!bound).then(|| {
+        format!(
+            "note: kit {kit}: {svc} subscription logins happen inside the sandbox (tokens stay \
+             there); set an API key with `sbt secret set {svc}` to keep it on the host"
+        )
+    })
 }
 
 /// Kit `resources@1` fill the cpus and memory the user didn't set.
@@ -1257,6 +1262,35 @@ mod tests {
         let mut req = request();
         run_with(&p, &mut req, &mut Policy::default(), &secrets(&["github"])).unwrap();
         assert!(req.credential_install.is_empty());
+    }
+
+    #[test]
+    fn the_login_note_is_only_for_a_service_without_its_key() {
+        let kc = |passthrough| KitCred {
+            kit: "claude".into(),
+            optional: true,
+            req: CredReq {
+                service: "anthropic".into(),
+                install: false,
+                runtime: true,
+                env: None,
+                inject: vec![],
+                oauth: Some(OAuthReq {
+                    passthrough,
+                    token_host: None,
+                    resource_hosts: vec![],
+                }),
+            },
+        };
+        let note = oauth_note(&kc(false), false).unwrap();
+        assert!(
+            note.contains("subscription logins happen inside the sandbox"),
+            "{note}"
+        );
+        // Its API key is bound: nothing to say.
+        assert_eq!(oauth_note(&kc(false), true), None);
+        // Passthrough tokens always live in the sandbox.
+        assert!(oauth_note(&kc(true), true).unwrap().contains("passthrough"));
     }
 
     #[test]

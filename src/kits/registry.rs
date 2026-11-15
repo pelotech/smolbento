@@ -49,16 +49,26 @@ const V2_FILES_MEDIA_TYPE: &str = "application/vnd.oci.image.layer.v1.tar+gzip";
 /// descriptor annotation is a plain image and an error. A DIGEST (one a signature check
 /// verified) pins the fetch to that manifest; the kit's source is still REF.
 pub fn pull(reference: &str, digest: Option<&str>, cache: &Path, logins: Logins) -> Result<Kit> {
-    // A pinned kit already in the cache needs no registry: its layout is named by its digest.
-    if let Some(d) = digest {
-        let dir = cache.join("oci").join(hex_of(d)?);
-        if dir.join("index.json").is_file() {
-            return read_layout(&dir, Source::Registry(reference.to_string()));
-        }
+    if let Some(kit) = cached(reference, digest, cache)? {
+        return Ok(kit);
     }
     let pinned = digest.map(|d| pinned(reference, d)).transpose()?;
     let dir = pull_layout(pinned.as_deref().unwrap_or(reference), cache, true, logins)?;
     read_layout(&dir, Source::Registry(reference.to_string()))
+}
+
+/// A pinned kit already in the cache, read with no registry call; `None` when unpinned or not
+/// cached. Layouts are named by manifest digest only, so the same content pulled from another
+/// repository answers too: identical bytes, recorded here under `reference`.
+pub fn cached(reference: &str, digest: Option<&str>, cache: &Path) -> Result<Option<Kit>> {
+    let Some(d) = digest else {
+        return Ok(None);
+    };
+    let dir = cache.join("oci").join(hex_of(d)?);
+    if !dir.join("index.json").is_file() {
+        return Ok(None);
+    }
+    read_layout(&dir, Source::Registry(reference.to_string())).map(Some)
 }
 
 /// Pulls a plain image (no kit annotation required) into an OCI layout; returns its directory.
