@@ -157,6 +157,12 @@ pub const SETTINGS: &[SettingDef] = &[
         help: "Registry prefixes kits may load from, as a JSON array (`[\"*\"]` = any)",
     },
     SettingDef {
+        key: "kit.showWarnings",
+        env: "SMOLBENTO_KIT_SHOW_WARNINGS",
+        default: "false",
+        help: "Show what smolbento skips or ignores of a kit's optional parts (also with -D)",
+    },
+    SettingDef {
         key: "kit.allowLocalKits",
         env: "SMOLBENTO_KIT_ALLOW_LOCAL_KITS",
         default: "true",

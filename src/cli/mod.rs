@@ -135,6 +135,7 @@ pub fn dispatch<R: Runner>(ctx: &mut Ctx<R>, cli: Cli) -> Result<i32> {
         return Err(Unsupported("--cloud: Docker Cloud sandboxes are not supported".into()).into());
     }
     ctx.no_input = cli.no_input;
+    crate::kits::warn::show(crate::kits::warn::wanted(&ctx.settings, cli.debug));
     let cmd = cli.command.unwrap_or_else(|| Cmd::Ls(LsArgs::default()));
     match &cmd {
         Cmd::Run(a) => run::check_args(a)?,

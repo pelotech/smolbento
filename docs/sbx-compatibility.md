@@ -240,7 +240,8 @@ smolbento implements the [sandbox kit spec](https://github.com/docker/sandbox-ki
 upstream. v2 `spec.yaml` kits and smolvm Smolfiles work too.
 
 A kit that **requires** a capability marked "no" or "later" fails, with its `type@version`, before
-anything is created. An optional one is skipped with a warning.
+anything is created. An optional one is skipped, with a warning when `kit.showWarnings` is on (or
+with `-D`).
 
 | Capability | sbx (local) | smolbento |
 |---|---|---|
@@ -361,7 +362,7 @@ anything is created. An optional one is skipped with a warning.
 | Loopback registries | HTTPS only | Plain HTTP for `localhost`, `127.0.0.0/8` and `::1`, as in Docker |
 | Smolfile kits | None | A Smolfile defines its own workload; one without a command keeps the shell agent's |
 | Agent context file | Starts with a long platform preamble | No preamble: kit text and the index only |
-| Mixin context with no agent file in the workload | Dropped silently | Dropped with a warning |
+| Mixin context with no agent file in the workload | Dropped silently | Dropped, with a warning when `kit.showWarnings` is on |
 | Startup log lines | `ok /etc/durable-startup.d/…` | `ok /etc/smolbento/startup.d/NN-<kit>.sh hook N`, one per step and start |
 | v2 kits' `requires.agent` | A base-agent name | A capability name with no version, so any version meets it (v2 has no versioned provides) |
 | `kit add` and earlier kits | Recreates with the whole set | Checks the new kit against the provides recorded at create, with versions. Older records hold bare names, which meet only unconstrained requires. Errors name kits by kit name. Earlier kits' requires and conflicts aren't rechecked |

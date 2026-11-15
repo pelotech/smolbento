@@ -525,7 +525,9 @@ fn bind_credential(
             kc.kit, c.service
         );
         if kc.optional {
-            eprintln!("warning: {why}; skipping its optional credential");
+            super::warn::warn(format_args!(
+                "warning: {why}; skipping its optional credential"
+            ));
             return Ok(());
         }
         bail!("{why}");
@@ -548,16 +550,20 @@ fn bind_credential(
                 c.service
             );
             if kc.optional {
-                eprintln!("warning: {why}; skipping its optional credential");
+                super::warn::warn(format_args!(
+                    "warning: {why}; skipping its optional credential"
+                ));
                 return Ok(());
             }
             bail!("{why}; refusing");
         }
     }
     if secrets.entry_for(&req.name, None, &c.service).is_none() {
-        // Optional means the agent works without it (claude with its subscription login): no
-        // warning. An OAuth credential's note says how to set a key.
         if kc.optional {
+            super::warn::warn(format_args!(
+                "warning: kit {}: no {} secret is set; skipping its optional credential",
+                kc.kit, c.service
+            ));
             return Ok(());
         }
         let host = c.inject.first().map_or("HOST", |i| i.domain.as_str());
@@ -809,9 +815,9 @@ fn context_scripts(plan: &Plan, agent_file: Option<&str>, mounts: &[&Path]) -> V
     }
     let Some(file) = agent_file else {
         for (kit, _) in &mixins {
-            eprintln!(
+            super::warn::warn(format_args!(
                 "warning: kit {kit}: agent context dropped (the workload declares no agent file)"
-            );
+            ));
         }
         return Vec::new();
     };

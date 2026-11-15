@@ -513,7 +513,7 @@ adds a line to the list. Unlike sbx, smolbento writes no platform preamble.
 
 - Nothing is written on your machine. A file that would land in a mounted workspace is skipped with
   a warning.
-- A workload kit with no agent file drops mixin instructions, with a warning.
+- A workload kit with no agent file drops mixin instructions (`kit.showWarnings` shows a warning).
 - Files are owned by `agent`, except a file the image already has owned by root, which keeps its
   owner.
 - With `--clone` and a subdirectory workspace, the parent directory is in the clone, so the files
