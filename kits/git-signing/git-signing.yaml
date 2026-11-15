@@ -10,8 +10,8 @@ provides: [git-signing]
 
 args:
   # The public key to sign with, as `ssh-add -L` prints it (the comment is optional, and git's
-  # `key::` in front is fine). Not a path to a key file. Empty picks one from the agent at each
-  # signature.
+  # `key::` in front is fine). Not a path to a key file. Empty signs with the agent's
+  # first key.
   signingKey:
     default: ""
     # Nothing that could leave the single quotes the install step puts it in.
@@ -29,13 +29,6 @@ capabilities:
       phase: runtime
       unrestricted: false
       sign: [git]
-
-  # Asked which of your keys GitHub knows as signing keys, when `gh` is logged in.
-  - type: com.docker.sandbox/network-policy@1
-    config:
-      runtime:
-        allow:
-          - api.github.com
 
   - type: com.docker.sandbox/lifecycle@1
     config:
@@ -86,23 +79,6 @@ capabilities:
               printf '%s\n' "$keys" | awk -v want="$1" '$2 == want { print $1 " " $2; exit }'
             }
 
-            # The first agent key GitHub lists as one of your signing keys, when this repository
-            # has a github.com remote and `gh` can answer. GitHub's list is kept for five minutes.
-            from_github() {
-              command -v gh >/dev/null 2>&1 || return 1
-              git config --get-regexp '^remote\..*\.url$' 2>/dev/null \
-                | grep -q '[/@]github\.com[:/]' || return 1
-              list=${XDG_CACHE_HOME:-$HOME/.cache}/git-signing/github-signing-keys
-              if [ -z "$(find "$list" -mmin -5 2>/dev/null)" ]; then
-                limit=
-                command -v timeout >/dev/null 2>&1 && limit="timeout 10"
-                listed=$($limit gh api user/ssh_signing_keys --jq '.[].key' 2>/dev/null) || return 1
-                mkdir -p "${list%/*}" && printf '%s\n' "$listed" > "$list" || return 1
-              fi
-              printf '%s\n' "$keys" \
-                | awk 'NR == FNR { listed[$2]; next } $2 in listed { print $1 " " $2; exit }' "$list" -
-            }
-
             pinned=$(sed 's/^key:://' "$dir/key" 2>/dev/null)
             if [ -n "$pinned" ]; then
               # With or without the key type in front.
@@ -122,8 +98,7 @@ capabilities:
                 "On the host, add that key to your agent ('ssh-add -L' lists what it holds), or create" \
                 "the sandbox again with another --kit-arg signingKey=..."
             else
-              key=$(from_github) || key=
-              [ -n "$key" ] || key=$(held "$(printf '%s\n' "$keys" | awk 'NR == 1 { print $2 }')")
+              key=$(held "$(printf '%s\n' "$keys" | awk 'NR == 1 { print $2 }')")
               [ -n "$key" ] || refuse "the SSH agent listed no usable key." \
                 "On the host, 'ssh-add -L' should print at least one public key."
             fi
@@ -150,17 +125,9 @@ capabilities:
             git config --system gpg.format ssh
             git config --system gpg.ssh.defaultKeyCommand "$dir/pick-key"
             git config --system gpg.ssh.allowedSignersFile '~/.config/git-signing/allowed_signers'
-            # Sign only in repositories with a remote: a scratch `git init` stays unsigned.
+            # Sign only in repositories with a remote: a scratch `git init` stays unsigned. git
+            # before 2.36 doesn't know the condition and signs nothing.
             git config --system 'includeIf.hasconfig:remote.*.url:**.path' "$dir/sign.gitconfig"
-            # git before 2.36 doesn't know that condition, so there every repository signs.
-            probe=$(mktemp -d)
-            git init -q "$probe"
-            git -C "$probe" config remote.probe.url https://example.invalid/probe.git
-            if [ "$(git -C "$probe" config --get commit.gpgSign || true)" != true ]; then
-              git config --system commit.gpgSign true
-              echo "git-signing: this git is older than 2.36, so every repository signs" >&2
-            fi
-            rm -rf "$probe"
           user: "0"
           description: Sign commits with a key from the SSH agent
 

@@ -683,11 +683,16 @@ mod tests {
             panic!("agent-context@2");
         };
         assert!(note.content.contains("signed"), "{}", note.content);
-        let CapBody::Network { runtime, .. } = &cap("network-policy@1").body else {
-            panic!("network-policy@1");
-        };
-        let hosts: Vec<&str> = runtime.allow.iter().map(|r| r.host.as_str()).collect();
-        assert_eq!(hosts, ["api.github.com"]);
+        // Nothing is looked up anywhere: no network rule, and git 2.36's condition isn't probed.
+        assert!(
+            !k.caps
+                .iter()
+                .any(|c| matches!(c.body, CapBody::Network { .. }))
+        );
+        assert!(
+            !yaml.contains("gh api") && !yaml.contains("mktemp"),
+            "{yaml}"
+        );
 
         // Tags aren't signed by default: `tag.gpgSign` would make a plain `git tag v1` ask for a
         // message. The note can't promise limits a built-in agent's own SSH agent doesn't have.

@@ -6,7 +6,12 @@ use super::*;
 /// `alpine/git` (git and OpenSSH, which the kit's steps need from the first start) with an
 /// `agent` account, as an image that idles in a shell.
 fn git_image() -> Image {
-    let mut image = Image::pull("alpine/git").with_agent_account(&Image::pull("alpine/git"));
+    let base = Image::pull("alpine/git");
+    let copy = Image {
+        layers: base.layers.clone(),
+        config: base.config.clone(),
+    };
+    let mut image = copy.with_agent_account(&base);
     image.config["config"]["Entrypoint"] = serde_json::Value::Null;
     image.config["config"]["Cmd"] = serde_json::json!(["/bin/sh"]);
     image
@@ -28,15 +33,14 @@ fn workspace_repo(e: &E2e, remote: bool) {
     }
 }
 
-/// The built-in `shell` agent on `git_image`, with the kit and `more` arguments.
-fn create_shell(e: &E2e, more: &[&str]) {
+/// The built-in `shell` agent on `git_image`, with the kit.
+fn create_shell(e: &E2e) {
     let archive = e.dir.path().join("git-image.tar");
     git_image().save_oci(&archive);
     let ws = e.workspace();
     let mut args = vec!["create", "shell", ws.to_str().unwrap(), "--name", &e.name];
     args.extend(["-t", archive.to_str().unwrap(), "--kit", "git-signing"]);
     args.extend(["--cpus", "1", "-m", "1g"]);
-    args.extend(more);
     e.ok(&args);
 }
 
@@ -67,7 +71,7 @@ pub(crate) fn git_signing_signs_and_verifies_under_a_built_in_agent() {
     let agent = ThrowawayAgent::start(&e, 11);
     agent.serve_to(&mut e);
     workspace_repo(&e, true);
-    create_shell(&e, &[]);
+    create_shell(&e);
 
     let out = in_workspace(&e, &e.name, &format!("{COMMIT} && {VERIFY}"));
     let said = text(&out);
@@ -132,39 +136,6 @@ pub(crate) fn git_signing_gives_a_workload_agent_git_signatures_only() {
     assert!(!other.status.success(), "only git signatures: {other:?}");
 }
 
-/// `signingKey` picks the key, whatever the agent lists first.
-#[test]
-#[ignore = "boots real VMs and pulls alpine/git; run with `just e2e`"]
-pub(crate) fn git_signing_signs_with_the_pinned_key() {
-    let mut e = E2e::new("gspinned");
-    let agent = ThrowawayAgent::start(&e, 13);
-    agent.serve_to(&mut e);
-    let second = e.dir.path().join("id_second");
-    let keygen = Command::new("ssh-keygen")
-        .args(["-q", "-t", "ed25519", "-N", "", "-C", "second", "-f"])
-        .arg(&second)
-        .output()
-        .unwrap();
-    assert!(keygen.status.success(), "ssh-keygen: {keygen:?}");
-    assert!(agent.ssh_add(&[second.to_str().unwrap()]).status.success());
-    let public = std::fs::read_to_string(second.with_extension("pub")).unwrap();
-    let mut fields = public.split_whitespace();
-    let pinned = format!("{} {}", fields.next().unwrap(), fields.next().unwrap());
-    workspace_repo(&e, true);
-    create_shell(&e, &["--kit-arg", &format!("signingKey={pinned}")]);
-
-    let signers = "cat ~/.config/git-signing/allowed_signers";
-    let out = in_workspace(&e, &e.name, &format!("{COMMIT} && {VERIFY} && {signers}"));
-    let said = text(&out);
-    assert!(out.status.success(), "{said}");
-    assert!(said.starts_with("G\n"), "{said}");
-    assert!(
-        said.trim_end()
-            .ends_with(&format!("signer@example.com namespaces=\"git\" {pinned}")),
-        "signed with the pinned key only: {said}"
-    );
-}
-
 /// With no SSH agent on the host the sandbox is still created. A repository without a remote
 /// commits unsigned; one with a remote refuses the commit and says why.
 #[test]
@@ -172,7 +143,7 @@ pub(crate) fn git_signing_signs_with_the_pinned_key() {
 pub(crate) fn git_signing_without_an_agent_signs_nothing_and_says_why() {
     let e = E2e::new("gsnoagent");
     workspace_repo(&e, true);
-    create_shell(&e, &[]);
+    create_shell(&e);
 
     let scratch = format!("git init -q /tmp/scratch && cd /tmp/scratch && {COMMIT} && {VERIFY}");
     let out = in_workspace(&e, &e.name, &scratch);

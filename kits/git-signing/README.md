@@ -17,14 +17,11 @@ It is built into `bento`, so nothing is downloaded.
 
 - **Identity:** `user.name` and `user.email` come from the host's `git config`, read in the
   directory you run `bento` from.
-- **Which repositories:** those with a remote. A scratch `git init` commits unsigned. With git older
-  than 2.36 in the image, every repository signs.
+- **Which repositories:** those with a remote. A scratch `git init` commits unsigned.
 - **Tags:** not signed unless you ask (`git tag -s`), so a plain `git tag v1` stays a lightweight
   tag. Set `tag.gpgSign` yourself to sign every tag.
-- **Which key:** `signingKey` if you give one. Otherwise, in a repository with a `github.com`
-  remote where `gh` is logged in, the first agent key that GitHub lists as one of your signing
-  keys (the list is kept for five minutes). Otherwise the agent's first key. If GitHub can't be
-  asked, the first key signs and nothing fails.
+- **Which key:** `signingKey` if you give one, otherwise the first key your agent lists. With
+  several keys in the agent, give `signingKey`.
 - **Verification:** the key is recorded as a trusted signer for your email
   (`~/.config/git-signing/allowed_signers`), so `git log --show-signature` works in the sandbox.
 - **Failures:** a commit that can't be signed stops with a `git-signing:` message naming what is
@@ -37,11 +34,12 @@ It is built into `bento`, so nothing is downloaded.
 
 | Name | Default | Meaning |
 |---|---|---|
-| `signingKey` | empty | The public key to sign with, as `ssh-add -L` prints it (the comment is optional; git's `key::` prefix is accepted). A path to a key file or a GPG key id is refused at the first commit. Empty picks a key as above |
+| `signingKey` | empty | The public key to sign with, as `ssh-add -L` prints it (the comment is optional; git's `key::` prefix is accepted). A path to a key file or a GPG key id is refused at the first commit. Empty signs with the agent's first key |
 
 ## Limits
 
-- The image needs `git`, `ssh-add` and `ssh-keygen` (the OpenSSH client). The built-in agents' images
+- The image needs `git` 2.36 or newer (with an older one nothing is signed), `ssh-add` and
+  `ssh-keygen` (the OpenSSH client). The built-in agents' images
   have them.
 - The SSH agent is attached when a sandbox is created. With none on the host, the sandbox is created
   without one: repositories with a remote then refuse to commit until you create it again with an
@@ -51,5 +49,3 @@ It is built into `bento`, so nothing is downloaded.
   limit anyway, and a kit can't narrow it.
 - A signature says the commit was made in a sandbox with access to your agent, not that you reviewed
   it.
-- GitHub is asked only for `github.com` remotes. `gh` needs the `admin:ssh_signing_key` or
-  `read:ssh_signing_key` scope to list signing keys; without it the first key signs.

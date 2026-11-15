@@ -1,5 +1,5 @@
-//! The `git-signing` kit's key-picking script, run on the host with a stand-in `ssh-add` and `gh`
-//! (never your SSH agent, your `gh` or your git config).
+//! The `git-signing` kit's key-picking script, run on the host with a stand-in `ssh-add` (never
+//! your SSH agent or your git config).
 
 use smolbento::kits::load::builtin;
 use smolbento::kits::model::CapBody;
@@ -19,8 +19,6 @@ struct Sandbox {
     /// `ssh-add -L`'s output and exit status.
     keys: String,
     ssh_add_status: i32,
-    /// What `gh api user/ssh_signing_keys` prints; `None` makes `gh` fail.
-    github: Option<String>,
     agent: bool,
 }
 
@@ -35,16 +33,11 @@ impl Sandbox {
             dir,
             keys: format!("{FIRST}\n{SECOND}\n"),
             ssh_add_status: 0,
-            github: None,
             agent: true,
         };
         s.tool(
             "ssh-add",
             r#"printf %s "$FAKE_KEYS"; exit "$FAKE_SSH_ADD_STATUS""#,
-        );
-        s.tool(
-            "gh",
-            r#"echo "$*" >> "$FAKE_GH_CALLS"; [ -n "${FAKE_GH+set}" ] || exit 1; printf %s "$FAKE_GH""#,
         );
         std::fs::write(
             s.path("gitconfig"),
@@ -79,11 +72,7 @@ impl Sandbox {
             .env("GIT_CONFIG_GLOBAL", self.path("gitconfig"))
             .env("GIT_CONFIG_NOSYSTEM", "1")
             .env("FAKE_KEYS", &self.keys)
-            .env("FAKE_SSH_ADD_STATUS", self.ssh_add_status.to_string())
-            .env("FAKE_GH_CALLS", self.path("gh-calls"));
-        if let Some(listed) = &self.github {
-            cmd.env("FAKE_GH", listed);
-        }
+            .env("FAKE_SSH_ADD_STATUS", self.ssh_add_status.to_string());
         if self.agent {
             cmd.env("SSH_AUTH_SOCK", self.path("agent.sock"));
         }
@@ -92,11 +81,6 @@ impl Sandbox {
 
     fn git(&self, args: &[&str]) -> Output {
         self.env(Command::new("git").args(args)).output().unwrap()
-    }
-
-    fn github_remote(&self) {
-        let add = self.git(&["remote", "add", "origin", "git@github.com:acme/widgets.git"]);
-        assert!(add.status.success(), "{add:?}");
     }
 
     fn pin(&self, key: &str) {
@@ -123,10 +107,6 @@ impl Sandbox {
         assert!(!out.status.success(), "{out:?}");
         assert_eq!(String::from_utf8_lossy(&out.stdout), "", "no key on stdout");
         String::from_utf8(out.stderr).unwrap()
-    }
-
-    fn gh_calls(&self) -> usize {
-        std::fs::read_to_string(self.path("gh-calls")).map_or(0, |c| c.lines().count())
     }
 
     fn allowed_signers(&self) -> String {
@@ -164,16 +144,13 @@ fn the_first_agent_key_signs_by_default_and_is_recorded_for_the_committer() {
     );
     s.picked();
     assert_eq!(s.allowed_signers().lines().count(), 1, "recorded once");
-    assert_eq!(s.gh_calls(), 0, "no GitHub remote, so GitHub isn't asked");
 }
 
 #[test]
 fn a_pinned_key_signs_whatever_the_agent_lists_first() {
     let s = Sandbox::new();
-    s.github_remote();
     s.pin("ssh-ed25519 AAAAsecond");
     assert_eq!(s.picked(), "key::ssh-ed25519 AAAAsecond\n");
-    assert_eq!(s.gh_calls(), 0, "a pinned key needs no lookup");
 }
 
 /// git's own spelling of a literal key (`key::…`, as `user.signingkey` may hold it) pins too.
@@ -201,27 +178,6 @@ fn a_pinned_key_the_agent_lacks_is_refused_by_name() {
     let err = s.refusal();
     assert!(err.contains("signingKey"), "{err}");
     assert!(err.contains("AAAAother"), "{err}");
-}
-
-#[test]
-fn a_github_remote_prefers_the_key_github_lists_for_signing() {
-    let mut s = Sandbox::new();
-    s.github_remote();
-    s.github = Some("ssh-ed25519 AAAAsecond\n".into());
-    assert_eq!(s.picked(), "key::ssh-ed25519 AAAAsecond\n");
-    assert_eq!(s.picked(), "key::ssh-ed25519 AAAAsecond\n");
-    assert_eq!(s.gh_calls(), 1, "GitHub's answer is kept for a few minutes");
-}
-
-#[test]
-fn without_a_github_answer_the_first_key_signs() {
-    let mut s = Sandbox::new();
-    s.github_remote();
-    // `gh` fails: not logged in, or the host is blocked.
-    assert_eq!(s.picked(), "key::ssh-ed25519 AAAAfirst\n");
-    // GitHub lists a key the agent doesn't hold.
-    s.github = Some("ssh-ed25519 AAAAelsewhere\n".into());
-    assert_eq!(s.picked(), "key::ssh-ed25519 AAAAfirst\n");
 }
 
 #[test]
