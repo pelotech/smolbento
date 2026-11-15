@@ -39,5 +39,17 @@
       matchPackageNames: ['*'],
       minimumReleaseAge: '7 days',
     },
+    {
+      // What ships in the binary or what it runs: `fix(deps)`, so release-please releases it.
+      // Everything else (actions, the dev shell, the cross-compile image) stays `chore(deps)`,
+      // which doesn't.
+      matchManagers: ['cargo'],
+      semanticCommitType: 'fix',
+    },
+    {
+      matchManagers: ['custom.regex'],
+      matchDepNames: ['smol-machines/smolvm', 'docker.io/sbx/shell'],
+      semanticCommitType: 'fix',
+    },
   ],
 }

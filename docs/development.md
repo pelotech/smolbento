@@ -108,6 +108,12 @@ release PR.
 
 ## Releases
 
+Only changes that reach users make a release: `feat`, `fix`, `perf` and `revert` commits (squash
+titles). `docs`, `test`, `ci`, `build`, `chore`, `style` and `refactor` don't open a release PR, and
+aren't listed in the changelog. Renovate titles what ships (Cargo crates, the pinned smolvm, the
+builder image) `fix(deps)`, and the rest `chore(deps)`. To release a change of another type, title
+it `fix`.
+
 Merging the release-please PR tags the release. The workflow then builds all three targets on Linux with
 cargo-zigbuild:
 
