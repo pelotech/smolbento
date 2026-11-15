@@ -178,7 +178,7 @@ fn attach<R: Runner>(ctx: &Ctx<R>, a: &RunArgs, sb: &Sandbox, command: Vec<Strin
     }
     let _session = session::Session::register(&sessions, sb.name())?;
     // Opens URLs and copies text on the host for the agent while the user is attached.
-    let _bridge = bridge::attach(&ctx.env, &ctx.settings, sb);
+    let _bridge = bridge::attach(&ctx.env, &ctx.settings, &ctx.smolvm, sb);
     // A runtime `ssh-agent@1` grant: the filtered host agent, while the user is attached.
     let _agent = crate::ssh_agent::filter::attach(&ctx.env, &ctx.paths, sb);
     match image_user.then(|| has_bash(ctx, sb)) {

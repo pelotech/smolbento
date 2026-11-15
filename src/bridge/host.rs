@@ -95,7 +95,12 @@ fn relay(
 /// Serves the sandbox's bridge for an attached session (`run`, `exec -it`) until the result is
 /// dropped. `None` when the sandbox has no bridge, the host has no display, or another session
 /// already serves it. Problems only warn: the session goes on and the shims fall back.
-pub fn attach(env: &BTreeMap<String, String>, settings: &Settings, sb: &Sandbox) -> Option<Server> {
+pub fn attach(
+    env: &BTreeMap<String, String>,
+    settings: &Settings,
+    smolvm: &crate::smolvm::locate::SmolvmCmd,
+    sb: &Sandbox,
+) -> Option<Server> {
     if !sb.meta.bridge || sb.meta.service || !has_display(env, cfg!(target_os = "linux")) {
         return None;
     }
@@ -103,17 +108,7 @@ pub fn attach(env: &BTreeMap<String, String>, settings: &Settings, sb: &Sandbox)
         eprintln!("warning: not opening URLs or copying from the sandbox: {e:#}");
         Allowed::default()
     });
-    let smolvm = match crate::smolvm::locate::locate(settings, env) {
-        Ok(s) => s,
-        Err(e) => {
-            eprintln!(
-                "warning: {}: no browser and clipboard bridge: {e:#}",
-                sb.name()
-            );
-            return None;
-        }
-    };
-    let h = handlers(env, allowed, &smolvm, sb, false);
+    let h = handlers(env, allowed, smolvm, sb, false);
     http::serve(&super::host_socket(sb.name()), h).unwrap_or_else(|e| {
         eprintln!(
             "warning: {}: no browser and clipboard bridge: {e:#}",
@@ -291,7 +286,6 @@ mod tests {
             env: Vec::new(),
             managed: false,
             home: "/nonexistent".into(),
-            home_explicit: false,
         };
         handlers(&env(vars), allowed, &smolvm, &sb, false)
     }

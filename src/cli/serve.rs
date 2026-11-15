@@ -111,7 +111,7 @@ fn bridge<R: Runner>(ctx: &Ctx<R>, sb: &Sandbox, conn: &UnixStream, slot: File) 
     let handlers = bridge::handlers(
         &ctx.env,
         bridge::Allowed::from_settings(&ctx.settings)?,
-        &crate::smolvm::locate::locate(&ctx.settings, &ctx.env)?,
+        &ctx.smolvm,
         sb,
         true,
     );

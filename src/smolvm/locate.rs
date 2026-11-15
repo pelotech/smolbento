@@ -13,7 +13,7 @@ use crate::config::Settings;
 pub const URL_ENV: &str = "SMOLBENTO_SMOLVM_URL";
 
 /// macOS's limit on a Unix socket path, in bytes (`sun_path` less its terminator).
-const MACOS_SOCKET_LIMIT: usize = 103;
+pub const MACOS_SOCKET_LIMIT: usize = 103;
 
 /// How to run smolvm.
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -26,31 +26,38 @@ pub struct SmolvmCmd {
     pub managed: bool,
     /// smolbento's home: smolvm's state and the downloaded smolvm (`engine/`).
     pub home: PathBuf,
-    /// `smolvm.home` was set by the user (its socket paths are checked).
-    pub home_explicit: bool,
+}
+
+impl SmolvmCmd {
+    /// smolvm keeps its state in `home` (not its own default location).
+    pub fn has_state(&self) -> bool {
+        !self.env.is_empty()
+    }
+}
+
+/// `~/.smolbento`.
+pub fn default_home(env: &BTreeMap<String, String>) -> Result<PathBuf> {
+    let user_home = env.get("HOME").context("HOME is not set")?;
+    Ok(Path::new(user_home).join(".smolbento"))
 }
 
 /// The smolvm to run, from `smolvm.path` and `smolvm.home`. Downloads nothing.
 pub fn locate(settings: &Settings, env: &BTreeMap<String, String>) -> Result<SmolvmCmd> {
-    let user_home = env.get("HOME").context("HOME is not set")?;
-    let default_home = Path::new(user_home).join(".smolbento");
     let set_home = settings.value("smolvm.home")?;
-    let (home, home_explicit, state) = match set_home.as_str() {
-        "" => (default_home.clone(), false, true),
-        // smolvm's own default state; the download stays in smolbento's default home.
-        "-" => (default_home.clone(), false, false),
-        h => (absolute_home(h, user_home)?, true, true),
+    // `-`: smolvm's own default state; the download stays in smolbento's default home.
+    let home = match set_home.as_str() {
+        "" | "-" => default_home(env)?,
+        h => absolute_home(h, env)?,
     };
-    let env = if state {
-        vec![("SMOLVM_DATA_DIR".to_string(), home.display().to_string())]
-    } else {
+    let env = if set_home == "-" {
         Vec::new()
+    } else {
+        vec![("SMOLVM_DATA_DIR".to_string(), home.display().to_string())]
     };
     let path = settings.value("smolvm.path")?;
     let (bin, managed) = if path.is_empty() {
-        let engine_home = if state { &home } else { &default_home };
         let v = &pin::pin().version;
-        (install::engine_dir(engine_home, v).join("smolvm"), true)
+        (install::engine_dir(&home, v).join("smolvm"), true)
     } else {
         (PathBuf::from(path), false)
     };
@@ -59,15 +66,14 @@ pub fn locate(settings: &Settings, env: &BTreeMap<String, String>) -> Result<Smo
         env,
         managed,
         home,
-        home_explicit,
     })
 }
 
 /// A set `smolvm.home`, with `~/` expanded. A relative path would follow the current directory,
 /// so sandboxes would come and go with `cd` (and `reset` would delete the wrong folder).
-fn absolute_home(h: &str, user_home: &str) -> Result<PathBuf> {
+fn absolute_home(h: &str, env: &BTreeMap<String, String>) -> Result<PathBuf> {
     let p = match h.strip_prefix("~/") {
-        Some(rest) => Path::new(user_home).join(rest),
+        Some(rest) => Path::new(env.get("HOME").context("HOME is not set")?).join(rest),
         None => PathBuf::from(h),
     };
     if !p.is_absolute() {
@@ -83,13 +89,8 @@ pub fn ensure_installed(cmd: &SmolvmCmd, env: &BTreeMap<String, String>) -> Resu
         return Ok(());
     }
     let base = env.get(URL_ENV).map_or(pin::RELEASES, String::as_str);
-    let engine_home = cmd
-        .bin
-        .ancestors()
-        .nth(3)
-        .context("the managed smolvm has no home")?;
     install::ensure(
-        engine_home,
+        &cmd.home,
         pin::pin(),
         pin::host_platform()?,
         base,
@@ -108,21 +109,26 @@ pub fn longest_socket_path(home: &Path) -> usize {
         .len()
 }
 
-/// Refuses an explicitly set `smolvm.home` whose sockets wouldn't fit macOS's limit. The default
-/// always fits; Linux has no `Library/Caches` in its paths.
-pub fn check_home(cmd: &SmolvmCmd) -> Result<()> {
-    if !cfg!(target_os = "macos") || !cmd.home_explicit {
-        return Ok(());
-    }
-    let n = longest_socket_path(&cmd.home);
+/// The longest socket path under `home`, or an error when it's past macOS's limit.
+pub fn socket_room(home: &Path) -> Result<usize> {
+    let n = longest_socket_path(home);
     if n > MACOS_SOCKET_LIMIT {
         bail!(
             "smolvm.home {} is too long for macOS sockets ({n} bytes, limit \
              {MACOS_SOCKET_LIMIT}); set smolvm.home to a shorter path",
-            cmd.home.display()
+            home.display()
         );
     }
-    Ok(())
+    Ok(n)
+}
+
+/// Refuses a home whose sockets wouldn't fit macOS's limit (a long user name can push even
+/// `~/.smolbento` past it). Linux has no `Library/Caches` in its paths.
+pub fn check_home(cmd: &SmolvmCmd) -> Result<()> {
+    if !cfg!(target_os = "macos") || !cmd.has_state() {
+        return Ok(());
+    }
+    socket_room(&cmd.home).map(drop)
 }
 
 #[cfg(test)]
@@ -131,13 +137,12 @@ mod tests {
     use crate::testutil::*;
 
     fn located(extra: &[(&str, &str)]) -> Result<SmolvmCmd> {
-        let mut all = vec![("HOME", "/h")];
-        all.extend_from_slice(extra);
-        let t = test_env(&all);
+        let t = test_env(&[("HOME", "/h")]);
         let mut env = t.ctx.env.clone();
         // test_env points smolvm.path at a dummy; these tests choose for themselves.
-        if !extra.iter().any(|(k, _)| *k == "SMOLBENTO_SMOLVM") {
-            env.remove("SMOLBENTO_SMOLVM");
+        env.remove("SMOLBENTO_SMOLVM");
+        for (k, v) in extra {
+            env.insert(k.to_string(), v.to_string());
         }
         let settings = crate::config::Settings::load(&t.ctx.paths, env.clone()).0;
         locate(&settings, &env)
@@ -157,7 +162,6 @@ mod tests {
             c.env,
             [("SMOLVM_DATA_DIR".to_string(), "/h/.smolbento".to_string())]
         );
-        assert!(!c.home_explicit);
     }
 
     #[test]
@@ -172,7 +176,6 @@ mod tests {
         let c = located(&[("SMOLBENTO_SMOLVM_HOME", "/x y/é")]).unwrap();
         assert_eq!(c.home, PathBuf::from("/x y/é"));
         assert_eq!(c.env[0].1, "/x y/é");
-        assert!(c.home_explicit);
         let c = located(&[("SMOLBENTO_SMOLVM_HOME", "-")]).unwrap();
         assert!(c.env.is_empty(), "smolvm's own default state");
         // The download still lives in smolbento's default home.
@@ -204,7 +207,6 @@ mod tests {
         let long = format!("/Users/jhill/{}", "x".repeat(40));
         let cmd = SmolvmCmd {
             home: PathBuf::from(&long),
-            home_explicit: true,
             ..located(&[]).unwrap()
         };
         if cfg!(target_os = "macos") {
@@ -213,9 +215,9 @@ mod tests {
         } else {
             check_home(&cmd).unwrap();
         }
-        // Only an explicit home is checked.
+        // smolvm's own default state isn't in the home.
         check_home(&SmolvmCmd {
-            home_explicit: false,
+            env: Vec::new(),
             ..cmd
         })
         .unwrap();

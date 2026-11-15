@@ -238,8 +238,7 @@ mod tests {
         // test_env sets an explicit smolvm; without one, the ProxyCommand runs bento alone.
         let mut t = test_env(&[]);
         let h = home(&mut t);
-        t.ctx.env.remove("SMOLBENTO_SMOLVM");
-        t.ctx.settings = crate::config::Settings::load(&t.ctx.paths, t.ctx.env.clone()).0;
+        t.use_managed_smolvm();
         t.sbt(&["setup", "ssh"]).unwrap();
         let cfg = std::fs::read_to_string(h.join(".ssh/config")).unwrap();
         assert!(!cfg.contains("SMOLBENTO_SMOLVM"), "{cfg}");
@@ -249,7 +248,7 @@ mod tests {
         t.ctx
             .env
             .insert("SMOLBENTO_SMOLVM".into(), s.display().to_string());
-        t.ctx.settings = crate::config::Settings::load(&t.ctx.paths, t.ctx.env.clone()).0;
+        t.reload_settings();
         t.sbt(&["setup", "ssh"]).unwrap();
         let cfg = std::fs::read_to_string(h.join(".ssh/config")).unwrap();
         assert!(

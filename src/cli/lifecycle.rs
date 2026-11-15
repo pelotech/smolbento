@@ -324,12 +324,12 @@ pub fn prune<R: Runner>(ctx: &mut Ctx<R>, a: &PruneArgs) -> Result<i32> {
 /// `--preserve-secrets`, and last `~/.smolbento` (smolvm's state and the downloaded smolvm, which
 /// does the deleting before that).
 pub fn reset<R: Runner>(ctx: &mut Ctx<R>, a: &ResetArgs) -> Result<i32> {
-    let smolvm = crate::smolvm::locate::locate(&ctx.settings, &ctx.env)?;
     // A home the user chose may hold their own files: only the smolvm in it goes.
-    let home = if smolvm.home_explicit {
-        smolvm.home.join("engine")
+    let chosen = ctx.smolvm.home != crate::smolvm::locate::default_home(&ctx.env)?;
+    let home = if chosen {
+        ctx.smolvm.home.join("engine")
     } else {
-        smolvm.home.clone()
+        ctx.smolvm.home.clone()
     };
     confirm(
         ctx,
@@ -347,13 +347,18 @@ pub fn reset<R: Runner>(ctx: &mut Ctx<R>, a: &ResetArgs) -> Result<i32> {
         remove(ctx, sb, !a.preserve_secrets)?;
     }
     // Sandboxes from before smolbento kept its own state; never a machine without its labels.
+    // Problems there only warn: what follows still resets this installation.
     match ctx.vm.list_default_state() {
-        Ok(machines) => {
-            for m in machines
-                .iter()
-                .filter(|m| m.labels.contains_key("sbx.name"))
-            {
-                ctx.vm.delete_default_state(&m.name)?;
+        Ok(mut machines) => {
+            machines.retain(|m| m.labels.contains_key("sbx.name"));
+            machines.sort_by_key(|m| !m.labels.contains_key("sbx.fork-of"));
+            for m in machines {
+                if let Err(e) = ctx.vm.delete_default_state(&m.name) {
+                    eprintln!(
+                        "warning: couldn't remove {} from smolvm's default location: {e:#}",
+                        m.name
+                    );
+                }
             }
         }
         Err(e) => eprintln!("warning: couldn't list smolvm's default location: {e:#}"),
@@ -378,11 +383,11 @@ pub fn reset<R: Runner>(ctx: &mut Ctx<R>, a: &ResetArgs) -> Result<i32> {
         remove_tree(dir, &keep)?;
     }
     remove_tree(&home, &[])?;
-    if smolvm.home_explicit {
+    if chosen {
         writeln!(
             &ctx.out,
             "Kept {}: it's your smolvm.home. Delete it if it holds nothing else.",
-            smolvm.home.display()
+            ctx.smolvm.home.display()
         )?;
     }
     Ok(0)
@@ -1949,6 +1954,39 @@ SETUP
         ] {
             assert!(!d.exists(), "{} is left", d.display());
         }
+    }
+
+    #[test]
+    fn reset_goes_on_when_an_old_location_sandbox_wont_go_and_removes_forks_first() {
+        let mut t = test_env(&[]);
+        let old = format!(
+            "[{},{}]",
+            machine_json("sbx-a", "stopped", &[("sbx.name", "a")]),
+            machine_json(
+                "sbx-b",
+                "stopped",
+                &[("sbx.name", "b"), ("sbx.fork-of", "a")]
+            )
+        );
+        t.runner().ok(&["machine", "ls", "--json"], &old);
+        t.runner().once_ok(&["machine", "ls", "--json"], "[]");
+        t.runner().fail(
+            &["machine", "delete", "-n", "sbx-b"],
+            "SMOLVM_ERROR",
+            "busy",
+        );
+        std::fs::create_dir_all(&t.ctx.paths.config).unwrap();
+        t.sbt(&["reset", "-f"]).unwrap();
+        let deletes: Vec<String> = t
+            .calls()
+            .into_iter()
+            .filter(|l| l.starts_with("machine delete"))
+            .collect();
+        assert_eq!(
+            deletes,
+            ["machine delete -n sbx-b -f", "machine delete -n sbx-a -f"]
+        );
+        assert!(!t.ctx.paths.config.exists(), "the reset went on");
     }
 
     #[test]

@@ -51,7 +51,7 @@ where
         .spawner()
         .context("this smolvm runner can't serve SSH sessions")?;
     // Served for the connection's life, as for an attached session.
-    let _bridge = bridge::attach(&ctx.env, &ctx.settings, &sb);
+    let _bridge = bridge::attach(&ctx.env, &ctx.settings, &ctx.smolvm, &sb);
     let _agent = crate::ssh_agent::filter::attach(&ctx.env, &ctx.paths, &sb);
     let target = Target {
         spawner,

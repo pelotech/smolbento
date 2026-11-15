@@ -8,7 +8,7 @@ use super::Ctx;
 use crate::smolvm::Runner;
 
 pub fn run<R: Runner>(ctx: &mut Ctx<R>) -> Result<i32> {
-    let mut checks = vec![smolvm_check(ctx), home_check(ctx)?];
+    let mut checks = vec![smolvm_check(ctx), home_check(ctx)];
     #[cfg(target_os = "macos")]
     checks.push(mkfs_check(&mkfs_dirs(&ctx.env)));
     #[cfg(target_os = "linux")]
@@ -17,10 +17,7 @@ pub fn run<R: Runner>(ctx: &mut Ctx<R>) -> Result<i32> {
     checks.push(kvm_check());
     #[cfg(target_os = "macos")]
     checks.push(entitlement_check(
-        &crate::smolvm::locate::locate(&ctx.settings, &ctx.env)?
-            .bin
-            .display()
-            .to_string(),
+        &ctx.smolvm.bin.display().to_string(),
         &ctx.env,
     ));
     checks.push(config_check(ctx));
@@ -47,10 +44,7 @@ pub fn report(checks: &[(bool, String)]) -> (String, i32) {
 /// `smolvm.path`, whose version is only noted when it differs from the pin.
 pub fn smolvm_check<R: Runner>(ctx: &Ctx<R>) -> (bool, String) {
     let pinned = &crate::smolvm::pin::pin().version;
-    let cmd = match crate::smolvm::locate::locate(&ctx.settings, &ctx.env) {
-        Ok(c) => c,
-        Err(e) => return (false, format!("smolvm: {e:#}")),
-    };
+    let cmd = &ctx.smolvm;
     if cmd.managed && !cmd.bin.is_file() {
         return (
             true,
@@ -78,22 +72,31 @@ pub fn smolvm_check<R: Runner>(ctx: &Ctx<R>) -> (bool, String) {
 }
 
 /// `smolvm.home`, and on macOS how long its longest socket path is against the limit.
-fn home_check<R: Runner>(ctx: &Ctx<R>) -> Result<(bool, String)> {
-    let cmd = crate::smolvm::locate::locate(&ctx.settings, &ctx.env)?;
-    let home = cmd.home.display();
+fn home_check<R: Runner>(ctx: &Ctx<R>) -> (bool, String) {
+    let home = &ctx.smolvm.home;
     if !cfg!(target_os = "macos") {
-        return Ok((true, format!("smolvm.home {home}")));
+        return (true, format!("smolvm.home {}", home.display()));
     }
-    let n = crate::smolvm::locate::longest_socket_path(&cmd.home);
-    Ok((
-        n <= 103,
-        format!("smolvm.home {home} (longest socket path {n} of 103 bytes)"),
-    ))
+    match crate::smolvm::locate::socket_room(home) {
+        Ok(n) => (
+            true,
+            format!(
+                "smolvm.home {} (longest socket path {n} of {} bytes)",
+                home.display(),
+                crate::smolvm::locate::MACOS_SOCKET_LIMIT
+            ),
+        ),
+        Err(e) => (false, format!("{e:#}")),
+    }
 }
 
-/// `name` in the first of `dirs` that has it.
-fn find_in(name: &str, dirs: &[PathBuf]) -> Option<PathBuf> {
-    dirs.iter().map(|d| d.join(name)).find(|p| p.exists())
+/// Finds `name` in `dirs`. Missing, it's a failure unless `required` is false (then a note), with
+/// `hint` saying what to do.
+fn tool_check(name: &str, dirs: &[PathBuf], required: bool, hint: &str) -> (bool, String) {
+    match dirs.iter().map(|d| d.join(name)).find(|p| p.exists()) {
+        Some(p) => (true, format!("{name} {}", p.display())),
+        None => (!required, format!("{name} not found: {hint}")),
+    }
 }
 
 /// macOS: where smolvm looks for `mkfs.ext4` (PATH, then Homebrew's e2fsprogs).
@@ -117,15 +120,12 @@ fn mkfs_dirs(env: &std::collections::BTreeMap<String, String>) -> Vec<PathBuf> {
 /// `mkfs.ext4`: smolvm needs it only for disks larger than its templates, so it's a note.
 #[cfg_attr(not(target_os = "macos"), allow(dead_code))]
 fn mkfs_check(dirs: &[PathBuf]) -> (bool, String) {
-    match find_in("mkfs.ext4", dirs) {
-        Some(p) => (true, format!("mkfs.ext4 {}", p.display())),
-        None => (
-            true,
-            "mkfs.ext4 not found: disks larger than smolvm's templates need it (brew install \
-             e2fsprogs)"
-                .into(),
-        ),
-    }
+    tool_check(
+        "mkfs.ext4",
+        dirs,
+        false,
+        "disks larger than smolvm's templates need it (brew install e2fsprogs)",
+    )
 }
 
 /// Linux: where the system's libraries are.
@@ -148,14 +148,12 @@ fn lib_dirs() -> Vec<PathBuf> {
 /// `libbz2.so.1`: the downloaded smolvm needs the system's.
 #[cfg_attr(not(target_os = "linux"), allow(dead_code))]
 fn libbz2_check(dirs: &[PathBuf]) -> (bool, String) {
-    match find_in("libbz2.so.1", dirs) {
-        Some(p) => (true, format!("libbz2 {}", p.display())),
-        None => (
-            false,
-            "libbz2.so.1 not found: smolvm needs it (install your distribution's bzip2 library)"
-                .into(),
-        ),
-    }
+    tool_check(
+        "libbz2.so.1",
+        dirs,
+        true,
+        "smolvm needs it (install your distribution's bzip2 library)",
+    )
 }
 
 fn config_check<R: Runner>(ctx: &Ctx<R>) -> (bool, String) {
@@ -305,8 +303,7 @@ mod tests {
     #[test]
     fn a_managed_smolvm_not_yet_downloaded_says_when_it_will_be() {
         let mut t = test_env(&[]);
-        t.ctx.env.remove("SMOLBENTO_SMOLVM");
-        t.ctx.settings = crate::config::Settings::load(&t.ctx.paths, t.ctx.env.clone()).0;
+        t.use_managed_smolvm();
         let (ok, msg) = smolvm_check(&t.ctx);
         assert!(ok);
         assert_eq!(
@@ -322,7 +319,7 @@ mod tests {
     #[test]
     fn home_is_reported_with_its_socket_room_on_macos() {
         let t = test_env(&[("HOME", "/Users/jhill")]);
-        let (ok, msg) = home_check(&t.ctx).unwrap();
+        let (ok, msg) = home_check(&t.ctx);
         assert!(ok);
         if cfg!(target_os = "macos") {
             assert_eq!(

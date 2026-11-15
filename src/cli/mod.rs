@@ -82,6 +82,7 @@ pub fn main(args: impl IntoIterator<Item = OsString>) -> Result<i32> {
     let mut ctx = Ctx {
         vm: Smolvm::new(runner),
         settings,
+        smolvm,
         services: crate::host_service::HostServices::detect(
             &paths,
             &env,
@@ -151,9 +152,8 @@ pub fn dispatch<R: Runner>(ctx: &mut Ctx<R>, cli: Cli) -> Result<i32> {
     }
     if cmd.needs_smolvm() {
         refuse_root(ctx.uid)?;
-        let smolvm = crate::smolvm::locate::locate(&ctx.settings, &ctx.env)?;
-        crate::smolvm::locate::check_home(&smolvm)?;
-        crate::smolvm::locate::ensure_installed(&smolvm, &ctx.env)?;
+        crate::smolvm::locate::check_home(&ctx.smolvm)?;
+        crate::smolvm::locate::ensure_installed(&ctx.smolvm, &ctx.env)?;
     }
     match cmd {
         Cmd::Run(a) => run::run(ctx, &a),
@@ -318,8 +318,7 @@ mod tests {
             ("SMOLBENTO_SMOLVM_HOME", &home_s),
             ("SMOLBENTO_SMOLVM_URL", &url),
         ]);
-        t.ctx.env.remove("SMOLBENTO_SMOLVM");
-        t.ctx.settings = crate::config::Settings::load(&t.ctx.paths, t.ctx.env.clone()).0;
+        t.use_managed_smolvm();
         let err = t.sbt_err(&["ls"]);
         assert!(err.contains("checksum"), "{err}");
         assert_eq!(seen.lock().unwrap().len(), 1);
@@ -329,8 +328,7 @@ mod tests {
     fn settings_and_help_never_download() {
         let (url, seen) = crate::testutil::http_server(b"not smolvm".to_vec());
         let mut t = crate::testutil::test_env(&[("SMOLBENTO_SMOLVM_URL", &url)]);
-        t.ctx.env.remove("SMOLBENTO_SMOLVM");
-        t.ctx.settings = crate::config::Settings::load(&t.ctx.paths, t.ctx.env.clone()).0;
+        t.use_managed_smolvm();
         t.sbt(&["settings", "ls"]).unwrap();
         t.sbt(&["version"]).unwrap();
         assert!(seen.lock().unwrap().is_empty(), "nothing was downloaded");
@@ -363,8 +361,7 @@ mod tests {
         for args in [&[][..], &["ls"][..]] {
             let (url, seen) = http_server(b"not smolvm".to_vec());
             let mut t = test_env(&[("SMOLBENTO_SMOLVM_URL", &url)]);
-            t.ctx.env.remove("SMOLBENTO_SMOLVM");
-            t.ctx.settings = crate::config::Settings::load(&t.ctx.paths, t.ctx.env.clone()).0;
+            t.use_managed_smolvm();
             let err = t.sbt(args).unwrap_err();
             assert!(format!("{err:#}").contains("checksum"), "{args:?}: {err:#}");
             assert_eq!(seen.lock().unwrap().len(), 1, "{args:?}");

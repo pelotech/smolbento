@@ -18,7 +18,8 @@ pub struct TestEnv {
 /// A context with temp config/cache/data dirs, cwd `<tmp>/proj`, `now` = 1_000_000, uid 501 and smolvm
 /// 1.35.1.
 pub fn test_env(extra_env: &[(&str, &str)]) -> TestEnv {
-    let dir = tempfile::tempdir().unwrap();
+    // Under /tmp, so `~/.smolbento`'s sockets fit macOS's limit.
+    let dir = tempfile::tempdir_in("/tmp").unwrap();
     let mut env = BTreeMap::from([
         (
             "SMOLBENTO_CONFIG_DIR".to_string(),
@@ -57,6 +58,7 @@ pub fn test_env(extra_env: &[(&str, &str)]) -> TestEnv {
     std::fs::create_dir_all(&paths.config).unwrap();
     std::fs::write(paths.policy_file(), "mode = \"allow-all\"\n").unwrap();
     let (settings, config_error) = Settings::load(&paths, env.clone());
+    let smolvm = crate::smolvm::locate::locate(&settings, &env).unwrap();
     let fake = FakeRunner::new();
     fake.ok(&["--version"], "smolvm 1.35.1\n");
     let cwd = dir.path().join("proj");
@@ -66,6 +68,7 @@ pub fn test_env(extra_env: &[(&str, &str)]) -> TestEnv {
         ctx: Ctx {
             vm: Smolvm::new(fake),
             settings,
+            smolvm,
             services: crate::host_service::HostServices::disabled(),
             paths,
             cwd,
@@ -203,6 +206,20 @@ pub fn break_config(t: &mut TestEnv) {
     let (settings, config_error) = Settings::load(&t.ctx.paths, t.ctx.env.clone());
     t.ctx.settings = settings;
     t.ctx.config_error = config_error;
+}
+
+impl TestEnv {
+    /// Reloads settings from `ctx.env` (as `main` would) and the smolvm they pick.
+    pub fn reload_settings(&mut self) {
+        self.ctx.settings = Settings::load(&self.ctx.paths, self.ctx.env.clone()).0;
+        self.ctx.smolvm = crate::smolvm::locate::locate(&self.ctx.settings, &self.ctx.env).unwrap();
+    }
+
+    /// Runs the downloaded smolvm rather than test_env's explicit stand-in.
+    pub fn use_managed_smolvm(&mut self) {
+        self.ctx.env.remove("SMOLBENTO_SMOLVM");
+        self.reload_settings();
+    }
 }
 
 /// Replaces policy.toml.
