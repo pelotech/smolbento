@@ -1,5 +1,23 @@
 # Changelog
 
+## [0.28.1](https://github.com/pelotech/smolbento/compare/v0.28.0...v0.28.1) (2026-11-15)
+
+
+### Bug Fixes
+
+* **kits:** no key prompt in Claude, one agent guide, quiet kit warnings ([#130](https://github.com/pelotech/smolbento/issues/130)) ([2b6b301](https://github.com/pelotech/smolbento/commit/2b6b301d76bace6015da896a7313fcf3f68c1f44))
+
+
+### Chores
+
+* **main:** release nix-kit 0.1.0 ([#129](https://github.com/pelotech/smolbento/issues/129)) ([4407340](https://github.com/pelotech/smolbento/commit/44073409d986ba2d5c9f4440239e5c562fabf09e))
+* stop installing smolvm on the runners ([#134](https://github.com/pelotech/smolbento/issues/134)) ([505d0d9](https://github.com/pelotech/smolbento/commit/505d0d9dd21a852cea86ea159ad394d1e86d575e))
+
+
+### Docs
+
+* **readme:** a scripted demo GIF of bento run claude ([#132](https://github.com/pelotech/smolbento/issues/132)) ([3cf865d](https://github.com/pelotech/smolbento/commit/3cf865da5cebe2616210fa6665ee6fc080627042))
+
 ## [0.28.0](https://github.com/pelotech/smolbento/compare/v0.27.0...v0.28.0) (2026-11-15)
 
 
