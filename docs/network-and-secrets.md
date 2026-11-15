@@ -2,6 +2,8 @@
 
 What a sandbox may reach, and how it uses your API keys without seeing them. Running agents is in [Usage](usage.md).
 
+On this page: [Network policy](#network-policy) · [Secrets](#secrets)
+
 ## Network policy
 
 Creating or starting a sandbox needs a network policy. The first time, `bento` asks which one to use

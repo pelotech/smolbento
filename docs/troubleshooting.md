@@ -11,7 +11,7 @@ Behind a firewall that blocks GitHub, download the release named in the error yo
 and point smolbento at it:
 
 ```sh
-bento settings set smolvm.path /path/to/smolvm-<version>-<platform>/smolvm
+bento settings set smolvm.path /path/to/smolvm-VERSION-PLATFORM/smolvm
 ```
 
 ## `smolvm download … failed its checksum`
@@ -74,7 +74,7 @@ Cause: `~/.config/smolbento/config.toml` doesn't parse. The message shows the er
 
 ```sh
 # reset one setting, or fix the file by hand
-bento settings unset <key>
+bento settings unset KEY
 ```
 
 ## `Permission denied` writing the workspace
@@ -99,7 +99,7 @@ with `docker.enabled=false` have no Docker engine.
 If the error persists, read the daemon log:
 
 ```sh
-bento exec --privileged <name> cat /var/log/dockerd.log
+bento exec --privileged NAME cat /var/log/dockerd.log
 ```
 
 ## A sandbox won't go away, or `already exists`
@@ -108,13 +108,13 @@ Cause: a leftover sandbox or smolvm machine.
 
 ```sh
 bento ls
-bento rm -f <name>
+bento rm -f NAME
 # if it's still listed by `bento smolvm machine ls`
-bento smolvm machine delete --name sbx-<name> -f
+bento smolvm machine delete --name sbx-NAME -f
 ```
 
 A sandbox whose first start fails is removed, so you can rerun the command. If the removal fails too,
-run `bento rm -f <name>`.
+run `bento rm -f NAME`.
 
 ## A storage error from smolvm
 

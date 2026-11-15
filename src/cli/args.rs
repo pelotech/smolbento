@@ -1074,7 +1074,7 @@ pub enum ApprovalCmd {
 #[derive(Debug, Subcommand)]
 pub enum McpCmd {
     /// Register an MCP server
-    Add(McpAddArgs),
+    Add(Box<McpAddArgs>),
     /// List registered MCP servers
     #[command(visible_alias = "list")]
     Ls(McpLsArgs),

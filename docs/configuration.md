@@ -1,5 +1,8 @@
 # Configuration
 
+On this page: [Settings](#settings) · [Files](#files) · [Where sandboxes
+live](#where-sandboxes-live) · [Secret values](#secret-values)
+
 ## Settings
 
 ```sh

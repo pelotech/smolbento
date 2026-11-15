@@ -1,10 +1,19 @@
 # sbx compatibility
 
 smolbento takes Docker Sandboxes (sbx) command lines flag for flag. The reference is sbx v0.49;
-kit host mounts, `--mount` and `inspect` are checked against v0.50.1.
+kit host mounts, `--mount` and `inspect` are checked against v0.50.1, and commands, flags, aliases
+and `--json` output against v0.53.
 
 Anything not implemented yet still parses and exits with status **2** and prints a message, so
 scripts fail clearly instead of doing something different.
+
+On this page: [Works today](#works-today) · [Parses, not implemented yet (exit
+2)](#parses-not-implemented-yet-exit-2) · [Never (Docker Cloud only, exit
+2)](#never-docker-cloud-only-exit-2) · [SSH](#ssh) · [Differences you'll
+notice](#differences-youll-notice) · [Skills](#skills) · [MCP servers](#mcp-servers) ·
+[Templates](#templates) · [Environment files](#environment-files) · [Sandbox
+environment](#sandbox-environment) · [SSH agent](#ssh-agent) · [Kits](#kits) · [Exit
+codes](#exit-codes)
 
 ## Works today
 
@@ -17,6 +26,7 @@ scripts fail clearly instead of doing something different.
 
 smolbento-only:
 
+- `start` and `exec --privileged`. sbx 0.53 no longer has them; smolbento keeps them.
 - `fork`. sbx has none; its `template save` saves only the disk.
 - `daemon`. Accepted and does nothing.
 - `smolvm ARGS…`. Runs the smolvm smolbento uses (the pinned release it downloads) on its own
@@ -31,6 +41,8 @@ smolbento-only:
 | `sbxenv.yaml` fields under [Environment files](#environment-files) | Later |
 | `setup ssh --auto-create` (desktop app connections) | Not supported |
 | `mcp auth`, `mcp load`, `mcp unload`; `mcp add --local`, `--dir`, `--client-id`, `--oauth-authorization-server`, `--resource`, `--skip-auth` | Not supported: no MCP gateway |
+| `create/run --profile`, `policy ls --profile`, `policy rm network --method/--path/--query`, `template ls -a/--digests/--no-trunc`, `template save\|load --capture-mode/--description`, `secret set-custom --no-verify/--show-error/--refresh`, `mcp add --disable-http2/--skip-ssrf-check/--callback-port/--scope/--no-scope` | Not implemented |
+| `kit inspect --resolved`, `diagnose --upload`, `diagnose --format github-issue` | Not accepted yet (unknown argument) |
 | `tui` | Later |
 | `--pull always`; `--pull never` without a saved template ([Templates](#templates)) | Not implemented. `--pull missing` works, as in smolvm |
 | `exec -d`, `--detach-keys` | Not supported (sbx doesn't support `exec -d` either) |
@@ -96,9 +108,14 @@ smolbento-only:
 | `reset` | Resets to a freshly installed state: stops and deletes sandboxes, clears the image cache, policy, the managed SSH config, secrets (unless `--preserve-secrets`), and all state, cache and config directories; also signs out, stops the daemon and clears Gordon's history | Same: sandboxes (and smolbento's leftovers in smolvm's default location, never machines without its labels), `~/.smolbento` (smolvm's state, images and the downloaded smolvm), the SSH config block, background services, and smolbento's config, cache and data directories (kit host-mount directories included). More below. |
 | Progress output | A line per image layer | No per-layer lines. The pull shows a percentage, and the image step reads `preparing` until smolvm reports a pull (a cached image has none). CPU and Memory print before a kit's `resources@1`. A kit's "cached" label is approximate when pulls or builds overlap. On a terminal, a step's detail stays on the step's line, and a warning follows the step's last drawn line |
 | Browser and clipboard | Shims post to the daemon's proxy with `curl` and `jq`; copies work from any `exec`; image paste behind `clipboard.imagePaste`; `SBX_HOST_SESSION_ID` routes requests | Same shims and texts over a socket smolvm mounts at `/run/smolbento/bridge.sock`, with `curl` only. Copying is off until `clipboard.textCopy` is `true`, as in sbx 0.51. More below. |
-| Command aliases | `ls`, `rm`/`delete`, `secret ls`/`rm`/`delete`/`unset`, `settings ls`, `template ls`/`list`, `template rm`/`remove`/`delete` | Implemented. `volume` aliases come with that command |
+| Command aliases | `ls`, `rm`/`delete`, `secret ls`/`rm`/`delete`/`unset`, `settings ls`, `template ls`/`list`, `template rm`/`remove`/`delete`, `policy ls`/`list`, `policy rm`/`remove`/`delete`, `mcp rm`/`remove`/`delete` | Implemented. `volume` aliases come with that command |
 | `--version` | `sbx version vX <revision>` | `bento version vX` (no revision); `bento version` also shows the smolvm version |
 | Errors | `error: …`, and a missing sandbox adds `  try: sbx ls` on its own line | Same, with `bento`. Other suggestions are still inline (``(see `bento mcp ls`)``) |
+| `settings ls` | `KEY VALUE TYPE SOURCE RESTART DESCRIPTION`, sorted, cells cut; `--no-trunc` prints a block per setting | Same. `RESTART` is always empty (no daemon); `TYPE` is `bool` or `string` |
+| `policy ls` layout | 0.53: one row per policy (`POLICY SOURCE APPLIES TO SUMMARY`), `--json` is `{"rules":[…]}`; `--wide` has 14 columns | The earlier layout: `Mode:` and one row per rule, `--json` a bare array. Not updated yet |
+| `policy approval respond` | 0.53: `APPROVAL-ID --option OPTION-ID` | `ID allow\|deny`. `--option` isn't accepted (sbx's option IDs weren't observed) |
+| `df` | Disk usage of images, containers and volumes | Not implemented (`unrecognized subcommand`) |
+| `skills import` | Lists missing directories only with `-v`; prints `Skills directory found at DIR:` before each directory's skills | `-v` the same; no `Skills directory found` header |
 | `--format`, `--json` | On every command that prints something | Same shapes and key order on `ls`, `inspect`, `ports`, `stop`, `rm`, `prune`, `diagnose`, `settings ls`/`get`, `secret ls`, `policy check network`. `version --json` has `client` and `smolvm` (sbx: `client` and `server`). `diagnose --json` checks have empty `detail` and `hint`. `settings` values are `bool` or `string`. `policy check` adds `reason`. `prune --json` works only with `--dry-run`, as in sbx (the same error otherwise): `would_remove` rows have `name`, `agent`, `mounts` and `workspaces` (no `stopped_at`: smolvm doesn't record it), then `skipped_unknown_stop` (always empty) and smolbento's `host_services`. `ports --publish --json` prints the ports it published (not measured on sbx). A command that fails partway still prints what it did. `-q` wins over `--json`. Confirmation prompts go to stderr. `stop`, `rm` and `prune` print `Stopped sandbox NAME` and `Removed sandbox NAME`, as sbx does. Not on `template inspect` (not implemented) |
 
 - **Host services:** Only sandboxes created while a `localhost` rule applied get it; others need
@@ -395,7 +412,7 @@ with `-D`).
 | v2 kits' `requires.agent` | A base-agent name | A capability name with no version, so any version meets it (v2 has no versioned provides) |
 | `kit add` and earlier kits | Recreates with the whole set | Checks the new kit against the provides recorded at create, with versions. Older records hold bare names, which meet only unconstrained requires. Errors name kits by kit name. Earlier kits' requires and conflicts aren't rechecked |
 | Kit settings | Also `kit.requireSignature`, `kit.trustedSigners`, `kit.ignoreTransparencyLog`, `kit.allowExtractedAgents` | All but `kit.allowExtractedAgents` (not implemented) |
-| Default kit sources and signers | `kit.allowedSources` `["docker.io/"]`; `kit.trustedSigners` `*@docker.com` | Also `ghcr.io/pelotech/smolbento/` and smolbento's release workflow (GitHub OIDC), so smolbento's own kits load and verify with default settings |
+| Default kit sources and signers | `kit.allowedSources` `["docker.io/","dhi.io/"]` (0.53); `kit.trustedSigners` `*@docker.com` | Also `ghcr.io/pelotech/smolbento/` and smolbento's release workflow (GitHub OIDC), so smolbento's own kits load and verify with default settings |
 | Bare kit names | None for published kits | `nix` names `ghcr.io/pelotech/smolbento/kits/nix:latest` and loads as a registry kit (source and signature checks apply). `docker` is the shipped kit |
 | `kit.requireSignature` | Enforced wherever a kit loads (not `kit pull` or `--offline`): a registry or local kit needs a signature verifying against `kit.trustedSigners` (`{"key": PATH}`, or keyless `issuer`/`identity`, each also `…Regexp`). Success: `✓ REF — signature verified (IDENTITY via ISSUER)` on stderr | Registry kits only, checked on the resolved digest. Built-in agents' kits (`claude`: sbx publishes them unsigned) and shipped kits (`docker`) are exempt. More below. |
 
