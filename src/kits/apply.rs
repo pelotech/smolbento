@@ -265,13 +265,21 @@ fn drop_service_variables(req: &mut CreateRequest, kit_creds: &[KitCred]) {
         .collect();
     let vars: Vec<String> = kit_creds
         .iter()
-        .filter(|kc| kc.req.env.is_none() && !kc.req.inject.is_empty())
+        // Bound: a kit credential that was skipped leaves the user's variable the only way in.
+        .filter(|kc| kc.req.env.is_none() && req.credential_env.contains(&kit_env(&kc.req)))
         .filter_map(|kc| services::builtin(&kc.req.service))
         .flat_map(|s| s.env_vars)
         .filter(|v| !named.contains(&v.as_str()))
         .collect();
     req.credentials.retain(|c| !vars.contains(&c.env_var));
     req.credential_env.retain(|e| !vars.contains(e));
+}
+
+/// The variable a kit credential binds: the one it names, else `SBX_KIT_<SERVICE>`.
+fn kit_env(c: &CredReq) -> String {
+    c.env
+        .clone()
+        .unwrap_or_else(|| format!("SBX_KIT_{}", upper_env(&c.service)))
 }
 
 fn user_credentials(req: &CreateRequest, secrets: &SecretsFile) -> Vec<(String, String)> {
@@ -525,9 +533,7 @@ fn bind_credential(
             kc.kit, c.service
         );
         if kc.optional {
-            super::warn::warn(format_args!(
-                "warning: {why}; skipping its optional credential"
-            ));
+            crate::kit_warning!("warning: {why}; skipping its optional credential");
             return Ok(());
         }
         bail!("{why}");
@@ -550,9 +556,7 @@ fn bind_credential(
                 c.service
             );
             if kc.optional {
-                super::warn::warn(format_args!(
-                    "warning: {why}; skipping its optional credential"
-                ));
+                crate::kit_warning!("warning: {why}; skipping its optional credential");
                 return Ok(());
             }
             bail!("{why}; refusing");
@@ -560,20 +564,18 @@ fn bind_credential(
     }
     if secrets.entry_for(&req.name, None, &c.service).is_none() {
         if kc.optional {
-            super::warn::warn(format_args!(
+            crate::kit_warning!(
                 "warning: kit {}: no {} secret is set; skipping its optional credential",
-                kc.kit, c.service
-            ));
+                kc.kit,
+                c.service
+            );
             return Ok(());
         }
         let host = c.inject.first().map_or("HOST", |i| i.domain.as_str());
         eprintln!("{}", unbound_required(&kc.kit, &c.service, host));
         return Ok(());
     }
-    let env = c
-        .env
-        .clone()
-        .unwrap_or_else(|| format!("SBX_KIT_{}", upper_env(&c.service)));
+    let env = kit_env(c);
     if !guest::is_env_name(&env) {
         bail!("kit {}: '{env}' is not a valid variable name", kc.kit);
     }
@@ -815,9 +817,9 @@ fn context_scripts(plan: &Plan, agent_file: Option<&str>, mounts: &[&Path]) -> V
     }
     let Some(file) = agent_file else {
         for (kit, _) in &mixins {
-            super::warn::warn(format_args!(
+            crate::kit_warning!(
                 "warning: kit {kit}: agent context dropped (the workload declares no agent file)"
-            ));
+            );
         }
         return Vec::new();
     };
@@ -971,6 +973,15 @@ mod tests {
             registries: vec![],
             bindings: Default::default(),
         }
+    }
+    /// The user's `anthropic` secret, bound as `create` binds it before the kits.
+    fn user_anthropic() -> (SecretsFile, CreateRequest) {
+        let s = secrets(&["anthropic"]);
+        let mut req = request();
+        req.credentials = crate::provision::credentials(&s, &["anthropic".into()]).unwrap();
+        req.credential_env = vec!["ANTHROPIC_API_KEY".into()];
+        req.secrets = vec!["anthropic".into()];
+        (s, req)
     }
     fn request() -> CreateRequest {
         CreateRequest {
@@ -1221,6 +1232,21 @@ mod tests {
     }
 
     #[test]
+    fn a_kit_key_that_isnt_bound_leaves_the_service_variable() {
+        // Optional, and aimed at a host the service doesn't use: refused, so the user's own
+        // variable is the only way the key reaches the sandbox.
+        let c = cred(
+            "anthropic",
+            None,
+            vec![inject("api.example.com", Some("x-api-key"))],
+        );
+        let p = plan(vec![with(kit("k", Kind::Mixin), "credential@1", true, c)]);
+        let (s, mut req) = user_anthropic();
+        run_with(&p, &mut req, &mut Policy::default(), &s).unwrap();
+        assert_eq!(req.credential_env, ["ANTHROPIC_API_KEY"]);
+    }
+
+    #[test]
     fn a_kit_that_takes_a_key_without_a_variable_gets_no_service_variable() {
         // Claude's kit: the key reaches the agent through its apiKeyHelper, never a variable.
         // `ANTHROPIC_API_KEY` from the user's secret would make Claude ask whether to use it.
@@ -1235,12 +1261,7 @@ mod tests {
             true,
             c,
         )]);
-        let s = secrets(&["anthropic"]);
-        let mut req = request();
-        // As `create` sets them from the user's secrets, before the kits.
-        req.credentials = crate::provision::credentials(&s, &["anthropic".into()]).unwrap();
-        req.credential_env = vec!["ANTHROPIC_API_KEY".into()];
-        req.secrets = vec!["anthropic".into()];
+        let (s, mut req) = user_anthropic();
         run_with(&p, &mut req, &mut Policy::default(), &s).unwrap();
         assert_eq!(
             credential_args(&req),
@@ -1268,10 +1289,7 @@ mod tests {
             ),
             with(kit("other", Kind::Mixin), "credential@1", false, named),
         ]);
-        let mut req = request();
-        req.credentials = crate::provision::credentials(&s, &["anthropic".into()]).unwrap();
-        req.credential_env = vec!["ANTHROPIC_API_KEY".into()];
-        req.secrets = vec!["anthropic".into()];
+        let (_, mut req) = user_anthropic();
         run_with(&p, &mut req, &mut Policy::default(), &s).unwrap();
         assert!(
             req.credential_env

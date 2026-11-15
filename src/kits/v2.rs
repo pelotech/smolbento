@@ -42,7 +42,7 @@ fn name_or_source(name: Option<String>, dir: &Path) -> Result<String> {
 pub fn parse(yaml: &str, dir: &Path) -> Result<Kit> {
     let (kit, warnings) = parse_warn(yaml, dir)?;
     for w in warnings {
-        super::warn::warn(w);
+        crate::kit_warning!("{w}");
     }
     Ok(kit)
 }

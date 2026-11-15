@@ -21,11 +21,19 @@ pub fn show(on: bool) {
     SHOWN.store(on, Ordering::Relaxed);
 }
 
-/// Prints `line` (a whole `warning: kit …` line) to stderr when they're shown.
-pub fn warn(line: impl std::fmt::Display) {
-    if SHOWN.load(Ordering::Relaxed) {
-        eprintln!("{line}");
-    }
+/// Whether this command shows them.
+pub fn shown() -> bool {
+    SHOWN.load(Ordering::Relaxed)
+}
+
+/// `eprintln!` for a kit warning: printed only when they're shown.
+#[macro_export]
+macro_rules! kit_warning {
+    ($($arg:tt)*) => {
+        if $crate::kits::warn::shown() {
+            eprintln!($($arg)*);
+        }
+    };
 }
 
 #[cfg(test)]
