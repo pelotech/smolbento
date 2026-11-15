@@ -20,8 +20,16 @@ Options:
   -f, --force
           Don't ask for confirmation
 
+      --format <FORMAT>
+          Output format
+
+          [possible values: table, json, yaml]
+
       --no-input
           Never prompt; commands that need an answer fail with the command to run instead
+
+      --json
+          Same as --format json
 
   -h, --help
           Print help

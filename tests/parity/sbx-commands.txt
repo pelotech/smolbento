@@ -181,3 +181,14 @@ run claude -w src
 run --name my-sandbox --workdir /tmp
 secret set-custom --host api.example.com --env API_KEY --value-stdin
 --no-input reset
+stop my-sandbox --json
+rm my-sandbox --force --format yaml
+prune --dry-run --json
+ports my-sandbox --json
+version --json
+diagnose --format json
+settings ls -q
+settings ls --format json
+settings get docker.enabled --json
+secret ls --json
+policy check network --json api.example.com

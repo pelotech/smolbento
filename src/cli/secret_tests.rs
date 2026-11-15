@@ -1,0 +1,798 @@
+use super::*;
+use crate::testutil::*;
+
+fn set_registry_from(t: &mut TestEnv, host: &str, user: Option<&str>, input: &str) -> Result<()> {
+    let mut file = SecretsFile::load(&t.ctx.paths)?;
+    set_registry(
+        &t.ctx,
+        &mut file,
+        host,
+        user.map(String::from),
+        None,
+        input.as_bytes(),
+    )
+}
+
+#[test]
+fn an_mcp_secret_is_stored_like_any_other() {
+    let mut t = test_env(&[]);
+    t.machine("sbx-s1", "running", &[("sbx.name", "s1")]);
+    t.sbt(&["secret", "set", "mcp:linear:api-key", "-t", "tok"])
+        .unwrap();
+    // No "created without it" note: MCP secrets aren't offered to sandboxes as secrets.
+    let out = t.stdout();
+    assert!(
+        out.starts_with("Saved mcp:linear:api-key secret ("),
+        "{out}"
+    );
+    assert_eq!(out.lines().count(), 1, "{out}");
+    let file = SecretsFile::load(&t.ctx.paths).unwrap();
+    let entry = file
+        .secrets
+        .iter()
+        .find(|e| e.service == "mcp:linear:api-key")
+        .expect("an entry");
+    assert_eq!(entry.scope, crate::secrets::scope_for(None));
+    assert_eq!(
+        t.ctx.store.get(&entry.account()).unwrap().as_deref(),
+        Some("tok")
+    );
+    // Never bound to a sandbox as an ordinary secret.
+    assert!(
+        file.services_for("s1")
+            .iter()
+            .all(|s| !s.starts_with("mcp:") || file.service(s).is_none())
+    );
+    let err = t.sbt_err(&[
+        "secret",
+        "set",
+        "mcp:linear:api-key",
+        "--sandbox",
+        "s1",
+        "-t",
+        "x",
+    ]);
+    assert!(err.contains("MCP secrets are global"), "{err}");
+    for bad in ["mcp:linear", "mcp::k", "mcp:bad name:k", "mcp:linear:a b"] {
+        let err = t.sbt_err(&["secret", "set", bad, "-t", "x"]);
+        assert!(err.contains("mcp:<server>:<name>"), "{bad}: {err}");
+    }
+}
+
+#[test]
+fn registry_set_token_only_stores_value_and_entry() {
+    let mut t = test_env(&[]);
+    set_registry_from(&mut t, "Quay.IO", None, "tok\n").unwrap();
+    assert_eq!(
+        t.stdout(),
+        "Saved registry secret quay.io (host only, username (token-only))\n"
+    );
+    let f = SecretsFile::load(&t.ctx.paths).unwrap();
+    assert_eq!(f.registries.len(), 1);
+    assert_eq!(f.registries[0].host, "quay.io");
+    assert_eq!(f.registries[0].username, None);
+    assert_eq!(
+        crate::secrets::registry_secret(&*t.ctx.store, "quay.io")
+            .unwrap()
+            .as_deref(),
+        Some("tok")
+    );
+    let text = std::fs::read_to_string(t.ctx.paths.secrets_file()).unwrap();
+    assert!(
+        !text.contains("tok\n") && !text.contains("\"tok\""),
+        "{text}"
+    );
+}
+
+#[test]
+fn registry_set_with_username_and_replace() {
+    let mut t = test_env(&[]);
+    set_registry_from(&mut t, "ghcr.io", Some("me"), "one").unwrap();
+    assert_eq!(
+        t.stdout(),
+        "Saved registry secret ghcr.io (host only, username me)\n"
+    );
+    set_registry_from(&mut t, "ghcr.io", Some("me"), "two").unwrap();
+    let f = SecretsFile::load(&t.ctx.paths).unwrap();
+    assert_eq!(f.registries.len(), 1);
+    assert_eq!(f.registries[0].username.as_deref(), Some("me"));
+    assert_eq!(
+        t.ctx.store.get("registry:ghcr.io").unwrap().as_deref(),
+        Some("two")
+    );
+}
+
+#[test]
+fn registry_set_refuses_empty_input_and_bad_hosts() {
+    let mut t = test_env(&[]);
+    assert!(set_registry_from(&mut t, "ghcr.io", None, "\n").is_err());
+    assert!(set_registry_from(&mut t, "ghcr.io", None, "").is_err());
+    assert!(set_registry_from(&mut t, "https://ghcr.io/x", None, "t").is_err());
+    assert!(
+        SecretsFile::load(&t.ctx.paths)
+            .unwrap()
+            .registries
+            .is_empty()
+    );
+    assert_eq!(t.ctx.store.get("registry:ghcr.io").unwrap(), None);
+}
+
+#[test]
+fn registry_auth_endpoint_must_be_https() {
+    let t = test_env(&[]);
+    let mut file = SecretsFile::load(&t.ctx.paths).unwrap();
+    let mut set = |endpoint: &str| {
+        set_registry(
+            &t.ctx,
+            &mut file,
+            "quay.io",
+            None,
+            Some(endpoint.into()),
+            "tok".as_bytes(),
+        )
+    };
+    let e = set("http://auth.example.com/token").unwrap_err();
+    assert_eq!(
+        e.to_string(),
+        "--registry-auth-endpoint must be an https:// URL: http://auth.example.com/token"
+    );
+    assert!(set("auth.example.com/token").is_err());
+    assert_eq!(t.ctx.store.get("registry:quay.io").unwrap(), None);
+    set("https://auth.example.com/token").unwrap();
+    let f = SecretsFile::load(&t.ctx.paths).unwrap();
+    assert_eq!(
+        f.registries[0].auth_endpoint.as_deref(),
+        Some("https://auth.example.com/token")
+    );
+}
+
+#[test]
+fn registry_set_refuses_flags_it_would_ignore() {
+    let mut t = test_env(&[]);
+    for flag in [
+        &["--oauth"][..],
+        &["--refresh", "x"],
+        &["--no-verify"],
+        &["--show-error"],
+    ] {
+        let mut args = vec!["secret", "set", "--registry", "ghcr.io", "--password-stdin"];
+        args.extend_from_slice(flag);
+        let e = t.sbt(&args).unwrap_err();
+        assert!(e.to_string().contains(flag[0]), "{e}");
+    }
+    assert_eq!(t.ctx.store.get("registry:ghcr.io").unwrap(), None);
+}
+
+#[test]
+fn registry_rm_refuses_all_and_a_service() {
+    let mut t = test_env(&[]);
+    for extra in [&["--all"][..], &["github"]] {
+        let mut args = vec!["secret", "rm", "--registry", "ghcr.io"];
+        args.extend_from_slice(extra);
+        let e = t.sbt(&args).unwrap_err();
+        assert!(e.to_string().contains("--registry"), "{e}");
+    }
+}
+
+#[test]
+fn an_empty_username_is_token_only() {
+    let mut t = test_env(&[]);
+    set_registry_from(&mut t, "ghcr.io", Some(""), "tok").unwrap();
+    assert_eq!(
+        t.stdout(),
+        "Saved registry secret ghcr.io (host only, username (token-only))\n"
+    );
+    let f = SecretsFile::load(&t.ctx.paths).unwrap();
+    assert_eq!(f.registries[0].username, None);
+}
+
+#[test]
+fn registry_set_refusals() {
+    let mut t = test_env(&[]);
+    for extra in [&["--sandbox", "a1"][..], &["--all-sandboxes"][..]] {
+        let mut args = vec!["secret", "set", "--registry", "ghcr.io", "--password-stdin"];
+        args.extend_from_slice(extra);
+        let e = t.sbt(&args).unwrap_err();
+        assert!(e.downcast_ref::<Unsupported>().is_some(), "{e}");
+        assert!(e.to_string().contains("used for host pulls only"), "{e}");
+    }
+    let e = t
+        .sbt(&["secret", "set", "--registry", "ghcr.io"])
+        .unwrap_err();
+    assert!(e.to_string().contains("--password-stdin"), "{e}");
+    let e = t
+        .sbt(&["secret", "set", "--username", "u", "--password-stdin"])
+        .unwrap_err();
+    assert!(e.to_string().contains("--registry"), "{e}");
+}
+
+#[test]
+fn registry_ls_rows() {
+    let mut t = test_env(&[]);
+    t.sbt(&["secret", "ls"]).unwrap();
+    assert_eq!(t.stdout(), "No secrets\n");
+    set_registry_from(&mut t, "ghcr.io", Some("me"), "abcdefgh").unwrap();
+    t.stdout();
+    t.sbt(&["secret", "ls"]).unwrap();
+    let out = t.stdout();
+    assert!(out.contains("SCOPE") && out.contains("TYPE"), "{out}");
+    assert!(
+        out.contains("(host only)   registry   ghcr.io   (stored)"),
+        "{out}"
+    );
+    assert!(!out.contains("abcd"), "{out}");
+}
+
+#[test]
+fn registry_rm_removes_value_and_entry() {
+    let mut t = test_env(&[]);
+    set_registry_from(&mut t, "ghcr.io", None, "v").unwrap();
+    t.stdout();
+    t.sbt(&["secret", "rm", "--registry", "GHCR.io"]).unwrap();
+    assert_eq!(
+        t.stdout(),
+        "Removed registry secret ghcr.io ((host only))\n"
+    );
+    assert!(
+        SecretsFile::load(&t.ctx.paths)
+            .unwrap()
+            .registries
+            .is_empty()
+    );
+    assert_eq!(t.ctx.store.get("registry:ghcr.io").unwrap(), None);
+    let e = t
+        .sbt(&["secret", "rm", "--registry", "ghcr.io"])
+        .unwrap_err();
+    assert_eq!(e.to_string(), "no ghcr.io secret (host only)");
+    let e = t
+        .sbt(&["secret", "rm", "--registry", "ghcr.io", "--sandbox", "a"])
+        .unwrap_err();
+    assert!(e.downcast_ref::<Unsupported>().is_some(), "{e}");
+    let e = t
+        .sbt(&["secret", "rm", "--registry", "ghcr.io", "--all-sandboxes"])
+        .unwrap_err();
+    assert!(e.downcast_ref::<Unsupported>().is_some(), "{e}");
+}
+
+/// A login for `ghcr.io` scoped to sandbox `web`, as an environment file's `registries`.
+fn scoped_login(t: &TestEnv) {
+    let mut file = SecretsFile::load(&t.ctx.paths).unwrap();
+    let entry = RegistryEntry {
+        host: "ghcr.io".into(),
+        username: None,
+        auth_endpoint: None,
+        sandbox: Some("web".into()),
+    };
+    put_registry(&t.ctx, &mut file, entry, "scoped").unwrap();
+}
+
+const SCOPED_KEY: &str = "sandbox-registry:web/ghcr.io";
+
+#[test]
+fn registry_set_and_rm_leave_a_sandboxs_login_alone() {
+    let mut t = test_env(&[]);
+    scoped_login(&t);
+    set_registry_from(&mut t, "ghcr.io", None, "host-wide\n").unwrap();
+    let hosts = |t: &TestEnv| -> Vec<Option<String>> {
+        let f = SecretsFile::load(&t.ctx.paths).unwrap();
+        f.registries.into_iter().map(|r| r.sandbox).collect()
+    };
+    assert_eq!(hosts(&t), [Some("web".to_string()), None]);
+    t.sbt(&["secret", "rm", "--registry", "ghcr.io"]).unwrap();
+    assert_eq!(hosts(&t), [Some("web".to_string())]);
+    assert_eq!(
+        t.ctx.store.get(SCOPED_KEY).unwrap().as_deref(),
+        Some("scoped")
+    );
+    assert_eq!(t.ctx.store.get("registry:ghcr.io").unwrap(), None);
+}
+
+#[test]
+fn forgetting_everything_takes_a_sandboxs_login_too() {
+    let t = test_env(&[]);
+    scoped_login(&t);
+    forget_all(&t.ctx).unwrap();
+    assert_eq!(t.ctx.store.get(SCOPED_KEY).unwrap(), None);
+    assert!(
+        SecretsFile::load(&t.ctx.paths)
+            .unwrap()
+            .registries
+            .is_empty()
+    );
+}
+
+#[test]
+fn rm_all_clears_registries() {
+    let mut t = test_env(&[]);
+    set_registry_from(&mut t, "ghcr.io", None, "v").unwrap();
+    t.sbt(&["secret", "rm", "--all", "-f"]).unwrap();
+    assert!(
+        SecretsFile::load(&t.ctx.paths)
+            .unwrap()
+            .registries
+            .is_empty()
+    );
+    assert_eq!(t.ctx.store.get("registry:ghcr.io").unwrap(), None);
+}
+
+#[test]
+fn set_with_token_stores_the_value_in_the_store_only() {
+    let mut t = test_env(&[]);
+    t.sbt(&["secret", "set", "anthropic", "-t", "sk-1"])
+        .unwrap();
+    let f = SecretsFile::load(&t.ctx.paths).unwrap();
+    assert_eq!(f.secrets[0].source, Source::Keychain);
+    assert_eq!(
+        t.ctx.store.get("global/anthropic").unwrap().as_deref(),
+        Some("sk-1")
+    );
+    let text = std::fs::read_to_string(t.ctx.paths.secrets_file()).unwrap();
+    assert!(!text.contains("sk-1"), "{text}");
+}
+
+/// Runs `f` with the config dir read-only, so saving secrets.toml fails. Root ignores the
+/// mode, so these tests return early (pass vacuously) when run as root. The mode is restored
+/// even if `f` panics, so the tempdir can be cleaned up.
+#[cfg(unix)]
+fn with_read_only_config<T>(t: &mut TestEnv, f: impl FnOnce(&mut TestEnv) -> T) -> Option<T> {
+    use std::os::unix::fs::PermissionsExt;
+    struct Restore(std::path::PathBuf);
+    impl Drop for Restore {
+        fn drop(&mut self) {
+            let _ = std::fs::set_permissions(&self.0, std::fs::Permissions::from_mode(0o755));
+        }
+    }
+    // SAFETY: geteuid has no preconditions.
+    if unsafe { libc::geteuid() } == 0 {
+        return None;
+    }
+    let dir = t.ctx.paths.config.clone();
+    std::fs::set_permissions(&dir, std::fs::Permissions::from_mode(0o555)).unwrap();
+    let _restore = Restore(dir);
+    Some(f(t))
+}
+
+#[cfg(unix)]
+#[test]
+fn a_failed_save_doesnt_leave_the_value_behind() {
+    let mut t = test_env(&[]);
+    t.sbt(&["secret", "set", "github", "-t", "old"]).unwrap();
+    let Some((new, replaced, overwritten)) = with_read_only_config(&mut t, |t| {
+        (
+            t.sbt(&["secret", "set", "anthropic", "-t", "sk-1"]),
+            t.sbt(&["secret", "set", "github", "--command", "gh auth token"]),
+            t.sbt(&["secret", "set", "github", "-t", "new"]),
+        )
+    }) else {
+        return;
+    };
+    assert!(new.is_err() && replaced.is_err() && overwritten.is_err());
+    assert_eq!(t.ctx.store.get("global/anthropic").unwrap(), None);
+    // The entry still says the value is stored, so the old value must still be there.
+    assert_eq!(
+        t.ctx.store.get("global/github").unwrap().as_deref(),
+        Some("old")
+    );
+}
+
+#[cfg(unix)]
+#[test]
+fn a_failed_save_keeps_removed_values() {
+    let mut t = test_env(&[]);
+    t.sbt(&["secret", "set", "github", "-t", "g"]).unwrap();
+    t.sbt(&["secret", "set", "openai", "-t", "o", "--sandbox", "a1"])
+        .unwrap();
+    let Some(results) = with_read_only_config(&mut t, |t| {
+        [
+            t.sbt(&["secret", "rm", "github"]).map(drop),
+            t.sbt(&["secret", "rm", "--all", "-f"]).map(drop),
+            forget_sandbox(&t.ctx, "a1", true),
+            forget_all(&t.ctx),
+        ]
+    }) else {
+        return;
+    };
+    assert!(results.iter().all(Result::is_err), "{results:?}");
+    assert_eq!(
+        t.ctx.store.get("global/github").unwrap().as_deref(),
+        Some("g")
+    );
+    assert_eq!(
+        t.ctx.store.get("sandbox:a1/openai").unwrap().as_deref(),
+        Some("o")
+    );
+}
+
+#[test]
+fn set_ref_command_and_sandbox_scope() {
+    let mut t = test_env(&[]);
+    t.sbt(&[
+        "secret",
+        "set",
+        "claude",
+        "--ref",
+        "op://P/c/credential",
+        "--sandbox",
+        "a1",
+    ])
+    .unwrap();
+    t.sbt(&["secret", "set", "github", "--command", "gh auth token"])
+        .unwrap();
+    let f = SecretsFile::load(&t.ctx.paths).unwrap();
+    assert_eq!(
+        f.entry_for("a1", None, "claude").unwrap().scope,
+        "sandbox:a1"
+    );
+    assert!(matches!(
+        f.entry_for("x", None, "github").unwrap().source,
+        Source::Command { .. }
+    ));
+}
+
+#[test]
+fn set_ref_accepts_any_aws_partition() {
+    let mut t = test_env(&[]);
+    let arn = "arn:aws-us-gov:secretsmanager:us-gov-west-1:123:secret:x";
+    t.sbt(&["secret", "set", "github", "--ref", arn]).unwrap();
+    let f = SecretsFile::load(&t.ctx.paths).unwrap();
+    assert_eq!(
+        f.entry_for("x", None, "github").unwrap().source,
+        Source::Ref {
+            reference: arn.into()
+        }
+    );
+    let err = t
+        .sbt(&["secret", "set", "github", "--ref", "arn:aws:s3:::bucket"])
+        .unwrap_err();
+    assert!(err.to_string().contains("unsupported reference"), "{err}");
+}
+
+#[test]
+fn set_errors() {
+    let mut t = test_env(&[]);
+    assert!(
+        t.sbt_err(&["secret", "set", "nope", "-t", "x"])
+            .contains("unknown service")
+    );
+    assert!(
+        t.sbt(&["secret", "set", "github", "-t", "x", "--command", "y"])
+            .is_err()
+    );
+    assert!(
+        t.sbt(&["secret", "set", "github", "--ref", "vault://x"])
+            .is_err()
+    );
+    assert!(
+        t.sbt_err(&["secret", "set", "github"])
+            .contains("no terminal")
+    );
+    assert!(
+        t.sbt_err(&["secret", "set", "github", "-t", ""])
+            .contains("empty value")
+    );
+    let err = t.sbt(&["secret", "set", "github", "--oauth"]).unwrap_err();
+    assert_eq!(super::super::exit_code(&err), 2);
+}
+
+#[test]
+fn value_stdin_reads_the_value_from_stdin() {
+    let mut t = test_env(&[]);
+    t.answer("s3cret\n");
+    t.sbt(&["secret", "set", "github", "--value-stdin"])
+        .unwrap();
+    assert_eq!(
+        t.ctx.store.get("global/github").unwrap().as_deref(),
+        Some("s3cret"),
+        "one trailing newline is dropped"
+    );
+    let err = t
+        .sbt(&["secret", "set", "github", "--value-stdin", "-t", "x"])
+        .unwrap_err();
+    assert!(err.to_string().contains("pass only one"), "{err}");
+}
+
+#[test]
+fn replacing_a_stored_value_with_a_command_deletes_the_value() {
+    let mut t = test_env(&[]);
+    t.sbt(&["secret", "set", "github", "-t", "v"]).unwrap();
+    assert!(t.ctx.store.get("global/github").unwrap().is_some());
+    t.sbt(&["secret", "set", "github", "--command", "x"])
+        .unwrap();
+    assert_eq!(t.ctx.store.get("global/github").unwrap(), None);
+}
+
+#[test]
+fn set_custom_defines_a_service() {
+    let mut t = test_env(&[]);
+    t.sbt(&[
+        "secret",
+        "set-custom",
+        "--host",
+        "httpbin.org",
+        "--env",
+        "TOK",
+        "-t",
+        "v",
+    ])
+    .unwrap();
+    let f = SecretsFile::load(&t.ctx.paths).unwrap();
+    assert_eq!(f.service("tok").unwrap().hosts, vec!["httpbin.org"]);
+    let err = t
+        .sbt(&[
+            "secret",
+            "set-custom",
+            "--host",
+            "x.com",
+            "--env",
+            "OPENAI_API_KEY",
+            "-t",
+            "v",
+        ])
+        .unwrap_err();
+    assert!(err.to_string().contains("openai"), "{err}");
+}
+
+#[test]
+fn set_custom_hosts_must_be_bare_host_names() {
+    for (host, says) in [
+        (
+            "https://api.x.com/v1",
+            "use a bare host name like api.x.com",
+        ),
+        ("api.x.com/v1", "use a bare host name like api.x.com"),
+        ("api.x.com:443", "use a bare host name like api.x.com"),
+        ("tok@api.x.com", "use a bare host name like api.x.com"),
+        ("a.com,b.com", "use a bare host name like api.x.com"),
+        ("*", "wildcard"),
+        ("*.com", "wildcard"),
+        ("**.x.com", "wildcard"),
+        ("api.*.com", "wildcard"),
+        ("api.?.com", "wildcard"),
+        ("*.-x.com", "invalid host"),
+        (
+            "10.0.0.1",
+            "smolvm only substitutes secrets for host names, not IP addresses",
+        ),
+        ("::1", "not IP addresses"),
+        ("[::1]", "not IP addresses"),
+        ("-bad.x.com", "invalid host"),
+        ("a..com", "invalid host"),
+        ("", "invalid host"),
+    ] {
+        let err = custom_hosts(&[host.to_string()]).unwrap_err().to_string();
+        assert!(err.contains(says), "{host}: {err}");
+    }
+    let mut t = test_env(&[]);
+    let err = t.sbt_err(&[
+        "secret",
+        "set-custom",
+        "--host",
+        "https://api.x.com/v1",
+        "--env",
+        "TOK",
+        "-t",
+        "v",
+    ]);
+    assert!(
+        err.contains("use a bare host name like api.x.com (no scheme, port or path)"),
+        "{err}"
+    );
+    let f = SecretsFile::load(&t.ctx.paths).unwrap();
+    assert!(f.custom.is_empty() && f.secrets.is_empty());
+    assert_eq!(t.ctx.store.get("global/tok").unwrap(), None);
+}
+
+#[test]
+fn set_custom_hosts_are_lowercased_and_deduped() {
+    assert_eq!(
+        custom_hosts(&[
+            " API.X.com ".to_string(),
+            "api.x.com.".to_string(),
+            "b.x.com".to_string(),
+            "api.x.com".to_string(),
+            "*.Notion.com".to_string(),
+            "*.notion.com".to_string(),
+        ])
+        .unwrap(),
+        vec!["api.x.com", "b.x.com", "*.notion.com"]
+    );
+}
+
+#[test]
+fn set_custom_env_must_be_a_variable_name() {
+    let mut t = test_env(&[]);
+    for env in ["1TOK", "MY-TOKEN", "TOK=1", "", "TÖK"] {
+        let err = t.sbt_err(&[
+            "secret",
+            "set-custom",
+            "--host",
+            "api.x.com",
+            "--env",
+            env,
+            "-t",
+            "v",
+        ]);
+        assert!(err.contains("isn't a valid env var name"), "{env}: {err}");
+    }
+    assert!(SecretsFile::load(&t.ctx.paths).unwrap().custom.is_empty());
+}
+
+#[test]
+fn ls_and_rm() {
+    let mut t = test_env(&[]);
+    t.sbt(&["secret", "set", "anthropic", "-t", "sk-1"])
+        .unwrap();
+    t.sbt(&[
+        "secret",
+        "set",
+        "github",
+        "--command",
+        "gh auth token",
+        "--sandbox",
+        "a1",
+    ])
+    .unwrap();
+    t.stdout();
+    t.sbt(&["secret", "ls"]).unwrap();
+    insta::assert_snapshot!(t.stdout());
+    t.sbt(&["secret", "rm", "anthropic"]).unwrap();
+    assert_eq!(t.ctx.store.get("global/anthropic").unwrap(), None);
+    assert!(t.sbt_err(&["secret", "rm", "--all"]).contains("pass -f"));
+    t.sbt(&["secret", "rm", "--all", "-f"]).unwrap();
+    assert!(SecretsFile::load(&t.ctx.paths).unwrap().secrets.is_empty());
+}
+
+#[test]
+fn ls_as_json_has_sbxs_shape() {
+    let mut t = test_env(&[]);
+    t.sbt(&["secret", "ls", "--json"]).unwrap();
+    assert_eq!(
+        t.stdout(),
+        "{\n  \"secrets\": [],\n  \"custom_secrets\": [],\n  \"shadowed_services\": [],\n  \"env_only_count\": 0\n}\n"
+    );
+    t.sbt(&["secret", "set", "github", "--sandbox", "s1", "-t", "x"])
+        .unwrap();
+    t.stdout();
+    t.sbt(&["secret", "ls", "--json"]).unwrap();
+    let v: serde_json::Value = serde_json::from_str(&t.stdout()).unwrap();
+    assert_eq!(
+        v["secrets"],
+        serde_json::json!([{"scope": "s1", "type": "service", "name": "github", "secret": "(stored)"}])
+    );
+}
+
+#[test]
+fn ls_of_a_fork_includes_its_originals_secrets() {
+    let mut t = test_env(&[]);
+    for args in [
+        &["anthropic", "-t", "g"][..],
+        &["github", "-t", "p", "--sandbox", "aa"][..],
+        &["openai", "-t", "p", "--sandbox", "aa"][..],
+        &["openai", "-t", "f", "--sandbox", "aa-fork-1"][..],
+        &["claude", "-t", "o", "--sandbox", "other"][..],
+    ] {
+        let mut full = vec!["secret", "set"];
+        full.extend_from_slice(args);
+        t.sbt(&full).unwrap();
+    }
+    let fake = t.runner();
+    fake.ok(
+        &["machine", "status", "-n", "sbx-aa-fork-1"],
+        &machine_json(
+            "sbx-aa-fork-1",
+            "running",
+            &[("sbx.name", "aa-fork-1"), ("sbx.fork-of", "aa")],
+        ),
+    );
+    t.stdout();
+    let ls = |t: &mut TestEnv, args: &[&str]| {
+        let mut full = vec!["secret", "ls"];
+        full.extend_from_slice(args);
+        t.sbt(&full).unwrap();
+        t.stdout()
+    };
+    // Own, the original's (but not where the fork has its own) and global; the original is
+    // looked up from the fork's labels.
+    assert_eq!(
+        ls(&mut t, &["-q", "--sandbox", "aa-fork-1"]),
+        "anthropic\ngithub\nopenai\n"
+    );
+    let table = ls(&mut t, &["--sandbox", "aa-fork-1"]);
+    assert!(table.contains("sandbox:aa"), "{table}");
+    assert!(!table.contains("sandbox:other"), "{table}");
+    // A sandbox that isn't a fork sees only its own and the global ones.
+    t.runner().ok(
+        &["machine", "status", "-n", "sbx-plain"],
+        &machine_json("sbx-plain", "running", &[("sbx.name", "plain")]),
+    );
+    assert_eq!(ls(&mut t, &["-q", "--sandbox", "plain"]), "anthropic\n");
+}
+
+#[test]
+fn ls_for_a_sandbox_works_when_smolvm_cannot_be_asked() {
+    let mut t = test_env(&[]);
+    t.runner()
+        .fail(&["machine", "status"], "SMOLVM_ERROR", "boom");
+    let mut f = SecretsFile::default();
+    for scope in [None, Some("aa")] {
+        f.set(SecretEntry {
+            service: "github".into(),
+            scope: scope_for(scope),
+            source: Source::Keychain,
+        });
+    }
+    f.save(&t.ctx.paths).unwrap();
+    t.sbt(&["secret", "ls", "-q", "--sandbox", "aa-fork-1"])
+        .unwrap();
+    assert_eq!(t.stdout(), "github\n");
+}
+
+#[test]
+fn rm_of_the_last_custom_entry_drops_its_definition() {
+    let mut t = test_env(&[]);
+    for scope in [&[][..], &["--sandbox", "a1"][..]] {
+        let mut args = vec![
+            "secret",
+            "set-custom",
+            "--host",
+            "httpbin.org",
+            "--env",
+            "TOK",
+            "-t",
+            "v",
+        ];
+        args.extend_from_slice(scope);
+        t.sbt(&args).unwrap();
+    }
+    t.sbt(&["secret", "rm", "tok"]).unwrap();
+    let f = SecretsFile::load(&t.ctx.paths).unwrap();
+    assert!(f.service("tok").is_some(), "a1 still uses it");
+    t.sbt(&["secret", "rm", "tok", "--sandbox", "a1"]).unwrap();
+    let f = SecretsFile::load(&t.ctx.paths).unwrap();
+    assert!(f.custom.is_empty(), "{:?}", f.custom);
+    assert!(f.service("tok").is_none());
+}
+
+#[test]
+fn rm_sandbox_forgets_its_secrets_and_policy() {
+    let mut t = test_env(&[]);
+    t.sbt(&["secret", "set", "github", "-t", "g", "--sandbox", "a1"])
+        .unwrap();
+    let mut p = crate::policy::Policy::load(&t.ctx.paths).unwrap();
+    p.add_rule(
+        Some("a1"),
+        crate::policy::Decision::Deny,
+        "evil.com",
+        "added",
+        None,
+        None,
+    )
+    .unwrap();
+    p.save(&t.ctx.paths).unwrap();
+    let a1 = machine_json("sbx-a1", "stopped", &[("sbx.name", "a1")]);
+    t.runner().ok(&["machine", "status"], &a1);
+    t.runner()
+        .ok(&["machine", "ls", "--json"], &format!("[{a1}]"));
+    t.sbt(&["rm", "-f", "a1"]).unwrap();
+    assert!(SecretsFile::load(&t.ctx.paths).unwrap().secrets.is_empty());
+    assert_eq!(t.ctx.store.get("sandbox:a1/github").unwrap(), None);
+    assert!(
+        crate::policy::Policy::load(&t.ctx.paths)
+            .unwrap()
+            .sandboxes
+            .is_empty()
+    );
+}
+
+#[test]
+fn reset_preserves_secrets_only_when_asked() {
+    let mut t = test_env(&[]);
+    t.runner().ok(&["machine", "ls", "--json"], "[]");
+    t.sbt(&["secret", "set", "anthropic", "-t", "sk-1"])
+        .unwrap();
+    t.sbt(&["reset", "-f", "--preserve-secrets"]).unwrap();
+    assert_eq!(SecretsFile::load(&t.ctx.paths).unwrap().secrets.len(), 1);
+    t.sbt(&["reset", "-f"]).unwrap();
+    assert!(SecretsFile::load(&t.ctx.paths).unwrap().secrets.is_empty());
+    assert_eq!(t.ctx.store.get("global/anthropic").unwrap(), None);
+}

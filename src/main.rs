@@ -8,7 +8,7 @@ fn main() -> ExitCode {
     match smolbento::cli::main(std::env::args_os()) {
         Ok(code) => ExitCode::from(u8::try_from(code).unwrap_or(1)),
         Err(err) => {
-            eprintln!("bento: {err:#}");
+            eprintln!("error: {err:#}");
             if let Some(hint) = smolbento::cli::hint(&err) {
                 eprintln!("hint: {hint}");
             }

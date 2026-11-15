@@ -144,7 +144,7 @@ pub fn dispatch<R: Runner>(ctx: &mut Ctx<R>, cli: Cli) -> Result<i32> {
     }
     if let Some(err) = &ctx.config_error {
         let path = ctx.paths.config_file();
-        if !matches!(cmd, Cmd::Diagnose | Cmd::Settings(_)) {
+        if !matches!(cmd, Cmd::Diagnose(_) | Cmd::Settings(_)) {
             bail!("{}: {err}", path.display());
         }
         if matches!(cmd, Cmd::Settings(_)) {
@@ -165,16 +165,16 @@ pub fn dispatch<R: Runner>(ctx: &mut Ctx<R>, cli: Cli) -> Result<i32> {
         Cmd::Ls(a) => ls::run(ctx, &a),
         Cmd::Inspect(a) => inspect::run(ctx, &a),
         Cmd::Start { sandboxes } => lifecycle::start(ctx, &sandboxes),
-        Cmd::Stop { sandboxes } => lifecycle::stop(ctx, &sandboxes),
+        Cmd::Stop { sandboxes, output } => lifecycle::stop(ctx, &sandboxes, &output),
         Cmd::Rm(a) => lifecycle::rm(ctx, &a),
         Cmd::Prune(a) => lifecycle::prune(ctx, &a),
         Cmd::Reset(a) => lifecycle::reset(ctx, &a),
-        Cmd::Version => version(ctx),
+        Cmd::Version(o) => version(ctx, &o),
         Cmd::Completion { shell } => {
             clap_complete::generate(shell, &mut Cli::command(), &ctx.program, &mut &ctx.out);
             Ok(0)
         }
-        Cmd::Diagnose => diagnose::run(ctx),
+        Cmd::Diagnose(o) => diagnose::run(ctx, &o),
         Cmd::Settings(s) => settings::run(ctx, s),
         Cmd::Policy(p) => policy::run(ctx, p),
         Cmd::Secret(s) => secret::run(ctx, s),
@@ -218,10 +218,20 @@ fn pending(cmd: &str) -> Result<i32> {
     Err(Unsupported(format!("`bento {cmd}` is not implemented yet")).into())
 }
 
-fn version<R: Runner>(ctx: &Ctx<R>) -> Result<i32> {
+fn version<R: Runner>(ctx: &Ctx<R>, output: &OutputArgs) -> Result<i32> {
     let mut out = &ctx.out;
+    let smolvm = ctx.vm.version();
+    // sbx's shape has `client` and `server`; smolbento has no server, and names its smolvm.
+    let doc = serde_json::json!({
+        "client": { "version": concat!("v", env!("CARGO_PKG_VERSION")) },
+        "smolvm": { "version": smolvm.as_ref().ok().map(|v| format!("v{v}")) },
+    });
+    if let Some(text) = output.structured(&doc)? {
+        write!(out, "{text}")?;
+        return Ok(0);
+    }
     writeln!(out, "smolbento version v{}", env!("CARGO_PKG_VERSION"))?;
-    match ctx.vm.version() {
+    match smolvm {
         Ok(v) => writeln!(out, "smolvm version v{v}")?,
         Err(e) => writeln!(out, "smolvm not available: {e:#}")?,
     }
@@ -249,9 +259,11 @@ pub fn confirm<R: Runner>(ctx: &Ctx<R>, question: &str, force: bool) -> Result<(
     if !ctx.can_prompt() {
         bail!("{question} Refusing without a terminal; pass -f to confirm");
     }
-    let mut out = &ctx.out;
-    write!(out, "{question} [y/N] ")?;
-    out.flush()?;
+    // A question, not command output: stderr, so stdout stays clean for `--json` and pipes.
+    let mut err = std::io::stderr().lock();
+    write!(err, "{question} [y/N] ")?;
+    err.flush()?;
+    drop(err);
     if is_yes(&ctx.read_line()?) {
         Ok(())
     } else {
@@ -367,6 +379,20 @@ mod tests {
             assert!(format!("{err:#}").contains("checksum"), "{args:?}: {err:#}");
             assert_eq!(seen.lock().unwrap().len(), 1, "{args:?}");
         }
+    }
+
+    #[test]
+    fn version_as_json_names_both_versions() {
+        let mut t = test_env(&[]);
+        t.sbt(&["version", "--json"]).unwrap();
+        let v: serde_json::Value = serde_json::from_str(&t.stdout()).unwrap();
+        assert_eq!(
+            v["client"]["version"],
+            concat!("v", env!("CARGO_PKG_VERSION"))
+        );
+        assert_eq!(v["smolvm"]["version"], "v1.35.1");
+        t.sbt(&["version"]).unwrap();
+        assert!(t.stdout().starts_with("smolbento version v"));
     }
 
     #[test]

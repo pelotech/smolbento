@@ -48,7 +48,7 @@ smolbento-only:
 
 | | sbx | smolbento |
 |---|---|---|
-| Config block | `# >>> docker sandboxes (managed) >>>` in `~/.ssh/config`, `ProxyCommand "sbx" ssh proxy %n`, `KnownHostsCommand`, `UserKnownHostsFile ~/.ssh/sbx_known_hosts`, `StrictHostKeyChecking yes` | Own markers `# >>> smolbento (managed) >>>`, so it never edits sbx's block (`setup ssh` warns when both exist: the first `Host *.sbx` wins). Added at the top of the file, ending with `Host *` so your own top-level options keep their scope. The same options, except `StrictHostKeyChecking no`, `UserKnownHostsFile /dev/null` and `LogLevel ERROR` replace the known-hosts ones: the server is `bento ssh proxy`, a child process of `ssh` on a pipe, so there is no network path to impersonate and a host key protects nothing. There is no `ssh known-hosts` command and no host key file; each connection uses a new key. `ProxyCommand` uses absolute paths, `'<bento>' ssh proxy %n` (prefixed with `env SMOLBENTO_SMOLVM=… SMOLBENTO_SMOLVM_HOME=…` for the ones you set), found when you run `setup ssh` (an IDE started from the Dock runs it with a minimal PATH); run it again after moving either. No `IdentityAgent none` (IDEs such as IntelliJ warn about it; `IdentityFile /dev/null` and `IdentitiesOnly yes` already keep keys out) |
+| Config block | `# >>> docker sandboxes (managed) >>>` in `~/.ssh/config`, `ProxyCommand "sbx" ssh proxy %n`, `KnownHostsCommand`, `UserKnownHostsFile ~/.ssh/sbx_known_hosts`, `StrictHostKeyChecking yes` | Own markers `# >>> smolbento (managed) >>>`, so it never edits sbx's block (`setup ssh` warns when both exist: the first `Host *.sbx` wins). More below. |
 | `setup ssh remove` | Removes the block | Same; touches nothing outside our markers |
 | `--auto-create` | Adds desktop app connections | Not supported |
 | Sessions | The daemon terminates SSH; an unknown sandbox is an error; a stopped one is started | Same, in the `ProxyCommand` process. The shell is the session user's login shell in the workspace, on a pty from your terminal |
@@ -56,6 +56,17 @@ smolbento-only:
 | SFTP, `scp`, agent forwarding, X11, remote forwarding | Not documented | Refused |
 | `env` requests | Acknowledged and ignored | Same |
 | Signals, exit signals | Not documented | A signal sent over SSH isn't delivered; a command killed by signal `n` exits with `128+n` |
+
+- **Config block:** Added at the top of the file, ending with `Host *` so your own top-level options
+  keep their scope. The same options, except `StrictHostKeyChecking no`, `UserKnownHostsFile
+  /dev/null` and `LogLevel ERROR` replace the known-hosts ones: the server is `bento ssh proxy`, a
+  child process of `ssh` on a pipe, so there is no network path to impersonate and a host key
+  protects nothing. There is no `ssh known-hosts` command and no host key file; each connection uses
+  a new key. `ProxyCommand` uses absolute paths, `'<bento>' ssh proxy %n` (prefixed with `env
+  SMOLBENTO_SMOLVM=… SMOLBENTO_SMOLVM_HOME=…` for the ones you set), found when you run `setup ssh`
+  (an IDE started from the Dock runs it with a minimal PATH); run it again after moving either. No
+  `IdentityAgent none` (IDEs such as IntelliJ warn about it; `IdentityFile /dev/null` and
+  `IdentitiesOnly yes` already keep keys out)
 
 ## Differences you'll notice
 
@@ -67,7 +78,7 @@ smolbento-only:
 | `secret set-custom --host` | Exact host, IP or wildcard pattern | Exact host, or `*.domain` for any depth (not the apex). Other wildcards and IPs are refused: smolvm substitutes secrets only for host names |
 | Policy changes | Live everywhere | Live, except: switching a running sandbox between allow-all and a restricted mode applies on its next start, and deny-CIDR rules apply only to sandboxes created afterwards |
 | Approvals | Queue | Derived from smolvm's blocked-request (egress) log; the host is the approval id |
-| Host services | Per-port `host.docker.internal` when the policy allows `localhost:PORT`, live; a blocked request gets `403 Approval required…` | Live `host.docker.internal`, but a `localhost` rule opens **every** port on the host's `127.0.0.1` (smolvm can't open one port), not `::1`. Only sandboxes created while a `localhost` rule applied get it; others need recreating. Kit rules never grant it, and `_builder` never has it. A blocked request gets connection refused, with no approval entry. Under allow-all the host's LAN IP is reachable, so services on `0.0.0.0` are too (sbx blocks this). See [Security](SECURITY.md#host-services-localhost-rules) |
+| Host services | Per-port `host.docker.internal` when the policy allows `localhost:PORT`, live; a blocked request gets `403 Approval required…` | Live `host.docker.internal`, but a `localhost` rule opens **every** port on the host's `127.0.0.1` (smolvm can't open one port), not `::1`. More below. |
 | Published ports | Any host IP | Loopback only: `127.0.0.1` and `[::1]` |
 | Automatic publishing | None: ports are published on request (`sbx ports --publish`) | None. smolvm's `--auto-ports` (publish every port a guest listens on) isn't used: sbx publishes on request, and auto-publishing would open ports without the user asking |
 | Single-file `:ro` mounts | Supported | Directories only (smolvm mounts directories) |
@@ -82,11 +93,28 @@ smolbento-only:
 | Install-phase kit rules in `policy ls` | Not listed after create | Never listed, even while a create installs (they're in effect then) |
 | `inspect` | Also `id`, CPUs, memory, uptime, image digest, auth mode, network, mount and proxy policy, runtime mounts, MCP gateway, daemon | Those are left out (a sandbox is known by its name; smolvm has no other ID). The rest matches sbx's layout and JSON keys, `created_at` and `created_version` (`Created with:`) included; sandboxes from before 0.27 have no `created_version` |
 | Default name held by another directory | `create` refuses (`sandbox name … is already used by workspace …; pass --name …`); `run` reattaches to the current directory's sandbox (0.53) | Same, and the refusal suggests a name (`such as --name <agent>-<parent>-<directory>`). smolbento-only `sandbox.autoName` takes it instead of refusing. `run` finds this directory's sandbox by its workspace and agent |
-| `reset` | Resets to a freshly installed state: stops and deletes sandboxes, clears the image cache, policy, the managed SSH config, secrets (unless `--preserve-secrets`), and all state, cache and config directories; also signs out, stops the daemon and clears Gordon's history | Same: sandboxes (and smolbento's leftovers in smolvm's default location, never machines without its labels), `~/.smolbento` (smolvm's state, images and the downloaded smolvm), the SSH config block, background services, and smolbento's config, cache and data directories (kit host-mount directories included). No sign-out, daemon or Gordon |
+| `reset` | Resets to a freshly installed state: stops and deletes sandboxes, clears the image cache, policy, the managed SSH config, secrets (unless `--preserve-secrets`), and all state, cache and config directories; also signs out, stops the daemon and clears Gordon's history | Same: sandboxes (and smolbento's leftovers in smolvm's default location, never machines without its labels), `~/.smolbento` (smolvm's state, images and the downloaded smolvm), the SSH config block, background services, and smolbento's config, cache and data directories (kit host-mount directories included). More below. |
 | Progress output | A line per image layer | No per-layer lines. The pull shows a percentage, and the image step reads `preparing` until smolvm reports a pull (a cached image has none). CPU and Memory print before a kit's `resources@1`. A kit's "cached" label is approximate when pulls or builds overlap. On a terminal, a step's detail stays on the step's line, and a warning follows the step's last drawn line |
-| Browser and clipboard | Shims post to the daemon's proxy with `curl` and `jq`; copies work from any `exec`; image paste behind `clipboard.imagePaste`; `SBX_HOST_SESSION_ID` routes requests | Same shims and texts over a socket smolvm mounts at `/run/smolbento/bridge.sock`, with `curl` only. Copying is off until `clipboard.textCopy` is `true`, as in sbx 0.51. Served by a launchd or `systemd --user` unit whenever the sandbox runs; without a usable service manager, only while attached (`run`, `exec -it`), and then URLs print the fallback and copies fail otherwise. No image paste. sbx doesn't read clipboard text either. No `SBX_HOST_SESSION_ID`: with units each connection is served alone; attached-only serving: the first attached session. Forks keep the parent's socket, so they use its bridge while it is served. Login relay: `curl -g --noproxy '*'` with 10-second timeouts (`wget` for a `GET`); no request body (`form_post` callbacks lose theirs); text responses only; at most 4 ports per session (with units, per connection), each for 10 minutes. See [Usage](usage.md#browser-and-clipboard) |
+| Browser and clipboard | Shims post to the daemon's proxy with `curl` and `jq`; copies work from any `exec`; image paste behind `clipboard.imagePaste`; `SBX_HOST_SESSION_ID` routes requests | Same shims and texts over a socket smolvm mounts at `/run/smolbento/bridge.sock`, with `curl` only. Copying is off until `clipboard.textCopy` is `true`, as in sbx 0.51. More below. |
 | Command aliases | `ls`, `rm`/`delete`, `secret ls`/`rm`/`delete`/`unset`, `settings ls`, `template ls`/`list`, `template rm`/`remove`/`delete` | Implemented. `volume` aliases come with that command |
-| `--version` | `sbx version vX` | `bento --version` prints `bento X`; `bento version` also shows the smolvm version |
+| `--version` | `sbx version vX <revision>` | `bento version vX` (no revision); `bento version` also shows the smolvm version |
+| Errors | `error: …`, and a missing sandbox adds `  try: sbx ls` on its own line | Same, with `bento`. Other suggestions are still inline (``(see `bento mcp ls`)``) |
+| `--format`, `--json` | On every command that prints something | Same shapes and key order on `ls`, `inspect`, `ports`, `stop`, `rm`, `prune`, `diagnose`, `settings ls`/`get`, `secret ls`, `policy check network`. `version --json` has `client` and `smolvm` (sbx: `client` and `server`). `diagnose --json` checks have empty `detail` and `hint`. `settings` values are `bool` or `string`. `policy check` adds `reason`. `prune --json` works only with `--dry-run`, as in sbx (the same error otherwise): `would_remove` rows have `name`, `agent`, `mounts` and `workspaces` (no `stopped_at`: smolvm doesn't record it), then `skipped_unknown_stop` (always empty) and smolbento's `host_services`. `ports --publish --json` prints the ports it published (not measured on sbx). A command that fails partway still prints what it did. `-q` wins over `--json`. Confirmation prompts go to stderr. `stop`, `rm` and `prune` print `Stopped sandbox NAME` and `Removed sandbox NAME`, as sbx does. Not on `template inspect` (not implemented) |
+
+- **Host services:** Only sandboxes created while a `localhost` rule applied get it; others need
+  recreating. Kit rules never grant it, and `_builder` never has it. A blocked request gets
+  connection refused, with no approval entry. Under allow-all the host's LAN IP is reachable, so
+  services on `0.0.0.0` are too (sbx blocks this). See
+  [Security](SECURITY.md#host-services-localhost-rules)
+- **`reset`:** No sign-out, daemon or Gordon
+- **Browser and clipboard:** Served by a launchd or `systemd --user` unit whenever the sandbox runs;
+  without a usable service manager, only while attached (`run`, `exec -it`), and then URLs print the
+  fallback and copies fail otherwise. No image paste. sbx doesn't read clipboard text either. No
+  `SBX_HOST_SESSION_ID`: with units each connection is served alone; attached-only serving: the
+  first attached session. Forks keep the parent's socket, so they use its bridge while it is served.
+  Login relay: `curl -g --noproxy '*'` with 10-second timeouts (`wget` for a `GET`); no request body
+  (`form_post` callbacks lose theirs); text responses only; at most 4 ports per session (with units,
+  per connection), each for 10 minutes. See [Usage](usage.md#browser-and-clipboard)
 
 ## Skills
 
@@ -171,7 +199,7 @@ and `pullPolicy: always`.
 | Plan after a plain `rm` | Lines end `— recorded as applied, no longer present` | A bare `+` |
 | A local kit's contents | Not measured | Not part of the approval; the plan names the kit's path |
 | `refresh`, `backend` on a secret | Used | Accepted, no effect: smolbento resolves at every start |
-| `secret ls` with registry credentials | `SECRET` shows the first characters | A separate `SCOPE TYPE NAME SECRET` table; `SECRET` is always `(stored)`. No `--json` on `secret ls` yet |
+| `secret ls` with registry credentials | `SECRET` shows the first characters | A separate `SCOPE TYPE NAME SECRET` table; `SECRET` is always `(stored)`. In `--json` they are `secrets` rows of type `registry` |
 | Workload kit as `agent` | The kit whose name equals `agent` | A local kit matches by directory name; a registry kit by the last part of its repository name |
 | Secret `command:` source | Runs on the host | Runs from a fresh temporary directory, so a relative helper path fails (also for `secret set --command`) |
 | `mounts:` path no kit declares | Error includes `remove this environment's sandbox and provisioned secrets` and `try: sbx env rm`; checked after the kit image is prepared | First sentence only (secrets are stored by then, and `env rm` removes them); checked before a registry kit's image is prepared |
@@ -346,7 +374,7 @@ with `-D`).
 | Kit archives | `kit pack`'s ZIP and pushed layer are byte-stable | Deterministic but not byte-identical (Go and Rust deflate differ), so each tool gives the same kit a different digest. The ZIP stores entries uncompressed |
 | `kit push` | HTTPS only; every push attaches a provenance referrer | Plain HTTP for loopback registries. No provenance yet. Prints `Pushed REF (sha256:…)`. Needs a tag. Logs in with `bento secret set --registry` credentials, else the host's docker login |
 | `kit pull` | Saves the files layer as `<repo>-<tag>.tar.gz` | With a digest, the default name is `<repo>-<first 12 hex>.tar.gz` (sbx's not measured). Other artifacts, including v3 image kits, are refused (`… is not a v2 kit artifact`). `kit.allowedSources` applies to `pull`, not `push` |
-| `kit sign`, `kit verify`, `kit push --sign` | Sigstore bundles as `application/vnd.docker.sandbox.kit.signature.v1` referrers; keyless (Fulcio and Rekor) or `--key` (unencrypted PEM, no Rekor upload) | Same bundles and referrers, made and checked by `cosign` (must be on PATH; `--key` PEM is imported into a private temp directory). Registries without the referrers API get the `sha256-<hex>` tag index, which sbx reads. A local directory (`kit.sig.bundle`) and `--tlog-upload=false` are refused (exit 2). `verify --key` checks no transparency log entry. `push --sign` attaches no provenance. `sign` prints `Signed REF`; keyless `verify` prints the identity and issuer you gave, not the certificate's |
+| `kit sign`, `kit verify`, `kit push --sign` | Sigstore bundles as `application/vnd.docker.sandbox.kit.signature.v1` referrers; keyless (Fulcio and Rekor) or `--key` (unencrypted PEM, no Rekor upload) | Same bundles and referrers, made and checked by `cosign` (must be on PATH; `--key` PEM is imported into a private temp directory). Registries without the referrers API get the `sha256-<hex>` tag index, which sbx reads. More below. |
 | `kit validate` output | `✓ <ref> — valid`; `--json` is `{reference, kind, valid, warnings}` | Adds `--format table\|json\|yaml`. A failure with `--json` or `--format json\|yaml` prints the object with `valid: false` and `errors: [...]` on stdout and exits 1; table output prints the plain error |
 | The name `docker` | A registry ref (the `docker` image) | The shipped Docker kit. Write `docker.io/library/docker` for the image |
 | Docker in the sandbox | Run by the `-docker` images | The shipped `docker` kit comes first, before your kits (added to Docker-enabled images, or `--kit docker`). Its `dockerd` step runs in the background: a failure is only logged (`/var/log/dockerd.log`). smolvm's Docker Engine API (`smolvm engine`) isn't used: its containers are host machines that can bind any host path |
@@ -369,7 +397,15 @@ with `-D`).
 | Kit settings | Also `kit.requireSignature`, `kit.trustedSigners`, `kit.ignoreTransparencyLog`, `kit.allowExtractedAgents` | All but `kit.allowExtractedAgents` (not implemented) |
 | Default kit sources and signers | `kit.allowedSources` `["docker.io/"]`; `kit.trustedSigners` `*@docker.com` | Also `ghcr.io/pelotech/smolbento/` and smolbento's release workflow (GitHub OIDC), so smolbento's own kits load and verify with default settings |
 | Bare kit names | None for published kits | `nix` names `ghcr.io/pelotech/smolbento/kits/nix:latest` and loads as a registry kit (source and signature checks apply). `docker` is the shipped kit |
-| `kit.requireSignature` | Enforced wherever a kit loads (not `kit pull` or `--offline`): a registry or local kit needs a signature verifying against `kit.trustedSigners` (`{"key": PATH}`, or keyless `issuer`/`identity`, each also `…Regexp`). Success: `✓ REF — signature verified (IDENTITY via ISSUER)` on stderr | Registry kits only, checked on the resolved digest. Built-in agents' kits (`claude`: sbx publishes them unsigned) and shipped kits (`docker`) are exempt. Local directories and Smolfiles are refused (`… is not signed`, or `… isn't supported yet` with a `kit.sig.bundle`). The success line names the matching signer entry, not the certificate's identity |
+| `kit.requireSignature` | Enforced wherever a kit loads (not `kit pull` or `--offline`): a registry or local kit needs a signature verifying against `kit.trustedSigners` (`{"key": PATH}`, or keyless `issuer`/`identity`, each also `…Regexp`). Success: `✓ REF — signature verified (IDENTITY via ISSUER)` on stderr | Registry kits only, checked on the resolved digest. Built-in agents' kits (`claude`: sbx publishes them unsigned) and shipped kits (`docker`) are exempt. More below. |
+
+- **`kit sign`, `kit verify`, `kit push --sign`:** A local directory (`kit.sig.bundle`) and
+  `--tlog-upload=false` are refused (exit 2). `verify --key` checks no transparency log entry. `push
+  --sign` attaches no provenance. `sign` prints `Signed REF`; keyless `verify` prints the identity
+  and issuer you gave, not the certificate's
+- **`kit.requireSignature`:** Local directories and Smolfiles are refused (`… is not signed`, or `…
+  isn't supported yet` with a `kit.sig.bundle`). The success line names the matching signer entry,
+  not the certificate's identity
 
 ### Not measured against sbx yet
 

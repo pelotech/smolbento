@@ -10,7 +10,8 @@ use super::Unsupported;
 #[derive(Debug, Parser)]
 #[command(
     name = "bento",
-    version,
+    // As `sbx --version`: "bento version v0.28.0".
+    version = concat!("version v", env!("CARGO_PKG_VERSION")),
     about = "Docker Sandboxes (sbx) compatible agent sandboxes on smolvm microVMs"
 )]
 pub struct Cli {
@@ -49,6 +50,8 @@ pub enum Cmd {
     Stop {
         #[arg(required = true)]
         sandboxes: Vec<String>,
+        #[command(flatten)]
+        output: OutputArgs,
     },
     /// Remove sandboxes
     #[command(visible_aliases = ["remove", "delete"])]
@@ -62,11 +65,11 @@ pub enum Cmd {
     /// Copy a running sandbox (memory, processes, disk) for parallel attempts
     Fork(ForkArgs),
     /// Show smolbento and smolvm versions
-    Version,
+    Version(OutputArgs),
     /// Generate shell completions
     Completion { shell: clap_complete::Shell },
     /// Check smolbento's environment
-    Diagnose,
+    Diagnose(OutputArgs),
     /// Read and change settings
     #[command(subcommand)]
     Settings(SettingsCmd),
@@ -355,6 +358,8 @@ pub struct PortsArgs {
     /// HOST:PORT[/proto]
     #[arg(long)]
     pub unpublish: Vec<String>,
+    #[command(flatten)]
+    pub output: OutputArgs,
 }
 
 #[derive(Debug, Args)]
@@ -737,6 +742,32 @@ impl Format {
     }
 }
 
+/// `--format` and `--json`, as sbx has them on every command that prints something.
+#[derive(Debug, Clone, Copy, Default, Args)]
+pub struct OutputArgs {
+    /// Output format
+    #[arg(long, value_enum)]
+    pub format: Option<Format>,
+    /// Same as --format json
+    #[arg(long)]
+    pub json: bool,
+}
+
+impl OutputArgs {
+    pub fn pick(&self) -> Format {
+        Format::pick(self.json, self.format)
+    }
+
+    /// `value` as JSON or YAML, as asked; `None` when the command should print its table.
+    pub fn structured<T: serde::Serialize>(&self, value: &T) -> anyhow::Result<Option<String>> {
+        Ok(match self.pick() {
+            Format::Table => None,
+            Format::Json => Some(format!("{}\n", serde_json::to_string_pretty(value)?)),
+            Format::Yaml => Some(serde_saphyr::to_string(value)?),
+        })
+    }
+}
+
 #[derive(Debug, Default, Args)]
 pub struct LsArgs {
     /// Output format
@@ -770,6 +801,8 @@ pub struct RmArgs {
     /// Don't ask for confirmation
     #[arg(short = 'f', long)]
     pub force: bool,
+    #[command(flatten)]
+    pub output: OutputArgs,
 }
 
 #[derive(Debug, Args)]
@@ -783,6 +816,8 @@ pub struct PruneArgs {
     /// Don't ask for confirmation
     #[arg(short = 'f', long)]
     pub force: bool,
+    #[command(flatten)]
+    pub output: OutputArgs,
 }
 
 #[derive(Debug, Args)]
@@ -809,11 +844,21 @@ pub enum SettingsCmd {
     /// List settings
     #[command(visible_alias = "list")]
     Ls {
+        /// Show full descriptions
         #[arg(long = "no-trunc")]
         no_trunc: bool,
+        /// Only print keys
+        #[arg(short = 'q', long)]
+        quiet: bool,
+        #[command(flatten)]
+        output: OutputArgs,
     },
     /// Print a setting's value
-    Get { key: String },
+    Get {
+        key: String,
+        #[command(flatten)]
+        output: OutputArgs,
+    },
     /// Change a setting
     Set { key: String, value: String },
     /// Reset a setting to its default
@@ -971,6 +1016,8 @@ pub struct CheckArgs {
     pub protocol: Option<String>,
     #[arg(long)]
     pub verbose: bool,
+    #[command(flatten)]
+    pub output: OutputArgs,
 }
 
 #[derive(Debug, Subcommand)]
@@ -1294,6 +1341,8 @@ pub struct SecretLsArgs {
     pub service: Option<String>,
     #[arg(short = 'q', long)]
     pub quiet: bool,
+    #[command(flatten)]
+    pub output: OutputArgs,
 }
 
 #[derive(Debug, Args)]

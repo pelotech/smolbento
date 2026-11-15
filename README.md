@@ -71,7 +71,7 @@ in [`kits/`](kits):
   sandboxes. It never sees the host's.
 - [`nix`](kits/nix): Nix with flakes, direnv and nix-direnv, for any agent (`--kit nix`).
 
-See [Kits](docs/usage.md#kits) to add your own.
+See [Kits](docs/kits.md#kits) to add your own.
 
 ## Install
 
@@ -99,11 +99,13 @@ bento run claude
 
 Choose a network policy when asked (`balanced` suits most work). Give agents their API keys with
 `bento secret set`. They see only placeholders. When the last session ends, the sandbox stops. Run
-`bento run claude` again to pick up where you left off. See [Usage](docs/usage.md#secrets).
+`bento run claude` again to pick up where you left off. See [Usage](docs/network-and-secrets.md#secrets).
 
 ## Documentation
 
 - [Usage](docs/usage.md): running agents, workspaces, files, cleaning up
+- [Kits, skills, MCP servers and templates](docs/kits.md)
+- [Network policy and secrets](docs/network-and-secrets.md), and [environment files](docs/environments.md)
 - [Configuration](docs/configuration.md)
 - [Troubleshooting](docs/troubleshooting.md)
 - [Full index](docs/README.md): architecture, security, development and contributing

@@ -13,6 +13,9 @@ boundary.
 
 - [Install](install.md): prerequisites, installing, checking your setup
 - [Usage](usage.md): running agents, workspaces, exec, copying files, cleaning up
+- [Kits, skills, MCP servers and templates](kits.md): what a sandbox is built from
+- [Environment files](environments.md): `sbxenv.yaml`
+- [Network policy and secrets](network-and-secrets.md): what a sandbox may reach, and API keys
 - [Configuration](configuration.md): settings, environment variables, where files live
 - [sbx compatibility](sbx-compatibility.md): what works like sbx, what doesn't yet, what never will
 - [Troubleshooting](troubleshooting.md): `bento diagnose` and common problems
