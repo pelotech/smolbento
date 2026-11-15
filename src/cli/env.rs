@@ -997,6 +997,8 @@ mod tests {
         existing(&t, "running");
         t.runner().interactive_exit(0);
         t.sbt(&["env", "exec", "--", "ls"]).unwrap();
+        let call = t.runner().interactive_calls()[0].join(" ");
+        assert!(call.ends_with(" -- ls"), "the command ran: {call}");
     }
 
     fn set_scoped(t: &mut TestEnv, scope: &[&str]) {

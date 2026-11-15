@@ -1254,6 +1254,7 @@ SETUP
             .ok(&["machine", "status"], &clone_json("box", "stopped", &gone));
         ls_one(&t, &clone_json("box", "stopped", &gone));
         t.sbt(&["rm", "-f", "box"]).unwrap();
+        assert!(t.made("machine delete -n sbx-box"), "{:?}", t.calls());
     }
 
     #[test]
