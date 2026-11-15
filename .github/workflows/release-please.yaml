@@ -181,9 +181,10 @@ jobs:
           persist-credentials: false
       - uses: $/.github/actions/smolbento-release
         with:
-          minimum: "0.26.0"
+          # The first release that downloads its own smolvm.
+          minimum: "0.28.0"
 
-      - uses: $/.github/actions/smolvm
+      - uses: $/.github/actions/kvm
 
       - name: Create a sandbox with the published kit
         run: |
