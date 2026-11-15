@@ -41,7 +41,6 @@ use clap::{CommandFactory, Parser};
 use crate::config::{Paths, Settings};
 use crate::smolvm::{ProcessRunner, Runner, Smolvm};
 
-/// The oldest smolvm smolbento supports.
 
 pub fn exit_code(err: &anyhow::Error) -> u8 {
     if err.downcast_ref::<Unsupported>().is_some() {
