@@ -20,5 +20,8 @@ Options:
   -o, --output <OUTPUT>
           Also export the template to a file
 
+      --no-input
+          Never prompt; commands that need an answer fail with the command to run instead
+
   -h, --help
           Print help

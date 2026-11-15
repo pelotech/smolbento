@@ -55,6 +55,7 @@ pub fn test_env(extra_env: &[(&str, &str)]) -> TestEnv {
             env,
             now: 1_000_000,
             stdin_tty: false,
+            no_input: false,
             stdout_tty: false,
             uid: 501,
             store: Box::new(crate::secrets::store::MemoryStore::default()),

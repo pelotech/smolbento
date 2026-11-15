@@ -78,10 +78,11 @@ smolbento-only:
 | Linked worktrees as clone source | Not supported | Supported: the branch, or the commit when detached |
 | `policy ls --wide` | sbx's wide layout | Adds a NAME column; sbx's other wide columns aren't shown |
 | Install-phase kit rules in `policy ls` | Not listed after create | Never listed, even while a create installs (they're in effect then) |
-| `inspect` | Also CPUs, memory, uptime, image digest, auth mode, network, mount and proxy policy, runtime mounts, MCP gateway, daemon | Those are left out. The rest matches sbx's layout and JSON keys |
+| `inspect` | Also `id`, CPUs, memory, uptime, image digest, auth mode, network, mount and proxy policy, runtime mounts, MCP gateway, daemon | Those are left out (a sandbox is known by its name; smolvm has no other ID). The rest matches sbx's layout and JSON keys, `created_at` and `created_version` (`Created with:`) included; sandboxes from before 0.27 have no `created_version` |
+| Default name held by another directory | `create` refuses (`sandbox name … is already used by workspace …; pass --name …`); `run` reattaches to the current directory's sandbox (0.53) | Same, and the refusal suggests a name (`such as --name <agent>-<parent>-<directory>`). smolbento-only `sandbox.autoName` takes it instead of refusing. `run` finds this directory's sandbox by its workspace and agent |
 | `reset` | Deletes all state, kit host-mount directories included | Removes sandboxes, session state and the shared skills store. Kit host-mount directories stay: delete them yourself |
 | Progress output | A line per image layer | No per-layer lines. The pull shows a percentage, and the image step reads `preparing` until smolvm reports a pull (a cached image has none). CPU and Memory print before a kit's `resources@1`. A kit's "cached" label is approximate when pulls or builds overlap. On a terminal, a step's detail stays on the step's line, and a warning follows the step's last drawn line |
-| Browser and clipboard | Shims post to the daemon's proxy with `curl` and `jq`; copies work from any `exec`; image paste behind `clipboard.imagePaste`; `SBX_HOST_SESSION_ID` routes requests | Same shims and texts over a socket smolvm mounts at `/run/smolbento/bridge.sock`, with `curl` only. Served by a launchd or `systemd --user` unit whenever the sandbox runs; without a usable service manager, only while attached (`run`, `exec -it`), and then URLs print the fallback and copies fail otherwise. No image paste. sbx doesn't read clipboard text either. No `SBX_HOST_SESSION_ID`: with units each connection is served alone; attached-only serving: the first attached session. Forks keep the parent's socket, so they use its bridge while it is served. Login relay: `curl -g --noproxy '*'` with 10-second timeouts (`wget` for a `GET`); no request body (`form_post` callbacks lose theirs); text responses only; at most 4 ports per session (with units, per connection), each for 10 minutes. See [Usage](usage.md#browser-and-clipboard) |
+| Browser and clipboard | Shims post to the daemon's proxy with `curl` and `jq`; copies work from any `exec`; image paste behind `clipboard.imagePaste`; `SBX_HOST_SESSION_ID` routes requests | Same shims and texts over a socket smolvm mounts at `/run/smolbento/bridge.sock`, with `curl` only. Copying is off until `clipboard.textCopy` is `true`, as in sbx 0.51. Served by a launchd or `systemd --user` unit whenever the sandbox runs; without a usable service manager, only while attached (`run`, `exec -it`), and then URLs print the fallback and copies fail otherwise. No image paste. sbx doesn't read clipboard text either. No `SBX_HOST_SESSION_ID`: with units each connection is served alone; attached-only serving: the first attached session. Forks keep the parent's socket, so they use its bridge while it is served. Login relay: `curl -g --noproxy '*'` with 10-second timeouts (`wget` for a `GET`); no request body (`form_post` callbacks lose theirs); text responses only; at most 4 ports per session (with units, per connection), each for 10 minutes. See [Usage](usage.md#browser-and-clipboard) |
 | Command aliases | `ls`, `rm`/`delete`, `secret ls`/`rm`/`delete`/`unset`, `settings ls`, `template ls`/`list`, `template rm`/`remove`/`delete` | Implemented. `volume` aliases come with that command |
 | `--version` | `sbx version vX` | `sbt --version` prints `sbt X`; `sbt version` also shows the smolvm version |
 
@@ -159,6 +160,7 @@ and `pullPolicy: always`.
 | Ports | `tcp4`, or `tcp6` for an IPv6 `hostIP` | smolvm publishes on both `127.0.0.1` and `::1`, so `tcp4`/`tcp6`/`udp4`/`udp6` all publish on both. Any other `hostIP` is refused |
 | Environment files in the sandbox | Mounted at their host path, read-only unless `writableEnvFiles` | Files in a writable mounted workspace are made read-only in the guest at each start (unless `writableEnvFiles`); root in the guest can undo it. Files outside the workspaces aren't mounted (smolvm mounts directories only). No plan line for a writable one |
 | `sandboxOptions.fuse: false` | `/dev/fuse` absent, no `SYS_ADMIN` | `/dev/fuse` removed at each start |
+| Disk sizes (`sandboxOptions.rootSize`, `dockerSize`, `clonedWorkspaceSize`; `sandbox.disk.dockerVolume`) | Separate root, Docker and clone volumes; `dockerVolume` defaults to `10g`, and `DOCKER_SANDBOXES_DOCKER_SIZE` sets one create | smolvm has two disks: `rootSize` sizes the overlay; `dockerSize`, `clonedWorkspaceSize` and the setting size the storage disk, which also holds image layers (the larger wins). Unset keeps smolvm's 20 GiB storage and 10 GiB overlay. One create: `SMOLBENTO_SANDBOX_DISK_DOCKER_VOLUME` |
 | `bindings` | Merged into the global `credentials.yaml`; `--prune-bindings` removes the service's entry; an unknown service is accepted by `env plan` | Stored in smolbento's secrets file; `--prune-bindings` works the same. An unknown service is refused at create, with the `sbt secret set` error |
 | `mcp` url servers | Registered for the host, after an OAuth discovery that fails the create if the server is unreachable | Registered in `mcp.toml` and written into the agent's config (`claude` only). Create fails before anything is made when nothing answers at the URL (any HTTP answer counts; no OAuth discovery) |
 | `mcp` command servers | Run on the host, approved like lifecycle commands | Refused (exit 2) |
@@ -265,11 +267,12 @@ anything is created. An optional one is skipped with a warning.
   default to `agent`. v3 install steps get a clean environment: `PATH`, `HOME`, `USER`, `TERM`,
   the proxy and CA variables, and the step's own `env`. v3 startup steps and all v2 steps get the
   full sandbox environment.
-- Startup steps block, in kit order. A failure fails the start (`kit startup exited with code N`).
-  `background: true` steps start in place and are only logged if they fail. A blocking step that
-  never ends holds the start (no timeout). The log is `/var/log/sbx-kit-startup.log`. A step that
-  fails during create still creates the sandbox (with sbx's `StartRuntime after create failed`
-  warning), which is left stopped; later starts fail until the step succeeds.
+- Startup steps block, in kit order. A failure is a warning with the log's last lines
+  (`a kit startup step failed (kit startup exited with code N); starting anyway`), and the start,
+  create or `kit add` goes on, as in sbx 0.51 (sbx's wording not measured). `background: true`
+  steps start in place and are only logged if they fail. A blocking step that never ends holds the
+  start (no timeout). The log is `/var/log/sbx-kit-startup.log`; sbx 0.51 also keeps install logs at
+  `/var/log/sbx-kits/<kit>/install-<n>.log`, which smolbento doesn't.
 - An optional kit argument used with no value and no default is an error
   (`create-phase kit arg "x" has no resolved value`). `--kit-arg x=` sets it empty. `--kit-arg`
   without a kit is an error. A `KIT.NAME` value for a kit not in the set is ignored. Unquoted

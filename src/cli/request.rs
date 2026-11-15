@@ -4,15 +4,16 @@
 use anyhow::{Context, Result, bail};
 
 use super::progress::Progress;
-use super::{Ctx, SandboxOpts};
+use super::{Ctx, DiskSizes, SandboxOpts};
 use crate::agents;
 use crate::kits::args::ArgValues;
 use crate::kits::capability;
 use crate::kits::load;
 use crate::kits::model::{Content, Kind, Kit, Source};
 use crate::kits::resolve::{Plan, resolve_for};
-use crate::sandbox::{CreateRequest, name, options};
+use crate::sandbox::{self, CreateRequest, Sandbox, name, options};
 use crate::smolvm::Runner;
+use crate::util;
 use crate::workspace::{self, Workspace, clone};
 
 /// Turns sbx's create options into a [`CreateRequest`]. `default_to_cwd`: `run` mounts the current
@@ -105,6 +106,7 @@ fn base_request<R: Runner>(
         Some(m) => options::parse_memory(m)?,
         None => options::default_memory_mib(options::host_memory_mib()?),
     };
+    let (storage_gib, overlay_gib) = disk_sizes(ctx, &opts.disk)?;
     let env = options::parse_env(&opts.env, &opts.env_file, &ctx.env)?;
     let ports = opts
         .publish
@@ -120,6 +122,8 @@ fn base_request<R: Runner>(
         workspaces,
         cpus,
         memory_mib,
+        storage_gib,
+        overlay_gib,
         env,
         ports,
         created: ctx.now,
@@ -148,6 +152,71 @@ pub(crate) fn check_kit_args(targets: &[String], opts: &SandboxOpts) -> Result<(
 pub(crate) enum Workload {
     Preset(Box<Kit>),
     Ref(String),
+}
+
+/// smolvm's disk sizes in GiB, `(storage, overlay)`; `None` keeps smolvm's default. The root
+/// filesystem's changes are the overlay. Docker's data and a clone's workspace share the storage
+/// disk, so the larger of their sizes wins; without an environment file's `dockerSize`, the
+/// `sandbox.disk.dockerVolume` setting applies.
+fn disk_sizes<R: Runner>(ctx: &Ctx<R>, d: &DiskSizes) -> Result<(Option<u32>, Option<u32>)> {
+    let gib = |v: Option<&str>, what| v.map(|v| util::size_gib(v, what)).transpose();
+    let setting = ctx.settings.value("sandbox.disk.dockerVolume")?;
+    let docker = match &d.docker {
+        Some(v) => gib(Some(v), "sandboxOptions.dockerSize")?,
+        None => gib(
+            Some(setting.as_str()).filter(|v| !v.is_empty()),
+            "sandbox.disk.dockerVolume",
+        )?,
+    };
+    let cloned = gib(
+        d.cloned_workspace.as_deref(),
+        "sandboxOptions.clonedWorkspaceSize",
+    )?;
+    let overlay = gib(d.root.as_deref(), "sandboxOptions.rootSize")?;
+    Ok((docker.max(cloned), overlay))
+}
+
+/// What `run` and `create` do about a default name (no `--name`), as sbx 0.53 does for two folders
+/// with the same name. With `reuse` (`run`), the sandbox for this folder and agent is returned
+/// whatever it's called. Otherwise a default name that another folder's sandbox holds is refused
+/// with a suggested name, or, with `sandbox.autoName`, replaced by it.
+pub(crate) fn settle_default_name<R: Runner>(
+    ctx: &Ctx<R>,
+    req: &mut CreateRequest,
+    opts: &SandboxOpts,
+    reuse: bool,
+) -> Result<Option<Sandbox>> {
+    if opts.name.is_some() {
+        return Ok(None);
+    }
+    let Some(ws) = req.workspaces.first().map(|w| w.path.clone()) else {
+        return Ok(None);
+    };
+    let here = ws.display().to_string();
+    let all = sandbox::list(&ctx.vm)?;
+    let mine =
+        |s: &&Sandbox| s.meta.agent == req.agent && s.meta.workspace.as_deref() == Some(&here);
+    if reuse && let Some(sb) = all.iter().find(mine) {
+        return Ok(Some(sb.clone()));
+    }
+    let Some(owner) = all.iter().find(|s| s.name() == req.name && !mine(s)) else {
+        return Ok(None);
+    };
+    let used_by = owner.meta.workspace.as_deref().unwrap_or("(none)");
+    let suggested = name::suggest_name(&req.agent, &ws, |n| all.iter().any(|s| s.name() == n));
+    if ctx.settings.bool("sandbox.autoName")? {
+        eprintln!(
+            "note: {} is used by workspace {used_by}; naming this sandbox {suggested}",
+            req.name
+        );
+        req.name = suggested;
+        return Ok(None);
+    }
+    bail!(
+        "sandbox name \"{}\" is already used by workspace \"{used_by}\"; pass --name to choose a \
+         different name, such as --name {suggested}",
+        req.name
+    )
 }
 
 /// `build_request` for `targets` (an agent preset or a workload kit REF, then workspace paths),
@@ -1652,7 +1721,11 @@ SETUP
         assert_eq!(t.stdout(), "");
         assert_eq!(
             t.calls(),
-            ["--version", "machine status -n sbx-shell-proj --json"]
+            [
+                "--version",
+                "machine ls --json",
+                "machine status -n sbx-shell-proj --json"
+            ]
         );
     }
 

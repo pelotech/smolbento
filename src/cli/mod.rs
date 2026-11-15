@@ -94,6 +94,7 @@ pub fn main(args: impl IntoIterator<Item = OsString>) -> Result<i32> {
         env,
         now: SystemTime::now().duration_since(UNIX_EPOCH)?.as_secs() as i64,
         stdin_tty: std::io::stdin().is_terminal(),
+        no_input: false,
         stdout_tty: std::io::stdout().is_terminal(),
         uid: crate::util::host_uid(),
         store,
@@ -134,6 +135,7 @@ pub fn dispatch<R: Runner>(ctx: &mut Ctx<R>, cli: Cli) -> Result<i32> {
     if cli.cloud {
         return Err(Unsupported("--cloud: Docker Cloud sandboxes are not supported".into()).into());
     }
+    ctx.no_input = cli.no_input;
     let cmd = cli.command.unwrap_or_else(|| Cmd::Ls(LsArgs::default()));
     match &cmd {
         Cmd::Run(a) => run::check_args(a)?,
@@ -266,7 +268,7 @@ pub fn confirm<R: Runner>(ctx: &Ctx<R>, question: &str, force: bool) -> Result<(
     if force {
         return Ok(());
     }
-    if !ctx.stdin_tty {
+    if !ctx.can_prompt() {
         bail!("{question} Refusing without a terminal; pass -f to confirm");
     }
     let mut out = &ctx.out;
@@ -287,7 +289,7 @@ pub fn confirm_or<R: Runner>(
     force: bool,
     refusal: &str,
 ) -> Result<()> {
-    if !force && !ctx.stdin_tty {
+    if !force && !ctx.can_prompt() {
         bail!("{refusal}");
     }
     confirm(ctx, question, force)

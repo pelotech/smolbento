@@ -23,11 +23,16 @@ pub fn run<R: Runner>(ctx: &mut Ctx<R>, a: &InspectArgs) -> Result<i32> {
 struct Details<'a> {
     #[serde(skip_serializing_if = "BTreeMap::is_empty")]
     mounts: BTreeMap<&'a str, &'a str>,
+    /// RFC 3339, as sbx 0.53 writes it.
+    created_at: String,
     name: &'a str,
     agent: &'a str,
     /// The kits' refs, as sbx lists them.
     kits: Vec<String>,
     state: &'static str,
+    /// `v` and the smolbento version that created it (sbx 0.51); absent for older sandboxes.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    created_version: Option<String>,
     #[serde(skip_serializing_if = "Option::is_none")]
     image: Option<&'a str>,
     #[serde(skip_serializing_if = "Option::is_none")]
@@ -52,10 +57,15 @@ pub fn render(sb: &Sandbox, sessions: usize, format: Format) -> Result<String> {
             .iter()
             .map(|(guest, host)| (guest.as_str(), host.as_str()))
             .collect(),
+        created_at: humantime::format_rfc3339_seconds(
+            std::time::UNIX_EPOCH + std::time::Duration::from_secs(m.created.max(0) as u64),
+        )
+        .to_string(),
         name: sb.name(),
         agent: &m.agent,
         kits: m.kits.iter().map(|k| k.reference.clone()).collect(),
         state: super::ls::status(sb.state),
+        created_version: m.version.as_ref().map(|v| format!("v{v}")),
         image: sb.image.as_deref(),
         workspace: m.workspace.as_deref(),
         clone_source: m.clone_repo.as_deref(),
@@ -91,10 +101,15 @@ fn table(d: &Details) -> String {
         ("Agent", d.agent.to_string()),
         ("Kits", list(&d.kits, "none")),
         ("State", d.state.to_string()),
+    ];
+    if let Some(v) = &d.created_version {
+        rows.push(("Created with", v.clone()));
+    }
+    rows.extend([
         ("Image", d.image.unwrap_or("-").to_string()),
         ("Workspace", d.workspace.unwrap_or("-").to_string()),
         ("Clone source", d.clone_source.unwrap_or("-").to_string()),
-    ];
+    ]);
     if !mounts.is_empty() {
         rows.push(("Host mounts", mounts.join(", ")));
     }
@@ -143,6 +158,7 @@ mod tests {
             workspace: Some("/Users/dev/proj".into()),
             workspaces: vec!["/Users/dev/proj".into()],
             created: 999_000,
+            version: Some("0.27.0".into()),
             secrets: vec!["anthropic".into(), "github".into()],
             clone_repo: Some("/Users/dev/proj".into()),
             kits: ["ghcr.io/example/kit:1@sha256:abc", "/Users/dev/kits/cache"]
@@ -221,6 +237,29 @@ mod tests {
         t.sbt(&["inspect", "shell-x", "--json"]).unwrap();
         let json: serde_json::Value = serde_json::from_str(&t.stdout()).unwrap();
         assert!(json.get("mcp_servers").is_none(), "{json}");
+    }
+
+    #[test]
+    fn creation_time_and_version_are_shown_as_in_sbx() {
+        let mut t = test_env(&[]);
+        let _s = full(&t);
+        t.sbt(&["inspect", "claude-proj", "--json"]).unwrap();
+        let json: serde_json::Value = serde_json::from_str(&t.stdout()).unwrap();
+        assert_eq!(json["created_at"], "1970-01-12T13:30:00Z");
+        assert_eq!(json["created_version"], "v0.27.0");
+        t.sbt(&["inspect", "claude-proj"]).unwrap();
+        assert!(
+            t.stdout().contains("\n  Created with:    v0.27.0\n"),
+            "{}",
+            t.stdout()
+        );
+        // A sandbox from before the label has a time and no version.
+        let mut t = test_env(&[]);
+        bare(&t);
+        t.sbt(&["inspect", "shell-x", "--json"]).unwrap();
+        let json: serde_json::Value = serde_json::from_str(&t.stdout()).unwrap();
+        assert!(json.get("created_version").is_none(), "{json}");
+        assert!(json.get("created_at").is_some(), "{json}");
     }
 
     #[test]

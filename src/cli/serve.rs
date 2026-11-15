@@ -110,7 +110,7 @@ fn bridge<R: Runner>(ctx: &Ctx<R>, sb: &Sandbox, conn: &UnixStream, slot: File) 
     }
     let handlers = bridge::handlers(
         &ctx.env,
-        ctx.settings.bool("browser.enabled")?,
+        bridge::Allowed::from_settings(&ctx.settings)?,
         &ctx.settings.value("smolvm.path")?,
         sb,
         true,

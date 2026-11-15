@@ -4,7 +4,7 @@ use std::path::{Path, PathBuf};
 
 use anyhow::{Context, Result, bail};
 
-use super::SandboxOpts;
+use super::{DiskSizes, SandboxOpts};
 use crate::agents;
 use crate::env::file::{
     Binding, EnvFile, KitEntry, Lifecycle, PinnedKit, Port, RegistryDecl, SecretDecl, Workspace,
@@ -191,6 +191,11 @@ pub fn spec(loaded: &Loaded, overrides: &Overrides, secrets: &SecretsFile) -> Re
         }),
         clone,
         no_fuse: o.and_then(|o| o.fuse) == Some(false),
+        disk: DiskSizes {
+            root: o.and_then(|o| o.root_size.clone()),
+            docker: o.and_then(|o| o.docker_size.clone()),
+            cloned_workspace: o.and_then(|o| o.cloned_workspace_size.clone()),
+        },
         read_only_files: if o.and_then(|o| o.writable_env_files) == Some(true) {
             Vec::new()
         } else {
@@ -277,6 +282,9 @@ pub fn resources(loaded: &Loaded, spec: &EnvSpec) -> Vec<Resource> {
             ("pullPolicy", o.pull_policy.clone()),
             ("skills", o.skills.clone()),
             ("fuse", o.fuse.map(|f| f.to_string())),
+            ("rootSize", o.root_size.clone()),
+            ("dockerSize", o.docker_size.clone()),
+            ("clonedWorkspaceSize", o.cloned_workspace_size.clone()),
             (
                 "writableEnvFiles",
                 o.writable_env_files.filter(|w| *w).map(|w| w.to_string()),
@@ -806,6 +814,21 @@ mod tests {
         assert_eq!(s.opts.memory.as_deref(), Some("8g"));
         assert_eq!(s.opts.template.as_deref(), Some("img:1"));
         assert_eq!(s.opts.pull.as_deref(), Some("missing"));
+
+        let s = t
+            .spec(&format!(
+                "{HEAD}agent: claude\nsandboxOptions:\n  rootSize: 24g\n  dockerSize: 30g\n  \
+                 clonedWorkspaceSize: 8g\n"
+            ))
+            .unwrap();
+        assert_eq!(
+            s.opts.disk,
+            DiskSizes {
+                root: Some("24g".into()),
+                docker: Some("30g".into()),
+                cloned_workspace: Some("8g".into()),
+            }
+        );
 
         let s = t
             .spec(&format!(

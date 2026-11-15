@@ -20,6 +20,9 @@ pub struct Cli {
     /// Docker Cloud sandboxes (not supported)
     #[arg(long, global = true, hide = true)]
     pub cloud: bool,
+    /// Never prompt; commands that need an answer fail with the command to run instead
+    #[arg(long = "no-input", global = true)]
+    pub no_input: bool,
     #[command(subcommand)]
     pub command: Option<Cmd>,
 }
@@ -181,6 +184,7 @@ pub struct SetupSshArgs {
 #[derive(Debug, Subcommand)]
 pub enum SetupSshCmd {
     /// Remove the managed block from ~/.ssh/config
+    #[command(visible_alias = "rm")]
     Remove,
 }
 
@@ -343,7 +347,7 @@ pub struct EnvRmArgs {
 pub struct PortsArgs {
     pub sandbox: String,
     /// [[127.0.0.1:]HOST:]PORT[/proto]; no host port picks a free one
-    #[arg(long)]
+    #[arg(short = 'p', long)]
     pub publish: Vec<String>,
     /// HOST:PORT[/proto]
     #[arg(long)]
@@ -513,6 +517,15 @@ pub struct Passthrough {
     pub args: Vec<String>,
 }
 
+/// An environment file's `sandboxOptions.rootSize`, `dockerSize` and `clonedWorkspaceSize`, as
+/// written (such as `30g`).
+#[derive(Debug, Clone, Default, PartialEq, Eq)]
+pub struct DiskSizes {
+    pub root: Option<String>,
+    pub docker: Option<String>,
+    pub cloned_workspace: Option<String>,
+}
+
 /// Options shared by `run` and `create`.
 #[derive(Debug, Clone, Default, Args)]
 pub struct SandboxOpts {
@@ -559,6 +572,9 @@ pub struct SandboxOpts {
     /// An environment file's `sandboxOptions.fuse: false`.
     #[arg(skip)]
     pub no_fuse: bool,
+    /// An environment file's `sandboxOptions` disk sizes.
+    #[arg(skip)]
+    pub disk: DiskSizes,
     /// An environment's files in its mounted workspaces, kept read-only in the guest.
     #[arg(skip)]
     pub read_only_files: Vec<String>,
@@ -635,6 +651,10 @@ pub struct RunArgs {
     /// Suppress progress output
     #[arg(long = "no-progress")]
     pub no_progress: bool,
+    /// Directory to start the agent session in: absolute, or relative to the sandbox workspace.
+    /// Applies to this session only, so it works on a re-attach too
+    #[arg(short = 'w', long)]
+    pub workdir: Option<String>,
     #[arg(long, hide = true)]
     pub new: bool,
     #[arg(long = "detach-keys", hide = true)]
@@ -1196,11 +1216,14 @@ pub enum SecretCmd {
     Import(Passthrough),
 }
 
-#[derive(Debug, Args)]
+#[derive(Debug, Default, Args)]
 pub struct SecretSource {
     /// The value (prefer the prompt: values on the command line reach shell history)
     #[arg(short = 't', long = "token", alias = "value")]
     pub token: Option<String>,
+    /// Read the value from stdin (one trailing newline is dropped)
+    #[arg(long = "value-stdin")]
+    pub value_stdin: bool,
     /// op://vault/item/field (1Password) or an AWS Secrets Manager ARN, read at each start
     #[arg(long = "ref")]
     pub reference: Option<String>,

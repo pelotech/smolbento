@@ -785,11 +785,11 @@ pub(crate) fn numeric_image_user_runs_as_its_account() {
     e.assert_agent_runs_as("numbered");
 }
 
-/// sbx #11: a blocking startup hook that fails keeps a new sandbox stopped (create only warns),
-/// and every later start fails.
+/// sbx 0.51: a blocking startup hook that fails is a warning with the log's tail, at create and
+/// at every start, and the sandbox runs.
 #[test]
 #[ignore = "boots real VMs and pulls alpine; run with `just e2e`"]
-pub(crate) fn failing_startup_hook_fails_the_start() {
+pub(crate) fn failing_startup_hook_warns_and_the_sandbox_runs() {
     let e = E2e::new("startfail");
     let kit = e.dir.path().join("e2e-fail-start");
     std::fs::create_dir_all(&kit).unwrap();
@@ -822,19 +822,20 @@ setup:
         "1g",
     ]);
     let err = String::from_utf8_lossy(&out.stderr);
-    assert!(out.status.success(), "create still succeeds:\n{err}");
+    assert!(out.status.success(), "create succeeds:\n{err}");
     assert!(
-        err.contains("StartRuntime after create failed")
-            && err.contains("kit startup exited with code 7"),
+        err.contains("a kit startup step failed (kit startup exited with code 7); starting anyway")
+            && err.contains("/var/log/sbx-kit-startup.log:"),
         "{err}"
     );
-    assert_eq!(e.state(), "stopped");
+    assert_eq!(e.state(), "running");
 
+    e.ok(&["stop", &e.name]);
     let out = e.sbt(&["start", &e.name]);
     let err = String::from_utf8_lossy(&out.stderr);
-    assert!(!out.status.success(), "start fails");
+    assert!(out.status.success(), "start succeeds:\n{err}");
     assert!(err.contains("kit startup exited with code 7"), "{err}");
-    assert_eq!(e.state(), "stopped");
+    assert_eq!(e.state(), "running");
 }
 
 /// sbx #13: a v2 startup hook without `user:` runs as the agent account, and it doesn't keep the sandbox from starting.

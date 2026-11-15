@@ -196,25 +196,23 @@ fn running_sandboxes_skip_the_plan() {
 }
 
 #[test]
-fn a_failed_setup_step_stops_the_machine() {
+fn a_failed_startup_step_warns_and_the_start_goes_on() {
+    // sbx 0.51: a warning with the log's tail, and the agent still starts.
     let fake = FakeRunner::new();
     fake.ok(&["machine", "status"], &stopped());
-    fake.fail(
-        &root_sh("sbx-claude-myrepo", &startup_cmd(None)),
-        "EXEC_FAILED",
-        "startup hook failed",
-    );
+    failing_startup(&fake, "sbx-claude-myrepo", 7);
     let vm = Smolvm::new(fake);
     let mut sb = get(&vm, "claude-myrepo").unwrap();
-    let err = ensure_running(&vm, &mut sb, || Ok(plan())).unwrap_err();
+    ensure_running(&vm, &mut sb, || Ok(plan())).unwrap();
+    assert!(sb.is_running());
+    let lines = vm.runner().call_lines();
     assert!(
-        format!("{err:#}").contains("startup hook failed"),
-        "{err:#}"
+        !lines.iter().any(|l| l.starts_with("machine stop")),
+        "{lines:#?}"
     );
-    assert!(!sb.is_running());
-    assert_eq!(
-        vm.runner().call_lines().last().unwrap(),
-        "machine stop -n sbx-claude-myrepo"
+    assert!(
+        lines.last().unwrap().ends_with(&startup_log_tail_cmd()),
+        "the warning shows the log's tail: {lines:#?}"
     );
 }
 

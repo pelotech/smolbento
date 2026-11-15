@@ -423,7 +423,7 @@ fn approve<R: Runner>(
     if plan.need == Need::No || force {
         return Ok(());
     }
-    if !ctx.stdin_tty {
+    if !ctx.can_prompt() {
         // The command as given, quoted for the shell, with `--force` added (sbx does the same).
         let words: Vec<String> = ctx.args.iter().map(|a| shell_word(a)).collect();
         let file = match loaded.files.as_slice() {
@@ -574,9 +574,8 @@ fn source<R: Runner>(
     if let Some(v) = &decl.value {
         return Ok(SecretSource {
             token: Some(v.clone()),
-            reference: None,
-            command: None,
             sandbox,
+            ..Default::default()
         });
     }
     let source = match (&decl.r#ref, &decl.command) {
@@ -600,21 +599,18 @@ fn source<R: Runner>(
     Ok(match source {
         _ if snapshot => SecretSource {
             token: resolved,
-            reference: None,
-            command: None,
             sandbox,
+            ..Default::default()
         },
         Source::Ref { reference } => SecretSource {
-            token: None,
             reference: Some(reference),
-            command: None,
             sandbox,
+            ..Default::default()
         },
         Source::Command { command } => SecretSource {
-            token: None,
-            reference: None,
             command: Some(command),
             sandbox,
+            ..Default::default()
         },
         Source::Keychain => unreachable!("built from a ref or command"),
     })

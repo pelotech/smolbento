@@ -60,6 +60,13 @@ pub fn parse_size(value: &str, what: &str) -> Result<u64> {
         .with_context(|| format!("{what} '{value}' is too large"))
 }
 
+/// `parse_size` in whole GiB, rounded up and at least 1, as smolvm's disk sizes take them.
+pub fn size_gib(value: &str, what: &str) -> Result<u32> {
+    let bytes = parse_size(value, what)?;
+    let gib = bytes.div_ceil(1 << 30).max(1);
+    u32::try_from(gib).with_context(|| format!("{what} '{value}' is too large"))
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;

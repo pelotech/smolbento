@@ -27,12 +27,29 @@ pub fn has_display(env: &BTreeMap<String, String>, linux: bool) -> bool {
     !set("SSH_CONNECTION") || (linux && (set("DISPLAY") || set("WAYLAND_DISPLAY")))
 }
 
+/// What a sandbox may do on the host through the bridge: open URLs (`browser.enabled`) and copy
+/// text to the clipboard (`clipboard.textCopy`).
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
+pub struct Allowed {
+    pub browser: bool,
+    pub copy: bool,
+}
+
+impl Allowed {
+    pub fn from_settings(settings: &Settings) -> Result<Allowed> {
+        Ok(Allowed {
+            browser: settings.bool("browser.enabled")?,
+            copy: settings.bool("clipboard.textCopy")?,
+        })
+    }
+}
+
 /// Handlers that run the host's browser and clipboard commands, or the env overrides, and relay
 /// login callbacks into the sandbox with the `smolvm` binary. With `linger` a login's relay
 /// outlives the handlers (for a process that serves one connection).
 pub fn handlers(
     env: &BTreeMap<String, String>,
-    browser_enabled: bool,
+    allowed: Allowed,
     smolvm: &str,
     sb: &Sandbox,
     linger: bool,
@@ -40,7 +57,8 @@ pub fn handlers(
     let open_cmd = env.get(OPEN_CMD).cloned();
     let copy_cmd = env.get(COPY_CMD).cloned();
     Handlers {
-        browser_enabled,
+        browser_enabled: allowed.browser,
+        copy_enabled: allowed.copy,
         open: Box::new(move |url| open_url(open_cmd.as_deref(), url)),
         copy: Box::new(move |text| copy_text(copy_cmd.as_deref(), text)),
         relay: relay(smolvm, &sb.machine, relay_user(sb), linger),
@@ -76,14 +94,14 @@ pub fn attach(env: &BTreeMap<String, String>, settings: &Settings, sb: &Sandbox)
     if !sb.meta.bridge || sb.meta.service || !has_display(env, cfg!(target_os = "linux")) {
         return None;
     }
-    let browser = settings.bool("browser.enabled").unwrap_or_else(|e| {
-        eprintln!("warning: not opening URLs from the sandbox: {e:#}");
-        false
+    let allowed = Allowed::from_settings(settings).unwrap_or_else(|e| {
+        eprintln!("warning: not opening URLs or copying from the sandbox: {e:#}");
+        Allowed::default()
     });
     let smolvm = settings
         .value("smolvm.path")
         .unwrap_or_else(|_| "smolvm".into());
-    let h = handlers(env, browser, &smolvm, sb, false);
+    let h = handlers(env, allowed, &smolvm, sb, false);
     http::serve(&super::host_socket(sb.name()), h).unwrap_or_else(|e| {
         eprintln!(
             "warning: {}: no browser and clipboard bridge: {e:#}",
@@ -252,7 +270,11 @@ mod tests {
             ports: Vec::new(),
             image: None,
         };
-        handlers(&env(vars), browser, "/nonexistent/smolvm", &sb, false)
+        let allowed = Allowed {
+            browser,
+            copy: true,
+        };
+        handlers(&env(vars), allowed, "/nonexistent/smolvm", &sb, false)
     }
 
     #[test]

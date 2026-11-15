@@ -216,6 +216,34 @@ pub fn startup_cmd(script: Option<&str>) -> String {
 /// kit order that waits for each blocking hook and starts each background one detached at its
 /// position. A failed blocking hook is an error with sbx's text (its output is in the guest's
 /// startup log).
+/// Prints the startup log's last lines, for a failed start's warning.
+pub fn startup_log_tail_cmd() -> String {
+    format!("tail -n 20 {} 2>/dev/null", guest::STARTUP_LOG)
+}
+
+/// sbx 0.51: a failed startup step is a warning with the log's tail; the agent starts anyway. The
+/// tail is best-effort.
+pub fn startup_failure_warning<R: Runner>(
+    vm: &Smolvm<R>,
+    sb: &Sandbox,
+    e: &anyhow::Error,
+) -> String {
+    let tail = vm
+        .exec_output(&ExecSpec::sh(&sb.machine, "root", startup_log_tail_cmd()))
+        .map(|o| o.stdout.trim_end().to_string())
+        .unwrap_or_default();
+    let mut w = format!(
+        "warning: {}: a kit startup step failed ({e:#}); starting anyway. {}:",
+        sb.name(),
+        guest::STARTUP_LOG
+    );
+    for line in tail.lines() {
+        w.push_str("\n  ");
+        w.push_str(line);
+    }
+    w
+}
+
 pub fn run_startup<R: Runner>(vm: &Smolvm<R>, sb: &Sandbox, script: Option<&str>) -> Result<()> {
     let what = "running the kits' startup hooks";
     let out = vm

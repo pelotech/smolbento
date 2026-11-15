@@ -17,5 +17,8 @@ Options:
   -o, --output <OUTPUT>
           Output file path; must end in .zip (default: <name>.zip)
 
+      --no-input
+          Never prompt; commands that need an answer fail with the command to run instead
+
   -h, --help
           Print help

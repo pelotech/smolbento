@@ -26,6 +26,9 @@ Options:
   -e, --env <ENV>
           Environment variable: KEY=VALUE, or KEY to copy the host's value
 
+      --no-input
+          Never prompt; commands that need an answer fail with the command to run instead
+
       --env-file <ENV_FILE>
           Read environment variables from a file
 

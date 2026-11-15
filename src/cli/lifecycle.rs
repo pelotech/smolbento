@@ -7,7 +7,9 @@ use std::time::UNIX_EPOCH;
 use anyhow::{Context, Result, bail};
 
 use super::progress::{CreateSteps, Progress};
-use super::request::{Workload, check_kit_args, kit_plan, kit_target, resolve_clone};
+use super::request::{
+    Workload, check_kit_args, kit_plan, kit_target, resolve_clone, settle_default_name,
+};
 use super::{CreateArgs, Ctx, PruneArgs, ResetArgs, RmArgs, SandboxOpts, confirm};
 use crate::provision;
 use crate::sandbox::{self, CreateRequest, Event, Sandbox, session};
@@ -20,6 +22,7 @@ pub fn create<R: Runner>(ctx: &mut Ctx<R>, a: &CreateArgs) -> Result<i32> {
     }
     check_kit_args(&a.targets, &a.opts)?;
     let (mut req, workload) = kit_target(ctx, &a.targets, &a.opts, false)?;
+    settle_default_name(ctx, &mut req, &a.opts, false)?;
     let p = Progress::for_ctx(ctx, a.no_progress);
     let sb = create_reported(ctx, &p, &mut req, workload, &a.opts)?;
     p.finish(&format!("Created sandbox {}", sb.name()));
@@ -340,7 +343,7 @@ mod tests {
     use clap::Parser;
 
     use super::super::request::*;
-    use super::super::{Cli, Cmd, SandboxOpts};
+    use super::super::{Cli, Cmd, DiskSizes, SandboxOpts};
     use crate::testutil::*;
 
     #[test]
@@ -857,6 +860,51 @@ mod tests {
     }
 
     #[test]
+    fn disk_sizes_come_from_the_options_and_the_docker_volume_setting() {
+        let t = test_env(&[]);
+        let req = build_request(&t.ctx, "shell", &[], &SandboxOpts::default(), false).unwrap();
+        assert_eq!(
+            (req.storage_gib, req.overlay_gib),
+            (None, None),
+            "smolvm's own sizes"
+        );
+
+        let t = test_env(&[("SMOLBENTO_SANDBOX_DISK_DOCKER_VOLUME", "40g")]);
+        let req = build_request(&t.ctx, "shell", &[], &SandboxOpts::default(), false).unwrap();
+        assert_eq!(req.storage_gib, Some(40));
+
+        // An environment file's sizes: the larger storage size wins, and sizes round up to GiB.
+        let opts = SandboxOpts {
+            disk: DiskSizes {
+                root: Some("24g".into()),
+                docker: Some("30g".into()),
+                cloned_workspace: Some("35500m".into()),
+            },
+            ..Default::default()
+        };
+        let req = build_request(&t.ctx, "shell", &[], &opts, false).unwrap();
+        assert_eq!((req.storage_gib, req.overlay_gib), (Some(35), Some(24)));
+        let opts = SandboxOpts {
+            disk: DiskSizes {
+                root: Some("512m".into()),
+                ..Default::default()
+            },
+            ..Default::default()
+        };
+        let req = build_request(&t.ctx, "shell", &[], &opts, false).unwrap();
+        assert_eq!(req.overlay_gib, Some(1));
+        let opts = SandboxOpts {
+            disk: DiskSizes {
+                root: Some("lots".into()),
+                ..Default::default()
+            },
+            ..Default::default()
+        };
+        let err = build_request(&t.ctx, "shell", &[], &opts, false).unwrap_err();
+        assert!(err.to_string().contains("rootSize"), "{err}");
+    }
+
+    #[test]
     fn a_template_saved_from_another_agent_is_refused() {
         let t = test_env(&[]);
         saved_template(&t, "t:v1", "shell");
@@ -1300,6 +1348,69 @@ SETUP
             .filter(|l| l.contains("delete"))
             .collect();
         assert_eq!(deletes, vec!["machine delete -n sbx-old -f"]);
+    }
+
+    #[test]
+    fn create_refuses_a_default_name_another_folder_uses() {
+        let t = test_env(&[]);
+        let theirs = machine_json(
+            "sbx-claude-proj",
+            "stopped",
+            &[
+                ("sbx.name", "claude-proj"),
+                ("sbx.agent", "claude"),
+                ("sbx.workspace", "/other/proj"),
+            ],
+        );
+        t.runner()
+            .ok(&["machine", "ls", "--json"], &format!("[{theirs}]"));
+        t.runner()
+            .ok(&["machine", "status", "-n", "sbx-claude-proj"], &theirs);
+        let mut t = t;
+        let err = t.sbt_err(&["create", "claude", "."]);
+        assert!(
+            err.contains("is already used by workspace \"/other/proj\""),
+            "{err}"
+        );
+        assert!(err.contains("such as --name claude-"), "{err}");
+        assert!(!t.made("machine create"));
+    }
+
+    #[test]
+    fn auto_name_creates_under_the_suggested_name() {
+        let t = test_env(&[("SMOLBENTO_SANDBOX_AUTO_NAME", "true")]);
+        let suggested =
+            crate::sandbox::name::suggest_name("claude", &t.ctx.cwd, |n| n == "claude-proj");
+        creatable_as(&t, &suggested);
+        let theirs = machine_json(
+            "sbx-claude-proj",
+            "stopped",
+            &[
+                ("sbx.name", "claude-proj"),
+                ("sbx.agent", "claude"),
+                ("sbx.workspace", "/other/proj"),
+            ],
+        );
+        t.runner()
+            .ok(&["machine", "ls", "--json"], &format!("[{theirs}]"));
+        t.runner()
+            .ok(&["machine", "status", "-n", "sbx-claude-proj"], &theirs);
+        let mut t = t;
+        t.sbt(&["create", "claude", "."]).unwrap();
+        let machine = crate::sandbox::name::machine_name(&suggested);
+        assert!(
+            t.made(&format!("machine create -n {machine} ")),
+            "{:?}",
+            t.calls()
+        );
+    }
+
+    #[test]
+    fn no_input_never_prompts() {
+        let mut t = test_env(&[]);
+        t.answer("y\n");
+        let err = t.sbt(&["--no-input", "reset"]).unwrap_err();
+        assert!(err.to_string().contains("pass -f"), "{err}");
     }
 
     #[test]

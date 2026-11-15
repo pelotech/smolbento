@@ -32,7 +32,8 @@ pub(super) fn clone_prep_cmd(step: &CloneStep) -> String {
     format!("[ -d {git} ] && exit 0; rmdir {lf} 2>/dev/null; chown agent {d}")
 }
 
-/// As `agent`: sbx's clone command (skipped once cloned), then its remote copy, which runs on
+/// As `agent`: trusting the source for git, then sbx's clone command (skipped once cloned), then
+/// its remote copy, which runs on
 /// every start so a failed add is retried and host remote changes arrive (as sbx's setup script).
 /// A detached worktree's commit is checked out after the clone (a local clone copies every object,
 /// so commits made while detached are there too). If that checkout still fails, the clone keeps
@@ -40,7 +41,7 @@ pub(super) fn clone_prep_cmd(step: &CloneStep) -> String {
 /// that path: it's echoed unquoted inside the warning.
 pub(super) fn clone_cmd(step: &CloneStep) -> String {
     let (d, git) = step.quoted();
-    let clone = format!("git -c safe.directory={SOURCE_MOUNT} clone -q");
+    let clone = "git clone -q".to_string();
     let clone = match &step.head {
         Some(WorktreeHead::Branch(b)) => {
             format!("{clone} --branch {} {SOURCE_MOUNT} {d}", sh_quote(b))
@@ -56,7 +57,14 @@ pub(super) fn clone_cmd(step: &CloneStep) -> String {
         ),
         _ => format!("{clone} {SOURCE_MOUNT} {d}"),
     };
-    let mut s = format!("set -e; [ -d {git} ] || {clone}; cd {d}");
+    // Git refuses a repository another user owns ("dubious ownership"), and the source is owned by
+    // the host's uid unless smolvm maps it. Older git (2.47) reads `safe.directory` only from a
+    // config file, so it goes in the user's: added once, kept on later starts.
+    let trust = format!(
+        "git config --global --replace-all safe.directory {SOURCE_MOUNT} {}",
+        sh_quote(&format!("^{SOURCE_MOUNT}$"))
+    );
+    let mut s = format!("set -e; {trust}; [ -d {git} ] || {clone}; cd {d}");
     for (n, u) in &step.remotes {
         let (n, u) = (sh_quote(n), sh_quote(u));
         s.push_str(&format!(

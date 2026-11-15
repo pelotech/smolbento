@@ -20,6 +20,9 @@ pub struct CreateRequest {
     pub workspaces: Vec<Workspace>,
     pub cpus: u32,
     pub memory_mib: u64,
+    /// Disk sizes in GiB; `None` keeps smolvm's defaults.
+    pub storage_gib: Option<u32>,
+    pub overlay_gib: Option<u32>,
     pub env: Vec<(String, String)>,
     pub ports: Vec<PortMap>,
     /// The sandbox has a private dockerd (the `sbx.docker` label). Before kits are applied: the
@@ -132,6 +135,7 @@ pub fn meta(req: &CreateRequest) -> Meta {
         workspace: primary,
         workspaces: req.workspaces.iter().map(Workspace::label).collect(),
         created: req.created,
+        version: Some(env!("CARGO_PKG_VERSION").into()),
         docker: req.docker,
         secrets: req.secrets.clone(),
         credential_hosts: req.credential_hosts.clone(),
@@ -260,6 +264,8 @@ pub fn spec(req: &CreateRequest) -> CreateSpec {
         workdir: meta.clone_repo.clone().or_else(|| meta.workspace.clone()),
         cpus: Some(req.cpus),
         memory_mib: Some(req.memory_mib),
+        storage_gib: req.storage_gib,
+        overlay_gib: req.overlay_gib,
         env,
         ports: req.ports.clone(),
         network: req.network.clone(),

@@ -15,7 +15,7 @@ use sha2::{Digest, Sha256};
 
 use crate::util::hex;
 
-pub use host::{attach, handlers, has_display};
+pub use host::{Allowed, attach, handlers, has_display};
 pub use http::{Handlers, serve, serve_connection};
 pub use listener::Server;
 pub use shims::{install_cmd, remove_cmd};

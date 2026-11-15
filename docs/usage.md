@@ -13,6 +13,18 @@ sbt run claude
 `<agent>-<directory name>` (here `claude-myrepo`), so the same agent in the same directory
 reattaches.
 
+Two directories with the same name (`pelotech/infrastructure` and `uki-code/infrastructure`) would
+get the same default name. Without `--name`, `run` and `create` refuse a name another directory's
+sandbox holds, and suggest one with the parent directory:
+
+```console
+$ sbt run claude
+error: sandbox name "claude-infrastructure" is already used by workspace "/src/pelotech/infrastructure"; pass --name to choose a different name, such as --name claude-uki-code-infrastructure
+```
+
+`sbt settings set sandbox.autoName true` takes the suggested name instead of refusing. Either way, a
+later `sbt run claude` in that directory finds its sandbox by the directory, whatever it's called.
+
 When the last attached session exits (closing the terminal counts), the sandbox stops. Its disk is
 kept, so the next `run` resumes with what the agent installed.
 
@@ -97,11 +109,13 @@ On a terminal, each step redraws in place with a spinner, and a pull shows its p
 cached doesn't pull (see [`smolvm.image-cache-size`](configuration.md#settings)).
 
 Progress goes to stdout. Scripts that capture output (`name=$(sbt run -d …)`) pass `--no-progress`,
-which also hides the `Created` and `try:` lines. `run -d --no-progress` then prints only the name.
+which also hides the `Created` and `try:` lines. `--no-input`, on any command, never prompts: a
+command that would ask fails with the flag or command to use instead. `run -d --no-progress` then prints only the name.
 
 | Option | Meaning |
 |---|---|
 | `--name NAME` | Letters, digits, `-` and `.`; at least 2 characters |
+| `-w, --workdir DIR` | `run` only: start the session in `DIR`, absolute or relative to the workspace; applies on a re-attach too |
 | `--cpus N` | `0` or unset: all host CPUs |
 | `-m, --memory SIZE` | Such as `4g` or `512m`. Default: half of host memory, from 512 MiB to 32 GiB |
 | `-e, --env KEY=VALUE` | A bare `KEY` copies the host's value |
@@ -246,7 +260,8 @@ top of `~/.ssh/config`). See [sbx compatibility](sbx-compatibility.md#ssh).
 
 ## Browser and clipboard
 
-The sandbox can open URLs in your browser and copy text to your clipboard, whenever it runs. On
+The sandbox can open URLs in your browser and, once you allow it, copy text to your clipboard,
+whenever it runs. On
 macOS (launchd) and Linux (`systemd --user`) a service unit owns the socket, so nothing needs to be
 attached; without a usable service manager (a container, CI without a user session) it works only
 while `sbt run` or `sbt exec -it` is attached.
@@ -259,9 +274,10 @@ git diff | wl-copy                          # or xclip, xsel, pbcopy, clip.exe
 
 - Only `https://` URLs open. Others, or any URL when nothing serves the socket, print `Open this URL
   in your browser: URL`.
-- Copying is text only. Reading the clipboard (`wl-paste`, `xclip -o`, `xsel -o`) prints nothing,
-  and images can't be pasted. Copying when nothing serves the socket fails with `<command>: failed
-  to write host clipboard`.
+- Copying is off until you run `sbt settings set clipboard.textCopy true`, as in sbx. It's text
+  only. Reading the clipboard (`wl-paste`, `xclip -o`, `xsel -o`) prints nothing, and images can't
+  be pasted. A copy that's off, or made when nothing serves the socket, fails with `<command>:
+  failed to write host clipboard (copying may be off: …)`.
 - Browser logins work. For a `redirect_uri` of `http://localhost:PORT/…` or
   `http://127.0.0.1:PORT/…`, smolbento listens on your `127.0.0.1:PORT` for 10 minutes (the
   connection's process stays that long) and relays the callback. If something else answers that port, it warns and still
@@ -409,15 +425,16 @@ What a kit does, and when:
   with network only for installing. A failing step, or a kit file that can't be written, removes the
   sandbox. Fix the cause and run the same command. In a v2 kit, `files/workspace` and `${WORKDIR}`
   are the primary workspace, or `/home/agent/workspace` without one.
-- On every start, startup steps run in kit order, before the agent. A failing one fails the start
-  (`kit startup exited with code N`). A `background: true` step (such as the `docker` kit's
+- On every start, startup steps run in kit order, before the agent. A failing one is a warning
+  with the log's last lines, and the sandbox starts anyway, as in sbx 0.51. A `background: true`
+  step (such as the `docker` kit's
   `dockerd`) keeps running; if it fails, only the log records it. A step that doesn't finish holds
   up the start; there is no timeout, as in sbx.
 - Logs go to `/var/log/sbx-kit-startup.log` in the sandbox. Each start adds a `=== dispatcher run …
   ===` line, each finished step an `ok /etc/smolbento/startup.d/NN-<kit>.sh hook N` line, and a
   failing step its output and exit code.
-- A failing startup step at create leaves the sandbox created, with a warning, and stopped. Each
-  later start fails until the step succeeds. `kit add` only warns.
+- At create and `kit add`, a failing startup step is the same warning; the sandbox is created and
+  runs.
 - Startup steps run as `agent` unless they name a user (a numeric user runs as the account with that
   uid). The `docker` kit runs before your kits.
 - A v3 install step gets a clean environment (`PATH`, `HOME`, `USER`, `TERM`, the proxy and CA
@@ -456,8 +473,8 @@ sbt create docker.io/sbx/antigravity:latest . --kit nix
 - Nix's default profile and `/home/agent/.nix-profile/bin` come first on `PATH`; on a workload image
   whose user isn't `agent`, add that user's `~/.nix-profile/bin` yourself for `nix profile add`.
 - It brings its own network rules for the Nix caches and GitHub, for policies other than `balanced`.
-- The store is on the sandbox's disk, smolvm's 10 GiB overlay by default; smolbento can't size it
-  yet, so very large dev shells may run out of space.
+- The store is on the root filesystem's disk, smolvm's 10 GiB overlay by default. For large dev
+  shells, raise it with `sandboxOptions.rootSize` in an environment file.
 - `nix` is `:latest` while the kit is 0.x and may change; pin a version
   (`ghcr.io/pelotech/smolbento/kits/nix:0.0.1`) or a digest in environment files. Each release
   notes the smolbento it needs.
@@ -824,7 +841,9 @@ bindings:
 
 Not supported yet (exit 2, naming the field): `mcp` servers with a `command`,
 `sandboxOptions.profile`, `display`, `gpu` and `usb`, and `pullPolicy: always`. `fuse` and
-`pullPolicy: missing|never` are accepted. Environment files inside a writable mounted workspace are
+`pullPolicy: missing|never` are accepted. `rootSize` sizes the disk for the root filesystem's
+changes, and `dockerSize` and `clonedWorkspaceSize` the disk for Docker's data and a clone's
+workspace (the larger wins), in sizes such as `30g`, rounded up to whole GiB. Environment files inside a writable mounted workspace are
 made read-only at each start, unless `writableEnvFiles: true`. `refresh` and `backend` on a secret
 do nothing. Secret service names must be ones `sbt secret set` knows. See [sbx
 compatibility](sbx-compatibility.md#environment-files).
@@ -921,6 +940,7 @@ sbt secret set claude --ref op://Private/claude-sandbox/credential   # 1Password
 sbt secret set github --command 'gh auth token'                      # run at each start
 sbt secret set openai --sandbox claude-myrepo -t sk-…                # one sandbox only
 sbt secret set-custom --host api.example.com --env EXAMPLE_TOKEN --command 'pass show example'
+printf %s "$TOKEN" | sbt secret set github --value-stdin           # keeps it out of argv
 sbt secret ls
 sbt secret rm github
 ```

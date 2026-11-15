@@ -102,6 +102,18 @@ pub struct SettingDef {
 
 pub const SETTINGS: &[SettingDef] = &[
     SettingDef {
+        key: "sandbox.autoName",
+        env: "SMOLBENTO_SANDBOX_AUTO_NAME",
+        default: "false",
+        help: "When a default sandbox name belongs to another folder's sandbox, use the suggested name (agent-parent-folder) instead of refusing",
+    },
+    SettingDef {
+        key: "sandbox.disk.dockerVolume",
+        env: "SMOLBENTO_SANDBOX_DISK_DOCKER_VOLUME",
+        default: "",
+        help: "Disk for Docker's data (and image layers) in new sandboxes, e.g. 30g; empty keeps smolvm's default (20g)",
+    },
+    SettingDef {
         key: "docker.enabled",
         env: "SMOLBENTO_DOCKER",
         default: "true",
@@ -160,6 +172,12 @@ pub const SETTINGS: &[SettingDef] = &[
         env: "SMOLBENTO_KIT_IGNORE_TRANSPARENCY_LOG",
         default: "false",
         help: "Verify keyless kit signatures without requiring a Rekor transparency-log entry",
+    },
+    SettingDef {
+        key: "clipboard.textCopy",
+        env: "SMOLBENTO_CLIPBOARD_TEXT_COPY",
+        default: "false",
+        help: "Allow sandboxed processes to copy text to the host clipboard (pbcopy, xclip and the like in the sandbox)",
     },
     SettingDef {
         key: "browser.enabled",

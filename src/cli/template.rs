@@ -181,7 +181,7 @@ fn save<R: Runner>(ctx: &Ctx<R>, a: &TemplateSaveArgs) -> Result<()> {
                 sb.name()
             )
         };
-        if !ctx.stdin_tty {
+        if !ctx.can_prompt() {
             return Err(refused());
         }
         let q = format!(

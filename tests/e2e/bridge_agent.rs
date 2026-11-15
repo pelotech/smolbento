@@ -108,6 +108,9 @@ pub(crate) fn bridge_opens_urls_copies_text_and_relays_login_callbacks() {
         .push(("SMOLBENTO_OPEN_CMD", opener.display().to_string()));
     e.vars
         .push(("SMOLBENTO_COPY_CMD", copier.display().to_string()));
+    // Copying to the host clipboard is off by default, as in sbx.
+    e.vars
+        .push(("SMOLBENTO_CLIPBOARD_TEXT_COPY", "true".to_string()));
     e.create_alpine_with("apk add -q curl busybox-extras");
     let guest = |script: &str| e.ok(&["exec", &e.name, "sh", "-c", script]);
     let read = |p: &Path| std::fs::read_to_string(p).unwrap_or_default();

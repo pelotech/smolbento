@@ -306,6 +306,14 @@ pub struct SandboxOptions {
     pub usb: Option<Value>,
     pub fuse: Option<bool>,
     pub writable_env_files: Option<bool>,
+    /// Disk sizes such as `20g`: the root filesystem's changes (smolvm `--overlay`), and Docker's
+    /// data and a clone's workspace (both on smolvm's storage disk, `--storage`).
+    #[serde(default, deserialize_with = "opt_text")]
+    pub root_size: Option<String>,
+    #[serde(default, deserialize_with = "opt_text")]
+    pub docker_size: Option<String>,
+    #[serde(default, deserialize_with = "opt_text")]
+    pub cloned_workspace_size: Option<String>,
 }
 
 /// A YAML scalar as text: a string as is, a number or bool as written. Null and collections are

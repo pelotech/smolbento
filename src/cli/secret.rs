@@ -238,11 +238,12 @@ pub(crate) fn store<R: Runner>(
     }
     let given = [
         src.token.is_some(),
+        src.value_stdin,
         src.reference.is_some(),
         src.command.is_some(),
     ];
     if given.iter().filter(|g| **g).count() > 1 {
-        bail!("pass only one of -t, --ref and --command");
+        bail!("pass only one of -t, --value-stdin, --ref and --command");
     }
     let scope = scope_for(src.sandbox.as_deref());
     let account = SecretEntry {
@@ -265,6 +266,11 @@ pub(crate) fn store<R: Runner>(
     } else {
         let value = match src.token {
             Some(t) => t,
+            None if src.value_stdin => {
+                let v = ctx.read_to_end()?;
+                let v = v.strip_suffix('\n').unwrap_or(&v);
+                v.strip_suffix('\r').unwrap_or(v).to_string()
+            }
             None => read_value(ctx, service)?,
         };
         if value.is_empty() {
@@ -337,7 +343,7 @@ fn explain_impact<R: Runner>(ctx: &Ctx<R>, service: &str, scope: Option<&str>) -
 }
 
 fn read_value<R: Runner>(ctx: &Ctx<R>, service: &str) -> Result<String> {
-    if !ctx.stdin_tty {
+    if !ctx.can_prompt() {
         bail!("no terminal to prompt on; pass -t, --ref or --command");
     }
     eprint!("Value for {service} (input hidden, empty line to cancel): ");
@@ -500,6 +506,7 @@ fn registry_set<R: Runner>(ctx: &Ctx<R>, file: &mut SecretsFile, a: SecretSetArg
     }
     if a.service.is_some()
         || a.source.token.is_some()
+        || a.source.value_stdin
         || a.source.reference.is_some()
         || a.source.command.is_some()
     {
@@ -1077,6 +1084,23 @@ mod tests {
         );
         let err = t.sbt(&["secret", "set", "github", "--oauth"]).unwrap_err();
         assert_eq!(super::super::exit_code(&err), 2);
+    }
+
+    #[test]
+    fn value_stdin_reads_the_value_from_stdin() {
+        let mut t = test_env(&[]);
+        t.answer("s3cret\n");
+        t.sbt(&["secret", "set", "github", "--value-stdin"])
+            .unwrap();
+        assert_eq!(
+            t.ctx.store.get("global/github").unwrap().as_deref(),
+            Some("s3cret"),
+            "one trailing newline is dropped"
+        );
+        let err = t
+            .sbt(&["secret", "set", "github", "--value-stdin", "-t", "x"])
+            .unwrap_err();
+        assert!(err.to_string().contains("pass only one"), "{err}");
     }
 
     #[test]

@@ -20,5 +20,8 @@ Options:
   -L, --follow-link
           Follow symbolic links in the host source
 
+      --no-input
+          Never prompt; commands that need an answer fail with the command to run instead
+
   -h, --help
           Print help

@@ -14,6 +14,8 @@ An environment variable beats the config file, which beats the default. Booleans
 
 | Setting | Env var | Default | Meaning |
 |---|---|---|---|
+| `sandbox.autoName` | `SMOLBENTO_SANDBOX_AUTO_NAME` | `false` | When a default name belongs to another directory's sandbox, take the suggested `<agent>-<parent>-<directory>` name instead of refusing. smolbento only. See [Usage](usage.md). |
+| `sandbox.disk.dockerVolume` | `SMOLBENTO_SANDBOX_DISK_DOCKER_VOLUME` | (smolvm's default, 20 GiB) | Disk for Docker's data in new sandboxes, such as `30g`. smolvm keeps image layers on the same disk. An environment file's `dockerSize` wins. |
 | `docker.enabled` | `SMOLBENTO_DOCKER` | `true` | Docker-enabled agent images, and a private Docker engine in each sandbox. Applies to sandboxes created afterwards. |
 | `smolvm.path` | `SMOLBENTO_SMOLVM` | `smolvm` | The smolvm binary to run. |
 | `smolvm.image-cache-size` | `SMOLBENTO_IMAGE_CACHE_SIZE` | `40g` | Disk for smolvm's cache of ready-to-boot images. See [Details](#details). |
@@ -24,6 +26,7 @@ An environment variable beats the config file, which beats the default. Booleans
 | `kit.requireSignature` | `SMOLBENTO_KIT_REQUIRE_SIGNATURE` | `false` | Load registry kits only when a trusted signer signed them. Refuses local kits. See [Kit signatures](#kit-signatures). |
 | `kit.trustedSigners` | `SMOLBENTO_KIT_TRUSTED_SIGNERS` | Docker employees (`identityRegexp` `^.*@docker\.com$`, `issuer` `https://accounts.google.com`) and smolbento's kit releases (see [Kit signatures](#kit-signatures)) | JSON array of trusted signers. See [Kit signatures](#kit-signatures). |
 | `kit.ignoreTransparencyLog` | `SMOLBENTO_KIT_IGNORE_TRANSPARENCY_LOG` | `false` | Verify keyless kit signatures without requiring a Rekor transparency-log entry. |
+| `clipboard.textCopy` | `SMOLBENTO_CLIPBOARD_TEXT_COPY` | `false` | Let sandboxes copy text to your clipboard (`pbcopy`, `wl-copy`, `xclip`, `xsel`, `clip.exe` in the sandbox). See [Browser and clipboard](usage.md#browser-and-clipboard). |
 | `browser.enabled` | `SMOLBENTO_BROWSER_ENABLED` | `true` | Let sandboxes open `https://` URLs in your browser. `false` also stops in-sandbox logins that redirect to `localhost`. See [Details](#details). |
 | `ssh.agentForwardingEnabled` | `SMOLBENTO_SSH_AGENT_FORWARDING` | `true` | Let sandboxes list your SSH agent's keys and sign with them, but not add, remove or lock keys. See [SSH agent](usage.md#ssh-agent). |
 | `ssh.agentSocketPath` | `SMOLBENTO_SSH_AGENT_SOCKET` | empty | Fixed host SSH agent socket. Empty uses the user session's `SSH_AUTH_SOCK` (the `sbt` client's, while attached). |

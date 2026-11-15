@@ -26,6 +26,9 @@ Options:
   -m, --memory <MEMORY>
           Memory, e.g. 4g (default: half of host memory, 512MiB to 32GiB)
 
+      --no-input
+          Never prompt; commands that need an answer fail with the command to run instead
+
   -e, --env <ENV>
           Environment variable: KEY=VALUE, or KEY to copy the host's value
 
@@ -73,6 +76,9 @@ Options:
 
       --no-progress
           Suppress progress output
+
+  -w, --workdir <WORKDIR>
+          Directory to start the agent session in: absolute, or relative to the sandbox workspace. Applies to this session only, so it works on a re-attach too
 
   -h, --help
           Print help
