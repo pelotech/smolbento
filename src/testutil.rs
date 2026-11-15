@@ -16,7 +16,7 @@ pub struct TestEnv {
 }
 
 /// A context with temp config/cache/data dirs, cwd `<tmp>/proj`, `now` = 1_000_000, uid 501 and smolvm
-/// 1.35.0.
+/// 1.35.1.
 pub fn test_env(extra_env: &[(&str, &str)]) -> TestEnv {
     let dir = tempfile::tempdir().unwrap();
     let mut env = BTreeMap::from([
@@ -48,7 +48,7 @@ pub fn test_env(extra_env: &[(&str, &str)]) -> TestEnv {
     std::fs::write(paths.policy_file(), "mode = \"allow-all\"\n").unwrap();
     let (settings, config_error) = Settings::load(&paths, env.clone());
     let fake = FakeRunner::new();
-    fake.ok(&["--version"], "smolvm 1.35.0\n");
+    fake.ok(&["--version"], "smolvm 1.35.1\n");
     let cwd = dir.path().join("proj");
     std::fs::create_dir_all(&cwd).unwrap();
     let cwd = cwd.canonicalize().unwrap();

@@ -234,27 +234,3 @@ fn a_create_whose_first_start_fails_removes_the_sandbox() {
     // The smolvm error stays reachable, for its hint.
     assert!(err.chain().any(|e| e.is::<crate::smolvm::SmolvmError>()));
 }
-
-// WORKAROUND(smolvm 1.35.0 idmap): remove with `sandbox::idmap_workaround`.
-#[test]
-fn a_start_maps_the_workspace_to_the_session_user_and_a_failure_only_warns() {
-    let fake = FakeRunner::new();
-    fake.ok(&["machine", "status"], &stopped());
-    let vm = Smolvm::new(fake);
-    let mut sb = get(&vm, "claude-myrepo").unwrap();
-    let script = idmap_workaround::script(&sb.meta).expect("a workspace to map");
-    vm.runner().fail(
-        &root_sh("sbx-claude-myrepo", &script),
-        "EXEC_FAILED",
-        "no idmap",
-    );
-    ensure_running(&vm, &mut sb, || Ok(plan())).unwrap();
-    assert!(sb.is_running(), "a warning, not a failed start");
-    let lines = vm.runner().call_lines();
-    assert!(
-        lines
-            .iter()
-            .any(|l| l.contains("-u root") && l.contains("X-mount.idmap")),
-        "{lines:#?}"
-    );
-}

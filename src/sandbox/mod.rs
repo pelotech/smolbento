@@ -4,7 +4,6 @@ mod clone_step;
 pub mod create;
 pub mod env;
 mod guest_cmd;
-mod idmap_workaround; // WORKAROUND(smolvm 1.35.0 idmap)
 mod kit_steps;
 pub mod labels;
 pub mod name;
@@ -233,16 +232,6 @@ fn setup<R: Runner>(
     if let Err(e) = vm.exec_captured(&ExecSpec::sh(&sb.machine, "root", hosts_cmd())) {
         eprintln!(
             "warning: {}: couldn't add host.docker.internal to /etc/hosts: {e:#}",
-            sb.name()
-        );
-    }
-    // WORKAROUND(smolvm 1.35.0 idmap): not fatal; an unmapped workspace is still readable.
-    if let Some(script) = idmap_workaround::script(&sb.meta)
-        && let Err(e) = vm.exec_captured(&ExecSpec::sh(&sb.machine, "root", script))
-    {
-        eprintln!(
-            "warning: {}: couldn't map the workspace to the sandbox user, so it may not be \
-             writable (smolvm 1.35.0 bug): {e:#}",
             sb.name()
         );
     }

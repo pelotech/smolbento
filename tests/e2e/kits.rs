@@ -82,26 +82,14 @@ pub(crate) fn real_shell_kit_runs_dockerd_across_restarts() {
 
 /// The real `claude` agent kit: pulled from Docker Hub, its API key bound from your secret (the
 /// value stays on the host), its install steps writing Claude's settings, its agent file in
-/// place, and the agent idle until `run` starts it. `--clone`, so the workspace is the sandbox's
-/// own (the kit image has no `mount` for smolvm 1.35.0's idmap workaround).
+/// place, the agent idle until `run` starts it, and the mounted workspace writable by the agent
+/// (smolvm maps it to the kit's image user).
 #[test]
 #[ignore = "boots real VMs and pulls sbx's claude kit; run with `just e2e`"]
 pub(crate) fn real_claude_kit_binds_its_api_key_and_seeds_its_settings() {
     let e = E2e::new("claude");
     e.real_agent_kits();
     let ws = e.workspace();
-    e.git_ok(&["init", "-q"]);
-    e.git_ok(&[
-        "-c",
-        "user.name=e2e",
-        "-c",
-        "user.email=e2e@example.com",
-        "commit",
-        "-q",
-        "--allow-empty",
-        "-m",
-        "init",
-    ]);
     // A host command, so no keychain is needed.
     e.ok(&[
         "secret",
@@ -114,7 +102,6 @@ pub(crate) fn real_claude_kit_binds_its_api_key_and_seeds_its_settings() {
         "create",
         "claude",
         ws.to_str().unwrap(),
-        "--clone",
         "--name",
         &e.name,
         "--cpus",
@@ -142,6 +129,13 @@ pub(crate) fn real_claude_kit_binds_its_api_key_and_seeds_its_settings() {
     );
     // The agent idles at boot: nothing runs claude until `run`.
     assert_eq!(sh("pgrep -x claude || true"), "", "{}", sh("ps -ef"));
+    // The workspace is the agent's to write, and the file is yours on the host.
+    assert_eq!(
+        sh("touch e2e-written && echo ok"),
+        "ok\n",
+        "the agent writes its workspace"
+    );
+    assert!(ws.join("e2e-written").exists());
 }
 
 /// Checks the sandbox runs exactly one dockerd, again and again for about 5 s: a second one

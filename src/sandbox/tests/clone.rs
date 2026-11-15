@@ -26,7 +26,7 @@ fn starts_install_the_bridge_shims_or_remove_ours() {
             "machine exec --name sbx-claude-myrepo -u root -- sh -c {}",
             bridge::remove_cmd()
         );
-        let lines = lines_without_idmap(&vm);
+        let lines = vm.runner().call_lines();
         // Right after the hosts step: the install, or without the bridge the removal.
         let hosts = lines
             .iter()

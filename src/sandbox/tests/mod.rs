@@ -178,11 +178,3 @@ pub(super) fn failing_startup(fake: &FakeRunner, machine: &str, code: i32) {
         },
     );
 }
-
-/// The fake's call lines without the idmap step.
-/// WORKAROUND(smolvm 1.35.0 idmap): back to `call_lines()` when it's removed.
-pub(super) fn lines_without_idmap(vm: &Smolvm<FakeRunner>) -> Vec<String> {
-    let mut lines = vm.runner().call_lines();
-    lines.retain(|l| !l.contains("X-mount.idmap"));
-    lines
-}

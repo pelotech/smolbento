@@ -143,15 +143,6 @@ in [sbx compatibility](sbx-compatibility.md). Worth another look:
 Proven on GitHub: e2e on `ubuntu-latest`, and the v0.1.1 release (all three binaries; macOS binary
 verified on a Mac).
 
-- **smolvm 1.35.0 doesn't map `-v` directories to the workload user** (macOS), so the session user
-  can't write its workspace. Meanwhile: after each start smolbento binds each workspace and kit host
-  mount onto itself with an idmap (`src/sandbox/idmap_workaround.rs`). It needs util-linux 2.39 or
-  newer in the image (the sbx agent images have it); older images, images without `mount` (Docker's
-  hardened `docker.io/sbx/antigravity`), and folders added while running get a warning, and their
-  workspace isn't writable; `--clone` works there, since the agent works in its own clone. Three e2e tests on such images fail meanwhile: `just e2e` leaves them out and
-  `just e2e-known-broken` (a non-blocking CI step) runs them. Remove everything tagged
-  `WORKAROUND(smolvm 1.35.0 idmap)` once a fixed smolvm is the minimum. Upstream fix:
-  [smolvm#2189](https://github.com/smol-machines/smolvm/pull/2189).
 - Refusals of sandboxes and templates from before built-in agents were kits
   (`Sandbox::check_current`, `templates::Entry::check_current`, and their tests): remove them one
   release after the agents-as-kits change ships, once users have had a release to recreate them.
