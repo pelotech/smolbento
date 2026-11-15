@@ -44,6 +44,11 @@ fn connect(url: &str) -> Result<()> {
 }
 
 /// Tests don't reach the network: a `.invalid` host is unreachable, any other answers.
+/// The error for a server name that isn't registered.
+pub fn unknown(name: &str) -> String {
+    format!("no MCP server named '{name}'\n  try: bento mcp ls")
+}
+
 #[cfg(test)]
 fn connect(url: &str) -> Result<()> {
     let host = reqwest::Url::parse(url)?
@@ -353,9 +358,4 @@ mod tests {
         };
         assert_eq!(c.host(), None);
     }
-}
-
-/// The error for a server name that isn't registered.
-pub fn unknown(name: &str) -> String {
-    format!("no MCP server named '{name}'\n  try: bento mcp ls")
 }
