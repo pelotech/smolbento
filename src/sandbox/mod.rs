@@ -56,7 +56,7 @@ pub struct StartPlan {
     pub remove: Vec<String>,
     /// Set for a clone sandbox; the clone itself is skipped once it exists, the remote copy is not.
     pub clone: Option<CloneStep>,
-    /// Start with `--branchable` so `sbt fork` can copy it; only for forkable sandboxes.
+    /// Start with `--branchable` so `bento fork` can copy it; only for forkable sandboxes.
     pub branchable: bool,
     /// Kit steps for the first start; only `create` runs them.
     pub kit: Option<KitFirstStart>,
@@ -97,7 +97,7 @@ impl Sandbox {
         if self.meta.command.is_none() {
             return Err(anyhow!(
                 "sandbox {n} was created by an older smolbento whose built-in agents weren't \
-                 kits; recreate it (sbt rm {n}, then sbt create …)",
+                 kits; recreate it (bento rm {n}, then bento create …)",
                 n = self.name()
             ));
         }
@@ -150,7 +150,7 @@ pub fn pick<'a>(all: &'a [Sandbox], name: &str) -> Result<&'a Sandbox> {
 }
 
 fn not_found(name: &str) -> anyhow::Error {
-    anyhow::anyhow!("sandbox '{name}' not found (see `sbt ls`)")
+    anyhow::anyhow!("sandbox '{name}' not found (see `bento ls`)")
 }
 
 /// All sandboxes, sorted by name; running ones include their published ports.
@@ -354,7 +354,7 @@ pub fn create<R: Runner>(
         Ok(()) => e.context("the first start failed (the sandbox was removed)"),
         Err(d) => anyhow!(
             "the first start failed: {e:#}\nremoving the sandbox failed too ({d:#}); remove it \
-             with `sbt rm -f {}`",
+             with `bento rm -f {}`",
             sb.name()
         ),
     };

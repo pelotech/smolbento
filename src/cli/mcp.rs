@@ -1,4 +1,4 @@
-//! `sbt mcp`: the MCP servers registered on the host.
+//! `bento mcp`: the MCP servers registered on the host.
 
 use std::collections::BTreeMap;
 use std::io::Write;
@@ -31,13 +31,13 @@ pub fn run<R: Runner>(ctx: &Ctx<R>, cmd: McpCmd) -> Result<i32> {
 }
 
 fn unknown(name: &str) -> String {
-    format!("no MCP server named '{name}' (see `sbt mcp ls`)")
+    format!("no MCP server named '{name}' (see `bento mcp ls`)")
 }
 
 /// What sbx does through its MCP gateway, which smolbento doesn't have.
 fn no_gateway(what: &str) -> anyhow::Error {
     Unsupported(format!(
-        "`sbt {what}` is not supported: smolbento has no MCP gateway (servers are attached \
+        "`bento {what}` is not supported: smolbento has no MCP gateway (servers are attached \
          with `run|create --static-mcp`)"
     ))
     .into()
@@ -101,7 +101,7 @@ fn add<R: Runner>(ctx: &Ctx<R>, a: McpAddArgs) -> Result<()> {
     let mut out = &ctx.out;
     writeln!(out, "Registered MCP server {}", a.name)?;
     for secret in secrets(&a.name, &server) {
-        writeln!(out, "Set its secret with: sbt secret set {secret}")?;
+        writeln!(out, "Set its secret with: bento secret set {secret}")?;
     }
     Ok(())
 }
@@ -293,11 +293,11 @@ mod tests {
         assert_eq!(listed(&mut t, &["mcp", "ls", "-q"]), "files\n");
         assert_eq!(
             t.sbt_err(&["mcp", "rm", "linear"]),
-            "no MCP server named 'linear' (see `sbt mcp ls`)"
+            "no MCP server named 'linear' (see `bento mcp ls`)"
         );
         assert_eq!(
             t.sbt_err(&["mcp", "inspect", "linear"]),
-            "no MCP server named 'linear' (see `sbt mcp ls`)"
+            "no MCP server named 'linear' (see `bento mcp ls`)"
         );
     }
 
@@ -629,7 +629,7 @@ mod tests {
         assert_eq!(
             t.stdout(),
             "Registered MCP server linear\n\
-             Set its secret with: sbt secret set mcp:linear:api-key\n"
+             Set its secret with: bento secret set mcp:linear:api-key\n"
         );
         let mut t = test_env(&[]);
         t.sbt(&FILES).unwrap();

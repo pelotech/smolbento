@@ -321,7 +321,7 @@ mod tests {
         t.runner()
             .fail(&["machine", "status"], "NOT_FOUND", "machine not found");
         let err = t.sbt(&["inspect", "nope"]).unwrap_err();
-        assert_eq!(err.to_string(), "sandbox 'nope' not found (see `sbt ls`)");
+        assert_eq!(err.to_string(), "sandbox 'nope' not found (see `bento ls`)");
         assert_eq!(t.stdout(), "");
     }
 }

@@ -1,0 +1,28 @@
+---
+source: tests/help.rs
+expression: help(&path)
+---
+List sandboxes
+
+Usage: bento ls [OPTIONS]
+
+Options:
+  -D, --debug
+          Print each smolvm command line
+
+      --format <FORMAT>
+          Output format
+
+          [possible values: table, json, yaml]
+
+      --json
+          Same as --format json
+
+      --no-input
+          Never prompt; commands that need an answer fail with the command to run instead
+
+  -q, --quiet
+          Only print names
+
+  -h, --help
+          Print help

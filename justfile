@@ -23,14 +23,47 @@ e2e threads="2" *args:
 e2e-dhi *args:
     cargo nextest run --locked --run-ignored only --no-fail-fast -E 'binary(e2e) & ({{needs_dhi}})' {{args}}
 
+# Pin smolvm VERSION: rewrite smolvm.lock from that release's checksums.sha256
+smolvm-pin version:
+    #!/usr/bin/env bash
+    set -euo pipefail
+    lock=$(just _smolvm-lock {{version}})
+    printf '%s\n' "$lock" > smolvm.lock
+    echo "pinned smolvm {{version}}"
+
+# Check smolvm.lock's checksums against its version's release (fails a version bump until pinned)
+smolvm-lock-check:
+    #!/usr/bin/env bash
+    set -euo pipefail
+    v=$(sed -n 's/^version = "\(.*\)"/\1/p' smolvm.lock)
+    if ! diff -u smolvm.lock <(just _smolvm-lock "$v"); then
+        echo "error: smolvm.lock doesn't match smolvm $v's checksums; run \`just smolvm-pin $v\`" >&2
+        exit 1
+    fi
+
+# Print smolvm.lock for VERSION, from that release's checksums.sha256
+_smolvm-lock version:
+    #!/usr/bin/env bash
+    set -euo pipefail
+    sums=$(curl -fsSL "https://github.com/smol-machines/smolvm/releases/download/v{{version}}/checksums.sha256")
+    hash() { echo "$sums" | awk -v f="smolvm-{{version}}-$1.tar.gz" '$2 == f { print $1 }'; }
+    echo "# smolvm release smolbento runs; \`just smolvm-pin VERSION\` rewrites this file."
+    echo 'version = "{{version}}"'
+    echo
+    echo '[sha256]'
+    for p in darwin-arm64 linux-arm64 linux-x86_64; do
+        h=$(hash "$p"); [ -n "$h" ] || { echo "error: no $p asset in v{{version}}" >&2; exit 1; }
+        echo "$p = \"$h\""
+    done
+
 # Run all pre-commit hooks
 lint:
     prek run --all-files
 
-# Install smolbento and its sbt/sbx/bento links into ~/.cargo/bin
+# Install smolbento and its bento/sbx links into ~/.cargo/bin
 install:
     cargo install --locked --path .
-    for n in sbt sbx bento; do ln -sf smolbento "$HOME/.cargo/bin/$n"; done
+    for n in bento sbx; do ln -sf smolbento "$HOME/.cargo/bin/$n"; done
 
 # Build a release tarball for TARGET into dist/ with BUILDER: cargo (native) or zigbuild (cross from Linux)
 release-build target builder:
@@ -66,7 +99,7 @@ release-build target builder:
     stage="dist/smolbento-{{target}}"
     rm -rf "$stage" && mkdir -p "$stage"
     cp "$bin" LICENSE README.md "$stage/"
-    for n in sbt sbx bento; do ln -s smolbento "$stage/$n"; done
+    for n in bento sbx; do ln -s smolbento "$stage/$n"; done
     tar -C dist -czf "dist/smolbento-{{target}}.tar.gz" "smolbento-{{target}}"
     # Smoke-test Linux binaries outside the build environment (no Nix store, stock glibc).
     case "{{target}}" in

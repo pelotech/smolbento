@@ -1,0 +1,21 @@
+---
+source: tests/help.rs
+expression: help(&path)
+---
+Set up host integrations
+
+Usage: bento setup [OPTIONS] <COMMAND>
+
+Commands:
+  ssh   Let `ssh NAME.sbx` reach a sandbox (adds a managed block to ~/.ssh/config)
+  help  Print this message or the help of the given subcommand(s)
+
+Options:
+  -D, --debug
+          Print each smolvm command line
+
+      --no-input
+          Never prompt; commands that need an answer fail with the command to run instead
+
+  -h, --help
+          Print help

@@ -105,7 +105,7 @@ impl Store {
             .with_context(|| format!("removing {}", self.dir.join(name).display()))
     }
 
-    /// `sbt reset`: the store and its metadata.
+    /// `bento reset`: the store and its metadata.
     pub fn wipe(&self) -> Result<()> {
         for d in [&self.dir, &self.meta] {
             match fs::remove_dir_all(d) {

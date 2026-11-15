@@ -19,6 +19,8 @@ smolbento-only:
 
 - `fork`. sbx has none; its `template save` saves only the disk.
 - `daemon`. Accepted and does nothing.
+- `smolvm ARGS…`. Runs the smolvm smolbento uses (the pinned release it downloads) on its own
+  state (`~/.smolbento`), passing ARGS through. sbx has no `smolvm` command.
 
 ## Parses, not implemented yet (exit 2)
 
@@ -41,12 +43,12 @@ smolbento-only:
 
 ## SSH
 
-`sbt setup ssh` and `ssh NAME.sbx` follow sbx's documented behaviour (sbx's own reference page for
+`bento setup ssh` and `ssh NAME.sbx` follow sbx's documented behaviour (sbx's own reference page for
 `setup ssh` was empty when this was written, so none of it is measured against a real sbx).
 
 | | sbx | smolbento |
 |---|---|---|
-| Config block | `# >>> docker sandboxes (managed) >>>` in `~/.ssh/config`, `ProxyCommand "sbx" ssh proxy %n`, `KnownHostsCommand`, `UserKnownHostsFile ~/.ssh/sbx_known_hosts`, `StrictHostKeyChecking yes` | Own markers `# >>> smolbento (managed) >>>`, so it never edits sbx's block (`setup ssh` warns when both exist: the first `Host *.sbx` wins). Added at the top of the file, ending with `Host *` so your own top-level options keep their scope. The same options, except `StrictHostKeyChecking no`, `UserKnownHostsFile /dev/null` and `LogLevel ERROR` replace the known-hosts ones: the server is `sbt ssh proxy`, a child process of `ssh` on a pipe, so there is no network path to impersonate and a host key protects nothing. There is no `ssh known-hosts` command and no host key file; each connection uses a new key. `ProxyCommand` uses absolute paths, `env SMOLBENTO_SMOLVM='<smolvm>' '<sbt>' ssh proxy %n`, found when you run `setup ssh` (an IDE started from the Dock runs it with a minimal PATH); run it again after moving either. No `IdentityAgent none` (IDEs such as IntelliJ warn about it; `IdentityFile /dev/null` and `IdentitiesOnly yes` already keep keys out) |
+| Config block | `# >>> docker sandboxes (managed) >>>` in `~/.ssh/config`, `ProxyCommand "sbx" ssh proxy %n`, `KnownHostsCommand`, `UserKnownHostsFile ~/.ssh/sbx_known_hosts`, `StrictHostKeyChecking yes` | Own markers `# >>> smolbento (managed) >>>`, so it never edits sbx's block (`setup ssh` warns when both exist: the first `Host *.sbx` wins). Added at the top of the file, ending with `Host *` so your own top-level options keep their scope. The same options, except `StrictHostKeyChecking no`, `UserKnownHostsFile /dev/null` and `LogLevel ERROR` replace the known-hosts ones: the server is `bento ssh proxy`, a child process of `ssh` on a pipe, so there is no network path to impersonate and a host key protects nothing. There is no `ssh known-hosts` command and no host key file; each connection uses a new key. `ProxyCommand` uses absolute paths, `'<bento>' ssh proxy %n` (prefixed with `env SMOLBENTO_SMOLVM=… SMOLBENTO_SMOLVM_HOME=…` for the ones you set), found when you run `setup ssh` (an IDE started from the Dock runs it with a minimal PATH); run it again after moving either. No `IdentityAgent none` (IDEs such as IntelliJ warn about it; `IdentityFile /dev/null` and `IdentitiesOnly yes` already keep keys out) |
 | `setup ssh remove` | Removes the block | Same; touches nothing outside our markers |
 | `--auto-create` | Adds desktop app connections | Not supported |
 | Sessions | The daemon terminates SSH; an unknown sandbox is an error; a stopped one is started | Same, in the `ProxyCommand` process. The shell is the session user's login shell in the workspace, on a pty from your terminal |
@@ -73,18 +75,18 @@ smolbento-only:
 | Daemon | `sandboxd` | None; each command talks to smolvm directly |
 | Clone transport | Git daemon in the sandbox on a published port; the remote URL changes on every start, and fetch fails while stopped | No daemon or port. The `sandbox-<name>` remote's `uploadpack` runs `smolbento _upload-pack <name>` (so `smolbento` must be on `PATH`) through `smolvm machine exec`. `git remote -v` shows a placeholder `file:///sbt/<name>` |
 | Tags from the sandbox | Remote follows tags | `tagOpt = --no-tags`; only branches come back |
-| Fetch on exit | None | `sbt run` fetches `sandbox-<name>` when the agent exits (`clone.fetch-on-exit`, default `true`), with `fetch.fsckObjects=true`. Manual `git fetch` is unchanged |
+| Fetch on exit | None | `bento run` fetches `sandbox-<name>` when the agent exits (`clone.fetch-on-exit`, default `true`), with `fetch.fsckObjects=true`. Manual `git fetch` is unchanged |
 | Fetch from a stopped sandbox | Fails | Starts it, fetches, stops it again |
 | Linked worktrees as clone source | Not supported | Supported: the branch, or the commit when detached |
 | `policy ls --wide` | sbx's wide layout | Adds a NAME column; sbx's other wide columns aren't shown |
 | Install-phase kit rules in `policy ls` | Not listed after create | Never listed, even while a create installs (they're in effect then) |
 | `inspect` | Also `id`, CPUs, memory, uptime, image digest, auth mode, network, mount and proxy policy, runtime mounts, MCP gateway, daemon | Those are left out (a sandbox is known by its name; smolvm has no other ID). The rest matches sbx's layout and JSON keys, `created_at` and `created_version` (`Created with:`) included; sandboxes from before 0.27 have no `created_version` |
 | Default name held by another directory | `create` refuses (`sandbox name … is already used by workspace …; pass --name …`); `run` reattaches to the current directory's sandbox (0.53) | Same, and the refusal suggests a name (`such as --name <agent>-<parent>-<directory>`). smolbento-only `sandbox.autoName` takes it instead of refusing. `run` finds this directory's sandbox by its workspace and agent |
-| `reset` | Deletes all state, kit host-mount directories included | Removes sandboxes, session state and the shared skills store. Kit host-mount directories stay: delete them yourself |
+| `reset` | Resets to a freshly installed state: stops and deletes sandboxes, clears the image cache, policy, the managed SSH config, secrets (unless `--preserve-secrets`), and all state, cache and config directories; also signs out, stops the daemon and clears Gordon's history | Same: sandboxes (and smolbento's leftovers in smolvm's default location, never machines without its labels), `~/.smolbento` (smolvm's state, images and the downloaded smolvm), the SSH config block, background services, and smolbento's config, cache and data directories (kit host-mount directories included). No sign-out, daemon or Gordon |
 | Progress output | A line per image layer | No per-layer lines. The pull shows a percentage, and the image step reads `preparing` until smolvm reports a pull (a cached image has none). CPU and Memory print before a kit's `resources@1`. A kit's "cached" label is approximate when pulls or builds overlap. On a terminal, a step's detail stays on the step's line, and a warning follows the step's last drawn line |
 | Browser and clipboard | Shims post to the daemon's proxy with `curl` and `jq`; copies work from any `exec`; image paste behind `clipboard.imagePaste`; `SBX_HOST_SESSION_ID` routes requests | Same shims and texts over a socket smolvm mounts at `/run/smolbento/bridge.sock`, with `curl` only. Copying is off until `clipboard.textCopy` is `true`, as in sbx 0.51. Served by a launchd or `systemd --user` unit whenever the sandbox runs; without a usable service manager, only while attached (`run`, `exec -it`), and then URLs print the fallback and copies fail otherwise. No image paste. sbx doesn't read clipboard text either. No `SBX_HOST_SESSION_ID`: with units each connection is served alone; attached-only serving: the first attached session. Forks keep the parent's socket, so they use its bridge while it is served. Login relay: `curl -g --noproxy '*'` with 10-second timeouts (`wget` for a `GET`); no request body (`form_post` callbacks lose theirs); text responses only; at most 4 ports per session (with units, per connection), each for 10 minutes. See [Usage](usage.md#browser-and-clipboard) |
 | Command aliases | `ls`, `rm`/`delete`, `secret ls`/`rm`/`delete`/`unset`, `settings ls`, `template ls`/`list`, `template rm`/`remove`/`delete` | Implemented. `volume` aliases come with that command |
-| `--version` | `sbx version vX` | `sbt --version` prints `sbt X`; `sbt version` also shows the smolvm version |
+| `--version` | `sbx version vX` | `bento --version` prints `bento X`; `bento version` also shows the smolvm version |
 
 ## Skills
 
@@ -93,7 +95,7 @@ smolbento-only:
 
 | Area | sbx | smolbento |
 |---|---|---|
-| Store path | macOS: `~/Library/Application Support/com.docker.sandboxes/sandboxes/agent-skills`. Linux: under `$XDG_STATE_HOME` | `~/.local/share/smolbento/agent-skills` (`$XDG_DATA_HOME` and `$SMOLBENTO_DATA_DIR` respected). A separate store: run `sbt skills import` to bring skills over |
+| Store path | macOS: `~/Library/Application Support/com.docker.sandboxes/sandboxes/agent-skills`. Linux: under `$XDG_STATE_HOME` | `~/.local/share/smolbento/agent-skills` (`$XDG_DATA_HOME` and `$SMOLBENTO_DATA_DIR` respected). A separate store: run `bento skills import` to bring skills over |
 | `add` | Clones the repository itself | Runs your host `git` (shallow, no prompts), so credential helpers and the SSH agent apply |
 | `update` | Per-skill messages; `No repository-installed skills found` | A failing repository prints an error and the others still update. Exit code 1 (not measured in sbx) |
 | Path that is both the agent's and a kit's directory | Can't happen: a v3 mixin can't join a built-in agent | Allowed; the path behaves like the agent's own directory |
@@ -136,7 +138,7 @@ servers are written into the agent's own MCP config at create.
 | `-t` with `--kit` | Not measured | Refused when a kit adds image layers (a template's disk is saved whole) |
 | Kit args | Not measured where sbx keeps them | Kept with the sandbox (`sbx.kits`), in its templates and their archives, defaults included |
 | `-t IMAGE` with a workload kit | Only for `shell` | Any workload kit, built-in agents included: the image replaces the kit's, its capabilities and command stay |
-| `save` of a running sandbox, no terminal | Suggests a nonexistent `--force` | Says to `sbt stop` it first |
+| `save` of a running sandbox, no terminal | Suggests a nonexistent `--force` | Says to `bento stop` it first |
 | `inspect` | Needs `--cloud`; local templates are Docker images | Not supported |
 | `--pull never` | Default for saved local snapshots; an uncached image fails (`not cached locally and pull_policy=never`) | Accepted only with a saved template, whose kits must be in the kit cache; exit 2 otherwise |
 
@@ -163,7 +165,7 @@ and `pullPolicy: always`.
 | Environment files in the sandbox | Mounted at their host path, read-only unless `writableEnvFiles` | Files in a writable mounted workspace are made read-only in the guest at each start (unless `writableEnvFiles`); root in the guest can undo it. Files outside the workspaces aren't mounted (smolvm mounts directories only). No plan line for a writable one |
 | `sandboxOptions.fuse: false` | `/dev/fuse` absent, no `SYS_ADMIN` | `/dev/fuse` removed at each start |
 | Disk sizes (`sandboxOptions.rootSize`, `dockerSize`, `clonedWorkspaceSize`; `sandbox.disk.dockerVolume`) | Separate root, Docker and clone volumes; `dockerVolume` defaults to `10g`, and `DOCKER_SANDBOXES_DOCKER_SIZE` sets one create | smolvm has two disks: `rootSize` sizes the overlay; `dockerSize`, `clonedWorkspaceSize` and the setting size the storage disk, which also holds image layers (the larger wins). Unset keeps smolvm's 20 GiB storage and 10 GiB overlay. One create: `SMOLBENTO_SANDBOX_DISK_DOCKER_VOLUME` |
-| `bindings` | Merged into the global `credentials.yaml`; `--prune-bindings` removes the service's entry; an unknown service is accepted by `env plan` | Stored in smolbento's secrets file; `--prune-bindings` works the same. An unknown service is refused at create, with the `sbt secret set` error |
+| `bindings` | Merged into the global `credentials.yaml`; `--prune-bindings` removes the service's entry; an unknown service is accepted by `env plan` | Stored in smolbento's secrets file; `--prune-bindings` works the same. An unknown service is refused at create, with the `bento secret set` error |
 | `mcp` url servers | Registered for the host, after an OAuth discovery that fails the create if the server is unreachable | Registered in `mcp.toml` and written into the agent's config (`claude` only). Create fails before anything is made when nothing answers at the URL (any HTTP answer counts; no OAuth discovery) |
 | `mcp` command servers | Run on the host, approved like lifecycle commands | Refused (exit 2) |
 | Plan after a plain `rm` | Lines end `— recorded as applied, no longer present` | A bare `+` |
@@ -208,9 +210,9 @@ your agent (`ssh-add -D` fails with `Failed to remove all identities.`). The set
 
 | Area | sbx | smolbento |
 |---|---|---|
-| Serving | The daemon, whenever the sandbox runs | A launchd or `systemd --user` unit owns the socket and runs `sbt _serve agent` per connection, whenever the sandbox runs (no smolbento daemon). The create's install steps serve an `install` grant themselves. Without a usable service manager, and for sandboxes made before units, only while `sbt` runs for the sandbox (`run`, `exec -it`, plain `exec`), and agent connections fail at other times |
+| Serving | The daemon, whenever the sandbox runs | A launchd or `systemd --user` unit owns the socket and runs `bento _serve agent` per connection, whenever the sandbox runs (no smolbento daemon). The create's install steps serve an `install` grant themselves. Without a usable service manager, and for sandboxes made before units, only while `bento` runs for the sandbox (`run`, `exec -it`, plain `exec`), and agent connections fail at other times |
 | Sessions | Every session reaches the agent | Every connection is served alone. Attached-only serving: the first session serves it and a concurrent second uses it |
-| Which agent | The sbx client's `SSH_AUTH_SOCK` | `ssh.agentSocketPath`, else the user session's `SSH_AUTH_SOCK` (launchd supplies macOS's; on Linux, that of the last `sbt` that wrote the unit). Attached-only serving: the serving `sbt`'s |
+| Which agent | The sbx client's `SSH_AUTH_SOCK` | `ssh.agentSocketPath`, else the user session's `SSH_AUTH_SOCK` (launchd supplies macOS's; on Linux, that of the last `bento` that wrote the unit). Attached-only serving: the serving `bento`'s |
 | `SSH_AUTH_SOCK_GATEWAY` | `gateway.docker.internal:3129` | Not set (no TCP gateway) |
 | `authenticate` limits | Logins only to the named servers | Supported. Host keys come from `ssh.knownHostsFile` (smolbento-only setting, default `~/.ssh/known_hosts`), read at each login. A server known only through `@cert-authority`, or by a wildcard or negated pattern, is refused, as is a `[host]:port` entry; hashed names work |
 | Forks | No forks | No agent or units of its own, but it keeps the parent's socket mount, so it can use the agent (with the parent's grant) while the parent is served |
@@ -258,13 +260,13 @@ anything is created. An optional one is skipped with a warning.
 ### What works as in sbx
 
 - A workload kit's command runs as the image's `USER` (root if none), under `/bin/bash` so
-  `BASH_ENV` is sourced, in the workspace path rather than `WORKDIR`. `sbt exec` uses the same
+  `BASH_ENV` is sourced, in the workspace path rather than `WORKDIR`. `bento exec` uses the same
   user. Without `/bin/bash` the error is `executable file '/bin/bash' not found` (exit 127).
   smolvm maps the workspace to the image user so it can write it. An image with no `ENTRYPOINT`
   or `CMD` is refused at create and by `kit validate`.
 - A v3 workload's `ENTRYPOINT` + `CMD` also run at every boot, as the image user, as the kit
   spec's default launch mode says (the machine's command; smolvm keeps the machine up after it
-  exits). Not measured against sbx. `sbt run` is unchanged: an interactive session through `exec`.
+  exits). Not measured against sbx. `bento run` is unchanged: an interactive session through `exec`.
 - Install steps run as root in the image `WORKDIR` (`/` otherwise). Startup steps and kit files
   default to `agent`. v3 install steps get a clean environment: `PATH`, `HOME`, `USER`, `TERM`,
   the proxy and CA variables, and the step's own `env`. v3 startup steps and all v2 steps get the
@@ -282,7 +284,7 @@ anything is created. An optional one is skipped with a warning.
   exported under that name whenever it has a value (defaults and empty values count; no value
   exports nothing). The name may be `PATH`. A later kit's value and your own `-e` still win.
 - For `create REF`, a bare or dotted word is an agent name even when a directory of that name
-  exists: `sbt create alpine` fails with `unknown agent "alpine"`, `sbt create .hidden` with
+  exists: `bento create alpine` fails with `unknown agent "alpine"`, `bento create .hidden` with
   `unknown agent ".hidden"`. `a/b` is a registry reference even if the directory exists. For
   `--kit`, `kit validate|inspect|add` and an environment file's `kits:`, an existing path is a
   local kit without `./` (in an environment file, relative to the file). Otherwise a local kit is
@@ -298,7 +300,7 @@ anything is created. An optional one is skipped with a warning.
   `resolve: dependency cycle among ./a, ./b`, and `kit ./x is listed more than once`.
 - A required credential with no secret warns
   `WARN: required credential not found for service SERVICE`, and the requests go out without it.
-  The warning adds the `sbt secret set` command to run.
+  The warning adds the `bento secret set` command to run.
 - `kit inspect` and `kit validate` print sbx's summary (`Name:`, `Kind:`, `Schema:`, `Policies:`,
   `Credentials:`, `Commands:`) and `✓ <ref> — valid`. `kit inspect --format json` is the
   v2-shaped descriptor; `kit validate --json` is `{reference, kind, valid, warnings}`.
@@ -336,7 +338,7 @@ anything is created. An optional one is skipped with a warning.
 | `kit inspect` output | Summary table; `--format json` is the v2-shaped descriptor | Same shape, plus `--format yaml` and `--json`. The table adds `Capabilities:`, Source, Digest, Provides, Requires, Integrates, Conflicts, Credentials (each service and where its secret goes), and Args when present; JSON and YAML carry these under a `smolbento` key. `--kit-arg` is checked but not substituted into the output |
 | `kit pack`, `kit push` | v1 and v2; v3 refused (`unsupported schemaVersion "3" (supported: [1 2])`) | v2 only (v1 isn't loaded); v3 refused with sbx's message. A kit with `files/workspace` is refused (sbx's mapping isn't measured) |
 | Kit archives | `kit pack`'s ZIP and pushed layer are byte-stable | Deterministic but not byte-identical (Go and Rust deflate differ), so each tool gives the same kit a different digest. The ZIP stores entries uncompressed |
-| `kit push` | HTTPS only; every push attaches a provenance referrer | Plain HTTP for loopback registries. No provenance yet. Prints `Pushed REF (sha256:…)`. Needs a tag. Logs in with `sbt secret set --registry` credentials, else the host's docker login |
+| `kit push` | HTTPS only; every push attaches a provenance referrer | Plain HTTP for loopback registries. No provenance yet. Prints `Pushed REF (sha256:…)`. Needs a tag. Logs in with `bento secret set --registry` credentials, else the host's docker login |
 | `kit pull` | Saves the files layer as `<repo>-<tag>.tar.gz` | With a digest, the default name is `<repo>-<first 12 hex>.tar.gz` (sbx's not measured). Other artifacts, including v3 image kits, are refused (`… is not a v2 kit artifact`). `kit.allowedSources` applies to `pull`, not `push` |
 | `kit sign`, `kit verify`, `kit push --sign` | Sigstore bundles as `application/vnd.docker.sandbox.kit.signature.v1` referrers; keyless (Fulcio and Rekor) or `--key` (unencrypted PEM, no Rekor upload) | Same bundles and referrers, made and checked by `cosign` (must be on PATH; `--key` PEM is imported into a private temp directory). Registries without the referrers API get the `sha256-<hex>` tag index, which sbx reads. A local directory (`kit.sig.bundle`) and `--tlog-upload=false` are refused (exit 2). `verify --key` checks no transparency log entry. `push --sign` attaches no provenance. `sign` prints `Signed REF`; keyless `verify` prints the identity and issuer you gave, not the certificate's |
 | `kit validate` output | `✓ <ref> — valid`; `--json` is `{reference, kind, valid, warnings}` | Adds `--format table\|json\|yaml`. A failure with `--json` or `--format json\|yaml` prints the object with `valid: false` and `errors: [...]` on stdout and exits 1; table output prints the plain error |

@@ -1,0 +1,28 @@
+---
+source: tests/help.rs
+expression: help(&path)
+---
+List templates
+
+Usage: bento template ls [OPTIONS]
+
+Options:
+  -D, --debug
+          Print each smolvm command line
+
+      --format <FORMAT>
+          Output format: table, json or yaml
+
+          [possible values: table, json, yaml]
+
+      --json
+          Output in JSON format
+
+      --no-input
+          Never prompt; commands that need an answer fail with the command to run instead
+
+  -q, --quiet
+          Only display template names
+
+  -h, --help
+          Print help

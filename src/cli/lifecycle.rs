@@ -18,7 +18,7 @@ use crate::workspace::clone;
 
 pub fn create<R: Runner>(ctx: &mut Ctx<R>, a: &CreateArgs) -> Result<i32> {
     if a.targets.is_empty() {
-        bail!("specify an agent, e.g. `sbt create claude .`");
+        bail!("specify an agent, e.g. `bento create claude .`");
     }
     check_kit_args(&a.targets, &a.opts)?;
     let (mut req, workload) = kit_target(ctx, &a.targets, &a.opts, false)?;
@@ -26,7 +26,7 @@ pub fn create<R: Runner>(ctx: &mut Ctx<R>, a: &CreateArgs) -> Result<i32> {
     let p = Progress::for_ctx(ctx, a.no_progress);
     let sb = create_reported(ctx, &p, &mut req, workload, &a.opts)?;
     p.finish(&format!("Created sandbox {}", sb.name()));
-    p.hint(&format!("sbt run --name {}", sb.name()));
+    p.hint(&format!("bento run --name {}", sb.name()));
     Ok(0)
 }
 
@@ -318,17 +318,55 @@ pub fn prune<R: Runner>(ctx: &mut Ctx<R>, a: &PruneArgs) -> Result<i32> {
     Ok(0)
 }
 
+/// Resets smolbento to a freshly installed state, as `sbx reset` does: every sandbox (smolbento's
+/// own, and its leftovers in smolvm's default state), the SSH config block, background services,
+/// settings, policy, templates, kits, skills and caches, stored secrets unless
+/// `--preserve-secrets`, and last `~/.smolbento` (smolvm's state and the downloaded smolvm, which
+/// does the deleting before that).
 pub fn reset<R: Runner>(ctx: &mut Ctx<R>, a: &ResetArgs) -> Result<i32> {
+    // A home the user chose may hold their own files: only the smolvm in it goes.
+    let chosen = ctx.smolvm.home != crate::smolvm::locate::default_home(&ctx.env)?;
+    let home = if chosen {
+        ctx.smolvm.home.join("engine")
+    } else {
+        ctx.smolvm.home.clone()
+    };
     confirm(
         ctx,
-        "Remove every sandbox, smolbento's session state and the shared skills store?",
+        &format!(
+            "Reset smolbento to a freshly installed state? This removes every sandbox (also \
+             smolbento's in smolvm's default location), {} (smolvm's state and the downloaded \
+             smolvm), settings and network policy, templates, kits and skills, the SSH config \
+             block, background services, and stored secrets (unless --preserve-secrets)",
+            home.display()
+        ),
         a.force,
     )?;
     let all = sandbox::list(&ctx.vm)?;
     for sb in forks_first(all.iter().collect()) {
         remove(ctx, sb, !a.preserve_secrets)?;
     }
+    // Sandboxes from before smolbento kept its own state; never a machine without its labels.
+    // Problems there only warn: what follows still resets this installation.
+    match ctx.vm.list_default_state() {
+        Ok(mut machines) => {
+            machines.retain(|m| m.labels.contains_key("sbx.name"));
+            machines.sort_by_key(|m| !m.labels.contains_key("sbx.fork-of"));
+            for m in machines {
+                if let Err(e) = ctx.vm.delete_default_state(&m.name) {
+                    eprintln!(
+                        "warning: couldn't remove {} from smolvm's default location: {e:#}",
+                        m.name
+                    );
+                }
+            }
+        }
+        Err(e) => eprintln!("warning: couldn't list smolvm's default location: {e:#}"),
+    }
     provision::sweep_orphans(ctx);
+    if let Some(home) = ctx.env.get("HOME") {
+        super::setup::remove_block(&std::path::Path::new(home).join(".ssh"))?;
+    }
     let _ = std::fs::remove_dir_all(ctx.paths.sessions());
     // A store that won't go must not keep the secrets from being forgotten.
     let wiped = crate::skills::store::Store::new(&ctx.paths).wipe();
@@ -336,7 +374,50 @@ pub fn reset<R: Runner>(ctx: &mut Ctx<R>, a: &ResetArgs) -> Result<i32> {
         super::secret::forget_all(ctx)?;
     }
     wiped?;
+    let keep = if a.preserve_secrets {
+        vec![ctx.paths.secrets_file(), ctx.paths.secret_values_file()]
+    } else {
+        Vec::new()
+    };
+    for dir in [&ctx.paths.cache, &ctx.paths.data, &ctx.paths.config] {
+        remove_tree(dir, &keep)?;
+    }
+    remove_tree(&home, &[])?;
+    if chosen {
+        writeln!(
+            &ctx.out,
+            "Kept {}: it's your smolvm.home. Delete it if it holds nothing else.",
+            ctx.smolvm.home.display()
+        )?;
+    }
     Ok(0)
+}
+
+/// Removes `dir` and everything in it but the files in `keep` (and the directories holding them).
+fn remove_tree(dir: &std::path::Path, keep: &[std::path::PathBuf]) -> Result<()> {
+    if !keep.iter().any(|k| k.starts_with(dir)) {
+        return match std::fs::remove_dir_all(dir) {
+            Err(e) if e.kind() != std::io::ErrorKind::NotFound => {
+                Err(e).with_context(|| format!("removing {}", dir.display()))
+            }
+            _ => Ok(()),
+        };
+    }
+    let Ok(entries) = std::fs::read_dir(dir) else {
+        return Ok(());
+    };
+    for e in entries.flatten() {
+        let p = e.path();
+        if keep.contains(&p) {
+            continue;
+        }
+        if p.is_dir() {
+            remove_tree(&p, keep)?;
+        } else {
+            std::fs::remove_file(&p).with_context(|| format!("removing {}", p.display()))?;
+        }
+    }
+    Ok(())
 }
 
 #[cfg(test)]
@@ -1276,7 +1357,7 @@ mod tests {
         let err = planned(&t, "shell", &opts).unwrap_err();
         assert_eq!(
             err.to_string(),
-            "--pull never works only with a saved template (see `sbt template ls`); smolvm pulls missing images"
+            "--pull never works only with a saved template (see `bento template ls`); smolvm pulls missing images"
         );
         assert_eq!(crate::cli::exit_code(&err), 2);
     }
@@ -1412,7 +1493,7 @@ SETUP
   ✓ shell — installed
 
   ✓ Created sandbox shell-proj
-        try: sbt run --name shell-proj
+        try: bento run --name shell-proj
 "
         );
     }
@@ -1511,7 +1592,7 @@ SETUP
         );
         let err = t.sbt_err(&["start", "claude-proj"]);
         assert!(
-            err.contains("no network policy chosen yet; run `sbt policy init"),
+            err.contains("no network policy chosen yet; run `bento policy init"),
             "{err}"
         );
         let started = |t: &TestEnv| {
@@ -1771,7 +1852,9 @@ SETUP
             json("sbx-a1", "stopped", "a1"),
             json("sbx-b1", "stopped", "b1")
         );
-        t.runner().ok(&["machine", "ls", "--json"], &ls);
+        t.runner().ok(&["machine", "ls", "--json"], "[]");
+        // The first list is smolbento's own state; the second, smolvm's old default.
+        t.runner().once_ok(&["machine", "ls", "--json"], &ls);
         t.sbt(&["reset", "-f"]).unwrap();
         let deletes = t
             .ctx
@@ -1816,6 +1899,120 @@ SETUP
             Some("gh-123")
         );
         assert!(Policy::load(&t.ctx.paths).unwrap().sandboxes.is_empty());
+    }
+
+    #[test]
+    fn reset_removes_old_location_sandboxes_but_not_others() {
+        let mut t = test_env(&[]);
+        let old = format!(
+            "[{},{}]",
+            json("sbx-old", "stopped", "old"),
+            machine_json("mine", "stopped", &[])
+        );
+        // smolbento's own state is empty; smolvm's default has one of ours and one of yours.
+        t.runner().ok(&["machine", "ls", "--json"], &old);
+        t.runner().once_ok(&["machine", "ls", "--json"], "[]");
+        t.sbt(&["reset", "-f"]).unwrap();
+        let calls = t.calls();
+        assert!(
+            calls.contains(&"machine delete -n sbx-old -f".to_string()),
+            "{calls:?}"
+        );
+        assert!(!calls.iter().any(|l| l.contains("-n mine")), "{calls:?}");
+        // The old-location calls run without smolbento's SMOLVM_DATA_DIR.
+        let removed = t.runner().removed();
+        assert!(
+            removed
+                .iter()
+                .filter(|r| r.contains(&"SMOLVM_DATA_DIR".to_string()))
+                .count()
+                >= 2,
+            "{removed:?}"
+        );
+    }
+
+    #[test]
+    fn reset_removes_smolbentos_dirs_and_its_home() {
+        let mut t = test_env(&[]);
+        t.runner().ok(&["machine", "ls", "--json"], "[]");
+        let home = std::path::PathBuf::from(&t.ctx.env["HOME"]).join(".smolbento");
+        for d in [
+            &t.ctx.paths.config,
+            &t.ctx.paths.cache,
+            &t.ctx.paths.data,
+            &home.join("engine/1.0.0"),
+        ] {
+            std::fs::create_dir_all(d).unwrap();
+            std::fs::write(d.join("x"), "x").unwrap();
+        }
+        t.sbt(&["reset", "-f"]).unwrap();
+        for d in [
+            &t.ctx.paths.config,
+            &t.ctx.paths.cache,
+            &t.ctx.paths.data,
+            &home,
+        ] {
+            assert!(!d.exists(), "{} is left", d.display());
+        }
+    }
+
+    #[test]
+    fn reset_goes_on_when_an_old_location_sandbox_wont_go_and_removes_forks_first() {
+        let mut t = test_env(&[]);
+        let old = format!(
+            "[{},{}]",
+            machine_json("sbx-a", "stopped", &[("sbx.name", "a")]),
+            machine_json(
+                "sbx-b",
+                "stopped",
+                &[("sbx.name", "b"), ("sbx.fork-of", "a")]
+            )
+        );
+        t.runner().ok(&["machine", "ls", "--json"], &old);
+        t.runner().once_ok(&["machine", "ls", "--json"], "[]");
+        t.runner().fail(
+            &["machine", "delete", "-n", "sbx-b"],
+            "SMOLVM_ERROR",
+            "busy",
+        );
+        std::fs::create_dir_all(&t.ctx.paths.config).unwrap();
+        t.sbt(&["reset", "-f"]).unwrap();
+        let deletes: Vec<String> = t
+            .calls()
+            .into_iter()
+            .filter(|l| l.starts_with("machine delete"))
+            .collect();
+        assert_eq!(
+            deletes,
+            ["machine delete -n sbx-b -f", "machine delete -n sbx-a -f"]
+        );
+        assert!(!t.ctx.paths.config.exists(), "the reset went on");
+    }
+
+    #[test]
+    fn reset_keeps_a_smolvm_home_you_chose_but_removes_its_smolvm() {
+        // Short, for the macOS socket check.
+        let home = tempfile::tempdir_in("/tmp").unwrap();
+        std::fs::create_dir_all(home.path().join("engine/1.0.0")).unwrap();
+        std::fs::write(home.path().join("notes.txt"), "mine").unwrap();
+        let mut t = test_env(&[("SMOLBENTO_SMOLVM_HOME", home.path().to_str().unwrap())]);
+        t.runner().ok(&["machine", "ls", "--json"], "[]");
+        t.sbt(&["reset", "-f"]).unwrap();
+        assert!(!home.path().join("engine").exists());
+        assert!(home.path().join("notes.txt").exists());
+    }
+
+    #[test]
+    fn reset_removes_the_ssh_block() {
+        let mut t = test_env(&[]);
+        t.runner().ok(&["machine", "ls", "--json"], "[]");
+        let ssh = std::path::PathBuf::from(&t.ctx.env["HOME"]).join(".ssh");
+        std::fs::create_dir_all(&ssh).unwrap();
+        let user = "Host gh\n  User git\n";
+        let block = crate::ssh::block::render("/bin/sbt", &[]);
+        std::fs::write(ssh.join("config"), format!("{block}{user}")).unwrap();
+        t.sbt(&["reset", "-f"]).unwrap();
+        assert_eq!(std::fs::read_to_string(ssh.join("config")).unwrap(), user);
     }
 
     fn fork_json(name: &str, state: &str, parent: Option<&str>) -> String {
@@ -1880,7 +2077,7 @@ SETUP
         let mut t = test_env(&[]);
         with_forks(&t, "stopped", "stopped", "stopped");
         let err = t.sbt(&["rm", "-f", "a-fork-1", "nope"]).unwrap_err();
-        assert_eq!(err.to_string(), "sandbox 'nope' not found (see `sbt ls`)");
+        assert_eq!(err.to_string(), "sandbox 'nope' not found (see `bento ls`)");
         assert!(deletes(&t).is_empty());
     }
 
@@ -1950,7 +2147,8 @@ SETUP
         let mut t = test_env(&[]);
         with_forks(&t, "stopped", "stopped", "stopped");
         t.sbt(&["reset", "-f"]).unwrap();
-        assert_eq!(deletes(&t), vec!["a-fork-1", "a-fork-2", "a"]);
+        // The fake answers smolvm's default location with the same machines, deleted after.
+        assert_eq!(deletes(&t)[..3], ["a-fork-1", "a-fork-2", "a"]);
     }
 
     #[test]

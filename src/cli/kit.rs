@@ -1,4 +1,4 @@
-//! `sbt kit inspect|validate|add`.
+//! `bento kit inspect|validate|add`.
 
 use std::io::Write;
 
@@ -724,7 +724,7 @@ fn add_running<R: Runner>(
             if let Err(r) = rollback() {
                 msg.push_str(&format!(
                     "\nremoving the kit's network rules failed too ({r:#}); remove them with \
-                     `sbt policy rm network --sandbox {name} --id <id>` (rule ids: {})",
+                     `bento policy rm network --sandbox {name} --id <id>` (rule ids: {})",
                     added.join(", ")
                 ));
             }
@@ -824,7 +824,7 @@ mod tests {
         assert_eq!(
             err,
             "sandbox dev was created by an older smolbento whose built-in agents weren't kits; \
-             recreate it (sbt rm dev, then sbt create …)"
+             recreate it (bento rm dev, then bento create …)"
         );
     }
 

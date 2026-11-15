@@ -20,9 +20,9 @@ fn refused(reference: &str, detail: &str) -> anyhow::Error {
          signer and re-push; if administrator policy permits, add the signer to the trusted \
          signers or disable the requirement; otherwise ask your administrator to update the \
          policy\n\
-         try: sbt kit sign --help\n \
-         or: sbt settings set kit.trustedSigners <signers>\n \
-         or: sbt settings set kit.requireSignature false"
+         try: bento kit sign --help\n \
+         or: bento settings set kit.trustedSigners <signers>\n \
+         or: bento settings set kit.requireSignature false"
     )
 }
 
@@ -92,7 +92,7 @@ struct Entry {
 
 /// `kit.trustedSigners`: `{"key": PATH}` entries and keyless `issuer`/`identity` entries (exact
 /// or `…Regexp`), as verification policies; keyless ones skip Rekor when IGNORE_TLOG
-/// (`kit.ignoreTransparencyLog`). Also checked by `sbt settings set`.
+/// (`kit.ignoreTransparencyLog`). Also checked by `bento settings set`.
 pub fn parse(raw: &str, ignore_tlog: bool) -> Result<Vec<Policy>> {
     let entries: Vec<Entry> = serde_json::from_str(raw).map_err(|e| {
         anyhow::anyhow!("kit.trustedSigners must be a JSON array of signer objects: {e}")

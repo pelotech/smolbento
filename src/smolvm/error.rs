@@ -61,16 +61,16 @@ impl SmolvmError {
                 "your user can't use KVM. Check `ls -l /dev/kvm`. Missing: enable virtualization \
                  in the firmware (nested virtualization, inside a VM) and load the module (`sudo \
                  modprobe kvm_intel` or `kvm_amd`). Present: join its group (`sudo usermod -aG \
-                 kvm $USER`) and log in again. `sbt diagnose` checks it",
+                 kvm $USER`) and log in again. `bento diagnose` checks it",
             ),
             "HYPERVISOR_UNAVAILABLE" => Some(
-                "the hypervisor isn't available: run `sbt diagnose`; on macOS the smolvm binary \
+                "the hypervisor isn't available: run `bento diagnose`; on macOS the smolvm binary \
                  needs the hypervisor entitlement (reinstall smolvm)",
             ),
             "STORAGE_ERROR" => Some(
                 "smolvm couldn't use its storage, most often because the disk is full: check `df \
-                 -h ~`. To free space: `sbt prune` removes stopped sandboxes, `sbt rm NAME` one \
-                 sandbox, `sbt template rm` a saved template",
+                 -h ~`. To free space: `bento prune` removes stopped sandboxes, `bento rm NAME` one \
+                 sandbox, `bento template rm` a saved template",
             ),
             _ => None,
         }
@@ -104,11 +104,11 @@ mod tests {
             with("HYPERVISOR_UNAVAILABLE")
                 .hint()
                 .unwrap()
-                .contains("sbt diagnose")
+                .contains("bento diagnose")
         );
         let storage = with("STORAGE_ERROR").hint().unwrap();
         assert!(storage.contains("df -h"), "{storage}");
-        assert!(storage.contains("sbt prune"), "{storage}");
+        assert!(storage.contains("bento prune"), "{storage}");
         assert_eq!(with("SMOLVM_ERROR").hint(), None);
         assert_eq!(with("NOT_FOUND").hint(), None);
     }

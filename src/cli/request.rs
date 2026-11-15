@@ -214,7 +214,7 @@ pub(crate) fn kit_target<R: Runner>(
     }
     if opts.pull.as_deref() == Some("never") {
         return Err(super::Unsupported(
-            "--pull never works only with a saved template (see `sbt template ls`); smolvm \
+            "--pull never works only with a saved template (see `bento template ls`); smolvm \
              pulls missing images"
                 .into(),
         )
@@ -291,7 +291,7 @@ pub(crate) fn kit_plan<R: Runner>(
             if kit.kind == Kind::Mixin {
                 // sbx's report, then how to use the mixin.
                 bail!(
-                    "{}\n{target} is a mixin; add it with --kit to an agent, e.g. sbt run shell \
+                    "{}\n{target} is a mixin; add it with --kit to an agent, e.g. bento run shell \
                      --kit {target}",
                     capability::incoherent(&[capability::NO_WORKLOAD.to_string()])
                 );
@@ -526,7 +526,7 @@ pub(crate) fn resolve_clone(req: &mut CreateRequest, opts: &SandboxOpts) -> Resu
         let primary = req
             .workspaces
             .first()
-            .context("--clone needs a workspace path, e.g. `sbt create --clone claude .`")?;
+            .context("--clone needs a workspace path, e.g. `bento create --clone claude .`")?;
         req.clone = Some(clone::source(&primary.path)?);
     }
     Ok(())
@@ -726,7 +726,7 @@ SETUP
   ✓ docker — installed
 
   ✓ Created sandbox shell-proj
-        try: sbt run --name shell-proj
+        try: bento run --name shell-proj
 "
         );
     }
@@ -883,7 +883,7 @@ SETUP
             format!(
                 "resolve: the kit set is not coherent:\n  - no workload kit in the set; every \
                  composition needs exactly one kind: workload base\n{kit} is a mixin; add it with \
-                 --kit to an agent, e.g. sbt run shell --kit {kit}"
+                 --kit to an agent, e.g. bento run shell --kit {kit}"
             )
         );
         assert!(no_machine_calls(&t));
@@ -1716,7 +1716,7 @@ SETUP
         let cases: Vec<(Vec<&str>, String)> = vec![
             (
                 vec!["--kit", "./hm", "--mount", "data"],
-                "--mount \"data\" requires HOST:SANDBOX_PATH\n  try: sbt create --help".into(),
+                "--mount \"data\" requires HOST:SANDBOX_PATH\n  try: bento create --help".into(),
             ),
             (
                 vec!["--kit", "./hm", "--mount", "missing:/x"],
@@ -1837,7 +1837,6 @@ SETUP
         assert_eq!(
             t.calls(),
             [
-                "--version",
                 "machine ls --json",
                 "machine status -n sbx-shell-proj --json"
             ]

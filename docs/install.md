@@ -3,32 +3,30 @@
 ## Requirements
 
 - macOS on Apple Silicon, or Linux (x86_64 or arm64) with KVM. Windows is planned.
-- smolvm 1.35 or newer: `brew install smol-machines/tap/smolvm`, or a release tarball from
-  [smol-machines/smolvm](https://github.com/smol-machines/smolvm/releases).
-- On Linux, read/write access to `/dev/kvm` (usually through the `kvm` group).
+- On Linux, read/write access to `/dev/kvm` (usually through the `kvm` group), and the bzip2
+  library (`libbz2.so.1`, in most distributions by default).
 - A normal user account. smolbento refuses to run as root (see [Security](SECURITY.md)).
 
 Docker isn't needed on the host. smolvm pulls agent images itself.
 
+smolvm is installed automatically: smolbento downloads the smolvm release it was tested with from
+[smol-machines/smolvm](https://github.com/smol-machines/smolvm/releases) the first time you run it,
+checks it against the checksum built into smolbento, and keeps it in `~/.smolbento` with your
+sandboxes. To download it ahead (before going offline, say), run `bento smolvm --version`.
+
 ## Install with Homebrew
 
 ```sh
-# smolvm, installed as a dependency
-brew tap smol-machines/tap
-# Homebrew 7+ only loads trusted third-party taps
-brew trust pelotech/tap smol-machines/tap
+# once: Homebrew 7+ only loads trusted taps
+brew tap pelotech/tap && brew trust pelotech/tap
 brew install pelotech/tap/smolbento
 ```
 
-This installs `smolbento` and links `sbt` and `bento` to it. `sbx` isn't linked, so it can't clash
-with Docker's `sbx`. Add `alias sbx=sbt` to your shell to use that name. `brew upgrade` picks up new
-releases. Run `brew tap` before `brew trust`, as above. Homebrew rejects tapping a tap that is
-already trusted (see [pelotech/homebrew-tap](https://github.com/pelotech/homebrew-tap)).
-
-!!! note "Linux"
-    If smolvm fails to install from `smol-machines/tap` on Linux (1.32.3 did), install smolvm
-    from its release tarball and smolbento with
-    `brew install --ignore-dependencies pelotech/tap/smolbento`, or use a release tarball below.
+This installs `smolbento` and links `bento` to it, plus `e2fsprogs` on macOS (smolvm formats
+disks larger than 20 GiB with it). `sbx` and `sbt` aren't linked, so they can't clash with Docker's
+`sbx` or Scala's `sbt`. To use those names, add `alias sbx=bento sbt=bento` to your shell.
+`brew upgrade` picks up new releases. Tap before trusting, as above: Homebrew rejects tapping a tap
+that is already trusted.
 
 ## Install from source
 
@@ -39,12 +37,12 @@ direnv allow
 just install
 ```
 
-This installs `smolbento` into `~/.cargo/bin` and links `sbt`, `sbx` and `bento` to it. With Nix
+This installs `smolbento` into `~/.cargo/bin` and links `bento` and `sbx` to it. With Nix
 only, `nix build` produces the same names in `result/bin/`.
 
 !!! warning "Docker's `sbx`"
     If Docker Sandboxes is also installed, the `sbx` link can shadow Docker's `sbx`, or be shadowed
-    by it, depending on your `PATH` order. To use both, run `sbt` or `bento`, or delete
+    by it, depending on your `PATH` order. To use both, run `bento`, or delete
     `~/.cargo/bin/sbx`.
 
 ## Install a release
@@ -61,7 +59,8 @@ cosign verify-blob --bundle smolbento-<target>.tar.gz.sigstore.json \
 tar xzf smolbento-<target>.tar.gz
 ```
 
-Linux binaries need glibc 2.28 or newer.
+Linux binaries need glibc 2.28 or newer. On macOS, sandboxes with a disk larger than 20 GiB need `e2fsprogs`
+(`brew install e2fsprogs`); the Homebrew formula installs it for you.
 
 ## Upgrading
 
@@ -70,27 +69,45 @@ not start or work fully. Settings, secrets, policies and saved templates carry o
 inside a sandbox (installed tools, agent logins), save it as a template first:
 
 ```sh
-sbt stop NAME
-sbt template save NAME NAME-saved:v1
-sbt rm NAME
-sbt create AGENT PATH --name NAME -t NAME-saved:v1
+bento stop NAME
+bento template save NAME NAME-saved:v1
+bento rm NAME
+bento create AGENT PATH --name NAME -t NAME-saved:v1
 ```
+
+Sandboxes made before smolbento downloaded its own smolvm stay in your smolvm's default location,
+so `bento ls` no longer shows them. Recreate them, and run `bento reset` to remove the old ones.
+
+## Uninstalling
+
+Remove smolbento's sandboxes and files first, then smolbento:
+
+```sh
+bento reset --force
+# or delete the binary and its links
+brew uninstall smolbento
+```
+
+`bento reset` deletes every sandbox (including ones from before smolbento downloaded its own smolvm),
+its settings, secrets and templates, and `~/.smolbento` with the smolvm in it. If smolbento is
+already gone, delete `~/.smolbento` and the folders listed in
+[Configuration](configuration.md#files).
 
 ## Check your setup
 
 ```sh
-sbt diagnose
+bento diagnose
 ```
 
-Every line should start with `ok`. It checks the smolvm version, hypervisor access (`/dev/kvm` on
-Linux, smolvm's hypervisor entitlement on macOS) and your config file. If a line says `FAIL`, see
+Every line should start with `ok`. It checks the smolvm smolbento runs, hypervisor access
+(`/dev/kvm` on Linux, smolvm's hypervisor entitlement on macOS) and your config file. If a line says `FAIL`, see
 [Troubleshooting](troubleshooting.md).
 
 ## Shell completions
 
 ```sh
 # also: bash, fish, powershell
-sbt completion zsh > "${fpath[1]}/_sbt"
+bento completion zsh > "${fpath[1]}/_bento"
 ```
 
 Run as `sbx` or `bento`, it generates completions for that name (`sbx completion zsh`).

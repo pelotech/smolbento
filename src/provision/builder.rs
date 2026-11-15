@@ -173,7 +173,7 @@ fn pull_tokens<R: Runner>(
         let Some(password) = registry_secret(ctx.store.as_ref(), host)? else {
             bail!(
                 "registry secret {host} has no value in {}; set it again with \
-                 `sbt secret set --registry {host} --password-stdin`",
+                 `bento secret set --registry {host} --password-stdin`",
                 ctx.store.describe()
             );
         };
@@ -403,7 +403,7 @@ fn build_error(dir: &Path, e: &anyhow::Error, unbound: &[String]) -> anyhow::Err
             "building {} failed: the build reached {hosts}, which you stored a registry login for, \
              without a token: smolbento gets one only for images the kit's descriptor names as \
              {refs}. Name the image that way in the kit, or remove the login with \
-             `sbt secret rm --registry {host}`",
+             `bento secret rm --registry {host}`",
             dir.display()
         );
     }
@@ -416,7 +416,7 @@ fn build_error(dir: &Path, e: &anyhow::Error, unbound: &[String]) -> anyhow::Err
         let host = host.as_deref().unwrap_or("HOST");
         return anyhow::anyhow!(
             "building {} failed: the build pulls{from}, which needs a registry login; store \
-             one with `sbt secret set --registry {host} --password-stdin`",
+             one with `bento secret set --registry {host} --password-stdin`",
             dir.display()
         );
     }
@@ -753,7 +753,7 @@ mod tests {
             "{err}"
         );
         assert!(err.contains("`dhi.io/<repo>`"), "{err}");
-        assert!(err.contains("`sbt secret rm --registry dhi.io`"), "{err}");
+        assert!(err.contains("`bento secret rm --registry dhi.io`"), "{err}");
         assert!(!err.contains("tok-"), "{err}");
     }
 
@@ -784,7 +784,7 @@ mod tests {
         assert!(
             err.contains(
                 "failed: the build pulls from ghcr.io, which needs a registry login; store \
-                 one with `sbt secret set --registry ghcr.io --password-stdin`"
+                 one with `bento secret set --registry ghcr.io --password-stdin`"
             ),
             "{err}"
         );
@@ -792,7 +792,7 @@ mod tests {
         assert!(
             err.contains(
                 "failed: the build pulls, which needs a registry login; store \
-                 one with `sbt secret set --registry HOST --password-stdin`"
+                 one with `bento secret set --registry HOST --password-stdin`"
             ),
             "{err}"
         );

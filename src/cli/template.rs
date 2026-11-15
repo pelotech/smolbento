@@ -1,4 +1,4 @@
-//! `sbt template`: saved sandbox templates (spec Phase 5d).
+//! `bento template`: saved sandbox templates (spec Phase 5d).
 
 use std::io::Write;
 
@@ -20,7 +20,7 @@ pub fn run<R: Runner>(ctx: &mut Ctx<R>, cmd: TemplateCmd) -> Result<i32> {
     match cmd {
         TemplateCmd::Inspect(_) => Err(Unsupported(
             "'template inspect' requires --cloud in v1; local templates are smolvm packs; \
-             list them with sbt template ls"
+             list them with bento template ls"
                 .into(),
         )
         .into()),
@@ -93,7 +93,7 @@ fn rm<R: Runner>(ctx: &Ctx<R>, a: &TemplateRmArgs) -> Result<()> {
     let found = store.find(&a.name).map_err(|e| {
         if e.downcast_ref::<crate::templates::Ambiguous>().is_some() {
             anyhow::anyhow!(
-                "cannot remove template \"{n}\": \"{n}\" matches more than one template\n  try: sbt template ls",
+                "cannot remove template \"{n}\": \"{n}\" matches more than one template\n  try: bento template ls",
                 n = a.name
             )
         } else {
@@ -102,7 +102,7 @@ fn rm<R: Runner>(ctx: &Ctx<R>, a: &TemplateRmArgs) -> Result<()> {
     })?;
     let Some(e) = found else {
         bail!(
-            "cannot remove template \"{n}\": no template \"{n}\"\n  try: sbt template ls",
+            "cannot remove template \"{n}\": no template \"{n}\"\n  try: bento template ls",
             n = a.name
         );
     };
@@ -111,7 +111,7 @@ fn rm<R: Runner>(ctx: &Ctx<R>, a: &TemplateRmArgs) -> Result<()> {
         ctx,
         &q,
         a.force,
-        "stdin is not a terminal; pass --force to skip the confirmation\n  try: sbt template rm --force",
+        "stdin is not a terminal; pass --force to skip the confirmation\n  try: bento template rm --force",
     )?;
     store.remove(&e)?;
     let mut out = &ctx.out;
@@ -135,7 +135,9 @@ fn rm<R: Runner>(ctx: &Ctx<R>, a: &TemplateRmArgs) -> Result<()> {
 
 fn load<R: Runner>(ctx: &Ctx<R>, a: &TemplateLoadArgs) -> Result<()> {
     if a.name.is_some() {
-        bail!("'template load' (local) takes one argument (FILE)\n  try: sbt template load --help");
+        bail!(
+            "'template load' (local) takes one argument (FILE)\n  try: bento template load --help"
+        );
     }
     let f = a.file.display();
     let p = Progress::for_ctx(ctx, false);
@@ -172,7 +174,7 @@ fn save<R: Runner>(ctx: &Ctx<R>, a: &TemplateSaveArgs) -> Result<()> {
     if sb.is_running() {
         let refused = || {
             anyhow::anyhow!(
-                "cannot save a running sandbox; stop it first with:\n  try: sbt stop {}",
+                "cannot save a running sandbox; stop it first with:\n  try: bento stop {}",
                 sb.name()
             )
         };
@@ -317,7 +319,7 @@ mod tests {
         let err = t.sbt_err(&["template", "save", "a", "t"]);
         assert_eq!(
             err,
-            "cannot save a running sandbox; stop it first with:\n  try: sbt stop a"
+            "cannot save a running sandbox; stop it first with:\n  try: bento stop a"
         );
         assert!(!t.calls().iter().any(|l| l.starts_with("pack")));
     }
@@ -346,7 +348,7 @@ mod tests {
         assert_eq!(
             err,
             "sandbox a was created by an older smolbento whose built-in agents weren't kits; \
-             recreate it (sbt rm a, then sbt create …)"
+             recreate it (bento rm a, then bento create …)"
         );
         let calls = t.calls();
         assert!(!calls.iter().any(|l| l.starts_with("pack")), "{calls:?}");
@@ -372,7 +374,7 @@ mod tests {
         assert_eq!(
             err,
             format!(
-                "cannot remove template \"{n}\": \"{n}\" matches more than one template\n  try: sbt template ls"
+                "cannot remove template \"{n}\": \"{n}\" matches more than one template\n  try: bento template ls"
             )
         );
         assert_eq!(Store::new(&t.ctx.paths).list().unwrap().len(), 2);
@@ -463,7 +465,7 @@ mod tests {
         let err = t.sbt_err(&["template", "rm", "t:v1"]);
         assert_eq!(
             err,
-            "stdin is not a terminal; pass --force to skip the confirmation\n  try: sbt template rm --force"
+            "stdin is not a terminal; pass --force to skip the confirmation\n  try: bento template rm --force"
         );
         t.sbt(&["template", "rm", "-f", "t:v1"]).unwrap();
         assert_eq!(t.stdout(), "Removed template t:v1\n");
@@ -489,7 +491,7 @@ mod tests {
         let err = t.sbt_err(&["template", "rm", "-f", "t:nope"]);
         assert_eq!(
             err,
-            "cannot remove template \"t:nope\": no template \"t:nope\"\n  try: sbt template ls"
+            "cannot remove template \"t:nope\": no template \"t:nope\"\n  try: bento template ls"
         );
     }
 
@@ -513,7 +515,7 @@ mod tests {
         let err = t.sbt_err(&["template", "load", "x.tar", "name"]);
         assert_eq!(
             err,
-            "'template load' (local) takes one argument (FILE)\n  try: sbt template load --help"
+            "'template load' (local) takes one argument (FILE)\n  try: bento template load --help"
         );
     }
 }

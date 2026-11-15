@@ -6,7 +6,7 @@ pub(crate) struct Forks(pub(crate) Vec<String>);
 impl Drop for Forks {
     fn drop(&mut self) {
         for n in &self.0 {
-            let _ = Command::new("smolvm")
+            let _ = smolvm_command()
                 .args(["machine", "delete", "-n", &format!("sbx-{n}"), "-f"])
                 .output();
         }

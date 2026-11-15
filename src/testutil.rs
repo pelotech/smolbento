@@ -18,7 +18,8 @@ pub struct TestEnv {
 /// A context with temp config/cache/data dirs, cwd `<tmp>/proj`, `now` = 1_000_000, uid 501 and smolvm
 /// 1.35.1.
 pub fn test_env(extra_env: &[(&str, &str)]) -> TestEnv {
-    let dir = tempfile::tempdir().unwrap();
+    // Under /tmp, so `~/.smolbento`'s sockets fit macOS's limit.
+    let dir = tempfile::tempdir_in("/tmp").unwrap();
     let mut env = BTreeMap::from([
         (
             "SMOLBENTO_CONFIG_DIR".to_string(),
@@ -33,6 +34,16 @@ pub fn test_env(extra_env: &[(&str, &str)]) -> TestEnv {
             dir.path().join("data").display().to_string(),
         ),
     ]);
+    // A home of its own (smolbento's `~/.smolbento` lives under it); a test may set another.
+    env.insert(
+        "HOME".to_string(),
+        dir.path().join("home").display().to_string(),
+    );
+    // An explicit smolvm, so no command downloads one (FakeRunner answers instead).
+    env.insert(
+        "SMOLBENTO_SMOLVM".to_string(),
+        "/nonexistent/smolvm".to_string(),
+    );
     // Built-in agents load these stand-ins, never Docker Hub.
     let agent_kits_dir = dir.path().join("agent-kits");
     crate::agents::write_stand_ins(&agent_kits_dir).unwrap();
@@ -47,6 +58,7 @@ pub fn test_env(extra_env: &[(&str, &str)]) -> TestEnv {
     std::fs::create_dir_all(&paths.config).unwrap();
     std::fs::write(paths.policy_file(), "mode = \"allow-all\"\n").unwrap();
     let (settings, config_error) = Settings::load(&paths, env.clone());
+    let smolvm = crate::smolvm::locate::locate(&settings, &env).unwrap();
     let fake = FakeRunner::new();
     fake.ok(&["--version"], "smolvm 1.35.1\n");
     let cwd = dir.path().join("proj");
@@ -56,6 +68,7 @@ pub fn test_env(extra_env: &[(&str, &str)]) -> TestEnv {
         ctx: Ctx {
             vm: Smolvm::new(fake),
             settings,
+            smolvm,
             services: crate::host_service::HostServices::disabled(),
             paths,
             cwd,
@@ -70,7 +83,7 @@ pub fn test_env(extra_env: &[(&str, &str)]) -> TestEnv {
             out: crate::ctx::Out::Buffer(Default::default()),
             input: crate::ctx::In::Buffer(Default::default()),
             args: vec![],
-            program: "sbt".into(),
+            program: "bento".into(),
         },
         _dir: dir,
     }
@@ -101,12 +114,12 @@ impl TestEnv {
         self.runner().call_lines()
     }
 
-    /// Runs `sbt ARGS`.
+    /// Runs `bento ARGS`.
     pub fn sbt(&mut self, args: &[&str]) -> Result<i32> {
         sbt(&mut self.ctx, args)
     }
 
-    /// Runs `sbt ARGS`, which must fail, and returns the error's message.
+    /// Runs `bento ARGS`, which must fail, and returns the error's message.
     pub fn sbt_err(&mut self, args: &[&str]) -> String {
         self.sbt(args).unwrap_err().to_string()
     }
@@ -193,6 +206,20 @@ pub fn break_config(t: &mut TestEnv) {
     let (settings, config_error) = Settings::load(&t.ctx.paths, t.ctx.env.clone());
     t.ctx.settings = settings;
     t.ctx.config_error = config_error;
+}
+
+impl TestEnv {
+    /// Reloads settings from `ctx.env` (as `main` would) and the smolvm they pick.
+    pub fn reload_settings(&mut self) {
+        self.ctx.settings = Settings::load(&self.ctx.paths, self.ctx.env.clone()).0;
+        self.ctx.smolvm = crate::smolvm::locate::locate(&self.ctx.settings, &self.ctx.env).unwrap();
+    }
+
+    /// Runs the downloaded smolvm rather than test_env's explicit stand-in.
+    pub fn use_managed_smolvm(&mut self) {
+        self.ctx.env.remove("SMOLBENTO_SMOLVM");
+        self.reload_settings();
+    }
 }
 
 /// Replaces policy.toml.
@@ -440,6 +467,39 @@ pub const CLAUDE_STAND_IN: &str = r#"{
 pub fn agent_stand_in(t: &TestEnv, name: &str, descriptor: &str) {
     let dir = std::path::Path::new(&t.ctx.env[crate::agents::KITS_DIR_ENV]);
     crate::agents::write_stand_in(dir, name, descriptor).unwrap();
+}
+
+/// A tiny HTTP server answering every GET with `body` (200), until the test ends. Returns its base
+/// URL (`http://127.0.0.1:PORT`) and the request lines it has seen.
+pub fn http_server(body: Vec<u8>) -> (String, std::sync::Arc<std::sync::Mutex<Vec<String>>>) {
+    use std::io::{BufRead, BufReader, Write};
+    let listener = std::net::TcpListener::bind("127.0.0.1:0").unwrap();
+    let base = format!("http://{}", listener.local_addr().unwrap());
+    let seen = std::sync::Arc::new(std::sync::Mutex::new(Vec::new()));
+    let log = seen.clone();
+    std::thread::spawn(move || {
+        for conn in listener.incoming() {
+            let Ok(mut conn) = conn else { break };
+            let mut reader = BufReader::new(conn.try_clone().unwrap());
+            let mut line = String::new();
+            let _ = reader.read_line(&mut line);
+            log.lock().unwrap().push(line.trim().to_string());
+            // Skip the headers.
+            loop {
+                let mut h = String::new();
+                if reader.read_line(&mut h).unwrap_or(0) == 0 || h == "\r\n" {
+                    break;
+                }
+            }
+            let head = format!(
+                "HTTP/1.1 200 OK\r\nContent-Length: {}\r\nConnection: close\r\n\r\n",
+                body.len()
+            );
+            let _ = conn.write_all(head.as_bytes());
+            let _ = conn.write_all(&body);
+        }
+    });
+    (base, seen)
 }
 
 #[cfg(test)]

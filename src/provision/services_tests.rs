@@ -244,7 +244,7 @@ fn diagnose_reports_leftovers_and_suggests_prune() {
     let out = t.stdout();
     assert!(
         out.contains(
-            "FAIL host services left by removed sandboxes: gone; `sbt prune` removes them"
+            "FAIL host services left by removed sandboxes: gone; `bento prune` removes them"
         ),
         "{out}"
     );

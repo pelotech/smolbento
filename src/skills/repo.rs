@@ -1,4 +1,4 @@
-//! `sbt skills add/update`: repository URLs, a shallow clone with host git, and the skills in it.
+//! `bento skills add/update`: repository URLs, a shallow clone with host git, and the skills in it.
 
 use std::collections::BTreeMap;
 use std::fs;

@@ -3,7 +3,7 @@ use super::*;
 pub(crate) struct E2e {
     pub(crate) dir: tempfile::TempDir,
     pub(crate) name: String,
-    /// Extra environment for every `sbt` call (e.g. `SMOLBENTO_DOCKER=true` for one test).
+    /// Extra environment for every `bento` call (e.g. `SMOLBENTO_DOCKER=true` for one test).
     pub(crate) vars: Vec<(&'static str, String)>,
     /// Set by [`E2e::one_off_images`].
     pub(crate) no_seeds: std::cell::Cell<bool>,
@@ -65,6 +65,7 @@ impl E2e {
             .env("SMOLBENTO_CACHE_DIR", self.dir.path().join("cache"))
             .env("SMOLBENTO_DATA_DIR", self.dir.path().join("data"))
             .env("SMOLBENTO_DOCKER", "false")
+            .env("SMOLBENTO_SMOLVM_HOME", smolvm_home())
             // Never your SSH agent: only the SSH tests set a throwaway one in `vars`.
             .env_remove("SSH_AUTH_SOCK")
             .env_remove("SMOLBENTO_SSH_AGENT_SOCKET")
@@ -232,7 +233,7 @@ agentInstructions:
 
 impl Drop for E2e {
     fn drop(&mut self) {
-        let _ = Command::new("smolvm")
+        let _ = smolvm_command()
             .args(["machine", "delete", "-n", &self.machine(), "-f"])
             .output();
         // Machines deleted with smolvm leave host service units behind: any state-changing
@@ -243,7 +244,7 @@ impl Drop for E2e {
 
 /// Whether `smolvm args` succeeds.
 pub(crate) fn smolvm(args: &[&str]) {
-    let out = Command::new("smolvm").args(args).output().unwrap();
+    let out = smolvm_command().args(args).output().unwrap();
     assert!(
         out.status.success(),
         "smolvm {args:?}:\n{}",
@@ -362,7 +363,7 @@ impl Registry {
 
 impl Drop for Registry {
     fn drop(&mut self) {
-        let _ = Command::new("smolvm")
+        let _ = smolvm_command()
             .args(["machine", "delete", "-f", "-n", &self.machine])
             .output();
     }
@@ -612,7 +613,7 @@ impl E2e {
             .unwrap_or_else(|| Image::alpine_agent_archive().to_str().unwrap().to_string())
     }
 
-    /// `sbt create` of an Alpine-based shell sandbox with `kits` (`-t <alpine> --kit ...`).
+    /// `bento create` of an Alpine-based shell sandbox with `kits` (`-t <alpine> --kit ...`).
     pub(crate) fn create_with_kits(&self, kits: &[&str]) {
         self.create_with_kits_as("shell", kits);
     }
@@ -661,4 +662,19 @@ pub(crate) fn basic_auth_ok(e: &E2e, sb: &str, var: &str, pass: &str) -> bool {
          https://httpbin.org/basic-auth/user/{pass}"
     );
     e.sbt(&["exec", sb, "sh", "-c", &cmd]).status.success()
+}
+
+/// The smolvm home every e2e test shares (as they share smolvm's builder and image cache): short,
+/// so its sockets fit macOS's limit, and apart from your own `~/.smolbento`.
+pub(crate) fn smolvm_home() -> String {
+    format!("/tmp/sbt-e2e-{}", smolbento::util::host_uid())
+}
+
+/// `smolbento smolvm`: the pinned smolvm (downloaded on first use) on the tests' shared home, or
+/// `SMOLBENTO_SMOLVM` when the run sets one (a local build).
+pub(crate) fn smolvm_command() -> Command {
+    let mut cmd = Command::new(env!("CARGO_BIN_EXE_smolbento"));
+    cmd.arg("smolvm")
+        .env("SMOLBENTO_SMOLVM_HOME", smolvm_home());
+    cmd
 }

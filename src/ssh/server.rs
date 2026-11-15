@@ -261,11 +261,11 @@ fn relay(proc: Proc, handle: Handle, ch: ChannelId, pty: bool, kind: Kind) -> Ru
                         Kind::Forward(addr, port) if code != 0 && !sent => {
                             if code == NO_FORWARD_TOOLS {
                                 eprintln!(
-                                    "sbt: can't forward to {addr}:{port}: the sandbox has neither nc nor bash"
+                                    "bento: can't forward to {addr}:{port}: the sandbox has neither nc nor bash"
                                 );
                             } else {
                                 eprintln!(
-                                    "sbt: can't forward to {addr}:{port}: the connection failed in the sandbox"
+                                    "bento: can't forward to {addr}:{port}: the connection failed in the sandbox"
                                 );
                             }
                         }
@@ -363,7 +363,7 @@ impl Handler for Conn {
                 reply.accept().await;
             }
             Err(e) => {
-                eprintln!("sbt: can't forward to {}:{}: {e:#}", to.0, to.1);
+                eprintln!("bento: can't forward to {}:{}: {e:#}", to.0, to.1);
                 reply.reject(ConnectFailed).await;
             }
         }
@@ -526,7 +526,7 @@ impl Conn {
             Err(e) => {
                 // The client sees a failed request; the reason goes to our stderr, which
                 // `ssh` shows.
-                eprintln!("sbt: {e}");
+                eprintln!("bento: {e}");
                 session.channel_failure(channel)
             }
         }

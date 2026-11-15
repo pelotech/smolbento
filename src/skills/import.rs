@@ -1,4 +1,4 @@
-//! `sbt skills import`: the agents' own skills directories, first copy of a name wins.
+//! `bento skills import`: the agents' own skills directories, first copy of a name wins.
 
 use std::collections::BTreeSet;
 use std::fs;

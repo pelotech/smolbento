@@ -1,4 +1,4 @@
-//! `sbt policy`: the network policy.
+//! `bento policy`: the network policy.
 
 use anyhow::{Context, Result, bail};
 use serde::Serialize;
@@ -66,7 +66,7 @@ pub fn run<R: Runner>(ctx: &mut Ctx<R>, cmd: PolicyCmd) -> Result<i32> {
             {
                 bail!(
                     "kit rules can't be removed; add a deny rule instead \
-                     (sbt policy deny network --sandbox {sb} <host>)"
+                     (bento policy deny network --sandbox {sb} <host>)"
                 );
             }
             // Ids are unique, so --id alone finds a sandbox's rule too.
@@ -94,7 +94,7 @@ pub fn run<R: Runner>(ctx: &mut Ctx<R>, cmd: PolicyCmd) -> Result<i32> {
             ] {
                 if set {
                     return Err(Unsupported(format!(
-                        "`sbt policy ls {flag}` is not implemented yet"
+                        "`bento policy ls {flag}` is not implemented yet"
                     ))
                     .into());
                 }
@@ -185,7 +185,7 @@ pub fn run<R: Runner>(ctx: &mut Ctx<R>, cmd: PolicyCmd) -> Result<i32> {
         PolicyCmd::Approval(cmd) => return approval(ctx, &mut policy, cmd),
         PolicyCmd::Refresh(_) => {
             return Err(
-                Unsupported("`sbt policy refresh` is for organization policies".into()).into(),
+                Unsupported("`bento policy refresh` is for organization policies".into()).into(),
             );
         }
     }
@@ -475,7 +475,7 @@ fn approval<R: Runner>(ctx: &Ctx<R>, policy: &mut Policy, cmd: ApprovalCmd) -> R
                 .map(|r| r.sandbox.as_str())
                 .collect();
             if seen.is_empty() {
-                bail!("no blocked request for '{id}' (see `sbt policy approval ls`)");
+                bail!("no blocked request for '{id}' (see `bento policy approval ls`)");
             }
             if let Some(s) = sandbox.as_deref()
                 && !seen.contains(&s)
@@ -563,7 +563,8 @@ struct LsOpts<'a> {
 /// For the table without --wide (stderr): how many listed rules have enforcement notes.
 fn ls_note(rows: &[LsRow]) -> Option<String> {
     let n = rows.iter().filter(|r| !r.notes.is_empty()).count();
-    (n > 0).then(|| format!("note: {n} rule(s) aren't fully enforced; see `sbt policy ls --wide`"))
+    (n > 0)
+        .then(|| format!("note: {n} rule(s) aren't fully enforced; see `bento policy ls --wide`"))
 }
 
 fn ls_rows(policy: &Policy, opts: &LsOpts) -> Vec<LsRow> {
@@ -1270,11 +1271,11 @@ mod tests {
         .unwrap();
         assert_eq!(
             ls_note_for(&p, None, None).as_deref(),
-            Some("note: 2 rule(s) aren't fully enforced; see `sbt policy ls --wide`")
+            Some("note: 2 rule(s) aren't fully enforced; see `bento policy ls --wide`")
         );
         assert_eq!(
             ls_note_for(&p, None, Some(Decision::Allow)).as_deref(),
-            Some("note: 1 rule(s) aren't fully enforced; see `sbt policy ls --wide`")
+            Some("note: 1 rule(s) aren't fully enforced; see `bento policy ls --wide`")
         );
         assert_eq!(ls_note_for(&p, Some("s2"), Some(Decision::Allow)), None);
     }

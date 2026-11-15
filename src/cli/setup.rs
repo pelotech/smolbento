@@ -44,14 +44,7 @@ fn install<R: Runner>(ctx: &Ctx<R>, ssh_dir: &Path) -> Result<i32> {
             .with_context(|| format!("creating {}", ssh_dir.display()))?;
     }
     let old = read(&config)?;
-    let smolvm = smolvm_path(ctx);
-    if smolvm.is_none() {
-        eprintln!(
-            "warning: smolvm isn't on your PATH; IDEs started from the Dock or a launcher may not \
-find it (set smolvm.path, then run `sbt setup ssh` again)"
-        );
-    }
-    let new = block::upsert(&old, &block::render(&binary(ctx), smolvm.as_deref()))?;
+    let new = block::upsert(&old, &block::render(&binary(ctx), &proxy_env(ctx)))?;
     if new != old {
         // A new file is private; an existing one keeps its mode.
         write_atomic(
@@ -78,24 +71,34 @@ the first one in the file wins (smolbento's is first unless you moved it)",
 
 fn remove<R: Runner>(ctx: &Ctx<R>, ssh_dir: &Path) -> Result<i32> {
     let config = ssh_dir.join("config");
-    let old = read(&config)?;
-    match block::remove(&old)? {
-        Some(new) => {
-            write_atomic(&config, new.as_bytes(), None, Symlink::Follow)?;
-            writeln!(
-                &ctx.out,
-                "removed the smolbento block from {}",
-                config.display()
-            )?;
-        }
-        None => writeln!(&ctx.out, "no smolbento block in {}", config.display())?,
+    if remove_block(ssh_dir)? {
+        writeln!(
+            &ctx.out,
+            "removed the smolbento block from {}",
+            config.display()
+        )?;
+    } else {
+        writeln!(&ctx.out, "no smolbento block in {}", config.display())?;
     }
     Ok(0)
 }
 
+/// Removes smolbento's block from `<ssh_dir>/config`; whether there was one.
+pub fn remove_block(ssh_dir: &Path) -> Result<bool> {
+    let config = ssh_dir.join("config");
+    let old = read(&config)?;
+    match block::remove(&old)? {
+        Some(new) => {
+            write_atomic(&config, new.as_bytes(), None, Symlink::Follow)?;
+            Ok(true)
+        }
+        None => Ok(false),
+    }
+}
+
 /// How `ssh` should call us, as an absolute path (IDEs run the ProxyCommand with a minimal PATH):
 /// where the name this binary was run as is found on PATH, when that is this very binary (a stable
-/// link such as `/opt/homebrew/bin/sbt`, not a versioned Cellar path); else this binary's path.
+/// link such as `/opt/homebrew/bin/bento`, not a versioned Cellar path); else this binary's path.
 fn binary<R: Runner>(ctx: &Ctx<R>) -> String {
     let exe = std::env::current_exe()
         .ok()
@@ -106,18 +109,44 @@ fn binary<R: Runner>(ctx: &Ctx<R>) -> String {
             .map(|d| d.join(name))
             .find(|p| p.is_file())
     };
-    for name in [ctx.program.as_str(), "sbt", "smolbento"] {
+    for name in [ctx.program.as_str(), "bento", "smolbento"] {
         if let (Some(found), Some(exe)) = (on_path(name), &exe)
             && found.canonicalize().ok().as_ref() == Some(exe)
         {
             return found.display().to_string();
         }
     }
-    exe.map_or_else(|| "sbt".into(), |e| e.display().to_string())
+    exe.map_or_else(|| "bento".into(), |e| e.display().to_string())
 }
 
-/// smolvm's absolute path, as smolbento would run it now (`smolvm.path`, looked up on PATH when
-/// it's a bare name), so the ProxyCommand doesn't depend on the IDE's PATH. `None` if not found.
+/// What the ProxyCommand sets: only the smolvm settings the user set, since `bento ssh proxy` finds
+/// the pinned smolvm and `~/.smolbento` by itself. An explicit smolvm goes in by its absolute path,
+/// so it doesn't depend on the IDE's PATH.
+fn proxy_env<R: Runner>(ctx: &Ctx<R>) -> Vec<(String, String)> {
+    let mut env = Vec::new();
+    if !ctx
+        .settings
+        .value("smolvm.path")
+        .unwrap_or_default()
+        .is_empty()
+    {
+        match smolvm_path(ctx) {
+            Some(p) => env.push(("SMOLBENTO_SMOLVM".to_string(), p)),
+            None => eprintln!(
+                "warning: smolvm.path isn't an absolute path or on your PATH; IDEs started from \
+the Dock or a launcher may not find it (set it to an absolute path, then run `bento setup ssh` again)"
+            ),
+        }
+    }
+    let home = ctx.settings.value("smolvm.home").unwrap_or_default();
+    if !home.is_empty() {
+        env.push(("SMOLBENTO_SMOLVM_HOME".to_string(), home));
+    }
+    env
+}
+
+/// The explicit smolvm's absolute path (`smolvm.path`, looked up on PATH when it's a bare name).
+/// `None` if not found.
 fn smolvm_path<R: Runner>(ctx: &Ctx<R>) -> Option<String> {
     let configured = ctx.settings.value("smolvm.path").ok()?;
     let p = Path::new(&configured);
@@ -202,6 +231,30 @@ mod tests {
         t.sbt(&["setup", "ssh"]).unwrap();
         t.sbt(&["setup", "ssh", "remove"]).unwrap();
         assert_eq!(std::fs::read_to_string(h.join(".ssh/config")).unwrap(), sbx);
+    }
+
+    #[test]
+    fn the_proxy_command_names_smolvm_only_when_explicit() {
+        // test_env sets an explicit smolvm; without one, the ProxyCommand runs bento alone.
+        let mut t = test_env(&[]);
+        let h = home(&mut t);
+        t.use_managed_smolvm();
+        t.sbt(&["setup", "ssh"]).unwrap();
+        let cfg = std::fs::read_to_string(h.join(".ssh/config")).unwrap();
+        assert!(!cfg.contains("SMOLBENTO_SMOLVM"), "{cfg}");
+        // An explicit one that exists is named, by its absolute path.
+        let s = h.join("my-smolvm");
+        std::fs::write(&s, "").unwrap();
+        t.ctx
+            .env
+            .insert("SMOLBENTO_SMOLVM".into(), s.display().to_string());
+        t.reload_settings();
+        t.sbt(&["setup", "ssh"]).unwrap();
+        let cfg = std::fs::read_to_string(h.join(".ssh/config")).unwrap();
+        assert!(
+            cfg.contains(&format!("SMOLBENTO_SMOLVM='{}'", s.display())),
+            "{cfg}"
+        );
     }
 
     #[test]

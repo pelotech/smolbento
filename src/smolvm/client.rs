@@ -1,6 +1,9 @@
 use std::collections::BTreeMap;
 use std::path::{Path, PathBuf};
 
+/// smolvm's state directory variable; smolbento sets it on every call (`locate`).
+const DATA_DIR: &str = "SMOLVM_DATA_DIR";
+
 use anyhow::{Context, Result, anyhow};
 
 use super::{
@@ -239,6 +242,14 @@ fn args(items: &[&str]) -> Vec<String> {
     items.iter().map(|s| s.to_string()).collect()
 }
 
+/// `machine ls --json` output (empty when there are none).
+fn machines(out: &Output) -> Result<Vec<Machine>> {
+    if out.stdout.trim().is_empty() {
+        return Ok(Vec::new());
+    }
+    Ok(serde_json::from_str(&out.stdout)?)
+}
+
 /// The output of a smolvm call that must have succeeded.
 fn checked(out: Output) -> Result<Output> {
     if out.code != 0 {
@@ -271,11 +282,7 @@ impl<R: Runner> Smolvm<R> {
     }
 
     pub fn list(&self) -> Result<Vec<Machine>> {
-        let out = self.call(args(&["machine", "ls", "--json"]))?;
-        if out.stdout.trim().is_empty() {
-            return Ok(Vec::new());
-        }
-        Ok(serde_json::from_str(&out.stdout)?)
+        machines(&self.call(args(&["machine", "ls", "--json"]))?)
     }
 
     /// `None` when the machine doesn't exist.
@@ -300,7 +307,7 @@ impl<R: Runner> Smolvm<R> {
 
     /// `env` reaches the smolvm process only: it's how secret values get to credentials. `remove`
     /// names inherited variables to drop, so a credential without a value isn't the host's.
-    /// `branchable` lets `sbt fork` branch it later, at a cost: smolvm doesn't reclaim its idle
+    /// `branchable` lets `bento fork` branch it later, at a cost: smolvm doesn't reclaim its idle
     /// memory, and on Linux other processes running as the user can read the VM process's memory.
     pub fn start(
         &self,
@@ -424,6 +431,26 @@ impl<R: Runner> Smolvm<R> {
 
     pub fn stop(&self, name: &str) -> Result<()> {
         self.call(args(&["machine", "stop", "-n", name])).map(drop)
+    }
+
+    /// `list` against smolvm's own default state (without smolbento's `SMOLVM_DATA_DIR`), where
+    /// sandboxes from before smolbento kept its own state may still be.
+    pub fn list_default_state(&self) -> Result<Vec<Machine>> {
+        machines(&self.call_default_state(&["machine", "ls", "--json"])?)
+    }
+
+    /// `delete` in smolvm's own default state (see `list_default_state`).
+    pub fn delete_default_state(&self, name: &str) -> Result<()> {
+        self.call_default_state(&["machine", "delete", "-n", name, "-f"])
+            .map(drop)
+    }
+
+    /// A call without smolbento's `SMOLVM_DATA_DIR`.
+    fn call_default_state(&self, a: &[&str]) -> Result<Output> {
+        checked(
+            self.runner
+                .run_with_env(&args(a), &[], &[DATA_DIR.to_string()])?,
+        )
     }
 
     pub fn delete(&self, name: &str) -> Result<()> {

@@ -1,6 +1,6 @@
 //! Running an environment's lifecycle commands on the host, as sbx does.
 //!
-//! They run with the user's privileges and sbt's own environment plus the `SBX_*` variables. They
+//! They run with the user's privileges and bento's own environment plus the `SBX_*` variables. They
 //! get neither the file's `env` values nor any secret.
 
 use std::io::{Read, Write};

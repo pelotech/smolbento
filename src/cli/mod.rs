@@ -41,9 +41,6 @@ use clap::{CommandFactory, Parser};
 use crate::config::{Paths, Settings};
 use crate::smolvm::{ProcessRunner, Runner, Smolvm};
 
-/// The oldest smolvm smolbento supports.
-pub const MIN_SMOLVM: &str = "1.35.1";
-
 pub fn exit_code(err: &anyhow::Error) -> u8 {
     if err.downcast_ref::<Unsupported>().is_some() {
         2
@@ -53,12 +50,12 @@ pub fn exit_code(err: &anyhow::Error) -> u8 {
 }
 
 /// The name completions are generated for: the one the binary was run as when it is one of ours
-/// (`sbx` and `bento` are links to it), else `sbt`.
+/// (`bento`, or `sbt` and `sbx` when linked or aliased), else `bento`.
 fn program_name(argv0: Option<&OsString>) -> String {
     argv0
         .and_then(|a| std::path::Path::new(a).file_name()?.to_str())
         .filter(|n| ["sbt", "sbx", "bento"].contains(n))
-        .unwrap_or("sbt")
+        .unwrap_or("bento")
         .to_string()
 }
 
@@ -76,14 +73,16 @@ pub fn main(args: impl IntoIterator<Item = OsString>) -> Result<i32> {
     let paths = Paths::from_env(&env)?;
     let (settings, config_error) = Settings::load(&paths, env.clone());
     let store = crate::secrets::store::platform(&paths, &env);
+    let smolvm = crate::smolvm::locate::locate(&settings, &env)?;
     let runner = with_image_cache(
-        ProcessRunner::new(settings.value("smolvm.path")?).debug(cli.debug),
+        ProcessRunner::for_cmd(&smolvm).debug(cli.debug),
         &settings,
         &env,
     );
     let mut ctx = Ctx {
         vm: Smolvm::new(runner),
         settings,
+        smolvm,
         services: crate::host_service::HostServices::detect(
             &paths,
             &env,
@@ -112,7 +111,7 @@ pub fn main(args: impl IntoIterator<Item = OsString>) -> Result<i32> {
 }
 
 /// smolvm's own `SMOLVM_IMAGE_SEED_MAX_BYTES` wins; else `smolvm.image-cache-size` sets it. A bad
-/// size only warns, so `sbt settings` can still fix it.
+/// size only warns, so `bento settings` can still fix it.
 fn with_image_cache(
     runner: ProcessRunner,
     settings: &Settings,
@@ -153,7 +152,8 @@ pub fn dispatch<R: Runner>(ctx: &mut Ctx<R>, cli: Cli) -> Result<i32> {
     }
     if cmd.needs_smolvm() {
         refuse_root(ctx.uid)?;
-        check_smolvm(&ctx.vm)?;
+        crate::smolvm::locate::check_home(&ctx.smolvm)?;
+        crate::smolvm::locate::ensure_installed(&ctx.smolvm, &ctx.env)?;
     }
     match cmd {
         Cmd::Run(a) => run::run(ctx, &a),
@@ -187,6 +187,7 @@ pub fn dispatch<R: Runner>(ctx: &mut Ctx<R>, cli: Cli) -> Result<i32> {
         Cmd::Bridge { sandbox } => bridge::run(ctx, &sandbox),
         Cmd::Ssh(s) => ssh::run(ctx, s),
         Cmd::Serve { kind, sandbox } => serve::run(ctx, &kind, &sandbox),
+        Cmd::Smolvm(p) => ctx.vm.runner().interactive(&p.args),
         Cmd::Daemon(_) => {
             writeln!(
                 &ctx.out,
@@ -207,13 +208,13 @@ pub fn dispatch<R: Runner>(ctx: &mut Ctx<R>, cli: Cli) -> Result<i32> {
 
 fn cloud(cmd: &str) -> Result<i32> {
     Err(Unsupported(format!(
-        "`sbt {cmd}` is a Docker Cloud feature and is not supported"
+        "`bento {cmd}` is a Docker Cloud feature and is not supported"
     ))
     .into())
 }
 
 fn pending(cmd: &str) -> Result<i32> {
-    Err(Unsupported(format!("`sbt {cmd}` is not implemented yet")).into())
+    Err(Unsupported(format!("`bento {cmd}` is not implemented yet")).into())
 }
 
 fn version<R: Runner>(ctx: &Ctx<R>) -> Result<i32> {
@@ -231,35 +232,11 @@ fn version<R: Runner>(ctx: &Ctx<R>) -> Result<i32> {
 fn refuse_root(uid: u32) -> Result<()> {
     if uid == 0 {
         bail!(
-            "don't run sbt as root: smolvm doesn't map a workspace owned by root to the agent user, so \
+            "don't run bento as root: smolvm doesn't map a workspace owned by root to the agent user, so \
 the agent couldn't write it; run it as your normal user"
         );
     }
     Ok(())
-}
-
-fn check_smolvm<R: Runner>(vm: &Smolvm<R>) -> Result<()> {
-    let v = vm.version()?;
-    if !version_at_least(&v, MIN_SMOLVM) {
-        bail!("smolvm {v} is too old; smolbento needs {MIN_SMOLVM} or newer (brew upgrade smolvm)");
-    }
-    Ok(())
-}
-
-pub fn version_at_least(version: &str, min: &str) -> bool {
-    let parse = |s: &str| -> Vec<u64> {
-        s.trim_start_matches('v')
-            .split('.')
-            .map(|p| {
-                p.chars()
-                    .take_while(char::is_ascii_digit)
-                    .collect::<String>()
-                    .parse()
-                    .unwrap_or(0)
-            })
-            .collect()
-    };
-    parse(version) >= parse(min)
 }
 
 /// Asks before destructive actions. sbx behaviour: fails without a terminal unless forced, and
@@ -329,30 +306,41 @@ pub fn table(rows: Vec<Vec<String>>) -> String {
 
 #[cfg(test)]
 mod tests {
+
+    #[test]
+    fn a_command_that_needs_smolvm_installs_it_first() {
+        // Short, so its sockets fit macOS's limit (an explicit home is checked).
+        let home = tempfile::tempdir_in("/tmp").unwrap();
+        // Not the pinned release, so it fails the checksum: proof that `ls` went to download it.
+        let (url, seen) = crate::testutil::http_server(b"not smolvm".to_vec());
+        let home_s = home.path().display().to_string();
+        let mut t = crate::testutil::test_env(&[
+            ("SMOLBENTO_SMOLVM_HOME", &home_s),
+            ("SMOLBENTO_SMOLVM_URL", &url),
+        ]);
+        t.use_managed_smolvm();
+        let err = t.sbt_err(&["ls"]);
+        assert!(err.contains("checksum"), "{err}");
+        assert_eq!(seen.lock().unwrap().len(), 1);
+    }
+
+    #[test]
+    fn settings_and_help_never_download() {
+        let (url, seen) = crate::testutil::http_server(b"not smolvm".to_vec());
+        let mut t = crate::testutil::test_env(&[("SMOLBENTO_SMOLVM_URL", &url)]);
+        t.use_managed_smolvm();
+        t.sbt(&["settings", "ls"]).unwrap();
+        t.sbt(&["version"]).unwrap();
+        assert!(seen.lock().unwrap().is_empty(), "nothing was downloaded");
+    }
     use super::*;
     use crate::testutil::*;
-
-    #[test]
-    fn versions_compare_numerically() {
-        assert!(version_at_least("1.32.2", "1.32.2"));
-        assert!(version_at_least("1.32.10", "1.32.2"));
-        assert!(version_at_least("v2.0.0", "1.32.2"));
-        assert!(!version_at_least("1.31.9", "1.32.2"));
-    }
-
-    #[test]
-    fn old_smolvm_is_refused() {
-        let mut t = test_env(&[]);
-        t.runner().ok(&["--version"], "smolvm 1.30.0\n");
-        let err = t.sbt(&["ls"]).unwrap_err();
-        assert!(err.to_string().contains("too old"));
-    }
 
     #[test]
     fn pending_and_cloud_commands_exit_2() {
         let mut t = test_env(&[]);
         let err = t.sbt(&["tui"]).unwrap_err();
-        assert_eq!(err.to_string(), "`sbt tui` is not implemented yet");
+        assert_eq!(err.to_string(), "`bento tui` is not implemented yet");
         assert_eq!(exit_code(&err), 2);
         let err = t.sbt(&["move", "x", "--to", "cloud"]).unwrap_err();
         assert!(err.to_string().contains("Docker Cloud"));
@@ -369,12 +357,14 @@ mod tests {
     }
 
     #[test]
-    fn bare_sbt_hits_the_same_version_gate_as_ls() {
+    fn bare_sbt_installs_smolvm_like_ls() {
         for args in [&[][..], &["ls"][..]] {
-            let mut t = test_env(&[]);
-            t.runner().ok(&["--version"], "smolvm 1.30.0\n");
+            let (url, seen) = http_server(b"not smolvm".to_vec());
+            let mut t = test_env(&[("SMOLBENTO_SMOLVM_URL", &url)]);
+            t.use_managed_smolvm();
             let err = t.sbt(args).unwrap_err();
-            assert!(err.to_string().contains("too old"), "{args:?}");
+            assert!(format!("{err:#}").contains("checksum"), "{args:?}: {err:#}");
+            assert_eq!(seen.lock().unwrap().len(), 1, "{args:?}");
         }
     }
 
@@ -384,13 +374,13 @@ mod tests {
             refuse_root(0)
                 .unwrap_err()
                 .to_string()
-                .contains("don't run sbt as root")
+                .contains("don't run bento as root")
         );
         refuse_root(501).unwrap();
         let mut t = test_env(&[]);
         t.ctx.uid = 0;
         let err = t.sbt(&["ls"]).unwrap_err();
-        assert!(err.to_string().contains("don't run sbt as root"), "{err}");
+        assert!(err.to_string().contains("don't run bento as root"), "{err}");
     }
 
     #[test]
@@ -408,6 +398,28 @@ mod tests {
         assert_eq!(t.sbt(&["settings", "unset", "docker.enabled"]).unwrap(), 0);
         let (_, err) = Settings::load(&t.ctx.paths, t.ctx.env.clone());
         assert_eq!(err, None, "unset rewrote a valid config.toml");
+    }
+
+    #[test]
+    fn smolvm_passes_args_and_exit_code_through() {
+        let mut t = test_env(&[]);
+        t.runner().interactive_exit(7);
+        assert_eq!(t.sbt(&["smolvm", "machine", "ls", "--json"]).unwrap(), 7);
+        assert_eq!(
+            t.runner().interactive_calls(),
+            [vec!["machine".to_string(), "ls".into(), "--json".into()]]
+        );
+    }
+
+    #[test]
+    fn smolvm_reserves_no_words() {
+        let mut t = test_env(&[]);
+        t.sbt(&["smolvm", "install"]).unwrap();
+        t.sbt(&["smolvm", "--version"]).unwrap();
+        assert_eq!(
+            t.runner().interactive_calls(),
+            [vec!["install".to_string()], vec!["--version".to_string()]]
+        );
     }
 
     #[test]
@@ -437,11 +449,11 @@ mod tests {
             ("/usr/local/bin/sbx", "sbx"),
             ("bento", "bento"),
             ("sbt", "sbt"),
-            ("/x/smolbento", "sbt"),
+            ("/x/smolbento", "bento"),
         ] {
             assert_eq!(program_name(Some(&OsString::from(argv0))), name);
         }
-        assert_eq!(program_name(None), "sbt");
+        assert_eq!(program_name(None), "bento");
         let mut t = test_env(&[]);
         t.ctx.program = "sbx".into();
         t.sbt(&["completion", "zsh"]).unwrap();

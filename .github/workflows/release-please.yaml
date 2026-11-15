@@ -152,7 +152,7 @@ jobs:
           minimum: "0.26.0"
       - name: Sign
         if: ${{ steps.push.outputs.digest != '' }}
-        run: sbt kit sign "$IMAGE@$DIGEST"
+        run: bento kit sign "$IMAGE@$DIGEST"
         env:
           DIGEST: ${{ steps.push.outputs.digest }}
 
@@ -187,9 +187,9 @@ jobs:
 
       - name: Create a sandbox with the published kit
         run: |
-          sbt policy init balanced
-          sbt create shell --kit nix --name verify
-          sbt exec verify nix --version
-          sbt rm -f verify
+          bento policy init balanced
+          bento create shell --kit nix --name verify
+          bento exec verify nix --version
+          bento rm -f verify
         env:
           SMOLBENTO_KIT_REQUIRE_SIGNATURE: "true"

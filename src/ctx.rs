@@ -13,6 +13,8 @@ use crate::smolvm::{Runner, Smolvm};
 pub struct Ctx<R: Runner> {
     pub vm: Smolvm<R>,
     pub settings: Settings,
+    /// The smolvm `vm` runs, and smolbento's home (`smolvm.home`).
+    pub smolvm: crate::smolvm::locate::SmolvmCmd,
     pub paths: Paths,
     /// The OS service manager's units for sandboxes' host sockets (off without one).
     pub services: crate::host_service::HostServices,
@@ -38,7 +40,7 @@ pub struct Ctx<R: Runner> {
     pub input: In,
     /// The command-line arguments after argv[0], for hints that repeat the command.
     pub args: Vec<String>,
-    /// The name the binary was run as (`sbt`, `sbx` or `bento`), for shell completions.
+    /// The name the binary was run as (`bento`, `sbx` or `sbt`), for shell completions.
     pub program: String,
 }
 

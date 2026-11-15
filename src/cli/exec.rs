@@ -44,7 +44,7 @@ pub fn exec<R: Runner>(ctx: &mut Ctx<R>, a: &ExecArgs) -> Result<i32> {
     };
     // `exec -it` is an attached session: serve the browser and clipboard bridge during it.
     let _bridge = if a.interactive && a.tty {
-        bridge::attach(&ctx.env, &ctx.settings, &sb)
+        bridge::attach(&ctx.env, &ctx.settings, &ctx.smolvm, &sb)
     } else {
         None
     };

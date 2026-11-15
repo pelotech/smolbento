@@ -21,7 +21,7 @@ pub fn check(source: &Source, settings: &Settings) -> Result<()> {
             bail!(
                 "kit \"{r}\" cannot be installed \u{2014} its source is not in your allowlist; \
                  current kit.allowedSources: {}\n\
-                 try: sbt settings set kit.allowedSources '{}' (or '[\"*\"]')",
+                 try: bento settings set kit.allowedSources '{}' (or '[\"*\"]')",
                 serde_json::to_string(&allowed)?,
                 serde_json::to_string(&suggested)?,
             )
@@ -30,7 +30,7 @@ pub fn check(source: &Source, settings: &Settings) -> Result<()> {
             if !settings.bool("kit.allowLocalKits")? {
                 bail!(
                     "local kits are disabled; enable them with \
-                     sbt settings set kit.allowLocalKits true"
+                     bento settings set kit.allowLocalKits true"
                 );
             }
             Ok(())
@@ -43,7 +43,7 @@ fn allowed_sources(settings: &Settings) -> Result<Vec<String>> {
     parse_allowed_sources(&settings.value("kit.allowedSources")?)
 }
 
-/// Also checked by `sbt settings set`, so a bad value is refused before it's saved.
+/// Also checked by `bento settings set`, so a bad value is refused before it's saved.
 pub(crate) fn parse_allowed_sources(raw: &str) -> Result<Vec<String>> {
     let list: Vec<String> = serde_json::from_str(raw).map_err(|e| {
         anyhow!(
@@ -212,7 +212,7 @@ mod tests {
             err,
             "kit \"ghcr.io/x/y:1\" cannot be installed \u{2014} its source is not in your allowlist; \
              current kit.allowedSources: [\"docker.io/\",\"ghcr.io/pelotech/smolbento/\"]\n\
-             try: sbt settings set kit.allowedSources \
+             try: bento settings set kit.allowedSources \
              '[\"docker.io/\",\"ghcr.io/pelotech/smolbento/\",\"ghcr.io/x/\"]' (or '[\"*\"]')"
         );
     }
@@ -308,7 +308,7 @@ mod tests {
         ] {
             assert_eq!(
                 check(&src, &s).unwrap_err().to_string(),
-                "local kits are disabled; enable them with sbt settings set kit.allowLocalKits true"
+                "local kits are disabled; enable them with bento settings set kit.allowLocalKits true"
             );
         }
         check(&registry("a/b"), &s).unwrap();

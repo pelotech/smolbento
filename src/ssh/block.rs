@@ -7,15 +7,22 @@ pub const END: &str = "# <<< smolbento (managed) <<<";
 /// sbx's own markers; its block claims `Host *.sbx` too.
 pub const SBX_BEGIN: &str = "# >>> docker sandboxes (managed) >>>";
 
-/// The block for `bin` (smolbento's absolute path) and `smolvm` (smolvm's, when found). Both are
-/// absolute because an IDE started from the Dock runs the ProxyCommand with a minimal PATH. It ends
+/// The block for `bin` (smolbento's absolute path) and the `env` its ProxyCommand sets (only the
+/// smolvm settings the user set explicitly). Paths are absolute because an IDE started from the
+/// Dock runs the ProxyCommand with a minimal PATH. It ends
 /// with `Host *`, so settings that follow it (or precede it, when it is first in the file) keep
 /// their scope: the block goes first so that its settings win over a user's `Host *` (ssh uses the
 /// first value it finds).
-pub fn render(bin: &str, smolvm: Option<&str>) -> String {
-    let env = smolvm.map_or_else(String::new, |p| {
-        format!("env SMOLBENTO_SMOLVM={} ", quote(p))
-    });
+pub fn render(bin: &str, env: &[(String, String)]) -> String {
+    let env = if env.is_empty() {
+        String::new()
+    } else {
+        let vars: Vec<String> = env
+            .iter()
+            .map(|(k, v)| format!("{k}={}", quote(v)))
+            .collect();
+        format!("env {} ", vars.join(" "))
+    };
     let lines = [
         BEGIN.to_string(),
         "Host *.sbx".into(),
@@ -94,8 +101,36 @@ mod tests {
     use super::*;
 
     #[test]
+    fn the_proxy_command_sets_only_what_was_set_explicitly() {
+        let env = |pairs: &[(&str, &str)]| -> Vec<(String, String)> {
+            pairs
+                .iter()
+                .map(|(k, v)| (k.to_string(), v.to_string()))
+                .collect()
+        };
+        assert!(render("/bin/sbt", &[]).contains("    ProxyCommand '/bin/sbt' ssh proxy %n\n"));
+        let b = render(
+            "/bin/sbt",
+            &env(&[
+                ("SMOLBENTO_SMOLVM", "/opt/s"),
+                ("SMOLBENTO_SMOLVM_HOME", "/h/x"),
+            ]),
+        );
+        assert!(
+            b.contains(
+                "    ProxyCommand env SMOLBENTO_SMOLVM='/opt/s' SMOLBENTO_SMOLVM_HOME='/h/x' \
+                 '/bin/sbt' ssh proxy %n\n"
+            ),
+            "{b}"
+        );
+    }
+
+    #[test]
     fn renders_sbxs_options_with_our_paths() {
-        let b = render("/bin/sbt", Some("/opt/smolvm"));
+        let b = render(
+            "/bin/sbt",
+            &[("SMOLBENTO_SMOLVM".to_string(), "/opt/smolvm".to_string())],
+        );
         assert!(b.starts_with(&format!("{BEGIN}\nHost *.sbx\n")));
         assert!(!b.contains("IdentityAgent"), "{b}");
         for line in [
@@ -116,8 +151,9 @@ mod tests {
 
     #[test]
     fn quotes_paths_for_the_shell_and_doubles_percent_signs() {
-        assert!(render("/a b/sbt", None).contains("    ProxyCommand '/a b/sbt' ssh proxy %n\n"));
-        assert!(render("/x/it's%/sbt", Some("/y z/smolvm")).contains(
+        assert!(render("/a b/sbt", &[]).contains("    ProxyCommand '/a b/sbt' ssh proxy %n\n"));
+        let smolvm = [("SMOLBENTO_SMOLVM".to_string(), "/y z/smolvm".to_string())];
+        assert!(render("/x/it's%/sbt", &smolvm).contains(
             "ProxyCommand env SMOLBENTO_SMOLVM='/y z/smolvm' '/x/it'\\''s%%/sbt' ssh proxy %n"
         ));
     }
@@ -125,7 +161,7 @@ mod tests {
     #[test]
     fn adds_at_the_top_and_keeps_the_rest() {
         let user = "ServerAliveInterval 5\n\nHost gh\n  User git\n";
-        let out = upsert(user, &render("/bin/sbt", None)).unwrap();
+        let out = upsert(user, &render("/bin/sbt", &[])).unwrap();
         assert!(out.starts_with(BEGIN));
         assert!(out.ends_with(&format!("{END}\n\n{user}")));
     }
@@ -133,30 +169,30 @@ mod tests {
     #[test]
     fn an_empty_file_gets_just_the_block() {
         assert_eq!(
-            upsert("", &render("/bin/sbt", None)).unwrap(),
-            render("/bin/sbt", None)
+            upsert("", &render("/bin/sbt", &[])).unwrap(),
+            render("/bin/sbt", &[])
         );
     }
 
     #[test]
     fn replaces_in_place_and_is_idempotent() {
         let user = "Host a\n  User x\n";
-        let once = upsert(user, &render("/bin/old", None)).unwrap();
+        let once = upsert(user, &render("/bin/old", &[])).unwrap();
         let moved = format!("{user}\n{}", &once[..once.len() - user.len() - 1]);
-        let twice = upsert(&moved, &render("/bin/sbt", None)).unwrap();
+        let twice = upsert(&moved, &render("/bin/sbt", &[])).unwrap();
         assert!(twice.starts_with(user));
         assert!(twice.contains("'/bin/sbt' ssh proxy"));
         assert!(!twice.contains("/bin/old"));
-        assert_eq!(upsert(&twice, &render("/bin/sbt", None)).unwrap(), twice);
+        assert_eq!(upsert(&twice, &render("/bin/sbt", &[])).unwrap(), twice);
     }
 
     #[test]
     fn remove_restores_the_original() {
         let user = "ServerAliveInterval 5\n\nHost gh\n  User git\n";
-        let with = upsert(user, &render("/bin/sbt", None)).unwrap();
+        let with = upsert(user, &render("/bin/sbt", &[])).unwrap();
         assert_eq!(remove(&with).unwrap().unwrap(), user);
         assert_eq!(remove(user).unwrap(), None);
-        assert_eq!(remove(&render("/bin/sbt", None)).unwrap().unwrap(), "");
+        assert_eq!(remove(&render("/bin/sbt", &[])).unwrap().unwrap(), "");
     }
 
     #[test]
@@ -169,6 +205,6 @@ mod tests {
     #[test]
     fn spots_sbxs_block() {
         assert!(has_sbx_block(&format!("a\n{SBX_BEGIN}\nHost *.sbx\n")));
-        assert!(!has_sbx_block(&render("/bin/sbt", None)));
+        assert!(!has_sbx_block(&render("/bin/sbt", &[])));
     }
 }

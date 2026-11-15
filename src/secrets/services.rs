@@ -99,7 +99,7 @@ pub fn builtin(name: &str) -> Option<Service> {
 /// `secret set`'s error for a service that is neither built in nor custom.
 pub fn unknown(service: &str) -> String {
     format!(
-        "unknown service '{service}' (built-in: {}; or use `sbt secret set-custom`)",
+        "unknown service '{service}' (built-in: {}; or use `bento secret set-custom`)",
         builtin_names().join(", ")
     )
 }

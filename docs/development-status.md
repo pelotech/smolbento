@@ -12,7 +12,7 @@ usage guide is linked from its row in the [Phases](#phases) table.
 - Before 1.0, recreate sandboxes after upgrading smolbento ([Install](install.md#upgrading)).
 - Docker in a sandbox is the shipped `docker` kit. If its first start fails, the sandbox is removed;
   fix the cause and run the same command again.
-- Secret `command:` sources (`sbt secret set --command`, and `command:` in an environment file) run in
+- Secret `command:` sources (`bento secret set --command`, and `command:` in an environment file) run in
   a fresh temporary directory. Use absolute paths or put helpers on `PATH`. Relative paths no longer
   work.
 
@@ -35,13 +35,13 @@ usage guide is linked from its row in the [Phases](#phases) table.
 | 5e | Browser and clipboard bridge while attached (`xdg-open`, `wl-copy`/`xclip`/`xsel`/`pbcopy`, the login callback relay, `browser.enabled`). See [Usage](usage.md#browser-and-clipboard) | Done |
 | 5f | Static MCP: `mcp add/ls/inspect/rm`, `run/create --static-mcp`, header secrets as smolvm credentials, Claude Code only. No gateway, OAuth, dynamic mode or live load/unload | Done |
 | 5g | `ssh-agent@1` `authenticate` limits: logins only to named servers, checked against your known hosts (`ssh.knownHostsFile`). See [Usage](usage.md#ssh-agent) | Done |
-| 5h | `setup ssh` and `ssh NAME.sbx`: shells, exec and `-L` forwards through `sbt ssh proxy`. See [Usage](usage.md#ssh-into-a-sandbox). Not done: `--auto-create`, and the `ssh.autoCreate`, `ssh.defaultAgent`, `ssh.defaultTemplate`, `ssh.workspaceRoot` settings (sbx doesn't document them) | Done |
+| 5h | `setup ssh` and `ssh NAME.sbx`: shells, exec and `-L` forwards through `bento ssh proxy`. See [Usage](usage.md#ssh-into-a-sandbox). Not done: `--auto-create`, and the `ssh.autoCreate`, `ssh.defaultAgent`, `ssh.defaultTemplate`, `ssh.workspaceRoot` settings (sbx doesn't document them) | Done |
 | 6a | `env plan`, remembered approvals, `env.rememberHostCommands` | Done |
 | 6b | `sbxenv.yaml` `lifecycle`, `registries`, `entrypoint` and `cmd`; registry logins scoped to a sandbox | Done |
 | 6c | `sbxenv.yaml` `bindings`, `mcp` url servers, `fuse`, `pullPolicy: never`, `writableEnvFiles`; `gemini` retired | Done |
 | 7 | Kit publishing: `kit pack/push/pull/sign/verify` and `push --sign` (v2 kits; cosign signing) | Done |
 | 8 | The `nix` kit: Nix, direnv and xz for any agent (`--kit nix`), published to GHCR and signed. See [Usage](usage.md#the-nix-kit) | Done |
-| 9 | `tui` dashboard (bare `sbt` opens it on a terminal) | Planned |
+| 9 | `tui` dashboard (bare `bento` opens it on a terminal) | Planned |
 | 10 | Warm-start pool for near-instant creates; Windows | Planned |
 
 ## Known limitations
@@ -58,7 +58,7 @@ usage guide is linked from its row in the [Phases](#phases) table.
   images. Forks have no bridge of their own.
 - The bridge and the SSH agent are served by launchd or `systemd --user` units for sandboxes created
   by this version. Without a usable service manager, or for earlier sandboxes, they are served only
-  while `sbt run`, `sbt exec -it` or `sbt exec` runs. A sandbox deleted with `smolvm machine delete`
+  while `bento run`, `bento exec -it` or `bento exec` runs. A sandbox deleted with `bento smolvm machine delete`
   leaves its units until the next state-changing command sweeps them (`prune`, `diagnose`).
 - Templates don't keep `/tmp`.
 - Shared skills are linked by a start script running as `agent`. Images without that account get no
@@ -99,7 +99,7 @@ meanwhile.
   doesn't answer. Not yet checked: a name the first resolver refuses (before 1.34 that failed in every VM,
   even when the host resolved it). Meanwhile: no workaround; the e2e tests avoid such names.
 - **Copying a directory out of a sandbox.** `machine cp` uploads directories but downloads single files
-  only (rechecked on 1.35.0). Meanwhile: `sbt cp SANDBOX:/dir ./dir` fails with smolvm's "is a directory".
+  only (rechecked on 1.35.0). Meanwhile: `bento cp SANDBOX:/dir ./dir` fails with smolvm's "is a directory".
 - **Install-only credentials after install.** smolvm answers `502 credential unavailable` when a binding
   has no value; sbx sends the request without the credential. Meanwhile: a documented difference.
 

@@ -1,4 +1,4 @@
-//! Where smolbento keeps its files, and its settings (`sbt settings`).
+//! Where smolbento keeps its files, and its settings (`bento settings`).
 
 use std::collections::BTreeMap;
 use std::fs;
@@ -77,7 +77,7 @@ impl Paths {
         self.data.join("env")
     }
 
-    /// The shared agent skills store (`sbt skills`), one directory per skill.
+    /// The shared agent skills store (`bento skills`), one directory per skill.
     pub fn skills_store(&self) -> PathBuf {
         self.data.join("agent-skills")
     }
@@ -122,8 +122,15 @@ pub const SETTINGS: &[SettingDef] = &[
     SettingDef {
         key: "smolvm.path",
         env: "SMOLBENTO_SMOLVM",
-        default: "smolvm",
-        help: "smolvm binary to run",
+        default: "",
+        help: "smolvm to run instead of the pinned release smolbento downloads (empty: the pinned one)",
+    },
+    SettingDef {
+        key: "smolvm.home",
+        env: "SMOLBENTO_SMOLVM_HOME",
+        default: "",
+        help: "Where smolbento keeps smolvm's state and the downloaded smolvm (empty: ~/.smolbento; \
+               `-`: smolvm's own default state)",
     },
     SettingDef {
         key: "smolvm.image-cache-size",
@@ -141,7 +148,7 @@ pub const SETTINGS: &[SettingDef] = &[
         key: "fork.enabled",
         env: "SMOLBENTO_FORK",
         default: "true",
-        help: "Start clone and mountless sandboxes branchable so `sbt fork` can copy them",
+        help: "Start clone and mountless sandboxes branchable so `bento fork` can copy them",
     },
     SettingDef {
         key: "kit.allowedSources",
@@ -238,7 +245,7 @@ pub struct Settings {
 
 impl Settings {
     /// A config file that can't be read or parsed doesn't stop loading: the settings fall back to
-    /// env and defaults, and the error comes back so callers can report it (`sbt diagnose`) or
+    /// env and defaults, and the error comes back so callers can report it (`bento diagnose`) or
     /// refuse to go on.
     pub fn load(paths: &Paths, env: BTreeMap<String, String>) -> (Settings, Option<String>) {
         let path = paths.config_file();
@@ -257,7 +264,7 @@ impl Settings {
         SETTINGS
             .iter()
             .find(|d| d.key == key)
-            .with_context(|| format!("unknown setting '{key}' (see `sbt settings ls`)"))
+            .with_context(|| format!("unknown setting '{key}' (see `bento settings ls`)"))
     }
 
     /// Env var, then config file, then default.

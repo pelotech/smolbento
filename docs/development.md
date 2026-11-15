@@ -17,9 +17,11 @@ Without the direnv hook, prefix commands with `direnv exec .`. Without direnv, u
 |---|---|
 | `just build` | Build the binary |
 | `just test` | Unit, snapshot and sbx parity tests (nextest) |
-| `just e2e` | Real-VM tests, two at a time. `just e2e 4` runs four; `just e2e 2 --partition slice:1/3` is one CI shard. Needs smolvm and a hypervisor |
+| `just e2e` | Real-VM tests, two at a time. `just e2e 4` runs four; `just e2e 2 --partition slice:1/3` is one CI shard. Needs a hypervisor |
+| `just smolvm-pin VERSION` | Pin smolvm `VERSION`: rewrite `smolvm.lock` from that release's checksums |
+| `just smolvm-lock-check` | Check `smolvm.lock` against its release (CI runs it) |
 | `just lint` | All pre-commit hooks: fmt, clippy, cargo-deny, yamllint, actionlint, zizmor |
-| `just install` | Install to `~/.cargo/bin`, with the `sbt`/`sbx`/`bento` links |
+| `just install` | Install to `~/.cargo/bin`, with the `bento` and `sbx` links |
 | `just release-build TARGET BUILDER` | Build a release tarball into `dist/` |
 
 ## Tests
@@ -36,10 +38,14 @@ Without the direnv hook, prefix commands with `direnv exec .`. Without direnv, u
 ## Running tests
 
 ```sh
-cargo nextest run publish_starts        # one unit test, by name substring
-just e2e 2 bundled_skills_are           # one e2e test (boots VMs), by name substring
-cargo insta test --accept               # run and accept changed snapshots
-cargo insta review                      # or review them one by one
+# one unit test, by name substring
+cargo nextest run publish_starts
+# one e2e test (boots VMs), by name substring
+just e2e 2 bundled_skills_are
+# run and accept changed snapshots
+cargo insta test --accept
+# or review them one by one
+cargo insta review
 ```
 
 A handler test, from `src/cli/ports.rs`:
@@ -61,6 +67,19 @@ are in `src/testutil.rs`.
 
 IDEs should use their own `CARGO_TARGET_DIR` or the Nix toolchain. Sharing `target/` between toolchains
 forces a full rebuild on every switch, and it grows past 40 GB.
+
+## smolvm versions
+
+smolbento runs the smolvm release pinned in `smolvm.lock`. It downloads it on first use into
+`<smolvm.home>/engine/<version>/`. e2e tests share the home `/tmp/sbt-e2e-<uid>`, apart from your own
+`~/.smolbento`, and reach smolvm through `bento smolvm`.
+
+- **Try a new release:** `just smolvm-pin 1.36.0`, then `just test` and `just e2e`. Commit
+  `smolvm.lock` if they pass, or `git checkout smolvm.lock` to go back. Renovate opens a PR that
+  bumps the version; CI fails it until someone runs `just smolvm-pin` on that branch.
+- **Try a smolvm you built:** `SMOLBENTO_SMOLVM=../smolvm/target/release/smolvm just e2e`. Every
+  test uses that binary except `the_pinned_smolvm_runs_from_smolbentos_home`.
+- **Debug a test's VMs:** `SMOLBENTO_SMOLVM_HOME=/tmp/sbt-e2e-$(id -u) bento smolvm machine ls --json`.
 
 ## CI
 

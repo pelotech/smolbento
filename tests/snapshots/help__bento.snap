@@ -1,0 +1,51 @@
+---
+source: tests/help.rs
+expression: help(&path)
+---
+Docker Sandboxes (sbx) compatible agent sandboxes on smolvm microVMs
+
+Usage: bento [OPTIONS] [COMMAND]
+
+Commands:
+  run         Create a sandbox if needed and attach to its agent
+  create      Create and start a sandbox
+  exec        Run a command in a sandbox
+  ls          List sandboxes [alias: list]
+  inspect     Show a sandbox's details
+  start       Start stopped sandboxes
+  stop        Stop sandboxes, keeping their state
+  rm          Remove sandboxes [aliases: remove, delete]
+  prune       Remove stopped sandboxes
+  reset       Remove every sandbox, smolbento's session state and the shared skills store
+  cp          Copy files between the host and a sandbox
+  fork        Copy a running sandbox (memory, processes, disk) for parallel attempts
+  version     Show smolbento and smolvm versions
+  completion  Generate shell completions
+  diagnose    Check smolbento's environment
+  settings    Read and change settings
+  daemon      Accepted for sbx compatibility; smolbento needs no daemon
+  smolvm      Run smolbento's smolvm (the pinned release) on smolbento's sandboxes (smolbento only)
+  ports       Publish or unpublish ports on a sandbox (127.0.0.1 only)
+  policy      Network policy
+  secret      Secrets for agents: sandboxes see placeholders, smolvm sends the real value [alias: secrets]
+  kit         Inspect, validate and add kits
+  mcp         Register MCP servers for sandboxes
+  env         Manage a sandbox declared in an sbxenv.yaml file
+  template    Save sandboxes as templates and manage them
+  skills      Manage skills shared with agents in sandboxes (experimental)
+  setup       Set up host integrations
+  tui         Dashboard (not implemented yet)
+  help        Print this message or the help of the given subcommand(s)
+
+Options:
+  -D, --debug
+          Print each smolvm command line
+
+      --no-input
+          Never prompt; commands that need an answer fail with the command to run instead
+
+  -h, --help
+          Print help
+
+  -V, --version
+          Print version

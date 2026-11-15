@@ -222,7 +222,7 @@ pub(crate) struct BuilderGuard(pub(crate) bool);
 
 impl BuilderGuard {
     pub(crate) fn new() -> BuilderGuard {
-        let existed = Command::new("smolvm")
+        let existed = smolvm_command()
             .args(["machine", "status", "-n", "sbx-_builder"])
             .output()
             .unwrap()
@@ -235,7 +235,7 @@ impl BuilderGuard {
 impl Drop for BuilderGuard {
     fn drop(&mut self) {
         if !self.0 {
-            let _ = Command::new("smolvm")
+            let _ = smolvm_command()
                 .args(["machine", "delete", "-f", "-n", "sbx-_builder"])
                 .output();
         }
@@ -314,7 +314,7 @@ pub(crate) fn kit_host_mount_shared_and_kept() {
     impl Drop for Cleanup<'_> {
         fn drop(&mut self) {
             for n in self.0 {
-                let _ = Command::new("smolvm")
+                let _ = smolvm_command()
                     .args(["machine", "delete", "-f", "-n", &format!("sbx-{n}")])
                     .output();
             }
@@ -734,7 +734,7 @@ pub(crate) fn image_user_kit(
 }
 
 impl E2e {
-    /// `sbt create` of workload kit `kit` on the workspace.
+    /// `bento create` of workload kit `kit` on the workspace.
     pub(crate) fn create_workload(&self, kit: &str) {
         let ws = self.workspace();
         self.ok(&[
@@ -763,7 +763,7 @@ impl E2e {
             let as_root = self.sbt(&["exec", "--privileged", &self.name, "sh", "-c", probe]);
             let as_user = self.sbt(&["exec", "-u", user, &self.name, "sh", "-c", probe]);
             panic!(
-                "sbt run failed:\n{}\n--- as root:\n{}{}\n--- as {user}:\n{}{}",
+                "bento run failed:\n{}\n--- as root:\n{}{}\n--- as {user}:\n{}{}",
                 String::from_utf8_lossy(&run.stderr),
                 String::from_utf8_lossy(&as_root.stdout),
                 String::from_utf8_lossy(&as_root.stderr),
@@ -958,7 +958,7 @@ agentInstructions:
 
 /// sbx #6, #8, #9: kit argument errors stop `create` before any machine is made.
 #[test]
-#[ignore = "runs sbt against smolvm; run with `just e2e`"]
+#[ignore = "runs bento against smolvm; run with `just e2e`"]
 pub(crate) fn kit_arg_errors_stop_create() {
     let e = E2e::new("args");
     let ws = e.workspace();

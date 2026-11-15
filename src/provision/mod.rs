@@ -194,13 +194,13 @@ pub fn ensure_policy<R: Runner>(ctx: &Ctx<R>) -> Result<Policy> {
     }
     if !ctx.can_prompt() {
         bail!(
-            "no network policy chosen yet; run `sbt policy init allow-all|balanced|deny-all` first"
+            "no network policy chosen yet; run `bento policy init allow-all|balanced|deny-all` first"
         );
     }
     let mut out = &ctx.out;
     writeln!(
         out,
-        "Choose a network policy for your sandboxes (saved; change it with `sbt policy init`):"
+        "Choose a network policy for your sandboxes (saved; change it with `bento policy init`):"
     )?;
     writeln!(out, "  1) allow-all  open network")?;
     writeln!(
@@ -698,11 +698,11 @@ pub fn create_with<R: Runner>(
                 let name = &req.name;
                 eprintln!(
                     "warning: couldn't check whether {name} still exists ({e:#}); what this create \
-                     added was kept, and `sbt rm {name}` removes it if the sandbox exists"
+                     added was kept, and `bento rm {name}` removes it if the sandbox exists"
                 );
                 if !added.is_empty() {
                     eprintln!(
-                        "warning: if it doesn't, remove its rules with `sbt policy rm network \
+                        "warning: if it doesn't, remove its rules with `bento policy rm network \
                          --sandbox {name} --id <id>` (rule ids: {})",
                         added.join(", ")
                     );
@@ -1014,7 +1014,7 @@ mod tests {
         let err = start_plan(&t.ctx, &meta("s1", &[], &[]))
             .unwrap_err()
             .to_string();
-        assert!(err.contains("sbt policy init"), "{err}");
+        assert!(err.contains("bento policy init"), "{err}");
         assert_eq!(Policy::load(&t.ctx.paths).unwrap().mode, None);
     }
 
@@ -1041,7 +1041,7 @@ mod tests {
         let t = test_env(&[]);
         std::fs::remove_file(t.ctx.paths.policy_file()).unwrap();
         let err = ensure_policy(&t.ctx).unwrap_err().to_string();
-        assert!(err.contains("sbt policy init"), "{err}");
+        assert!(err.contains("bento policy init"), "{err}");
     }
 
     #[test]
@@ -1565,7 +1565,7 @@ mod tests {
         }
     }
 
-    /// Creates `name` from `plan` (`None`: a bare `create`), with `env` as sbt's environment.
+    /// Creates `name` from `plan` (`None`: a bare `create`), with `env` as bento's environment.
     /// Returns the env, the result and the smolvm calls.
     fn agent_create(
         env: &[(&str, &str)],

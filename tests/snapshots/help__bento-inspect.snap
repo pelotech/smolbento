@@ -1,0 +1,30 @@
+---
+source: tests/help.rs
+expression: help(&path)
+---
+Show a sandbox's details
+
+Usage: bento inspect [OPTIONS] <SANDBOX>
+
+Arguments:
+  <SANDBOX>
+
+
+Options:
+  -D, --debug
+          Print each smolvm command line
+
+      --format <FORMAT>
+          Output format
+
+          [default: table]
+          [possible values: table, json, yaml]
+
+      --json
+          Same as --format json
+
+      --no-input
+          Never prompt; commands that need an answer fail with the command to run instead
+
+  -h, --help
+          Print help

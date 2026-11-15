@@ -518,7 +518,7 @@ mod tests {
             )),
             "{e}"
         );
-        assert!(e.contains("\ntry: sbt kit sign --help"), "{e}");
+        assert!(e.contains("\ntry: bento kit sign --help"), "{e}");
         fs::write(dir.join("kit.sig.bundle"), "{}").unwrap();
         let e = load(&t.ctx, "./mykit").unwrap_err().to_string();
         assert!(

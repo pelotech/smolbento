@@ -103,7 +103,7 @@ pub(crate) fn bridge_opens_urls_copies_text_and_relays_login_callbacks() {
         &format!("printf '%s\\n' \"$1\" >> '{}'", opened.display()),
     );
     sh_script(&copier, &format!("cat > '{}'", copied.display()));
-    // In the units' environment too: they read it from the `sbt` that wrote them.
+    // In the units' environment too: they read it from the `bento` that wrote them.
     e.vars
         .push(("SMOLBENTO_OPEN_CMD", opener.display().to_string()));
     e.vars
@@ -248,7 +248,7 @@ pub(crate) fn host_services_serve_a_detached_sandbox_and_are_removed_with_it() {
     let report = String::from_utf8_lossy(&diagnose.stdout);
     assert!(
         report.contains(&format!(
-            "host services left by removed sandboxes: {second}; `sbt prune` removes them"
+            "host services left by removed sandboxes: {second}; `bento prune` removes them"
         )),
         "{report}"
     );
@@ -321,7 +321,7 @@ impl ThrowawayAgent {
         String::from_utf8_lossy(&self.ssh_add(&["-l"]).stdout).contains(&self.comment)
     }
 
-    /// Points every `sbt` call of `e` at this agent.
+    /// Points every `bento` call of `e` at this agent.
     pub(crate) fn serve_to(&self, e: &mut E2e) {
         let socket: String = self.socket.to_str().unwrap().into();
         // The setting too: a unit's environment has no `SSH_AUTH_SOCK` of this process's (launchd

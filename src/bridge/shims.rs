@@ -31,7 +31,7 @@ copy() {{
   else
     post copy
   fi || {{
-    echo "$n: failed to write host clipboard (copying may be off: on the host, sbt settings set clipboard.textCopy true)" >&2
+    echo "$n: failed to write host clipboard (copying may be off: on the host, bento settings set clipboard.textCopy true)" >&2
     exit 1
   }}
 }}
@@ -421,7 +421,7 @@ mod tests {
                         "".into(),
                         format!(
                             "{shim}: failed to write host clipboard (copying may be off: on the \
-                             host, sbt settings set clipboard.textCopy true)\n"
+                             host, bento settings set clipboard.textCopy true)\n"
                         )
                     )
                 );

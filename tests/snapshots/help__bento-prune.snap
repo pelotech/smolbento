@@ -1,0 +1,26 @@
+---
+source: tests/help.rs
+expression: help(&path)
+---
+Remove stopped sandboxes
+
+Usage: bento prune [OPTIONS]
+
+Options:
+  -D, --debug
+          Print each smolvm command line
+
+      --dry-run
+          Show what would be removed
+
+      --filter <FILTER>
+          Filter: until=<timestamp|duration>
+
+  -f, --force
+          Don't ask for confirmation
+
+      --no-input
+          Never prompt; commands that need an answer fail with the command to run instead
+
+  -h, --help
+          Print help

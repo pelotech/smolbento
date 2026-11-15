@@ -1,0 +1,24 @@
+---
+source: tests/help.rs
+expression: help(&path)
+---
+Package a directory as a kit artifact
+
+Usage: bento kit pack [OPTIONS] <DIRECTORY>
+
+Arguments:
+  <DIRECTORY>
+          Kit directory: spec.yaml and an optional files/
+
+Options:
+  -D, --debug
+          Print each smolvm command line
+
+  -o, --output <OUTPUT>
+          Output file path; must end in .zip (default: <name>.zip)
+
+      --no-input
+          Never prompt; commands that need an answer fail with the command to run instead
+
+  -h, --help
+          Print help
