@@ -123,9 +123,16 @@ pub(crate) fn real_claude_kit_binds_its_api_key_and_seeds_its_settings() {
         !sh("env").contains("sk-ant-e2e-not-a-real-key"),
         "the key never enters the guest"
     );
+    // As in sbx: no ANTHROPIC_API_KEY, which Claude would ask about before using it.
     assert!(
-        !sh("cat ~/.claude/CLAUDE.md").is_empty(),
-        "the kit's agent file"
+        !sh("env").contains("ANTHROPIC_API_KEY="),
+        "the key reaches Claude only through its helper"
+    );
+    // The kit gives its guide as agent-context@1 and @2: written once.
+    assert_eq!(
+        sh("grep -c '^## Claude Code' ~/.claude/CLAUDE.md"),
+        "1\n",
+        "the kit's agent file, with its guide once"
     );
     // The agent idles at boot: nothing runs claude until `run`.
     assert_eq!(sh("pgrep -x claude || true"), "", "{}", sh("ps -ef"));

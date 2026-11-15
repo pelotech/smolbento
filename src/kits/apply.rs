@@ -150,6 +150,7 @@ pub fn apply(
             bind_credential(kc, req, secrets, &user_creds, &mut notes)?;
         }
     }
+    drop_service_variables(req, &m.credentials);
 
     if m.git_identity {
         steps.install.extend(git_identity_step(&kits, host_git())?);
@@ -252,6 +253,27 @@ fn add_volumes(
 
 /// `(env var, service)` for each credential already in `req`; the service is empty when the
 /// credential isn't one of the user's own secrets.
+/// A kit that takes a built-in service's key without naming a variable (Claude's, whose
+/// apiKeyHelper reads it) gets it only that way, as in sbx: the service's own variable from the
+/// user's secret (`ANTHROPIC_API_KEY`) would make the agent ask whether to use a key it doesn't
+/// know. Other sandboxes keep the variable.
+fn drop_service_variables(req: &mut CreateRequest, kit_creds: &[KitCred]) {
+    // A variable another kit names stays: that kit asked for it.
+    let named: Vec<&str> = kit_creds
+        .iter()
+        .filter_map(|kc| kc.req.env.as_deref())
+        .collect();
+    let vars: Vec<String> = kit_creds
+        .iter()
+        .filter(|kc| kc.req.env.is_none() && !kc.req.inject.is_empty())
+        .filter_map(|kc| services::builtin(&kc.req.service))
+        .flat_map(|s| s.env_vars)
+        .filter(|v| !named.contains(&v.as_str()))
+        .collect();
+    req.credentials.retain(|c| !vars.contains(&c.env_var));
+    req.credential_env.retain(|e| !vars.contains(e));
+}
+
 fn user_credentials(req: &CreateRequest, secrets: &SecretsFile) -> Vec<(String, String)> {
     req.credentials
         .iter()
@@ -533,11 +555,9 @@ fn bind_credential(
         }
     }
     if secrets.entry_for(&req.name, None, &c.service).is_none() {
+        // Optional means the agent works without it (claude with its subscription login): no
+        // warning. An OAuth credential's note says how to set a key.
         if kc.optional {
-            eprintln!(
-                "warning: kit {}: no {} secret is set; skipping its optional credential",
-                kc.kit, c.service
-            );
             return Ok(());
         }
         let host = c.inject.first().map_or("HOST", |i| i.domain.as_str());
@@ -1192,6 +1212,66 @@ mod tests {
         let mut req = request();
         run_with(&p, &mut req, &mut Policy::default(), &secrets(&["github"])).unwrap();
         assert!(req.credentials.is_empty(), "{:?}", req.credentials);
+    }
+
+    #[test]
+    fn a_kit_that_takes_a_key_without_a_variable_gets_no_service_variable() {
+        // Claude's kit: the key reaches the agent through its apiKeyHelper, never a variable.
+        // `ANTHROPIC_API_KEY` from the user's secret would make Claude ask whether to use it.
+        let c = cred(
+            "anthropic",
+            None,
+            vec![inject("api.anthropic.com", Some("x-api-key"))],
+        );
+        let p = plan(vec![with(
+            kit("claude", Kind::Mixin),
+            "credential@1",
+            true,
+            c,
+        )]);
+        let s = secrets(&["anthropic"]);
+        let mut req = request();
+        // As `create` sets them from the user's secrets, before the kits.
+        req.credentials = crate::provision::credentials(&s, &["anthropic".into()]).unwrap();
+        req.credential_env = vec!["ANTHROPIC_API_KEY".into()];
+        req.secrets = vec!["anthropic".into()];
+        run_with(&p, &mut req, &mut Policy::default(), &s).unwrap();
+        assert_eq!(
+            credential_args(&req),
+            ["anthropic=SBX_KIT_ANTHROPIC@api.anthropic.com:set-header=x-api-key"]
+        );
+        assert_eq!(req.credential_env, ["SBX_KIT_ANTHROPIC"]);
+        assert_eq!(req.secrets, ["anthropic"]);
+
+        // Another kit that names the variable keeps it.
+        let named = cred(
+            "anthropic",
+            Some("ANTHROPIC_API_KEY"),
+            vec![inject("api.anthropic.com", None)],
+        );
+        let p = plan(vec![
+            with(
+                kit("claude", Kind::Mixin),
+                "credential@1",
+                true,
+                cred(
+                    "anthropic",
+                    None,
+                    vec![inject("api.anthropic.com", Some("x-api-key"))],
+                ),
+            ),
+            with(kit("other", Kind::Mixin), "credential@1", false, named),
+        ]);
+        let mut req = request();
+        req.credentials = crate::provision::credentials(&s, &["anthropic".into()]).unwrap();
+        req.credential_env = vec!["ANTHROPIC_API_KEY".into()];
+        req.secrets = vec!["anthropic".into()];
+        run_with(&p, &mut req, &mut Policy::default(), &s).unwrap();
+        assert!(
+            req.credential_env
+                .contains(&"ANTHROPIC_API_KEY".to_string()),
+            "{req:?}"
+        );
     }
 
     #[test]

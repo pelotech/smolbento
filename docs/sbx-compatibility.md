@@ -189,6 +189,11 @@ so every process sees them. Your own `-e` wins. None holds a secret value.
 - `SBX_CRED_<SVC>_MODE`: one per service a kit in the sandbox declares a credential for: `apikey`
   when the service's secret is bound at create, else `none`. As measured in sbx 0.53, `claude` gets
   `ANTHROPIC` and `shell` none.
+- Each secret's own variables (`ANTHROPIC_API_KEY`, `GITHUB_TOKEN`…), holding smolvm's
+  placeholder. Not for a service whose key a kit takes without naming a variable: `claude` reads
+  its key through the `apiKeyHelper` its kit seeds, and would ask about an unknown
+  `ANTHROPIC_API_KEY`. sbx 0.53 sets none of these: a secret reaches an agent only as its kit
+  declares (measured with `anthropic` in `claude` and `shell` sandboxes).
 - `TZ`: from the host, in TTY sessions (`run`, `exec -it`), when set. sbx derives one when unset.
 - `TERM_PROGRAM`, `TERM_PROGRAM_VERSION`, `COLORTERM`: from the host in TTY sessions, so agents know
   your terminal shows clickable links.

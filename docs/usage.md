@@ -983,7 +983,8 @@ bento policy allow network --sandbox claude-myrepo localhost
 ## Secrets
 
 Agents never see your API keys. The variable holds a placeholder inside the sandbox, and smolvm
-swaps in the real value only on HTTPS requests to that service's hosts.
+swaps in the real value only on HTTPS requests to that service's hosts. An agent whose kit takes
+the key another way gets no variable: `claude` reads it through its `apiKeyHelper`.
 
 ```sh
 # prompts (hidden input; an empty line cancels)
