@@ -342,11 +342,7 @@ mod tests {
     fn workdir_starts_the_session_in_a_directory_of_the_workspace() {
         for (given, want) in [("src/app", "/src/app"), ("/tmp/x", "")] {
             let mut t = test_env(&[]);
-            created(&t, "created");
-            t.runner()
-                .once_fail(&["machine", "status"], "NOT_FOUND", "vm not found");
-            t.runner()
-                .once_fail(&["machine", "status"], "NOT_FOUND", "vm not found");
+            t.project_creatable();
             t.runner().interactive_exit(0);
             t.sbt(&["run", "claude", "--cpus", "1", "-m", "1g", "-w", given])
                 .unwrap();
@@ -440,12 +436,7 @@ mod tests {
     #[test]
     fn creates_attaches_and_stops_after_the_last_session() {
         let mut t = test_env(&[]);
-        created(&t, "created");
-        // run looks the name up, then provision::create checks again before creating.
-        t.runner()
-            .once_fail(&["machine", "status"], "NOT_FOUND", "vm not found");
-        t.runner()
-            .once_fail(&["machine", "status"], "NOT_FOUND", "vm not found");
+        t.project_creatable();
         t.runner().interactive_exit(0);
         assert_eq!(
             t.sbt(&["run", "claude", "--cpus", "1", "-m", "1g", "--", "-c"])
@@ -483,12 +474,7 @@ mod tests {
     /// `run -d claude` of a new sandbox, with `extra` args; returns stdout.
     fn run_new(extra: &[&str]) -> String {
         let mut t = test_env(&[]);
-        created(&t, "created");
-        // run looks the name up, then provision::create checks again before creating.
-        for _ in 0..2 {
-            t.runner()
-                .once_fail(&["machine", "status"], "NOT_FOUND", "vm not found");
-        }
+        t.project_creatable();
         let args: Vec<&str> = ["run", "-d", "claude", "--cpus", "1", "-m", "1g"]
             .into_iter()
             .chain(extra.iter().copied())
@@ -543,12 +529,7 @@ mod tests {
     #[test]
     fn deny_network_adds_sandbox_deny_rules_at_create() {
         let mut t = test_env(&[]);
-        created(&t, "created");
-        // run looks the name up, then provision::create checks again before creating.
-        for _ in 0..2 {
-            t.runner()
-                .once_fail(&["machine", "status"], "NOT_FOUND", "vm not found");
-        }
+        t.project_creatable();
         t.runner().interactive_exit(0);
         t.sbt(&[
             "run",

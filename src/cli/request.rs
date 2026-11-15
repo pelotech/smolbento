@@ -1226,7 +1226,7 @@ SETUP
                 &format!("{agent}-proj"),
             ),
         );
-        fake.once_fail(&["machine", "status"], "NOT_FOUND", "vm not found");
+        fake.missing_until_created(&format!("sbx-{agent}-proj"));
         let r = t.sbt(args);
         if r.is_err() {
             return (t, r, vec![], None);
@@ -1361,7 +1361,7 @@ SETUP
                 &format!("{agent}-proj"),
             ),
         );
-        fake.once_fail(&["machine", "status"], "NOT_FOUND", "vm not found");
+        fake.missing_until_created(&format!("sbx-{agent}-proj"));
         let descriptor =
             format!(r#"{{"schemaVersion":"3","kind":"mixin","name":"k","capabilities":[{caps}]}}"#);
         v3_kit(&t, "k", &descriptor, &[]);
@@ -1634,6 +1634,7 @@ SETUP
         let ws = tempfile::tempdir().unwrap();
         let ws = ws.path().canonicalize().unwrap().display().to_string();
         let mut t = host_mount_env(&ws);
+        t.creatable("ws", &[]);
         let e = t
             .sbt(&["create", "shell", &ws, "--kit", "./hm", "--name", "ws"])
             .unwrap_err();

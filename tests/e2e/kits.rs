@@ -377,23 +377,21 @@ pub(crate) fn os_keychain_delete(account: &str) {
 #[test]
 #[ignore = "boots real VMs and pulls from dhi.io with a login; run with `just e2e`"]
 pub(crate) fn local_kit_builds_from_a_registry_that_needs_a_login() {
-    // Local only: needs a Docker account with dhi.io access and its access token in a file.
+    // Run with `just e2e-dhi` (`just e2e` leaves it out): needs a Docker account with dhi.io
+    // access and its access token in a file.
     let (Ok(user), Ok(token_file)) = (
         std::env::var("SMOLBENTO_E2E_DHI_USER"),
         std::env::var("SMOLBENTO_E2E_DHI_TOKEN_FILE"),
     ) else {
-        eprintln!(
-            "skipped: set SMOLBENTO_E2E_DHI_USER and SMOLBENTO_E2E_DHI_TOKEN_FILE to build from dhi.io"
-        );
-        return;
+        panic!("set SMOLBENTO_E2E_DHI_USER and SMOLBENTO_E2E_DHI_TOKEN_FILE to build from dhi.io");
     };
     // The value goes to the OS keychain, which is shared with your own smolbento whatever the
     // config dir: never touch a dhi.io login you stored yourself.
     const ACCOUNT: &str = "registry:dhi.io";
-    if os_keychain_has(ACCOUNT) {
-        eprintln!("skipped: your keychain already has a smolbento dhi.io login; not touching it");
-        return;
-    }
+    assert!(
+        !os_keychain_has(ACCOUNT),
+        "your keychain already has a smolbento dhi.io login; not touching it"
+    );
     let token = std::fs::read(&token_file).unwrap();
     // This recreates your real `_builder` (a global smolvm machine); your next real build
     // recreates it again.

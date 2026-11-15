@@ -266,7 +266,7 @@ fn a_failed_first_start_removes_the_units_with_the_sandbox() {
             &[("sbx.name", "claude-proj"), ("sbx.agent", "claude")],
         ),
     );
-    fake.once_fail(&["machine", "status"], "NOT_FOUND", "vm not found");
+    fake.missing_until_created("sbx-claude-proj");
     fake.fail(&["machine", "start"], "SMOLVM_ERROR", "boom");
     let err = t.sbt_err(&["create", "claude", "."]);
     assert!(t.made("machine delete"), "{err}: {:?}", t.calls());

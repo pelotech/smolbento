@@ -957,7 +957,7 @@ mod tests {
         let e = saved_template(&t, "chk-tpl:v1", "shell");
         let fake = t.runner();
         fake.ok(&["machine", "status"], &json("sbx-bb", "created", "bb"));
-        fake.once_fail(&["machine", "status"], "NOT_FOUND", "vm not found");
+        fake.missing_until_created("sbx-bb");
         t.sbt(&["create", "shell", "-t", "chk-tpl:v1", "--name", "bb"])
             .unwrap();
         let create = t
@@ -1254,6 +1254,7 @@ SETUP
             .ok(&["machine", "status"], &clone_json("box", "stopped", &gone));
         ls_one(&t, &clone_json("box", "stopped", &gone));
         t.sbt(&["rm", "-f", "box"]).unwrap();
+        assert!(t.made("machine delete -n sbx-box"), "{:?}", t.calls());
     }
 
     #[test]

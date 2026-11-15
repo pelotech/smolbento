@@ -635,8 +635,8 @@ mod tests {
         t
     }
 
-    fn missing_then_created(t: &TestEnv, lookups: usize) {
-        t.project_creatable(lookups);
+    fn missing_then_created(t: &TestEnv) {
+        t.project_creatable();
     }
 
     fn existing(t: &TestEnv, state: &str) {
@@ -685,7 +685,7 @@ mod tests {
     #[test]
     fn create_force_runs_what_sbt_create_runs() {
         let mut env = with_file(FILE);
-        missing_then_created(&env, 2);
+        missing_then_created(&env);
         sbt(&mut env.ctx, &["env", "create", "--force"]).unwrap();
         let out = env.stdout();
         assert!(
@@ -701,7 +701,7 @@ mod tests {
         assert!(!out.contains("PROVISION"), "{out}");
 
         let mut plain = with_file(FILE);
-        missing_then_created(&plain, 1);
+        missing_then_created(&plain);
         let ws = plain.ctx.cwd.display().to_string();
         sbt(
             &mut plain.ctx,
@@ -759,11 +759,7 @@ mod tests {
                 ("sbx.workspace", ws.as_str()),
             ],
         );
-        t.runner()
-            .once_fail(&["machine", "status"], "NOT_FOUND", "vm not found");
-        // env create looks the name up once more, for its own "already exists" error.
-        t.runner()
-            .once_fail(&["machine", "status"], "NOT_FOUND", "vm not found");
+        t.runner().missing_until_created("sbx-shell-proj");
         v3_kit(
             &t,
             "hm",
@@ -785,7 +781,7 @@ mod tests {
         let mut t = with_file(&format!(
             "{FILE}secrets:\n  github:\n    value: ghp_dummy\n"
         ));
-        missing_then_created(&t, 2);
+        missing_then_created(&t);
         t.sbt(&["env", "create", "-f"]).unwrap();
         let out = t.stdout();
         assert!(
@@ -805,7 +801,7 @@ mod tests {
         let mut t = with_file(&format!(
             "{FILE}secrets:\n  github:\n    value: ghp_dummy\n"
         ));
-        missing_then_created(&t, 2);
+        missing_then_created(&t);
         let file = t.ctx.cwd.join("sbxenv.yaml").display().to_string();
         for cmd in ["create", "run"] {
             let err = t.sbt_err(&["env", cmd]);
@@ -835,7 +831,7 @@ mod tests {
         let mut t = with_file(FILE);
         let text = format!("{FILE}args:\n  v:\n    default: a\n");
         std::fs::write(t.ctx.cwd.join("my env.yaml"), text).unwrap();
-        missing_then_created(&t, 1);
+        t.creatable("box", &[]);
         let err = t.sbt_err(&[
             "env",
             "create",
@@ -871,7 +867,7 @@ mod tests {
         let mut t = with_file(&format!(
             "{FILE}secrets:\n  github:\n    value: ghp_dummy\n"
         ));
-        missing_then_created(&t, 2);
+        missing_then_created(&t);
         t.runner()
             .fail(&["machine", "create"], "CREATE_FAILED", "no space left");
         assert!(t.sbt(&["env", "create", "-f"]).is_err());
@@ -884,7 +880,7 @@ mod tests {
         let mut t = with_file(&format!(
             "{FILE}secrets:\n  github:\n    command: printf snap\n    snapshot: true\n"
         ));
-        missing_then_created(&t, 2);
+        missing_then_created(&t);
         t.sbt(&["env", "create", "-f"]).unwrap();
         assert!(t.stdout().contains("  ✓ github — secret · literal\n"));
         assert_eq!(scoped(&t)[0].source, Source::Keychain);
@@ -896,7 +892,7 @@ mod tests {
         let mut t = with_file(&format!(
             "{FILE}secrets:\n  github:\n    command: \"false\"\n"
         ));
-        missing_then_created(&t, 2);
+        missing_then_created(&t);
         let err = t.sbt_err(&["env", "create", "-f"]);
         assert!(err.starts_with("secret \"github\": "), "{err}");
         assert!(scoped(&t).is_empty());
@@ -905,7 +901,7 @@ mod tests {
         let mut t = with_file(&format!(
             "{FILE}secrets:\n  github:\n    command: \"false\"\n    noVerify: true\n"
         ));
-        missing_then_created(&t, 2);
+        missing_then_created(&t);
         t.sbt(&["env", "create", "-f"]).unwrap();
         assert!(t.stdout().contains("  ✓ github — secret · command\n"));
         assert_eq!(
@@ -933,7 +929,7 @@ mod tests {
     fn run_of_a_new_sandbox_creates_it_and_detaches() {
         let mut t = with_file(FILE);
         // env run looks the name up, and the create once more; the attach finds it.
-        missing_then_created(&t, 2);
+        missing_then_created(&t);
         assert_eq!(t.sbt(&["env", "run", "-d", "-f"]).unwrap(), 0);
         assert_eq!(creates(&t).len(), 1);
         assert!(t.stdout().ends_with("claude-proj\n"));
@@ -1001,6 +997,8 @@ mod tests {
         existing(&t, "running");
         t.runner().interactive_exit(0);
         t.sbt(&["env", "exec", "--", "ls"]).unwrap();
+        let call = t.runner().interactive_calls()[0].join(" ");
+        assert!(call.ends_with(" -- ls"), "the command ran: {call}");
     }
 
     fn set_scoped(t: &mut TestEnv, scope: &[&str]) {
@@ -1131,7 +1129,7 @@ mod tests {
     /// and the sandbox exists.
     fn approved(text: &str) -> TestEnv {
         let mut t = with_file(text);
-        missing_then_created(&t, 2);
+        missing_then_created(&t);
         t.answer("y\n");
         t.sbt(&["env", "create"]).unwrap();
         assert!(t.stdout().contains("\n  Approve this plan? (y/N) "));
@@ -1190,7 +1188,7 @@ mod tests {
         let mut t = approved(FILE);
         // Attaching, and creating it again after a plain `rm`.
         t.sbt(&["env", "run", "-d"]).unwrap();
-        missing_then_created(&t, 2);
+        missing_then_created(&t);
         t.sbt(&["env", "create"]).unwrap();
         assert_eq!(creates(&t).len(), 2);
     }
@@ -1198,7 +1196,7 @@ mod tests {
     #[test]
     fn force_approves_nothing() {
         let mut t = with_file(FILE);
-        missing_then_created(&t, 2);
+        missing_then_created(&t);
         t.sbt(&["env", "create", "--force"]).unwrap();
         assert_eq!(record(&t), None);
         let err = t.sbt_err(&["env", "run", "-d"]);
@@ -1249,7 +1247,7 @@ mod tests {
         // As in sbx: also when attaching, where the secret's command doesn't run again.
         assert_eq!(t.sbt_err(&["env", "run", "-d"]), refusal("run -d"));
         t.stdout();
-        missing_then_created(&t, 2);
+        missing_then_created(&t);
         assert_eq!(t.sbt_err(&["env", "create"]), refusal("create"));
         let out = t.stdout();
         assert!(
@@ -1267,7 +1265,7 @@ mod tests {
             .unwrap();
         existing(&t, "running");
         t.sbt(&["env", "run", "-d"]).unwrap();
-        missing_then_created(&t, 2);
+        missing_then_created(&t);
         t.sbt(&["env", "create"]).unwrap();
     }
 
@@ -1345,7 +1343,7 @@ mod tests {
     #[test]
     fn lifecycle_phases_run_around_the_create_and_on_every_run() {
         let mut t = with_file(&lifecycle_file(""));
-        missing_then_created(&t, 2);
+        missing_then_created(&t);
         t.sbt(&["env", "create", "--force"]).unwrap();
         assert_eq!(log(&t), "init\npost\n");
         let out = t.stdout();
@@ -1371,7 +1369,7 @@ mod tests {
             "{FILE}secrets:\n  github:\n    value: ghp_dummy\nlifecycle:\n  initialize:\n    \
              - command: exit 7\n"
         ));
-        missing_then_created(&t, 2);
+        missing_then_created(&t);
         for cmd in ["create", "run"] {
             assert_eq!(
                 t.sbt_err(&["env", cmd, "--force"]),
@@ -1387,7 +1385,7 @@ mod tests {
         let mut t = with_file(&format!(
             "{FILE}lifecycle:\n  postCreate:\n    - command: exit 4\n"
         ));
-        missing_then_created(&t, 2);
+        missing_then_created(&t);
         assert_eq!(
             t.sbt_err(&["env", "run", "--force"]),
             "postCreate[0] (exit 4): exit status 4; remove this environment's sandbox and \
@@ -1501,7 +1499,7 @@ mod tests {
         let mut t = with_file(&format!("{FILE}{REGISTRY}"));
         // A host-wide login for the same host stays as it is.
         t.ctx.store.set("registry:ghcr.io", "host-wide").unwrap();
-        missing_then_created(&t, 2);
+        missing_then_created(&t);
         t.sbt(&["env", "create", "--force"]).unwrap();
         let out = t.stdout();
         assert!(
@@ -1553,7 +1551,7 @@ mod tests {
     #[test]
     fn a_plain_rm_removes_the_sandboxs_registry_login() {
         let mut t = with_file(&format!("{FILE}{REGISTRY}"));
-        missing_then_created(&t, 2);
+        missing_then_created(&t);
         t.sbt(&["env", "create", "--force"]).unwrap();
         listed(&t, &[]);
         t.sbt(&["rm", "-f", "claude-proj"]).unwrap();
@@ -1566,7 +1564,7 @@ mod tests {
     fn a_registry_source_that_fails_stops_before_the_create() {
         let bad = REGISTRY.replace("printf 'reg-%s' tok3n", "exit 1");
         let mut t = with_file(&format!("{FILE}{bad}"));
-        missing_then_created(&t, 2);
+        missing_then_created(&t);
         let err = t.sbt_err(&["env", "create", "--force"]);
         assert!(err.starts_with("registry \"GHCR.io\": secret: "), "{err}");
         assert!(creates(&t).is_empty());
@@ -1579,7 +1577,7 @@ mod tests {
         let file = "schemaVersion: \"1\"\nagent: claude\nname: claude-proj\n\
                     entrypoint: [\"/bin/sh\", \"-c\"]\ncmd: [\"echo hi\"]\n";
         let mut t = with_file(file);
-        missing_then_created(&t, 2);
+        missing_then_created(&t);
         t.sbt(&["env", "run", "-d", "--force"]).unwrap();
         assert!(t.runner().interactive_calls().is_empty());
         let create = &creates(&t)[0];
@@ -1646,7 +1644,7 @@ mod tests {
         let mut t = with_file(&format!(
             "{FILE}{REGISTRY}lifecycle:\n  initialize:\n    - command: exit 7\n"
         ));
-        missing_then_created(&t, 2);
+        missing_then_created(&t);
         assert!(
             t.sbt_err(&["env", "create", "--force"])
                 .ends_with("exit status 7")
@@ -1660,7 +1658,7 @@ mod tests {
         let mut t = with_file(&format!(
             "{FILE}{launch}lifecycle:\n  postCreate:\n    - command: echo post >> log\n"
         ));
-        missing_then_created(&t, 2);
+        missing_then_created(&t);
         t.sbt(&["env", "run", "--force"]).unwrap();
         assert_eq!(log(&t), "post\n");
         let out = t.stdout();
@@ -1718,7 +1716,7 @@ mod tests {
     #[test]
     fn bindings_are_saved_globally_and_send_the_credential_there() {
         let mut t = with_file(&format!("{FILE}{BINDING}"));
-        missing_then_created(&t, 2);
+        missing_then_created(&t);
         t.sbt(&["env", "create", "--force"]).unwrap();
         let out = t.stdout();
         assert!(
@@ -1740,7 +1738,7 @@ mod tests {
     #[test]
     fn env_rm_keeps_bindings_unless_pruned() {
         let mut t = with_file(&format!("{FILE}{BINDING}"));
-        missing_then_created(&t, 2);
+        missing_then_created(&t);
         t.sbt(&["env", "create", "--force"]).unwrap();
         listed(&t, &[]);
         t.sbt(&["env", "rm", "--force"]).unwrap();
@@ -1764,7 +1762,7 @@ mod tests {
         let mut t = with_file(&format!(
             "{FILE}bindings:\n  nosuch:\n    apiKey:\n      domains: [a.example]\n"
         ));
-        missing_then_created(&t, 2);
+        missing_then_created(&t);
         let err = t.sbt_err(&["env", "create", "--force"]);
         assert!(err.starts_with("unknown service 'nosuch'"), "{err}");
     }
@@ -1774,7 +1772,7 @@ mod tests {
         let mut t = with_file(&format!(
             "{FILE}mcp:\n  servers:\n    - name: deep\n      url: https://mcp.deepwiki.com/mcp\n"
         ));
-        missing_then_created(&t, 2);
+        missing_then_created(&t);
         t.sbt(&["env", "create", "--force"]).unwrap();
         let out = t.stdout();
         assert!(
@@ -1800,7 +1798,7 @@ mod tests {
             "{FILE}secrets:\n  github:\n    value: ghp_dummy\n\
              mcp:\n  servers:\n    - name: gone\n      url: https://mcp.example.invalid/mcp\n"
         ));
-        missing_then_created(&t, 2);
+        missing_then_created(&t);
         let err = t.sbt_err(&["env", "create", "--force"]);
         assert!(
             err.starts_with(

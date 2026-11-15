@@ -32,6 +32,8 @@ pub struct FakeRunner {
     during_interactive: RefCell<Option<Box<dyn Fn()>>>,
     during: RefCell<Vec<(Vec<String>, Hook)>>,
     spawn_bin: RefCell<Option<PathBuf>>,
+    /// Machines `missing_until_created` keeps missing until they're created.
+    missing: RefCell<std::collections::BTreeSet<String>>,
 }
 
 fn strings(items: &[&str]) -> Vec<String> {
@@ -109,6 +111,14 @@ impl FakeRunner {
 
     pub fn once_fail(&self, prefix: &[&str], code: &str, message: &str) -> &Self {
         self.once(prefix, error_output(code, message))
+    }
+
+    /// `machine status -n MACHINE` answers NOT_FOUND until a `machine create -n MACHINE` call,
+    /// then as registered: a sandbox that a test's command creates, however often it's looked up.
+    /// Registering again makes it missing again (after a removal).
+    pub fn missing_until_created(&self, machine: &str) -> &Self {
+        self.missing.borrow_mut().insert(machine.to_string());
+        self
     }
 
     /// Make calls starting with `prefix` fail to run at all, as when smolvm can't be spawned.
@@ -225,6 +235,19 @@ impl Runner for FakeRunner {
                 f(args);
             }
         }
+        if let [m, verb, n, machine, ..] = args
+            && (m.as_str(), n.as_str()) == ("machine", "-n")
+        {
+            match verb.as_str() {
+                "create" => {
+                    self.missing.borrow_mut().remove(machine);
+                }
+                "status" if self.missing.borrow().contains(machine) => {
+                    return Ok(error_output("NOT_FOUND", "vm not found"));
+                }
+                _ => {}
+            }
+        }
         let mut replies = self.replies.borrow_mut();
         let Some(index) = replies.iter().rposition(|r| args.starts_with(&r.prefix)) else {
             return Ok(Output::default());
@@ -291,6 +314,30 @@ mod tests {
 
     fn args(items: &[&str]) -> Vec<String> {
         strings(items)
+    }
+
+    #[test]
+    fn a_machine_is_missing_until_it_is_created() {
+        let f = FakeRunner::new();
+        f.ok(&["machine", "status"], "{}")
+            .missing_until_created("sbx-a");
+        let status = |m: &str| {
+            f.run(&args(&["machine", "status", "-n", m, "--json"]))
+                .unwrap()
+        };
+        assert!(status("sbx-a").stderr.contains("NOT_FOUND"));
+        assert!(
+            status("sbx-a").stderr.contains("NOT_FOUND"),
+            "any number of lookups"
+        );
+        assert_eq!(
+            status("sbx-b").stdout,
+            "{}",
+            "other machines answer as registered"
+        );
+        f.run(&args(&["machine", "create", "-n", "sbx-a", "--image", "x"]))
+            .unwrap();
+        assert_eq!(status("sbx-a").stdout, "{}");
     }
 
     #[test]

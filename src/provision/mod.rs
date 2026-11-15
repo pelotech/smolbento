@@ -1246,8 +1246,7 @@ mod tests {
                 &machine_json("sbx-s1", "created", &[("sbx.name", "s1")]),
             );
         }
-        // `create` checks the name is free first.
-        fake.once_fail(&["machine", "status"], "NOT_FOUND", "vm not found");
+        fake.missing_until_created("sbx-s1");
         if fail_install {
             fake.fail(&root_sh("sbx-s1", "npm i"), "EXEC_FAILED", "npm ERR! 404");
         }
@@ -1395,7 +1394,7 @@ mod tests {
             &["machine", "status"],
             &machine_json("sbx-s1", "created", &[("sbx.name", "s1")]),
         );
-        fake.once_fail(&["machine", "status"], "NOT_FOUND", "vm not found");
+        fake.missing_until_created("sbx-s1");
         let kit = Kit::test;
         let mut wl = kit("wl", Kind::Workload);
         wl.content = Content::Image("img:1".into());
@@ -1572,7 +1571,7 @@ mod tests {
                 &[("sbx.name", name)],
             ),
         );
-        fake.once_fail(&["machine", "status"], "NOT_FOUND", "vm not found");
+        fake.missing_until_created(&sandbox::name::machine_name(name));
         let mut req = agent_request(preset);
         req.name = name.into();
         let result = check_free(&t.ctx, name)

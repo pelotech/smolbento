@@ -435,15 +435,15 @@ mod tests {
         let mut t = mcp_env(&[]);
         t.runner()
             .fail(&["machine", "start"], "SMOLVM_ERROR", "boom");
-        // Later registrations answer first: the name is free, the machine exists once created,
-        // and after the failed first start removed it smolvm no longer has it.
+        // The name is free until the create (mcp_env); later registrations answer first: the
+        // machine exists once created, and after the failed first start removed it smolvm no
+        // longer has it.
         t.runner()
             .fail(&["machine", "status"], "NOT_FOUND", "vm not found")
             .once_ok(
                 &["machine", "status"],
                 &json("sbx-claude-proj", "created", "claude-proj"),
-            )
-            .once_fail(&["machine", "status"], "NOT_FOUND", "vm not found");
+            );
         let err = t
             .sbt(&["create", "claude", ".", "--static-mcp", "linear"])
             .unwrap_err();

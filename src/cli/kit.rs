@@ -1189,7 +1189,10 @@ mod tests {
         assert!(e.to_string().contains("not in your allowlist"), "{e}");
         assert!(!t.ctx.cwd.join("gemini-kit-latest.tar.gz").exists());
         v2_dir(&t, "k", "schemaVersion: \"2\"\nkind: mixin\nname: demo\n");
-        let e = t.sbt(&["kit", "push", "./k", "k:1"]).unwrap_err();
+        // A closed loopback port: the push gets past the policy and fails at once, offline.
+        let e = t
+            .sbt(&["kit", "push", "./k", "127.0.0.1:1/k:1"])
+            .unwrap_err();
         assert!(!e.to_string().contains("allowlist"), "{e}");
     }
 

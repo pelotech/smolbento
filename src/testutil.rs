@@ -119,13 +119,10 @@ impl TestEnv {
         self.machine(&crate::sandbox::name::machine_name(name), state, &all)
     }
 
-    /// Sandbox `name` is missing for `lookups` status calls, then exists as `created`.
-    pub fn creatable(&self, name: &str, labels: &[(&str, &str)], lookups: usize) -> &FakeRunner {
-        let fake = self.sandbox(name, "created", labels);
-        for _ in 0..lookups {
-            fake.once_fail(&["machine", "status"], "NOT_FOUND", "vm not found");
-        }
-        fake
+    /// Sandbox `name` is missing until the command creates it, then exists as `created`.
+    pub fn creatable(&self, name: &str, labels: &[(&str, &str)]) -> &FakeRunner {
+        self.sandbox(name, "created", labels)
+            .missing_until_created(&crate::sandbox::name::machine_name(name))
     }
 
     /// Sandbox `claude-proj`, whose workspace is the cwd.
@@ -134,10 +131,10 @@ impl TestEnv {
         self.sandbox("claude-proj", state, &Self::project_labels(&ws))
     }
 
-    /// `claude-proj` is missing for `lookups` status calls, then exists as `created`.
-    pub fn project_creatable(&self, lookups: usize) -> &FakeRunner {
+    /// `claude-proj` is missing until the command creates it, then exists as `created`.
+    pub fn project_creatable(&self) -> &FakeRunner {
         let ws = self.ctx.cwd.display().to_string();
-        self.creatable("claude-proj", &Self::project_labels(&ws), lookups)
+        self.creatable("claude-proj", &Self::project_labels(&ws))
     }
 
     fn project_labels(ws: &str) -> [(&str, &str); 2] {
@@ -298,11 +295,7 @@ pub fn json(machine: &str, state: &str, name: &str) -> String {
 
 /// Fake smolvm for one create of `name` that succeeds.
 pub fn creatable_as(t: &TestEnv, name: &str) {
-    t.creatable(
-        name,
-        &[("sbx.agent", "claude"), ("sbx.created", "999000")],
-        1,
-    );
+    t.creatable(name, &[("sbx.agent", "claude"), ("sbx.created", "999000")]);
 }
 
 pub fn global_github_secret(t: &TestEnv) {
