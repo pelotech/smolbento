@@ -8,7 +8,7 @@ Usage: bento inspect [OPTIONS] <SANDBOX>
 
 Arguments:
   <SANDBOX>
-
+          Sandbox name
 
 Options:
   -D, --debug

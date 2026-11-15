@@ -82,3 +82,8 @@ Options:
 
   -h, --help
           Print help
+
+Examples:
+  bento run claude
+  bento run claude ~/code/api
+  bento run codex . -- --model o3

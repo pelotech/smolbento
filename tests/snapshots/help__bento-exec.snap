@@ -8,10 +8,10 @@ Usage: bento exec [OPTIONS] <SANDBOX> <COMMAND>...
 
 Arguments:
   <SANDBOX>
-
+          Sandbox name
 
   <COMMAND>...
-
+          Command and its arguments
 
 Options:
   -D, --debug
@@ -46,3 +46,7 @@ Options:
 
   -h, --help
           Print help
+
+Examples:
+  bento exec claude-myrepo git status
+  bento exec -it claude-myrepo bash

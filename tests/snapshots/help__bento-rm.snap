@@ -8,7 +8,7 @@ Usage: bento rm [OPTIONS] [SANDBOXES]...
 
 Arguments:
   [SANDBOXES]...
-
+          Sandboxes to remove
 
 Options:
       --all

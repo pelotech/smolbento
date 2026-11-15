@@ -8,7 +8,7 @@ Usage: bento template save [OPTIONS] <SANDBOX> <TAG>
 
 Arguments:
   <SANDBOX>
-
+          Sandbox to save
 
   <TAG>
           Template name, e.g. myimage:v1.0
