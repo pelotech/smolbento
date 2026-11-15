@@ -16,62 +16,10 @@ use crate::smolvm::Runner;
 use crate::util;
 use crate::workspace::{self, Workspace, clone};
 
-/// Turns sbx's create options into a [`CreateRequest`]. `default_to_cwd`: `run` mounts the current
-/// directory when no path is given; `create` makes a mountless sandbox.
-pub(crate) fn build_request<R: Runner>(
-    ctx: &Ctx<R>,
-    agent_name: &str,
-    paths: &[String],
-    opts: &SandboxOpts,
-    default_to_cwd: bool,
-) -> Result<CreateRequest> {
-    let agent = agents::find(agent_name).with_context(|| {
-        agents::retired(agent_name).map_or_else(|| agents::unknown(agent_name), |r| r.refusal())
-    })?;
-    let mut req = base_request(ctx, agent.name, paths, opts, default_to_cwd)?;
-    let docker_enabled = ctx.settings.bool("docker.enabled")?;
-    let store = crate::templates::Store::new(&ctx.paths);
-    let saved = match &opts.template {
-        Some(t) => store.find_ref(t)?,
-        None => None,
-    };
-    if opts.pull.as_deref() == Some("never") && saved.is_none() {
-        return Err(super::Unsupported(
-            "--pull never works only with a saved template (see `sbt template ls`); smolvm \
-             pulls missing images"
-                .into(),
-        )
-        .into());
-    }
-    if let Some(e) = saved {
-        if e.agent != agent.name {
-            bail!(
-                "template {} was saved from a {a} sandbox; run it with {a}",
-                e.full(),
-                a = e.agent
-            );
-        }
-        req.template_pack = Some(store.pack(&e));
-        req.template = Some(e.full());
-        // Asks for the docker kit as the source sandbox had it.
-        req.docker = e.docker && docker_enabled;
-        req.image = e.image;
-        return Ok(req);
-    }
-    // docker.enabled=false swaps the preset for its plain variant; an explicit -t is used as given.
-    req.image = match &opts.template {
-        Some(t) => t.clone(),
-        None if docker_enabled => agent.image.to_string(),
-        None => agents::plain_image(agent.image),
-    };
-    // Asks for the docker kit; `apply` sets it again from the kits actually applied.
-    req.docker = docker_enabled && agents::is_docker_image(&req.image);
-    Ok(req)
-}
-
-/// Everything but the image: `agent` is the preset or workload kit name (the `sbx.agent` label
-/// and the default name's prefix).
-fn base_request<R: Runner>(
+/// Turns sbx's create options into a [`CreateRequest`], all but the image: `agent` is the agent
+/// or workload kit name (the `sbx.agent` label and the default name's prefix). `default_to_cwd`:
+/// `run` mounts the current directory when no path is given; `create` makes a mountless sandbox.
+pub(crate) fn base_request<R: Runner>(
     ctx: &Ctx<R>,
     agent: &str,
     paths: &[String],
@@ -149,10 +97,11 @@ pub(crate) fn check_kit_args(targets: &[String], opts: &SandboxOpts) -> Result<(
     Ok(())
 }
 
-/// The workload `kit_target` found: a preset (from a saved template), a built-in agent's kit
-/// or a workload kit, not loaded yet.
+/// The workload `kit_target` found, not loaded yet: a saved template's kits, a built-in agent's
+/// kit or a workload kit.
 pub(crate) enum Workload {
-    Preset(Box<Kit>),
+    /// A saved template: its recorded kits, loaded by their pinned refs.
+    Template(Box<crate::templates::Entry>),
     /// A built-in agent's published kit, by `agents::kit_ref`.
     Agent {
         name: String,
@@ -226,57 +175,62 @@ pub(crate) fn settle_default_name<R: Runner>(
     )
 }
 
-/// `build_request` for `targets` (an agent preset or a workload kit REF, then workspace paths),
-/// and the workload: the request (so its name) without loading any kit; a workload kit's name
-/// comes from `load::kit_name`. `kit_plan` loads the kits. `None` when there are no kits: a
-/// preset without `--kit`, unless its image gets the `docker` kit.
+/// The request for `targets` (a built-in agent or a workload kit REF, then workspace paths), and
+/// its workload: a saved template given with `-t`, the agent's kit or the workload kit. Loads no
+/// kit (a workload kit's name comes from `load::kit_name`); `kit_plan` loads them.
 pub(crate) fn kit_target<R: Runner>(
     ctx: &Ctx<R>,
     targets: &[String],
     opts: &SandboxOpts,
     default_to_cwd: bool,
-) -> Result<(CreateRequest, Option<Workload>)> {
+) -> Result<(CreateRequest, Workload)> {
     let (target, paths) = targets.split_first().context("specify an agent")?;
-    if let Some(reference) = agents::kit_ref(&ctx.env, target) {
-        let saved = match &opts.template {
-            Some(t) => crate::templates::Store::new(&ctx.paths).find_ref(t)?,
-            None => None,
-        };
-        if saved.is_none() {
-            if opts.pull.as_deref() == Some("never") {
-                return Err(super::Unsupported(
-                    "--pull never works only with a saved template (see `sbt template ls`); \
-                     smolvm pulls missing images"
-                        .into(),
-                )
-                .into());
-            }
-            let req = base_request(ctx, target, paths, opts, default_to_cwd)?;
-            let name = target.clone();
-            return Ok((req, Some(Workload::Agent { name, reference })));
-        }
+    if let Some(r) = agents::retired(target) {
+        bail!(r.refusal());
     }
-    Ok(match agents::find(target) {
-        Some(agent) => {
-            let req = build_request(ctx, target, paths, opts, default_to_cwd)?;
-            if opts.kit.is_empty() && !req.docker {
-                return Ok((req, None));
-            }
-            let workload = load::preset_kit(agent, &req.image);
-            (req, Some(Workload::Preset(Box::new(workload))))
+    let store = crate::templates::Store::new(&ctx.paths);
+    let saved = match &opts.template {
+        Some(t) => store.find_ref(t)?,
+        None => None,
+    };
+    if let Some(e) = saved {
+        e.check_current()?;
+        let same = *target == e.agent
+            || (looks_like_kit(target) && load::kit_name(ctx, target)? == e.agent);
+        if !same {
+            bail!(
+                "template {} was saved from a {a} sandbox; run it with {a}",
+                e.full(),
+                a = e.agent
+            );
         }
-        None => {
-            if let Some(r) = agents::retired(target) {
-                bail!(r.refusal());
-            }
-            if !looks_like_kit(target) {
-                bail!(agents::unknown(target));
-            }
-            let name = load::kit_name(ctx, target)?;
-            let req = base_request(ctx, &name, paths, opts, default_to_cwd)?;
-            (req, Some(Workload::Ref(target.clone())))
-        }
-    })
+        let mut req = base_request(ctx, &e.agent, paths, opts, default_to_cwd)?;
+        req.template_pack = Some(store.pack(&e));
+        req.template = Some(e.full());
+        req.image = e.image.clone();
+        // The docker kit as the source sandbox had it.
+        req.docker = e.docker && ctx.settings.bool("docker.enabled")?;
+        return Ok((req, Workload::Template(Box::new(e))));
+    }
+    if opts.pull.as_deref() == Some("never") {
+        return Err(super::Unsupported(
+            "--pull never works only with a saved template (see `sbt template ls`); smolvm \
+             pulls missing images"
+                .into(),
+        )
+        .into());
+    }
+    if let Some(reference) = agents::kit_ref(&ctx.env, target) {
+        let req = base_request(ctx, target, paths, opts, default_to_cwd)?;
+        let name = target.clone();
+        return Ok((req, Workload::Agent { name, reference }));
+    }
+    if !looks_like_kit(target) {
+        bail!(agents::unknown(target));
+    }
+    let name = load::kit_name(ctx, target)?;
+    let req = base_request(ctx, &name, paths, opts, default_to_cwd)?;
+    Ok((req, Workload::Ref(target.clone())))
 }
 
 /// Whether any kit flag was given (`run` warns that they don't apply to an existing sandbox).
@@ -300,28 +254,35 @@ pub(crate) fn kit_plan<R: Runner>(
     p: &Progress,
 ) -> Result<Plan> {
     let mut kits = KitsSection::new(p, &req.name);
-    let workload_source = match &workload {
-        Workload::Ref(target) => Some(target.clone()),
-        Workload::Agent { name, .. } => Some(name.clone()),
-        Workload::Preset(_) => None,
-    };
-    let workload = match workload {
-        Workload::Preset(kit) => *kit,
+    // A template's own mixins and their recorded args.
+    let mut recorded: Vec<Kit> = Vec::new();
+    let mut recorded_args: Vec<(String, Vec<String>)> = Vec::new();
+    let (workload_source, workload) = match workload {
+        Workload::Template(e) => {
+            let offline = opts.pull.as_deref() == Some("never");
+            let agent_ref = agents::kit_ref(&ctx.env, &e.agent);
+            for (i, rec) in e.kits.iter().enumerate() {
+                let agent = i == 0 && agent_ref.as_deref() == Some(load::unpinned(&rec.reference));
+                let mut kit = kits.load_pinned(ctx, &rec.reference, offline, agent)?;
+                let args = rec.args.iter().map(|(k, v)| format!("{k}={v}")).collect();
+                recorded_args.push((kit.name.clone(), args));
+                if i == 0 {
+                    // The template's pack boots; its source image is recorded.
+                    kit.content = Content::Image(e.image.clone());
+                } else if matches!(kit.content, Content::Oci(_)) {
+                    // Its layers are in the pack already.
+                    kit.content = Content::None;
+                }
+                recorded.push(kit);
+            }
+            (None, recorded.remove(0))
+        }
         Workload::Agent { name, reference } => {
-            let mut kit = kits.load_agent(ctx, &name, &reference)?;
-            load::check_launchable(ctx, &mut kit, Some(&req.name))?;
-            // `-t IMAGE` replaces the kit's image and keeps its capabilities.
-            if let Some(image) = &opts.template {
-                kit.content = Content::Image(image.clone());
-            }
-            if let Content::Image(image) = &kit.content {
-                req.image = image.clone();
-            }
-            req.docker = wants_docker(&kit, ctx.settings.bool("docker.enabled")?);
-            kit
+            let kit = kits.load_agent(ctx, &name, &reference)?;
+            (Some(name), kit)
         }
         Workload::Ref(target) => {
-            let mut kit = kits.load(ctx, &target, load::Position::Agent)?;
+            let kit = kits.load(ctx, &target, load::Position::Agent)?;
             if kit.kind == Kind::Mixin {
                 // sbx's report, then how to use the mixin.
                 bail!(
@@ -330,33 +291,45 @@ pub(crate) fn kit_plan<R: Runner>(
                     capability::incoherent(&[capability::NO_WORKLOAD.to_string()])
                 );
             }
-            load::check_launchable(ctx, &mut kit, Some(&req.name))?;
-            // A Smolfile kit gets the shell preset's command, recorded in `sbx.command` so every
-            // attach launches the same thing.
-            if kit.command.is_none() {
-                let shell = agents::find("shell").expect("the shell preset");
-                kit.command = Some(shell.command.iter().map(|s| s.to_string()).collect());
-            }
-            // `-t IMAGE` replaces the kit's image and keeps its capabilities.
-            if let Some(image) = &opts.template {
-                kit.content = Content::Image(image.clone());
-            }
-            if let Content::Image(image) = &kit.content {
-                req.image = image.clone();
-            }
-            req.docker = wants_docker(&kit, ctx.settings.bool("docker.enabled")?);
-            kit
+            (Some(target), kit)
         }
     };
+    let mut workload = workload;
+    // A template already set the image and the docker flag.
+    if req.template_pack.is_none() {
+        load::check_launchable(ctx, &mut workload, Some(&req.name))?;
+        // A Smolfile kit gets the shell preset's command, recorded in `sbx.command` so every
+        // attach launches the same thing.
+        if workload.command.is_none() {
+            let shell = agents::find("shell").expect("the shell preset");
+            workload.command = Some(shell.command.iter().map(|s| s.to_string()).collect());
+        }
+        // `-t IMAGE` replaces the kit's image and keeps its capabilities.
+        if let Some(image) = &opts.template {
+            workload.content = Content::Image(image.clone());
+        }
+        if let Content::Image(image) = &workload.content {
+            req.image = image.clone();
+        }
+        req.docker = wants_docker(&workload, ctx.settings.bool("docker.enabled")?);
+    }
     let mut args = ArgValues::parse(&opts.kit_args_file, &opts.kit_arg)?;
-    let mixins = opts
-        .kit
-        .iter()
-        .map(|r| kits.load(ctx, r, load::Position::Kit))
+    for (kit, pins) in &recorded_args {
+        args.pin(kit, pins)?;
+    }
+    let mixins = recorded
+        .into_iter()
+        .map(Ok)
+        .chain(
+            opts.kit
+                .iter()
+                .map(|r| kits.load(ctx, r, load::Position::Kit)),
+        )
         .collect::<Result<Vec<_>>>()?;
     for (source, pins) in &opts.kit_pins {
+        let given = mixins.len() - opts.kit.len();
         let kit = match opts.kit.iter().position(|k| k == source) {
-            Some(i) => &mixins[i],
+            Some(i) => &mixins[given + i],
             None if workload_source.as_ref() == Some(source) => &workload,
             None => continue,
         };
@@ -411,6 +384,20 @@ impl<'a> KitsSection<'a> {
         let sandbox = self.sandbox.clone();
         self.fetch(reference, |before| {
             load::load_noting(ctx, reference, Some(&sandbox), position, before)
+        })
+    }
+
+    /// `load` for a template's kit `reference` (pinned): `load::pinned`.
+    fn load_pinned<R: Runner>(
+        &mut self,
+        ctx: &Ctx<R>,
+        reference: &str,
+        offline: bool,
+        agent: bool,
+    ) -> Result<Kit> {
+        let sandbox = self.sandbox.clone();
+        self.fetch(load::unpinned(reference), |before| {
+            load::pinned(ctx, reference, offline, agent, Some(&sandbox), before)
         })
     }
 
@@ -677,7 +664,7 @@ mod tests {
         // mixins.
         assert!(
             create.contains(&format!(
-                "--label sbx.kits=[{{\"name\":\"shell\",\"ref\":\"{shell}\",\"format\":\"v2\"}},{},{{\"name\":\"tool\",\"ref\":\"{kit}\",\"format\":\"v2\"}}]",
+                "--label sbx.kits=[{{\"name\":\"shell\",\"ref\":\"{shell}\",\"format\":\"v2\"}},{},{{\"name\":\"tool\",\"ref\":\"{kit}\",\"format\":\"v2\",\"args\":{{\"mode\":\"slow\"}}}}]",
                 r#"{"name":"docker","ref":"builtin:docker","provides":["docker@1.0.0"]}"#
             )),
             "{create}"
@@ -1254,8 +1241,8 @@ SETUP
         };
         let (mut req, workload) = super::kit_target(&t.ctx, &a.targets, &a.opts, true).unwrap();
         let quiet = super::Progress::new(t.ctx.out.clone(), false, false, true);
-        let plan = workload.map(|w| super::kit_plan(&t.ctx, &mut req, w, &a.opts, &quiet).unwrap());
-        (req, plan)
+        let plan = super::kit_plan(&t.ctx, &mut req, workload, &a.opts, &quiet).unwrap();
+        (req, Some(plan))
     }
 
     const SHARED: &str = "/home/agent/.chk-shared";

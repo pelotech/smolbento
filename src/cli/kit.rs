@@ -789,6 +789,7 @@ mod tests {
             reference: reference.into(),
             provides: provides.iter().map(|p| p.to_string()).collect(),
             format,
+            args: Default::default(),
         }
     }
 

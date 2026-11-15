@@ -49,6 +49,13 @@ const V2_FILES_MEDIA_TYPE: &str = "application/vnd.oci.image.layer.v1.tar+gzip";
 /// descriptor annotation is a plain image and an error. A DIGEST (one a signature check
 /// verified) pins the fetch to that manifest; the kit's source is still REF.
 pub fn pull(reference: &str, digest: Option<&str>, cache: &Path, logins: Logins) -> Result<Kit> {
+    // A pinned kit already in the cache needs no registry: its layout is named by its digest.
+    if let Some(d) = digest {
+        let dir = cache.join("oci").join(hex_of(d)?);
+        if dir.join("index.json").is_file() {
+            return read_layout(&dir, Source::Registry(reference.to_string()));
+        }
+    }
     let pinned = digest.map(|d| pinned(reference, d)).transpose()?;
     let dir = pull_layout(pinned.as_deref().unwrap_or(reference), cache, true, logins)?;
     read_layout(&dir, Source::Registry(reference.to_string()))
@@ -1110,6 +1117,27 @@ mod tests {
 
     fn src() -> Source {
         Source::Registry("docker.io/acme/kit:1".into())
+    }
+
+    #[test]
+    fn a_cached_pinned_ref_loads_without_the_registry() {
+        let cache = tempfile::tempdir().unwrap();
+        let tmp = tempfile::tempdir().unwrap();
+        let digest = fixtures::oci_layout(tmp.path(), Some(DESC), &[], "{}");
+        fs::create_dir_all(store_dir(cache.path())).unwrap();
+        for e in fs::read_dir(store_dir(tmp.path())).unwrap() {
+            let data = fs::read(e.unwrap().path()).unwrap();
+            put_bytes(cache.path(), &sha256_digest(&data), &data).unwrap();
+        }
+        let manifest = fs::read(store_dir(tmp.path()).join(hex_of(&digest).unwrap())).unwrap();
+        // Nothing listens on 127.0.0.1:1: only the cache can answer.
+        let r = "127.0.0.1:1/acme/kit:1";
+        build_layout(cache.path(), &manifest, &digest, r).unwrap();
+        let k = pull(r, Some(&digest), cache.path(), Logins::none()).unwrap();
+        assert_eq!(k.digest.as_deref(), Some(digest.as_str()));
+        assert_eq!(k.source, Source::Registry(r.into()));
+        // Unpinned, it asks the registry.
+        assert!(pull(r, None, cache.path(), Logins::none()).is_err());
     }
 
     #[test]

@@ -186,6 +186,72 @@ pub fn agent<R: Runner>(
     Ok((kit, cached))
 }
 
+/// A kit record's ref without its `@sha256:…` pin.
+pub fn unpinned(reference: &str) -> &str {
+    match reference.rsplit_once('@') {
+        Some((base, d)) if d.starts_with("sha256:") => base,
+        _ => reference,
+    }
+}
+
+/// Loads a template's recorded kit by its record `reference` (`ref@sha256:…`, a local path, or
+/// `builtin:NAME`). A pinned registry kit already in the kit cache needs no network; `offline`
+/// (`--pull never`) refuses one that isn't. `agent`: it is the template's built-in agent kit,
+/// tagged `Source::Agent` and not trust-checked; other registry kits are checked against
+/// `kit.allowedSources` (an imported template may come from someone else).
+pub fn pinned<R: Runner>(
+    ctx: &Ctx<R>,
+    reference: &str,
+    offline: bool,
+    agent: bool,
+    sandbox: Option<&str>,
+    before: &mut dyn FnMut(Fetch),
+) -> Result<(Kit, bool)> {
+    if let Some(name) = reference.strip_prefix("builtin:") {
+        let kit = builtin(name).with_context(|| format!("unknown shipped kit {name}"))??;
+        return Ok((kit, true));
+    }
+    let base = unpinned(reference);
+    let digest = (base != reference).then(|| &reference[base.len() + 1..]);
+    let path = Path::new(base);
+    let (mut kit, cached) = if path.join("oci-layout").is_file() {
+        // A prebuilt layout: an agent's stand-in.
+        (
+            registry::read_layout(path, Source::Registry(base.into()))?,
+            true,
+        )
+    } else if path.is_absolute() {
+        fetch(ctx, base, offline, sandbox, Position::Kit, before)?
+    } else {
+        if !agent {
+            trust::check(&Source::Registry(base.into()), &ctx.settings)?;
+        }
+        let cache = ctx.paths.kit_cache();
+        let hit = match digest {
+            Some(d) => cache
+                .join("oci")
+                .join(registry::hex_of(d)?)
+                .join("index.json")
+                .is_file(),
+            None => false,
+        };
+        if !hit && offline {
+            bail!("kit {base} isn't in the kit cache, and --pull never can't fetch it");
+        }
+        if !hit {
+            before(Fetch::Pull);
+        }
+        let registries = registries(&SecretsFile::load(&ctx.paths)?, sandbox);
+        let logins = Logins::new(&registries, &*ctx.store);
+        (registry::pull(base, digest, &cache, logins)?, hit)
+    };
+    if agent {
+        kit.source = Source::Agent(base.into());
+    }
+    kit.reference = Some(base.to_string());
+    Ok((kit, cached))
+}
+
 /// How many entries `dir` has (0 when it doesn't exist).
 fn entries(dir: &Path) -> usize {
     fs::read_dir(dir).map_or(0, |d| d.count())

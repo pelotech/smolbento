@@ -345,7 +345,33 @@ pub fn deny(resources: &[&str]) -> (String, Vec<String>) {
     )
 }
 
+/// A saved template of agent `agent`'s stand-in kit (unpinned: it's a local layout).
 pub fn saved_template(t: &TestEnv, name: &str, agent: &str) -> crate::templates::Entry {
+    add_template(t, name, agent, saved_template_kits(t, agent))
+}
+
+/// The kit records of a template of agent `agent`: its stand-in kit.
+pub fn saved_template_kits(t: &TestEnv, agent: &str) -> Vec<crate::sandbox::labels::KitRecord> {
+    vec![crate::sandbox::labels::KitRecord {
+        name: agent.into(),
+        reference: crate::agents::kit_ref(&t.ctx.env, agent).unwrap(),
+        provides: vec![],
+        format: Some(crate::kits::model::Format::V3),
+        args: Default::default(),
+    }]
+}
+
+/// A template saved before agents were kits: no kit records.
+pub fn legacy_template(t: &TestEnv, name: &str, agent: &str) -> crate::templates::Entry {
+    add_template(t, name, agent, vec![])
+}
+
+fn add_template(
+    t: &TestEnv,
+    name: &str,
+    agent: &str,
+    kits: Vec<crate::sandbox::labels::KitRecord>,
+) -> crate::templates::Entry {
     let src = t.ctx.cwd.join("p.smolmachine");
     std::fs::write(&src, "packed").unwrap();
     let r = crate::templates::TemplateRef::parse(name).unwrap();
@@ -358,6 +384,7 @@ pub fn saved_template(t: &TestEnv, name: &str, agent: &str) -> crate::templates:
                 image: "docker/sandbox-templates:shell-docker-0.10.0".into(),
                 docker: false,
                 created_at: "1970-01-12T13:46:30Z".into(),
+                kits,
                 ..Default::default()
             },
             &src,
@@ -370,6 +397,7 @@ pub fn saved_template(t: &TestEnv, name: &str, agent: &str) -> crate::templates:
 pub const CLAUDE_STAND_IN: &str = r#"{
   "schemaVersion": "3",
   "kind": "workload",
+  "args": {"model": {"default": "", "description": "Claude model to use"}},
   "capabilities": [
     {"type": "com.docker.sandbox/network-policy@1",
      "config": {"runtime": {"allow": ["api.anthropic.com:443", "platform.claude.com:443"]}}},

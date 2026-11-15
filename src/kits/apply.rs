@@ -1,6 +1,7 @@
 //! Applies a resolved kit plan to a new sandbox: `CreateRequest` fields, the kits' policy rules,
 //! and the guest steps the first start runs.
 
+use std::collections::BTreeMap;
 use std::path::Path;
 
 use anyhow::{Context, Result, bail};
@@ -193,7 +194,7 @@ pub fn apply(
     if !preset {
         set_workload_fields(req, &plan.workload, workdir, agent_file);
     }
-    record_kits(&kits, preset, req)?;
+    record_kits(&kits, preset, &plan.args, req)?;
     steps.kit_names = req.kits.iter().map(|k| k.name.clone()).collect();
     req.long_running = m.long_running;
     // `sbx.docker` (shown by `ls`) says the sandbox has a private dockerd: the docker kit's, or
@@ -324,9 +325,16 @@ fn set_workload_fields(
 }
 
 /// Each kit's record (a preset isn't a kit), pushed on `req.kits` (the `sbx.kits` label).
-fn record_kits(kits: &[&Kit], preset: bool, req: &mut CreateRequest) -> Result<()> {
+fn record_kits(
+    kits: &[&Kit],
+    preset: bool,
+    args: &BTreeMap<String, BTreeMap<String, String>>,
+    req: &mut CreateRequest,
+) -> Result<()> {
     for k in kits.iter().skip(usize::from(preset)) {
-        req.kits.push(kit_record(k)?);
+        let mut r = kit_record(k)?;
+        r.args = args.get(&k.name).cloned().unwrap_or_default();
+        req.kits.push(r);
     }
     Ok(())
 }
@@ -339,6 +347,7 @@ pub fn kit_record(k: &Kit) -> Result<KitRecord> {
         provides: k.provides.clone(),
         // None for a kit that mixes with either.
         format: crate::kits::resolve::mixing_format(k),
+        args: BTreeMap::new(),
     })
 }
 
@@ -1411,6 +1420,7 @@ mod tests {
             reference: pinned(name),
             provides: provides.iter().map(|p| p.to_string()).collect(),
             format: Some(format),
+            args: Default::default(),
         };
         assert_eq!(
             req.kits,
