@@ -442,6 +442,39 @@ pub fn agent_stand_in(t: &TestEnv, name: &str, descriptor: &str) {
     crate::agents::write_stand_in(dir, name, descriptor).unwrap();
 }
 
+/// A tiny HTTP server answering every GET with `body` (200), until the test ends. Returns its base
+/// URL (`http://127.0.0.1:PORT`) and the request lines it has seen.
+pub fn http_server(body: Vec<u8>) -> (String, std::sync::Arc<std::sync::Mutex<Vec<String>>>) {
+    use std::io::{BufRead, BufReader, Write};
+    let listener = std::net::TcpListener::bind("127.0.0.1:0").unwrap();
+    let base = format!("http://{}", listener.local_addr().unwrap());
+    let seen = std::sync::Arc::new(std::sync::Mutex::new(Vec::new()));
+    let log = seen.clone();
+    std::thread::spawn(move || {
+        for conn in listener.incoming() {
+            let Ok(mut conn) = conn else { break };
+            let mut reader = BufReader::new(conn.try_clone().unwrap());
+            let mut line = String::new();
+            let _ = reader.read_line(&mut line);
+            log.lock().unwrap().push(line.trim().to_string());
+            // Skip the headers.
+            loop {
+                let mut h = String::new();
+                if reader.read_line(&mut h).unwrap_or(0) == 0 || h == "\r\n" {
+                    break;
+                }
+            }
+            let head = format!(
+                "HTTP/1.1 200 OK\r\nContent-Length: {}\r\nConnection: close\r\n\r\n",
+                body.len()
+            );
+            let _ = conn.write_all(head.as_bytes());
+            let _ = conn.write_all(&body);
+        }
+    });
+    (base, seen)
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;

@@ -3,6 +3,7 @@
 mod client;
 mod error;
 pub mod fake;
+pub mod install;
 mod network;
 pub mod pin;
 mod pull;
