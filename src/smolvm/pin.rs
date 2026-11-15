@@ -25,41 +25,18 @@ pub fn pin() -> &'static Pin {
     })
 }
 
-/// smolvm's asset platform for a Rust target triple; `None` where smolvm publishes none.
-pub fn platform(target: &str) -> Option<&'static str> {
-    match target {
-        "aarch64-apple-darwin" => Some("darwin-arm64"),
-        "x86_64-unknown-linux-gnu" => Some("linux-x86_64"),
-        "aarch64-unknown-linux-gnu" => Some("linux-arm64"),
-        _ => None,
-    }
-}
-
-/// `platform`, or the error telling the user how to run smolbento anyway.
-pub fn platform_of(target: &str) -> Result<&'static str> {
-    match platform(target) {
-        Some(p) => Ok(p),
-        None => bail!(
-            "no smolvm release for this platform ({target}); set SMOLBENTO_SMOLVM to a smolvm \
-             you built"
-        ),
-    }
-}
-
-/// The asset platform of the machine this build runs on.
+/// smolvm's release name for this machine.
 pub fn host_platform() -> Result<&'static str> {
-    platform_of(host_target())
+    platform(std::env::consts::ARCH, std::env::consts::OS)
 }
 
-/// The target triple this build was compiled for (the three smolbento releases, else a name
-/// for the error).
-fn host_target() -> &'static str {
-    match (std::env::consts::ARCH, std::env::consts::OS) {
-        ("aarch64", "macos") => "aarch64-apple-darwin",
-        ("x86_64", "linux") => "x86_64-unknown-linux-gnu",
-        ("aarch64", "linux") => "aarch64-unknown-linux-gnu",
-        ("x86_64", "macos") => "x86_64-apple-darwin",
-        _ => concat!("unsupported-", "target"),
+/// smolvm's release name for `arch` and `os` (Rust's names), or how to run smolbento anyway.
+fn platform(arch: &str, os: &str) -> Result<&'static str> {
+    match (arch, os) {
+        ("aarch64", "macos") => Ok("darwin-arm64"),
+        ("x86_64", "linux") => Ok("linux-x86_64"),
+        ("aarch64", "linux") => Ok("linux-arm64"),
+        _ => bail!("no smolvm release for {arch}-{os}; set SMOLBENTO_SMOLVM to a smolvm you built"),
     }
 }
 
@@ -85,11 +62,10 @@ mod tests {
     }
 
     #[test]
-    fn targets_map_to_assets() {
-        assert_eq!(platform("aarch64-apple-darwin"), Some("darwin-arm64"));
-        assert_eq!(platform("x86_64-unknown-linux-gnu"), Some("linux-x86_64"));
-        assert_eq!(platform("aarch64-unknown-linux-gnu"), Some("linux-arm64"));
-        assert_eq!(platform("x86_64-apple-darwin"), None);
+    fn platforms_map_to_assets() {
+        assert_eq!(platform("aarch64", "macos").unwrap(), "darwin-arm64");
+        assert_eq!(platform("x86_64", "linux").unwrap(), "linux-x86_64");
+        assert_eq!(platform("aarch64", "linux").unwrap(), "linux-arm64");
     }
 
     #[test]
@@ -103,11 +79,10 @@ mod tests {
 
     #[test]
     fn an_unknown_platform_says_to_set_smolvm() {
-        let e = platform_of("x86_64-apple-darwin").unwrap_err().to_string();
+        let e = platform("x86_64", "macos").unwrap_err().to_string();
         assert_eq!(
             e,
-            "no smolvm release for this platform (x86_64-apple-darwin); set SMOLBENTO_SMOLVM to \
-             a smolvm you built"
+            "no smolvm release for x86_64-macos; set SMOLBENTO_SMOLVM to a smolvm you built"
         );
     }
 }
