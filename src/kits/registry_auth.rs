@@ -288,7 +288,7 @@ pub(crate) fn stored_login(
     let Some(password) = store.get(&entry.account())? else {
         bail!(
             "registry secret {host} has no value in {}; set it again with \
-             `sbt secret set --registry {host} --password-stdin`",
+             `bento secret set --registry {host} --password-stdin`",
             store.describe()
         );
     };
@@ -665,7 +665,7 @@ mod tests {
         // An entry whose value is gone from the store is an error, not a silent anonymous pull.
         let e = stored_login(&regs, &store, "quay.io").unwrap_err();
         assert!(
-            format!("{e:#}").contains("sbt secret set --registry quay.io"),
+            format!("{e:#}").contains("bento secret set --registry quay.io"),
             "{e:#}"
         );
     }

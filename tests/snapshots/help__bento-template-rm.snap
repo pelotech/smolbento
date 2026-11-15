@@ -4,7 +4,7 @@ expression: help(&path)
 ---
 Remove a template
 
-Usage: sbt template rm [OPTIONS] <NAME>
+Usage: bento template rm [OPTIONS] <NAME>
 
 Arguments:
   <NAME>

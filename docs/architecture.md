@@ -6,7 +6,7 @@ smolbento is one Rust binary that drives the `smolvm` CLI. It doesn't link smolv
 Doing so would mean shipping libkrun and signing our binary with Apple's hypervisor entitlement.
 
 ```
-sbt ── clap CLI (mirrors sbx) ── sandbox logic ── Runner ──> smolvm ──> microVM
+bento ── clap CLI (mirrors sbx) ── sandbox logic ── Runner ──> smolvm ──> microVM
 ```
 
 The smolvm it drives is a release pinned in `smolvm.lock` (version and SHA-256 per platform, built
@@ -23,7 +23,7 @@ mode, resizes and colours work unchanged.
 ## State
 
 smolbento has no database. A sandbox is a smolvm machine named `sbx-<name>`. Its agent, workspaces,
-creation time and Docker flag are labels set at create. `sbt ls` is `smolvm machine ls --json`, filtered
+creation time and Docker flag are labels set at create. `bento ls` is `smolvm machine ls --json`, filtered
 to machines with an `sbx.name` label.
 
 Global files are listed in [Configuration](configuration.md#files). On headless Linux and in CI, where no

@@ -1,4 +1,4 @@
-//! The smolvm `sbt` runs and how: the managed copy of the pinned release (or `smolvm.path`), with
+//! The smolvm `bento` runs and how: the managed copy of the pinned release (or `smolvm.path`), with
 //! smolbento's own state (`SMOLVM_DATA_DIR=<smolvm.home>`).
 
 use std::collections::BTreeMap;

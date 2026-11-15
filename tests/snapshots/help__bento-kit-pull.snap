@@ -4,7 +4,7 @@ expression: help(&path)
 ---
 Pull a kit artifact from an OCI registry
 
-Usage: sbt kit pull [OPTIONS] <REFERENCE>
+Usage: bento kit pull [OPTIONS] <REFERENCE>
 
 Arguments:
   <REFERENCE>

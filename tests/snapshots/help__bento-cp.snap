@@ -4,7 +4,7 @@ expression: help(&path)
 ---
 Copy files between the host and a sandbox
 
-Usage: sbt cp [OPTIONS] <SRC> <DST>
+Usage: bento cp [OPTIONS] <SRC> <DST>
 
 Arguments:
   <SRC>

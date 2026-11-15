@@ -213,7 +213,7 @@ fn oauth_note(kc: &KitCred, bound: bool) -> Option<String> {
     (!bound).then(|| {
         format!(
             "note: kit {kit}: {svc} subscription logins happen inside the sandbox (tokens stay \
-             there); set an API key with `sbt secret set {svc}` to keep it on the host"
+             there); set an API key with `bento secret set {svc}` to keep it on the host"
         )
     })
 }
@@ -687,7 +687,7 @@ fn unbound_required(kit: &str, service: &str, host: &str) -> String {
 fn missing_secret(kit: &str, service: &str, host: &str) -> String {
     if services::builtin(service).is_some() {
         return format!(
-            "kit {kit} needs the {service} secret; set it with sbt secret set {service} \
+            "kit {kit} needs the {service} secret; set it with bento secret set {service} \
              and recreate the sandbox"
         );
     }
@@ -695,12 +695,12 @@ fn missing_secret(kit: &str, service: &str, host: &str) -> String {
     if guest::is_env_name(&env) && env.to_ascii_lowercase().replace('_', "-") == service {
         format!(
             "kit {kit} needs the {service} secret; set it with \
-             sbt secret set-custom --env {env} --host {host} and recreate the sandbox"
+             bento secret set-custom --env {env} --host {host} and recreate the sandbox"
         )
     } else {
         format!(
             "kit {kit} needs a custom secret service named {service}, which \
-             `sbt secret set-custom` can't define: it names a service after its --env variable, \
+             `bento secret set-custom` can't define: it names a service after its --env variable, \
              lowercased with '_' as '-'"
         )
     }
@@ -1064,7 +1064,7 @@ mod tests {
         assert_eq!(
             missing_secret("k", "my-api", "api.x.com"),
             "kit k needs the my-api secret; set it with \
-             sbt secret set-custom --env MY_API --host api.x.com \
+             bento secret set-custom --env MY_API --host api.x.com \
              and recreate the sandbox"
         );
         // `set-custom --env MY_API` names its service my-api, never my_api or 1tok.
@@ -1232,7 +1232,7 @@ mod tests {
         assert_eq!(
             unbound_required("gh", "github", "github.com"),
             "WARN: required credential not found for service github\n\
-             kit gh needs the github secret; set it with sbt secret set github \
+             kit gh needs the github secret; set it with bento secret set github \
              and recreate the sandbox"
         );
     }

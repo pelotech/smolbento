@@ -80,7 +80,7 @@ pub fn test_env(extra_env: &[(&str, &str)]) -> TestEnv {
             out: crate::ctx::Out::Buffer(Default::default()),
             input: crate::ctx::In::Buffer(Default::default()),
             args: vec![],
-            program: "sbt".into(),
+            program: "bento".into(),
         },
         _dir: dir,
     }
@@ -111,12 +111,12 @@ impl TestEnv {
         self.runner().call_lines()
     }
 
-    /// Runs `sbt ARGS`.
+    /// Runs `bento ARGS`.
     pub fn sbt(&mut self, args: &[&str]) -> Result<i32> {
         sbt(&mut self.ctx, args)
     }
 
-    /// Runs `sbt ARGS`, which must fail, and returns the error's message.
+    /// Runs `bento ARGS`, which must fail, and returns the error's message.
     pub fn sbt_err(&mut self, args: &[&str]) -> String {
         self.sbt(args).unwrap_err().to_string()
     }

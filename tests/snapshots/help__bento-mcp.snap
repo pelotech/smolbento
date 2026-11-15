@@ -4,7 +4,7 @@ expression: help(&path)
 ---
 Register MCP servers for sandboxes
 
-Usage: sbt mcp [OPTIONS] <COMMAND>
+Usage: bento mcp [OPTIONS] <COMMAND>
 
 Commands:
   add      Register an MCP server

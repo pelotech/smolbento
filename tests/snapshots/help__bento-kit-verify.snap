@@ -4,7 +4,7 @@ expression: help(&path)
 ---
 Verify a kit artifact's signature
 
-Usage: sbt kit verify [OPTIONS] <REFERENCE>
+Usage: bento kit verify [OPTIONS] <REFERENCE>
 
 Arguments:
   <REFERENCE>

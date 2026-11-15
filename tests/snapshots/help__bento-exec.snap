@@ -4,7 +4,7 @@ expression: help(&path)
 ---
 Run a command in a sandbox
 
-Usage: sbt exec [OPTIONS] <SANDBOX> <COMMAND>...
+Usage: bento exec [OPTIONS] <SANDBOX> <COMMAND>...
 
 Arguments:
   <SANDBOX>

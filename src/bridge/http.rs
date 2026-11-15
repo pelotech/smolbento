@@ -195,7 +195,7 @@ fn route(h: &Handlers, req: &Request) -> Response {
         Response::new(
             403,
             "copying to the host clipboard is off; enable it with \
-             `sbt settings set clipboard.textCopy true`",
+             `bento settings set clipboard.textCopy true`",
         )
     } else {
         done((h.copy)(&req.body))
@@ -608,7 +608,7 @@ mod tests {
             (
                 403,
                 "copying to the host clipboard is off; enable it with \
-                 `sbt settings set clipboard.textCopy true`\n"
+                 `bento settings set clipboard.textCopy true`\n"
             )
         );
         assert!(seen.lock().unwrap().is_empty());

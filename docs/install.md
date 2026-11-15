@@ -14,7 +14,7 @@ You don't install smolvm. smolbento runs the smolvm release it was tested with, 
 [smol-machines/smolvm](https://github.com/smol-machines/smolvm/releases) on first use and checked
 against the checksum built into smolbento. It goes in `~/.smolbento`, with smolbento's sandboxes, so
 a smolvm you installed yourself keeps its own machines. To download it ahead (before going
-offline, say), run `sbt smolvm --version`. To run your own smolvm instead, set `smolvm.path` (see
+offline, say), run `bento smolvm --version`. To run your own smolvm instead, set `smolvm.path` (see
 [Configuration](configuration.md)).
 
 ## Install with Homebrew
@@ -26,9 +26,9 @@ brew trust pelotech/tap
 brew install pelotech/tap/smolbento
 ```
 
-This installs `smolbento` and links `sbt` and `bento` to it. `sbx` isn't linked, so it can't clash
-with Docker's `sbx`. Add `alias sbx=sbt` to your shell to use that name. `brew upgrade` picks up new
-releases. Run `brew tap` before `brew trust`, as above. Homebrew rejects tapping a tap that is
+This installs `smolbento` and links `bento` to it. `sbx` and `sbt` aren't linked, so they can't
+clash with Docker's `sbx` or Scala's `sbt`. To use those names, add `alias sbx=bento sbt=bento` to
+your shell. `brew upgrade` picks up new releases. Run `brew tap` before `brew trust`, as above. Homebrew rejects tapping a tap that is
 already trusted (see [pelotech/homebrew-tap](https://github.com/pelotech/homebrew-tap)).
 
 ## Install from source
@@ -40,12 +40,12 @@ direnv allow
 just install
 ```
 
-This installs `smolbento` into `~/.cargo/bin` and links `sbt`, `sbx` and `bento` to it. With Nix
+This installs `smolbento` into `~/.cargo/bin` and links `bento` and `sbx` to it. With Nix
 only, `nix build` produces the same names in `result/bin/`.
 
 !!! warning "Docker's `sbx`"
     If Docker Sandboxes is also installed, the `sbx` link can shadow Docker's `sbx`, or be shadowed
-    by it, depending on your `PATH` order. To use both, run `sbt` or `bento`, or delete
+    by it, depending on your `PATH` order. To use both, run `bento`, or delete
     `~/.cargo/bin/sbx`.
 
 ## Install a release
@@ -71,25 +71,25 @@ not start or work fully. Settings, secrets, policies and saved templates carry o
 inside a sandbox (installed tools, agent logins), save it as a template first:
 
 ```sh
-sbt stop NAME
-sbt template save NAME NAME-saved:v1
-sbt rm NAME
-sbt create AGENT PATH --name NAME -t NAME-saved:v1
+bento stop NAME
+bento template save NAME NAME-saved:v1
+bento rm NAME
+bento create AGENT PATH --name NAME -t NAME-saved:v1
 ```
 
 Sandboxes made before smolbento downloaded its own smolvm stay in your smolvm's default location,
-so `sbt ls` no longer shows them. Recreate them, and run `sbt reset` to remove the old ones.
+so `bento ls` no longer shows them. Recreate them, and run `bento reset` to remove the old ones.
 
 ## Uninstalling
 
 Remove smolbento's sandboxes and files first, then smolbento:
 
 ```sh
-sbt reset --force
+bento reset --force
 brew uninstall smolbento    # or delete the binary and its links
 ```
 
-`sbt reset` deletes every sandbox (including ones from before smolbento downloaded its own smolvm),
+`bento reset` deletes every sandbox (including ones from before smolbento downloaded its own smolvm),
 its settings, secrets and templates, and `~/.smolbento` with the smolvm in it. If smolbento is
 already gone, delete `~/.smolbento` and the folders listed in
 [Configuration](configuration.md#files).
@@ -97,7 +97,7 @@ already gone, delete `~/.smolbento` and the folders listed in
 ## Check your setup
 
 ```sh
-sbt diagnose
+bento diagnose
 ```
 
 Every line should start with `ok`. It checks the smolvm smolbento runs, hypervisor access
@@ -108,7 +108,7 @@ Every line should start with `ok`. It checks the smolvm smolbento runs, hypervis
 
 ```sh
 # also: bash, fish, powershell
-sbt completion zsh > "${fpath[1]}/_sbt"
+bento completion zsh > "${fpath[1]}/_bento"
 ```
 
 Run as `sbx` or `bento`, it generates completions for that name (`sbx completion zsh`).

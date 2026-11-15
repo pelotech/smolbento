@@ -79,7 +79,7 @@ fn check_dir(path: &Path) -> Result<()> {
 pub fn parse_mount(arg: &str, cwd: &Path) -> Result<(PathBuf, String)> {
     let (host, guest) = match arg.rsplit_once(':') {
         Some((h, g)) if !h.is_empty() && !g.is_empty() => (h, g),
-        _ => bail!("--mount \"{arg}\" requires HOST:SANDBOX_PATH\n  try: sbt create --help"),
+        _ => bail!("--mount \"{arg}\" requires HOST:SANDBOX_PATH\n  try: bento create --help"),
     };
     let abs = cwd.join(host);
     let host = abs
@@ -167,7 +167,7 @@ mod tests {
         for arg in ["data", ":/x", "data:"] {
             assert_eq!(
                 err(arg),
-                format!("--mount \"{arg}\" requires HOST:SANDBOX_PATH\n  try: sbt create --help")
+                format!("--mount \"{arg}\" requires HOST:SANDBOX_PATH\n  try: bento create --help")
             );
         }
         assert_eq!(

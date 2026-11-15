@@ -4,7 +4,7 @@ expression: help(&path)
 ---
 Add a mixin kit to an existing sandbox
 
-Usage: sbt kit add [OPTIONS] <SANDBOX> <REFERENCE>
+Usage: bento kit add [OPTIONS] <SANDBOX> <REFERENCE>
 
 Arguments:
   <SANDBOX>

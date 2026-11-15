@@ -4,7 +4,7 @@ expression: help(&path)
 ---
 Show what a kit provides and requests
 
-Usage: sbt kit inspect [OPTIONS] <REFERENCE>
+Usage: bento kit inspect [OPTIONS] <REFERENCE>
 
 Arguments:
   <REFERENCE>

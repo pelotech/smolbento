@@ -1,4 +1,4 @@
-//! `sbt skills`: the shared skills store (spec Phase 5c §1).
+//! `bento skills`: the shared skills store (spec Phase 5c §1).
 
 use std::collections::BTreeMap;
 use std::io::Write;
@@ -66,7 +66,7 @@ fn ls<R: Runner>(ctx: &Ctx<R>, store: &Store, a: &SkillsLsArgs) -> Result<()> {
 
 fn rm<R: Runner>(ctx: &Ctx<R>, store: &Store, a: &SkillsRmArgs) -> Result<()> {
     if let Some(n) = a.skills.iter().find(|n| !store.has(n)) {
-        bail!("skill {n:?} is not installed\n  try: sbt skills ls");
+        bail!("skill {n:?} is not installed\n  try: bento skills ls");
     }
     let q = format!(
         "Remove {}? Running agents may be reading them.",
@@ -76,7 +76,7 @@ fn rm<R: Runner>(ctx: &Ctx<R>, store: &Store, a: &SkillsRmArgs) -> Result<()> {
         ctx,
         &q,
         a.force,
-        "stdin is not a terminal; use --force to skip confirmation\n  try: sbt skills rm --help",
+        "stdin is not a terminal; use --force to skip confirmation\n  try: bento skills rm --help",
     )?;
     let mut sources = store.sources()?;
     for n in &a.skills {
@@ -90,7 +90,7 @@ fn rm<R: Runner>(ctx: &Ctx<R>, store: &Store, a: &SkillsRmArgs) -> Result<()> {
 
 fn add<R: Runner>(ctx: &Ctx<R>, store: &Store, a: &SkillsAddArgs) -> Result<()> {
     let url = repo::parse_url(&a.repository)
-        .map_err(|e| anyhow::anyhow!("{e}\n  try: sbt skills add --help"))?;
+        .map_err(|e| anyhow::anyhow!("{e}\n  try: bento skills add --help"))?;
     add_url(ctx, store, &url, &a.skill, a.force)
 }
 
@@ -116,7 +116,7 @@ fn add_url<R: Runner>(
             ctx,
             &q,
             force,
-            "stdin is not a terminal; pass --force to skip the confirmation\n  try: sbt skills add --help",
+            "stdin is not a terminal; pass --force to skip the confirmation\n  try: bento skills add --help",
         )?;
     }
     install(ctx, store, &checkout, &picked, "Added")?;
@@ -194,7 +194,7 @@ fn import<R: Runner>(ctx: &Ctx<R>, store: &Store, a: &SkillsImportArgs) -> Resul
             ctx,
             &q,
             a.force,
-            "stdin is not a terminal; pass --force to skip the confirmation\n  try: sbt skills import --help",
+            "stdin is not a terminal; pass --force to skip the confirmation\n  try: bento skills import --help",
         )?;
     }
     let mut sources = store.sources()?;
@@ -214,7 +214,7 @@ fn import<R: Runner>(ctx: &Ctx<R>, store: &Store, a: &SkillsImportArgs) -> Resul
 
 fn pick(found: &BTreeMap<String, PathBuf>, only: &[String]) -> Result<BTreeMap<String, PathBuf>> {
     if found.is_empty() {
-        bail!("no SKILL.md found in the repository\n  try: sbt skills add --help");
+        bail!("no SKILL.md found in the repository\n  try: bento skills add --help");
     }
     if only.is_empty() {
         return Ok(found.clone());
@@ -223,7 +223,7 @@ fn pick(found: &BTreeMap<String, PathBuf>, only: &[String]) -> Result<BTreeMap<S
         .map(|n| match found.get(n) {
             Some(p) => Ok((n.clone(), p.clone())),
             None => bail!(
-                "skill {n:?} not found in repository; available skills: {}\n  try: sbt skills add --help",
+                "skill {n:?} not found in repository; available skills: {}\n  try: bento skills add --help",
                 found.keys().cloned().collect::<Vec<_>>().join(", ")
             ),
         })
@@ -267,7 +267,7 @@ fn update<R: Runner>(ctx: &Ctx<R>, store: &Store, a: &SkillsUpdateArgs) -> Resul
     for n in &names {
         if !sources.skills.contains_key(n) {
             bail!(
-                "skill {n:?} was not installed from a repository; install it from a repository\n  try: sbt skills add --help"
+                "skill {n:?} was not installed from a repository; install it from a repository\n  try: bento skills add --help"
             );
         }
     }
@@ -380,7 +380,7 @@ mod tests {
             "{e}"
         );
         let e = t.sbt_err(&["skills", "rm", "a", "nope", "-f"]);
-        assert_eq!(e, "skill \"nope\" is not installed\n  try: sbt skills ls");
+        assert_eq!(e, "skill \"nope\" is not installed\n  try: bento skills ls");
         assert!(t.ctx.paths.skills_store().join("a").exists());
         t.sbt(&["skills", "remove", "a", "b", "--force"]).unwrap();
         assert_eq!(t.stdout(), "Removed skill a\nRemoved skill b\n");

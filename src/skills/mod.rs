@@ -1,4 +1,4 @@
-//! Agent skills: the shared store (`sbt skills`) and how sandboxes see it (`--skills`, kit
+//! Agent skills: the shared store (`bento skills`) and how sandboxes see it (`--skills`, kit
 //! `agent-skills@1`/`agent-skill@1`). Spec: Phase 5c.
 
 pub mod import;

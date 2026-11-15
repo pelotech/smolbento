@@ -9,7 +9,7 @@ use super::Unsupported;
 
 #[derive(Debug, Parser)]
 #[command(
-    name = "sbt",
+    name = "bento",
     version,
     about = "Docker Sandboxes (sbx) compatible agent sandboxes on smolvm microVMs"
 )]
@@ -211,7 +211,7 @@ pub struct EnvCommon {
     /// sbxenv.yaml files, or directories holding one (default: the current directory)
     #[arg(value_name = "PATH")]
     pub paths: Vec<String>,
-    /// Name for the sandbox, overriding 'name:' in sbxenv.yaml and the derived <agent>-<directory> (every 'sbt env' command addressing this environment needs the same value)
+    /// Name for the sandbox, overriding 'name:' in sbxenv.yaml and the derived <agent>-<directory> (every 'bento env' command addressing this environment needs the same value)
     #[arg(long)]
     pub name: Option<String>,
     /// Value for an argument the environment file declares, as name=value (can be repeated)
@@ -225,7 +225,7 @@ pub struct EnvCommon {
 /// Flags of `env create`, `env run` and `env plan` that override the file.
 #[derive(Debug, Clone, Default, Args)]
 pub struct EnvOverrideOpts {
-    /// Override workspace.clone in sbxenv.yaml (see 'sbt create --clone')
+    /// Override workspace.clone in sbxenv.yaml (see 'bento create --clone')
     #[arg(long, num_args = 0..=1, require_equals = true, default_missing_value = "true")]
     pub clone: Option<bool>,
     /// Value for an argument a kit declares, as name=value for every kit or kit.name=value for one (can be repeated); overrides the args a kits: entry pins in sbxenv.yaml
@@ -314,7 +314,7 @@ pub struct EnvExecArgs {
     pub detach: bool,
     #[arg(long = "detach-keys", hide = true)]
     pub detach_keys: Option<String>,
-    /// Name for the sandbox, overriding 'name:' in sbxenv.yaml and the derived <agent>-<directory> (every 'sbt env' command addressing this environment needs the same value)
+    /// Name for the sandbox, overriding 'name:' in sbxenv.yaml and the derived <agent>-<directory> (every 'bento env' command addressing this environment needs the same value)
     #[arg(long)]
     pub name: Option<String>,
     /// Value for an argument the environment file declares, as name=value (can be repeated)
@@ -587,14 +587,14 @@ pub struct SandboxOpts {
     pub mount: Vec<String>,
     /// Add a per-sandbox network deny rule at creation time. Can be specified multiple times.
     /// The rule applies only to the new sandbox and can be listed or removed later with
-    /// 'sbt policy ls <NAME>' or 'sbt policy rm network --sandbox <NAME> --resource <HOST>'
+    /// 'bento policy ls <NAME>' or 'bento policy rm network --sandbox <NAME> --resource <HOST>'
     #[arg(long = "deny-network", value_name = "HOST", value_delimiter = ',')]
     pub deny_network: Vec<String>,
     /// Shared skills: off, readonly (store linked in read-only) or readwrite (store mounted over
     /// the agent's skills directory). Default: skills.defaultMode
     #[arg(long)]
     pub skills: Option<String>,
-    /// Registered MCP servers for the agent, comma-separated (see `sbt mcp`), or `none`
+    /// Registered MCP servers for the agent, comma-separated (see `bento mcp`), or `none`
     #[arg(long = "static-mcp", value_name = "SERVERS")]
     pub static_mcp: Option<String>,
     #[arg(long = "allow-network", hide = true)]
@@ -992,7 +992,7 @@ pub enum ApprovalCmd {
     },
 }
 
-/// `sbt mcp`: MCP servers registered on the host, attached with `run|create --static-mcp`.
+/// `bento mcp`: MCP servers registered on the host, attached with `run|create --static-mcp`.
 #[derive(Debug, Subcommand)]
 pub enum McpCmd {
     /// Register an MCP server
@@ -1072,7 +1072,7 @@ pub struct McpInspectArgs {
     pub json: bool,
 }
 
-/// `sbt skills` (sbx's are experimental too).
+/// `bento skills` (sbx's are experimental too).
 #[derive(Debug, Subcommand)]
 pub enum SkillsCmd {
     /// Add skills from a Git repository
@@ -1140,7 +1140,7 @@ pub struct SkillsUpdateArgs {
     pub skills: Vec<String>,
 }
 
-/// `sbt template` (local; sbx's `--cloud` templates aren't supported).
+/// `bento template` (local; sbx's `--cloud` templates aren't supported).
 #[derive(Debug, Subcommand)]
 pub enum TemplateCmd {
     /// Save a snapshot of the sandbox as a template

@@ -4,8 +4,8 @@ A smolbento mixin kit with Nix (flakes on), direnv with nix-direnv, and xz, for 
 is downloaded when a sandbox is created: Nix ships in the kit's image layer.
 
 ```sh
-sbt create claude . --kit nix
-sbt create docker.io/sbx/antigravity:latest . --kit nix
+bento create claude . --kit nix
+bento create docker.io/sbx/antigravity:latest . --kit nix
 ```
 
 `nix` is a bare name for `ghcr.io/pelotech/smolbento/kits/nix:latest`. It needs smolbento 0.26.0

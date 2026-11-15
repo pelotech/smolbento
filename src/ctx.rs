@@ -38,7 +38,7 @@ pub struct Ctx<R: Runner> {
     pub input: In,
     /// The command-line arguments after argv[0], for hints that repeat the command.
     pub args: Vec<String>,
-    /// The name the binary was run as (`sbt`, `sbx` or `bento`), for shell completions.
+    /// The name the binary was run as (`bento`, `sbx` or `sbt`), for shell completions.
     pub program: String,
 }
 

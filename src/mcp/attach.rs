@@ -58,12 +58,12 @@ pub fn attach(
                 if *n == "none" {
                     "--static-mcp none can't be combined with server names".to_string()
                 } else {
-                    format!("no MCP server named '{n}' (see `sbt mcp ls`)")
+                    format!("no MCP server named '{n}' (see `bento mcp ls`)")
                 }
             })?;
             check_server(n, server).with_context(|| {
                 format!(
-                    "MCP server '{n}' in mcp.toml isn't valid (fix the file, or `sbt mcp rm` it \
+                    "MCP server '{n}' in mcp.toml isn't valid (fix the file, or `bento mcp rm` it \
                      and add it again)"
                 )
             })?;
@@ -85,7 +85,7 @@ pub fn attach(
                 let secret = secret_name(name, p);
                 if !has_secret(&secret) {
                     bail!(
-                        "MCP server {name} needs the secret {secret}; set it with `sbt secret \
+                        "MCP server {name} needs the secret {secret}; set it with `bento secret \
                          set {secret}`"
                     );
                 }
@@ -198,11 +198,11 @@ mod tests {
         };
         assert_eq!(
             err("nope", "claude", true),
-            "no MCP server named 'nope' (see `sbt mcp ls`)"
+            "no MCP server named 'nope' (see `bento mcp ls`)"
         );
         assert_eq!(
             err("linear", "claude", false),
-            "MCP server linear needs the secret mcp:linear:api-key; set it with `sbt secret set \
+            "MCP server linear needs the secret mcp:linear:api-key; set it with `bento secret set \
              mcp:linear:api-key`"
         );
         assert_eq!(

@@ -1,7 +1,7 @@
 # smolbento
 
 A Docker Sandboxes (`sbx`) compatible CLI on top of [smolvm](https://github.com/smol-machines/smolvm)
-microVMs. One Rust binary, invoked as `sbt`, `sbx` or `bento`.
+microVMs. One Rust binary, invoked as `bento` (or `sbx`, `sbt` when linked).
 
 Design notes, specs and plans live in `docs/superpowers/` when present. It's gitignored for now, so
 only some checkouts have it. If it's there, read the relevant section before changing behaviour.
@@ -35,7 +35,7 @@ only some checkouts have it. If it's there, read the relevant section before cha
 smolbento runs the release pinned in `smolvm.lock` (`just smolvm-pin VERSION` bumps it), downloaded
 on first use into `<smolvm.home>/engine/<version>/` (default `~/.smolbento`). Every smolvm call gets
 `SMOLVM_DATA_DIR=<smolvm.home>`, so smolbento's machines are apart from the user's own smolvm. Tell
-users to run `sbt smolvm …`, never a bare `smolvm …`, which sees other machines. Tests:
+users to run `bento smolvm …`, never a bare `smolvm …`, which sees other machines. Tests:
 `SMOLBENTO_SMOLVM` runs another binary (a local build), and e2e shares `/tmp/sbt-e2e-<uid>`.
 
 As of smolvm 1.35. Check the reference source before depending on anything not listed here.
@@ -96,7 +96,7 @@ As of smolvm 1.35. Check the reference source before depending on anything not l
 
 | Module | Responsibility |
 |---|---|
-| `main.rs` | process entry; `sbt`, `sbx` and `bento` are links to the one binary |
+| `main.rs` | process entry; `bento` and `sbx` are links to the one binary (and `sbt`, if a user links it) |
 | `cli` | clap definitions mirroring sbx; handlers |
 | `provision` | create and start: binds policy, secrets and kits to a sandbox; the kit builder |
 | `ctx` | the context every command gets: paths, settings, smolvm, stdio |

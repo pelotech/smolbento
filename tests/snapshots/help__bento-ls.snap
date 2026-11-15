@@ -4,7 +4,7 @@ expression: help(&path)
 ---
 List sandboxes
 
-Usage: sbt ls [OPTIONS]
+Usage: bento ls [OPTIONS]
 
 Options:
   -D, --debug

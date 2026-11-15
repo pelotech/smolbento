@@ -4,7 +4,7 @@ expression: help(&path)
 ---
 Remove stopped sandboxes
 
-Usage: sbt prune [OPTIONS]
+Usage: bento prune [OPTIONS]
 
 Options:
   -D, --debug

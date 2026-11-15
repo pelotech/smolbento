@@ -43,7 +43,7 @@ pub fn report(checks: &[(bool, String)]) -> (String, i32) {
     (text, code)
 }
 
-/// The smolvm `sbt` runs: the pinned release (or not downloaded yet), or the explicit
+/// The smolvm `bento` runs: the pinned release (or not downloaded yet), or the explicit
 /// `smolvm.path`, whose version is only noted when it differs from the pin.
 pub fn smolvm_check<R: Runner>(ctx: &Ctx<R>) -> (bool, String) {
     let pinned = &crate::smolvm::pin::pin().version;
@@ -56,7 +56,7 @@ pub fn smolvm_check<R: Runner>(ctx: &Ctx<R>) -> (bool, String) {
             true,
             format!(
                 "smolvm {pinned} (pinned) isn't downloaded yet: the first command that needs it \
-                 downloads it, or run `sbt smolvm --version`"
+                 downloads it, or run `bento smolvm --version`"
             ),
         );
     }
@@ -313,7 +313,7 @@ mod tests {
             msg,
             format!(
                 "smolvm {} (pinned) isn't downloaded yet: the first command that needs it \
-                 downloads it, or run `sbt smolvm --version`",
+                 downloads it, or run `bento smolvm --version`",
                 pinned()
             )
         );

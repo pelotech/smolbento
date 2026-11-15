@@ -4,7 +4,7 @@ expression: help(&path)
 ---
 Manage skills shared with agents in sandboxes (experimental)
 
-Usage: sbt skills [OPTIONS] <COMMAND>
+Usage: bento skills [OPTIONS] <COMMAND>
 
 Commands:
   add     Add skills from a Git repository [alias: a]

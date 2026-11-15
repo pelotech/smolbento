@@ -75,7 +75,7 @@ pub fn bound_conflict(
     Some((host.clone(), service))
 }
 
-/// `--deny-network` values, each parsed as `sbt policy deny network` parses its resources.
+/// `--deny-network` values, each parsed as `bento policy deny network` parses its resources.
 pub fn parse_create_denies(values: &[String]) -> Result<Vec<(String, Vec<Resource>)>> {
     values
         .iter()
@@ -87,7 +87,7 @@ pub fn parse_create_denies(values: &[String]) -> Result<Vec<(String, Vec<Resourc
 }
 
 /// `run`/`create --deny-network`: adds each value as a deny rule of the new sandbox `sandbox`, as
-/// `sbt policy deny network --sandbox <sandbox> <value>` would, with the same checks and stderr
+/// `bento policy deny network --sandbox <sandbox> <value>` would, with the same checks and stderr
 /// notes. `services` and `credential_hosts` are the secrets the sandbox is about to be created
 /// with. Returns the ids of the rules that weren't there yet; the caller saves the policy.
 pub fn add_create_denies(

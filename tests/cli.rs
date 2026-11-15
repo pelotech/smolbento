@@ -3,7 +3,7 @@
 use std::os::fd::{FromRawFd, OwnedFd};
 use std::process::{Command, Stdio};
 
-/// `sbt ls | head -1` and friends: the reader goes away early. That must end the program quietly,
+/// `bento ls | head -1` and friends: the reader goes away early. That must end the program quietly,
 /// like other Unix tools, not with a panic.
 #[test]
 fn closed_stdout_does_not_panic() {

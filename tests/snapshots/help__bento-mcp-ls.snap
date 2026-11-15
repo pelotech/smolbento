@@ -4,7 +4,7 @@ expression: help(&path)
 ---
 List registered MCP servers
 
-Usage: sbt mcp ls [OPTIONS]
+Usage: bento mcp ls [OPTIONS]
 
 Options:
   -D, --debug

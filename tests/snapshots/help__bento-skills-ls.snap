@@ -4,7 +4,7 @@ expression: help(&path)
 ---
 List installed skills
 
-Usage: sbt skills ls [OPTIONS]
+Usage: bento skills ls [OPTIONS]
 
 Options:
   -D, --debug

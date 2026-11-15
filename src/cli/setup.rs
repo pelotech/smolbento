@@ -98,7 +98,7 @@ pub fn remove_block(ssh_dir: &Path) -> Result<bool> {
 
 /// How `ssh` should call us, as an absolute path (IDEs run the ProxyCommand with a minimal PATH):
 /// where the name this binary was run as is found on PATH, when that is this very binary (a stable
-/// link such as `/opt/homebrew/bin/sbt`, not a versioned Cellar path); else this binary's path.
+/// link such as `/opt/homebrew/bin/bento`, not a versioned Cellar path); else this binary's path.
 fn binary<R: Runner>(ctx: &Ctx<R>) -> String {
     let exe = std::env::current_exe()
         .ok()
@@ -109,17 +109,17 @@ fn binary<R: Runner>(ctx: &Ctx<R>) -> String {
             .map(|d| d.join(name))
             .find(|p| p.is_file())
     };
-    for name in [ctx.program.as_str(), "sbt", "smolbento"] {
+    for name in [ctx.program.as_str(), "bento", "smolbento"] {
         if let (Some(found), Some(exe)) = (on_path(name), &exe)
             && found.canonicalize().ok().as_ref() == Some(exe)
         {
             return found.display().to_string();
         }
     }
-    exe.map_or_else(|| "sbt".into(), |e| e.display().to_string())
+    exe.map_or_else(|| "bento".into(), |e| e.display().to_string())
 }
 
-/// What the ProxyCommand sets: only the smolvm settings the user set, since `sbt ssh proxy` finds
+/// What the ProxyCommand sets: only the smolvm settings the user set, since `bento ssh proxy` finds
 /// the pinned smolvm and `~/.smolbento` by itself. An explicit smolvm goes in by its absolute path,
 /// so it doesn't depend on the IDE's PATH.
 fn proxy_env<R: Runner>(ctx: &Ctx<R>) -> Vec<(String, String)> {
@@ -134,7 +134,7 @@ fn proxy_env<R: Runner>(ctx: &Ctx<R>) -> Vec<(String, String)> {
             Some(p) => env.push(("SMOLBENTO_SMOLVM".to_string(), p)),
             None => eprintln!(
                 "warning: smolvm.path isn't an absolute path or on your PATH; IDEs started from \
-the Dock or a launcher may not find it (set it to an absolute path, then run `sbt setup ssh` again)"
+the Dock or a launcher may not find it (set it to an absolute path, then run `bento setup ssh` again)"
             ),
         }
     }
@@ -235,7 +235,7 @@ mod tests {
 
     #[test]
     fn the_proxy_command_names_smolvm_only_when_explicit() {
-        // test_env sets an explicit smolvm; without one, the ProxyCommand runs sbt alone.
+        // test_env sets an explicit smolvm; without one, the ProxyCommand runs bento alone.
         let mut t = test_env(&[]);
         let h = home(&mut t);
         t.ctx.env.remove("SMOLBENTO_SMOLVM");

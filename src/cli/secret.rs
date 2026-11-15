@@ -1,4 +1,4 @@
-//! `sbt secret`: secret sources. Values go to the secret store, never to secrets.toml.
+//! `bento secret`: secret sources. Values go to the secret store, never to secrets.toml.
 
 use std::io::{BufRead, Read, Write};
 
@@ -36,7 +36,7 @@ pub fn run<R: Runner>(ctx: &mut Ctx<R>, cmd: SecretCmd) -> Result<i32> {
             }
             let service = a
                 .service
-                .context("specify a service, e.g. `sbt secret set anthropic`")?;
+                .context("specify a service, e.g. `bento secret set anthropic`")?;
             if service.starts_with("mcp:") {
                 set_mcp(ctx, &mut file, &service, a.source)?;
             } else {
@@ -56,7 +56,7 @@ pub fn run<R: Runner>(ctx: &mut Ctx<R>, cmd: SecretCmd) -> Result<i32> {
             check_env_name(&a.env)?;
             if let Some(owner) = services::env_var_owner(&a.env) {
                 bail!(
-                    "{} belongs to the built-in {owner} service; use `sbt secret set {owner}`",
+                    "{} belongs to the built-in {owner} service; use `bento secret set {owner}`",
                     a.env
                 );
             }
@@ -76,7 +76,7 @@ pub fn run<R: Runner>(ctx: &mut Ctx<R>, cmd: SecretCmd) -> Result<i32> {
         SecretCmd::Ls(a) => ls(ctx, &file, &a)?,
         SecretCmd::Rm(a) => rm(ctx, &mut file, a)?,
         SecretCmd::Import(_) => {
-            return Err(Unsupported("`sbt secret import` is not implemented yet".into()).into());
+            return Err(Unsupported("`bento secret import` is not implemented yet".into()).into());
         }
     }
     Ok(0)
@@ -199,7 +199,7 @@ fn set<R: Runner>(
 }
 
 /// `secret set mcp:<server>:<name>`: the value of a registered MCP server's header placeholder
-/// (`sbt mcp add --header 'Name: ${name}'`). Global only, and never bound to a sandbox as an
+/// (`bento mcp add --header 'Name: ${name}'`). Global only, and never bound to a sandbox as an
 /// ordinary secret: `--static-mcp` binds it to the server's host.
 fn set_mcp<R: Runner>(
     ctx: &Ctx<R>,
@@ -466,7 +466,7 @@ fn rm<R: Runner>(ctx: &Ctx<R>, file: &mut SecretsFile, a: SecretRmArgs) -> Resul
     Ok(())
 }
 
-/// `sbt rm`: forget a sandbox's policy and, with `secrets`, its own secrets.
+/// `bento rm`: forget a sandbox's policy and, with `secrets`, its own secrets.
 pub fn forget_sandbox<R: Runner>(ctx: &Ctx<R>, name: &str, secrets: bool) -> Result<()> {
     if secrets {
         let mut file = SecretsFile::load(&ctx.paths)?;
@@ -481,7 +481,7 @@ pub fn forget_sandbox<R: Runner>(ctx: &Ctx<R>, name: &str, secrets: bool) -> Res
     policy.save(&ctx.paths)
 }
 
-/// `sbt reset` without --preserve-secrets.
+/// `bento reset` without --preserve-secrets.
 pub fn forget_all<R: Runner>(ctx: &Ctx<R>) -> Result<()> {
     let file = SecretsFile::load(&ctx.paths)?;
     SecretsFile::default().save(&ctx.paths)?;
@@ -526,7 +526,7 @@ fn registry_set<R: Runner>(ctx: &Ctx<R>, file: &mut SecretsFile, a: SecretSetArg
     }
     if !a.password_stdin {
         bail!(
-            "--registry needs --password-stdin, e.g. `gh auth token | sbt secret set --registry \
+            "--registry needs --password-stdin, e.g. `gh auth token | bento secret set --registry \
              ghcr.io --password-stdin`"
         );
     }

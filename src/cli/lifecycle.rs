@@ -18,7 +18,7 @@ use crate::workspace::clone;
 
 pub fn create<R: Runner>(ctx: &mut Ctx<R>, a: &CreateArgs) -> Result<i32> {
     if a.targets.is_empty() {
-        bail!("specify an agent, e.g. `sbt create claude .`");
+        bail!("specify an agent, e.g. `bento create claude .`");
     }
     check_kit_args(&a.targets, &a.opts)?;
     let (mut req, workload) = kit_target(ctx, &a.targets, &a.opts, false)?;
@@ -26,7 +26,7 @@ pub fn create<R: Runner>(ctx: &mut Ctx<R>, a: &CreateArgs) -> Result<i32> {
     let p = Progress::for_ctx(ctx, a.no_progress);
     let sb = create_reported(ctx, &p, &mut req, workload, &a.opts)?;
     p.finish(&format!("Created sandbox {}", sb.name()));
-    p.hint(&format!("sbt run --name {}", sb.name()));
+    p.hint(&format!("bento run --name {}", sb.name()));
     Ok(0)
 }
 
@@ -1336,7 +1336,7 @@ mod tests {
         let err = planned(&t, "shell", &opts).unwrap_err();
         assert_eq!(
             err.to_string(),
-            "--pull never works only with a saved template (see `sbt template ls`); smolvm pulls missing images"
+            "--pull never works only with a saved template (see `bento template ls`); smolvm pulls missing images"
         );
         assert_eq!(crate::cli::exit_code(&err), 2);
     }
@@ -1472,7 +1472,7 @@ SETUP
   ✓ shell — installed
 
   ✓ Created sandbox shell-proj
-        try: sbt run --name shell-proj
+        try: bento run --name shell-proj
 "
         );
     }
@@ -1571,7 +1571,7 @@ SETUP
         );
         let err = t.sbt_err(&["start", "claude-proj"]);
         assert!(
-            err.contains("no network policy chosen yet; run `sbt policy init"),
+            err.contains("no network policy chosen yet; run `bento policy init"),
             "{err}"
         );
         let started = |t: &TestEnv| {
@@ -2010,7 +2010,7 @@ SETUP
         let mut t = test_env(&[]);
         with_forks(&t, "stopped", "stopped", "stopped");
         let err = t.sbt(&["rm", "-f", "a-fork-1", "nope"]).unwrap_err();
-        assert_eq!(err.to_string(), "sandbox 'nope' not found (see `sbt ls`)");
+        assert_eq!(err.to_string(), "sandbox 'nope' not found (see `bento ls`)");
         assert!(deletes(&t).is_empty());
     }
 

@@ -46,4 +46,4 @@ runs:
 
     - name: smolbento version
       shell: bash
-      run: sbt --version
+      run: bento --version

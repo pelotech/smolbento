@@ -190,7 +190,7 @@ mod tests {
         t.ctx.stdin_tty = true;
         clone_sandbox(&t, "stopped");
         let err = t.sbt_err(&["_upload-pack", "box"]);
-        assert!(err.contains("sbt policy init"), "{err}");
+        assert!(err.contains("bento policy init"), "{err}");
         assert!(t.runner().interactive_calls().is_empty());
         assert!(!called(&t, "machine start"));
     }

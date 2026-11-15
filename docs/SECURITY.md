@@ -14,7 +14,7 @@ you add a `localhost` rule.
 
 ### Host services (`localhost` rules)
 
-`sbt policy allow network [--sandbox NAME] localhost[:PORT]` lets sandboxes reach your localhost as
+`bento policy allow network [--sandbox NAME] localhost[:PORT]` lets sandboxes reach your localhost as
 `host.docker.internal`. smolvm can't open a single host port yet, so a rule opens more than it
 names:
 
@@ -64,11 +64,11 @@ kits you trust.
   without a `kit.allowedSources` check, like a Dockerfile's `FROM`.
 - Registry transport is HTTPS, except for loopback registries (`localhost`, `127.0.0.0/8`,
   `::1`), which use plain HTTP, as in Docker.
-- Kit network rules apply to their sandbox only, even under `deny-all`. `sbt policy ls --source kit`
+- Kit network rules apply to their sandbox only, even under `deny-all`. `bento policy ls --source kit`
   lists them, one `kit:NAME` row per sandbox. Deny rules always win: to block a host a kit allows,
-  run `sbt policy deny network --sandbox NAME HOST`.
+  run `bento policy deny network --sandbox NAME HOST`.
 - Install-only rules aren't listed by `policy ls`, as in sbx. They apply from create through the
-  first start's setup and install steps, then go, and later starts never use them. `sbt rm` removes
+  first start's setup and install steps, then go, and later starts never use them. `bento rm` removes
   leftovers from an interrupted create, as does the next create of that name. A CIDR deny made
   during install stays for the sandbox's life, because smolvm takes CIDR denies only at create.
 - `kit add` asks before opening new network access on an existing sandbox. `-y` grants it. Without
@@ -79,9 +79,9 @@ kits you trust.
     hosts. Naming another host fails: "kit K wants to send your github secret to HOST, which github
     doesn't use; refusing". sbx trusts the kit here; smolbento doesn't, because Docker Hub kits
     load by default.
-  - A **custom** service's secret (`sbt secret set-custom`) goes to any host the kit names. `create`
+  - A **custom** service's secret (`bento secret set-custom`) goes to any host the kit names. `create`
     and `kit add` print "kit K sends your SERVICE secret to HOSTS".
-  - `sbt kit inspect REF` lists each credential's service and hosts under `Credentials:`
+  - `bento kit inspect REF` lists each credential's service and hosts under `Credentials:`
     (`credentials` in `--format json`).
   - A credential's hosts are always reachable, and a deny rule can't block them while the kit's
     binding exists. That binding lasts the sandbox's life, because smolvm needs those hosts to send
@@ -105,7 +105,7 @@ kits you trust.
   config. Put secrets in credentials, not `--kit-arg`.
 - Local kit builds run in the `_builder` sandbox, a VM under your global network policy, not on
   your Docker. The builder never gets your secrets.
-- Registry credentials (`sbt secret set --registry`) stay on your machine. The login goes only over
+- Registry credentials (`bento secret set --registry`) stay on your machine. The login goes only over
   HTTPS (or plain HTTP to a localhost registry), and only to that registry, to `auth.docker.io` for
   Docker Hub, or to the exact `--registry-auth-endpoint`. For a local build, smolbento trades the
   login on the host for a pull token scoped to the repositories the kit's descriptor names. The
@@ -136,7 +136,7 @@ kits you trust.
 
 - `bindings` add domains a credential may be sent to. As in sbx, they are global: once approved,
   every later sandbox may send your token to them too. They're listed in the plan, stored in your
-  secrets file, and removed with `sbt env rm --prune-bindings`.
+  secrets file, and removed with `bento env rm --prune-bindings`.
 - An `sbxenv.yaml` from a repository can run commands on your machine. A secret's `command:` source
   runs with your privileges, at `env create` (to check it) and at each start. `env create` and
   `env run` show every such command and ask `Approve this plan? (y/N)` first. `--force` skips the
@@ -145,7 +145,7 @@ kits you trust.
   the files or to a resource asks again. A file that declares host commands (lifecycle commands, or
   `command:` sources of secrets and registries) asks on every `env create` and `env run`, unless
   you set `env.rememberHostCommands`.
-- Lifecycle commands run on your machine with your privileges and `sbt`'s environment. They get
+- Lifecycle commands run on your machine with your privileges and `bento`'s environment. They get
   neither the file's `env` values nor any secret. `--skip-host-commands` skips them. A command with
   a `timeout` is killed, with everything it started, when time is up.
 - `entrypoint` and `cmd` run inside the sandbox under `env run`, never on your machine.
@@ -154,16 +154,16 @@ kits you trust.
 - The approval record (`<data dir>/env/<name>.toml`) holds what the plan shows. A literal secret
   appears there only as its SHA-256 digest, and the summary shows it as a hash. The value is never
   shown.
-- Every secret `command:` source (here and in `sbt secret set --command`) runs from a fresh
+- Every secret `command:` source (here and in `bento secret set --command`) runs from a fresh
   temporary directory, so it can't pick up a script from the current directory. Use an absolute
   path or `PATH`.
 - A failed `env create` leaves the secrets it stored. `env rm` with the same files removes them.
 
 ## Other things to know
 
-- `ssh NAME.sbx` (after `sbt setup ssh`) runs `sbt ssh proxy` as a child of `ssh`, on a pipe:
+- `ssh NAME.sbx` (after `bento setup ssh`) runs `bento ssh proxy` as a child of `ssh`, on a pipe:
   no listener, no key, no password. It accepts the `none` method only and nothing else, so only the
-  user who runs `ssh` reaches it, and it can do what `sbt exec` does. It turns down SFTP, agent
+  user who runs `ssh` reaches it, and it can do what `bento exec` does. It turns down SFTP, agent
   forwarding, X11 and remote forwarding. `-L` forwards reach only the sandbox's own loopback
   (`localhost`, `127.0.0.0/8`, `::1`), never the host or another address. The host key is new for each
   connection and not checked, since nothing sits between `ssh` and its child. Session data is not
@@ -176,29 +176,29 @@ kits you trust.
 - With `--clone`, the agent can read your repo's whole `.git`, including `.git/config`, as in sbx.
   A user name and token in an HTTPS remote URL are left out of the clone's own remotes, but they
   stay in that file, and so does any `http.extraHeader`. Keep credentials out of repo config. Use
-  a credential helper or `sbt secret`. `create --clone` warns about remote URLs with a token.
-- `sbt exec --privileged` and the sandbox's Docker engine run as root inside the VM.
+  a credential helper or `bento secret`. `create --clone` warns about remote URLs with a token.
+- `bento exec --privileged` and the sandbox's Docker engine run as root inside the VM.
 - Forkable sandboxes (clone and mountless, not forks) start branchable. On Linux this drops smolvm's
   no-ptrace hardening of the VM process, so other processes running as you can read its memory,
   including secret values. On every platform, smolvm stops returning their idle memory. Turn it off
-  with `sbt settings set fork.enabled false`, from each sandbox's next start.
+  with `bento settings set fork.enabled false`, from each sandbox's next start.
 - smolbento refuses to run as root on the host, because smolvm doesn't map a root-owned workspace
   to the agent user.
 - While the sandbox runs (a service unit serves the bridge; without one, while you're attached
-  with `sbt run` or `sbt exec -it`), it can open `https://` URLs in your
+  with `bento run` or `bento exec -it`), it can open `https://` URLs in your
   browser and overwrite your clipboard, but it can't read the clipboard. A malicious page opened
   this way runs in your real browser, with your logins. Turn off URL opening with
-  `sbt settings set browser.enabled false`. Clipboard text may be crafted to run commands when
+  `bento settings set browser.enabled false`. Clipboard text may be crafted to run commands when
   pasted, so check it first.
 - Host service units. Per sandbox with a bridge or a runtime SSH agent grant, smolbento writes a
   launchd user agent (`~/Library/Application Support/smolbento/launchd/dev.smolbento.*`) or `systemd --user` socket and
   service units. They run as you, never as root, listen on a `0600` socket and start
-  `sbt _serve KIND SANDBOX` for each connection, with the connection as stdin and stdout and stderr
+  `bento _serve KIND SANDBOX` for each connection, with the connection as stdin and stdout and stderr
   on `/dev/null`. `_serve` is the same filter and bridge handler as before, reading the grant from
   the sandbox's labels; the unit carries your `PATH`, `HOME`, `SMOLBENTO_*` variables and, on Linux,
   `SSH_AUTH_SOCK`, never secrets. Anyone who can write your unit files or your `PATH` can run
   commands as you, as with any launch agent. Units go with the sandbox (`rm`, `prune`, `reset`,
-  `env rm`, a failed first start) and, for a sandbox deleted with `sbt smolvm machine delete`, with the
+  `env rm`, a failed first start) and, for a sandbox deleted with `bento smolvm machine delete`, with the
   next state-changing command. Names carry a hash of the data dir, so separate setups don't touch
   each other's units.
 - The sockets live in `~/Library/Application Support/smolbento/sock/` (macOS) or
@@ -223,7 +223,7 @@ kits you trust.
   - Each replay is cut off after 15 seconds or 1 MiB of response.
   - `browser.enabled false` also turns the relay off.
 - Built-in agents, and kits that ask with `ssh-agent@1`, can use your SSH agent whenever the sandbox runs (a service unit serves it; without one, while
-  `sbt run`, `sbt exec -it` or `sbt exec` runs for them), and during a kit's `install` grant. They can list
+  `bento run`, `bento exec -it` or `bento exec` runs for them), and during a kit's `install` grant. They can list
   your agent's public keys and have it sign with any of them. That covers git commit signatures and
   SSH logins to any server your keys open. A kit's `sign: [...]` list allows only signatures in
   those namespaces, not logins. An `authenticate: [...]` list allows logins only to those servers:
@@ -239,8 +239,8 @@ kits you trust.
   parent is served, a fork can use the agent with the parent's grant. The socket's
   directory gets the bridge's checks: no agent for a start while that directory isn't
   private, and a kit that requires an agent is refused at create.
-  To turn it off, run `sbt settings set ssh.agentForwardingEnabled false`. New connections are
-  refused at once, and open ones stay. Or run `sbt` without `SSH_AUTH_SOCK`. For a dedicated agent
+  To turn it off, run `bento settings set ssh.agentForwardingEnabled false`. New connections are
+  refused at once, and open ones stay. Or run `bento` without `SSH_AUTH_SOCK`. For a dedicated agent
   that holds only the keys you want sandboxes to use, set `ssh.agentSocketPath` to its socket.
 
 ## Skills

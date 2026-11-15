@@ -56,7 +56,7 @@ pub fn run<R: Runner>(ctx: &mut Ctx<R>, a: &RunArgs) -> Result<i32> {
         None => {
             if a.targets.is_empty() {
                 bail!(
-                    "specify an agent (e.g. `sbt run claude`) or the --name of an existing sandbox"
+                    "specify an agent (e.g. `bento run claude`) or the --name of an existing sandbox"
                 );
             }
             // The name first: attaching to an existing sandbox loads no kits.
@@ -82,7 +82,7 @@ pub fn run<R: Runner>(ctx: &mut Ctx<R>, a: &RunArgs) -> Result<i32> {
     if !a.opts.deny_network.is_empty() && !created {
         eprintln!(
             "warning: --deny-network only adds rules when a sandbox is created; {} already exists \
-             (use `sbt policy deny network --sandbox {}`)",
+             (use `bento policy deny network --sandbox {}`)",
             sb.name(),
             sb.name()
         );
@@ -361,7 +361,7 @@ mod tests {
         assert_eq!(
             err,
             "sandbox claude-proj was created by an older smolbento whose built-in agents weren't \
-             kits; recreate it (sbt rm claude-proj, then sbt create …)"
+             kits; recreate it (bento rm claude-proj, then bento create …)"
         );
         assert!(t.runner().interactive_calls().is_empty());
     }
@@ -621,7 +621,7 @@ mod tests {
         std::fs::remove_file(t.ctx.paths.policy_file()).unwrap();
         created(&t, "stopped");
         let err = t.sbt_err(&["run", "claude", "--deny-network", "evil.com"]);
-        assert!(err.contains("sbt policy init"), "{err}");
+        assert!(err.contains("bento policy init"), "{err}");
         assert!(!t.ctx.paths.policy_file().exists());
         let lines = t.calls();
         assert!(
@@ -709,7 +709,7 @@ mod tests {
         let mut t = test_env(&[]);
         t.old_sandbox("x", "stopped", &[("sbx.agent", "nope")]);
         let err = t.sbt_err(&["run", "--name", "x"]);
-        assert!(err.contains("recreate it (sbt rm x"), "{err}");
+        assert!(err.contains("recreate it (bento rm x"), "{err}");
         // Checked before the start: nothing to stop afterwards.
         assert!(!t.made("machine start"), "{:#?}", t.calls());
     }
@@ -1073,7 +1073,7 @@ mod tests {
             &[("sbx.agent", "gemini"), ("sbx.workspace", &ws)],
         );
         let err = t.sbt_err(&["run", "--name", "old"]);
-        assert!(err.contains("recreate it (sbt rm old"), "{err}");
+        assert!(err.contains("recreate it (bento rm old"), "{err}");
         assert!(t.runner().interactive_calls().is_empty());
     }
 

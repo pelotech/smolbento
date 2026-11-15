@@ -151,7 +151,7 @@ fn add_remote_and_branch<R: Runner>(
     result
 }
 
-/// smolvm's not-branchable and backing-chain errors (`src/agent/fork.rs` in smolvm), in sbt terms.
+/// smolvm's not-branchable and backing-chain errors (`src/agent/fork.rs` in smolvm), in bento terms.
 fn branch_hint(e: anyhow::Error, parent: &str) -> anyhow::Error {
     let Some(message) = e.downcast_ref::<SmolvmError>().map(|s| s.message.as_str()) else {
         return e;
@@ -159,7 +159,7 @@ fn branch_hint(e: anyhow::Error, parent: &str) -> anyhow::Error {
     if message.contains("was not started as branchable") {
         return anyhow!(
             "{parent} was started without fork support; restart it once \
-             (`sbt stop {parent} && sbt start {parent}`) to enable fork"
+             (`bento stop {parent} && bento start {parent}`) to enable fork"
         );
     }
     if message.contains("qcow2 backing layers") || message.contains("safe backing depth") {
@@ -417,7 +417,7 @@ mod tests {
         assert_eq!(p.sandboxes["a"].rules.len(), 1);
     }
 
-    /// Parent labels, sbt args, and the expected error.
+    /// Parent labels, bento args, and the expected error.
     type Refusal<'a> = (&'a [(&'a str, &'a str)], &'a [&'a str], &'a str);
 
     #[test]
@@ -574,7 +574,7 @@ mod tests {
         assert!(
             err.contains(
                 "a was started without fork support; restart it once \
-                 (`sbt stop a && sbt start a`) to enable fork"
+                 (`bento stop a && bento start a`) to enable fork"
             ),
             "{err}"
         );

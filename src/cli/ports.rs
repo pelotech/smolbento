@@ -1,4 +1,4 @@
-//! `sbt ports`: publish ports on a sandbox (smolvm applies TCP changes live, and UDP ones only
+//! `bento ports`: publish ports on a sandbox (smolvm applies TCP changes live, and UDP ones only
 //! while it's stopped).
 
 use anyhow::{Result, bail};
@@ -29,7 +29,7 @@ pub fn run<R: Runner>(ctx: &mut Ctx<R>, a: &PortsArgs) -> Result<i32> {
     let udp = publish.iter().chain(&unpublish).any(|p| p.udp);
     if udp && sb.is_running() {
         bail!(
-            "smolvm can't change UDP ports on a running sandbox; `sbt stop {}` first, or publish it when creating",
+            "smolvm can't change UDP ports on a running sandbox; `bento stop {}` first, or publish it when creating",
             sb.name()
         );
     }

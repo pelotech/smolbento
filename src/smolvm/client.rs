@@ -303,7 +303,7 @@ impl<R: Runner> Smolvm<R> {
 
     /// `env` reaches the smolvm process only: it's how secret values get to credentials. `remove`
     /// names inherited variables to drop, so a credential without a value isn't the host's.
-    /// `branchable` lets `sbt fork` branch it later, at a cost: smolvm doesn't reclaim its idle
+    /// `branchable` lets `bento fork` branch it later, at a cost: smolvm doesn't reclaim its idle
     /// memory, and on Linux other processes running as the user can read the VM process's memory.
     pub fn start(
         &self,

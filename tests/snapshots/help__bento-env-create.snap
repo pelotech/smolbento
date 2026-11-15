@@ -4,7 +4,7 @@ expression: help(&path)
 ---
 Create a sandbox environment from sbxenv.yaml
 
-Usage: sbt env create [OPTIONS] [PATH]...
+Usage: bento env create [OPTIONS] [PATH]...
 
 Arguments:
   [PATH]...
@@ -15,7 +15,7 @@ Options:
           Print each smolvm command line
 
       --name <NAME>
-          Name for the sandbox, overriding 'name:' in sbxenv.yaml and the derived <agent>-<directory> (every 'sbt env' command addressing this environment needs the same value)
+          Name for the sandbox, overriding 'name:' in sbxenv.yaml and the derived <agent>-<directory> (every 'bento env' command addressing this environment needs the same value)
 
       --env-arg <NAME=VALUE>
           Value for an argument the environment file declares, as name=value (can be repeated)
@@ -27,7 +27,7 @@ Options:
           Never prompt; commands that need an answer fail with the command to run instead
 
       --clone[=<CLONE>]
-          Override workspace.clone in sbxenv.yaml (see 'sbt create --clone')
+          Override workspace.clone in sbxenv.yaml (see 'bento create --clone')
 
           [possible values: true, false]
 

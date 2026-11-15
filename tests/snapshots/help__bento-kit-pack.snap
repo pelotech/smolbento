@@ -4,7 +4,7 @@ expression: help(&path)
 ---
 Package a directory as a kit artifact
 
-Usage: sbt kit pack [OPTIONS] <DIRECTORY>
+Usage: bento kit pack [OPTIONS] <DIRECTORY>
 
 Arguments:
   <DIRECTORY>

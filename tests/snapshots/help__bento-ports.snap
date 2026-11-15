@@ -4,7 +4,7 @@ expression: help(&path)
 ---
 Publish or unpublish ports on a sandbox (127.0.0.1 only)
 
-Usage: sbt ports [OPTIONS] <SANDBOX>
+Usage: bento ports [OPTIONS] <SANDBOX>
 
 Arguments:
   <SANDBOX>

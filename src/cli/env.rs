@@ -1,4 +1,4 @@
-//! `sbt env`: a sandbox declared in sbxenv.yaml files.
+//! `bento env`: a sandbox declared in sbxenv.yaml files.
 
 use std::io::Write;
 use std::path::Path;
@@ -147,8 +147,8 @@ fn create<R: Runner>(ctx: &mut Ctx<R>, c: &EnvCommon, a: &EnvApplyOpts) -> Resul
     let (loaded, spec, mut secrets) = prepare(ctx, c, &a.overrides)?;
     if sandbox::find(&ctx.vm, &spec.name)?.is_some() {
         bail!(
-            "sandbox \"{}\" already exists; attach to it with `sbt env run`, or remove it with \
-             `sbt env rm` and create it again",
+            "sandbox \"{}\" already exists; attach to it with `bento env run`, or remove it with \
+             `bento env rm` and create it again",
             spec.name
         );
     }
@@ -185,7 +185,7 @@ fn create_sandbox<R: Runner>(
     let commands = &spec.lifecycle.post_create;
     host_phase(ctx, Phase::PostCreate, commands, vars, skip_host_commands).map_err(|e| {
         anyhow!(
-            "{e:#}; remove this environment's sandbox and provisioned secrets\n  try: sbt env rm"
+            "{e:#}; remove this environment's sandbox and provisioned secrets\n  try: bento env rm"
         )
     })
 }
@@ -258,11 +258,11 @@ fn env_exec<R: Runner>(ctx: &mut Ctx<R>, a: EnvExecArgs) -> Result<i32> {
         (a.paths, a.command)
     };
     if command.is_empty() {
-        bail!("specify a command to run, e.g. `sbt env exec -- bash`");
+        bail!("specify a command to run, e.g. `bento env exec -- bash`");
     }
     let (loaded, name) = load_name(ctx, &paths, a.name.as_deref(), &a.env_arg, &a.env_args_file)?;
     if sandbox::find(&ctx.vm, &name)?.is_none() {
-        bail!("sandbox '{name}' not found for this environment\n  try: sbt env create");
+        bail!("sandbox '{name}' not found for this environment\n  try: bento env create");
     }
     // The file's env first, so the user's -e wins.
     let mut env: Vec<String> = loaded
@@ -351,7 +351,7 @@ fn env_rm<R: Runner>(ctx: &mut Ctx<R>, a: EnvRmArgs) -> Result<i32> {
         )?;
     }
     if nothing_stored {
-        eprintln!("error: sandbox '{name}' not found\n  try: sbt ls");
+        eprintln!("error: sandbox '{name}' not found\n  try: bento ls");
     }
     let vars = vars(&loaded, &name);
     if let Err(e) = host_phase(ctx, Phase::PreRemove, &lifecycle.pre_remove, &vars, skip) {
@@ -433,13 +433,13 @@ fn approve<R: Runner>(
                 format!("the merged environment ({})", all.join(", "))
             }
         };
-        let retry = format!("\n  try: sbt {} --force", words.join(" "));
+        let retry = format!("\n  try: bento {} --force", words.join(" "));
         if plan.need == Need::HostCommands {
             bail!(
                 "{file} declares commands that run on this machine, which must be approved on \
                  every invocation; approve the plan by running it in a terminal or with --force \
                  (-f), or remember approval until the plan changes with the setting below{retry}\n   \
-                 or: sbt settings set env.rememberHostCommands true"
+                 or: bento settings set env.rememberHostCommands true"
             );
         }
         bail!(
@@ -694,7 +694,7 @@ mod tests {
         );
         assert!(
             out.ends_with(
-                "  ✓ Created sandbox claude-proj\n        try: sbt run --name claude-proj\n"
+                "  ✓ Created sandbox claude-proj\n        try: bento run --name claude-proj\n"
             ),
             "{out}"
         );
@@ -810,7 +810,7 @@ mod tests {
                 format!(
                     "{file} changes things outside the sandbox that have not been approved; \
                      approve them by running this in a terminal, or approve this invocation with \
-                     --force (-f)\n  try: sbt env {cmd} --force"
+                     --force (-f)\n  try: bento env {cmd} --force"
                 )
             );
         }
@@ -843,7 +843,7 @@ mod tests {
         ]);
         assert!(
             err.ends_with(
-                "\n  try: sbt env create 'my env.yaml' --name box --env-arg 'v=x y' --force"
+                "\n  try: bento env create 'my env.yaml' --name box --env-arg 'v=x y' --force"
             ),
             "{err}"
         );
@@ -856,8 +856,8 @@ mod tests {
         let err = t.sbt_err(&["env", "create", "-f"]);
         assert_eq!(
             err,
-            "sandbox \"claude-proj\" already exists; attach to it with `sbt env run`, or remove it \
-             with `sbt env rm` and create it again"
+            "sandbox \"claude-proj\" already exists; attach to it with `bento env run`, or remove it \
+             with `bento env rm` and create it again"
         );
         assert!(creates(&t).is_empty());
     }
@@ -986,7 +986,7 @@ mod tests {
         let err = t.sbt_err(&["env", "exec", "--", "ls"]);
         assert_eq!(
             err,
-            "sandbox 'claude-proj' not found for this environment\n  try: sbt env create"
+            "sandbox 'claude-proj' not found for this environment\n  try: bento env create"
         );
         assert!(t.runner().interactive_calls().is_empty());
     }
@@ -1240,8 +1240,8 @@ mod tests {
                 "{file} declares commands that run on this machine, which must be approved on \
                  every invocation; approve the plan by running it in a terminal or with --force \
                  (-f), or remember approval until the plan changes with the setting below\n  \
-                 try: sbt env {cmd} --force\n   \
-                 or: sbt settings set env.rememberHostCommands true"
+                 try: bento env {cmd} --force\n   \
+                 or: bento settings set env.rememberHostCommands true"
             )
         };
         // As in sbx: also when attaching, where the secret's command doesn't run again.
@@ -1389,7 +1389,7 @@ mod tests {
         assert_eq!(
             t.sbt_err(&["env", "run", "--force"]),
             "postCreate[0] (exit 4): exit status 4; remove this environment's sandbox and \
-             provisioned secrets\n  try: sbt env rm"
+             provisioned secrets\n  try: bento env rm"
         );
         assert_eq!(creates(&t).len(), 1);
         assert!(deletes(&t).is_empty());

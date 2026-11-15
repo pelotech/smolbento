@@ -264,7 +264,7 @@ mod tests {
         s.done("ready");
         p.step("kit", "building").fail();
         p.finish("Created sandbox chk-pg1");
-        p.hint("sbt run --name chk-pg1");
+        p.hint("bento run --name chk-pg1");
     }
 
     #[test]
@@ -276,7 +276,7 @@ mod tests {
             "\nSANDBOX\n  Name:       chk-pg1\n  Workspace:  /path/ws (rw)\n\nIMAGE\n\
              \x20 ○ image — pulling…\n  ✓ image — ready\n\
              \x20 ○ kit — building…\n  ✗ kit — failed\n\
-             \n  ✓ Created sandbox chk-pg1\n        try: sbt run --name chk-pg1\n"
+             \n  ✓ Created sandbox chk-pg1\n        try: bento run --name chk-pg1\n"
         );
     }
 

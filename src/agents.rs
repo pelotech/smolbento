@@ -136,8 +136,8 @@ impl Retired {
     pub fn refusal(&self) -> String {
         let name = self.name;
         format!(
-            "\"{name}\" is retired and is no longer a built-in agent; prefer {} with `sbt create \
-             \"{}\"`, or keep running {name} with `sbt create \"{}\"`",
+            "\"{name}\" is retired and is no longer a built-in agent; prefer {} with `bento create \
+             \"{}\"`, or keep running {name} with `bento create \"{}\"`",
             self.replacement, self.replacement_kit, self.kit
         )
     }
@@ -174,7 +174,7 @@ mod tests {
         assert_eq!(
             retired("gemini").unwrap().refusal(),
             "\"gemini\" is retired and is no longer a built-in agent; prefer antigravity with \
-             `sbt create \"docker.io/sbx/antigravity:latest\"`, or keep running gemini with `sbt \
+             `bento create \"docker.io/sbx/antigravity:latest\"`, or keep running gemini with `bento \
              create \"docker.io/sbx/gemini-kit:latest\"`"
         );
         assert!(retired("claude").is_none());

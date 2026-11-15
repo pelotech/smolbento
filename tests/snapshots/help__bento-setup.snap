@@ -4,7 +4,7 @@ expression: help(&path)
 ---
 Set up host integrations
 
-Usage: sbt setup [OPTIONS] <COMMAND>
+Usage: bento setup [OPTIONS] <COMMAND>
 
 Commands:
   ssh   Let `ssh NAME.sbx` reach a sandbox (adds a managed block to ~/.ssh/config)

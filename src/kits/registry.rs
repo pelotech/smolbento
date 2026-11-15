@@ -104,7 +104,7 @@ fn fetch_ref(
         .build()
         .context("starting the registry client")?;
     let client = new_client(&r);
-    // A stored registry secret (`sbt secret set --registry`) is used instead of anonymous.
+    // A stored registry secret (`bento secret set --registry`) is used instead of anonymous.
     let stored = logins
         .auth_for(r.registry(), r.repository())
         .with_context(|| format!("logging in to {} with its registry secret", r.registry()))?;

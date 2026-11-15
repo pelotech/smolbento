@@ -4,7 +4,7 @@ expression: help(&path)
 ---
 Manage a sandbox declared in an sbxenv.yaml file
 
-Usage: sbt env [OPTIONS] <COMMAND>
+Usage: bento env [OPTIONS] <COMMAND>
 
 Commands:
   create  Create a sandbox environment from sbxenv.yaml

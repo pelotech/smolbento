@@ -4,7 +4,7 @@ expression: help(&path)
 ---
 Network policy
 
-Usage: sbt policy [OPTIONS] <COMMAND>
+Usage: bento policy [OPTIONS] <COMMAND>
 
 Commands:
   init      Choose the network policy for all sandboxes

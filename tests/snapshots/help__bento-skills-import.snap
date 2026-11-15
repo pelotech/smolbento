@@ -4,7 +4,7 @@ expression: help(&path)
 ---
 Import skills from supported agent directories
 
-Usage: sbt skills import [OPTIONS]
+Usage: bento skills import [OPTIONS]
 
 Options:
   -D, --debug

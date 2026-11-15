@@ -1,17 +1,17 @@
 # Troubleshooting
 
-Start with `sbt diagnose`. Add `-D` to any command to print the smolvm commands it runs, for example
-`sbt -D run claude`.
+Start with `bento diagnose`. Add `-D` to any command to print the smolvm commands it runs, for example
+`bento -D run claude`.
 
 ## `downloading smolvm from … failed`
 
 Cause: smolbento downloads its smolvm from GitHub the first time a command needs it, and couldn't
-reach GitHub. Retry once online. To work offline later, run `sbt smolvm --version` while online.
+reach GitHub. Retry once online. To work offline later, run `bento smolvm --version` while online.
 Behind a firewall that blocks GitHub, download the release named in the error yourself, unpack it,
 and point smolbento at it:
 
 ```sh
-sbt settings set smolvm.path /path/to/smolvm-<version>-<platform>/smolvm
+bento settings set smolvm.path /path/to/smolvm-<version>-<platform>/smolvm
 ```
 
 ## `smolvm download … failed its checksum`
@@ -24,7 +24,7 @@ release was replaced. Don't work around it. Retry, and report it if it persists.
 Cause: `smolvm.path` points at a smolvm that isn't there. Unset it to use the downloaded one:
 
 ```sh
-sbt settings unset smolvm.path
+bento settings unset smolvm.path
 ```
 
 ## `smolvm.home … is too long for macOS sockets`
@@ -40,11 +40,11 @@ Cause: smolvm needs the bzip2 library. Install it (`apt install libbz2-1.0`, `dn
 
 Only sandboxes with a disk larger than 20 GiB need it: `brew install e2fsprogs`.
 
-## `don't run sbt as root`
+## `don't run bento as root`
 
 Cause: smolvm maps the workspace to the agent only for a normal user's workspace.
 
-Run `sbt` as your normal user. On Linux, grant that user `/dev/kvm` access instead of using `sudo`.
+Run `bento` as your normal user. On Linux, grant that user `/dev/kvm` access instead of using `sudo`.
 
 ## `diagnose` says `FAIL /dev/kvm` (Linux)
 
@@ -71,7 +71,7 @@ the next command downloads smolvm again.
 Cause: `~/.config/smolbento/config.toml` doesn't parse. The message shows the error.
 
 ```sh
-sbt settings unset <key>       # reset one setting, or fix the file by hand
+bento settings unset <key>       # reset one setting, or fix the file by hand
 ```
 
 ## `Permission denied` writing the workspace
@@ -96,7 +96,7 @@ with `docker.enabled=false` have no Docker engine.
 If the error persists, read the daemon log:
 
 ```sh
-sbt exec --privileged <name> cat /var/log/dockerd.log
+bento exec --privileged <name> cat /var/log/dockerd.log
 ```
 
 ## A sandbox won't go away, or `already exists`
@@ -104,13 +104,13 @@ sbt exec --privileged <name> cat /var/log/dockerd.log
 Cause: a leftover sandbox or smolvm machine.
 
 ```sh
-sbt ls
-sbt rm -f <name>
-sbt smolvm machine delete --name sbx-<name> -f   # if it's still listed by `sbt smolvm machine ls`
+bento ls
+bento rm -f <name>
+bento smolvm machine delete --name sbx-<name> -f   # if it's still listed by `bento smolvm machine ls`
 ```
 
 A sandbox whose first start fails is removed, so you can rerun the command. If the removal fails too,
-run `sbt rm -f <name>`.
+run `bento rm -f <name>`.
 
 ## A storage error from smolvm
 
@@ -118,9 +118,9 @@ Cause: usually a full disk.
 
 ```sh
 df -h ~
-sbt prune                # remove stopped sandboxes
-sbt rm NAME              # remove one sandbox
-sbt template rm NAME     # remove a saved template
+bento prune                # remove stopped sandboxes
+bento rm NAME              # remove one sandbox
+bento template rm NAME     # remove a saved template
 ```
 
 ## `Refusing without a terminal; pass -f`

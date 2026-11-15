@@ -4,7 +4,7 @@ expression: help(&path)
 ---
 Push a kit artifact to an OCI registry
 
-Usage: sbt kit push [OPTIONS] <DIRECTORY> <REFERENCE>
+Usage: bento kit push [OPTIONS] <DIRECTORY> <REFERENCE>
 
 Arguments:
   <DIRECTORY>

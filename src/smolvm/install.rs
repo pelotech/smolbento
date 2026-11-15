@@ -9,7 +9,7 @@ use anyhow::{Context, Result, bail};
 use super::pin::{Pin, asset_url};
 
 /// A temp dir older than this is left over from an interrupted install; a younger one may be
-/// another `sbt`'s install in progress.
+/// another `bento`'s install in progress.
 const STALE: Duration = Duration::from_secs(600);
 
 /// Where version `version` is installed under `home`.
@@ -74,7 +74,7 @@ fn download(url: &str, version: &str, progress: &mut dyn FnMut(&str)) -> Result<
 }
 
 /// Unpacks a release tarball (one top-level directory) into `<home>/engine/<version>` by way of a
-/// temp dir and a rename, so a half copy never takes its place. When another `sbt` got there
+/// temp dir and a rename, so a half copy never takes its place. When another `bento` got there
 /// first, its copy stays and this one goes.
 fn install_from(home: &Path, version: &str, tarball: &[u8]) -> Result<PathBuf> {
     let engine = home.join("engine");

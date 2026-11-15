@@ -4,7 +4,7 @@ expression: help(&path)
 ---
 Docker Sandboxes (sbx) compatible agent sandboxes on smolvm microVMs
 
-Usage: sbt [OPTIONS] [COMMAND]
+Usage: bento [OPTIONS] [COMMAND]
 
 Commands:
   run         Create a sandbox if needed and attach to its agent

@@ -4,7 +4,7 @@ expression: help(&path)
 ---
 Register an MCP server
 
-Usage: sbt mcp add [OPTIONS] <NAME>
+Usage: bento mcp add [OPTIONS] <NAME>
 
 Arguments:
   <NAME>

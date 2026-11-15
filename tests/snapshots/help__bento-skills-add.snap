@@ -4,7 +4,7 @@ expression: help(&path)
 ---
 Add skills from a Git repository
 
-Usage: sbt skills add [OPTIONS] <REPOSITORY>
+Usage: bento skills add [OPTIONS] <REPOSITORY>
 
 Arguments:
   <REPOSITORY>

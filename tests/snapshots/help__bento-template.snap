@@ -4,7 +4,7 @@ expression: help(&path)
 ---
 Save sandboxes as templates and manage them
 
-Usage: sbt template [OPTIONS] <COMMAND>
+Usage: bento template [OPTIONS] <COMMAND>
 
 Commands:
   save  Save a snapshot of the sandbox as a template

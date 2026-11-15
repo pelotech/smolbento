@@ -1,4 +1,4 @@
-//! MCP servers registered on the host (`sbt mcp`) and given to a sandbox's agent at create
+//! MCP servers registered on the host (`bento mcp`) and given to a sandbox's agent at create
 //! (`--static-mcp`). smolbento doesn't speak MCP: a server is written into the agent's own MCP
 //! config, and a header secret travels as a smolvm credential placeholder.
 
@@ -64,7 +64,9 @@ pub fn register(paths: &crate::config::Paths, name: &str, server: Server) -> Res
     match file.servers.get(name) {
         Some(existing) if *existing == server => Ok(()),
         Some(_) => {
-            bail!("MCP server {name} is already registered differently; `sbt mcp rm {name}` first")
+            bail!(
+                "MCP server {name} is already registered differently; `bento mcp rm {name}` first"
+            )
         }
         None => {
             file.servers.insert(name.to_string(), server);

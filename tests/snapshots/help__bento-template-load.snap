@@ -4,7 +4,7 @@ expression: help(&path)
 ---
 Load a template from a file made by `template save --output`
 
-Usage: sbt template load [OPTIONS] <FILE>
+Usage: bento template load [OPTIONS] <FILE>
 
 Arguments:
   <FILE>

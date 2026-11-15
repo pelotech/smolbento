@@ -4,7 +4,7 @@ expression: help(&path)
 ---
 Inspect, validate and add kits
 
-Usage: sbt kit [OPTIONS] <COMMAND>
+Usage: bento kit [OPTIONS] <COMMAND>
 
 Commands:
   inspect   Show what a kit provides and requests

@@ -4,7 +4,7 @@ expression: help(&path)
 ---
 Show a sandbox's details
 
-Usage: sbt inspect [OPTIONS] <SANDBOX>
+Usage: bento inspect [OPTIONS] <SANDBOX>
 
 Arguments:
   <SANDBOX>

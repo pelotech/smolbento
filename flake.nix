@@ -40,7 +40,7 @@
               # release
               rcodesign
 
-              # kit signing (`sbt kit sign/verify`, e2e)
+              # kit signing (`bento kit sign/verify`, e2e)
               cosign
 
               # tasks
@@ -75,9 +75,9 @@
             # Some unit tests read host facts (memory, free ports) the build sandbox hides; CI runs them.
             doCheck = false;
             postInstall = ''
-              for n in sbt sbx bento; do ln -s smolbento $out/bin/$n; done
+              for n in bento sbx; do ln -s smolbento $out/bin/$n; done
             '';
-            meta.mainProgram = "sbt";
+            meta.mainProgram = "bento";
           };
 
           treefmt = {

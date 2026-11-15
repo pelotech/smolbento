@@ -4,7 +4,7 @@ expression: help(&path)
 ---
 List templates
 
-Usage: sbt template ls [OPTIONS]
+Usage: bento template ls [OPTIONS]
 
 Options:
   -D, --debug

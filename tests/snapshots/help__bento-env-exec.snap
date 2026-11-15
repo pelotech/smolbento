@@ -4,7 +4,7 @@ expression: help(&path)
 ---
 Execute a command inside a sandbox environment
 
-Usage: sbt env exec [OPTIONS] [PATH]... [-- <COMMAND>...]
+Usage: bento env exec [OPTIONS] [PATH]... [-- <COMMAND>...]
 
 Arguments:
   [PATH]...
@@ -45,7 +45,7 @@ Options:
           Not supported (as in sbx)
 
       --name <NAME>
-          Name for the sandbox, overriding 'name:' in sbxenv.yaml and the derived <agent>-<directory> (every 'sbt env' command addressing this environment needs the same value)
+          Name for the sandbox, overriding 'name:' in sbxenv.yaml and the derived <agent>-<directory> (every 'bento env' command addressing this environment needs the same value)
 
       --env-arg <NAME=VALUE>
           Value for an argument the environment file declares, as name=value (can be repeated)

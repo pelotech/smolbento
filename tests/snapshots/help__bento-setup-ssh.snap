@@ -4,7 +4,7 @@ expression: help(&path)
 ---
 Let `ssh NAME.sbx` reach a sandbox (adds a managed block to ~/.ssh/config)
 
-Usage: sbt setup ssh [OPTIONS] [COMMAND]
+Usage: bento setup ssh [OPTIONS] [COMMAND]
 
 Commands:
   remove  Remove the managed block from ~/.ssh/config [alias: rm]

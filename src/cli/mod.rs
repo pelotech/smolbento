@@ -50,12 +50,12 @@ pub fn exit_code(err: &anyhow::Error) -> u8 {
 }
 
 /// The name completions are generated for: the one the binary was run as when it is one of ours
-/// (`sbx` and `bento` are links to it), else `sbt`.
+/// (`bento`, or `sbt` and `sbx` when linked or aliased), else `bento`.
 fn program_name(argv0: Option<&OsString>) -> String {
     argv0
         .and_then(|a| std::path::Path::new(a).file_name()?.to_str())
         .filter(|n| ["sbt", "sbx", "bento"].contains(n))
-        .unwrap_or("sbt")
+        .unwrap_or("bento")
         .to_string()
 }
 
@@ -110,7 +110,7 @@ pub fn main(args: impl IntoIterator<Item = OsString>) -> Result<i32> {
 }
 
 /// smolvm's own `SMOLVM_IMAGE_SEED_MAX_BYTES` wins; else `smolvm.image-cache-size` sets it. A bad
-/// size only warns, so `sbt settings` can still fix it.
+/// size only warns, so `bento settings` can still fix it.
 fn with_image_cache(
     runner: ProcessRunner,
     settings: &Settings,
@@ -208,13 +208,13 @@ pub fn dispatch<R: Runner>(ctx: &mut Ctx<R>, cli: Cli) -> Result<i32> {
 
 fn cloud(cmd: &str) -> Result<i32> {
     Err(Unsupported(format!(
-        "`sbt {cmd}` is a Docker Cloud feature and is not supported"
+        "`bento {cmd}` is a Docker Cloud feature and is not supported"
     ))
     .into())
 }
 
 fn pending(cmd: &str) -> Result<i32> {
-    Err(Unsupported(format!("`sbt {cmd}` is not implemented yet")).into())
+    Err(Unsupported(format!("`bento {cmd}` is not implemented yet")).into())
 }
 
 fn version<R: Runner>(ctx: &Ctx<R>) -> Result<i32> {
@@ -232,7 +232,7 @@ fn version<R: Runner>(ctx: &Ctx<R>) -> Result<i32> {
 fn refuse_root(uid: u32) -> Result<()> {
     if uid == 0 {
         bail!(
-            "don't run sbt as root: smolvm doesn't map a workspace owned by root to the agent user, so \
+            "don't run bento as root: smolvm doesn't map a workspace owned by root to the agent user, so \
 the agent couldn't write it; run it as your normal user"
         );
     }
@@ -342,7 +342,7 @@ mod tests {
     fn pending_and_cloud_commands_exit_2() {
         let mut t = test_env(&[]);
         let err = t.sbt(&["tui"]).unwrap_err();
-        assert_eq!(err.to_string(), "`sbt tui` is not implemented yet");
+        assert_eq!(err.to_string(), "`bento tui` is not implemented yet");
         assert_eq!(exit_code(&err), 2);
         let err = t.sbt(&["move", "x", "--to", "cloud"]).unwrap_err();
         assert!(err.to_string().contains("Docker Cloud"));
@@ -377,13 +377,13 @@ mod tests {
             refuse_root(0)
                 .unwrap_err()
                 .to_string()
-                .contains("don't run sbt as root")
+                .contains("don't run bento as root")
         );
         refuse_root(501).unwrap();
         let mut t = test_env(&[]);
         t.ctx.uid = 0;
         let err = t.sbt(&["ls"]).unwrap_err();
-        assert!(err.to_string().contains("don't run sbt as root"), "{err}");
+        assert!(err.to_string().contains("don't run bento as root"), "{err}");
     }
 
     #[test]
@@ -452,11 +452,11 @@ mod tests {
             ("/usr/local/bin/sbx", "sbx"),
             ("bento", "bento"),
             ("sbt", "sbt"),
-            ("/x/smolbento", "sbt"),
+            ("/x/smolbento", "bento"),
         ] {
             assert_eq!(program_name(Some(&OsString::from(argv0))), name);
         }
-        assert_eq!(program_name(None), "sbt");
+        assert_eq!(program_name(None), "bento");
         let mut t = test_env(&[]);
         t.ctx.program = "sbx".into();
         t.sbt(&["completion", "zsh"]).unwrap();

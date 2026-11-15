@@ -4,7 +4,7 @@ expression: help(&path)
 ---
 Remove a registered MCP server
 
-Usage: sbt mcp rm [OPTIONS] <NAME>
+Usage: bento mcp rm [OPTIONS] <NAME>
 
 Arguments:
   <NAME>

@@ -4,7 +4,7 @@ expression: help(&path)
 ---
 Remove a sandbox environment and its scoped resources
 
-Usage: sbt env rm [OPTIONS] [PATH]...
+Usage: bento env rm [OPTIONS] [PATH]...
 
 Arguments:
   [PATH]...
@@ -15,7 +15,7 @@ Options:
           Print each smolvm command line
 
       --name <NAME>
-          Name for the sandbox, overriding 'name:' in sbxenv.yaml and the derived <agent>-<directory> (every 'sbt env' command addressing this environment needs the same value)
+          Name for the sandbox, overriding 'name:' in sbxenv.yaml and the derived <agent>-<directory> (every 'bento env' command addressing this environment needs the same value)
 
       --env-arg <NAME=VALUE>
           Value for an argument the environment file declares, as name=value (can be repeated)

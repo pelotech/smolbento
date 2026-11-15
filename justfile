@@ -58,10 +58,10 @@ smolvm-lock-check:
 lint:
     prek run --all-files
 
-# Install smolbento and its sbt/sbx/bento links into ~/.cargo/bin
+# Install smolbento and its bento/sbx links into ~/.cargo/bin
 install:
     cargo install --locked --path .
-    for n in sbt sbx bento; do ln -sf smolbento "$HOME/.cargo/bin/$n"; done
+    for n in bento sbx; do ln -sf smolbento "$HOME/.cargo/bin/$n"; done
 
 # Build a release tarball for TARGET into dist/ with BUILDER: cargo (native) or zigbuild (cross from Linux)
 release-build target builder:
@@ -97,7 +97,7 @@ release-build target builder:
     stage="dist/smolbento-{{target}}"
     rm -rf "$stage" && mkdir -p "$stage"
     cp "$bin" LICENSE README.md "$stage/"
-    for n in sbt sbx bento; do ln -s smolbento "$stage/$n"; done
+    for n in bento sbx; do ln -s smolbento "$stage/$n"; done
     tar -C dist -czf "dist/smolbento-{{target}}.tar.gz" "smolbento-{{target}}"
     # Smoke-test Linux binaries outside the build environment (no Nix store, stock glibc).
     case "{{target}}" in

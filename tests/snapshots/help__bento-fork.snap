@@ -4,7 +4,7 @@ expression: help(&path)
 ---
 Copy a running sandbox (memory, processes, disk) for parallel attempts
 
-Usage: sbt fork [OPTIONS] <SANDBOX>
+Usage: bento fork [OPTIONS] <SANDBOX>
 
 Arguments:
   <SANDBOX>

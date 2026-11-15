@@ -1,7 +1,7 @@
 //! Host services for a sandbox's life: the OS service manager (launchd, systemd --user) owns the
 //! sockets smolvm mounts into a sandbox and runs `smolbento _serve KIND SANDBOX` for each
 //! connection, so the SSH agent and the browser and clipboard bridge answer without an attached
-//! `sbt`, and without a smolbento daemon.
+//! `bento`, and without a smolbento daemon.
 //!
 //! Units are namespaced by a hash of smolbento's data dir, so separate setups (the conformance
 //! adapter's isolated dirs) never see or remove each other's. Without a usable service manager

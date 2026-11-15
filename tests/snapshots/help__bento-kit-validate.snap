@@ -4,7 +4,7 @@ expression: help(&path)
 ---
 Check a kit without running it
 
-Usage: sbt kit validate [OPTIONS] <REFERENCE>
+Usage: bento kit validate [OPTIONS] <REFERENCE>
 
 Arguments:
   <REFERENCE>

@@ -4,7 +4,7 @@ expression: help(&path)
 ---
 Save a snapshot of the sandbox as a template
 
-Usage: sbt template save [OPTIONS] <SANDBOX> <TAG>
+Usage: bento template save [OPTIONS] <SANDBOX> <TAG>
 
 Arguments:
   <SANDBOX>

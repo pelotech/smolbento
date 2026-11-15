@@ -4,7 +4,7 @@ expression: help(&path)
 ---
 Read and change settings
 
-Usage: sbt settings [OPTIONS] <COMMAND>
+Usage: bento settings [OPTIONS] <COMMAND>
 
 Commands:
   ls     List settings [alias: list]

@@ -362,7 +362,7 @@ impl Meta {
             .any(|(i, w)| !w.ends_with(":ro") && !(i == 0 && self.clone_repo.is_some()))
     }
 
-    /// Whether `sbt fork` can copy it: no writable host folder, not itself a fork, and not an
+    /// Whether `bento fork` can copy it: no writable host folder, not itself a fork, and not an
     /// internal sandbox (`_builder`), which would only pay branchable's memory cost.
     pub fn forkable(&self) -> bool {
         self.fork_of.is_none()

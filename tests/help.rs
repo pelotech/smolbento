@@ -71,9 +71,9 @@ fn help_snapshots() {
         vec!["env", "rm"],
     ] {
         let name = if path.is_empty() {
-            "sbt".to_string()
+            "bento".to_string()
         } else {
-            format!("sbt-{}", path.join("-"))
+            format!("bento-{}", path.join("-"))
         };
         insta::assert_snapshot!(name, help(&path));
     }
