@@ -141,11 +141,20 @@ pub fn apply(
     let mut notes = Vec::new();
     for kc in &m.credentials {
         // `resolve` added its hosts to the kit's network rules.
-        if kc.req.oauth.as_ref().is_some_and(|o| o.passthrough) {
-            let note = format!(
-                "note: kit {}: {} OAuth tokens live in the sandbox (passthrough)",
-                kc.kit, kc.req.service
-            );
+        if let Some(o) = &kc.req.oauth {
+            let note = if o.passthrough {
+                format!(
+                    "note: kit {}: {} OAuth tokens live in the sandbox (passthrough)",
+                    kc.kit, kc.req.service
+                )
+            } else {
+                format!(
+                    "note: kit {kit}: {svc} subscription logins happen inside the sandbox (tokens \
+                     stay there); set an API key with `sbt secret set {svc}` to keep it on the host",
+                    kit = kc.kit,
+                    svc = kc.req.service
+                )
+            };
             if !notes.contains(&note) {
                 notes.push(note);
             }
@@ -1257,7 +1266,7 @@ mod tests {
     }
 
     #[test]
-    fn passthrough_oauth_only_allows_its_hosts() {
+    fn oauth_only_allows_its_hosts() {
         let o = |passthrough| {
             CapBody::Credential(CredReq {
                 service: "xsvc".into(),
@@ -1286,13 +1295,18 @@ mod tests {
         assert!(credential_args(&req).is_empty());
         assert!(req.secrets.is_empty());
 
-        let e = resolve(
-            workload(),
-            vec![with(kit("o", Kind::Mixin), "credential@1", false, o(false))],
-            &ArgValues::default(),
-        )
-        .unwrap_err();
-        assert!(format!("{e:#}").contains("without passthrough"), "{e:#}");
+        // Without passthrough (sbx's sentinels) the hosts are allowed too: the login happens in
+        // the sandbox.
+        let p = plan(vec![with(
+            kit("o", Kind::Mixin),
+            "credential@1",
+            false,
+            o(false),
+        )]);
+        let mut policy = Policy::default();
+        let mut req = request();
+        let (_, added) = run(&p, &mut req, &mut policy).unwrap();
+        assert_eq!(rule_hosts(&policy, &added), ["auth.x.com", "api.x.com"]);
     }
 
     #[test]

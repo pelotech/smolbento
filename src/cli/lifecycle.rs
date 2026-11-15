@@ -543,9 +543,9 @@ mod tests {
                 "SANDBOX_NAME=claude-proj".into(),
                 "SANDBOX_VM_ID=claude-proj".into(),
                 format!("WORKSPACE_DIR={ws}"),
+                // The default stand-in declares no credential, so no mode; IS_SANDBOX is the
+                // image's own.
                 "SBX_AGENT=claude".into(),
-                "SBX_CRED_ANTHROPIC_MODE=none".into(),
-                "IS_SANDBOX=1".into(),
             ]
         );
         assert_eq!(pair("-p"), vec!["8080:80"]);
@@ -628,6 +628,42 @@ mod tests {
         t.sbt(&["create", &kit, "-t", "img:2"]).unwrap();
         let create = t.calls_of("machine create").remove(0);
         assert!(create.contains("--image img:2 "), "{create}");
+    }
+
+    #[test]
+    fn claude_without_a_key_installs_with_mode_none() {
+        let mut t = test_env(&[]);
+        agent_stand_in(&t, "claude", CLAUDE_STAND_IN);
+        creatable(&t);
+        t.sbt(&["create", "claude", "."]).unwrap();
+        let create = t.calls_of("machine create").remove(0);
+        assert!(
+            create.contains("-e SBX_CRED_ANTHROPIC_MODE=none "),
+            "{create}"
+        );
+        assert!(!create.contains("--credential"), "{create}");
+        assert!(
+            t.calls_of("machine exec")
+                .iter()
+                .any(|l| l.contains("echo mode=")),
+            "the install step runs"
+        );
+    }
+
+    #[test]
+    fn an_oauth_credential_binds_its_api_key() {
+        let mut t = test_env(&[]);
+        agent_stand_in(&t, "claude", CLAUDE_STAND_IN);
+        global_secret(&t, "anthropic", "sk-ant-test");
+        creatable(&t);
+        t.sbt(&["create", "claude", "."]).unwrap();
+        let create = t.calls_of("machine create").remove(0);
+        assert!(
+            create.contains("-e SBX_CRED_ANTHROPIC_MODE=apikey "),
+            "{create}"
+        );
+        assert!(create.contains("api.anthropic.com"), "{create}");
+        assert!(!create.contains("sk-ant-test"), "never in argv: {create}");
     }
 
     #[test]

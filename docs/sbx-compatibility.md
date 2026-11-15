@@ -182,10 +182,10 @@ so every process sees them. Your own `-e` wins. None holds a secret value.
 - `SANDBOX_NAME`, `SANDBOX_VM_ID` (the name), `SANDBOX_ID` (a new UUID per create). A `fork`
   gets its own name and id.
 - `WORKSPACE_DIR`: the host path of the primary workspace (the guest workdir when mountless).
-- `SBX_AGENT`: the preset or kit name. `IS_SANDBOX=1` for the `claude` preset.
-- `SBX_CRED_<SVC>_MODE`: `apikey` when the service's secret is bound at create, else `none`. `shell`
-  gets all eight services and `claude` only `ANTHROPIC`. Other presets and kits get none, even one
-  named `claude` or `shell`.
+- `SBX_AGENT`: the agent or kit name. `IS_SANDBOX=1` comes from the `claude` kit's image.
+- `SBX_CRED_<SVC>_MODE`: one per service a kit in the sandbox declares a credential for: `apikey`
+  when the service's secret is bound at create, else `none`. As measured in sbx 0.53, `claude` gets
+  `ANTHROPIC` and `shell` none.
 - `TZ`: from the host, in TTY sessions (`run`, `exec -it`), when set. sbx derives one when unset.
 - `TERM_PROGRAM`, `TERM_PROGRAM_VERSION`, `COLORTERM`: from the host in TTY sessions, so agents know
   your terminal shows clickable links.
@@ -237,7 +237,7 @@ anything is created. An optional one is skipped with a warning.
 | Capability | sbx (local) | smolbento |
 |---|---|---|
 | `network-policy@1`, `@2` | Yes | Yes, source `kit`. Install-phase rules last through the first start's install steps only. An install-phase CIDR deny stays enforced for the sandbox's life (smolvm takes CIDR denies only at create; create prints a note), though `policy ls` doesn't show it. `@2` method and path rules aren't enforced, so a kit requiring them is refused. Optional: allow rules cover the whole host, and deny rules with methods or paths are dropped (the skipped line says how many) |
-| `credential@1` | Yes | API keys: yes, through your secrets. OAuth with `passthrough: true`: yes (the agent's own login keeps its tokens in the sandbox). OAuth without passthrough: no |
+| `credential@1` | Yes | API keys: yes, through your secrets. OAuth with `passthrough: true`: yes (the agent's own login keeps its tokens in the sandbox). OAuth without passthrough: its API key part binds; logins happen inside the sandbox |
 | `port@1` | Yes | Yes, on `127.0.0.1` |
 | `volume@1` | Yes, removed with the sandbox | Yes, on the sandbox's disk. Removed with the sandbox (`rm`, `reset`, recreate); kept across stop and start; each fork gets a copy |
 | `resources@1` | Limited (no GPU) | CPUs and memory. GPU ignored |
@@ -327,7 +327,7 @@ anything is created. An optional one is skipped with a warning.
 | Building local v3 kits | BuildKit on your machine | BuildKit in a hidden `_builder` sandbox; no Docker needed locally. It never gets your secrets. Base images that need a login pull with `secret set --registry` credentials: the builder gets a short-lived pull token for the `HOST/<repo>` references in the descriptor, reaches those registries whatever the policy, and is recreated when the registry set changes. A build reaching a stored-login registry without naming `HOST/<repo>` fails with `502 credential unavailable`. Docker Hub logins don't apply yet |
 | Where a kit sends a secret | Any host the kit names, after you approve | A built-in service's secret goes only to that service's hosts (else the kit is refused). A custom service's can go anywhere, with a note at `create` and `kit add` |
 | Install-only credentials | Not injected after install; requests go out without the credential | The sandbox restarts once after install without them; later requests to their hosts get `502` |
-| OAuth credentials | Passthrough and sentinel tokens | Passthrough only (sentinel tokens need smolvm support) |
+| OAuth credentials | Passthrough and sentinel tokens | Passthrough. A sentinel-token credential (`claude`'s claude.ai login) binds its API key; without one, the login happens inside the sandbox and its tokens stay there (sentinel tokens need smolvm support) |
 | Method and path rules | Enforced (`403` outside the rule) | Not enforced (as with `policy allow --method/--path`); a kit requiring them is refused |
 | `kit validate` on registry references | Refused: "OCI references are not supported for validation" | Pulled and validated |
 | `kit add` | Recreates the container; refuses v2 kits with files and v3 mixins on a v3 workload; asks before opening network access, no skip flag | Applies to the running sandbox, files and deny rules included. Image layers, credentials, ports, volumes, resources, environment variables and `long-running` need a recreate (`recreate required`). Asks before opening network access; `-y/--yes` skips it. A new startup step that fails only warns |

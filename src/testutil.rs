@@ -306,14 +306,19 @@ pub fn creatable_as(t: &TestEnv, name: &str) {
 }
 
 pub fn global_github_secret(t: &TestEnv) {
+    global_secret(t, "github", "gh-123");
+}
+
+/// A global secret for `service` in the keychain store.
+pub fn global_secret(t: &TestEnv, service: &str, value: &str) {
     use crate::secrets::{SecretEntry, SecretsFile, Source, scope_for};
     let entry = SecretEntry {
-        service: "github".into(),
+        service: service.into(),
         scope: scope_for(None),
         source: Source::Keychain,
     };
-    t.ctx.store.set(&entry.account(), "gh-123").unwrap();
-    let mut f = SecretsFile::default();
+    t.ctx.store.set(&entry.account(), value).unwrap();
+    let mut f = SecretsFile::load(&t.ctx.paths).unwrap_or_default();
     f.set(entry);
     f.save(&t.ctx.paths).unwrap();
 }
@@ -396,6 +401,21 @@ pub const CLAUDE_FILES_STAND_IN: &str = r#"{
      "config": {"content": "", "directory": "/home/agent/.claude", "filename": "CLAUDE.md"}}
   ]
 }"#;
+
+/// Replaces agent `name`'s stand-in in `t` with one whose descriptor is `descriptor`.
+pub fn agent_stand_in(t: &TestEnv, name: &str, descriptor: &str) {
+    let dir = std::path::Path::new(&t.ctx.env[crate::agents::KITS_DIR_ENV]).join(name);
+    std::fs::remove_dir_all(&dir).unwrap();
+    std::fs::create_dir_all(&dir).unwrap();
+    let config = serde_json::json!({"config": {"Entrypoint": [name], "User": "agent"}});
+    crate::kits::registry::fixtures::oci_layout_with(
+        &dir,
+        Some(descriptor),
+        &[("com.docker.sandboxes.start-docker", "true")],
+        &[],
+        &config.to_string(),
+    );
+}
 
 /// Stand-ins for the built-in agents' published kits: a prebuilt OCI layout per name under
 /// `dir`, as `load::agent` reads them when `SMOLBENTO_AGENT_KITS_DIR` is set. Each launches its

@@ -304,9 +304,19 @@ pub fn prepare_create<R: Runner>(
     req.credential_env.dedup();
     req.secrets = services;
     if !name::is_internal(&req.name) {
-        // No plan is the bare preset; a workload kit named like one isn't it.
-        let preset = kits.is_none_or(|p| crate::kits::apply::is_builtin_agent(&p.workload));
-        sandbox::env::apply(req, preset)?;
+        // The services the kits declare a credential for get a mode.
+        let mut services: Vec<String> = kits
+            .map(|p| {
+                p.merged
+                    .credentials
+                    .iter()
+                    .map(|c| c.req.service.clone())
+                    .collect()
+            })
+            .unwrap_or_default();
+        services.sort();
+        services.dedup();
+        sandbox::env::apply(req, &services)?;
     }
     // Before the policy is saved or smolvm creates anything. A workload kit named like a preset
     // isn't that agent.

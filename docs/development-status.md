@@ -92,7 +92,7 @@ meanwhile.
 - **Credential hosts with a port.** `--credential` can't bind a host with a port. Meanwhile: the builder
   skips logins for registries on a port (documented).
 - **OAuth sentinel tokens and enforced method/path rules.** Both need to read decrypted HTTPS requests;
-  smolvm's proxy only substitutes credentials. Meanwhile: kits get passthrough OAuth only, and method/path
+  smolvm's proxy only substitutes credentials. Meanwhile: sentinel OAuth binds only its API key (logins happen in the sandbox), and method/path
   rules (kits' and `policy allow --method/--path`) aren't enforced. Preferred: method/path matching and
   an OAuth sentinel mode upstream in smolvm. If declined: smolbento's own egress proxy, as its own phase.
 - **Guest DNS upstream order.** Since smolvm 1.34, guest DNS moves to the host's next resolver when one
@@ -121,8 +121,8 @@ in [sbx compatibility](sbx-compatibility.md). Worth another look:
   decoded, so local kits are refused under `kit.requireSignature`), keyless signing without Rekor,
   `kit provenance/builder`, push provenance, and `kit.allowExtractedAgents`.
 - **Sandbox variables.** smolbento omits sbx's fake credential values, `MCP_*`, proxy settings,
-  `GIT_CONFIG_*` and the SSH/display variables. It sets `SBX_CRED_*_MODE` only for `shell` and `claude`,
-  the only agents measured.
+  `GIT_CONFIG_*` and the SSH/display variables. It sets `SBX_CRED_*_MODE` for the services the
+  kits declare credentials for (measured on sbx 0.53's `claude` and `shell`).
 - **From sbx 0.51–0.53, for later:**
   - Built-in agents are published kits (`docker.io/sbx/<agent>:latest`) in sbx 0.51; Docker no
     longer publishes the `docker/sandbox-templates` images for codex, cursor, devin, docker-agent

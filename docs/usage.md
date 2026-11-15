@@ -229,10 +229,9 @@ sbt exec -u root -w /tmp -e DEBUG=1 claude-myrepo env
 `-w`. `--privileged` runs as root. It exits with the command's status.
 
 The agent and every `exec` see the sbx sandbox variables: `SANDBOX_NAME`, `SANDBOX_VM_ID` (the
-name), `SANDBOX_ID` (a UUID, new per sandbox and per fork), `WORKSPACE_DIR`, `SBX_AGENT`, and for
-the `shell` and `claude` presets (not kits of those names) `SBX_CRED_<SERVICE>_MODE` (`apikey` if
-that secret was set at create, else `none`). The `claude` preset also gets `IS_SANDBOX=1`. Your `-e`
-wins. Differences from sbx are in [sbx compatibility](sbx-compatibility.md#sandbox-environment).
+name), `SANDBOX_ID` (a UUID, new per sandbox and per fork), `WORKSPACE_DIR`, `SBX_AGENT`, and
+`SBX_CRED_<SERVICE>_MODE` for each service a kit declares a credential for (`apikey` if that secret
+was set at create, else `none`; `claude` has `ANTHROPIC`). Your `-e` wins. Differences from sbx are in [sbx compatibility](sbx-compatibility.md#sandbox-environment).
 
 ## SSH into a sandbox
 

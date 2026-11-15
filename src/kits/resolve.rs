@@ -364,17 +364,8 @@ pub fn resolve_for(
                     bail!("kit {}: {} is not supported by smolbento", k.name, cap.ty);
                 }
                 CapBody::Credential(c) => {
-                    if c.oauth.as_ref().is_some_and(|o| !o.passthrough) {
-                        if cap.optional {
-                            skipped.push(Skipped::new(&k.name, &cap.ty));
-                            continue;
-                        }
-                        bail!(
-                            "kit {}: {} oauth without passthrough is not supported by smolbento",
-                            k.name,
-                            cap.ty
-                        );
-                    }
+                    // OAuth without passthrough (sbx's sentinel tokens) needs smolvm support: its
+                    // API key part binds as usual, and logins happen inside the sandbox.
                     merged.credentials.push(KitCred {
                         kit: k.name.clone(),
                         optional: cap.optional,
@@ -437,7 +428,7 @@ pub fn resolve_for(
         install: ssh_phase(&ssh_entries, SshPhase::Install)?,
         runtime: ssh_phase(&ssh_entries, SshPhase::Runtime)?,
     };
-    add_passthrough_hosts(&mut merged);
+    add_oauth_hosts(&mut merged);
 
     let mut it = all.into_iter();
     let workload = it.next().expect("workload is first");
@@ -637,17 +628,17 @@ fn add_lifecycle(
     Ok(())
 }
 
-/// A passthrough OAuth credential's token and resource hosts join its kit's network rules (the
-/// first entry for that kit), and its install rules too when the credential is used during install:
-/// the guest talks to them itself.
-fn add_passthrough_hosts(merged: &mut Merged) {
+/// An OAuth credential's token and resource hosts join its kit's network rules (the first entry
+/// for that kit), and its install rules too when the credential is used during install: the guest
+/// talks to them itself (passthrough, or a login inside the sandbox).
+fn add_oauth_hosts(merged: &mut Merged) {
     let Merged {
         credentials,
         network,
         ..
     } = merged;
     for kc in credentials.iter() {
-        let Some(o) = kc.req.oauth.as_ref().filter(|o| o.passthrough) else {
+        let Some(o) = kc.req.oauth.as_ref() else {
             continue;
         };
         let hosts: Vec<NetRule> = o
@@ -1381,8 +1372,29 @@ mod tests {
     }
 
     #[test]
-    fn oauth_passthrough_is_accepted_and_without_is_not() {
+    fn oauth_without_passthrough_is_kept() {
         let ty = "com.docker.sandbox/credential@1";
+        let body = || {
+            cred(Some(OAuthReq {
+                passthrough: false,
+                token_host: Some("auth.x.com".into()),
+                resource_hosts: vec![],
+            }))
+        };
+        // Required or optional, it binds its API key part; the login happens in the sandbox.
+        for optional in [false, true] {
+            let p = run(workload("w"), vec![mixin("m").cap(ty, optional, body())]).unwrap();
+            assert_eq!(p.merged.credentials.len(), 1, "{optional}");
+            assert!(p.skipped.is_empty(), "{:?}", p.skipped);
+            let hosts: Vec<_> = p.merged.network[0]
+                .runtime
+                .allow
+                .iter()
+                .map(|n| n.host.clone())
+                .collect();
+            assert_eq!(hosts, ["auth.x.com"]);
+        }
+        // Passthrough still works as before.
         let ok = mixin("m").cap(ty, false, cred(oauth(true)));
         assert_eq!(
             run(workload("w"), vec![ok])
@@ -1392,18 +1404,6 @@ mod tests {
                 .len(),
             1
         );
-
-        let bad = mixin("m").cap(ty, false, cred(oauth(false)));
-        let e = run(workload("w"), vec![bad]).unwrap_err();
-        assert!(
-            format!("{e:#}").contains("kit m: com.docker.sandbox/credential@1 oauth without passthrough is not supported by smolbento"),
-            "{e:#}"
-        );
-
-        let opt = mixin("m").cap(ty, true, cred(oauth(false)));
-        let p = run(workload("w"), vec![opt]).unwrap();
-        assert_eq!(p.skipped, ["m: com.docker.sandbox/credential@1"]);
-        assert!(p.merged.credentials.is_empty());
     }
 
     #[test]
