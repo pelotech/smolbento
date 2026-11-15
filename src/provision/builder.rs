@@ -553,10 +553,9 @@ mod tests {
     fn first_build_creates_starts_builds_copies_back_and_stops() {
         let t = test_env(&[]);
         let fake = t.runner();
-        // `once` replies win over the `ok` until used up: find, provision::create's check, then get.
+        // The builder is missing until it's created.
         fake.ok(&["machine", "status"], &builder_json("created"))
-            .once_fail(&["machine", "status"], "NOT_FOUND", "vm not found")
-            .once_fail(&["machine", "status"], "NOT_FOUND", "vm not found")
+            .missing_until_created("sbx-_builder")
             .download(&kit_tar());
         let kit = kit_dir();
         let out = build(&t.ctx, kit.path()).unwrap();
@@ -911,8 +910,7 @@ mod tests {
         f.save(&t.ctx.paths).unwrap();
         let fake = t.runner();
         fake.ok(&["machine", "status"], &builder_json("created"))
-            .once_fail(&["machine", "status"], "NOT_FOUND", "vm not found")
-            .once_fail(&["machine", "status"], "NOT_FOUND", "vm not found")
+            .missing_until_created("sbx-_builder")
             .download(&kit_tar());
         let kit = kit_dir();
         build(&t.ctx, kit.path()).unwrap();
@@ -938,8 +936,7 @@ mod tests {
         t.sbt(&["policy", "allow", "network", "localhost"]).unwrap();
         let fake = t.runner();
         fake.ok(&["machine", "status"], &builder_json("created"))
-            .once_fail(&["machine", "status"], "NOT_FOUND", "vm not found")
-            .once_fail(&["machine", "status"], "NOT_FOUND", "vm not found")
+            .missing_until_created("sbx-_builder")
             .download(&kit_tar());
         let kit = kit_dir();
         build(&t.ctx, kit.path()).unwrap();
@@ -1016,8 +1013,7 @@ mod tests {
         with_dhi_login(&t);
         let fake = t.runner();
         fake.ok(&["machine", "status"], &dhi_builder_json("created"))
-            .once_fail(&["machine", "status"], "NOT_FOUND", "vm not found")
-            .once_fail(&["machine", "status"], "NOT_FOUND", "vm not found")
+            .missing_until_created("sbx-_builder")
             .download(&kit_tar());
         let kit = dhi_kit_dir();
         build_with(&t.ctx, kit.path(), fake_mint).unwrap();
@@ -1138,8 +1134,7 @@ mod tests {
         f.save(&t.ctx.paths).unwrap();
         let fake = t.runner();
         fake.ok(&["machine", "status"], &builder_json("created"))
-            .once_fail(&["machine", "status"], "NOT_FOUND", "vm not found")
-            .once_fail(&["machine", "status"], "NOT_FOUND", "vm not found")
+            .missing_until_created("sbx-_builder")
             .download(&kit_tar());
         let kit = kit_dir();
         build_with(&t.ctx, kit.path(), no_mint).unwrap();
