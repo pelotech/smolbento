@@ -6,8 +6,9 @@ line of Docker [Sandboxes](https://docs.docker.com/ai/sandboxes/) (`sbx`). One b
 
 ## Install
 
-Needs smolvm 1.35 or newer. Install smolbento with Homebrew, from source, or from a release. See
-[Install](docs/install.md).
+Install smolbento with Homebrew, from source, or from a release. See [Install](docs/install.md).
+You don't install smolvm: smolbento downloads the release it's tested with on first use, into
+`~/.smolbento`.
 
 ## First run
 

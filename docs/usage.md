@@ -296,7 +296,7 @@ git diff | wl-copy                          # or xclip, xsel, pbcopy, clip.exe
 - Forks don't install the shims or get units, but keep the parent's socket mount, so they can use
   the parent's bridge while the parent's unit (or attached session) serves it.
 - `sbt rm`, `prune`, `reset` and `env rm` remove a sandbox's units and sockets. Units of a sandbox
-  deleted with `smolvm machine delete` are removed by the next `create`, `start`, `run`, `exec`,
+  deleted with `sbt smolvm machine delete` are removed by the next `create`, `start`, `run`, `exec`,
   `rm` or `prune` (never by `ls`); `prune --dry-run` lists them and `diagnose` reports them.
 
 ## SSH agent
@@ -412,8 +412,8 @@ checks a local v2 kit or Smolfile without the network or source policy.
 FILE` reads `NAME=VALUE` lines. Files are read first, then `--kit-arg`; the last value wins, and a
 per-kit value beats an all-kits one. A `KIT.NAME` for a kit not in the sandbox is ignored. Argument
 values aren't secret: they reach the environment and smolvm's machine config, and each kit's values
-(defaults included) are kept with the sandbox (its `sbx.kits` label, shown by `smolvm machine
-status`), in templates saved from it, and in their `--output` archives. Put secrets in
+(defaults included) are kept with the sandbox (its `sbx.kits` label, shown by
+`sbt smolvm machine status`), in templates saved from it, and in their `--output` archives. Put secrets in
 [credentials](#secrets). An argument with no value and no default fails with `create-phase kit arg
 "x" has no resolved value`; `--kit-arg x=` sets it empty. `--kit-arg` without a kit is an error.
 Unquoted numbers and booleans in `default:` and `enum:` are read as strings.
@@ -1064,8 +1064,8 @@ sbt prune --dry-run --filter until=24h # stopped sandboxes created more than 24h
 sbt reset -f                           # remove every sandbox
 ```
 
-`prune --dry-run` also lists host service units left by sandboxes deleted with `smolvm machine
-delete` (`Would remove NAME (leftover host services)`), and `prune` removes them without asking.
+`prune --dry-run` also lists host service units left by sandboxes deleted with `sbt smolvm
+machine delete` (`Would remove NAME (leftover host services)`), and `prune` removes them without asking.
 
 Commands that delete things ask for confirmation, and refuse to run without a terminal unless you
 pass `-f`.

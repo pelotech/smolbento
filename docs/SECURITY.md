@@ -198,7 +198,7 @@ kits you trust.
   the sandbox's labels; the unit carries your `PATH`, `HOME`, `SMOLBENTO_*` variables and, on Linux,
   `SSH_AUTH_SOCK`, never secrets. Anyone who can write your unit files or your `PATH` can run
   commands as you, as with any launch agent. Units go with the sandbox (`rm`, `prune`, `reset`,
-  `env rm`, a failed first start) and, for a sandbox deleted with `smolvm machine delete`, with the
+  `env rm`, a failed first start) and, for a sandbox deleted with `sbt smolvm machine delete`, with the
   next state-changing command. Names carry a hash of the data dir, so separate setups don't touch
   each other's units.
 - The sockets live in `~/Library/Application Support/smolbento/sock/` (macOS) or

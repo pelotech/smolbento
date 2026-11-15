@@ -3,23 +3,42 @@
 Start with `sbt diagnose`. Add `-D` to any command to print the smolvm commands it runs, for example
 `sbt -D run claude`.
 
-## `smolvm 1.x is too old`
+## `downloading smolvm from … failed`
 
-Cause: smolvm is older than 1.35.1.
-
-```sh
-brew upgrade smolvm
-```
-
-## `could not run smolvm`
-
-Cause: smolvm isn't on your `PATH`.
+Cause: smolbento downloads its smolvm from GitHub the first time a command needs it, and couldn't
+reach GitHub. Retry once online. To work offline later, run `sbt smolvm --version` while online.
+Behind a firewall that blocks GitHub, download the release named in the error yourself, unpack it,
+and point smolbento at it:
 
 ```sh
-brew install smol-machines/tap/smolvm
-# or point smolbento at it
-sbt settings set smolvm.path /path/to/smolvm
+sbt settings set smolvm.path /path/to/smolvm-<version>-<platform>/smolvm
 ```
+
+## `smolvm download … failed its checksum`
+
+Cause: the download doesn't match the checksum built into smolbento: a proxy changed it, or the
+release was replaced. Don't work around it. Retry, and report it if it persists.
+
+## `could not run …/smolvm`
+
+Cause: `smolvm.path` points at a smolvm that isn't there. Unset it to use the downloaded one:
+
+```sh
+sbt settings unset smolvm.path
+```
+
+## `smolvm.home … is too long for macOS sockets`
+
+Cause: macOS limits socket paths to 103 bytes, and smolvm's deepest socket sits several folders
+inside `smolvm.home`. Set a shorter path, or unset it to use `~/.smolbento`.
+
+## `diagnose` says `libbz2.so.1 not found` (Linux)
+
+Cause: smolvm needs the bzip2 library. Install it (`apt install libbz2-1.0`, `dnf install bzip2-libs`).
+
+## `diagnose` says `mkfs.ext4 not found` (macOS)
+
+Only sandboxes with a disk larger than 20 GiB need it: `brew install e2fsprogs`.
 
 ## `don't run sbt as root`
 
@@ -44,7 +63,8 @@ nested virtualization instead.
 
 Cause: the smolvm binary lacks `com.apple.security.hypervisor`, usually because it was built unsigned.
 
-Reinstall smolvm from Homebrew or its release tarball.
+If you set `smolvm.path`, sign your build or unset it. Otherwise delete `~/.smolbento/engine` so
+the next command downloads smolvm again.
 
 ## `diagnose` says `FAIL config`
 
@@ -86,7 +106,7 @@ Cause: a leftover sandbox or smolvm machine.
 ```sh
 sbt ls
 sbt rm -f <name>
-smolvm machine delete -n sbx-<name> -f   # if the sandbox is still listed in smolvm
+sbt smolvm machine delete --name sbx-<name> -f   # if it's still listed by `sbt smolvm machine ls`
 ```
 
 A sandbox whose first start fails is removed, so you can rerun the command. If the removal fails too,

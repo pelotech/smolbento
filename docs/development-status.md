@@ -58,7 +58,7 @@ usage guide is linked from its row in the [Phases](#phases) table.
   images. Forks have no bridge of their own.
 - The bridge and the SSH agent are served by launchd or `systemd --user` units for sandboxes created
   by this version. Without a usable service manager, or for earlier sandboxes, they are served only
-  while `sbt run`, `sbt exec -it` or `sbt exec` runs. A sandbox deleted with `smolvm machine delete`
+  while `sbt run`, `sbt exec -it` or `sbt exec` runs. A sandbox deleted with `sbt smolvm machine delete`
   leaves its units until the next state-changing command sweeps them (`prune`, `diagnose`).
 - Templates don't keep `/tmp`.
 - Shared skills are linked by a start script running as `agent`. Images without that account get no

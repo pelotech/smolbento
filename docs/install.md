@@ -3,20 +3,26 @@
 ## Requirements
 
 - macOS on Apple Silicon, or Linux (x86_64 or arm64) with KVM. Windows is planned.
-- smolvm 1.35 or newer: `brew install smol-machines/tap/smolvm`, or a release tarball from
-  [smol-machines/smolvm](https://github.com/smol-machines/smolvm/releases).
-- On Linux, read/write access to `/dev/kvm` (usually through the `kvm` group).
+- On Linux, read/write access to `/dev/kvm` (usually through the `kvm` group), and the bzip2
+  library (`libbz2.so.1`, in most distributions by default).
+- On macOS, `e2fsprogs` (`brew install e2fsprogs`) for sandboxes with a disk larger than 20 GiB.
 - A normal user account. smolbento refuses to run as root (see [Security](SECURITY.md)).
 
 Docker isn't needed on the host. smolvm pulls agent images itself.
 
+You don't install smolvm. smolbento runs the smolvm release it was tested with, downloaded from
+[smol-machines/smolvm](https://github.com/smol-machines/smolvm/releases) on first use and checked
+against the checksum built into smolbento. It goes in `~/.smolbento`, with smolbento's sandboxes, so
+a smolvm you installed yourself keeps its own machines. To download it ahead (before going
+offline, say), run `sbt smolvm --version`. To run your own smolvm instead, set `smolvm.path` (see
+[Configuration](configuration.md)).
+
 ## Install with Homebrew
 
 ```sh
-# smolvm, installed as a dependency
-brew tap smol-machines/tap
+brew tap pelotech/tap
 # Homebrew 7+ only loads trusted third-party taps
-brew trust pelotech/tap smol-machines/tap
+brew trust pelotech/tap
 brew install pelotech/tap/smolbento
 ```
 
@@ -24,11 +30,6 @@ This installs `smolbento` and links `sbt` and `bento` to it. `sbx` isn't linked,
 with Docker's `sbx`. Add `alias sbx=sbt` to your shell to use that name. `brew upgrade` picks up new
 releases. Run `brew tap` before `brew trust`, as above. Homebrew rejects tapping a tap that is
 already trusted (see [pelotech/homebrew-tap](https://github.com/pelotech/homebrew-tap)).
-
-!!! note "Linux"
-    If smolvm fails to install from `smol-machines/tap` on Linux (1.32.3 did), install smolvm
-    from its release tarball and smolbento with
-    `brew install --ignore-dependencies pelotech/tap/smolbento`, or use a release tarball below.
 
 ## Install from source
 
@@ -76,14 +77,31 @@ sbt rm NAME
 sbt create AGENT PATH --name NAME -t NAME-saved:v1
 ```
 
+Sandboxes made before smolbento downloaded its own smolvm stay in your smolvm's default location,
+so `sbt ls` no longer shows them. Recreate them, and run `sbt reset` to remove the old ones.
+
+## Uninstalling
+
+Remove smolbento's sandboxes and files first, then smolbento:
+
+```sh
+sbt reset --force
+brew uninstall smolbento    # or delete the binary and its links
+```
+
+`sbt reset` deletes every sandbox (including ones from before smolbento downloaded its own smolvm),
+its settings, secrets and templates, and `~/.smolbento` with the smolvm in it. If smolbento is
+already gone, delete `~/.smolbento` and the folders listed in
+[Configuration](configuration.md#files).
+
 ## Check your setup
 
 ```sh
 sbt diagnose
 ```
 
-Every line should start with `ok`. It checks the smolvm version, hypervisor access (`/dev/kvm` on
-Linux, smolvm's hypervisor entitlement on macOS) and your config file. If a line says `FAIL`, see
+Every line should start with `ok`. It checks the smolvm smolbento runs, hypervisor access
+(`/dev/kvm` on Linux, smolvm's hypervisor entitlement on macOS) and your config file. If a line says `FAIL`, see
 [Troubleshooting](troubleshooting.md).
 
 ## Shell completions

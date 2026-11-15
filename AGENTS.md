@@ -32,6 +32,12 @@ only some checkouts have it. If it's there, read the relevant section before cha
 
 ## smolvm behaviour to rely on
 
+smolbento runs the release pinned in `smolvm.lock` (`just smolvm-pin VERSION` bumps it), downloaded
+on first use into `<smolvm.home>/engine/<version>/` (default `~/.smolbento`). Every smolvm call gets
+`SMOLVM_DATA_DIR=<smolvm.home>`, so smolbento's machines are apart from the user's own smolvm. Tell
+users to run `sbt smolvm …`, never a bare `smolvm …`, which sees other machines. Tests:
+`SMOLBENTO_SMOLVM` runs another binary (a local build), and e2e shares `/tmp/sbt-e2e-<uid>`.
+
 As of smolvm 1.35. Check the reference source before depending on anything not listed here.
 
 - **Errors:** `--error-format json` prints `{"error":{"code":…,"message":…}}` on stderr. The exit
@@ -94,7 +100,7 @@ As of smolvm 1.35. Check the reference source before depending on anything not l
 | `cli` | clap definitions mirroring sbx; handlers |
 | `provision` | create and start: binds policy, secrets and kits to a sandbox; the kit builder |
 | `ctx` | the context every command gets: paths, settings, smolvm, stdio |
-| `smolvm` | `Runner` trait, command builder, JSON types |
+| `smolvm` | `Runner` trait, command builder, JSON types; the pin (`smolvm.lock`), download and locate |
 | `sandbox` | naming, labels, lifecycle, session tracking |
 | `agents` | built-in agent names → sbx's published kits; retired agents |
 | `workspace` | mounts; clone mode (host git, `sandbox-<name>` remote) |

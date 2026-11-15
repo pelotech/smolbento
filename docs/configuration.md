@@ -17,7 +17,8 @@ An environment variable beats the config file, which beats the default. Booleans
 | `sandbox.autoName` | `SMOLBENTO_SANDBOX_AUTO_NAME` | `false` | When a default name belongs to another directory's sandbox, take the suggested `<agent>-<parent>-<directory>` name instead of refusing. smolbento only. See [Usage](usage.md). |
 | `sandbox.disk.dockerVolume` | `SMOLBENTO_SANDBOX_DISK_DOCKER_VOLUME` | (smolvm's default, 20 GiB) | Disk for Docker's data in new sandboxes, such as `30g`. smolvm keeps image layers on the same disk. An environment file's `dockerSize` wins. |
 | `docker.enabled` | `SMOLBENTO_DOCKER` | `true` | Docker-enabled agent images, and a private Docker engine in each sandbox. Applies to sandboxes created afterwards. |
-| `smolvm.path` | `SMOLBENTO_SMOLVM` | `smolvm` | The smolvm binary to run. |
+| `smolvm.path` | `SMOLBENTO_SMOLVM` | (empty) | A smolvm to run instead of the release smolbento downloads, such as one you built. smolbento is tested with the downloaded one (`sbt diagnose` names it). |
+| `smolvm.home` | `SMOLBENTO_SMOLVM_HOME` | `~/.smolbento` | Where smolvm keeps smolbento's sandboxes, and where the downloaded smolvm goes. `-` uses your smolvm's own default location. On macOS keep it short: smolvm's sockets inside it must fit in 103 bytes. |
 | `smolvm.image-cache-size` | `SMOLBENTO_IMAGE_CACHE_SIZE` | `40g` | Disk for smolvm's cache of ready-to-boot images. See [Details](#details). |
 | `clone.fetch-on-exit` | `SMOLBENTO_CLONE_FETCH_ON_EXIT` | `true` | After `run` in a clone sandbox, fetch the agent's commits into the `sandbox-<name>` remote. |
 | `fork.enabled` | `SMOLBENTO_FORK` | `true` | Start clone and mountless sandboxes branchable so `sbt fork` can copy them. `false` also turns `sbt fork` off. Applies from each sandbox's next start; see [Fork](usage.md#fork). |
@@ -123,6 +124,7 @@ Sign a kit with `sbt kit sign --help`.
 
 | Path | Contents |
 |---|---|
+| `~/.smolbento/` | smolvm's state for smolbento's sandboxes (`smolvm.home`), and the downloaded smolvm in `engine/<version>/` |
 | `~/.config/smolbento/config.toml` | Settings written by `sbt settings set` |
 | `~/.config/smolbento/policy.toml` | Network policy: mode, global and per-sandbox rules |
 | `~/.config/smolbento/mcp.toml` | Registered MCP servers |
@@ -182,8 +184,8 @@ name turned into `_`). Its details are stored as labels on that machine:
 | `sbx.skills` | The skills mode, the `/run/sbx/skills-shared` mount (`none`, `ro` or `rw`), and each skills directory with its access (`none`, `link`, or the store mounted over it `ro` or `rw`), set at create |
 | `sbx.long-running` | `true` when a kit asked not to stop the sandbox when its last session ends |
 
-`smolvm machine ls` shows these alongside machines you made with smolvm directly. `sbt ls` shows
-only the ones smolbento made.
+`sbt smolvm machine ls` shows these. Machines you make with `sbt smolvm` sit next to smolbento's
+sandboxes, but `sbt ls` shows only the ones smolbento made.
 
 ## Secret values
 
