@@ -51,8 +51,10 @@ fn clone_commands_quote_and_copy_remotes() {
     );
     assert_eq!(
         clone_cmd(&step),
-        "set -e; [ -d '/w/my repo/.git' ] || \
-         git -c safe.directory=/run/sandbox/source clone -q --branch 'feat' /run/sandbox/source '/w/my repo'; \
+        "set -e; \
+         git config --global --replace-all safe.directory /run/sandbox/source '^/run/sandbox/source$'; \
+         [ -d '/w/my repo/.git' ] || \
+         git clone -q --branch 'feat' /run/sandbox/source '/w/my repo'; \
          cd '/w/my repo'; \
          git remote set-url -- 'origin' 'https://github.com/o/r.git' 2>/dev/null || git remote add -- 'origin' 'https://github.com/o/r.git'"
     );
@@ -69,8 +71,10 @@ fn a_detached_worktree_clone_checks_out_its_commit_or_falls_back() {
     };
     assert_eq!(
         clone_cmd(&detached),
-        "set -e; [ -d '/w/r/.git' ] || \
-         { git -c safe.directory=/run/sandbox/source clone -q --no-checkout /run/sandbox/source '/w/r' || exit 1; \
+        "set -e; \
+         git config --global --replace-all safe.directory /run/sandbox/source '^/run/sandbox/source$'; \
+         [ -d '/w/r/.git' ] || \
+         { git clone -q --no-checkout /run/sandbox/source '/w/r' || exit 1; \
          git -C '/w/r' checkout -q --detach '0123456789abcdef0123456789abcdef01234567' -- 2>/dev/null || { \
          git -C '/w/r' reset -q --hard || { rm -rf '/w/r/.git'; exit 1; }; \
          echo \"warning: commit 0123456789ab isn't in the clone; the agent starts \
