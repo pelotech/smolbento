@@ -39,7 +39,7 @@ pub fn locate(settings: &Settings, env: &BTreeMap<String, String>) -> Result<Smo
         "" => (default_home.clone(), false, true),
         // smolvm's own default state; the download stays in smolbento's default home.
         "-" => (default_home.clone(), false, false),
-        h => (PathBuf::from(h), true, true),
+        h => (absolute_home(h, user_home)?, true, true),
     };
     let env = if state {
         vec![("SMOLVM_DATA_DIR".to_string(), home.display().to_string())]
@@ -61,6 +61,19 @@ pub fn locate(settings: &Settings, env: &BTreeMap<String, String>) -> Result<Smo
         home,
         home_explicit,
     })
+}
+
+/// A set `smolvm.home`, with `~/` expanded. A relative path would follow the current directory,
+/// so sandboxes would come and go with `cd` (and `reset` would delete the wrong folder).
+fn absolute_home(h: &str, user_home: &str) -> Result<PathBuf> {
+    let p = match h.strip_prefix("~/") {
+        Some(rest) => Path::new(user_home).join(rest),
+        None => PathBuf::from(h),
+    };
+    if !p.is_absolute() {
+        bail!("smolvm.home must be an absolute path (or start with ~/), not {h}");
+    }
+    Ok(p)
 }
 
 /// Downloads the pinned smolvm when `cmd` is the managed copy and it's missing; progress goes to
@@ -164,6 +177,17 @@ mod tests {
         assert!(c.env.is_empty(), "smolvm's own default state");
         // The download still lives in smolbento's default home.
         assert!(c.bin.starts_with("/h/.smolbento/engine"));
+    }
+
+    #[test]
+    fn home_expands_a_tilde_and_must_be_absolute() {
+        let c = located(&[("SMOLBENTO_SMOLVM_HOME", "~/vms")]).unwrap();
+        assert_eq!(c.home, PathBuf::from("/h/vms"));
+        let e = located(&[("SMOLBENTO_SMOLVM_HOME", "vms")]).unwrap_err();
+        assert_eq!(
+            e.to_string(),
+            "smolvm.home must be an absolute path (or start with ~/), not vms"
+        );
     }
 
     #[test]
