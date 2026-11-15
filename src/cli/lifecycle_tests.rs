@@ -1604,11 +1604,17 @@ fn stop_rm_and_prune_print_sbxs_json() {
     let v = json(&t);
     assert_eq!(v["would_remove"][0]["name"], "a");
     assert_eq!(v["would_remove"][0]["agent"], "claude");
-    t.sbt(&["prune", "-f", "--json"]).unwrap();
+    assert!(v["would_remove"][0]["mounts"].is_array());
+    assert!(v["would_remove"][0]["workspaces"].is_array());
+    assert_eq!(v["skipped_unknown_stop"], serde_json::json!([]));
+    // As sbx: --format describes the dry-run listing only.
+    let err = t.sbt_err(&["prune", "-f", "--json"]);
     assert_eq!(
-        json(&t),
-        serde_json::json!([{"action": "removed", "resource": "sandbox", "name": "a"}])
+        err,
+        "--format describes the --dry-run listing; pass --dry-run to preview removals, or run \
+         the prune without --format\n  try: bento prune --dry-run --format json"
     );
+    assert!(!t.calls().iter().any(|l| l.starts_with("machine delete")));
 
     let mut t = test_env(&[]);
     listed(&t);
@@ -1621,8 +1627,6 @@ fn stop_rm_and_prune_print_sbxs_json() {
     let mut t = test_env(&[]);
     t.runner().ok(&["machine", "ls", "--json"], "[]");
     t.sbt(&["rm", "--all", "-f", "--json"]).unwrap();
-    assert_eq!(t.stdout(), "[]\n");
-    t.sbt(&["prune", "-f", "--json"]).unwrap();
     assert_eq!(t.stdout(), "[]\n");
 }
 
@@ -1764,7 +1768,10 @@ fn prune_says_which_parents_it_skipped() {
     with_forks(&t, "stopped", "running", "stopped");
     t.sbt(&["prune", "-f"]).unwrap();
     // remove() reports through the same sink, after the skips.
-    assert_eq!(t.stdout(), "a has forks; skipped\nRemoved a-fork-2\n");
+    assert_eq!(
+        t.stdout(),
+        "a has forks; skipped\nRemoved sandbox a-fork-2\n"
+    );
 }
 
 #[test]

@@ -142,15 +142,11 @@ pub fn stop<R: Runner>(ctx: &mut Ctx<R>, names: &[String], output: &OutputArgs) 
     let result = names.iter().try_for_each(|n| {
         let sb = sandbox::get(&ctx.vm, n)?;
         stop_quietly(ctx, &sb)?;
-        report.did(ctx, "Stopped", SANDBOX, sb.name())
+        report.did(ctx, "Stopped", sb.name())
     });
     report.finish(ctx, result)?;
     Ok(0)
 }
-
-const SANDBOX: &str = "sandbox";
-/// Units left by a sandbox deleted with `smolvm machine delete`.
-const HOST_SERVICES: &str = "host-services";
 
 /// What a command did to sandboxes: a line each as it goes (`Stopped a`), or with `--json` or
 /// `--format`, sbx's list of `{action, resource, name}` at the end.
@@ -167,11 +163,40 @@ struct Done {
     name: String,
 }
 
+/// `prune --dry-run --json`, in sbx's shape: its `would_remove` and `skipped_unknown_stop`
+/// (always empty: smolvm always knows a machine's state), then smolbento's leftover units.
 #[derive(serde::Serialize)]
-struct WouldRemove<'a> {
-    name: &'a str,
-    agent: &'a str,
-    workspaces: &'a [String],
+struct DryRun<'a> {
+    would_remove: Vec<WouldRemove>,
+    skipped_unknown_stop: [(); 0],
+    host_services: &'a [String],
+}
+
+/// sbx's keys, less `stopped_at`, which smolvm doesn't record.
+#[derive(serde::Serialize)]
+struct WouldRemove {
+    name: String,
+    agent: String,
+    /// `HOST:GUEST[:ro]`; smolbento mounts a workspace at its host path.
+    mounts: Vec<String>,
+    workspaces: Vec<String>,
+}
+
+impl WouldRemove {
+    fn of(sb: &Sandbox) -> Self {
+        let path = |w: &String| w.strip_suffix(":ro").unwrap_or(w).to_string();
+        Self {
+            name: sb.name().to_string(),
+            agent: sb.meta.agent.clone(),
+            mounts: sb
+                .meta
+                .workspaces
+                .iter()
+                .map(|w| format!("{}:{w}", path(w)))
+                .collect(),
+            workspaces: sb.meta.workspaces.iter().map(path).collect(),
+        }
+    }
 }
 
 impl<'a> Report<'a> {
@@ -186,24 +211,16 @@ impl<'a> Report<'a> {
         self.output.pick() != super::Format::Table
     }
 
-    /// `verb` is `Stopped` or `Removed`; `resource` is `SANDBOX` or `HOST_SERVICES`.
-    fn did<R: Runner>(
-        &mut self,
-        ctx: &Ctx<R>,
-        verb: &str,
-        resource: &'static str,
-        name: &str,
-    ) -> Result<()> {
+    /// `verb` is `Stopped` or `Removed`.
+    fn did<R: Runner>(&mut self, ctx: &Ctx<R>, verb: &str, name: &str) -> Result<()> {
         if self.structured() {
             self.done.push(Done {
                 action: verb.to_lowercase(),
-                resource,
+                resource: "sandbox",
                 name: name.to_string(),
             });
-        } else if resource == SANDBOX {
-            writeln!(&ctx.out, "{verb} {name}")?;
         } else {
-            writeln!(&ctx.out, "{verb} {name} (leftover host services)")?;
+            writeln!(&ctx.out, "{verb} sandbox {name}")?;
         }
         Ok(())
     }
@@ -221,7 +238,7 @@ impl<'a> Report<'a> {
 /// Stops `sb` if it's running and forgets its sessions.
 pub(crate) fn stop_sandbox<R: Runner>(ctx: &Ctx<R>, sb: &Sandbox) -> Result<()> {
     stop_quietly(ctx, sb)?;
-    writeln!(&ctx.out, "Stopped {}", sb.name())?;
+    writeln!(&ctx.out, "Stopped sandbox {}", sb.name())?;
     Ok(())
 }
 
@@ -268,7 +285,7 @@ pub(crate) fn delete_keeping_remote<R: Runner>(
 
 fn remove<R: Runner>(ctx: &Ctx<R>, sb: &Sandbox, forget_secrets: bool) -> Result<()> {
     delete_sandbox(ctx, sb, forget_secrets)?;
-    writeln!(&ctx.out, "Removed {}", sb.name())?;
+    writeln!(&ctx.out, "Removed sandbox {}", sb.name())?;
     Ok(())
 }
 
@@ -328,7 +345,7 @@ pub fn rm<R: Runner>(ctx: &mut Ctx<R>, a: &RmArgs) -> Result<i32> {
     confirm(ctx, &format!("Remove {}?", names.join(", ")), a.force)?;
     let result = forks_first(targets).into_iter().try_for_each(|sb| {
         delete_sandbox(ctx, sb, true)?;
-        report.did(ctx, "Removed", SANDBOX, sb.name())
+        report.did(ctx, "Removed", sb.name())
     });
     report.finish(ctx, result)?;
     Ok(0)
@@ -368,32 +385,24 @@ pub fn prune<R: Runner>(ctx: &mut Ctx<R>, a: &PruneArgs) -> Result<i32> {
     let (skipped, targets): (Vec<&Sandbox>, Vec<&Sandbox>) = targets
         .into_iter()
         .partition(|sb| !remaining_forks(sb, &all, &names).is_empty());
-    let mut report = Report::new(&a.output);
-    // With --json or --format only the result is printed, in sbx's shape.
-    let text = !report.structured();
-    for sb in skipped.iter().filter(|_| text) {
+    // As sbx: --json and --format describe the dry-run listing only.
+    let structured = a.output.pick() != super::Format::Table;
+    if structured && !a.dry_run {
+        bail!(
+            "--format describes the --dry-run listing; pass --dry-run to preview removals, or \
+             run the prune without --format\n  try: bento prune --dry-run --format json"
+        );
+    }
+    for sb in skipped.iter().filter(|_| !structured) {
         writeln!(&ctx.out, "{} has forks; skipped", sb.name())?;
     }
     let targets = forks_first(targets);
     // Units of sandboxes deleted with `smolvm machine delete`: leftovers, not sandboxes.
     let orphans = provision::orphan_services(ctx);
-    if a.dry_run && !text {
-        let would: Vec<WouldRemove> = targets
-            .iter()
-            .map(|sb| WouldRemove {
-                name: sb.name(),
-                agent: &sb.meta.agent,
-                workspaces: &sb.meta.workspaces,
-            })
-            .collect();
-        /// sbx's `would_remove`, then smolbento's own: leftover units it would remove too.
-        #[derive(serde::Serialize)]
-        struct DryRun<'a> {
-            would_remove: Vec<WouldRemove<'a>>,
-            host_services: &'a [String],
-        }
+    if structured {
         let doc = DryRun {
-            would_remove: would,
+            would_remove: targets.iter().map(|sb| WouldRemove::of(sb)).collect(),
+            skipped_unknown_stop: [],
             host_services: &orphans,
         };
         write!(
@@ -404,10 +413,7 @@ pub fn prune<R: Runner>(ctx: &mut Ctx<R>, a: &PruneArgs) -> Result<i32> {
         return Ok(0);
     }
     if targets.is_empty() && orphans.is_empty() {
-        if text {
-            writeln!(&ctx.out, "Nothing to prune")?;
-        }
-        report.finish(ctx, Ok(()))?;
+        writeln!(&ctx.out, "Nothing to prune")?;
         return Ok(0);
     }
     if a.dry_run {
@@ -425,19 +431,13 @@ pub fn prune<R: Runner>(ctx: &mut Ctx<R>, a: &PruneArgs) -> Result<i32> {
             &format!("Remove {} stopped sandbox(es)?", targets.len()),
             a.force,
         )?;
+        for sb in &targets {
+            remove(ctx, sb, true)?;
+        }
     }
-    let result = targets
-        .iter()
-        .try_for_each(|sb| {
-            delete_sandbox(ctx, sb, true)?;
-            report.did(ctx, "Removed", SANDBOX, sb.name())
-        })
-        .and_then(|()| {
-            provision::sweep_orphans(ctx)
-                .iter()
-                .try_for_each(|name| report.did(ctx, "Removed", HOST_SERVICES, name))
-        });
-    report.finish(ctx, result)?;
+    for name in provision::sweep_orphans(ctx) {
+        writeln!(&ctx.out, "Removed {name} (leftover host services)")?;
+    }
     Ok(0)
 }
 
