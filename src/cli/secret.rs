@@ -90,6 +90,10 @@ fn ls<R: Runner>(ctx: &Ctx<R>, file: &SecretsFile, a: &SecretLsArgs) -> Result<(
         .as_deref()
         .and_then(|s| sandbox::find(&ctx.vm, s).ok().flatten())
         .and_then(|sb| sb.meta.fork_of);
+    if let Some(doc) = a.output.structured(&ls_doc(file, a, parent.as_deref()))? {
+        write!(&ctx.out, "{doc}")?;
+        return Ok(());
+    }
     let mut text = render_ls(file, a, parent.as_deref());
     // Every registry login, or with `--sandbox` that sandbox's own (as sbx lists them).
     let registries: Vec<&RegistryEntry> = file
@@ -370,11 +374,15 @@ fn read_value<R: Runner>(ctx: &Ctx<R>, service: &str) -> Result<String> {
 }
 
 /// `secret ls` for `a`; `fork_of` is `a.sandbox`'s original when it's a fork.
-fn render_ls(file: &SecretsFile, a: &SecretLsArgs, fork_of: Option<&str>) -> String {
+/// The secrets `ls` shows for its filters; a fork also shows its original's.
+fn listed<'a>(
+    file: &'a SecretsFile,
+    a: &SecretLsArgs,
+    fork_of: Option<&str>,
+) -> Vec<&'a SecretEntry> {
     let own = a.sandbox.as_deref().map(|s| scope_for(Some(s)));
     let parent = fork_of.map(|p| scope_for(Some(p)));
-    let entries: Vec<&SecretEntry> = file
-        .secrets
+    file.secrets
         .iter()
         .filter(|e| !a.global || e.scope == "global")
         .filter(|e| {
@@ -384,7 +392,59 @@ fn render_ls(file: &SecretsFile, a: &SecretLsArgs, fork_of: Option<&str>) -> Str
             shown_for_own || inherited(file, e, own.as_deref(), parent.as_deref())
         })
         .filter(|e| a.service.as_deref().is_none_or(|s| e.service == s))
+        .collect()
+}
+
+/// sbx's `secret ls --json` shape. Values are never shown; `custom_secrets`, `shadowed_services`
+/// and `env_only_count` are sbx's, always empty here (custom services are listed as secrets).
+fn ls_doc(file: &SecretsFile, a: &SecretLsArgs, fork_of: Option<&str>) -> impl serde::Serialize {
+    #[derive(serde::Serialize)]
+    struct Row {
+        scope: String,
+        r#type: &'static str,
+        name: String,
+        secret: &'static str,
+    }
+    #[derive(serde::Serialize)]
+    struct Doc {
+        secrets: Vec<Row>,
+        custom_secrets: [(); 0],
+        shadowed_services: [(); 0],
+        env_only_count: u32,
+    }
+    let scope = |s: &str| s.strip_prefix("sandbox:").unwrap_or(s).to_string();
+    let mut secrets: Vec<Row> = listed(file, a, fork_of)
+        .into_iter()
+        .map(|e| Row {
+            scope: scope(&e.scope),
+            r#type: "service",
+            name: e.service.clone(),
+            secret: "(stored)",
+        })
         .collect();
+    if !a.global && a.service.is_none() {
+        secrets.extend(
+            file.registries
+                .iter()
+                .filter(|r| a.sandbox.is_none() || r.sandbox == a.sandbox)
+                .map(|r| Row {
+                    scope: r.sandbox.clone().unwrap_or_else(|| "(host only)".into()),
+                    r#type: "registry",
+                    name: r.host.clone(),
+                    secret: "(stored)",
+                }),
+        );
+    }
+    Doc {
+        secrets,
+        custom_secrets: [],
+        shadowed_services: [],
+        env_only_count: 0,
+    }
+}
+
+fn render_ls(file: &SecretsFile, a: &SecretLsArgs, fork_of: Option<&str>) -> String {
+    let entries = listed(file, a, fork_of);
     if a.quiet {
         return entries.iter().map(|e| format!("{}\n", e.service)).collect();
     }

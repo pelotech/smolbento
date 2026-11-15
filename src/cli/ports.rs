@@ -12,7 +12,7 @@ use crate::smolvm::{PortMap, PublishedPort, Runner};
 pub fn run<R: Runner>(ctx: &mut Ctx<R>, a: &PortsArgs) -> Result<i32> {
     let mut sb = sandbox::get(&ctx.vm, &a.sandbox)?;
     if a.publish.is_empty() && a.unpublish.is_empty() {
-        write!(&ctx.out, "{}", render_list(&sb.ports))?;
+        write!(&ctx.out, "{}", list(&sb.ports, &a.output)?)?;
         return Ok(0);
     }
     let publish = a
@@ -52,6 +52,30 @@ pub fn run<R: Runner>(ctx: &mut Ctx<R>, a: &PortsArgs) -> Result<i32> {
     Ok(0)
 }
 
+/// The published ports: sbx's JSON/YAML rows, or the table.
+fn list(ports: &[PublishedPort], output: &super::OutputArgs) -> Result<String> {
+    /// In sbx's key order.
+    #[derive(serde::Serialize)]
+    struct Row {
+        host_ip: &'static str,
+        host_port: u16,
+        sandbox_port: u16,
+        protocol: &'static str,
+    }
+    let rows: Vec<Row> = ports
+        .iter()
+        .map(|p| Row {
+            host_ip: "127.0.0.1",
+            host_port: p.host,
+            sandbox_port: p.guest,
+            protocol: "tcp",
+        })
+        .collect();
+    Ok(output
+        .structured(&rows)?
+        .unwrap_or_else(|| render_list(ports)))
+}
+
 fn render_list(ports: &[PublishedPort]) -> String {
     if ports.is_empty() {
         return "No published ports\n".into();
@@ -70,6 +94,27 @@ mod tests {
 
     fn sandbox(t: &TestEnv, state: &str) {
         t.sandbox("a1", state, &[]);
+    }
+
+    #[test]
+    fn list_as_json_has_sbxs_keys() {
+        let ports = [PublishedPort {
+            host: 18999,
+            guest: 8999,
+        }];
+        let json = super::super::OutputArgs {
+            json: true,
+            ..Default::default()
+        };
+        let v: serde_json::Value = serde_json::from_str(&list(&ports, &json).unwrap()).unwrap();
+        assert_eq!(
+            v,
+            serde_json::json!([{"host_ip": "127.0.0.1", "host_port": 18999, "sandbox_port": 8999, "protocol": "tcp"}])
+        );
+        assert_eq!(list(&[], &json).unwrap(), "[]\n");
+        // Without a format it's the table.
+        let table = list(&ports, &Default::default()).unwrap();
+        assert!(table.starts_with("HOST"), "{table}");
     }
 
     #[test]

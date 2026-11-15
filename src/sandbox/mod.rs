@@ -149,8 +149,9 @@ pub fn pick<'a>(all: &'a [Sandbox], name: &str) -> Result<&'a Sandbox> {
         .ok_or_else(|| not_found(name))
 }
 
-fn not_found(name: &str) -> anyhow::Error {
-    anyhow::anyhow!("sandbox '{name}' not found (see `bento ls`)")
+/// sbx's wording for a sandbox that doesn't exist.
+pub fn not_found(name: &str) -> anyhow::Error {
+    anyhow::anyhow!("sandbox '{name}' not found\n  try: bento ls")
 }
 
 /// All sandboxes, sorted by name; running ones include their published ports.

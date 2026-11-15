@@ -7,24 +7,63 @@ use std::path::PathBuf;
 use super::Ctx;
 use crate::smolvm::Runner;
 
-pub fn run<R: Runner>(ctx: &mut Ctx<R>) -> Result<i32> {
-    let mut checks = vec![smolvm_check(ctx), home_check(ctx)];
+pub fn run<R: Runner>(ctx: &mut Ctx<R>, output: &super::OutputArgs) -> Result<i32> {
+    // Named for `--json`, as sbx names its checks.
+    let mut named = vec![
+        ("smolvm", smolvm_check(ctx)),
+        ("smolvm.home", home_check(ctx)),
+    ];
     #[cfg(target_os = "macos")]
-    checks.push(mkfs_check(&mkfs_dirs(&ctx.env)));
+    named.push(("mkfs.ext4", mkfs_check(&mkfs_dirs(&ctx.env))));
     #[cfg(target_os = "linux")]
-    checks.push(libbz2_check(&lib_dirs()));
+    named.push(("libbz2", libbz2_check(&lib_dirs())));
     #[cfg(target_os = "linux")]
-    checks.push(kvm_check());
+    named.push(("kvm", kvm_check()));
     #[cfg(target_os = "macos")]
-    checks.push(entitlement_check(
-        &ctx.smolvm.bin.display().to_string(),
-        &ctx.env,
+    named.push((
+        "hypervisor entitlement",
+        entitlement_check(&ctx.smolvm.bin.display().to_string(), &ctx.env),
     ));
-    checks.push(config_check(ctx));
-    checks.extend(services_check(ctx));
+    named.push(("config", config_check(ctx)));
+    named.extend(services_check(ctx).map(|c| ("host services", c)));
+    let checks: Vec<(bool, String)> = named.iter().map(|(_, c)| c.clone()).collect();
     let (text, code) = report(&checks);
-    write!(&ctx.out, "{text}")?;
+    match output.structured(&structured(&named))? {
+        Some(doc) => write!(&ctx.out, "{doc}")?,
+        None => write!(&ctx.out, "{text}")?,
+    }
     Ok(code)
+}
+
+/// sbx's `diagnose --json` shape: `{version, checks: [{name, status, message, detail, hint}]}`.
+fn structured<'a>(named: &'a [(&'a str, (bool, String))]) -> impl serde::Serialize + 'a {
+    #[derive(serde::Serialize)]
+    struct Check<'a> {
+        name: &'a str,
+        status: &'static str,
+        message: &'a str,
+        detail: &'static str,
+        hint: &'static str,
+    }
+    let checks: Vec<Check> = named
+        .iter()
+        .map(|(name, (ok, message))| Check {
+            name,
+            status: if *ok { "pass" } else { "fail" },
+            message,
+            detail: "",
+            hint: "",
+        })
+        .collect();
+    #[derive(serde::Serialize)]
+    struct Doc<'a> {
+        version: &'static str,
+        checks: Vec<Check<'a>>,
+    }
+    Doc {
+        version: "1.0",
+        checks,
+    }
 }
 
 pub fn report(checks: &[(bool, String)]) -> (String, i32) {
@@ -314,6 +353,24 @@ mod tests {
                 pinned()
             )
         );
+    }
+
+    #[test]
+    fn json_has_sbxs_shape() {
+        let mut t = test_env(&[]);
+        t.sbt(&["diagnose", "--json"]).ok();
+        let out = t.stdout();
+        assert!(
+            out.starts_with("{\n  \"version\": \"1.0\",\n  \"checks\": ["),
+            "{out}"
+        );
+        let v: serde_json::Value = serde_json::from_str(&out).unwrap();
+        let first = &v["checks"][0];
+        assert_eq!(first["name"], "smolvm");
+        assert!(["pass", "fail"].contains(&first["status"].as_str().unwrap()));
+        for key in ["message", "detail", "hint"] {
+            assert!(first[key].is_string(), "{key}");
+        }
     }
 
     #[test]

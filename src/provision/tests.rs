@@ -1,4 +1,3 @@
-
 #[test]
 fn host_access_note_only_for_sandboxes_with_host_access() {
     assert_eq!(

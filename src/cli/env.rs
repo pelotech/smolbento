@@ -351,7 +351,7 @@ fn env_rm<R: Runner>(ctx: &mut Ctx<R>, a: EnvRmArgs) -> Result<i32> {
         )?;
     }
     if nothing_stored {
-        eprintln!("error: sandbox '{name}' not found\n  try: bento ls");
+        eprintln!("error: {}", sandbox::not_found(&name));
     }
     let vars = vars(&loaded, &name);
     if let Err(e) = host_phase(ctx, Phase::PreRemove, &lifecycle.pre_remove, &vars, skip) {

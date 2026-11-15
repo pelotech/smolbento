@@ -1,4 +1,3 @@
-
 use super::super::{Cli, Cmd, EnvCmd, exit_code};
 use crate::secrets::{SecretEntry, SecretsFile, Source};
 use crate::testutil::*;

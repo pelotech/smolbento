@@ -1,4 +1,3 @@
-
 use super::*;
 use crate::secrets::{SecretEntry, Source};
 use crate::testutil::*;
@@ -142,6 +141,19 @@ fn check_exit_codes() {
             .unwrap(),
         1
     );
+    // --json keeps the exit code and prints sbx's keys.
+    t.stdout();
+    assert_eq!(
+        t.sbt(&["policy", "check", "network", "--json", "example.com"])
+            .unwrap(),
+        1
+    );
+    let v: serde_json::Value = serde_json::from_str(&t.stdout()).unwrap();
+    assert_eq!(v["allowed"], false);
+    assert_eq!(v["target"], "example.com:443");
+    assert_eq!(v["context"], "global");
+    assert_eq!(v["type"], "network");
+    assert_eq!(v["governance"]["active"], false);
 }
 
 #[test]

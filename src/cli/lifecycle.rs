@@ -10,7 +10,7 @@ use super::progress::{CreateSteps, Progress};
 use super::request::{
     Workload, check_kit_args, kit_plan, kit_target, resolve_clone, settle_default_name,
 };
-use super::{CreateArgs, Ctx, PruneArgs, ResetArgs, RmArgs, SandboxOpts, confirm};
+use super::{CreateArgs, Ctx, OutputArgs, PruneArgs, ResetArgs, RmArgs, SandboxOpts, confirm};
 use crate::provision;
 use crate::sandbox::{self, CreateRequest, Event, Sandbox, session};
 use crate::smolvm::Runner;
@@ -137,20 +137,87 @@ pub fn start<R: Runner>(ctx: &mut Ctx<R>, names: &[String]) -> Result<i32> {
     Ok(0)
 }
 
-pub fn stop<R: Runner>(ctx: &mut Ctx<R>, names: &[String]) -> Result<i32> {
+pub fn stop<R: Runner>(ctx: &mut Ctx<R>, names: &[String], output: &OutputArgs) -> Result<i32> {
+    let mut report = Report::new(output);
     for n in names {
-        stop_sandbox(ctx, &sandbox::get(&ctx.vm, n)?)?;
+        let sb = sandbox::get(&ctx.vm, n)?;
+        stop_quietly(ctx, &sb)?;
+        report.did(ctx, "stopped", sb.name())?;
     }
+    report.finish(ctx)?;
     Ok(0)
+}
+
+/// What a command did to sandboxes: a line each as it goes (`Stopped a`), or with `--json` or
+/// `--format`, sbx's list of `{action, resource, name}` at the end.
+struct Report<'a> {
+    output: &'a OutputArgs,
+    done: Vec<Done>,
+}
+
+/// In sbx's key order.
+#[derive(serde::Serialize)]
+struct Done {
+    action: String,
+    resource: &'static str,
+    name: String,
+}
+
+#[derive(serde::Serialize)]
+struct WouldRemove<'a> {
+    name: &'a str,
+    agent: &'a str,
+    workspaces: &'a [String],
+}
+
+impl<'a> Report<'a> {
+    fn new(output: &'a OutputArgs) -> Self {
+        Self {
+            output,
+            done: Vec::new(),
+        }
+    }
+
+    fn structured(&self) -> bool {
+        self.output.pick() != super::Format::Table
+    }
+
+    /// `action` is `stopped` or `removed`.
+    fn did<R: Runner>(&mut self, ctx: &Ctx<R>, action: &str, name: &str) -> Result<()> {
+        if self.structured() {
+            self.done.push(Done {
+                action: action.to_string(),
+                resource: "sandbox",
+                name: name.to_string(),
+            });
+        } else {
+            let mut verb = action.to_string();
+            verb[..1].make_ascii_uppercase();
+            writeln!(&ctx.out, "{verb} {name}")?;
+        }
+        Ok(())
+    }
+
+    fn finish<R: Runner>(self, ctx: &Ctx<R>) -> Result<()> {
+        if let Some(text) = self.output.structured(&self.done)? {
+            write!(&ctx.out, "{text}")?;
+        }
+        Ok(())
+    }
 }
 
 /// Stops `sb` if it's running and forgets its sessions.
 pub(crate) fn stop_sandbox<R: Runner>(ctx: &Ctx<R>, sb: &Sandbox) -> Result<()> {
+    stop_quietly(ctx, sb)?;
+    writeln!(&ctx.out, "Stopped {}", sb.name())?;
+    Ok(())
+}
+
+fn stop_quietly<R: Runner>(ctx: &Ctx<R>, sb: &Sandbox) -> Result<()> {
     if sb.is_running() {
         ctx.vm.stop(&sb.machine)?;
     }
     session::clear(&ctx.paths.sessions(), sb.name());
-    writeln!(&ctx.out, "Stopped {}", sb.name())?;
     Ok(())
 }
 
@@ -227,8 +294,12 @@ pub fn rm<R: Runner>(ctx: &mut Ctx<R>, a: &RmArgs) -> Result<i32> {
             .map(|n| sandbox::pick(&all, n))
             .collect::<Result<_>>()?
     };
+    let mut report = Report::new(&a.output);
     if targets.is_empty() {
-        writeln!(&ctx.out, "No sandboxes found")?;
+        if !report.structured() {
+            writeln!(&ctx.out, "No sandboxes found")?;
+        }
+        report.finish(ctx)?;
         return Ok(0);
     }
     let names: Vec<&str> = targets.iter().map(|sb| sb.name()).collect();
@@ -244,8 +315,10 @@ pub fn rm<R: Runner>(ctx: &mut Ctx<R>, a: &RmArgs) -> Result<i32> {
     }
     confirm(ctx, &format!("Remove {}?", names.join(", ")), a.force)?;
     for sb in forks_first(targets) {
-        remove(ctx, sb, true)?;
+        delete_sandbox(ctx, sb, true)?;
+        report.did(ctx, "removed", sb.name())?;
     }
+    report.finish(ctx)?;
     Ok(0)
 }
 
@@ -283,14 +356,37 @@ pub fn prune<R: Runner>(ctx: &mut Ctx<R>, a: &PruneArgs) -> Result<i32> {
     let (skipped, targets): (Vec<&Sandbox>, Vec<&Sandbox>) = targets
         .into_iter()
         .partition(|sb| !remaining_forks(sb, &all, &names).is_empty());
-    for sb in &skipped {
+    let mut report = Report::new(&a.output);
+    // With --json or --format only the result is printed, in sbx's shape.
+    let text = !report.structured();
+    for sb in skipped.iter().filter(|_| text) {
         writeln!(&ctx.out, "{} has forks; skipped", sb.name())?;
     }
     let targets = forks_first(targets);
     // Units of sandboxes deleted with `smolvm machine delete`: leftovers, not sandboxes.
     let orphans = provision::orphan_services(ctx);
+    if a.dry_run && !text {
+        let would: Vec<WouldRemove> = targets
+            .iter()
+            .map(|sb| WouldRemove {
+                name: sb.name(),
+                agent: &sb.meta.agent,
+                workspaces: &sb.meta.workspaces,
+            })
+            .collect();
+        let doc = serde_json::json!({ "would_remove": would });
+        write!(
+            &ctx.out,
+            "{}",
+            a.output.structured(&doc)?.unwrap_or_default()
+        )?;
+        return Ok(0);
+    }
     if targets.is_empty() && orphans.is_empty() {
-        writeln!(&ctx.out, "Nothing to prune")?;
+        if text {
+            writeln!(&ctx.out, "Nothing to prune")?;
+        }
+        report.finish(ctx)?;
         return Ok(0);
     }
     if a.dry_run {
@@ -309,12 +405,14 @@ pub fn prune<R: Runner>(ctx: &mut Ctx<R>, a: &PruneArgs) -> Result<i32> {
             a.force,
         )?;
         for sb in &targets {
-            remove(ctx, sb, true)?;
+            delete_sandbox(ctx, sb, true)?;
+            report.did(ctx, "removed", sb.name())?;
         }
     }
-    for name in provision::sweep_orphans(ctx) {
+    for name in provision::sweep_orphans(ctx).into_iter().filter(|_| text) {
         writeln!(&ctx.out, "Removed {name} (leftover host services)")?;
     }
+    report.finish(ctx)?;
     Ok(0)
 }
 

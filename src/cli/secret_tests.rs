@@ -1,4 +1,3 @@
-
 use super::*;
 use crate::testutil::*;
 
@@ -641,6 +640,25 @@ fn ls_and_rm() {
     assert!(t.sbt_err(&["secret", "rm", "--all"]).contains("pass -f"));
     t.sbt(&["secret", "rm", "--all", "-f"]).unwrap();
     assert!(SecretsFile::load(&t.ctx.paths).unwrap().secrets.is_empty());
+}
+
+#[test]
+fn ls_as_json_has_sbxs_shape() {
+    let mut t = test_env(&[]);
+    t.sbt(&["secret", "ls", "--json"]).unwrap();
+    assert_eq!(
+        t.stdout(),
+        "{\n  \"secrets\": [],\n  \"custom_secrets\": [],\n  \"shadowed_services\": [],\n  \"env_only_count\": 0\n}\n"
+    );
+    t.sbt(&["secret", "set", "github", "--sandbox", "s1", "-t", "x"])
+        .unwrap();
+    t.stdout();
+    t.sbt(&["secret", "ls", "--json"]).unwrap();
+    let v: serde_json::Value = serde_json::from_str(&t.stdout()).unwrap();
+    assert_eq!(
+        v["secrets"],
+        serde_json::json!([{"scope": "s1", "type": "service", "name": "github", "secret": "(stored)"}])
+    );
 }
 
 #[test]

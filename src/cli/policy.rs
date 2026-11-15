@@ -518,6 +518,27 @@ fn check<R: Runner>(ctx: &Ctx<R>, policy: &Policy, a: &CheckArgs) -> Result<i32>
         None => Vec::new(),
     };
     let v = compile::check(policy, a.sandbox.as_deref(), &bound, &a.target);
+    // sbx's shape, plus `reason` (the rule or default that decided). A bare host means port 443.
+    let target = if a.target.contains(':') {
+        a.target.clone()
+    } else {
+        format!("{}:443", a.target)
+    };
+    let doc = serde_json::json!({
+        "action": "net:connect:tcp",
+        "allowed": v.allowed,
+        "context": a.sandbox.as_deref().unwrap_or("global"),
+        "governance": { "active": false },
+        "reason": v.reason,
+        "resource_type": "net:domain",
+        "resource_value": target,
+        "target": target,
+        "type": "network",
+    });
+    if let Some(text) = a.output.structured(&doc)? {
+        write!(&ctx.out, "{text}")?;
+        return Ok(if v.allowed { 0 } else { 1 });
+    }
     writeln!(
         &ctx.out,
         "{}: {} ({})",

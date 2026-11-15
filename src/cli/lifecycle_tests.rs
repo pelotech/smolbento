@@ -1,4 +1,3 @@
-
 use clap::Parser;
 
 use super::super::{Cli, Cmd, DiskSizes, SandboxOpts};
@@ -1579,6 +1578,54 @@ fn reset_keeps_a_smolvm_home_you_chose_but_removes_its_smolvm() {
 }
 
 #[test]
+fn stop_rm_and_prune_print_sbxs_json() {
+    let json = |t: &TestEnv| -> serde_json::Value { serde_json::from_str(&t.stdout()).unwrap() };
+    let mut t = test_env(&[]);
+    t.sandbox("a", "running", &[]);
+    t.sbt(&["stop", "a", "--json"]).unwrap();
+    assert_eq!(
+        json(&t),
+        serde_json::json!([{"action": "stopped", "resource": "sandbox", "name": "a"}])
+    );
+    t.sbt(&["stop", "a", "--format", "yaml"]).unwrap();
+    assert_eq!(
+        t.stdout(),
+        "- action: stopped\n  resource: sandbox\n  name: a\n"
+    );
+
+    let listed = |t: &TestEnv| {
+        let ls = format!("[{}]", crate::testutil::json("sbx-a", "stopped", "a"));
+        t.runner().ok(&["machine", "ls", "--json"], &ls);
+    };
+    let mut t = test_env(&[]);
+    listed(&t);
+    t.sbt(&["prune", "--dry-run", "--json"]).unwrap();
+    let v = json(&t);
+    assert_eq!(v["would_remove"][0]["name"], "a");
+    assert_eq!(v["would_remove"][0]["agent"], "claude");
+    t.sbt(&["prune", "-f", "--json"]).unwrap();
+    assert_eq!(
+        json(&t),
+        serde_json::json!([{"action": "removed", "resource": "sandbox", "name": "a"}])
+    );
+
+    let mut t = test_env(&[]);
+    listed(&t);
+    t.sbt(&["rm", "-f", "a", "--json"]).unwrap();
+    assert_eq!(
+        json(&t),
+        serde_json::json!([{"action": "removed", "resource": "sandbox", "name": "a"}])
+    );
+    // Nothing to do is an empty list, not a sentence.
+    let mut t = test_env(&[]);
+    t.runner().ok(&["machine", "ls", "--json"], "[]");
+    t.sbt(&["rm", "--all", "-f", "--json"]).unwrap();
+    assert_eq!(t.stdout(), "[]\n");
+    t.sbt(&["prune", "-f", "--json"]).unwrap();
+    assert_eq!(t.stdout(), "[]\n");
+}
+
+#[test]
 fn reset_removes_the_ssh_block() {
     let mut t = test_env(&[]);
     t.runner().ok(&["machine", "ls", "--json"], "[]");
@@ -1653,7 +1700,7 @@ fn rm_of_a_missing_sandbox_deletes_nothing() {
     let mut t = test_env(&[]);
     with_forks(&t, "stopped", "stopped", "stopped");
     let err = t.sbt(&["rm", "-f", "a-fork-1", "nope"]).unwrap_err();
-    assert_eq!(err.to_string(), "sandbox 'nope' not found (see `bento ls`)");
+    assert_eq!(err.to_string(), "sandbox 'nope' not found\n  try: bento ls");
     assert!(deletes(&t).is_empty());
 }
 

@@ -7,12 +7,63 @@ use crate::smolvm::Runner;
 
 pub fn run<R: Runner>(ctx: &mut Ctx<R>, cmd: SettingsCmd) -> Result<i32> {
     match cmd {
-        SettingsCmd::Ls { no_trunc } => write!(&ctx.out, "{}", render(&ctx.settings, no_trunc)?)?,
-        SettingsCmd::Get { key } => writeln!(&ctx.out, "{}", ctx.settings.value(&key)?)?,
+        SettingsCmd::Ls {
+            no_trunc,
+            quiet,
+            output,
+        } => {
+            let docs = SETTINGS
+                .iter()
+                .map(|d| doc(&ctx.settings, d))
+                .collect::<Result<Vec<_>>>()?;
+            let text = if quiet {
+                SETTINGS.iter().map(|d| format!("{}\n", d.key)).collect()
+            } else {
+                match output.structured(&docs)? {
+                    Some(s) => s,
+                    None => render(&ctx.settings, no_trunc)?,
+                }
+            };
+            write!(&ctx.out, "{text}")?
+        }
+        SettingsCmd::Get { key, output } => {
+            let value = ctx.settings.value(&key)?;
+            let def = SETTINGS.iter().find(|d| d.key == key);
+            match def.map(|d| doc(&ctx.settings, d)).transpose()? {
+                Some(d) if output.pick() != super::Format::Table => {
+                    write!(&ctx.out, "{}", output.structured(&d)?.unwrap_or_default())?
+                }
+                _ => writeln!(&ctx.out, "{value}")?,
+            }
+        }
         SettingsCmd::Set { key, value } => ctx.settings.set(&key, &value)?,
         SettingsCmd::Unset { key } => ctx.settings.unset(&key)?,
     }
     Ok(0)
+}
+
+/// A setting as sbx's `--json` shows one: `{default, description, key, source, type, value}`.
+/// Booleans are JSON booleans; everything else is a string.
+fn doc(settings: &Settings, def: &crate::config::SettingDef) -> Result<serde_json::Value> {
+    let (value, source) = settings.get(def.key)?;
+    let is_bool = matches!(def.default, "true" | "false");
+    let typed = |v: &str| match v {
+        "true" if is_bool => serde_json::Value::Bool(true),
+        "false" if is_bool => serde_json::Value::Bool(false),
+        other => other.into(),
+    };
+    Ok(serde_json::json!({
+        "default": typed(def.default),
+        "description": def.help,
+        "key": def.key,
+        "source": match source {
+            Source::Env => "envvar",
+            Source::File => "override",
+            Source::Default => "default",
+        },
+        "type": if is_bool { "bool" } else { "string" },
+        "value": typed(&value),
+    }))
 }
 
 pub fn render(settings: &Settings, no_trunc: bool) -> Result<String> {
@@ -62,6 +113,35 @@ mod tests {
         t.sbt(&["settings", "unset", "docker.enabled"]).unwrap();
         assert_eq!(t.ctx.settings.value("docker.enabled").unwrap(), "true");
         assert!(t.sbt(&["settings", "get", "nope"]).is_err());
+    }
+
+    #[test]
+    fn ls_and_get_as_json_and_quiet() {
+        let mut t = test_env(&[("SMOLBENTO_DOCKER", "false")]);
+        t.sbt(&["settings", "get", "docker.enabled", "--json"])
+            .unwrap();
+        let v: serde_json::Value = serde_json::from_str(&t.stdout()).unwrap();
+        assert_eq!(
+            v,
+            serde_json::json!({
+                "default": true,
+                "description": "Use Docker-enabled agent images and run a private dockerd in each sandbox",
+                "key": "docker.enabled",
+                "source": "envvar",
+                "type": "bool",
+                "value": false,
+            })
+        );
+        t.sbt(&["settings", "get", "docker.enabled"]).unwrap();
+        assert_eq!(t.stdout(), "false\n");
+        t.sbt(&["settings", "ls", "--format", "json"]).unwrap();
+        let all: Vec<serde_json::Value> = serde_json::from_str(&t.stdout()).unwrap();
+        assert_eq!(all.len(), SETTINGS.len());
+        assert_eq!(all[0]["key"], SETTINGS[0].key);
+        t.sbt(&["settings", "ls", "-q"]).unwrap();
+        let keys = t.stdout();
+        assert_eq!(keys.lines().count(), SETTINGS.len());
+        assert_eq!(keys.lines().next(), Some(SETTINGS[0].key));
     }
 
     #[test]
