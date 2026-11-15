@@ -152,6 +152,9 @@ verified on a Mac).
   `just e2e-known-broken` (a non-blocking CI step) runs them. Remove everything tagged
   `WORKAROUND(smolvm 1.35.0 idmap)` once a fixed smolvm is the minimum. Upstream fix:
   [smolvm#2189](https://github.com/smol-machines/smolvm/pull/2189).
+- Refusals of sandboxes and templates from before built-in agents were kits
+  (`Sandbox::check_current`, `templates::Entry::check_current`, and their tests): remove them one
+  release after the agents-as-kits change ships, once users have had a release to recreate them.
 - russh from git (commit b541663a8838) until a release pins ssh-key 0.7.0-rc.12 or later: then switch
   to crates.io, drop the `deny.toml` allow-git entry and the flake `outputHashes`.
 
