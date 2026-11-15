@@ -20,6 +20,11 @@ Without the direnv hook, prefix commands with `direnv exec .`. Without direnv, u
 | `just e2e` | Real-VM tests, two at a time. `just e2e 4` runs four; `just e2e 2 --partition slice:1/3` is one CI shard. Needs a hypervisor |
 | `just smolvm-pin VERSION` | Pin smolvm `VERSION`: rewrite `smolvm.lock` from that release's checksums |
 | `just smolvm-lock-check` | Check `smolvm.lock` against its release (CI runs it) |
+| `just demo` | Record the README demo (`docs/demo.tape`) into `dist/demo.gif`. Boots a VM; uses its own dirs, never yours |
+| `just demo-publish` | Replace the GIF the README shows (the `demo` release's asset) |
+
+Re-record the demo (`just demo`, check `dist/demo.gif`, then `just demo-publish`) when the output it
+shows changes. The GIF stays out of git: only the tape is committed.
 | `just lint` | All pre-commit hooks: fmt, clippy, cargo-deny, yamllint, actionlint, zizmor |
 | `just install` | Install to `~/.cargo/bin`, with the `bento` and `sbx` links |
 | `just release-build TARGET BUILDER` | Build a release tarball into `dist/` |

@@ -163,3 +163,8 @@ demo:
     rm -f "$SMOLBENTO_CONFIG_DIR/policy.toml"
     nix run --inputs-from . nixpkgs#vhs -- docs/demo.tape
     ls -lh dist/demo.gif
+
+# Replace the README demo: upload dist/demo.gif to the `demo` prerelease (record it with `just demo`)
+demo-publish:
+    test -f dist/demo.gif || { echo "error: no dist/demo.gif; run just demo first" >&2; exit 1; }
+    gh release upload demo dist/demo.gif --clobber
