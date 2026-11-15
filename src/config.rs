@@ -100,6 +100,13 @@ pub struct SettingDef {
     pub help: &'static str,
 }
 
+impl SettingDef {
+    /// A setting whose default is `true` or `false` takes only those.
+    pub fn is_bool(&self) -> bool {
+        matches!(self.default, "true" | "false")
+    }
+}
+
 pub const SETTINGS: &[SettingDef] = &[
     SettingDef {
         key: "sandbox.autoName",
@@ -266,7 +273,7 @@ impl Settings {
         (Settings { path, file, env }, error)
     }
 
-    fn def(key: &str) -> Result<&'static SettingDef> {
+    pub fn def(key: &str) -> Result<&'static SettingDef> {
         SETTINGS
             .iter()
             .find(|d| d.key == key)
@@ -301,7 +308,7 @@ impl Settings {
 
     pub fn set(&mut self, key: &str, value: &str) -> Result<()> {
         let def = Self::def(key)?;
-        if matches!(def.default, "true" | "false") {
+        if def.is_bool() {
             parse_bool(value)?;
         }
         if key == "kit.allowedSources" {

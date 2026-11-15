@@ -62,8 +62,9 @@ fn ls<R: Runner>(ctx: &Ctx<R>, a: &TemplateLsArgs) -> Result<()> {
     let mut out = &ctx.out;
     match a.output.pick() {
         _ if a.quiet => all.iter().try_for_each(|e| writeln!(out, "{}", e.full()))?,
-        Format::Json => writeln!(out, "{}", serde_json::to_string_pretty(&rows)?)?,
-        Format::Yaml => write!(out, "{}", serde_saphyr::to_string(&rows)?)?,
+        f @ (Format::Json | Format::Yaml) => {
+            write!(out, "{}", f.structured(&rows)?.unwrap_or_default())?
+        }
         Format::Table => {
             let head = ["REPOSITORY", "TAG", "IMAGE ID", "FLAVOR", "CREATED"];
             let mut lines = vec![head.map(String::from).to_vec()];
@@ -120,20 +121,14 @@ fn rm<R: Runner>(ctx: &Ctx<R>, a: &TemplateRmArgs) -> Result<()> {
     )?;
     store.remove(&e)?;
     let mut out = &ctx.out;
-    match a.output.pick() {
-        Format::Table => writeln!(out, "Removed template {}", a.name)?,
-        f => {
-            let doc = [Removed {
-                action: "removed",
-                resource: "template",
-                name: &a.name,
-            }];
-            if f == Format::Json {
-                writeln!(out, "{}", serde_json::to_string_pretty(&doc)?)?;
-            } else {
-                write!(out, "{}", serde_saphyr::to_string(&doc)?)?;
-            }
-        }
+    let doc = [Removed {
+        action: "removed",
+        resource: "template",
+        name: &a.name,
+    }];
+    match a.output.structured(&doc)? {
+        Some(text) => write!(out, "{text}")?,
+        None => writeln!(out, "Removed template {}", a.name)?,
     }
     Ok(())
 }

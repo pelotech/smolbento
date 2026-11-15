@@ -14,7 +14,7 @@ pub fn run<R: Runner>(ctx: &mut Ctx<R>, cmd: SettingsCmd) -> Result<i32> {
         } => {
             let text = if quiet {
                 SETTINGS.iter().map(|d| format!("{}\n", d.key)).collect()
-            } else if output.pick() == super::Format::Table {
+            } else if output.is_table() {
                 render(&ctx.settings, no_trunc)?
             } else {
                 let docs = SETTINGS
@@ -26,14 +26,11 @@ pub fn run<R: Runner>(ctx: &mut Ctx<R>, cmd: SettingsCmd) -> Result<i32> {
             write!(&ctx.out, "{text}")?
         }
         SettingsCmd::Get { key, output } => {
-            // Errors for an unknown key, before anything is printed.
-            let value = ctx.settings.value(&key)?;
-            let def = SETTINGS.iter().find(|d| d.key == key);
-            let text = match def {
-                Some(d) if output.pick() != super::Format::Table => output
-                    .structured(&doc(&ctx.settings, d)?)?
-                    .unwrap_or_default(),
-                _ => format!("{value}\n"),
+            // An unknown key is an error before anything is printed.
+            let def = Settings::def(&key)?;
+            let text = match output.structured(&doc(&ctx.settings, def)?)? {
+                Some(doc) => doc,
+                None => format!("{}\n", ctx.settings.value(&key)?),
             };
             write!(&ctx.out, "{text}")?
         }
@@ -48,8 +45,8 @@ pub fn run<R: Runner>(ctx: &mut Ctx<R>, cmd: SettingsCmd) -> Result<i32> {
 fn doc(settings: &Settings, def: &SettingDef) -> Result<serde_json::Value> {
     let (value, source) = settings.get(def.key)?;
     let typed = |v: &str| match v {
-        "true" if is_bool(def) => serde_json::Value::Bool(true),
-        "false" if is_bool(def) => serde_json::Value::Bool(false),
+        "true" if def.is_bool() => serde_json::Value::Bool(true),
+        "false" if def.is_bool() => serde_json::Value::Bool(false),
         other => other.into(),
     };
     Ok(serde_json::json!({
@@ -62,12 +59,8 @@ fn doc(settings: &Settings, def: &SettingDef) -> Result<serde_json::Value> {
     }))
 }
 
-fn is_bool(def: &SettingDef) -> bool {
-    matches!(def.default, "true" | "false")
-}
-
 fn type_word(def: &SettingDef) -> &'static str {
-    if is_bool(def) { "bool" } else { "string" }
+    if def.is_bool() { "bool" } else { "string" }
 }
 
 /// sbx's words for where a value comes from.

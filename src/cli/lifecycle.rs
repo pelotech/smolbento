@@ -207,13 +207,9 @@ impl<'a> Report<'a> {
         }
     }
 
-    fn structured(&self) -> bool {
-        self.output.pick() != super::Format::Table
-    }
-
     /// `verb` is `Stopped` or `Removed`.
     fn did<R: Runner>(&mut self, ctx: &Ctx<R>, verb: &str, name: &str) -> Result<()> {
-        if self.structured() {
+        if !self.output.is_table() {
             self.done.push(Done {
                 action: verb.to_lowercase(),
                 resource: "sandbox",
@@ -322,7 +318,7 @@ pub fn rm<R: Runner>(ctx: &mut Ctx<R>, a: &RmArgs) -> Result<i32> {
     };
     let mut report = Report::new(&a.output);
     if targets.is_empty() {
-        if !report.structured() {
+        if a.output.is_table() {
             writeln!(&ctx.out, "No sandboxes found")?;
         }
         report.finish(ctx, Ok(()))?;
@@ -382,21 +378,17 @@ pub fn prune<R: Runner>(ctx: &mut Ctx<R>, a: &PruneArgs) -> Result<i32> {
     let (skipped, targets): (Vec<&Sandbox>, Vec<&Sandbox>) = targets
         .into_iter()
         .partition(|sb| !remaining_forks(sb, &all, &names).is_empty());
-    // As sbx: --json and --format describe the dry-run listing only.
-    let structured = a.output.pick() != super::Format::Table;
-    if structured && !a.dry_run {
-        bail!(
-            "--format describes the --dry-run listing; pass --dry-run to preview removals, or \
-             run the prune without --format\n  try: bento prune --dry-run --format json"
-        );
-    }
-    for sb in skipped.iter().filter(|_| !structured) {
-        writeln!(&ctx.out, "{} has forks; skipped", sb.name())?;
-    }
     let targets = forks_first(targets);
     // Units of sandboxes deleted with `smolvm machine delete`: leftovers, not sandboxes.
     let orphans = provision::orphan_services(ctx);
-    if structured {
+    // --json and --format describe the dry-run listing only, and print nothing else.
+    if !a.output.is_table() {
+        if !a.dry_run {
+            bail!(
+                "--format describes the --dry-run listing; pass --dry-run to preview removals, \
+                 or run the prune without --format\n  try: bento prune --dry-run --format json"
+            );
+        }
         let doc = DryRun {
             would_remove: targets.iter().map(|sb| WouldRemove::of(sb)).collect(),
             skipped_unknown_stop: [],
@@ -408,6 +400,9 @@ pub fn prune<R: Runner>(ctx: &mut Ctx<R>, a: &PruneArgs) -> Result<i32> {
             a.output.structured(&doc)?.unwrap_or_default()
         )?;
         return Ok(0);
+    }
+    for sb in &skipped {
+        writeln!(&ctx.out, "{} has forks; skipped", sb.name())?;
     }
     if targets.is_empty() && orphans.is_empty() {
         writeln!(&ctx.out, "Nothing to prune")?;

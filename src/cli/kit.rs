@@ -276,11 +276,11 @@ fn verify<R: Runner>(
         issuer: issuer.filter(|_| checked.is_ok()),
         error: checked.as_ref().err().map(|e| format!("{e:#}")),
     };
-    if format == Format::Json {
-        writeln!(&ctx.out, "{}", serde_json::to_string_pretty(&report)?)?;
-    } else {
-        write!(&ctx.out, "{}", serde_saphyr::to_string(&report)?)?;
-    }
+    write!(
+        &ctx.out,
+        "{}",
+        format.structured(&report)?.unwrap_or_default()
+    )?;
     Ok(if checked.is_ok() { 0 } else { 1 })
 }
 
@@ -355,8 +355,9 @@ fn inspect<R: Runner>(
     let doc = Doc::new(&kit);
     let mut out = &ctx.out;
     match format {
-        Format::Json => writeln!(out, "{}", doc.json()?)?,
-        Format::Yaml => write!(out, "{}", doc.yaml()?)?,
+        f @ (Format::Json | Format::Yaml) => {
+            write!(out, "{}", f.structured(&doc)?.unwrap_or_default())?
+        }
         Format::Table => {
             write!(out, "{}", doc.table(&kit))?;
             if !kit.caps.is_empty() {

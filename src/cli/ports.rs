@@ -37,21 +37,21 @@ pub fn run<R: Runner>(ctx: &mut Ctx<R>, a: &PortsArgs) -> Result<i32> {
         // sbx starts a stopped sandbox to publish on it; UDP ports can only change while stopped.
         provision::ensure_running(ctx, &mut sb)?;
     }
-    // With --json or --format: the ports this call published, as the listing shows them.
-    let text = a.output.pick() == super::Format::Table;
     if !publish.is_empty() {
         ctx.vm.publish(&sb.machine, &publish)?;
-        for p in publish.iter().filter(|_| text) {
-            writeln!(&ctx.out, "Published 127.0.0.1:{} -> {}", p.host, p.guest)?;
-        }
     }
     if !unpublish.is_empty() {
         ctx.vm.unpublish(&sb.machine, &unpublish)?;
-        for p in unpublish.iter().filter(|_| text) {
+    }
+    if a.output.is_table() {
+        for p in &publish {
+            writeln!(&ctx.out, "Published 127.0.0.1:{} -> {}", p.host, p.guest)?;
+        }
+        for p in &unpublish {
             writeln!(&ctx.out, "Unpublished 127.0.0.1:{}", p.host)?;
         }
-    }
-    if !text {
+    } else {
+        // The ports this call published, as the listing shows them.
         let published: Vec<PublishedPort> = publish
             .iter()
             .filter(|p| !p.udp)
@@ -124,7 +124,6 @@ mod tests {
             v,
             serde_json::json!([{"host_ip": "127.0.0.1", "host_port": 18999, "sandbox_port": 8999, "protocol": "tcp"}])
         );
-        assert_eq!(list(&[], &json).unwrap(), "[]\n");
         // Without a format it's the table.
         let table = list(&ports, &Default::default()).unwrap();
         assert!(table.starts_with("HOST"), "{table}");

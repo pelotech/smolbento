@@ -252,8 +252,13 @@ the agent couldn't write it; run it as your normal user"
 
 /// sbx flags smolbento parses but doesn't implement: the first one set is refused (exit 2).
 pub fn refuse(flags: &[(bool, &str)]) -> Result<()> {
+    refuse_as(flags, "is not implemented yet")
+}
+
+/// `refuse` with its own reason: the error is `<flag> <why>`.
+pub fn refuse_as(flags: &[(bool, &str)], why: &str) -> Result<()> {
     match flags.iter().find(|(set, _)| *set) {
-        Some((_, flag)) => Err(Unsupported(format!("{flag} is not implemented yet")).into()),
+        Some((_, flag)) => Err(Unsupported(format!("{flag} {why}")).into()),
         None => Ok(()),
     }
 }

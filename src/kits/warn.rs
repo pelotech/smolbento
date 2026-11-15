@@ -26,13 +26,12 @@ pub fn shown() -> bool {
     SHOWN.load(Ordering::Relaxed)
 }
 
-/// `eprintln!` for a kit warning: printed only when they're shown.
+/// `warning!` for a kit warning: printed only when they're shown.
 #[macro_export]
 macro_rules! kit_warning {
     ($($arg:tt)*) => {
         if $crate::kits::warn::shown() {
-            use std::io::Write as _;
-            let _ = writeln!(std::io::stderr(), $($arg)*);
+            $crate::warning!($($arg)*);
         }
     };
 }

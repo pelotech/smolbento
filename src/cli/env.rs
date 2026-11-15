@@ -11,7 +11,7 @@ use super::env_spec::{
 };
 use super::{
     Ctx, EnvApplyOpts, EnvCmd, EnvCommon, EnvExecArgs, EnvOverrideOpts, EnvRmArgs, EnvRunArgs,
-    ExecArgs, RunArgs, SandboxOpts, SecretSource, Unsupported, confirm_or,
+    ExecArgs, RunArgs, SandboxOpts, SecretSource, confirm_or,
 };
 use crate::env::approval::{self, Need};
 use crate::env::file::{Binding, HostCommand, SecretDecl};
@@ -132,14 +132,13 @@ fn env_plan<R: Runner>(ctx: &mut Ctx<R>, c: &EnvCommon, o: &EnvOverrideOpts) -> 
 
 /// Refuses the flags that only Docker Cloud has.
 fn refuse_cloud(a: &EnvApplyOpts) -> Result<()> {
-    let cloud = [
-        (a.on_timeout.is_some(), "--on-timeout"),
-        (a.ttl.is_some(), "--ttl"),
-    ];
-    match cloud.iter().find(|(set, _)| *set) {
-        Some((_, flag)) => Err(Unsupported(format!("{flag} is a Docker Cloud option")).into()),
-        None => Ok(()),
-    }
+    super::refuse_as(
+        &[
+            (a.on_timeout.is_some(), "--on-timeout"),
+            (a.ttl.is_some(), "--ttl"),
+        ],
+        "is a Docker Cloud option",
+    )
 }
 
 fn create<R: Runner>(ctx: &mut Ctx<R>, c: &EnvCommon, a: &EnvApplyOpts) -> Result<i32> {

@@ -49,8 +49,9 @@ fn ls<R: Runner>(ctx: &Ctx<R>, store: &Store, a: &SkillsLsArgs) -> Result<()> {
     };
     match format {
         _ if a.quiet => names.iter().try_for_each(|n| writeln!(out, "{n}"))?,
-        Format::Json => writeln!(out, "{}", serde_json::to_string_pretty(&doc)?)?,
-        Format::Yaml => write!(out, "{}", serde_saphyr::to_string(&doc)?)?,
+        f @ (Format::Json | Format::Yaml) => {
+            write!(out, "{}", f.structured(&doc)?.unwrap_or_default())?
+        }
         Format::Table if names.is_empty() => writeln!(out, "No skills found in {path}")?,
         Format::Table => {
             // sbx pads the name column to its widest cell plus 4 spaces.
@@ -157,7 +158,7 @@ fn import<R: Runner>(ctx: &Ctx<R>, store: &Store, a: &SkillsImportArgs) -> Resul
                 dir.display()
             ),
             Event::Loose(n) => crate::warning!("skipping {n:?}: not a directory"),
-            // As sbx 0.53: only with -v, on stdout, where the directory comes in the scan.
+            // As sbx: only with -v, on stdout, where the directory comes in the scan.
             Event::Missing(d) if a.verbose => writeln!(
                 &ctx.out,
                 "No skills directory found at {}; nothing to import",
@@ -673,7 +674,7 @@ mod tests {
             t.sbt(args).unwrap();
             assert_eq!(t.stdout(), want, "{args:?}");
         }
-        // Without -v the missing directories aren't listed, as in sbx 0.53.
+        // Without -v the missing directories aren't listed, as in sbx.
         t.sbt(&["skills", "import", "--dry-run"]).unwrap();
         assert_eq!(t.stdout(), "");
         let store = Store::new(&t.ctx.paths);

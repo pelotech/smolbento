@@ -80,8 +80,7 @@ pub fn render(sb: &Sandbox, sessions: usize, format: Format) -> Result<String> {
         sessions,
     };
     match format {
-        Format::Json => Ok(format!("{}\n", serde_json::to_string_pretty(&d)?)),
-        Format::Yaml => Ok(serde_saphyr::to_string(&d)?),
+        f @ (Format::Json | Format::Yaml) => Ok(f.structured(&d)?.unwrap_or_default()),
         Format::Table => Ok(table(&d)),
     }
 }

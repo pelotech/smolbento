@@ -91,20 +91,13 @@ pub fn run<R: Runner>(ctx: &mut Ctx<R>, cmd: PolicyCmd) -> Result<i32> {
             provision::push_network(ctx, &policy)?;
         }
         PolicyCmd::Ls(a) => {
-            for (flag, set) in [
-                ("--created-via", a.created_via.is_some()),
-                ("--type", a.kind.is_some()),
-                ("--protocol", a.protocol.is_some()),
-                ("--include-inactive", a.include_inactive),
-                ("--profile", a.profile.is_some()),
-            ] {
-                if set {
-                    return Err(Unsupported(format!(
-                        "`bento policy ls {flag}` is not implemented yet"
-                    ))
-                    .into());
-                }
-            }
+            super::refuse(&[
+                (a.created_via.is_some(), "--created-via"),
+                (a.kind.is_some(), "--type"),
+                (a.protocol.is_some(), "--protocol"),
+                (a.include_inactive, "--include-inactive"),
+                (a.profile.is_some(), "--profile"),
+            ])?;
             let decision = match a.decision.as_deref() {
                 None => None,
                 Some("allow") => Some(Decision::Allow),
@@ -699,8 +692,7 @@ fn render_ls(policy: &Policy, rows: &[LsRow], opts: &LsOpts) -> Result<String> {
         return Ok(rows.iter().map(|r| format!("{}\n", r.id)).collect());
     }
     match opts.format {
-        Format::Json => Ok(format!("{}\n", serde_json::to_string_pretty(rows)?)),
-        Format::Yaml => Ok(serde_saphyr::to_string(&rows)?),
+        f @ (Format::Json | Format::Yaml) => Ok(f.structured(&rows)?.unwrap_or_default()),
         Format::Table => {
             let mode = policy.mode.map_or("not chosen", Mode::name);
             let mut lines = vec![

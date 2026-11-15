@@ -40,27 +40,24 @@ fn no_gateway(what: &str) -> anyhow::Error {
 }
 
 fn add<R: Runner>(ctx: &Ctx<R>, a: McpAddArgs) -> Result<()> {
-    let unsupported = [
-        (a.local, "--local"),
-        (a.dir.is_some(), "--dir"),
-        (a.client_id.is_some(), "--client-id"),
-        (
-            a.oauth_authorization_server.is_some(),
-            "--oauth-authorization-server",
-        ),
-        (a.resource.is_some(), "--resource"),
-        (a.skip_auth, "--skip-auth"),
-        (a.disable_http2, "--disable-http2"),
-        (a.skip_ssrf_check, "--skip-ssrf-check"),
-        (a.callback_port.is_some(), "--callback-port"),
-        (!a.scope.is_empty() || a.no_scope, "--scope/--no-scope"),
-    ];
-    if let Some((_, flag)) = unsupported.iter().find(|(set, _)| *set) {
-        return Err(Unsupported(format!(
-            "{flag} is not supported: smolbento has no MCP gateway or OAuth for MCP servers"
-        ))
-        .into());
-    }
+    super::refuse_as(
+        &[
+            (a.local, "--local"),
+            (a.dir.is_some(), "--dir"),
+            (a.client_id.is_some(), "--client-id"),
+            (
+                a.oauth_authorization_server.is_some(),
+                "--oauth-authorization-server",
+            ),
+            (a.resource.is_some(), "--resource"),
+            (a.skip_auth, "--skip-auth"),
+            (a.disable_http2, "--disable-http2"),
+            (a.skip_ssrf_check, "--skip-ssrf-check"),
+            (a.callback_port.is_some(), "--callback-port"),
+            (!a.scope.is_empty() || a.no_scope, "--scope/--no-scope"),
+        ],
+        "is not supported: smolbento has no MCP gateway or OAuth for MCP servers",
+    )?;
     // The name first, as before the shared check: a bad name is reported over a flag error.
     mcp::check_name(&a.name)?;
     let server = match (a.url, a.command) {
@@ -183,8 +180,9 @@ fn ls<R: Runner>(ctx: &Ctx<R>, a: &McpLsArgs) -> Result<()> {
     let mut out = &ctx.out;
     match a.output.pick() {
         _ if a.quiet => rows.iter().try_for_each(|r| writeln!(out, "{}", r.name))?,
-        Format::Json => writeln!(out, "{}", serde_json::to_string_pretty(&rows)?)?,
-        Format::Yaml => write!(out, "{}", serde_saphyr::to_string(&rows)?)?,
+        f @ (Format::Json | Format::Yaml) => {
+            write!(out, "{}", f.structured(&rows)?.unwrap_or_default())?
+        }
         Format::Table if rows.is_empty() => writeln!(out, "No MCP servers registered")?,
         Format::Table => {
             let mut lines = vec![["NAME", "TYPE", "TARGET"].map(String::from).to_vec()];
@@ -207,8 +205,9 @@ fn inspect<R: Runner>(ctx: &Ctx<R>, a: &McpInspectArgs) -> Result<()> {
     let row = Row::new(&a.name, server);
     let mut out = &ctx.out;
     match a.output.pick() {
-        Format::Json => writeln!(out, "{}", serde_json::to_string_pretty(&row)?)?,
-        Format::Yaml => write!(out, "{}", serde_saphyr::to_string(&row)?)?,
+        f @ (Format::Json | Format::Yaml) => {
+            write!(out, "{}", f.structured(&row)?.unwrap_or_default())?
+        }
         Format::Table => {
             writeln!(out, "Name:     {}", row.name)?;
             writeln!(out, "Type:     {}", row.kind)?;

@@ -10,7 +10,7 @@ use super::Unsupported;
 #[derive(Debug, Parser)]
 #[command(
     name = "bento",
-    // As `sbx --version`: "bento version v0.28.0".
+    // As `sbx --version`: "bento version vX.Y.Z".
     version = concat!("version v", env!("CARGO_PKG_VERSION")),
     about = "Docker Sandboxes (sbx) compatible agent sandboxes on smolvm microVMs"
 )]
@@ -623,17 +623,17 @@ pub struct SandboxOpts {
 impl SandboxOpts {
     /// Rejects flags from later phases and Docker Cloud-only flags.
     pub fn check_supported(&self) -> Result<()> {
-        let cloud = [
-            (self.allow_network.is_some(), "--allow-network"),
-            (self.image_ref.is_some(), "--image-ref"),
-            (self.platform.is_some(), "--platform"),
-            (self.ttl.is_some(), "--ttl"),
-            (self.on_timeout.is_some(), "--on-timeout"),
-            (!self.volume.is_empty(), "--volume"),
-        ];
-        if let Some((_, flag)) = cloud.iter().find(|(set, _)| *set) {
-            return Err(Unsupported(format!("{flag} is a Docker Cloud option")).into());
-        }
+        super::refuse_as(
+            &[
+                (self.allow_network.is_some(), "--allow-network"),
+                (self.image_ref.is_some(), "--image-ref"),
+                (self.platform.is_some(), "--platform"),
+                (self.ttl.is_some(), "--ttl"),
+                (self.on_timeout.is_some(), "--on-timeout"),
+                (!self.volume.is_empty(), "--volume"),
+            ],
+            "is a Docker Cloud option",
+        )?;
         super::refuse(&[(self.profile.is_some(), "--profile")])?;
         if let Some(p) = self
             .pull
@@ -739,13 +739,13 @@ pub enum Format {
 }
 
 impl Format {
-    /// `--json` wins over `--format`, which defaults to a table.
-    pub fn pick(json: bool, format: Option<Format>) -> Format {
-        if json {
-            Format::Json
-        } else {
-            format.unwrap_or_default()
-        }
+    /// `value` as JSON or YAML; `None` for a table, which each command draws itself.
+    pub fn structured<T: serde::Serialize>(self, value: &T) -> anyhow::Result<Option<String>> {
+        Ok(match self {
+            Format::Table => None,
+            Format::Json => Some(format!("{}\n", serde_json::to_string_pretty(value)?)),
+            Format::Yaml => Some(serde_saphyr::to_string(value)?),
+        })
     }
 }
 
@@ -761,17 +761,22 @@ pub struct OutputArgs {
 }
 
 impl OutputArgs {
+    /// `--json` wins over `--format`, which defaults to a table.
     pub fn pick(&self) -> Format {
-        Format::pick(self.json, self.format)
+        if self.json {
+            Format::Json
+        } else {
+            self.format.unwrap_or_default()
+        }
+    }
+
+    pub fn is_table(&self) -> bool {
+        self.pick() == Format::Table
     }
 
     /// `value` as JSON or YAML, as asked; `None` when the command should print its table.
     pub fn structured<T: serde::Serialize>(&self, value: &T) -> anyhow::Result<Option<String>> {
-        Ok(match self.pick() {
-            Format::Table => None,
-            Format::Json => Some(format!("{}\n", serde_json::to_string_pretty(value)?)),
-            Format::Yaml => Some(serde_saphyr::to_string(value)?),
-        })
+        self.pick().structured(value)
     }
 }
 

@@ -67,8 +67,7 @@ pub fn render(sandboxes: &[Sandbox], format: Format, quiet: bool, now: i64) -> R
         })
         .collect();
     match format {
-        Format::Json => Ok(format!("{}\n", serde_json::to_string_pretty(&rows)?)),
-        Format::Yaml => Ok(serde_saphyr::to_string(&rows)?),
+        f @ (Format::Json | Format::Yaml) => Ok(f.structured(&rows)?.unwrap_or_default()),
         Format::Table if rows.is_empty() => Ok("No sandboxes found\n".into()),
         Format::Table => {
             let mut lines = vec![
