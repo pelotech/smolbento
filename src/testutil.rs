@@ -33,6 +33,13 @@ pub fn test_env(extra_env: &[(&str, &str)]) -> TestEnv {
             dir.path().join("data").display().to_string(),
         ),
     ]);
+    // Built-in agents load these stand-ins, never Docker Hub.
+    let agent_kits_dir = dir.path().join("agent-kits");
+    agent_kits(&agent_kits_dir);
+    env.insert(
+        "SMOLBENTO_AGENT_KITS_DIR".to_string(),
+        agent_kits_dir.display().to_string(),
+    );
     for (k, v) in extra_env {
         env.insert(k.to_string(), v.to_string());
     }
@@ -351,4 +358,79 @@ pub fn saved_template(t: &TestEnv, name: &str, agent: &str) -> crate::templates:
             &src,
         )
         .unwrap()
+}
+
+/// The `claude` stand-in's descriptor: the published kit's shape, trimmed (an API key with a
+/// non-passthrough OAuth part, its agent file and skills, an install step that shows the mode).
+pub const CLAUDE_STAND_IN: &str = r#"{
+  "schemaVersion": "3",
+  "kind": "workload",
+  "capabilities": [
+    {"type": "com.docker.sandbox/network-policy@1",
+     "config": {"runtime": {"allow": ["api.anthropic.com:443", "platform.claude.com:443"]}}},
+    {"type": "com.docker.sandbox/credential@1", "optional": true, "config": {
+      "service": "anthropic", "phase": "runtime",
+      "apiKey": {"inject": [{"domain": "api.anthropic.com", "header": "x-api-key", "format": "%s"}]},
+      "oauth": {"tokenEndpoint": {"host": "platform.claude.com", "path": "/v1/oauth/token"},
+                "sentinels": {"accessToken": "sk-ant-oat01-proxy-managed"}}}},
+    {"type": "com.docker.sandbox/lifecycle@1", "config": {"install": [
+      {"command": "echo mode=$SBX_CRED_ANTHROPIC_MODE", "env": ["SBX_CRED_ANTHROPIC_MODE"],
+       "user": "agent"}]}},
+    {"type": "com.docker.sandbox/agent-skills@1", "optional": true,
+     "config": {"path": "/home/agent/.claude/skills"}},
+    {"type": "com.docker.sandbox/agent-context@1", "optional": true,
+     "config": {"content": "Claude Code notes\n", "directory": "/home/agent/.claude",
+                "filename": "CLAUDE.md"}}
+  ]
+}"#;
+
+/// Stand-ins for the built-in agents' published kits: a prebuilt OCI layout per name under
+/// `dir`, as `load::agent` reads them when `SMOLBENTO_AGENT_KITS_DIR` is set. Each launches its
+/// own name as the `agent` user; only `claude` has capabilities.
+pub fn agent_kits(dir: &std::path::Path) {
+    for name in crate::agents::NAMES {
+        let kit = dir.join(name);
+        std::fs::create_dir_all(&kit).unwrap();
+        let descriptor = match name {
+            "claude" => CLAUDE_STAND_IN.to_string(),
+            _ => r#"{"schemaVersion": "3", "kind": "workload"}"#.to_string(),
+        };
+        let config = serde_json::json!({"config": {"Entrypoint": [name], "User": "agent"}});
+        crate::kits::registry::fixtures::oci_layout(
+            &kit,
+            Some(&descriptor),
+            &[],
+            &config.to_string(),
+        );
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::kits::model::{CapBody, Kind, Source};
+    use crate::kits::registry::read_layout;
+
+    #[test]
+    fn agent_stand_ins_read_as_kits() {
+        let dir = tempfile::tempdir().unwrap();
+        agent_kits(dir.path());
+        for name in crate::agents::NAMES {
+            let k = read_layout(&dir.path().join(name), Source::Registry(name.into())).unwrap();
+            assert_eq!(k.kind, Kind::Workload, "{name}");
+            assert_eq!(k.command, Some(vec![name.to_string()]), "{name}");
+        }
+        let claude = read_layout(&dir.path().join("claude"), Source::Registry("claude".into()))
+            .unwrap();
+        let cred = claude
+            .caps
+            .iter()
+            .find_map(|c| match &c.body {
+                CapBody::Credential(r) => Some(r),
+                _ => None,
+            })
+            .expect("a credential");
+        assert_eq!(cred.service, "anthropic");
+        assert!(!cred.oauth.as_ref().unwrap().passthrough);
+    }
 }

@@ -94,6 +94,20 @@ pub const AGENTS: &[Agent] = &[
     },
 ];
 
+/// The built-in agent names, each a kit sbx publishes as `docker.io/sbx/<name>:latest`.
+pub const NAMES: [&str; 10] = [
+    "claude",
+    "codex",
+    "copilot",
+    "cursor",
+    "devin",
+    "docker-agent",
+    "droid",
+    "kiro",
+    "opencode",
+    "shell",
+];
+
 /// Agents sbx no longer offers (v0.53): a new sandbox with one is refused.
 const RETIRED: &[Retired] = &[Retired {
     name: "gemini",
