@@ -8,10 +8,10 @@ use std::time::Duration;
 
 use anyhow::{Context, Result, bail};
 
-use crate::agents;
 use crate::ctx::Ctx;
 use crate::kits::args::ArgValues;
 use crate::kits::load::{self, SYNTAX, starts_with_syntax};
+use crate::kits::model::{Content, Kind, Kit, Source};
 use crate::kits::registry_auth;
 use crate::kits::resolve::{Plan, resolve};
 use crate::provision;
@@ -22,7 +22,8 @@ use crate::util;
 
 pub const BUILDER: &str = "_builder";
 /// Renovate bumps this (see renovate.json5).
-pub const BUILDER_IMAGE: &str = "docker/sandbox-templates:shell-docker-0.10.0";
+pub const BUILDER_IMAGE: &str = "docker.io/sbx/shell-docker-image:latest@sha256:\
+                                 78bbd3aa71057e907f70a81c23456ab5476c8b6ec66c7d2bb356181fa3f94a1f";
 
 const MEMORY_MIB: u64 = 4096;
 
@@ -222,16 +223,16 @@ fn start<R: Runner>(ctx: &Ctx<R>, sb: &mut Sandbox, tokens: Vec<(String, String)
     })
 }
 
-/// The builder's kits: the shell preset with the shipped docker kit, whose startup hook starts
-/// dockerd on every start of the builder.
+/// The builder's kits: sbx's shell image with Docker (its recommended base for custom workloads)
+/// and the shipped docker kit, whose startup hook starts dockerd on every start of the builder.
 fn docker_plan() -> Result<Plan> {
-    let shell = agents::find("shell").expect("the shell preset");
+    let workload = Kit {
+        content: Content::Image(BUILDER_IMAGE.into()),
+        command: Some(vec!["bash".into(), "-l".into()]),
+        ..Kit::new("builder", Kind::Workload, Source::Builtin("builder"))
+    };
     let docker = load::builtin("docker").expect("the docker kit is shipped")?;
-    resolve(
-        load::preset_kit(shell, BUILDER_IMAGE),
-        vec![docker],
-        &ArgValues::default(),
-    )
+    resolve(workload, vec![docker], &ArgValues::default())
 }
 
 /// The builder sandbox: mountless, with a private dockerd, under the global network policy.
@@ -580,9 +581,16 @@ mod tests {
             .expect("create");
         let c = &lines[create];
         assert!(c.contains(&format!("--image {BUILDER_IMAGE}")), "{c}");
+        assert!(
+            c.contains(
+                "--image docker.io/sbx/shell-docker-image:latest@sha256:\
+                 78bbd3aa71057e907f70a81c23456ab5476c8b6ec66c7d2bb356181fa3f94a1f"
+            ),
+            "{c}"
+        );
         assert!(c.contains("--label sbx.name=_builder"), "{c}");
         assert!(c.contains("--label sbx.docker=true"), "{c}");
-        assert!(c.contains(r#"--label sbx.kits=[{"name":"docker","ref":"builtin:docker","provides":["docker@1.0.0"]}]"#), "{c}");
+        assert!(c.contains(r#"--label sbx.kits=[{"name":"builder","ref":"builtin:builder"},{"name":"docker","ref":"builtin:docker","provides":["docker@1.0.0"]}]"#), "{c}");
         assert!(
             c.contains("-v /var/lib/docker -v /var/lib/containerd"),
             "{c}"

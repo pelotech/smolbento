@@ -18,9 +18,6 @@ pub enum Source {
     LocalV3(PathBuf),
     LocalV2(PathBuf),
     Smolfile(PathBuf),
-    /// An agent preset as the workload (`load::preset_kit`), with its image: not a kit the user
-    /// chose.
-    Preset(String),
     /// A built-in agent's published kit (`load::agent`), by the ref it was loaded from: trusted
     /// like smolbento's own kits, and the only kind that gets the built-in agent's extras.
     Agent(String),
@@ -47,16 +44,14 @@ impl Format {
 }
 
 impl Source {
-    /// `None` for a Smolfile, which isn't a kit file. An agent preset counts as v3, as in sbx.
+    /// `None` for a Smolfile, which isn't a kit file.
     pub fn format(&self) -> Option<Format> {
         match self {
             Source::LocalV2(_) => Some(Format::V2),
             Source::Smolfile(_) => None,
-            Source::Registry(_)
-            | Source::LocalV3(_)
-            | Source::Preset(_)
-            | Source::Agent(_)
-            | Source::Builtin(_) => Some(Format::V3),
+            Source::Registry(_) | Source::LocalV3(_) | Source::Agent(_) | Source::Builtin(_) => {
+                Some(Format::V3)
+            }
         }
     }
 }
@@ -67,7 +62,7 @@ pub enum Content {
     None,
     /// OCI layout dir in the kit cache (registry pull or build).
     Oci(PathBuf),
-    /// v2 `sandbox.image` / agent preset: a plain image ref.
+    /// v2 `sandbox.image`, or a `-t IMAGE` in place of a kit's: a plain image ref.
     Image(String),
     Smolfile(PathBuf),
 }
@@ -101,7 +96,7 @@ pub struct Kit {
     /// sbx's published agent kits do.
     pub starts_docker: bool,
     /// The reference the user gave (`--kit`, the agent argument), as typed: resolver messages name
-    /// kits by it, as sbx does. None for presets and kits already in a sandbox.
+    /// kits by it, as sbx does. None for kits already in a sandbox.
     pub reference: Option<String>,
 }
 
@@ -134,6 +129,22 @@ impl Kit {
         Kit {
             digest: Some(format!("sha256:{}", "ab".repeat(32))),
             ..Kit::new(name, kind, Source::Registry(format!("acme/{name}:1")))
+        }
+    }
+
+    /// A built-in agent's published kit for tests: `Agent("docker.io/sbx/<name>:latest")`, image
+    /// `img:1`, launching `<name>`.
+    #[cfg(test)]
+    pub fn agent_test(name: &str) -> Kit {
+        Kit {
+            content: Content::Image("img:1".into()),
+            command: Some(vec![name.into()]),
+            digest: Some(format!("sha256:{}", "ab".repeat(32))),
+            ..Kit::new(
+                name,
+                Kind::Workload,
+                Source::Agent(format!("docker.io/sbx/{name}:latest")),
+            )
         }
     }
 

@@ -119,8 +119,19 @@ impl TestEnv {
         )
     }
 
-    /// Makes `machine status` answer with sandbox `name` (machine `sbx-<name>`) in `state`.
+    /// Makes `machine status` answer with sandbox `name` (machine `sbx-<name>`) in `state`. It
+    /// launches `bash` unless `labels` give an `sbx.command`, as every kit sandbox records one.
     pub fn sandbox(&self, name: &str, state: &str, labels: &[(&str, &str)]) -> &FakeRunner {
+        let mut all = vec![("sbx.name", name)];
+        if !labels.iter().any(|(k, _)| *k == "sbx.command") {
+            all.push(("sbx.command", r#"["bash"]"#));
+        }
+        all.extend_from_slice(labels);
+        self.machine(&crate::sandbox::name::machine_name(name), state, &all)
+    }
+
+    /// A sandbox from before agents were kits: no `sbx.command`.
+    pub fn old_sandbox(&self, name: &str, state: &str, labels: &[(&str, &str)]) -> &FakeRunner {
         let mut all = vec![("sbx.name", name)];
         all.extend_from_slice(labels);
         self.machine(&crate::sandbox::name::machine_name(name), state, &all)
@@ -144,8 +155,15 @@ impl TestEnv {
         self.creatable("claude-proj", &Self::project_labels(&ws))
     }
 
-    fn project_labels(ws: &str) -> [(&str, &str); 2] {
-        [("sbx.agent", "claude"), ("sbx.workspace", ws)]
+    fn project_labels(ws: &str) -> [(&str, &str); 3] {
+        [
+            ("sbx.agent", "claude"),
+            ("sbx.workspace", ws),
+            (
+                "sbx.command",
+                r#"["claude","--dangerously-skip-permissions"]"#,
+            ),
+        ]
     }
 
     /// The smolvm calls that start with `prefix`.

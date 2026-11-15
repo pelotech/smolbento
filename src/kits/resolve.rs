@@ -18,7 +18,7 @@ const AGENT_HOME: &str = "/home/agent";
 
 #[derive(Debug)]
 pub struct Plan {
-    /// The agent preset as a synthetic workload kit, or a workload kit.
+    /// The workload kit: a built-in agent's or the one given.
     pub workload: Kit,
     /// Dependency order.
     pub mixins: Vec<Kit>,
@@ -339,7 +339,7 @@ pub fn resolve_for(
 
     let mut skipped = Vec::new();
     let mut ssh_entries = Vec::new();
-    if matches!(workload.source, Source::Preset(_) | Source::Agent(_)) {
+    if matches!(workload.source, Source::Agent(_)) {
         ssh_entries.push(BUILT_IN);
     }
     for k in &all {
@@ -441,12 +441,10 @@ pub fn resolve_for(
     })
 }
 
-/// Each kit once, names unique (they scope `--kit-arg`s and tag policy rules; an agent preset
-/// isn't a kit, so a kit may share its name), and one workload.
-/// As in sbx, v2 and v3 kits don't go into one sandbox. Only the kits the user named count: an
-/// agent preset and the shipped docker kit go with either (in sbx the agents are v3 kits: see
-/// docs/sbx-compatibility.md). For a create, where every kit was just loaded: `kit add` can't
-/// tell the format of the kits a sandbox already has.
+/// Each kit once, names unique (they scope `--kit-arg`s and tag policy rules), and one workload.
+/// As in sbx, v2 and v3 kits don't go into one sandbox; the built-in agents are v3 kits, and the
+/// shipped docker kit goes with either. For a create, where every kit was just loaded: `kit add`
+/// can't tell the format of the kits a sandbox already has.
 pub fn check_formats(workload: &Kit, mixins: &[Kit]) -> Result<()> {
     let named: Vec<(&str, Option<Format>)> = std::iter::once(workload)
         .chain(mixins)
@@ -455,11 +453,11 @@ pub fn check_formats(workload: &Kit, mixins: &[Kit]) -> Result<()> {
     check_named_formats(&named)
 }
 
-/// The format `check_formats` counts a kit as: none for an agent preset, the shipped docker kit
-/// or a Smolfile. `kit add` records it for each kit of a sandbox.
+/// The format `check_formats` counts a kit as: none for the shipped docker kit or a Smolfile.
+/// `kit add` records it for each kit of a sandbox.
 pub fn mixing_format(k: &Kit) -> Option<Format> {
     match k.source {
-        Source::Preset(_) | Source::Builtin(_) => None,
+        Source::Builtin(_) => None,
         _ => k.format(),
     }
 }
@@ -483,10 +481,7 @@ pub fn check_named_formats(kits: &[(&str, Option<Format>)]) -> Result<()> {
 }
 
 fn check_names(workload: &Kit, mixins: &[Kit]) -> Result<()> {
-    let named: Vec<&Kit> = std::iter::once(workload)
-        .filter(|w| !matches!(w.source, Source::Preset(_)))
-        .chain(mixins)
-        .collect();
+    let named: Vec<&Kit> = std::iter::once(workload).chain(mixins).collect();
     for (i, k) in named.iter().enumerate() {
         if named[..i].iter().any(|o| o.source == k.source) {
             bail!("{}", capability::listed_twice(k.label()));
@@ -1169,10 +1164,9 @@ mod tests {
              rename your kit, or have it provide docker (`provides: [docker@<version>]`) to \
              replace the shipped one"
         );
-        // A preset agent's name is free for a kit.
-        let mut preset = workload("claude");
-        preset.source = Source::Preset("img:1".into());
-        run(preset, vec![mixin("claude")]).unwrap();
+        // A built-in agent is a kit like any other: its name is taken.
+        let e = run(Kit::agent_test("claude"), vec![mixin("claude")]).unwrap_err();
+        assert_eq!(format!("{e:#}"), "two kits are named claude");
     }
 
     #[test]
@@ -1216,7 +1210,7 @@ mod tests {
     }
     fn preset() -> Kit {
         let mut w = workload("shell");
-        w.source = Source::Preset("img:1".into());
+        w.source = Source::Agent("docker.io/sbx/shell:latest".into());
         w
     }
 
@@ -1863,20 +1857,23 @@ mod tests {
 
     #[test]
     fn v2_and_v3_kits_are_not_mixed() {
-        let preset = || Kit::new("shell", Kind::Workload, Source::Preset("img".into()));
+        let v2_workload = || Kit::new("w2", Kind::Workload, Source::LocalV2("w2".into()));
         let v2 = |name: &str| Kit::new(name, Kind::Mixin, Source::LocalV2(name.into()));
         let docker = || Kit::new("docker", Kind::Mixin, Source::Builtin("docker"));
         // sbx's wording.
-        let err = check_formats(&preset(), &[v2("old"), mixin("new")]).unwrap_err();
+        let err = check_formats(&v2_workload(), &[v2("old"), mixin("new")]).unwrap_err();
         assert_eq!(
             err.to_string(),
             "cannot mix v3 kits with v1/v2 kits in one sandbox; compositions are single-format \
-             (v3: new; v1/v2: old). Use a v3 version of the v1/v2 kit"
+             (v3: new; v1/v2: w2, old). Use a v3 version of the v1/v2 kit"
         );
+        // A built-in agent's kit is v3, as in sbx.
+        let agent = Kit::agent_test("shell");
+        assert!(check_formats(&agent, &[v2("old")]).is_err());
         let err = check_formats(&workload("w"), &[v2("old")]).unwrap_err();
         assert!(err.to_string().contains("(v3: w; v1/v2: old)"), "{err}");
-        // A preset and the shipped docker kit have no format of their own.
-        check_formats(&preset(), &[docker(), v2("old"), v2("older")]).unwrap();
-        check_formats(&preset(), &[docker(), mixin("new")]).unwrap();
+        // The shipped docker kit has no format of its own.
+        check_formats(&v2_workload(), &[docker(), v2("old"), v2("older")]).unwrap();
+        check_formats(&agent, &[docker(), mixin("new")]).unwrap();
     }
 }

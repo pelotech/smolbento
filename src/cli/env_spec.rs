@@ -74,7 +74,8 @@ pub fn spec(loaded: &Loaded, overrides: &Overrides, secrets: &SecretsFile) -> Re
     let name = name(loaded, overrides.name.as_deref())?;
     let agent = f.agent.as_deref().unwrap_or_default();
 
-    // A preset takes every kit as a mixin; otherwise the kit named like `agent` is the workload.
+    // A built-in agent takes every kit as a mixin; otherwise the kit named like `agent` is the
+    // workload.
     let mut kits: Vec<String> = f
         .kits
         .iter()

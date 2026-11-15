@@ -92,6 +92,19 @@ pub struct Sandbox {
 }
 
 impl Sandbox {
+    /// Refuses a sandbox made when built-in agents weren't kits: it records no command
+    /// (`sbx.command`), which every kit sandbox has.
+    pub fn check_current(&self) -> Result<()> {
+        if self.meta.command.is_none() {
+            return Err(anyhow!(
+                "sandbox {n} was created by an older smolbento whose built-in agents weren't \
+                 kits; recreate it (sbt rm {n}, then sbt create …)",
+                n = self.name()
+            ));
+        }
+        Ok(())
+    }
+
     pub fn from_machine(m: &Machine) -> Option<Sandbox> {
         Some(Sandbox {
             meta: Meta::from_labels(&m.labels)?,

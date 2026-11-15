@@ -5,11 +5,10 @@ use std::path::{Path, PathBuf};
 
 use anyhow::{Context, Result, bail};
 
-use crate::agents::Agent;
 use crate::ctx::Ctx;
 use crate::kits::model::{Content, Kind, Kit, Source};
 use crate::kits::registry_auth::Logins;
-use crate::kits::{capability, registry, signers, smolfile, trust, v2, v3};
+use crate::kits::{registry, signers, smolfile, trust, v2, v3};
 use crate::provision::builder;
 use crate::secrets::{RegistryEntry, SecretsFile};
 use crate::smolvm::Runner;
@@ -46,7 +45,7 @@ pub fn builtin(reference: &str) -> Option<Result<Kit>> {
 }
 
 /// Loads the kit REF names. `trust::check` runs on the source before anything is read, built
-/// or pulled. Presets (`agents::find`) are the caller's business, so `claude` never lands here;
+/// or pulled. Built-in agent names are `agent`'s business, so `claude` never lands here;
 /// shipped kits (`docker`) are found before any path or registry.
 pub fn load<R: Runner>(ctx: &Ctx<R>, reference: &str) -> Result<Kit> {
     load_with(ctx, reference, false)
@@ -424,7 +423,7 @@ fn is_descriptor(path: &Path) -> bool {
 
 /// Gives a workload kit its command or refuses it with sbx's error. v3 has its image config's;
 /// a v2 kit without `sandbox.entrypoint`/`command` takes its `sandbox.image`'s Entrypoint+Cmd.
-/// A Smolfile is smolvm's, so its sandbox keeps the `shell` preset's command.
+/// A Smolfile is smolvm's, so its sandbox gets a login shell (`kit_plan`).
 /// `sandbox` is the one being created, whose registry logins the image lookup may use.
 pub fn check_launchable<R: Runner>(
     ctx: &Ctx<R>,
@@ -461,39 +460,9 @@ pub fn check_launchable<R: Runner>(
     Ok(())
 }
 
-/// What a preset provides: its agent name, so v2 `requires.agent` (and v3 `requires`) entries
-/// naming it are met, as in sbx. The version is the image tag's (`:1.2`, or a trailing
-/// `-0.10.0` as in `claude-code-docker-0.10.0`), else `0`; v2 requires carry no version.
-pub fn preset_provide(agent: &str, image: &str) -> String {
-    let tag_suffix = || {
-        let (_, tag) = image.rsplit_once(':')?;
-        let (_, v) = tag.rsplit_once('-')?;
-        (!tag.contains('/') && capability::is_version(v)).then(|| v.to_string())
-    };
-    let version = capability::version_from_reference(image)
-        .or_else(tag_suffix)
-        .unwrap_or_else(|| "0".into());
-    format!("{agent}@{version}")
-}
-
-/// A preset as a workload kit: the image and command, no capabilities.
-pub fn preset_kit(agent: &Agent, image: &str) -> Kit {
-    Kit {
-        provides: vec![preset_provide(agent.name, image)],
-        content: Content::Image(image.to_string()),
-        command: Some(agent.command.iter().map(|s| s.to_string()).collect()),
-        ..Kit::new(
-            agent.name,
-            Kind::Workload,
-            Source::Preset(image.to_string()),
-        )
-    }
-}
-
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::agents;
     use crate::testutil::*;
 
     fn allow_local() -> TestEnv {
@@ -925,45 +894,5 @@ mod tests {
         let t = test_env(&[("SMOLBENTO_KIT_ALLOWED_SOURCES", r#"["ghcr.io/ok/"]"#)]);
         let e = load(&t.ctx, "evil.example/x/y:1").unwrap_err();
         assert!(format!("{e:#}").contains("not in your allowlist"), "{e:#}");
-    }
-
-    #[test]
-    fn preset_kit_keeps_image_and_command() {
-        let a = agents::find("claude").unwrap();
-        let k = preset_kit(a, "img:1");
-        assert_eq!(k.name, "claude");
-        assert_eq!(k.kind, Kind::Workload);
-        assert_eq!(k.content, Content::Image("img:1".into()));
-        assert_eq!(k.source, Source::Preset("img:1".into()));
-        assert_eq!(
-            k.command.unwrap(),
-            a.command.iter().map(|s| s.to_string()).collect::<Vec<_>>()
-        );
-    }
-
-    #[test]
-    fn a_preset_provides_its_agent_name_at_its_image_version() {
-        let claude = agents::find("claude").unwrap();
-        assert_eq!(preset_kit(claude, "img:1.2").provides, ["claude@1.2"]);
-        assert_eq!(
-            preset_kit(claude, "docker/sandbox-templates:claude-code-docker-0.10.0").provides,
-            ["claude@0.10.0"]
-        );
-        assert_eq!(preset_kit(claude, "img:latest").provides, ["claude@0"]);
-        assert_eq!(
-            preset_kit(claude, "localhost:5000/img").provides,
-            ["claude@0"]
-        );
-        assert_eq!(preset_provide("shell", ""), "shell@0");
-    }
-
-    #[test]
-    fn a_v2_mixin_requiring_its_agent_resolves_on_that_preset() {
-        let y = "schemaVersion: \"2\"\nkind: mixin\nname: m\nrequires:\n  agent: claude\n";
-        let m = crate::kits::v2::parse(y, std::path::Path::new("/nonexistent")).unwrap();
-        assert_eq!(m.requires, ["claude"]);
-        let claude = agents::find("claude").unwrap();
-        let w = preset_kit(claude, claude.image);
-        crate::kits::resolve::resolve(w, vec![m], &Default::default()).unwrap();
     }
 }

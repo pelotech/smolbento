@@ -286,7 +286,8 @@ pub fn spec(req: &CreateRequest) -> CreateSpec {
 /// What the machine runs at every boot (smolvm reruns it on each start, and keeps the machine up
 /// after it exits). A v3 workload kit launches its image's `Entrypoint` + `Cmd`, as the kit spec's
 /// default launch mode says (an image user, `sbx.user`, marks a v3 workload); every other sandbox,
-/// presets and the internal builder included, just idles for `exec` and sessions.
+/// built-in agents (started on a terminal by `run`) and the internal builder included, just idles
+/// for `exec` and sessions.
 fn boot_command(req: &CreateRequest) -> Vec<String> {
     match (&req.user, &req.command) {
         (Some(_), Some(c))
@@ -331,7 +332,7 @@ mod tests {
             req.user = user.map(String::from);
             spec(&req).user
         };
-        // Presets: `agent`. A v3 workload: its image user, `0` when the image names none.
+        // No image user: `agent`. A v3 workload: its image user, `0` when the image names none.
         assert_eq!(user("claude.repo", None).as_deref(), Some("agent"));
         assert_eq!(
             user("tool", Some("somebody:1001")).as_deref(),
@@ -365,7 +366,7 @@ mod tests {
             tail,
             ["-u", "somebody:1001", "--", "/bin/agent", "--x", "run"]
         );
-        // A preset, a v2 workload (a command but no image user), a v3 image without a command,
+        // No image user, a v2 workload (a command but no image user), a v3 image without a command,
         // and the internal builder keep `sleep infinity`.
         assert_eq!(cmd("claude.repo", None, None).cmd, idle);
         // A built-in agent's kit idles too: its agent starts in `run` or `exec`, on a terminal.

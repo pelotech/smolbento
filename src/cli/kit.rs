@@ -513,11 +513,13 @@ fn reference_kind(reference: &str) -> &'static str {
     if file { "file" } else { "directory" }
 }
 
-/// A synthetic preset workload with nothing in it: the existing sandbox's agent for `kit add`.
+/// A workload with nothing in it, for `kit add`: the existing sandbox's workload kit is among its
+/// recorded kits already. The placeholder digest lets `apply` record it.
 fn empty_workload(name: &str) -> Kit {
     Kit {
         content: Content::Image(String::new()),
-        ..Kit::new(name, Kind::Workload, Source::Preset(String::new()))
+        digest: Some("sha256:recorded".into()),
+        ..Kit::new(name, Kind::Workload, Source::Registry(String::new()))
     }
 }
 
@@ -545,6 +547,7 @@ fn add<R: Runner>(
 ) -> Result<i32> {
     let values = arg_values(args)?;
     let mut sb = sandbox::get(&ctx.vm, name)?;
+    sb.check_current()?;
     let kit = load::load(ctx, reference)?;
     if kit.kind != Kind::Mixin {
         bail!("{reference} is a workload kit, not a mixin; only mixins can be added to a sandbox");
@@ -586,22 +589,18 @@ fn add_running<R: Runner>(
     named.push((kit.name.as_str(), mixing_format(&kit)));
     check_named_formats(&named)?;
     let kit_name = kit.name.clone();
-    let mixins: Vec<Kit> = existing
-        .iter()
+    // The workload's own record (named like the sandbox's agent) is the workload, not a mixin.
+    let (own, others): (Vec<&KitRecord>, Vec<&KitRecord>) =
+        existing.iter().partition(|r| r.name == sb.meta.agent);
+    let mixins: Vec<Kit> = others
+        .into_iter()
         .map(recorded_kit)
         .chain(std::iter::once(kit))
         .collect();
     // Install hooks run where the create ran them: a v3 workload's image WORKDIR.
+    // Its agent file is the recorded `sbx.agent-file` or none.
     let mut workload = empty_workload(&sb.meta.agent);
-    // A workload kit, whatever its name, isn't a preset: create gives every one a command
-    // (`sbx.command`), and its agent file is the recorded `sbx.agent-file` or none.
-    if sb.meta.command.is_some() {
-        workload.source = Source::Registry(String::new());
-        workload.digest = Some("sha256:recorded".into());
-    } else {
-        // A preset provides its agent name, as at create (the image isn't recorded: version 0).
-        workload.provides = vec![load::preset_provide(&sb.meta.agent, "")];
-    }
+    workload.provides = own.iter().flat_map(|r| r.provides.clone()).collect();
     workload.config = sb.meta.image_workdir.clone().map(|workdir| ImageConfig {
         workdir,
         ..Default::default()
@@ -809,13 +808,38 @@ mod tests {
         )
     }
 
+    #[test]
+    fn kit_add_refuses_an_old_preset_sandbox() {
+        let mut t = test_env(&[("SMOLBENTO_KIT_ALLOW_LOCAL_KITS", "true")]);
+        // No `sbx.command`: made when built-in agents weren't kits.
+        t.runner().ok(
+            &["machine", "status", "-n", MACHINE],
+            &machine_json(
+                MACHINE,
+                "running",
+                &[("sbx.name", "dev"), ("sbx.agent", "shell")],
+            ),
+        );
+        let err = t.sbt_err(&["kit", "add", "dev", "docker"]);
+        assert_eq!(
+            err,
+            "sandbox dev was created by an older smolbento whose built-in agents weren't kits; \
+             recreate it (sbt rm dev, then sbt create …)"
+        );
+    }
+
     /// A running shell sandbox `dev` whose `sbx.kits` holds `kits`.
     fn dev_sandbox(t: &TestEnv, kits: &[KitRecord]) {
         dev_sandbox_in(t, "running", kits);
     }
 
     fn dev_sandbox_in(t: &TestEnv, state: &str, kits: &[KitRecord]) {
-        dev_sandbox_labeled(t, state, &[("sbx.agent", "shell")], kits);
+        // The shell kit's agent file, as create records it.
+        let labels = [
+            ("sbx.agent", "shell"),
+            ("sbx.agent-file", "/home/agent/AGENTS.md"),
+        ];
+        dev_sandbox_labeled(t, state, &labels, kits);
     }
 
     /// `dev` with `labels` besides its name.
@@ -823,6 +847,10 @@ mod tests {
         let fake = t.runner();
         let value = labels::kits_value(kits);
         let mut all = vec![("sbx.name", "dev")];
+        // Every kit sandbox records its command.
+        if !labels.iter().any(|(k, _)| *k == "sbx.command") {
+            all.push(("sbx.command", r#"["bash"]"#));
+        }
         all.extend_from_slice(labels);
         if !kits.is_empty() {
             all.push(("sbx.kits", &value));
@@ -1816,6 +1844,7 @@ mod tests {
             "running",
             &[
                 ("sbx.agent", "claude"),
+                ("sbx.agent-file", "/w/CLAUDE.md"),
                 ("sbx.workspace", "/w/proj"),
                 ("sbx.workspaces", r#"["/w/proj"]"#),
             ],
@@ -1847,7 +1876,7 @@ mod tests {
 
     #[test]
     fn add_drops_a_mixin_context_when_the_workload_has_no_agent_file() {
-        // A workload kit named like a preset is still a workload kit: no preset agent file.
+        // Without a recorded agent file, a mixin's context is dropped, whatever the agent.
         for agent in ["wl", "claude"] {
             let mut t = kit_env();
             dev_sandbox_labeled(
@@ -2017,9 +2046,16 @@ mod tests {
     }
 
     #[test]
-    fn add_meets_a_requires_on_the_sandboxs_agent_preset() {
+    fn add_meets_a_requires_on_the_sandboxs_agent_kit() {
         let mut t = kit_env();
-        dev_sandbox_labeled(&t, "running", &[("sbx.agent", "claude")], &[]);
+        // The claude kit provides its name, as sbx's does.
+        let claude = rec(
+            "claude",
+            "docker.io/sbx/claude:latest@sha256:ab",
+            &["claude@2.1.325"],
+            Some(Format::V3),
+        );
+        dev_sandbox_labeled(&t, "running", &[("sbx.agent", "claude")], &[claude]);
         v3_kit(
             &t,
             "forclaude",
@@ -2040,7 +2076,7 @@ mod tests {
                 vec![rec("docker", "builtin:docker", &["docker@1.0.0"], None)],
             ),
             (
-                &[("sbx.agent", "wl"), ("sbx.command", "wl")][..],
+                &[("sbx.agent", "wl"), ("sbx.command", r#"["wl"]"#)][..],
                 vec![rec("other", "/k/other", &[], None)],
             ),
         ] {

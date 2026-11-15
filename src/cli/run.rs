@@ -4,7 +4,7 @@
 use std::io::Write;
 use std::path::Path;
 
-use anyhow::{Context, Result, bail};
+use anyhow::{Result, bail};
 
 use super::lifecycle::create_reported;
 use super::progress::Progress;
@@ -88,23 +88,13 @@ pub fn run<R: Runner>(ctx: &mut Ctx<R>, a: &RunArgs) -> Result<i32> {
         );
     }
     // What to launch, with the arguments given: an environment's `entrypoint`, else the agent's
-    // command (a workload kit's, else the preset's). Looked up before the start, so a sandbox
+    // command (`sbx.command`; a sandbox without one is from before agents were kits). Looked up before the start, so a sandbox
     // with no known agent isn't started and left running.
+    sb.check_current()?;
     let command: Option<Vec<String>> = match (&a.entrypoint, &sb.meta.command, a.detach) {
-        (_, _, true) => None,
+        (_, _, true) | (None, None, false) => None,
         (Some(e), _, false) => Some([e.as_slice(), a.agent_args.as_slice()].concat()),
         (None, Some(c), false) => Some(agents::command_with_args(c, &a.agent_args)),
-        (None, None, false) => {
-            let preset = agents::find(&sb.meta.agent).with_context(|| {
-                format!(
-                    "sandbox '{}' has no known agent ('{}')",
-                    sb.name(),
-                    sb.meta.agent
-                )
-            })?;
-            let command: Vec<String> = preset.command.iter().map(|s| s.to_string()).collect();
-            Some(agents::command_with_args(&command, &a.agent_args))
-        }
     };
     // A closed terminal must not end this process once the sandbox may be running: it has the
     // cleanup below to do. The agent still ends with the terminal (`interactive` gives it the
@@ -329,6 +319,25 @@ mod tests {
     }
 
     #[test]
+    fn an_old_preset_sandbox_is_refused_with_recreate() {
+        let mut t = test_env(&[]);
+        let ws = t.ctx.cwd.display().to_string();
+        // No `sbx.command`: made when built-in agents weren't kits.
+        t.old_sandbox(
+            "claude-proj",
+            "running",
+            &[("sbx.agent", "claude"), ("sbx.workspace", &ws)],
+        );
+        let err = t.sbt_err(&["run", "claude"]);
+        assert_eq!(
+            err,
+            "sandbox claude-proj was created by an older smolbento whose built-in agents weren't \
+             kits; recreate it (sbt rm claude-proj, then sbt create …)"
+        );
+        assert!(t.runner().interactive_calls().is_empty());
+    }
+
+    #[test]
     fn clone_is_ignored_when_run_attaches_to_an_existing_sandbox() {
         let mut t = test_env(&[]);
         created(&t, "running");
@@ -369,6 +378,7 @@ mod tests {
             &[
                 ("sbx.name", "claude-proj-2"),
                 ("sbx.agent", "claude"),
+                ("sbx.command", r#"["claude"]"#),
                 ("sbx.workspace", &ws),
             ],
         );
@@ -378,6 +388,7 @@ mod tests {
             &[
                 ("sbx.name", "claude-proj"),
                 ("sbx.agent", "claude"),
+                ("sbx.command", r#"["claude"]"#),
                 ("sbx.workspace", "/other/proj"),
             ],
         );
@@ -406,6 +417,7 @@ mod tests {
             &[
                 ("sbx.name", "claude-proj"),
                 ("sbx.agent", "claude"),
+                ("sbx.command", r#"["claude"]"#),
                 ("sbx.workspace", "/other/proj"),
             ],
         );
@@ -664,11 +676,11 @@ mod tests {
     }
 
     #[test]
-    fn a_sandbox_with_no_known_agent_is_not_started() {
+    fn a_sandbox_from_before_kits_is_not_started() {
         let mut t = test_env(&[]);
-        t.sandbox("x", "stopped", &[("sbx.agent", "nope")]);
+        t.old_sandbox("x", "stopped", &[("sbx.agent", "nope")]);
         let err = t.sbt_err(&["run", "--name", "x"]);
-        assert!(err.contains("has no known agent ('nope')"), "{err}");
+        assert!(err.contains("recreate it (sbt rm x"), "{err}");
         // Checked before the start: nothing to stop afterwards.
         assert!(!t.made("machine start"), "{:#?}", t.calls());
     }
@@ -806,6 +818,7 @@ mod tests {
             &[
                 ("sbx.name", "claude-proj"),
                 ("sbx.agent", "claude"),
+                ("sbx.command", r#"["claude"]"#),
                 ("sbx.workspace", &ws.display().to_string()),
                 ("sbx.clone", "true"),
             ],
@@ -1016,7 +1029,7 @@ mod tests {
     }
 
     #[test]
-    fn gemini_is_refused_for_a_new_sandbox_and_an_old_one_has_no_known_agent() {
+    fn gemini_is_refused_for_a_new_sandbox_and_an_old_one_must_be_recreated() {
         let mut t = test_env(&[]);
         t.no_machine();
         let err = t.sbt_err(&["run", "gemini", "."]);
@@ -1025,13 +1038,13 @@ mod tests {
 
         let mut t = test_env(&[]);
         let ws = t.ctx.cwd.display().to_string();
-        t.sandbox(
+        t.old_sandbox(
             "old",
             "running",
             &[("sbx.agent", "gemini"), ("sbx.workspace", &ws)],
         );
         let err = t.sbt_err(&["run", "--name", "old"]);
-        assert!(err.contains("has no known agent ('gemini')"), "{err}");
+        assert!(err.contains("recreate it (sbt rm old"), "{err}");
         assert!(t.runner().interactive_calls().is_empty());
     }
 

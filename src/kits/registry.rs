@@ -819,7 +819,7 @@ fn build_layout(cache: &Path, manifest: &[u8], digest: &str, reference: &str) ->
 /// command, user and working directory from the image config. Also used for local builds, with their own `source`.
 pub fn read_layout(dir: &Path, source: Source) -> Result<Kit> {
     let what = match &source {
-        Source::Registry(r) | Source::Preset(r) | Source::Agent(r) => r.clone(),
+        Source::Registry(r) | Source::Agent(r) => r.clone(),
         Source::Builtin(n) => format!("builtin:{n}"),
         Source::LocalV3(p) | Source::LocalV2(p) | Source::Smolfile(p) => p.display().to_string(),
     };

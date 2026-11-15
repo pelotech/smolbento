@@ -1,6 +1,6 @@
 //! `kit.requireSignature` and `kit.trustedSigners`: with the requirement on, a kit loads only when
-//! one of the trusted signers signed it, as in sbx 0.53. smolbento's presets and shipped kits
-//! are exempt; `--offline` skips the check, as sbx documents.
+//! one of the trusted signers signed it, as in sbx 0.53. built-in agents' kits and smolbento's
+//! shipped kits are exempt; `--offline` skips the check, as sbx documents.
 
 use std::path::Path;
 

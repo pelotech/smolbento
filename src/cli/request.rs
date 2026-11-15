@@ -298,11 +298,10 @@ pub(crate) fn kit_plan<R: Runner>(
     // A template already set the image and the docker flag.
     if req.template_pack.is_none() {
         load::check_launchable(ctx, &mut workload, Some(&req.name))?;
-        // A Smolfile kit gets the shell preset's command, recorded in `sbx.command` so every
-        // attach launches the same thing.
+        // A Smolfile kit gets a login shell, recorded in `sbx.command` so every attach launches
+        // the same thing.
         if workload.command.is_none() {
-            let shell = agents::find("shell").expect("the shell preset");
-            workload.command = Some(shell.command.iter().map(|s| s.to_string()).collect());
+            workload.command = Some(vec!["bash".into(), "-l".into()]);
         }
         // `-t IMAGE` replaces the kit's image and keeps its capabilities.
         if let Some(image) = &opts.template {
@@ -1203,9 +1202,8 @@ SETUP
     /// `kit_target` and a quiet `kit_plan` for `args` followed by `kit`.
     #[test]
     fn a_kit_providing_docker_replaces_the_shipped_one() {
-        use crate::agents;
-        use crate::kits::{load, model::Source};
-        let preset = load::preset_kit(agents::find("shell").unwrap(), "img:1");
+        use crate::kits::{load, model::Kit, model::Source};
+        let preset = Kit::agent_test("shell");
         let mut own = load::builtin("docker").unwrap().unwrap();
         own.source = Source::Registry("acme/dind:1".into());
         own.name = "dind".into();

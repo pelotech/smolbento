@@ -168,14 +168,7 @@ fn save<R: Runner>(ctx: &Ctx<R>, a: &TemplateSaveArgs) -> Result<()> {
             sb.name()
         );
     }
-    // Every kit sandbox records its command; a preset one didn't.
-    if sb.meta.command.is_none() {
-        bail!(
-            "sandbox {n} was created by an older smolbento whose built-in agents weren't kits; \
-             recreate it (sbt rm {n}, then sbt create …)",
-            n = sb.name()
-        );
-    }
+    sb.check_current()?;
     if sb.is_running() {
         let refused = || {
             anyhow::anyhow!(

@@ -187,14 +187,10 @@ pub fn apply(
     steps.context = context_scripts(plan, agent_file.as_deref(), &mounts);
     steps.startup_d = startup_d(&kits, m, &tmpfs);
 
-    // A preset agent isn't a kit: nothing to record, and its command is the agent's own. A v3
-    // workload's agent runs as its image's user, root when the image names none.
-    let preset = is_preset(&plan.workload);
-    req.builtin_agent = matches!(plan.workload.source, Source::Agent(_));
-    if !preset {
-        set_workload_fields(req, &plan.workload, workdir, agent_file);
-    }
-    record_kits(&kits, preset, &plan.args, req)?;
+    // A v3 workload's agent runs as its image's user, root when the image names none.
+    req.builtin_agent = is_builtin_agent(&plan.workload);
+    set_workload_fields(req, &plan.workload, workdir, agent_file);
+    record_kits(&kits, &plan.args, req)?;
     steps.kit_names = req.kits.iter().map(|k| k.name.clone()).collect();
     req.long_running = m.long_running;
     // `sbx.docker` (shown by `ls`) says the sandbox has a private dockerd: the docker kit's, or
@@ -305,9 +301,8 @@ fn last_wins(files: &[FileReq]) -> Vec<&FileReq> {
     out
 }
 
-/// The request fields a non-preset workload sets. A preset agent isn't a kit and its command is
-/// the agent's own. A v3 workload's agent runs as its image's user, root when the image names
-/// none.
+/// The request fields the workload kit sets. A v3 workload's agent runs as its image's user, root
+/// when the image names none.
 fn set_workload_fields(
     req: &mut CreateRequest,
     workload: &Kit,
@@ -324,14 +319,13 @@ fn set_workload_fields(
     });
 }
 
-/// Each kit's record (a preset isn't a kit), pushed on `req.kits` (the `sbx.kits` label).
+/// Each kit's record, with the args it resolved with, pushed on `req.kits` (the `sbx.kits` label).
 fn record_kits(
     kits: &[&Kit],
-    preset: bool,
     args: &BTreeMap<String, BTreeMap<String, String>>,
     req: &mut CreateRequest,
 ) -> Result<()> {
-    for k in kits.iter().skip(usize::from(preset)) {
+    for k in kits {
         let mut r = kit_record(k)?;
         r.args = args.get(&k.name).cloned().unwrap_or_default();
         req.kits.push(r);
@@ -726,18 +720,14 @@ fn upper_env(service: &str) -> String {
         .collect()
 }
 
-/// The agent file in the guest: the preset's file name, or the workload kit's own
-/// `agent-context` file, in the parent of `workdir` (sbx #15). `None` when the workload declares
-/// none.
+/// The agent file in the guest: the workload kit's own `agent-context` file, in the parent of
+/// `workdir` unless it names a directory (sbx #15). `None` when the workload declares none.
 pub fn agent_file(plan: &Plan, workdir: &str) -> Result<Option<String>> {
     let parent = Path::new(workdir)
         .parent()
         .map_or_else(|| "/".to_string(), |p| p.display().to_string());
     let join = |dir: &str, name: &str| format!("{}/{name}", dir.trim_end_matches('/'));
     let w = &plan.workload;
-    if is_preset(w) {
-        return Ok(agents::find(&w.name).map(|a| join(&parent, a.context_file)));
-    }
     let Some((_, c)) = plan.merged.contexts.iter().find(|(k, _)| *k == w.name) else {
         return Ok(None);
     };
@@ -780,7 +770,7 @@ fn context_scripts(plan: &Plan, agent_file: Option<&str>, mounts: &[&Path]) -> V
         if c.content.trim().is_empty() {
             continue;
         }
-        if !is_preset(w) && *kit == w.name {
+        if *kit == w.name {
             own.push(&c.content);
         } else {
             match mixins.iter_mut().find(|(k, _)| k == kit) {
@@ -828,23 +818,18 @@ fn context_scripts(plan: &Plan, agent_file: Option<&str>, mounts: &[&Path]) -> V
     scripts
 }
 
-/// The agent preset as a synthetic workload (`load::preset_kit`), not a kit the user chose.
-pub fn is_preset(w: &Kit) -> bool {
-    matches!(w.source, Source::Preset(_))
-}
-
-/// A built-in agent: its published kit (`load::agent`) or a preset. It gets the SSH agent, the
-/// agent name for `--static-mcp` and the credential modes; a kit merely named like one doesn't.
+/// A built-in agent's published kit (`load::agent`). It gets the SSH agent, the agent name for
+/// `--static-mcp` and its skills as the agent's own; a kit merely named like one doesn't.
 pub fn is_builtin_agent(w: &Kit) -> bool {
-    matches!(w.source, Source::Preset(_) | Source::Agent(_))
+    matches!(w.source, Source::Agent(_))
 }
 
 /// A registry kit pinned to its digest, a shipped kit as `builtin:<name>`, or a local kit's
 /// canonical path.
 fn pinned_ref(k: &Kit) -> Result<String> {
     Ok(match &k.source {
-        Source::Registry(r) | Source::Preset(r) | Source::Agent(r) if r.contains('@') => r.clone(),
-        Source::Registry(r) | Source::Preset(r) | Source::Agent(r) => match &k.digest {
+        Source::Registry(r) | Source::Agent(r) if r.contains('@') => r.clone(),
+        Source::Registry(r) | Source::Agent(r) => match &k.digest {
             Some(d) => format!("{r}@{d}"),
             None => bail!("kit {}: {r} has no digest to pin it to", k.name),
         },
@@ -1494,21 +1479,6 @@ mod tests {
     }
 
     #[test]
-    fn a_preset_workload_records_no_command_or_kit() {
-        let agent = crate::agents::find("claude").unwrap();
-        let w = crate::kits::load::preset_kit(agent, "preset:1");
-        let p = resolve(w, vec![], &ArgValues::default()).unwrap();
-        let mut req = request();
-        let (steps, _) = run(&p, &mut req, &mut Policy::default()).unwrap();
-        assert_eq!(req.command, None);
-        assert!(req.kits.is_empty() && steps.kit_names.is_empty());
-        assert_eq!(
-            create::spec(&req).labels,
-            create::meta(&request()).to_labels()
-        );
-    }
-
-    #[test]
     fn a_smolfile_workload_is_passed_with_smolfile() {
         let mut w = kit("sf", Kind::Workload);
         w.source = Source::Smolfile("/k/Smolfile".into());
@@ -1810,8 +1780,18 @@ mod tests {
         }
     }
 
-    fn preset_plan(agent: &str, mixins: Vec<Kit>) -> Plan {
-        let w = crate::kits::load::preset_kit(agents::find(agent).unwrap(), "img:1");
+    /// A built-in agent's kit whose `agent-context` names `file`, sbx's default directory.
+    fn agent_kit_plan(agent: &str, file: &str, mixins: Vec<Kit>) -> Plan {
+        let mut w = Kit::agent_test(agent);
+        w.caps.push(Cap {
+            ty: "com.docker.sandbox/agent-context@1".into(),
+            optional: true,
+            body: CapBody::AgentContext(AgentContextReq {
+                filename: Some(file.into()),
+                directory: None,
+                content: String::new(),
+            }),
+        });
         resolve(w, mixins, &ArgValues::default()).unwrap()
     }
 
@@ -1831,7 +1811,7 @@ mod tests {
     }
 
     #[test]
-    fn a_preset_agent_file_sits_in_the_workspace_parent() {
+    fn an_agent_file_sits_in_the_workspace_parent() {
         for (agent, file) in [
             ("claude", "CLAUDE.md"),
             ("codex", "AGENTS.md"),
@@ -1839,8 +1819,9 @@ mod tests {
         ] {
             // v2 and v3 mixins get the same layout.
             for source in [Source::LocalV2, Source::LocalV3] {
-                let p = preset_plan(
+                let p = agent_kit_plan(
                     agent,
+                    file,
                     vec![
                         context_mixin("m1", source("/k/m1".into()), "use m1"),
                         context_mixin("m2", source("/k/m2".into()), "use m2"),
@@ -1853,16 +1834,16 @@ mod tests {
                     mixin_layout(&format!("/w/{file}"), &[("m1", "use m1"), ("m2", "use m2")]),
                     "{agent}"
                 );
-                // A preset's file follows from its name: no label.
-                assert_eq!(req.agent_file, None);
+                assert_eq!(req.agent_file, Some(format!("/w/{file}")));
             }
         }
     }
 
     #[test]
     fn a_mountless_sandbox_uses_the_parent_of_its_workdir() {
-        let p = preset_plan(
+        let p = agent_kit_plan(
             "claude",
+            "CLAUDE.md",
             vec![context_mixin("m", Source::LocalV3("/k/m".into()), "b")],
         );
         let (steps, _) = run(&p, &mut request(), &mut Policy::default()).unwrap();
@@ -1942,8 +1923,9 @@ mod tests {
 
     #[test]
     fn context_is_never_written_into_a_mounted_workspace() {
-        let p = preset_plan(
+        let p = agent_kit_plan(
             "claude",
+            "CLAUDE.md",
             vec![context_mixin("m", Source::LocalV3("/k/m".into()), "b")],
         );
         let mut req = in_workspace("/w/proj");
