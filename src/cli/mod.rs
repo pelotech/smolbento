@@ -259,9 +259,11 @@ pub fn confirm<R: Runner>(ctx: &Ctx<R>, question: &str, force: bool) -> Result<(
     if !ctx.can_prompt() {
         bail!("{question} Refusing without a terminal; pass -f to confirm");
     }
-    let mut out = &ctx.out;
-    write!(out, "{question} [y/N] ")?;
-    out.flush()?;
+    // A question, not command output: stderr, so stdout stays clean for `--json` and pipes.
+    let mut err = std::io::stderr().lock();
+    write!(err, "{question} [y/N] ")?;
+    err.flush()?;
+    drop(err);
     if is_yes(&ctx.read_line()?) {
         Ok(())
     } else {

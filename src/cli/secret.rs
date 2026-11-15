@@ -90,7 +90,10 @@ fn ls<R: Runner>(ctx: &Ctx<R>, file: &SecretsFile, a: &SecretLsArgs) -> Result<(
         .as_deref()
         .and_then(|s| sandbox::find(&ctx.vm, s).ok().flatten())
         .and_then(|sb| sb.meta.fork_of);
-    if let Some(doc) = a.output.structured(&ls_doc(file, a, parent.as_deref()))? {
+    // -q wins over --json, as in `ls` and `settings ls`.
+    if !a.quiet
+        && let Some(doc) = a.output.structured(&ls_doc(file, a, parent.as_deref()))?
+    {
         write!(&ctx.out, "{doc}")?;
         return Ok(());
     }

@@ -4,6 +4,9 @@ nav:
   - Home: README.md
   - Install: install.md
   - Usage: usage.md
+  - Kits, skills, MCP servers and templates: kits.md
+  - Environment files: environments.md
+  - Network policy and secrets: network-and-secrets.md
   - Configuration: configuration.md
   - sbx compatibility: sbx-compatibility.md
   - Troubleshooting: troubleshooting.md

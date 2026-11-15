@@ -12,29 +12,30 @@ pub fn run<R: Runner>(ctx: &mut Ctx<R>, cmd: SettingsCmd) -> Result<i32> {
             quiet,
             output,
         } => {
-            let docs = SETTINGS
-                .iter()
-                .map(|d| doc(&ctx.settings, d))
-                .collect::<Result<Vec<_>>>()?;
             let text = if quiet {
                 SETTINGS.iter().map(|d| format!("{}\n", d.key)).collect()
+            } else if output.pick() == super::Format::Table {
+                render(&ctx.settings, no_trunc)?
             } else {
-                match output.structured(&docs)? {
-                    Some(s) => s,
-                    None => render(&ctx.settings, no_trunc)?,
-                }
+                let docs = SETTINGS
+                    .iter()
+                    .map(|d| doc(&ctx.settings, d))
+                    .collect::<Result<Vec<_>>>()?;
+                output.structured(&docs)?.unwrap_or_default()
             };
             write!(&ctx.out, "{text}")?
         }
         SettingsCmd::Get { key, output } => {
+            // Errors for an unknown key, before anything is printed.
             let value = ctx.settings.value(&key)?;
             let def = SETTINGS.iter().find(|d| d.key == key);
-            match def.map(|d| doc(&ctx.settings, d)).transpose()? {
-                Some(d) if output.pick() != super::Format::Table => {
-                    write!(&ctx.out, "{}", output.structured(&d)?.unwrap_or_default())?
-                }
-                _ => writeln!(&ctx.out, "{value}")?,
-            }
+            let text = match def {
+                Some(d) if output.pick() != super::Format::Table => output
+                    .structured(&doc(&ctx.settings, d)?)?
+                    .unwrap_or_default(),
+                _ => format!("{value}\n"),
+            };
+            write!(&ctx.out, "{text}")?
         }
         SettingsCmd::Set { key, value } => ctx.settings.set(&key, &value)?,
         SettingsCmd::Unset { key } => ctx.settings.unset(&key)?,

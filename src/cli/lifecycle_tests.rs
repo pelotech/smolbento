@@ -1319,7 +1319,8 @@ fn rm_asks_on_a_terminal_and_removes_only_on_yes() {
     t.answer("n\n");
     let e = sbt(&mut t.ctx, &["rm", "claude-proj"]).unwrap_err();
     assert_eq!(e.to_string(), "aborted");
-    assert_eq!(t.stdout(), "Remove claude-proj? [y/N] ");
+    // The question goes to stderr: stdout stays clean for `--json` and pipes.
+    assert_eq!(t.stdout(), "");
     assert!(!deleted(&t));
     t.answer("y\n");
     sbt(&mut t.ctx, &["rm", "claude-proj"]).unwrap();
@@ -1623,6 +1624,29 @@ fn stop_rm_and_prune_print_sbxs_json() {
     assert_eq!(t.stdout(), "[]\n");
     t.sbt(&["prune", "-f", "--json"]).unwrap();
     assert_eq!(t.stdout(), "[]\n");
+}
+
+#[test]
+fn rm_that_fails_partway_still_reports_what_it_removed() {
+    let mut t = test_env(&[]);
+    let ls = format!(
+        "[{},{}]",
+        crate::testutil::json("sbx-a", "stopped", "a"),
+        crate::testutil::json("sbx-b", "stopped", "b")
+    );
+    t.runner().ok(&["machine", "ls", "--json"], &ls);
+    t.runner().fail(
+        &["machine", "delete", "-n", "sbx-b"],
+        "SMOLVM_ERROR",
+        "busy",
+    );
+    let err = t.sbt_err(&["rm", "-f", "a", "b", "--json"]);
+    assert!(err.contains("busy"), "{err}");
+    let v: serde_json::Value = serde_json::from_str(&t.stdout()).unwrap();
+    assert_eq!(
+        v,
+        serde_json::json!([{"action": "removed", "resource": "sandbox", "name": "a"}])
+    );
 }
 
 #[test]

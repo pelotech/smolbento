@@ -28,10 +28,8 @@ pub fn run<R: Runner>(ctx: &mut Ctx<R>, output: &super::OutputArgs) -> Result<i3
     named.extend(services_check(ctx).map(|c| ("host services", c)));
     let checks: Vec<(bool, String)> = named.iter().map(|(_, c)| c.clone()).collect();
     let (text, code) = report(&checks);
-    match output.structured(&structured(&named))? {
-        Some(doc) => write!(&ctx.out, "{doc}")?,
-        None => write!(&ctx.out, "{text}")?,
-    }
+    let text = output.structured(&structured(&named))?.unwrap_or(text);
+    write!(&ctx.out, "{text}")?;
     Ok(code)
 }
 

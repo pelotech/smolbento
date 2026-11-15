@@ -519,10 +519,11 @@ fn check<R: Runner>(ctx: &Ctx<R>, policy: &Policy, a: &CheckArgs) -> Result<i32>
     };
     let v = compile::check(policy, a.sandbox.as_deref(), &bound, &a.target);
     // sbx's shape, plus `reason` (the rule or default that decided). A bare host means port 443.
-    let target = if a.target.contains(':') {
-        a.target.clone()
-    } else {
-        format!("{}:443", a.target)
+    let target = match a.target.matches(':').count() {
+        0 => format!("{}:443", a.target),
+        // A bare IPv6 address.
+        n if n > 1 && !a.target.contains(']') => format!("[{}]:443", a.target),
+        _ => a.target.clone(),
     };
     let doc = serde_json::json!({
         "action": "net:connect:tcp",

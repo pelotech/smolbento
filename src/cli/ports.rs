@@ -37,17 +37,30 @@ pub fn run<R: Runner>(ctx: &mut Ctx<R>, a: &PortsArgs) -> Result<i32> {
         // sbx starts a stopped sandbox to publish on it; UDP ports can only change while stopped.
         provision::ensure_running(ctx, &mut sb)?;
     }
+    // With --json or --format: the ports this call published, as the listing shows them.
+    let text = a.output.pick() == super::Format::Table;
     if !publish.is_empty() {
         ctx.vm.publish(&sb.machine, &publish)?;
-        for p in &publish {
+        for p in publish.iter().filter(|_| text) {
             writeln!(&ctx.out, "Published 127.0.0.1:{} -> {}", p.host, p.guest)?;
         }
     }
     if !unpublish.is_empty() {
         ctx.vm.unpublish(&sb.machine, &unpublish)?;
-        for p in &unpublish {
+        for p in unpublish.iter().filter(|_| text) {
             writeln!(&ctx.out, "Unpublished 127.0.0.1:{}", p.host)?;
         }
+    }
+    if !text {
+        let published: Vec<PublishedPort> = publish
+            .iter()
+            .filter(|p| !p.udp)
+            .map(|p| PublishedPort {
+                host: p.host,
+                guest: p.guest,
+            })
+            .collect();
+        write!(&ctx.out, "{}", list(&published, &a.output)?)?;
     }
     Ok(0)
 }
@@ -115,6 +128,22 @@ mod tests {
         // Without a format it's the table.
         let table = list(&ports, &Default::default()).unwrap();
         assert!(table.starts_with("HOST"), "{table}");
+    }
+
+    #[test]
+    fn publish_with_json_prints_the_published_ports_not_text() {
+        let mut t = test_env(&[]);
+        sandbox(&t, "running");
+        t.sbt(&["ports", "a1", "--publish", "8080:80", "--json"])
+            .unwrap();
+        let v: serde_json::Value = serde_json::from_str(&t.stdout()).unwrap();
+        assert_eq!(
+            v,
+            serde_json::json!([{"host_ip": "127.0.0.1", "host_port": 8080, "sandbox_port": 80, "protocol": "tcp"}])
+        );
+        t.sbt(&["ports", "a1", "--unpublish", "8080:80", "--json"])
+            .unwrap();
+        assert_eq!(t.stdout(), "[]\n");
     }
 
     #[test]
