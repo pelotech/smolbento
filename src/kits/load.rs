@@ -154,29 +154,38 @@ fn fetch<R: Runner>(
 }
 
 /// Loads built-in agent `name`'s published kit (`agents::kit_ref`): pulled from Docker Hub, or
-/// read from its stand-in under `SMOLBENTO_AGENT_KITS_DIR`. Like smolbento's own kits it skips
+/// read from its stand-in under `SMOLBENTO_AGENT_KITS_DIR` (the only place a stand-in is read).
+/// `pin` (a template's recorded digest) loads that version, from the kit cache when it's there;
+/// `offline` (`--pull never`) refuses a pull. Like smolbento's own kits it skips
 /// `kit.allowedSources` and `kit.requireSignature` (sbx's kits are unsigned). Also returns
 /// whether loading it added nothing to the kit cache. `before` is called just before a pull.
 pub fn agent<R: Runner>(
     ctx: &Ctx<R>,
     name: &str,
+    pin: Option<&str>,
+    offline: bool,
     sandbox: Option<&str>,
     before: &mut dyn FnMut(Fetch),
 ) -> Result<(Kit, bool)> {
     let reference =
         crate::agents::kit_ref(&ctx.env, name).with_context(|| crate::agents::unknown(name))?;
     let source = Source::Agent(reference.clone());
+    let cache = ctx.paths.kit_cache();
     let (mut kit, cached) = if ctx.env.contains_key(crate::agents::KITS_DIR_ENV) {
         let kit = registry::read_layout(Path::new(&reference), source.clone())
             .with_context(|| format!("loading agent kit {reference}"))?;
         (kit, true)
+    } else if let Some(kit) = registry::cached(&reference, pin, &cache)? {
+        (kit, true)
     } else {
+        if offline {
+            bail!("kit {reference} isn't in the kit cache, and --pull never can't fetch it");
+        }
         let registries = registries(&SecretsFile::load(&ctx.paths)?, sandbox);
         let logins = Logins::new(&registries, &*ctx.store);
-        let cache = ctx.paths.kit_cache();
         before(Fetch::Pull);
         let blobs = entries(&registry::store_dir(&cache));
-        let kit = registry::pull(&reference, None, &cache, logins)
+        let kit = registry::pull(&reference, pin, &cache, logins)
             .with_context(|| format!("pulling agent kit {reference}"))?;
         (kit, entries(&registry::store_dir(&cache)) == blobs)
     };
@@ -195,8 +204,8 @@ pub fn unpinned(reference: &str) -> &str {
 
 /// Loads a template's recorded kit by its record `reference` (`ref@sha256:…`, a local path, or
 /// `builtin:NAME`). A pinned registry kit already in the kit cache needs no network; `offline`
-/// (`--pull never`) refuses one that isn't. `agent`: it is the template's built-in agent kit,
-/// tagged `Source::Agent` and exempt from kit policy, as at create. Every other kit meets kit
+/// (`--pull never`) refuses one that isn't. `agent`: the record is built-in agent `agent`'s kit,
+/// loaded by `agent` (exempt from kit policy, as at create). Every other kit meets kit
 /// policy as at create (an imported template may come from someone else): `kit.allowedSources`
 /// and `kit.allowLocalKits`, and `kit.requireSignature`, which refuses local kits and verifies a
 /// registry kit's pinned digest (so it needs the registry, even with `--pull never`).
@@ -204,7 +213,7 @@ pub fn pinned<R: Runner>(
     ctx: &Ctx<R>,
     reference: &str,
     offline: bool,
-    agent: bool,
+    agent: Option<&str>,
     sandbox: Option<&str>,
     before: &mut dyn FnMut(Fetch),
 ) -> Result<(Kit, bool)> {
@@ -214,20 +223,12 @@ pub fn pinned<R: Runner>(
     }
     let base = unpinned(reference);
     let digest = (base != reference).then(|| &reference[base.len() + 1..]);
+    if let Some(name) = agent {
+        return self::agent(ctx, name, digest, offline, sandbox, before);
+    }
     let path = Path::new(base);
     let require = ctx.settings.bool("kit.requireSignature")?;
-    // Only an agent's stand-in (tests) is read as a prebuilt layout.
-    let stand_in = agent
-        && ctx
-            .env
-            .get(crate::agents::KITS_DIR_ENV)
-            .is_some_and(|dir| path.parent() == Some(Path::new(dir.trim_end_matches('/'))));
-    let (mut kit, cached) = if stand_in {
-        (
-            registry::read_layout(path, Source::Registry(base.into()))?,
-            true,
-        )
-    } else if path.is_absolute() {
+    let (mut kit, cached) = if path.is_absolute() {
         trust::check(&Source::LocalV3(path.into()), &ctx.settings)?;
         if require {
             return Err(signers::refuse_local(base, path));
@@ -241,19 +242,17 @@ pub fn pinned<R: Runner>(
         }
         fetch(ctx, base, offline, sandbox, Position::Kit, before)?
     } else {
-        if !agent {
-            trust::check(&Source::Registry(base.into()), &ctx.settings)?;
-            if require {
-                if offline {
-                    bail!(
-                        "kit {base}: kit.requireSignature verifies it at the registry, which \
-                         --pull never can't reach"
-                    );
-                }
-                let registries = registries(&SecretsFile::load(&ctx.paths)?, sandbox);
-                let logins = Logins::new(&registries, &*ctx.store);
-                signers::verify_registry(reference, &ctx.settings, logins)?;
+        trust::check(&Source::Registry(base.into()), &ctx.settings)?;
+        if require {
+            if offline {
+                bail!(
+                    "kit {base}: kit.requireSignature verifies it at the registry, which --pull \
+                     never can't reach"
+                );
             }
+            let registries = registries(&SecretsFile::load(&ctx.paths)?, sandbox);
+            let logins = Logins::new(&registries, &*ctx.store);
+            signers::verify_registry(reference, &ctx.settings, logins)?;
         }
         let cache = ctx.paths.kit_cache();
         match registry::cached(base, digest, &cache)? {
@@ -269,9 +268,6 @@ pub fn pinned<R: Runner>(
             }
         }
     };
-    if agent {
-        kit.source = Source::Agent(base.into());
-    }
     kit.reference = Some(base.to_string());
     Ok((kit, cached))
 }

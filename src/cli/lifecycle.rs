@@ -809,7 +809,7 @@ mod tests {
             &t.ctx,
             &planted.display().to_string(),
             true,
-            false,
+            None,
             None,
             &mut |_| {},
         );

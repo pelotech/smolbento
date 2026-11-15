@@ -254,30 +254,30 @@ pub(crate) fn kit_plan<R: Runner>(
     p: &Progress,
 ) -> Result<Plan> {
     let mut kits = KitsSection::new(p, &req.name);
-    // A template's own mixins and their recorded args.
+    // A template's own mixins, and every recorded kit's args.
     let mut recorded: Vec<Kit> = Vec::new();
     let mut recorded_args: Vec<(String, Vec<String>)> = Vec::new();
     let (workload_source, workload) = match workload {
         Workload::Template(e) => {
             let offline = opts.pull.as_deref() == Some("never");
-            let agent_template = e.is_agent_template(&ctx.env);
-            for (i, rec) in e.kits.iter().enumerate() {
-                let agent = i == 0 && agent_template;
+            // docker.enabled=false leaves out the docker kit the source sandbox had.
+            let records = e
+                .kits
+                .iter()
+                .filter(|r| req.docker || r.reference != "builtin:docker");
+            for (i, rec) in records.enumerate() {
+                // The workload record is the agent's own kit for an agent's template.
+                let agent = (i == 0 && e.is_agent_template(&ctx.env)).then_some(e.agent.as_str());
                 let mut kit = kits.load_pinned(ctx, &rec.reference, offline, agent)?;
+                kit.content = match (i, kit.content) {
+                    // The template's pack boots; its source image is recorded.
+                    (0, _) => Content::Image(e.image.clone()),
+                    // A mixin's layers are in the pack already.
+                    (_, Content::Oci(_)) => Content::None,
+                    (_, content) => content,
+                };
                 let args = rec.args.iter().map(|(k, v)| format!("{k}={v}")).collect();
                 recorded_args.push((kit.name.clone(), args));
-                if i == 0 {
-                    // The template's pack boots; its source image is recorded.
-                    kit.content = Content::Image(e.image.clone());
-                } else if matches!(kit.content, Content::Oci(_)) {
-                    // Its layers are in the pack already.
-                    kit.content = Content::None;
-                }
-                // docker.enabled=false drops the docker kit the source sandbox had.
-                if kit.source == Source::Builtin("docker") && !req.docker {
-                    recorded_args.pop();
-                    continue;
-                }
                 recorded.push(kit);
             }
             (None, recorded.remove(0))
@@ -397,7 +397,7 @@ impl<'a> KitsSection<'a> {
         ctx: &Ctx<R>,
         reference: &str,
         offline: bool,
-        agent: bool,
+        agent: Option<&str>,
     ) -> Result<Kit> {
         let sandbox = self.sandbox.clone();
         self.fetch(load::unpinned(reference), |before| {
@@ -409,7 +409,7 @@ impl<'a> KitsSection<'a> {
     fn load_agent<R: Runner>(&mut self, ctx: &Ctx<R>, name: &str, reference: &str) -> Result<Kit> {
         let sandbox = self.sandbox.clone();
         self.fetch(reference, |before| {
-            load::agent(ctx, name, Some(&sandbox), before)
+            load::agent(ctx, name, None, false, Some(&sandbox), before)
         })
     }
 
