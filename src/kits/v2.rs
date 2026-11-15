@@ -223,29 +223,23 @@ fn cap(name: &str, body: CapBody) -> Cap {
 
 #[derive(Deserialize)]
 #[serde(rename_all = "camelCase", deny_unknown_fields)]
+// Some fields are only accepted, so published descriptors parse.
+#[allow(dead_code)]
 struct Spec {
     schema_version: String,
     kind: String,
     name: Option<String>,
     // Descriptive only.
-    #[allow(dead_code)]
     version: Option<String>,
-    #[allow(dead_code)]
     display_name: Option<String>,
-    #[allow(dead_code)]
     description: Option<String>,
-    #[allow(dead_code)]
     #[serde(rename = "sourceURL")]
     source_url: Option<String>,
-    #[allow(dead_code)]
     licenses: Option<Vec<String>>,
-    #[allow(dead_code)]
     locked: Option<Vec<String>>,
     // Composition (`extends`, `mixins`) belongs to the resolver; the keys are accepted so valid
     // specs parse.
-    #[allow(dead_code)]
     extends: Option<String>,
-    #[allow(dead_code)]
     mixins: Option<Value>,
     requires: Option<RequiresCfg>,
     security: Option<SecurityCfg>,
@@ -280,12 +274,13 @@ struct SecurityCfg {
 
 #[derive(Deserialize)]
 #[serde(deny_unknown_fields)]
+// Some fields are only accepted, so published descriptors parse.
+#[allow(dead_code)]
 struct ArgCfg {
     #[serde(default, deserialize_with = "opt_scalar")]
     default: Option<String>,
     #[serde(default)]
     required: bool,
-    #[allow(dead_code)]
     description: Option<String>,
     #[serde(default, rename = "enum", deserialize_with = "scalar_list")]
     enum_values: Vec<String>,
@@ -316,21 +311,23 @@ struct NetworkCfg {
 
 #[derive(Deserialize)]
 #[serde(deny_unknown_fields)]
+// Some fields are only accepted, so published descriptors parse.
+#[allow(dead_code)]
 struct PortCfg {
     container: u16,
     protocol: Option<String>,
-    #[allow(dead_code)]
     name: Option<String>,
 }
 
 #[derive(Deserialize)]
 #[serde(deny_unknown_fields)]
+// Some fields are only accepted, so published descriptors parse.
+#[allow(dead_code)]
 struct VolumeCfg {
     path: String,
     #[serde(rename = "type")]
     ty: Option<String>,
     // smolvm volumes are not sized per mount.
-    #[allow(dead_code)]
     size: Option<String>,
     mode: Option<String>,
 }
@@ -363,11 +360,12 @@ enum CommandCfg {
 
 #[derive(Deserialize)]
 #[serde(deny_unknown_fields)]
+// Some fields are only accepted, so published descriptors parse.
+#[allow(dead_code)]
 struct CommandMap {
     #[serde(default)]
     default: Vec<String>,
     // The interactive tail belongs to the agent launcher.
-    #[allow(dead_code)]
     interactive: Option<Vec<String>>,
 }
 
@@ -382,14 +380,13 @@ impl CommandCfg {
 
 #[derive(Deserialize)]
 #[serde(deny_unknown_fields)]
+// Some fields are only accepted, so published descriptors parse.
+#[allow(dead_code)]
 struct CredCfg {
     service: String,
-    #[allow(dead_code)]
     description: Option<String>,
-    #[allow(dead_code)]
     required: Option<bool>,
     // Reserved upstream: accepted, no effect.
-    #[allow(dead_code)]
     provider: Option<String>,
     #[serde(rename = "apiKey")]
     api_key: Option<ApiKeyCfg>,
@@ -398,6 +395,8 @@ struct CredCfg {
 
 #[derive(Deserialize)]
 #[serde(rename_all = "camelCase", deny_unknown_fields)]
+// Some fields are only accepted, so published descriptors parse.
+#[allow(dead_code)]
 struct OAuthCfg {
     token_endpoint: Option<TokenEndpoint>,
     #[serde(default)]
@@ -405,13 +404,9 @@ struct OAuthCfg {
     #[serde(default)]
     passthrough: bool,
     // Sentinel and credential-file plumbing is the proxy's business; accepted and ignored.
-    #[allow(dead_code)]
     sentinels: Option<Value>,
-    #[allow(dead_code)]
     credential_file: Option<Value>,
-    #[allow(dead_code)]
     response_fields: Option<Value>,
-    #[allow(dead_code)]
     skip_if_env: Option<String>,
 }
 
@@ -487,21 +482,23 @@ struct Setup {
 
 #[derive(Deserialize)]
 #[serde(deny_unknown_fields)]
+// Some fields are only accepted, so published descriptors parse.
+#[allow(dead_code)]
 struct InstallCfg {
     command: String,
     user: Option<String>,
-    #[allow(dead_code)]
     description: Option<String>,
 }
 
 #[derive(Deserialize)]
 #[serde(deny_unknown_fields)]
+// Some fields are only accepted, so published descriptors parse.
+#[allow(dead_code)]
 struct StartupCfg {
     command: Vec<String>,
     user: Option<String>,
     #[serde(default)]
     background: bool,
-    #[allow(dead_code)]
     description: Option<String>,
 }
 

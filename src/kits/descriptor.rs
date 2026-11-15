@@ -4,11 +4,12 @@ use serde::Deserialize;
 
 #[derive(Deserialize)]
 #[serde(rename_all = "camelCase", deny_unknown_fields)]
+// Some fields are only accepted, so published descriptors parse.
+#[allow(dead_code)]
 pub(super) struct ApiKeyCfg {
     #[serde(default)]
     pub(super) name: String,
     // The proxy always keeps real values off the guest, so the flag changes nothing here.
-    #[allow(dead_code)]
     #[serde(default)]
     pub(super) proxy_managed: bool,
     #[serde(default)]
@@ -28,9 +29,10 @@ pub(super) struct InjectCfg {
 
 #[derive(Deserialize)]
 #[serde(deny_unknown_fields)]
+// Some fields are only accepted, so published descriptors parse.
+#[allow(dead_code)]
 pub(super) struct TokenEndpoint {
     pub(super) host: String,
-    #[allow(dead_code)]
     pub(super) path: Option<String>,
 }
 

@@ -65,6 +65,8 @@ struct CapabilityItem {
 // Lenient like the descriptor's top level: an unknown arg key is ignored.
 #[derive(Deserialize)]
 #[serde(rename_all = "camelCase")]
+// Some fields are only accepted, so published descriptors parse.
+#[allow(dead_code)]
 struct Arg {
     #[serde(default, deserialize_with = "opt_scalar")]
     default: Option<String>,
@@ -75,7 +77,6 @@ struct Arg {
     enum_values: Vec<String>,
     env: Option<String>,
     // Accepted so published descriptors parse.
-    #[allow(dead_code)]
     description: Option<String>,
     /// Set for an argument the build takes.
     build_arg: Option<String>,
@@ -571,6 +572,8 @@ enum OneOrMany {
 
 #[derive(Deserialize)]
 #[serde(rename_all = "camelCase", deny_unknown_fields)]
+// Some fields are only accepted, so published descriptors parse.
+#[allow(dead_code)]
 struct OAuthCfg {
     token_endpoint: Option<TokenEndpoint>,
     #[serde(default)]
@@ -578,11 +581,8 @@ struct OAuthCfg {
     #[serde(default)]
     passthrough: bool,
     // Sentinel and credential-file plumbing is the proxy's business; accepted and ignored.
-    #[allow(dead_code)]
     sentinels: Option<Value>,
-    #[allow(dead_code)]
     credential_file: Option<Value>,
-    #[allow(dead_code)]
     response_fields: Option<Value>,
 }
 
@@ -759,22 +759,23 @@ fn check_ssh_phases(kit: &str, caps: &[Cap]) -> Result<()> {
 
 #[derive(Deserialize)]
 #[serde(deny_unknown_fields)]
+// Some fields are only accepted, so published descriptors parse.
+#[allow(dead_code)]
 struct PortCfg {
     // Labels and the address family describe the service; the model does not need them.
-    #[allow(dead_code)]
     name: Option<String>,
     container: u16,
     transport: Option<String>,
-    #[allow(dead_code)]
     family: Option<String>,
 }
 
 #[derive(Deserialize)]
 #[serde(deny_unknown_fields)]
+// Some fields are only accepted, so published descriptors parse.
+#[allow(dead_code)]
 struct VolumeCfg {
     path: String,
     // smolvm volumes are not sized per mount.
-    #[allow(dead_code)]
     size: Option<String>,
     #[serde(default)]
     tmpfs: bool,
@@ -829,6 +830,8 @@ struct AgentContextV2 {
 
 #[derive(Deserialize, Default)]
 #[serde(deny_unknown_fields)]
+// Some fields are only accepted, so published descriptors parse.
+#[allow(dead_code)]
 struct LifecycleCfg {
     #[serde(default)]
     install: Vec<HookCfg>,
@@ -837,12 +840,13 @@ struct LifecycleCfg {
     #[serde(default)]
     files: Vec<FileCfg>,
     // The launch-argv tail for interactive sessions belongs to the agent launcher.
-    #[allow(dead_code)]
     interactive: Option<Vec<String>>,
 }
 
 #[derive(Deserialize)]
 #[serde(deny_unknown_fields)]
+// Some fields are only accepted, so published descriptors parse.
+#[allow(dead_code)]
 struct HookCfg {
     command: CommandCfg,
     user: Option<String>,
@@ -850,7 +854,6 @@ struct HookCfg {
     env: Vec<String>,
     // Meaningful for startup hooks only.
     background: Option<bool>,
-    #[allow(dead_code)]
     description: Option<String>,
 }
 
@@ -863,12 +866,13 @@ enum CommandCfg {
 
 #[derive(Deserialize)]
 #[serde(deny_unknown_fields)]
+// Some fields are only accepted, so published descriptors parse.
+#[allow(dead_code)]
 struct FileCfg {
     path: String,
     content: String,
     mode: Option<String>,
     overwrite: Option<bool>,
-    #[allow(dead_code)]
     description: Option<String>,
 }
 
