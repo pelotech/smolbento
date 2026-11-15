@@ -19,6 +19,8 @@ smolbento-only:
 
 - `fork`. sbx has none; its `template save` saves only the disk.
 - `daemon`. Accepted and does nothing.
+- `smolvm ARGS…`. Runs the smolvm smolbento uses (the pinned release it downloads) on its own
+  state (`~/.smolbento`), passing ARGS through. sbx has no `smolvm` command.
 
 ## Parses, not implemented yet (exit 2)
 

@@ -24,6 +24,7 @@ Commands:
   diagnose    Check smolbento's environment
   settings    Read and change settings
   daemon      Accepted for sbx compatibility; smolbento needs no daemon
+  smolvm      Run smolbento's smolvm (the pinned release) on smolbento's sandboxes (smolbento only)
   ports       Publish or unpublish ports on a sandbox (127.0.0.1 only)
   policy      Network policy
   secret      Secrets for agents: sandboxes see placeholders, smolvm sends the real value [alias: secrets]

@@ -79,6 +79,12 @@ pub struct ProcessRunner {
     env: Vec<(String, String)>,
 }
 
+/// A `-D` line: the call as `sbt smolvm …`, which runs the same smolvm with the same state, so
+/// it can be pasted.
+fn trace_line(args: &[String]) -> String {
+    format!("+ sbt smolvm {}", args.join(" "))
+}
+
 impl ProcessRunner {
     pub fn new(bin: impl Into<PathBuf>) -> Self {
         Self {
@@ -111,12 +117,7 @@ impl ProcessRunner {
         if self.debug {
             // Not `eprintln!`: after a hang-up stderr is gone, and the calls that stop or remove
             // the sandbox still have to run.
-            let _ = writeln!(
-                std::io::stderr(),
-                "+ {} {}",
-                self.bin.display(),
-                args.join(" ")
-            );
+            let _ = writeln!(std::io::stderr(), "{}", trace_line(args));
         }
     }
 
@@ -404,6 +405,12 @@ mod tests {
 
     fn pair(k: &str, v: &str) -> (String, String) {
         (k.to_string(), v.to_string())
+    }
+
+    #[test]
+    fn debug_lines_are_pasteable() {
+        let args = ["machine".to_string(), "ls".into(), "--json".into()];
+        assert_eq!(trace_line(&args), "+ sbt smolvm machine ls --json");
     }
 
     #[test]

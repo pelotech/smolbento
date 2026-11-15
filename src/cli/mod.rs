@@ -41,7 +41,6 @@ use clap::{CommandFactory, Parser};
 use crate::config::{Paths, Settings};
 use crate::smolvm::{ProcessRunner, Runner, Smolvm};
 
-
 pub fn exit_code(err: &anyhow::Error) -> u8 {
     if err.downcast_ref::<Unsupported>().is_some() {
         2
@@ -188,6 +187,7 @@ pub fn dispatch<R: Runner>(ctx: &mut Ctx<R>, cli: Cli) -> Result<i32> {
         Cmd::Bridge { sandbox } => bridge::run(ctx, &sandbox),
         Cmd::Ssh(s) => ssh::run(ctx, s),
         Cmd::Serve { kind, sandbox } => serve::run(ctx, &kind, &sandbox),
+        Cmd::Smolvm(p) => ctx.vm.runner().interactive(&p.args),
         Cmd::Daemon(_) => {
             writeln!(
                 &ctx.out,
@@ -401,6 +401,28 @@ mod tests {
         assert_eq!(t.sbt(&["settings", "unset", "docker.enabled"]).unwrap(), 0);
         let (_, err) = Settings::load(&t.ctx.paths, t.ctx.env.clone());
         assert_eq!(err, None, "unset rewrote a valid config.toml");
+    }
+
+    #[test]
+    fn smolvm_passes_args_and_exit_code_through() {
+        let mut t = test_env(&[]);
+        t.runner().interactive_exit(7);
+        assert_eq!(t.sbt(&["smolvm", "machine", "ls", "--json"]).unwrap(), 7);
+        assert_eq!(
+            t.runner().interactive_calls(),
+            [vec!["machine".to_string(), "ls".into(), "--json".into()]]
+        );
+    }
+
+    #[test]
+    fn smolvm_reserves_no_words() {
+        let mut t = test_env(&[]);
+        t.sbt(&["smolvm", "install"]).unwrap();
+        t.sbt(&["smolvm", "--version"]).unwrap();
+        assert_eq!(
+            t.runner().interactive_calls(),
+            [vec!["install".to_string()], vec!["--version".to_string()]]
+        );
     }
 
     #[test]

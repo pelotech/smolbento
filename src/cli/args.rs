@@ -72,6 +72,8 @@ pub enum Cmd {
     Settings(SettingsCmd),
     /// Accepted for sbx compatibility; smolbento needs no daemon
     Daemon(Passthrough),
+    /// Run smolbento's smolvm (the pinned release) on smolbento's sandboxes (smolbento only)
+    Smolvm(Passthrough),
     /// Publish or unpublish ports on a sandbox (127.0.0.1 only)
     Ports(PortsArgs),
     /// Network policy
@@ -154,6 +156,7 @@ impl Cmd {
                 | Cmd::UploadPack { .. }
                 | Cmd::Bridge { .. }
                 | Cmd::Ssh(_)
+                | Cmd::Smolvm(_)
                 | Cmd::Template(TemplateCmd::Save(_))
                 | Cmd::Env(EnvCmd::Create(_) | EnvCmd::Run(_) | EnvCmd::Exec(_) | EnvCmd::Rm(_))
         )
