@@ -92,6 +92,9 @@ pub struct Kit {
     pub command: Option<Vec<String>>,
     /// The image config's `User` and `WorkingDir`, for a kit read from an OCI layout (v3).
     pub config: Option<ImageConfig>,
+    /// Its manifest asks for a Docker engine (`com.docker.sandboxes.start-docker: "true"`), as
+    /// sbx's published agent kits do.
+    pub starts_docker: bool,
     /// The reference the user gave (`--kit`, the agent argument), as typed: resolver messages name
     /// kits by it, as sbx does. None for presets and kits already in a sandbox.
     pub reference: Option<String>,
@@ -115,6 +118,7 @@ impl Kit {
             content: Content::None,
             command: None,
             config: None,
+            starts_docker: false,
             reference: None,
         }
     }

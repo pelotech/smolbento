@@ -143,6 +143,7 @@ fn from_value(v: Value, source: Source) -> Result<Kit> {
         content: Content::None,
         command: None,
         config: None,
+        starts_docker: false,
         reference: None,
     })
 }

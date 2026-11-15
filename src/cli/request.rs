@@ -302,8 +302,8 @@ pub(crate) fn kit_plan<R: Runner>(
             }
             if let Content::Image(image) = &kit.content {
                 req.image = image.clone();
-                req.docker = ctx.settings.bool("docker.enabled")? && agents::is_docker_image(image);
             }
+            req.docker = wants_docker(&kit, ctx.settings.bool("docker.enabled")?);
             kit
         }
     };
@@ -438,6 +438,17 @@ fn needs_docker_kit(docker_image: bool, workload: &Kit, mixins: &[Kit]) -> bool 
                     .iter()
                     .any(|p| capability::provides_name(p, "docker"))
         })
+}
+
+/// Whether a workload kit gets the `docker` kit: a prebuilt kit when its manifest asks for an
+/// engine, a plain image when its name says it's Docker-enabled; never with `docker.enabled=false`.
+fn wants_docker(kit: &Kit, enabled: bool) -> bool {
+    enabled
+        && match &kit.content {
+            Content::Oci(_) => kit.starts_docker,
+            Content::Image(image) => agents::is_docker_image(image),
+            _ => false,
+        }
 }
 
 /// A path or a registry reference rather than a misspelt agent, which mustn't reach a registry.
@@ -1090,6 +1101,22 @@ SETUP
             .map(|k| k.name.clone())
             .collect();
         assert_eq!(names, ["docker", "akit"]);
+    }
+
+    #[test]
+    fn a_start_docker_workload_gets_the_docker_kit() {
+        use crate::kits::model::{Content, Kind, Kit, Source};
+        let mut w = Kit::new("wl", Kind::Workload, Source::Registry("acme/wl:1".into()));
+        w.content = Content::Oci("/layout".into());
+        assert!(!wants_docker(&w, true));
+        w.starts_docker = true;
+        assert!(wants_docker(&w, true));
+        // docker.enabled=false: no docker kit.
+        assert!(!wants_docker(&w, false));
+        // A plain image is still judged by its name.
+        w.content = Content::Image("docker/sandbox-templates:shell-docker".into());
+        w.starts_docker = false;
+        assert!(wants_docker(&w, true));
     }
 
     #[test]

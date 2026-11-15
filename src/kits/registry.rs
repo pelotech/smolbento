@@ -37,6 +37,8 @@ use crate::util::{hex, sha256_digest};
 const DESCRIPTOR_ANNOTATION: &str = "vnd.docker.sandbox.kit.descriptor";
 const SCHEMA_ANNOTATION: &str = "vnd.docker.sandbox.kit.schema-version";
 const REF_NAME_ANNOTATION: &str = "org.opencontainers.image.ref.name";
+/// sbx's published kits set it to `"true"` when the image's Docker engine should start.
+const START_DOCKER_ANNOTATION: &str = "com.docker.sandboxes.start-docker";
 /// The config of a v2 kit published as an OCI artifact: the kit's spec.yaml.
 const V2_SPEC_MEDIA_TYPE: &str = "application/vnd.docker.sandbox.kit.v2.spec+yaml";
 const EMPTY_MEDIA_TYPE: &str = "application/vnd.oci.empty.v1+json";
@@ -857,6 +859,7 @@ pub fn read_layout(dir: &Path, source: Source) -> Result<Kit> {
         user: text("User"),
         workdir: text("WorkingDir"),
     });
+    kit.starts_docker = manifest["annotations"][START_DOCKER_ANNOTATION].as_str() == Some("true");
     kit.digest = Some(digest);
     kit.content = Content::Oci(dir.to_path_buf());
     Ok(kit)
@@ -1048,6 +1051,17 @@ pub(crate) mod fixtures {
         layers: &[&[u8]],
         config_json: &str,
     ) -> String {
+        oci_layout_with(dir, annotation_json, &[], layers, config_json)
+    }
+
+    /// `oci_layout` with `extra` manifest annotations beside the descriptor.
+    pub fn oci_layout_with(
+        dir: &Path,
+        annotation_json: Option<&str>,
+        extra: &[(&str, &str)],
+        layers: &[&[u8]],
+        config_json: &str,
+    ) -> String {
         let blobs = dir.join("blobs").join("sha256");
         fs::create_dir_all(&blobs).unwrap();
         let put = |data: &[u8]| {
@@ -1073,6 +1087,9 @@ pub(crate) mod fixtures {
         if let Some(a) = annotation_json {
             manifest["annotations"] = json!({DESCRIPTOR_ANNOTATION: a, SCHEMA_ANNOTATION: "3"});
         }
+        for (k, v) in extra {
+            manifest["annotations"][*k] = json!(v);
+        }
         let bytes = serde_json::to_vec(&manifest).unwrap();
         let digest = put(&bytes);
         fs::write(dir.join("oci-layout"), r#"{"imageLayoutVersion":"1.0.0"}"#).unwrap();
@@ -1093,6 +1110,22 @@ mod tests {
 
     fn src() -> Source {
         Source::Registry("docker.io/acme/kit:1".into())
+    }
+
+    #[test]
+    fn start_docker_annotation_is_read() {
+        let flagged = tempfile::tempdir().unwrap();
+        fixtures::oci_layout_with(
+            flagged.path(),
+            Some(DESC),
+            &[("com.docker.sandboxes.start-docker", "true")],
+            &[],
+            "{}",
+        );
+        assert!(read_layout(flagged.path(), src()).unwrap().starts_docker);
+        let plain = tempfile::tempdir().unwrap();
+        fixtures::oci_layout(plain.path(), Some(DESC), &[], "{}");
+        assert!(!read_layout(plain.path(), src()).unwrap().starts_docker);
     }
 
     #[test]
