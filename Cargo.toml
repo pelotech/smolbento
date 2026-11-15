@@ -49,5 +49,5 @@ codegen-units = 1
 strip = true
 
 [dev-dependencies]
-insta = "1.49.0"
-shlex = "2.0.1"
+insta = "=1.49.0"
+shlex = "=2.0.1"
