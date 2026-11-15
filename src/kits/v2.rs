@@ -37,11 +37,12 @@ fn name_or_source(name: Option<String>, dir: &Path) -> Result<String> {
 }
 
 /// `dir` is the kit directory: `spec.yaml` sits in it, with optional `files/home` and
-/// `files/workspace` beside it. Fields smolbento ignores are warnings on stderr.
+/// `files/workspace` beside it. Fields smolbento ignores are kit warnings (shown with
+/// `kit.showWarnings` or `-D`).
 pub fn parse(yaml: &str, dir: &Path) -> Result<Kit> {
     let (kit, warnings) = parse_warn(yaml, dir)?;
     for w in warnings {
-        eprintln!("{w}");
+        crate::kit_warning!("{w}");
     }
     Ok(kit)
 }

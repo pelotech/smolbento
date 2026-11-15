@@ -2,7 +2,9 @@
 schemaVersion: "3"
 kind: mixin
 displayName: nix
-version: "0.0.2" # x-release-please-version
+# x-release-please-start-version
+version: "0.0.2"
+# x-release-please-end
 provides: [nix, direnv]
 args:
   # Nix's default profile first; `nix profile install` as agent lands in ~/.nix-profile.

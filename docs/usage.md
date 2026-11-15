@@ -513,7 +513,7 @@ adds a line to the list. Unlike sbx, smolbento writes no platform preamble.
 
 - Nothing is written on your machine. A file that would land in a mounted workspace is skipped with
   a warning.
-- A workload kit with no agent file drops mixin instructions, with a warning.
+- A workload kit with no agent file drops mixin instructions (`kit.showWarnings` shows a warning).
 - Files are owned by `agent`, except a file the image already has owned by root, which keeps its
   owner.
 - With `--clone` and a subdirectory workspace, the parent directory is in the clone, so the files
@@ -983,7 +983,8 @@ bento policy allow network --sandbox claude-myrepo localhost
 ## Secrets
 
 Agents never see your API keys. The variable holds a placeholder inside the sandbox, and smolvm
-swaps in the real value only on HTTPS requests to that service's hosts.
+swaps in the real value only on HTTPS requests to that service's hosts. An agent whose kit takes
+the key another way gets no variable: `claude` reads it through its `apiKeyHelper`.
 
 ```sh
 # prompts (hidden input; an empty line cancels)

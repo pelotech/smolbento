@@ -62,10 +62,10 @@ impl PartialEq<&str> for Skipped {
 }
 
 impl Plan {
-    /// One stderr line per skipped optional capability.
+    /// One stderr line per skipped optional capability, when kit warnings are shown.
     pub fn warn_skipped(&self) {
         for w in self.skipped_warnings() {
-            eprintln!("warning: {w}");
+            crate::kit_warning!("warning: {w}");
         }
     }
 

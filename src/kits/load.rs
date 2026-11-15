@@ -587,7 +587,15 @@ mod tests {
             "{yaml}"
         );
         assert!(yaml.contains("\nbuild: |\n"), "{yaml}");
-        assert!(yaml.contains("# x-release-please-version"), "{yaml}");
+        // Docker's base image prints each kit's `version:` line in the login banner, stripping
+        // only spaces and quotes, so the line carries no comment: release-please's markers go
+        // around it instead.
+        assert!(
+            yaml.contains("# x-release-please-start-version\nversion: \""),
+            "{yaml}"
+        );
+        let line = yaml.lines().find(|l| l.starts_with("version:")).unwrap();
+        assert!(!line.contains('#'), "{line}");
         let kit = v3::parse(yaml, Source::LocalV3("kits/nix".into())).unwrap();
         assert_eq!(kit.name, "nix");
     }
