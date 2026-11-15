@@ -370,7 +370,7 @@ mod tests {
         t.sbt(&["create", "claude", ".", "--static-mcp", "files"])
             .unwrap();
         let create = t.calls_of("machine create").remove(0);
-        assert!(!create.contains("sbx.kits"), "{create}");
+        assert!(!create.contains("builtin:docker"), "{create}");
         assert!(
             t.calls_of("machine exec")
                 .iter()

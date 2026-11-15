@@ -108,6 +108,27 @@ pub const NAMES: [&str; 10] = [
     "shell",
 ];
 
+/// Set (by tests) to a directory of prebuilt stand-in kits, one OCI layout per agent name, read
+/// instead of Docker Hub.
+pub const KITS_DIR_ENV: &str = "SMOLBENTO_AGENT_KITS_DIR";
+
+/// Whether `name` is a built-in agent.
+pub fn is_agent(name: &str) -> bool {
+    NAMES.contains(&name)
+}
+
+/// The kit a built-in agent name loads: sbx's published `docker.io/sbx/<name>:latest`, or its
+/// stand-in under `SMOLBENTO_AGENT_KITS_DIR`. `None` for any other name.
+pub fn kit_ref(env: &std::collections::BTreeMap<String, String>, name: &str) -> Option<String> {
+    if !is_agent(name) {
+        return None;
+    }
+    Some(match env.get(KITS_DIR_ENV) {
+        Some(dir) => format!("{}/{name}", dir.trim_end_matches('/')),
+        None => format!("docker.io/sbx/{name}:latest"),
+    })
+}
+
 /// Agents sbx no longer offers (v0.53): a new sandbox with one is refused.
 const RETIRED: &[Retired] = &[Retired {
     name: "gemini",
@@ -317,5 +338,24 @@ mod tests {
             command_with_args(base, &s(&["mcp", "list"])),
             s(&["claude", "mcp", "list"])
         );
+    }
+}
+
+#[cfg(test)]
+mod kit_ref_tests {
+    use super::*;
+
+    #[test]
+    fn kit_ref_defaults_to_docker_hub() {
+        let mut env = std::collections::BTreeMap::new();
+        assert_eq!(
+            kit_ref(&env, "codex").as_deref(),
+            Some("docker.io/sbx/codex:latest")
+        );
+        assert_eq!(kit_ref(&env, "nope"), None);
+        assert_eq!(kit_ref(&env, "gemini"), None);
+        env.insert("SMOLBENTO_AGENT_KITS_DIR".to_string(), "/kits".to_string());
+        assert_eq!(kit_ref(&env, "codex").as_deref(), Some("/kits/codex"));
+        assert!(is_agent("docker-agent") && !is_agent("antigravity"));
     }
 }

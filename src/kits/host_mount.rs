@@ -18,7 +18,7 @@ pub fn identity(kit: &Kit) -> Result<String> {
         Source::LocalV3(p) | Source::LocalV2(p) | Source::Smolfile(p) => {
             Ok(p.to_string_lossy().into_owned())
         }
-        Source::Registry(r) => {
+        Source::Registry(r) | Source::Agent(r) => {
             let r: Reference = r
                 .parse()
                 .with_context(|| format!("invalid kit reference '{r}'"))?;

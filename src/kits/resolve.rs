@@ -339,7 +339,7 @@ pub fn resolve_for(
 
     let mut skipped = Vec::new();
     let mut ssh_entries = Vec::new();
-    if matches!(workload.source, Source::Preset(_)) {
+    if matches!(workload.source, Source::Preset(_) | Source::Agent(_)) {
         ssh_entries.push(BUILT_IN);
     }
     for k in &all {
@@ -1241,6 +1241,20 @@ mod tests {
         );
         // The same grant a create with no plan uses.
         assert_eq!(built_in_ssh_agent(), p.merged.ssh_agent);
+        // A built-in agent's published kit gets it too; a kit merely named like one doesn't.
+        let mut agent = workload("claude");
+        agent.source = Source::Agent("docker.io/sbx/claude:latest".into());
+        assert_eq!(
+            run(agent, vec![]).unwrap().merged.ssh_agent,
+            built_in_ssh_agent()
+        );
+        assert!(
+            run(workload("claude"), vec![])
+                .unwrap()
+                .merged
+                .ssh_agent
+                .is_empty()
+        );
         // A workload kit gets nothing unless it asks.
         assert!(
             run(workload("w"), vec![])

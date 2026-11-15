@@ -88,7 +88,7 @@ pub fn spec(loaded: &Loaded, overrides: &Overrides, secrets: &SecretsFile) -> Re
             bail!("{k}: no such file or directory");
         }
     }
-    let target = if agents::find(agent).is_some() {
+    let target = if agents::is_agent(agent) {
         agent.to_string()
     } else if let Some(r) = agents::retired(agent) {
         // As in sbx: a retired agent runs from the kit that keeps it, listed in `kits:`.

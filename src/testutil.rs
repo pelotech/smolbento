@@ -384,6 +384,19 @@ pub const CLAUDE_STAND_IN: &str = r#"{
   ]
 }"#;
 
+/// The default `claude` stand-in: only its agent file and skills directory, so a test's rules,
+/// credentials and steps are its own. `CLAUDE_STAND_IN` is the whole shape.
+pub const CLAUDE_FILES_STAND_IN: &str = r#"{
+  "schemaVersion": "3",
+  "kind": "workload",
+  "capabilities": [
+    {"type": "com.docker.sandbox/agent-skills@1", "optional": true,
+     "config": {"path": "/home/agent/.claude/skills"}},
+    {"type": "com.docker.sandbox/agent-context@1", "optional": true,
+     "config": {"content": "", "directory": "/home/agent/.claude", "filename": "CLAUDE.md"}}
+  ]
+}"#;
+
 /// Stand-ins for the built-in agents' published kits: a prebuilt OCI layout per name under
 /// `dir`, as `load::agent` reads them when `SMOLBENTO_AGENT_KITS_DIR` is set. Each launches its
 /// own name as the `agent` user; only `claude` has capabilities.
@@ -392,13 +405,15 @@ pub fn agent_kits(dir: &std::path::Path) {
         let kit = dir.join(name);
         std::fs::create_dir_all(&kit).unwrap();
         let descriptor = match name {
-            "claude" => CLAUDE_STAND_IN.to_string(),
+            "claude" => CLAUDE_FILES_STAND_IN.to_string(),
             _ => r#"{"schemaVersion": "3", "kind": "workload"}"#.to_string(),
         };
         let config = serde_json::json!({"config": {"Entrypoint": [name], "User": "agent"}});
-        crate::kits::registry::fixtures::oci_layout(
+        // sbx's published agent kits all ask for their Docker engine.
+        crate::kits::registry::fixtures::oci_layout_with(
             &kit,
             Some(&descriptor),
+            &[("com.docker.sandboxes.start-docker", "true")],
             &[],
             &config.to_string(),
         );
@@ -420,11 +435,14 @@ mod tests {
             assert_eq!(k.kind, Kind::Workload, "{name}");
             assert_eq!(k.command, Some(vec![name.to_string()]), "{name}");
         }
-        let claude = read_layout(
-            &dir.path().join("claude"),
-            Source::Registry("claude".into()),
-        )
-        .unwrap();
+        let claude = tempfile::tempdir().unwrap();
+        crate::kits::registry::fixtures::oci_layout(
+            claude.path(),
+            Some(CLAUDE_STAND_IN),
+            &[],
+            "{}",
+        );
+        let claude = read_layout(claude.path(), Source::Registry("claude".into())).unwrap();
         let cred = claude
             .caps
             .iter()

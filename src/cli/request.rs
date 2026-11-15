@@ -141,16 +141,23 @@ fn base_request<R: Runner>(
 /// Kit args need a kit: a `--kit` or a workload kit as the target. Like sbx this fails on every
 /// command, including `run` of an existing sandbox.
 pub(crate) fn check_kit_args(targets: &[String], opts: &SandboxOpts) -> Result<()> {
-    let workload_kit = targets.first().is_some_and(|t| agents::find(t).is_none());
+    // Every target is a workload kit now, built-in agents included.
+    let workload_kit = !targets.is_empty();
     if !workload_kit && opts.kit.is_empty() && has_kit_args(opts) {
         bail!("kit arguments were supplied but no kits were referenced");
     }
     Ok(())
 }
 
-/// The workload `kit_target` found: the preset as a kit, or a workload kit not loaded yet.
+/// The workload `kit_target` found: a preset (from a saved template), a built-in agent's kit
+/// or a workload kit, not loaded yet.
 pub(crate) enum Workload {
     Preset(Box<Kit>),
+    /// A built-in agent's published kit, by `agents::kit_ref`.
+    Agent {
+        name: String,
+        reference: String,
+    },
     Ref(String),
 }
 
@@ -230,6 +237,25 @@ pub(crate) fn kit_target<R: Runner>(
     default_to_cwd: bool,
 ) -> Result<(CreateRequest, Option<Workload>)> {
     let (target, paths) = targets.split_first().context("specify an agent")?;
+    if let Some(reference) = agents::kit_ref(&ctx.env, target) {
+        let saved = match &opts.template {
+            Some(t) => crate::templates::Store::new(&ctx.paths).find_ref(t)?,
+            None => None,
+        };
+        if saved.is_none() {
+            if opts.pull.as_deref() == Some("never") {
+                return Err(super::Unsupported(
+                    "--pull never works only with a saved template (see `sbt template ls`); \
+                     smolvm pulls missing images"
+                        .into(),
+                )
+                .into());
+            }
+            let req = base_request(ctx, target, paths, opts, default_to_cwd)?;
+            let name = target.clone();
+            return Ok((req, Some(Workload::Agent { name, reference })));
+        }
+    }
     Ok(match agents::find(target) {
         Some(agent) => {
             let req = build_request(ctx, target, paths, opts, default_to_cwd)?;
@@ -245,9 +271,6 @@ pub(crate) fn kit_target<R: Runner>(
             }
             if !looks_like_kit(target) {
                 bail!(agents::unknown(target));
-            }
-            if opts.template.is_some() {
-                bail!("-t can't be combined with a workload kit");
             }
             let name = load::kit_name(ctx, target)?;
             let req = base_request(ctx, &name, paths, opts, default_to_cwd)?;
@@ -279,10 +302,24 @@ pub(crate) fn kit_plan<R: Runner>(
     let mut kits = KitsSection::new(p, &req.name);
     let workload_source = match &workload {
         Workload::Ref(target) => Some(target.clone()),
+        Workload::Agent { name, .. } => Some(name.clone()),
         Workload::Preset(_) => None,
     };
     let workload = match workload {
         Workload::Preset(kit) => *kit,
+        Workload::Agent { name, reference } => {
+            let mut kit = kits.load_agent(ctx, &name, &reference)?;
+            load::check_launchable(ctx, &mut kit, Some(&req.name))?;
+            // `-t IMAGE` replaces the kit's image and keeps its capabilities.
+            if let Some(image) = &opts.template {
+                kit.content = Content::Image(image.clone());
+            }
+            if let Content::Image(image) = &kit.content {
+                req.image = image.clone();
+            }
+            req.docker = wants_docker(&kit, ctx.settings.bool("docker.enabled")?);
+            kit
+        }
         Workload::Ref(target) => {
             let mut kit = kits.load(ctx, &target, load::Position::Agent)?;
             if kit.kind == Kind::Mixin {
@@ -299,6 +336,10 @@ pub(crate) fn kit_plan<R: Runner>(
             if kit.command.is_none() {
                 let shell = agents::find("shell").expect("the shell preset");
                 kit.command = Some(shell.command.iter().map(|s| s.to_string()).collect());
+            }
+            // `-t IMAGE` replaces the kit's image and keeps its capabilities.
+            if let Some(image) = &opts.template {
+                kit.content = Content::Image(image.clone());
             }
             if let Content::Image(image) = &kit.content {
                 req.image = image.clone();
@@ -367,9 +408,28 @@ impl<'a> KitsSection<'a> {
         reference: &str,
         position: load::Position,
     ) -> Result<Kit> {
-        let mut step = None;
         let sandbox = self.sandbox.clone();
-        let loaded = load::load_noting(ctx, reference, Some(&sandbox), position, &mut |fetch| {
+        self.fetch(reference, |before| {
+            load::load_noting(ctx, reference, Some(&sandbox), position, before)
+        })
+    }
+
+    /// `load` for built-in agent `name`'s kit, shown by its `reference`.
+    fn load_agent<R: Runner>(&mut self, ctx: &Ctx<R>, name: &str, reference: &str) -> Result<Kit> {
+        let sandbox = self.sandbox.clone();
+        self.fetch(reference, |before| {
+            load::agent(ctx, name, Some(&sandbox), before)
+        })
+    }
+
+    /// Runs `load` (given the hook it calls before a fetch) with `reference`'s step.
+    fn fetch(
+        &mut self,
+        reference: &str,
+        load: impl FnOnce(&mut dyn FnMut(load::Fetch)) -> Result<(Kit, bool)>,
+    ) -> Result<Kit> {
+        let mut step = None;
+        let loaded = load(&mut |fetch| {
             self.open_section();
             let doing = match fetch {
                 load::Fetch::Pull => "pulling",
@@ -524,7 +584,8 @@ mod tests {
             let mut t = kit_env();
             creatable_as(&t, "shell-proj");
             let a = super::super::CreateArgs {
-                targets: vec!["shell".into(), ".".into()],
+                // A v2 mixin needs a v2 workload.
+                targets: vec![fixture("shell-workload"), ".".into()],
                 opts: SandboxOpts {
                     kit: vec![kit.clone()],
                     kit_arg: flags.iter().map(|s| s.to_string()).collect(),
@@ -593,9 +654,11 @@ mod tests {
         set_policy(&t, "mode = \"deny-all\"");
         creatable_as(&t, "shell-proj");
         let kit = fixture("tool-mixin");
+        // A v2 mixin needs a v2 workload.
+        let shell = fixture("shell-workload");
         t.sbt(&[
             "create",
-            "shell",
+            &shell,
             ".",
             "--kit",
             &kit,
@@ -610,10 +673,11 @@ mod tests {
         let create = create_line(&t);
         assert!(create.contains("-e TOOL_MODE=fast"), "{create}");
         assert!(create.contains(":8080 "), "{create}");
-        // The shell preset's image is Docker-enabled, so the docker kit comes too, first.
+        // The workload's image is Docker-enabled, so the docker kit comes too, first of the
+        // mixins.
         assert!(
             create.contains(&format!(
-                "--label sbx.kits=[{},{{\"name\":\"tool\",\"ref\":\"{kit}\",\"format\":\"v2\"}}]",
+                "--label sbx.kits=[{{\"name\":\"shell\",\"ref\":\"{shell}\",\"format\":\"v2\"}},{},{{\"name\":\"tool\",\"ref\":\"{kit}\",\"format\":\"v2\"}}]",
                 r#"{"name":"docker","ref":"builtin:docker","provides":["docker@1.0.0"]}"#
             )),
             "{create}"
@@ -633,13 +697,16 @@ mod tests {
         // pull or build), and the install hooks' kit before the docker kit, which has none.
         let ws = t.ctx.cwd.display().to_string();
         assert_eq!(
-            t.stdout().replace(&ws, "WS").replace(&kit, "KIT"),
+            t.stdout()
+                .replace(&ws, "WS")
+                .replace(&kit, "KIT")
+                .replace(&shell, "SHELL"),
             "
 SANDBOX
   Name:       shell-proj
   Agent:      shell
   Workspace:  WS (rw)
-  Image:      docker/sandbox-templates:shell-docker-0.10.0
+  Image:      from SHELL
   CPU:        1
   Memory:     1 GiB
 
@@ -652,6 +719,8 @@ SETUP
   ✓ sandbox — started
   ○ tool — installing…
   ✓ tool — installed
+  ○ shell — installing…
+  ✓ shell — installed
   ○ docker — installing…
   ✓ docker — installed
 
@@ -666,7 +735,9 @@ SETUP
         let mut t = kit_env();
         creatable_as(&t, "shell-proj");
         let kit = fixture("workspace-files");
-        t.sbt(&["create", "shell", ".", "--kit", &kit]).unwrap();
+        // A v2 mixin needs a v2 workload.
+        let shell = fixture("shell-workload");
+        t.sbt(&["create", &shell, ".", "--kit", &kit]).unwrap();
         let ws = t.ctx.cwd.canonicalize().unwrap().display().to_string();
         let lines = t.calls();
         let wrote = |needle: &str| {
@@ -823,16 +894,13 @@ SETUP
         let workload = fixture("tool-workload");
         for (args, want) in [
             (
-                vec!["create", "shell", "--kit", &kit, "--kit-arg", "nope=1"],
+                vec!["create", &workload, "--kit", &kit, "--kit-arg", "nope=1"],
                 "unknown kit argument nope",
             ),
             (
+                // `shell` is a kit now, as in sbx 0.53 ("no kit declares this argument").
                 vec!["create", "shell", "--kit-arg", "mode=1"],
-                "kit arguments were supplied but no kits were referenced",
-            ),
-            (
-                vec!["create", &workload, "-t", "img:1"],
-                "-t can't be combined with a workload kit",
+                "unknown kit argument mode",
             ),
             (
                 vec!["create", "shell", "--kit", "git+https://github.com/o/r.git"],
@@ -1172,8 +1240,13 @@ SETUP
         Option<crate::kits::resolve::Plan>,
     ) {
         let kit = kit.display().to_string();
+        // These tests add v2 mixins, which the v3 `shell` agent refuses: a v2 `shell` instead.
+        let v2_shell = fixture("shell-workload");
         let argv: Vec<&str> = std::iter::once("sbt")
-            .chain(args.iter().copied())
+            .chain(
+                args.iter()
+                    .map(|a| if *a == "shell" { v2_shell.as_str() } else { a }),
+            )
             .chain([kit.as_str(), "--cpus", "1", "-m", "1g"])
             .collect();
         let Some(Cmd::Create(a)) = Cli::try_parse_from(argv).unwrap().command else {
@@ -1576,7 +1649,7 @@ SETUP
         t.sbt(&["create", "shell", ".", "--kit", "./hm"]).unwrap();
         let out = t.stdout();
         assert!(
-            out.contains("\nKITS\n  ○ ./hm — building…\n  ✓ ./hm — ready\n\nIMAGE\n"),
+            out.contains("\n  ○ ./hm — building…\n  ✓ ./hm — ready\n\nIMAGE\n"),
             "{out}"
         );
         let dir = managed(&t, SHARED);
@@ -1686,9 +1759,10 @@ SETUP
             "{line}"
         );
         assert!(line.contains("--label sbx.docker=true"), "{line}");
+        // The agent's kit, then the docker kit.
         assert!(
             line.contains(&format!(
-                "--label sbx.kits=[{}]",
+                ",{}]",
                 r#"{"name":"docker","ref":"builtin:docker","provides":["docker@1.0.0"]}"#
             )),
             "{line}"
@@ -1765,7 +1839,7 @@ SETUP
         let out = t.stdout();
         assert!(
             out.contains(
-                "\nKITS\n  ✓ docker — cached\n  ○ ./hm — building…\n  ✓ ./hm — ready\n\nIMAGE\n"
+                "— cached\n  ✓ docker — cached\n  ○ ./hm — building…\n  ✓ ./hm — ready\n\nIMAGE\n"
             ),
             "{out}"
         );

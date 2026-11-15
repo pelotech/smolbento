@@ -8,7 +8,7 @@ use crate::kits::model::Source;
 pub fn check(source: &Source, settings: &Settings) -> Result<()> {
     match source {
         // smolbento's own presets and shipped kits.
-        Source::Preset(_) | Source::Builtin(_) => Ok(()),
+        Source::Preset(_) | Source::Agent(_) | Source::Builtin(_) => Ok(()),
         Source::Registry(r) => {
             let name = normalise(r)?;
             let allowed = allowed_sources(settings)?;

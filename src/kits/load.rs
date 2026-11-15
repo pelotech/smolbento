@@ -154,6 +154,38 @@ fn fetch<R: Runner>(
     Ok((kit, cached))
 }
 
+/// Loads built-in agent `name`'s published kit (`agents::kit_ref`): pulled from Docker Hub, or
+/// read from its stand-in under `SMOLBENTO_AGENT_KITS_DIR`. Like smolbento's own kits it skips
+/// `kit.allowedSources` and `kit.requireSignature` (sbx's kits are unsigned). Also returns
+/// whether loading it added nothing to the kit cache. `before` is called just before a pull.
+pub fn agent<R: Runner>(
+    ctx: &Ctx<R>,
+    name: &str,
+    sandbox: Option<&str>,
+    before: &mut dyn FnMut(Fetch),
+) -> Result<(Kit, bool)> {
+    let reference =
+        crate::agents::kit_ref(&ctx.env, name).with_context(|| crate::agents::unknown(name))?;
+    let source = Source::Agent(reference.clone());
+    let (mut kit, cached) = if ctx.env.contains_key(crate::agents::KITS_DIR_ENV) {
+        let kit = registry::read_layout(Path::new(&reference), source.clone())
+            .with_context(|| format!("loading agent kit {reference}"))?;
+        (kit, true)
+    } else {
+        let registries = registries(&SecretsFile::load(&ctx.paths)?, sandbox);
+        let logins = Logins::new(&registries, &*ctx.store);
+        let cache = ctx.paths.kit_cache();
+        before(Fetch::Pull);
+        let blobs = entries(&registry::store_dir(&cache));
+        let kit = registry::pull(&reference, None, &cache, logins)
+            .with_context(|| format!("pulling agent kit {reference}"))?;
+        (kit, entries(&registry::store_dir(&cache)) == blobs)
+    };
+    kit.source = source;
+    kit.reference = Some(name.to_string());
+    Ok((kit, cached))
+}
+
 /// How many entries `dir` has (0 when it doesn't exist).
 fn entries(dir: &Path) -> usize {
     fs::read_dir(dir).map_or(0, |d| d.count())

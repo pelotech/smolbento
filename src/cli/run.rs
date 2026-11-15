@@ -225,7 +225,7 @@ fn has_bash<R: Runner>(ctx: &Ctx<R>, sb: &Sandbox) -> Result<bool> {
 /// The warning for kits given to `run` of a sandbox that already exists: kit flags, or a workload
 /// kit as the target.
 fn ignored_kits_warning(a: &RunArgs, name: &str) -> Option<String> {
-    let kit_target = a.targets.first().is_some_and(|t| agents::find(t).is_none());
+    let kit_target = a.targets.first().is_some_and(|t| !agents::is_agent(t));
     (has_kit_flags(&a.opts) || kit_target).then(|| {
         format!("warning: kits only apply when a sandbox is created; {name} already exists")
     })
@@ -1159,8 +1159,8 @@ mod tests {
         let mut t = test_env(&[]);
         created(&t, "running");
         t.runner().interactive_exit(0);
+        // `run claude` names a kit now (sbx 0.53), so only a bare --name has none.
         for args in [
-            vec!["run", "claude", "--kit-arg", "a=1"],
             vec!["run", "--name", "claude-proj", "--kit-arg", "a=1"],
             vec!["run", "--name", "claude-proj", "--kit-args-file", "f"],
         ] {
@@ -1169,10 +1169,14 @@ mod tests {
         }
         assert!(t.runner().interactive_calls().is_empty());
 
+        // A new sandbox: the agent's kit declares no such argument.
         let mut t = test_env(&[]);
         t.no_machine();
         let err = t.sbt(&["run", "claude", "--kit-arg", "a=1"]).unwrap_err();
-        assert_eq!(format!("{err:#}"), want);
+        assert!(
+            format!("{err:#}").contains("unknown kit argument a"),
+            "{err:#}"
+        );
         assert!(!t.calls().iter().any(|l| l.starts_with("machine create")),);
     }
 

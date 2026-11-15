@@ -305,7 +305,7 @@ pub fn prepare_create<R: Runner>(
     req.secrets = services;
     if !name::is_internal(&req.name) {
         // No plan is the bare preset; a workload kit named like one isn't it.
-        let preset = kits.is_none_or(|p| crate::kits::apply::is_preset(&p.workload));
+        let preset = kits.is_none_or(|p| crate::kits::apply::is_builtin_agent(&p.workload));
         sandbox::env::apply(req, preset)?;
     }
     // Before the policy is saved or smolvm creates anything. A workload kit named like a preset
@@ -313,7 +313,7 @@ pub fn prepare_create<R: Runner>(
     let attachment = mcp_attachment(
         ctx,
         req,
-        kits.is_none_or(|p| crate::kits::apply::is_preset(&p.workload)),
+        kits.is_none_or(|p| crate::kits::apply::is_builtin_agent(&p.workload)),
     )?;
     let mut added = Vec::new();
     let mut first_start = None;
@@ -469,6 +469,19 @@ fn skill_wants(agent: &str, kits: Option<&Plan>) -> Vec<crate::skills::Want> {
         .into_iter()
         .collect();
     if let Some(p) = kits {
+        // A built-in agent's own skills directories are the agent's, as a preset's were.
+        if matches!(p.workload.source, crate::kits::model::Source::Agent(_)) {
+            wants.extend(p.workload.caps.iter().filter_map(|c| match &c.body {
+                crate::kits::model::CapBody::AgentSkills { path, .. } => {
+                    Some(crate::skills::Want {
+                        path: path.clone(),
+                        readwrite: true,
+                        builtin: true,
+                    })
+                }
+                _ => None,
+            }));
+        }
         wants.extend(p.merged.skill_dirs.iter().map(|d| crate::skills::Want {
             path: d.path.clone(),
             readwrite: d.readwrite,

@@ -21,6 +21,9 @@ pub enum Source {
     /// An agent preset as the workload (`load::preset_kit`), with its image: not a kit the user
     /// chose.
     Preset(String),
+    /// A built-in agent's published kit (`load::agent`), by the ref it was loaded from: trusted
+    /// like smolbento's own kits, and the only kind that gets the built-in agent's extras.
+    Agent(String),
     /// A kit shipped inside smolbento (`load::builtin`), by name: only `docker` so far.
     Builtin(&'static str),
 }
@@ -49,9 +52,11 @@ impl Source {
         match self {
             Source::LocalV2(_) => Some(Format::V2),
             Source::Smolfile(_) => None,
-            Source::Registry(_) | Source::LocalV3(_) | Source::Preset(_) | Source::Builtin(_) => {
-                Some(Format::V3)
-            }
+            Source::Registry(_)
+            | Source::LocalV3(_)
+            | Source::Preset(_)
+            | Source::Agent(_)
+            | Source::Builtin(_) => Some(Format::V3),
         }
     }
 }

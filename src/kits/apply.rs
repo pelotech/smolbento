@@ -180,6 +180,7 @@ pub fn apply(
     // A preset agent isn't a kit: nothing to record, and its command is the agent's own. A v3
     // workload's agent runs as its image's user, root when the image names none.
     let preset = is_preset(&plan.workload);
+    req.builtin_agent = matches!(plan.workload.source, Source::Agent(_));
     if !preset {
         set_workload_fields(req, &plan.workload, workdir, agent_file);
     }
@@ -814,12 +815,18 @@ pub fn is_preset(w: &Kit) -> bool {
     matches!(w.source, Source::Preset(_))
 }
 
+/// A built-in agent: its published kit (`load::agent`) or a preset. It gets the SSH agent, the
+/// agent name for `--static-mcp` and the credential modes; a kit merely named like one doesn't.
+pub fn is_builtin_agent(w: &Kit) -> bool {
+    matches!(w.source, Source::Preset(_) | Source::Agent(_))
+}
+
 /// A registry kit pinned to its digest, a shipped kit as `builtin:<name>`, or a local kit's
 /// canonical path.
 fn pinned_ref(k: &Kit) -> Result<String> {
     Ok(match &k.source {
-        Source::Registry(r) | Source::Preset(r) if r.contains('@') => r.clone(),
-        Source::Registry(r) | Source::Preset(r) => match &k.digest {
+        Source::Registry(r) | Source::Preset(r) | Source::Agent(r) if r.contains('@') => r.clone(),
+        Source::Registry(r) | Source::Preset(r) | Source::Agent(r) => match &k.digest {
             Some(d) => format!("{r}@{d}"),
             None => bail!("kit {}: {r} has no digest to pin it to", k.name),
         },

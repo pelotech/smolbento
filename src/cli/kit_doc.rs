@@ -371,6 +371,7 @@ fn source_of(s: &Source) -> (String, &'static str) {
     match s {
         Source::Registry(r) => (r.clone(), "registry"),
         Source::Preset(r) => (r.clone(), "preset"),
+        Source::Agent(r) => (r.clone(), "agent"),
         Source::Builtin(n) => (n.to_string(), "builtin"),
         Source::LocalV3(p) => (p.display().to_string(), "local v3"),
         Source::LocalV2(p) => (p.display().to_string(), "local v2"),
