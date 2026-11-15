@@ -8,6 +8,13 @@ More:
 - [Environment files](environments.md)
 - [Network policy and secrets](network-and-secrets.md)
 
+On this page: [Run an agent](#run-an-agent) · [Create without attaching](#create-without-attaching)
+· [Clone mode](#clone-mode) · [Fork](#fork) · [Run commands inside](#run-commands-inside) · [SSH
+into a sandbox](#ssh-into-a-sandbox) · [Browser and clipboard](#browser-and-clipboard) · [SSH
+agent](#ssh-agent) · [Docker inside a sandbox](#docker-inside-a-sandbox) · [Files and
+ownership](#files-and-ownership) · [Ports](#ports) · [Copy files](#copy-files) · [List](#list) ·
+[Stop, start and remove](#stop-start-and-remove)
+
 ## Run an agent
 
 ```sh

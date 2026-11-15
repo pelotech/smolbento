@@ -8,7 +8,7 @@ Usage: bento skills update [OPTIONS] [SKILLS]...
 
 Arguments:
   [SKILLS]...
-
+          Skills to update (default: all)
 
 Options:
   -D, --debug

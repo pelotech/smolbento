@@ -41,7 +41,7 @@ struct Listing<'a> {
 fn ls<R: Runner>(ctx: &Ctx<R>, store: &Store, a: &SkillsLsArgs) -> Result<()> {
     let names = store.list()?;
     let path = store.dir.display().to_string();
-    let format = Format::pick(a.json, a.format);
+    let format = a.output.pick();
     let mut out = &ctx.out;
     let doc = Listing {
         store: path.clone(),
@@ -49,8 +49,9 @@ fn ls<R: Runner>(ctx: &Ctx<R>, store: &Store, a: &SkillsLsArgs) -> Result<()> {
     };
     match format {
         _ if a.quiet => names.iter().try_for_each(|n| writeln!(out, "{n}"))?,
-        Format::Json => writeln!(out, "{}", serde_json::to_string_pretty(&doc)?)?,
-        Format::Yaml => write!(out, "{}", serde_saphyr::to_string(&doc)?)?,
+        f @ (Format::Json | Format::Yaml) => {
+            write!(out, "{}", f.structured(&doc)?.unwrap_or_default())?
+        }
         Format::Table if names.is_empty() => writeln!(out, "No skills found in {path}")?,
         Format::Table => {
             // sbx pads the name column to its widest cell plus 4 spaces.
@@ -145,7 +146,6 @@ fn import<R: Runner>(ctx: &Ctx<R>, store: &Store, a: &SkillsImportArgs) -> Resul
             _ => None,
         })
         .collect();
-    let mut missing = Vec::new();
     for e in &events {
         match e {
             Event::Pick { name, .. } if a.dry_run => {
@@ -153,21 +153,19 @@ fn import<R: Runner>(ctx: &Ctx<R>, store: &Store, a: &SkillsImportArgs) -> Resul
                 writeln!(&ctx.out, "Would {verb} skill {name:?}")?;
             }
             Event::Pick { .. } => {}
-            Event::Duplicate { name, dir } => eprintln!(
-                "warning: skipping skill {name:?} from {}: already imported from an earlier source",
+            Event::Duplicate { name, dir } => crate::warning!(
+                "skipping skill {name:?} from {}: already imported from an earlier source",
                 dir.display()
             ),
-            Event::Loose(n) => eprintln!("warning: skipping {n:?}: not a directory"),
-            Event::Missing(d) => missing.push(d),
+            Event::Loose(n) => crate::warning!("skipping {n:?}: not a directory"),
+            // As sbx: only with -v, on stdout, where the directory comes in the scan.
+            Event::Missing(d) if a.verbose => writeln!(
+                &ctx.out,
+                "No skills directory found at {}; nothing to import",
+                d.display()
+            )?,
+            Event::Missing(_) => {}
         }
-    }
-    // sbx prints the missing-source notices after the picks, on stdout.
-    for d in missing {
-        writeln!(
-            &ctx.out,
-            "No skills directory found at {}; nothing to import",
-            d.display()
-        )?;
     }
     // Nothing to import: no summary, and nothing written.
     if picks.is_empty() {
@@ -670,12 +668,15 @@ mod tests {
             })
             .collect();
         for args in [
-            &["skills", "import", "--dry-run"][..],
-            &["skills", "import"],
+            &["skills", "import", "--dry-run", "-v"][..],
+            &["skills", "import", "--verbose"],
         ] {
             t.sbt(args).unwrap();
             assert_eq!(t.stdout(), want, "{args:?}");
         }
+        // Without -v the missing directories aren't listed, as in sbx.
+        t.sbt(&["skills", "import", "--dry-run"]).unwrap();
+        assert_eq!(t.stdout(), "");
         let store = Store::new(&t.ctx.paths);
         assert!(!store.dir.exists() && !store.meta.exists());
     }

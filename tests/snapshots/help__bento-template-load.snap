@@ -8,7 +8,7 @@ Usage: bento template load [OPTIONS] <FILE>
 
 Arguments:
   <FILE>
-
+          File made by `bento template save --output`
 
 Options:
   -D, --debug

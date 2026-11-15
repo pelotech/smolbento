@@ -67,6 +67,16 @@ pub fn size_gib(value: &str, what: &str) -> Result<u32> {
     u32::try_from(gib).with_context(|| format!("{what} '{value}' is too large"))
 }
 
+/// Prints `warning: …` to stderr without panicking: `eprintln!` panics when stderr is gone (the
+/// terminal hung up), and warnings are printed from cleanup paths that must finish.
+#[macro_export]
+macro_rules! warning {
+    ($($arg:tt)*) => {{
+        use std::io::Write as _;
+        let _ = writeln!(std::io::stderr(), "warning: {}", format_args!($($arg)*));
+    }};
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;

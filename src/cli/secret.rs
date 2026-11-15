@@ -25,15 +25,12 @@ pub fn run<R: Runner>(ctx: &mut Ctx<R>, cmd: SecretCmd) -> Result<i32> {
             if a.username.is_some() || a.password_stdin || a.registry_auth_endpoint.is_some() {
                 bail!("--username, --password-stdin and --registry-auth-endpoint need --registry");
             }
-            let unsupported = [
+            super::refuse(&[
                 (a.oauth, "--oauth"),
                 (a.refresh.is_some(), "--refresh"),
                 (a.all_sandboxes, "--all-sandboxes"),
                 (a.no_verify || a.show_error, "--no-verify/--show-error"),
-            ];
-            if let Some((_, what)) = unsupported.iter().find(|(set, _)| *set) {
-                return Err(Unsupported(format!("{what} is not implemented yet")).into());
-            }
+            ])?;
             let service = a
                 .service
                 .context("specify a service, e.g. `bento secret set anthropic`")?;
@@ -47,6 +44,10 @@ pub fn run<R: Runner>(ctx: &mut Ctx<R>, cmd: SecretCmd) -> Result<i32> {
             }
         }
         SecretCmd::SetCustom(a) => {
+            super::refuse(&[
+                (a.refresh.is_some(), "--refresh"),
+                (a.no_verify || a.show_error, "--no-verify/--show-error"),
+            ])?;
             if a.placeholder.is_some() {
                 return Err(Unsupported(
                     "--placeholder is not supported; smolvm chooses the placeholder".into(),
@@ -90,41 +91,24 @@ fn ls<R: Runner>(ctx: &Ctx<R>, file: &SecretsFile, a: &SecretLsArgs) -> Result<(
         .as_deref()
         .and_then(|s| sandbox::find(&ctx.vm, s).ok().flatten())
         .and_then(|sb| sb.meta.fork_of);
-    // -q wins over --json, as in `ls` and `settings ls`.
-    if !a.quiet
-        && let Some(doc) = a.output.structured(&ls_doc(file, a, parent.as_deref()))?
-    {
-        write!(&ctx.out, "{doc}")?;
-        return Ok(());
-    }
-    let mut text = render_ls(file, a, parent.as_deref());
-    // Every registry login, or with `--sandbox` that sandbox's own (as sbx lists them).
+    let entries = listed(file, a, parent.as_deref());
+    // Every registry login, or with `--sandbox` that sandbox's own (as sbx lists them); none when
+    // filtering by `-g` or `--service`.
     let registries: Vec<&RegistryEntry> = file
         .registries
         .iter()
+        .filter(|_| !a.global && a.service.is_none())
         .filter(|r| a.sandbox.is_none() || r.sandbox == a.sandbox)
         .collect();
-    if !a.quiet && !a.global && a.service.is_none() && !registries.is_empty() {
-        if text == "No secrets\n" {
-            text.clear();
-        } else {
-            text.push('\n');
+    // -q wins over --json, as in `ls` and `settings ls`.
+    let text = if a.quiet {
+        entries.iter().map(|e| format!("{}\n", e.service)).collect()
+    } else {
+        match a.output.structured(&ls_doc(&entries, &registries))? {
+            Some(doc) => doc,
+            None => render_ls(&entries, &registries),
         }
-        let mut rows = vec![
-            ["SCOPE", "TYPE", "NAME", "SECRET"]
-                .map(String::from)
-                .to_vec(),
-        ];
-        for r in registries {
-            rows.push(vec![
-                r.sandbox.clone().unwrap_or_else(|| "(host only)".into()),
-                "registry".into(),
-                r.host.clone(),
-                "(stored)".into(),
-            ]);
-        }
-        text.push_str(&table(rows));
-    }
+    };
     write!(&ctx.out, "{text}")?;
     Ok(())
 }
@@ -184,8 +168,8 @@ fn warn_unresolved(hosts: &[String]) {
     // `*.x` names no single host to look up.
     for host in hosts.iter().filter(|h| !h.starts_with("*.")) {
         if (host.as_str(), 443).to_socket_addrs().is_err() {
-            eprintln!(
-                "warning: {host} doesn't resolve right now; sandboxes created with this secret \
+            crate::warning!(
+                "{host} doesn't resolve right now; sandboxes created with this secret \
                  will fail to start until it does"
             );
         }
@@ -398,9 +382,14 @@ fn listed<'a>(
         .collect()
 }
 
+/// A registry login's scope as listed: its sandbox, or `(host only)`.
+fn registry_scope(r: &RegistryEntry) -> String {
+    r.sandbox.clone().unwrap_or_else(|| "(host only)".into())
+}
+
 /// sbx's `secret ls --json` shape. Values are never shown; `custom_secrets`, `shadowed_services`
 /// and `env_only_count` are sbx's, always empty here (custom services are listed as secrets).
-fn ls_doc(file: &SecretsFile, a: &SecretLsArgs, fork_of: Option<&str>) -> impl serde::Serialize {
+fn ls_doc(entries: &[&SecretEntry], registries: &[&RegistryEntry]) -> impl serde::Serialize {
     #[derive(serde::Serialize)]
     struct Row {
         scope: String,
@@ -415,54 +404,64 @@ fn ls_doc(file: &SecretsFile, a: &SecretLsArgs, fork_of: Option<&str>) -> impl s
         shadowed_services: [(); 0],
         env_only_count: u32,
     }
-    let scope = |s: &str| s.strip_prefix("sandbox:").unwrap_or(s).to_string();
-    let mut secrets: Vec<Row> = listed(file, a, fork_of)
-        .into_iter()
-        .map(|e| Row {
-            scope: scope(&e.scope),
-            r#type: "service",
-            name: e.service.clone(),
-            secret: "(stored)",
-        })
-        .collect();
-    if !a.global && a.service.is_none() {
-        secrets.extend(
-            file.registries
-                .iter()
-                .filter(|r| a.sandbox.is_none() || r.sandbox == a.sandbox)
-                .map(|r| Row {
-                    scope: r.sandbox.clone().unwrap_or_else(|| "(host only)".into()),
-                    r#type: "registry",
-                    name: r.host.clone(),
-                    secret: "(stored)",
-                }),
-        );
-    }
+    let services = entries.iter().map(|e| Row {
+        scope: e
+            .scope
+            .strip_prefix("sandbox:")
+            .unwrap_or(&e.scope)
+            .to_string(),
+        r#type: "service",
+        name: e.service.clone(),
+        secret: "(stored)",
+    });
+    let logins = registries.iter().map(|r| Row {
+        scope: registry_scope(r),
+        r#type: "registry",
+        name: r.host.clone(),
+        secret: "(stored)",
+    });
     Doc {
-        secrets,
+        secrets: services.chain(logins).collect(),
         custom_secrets: [],
         shadowed_services: [],
         env_only_count: 0,
     }
 }
 
-fn render_ls(file: &SecretsFile, a: &SecretLsArgs, fork_of: Option<&str>) -> String {
-    let entries = listed(file, a, fork_of);
-    if a.quiet {
-        return entries.iter().map(|e| format!("{}\n", e.service)).collect();
+/// The secrets table, then the registry logins in a table of their own.
+fn render_ls(entries: &[&SecretEntry], registries: &[&RegistryEntry]) -> String {
+    if entries.is_empty() && registries.is_empty() {
+        return "No secrets found\n".into();
     }
-    if entries.is_empty() {
-        return "No secrets\n".into();
+    let mut tables = Vec::new();
+    if !entries.is_empty() {
+        let mut rows = vec![["SERVICE", "SCOPE", "SOURCE"].map(String::from).to_vec()];
+        for e in entries {
+            rows.push(vec![
+                e.service.clone(),
+                e.scope.clone(),
+                e.source.describe(),
+            ]);
+        }
+        tables.push(table(rows));
     }
-    let mut lines = vec![["SERVICE", "SCOPE", "SOURCE"].map(String::from).to_vec()];
-    for e in entries {
-        lines.push(vec![
-            e.service.clone(),
-            e.scope.clone(),
-            e.source.describe(),
-        ]);
+    if !registries.is_empty() {
+        let mut rows = vec![
+            ["SCOPE", "TYPE", "NAME", "SECRET"]
+                .map(String::from)
+                .to_vec(),
+        ];
+        for r in registries {
+            rows.push(vec![
+                registry_scope(r),
+                "registry".into(),
+                r.host.clone(),
+                "(stored)".into(),
+            ]);
+        }
+        tables.push(table(rows));
     }
-    table(lines)
+    tables.join("\n")
 }
 
 /// Whether `e` is the fork's original's entry for a service the fork has no entry of its own for.

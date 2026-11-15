@@ -42,6 +42,11 @@ struct Row<'a> {
 }
 
 fn ls<R: Runner>(ctx: &Ctx<R>, a: &TemplateLsArgs) -> Result<()> {
+    super::refuse(&[
+        (a.all, "--all"),
+        (a.digests, "--digests"),
+        (a.no_trunc, "--no-trunc"),
+    ])?;
     let all = Store::new(&ctx.paths).list()?;
     let rows: Vec<Row> = all
         .iter()
@@ -55,10 +60,11 @@ fn ls<R: Runner>(ctx: &Ctx<R>, a: &TemplateLsArgs) -> Result<()> {
         })
         .collect();
     let mut out = &ctx.out;
-    match Format::pick(a.json, a.format) {
+    match a.output.pick() {
         _ if a.quiet => all.iter().try_for_each(|e| writeln!(out, "{}", e.full()))?,
-        Format::Json => writeln!(out, "{}", serde_json::to_string_pretty(&rows)?)?,
-        Format::Yaml => write!(out, "{}", serde_saphyr::to_string(&rows)?)?,
+        f @ (Format::Json | Format::Yaml) => {
+            write!(out, "{}", f.structured(&rows)?.unwrap_or_default())?
+        }
         Format::Table => {
             let head = ["REPOSITORY", "TAG", "IMAGE ID", "FLAVOR", "CREATED"];
             let mut lines = vec![head.map(String::from).to_vec()];
@@ -115,25 +121,23 @@ fn rm<R: Runner>(ctx: &Ctx<R>, a: &TemplateRmArgs) -> Result<()> {
     )?;
     store.remove(&e)?;
     let mut out = &ctx.out;
-    match Format::pick(a.json, a.format) {
-        Format::Table => writeln!(out, "Removed template {}", a.name)?,
-        f => {
-            let doc = [Removed {
-                action: "removed",
-                resource: "template",
-                name: &a.name,
-            }];
-            if f == Format::Json {
-                writeln!(out, "{}", serde_json::to_string_pretty(&doc)?)?;
-            } else {
-                write!(out, "{}", serde_saphyr::to_string(&doc)?)?;
-            }
-        }
+    let doc = [Removed {
+        action: "removed",
+        resource: "template",
+        name: &a.name,
+    }];
+    match a.output.structured(&doc)? {
+        Some(text) => write!(out, "{text}")?,
+        None => writeln!(out, "Removed template {}", a.name)?,
     }
     Ok(())
 }
 
 fn load<R: Runner>(ctx: &Ctx<R>, a: &TemplateLoadArgs) -> Result<()> {
+    super::refuse(&[
+        (a.capture_mode.is_some(), "--capture-mode"),
+        (a.description.is_some(), "--description"),
+    ])?;
     if a.name.is_some() {
         bail!(
             "'template load' (local) takes one argument (FILE)\n  try: bento template load --help"
@@ -154,6 +158,10 @@ fn load<R: Runner>(ctx: &Ctx<R>, a: &TemplateLoadArgs) -> Result<()> {
 }
 
 fn save<R: Runner>(ctx: &Ctx<R>, a: &TemplateSaveArgs) -> Result<()> {
+    super::refuse(&[
+        (a.capture_mode.is_some(), "--capture-mode"),
+        (a.description.is_some(), "--description"),
+    ])?;
     let r = TemplateRef::parse(&a.tag)?;
     let sb = sandbox::get(&ctx.vm, &a.sandbox)?;
     if let Some(t) = &sb.meta.template {

@@ -477,7 +477,7 @@ fn the_login_note_is_only_for_a_service_without_its_key() {
     };
     let note = oauth_note(&kc(false), false).unwrap();
     assert!(
-        note.contains("subscription logins happen inside the sandbox"),
+        note.contains("asks you to log in inside the sandbox"),
         "{note}"
     );
     // Its API key is bound: nothing to say.

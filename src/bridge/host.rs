@@ -105,15 +105,12 @@ pub fn attach(
         return None;
     }
     let allowed = Allowed::from_settings(settings).unwrap_or_else(|e| {
-        eprintln!("warning: not opening URLs or copying from the sandbox: {e:#}");
+        crate::warning!("not opening URLs or copying from the sandbox: {e:#}");
         Allowed::default()
     });
     let h = handlers(env, allowed, smolvm, sb, false);
     http::serve(&super::host_socket(sb.name()), h).unwrap_or_else(|e| {
-        eprintln!(
-            "warning: {}: no browser and clipboard bridge: {e:#}",
-            sb.name()
-        );
+        crate::warning!("{}: no browser and clipboard bridge: {e:#}", sb.name());
         None
     })
 }

@@ -1,7 +1,7 @@
 # smolbento
 
 A Docker Sandboxes (`sbx`) compatible CLI on top of [smolvm](https://github.com/smol-machines/smolvm)
-microVMs. One Rust binary, invoked as `bento` (or `sbx`, `sbt` when linked).
+microVMs. One Rust binary, invoked as `bento` (or `sbx`). Nothing ships an `sbt` link; the binary still answers to it by alias.
 
 Design notes, specs and plans live in `docs/superpowers/` when present. It's gitignored for now, so
 only some checkouts have it. If it's there, read the relevant section before changing behaviour.
@@ -96,7 +96,7 @@ As of smolvm 1.35. Check the reference source before depending on anything not l
 
 | Module | Responsibility |
 |---|---|
-| `main.rs` | process entry; `bento` and `sbx` are links to the one binary (and `sbt`, if a user links it) |
+| `main.rs` | process entry; `bento` and `sbx` are links to the one binary |
 | `cli` | clap definitions mirroring sbx; handlers |
 | `provision` | create and start: binds policy, secrets and kits to a sandbox; the kit builder |
 | `ctx` | the context every command gets: paths, settings, smolvm, stdio |

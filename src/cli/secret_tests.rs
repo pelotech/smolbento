@@ -210,7 +210,7 @@ fn registry_set_refusals() {
 fn registry_ls_rows() {
     let mut t = test_env(&[]);
     t.sbt(&["secret", "ls"]).unwrap();
-    assert_eq!(t.stdout(), "No secrets\n");
+    assert_eq!(t.stdout(), "No secrets found\n");
     set_registry_from(&mut t, "ghcr.io", Some("me"), "abcdefgh").unwrap();
     t.stdout();
     t.sbt(&["secret", "ls"]).unwrap();
@@ -644,21 +644,37 @@ fn ls_and_rm() {
 
 #[test]
 fn ls_as_json_has_sbxs_shape() {
+    let json = |t: &TestEnv| -> serde_json::Value { serde_json::from_str(&t.stdout()).unwrap() };
     let mut t = test_env(&[]);
     t.sbt(&["secret", "ls", "--json"]).unwrap();
-    assert_eq!(
-        t.stdout(),
-        "{\n  \"secrets\": [],\n  \"custom_secrets\": [],\n  \"shadowed_services\": [],\n  \"env_only_count\": 0\n}\n"
+    let out = t.stdout();
+    // sbx's key order.
+    assert!(
+        out.starts_with("{\n  \"secrets\": [],\n  \"custom_secrets\""),
+        "{out}"
     );
+    assert_eq!(
+        serde_json::from_str::<serde_json::Value>(&out).unwrap(),
+        serde_json::json!({
+            "secrets": [], "custom_secrets": [], "shadowed_services": [], "env_only_count": 0
+        })
+    );
+    // A service secret, then a registry login, in the one `secrets` list.
     t.sbt(&["secret", "set", "github", "--sandbox", "s1", "-t", "x"])
         .unwrap();
+    set_registry_from(&mut t, "ghcr.io", Some("me"), "abcdefgh").unwrap();
     t.stdout();
     t.sbt(&["secret", "ls", "--json"]).unwrap();
-    let v: serde_json::Value = serde_json::from_str(&t.stdout()).unwrap();
     assert_eq!(
-        v["secrets"],
-        serde_json::json!([{"scope": "s1", "type": "service", "name": "github", "secret": "(stored)"}])
+        json(&t)["secrets"],
+        serde_json::json!([
+            {"scope": "s1", "type": "service", "name": "github", "secret": "(stored)"},
+            {"scope": "(host only)", "type": "registry", "name": "ghcr.io", "secret": "(stored)"},
+        ])
     );
+    // -q wins over --json.
+    t.sbt(&["secret", "ls", "-q", "--json"]).unwrap();
+    assert_eq!(t.stdout(), "github\n");
 }
 
 #[test]

@@ -65,7 +65,7 @@ impl Plan {
     /// One stderr line per skipped optional capability, when kit warnings are shown.
     pub fn warn_skipped(&self) {
         for w in self.skipped_warnings() {
-            crate::kit_warning!("warning: {w}");
+            crate::kit_warning!("{w}");
         }
     }
 

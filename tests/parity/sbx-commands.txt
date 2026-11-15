@@ -129,7 +129,7 @@ env run --skip-host-commands ./project
 env rm --force --skip-host-commands
 env rm
 env rm --force --prune-bindings ./project
-# Later phases (must parse; exit 2 for now)
+# Kits, MCP, environments and SSH (implemented), and flags that must parse and exit 2
 kit pack ./my-kit
 kit push ./my-kit ghcr.io/myorg/my-kit:1.0
 kit pull ghcr.io/myorg/my-kit:1.0
@@ -192,3 +192,17 @@ settings ls --format json
 settings get docker.enabled --json
 secret ls --json
 policy check network --json api.example.com
+policy list
+policy remove network --resource example.com
+mcp delete my-server
+mcp rm -f my-server
+policy check network -v api.example.com
+policy approval ls -q
+policy log --format yaml
+skills import -v
+create claude . --profile strict
+template ls --digests
+template save my-sandbox myimage:v1 --description notes
+policy rm network --resource example.com --method GET
+policy ls --profile strict
+secret set-custom --host api.example.com --env API_KEY --no-verify

@@ -13,7 +13,7 @@ use crate::smolvm::Runner;
 pub fn run<R: Runner>(ctx: &mut Ctx<R>, a: &InspectArgs) -> Result<i32> {
     let sb = sandbox::get(&ctx.vm, &a.sandbox)?;
     let sessions = session::live_sessions(&ctx.paths.sessions(), sb.name());
-    let format = Format::pick(a.json, Some(a.format));
+    let format = a.output.pick();
     write!(&ctx.out, "{}", render(&sb, sessions, format)?)?;
     Ok(0)
 }
@@ -80,8 +80,7 @@ pub fn render(sb: &Sandbox, sessions: usize, format: Format) -> Result<String> {
         sessions,
     };
     match format {
-        Format::Json => Ok(format!("{}\n", serde_json::to_string_pretty(&d)?)),
-        Format::Yaml => Ok(serde_saphyr::to_string(&d)?),
+        f @ (Format::Json | Format::Yaml) => Ok(f.structured(&d)?.unwrap_or_default()),
         Format::Table => Ok(table(&d)),
     }
 }

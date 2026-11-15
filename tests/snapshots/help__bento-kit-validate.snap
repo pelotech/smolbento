@@ -21,7 +21,7 @@ Options:
           Read kit arguments (NAME=VALUE lines) from a file (repeatable)
 
       --format <FORMAT>
-          Output format
+          Output format: table, json or yaml
 
           [possible values: table, json, yaml]
 

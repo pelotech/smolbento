@@ -12,13 +12,13 @@ use crate::smolvm::Runner;
 
 pub fn run<R: Runner>(ctx: &Ctx<R>, cmd: McpCmd) -> Result<i32> {
     match cmd {
-        McpCmd::Add(a) => add(ctx, a)?,
+        McpCmd::Add(a) => add(ctx, *a)?,
         McpCmd::Ls(a) => ls(ctx, &a)?,
         McpCmd::Inspect(a) => inspect(ctx, &a)?,
-        McpCmd::Rm { name } => {
+        McpCmd::Rm { name, force: _ } => {
             let mut file = McpFile::load(&ctx.paths)?;
             if file.servers.remove(&name).is_none() {
-                bail!(unknown(&name));
+                bail!(crate::mcp::unknown(&name));
             }
             file.save(&ctx.paths)?;
             writeln!(&ctx.out, "Removed MCP server {name}")?;
@@ -28,10 +28,6 @@ pub fn run<R: Runner>(ctx: &Ctx<R>, cmd: McpCmd) -> Result<i32> {
         McpCmd::Unload(_) => return Err(no_gateway("mcp unload")),
     }
     Ok(0)
-}
-
-fn unknown(name: &str) -> String {
-    format!("no MCP server named '{name}' (see `bento mcp ls`)")
 }
 
 /// What sbx does through its MCP gateway, which smolbento doesn't have.
@@ -44,23 +40,24 @@ fn no_gateway(what: &str) -> anyhow::Error {
 }
 
 fn add<R: Runner>(ctx: &Ctx<R>, a: McpAddArgs) -> Result<()> {
-    let unsupported = [
-        (a.local, "--local"),
-        (a.dir.is_some(), "--dir"),
-        (a.client_id.is_some(), "--client-id"),
-        (
-            a.oauth_authorization_server.is_some(),
-            "--oauth-authorization-server",
-        ),
-        (a.resource.is_some(), "--resource"),
-        (a.skip_auth, "--skip-auth"),
-    ];
-    if let Some((_, flag)) = unsupported.iter().find(|(set, _)| *set) {
-        return Err(Unsupported(format!(
-            "{flag} is not supported: smolbento has no MCP gateway or OAuth for MCP servers"
-        ))
-        .into());
-    }
+    super::refuse_as(
+        &[
+            (a.local, "--local"),
+            (a.dir.is_some(), "--dir"),
+            (a.client_id.is_some(), "--client-id"),
+            (
+                a.oauth_authorization_server.is_some(),
+                "--oauth-authorization-server",
+            ),
+            (a.resource.is_some(), "--resource"),
+            (a.skip_auth, "--skip-auth"),
+            (a.disable_http2, "--disable-http2"),
+            (a.skip_ssrf_check, "--skip-ssrf-check"),
+            (a.callback_port.is_some(), "--callback-port"),
+            (!a.scope.is_empty() || a.no_scope, "--scope/--no-scope"),
+        ],
+        "is not supported: smolbento has no MCP gateway or OAuth for MCP servers",
+    )?;
     // The name first, as before the shared check: a bad name is reported over a flag error.
     mcp::check_name(&a.name)?;
     let server = match (a.url, a.command) {
@@ -181,10 +178,11 @@ fn ls<R: Runner>(ctx: &Ctx<R>, a: &McpLsArgs) -> Result<()> {
     let file = McpFile::load(&ctx.paths)?;
     let rows: Vec<Row> = file.servers.iter().map(|(n, s)| Row::new(n, s)).collect();
     let mut out = &ctx.out;
-    match Format::pick(a.json, a.format) {
+    match a.output.pick() {
         _ if a.quiet => rows.iter().try_for_each(|r| writeln!(out, "{}", r.name))?,
-        Format::Json => writeln!(out, "{}", serde_json::to_string_pretty(&rows)?)?,
-        Format::Yaml => write!(out, "{}", serde_saphyr::to_string(&rows)?)?,
+        f @ (Format::Json | Format::Yaml) => {
+            write!(out, "{}", f.structured(&rows)?.unwrap_or_default())?
+        }
         Format::Table if rows.is_empty() => writeln!(out, "No MCP servers registered")?,
         Format::Table => {
             let mut lines = vec![["NAME", "TYPE", "TARGET"].map(String::from).to_vec()];
@@ -203,12 +201,13 @@ fn inspect<R: Runner>(ctx: &Ctx<R>, a: &McpInspectArgs) -> Result<()> {
     let server = file
         .servers
         .get(&a.name)
-        .with_context(|| unknown(&a.name))?;
+        .with_context(|| crate::mcp::unknown(&a.name))?;
     let row = Row::new(&a.name, server);
     let mut out = &ctx.out;
-    match Format::pick(a.json, a.format) {
-        Format::Json => writeln!(out, "{}", serde_json::to_string_pretty(&row)?)?,
-        Format::Yaml => write!(out, "{}", serde_saphyr::to_string(&row)?)?,
+    match a.output.pick() {
+        f @ (Format::Json | Format::Yaml) => {
+            write!(out, "{}", f.structured(&row)?.unwrap_or_default())?
+        }
         Format::Table => {
             writeln!(out, "Name:     {}", row.name)?;
             writeln!(out, "Type:     {}", row.kind)?;
@@ -293,11 +292,11 @@ mod tests {
         assert_eq!(listed(&mut t, &["mcp", "ls", "-q"]), "files\n");
         assert_eq!(
             t.sbt_err(&["mcp", "rm", "linear"]),
-            "no MCP server named 'linear' (see `bento mcp ls`)"
+            "no MCP server named 'linear'\n  try: bento mcp ls"
         );
         assert_eq!(
             t.sbt_err(&["mcp", "inspect", "linear"]),
-            "no MCP server named 'linear' (see `bento mcp ls`)"
+            "no MCP server named 'linear'\n  try: bento mcp ls"
         );
     }
 

@@ -52,11 +52,12 @@ Release tarballs for `aarch64-apple-darwin`, `x86_64-unknown-linux-gnu` and
 bundle (`.sigstore.json`). Verify it, unpack it, and put the directory on your `PATH`:
 
 ```sh
-cosign verify-blob --bundle smolbento-<target>.tar.gz.sigstore.json \
+TARGET=aarch64-apple-darwin
+cosign verify-blob --bundle "smolbento-$TARGET.tar.gz.sigstore.json" \
   --certificate-identity-regexp 'https://github.com/pelotech/smolbento/' \
   --certificate-oidc-issuer https://token.actions.githubusercontent.com \
-  smolbento-<target>.tar.gz
-tar xzf smolbento-<target>.tar.gz
+  "smolbento-$TARGET.tar.gz"
+tar xzf "smolbento-$TARGET.tar.gz"
 ```
 
 Linux binaries need glibc 2.28 or newer. On macOS, sandboxes with a disk larger than 20 GiB need `e2fsprogs`

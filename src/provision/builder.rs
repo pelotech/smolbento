@@ -130,7 +130,7 @@ fn build_with<R: Runner>(ctx: &Ctx<R>, dir: &Path, mint: Minter) -> Result<PathB
         && sb.is_running()
         && let Err(e) = ctx.vm.stop(&sb.machine)
     {
-        eprintln!("warning: stopping the {BUILDER} sandbox: {e:#}");
+        crate::warning!("stopping the {BUILDER} sandbox: {e:#}");
     }
     result?;
     unpack(&kit_tar, &cache.join("built"), tmp.path())
@@ -381,7 +381,7 @@ fn run_build<R: Runner>(
             .context("copying the built kit out of the builder")
     })();
     if let Err(e) = exec(&["rm", "-rf", &n]) {
-        eprintln!("warning: removing {n} in the {BUILDER} sandbox: {e:#}");
+        crate::warning!("removing {n} in the {BUILDER} sandbox: {e:#}");
     }
     result
 }

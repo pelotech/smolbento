@@ -65,7 +65,8 @@ impl SmolvmError {
             ),
             "HYPERVISOR_UNAVAILABLE" => Some(
                 "the hypervisor isn't available: run `bento diagnose`; on macOS the smolvm binary \
-                 needs the hypervisor entitlement (reinstall smolvm)",
+                 needs the hypervisor entitlement (delete ~/.smolbento/engine so the next command \
+                 downloads smolvm again, or fix smolvm.path if you set it)",
             ),
             "STORAGE_ERROR" => Some(
                 "smolvm couldn't use its storage, most often because the disk is full: check `df \

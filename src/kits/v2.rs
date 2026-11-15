@@ -62,8 +62,7 @@ fn parse_warn(yaml: &str, dir: &Path) -> Result<(Kit, Vec<String>)> {
     let source = Source::LocalV2(dir.to_path_buf());
     let name = name_or_source(s.name.clone(), dir)?;
     let mut warnings = Vec::new();
-    let mut ignored =
-        |field: &str| warnings.push(format!("warning: kit {name}: {field} is ignored"));
+    let mut ignored = |field: &str| warnings.push(format!("kit {name}: {field} is ignored"));
 
     let mut caps = Vec::new();
     let mut sandbox = s.sandbox.unwrap_or_default();
@@ -152,7 +151,7 @@ fn parse_warn(yaml: &str, dir: &Path) -> Result<(Kit, Vec<String>)> {
     {
         if kind == Kind::Mixin && a.filename.is_some() {
             warnings.push(format!(
-                "warning: kit {name}: agentInstructions.filename is only used for kind \
+                "kit {name}: agentInstructions.filename is only used for kind \
                  \"sandbox\", not \"mixin\""
             ));
         }
@@ -541,9 +540,7 @@ fn lifecycle(
         let mut out = Vec::new();
         if root.is_dir() {
             walk(&root, &root, dest, &mut out, &mut |rel| {
-                warnings.push(format!(
-                    "warning: kit {kit}: {sub}/{rel} is a symlink; skipped"
-                ))
+                warnings.push(format!("kit {kit}: {sub}/{rel} is a symlink; skipped"))
             })?;
         }
         Ok(out)
@@ -740,8 +737,8 @@ mod tests {
         assert_eq!(
             warnings,
             [
-                format!("warning: kit {name}: files/home/link.txt is a symlink; skipped"),
-                format!("warning: kit {name}: files/home/sub/loop is a symlink; skipped"),
+                format!("kit {name}: files/home/link.txt is a symlink; skipped"),
+                format!("kit {name}: files/home/sub/loop is a symlink; skipped"),
             ]
         );
     }
@@ -795,10 +792,10 @@ mod tests {
         assert_eq!(
             warnings,
             [
-                "warning: kit m: sandbox.build is ignored",
-                "warning: kit m: sandbox.resources.gpu is ignored",
-                "warning: kit m: sandbox.entrypoint is ignored",
-                "warning: kit m: sandbox.command is ignored",
+                "kit m: sandbox.build is ignored",
+                "kit m: sandbox.resources.gpu is ignored",
+                "kit m: sandbox.entrypoint is ignored",
+                "kit m: sandbox.command is ignored",
             ]
         );
         // A workload's command runs.
@@ -846,9 +843,7 @@ mod tests {
         let (_, w) = parse_warn(y, Path::new("/nonexistent")).unwrap();
         assert_eq!(
             w,
-            [
-                "warning: kit m: agentInstructions.filename is only used for kind \"sandbox\", not \"mixin\""
-            ]
+            ["kit m: agentInstructions.filename is only used for kind \"sandbox\", not \"mixin\""]
         );
         let y = y
             .replace("mixin", "sandbox")

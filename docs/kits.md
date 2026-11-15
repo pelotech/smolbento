@@ -2,6 +2,9 @@
 
 What a sandbox is built from and what you can add to it. Running agents is in [Usage](usage.md).
 
+On this page: [Kits](#kits) · [Skills](#skills) · [MCP servers](#mcp-servers) ·
+[Templates](#templates)
+
 ## Kits
 
 Kits add tools, files, network rules, credentials and setup steps. smolbento runs Docker Sandboxes

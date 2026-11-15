@@ -10,6 +10,9 @@ Options:
   -D, --debug
           Print each smolvm command line
 
+      --no-input
+          Never prompt; commands that need an answer fail with the command to run instead
+
       --format <FORMAT>
           Output format: table, json or yaml
 
@@ -17,9 +20,6 @@ Options:
 
       --json
           Output in JSON format
-
-      --no-input
-          Never prompt; commands that need an answer fail with the command to run instead
 
   -q, --quiet
           Only display template names

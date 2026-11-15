@@ -8,10 +8,10 @@ Usage: bento cp [OPTIONS] <SRC> <DST>
 
 Arguments:
   <SRC>
-
+          Host path, or SANDBOX:/absolute/path
 
   <DST>
-
+          Host path, or SANDBOX:/absolute/path (one side must be a sandbox)
 
 Options:
   -D, --debug
@@ -25,3 +25,7 @@ Options:
 
   -h, --help
           Print help
+
+Examples:
+  bento cp ./notes.md claude-myrepo:/tmp/notes.md
+  bento cp claude-myrepo:/home/agent/.bash_history ./history

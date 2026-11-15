@@ -55,8 +55,8 @@ fn install<R: Runner>(ctx: &Ctx<R>, ssh_dir: &Path) -> Result<i32> {
         )?;
     }
     if block::has_sbx_block(&new) {
-        eprintln!(
-            "warning: {} also has a docker sandboxes (sbx) block; both claim `Host *.sbx` and \
+        crate::warning!(
+            "{} also has a docker sandboxes (sbx) block; both claim `Host *.sbx` and \
 the first one in the file wins (smolbento's is first unless you moved it)",
             config.display()
         );
@@ -132,8 +132,8 @@ fn proxy_env<R: Runner>(ctx: &Ctx<R>) -> Vec<(String, String)> {
     {
         match smolvm_path(ctx) {
             Some(p) => env.push(("SMOLBENTO_SMOLVM".to_string(), p)),
-            None => eprintln!(
-                "warning: smolvm.path isn't an absolute path or on your PATH; IDEs started from \
+            None => crate::warning!(
+                "smolvm.path isn't an absolute path or on your PATH; IDEs started from \
 the Dock or a launcher may not find it (set it to an absolute path, then run `bento setup ssh` again)"
             ),
         }

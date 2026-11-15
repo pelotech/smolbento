@@ -14,7 +14,7 @@ pub fn run<R: Runner>(ctx: &mut Ctx<R>, a: &LsArgs) -> Result<i32> {
     let mut sandboxes = sandbox::list(&ctx.vm)?;
     // sbx's ls has no --all.
     sandboxes.retain(|s| !name::is_internal(s.name()));
-    let format = Format::pick(a.json, a.format);
+    let format = a.output.pick();
     write!(
         &ctx.out,
         "{}",
@@ -67,8 +67,7 @@ pub fn render(sandboxes: &[Sandbox], format: Format, quiet: bool, now: i64) -> R
         })
         .collect();
     match format {
-        Format::Json => Ok(format!("{}\n", serde_json::to_string_pretty(&rows)?)),
-        Format::Yaml => Ok(serde_saphyr::to_string(&rows)?),
+        f @ (Format::Json | Format::Yaml) => Ok(f.structured(&rows)?.unwrap_or_default()),
         Format::Table if rows.is_empty() => Ok("No sandboxes found\n".into()),
         Format::Table => {
             let mut lines = vec![

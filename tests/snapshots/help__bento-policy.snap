@@ -10,8 +10,8 @@ Commands:
   init      Choose the network policy for all sandboxes
   allow     Allow network access
   deny      Deny network access
-  rm        Remove rules
-  ls        List rules
+  rm        Remove rules [aliases: remove, delete]
+  ls        List rules [alias: list]
   inspect   Show one rule
   log       Show requests the policy blocked
   check     Test whether a host is allowed

@@ -24,13 +24,13 @@ fn stop_running<R: Runner>(ctx: &Ctx<R>) {
     let sandboxes = match sandbox::list(&ctx.vm) {
         Ok(s) => s,
         Err(e) => {
-            eprintln!("warning: couldn't list sandboxes to stop them ({e:#})");
+            crate::warning!("couldn't list sandboxes to stop them ({e:#})");
             return;
         }
     };
     for sb in sandboxes.iter().filter(|s| s.is_running()) {
         if let Err(e) = super::lifecycle::stop_sandbox(ctx, sb) {
-            eprintln!("warning: couldn't stop {} ({e:#})", sb.name());
+            crate::warning!("couldn't stop {} ({e:#})", sb.name());
         }
     }
 }
@@ -58,6 +58,11 @@ pub fn run<R: Runner>(ctx: &mut Ctx<R>, cmd: PolicyCmd) -> Result<i32> {
         PolicyCmd::Rm {
             kind: PolicyRmKind::Network(a),
         } => {
+            super::refuse(&[
+                (a.method.is_some(), "--method"),
+                (a.path.is_some(), "--path"),
+                (a.query.is_some(), "--query"),
+            ])?;
             if a.id.is_none() && a.resource.is_none() {
                 bail!("pass --id or --resource");
             }
@@ -86,19 +91,13 @@ pub fn run<R: Runner>(ctx: &mut Ctx<R>, cmd: PolicyCmd) -> Result<i32> {
             provision::push_network(ctx, &policy)?;
         }
         PolicyCmd::Ls(a) => {
-            for (flag, set) in [
-                ("--created-via", a.created_via.is_some()),
-                ("--type", a.kind.is_some()),
-                ("--protocol", a.protocol.is_some()),
-                ("--include-inactive", a.include_inactive),
-            ] {
-                if set {
-                    return Err(Unsupported(format!(
-                        "`bento policy ls {flag}` is not implemented yet"
-                    ))
-                    .into());
-                }
-            }
+            super::refuse(&[
+                (a.created_via.is_some(), "--created-via"),
+                (a.kind.is_some(), "--type"),
+                (a.protocol.is_some(), "--protocol"),
+                (a.include_inactive, "--include-inactive"),
+                (a.profile.is_some(), "--profile"),
+            ])?;
             let decision = match a.decision.as_deref() {
                 None => None,
                 Some("allow") => Some(Decision::Allow),
@@ -110,7 +109,7 @@ pub fn run<R: Runner>(ctx: &mut Ctx<R>, cmd: PolicyCmd) -> Result<i32> {
                 Some(s @ ("local" | "org" | "kit" | "mcp")) => Some(s),
                 Some(other) => bail!("--source takes local, org, kit or mcp, not '{other}'"),
             };
-            let format = Format::pick(a.json, a.format);
+            let format = a.output.pick();
             let opts = LsOpts {
                 sandbox: a.sandbox.as_deref(),
                 source,
@@ -130,18 +129,13 @@ pub fn run<R: Runner>(ctx: &mut Ctx<R>, cmd: PolicyCmd) -> Result<i32> {
                 eprintln!("{note}");
             }
         }
-        PolicyCmd::Inspect { id, json } => {
+        PolicyCmd::Inspect { id, output } => {
             let (rule, scope) = policy
                 .find(&id)
                 .with_context(|| format!("no rule '{id}'"))?;
-            if json {
-                writeln!(
-                    &ctx.out,
-                    "{}",
-                    serde_json::to_string_pretty(
-                        &serde_json::json!({ "scope": scope.unwrap_or("global"), "rule": rule })
-                    )?
-                )?;
+            let doc = serde_json::json!({ "scope": scope.unwrap_or("global"), "rule": rule });
+            if let Some(text) = output.structured(&doc)? {
+                write!(&ctx.out, "{text}")?;
             } else {
                 writeln!(
                     &ctx.out,
@@ -176,11 +170,8 @@ pub fn run<R: Runner>(ctx: &mut Ctx<R>, cmd: PolicyCmd) -> Result<i32> {
                 return Err(Unsupported("smolbento has no filesystem policy".into()).into());
             }
             let rows = blocked_rows(ctx, a.sandbox.as_deref(), a.limit)?;
-            if a.json {
-                writeln!(&ctx.out, "{}", serde_json::to_string_pretty(&rows)?)?;
-            } else {
-                write!(&ctx.out, "{}", render_log(&rows))?;
-            }
+            let text = a.output.structured(&rows)?;
+            write!(&ctx.out, "{}", text.unwrap_or_else(|| render_log(&rows)))?;
         }
         PolicyCmd::Approval(cmd) => return approval(ctx, &mut policy, cmd),
         PolicyCmd::Refresh(_) => {
@@ -348,8 +339,8 @@ fn guard_bound_secrets<R: Runner>(
     let sandboxes = match sandbox::list(&ctx.vm) {
         Ok(s) => s,
         Err(e) => {
-            eprintln!(
-                "warning: couldn't check sandboxes for bound secrets ({e:#}); adding the rule anyway"
+            crate::warning!(
+                "couldn't check sandboxes for bound secrets ({e:#}); adding the rule anyway"
             );
             return Ok(());
         }
@@ -431,9 +422,13 @@ fn approval<R: Runner>(ctx: &Ctx<R>, policy: &mut Policy, cmd: ApprovalCmd) -> R
     let rows = blocked_rows(ctx, None, APPROVAL_EVENTS)?;
     let pending = log::pending(policy, &rows);
     match cmd {
-        ApprovalCmd::Ls { json } => {
-            if json {
-                writeln!(&ctx.out, "{}", serde_json::to_string_pretty(&pending)?)?;
+        ApprovalCmd::Ls { quiet, output } => {
+            if quiet {
+                for r in &pending {
+                    writeln!(&ctx.out, "{}", r.host)?;
+                }
+            } else if let Some(text) = output.structured(&pending)? {
+                write!(&ctx.out, "{text}")?;
             } else if pending.is_empty() {
                 writeln!(&ctx.out, "No pending approvals")?;
             } else {
@@ -475,7 +470,7 @@ fn approval<R: Runner>(ctx: &Ctx<R>, policy: &mut Policy, cmd: ApprovalCmd) -> R
                 .map(|r| r.sandbox.as_str())
                 .collect();
             if seen.is_empty() {
-                bail!("no blocked request for '{id}' (see `bento policy approval ls`)");
+                bail!("no blocked request for '{id}'\n  try: bento policy approval ls");
             }
             if let Some(s) = sandbox.as_deref()
                 && !seen.contains(&s)
@@ -697,8 +692,7 @@ fn render_ls(policy: &Policy, rows: &[LsRow], opts: &LsOpts) -> Result<String> {
         return Ok(rows.iter().map(|r| format!("{}\n", r.id)).collect());
     }
     match opts.format {
-        Format::Json => Ok(format!("{}\n", serde_json::to_string_pretty(rows)?)),
-        Format::Yaml => Ok(serde_saphyr::to_string(&rows)?),
+        f @ (Format::Json | Format::Yaml) => Ok(f.structured(&rows)?.unwrap_or_default()),
         Format::Table => {
             let mode = policy.mode.map_or("not chosen", Mode::name);
             let mut lines = vec![

@@ -10,7 +10,7 @@ Commands:
   add      Register an MCP server
   ls       List registered MCP servers [alias: list]
   inspect  Show a registered MCP server
-  rm       Remove a registered MCP server [alias: remove]
+  rm       Remove a registered MCP server [aliases: remove, delete]
   auth     Authorize OAuth servers (not supported: smolbento has no MCP gateway)
   load     Attach a server to a running sandbox (not supported: smolbento has no MCP gateway)
   unload   Detach a server from a running sandbox (not supported: smolbento has no MCP gateway)

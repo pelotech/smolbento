@@ -58,7 +58,7 @@ pub fn attach(
                 if *n == "none" {
                     "--static-mcp none can't be combined with server names".to_string()
                 } else {
-                    format!("no MCP server named '{n}' (see `bento mcp ls`)")
+                    super::unknown(n)
                 }
             })?;
             check_server(n, server).with_context(|| {
@@ -198,7 +198,7 @@ mod tests {
         };
         assert_eq!(
             err("nope", "claude", true),
-            "no MCP server named 'nope' (see `bento mcp ls`)"
+            "no MCP server named 'nope'\n  try: bento mcp ls"
         );
         assert_eq!(
             err("linear", "claude", false),

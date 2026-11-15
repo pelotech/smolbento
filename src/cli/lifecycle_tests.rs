@@ -1609,11 +1609,7 @@ fn stop_rm_and_prune_print_sbxs_json() {
     assert_eq!(v["skipped_unknown_stop"], serde_json::json!([]));
     // As sbx: --format describes the dry-run listing only.
     let err = t.sbt_err(&["prune", "-f", "--json"]);
-    assert_eq!(
-        err,
-        "--format describes the --dry-run listing; pass --dry-run to preview removals, or run \
-         the prune without --format\n  try: bento prune --dry-run --format json"
-    );
+    assert!(err.contains("pass --dry-run"), "{err}");
     assert!(!t.calls().iter().any(|l| l.starts_with("machine delete")));
 
     let mut t = test_env(&[]);

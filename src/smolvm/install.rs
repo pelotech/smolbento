@@ -141,7 +141,7 @@ fn prune(engine: &Path, pinned: &str) {
     older.pop();
     for name in older {
         if let Err(err) = std::fs::remove_dir_all(engine.join(&name)) {
-            eprintln!("warning: couldn't remove smolvm {name}: {err}");
+            crate::warning!("couldn't remove smolvm {name}: {err}");
         }
     }
 }

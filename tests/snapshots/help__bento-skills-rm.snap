@@ -8,7 +8,7 @@ Usage: bento skills rm [OPTIONS] <SKILLS>...
 
 Arguments:
   <SKILLS>...
-
+          Skills to remove
 
 Options:
   -D, --debug

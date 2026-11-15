@@ -92,14 +92,17 @@ From source or a release tarball, and how to uninstall: [Install](docs/install.m
 ## First run
 
 ```sh
+# optional: an API key, kept on your machine (skip it to log in inside the sandbox)
+bento secret set anthropic
 cd ~/code/myrepo
 # create a sandbox for this directory and attach Claude Code
 bento run claude
 ```
 
-Choose a network policy when asked (`balanced` suits most work). Give agents their API keys with
-`bento secret set`. They see only placeholders. When the last session ends, the sandbox stops. Run
-`bento run claude` again to pick up where you left off. See [Usage](docs/network-and-secrets.md#secrets).
+Set the key first: a sandbox uses the secrets that exist when it's created. The agent sees only a
+placeholder. Choose a network policy when asked (`balanced` suits most work). When the last
+session ends, the sandbox stops. Run `bento run claude` again to pick up where you left off. See
+[Secrets](docs/network-and-secrets.md#secrets).
 
 ## Documentation
 

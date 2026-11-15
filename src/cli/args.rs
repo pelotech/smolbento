@@ -10,7 +10,7 @@ use super::Unsupported;
 #[derive(Debug, Parser)]
 #[command(
     name = "bento",
-    // As `sbx --version`: "bento version v0.28.0".
+    // As `sbx --version`: "bento version vX.Y.Z".
     version = concat!("version v", env!("CARGO_PKG_VERSION")),
     about = "Docker Sandboxes (sbx) compatible agent sandboxes on smolvm microVMs"
 )]
@@ -31,10 +31,16 @@ pub struct Cli {
 #[derive(Debug, Subcommand)]
 pub enum Cmd {
     /// Create a sandbox if needed and attach to its agent
+    #[command(
+        after_help = "Examples:\n  bento run claude\n  bento run claude ~/code/api\n  bento run codex . -- --model o3"
+    )]
     Run(RunArgs),
     /// Create and start a sandbox
     Create(CreateArgs),
     /// Run a command in a sandbox
+    #[command(
+        after_help = "Examples:\n  bento exec claude-myrepo git status\n  bento exec -it claude-myrepo bash"
+    )]
     Exec(ExecArgs),
     /// List sandboxes
     #[command(visible_alias = "list")]
@@ -43,11 +49,13 @@ pub enum Cmd {
     Inspect(InspectArgs),
     /// Start stopped sandboxes
     Start {
+        /// Sandboxes to start
         #[arg(required = true)]
         sandboxes: Vec<String>,
     },
     /// Stop sandboxes, keeping their state
     Stop {
+        /// Sandboxes to stop
         #[arg(required = true)]
         sandboxes: Vec<String>,
         #[command(flatten)]
@@ -58,9 +66,13 @@ pub enum Cmd {
     Rm(RmArgs),
     /// Remove stopped sandboxes
     Prune(PruneArgs),
-    /// Remove every sandbox, smolbento's session state and the shared skills store
+    /// Reset smolbento to a fresh install: removes every sandbox, settings, policy, templates,
+    /// kits, skills and secrets
     Reset(ResetArgs),
     /// Copy files between the host and a sandbox
+    #[command(
+        after_help = "Examples:\n  bento cp ./notes.md claude-myrepo:/tmp/notes.md\n  bento cp claude-myrepo:/home/agent/.bash_history ./history"
+    )]
     Cp(CpArgs),
     /// Copy a running sandbox (memory, processes, disk) for parallel attempts
     Fork(ForkArgs),
@@ -76,6 +88,7 @@ pub enum Cmd {
     /// Accepted for sbx compatibility; smolbento needs no daemon
     Daemon(Passthrough),
     /// Run smolbento's smolvm (the pinned release) on smolbento's sandboxes (smolbento only)
+    #[command(after_help = "Examples:\n  bento smolvm --version\n  bento smolvm machine ls --json")]
     Smolvm(Passthrough),
     /// Publish or unpublish ports on a sandbox (127.0.0.1 only)
     Ports(PortsArgs),
@@ -351,6 +364,7 @@ pub struct EnvRmArgs {
 
 #[derive(Debug, Args)]
 pub struct PortsArgs {
+    /// Sandbox name
     pub sandbox: String,
     /// [[127.0.0.1:]HOST:]PORT[/proto]; no host port picks a free one
     #[arg(short = 'p', long)]
@@ -383,12 +397,8 @@ pub enum KitCmd {
         reference: String,
         #[command(flatten)]
         args: KitArgOpts,
-        /// Output format
-        #[arg(long, value_enum)]
-        format: Option<Format>,
-        /// Output in JSON format
-        #[arg(long)]
-        json: bool,
+        #[command(flatten)]
+        output: OutputArgs,
         /// Skip the source policy check; local kits only, no network
         #[arg(long)]
         offline: bool,
@@ -399,12 +409,8 @@ pub enum KitCmd {
         reference: String,
         #[command(flatten)]
         args: KitArgOpts,
-        /// Output format
-        #[arg(long, value_enum)]
-        format: Option<Format>,
-        /// Output in JSON format
-        #[arg(long)]
-        json: bool,
+        #[command(flatten)]
+        output: OutputArgs,
         /// Skip the source policy check; local kits only, no network
         #[arg(long)]
         offline: bool,
@@ -479,12 +485,8 @@ pub enum KitCmd {
         /// Do not require a Rekor transparency-log entry (for private keyless signatures)
         #[arg(long)]
         insecure_ignore_tlog: bool,
-        /// Output format
-        #[arg(long, value_enum)]
-        format: Option<Format>,
-        /// Output in JSON format
-        #[arg(long)]
-        json: bool,
+        #[command(flatten)]
+        output: OutputArgs,
     },
 }
 
@@ -537,6 +539,8 @@ pub struct DiskSizes {
 /// Options shared by `run` and `create`.
 #[derive(Debug, Clone, Default, Args)]
 pub struct SandboxOpts {
+    #[arg(long, hide = true)]
+    pub profile: Option<String>,
     /// Sandbox name (default: <agent>-<workspace basename>)
     #[arg(long)]
     pub name: Option<String>,
@@ -619,17 +623,18 @@ pub struct SandboxOpts {
 impl SandboxOpts {
     /// Rejects flags from later phases and Docker Cloud-only flags.
     pub fn check_supported(&self) -> Result<()> {
-        let cloud = [
-            (self.allow_network.is_some(), "--allow-network"),
-            (self.image_ref.is_some(), "--image-ref"),
-            (self.platform.is_some(), "--platform"),
-            (self.ttl.is_some(), "--ttl"),
-            (self.on_timeout.is_some(), "--on-timeout"),
-            (!self.volume.is_empty(), "--volume"),
-        ];
-        if let Some((_, flag)) = cloud.iter().find(|(set, _)| *set) {
-            return Err(Unsupported(format!("{flag} is a Docker Cloud option")).into());
-        }
+        super::refuse_as(
+            &[
+                (self.allow_network.is_some(), "--allow-network"),
+                (self.image_ref.is_some(), "--image-ref"),
+                (self.platform.is_some(), "--platform"),
+                (self.ttl.is_some(), "--ttl"),
+                (self.on_timeout.is_some(), "--on-timeout"),
+                (!self.volume.is_empty(), "--volume"),
+            ],
+            "is a Docker Cloud option",
+        )?;
+        super::refuse(&[(self.profile.is_some(), "--profile")])?;
         if let Some(p) = self
             .pull
             .as_deref()
@@ -718,7 +723,9 @@ pub struct ExecArgs {
     pub detach: bool,
     #[arg(long = "detach-keys", hide = true)]
     pub detach_keys: Option<String>,
+    /// Sandbox name
     pub sandbox: String,
+    /// Command and its arguments
     #[arg(required = true, trailing_var_arg = true, allow_hyphen_values = true)]
     pub command: Vec<String>,
 }
@@ -732,35 +739,9 @@ pub enum Format {
 }
 
 impl Format {
-    /// `--json` wins over `--format`, which defaults to a table.
-    pub fn pick(json: bool, format: Option<Format>) -> Format {
-        if json {
-            Format::Json
-        } else {
-            format.unwrap_or_default()
-        }
-    }
-}
-
-/// `--format` and `--json`, as sbx has them on every command that prints something.
-#[derive(Debug, Clone, Copy, Default, Args)]
-pub struct OutputArgs {
-    /// Output format
-    #[arg(long, value_enum)]
-    pub format: Option<Format>,
-    /// Same as --format json
-    #[arg(long)]
-    pub json: bool,
-}
-
-impl OutputArgs {
-    pub fn pick(&self) -> Format {
-        Format::pick(self.json, self.format)
-    }
-
-    /// `value` as JSON or YAML, as asked; `None` when the command should print its table.
-    pub fn structured<T: serde::Serialize>(&self, value: &T) -> anyhow::Result<Option<String>> {
-        Ok(match self.pick() {
+    /// `value` as JSON or YAML; `None` for a table, which each command draws itself.
+    pub fn structured<T: serde::Serialize>(self, value: &T) -> anyhow::Result<Option<String>> {
+        Ok(match self {
             Format::Table => None,
             Format::Json => Some(format!("{}\n", serde_json::to_string_pretty(value)?)),
             Format::Yaml => Some(serde_saphyr::to_string(value)?),
@@ -768,14 +749,41 @@ impl OutputArgs {
     }
 }
 
-#[derive(Debug, Default, Args)]
-pub struct LsArgs {
-    /// Output format
+/// `--format` and `--json`, as sbx has them on every command that prints something.
+#[derive(Debug, Clone, Copy, Default, Args)]
+pub struct OutputArgs {
+    /// Output format: table, json or yaml
     #[arg(long, value_enum)]
     pub format: Option<Format>,
-    /// Same as --format json
+    /// Output in JSON format
     #[arg(long)]
     pub json: bool,
+}
+
+impl OutputArgs {
+    /// `--json` wins over `--format`, which defaults to a table.
+    pub fn pick(&self) -> Format {
+        if self.json {
+            Format::Json
+        } else {
+            self.format.unwrap_or_default()
+        }
+    }
+
+    pub fn is_table(&self) -> bool {
+        self.pick() == Format::Table
+    }
+
+    /// `value` as JSON or YAML, as asked; `None` when the command should print its table.
+    pub fn structured<T: serde::Serialize>(&self, value: &T) -> anyhow::Result<Option<String>> {
+        self.pick().structured(value)
+    }
+}
+
+#[derive(Debug, Default, Args)]
+pub struct LsArgs {
+    #[command(flatten)]
+    pub output: OutputArgs,
     /// Only print names
     #[arg(short = 'q', long)]
     pub quiet: bool,
@@ -783,17 +791,15 @@ pub struct LsArgs {
 
 #[derive(Debug, Args)]
 pub struct InspectArgs {
+    /// Sandbox name
     pub sandbox: String,
-    /// Output format
-    #[arg(long, value_enum, default_value = "table")]
-    pub format: Format,
-    /// Same as --format json
-    #[arg(long)]
-    pub json: bool,
+    #[command(flatten)]
+    pub output: OutputArgs,
 }
 
 #[derive(Debug, Args)]
 pub struct RmArgs {
+    /// Sandboxes to remove
     pub sandboxes: Vec<String>,
     /// Remove every sandbox
     #[arg(long)]
@@ -835,7 +841,9 @@ pub struct CpArgs {
     /// Follow symbolic links in the host source
     #[arg(short = 'L', long = "follow-link")]
     pub follow_link: bool,
+    /// Host path, or SANDBOX:/absolute/path
     pub src: String,
+    /// Host path, or SANDBOX:/absolute/path (one side must be a sandbox)
     pub dst: String,
 }
 
@@ -855,6 +863,7 @@ pub enum SettingsCmd {
     },
     /// Print a setting's value
     Get {
+        /// Setting key (see `bento settings ls`)
         key: String,
         #[command(flatten)]
         output: OutputArgs,
@@ -869,6 +878,7 @@ pub enum SettingsCmd {
 pub enum PolicyCmd {
     /// Choose the network policy for all sandboxes
     Init {
+        /// The policy to use
         mode: crate::policy::Mode,
         #[arg(long, hide = true)]
         sandbox: Option<String>,
@@ -884,17 +894,20 @@ pub enum PolicyCmd {
         kind: RuleKind,
     },
     /// Remove rules
+    #[command(visible_aliases = ["remove", "delete"])]
     Rm {
         #[command(subcommand)]
         kind: PolicyRmKind,
     },
     /// List rules
+    #[command(visible_alias = "list")]
     Ls(PolicyLsArgs),
     /// Show one rule
     Inspect {
+        /// Rule ID (as shown by `bento policy ls`)
         id: String,
-        #[arg(long)]
-        json: bool,
+        #[command(flatten)]
+        output: OutputArgs,
     },
     /// Show requests the policy blocked
     Log(PolicyLogArgs),
@@ -905,6 +918,7 @@ pub enum PolicyCmd {
     },
     /// Remove every rule and the chosen mode
     Reset {
+        /// Don't ask for confirmation
         #[arg(short = 'f', long)]
         force: bool,
     },
@@ -917,7 +931,10 @@ pub enum PolicyCmd {
 
 #[derive(Debug, Subcommand)]
 pub enum RuleKind {
-    /// Network rule
+    /// Hosts, wildcards, IPs or CIDRs, separated by commas
+    #[command(
+        after_help = "Examples:\n  bento policy allow network api.example.com,*.example.org\n  bento policy deny network tracking.example.com\n  bento policy allow network internal.example.com --sandbox claude-myrepo"
+    )]
     Network(RuleArgs),
 }
 
@@ -947,29 +964,38 @@ pub enum PolicyRmKind {
 
 #[derive(Debug, Args)]
 pub struct PolicyRmArgs {
+    #[arg(long, hide = true)]
+    pub method: Option<String>,
+    #[arg(long, hide = true)]
+    pub path: Option<String>,
+    #[arg(long, hide = true)]
+    pub query: Option<String>,
     /// Rule id
     #[arg(long)]
     pub id: Option<String>,
     /// Remove this resource from every rule listing it
     #[arg(long)]
     pub resource: Option<String>,
+    /// Only this sandbox's rules
     #[arg(long)]
     pub sandbox: Option<String>,
+    /// Don't ask for confirmation
     #[arg(short = 'f', long)]
     pub force: bool,
 }
 
 #[derive(Debug, Default, Args)]
 pub struct PolicyLsArgs {
+    #[arg(long, hide = true)]
+    pub profile: Option<String>,
     /// Only rules that apply to this sandbox
     pub sandbox: Option<String>,
     /// Show every resource and enforcement notes
     #[arg(long)]
     pub wide: bool,
-    #[arg(long, value_enum)]
-    pub format: Option<Format>,
-    #[arg(long)]
-    pub json: bool,
+    #[command(flatten)]
+    pub output: OutputArgs,
+    /// Only display rule IDs
     #[arg(short = 'q', long)]
     pub quiet: bool,
     /// Only rules from this source
@@ -990,6 +1016,7 @@ pub struct PolicyLsArgs {
 
 #[derive(Debug, Args)]
 pub struct PolicyLogArgs {
+    /// Only this sandbox's requests
     pub sandbox: Option<String>,
     /// Events read per sandbox
     #[arg(long, default_value_t = 50)]
@@ -997,8 +1024,8 @@ pub struct PolicyLogArgs {
     /// all, network or filesystem (only network has events)
     #[arg(long = "type")]
     pub kind: Option<String>,
-    #[arg(long)]
-    pub json: bool,
+    #[command(flatten)]
+    pub output: OutputArgs,
 }
 
 #[derive(Debug, Subcommand)]
@@ -1009,12 +1036,16 @@ pub enum CheckKind {
 
 #[derive(Debug, Args)]
 pub struct CheckArgs {
+    /// Host, host:port, IP or URL to check
     pub target: String,
+    /// Check in this sandbox's context
     #[arg(long)]
     pub sandbox: Option<String>,
+    /// Protocol (only tcp)
     #[arg(long)]
     pub protocol: Option<String>,
-    #[arg(long)]
+    /// Accepted as in sbx; the deciding rule is always printed
+    #[arg(short = 'v', long)]
     pub verbose: bool,
     #[command(flatten)]
     pub output: OutputArgs,
@@ -1024,8 +1055,11 @@ pub struct CheckArgs {
 pub enum ApprovalCmd {
     /// Blocked hosts with no rule yet
     Ls {
-        #[arg(long)]
-        json: bool,
+        /// Only display approval IDs
+        #[arg(short = 'q', long)]
+        quiet: bool,
+        #[command(flatten)]
+        output: OutputArgs,
     },
     /// Show one blocked host
     Inspect { id: String },
@@ -1033,7 +1067,9 @@ pub enum ApprovalCmd {
     Respond {
         /// The blocked host (as shown by `approval ls`)
         id: String,
+        /// allow or deny
         decision: crate::policy::Decision,
+        /// Only for this sandbox
         #[arg(long)]
         sandbox: Option<String>,
     },
@@ -1043,17 +1079,20 @@ pub enum ApprovalCmd {
 #[derive(Debug, Subcommand)]
 pub enum McpCmd {
     /// Register an MCP server
-    Add(McpAddArgs),
+    Add(Box<McpAddArgs>),
     /// List registered MCP servers
     #[command(visible_alias = "list")]
     Ls(McpLsArgs),
     /// Show a registered MCP server
     Inspect(McpInspectArgs),
     /// Remove a registered MCP server
-    #[command(visible_alias = "remove")]
+    #[command(visible_aliases = ["remove", "delete"])]
     Rm {
         /// Server name
         name: String,
+        /// Accepted as in sbx; smolbento never asks before removing a server
+        #[arg(short = 'f', long)]
+        force: bool,
     },
     /// Authorize OAuth servers (not supported: smolbento has no MCP gateway)
     Auth(Passthrough),
@@ -1065,6 +1104,16 @@ pub enum McpCmd {
 
 #[derive(Debug, Args)]
 pub struct McpAddArgs {
+    #[arg(long = "disable-http2", hide = true)]
+    pub disable_http2: bool,
+    #[arg(long = "skip-ssrf-check", hide = true)]
+    pub skip_ssrf_check: bool,
+    #[arg(long = "callback-port", hide = true)]
+    pub callback_port: Option<String>,
+    #[arg(long, hide = true)]
+    pub scope: Vec<String>,
+    #[arg(long = "no-scope", hide = true)]
+    pub no_scope: bool,
     /// Server name
     pub name: String,
     /// The server's URL
@@ -1096,12 +1145,8 @@ pub struct McpAddArgs {
 
 #[derive(Debug, Args)]
 pub struct McpLsArgs {
-    /// Output format: table, json or yaml
-    #[arg(long, value_enum)]
-    pub format: Option<Format>,
-    /// Output in JSON format
-    #[arg(long)]
-    pub json: bool,
+    #[command(flatten)]
+    pub output: OutputArgs,
     /// Only display server names
     #[arg(short = 'q', long)]
     pub quiet: bool,
@@ -1111,12 +1156,8 @@ pub struct McpLsArgs {
 pub struct McpInspectArgs {
     /// Server name
     pub name: String,
-    /// Output format: table, json or yaml
-    #[arg(long, value_enum)]
-    pub format: Option<Format>,
-    /// Output in JSON format
-    #[arg(long)]
-    pub json: bool,
+    #[command(flatten)]
+    pub output: OutputArgs,
 }
 
 /// `bento skills` (sbx's are experimental too).
@@ -1158,16 +1199,15 @@ pub struct SkillsImportArgs {
     /// Overwrite existing skills without prompting
     #[arg(short = 'f', long)]
     pub force: bool,
+    /// Also list the checked directories that do not exist
+    #[arg(short = 'v', long)]
+    pub verbose: bool,
 }
 
 #[derive(Debug, Args)]
 pub struct SkillsLsArgs {
-    /// Output format: table, json or yaml
-    #[arg(long, value_enum)]
-    pub format: Option<Format>,
-    /// Output in JSON format
-    #[arg(long)]
-    pub json: bool,
+    #[command(flatten)]
+    pub output: OutputArgs,
     /// Only display skill names
     #[arg(short = 'q', long)]
     pub quiet: bool,
@@ -1175,6 +1215,7 @@ pub struct SkillsLsArgs {
 
 #[derive(Debug, Args)]
 pub struct SkillsRmArgs {
+    /// Skills to remove
     #[arg(required = true)]
     pub skills: Vec<String>,
     /// Skip confirmation prompts
@@ -1184,6 +1225,7 @@ pub struct SkillsRmArgs {
 
 #[derive(Debug, Args)]
 pub struct SkillsUpdateArgs {
+    /// Skills to update (default: all)
     pub skills: Vec<String>,
 }
 
@@ -1206,6 +1248,11 @@ pub enum TemplateCmd {
 
 #[derive(Debug, Args)]
 pub struct TemplateSaveArgs {
+    #[arg(long = "capture-mode", hide = true)]
+    pub capture_mode: Option<String>,
+    #[arg(long, hide = true)]
+    pub description: Option<String>,
+    /// Sandbox to save
     pub sandbox: String,
     /// Template name, e.g. myimage:v1.0
     pub tag: String,
@@ -1216,12 +1263,14 @@ pub struct TemplateSaveArgs {
 
 #[derive(Debug, Args)]
 pub struct TemplateLsArgs {
-    /// Output format: table, json or yaml
-    #[arg(long, value_enum)]
-    pub format: Option<Format>,
-    /// Output in JSON format
-    #[arg(long)]
-    pub json: bool,
+    #[arg(long, short = 'a', hide = true)]
+    pub all: bool,
+    #[arg(long, hide = true)]
+    pub digests: bool,
+    #[arg(long = "no-trunc", hide = true)]
+    pub no_trunc: bool,
+    #[command(flatten)]
+    pub output: OutputArgs,
     /// Only display template names
     #[arg(short = 'q', long)]
     pub quiet: bool,
@@ -1234,16 +1283,17 @@ pub struct TemplateRmArgs {
     /// Skip confirmation prompts
     #[arg(short = 'f', long)]
     pub force: bool,
-    /// Output format: table, json or yaml
-    #[arg(long, value_enum)]
-    pub format: Option<Format>,
-    /// Output in JSON format
-    #[arg(long)]
-    pub json: bool,
+    #[command(flatten)]
+    pub output: OutputArgs,
 }
 
 #[derive(Debug, Args)]
 pub struct TemplateLoadArgs {
+    #[arg(long = "capture-mode", hide = true)]
+    pub capture_mode: Option<String>,
+    #[arg(long, hide = true)]
+    pub description: Option<String>,
+    /// File made by `bento template save --output`
     pub file: PathBuf,
     /// sbx's cloud template name; refused for local templates
     #[arg(hide = true)]
@@ -1253,6 +1303,9 @@ pub struct TemplateLoadArgs {
 #[derive(Debug, Subcommand)]
 pub enum SecretCmd {
     /// Set a secret for a built-in service (anthropic, claude, github, openai, …)
+    #[command(
+        after_help = "Examples:\n  bento secret set anthropic\n  bento secret set github --command 'gh auth token'\n  bento secret set openai --sandbox claude-myrepo"
+    )]
     Set(SecretSetArgs),
     /// Set a secret for any host and environment variable
     SetCustom(SecretCustomArgs),
@@ -1287,9 +1340,11 @@ pub struct SecretSource {
 
 #[derive(Debug, Args)]
 pub struct SecretSetArgs {
+    /// Service name, such as anthropic, github or openai
     pub service: Option<String>,
     #[command(flatten)]
     pub source: SecretSource,
+    /// Overwrite an existing secret without confirmation
     #[arg(short = 'f', long)]
     pub force: bool,
     #[arg(long, hide = true)]
@@ -1318,6 +1373,12 @@ pub struct SecretSetArgs {
 
 #[derive(Debug, Args)]
 pub struct SecretCustomArgs {
+    #[arg(long = "no-verify", hide = true)]
+    pub no_verify: bool,
+    #[arg(long = "show-error", hide = true)]
+    pub show_error: bool,
+    #[arg(long, hide = true)]
+    pub refresh: Option<String>,
     /// Hosts the secret is sent to (repeatable)
     #[arg(long = "host", required = true)]
     pub hosts: Vec<String>,
@@ -1335,10 +1396,13 @@ pub struct SecretLsArgs {
     /// Only global secrets
     #[arg(short = 'g', long)]
     pub global: bool,
+    /// Only list secrets for one sandbox
     #[arg(long)]
     pub sandbox: Option<String>,
+    /// Filter by secret service name
     #[arg(long)]
     pub service: Option<String>,
+    /// Only display secret names
     #[arg(short = 'q', long)]
     pub quiet: bool,
     #[command(flatten)]
@@ -1347,12 +1411,15 @@ pub struct SecretLsArgs {
 
 #[derive(Debug, Args)]
 pub struct SecretRmArgs {
+    /// Service whose secret to remove
     pub service: Option<String>,
+    /// Only this sandbox's secret
     #[arg(long)]
     pub sandbox: Option<String>,
     /// Remove every secret
     #[arg(long)]
     pub all: bool,
+    /// Don't ask for confirmation
     #[arg(short = 'f', long)]
     pub force: bool,
     /// Remove the pull credential for this container registry
@@ -1393,5 +1460,24 @@ mod tests {
             parse(&["settings", "list"]),
             Cmd::Settings(SettingsCmd::Ls { .. })
         ));
+        assert!(matches!(
+            parse(&["policy", "list"]),
+            Cmd::Policy(PolicyCmd::Ls(_))
+        ));
+        for rm in ["remove", "delete"] {
+            assert!(matches!(
+                parse(&["policy", rm, "network", "--resource", "x.com"]),
+                Cmd::Policy(PolicyCmd::Rm { .. })
+            ));
+            assert!(matches!(
+                parse(&["mcp", rm, "linear"]),
+                Cmd::Mcp(McpCmd::Rm { .. })
+            ));
+        }
+        // sbx's short and no-op flags.
+        parse(&["policy", "check", "network", "-v", "x.com"]);
+        parse(&["policy", "approval", "ls", "-q"]);
+        parse(&["mcp", "rm", "-f", "linear"]);
+        parse(&["skills", "import", "-v"]);
     }
 }

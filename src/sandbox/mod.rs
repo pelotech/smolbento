@@ -210,10 +210,7 @@ fn start_checked<R: Runner>(
     on(Event::Setup);
     if let Err(e) = setup(vm, sb, plan, private) {
         if let Err(stop) = vm.stop(&sb.machine) {
-            eprintln!(
-                "warning: stopping {} after the failed start: {stop:#}",
-                sb.name()
-            );
+            crate::warning!("stopping {} after the failed start: {stop:#}", sb.name());
         }
         return Err(e);
     }
@@ -231,8 +228,8 @@ fn setup<R: Runner>(
 ) -> Result<()> {
     // Not fatal: an image without a writable /etc/hosts still works, just without the name.
     if let Err(e) = vm.exec_captured(&ExecSpec::sh(&sb.machine, "root", hosts_cmd())) {
-        eprintln!(
-            "warning: {}: couldn't add host.docker.internal to /etc/hosts: {e:#}",
+        crate::warning!(
+            "{}: couldn't add host.docker.internal to /etc/hosts: {e:#}",
             sb.name()
         );
     }
@@ -240,8 +237,8 @@ fn setup<R: Runner>(
     if let Some(cmd) = lockdown_cmd(sb.meta.no_fuse, &sb.meta.read_only_files)
         && let Err(e) = vm.exec_captured(&ExecSpec::sh(&sb.machine, "root", cmd))
     {
-        eprintln!(
-            "warning: {}: couldn't apply the environment file's sandbox options: {e:#}",
+        crate::warning!(
+            "{}: couldn't apply the environment file's sandbox options: {e:#}",
             sb.name()
         );
     }
@@ -265,8 +262,8 @@ fn setup<R: Runner>(
         (bridge::remove_cmd(), "remove")
     };
     if let Err(e) = vm.exec_captured(&ExecSpec::sh(&sb.machine, "root", shims)) {
-        eprintln!(
-            "warning: {}: couldn't {what} the browser and clipboard shims: {e:#}",
+        crate::warning!(
+            "{}: couldn't {what} the browser and clipboard shims: {e:#}",
             sb.name()
         );
     }
@@ -279,7 +276,7 @@ fn setup<R: Runner>(
         .and_then(|l| crate::skills::link_script(&l.dirs))
         && let Err(e) = vm.exec_captured(&ExecSpec::sh(&sb.machine, "root", script))
     {
-        eprintln!("warning: {}: couldn't link shared skills: {e:#}", sb.name());
+        crate::warning!("{}: couldn't link shared skills: {e:#}", sb.name());
     }
     if let Some(step) = &plan.clone {
         for w in run_clone(vm, sb, step)? {

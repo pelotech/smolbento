@@ -96,8 +96,8 @@ fn plan_for<R: Runner>(
         let read =
             || -> Result<_> { Ok((clone::worktree_head(repo)?, clone::copied_remotes(repo)?)) };
         let (head, remotes) = read().unwrap_or_else(|e| {
-            eprintln!(
-                "warning: reading the host repo for {sandbox}: {e:#}; its remotes aren't copied"
+            crate::warning!(
+                "reading the host repo for {sandbox}: {e:#}; its remotes aren't copied"
             );
             (None, Vec::new())
         });
@@ -142,7 +142,7 @@ pub(crate) fn service_kinds(meta: &Meta) -> Vec<Kind> {
 /// warn: without a unit the sockets are served while a session is attached only, if at all.
 pub(crate) fn sync_services<R: Runner>(ctx: &Ctx<R>, name: &str, kinds: &[Kind]) {
     if let Err(e) = ctx.services.sync(name, kinds, &ctx.paths, &ctx.env) {
-        eprintln!("warning: {name}: host services for the browser, clipboard and SSH agent: {e:#}");
+        crate::warning!("{name}: host services for the browser, clipboard and SSH agent: {e:#}");
     }
 }
 
@@ -160,7 +160,7 @@ pub fn sweep_orphans<R: Runner>(ctx: &Ctx<R>) -> Vec<String> {
     let gone = orphan_services(ctx);
     for name in &gone {
         if let Err(e) = ctx.services.remove(name) {
-            eprintln!("warning: removing the leftover host services of {name}: {e:#}");
+            crate::warning!("removing the leftover host services of {name}: {e:#}");
         }
     }
     gone
@@ -583,8 +583,8 @@ pub fn create_with<R: Runner>(
     if let Some(repo) = &repo {
         clone::check_remote_free(repo, &req.name)?;
         for remote in clone::userinfo_remotes(repo).unwrap_or_default() {
-            eprintln!(
-                "warning: remote '{remote}' has a user name or token in its URL; the sandbox can \
+            crate::warning!(
+                "remote '{remote}' has a user name or token in its URL; the sandbox can \
                  read it in {}/config",
                 clone::SOURCE_MOUNT
             );
@@ -686,7 +686,7 @@ pub fn create_with<R: Runner>(
         // A failed first start removes the machine, and the units that were installed with it.
         let gone = matches!(sandbox::find(&ctx.vm, &req.name), Ok(None));
         if gone && let Err(e) = ctx.services.remove(&req.name) {
-            eprintln!("warning: removing the host services of {}: {e:#}", req.name);
+            crate::warning!("removing the host services of {}: {e:#}", req.name);
         }
     }
     let rollback = result.is_err() && (!added.is_empty() || added_remote.is_some());
@@ -696,13 +696,13 @@ pub fn create_with<R: Runner>(
             Err(e) => {
                 // Unknown whether the sandbox is gone: keep what it added (`rm` drops it).
                 let name = &req.name;
-                eprintln!(
-                    "warning: couldn't check whether {name} still exists ({e:#}); what this create \
+                crate::warning!(
+                    "couldn't check whether {name} still exists ({e:#}); what this create \
                      added was kept, and `bento rm {name}` removes it if the sandbox exists"
                 );
                 if !added.is_empty() {
-                    eprintln!(
-                        "warning: if it doesn't, remove its rules with `bento policy rm network \
+                    crate::warning!(
+                        "if it doesn't, remove its rules with `bento policy rm network \
                          --sandbox {name} --id <id>` (rule ids: {})",
                         added.join(", ")
                     );
@@ -775,11 +775,15 @@ fn drop_install_rules<R: Runner>(
 /// Pushes the policy (as just saved) to running sandboxes. Failures are warnings: the policy
 /// applies on each sandbox's next start anyway.
 pub fn push_network<R: Runner>(ctx: &Ctx<R>, policy: &Policy) -> Result<()> {
+    // Before the first download there is no smolvm to ask, and no sandbox to update.
+    if ctx.smolvm.managed && !ctx.smolvm.bin.is_file() {
+        return Ok(());
+    }
     let sandboxes = match sandbox::list(&ctx.vm) {
         Ok(s) => s,
         Err(e) => {
-            eprintln!(
-                "warning: couldn't update running sandboxes ({e:#}); the change applies when they next start"
+            crate::warning!(
+                "couldn't update running sandboxes ({e:#}); the change applies when they next start"
             );
             return Ok(());
         }
@@ -794,8 +798,8 @@ pub fn push_network<R: Runner>(ctx: &Ctx<R>, policy: &Policy) -> Result<()> {
         );
         match ctx.vm.update_network(&sb.machine, &network) {
             Ok(()) => updated += 1,
-            Err(e) => eprintln!(
-                "warning: {}: the change applies on its next start ({e:#})",
+            Err(e) => crate::warning!(
+                "{}: the change applies on its next start ({e:#})",
                 sb.name()
             ),
         }

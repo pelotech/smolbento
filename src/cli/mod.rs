@@ -124,7 +124,7 @@ fn with_image_cache(
     match settings.image_cache_bytes() {
         Ok(bytes) => runner.env(SEED_MAX, bytes.to_string()),
         Err(e) => {
-            eprintln!("warning: {e:#}; using smolvm's default");
+            crate::warning!("{e:#}; using smolvm's default");
             runner
         }
     }
@@ -148,7 +148,7 @@ pub fn dispatch<R: Runner>(ctx: &mut Ctx<R>, cli: Cli) -> Result<i32> {
             bail!("{}: {err}", path.display());
         }
         if matches!(cmd, Cmd::Settings(_)) {
-            eprintln!("warning: ignoring {}: {err}", path.display());
+            crate::warning!("ignoring {}: {err}", path.display());
         }
     }
     if cmd.needs_smolvm() {
@@ -248,6 +248,19 @@ the agent couldn't write it; run it as your normal user"
         );
     }
     Ok(())
+}
+
+/// sbx flags smolbento parses but doesn't implement: the first one set is refused (exit 2).
+pub fn refuse(flags: &[(bool, &str)]) -> Result<()> {
+    refuse_as(flags, "is not implemented yet")
+}
+
+/// `refuse` with its own reason: the error is `<flag> <why>`.
+pub fn refuse_as(flags: &[(bool, &str)], why: &str) -> Result<()> {
+    match flags.iter().find(|(set, _)| *set) {
+        Some((_, flag)) => Err(Unsupported(format!("{flag} {why}")).into()),
+        None => Ok(()),
+    }
 }
 
 /// Asks before destructive actions. sbx behaviour: fails without a terminal unless forced, and
@@ -393,6 +406,29 @@ mod tests {
         assert_eq!(v["smolvm"]["version"], "v1.35.1");
         t.sbt(&["version"]).unwrap();
         assert!(t.stdout().starts_with("smolbento version v"));
+    }
+
+    #[test]
+    fn sbx_flags_that_arent_implemented_parse_and_exit_2() {
+        let mut t = test_env(&[]);
+        for args in [
+            &["template", "ls", "--digests"][..],
+            &["policy", "ls", "--profile", "strict"],
+            &[
+                "policy",
+                "rm",
+                "network",
+                "--resource",
+                "x.com",
+                "--method",
+                "GET",
+            ],
+            &["create", "claude", ".", "--profile", "strict"],
+        ] {
+            let err = t.sbt(args).unwrap_err();
+            assert_eq!(exit_code(&err), 2, "{args:?}: {err:#}");
+            assert!(err.to_string().contains("not implemented yet"), "{err:#}");
+        }
     }
 
     #[test]

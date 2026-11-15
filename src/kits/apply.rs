@@ -213,8 +213,9 @@ fn oauth_note(kc: &KitCred, bound: bool) -> Option<String> {
     }
     (!bound).then(|| {
         format!(
-            "note: kit {kit}: {svc} subscription logins happen inside the sandbox (tokens stay \
-             there); set an API key with `bento secret set {svc}` to keep it on the host"
+            "note: no {svc} API key is set, so {kit} asks you to log in inside the sandbox (its \
+             tokens stay there). To use a key kept on the host: `bento secret set {svc}`, then \
+             recreate the sandbox"
         )
     })
 }
@@ -251,8 +252,6 @@ fn add_volumes(
     tmpfs
 }
 
-/// `(env var, service)` for each credential already in `req`; the service is empty when the
-/// credential isn't one of the user's own secrets.
 /// A kit that takes a built-in service's key without naming a variable (Claude's, whose
 /// apiKeyHelper reads it) gets it only that way, as in sbx: the service's own variable from the
 /// user's secret (`ANTHROPIC_API_KEY`) would make the agent ask whether to use a key it doesn't
@@ -282,6 +281,8 @@ fn kit_env(c: &CredReq) -> String {
         .unwrap_or_else(|| format!("SBX_KIT_{}", upper_env(&c.service)))
 }
 
+/// `(env var, service)` for each credential already in `req`; the service is empty when the
+/// credential isn't one of the user's own secrets.
 fn user_credentials(req: &CreateRequest, secrets: &SecretsFile) -> Vec<(String, String)> {
     req.credentials
         .iter()
@@ -323,7 +324,7 @@ fn git_identity_step(kits: &[&Kit], host: Option<(String, String)>) -> Result<Op
             k.name
         ),
         (None, None) => {
-            eprintln!("warning: no git user.name/user.email on the host; skipping git-identity");
+            crate::warning!("no git user.name/user.email on the host; skipping git-identity");
             Ok(None)
         }
     }
@@ -533,7 +534,7 @@ fn bind_credential(
             kc.kit, c.service
         );
         if kc.optional {
-            crate::kit_warning!("warning: {why}; skipping its optional credential");
+            crate::kit_warning!("{why}; skipping its optional credential");
             return Ok(());
         }
         bail!("{why}");
@@ -556,7 +557,7 @@ fn bind_credential(
                 c.service
             );
             if kc.optional {
-                crate::kit_warning!("warning: {why}; skipping its optional credential");
+                crate::kit_warning!("{why}; skipping its optional credential");
                 return Ok(());
             }
             bail!("{why}; refusing");
@@ -565,7 +566,7 @@ fn bind_credential(
     if secrets.entry_for(&req.name, None, &c.service).is_none() {
         if kc.optional {
             crate::kit_warning!(
-                "warning: kit {}: no {} secret is set; skipping its optional credential",
+                "kit {}: no {} secret is set; skipping its optional credential",
                 kc.kit,
                 c.service
             );
@@ -818,7 +819,7 @@ fn context_scripts(plan: &Plan, agent_file: Option<&str>, mounts: &[&Path]) -> V
     let Some(file) = agent_file else {
         for (kit, _) in &mixins {
             crate::kit_warning!(
-                "warning: kit {kit}: agent context dropped (the workload declares no agent file)"
+                "kit {kit}: agent context dropped (the workload declares no agent file)"
             );
         }
         return Vec::new();
@@ -832,8 +833,8 @@ fn context_scripts(plan: &Plan, agent_file: Option<&str>, mounts: &[&Path]) -> V
         .iter()
         .any(|m| Path::new(file).starts_with(m) || Path::new(&index_dir).starts_with(m))
     {
-        eprintln!(
-            "warning: agent context not written: {file} is in a mounted workspace, outside the \
+        crate::warning!(
+            "agent context not written: {file} is in a mounted workspace, outside the \
              sandbox"
         );
         return Vec::new();

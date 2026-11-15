@@ -2,7 +2,7 @@ use anyhow::Result;
 use std::io::Write;
 
 use super::{Ctx, SettingsCmd, table};
-use crate::config::{SETTINGS, Settings, Source};
+use crate::config::{SETTINGS, SettingDef, Settings, Source};
 use crate::smolvm::Runner;
 
 pub fn run<R: Runner>(ctx: &mut Ctx<R>, cmd: SettingsCmd) -> Result<i32> {
@@ -14,7 +14,7 @@ pub fn run<R: Runner>(ctx: &mut Ctx<R>, cmd: SettingsCmd) -> Result<i32> {
         } => {
             let text = if quiet {
                 SETTINGS.iter().map(|d| format!("{}\n", d.key)).collect()
-            } else if output.pick() == super::Format::Table {
+            } else if output.is_table() {
                 render(&ctx.settings, no_trunc)?
             } else {
                 let docs = SETTINGS
@@ -26,14 +26,11 @@ pub fn run<R: Runner>(ctx: &mut Ctx<R>, cmd: SettingsCmd) -> Result<i32> {
             write!(&ctx.out, "{text}")?
         }
         SettingsCmd::Get { key, output } => {
-            // Errors for an unknown key, before anything is printed.
-            let value = ctx.settings.value(&key)?;
-            let def = SETTINGS.iter().find(|d| d.key == key);
-            let text = match def {
-                Some(d) if output.pick() != super::Format::Table => output
-                    .structured(&doc(&ctx.settings, d)?)?
-                    .unwrap_or_default(),
-                _ => format!("{value}\n"),
+            // An unknown key is an error before anything is printed.
+            let def = Settings::def(&key)?;
+            let text = match output.structured(&doc(&ctx.settings, def)?)? {
+                Some(doc) => doc,
+                None => format!("{}\n", ctx.settings.value(&key)?),
             };
             write!(&ctx.out, "{text}")?
         }
@@ -45,50 +42,78 @@ pub fn run<R: Runner>(ctx: &mut Ctx<R>, cmd: SettingsCmd) -> Result<i32> {
 
 /// A setting as sbx's `--json` shows one: `{default, description, key, source, type, value}`.
 /// Booleans are JSON booleans; everything else is a string.
-fn doc(settings: &Settings, def: &crate::config::SettingDef) -> Result<serde_json::Value> {
+fn doc(settings: &Settings, def: &SettingDef) -> Result<serde_json::Value> {
     let (value, source) = settings.get(def.key)?;
-    let is_bool = matches!(def.default, "true" | "false");
     let typed = |v: &str| match v {
-        "true" if is_bool => serde_json::Value::Bool(true),
-        "false" if is_bool => serde_json::Value::Bool(false),
+        "true" if def.is_bool() => serde_json::Value::Bool(true),
+        "false" if def.is_bool() => serde_json::Value::Bool(false),
         other => other.into(),
     };
     Ok(serde_json::json!({
         "default": typed(def.default),
         "description": def.help,
         "key": def.key,
-        "source": match source {
-            Source::Env => "envvar",
-            Source::File => "override",
-            Source::Default => "default",
-        },
-        "type": if is_bool { "bool" } else { "string" },
+        "source": source_word(source),
+        "type": type_word(def),
         "value": typed(&value),
     }))
 }
 
-pub fn render(settings: &Settings, no_trunc: bool) -> Result<String> {
-    let mut rows = vec![vec![
-        "KEY".into(),
-        "VALUE".into(),
-        "SOURCE".into(),
-        "DESCRIPTION".into(),
-    ]];
-    for def in SETTINGS {
-        let (value, source) = settings.get(def.key)?;
-        let source = match source {
-            Source::Env => format!("env ({})", def.env),
-            Source::File => "config".into(),
-            Source::Default => "default".into(),
-        };
-        let help = if no_trunc || def.help.chars().count() <= 50 {
-            def.help.to_string()
-        } else {
-            format!("{}…", def.help.chars().take(49).collect::<String>())
-        };
-        rows.push(vec![def.key.into(), value, source, help]);
+fn type_word(def: &SettingDef) -> &'static str {
+    if def.is_bool() { "bool" } else { "string" }
+}
+
+/// sbx's words for where a value comes from.
+fn source_word(source: Source) -> &'static str {
+    match source {
+        Source::Env => "envvar",
+        Source::File => "override",
+        Source::Default => "default",
     }
-    Ok(table(rows))
+}
+
+/// `text` cut to `max` characters, ending in `…` when it was longer (as sbx cuts cells).
+fn cut(text: &str, max: usize) -> String {
+    if text.chars().count() <= max {
+        return text.to_string();
+    }
+    format!("{}…", text.chars().take(max - 1).collect::<String>())
+}
+
+/// sbx's listing: a table sorted by key with long cells cut, or with `no_trunc` one block per
+/// setting in full. `RESTART` is sbx's (settings its daemon reads once); smolbento has none.
+pub fn render(settings: &Settings, no_trunc: bool) -> Result<String> {
+    let mut defs: Vec<&SettingDef> = SETTINGS.iter().collect();
+    defs.sort_by_key(|d| d.key);
+    let mut rows = vec![
+        ["KEY", "VALUE", "TYPE", "SOURCE", "RESTART", "DESCRIPTION"]
+            .map(String::from)
+            .to_vec(),
+    ];
+    let mut blocks = String::new();
+    for def in defs {
+        let (value, source) = settings.get(def.key)?;
+        if no_trunc {
+            blocks.push_str(&format!(
+                "  Key:          {}\n  Value:        {value}\n  Type:         {}\n  \
+                 Source:       {}\n  Description:  {}\n\n",
+                def.key,
+                type_word(def),
+                source_word(source),
+                def.help
+            ));
+        } else {
+            rows.push(vec![
+                def.key.into(),
+                cut(&value, 32),
+                type_word(def).into(),
+                source_word(source).into(),
+                String::new(),
+                cut(def.help, 48),
+            ]);
+        }
+    }
+    Ok(if no_trunc { blocks } else { table(rows) })
 }
 
 #[cfg(test)]
@@ -102,14 +127,14 @@ mod tests {
         t.sbt(&["settings", "set", "docker.enabled", "false"])
             .unwrap();
         assert_eq!(t.ctx.settings.value("docker.enabled").unwrap(), "false");
-        let listing = render(&t.ctx.settings, true).unwrap();
+        let listing = render(&t.ctx.settings, false).unwrap();
         let row = listing
             .lines()
             .find(|l| l.starts_with("docker.enabled"))
             .unwrap();
         assert_eq!(
-            row.split_whitespace().take(3).collect::<Vec<_>>(),
-            vec!["docker.enabled", "false", "config"]
+            row.split_whitespace().take(4).collect::<Vec<_>>(),
+            vec!["docker.enabled", "false", "bool", "override"]
         );
         t.sbt(&["settings", "unset", "docker.enabled"]).unwrap();
         assert_eq!(t.ctx.settings.value("docker.enabled").unwrap(), "true");
@@ -146,6 +171,37 @@ mod tests {
     }
 
     #[test]
+    fn ls_table_is_sbxs() {
+        let t = test_env(&[]);
+        let table = render(&t.ctx.settings, false).unwrap();
+        let mut lines = table.lines();
+        assert_eq!(
+            lines.next().unwrap().split_whitespace().collect::<Vec<_>>(),
+            ["KEY", "VALUE", "TYPE", "SOURCE", "RESTART", "DESCRIPTION"]
+        );
+        // Sorted by key, with long values and descriptions cut.
+        let keys: Vec<&str> = lines
+            .map(|l| l.split_whitespace().next().unwrap())
+            .collect();
+        let mut sorted = keys.clone();
+        sorted.sort();
+        assert_eq!(keys, sorted);
+        let signers = table
+            .lines()
+            .find(|l| l.starts_with("kit.trustedSigners"))
+            .unwrap();
+        assert!(signers.contains("…"), "{signers}");
+        assert!(table.lines().all(|l| l.chars().count() < 160), "{table}");
+        // --no-trunc: one block per setting, in full.
+        let blocks = render(&t.ctx.settings, true).unwrap();
+        assert!(
+            blocks.starts_with("  Key:          browser.enabled\n  Value:        true\n  Type:         bool\n  Source:       default\n  Description:  "),
+            "{blocks}"
+        );
+        assert!(!blocks.contains("…"));
+    }
+
+    #[test]
     fn set_validates_kit_allowed_sources() {
         let mut t = test_env(&[]);
         for bad in ["docker.io/", "[1]", r#"[""]"#, r#"["docker.io/", ""]"#] {
@@ -173,14 +229,14 @@ mod tests {
     #[test]
     fn ls_lists_the_clone_fetch_on_exit_setting() {
         let t = test_env(&[]);
-        let listing = render(&t.ctx.settings, true).unwrap();
+        let listing = render(&t.ctx.settings, false).unwrap();
         let row = listing
             .lines()
             .find(|l| l.starts_with("clone.fetch-on-exit"))
             .expect("listed");
         assert_eq!(
-            row.split_whitespace().take(3).collect::<Vec<_>>(),
-            vec!["clone.fetch-on-exit", "true", "default"]
+            row.split_whitespace().take(4).collect::<Vec<_>>(),
+            vec!["clone.fetch-on-exit", "true", "bool", "default"]
         );
     }
 }

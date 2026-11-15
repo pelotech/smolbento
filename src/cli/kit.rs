@@ -28,17 +28,15 @@ pub fn run<R: Runner>(ctx: &mut Ctx<R>, cmd: KitCmd) -> Result<i32> {
         KitCmd::Inspect {
             reference,
             args,
-            format,
-            json,
+            output,
             offline,
-        } => inspect(ctx, &reference, &args, Format::pick(json, format), offline),
+        } => inspect(ctx, &reference, &args, output.pick(), offline),
         KitCmd::Validate {
             reference,
             args,
-            format,
-            json,
+            output,
             offline,
-        } => validate(ctx, &reference, &args, Format::pick(json, format), offline),
+        } => validate(ctx, &reference, &args, output.pick(), offline),
         KitCmd::Add {
             sandbox,
             reference,
@@ -62,8 +60,7 @@ pub fn run<R: Runner>(ctx: &mut Ctx<R>, cmd: KitCmd) -> Result<i32> {
             certificate_oidc_issuer,
             certificate_oidc_issuer_regexp,
             insecure_ignore_tlog,
-            format,
-            json,
+            output,
         } => {
             let pick = |exact: Option<String>, regexp: Option<String>| {
                 exact
@@ -78,7 +75,7 @@ pub fn run<R: Runner>(ctx: &mut Ctx<R>, cmd: KitCmd) -> Result<i32> {
                     ignore_tlog: insecure_ignore_tlog,
                 },
             };
-            verify(ctx, &reference, policy, Format::pick(json, format))
+            verify(ctx, &reference, policy, output.pick())
         }
     }
 }
@@ -279,11 +276,11 @@ fn verify<R: Runner>(
         issuer: issuer.filter(|_| checked.is_ok()),
         error: checked.as_ref().err().map(|e| format!("{e:#}")),
     };
-    if format == Format::Json {
-        writeln!(&ctx.out, "{}", serde_json::to_string_pretty(&report)?)?;
-    } else {
-        write!(&ctx.out, "{}", serde_saphyr::to_string(&report)?)?;
-    }
+    write!(
+        &ctx.out,
+        "{}",
+        format.structured(&report)?.unwrap_or_default()
+    )?;
     Ok(if checked.is_ok() { 0 } else { 1 })
 }
 
@@ -358,8 +355,9 @@ fn inspect<R: Runner>(
     let doc = Doc::new(&kit);
     let mut out = &ctx.out;
     match format {
-        Format::Json => writeln!(out, "{}", doc.json()?)?,
-        Format::Yaml => write!(out, "{}", doc.yaml()?)?,
+        f @ (Format::Json | Format::Yaml) => {
+            write!(out, "{}", f.structured(&doc)?.unwrap_or_default())?
+        }
         Format::Table => {
             write!(out, "{}", doc.table(&kit))?;
             if !kit.caps.is_empty() {
@@ -413,7 +411,7 @@ fn validate<R: Runner>(
     let checked = check_kit(ctx, reference, args, offline);
     if format == Format::Table {
         for w in checked? {
-            eprintln!("warning: {w}");
+            crate::warning!("{w}");
         }
         writeln!(&ctx.out, "✓ {reference} — valid")?;
         return Ok(0);
@@ -738,8 +736,8 @@ fn add_running<R: Runner>(
     if let Some((path, _, _)) = &startup
         && let Err(e) = sandbox::run_startup(&ctx.vm, sb, Some(path))
     {
-        eprintln!(
-            "warning: kit {kit_name}'s startup hooks failed: {e:#}; later starts fail until they \
+        crate::warning!(
+            "kit {kit_name}'s startup hooks failed: {e:#}; later starts fail until they \
              succeed"
         );
     }

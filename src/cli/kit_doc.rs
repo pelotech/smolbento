@@ -5,7 +5,6 @@
 
 use std::collections::BTreeMap;
 
-use anyhow::Result;
 use serde::Serialize;
 use serde_json::Value;
 
@@ -272,14 +271,6 @@ impl Doc {
                     .collect(),
             },
         }
-    }
-
-    pub fn json(&self) -> Result<String> {
-        Ok(serde_json::to_string_pretty(self)?)
-    }
-
-    pub fn yaml(&self) -> Result<String> {
-        Ok(serde_saphyr::to_string(self)?)
     }
 
     /// sbx's summary: name, kind, schema, template, then counts.
