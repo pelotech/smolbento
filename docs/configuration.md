@@ -69,7 +69,7 @@ next login. A missing or unreadable file means no server is trusted and logins a
 `sandboxOptions.skills` says otherwise. An existing sandbox keeps the mode it was created with. A
 bad setting value is reported as `setting skills.defaultMode: ...`. A bad `--skills` or
 `sandboxOptions.skills` value is reported as `invalid skills mode "x": use off, readonly or
-readwrite`. See [Skills](usage.md#skills).
+readwrite`. See [Skills](kits.md#skills).
 
 ### Kit sources
 
@@ -78,7 +78,7 @@ repository, with the tag or digest dropped and Docker Hub spelled out. `alpine` 
 `docker.io/library/alpine`, and `ghcr.io/acme/kit:1` is `ghcr.io/acme/kit`.
 
 The default allows Docker Hub, as in sbx, and `ghcr.io/pelotech/smolbento/`, where smolbento
-publishes its own kits (such as [`nix`](usage.md#the-nix-kit)). Nothing else on GHCR.
+publishes its own kits (such as [`nix`](kits.md#the-nix-kit)). Nothing else on GHCR.
 
 - End a prefix with `/` to match whole names. `ghcr.io/acme/` doesn't match `ghcr.io/acmex/kit`.
 - An entry without `/` is a registry host and matches only that host. `ghcr.io` allows
@@ -135,11 +135,11 @@ Sign a kit with `bento kit sign --help`.
 | `~/.config/smolbento/secret-values.toml` | Secret values, mode 0600, only where no OS keychain is usable (headless Linux, CI) |
 | `~/.cache/smolbento/sessions/` | One file per attached `run` session, used to stop a sandbox when its last session ends |
 | `~/.cache/smolbento/kits/` | Downloaded and built kits, and images with kit layers added. Safe to delete. |
-| `~/.local/share/smolbento/agent-skills/` | The shared [skills](usage.md#skills) store, one directory per skill. `bento reset` deletes it. |
+| `~/.local/share/smolbento/agent-skills/` | The shared [skills](kits.md#skills) store, one directory per skill. `bento reset` deletes it. |
 | `~/.local/share/smolbento/agent-skills-metadata/` | Where each skill added from a repository came from (`sources.json`) |
 | `~/.local/share/smolbento/env/` | Your approval record for each environment file (`<name>.toml`) |
 | `~/.local/share/smolbento/templates/` | Saved templates: `templates.json` and the `<id>.smolmachine` packs |
-| `~/.local/share/smolbento/kit-host-mounts/` | Kit [host mounts](usage.md#kit-host-mounts), kept after their sandboxes are removed |
+| `~/.local/share/smolbento/kit-host-mounts/` | Kit [host mounts](kits.md#kit-host-mounts), kept after their sandboxes are removed |
 | `~/Library/Application Support/smolbento/launchd/dev.smolbento.<id>.<sandbox>.<agent\|bridge>.plist` (macOS), `~/.config/systemd/user/smolbento-<id>-<sandbox>-<agent\|bridge>.socket` and `…@.service` (Linux) | [Host service](usage.md#browser-and-clipboard) units, one per socket of a sandbox; `<id>` is a short hash of the data dir. Removed with the sandbox. |
 | `~/Library/Application Support/smolbento/sock/` (macOS), `$XDG_RUNTIME_DIR/smolbento/` (Linux) | Their sockets, mode 0600 in a private (0700) directory. Without a service manager, sockets are `/tmp/sbt-<uid>/`, served while attached. |
 

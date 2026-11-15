@@ -25,13 +25,13 @@ usage guide is linked from its row in the [Phases](#phases) table.
 | 2 | Network policy (`policy init/allow/deny/rm/ls/log/check`, approvals, live changes), secrets (keychain, `op://` and AWS references, `--command`; the sandbox sees only placeholders), `ports`. See [Security](SECURITY.md) | Done |
 | 3a | `--clone`: the agent works on its own clone; only commits come back, through the `sandbox-<name>` remote. See [Usage](usage.md#clone-mode) | Done |
 | 3b | `fork`: copy-on-write copies of a running sandbox. `checkpoint`/`restore` dropped: secrets can't work in a restored smolvm checkpoint from the CLI. See [Usage](usage.md#fork) | Done |
-| 4a | Kits: v3 capabilities, v2 `spec.yaml`, Smolfiles, `kit inspect/validate/add`, the `docker` kit, the `_builder` sandbox. See [Usage](usage.md#kits) | Done |
-| 4b | `sbxenv.yaml` core: `env create/run/exec/rm`, files, args, user defaults, secrets, kits, ports. See [Usage](usage.md#environments-sbxenvyaml) | Done |
-| 4c | Host services: `localhost[:PORT]` rules reach the host as `host.docker.internal`, live. Interim: every host port opens until smolvm can open one. See [Usage](usage.md#host-services) | Done (interim) |
-| 5a | Host mounts: `host-mount@1` (kept after removal), `--mount`, `sbxenv.yaml` `mounts:`, `inspect`. See [Usage](usage.md#kit-host-mounts) | Done |
+| 4a | Kits: v3 capabilities, v2 `spec.yaml`, Smolfiles, `kit inspect/validate/add`, the `docker` kit, the `_builder` sandbox. See [Usage](kits.md#kits) | Done |
+| 4b | `sbxenv.yaml` core: `env create/run/exec/rm`, files, args, user defaults, secrets, kits, ports. See [Usage](environments.md#environments-sbxenvyaml) | Done |
+| 4c | Host services: `localhost[:PORT]` rules reach the host as `host.docker.internal`, live. Interim: every host port opens until smolvm can open one. See [Usage](network-and-secrets.md#host-services) | Done (interim) |
+| 5a | Host mounts: `host-mount@1` (kept after removal), `--mount`, `sbxenv.yaml` `mounts:`, `inspect`. See [Usage](kits.md#kit-host-mounts) | Done |
 | 5b | SSH agent forwarding: `ssh-agent@1` with `sign` limits, the built-in agents' own grant, `ssh.agentForwardingEnabled`, `ssh.agentSocketPath`. See [Usage](usage.md#ssh-agent) | Done |
-| 5c | Agent skills: `skills add/import/ls/rm/update` on the store in `~/.local/share/smolbento/agent-skills`, `--skills`, `skills.defaultMode`, `agent-skills@1`, `agent-skill@1`. See [Usage](usage.md#skills) | Done |
-| 5d | Templates: `template save/ls/rm/load` (saves a stopped sandbox as a smolvm pack), `run/create -t`. See [Usage](usage.md#templates) | Done |
+| 5c | Agent skills: `skills add/import/ls/rm/update` on the store in `~/.local/share/smolbento/agent-skills`, `--skills`, `skills.defaultMode`, `agent-skills@1`, `agent-skill@1`. See [Usage](kits.md#skills) | Done |
+| 5d | Templates: `template save/ls/rm/load` (saves a stopped sandbox as a smolvm pack), `run/create -t`. See [Usage](kits.md#templates) | Done |
 | 5e | Browser and clipboard bridge while attached (`xdg-open`, `wl-copy`/`xclip`/`xsel`/`pbcopy`, the login callback relay, `browser.enabled`). See [Usage](usage.md#browser-and-clipboard) | Done |
 | 5f | Static MCP: `mcp add/ls/inspect/rm`, `run/create --static-mcp`, header secrets as smolvm credentials, Claude Code only. No gateway, OAuth, dynamic mode or live load/unload | Done |
 | 5g | `ssh-agent@1` `authenticate` limits: logins only to named servers, checked against your known hosts (`ssh.knownHostsFile`). See [Usage](usage.md#ssh-agent) | Done |
@@ -40,7 +40,7 @@ usage guide is linked from its row in the [Phases](#phases) table.
 | 6b | `sbxenv.yaml` `lifecycle`, `registries`, `entrypoint` and `cmd`; registry logins scoped to a sandbox | Done |
 | 6c | `sbxenv.yaml` `bindings`, `mcp` url servers, `fuse`, `pullPolicy: never`, `writableEnvFiles`; `gemini` retired | Done |
 | 7 | Kit publishing: `kit pack/push/pull/sign/verify` and `push --sign` (v2 kits; cosign signing) | Done |
-| 8 | The `nix` kit: Nix, direnv and xz for any agent (`--kit nix`), published to GHCR and signed. See [Usage](usage.md#the-nix-kit) | Done |
+| 8 | The `nix` kit: Nix, direnv and xz for any agent (`--kit nix`), published to GHCR and signed. See [Usage](kits.md#the-nix-kit) | Done |
 | 9 | `tui` dashboard (bare `bento` opens it on a terminal) | Planned |
 | 10 | Warm-start pool for near-instant creates; Windows | Planned |
 

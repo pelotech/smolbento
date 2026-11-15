@@ -9,7 +9,7 @@ bento create docker.io/sbx/antigravity:latest . --kit nix
 ```
 
 `nix` is a bare name for `ghcr.io/pelotech/smolbento/kits/nix:latest`. It needs smolbento 0.26.0
-or newer. What it does in a sandbox, and its limits: [Usage](../../docs/usage.md#the-nix-kit).
+or newer. What it does in a sandbox, and its limits: [Usage](../../docs/kits.md#the-nix-kit).
 
 ## Versions
 
