@@ -145,7 +145,6 @@ fn import<R: Runner>(ctx: &Ctx<R>, store: &Store, a: &SkillsImportArgs) -> Resul
             _ => None,
         })
         .collect();
-    let mut missing = Vec::new();
     for e in &events {
         match e {
             Event::Pick { name, .. } if a.dry_run => {
@@ -158,16 +157,14 @@ fn import<R: Runner>(ctx: &Ctx<R>, store: &Store, a: &SkillsImportArgs) -> Resul
                 dir.display()
             ),
             Event::Loose(n) => eprintln!("warning: skipping {n:?}: not a directory"),
-            Event::Missing(d) => missing.push(d),
+            // As sbx 0.53: only with -v, on stdout, where the directory comes in the scan.
+            Event::Missing(d) if a.verbose => writeln!(
+                &ctx.out,
+                "No skills directory found at {}; nothing to import",
+                d.display()
+            )?,
+            Event::Missing(_) => {}
         }
-    }
-    // sbx prints the missing-source notices after the picks, on stdout.
-    for d in missing {
-        writeln!(
-            &ctx.out,
-            "No skills directory found at {}; nothing to import",
-            d.display()
-        )?;
     }
     // Nothing to import: no summary, and nothing written.
     if picks.is_empty() {
@@ -670,12 +667,15 @@ mod tests {
             })
             .collect();
         for args in [
-            &["skills", "import", "--dry-run"][..],
-            &["skills", "import"],
+            &["skills", "import", "--dry-run", "-v"][..],
+            &["skills", "import", "--verbose"],
         ] {
             t.sbt(args).unwrap();
             assert_eq!(t.stdout(), want, "{args:?}");
         }
+        // Without -v the missing directories aren't listed, as in sbx 0.53.
+        t.sbt(&["skills", "import", "--dry-run"]).unwrap();
+        assert_eq!(t.stdout(), "");
         let store = Store::new(&t.ctx.paths);
         assert!(!store.dir.exists() && !store.meta.exists());
     }

@@ -19,5 +19,8 @@ Options:
       --no-input
           Never prompt; commands that need an answer fail with the command to run instead
 
+  -v, --verbose
+          Also list the checked directories that do not exist
+
   -h, --help
           Print help

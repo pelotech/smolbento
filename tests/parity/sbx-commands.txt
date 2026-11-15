@@ -192,3 +192,11 @@ settings ls --format json
 settings get docker.enabled --json
 secret ls --json
 policy check network --json api.example.com
+policy list
+policy remove network --resource example.com
+mcp delete my-server
+mcp rm -f my-server
+policy check network -v api.example.com
+policy approval ls -q
+policy log --format yaml
+skills import -v

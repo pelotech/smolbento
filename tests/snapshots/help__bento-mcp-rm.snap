@@ -14,6 +14,9 @@ Options:
   -D, --debug
           Print each smolvm command line
 
+  -f, --force
+          Accepted as in sbx; smolbento never asks before removing a server
+
       --no-input
           Never prompt; commands that need an answer fail with the command to run instead
 

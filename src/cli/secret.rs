@@ -105,7 +105,7 @@ fn ls<R: Runner>(ctx: &Ctx<R>, file: &SecretsFile, a: &SecretLsArgs) -> Result<(
         .filter(|r| a.sandbox.is_none() || r.sandbox == a.sandbox)
         .collect();
     if !a.quiet && !a.global && a.service.is_none() && !registries.is_empty() {
-        if text == "No secrets\n" {
+        if text == "No secrets found\n" {
             text.clear();
         } else {
             text.push('\n');
@@ -452,7 +452,7 @@ fn render_ls(file: &SecretsFile, a: &SecretLsArgs, fork_of: Option<&str>) -> Str
         return entries.iter().map(|e| format!("{}\n", e.service)).collect();
     }
     if entries.is_empty() {
-        return "No secrets\n".into();
+        return "No secrets found\n".into();
     }
     let mut lines = vec![["SERVICE", "SCOPE", "SOURCE"].map(String::from).to_vec()];
     for e in entries {

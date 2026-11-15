@@ -423,8 +423,12 @@ fn approval<R: Runner>(ctx: &Ctx<R>, policy: &mut Policy, cmd: ApprovalCmd) -> R
     let rows = blocked_rows(ctx, None, APPROVAL_EVENTS)?;
     let pending = log::pending(policy, &rows);
     match cmd {
-        ApprovalCmd::Ls { output } => {
-            if let Some(text) = output.structured(&pending)? {
+        ApprovalCmd::Ls { quiet, output } => {
+            if quiet {
+                for r in &pending {
+                    writeln!(&ctx.out, "{}", r.host)?;
+                }
+            } else if let Some(text) = output.structured(&pending)? {
                 write!(&ctx.out, "{text}")?;
             } else if pending.is_empty() {
                 writeln!(&ctx.out, "No pending approvals")?;

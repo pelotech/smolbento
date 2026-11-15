@@ -210,7 +210,7 @@ fn registry_set_refusals() {
 fn registry_ls_rows() {
     let mut t = test_env(&[]);
     t.sbt(&["secret", "ls"]).unwrap();
-    assert_eq!(t.stdout(), "No secrets\n");
+    assert_eq!(t.stdout(), "No secrets found\n");
     set_registry_from(&mut t, "ghcr.io", Some("me"), "abcdefgh").unwrap();
     t.stdout();
     t.sbt(&["secret", "ls"]).unwrap();

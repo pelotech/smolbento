@@ -15,7 +15,7 @@ pub fn run<R: Runner>(ctx: &Ctx<R>, cmd: McpCmd) -> Result<i32> {
         McpCmd::Add(a) => add(ctx, a)?,
         McpCmd::Ls(a) => ls(ctx, &a)?,
         McpCmd::Inspect(a) => inspect(ctx, &a)?,
-        McpCmd::Rm { name } => {
+        McpCmd::Rm { name, force: _ } => {
             let mut file = McpFile::load(&ctx.paths)?;
             if file.servers.remove(&name).is_none() {
                 bail!(unknown(&name));

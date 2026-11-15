@@ -864,11 +864,13 @@ pub enum PolicyCmd {
         kind: RuleKind,
     },
     /// Remove rules
+    #[command(visible_aliases = ["remove", "delete"])]
     Rm {
         #[command(subcommand)]
         kind: PolicyRmKind,
     },
     /// List rules
+    #[command(visible_alias = "list")]
     Ls(PolicyLsArgs),
     /// Show one rule
     Inspect {
@@ -992,7 +994,8 @@ pub struct CheckArgs {
     pub sandbox: Option<String>,
     #[arg(long)]
     pub protocol: Option<String>,
-    #[arg(long)]
+    /// Accepted as in sbx; the deciding rule is always printed
+    #[arg(short = 'v', long)]
     pub verbose: bool,
     #[command(flatten)]
     pub output: OutputArgs,
@@ -1002,6 +1005,9 @@ pub struct CheckArgs {
 pub enum ApprovalCmd {
     /// Blocked hosts with no rule yet
     Ls {
+        /// Only display approval IDs
+        #[arg(short = 'q', long)]
+        quiet: bool,
         #[command(flatten)]
         output: OutputArgs,
     },
@@ -1028,10 +1034,13 @@ pub enum McpCmd {
     /// Show a registered MCP server
     Inspect(McpInspectArgs),
     /// Remove a registered MCP server
-    #[command(visible_alias = "remove")]
+    #[command(visible_aliases = ["remove", "delete"])]
     Rm {
         /// Server name
         name: String,
+        /// Accepted as in sbx; smolbento never asks before removing a server
+        #[arg(short = 'f', long)]
+        force: bool,
     },
     /// Authorize OAuth servers (not supported: smolbento has no MCP gateway)
     Auth(Passthrough),
@@ -1128,6 +1137,9 @@ pub struct SkillsImportArgs {
     /// Overwrite existing skills without prompting
     #[arg(short = 'f', long)]
     pub force: bool,
+    /// Also list the checked directories that do not exist
+    #[arg(short = 'v', long)]
+    pub verbose: bool,
 }
 
 #[derive(Debug, Args)]
@@ -1351,5 +1363,24 @@ mod tests {
             parse(&["settings", "list"]),
             Cmd::Settings(SettingsCmd::Ls { .. })
         ));
+        assert!(matches!(
+            parse(&["policy", "list"]),
+            Cmd::Policy(PolicyCmd::Ls(_))
+        ));
+        for rm in ["remove", "delete"] {
+            assert!(matches!(
+                parse(&["policy", rm, "network", "--resource", "x.com"]),
+                Cmd::Policy(PolicyCmd::Rm { .. })
+            ));
+            assert!(matches!(
+                parse(&["mcp", rm, "linear"]),
+                Cmd::Mcp(McpCmd::Rm { .. })
+            ));
+        }
+        // sbx's short and no-op flags.
+        parse(&["policy", "check", "network", "-v", "x.com"]);
+        parse(&["policy", "approval", "ls", "-q"]);
+        parse(&["mcp", "rm", "-f", "linear"]);
+        parse(&["skills", "import", "-v"]);
     }
 }
