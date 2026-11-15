@@ -94,7 +94,7 @@ pub fn run<R: Runner>(ctx: &mut Ctx<R>, a: &RunArgs) -> Result<i32> {
     let command: Option<Vec<String>> = match (&a.entrypoint, &sb.meta.command, a.detach) {
         (_, _, true) | (None, None, false) => None,
         (Some(e), _, false) => Some([e.as_slice(), a.agent_args.as_slice()].concat()),
-        (None, Some(c), false) => Some(agents::command_with_args(c, &a.agent_args)),
+        (None, Some(c), false) => Some(command_with_args(c, &a.agent_args)),
     };
     // A closed terminal must not end this process once the sandbox may be running: it has the
     // cleanup below to do. The agent still ends with the terminal (`interactive` gives it the
@@ -212,6 +212,21 @@ fn has_bash<R: Runner>(ctx: &Ctx<R>, sb: &Sandbox) -> Result<bool> {
     }
 }
 
+/// sbx's rule for `-- ARGS`: flags are appended to the agent's command; a bare word replaces its
+/// flags.
+fn command_with_args<S: AsRef<str>>(command: &[S], args: &[String]) -> Vec<String> {
+    let mut cmd: Vec<String> = command.iter().map(|s| s.as_ref().to_string()).collect();
+    match args.first() {
+        None => {}
+        Some(first) if first.starts_with('-') => cmd.extend(args.iter().cloned()),
+        Some(_) => {
+            cmd.truncate(1);
+            cmd.extend(args.iter().cloned());
+        }
+    }
+    cmd
+}
+
 /// The warning for kits given to `run` of a sandbox that already exists: kit flags, or a workload
 /// kit as the target.
 fn ignored_kits_warning(a: &RunArgs, name: &str) -> Option<String> {
@@ -318,6 +333,20 @@ mod tests {
         t.project(state);
     }
 
+    #[test]
+    fn agent_args_rule() {
+        let base = &["claude", "--dangerously-skip-permissions"];
+        let s = |v: &[&str]| v.iter().map(|x| x.to_string()).collect::<Vec<_>>();
+        assert_eq!(super::command_with_args(base, &[]), s(base));
+        assert_eq!(
+            super::command_with_args(base, &s(&["-c"])),
+            s(&["claude", "--dangerously-skip-permissions", "-c"])
+        );
+        assert_eq!(
+            super::command_with_args(base, &s(&["mcp", "list"])),
+            s(&["claude", "mcp", "list"])
+        );
+    }
     #[test]
     fn an_old_preset_sandbox_is_refused_with_recreate() {
         let mut t = test_env(&[]);

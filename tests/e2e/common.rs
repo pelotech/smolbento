@@ -27,7 +27,7 @@ impl E2e {
             base: Default::default(),
             real_kits: Default::default(),
         };
-        agent_stand_ins(&e.dir.path().join("agent-kits"));
+        smolbento::agents::write_stand_ins(&e.dir.path().join("agent-kits")).unwrap();
         e.ok(&["policy", "init", "allow-all"]);
         e
     }
@@ -661,70 +661,4 @@ pub(crate) fn basic_auth_ok(e: &E2e, sb: &str, var: &str, pass: &str) -> bool {
          https://httpbin.org/basic-auth/user/{pass}"
     );
     e.sbt(&["exec", sb, "sh", "-c", &cmd]).status.success()
-}
-
-/// Stand-ins for the built-in agents' published kits, one prebuilt OCI layout per name under
-/// `dir`, as smolbento reads them with `SMOLBENTO_AGENT_KITS_DIR`: a v3 workload with no layers
-/// that launches its own name as `agent`. Tests boot them with `-t <image>`, so nothing is pulled.
-pub(crate) fn agent_stand_ins(dir: &Path) {
-    use sha2::{Digest, Sha256};
-    let names = [
-        "claude",
-        "codex",
-        "copilot",
-        "cursor",
-        "devin",
-        "docker-agent",
-        "droid",
-        "kiro",
-        "opencode",
-        "shell",
-    ];
-    for name in names {
-        let kit = dir.join(name);
-        let blobs = kit.join("blobs").join("sha256");
-        std::fs::create_dir_all(&blobs).unwrap();
-        let put = |data: &[u8]| {
-            let hex: String = Sha256::digest(data)
-                .iter()
-                .map(|b| format!("{b:02x}"))
-                .collect();
-            std::fs::write(blobs.join(&hex), data).unwrap();
-            format!("sha256:{hex}")
-        };
-        // As sbx's kits launch them; `shell` is a login bash.
-        let entrypoint = if name == "shell" {
-            vec!["bash", "-l"]
-        } else {
-            vec![name]
-        };
-        let config = serde_json::json!({"config": {"Entrypoint": entrypoint, "User": "agent"}});
-        let config = config.to_string();
-        // `claude` keeps its agent file where the real kit does; sbx's `shell` kit has none.
-        let descriptor = if name == "claude" {
-            r#"{"schemaVersion":"3","kind":"workload","capabilities":[
-                {"type":"com.docker.sandbox/agent-context@1","optional":true,"config":{
-                 "content":"","directory":"/home/agent/.claude","filename":"CLAUDE.md"}}]}"#
-        } else {
-            r#"{"schemaVersion":"3","kind":"workload"}"#
-        };
-        let manifest = serde_json::json!({
-            "schemaVersion": 2,
-            "mediaType": "application/vnd.oci.image.manifest.v1+json",
-            "config": {"mediaType": "application/vnd.oci.image.config.v1+json",
-                       "digest": put(config.as_bytes()), "size": config.len()},
-            "layers": [],
-            "annotations": {
-                "vnd.docker.sandbox.kit.descriptor": descriptor,
-                "vnd.docker.sandbox.kit.schema-version": "3",
-            },
-        })
-        .to_string();
-        let digest = put(manifest.as_bytes());
-        std::fs::write(kit.join("oci-layout"), r#"{"imageLayoutVersion":"1.0.0"}"#).unwrap();
-        let index = serde_json::json!({"schemaVersion": 2, "manifests": [{
-            "mediaType": "application/vnd.oci.image.manifest.v1+json",
-            "digest": digest, "size": manifest.len()}]});
-        std::fs::write(kit.join("index.json"), index.to_string()).unwrap();
-    }
 }

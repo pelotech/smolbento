@@ -6,7 +6,6 @@ use std::path::Path;
 
 use anyhow::{Context, Result, bail};
 
-use crate::agents;
 use crate::kits::capability;
 use crate::kits::compose;
 use crate::kits::env_ref;
@@ -725,6 +724,9 @@ fn upper_env(service: &str) -> String {
         .collect()
 }
 
+/// The agent file's name for a workload kit's `agent-context` without a `filename`.
+const DEFAULT_CONTEXT_FILE: &str = "AGENTS.md";
+
 /// The agent file in the guest: the workload kit's own `agent-context` file, in the parent of
 /// `workdir` unless it names a directory (sbx #15). `None` when the workload declares none.
 pub fn agent_file(plan: &Plan, workdir: &str) -> Result<Option<String>> {
@@ -750,10 +752,7 @@ pub fn agent_file(plan: &Plan, workdir: &str) -> Result<Option<String>> {
             w.name
         );
     }
-    let name = c
-        .filename
-        .as_deref()
-        .unwrap_or(agents::DEFAULT_CONTEXT_FILE);
+    let name = c.filename.as_deref().unwrap_or(DEFAULT_CONTEXT_FILE);
     if name.is_empty() || name.contains('/') || name == "." || name == ".." {
         bail!(
             "kit {}: agent-context filename '{name}' must be a file name",

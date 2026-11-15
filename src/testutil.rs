@@ -35,7 +35,7 @@ pub fn test_env(extra_env: &[(&str, &str)]) -> TestEnv {
     ]);
     // Built-in agents load these stand-ins, never Docker Hub.
     let agent_kits_dir = dir.path().join("agent-kits");
-    agent_kits(&agent_kits_dir);
+    crate::agents::write_stand_ins(&agent_kits_dir).unwrap();
     env.insert(
         "SMOLBENTO_AGENT_KITS_DIR".to_string(),
         agent_kits_dir.display().to_string(),
@@ -435,55 +435,10 @@ pub const CLAUDE_STAND_IN: &str = r#"{
   ]
 }"#;
 
-/// The default `claude` stand-in: only its agent file and skills directory, so a test's rules,
-/// credentials and steps are its own. `CLAUDE_STAND_IN` is the whole shape.
-pub const CLAUDE_FILES_STAND_IN: &str = r#"{
-  "schemaVersion": "3",
-  "kind": "workload",
-  "capabilities": [
-    {"type": "com.docker.sandbox/agent-skills@1", "optional": true,
-     "config": {"path": "/home/agent/.claude/skills"}},
-    {"type": "com.docker.sandbox/agent-context@1", "optional": true,
-     "config": {"content": "", "directory": "/home/agent/.claude", "filename": "CLAUDE.md"}}
-  ]
-}"#;
-
 /// Replaces agent `name`'s stand-in in `t` with one whose descriptor is `descriptor`.
 pub fn agent_stand_in(t: &TestEnv, name: &str, descriptor: &str) {
-    let dir = std::path::Path::new(&t.ctx.env[crate::agents::KITS_DIR_ENV]).join(name);
-    std::fs::remove_dir_all(&dir).unwrap();
-    std::fs::create_dir_all(&dir).unwrap();
-    let config = serde_json::json!({"config": {"Entrypoint": [name], "User": "agent"}});
-    crate::kits::registry::fixtures::oci_layout_with(
-        &dir,
-        Some(descriptor),
-        &[("com.docker.sandboxes.start-docker", "true")],
-        &[],
-        &config.to_string(),
-    );
-}
-
-/// Stand-ins for the built-in agents' published kits: a prebuilt OCI layout per name under
-/// `dir`, as `load::agent` reads them when `SMOLBENTO_AGENT_KITS_DIR` is set. Each launches its
-/// own name as the `agent` user; only `claude` has capabilities.
-pub fn agent_kits(dir: &std::path::Path) {
-    for name in crate::agents::NAMES {
-        let kit = dir.join(name);
-        std::fs::create_dir_all(&kit).unwrap();
-        let descriptor = match name {
-            "claude" => CLAUDE_FILES_STAND_IN.to_string(),
-            _ => r#"{"schemaVersion": "3", "kind": "workload"}"#.to_string(),
-        };
-        let config = serde_json::json!({"config": {"Entrypoint": [name], "User": "agent"}});
-        // sbx's published agent kits all ask for their Docker engine.
-        crate::kits::registry::fixtures::oci_layout_with(
-            &kit,
-            Some(&descriptor),
-            &[("com.docker.sandboxes.start-docker", "true")],
-            &[],
-            &config.to_string(),
-        );
-    }
+    let dir = std::path::Path::new(&t.ctx.env[crate::agents::KITS_DIR_ENV]);
+    crate::agents::write_stand_in(dir, name, descriptor).unwrap();
 }
 
 #[cfg(test)]
@@ -495,11 +450,16 @@ mod tests {
     #[test]
     fn agent_stand_ins_read_as_kits() {
         let dir = tempfile::tempdir().unwrap();
-        agent_kits(dir.path());
+        crate::agents::write_stand_ins(dir.path()).unwrap();
         for name in crate::agents::NAMES {
             let k = read_layout(&dir.path().join(name), Source::Registry(name.into())).unwrap();
             assert_eq!(k.kind, Kind::Workload, "{name}");
-            assert_eq!(k.command, Some(vec![name.to_string()]), "{name}");
+            assert!(k.starts_docker, "{name}");
+            let want: Vec<String> = match name {
+                "shell" => vec!["bash".into(), "-l".into()],
+                _ => vec![name.into()],
+            };
+            assert_eq!(k.command, Some(want), "{name}");
         }
         let claude = tempfile::tempdir().unwrap();
         crate::kits::registry::fixtures::oci_layout(

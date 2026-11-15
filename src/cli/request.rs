@@ -497,9 +497,19 @@ fn wants_docker(kit: &Kit, enabled: bool) -> bool {
     enabled
         && match &kit.content {
             Content::Oci(_) => kit.starts_docker,
-            Content::Image(image) => agents::is_docker_image(image),
+            Content::Image(image) => is_docker_image(image),
             _ => false,
         }
+}
+
+fn split_tag(image: &str) -> Option<(&str, &str)> {
+    image.rsplit_once(':').filter(|(_, tag)| !tag.contains('/'))
+}
+
+/// True for Docker's `-docker` template variants, which bundle a Docker engine: how an image given
+/// with `-t` (not a kit) is judged.
+fn is_docker_image(image: &str) -> bool {
+    split_tag(image).is_some_and(|(_, tag)| tag.ends_with("-docker") || tag.contains("-docker-"))
 }
 
 /// A path or a registry reference rather than a misspelt agent, which mustn't reach a registry.
@@ -1160,6 +1170,19 @@ SETUP
             .map(|k| k.name.clone())
             .collect();
         assert_eq!(names, ["docker", "akit"]);
+    }
+
+    #[test]
+    fn docker_image_detection() {
+        assert!(is_docker_image("docker/sandbox-templates:shell-docker"));
+        assert!(is_docker_image(
+            "docker/sandbox-templates:docker-agent-docker-0.11.0"
+        ));
+        assert!(!is_docker_image(
+            "docker/sandbox-templates:docker-agent-0.11.0"
+        ));
+        assert!(!is_docker_image("alpine"));
+        assert!(!is_docker_image("localhost:5000/x"));
     }
 
     #[test]

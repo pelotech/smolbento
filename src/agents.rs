@@ -1,9 +1,6 @@
 //! Built-in agent names: each is a kit sbx publishes as `docker.io/sbx/<name>:latest`, loaded like
 //! any registry kit (`kits::load::agent`). Retired agents are refused with sbx's message.
 
-/// The agent file's name for a workload kit's `agent-context` without a `filename`.
-pub const DEFAULT_CONTEXT_FILE: &str = "AGENTS.md";
-
 /// The built-in agent names, each a kit sbx publishes as `docker.io/sbx/<name>:latest`.
 pub const NAMES: [&str; 10] = [
     "claude",
@@ -21,6 +18,72 @@ pub const NAMES: [&str; 10] = [
 /// Set (by tests) to a directory of prebuilt stand-in kits, one OCI layout per agent name, read
 /// instead of Docker Hub.
 pub const KITS_DIR_ENV: &str = "SMOLBENTO_AGENT_KITS_DIR";
+
+/// Writes a stand-in for every built-in agent's kit under `dir`, for tests (unit and e2e), which
+/// read them with `SMOLBENTO_AGENT_KITS_DIR` instead of Docker Hub: a prebuilt v3 workload with
+/// no layers (booted with `-t <image>`), launching as sbx's kits do as `agent`, asking for Docker.
+/// `claude` keeps its agent file and skills where the real kit does; sbx's `shell` has neither.
+#[doc(hidden)]
+pub fn write_stand_ins(dir: &std::path::Path) -> std::io::Result<()> {
+    for name in NAMES {
+        let descriptor = match name {
+            "claude" => STAND_IN_CLAUDE,
+            _ => r#"{"schemaVersion":"3","kind":"workload"}"#,
+        };
+        write_stand_in(dir, name, descriptor)?;
+    }
+    Ok(())
+}
+
+/// The `claude` stand-in's descriptor: the real kit's agent file and skills directory.
+#[doc(hidden)]
+pub const STAND_IN_CLAUDE: &str = r#"{"schemaVersion":"3","kind":"workload","capabilities":[
+  {"type":"com.docker.sandbox/agent-skills@1","optional":true,
+   "config":{"path":"/home/agent/.claude/skills"}},
+  {"type":"com.docker.sandbox/agent-context@1","optional":true,
+   "config":{"content":"","directory":"/home/agent/.claude","filename":"CLAUDE.md"}}]}"#;
+
+/// Writes (or replaces) agent `name`'s stand-in under `dir` with `descriptor`.
+#[doc(hidden)]
+pub fn write_stand_in(dir: &std::path::Path, name: &str, descriptor: &str) -> std::io::Result<()> {
+    use crate::util::sha256_digest;
+    let kit = dir.join(name);
+    if kit.exists() {
+        std::fs::remove_dir_all(&kit)?;
+    }
+    let blobs = kit.join("blobs").join("sha256");
+    std::fs::create_dir_all(&blobs)?;
+    let put = |data: &[u8]| -> std::io::Result<String> {
+        let digest = sha256_digest(data);
+        std::fs::write(blobs.join(digest.trim_start_matches("sha256:")), data)?;
+        Ok(digest)
+    };
+    let entrypoint: &[&str] = if name == "shell" {
+        &["bash", "-l"]
+    } else {
+        &[name]
+    };
+    let config =
+        serde_json::json!({"config": {"Entrypoint": entrypoint, "User": "agent"}}).to_string();
+    let manifest = serde_json::json!({
+        "schemaVersion": 2,
+        "mediaType": "application/vnd.oci.image.manifest.v1+json",
+        "config": {"mediaType": "application/vnd.oci.image.config.v1+json",
+                   "digest": put(config.as_bytes())?, "size": config.len()},
+        "layers": [],
+        "annotations": {
+            "vnd.docker.sandbox.kit.descriptor": descriptor,
+            "vnd.docker.sandbox.kit.schema-version": "3",
+            "com.docker.sandboxes.start-docker": "true",
+        },
+    })
+    .to_string();
+    let index = serde_json::json!({"schemaVersion": 2, "manifests": [{
+        "mediaType": "application/vnd.oci.image.manifest.v1+json",
+        "digest": put(manifest.as_bytes())?, "size": manifest.len()}]});
+    std::fs::write(kit.join("oci-layout"), r#"{"imageLayoutVersion":"1.0.0"}"#)?;
+    std::fs::write(kit.join("index.json"), index.to_string())
+}
 
 /// Whether `name` is a built-in agent.
 pub fn is_agent(name: &str) -> bool {
@@ -88,31 +151,6 @@ pub fn unknown(name: &str) -> String {
     format!("unknown agent \"{name}\"")
 }
 
-fn split_tag(image: &str) -> Option<(&str, &str)> {
-    image.rsplit_once(':').filter(|(_, tag)| !tag.contains('/'))
-}
-
-/// True for Docker's `-docker` template variants, which bundle a Docker engine: how an image given
-/// with `-t` (not a kit) is judged.
-pub fn is_docker_image(image: &str) -> bool {
-    split_tag(image).is_some_and(|(_, tag)| tag.ends_with("-docker") || tag.contains("-docker-"))
-}
-
-/// sbx's rule for `-- ARGS`: flags are appended to the agent's command; a bare word replaces its
-/// flags.
-pub fn command_with_args<S: AsRef<str>>(command: &[S], args: &[String]) -> Vec<String> {
-    let mut cmd: Vec<String> = command.iter().map(|s| s.as_ref().to_string()).collect();
-    match args.first() {
-        None => {}
-        Some(first) if first.starts_with('-') => cmd.extend(args.iter().cloned()),
-        Some(_) => {
-            cmd.truncate(1);
-            cmd.extend(args.iter().cloned());
-        }
-    }
-    cmd
-}
-
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -128,39 +166,6 @@ mod tests {
         );
         assert!(retired("claude").is_none());
     }
-
-    #[test]
-    fn docker_image_detection() {
-        assert!(is_docker_image("docker/sandbox-templates:shell-docker"));
-        assert!(is_docker_image(
-            "docker/sandbox-templates:docker-agent-docker-0.11.0"
-        ));
-        assert!(!is_docker_image(
-            "docker/sandbox-templates:docker-agent-0.11.0"
-        ));
-        assert!(!is_docker_image("alpine"));
-        assert!(!is_docker_image("localhost:5000/x"));
-    }
-
-    #[test]
-    fn agent_args_rule() {
-        let base = &["claude", "--dangerously-skip-permissions"];
-        let s = |v: &[&str]| v.iter().map(|x| x.to_string()).collect::<Vec<_>>();
-        assert_eq!(command_with_args(base, &[]), s(base));
-        assert_eq!(
-            command_with_args(base, &s(&["-c"])),
-            s(&["claude", "--dangerously-skip-permissions", "-c"])
-        );
-        assert_eq!(
-            command_with_args(base, &s(&["mcp", "list"])),
-            s(&["claude", "mcp", "list"])
-        );
-    }
-}
-
-#[cfg(test)]
-mod kit_ref_tests {
-    use super::*;
 
     #[test]
     fn kit_ref_defaults_to_docker_hub() {

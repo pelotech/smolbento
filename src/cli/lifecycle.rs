@@ -628,7 +628,7 @@ mod tests {
         assert!(create.contains("--image alpine:3 "), "{create}");
         // The kit stays, with its command; an image whose name isn't Docker-enabled gets no dockerd.
         assert!(create.contains(r#"sbx.kits=[{"name":"shell""#), "{create}");
-        assert!(create.contains(r#"sbx.command=["shell"]"#), "{create}");
+        assert!(create.contains(r#"sbx.command=["bash","-l"]"#), "{create}");
         assert!(create.contains("sbx.docker=false"), "{create}");
         // Any workload kit, not only an agent.
         let mut t = test_env(&[("SMOLBENTO_KIT_ALLOW_LOCAL_KITS", "true")]);
