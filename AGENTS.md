@@ -96,7 +96,7 @@ As of smolvm 1.35. Check the reference source before depending on anything not l
 | `ctx` | the context every command gets: paths, settings, smolvm, stdio |
 | `smolvm` | `Runner` trait, command builder, JSON types |
 | `sandbox` | naming, labels, lifecycle, session tracking |
-| `agents` | agent presets (data) |
+| `agents` | built-in agent names → sbx's published kits; retired agents |
 | `workspace` | mounts; clone mode (host git, `sandbox-<name>` remote) |
 | `config` | settings and precedence |
 | `policy` | network rules, presets, compile to smolvm flags |

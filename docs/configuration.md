@@ -102,7 +102,8 @@ HTTPS, except loopback ones (`localhost`, `127.0.0.0/8`, `::1`), which use plain
 With `kit.requireSignature` set to `true`, a registry kit loads only if one of its signatures
 verifies for a signer in `kit.trustedSigners`. Verification uses `cosign`, from `PATH` or from
 `SMOLBENTO_COSIGN`. Local kits are refused while the setting is on. `--offline` skips the check, as
-in sbx. Presets and shipped kits are exempt.
+in sbx. Built-in agents' kits (sbx publishes them unsigned) and shipped kits are exempt, and so
+are they from `kit.allowedSources`.
 
 `kit.trustedSigners` is a JSON array. Each entry is either:
 

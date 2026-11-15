@@ -290,8 +290,8 @@ anything is created. An optional one is skipped with a warning.
   `kit reference "alpine": not a local path and does not look like a registry reference`. ZIP kits
   and `git+` sources are refused. All measured on v0.53.0.
 - Versions in `provides: [name@1.2.0]` and `requires: ["name >= 1.0"]` follow the spec's version
-  grammar. Agent presets provide their name at their image tag's version, so
-  `requires.agent: claude` works on `claude`.
+  grammar. sbx's agent kits provide their name at their version, so `requires: [claude]` works on
+  `claude`.
 - Composition errors use sbx's texts, with kits named as typed. They are
   `resolve: the kit set is not coherent:` with one `  - <problem>` line each,
   `resolve: dependency cycle among ./a, ./b`, and `kit ./x is listed more than once`.
@@ -343,7 +343,7 @@ anything is created. An optional one is skipped with a warning.
 | Docker in the sandbox | Run by the `-docker` images | The shipped `docker` kit comes first, before your kits (added to Docker-enabled images, or `--kit docker`). Its `dockerd` step runs in the background: a failure is only logged (`/var/log/dockerd.log`). smolvm's Docker Engine API (`smolvm engine`) isn't used: its containers are host machines that can bind any host path |
 | v3 mixins on built-in agents | Allowed since sbx 0.53 (earlier: `no workload kit in the set`) | Allowed |
 | v2 and v3 kits in one sandbox | Refused: `cannot mix v3 kits with v1/v2 kits in one sandbox; compositions are single-format (v3: …; v1/v2: …)` | Same message, at create and by `kit add`. |
-| v2 mixins on built-in agents | Refused, since the agents are v3 kits (sbx 0.53) | Allowed. Presets, the shipped `docker` kit and Smolfiles have no kit format |
+| v2 mixins on built-in agents | Refused, since the agents are v3 kits (sbx 0.53) | Refused, the same way. The shipped `docker` kit and Smolfiles go with either format |
 | Published v2 kits | OCI artifact: config is the spec, one layer is `files/` as tar.gz under `home/agent/` | A files-layer entry outside `home/agent/` is refused (other mappings unmeasured). The agent is named after the reference (`gemini-kit`), not the kit |
 | Retired agents | `gemini` (0.53) refused for new sandboxes, pointing to `antigravity` and `docker.io/sbx/gemini-kit` | Same wording |
 | Self-referencing kit variable | `PATH: /opt/kit/bin:$PATH` gets the image's PATH | Same for `$NAME` and `${NAME}` in NAME's own value (read at create; smolvm doesn't expand variables yet). `${PATH}` in another variable stays as written; sbx substitutes the kit's unexpanded PATH |
@@ -356,11 +356,11 @@ anything is created. An optional one is skipped with a warning.
 | Mixin context with no agent file in the workload | Dropped silently | Dropped with a warning |
 | Startup log lines | `ok /etc/durable-startup.d/…` | `ok /etc/smolbento/startup.d/NN-<kit>.sh hook N`, one per step and start |
 | v2 kits' `requires.agent` | A base-agent name | A capability name with no version, so any version meets it (v2 has no versioned provides) |
-| `kit add` and earlier kits | Recreates with the whole set | Checks the new kit against the provides recorded at create, with versions. Older records hold bare names, which meet only unconstrained requires. A preset's own name counts as `claude@0`, so a versioned require can pass at create and fail at `kit add`. Errors name kits by kit name. Earlier kits' requires and conflicts aren't rechecked |
-| Kit settings | Also `kit.requireSignature`, `kit.trustedSigners`, `kit.ignoreTransparencyLog`, `kit.allowExtractedAgents` | All but `kit.allowExtractedAgents` (built-in agents aren't kits) |
+| `kit add` and earlier kits | Recreates with the whole set | Checks the new kit against the provides recorded at create, with versions. Older records hold bare names, which meet only unconstrained requires. Errors name kits by kit name. Earlier kits' requires and conflicts aren't rechecked |
+| Kit settings | Also `kit.requireSignature`, `kit.trustedSigners`, `kit.ignoreTransparencyLog`, `kit.allowExtractedAgents` | All but `kit.allowExtractedAgents` (not implemented) |
 | Default kit sources and signers | `kit.allowedSources` `["docker.io/"]`; `kit.trustedSigners` `*@docker.com` | Also `ghcr.io/pelotech/smolbento/` and smolbento's release workflow (GitHub OIDC), so smolbento's own kits load and verify with default settings |
 | Bare kit names | None for published kits | `nix` names `ghcr.io/pelotech/smolbento/kits/nix:latest` and loads as a registry kit (source and signature checks apply). `docker` is the shipped kit |
-| `kit.requireSignature` | Enforced wherever a kit loads (not `kit pull` or `--offline`): a registry or local kit needs a signature verifying against `kit.trustedSigners` (`{"key": PATH}`, or keyless `issuer`/`identity`, each also `…Regexp`). Success: `✓ REF — signature verified (IDENTITY via ISSUER)` on stderr | Registry kits only, checked on the resolved digest. Presets and shipped kits (`claude`, `docker`) are exempt. Local directories and Smolfiles are refused (`… is not signed`, or `… isn't supported yet` with a `kit.sig.bundle`). The success line names the matching signer entry, not the certificate's identity |
+| `kit.requireSignature` | Enforced wherever a kit loads (not `kit pull` or `--offline`): a registry or local kit needs a signature verifying against `kit.trustedSigners` (`{"key": PATH}`, or keyless `issuer`/`identity`, each also `…Regexp`). Success: `✓ REF — signature verified (IDENTITY via ISSUER)` on stderr | Registry kits only, checked on the resolved digest. Built-in agents' kits (`claude`: sbx publishes them unsigned) and shipped kits (`docker`) are exempt. Local directories and Smolfiles are refused (`… is not signed`, or `… isn't supported yet` with a `kit.sig.bundle`). The success line names the matching signer entry, not the certificate's identity |
 
 ### Not measured against sbx yet
 

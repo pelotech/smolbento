@@ -124,10 +124,6 @@ in [sbx compatibility](sbx-compatibility.md). Worth another look:
   `GIT_CONFIG_*` and the SSH/display variables. It sets `SBX_CRED_*_MODE` for the services the
   kits declare credentials for (measured on sbx 0.53's `claude` and `shell`).
 - **From sbx 0.51–0.53, for later:**
-  - Built-in agents are published kits (`docker.io/sbx/<agent>:latest`) in sbx 0.51; Docker no
-    longer publishes the `docker/sandbox-templates` images for codex, cursor, devin, docker-agent
-    and opencode, and no longer refreshes `shell`. smolbento's presets still pin those images, so
-    those agents get no updates. Moving presets to the published kits is a phase of its own.
   - `kit add` installs a kit's image layers into a running v3 sandbox; smolbento says `recreate
     required` (smolvm can't add layers to a running machine).
   - `sbx df` (disk usage of images, sandboxes and volumes).
