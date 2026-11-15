@@ -1,5 +1,12 @@
 # Changelog
 
+## [0.2.0](https://github.com/pelotech/smolbento/compare/nix-kit-v0.1.0...nix-kit-v0.2.0) (2026-11-15)
+
+
+### Features
+
+* **cli:** sbx's error format and --json on more commands; split tests and the usage guide ([#135](https://github.com/pelotech/smolbento/issues/135)) ([694d0f7](https://github.com/pelotech/smolbento/commit/694d0f75d430d8452d777b4af6d17d74b76e21ec))
+
 ## [0.1.0](https://github.com/pelotech/smolbento/compare/nix-kit-v0.0.2...nix-kit-v0.1.0) (2026-11-15)
 
 
