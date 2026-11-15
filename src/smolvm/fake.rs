@@ -32,8 +32,8 @@ pub struct FakeRunner {
     during_interactive: RefCell<Option<Box<dyn Fn()>>>,
     during: RefCell<Vec<(Vec<String>, Hook)>>,
     spawn_bin: RefCell<Option<PathBuf>>,
-    /// Machines `missing_until_created` keeps missing, with how many calls had been made then.
-    missing: RefCell<Vec<(String, usize)>>,
+    /// Machines `missing_until_created` keeps missing until they're created.
+    missing: RefCell<std::collections::BTreeSet<String>>,
 }
 
 fn strings(items: &[&str]) -> Vec<String> {
@@ -113,31 +113,12 @@ impl FakeRunner {
         self.once(prefix, error_output(code, message))
     }
 
-    /// `machine status -n MACHINE` answers NOT_FOUND until a later `machine create -n MACHINE`
-    /// call, then as registered: a sandbox that a test's command creates, however often it's
-    /// looked up. Registering again makes it missing again (after a removal).
+    /// `machine status -n MACHINE` answers NOT_FOUND until a `machine create -n MACHINE` call,
+    /// then as registered: a sandbox that a test's command creates, however often it's looked up.
+    /// Registering again makes it missing again (after a removal).
     pub fn missing_until_created(&self, machine: &str) -> &Self {
-        let made = self.calls.borrow().len();
-        self.missing.borrow_mut().push((machine.to_string(), made));
+        self.missing.borrow_mut().insert(machine.to_string());
         self
-    }
-
-    /// Whether `machine` is registered missing and no create for it came after that.
-    fn still_missing(&self, machine: &str) -> bool {
-        let Some(since) = self
-            .missing
-            .borrow()
-            .iter()
-            .rev()
-            .find(|(m, _)| m == machine)
-            .map(|(_, n)| *n)
-        else {
-            return false;
-        };
-        let create = strings(&["machine", "create", "-n", machine]);
-        !self.calls.borrow()[since..]
-            .iter()
-            .any(|c| c.starts_with(&create))
     }
 
     /// Make calls starting with `prefix` fail to run at all, as when smolvm can't be spawned.
@@ -254,11 +235,18 @@ impl Runner for FakeRunner {
                 f(args);
             }
         }
-        if let [m, status, n, machine, ..] = args
-            && (m.as_str(), status.as_str(), n.as_str()) == ("machine", "status", "-n")
-            && self.still_missing(machine)
+        if let [m, verb, n, machine, ..] = args
+            && (m.as_str(), n.as_str()) == ("machine", "-n")
         {
-            return Ok(error_output("NOT_FOUND", "vm not found"));
+            match verb.as_str() {
+                "create" => {
+                    self.missing.borrow_mut().remove(machine);
+                }
+                "status" if self.missing.borrow().contains(machine) => {
+                    return Ok(error_output("NOT_FOUND", "vm not found"));
+                }
+                _ => {}
+            }
         }
         let mut replies = self.replies.borrow_mut();
         let Some(index) = replies.iter().rposition(|r| args.starts_with(&r.prefix)) else {
