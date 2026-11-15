@@ -1246,11 +1246,6 @@ mod tests {
     }
 
     #[test]
-    fn upstream_claude_mixin_parses() {
-        parse(&fixture("claude-mixin.yaml"), local("c")).unwrap();
-    }
-
-    #[test]
     fn claude_mixin_capabilities_decode() {
         let k = parse(&fixture("claude-mixin.yaml"), local("c")).unwrap();
         assert_eq!(k.name, "c");

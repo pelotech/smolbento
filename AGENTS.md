@@ -120,7 +120,8 @@ Shipped kits live in `kits/`. Planned for later phases: `tui`, and `images/plus/
 - `just build`, `just test` (nextest: unit, `insta` snapshots, sbx parity), `just lint` (prek), and
   `just e2e` (boots real VMs; needs a hypervisor). e2e tests run two at a time (`just e2e 4` for more),
   so each needs its own sandbox names and config/cache dirs. A test that changes global state (like
-  the shared `_builder`) must be the only one that does.
+  the shared `_builder`) must be the only one that does. A test that needs outside credentials gets
+  its own recipe (`just e2e-dhi`) and fails without them; it never returns early, which would pass.
 - CI runs Linux only by default. VM tests (`just e2e`) run in CI only on x64 Linux, split over three
   runners by nextest's `--partition slice:N/3`. So an e2e test can't rely on another having run on the
   same machine. GitHub's arm64 Linux and macOS runners can't boot VMs. Run `just test` and `just e2e`
