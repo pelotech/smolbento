@@ -1,13 +1,18 @@
-//! diagnose: checks smolvm, the hypervisor and the config file.
+//! diagnose: checks smolvm, its home and host tools, the hypervisor and the config file.
 
 use anyhow::Result;
 use std::io::Write;
+use std::path::PathBuf;
 
 use super::Ctx;
 use crate::smolvm::Runner;
 
 pub fn run<R: Runner>(ctx: &mut Ctx<R>) -> Result<i32> {
-    let mut checks = vec![smolvm_check(ctx)];
+    let mut checks = vec![smolvm_check(ctx), home_check(ctx)?];
+    #[cfg(target_os = "macos")]
+    checks.push(mkfs_check(&mkfs_dirs(&ctx.env)));
+    #[cfg(target_os = "linux")]
+    checks.push(libbz2_check(&lib_dirs()));
     #[cfg(target_os = "linux")]
     checks.push(kvm_check());
     #[cfg(target_os = "macos")]
@@ -38,10 +43,118 @@ pub fn report(checks: &[(bool, String)]) -> (String, i32) {
     (text, code)
 }
 
+/// The smolvm `sbt` runs: the pinned release (or not downloaded yet), or the explicit
+/// `smolvm.path`, whose version is only noted when it differs from the pin.
 pub fn smolvm_check<R: Runner>(ctx: &Ctx<R>) -> (bool, String) {
-    match ctx.vm.version() {
-        Ok(v) => (true, format!("smolvm {v}")),
-        Err(e) => (false, format!("smolvm: {e:#}")),
+    let pinned = &crate::smolvm::pin::pin().version;
+    let cmd = match crate::smolvm::locate::locate(&ctx.settings, &ctx.env) {
+        Ok(c) => c,
+        Err(e) => return (false, format!("smolvm: {e:#}")),
+    };
+    if cmd.managed && !cmd.bin.is_file() {
+        return (
+            true,
+            format!(
+                "smolvm {pinned} (pinned) isn't downloaded yet: the first command that needs it \
+                 downloads it, or run `sbt smolvm --version`"
+            ),
+        );
+    }
+    let v = match ctx.vm.version() {
+        Ok(v) => v,
+        Err(e) => return (false, format!("smolvm: {e:#}")),
+    };
+    let msg = if cmd.managed {
+        format!("smolvm {v} (pinned, {})", cmd.bin.display())
+    } else if &v == pinned {
+        format!("smolvm {v} ({}, from smolvm.path)", cmd.bin.display())
+    } else {
+        format!(
+            "smolvm {v} ({}, from smolvm.path; smolbento is tested with {pinned})",
+            cmd.bin.display()
+        )
+    };
+    (true, msg)
+}
+
+/// `smolvm.home`, and on macOS how long its longest socket path is against the limit.
+fn home_check<R: Runner>(ctx: &Ctx<R>) -> Result<(bool, String)> {
+    let cmd = crate::smolvm::locate::locate(&ctx.settings, &ctx.env)?;
+    let home = cmd.home.display();
+    if !cfg!(target_os = "macos") {
+        return Ok((true, format!("smolvm.home {home}")));
+    }
+    let n = crate::smolvm::locate::longest_socket_path(&cmd.home);
+    Ok((
+        n <= 103,
+        format!("smolvm.home {home} (longest socket path {n} of 103 bytes)"),
+    ))
+}
+
+/// `name` in the first of `dirs` that has it.
+fn find_in(name: &str, dirs: &[PathBuf]) -> Option<PathBuf> {
+    dirs.iter().map(|d| d.join(name)).find(|p| p.exists())
+}
+
+/// macOS: where smolvm looks for `mkfs.ext4` (PATH, then Homebrew's e2fsprogs).
+#[cfg(target_os = "macos")]
+fn mkfs_dirs(env: &std::collections::BTreeMap<String, String>) -> Vec<PathBuf> {
+    let mut dirs: Vec<PathBuf> = env
+        .get("PATH")
+        .map(|p| std::env::split_paths(p).collect())
+        .unwrap_or_default();
+    dirs.extend(
+        [
+            "/opt/homebrew/opt/e2fsprogs/sbin",
+            "/usr/local/opt/e2fsprogs/sbin",
+            "/opt/homebrew/sbin",
+        ]
+        .map(PathBuf::from),
+    );
+    dirs
+}
+
+/// `mkfs.ext4`: smolvm needs it only for disks larger than its templates, so it's a note.
+#[cfg_attr(not(target_os = "macos"), allow(dead_code))]
+fn mkfs_check(dirs: &[PathBuf]) -> (bool, String) {
+    match find_in("mkfs.ext4", dirs) {
+        Some(p) => (true, format!("mkfs.ext4 {}", p.display())),
+        None => (
+            true,
+            "mkfs.ext4 not found: disks larger than smolvm's templates need it (brew install \
+             e2fsprogs)"
+                .into(),
+        ),
+    }
+}
+
+/// Linux: where the system's libraries are.
+#[cfg(target_os = "linux")]
+fn lib_dirs() -> Vec<PathBuf> {
+    [
+        "/lib",
+        "/usr/lib",
+        "/lib64",
+        "/usr/lib64",
+        "/lib/x86_64-linux-gnu",
+        "/usr/lib/x86_64-linux-gnu",
+        "/lib/aarch64-linux-gnu",
+        "/usr/lib/aarch64-linux-gnu",
+    ]
+    .map(PathBuf::from)
+    .to_vec()
+}
+
+/// `libbz2.so.1`: the downloaded smolvm needs the system's.
+#[cfg_attr(not(target_os = "linux"), allow(dead_code))]
+fn libbz2_check(dirs: &[PathBuf]) -> (bool, String) {
+    match find_in("libbz2.so.1", dirs) {
+        Some(p) => (true, format!("libbz2 {}", p.display())),
+        None => (
+            false,
+            "libbz2.so.1 not found: smolvm needs it (install your distribution's bzip2 library)"
+                .into(),
+        ),
     }
 }
 
@@ -154,14 +267,104 @@ mod tests {
         assert_eq!(t.sbt(&["diagnose"]).unwrap(), 1);
     }
 
+    fn pinned() -> &'static str {
+        &crate::smolvm::pin::pin().version
+    }
+
     #[test]
-    fn smolvm_version_check() {
+    fn an_explicit_smolvm_is_named_and_a_differing_version_noted() {
         let t = test_env(&[]);
-        assert!(smolvm_check(&t.ctx).0);
+        // test_env's smolvm is explicit, at the pinned version.
+        t.runner()
+            .ok(&["--version"], &format!("smolvm {}\n", pinned()));
+        assert_eq!(
+            smolvm_check(&t.ctx),
+            (
+                true,
+                format!(
+                    "smolvm {} (/nonexistent/smolvm, from smolvm.path)",
+                    pinned()
+                )
+            )
+        );
+        // No floor: an explicit smolvm is the user's; a different version is only noted.
         t.runner().ok(&["--version"], "smolvm 1.0.0\n");
-        // No floor: the managed smolvm is the pinned one, an explicit one is the user's.
+        assert_eq!(
+            smolvm_check(&t.ctx),
+            (
+                true,
+                format!(
+                    "smolvm 1.0.0 (/nonexistent/smolvm, from smolvm.path; smolbento is tested \
+                     with {})",
+                    pinned()
+                )
+            )
+        );
+    }
+
+    #[test]
+    fn a_managed_smolvm_not_yet_downloaded_says_when_it_will_be() {
+        let mut t = test_env(&[]);
+        t.ctx.env.remove("SMOLBENTO_SMOLVM");
+        t.ctx.settings = crate::config::Settings::load(&t.ctx.paths, t.ctx.env.clone()).0;
         let (ok, msg) = smolvm_check(&t.ctx);
         assert!(ok);
-        assert_eq!(msg, "smolvm 1.0.0");
+        assert_eq!(
+            msg,
+            format!(
+                "smolvm {} (pinned) isn't downloaded yet: the first command that needs it \
+                 downloads it, or run `sbt smolvm --version`",
+                pinned()
+            )
+        );
+    }
+
+    #[test]
+    fn home_is_reported_with_its_socket_room_on_macos() {
+        let t = test_env(&[("HOME", "/Users/jhill")]);
+        let (ok, msg) = home_check(&t.ctx).unwrap();
+        assert!(ok);
+        if cfg!(target_os = "macos") {
+            assert_eq!(
+                msg,
+                "smolvm.home /Users/jhill/.smolbento (longest socket path 84 of 103 bytes)"
+            );
+        } else {
+            assert_eq!(msg, "smolvm.home /Users/jhill/.smolbento");
+        }
+    }
+
+    #[test]
+    fn host_tools_are_found_or_explained() {
+        let dir = tempfile::tempdir().unwrap();
+        let dirs = [dir.path().to_path_buf()];
+        assert_eq!(
+            mkfs_check(&dirs),
+            (
+                true,
+                "mkfs.ext4 not found: disks larger than smolvm's templates need it (brew install \
+                 e2fsprogs)"
+                    .to_string()
+            )
+        );
+        std::fs::write(dir.path().join("mkfs.ext4"), "").unwrap();
+        assert_eq!(
+            mkfs_check(&dirs),
+            (
+                true,
+                format!("mkfs.ext4 {}", dir.path().join("mkfs.ext4").display())
+            )
+        );
+        assert_eq!(
+            libbz2_check(&dirs),
+            (
+                false,
+                "libbz2.so.1 not found: smolvm needs it (install your distribution's bzip2 \
+                 library)"
+                    .to_string()
+            )
+        );
+        std::fs::write(dir.path().join("libbz2.so.1"), "").unwrap();
+        assert!(libbz2_check(&dirs).0);
     }
 }
