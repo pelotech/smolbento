@@ -1251,7 +1251,7 @@ pub(crate) fn nix_kit_gives_agents_nix_and_direnv() {
     let _builder = BuilderGuard::new();
     let _reg = Registry::start(&e);
     std::fs::write(e.workspace().join(".envrc"), "export E2E_DIRENV=yes\n").unwrap();
-    // `claude` has an agent file for the kit's instructions; sbx's `shell` kit has none.
+    // `claude`'s agent file is in `~/.claude`, so the kit's instructions are there too.
     e.create_with_kits_as("claude", &[&nix_kit_dir()]);
     let as_agent = |script: &str| e.ok(&["exec", &e.name, "sh", "-c", script]);
     assert!(as_agent("nix --version").contains("nix"));

@@ -21,23 +21,36 @@ pub const KITS_DIR_ENV: &str = "SMOLBENTO_AGENT_KITS_DIR";
 
 /// Writes a stand-in for every built-in agent's kit under `dir`, for tests (unit and e2e), which
 /// read them with `SMOLBENTO_AGENT_KITS_DIR` instead of Docker Hub: a prebuilt v3 workload with
-/// no layers (booted with `-t <image>`), launching as sbx's kits do as `agent`, asking for Docker.
-/// `claude` keeps its agent file and skills where the real kit does; sbx's `shell` has neither.
+/// no layers (booted with `-t <image>`), launching as sbx's kits do as `agent`, asking for Docker,
+/// and declaring `sbx@1`. Their agent files and skills directories are where the real kits keep
+/// them: `shell`'s `AGENTS.md` beside the workspace, `claude`'s in `~/.claude`.
 #[doc(hidden)]
 pub fn write_stand_ins(dir: &std::path::Path) -> std::io::Result<()> {
     for name in NAMES {
         let descriptor = match name {
             "claude" => STAND_IN_CLAUDE,
-            _ => r#"{"schemaVersion":"3","kind":"workload"}"#,
+            "shell" => STAND_IN_SHELL,
+            _ => {
+                r#"{"schemaVersion":"3","kind":"workload","capabilities":[
+                {"type":"com.docker.sandbox/sbx@1"}]}"#
+            }
         };
         write_stand_in(dir, name, descriptor)?;
     }
     Ok(())
 }
 
-/// The `claude` stand-in's descriptor: the real kit's agent file and skills directory.
+/// The `shell` stand-in's descriptor: the real kit's `sbx@1` and agent file.
+#[doc(hidden)]
+pub const STAND_IN_SHELL: &str = r#"{"schemaVersion":"3","kind":"workload","capabilities":[
+  {"type":"com.docker.sandbox/sbx@1"},
+  {"type":"com.docker.sandbox/agent-context@1","optional":true,
+   "config":{"content":"","filename":"AGENTS.md"}}]}"#;
+
+/// The `claude` stand-in's descriptor: the real kit's `sbx@1`, agent file and skills directory.
 #[doc(hidden)]
 pub const STAND_IN_CLAUDE: &str = r#"{"schemaVersion":"3","kind":"workload","capabilities":[
+  {"type":"com.docker.sandbox/sbx@1"},
   {"type":"com.docker.sandbox/agent-skills@1","optional":true,
    "config":{"path":"/home/agent/.claude/skills"}},
   {"type":"com.docker.sandbox/agent-context@1","optional":true,

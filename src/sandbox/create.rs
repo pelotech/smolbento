@@ -52,9 +52,9 @@ pub struct CreateRequest {
     pub command: Option<Vec<String>>,
     /// A v3 workload kit's image user (the `sbx.user` label).
     pub user: Option<String>,
-    /// The workload is a built-in agent's kit (`Source::Agent`): it idles at boot, and its agent
-    /// starts in `run` or `exec`.
-    pub builtin_agent: bool,
+    /// The workload declares `sbx@1`: the host launches its agent (in `run` or `exec`, under
+    /// bash), so its image entrypoint isn't started at boot.
+    pub launched_by_host: bool,
     /// A v3 workload kit's image WORKDIR, when not `/` (the `sbx.workdir` label).
     pub image_workdir: Option<String>,
     /// A workload kit's agent file in the guest (the `sbx.agent-file` label). `kits::apply`
@@ -285,13 +285,13 @@ pub fn spec(req: &CreateRequest) -> CreateSpec {
 
 /// What the machine runs at every boot (smolvm reruns it on each start, and keeps the machine up
 /// after it exits). A v3 workload kit launches its image's `Entrypoint` + `Cmd`, as the kit spec's
-/// default launch mode says (an image user, `sbx.user`, marks a v3 workload); every other sandbox,
-/// built-in agents (started on a terminal by `run`) and the internal builder included, just idles
-/// for `exec` and sessions.
+/// default launch mode says (an image user, `sbx.user`, marks a v3 workload), unless it declares
+/// `sbx@1` (the host launches its agent, as for every built-in agent); every other sandbox, the
+/// internal builder included, just idles for `exec` and sessions.
 fn boot_command(req: &CreateRequest) -> Vec<String> {
     match (&req.user, &req.command) {
         (Some(_), Some(c))
-            if !c.is_empty() && !req.builtin_agent && !name::is_internal(&req.name) =>
+            if !c.is_empty() && !req.launched_by_host && !name::is_internal(&req.name) =>
         {
             c.clone()
         }
@@ -374,7 +374,7 @@ mod tests {
         req.name = "claude-x".into();
         req.user = Some("agent".into());
         req.command = Some(vec!["claude".into()]);
-        req.builtin_agent = true;
+        req.launched_by_host = true;
         assert_eq!(spec(&req).cmd, idle);
         assert_eq!(cmd("tool", None, Some(&["wl"])).cmd, idle);
         assert_eq!(cmd("tool", Some("0"), None).cmd, idle);

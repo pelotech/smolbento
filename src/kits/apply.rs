@@ -174,7 +174,11 @@ pub fn apply(
     steps.startup_d = startup_d(&kits, m, &tmpfs);
 
     // A v3 workload's agent runs as its image's user, root when the image names none.
-    req.builtin_agent = is_builtin_agent(&plan.workload);
+    req.launched_by_host = plan
+        .workload
+        .caps
+        .iter()
+        .any(|c| matches!(c.body, CapBody::Sbx));
     set_workload_fields(req, &plan.workload, workdir, agent_file);
     record_kits(&kits, &plan.args, req)?;
     steps.kit_names = req.kits.iter().map(|k| k.name.clone()).collect();
@@ -823,7 +827,8 @@ fn context_scripts(plan: &Plan, agent_file: Option<&str>, mounts: &[&Path]) -> V
 }
 
 /// A built-in agent's published kit (`load::agent`). It gets the SSH agent, the agent name for
-/// `--static-mcp` and its skills as the agent's own; a kit merely named like one doesn't.
+/// `--static-mcp` and its skills as the agent's own; a kit merely named like one doesn't. (When
+/// its agent starts is the kit's own `sbx@1`, not this.)
 pub fn is_builtin_agent(w: &Kit) -> bool {
     matches!(w.source, Source::Agent(_))
 }
@@ -1261,6 +1266,20 @@ mod tests {
         let mut req = request();
         run_with(&p, &mut req, &mut Policy::default(), &secrets(&["github"])).unwrap();
         assert!(req.credential_install.is_empty());
+    }
+
+    #[test]
+    fn a_workload_declaring_sbx_is_launched_by_the_host() {
+        // Any workload kit, not only a built-in agent's: sbx@1 says the host launches it.
+        let w = with(workload(), "sbx@1", false, CapBody::Sbx);
+        let p = resolve(w, vec![], &ArgValues::default()).unwrap();
+        let mut req = request();
+        run(&p, &mut req, &mut Policy::default()).unwrap();
+        assert!(req.launched_by_host);
+        // Without it, the image's entrypoint is the workload, started at boot.
+        let mut req = request();
+        run(&plan(vec![]), &mut req, &mut Policy::default()).unwrap();
+        assert!(!req.launched_by_host);
     }
 
     #[test]

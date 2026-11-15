@@ -417,6 +417,7 @@ pub const CLAUDE_STAND_IN: &str = r#"{
   "kind": "workload",
   "args": {"model": {"default": "", "description": "Claude model to use"}},
   "capabilities": [
+    {"type": "com.docker.sandbox/sbx@1"},
     {"type": "com.docker.sandbox/network-policy@1",
      "config": {"runtime": {"allow": ["api.anthropic.com:443", "platform.claude.com:443"]}}},
     {"type": "com.docker.sandbox/credential@1", "optional": true, "config": {
