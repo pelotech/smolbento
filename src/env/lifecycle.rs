@@ -110,8 +110,12 @@ pub fn run(
 }
 
 /// How long a command's background children get to let go of its output once it has exited
-/// (sbx's grace).
-const HELD_OUTPUT_GRACE: Duration = Duration::from_secs(5);
+/// (sbx's grace). Shorter in tests, which only check that it's waited out.
+const HELD_OUTPUT_GRACE: Duration = if cfg!(test) {
+    Duration::from_millis(500)
+} else {
+    Duration::from_secs(5)
+};
 const TICK: Duration = Duration::from_millis(50);
 
 /// Set by SIGINT or SIGTERM while a command runs: it is in its own process group, so the
