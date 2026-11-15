@@ -1,5 +1,19 @@
 # Changelog
 
+## [0.29.0](https://github.com/pelotech/smolbento/compare/v0.28.1...v0.29.0) (2026-11-15)
+
+
+### Features
+
+* **cli:** more sbx flags and aliases, help text for every argument, simpler output code ([#138](https://github.com/pelotech/smolbento/issues/138)) ([d530f2e](https://github.com/pelotech/smolbento/commit/d530f2edb3f4c2a888e1152fac42b2106740743f))
+* **cli:** sbx's error format and --json on more commands; split tests and the usage guide ([#135](https://github.com/pelotech/smolbento/issues/135)) ([694d0f7](https://github.com/pelotech/smolbento/commit/694d0f75d430d8452d777b4af6d17d74b76e21ec))
+* **kits:** a built-in git-signing kit ([#139](https://github.com/pelotech/smolbento/issues/139)) ([aedeab0](https://github.com/pelotech/smolbento/commit/aedeab0002282df7c95404293825383a13b7fbd3))
+
+
+### Chores
+
+* **main:** release nix-kit 0.2.0 ([#136](https://github.com/pelotech/smolbento/issues/136)) ([8fbbb6e](https://github.com/pelotech/smolbento/commit/8fbbb6ed87b74ba7d418e6fc92e0c03965744e04))
+
 ## [0.28.1](https://github.com/pelotech/smolbento/compare/v0.28.0...v0.28.1) (2026-11-15)
 
 
