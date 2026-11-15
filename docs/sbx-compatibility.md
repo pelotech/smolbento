@@ -110,13 +110,14 @@ smolbento-only:
 | Browser and clipboard | Shims post to the daemon's proxy with `curl` and `jq`; copies work from any `exec`; image paste behind `clipboard.imagePaste`; `SBX_HOST_SESSION_ID` routes requests | Same shims and texts over a socket smolvm mounts at `/run/smolbento/bridge.sock`, with `curl` only. Copying is off until `clipboard.textCopy` is `true`, as in sbx 0.51. More below. |
 | Command aliases | `ls`, `rm`/`delete`, `secret ls`/`rm`/`delete`/`unset`, `settings ls`, `template ls`/`list`, `template rm`/`remove`/`delete`, `policy ls`/`list`, `policy rm`/`remove`/`delete`, `mcp rm`/`remove`/`delete` | Implemented. `volume` aliases come with that command |
 | `--version` | `sbx version vX <revision>` | `bento version vX` (no revision); `bento version` also shows the smolvm version |
-| Errors | `error: …`, and a missing sandbox adds `  try: sbx ls` on its own line | Same, with `bento`. Other suggestions are still inline (``(see `bento mcp ls`)``) |
+| Errors | `error: …`, and a suggestion as `  try: sbx ls` on its own line | Same, with `bento` |
+| `stop`, `rm`, `prune` text | `Stopped sandbox NAME`, `Removed sandbox NAME` | Same |
 | `settings ls` | `KEY VALUE TYPE SOURCE RESTART DESCRIPTION`, sorted, cells cut; `--no-trunc` prints a block per setting | Same. `RESTART` is always empty (no daemon); `TYPE` is `bool` or `string` |
 | `policy ls` layout | 0.53: one row per policy (`POLICY SOURCE APPLIES TO SUMMARY`), `--json` is `{"rules":[…]}`; `--wide` has 14 columns | The earlier layout: `Mode:` and one row per rule, `--json` a bare array. Not updated yet |
 | `policy approval respond` | 0.53: `APPROVAL-ID --option OPTION-ID` | `ID allow\|deny`. `--option` isn't accepted (sbx's option IDs weren't observed) |
 | `df` | Disk usage of images, containers and volumes | Not implemented (`unrecognized subcommand`) |
 | `skills import` | Lists missing directories only with `-v`; prints `Skills directory found at DIR:` before each directory's skills | `-v` the same; no `Skills directory found` header |
-| `--format`, `--json` | On every command that prints something | Same shapes and key order on `ls`, `inspect`, `ports`, `stop`, `rm`, `prune`, `diagnose`, `settings ls`/`get`, `secret ls`, `policy check network`. `version --json` has `client` and `smolvm` (sbx: `client` and `server`). `diagnose --json` checks have empty `detail` and `hint`. `settings` values are `bool` or `string`. `policy check` adds `reason`. `prune --json` works only with `--dry-run`, as in sbx (the same error otherwise): `would_remove` rows have `name`, `agent`, `mounts` and `workspaces` (no `stopped_at`: smolvm doesn't record it), then `skipped_unknown_stop` (always empty) and smolbento's `host_services`. `ports --publish --json` prints the ports it published (not measured on sbx). A command that fails partway still prints what it did. `-q` wins over `--json`. Confirmation prompts go to stderr. `stop`, `rm` and `prune` print `Stopped sandbox NAME` and `Removed sandbox NAME`, as sbx does. Not on `template inspect` (not implemented) |
+| `--format`, `--json` | On every command that prints something | The same flags on every command that prints something, except `template inspect` (not implemented). Differences in the output: [Output formats](#output-formats) |
 
 - **Host services:** Only sandboxes created while a `localhost` rule applied get it; others need
   recreating. Kit rules never grant it, and `_builder` never has it. A blocked request gets
@@ -132,6 +133,26 @@ smolbento-only:
   Login relay: `curl -g --noproxy '*'` with 10-second timeouts (`wget` for a `GET`); no request body
   (`form_post` callbacks lose theirs); text responses only; at most 4 ports per session (with units,
   per connection), each for 10 minutes. See [Usage](usage.md#browser-and-clipboard)
+
+### Output formats
+
+`--json` and `--format json|yaml` print sbx's shapes, in sbx's key order (measured on 0.53).
+Where they differ:
+
+| Command | sbx | smolbento |
+|---|---|---|
+| `version` | `client` and `server` | `client` and `smolvm` (there is no daemon) |
+| `diagnose` | `checks` with `name`, `status`, `message`, `detail`, `hint` | Same keys; `detail` and `hint` are empty, and `status` is `pass` or `fail` |
+| `settings ls`, `settings get` | `type` is `bool`, `int` or `string`, among others | `type` is `bool` or `string` |
+| `policy check network` | `action`, `allowed`, `context`, `governance`, `resource_type`, `resource_value`, `target`, `type` | Adds `reason`: the rule or default that decided |
+| `prune --dry-run` | `would_remove` rows with `name`, `agent`, `stopped_at`, `mounts`, `workspaces`; `skipped_unknown_stop` | No `stopped_at` (smolvm doesn't record it); `skipped_unknown_stop` is always empty; adds `host_services`, the leftover units it would remove |
+| `prune` without `--dry-run` | Refused: `--format` describes the dry-run listing | Same error |
+| `ports --publish`, `--unpublish` | Not measured | The ports this call published, as the listing shows them |
+| `secret ls` | `secrets`, `custom_secrets`, `shadowed_services`, `env_only_count` | Registry logins are `secrets` rows of type `registry`; the other three are always empty |
+
+- `-q` wins over `--json`.
+- A `stop` or `rm` that fails partway still prints what it did.
+- Confirmation prompts go to stderr, so piped JSON stays clean.
 
 ## Skills
 
