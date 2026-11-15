@@ -71,9 +71,18 @@ See [Kits](docs/usage.md#kits) to add your own.
 
 ## Install
 
-Install smolbento with Homebrew, from source, or from a release. See [Install](docs/install.md).
-You don't install smolvm: smolbento downloads the release it's tested with on first use, into
-`~/.smolbento`.
+macOS (Apple Silicon) or Linux (x86_64, arm64) with Homebrew:
+
+```sh
+brew tap pelotech/tap && brew trust pelotech/tap   # once: Homebrew 7+ only loads trusted taps
+brew install pelotech/tap/smolbento
+```
+
+That's all: smolvm is installed automatically. smolbento downloads the smolvm release it's tested
+with the first time you run it, into `~/.smolbento`, and checks its checksum. Docker isn't needed.
+On Linux, your user needs access to `/dev/kvm`.
+
+From source or a release tarball, and how to uninstall: [Install](docs/install.md).
 
 ## First run
 

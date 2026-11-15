@@ -5,31 +5,27 @@
 - macOS on Apple Silicon, or Linux (x86_64 or arm64) with KVM. Windows is planned.
 - On Linux, read/write access to `/dev/kvm` (usually through the `kvm` group), and the bzip2
   library (`libbz2.so.1`, in most distributions by default).
-- On macOS, `e2fsprogs` (`brew install e2fsprogs`) for sandboxes with a disk larger than 20 GiB.
 - A normal user account. smolbento refuses to run as root (see [Security](SECURITY.md)).
 
 Docker isn't needed on the host. smolvm pulls agent images itself.
 
-You don't install smolvm. smolbento runs the smolvm release it was tested with, downloaded from
-[smol-machines/smolvm](https://github.com/smol-machines/smolvm/releases) on first use and checked
-against the checksum built into smolbento. It goes in `~/.smolbento`, with smolbento's sandboxes, so
-a smolvm you installed yourself keeps its own machines. To download it ahead (before going
-offline, say), run `bento smolvm --version`. To run your own smolvm instead, set `smolvm.path` (see
-[Configuration](configuration.md)).
+smolvm is installed automatically: smolbento downloads the smolvm release it was tested with from
+[smol-machines/smolvm](https://github.com/smol-machines/smolvm/releases) the first time you run it,
+checks it against the checksum built into smolbento, and keeps it in `~/.smolbento` with your
+sandboxes. To download it ahead (before going offline, say), run `bento smolvm --version`.
 
 ## Install with Homebrew
 
 ```sh
-brew tap pelotech/tap
-# Homebrew 7+ only loads trusted third-party taps
-brew trust pelotech/tap
+brew tap pelotech/tap && brew trust pelotech/tap   # once: Homebrew 7+ only loads trusted taps
 brew install pelotech/tap/smolbento
 ```
 
-This installs `smolbento` and links `bento` to it. `sbx` and `sbt` aren't linked, so they can't
-clash with Docker's `sbx` or Scala's `sbt`. To use those names, add `alias sbx=bento sbt=bento` to
-your shell. `brew upgrade` picks up new releases. Run `brew tap` before `brew trust`, as above. Homebrew rejects tapping a tap that is
-already trusted (see [pelotech/homebrew-tap](https://github.com/pelotech/homebrew-tap)).
+This installs `smolbento` and links `bento` to it, plus `e2fsprogs` on macOS (smolvm formats
+disks larger than 20 GiB with it). `sbx` and `sbt` aren't linked, so they can't clash with Docker's
+`sbx` or Scala's `sbt`. To use those names, add `alias sbx=bento sbt=bento` to your shell.
+`brew upgrade` picks up new releases. Tap before trusting, as above: Homebrew rejects tapping a tap
+that is already trusted.
 
 ## Install from source
 
@@ -62,7 +58,8 @@ cosign verify-blob --bundle smolbento-<target>.tar.gz.sigstore.json \
 tar xzf smolbento-<target>.tar.gz
 ```
 
-Linux binaries need glibc 2.28 or newer.
+Linux binaries need glibc 2.28 or newer. On macOS, sandboxes with a disk larger than 20 GiB need `e2fsprogs`
+(`brew install e2fsprogs`); the Homebrew formula installs it for you.
 
 ## Upgrading
 
