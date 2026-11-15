@@ -1,5 +1,23 @@
 # Changelog
 
+## [0.28.0](https://github.com/pelotech/smolbento/compare/v0.27.0...v0.28.0) (2026-11-15)
+
+
+### Features
+
+* bring a pinned smolvm and name the command bento ([#128](https://github.com/pelotech/smolbento/issues/128)) ([29a92e4](https://github.com/pelotech/smolbento/commit/29a92e42018dde49baa5410f9903f75389988699))
+* built-in agents are sbx's published kits ([#126](https://github.com/pelotech/smolbento/issues/126)) ([85bddb6](https://github.com/pelotech/smolbento/commit/85bddb6981f4489d81a42197552095822e9922a8))
+
+
+### Chores
+
+* **deps:** pin dependencies ([#127](https://github.com/pelotech/smolbento/issues/127)) ([57a6e03](https://github.com/pelotech/smolbento/commit/57a6e03048aa1940052725d3572df00c000a096c))
+
+
+### Tests
+
+* faster, offline unit tests and no silent e2e passes ([#124](https://github.com/pelotech/smolbento/issues/124)) ([d10aa7b](https://github.com/pelotech/smolbento/commit/d10aa7bda1ef42e5b1e4a72cdc80ea20a87b30c8))
+
 ## [0.27.0](https://github.com/pelotech/smolbento/compare/v0.26.1...v0.27.0) (2026-11-15)
 
 
