@@ -1,6 +1,9 @@
 use std::collections::BTreeMap;
 use std::path::{Path, PathBuf};
 
+/// smolvm's state directory variable; smolbento sets it on every call (`locate`).
+const DATA_DIR: &str = "SMOLVM_DATA_DIR";
+
 use anyhow::{Context, Result, anyhow};
 
 use super::{
@@ -424,6 +427,30 @@ impl<R: Runner> Smolvm<R> {
 
     pub fn stop(&self, name: &str) -> Result<()> {
         self.call(args(&["machine", "stop", "-n", name])).map(drop)
+    }
+
+    /// `list` against smolvm's own default state (without smolbento's `SMOLVM_DATA_DIR`), where
+    /// sandboxes from before smolbento kept its own state may still be.
+    pub fn list_default_state(&self) -> Result<Vec<Machine>> {
+        let out = checked(self.runner.run_with_env(
+            &args(&["machine", "ls", "--json"]),
+            &[],
+            &[DATA_DIR.to_string()],
+        )?)?;
+        if out.stdout.trim().is_empty() {
+            return Ok(Vec::new());
+        }
+        Ok(serde_json::from_str(&out.stdout)?)
+    }
+
+    /// `delete` in smolvm's own default state (see `list_default_state`).
+    pub fn delete_default_state(&self, name: &str) -> Result<()> {
+        checked(self.runner.run_with_env(
+            &args(&["machine", "delete", "-n", name, "-f"]),
+            &[],
+            &[DATA_DIR.to_string()],
+        )?)
+        .map(drop)
     }
 
     pub fn delete(&self, name: &str) -> Result<()> {

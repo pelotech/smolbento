@@ -71,19 +71,29 @@ the first one in the file wins (smolbento's is first unless you moved it)",
 
 fn remove<R: Runner>(ctx: &Ctx<R>, ssh_dir: &Path) -> Result<i32> {
     let config = ssh_dir.join("config");
+    if remove_block(ssh_dir)? {
+        writeln!(
+            &ctx.out,
+            "removed the smolbento block from {}",
+            config.display()
+        )?;
+    } else {
+        writeln!(&ctx.out, "no smolbento block in {}", config.display())?;
+    }
+    Ok(0)
+}
+
+/// Removes smolbento's block from `<ssh_dir>/config`; whether there was one.
+pub fn remove_block(ssh_dir: &Path) -> Result<bool> {
+    let config = ssh_dir.join("config");
     let old = read(&config)?;
     match block::remove(&old)? {
         Some(new) => {
             write_atomic(&config, new.as_bytes(), None, Symlink::Follow)?;
-            writeln!(
-                &ctx.out,
-                "removed the smolbento block from {}",
-                config.display()
-            )?;
+            Ok(true)
         }
-        None => writeln!(&ctx.out, "no smolbento block in {}", config.display())?,
+        None => Ok(false),
     }
-    Ok(0)
 }
 
 /// How `ssh` should call us, as an absolute path (IDEs run the ProxyCommand with a minimal PATH):
