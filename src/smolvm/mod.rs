@@ -82,7 +82,22 @@ pub struct ProcessRunner {
 /// A `-D` line: the call as `bento smolvm …`, which runs the same smolvm with the same state, so
 /// it can be pasted.
 fn trace_line(args: &[String]) -> String {
-    format!("+ bento smolvm {}", args.join(" "))
+    let plain = |a: &str| {
+        !a.is_empty()
+            && a.chars()
+                .all(|c| c.is_ascii_alphanumeric() || "_-./:=@%+,".contains(c))
+    };
+    let words: Vec<String> = args
+        .iter()
+        .map(|a| {
+            if plain(a) {
+                a.clone()
+            } else {
+                crate::util::sh_quote(a)
+            }
+        })
+        .collect();
+    format!("+ bento smolvm {}", words.join(" "))
 }
 
 impl ProcessRunner {
@@ -411,6 +426,11 @@ mod tests {
     fn debug_lines_are_pasteable() {
         let args = ["machine".to_string(), "ls".into(), "--json".into()];
         assert_eq!(trace_line(&args), "+ bento smolvm machine ls --json");
+        let args = ["exec".to_string(), "sh -c 'x'".into(), "a=b/c:1".into()];
+        assert_eq!(
+            trace_line(&args),
+            r#"+ bento smolvm exec 'sh -c '\''x'\''' a=b/c:1"#
+        );
     }
 
     #[test]
