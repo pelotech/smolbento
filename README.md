@@ -4,6 +4,9 @@ Run coding agents in [smolvm](https://github.com/smol-machines/smolvm) microVMs,
 line of Docker [Sandboxes](https://docs.docker.com/ai/sandboxes/) (`sbx`). One binary, invoked as
 `bento` (or `sbx`). It has no daemon and needs no Docker on the host.
 
+![bento run claude: a network policy prompt, the microVM starting Claude Code, and the agent
+seeing only a placeholder for the API key](https://github.com/pelotech/smolbento/releases/download/demo/demo.gif)
+
 ## Why smolbento
 
 Docker Sandboxes and smolbento both run each agent in its own microVM, and neither needs Docker
