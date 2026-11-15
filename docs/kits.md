@@ -33,6 +33,7 @@ exits, and `bento run` still starts its own interactive session.
 | Reference | Kit |
 |---|---|
 | `docker` | The shipped Docker kit |
+| `git-signing` | The shipped [git-signing kit](#the-git-signing-kit) |
 | `nix` | smolbento's [Nix kit](#the-nix-kit), pulled from `ghcr.io/pelotech/smolbento/kits/nix:latest` |
 | `docker.io/acme/kit:1`, `ghcr.io/acme/kit@sha256:…` | A published kit, pulled from its registry |
 | `./my-kit` (a directory with one `*.yaml` starting `# syntax=docker/sandbox-kit:3`), or that file | A local v3 kit, built in the builder sandbox (below) |
@@ -43,7 +44,7 @@ v2 and v3 kits can't share a sandbox. The built-in agents are v3 kits; `docker` 
 go with either.
 
 A local kit is always a path (`./my-kit`, `../kits/my-kit`, `.`, or absolute). A bare word is never
-a local kit, even if a directory has that name; only `docker` and `nix` are bare kit names. `bento create my-kit` fails with `unknown agent "my-kit"`,
+a local kit, even if a directory has that name; only `docker`, `git-signing` and `nix` are bare kit names. `bento create my-kit` fails with `unknown agent "my-kit"`,
 and `--kit my-kit` says `not a local path and does not look like a registry reference`. Write
 `docker.io/library/alpine` for the alpine image.
 
@@ -128,6 +129,32 @@ bento create docker.io/sbx/antigravity:latest . --kit nix
 - `nix` is `:latest` while the kit is 0.x and may change; pin a version
   (`ghcr.io/pelotech/smolbento/kits/nix:0.0.1`) or a digest in environment files. Each release
   notes the smolbento it needs.
+
+### The `git-signing` kit
+
+`git-signing` signs commits and tags with a key from your SSH agent, under any agent, and sets your
+git name and email. It is built in, so nothing is downloaded:
+
+```sh
+bento create claude . --kit git-signing
+bento create docker.io/sbx/antigravity:latest . --kit git-signing
+# sign with one particular key
+bento create claude . --kit git-signing --kit-arg "signingKey=$(git config user.signingkey)"
+```
+
+- Repositories with a remote sign; a scratch `git init` doesn't (git 2.36 or newer in the image).
+- Without `signingKey`, a `github.com` repository where `gh` is logged in signs with the agent key
+  GitHub lists as a signing key; otherwise the agent's first key signs.
+- `git log --show-signature` verifies the sandbox's own signatures.
+- A commit that can't be signed stops with a `git-signing:` message saying what is missing and what
+  to run. With no SSH agent on the host the sandbox is still created; create it again once you have
+  one.
+- A workload kit's sandbox gets the agent for git signatures only, so it can't log in to servers
+  over SSH. Built-in agents get your [SSH agent](usage.md#ssh-agent) without that limit anyway.
+- The settings are in the system git config, so your own git config in the sandbox wins.
+
+See the kit's [README](https://github.com/pelotech/smolbento/tree/main/kits/git-signing) for the
+details.
 
 ### Agent instructions from kits
 

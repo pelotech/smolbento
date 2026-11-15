@@ -1,0 +1,168 @@
+# syntax=docker/sandbox-kit:3
+schemaVersion: "3"
+kind: mixin
+displayName: Git signing
+description: Your git identity, and commits and tags signed with a key from your SSH agent.
+# x-release-please-start-version
+version: "0.28.1"
+# x-release-please-end
+provides: [git-signing]
+
+args:
+  # The public key to sign with, as `ssh-add -L` prints it (the comment is optional). Empty picks
+  # one from the agent at each signature.
+  signingKey:
+    default: ""
+    # Nothing that could leave the single quotes the install step puts it in.
+    pattern: '^[A-Za-z0-9@.+/= -]*$'
+
+capabilities:
+  # user.name and user.email, from the host's git.
+  - type: com.docker.sandbox/git-identity@1
+
+  # The host's SSH agent, for git signatures and nothing else. Optional, so a host without an
+  # agent still creates the sandbox; the script below then says why a commit can't be signed.
+  - type: com.docker.sandbox/ssh-agent@1
+    optional: true
+    config:
+      phase: runtime
+      unrestricted: false
+      sign: [git]
+
+  # Asked which of your keys GitHub knows as signing keys, when `gh` is logged in.
+  - type: com.docker.sandbox/network-policy@1
+    config:
+      runtime:
+        allow:
+          - api.github.com
+
+  - type: com.docker.sandbox/lifecycle@1
+    config:
+      files:
+        # git runs this for each signature (gpg.ssh.defaultKeyCommand) and signs with the key it
+        # prints.
+        - path: /etc/git-signing/pick-key
+          mode: "0755"
+          overwrite: true
+          content: |
+            #!/bin/sh
+            # Prints the public key git signs with, as `key::<type> <key>`, and records it as a
+            # trusted signer for the committer so `git log --show-signature` can verify it.
+            dir=/etc/git-signing
+
+            refuse() {
+              {
+                echo "git-signing: $1"
+                shift
+                for line in "$@"; do echo "  $line"; done
+                echo "  git may add \"user.signingKey needs to be set\" below. Ignore that: the key"
+                echo "  comes from the SSH agent, and setting user.signingKey here won't help."
+              } >&2
+              exit 1
+            }
+
+            [ -n "${SSH_AUTH_SOCK:-}" ] || refuse \
+              "no SSH agent reaches this sandbox (SSH_AUTH_SOCK is unset), so there is no key to sign with." \
+              "On the host, check that 'ssh-add -l' lists a key and that" \
+              "'bento settings get ssh.agentForwardingEnabled' prints true, then create the sandbox" \
+              "again: the agent is attached when a sandbox is created."
+
+            keys=$(ssh-add -L 2>/dev/null)
+            case $? in
+              0) ;;
+              1) refuse "the SSH agent holds no keys." \
+                   "On the host, add one with 'ssh-add <private key file>' (or unlock your key manager)." \
+                   "The sandbox sees it at once; nothing needs restarting." ;;
+              127) refuse "ssh-add isn't installed in this sandbox." \
+                     "Install the OpenSSH client (ssh-add and ssh-keygen) in the image." ;;
+              *) refuse "the SSH agent at $SSH_AUTH_SOCK isn't answering." \
+                   "On the host, check that your agent runs ('ssh-add -l') and run 'bento diagnose'," \
+                   "which checks the service that forwards it to this sandbox." ;;
+            esac
+
+            # The agent's key that has this base64 body, without its comment.
+            held() {
+              printf '%s\n' "$keys" | awk -v want="$1" '$2 == want { print $1 " " $2; exit }'
+            }
+
+            # The first agent key GitHub lists as one of your signing keys, when this repository
+            # has a github.com remote and `gh` can answer. GitHub's list is kept for five minutes.
+            from_github() {
+              command -v gh >/dev/null 2>&1 || return 1
+              git config --get-regexp '^remote\..*\.url$' 2>/dev/null \
+                | grep -q '[/@]github\.com[:/]' || return 1
+              list=${XDG_CACHE_HOME:-$HOME/.cache}/git-signing/github-signing-keys
+              if [ -z "$(find "$list" -mmin -5 2>/dev/null)" ]; then
+                limit=
+                command -v timeout >/dev/null 2>&1 && limit="timeout 10"
+                listed=$($limit gh api user/ssh_signing_keys --jq '.[].key' 2>/dev/null) || return 1
+                mkdir -p "${list%/*}" && printf '%s\n' "$listed" > "$list" || return 1
+              fi
+              printf '%s\n' "$keys" \
+                | awk 'NR == FNR { listed[$2]; next } $2 in listed { print $1 " " $2; exit }' "$list" -
+            }
+
+            pinned=$(cat "$dir/key" 2>/dev/null)
+            if [ -n "$pinned" ]; then
+              # With or without the key type in front.
+              body=$(printf '%s\n' "$pinned" | awk '{ print (NF > 1 ? $2 : $1) }')
+              key=$(held "$body")
+              [ -n "$key" ] || refuse \
+                "the SSH agent doesn't hold the key this sandbox was told to sign with (signingKey):" \
+                "$pinned" \
+                "On the host, add that key to your agent ('ssh-add -L' lists what it holds), or create" \
+                "the sandbox again with another --kit-arg signingKey=..."
+            else
+              key=$(from_github) || key=
+              [ -n "$key" ] || key=$(held "$(printf '%s\n' "$keys" | awk 'NR == 1 { print $2 }')")
+              [ -n "$key" ] || refuse "the SSH agent listed no usable key." \
+                "On the host, 'ssh-add -L' should print at least one public key."
+            fi
+
+            email=$(git var GIT_COMMITTER_IDENT 2>/dev/null | sed -n 's/.*<\(.*\)>.*/\1/p')
+            signers=$HOME/.config/git-signing/allowed_signers
+            if [ -n "$email" ] && mkdir -p "${signers%/*}" 2>/dev/null; then
+              entry="$email namespaces=\"git\" $key"
+              grep -qxF "$entry" "$signers" 2>/dev/null || echo "$entry" >> "$signers"
+            fi
+
+            echo "key::$key"
+
+      install:
+        # System config: your own git config, and a repository's, still win.
+        - command: |
+            set -e
+            dir=/etc/git-signing
+            mkdir -p "$dir"
+            key='${{ kit.args.signingKey }}'
+            if [ -n "$key" ]; then echo "$key" > "$dir/key"; else rm -f "$dir/key"; fi
+            printf '[commit]\n\tgpgSign = true\n[tag]\n\tgpgSign = true\n' > "$dir/sign.gitconfig"
+            git config --system gpg.format ssh
+            git config --system gpg.ssh.defaultKeyCommand "$dir/pick-key"
+            git config --system gpg.ssh.allowedSignersFile '~/.config/git-signing/allowed_signers'
+            # Sign only in repositories with a remote: a scratch `git init` stays unsigned.
+            git config --system 'includeIf.hasconfig:remote.*.url:**.path' "$dir/sign.gitconfig"
+            # git before 2.36 doesn't know that condition, so there every repository signs.
+            probe=$(mktemp -d)
+            git init -q "$probe"
+            git -C "$probe" config remote.probe.url https://example.invalid/probe.git
+            if [ "$(git -C "$probe" config --get commit.gpgSign || true)" != true ]; then
+              git config --system commit.gpgSign true
+              git config --system tag.gpgSign true
+              echo "git-signing: this git is older than 2.36, so every repository signs" >&2
+            fi
+            rm -rf "$probe"
+          user: "0"
+          description: Sign commits and tags with a key from the SSH agent
+
+  - type: com.docker.sandbox/agent-context@1
+    config:
+      content: &note >-
+        Commits and tags in repositories with a remote are signed automatically with the user's SSH
+        key, through an SSH agent that only makes git signatures here: it can't log in to servers
+        over SSH, so use HTTPS remotes. Don't change the signing config or pass `--no-gpg-sign`; if
+        signing fails, show the user the message. A signature says the commit came from this
+        sandbox, not that the user reviewed it.
+  - type: com.docker.sandbox/agent-context@2
+    config:
+      content: *note

@@ -69,6 +69,8 @@ in [`kits/`](kits):
 
 - [`docker`](kits/docker): a private Docker engine inside the sandbox, added to Docker-enabled
   sandboxes. It never sees the host's.
+- [`git-signing`](kits/git-signing): commits and tags signed with a key from your SSH agent, for
+  any agent (`--kit git-signing`).
 - [`nix`](kits/nix): Nix with flakes, direnv and nix-direnv, for any agent (`--kit nix`).
 
 See [Kits](docs/kits.md#kits) to add your own.
