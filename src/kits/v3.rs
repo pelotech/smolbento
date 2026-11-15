@@ -104,6 +104,7 @@ fn from_value(v: Value, source: Source) -> Result<Kit> {
             cap(c)
         })
         .collect::<Result<Vec<_>>>()?;
+    let caps = newest_versions(caps);
     let name = name_from_source(&source)?;
     for c in &caps {
         if let CapBody::Lifecycle(l) = &c.body {
@@ -258,6 +259,28 @@ fn path_name(p: &Path) -> String {
         p.file_stem()
     };
     part.and_then(|n| n.to_str()).unwrap_or("kit").to_string()
+}
+
+/// Of a capability declared in several versions, only the newest one smolbento understands
+/// counts: kits declare older versions for older runtimes (sbx's agents give their guide as
+/// agent-context@1 and @2 alike), and applying both would apply it twice. Entries of that one
+/// version all stay (several volume@1, say); unknown capabilities are left as they are.
+fn newest_versions(caps: Vec<Cap>) -> Vec<Cap> {
+    let versioned = |c: &Cap| {
+        if matches!(c.body, CapBody::Unsupported) {
+            return None;
+        }
+        let (base, v) = c.ty.rsplit_once('@')?;
+        Some((base.to_string(), v.parse::<u32>().ok()?))
+    };
+    let mut newest: BTreeMap<String, u32> = BTreeMap::new();
+    for (base, v) in caps.iter().filter_map(versioned) {
+        let n = newest.entry(base).or_insert(v);
+        *n = (*n).max(v);
+    }
+    caps.into_iter()
+        .filter(|c| versioned(c).is_none_or(|(base, v)| newest[&base] == v))
+        .collect()
 }
 
 fn cap(item: CapabilityItem) -> Result<Cap> {
@@ -1311,8 +1334,9 @@ mod tests {
                 _ => None,
             })
             .collect();
-        assert_eq!(ctx.len(), 2);
-        assert_eq!(ctx[0], ctx[1]);
+        // sbx publishes the guide as agent-context@1 and @2 alike: one copy, not both.
+        assert_eq!(ctx.len(), 1);
+        assert!(k.caps.iter().any(|c| c.ty.ends_with("agent-context@2")));
         assert_eq!(ctx[0].filename.as_deref(), Some("CLAUDE.md"));
         assert_eq!(ctx[0].directory.as_deref(), Some("/home/agent/.claude"));
         assert!(ctx[0].content.starts_with("Claude Code is installed"));
@@ -1369,6 +1393,30 @@ mod tests {
             &format!(r#"{{"schemaVersion":"3","kind":"mixin","capabilities":[{json_cap}]}}"#),
             local("t"),
         )
+    }
+
+    #[test]
+    fn only_the_newest_known_version_of_a_capability_counts() {
+        let caps = [
+            r#"{"type":"com.docker.sandbox/agent-context@1","config":{"content":"old"}}"#,
+            r#"{"type":"com.docker.sandbox/agent-context@2","config":{"content":"new"}}"#,
+            r#"{"type":"com.docker.sandbox/agent-context@9","config":{"content":"future"}}"#,
+            r#"{"type":"com.docker.sandbox/volume@1","config":{"path":"/a"}}"#,
+            r#"{"type":"com.docker.sandbox/volume@1","config":{"path":"/b"}}"#,
+        ]
+        .join(",");
+        let k = one_cap(&caps).unwrap();
+        let types: Vec<&str> = k.caps.iter().map(|c| c.ty.as_str()).collect();
+        assert_eq!(
+            types,
+            [
+                "com.docker.sandbox/agent-context@2",
+                "com.docker.sandbox/agent-context@9",
+                "com.docker.sandbox/volume@1",
+                "com.docker.sandbox/volume@1",
+            ]
+        );
+        assert!(matches!(k.caps[1].body, CapBody::Unsupported));
     }
 
     #[test]
