@@ -5,7 +5,10 @@
   "release-type": "rust",
   "separate-pull-requests": true,
   "packages": {
-    ".": { "exclude-paths": ["kits/nix"] },
+    ".": {
+      "exclude-paths": ["kits/nix"],
+      "extra-files": [{ "type": "generic", "path": "kits/git-signing/git-signing.yaml" }]
+    },
     "kits/nix": {
       "release-type": "simple",
       "component": "nix-kit",

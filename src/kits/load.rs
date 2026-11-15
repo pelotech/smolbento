@@ -24,7 +24,13 @@ pub(crate) fn starts_with_syntax(bytes: &[u8]) -> bool {
 }
 
 /// Kits shipped inside smolbento, by the bare name that loads them.
-const BUILTINS: [(&str, &str); 1] = [("docker", include_str!("../../kits/docker/docker.yaml"))];
+const BUILTINS: [(&str, &str); 2] = [
+    ("docker", include_str!("../../kits/docker/docker.yaml")),
+    (
+        "git-signing",
+        include_str!("../../kits/git-signing/git-signing.yaml"),
+    ),
+];
 
 /// Bare names for kits smolbento publishes, loaded from their registry like any registry kit
 /// (pulled, source- and signature-checked). The tag follows the kit's 0.x releases.
@@ -621,6 +627,85 @@ mod tests {
         assert!(k.caps.iter().any(|c| c.body == CapBody::Privileged));
         assert_eq!(kit_name(&t.ctx, "docker").unwrap(), "docker");
         assert!(t.calls().is_empty());
+    }
+
+    /// The shipped file: loadable by its bare name with local kits off, with release-please's
+    /// markers around a comment-free `version:` line (as `kits/nix`), and asking for the SSH agent
+    /// for git signatures only.
+    #[test]
+    fn git_signing_is_a_shipped_mixin_with_a_git_only_agent_grant() {
+        use crate::kits::model::{CapBody, Kind, SshPhase};
+        let yaml = include_str!("../../kits/git-signing/git-signing.yaml");
+        assert!(
+            yaml.starts_with("# syntax=docker/sandbox-kit:3\n"),
+            "{yaml}"
+        );
+        assert!(
+            yaml.contains("# x-release-please-start-version\nversion: \""),
+            "{yaml}"
+        );
+        let line = yaml.lines().find(|l| l.starts_with("version:")).unwrap();
+        assert!(!line.contains('#'), "{line}");
+
+        let t = test_env(&[("SMOLBENTO_KIT_ALLOW_LOCAL_KITS", "false")]);
+        let k = load(&t.ctx, "git-signing").unwrap();
+        assert_eq!(k.name, "git-signing");
+        assert_eq!(k.source, Source::Builtin("git-signing"));
+        assert_eq!(k.kind, Kind::Mixin);
+        assert_eq!(kit_name(&t.ctx, "git-signing").unwrap(), "git-signing");
+        assert!(t.calls().is_empty());
+
+        let cap = |ty: &str| {
+            let ty = format!("com.docker.sandbox/{ty}");
+            k.caps
+                .iter()
+                .find(|c| c.ty == ty)
+                .unwrap_or_else(|| panic!("no {ty}"))
+        };
+        assert!(!cap("git-identity@1").optional);
+        let agent = cap("ssh-agent@1");
+        assert!(agent.optional, "a host with no SSH agent still creates");
+        assert_eq!(
+            agent.body,
+            CapBody::SshAgent {
+                phases: vec![SshPhase::Runtime],
+                unrestricted: false,
+                sign: vec!["git".into()],
+                authenticate: vec![],
+            }
+        );
+        // Declared under both versions for runtimes that know only the first; the newest is kept.
+        assert!(
+            yaml.contains("com.docker.sandbox/agent-context@1\n"),
+            "{yaml}"
+        );
+        let CapBody::AgentContext(note) = &cap("agent-context@2").body else {
+            panic!("agent-context@2");
+        };
+        assert!(note.content.contains("signed"), "{}", note.content);
+        // Nothing is looked up anywhere: no network rule, and git 2.36's condition isn't probed.
+        assert!(
+            !k.caps
+                .iter()
+                .any(|c| matches!(c.body, CapBody::Network { .. }))
+        );
+        assert!(
+            !yaml.contains("gh api") && !yaml.contains("mktemp"),
+            "{yaml}"
+        );
+
+        // Tags aren't signed by default: `tag.gpgSign` would make a plain `git tag v1` ask for a
+        // message. The note can't promise limits a built-in agent's own SSH agent doesn't have.
+        assert!(
+            !yaml.contains("tag.gpgSign") && !yaml.contains("[tag]"),
+            "{yaml}"
+        );
+        assert!(note.content.contains("git tag -s"), "{}", note.content);
+        assert!(!note.content.contains("can't log in"), "{}", note.content);
+
+        let key = &k.args["signingKey"];
+        assert_eq!(key.default.as_deref(), Some(""));
+        assert_eq!(key.pattern.as_deref(), Some("^[A-Za-z0-9@.+/=: -]*$"));
     }
 
     #[test]

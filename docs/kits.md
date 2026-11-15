@@ -36,6 +36,7 @@ exits, and `bento run` still starts its own interactive session.
 | Reference | Kit |
 |---|---|
 | `docker` | The shipped Docker kit |
+| `git-signing` | The shipped [git-signing kit](#the-git-signing-kit) |
 | `nix` | smolbento's [Nix kit](#the-nix-kit), pulled from `ghcr.io/pelotech/smolbento/kits/nix:latest` |
 | `docker.io/acme/kit:1`, `ghcr.io/acme/kit@sha256:…` | A published kit, pulled from its registry |
 | `./my-kit` (a directory with one `*.yaml` starting `# syntax=docker/sandbox-kit:3`), or that file | A local v3 kit, built in the builder sandbox (below) |
@@ -46,7 +47,7 @@ v2 and v3 kits can't share a sandbox. The built-in agents are v3 kits; `docker` 
 go with either.
 
 A local kit is always a path (`./my-kit`, `../kits/my-kit`, `.`, or absolute). A bare word is never
-a local kit, even if a directory has that name; only `docker` and `nix` are bare kit names. `bento create my-kit` fails with `unknown agent "my-kit"`,
+a local kit, even if a directory has that name; only `docker`, `git-signing` and `nix` are bare kit names. `bento create my-kit` fails with `unknown agent "my-kit"`,
 and `--kit my-kit` says `not a local path and does not look like a registry reference`. Write
 `docker.io/library/alpine` for the alpine image.
 
@@ -131,6 +132,18 @@ bento create docker.io/sbx/antigravity:latest . --kit nix
 - `nix` is `:latest` while the kit is 0.x and may change; pin a version
   (`ghcr.io/pelotech/smolbento/kits/nix:0.0.1`) or a digest in environment files. Each release
   notes the smolbento it needs.
+
+### The `git-signing` kit
+
+`git-signing` signs commits with a key from your SSH agent, under any agent, and sets your git name
+and email. It is built in, so nothing is downloaded:
+
+```sh
+bento create claude . --kit git-signing
+```
+
+The kit's [README](https://github.com/pelotech/smolbento/tree/main/kits/git-signing) covers which
+repositories and key it signs with, the `signingKey` argument and its limits.
 
 ### Agent instructions from kits
 
