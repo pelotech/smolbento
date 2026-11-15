@@ -608,6 +608,29 @@ mod tests {
     }
 
     #[test]
+    fn t_replaces_a_kit_image() {
+        let mut t = test_env(&[]);
+        creatable_as(&t, "shell-proj");
+        t.sbt(&["create", "shell", "-t", "alpine:3"]).unwrap();
+        let create = t.calls_of("machine create").remove(0);
+        assert!(create.contains("--image alpine:3 "), "{create}");
+        // The kit stays, with its command; an image whose name isn't Docker-enabled gets no dockerd.
+        assert!(create.contains(r#"sbx.kits=[{"name":"shell""#), "{create}");
+        assert!(create.contains(r#"sbx.command=["shell"]"#), "{create}");
+        assert!(create.contains("sbx.docker=false"), "{create}");
+        // Any workload kit, not only an agent.
+        let mut t = test_env(&[("SMOLBENTO_KIT_ALLOW_LOCAL_KITS", "true")]);
+        creatable_as(&t, "toolbox-proj");
+        let kit = format!(
+            "{}/tests/fixtures/kits/v2/tool-workload",
+            env!("CARGO_MANIFEST_DIR")
+        );
+        t.sbt(&["create", &kit, "-t", "img:2"]).unwrap();
+        let create = t.calls_of("machine create").remove(0);
+        assert!(create.contains("--image img:2 "), "{create}");
+    }
+
+    #[test]
     fn a_built_in_name_loads_its_kit() {
         let mut t = test_env(&[]);
         creatable(&t);
