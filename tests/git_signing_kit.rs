@@ -176,6 +176,24 @@ fn a_pinned_key_signs_whatever_the_agent_lists_first() {
     assert_eq!(s.gh_calls(), 0, "a pinned key needs no lookup");
 }
 
+/// git's own spelling of a literal key (`key::…`, as `user.signingkey` may hold it) pins too.
+#[test]
+fn a_pinned_key_may_carry_gits_key_prefix() {
+    let s = Sandbox::new();
+    s.pin("key::ssh-ed25519 AAAAsecond second@host");
+    assert_eq!(s.picked(), "key::ssh-ed25519 AAAAsecond\n");
+}
+
+/// A path or a GPG key id is not a public key: say so, not "the agent doesn't hold it".
+#[test]
+fn a_pinned_value_that_is_no_public_key_is_called_that() {
+    let s = Sandbox::new();
+    s.pin("/Users/me/.ssh/id_ed25519.pub");
+    let err = s.refusal();
+    assert!(err.contains("isn't a public key"), "{err}");
+    assert!(err.contains("ssh-add -L"), "{err}");
+}
+
 #[test]
 fn a_pinned_key_the_agent_lacks_is_refused_by_name() {
     let s = Sandbox::new();

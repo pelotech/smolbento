@@ -132,17 +132,18 @@ bento create docker.io/sbx/antigravity:latest . --kit nix
 
 ### The `git-signing` kit
 
-`git-signing` signs commits and tags with a key from your SSH agent, under any agent, and sets your
+`git-signing` signs commits with a key from your SSH agent, under any agent, and sets your
 git name and email. It is built in, so nothing is downloaded:
 
 ```sh
 bento create claude . --kit git-signing
 bento create docker.io/sbx/antigravity:latest . --kit git-signing
-# sign with one particular key
-bento create claude . --kit git-signing --kit-arg "signingKey=$(git config user.signingkey)"
+# sign with one particular key: the public key itself, not a path to it
+bento create claude . --kit git-signing --kit-arg "signingKey=$(cat ~/.ssh/id_ed25519.pub)"
 ```
 
 - Repositories with a remote sign; a scratch `git init` doesn't (git 2.36 or newer in the image).
+  Tags are signed when you ask (`git tag -s`).
 - Without `signingKey`, a `github.com` repository where `gh` is logged in signs with the agent key
   GitHub lists as a signing key; otherwise the agent's first key signs.
 - `git log --show-signature` verifies the sandbox's own signatures.

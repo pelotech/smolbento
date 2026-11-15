@@ -1,14 +1,14 @@
 # git-signing kit
 
-Signs the commits and tags made in a sandbox with a key from your SSH agent, under any agent, and
-sets your git name and email. The private key never enters the sandbox, and the sandbox can use
+Signs the commits made in a sandbox with a key from your SSH agent, under any agent, and sets your
+git name and email. The private key never enters the sandbox, and the sandbox can use
 the agent for git signatures only.
 
 ```sh
 bento create claude . --kit git-signing
 bento create docker.io/sbx/antigravity:latest . --kit git-signing
-# sign with one particular key
-bento create claude . --kit git-signing --kit-arg "signingKey=$(git config user.signingkey)"
+# sign with one particular key: the public key itself, not a path to it
+bento create claude . --kit git-signing --kit-arg "signingKey=$(cat ~/.ssh/id_ed25519.pub)"
 ```
 
 It is built into `bento`, so nothing is downloaded.
@@ -19,6 +19,8 @@ It is built into `bento`, so nothing is downloaded.
   directory you run `bento` from.
 - **Which repositories:** those with a remote. A scratch `git init` commits unsigned. With git older
   than 2.36 in the image, every repository signs.
+- **Tags:** not signed unless you ask (`git tag -s`), so a plain `git tag v1` stays a lightweight
+  tag. Set `tag.gpgSign` yourself to sign every tag.
 - **Which key:** `signingKey` if you give one. Otherwise, in a repository with a `github.com`
   remote where `gh` is logged in, the first agent key that GitHub lists as one of your signing
   keys (the list is kept for five minutes). Otherwise the agent's first key. If GitHub can't be
@@ -35,7 +37,7 @@ It is built into `bento`, so nothing is downloaded.
 
 | Name | Default | Meaning |
 |---|---|---|
-| `signingKey` | empty | The public key to sign with, as `ssh-add -L` prints it (the comment is optional). Empty picks a key as above |
+| `signingKey` | empty | The public key to sign with, as `ssh-add -L` prints it (the comment is optional; git's `key::` prefix is accepted). A path to a key file or a GPG key id is refused at the first commit. Empty picks a key as above |
 
 ## Limits
 

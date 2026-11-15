@@ -2,19 +2,20 @@
 schemaVersion: "3"
 kind: mixin
 displayName: Git signing
-description: Your git identity, and commits and tags signed with a key from your SSH agent.
+description: Your git identity, and commits signed with a key from your SSH agent.
 # x-release-please-start-version
 version: "0.28.1"
 # x-release-please-end
 provides: [git-signing]
 
 args:
-  # The public key to sign with, as `ssh-add -L` prints it (the comment is optional). Empty picks
-  # one from the agent at each signature.
+  # The public key to sign with, as `ssh-add -L` prints it (the comment is optional, and git's
+  # `key::` in front is fine). Not a path to a key file. Empty picks one from the agent at each
+  # signature.
   signingKey:
     default: ""
     # Nothing that could leave the single quotes the install step puts it in.
-    pattern: '^[A-Za-z0-9@.+/= -]*$'
+    pattern: '^[A-Za-z0-9@.+/=: -]*$'
 
 capabilities:
   # user.name and user.email, from the host's git.
@@ -102,10 +103,18 @@ capabilities:
                 | awk 'NR == FNR { listed[$2]; next } $2 in listed { print $1 " " $2; exit }' "$list" -
             }
 
-            pinned=$(cat "$dir/key" 2>/dev/null)
+            pinned=$(sed 's/^key:://' "$dir/key" 2>/dev/null)
             if [ -n "$pinned" ]; then
               # With or without the key type in front.
               body=$(printf '%s\n' "$pinned" | awk '{ print (NF > 1 ? $2 : $1) }')
+              # Every SSH public key's base64 starts this way; a file path or a GPG key id doesn't.
+              case $body in
+                AAAA*) ;;
+                *) refuse "the key this sandbox was told to sign with (signingKey) isn't a public key:" \
+                     "$pinned" \
+                     "Create the sandbox again with the key itself, a line of 'ssh-add -L' on the host:" \
+                     "--kit-arg \"signingKey=ssh-ed25519 AAAA...\"" ;;
+              esac
               key=$(held "$body")
               [ -n "$key" ] || refuse \
                 "the SSH agent doesn't hold the key this sandbox was told to sign with (signingKey):" \
@@ -136,7 +145,8 @@ capabilities:
             mkdir -p "$dir"
             key='${{ kit.args.signingKey }}'
             if [ -n "$key" ]; then echo "$key" > "$dir/key"; else rm -f "$dir/key"; fi
-            printf '[commit]\n\tgpgSign = true\n[tag]\n\tgpgSign = true\n' > "$dir/sign.gitconfig"
+            # Commits only: with tag signing on, a plain `git tag v1` would ask for a message.
+            printf '[commit]\n\tgpgSign = true\n' > "$dir/sign.gitconfig"
             git config --system gpg.format ssh
             git config --system gpg.ssh.defaultKeyCommand "$dir/pick-key"
             git config --system gpg.ssh.allowedSignersFile '~/.config/git-signing/allowed_signers'
@@ -148,21 +158,20 @@ capabilities:
             git -C "$probe" config remote.probe.url https://example.invalid/probe.git
             if [ "$(git -C "$probe" config --get commit.gpgSign || true)" != true ]; then
               git config --system commit.gpgSign true
-              git config --system tag.gpgSign true
               echo "git-signing: this git is older than 2.36, so every repository signs" >&2
             fi
             rm -rf "$probe"
           user: "0"
-          description: Sign commits and tags with a key from the SSH agent
+          description: Sign commits with a key from the SSH agent
 
   - type: com.docker.sandbox/agent-context@1
     config:
       content: &note >-
-        Commits and tags in repositories with a remote are signed automatically with the user's SSH
-        key, through an SSH agent that only makes git signatures here: it can't log in to servers
-        over SSH, so use HTTPS remotes. Don't change the signing config or pass `--no-gpg-sign`; if
-        signing fails, show the user the message. A signature says the commit came from this
-        sandbox, not that the user reviewed it.
+        Commits in repositories with a remote are signed automatically with the user's SSH key;
+        sign a tag with `git tag -s`. Don't change the signing config or pass `--no-gpg-sign`: if
+        signing fails, show the user the message. The SSH agent here may allow git signatures
+        only, so if git over SSH is refused, use an HTTPS remote. A signature says the commit came
+        from this sandbox, not that the user reviewed it.
   - type: com.docker.sandbox/agent-context@2
     config:
       content: *note

@@ -689,9 +689,18 @@ mod tests {
         let hosts: Vec<&str> = runtime.allow.iter().map(|r| r.host.as_str()).collect();
         assert_eq!(hosts, ["api.github.com"]);
 
+        // Tags aren't signed by default: `tag.gpgSign` would make a plain `git tag v1` ask for a
+        // message. The note can't promise limits a built-in agent's own SSH agent doesn't have.
+        assert!(
+            !yaml.contains("tag.gpgSign") && !yaml.contains("[tag]"),
+            "{yaml}"
+        );
+        assert!(note.content.contains("git tag -s"), "{}", note.content);
+        assert!(!note.content.contains("can't log in"), "{}", note.content);
+
         let key = &k.args["signingKey"];
         assert_eq!(key.default.as_deref(), Some(""));
-        assert_eq!(key.pattern.as_deref(), Some("^[A-Za-z0-9@.+/= -]*$"));
+        assert_eq!(key.pattern.as_deref(), Some("^[A-Za-z0-9@.+/=: -]*$"));
     }
 
     #[test]

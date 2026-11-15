@@ -77,6 +77,13 @@ pub(crate) fn git_signing_signs_and_verifies_under_a_built_in_agent() {
         said.contains("Good \"git\" signature for signer@example.com"),
         "{said}"
     );
+
+    // A plain tag stays a plain tag (no message asked for); `-s` signs one.
+    let tags = "git tag plain && git tag -s -m release signed && git tag -v signed";
+    let out = in_workspace(&e, &e.name, &format!("GIT_EDITOR=false {tags}"));
+    let said = text(&out);
+    assert!(out.status.success(), "{said}");
+    assert!(said.contains("Good \"git\" signature"), "{said}");
     assert!(agent.has_key(), "the key is still in the agent");
 }
 
