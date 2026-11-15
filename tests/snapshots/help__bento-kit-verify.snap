@@ -36,7 +36,7 @@ Options:
           Do not require a Rekor transparency-log entry (for private keyless signatures)
 
       --format <FORMAT>
-          Output format
+          Output format: table, json or yaml
 
           [possible values: table, json, yaml]
 

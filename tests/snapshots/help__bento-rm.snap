@@ -21,7 +21,7 @@ Options:
           Don't ask for confirmation
 
       --format <FORMAT>
-          Output format
+          Output format: table, json or yaml
 
           [possible values: table, json, yaml]
 
@@ -29,7 +29,7 @@ Options:
           Never prompt; commands that need an answer fail with the command to run instead
 
       --json
-          Same as --format json
+          Output in JSON format
 
   -h, --help
           Print help

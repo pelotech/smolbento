@@ -15,13 +15,12 @@ Options:
           Print each smolvm command line
 
       --format <FORMAT>
-          Output format
+          Output format: table, json or yaml
 
-          [default: table]
           [possible values: table, json, yaml]
 
       --json
-          Same as --format json
+          Output in JSON format
 
       --no-input
           Never prompt; commands that need an answer fail with the command to run instead

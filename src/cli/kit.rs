@@ -28,17 +28,15 @@ pub fn run<R: Runner>(ctx: &mut Ctx<R>, cmd: KitCmd) -> Result<i32> {
         KitCmd::Inspect {
             reference,
             args,
-            format,
-            json,
+            output,
             offline,
-        } => inspect(ctx, &reference, &args, Format::pick(json, format), offline),
+        } => inspect(ctx, &reference, &args, output.pick(), offline),
         KitCmd::Validate {
             reference,
             args,
-            format,
-            json,
+            output,
             offline,
-        } => validate(ctx, &reference, &args, Format::pick(json, format), offline),
+        } => validate(ctx, &reference, &args, output.pick(), offline),
         KitCmd::Add {
             sandbox,
             reference,
@@ -62,8 +60,7 @@ pub fn run<R: Runner>(ctx: &mut Ctx<R>, cmd: KitCmd) -> Result<i32> {
             certificate_oidc_issuer,
             certificate_oidc_issuer_regexp,
             insecure_ignore_tlog,
-            format,
-            json,
+            output,
         } => {
             let pick = |exact: Option<String>, regexp: Option<String>| {
                 exact
@@ -78,7 +75,7 @@ pub fn run<R: Runner>(ctx: &mut Ctx<R>, cmd: KitCmd) -> Result<i32> {
                     ignore_tlog: insecure_ignore_tlog,
                 },
             };
-            verify(ctx, &reference, policy, Format::pick(json, format))
+            verify(ctx, &reference, policy, output.pick())
         }
     }
 }

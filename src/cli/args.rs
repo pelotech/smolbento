@@ -383,12 +383,8 @@ pub enum KitCmd {
         reference: String,
         #[command(flatten)]
         args: KitArgOpts,
-        /// Output format
-        #[arg(long, value_enum)]
-        format: Option<Format>,
-        /// Output in JSON format
-        #[arg(long)]
-        json: bool,
+        #[command(flatten)]
+        output: OutputArgs,
         /// Skip the source policy check; local kits only, no network
         #[arg(long)]
         offline: bool,
@@ -399,12 +395,8 @@ pub enum KitCmd {
         reference: String,
         #[command(flatten)]
         args: KitArgOpts,
-        /// Output format
-        #[arg(long, value_enum)]
-        format: Option<Format>,
-        /// Output in JSON format
-        #[arg(long)]
-        json: bool,
+        #[command(flatten)]
+        output: OutputArgs,
         /// Skip the source policy check; local kits only, no network
         #[arg(long)]
         offline: bool,
@@ -479,12 +471,8 @@ pub enum KitCmd {
         /// Do not require a Rekor transparency-log entry (for private keyless signatures)
         #[arg(long)]
         insecure_ignore_tlog: bool,
-        /// Output format
-        #[arg(long, value_enum)]
-        format: Option<Format>,
-        /// Output in JSON format
-        #[arg(long)]
-        json: bool,
+        #[command(flatten)]
+        output: OutputArgs,
     },
 }
 
@@ -745,10 +733,10 @@ impl Format {
 /// `--format` and `--json`, as sbx has them on every command that prints something.
 #[derive(Debug, Clone, Copy, Default, Args)]
 pub struct OutputArgs {
-    /// Output format
+    /// Output format: table, json or yaml
     #[arg(long, value_enum)]
     pub format: Option<Format>,
-    /// Same as --format json
+    /// Output in JSON format
     #[arg(long)]
     pub json: bool,
 }
@@ -770,12 +758,8 @@ impl OutputArgs {
 
 #[derive(Debug, Default, Args)]
 pub struct LsArgs {
-    /// Output format
-    #[arg(long, value_enum)]
-    pub format: Option<Format>,
-    /// Same as --format json
-    #[arg(long)]
-    pub json: bool,
+    #[command(flatten)]
+    pub output: OutputArgs,
     /// Only print names
     #[arg(short = 'q', long)]
     pub quiet: bool,
@@ -784,12 +768,8 @@ pub struct LsArgs {
 #[derive(Debug, Args)]
 pub struct InspectArgs {
     pub sandbox: String,
-    /// Output format
-    #[arg(long, value_enum, default_value = "table")]
-    pub format: Format,
-    /// Same as --format json
-    #[arg(long)]
-    pub json: bool,
+    #[command(flatten)]
+    pub output: OutputArgs,
 }
 
 #[derive(Debug, Args)]
@@ -893,8 +873,8 @@ pub enum PolicyCmd {
     /// Show one rule
     Inspect {
         id: String,
-        #[arg(long)]
-        json: bool,
+        #[command(flatten)]
+        output: OutputArgs,
     },
     /// Show requests the policy blocked
     Log(PolicyLogArgs),
@@ -966,10 +946,8 @@ pub struct PolicyLsArgs {
     /// Show every resource and enforcement notes
     #[arg(long)]
     pub wide: bool,
-    #[arg(long, value_enum)]
-    pub format: Option<Format>,
-    #[arg(long)]
-    pub json: bool,
+    #[command(flatten)]
+    pub output: OutputArgs,
     #[arg(short = 'q', long)]
     pub quiet: bool,
     /// Only rules from this source
@@ -997,8 +975,8 @@ pub struct PolicyLogArgs {
     /// all, network or filesystem (only network has events)
     #[arg(long = "type")]
     pub kind: Option<String>,
-    #[arg(long)]
-    pub json: bool,
+    #[command(flatten)]
+    pub output: OutputArgs,
 }
 
 #[derive(Debug, Subcommand)]
@@ -1024,8 +1002,8 @@ pub struct CheckArgs {
 pub enum ApprovalCmd {
     /// Blocked hosts with no rule yet
     Ls {
-        #[arg(long)]
-        json: bool,
+        #[command(flatten)]
+        output: OutputArgs,
     },
     /// Show one blocked host
     Inspect { id: String },
@@ -1096,12 +1074,8 @@ pub struct McpAddArgs {
 
 #[derive(Debug, Args)]
 pub struct McpLsArgs {
-    /// Output format: table, json or yaml
-    #[arg(long, value_enum)]
-    pub format: Option<Format>,
-    /// Output in JSON format
-    #[arg(long)]
-    pub json: bool,
+    #[command(flatten)]
+    pub output: OutputArgs,
     /// Only display server names
     #[arg(short = 'q', long)]
     pub quiet: bool,
@@ -1111,12 +1085,8 @@ pub struct McpLsArgs {
 pub struct McpInspectArgs {
     /// Server name
     pub name: String,
-    /// Output format: table, json or yaml
-    #[arg(long, value_enum)]
-    pub format: Option<Format>,
-    /// Output in JSON format
-    #[arg(long)]
-    pub json: bool,
+    #[command(flatten)]
+    pub output: OutputArgs,
 }
 
 /// `bento skills` (sbx's are experimental too).
@@ -1162,12 +1132,8 @@ pub struct SkillsImportArgs {
 
 #[derive(Debug, Args)]
 pub struct SkillsLsArgs {
-    /// Output format: table, json or yaml
-    #[arg(long, value_enum)]
-    pub format: Option<Format>,
-    /// Output in JSON format
-    #[arg(long)]
-    pub json: bool,
+    #[command(flatten)]
+    pub output: OutputArgs,
     /// Only display skill names
     #[arg(short = 'q', long)]
     pub quiet: bool,
@@ -1216,12 +1182,8 @@ pub struct TemplateSaveArgs {
 
 #[derive(Debug, Args)]
 pub struct TemplateLsArgs {
-    /// Output format: table, json or yaml
-    #[arg(long, value_enum)]
-    pub format: Option<Format>,
-    /// Output in JSON format
-    #[arg(long)]
-    pub json: bool,
+    #[command(flatten)]
+    pub output: OutputArgs,
     /// Only display template names
     #[arg(short = 'q', long)]
     pub quiet: bool,
@@ -1234,12 +1196,8 @@ pub struct TemplateRmArgs {
     /// Skip confirmation prompts
     #[arg(short = 'f', long)]
     pub force: bool,
-    /// Output format: table, json or yaml
-    #[arg(long, value_enum)]
-    pub format: Option<Format>,
-    /// Output in JSON format
-    #[arg(long)]
-    pub json: bool,
+    #[command(flatten)]
+    pub output: OutputArgs,
 }
 
 #[derive(Debug, Args)]

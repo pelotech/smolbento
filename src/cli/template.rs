@@ -55,7 +55,7 @@ fn ls<R: Runner>(ctx: &Ctx<R>, a: &TemplateLsArgs) -> Result<()> {
         })
         .collect();
     let mut out = &ctx.out;
-    match Format::pick(a.json, a.format) {
+    match a.output.pick() {
         _ if a.quiet => all.iter().try_for_each(|e| writeln!(out, "{}", e.full()))?,
         Format::Json => writeln!(out, "{}", serde_json::to_string_pretty(&rows)?)?,
         Format::Yaml => write!(out, "{}", serde_saphyr::to_string(&rows)?)?,
@@ -115,7 +115,7 @@ fn rm<R: Runner>(ctx: &Ctx<R>, a: &TemplateRmArgs) -> Result<()> {
     )?;
     store.remove(&e)?;
     let mut out = &ctx.out;
-    match Format::pick(a.json, a.format) {
+    match a.output.pick() {
         Format::Table => writeln!(out, "Removed template {}", a.name)?,
         f => {
             let doc = [Removed {

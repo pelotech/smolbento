@@ -110,7 +110,7 @@ pub fn run<R: Runner>(ctx: &mut Ctx<R>, cmd: PolicyCmd) -> Result<i32> {
                 Some(s @ ("local" | "org" | "kit" | "mcp")) => Some(s),
                 Some(other) => bail!("--source takes local, org, kit or mcp, not '{other}'"),
             };
-            let format = Format::pick(a.json, a.format);
+            let format = a.output.pick();
             let opts = LsOpts {
                 sandbox: a.sandbox.as_deref(),
                 source,
@@ -130,18 +130,13 @@ pub fn run<R: Runner>(ctx: &mut Ctx<R>, cmd: PolicyCmd) -> Result<i32> {
                 eprintln!("{note}");
             }
         }
-        PolicyCmd::Inspect { id, json } => {
+        PolicyCmd::Inspect { id, output } => {
             let (rule, scope) = policy
                 .find(&id)
                 .with_context(|| format!("no rule '{id}'"))?;
-            if json {
-                writeln!(
-                    &ctx.out,
-                    "{}",
-                    serde_json::to_string_pretty(
-                        &serde_json::json!({ "scope": scope.unwrap_or("global"), "rule": rule })
-                    )?
-                )?;
+            let doc = serde_json::json!({ "scope": scope.unwrap_or("global"), "rule": rule });
+            if let Some(text) = output.structured(&doc)? {
+                write!(&ctx.out, "{text}")?;
             } else {
                 writeln!(
                     &ctx.out,
@@ -176,11 +171,8 @@ pub fn run<R: Runner>(ctx: &mut Ctx<R>, cmd: PolicyCmd) -> Result<i32> {
                 return Err(Unsupported("smolbento has no filesystem policy".into()).into());
             }
             let rows = blocked_rows(ctx, a.sandbox.as_deref(), a.limit)?;
-            if a.json {
-                writeln!(&ctx.out, "{}", serde_json::to_string_pretty(&rows)?)?;
-            } else {
-                write!(&ctx.out, "{}", render_log(&rows))?;
-            }
+            let text = a.output.structured(&rows)?;
+            write!(&ctx.out, "{}", text.unwrap_or_else(|| render_log(&rows)))?;
         }
         PolicyCmd::Approval(cmd) => return approval(ctx, &mut policy, cmd),
         PolicyCmd::Refresh(_) => {
@@ -431,9 +423,9 @@ fn approval<R: Runner>(ctx: &Ctx<R>, policy: &mut Policy, cmd: ApprovalCmd) -> R
     let rows = blocked_rows(ctx, None, APPROVAL_EVENTS)?;
     let pending = log::pending(policy, &rows);
     match cmd {
-        ApprovalCmd::Ls { json } => {
-            if json {
-                writeln!(&ctx.out, "{}", serde_json::to_string_pretty(&pending)?)?;
+        ApprovalCmd::Ls { output } => {
+            if let Some(text) = output.structured(&pending)? {
+                write!(&ctx.out, "{text}")?;
             } else if pending.is_empty() {
                 writeln!(&ctx.out, "No pending approvals")?;
             } else {

@@ -23,12 +23,12 @@ Options:
           Never prompt; commands that need an answer fail with the command to run instead
 
       --format <FORMAT>
-          Output format
+          Output format: table, json or yaml
 
           [possible values: table, json, yaml]
 
       --json
-          Same as --format json
+          Output in JSON format
 
   -h, --help
           Print help

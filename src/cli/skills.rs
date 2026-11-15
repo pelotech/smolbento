@@ -41,7 +41,7 @@ struct Listing<'a> {
 fn ls<R: Runner>(ctx: &Ctx<R>, store: &Store, a: &SkillsLsArgs) -> Result<()> {
     let names = store.list()?;
     let path = store.dir.display().to_string();
-    let format = Format::pick(a.json, a.format);
+    let format = a.output.pick();
     let mut out = &ctx.out;
     let doc = Listing {
         store: path.clone(),

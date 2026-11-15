@@ -14,7 +14,7 @@ pub fn run<R: Runner>(ctx: &mut Ctx<R>, a: &LsArgs) -> Result<i32> {
     let mut sandboxes = sandbox::list(&ctx.vm)?;
     // sbx's ls has no --all.
     sandboxes.retain(|s| !name::is_internal(s.name()));
-    let format = Format::pick(a.json, a.format);
+    let format = a.output.pick();
     write!(
         &ctx.out,
         "{}",

@@ -181,7 +181,7 @@ fn ls<R: Runner>(ctx: &Ctx<R>, a: &McpLsArgs) -> Result<()> {
     let file = McpFile::load(&ctx.paths)?;
     let rows: Vec<Row> = file.servers.iter().map(|(n, s)| Row::new(n, s)).collect();
     let mut out = &ctx.out;
-    match Format::pick(a.json, a.format) {
+    match a.output.pick() {
         _ if a.quiet => rows.iter().try_for_each(|r| writeln!(out, "{}", r.name))?,
         Format::Json => writeln!(out, "{}", serde_json::to_string_pretty(&rows)?)?,
         Format::Yaml => write!(out, "{}", serde_saphyr::to_string(&rows)?)?,
@@ -206,7 +206,7 @@ fn inspect<R: Runner>(ctx: &Ctx<R>, a: &McpInspectArgs) -> Result<()> {
         .with_context(|| unknown(&a.name))?;
     let row = Row::new(&a.name, server);
     let mut out = &ctx.out;
-    match Format::pick(a.json, a.format) {
+    match a.output.pick() {
         Format::Json => writeln!(out, "{}", serde_json::to_string_pretty(&row)?)?,
         Format::Yaml => write!(out, "{}", serde_saphyr::to_string(&row)?)?,
         Format::Table => {
