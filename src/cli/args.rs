@@ -527,6 +527,18 @@ pub enum DiagnoseFormat {
     GithubIssue,
 }
 
+impl DiagnoseFormat {
+    /// The format every command has; `None` for the report only `diagnose` prints.
+    pub fn shared(self) -> Option<Format> {
+        match self {
+            DiagnoseFormat::Table => Some(Format::Table),
+            DiagnoseFormat::Json => Some(Format::Json),
+            DiagnoseFormat::Yaml => Some(Format::Yaml),
+            DiagnoseFormat::GithubIssue => None,
+        }
+    }
+}
+
 #[derive(Debug, Default, Args)]
 pub struct DiagnoseArgs {
     /// Output format: table, json, yaml or github-issue

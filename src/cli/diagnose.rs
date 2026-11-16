@@ -34,16 +34,15 @@ pub fn run<R: Runner>(ctx: &mut Ctx<R>, a: &DiagnoseArgs) -> Result<i32> {
     let checks: Vec<(bool, String)> = named.iter().map(|(_, c)| c.clone()).collect();
     let (text, code) = report(&checks);
     let doc = structured(&named);
-    let format = match a.format {
-        _ if a.json => DiagnoseFormat::Json,
-        Some(f) => f,
-        None => DiagnoseFormat::Table,
+    // `--json` wins over `--format`, which defaults to a table.
+    let format = if a.json {
+        Some(Format::Json)
+    } else {
+        a.format.map_or(Some(Format::Table), DiagnoseFormat::shared)
     };
     let text = match format {
-        DiagnoseFormat::Table => text,
-        DiagnoseFormat::Json => Format::Json.structured(&doc)?.unwrap_or_default(),
-        DiagnoseFormat::Yaml => Format::Yaml.structured(&doc)?.unwrap_or_default(),
-        DiagnoseFormat::GithubIssue => github_issue(&doc)?,
+        Some(f) => f.structured(&doc)?.unwrap_or(text),
+        None => github_issue(&doc)?,
     };
     write!(&ctx.out, "{text}")?;
     Ok(code)
@@ -51,6 +50,8 @@ pub fn run<R: Runner>(ctx: &mut Ctx<R>, a: &DiagnoseArgs) -> Result<i32> {
 
 #[derive(serde::Serialize)]
 struct Check<'a> {
+    #[serde(skip)]
+    ok: bool,
     name: &'a str,
     status: &'static str,
     message: &'a str,
@@ -80,6 +81,7 @@ fn structured<'a>(named: &'a [(&'a str, (bool, String))]) -> Doc<'a> {
     let checks: Vec<Check> = named
         .iter()
         .map(|(name, (ok, message))| Check {
+            ok: *ok,
             name,
             status: if *ok { "pass" } else { "fail" },
             message,
@@ -87,7 +89,7 @@ fn structured<'a>(named: &'a [(&'a str, (bool, String))]) -> Doc<'a> {
             hint: "",
         })
         .collect();
-    let pass = named.iter().filter(|(_, (ok, _))| *ok).count();
+    let pass = checks.iter().filter(|c| c.ok).count();
     Doc {
         version: "1.0",
         summary: Summary {
@@ -119,7 +121,7 @@ fn github_issue(doc: &Doc) -> Result<String> {
         env!("CARGO_PKG_VERSION")
     );
     for c in &doc.checks {
-        let mark = if c.status == "pass" { "✓" } else { "✗" };
+        let mark = if c.ok { "✓" } else { "✗" };
         // A `|` or a line break in a message would end the cell.
         let message = c.message.replace('|', "\\|").replace('\n', " ");
         out.push_str(&format!("| {} | {mark} | {message} |\n", c.name));

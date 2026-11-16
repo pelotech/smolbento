@@ -1,6 +1,6 @@
 //! `bento policy`: the network policy.
 
-use anyhow::{Context, Result, bail};
+use anyhow::{Context, Result, anyhow, bail};
 use serde::Serialize;
 use std::collections::{BTreeMap, BTreeSet};
 use std::io::Write;
@@ -12,7 +12,7 @@ use super::{
 use crate::policy::log;
 use crate::policy::notes::{bound_conflict, deny_notes};
 use crate::policy::rules::{Resource, parse_list};
-use crate::policy::{Decision, Mode, Policy, Rule, compile, presets};
+use crate::policy::{Decision, Mode, Policy, Rule, compile, normalise_methods, presets};
 use crate::provision;
 use crate::provision::builder::BUILDER;
 use crate::sandbox::{self, name};
@@ -69,6 +69,16 @@ pub fn run<R: Runner>(ctx: &mut Ctx<R>, cmd: PolicyCmd) -> Result<i32> {
                     bail!("{flag} requires --resource\n  try: bento policy rm network --help");
                 }
             }
+            // The canonical list. An empty one would pick every rule: smolbento's own error.
+            let method = a
+                .method
+                .as_deref()
+                .map(|m| {
+                    normalise_methods(m).context(
+                        "--method names no HTTP method\n  try: bento policy rm network --help",
+                    )
+                })
+                .transpose()?;
             if a.id.is_none() && a.resource.is_none() {
                 bail!("pass --id or --resource");
             }
@@ -88,21 +98,22 @@ pub fn run<R: Runner>(ctx: &mut Ctx<R>, cmd: PolicyCmd) -> Result<i32> {
             let before = policy.clone();
             // Rules never carry a query, so --query matches none.
             let removed = a.query.is_none()
-                && policy.remove_matching(
+                && policy.remove_rules(
                     sandbox.as_deref(),
                     a.id.as_deref(),
                     a.resource.as_deref(),
-                    a.method.as_deref(),
+                    method.as_deref(),
                     a.path.as_deref(),
                 );
-            if !removed && a.resource.is_some() {
-                bail!(
-                    "remove network rule: remove-resource: not found; \
-                     use \"bento policy ls --wide\" to find rule IDs"
-                );
-            }
             if !removed {
-                bail!("no matching rules");
+                // sbx's error for a resource no rule has.
+                bail!(match a.resource {
+                    Some(_) => {
+                        "remove network rule: remove-resource: not found; \
+                         use \"bento policy ls --wide\" to find rule IDs"
+                    }
+                    None => "no matching rules",
+                });
             }
             policy.save(&ctx.paths)?;
             writeln!(&ctx.out, "Removed")?;
@@ -261,10 +272,45 @@ fn keeps_access_notes(before: &Policy, after: &Policy, sandboxes: &[(&str, bool)
         .collect()
 }
 
-/// The localhost warning and host access notes (stderr) for a rule change from `before` to
-/// `after`: `added` are the resources of a new rule with this decision in `scope` (none for a
-/// removal). Sandboxes are listed only when a `localhost` rule is involved; a failure to list is
-/// left to `push_network` to report.
+/// The localhost warning and host access notes for a rule change from `before` to `after`:
+/// `added` are the resources of a new rule with this decision in `scope` (none for a removal).
+/// Sandboxes are listed only when a `localhost` rule is involved; a failure to list is left to
+/// `push_network` to report.
+fn host_notes<R: Runner>(
+    ctx: &Ctx<R>,
+    before: &Policy,
+    after: &Policy,
+    scope: Option<&str>,
+    decision: Decision,
+    added: &[Resource],
+) -> Vec<String> {
+    let allowed = decision == Decision::Allow;
+    let mut notes: Vec<String> = Vec::new();
+    if allowed {
+        notes.extend(localhost_warning(scope, added));
+    }
+    let localhost = |p: &Policy| {
+        p.all_rules()
+            .any(|(r, _)| r.parsed().any(|x| compile::is_host_services(&x)))
+    };
+    if !localhost(before) && !localhost(after) {
+        return notes;
+    }
+    let Ok(sandboxes) = sandbox::list(&ctx.vm) else {
+        return notes;
+    };
+    let sbs: Vec<(&str, bool)> = sandboxes
+        .iter()
+        .map(|s| (s.name(), s.meta.host_access))
+        .collect();
+    if allowed && added.iter().any(compile::is_host_services) {
+        notes.extend(without_access_note(scope, &sbs));
+    }
+    notes.extend(keeps_access_notes(before, after, &sbs));
+    notes
+}
+
+/// `host_notes`, on stderr.
 fn print_host_notes<R: Runner>(
     ctx: &Ctx<R>,
     before: &Policy,
@@ -273,31 +319,7 @@ fn print_host_notes<R: Runner>(
     decision: Decision,
     added: &[Resource],
 ) {
-    let allowed = decision == Decision::Allow;
-    if allowed && let Some(w) = localhost_warning(scope, added) {
-        eprintln!("{w}");
-    }
-    let localhost = |p: &Policy| {
-        p.all_rules()
-            .any(|(r, _)| r.parsed().any(|x| compile::is_host_services(&x)))
-    };
-    if !localhost(before) && !localhost(after) {
-        return;
-    }
-    let Ok(sandboxes) = sandbox::list(&ctx.vm) else {
-        return;
-    };
-    let sbs: Vec<(&str, bool)> = sandboxes
-        .iter()
-        .map(|s| (s.name(), s.meta.host_access))
-        .collect();
-    if allowed
-        && added.iter().any(compile::is_host_services)
-        && let Some(n) = without_access_note(scope, &sbs)
-    {
-        eprintln!("{n}");
-    }
-    for n in keeps_access_notes(before, after, &sbs) {
+    for n in host_notes(ctx, before, after, scope, decision, added) {
         eprintln!("{n}");
     }
 }
@@ -462,19 +484,11 @@ impl<'a> Approval<'a> {
 
 /// Approvals are blocked hosts no rule mentions yet; the host is the id.
 fn approval<R: Runner>(ctx: &Ctx<R>, policy: &mut Policy, cmd: ApprovalCmd) -> Result<i32> {
-    // sbx (cobra) checks its required flag before it looks anything up.
-    if let ApprovalCmd::Respond {
-        decision: None,
-        option: None,
-        ..
-    } = &cmd
-    {
-        bail!("required flag(s) \"option\" not set\n  try: bento policy approval respond --help");
-    }
-    let rows = blocked_rows(ctx, None, APPROVAL_EVENTS)?;
-    let pending = log::pending(policy, &rows);
+    let blocked = || blocked_rows(ctx, None, APPROVAL_EVENTS);
     match cmd {
         ApprovalCmd::Ls { quiet, output } => {
+            let rows = blocked()?;
+            let pending = log::pending(policy, &rows);
             let list: Vec<Approval> = pending.iter().map(|r| Approval::of(r)).collect();
             if quiet {
                 for a in &list {
@@ -507,6 +521,8 @@ fn approval<R: Runner>(ctx: &Ctx<R>, policy: &mut Policy, cmd: ApprovalCmd) -> R
             }
         }
         ApprovalCmd::Inspect { id } => {
+            let rows = blocked()?;
+            let pending = log::pending(policy, &rows);
             // A pending one first; an answered one is still shown.
             let row = pending
                 .iter()
@@ -538,67 +554,134 @@ fn approval<R: Runner>(ctx: &Ctx<R>, policy: &mut Policy, cmd: ApprovalCmd) -> R
             option,
             sandbox,
         } => {
-            let seen: Vec<&str> = rows
-                .iter()
-                .filter(|r| r.host == id)
-                .map(|r| r.sandbox.as_str())
-                .collect();
-            if seen.is_empty() {
-                bail!("no blocked request for '{id}'\n  try: bento policy approval ls");
-            }
-            if let Some(s) = sandbox.as_deref()
-                && !seen.contains(&s)
-            {
-                bail!(
-                    "sandbox {s} has no blocked request for '{id}': it was blocked in {}",
-                    seen.join(", ")
-                );
-            }
-            // smolbento's older form: `ID allow|deny`, a rule for every sandbox unless --sandbox.
-            if let Some(decision) = decision {
-                let rule = RuleArgs {
-                    resources: id,
-                    sandbox,
-                    protocol: None,
-                    method: None,
-                    path: None,
-                };
-                add_rule(ctx, policy, decision, rule, "approval")?;
-                return Ok(0);
-            }
-            // sbx's form. An approval belongs to a sandbox, and so does the rule an allow makes.
-            let option = option.unwrap_or_default();
-            let waiting: Vec<(String, String)> = pending
-                .iter()
-                .filter(|r| r.host == id && sandbox.as_deref().is_none_or(|s| s == r.sandbox))
-                .map(|r| (r.sandbox.clone(), r.last_seen.clone()))
-                .collect();
-            if waiting.is_empty() {
-                bail!("approval {id:?} is not pending\n  try: bento policy approval ls");
-            }
-            let Some(answer) = OPTIONS.iter().find(|o| o.id == option) else {
-                bail!("approval {id:?} has no option {option:?}\n  try: bento policy approval ls");
+            // sbx (cobra) checks its required flag before it looks anything up.
+            let answer = match (decision, option) {
+                (Some(decision), _) => Answer::Rule(decision),
+                (None, Some(option)) => Answer::Option(option),
+                (None, None) => bail!(
+                    "required flag(s) \"option\" not set\n  \
+                     try: bento policy approval respond --help"
+                ),
             };
-            let allow = answer.id == "allow";
-            for (sb, last_seen) in waiting {
-                if allow {
-                    policy.add_rule(Some(&sb), Decision::Allow, &id, "approval", None, None)?;
-                } else {
-                    policy
-                        .dismissed
-                        .entry(sb)
-                        .or_default()
-                        .insert(id.clone(), last_seen);
-                }
-            }
-            policy.save(&ctx.paths)?;
-            writeln!(&ctx.out, "Recorded answer {}", answer.label)?;
-            if allow {
-                provision::push_network(ctx, policy)?;
-            }
+            respond(ctx, policy, &blocked()?, id, answer, sandbox)?;
         }
     }
     Ok(0)
+}
+
+/// How `approval respond` was answered.
+enum Answer {
+    /// sbx's `--option OPTION-ID`. An approval belongs to a sandbox, and so does the rule an
+    /// allow makes.
+    Option(String),
+    /// smolbento's older `ID allow|deny`: a rule for every sandbox unless --sandbox.
+    Rule(Decision),
+}
+
+fn respond<R: Runner>(
+    ctx: &Ctx<R>,
+    policy: &mut Policy,
+    rows: &[log::LogRow],
+    id: String,
+    answer: Answer,
+    sandbox: Option<String>,
+) -> Result<()> {
+    let seen: Vec<&str> = rows
+        .iter()
+        .filter(|r| r.host == id)
+        .map(|r| r.sandbox.as_str())
+        .collect();
+    if seen.is_empty() {
+        bail!("no blocked request for '{id}'\n  try: bento policy approval ls");
+    }
+    if let Some(s) = sandbox.as_deref()
+        && !seen.contains(&s)
+    {
+        bail!(
+            "sandbox {s} has no blocked request for '{id}': it was blocked in {}",
+            seen.join(", ")
+        );
+    }
+    let option = match answer {
+        Answer::Rule(decision) => {
+            let rule = RuleArgs {
+                resources: id,
+                sandbox,
+                protocol: None,
+                method: None,
+                path: None,
+            };
+            return add_rule(ctx, policy, decision, rule, "approval");
+        }
+        Answer::Option(option) => option,
+    };
+    let waiting: Vec<&log::LogRow> = log::pending(policy, rows)
+        .into_iter()
+        .filter(|r| r.host == id && sandbox.as_deref().is_none_or(|s| s == r.sandbox))
+        .collect();
+    if waiting.is_empty() {
+        bail!("approval {id:?} is not pending\n  try: bento policy approval ls");
+    }
+    let Some(answer) = OPTIONS.iter().find(|o| o.id == option) else {
+        bail!("approval {id:?} has no option {option:?}\n  try: bento policy approval ls");
+    };
+    let allow = answer.id == "allow";
+    let before = policy.clone();
+    for r in &waiting {
+        if allow {
+            policy.add_rule(
+                Some(&r.sandbox),
+                Decision::Allow,
+                &id,
+                "approval",
+                None,
+                None,
+            )?;
+        } else {
+            policy
+                .dismissed
+                .entry(r.sandbox.clone())
+                .or_default()
+                .insert(id.clone(), r.last_seen.clone());
+        }
+    }
+    policy.save(&ctx.paths)?;
+    writeln!(&ctx.out, "Recorded answer {}", answer.label)?;
+    if allow {
+        for n in approval_notes(ctx, &before, policy, &waiting, &id)? {
+            eprintln!("{n}");
+        }
+        provision::push_network(ctx, policy)?;
+    }
+    Ok(())
+}
+
+/// What `policy allow` would note (`host_notes`) for an approval's allow rule in each of the
+/// `waiting` sandboxes, each note once.
+fn approval_notes<R: Runner>(
+    ctx: &Ctx<R>,
+    before: &Policy,
+    after: &Policy,
+    waiting: &[&log::LogRow],
+    id: &str,
+) -> Result<Vec<String>> {
+    let added = parse_list(id)?;
+    let mut notes = Vec::new();
+    for r in waiting {
+        for n in host_notes(
+            ctx,
+            before,
+            after,
+            Some(&r.sandbox),
+            Decision::Allow,
+            &added,
+        ) {
+            if !notes.contains(&n) {
+                notes.push(n);
+            }
+        }
+    }
+    Ok(notes)
 }
 
 /// sbx's `policy check --json`, keys in its order, plus `reason` when allowed too.
@@ -628,10 +711,16 @@ fn check<R: Runner>(ctx: &Ctx<R>, policy: &Policy, a: &CheckArgs) -> Result<i32>
     let udp = match a.protocol.as_deref() {
         None | Some("tcp") => false,
         Some("udp") => true,
-        Some(other) => bail!(
-            "invalid argument {other:?} for \"--protocol\" flag: invalid protocol {other:?}: \
-             must be tcp or udp\n  try: bento policy check network --help"
-        ),
+        Some(other) => {
+            let command = "policy check network";
+            return Err(invalid_flag(
+                "--protocol",
+                other,
+                "protocol",
+                &["tcp", "udp"],
+                command,
+            ));
+        }
     };
     let bound = match &a.sandbox {
         Some(n) => sandbox::find(&ctx.vm, n)
@@ -706,6 +795,25 @@ fn check<R: Runner>(ctx: &Ctx<R>, policy: &Policy, a: &CheckArgs) -> Result<i32>
         writeln!(&ctx.out, "  {label:<13}{value}")?;
     }
     Ok(code)
+}
+
+/// sbx's (cobra's) error for a flag of `command` whose value isn't one of `allowed`.
+fn invalid_flag(
+    flag: &str,
+    value: &str,
+    what: &str,
+    allowed: &[&str],
+    command: &str,
+) -> anyhow::Error {
+    // sbx names two values as `a or b`, and more as `one of: a, b, c`.
+    let list = match allowed {
+        [a, b] => format!("{a} or {b}"),
+        _ => format!("one of: {}", allowed.join(", ")),
+    };
+    anyhow!(
+        "invalid argument {value:?} for \"{flag}\" flag: invalid {what} {value:?}: must be {list}\n  \
+         try: bento {command} --help"
+    )
 }
 
 fn capitalised(s: &str) -> String {
@@ -996,15 +1104,7 @@ fn check_filters(a: &PolicyLsArgs) -> Result<()> {
     ];
     for (flag, value, what, allowed) in checks {
         if let Some(v) = value.as_deref().filter(|v| !allowed.contains(v)) {
-            // sbx names two values as `a or b`, and more as `one of: a, b, c`.
-            let list = match allowed {
-                [a, b] => format!("{a} or {b}"),
-                _ => format!("one of: {}", allowed.join(", ")),
-            };
-            bail!(
-                "invalid argument \"{v}\" for \"{flag}\" flag: invalid {what} \"{v}\": must be \
-                 {list}\n  try: bento policy ls --help"
-            );
+            return Err(invalid_flag(flag, v, what, allowed, "policy ls"));
         }
     }
     // smolbento has no org rules: `org` matches nothing.

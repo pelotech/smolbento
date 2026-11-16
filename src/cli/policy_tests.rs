@@ -297,6 +297,70 @@ fn check_refuses_an_unknown_protocol_as_sbx_does() {
 }
 
 #[test]
+fn check_udp_to_port_53_reports_the_rules_denial_first() {
+    let mut t = test_env(&[]);
+    set_policy(&t, "mode = \"deny-all\"");
+    let udp = ["policy", "check", "network", "--protocol", "udp"];
+    // As measured in sbx: no allow rule is the reason, not DNS.
+    assert_eq!(
+        t.sbt(&[&udp[..], &["-v", "github.com:53"]].concat())
+            .unwrap(),
+        1
+    );
+    assert_eq!(
+        t.stdout(),
+        "  Denied:      github.com:53\n  Governance:  Local policy only\n  Context:     global\n  \
+         Reason:      no matching allow rule (default deny)\n  Action:      net:connect:udp\n  \
+         Resource:    net:domain github.com:53\n  Deny kind:   implicit\n"
+    );
+    // A deny rule's denial stays explicit on port 53.
+    t.sbt(&["policy", "deny", "network", "10.0.0.0/8"]).unwrap();
+    t.stdout();
+    assert_eq!(
+        t.sbt(&[&udp[..], &["--json", "10.1.2.3:53"]].concat())
+            .unwrap(),
+        1
+    );
+    let v: serde_json::Value = serde_json::from_str(&t.stdout()).unwrap();
+    assert_eq!(v["deny_kind"], "explicit");
+    assert!(
+        v["reason"].as_str().unwrap().starts_with("Deny rule "),
+        "{v}"
+    );
+}
+
+#[test]
+fn rm_refuses_an_empty_method_instead_of_matching_every_rule() {
+    let mut t = test_env(&[]);
+    set_policy(&t, "mode = \"deny-all\"");
+    t.sbt(&["policy", "allow", "network", "a.com"]).unwrap();
+    t.sbt(&[
+        "policy", "allow", "network", "a.com", "--method", "GET", "--path", "/v1/**",
+    ])
+    .unwrap();
+    let rm = ["policy", "rm", "network", "--resource", "a.com", "-f"];
+    // Not measured in sbx: smolbento's own error.
+    for method in ["", ",", " , "] {
+        let err = t
+            .sbt(&[&rm[..], &["--method", method]].concat())
+            .unwrap_err();
+        assert_eq!(
+            err.to_string(),
+            "--method names no HTTP method\n  try: bento policy rm network --help",
+            "{method:?}"
+        );
+        assert_eq!(super::super::exit_code(&err), 1);
+    }
+    // An empty path is no rule's path.
+    let err = t.sbt(&[&rm[..], &["--path", ""]].concat()).unwrap_err();
+    assert!(
+        err.to_string().contains("remove-resource: not found"),
+        "{err}"
+    );
+    assert_eq!(Policy::load(&t.ctx.paths).unwrap().rules.len(), 2);
+}
+
+#[test]
 fn rm_picks_a_rule_by_its_http_qualifiers() {
     let mut t = test_env(&[]);
     set_policy(&t, "mode = \"deny-all\"");
@@ -325,7 +389,8 @@ fn rm_picks_a_rule_by_its_http_qualifiers() {
     let p = Policy::load(&t.ctx.paths).unwrap();
     assert_eq!(p.rules.len(), 1);
     assert_eq!(p.rules[0].method, None);
-    // Without --resource there is nothing for them to pick from.
+    // Without --resource there is nothing for them to pick from. sbx's error was measured for
+    // --method only; --path and --query are assumed to say the same.
     for flag in ["--method", "--path", "--query"] {
         let err = t
             .sbt(&["policy", "rm", "network", flag, "GET", "-f"])
@@ -730,6 +795,58 @@ fn approval_respond_option_allow_adds_the_sandboxs_rule() {
 }
 
 #[test]
+fn approval_respond_option_allow_gives_the_notes_policy_allow_gives() {
+    let mut t = test_env(&[]);
+    set_policy(&t, "mode = \"deny-all\"");
+    running(&t, &[("sbx.name", "a1")]);
+    t.runner().ok(
+        &["machine", "egress-events"],
+        r#"[{"timestamp":"2026-10-26T10:00:00Z","operation":"resolve","dest":"localhost"}]"#,
+    );
+    // The notes go to stderr, so they are checked as the handler computes them.
+    let before = Policy::load(&t.ctx.paths).unwrap();
+    let mut after = before.clone();
+    after
+        .add_rule(
+            Some("a1"),
+            Decision::Allow,
+            "localhost",
+            "approval",
+            None,
+            None,
+        )
+        .unwrap();
+    let rows = blocked_rows(&t.ctx, None, APPROVAL_EVENTS).unwrap();
+    // The same sandbox twice: each note once.
+    let waiting = [&rows[0], &rows[0]];
+    assert_eq!(
+        approval_notes(&t.ctx, &before, &after, &waiting, "localhost").unwrap(),
+        [
+            "warning: smolvm can't open a single host port yet; this opens every port on your \
+             host's localhost to sandbox a1",
+            "note: a1 were created without host access; recreate them to use it"
+        ]
+    );
+    // Another host has none.
+    assert!(
+        approval_notes(&t.ctx, &before, &before, &waiting, "example.com")
+            .unwrap()
+            .is_empty()
+    );
+    t.sbt(&[
+        "policy",
+        "approval",
+        "respond",
+        "localhost",
+        "--option",
+        "allow",
+    ])
+    .unwrap();
+    assert!(t.stdout().starts_with("Recorded answer Allow\n"));
+    assert_eq!(Policy::load(&t.ctx.paths).unwrap(), after);
+}
+
+#[test]
 fn approval_respond_option_dismiss_adds_no_rule_until_blocked_again() {
     let mut t = test_env(&[]);
     set_policy(&t, "mode = \"deny-all\"");
@@ -750,7 +867,7 @@ fn approval_respond_option_dismiss_adds_no_rule_until_blocked_again() {
     t.sbt(&["policy", "approval", "ls", "--json"]).unwrap();
     assert_eq!(t.stdout(), "[]\n");
     assert!(t.sbt_err(&dismiss).contains("is not pending"));
-    // Blocked again later: it asks again.
+    // Blocked again later: it asks again (smolbento's choice; not measured in sbx).
     t.runner().ok(
         &["machine", "egress-events"],
         r#"[{"timestamp":"2026-10-26T12:00:00Z","operation":"resolve","dest":"example.com"}]"#,
@@ -933,7 +1050,7 @@ fn keeps_access_notes_name_open_sandboxes_with_host_access_that_lose_the_rule() 
         .add_rule(None, Decision::Allow, "localhost:80", "added", None, None)
         .unwrap();
     let mut after = before.clone();
-    after.remove_rules(None, None, Some("localhost:80"));
+    after.remove_rules(None, None, Some("localhost:80"), None, None);
     let sbs = [("a1", true), ("b2", false)];
     assert_eq!(
         keeps_access_notes(&before, &after, &sbs),
