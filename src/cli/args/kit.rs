@@ -19,6 +19,9 @@ pub enum KitCmd {
         /// Skip the source policy check; local kits only, no network
         #[arg(long)]
         offline: bool,
+        /// Accepted as in sbx; `extends:` parents aren't merged, so the output is the same
+        #[arg(long)]
+        resolved: bool,
     },
     /// Check a kit without running it
     Validate {

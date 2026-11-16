@@ -184,6 +184,16 @@ fn inspect_counts_a_v2_kits_credentials_and_rules() {
 }
 
 #[test]
+fn inspect_resolved_is_accepted_and_prints_the_same() {
+    let mut t = kit_env();
+    let full = v2_fixture("full");
+    t.sbt(&["kit", "inspect", &full]).unwrap();
+    let plain = t.stdout();
+    t.sbt(&["kit", "inspect", "--resolved", &full]).unwrap();
+    assert_eq!(t.stdout(), plain);
+}
+
+#[test]
 fn inspect_json_is_the_v2_shaped_document_even_for_v3() {
     let mut t = kit_env();
     let full = v2_fixture("full");

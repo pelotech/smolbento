@@ -31,9 +31,9 @@ bento policy ls claude-myrepo
 bento policy check network pypi.org
 # requests sandboxes made that were blocked
 bento policy log
-# blocked hosts with no rule yet
+# blocked hosts with no rule yet; answer with allow (a rule for that sandbox) or dismiss
 bento policy approval ls
-bento policy approval respond registry.example.com allow
+bento policy approval respond registry.example.com --option allow
 bento policy rm network --resource api.example.com
 # deny rules for this sandbox only
 bento create claude . --deny-network evil.com,tracker.example
@@ -69,7 +69,12 @@ network --id`), `--json` the same rules as `{"rules": [...]}`, and `-q` only the
 - `bento policy reset` stops running sandboxes, then removes the mode and every rule. The next create
   or start asks for a mode again.
 - Blocked requests come from smolvm's egress log. `policy approval` lists hosts with no rule yet;
-  the host is the approval ID.
+  the host is the approval ID. `--option dismiss` adds no rule and hides the host until it is
+  blocked again.
+- `policy check network --protocol udp HOST:PORT` checks a UDP destination. smolvm admits UDP
+  wherever its allow list admits TCP, except port 53: it answers DNS itself.
+- `policy rm network --resource HOST --method GET --path '/v1/**'` removes the host from the rule
+  with those methods and that path only.
 
 ### Host services
 

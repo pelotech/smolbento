@@ -116,6 +116,10 @@ pub struct Policy {
     pub rules: Vec<Rule>,
     #[serde(default, skip_serializing_if = "BTreeMap::is_empty")]
     pub sandboxes: BTreeMap<String, SandboxPolicy>,
+    /// Approvals answered `dismiss`: sandbox, then host, then the newest blocked request at the
+    /// time. A later block of the host asks again.
+    #[serde(default, skip_serializing_if = "BTreeMap::is_empty")]
+    pub dismissed: BTreeMap<String, BTreeMap<String, String>>,
 }
 
 /// `--method` as one canonical list: uppercase, comma-separated, sorted and deduped.
@@ -308,6 +312,21 @@ impl Policy {
         id: Option<&str>,
         resource: Option<&str>,
     ) -> bool {
+        self.remove_matching(sandbox, id, resource, None, None)
+    }
+
+    /// `remove_rules`, taking the resource only from rules with these HTTP qualifiers
+    /// (`policy rm --method/--path`): the same methods in any order, the same path. `None` is
+    /// any rule.
+    pub fn remove_matching(
+        &mut self,
+        sandbox: Option<&str>,
+        id: Option<&str>,
+        resource: Option<&str>,
+        method: Option<&str>,
+        path: Option<&str>,
+    ) -> bool {
+        let method = method.and_then(normalise_methods);
         let list = self.rules_mut(sandbox);
         let before: usize = list.iter().map(|r| r.resources.len()).sum();
         if let Some(id) = id {
@@ -315,7 +334,11 @@ impl Policy {
         }
         if let Some(res) = resource {
             // Kit rules go with their kit, never by resource.
-            for r in list.iter_mut().filter(|r| r.source() != "kit") {
+            for r in list.iter_mut().filter(|r| {
+                r.source() != "kit"
+                    && (method.is_none() || r.method == method)
+                    && path.is_none_or(|p| r.path.as_deref() == Some(p))
+            }) {
                 r.resources.retain(|x| !x.eq_ignore_ascii_case(res));
             }
             list.retain(|r| !r.resources.is_empty());
@@ -425,10 +448,12 @@ impl Policy {
         self.mode = None;
         self.rules.clear();
         self.sandboxes.clear();
+        self.dismissed.clear();
     }
 
     pub fn forget_sandbox(&mut self, sandbox: &str) {
         self.sandboxes.remove(sandbox);
+        self.dismissed.remove(sandbox);
     }
 }
 
@@ -553,6 +578,23 @@ mod tests {
         assert_eq!(a, again);
         assert_eq!(p.rules.len(), 1);
         assert!(p.remove_rules(None, None, Some("a.com")));
+        // HTTP qualifiers pick one of a resource's rules.
+        for (method, path) in [(Some("post,get"), Some("/v1/**")), (None, None)] {
+            let (m, pa) = (method.map(String::from), path.map(String::from));
+            p.add_rule(None, Decision::Allow, "h.com", "added", m, pa)
+                .unwrap();
+        }
+        let n = p.rules.len();
+        assert!(!p.remove_matching(None, None, Some("h.com"), Some("GET"), None));
+        assert!(!p.remove_matching(None, None, Some("h.com"), None, Some("/v2")));
+        assert!(p.remove_matching(None, None, Some("h.com"), Some("GET,POST"), Some("/v1/**")));
+        assert_eq!(p.rules.len(), n - 1);
+        assert!(
+            p.rules
+                .iter()
+                .any(|r| r.resources == ["h.com"] && r.method.is_none())
+        );
+        assert!(p.remove_rules(None, None, Some("h.com")));
         assert_eq!(p.rules[0].resources, vec!["b.com"]);
         assert!(p.remove_rules(None, Some(&a), None));
         assert!(p.rules.is_empty());

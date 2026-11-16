@@ -18,9 +18,17 @@ pub const SOURCES: [&str; 6] = [
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum Event {
-    Pick { name: String, from: PathBuf },
-    Duplicate { name: String, dir: PathBuf },
+    Pick {
+        name: String,
+        from: PathBuf,
+    },
+    Duplicate {
+        name: String,
+        dir: PathBuf,
+    },
     Loose(String),
+    /// A source directory that exists, before its entries.
+    Found(PathBuf),
     Missing(PathBuf),
 }
 
@@ -33,6 +41,7 @@ pub fn scan(home: &Path) -> Vec<Event> {
             events.push(Event::Missing(dir));
             continue;
         };
+        events.push(Event::Found(dir.clone()));
         let mut entries: Vec<_> = rd.filter_map(|e| e.ok()).collect();
         entries.sort_by_key(|e| e.file_name());
         for e in entries {

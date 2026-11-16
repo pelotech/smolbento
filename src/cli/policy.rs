@@ -59,11 +59,16 @@ pub fn run<R: Runner>(ctx: &mut Ctx<R>, cmd: PolicyCmd) -> Result<i32> {
         PolicyCmd::Rm {
             kind: PolicyRmKind::Network(a),
         } => {
-            super::refuse(&[
+            // sbx: the HTTP qualifiers pick one of a resource's rules.
+            for (set, flag) in [
                 (a.method.is_some(), "--method"),
                 (a.path.is_some(), "--path"),
                 (a.query.is_some(), "--query"),
-            ])?;
+            ] {
+                if set && a.resource.is_none() {
+                    bail!("{flag} requires --resource\n  try: bento policy rm network --help");
+                }
+            }
             if a.id.is_none() && a.resource.is_none() {
                 bail!("pass --id or --resource");
             }
@@ -81,8 +86,21 @@ pub fn run<R: Runner>(ctx: &mut Ctx<R>, cmd: PolicyCmd) -> Result<i32> {
                 _ => a.sandbox.clone(),
             };
             let before = policy.clone();
-            let removed =
-                policy.remove_rules(sandbox.as_deref(), a.id.as_deref(), a.resource.as_deref());
+            // Rules never carry a query, so --query matches none.
+            let removed = a.query.is_none()
+                && policy.remove_matching(
+                    sandbox.as_deref(),
+                    a.id.as_deref(),
+                    a.resource.as_deref(),
+                    a.method.as_deref(),
+                    a.path.as_deref(),
+                );
+            if !removed && a.resource.is_some() {
+                bail!(
+                    "remove network rule: remove-resource: not found; \
+                     use \"bento policy ls --wide\" to find rule IDs"
+                );
+            }
             if !removed {
                 bail!("no matching rules");
             }
@@ -388,48 +406,136 @@ pub fn render_log(rows: &[log::LogRow]) -> String {
 /// How many recent blocked requests per sandbox approvals look at (`policy log` shows 50).
 const APPROVAL_EVENTS: usize = 200;
 
+/// One answer an approval takes, as sbx lists them.
+#[derive(Clone, Copy, Serialize)]
+struct ApprovalOption {
+    id: &'static str,
+    label: &'static str,
+}
+
+/// sbx's options for a network approval.
+const OPTIONS: [ApprovalOption; 2] = [
+    ApprovalOption {
+        id: "allow",
+        label: "Allow",
+    },
+    ApprovalOption {
+        id: "dismiss",
+        label: "Dismiss",
+    },
+];
+
+/// sbx's approval (`policy approval ls --json`), keys in its order. smolvm's log has the host
+/// only: no port for the title, and no protocol for the detail.
+#[derive(Serialize)]
+struct Approval<'a> {
+    created_at: &'a str,
+    detail: String,
+    id: &'a str,
+    options: [ApprovalOption; 2],
+    sandbox_name: &'a str,
+    title: &'a str,
+}
+
+impl<'a> Approval<'a> {
+    fn of(row: &'a log::LogRow) -> Self {
+        let kind = if row.host.parse::<std::net::IpAddr>().is_ok() {
+            "ip"
+        } else {
+            "domain"
+        };
+        Approval {
+            created_at: &row.first_seen,
+            detail: format!("Resource type: {kind}\nno matching allow rule (default deny)"),
+            id: &row.host,
+            options: OPTIONS,
+            sandbox_name: &row.sandbox,
+            title: &row.host,
+        }
+    }
+
+    /// The detail on one line, as sbx's tables show it.
+    fn detail_line(&self) -> String {
+        self.detail.replace('\n', " ")
+    }
+}
+
 /// Approvals are blocked hosts no rule mentions yet; the host is the id.
 fn approval<R: Runner>(ctx: &Ctx<R>, policy: &mut Policy, cmd: ApprovalCmd) -> Result<i32> {
+    // sbx (cobra) checks its required flag before it looks anything up.
+    if let ApprovalCmd::Respond {
+        decision: None,
+        option: None,
+        ..
+    } = &cmd
+    {
+        bail!("required flag(s) \"option\" not set\n  try: bento policy approval respond --help");
+    }
     let rows = blocked_rows(ctx, None, APPROVAL_EVENTS)?;
     let pending = log::pending(policy, &rows);
     match cmd {
         ApprovalCmd::Ls { quiet, output } => {
+            let list: Vec<Approval> = pending.iter().map(|r| Approval::of(r)).collect();
             if quiet {
-                for r in &pending {
-                    writeln!(&ctx.out, "{}", r.host)?;
+                for a in &list {
+                    writeln!(&ctx.out, "{}", a.id)?;
                 }
-            } else if let Some(text) = output.structured(&pending)? {
+            } else if let Some(text) = output.structured(&list)? {
                 write!(&ctx.out, "{text}")?;
-            } else if pending.is_empty() {
-                writeln!(&ctx.out, "No pending approvals")?;
+            } else if list.is_empty() {
+                writeln!(&ctx.out, "No pending approvals.")?;
             } else {
-                let head = ["ID", "SANDBOX", "LAST SEEN", "COUNT"];
-                let mut lines = Vec::new();
-                for r in &pending {
-                    lines.push(vec![
-                        r.host.clone(),
-                        r.sandbox.clone(),
-                        r.last_seen.clone(),
-                        r.count.to_string(),
-                    ]);
-                }
+                let head = ["APPROVAL", "SANDBOX", "TITLE", "DETAIL", "OPTIONS"];
+                let lines = list
+                    .iter()
+                    .map(|a| {
+                        let options: Vec<String> = a
+                            .options
+                            .iter()
+                            .map(|o| format!("{} ({})", o.id, o.label))
+                            .collect();
+                        vec![
+                            a.id.to_string(),
+                            a.sandbox_name.to_string(),
+                            a.title.to_string(),
+                            a.detail_line(),
+                            options.join(", "),
+                        ]
+                    })
+                    .collect();
                 write!(&ctx.out, "{}", table(&head, lines))?;
             }
         }
         ApprovalCmd::Inspect { id } => {
-            let r = rows
+            // A pending one first; an answered one is still shown.
+            let row = pending
                 .iter()
+                .copied()
                 .find(|r| r.host == id)
+                .or_else(|| rows.iter().find(|r| r.host == id))
                 .with_context(|| format!("no blocked request for '{id}'"))?;
+            let a = Approval::of(row);
             writeln!(
                 &ctx.out,
-                "Host: {}\nSandbox: {}\nBlocked: {} time(s), last {}",
-                r.host, r.sandbox, r.count, r.last_seen
+                "  ○ APPROVAL {} — sandbox {}\n      {}\n      {}\n",
+                a.id,
+                a.sandbox_name,
+                a.title,
+                a.detail_line()
             )?;
+            let options = a
+                .options
+                .iter()
+                .map(|o| vec![o.id.to_string(), o.label.to_string()])
+                .collect();
+            for line in table(&["OPTION", "LABEL"], options).lines() {
+                writeln!(&ctx.out, "  {line}")?;
+            }
         }
         ApprovalCmd::Respond {
             id,
             decision,
+            option,
             sandbox,
         } => {
             let seen: Vec<&str> = rows
@@ -448,24 +554,85 @@ fn approval<R: Runner>(ctx: &Ctx<R>, policy: &mut Policy, cmd: ApprovalCmd) -> R
                     seen.join(", ")
                 );
             }
-            let rule = RuleArgs {
-                resources: id,
-                sandbox,
-                protocol: None,
-                method: None,
-                path: None,
+            // smolbento's older form: `ID allow|deny`, a rule for every sandbox unless --sandbox.
+            if let Some(decision) = decision {
+                let rule = RuleArgs {
+                    resources: id,
+                    sandbox,
+                    protocol: None,
+                    method: None,
+                    path: None,
+                };
+                add_rule(ctx, policy, decision, rule, "approval")?;
+                return Ok(0);
+            }
+            // sbx's form. An approval belongs to a sandbox, and so does the rule an allow makes.
+            let option = option.unwrap_or_default();
+            let waiting: Vec<(String, String)> = pending
+                .iter()
+                .filter(|r| r.host == id && sandbox.as_deref().is_none_or(|s| s == r.sandbox))
+                .map(|r| (r.sandbox.clone(), r.last_seen.clone()))
+                .collect();
+            if waiting.is_empty() {
+                bail!("approval {id:?} is not pending\n  try: bento policy approval ls");
+            }
+            let Some(answer) = OPTIONS.iter().find(|o| o.id == option) else {
+                bail!("approval {id:?} has no option {option:?}\n  try: bento policy approval ls");
             };
-            add_rule(ctx, policy, decision, rule, "approval")?;
+            let allow = answer.id == "allow";
+            for (sb, last_seen) in waiting {
+                if allow {
+                    policy.add_rule(Some(&sb), Decision::Allow, &id, "approval", None, None)?;
+                } else {
+                    policy
+                        .dismissed
+                        .entry(sb)
+                        .or_default()
+                        .insert(id.clone(), last_seen);
+                }
+            }
+            policy.save(&ctx.paths)?;
+            writeln!(&ctx.out, "Recorded answer {}", answer.label)?;
+            if allow {
+                provision::push_network(ctx, policy)?;
+            }
         }
     }
     Ok(0)
 }
 
+/// sbx's `policy check --json`, keys in its order, plus `reason` when allowed too.
+#[derive(Serialize)]
+struct CheckDoc<'a> {
+    action: &'static str,
+    allowed: bool,
+    context: &'a str,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    deny_kind: Option<&'static str>,
+    governance: Governance,
+    reason: String,
+    resource_type: &'static str,
+    resource_value: &'a str,
+    target: &'a str,
+    #[serde(rename = "type")]
+    kind: &'static str,
+}
+
+/// smolbento has no organization policy: never active.
+#[derive(Serialize)]
+struct Governance {
+    active: bool,
+}
+
 fn check<R: Runner>(ctx: &Ctx<R>, policy: &Policy, a: &CheckArgs) -> Result<i32> {
-    // --verbose is accepted as is: the deciding reason is always printed.
-    if a.protocol.as_deref().is_some_and(|p| p != "tcp") {
-        return Err(Unsupported("only tcp network rules are supported".into()).into());
-    }
+    let udp = match a.protocol.as_deref() {
+        None | Some("tcp") => false,
+        Some("udp") => true,
+        Some(other) => bail!(
+            "invalid argument {other:?} for \"--protocol\" flag: invalid protocol {other:?}: \
+             must be tcp or udp\n  try: bento policy check network --help"
+        ),
+    };
     let bound = match &a.sandbox {
         Some(n) => sandbox::find(&ctx.vm, n)
             .ok()
@@ -474,37 +641,79 @@ fn check<R: Runner>(ctx: &Ctx<R>, policy: &Policy, a: &CheckArgs) -> Result<i32>
             .unwrap_or_default(),
         None => Vec::new(),
     };
-    let v = compile::check(policy, a.sandbox.as_deref(), &bound, &a.target);
-    // sbx's shape, plus `reason` (the rule or default that decided). A bare host means port 443.
+    // A bare host means port 443, as in sbx.
     let target = match a.target.matches(':').count() {
         0 => format!("{}:443", a.target),
         // A bare IPv6 address.
         n if n > 1 && !a.target.contains(']') => format!("[{}]:443", a.target),
         _ => a.target.clone(),
     };
-    let doc = serde_json::json!({
-        "action": "net:connect:tcp",
-        "allowed": v.allowed,
-        "context": a.sandbox.as_deref().unwrap_or("global"),
-        "governance": { "active": false },
-        "reason": v.reason,
-        "resource_type": "net:domain",
-        "resource_value": target,
-        "target": target,
-        "type": "network",
-    });
+    let scope = a.sandbox.as_deref();
+    let v = if udp {
+        compile::check_udp(policy, scope, &bound, &a.target)
+    } else {
+        compile::check(policy, scope, &bound, &a.target)
+    };
+    let deny_kind = match (v.allowed, v.implicit) {
+        (true, _) => None,
+        (false, true) => Some("implicit"),
+        (false, false) => Some("explicit"),
+    };
+    let doc = CheckDoc {
+        action: if udp {
+            "net:connect:udp"
+        } else {
+            "net:connect:tcp"
+        },
+        allowed: v.allowed,
+        context: scope.unwrap_or("global"),
+        deny_kind,
+        governance: Governance { active: false },
+        // sbx's JSON starts a denial's reason with a capital.
+        reason: if v.allowed {
+            v.reason.clone()
+        } else {
+            capitalised(&v.reason)
+        },
+        resource_type: "net:domain",
+        resource_value: &target,
+        target: &target,
+        kind: "network",
+    };
+    let code = if v.allowed { 0 } else { 1 };
     if let Some(text) = a.output.structured(&doc)? {
         write!(&ctx.out, "{text}")?;
-        return Ok(if v.allowed { 0 } else { 1 });
+        return Ok(code);
     }
-    writeln!(
-        &ctx.out,
-        "{}: {} ({})",
-        a.target,
-        if v.allowed { "allowed" } else { "denied" },
-        v.reason
-    )?;
-    Ok(if v.allowed { 0 } else { 1 })
+    // sbx's block. It prints a reason only for a denial; smolbento always says what decided.
+    let mut lines = vec![
+        (
+            if v.allowed { "Allowed:" } else { "Denied:" },
+            target.clone(),
+        ),
+        ("Governance:", "Local policy only".to_string()),
+        ("Context:", doc.context.to_string()),
+        ("Reason:", v.reason.clone()),
+    ];
+    if a.verbose {
+        lines.push(("Action:", doc.action.to_string()));
+        lines.push(("Resource:", format!("{} {target}", doc.resource_type)));
+        if let Some(kind) = deny_kind {
+            lines.push(("Deny kind:", kind.to_string()));
+        }
+    }
+    for (label, value) in lines {
+        writeln!(&ctx.out, "  {label:<13}{value}")?;
+    }
+    Ok(code)
+}
+
+fn capitalised(s: &str) -> String {
+    let mut chars = s.chars();
+    match chars.next() {
+        Some(first) => first.to_uppercase().chain(chars).collect(),
+        None => String::new(),
+    }
 }
 
 /// One rule as sbx 0.53's `policy ls --json` has it, keys in sbx's order.

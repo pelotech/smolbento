@@ -350,13 +350,37 @@ fn admits(spec: &NetworkSpec, host: &str, mode: Mode) -> Option<String> {
 pub struct Verdict {
     pub allowed: bool,
     pub reason: String,
+    /// Denied with no deny rule involved (sbx's `deny_kind: implicit`).
+    pub implicit: bool,
 }
 
 fn verdict(allowed: bool, reason: impl Into<String>) -> Verdict {
     Verdict {
         allowed,
         reason: reason.into(),
+        implicit: false,
     }
+}
+
+/// `check` for a UDP destination. smolvm's allow list admits UDP wherever it admits TCP, so the
+/// rules decide the same way. The exception is port 53: smolvm answers DNS itself and never
+/// relays a datagram there.
+pub fn check_udp(
+    policy: &Policy,
+    sandbox: Option<&str>,
+    credential_hosts: &[String],
+    target: &str,
+) -> Verdict {
+    if split_port(target.trim()).is_ok_and(|(_, port)| port == Some(53)) {
+        return Verdict {
+            implicit: true,
+            ..verdict(
+                false,
+                "smolvm answers DNS itself; UDP to port 53 never reaches the target",
+            )
+        };
+    }
+    check(policy, sandbox, credential_hosts, target)
 }
 
 /// sbx semantics: bound secrets, then deny rules, then the mode, allow rules and the preset.
@@ -425,14 +449,18 @@ pub fn check(
     {
         return verdict(true, format!("balanced preset ({group})"));
     }
-    let text = format!("no rule allows it ({} mode)", mode.name());
+    // sbx's wording.
+    let text = "no matching allow rule (default deny)";
     // smolvm allows a host on every port, and widens wildcards: say so when it lets this through.
     match admits(&spec(), &host, mode) {
         Some(why) => verdict(
             true,
             format!("{text}, but smolvm still allows it via {why}"),
         ),
-        None => verdict(false, text),
+        None => Verdict {
+            implicit: true,
+            ..verdict(false, text)
+        },
     }
 }
 

@@ -132,7 +132,7 @@ Sign a kit with `bento kit sign --help`.
 |---|---|
 | `~/.smolbento/` | smolvm's state for smolbento's sandboxes (`smolvm.home`), and the downloaded smolvm in `engine/<version>/` |
 | `~/.config/smolbento/config.toml` | Settings written by `bento settings set` |
-| `~/.config/smolbento/policy.toml` | Network policy: mode, global and per-sandbox rules |
+| `~/.config/smolbento/policy.toml` | Network policy: mode, global and per-sandbox rules, dismissed approvals |
 | `~/.config/smolbento/mcp.toml` | Registered MCP servers |
 | `~/.config/smolbento/secrets.toml` | Where each secret comes from (never the value) |
 | `~/.config/smolbento/secret-values.toml` | Secret values, mode 0600, only where no OS keychain is usable (headless Linux, CI) |

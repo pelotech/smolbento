@@ -165,6 +165,7 @@ fn import<R: Runner>(ctx: &Ctx<R>, store: &Store, a: &SkillsImportArgs) -> Resul
                 dir.display()
             ),
             Event::Loose(n) => crate::warning!("skipping {n:?}: not a directory"),
+            Event::Found(d) => writeln!(&ctx.out, "Skills directory found at {}:", d.display())?,
             // As sbx: only with -v, on stdout, where the directory comes in the scan.
             Event::Missing(d) if a.verbose => writeln!(
                 &ctx.out,
@@ -696,9 +697,16 @@ mod tests {
         let store = t.ctx.paths.skills_store().display().to_string();
         t.sbt(&["skills", "import", "--dry-run"]).unwrap();
         let out = t.stdout();
-        assert_eq!(out.lines().next().unwrap(), "Would import skill \"beta\"");
+        // sbx names each directory it found before that directory's skills.
+        let (agents, claude) = (h.join(".agents/skills"), h.join(".claude/skills"));
         assert!(
-            out.contains("Would import skill \"alpha\"\nWould import skill \"linked\"\n"),
+            out.starts_with(&format!(
+                "Skills directory found at {}:\nWould import skill \"beta\"\n\
+                 Skills directory found at {}:\nWould import skill \"alpha\"\n\
+                 Would import skill \"linked\"\n",
+                agents.display(),
+                claude.display()
+            )),
             "{out}"
         );
         assert!(
@@ -729,8 +737,9 @@ mod tests {
         std::fs::write(home.path().join(".claude/skills/x.txt"), "").unwrap();
         let ev = scan(home.path());
         assert!(matches!(&ev[0], Event::Missing(p) if p.ends_with(".agents/skills")));
-        assert!(matches!(&ev[1], Event::Pick { name, .. } if name == "a"));
-        assert!(matches!(&ev[2], Event::Loose(n) if n == "x.txt"));
-        assert_eq!(ev.len(), 7); // 5 missing sources + pick + loose
+        assert!(matches!(&ev[1], Event::Found(p) if p.ends_with(".claude/skills")));
+        assert!(matches!(&ev[2], Event::Pick { name, .. } if name == "a"));
+        assert!(matches!(&ev[3], Event::Loose(n) if n == "x.txt"));
+        assert_eq!(ev.len(), 8); // 5 missing sources + found + pick + loose
     }
 }

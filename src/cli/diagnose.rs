@@ -4,10 +4,15 @@ use anyhow::Result;
 use std::io::Write;
 use std::path::PathBuf;
 
-use super::Ctx;
+use super::{Ctx, DiagnoseArgs, DiagnoseFormat, Format};
 use crate::smolvm::Runner;
 
-pub fn run<R: Runner>(ctx: &mut Ctx<R>, output: &super::OutputArgs) -> Result<i32> {
+pub fn run<R: Runner>(ctx: &mut Ctx<R>, a: &DiagnoseArgs) -> Result<i32> {
+    // Refused before any check runs: nothing is ever sent anywhere.
+    super::refuse_as(
+        &[(a.upload, "--upload")],
+        "isn't supported: smolbento has no support service to upload a report to",
+    )?;
     // Named for `--json`, as sbx names its checks.
     let mut named = vec![
         ("smolvm", smolvm_check(ctx)),
@@ -28,21 +33,50 @@ pub fn run<R: Runner>(ctx: &mut Ctx<R>, output: &super::OutputArgs) -> Result<i3
     named.extend(services_check(ctx).map(|c| ("host services", c)));
     let checks: Vec<(bool, String)> = named.iter().map(|(_, c)| c.clone()).collect();
     let (text, code) = report(&checks);
-    let text = output.structured(&structured(&named))?.unwrap_or(text);
+    let doc = structured(&named);
+    let format = match a.format {
+        _ if a.json => DiagnoseFormat::Json,
+        Some(f) => f,
+        None => DiagnoseFormat::Table,
+    };
+    let text = match format {
+        DiagnoseFormat::Table => text,
+        DiagnoseFormat::Json => Format::Json.structured(&doc)?.unwrap_or_default(),
+        DiagnoseFormat::Yaml => Format::Yaml.structured(&doc)?.unwrap_or_default(),
+        DiagnoseFormat::GithubIssue => github_issue(&doc)?,
+    };
     write!(&ctx.out, "{text}")?;
     Ok(code)
 }
 
-/// sbx's `diagnose --json` shape: `{version, checks: [{name, status, message, detail, hint}]}`.
-fn structured<'a>(named: &'a [(&'a str, (bool, String))]) -> impl serde::Serialize + 'a {
-    #[derive(serde::Serialize)]
-    struct Check<'a> {
-        name: &'a str,
-        status: &'static str,
-        message: &'a str,
-        detail: &'static str,
-        hint: &'static str,
-    }
+#[derive(serde::Serialize)]
+struct Check<'a> {
+    name: &'a str,
+    status: &'static str,
+    message: &'a str,
+    detail: &'static str,
+    hint: &'static str,
+}
+
+/// How many checks ended in each of sbx's states; smolbento's checks only pass or fail.
+#[derive(serde::Serialize)]
+struct Summary {
+    pass: usize,
+    warn: usize,
+    fail: usize,
+    skip: usize,
+}
+
+/// sbx's `diagnose --json` shape: `{version, checks: [{name, status, message, detail, hint}],
+/// summary}`.
+#[derive(serde::Serialize)]
+struct Doc<'a> {
+    version: &'static str,
+    checks: Vec<Check<'a>>,
+    summary: Summary,
+}
+
+fn structured<'a>(named: &'a [(&'a str, (bool, String))]) -> Doc<'a> {
     let checks: Vec<Check> = named
         .iter()
         .map(|(name, (ok, message))| Check {
@@ -53,15 +87,48 @@ fn structured<'a>(named: &'a [(&'a str, (bool, String))]) -> impl serde::Seriali
             hint: "",
         })
         .collect();
-    #[derive(serde::Serialize)]
-    struct Doc<'a> {
-        version: &'static str,
-        checks: Vec<Check<'a>>,
-    }
+    let pass = named.iter().filter(|(_, (ok, _))| *ok).count();
     Doc {
         version: "1.0",
+        summary: Summary {
+            pass,
+            warn: 0,
+            fail: checks.len() - pass,
+            skip: 0,
+        },
         checks,
     }
+}
+
+/// sbx's `--format github-issue`: Markdown to paste into an issue, with the JSON folded away.
+/// OS and architecture are named as sbx (Go) names them.
+fn github_issue(doc: &Doc) -> Result<String> {
+    let os = match std::env::consts::OS {
+        "macos" => "darwin",
+        os => os,
+    };
+    let arch = match std::env::consts::ARCH {
+        "aarch64" => "arm64",
+        "x86_64" => "amd64",
+        arch => arch,
+    };
+    let mut out = format!(
+        "### bento diagnose report\n\n**OS:** {os}\n**Arch:** {arch}\n\
+         **smolbento Version:** v{}\n\n\
+         | Check | Status | Message |\n|-------|--------|---------|\n",
+        env!("CARGO_PKG_VERSION")
+    );
+    for c in &doc.checks {
+        let mark = if c.status == "pass" { "✓" } else { "✗" };
+        // A `|` or a line break in a message would end the cell.
+        let message = c.message.replace('|', "\\|").replace('\n', " ");
+        out.push_str(&format!("| {} | {mark} | {message} |\n", c.name));
+    }
+    out.push_str(&format!(
+        "\n<details>\n<summary>Full JSON output</summary>\n\n```json\n{}\n```\n\n</details>\n",
+        serde_json::to_string_pretty(doc)?
+    ));
+    Ok(out)
 }
 
 pub fn report(checks: &[(bool, String)]) -> (String, i32) {
@@ -365,6 +432,92 @@ mod tests {
         for key in ["message", "detail", "hint"] {
             assert!(first[key].is_string(), "{key}");
         }
+    }
+
+    #[test]
+    fn github_issue_is_sbxs_report_with_the_json_folded() {
+        let named = [
+            ("smolvm", (true, "smolvm 1.35.1 (pinned)".to_string())),
+            ("config", (false, "config a|b: bad".to_string())),
+        ];
+        let out = github_issue(&structured(&named)).unwrap();
+        let (head, rest) = out.split_once("| Check |").unwrap();
+        let mut lines = head.lines();
+        assert_eq!(lines.next(), Some("### bento diagnose report"));
+        assert_eq!(lines.next(), Some(""));
+        assert!(lines.next().unwrap().starts_with("**OS:** "));
+        assert!(lines.next().unwrap().starts_with("**Arch:** "));
+        assert_eq!(
+            lines.next().unwrap(),
+            format!("**smolbento Version:** v{}", env!("CARGO_PKG_VERSION"))
+        );
+        assert_eq!(
+            rest,
+            r#" Status | Message |
+|-------|--------|---------|
+| smolvm | ✓ | smolvm 1.35.1 (pinned) |
+| config | ✗ | config a\|b: bad |
+
+<details>
+<summary>Full JSON output</summary>
+
+```json
+{
+  "version": "1.0",
+  "checks": [
+    {
+      "name": "smolvm",
+      "status": "pass",
+      "message": "smolvm 1.35.1 (pinned)",
+      "detail": "",
+      "hint": ""
+    },
+    {
+      "name": "config",
+      "status": "fail",
+      "message": "config a|b: bad",
+      "detail": "",
+      "hint": ""
+    }
+  ],
+  "summary": {
+    "pass": 1,
+    "warn": 0,
+    "fail": 1,
+    "skip": 0
+  }
+}
+```
+
+</details>
+"#
+        );
+    }
+
+    #[test]
+    fn format_github_issue_keeps_the_exit_code() {
+        let mut t = test_env(&[]);
+        break_config(&mut t);
+        assert_eq!(t.sbt(&["diagnose", "--format", "github-issue"]).unwrap(), 1);
+        let out = t.stdout();
+        assert!(
+            out.starts_with("### bento diagnose report\n\n**OS:** "),
+            "{out}"
+        );
+        assert!(out.ends_with("```\n\n</details>\n"), "{out}");
+    }
+
+    #[test]
+    fn upload_is_refused_before_anything_runs() {
+        let mut t = test_env(&[]);
+        let err = t.sbt(&["diagnose", "--upload"]).unwrap_err();
+        assert_eq!(super::super::exit_code(&err), 2);
+        assert_eq!(
+            err.to_string(),
+            "--upload isn't supported: smolbento has no support service to upload a report to"
+        );
+        assert_eq!(t.stdout(), "");
+        assert!(t.calls().is_empty());
     }
 
     #[test]

@@ -174,7 +174,7 @@ pub fn dispatch<R: Runner>(ctx: &mut Ctx<R>, cli: Cli) -> Result<i32> {
             clap_complete::generate(shell, &mut Cli::command(), &ctx.program, &mut &ctx.out);
             Ok(0)
         }
-        Cmd::Diagnose(o) => diagnose::run(ctx, &o),
+        Cmd::Diagnose(a) => diagnose::run(ctx, &a),
         Cmd::Settings(s) => settings::run(ctx, s),
         Cmd::Policy(p) => policy::run(ctx, p),
         Cmd::Secret(s) => secret::run(ctx, s),
@@ -426,15 +426,6 @@ mod tests {
         for args in [
             &["template", "ls", "--digests"][..],
             &["policy", "ls", "--profile", "strict"],
-            &[
-                "policy",
-                "rm",
-                "network",
-                "--resource",
-                "x.com",
-                "--method",
-                "GET",
-            ],
             &["create", "claude", ".", "--profile", "strict"],
         ] {
             let err = t.sbt(args).unwrap_err();
