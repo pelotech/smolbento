@@ -65,7 +65,7 @@ kits you trust.
 - Registry transport is HTTPS, except for loopback registries (`localhost`, `127.0.0.0/8`,
   `::1`), which use plain HTTP, as in Docker.
 - Kit network rules apply to their sandbox only, even under `deny-all`. `bento policy ls --source kit`
-  lists them, one `kit:NAME` row per sandbox. Deny rules always win: to block a host a kit allows,
+  lists them, one `kit:NAME` policy per sandbox. Deny rules always win: to block a host a kit allows,
   run `bento policy deny network --sandbox NAME HOST`.
 - Install-only rules aren't listed by `policy ls`, as in sbx. They apply from create through the
   first start's setup and install steps, then go, and later starts never use them. `bento rm` removes

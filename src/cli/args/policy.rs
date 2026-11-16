@@ -118,9 +118,9 @@ pub struct PolicyRmArgs {
 pub struct PolicyLsArgs {
     #[arg(long, hide = true)]
     pub profile: Option<String>,
-    /// Only rules that apply to this sandbox
+    /// Summarise what applies to this sandbox
     pub sandbox: Option<String>,
-    /// Show every resource and enforcement notes
+    /// Show a row per rule, with every resource
     #[arg(long)]
     pub wide: bool,
     #[command(flatten)]
@@ -134,13 +134,24 @@ pub struct PolicyLsArgs {
     /// Only allow or only deny rules
     #[arg(long, value_name = "allow|deny")]
     pub decision: Option<String>,
-    #[arg(long = "created-via", hide = true)]
+    /// Only rules created this way
+    #[arg(
+        long = "created-via",
+        value_name = "default|added|provisioned|approval"
+    )]
     pub created_via: Option<String>,
-    #[arg(long = "type", hide = true)]
+    /// Only rules of this type
+    #[arg(
+        long = "type",
+        value_name = "all|network|http|filesystem",
+        default_value = "all"
+    )]
     pub kind: Option<String>,
-    #[arg(long, hide = true)]
+    /// Only rules for this protocol
+    #[arg(long, value_name = "tcp|udp")]
     pub protocol: Option<String>,
-    #[arg(long = "include-inactive", hide = true)]
+    /// Accepted as in sbx; every smolbento rule is active
+    #[arg(long = "include-inactive")]
     pub include_inactive: bool,
 }
 

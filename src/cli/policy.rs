@@ -2,16 +2,17 @@
 
 use anyhow::{Context, Result, bail};
 use serde::Serialize;
+use std::collections::{BTreeMap, BTreeSet};
 use std::io::Write;
 
 use super::{
-    ApprovalCmd, CheckArgs, CheckKind, Ctx, Format, PolicyCmd, PolicyRmKind, RuleArgs, RuleKind,
-    Unsupported, confirm, table,
+    ApprovalCmd, CheckArgs, CheckKind, Ctx, PolicyCmd, PolicyLsArgs, PolicyRmKind, RuleArgs,
+    RuleKind, Unsupported, confirm, table,
 };
 use crate::policy::log;
 use crate::policy::notes::{bound_conflict, deny_notes};
 use crate::policy::rules::{Resource, parse_list};
-use crate::policy::{Decision, Mode, Policy, compile, presets};
+use crate::policy::{Decision, Mode, Policy, Rule, compile, presets};
 use crate::provision;
 use crate::provision::builder::BUILDER;
 use crate::sandbox::{self, name};
@@ -90,45 +91,7 @@ pub fn run<R: Runner>(ctx: &mut Ctx<R>, cmd: PolicyCmd) -> Result<i32> {
             print_host_notes(ctx, &before, &policy, None, Decision::Deny, &[]);
             provision::push_network(ctx, &policy)?;
         }
-        PolicyCmd::Ls(a) => {
-            super::refuse(&[
-                (a.created_via.is_some(), "--created-via"),
-                (a.kind.is_some(), "--type"),
-                (a.protocol.is_some(), "--protocol"),
-                (a.include_inactive, "--include-inactive"),
-                (a.profile.is_some(), "--profile"),
-            ])?;
-            let decision = match a.decision.as_deref() {
-                None => None,
-                Some("allow") => Some(Decision::Allow),
-                Some("deny") => Some(Decision::Deny),
-                Some(other) => bail!("--decision takes allow or deny, not '{other}'"),
-            };
-            let source = match a.source.as_deref() {
-                None => None,
-                Some(s @ ("local" | "org" | "kit" | "mcp")) => Some(s),
-                Some(other) => bail!("--source takes local, org, kit or mcp, not '{other}'"),
-            };
-            let format = a.output.pick();
-            let opts = LsOpts {
-                sandbox: a.sandbox.as_deref(),
-                source,
-                decision,
-                format,
-                wide: a.wide,
-                quiet: a.quiet,
-            };
-            let rows = ls_rows(&policy, &opts);
-            write!(&ctx.out, "{}", render_ls(&policy, &rows, &opts)?)?;
-            // stderr, so the table stays what sbx prints.
-            if format == Format::Table
-                && !a.wide
-                && !a.quiet
-                && let Some(note) = ls_note(&rows)
-            {
-                eprintln!("{note}");
-            }
-        }
+        PolicyCmd::Ls(a) => ls(ctx, &policy, &a)?,
         PolicyCmd::Inspect { id, output } => {
             let (rule, scope) = policy
                 .find(&id)
@@ -544,193 +507,568 @@ fn check<R: Runner>(ctx: &Ctx<R>, policy: &Policy, a: &CheckArgs) -> Result<i32>
     Ok(if v.allowed { 0 } else { 1 })
 }
 
+/// One rule as sbx 0.53's `policy ls --json` has it, keys in sbx's order.
 #[derive(Serialize)]
-struct LsRow {
+struct LsRule {
     id: String,
-    /// Only kit rows have one: `kit:<sandbox>`.
-    #[serde(skip_serializing_if = "String::is_empty")]
+    /// The id, except `approval:<id>` for an approved request and `kit:<sandbox>` for kit rules.
     name: String,
-    source: String,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    policy_id: Option<String>,
+    /// Only the fallback has one, in place of a `policy_id`.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    policy_name: Option<&'static str>,
+    scope: String,
     applies_to: String,
-    decision: String,
+    /// `network`, or `http` for a rule with a method or a path.
+    resource_type: &'static str,
+    decision: &'static str,
     resources: Vec<String>,
-    notes: Vec<String>,
-    /// Only kit rows say so (`false`); they change with their kits, not by `policy rm`.
-    #[serde(skip_serializing_if = "is_true")]
+    origin: &'static str,
+    /// sbx's source: `local` or `kit` (and smolbento's `mcp`).
+    layer: &'static str,
+    status: &'static str,
+    /// What the fallback is, or how smolvm enforces the rule more loosely than sbx would.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    reason: Option<String>,
     editable: bool,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    sandbox_id: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    provenance: Option<Provenance>,
+    actions: Vec<&'static str>,
+    #[serde(skip)]
+    method: Option<String>,
+    #[serde(skip)]
+    path: Option<String>,
 }
 
-fn is_true(b: &bool) -> bool {
-    *b
+#[derive(Serialize)]
+struct Provenance {
+    created_via: &'static str,
 }
 
-/// What `policy ls` lists, and how.
-#[derive(Default)]
-struct LsOpts<'a> {
-    sandbox: Option<&'a str>,
-    /// `local`, `org` or `kit`; smolbento has no org rules, and the balanced preset counts as local.
-    source: Option<&'a str>,
-    decision: Option<Decision>,
-    format: Format,
-    wide: bool,
-    quiet: bool,
+const TCP: &str = "net:connect:tcp";
+const UDP: &str = "net:connect:udp";
+const FALLBACK_REASON: &str = "Implicit fallback when no applicable policy decides the request.";
+
+impl LsRule {
+    /// What the POLICY column of the table shows.
+    fn policy(&self) -> &str {
+        self.policy_id
+            .as_deref()
+            .or(self.policy_name)
+            .unwrap_or("-")
+    }
+
+    fn created_via(&self) -> Option<&'static str> {
+        self.provenance.as_ref().map(|p| p.created_via)
+    }
+
+    fn protocols(&self) -> Vec<&'static str> {
+        self.actions
+            .iter()
+            .map(|a| a.trim_start_matches("net:connect:"))
+            .collect()
+    }
 }
 
-/// For the table without --wide (stderr): how many listed rules have enforcement notes.
-fn ls_note(rows: &[LsRow]) -> Option<String> {
-    let n = rows.iter().filter(|r| !r.notes.is_empty()).count();
-    (n > 0)
-        .then(|| format!("note: {n} rule(s) aren't fully enforced; see `bento policy ls --wide`"))
+/// A rule of `policy` in `scope` (a sandbox, else global), for the listing.
+fn ls_rule(rule: &Rule, scope: Option<&str>) -> LsRule {
+    let mut notes: Vec<String> = rule
+        .parsed()
+        .filter_map(|r| {
+            let note = r.note(rule.decision == Decision::Deny)?;
+            Some(format!("{}: {note}", r.raw))
+        })
+        .collect();
+    for (label, value) in [("method", &rule.method), ("path", &rule.path)] {
+        if let Some(v) = value {
+            notes.push(format!("{label} {v} not enforced"));
+        }
+    }
+    let layer = rule.source();
+    let policy_id = match (layer, scope) {
+        ("local", None) => "local-policy".to_string(),
+        ("local", Some(s)) => format!("sandbox:{s}"),
+        (layer, Some(s)) => format!("{layer}:{s}"),
+        (layer, None) => layer.to_string(),
+    };
+    let scoped = scope.map(|s| format!("sandbox:{s}"));
+    LsRule {
+        name: match rule.created_via.as_str() {
+            "approval" => format!("approval:{}", rule.id),
+            _ => rule.id.clone(),
+        },
+        id: rule.id.clone(),
+        policy_id: Some(policy_id),
+        policy_name: None,
+        scope: scoped.clone().unwrap_or_else(|| "global".into()),
+        applies_to: scoped.unwrap_or_else(|| "all".into()),
+        resource_type: if rule.method.is_some() || rule.path.is_some() {
+            "http"
+        } else {
+            "network"
+        },
+        decision: rule.decision.name(),
+        resources: rule.resources.clone(),
+        origin: if scope.is_some() { "scoped" } else { "local" },
+        layer,
+        status: "active",
+        reason: (!notes.is_empty()).then(|| notes.join("; ")),
+        editable: true,
+        sandbox_id: scope.map(String::from),
+        provenance: Some(Provenance {
+            created_via: match rule.created_via.as_str() {
+                "approval" => "approval",
+                _ if layer == "local" => "added",
+                _ => "provisioned",
+            },
+        }),
+        // As in sbx: an allow opens tcp, a deny closes both.
+        actions: match rule.decision {
+            Decision::Allow => vec![TCP],
+            Decision::Deny => vec![TCP, UDP],
+        },
+        method: rule.method.clone(),
+        path: rule.path.clone(),
+    }
 }
 
-fn ls_rows(policy: &Policy, opts: &LsOpts) -> Vec<LsRow> {
+/// Every rule `policy ls` lists, in sbx's order: the balanced preset's groups, the rules (for
+/// `sandbox`: the global ones and its own), each sandbox's kit rules, and last the fallback, which
+/// is how sbx shows what happens when no rule decides: the mode.
+fn ls_rules(policy: &Policy, sandbox: Option<&str>) -> Vec<LsRule> {
     let mut rows = Vec::new();
     if policy.mode == Some(Mode::Balanced) {
         for (group, resources) in presets::GROUPS {
-            rows.push(LsRow {
+            rows.push(LsRule {
                 id: group.to_string(),
-                source: "default".into(),
+                name: group.to_string(),
+                policy_id: Some("local-policy".into()),
+                policy_name: None,
+                scope: "global".into(),
                 applies_to: "all".into(),
-                decision: "allow".into(),
+                resource_type: "network",
+                decision: "allow",
                 resources: resources.iter().map(|r| r.to_string()).collect(),
-                notes: Vec::new(),
+                origin: "local",
+                layer: "local",
+                status: "active",
+                reason: None,
                 editable: true,
-                name: String::new(),
+                sandbox_id: None,
+                provenance: Some(Provenance {
+                    created_via: "default",
+                }),
+                actions: vec![TCP],
+                method: None,
+                path: None,
             });
         }
     }
-    let rules: Vec<_> = match opts.sandbox {
+    let rules: Vec<_> = match sandbox {
         Some(s) => policy.rules_for(Some(s)).collect(),
         None => policy.all_rules().collect(),
     };
-    // sbx shows one `kit:<sandbox>` policy per sandbox, whatever kits made it. The per-kit rules
+    // sbx shows one `kit:<sandbox>` rule per sandbox, whatever kits made it. The per-kit rules
     // stay in the store (rollback and `kit add` need them); only the listing aggregates.
-    let mut kit_rows: Vec<LsRow> = Vec::new();
+    let mut kit_rows: Vec<LsRule> = Vec::new();
     for (rule, scope) in rules {
-        let mut notes: Vec<String> = rule
-            .parsed()
-            .filter_map(|r| {
-                let note = r.note(rule.decision == Decision::Deny)?;
-                Some(format!("{}: {note}", r.raw))
-            })
-            .collect();
-        for (label, value) in [("method", &rule.method), ("path", &rule.path)] {
-            if let Some(v) = value {
-                notes.push(format!("{label} {v} not enforced"));
-            }
-        }
         // sbx doesn't list install-only hosts after create.
         if rule.is_kit_install() {
             continue;
         }
-        if rule.source() == "kit"
-            && let Some(sandbox) = scope
-        {
-            // (Kit rules always carry a sandbox scope; a scopeless one lists as a plain rule.)
-            let name = format!("kit:{sandbox}");
-            let decision = rule.decision.name();
-            let at = kit_rows
-                .iter()
-                .position(|r| r.name == name && r.decision == decision);
-            let row = match at {
-                Some(i) => &mut kit_rows[i],
-                None => {
-                    // The allow rule is the one sbx shows; a kit deny rule gets its own id.
-                    let id = match rule.decision {
-                        Decision::Allow => crate::policy::kit_rule_id(sandbox),
-                        Decision::Deny => crate::policy::kit_rule_id(&format!("{sandbox}|deny")),
-                    };
-                    kit_rows.push(LsRow {
-                        id,
-                        name,
-                        source: "kit".into(),
-                        applies_to: format!("sandbox:{sandbox}"),
-                        decision: decision.into(),
-                        resources: Vec::new(),
-                        notes: Vec::new(),
-                        editable: false,
-                    });
-                    kit_rows.last_mut().expect("just pushed")
-                }
-            };
-            for r in &rule.resources {
-                if !row.resources.contains(r) {
-                    row.resources.push(r.clone());
-                }
-            }
-            row.notes.extend(notes);
+        let row = ls_rule(rule, scope);
+        let note = row.reason.clone();
+        // (Kit rules always carry a sandbox scope; a scopeless one lists as a plain rule.)
+        let Some(sandbox) = scope.filter(|_| row.layer == "kit") else {
+            rows.push(row);
             continue;
+        };
+        let name = format!("kit:{sandbox}");
+        let at = kit_rows
+            .iter()
+            .position(|r| r.name == name && r.decision == row.decision);
+        let kit = match at {
+            Some(i) => &mut kit_rows[i],
+            None => {
+                // The allow rule is the one sbx shows; a kit deny rule gets its own id.
+                let id = match rule.decision {
+                    Decision::Allow => crate::policy::kit_rule_id(sandbox),
+                    Decision::Deny => crate::policy::kit_rule_id(&format!("{sandbox}|deny")),
+                };
+                kit_rows.push(LsRule {
+                    id,
+                    name,
+                    resource_type: "network",
+                    resources: Vec::new(),
+                    reason: None,
+                    // They change with their kits, not by `policy rm`.
+                    editable: false,
+                    method: None,
+                    path: None,
+                    ..row
+                });
+                kit_rows.last_mut().expect("just pushed")
+            }
+        };
+        for r in &rule.resources {
+            if !kit.resources.contains(r) {
+                kit.resources.push(r.clone());
+            }
         }
-        rows.push(LsRow {
-            id: rule.id.clone(),
-            name: String::new(),
-            source: rule.source().into(),
-            applies_to: scope.unwrap_or("all").into(),
-            decision: rule.decision.name().into(),
-            resources: rule.resources.clone(),
-            notes,
-            editable: true,
-        });
+        if let Some(note) = note {
+            kit.reason = Some(match kit.reason.take() {
+                Some(earlier) => format!("{earlier}; {note}"),
+                None => note,
+            });
+        }
     }
     rows.extend(kit_rows);
-    if let Some(d) = opts.decision {
-        rows.retain(|r| r.decision == d.name());
-    }
-    if let Some(want) = opts.source {
-        rows.retain(|r| match r.source.as_str() {
-            "default" => want == "local",
-            kind => kind == want,
-        });
-    }
+    let (id, decision) = match policy.current_mode() {
+        Mode::AllowAll => ("default-allow-all", "allow"),
+        Mode::Balanced | Mode::DenyAll => ("default-deny-all", "deny"),
+    };
+    rows.push(LsRule {
+        id: id.into(),
+        name: id.into(),
+        policy_id: None,
+        policy_name: Some(id),
+        scope: "global".into(),
+        applies_to: "all".into(),
+        resource_type: "network",
+        decision,
+        resources: vec!["**".into()],
+        origin: "local",
+        layer: "local",
+        status: "active",
+        reason: Some(FALLBACK_REASON.into()),
+        editable: false,
+        sandbox_id: None,
+        provenance: None,
+        actions: vec![TCP, UDP],
+        method: None,
+        path: None,
+    });
     rows
 }
 
-fn render_ls(policy: &Policy, rows: &[LsRow], opts: &LsOpts) -> Result<String> {
-    let wide = opts.wide;
-    if opts.quiet {
-        return Ok(rows.iter().map(|r| format!("{}\n", r.id)).collect());
+/// `policy ls`'s filters, each already checked.
+#[derive(Default)]
+struct LsFilter<'a> {
+    decision: Option<&'a str>,
+    /// `local`, `org` or `kit` (and smolbento's `mcp`). smolbento has no org rules.
+    source: Option<&'a str>,
+    created_via: Option<&'a str>,
+    /// `network`, `http` or `filesystem` (smolbento has no filesystem rules); `None` for all.
+    kind: Option<&'a str>,
+    protocol: Option<&'a str>,
+}
+
+/// The filters `a` asks for. A bad value is refused in sbx's words where those were observed.
+fn ls_filter(a: &PolicyLsArgs) -> Result<LsFilter<'_>> {
+    let check =
+        |flag: &str, value: &Option<String>, allowed: &[&str], what: &str, list: &str| match value
+            .as_deref()
+        {
+            Some(v) if !allowed.contains(&v) => bail!(
+                "invalid argument \"{v}\" for \"{flag}\" flag: invalid {what} \"{v}\": must be \
+                 {list}\n  try: bento policy ls --help"
+            ),
+            _ => Ok(()),
+        };
+    check(
+        "--type",
+        &a.kind,
+        &["all", "network", "http", "filesystem"],
+        "type",
+        "one of: all, network, http, filesystem",
+    )?;
+    check(
+        "--created-via",
+        &a.created_via,
+        &["default", "added", "provisioned", "approval"],
+        "creation method",
+        "one of: default, added, provisioned, approval",
+    )?;
+    check(
+        "--protocol",
+        &a.protocol,
+        &["tcp", "udp"],
+        "protocol",
+        "tcp or udp",
+    )?;
+    if let Some(d) = a
+        .decision
+        .as_deref()
+        .filter(|d| !["allow", "deny"].contains(d))
+    {
+        bail!("--decision takes allow or deny, not '{d}'");
     }
-    match opts.format {
-        f @ (Format::Json | Format::Yaml) => Ok(f.structured(&rows)?.unwrap_or_default()),
-        Format::Table => {
-            let mode = policy.mode.map_or("not chosen", Mode::name);
-            let mut head = vec!["ID", "SOURCE", "APPLIES TO", "DECISION", "RESOURCES"];
-            if wide {
-                head.insert(1, "NAME");
-                head.push("NOTES");
-            }
-            let mut lines = Vec::new();
-            for r in rows {
-                let resources = if !r.editable && !wide {
-                    format!("network: {} {}", r.resources.len(), r.decision)
-                } else if wide || r.resources.len() <= 3 {
-                    r.resources.join(", ")
-                } else {
-                    format!("{} rules", r.resources.len())
+    if let Some(s) = a
+        .source
+        .as_deref()
+        .filter(|s| !["local", "org", "kit", "mcp"].contains(s))
+    {
+        bail!("--source takes local, org, kit or mcp, not '{s}'");
+    }
+    Ok(LsFilter {
+        decision: a.decision.as_deref(),
+        source: a.source.as_deref(),
+        created_via: a.created_via.as_deref(),
+        kind: a.kind.as_deref().filter(|k| *k != "all"),
+        protocol: a.protocol.as_deref(),
+    })
+}
+
+fn filtered(mut rows: Vec<LsRule>, f: &LsFilter) -> Vec<LsRule> {
+    rows.retain(|r| {
+        f.decision.is_none_or(|d| r.decision == d)
+            && f.source.is_none_or(|s| r.layer == s)
+            && f.created_via.is_none_or(|v| r.created_via() == Some(v))
+            && f.kind.is_none_or(|k| r.resource_type == k)
+            && f.protocol.is_none_or(|p| r.protocols().contains(&p))
+    });
+    rows
+}
+
+fn ls<R: Runner>(ctx: &Ctx<R>, policy: &Policy, a: &PolicyLsArgs) -> Result<()> {
+    // smolbento has no governance profiles.
+    super::refuse(&[(a.profile.is_some(), "--profile")])?;
+    // --include-inactive is accepted as is: every smolbento rule is active.
+    let filter = ls_filter(a)?;
+    if let Some(s) = &a.sandbox {
+        sandbox::get(&ctx.vm, s)?;
+    }
+    let rows = filtered(ls_rules(policy, a.sandbox.as_deref()), &filter);
+    if a.quiet {
+        for r in &rows {
+            writeln!(&ctx.out, "{}", r.id)?;
+        }
+        return Ok(());
+    }
+    #[derive(Serialize)]
+    struct Doc<'a> {
+        rules: &'a [LsRule],
+    }
+    if let Some(text) = a.output.structured(&Doc { rules: &rows })? {
+        write!(&ctx.out, "{text}")?;
+        return Ok(());
+    }
+    if rows.is_empty() {
+        writeln!(&ctx.out, "No policies match the selected filters")?;
+        return Ok(());
+    }
+    if a.wide {
+        write!(&ctx.out, "{}", render_wide(&rows))?;
+        return Ok(());
+    }
+    match &a.sandbox {
+        Some(s) => write!(&ctx.out, "{}", render_sandbox(s, &rows))?,
+        None => write!(&ctx.out, "{}", render_policies(&rows))?,
+    }
+    // stderr, so the table stays what sbx prints.
+    if let Some(note) = ls_note(&rows) {
+        eprintln!("{note}");
+    }
+    Ok(())
+}
+
+/// For the listings without each rule's status (stderr): how many listed rules smolvm enforces
+/// more loosely than sbx would.
+fn ls_note(rows: &[LsRule]) -> Option<String> {
+    let n = rows
+        .iter()
+        .filter(|r| r.policy_name.is_none() && r.reason.is_some())
+        .count();
+    (n > 0)
+        .then(|| format!("note: {n} rule(s) aren't fully enforced; see `bento policy ls --wide`"))
+}
+
+fn hosts(n: usize) -> String {
+    format!("{n} host{}", if n == 1 { "" } else { "s" })
+}
+
+/// sbx's table: one row per policy, sorted by name, with how many resources it allows and denies.
+fn render_policies(rows: &[LsRule]) -> String {
+    let mut policies: BTreeMap<&str, Vec<&LsRule>> = BTreeMap::new();
+    for r in rows {
+        policies.entry(r.policy()).or_default().push(r);
+    }
+    let mut lines = Vec::new();
+    for (name, rules) in policies {
+        let first = rules[0];
+        let summary = if first.policy_name.is_some() {
+            format!("network: {} when no rule decides", first.decision)
+        } else {
+            let mut parts = Vec::new();
+            for kind in ["network", "http"] {
+                let count = |decision: &str| -> usize {
+                    rules
+                        .iter()
+                        .filter(|r| r.resource_type == kind && r.decision == decision)
+                        .map(|r| r.resources.len())
+                        .sum()
                 };
-                let mut line = vec![
-                    r.id.clone(),
-                    r.source.clone(),
-                    r.applies_to.clone(),
-                    r.decision.clone(),
-                    resources,
-                ];
-                if wide {
-                    line.insert(
-                        1,
-                        if r.name.is_empty() {
-                            "-".into()
-                        } else {
-                            r.name.clone()
-                        },
-                    );
-                    line.push(r.notes.join("; "));
+                let counts: Vec<String> = ["allow", "deny"]
+                    .iter()
+                    .filter(|d| count(d) > 0)
+                    .map(|d| format!("{} {d}", count(d)))
+                    .collect();
+                if !counts.is_empty() {
+                    parts.push(format!("{kind}: {}", counts.join(", ")));
                 }
-                lines.push(line);
             }
-            Ok(format!("Mode: {mode}\n{}", table(&head, lines)))
+            parts.join("; ")
+        };
+        lines.push(vec![
+            name.to_string(),
+            first.layer.to_string(),
+            first.applies_to.clone(),
+            summary,
+        ]);
+    }
+    table(&["POLICY", "SOURCE", "APPLIES TO", "SUMMARY"], lines)
+}
+
+/// sbx's `policy ls SANDBOX`: what applies to one sandbox, and from which policies. It has no
+/// FILESYSTEM section: smolbento has no filesystem policy.
+fn render_sandbox(sandbox: &str, rows: &[LsRule]) -> String {
+    let mut out = format!("  Policy for sandbox:  {sandbox}\n\nNETWORK\n");
+    for decision in ["allow", "deny"] {
+        let rules: Vec<&LsRule> = rows
+            .iter()
+            .filter(|r| r.policy_name.is_none() && r.decision == decision)
+            .collect();
+        if rules.is_empty() {
+            continue;
+        }
+        let from: BTreeSet<&str> = rules.iter().map(|r| r.policy()).collect();
+        let n = rules.iter().map(|r| r.resources.len()).sum();
+        let from: Vec<&str> = from.into_iter().collect();
+        out.push_str(&format!(
+            "  • {decision} {} from {}\n",
+            hosts(n),
+            from.join(", ")
+        ));
+    }
+    if let Some(r) = rows.iter().find(|r| r.policy_name.is_some()) {
+        out.push_str(&format!(
+            "  • fallback: {} when no rule decides from {}\n",
+            r.decision, r.id
+        ));
+    }
+    out.push('\n');
+    out
+}
+
+/// Lines of at most `width` characters, broken at spaces (a longer word gets its own line).
+fn wrap(text: &str, width: usize) -> Vec<String> {
+    let mut lines: Vec<String> = Vec::new();
+    for word in text.split(' ') {
+        match lines.last_mut() {
+            Some(line) if line.chars().count() + 1 + word.chars().count() <= width => {
+                line.push(' ');
+                line.push_str(word);
+            }
+            _ => lines.push(word.to_string()),
         }
     }
+    lines
+}
+
+/// sbx's `--wide` table: a row per rule, with a line per resource (sorted) and a blank line
+/// between rules. STATUS is there only when some rule has more than `active` to say; it wraps
+/// at sbx's width. Unlike `table`, lines keep their padding, as sbx's do.
+fn render_wide(rows: &[LsRule]) -> String {
+    const STATUS: usize = 12;
+    let dash = |v: Option<&str>| v.unwrap_or("-").to_string();
+    let mut lines: Vec<Vec<String>> = vec![
+        [
+            "SOURCE",
+            "CREATED VIA",
+            "APPLIES TO",
+            "POLICY",
+            "POLICY_ID",
+            "RULE",
+            "RULE_ID",
+            "TYPE",
+            "METHOD",
+            "PATH",
+            "DECISION",
+            "PROTOCOLS",
+            "STATUS",
+            "RESOURCES",
+        ]
+        .map(String::from)
+        .to_vec(),
+    ];
+    for (i, r) in rows.iter().enumerate() {
+        if i > 0 {
+            lines.push(vec![String::new(); lines[0].len()]);
+        }
+        let status = match &r.reason {
+            Some(reason) => wrap(&format!("{} — {reason}", r.status), 26),
+            None => vec![r.status.to_string()],
+        };
+        let mut resources = r.resources.clone();
+        resources.sort();
+        for n in 0..resources.len().max(status.len()) {
+            let first = |cell: String| if n == 0 { cell } else { String::new() };
+            // Each resource line repeats the method and path.
+            let each = |cell: String| {
+                if n < resources.len() {
+                    cell
+                } else {
+                    String::new()
+                }
+            };
+            lines.push(vec![
+                first(r.layer.to_string()),
+                first(dash(r.created_via())),
+                first(r.applies_to.clone()),
+                first(dash(r.policy_name)),
+                first(dash(r.policy_id.as_deref())),
+                // Only kit rules have a name of their own to show.
+                first(dash((r.layer == "kit").then_some(r.name.as_str()))),
+                first(r.id.clone()),
+                first(r.resource_type.to_string()),
+                each(dash(r.method.as_deref())),
+                each(dash(r.path.as_deref())),
+                first(r.decision.to_string()),
+                first(r.protocols().join(",")),
+                status.get(n).cloned().unwrap_or_default(),
+                resources.get(n).cloned().unwrap_or_default(),
+            ]);
+        }
+    }
+    if rows.iter().all(|r| r.reason.is_none()) {
+        for line in &mut lines {
+            line.remove(STATUS);
+        }
+    }
+    let widths: Vec<usize> = (0..lines[0].len())
+        .map(|c| {
+            lines
+                .iter()
+                .map(|l| l[c].chars().count())
+                .max()
+                .unwrap_or(0)
+        })
+        .collect();
+    let mut out = String::new();
+    for line in lines {
+        let last = line.len() - 1;
+        for (c, cell) in line.iter().enumerate() {
+            out.push_str(cell);
+            if c < last {
+                out.push_str(&" ".repeat(widths[c] - cell.chars().count() + 3));
+            }
+        }
+        out.push('\n');
+    }
+    out
 }
 
 #[cfg(test)]

@@ -68,6 +68,12 @@ policy allow network api.example.com,*.npmjs.org
 policy ls --wide
 policy ls --decision deny
 policy ls --source kit
+policy ls --created-via added
+policy ls --type network
+policy ls --protocol udp
+policy ls --include-inactive
+policy ls my-sandbox --format yaml
+policy ls -q
 policy log
 policy log my-sandbox --limit 20 --json
 policy approval ls

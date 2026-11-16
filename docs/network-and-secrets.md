@@ -23,8 +23,10 @@ balanced`.
 bento policy allow network api.example.com,*.example.org
 bento policy deny network tracking.example.com
 bento policy allow network internal.example.com --sandbox claude-myrepo
-# --wide shows every host and enforcement notes
+# one row per policy; --wide lists every rule and host
 bento policy ls
+# what applies to one sandbox
+bento policy ls claude-myrepo
 # exits 1 when denied, and says which rule decided
 bento policy check network pypi.org
 # requests sandboxes made that were blocked
@@ -41,6 +43,19 @@ Rules take hosts (`api.x.com`), wildcards (`*.x.com`, `**.x.com`), IPs and CIDRs
 `**` allows everything. Where smolvm enforces a rule more loosely than sbx, see [sbx
 compatibility](sbx-compatibility.md).
 
+`bento policy ls` prints what sbx does. Under `balanced` with one allow rule and one deny rule:
+
+```
+POLICY             SOURCE   APPLIES TO   SUMMARY
+default-deny-all   local    all          network: deny when no rule decides
+local-policy       local    all          network: 200 allow, 1 deny
+```
+
+The mode shows as the fallback policy: `default-deny-all` for `balanced` and `deny-all`,
+`default-allow-all` for `allow-all`. `--wide` has a row per rule with its ID (for `policy rm
+network --id`), `--json` the same rules as `{"rules": [...]}`, and `-q` only their IDs. `--decision`,
+`--source`, `--created-via`, `--type` and `--protocol` filter the rules.
+
 - `run` and `create --deny-network <HOST>` add a deny rule for the new sandbox only, as `bento policy
   deny network --sandbox <NAME> <HOST>` does. It applies only at create; on an existing sandbox
   `run` warns and changes nothing. If the create fails, its rules are removed.
@@ -48,7 +63,7 @@ compatibility](sbx-compatibility.md).
   refused, naming the secret's service.
 - A deny with a port (`host.example.com:8080`) isn't enforced: smolvm can't filter by port. Deny the
   host without a port. The exception is a deny with exactly the same text as an allow, which cancels
-  that allow. `policy ls` notes rules that aren't fully enforced; `policy check` without a port
+  that allow. `policy ls --wide` says in STATUS which rules aren't fully enforced; `policy check` without a port
   checks 443. Details are in [sbx compatibility](sbx-compatibility.md).
 - `balanced` allows its hosts on any port. sbx limits them to 443.
 - `bento policy reset` stops running sandboxes, then removes the mode and every rule. The next create
