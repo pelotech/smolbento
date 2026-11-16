@@ -956,6 +956,58 @@ fn adding_a_mixin_with_an_ssh_agent_needs_a_recreate() {
     assert!(dev_calls(&t).is_empty(), "{:#?}", dev_calls(&t));
 }
 
+/// A v3 kit exports an argument as a variable (`env:`), which only a create can set. One without
+/// a value exports nothing.
+#[test]
+fn adding_a_mixin_whose_argument_is_exported_needs_a_recreate() {
+    let mut t = kit_env();
+    dev_sandbox(&t, &base());
+    v3_kit(
+        &t,
+        "ex",
+        r#"{"schemaVersion":"3","kind":"mixin","name":"ex",
+            "args":{"model":{"env":"TOOL_MODEL"}},"capabilities":[]}"#,
+        &[],
+    );
+    let add = [
+        "kit",
+        "add",
+        "dev",
+        "./ex",
+        "--yes",
+        "--kit-arg",
+        "model=fast",
+    ];
+    let e = t.sbt(&add).unwrap_err();
+    assert_eq!(format!("{e:#}"), "recreate required: environment variables");
+    assert!(dev_calls(&t).is_empty(), "{:#?}", dev_calls(&t));
+
+    t.sbt(&add[..5]).unwrap();
+}
+
+/// The reasons come in one fixed order, whatever order the kit lists its capabilities in.
+#[test]
+fn recreate_reasons_keep_their_order() {
+    let mut t = kit_env();
+    dev_sandbox(&t, &base());
+    v3_kit(
+        &t,
+        "many",
+        r#"{"schemaVersion":"3","kind":"mixin","name":"many","capabilities":[
+                {"type":"com.docker.sandbox/ssh-agent@1","config":{"phase":"runtime"}},
+                {"type":"com.docker.sandbox/agent-skill@1","config":{"path":"/usr/share/x/pr"}},
+                {"type":"com.docker.sandbox/port@1","config":{"container":8080}}]}"#,
+        &[],
+    );
+    let e = t
+        .sbt(&["kit", "add", "dev", "./many", "--yes"])
+        .unwrap_err();
+    assert_eq!(
+        format!("{e:#}"),
+        "recreate required: ports, agent skills, SSH agent"
+    );
+}
+
 #[test]
 fn adding_a_mixin_with_ports_and_env_needs_a_recreate() {
     let mut t = kit_env();
