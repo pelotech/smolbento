@@ -330,7 +330,6 @@ pub fn platform(paths: &Paths, env: &BTreeMap<String, String>) -> Box<dyn Secret
 #[cfg(test)]
 mod tests {
     use super::*;
-    #[cfg(unix)]
     use std::os::unix::fs::PermissionsExt;
 
     #[test]
@@ -382,7 +381,6 @@ mod tests {
         }
     }
 
-    #[cfg(unix)]
     #[test]
     fn file_store_tightens_a_loose_file() {
         let dir = tempfile::tempdir().unwrap();
@@ -399,7 +397,6 @@ mod tests {
         assert_eq!(s.get("new").unwrap().as_deref(), Some("2"));
     }
 
-    #[cfg(unix)]
     #[test]
     fn file_store_replaces_a_symlink_instead_of_writing_through_it() {
         let dir = tempfile::tempdir().unwrap();
@@ -438,7 +435,6 @@ mod tests {
         assert_eq!(s.get("a").unwrap(), None);
     }
 
-    #[cfg(unix)]
     #[test]
     fn file_store_is_private() {
         let dir = tempfile::tempdir().unwrap();

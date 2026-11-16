@@ -327,17 +327,10 @@ impl Meta {
                 .filter_map(|(k, v)| {
                     Some((k.strip_prefix(CREDENTIAL_SERVICE)?.to_string(), v.clone()))
                 })
-                .filter(|(var, service)| !is_old_mcp_secret(var, service))
                 .collect(),
             mcp_secrets: labels
                 .iter()
-                .filter_map(|(k, v)| {
-                    if let Some(var) = k.strip_prefix(MCP_SECRET) {
-                        return Some((var.to_string(), v.clone()));
-                    }
-                    let var = k.strip_prefix(CREDENTIAL_SERVICE)?;
-                    is_old_mcp_secret(var, v).then(|| (var.to_string(), v.clone()))
-                })
+                .filter_map(|(k, v)| Some((k.strip_prefix(MCP_SECRET)?.to_string(), v.clone())))
                 .collect(),
             host_mounts: json(labels, HOST_MOUNTS).unwrap_or_default(),
             no_fuse: flag(NO_FUSE),
@@ -372,13 +365,6 @@ impl Meta {
 }
 
 /// A comma-joined label value.
-/// smolbento 0.15.0 and 0.15.1 recorded a `--static-mcp` secret among the kit credential
-/// services (`sbx.credential-service.SBX_MCP_…=mcp:…`). Kits can't name an `mcp:` service, so
-/// such a label is one of those.
-fn is_old_mcp_secret(var: &str, service: &str) -> bool {
-    var.starts_with("SBX_MCP_") && service.starts_with("mcp:")
-}
-
 fn list(value: Option<&String>) -> Vec<String> {
     value
         .map(|s| {
@@ -556,29 +542,6 @@ mod tests {
         // None of them is written for a sandbox that doesn't use it, so its labels don't change.
         let plain = meta().to_labels();
         assert_eq!(plain.len(), 6, "{plain:?}");
-    }
-
-    #[test]
-    fn an_mcp_secret_recorded_by_0_15_is_still_read() {
-        // 0.15.0 and 0.15.1 recorded it among the kit credential services.
-        let mut labels = meta().to_labels();
-        labels.insert(
-            "sbx.credential-service.SBX_MCP_LINEAR_API_KEY".into(),
-            "mcp:linear:api-key".into(),
-        );
-        labels.insert("sbx.credential-service.SBX_KIT_X".into(), "x".into());
-        let m = Meta::from_labels(&labels).unwrap();
-        assert_eq!(
-            m.mcp_secrets,
-            BTreeMap::from([(
-                "SBX_MCP_LINEAR_API_KEY".to_string(),
-                "mcp:linear:api-key".to_string()
-            )])
-        );
-        assert_eq!(
-            m.credential_services,
-            BTreeMap::from([("SBX_KIT_X".to_string(), "x".to_string())])
-        );
     }
 
     #[test]

@@ -400,18 +400,14 @@ pub fn write_atomic(path: &Path, bytes: &[u8], mode: Option<u32>, links: Symlink
     remove_stale_temp_files(&dir, &prefix);
     let mut builder = tempfile::Builder::new();
     builder.prefix(&prefix).suffix(TEMP_SUFFIX);
-    #[cfg(unix)]
     {
         use std::os::unix::fs::PermissionsExt;
         builder.permissions(fs::Permissions::from_mode(mode.unwrap_or(0o666)));
     }
-    #[cfg(not(unix))]
-    let _ = mode;
     (|| -> std::io::Result<()> {
         // Dropping `tmp` on an error removes it.
         let mut tmp = builder.tempfile_in(&dir)?;
         // The create mode is filtered by the umask; set it exactly.
-        #[cfg(unix)]
         if let Some(m) = mode {
             use std::os::unix::fs::PermissionsExt;
             tmp.as_file()
@@ -484,18 +480,12 @@ fn remove_stale_temp_files(dir: &Path, prefix: &str) {
     }
 }
 
-#[cfg(unix)]
 fn existing_mode(path: &Path) -> Option<u32> {
     use std::os::unix::fs::PermissionsExt;
     fs::symlink_metadata(path)
         .ok()
         .filter(|m| m.is_file())
         .map(|m| m.permissions().mode() & 0o7777)
-}
-
-#[cfg(not(unix))]
-fn existing_mode(_path: &Path) -> Option<u32> {
-    None
 }
 
 /// Paths under a new temp dir, for tests.
@@ -524,7 +514,6 @@ mod tests {
     use std::collections::BTreeMap;
     use std::path::PathBuf;
 
-    #[cfg(unix)]
     fn entries(dir: &Path) -> Vec<String> {
         let mut v: Vec<String> = fs::read_dir(dir)
             .unwrap()
@@ -560,7 +549,6 @@ mod tests {
         );
     }
 
-    #[cfg(unix)]
     #[test]
     fn write_atomic_can_write_through_a_symlink() {
         use std::os::unix::fs::PermissionsExt;
@@ -634,7 +622,6 @@ mod tests {
         assert!(other.exists(), "another file's");
     }
 
-    #[cfg(unix)]
     #[test]
     fn write_atomic_writes_with_the_mode_and_leaves_no_temp_file() {
         use std::os::unix::fs::PermissionsExt;
@@ -648,7 +635,6 @@ mod tests {
         assert_eq!(entries(dir.path()), ["f.toml"]);
     }
 
-    #[cfg(unix)]
     #[test]
     fn write_atomic_keeps_an_existing_files_mode_when_none_is_given() {
         use std::os::unix::fs::PermissionsExt;
@@ -661,7 +647,6 @@ mod tests {
         assert_eq!(mode & 0o777, 0o640);
     }
 
-    #[cfg(unix)]
     #[test]
     fn write_atomic_replaces_a_symlink_and_cleans_up_on_failure() {
         let dir = tempfile::tempdir().unwrap();

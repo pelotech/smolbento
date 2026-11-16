@@ -105,7 +105,6 @@ pub fn create_managed(dirs: &[HostDir]) -> Result<()> {
 fn create_dir(host: &Path, mode: u32) -> std::io::Result<()> {
     let mut builder = std::fs::DirBuilder::new();
     builder.recursive(true);
-    #[cfg(unix)]
     {
         use std::os::unix::fs::{DirBuilderExt, PermissionsExt};
         if let Some(parent) = host.parent() {
@@ -117,11 +116,6 @@ fn create_dir(host: &Path, mode: u32) -> std::io::Result<()> {
             // The create mode is filtered by the umask; set it exactly.
             Ok(()) => std::fs::set_permissions(host, std::fs::Permissions::from_mode(mode))?,
         }
-    }
-    #[cfg(not(unix))]
-    {
-        let _ = mode;
-        builder.create(host)?;
     }
     Ok(())
 }
@@ -180,7 +174,6 @@ mod tests {
         assert_eq!(d.parent().unwrap(), Path::new("/data").join(id));
     }
 
-    #[cfg(unix)]
     #[test]
     fn a_dir_created_concurrently_is_reused_untouched() {
         use std::os::unix::fs::PermissionsExt;

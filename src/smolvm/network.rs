@@ -117,7 +117,7 @@ impl NetworkSpec {
     }
 }
 
-/// Workaround for smolvm 1.32.3 (still in 1.35.0): a running machine's live allow list without
+/// Workaround for smolvm 1.32.3 (still in 1.35.1): a running machine's live allow list without
 /// hosts turns DNS filtering off, and the IPs it learned from earlier allowed DNS answers stay
 /// allowed until their TTL (up to an hour). So a host removed by `--reset-allow-list` that leaves
 /// only CIDRs stays reachable by name and IP until a restart; `--remove-allow-host` of the last

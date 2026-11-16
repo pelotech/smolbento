@@ -333,7 +333,6 @@ fn set_with_token_stores_the_value_in_the_store_only() {
 /// Runs `f` with the config dir read-only, so saving secrets.toml fails. Root ignores the
 /// mode, so these tests return early (pass vacuously) when run as root. The mode is restored
 /// even if `f` panics, so the tempdir can be cleaned up.
-#[cfg(unix)]
 fn with_read_only_config<T>(t: &mut TestEnv, f: impl FnOnce(&mut TestEnv) -> T) -> Option<T> {
     use std::os::unix::fs::PermissionsExt;
     struct Restore(std::path::PathBuf);
@@ -352,7 +351,6 @@ fn with_read_only_config<T>(t: &mut TestEnv, f: impl FnOnce(&mut TestEnv) -> T) 
     Some(f(t))
 }
 
-#[cfg(unix)]
 #[test]
 fn a_failed_save_doesnt_leave_the_value_behind() {
     let mut t = test_env(&[]);
@@ -375,7 +373,6 @@ fn a_failed_save_doesnt_leave_the_value_behind() {
     );
 }
 
-#[cfg(unix)]
 #[test]
 fn a_failed_save_keeps_removed_values() {
     let mut t = test_env(&[]);

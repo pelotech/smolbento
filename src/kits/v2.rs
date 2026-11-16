@@ -718,7 +718,6 @@ mod tests {
         assert_eq!(c.inject[0].format.as_deref(), Some("Bearer %s"));
     }
 
-    #[cfg(unix)]
     #[test]
     fn symlinks_under_files_are_skipped_so_cycles_end() {
         let d = tempfile::tempdir().unwrap();
