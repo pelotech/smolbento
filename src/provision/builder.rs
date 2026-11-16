@@ -10,7 +10,7 @@ use anyhow::{Context, Result, bail};
 
 use crate::ctx::Ctx;
 use crate::kits::args::ArgValues;
-use crate::kits::load::{self, SYNTAX, starts_with_syntax};
+use crate::kits::load::{self, starts_with_syntax};
 use crate::kits::model::{Content, Kind, Kit, Source};
 use crate::kits::registry_auth;
 use crate::kits::resolve::{Plan, resolve};
@@ -71,7 +71,7 @@ pub fn build<R: Runner>(ctx: &Ctx<R>, dir: &Path) -> Result<PathBuf> {
 }
 
 fn build_with<R: Runner>(ctx: &Ctx<R>, dir: &Path, mint: Minter) -> Result<PathBuf> {
-    let desc = descriptor(dir)?;
+    let desc = load::descriptor(dir)?;
     let text = fs::read(dir.join(&desc))
         .with_context(|| format!("reading {}", dir.join(&desc).display()))?;
     let text = String::from_utf8_lossy(&text);
@@ -251,35 +251,6 @@ fn request<R: Runner>(ctx: &Ctx<R>, registries: &[String]) -> CreateRequest {
         created: ctx.now,
         registries: registries.to_vec(),
         ..Default::default()
-    }
-}
-
-/// The kit's descriptor file name: the single v3 `*.yaml`/`*.yml` (`load::is_descriptor`; upstream
-/// names it after the kit, e.g. `claude-mixin.yaml`).
-fn descriptor(dir: &Path) -> Result<String> {
-    let mut found = Vec::new();
-    for entry in fs::read_dir(dir).with_context(|| format!("reading {}", dir.display()))? {
-        let path = entry?.path();
-        let Some(name) = path.file_name().and_then(|n| n.to_str()) else {
-            continue;
-        };
-        if load::is_descriptor(&path) {
-            found.push(name.to_string());
-        }
-    }
-    found.sort();
-    match found.len() {
-        1 => Ok(found.remove(0)),
-        0 => bail!(
-            "{} has no kit descriptor: no *.yaml file has `schemaVersion: \"3\"` or starts with \
-             `{SYNTAX}`",
-            dir.display()
-        ),
-        _ => bail!(
-            "{} has several kit descriptors ({}); keep one *.yaml with `schemaVersion: \"3\"`",
-            dir.display(),
-            found.join(", ")
-        ),
     }
 }
 

@@ -328,26 +328,6 @@ fn a_descriptor_without_the_syntax_line_is_built_with_the_frontend_named() {
 }
 
 #[test]
-fn the_descriptor_is_the_one_yaml_with_the_v3_syntax_line() {
-    let kit = kit_dir();
-    assert_eq!(descriptor(kit.path()).unwrap(), "claude-mixin.yaml");
-
-    let none = tempfile::tempdir().unwrap();
-    fs::write(none.path().join("kit.yaml"), "kind: mixin\n").unwrap();
-    let err = descriptor(none.path()).unwrap_err().to_string();
-    assert!(err.contains(&none.path().display().to_string()), "{err}");
-    assert!(err.contains("# syntax=docker/sandbox-kit:3"), "{err}");
-
-    fs::write(kit.path().join("second.yml"), MIXIN).unwrap();
-    let err = descriptor(kit.path()).unwrap_err().to_string();
-    assert!(err.contains(&kit.path().display().to_string()), "{err}");
-    assert!(
-        err.contains("claude-mixin.yaml") && err.contains("second.yml"),
-        "{err}"
-    );
-}
-
-#[test]
 fn dockerd_that_never_answers_times_out_pointing_at_its_log() {
     let t = test_env(&[]);
     t.runner().fail(
