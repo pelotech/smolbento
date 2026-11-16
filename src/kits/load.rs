@@ -927,6 +927,13 @@ mod tests {
         let e = format!("{:#}", load(&t.ctx, "./kit").unwrap_err());
         assert!(e.contains("kit.yaml isn't valid YAML"), "{e}");
         assert!(t.calls().is_empty(), "nothing is built");
+        // A `spec.yaml` could be either version: its error names neither.
+        fs::rename(dir.join("kit.yaml"), dir.join("spec.yaml")).unwrap();
+        for e in [load(&t.ctx, "./kit").err(), kit_name(&t.ctx, "./kit").err()] {
+            let e = format!("{:#}", e.unwrap());
+            assert!(e.contains("spec.yaml isn't valid YAML"), "{e}");
+            assert!(!e.contains("v2"), "{e}");
+        }
     }
 
     /// A v3 kit in a file called `spec.yaml` is built, not read as v2.

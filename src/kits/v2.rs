@@ -20,7 +20,7 @@ const HOME: &str = "/home/agent";
 
 /// The kit's name as `parse` gives it, reading only the `name` field.
 pub fn name_in(yaml: &str, dir: &Path) -> Result<String> {
-    let v: Value = serde_saphyr::from_str(yaml).context("reading the v2 kit descriptor")?;
+    let v: Value = serde_saphyr::from_str(yaml).context("spec.yaml isn't valid YAML")?;
     let name = match v.get("name") {
         None | Some(Value::Null) => None,
         Some(Value::String(n)) => Some(n.clone()),
@@ -49,7 +49,7 @@ pub fn parse(yaml: &str, dir: &Path) -> Result<Kit> {
 
 /// `parse`, returning its warnings instead of printing them.
 fn parse_warn(yaml: &str, dir: &Path) -> Result<(Kit, Vec<String>)> {
-    let v: Value = serde_saphyr::from_str(yaml).context("reading the v2 kit descriptor")?;
+    let v: Value = serde_saphyr::from_str(yaml).context("spec.yaml isn't valid YAML")?;
     let s: Spec = serde_json::from_value(v).context("reading the v2 kit descriptor")?;
     if s.schema_version != "2" {
         bail!("schemaVersion must be \"2\" (got {:?})", s.schema_version);
