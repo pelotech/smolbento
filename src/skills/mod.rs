@@ -434,7 +434,6 @@ mod tests {
     }
 
     /// Make `p` read-only for the closure (restored on drop). None when root, which ignores mode.
-    #[cfg(unix)]
     fn read_only<T>(p: &Path, f: impl FnOnce() -> T) -> Option<T> {
         use std::os::unix::fs::PermissionsExt;
         struct Restore(std::path::PathBuf);

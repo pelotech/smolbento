@@ -77,7 +77,7 @@ impl SmolvmError {
         }
     }
 
-    /// `machine update` (still in smolvm 1.35.0) reports a missing machine as `CONFIG_ERROR`
+    /// `machine update` (still in smolvm 1.35.1) reports a missing machine as `CONFIG_ERROR`
     /// ("machine 'x' not found"), not `NOT_FOUND`, so a `CONFIG_ERROR` naming a missing machine
     /// counts too.
     pub fn is_not_found(&self) -> bool {

@@ -207,7 +207,6 @@ fn layout_hard_links_the_shared_store() {
         "docker.io/acme/kit:1"
     );
     assert_eq!(m["annotations"][SCHEMA_ANNOTATION], "3");
-    #[cfg(unix)]
     {
         use std::os::unix::fs::MetadataExt;
         let h = hex_of(&digest).unwrap();

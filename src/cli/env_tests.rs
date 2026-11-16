@@ -697,7 +697,6 @@ fn what_a_secret_or_a_port_does_is_part_of_the_approval() {
     assert!(plan.contains("      hostIP: 127.0.0.1\n"), "{plan}");
 }
 
-#[cfg(unix)]
 #[test]
 fn the_record_is_private() {
     use std::os::unix::fs::PermissionsExt;
