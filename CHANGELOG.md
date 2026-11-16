@@ -1,5 +1,23 @@
 # Changelog
 
+## [0.30.0](https://github.com/pelotech/smolbento/compare/v0.29.1...v0.30.0) (2026-11-16)
+
+
+### Features
+
+* **cli:** approval options, HTTP rule removal, UDP checks and other sbx 0.53 flags ([#149](https://github.com/pelotech/smolbento/issues/149)) ([1e59e40](https://github.com/pelotech/smolbento/commit/1e59e40a6f62eea2ecad1e20bb2e6a015afcd0f0))
+* **cli:** policy ls in sbx 0.53's layout, with its filters ([#148](https://github.com/pelotech/smolbento/issues/148)) ([071585f](https://github.com/pelotech/smolbento/commit/071585f1d48c687f16a3c10b87f0b7d52d3c6a8b))
+
+
+### Bug Fixes
+
+* **kits:** read a kit as v3 by its schemaVersion, as sbx does ([#151](https://github.com/pelotech/smolbento/issues/151)) ([61b0d33](https://github.com/pelotech/smolbento/commit/61b0d339719d9fd31b8f77065944e6a6ceb0bee8))
+
+
+### Chores
+
+* **deps:** update pre-commit hook kjanat/actionlint to v1.17.1 ([#146](https://github.com/pelotech/smolbento/issues/146)) ([13821e4](https://github.com/pelotech/smolbento/commit/13821e45e660cbcaa6805e1e76961a3b8d828de1))
+
 ## [0.29.1](https://github.com/pelotech/smolbento/compare/v0.29.0...v0.29.1) (2026-11-16)
 
 
