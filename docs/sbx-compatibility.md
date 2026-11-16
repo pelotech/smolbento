@@ -37,7 +37,7 @@ smolbento-only:
 | Command or flag | Status |
 |---|---|
 | `policy refresh`, `secret import`, `secret set --oauth/--refresh`, `secret set/rm --registry` with `--sandbox`/`--all-sandboxes` | Not implemented |
-| `policy ls --created-via/--type/--protocol/--include-inactive`, `policy check --protocol` other than `tcp` | Not implemented (`--decision` and `--source` work) |
+| `policy check --protocol` other than `tcp` | Not implemented |
 | `sbxenv.yaml` fields under [Environment files](#environment-files) | Later |
 | `setup ssh --auto-create` (desktop app connections) | Not supported |
 | `mcp auth`, `mcp load`, `mcp unload`; `mcp add --local`, `--dir`, `--client-id`, `--oauth-authorization-server`, `--resource`, `--skip-auth` | Not supported: no MCP gateway |
@@ -84,7 +84,7 @@ smolbento-only:
 
 | Area | sbx | smolbento |
 |---|---|---|
-| Network | Default-deny policy | Same modes and rule syntax, but looser: `*.x.com` matches any depth (sbx: one label), and wildcards inside a label (`crl*.x.com`, `?`, `[..]`) widen to `*.x.com`. Ports, methods and paths aren't enforced (`policy ls --wide` shows which). `balanced` is sbx's 195 rules plus Nix caches, on any port |
+| Network | Default-deny policy | Same modes and rule syntax, but looser: `*.x.com` matches any depth (sbx: one label), and wildcards inside a label (`crl*.x.com`, `?`, `[..]`) widen to `*.x.com`. Ports, methods and paths aren't enforced (`policy ls --wide` shows which, in STATUS). `balanced` is sbx's 195 rules plus Nix caches, on any port |
 | Host deny rules | Always enforced | Not enforced under allow-all, nor where a broader allow covers the host. Only deny CIDRs are enforced (at create). A deny with a port isn't enforced, because smolvm can't filter by port. The exception: a deny with the same text as an allow cancels that allow. `policy check` and `policy deny` say so |
 | Secrets | Proxy injects on the wire | smolvm substitutes on the wire. A secret's hosts and their subdomains are always reachable from sandboxes that bound it (`policy deny` of one is refused). New values apply on the next start |
 | `secret set-custom --host` | Exact host, IP or wildcard pattern | Exact host, or `*.domain` for any depth (not the apex). Other wildcards and IPs are refused: smolvm substitutes secrets only for host names |
@@ -101,7 +101,6 @@ smolbento-only:
 | Fetch on exit | None | `bento run` fetches `sandbox-<name>` when the agent exits (`clone.fetch-on-exit`, default `true`), with `fetch.fsckObjects=true`. Manual `git fetch` is unchanged |
 | Fetch from a stopped sandbox | Fails | Starts it, fetches, stops it again |
 | Linked worktrees as clone source | Not supported | Supported: the branch, or the commit when detached |
-| `policy ls --wide` | sbx's wide layout | Adds a NAME column; sbx's other wide columns aren't shown |
 | Install-phase kit rules in `policy ls` | Not listed after create | Never listed, even while a create installs (they're in effect then) |
 | `inspect` | Also `id`, CPUs, memory, uptime, image digest, auth mode, network, mount and proxy policy, runtime mounts, MCP gateway, daemon | Those are left out (a sandbox is known by its name; smolvm has no other ID). The rest matches sbx's layout and JSON keys, `created_at` and `created_version` (`Created with:`) included; sandboxes from before 0.27 have no `created_version` |
 | Default name held by another directory | `create` refuses (`sandbox name … is already used by workspace …; pass --name …`); `run` reattaches to the current directory's sandbox (0.53) | Same, and the refusal suggests a name (`such as --name <agent>-<parent>-<directory>`). smolbento-only `sandbox.autoName` takes it instead of refusing. `run` finds this directory's sandbox by its workspace and agent |
@@ -113,7 +112,14 @@ smolbento-only:
 | Errors | `error: …`, and a suggestion as `  try: sbx ls` on its own line | Same, with `bento` |
 | `stop`, `rm`, `prune` text | `Stopped sandbox NAME`, `Removed sandbox NAME` | Same |
 | `settings ls` | `KEY VALUE TYPE SOURCE RESTART DESCRIPTION`, sorted, cells cut; `--no-trunc` prints a block per setting | Same. `RESTART` is always empty (no daemon); `TYPE` is `bool` or `string` |
-| `policy ls` layout | 0.53: one row per policy (`POLICY SOURCE APPLIES TO SUMMARY`), `--json` is `{"rules":[…]}`; `--wide` has 14 columns | The earlier layout: `Mode:` and one row per rule, `--json` a bare array. Not updated yet |
+| `policy ls` layout | 0.53: one row per policy (`POLICY SOURCE APPLIES TO SUMMARY`); `--wide` a row per rule in 14 columns; `--json` and `--format yaml` are `{"rules":[…]}`; `policy ls SANDBOX` a summary (`Policy for sandbox:`, `NETWORK`, `FILESYSTEM`) | Same layouts, texts and JSON key order. The differences are the rows below |
+| `policy ls`: the mode | No mode line. The `default-deny-all` policy (`network: deny when no rule decides`) is the fallback | Same: no `Mode:` line. `balanced` and `deny-all` show `default-deny-all` (`balanced` also lists its preset groups in `local-policy`). `allow-all`, and a policy with no mode chosen yet, show `default-allow-all` (`network: allow when no rule decides`) instead: smolbento-only |
+| `policy ls`: policy and rule IDs | UUIDs; sandbox-scoped rules are in a policy with its own UUID | Rule IDs are `r-<hash>`. Policies are named `local-policy` (global rules), `sandbox:<name>` (a sandbox's rules), `kit:<name>` (its kit rules) and `mcp:<name>` (its `--static-mcp` hosts, source `mcp`) |
+| `policy ls`: filesystem rules | `default-fs-read-allow-all`, `default-fs-write-allow-all`; a `FILESYSTEM` section in `policy ls SANDBOX` | None: smolbento has no filesystem policy. `--type filesystem` prints `No policies match the selected filters`, and the sandbox summary has no `FILESYSTEM` section |
+| `policy ls`: resources | Preset hosts carry `:443` | Shown as stored: the preset's hosts have no port (they're allowed on any port), and `balanced` has the `smolbento-nix` group too |
+| `policy ls`: STATUS and `reason` | `active`; a reason only on the fallback | A rule smolvm enforces more loosely than sbx also has a reason (`--wide`: `active — <resource>: port 8080 not enforced …`; JSON `reason`). The table and the sandbox summary count such rules in a note on stderr |
+| `policy ls`: rules with a method or a path | Type `http` | Type `http` with METHOD and PATH filled in, actions `net:connect:tcp` (they aren't enforced). A sandbox's kit rules are one `kit:<sandbox>` rule of type `network`, as in sbx 0.49. sbx 0.53's JSON for kit and `http` rules wasn't observed: smolbento uses `layer: "kit"`, `created_via: "provisioned"` |
+| `policy ls` filters | `--source local\|org\|kit`, `--include-inactive`, `--profile` | `--source` also takes `mcp`; `org` matches nothing. `--include-inactive` changes nothing (every rule is active). `--profile` is refused. A bad `--decision` or `--source` value has smolbento's own error text |
 | `policy approval respond` | 0.53: `APPROVAL-ID --option OPTION-ID` | `ID allow\|deny`. `--option` isn't accepted (sbx's option IDs weren't observed) |
 | `df` | Disk usage of images, containers and volumes | Not implemented (`unrecognized subcommand`) |
 | `skills import` | Lists missing directories only with `-v`; prints `Skills directory found at DIR:` before each directory's skills | `-v` the same; no `Skills directory found` header |
@@ -376,7 +382,8 @@ with `-D`).
 - `kit inspect` and `kit validate` print sbx's summary (`Name:`, `Kind:`, `Schema:`, `Policies:`,
   `Credentials:`, `Commands:`) and `✓ <ref> — valid`. `kit inspect --format json` is the
   v2-shaped descriptor; `kit validate --json` is `{reference, kind, valid, warnings}`.
-- `policy ls` shows kit rules as one `kit:<sandbox>` row per sandbox (source `kit`). `policy rm`
+- `policy ls` shows kit rules as one `kit:<sandbox>` policy per sandbox (source `kit`), holding one
+  `kit:<sandbox>` rule. `policy rm`
   can't remove them; deny a host instead.
 - Agent context goes in the agent's file in the workspace's parent directory, inside the sandbox
   only: `CLAUDE.md` (claude), `GEMINI.md` (gemini), `AGENTS.md` (others), or the file a workload

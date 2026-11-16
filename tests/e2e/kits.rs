@@ -526,7 +526,7 @@ echo "$ip" > /etc/e2e-install-ip"#;
         "{ip} (httpbin.org's address) is closed after install"
     );
     // `policy ls` never lists install-phase rules (as sbx), so check the stored policy too.
-    let rules = e.ok(&["policy", "ls"]);
+    let rules = e.ok(&["policy", "ls", "--wide"]);
     assert!(
         !rules.contains("httpbin.org"),
         "install rules not listed:\n{rules}"
@@ -640,8 +640,9 @@ setup:
             .success()),
         "the startup hook ran"
     );
-    // As in sbx: one `kit:<sandbox>` row, its hosts counted (listed with --wide).
+    // As in sbx: one `kit:<sandbox>` policy, its hosts counted (listed with --wide).
     let rules = e.ok(&["policy", "ls", "--source", "kit"]);
+    assert!(rules.contains(&format!("kit:{}", e.name)), "{rules}");
     assert!(rules.contains("network: 1 allow"), "{rules}");
     let wide = e.ok(&["policy", "ls", "--source", "kit", "--wide"]);
     assert!(wide.contains(&format!("kit:{}", e.name)), "{wide}");
