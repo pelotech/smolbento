@@ -551,7 +551,7 @@ fn add<R: Runner>(
         bail!("{reference} is a workload kit, not a mixin; only mixins can be added to a sandbox");
     }
     // Before anything changes, the sandbox's start included.
-    let recreate = apply::needs_recreate(&kit)?;
+    let recreate = apply::needs_recreate(&kit, &values.for_kit(&kit)?)?;
     if !recreate.is_empty() {
         bail!("recreate required: {}", recreate.join(", "));
     }

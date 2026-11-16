@@ -880,8 +880,9 @@ fn pinned_ref(k: &Kit) -> Result<String> {
     })
 }
 
-/// What in `kit` only a create can apply (spec "Data flow", `kit add`), in a fixed order.
-pub fn needs_recreate(kit: &Kit) -> Result<Vec<&'static str>> {
+/// What in `kit` only a create can apply (spec "Data flow", `kit add`), in a fixed order. `args`
+/// are the kit's argument values: one that the kit exports (`env:`) is a variable to set.
+pub fn needs_recreate(kit: &Kit, args: &BTreeMap<String, String>) -> Result<Vec<&'static str>> {
     let mut what = Vec::new();
     if compose::has_layers(kit)? {
         what.push("image layers");
@@ -902,7 +903,11 @@ pub fn needs_recreate(kit: &Kit) -> Result<Vec<&'static str>> {
         };
         what.push(need);
     }
-    if !kit.env.is_empty() {
+    let exports = kit
+        .args
+        .iter()
+        .any(|(name, def)| def.env.is_some() && args.contains_key(name));
+    if !kit.env.is_empty() || exports {
         what.push("environment variables");
     }
     let order = [
@@ -911,6 +916,7 @@ pub fn needs_recreate(kit: &Kit) -> Result<Vec<&'static str>> {
         "ports",
         "volumes",
         "host mounts",
+        "agent skills",
         "SSH agent",
         "resources",
         "environment variables",

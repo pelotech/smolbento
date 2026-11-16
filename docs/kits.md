@@ -167,9 +167,9 @@ adds a line to the list. Unlike sbx, smolbento writes no platform preamble.
 ### Adding a kit to a sandbox
 
 `bento kit add SANDBOX REF` applies a mixin to an existing sandbox without restarting it; a stopped
-sandbox is started for it. A kit that changes the image, credentials, ports, volumes, resources,
-environment variables or auto-stop needs a new sandbox. `kit add` then says `recreate required` and
-changes nothing. A kit that opens network access asks first; `-y` grants it, and without a terminal
+sandbox is started for it. A kit that changes the image, credentials, ports, volumes, host mounts,
+agent skills, the SSH agent, resources, environment variables (an exported argument included) or
+auto-stop needs a new sandbox. `kit add` then says `recreate required` and changes nothing. A kit that opens network access asks first; `-y` grants it, and without a terminal
 it fails.
 
 ### Kit host mounts
