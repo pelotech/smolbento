@@ -192,22 +192,13 @@ fn parse_warn(yaml: &str, dir: &Path) -> Result<(Kit, Vec<String>)> {
         ),
     };
     let kit = Kit {
-        name,
-        source,
-        digest: None,
-        kind,
-        provides: vec![],
         requires: s.requires.and_then(|r| r.agent).into_iter().collect(),
-        integrates: vec![],
-        conflicts: vec![],
         args,
         caps,
         env: s.environment.variables.into_iter().collect(),
         content: sandbox.image.map_or(Content::None, Content::Image),
         command,
-        config: None,
-        starts_docker: false,
-        reference: None,
+        ..Kit::new(&name, kind, source)
     };
     Ok((kit, warnings))
 }

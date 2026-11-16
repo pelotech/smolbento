@@ -35,13 +35,14 @@ fn a_cached_pinned_ref_loads_without_the_registry() {
 #[test]
 fn start_docker_annotation_is_read() {
     let flagged = tempfile::tempdir().unwrap();
-    fixtures::oci_layout_with(
+    write_layout(
         flagged.path(),
         Some(DESC),
         &[("com.docker.sandboxes.start-docker", "true")],
         &[],
         "{}",
-    );
+    )
+    .unwrap();
     assert!(read_layout(flagged.path(), src()).unwrap().starts_docker);
     let plain = tempfile::tempdir().unwrap();
     fixtures::oci_layout(plain.path(), Some(DESC), &[], "{}");

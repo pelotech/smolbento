@@ -303,8 +303,16 @@ pub fn is_yes(answer: &str) -> bool {
     matches!(answer.trim().to_ascii_lowercase().as_str(), "y" | "yes")
 }
 
-/// Left-aligned columns separated by three spaces, like sbx's tables.
-pub fn table(rows: Vec<Vec<String>>) -> String {
+/// Unix seconds as an RFC 3339 UTC time.
+pub fn rfc3339(secs: i64) -> String {
+    let at = std::time::UNIX_EPOCH + std::time::Duration::from_secs(secs.max(0) as u64);
+    humantime::format_rfc3339_seconds(at).to_string()
+}
+
+/// Left-aligned columns separated by three spaces, like sbx's tables: `head`, then `rows`.
+pub fn table(head: &[&str], rows: Vec<Vec<String>>) -> String {
+    let head = head.iter().map(|s| s.to_string()).collect();
+    let rows: Vec<Vec<String>> = std::iter::once(head).chain(rows).collect();
     let cols = rows.iter().map(Vec::len).max().unwrap_or(0);
     let widths: Vec<usize> = (0..cols)
         .map(|c| {
@@ -332,35 +340,38 @@ pub fn table(rows: Vec<Vec<String>>) -> String {
 
 #[cfg(test)]
 mod tests {
+    use super::*;
+    use crate::testutil::*;
 
+    /// `ls`, the bare command (which lists too), and `ls` with an explicit smolvm home.
     #[test]
     fn a_command_that_needs_smolvm_installs_it_first() {
         // Short, so its sockets fit macOS's limit (an explicit home is checked).
         let home = tempfile::tempdir_in("/tmp").unwrap();
-        // Not the pinned release, so it fails the checksum: proof that `ls` went to download it.
-        let (url, seen) = crate::testutil::http_server(b"not smolvm".to_vec());
-        let home_s = home.path().display().to_string();
-        let mut t = crate::testutil::test_env(&[
-            ("SMOLBENTO_SMOLVM_HOME", &home_s),
-            ("SMOLBENTO_SMOLVM_URL", &url),
-        ]);
-        t.use_managed_smolvm();
-        let err = t.sbt_err(&["ls"]);
-        assert!(err.contains("checksum"), "{err}");
-        assert_eq!(seen.lock().unwrap().len(), 1);
+        let home = home.path().display().to_string();
+        let ls = &["ls"][..];
+        for (args, home) in [(ls, None), (&[][..], None), (ls, Some(home.as_str()))] {
+            // Not the pinned release, so it fails the checksum: proof that it was downloaded.
+            let (url, seen) = http_server(b"not smolvm".to_vec());
+            let mut env = vec![("SMOLBENTO_SMOLVM_URL", url.as_str())];
+            env.extend(home.map(|h| ("SMOLBENTO_SMOLVM_HOME", h)));
+            let mut t = test_env(&env);
+            t.use_managed_smolvm();
+            let err = t.sbt_err(args);
+            assert!(err.contains("checksum"), "{args:?}: {err}");
+            assert_eq!(seen.lock().unwrap().len(), 1, "{args:?}");
+        }
     }
 
     #[test]
     fn settings_and_help_never_download() {
-        let (url, seen) = crate::testutil::http_server(b"not smolvm".to_vec());
-        let mut t = crate::testutil::test_env(&[("SMOLBENTO_SMOLVM_URL", &url)]);
+        let (url, seen) = http_server(b"not smolvm".to_vec());
+        let mut t = test_env(&[("SMOLBENTO_SMOLVM_URL", &url)]);
         t.use_managed_smolvm();
         t.sbt(&["settings", "ls"]).unwrap();
         t.sbt(&["version"]).unwrap();
         assert!(seen.lock().unwrap().is_empty(), "nothing was downloaded");
     }
-    use super::*;
-    use crate::testutil::*;
 
     #[test]
     fn pending_and_cloud_commands_exit_2() {
@@ -380,18 +391,6 @@ mod tests {
         let err = run.opts.check_supported().unwrap_err();
         assert_eq!(err.to_string(), "--ttl is a Docker Cloud option");
         assert_eq!(exit_code(&err), 2);
-    }
-
-    #[test]
-    fn bare_sbt_installs_smolvm_like_ls() {
-        for args in [&[][..], &["ls"][..]] {
-            let (url, seen) = http_server(b"not smolvm".to_vec());
-            let mut t = test_env(&[("SMOLBENTO_SMOLVM_URL", &url)]);
-            t.use_managed_smolvm();
-            let err = t.sbt(args).unwrap_err();
-            assert!(format!("{err:#}").contains("checksum"), "{args:?}: {err:#}");
-            assert_eq!(seen.lock().unwrap().len(), 1, "{args:?}");
-        }
     }
 
     #[test]
@@ -527,10 +526,7 @@ mod tests {
 
     #[test]
     fn table_aligns_columns() {
-        let t = table(vec![
-            vec!["A".into(), "BB".into()],
-            vec!["CCC".into(), "D".into()],
-        ]);
+        let t = table(&["A", "BB"], vec![vec!["CCC".into(), "D".into()]]);
         assert_eq!(t, "A     BB\nCCC   D\n");
     }
 }

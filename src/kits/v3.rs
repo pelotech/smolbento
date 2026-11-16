@@ -131,22 +131,13 @@ fn from_value(v: Value, source: Source) -> Result<Kit> {
         })
         .collect();
     Ok(Kit {
-        name,
-        source,
-        digest: None,
-        kind,
         provides,
         requires: d.requires,
         integrates: d.integrates,
         conflicts: d.conflicts,
         args,
         caps,
-        env: vec![],
-        content: Content::None,
-        command: None,
-        config: None,
-        starts_docker: false,
-        reference: None,
+        ..Kit::new(&name, kind, source)
     })
 }
 
@@ -492,14 +483,9 @@ struct RulesV1 {
 
 impl RulesV1 {
     fn into_rules(self) -> Rules {
-        let rule = |host| NetRule {
-            host,
-            methods: vec![],
-            paths: vec![],
-        };
         Rules {
-            allow: self.allow.into_iter().map(rule).collect(),
-            deny: self.deny.into_iter().map(rule).collect(),
+            allow: self.allow.into_iter().map(NetRule::host).collect(),
+            deny: self.deny.into_iter().map(NetRule::host).collect(),
         }
     }
 }
@@ -590,21 +576,7 @@ fn credential(c: CredCfg) -> Result<CredReq> {
     if c.api_key.is_none() && c.oauth.is_none() {
         bail!("one of apiKey or oauth is required");
     }
-    let phases = match c.phase {
-        OneOrMany::One(p) => vec![p],
-        OneOrMany::Many(p) => p,
-    };
-    let (mut install, mut runtime) = (false, false);
-    for p in &phases {
-        match p.as_str() {
-            "install" => install = true,
-            "runtime" => runtime = true,
-            other => bail!("phase must be install or runtime (got {other:?})"),
-        }
-    }
-    if !install && !runtime {
-        bail!("phase must name install, runtime or both");
-    }
+    let phases = phases(c.phase, false)?;
     let (env, inject) = match c.api_key {
         Some(k) => {
             let inject = k
@@ -628,8 +600,8 @@ fn credential(c: CredCfg) -> Result<CredReq> {
     });
     Ok(CredReq {
         service: c.service,
-        install,
-        runtime,
+        install: phases.contains(&SshPhase::Install),
+        runtime: phases.contains(&SshPhase::Runtime),
         env,
         inject,
         oauth,
@@ -645,8 +617,9 @@ struct SshAgentCfg {
     authenticate: Option<Vec<String>>,
 }
 
-fn ssh_agent(c: SshAgentCfg) -> Result<CapBody> {
-    let names = match c.phase {
+/// The phases a capability's `phase:` names; `unique` (ssh-agent@1) refuses one listed twice.
+fn phases(phase: OneOrMany, unique: bool) -> Result<Vec<SshPhase>> {
+    let names = match phase {
         OneOrMany::One(p) => vec![p],
         OneOrMany::Many(p) => p,
     };
@@ -657,7 +630,7 @@ fn ssh_agent(c: SshAgentCfg) -> Result<CapBody> {
             "runtime" => SshPhase::Runtime,
             other => bail!("phase must be install or runtime (got {other:?})"),
         };
-        if phases.contains(&phase) {
+        if unique && phases.contains(&phase) {
             bail!("phase {p} is listed twice");
         }
         phases.push(phase);
@@ -665,6 +638,11 @@ fn ssh_agent(c: SshAgentCfg) -> Result<CapBody> {
     if phases.is_empty() {
         bail!("phase must name install, runtime or both");
     }
+    Ok(phases)
+}
+
+fn ssh_agent(c: SshAgentCfg) -> Result<CapBody> {
+    let phases = phases(c.phase, true)?;
     let unrestricted = c.unrestricted.unwrap_or(true);
     if unrestricted && (c.sign.is_some() || c.authenticate.is_some()) {
         bail!("an unrestricted entry can't state sign or authenticate");

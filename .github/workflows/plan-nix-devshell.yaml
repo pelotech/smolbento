@@ -22,8 +22,6 @@ jobs:
         with:
           persist-credentials: false
       - uses: $/.github/actions/nix-devshell
-        with:
-          gh-token: ${{ secrets.GITHUB_TOKEN }}
 
       - name: Comment dev shell closure diff
         run: |

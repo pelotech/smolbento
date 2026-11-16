@@ -344,12 +344,7 @@ pub fn resolve_for(
     }
     for k in &all {
         let a = &kit_args[&k.name];
-        let unresolved: BTreeSet<String> = k
-            .args
-            .keys()
-            .filter(|n| !a.contains_key(*n))
-            .cloned()
-            .collect();
+        let unresolved = unresolved(k, a);
         let ex = |s: &str| -> Result<String> {
             expand(s, a, &unresolved, &env_map).with_context(|| format!("kit {}", k.name))
         };
@@ -671,26 +666,13 @@ fn ssh_phase(entries: &[SshEntry], phase: SshPhase) -> Result<Option<PhaseGrant>
     if es.is_empty() {
         return Ok(None);
     }
-    let sign = if es.iter().any(|e| e.unrestricted) {
-        None
-    } else {
-        let mut union: Vec<String> = Vec::new();
-        for ns in es.iter().flat_map(|e| e.sign) {
-            if !union.contains(ns) {
-                union.push(ns.clone());
-            }
-        }
-        Some(union)
-    };
     let unrestricted = es.iter().any(|e| e.unrestricted);
-    let mut authenticate: Vec<String> = Vec::new();
-    if !unrestricted {
-        for d in es.iter().flat_map(|e| e.authenticate) {
-            if !authenticate.contains(d) {
-                authenticate.push(d.clone());
-            }
-        }
-    }
+    let sign = (!unrestricted).then(|| union(es.iter().flat_map(|e| e.sign)));
+    let authenticate = if unrestricted {
+        vec![]
+    } else {
+        union(es.iter().flat_map(|e| e.authenticate))
+    };
     let required = es.iter().any(|e| !e.optional);
     let kit = es
         .iter()
@@ -705,6 +687,17 @@ fn ssh_phase(entries: &[SshEntry], phase: SshPhase) -> Result<Option<PhaseGrant>
     }))
 }
 
+/// The distinct `values`, in the order first seen.
+fn union<'a>(values: impl Iterator<Item = &'a String>) -> Vec<String> {
+    let mut union: Vec<String> = Vec::new();
+    for v in values {
+        if !union.contains(v) {
+            union.push(v.clone());
+        }
+    }
+    union
+}
+
 fn expand_hook(h: &Hook, ex: &dyn Fn(&str) -> Result<String>) -> Result<Hook> {
     let command = match &h.command {
         HookCmd::Shell(s) => HookCmd::Shell(ex(s)?),
@@ -716,17 +709,18 @@ fn expand_hook(h: &Hook, ex: &dyn Fn(&str) -> Result<String>) -> Result<Hook> {
     })
 }
 
+/// The arguments `k` declares that `args` gives no value.
+fn unresolved(k: &Kit, args: &BTreeMap<String, String>) -> BTreeSet<String> {
+    let missing = k.args.keys().filter(|n| !args.contains_key(*n));
+    missing.cloned().collect()
+}
+
 /// Expands the arg references in `k.provides` (the only capability field that may carry them).
 fn expand_provides(k: &mut Kit, args: &BTreeMap<String, String>) -> Result<()> {
     if !k.provides.iter().any(|s| capability::has_arg_ref(s)) {
         return Ok(());
     }
-    let unresolved: BTreeSet<String> = k
-        .args
-        .keys()
-        .filter(|n| !args.contains_key(*n))
-        .cloned()
-        .collect();
+    let unresolved = unresolved(k, args);
     let env = BTreeMap::new();
     let provides = k
         .provides

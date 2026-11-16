@@ -62,12 +62,7 @@ pub fn cosign() -> Result<PathBuf> {
     if let Some(p) = std::env::var_os("SMOLBENTO_COSIGN") {
         return Ok(p.into());
     }
-    std::env::var_os("PATH")
-        .iter()
-        .flat_map(std::env::split_paths)
-        .map(|d| d.join("cosign"))
-        .find(|p| p.is_file())
-        .context(MISSING)
+    crate::util::find_on_path(std::env::var_os("PATH"), "cosign").context(MISSING)
 }
 
 /// Signs BLOB and returns the bundle.

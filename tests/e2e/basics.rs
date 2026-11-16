@@ -9,7 +9,7 @@ pub(crate) fn lifecycle_exec_and_same_path_mount() {
 
     std::fs::write(e.workspace().join("from-host"), "hello").unwrap();
     assert_eq!(e.ok(&["exec", &e.name, "cat", "from-host"]), "hello");
-    e.ok(&["exec", &e.name, "sh", "-c", "echo back > from-guest"]);
+    e.sh_ok(&e.name, "echo back > from-guest");
     assert_eq!(
         std::fs::read_to_string(e.workspace().join("from-guest")).unwrap(),
         "back\n"
@@ -23,9 +23,9 @@ pub(crate) fn lifecycle_exec_and_same_path_mount() {
     // command's exit status is bento's.
     let big = e.ok(&["exec", &e.name, "head", "-c", "12000000", "/dev/zero"]);
     assert_eq!(big.len(), 12_000_000);
-    let out = e.sbt(&["exec", &e.name, "sh", "-c", "echo to-err >&2; exit 7"]);
+    let out = e.sh(&e.name, "echo to-err >&2; exit 7");
     assert_eq!(out.status.code(), Some(7));
-    assert_eq!(String::from_utf8_lossy(&out.stderr), "to-err\n");
+    assert_eq!(err_text(&out), "to-err\n");
 
     e.ok(&["stop", &e.name]);
     assert_eq!(e.state(), "stopped");
@@ -92,16 +92,9 @@ pub(crate) fn the_pinned_smolvm_runs_from_smolbentos_home() {
         .env_remove("SMOLBENTO_SMOLVM")
         .output()
         .unwrap();
-    assert!(
-        out.status.success(),
-        "{}",
-        String::from_utf8_lossy(&out.stderr)
-    );
+    assert!(out.status.success(), "{}", err_text(&out));
     let version = smolbento::smolvm::pin::pin().version.as_str();
-    assert!(
-        String::from_utf8_lossy(&out.stdout).contains(version),
-        "{out:?}"
-    );
+    assert!(out_text(&out).contains(version), "{out:?}");
     let bin = Path::new(&smolvm_home())
         .join("engine")
         .join(version)
@@ -125,6 +118,12 @@ pub(crate) fn reachable(e: &E2e, url: &str) -> bool {
     .success()
 }
 
+/// Whether `http://IP/` gives any HTTP answer from `e`'s sandbox.
+pub(crate) fn http_answers(e: &E2e, ip: &str) -> bool {
+    let probe = format!("wget -S -T 8 -O /dev/null http://{ip}/ 2>&1 | grep -q 'HTTP/'");
+    e.sh(&e.name, &probe).status.success()
+}
+
 #[test]
 #[ignore = "boots real VMs; run with `just e2e`"]
 pub(crate) fn policy_changes_apply_on_start_and_live() {
@@ -135,26 +134,20 @@ pub(crate) fn policy_changes_apply_on_start_and_live() {
     assert!(!reachable(&e, "https://httpbin.org"), "deny-all blocks");
     e.ok(&["policy", "allow", "network", "httpbin.org"]);
     assert!(reachable(&e, "https://httpbin.org"), "live allow");
-    let ip = e.ok(&[
-        "exec",
+    let ip = e.sh_ok(
         &e.name,
-        "sh",
-        "-c",
         "nslookup httpbin.org 2>/dev/null | awk '/^Address/ && $NF !~ /:/ {print $NF}' | head -n 1",
-    ]);
+    );
     let ip = ip.trim();
     assert!(!ip.is_empty(), "httpbin.org resolved");
-    let by_ip = |e: &E2e| {
-        let probe = format!("wget -S -T 8 -O /dev/null http://{ip}/ 2>&1 | grep -q 'HTTP/'");
-        e.sbt(&["exec", &e.name, "sh", "-c", &probe])
-            .status
-            .success()
-    };
-    assert!(by_ip(&e), "live allow reaches {ip}");
+    assert!(http_answers(&e, ip), "live allow reaches {ip}");
     // The last host leaves a host-less list: closed live, by name and by its IP (no restart).
     e.ok(&["policy", "rm", "network", "--resource", "httpbin.org"]);
     assert!(!reachable(&e, "https://httpbin.org"), "live rm");
-    assert!(!by_ip(&e), "live rm closes {ip} (httpbin.org's address)");
+    assert!(
+        !http_answers(&e, ip),
+        "live rm closes {ip} (httpbin.org's address)"
+    );
     assert!(
         !reachable(&e, "https://www.wikipedia.org"),
         "still restricted"
@@ -175,8 +168,6 @@ pub(crate) fn policy_changes_apply_on_start_and_live() {
 #[test]
 #[ignore = "boots real VMs; run with `just e2e`"]
 pub(crate) fn ports_publish_live() {
-    use std::io::{Read, Write};
-    use std::time::{Duration, Instant};
     let e = E2e::new("port");
     e.create_alpine();
     smolvm(&[
@@ -193,24 +184,11 @@ pub(crate) fn ports_publish_live() {
     let port = smolbento::sandbox::options::free_port().unwrap();
     e.ok(&["ports", &e.name, "--publish", &format!("{port}:8000")]);
     // The guest's nc may not be listening yet: retry until it answers or the deadline passes.
-    let fetch = || -> std::io::Result<String> {
-        let timeout = Some(Duration::from_secs(10));
-        let mut stream = std::net::TcpStream::connect(("127.0.0.1", port))?;
-        stream.set_read_timeout(timeout)?;
-        stream.set_write_timeout(timeout)?;
-        stream.write_all(b"GET / HTTP/1.0\r\n\r\n")?;
-        let mut body = String::new();
-        stream.read_to_string(&mut body)?;
-        Ok(body)
-    };
-    let deadline = Instant::now() + Duration::from_secs(30);
-    let body = loop {
-        let last = fetch();
-        if last.as_ref().is_ok_and(|b| b.contains("hi-from-guest")) || Instant::now() > deadline {
-            break last;
-        }
-        std::thread::sleep(Duration::from_millis(500));
-    };
+    let mut body = Ok(String::new());
+    wait_until(30, || {
+        body = host_get(port, "/");
+        body.as_ref().is_ok_and(|b| b.contains("hi-from-guest"))
+    });
     let body = body.expect("published port answers");
     assert!(body.contains("hi-from-guest"), "{body}");
     e.ok(&["ports", &e.name, "--unpublish", &format!("{port}:8000")]);
@@ -232,7 +210,7 @@ pub(crate) fn secrets_are_placeholders_in_the_guest() {
         &format!("printf {BASIC_SECRET}"),
     ]);
     e.create_alpine();
-    let seen = e.ok(&["exec", &e.name, "sh", "-c", "printf %s \"$TOK\""]);
+    let seen = e.sh_ok(&e.name, "printf %s \"$TOK\"");
     assert!(seen.starts_with("SMOL_PLACEHOLDER_"), "{seen}");
     assert!(
         basic_auth_ok(&e, &e.name, "TOK", "real-secret-xyz"),
@@ -261,7 +239,7 @@ pub(crate) fn guest_root(sb: &str, script: &str) {
     assert!(
         out.status.success(),
         "{script} in {sb}:\n{}",
-        String::from_utf8_lossy(&out.stderr)
+        err_text(&out)
     );
 }
 
@@ -271,8 +249,6 @@ pub(crate) fn guest_root(sb: &str, script: &str) {
 #[ignore = "boots real VMs; run with `just e2e`"]
 pub(crate) fn a_failed_clone_create_removes_the_sandbox() {
     let e = E2e::new("clonefail");
-    let ws = e.workspace();
-    let ws = ws.to_str().unwrap();
     let remote = format!("sandbox-{}", e.name);
     std::fs::write(e.workspace().join("README"), "host\n").unwrap();
     e.git_ok(&["init", "-q", "-b", "main"]);
@@ -280,21 +256,9 @@ pub(crate) fn a_failed_clone_create_removes_the_sandbox() {
     e.git_ok(&["commit", "-q", "-m", "host commit"]);
 
     let archive = Image::alpine_agent_archive();
-    let out = e.sbt(&[
-        "create",
-        "--clone",
-        "shell",
-        ws,
-        "--name",
-        &e.name,
-        "-t",
-        archive.to_str().unwrap(),
-        "--cpus",
-        "1",
-        "-m",
-        "1g",
-    ]);
-    let err = String::from_utf8_lossy(&out.stderr);
+    let head = ["--clone", "-t", archive.to_str().unwrap(), "shell"];
+    let out = e.try_create(&e.name, &head);
+    let err = err_text(&out);
     assert!(!out.status.success(), "{err}");
     assert!(err.contains("cloning the repo in the sandbox"), "{err}");
     assert!(err.contains("the sandbox was removed"), "{err}");
@@ -347,19 +311,16 @@ pub(crate) fn clone_round_trip() {
         "https://example.com/o/r.git",
         "userinfo stripped"
     );
-    let tok = e.ok(&["exec", &e.name, "sh", "-c", "printf %s \"$TOK\""]);
+    let tok = e.sh_ok(&e.name, "printf %s \"$TOK\"");
     assert!(tok.starts_with("SMOL_PLACEHOLDER_"), "{tok}");
     let guest_commit = |msg: &str| {
-        e.ok(&[
-            "exec",
+        e.sh_ok(
             &e.name,
-            "sh",
-            "-c",
             &format!(
                 "echo {msg} >> README && git -c user.name=a -c user.email=a@a \
                  -c commit.gpgsign=false commit -q -am {msg}"
             ),
-        ]);
+        );
     };
     guest_commit("guest-one");
     e.ok(&["exec", &e.name, "git", "-C", ws, "tag", "v9.9.9"]);

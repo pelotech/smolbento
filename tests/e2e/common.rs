@@ -108,9 +108,49 @@ impl E2e {
         assert!(
             out.status.success(),
             "git {args:?} failed:\n{}",
-            String::from_utf8_lossy(&out.stderr)
+            err_text(&out)
         );
-        String::from_utf8_lossy(&out.stdout).into_owned()
+        out_text(&out)
+    }
+
+    /// `bento exec SB sh -c SCRIPT`, whatever the status.
+    pub(crate) fn sh(&self, sb: &str, script: &str) -> Output {
+        self.sbt(&["exec", sb, "sh", "-c", script])
+    }
+
+    /// `sh` that must succeed: its stdout.
+    pub(crate) fn sh_ok(&self, sb: &str, script: &str) -> String {
+        self.ok(&["exec", sb, "sh", "-c", script])
+    }
+
+    /// `bento create HEAD <workspace> --name NAME --cpus 1 -m 1g`, whatever the status: the size
+    /// every e2e sandbox has. `head` is the flags, then the agent.
+    pub(crate) fn try_create(&self, name: &str, head: &[&str]) -> Output {
+        let ws = self.workspace();
+        let mut args = vec!["create"];
+        args.extend(head);
+        args.extend([ws.to_str().unwrap(), "--name", name]);
+        args.extend(["--cpus", "1", "-m", "1g"]);
+        self.sbt(&args)
+    }
+
+    /// `try_create` that must succeed.
+    pub(crate) fn create(&self, name: &str, head: &[&str]) {
+        let out = self.try_create(name, head);
+        assert!(
+            out.status.success(),
+            "create {name} {head:?} failed:\n{}",
+            err_text(&out)
+        );
+    }
+
+    /// A local kit: directory `name` in the test's directory holding `spec` as `spec.yaml`.
+    /// Returns its path.
+    pub(crate) fn kit_dir(&self, name: &str, spec: &str) -> String {
+        let dir = self.dir.path().join(name);
+        std::fs::create_dir_all(&dir).unwrap();
+        std::fs::write(dir.join("spec.yaml"), spec).unwrap();
+        dir.display().to_string()
     }
 
     pub(crate) fn ok(&self, args: &[&str]) -> String {
@@ -118,9 +158,9 @@ impl E2e {
         assert!(
             out.status.success(),
             "sbt {args:?} failed:\n{}",
-            String::from_utf8_lossy(&out.stderr)
+            err_text(&out)
         );
-        String::from_utf8_lossy(&out.stdout).into_owned()
+        out_text(&out)
     }
 
     /// Alpine with an `agent` user, the sandbox's workload user, and bash installed as root.
@@ -142,15 +182,12 @@ impl E2e {
         self.create_alpine_from(&self.v2_shell(), &self.name, "apk add -q bash");
     }
 
-    /// A v2 workload named `shell` with an agent file (`AGENTS.md`), written once: v2 mixins
+    /// A v2 workload named `shell` with an agent file (`AGENTS.md`): v2 mixins
     /// need a v2 workload, as in sbx, and the built-in agents are v3 kits. Boot it with `-t`.
     pub(crate) fn v2_shell(&self) -> String {
-        let dir = self.dir.path().join("v2-shell");
-        if !dir.exists() {
-            std::fs::create_dir_all(&dir).unwrap();
-            std::fs::write(
-                dir.join("spec.yaml"),
-                r#"schemaVersion: "2"
+        self.kit_dir(
+            "v2-shell",
+            r#"schemaVersion: "2"
 kind: sandbox
 name: shell
 sandbox:
@@ -160,10 +197,7 @@ agentInstructions:
   filename: AGENTS.md
   content: "An e2e sandbox."
 "#,
-            )
-            .unwrap();
-        }
-        dir.display().to_string()
+        )
     }
 
     /// An Alpine sandbox `name` (with its `agent` user), then `then` run as root.
@@ -173,20 +207,8 @@ agentInstructions:
 
     /// `create_alpine_named` with `target` as the agent.
     fn create_alpine_from(&self, target: &str, name: &str, then: &str) {
-        let ws = self.workspace();
-        self.ok(&[
-            "create",
-            target,
-            ws.to_str().unwrap(),
-            "--name",
-            name,
-            "-t",
-            Image::alpine_agent_archive().to_str().unwrap(),
-            "--cpus",
-            "1",
-            "-m",
-            "1g",
-        ]);
+        let archive = Image::alpine_agent_archive();
+        self.create(name, &["-t", archive.to_str().unwrap(), target]);
         guest_root(name, then);
     }
 
@@ -201,23 +223,8 @@ agentInstructions:
         self.ok(&["stop", &base]);
         self.ok(&["template", "save", &base, "e2e-git:v1"]);
         self.ok(&["rm", "-f", &base]);
-        let ws = self.workspace();
-        self.ok(&[
-            "create",
-            "--clone",
-            "shell",
-            ws.to_str().unwrap(),
-            "--name",
-            &self.name,
-            "-t",
-            "e2e-git:v1",
-            "--pull",
-            "never",
-            "--cpus",
-            "1",
-            "-m",
-            "1g",
-        ]);
+        let head = ["--clone", "-t", "e2e-git:v1", "--pull", "never", "shell"];
+        self.create(&self.name, &head);
     }
 
     pub(crate) fn state(&self) -> String {
@@ -245,11 +252,7 @@ impl Drop for E2e {
 /// Whether `smolvm args` succeeds.
 pub(crate) fn smolvm(args: &[&str]) {
     let out = smolvm_command().args(args).output().unwrap();
-    assert!(
-        out.status.success(),
-        "smolvm {args:?}:\n{}",
-        String::from_utf8_lossy(&out.stderr)
-    );
+    assert!(out.status.success(), "smolvm {args:?}:\n{}", err_text(&out));
 }
 
 /// A throwaway `registry:2` in its own smolvm machine on a free loopback port, for published-kit
@@ -297,16 +300,7 @@ impl Registry {
     }
 
     pub(crate) fn answers(&self) -> bool {
-        use std::io::{Read, Write};
-        let Ok(mut s) = std::net::TcpStream::connect(("127.0.0.1", self.port)) else {
-            return false;
-        };
-        let _ = s.set_read_timeout(Some(std::time::Duration::from_secs(5)));
-        let mut body = String::new();
-        s.write_all(b"GET /v2/ HTTP/1.0\r\n\r\n").is_ok()
-            && s.read_to_string(&mut body).is_ok()
-            && body.starts_with("HTTP/1.")
-            && body.contains(" 200 ")
+        host_get(self.port, "/v2/").is_ok_and(|r| r.starts_with("HTTP/1.") && r.contains(" 200 "))
     }
 
     /// `localhost:<port>/e2e/<repo>:1`.
@@ -469,7 +463,7 @@ impl Image {
             b.append_data(&mut h, path, body.as_bytes()).unwrap();
         }
         let data = b.into_inner().unwrap();
-        let diff_id = sha256(&data);
+        let diff_id = smolbento::util::sha256_digest(&data);
         self.config["rootfs"]["diff_ids"]
             .as_array_mut()
             .unwrap()
@@ -491,7 +485,7 @@ impl Image {
             h.set_cksum();
             b.append_data(&mut h, name, data).unwrap();
         };
-        let blob = |data: &[u8]| (sha256(data), data.len());
+        let blob = |data: &[u8]| (smolbento::util::sha256_digest(data), data.len());
         let hex = |digest: &str| digest.trim_start_matches("sha256:").to_string();
         let config = serde_json::to_vec(&self.config).unwrap();
         let (config_digest, config_len) = blob(&config);
@@ -572,13 +566,28 @@ impl Image {
     }
 }
 
-pub(crate) fn sha256(data: &[u8]) -> String {
-    use sha2::Digest;
-    let hex: String = sha2::Sha256::digest(data)
-        .iter()
-        .map(|b| format!("{b:02x}"))
-        .collect();
-    format!("sha256:{hex}")
+/// `out`'s stdout as text.
+pub(crate) fn out_text(out: &Output) -> String {
+    String::from_utf8_lossy(&out.stdout).into_owned()
+}
+
+/// `out`'s stderr as text.
+pub(crate) fn err_text(out: &Output) -> String {
+    String::from_utf8_lossy(&out.stderr).into_owned()
+}
+
+/// `GET path` on the host's `127.0.0.1:port`; the whole response.
+pub(crate) fn host_get(port: u16, path: &str) -> std::io::Result<String> {
+    use std::io::{Read, Write};
+    let mut s = std::net::TcpStream::connect(("127.0.0.1", port))?;
+    s.set_read_timeout(Some(std::time::Duration::from_secs(30)))?;
+    write!(
+        s,
+        "GET {path} HTTP/1.1\r\nHost: 127.0.0.1:{port}\r\nConnection: close\r\n\r\n"
+    )?;
+    let mut out = String::new();
+    s.read_to_string(&mut out)?;
+    Ok(out)
 }
 
 /// A kit descriptor as published: `schemaVersion` 3 plus `kind` and capabilities.
@@ -620,34 +629,24 @@ impl E2e {
 
     /// `create_with_kits` with `agent` (v2 mixins get the v2 `shell` instead).
     pub(crate) fn create_with_kits_as(&self, agent: &str, kits: &[&str]) {
-        let ws = self.workspace();
         let template = self.alpine_template();
-        let mut args = vec!["create", "-t", &template];
+        let mut head = vec!["-t", &template];
         for k in kits {
-            args.extend(["--kit", k]);
+            head.extend(["--kit", k]);
         }
         // v2 mixins need a v2 workload.
         let v2 = kits
             .iter()
             .all(|k| std::path::Path::new(k).join("spec.yaml").is_file());
         let v2_shell = self.v2_shell();
-        args.extend([
-            if v2 { v2_shell.as_str() } else { agent },
-            ws.to_str().unwrap(),
-            "--name",
-            &self.name,
-            "--cpus",
-            "1",
-            "-m",
-            "1g",
-        ]);
-        self.ok(&args);
+        head.push(if v2 { v2_shell.as_str() } else { agent });
+        self.create(&self.name, &head);
     }
 }
 
 /// Root's view of `script` in sandbox `sb`: its stdout, whatever the exit status.
 pub(crate) fn root_out(sb: &str, script: &str) -> String {
-    String::from_utf8_lossy(&root_sh(sb, script).stdout).into_owned()
+    out_text(&root_sh(sb, script))
 }
 
 /// A secret httpbin can check: the base64 of `user:real-secret-xyz`, for `Authorization: Basic`.
@@ -661,7 +660,7 @@ pub(crate) fn basic_auth_ok(e: &E2e, sb: &str, var: &str, pass: &str) -> bool {
         "wget -q -T 20 -O /dev/null --header \"Authorization: Basic ${var}\" \
          https://httpbin.org/basic-auth/user/{pass}"
     );
-    e.sbt(&["exec", sb, "sh", "-c", &cmd]).status.success()
+    e.sh(sb, &cmd).status.success()
 }
 
 /// The smolvm home every e2e test shares (as they share smolvm's builder and image cache): short,

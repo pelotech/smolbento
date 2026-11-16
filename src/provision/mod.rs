@@ -316,7 +316,7 @@ pub fn prepare_create<R: Runner>(
             .unwrap_or_default();
         services.sort();
         services.dedup();
-        sandbox::env::apply(req, &services)?;
+        sandbox::env::apply(req, &services);
     }
     // Before the policy is saved or smolvm creates anything. A workload kit named like a built-in
     // agent isn't that agent.

@@ -45,7 +45,6 @@ pub struct Ctx<R: Runner> {
 }
 
 impl<R: Runner> Ctx<R> {
-    /// One line of input (a prompt's answer), with its line ending; empty at end of input.
     /// Whether a prompt may ask: stdin is a terminal and `--no-input` wasn't given.
     pub fn can_prompt(&self) -> bool {
         self.stdin_tty && !self.no_input
@@ -61,6 +60,7 @@ impl<R: Runner> Ctx<R> {
         Ok(all)
     }
 
+    /// One line of input (a prompt's answer), with its line ending; empty at end of input.
     pub fn read_line(&self) -> std::io::Result<String> {
         let mut line = String::new();
         match &self.input {

@@ -106,30 +106,42 @@ fn add_url<R: Runner>(
     let checkout = repo::clone(url)?;
     let found = repo::discover(checkout.root(), &repo::repo_name(url))?;
     let picked = pick(&found, only)?;
-    let replacing: Vec<&str> = picked
-        .keys()
-        .filter(|n| store.has(n))
-        .map(|n| n.as_str())
-        .collect();
-    if !replacing.is_empty() {
-        let q = format!("Replace {}?", replacing.join(", "));
-        confirm_or(
-            ctx,
-            &q,
-            force,
-            "stdin is not a terminal; pass --force to skip the confirmation\n  try: bento skills add --help",
-        )?;
-    }
+    confirm_replace(ctx, store, picked.keys(), force, "add")?;
     install(ctx, store, &checkout, &picked, "Added")?;
     let n = picked.len();
     writeln!(
         &ctx.out,
         "Added {n} skill{} into {}",
-        if n == 1 { "" } else { "s" },
+        plural(n),
         store.dir.display()
     )?;
     writeln!(&ctx.out, "{NOTE}")?;
     Ok(())
+}
+
+/// The `s` of `n skills`.
+fn plural(n: usize) -> &'static str {
+    if n == 1 { "" } else { "s" }
+}
+
+/// Asks before `skills <command>` replaces the skills among `names` that are installed.
+fn confirm_replace<'a, R: Runner>(
+    ctx: &Ctx<R>,
+    store: &Store,
+    names: impl Iterator<Item = &'a String>,
+    force: bool,
+    command: &str,
+) -> Result<()> {
+    let replacing: Vec<&str> = names.filter(|n| store.has(n)).map(|n| n.as_str()).collect();
+    if replacing.is_empty() {
+        return Ok(());
+    }
+    let q = format!("Replace {}?", replacing.join(", "));
+    let refusal = format!(
+        "stdin is not a terminal; pass --force to skip the confirmation\n  try: bento skills \
+         {command} --help"
+    );
+    confirm_or(ctx, &q, force, &refusal)
 }
 
 fn import<R: Runner>(ctx: &Ctx<R>, store: &Store, a: &SkillsImportArgs) -> Result<()> {
@@ -172,7 +184,7 @@ fn import<R: Runner>(ctx: &Ctx<R>, store: &Store, a: &SkillsImportArgs) -> Resul
         return Ok(());
     }
     let n = picks.len();
-    let s = if n == 1 { "" } else { "s" };
+    let s = plural(n);
     if a.dry_run {
         writeln!(
             &ctx.out,
@@ -181,20 +193,7 @@ fn import<R: Runner>(ctx: &Ctx<R>, store: &Store, a: &SkillsImportArgs) -> Resul
         )?;
         return Ok(());
     }
-    let replacing: Vec<&str> = picks
-        .iter()
-        .filter(|(n, _)| store.has(n))
-        .map(|(n, _)| n.as_str())
-        .collect();
-    if !replacing.is_empty() {
-        let q = format!("Replace {}?", replacing.join(", "));
-        confirm_or(
-            ctx,
-            &q,
-            a.force,
-            "stdin is not a terminal; pass --force to skip the confirmation\n  try: bento skills import --help",
-        )?;
-    }
+    confirm_replace(ctx, store, picks.iter().map(|(n, _)| *n), a.force, "import")?;
     let mut sources = store.sources()?;
     for (name, from) in &picks {
         store.install(name, from)?;
@@ -294,7 +293,7 @@ fn update<R: Runner>(ctx: &Ctx<R>, store: &Store, a: &SkillsUpdateArgs) -> Resul
         writeln!(
             &ctx.out,
             "Updated {updated} skill{} in {}",
-            if updated == 1 { "" } else { "s" },
+            plural(updated),
             store.dir.display()
         )?;
     }

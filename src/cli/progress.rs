@@ -159,6 +159,15 @@ impl Step {
         self.end(&format!("  {mark} {} — failed\n", self.subject));
     }
 
+    /// Ends the step as `done(word)` or, for an error, `fail()`, and hands `result` back.
+    pub fn finish<T, E>(self, result: Result<T, E>, word: &str) -> Result<T, E> {
+        match &result {
+            Ok(_) => self.done(word),
+            Err(_) => self.fail(),
+        }
+        result
+    }
+
     /// `  ⠙ subject — doing… detail`, over the current line and without a newline.
     fn draw(&mut self, detail: Option<&str>) {
         let frame = self.p.paint(MAGENTA, SPINNER[self.frame]);

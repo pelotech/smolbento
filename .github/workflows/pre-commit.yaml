@@ -23,8 +23,6 @@ jobs:
         with:
           persist-credentials: false
       - uses: $/.github/actions/nix-devshell
-        with:
-          gh-token: ${{ secrets.GITHUB_TOKEN }}
       # clippy compiles the crate; saved from main only so PRs reuse main's cache.
       - uses: Swatinem/rust-cache@d1527c8f67ef9af357290475d4af4b0fab8f12e0 # v2.9.3
         with:

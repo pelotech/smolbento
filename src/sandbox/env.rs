@@ -2,28 +2,22 @@
 
 use std::collections::BTreeMap;
 
-use anyhow::{Context, Result};
-
 use super::CreateRequest;
 
 /// A random (v4) UUID.
-pub fn new_uuid() -> Result<String> {
-    use std::io::Read;
-    let mut b = [0u8; 16];
-    std::fs::File::open("/dev/urandom")
-        .and_then(|mut f| f.read_exact(&mut b))
-        .context("reading /dev/urandom for the sandbox id")?;
+pub fn new_uuid() -> String {
+    let mut b: [u8; 16] = rand::random();
     b[6] = (b[6] & 0x0f) | 0x40;
     b[8] = (b[8] & 0x3f) | 0x80;
     let h = crate::util::hex(&b);
-    Ok(format!(
+    format!(
         "{}-{}-{}-{}-{}",
         &h[0..8],
         &h[8..12],
         &h[12..16],
         &h[16..20],
         &h[20..32]
-    ))
+    )
 }
 
 /// The sandbox variables for `req` (after its secrets are bound), with `id` as `SANDBOX_ID`.
@@ -53,14 +47,12 @@ pub fn defaults(req: &CreateRequest, id: &str, services: &[String]) -> Vec<(Stri
 }
 
 /// Adds the defaults to `req.env`, behind anything already there (the user's `-e` wins).
-pub fn apply(req: &mut CreateRequest, services: &[String]) -> Result<()> {
-    let id = new_uuid()?;
-    for (k, v) in defaults(req, &id, services) {
+pub fn apply(req: &mut CreateRequest, services: &[String]) {
+    for (k, v) in defaults(req, &new_uuid(), services) {
         if !req.env.iter().any(|(n, _)| *n == k) {
             req.env.push((k, v));
         }
     }
-    Ok(())
 }
 
 /// What a TTY session takes from the host, as sbx: `TZ` (sbx also derives one when unset; we
@@ -169,7 +161,7 @@ mod tests {
     fn user_env_wins_and_values_are_never_secrets() {
         let mut r = req("claude", &["anthropic"]);
         r.env = vec![("SBX_AGENT".into(), "mine".into())];
-        apply(&mut r, &svcs(&["anthropic"])).unwrap();
+        apply(&mut r, &svcs(&["anthropic"]));
         assert_eq!(get(&r.env, "SBX_AGENT"), Some("mine"));
         assert_eq!(r.env.iter().filter(|(k, _)| k == "SBX_AGENT").count(), 1);
         assert!(get(&r.env, "SANDBOX_ID").is_some());
@@ -177,11 +169,11 @@ mod tests {
 
     #[test]
     fn uuid_is_v4() {
-        let a = new_uuid().unwrap();
+        let a = new_uuid();
         assert_eq!(a.len(), 36);
         assert_eq!(&a[14..15], "4");
         assert!("89ab".contains(&a[19..20]));
-        assert_ne!(a, new_uuid().unwrap());
+        assert_ne!(a, new_uuid());
     }
 
     fn vars(pairs: &[(&str, &str)]) -> Vec<(String, String)> {

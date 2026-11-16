@@ -5,9 +5,6 @@ inputs:
   gh-token:
     description: github token for nix downloads
     default: ${{ github.token }}
-  working-directory:
-    description: directory containing flake.nix
-    default: '.'
 
 runs:
   using: 'composite'
@@ -18,5 +15,4 @@ runs:
 
     - name: Put nix devshell tools on PATH
       shell: bash
-      working-directory: ${{ inputs.working-directory }}
       run: nix develop -c printenv PATH >> "$GITHUB_PATH" # zizmor: ignore[github-env]

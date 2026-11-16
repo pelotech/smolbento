@@ -36,7 +36,7 @@ impl Image {
         entry("home/", None, 0);
         entry("home/agent/", None, uid.into());
         let data = b.into_inner().unwrap();
-        let diff_id = sha256(&data);
+        let diff_id = smolbento::util::sha256_digest(&data);
         self.config["rootfs"]["diff_ids"]
             .as_array_mut()
             .unwrap()
@@ -114,25 +114,9 @@ pub(crate) fn store_skill(e: &E2e, name: &str) {
 impl E2e {
     /// `create_with_kits` with `--skills mode`, returning the output whatever the status.
     pub(crate) fn create_skills(&self, kit: &str, mode: &str) -> Output {
-        let ws = self.workspace();
         let template = self.alpine_template();
-        self.sbt(&[
-            "create",
-            "-t",
-            &template,
-            "--kit",
-            kit,
-            "--skills",
-            mode,
-            "shell",
-            ws.to_str().unwrap(),
-            "--name",
-            &self.name,
-            "--cpus",
-            "1",
-            "-m",
-            "1g",
-        ])
+        let head = ["-t", &template, "--kit", kit, "--skills", mode, "shell"];
+        self.try_create(&self.name, &head)
     }
 
     /// `create_skills` that must succeed.
@@ -141,7 +125,7 @@ impl E2e {
         assert!(
             out.status.success(),
             "create --skills {mode} failed:\n{}",
-            String::from_utf8_lossy(&out.stderr)
+            err_text(&out)
         );
     }
 }
@@ -240,7 +224,7 @@ pub(crate) fn shared_skills_kit_dirs_are_mounted_over_and_off() {
         [(SKILLS_DIR.to_string(), "rw".to_string())]
     );
     let write = format!("mkdir {SKILLS_DIR}/fromrw && echo x > {SKILLS_DIR}/fromrw/SKILL.md");
-    e.ok(&["exec", &e.name, "sh", "-c", &write]);
+    e.sh_ok(&e.name, &write);
     assert_eq!(
         std::fs::read_to_string(e.dir.path().join("data/agent-skills/fromrw/SKILL.md")).unwrap(),
         "x\n"
@@ -289,7 +273,7 @@ pub(crate) fn bundled_skills_are_linked_and_a_store_clash_fails_the_create() {
 
     store_skill(&e, "review-pr");
     let out = e.create_skills(&kit, "readonly");
-    let err = String::from_utf8_lossy(&out.stderr);
+    let err = err_text(&out);
     assert!(!out.status.success(), "the clash fails the create:\n{err}");
     assert!(
         err.contains(&format!(

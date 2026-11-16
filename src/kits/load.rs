@@ -384,12 +384,8 @@ fn local_path<R: Runner>(
     reference: &str,
     position: Position,
 ) -> Result<Option<PathBuf>> {
-    let path = if let Some(rest) = reference.strip_prefix("~/") {
-        let home = ctx.env.get("HOME").context("HOME is not set")?;
-        Path::new(home).join(rest)
-    } else {
-        ctx.cwd.join(reference)
-    };
+    let path =
+        crate::util::expand_home(reference, &ctx.env)?.unwrap_or_else(|| ctx.cwd.join(reference));
     let looks_local = [".", ".."].contains(&reference)
         || ["/", "./", "../", "~/"]
             .iter()

@@ -38,7 +38,7 @@ pub(crate) fn host_loopback_is_unreachable() {
     let probe = format!(
         "gw=$(ip route | awk '/default/ {{print $3}}'); echo probe | nc -w 3 \"$gw\" {port}; true"
     );
-    e.sbt(&["exec", &e.name, "sh", "-c", &probe]);
+    e.sh(&e.name, &probe);
     tx.send(()).unwrap();
     let got = received.join().unwrap();
     assert!(
@@ -65,8 +65,8 @@ pub(crate) fn host_service() -> u16 {
 }
 
 /// sbx's host services: a `localhost:PORT` rule lets sandboxes created with host access reach
-/// the host as `host.docker.internal:PORT`, opened and closed live. Under smolvm 1.32.4 it opens
-/// every host port (see SECURITY.md), so only the open/closed transitions are checked.
+/// the host as `host.docker.internal:PORT`, opened and closed live. smolvm opens every host
+/// port for it (see SECURITY.md), so only the open/closed transitions are checked.
 #[test]
 #[ignore = "boots real VMs; run with `just e2e`"]
 pub(crate) fn host_services_open_and_close_live() {
@@ -81,7 +81,7 @@ pub(crate) fn host_services_open_and_close_live() {
     assert!(!reachable(&a, &url), "no rule, no host access");
     let out = a.sbt(&["policy", "allow", "network", "--sandbox", &a.name, &rule]);
     assert!(out.status.success(), "{out:?}");
-    let err = String::from_utf8_lossy(&out.stderr);
+    let err = err_text(&out);
     assert!(
         err.contains(&format!(
             "note: {} were created without host access; recreate them to use it",

@@ -93,11 +93,11 @@ fn render_list(ports: &[PublishedPort]) -> String {
     if ports.is_empty() {
         return "No published ports\n".into();
     }
-    let mut lines = vec![vec!["HOST".to_string(), "SANDBOX PORT".to_string()]];
+    let mut lines = Vec::new();
     for p in ports {
         lines.push(vec![format!("127.0.0.1:{}", p.host), p.guest.to_string()]);
     }
-    table(lines)
+    table(&["HOST", "SANDBOX PORT"], lines)
 }
 
 #[cfg(test)]
@@ -188,10 +188,7 @@ mod tests {
         t.sbt(&["ports", "a1", "--unpublish", "5353:53/udp"])
             .unwrap();
         let lines = t.calls();
-        assert!(
-            !lines.iter().any(|l| l.contains("machine start")),
-            "{lines:?}"
-        );
+        assert!(!t.made("machine start"), "{lines:?}");
         let updates: Vec<&String> = lines.iter().filter(|l| l.contains("update")).collect();
         assert_eq!(
             updates,

@@ -362,7 +362,7 @@ fn inspect<R: Runner>(
             write!(out, "{}", doc.table(&kit))?;
             if !kit.caps.is_empty() {
                 writeln!(out, "Capabilities:")?;
-                let mut rows = vec![vec!["TYPE".into(), "OPTIONAL".into(), "SUPPORT".into()]];
+                let mut rows = Vec::new();
                 for c in &kit.caps {
                     rows.push(vec![
                         c.ty.clone(),
@@ -375,7 +375,11 @@ fn inspect<R: Runner>(
                         .into(),
                     ]);
                 }
-                write!(out, "{}", super::table(rows))?;
+                write!(
+                    out,
+                    "{}",
+                    super::table(&["TYPE", "OPTIONAL", "SUPPORT"], rows)
+                )?;
             }
             write!(out, "{}", doc.extras_table())?;
         }

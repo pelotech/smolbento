@@ -55,8 +55,6 @@ pub struct InstallStep {
     pub relay_stderr: bool,
 }
 
-/// Fills `req` from the plan and writes the kits' policy rules (install-phase ones too: they must
-/// be in place while install hooks run). Returns the steps for the first start and the ids of
 /// The kits' variables, with a variable's reference to itself (`PATH: /x:$PATH`) replaced by the
 /// image's value (`env_ref`). The image's environment is read only when one does.
 fn expand_self_references(
@@ -87,6 +85,8 @@ fn expand_self_references(
         .collect())
 }
 
+/// Fills `req` from the plan and writes the kits' policy rules (install-phase ones too: they must
+/// be in place while install hooks run). Returns the steps for the first start and the ids of
 /// every rule this call added, for rollback. Nothing is written to `policy` on error.
 pub fn apply(
     plan: &Plan,
@@ -174,7 +174,6 @@ pub fn apply(
     steps.context = context_scripts(plan, agent_file.as_deref(), &mounts);
     steps.startup_d = startup_d(&kits, m, &tmpfs);
 
-    // A v3 workload's agent runs as its image's user, root when the image names none.
     req.launched_by_host = plan
         .workload
         .caps

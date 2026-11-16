@@ -2,15 +2,12 @@ use super::*;
 use crate::testutil::*;
 
 fn set_registry_from(t: &mut TestEnv, host: &str, user: Option<&str>, input: &str) -> Result<()> {
-    let mut file = SecretsFile::load(&t.ctx.paths)?;
-    set_registry(
-        &t.ctx,
-        &mut file,
-        host,
-        user.map(String::from),
-        None,
-        input.as_bytes(),
-    )
+    t.stdin(input);
+    let mut args = vec!["secret", "set", "--registry", host, "--password-stdin"];
+    if let Some(user) = user {
+        args.extend(["--username", user]);
+    }
+    t.sbt(&args).map(|_| ())
 }
 
 #[test]
@@ -119,26 +116,21 @@ fn registry_set_refuses_empty_input_and_bad_hosts() {
 
 #[test]
 fn registry_auth_endpoint_must_be_https() {
-    let t = test_env(&[]);
-    let mut file = SecretsFile::load(&t.ctx.paths).unwrap();
-    let mut set = |endpoint: &str| {
-        set_registry(
-            &t.ctx,
-            &mut file,
-            "quay.io",
-            None,
-            Some(endpoint.into()),
-            "tok".as_bytes(),
-        )
+    let mut t = test_env(&[]);
+    let set = |t: &mut TestEnv, endpoint: &str| {
+        t.stdin("tok");
+        let registry = ["--registry", "quay.io", "--password-stdin"];
+        let endpoint = ["--registry-auth-endpoint", endpoint];
+        t.sbt(&[&["secret", "set"], &registry[..], &endpoint].concat())
     };
-    let e = set("http://auth.example.com/token").unwrap_err();
+    let e = set(&mut t, "http://auth.example.com/token").unwrap_err();
     assert_eq!(
         e.to_string(),
         "--registry-auth-endpoint must be an https:// URL: http://auth.example.com/token"
     );
-    assert!(set("auth.example.com/token").is_err());
+    assert!(set(&mut t, "auth.example.com/token").is_err());
     assert_eq!(t.ctx.store.get("registry:quay.io").unwrap(), None);
-    set("https://auth.example.com/token").unwrap();
+    set(&mut t, "https://auth.example.com/token").unwrap();
     let f = SecretsFile::load(&t.ctx.paths).unwrap();
     assert_eq!(
         f.registries[0].auth_endpoint.as_deref(),

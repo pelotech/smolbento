@@ -59,18 +59,10 @@ pub const STAND_IN_CLAUDE: &str = r#"{"schemaVersion":"3","kind":"workload","cap
 /// Writes (or replaces) agent `name`'s stand-in under `dir` with `descriptor`.
 #[doc(hidden)]
 pub fn write_stand_in(dir: &std::path::Path, name: &str, descriptor: &str) -> std::io::Result<()> {
-    use crate::util::sha256_digest;
     let kit = dir.join(name);
     if kit.exists() {
         std::fs::remove_dir_all(&kit)?;
     }
-    let blobs = kit.join("blobs").join("sha256");
-    std::fs::create_dir_all(&blobs)?;
-    let put = |data: &[u8]| -> std::io::Result<String> {
-        let digest = sha256_digest(data);
-        std::fs::write(blobs.join(digest.trim_start_matches("sha256:")), data)?;
-        Ok(digest)
-    };
     let entrypoint: &[&str] = if name == "shell" {
         &["bash", "-l"]
     } else {
@@ -78,24 +70,8 @@ pub fn write_stand_in(dir: &std::path::Path, name: &str, descriptor: &str) -> st
     };
     let config =
         serde_json::json!({"config": {"Entrypoint": entrypoint, "User": "agent"}}).to_string();
-    let manifest = serde_json::json!({
-        "schemaVersion": 2,
-        "mediaType": "application/vnd.oci.image.manifest.v1+json",
-        "config": {"mediaType": "application/vnd.oci.image.config.v1+json",
-                   "digest": put(config.as_bytes())?, "size": config.len()},
-        "layers": [],
-        "annotations": {
-            "vnd.docker.sandbox.kit.descriptor": descriptor,
-            "vnd.docker.sandbox.kit.schema-version": "3",
-            "com.docker.sandboxes.start-docker": "true",
-        },
-    })
-    .to_string();
-    let index = serde_json::json!({"schemaVersion": 2, "manifests": [{
-        "mediaType": "application/vnd.oci.image.manifest.v1+json",
-        "digest": put(manifest.as_bytes())?, "size": manifest.len()}]});
-    std::fs::write(kit.join("oci-layout"), r#"{"imageLayoutVersion":"1.0.0"}"#)?;
-    std::fs::write(kit.join("index.json"), index.to_string())
+    let extra = [("com.docker.sandboxes.start-docker", "true")];
+    crate::kits::registry::write_layout(&kit, Some(descriptor), &extra, &[], &config).map(drop)
 }
 
 /// Whether `name` is a built-in agent.

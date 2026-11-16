@@ -2,14 +2,13 @@ use super::*;
 
 /// The guest's startup log (empty until the startup runner first writes it).
 pub(crate) fn startup_log(e: &E2e) -> String {
-    let out = root_sh(&e.name, "cat /var/log/sbx-kit-startup.log 2>/dev/null");
-    String::from_utf8_lossy(&out.stdout).into_owned()
+    root_out(&e.name, "cat /var/log/sbx-kit-startup.log 2>/dev/null")
 }
 
 /// Number of dockerd processes in the guest.
 pub(crate) fn dockerds(e: &E2e) -> usize {
-    let out = e.sbt(&["exec", &e.name, "sh", "-c", "pgrep -x dockerd || true"]);
-    String::from_utf8_lossy(&out.stdout).lines().count()
+    let out = e.sh(&e.name, "pgrep -x dockerd || true");
+    out_text(&out).lines().count()
 }
 
 /// The real `shell` agent kit (sbx's `docker.io/sbx/shell:latest`, pulled from Docker Hub) runs
@@ -60,7 +59,7 @@ pub(crate) fn real_shell_kit_runs_dockerd_across_restarts() {
         wait(),
         "docker info after create:\n{}\n{}",
         startup_log(&e),
-        String::from_utf8_lossy(&root_sh(&e.name, "cat /var/log/dockerd.log; ps -ef").stdout)
+        root_out(&e.name, "cat /var/log/dockerd.log; ps -ef")
     );
     assert_one_dockerd(&e, "dockerd survives the startup runner's exec");
 
@@ -109,10 +108,7 @@ pub(crate) fn real_claude_kit_binds_its_api_key_and_seeds_its_settings() {
         "-m",
         "2g",
     ]);
-    let sh = |script: &str| {
-        let out = e.sbt(&["exec", &e.name, "sh", "-c", script]);
-        String::from_utf8_lossy(&out.stdout).into_owned()
-    };
+    let sh = |script: &str| out_text(&e.sh(&e.name, script));
     let settings = sh("cat ~/.claude/settings.json");
     assert!(
         settings.contains("apiKeyHelper"),
@@ -186,22 +182,14 @@ pub(crate) fn published_workload_kit_runs_its_command() {
             ]),
         ),
     );
-    let ws = e.workspace();
-    e.ok(&[
-        "create",
-        &kit,
-        ws.to_str().unwrap(),
-        "--name",
-        &e.name,
-        "--cpus",
-        "1",
-        "-m",
-        "1g",
-    ]);
+    e.create_workload(&kit);
     assert_eq!(e.state(), "running");
     // The image has no USER, so the agent runs as root, as in sbx, in the workspace.
     let out = e.ok(&["run", "--name", &e.name]);
-    let want = format!("workload-command-ran-as-root in {}", ws.display());
+    let want = format!(
+        "workload-command-ran-as-root in {}",
+        e.workspace().display()
+    );
     assert!(out.contains(&want), "{out}");
 }
 
@@ -328,22 +316,7 @@ pub(crate) fn kit_host_mount_shared_and_kept() {
         }
     }
     let _cleanup = Cleanup([&a, &b]);
-    let ws = e.workspace();
-    let create = |name: &str, extra: &[&str]| {
-        let mut args = vec![
-            "create",
-            &kit,
-            ws.to_str().unwrap(),
-            "--name",
-            name,
-            "--cpus",
-            "1",
-            "-m",
-            "1g",
-        ];
-        args.extend(extra);
-        e.ok(&args);
-    };
+    let create = |name: &str, flags: &[&str]| e.create(name, &[flags, &[&kit]].concat());
     let mounts = |name: &str| -> serde_json::Value {
         let out = e.ok(&["inspect", "--json", name]);
         serde_json::from_str::<serde_json::Value>(&out).unwrap()["mounts"].clone()
@@ -361,7 +334,7 @@ pub(crate) fn kit_host_mount_shared_and_kept() {
     );
     assert_eq!(mounts(&a)[SHARED], managed.to_str().unwrap());
     let note = format!("{SHARED}/note");
-    e.ok(&["exec", &a, "sh", "-c", &format!("echo from-a > {note}")]);
+    e.sh_ok(&a, &format!("echo from-a > {note}"));
     assert_eq!(e.ok(&["exec", &b, "cat", &note]), "from-a\n");
 
     // Removing both sandboxes keeps the directory and its file.
@@ -481,7 +454,7 @@ pub(crate) fn local_kit_builds_from_a_registry_that_needs_a_login() {
     assert!(
         out.status.success(),
         "secret set --registry: {}",
-        String::from_utf8_lossy(&out.stderr)
+        err_text(&out)
     );
 
     let kit = e.dir.path().join("dhi");
@@ -548,15 +521,8 @@ echo "$ip" > /etc/e2e-install-ip"#;
         !reachable(&e, "https://httpbin.org"),
         "httpbin.org is closed after install"
     );
-    let by_ip = e.sbt(&[
-        "exec",
-        &e.name,
-        "sh",
-        "-c",
-        &format!("wget -S -T 8 -O /dev/null http://{ip}/ 2>&1 | grep -q 'HTTP/'"),
-    ]);
     assert!(
-        !by_ip.status.success(),
+        !http_answers(&e, &ip),
         "{ip} (httpbin.org's address) is closed after install"
     );
     // `policy ls` never lists install-phase rules (as sbx), so check the stored policy too.
@@ -618,14 +584,11 @@ pub(crate) fn install_only_credential_is_gone_after_install() {
             .success(),
         "substituted during install"
     );
-    let after = e.sbt(&[
-        "exec",
+    let after = e.sh(
         &e.name,
-        "sh",
-        "-c",
         "wget -S -T 20 -O - https://httpbin.org/basic-auth/user/real-secret-xyz 2>&1",
-    ]);
-    let after = String::from_utf8_lossy(&after.stdout);
+    );
+    let after = out_text(&after);
     assert!(after.contains("502"), "502 after install: {after}");
     assert!(!after.contains(BASIC_SECRET), "{after}");
 }
@@ -642,10 +605,8 @@ pub(crate) fn kit_add_applies_network_and_hooks_live() {
     assert!(!reachable(&e, "https://httpbin.org"), "deny-all blocks");
     let boot = root_out(&e.name, "cat /proc/sys/kernel/random/boot_id");
 
-    let kit = e.dir.path().join("e2e-add");
-    std::fs::create_dir_all(&kit).unwrap();
-    std::fs::write(
-        kit.join("spec.yaml"),
+    let kit = e.kit_dir(
+        "e2e-add",
         r#"schemaVersion: "2"
 kind: mixin
 name: e2e-add
@@ -659,9 +620,8 @@ setup:
     - command: [touch, /tmp/e2e-kit-started]
       user: "0"
 "#,
-    )
-    .unwrap();
-    e.ok(&["kit", "add", &e.name, kit.to_str().unwrap(), "--yes"]);
+    );
+    e.ok(&["kit", "add", &e.name, &kit, "--yes"]);
 
     assert_eq!(
         root_out(&e.name, "cat /proc/sys/kernel/random/boot_id"),
@@ -743,18 +703,7 @@ pub(crate) fn image_user_kit(
 impl E2e {
     /// `bento create` of workload kit `kit` on the workspace.
     pub(crate) fn create_workload(&self, kit: &str) {
-        let ws = self.workspace();
-        self.ok(&[
-            "create",
-            kit,
-            ws.to_str().unwrap(),
-            "--name",
-            &self.name,
-            "--cpus",
-            "1",
-            "-m",
-            "1g",
-        ]);
+        self.create(&self.name, &[kit]);
     }
 
     /// Runs the workload's agent; asserts it ran as `user` with
@@ -771,14 +720,14 @@ impl E2e {
             let as_user = self.sbt(&["exec", "-u", user, &self.name, "sh", "-c", probe]);
             panic!(
                 "bento run failed:\n{}\n--- as root:\n{}{}\n--- as {user}:\n{}{}",
-                String::from_utf8_lossy(&run.stderr),
-                String::from_utf8_lossy(&as_root.stdout),
-                String::from_utf8_lossy(&as_root.stderr),
-                String::from_utf8_lossy(&as_user.stdout),
-                String::from_utf8_lossy(&as_user.stderr),
+                err_text(&run),
+                out_text(&as_root),
+                err_text(&as_root),
+                out_text(&as_user),
+                err_text(&as_user),
             );
         }
-        let out = String::from_utf8_lossy(&run.stdout).into_owned();
+        let out = out_text(&run);
         let want = format!("ran user={user} bash_env=yes pwd={}", ws.display());
         assert!(out.contains(&want), "want {want:?} in:\n{out}");
         let written = ws.join(format!("wrote-as-{user}"));
@@ -839,10 +788,8 @@ pub(crate) fn numeric_image_user_runs_as_its_account() {
 #[ignore = "boots real VMs and pulls alpine; run with `just e2e`"]
 pub(crate) fn failing_startup_hook_warns_and_the_sandbox_runs() {
     let e = E2e::new("startfail");
-    let kit = e.dir.path().join("e2e-fail-start");
-    std::fs::create_dir_all(&kit).unwrap();
-    std::fs::write(
-        kit.join("spec.yaml"),
+    let kit = e.kit_dir(
+        "e2e-fail-start",
         r#"schemaVersion: "2"
 kind: mixin
 name: e2e-fail-start
@@ -851,26 +798,18 @@ setup:
     - command: [sh, -c, "sleep 2; exit 7"]
       user: "0"
 "#,
-    )
-    .unwrap();
-    let ws = e.workspace();
-    let out = e.sbt(&[
-        "create",
+    );
+    let archive = Image::alpine_agent_archive();
+    // A v2 mixin needs a v2 workload.
+    let head = [
         "-t",
-        Image::alpine_agent_archive().to_str().unwrap(),
+        archive.to_str().unwrap(),
         "--kit",
-        kit.to_str().unwrap(),
-        // A v2 mixin needs a v2 workload.
+        &kit,
         &e.v2_shell(),
-        ws.to_str().unwrap(),
-        "--name",
-        &e.name,
-        "--cpus",
-        "1",
-        "-m",
-        "1g",
-    ]);
-    let err = String::from_utf8_lossy(&out.stderr);
+    ];
+    let out = e.try_create(&e.name, &head);
+    let err = err_text(&out);
     assert!(out.status.success(), "create succeeds:\n{err}");
     assert!(
         err.contains("a kit startup step failed (kit startup exited with code 7); starting anyway")
@@ -881,7 +820,7 @@ setup:
 
     e.ok(&["stop", &e.name]);
     let out = e.sbt(&["start", &e.name]);
-    let err = String::from_utf8_lossy(&out.stderr);
+    let err = err_text(&out);
     assert!(out.status.success(), "start succeeds:\n{err}");
     assert!(err.contains("kit startup exited with code 7"), "{err}");
     assert_eq!(e.state(), "running");
@@ -892,10 +831,8 @@ setup:
 #[ignore = "boots real VMs and pulls alpine; run with `just e2e`"]
 pub(crate) fn v2_startup_hook_runs_as_agent_by_default() {
     let e = E2e::new("v2user");
-    let kit = e.dir.path().join("e2e-v2-user");
-    std::fs::create_dir_all(&kit).unwrap();
-    std::fs::write(
-        kit.join("spec.yaml"),
+    let kit = e.kit_dir(
+        "e2e-v2-user",
         r#"schemaVersion: "2"
 kind: mixin
 name: e2e-v2-user
@@ -903,9 +840,8 @@ setup:
   startup:
     - command: [sh, -c, "id -un > /tmp/e2e-started-as"]
 "#,
-    )
-    .unwrap();
-    e.create_with_kits(&[kit.to_str().unwrap()]);
+    );
+    e.create_with_kits(&[&kit]);
     e.ok(&["start", &e.name]);
     assert_eq!(e.state(), "running");
     let uid = smolbento::util::host_uid();
@@ -924,19 +860,16 @@ setup:
 #[ignore = "boots real VMs and pulls alpine; run with `just e2e`"]
 pub(crate) fn mixin_agent_context_sits_beside_the_workspace() {
     let e = E2e::new("ctx");
-    let kit = e.dir.path().join("e2e-ctx");
-    std::fs::create_dir_all(&kit).unwrap();
-    std::fs::write(
-        kit.join("spec.yaml"),
+    let kit = e.kit_dir(
+        "e2e-ctx",
         r#"schemaVersion: "2"
 kind: mixin
 name: e2e-ctx
 agentInstructions:
   content: "Use the e2e tools."
 "#,
-    )
-    .unwrap();
-    e.create_with_kits(&[kit.to_str().unwrap()]);
+    );
+    e.create_with_kits(&[&kit]);
     let parent = e.workspace().parent().unwrap().to_path_buf();
     let p = parent.display();
     let index = root_out(&e.name, &format!("cat {p}/AGENTS.md"));
@@ -972,7 +905,7 @@ pub(crate) fn kit_arg_errors_stop_create() {
     let ws = ws.to_str().unwrap();
     let fails = |args: &[&str], want: &str| {
         let out = e.sbt(args);
-        let err = String::from_utf8_lossy(&out.stderr);
+        let err = err_text(&out);
         assert!(!out.status.success(), "{args:?} fails");
         assert!(err.contains(want), "{args:?}: want {want:?} in:\n{err}");
         assert_eq!(e.state(), "absent", "{args:?} made no sandbox");
@@ -983,19 +916,14 @@ pub(crate) fn kit_arg_errors_stop_create() {
         "unknown kit argument a",
     );
     // A v2 mixin needs a v2 workload: the built-in agents are v3 kits.
-    let wl = e.dir.path().join("e2e-wl");
-    std::fs::create_dir_all(&wl).unwrap();
-    std::fs::write(
-        wl.join("spec.yaml"),
+    let wl = e.kit_dir(
+        "e2e-wl",
         "schemaVersion: \"2\"\nkind: sandbox\nname: wl\nsandbox:\n  image: alpine\n  entrypoint: [sh]\n",
-    )
-    .unwrap();
-    let wl = wl.to_str().unwrap();
+    );
+    let wl = wl.as_str();
 
-    let kit = e.dir.path().join("e2e-args");
-    std::fs::create_dir_all(&kit).unwrap();
-    std::fs::write(
-        kit.join("spec.yaml"),
+    let kit = e.kit_dir(
+        "e2e-args",
         r#"schemaVersion: "2"
 kind: mixin
 name: e2e-args
@@ -1009,9 +937,8 @@ setup:
   install:
     - command: "echo ${{ kit.args.opt }} ${{ kit.args.num }}"
 "#,
-    )
-    .unwrap();
-    let kit = kit.to_str().unwrap();
+    );
+    let kit = kit.as_str();
     fails(
         &[
             "create", "-t", "alpine", "--kit", kit, wl, ws, "--name", &e.name,
@@ -1072,13 +999,12 @@ setup:
 pub(crate) fn a_pushed_kit_pulls_and_runs() {
     let e = E2e::new("push");
     let reg = Registry::start(&e);
-    let kit = e.dir.path().join("pushed");
-    std::fs::create_dir_all(kit.join("files/home")).unwrap();
-    std::fs::write(
-        kit.join("spec.yaml"),
+    let kit = e.kit_dir(
+        "pushed",
         "schemaVersion: \"2\"\nkind: mixin\nname: pushed\n",
-    )
-    .unwrap();
+    );
+    let kit = Path::new(&kit);
+    std::fs::create_dir_all(kit.join("files/home")).unwrap();
     std::fs::write(kit.join("files/home/hello"), "from-the-registry\n").unwrap();
     let r = reg.reference("pushed");
     let out = e.ok(&["kit", "push", kit.to_str().unwrap(), &r]);
@@ -1091,7 +1017,7 @@ pub(crate) fn a_pushed_kit_pulls_and_runs() {
     let out = e.ok(&["kit", "pull", &r, "-o", "out.tar.gz"]);
     assert_eq!(out, format!("Pulled {r} to out.tar.gz\n"));
     let pulled = std::fs::read(e.workspace().join("out.tar.gz")).unwrap();
-    let pushed = smolbento::kits::artifact::read_dir(&kit)
+    let pushed = smolbento::kits::artifact::read_dir(kit)
         .unwrap()
         .files
         .unwrap();
@@ -1148,19 +1074,16 @@ pub(crate) fn a_signed_kit_verifies_with_its_key() {
     };
     let (key, public) = keypair("signer");
     let (_, other) = keypair("other");
-    let kit = dir.join("signed");
-    std::fs::create_dir_all(&kit).unwrap();
-    std::fs::write(
-        kit.join("spec.yaml"),
+    let kit = e.kit_dir(
+        "signed",
         "schemaVersion: \"2\"\nkind: mixin\nname: signed\n",
-    )
-    .unwrap();
+    );
     let r = reg.reference("signed");
-    e.ok(&["kit", "push", kit.to_str().unwrap(), &r]);
+    e.ok(&["kit", "push", &kit, &r]);
 
     let out = e.sbt(&["kit", "verify", &r, "--key", &public]);
     assert!(!out.status.success());
-    assert!(String::from_utf8_lossy(&out.stderr).contains("kit is not signed"));
+    assert!(err_text(&out).contains("kit is not signed"));
 
     assert_eq!(
         e.ok(&["kit", "sign", &r, "--key", &key]),
@@ -1193,26 +1116,18 @@ pub(crate) fn a_signed_kit_verifies_with_its_key() {
     e.ok(&["kit", "verify", &r, "--key", &public2]);
 
     let r2 = reg.reference("signed-at-push");
-    let out = e.ok(&[
-        "kit",
-        "push",
-        kit.to_str().unwrap(),
-        &r2,
-        "--sign",
-        "--key",
-        &key,
-    ]);
+    let out = e.ok(&["kit", "push", &kit, &r2, "--sign", "--key", &key]);
     assert!(out.ends_with(&format!("Signed {r2}\n")), "{out}");
     e.ok(&["kit", "verify", &r2, "--key", &public]);
 
     // kit.requireSignature with this key trusted: the signed kit loads, an unsigned one doesn't.
     let unsigned = reg.reference("unsigned");
-    e.ok(&["kit", "push", kit.to_str().unwrap(), &unsigned]);
+    e.ok(&["kit", "push", &kit, &unsigned]);
     e.ok(&["settings", "set", "kit.requireSignature", "true"]);
     let trust = |key: &str| format!(r#"[{{"key":"{key}"}}]"#);
     e.ok(&["settings", "set", "kit.trustedSigners", &trust(&public)]);
     let out = e.sbt(&["kit", "inspect", &r]);
-    let stderr = String::from_utf8_lossy(&out.stderr);
+    let stderr = err_text(&out);
     assert!(out.status.success(), "{stderr}");
     assert!(
         stderr.contains(&format!("✓ {r} — signature verified (key {public})")),
@@ -1220,7 +1135,7 @@ pub(crate) fn a_signed_kit_verifies_with_its_key() {
     );
     let out = e.sbt(&["kit", "inspect", &unsigned]);
     assert!(!out.status.success());
-    let stderr = String::from_utf8_lossy(&out.stderr);
+    let stderr = err_text(&out);
     assert!(
         stderr.contains(&format!("{unsigned} is not signed")),
         "{stderr}"
@@ -1228,7 +1143,7 @@ pub(crate) fn a_signed_kit_verifies_with_its_key() {
     e.ok(&["settings", "set", "kit.trustedSigners", &trust(&other)]);
     let out = e.sbt(&["kit", "inspect", &r]);
     assert!(!out.status.success());
-    let stderr = String::from_utf8_lossy(&out.stderr);
+    let stderr = err_text(&out);
     assert!(
         stderr.contains("kit signature verification failed"),
         "{stderr}"
@@ -1254,7 +1169,7 @@ pub(crate) fn nix_kit_gives_agents_nix_and_direnv() {
     std::fs::write(e.workspace().join(".envrc"), "export E2E_DIRENV=yes\n").unwrap();
     // `claude`'s agent file is in `~/.claude`, so the kit's instructions are there too.
     e.create_with_kits_as("claude", &[&nix_kit_dir()]);
-    let as_agent = |script: &str| e.ok(&["exec", &e.name, "sh", "-c", script]);
+    let as_agent = |script: &str| e.sh_ok(&e.name, script);
     assert!(as_agent("nix --version").contains("nix"));
     as_agent(NIX_BUILD);
     assert_eq!(
@@ -1275,21 +1190,8 @@ pub(crate) fn nix_kit_works_for_a_workload_image_user() {
     let _builder = BuilderGuard::new();
     let reg = Registry::start(&e);
     let kit = image_user_kit(&reg, "nix-image-user", "somebody", serde_json::Value::Null);
-    let ws = e.workspace();
-    e.ok(&[
-        "create",
-        &kit,
-        ws.to_str().unwrap(),
-        "--kit",
-        &nix_kit_dir(),
-        "--name",
-        &e.name,
-        "--cpus",
-        "1",
-        "-m",
-        "1g",
-    ]);
+    e.create(&e.name, &["--kit", &nix_kit_dir(), &kit]);
     assert_eq!(e.ok(&["exec", &e.name, "id", "-un"]).trim(), "somebody");
     assert!(e.ok(&["exec", &e.name, "nix", "--version"]).contains("nix"));
-    e.ok(&["exec", &e.name, "sh", "-c", NIX_BUILD]);
+    e.sh_ok(&e.name, NIX_BUILD);
 }

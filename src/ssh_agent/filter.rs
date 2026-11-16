@@ -20,6 +20,7 @@ use super::known_hosts::host_keys;
 use super::{self as agent, Access};
 use crate::bridge::listener::{self, DEADLINE, Deadline, POLL, Server};
 use crate::config::{Paths, Settings};
+use crate::host_service::MAX_CONNECTIONS;
 use crate::sandbox::Sandbox;
 
 const FAILURE: u8 = 5;
@@ -41,8 +42,6 @@ const SSHSIG: &[u8] = b"SSHSIG";
 
 /// A message (either way) above this closes the connection.
 const MAX_MESSAGE: usize = 256 << 10;
-/// Guest connections served at once; more are closed when they arrive.
-const MAX_CONNECTIONS: usize = 8;
 /// How long a connection may sit between requests: ssh keeps one open for its whole session.
 const IDLE: Duration = Duration::from_secs(600);
 /// How long the host agent may take to answer; it may ask the user to confirm a signature.
@@ -77,28 +76,25 @@ impl Backing {
         }
     }
 
+    /// The settings as they are now; `None` when they can't be read.
+    fn settings(&self) -> Option<Settings> {
+        let (settings, error) = Settings::load(&self.paths, self.env.clone());
+        error.is_none().then_some(settings)
+    }
+
     /// The host agent for a new connection; `None` refuses it: forwarding is off, there's no
     /// agent, or the settings can't be read.
     fn agent(&self) -> Option<PathBuf> {
-        let (settings, error) = Settings::load(&self.paths, self.env.clone());
-        if error.is_some() {
-            return None;
-        }
-        agent::host_agent(&settings, &self.env).ok()?.ok()
+        agent::host_agent(&self.settings()?, &self.env).ok()?.ok()
     }
 
     /// The text of the host's `known_hosts` file (`ssh.knownHostsFile`), read afresh each time so
     /// edits apply to the next login. `None` (no keys, so no login) when it can't be read.
     fn known_hosts(&self) -> Option<String> {
-        let (settings, error) = Settings::load(&self.paths, self.env.clone());
-        if error.is_some() {
-            return None;
-        }
-        let path = settings.value("ssh.knownHostsFile").ok()?;
-        let path = match path.strip_prefix("~/") {
-            Some(rest) => Path::new(self.env.get("HOME")?).join(rest),
-            None => PathBuf::from(path),
-        };
+        let path = self.settings()?.value("ssh.knownHostsFile").ok()?;
+        let path = crate::util::expand_home(&path, &self.env)
+            .ok()?
+            .unwrap_or_else(|| path.into());
         let file = std::fs::File::open(path).ok()?;
         let mut text = String::new();
         file.take(MAX_KNOWN_HOSTS).read_to_string(&mut text).ok()?;

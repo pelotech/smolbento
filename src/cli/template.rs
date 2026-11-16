@@ -67,7 +67,7 @@ fn ls<R: Runner>(ctx: &Ctx<R>, a: &TemplateLsArgs) -> Result<()> {
         }
         Format::Table => {
             let head = ["REPOSITORY", "TAG", "IMAGE ID", "FLAVOR", "CREATED"];
-            let mut lines = vec![head.map(String::from).to_vec()];
+            let mut lines = Vec::new();
             for e in &all {
                 let created = humantime::parse_rfc3339(&e.created_at)
                     .ok()
@@ -81,7 +81,7 @@ fn ls<R: Runner>(ctx: &Ctx<R>, a: &TemplateLsArgs) -> Result<()> {
                     created,
                 ]);
             }
-            write!(out, "{}", table(lines))?;
+            write!(out, "{}", table(&head, lines))?;
         }
     }
     Ok(())
@@ -146,13 +146,7 @@ fn load<R: Runner>(ctx: &Ctx<R>, a: &TemplateLoadArgs) -> Result<()> {
     let f = a.file.display();
     let p = Progress::for_ctx(ctx, false);
     let step = p.step(&format!("image from {f}"), "loading");
-    match Store::new(&ctx.paths).import(&a.file) {
-        Ok(_) => step.done("loaded"),
-        Err(e) => {
-            step.fail();
-            return Err(e);
-        }
-    }
+    step.finish(Store::new(&ctx.paths).import(&a.file), "loaded")?;
     writeln!(&ctx.out, "Loaded image from {f}")?;
     Ok(())
 }
@@ -202,12 +196,9 @@ fn save<R: Runner>(ctx: &Ctx<R>, a: &TemplateSaveArgs) -> Result<()> {
     // The temp dir is removed on drop, so a failed pack leaves nothing behind.
     let tmp = store.temp_dir()?;
     let out = tmp.path().join("pack");
-    if let Err(e) = ctx.vm.pack_from_vm(&sb.machine, &out) {
-        step.fail();
-        return Err(e).context(format!("saving {}", sb.name()));
-    }
-    step.done("snapshotted");
-    let created = std::time::UNIX_EPOCH + std::time::Duration::from_secs(ctx.now.max(0) as u64);
+    let packed = ctx.vm.pack_from_vm(&sb.machine, &out);
+    step.finish(packed, "snapshotted")
+        .with_context(|| format!("saving {}", sb.name()))?;
     let entry = store.add(
         Entry {
             repository: r.repository,
@@ -216,7 +207,7 @@ fn save<R: Runner>(ctx: &Ctx<R>, a: &TemplateSaveArgs) -> Result<()> {
             image: sb.image.clone().unwrap_or_default(),
             docker: sb.meta.docker,
             kits: sb.meta.kits.clone(),
-            created_at: humantime::format_rfc3339_seconds(created).to_string(),
+            created_at: super::rfc3339(ctx.now),
             ..Default::default()
         },
         &tmp.path().join("pack.smolmachine"),
@@ -224,11 +215,7 @@ fn save<R: Runner>(ctx: &Ctx<R>, a: &TemplateSaveArgs) -> Result<()> {
     if let Some(file) = &a.output {
         let f = file.display();
         let step = p.step(&format!("image to {f}"), "exporting");
-        if let Err(e) = store.export(&entry, file) {
-            step.fail();
-            return Err(e);
-        }
-        step.done("exported");
+        step.finish(store.export(&entry, file), "exported")?;
         writeln!(&ctx.out, "Exported image to {f}")?;
     }
     writeln!(&ctx.out, "Saved template {}", entry.full())?;
@@ -278,14 +265,7 @@ mod tests {
             out.ends_with("Saved template docker.io/library/chk-tpl:v1\n"),
             "{out}"
         );
-        let line = t
-            .ctx
-            .vm
-            .runner()
-            .call_lines()
-            .into_iter()
-            .find(|l| l.starts_with("pack"))
-            .unwrap();
+        let line = t.calls_of("pack").remove(0);
         assert!(
             line.starts_with("pack create --from-vm sbx-a --no-sign -o "),
             "{line}"
@@ -329,7 +309,7 @@ mod tests {
             err,
             "cannot save a running sandbox; stop it first with:\n  try: bento stop a"
         );
-        assert!(!t.calls().iter().any(|l| l.starts_with("pack")));
+        assert!(!t.made("pack"));
     }
 
     #[test]
@@ -359,7 +339,7 @@ mod tests {
              recreate it (bento rm a, then bento create …)"
         );
         let calls = t.calls();
-        assert!(!calls.iter().any(|l| l.starts_with("pack")), "{calls:?}");
+        assert!(!t.made("pack"), "{calls:?}");
         assert!(!calls.iter().any(|l| l.contains("stop")), "{calls:?}");
     }
 

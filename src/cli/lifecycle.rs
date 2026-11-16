@@ -17,9 +17,6 @@ use crate::smolvm::Runner;
 use crate::workspace::clone;
 
 pub fn create<R: Runner>(ctx: &mut Ctx<R>, a: &CreateArgs) -> Result<i32> {
-    if a.targets.is_empty() {
-        bail!("specify an agent, e.g. `bento create claude .`");
-    }
     check_kit_args(&a.targets, &a.opts)?;
     let (mut req, workload) = kit_target(ctx, &a.targets, &a.opts, false)?;
     settle_default_name(ctx, &mut req, &a.opts, false)?;

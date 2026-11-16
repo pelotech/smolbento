@@ -250,7 +250,8 @@ pub struct ForkArgs {
     pub count: u32,
 }
 
-/// Arguments of a command that isn't implemented yet, kept so sbx command lines still parse.
+/// Arguments taken unparsed: `smolvm`'s and `daemon`'s, and those of sbx commands that aren't
+/// implemented, so their command lines still parse.
 #[derive(Debug, Args)]
 pub struct Passthrough {
     #[arg(trailing_var_arg = true, allow_hyphen_values = true, hide = true)]
@@ -425,8 +426,9 @@ pub struct CreateArgs {
     pub no_progress: bool,
 }
 
+/// The flags `exec` and `env exec` share.
 #[derive(Debug, Args)]
-pub struct ExecArgs {
+pub struct ExecFlags {
     /// Keep stdin open
     #[arg(short = 'i', long)]
     pub interactive: bool,
@@ -453,6 +455,12 @@ pub struct ExecArgs {
     pub detach: bool,
     #[arg(long = "detach-keys", hide = true)]
     pub detach_keys: Option<String>,
+}
+
+#[derive(Debug, Args)]
+pub struct ExecArgs {
+    #[command(flatten)]
+    pub flags: ExecFlags,
     /// Sandbox name
     pub sandbox: String,
     /// Command and its arguments

@@ -55,22 +55,16 @@ pub fn ensure(
 
 /// GETs `url` (following GitHub's redirect), saying how big it is first.
 fn download(url: &str, version: &str, progress: &mut dyn FnMut(&str)) -> Result<Vec<u8>> {
-    tokio::runtime::Builder::new_current_thread()
-        .enable_all()
-        .build()
-        .context("starting the download client")?
-        .block_on(async {
-            // Same TLS setup as `kits::registry`. Err means a provider is already installed.
-            let _ = rustls::crypto::ring::default_provider().install_default();
-            let client = reqwest::Client::builder()
-                .connect_timeout(Duration::from_secs(30))
-                .read_timeout(Duration::from_secs(60))
-                .build()?;
-            let res = client.get(url).send().await?.error_for_status()?;
-            let mb = res.content_length().unwrap_or(0) / 1_000_000;
-            progress(&format!("downloading smolvm {version} ({mb} MB)…"));
-            Ok(res.bytes().await?.to_vec())
-        })
+    crate::util::block_on("download client", async {
+        let client = reqwest::Client::builder()
+            .connect_timeout(Duration::from_secs(30))
+            .read_timeout(Duration::from_secs(60))
+            .build()?;
+        let res = client.get(url).send().await?.error_for_status()?;
+        let mb = res.content_length().unwrap_or(0) / 1_000_000;
+        progress(&format!("downloading smolvm {version} ({mb} MB)…"));
+        Ok(res.bytes().await?.to_vec())
+    })
 }
 
 /// Unpacks a release tarball (one top-level directory) into `<home>/engine/<version>` by way of a

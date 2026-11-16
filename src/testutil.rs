@@ -89,11 +89,29 @@ pub fn test_env(extra_env: &[(&str, &str)]) -> TestEnv {
     }
 }
 
+/// A context that may load kits from local directories.
+pub fn kit_env() -> TestEnv {
+    test_env(&[("SMOLBENTO_KIT_ALLOW_LOCAL_KITS", "true")])
+}
+
+/// The path of the v2 kit fixture `name`.
+pub fn v2_fixture(name: &str) -> String {
+    format!(
+        "{}/tests/fixtures/kits/v2/{name}",
+        env!("CARGO_MANIFEST_DIR")
+    )
+}
+
 impl TestEnv {
     /// Makes stdin a terminal that answers prompts with `answers`, one line each.
     pub fn answer(&mut self, answers: &str) {
         self.ctx.stdin_tty = true;
-        self.ctx.input = crate::ctx::In::Buffer(std::io::Cursor::new(answers.into()).into());
+        self.stdin(answers);
+    }
+
+    /// Makes `text` what commands read from stdin.
+    pub fn stdin(&mut self, text: &str) {
+        self.ctx.input = crate::ctx::In::Buffer(std::io::Cursor::new(text.into()).into());
     }
 
     /// What commands have written to stdout since the last call.
@@ -189,6 +207,13 @@ impl TestEnv {
     /// Whether smolvm got a call starting with `prefix`.
     pub fn made(&self, prefix: &str) -> bool {
         !self.calls_of(prefix).is_empty()
+    }
+
+    /// The `machine create` call.
+    pub fn create_line(&self) -> String {
+        let calls = self.calls();
+        let create = calls.iter().find(|l| l.starts_with("machine create"));
+        create.unwrap_or_else(|| panic!("{calls:#?}")).clone()
     }
 
     /// Makes `machine status` answer that no machine of that name exists.

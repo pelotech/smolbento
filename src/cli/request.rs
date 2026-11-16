@@ -89,9 +89,8 @@ pub(crate) fn base_request<R: Runner>(
 /// Kit args need a kit: a `--kit` or a workload kit as the target. Like sbx this fails on every
 /// command, including `run` of an existing sandbox.
 pub(crate) fn check_kit_args(targets: &[String], opts: &SandboxOpts) -> Result<()> {
-    // Every target is a workload kit now, built-in agents included.
-    let workload_kit = !targets.is_empty();
-    if !workload_kit && opts.kit.is_empty() && has_kit_args(opts) {
+    // Every target is a workload kit, built-in agents included.
+    if targets.is_empty() && opts.kit.is_empty() && has_kit_args(opts) {
         bail!("kit arguments were supplied but no kits were referenced");
     }
     Ok(())
@@ -257,7 +256,7 @@ pub(crate) fn kit_plan<R: Runner>(
     // A template's own mixins, and every recorded kit's args.
     let mut recorded: Vec<Kit> = Vec::new();
     let mut recorded_args: Vec<(String, Vec<String>)> = Vec::new();
-    let (workload_source, workload) = match workload {
+    let (workload_source, mut workload) = match workload {
         Workload::Template(e) => {
             let offline = opts.pull.as_deref() == Some("never");
             // docker.enabled=false leaves out the docker kit the source sandbox had.
@@ -299,7 +298,6 @@ pub(crate) fn kit_plan<R: Runner>(
             (Some(target), kit)
         }
     };
-    let mut workload = workload;
     // A template already set the image and the docker flag.
     if req.template_pack.is_none() {
         load::check_launchable(ctx, &mut workload, Some(&req.name))?;

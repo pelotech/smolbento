@@ -33,10 +33,7 @@ fn resets(t: &TestEnv) -> Vec<String> {
 }
 
 fn updates(t: &TestEnv) -> Vec<String> {
-    t.calls()
-        .into_iter()
-        .filter(|l| l.contains("machine update"))
-        .collect()
+    t.calls_of("machine update")
 }
 
 #[test]

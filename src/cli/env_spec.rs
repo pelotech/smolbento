@@ -1,10 +1,10 @@
 //! A loaded `sbxenv.yaml` as `create`'s options, the sandbox's secrets, and a summary.
 
-use std::path::{Path, PathBuf};
+use std::path::Path;
 
 use anyhow::{Context, Result, bail};
 
-use super::{DiskSizes, SandboxOpts};
+use super::{DiskSizes, EnvOverrideOpts, SandboxOpts};
 use crate::agents;
 use crate::env::file::{
     Binding, EnvFile, KitEntry, Lifecycle, PinnedKit, Port, RegistryDecl, SecretDecl, Workspace,
@@ -39,15 +39,6 @@ pub struct EnvSpec {
     pub cmd: Option<Vec<String>>,
 }
 
-/// Command-line flags that override the file.
-#[derive(Debug, Default)]
-pub struct Overrides {
-    pub name: Option<String>,
-    pub clone: Option<bool>,
-    pub kit_arg: Vec<String>,
-    pub kit_args_file: Vec<PathBuf>,
-}
-
 /// The sandbox name: `overrides_name`, the file's `name`, or `<agent>-<basename>` of the
 /// workspace (mountless: of the project directory). Checks nothing else.
 pub fn name(loaded: &Loaded, overrides_name: Option<&str>) -> Result<String> {
@@ -68,10 +59,16 @@ pub fn name(loaded: &Loaded, overrides_name: Option<&str>) -> Result<String> {
 }
 
 /// What `create` takes for this file, checked as far as it can be without side effects.
-/// `secrets` is the secret store, for the services it knows.
-pub fn spec(loaded: &Loaded, overrides: &Overrides, secrets: &SecretsFile) -> Result<EnvSpec> {
+/// `name_flag` and `overrides` are the command line's, which win over the file. `secrets` is the
+/// secret store, for the services it knows.
+pub fn spec(
+    loaded: &Loaded,
+    name_flag: Option<&str>,
+    overrides: &EnvOverrideOpts,
+    secrets: &SecretsFile,
+) -> Result<EnvSpec> {
     let f = &loaded.file;
-    let name = name(loaded, overrides.name.as_deref())?;
+    let name = name(loaded, name_flag)?;
     let agent = f.agent.as_deref().unwrap_or_default();
 
     // A built-in agent takes every kit as a mixin; otherwise the kit named like `agent` is the
@@ -544,7 +541,6 @@ fn kit_name(source: &str) -> &str {
     last.split(':').next().unwrap_or(last)
 }
 
-/// `tcp4`/`udp4` are `tcp`/`udp`; anything else is left for `-p`'s parser to refuse.
 /// `-p`'s form of an environment's port. smolvm publishes every port on both 127.0.0.1 and ::1,
 /// so a loopback host IP of either family needs no address, and `tcp4`/`tcp6` are `tcp`.
 fn publish_spec(p: &Port) -> Result<String> {
@@ -607,12 +603,22 @@ mod tests {
             let cwd = self.dir.path().join("proj");
             load(&paths, &ArgInputs::default(), &cwd, self.dir.path()).unwrap()
         }
-        fn spec_with(&self, text: &str, o: &Overrides) -> Result<EnvSpec> {
+        fn spec_with(
+            &self,
+            text: &str,
+            name: Option<&str>,
+            clone: Option<bool>,
+        ) -> Result<EnvSpec> {
             self.write("proj/sbxenv.yaml", text);
-            spec(&self.loaded(&["sbxenv.yaml"]), o, &SecretsFile::default())
+            let o = EnvOverrideOpts {
+                clone,
+                ..Default::default()
+            };
+            let loaded = self.loaded(&["sbxenv.yaml"]);
+            spec(&loaded, name, &o, &SecretsFile::default())
         }
         fn spec(&self, text: &str) -> Result<EnvSpec> {
-            self.spec_with(text, &Overrides::default())
+            self.spec_with(text, None, None)
         }
         fn err(&self, text: &str) -> String {
             self.spec(text).err().unwrap().to_string()
@@ -731,21 +737,9 @@ mod tests {
             t.spec(&format!("{file}name: from-file\n")).unwrap().name,
             "from-file"
         );
-        let o = Overrides {
-            name: Some("flag".into()),
-            ..Default::default()
-        };
-        assert_eq!(t.spec_with(&file, &o).unwrap().name, "flag");
-        assert!(
-            t.spec_with(
-                &file,
-                &Overrides {
-                    name: Some("x".into()),
-                    ..Default::default()
-                }
-            )
-            .is_err()
-        );
+        let named = t.spec_with(&file, Some("flag"), None);
+        assert_eq!(named.unwrap().name, "flag");
+        assert!(t.spec_with(&file, Some("x"), None).is_err());
         // `name` alone checks nothing else: the agent and the workspace may not exist.
         t.write(
             "proj/sbxenv.yaml",
@@ -763,18 +757,12 @@ mod tests {
         let t = T::new();
         let cloned = format!("{HEAD}agent: claude\nworkspace:\n  path: ./web\n  clone: true\n");
         assert!(t.spec(&cloned).unwrap().opts.clone);
-        let off = Overrides {
-            clone: Some(false),
-            ..Default::default()
-        };
-        assert!(!t.spec_with(&cloned, &off).unwrap().opts.clone);
+        let off = t.spec_with(&cloned, None, Some(false));
+        assert!(!off.unwrap().opts.clone);
         let plain = format!("{HEAD}agent: claude\nworkspace: ./web\n");
         assert!(!t.spec(&plain).unwrap().opts.clone);
-        let on = Overrides {
-            clone: Some(true),
-            ..Default::default()
-        };
-        assert!(t.spec_with(&plain, &on).unwrap().opts.clone);
+        let on = t.spec_with(&plain, None, Some(true));
+        assert!(on.unwrap().opts.clone);
 
         let s = t
             .spec(&format!(
@@ -863,7 +851,7 @@ mod tests {
             ),
         );
         let l = t.loaded(&["sbxenv.yaml"]);
-        let s = spec(&l, &Overrides::default(), &SecretsFile::default()).unwrap();
+        let s = spec(&l, None, &Default::default(), &SecretsFile::default()).unwrap();
         let names: Vec<String> = resources(&l, &s)
             .into_iter()
             .filter(|r| r.section == "PORTS")
@@ -962,10 +950,8 @@ mod tests {
         let s = t
             .spec_with(
                 &format!("{HEAD}agent: claude\nworkspace: .\n"),
-                &Overrides {
-                    clone: Some(true),
-                    ..Default::default()
-                },
+                None,
+                Some(true),
             )
             .unwrap();
         assert!(s.opts.read_only_files.is_empty());
@@ -991,7 +977,7 @@ mod tests {
     /// The plan of a fresh environment: every resource to add.
     fn summarise(t: &T, files: &[&str]) -> String {
         let l = t.loaded(files);
-        let s = spec(&l, &Overrides::default(), &SecretsFile::default()).unwrap();
+        let s = spec(&l, None, &Default::default(), &SecretsFile::default()).unwrap();
         let lines: Vec<Line> = resources(&l, &s)
             .iter()
             .map(|r| Line::new(Marker::Add, r))
@@ -1042,7 +1028,7 @@ mod tests {
             ),
         );
         let l = t.loaded(&["sbxenv.yaml"]);
-        let s = spec(&l, &Overrides::default(), &SecretsFile::default()).unwrap();
+        let s = spec(&l, None, &Default::default(), &SecretsFile::default()).unwrap();
         let lines = crate::env::approval::lines(None, &resources(&l, &s), false);
         let plan = header(&l, &s.name) + &render(&lines, HOST_COMMANDS);
         insta::assert_snapshot!(plan.replace(&t.root(), "<root>"));

@@ -243,11 +243,7 @@ fn entitlement_check(
     let found: Option<PathBuf> = if smolvm.contains('/') {
         Some(PathBuf::from(smolvm))
     } else {
-        env.get("PATH")
-            .into_iter()
-            .flat_map(|p| std::env::split_paths(p).collect::<Vec<_>>())
-            .map(|dir| dir.join(smolvm))
-            .find(|p| p.is_file())
+        crate::util::find_on_path(env.get("PATH"), smolvm)
     };
     let Some(path) = found.and_then(|p| p.canonicalize().ok()) else {
         return (false, format!("{smolvm} not found on PATH"));
