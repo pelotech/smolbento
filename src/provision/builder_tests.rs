@@ -304,6 +304,29 @@ fn an_auth_failure_points_at_secret_set_registry() {
     );
 }
 
+/// Without the syntax line nothing in the file names the kit frontend, so the build does.
+#[test]
+fn a_descriptor_without_the_syntax_line_is_built_with_the_frontend_named() {
+    let t = test_env(&[]);
+    let fake = t.runner();
+    fake.ok(&["machine", "status"], &builder_json("running"))
+        .download(&kit_tar());
+    let kit = tempfile::tempdir().unwrap();
+    fs::write(
+        kit.path().join("spec.yaml"),
+        "schemaVersion: \"3\"\nkind: mixin\n",
+    )
+    .unwrap();
+    build_with(&t.ctx, kit.path(), no_mint).unwrap();
+    let lines = fake.call_lines();
+    let build = lines.iter().find(|l| l.contains("buildx build")).unwrap();
+    assert!(
+        build.contains("buildx build --build-arg BUILDKIT_SYNTAX=docker/sandbox-kit:3 -f "),
+        "{build}"
+    );
+    assert!(build.contains("/ctx/spec.yaml "), "{build}");
+}
+
 #[test]
 fn the_descriptor_is_the_one_yaml_with_the_v3_syntax_line() {
     let kit = kit_dir();

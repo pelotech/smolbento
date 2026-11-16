@@ -261,11 +261,32 @@ build: |
 "#,
     )
     .unwrap();
-    e.create_with_kits(&[kit.to_str().unwrap()]);
+    // As sbx takes it: a v3 kit in a file called `spec.yaml`, without the syntax line.
+    let plain = e.dir.path().join("plain");
+    std::fs::create_dir_all(&plain).unwrap();
+    std::fs::write(
+        plain.join("spec.yaml"),
+        r#"schemaVersion: "3"
+kind: mixin
+displayName: Some kit
+description: Something
+
+capabilities:
+  - type: com.docker.sandbox/agent-context@2
+    config:
+      content: |
+        Something something
+"#,
+    )
+    .unwrap();
+    e.create_with_kits(&[kit.to_str().unwrap(), plain.to_str().unwrap()]);
     assert_eq!(
         root_out(&e.name, "cat /opt/e2e-built/hello"),
         "built in the builder\n"
     );
+    let shown = e.ok(&["kit", "inspect", plain.to_str().unwrap()]);
+    assert!(shown.contains("Schema: v3"), "{shown}");
+    assert!(shown.contains("agent-context@2"), "{shown}");
     let ls = e.ok(&["ls", "--json"]);
     assert!(!ls.contains("_builder"), "the builder is hidden: {ls}");
 }

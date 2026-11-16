@@ -254,8 +254,8 @@ fn request<R: Runner>(ctx: &Ctx<R>, registries: &[String]) -> CreateRequest {
     }
 }
 
-/// The kit's descriptor file name: the single `*.yaml`/`*.yml` whose first line is the v3 syntax
-/// line (upstream names it after the kit, e.g. `claude-mixin.yaml`).
+/// The kit's descriptor file name: the single v3 `*.yaml`/`*.yml` (`load::is_descriptor`; upstream
+/// names it after the kit, e.g. `claude-mixin.yaml`).
 fn descriptor(dir: &Path) -> Result<String> {
     let mut found = Vec::new();
     for entry in fs::read_dir(dir).with_context(|| format!("reading {}", dir.display()))? {
@@ -263,11 +263,7 @@ fn descriptor(dir: &Path) -> Result<String> {
         let Some(name) = path.file_name().and_then(|n| n.to_str()) else {
             continue;
         };
-        if !(name.ends_with(".yaml") || name.ends_with(".yml")) || !path.is_file() {
-            continue;
-        }
-        let bytes = fs::read(&path).with_context(|| format!("reading {}", path.display()))?;
-        if starts_with_syntax(&bytes) {
+        if load::is_descriptor(&path) {
             found.push(name.to_string());
         }
     }
@@ -275,11 +271,12 @@ fn descriptor(dir: &Path) -> Result<String> {
     match found.len() {
         1 => Ok(found.remove(0)),
         0 => bail!(
-            "{} has no kit descriptor: no *.yaml file starts with `{SYNTAX}`",
+            "{} has no kit descriptor: no *.yaml file has `schemaVersion: \"3\"` or starts with \
+             `{SYNTAX}`",
             dir.display()
         ),
         _ => bail!(
-            "{} has several kit descriptors ({}); keep one *.yaml starting with `{SYNTAX}`",
+            "{} has several kit descriptors ({}); keep one *.yaml with `schemaVersion: \"3\"`",
             dir.display(),
             found.join(", ")
         ),
@@ -329,6 +326,9 @@ fn root(machine: &str, cmd: &[&str]) -> ExecSpec {
     }
 }
 
+/// Selects the kit frontend for a descriptor without the syntax line.
+const FRONTEND: &str = "BUILDKIT_SYNTAX=docker/sandbox-kit:3";
+
 /// Copies the context in, builds it, copies the OCI tar out, and always removes `/build/<n>`.
 fn run_build<R: Runner>(
     ctx: &Ctx<R>,
@@ -344,6 +344,9 @@ fn run_build<R: Runner>(
         std::process::id(),
         BUILDS.fetch_add(1, Ordering::Relaxed)
     );
+    // A descriptor's syntax line picks the kit frontend. One that sbx takes without it (by its
+    // `schemaVersion`) has the build name the frontend instead.
+    let frontend_named = fs::read(dir.join(desc)).is_ok_and(|b| starts_with_syntax(&b));
     let host = |p: &Path| -> Result<String> {
         let s = p.display().to_string();
         // smolvm reads `a:b` as MACHINE:PATH.
@@ -365,17 +368,16 @@ fn run_build<R: Runner>(
             .context("copying the kit into the builder")?;
         exec(&["tar", "-xf", &guest_ctx_tar, "-C", &ctx_dir])
             .context("unpacking the kit in the builder")?;
-        exec(&[
-            "docker",
-            "buildx",
-            "build",
-            "-f",
-            &format!("{ctx_dir}/{desc}"),
-            "--output",
-            &format!("type=oci,dest={guest_kit_tar}"),
-            &ctx_dir,
-        ])
-        .map_err(|e| build_error(dir, &e, unbound))?;
+        let (file, output) = (
+            format!("{ctx_dir}/{desc}"),
+            format!("type=oci,dest={guest_kit_tar}"),
+        );
+        let mut build = vec!["docker", "buildx", "build"];
+        if !frontend_named {
+            build.extend(["--build-arg", FRONTEND]);
+        }
+        build.extend(["-f", &file, "--output", &output, &ctx_dir]);
+        exec(&build).map_err(|e| build_error(dir, &e, unbound))?;
         ctx.vm
             .cp(&format!("{machine}:{guest_kit_tar}"), &host(kit_tar)?)
             .context("copying the built kit out of the builder")

@@ -39,7 +39,7 @@ exits, and `bento run` still starts its own interactive session.
 | `git-signing` | The shipped [git-signing kit](#the-git-signing-kit) |
 | `nix` | smolbento's [Nix kit](#the-nix-kit), pulled from `ghcr.io/pelotech/smolbento/kits/nix:latest` |
 | `docker.io/acme/kit:1`, `ghcr.io/acme/kit@sha256:…` | A published kit, pulled from its registry |
-| `./my-kit` (a directory with one `*.yaml` starting `# syntax=docker/sandbox-kit:3`), or that file | A local v3 kit, built in the builder sandbox (below) |
+| `./my-kit` (a directory with one `*.yaml` that has `schemaVersion: "3"` or starts `# syntax=docker/sandbox-kit:3`), or that file | A local v3 kit, built in the builder sandbox (below) |
 | `./my-kit` (a directory with a `spec.yaml`) | A local v2 kit |
 | `./Smolfile`, `./x.smolfile` | A smolvm Smolfile |
 

@@ -239,7 +239,7 @@ pub fn pinned<R: Runner>(
         if require {
             return Err(signers::refuse_local(base, path));
         }
-        let v3_source = (path.is_dir() && !path.join("spec.yaml").is_file()) || is_descriptor(path);
+        let v3_source = (path.is_dir() && !is_v2_dir(path)) || is_descriptor(path);
         if offline && v3_source {
             bail!(
                 "kit {base} is a v3 source kit: --pull never can't build it (the kit builder \
@@ -353,7 +353,7 @@ fn locate<R: Runner>(
         trust::check(&Source::LocalV3(path.clone()), &ctx.settings)?;
     }
     if path.is_dir() {
-        return Ok(if path.join("spec.yaml").is_file() {
+        return Ok(if is_v2_dir(&path) {
             Located::V2(path)
         } else {
             Located::V3(path)
@@ -419,9 +419,8 @@ fn load_v3<R: Runner>(
         ),
         1 => {}
         _ => bail!(
-            "{} has several kit descriptors; keep one *.yaml starting with `{}`",
-            dir.display(),
-            SYNTAX
+            "{} has several kit descriptors; keep one *.yaml with `schemaVersion: \"3\"`",
+            dir.display()
         ),
     }
     before(Fetch::Build);
@@ -432,8 +431,9 @@ fn load_v3<R: Runner>(
     Ok((registry::read_layout(&built, source)?, cached))
 }
 
-/// A `*.yaml`/`*.yml` file whose first line is the v3 syntax line (after an optional BOM).
-fn is_descriptor(path: &Path) -> bool {
+/// A v3 kit descriptor: a `*.yaml`/`*.yml` file whose first line is the v3 syntax line (after an
+/// optional BOM) or, as sbx reads it, whose `schemaVersion` is 3 whatever the file is called.
+pub(crate) fn is_descriptor(path: &Path) -> bool {
     let yaml = matches!(
         path.extension().and_then(|e| e.to_str()),
         Some("yaml" | "yml")
@@ -441,7 +441,24 @@ fn is_descriptor(path: &Path) -> bool {
     if !yaml || !path.is_file() {
         return false;
     }
-    fs::read(path).is_ok_and(|b| starts_with_syntax(&b))
+    fs::read(path).is_ok_and(|b| starts_with_syntax(&b) || schema_version_3(&b))
+}
+
+fn schema_version_3(yaml: &[u8]) -> bool {
+    let doc = std::str::from_utf8(yaml)
+        .ok()
+        .and_then(|y| serde_saphyr::from_str::<serde_json::Value>(y).ok());
+    match doc.as_ref().and_then(|d| d.get("schemaVersion")) {
+        Some(serde_json::Value::String(v)) => v == "3",
+        Some(v) => v.as_u64() == Some(3),
+        None => false,
+    }
+}
+
+/// Whether `dir` holds a v2 kit: a `spec.yaml` that isn't a v3 descriptor.
+fn is_v2_dir(dir: &Path) -> bool {
+    let spec = dir.join("spec.yaml");
+    spec.is_file() && !is_descriptor(&spec)
 }
 
 /// Gives a workload kit its command or refuses it with sbx's error. v3 has its image config's;
@@ -824,6 +841,51 @@ mod tests {
         let f = d.path().join("k.yaml");
         fs::write(&f, "\u{feff}# syntax=docker/sandbox-kit:3\nkind: mixin\n").unwrap();
         assert!(is_descriptor(&f));
+    }
+
+    /// sbx goes by `schemaVersion`, whatever the file is called and without the syntax line.
+    #[test]
+    fn schema_version_3_makes_a_descriptor_without_the_syntax_line() {
+        let d = tempfile::tempdir().unwrap();
+        let file = |name: &str, text: &str| {
+            let f = d.path().join(name);
+            fs::write(&f, text).unwrap();
+            f
+        };
+        let v3 = "schemaVersion: \"3\"\nkind: mixin\ncapabilities: []\n";
+        assert!(is_descriptor(&file("spec.yaml", v3)));
+        assert!(is_descriptor(&file("kit.yml", v3)));
+        assert!(is_descriptor(&file("n.yaml", "schemaVersion: 3\n")));
+        assert!(!is_descriptor(&file("v2.yaml", V2)));
+        assert!(!is_descriptor(&file("other.yaml", "services: {}\n")));
+        assert!(!is_descriptor(&file("broken.yaml", "schemaVersion: [\n")));
+        assert!(!is_descriptor(&file("kit.txt", v3)));
+    }
+
+    /// A v3 kit in a file called `spec.yaml` is built, not read as v2.
+    #[test]
+    fn a_spec_yaml_with_schema_version_3_is_built() {
+        let t = allow_local();
+        v3_kit(
+            &t,
+            "kit",
+            r#"{"schemaVersion":"3","kind":"mixin","name":"m"}"#,
+            &[],
+        );
+        let dir = t.ctx.cwd.join("kit");
+        fs::remove_file(dir.join("kit.yaml")).unwrap();
+        fs::write(
+            dir.join("spec.yaml"),
+            "schemaVersion: \"3\"\nkind: mixin\ncapabilities: []\n",
+        )
+        .unwrap();
+        let k = load(&t.ctx, "./kit").unwrap();
+        assert_eq!(k.source, Source::LocalV3(dir.canonicalize().unwrap()));
+        assert_eq!(kit_name(&t.ctx, "./kit").unwrap(), k.name);
+        // A v2 `spec.yaml` is still v2.
+        fs::write(dir.join("spec.yaml"), V2).unwrap();
+        let k = load(&t.ctx, "./kit").unwrap();
+        assert_eq!(k.source, Source::LocalV2(dir.canonicalize().unwrap()));
     }
 
     #[test]
