@@ -50,10 +50,13 @@ pub fn parse(yaml: &str, dir: &Path) -> Result<Kit> {
 /// `parse`, returning its warnings instead of printing them.
 fn parse_warn(yaml: &str, dir: &Path) -> Result<(Kit, Vec<String>)> {
     let v: Value = serde_saphyr::from_str(yaml).context("spec.yaml isn't valid YAML")?;
-    let s: Spec = serde_json::from_value(v).context("reading the v2 kit descriptor")?;
-    if s.schema_version != "2" {
-        bail!("schemaVersion must be \"2\" (got {:?})", s.schema_version);
+    // Before the v2 grammar is applied: a `spec.yaml` of another version isn't a broken v2 kit.
+    match v.get("schemaVersion") {
+        None | Some(Value::Null) => bail!("schemaVersion is required"),
+        Some(Value::String(version)) if version == "2" => {}
+        Some(other) => bail!("unsupported schemaVersion {other} (supported: \"2\", \"3\")"),
     }
+    let s: Spec = serde_json::from_value(v).context("reading the v2 kit descriptor")?;
     let kind = match s.kind.as_str() {
         "sandbox" => Kind::Workload,
         "mixin" => Kind::Mixin,
@@ -603,6 +606,22 @@ fn walk(
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// A `spec.yaml` may be a v2 or a v3 kit, so the refusal names both and no "v2".
+    #[test]
+    fn a_missing_or_unsupported_schema_version_is_refused_by_name() {
+        let err = |yaml: &str| format!("{:#}", parse(yaml, Path::new("/k")).unwrap_err());
+        assert_eq!(err("kind: mixin\n"), "schemaVersion is required");
+        assert_eq!(
+            err("schemaVersion: \"1\"\nkind: mixin\n"),
+            "unsupported schemaVersion \"1\" (supported: \"2\", \"3\")"
+        );
+        // Unquoted: the quotes in the message say how to write it.
+        assert_eq!(
+            err("schemaVersion: 2\nkind: mixin\n"),
+            "unsupported schemaVersion 2 (supported: \"2\", \"3\")"
+        );
+    }
 
     #[test]
     fn v2_and_its_hand_written_v3_give_the_same_model() {
