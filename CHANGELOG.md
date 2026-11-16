@@ -1,5 +1,24 @@
 # Changelog
 
+## [0.29.1](https://github.com/pelotech/smolbento/compare/v0.29.0...v0.29.1) (2026-11-16)
+
+
+### Bug Fixes
+
+* **kits:** kit add refuses a kit that exports an argument as a variable ([#142](https://github.com/pelotech/smolbento/issues/142)) ([fa6f4ed](https://github.com/pelotech/smolbento/commit/fa6f4edca043dc6aa3d0f5d9a7989ed7d27a8e83))
+
+
+### Refactors
+
+* drop the 0.15 label shim and the non-Unix branches ([#145](https://github.com/pelotech/smolbento/issues/145)) ([a8ef95a](https://github.com/pelotech/smolbento/commit/a8ef95a0a1df0945d7aba8844bafd2c316d1013d))
+* move six test modules out and split the args and registry files ([#141](https://github.com/pelotech/smolbento/issues/141)) ([2a8dd66](https://github.com/pelotech/smolbento/commit/2a8dd66ce6908e60b5c034f01d613b576840f2c3))
+* share test helpers and remove duplicated code ([#144](https://github.com/pelotech/smolbento/issues/144)) ([bc4d599](https://github.com/pelotech/smolbento/commit/bc4d599a0024dcfb79782aecb20275291b67a23c))
+
+
+### Chores
+
+* **deps:** lock file maintenance ([#140](https://github.com/pelotech/smolbento/issues/140)) ([d616534](https://github.com/pelotech/smolbento/commit/d616534c9988323435b32f4c7e2895f824fe2688))
+
 ## [0.29.0](https://github.com/pelotech/smolbento/compare/v0.28.1...v0.29.0) (2026-11-15)
 
 
