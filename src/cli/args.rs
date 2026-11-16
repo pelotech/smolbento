@@ -97,7 +97,7 @@ pub enum Cmd {
     /// Generate shell completions
     Completion { shell: clap_complete::Shell },
     /// Check smolbento's environment
-    Diagnose(OutputArgs),
+    Diagnose(DiagnoseArgs),
     /// Read and change settings
     #[command(subcommand)]
     Settings(SettingsCmd),
@@ -516,6 +516,40 @@ impl OutputArgs {
     pub fn structured<T: serde::Serialize>(&self, value: &T) -> anyhow::Result<Option<String>> {
         self.pick().structured(value)
     }
+}
+
+/// `diagnose --format`: the usual formats, and sbx's report to paste into a GitHub issue.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, ValueEnum)]
+pub enum DiagnoseFormat {
+    Table,
+    Json,
+    Yaml,
+    GithubIssue,
+}
+
+impl DiagnoseFormat {
+    /// The format every command has; `None` for the report only `diagnose` prints.
+    pub fn shared(self) -> Option<Format> {
+        match self {
+            DiagnoseFormat::Table => Some(Format::Table),
+            DiagnoseFormat::Json => Some(Format::Json),
+            DiagnoseFormat::Yaml => Some(Format::Yaml),
+            DiagnoseFormat::GithubIssue => None,
+        }
+    }
+}
+
+#[derive(Debug, Default, Args)]
+pub struct DiagnoseArgs {
+    /// Output format: table, json, yaml or github-issue
+    #[arg(long, value_enum)]
+    pub format: Option<DiagnoseFormat>,
+    /// Output in JSON format
+    #[arg(long)]
+    pub json: bool,
+    /// sbx sends the report to Docker support; smolbento has nowhere to send one
+    #[arg(long, hide = true)]
+    pub upload: bool,
 }
 
 #[derive(Debug, Default, Args)]

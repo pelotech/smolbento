@@ -34,5 +34,8 @@ Options:
       --offline
           Skip the source policy check; local kits only, no network
 
+      --resolved
+          Accepted as in sbx; `extends:` parents aren't merged, so the output is the same
+
   -h, --help
           Print help

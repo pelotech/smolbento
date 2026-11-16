@@ -1,7 +1,8 @@
 # Troubleshooting
 
 Start with `bento diagnose`. Add `-D` to any command to print the smolvm commands it runs, for example
-`bento -D run claude`.
+`bento -D run claude`. `bento diagnose --format github-issue` prints the checks as Markdown to paste
+into an issue. It includes paths on your machine, so read it first. Nothing is uploaded.
 
 ## `downloading smolvm from … failed`
 

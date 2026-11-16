@@ -13,6 +13,9 @@ pub struct LogRow {
     pub host: String,
     pub count: usize,
     pub last_seen: String,
+    /// The oldest of the events read: when an approval for it was first wanted.
+    #[serde(skip)]
+    pub first_seen: String,
 }
 
 /// One row per sandbox and blocked host, newest first.
@@ -27,11 +30,15 @@ pub fn rows(events: &[(String, Vec<EgressEvent>)]) -> Vec<LogRow> {
                     host: e.dest.clone(),
                     count: 0,
                     last_seen: String::new(),
+                    first_seen: e.timestamp.clone(),
                 });
             row.count += 1;
             // smolvm's timestamps are ISO-8601 UTC (`2026-10-26T14:37:58Z`), so they sort as text.
             if e.timestamp > row.last_seen {
                 row.last_seen = e.timestamp.clone();
+            }
+            if e.timestamp < row.first_seen {
+                row.first_seen = e.timestamp.clone();
             }
         }
     }
@@ -42,15 +49,22 @@ pub fn rows(events: &[(String, Vec<EgressEvent>)]) -> Vec<LogRow> {
 
 /// Blocked hosts no rule mentions yet (in that sandbox's scope): sbx's approval queue. Log hosts
 /// carry no port, so a rule's port is ignored: a rule naming the host on any port handles it.
+/// A dismissed host stays out until it is blocked again.
 pub fn pending<'a>(policy: &Policy, rows: &'a [LogRow]) -> Vec<&'a LogRow> {
     rows.iter()
         .filter(|row| {
-            !policy.rules_for(Some(&row.sandbox)).any(|(r, _)| {
-                r.parsed().any(|mut res| {
-                    res.port = None;
-                    res.matches(&row.host)
+            let dismissed = policy
+                .dismissed
+                .get(&row.sandbox)
+                .and_then(|hosts| hosts.get(&row.host))
+                .is_some_and(|at| row.last_seen <= *at);
+            !dismissed
+                && !policy.rules_for(Some(&row.sandbox)).any(|(r, _)| {
+                    r.parsed().any(|mut res| {
+                        res.port = None;
+                        res.matches(&row.host)
+                    })
                 })
-            })
         })
         .collect()
 }
@@ -100,6 +114,31 @@ mod tests {
         let rows = rows(&events);
         let pending: Vec<&str> = pending(&p, &rows).iter().map(|r| r.host.as_str()).collect();
         assert_eq!(pending, vec!["a.com"]);
+    }
+
+    #[test]
+    fn a_dismissed_host_is_pending_again_once_blocked_later() {
+        let mut p = Policy::default();
+        p.dismissed
+            .entry("s1".into())
+            .or_default()
+            .insert("a.com".into(), "t2".into());
+        let hosts = |p: &Policy, events: Vec<EgressEvent>| -> Vec<String> {
+            let rows = rows(&[("s1".to_string(), events)]);
+            pending(p, &rows).iter().map(|r| r.host.clone()).collect()
+        };
+        assert_eq!(
+            hosts(&p, vec![ev("t1", "a.com"), ev("t2", "a.com")]),
+            [""; 0]
+        );
+        assert_eq!(
+            hosts(&p, vec![ev("t1", "a.com"), ev("t3", "a.com")]),
+            ["a.com"]
+        );
+        // Another sandbox's dismissal doesn't count.
+        let other = rows(&[("s2".to_string(), vec![ev("t1", "a.com")])]);
+        assert_eq!(pending(&p, &other).len(), 1);
+        assert_eq!(other[0].first_seen, "t1");
     }
 
     #[test]

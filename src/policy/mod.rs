@@ -116,10 +116,15 @@ pub struct Policy {
     pub rules: Vec<Rule>,
     #[serde(default, skip_serializing_if = "BTreeMap::is_empty")]
     pub sandboxes: BTreeMap<String, SandboxPolicy>,
+    /// Approvals answered `dismiss`: sandbox, then host, then the newest blocked request at the
+    /// time. A later block of the host asks again.
+    #[serde(default, skip_serializing_if = "BTreeMap::is_empty")]
+    pub dismissed: BTreeMap<String, BTreeMap<String, String>>,
 }
 
-/// `--method` as one canonical list: uppercase, comma-separated, sorted and deduped.
-fn normalise_methods(m: &str) -> Option<String> {
+/// `--method` as one canonical list: uppercase, comma-separated, sorted and deduped. `None` when
+/// it names no method.
+pub fn normalise_methods(m: &str) -> Option<String> {
     let mut v: Vec<String> = m
         .split(',')
         .map(|x| x.trim().to_ascii_uppercase())
@@ -301,12 +306,15 @@ impl Policy {
     }
 
     /// Removes rules by id, or one resource from every non-kit rule listing it (dropping emptied
-    /// rules).
+    /// rules). `method` (as `normalise_methods` gives it) and `path` take the resource only from
+    /// rules with those HTTP qualifiers (`policy rm --method/--path`); `None` is any rule.
     pub fn remove_rules(
         &mut self,
         sandbox: Option<&str>,
         id: Option<&str>,
         resource: Option<&str>,
+        method: Option<&str>,
+        path: Option<&str>,
     ) -> bool {
         let list = self.rules_mut(sandbox);
         let before: usize = list.iter().map(|r| r.resources.len()).sum();
@@ -315,7 +323,11 @@ impl Policy {
         }
         if let Some(res) = resource {
             // Kit rules go with their kit, never by resource.
-            for r in list.iter_mut().filter(|r| r.source() != "kit") {
+            for r in list.iter_mut().filter(|r| {
+                r.source() != "kit"
+                    && method.is_none_or(|m| r.method.as_deref() == Some(m))
+                    && path.is_none_or(|p| r.path.as_deref() == Some(p))
+            }) {
                 r.resources.retain(|x| !x.eq_ignore_ascii_case(res));
             }
             list.retain(|r| !r.resources.is_empty());
@@ -425,10 +437,12 @@ impl Policy {
         self.mode = None;
         self.rules.clear();
         self.sandboxes.clear();
+        self.dismissed.clear();
     }
 
     pub fn forget_sandbox(&mut self, sandbox: &str) {
         self.sandboxes.remove(sandbox);
+        self.dismissed.remove(sandbox);
     }
 }
 
@@ -460,8 +474,8 @@ mod tests {
         let copy_id = p.sandboxes["a-fork-1"].rules[0].id.clone();
         let parent_id = p.sandboxes["a"].rules[0].id.clone();
         // The parent's id doesn't name the copy's rule.
-        assert!(!p.remove_rules(Some("a-fork-1"), Some(&parent_id), None));
-        assert!(p.remove_rules(Some("a-fork-1"), Some(&copy_id), None));
+        assert!(!p.remove_rules(Some("a-fork-1"), Some(&parent_id), None, None, None));
+        assert!(p.remove_rules(Some("a-fork-1"), Some(&copy_id), None, None, None));
         assert!(!p.sandboxes.contains_key("a-fork-1"));
         assert_eq!(p.sandboxes["a"].rules.len(), 1);
         assert_eq!(p.sandboxes["a"].rules[0].id, parent_id);
@@ -552,9 +566,28 @@ mod tests {
             .unwrap();
         assert_eq!(a, again);
         assert_eq!(p.rules.len(), 1);
-        assert!(p.remove_rules(None, None, Some("a.com")));
+        assert!(p.remove_rules(None, None, Some("a.com"), None, None));
+        // HTTP qualifiers pick one of a resource's rules.
+        for (method, path) in [(Some("post,get"), Some("/v1/**")), (None, None)] {
+            let (m, pa) = (method.map(String::from), path.map(String::from));
+            p.add_rule(None, Decision::Allow, "h.com", "added", m, pa)
+                .unwrap();
+        }
+        let n = p.rules.len();
+        assert!(!p.remove_rules(None, None, Some("h.com"), Some("GET"), None));
+        // No method is no rule's methods, never "any rule".
+        assert!(!p.remove_rules(None, None, Some("h.com"), Some(""), None));
+        assert!(!p.remove_rules(None, None, Some("h.com"), None, Some("/v2")));
+        assert!(p.remove_rules(None, None, Some("h.com"), Some("GET,POST"), Some("/v1/**")));
+        assert_eq!(p.rules.len(), n - 1);
+        assert!(
+            p.rules
+                .iter()
+                .any(|r| r.resources == ["h.com"] && r.method.is_none())
+        );
+        assert!(p.remove_rules(None, None, Some("h.com"), None, None));
         assert_eq!(p.rules[0].resources, vec!["b.com"]);
-        assert!(p.remove_rules(None, Some(&a), None));
+        assert!(p.remove_rules(None, Some(&a), None, None, None));
         assert!(p.rules.is_empty());
     }
 
@@ -673,7 +706,7 @@ mod tests {
     #[test]
     fn removing_from_an_unknown_sandbox_leaves_no_entry() {
         let mut p = Policy::default();
-        assert!(!p.remove_rules(Some("ghost"), None, Some("a.com")));
+        assert!(!p.remove_rules(Some("ghost"), None, Some("a.com"), None, None));
         assert!(p.sandboxes.is_empty());
     }
 
@@ -790,7 +823,7 @@ mod tests {
         };
         p.add_kit_rules("sb", "gh", &rules, false).unwrap();
         assert!(p.kit_rule_target(Some("sb"), None, Some("x.com")).is_none());
-        assert!(p.remove_rules(Some("sb"), None, Some("x.com")));
+        assert!(p.remove_rules(Some("sb"), None, Some("x.com"), None, None));
         let left: Vec<_> = p.rules_for(Some("sb")).collect();
         assert_eq!(left.len(), 1);
         assert_eq!(left[0].0.created_via, "kit:gh");

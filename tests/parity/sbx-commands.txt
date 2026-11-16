@@ -77,7 +77,9 @@ policy ls -q
 policy log
 policy log my-sandbox --limit 20 --json
 policy approval ls
-policy approval respond example.com allow --sandbox my-sandbox
+policy approval respond example.com --option allow
+policy approval respond example.com --option dismiss
+policy approval inspect example.com
 policy deny network bad.example.com --sandbox my-sandbox
 policy rm network --id r-0123abcd
 policy rm network --resource api.example.com -f
@@ -209,6 +211,10 @@ skills import -v
 create claude . --profile strict
 template ls --digests
 template save my-sandbox myimage:v1 --description notes
-policy rm network --resource example.com --method GET
+policy rm network --resource example.com --method GET --path '/v1/**' --query a=1 -f
+policy check network --protocol udp example.com:123
+kit inspect ./my-kit --resolved
+diagnose --format github-issue
+diagnose --upload
 policy ls --profile strict
 secret set-custom --host api.example.com --env API_KEY --no-verify

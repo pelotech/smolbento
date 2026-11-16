@@ -30,6 +30,8 @@ pub fn run<R: Runner>(ctx: &mut Ctx<R>, cmd: KitCmd) -> Result<i32> {
             args,
             output,
             offline,
+            // The loader accepts `extends:` and ignores it, so there is no parent to merge.
+            resolved: _,
         } => inspect(ctx, &reference, &args, output.pick(), offline),
         KitCmd::Validate {
             reference,

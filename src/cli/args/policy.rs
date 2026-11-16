@@ -94,11 +94,14 @@ pub enum PolicyRmKind {
 
 #[derive(Debug, Args)]
 pub struct PolicyRmArgs {
-    #[arg(long, hide = true)]
+    /// With --resource: only the rule with these HTTP methods
+    #[arg(long)]
     pub method: Option<String>,
-    #[arg(long, hide = true)]
+    /// With --resource: only the rule with this HTTP path
+    #[arg(long)]
     pub path: Option<String>,
-    #[arg(long, hide = true)]
+    /// With --resource: only the rule with this query (smolbento's rules have none)
+    #[arg(long)]
     pub query: Option<String>,
     /// Rule id
     #[arg(long)]
@@ -182,10 +185,10 @@ pub struct CheckArgs {
     /// Check in this sandbox's context
     #[arg(long)]
     pub sandbox: Option<String>,
-    /// Protocol (only tcp)
+    /// Protocol: tcp (the default) or udp
     #[arg(long)]
     pub protocol: Option<String>,
-    /// Accepted as in sbx; the deciding rule is always printed
+    /// Also print the action, the resource and the kind of denial
     #[arg(short = 'v', long)]
     pub verbose: bool,
     #[command(flatten)]
@@ -203,13 +206,20 @@ pub enum ApprovalCmd {
         output: OutputArgs,
     },
     /// Show one blocked host
-    Inspect { id: String },
-    /// Allow or deny a blocked host
-    Respond {
-        /// The blocked host (as shown by `approval ls`)
+    Inspect {
+        /// Approval ID (as shown by `approval ls`)
         id: String,
-        /// allow or deny
-        decision: crate::policy::Decision,
+    },
+    /// Answer a pending approval
+    Respond {
+        /// Approval ID (as shown by `approval ls`)
+        id: String,
+        /// allow or deny, in place of --option: adds the rule for every sandbox (smolbento only)
+        #[arg(conflicts_with = "option")]
+        decision: Option<crate::policy::Decision>,
+        /// The option to answer with (as shown by `approval ls`)
+        #[arg(long, value_name = "OPTION-ID")]
+        option: Option<String>,
         /// Only for this sandbox
         #[arg(long)]
         sandbox: Option<String>,

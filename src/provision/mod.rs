@@ -716,7 +716,7 @@ pub fn create_with<R: Runner>(
             && let Ok(mut policy) = Policy::load(&ctx.paths)
         {
             for id in &added {
-                policy.remove_rules(Some(&req.name), Some(id), None);
+                policy.remove_rules(Some(&req.name), Some(id), None, None, None);
             }
             let _ = policy.save(&ctx.paths);
         }

@@ -37,12 +37,11 @@ smolbento-only:
 | Command or flag | Status |
 |---|---|
 | `policy refresh`, `secret import`, `secret set --oauth/--refresh`, `secret set/rm --registry` with `--sandbox`/`--all-sandboxes` | Not implemented |
-| `policy check --protocol` other than `tcp` | Not implemented |
 | `sbxenv.yaml` fields under [Environment files](#environment-files) | Later |
 | `setup ssh --auto-create` (desktop app connections) | Not supported |
 | `mcp auth`, `mcp load`, `mcp unload`; `mcp add --local`, `--dir`, `--client-id`, `--oauth-authorization-server`, `--resource`, `--skip-auth` | Not supported: no MCP gateway |
-| `create/run --profile`, `policy ls --profile`, `policy rm network --method/--path/--query`, `template ls -a/--digests/--no-trunc`, `template save\|load --capture-mode/--description`, `secret set-custom --no-verify/--show-error/--refresh`, `mcp add --disable-http2/--skip-ssrf-check/--callback-port/--scope/--no-scope` | Not implemented |
-| `kit inspect --resolved`, `diagnose --upload`, `diagnose --format github-issue` | Not accepted yet (unknown argument) |
+| `create/run --profile`, `policy ls --profile`, `template ls -a/--digests/--no-trunc`, `template save\|load --capture-mode/--description`, `secret set-custom --no-verify/--show-error/--refresh`, `mcp add --disable-http2/--skip-ssrf-check/--callback-port/--scope/--no-scope` | Not implemented |
+| `diagnose --upload` | Never: sbx sends the report to Docker support, and smolbento has no support service. Nothing is sent |
 | `tui` | Later |
 | `--pull always`; `--pull never` without a saved template ([Templates](#templates)) | Not implemented. `--pull missing` works, as in smolvm |
 | `exec -d`, `--detach-keys` | Not supported (sbx doesn't support `exec -d` either) |
@@ -120,9 +119,14 @@ smolbento-only:
 | `policy ls`: STATUS and `reason` | `active`; a reason only on the fallback | A rule smolvm enforces more loosely than sbx also has a reason (`--wide`: `active — <resource>: port 8080 not enforced …`; JSON `reason`). The table and the sandbox summary count such rules in a note on stderr |
 | `policy ls`: rules with a method or a path | Type `http` | Type `http` with METHOD and PATH filled in, actions `net:connect:tcp` (they aren't enforced). A sandbox's kit rules are one `kit:<sandbox>` rule of type `network`, as in sbx 0.49. sbx 0.53's JSON for kit and `http` rules wasn't observed: smolbento uses `layer: "kit"`, `created_via: "provisioned"` |
 | `policy ls` filters | `--source local\|org\|kit`, `--include-inactive`, `--profile` | `--source` also takes `mcp`; `org` matches nothing. `--include-inactive` changes nothing (every rule is active). `--profile` is refused. A bad `--decision` or `--source` value has smolbento's own error text |
-| `policy approval respond` | 0.53: `APPROVAL-ID --option OPTION-ID` | `ID allow\|deny`. `--option` isn't accepted (sbx's option IDs weren't observed) |
+| `policy approval ls`, `inspect` | 0.53: `APPROVAL SANDBOX TITLE DETAIL OPTIONS`; JSON keys `created_at`, `detail`, `id`, `options`, `sandbox_name`, `title`; the ID is `network:<hash>`, the title `host:port`, the detail `Protocol: TCP`, `Resource type: domain` and the reason | Same layout, keys and options (`allow`, `dismiss`). The ID and the title are the blocked host: smolvm's log has no port or protocol, so the detail has no `Protocol:` line. `created_at` is the oldest of the last 200 blocked requests read, in UTC. `inspect` of a host blocked in several sandboxes shows one of them, a pending one first |
+| `policy approval respond` | 0.53: `APPROVAL-ID --option OPTION-ID` prints `Recorded answer Allow`; `allow` adds a rule for the approval's sandbox, `dismiss` adds none | Same, and the same errors (no `--option`, an unknown option, `is not pending`). An allow that reached a running sandbox adds `Updated N running sandbox(es)`, and an allow of `localhost` warns as `policy allow` does. One host blocked in several sandboxes is one ID: the answer goes to each of them, or to `--sandbox NAME` (smolbento only). A dismissed host is asked about again when it is next blocked. The older `ID allow\|deny` form still works (smolbento only): its rule is for every sandbox unless `--sandbox` is given, and `deny` adds a deny rule |
+| `policy rm network --method/--path/--query` | Pick one HTTP rule of the resource | `--method` (the same methods, in any order) and `--path` pick among the resource's rules. Rules have no query, so `--query` finds none. sbx's errors: `--method requires --resource` (assumed for `--path` and `--query`, which weren't measured), and `remove network rule: remove-resource: not found; …` when no rule has the resource. An empty `--method` is refused (`--method names no HTTP method`). `--id` alone says `no matching rules` |
+| `policy check network` output | A block: `Denied:`/`Governance:`/`Context:`/`Reason:`; `-v` adds `Action:`, `Resource:`, `Deny kind:` | Same block. `Reason:` is printed for an allowed target too. `Allowed:` and `Deny kind: explicit` (a deny rule) weren't measured in sbx |
+| `policy check network --protocol udp` | Rules are per protocol: a UDP target needs a UDP rule | smolvm's allow list admits UDP wherever it admits TCP, so the same rules decide (a host sbx denies over UDP can be allowed here). Port 53 is denied even where the rules allow it: smolvm answers DNS itself. `policy allow\|deny --protocol udp` is still refused |
+| `kit inspect --resolved` | Merges the kit's `extends:` parent into the output | Accepted; prints the same as without it. smolbento's loader accepts `extends:` and ignores it, so there is no parent to merge |
+| `diagnose --format github-issue` | A Markdown report for a GitHub issue: OS, architecture, `DS Version`, a `Check \| Status \| Message` table, and the JSON in a `<details>` block | Same shape over smolbento's checks, with `smolbento Version`. Statuses are `✓` and `✗` (`✗` wasn't measured in sbx). Messages are the ones `bento diagnose` prints, paths included: read it before posting |
 | `df` | Disk usage of images, containers and volumes | Not implemented (`unrecognized subcommand`) |
-| `skills import` | Lists missing directories only with `-v`; prints `Skills directory found at DIR:` before each directory's skills | `-v` the same; no `Skills directory found` header |
 | `--format`, `--json` | On every command that prints something | The same flags on every command that prints something, except `template inspect` (not implemented). Differences in the output: [Output formats](#output-formats) |
 
 - **Host services:** Only sandboxes created while a `localhost` rule applied get it; others need
@@ -148,9 +152,9 @@ Where they differ:
 | Command | sbx | smolbento |
 |---|---|---|
 | `version` | `client` and `server` | `client` and `smolvm` (there is no daemon) |
-| `diagnose` | `checks` with `name`, `status`, `message`, `detail`, `hint` | Same keys; `detail` and `hint` are empty, and `status` is `pass` or `fail` |
+| `diagnose` | `checks` with `name`, `status`, `message`, `detail`, `hint`; `summary` with `pass`, `warn`, `fail`, `skip` | Same keys; `detail` and `hint` are empty, `status` is `pass` or `fail`, and `warn` and `skip` are 0 |
 | `settings ls`, `settings get` | `type` is `bool`, `int` or `string`, among others | `type` is `bool` or `string` |
-| `policy check network` | `action`, `allowed`, `context`, `governance`, `resource_type`, `resource_value`, `target`, `type` | Adds `reason`: the rule or default that decided |
+| `policy check network` | `action`, `allowed`, `context`, `governance`, `resource_type`, `resource_value`, `target`, `type`; a denial adds `deny_kind` and `reason` | Same, and `reason` (the rule or default that decided) is there for an allowed target too |
 | `prune --dry-run` | `would_remove` rows with `name`, `agent`, `stopped_at`, `mounts`, `workspaces`; `skipped_unknown_stop` | No `stopped_at` (smolvm doesn't record it); `skipped_unknown_stop` is always empty; adds `host_services`, the leftover units it would remove |
 | `prune` without `--dry-run` | Refused: `--format` describes the dry-run listing | Same error |
 | `ports --publish`, `--unpublish` | Not measured | The ports this call published, as the listing shows them |

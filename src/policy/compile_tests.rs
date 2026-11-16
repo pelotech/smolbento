@@ -576,7 +576,7 @@ fn localhost_rules_open_the_gateway_with_host_access_only() {
             .contains(&"localhost".to_string())
     );
     // Removed: gone.
-    p.remove_rules(Some("s1"), Some(&id), None);
+    p.remove_rules(Some("s1"), Some(&id), None, None, None);
     assert!(!has_gateway(&network(&p, "s1", &[], true)));
 }
 
