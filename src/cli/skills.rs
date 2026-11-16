@@ -11,7 +11,7 @@ use super::args::{
     Format, SkillsAddArgs, SkillsCmd, SkillsImportArgs, SkillsLsArgs, SkillsRmArgs,
     SkillsUpdateArgs,
 };
-use super::{Ctx, confirm_or};
+use super::{Ctx, confirm_or, plural};
 use crate::skills::import::{Event, scan};
 use crate::skills::repo::{self, Checkout};
 use crate::skills::store::{Source, Sources, Store};
@@ -117,11 +117,6 @@ fn add_url<R: Runner>(
     )?;
     writeln!(&ctx.out, "{NOTE}")?;
     Ok(())
-}
-
-/// The `s` of `n skills`.
-fn plural(n: usize) -> &'static str {
-    if n == 1 { "" } else { "s" }
 }
 
 /// Asks before `skills <command>` replaces the skills among `names` that are installed.

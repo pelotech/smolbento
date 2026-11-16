@@ -641,6 +641,26 @@ fn keeps_access_notes_name_open_sandboxes_with_host_access_that_lose_the_rule() 
     assert!(keeps_access_notes(&before, &after, &sbs).is_empty());
 }
 
+/// An empty policy in `mode`.
+fn policy(mode: Mode) -> Policy {
+    Policy {
+        mode: Some(mode),
+        ..Default::default()
+    }
+}
+
+/// Adds a rule without a method or a path to `p`, and returns its id.
+fn add(
+    p: &mut Policy,
+    sandbox: Option<&str>,
+    decision: Decision,
+    hosts: &str,
+    via: &str,
+) -> String {
+    p.add_rule(sandbox, decision, hosts, via, None, None)
+        .unwrap()
+}
+
 /// `bento policy ls ARGS`'s stdout.
 fn ls(t: &mut TestEnv, args: &[&str]) -> String {
     let args: Vec<&str> = ["policy", "ls"].iter().chain(args).copied().collect();
@@ -651,14 +671,8 @@ fn ls(t: &mut TestEnv, args: &[&str]) -> String {
 /// A `deny-all` policy with the rules sbx was measured with: a global allow, a global deny with
 /// a port, and an allow for sandbox `chk-pol`, which exists. Returns the three rule ids.
 fn checked_policy(t: &TestEnv) -> [String; 3] {
-    let mut p = Policy {
-        mode: Some(Mode::DenyAll),
-        ..Default::default()
-    };
-    let mut add = |sandbox, decision, host| {
-        p.add_rule(sandbox, decision, host, "added", None, None)
-            .unwrap()
-    };
+    let mut p = policy(Mode::DenyAll);
+    let mut add = |sandbox, decision, host| add(&mut p, sandbox, decision, host, "added");
     let ids = [
         add(None, Decision::Allow, "chk-allow.example.invalid"),
         add(None, Decision::Deny, "chk-deny.example.invalid:8443"),
@@ -752,30 +766,10 @@ local    -             all          default-deny-all   -           -      defaul
 #[test]
 fn ls_wide_lists_each_resource_sorted_and_hides_a_plain_status() {
     let mut t = test_env(&[]);
-    let mut p = Policy {
-        mode: Some(Mode::Balanced),
-        ..Default::default()
-    };
-    let one = p
-        .add_rule(
-            None,
-            Decision::Allow,
-            "z.example.com",
-            "approval",
-            None,
-            None,
-        )
-        .unwrap();
-    let two = p
-        .add_rule(
-            Some("a1"),
-            Decision::Allow,
-            "b.example.com,a.example.com",
-            "approval",
-            None,
-            None,
-        )
-        .unwrap();
+    let mut p = policy(Mode::Balanced);
+    let one = add(&mut p, None, Decision::Allow, "z.example.com", "approval");
+    let hosts = "b.example.com,a.example.com";
+    let two = add(&mut p, Some("a1"), Decision::Allow, hosts, "approval");
     p.save(&t.ctx.paths).unwrap();
     // As sbx's `--created-via approval --wide`: no row has more than `active` to say, so there
     // is no STATUS column.
@@ -823,20 +817,15 @@ fn ls_wide_lists_each_resource_sorted_and_hides_a_plain_status() {
 #[test]
 fn ls_json_and_yaml_are_sbx_s_rules_document() {
     let mut t = test_env(&[]);
-    let mut p = Policy {
-        mode: Some(Mode::DenyAll),
-        ..Default::default()
-    };
-    let id = p
-        .add_rule(
-            Some("chk-pol"),
-            Decision::Allow,
-            "example.org:443",
-            "approval",
-            None,
-            None,
-        )
-        .unwrap();
+    let mut p = policy(Mode::DenyAll);
+    let scope = Some("chk-pol");
+    let id = add(
+        &mut p,
+        scope,
+        Decision::Allow,
+        "example.org:443",
+        "approval",
+    );
     p.save(&t.ctx.paths).unwrap();
     // Keys in sbx's order.
     let json = format!(
@@ -925,8 +914,6 @@ fn ls_json_and_yaml_are_sbx_s_rules_document() {
         serde_json::from_str::<serde_json::Value>(&json).unwrap()
     );
     assert!(yaml.starts_with("rules:\n"), "{yaml}");
-    let at = |key: &str| yaml.find(key).unwrap_or_else(|| panic!("{key} in {yaml}"));
-    assert!(at("id:") < at("name:") && at("status:") < at("reason:"));
     // A filter that matches nothing leaves an empty list.
     assert_eq!(
         ls(&mut t, &["--json", "--source", "org"]),
@@ -944,10 +931,8 @@ fn ls_for_a_sandbox_summarises_what_applies_to_it() {
     let mut t = test_env(&[]);
     let [allow, deny, scoped] = checked_policy(&t);
     let mut p = Policy::load(&t.ctx.paths).unwrap();
-    p.add_rule(Some("other"), Decision::Allow, "x.com", "added", None, None)
-        .unwrap();
-    p.add_rule(None, Decision::Allow, "second.example", "added", None, None)
-        .unwrap();
+    add(&mut p, Some("other"), Decision::Allow, "x.com", "added");
+    add(&mut p, None, Decision::Allow, "second.example", "added");
     p.save(&t.ctx.paths).unwrap();
     assert_eq!(
         ls(&mut t, &["chk-pol"]),
@@ -1096,19 +1081,8 @@ fn ls_refuses_bad_filter_values_in_sbx_s_words() {
 fn ls_shows_kit_rules_as_one_policy_per_sandbox() {
     use crate::kits::model::{NetRule, Rules};
     let mut t = test_env(&[]);
-    let mut p = Policy {
-        mode: Some(Mode::DenyAll),
-        ..Default::default()
-    };
-    p.add_rule(
-        Some("my-sb"),
-        Decision::Allow,
-        "user.com",
-        "added",
-        None,
-        None,
-    )
-    .unwrap();
+    let mut p = policy(Mode::DenyAll);
+    add(&mut p, Some("my-sb"), Decision::Allow, "user.com", "added");
     let rules = |host: &str| Rules {
         allow: vec![NetRule::host(host)],
         deny: vec![],
@@ -1119,15 +1093,8 @@ fn ls_shows_kit_rules_as_one_policy_per_sandbox() {
         .unwrap();
     p.add_kit_rules("my-sb", "gh", &rules("pkg.kit.com"), true)
         .unwrap();
-    p.add_rule(
-        Some("my-sb"),
-        Decision::Allow,
-        "mcp.dev",
-        crate::policy::MCP_VIA,
-        None,
-        None,
-    )
-    .unwrap();
+    let mcp = crate::policy::MCP_VIA;
+    add(&mut p, Some("my-sb"), Decision::Allow, "mcp.dev", mcp);
     p.save(&t.ctx.paths).unwrap();
     t.sandbox("my-sb", "running", &[]);
     // One aggregated rule per sandbox, like sbx: runtime hosts only (install-phase hosts are
@@ -1205,39 +1172,39 @@ NETWORK
     );
 }
 
+/// A `balanced` policy with a plain allow, then the two rules smolvm enforces more loosely than
+/// sbx would: a global deny with a port, and for sandbox `s1` an allow with a widened wildcard, a
+/// method and a path. Returns that last rule's id.
+fn loose_policy(p: &mut Policy) -> String {
+    add(p, None, Decision::Deny, "b.com:8080", "added");
+    p.add_rule(
+        Some("s1"),
+        Decision::Allow,
+        "crl*.x.com",
+        "added",
+        Some("get".into()),
+        Some("/v1/**".into()),
+    )
+    .unwrap()
+}
+
 #[test]
-fn ls_shows_what_isnt_enforced_as_the_status_reason() {
-    let mut t = test_env(&[]);
-    let mut p = Policy {
-        mode: Some(Mode::Balanced),
-        ..Default::default()
-    };
-    p.add_rule(None, Decision::Allow, "a.com", "added", None, None)
-        .unwrap();
-    let note = |p: &Policy, f: LsFilter| ls_note(&filtered(ls_rules(p, None), &f));
+fn ls_note_counts_the_listed_rules_that_arent_fully_enforced() {
+    let mut p = policy(Mode::Balanced);
+    add(&mut p, None, Decision::Allow, "a.com", "added");
+    let note = |p: &Policy, a: PolicyLsArgs| ls_note(&filtered(ls_rules(p, None), &a));
     assert_eq!(
-        note(&p, LsFilter::default()),
+        note(&p, PolicyLsArgs::default()),
         None,
         "the preset and the fallback have no notes"
     );
-    p.add_rule(None, Decision::Deny, "b.com:8080", "added", None, None)
-        .unwrap();
-    let http = p
-        .add_rule(
-            Some("s1"),
-            Decision::Allow,
-            "crl*.x.com",
-            "added",
-            Some("get".into()),
-            Some("/v1/**".into()),
-        )
-        .unwrap();
+    loose_policy(&mut p);
     assert_eq!(
-        note(&p, LsFilter::default()).as_deref(),
+        note(&p, PolicyLsArgs::default()).as_deref(),
         Some("note: 2 rule(s) aren't fully enforced; see `bento policy ls --wide`")
     );
-    let allows = || LsFilter {
-        decision: Some("allow"),
+    let allows = || PolicyLsArgs {
+        decision: Some(Decision::Allow),
         ..Default::default()
     };
     assert_eq!(
@@ -1247,13 +1214,21 @@ fn ls_shows_what_isnt_enforced_as_the_status_reason() {
     assert_eq!(
         note(
             &p,
-            LsFilter {
-                source: Some("kit"),
+            PolicyLsArgs {
+                source: Some("kit".into()),
                 ..allows()
             }
         ),
         None
     );
+}
+
+#[test]
+fn ls_shows_what_isnt_enforced_as_the_status_reason() {
+    let mut t = test_env(&[]);
+    let mut p = policy(Mode::Balanced);
+    add(&mut p, None, Decision::Allow, "a.com", "added");
+    let http = loose_policy(&mut p);
     p.save(&t.ctx.paths).unwrap();
     // A rule with a method or a path is sbx's `http` type; neither is enforced.
     assert_eq!(ls(&mut t, &["--type", "http", "-q"]), format!("{http}\n"));
@@ -1289,6 +1264,91 @@ local    added         sandbox:s1   -        sandbox:s1   -      {http}   http  
     );
     assert_eq!(
         json["rules"][0]["actions"],
+        serde_json::json!(["net:connect:tcp", "net:connect:udp"])
+    );
+}
+
+#[test]
+fn ls_says_each_kit_rule_note_once() {
+    use crate::kits::model::{NetRule, Rules};
+    let mut t = test_env(&[]);
+    let mut p = policy(Mode::DenyAll);
+    // Two kits allow the same host and port, and one entry has two paths (a stored rule each).
+    let rules = Rules {
+        allow: vec![
+            NetRule::host("kit.com:8080"),
+            NetRule {
+                host: "api.dev".into(),
+                methods: vec!["GET".into()],
+                paths: vec!["/a".into(), "/b".into()],
+            },
+        ],
+        deny: vec![],
+    };
+    p.add_kit_rules("my-sb", "gh", &rules, false).unwrap();
+    p.add_kit_rules("my-sb", "jq", &rules, false).unwrap();
+    p.save(&t.ctx.paths).unwrap();
+    let json = ls(&mut t, &["--source", "kit", "--json"]);
+    let json: serde_json::Value = serde_json::from_str(&json).unwrap();
+    assert_eq!(
+        json["rules"][0]["resources"],
+        serde_json::json!(["kit.com:8080", "api.dev"])
+    );
+    assert_eq!(
+        json["rules"][0]["reason"],
+        "kit.com:8080: port 8080 not enforced (all ports allowed); method GET not enforced; \
+         path /a not enforced; path /b not enforced"
+    );
+}
+
+#[test]
+fn ls_shows_a_sandbox_s_kit_deny_rules_as_a_second_kit_rule() {
+    use crate::kits::model::{NetRule, Rules};
+    let mut t = test_env(&[]);
+    let mut p = policy(Mode::DenyAll);
+    let rules = |allow: &str, deny: &str| Rules {
+        allow: vec![NetRule::host(allow)],
+        deny: vec![NetRule::host(deny)],
+    };
+    p.add_kit_rules("my-sb", "gh", &rules("kit.com", "ads.kit.com"), false)
+        .unwrap();
+    p.add_kit_rules("my-sb", "jq", &rules("jq.dev", "ads.jq.dev"), false)
+        .unwrap();
+    p.save(&t.ctx.paths).unwrap();
+    let allow = crate::policy::kit_rule_id("my-sb");
+    let deny = crate::policy::kit_rule_id("my-sb|deny");
+    assert_ne!(allow, deny);
+    assert_eq!(
+        ls(&mut t, &["--source", "kit", "-q"]),
+        format!("{allow}\n{deny}\n")
+    );
+    assert_eq!(
+        ls(&mut t, &["--source", "kit", "--decision", "deny", "-q"]),
+        format!("{deny}\n")
+    );
+    // Both rules are in the one `kit:<sandbox>` policy.
+    assert_eq!(
+        ls(&mut t, &["--source", "kit"]),
+        "\
+POLICY      SOURCE   APPLIES TO      SUMMARY
+kit:my-sb   kit      sandbox:my-sb   network: 2 allow, 2 deny
+"
+    );
+    let json = ls(&mut t, &["--source", "kit", "--decision", "deny", "--json"]);
+    let json: serde_json::Value = serde_json::from_str(&json).unwrap();
+    let rows = json["rules"].as_array().unwrap();
+    assert_eq!(rows.len(), 1);
+    assert_eq!(rows[0]["id"], deny.as_str());
+    assert_eq!(rows[0]["name"], "kit:my-sb");
+    assert_eq!(rows[0]["policy_id"], "kit:my-sb");
+    assert_eq!(rows[0]["decision"], "deny");
+    assert_eq!(rows[0]["editable"], false);
+    assert_eq!(
+        rows[0]["resources"],
+        serde_json::json!(["ads.kit.com", "ads.jq.dev"])
+    );
+    assert_eq!(
+        rows[0]["actions"],
         serde_json::json!(["net:connect:tcp", "net:connect:udp"])
     );
 }

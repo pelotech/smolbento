@@ -309,10 +309,24 @@ pub fn rfc3339(secs: i64) -> String {
     humantime::format_rfc3339_seconds(at).to_string()
 }
 
+/// The `s` of `n things`.
+pub fn plural(n: usize) -> &'static str {
+    if n == 1 { "" } else { "s" }
+}
+
 /// Left-aligned columns separated by three spaces, like sbx's tables: `head`, then `rows`.
 pub fn table(head: &[&str], rows: Vec<Vec<String>>) -> String {
     let head = head.iter().map(|s| s.to_string()).collect();
     let rows: Vec<Vec<String>> = std::iter::once(head).chain(rows).collect();
+    aligned(&rows)
+        .iter()
+        .map(|line| format!("{}\n", line.trim_end()))
+        .collect()
+}
+
+/// A line per row, its cells left-aligned in columns three spaces apart. Every cell but a row's
+/// last is padded to its column, so a line whose last cells are empty ends in spaces.
+pub fn aligned(rows: &[Vec<String>]) -> Vec<String> {
     let cols = rows.iter().map(Vec::len).max().unwrap_or(0);
     let widths: Vec<usize> = (0..cols)
         .map(|c| {
@@ -323,19 +337,18 @@ pub fn table(head: &[&str], rows: Vec<Vec<String>>) -> String {
                 .unwrap_or(0)
         })
         .collect();
-    let mut out = String::new();
-    for row in rows {
-        let mut line = String::new();
-        for (i, cell) in row.iter().enumerate() {
-            line.push_str(cell);
-            if i + 1 < row.len() {
-                line.push_str(&" ".repeat(widths[i] - cell.chars().count() + 3));
+    rows.iter()
+        .map(|row| {
+            let mut line = String::new();
+            for (i, cell) in row.iter().enumerate() {
+                line.push_str(cell);
+                if i + 1 < row.len() {
+                    line.push_str(&" ".repeat(widths[i] - cell.chars().count() + 3));
+                }
             }
-        }
-        out.push_str(line.trim_end());
-        out.push('\n');
-    }
-    out
+            line
+        })
+        .collect()
 }
 
 #[cfg(test)]

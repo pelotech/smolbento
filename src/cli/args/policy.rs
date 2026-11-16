@@ -132,8 +132,8 @@ pub struct PolicyLsArgs {
     #[arg(long, value_name = "local|org|kit|mcp")]
     pub source: Option<String>,
     /// Only allow or only deny rules
-    #[arg(long, value_name = "allow|deny")]
-    pub decision: Option<String>,
+    #[arg(long, value_name = "allow|deny", hide_possible_values = true)]
+    pub decision: Option<crate::policy::Decision>,
     /// Only rules created this way
     #[arg(
         long = "created-via",
