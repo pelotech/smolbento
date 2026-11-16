@@ -72,10 +72,7 @@ pub fn locate(settings: &Settings, env: &BTreeMap<String, String>) -> Result<Smo
 /// A set `smolvm.home`, with `~/` expanded. A relative path would follow the current directory,
 /// so sandboxes would come and go with `cd` (and `reset` would delete the wrong folder).
 fn absolute_home(h: &str, env: &BTreeMap<String, String>) -> Result<PathBuf> {
-    let p = match h.strip_prefix("~/") {
-        Some(rest) => Path::new(env.get("HOME").context("HOME is not set")?).join(rest),
-        None => PathBuf::from(h),
-    };
+    let p = crate::util::expand_home(h, env)?.unwrap_or_else(|| h.into());
     if !p.is_absolute() {
         bail!("smolvm.home must be an absolute path (or start with ~/), not {h}");
     }

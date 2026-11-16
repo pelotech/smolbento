@@ -185,12 +185,10 @@ fn ls<R: Runner>(ctx: &Ctx<R>, a: &McpLsArgs) -> Result<()> {
         }
         Format::Table if rows.is_empty() => writeln!(out, "No MCP servers registered")?,
         Format::Table => {
-            let mut lines = vec![["NAME", "TYPE", "TARGET"].map(String::from).to_vec()];
-            lines.extend(
-                rows.iter()
-                    .map(|r| vec![r.name.to_string(), r.kind.to_string(), r.target()]),
-            );
-            write!(out, "{}", table(lines))?;
+            let lines = rows.iter();
+            let lines = lines.map(|r| vec![r.name.to_string(), r.kind.to_string(), r.target()]);
+            let head = ["NAME", "TYPE", "TARGET"];
+            write!(out, "{}", table(&head, lines.collect()))?;
         }
     }
     Ok(())
@@ -347,7 +345,7 @@ mod tests {
         let mut t = mcp_env(&[]);
         t.sbt(&["create", "claude", ".", "--static-mcp", "linear,files"])
             .unwrap();
-        let create = t.calls_of("machine create").remove(0);
+        let create = t.create_line();
         for want in [
             " --credential mcp_linear_api_key=SBX_MCP_LINEAR_API_KEY@mcp.linear.app ",
             " --label sbx.mcp=linear,files ",
@@ -398,7 +396,7 @@ mod tests {
         let mut t = mcp_env(&[("SMOLBENTO_DOCKER", "false")]);
         t.sbt(&["create", "claude", ".", "--static-mcp", "files"])
             .unwrap();
-        let create = t.calls_of("machine create").remove(0);
+        let create = t.create_line();
         assert!(!create.contains("builtin:docker"), "{create}");
         assert!(
             t.calls_of("machine exec")
@@ -414,7 +412,7 @@ mod tests {
         let mut t = mcp_env(&[]);
         t.sbt(&["create", "claude", ".", "--static-mcp", "none"])
             .unwrap();
-        let create = t.calls_of("machine create").remove(0);
+        let create = t.create_line();
         assert!(create.contains(" --label sbx.mcp= "), "{create}");
         assert!(!t.calls().iter().any(|l| l.contains("claude mcp add")));
         // Without the flag there is no label at all.

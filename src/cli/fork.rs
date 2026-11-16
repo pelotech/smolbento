@@ -128,7 +128,7 @@ fn add_remote_and_branch<R: Runner>(
     let vars = [
         ("SANDBOX_NAME".to_string(), fork.to_string()),
         ("SANDBOX_VM_ID".to_string(), fork.to_string()),
-        ("SANDBOX_ID".to_string(), sandbox::env::new_uuid()?),
+        ("SANDBOX_ID".to_string(), sandbox::env::new_uuid()),
     ];
     let result = ctx
         .vm
@@ -204,9 +204,8 @@ mod tests {
     }
 
     fn branches(t: &TestEnv) -> Vec<String> {
-        t.calls()
+        t.calls_of("machine branch")
             .into_iter()
-            .filter(|c| c.starts_with("machine branch"))
             .map(|c| normalize_id(&c))
             .collect()
     }
@@ -451,10 +450,7 @@ mod tests {
             let err = t.sbt(args).unwrap_err();
             assert!(format!("{err:#}").contains(msg), "{args:?}: {err:#}");
             assert!(branches(&t).is_empty(), "{args:?}");
-            assert!(
-                t.calls().iter().all(|c| !c.starts_with("machine start")),
-                "{args:?}"
-            );
+            assert!(!t.made("machine start"), "{args:?}");
         }
     }
 

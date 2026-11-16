@@ -165,7 +165,7 @@ fn copy_text(cmd: Option<&str>, text: &[u8]) -> Result<()> {
     };
     let mut last = None;
     for (program, args) in candidates {
-        match run(program, args, Some(text)) {
+        match run(program, args, text, CMD_TIMEOUT) {
             Ok(()) => return Ok(()),
             Err(e) => last = Some(e),
         }
@@ -173,28 +173,20 @@ fn copy_text(cmd: Option<&str>, text: &[u8]) -> Result<()> {
     Err(last.unwrap_or_else(|| anyhow::anyhow!("no clipboard command")))
 }
 
-/// Runs a host command with nothing reaching the attached terminal; `input` goes to its stdin.
-fn run(program: &str, args: &[&str], input: Option<&[u8]>) -> Result<()> {
-    run_within(program, args, input, CMD_TIMEOUT)
-}
-
 /// How long a copier may run: requests are handled one at a time.
 const CMD_TIMEOUT: Duration = Duration::from_secs(10);
 
-/// `run`, killing the command after `timeout`.
-fn run_within(program: &str, args: &[&str], input: Option<&[u8]>, timeout: Duration) -> Result<()> {
+/// Runs a host command with nothing reaching the attached terminal, killing it after `timeout`;
+/// `input` goes to its stdin.
+fn run(program: &str, args: &[&str], input: &[u8], timeout: Duration) -> Result<()> {
     let mut child = Command::new(program)
         .args(args)
-        .stdin(if input.is_some() {
-            Stdio::piped()
-        } else {
-            Stdio::null()
-        })
+        .stdin(Stdio::piped())
         .stdout(Stdio::null())
         .stderr(Stdio::null())
         .spawn()
         .with_context(|| format!("running {program}"))?;
-    if let (Some(input), Some(mut stdin)) = (input, child.stdin.take()) {
+    if let Some(mut stdin) = child.stdin.take() {
         // Its own thread: a command that never reads mustn't block us past the timeout. It ends
         // when the command does (the pipe breaks).
         let input = input.to_vec();
@@ -348,7 +340,7 @@ mod tests {
         let program = script.display().to_string();
         let started = Instant::now();
         let big = vec![b'x'; 1 << 20];
-        let err = run_within(&program, &[], Some(&big), Duration::from_millis(300)).unwrap_err();
+        let err = run(&program, &[], &big, Duration::from_millis(300)).unwrap_err();
         assert!(err.to_string().contains("didn't finish"), "{err:#}");
         assert!(
             started.elapsed() < Duration::from_secs(5),

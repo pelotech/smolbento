@@ -45,7 +45,7 @@ fn clone_is_ignored_when_run_attaches_to_an_existing_sandbox() {
     t.runner().interactive_exit(0);
     // cwd is not a git repo, yet --clone must not matter for an existing sandbox.
     t.sbt(&["run", "claude", "--clone"]).unwrap();
-    assert!(!t.calls().iter().any(|l| l.contains("machine create")));
+    assert!(!t.made("machine create"));
 }
 
 #[test]
@@ -747,7 +747,7 @@ fn gemini_is_refused_for_a_new_sandbox_and_an_old_one_must_be_recreated() {
 
 #[test]
 fn attaching_to_an_existing_sandbox_loads_no_kits() {
-    let mut t = test_env(&[("SMOLBENTO_KIT_ALLOW_LOCAL_KITS", "true")]);
+    let mut t = kit_env();
     created(&t, "running");
     t.runner().interactive_exit(0);
     // Loading either would fail: the path doesn't exist.
@@ -833,7 +833,7 @@ fn mount_on_an_existing_sandbox_is_warned_about_and_attaches() {
     t.runner().interactive_exit(0);
     t.sbt(&["run", "claude", "--mount", ".:/home/agent/x"])
         .unwrap();
-    assert!(!t.calls().iter().any(|l| l.contains("machine create")));
+    assert!(!t.made("machine create"));
 }
 
 #[test]
@@ -884,12 +884,12 @@ fn kit_args_without_a_kit_always_fail() {
         format!("{err:#}").contains("unknown kit argument a"),
         "{err:#}"
     );
-    assert!(!t.calls().iter().any(|l| l.starts_with("machine create")),);
+    assert!(!t.made("machine create"));
 }
 
 #[test]
 fn existing_name_with_kit_flags_attaches_without_loading() {
-    let mut t = test_env(&[("SMOLBENTO_KIT_ALLOW_LOCAL_KITS", "true")]);
+    let mut t = kit_env();
     created(&t, "running");
     t.runner().interactive_exit(0);
     t.sbt(&["run", "--name", "claude-proj", "--kit", "./no-such-kit"])
@@ -902,7 +902,7 @@ fn a_long_running_sandbox_keeps_running_after_the_last_session() {
     let mut t = test_env(&[]);
     kit_sandbox(&t, true);
     t.sbt(&["run", "--name", "toolbox-proj"]).unwrap();
-    assert!(!t.calls().iter().any(|l| l.starts_with("machine stop")));
+    assert!(!t.made("machine stop"));
 }
 
 #[test]

@@ -38,16 +38,13 @@ pub(crate) fn fork_round_trip() {
     e.create_clone();
 
     let guest_commit = |sb: &str, msg: &str| {
-        e.ok(&[
-            "exec",
+        e.sh_ok(
             sb,
-            "sh",
-            "-c",
             &format!(
                 "echo {msg} >> README && git -c user.name=a -c user.email=a@a \
                  -c commit.gpgsign=false commit -q -am {msg}"
             ),
-        ]);
+        );
     };
     guest_root(&e.name, "echo before > /root/before");
     guest_commit(&e.name, "before-fork");
@@ -125,7 +122,7 @@ pub(crate) fn fork_round_trip() {
     );
 
     let out = e.sbt(&["rm", "-f", &e.name]);
-    let err = String::from_utf8_lossy(&out.stderr);
+    let err = err_text(&out);
     assert!(!out.status.success(), "rm of a parent with forks fails");
     assert!(err.contains("remove its forks first"), "{err}");
     e.ok(&["rm", "-f", f1, f2]);
@@ -140,7 +137,7 @@ pub(crate) fn fork_round_trip() {
     let m = E2e::new("forkmnt");
     m.create_alpine();
     let out = m.sbt(&["fork", &m.name]);
-    let err = String::from_utf8_lossy(&out.stderr);
+    let err = err_text(&out);
     assert!(
         !out.status.success(),
         "fork of a host-mounted sandbox fails"
@@ -157,7 +154,7 @@ pub(crate) fn template_round_trip() {
     // Running: refused without a terminal.
     let out = e.sbt(&["template", "save", &e.name, "e2e-tpl:v1"]);
     assert!(!out.status.success());
-    assert!(String::from_utf8_lossy(&out.stderr).contains("cannot save a running sandbox"));
+    assert!(err_text(&out).contains("cannot save a running sandbox"));
     e.ok(&["stop", &e.name]);
     let out = e.ok(&["template", "save", &e.name, "e2e-tpl:v1", "-o", "tpl.tar"]);
     assert!(
@@ -173,28 +170,11 @@ pub(crate) fn template_round_trip() {
     let copy = format!("{}-copy", e.name);
     let _guard = Forks(vec![copy.clone()]);
     let ws = e.workspace();
-    e.ok(&[
-        "create",
-        "shell",
-        ws.to_str().unwrap(),
-        "--name",
+    e.create(&copy, &["-t", "e2e-tpl:v1", "--pull", "never", "shell"]);
+    let got = e.sh_ok(
         &copy,
-        "-t",
-        "e2e-tpl:v1",
-        "--pull",
-        "never",
-        "--cpus",
-        "1",
-        "-m",
-        "1g",
-    ]);
-    let got = e.ok(&[
-        "exec",
-        &copy,
-        "sh",
-        "-c",
         "cat /etc/marker; [ -e /etc/motd ] && echo present || echo gone; pwd",
-    ]);
+    );
     assert!(got.contains("kept"), "{got}");
     assert!(got.contains("gone") && !got.contains("present"), "{got}");
     assert!(
@@ -202,11 +182,11 @@ pub(crate) fn template_round_trip() {
         "exec runs in the workspace: {got}"
     );
 
-    // Nested saves are refused (smolvm 1.34.1 can't pack them: see development-status.md).
+    // Nested saves are refused (smolvm can't pack them: see development-status.md).
     e.ok(&["stop", &copy]);
     let out = e.sbt(&["template", "save", &copy, "e2e-tpl:v2"]);
     assert!(!out.status.success());
-    assert!(String::from_utf8_lossy(&out.stderr).contains("created from template"));
+    assert!(err_text(&out).contains("created from template"));
 
     // rm then load restores it; the copy keeps working without the pack.
     e.ok(&["template", "rm", "-f", "e2e-tpl:v1"]);

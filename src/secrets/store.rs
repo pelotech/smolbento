@@ -11,7 +11,7 @@ use std::cell::RefCell;
 use std::collections::BTreeMap;
 use std::fs;
 use std::io::Write;
-use std::path::{Path, PathBuf};
+use std::path::PathBuf;
 use std::process::{Command, Stdio};
 
 use anyhow::{Context, Result, bail};
@@ -312,8 +312,7 @@ impl SecretStore for MemoryStore {
 }
 
 fn on_path(program: &str, env: &BTreeMap<String, String>) -> bool {
-    env.get("PATH")
-        .is_some_and(|p| std::env::split_paths(p).any(|d| Path::new(&d).join(program).is_file()))
+    crate::util::find_on_path(env.get("PATH"), program).is_some()
 }
 
 /// The OS keychain where one is usable, else the 0600 file.

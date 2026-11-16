@@ -26,13 +26,7 @@ pub fn check_reachable(name: &str, url: &str) -> Result<()> {
 
 #[cfg(not(test))]
 fn connect(url: &str) -> Result<()> {
-    let rt = tokio::runtime::Builder::new_current_thread()
-        .enable_all()
-        .build()
-        .context("starting the HTTP client")?;
-    rt.block_on(async {
-        // Same TLS setup as the registry client. Err means a provider is already installed.
-        let _ = rustls::crypto::ring::default_provider().install_default();
+    crate::util::block_on("HTTP client", async {
         let client = reqwest::Client::builder()
             .redirect(reqwest::redirect::Policy::none())
             .connect_timeout(std::time::Duration::from_secs(15))

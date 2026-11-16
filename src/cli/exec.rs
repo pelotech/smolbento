@@ -4,46 +4,46 @@ use std::path::Path;
 
 use anyhow::{Context, Result, bail};
 
-use super::{CpArgs, Ctx, ExecArgs, Unsupported};
+use super::{CpArgs, Ctx, ExecArgs};
 use crate::bridge;
 use crate::provision;
 use crate::sandbox::{self, name, options};
 use crate::smolvm::{ExecSpec, Runner};
 
 pub fn exec<R: Runner>(ctx: &mut Ctx<R>, a: &ExecArgs) -> Result<i32> {
-    if a.detach {
-        return Err(Unsupported("exec -d is not supported (as in sbx)".into()).into());
-    }
-    if a.detach_keys.is_some() {
-        return Err(Unsupported("--detach-keys is not supported".into()).into());
-    }
+    let f = &a.flags;
+    super::refuse_as(&[(f.detach, "exec -d")], "is not supported (as in sbx)")?;
+    super::refuse_as(
+        &[(f.detach_keys.is_some(), "--detach-keys")],
+        "is not supported",
+    )?;
     let mut sb = sandbox::get(&ctx.vm, &a.sandbox)?;
     provision::ensure_running(ctx, &mut sb)?;
-    let user = if a.privileged {
+    let user = if f.privileged {
         "root".to_string()
     } else {
         // A v3 workload's image user, as sbx; else `agent`.
-        a.user
+        f.user
             .clone()
             .unwrap_or_else(|| sb.meta.session_user().to_string())
     };
-    let mut env = options::parse_env(&a.env, &a.env_file, &ctx.env)?;
-    sandbox::env::session_env(&ctx.env, a.tty, sb.meta.bridge, &mut env);
+    let mut env = options::parse_env(&f.env, &f.env_file, &ctx.env)?;
+    sandbox::env::session_env(&ctx.env, f.tty, sb.meta.bridge, &mut env);
     let spec = ExecSpec {
         name: sb.machine.clone(),
         user: Some(user),
-        workdir: Some(a.workdir.clone().unwrap_or_else(|| sb.workdir())),
+        workdir: Some(f.workdir.clone().unwrap_or_else(|| sb.workdir())),
         env,
-        interactive: a.interactive,
-        tty: a.tty,
+        interactive: f.interactive,
+        tty: f.tty,
         detach: false,
         // Without stdin or a TTY smolvm buffers the output until the command ends and fails it
         // past 11 MiB; streamed, it arrives as it's written and has no cap.
-        stream: !a.interactive && !a.tty,
+        stream: !f.interactive && !f.tty,
         cmd: a.command.clone(),
     };
     // `exec -it` is an attached session: serve the browser and clipboard bridge during it.
-    let _bridge = if a.interactive && a.tty {
+    let _bridge = if f.interactive && f.tty {
         bridge::attach(&ctx.env, &ctx.settings, &ctx.smolvm, &sb)
     } else {
         None
@@ -243,10 +243,7 @@ mod tests {
         t.sbt(&["cp", "./file", "claude-proj:/tmp/file"]).unwrap();
         t.sbt(&["cp", "claude-proj:/etc/hosts", "./hosts"]).unwrap();
         let cps: Vec<String> = t
-            .ctx
-            .vm
-            .runner()
-            .call_lines()
+            .calls()
             .into_iter()
             .filter(|l| l.contains(" cp "))
             .collect();

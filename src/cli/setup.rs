@@ -3,22 +3,19 @@
 use std::fs;
 use std::io::Write;
 use std::os::unix::fs::DirBuilderExt;
-use std::path::{Path, PathBuf};
+use std::path::Path;
 
 use anyhow::{Context, Result};
 
-use super::{Ctx, SetupCmd, SetupSshCmd, Unsupported};
+use super::{Ctx, SetupCmd, SetupSshCmd};
 use crate::config::{Symlink, write_atomic};
 use crate::smolvm::Runner;
 use crate::ssh::block;
 
 pub fn run<R: Runner>(ctx: &Ctx<R>, cmd: SetupCmd) -> Result<i32> {
     let SetupCmd::Ssh(a) = cmd;
-    if a.auto_create {
-        return Err(
-            Unsupported("--auto-create (desktop app connections) is not supported".into()).into(),
-        );
-    }
+    let auto_create = (a.auto_create, "--auto-create (desktop app connections)");
+    super::refuse_as(&[auto_create], "is not supported")?;
     let ssh_dir = Path::new(ctx.env.get("HOME").context("HOME is not set")?).join(".ssh");
     match a.cmd {
         None => install(ctx, &ssh_dir),
@@ -104,11 +101,7 @@ fn binary<R: Runner>(ctx: &Ctx<R>) -> String {
         .ok()
         .and_then(|e| e.canonicalize().ok());
     let path = ctx.env.get("PATH").cloned().unwrap_or_default();
-    let on_path = |name: &str| -> Option<PathBuf> {
-        std::env::split_paths(&path)
-            .map(|d| d.join(name))
-            .find(|p| p.is_file())
-    };
+    let on_path = |name: &str| crate::util::find_on_path(Some(&path), name);
     for name in [ctx.program.as_str(), "bento", "smolbento"] {
         if let (Some(found), Some(exe)) = (on_path(name), &exe)
             && found.canonicalize().ok().as_ref() == Some(exe)

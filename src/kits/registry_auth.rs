@@ -47,7 +47,7 @@ pub fn pull_token(
     password: &str,
     repos: &[String],
 ) -> Result<String> {
-    match mint(host, entry, password, repos)? {
+    match mint_for(host, entry, password, repos, "pull")? {
         Some(token) => Ok(token),
         None => {
             bail!("registry {host} does not hand out pull tokens (no Bearer challenge on /v2/)")
@@ -55,18 +55,9 @@ pub fn pull_token(
     }
 }
 
-/// `pull_token`, with `None` when `/v2/` asks for no Bearer token (no auth, or Basic itself).
+/// `pull_token` for ACTIONS on each repository (`pull`, or `pull,push` for `kit push`), with
+/// `None` when `/v2/` asks for no Bearer token (no auth, or Basic itself).
 /// Sync: runs its own runtime, so it must not be called from inside one.
-pub(crate) fn mint(
-    host: &str,
-    entry: &RegistryEntry,
-    password: &str,
-    repos: &[String],
-) -> Result<Option<String>> {
-    mint_for(host, entry, password, repos, "pull")
-}
-
-/// `mint` for ACTIONS on each repository (`pull`, or `pull,push` for `kit push`).
 pub(crate) fn mint_for(
     host: &str,
     entry: &RegistryEntry,
@@ -74,11 +65,8 @@ pub(crate) fn mint_for(
     repos: &[String],
     actions: &str,
 ) -> Result<Option<String>> {
-    tokio::runtime::Builder::new_current_thread()
-        .enable_all()
-        .build()
-        .context("starting the registry client")?
-        .block_on(mint_async(host, entry, password, repos, actions))
+    let mint = mint_async(host, entry, password, repos, actions);
+    crate::util::block_on("registry client", mint)
 }
 
 async fn mint_async(
@@ -88,8 +76,6 @@ async fn mint_async(
     repos: &[String],
     actions: &str,
 ) -> Result<Option<String>> {
-    // Same TLS setup as `registry::new_client`. Err means a provider is already installed.
-    let _ = rustls::crypto::ring::default_provider().install_default();
     // No redirects: the login must only reach the realm the trust rule checked.
     let client = reqwest::Client::builder()
         .redirect(Policy::none())

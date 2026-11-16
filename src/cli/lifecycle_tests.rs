@@ -10,14 +10,7 @@ fn create_clone_mounts_the_repo_and_adds_the_remote() {
     t.ctx.cwd = root.clone();
     creatable_as(&t, "claude-repo");
     t.sbt(&["create", "--clone", "claude", "."]).unwrap();
-    let create = t
-        .ctx
-        .vm
-        .runner()
-        .call_lines()
-        .into_iter()
-        .find(|l| l.contains("machine create"))
-        .unwrap();
+    let create = t.create_line();
     assert!(
         create.contains(&format!(
             "-v {}/.git:/run/sandbox/source:ro",
@@ -281,21 +274,18 @@ fn t_replaces_a_kit_image() {
     let mut t = test_env(&[]);
     creatable_as(&t, "shell-proj");
     t.sbt(&["create", "shell", "-t", "alpine:3"]).unwrap();
-    let create = t.calls_of("machine create").remove(0);
+    let create = t.create_line();
     assert!(create.contains("--image alpine:3 "), "{create}");
     // The kit stays, with its command; an image whose name isn't Docker-enabled gets no dockerd.
     assert!(create.contains(r#"sbx.kits=[{"name":"shell""#), "{create}");
     assert!(create.contains(r#"sbx.command=["bash","-l"]"#), "{create}");
     assert!(create.contains("sbx.docker=false"), "{create}");
     // Any workload kit, not only an agent.
-    let mut t = test_env(&[("SMOLBENTO_KIT_ALLOW_LOCAL_KITS", "true")]);
+    let mut t = kit_env();
     creatable_as(&t, "toolbox-proj");
-    let kit = format!(
-        "{}/tests/fixtures/kits/v2/tool-workload",
-        env!("CARGO_MANIFEST_DIR")
-    );
+    let kit = v2_fixture("tool-workload");
     t.sbt(&["create", &kit, "-t", "img:2"]).unwrap();
-    let create = t.calls_of("machine create").remove(0);
+    let create = t.create_line();
     assert!(create.contains("--image img:2 "), "{create}");
 }
 
@@ -305,7 +295,7 @@ fn claude_without_a_key_installs_with_mode_none() {
     agent_stand_in(&t, "claude", CLAUDE_STAND_IN);
     creatable(&t);
     t.sbt(&["create", "claude", "."]).unwrap();
-    let create = t.calls_of("machine create").remove(0);
+    let create = t.create_line();
     assert!(
         create.contains("-e SBX_CRED_ANTHROPIC_MODE=none "),
         "{create}"
@@ -326,7 +316,7 @@ fn an_oauth_credential_binds_its_api_key() {
     global_secret(&t, "anthropic", "sk-ant-test");
     creatable(&t);
     t.sbt(&["create", "claude", "."]).unwrap();
-    let create = t.calls_of("machine create").remove(0);
+    let create = t.create_line();
     assert!(
         create.contains("-e SBX_CRED_ANTHROPIC_MODE=apikey "),
         "{create}"
@@ -484,7 +474,7 @@ fn a_template_drops_its_docker_kit_when_docker_is_disabled() {
     fake.missing_until_created("sbx-bb");
     t.sbt(&["create", "shell", "-t", "x:v1", "--name", "bb"])
         .unwrap();
-    let create = t.calls_of("machine create").remove(0);
+    let create = t.create_line();
     assert!(!create.contains("builtin:docker"), "{create}");
     assert!(create.contains("--label sbx.docker=false"), "{create}");
 }
@@ -510,10 +500,7 @@ fn pull_never_names_itself_for_a_template_kit_that_needs_a_build() {
 
 #[test]
 fn template_kits_follow_kit_policy() {
-    let tool = format!(
-        "{}/tests/fixtures/kits/v2/tool-mixin",
-        env!("CARGO_MANIFEST_DIR")
-    );
+    let tool = v2_fixture("tool-mixin");
     // A local kit, under --pull never, still needs kit.allowLocalKits.
     let mut t = test_env(&[("SMOLBENTO_KIT_ALLOW_LOCAL_KITS", "false")]);
     template_with(&t, vec![record(&tool)], false);
@@ -559,11 +546,7 @@ fn a_built_in_name_loads_its_kit() {
     let mut t = test_env(&[]);
     creatable(&t);
     t.sbt(&["create", "claude", "."]).unwrap();
-    let calls = t.calls();
-    let create = calls
-        .iter()
-        .find(|l| l.starts_with("machine create"))
-        .unwrap();
+    let create = t.create_line();
     let kits = t.ctx.env["SMOLBENTO_AGENT_KITS_DIR"].clone();
     assert!(
         create.contains(&format!("{kits}/claude@sha256:")),
@@ -634,11 +617,7 @@ fn create_deny_network_adds_sandbox_deny_rules() {
     let p = crate::policy::Policy::load(&t.ctx.paths).unwrap();
     assert!(p.rules.is_empty(), "nothing global: {p:?}");
 
-    let lines = t.calls();
-    let create = lines
-        .iter()
-        .find(|l| l.starts_with("machine create"))
-        .unwrap();
+    let create = t.create_line();
     assert!(create.contains(" --deny-cidr 10.0.0.0/8 "), "{create}");
     // The sandbox keeps its mode and secrets.
     assert!(
@@ -659,11 +638,7 @@ fn create_denies_host_loopback_unless_a_localhost_rule_applies() {
             set_policy(&t, &format!("mode = \"{mode}\"\n{extra}"));
             creatable(&t);
             t.sbt(&["create", "claude", "."]).unwrap();
-            let lines = t.calls();
-            let create = lines
-                .iter()
-                .find(|l| l.starts_with("machine create"))
-                .unwrap();
+            let create = t.create_line();
             for cidr in ["127.0.0.0/8", "::1/128"] {
                 assert_eq!(
                     create.contains(&format!(" --deny-cidr {cidr} ")),
@@ -799,14 +774,7 @@ fn create_without_path_is_mountless_and_docker_can_be_disabled() {
     creatable_as(&t, "shell-proj");
     t.sbt(&["create", "shell", "--cpus", "1", "-m", "1g"])
         .unwrap();
-    let line = t
-        .ctx
-        .vm
-        .runner()
-        .call_lines()
-        .into_iter()
-        .find(|l| l.starts_with("machine create"))
-        .unwrap();
+    let line = t.create_line();
     assert!(line.contains("/kits/images/"), "{line}");
     assert!(!line.contains(" -v "), "{line}");
     assert!(line.contains("--label sbx.docker=false"), "{line}");
@@ -960,14 +928,7 @@ fn create_from_a_saved_template_passes_from_and_the_label() {
     fake.missing_until_created("sbx-bb");
     t.sbt(&["create", "shell", "-t", "chk-tpl:v1", "--name", "bb"])
         .unwrap();
-    let create = t
-        .ctx
-        .vm
-        .runner()
-        .call_lines()
-        .into_iter()
-        .find(|l| l.contains("machine create"))
-        .unwrap();
+    let create = t.create_line();
     let pack = crate::templates::Store::new(&t.ctx.paths).pack(&e);
     assert!(
         create.contains(&format!("--from {}", pack.display())),
@@ -1170,11 +1131,7 @@ fn start_needs_a_policy() {
         err.contains("no network policy chosen yet; run `bento policy init"),
         "{err}"
     );
-    let started = |t: &TestEnv| {
-        t.calls()
-            .into_iter()
-            .any(|l| l.starts_with("machine update") || l.starts_with("machine start"))
-    };
+    let started = |t: &TestEnv| t.made("machine update") || t.made("machine start");
     assert!(!started(&t));
     t.sbt(&["policy", "init", "balanced"]).unwrap();
     t.sbt(&["start", "claude-proj"]).unwrap();
@@ -1308,14 +1265,7 @@ fn rm_asks_on_a_terminal_and_removes_only_on_yes() {
         &json("sbx-claude-proj", "running", "claude-proj"),
     );
     ls_one(&t, &json("sbx-claude-proj", "running", "claude-proj"));
-    let deleted = |t: &TestEnv| {
-        t.ctx
-            .vm
-            .runner()
-            .call_lines()
-            .iter()
-            .any(|l| l.starts_with("machine delete"))
-    };
+    let deleted = |t: &TestEnv| t.made("machine delete");
     t.answer("n\n");
     let e = sbt(&mut t.ctx, &["rm", "claude-proj"]).unwrap_err();
     assert_eq!(e.to_string(), "aborted");
@@ -1347,10 +1297,7 @@ fn prune_removes_only_old_stopped_sandboxes() {
     );
     t.sbt(&["prune", "-f", "--filter", "until=1m"]).unwrap();
     let deletes: Vec<String> = t
-        .ctx
-        .vm
-        .runner()
-        .call_lines()
+        .calls()
         .into_iter()
         .filter(|l| l.contains("delete"))
         .collect();
@@ -1433,10 +1380,7 @@ fn reset_deletes_everything() {
     t.runner().once_ok(&["machine", "ls", "--json"], &ls);
     t.sbt(&["reset", "-f"]).unwrap();
     let deletes = t
-        .ctx
-        .vm
-        .runner()
-        .call_lines()
+        .calls()
         .into_iter()
         .filter(|l| l.contains("delete"))
         .count();
@@ -1553,11 +1497,7 @@ fn reset_goes_on_when_an_old_location_sandbox_wont_go_and_removes_forks_first() 
     );
     std::fs::create_dir_all(&t.ctx.paths.config).unwrap();
     t.sbt(&["reset", "-f"]).unwrap();
-    let deletes: Vec<String> = t
-        .calls()
-        .into_iter()
-        .filter(|l| l.starts_with("machine delete"))
-        .collect();
+    let deletes: Vec<String> = t.calls_of("machine delete");
     assert_eq!(
         deletes,
         ["machine delete -n sbx-b -f", "machine delete -n sbx-a -f"]
@@ -1610,7 +1550,7 @@ fn stop_rm_and_prune_print_sbxs_json() {
     // As sbx: --format describes the dry-run listing only.
     let err = t.sbt_err(&["prune", "-f", "--json"]);
     assert!(err.contains("pass --dry-run"), "{err}");
-    assert!(!t.calls().iter().any(|l| l.starts_with("machine delete")));
+    assert!(!t.made("machine delete"));
 
     let mut t = test_env(&[]);
     listed(&t);
@@ -1686,9 +1626,8 @@ fn with_forks(t: &TestEnv, a: &str, f1: &str, f2: &str) {
 }
 
 fn deletes(t: &TestEnv) -> Vec<String> {
-    t.calls()
+    t.calls_of("machine delete")
         .into_iter()
-        .filter(|l| l.contains("machine delete"))
         .map(|l| l.replace("machine delete -n sbx-", "").replace(" -f", ""))
         .collect()
 }
@@ -1713,10 +1652,7 @@ fn rm_deletes_forks_named_in_the_same_call_before_the_parent() {
     assert_eq!(deletes(&t), vec!["a-fork-1", "a-fork-2", "a"]);
     // Named targets come from the one list, not a status call each.
     let calls = t.calls();
-    assert!(
-        calls.iter().all(|c| !c.starts_with("machine status")),
-        "{calls:?}"
-    );
+    assert!(!t.made("machine status"), "{calls:?}");
 }
 
 #[test]
@@ -1734,14 +1670,7 @@ fn rm_all_deletes_forks_before_parents_and_lists_once() {
     with_forks(&t, "stopped", "stopped", "stopped");
     t.sbt(&["rm", "-f", "--all"]).unwrap();
     assert_eq!(deletes(&t), vec!["a-fork-1", "a-fork-2", "a"]);
-    let lists = t
-        .ctx
-        .vm
-        .runner()
-        .call_lines()
-        .iter()
-        .filter(|c| c.starts_with("machine ls"))
-        .count();
+    let lists = t.calls_of("machine ls").len();
     assert_eq!(lists, 1);
 }
 

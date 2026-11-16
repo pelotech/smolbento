@@ -195,6 +195,17 @@ fn add<R: Runner>(
     if let Some(s) = &a.sandbox {
         name::validate(s)?;
     }
+    add_rule(ctx, policy, decision, a, "added")
+}
+
+/// Adds the rule `a` describes (its protocol aside), says so, and applies it to running sandboxes.
+fn add_rule<R: Runner>(
+    ctx: &Ctx<R>,
+    policy: &mut Policy,
+    decision: Decision,
+    a: RuleArgs,
+    created_via: &str,
+) -> Result<()> {
     let parsed = parse_list(&a.resources)?;
     if decision == Decision::Deny {
         guard_bound_secrets(ctx, a.sandbox.as_deref(), &parsed)?;
@@ -204,7 +215,7 @@ fn add<R: Runner>(
         a.sandbox.as_deref(),
         decision,
         &a.resources,
-        "added",
+        created_via,
         a.method,
         a.path,
     )?;
@@ -387,19 +398,16 @@ pub fn render_log(rows: &[log::LogRow]) -> String {
     if rows.is_empty() {
         return "No blocked requests\n".into();
     }
-    let mut lines = vec![
-        [
-            "SANDBOX",
-            "TYPE",
-            "HOST",
-            "RULE",
-            "REASON",
-            "LAST SEEN",
-            "COUNT",
-        ]
-        .map(String::from)
-        .to_vec(),
+    let head = [
+        "SANDBOX",
+        "TYPE",
+        "HOST",
+        "RULE",
+        "REASON",
+        "LAST SEEN",
+        "COUNT",
     ];
+    let mut lines = Vec::new();
     for r in rows {
         lines.push(vec![
             r.sandbox.clone(),
@@ -411,7 +419,7 @@ pub fn render_log(rows: &[log::LogRow]) -> String {
             r.count.to_string(),
         ]);
     }
-    table(lines)
+    table(&head, lines)
 }
 
 /// How many recent blocked requests per sandbox approvals look at (`policy log` shows 50).
@@ -432,11 +440,8 @@ fn approval<R: Runner>(ctx: &Ctx<R>, policy: &mut Policy, cmd: ApprovalCmd) -> R
             } else if pending.is_empty() {
                 writeln!(&ctx.out, "No pending approvals")?;
             } else {
-                let mut lines = vec![
-                    ["ID", "SANDBOX", "LAST SEEN", "COUNT"]
-                        .map(String::from)
-                        .to_vec(),
-                ];
+                let head = ["ID", "SANDBOX", "LAST SEEN", "COUNT"];
+                let mut lines = Vec::new();
                 for r in &pending {
                     lines.push(vec![
                         r.host.clone(),
@@ -445,7 +450,7 @@ fn approval<R: Runner>(ctx: &Ctx<R>, policy: &mut Policy, cmd: ApprovalCmd) -> R
                         r.count.to_string(),
                     ]);
                 }
-                write!(&ctx.out, "{}", table(lines))?;
+                write!(&ctx.out, "{}", table(&head, lines))?;
             }
         }
         ApprovalCmd::Inspect { id } => {
@@ -480,20 +485,14 @@ fn approval<R: Runner>(ctx: &Ctx<R>, policy: &mut Policy, cmd: ApprovalCmd) -> R
                     seen.join(", ")
                 );
             }
-            let parsed = parse_list(&id)?;
-            if decision == Decision::Deny {
-                guard_bound_secrets(ctx, sandbox.as_deref(), &parsed)?;
-            }
-            let before = policy.clone();
-            let rule =
-                policy.add_rule(sandbox.as_deref(), decision, &id, "approval", None, None)?;
-            policy.save(&ctx.paths)?;
-            writeln!(&ctx.out, "{} rule {rule}: {id}", decision.name())?;
-            if decision == Decision::Deny {
-                print_deny_notes(ctx, policy, sandbox.as_deref(), &parsed)?;
-            }
-            print_host_notes(ctx, &before, policy, sandbox.as_deref(), decision, &parsed);
-            provision::push_network(ctx, policy)?;
+            let rule = RuleArgs {
+                resources: id,
+                sandbox,
+                protocol: None,
+                method: None,
+                path: None,
+            };
+            add_rule(ctx, policy, decision, rule, "approval")?;
         }
     }
     Ok(0)
@@ -695,15 +694,12 @@ fn render_ls(policy: &Policy, rows: &[LsRow], opts: &LsOpts) -> Result<String> {
         f @ (Format::Json | Format::Yaml) => Ok(f.structured(&rows)?.unwrap_or_default()),
         Format::Table => {
             let mode = policy.mode.map_or("not chosen", Mode::name);
-            let mut lines = vec![
-                ["ID", "SOURCE", "APPLIES TO", "DECISION", "RESOURCES"]
-                    .map(String::from)
-                    .to_vec(),
-            ];
+            let mut head = vec!["ID", "SOURCE", "APPLIES TO", "DECISION", "RESOURCES"];
             if wide {
-                lines[0].insert(1, "NAME".into());
-                lines[0].push("NOTES".into());
+                head.insert(1, "NAME");
+                head.push("NOTES");
             }
+            let mut lines = Vec::new();
             for r in rows {
                 let resources = if !r.editable && !wide {
                     format!("network: {} {}", r.resources.len(), r.decision)
@@ -732,7 +728,7 @@ fn render_ls(policy: &Policy, rows: &[LsRow], opts: &LsOpts) -> Result<String> {
                 }
                 lines.push(line);
             }
-            Ok(format!("Mode: {mode}\n{}", table(lines)))
+            Ok(format!("Mode: {mode}\n{}", table(&head, lines)))
         }
     }
 }

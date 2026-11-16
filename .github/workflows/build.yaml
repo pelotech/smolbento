@@ -53,8 +53,6 @@ jobs:
         with:
           persist-credentials: false
       - uses: $/.github/actions/nix-devshell
-        with:
-          gh-token: ${{ secrets.GITHUB_TOKEN }}
       # Saved from main only: PRs reuse main's cache without crowding it out.
       - uses: Swatinem/rust-cache@d1527c8f67ef9af357290475d4af4b0fab8f12e0 # v2.9.3
         with:
@@ -88,8 +86,6 @@ jobs:
         with:
           persist-credentials: false
       - uses: $/.github/actions/nix-devshell
-        with:
-          gh-token: ${{ secrets.GITHUB_TOKEN }}
 
       - name: Build
         run: just release-build "${TARGET}" zigbuild
@@ -105,8 +101,6 @@ jobs:
         with:
           persist-credentials: false
       - uses: $/.github/actions/nix-devshell
-        with:
-          gh-token: ${{ secrets.GITHUB_TOKEN }}
 
       # The CLI tests build the binary, so there's no separate build step.
       - name: Test

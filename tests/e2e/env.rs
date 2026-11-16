@@ -30,7 +30,7 @@ pub(crate) fn sbx_sandbox_variables_reach_the_agent_exec_and_forks() {
     let e = E2e::new("env");
     e.create_alpine();
     let ws = e.workspace();
-    let exec = sbx_vars(&e.ok(&["exec", &e.name, "sh", "-c", SBX_VARS]));
+    let exec = sbx_vars(&e.sh_ok(&e.name, SBX_VARS));
     assert_eq!(exec["SANDBOX_NAME"], e.name, "{exec:?}");
     assert_eq!(exec["SANDBOX_VM_ID"], e.name, "{exec:?}");
     assert!(is_uuid(&exec["SANDBOX_ID"]), "{exec:?}");
@@ -65,8 +65,8 @@ pub(crate) fn sbx_sandbox_variables_reach_the_agent_exec_and_forks() {
     let fork = format!("{}-fork-1", m.name);
     let forks = Forks(vec![fork.clone()]);
     assert_eq!(m.ok(&["fork", &m.name]).trim(), fork);
-    let parent = sbx_vars(&m.ok(&["exec", &m.name, "sh", "-c", SBX_VARS]));
-    let child = sbx_vars(&m.ok(&["exec", &fork, "sh", "-c", SBX_VARS]));
+    let parent = sbx_vars(&m.sh_ok(&m.name, SBX_VARS));
+    let child = sbx_vars(&m.sh_ok(&fork, SBX_VARS));
     assert_eq!(parent["SANDBOX_NAME"], m.name, "{parent:?}");
     assert_eq!(
         child["SANDBOX_NAME"], fork,

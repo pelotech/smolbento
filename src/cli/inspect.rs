@@ -57,10 +57,7 @@ pub fn render(sb: &Sandbox, sessions: usize, format: Format) -> Result<String> {
             .iter()
             .map(|(guest, host)| (guest.as_str(), host.as_str()))
             .collect(),
-        created_at: humantime::format_rfc3339_seconds(
-            std::time::UNIX_EPOCH + std::time::Duration::from_secs(m.created.max(0) as u64),
-        )
-        .to_string(),
+        created_at: super::rfc3339(m.created),
         name: sb.name(),
         agent: &m.agent,
         kits: m.kits.iter().map(|k| k.reference.clone()).collect(),

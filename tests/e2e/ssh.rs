@@ -14,10 +14,6 @@ fn ssh(e: &E2e, config: &Path, args: &[&str]) -> Output {
     .unwrap()
 }
 
-fn stdout(out: &Output) -> String {
-    String::from_utf8_lossy(&out.stdout).into_owned()
-}
-
 /// `bento setup ssh` against a throwaway HOME, so your `~/.ssh/config` is never touched. Returns the
 /// config path to hand to `ssh -F`. (smolvm runs with the real HOME: only this call has the fake.)
 fn setup(e: &E2e, args: &[&str]) -> PathBuf {
@@ -32,11 +28,7 @@ fn setup(e: &E2e, args: &[&str]) -> PathBuf {
         .env("HOME", &home)
         .output()
         .unwrap();
-    assert!(
-        out.status.success(),
-        "{}",
-        String::from_utf8_lossy(&out.stderr)
-    );
+    assert!(out.status.success(), "{}", err_text(&out));
     home.join(".ssh/config")
 }
 
@@ -55,27 +47,19 @@ pub(crate) fn ssh_runs_commands_shells_forwards_and_starts_the_sandbox() {
 
     // exec: output, the session user, the workspace, the exit status.
     let out = ssh(&e, &config, &[&host, "echo hi; id -un; pwd"]);
-    assert!(
-        out.status.success(),
-        "{}",
-        String::from_utf8_lossy(&out.stderr)
-    );
+    assert!(out.status.success(), "{}", err_text(&out));
     assert_eq!(
-        stdout(&out),
+        out_text(&out),
         format!("hi\nagent\n{}\n", e.workspace().display())
     );
     let out = ssh(&e, &config, &[&host, "echo to-err >&2; exit 7"]);
     assert_eq!(out.status.code(), Some(7));
-    assert_eq!(String::from_utf8_lossy(&out.stderr), "to-err\n");
+    assert_eq!(err_text(&out), "to-err\n");
 
     // A pty: `tty` succeeds, and the size is the one the client sent.
     let out = ssh(&e, &config, &["-tt", &host, "tty; stty size"]);
-    let text = stdout(&out);
-    assert!(
-        out.status.success(),
-        "{text}\n{}",
-        String::from_utf8_lossy(&out.stderr)
-    );
+    let text = out_text(&out);
+    assert!(out.status.success(), "{text}\n{}", err_text(&out));
     assert!(
         text.contains("/dev/") && !text.contains("not a tty"),
         "{text}"
@@ -132,16 +116,11 @@ pub(crate) fn ssh_runs_commands_shells_forwards_and_starts_the_sandbox() {
     e.ok(&["stop", &e.name]);
     assert_eq!(e.state(), "stopped");
     let out = ssh(&e, &config, &[&host, "echo again"]);
-    assert_eq!(
-        stdout(&out),
-        "again\n",
-        "{}",
-        String::from_utf8_lossy(&out.stderr)
-    );
+    assert_eq!(out_text(&out), "again\n", "{}", err_text(&out));
     assert_eq!(e.state(), "running");
     let out = ssh(&e, &config, &[&format!("{}-nope.sbx", e.name), "true"]);
     assert_eq!(out.status.code(), Some(255));
-    assert!(String::from_utf8_lossy(&out.stderr).contains("create the sandbox first"));
+    assert!(err_text(&out).contains("create the sandbox first"));
 
     setup(&e, &["remove"]);
     assert_eq!(std::fs::read_to_string(&config).unwrap(), "");

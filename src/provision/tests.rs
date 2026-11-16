@@ -788,22 +788,12 @@ fn kit_agent_create(
     agent_create(env, "s1", preset, Some(agent_plan(preset, caps)))
 }
 
-/// The `machine create` line.
-fn create_line(lines: &[String]) -> &str {
-    lines
-        .iter()
-        .find(|l| l.starts_with("machine create"))
-        .unwrap_or_else(|| panic!("{lines:#?}"))
-}
-
 /// The `machine create` line, and the install hook's.
-fn create_and_hook(lines: &[String]) -> (&str, &str) {
-    let create = create_line(lines);
-    let hook = lines
-        .iter()
-        .find(|l| l.contains("ssh-add -l"))
-        .unwrap_or_else(|| panic!("{lines:#?}"));
-    (create, hook)
+fn create_and_hook(t: &TestEnv) -> (String, String) {
+    let lines = t.calls();
+    let hook = lines.iter().find(|l| l.contains("ssh-add -l"));
+    let hook = hook.unwrap_or_else(|| panic!("{lines:#?}")).clone();
+    (t.create_line(), hook)
 }
 
 const AGENT_ENV: &str = "-e SSH_AUTH_SOCK=/run/ssh-agent.sock";
@@ -819,9 +809,9 @@ fn host_agent() -> (tempfile::TempDir, String) {
 #[test]
 fn a_built_in_agent_gets_the_agent_socket_and_ssh_auth_sock() {
     let (_agent, sock) = host_agent();
-    let (_t, result, lines) = kit_agent_create(&[("SSH_AUTH_SOCK", &sock)], true, vec![]);
+    let (t, result, _) = kit_agent_create(&[("SSH_AUTH_SOCK", &sock)], true, vec![]);
     result.unwrap();
-    let (create, hook) = create_and_hook(&lines);
+    let (create, hook) = create_and_hook(&t);
     let mount = format!(
         "--mount-socket {}:/run/ssh-agent.sock",
         crate::bridge::agent_socket("s1").display()
@@ -840,9 +830,9 @@ fn a_built_in_agent_gets_the_agent_socket_and_ssh_auth_sock() {
 #[test]
 fn a_bare_built_in_agent_gets_the_agent_too() {
     let (_agent, sock) = host_agent();
-    let (_t, result, lines) = agent_create(&[("SSH_AUTH_SOCK", &sock)], "s1", true, None);
+    let (t, result, _) = agent_create(&[("SSH_AUTH_SOCK", &sock)], "s1", true, None);
     result.unwrap();
-    let create = create_line(&lines);
+    let create = t.create_line();
     assert!(create.contains(":/run/ssh-agent.sock"), "{create}");
     assert!(create.contains(AGENT_ENV), "{create}");
     assert!(
@@ -855,9 +845,9 @@ fn a_bare_built_in_agent_gets_the_agent_too() {
 #[test]
 fn a_bare_built_in_agent_without_an_agent_gets_none() {
     let env = [("SMOLBENTO_SSH_AGENT_FORWARDING", "false")];
-    let (_t, result, lines) = agent_create(&env, "s1", true, None);
+    let (t, result, _) = agent_create(&env, "s1", true, None);
     result.unwrap();
-    let create = create_line(&lines);
+    let create = t.create_line();
     assert!(!create.contains("ssh-agent"), "{create}");
     assert!(!create.contains("SSH_AUTH_SOCK"), "{create}");
 }
@@ -866,9 +856,9 @@ fn a_bare_built_in_agent_without_an_agent_gets_none() {
 #[test]
 fn an_internal_name_gets_no_agent() {
     let (_agent, sock) = host_agent();
-    let (_t, result, lines) = agent_create(&[("SSH_AUTH_SOCK", &sock)], "_builder", true, None);
+    let (t, result, _) = agent_create(&[("SSH_AUTH_SOCK", &sock)], "_builder", true, None);
     result.unwrap();
-    let create = create_line(&lines);
+    let create = t.create_line();
     assert!(!create.contains("ssh-agent"), "{create}");
     assert!(!create.contains("SSH_AUTH_SOCK"), "{create}");
 }
@@ -900,9 +890,9 @@ fn a_kit_first_start_debug_output_has_no_secrets() {
 fn a_kit_grant_for_both_phases_reaches_the_install_hooks_too() {
     let (_agent, sock) = host_agent();
     let caps = vec![ssh_agent(&[Install, Runtime], &["git"], false)];
-    let (_t, result, lines) = kit_agent_create(&[("SSH_AUTH_SOCK", &sock)], false, caps);
+    let (t, result, _) = kit_agent_create(&[("SSH_AUTH_SOCK", &sock)], false, caps);
     result.unwrap();
-    let (create, hook) = create_and_hook(&lines);
+    let (create, hook) = create_and_hook(&t);
     assert!(create.contains(":/run/ssh-agent.sock"), "{create}");
     assert!(create.contains(AGENT_ENV), "{create}");
     assert!(
@@ -919,9 +909,9 @@ fn a_kit_grant_for_both_phases_reaches_the_install_hooks_too() {
 fn an_install_only_grant_sets_ssh_auth_sock_only_for_install_hooks() {
     let (_agent, sock) = host_agent();
     let caps = vec![ssh_agent(&[Install], &[], false)];
-    let (_t, result, lines) = kit_agent_create(&[("SSH_AUTH_SOCK", &sock)], false, caps);
+    let (t, result, _) = kit_agent_create(&[("SSH_AUTH_SOCK", &sock)], false, caps);
     result.unwrap();
-    let (create, hook) = create_and_hook(&lines);
+    let (create, hook) = create_and_hook(&t);
     assert!(create.contains(":/run/ssh-agent.sock"), "{create}");
     assert!(!create.contains("SSH_AUTH_SOCK"), "{create}");
     assert!(
@@ -937,9 +927,9 @@ fn an_install_only_grant_sets_ssh_auth_sock_only_for_install_hooks() {
 #[test]
 fn a_v3_workload_without_a_grant_gets_no_agent() {
     let (_agent, sock) = host_agent();
-    let (_t, result, lines) = kit_agent_create(&[("SSH_AUTH_SOCK", &sock)], false, vec![]);
+    let (t, result, _) = kit_agent_create(&[("SSH_AUTH_SOCK", &sock)], false, vec![]);
     result.unwrap();
-    let (create, hook) = create_and_hook(&lines);
+    let (create, hook) = create_and_hook(&t);
     assert!(!create.contains("ssh-agent"), "{create}");
     assert!(!create.contains("SSH_AUTH_SOCK"), "{create}");
     assert!(!hook.contains("SSH_AUTH_SOCK &&"), "{hook}");
@@ -986,9 +976,9 @@ fn an_optional_grant_without_an_agent_is_dropped() {
         } else {
             vec![ssh_agent(&[Install, Runtime], &[], true)]
         };
-        let (_t, result, lines) = kit_agent_create(&[], preset, caps);
+        let (t, result, _) = kit_agent_create(&[], preset, caps);
         result.unwrap();
-        let (create, hook) = create_and_hook(&lines);
+        let (create, hook) = create_and_hook(&t);
         assert!(!create.contains("ssh-agent"), "{create}");
         assert!(!create.contains("SSH_AUTH_SOCK"), "{create}");
         assert!(!hook.contains("SSH_AUTH_SOCK &&"), "{hook}");

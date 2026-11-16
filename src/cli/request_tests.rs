@@ -4,24 +4,6 @@ use super::super::{Cli, Cmd, SandboxOpts};
 use super::*;
 use crate::testutil::*;
 
-fn fixture(name: &str) -> String {
-    format!(
-        "{}/tests/fixtures/kits/v2/{name}",
-        env!("CARGO_MANIFEST_DIR")
-    )
-}
-
-fn kit_env() -> TestEnv {
-    test_env(&[("SMOLBENTO_KIT_ALLOW_LOCAL_KITS", "true")])
-}
-
-fn create_line(t: &TestEnv) -> String {
-    t.calls()
-        .into_iter()
-        .find(|l| l.starts_with("machine create"))
-        .expect("a machine create")
-}
-
 /// No machine touched: only the lookup that checks the name is free.
 fn no_machine_calls(t: &TestEnv) -> bool {
     !t.calls()
@@ -50,7 +32,7 @@ fn kit_pins_apply_beneath_kit_args() {
         creatable_as(&t, "shell-proj");
         let a = super::super::CreateArgs {
             // A v2 mixin needs a v2 workload.
-            targets: vec![fixture("shell-workload"), ".".into()],
+            targets: vec![v2_fixture("shell-workload"), ".".into()],
             opts: SandboxOpts {
                 kit: vec![kit.clone()],
                 kit_arg: flags.iter().map(|s| s.to_string()).collect(),
@@ -118,9 +100,9 @@ fn create_with_a_mixin_kit_applies_it() {
     // allow-all would leave the kit's allow rule out of the argv.
     set_policy(&t, "mode = \"deny-all\"");
     creatable_as(&t, "shell-proj");
-    let kit = fixture("tool-mixin");
+    let kit = v2_fixture("tool-mixin");
     // A v2 mixin needs a v2 workload.
-    let shell = fixture("shell-workload");
+    let shell = v2_fixture("shell-workload");
     t.sbt(&[
         "create",
         &shell,
@@ -135,7 +117,7 @@ fn create_with_a_mixin_kit_applies_it() {
         "1g",
     ])
     .unwrap();
-    let create = create_line(&t);
+    let create = t.create_line();
     assert!(create.contains("-e TOOL_MODE=fast"), "{create}");
     assert!(create.contains(":8080 "), "{create}");
     // The workload's image is Docker-enabled, so the docker kit comes too, first of the
@@ -199,9 +181,9 @@ SETUP
 fn create_writes_v2_workspace_files_into_the_workspace() {
     let mut t = kit_env();
     creatable_as(&t, "shell-proj");
-    let kit = fixture("workspace-files");
+    let kit = v2_fixture("workspace-files");
     // A v2 mixin needs a v2 workload.
-    let shell = fixture("shell-workload");
+    let shell = v2_fixture("shell-workload");
     t.sbt(&["create", &shell, ".", "--kit", &kit]).unwrap();
     let ws = t.ctx.cwd.canonicalize().unwrap().display().to_string();
     let lines = t.calls();
@@ -218,8 +200,9 @@ fn create_writes_v2_workspace_files_into_the_workspace() {
 fn create_with_a_workload_kit_names_the_sandbox_after_it() {
     let mut t = kit_env();
     creatable_as(&t, "toolbox-proj");
-    t.sbt(&["create", &fixture("tool-workload"), "."]).unwrap();
-    let create = create_line(&t);
+    t.sbt(&["create", &v2_fixture("tool-workload"), "."])
+        .unwrap();
+    let create = t.create_line();
     assert!(create.contains("-n sbx-toolbox-proj"), "{create}");
     assert!(
         create.contains("--image ghcr.io/example/toolbox:1"),
@@ -246,7 +229,7 @@ fn a_workload_kit_named_claude_gets_no_preset_variables() {
     .unwrap();
     creatable_as(&t, "claude-proj");
     t.sbt(&["create", &kit.display().to_string(), "."]).unwrap();
-    let create = create_line(&t);
+    let create = t.create_line();
     assert!(create.contains("-e SBX_AGENT=claude"), "{create}");
     assert!(!create.contains("SBX_CRED_"), "{create}");
     assert!(!create.contains("IS_SANDBOX"), "{create}");
@@ -279,7 +262,7 @@ fn a_workload_kit_without_a_command_is_refused() {
         "workload kit image declares no ENTRYPOINT or CMD; the image config is the runtime \
              contract"
     );
-    assert!(!t.calls().iter().any(|l| l.starts_with("machine create")),);
+    assert!(!t.made("machine create"));
 }
 
 #[test]
@@ -300,7 +283,7 @@ fn a_v2_workload_without_a_command_launches_its_images() {
     );
     creatable_as(&t, "bare-proj");
     t.sbt(&["create", &kit.display().to_string(), "."]).unwrap();
-    let create = create_line(&t);
+    let create = t.create_line();
     assert!(
         create.contains(r#"--label sbx.command=["/bin/agent","--x"]"#),
         "{create}"
@@ -323,7 +306,7 @@ fn a_local_kit_named_like_a_preset_is_still_a_kit() {
     .unwrap();
     creatable_as(&t, "shell-proj");
     t.sbt(&["create", &kit.display().to_string(), "."]).unwrap();
-    let create = create_line(&t);
+    let create = t.create_line();
     let path = kit.canonicalize().unwrap().display().to_string();
     assert!(
         create.contains(&format!(
@@ -340,7 +323,7 @@ fn a_local_kit_named_like_a_preset_is_still_a_kit() {
 #[test]
 fn a_mixin_as_the_target_fails_before_smolvm() {
     let mut t = kit_env_free();
-    let kit = fixture("tool-mixin");
+    let kit = v2_fixture("tool-mixin");
     let err = t.sbt_err(&["create", &kit]);
     assert_eq!(
         err,
@@ -355,8 +338,8 @@ fn a_mixin_as_the_target_fails_before_smolvm() {
 
 #[test]
 fn bad_kit_flags_fail_before_smolvm() {
-    let kit = fixture("tool-mixin");
-    let workload = fixture("tool-workload");
+    let kit = v2_fixture("tool-mixin");
+    let workload = v2_fixture("tool-workload");
     for (args, want) in [
         (
             vec!["create", &workload, "--kit", &kit, "--kit-arg", "nope=1"],
@@ -396,7 +379,7 @@ fn a_kit_create_on_an_existing_name_adds_no_rules() {
         &["machine", "status"],
         &json("sbx-shell-proj", "stopped", "shell-proj"),
     );
-    let err = t.sbt_err(&["create", "shell", ".", "--kit", &fixture("tool-mixin")]);
+    let err = t.sbt_err(&["create", "shell", ".", "--kit", &v2_fixture("tool-mixin")]);
     assert!(err.contains("already exists"), "{err}");
     assert!(sandbox_rules(&t, "shell-proj").is_empty());
 }
@@ -718,7 +701,7 @@ fn kit_request(
 ) {
     let kit = kit.display().to_string();
     // These tests add v2 mixins, which the v3 `shell` agent refuses: a v2 `shell` instead.
-    let v2_shell = fixture("shell-workload");
+    let v2_shell = v2_fixture("shell-workload");
     let argv: Vec<&str> = std::iter::once("sbt")
         .chain(
             args.iter()
@@ -1082,10 +1065,7 @@ fn a_bundled_skill_without_a_skills_directory_fails_or_is_skipped() {
         "kit k: skill review needs a skills directory: no agent-skills@1 in this sandbox"
     );
     let lines = t.calls();
-    assert!(
-        !lines.iter().any(|l| l.starts_with("machine create")),
-        "{lines:#?}"
-    );
+    assert!(!t.made("machine create"), "{lines:#?}");
 
     let optional =
         format!(r#"{{"type":"{AK}","optional":true,"config":{{"path":"/opt/k/review"}}}}"#);
@@ -1093,7 +1073,7 @@ fn a_bundled_skill_without_a_skills_directory_fails_or_is_skipped() {
     // Prints `note: kit k: skipping skill review: no skills directory in this sandbox`.
     t.sbt(&["create", "shell", ".", "--kit", "./k"]).unwrap();
     let lines = t.calls();
-    assert!(lines.iter().any(|l| l.starts_with("machine create")));
+    assert!(t.made("machine create"));
     assert!(!lines.iter().any(|l| l.contains("ln -sn ")), "{lines:#?}");
 }
 
@@ -1229,7 +1209,7 @@ fn kit_docker_adds_dockerd_to_any_template() {
     creatable_as(&t, "shell-proj");
     t.sbt(&["create", "-t", "alpine", "--kit", "docker", "shell", "."])
         .unwrap();
-    let line = create_line(&t);
+    let line = t.create_line();
     assert!(line.contains("--image alpine "), "{line}");
     assert!(
         line.contains("-v /var/lib/docker -v /var/lib/containerd"),
@@ -1274,10 +1254,7 @@ fn a_template_refuses_kits_that_add_image_layers() {
              (layered): a template's filesystem is saved whole"
     );
     let lines = t.calls();
-    assert!(
-        !lines.iter().any(|l| l.contains("machine create")),
-        "{lines:?}"
-    );
+    assert!(!t.made("machine create"), "{lines:?}");
 }
 
 #[test]
@@ -1324,7 +1301,7 @@ fn kits_without_a_fetch_wait_for_the_kits_section() {
 #[test]
 fn create_refuses_v2_and_v3_kits_together() {
     let mut t = host_mount_env(SHARED);
-    let v2 = fixture("tool-mixin");
+    let v2 = v2_fixture("tool-mixin");
     let err = t.sbt_err(&["create", "shell", ".", "--kit", &v2, "--kit", "./hm"]);
     assert!(
         err.starts_with("cannot mix v3 kits with v1/v2 kits in one sandbox"),

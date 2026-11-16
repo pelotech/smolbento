@@ -13,22 +13,8 @@ pub fn load(path: &Path) -> Result<Kit> {
     std::fs::File::open(path).with_context(|| format!("reading Smolfile {}", path.display()))?;
     let source = Source::Smolfile(path.to_path_buf());
     Ok(Kit {
-        name: name_from_source(&source)?,
-        source,
-        digest: None,
-        kind: Kind::Workload,
-        provides: vec![],
-        requires: vec![],
-        integrates: vec![],
-        conflicts: vec![],
-        args: Default::default(),
-        caps: vec![],
-        env: vec![],
         content: Content::Smolfile(path.to_path_buf()),
-        command: None,
-        config: None,
-        starts_docker: false,
-        reference: None,
+        ..Kit::new(&name_from_source(&source)?, Kind::Workload, source)
     })
 }
 

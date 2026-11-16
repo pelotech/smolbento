@@ -70,10 +70,7 @@ pub(super) fn credential_helper(name: &str, server: &str) -> Option<RegistryAuth
         return None;
     }
     let bin = format!("docker-credential-{name}");
-    let path = std::env::var_os("PATH")?;
-    if !std::env::split_paths(&path).any(|d| d.join(&bin).is_file()) {
-        return None;
-    }
+    crate::util::find_on_path(std::env::var_os("PATH"), &bin)?;
     let mut child = Command::new(&bin)
         .arg("get")
         .stdin(Stdio::piped())

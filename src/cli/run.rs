@@ -9,7 +9,7 @@ use anyhow::{Result, bail};
 use super::lifecycle::create_reported;
 use super::progress::Progress;
 use super::request::{has_kit_flags, kit_target, settle_default_name};
-use super::{Ctx, RunArgs, Unsupported};
+use super::{Ctx, RunArgs};
 use crate::agents;
 use crate::bridge;
 use crate::provision;
@@ -20,12 +20,11 @@ use crate::workspace::clone;
 /// Flag checks that need no smolvm; `dispatch` runs them before its smolvm gate.
 pub fn check_args(a: &RunArgs) -> Result<()> {
     a.opts.check_supported()?;
-    if a.new {
-        return Err(Unsupported("--new is a Docker Cloud option".into()).into());
-    }
-    if a.detach_keys.is_some() {
-        return Err(Unsupported("--detach-keys is not supported".into()).into());
-    }
+    super::refuse_as(&[(a.new, "--new")], "is a Docker Cloud option")?;
+    super::refuse_as(
+        &[(a.detach_keys.is_some(), "--detach-keys")],
+        "is not supported",
+    )?;
     if a.rm && a.detach {
         bail!("--rm can't be combined with -d");
     }

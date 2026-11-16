@@ -1,7 +1,6 @@
 //! ls: sbx's columns (SANDBOX AGENT STATUS PORTS WORKSPACE CREATED) or JSON/YAML.
 
 use std::io::Write;
-use std::time::{Duration, UNIX_EPOCH};
 
 use anyhow::Result;
 use serde::Serialize;
@@ -59,10 +58,7 @@ pub fn render(sandboxes: &[Sandbox], format: Format, quiet: bool, now: i64) -> R
             status: status(s.state),
             ports: &s.ports,
             workspace: s.meta.workspace.as_deref(),
-            created_at: humantime::format_rfc3339_seconds(
-                UNIX_EPOCH + Duration::from_secs(s.meta.created.max(0) as u64),
-            )
-            .to_string(),
+            created_at: super::rfc3339(s.meta.created),
             fork_of: s.meta.fork_of.as_deref(),
         })
         .collect();
@@ -70,18 +66,15 @@ pub fn render(sandboxes: &[Sandbox], format: Format, quiet: bool, now: i64) -> R
         f @ (Format::Json | Format::Yaml) => Ok(f.structured(&rows)?.unwrap_or_default()),
         Format::Table if rows.is_empty() => Ok("No sandboxes found\n".into()),
         Format::Table => {
-            let mut lines = vec![
-                [
-                    "SANDBOX",
-                    "AGENT",
-                    "STATUS",
-                    "PORTS",
-                    "WORKSPACE",
-                    "CREATED",
-                ]
-                .map(String::from)
-                .to_vec(),
+            let head = [
+                "SANDBOX",
+                "AGENT",
+                "STATUS",
+                "PORTS",
+                "WORKSPACE",
+                "CREATED",
             ];
+            let mut lines = Vec::new();
             for (row, sb) in rows.iter().zip(sandboxes) {
                 let dot = if sb.is_running() { "●" } else { "○" };
                 let ports = row
@@ -99,7 +92,7 @@ pub fn render(sandboxes: &[Sandbox], format: Format, quiet: bool, now: i64) -> R
                     age(now - sb.meta.created),
                 ]);
             }
-            Ok(table(lines))
+            Ok(table(&head, lines))
         }
     }
 }

@@ -85,11 +85,8 @@ fn cut(text: &str, max: usize) -> String {
 pub fn render(settings: &Settings, no_trunc: bool) -> Result<String> {
     let mut defs: Vec<&SettingDef> = SETTINGS.iter().collect();
     defs.sort_by_key(|d| d.key);
-    let mut rows = vec![
-        ["KEY", "VALUE", "TYPE", "SOURCE", "RESTART", "DESCRIPTION"]
-            .map(String::from)
-            .to_vec(),
-    ];
+    let head = ["KEY", "VALUE", "TYPE", "SOURCE", "RESTART", "DESCRIPTION"];
+    let mut rows = Vec::new();
     let mut blocks = String::new();
     for def in defs {
         let (value, source) = settings.get(def.key)?;
@@ -113,7 +110,7 @@ pub fn render(settings: &Settings, no_trunc: bool) -> Result<String> {
             ]);
         }
     }
-    Ok(if no_trunc { blocks } else { table(rows) })
+    Ok(if no_trunc { blocks } else { table(&head, rows) })
 }
 
 #[cfg(test)]

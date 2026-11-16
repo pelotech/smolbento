@@ -98,35 +98,11 @@ pub struct EnvRunArgs {
     pub args: Vec<String>,
 }
 
-/// `env exec`: `ExecArgs`' flags, the `EnvCommon` ones, then `[PATH...] -- CMD...`.
+/// `env exec`: `exec`'s flags, the `EnvCommon` ones, then `[PATH...] -- CMD...`.
 #[derive(Debug, Args)]
 pub struct EnvExecArgs {
-    /// Keep stdin open
-    #[arg(short = 'i', long)]
-    pub interactive: bool,
-    /// Allocate a terminal
-    #[arg(short = 't', long)]
-    pub tty: bool,
-    /// Environment variable: KEY=VALUE, or KEY to copy the host's value
-    #[arg(short = 'e', long = "env")]
-    pub env: Vec<String>,
-    /// Read environment variables from a file
-    #[arg(long = "env-file")]
-    pub env_file: Vec<PathBuf>,
-    /// User to run as (default: agent)
-    #[arg(short = 'u', long)]
-    pub user: Option<String>,
-    /// Working directory (default: the primary workspace)
-    #[arg(short = 'w', long)]
-    pub workdir: Option<String>,
-    /// Run as root
-    #[arg(long)]
-    pub privileged: bool,
-    /// Not supported (as in sbx)
-    #[arg(short = 'd', long)]
-    pub detach: bool,
-    #[arg(long = "detach-keys", hide = true)]
-    pub detach_keys: Option<String>,
+    #[command(flatten)]
+    pub flags: super::ExecFlags,
     /// Name for the sandbox, overriding 'name:' in sbxenv.yaml and the derived <agent>-<directory> (every 'bento env' command addressing this environment needs the same value)
     #[arg(long)]
     pub name: Option<String>,

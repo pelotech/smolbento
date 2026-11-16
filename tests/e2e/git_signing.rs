@@ -37,17 +37,20 @@ fn workspace_repo(e: &E2e, remote: bool) {
 fn create_shell(e: &E2e) {
     let archive = e.dir.path().join("git-image.tar");
     git_image().save_oci(&archive);
-    let ws = e.workspace();
-    let mut args = vec!["create", "shell", ws.to_str().unwrap(), "--name", &e.name];
-    args.extend(["-t", archive.to_str().unwrap(), "--kit", "git-signing"]);
-    args.extend(["--cpus", "1", "-m", "1g"]);
-    e.ok(&args);
+    let head = [
+        "-t",
+        archive.to_str().unwrap(),
+        "--kit",
+        "git-signing",
+        "shell",
+    ];
+    e.create(&e.name, &head);
 }
 
 /// `script` in the sandbox's workspace, as the session user.
 fn in_workspace(e: &E2e, sb: &str, script: &str) -> Output {
     let script = format!("cd \"$WORKSPACE_DIR\" && {script}");
-    e.sbt(&["exec", sb, "sh", "-c", &script])
+    e.sh(sb, &script)
 }
 
 const COMMIT: &str = "git commit -q --allow-empty -m signed";
@@ -55,11 +58,7 @@ const COMMIT: &str = "git commit -q --allow-empty -m signed";
 const VERIFY: &str = "git log -1 --format=%G? && git log -1 --show-signature";
 
 fn text(out: &Output) -> String {
-    format!(
-        "{}{}",
-        String::from_utf8_lossy(&out.stdout),
-        String::from_utf8_lossy(&out.stderr)
-    )
+    out_text(out) + &err_text(out)
 }
 
 /// A commit in a built-in agent's sandbox is signed with the agent's key, and the sandbox can
@@ -112,20 +111,7 @@ pub(crate) fn git_signing_gives_a_workload_agent_git_signatures_only() {
             serde_json::json!([{"type": "com.docker.sandbox/sbx@1"}]),
         ),
     );
-    let ws = e.workspace();
-    e.ok(&[
-        "create",
-        "--kit",
-        "git-signing",
-        &workload,
-        ws.to_str().unwrap(),
-        "--name",
-        &e.name,
-        "--cpus",
-        "1",
-        "-m",
-        "1g",
-    ]);
+    e.create(&e.name, &["--kit", "git-signing", &workload]);
 
     let out = in_workspace(&e, &e.name, &format!("{COMMIT} && {VERIFY}"));
     let said = text(&out);

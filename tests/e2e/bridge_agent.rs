@@ -71,20 +71,6 @@ pub(crate) fn sh_script(path: &Path, body: &str) {
     std::fs::set_permissions(path, std::fs::Permissions::from_mode(0o755)).unwrap();
 }
 
-/// `GET path` on the host's `127.0.0.1:port`; the whole response.
-pub(crate) fn host_get(port: u16, path: &str) -> std::io::Result<String> {
-    use std::io::{Read, Write};
-    let mut s = std::net::TcpStream::connect(("127.0.0.1", port))?;
-    s.set_read_timeout(Some(std::time::Duration::from_secs(30)))?;
-    write!(
-        s,
-        "GET {path} HTTP/1.1\r\nHost: 127.0.0.1:{port}\r\nConnection: close\r\n\r\n"
-    )?;
-    let mut out = String::new();
-    s.read_to_string(&mut out)?;
-    Ok(out)
-}
-
 /// The browser and clipboard bridge: https URLs reach the host opener, other URLs print the
 /// fallback, copies reach the host clipboard, and a login redirect to `http://127.0.0.1:PORT`
 /// relays the host's callback to a guest loopback listener. With a service manager (launchd,
@@ -112,7 +98,7 @@ pub(crate) fn bridge_opens_urls_copies_text_and_relays_login_callbacks() {
     e.vars
         .push(("SMOLBENTO_CLIPBOARD_TEXT_COPY", "true".to_string()));
     e.create_alpine_with("apk add -q curl busybox-extras");
-    let guest = |script: &str| e.ok(&["exec", &e.name, "sh", "-c", script]);
+    let guest = |script: &str| e.sh_ok(&e.name, script);
     let read = |p: &Path| std::fs::read_to_string(p).unwrap_or_default();
 
     let units = !unit_files(&e, &e.name).is_empty();
@@ -196,13 +182,7 @@ pub(crate) fn host_services_serve_a_detached_sandbox_and_are_removed_with_it() {
         let keys = e.ok(&["exec", &e.name, "ssh-add", "-l"]);
         assert!(keys.contains(&agent.comment), "{tag}: agent: {keys}");
         assert_eq!(
-            e.ok(&[
-                "exec",
-                &e.name,
-                "sh",
-                "-c",
-                "xdg-open https://example.invalid/hs"
-            ]),
+            e.sh_ok(&e.name, "xdg-open https://example.invalid/hs"),
             "",
             "{tag}: bridge"
         );
@@ -224,28 +204,16 @@ pub(crate) fn host_services_serve_a_detached_sandbox_and_are_removed_with_it() {
     assert_eq!(unit_files(&e, &e.name), Vec::<PathBuf>::new());
 
     // `smolvm machine delete` gives no hook: the next state-changing command sweeps (not `ls`).
-    let ws = e.workspace();
     let second = format!("{}-b", e.name);
     let _cleanup = Forks(vec![second.clone()]);
-    e.ok(&[
-        "create",
-        "shell",
-        ws.to_str().unwrap(),
-        "--name",
-        &second,
-        "-t",
-        Image::alpine_agent_archive().to_str().unwrap(),
-        "--cpus",
-        "1",
-        "-m",
-        "1g",
-    ]);
+    let archive = Image::alpine_agent_archive();
+    e.create(&second, &["-t", archive.to_str().unwrap(), "shell"]);
     assert!(!unit_files(&e, &second).is_empty());
     smolvm(&["machine", "delete", "-n", &format!("sbx-{second}"), "-f"]);
     e.ok(&["ls"]);
     assert!(!unit_files(&e, &second).is_empty(), "ls is read-only");
     let diagnose = e.sbt(&["diagnose"]);
-    let report = String::from_utf8_lossy(&diagnose.stdout);
+    let report = out_text(&diagnose);
     assert!(
         report.contains(&format!(
             "host services left by removed sandboxes: {second}; `bento prune` removes them"
@@ -318,7 +286,7 @@ impl ThrowawayAgent {
     }
 
     pub(crate) fn has_key(&self) -> bool {
-        String::from_utf8_lossy(&self.ssh_add(&["-l"]).stdout).contains(&self.comment)
+        out_text(&self.ssh_add(&["-l"])).contains(&self.comment)
     }
 
     /// Points every `bento` call of `e` at this agent.
@@ -345,7 +313,7 @@ pub(crate) fn guest_sign(e: &E2e, sb: &str, ns: &str) -> Output {
         "set -e; cd /tmp; ssh-add -L > e2e-key.pub; echo hi > e2e-{ns}; \
          ssh-keygen -Y sign -f e2e-key.pub -n {ns} e2e-{ns}; test -s e2e-{ns}.sig"
     );
-    e.sbt(&["exec", sb, "sh", "-c", &script])
+    e.sh(sb, &script)
 }
 
 /// sbx's built-in `shell` agent forwards your SSH agent filtered: the sandbox lists keys and signs,
@@ -358,7 +326,7 @@ pub(crate) fn built_in_agent_lists_and_signs_but_cannot_remove_keys() {
     agent.serve_to(&mut e);
     e.create_alpine_with("apk add -q openssh-client openssh-keygen");
 
-    let sock = e.ok(&["exec", &e.name, "sh", "-c", "echo $SSH_AUTH_SOCK"]);
+    let sock = e.sh_ok(&e.name, "echo $SSH_AUTH_SOCK");
     assert_eq!(sock, "/run/ssh-agent.sock\n");
     let keys = e.ok(&["exec", &e.name, "ssh-add", "-l"]);
     assert!(keys.contains(&agent.comment), "{keys}");
@@ -427,23 +395,9 @@ pub(crate) fn kit_ssh_agent_grants_limit_signing_and_phases() {
             ]),
         ),
     );
-    let ws = e.workspace();
-    let create = |name: &str, mixin: Option<&str>| {
-        let mut args = vec!["create"];
-        if let Some(m) = mixin {
-            args.extend(["--kit", m]);
-        }
-        args.extend([
-            &workload,
-            ws.to_str().unwrap(),
-            "--name",
-            name,
-            "--cpus",
-            "1",
-            "-m",
-            "1g",
-        ]);
-        e.ok(&args);
+    let create = |name: &str, mixin: Option<&str>| match mixin {
+        Some(m) => e.create(name, &["--kit", m, &workload]),
+        None => e.create(name, &[&workload]),
     };
     let (git, inst) = (format!("{}-git", e.name), format!("{}-inst", e.name));
     let _cleanup = Forks(vec![git.clone(), inst.clone()]);
@@ -461,18 +415,10 @@ pub(crate) fn kit_ssh_agent_grants_limit_signing_and_phases() {
         during.contains(&agent.comment),
         "install hooks list keys: {during}"
     );
-    assert_eq!(
-        e.ok(&["exec", &inst, "sh", "-c", env]),
-        "unset\n",
-        "not at runtime"
-    );
+    assert_eq!(e.sh_ok(&inst, env), "unset\n", "not at runtime");
 
     create(&e.name, None);
     let none = format!("{env}; test -e /run/ssh-agent.sock && echo socket || true");
-    assert_eq!(
-        e.ok(&["exec", &e.name, "sh", "-c", &none]),
-        "unset\n",
-        "no grant, no agent"
-    );
+    assert_eq!(e.sh_ok(&e.name, &none), "unset\n", "no grant, no agent");
     assert!(agent.has_key(), "the key is still in the agent");
 }

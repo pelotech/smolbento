@@ -1,6 +1,6 @@
 //! `bento secret`: secret sources. Values go to the secret store, never to secrets.toml.
 
-use std::io::{BufRead, Read, Write};
+use std::io::{BufRead, Write};
 
 use anyhow::{Context, Result, bail};
 
@@ -257,11 +257,7 @@ pub(crate) fn store<R: Runner>(
     } else {
         let value = match src.token {
             Some(t) => t,
-            None if src.value_stdin => {
-                let v = ctx.read_to_end()?;
-                let v = v.strip_suffix('\n').unwrap_or(&v);
-                v.strip_suffix('\r').unwrap_or(v).to_string()
-            }
+            None if src.value_stdin => stdin_value(ctx)?,
             None => read_value(ctx, service)?,
         };
         if value.is_empty() {
@@ -360,8 +356,8 @@ fn read_value<R: Runner>(ctx: &Ctx<R>, service: &str) -> Result<String> {
     Ok(line.trim_end_matches(['\n', '\r']).to_string())
 }
 
-/// `secret ls` for `a`; `fork_of` is `a.sandbox`'s original when it's a fork.
-/// The secrets `ls` shows for its filters; a fork also shows its original's.
+/// The secrets `ls` shows for `a`'s filters; a fork (`fork_of` is its original) also shows its
+/// original's.
 fn listed<'a>(
     file: &'a SecretsFile,
     a: &SecretLsArgs,
@@ -435,7 +431,7 @@ fn render_ls(entries: &[&SecretEntry], registries: &[&RegistryEntry]) -> String 
     }
     let mut tables = Vec::new();
     if !entries.is_empty() {
-        let mut rows = vec![["SERVICE", "SCOPE", "SOURCE"].map(String::from).to_vec()];
+        let mut rows = Vec::new();
         for e in entries {
             rows.push(vec![
                 e.service.clone(),
@@ -443,14 +439,10 @@ fn render_ls(entries: &[&SecretEntry], registries: &[&RegistryEntry]) -> String 
                 e.source.describe(),
             ]);
         }
-        tables.push(table(rows));
+        tables.push(table(&["SERVICE", "SCOPE", "SOURCE"], rows));
     }
     if !registries.is_empty() {
-        let mut rows = vec![
-            ["SCOPE", "TYPE", "NAME", "SECRET"]
-                .map(String::from)
-                .to_vec(),
-        ];
+        let mut rows = Vec::new();
         for r in registries {
             rows.push(vec![
                 registry_scope(r),
@@ -459,7 +451,7 @@ fn render_ls(entries: &[&SecretEntry], registries: &[&RegistryEntry]) -> String 
                 "(stored)".into(),
             ]);
         }
-        tables.push(table(rows));
+        tables.push(table(&["SCOPE", "TYPE", "NAME", "SECRET"], rows));
     }
     tables.join("\n")
 }
@@ -592,27 +584,9 @@ fn registry_set<R: Runner>(ctx: &Ctx<R>, file: &mut SecretsFile, a: SecretSetArg
              ghcr.io --password-stdin`"
         );
     }
-    let host = a.registry.unwrap_or_default();
-    set_registry(
-        ctx,
-        file,
-        &host,
-        a.username,
-        a.registry_auth_endpoint,
-        std::io::stdin().lock(),
-    )
-}
-
-fn set_registry<R: Runner>(
-    ctx: &Ctx<R>,
-    file: &mut SecretsFile,
-    host: &str,
-    username: Option<String>,
-    auth_endpoint: Option<String>,
-    mut input: impl Read,
-) -> Result<()> {
-    let username = username.filter(|u| !u.is_empty());
-    let host = host.trim().to_ascii_lowercase();
+    let auth_endpoint = a.registry_auth_endpoint;
+    let username = a.username.filter(|u| !u.is_empty());
+    let host = a.registry.unwrap_or_default().trim().to_ascii_lowercase();
     if host.is_empty() || host.contains("://") || host.contains(['/', '@', ' ']) {
         bail!("'{host}': use a bare registry host like ghcr.io (no scheme or path)");
     }
@@ -622,10 +596,7 @@ fn set_registry<R: Runner>(
     {
         bail!("--registry-auth-endpoint must be an https:// URL: {e}");
     }
-    let mut value = String::new();
-    input.read_to_string(&mut value)?;
-    let value = value.strip_suffix('\n').unwrap_or(&value);
-    let value = value.strip_suffix('\r').unwrap_or(value);
+    let value = stdin_value(ctx)?;
     if value.is_empty() {
         bail!("empty password or token on stdin");
     }
@@ -636,12 +607,19 @@ fn set_registry<R: Runner>(
         auth_endpoint,
         sandbox: None,
     };
-    put_registry(ctx, file, entry, value)?;
+    put_registry(ctx, file, entry, &value)?;
     writeln!(
         &ctx.out,
         "Saved registry secret {host} (host only, username {who})"
     )?;
     Ok(())
+}
+
+/// All of stdin, without its line ending: a value given with `--value-stdin` or `--password-stdin`.
+fn stdin_value<R: Runner>(ctx: &Ctx<R>) -> Result<String> {
+    let v = ctx.read_to_end()?;
+    let v = v.strip_suffix('\n').unwrap_or(&v);
+    Ok(v.strip_suffix('\r').unwrap_or(v).to_string())
 }
 
 /// Stores a registry login and its value, replacing the one for the same host and scope.

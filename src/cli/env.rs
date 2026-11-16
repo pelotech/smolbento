@@ -6,7 +6,7 @@ use std::path::Path;
 use anyhow::{Context, Result, anyhow, bail};
 
 use super::env_spec::{
-    EnvSpec, LIFECYCLE, Overrides, binding_resources, header, lifecycle, lifecycle_resources, name,
+    EnvSpec, LIFECYCLE, binding_resources, header, lifecycle, lifecycle_resources, name,
     remove_summary, resources, spec, vars,
 };
 use super::{
@@ -26,7 +26,7 @@ use crate::smolvm::Runner;
 
 pub fn run<R: Runner>(ctx: &mut Ctx<R>, cmd: EnvCmd) -> Result<i32> {
     match cmd {
-        EnvCmd::Create(a) => create(ctx, &a.common, &a.apply),
+        EnvCmd::Create(a) => apply(ctx, &a.common, &a.apply, false).map(|_| 0),
         EnvCmd::Run(a) => env_run(ctx, a),
         EnvCmd::Exec(a) => env_exec(ctx, a),
         EnvCmd::Rm(a) => env_rm(ctx, a),
@@ -141,10 +141,18 @@ fn refuse_cloud(a: &EnvApplyOpts) -> Result<()> {
     )
 }
 
-fn create<R: Runner>(ctx: &mut Ctx<R>, c: &EnvCommon, a: &EnvApplyOpts) -> Result<i32> {
+/// What `env create` and `env run` share: shows the plan, asks, runs `initialize` and creates
+/// the sandbox unless it exists, which only `attach` allows.
+fn apply<R: Runner>(
+    ctx: &mut Ctx<R>,
+    c: &EnvCommon,
+    a: &EnvApplyOpts,
+    attach: bool,
+) -> Result<EnvSpec> {
     refuse_cloud(a)?;
     let (loaded, spec, mut secrets) = prepare(ctx, c, &a.overrides)?;
-    if sandbox::find(&ctx.vm, &spec.name)?.is_some() {
+    let exists = sandbox::find(&ctx.vm, &spec.name)?.is_some();
+    if exists && !attach {
         bail!(
             "sandbox \"{}\" already exists; attach to it with `bento env run`, or remove it with \
              `bento env rm` and create it again",
@@ -152,20 +160,18 @@ fn create<R: Runner>(ctx: &mut Ctx<R>, c: &EnvCommon, a: &EnvApplyOpts) -> Resul
         );
     }
     let skip = a.overrides.skip_host_commands;
-    let plan = planned(ctx, &loaded, &spec, false, skip)?;
+    let plan = planned(ctx, &loaded, &spec, exists, skip)?;
     write!(&ctx.out, "{}", plan.text(true))?;
     approve(ctx, &loaded, &spec.name, &plan, a.force)?;
     let vars = vars(&loaded, &spec.name);
-    host_phase(
-        ctx,
-        Phase::Initialize,
-        &spec.lifecycle.initialize,
-        &vars,
-        skip,
-    )?;
-    provision(ctx, &mut secrets, &spec)?;
-    create_sandbox(ctx, &spec, &vars, skip)?;
-    Ok(0)
+    let initialize = &spec.lifecycle.initialize;
+    host_phase(ctx, Phase::Initialize, initialize, &vars, skip)?;
+    if !exists {
+        // Created first and attached to afterwards, so `postCreate` runs in between.
+        provision(ctx, &mut secrets, &spec)?;
+        create_sandbox(ctx, &spec, &vars, skip)?;
+    }
+    Ok(spec)
 }
 
 /// Creates the sandbox and runs `postCreate`. A failure there keeps the sandbox, as in sbx.
@@ -190,27 +196,7 @@ fn create_sandbox<R: Runner>(
 }
 
 fn env_run<R: Runner>(ctx: &mut Ctx<R>, run: EnvRunArgs) -> Result<i32> {
-    let a = &run.apply;
-    refuse_cloud(a)?;
-    let (loaded, spec, mut secrets) = prepare(ctx, &run.common, &a.overrides)?;
-    let exists = sandbox::find(&ctx.vm, &spec.name)?.is_some();
-    let skip = a.overrides.skip_host_commands;
-    let plan = planned(ctx, &loaded, &spec, exists, skip)?;
-    write!(&ctx.out, "{}", plan.text(true))?;
-    approve(ctx, &loaded, &spec.name, &plan, a.force)?;
-    let vars = vars(&loaded, &spec.name);
-    host_phase(
-        ctx,
-        Phase::Initialize,
-        &spec.lifecycle.initialize,
-        &vars,
-        skip,
-    )?;
-    if !exists {
-        // Created first and attached to afterwards, so `postCreate` runs in between.
-        provision(ctx, &mut secrets, &spec)?;
-        create_sandbox(ctx, &spec, &vars, skip)?;
-    }
+    let spec = apply(ctx, &run.common, &run.apply, true)?;
     // Attach as it was created, with the file's current env and launch command for this session.
     let args = RunArgs {
         opts: SandboxOpts {
@@ -239,14 +225,24 @@ fn load_name<R: Runner>(
     env_arg: &[String],
     env_args_file: &[std::path::PathBuf],
 ) -> Result<(Loaded, String)> {
+    let loaded = load_files(ctx, paths, env_arg, env_args_file)?;
+    let name = name(&loaded, name_flag)?;
+    Ok((loaded, name))
+}
+
+/// Loads the environment files with their arguments.
+fn load_files<R: Runner>(
+    ctx: &Ctx<R>,
+    paths: &[String],
+    env_arg: &[String],
+    env_args_file: &[std::path::PathBuf],
+) -> Result<Loaded> {
     let home = ctx.env.get("HOME").context("HOME is not set")?;
     let inputs = ArgInputs {
         files: env_args_file.to_vec(),
         flags: env_arg.to_vec(),
     };
-    let loaded = load(paths, &inputs, &ctx.cwd, Path::new(home))?;
-    let name = name(&loaded, name_flag)?;
-    Ok((loaded, name))
+    load(paths, &inputs, &ctx.cwd, Path::new(home))
 }
 
 fn env_exec<R: Runner>(ctx: &mut Ctx<R>, a: EnvExecArgs) -> Result<i32> {
@@ -271,23 +267,15 @@ fn env_exec<R: Runner>(ctx: &mut Ctx<R>, a: EnvExecArgs) -> Result<i32> {
         .flatten()
         .map(|(k, v)| format!("{k}={v}"))
         .collect();
-    env.extend(a.env);
-    super::exec::exec(
-        ctx,
-        &ExecArgs {
-            interactive: a.interactive,
-            tty: a.tty,
-            env,
-            env_file: a.env_file,
-            user: a.user,
-            workdir: a.workdir,
-            privileged: a.privileged,
-            detach: a.detach,
-            detach_keys: a.detach_keys,
-            sandbox: name,
-            command,
-        },
-    )
+    let mut flags = a.flags;
+    env.append(&mut flags.env);
+    flags.env = env;
+    let args = ExecArgs {
+        flags,
+        sandbox: name,
+        command,
+    };
+    super::exec::exec(ctx, &args)
 }
 
 fn env_rm<R: Runner>(ctx: &mut Ctx<R>, a: EnvRmArgs) -> Result<i32> {
@@ -392,20 +380,9 @@ fn prepare<R: Runner>(
     c: &EnvCommon,
     o: &EnvOverrideOpts,
 ) -> Result<(Loaded, EnvSpec, SecretsFile)> {
-    let home = ctx.env.get("HOME").context("HOME is not set")?;
-    let inputs = ArgInputs {
-        files: c.env_args_file.clone(),
-        flags: c.env_arg.clone(),
-    };
-    let loaded = load(&c.paths, &inputs, &ctx.cwd, Path::new(home))?;
+    let loaded = load_files(ctx, &c.paths, &c.env_arg, &c.env_args_file)?;
     let secrets = SecretsFile::load(&ctx.paths)?;
-    let overrides = Overrides {
-        name: c.name.clone(),
-        clone: o.clone,
-        kit_arg: o.kit_arg.clone(),
-        kit_args_file: o.kit_args_file.clone(),
-    };
-    let spec = spec(&loaded, &overrides, &secrets)?;
+    let spec = spec(&loaded, c.name.as_deref(), o, &secrets)?;
     Ok((loaded, spec, secrets))
 }
 

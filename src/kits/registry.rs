@@ -29,7 +29,7 @@ use tokio::io::AsyncWrite;
 use crate::kits::model::{Content, ImageConfig, Kit, Source};
 use crate::kits::registry_auth::Logins;
 use crate::kits::{artifact, trust, v3};
-use crate::util::{hex, sha256_digest};
+use crate::util::{block_on, hex, sha256_digest};
 
 mod docker_auth;
 mod signature;
@@ -37,6 +37,13 @@ mod signature;
 use docker_auth::*;
 pub use signature::*;
 
+/// The manifest types a pull accepts: an image or an index, OCI or Docker.
+const MANIFEST_TYPES: [&str; 4] = [
+    OCI_IMAGE_MEDIA_TYPE,
+    OCI_IMAGE_INDEX_MEDIA_TYPE,
+    IMAGE_MANIFEST_MEDIA_TYPE,
+    IMAGE_MANIFEST_LIST_MEDIA_TYPE,
+];
 const DESCRIPTOR_ANNOTATION: &str = "vnd.docker.sandbox.kit.descriptor";
 const SCHEMA_ANNOTATION: &str = "vnd.docker.sandbox.kit.schema-version";
 const REF_NAME_ANNOTATION: &str = "org.opencontainers.image.ref.name";
@@ -102,16 +109,12 @@ fn fetch_ref(
     // The same normaliser the trust check uses, so both read the ref alike.
     trust::normalise(reference)?;
     let r = parse_ref(reference)?;
-    let rt = tokio::runtime::Builder::new_current_thread()
-        .enable_all()
-        .build()
-        .context("starting the registry client")?;
     let client = new_client(&r);
     // A stored registry secret (`bento secret set --registry`) is used instead of anonymous.
     let stored = logins
         .auth_for(r.registry(), r.repository())
         .with_context(|| format!("logging in to {} with its registry secret", r.registry()))?;
-    rt.block_on(async {
+    block_on("registry client", async {
         if let Some(auth) = stored {
             return fetch(&client, &r, &auth, cache, require_kit, layers)
                 .await
@@ -176,12 +179,8 @@ fn with_client<T>(
     let auth = stored
         .or_else(|| docker_auth(r.resolve_registry()))
         .unwrap_or(RegistryAuth::Anonymous);
-    let rt = tokio::runtime::Builder::new_current_thread()
-        .enable_all()
-        .build()
-        .context("starting the registry client")?;
     let client = new_client(r);
-    rt.block_on(async {
+    block_on("registry client", async {
         client
             .auth(r, &auth, op)
             .await
@@ -219,15 +218,9 @@ fn parse_ref(reference: &str) -> Result<Reference> {
 /// signature on REF covers.
 pub fn top_manifest(reference: &str, logins: Logins) -> Result<(Vec<u8>, String)> {
     let r = parse_ref(reference)?;
-    let accepted = [
-        OCI_IMAGE_MEDIA_TYPE,
-        OCI_IMAGE_INDEX_MEDIA_TYPE,
-        IMAGE_MANIFEST_MEDIA_TYPE,
-        IMAGE_MANIFEST_LIST_MEDIA_TYPE,
-    ];
     with_client(&r, logins, RegistryOperation::Pull, async |client| {
         let (bytes, digest) = client
-            .pull_manifest_raw(&r, &RegistryAuth::Anonymous, &accepted)
+            .pull_manifest_raw(&r, &RegistryAuth::Anonymous, &MANIFEST_TYPES)
             .await
             .with_context(|| format!("pulling the manifest of {reference}"))?;
         Ok((bytes.to_vec(), digest))
@@ -284,7 +277,7 @@ pub(crate) fn tagged_reference(reference: &str) -> Result<Reference> {
 /// The ring provider is installed once; reqwest's no-provider rustls build needs a default.
 /// TLS roots come from the OS verifier (rustls-platform-verifier), not a bundled list.
 fn new_client(r: &Reference) -> Client {
-    // Err means a provider is already installed, which is fine.
+    // Built before `block_on` installs it. Err means a provider is already installed.
     let _ = rustls::crypto::ring::default_provider().install_default();
     Client::new(ClientConfig {
         protocol: protocol_for(r),
@@ -385,14 +378,8 @@ async fn fetch_manifest(
     r: &Reference,
     auth: &RegistryAuth,
 ) -> Result<(Vec<u8>, String)> {
-    let accept = [
-        OCI_IMAGE_MEDIA_TYPE,
-        OCI_IMAGE_INDEX_MEDIA_TYPE,
-        IMAGE_MANIFEST_MEDIA_TYPE,
-        IMAGE_MANIFEST_LIST_MEDIA_TYPE,
-    ];
     let (bytes, _) = client
-        .pull_manifest_raw(r, auth, &accept)
+        .pull_manifest_raw(r, auth, &MANIFEST_TYPES)
         .await
         .with_context(|| format!("pulling the manifest of {}", r.whole()))?;
     // Hash the bytes ourselves rather than trust the registry's header.
@@ -456,7 +443,6 @@ fn blob_digests(manifest: &Value) -> Result<Vec<String>> {
     Ok(out)
 }
 
-/// The descriptor JSON in the manifest annotation.
 /// A published v2 kit's spec digest (its config) and files layer digest (`None` for the empty
 /// layer), or None for any other manifest.
 fn v2_spec(manifest: &Value, what: &str) -> Result<Option<(String, Option<String>)>> {
@@ -499,6 +485,7 @@ fn unpack_v2_files(dir: &Path, layer: &[u8]) -> Result<()> {
     }
 }
 
+/// The descriptor JSON in the manifest annotation.
 fn kit_descriptor(manifest: &Value, what: &str) -> Result<String> {
     let ann = &manifest["annotations"];
     let Some(desc) = ann[DESCRIPTOR_ANNOTATION].as_str() else {
@@ -780,6 +767,51 @@ fn command_of(config: &Value) -> Option<Vec<String>> {
     (!command.is_empty()).then_some(command)
 }
 
+/// Writes a one-manifest OCI layout into `dir`, with the kit descriptor `annotation_json` and
+/// `extra` manifest annotations; returns the manifest digest. For tests and the agent stand-ins.
+pub(crate) fn write_layout(
+    dir: &Path,
+    annotation_json: Option<&str>,
+    extra: &[(&str, &str)],
+    layers: &[&[u8]],
+    config_json: &str,
+) -> io::Result<String> {
+    let blobs = dir.join("blobs").join("sha256");
+    fs::create_dir_all(&blobs)?;
+    let put = |data: &[u8]| -> io::Result<String> {
+        let d = sha256_digest(data);
+        fs::write(blobs.join(d.trim_start_matches("sha256:")), data)?;
+        Ok(d)
+    };
+    let mut layer_descs = Vec::new();
+    for l in layers {
+        layer_descs.push(
+            json!({"mediaType": "application/vnd.oci.image.layer.v1.tar",
+                                "digest": put(l)?, "size": l.len()}),
+        );
+    }
+    let mut manifest = json!({
+        "schemaVersion": 2,
+        "mediaType": OCI_IMAGE_MEDIA_TYPE,
+        "config": {"mediaType": "application/vnd.oci.image.config.v1+json",
+                   "digest": put(config_json.as_bytes())?, "size": config_json.len()},
+        "layers": layer_descs,
+    });
+    if let Some(a) = annotation_json {
+        manifest["annotations"] = json!({DESCRIPTOR_ANNOTATION: a, SCHEMA_ANNOTATION: "3"});
+    }
+    for (k, v) in extra {
+        manifest["annotations"][*k] = json!(v);
+    }
+    let bytes = manifest.to_string();
+    let digest = put(bytes.as_bytes())?;
+    fs::write(dir.join("oci-layout"), r#"{"imageLayoutVersion":"1.0.0"}"#)?;
+    let index = json!({"schemaVersion": 2, "manifests": [
+        {"mediaType": OCI_IMAGE_MEDIA_TYPE, "digest": digest, "size": bytes.len()}]});
+    fs::write(dir.join("index.json"), index.to_string())?;
+    Ok(digest)
+}
+
 #[cfg(test)]
 pub(crate) mod fixtures {
     use super::*;
@@ -798,59 +830,14 @@ pub(crate) mod fixtures {
         build_layout(cache, &manifest, &digest, reference).unwrap()
     }
 
-    /// Writes a one-manifest OCI layout into `dir`; returns the manifest digest.
+    /// `write_layout` with only the descriptor annotation, for tests.
     pub fn oci_layout(
         dir: &Path,
         annotation_json: Option<&str>,
         layers: &[&[u8]],
         config_json: &str,
     ) -> String {
-        oci_layout_with(dir, annotation_json, &[], layers, config_json)
-    }
-
-    /// `oci_layout` with `extra` manifest annotations beside the descriptor.
-    pub fn oci_layout_with(
-        dir: &Path,
-        annotation_json: Option<&str>,
-        extra: &[(&str, &str)],
-        layers: &[&[u8]],
-        config_json: &str,
-    ) -> String {
-        let blobs = dir.join("blobs").join("sha256");
-        fs::create_dir_all(&blobs).unwrap();
-        let put = |data: &[u8]| {
-            let d = sha256_digest(data);
-            fs::write(blobs.join(hex_of(&d).unwrap()), data).unwrap();
-            d
-        };
-        let config = put(config_json.as_bytes());
-        let layer_descs: Vec<Value> = layers
-            .iter()
-            .map(|l| {
-                json!({"mediaType": "application/vnd.oci.image.layer.v1.tar",
-                            "digest": put(l), "size": l.len()})
-            })
-            .collect();
-        let mut manifest = json!({
-            "schemaVersion": 2,
-            "mediaType": OCI_IMAGE_MEDIA_TYPE,
-            "config": {"mediaType": "application/vnd.oci.image.config.v1+json",
-                       "digest": config, "size": config_json.len()},
-            "layers": layer_descs,
-        });
-        if let Some(a) = annotation_json {
-            manifest["annotations"] = json!({DESCRIPTOR_ANNOTATION: a, SCHEMA_ANNOTATION: "3"});
-        }
-        for (k, v) in extra {
-            manifest["annotations"][*k] = json!(v);
-        }
-        let bytes = serde_json::to_vec(&manifest).unwrap();
-        let digest = put(&bytes);
-        fs::write(dir.join("oci-layout"), r#"{"imageLayoutVersion":"1.0.0"}"#).unwrap();
-        let index = json!({"schemaVersion": 2, "manifests": [
-            {"mediaType": OCI_IMAGE_MEDIA_TYPE, "digest": digest, "size": bytes.len()}]});
-        fs::write(dir.join("index.json"), index.to_string()).unwrap();
-        digest
+        write_layout(dir, annotation_json, &[], layers, config_json).unwrap()
     }
 }
 

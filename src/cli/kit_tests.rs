@@ -24,20 +24,9 @@ fn base() -> Vec<KitRecord> {
     vec![rec("base", "ghcr.io/acme/base@sha256:00", &["base"], None)]
 }
 
-fn kit_env() -> TestEnv {
-    test_env(&[("SMOLBENTO_KIT_ALLOW_LOCAL_KITS", "true")])
-}
-
-fn v2_fixture(name: &str) -> String {
-    format!(
-        "{}/tests/fixtures/kits/v2/{name}",
-        env!("CARGO_MANIFEST_DIR")
-    )
-}
-
 #[test]
 fn kit_add_refuses_an_old_preset_sandbox() {
-    let mut t = test_env(&[("SMOLBENTO_KIT_ALLOW_LOCAL_KITS", "true")]);
+    let mut t = kit_env();
     // No `sbx.command`: made when built-in agents weren't kits.
     t.runner().ok(
         &["machine", "status", "-n", MACHINE],

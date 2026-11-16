@@ -1,6 +1,8 @@
 //! Small helpers with no dependency on the rest of the crate.
 
-use std::path::Path;
+use std::collections::BTreeMap;
+use std::ffi::OsStr;
+use std::path::{Path, PathBuf};
 
 use anyhow::{Context, Result, bail};
 use sha2::{Digest, Sha256};
@@ -65,6 +67,34 @@ pub fn size_gib(value: &str, what: &str) -> Result<u32> {
     let bytes = parse_size(value, what)?;
     let gib = bytes.div_ceil(1 << 30).max(1);
     u32::try_from(gib).with_context(|| format!("{what} '{value}' is too large"))
+}
+
+/// `path` with a leading `~/` replaced by `env`'s `HOME`; `None` for any other path.
+pub fn expand_home(path: &str, env: &BTreeMap<String, String>) -> Result<Option<PathBuf>> {
+    let Some(rest) = path.strip_prefix("~/") else {
+        return Ok(None);
+    };
+    let home = env.get("HOME").context("HOME is not set")?;
+    Ok(Some(Path::new(home).join(rest)))
+}
+
+/// The first `name` that is a file in a directory of `path` (a `PATH` value); `None` without one.
+pub fn find_on_path(path: Option<impl AsRef<OsStr>>, name: impl AsRef<Path>) -> Option<PathBuf> {
+    std::env::split_paths(path?.as_ref())
+        .map(|d| d.join(&name))
+        .find(|p| p.is_file())
+}
+
+/// Runs `fut` to its end on a new single-threaded runtime, with the TLS provider HTTPS clients
+/// need; `what` names the client in the error. Sync: it must not be called from inside a runtime.
+pub fn block_on<T>(what: &str, fut: impl Future<Output = Result<T>>) -> Result<T> {
+    // reqwest's no-provider rustls build needs a default. Err means one is already installed.
+    let _ = rustls::crypto::ring::default_provider().install_default();
+    tokio::runtime::Builder::new_current_thread()
+        .enable_all()
+        .build()
+        .with_context(|| format!("starting the {what}"))?
+        .block_on(fut)
 }
 
 /// Prints `warning: …` to stderr without panicking: `eprintln!` panics when stderr is gone (the
