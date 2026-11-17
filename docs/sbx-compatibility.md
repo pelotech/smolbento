@@ -95,10 +95,10 @@ smolbento-only:
 | Single-file `:ro` mounts | Supported | Directories only (smolvm mounts directories) |
 | Machine names | `.` allowed | No `--`, no trailing `-` (smolvm rules) |
 | Daemon | `sandboxd` | None; each command talks to smolvm directly |
-| Clone transport | Git daemon in the sandbox on a published port; the remote URL changes on every start, and fetch fails while stopped | No daemon or port. The `sandbox-<name>` remote's `uploadpack` runs `smolbento _upload-pack <name>` (so `smolbento` must be on `PATH`) through `smolvm machine exec`. `git remote -v` shows a placeholder `file:///sbt/<name>` |
+| Clone transport | Git daemon in the sandbox on a published port; the remote URL is set at each start, and a fetch needs the sandbox running | No daemon or port. The `sandbox-<name>` remote's `uploadpack` runs `smolbento _upload-pack <name>` (so `smolbento` must be on `PATH`) through `smolvm machine exec`. `git remote -v` shows a placeholder `file:///sbt/<name>` |
 | Tags from the sandbox | Remote follows tags | `tagOpt = --no-tags`; only branches come back |
 | Fetch on exit | None | `bento run` fetches `sandbox-<name>` when the agent exits (`clone.fetch-on-exit`, default `true`), with `fetch.fsckObjects=true`. Manual `git fetch` is unchanged |
-| Fetch from a stopped sandbox | Fails | Starts it, fetches, stops it again |
+| Fetch from a stopped sandbox | Needs the sandbox running | Starts it, fetches, stops it again |
 | Linked worktrees as clone source | Not supported | Supported: the branch, or the commit when detached |
 | Install-phase kit rules in `policy ls` | Not listed after create | Never listed, even while a create installs (they're in effect then) |
 | `inspect` | Also `id`, CPUs, memory, uptime, image digest, auth mode, network, mount and proxy policy, runtime mounts, MCP gateway, daemon | Those are left out (a sandbox is known by its name; smolvm has no other ID). The rest matches sbx's layout and JSON keys, `created_at` and `created_version` (`Created with:`) included; sandboxes from before 0.27 have no `created_version` |
@@ -327,7 +327,7 @@ with `-D`).
 | `volume@1` | Yes, removed with the sandbox | Yes, on the sandbox's disk. Removed with the sandbox (`rm`, `reset`, recreate); kept across stop and start; each fork gets a copy |
 | `resources@1` | Limited (no GPU) | CPUs and memory. GPU ignored |
 | `lifecycle@1` | Yes | Yes: install steps on first start, startup steps on every start. `interactive` ignored |
-| `agent-context@1`, `@2` | Yes. As of 0.54 a mixin's `@2` text is still indexed like `@1` (docker/sbx-releases#878) | Yes, in the same places (see below). `@2` text is inline, as the spec requires |
+| `agent-context@1`, `@2` | Yes. In 0.54 a mixin's `@2` text is listed in the index, as for `@1` | Yes, in the same places (see below). `@2` text is inline, following the spec |
 | `sbx@1` | Yes | Yes: the workload's command is the agent (see below) |
 | `git-identity@1` | Yes | Yes: your `git config user.name/email` |
 | `long-running@1` | Yes | Yes: no auto-stop when the last session ends |
@@ -395,11 +395,10 @@ with `-D`).
   requires. `kit add` of a kit that names a file needs a recreate. `agent-context@1` text is laid out as sbx does: the workload's
   appended, a mixin's in `kits-agent-context/<kit>.md` beside it, listed between
   `<!-- sbx:kits-section start -->` and `<!-- sbx:kits-section end -->`. `agent-context@2` text
-  (a v2 kit's `agentInstructions` too) is in the file itself, between the same markers, as the
-  spec requires. sbx 0.54 still indexes a mixin's `@2` text like `@1`
-  (docker/sbx-releases#878), so the two differ there until sbx is fixed. The layout inside the
-  markers (a `<!-- sbx:kit <name> -->` line before each kit's text) is smolbento's: the spec
-  doesn't set one.
+  (a v2 kit's `agentInstructions` too) is in the file itself, between the same markers,
+  following the spec. sbx 0.54 lists a mixin's `@2` text in the index, as for `@1`, so the two
+  differ there for now. The layout inside the markers (a `<!-- sbx:kit <name> -->` line before
+  each kit's text) is smolbento's own: the spec doesn't set one.
 - A sandbox uses one `agent-context` version for all its kits ([Kits](kits.md#agent-instructions-from-kits)).
   The spec refuses `@1` and `@2` requests together and leaves the choice between two optional
   ones to the runtime; sbx's choice isn't measured.
@@ -473,7 +472,7 @@ with `-D`).
   `LOGNAME` and `SHELL`, which are that user's (via `runuser`, or `su` without `-`, which resets
   them).
 - Which `agent-context` version sbx applies when kits offer both, and its layout for inline
-  `@2` text once docker/sbx-releases#878 is fixed.
+  `@2` text.
 - `integrates` and `conflicts` error texts, and a published kit whose provides have no version.
 - An optional argument a kit declares but doesn't use, with no value and no default.
 - A published kit's host-mount identity: keyed on `<registry>/<repository>`; sbx's choice isn't

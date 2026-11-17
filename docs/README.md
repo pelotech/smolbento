@@ -17,7 +17,8 @@ boundary.
 - [Environment files](environments.md): `sbxenv.yaml`
 - [Network policy and secrets](network-and-secrets.md): what a sandbox may reach, and API keys
 - [Configuration](configuration.md): settings, environment variables, where files live
-- [sbx compatibility](sbx-compatibility.md): what works like sbx, what doesn't yet, what never will
+- [smolbento and Docker Sandboxes](comparison.md): how the two differ, and which to use
+- [sbx compatibility](sbx-compatibility.md): what works like sbx, what doesn't yet, and what is out of scope
 - [Troubleshooting](troubleshooting.md): `bento diagnose` and common problems
 - [Architecture](architecture.md): how smolbento drives smolvm
 - [Security](SECURITY.md): what a sandbox isolates today, and reporting issues

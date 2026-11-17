@@ -77,8 +77,8 @@ kits you trust.
   or to the service's own hosts if it names none.
   - A **built-in** service's secret (`github`, `anthropic`, ...) goes only to that service's own
     hosts. Naming another host fails: "kit K wants to send your github secret to HOST, which github
-    doesn't use; refusing". sbx trusts the kit here; smolbento doesn't, because Docker Hub kits
-    load by default.
+    doesn't use; refusing". sbx asks you to approve the kit's hosts instead; smolbento adds this
+    check because Docker Hub kits load by default.
   - A **custom** service's secret (`bento secret set-custom`) goes to any host the kit names. `create`
     and `kit add` print "kit K sends your SERVICE secret to HOSTS".
   - `bento kit inspect REF` lists each credential's service and hosts under `Credentials:`
