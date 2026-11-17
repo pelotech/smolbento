@@ -406,6 +406,11 @@ with `-D`).
   `agentInstructions` too) is in the file itself, between the same markers, joined with two
   newlines. sbx 0.54 lists a mixin's `@2` text in the index, as for `@1`, so the two differ there
   for now.
+- A kit's network hosts follow the spec: `*` means everything, as `**` does (only `bento policy
+  allow` refuses a bare `*`, as sbx does). A `network-policy@2` entry is a host string or an object,
+  and its objects are checked as the spec says: an empty `methods` or `paths` list, `paths` without
+  `methods`, a lowercase method, `ANY` beside another method, a path not starting with `/`, or a
+  pattern in a bounded allow entry is an error.
 - A sandbox uses one `agent-context` version for all its kits: `@2`, unless a kit requires `@1`.
   The spec refuses `@1` and `@2` requests together and leaves it to the runtime to accept one;
   sbx's choice isn't measured. Docker's published agent kits offer both as optional, so they get

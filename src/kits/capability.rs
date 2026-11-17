@@ -20,8 +20,6 @@ static LABEL: LazyLock<Regex> =
     LazyLock::new(|| Regex::new(r"^[a-z0-9]([a-z0-9-]{0,61}[a-z0-9])?$").unwrap());
 static VERSION: LazyLock<Regex> =
     LazyLock::new(|| Regex::new(r"^[0-9]+(\.[0-9A-Za-z-]+)*$").unwrap());
-static ARG_REF: LazyLock<Regex> =
-    LazyLock::new(|| Regex::new(r"\$\{\{\s*kit\.args\.([A-Za-z_][A-Za-z0-9_]*)\s*\}\}").unwrap());
 
 /// Single-label namespaces the spec defines (for derived provides); authors may not use others.
 const RESERVED: [&str; 2] = ["deb", "apk"];
@@ -89,7 +87,9 @@ pub fn display(name: &str) -> &str {
 
 /// Whether `s` holds a `${{ kit.args.NAME }}` reference.
 pub fn has_arg_ref(s: &str) -> bool {
-    ARG_REF.is_match(s)
+    super::args::KIT_REF
+        .captures_iter(s)
+        .any(|c| &c[1] == "args")
 }
 
 fn name_error(name: &str) -> Option<String> {

@@ -2,6 +2,7 @@
 
 use std::collections::{BTreeMap, BTreeSet};
 use std::path::PathBuf;
+use std::sync::LazyLock;
 
 use anyhow::{Context, Result, anyhow, bail};
 use regex_lite::Regex;
@@ -90,7 +91,11 @@ impl ArgValues {
             let re = def
                 .pattern
                 .as_deref()
-                .map(|p| Regex::new(p).with_context(|| format!("invalid pattern {p:?}")))
+                // SPEC §6: matched against the whole value.
+                .map(|p| {
+                    Regex::new(&format!("^(?:{p})$"))
+                        .with_context(|| format!("invalid pattern {p:?}"))
+                })
                 .transpose()
                 .with_context(|| format!("kit {}: argument {name}", kit.name))?;
             let given = self
@@ -141,7 +146,10 @@ fn validate(def: &ArgDef, pattern: Option<&Regex>, value: &str) -> Result<()> {
     if let Some(re) = pattern
         && !re.is_match(value)
     {
-        bail!("the value does not match pattern {:?}", re.as_str());
+        bail!(
+            "the value does not match pattern {:?}",
+            def.pattern.as_deref().unwrap_or_default()
+        );
     }
     Ok(())
 }
@@ -152,9 +160,20 @@ fn validate(def: &ArgDef, pattern: Option<&Regex>, value: &str) -> Result<()> {
 #[error("create-phase kit arg {0:?} has no resolved value")]
 pub struct NoResolvedValue(pub String);
 
+/// A kit reference, `${{ kit.args.NAME }}` or `${{ kit.env.NAME }}` (the spec's `argRef` and
+/// `envRef`): group 1 is `args` or `env`, group 2 the name.
+pub(crate) static KIT_REF: LazyLock<Regex> = LazyLock::new(|| {
+    Regex::new(r"\$\{\{\s*kit\.(args|env)\.([A-Za-z_][A-Za-z0-9_]*)\s*\}\}").unwrap()
+});
+
+/// Where a kit reference starts, well formed or not (the spec's `kitPlaceholderOpener`).
+static KIT_OPENER: LazyLock<Regex> =
+    LazyLock::new(|| Regex::new(r"\$\{\{\s*kit\.(args|env)\b").unwrap());
+
 /// Expands `${{ kit.args.NAME }}` and `${{ kit.env.NAME }}`; undeclared names are errors, and so
-/// are declared ones in `unresolved` (no value, no default). `$VAR` and `${VAR}` are left for
-/// the shell.
+/// are declared ones in `unresolved` (no value, no default). Any other `${{ … }}` (a GitHub
+/// Actions expression in a kit file, say) is text, as SPEC §6 has it; a malformed kit reference
+/// is an error. `$VAR` and `${VAR}` are left for the shell.
 pub fn expand(
     s: &str,
     args: &BTreeMap<String, String>,
@@ -162,30 +181,31 @@ pub fn expand(
     env: &BTreeMap<String, String>,
 ) -> Result<String> {
     let mut out = String::with_capacity(s.len());
-    let mut rest = s;
-    while let Some(start) = rest.find("${{") {
-        out.push_str(&rest[..start]);
-        let after = &rest[start + 3..];
-        let end = after
-            .find("}}")
-            .ok_or_else(|| anyhow!("unterminated placeholder in {s:?}"))?;
-        let expr = after[..end].trim();
-        let value = if let Some(n) = expr.strip_prefix("kit.args.") {
-            match args.get(n) {
+    let mut done = 0;
+    for open in KIT_OPENER.find_iter(s) {
+        let at = &s[open.start()..];
+        let reference = KIT_REF
+            .captures(at)
+            .filter(|c| c.get(0).is_some_and(|m| m.start() == 0))
+            .ok_or_else(|| anyhow!("malformed kit placeholder in {s:?}"))?;
+        let name = &reference[2];
+        let value = if &reference[1] == "args" {
+            match args.get(name) {
                 Some(v) => v,
-                None if unresolved.contains(n) => return Err(NoResolvedValue(n.into()).into()),
-                None => bail!("undeclared kit argument {n:?} in placeholder"),
+                None if unresolved.contains(name) => {
+                    return Err(NoResolvedValue(name.into()).into());
+                }
+                None => bail!("undeclared kit argument {name:?} in placeholder"),
             }
-        } else if let Some(n) = expr.strip_prefix("kit.env.") {
-            env.get(n)
-                .ok_or_else(|| anyhow!("undeclared kit env {n:?} in placeholder"))?
         } else {
-            bail!("unsupported placeholder {expr:?}");
+            env.get(name)
+                .ok_or_else(|| anyhow!("undeclared kit env {name:?} in placeholder"))?
         };
+        out.push_str(&s[done..open.start()]);
         out.push_str(value);
-        rest = &after[end + 2..];
+        done = open.start() + reference[0].len();
     }
-    out.push_str(rest);
+    out.push_str(&s[done..]);
     Ok(out)
 }
 
@@ -250,6 +270,31 @@ mod tests {
         assert_eq!(e, "kit k: argument t: the value is not one of: a, b");
         let v = ArgValues::parse(&[], &["nope=1".into()]).unwrap();
         assert!(v.check_unknown(&[kit("k", &[])]).is_err());
+    }
+
+    #[test]
+    fn a_pattern_matches_the_whole_value() {
+        // SPEC §6: an unanchored pattern still has to match all of the value.
+        let pat = ArgDef {
+            pattern: Some("[0-9]+|ok".into()),
+            ..Default::default()
+        };
+        let k = kit("k", &[("t", pat)]);
+        let check = |value: &str| {
+            ArgValues::parse(&[], &[format!("t={value}")])
+                .unwrap()
+                .for_kit(&k)
+                .map(|v| v["t"].clone())
+        };
+        assert_eq!(check("42").unwrap(), "42");
+        assert_eq!(check("ok").unwrap(), "ok");
+        for bad in ["abc1;rm", "42x", "okay"] {
+            let e = format!("{:#}", check(bad).unwrap_err());
+            assert_eq!(
+                e,
+                "kit k: argument t: the value does not match pattern \"[0-9]+|ok\""
+            );
+        }
     }
 
     #[test]
@@ -341,5 +386,27 @@ mod tests {
             expand("$HOME ${HOME} stay", &a, &none, &e).unwrap(),
             "$HOME ${HOME} stay"
         );
+    }
+
+    #[test]
+    fn other_placeholders_are_text_and_bad_kit_ones_are_errors() {
+        let a = BTreeMap::from([("v".to_string(), "1.2".to_string())]);
+        let none = BTreeSet::new();
+        let ex = |s: &str| expand(s, &a, &none, &BTreeMap::new());
+        // SPEC §6: only kit.args and kit.env are references; a workflow in a kit file keeps its own.
+        let workflow = "ref: ${{ github.sha }} v${{ kit.args.v }} ${{ kit.envy }} ${{ secrets.X";
+        assert_eq!(
+            ex(workflow).unwrap(),
+            "ref: ${{ github.sha }} v1.2 ${{ kit.envy }} ${{ secrets.X"
+        );
+        for bad in [
+            "${{ kit.args }}",
+            "${{ kit.args.a-b }}",
+            "${{ kit.env.1X }}",
+            "x ${{kit.args.v",
+        ] {
+            let err = format!("{:#}", ex(bad).unwrap_err());
+            assert_eq!(err, format!("malformed kit placeholder in {bad:?}"));
+        }
     }
 }
