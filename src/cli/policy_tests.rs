@@ -30,13 +30,10 @@ fn init_saves_and_pushes() {
         Policy::load(&t.ctx.paths).unwrap().mode,
         Some(Mode::DenyAll)
     );
-    // No hosts: smolvm's live-reset workaround takes a second call.
     let u = updates(&t);
-    assert_eq!(u.len(), 2, "{u:?}");
-    assert!(
-        u[1].ends_with("--remove-allow-host smolbento.invalid"),
-        "{u:?}"
-    );
+    assert_eq!(u.len(), 1, "{u:?}");
+    assert!(u[0].contains("--reset-allow-list"), "{u:?}");
+    assert!(!u[0].contains("--allow-host"), "{u:?}");
 }
 
 #[test]
@@ -981,7 +978,6 @@ fn localhost_rules_push_the_gateway_live_with_host_access_only() {
             "LOCALHOST:11434",
         ])
         .unwrap();
-        // No hosts: the list is the first of the two calls (see `NO_HOSTS_PLACEHOLDER`).
         let last = resets(&t).pop().unwrap();
         assert_eq!(
             last.contains("--allow-cidr 100.96.0.1/32"),
