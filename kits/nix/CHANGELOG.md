@@ -1,5 +1,12 @@
 # Changelog
 
+## [0.2.1](https://github.com/pelotech/smolbento/compare/nix-kit-v0.2.0...nix-kit-v0.2.1) (2026-11-17)
+
+
+### Bug Fixes
+
+* **kits:** write agent-context@2 text into the agent file ([#152](https://github.com/pelotech/smolbento/issues/152)) ([07d83a9](https://github.com/pelotech/smolbento/commit/07d83a93cd40a6fb073e0ad7f347cd2c20351be2))
+
 ## [0.2.0](https://github.com/pelotech/smolbento/compare/nix-kit-v0.1.0...nix-kit-v0.2.0) (2026-11-15)
 
 
