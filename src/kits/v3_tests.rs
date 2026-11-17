@@ -51,7 +51,7 @@ fn an_unknown_kind_is_an_error() {
 #[test]
 fn a_capability_without_a_type_is_an_error_naming_its_index() {
     for ty in [r#""#, r#""type":"","#] {
-        let e = parse_json(
+        let e = parse(
             &format!(
                 r#"{{"schemaVersion":"3","kind":"mixin","capabilities":[
                         {{"type":"com.docker.sandbox/sbx@1"}},{{{ty}"optional":true}}]}}"#
@@ -87,7 +87,7 @@ fn an_empty_hook_command_is_an_error() {
             "kit k: install hook 1 has an empty command",
         ),
     ] {
-        let e = parse_json(
+        let e = parse(
                 &format!(
                     r#"{{"schemaVersion":"3","kind":"mixin","capabilities":[{{"type":"com.docker.sandbox/lifecycle@1","config":{{"install":[{hook}]}}}}]}}"#
                 ),
@@ -96,7 +96,7 @@ fn an_empty_hook_command_is_an_error() {
             .unwrap_err();
         assert_eq!(format!("{e:#}"), want);
     }
-    let e = parse_json(
+    let e = parse(
             r#"{"schemaVersion":"3","kind":"mixin","capabilities":[{"type":"com.docker.sandbox/lifecycle@1","config":{"startup":[{"command":["a"]},{"command":""}]}}]}"#,
             local("k"),
         )
@@ -267,7 +267,7 @@ fn host_mount_refuses_a_mode_that_is_not_octal_and_unknown_keys() {
 
 #[test]
 fn a_local_kit_s_provides_need_a_version_like_sbx() {
-    let e = parse_json(
+    let e = parse(
         r#"{"schemaVersion":"3","kind":"mixin","provides":["x","y@1.0.0","z"]}"#,
         local("k"),
     )
@@ -293,15 +293,15 @@ fn a_local_kit_s_provides_need_a_version_like_sbx() {
 fn version_is_the_fallback_for_unversioned_provides_and_a_tag_beats_it() {
     let d = r#"{"schemaVersion":"3","kind":"mixin","version":"1.2.0",
             "provides":["x","y@3","${{ kit.args.v }}"]}"#;
-    let k = parse_json(d, local("k")).unwrap();
+    let k = parse(d, local("k")).unwrap();
     assert_eq!(k.provides, ["x@1.2.0", "y@3", "${{ kit.args.v }}"]);
-    let k = parse_json(d, Source::Registry("docker.io/acme/k:v2.0.1".into())).unwrap();
+    let k = parse(d, Source::Registry("docker.io/acme/k:v2.0.1".into())).unwrap();
     assert_eq!(k.provides, ["x@2.0.1", "y@3", "${{ kit.args.v }}"]);
     // Not a version-shaped tag: the descriptor's version stays.
-    let k = parse_json(d, Source::Registry("acme/k:latest@sha256:00".into())).unwrap();
+    let k = parse(d, Source::Registry("acme/k:latest@sha256:00".into())).unwrap();
     assert_eq!(k.provides[0], "x@1.2.0");
     // A published kit without versions is still read; it satisfies unconstrained requires.
-    let k = parse_json(
+    let k = parse(
         r#"{"schemaVersion":"3","kind":"mixin","provides":["x"]}"#,
         Source::Registry("acme/k".into()),
     )
@@ -313,7 +313,7 @@ fn version_is_the_fallback_for_unversioned_provides_and_a_tag_beats_it() {
 fn capability_entries_follow_the_spec_grammar() {
     let bad = |field: &str, entry: &str| {
         let d = format!(r#"{{"schemaVersion":"3","kind":"mixin","{field}":["{entry}"]}}"#);
-        format!("{:#}", parse_json(&d, local("k")).unwrap_err())
+        format!("{:#}", parse(&d, local("k")).unwrap_err())
     };
     assert_eq!(
         bad("provides", "Gh@1"),
@@ -346,7 +346,7 @@ fn capability_entries_follow_the_spec_grammar() {
              single label, which this specification reserves; a namespace of your own is \
              reverse-DNS, as in com.example/x"
     );
-    let e = parse_json(
+    let e = parse(
         r#"{"schemaVersion":"3","kind":"mixin","version":"v1"}"#,
         local("k"),
     )
@@ -356,7 +356,7 @@ fn capability_entries_follow_the_spec_grammar() {
 
 #[test]
 fn sandbox_is_the_old_spelling_of_workload() {
-    let k = parse_json(
+    let k = parse(
         r#"{"schemaVersion":"3","kind":"sandbox"}"#,
         Source::Registry("r/k:1".into()),
     )
@@ -456,7 +456,7 @@ fn shell_workload_parses() {
 
 #[test]
 fn network_v1_entries_are_plain_hosts_and_may_carry_ports() {
-    let k = parse_json(
+    let k = parse(
         r#"{"schemaVersion":"3","kind":"mixin","capabilities":[
                 {"type":"com.docker.sandbox/network-policy@1",
                  "config":{"runtime":{"allow":["a.com:443"],"deny":["b.com"]}}}]}"#,
@@ -473,7 +473,7 @@ fn network_v1_entries_are_plain_hosts_and_may_carry_ports() {
 
 #[test]
 fn network_v2_entry_fans_out_per_host() {
-    let k = parse_json(
+    let k = parse(
         r#"{"schemaVersion":"3","kind":"mixin","capabilities":[
                 {"type":"com.docker.sandbox/network-policy@2",
                  "config":{"runtime":{"allow":[{"hosts":["a","b"],"methods":["GET"]}]}}}]}"#,
@@ -488,8 +488,120 @@ fn network_v2_entry_fans_out_per_host() {
     assert_eq!(runtime.allow[1].methods, ["GET"]);
 }
 
+#[test]
+fn network_v2_takes_host_strings_and_star() {
+    // SPEC network-policy@2: an entry is a host string or an object; `*` is everything, as `**`.
+    let k = one_cap(
+        r#"{"type":"com.docker.sandbox/network-policy@2","config":{
+            "install":{"allow":["registry.npmjs.org"]},
+            "runtime":{"allow":["github.com","*",{"hosts":["api.github.com"],"methods":["GET"],
+                                                 "paths":["/repos/**"]}],
+                       "deny":[{"hosts":["*.example.com"],"methods":["DELETE"]}]}}}"#,
+    )
+    .unwrap();
+    let CapBody::Network { install, runtime } = &k.caps[0].body else {
+        panic!()
+    };
+    assert_eq!(install.allow, [NetRule::host("registry.npmjs.org")]);
+    let hosts: Vec<&str> = runtime.allow.iter().map(|r| r.host.as_str()).collect();
+    assert_eq!(hosts, ["github.com", "**", "api.github.com"]);
+    assert!(runtime.allow[0].methods.is_empty() && runtime.allow[0].paths.is_empty());
+    assert_eq!(runtime.allow[2].paths, ["/repos/**"]);
+    // A deny can name a pattern however it's bounded.
+    assert_eq!(runtime.deny[0].host, "*.example.com");
+
+    // network-policy@1 takes `*` too.
+    let k = one_cap(
+        r#"{"type":"com.docker.sandbox/network-policy@1","config":{"runtime":{"allow":["*"]}}}"#,
+    )
+    .unwrap();
+    let CapBody::Network { runtime, .. } = &k.caps[0].body else {
+        panic!()
+    };
+    assert_eq!(runtime.allow, [NetRule::host("**")]);
+}
+
+#[test]
+fn network_v2_entries_are_checked_as_the_spec_says() {
+    let entry = |e: &str| {
+        let cap = format!(
+            r#"{{"type":"com.docker.sandbox/network-policy@2","config":{{"runtime":{{"allow":[{e}]}}}}}}"#
+        );
+        format!("{:#}", one_cap(&cap).unwrap_err())
+    };
+    let at = "capability com.docker.sandbox/network-policy@2: runtime allow entry 0";
+    for (e, why) in [
+        // SPEC: an empty list would read as "every method".
+        (
+            r#"{"hosts":["a"],"methods":[]}"#,
+            "an empty methods list grants nothing; omit it, or name the methods",
+        ),
+        (
+            r#"{"hosts":["a"],"methods":["GET"],"paths":[]}"#,
+            "an empty paths list grants nothing; omit it, or name the paths",
+        ),
+        (
+            r#"{"hosts":["a"],"paths":["/x"]}"#,
+            "paths need methods; name them, or use methods: [ANY]",
+        ),
+        (
+            r#"{"hosts":[],"methods":["GET"]}"#,
+            "hosts must name at least one host, none empty",
+        ),
+        (
+            r#"{"methods":["GET"]}"#,
+            "hosts must name at least one host, none empty",
+        ),
+        (
+            r#"{"hosts":["a"],"methods":["get"]}"#,
+            "method \"get\" is not an uppercase HTTP method or ANY",
+        ),
+        (
+            r#"{"hosts":["a"],"methods":["GET","GET"]}"#,
+            "method \"GET\" is listed twice",
+        ),
+        (
+            r#"{"hosts":["a"],"methods":["ANY","GET"]}"#,
+            "ANY covers every method; list it alone",
+        ),
+        (
+            r#"{"hosts":["a"],"methods":["GET"],"paths":["x"]}"#,
+            "path \"x\" must start with /",
+        ),
+        // SPEC network-policy@2/bounded-allow-hosts-literal.
+        (
+            r#"{"hosts":["*.a.com"],"methods":["GET"]}"#,
+            "a bounded allow entry names its hosts exactly, not \"*.a.com\"",
+        ),
+        ("\"\"", "hosts must name at least one host, none empty"),
+    ] {
+        assert_eq!(entry(e), format!("{at}: {why}"), "{e}");
+    }
+    // An object keeps serde's own error, after the entry's name.
+    let e = entry(r#"{"hosts":["a"],"verbs":["GET"]}"#);
+    assert!(
+        e.starts_with(at) && e.contains("unknown field `verbs`"),
+        "{e}"
+    );
+    let e = entry("7");
+    assert!(
+        e.starts_with(at) && e.contains("invalid type: integer"),
+        "{e}"
+    );
+    // `ANY` alone, and an unbounded object, are fine.
+    for ok in [
+        r#"{"hosts":["a"],"methods":["ANY"],"paths":["/v1/**"]}"#,
+        r#"{"hosts":["*.a.com"]}"#,
+    ] {
+        let cap = format!(
+            r#"{{"type":"com.docker.sandbox/network-policy@2","config":{{"runtime":{{"allow":[{ok}]}}}}}}"#
+        );
+        one_cap(&cap).unwrap();
+    }
+}
+
 fn one_cap(json_cap: &str) -> Result<Kit> {
-    parse_json(
+    parse(
         &format!(r#"{{"schemaVersion":"3","kind":"mixin","capabilities":[{json_cap}]}}"#),
         local("t"),
     )
@@ -739,7 +851,7 @@ fn ssh_agent_entries_of_one_kit_must_not_overlap_in_phase() {
                 {{"type":"{ty}","config":{{"phase":["install","runtime"]}}}},
                 {{"type":"{ty}","config":{{"phase":"runtime","unrestricted":false,"sign":["git"]}}}}]}}"#
     );
-    let e = parse_json(&json, local("t")).unwrap_err();
+    let e = parse(&json, local("t")).unwrap_err();
     assert_eq!(
         format!("{e:#}"),
         "kit t: ssh-agent@1 entries overlap in phase runtime"
@@ -749,7 +861,7 @@ fn ssh_agent_entries_of_one_kit_must_not_overlap_in_phase() {
                 {{"type":"{ty}","config":{{"phase":"install"}}}},
                 {{"type":"{ty}","config":{{"phase":"runtime"}}}}]}}"#
     );
-    assert_eq!(parse_json(&json, local("t")).unwrap().caps.len(), 2);
+    assert_eq!(parse(&json, local("t")).unwrap().caps.len(), 2);
 }
 
 #[test]
@@ -769,7 +881,7 @@ fn kit_names_are_restricted() {
 #[test]
 fn name_comes_from_the_source_not_display_name() {
     let json = r#"{"schemaVersion":"3","kind":"mixin","displayName":"Fancy Name"}"#;
-    let name = |src| parse_json(json, src).unwrap().name;
+    let name = |src| parse(json, src).unwrap().name;
     assert_eq!(
         name(Source::Registry(
             "docker.io/acme/sbx-kit-team:1.0@sha256:abc".into()
@@ -809,13 +921,13 @@ fn a_published_kits_build_arguments_are_not_required() {
     // `version` only fed the build, which is done.
     let d = r#"{"schemaVersion":"3","kind":"workload","name":"w",
             "args":{"version":{"required":true,"buildArg":"VERSION"},"run":{"required":true}}}"#;
-    let published = parse_json(d, Source::Registry("acme/w:1".into())).unwrap();
+    let published = parse(d, Source::Registry("acme/w:1".into())).unwrap();
     assert!(!published.args["version"].required);
     assert!(
         published.args["run"].required,
         "a runtime argument stays required"
     );
-    let local = parse_json(d, Source::LocalV3("/k/w".into())).unwrap();
+    let local = parse(d, Source::LocalV3("/k/w".into())).unwrap();
     assert!(
         local.args["version"].required,
         "a kit still to build needs it"

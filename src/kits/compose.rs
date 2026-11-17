@@ -331,7 +331,7 @@ mod tests {
     }
 
     fn kit(name: &str, content: Content, digest: &str) -> Kit {
-        let mut k = crate::kits::v3::parse_json(DESC, Source::Registry(name.into())).unwrap();
+        let mut k = crate::kits::v3::parse(DESC, Source::Registry(name.into())).unwrap();
         k.name = name.into();
         k.digest = Some(digest.into());
         k.content = content;

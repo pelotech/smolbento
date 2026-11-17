@@ -71,7 +71,11 @@ values aren't secret: they reach the environment and smolvm's machine config, an
 `bento smolvm machine status`), in templates saved from it, and in their `--output` archives. Put secrets in
 [credentials](network-and-secrets.md#secrets). An argument with no value and no default fails with `create-phase kit arg
 "x" has no resolved value`; `--kit-arg x=` sets it empty. `--kit-arg` without a kit is an error.
-Unquoted numbers and booleans in `default:` and `enum:` are read as strings.
+Unquoted numbers and booleans in `default:` and `enum:` are read as strings. A `pattern:` has to
+match the whole value, as if it were written `^(?:…)$`.
+
+In a kit, `${{ kit.args.NAME }}` and `${{ kit.env.NAME }}` are replaced. Any other `${{ … }}`, such
+as a GitHub Actions expression in a file the kit writes, is left as it is.
 
 What a kit does, and when:
 

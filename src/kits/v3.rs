@@ -16,18 +16,12 @@ use crate::kits::model::*;
 
 const NS: &str = "com.docker.sandbox/";
 
-/// Parses a YAML descriptor. YAML goes through `serde_json::Value` so it shares one path with the
-/// JSON form carried in manifest annotations.
+/// Parses a descriptor: authored YAML, or the JSON a published kit carries in its manifest
+/// annotation (YAML reads JSON, and SPEC §9.3 has consumers decode annotations as YAML so older
+/// YAML-valued ones still load).
 pub fn parse(yaml: &str, source: Source) -> Result<Kit> {
     let v: Value = serde_saphyr::from_str(yaml).context("reading the kit descriptor")?;
     from_value(v, source)
-}
-
-pub fn parse_json(json: &str, source: Source) -> Result<Kit> {
-    from_value(
-        serde_json::from_str(json).context("reading the kit descriptor")?,
-        source,
-    )
 }
 
 #[derive(Deserialize)]
@@ -313,8 +307,8 @@ fn body(ty: &str, config: Option<Value>) -> Result<CapBody> {
         "network-policy@2" => {
             let c: NetworkV2 = decode(config)?;
             CapBody::Network {
-                install: c.install.unwrap_or_default().into_rules(),
-                runtime: c.runtime.unwrap_or_default().into_rules(),
+                install: c.install.unwrap_or_default().into_rules("install")?,
+                runtime: c.runtime.unwrap_or_default().into_rules("runtime")?,
             }
         }
         "credential@1" => CapBody::Credential(credential(decode(config)?)?),
@@ -480,11 +474,21 @@ struct RulesV1 {
     deny: Vec<String>,
 }
 
+/// A kit's host pattern: `*` means everything, as `**` does (SPEC network-policy@1).
+fn kit_host(host: String) -> String {
+    if host.trim() == "*" {
+        "**".into()
+    } else {
+        host
+    }
+}
+
 impl RulesV1 {
     fn into_rules(self) -> Rules {
+        let host = |h| NetRule::host(kit_host(h));
         Rules {
-            allow: self.allow.into_iter().map(NetRule::host).collect(),
-            deny: self.deny.into_iter().map(NetRule::host).collect(),
+            allow: self.allow.into_iter().map(host).collect(),
+            deny: self.deny.into_iter().map(host).collect(),
         }
     }
 }
@@ -499,42 +503,102 @@ struct NetworkV2 {
 #[derive(Deserialize, Default)]
 #[serde(deny_unknown_fields)]
 struct RulesV2 {
+    // Each a host, or an `EntryV2` object; `into_rules` decodes them, naming the entry in errors.
     #[serde(default)]
-    allow: Vec<EntryV2>,
+    allow: Vec<Value>,
     #[serde(default)]
-    deny: Vec<EntryV2>,
+    deny: Vec<Value>,
 }
 
+/// A `network-policy@2` entry: hosts, and the requests they're bounded to.
 #[derive(Deserialize)]
 #[serde(deny_unknown_fields)]
 struct EntryV2 {
+    #[serde(default)]
     hosts: Vec<String>,
-    #[serde(default)]
-    methods: Vec<String>,
-    #[serde(default)]
-    paths: Vec<String>,
+    // `None` is omitted (every method or path); `Some(vec![])` is an error.
+    methods: Option<Vec<String>>,
+    paths: Option<Vec<String>>,
+}
+
+/// The HTTP methods a `network-policy@2` entry may name, besides `ANY` on its own.
+const HTTP_METHODS: [&str; 9] = [
+    "GET", "HEAD", "POST", "PUT", "PATCH", "DELETE", "OPTIONS", "TRACE", "CONNECT",
+];
+
+impl EntryV2 {
+    /// SPEC network-policy@2 "Validation". `what` names the entry in errors.
+    fn check(&self, what: &str, allow: bool) -> Result<()> {
+        if self.hosts.is_empty() || self.hosts.iter().any(|h| h.trim().is_empty()) {
+            bail!("{what}: hosts must name at least one host, none empty");
+        }
+        let methods = self.methods.as_deref();
+        if methods.is_some_and(<[String]>::is_empty) {
+            bail!("{what}: an empty methods list grants nothing; omit it, or name the methods");
+        }
+        if self.paths.as_deref().is_some_and(<[String]>::is_empty) {
+            bail!("{what}: an empty paths list grants nothing; omit it, or name the paths");
+        }
+        if self.paths.is_some() && methods.is_none() {
+            bail!("{what}: paths need methods; name them, or use methods: [ANY]");
+        }
+        let methods = methods.unwrap_or_default();
+        for (i, m) in methods.iter().enumerate() {
+            if m != "ANY" && !HTTP_METHODS.contains(&m.as_str()) {
+                bail!("{what}: method {m:?} is not an uppercase HTTP method or ANY");
+            }
+            if methods[..i].contains(m) {
+                bail!("{what}: method {m:?} is listed twice");
+            }
+        }
+        if methods.len() > 1 && methods.iter().any(|m| m == "ANY") {
+            bail!("{what}: ANY covers every method; list it alone");
+        }
+        if let Some(p) = self.paths.iter().flatten().find(|p| !p.starts_with('/')) {
+            bail!("{what}: path {p:?} must start with /");
+        }
+        let bounded = self.methods.is_some() || self.paths.is_some();
+        if allow
+            && bounded
+            && let Some(h) = self.hosts.iter().find(|h| h.contains('*'))
+        {
+            bail!("{what}: a bounded allow entry names its hosts exactly, not {h:?}");
+        }
+        Ok(())
+    }
 }
 
 impl RulesV2 {
-    fn into_rules(self) -> Rules {
-        // One rule per host, each carrying the entry's methods and paths.
-        let flat = |entries: Vec<EntryV2>| {
-            entries
-                .into_iter()
-                .flat_map(|e| {
-                    let (methods, paths) = (e.methods, e.paths);
-                    e.hosts.into_iter().map(move |host| NetRule {
-                        host,
-                        methods: methods.clone(),
-                        paths: paths.clone(),
-                    })
-                })
-                .collect()
+    /// One rule per host, each carrying its entry's methods and paths. `phase` names the
+    /// entries in errors.
+    fn into_rules(self, phase: &str) -> Result<Rules> {
+        let flat = |entries: Vec<Value>, kind: &str| -> Result<Vec<NetRule>> {
+            let mut rules = Vec::new();
+            for (i, v) in entries.into_iter().enumerate() {
+                let what = format!("{phase} {kind} entry {i}");
+                let e = match v {
+                    // A host string is shorthand for an entry naming that host alone.
+                    Value::String(host) => EntryV2 {
+                        hosts: vec![host],
+                        methods: None,
+                        paths: None,
+                    },
+                    v => serde_json::from_value(v).with_context(|| what.clone())?,
+                };
+                e.check(&what, kind == "allow")?;
+                let (methods, paths) = (e.methods.unwrap_or_default(), e.paths.unwrap_or_default());
+                rules.extend(e.hosts.into_iter().map(|host| NetRule {
+                    host: kit_host(host),
+                    methods: methods.clone(),
+                    paths: paths.clone(),
+                }));
+            }
+            Ok(rules)
         };
-        Rules {
-            allow: flat(self.allow),
-            deny: flat(self.deny),
-        }
+        Ok(Rules {
+            allow: flat(self.allow, "allow")?,
+            deny: flat(self.deny, "deny")?,
+        })
     }
 }
 

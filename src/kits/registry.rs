@@ -675,7 +675,7 @@ pub fn read_layout(dir: &Path, source: Source) -> Result<Kit> {
         return Ok(kit);
     }
     let descriptor = kit_descriptor(&manifest, &what)?;
-    let mut kit = v3::parse_json(&descriptor, source)?;
+    let mut kit = v3::parse(&descriptor, source)?;
     let config_digest = manifest["config"]["digest"]
         .as_str()
         .ok_or_else(|| anyhow!("the manifest has no config"))?;
