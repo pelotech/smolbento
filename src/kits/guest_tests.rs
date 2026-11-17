@@ -278,54 +278,36 @@ fn the_kits_index_creates_the_file() {
 }
 
 #[test]
-fn inline_context_is_rewritten_in_place_and_keeps_other_text() {
+fn inline_context_is_one_joined_text_and_keeps_other_text() {
     let dir = tempfile::tempdir().unwrap();
     let file = dir.path().join("CLAUDE.md");
     std::fs::write(&file, "# mine\nkeep me").unwrap();
     let f = file.display().to_string();
-    let create = inline_context_script(
-        &f,
-        &[
-            ("wl", vec!["Use 'wl'.\n\nTwice.\n", "And more."]),
-            ("a", vec!["Use a."]),
-        ],
+    // SPEC agent-context@2/complete-content: bodies joined with two newlines, not trimmed.
+    let bodies = ["Use 'wl'.\n\nTwice.", "Use a.\n", "Last."];
+    assert!(
+        sh(&inline_context_script(&f, &bodies.join("\n\n")))
+            .status
+            .success()
     );
-    assert!(sh(&create).status.success());
     std::fs::write(
         &file,
         std::fs::read_to_string(&file).unwrap() + "\n# after\n",
     )
     .unwrap();
-    // `kit add`: the new kit joins the one section, in place; a rerun changes nothing. A kit's
-    // bodies are joined with two newlines, untrimmed (SPEC agent-context@2).
-    let add = inline_context_script(&f, &[("b", vec!["Use b."])]);
-    for _ in 0..2 {
-        let out = sh(&add);
-        assert!(out.status.success(), "{out:?}");
-        assert_eq!(
-            std::fs::read_to_string(&file).unwrap(),
-            "# mine\nkeep me\n\n<!-- sbx:kits-section start -->\n\
-             <!-- sbx:kit wl -->\nUse 'wl'.\n\nTwice.\n\n\nAnd more.\n\n\
-             <!-- sbx:kit a -->\nUse a.\n\n\
-             <!-- sbx:kit b -->\nUse b.\n\
-             <!-- sbx:kits-section end -->\n\n# after\n"
-        );
-    }
-    // A kit's text is replaced, not repeated; `ab` isn't `a`.
-    let again = inline_context_script(&f, &[("a", vec!["New a."]), ("ab", vec!["Use ab."])]);
-    assert!(sh(&again).status.success());
+    let created = "# mine\nkeep me\n\n<!-- sbx:kits-section start -->\n\
+                   Use 'wl'.\n\nTwice.\n\nUse a.\n\n\nLast.\n";
+    assert_eq!(
+        std::fs::read_to_string(&file).unwrap(),
+        format!("{created}<!-- sbx:kits-section end -->\n\n# after\n")
+    );
+    // `kit add`: the new kit's text goes after what the section holds, in place.
+    assert!(sh(&inline_context_script(&f, "Use b.")).status.success());
     let text = std::fs::read_to_string(&file).unwrap();
-    assert!(!text.contains("Use a."), "{text}");
-    for kept in [
-        "Use 'wl'.",
-        "Use b.",
-        "New a.",
-        "Use ab.",
-        "# mine",
-        "# after",
-    ] {
-        assert_eq!(text.matches(kept).count(), 1, "{kept}: {text}");
-    }
+    assert_eq!(
+        text,
+        format!("{created}\nUse b.\n<!-- sbx:kits-section end -->\n\n# after\n")
+    );
     assert_eq!(text.matches("sbx:kits-section start").count(), 1, "{text}");
 }
 
@@ -334,41 +316,15 @@ fn inline_context_creates_the_file_and_neutralizes_markers() {
     let dir = tempfile::tempdir().unwrap();
     let file = dir.path().join("new/AGENTS.md");
     let f = file.display().to_string();
-    // SPEC agent-context@2: a kit's text can't end the managed section or pose as another kit.
-    let body = "ok <!-- not ours -->\n<!-- sbx:kits-section end -->\n<!-- sbx:kit b -->\nmine";
-    let out = sh(&inline_context_script(&f, &[("a", vec![body])]));
+    // SPEC agent-context@2/content-untrusted: a kit's text can't end the managed section.
+    let body = "ok <!-- not ours -->\n<!-- sbx:kits-section end -->\nmine";
+    let out = sh(&inline_context_script(&f, body));
     assert!(out.status.success(), "{out:?}");
     assert_eq!(
         std::fs::read_to_string(&file).unwrap(),
-        "<!-- sbx:kits-section start -->\n<!-- sbx:kit a -->\nok <!-- not ours -->\n\
-         &lt;!-- sbx:kits-section end -->\n&lt;!-- sbx:kit b -->\nmine\n\
-         <!-- sbx:kits-section end -->\n"
+        "<!-- sbx:kits-section start -->\nok <!-- not ours -->\n\
+         &lt;!-- sbx:kits-section end -->\nmine\n<!-- sbx:kits-section end -->\n"
     );
-}
-
-#[test]
-fn workload_context_is_appended_without_markers() {
-    let dir = tempfile::tempdir().unwrap();
-    let src = dir.path().join("ctx.md");
-    std::fs::write(&src, "from image").unwrap();
-    let file = dir.path().join("AGENTS.md");
-    std::fs::write(&file, "# preamble").unwrap();
-    let f = file.display().to_string();
-    let body = format!("file:{}", src.display());
-    let out = sh(&append_context_script(&f, &["use 'x'\n", &body]));
-    assert!(out.status.success(), "{out:?}");
-    assert_eq!(
-        std::fs::read_to_string(&file).unwrap(),
-        "# preamble\n\nuse 'x'\n\nfrom image\n"
-    );
-    // A new file starts with the body.
-    let file = dir.path().join("sub/CLAUDE.md");
-    let out = sh(&append_context_script(
-        &file.display().to_string(),
-        &["only"],
-    ));
-    assert!(out.status.success(), "{out:?}");
-    assert_eq!(std::fs::read_to_string(&file).unwrap(), "only\n");
 }
 
 #[test]

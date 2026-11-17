@@ -772,10 +772,10 @@ fn upper_env(service: &str) -> String {
 const DEFAULT_CONTEXT_FILE: &str = "AGENTS.md";
 
 /// The `agent-context` requests a sandbox applies, and their version. A sandbox uses one version
-/// for all its kits (the spec refuses `@1` and `@2` together): `pin` when it already has one
-/// (`kit add`), else `@2` when every kit with agent context offers it, else `@1` when every one
-/// offers that. A kit left with no context at that version loses it (a warning); a request that
-/// isn't optional and can't be kept is an error.
+/// for all its kits (SPEC agent-context@2/mixed-versions refuses `@1` and `@2` together): `pin`
+/// when it already has one (`kit add`), else `@2`, unless a kit requires `@1`. Requests of the
+/// other version are skipped when optional (a kit left with none gets a warning) and an error
+/// when required.
 pub fn select_contexts(
     all: &[KitContext],
     pin: Option<u8>,
@@ -783,39 +783,26 @@ pub fn select_contexts(
     if all.is_empty() {
         return Ok((pin, Vec::new()));
     }
-    let other = |v: u8| if v == 1 { 2 } else { 1 };
-    // A request of the other version that its kit doesn't let us skip.
-    let blocker = |v: u8| all.iter().find(|c| c.version == other(v) && !c.optional);
-    let covers = |v: u8| {
-        all.iter()
-            .all(|c| all.iter().any(|o| o.kit == c.kit && o.version == v))
-    };
-    let version = match pin {
-        Some(v) => {
-            if let Some(c) = blocker(v) {
-                bail!(
-                    "kit {}: needs agent-context@{}, but this sandbox's kits use \
-                     agent-context@{v}, and a sandbox uses one version; recreate it with the kit",
-                    c.kit,
-                    c.version
-                );
-            }
-            v
-        }
-        None => match (blocker(2), blocker(1)) {
-            (None, _) if covers(2) => 2,
-            (_, None) if covers(1) => 1,
-            (None, _) => 2,
-            (_, None) => 1,
-            (Some(one), Some(two)) => bail!(
-                "kit {} needs agent-context@1 and kit {} needs agent-context@2, and a sandbox \
-                 uses one version; use kits that offer the same version (a kit can offer both \
-                 as optional)",
-                one.kit,
-                two.kit
+    let required = |v: u8| all.iter().find(|c| c.version == v && !c.optional);
+    let version = pin.unwrap_or(if required(1).is_some() { 1 } else { 2 });
+    let other = if version == 1 { 2 } else { 1 };
+    if let Some(c) = required(other) {
+        match (pin, required(version)) {
+            (None, Some(mine)) => bail!(
+                "kit {} needs agent-context@{version} and kit {} needs agent-context@{other}, \
+                 and a sandbox uses one version; use kits that offer the same version (a kit \
+                 can offer both as optional)",
+                mine.kit,
+                c.kit
             ),
-        },
-    };
+            _ => bail!(
+                "kit {}: needs agent-context@{other}, but this sandbox's kits use \
+                 agent-context@{version}, and a sandbox uses one version; recreate it with the \
+                 kit",
+                c.kit
+            ),
+        }
+    }
     let mut dropped: Vec<&str> = Vec::new();
     for c in all {
         if !all.iter().any(|o| o.kit == c.kit && o.version == version)
@@ -823,9 +810,9 @@ pub fn select_contexts(
         {
             dropped.push(&c.kit);
             crate::kit_warning!(
-                "kit {}: agent-context@{} skipped (this sandbox's kits use agent-context@{version})",
-                c.kit,
-                c.version
+                "kit {}: agent-context@{other} skipped (this sandbox's kits use \
+                 agent-context@{version})",
+                c.kit
             );
         }
     }
@@ -883,11 +870,13 @@ fn profile_path(kit: &str, dir: &str, name: Option<&str>) -> Result<String> {
 }
 
 /// Writes the kits' agent context to each agent file, which is the guest's own: nothing is
-/// written into a mounted workspace.
+/// written into a mounted workspace. The workload kit's context is handled like any kit's.
 ///
-/// `agent-context@2`: every kit's text goes in the file itself, in its kits section.
-/// `@1` is sbx's layout (#15): the workload's own text appended to the file, each mixin's in
-/// `<dir>/kits-agent-context/<kit>.md`, listed in the kits section.
+/// `agent-context@2`: the kits' text goes in the file itself, in its kits section, joined with
+/// two newlines and not trimmed (SPEC agent-context@2/complete-content).
+/// `@1`: the kits section lists where each kit's text is, for the agent to read when it needs
+/// it (SPEC agent-context@1/progressive-surfacing). A `contentFile` is listed where the kit
+/// image has it; inline text is written to `<dir>/kits-agent-context/<kit>.md` first.
 fn context_scripts(
     workload: &str,
     version: Option<u8>,
@@ -895,24 +884,23 @@ fn context_scripts(
     agent_files: &[String],
     mounts: &[&Path],
 ) -> Vec<String> {
-    // Each kit's bodies, in order.
-    let mut kits: Vec<(&str, Vec<&str>)> = Vec::new();
-    for c in contexts {
-        if c.req.content.trim().is_empty() {
-            continue;
-        }
-        match kits.iter_mut().find(|(k, _)| *k == c.kit) {
-            Some((_, bodies)) => bodies.push(&c.req.content),
-            None => kits.push((&c.kit, vec![&c.req.content])),
-        }
-    }
+    let has_body =
+        |c: &&&KitContext| !c.req.content.trim().is_empty() || c.req.content_file.is_some();
+    let contexts: Vec<&&KitContext> = contexts.iter().filter(has_body).collect();
     if agent_files.is_empty() {
-        for (kit, _) in kits.iter().filter(|(k, _)| *k != workload) {
-            crate::kit_warning!("kit {kit}: agent context dropped (no kit declares an agent file)");
+        let mut told: Vec<&str> = Vec::new();
+        for c in contexts.iter().filter(|c| c.kit != workload) {
+            if !told.contains(&&*c.kit) {
+                told.push(&c.kit);
+                crate::kit_warning!(
+                    "kit {}: agent context dropped (no kit declares an agent file)",
+                    c.kit
+                );
+            }
         }
         return Vec::new();
     }
-    if kits.is_empty() {
+    if contexts.is_empty() {
         return Vec::new();
     }
     let inline = version == Some(2);
@@ -930,22 +918,30 @@ fn context_scripts(
             continue;
         }
         if inline {
-            scripts.push(guest::inline_context_script(file, &kits));
+            let bodies: Vec<&str> = contexts.iter().map(|c| c.req.content.as_str()).collect();
+            scripts.push(guest::inline_context_script(file, &bodies.join("\n\n")));
             continue;
         }
-        let mut entries = Vec::new();
-        for (kit, bodies) in &kits {
-            if *kit == workload {
-                scripts.push(guest::append_context_script(file, bodies));
+        // One entry per staged file, and one for a kit's inline text, in kit order.
+        let mut entries: Vec<(String, String)> = Vec::new();
+        for c in &contexts {
+            if let Some(staged) = &c.req.content_file {
+                entries.push((c.kit.clone(), staged.clone()));
                 continue;
             }
-            let path = format!("{dir}/{}/{kit}.md", guest::KITS_CONTEXT_DIR);
-            scripts.push(guest::kit_context_script(&path, bodies));
-            entries.push((kit.to_string(), path));
+            let path = format!("{index_dir}/{}.md", c.kit);
+            if entries.iter().any(|(_, p)| *p == path) {
+                continue;
+            }
+            let bodies: Vec<&str> = contexts
+                .iter()
+                .filter(|o| o.kit == c.kit && o.req.content_file.is_none())
+                .map(|o| o.req.content.as_str())
+                .collect();
+            scripts.push(guest::kit_context_script(&path, &bodies));
+            entries.push((c.kit.clone(), path));
         }
-        if !entries.is_empty() {
-            scripts.push(guest::kits_index_script(file, &entries));
-        }
+        scripts.push(guest::kits_index_script(file, &entries));
     }
     scripts
 }
@@ -1008,6 +1004,7 @@ pub fn needs_recreate(kit: &Kit, args: &BTreeMap<String, String>) -> Result<Vec<
         what.push("environment variables");
     }
     let order = [
+        "agent file",
         "image layers",
         "credentials",
         "ports",

@@ -284,6 +284,20 @@ capabilities:
         root_out(&e.name, "cat /opt/e2e-built/hello"),
         "built in the builder\n"
     );
+    // A mixin that gives only `agent-context@2` text has it in the agent file itself, where
+    // the agent reads it at startup, and not in a file the agent may never open.
+    let parent = e.workspace().parent().unwrap().display().to_string();
+    let agents = root_out(&e.name, &format!("cat {parent}/AGENTS.md"));
+    assert!(
+        agents.contains("Something something\n<!-- sbx:kits-section end -->"),
+        "{agents}"
+    );
+    assert!(
+        !root_sh(&e.name, &format!("test -e {parent}/kits-agent-context"))
+            .status
+            .success(),
+        "no per-kit files: {agents}"
+    );
     let shown = e.ok(&["kit", "inspect", plain.to_str().unwrap()]);
     assert!(shown.contains("Schema: v3"), "{shown}");
     assert!(shown.contains("agent-context@2"), "{shown}");
@@ -896,7 +910,7 @@ agentInstructions:
     let parent = e.workspace().parent().unwrap().to_path_buf();
     let p = parent.display();
     let file = root_out(&e.name, &format!("cat {p}/AGENTS.md"));
-    let section = "<!-- sbx:kit e2e-ctx -->\nUse the e2e tools.\n<!-- sbx:kits-section end -->";
+    let section = "Use the e2e tools.\n<!-- sbx:kits-section end -->";
     assert!(
         file.contains("<!-- sbx:kits-section start -->") && file.contains(section),
         "{file}"
@@ -1197,8 +1211,12 @@ pub(crate) fn nix_kit_gives_agents_nix_and_direnv() {
     assert!(root_sh(&e.name, "getent passwd agent").status.success());
     // Claude's kit and this one both offer agent-context@2: the text is in the agent file.
     let text = root_out(&e.name, "cat /home/agent/.claude/CLAUDE.md");
+    let section = text
+        .split_once("<!-- sbx:kits-section start -->")
+        .and_then(|(_, rest)| rest.split_once("<!-- sbx:kits-section end -->"))
+        .map(|(section, _)| section);
     assert!(
-        text.contains("<!-- sbx:kit nix -->\nNix and direnv are installed."),
+        section.is_some_and(|s| s.contains("Nix and direnv are installed.")),
         "{text}"
     );
 }

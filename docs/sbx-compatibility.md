@@ -397,17 +397,21 @@ with `-D`).
   can't remove them; deny a host instead.
 - Agent context goes in the agent's file in the workspace's parent directory, inside the sandbox
   only: `CLAUDE.md` (claude), `GEMINI.md` (gemini), `AGENTS.md` (others). When kits name files
-  with `directory` and `filename`, it goes in each of those instead, a mixin's too, as the spec
-  requires. `kit add` of a kit that names a file needs a recreate. `agent-context@1` text is laid out as sbx does: the workload's
-  appended, a mixin's in `kits-agent-context/<kit>.md` beside it, listed between
-  `<!-- sbx:kits-section start -->` and `<!-- sbx:kits-section end -->`. `agent-context@2` text
-  (a v2 kit's `agentInstructions` too) is in the file itself, between the same markers,
-  following the spec. sbx 0.54 lists a mixin's `@2` text in the index, as for `@1`, so the two
-  differ there for now. The layout inside the markers (a `<!-- sbx:kit <name> -->` line before
-  each kit's text) is smolbento's own: the spec doesn't set one.
-- A sandbox uses one `agent-context` version for all its kits ([Kits](kits.md#agent-instructions-from-kits)).
-  The spec refuses `@1` and `@2` requests together and leaves the choice between two optional
-  ones to the runtime; sbx's choice isn't measured.
+  with `directory` and `filename`, it goes in each of those instead, a mixin's too, following
+  the spec. `kit add` of a kit that names a file needs a recreate.
+- Both layouts follow the spec ([Kits](kits.md#agent-instructions-from-kits)). `agent-context@1`
+  lists each kit's text between `<!-- sbx:kits-section start -->` and
+  `<!-- sbx:kits-section end -->`, the workload kit's too: a `contentFile` where the kit's image
+  has it, inline text in `kits-agent-context/<kit>.md`. `agent-context@2` text (a v2 kit's
+  `agentInstructions` too) is in the file itself, between the same markers, joined with two
+  newlines. sbx 0.54 lists a mixin's `@2` text in the index, as for `@1`, so the two differ there
+  for now.
+- A sandbox uses one `agent-context` version for all its kits: `@2`, unless a kit requires `@1`.
+  The spec refuses `@1` and `@2` requests together and leaves it to the runtime to accept one;
+  sbx's choice isn't measured. Docker's published agent kits offer both as optional, so they get
+  `@2`; `docker.io/sbx/amp` requires `@1` and gets that.
+- Not done yet: the runtime's own guidance at the top of the file (smolbento writes none), a
+  size limit on the combined text, and per-file required or optional.
 - The settings are `kit.allowedSources` and `kit.allowLocalKits`
   ([Configuration](configuration.md#settings)).
 - A `host-mount@1` directory is `kit-host-mounts/<sha256(kit)>/<sha256(path)>` under

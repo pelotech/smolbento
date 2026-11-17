@@ -982,6 +982,7 @@ fn context(directory: Option<&str>, filename: Option<&str>, content: &str) -> Ca
         filename: filename.map(String::from),
         directory: directory.map(String::from),
         content: content.into(),
+        content_file: None,
     })
 }
 
@@ -1027,15 +1028,17 @@ fn agent_kit_plan(agent: &str, file: &str, mixins: Vec<Kit>) -> Plan {
     resolve(w, mixins, &ArgValues::default()).unwrap()
 }
 
-/// `agent-context@2`: every kit's text in the agent file's kits section.
+/// `agent-context@2`: the kits' text in the agent file's kits section, joined with two newlines.
 fn inline_layout(agent_file: &str, kits: &[(&str, &str)]) -> Vec<String> {
-    let kits: Vec<(&str, Vec<&str>)> = kits.iter().map(|(kit, body)| (*kit, vec![*body])).collect();
-    vec![guest::inline_context_script(agent_file, &kits)]
+    let bodies: Vec<&str> = kits.iter().map(|(_, body)| *body).collect();
+    vec![guest::inline_context_script(
+        agent_file,
+        &bodies.join("\n\n"),
+    )]
 }
 
-/// `agent-context@1`, sbx's layout (#15): each mixin's context in
-/// `<parent>/kits-agent-context/<kit>.md`, one index block in the agent file, both in the
-/// workspace's parent.
+/// `agent-context@1`: each kit's inline context in `<parent>/kits-agent-context/<kit>.md`, and
+/// one index block in the agent file, the workload kit's like any other's.
 fn mixin_layout(agent_file: &str, kits: &[(&str, &str)]) -> Vec<String> {
     let dir = agent_file.rsplit_once('/').unwrap().0;
     let mut out = Vec::new();
@@ -1105,8 +1108,8 @@ fn a_workload_appends_its_own_context_and_records_its_agent_file() {
     let p = resolve(w, vec![mixin], &ArgValues::default()).unwrap();
     let mut req = in_workspace("/w/proj");
     let (steps, _) = run(&p, &mut req, &mut Policy::default()).unwrap();
-    let mut want = vec![guest::append_context_script("/w/AGENTS.md", &["wl body"])];
-    want.extend(mixin_layout("/w/AGENTS.md", &[("m", "use m")]));
+    // SPEC agent-context@1: the workload's body is indexed like any kit's.
+    let want = mixin_layout("/w/AGENTS.md", &[("wl", "wl body"), ("m", "use m")]);
     assert_eq!(steps.context, want);
     assert_eq!(req.agent_files, ["/w/AGENTS.md"]);
     let labels = create::spec(&req).labels;
@@ -1125,7 +1128,7 @@ fn a_workload_appends_its_own_context_and_records_its_agent_file() {
     let (steps, _) = run(&p, &mut req, &mut Policy::default()).unwrap();
     assert_eq!(
         steps.context,
-        [guest::append_context_script("/ctx/AGENTS.md", &["b"])]
+        mixin_layout("/ctx/AGENTS.md", &[("wl", "b")])
     );
 }
 
@@ -1238,8 +1241,10 @@ fn every_explicit_agent_file_gets_every_kits_context() {
     let (steps, _) = run(&p, &mut in_workspace("/w/proj"), &mut Policy::default()).unwrap();
     let mut want = Vec::new();
     for file in ["/home/agent/.wl/AGENTS.md", "/home/agent/.codex/AGENTS.md"] {
-        want.push(guest::append_context_script(file, &["wl body"]));
-        want.extend(mixin_layout(file, &[("codex", "use codex")]));
+        want.extend(mixin_layout(
+            file,
+            &[("wl", "wl body"), ("codex", "use codex")],
+        ));
     }
     assert_eq!(steps.context, want);
 
@@ -1279,6 +1284,43 @@ fn a_mounted_agent_file_is_skipped_and_the_others_written() {
 }
 
 #[test]
+fn a_staged_context_file_is_listed_where_the_image_has_it() {
+    // As docker.io/sbx/amp declares it: a required `@1` `contentFile` and a file name.
+    // SPEC agent-context@1: the index points at the staged path; the body isn't copied.
+    let staged = "/usr/share/sandbox/kit/amp/amp-context.md";
+    let w = with(
+        workload(),
+        "agent-context@1",
+        false,
+        CapBody::AgentContext(AgentContextReq {
+            filename: Some("AGENTS.md".into()),
+            directory: None,
+            content: String::new(),
+            content_file: Some(staged.into()),
+        }),
+    );
+    // A mixin offering both versions follows the workload's `@1`.
+    let mut m = context_mixin_at(1, "m", Source::LocalV3("/k/m".into()), "use m");
+    m.caps[0].optional = true;
+    let m = with(m, "agent-context@2", true, context(None, None, "use m"));
+    let p = resolve(w, vec![m], &ArgValues::default()).unwrap();
+    let mut req = in_workspace("/w/proj");
+    let (steps, _) = run(&p, &mut req, &mut Policy::default()).unwrap();
+    let inline = "/w/kits-agent-context/m.md";
+    assert_eq!(
+        steps.context,
+        [
+            guest::kit_context_script(inline, &["use m"]),
+            guest::kits_index_script(
+                "/w/AGENTS.md",
+                &[("wl".into(), staged.into()), ("m".into(), inline.into())]
+            ),
+        ]
+    );
+    assert_eq!(req.agent_context, Some(1));
+}
+
+#[test]
 fn a_sandbox_uses_one_context_version_for_all_its_kits() {
     let m = |version| context_mixin_at(version, "m", Source::LocalV3("/k/m".into()), "use m");
     let both = [(1, true), (2, true)];
@@ -1290,14 +1332,22 @@ fn a_sandbox_uses_one_context_version_for_all_its_kits() {
         };
         run(&p, &mut req, &mut Policy::default()).map(|(steps, _)| (req.agent_context, steps))
     };
-    // A kit offering both follows the kit that offers one.
+    // `@2`, unless a kit requires `@1`: a kit offering both then follows it.
     let (version, steps) = chosen(context_workload(&both, "wl"), m(1), None).unwrap();
     assert_eq!(version, Some(1));
-    let mut want = vec![guest::append_context_script("/w/AGENTS.md", &["wl"])];
-    want.extend(mixin_layout("/w/AGENTS.md", &[("m", "use m")]));
+    let want = mixin_layout("/w/AGENTS.md", &[("wl", "wl"), ("m", "use m")]);
     assert_eq!(steps.context, want, "once, not once per version");
     let (version, _) = chosen(context_workload(&both, "wl"), m(2), None).unwrap();
     assert_eq!(version, Some(2));
+    // A kit that only offers `@1`, as optional, is skipped rather than deciding for the others.
+    let mut offered = m(1);
+    offered.caps[0].optional = true;
+    let (version, steps) = chosen(context_workload(&both, "wl"), offered, None).unwrap();
+    assert_eq!(version, Some(2));
+    assert_eq!(
+        steps.context,
+        inline_layout("/w/AGENTS.md", &[("wl", "wl")])
+    );
 
     // SPEC agent-context@2: selected @1 and @2 requests are refused, not mixed.
     let e = chosen(context_workload(&[(1, false)], "wl"), m(2), None).unwrap_err();

@@ -875,9 +875,10 @@ fn hooks_files_and_contexts_expand_args_and_env() {
             "c@1",
             false,
             CapBody::AgentContext(AgentContextReq {
-                filename: None,
-                directory: None,
+                filename: Some("${{ kit.args.name }}.md".into()),
+                directory: Some("/home/${{ kit.args.name }}".into()),
                 content: "for ${{ kit.args.name }}".into(),
+                content_file: None,
             }),
         );
     let v = ArgValues::parse(&[], &["name=alice".into()]).unwrap();
@@ -892,7 +893,11 @@ fn hooks_files_and_contexts_expand_args_and_env() {
     );
     assert_eq!(p.merged.files[0].path, "/f/alice");
     assert_eq!(p.merged.files[0].content, b"x");
-    assert_eq!(p.merged.contexts[0].req.content, "for alice");
+    // SPEC §6: the file's name and directory expand too.
+    let context = &p.merged.contexts[0].req;
+    assert_eq!(context.content, "for alice");
+    assert_eq!(context.directory.as_deref(), Some("/home/alice"));
+    assert_eq!(context.filename.as_deref(), Some("alice.md"));
     assert!(!p.args["m"].contains_key("opt"));
 }
 
@@ -936,6 +941,7 @@ fn unknown_args_and_undeclared_placeholders_fail() {
             filename: None,
             directory: None,
             content: "${{ kit.args.zzz }}".into(),
+            content_file: None,
         }),
     );
     assert!(run(workload("w"), vec![m]).is_err());

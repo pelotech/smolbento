@@ -164,6 +164,7 @@ fn parse_warn(yaml: &str, dir: &Path) -> Result<(Kit, Vec<String>)> {
                 filename: a.filename,
                 directory: None,
                 content,
+                content_file: None,
             }),
         ));
     }

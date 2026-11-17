@@ -361,8 +361,10 @@ pub struct FileReq {
 pub struct AgentContextReq {
     pub filename: Option<String>,
     pub directory: Option<String>,
-    /// Inline body, or `file:<path>` for a `contentFile` staged in the kit image.
+    /// The inline body; empty for none.
     pub content: String,
+    /// `agent-context@1` `contentFile`: the body's path in the kit image, where the agent reads it.
+    pub content_file: Option<String>,
 }
 
 /// A YAML scalar: sbx accepts an unquoted number or bool where an arg default or enum value is

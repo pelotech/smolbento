@@ -159,19 +159,21 @@ without a `directory` counts only in the workload kit.
 
 How the text gets there depends on the `agent-context` version the kits declare:
 
-- **`agent-context@2`** (and a v2 kit's `agentInstructions`): every kit's text is in the file
+- **`agent-context@2`** (and a v2 kit's `agentInstructions`): the kits' text is in the file
   itself, so the agent reads it at startup. It sits between `<!-- sbx:kits-section start -->` and
-  `<!-- sbx:kits-section end -->`, each kit's text under a `<!-- sbx:kit <name> -->` line.
-- **`agent-context@1`**: the workload kit's text is appended to the file. Each mixin's text goes to
-  `kits-agent-context/<kit>.md` beside it, and the file gets a `## Kits` list between the same two
-  markers. The agent reads a kit's file when it needs it.
+  `<!-- sbx:kits-section end -->`, one kit's text after another, a blank line apart.
+- **`agent-context@1`**: the file gets a `## Kits` list between the same two markers, one line per
+  kit saying where its text is. The agent reads a kit's text when it needs it. Text a kit ships as
+  a file (`contentFile`) is listed where the kit's image has it; inline text is written to
+  `kits-agent-context/<kit>.md` beside the agent file.
 
-A sandbox uses one version for all its kits, as the kit spec requires. It is `@2` when every kit
-with instructions offers it, else `@1` when every kit offers that. A kit can offer both by declaring
-each with `optional: true`, as the shipped kits and sbx's agents do. Kits that require different
-versions can't share a sandbox, and `create` says which. `kit add` keeps to the sandbox's version: a
-kit that requires the other one needs a recreate, and one that offers it as optional is added
-without its instructions.
+A sandbox uses one version for all its kits, as the kit spec requires. It is `@2`, unless a kit
+requires `@1` (declares it without `optional: true`). A kit can offer both by declaring each with
+`optional: true`, as the shipped kits and sbx's agents do; it then follows the others. A kit that
+offers only the version not in use, as optional, is added without its instructions
+(`kit.showWarnings` shows a warning). Kits that require different versions can't share a sandbox,
+and `create` says which. `kit add` keeps to the sandbox's version: a kit that requires the other
+one needs a recreate.
 
 Text outside the markers is yours and is kept. Unlike sbx, smolbento writes no platform preamble.
 
@@ -181,8 +183,9 @@ Text outside the markers is yours and is kept. Unlike sbx, smolbento writes no p
   dropped (`kit.showWarnings` shows a warning).
 - `kit add` of a kit that names its own file needs a recreate (`recreate required: agent file`): a
   new file gets every kit's instructions, and only a create has them all.
-- A kit can't end the section or pass its text off as another kit's: a `<!-- sbx:` marker in kit
-  text is written as `&lt;!-- sbx:`.
+- A kit can't end the section: a `<!-- sbx:` marker in kit text is written as `&lt;!-- sbx:`.
+- `kit add` puts the new kit's text after what the section holds. If an add fails partway and you
+  run it again, that kit's `@2` text is there twice; remove one copy by hand.
 - Files are owned by `agent`, except a file the image already has owned by root, which keeps its
   owner.
 - With `--clone` and a subdirectory workspace, the parent directory is in the clone, so the files

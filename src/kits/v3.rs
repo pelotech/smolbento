@@ -369,17 +369,14 @@ fn body(ty: &str, config: Option<Value>) -> Result<CapBody> {
         "lifecycle@1" => CapBody::Lifecycle(lifecycle(decode(config)?)),
         "agent-context@1" => {
             let c: AgentContextV1 = decode(config)?;
-            let content = match (c.content, c.content_file) {
-                (Some(_), Some(_)) => bail!("content and contentFile are mutually exclusive"),
-                (Some(c), None) => c,
-                // The body is staged in the kit image; later code reads it from there.
-                (None, Some(f)) => format!("file:{f}"),
-                (None, None) => String::new(),
-            };
+            if c.content.is_some() && c.content_file.is_some() {
+                bail!("content and contentFile are mutually exclusive");
+            }
             CapBody::AgentContext(AgentContextReq {
                 filename: c.filename,
                 directory: c.directory,
-                content,
+                content: c.content.unwrap_or_default(),
+                content_file: c.content_file,
             })
         }
         "agent-context@2" => {
@@ -388,6 +385,7 @@ fn body(ty: &str, config: Option<Value>) -> Result<CapBody> {
                 filename: c.filename,
                 directory: c.directory,
                 content: c.content.unwrap_or_default(),
+                content_file: None,
             })
         }
         "sbx@1" => {
