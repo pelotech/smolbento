@@ -1,5 +1,23 @@
 # Changelog
 
+## [0.31.0](https://github.com/pelotech/smolbento/compare/v0.30.0...v0.31.0) (2026-11-17)
+
+
+### Features
+
+* **kits:** write agent context to every agent file a kit names ([#153](https://github.com/pelotech/smolbento/issues/153)) ([21fbb04](https://github.com/pelotech/smolbento/commit/21fbb04a398c67800e793b00b85972abcdfae424))
+
+
+### Bug Fixes
+
+* **kits:** write agent-context@2 text into the agent file ([#152](https://github.com/pelotech/smolbento/issues/152)) ([07d83a9](https://github.com/pelotech/smolbento/commit/07d83a93cd40a6fb073e0ad7f347cd2c20351be2))
+
+
+### Chores
+
+* **deps:** accept the chrono and humantime unmaintained advisories ([#154](https://github.com/pelotech/smolbento/issues/154)) ([41ec4d0](https://github.com/pelotech/smolbento/commit/41ec4d0cc28b19873b4cb6001b67cca7d8ad6b69))
+* **main:** release nix-kit 0.2.1 ([#156](https://github.com/pelotech/smolbento/issues/156)) ([36d515c](https://github.com/pelotech/smolbento/commit/36d515c4af503744164542bf70615e4823f228af))
+
 ## [0.30.0](https://github.com/pelotech/smolbento/compare/v0.29.1...v0.30.0) (2026-11-16)
 
 
