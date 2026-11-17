@@ -28,4 +28,20 @@ smolbento suits you when you want an open-source tool with no account and no bac
 macOS or Linux.
 
 Where a command, flag or kit behaves differently, [sbx compatibility](sbx-compatibility.md) lists
-it. Those notes describe the versions named there and may lag behind a newer sbx release.
+it.
+
+## What we haven't verified
+
+The Docker Sandboxes column is our reading of Docker's documentation and of the sbx versions named
+in [sbx compatibility](sbx-compatibility.md). Docker's own documentation is the authority, and sbx
+changes quickly, so a row here can be out of date.
+
+- **Taken from Docker's documentation, not tried by us:** Windows and Ubuntu host support, cloud
+  sandboxes and organization policy. smolbento has none of these to compare against.
+- **Not checked at all:** how sbx is licensed. The table says only how it is distributed.
+- **Measured on specific versions:** command, flag and kit behaviour. The compatibility page names
+  the version for each area, and lists what is
+  [not measured yet](sbx-compatibility.md#not-measured-against-sbx-yet).
+
+If something here is wrong or out of date, please
+[open an issue](https://github.com/pelotech/smolbento/issues) and we'll correct it.

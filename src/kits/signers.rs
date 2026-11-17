@@ -133,7 +133,7 @@ mod tests {
     use super::*;
 
     #[test]
-    fn the_default_trusts_docker_employees() {
+    fn the_default_trusts_docker_identities() {
         let p = parse(
             r#"[{"identityRegexp":"^.*@docker\\.com$","issuer":"https://accounts.google.com"}]"#,
             false,

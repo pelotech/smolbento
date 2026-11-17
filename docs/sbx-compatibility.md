@@ -7,6 +7,12 @@ and `--json` output against v0.53.
 Anything not implemented yet still parses and exits with status **2** and prints a message, so
 scripts fail clearly instead of doing something different.
 
+What this page says about sbx is what we measured on those versions, or read in Docker's
+documentation. It can be out of date or mistaken: Docker's documentation is the authority. Items
+marked "not measured" are our best guess, and [Not measured against sbx
+yet](#not-measured-against-sbx-yet) lists more. Corrections are welcome as
+[issues](https://github.com/pelotech/smolbento/issues).
+
 On this page: [Works today](#works-today) · [Parses, not implemented yet (exit
 2)](#parses-not-implemented-yet-exit-2) · [Never (Docker Cloud only, exit
 2)](#never-docker-cloud-only-exit-2) · [SSH](#ssh) · [Differences you'll

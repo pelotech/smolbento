@@ -31,7 +31,7 @@ An environment variable beats the config file, which beats the default. Booleans
 | `kit.showWarnings` | `SMOLBENTO_KIT_SHOW_WARNINGS` | `false` | Show what smolbento skips or ignores of a kit's optional parts: unsupported optional capabilities, optional credentials without a secret, ignored v2 fields. `-D` shows them too. Off by default because the kit works without them. smolbento only. |
 | `kit.allowLocalKits` | `SMOLBENTO_KIT_ALLOW_LOCAL_KITS` | `true` | Allow kits from local directories, descriptor files and Smolfiles. |
 | `kit.requireSignature` | `SMOLBENTO_KIT_REQUIRE_SIGNATURE` | `false` | Load registry kits only when a trusted signer signed them. Refuses local kits. See [Kit signatures](#kit-signatures). |
-| `kit.trustedSigners` | `SMOLBENTO_KIT_TRUSTED_SIGNERS` | Docker employees (`identityRegexp` `^.*@docker\.com$`, `issuer` `https://accounts.google.com`) and smolbento's kit releases (see [Kit signatures](#kit-signatures)) | JSON array of trusted signers. See [Kit signatures](#kit-signatures). |
+| `kit.trustedSigners` | `SMOLBENTO_KIT_TRUSTED_SIGNERS` | Docker identities (`identityRegexp` `^.*@docker\.com$`, `issuer` `https://accounts.google.com`) and smolbento's kit releases (see [Kit signatures](#kit-signatures)) | JSON array of trusted signers. See [Kit signatures](#kit-signatures). |
 | `kit.ignoreTransparencyLog` | `SMOLBENTO_KIT_IGNORE_TRANSPARENCY_LOG` | `false` | Verify keyless kit signatures without requiring a Rekor transparency-log entry. |
 | `clipboard.textCopy` | `SMOLBENTO_CLIPBOARD_TEXT_COPY` | `false` | Let sandboxes copy text to your clipboard (`pbcopy`, `wl-copy`, `xclip`, `xsel`, `clip.exe` in the sandbox). See [Browser and clipboard](usage.md#browser-and-clipboard). |
 | `browser.enabled` | `SMOLBENTO_BROWSER_ENABLED` | `true` | Let sandboxes open `https://` URLs in your browser. `false` also stops in-sandbox logins that redirect to `localhost`. See [Details](#details). |
@@ -120,7 +120,7 @@ are they from `kit.allowedSources`.
 
 `kit.ignoreTransparencyLog` relaxes only the keyless check, which otherwise needs a Rekor entry.
 
-The default trusts Docker employees, as in sbx, and smolbento's own kit releases: issuer
+The default trusts Docker identities, as in sbx, and smolbento's own kit releases: issuer
 `https://token.actions.githubusercontent.com`, identity
 `https://github.com/pelotech/smolbento/.github/workflows/release-please.yaml@refs/heads/main`.
 

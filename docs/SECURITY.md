@@ -58,7 +58,7 @@ kits you trust.
   [Kit sources](configuration.md#kit-sources).
 - Signatures are checked only when `kit.requireSignature` is `true` (default `false`). Then a
   registry kit needs a signature from a `kit.trustedSigners` signer, and local kits are refused.
-  The default signers are Docker employees and smolbento's release workflow.
+  The default signers are Docker identities (`@docker.com`) and smolbento's release workflow.
   `--offline` skips the check. See [Kit signatures](configuration.md#kit-signatures).
 - Images a kit names (a workload kit's image, and the base its layers are added to) are pulled
   without a `kit.allowedSources` check, like a Dockerfile's `FROM`.
