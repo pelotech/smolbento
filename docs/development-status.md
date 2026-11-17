@@ -79,9 +79,6 @@ meanwhile.
   `--rebase-from-image` drops the first template's files. Meanwhile: saving is refused.
 - **Per-port host access.** smolvm opens the host's loopback to a guest only as a whole (gateway CIDR
   `100.96.0.1/32`). Meanwhile: a `localhost:PORT` rule opens every host port (documented).
-- **Live allow list with no hosts left.** A `machine update` that leaves CIDRs but no hosts doesn't revoke
-  removed hosts until restart (still in 1.35). Meanwhile: smolbento sets the placeholder host
-  `smolbento.invalid` first, then removes it.
 - **Registry credentials for sandboxes.** `secret set --registry --sandbox/--all-sandboxes` would give a
   sandbox's own `docker pull` a login. smolvm reads credentials only at start, and registry tokens last
   minutes, so smolvm must mint or refresh the token. Meanwhile: registry logins are host-only, and the
