@@ -909,13 +909,6 @@ fn context_scripts(
         return Vec::new();
     }
     if inline {
-        let kits: Vec<(String, Vec<String>)> = kits
-            .iter()
-            .map(|(kit, bodies)| {
-                let bodies = bodies.iter().map(|b| b.to_string()).collect();
-                (kit.to_string(), bodies)
-            })
-            .collect();
         return vec![guest::inline_context_script(file, &kits)];
     }
     let mut scripts = Vec::new();

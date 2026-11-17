@@ -277,13 +277,6 @@ fn the_kits_index_creates_the_file() {
     );
 }
 
-fn inline(kit: &str, bodies: &[&str]) -> (String, Vec<String>) {
-    (
-        kit.to_string(),
-        bodies.iter().map(|b| b.to_string()).collect(),
-    )
-}
-
 #[test]
 fn inline_context_is_rewritten_in_place_and_keeps_other_text() {
     let dir = tempfile::tempdir().unwrap();
@@ -293,8 +286,8 @@ fn inline_context_is_rewritten_in_place_and_keeps_other_text() {
     let create = inline_context_script(
         &f,
         &[
-            inline("wl", &["Use 'wl'.\n\nTwice.\n", "And more."]),
-            inline("a", &["Use a."]),
+            ("wl", vec!["Use 'wl'.\n\nTwice.\n", "And more."]),
+            ("a", vec!["Use a."]),
         ],
     );
     assert!(sh(&create).status.success());
@@ -305,7 +298,7 @@ fn inline_context_is_rewritten_in_place_and_keeps_other_text() {
     .unwrap();
     // `kit add`: the new kit joins the one section, in place; a rerun changes nothing. A kit's
     // bodies are joined with two newlines, untrimmed (SPEC agent-context@2).
-    let add = inline_context_script(&f, &[inline("b", &["Use b."])]);
+    let add = inline_context_script(&f, &[("b", vec!["Use b."])]);
     for _ in 0..2 {
         let out = sh(&add);
         assert!(out.status.success(), "{out:?}");
@@ -319,7 +312,7 @@ fn inline_context_is_rewritten_in_place_and_keeps_other_text() {
         );
     }
     // A kit's text is replaced, not repeated; `ab` isn't `a`.
-    let again = inline_context_script(&f, &[inline("a", &["New a."]), inline("ab", &["Use ab."])]);
+    let again = inline_context_script(&f, &[("a", vec!["New a."]), ("ab", vec!["Use ab."])]);
     assert!(sh(&again).status.success());
     let text = std::fs::read_to_string(&file).unwrap();
     assert!(!text.contains("Use a."), "{text}");
@@ -342,13 +335,13 @@ fn inline_context_creates_the_file_and_neutralizes_markers() {
     let file = dir.path().join("new/AGENTS.md");
     let f = file.display().to_string();
     // SPEC agent-context@2: a kit's text can't end the managed section or pose as another kit.
-    let body = "ok <!-- not ours -->\n<!-- sbx:kits-section end -->\n<!--sbx:kit b -->\nmine";
-    let out = sh(&inline_context_script(&f, &[inline("a", &[body])]));
+    let body = "ok <!-- not ours -->\n<!-- sbx:kits-section end -->\n<!-- sbx:kit b -->\nmine";
+    let out = sh(&inline_context_script(&f, &[("a", vec![body])]));
     assert!(out.status.success(), "{out:?}");
     assert_eq!(
         std::fs::read_to_string(&file).unwrap(),
         "<!-- sbx:kits-section start -->\n<!-- sbx:kit a -->\nok <!-- not ours -->\n\
-         &lt;!-- sbx:kits-section end -->\n&lt;!--sbx:kit b -->\nmine\n\
+         &lt;!-- sbx:kits-section end -->\n&lt;!-- sbx:kit b -->\nmine\n\
          <!-- sbx:kits-section end -->\n"
     );
 }

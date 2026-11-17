@@ -1029,10 +1029,7 @@ fn agent_kit_plan(agent: &str, file: &str, mixins: Vec<Kit>) -> Plan {
 
 /// `agent-context@2`: every kit's text in the agent file's kits section.
 fn inline_layout(agent_file: &str, kits: &[(&str, &str)]) -> Vec<String> {
-    let kits: Vec<(String, Vec<String>)> = kits
-        .iter()
-        .map(|(kit, body)| (kit.to_string(), vec![body.to_string()]))
-        .collect();
+    let kits: Vec<(&str, Vec<&str>)> = kits.iter().map(|(kit, body)| (*kit, vec![*body])).collect();
     vec![guest::inline_context_script(agent_file, &kits)]
 }
 
