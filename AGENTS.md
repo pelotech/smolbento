@@ -27,6 +27,12 @@ only some checkouts have it. If it's there, read the relevant section before cha
 - **sbx compatibility:** flags and output match the sbx CLI reference. Record intentional differences
   in `docs/sbx-compatibility.md`; don't diverge silently. smolbento-only commands must not collide with
   sbx command names, and are added only when implemented.
+- **Kits conform to the kit spec.** The [sandbox kit spec](https://github.com/docker/sandbox-kit-spec)
+  decides how a kit is read and applied, at the commit in `SPEC_COMMIT` (`src/kits/mod.rs`). Before
+  changing how a capability is applied, read its page under the spec's
+  `docs/spec/capabilities/com.docker.sandbox/`, and name the rule's `tck:` id in the test. Where sbx
+  behaves differently from the spec, follow the spec and record the difference in
+  `docs/sbx-compatibility.md`. `just conformance` runs the spec's own suite.
 - macOS and Linux now. Keep path handling in `workspace` so Windows can be added later. smolvm itself
   runs on Windows hosts, with the caveats in its `docs/limitations.md`.
 
