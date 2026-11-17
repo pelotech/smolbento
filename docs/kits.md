@@ -149,8 +149,13 @@ repositories and key it signs with, the `signingKey` argument and its limits.
 
 Kit instructions go in the agent's file in the workspace's parent directory, inside the sandbox
 only. For workspace `~/src/app`, claude reads `~/src/CLAUDE.md`, gemini `~/src/GEMINI.md`, and other
-agents `~/src/AGENTS.md`. With no workspace, `/home/agent` is used. A workload kit can name its own
-file.
+agents `~/src/AGENTS.md`. With no workspace, `/home/agent` is used.
+
+A kit can name the file instead, with `directory` and `filename` in its `agent-context`, as an
+agent's kit does for the place its agent reads at startup (`/home/agent/.claude/CLAUDE.md`). Any
+kit can, a mixin too. Every file named this way gets every kit's instructions, so two agents in one
+sandbox each read all of them, and the file beside the workspace isn't written. A `filename`
+without a `directory` counts only in the workload kit.
 
 How the text gets there depends on the `agent-context` version the kits declare:
 
@@ -172,7 +177,10 @@ Text outside the markers is yours and is kept. Unlike sbx, smolbento writes no p
 
 - Nothing is written on your machine. A file that would land in a mounted workspace is skipped with
   a warning.
-- A workload kit with no agent file drops mixin instructions (`kit.showWarnings` shows a warning).
+- When no kit names a file and the workload kit declares no `agent-context`, mixin instructions are
+  dropped (`kit.showWarnings` shows a warning).
+- `kit add` of a kit that names its own file needs a recreate (`recreate required: agent file`): a
+  new file gets every kit's instructions, and only a create has them all.
 - A kit can't end the section or pass its text off as another kit's: a `<!-- sbx:` marker in kit
   text is written as `&lt;!-- sbx:`.
 - Files are owned by `agent`, except a file the image already has owned by root, which keeps its

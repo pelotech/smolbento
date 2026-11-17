@@ -58,7 +58,7 @@ kits you trust.
   [Kit sources](configuration.md#kit-sources).
 - Signatures are checked only when `kit.requireSignature` is `true` (default `false`). Then a
   registry kit needs a signature from a `kit.trustedSigners` signer, and local kits are refused.
-  The default signers are Docker employees and smolbento's release workflow.
+  The default signers are Docker identities (`@docker.com`) and smolbento's release workflow.
   `--offline` skips the check. See [Kit signatures](configuration.md#kit-signatures).
 - Images a kit names (a workload kit's image, and the base its layers are added to) are pulled
   without a `kit.allowedSources` check, like a Dockerfile's `FROM`.
@@ -77,8 +77,8 @@ kits you trust.
   or to the service's own hosts if it names none.
   - A **built-in** service's secret (`github`, `anthropic`, ...) goes only to that service's own
     hosts. Naming another host fails: "kit K wants to send your github secret to HOST, which github
-    doesn't use; refusing". sbx trusts the kit here; smolbento doesn't, because Docker Hub kits
-    load by default.
+    doesn't use; refusing". sbx asks you to approve the kit's hosts instead; smolbento adds this
+    check because Docker Hub kits load by default.
   - A **custom** service's secret (`bento secret set-custom`) goes to any host the kit names. `create`
     and `kit add` print "kit K sends your SERVICE secret to HOSTS".
   - `bento kit inspect REF` lists each credential's service and hosts under `Credentials:`

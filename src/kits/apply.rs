@@ -167,16 +167,17 @@ pub fn apply(
         .map(guest::file_script)
         .collect();
     let (context_version, contexts) = select_contexts(&m.contexts, req.agent_context)?;
-    let agent_file = match req.agent_file.clone() {
-        Some(f) => Some(f),
-        None => agent_file(&plan.workload.name, &contexts, &req.workdir())?,
+    let agent_files = if req.agent_files.is_empty() {
+        agent_files(&plan.workload.name, &contexts, &req.workdir())?
+    } else {
+        req.agent_files.clone()
     };
     let mounts: Vec<&Path> = req.workspaces.iter().map(|w| w.path.as_path()).collect();
     steps.context = context_scripts(
         &plan.workload.name,
         context_version,
         &contexts,
-        agent_file.as_deref(),
+        &agent_files,
         &mounts,
     );
     // Settled by the first text written: until then a later kit is free to choose.
@@ -190,7 +191,7 @@ pub fn apply(
         .caps
         .iter()
         .any(|c| matches!(c.body, CapBody::Sbx));
-    set_workload_fields(req, &plan.workload, workdir, agent_file);
+    set_workload_fields(req, &plan.workload, workdir, agent_files);
     record_kits(&kits, &plan.args, req)?;
     steps.kit_names = req.kits.iter().map(|k| k.name.clone()).collect();
     req.long_running = m.long_running;
@@ -356,12 +357,12 @@ fn set_workload_fields(
     req: &mut CreateRequest,
     workload: &Kit,
     workdir: Option<&str>,
-    agent_file: Option<String>,
+    agent_files: Vec<String>,
 ) {
     req.command = workload.command.clone();
     req.image_workdir = workdir.map(String::from);
     // `kit add` can't reload the workload: it reads this back from `sbx.agent-file`.
-    req.agent_file = agent_file;
+    req.agent_files = agent_files;
     req.user = workload.config.as_ref().map(|c| match c.user.as_str() {
         "" => "0".to_string(),
         u => u.to_string(),
@@ -832,37 +833,57 @@ pub fn select_contexts(
     Ok((Some(version), kept))
 }
 
-/// The agent file in the guest: the workload kit's own `agent-context` file, in the parent of
-/// `workdir` unless it names a directory (sbx #15). `None` when the workload declares none.
-pub fn agent_file(
-    workload: &str,
-    contexts: &[&KitContext],
-    workdir: &str,
-) -> Result<Option<String>> {
+/// The agent files in the guest, each of which gets every kit's agent context. They are the
+/// explicit profiles (`directory` and `filename`) any kit declares, each once, in kit order
+/// (SPEC agent-context `every-explicit-profile`, `profile-precedence`). With none, it is the
+/// workload kit's own file in the parent of `workdir` (sbx #15), the legacy profile; a mixin
+/// can't name that one. Empty when no kit declares a file.
+pub fn agent_files(workload: &str, contexts: &[&KitContext], workdir: &str) -> Result<Vec<String>> {
+    let mut explicit = Vec::new();
+    for c in contexts {
+        if let Some(dir) = &c.req.directory {
+            let file = profile_path(&c.kit, dir, c.req.filename.as_deref())?;
+            if !explicit.contains(&file) {
+                explicit.push(file);
+            }
+        }
+    }
+    if !explicit.is_empty() {
+        return Ok(explicit);
+    }
+    let Some(own) = contexts.iter().find(|c| c.kit == workload) else {
+        return Ok(Vec::new());
+    };
     let parent = Path::new(workdir)
         .parent()
         .map_or_else(|| "/".to_string(), |p| p.display().to_string());
-    let join = |dir: &str, name: &str| format!("{}/{name}", dir.trim_end_matches('/'));
-    let Some(c) = contexts.iter().find(|c| c.kit == workload).map(|c| &c.req) else {
-        return Ok(None);
-    };
-    let dir = c.directory.as_deref().unwrap_or(&parent);
+    let file = profile_path(workload, &parent, own.req.filename.as_deref())?;
+    Ok(vec![file])
+}
+
+/// `dir/name` for kit `kit`'s agent file, checked: an absolute directory and a plain file name.
+fn profile_path(kit: &str, dir: &str, name: Option<&str>) -> Result<String> {
     if !dir.starts_with('/') {
-        bail!("kit {workload}: agent-context directory '{dir}' must be an absolute path");
+        bail!("kit {kit}: agent-context directory '{dir}' must be an absolute path");
     }
     // A lexical check only: symlinks inside the guest are out of scope.
     if dir.split('/').any(|c| c == "..") {
-        bail!("kit {workload}: agent-context directory '{dir}' must not contain '..'");
+        bail!("kit {kit}: agent-context directory '{dir}' must not contain '..'");
     }
-    let name = c.filename.as_deref().unwrap_or(DEFAULT_CONTEXT_FILE);
+    let name = name.unwrap_or(DEFAULT_CONTEXT_FILE);
     if name.is_empty() || name.contains('/') || name == "." || name == ".." {
-        bail!("kit {workload}: agent-context filename '{name}' must be a file name");
+        bail!("kit {kit}: agent-context filename '{name}' must be a file name");
     }
-    Ok(Some(join(dir, name)))
+    let file = format!("{}/{name}", dir.trim_end_matches('/'));
+    // The `sbx.agent-file` label lists the files, comma-separated.
+    if file.contains(',') {
+        bail!("kit {kit}: agent-context file '{file}' must not contain ','");
+    }
+    Ok(file)
 }
 
-/// Writes the kits' agent context to the agent file, which is the guest's own: nothing is
-/// written into a mounted workspace. A mixin's `filename`/`directory` are ignored, as sbx does.
+/// Writes the kits' agent context to each agent file, which is the guest's own: nothing is
+/// written into a mounted workspace.
 ///
 /// `agent-context@2`: every kit's text goes in the file itself, in its kits section.
 /// `@1` is sbx's layout (#15): the workload's own text appended to the file, each mixin's in
@@ -871,7 +892,7 @@ fn context_scripts(
     workload: &str,
     version: Option<u8>,
     contexts: &[&KitContext],
-    agent_file: Option<&str>,
+    agent_files: &[String],
     mounts: &[&Path],
 ) -> Vec<String> {
     // Each kit's bodies, in order.
@@ -885,45 +906,46 @@ fn context_scripts(
             None => kits.push((&c.kit, vec![&c.req.content])),
         }
     }
-    let Some(file) = agent_file else {
+    if agent_files.is_empty() {
         for (kit, _) in kits.iter().filter(|(k, _)| *k != workload) {
-            crate::kit_warning!(
-                "kit {kit}: agent context dropped (the workload declares no agent file)"
-            );
+            crate::kit_warning!("kit {kit}: agent context dropped (no kit declares an agent file)");
         }
         return Vec::new();
-    };
+    }
     if kits.is_empty() {
         return Vec::new();
     }
-    let dir = file.rsplit_once('/').map_or("", |(d, _)| d);
     let inline = version == Some(2);
-    let index_dir = format!("{dir}/{}", guest::KITS_CONTEXT_DIR);
-    if mounts.iter().any(|m| {
-        Path::new(file).starts_with(m) || (!inline && Path::new(&index_dir).starts_with(m))
-    }) {
-        crate::warning!(
-            "agent context not written: {file} is in a mounted workspace, outside the \
-             sandbox"
-        );
-        return Vec::new();
-    }
-    if inline {
-        return vec![guest::inline_context_script(file, &kits)];
-    }
     let mut scripts = Vec::new();
-    let mut entries = Vec::new();
-    for (kit, bodies) in &kits {
-        if *kit == workload {
-            scripts.push(guest::append_context_script(file, bodies));
+    for file in agent_files {
+        let dir = file.rsplit_once('/').map_or("", |(d, _)| d);
+        let index_dir = format!("{dir}/{}", guest::KITS_CONTEXT_DIR);
+        if mounts.iter().any(|m| {
+            Path::new(file).starts_with(m) || (!inline && Path::new(&index_dir).starts_with(m))
+        }) {
+            crate::warning!(
+                "agent context not written: {file} is in a mounted workspace, outside the \
+                 sandbox"
+            );
             continue;
         }
-        let path = format!("{dir}/{}/{kit}.md", guest::KITS_CONTEXT_DIR);
-        scripts.push(guest::kit_context_script(&path, bodies));
-        entries.push((kit.to_string(), path));
-    }
-    if !entries.is_empty() {
-        scripts.push(guest::kits_index_script(file, &entries));
+        if inline {
+            scripts.push(guest::inline_context_script(file, &kits));
+            continue;
+        }
+        let mut entries = Vec::new();
+        for (kit, bodies) in &kits {
+            if *kit == workload {
+                scripts.push(guest::append_context_script(file, bodies));
+                continue;
+            }
+            let path = format!("{dir}/{}/{kit}.md", guest::KITS_CONTEXT_DIR);
+            scripts.push(guest::kit_context_script(&path, bodies));
+            entries.push((kit.to_string(), path));
+        }
+        if !entries.is_empty() {
+            scripts.push(guest::kits_index_script(file, &entries));
+        }
     }
     scripts
 }
@@ -968,6 +990,8 @@ pub fn needs_recreate(kit: &Kit, args: &BTreeMap<String, String>) -> Result<Vec<
             CapBody::Volume { .. } => "volumes",
             CapBody::HostMount { .. } => "host mounts",
             CapBody::AgentSkills { .. } | CapBody::AgentSkill { .. } => "agent skills",
+            // A new agent file needs every kit's context, and `add` has only this kit's.
+            CapBody::AgentContext(r) if r.directory.is_some() => "agent file",
             // The agent socket is mounted at create.
             CapBody::SshAgent { .. } => "SSH agent",
             CapBody::Resources { .. } => "resources",
