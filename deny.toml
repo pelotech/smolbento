@@ -4,6 +4,13 @@ all-features = true
 [advisories]
 version = 2
 yanked = "deny"
+# Unmaintained, not vulnerable, and no fixed version exists. Drop each entry when its crate is gone.
+ignore = [
+  # chrono comes with oci-client and russh-util; neither has a release without it yet.
+  { id = "RUSTSEC-2026-0543", reason = "transitive (oci-client, russh-util); no upgrade available" },
+  # humantime is flagged only because it wraps chrono. Ours to replace (jiff or time).
+  { id = "RUSTSEC-2026-0542", reason = "flagged for wrapping chrono; replace with jiff or time" },
+]
 
 [licenses]
 version = 2
