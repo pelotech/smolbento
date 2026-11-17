@@ -390,8 +390,9 @@ with `-D`).
   `kit:<sandbox>` rule. `policy rm`
   can't remove them; deny a host instead.
 - Agent context goes in the agent's file in the workspace's parent directory, inside the sandbox
-  only: `CLAUDE.md` (claude), `GEMINI.md` (gemini), `AGENTS.md` (others), or the file a workload
-  kit's `agent-context` names. `agent-context@1` text is laid out as sbx does: the workload's
+  only: `CLAUDE.md` (claude), `GEMINI.md` (gemini), `AGENTS.md` (others). When kits name files
+  with `directory` and `filename`, it goes in each of those instead, a mixin's too, as the spec
+  requires. `kit add` of a kit that names a file needs a recreate. `agent-context@1` text is laid out as sbx does: the workload's
   appended, a mixin's in `kits-agent-context/<kit>.md` beside it, listed between
   `<!-- sbx:kits-section start -->` and `<!-- sbx:kits-section end -->`. `agent-context@2` text
   (a v2 kit's `agentInstructions` too) is in the file itself, between the same markers, as the

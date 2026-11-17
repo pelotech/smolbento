@@ -602,7 +602,7 @@ fn add_running<R: Runner>(
         .chain(std::iter::once(kit))
         .collect();
     // Install hooks run where the create ran them: a v3 workload's image WORKDIR.
-    // Its agent file is the recorded `sbx.agent-file` or none.
+    // Its agent files are the recorded `sbx.agent-file`, or none.
     let mut workload = empty_workload(&sb.meta.agent);
     workload.provides = own.iter().flat_map(|r| r.provides.clone()).collect();
     workload.config = sb.meta.image_workdir.clone().map(|workdir| ImageConfig {
@@ -625,7 +625,7 @@ fn add_running<R: Runner>(
             .iter()
             .map(|w| Workspace::from_label(w))
             .collect(),
-        agent_file: sb.meta.agent_file.clone(),
+        agent_files: sb.meta.agent_files.clone(),
         agent_context: sb.meta.agent_context,
         ..Default::default()
     };

@@ -57,9 +57,9 @@ pub struct CreateRequest {
     pub launched_by_host: bool,
     /// A v3 workload kit's image WORKDIR, when not `/` (the `sbx.workdir` label).
     pub image_workdir: Option<String>,
-    /// A workload kit's agent file in the guest (the `sbx.agent-file` label). `kits::apply`
-    /// uses one already set (`kit add`) instead of deriving it.
-    pub agent_file: Option<String>,
+    /// The kits' agent files in the guest (the `sbx.agent-file` label). `kits::apply` uses
+    /// those already set (`kit add`) instead of deriving them.
+    pub agent_files: Vec<String>,
     /// The `agent-context` version the kits use (the `sbx.agent-context` label). `kits::apply`
     /// keeps to one already set (`kit add`) instead of choosing.
     pub agent_context: Option<u8>,
@@ -153,7 +153,7 @@ pub fn meta(req: &CreateRequest) -> Meta {
         command: req.command.clone(),
         user: req.user.clone(),
         image_workdir: req.image_workdir.clone(),
-        agent_file: req.agent_file.clone(),
+        agent_files: req.agent_files.clone(),
         agent_context: req.agent_context,
         credential_install: req.credential_install.clone(),
         long_running: req.long_running,

@@ -47,7 +47,8 @@ pub const COMMAND: &str = "sbx.command";
 pub const USER: &str = "sbx.user";
 /// A v3 workload kit's image WORKDIR, when not `/`.
 pub const WORKDIR: &str = "sbx.workdir";
-/// The agent file in the guest of a workload kit that declares one (`kit add` indexes into it).
+/// The agent files in the guest that the kits' `agent-context` names, comma-separated (`kit add`
+/// writes a new kit's context to each).
 pub const AGENT_FILE: &str = "sbx.agent-file";
 /// The `agent-context` version the sandbox's kits were applied under (`1` or `2`): a sandbox
 /// uses one, so `kit add` keeps to it.
@@ -166,9 +167,8 @@ pub struct Meta {
     pub user: Option<String>,
     /// A v3 workload's image WORKDIR, where install hooks run (`kit add` too); `None` for `/`.
     pub image_workdir: Option<String>,
-    /// A workload kit's agent file in the guest; `None` for a preset (its file follows from its
-    /// name) or a workload that declares none.
-    pub agent_file: Option<String>,
+    /// The kits' agent files in the guest; empty when no kit declares one.
+    pub agent_files: Vec<String>,
     /// The `agent-context` version in use; `None` when no kit gave agent context.
     pub agent_context: Option<u8>,
     /// Env vars of install-only credentials, left out of every start after the first.
@@ -244,7 +244,7 @@ impl Meta {
             (COMMAND, self.command.as_ref().map(json)),
             (USER, self.user.clone()),
             (WORKDIR, self.image_workdir.clone()),
-            (AGENT_FILE, self.agent_file.clone()),
+            (AGENT_FILE, list(&self.agent_files)),
             (AGENT_CONTEXT, self.agent_context.map(|v| v.to_string())),
             (CREDENTIAL_INSTALL, list(&self.credential_install)),
             (LONG_RUNNING, flag(self.long_running)),
@@ -315,7 +315,7 @@ impl Meta {
             command: json(labels, COMMAND),
             user: text(USER),
             image_workdir: text(WORKDIR),
-            agent_file: text(AGENT_FILE),
+            agent_files: list(labels.get(AGENT_FILE)),
             agent_context: text(AGENT_CONTEXT).and_then(|v| v.parse().ok()),
             credential_install: list(labels.get(CREDENTIAL_INSTALL)),
             long_running: flag(LONG_RUNNING),
@@ -491,7 +491,7 @@ mod tests {
             command: Some(vec!["wl".into(), "--a b".into()]),
             user: Some("somebody".into()),
             image_workdir: Some("/x".into()),
-            agent_file: Some("/w/AGENTS.md".into()),
+            agent_files: vec!["/w/AGENTS.md".into(), "/home/agent/.codex/AGENTS.md".into()],
             credential_install: vec!["GH_TOKEN".into(), "NPM_TOKEN".into()],
             long_running: true,
             credential_formats: BTreeMap::from([
@@ -532,7 +532,10 @@ mod tests {
             ("sbx.command", r#"["wl","--a b"]"#),
             ("sbx.user", "somebody"),
             ("sbx.workdir", "/x"),
-            ("sbx.agent-file", "/w/AGENTS.md"),
+            (
+                "sbx.agent-file",
+                "/w/AGENTS.md,/home/agent/.codex/AGENTS.md",
+            ),
             ("sbx.credential-install", "GH_TOKEN,NPM_TOKEN"),
             ("sbx.long-running", "true"),
             ("sbx.credential-format.SBX_KIT_X", "format:Bearer %s"),

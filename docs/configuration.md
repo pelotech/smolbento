@@ -185,7 +185,7 @@ name turned into `_`). Its details are stored as labels on that machine:
 | `sbx.kits` | Kits applied at create, pinned to their digests |
 | `sbx.command` | The command a workload kit launches, as a JSON list |
 | `sbx.user` | The image user a v3 workload kit's agent and `exec` run as (`0` for root) |
-| `sbx.agent-file` | The agent instructions file a workload kit's `agent-context` names, so `kit add` can add a new mixin's context to it |
+| `sbx.agent-file` | The agent instructions files the kits' `agent-context` names, comma-separated, so `kit add` can add a new mixin's context to each |
 | `sbx.agent-context` | The `agent-context` version (`1` or `2`) the sandbox's kit instructions were written under, so `kit add` keeps to it. Absent until a kit's instructions are written |
 | `sbx.workdir` | A v3 workload kit's image `WORKDIR`, where install hooks run (absent for `/`) |
 | `sbx.skills` | The skills mode, the `/run/sbx/skills-shared` mount (`none`, `ro` or `rw`), and each skills directory with its access (`none`, `link`, or the store mounted over it `ro` or `rw`), set at create |

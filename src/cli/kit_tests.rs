@@ -919,6 +919,24 @@ fn adding_a_mixin_with_a_host_mount_needs_a_recreate() {
 }
 
 #[test]
+fn adding_a_mixin_with_its_own_agent_file_needs_a_recreate() {
+    // A new agent file gets every kit's context, and `add` has only the new kit's.
+    let mut t = kit_env();
+    dev_sandbox(&t, &base());
+    v3_kit(
+        &t,
+        "ag",
+        r#"{"schemaVersion":"3","kind":"mixin","name":"ag","capabilities":[
+                {"type":"com.docker.sandbox/agent-context@2","optional":true,"config":{
+                  "directory":"/home/agent/.ag","filename":"AGENTS.md","content":"Use ag."}}]}"#,
+        &[],
+    );
+    let e = t.sbt(&["kit", "add", "dev", "./ag", "--yes"]).unwrap_err();
+    assert_eq!(format!("{e:#}"), "recreate required: agent file");
+    assert!(dev_calls(&t).is_empty(), "{:#?}", dev_calls(&t));
+}
+
+#[test]
 fn adding_a_mixin_with_a_bundled_skill_needs_a_recreate() {
     let mut t = kit_env();
     dev_sandbox(&t, &base());
