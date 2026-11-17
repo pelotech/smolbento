@@ -410,9 +410,12 @@ pub fn resolve_for(
                         kit: k.name.clone(),
                         version: context_version(&cap.ty),
                         optional: cap.optional,
+                        // SPEC §6: references expand in every string of a config.
                         req: AgentContextReq {
+                            filename: c.filename.as_deref().map(ex).transpose()?,
+                            directory: c.directory.as_deref().map(ex).transpose()?,
                             content: ex(&c.content)?,
-                            ..c.clone()
+                            content_file: c.content_file.clone(),
                         },
                     });
                 }

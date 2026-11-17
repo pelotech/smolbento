@@ -265,11 +265,6 @@ pub const KITS_CONTEXT_DIR: &str = "kits-agent-context";
 pub const KITS_SECTION_START: &str = "<!-- sbx:kits-section start -->";
 pub const KITS_SECTION_END: &str = "<!-- sbx:kits-section end -->";
 
-/// The line before a kit's text in the kits section of the agent file.
-fn kit_marker(kit: &str) -> String {
-    format!("<!-- sbx:kit {kit} -->")
-}
-
 /// Rewrites the kits section of `file` with `awk` program `rules`, appending the section when
 /// the file has none; text outside it stays. The program gets the markers as `b` and `e`, and
 /// `lines` (the new entries) in the file `s`. It prints the section from a `put()` it defines
@@ -282,7 +277,7 @@ fn section_script(file: &str, lines: &[String], rules: &str) -> String {
          new=; [ -e {f} ] || {{ : > {f}; new=1; }}\n\
          awk -v b={start} -v e={end} -v s=\"$s\" '\n\
          {rules}\
-         $0 == b {{ inb = 1; drop = 0; next }}\n\
+         $0 == b {{ inb = 1; next }}\n\
          inb && $0 == e {{ inb = 0; if (!done) put(); next }}\n\
          inb {{ old(); next }}\n\
          {{ print }}\n\
@@ -296,68 +291,47 @@ fn section_script(file: &str, lines: &[String], rules: &str) -> String {
     )
 }
 
-/// Puts each kit's text itself in the kits section of `file` (`agent-context@2`): `(kit, its
-/// bodies)` in order, under a line naming the kit. A kit already there gets its new text; the
-/// other kits' text stays. Bodies are joined with two newlines, untrimmed, as the spec says. A
-/// section marker in kit text is written as `&lt;!-- sbx:`, so a kit can't end the section or
-/// pass its text off as another kit's.
-pub fn inline_context_script(file: &str, kits: &[(&str, Vec<&str>)]) -> String {
-    let mut lines: Vec<String> = Vec::new();
-    for (i, (kit, bodies)) in kits.iter().enumerate() {
-        if i > 0 {
-            lines.push(String::new());
-        }
-        lines.push(kit_marker(kit));
-        let text = bodies.join("\n\n").replace("<!-- sbx:", "&lt;!-- sbx:");
-        lines.extend(text.trim_end_matches('\n').split('\n').map(String::from));
-    }
+/// Adds `text`, the kits' agent context itself, to the kits section of `file`
+/// (`agent-context@2`), after what the section already holds (`kit add`), a blank line apart.
+/// A section marker in the text is written as `&lt;!-- sbx:`, so a kit can't end the section
+/// (SPEC agent-context@2/content-untrusted). The text isn't keyed by kit, so a `kit add` rerun
+/// after it failed partway adds that kit's text again.
+pub fn inline_context_script(file: &str, text: &str) -> String {
+    let text = text.replace("<!-- sbx:", "&lt;!-- sbx:");
+    let lines: Vec<String> = text
+        .strip_suffix('\n')
+        .unwrap_or(&text)
+        .split('\n')
+        .map(String::from)
+        .collect();
     section_script(
         file,
         &lines,
-        "function kit(l) { return substr(l, 1, 13) == \"<!-- sbx:kit \" }\n\
-         function put(  i) { while (m && keep[m] == \"\") m--; print b;\n\
+        "function put(  i) { while (m && keep[m] == \"\") m--; print b;\n\
            for (i = 1; i <= m; i++) print keep[i]; if (m) print \"\";\n\
            for (i = 1; i <= n; i++) print add[i]; print e; done = 1 }\n\
-         function old() { if (kit($0)) drop = ($0 in new_kit); if (!drop) keep[++m] = $0 }\n\
-         BEGIN { while ((getline l < s) > 0) { add[++n] = l; if (kit(l)) new_kit[l] = 1 } close(s) }\n",
+         function old() { keep[++m] = $0 }\n\
+         BEGIN { while ((getline l < s) > 0) add[++n] = l; close(s) }\n",
     )
 }
 
-/// Shell commands printing `bodies` one blank line apart. A body is inline text or
-/// `file:<in-image path>` (copied with `awk 1`, which ends it with a newline).
+/// Shell commands printing `bodies` one blank line apart.
 fn print_bodies(bodies: &[&str]) -> String {
     let mut s = String::new();
     for (i, b) in bodies.iter().enumerate() {
         if i > 0 {
             s.push_str("echo\n");
         }
-        match b.strip_prefix("file:") {
-            Some(path) => s.push_str(&format!("awk 1 {}\n", sh_quote(path))),
-            None => s.push_str(&format!(
-                "printf '%s\\n' {}\n",
-                sh_quote(b.trim_end_matches('\n'))
-            )),
-        }
+        s.push_str(&format!(
+            "printf '%s\\n' {}\n",
+            sh_quote(b.trim_end_matches('\n'))
+        ));
     }
     s
 }
 
-/// Appends `bodies` to the agent file `file`, one blank line apart, with no markers (a workload
-/// kit's own agent context, written once at create).
-pub fn append_context_script(file: &str, bodies: &[&str]) -> String {
-    let f = sh_quote(file);
-    format!(
-        "set -e\n{OWNER}\n{mkdirs}new=; [ -e {f} ] || new=1\n\
-         if [ -s {f} ]; then {{ [ -z \"$(tail -c 1 {f})\" ] || echo; echo; }} >> {f}; fi\n\
-         {{\n{body}}} >> {f}\n\
-         [ -z \"$new\" ] || [ -z \"$o\" ] || chown \"$o\" {f}\n",
-        mkdirs = mkdirs(file),
-        body = print_bodies(bodies),
-    )
-}
-
-/// Writes a mixin's agent context to its own file `path`, replacing it; the file and its
-/// directory go to `agent`.
+/// Writes a kit's inline agent context to its own file `path` (`agent-context@1`), replacing
+/// it; the file and its directory go to `agent`.
 pub fn kit_context_script(path: &str, bodies: &[&str]) -> String {
     let p = sh_quote(path);
     let dir = Path::new(path)
@@ -371,8 +345,8 @@ pub fn kit_context_script(path: &str, bodies: &[&str]) -> String {
     )
 }
 
-/// Puts one `- **<kit>** — See <path>.` line per entry in sbx's kits index (`agent-context@1`),
-/// the kits section of `file`; a kit's old line is replaced.
+/// Puts one `- **<kit>** — See <path>.` line per entry in the kits index (`agent-context@1`),
+/// the kits section of `file`; a kit's old lines are replaced.
 pub fn kits_index_script(file: &str, entries: &[(String, String)]) -> String {
     let lines: Vec<String> = entries
         .iter()

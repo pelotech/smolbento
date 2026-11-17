@@ -556,7 +556,11 @@ fn port_resources_and_agent_context_variants() {
     let CapBody::AgentContext(a) = &k.caps[0].body else {
         panic!()
     };
-    assert_eq!(a.content, "file:/usr/share/sandbox/kit/x/ctx.md");
+    assert_eq!(a.content, "");
+    assert_eq!(
+        a.content_file.as_deref(),
+        Some("/usr/share/sandbox/kit/x/ctx.md")
+    );
 
     let e =
         one_cap(r#"{"type":"com.docker.sandbox/agent-context@2","config":{"contentFile":"x"}}"#)
