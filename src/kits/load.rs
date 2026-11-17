@@ -719,7 +719,7 @@ mod tests {
                 authenticate: vec![],
             }
         );
-        // Declared under both versions for runtimes that know only the first; the newest is kept.
+        // Offered under both versions: a sandbox uses the one its other kits offer too.
         assert!(
             yaml.contains("com.docker.sandbox/agent-context@1\n"),
             "{yaml}"

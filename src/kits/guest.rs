@@ -260,9 +260,73 @@ fn printf_bytes(bytes: &[u8]) -> String {
 
 /// The directory, next to the agent file, holding one `<kit>.md` per mixin with agent context.
 pub const KITS_CONTEXT_DIR: &str = "kits-agent-context";
-/// The markers around sbx's kits index in the agent file.
+/// The markers around the kits section of the agent file: sbx's index of per-kit files
+/// (`agent-context@1`), or the kits' text itself (`@2`).
 pub const KITS_SECTION_START: &str = "<!-- sbx:kits-section start -->";
 pub const KITS_SECTION_END: &str = "<!-- sbx:kits-section end -->";
+
+/// The line before a kit's text in the kits section of the agent file.
+fn kit_marker(kit: &str) -> String {
+    format!("<!-- sbx:kit {kit} -->")
+}
+
+/// Kit text with smolbento's and sbx's section markers made plain text (`&lt;!-- sbx:`), so a
+/// kit can't end the managed section or pass its text off as another kit's.
+fn neutralize(text: &str) -> String {
+    let mut out = String::with_capacity(text.len());
+    let mut rest = text;
+    while let Some(i) = rest.find("<!--") {
+        let after = &rest[i + 4..];
+        out.push_str(&rest[..i]);
+        if after.trim_start().starts_with("sbx:") {
+            out.push_str("&lt;!--");
+        } else {
+            out.push_str("<!--");
+        }
+        rest = after;
+    }
+    out.push_str(rest);
+    out
+}
+
+/// Puts each kit's text itself in the kits section of `file` (`agent-context@2`): `(kit, its
+/// bodies)` in order, a kit's bodies a blank line apart, under a line naming the kit. The
+/// section is rewritten in place, or appended; a kit already there gets its new text, the
+/// other kits' text and everything outside the section stay.
+pub fn inline_context_script(file: &str, kits: &[(String, Vec<String>)]) -> String {
+    let mut lines: Vec<String> = Vec::new();
+    for (i, (kit, bodies)) in kits.iter().enumerate() {
+        if i > 0 {
+            lines.push(String::new());
+        }
+        lines.push(kit_marker(kit));
+        let text = neutralize(&bodies.join("\n\n"));
+        lines.extend(text.trim_end_matches('\n').split('\n').map(String::from));
+    }
+    let lines: Vec<String> = lines.iter().map(|l| sh_quote(l)).collect();
+    let f = sh_quote(file);
+    format!(
+        "set -e\n{OWNER}\n{mkdirs}s=$(mktemp); t=$(mktemp)\nprintf '%s\\n' {lines} > \"$s\"\n\
+         new=; [ -e {f} ] || {{ : > {f}; new=1; }}\n\
+         awk -v b={start} -v e={end} -v s=\"$s\" '\n\
+         function kit(l) {{ return substr(l, 1, 13) == \"<!-- sbx:kit \" && substr(l, length(l) - 3) == \" -->\" }}\n\
+         function put(  i) {{ while (m && keep[m] == \"\") m--; print b;\n\
+           for (i = 1; i <= m; i++) print keep[i]; if (m) print \"\";\n\
+           for (i = 1; i <= n; i++) print add[i]; print e; done = 1 }}\n\
+         BEGIN {{ while ((getline l < s) > 0) {{ add[++n] = l; if (kit(l)) new_kit[l] = 1 }} close(s) }}\n\
+         $0 == b {{ inb = 1; drop = 0; next }}\n\
+         inb && $0 == e {{ inb = 0; if (!done) put(); next }}\n\
+         inb {{ if (kit($0)) drop = ($0 in new_kit); if (!drop) keep[++m] = $0; next }}\n\
+         {{ print }}\n\
+         END {{ if (!done) {{ if (NR && !inb) print \"\"; put() }} }}' {f} > \"$t\"\n\
+         cat \"$t\" > {f}\nrm -f \"$s\" \"$t\"\n\
+         [ -z \"$new\" ] || [ -z \"$o\" ] || chown \"$o\" {f}\n",
+        mkdirs = mkdirs(file),
+        lines = lines.join(" "),
+        start = sh_quote(KITS_SECTION_START),
+        end = sh_quote(KITS_SECTION_END),
+    )
+}
 
 /// Shell commands printing `bodies` one blank line apart. A body is inline text or
 /// `file:<in-image path>` (copied with `awk 1`, which ends it with a newline).

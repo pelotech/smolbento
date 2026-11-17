@@ -1132,6 +1132,32 @@ fn add_indexes_a_mixin_context_beside_the_workspace() {
     assert!(ran(&t, &guest::kit_context_script(path, &["Use net."])));
     let index = guest::kits_index_script("/w/CLAUDE.md", &[("net".into(), path.into())]);
     assert!(ran(&t, &index), "{:#?}", dev_calls(&t));
+    // The first kit with agent context settles the sandbox's version.
+    let label = format!("machine update -n {MACHINE} --label sbx.agent-context=1");
+    assert!(dev_calls(&t).contains(&label), "{:#?}", dev_calls(&t));
+}
+
+#[test]
+fn add_keeps_to_the_sandboxes_agent_context_version() {
+    let mut t = kit_env();
+    dev_sandbox_labeled(
+        &t,
+        "running",
+        &[
+            ("sbx.agent", "claude"),
+            ("sbx.agent-file", "/w/CLAUDE.md"),
+            ("sbx.agent-context", "2"),
+        ],
+        &base(),
+    );
+    // NET_KIT gives its context as agent-context@1 only, and requires it.
+    v3_kit(&t, "net", NET_KIT, &[]);
+    let e = t.sbt(&["kit", "add", "dev", "./net", "--yes"]).unwrap_err();
+    assert!(
+        format!("{e:#}").contains("kit net: needs agent-context@1, but this sandbox's kits use"),
+        "{e:#}"
+    );
+    assert_no_net_context(&t);
 }
 
 #[test]

@@ -29,6 +29,21 @@ pub struct Plan {
     pub skipped: Vec<Skipped>,
 }
 
+/// One kit's `agent-context` request.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct KitContext {
+    pub kit: String,
+    /// The contract it was declared under: 1 (a per-kit index) or 2 (inline).
+    pub version: u8,
+    pub optional: bool,
+    pub req: AgentContextReq,
+}
+
+/// The version of an `agent-context@N` type; smolbento reads `@1` and `@2` only.
+fn context_version(ty: &str) -> u8 {
+    if ty.ends_with("@1") { 1 } else { 2 }
+}
+
 /// A `volume@1` request: a directory on the sandbox's disk, or a tmpfs with `mode`.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct Volume {
@@ -98,7 +113,8 @@ pub struct Merged {
     pub install_hooks: Vec<(String, Hook)>,
     pub startup_hooks: Vec<(String, Hook)>,
     pub files: Vec<FileReq>,
-    pub contexts: Vec<(String, AgentContextReq)>,
+    /// Every kit's `agent-context` request, in dependency order. `apply` keeps one version's.
+    pub contexts: Vec<KitContext>,
     pub git_identity: bool,
     pub long_running: bool,
     pub privileged: bool,
@@ -390,13 +406,15 @@ pub fn resolve_for(
                 CapBody::Resources { cpus, memory } => merged.set_resources(cpus, memory),
                 CapBody::Lifecycle(l) => add_lifecycle(&mut merged, &k.name, l, &ex)?,
                 CapBody::AgentContext(c) => {
-                    merged.contexts.push((
-                        k.name.clone(),
-                        AgentContextReq {
+                    merged.contexts.push(KitContext {
+                        kit: k.name.clone(),
+                        version: context_version(&cap.ty),
+                        optional: cap.optional,
+                        req: AgentContextReq {
                             content: ex(&c.content)?,
                             ..c.clone()
                         },
-                    ));
+                    });
                 }
                 CapBody::SshAgent {
                     phases,

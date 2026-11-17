@@ -60,6 +60,9 @@ pub struct CreateRequest {
     /// A workload kit's agent file in the guest (the `sbx.agent-file` label). `kits::apply`
     /// uses one already set (`kit add`) instead of deriving it.
     pub agent_file: Option<String>,
+    /// The `agent-context` version the kits use (the `sbx.agent-context` label). `kits::apply`
+    /// keeps to one already set (`kit add`) instead of choosing.
+    pub agent_context: Option<u8>,
     /// Env vars of install-only credentials (the `sbx.credential-install` label).
     pub credential_install: Vec<String>,
     /// Kit credential value formats by env var (`sbx.credential-format.<ENV>` labels).
@@ -151,6 +154,7 @@ pub fn meta(req: &CreateRequest) -> Meta {
         user: req.user.clone(),
         image_workdir: req.image_workdir.clone(),
         agent_file: req.agent_file.clone(),
+        agent_context: req.agent_context,
         credential_install: req.credential_install.clone(),
         long_running: req.long_running,
         host_access: req.host_access,

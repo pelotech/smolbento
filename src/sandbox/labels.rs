@@ -49,6 +49,9 @@ pub const USER: &str = "sbx.user";
 pub const WORKDIR: &str = "sbx.workdir";
 /// The agent file in the guest of a workload kit that declares one (`kit add` indexes into it).
 pub const AGENT_FILE: &str = "sbx.agent-file";
+/// The `agent-context` version the sandbox's kits were applied under (`1` or `2`): a sandbox
+/// uses one, so `kit add` keeps to it.
+pub const AGENT_CONTEXT: &str = "sbx.agent-context";
 pub const CREDENTIAL_INSTALL: &str = "sbx.credential-install";
 pub const LONG_RUNNING: &str = "sbx.long-running";
 /// Created without the host loopback deny, because a `localhost` rule applied: only such a
@@ -166,6 +169,8 @@ pub struct Meta {
     /// A workload kit's agent file in the guest; `None` for a preset (its file follows from its
     /// name) or a workload that declares none.
     pub agent_file: Option<String>,
+    /// The `agent-context` version in use; `None` when no kit gave agent context.
+    pub agent_context: Option<u8>,
     /// Env vars of install-only credentials, left out of every start after the first.
     pub credential_install: Vec<String>,
     /// Don't stop the sandbox when its last session ends (`long-running@1`).
@@ -240,6 +245,7 @@ impl Meta {
             (USER, self.user.clone()),
             (WORKDIR, self.image_workdir.clone()),
             (AGENT_FILE, self.agent_file.clone()),
+            (AGENT_CONTEXT, self.agent_context.map(|v| v.to_string())),
             (CREDENTIAL_INSTALL, list(&self.credential_install)),
             (LONG_RUNNING, flag(self.long_running)),
             (HOST_ACCESS, flag(self.host_access)),
@@ -310,6 +316,7 @@ impl Meta {
             user: text(USER),
             image_workdir: text(WORKDIR),
             agent_file: text(AGENT_FILE),
+            agent_context: text(AGENT_CONTEXT).and_then(|v| v.parse().ok()),
             credential_install: list(labels.get(CREDENTIAL_INSTALL)),
             long_running: flag(LONG_RUNNING),
             host_access: flag(HOST_ACCESS),

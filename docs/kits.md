@@ -150,15 +150,31 @@ repositories and key it signs with, the `signingKey` argument and its limits.
 Kit instructions go in the agent's file in the workspace's parent directory, inside the sandbox
 only. For workspace `~/src/app`, claude reads `~/src/CLAUDE.md`, gemini `~/src/GEMINI.md`, and other
 agents `~/src/AGENTS.md`. With no workspace, `/home/agent` is used. A workload kit can name its own
-file, and its text is appended.
+file.
 
-Each mixin's text goes to `kits-agent-context/<kit>.md` beside that file, and the file gets a `##
-Kits` list between `<!-- sbx:kits-section start -->` and `<!-- sbx:kits-section end -->`. `kit add`
-adds a line to the list. Unlike sbx, smolbento writes no platform preamble.
+How the text gets there depends on the `agent-context` version the kits declare:
+
+- **`agent-context@2`** (and a v2 kit's `agentInstructions`): every kit's text is in the file
+  itself, so the agent reads it at startup. It sits between `<!-- sbx:kits-section start -->` and
+  `<!-- sbx:kits-section end -->`, each kit's text under a `<!-- sbx:kit <name> -->` line.
+- **`agent-context@1`**: the workload kit's text is appended to the file. Each mixin's text goes to
+  `kits-agent-context/<kit>.md` beside it, and the file gets a `## Kits` list between the same two
+  markers. The agent reads a kit's file when it needs it.
+
+A sandbox uses one version for all its kits, as the kit spec requires. It is `@2` when every kit
+with instructions offers it, else `@1` when every kit offers that. A kit can offer both by declaring
+each with `optional: true`, as the shipped kits and sbx's agents do. Kits that require different
+versions can't share a sandbox, and `create` says which. `kit add` keeps to the sandbox's version: a
+kit that requires the other one needs a recreate, and one that offers it as optional is added
+without its instructions.
+
+Text outside the markers is yours and is kept. Unlike sbx, smolbento writes no platform preamble.
 
 - Nothing is written on your machine. A file that would land in a mounted workspace is skipped with
   a warning.
 - A workload kit with no agent file drops mixin instructions (`kit.showWarnings` shows a warning).
+- A kit can't end the section or pass its text off as another kit's: a `<!-- sbx:` marker in kit
+  text is written as `&lt;!-- sbx:`.
 - Files are owned by `agent`, except a file the image already has owned by root, which keeps its
   owner.
 - With `--clone` and a subdirectory workspace, the parent directory is in the clone, so the files
