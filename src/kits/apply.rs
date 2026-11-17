@@ -12,7 +12,7 @@ use crate::kits::env_ref;
 use crate::kits::guest;
 use crate::kits::model::{CapBody, Content, CredReq, FileReq, Hook, Kit, Source};
 use crate::kits::registry_auth::Logins;
-use crate::kits::resolve::{KitCred, Merged, Plan};
+use crate::kits::resolve::{KitContext, KitCred, Merged, Plan};
 use crate::policy::Policy;
 use crate::policy::rules::is_under;
 use crate::sandbox::CreateRequest;
@@ -166,12 +166,23 @@ pub fn apply(
         .into_iter()
         .map(guest::file_script)
         .collect();
+    let (context_version, contexts) = select_contexts(&m.contexts, req.agent_context)?;
     let agent_file = match req.agent_file.clone() {
         Some(f) => Some(f),
-        None => agent_file(plan, &req.workdir())?,
+        None => agent_file(&plan.workload.name, &contexts, &req.workdir())?,
     };
     let mounts: Vec<&Path> = req.workspaces.iter().map(|w| w.path.as_path()).collect();
-    steps.context = context_scripts(plan, agent_file.as_deref(), &mounts);
+    steps.context = context_scripts(
+        &plan.workload.name,
+        context_version,
+        &contexts,
+        agent_file.as_deref(),
+        &mounts,
+    );
+    // Settled by the first text written: until then a later kit is free to choose.
+    if !steps.context.is_empty() {
+        req.agent_context = context_version;
+    }
     steps.startup_d = startup_d(&kits, m, &tmpfs);
 
     req.launched_by_host = plan
@@ -759,91 +770,154 @@ fn upper_env(service: &str) -> String {
 /// The agent file's name for a workload kit's `agent-context` without a `filename`.
 const DEFAULT_CONTEXT_FILE: &str = "AGENTS.md";
 
+/// The `agent-context` requests a sandbox applies, and their version. A sandbox uses one version
+/// for all its kits (the spec refuses `@1` and `@2` together): `pin` when it already has one
+/// (`kit add`), else `@2` when every kit with agent context offers it, else `@1` when every one
+/// offers that. A kit left with no context at that version loses it (a warning); a request that
+/// isn't optional and can't be kept is an error.
+pub fn select_contexts(
+    all: &[KitContext],
+    pin: Option<u8>,
+) -> Result<(Option<u8>, Vec<&KitContext>)> {
+    if all.is_empty() {
+        return Ok((pin, Vec::new()));
+    }
+    let other = |v: u8| if v == 1 { 2 } else { 1 };
+    // A request of the other version that its kit doesn't let us skip.
+    let blocker = |v: u8| all.iter().find(|c| c.version == other(v) && !c.optional);
+    let covers = |v: u8| {
+        all.iter()
+            .all(|c| all.iter().any(|o| o.kit == c.kit && o.version == v))
+    };
+    let version = match pin {
+        Some(v) => {
+            if let Some(c) = blocker(v) {
+                bail!(
+                    "kit {}: needs agent-context@{}, but this sandbox's kits use \
+                     agent-context@{v}, and a sandbox uses one version; recreate it with the kit",
+                    c.kit,
+                    c.version
+                );
+            }
+            v
+        }
+        None => match (blocker(2), blocker(1)) {
+            (None, _) if covers(2) => 2,
+            (_, None) if covers(1) => 1,
+            (None, _) => 2,
+            (_, None) => 1,
+            (Some(one), Some(two)) => bail!(
+                "kit {} needs agent-context@1 and kit {} needs agent-context@2, and a sandbox \
+                 uses one version; use kits that offer the same version (a kit can offer both \
+                 as optional)",
+                one.kit,
+                two.kit
+            ),
+        },
+    };
+    let mut dropped: Vec<&str> = Vec::new();
+    for c in all {
+        if !all.iter().any(|o| o.kit == c.kit && o.version == version)
+            && !dropped.contains(&&*c.kit)
+        {
+            dropped.push(&c.kit);
+            crate::kit_warning!(
+                "kit {}: agent-context@{} skipped (this sandbox's kits use agent-context@{version})",
+                c.kit,
+                c.version
+            );
+        }
+    }
+    let kept = all.iter().filter(|c| c.version == version).collect();
+    Ok((Some(version), kept))
+}
+
 /// The agent file in the guest: the workload kit's own `agent-context` file, in the parent of
 /// `workdir` unless it names a directory (sbx #15). `None` when the workload declares none.
-pub fn agent_file(plan: &Plan, workdir: &str) -> Result<Option<String>> {
+pub fn agent_file(
+    workload: &str,
+    contexts: &[&KitContext],
+    workdir: &str,
+) -> Result<Option<String>> {
     let parent = Path::new(workdir)
         .parent()
         .map_or_else(|| "/".to_string(), |p| p.display().to_string());
     let join = |dir: &str, name: &str| format!("{}/{name}", dir.trim_end_matches('/'));
-    let w = &plan.workload;
-    let Some((_, c)) = plan.merged.contexts.iter().find(|(k, _)| *k == w.name) else {
+    let Some(c) = contexts.iter().find(|c| c.kit == workload).map(|c| &c.req) else {
         return Ok(None);
     };
     let dir = c.directory.as_deref().unwrap_or(&parent);
     if !dir.starts_with('/') {
-        bail!(
-            "kit {}: agent-context directory '{dir}' must be an absolute path",
-            w.name
-        );
+        bail!("kit {workload}: agent-context directory '{dir}' must be an absolute path");
     }
     // A lexical check only: symlinks inside the guest are out of scope.
     if dir.split('/').any(|c| c == "..") {
-        bail!(
-            "kit {}: agent-context directory '{dir}' must not contain '..'",
-            w.name
-        );
+        bail!("kit {workload}: agent-context directory '{dir}' must not contain '..'");
     }
     let name = c.filename.as_deref().unwrap_or(DEFAULT_CONTEXT_FILE);
     if name.is_empty() || name.contains('/') || name == "." || name == ".." {
-        bail!(
-            "kit {}: agent-context filename '{name}' must be a file name",
-            w.name
-        );
+        bail!("kit {workload}: agent-context filename '{name}' must be a file name");
     }
     Ok(Some(join(dir, name)))
 }
 
-/// sbx's layout (#15): the workload's own context appended to the agent file; each mixin's in
-/// `<dir>/kits-agent-context/<kit>.md`, indexed in one block of the agent file. A mixin's
-/// `filename`/`directory` are ignored, as sbx does. Nothing is written into a mounted workspace:
-/// the agent file is the guest's own.
-fn context_scripts(plan: &Plan, agent_file: Option<&str>, mounts: &[&Path]) -> Vec<String> {
-    let w = &plan.workload;
-    let mut own: Vec<&str> = Vec::new();
-    let mut mixins: Vec<(&str, Vec<&str>)> = Vec::new();
-    for (kit, c) in &plan.merged.contexts {
-        if c.content.trim().is_empty() {
+/// Writes the kits' agent context to the agent file, which is the guest's own: nothing is
+/// written into a mounted workspace. A mixin's `filename`/`directory` are ignored, as sbx does.
+///
+/// `agent-context@2`: every kit's text goes in the file itself, in its kits section.
+/// `@1` is sbx's layout (#15): the workload's own text appended to the file, each mixin's in
+/// `<dir>/kits-agent-context/<kit>.md`, listed in the kits section.
+fn context_scripts(
+    workload: &str,
+    version: Option<u8>,
+    contexts: &[&KitContext],
+    agent_file: Option<&str>,
+    mounts: &[&Path],
+) -> Vec<String> {
+    // Each kit's bodies, in order.
+    let mut kits: Vec<(&str, Vec<&str>)> = Vec::new();
+    for c in contexts {
+        if c.req.content.trim().is_empty() {
             continue;
         }
-        if *kit == w.name {
-            own.push(&c.content);
-        } else {
-            match mixins.iter_mut().find(|(k, _)| k == kit) {
-                Some((_, bodies)) => bodies.push(&c.content),
-                None => mixins.push((kit, vec![&c.content])),
-            }
+        match kits.iter_mut().find(|(k, _)| *k == c.kit) {
+            Some((_, bodies)) => bodies.push(&c.req.content),
+            None => kits.push((&c.kit, vec![&c.req.content])),
         }
     }
     let Some(file) = agent_file else {
-        for (kit, _) in &mixins {
+        for (kit, _) in kits.iter().filter(|(k, _)| *k != workload) {
             crate::kit_warning!(
                 "kit {kit}: agent context dropped (the workload declares no agent file)"
             );
         }
         return Vec::new();
     };
-    let dir = file.rsplit_once('/').map_or("", |(d, _)| d);
-    if own.is_empty() && mixins.is_empty() {
+    if kits.is_empty() {
         return Vec::new();
     }
+    let dir = file.rsplit_once('/').map_or("", |(d, _)| d);
+    let inline = version == Some(2);
     let index_dir = format!("{dir}/{}", guest::KITS_CONTEXT_DIR);
-    if mounts
-        .iter()
-        .any(|m| Path::new(file).starts_with(m) || Path::new(&index_dir).starts_with(m))
-    {
+    if mounts.iter().any(|m| {
+        Path::new(file).starts_with(m) || (!inline && Path::new(&index_dir).starts_with(m))
+    }) {
         crate::warning!(
             "agent context not written: {file} is in a mounted workspace, outside the \
              sandbox"
         );
         return Vec::new();
     }
-    let mut scripts = Vec::new();
-    if !own.is_empty() {
-        scripts.push(guest::append_context_script(file, &own));
+    if inline {
+        return vec![guest::inline_context_script(file, &kits)];
     }
+    let mut scripts = Vec::new();
     let mut entries = Vec::new();
-    for (kit, bodies) in &mixins {
+    for (kit, bodies) in &kits {
+        if *kit == workload {
+            scripts.push(guest::append_context_script(file, bodies));
+            continue;
+        }
         let path = format!("{dir}/{}/{kit}.md", guest::KITS_CONTEXT_DIR);
         scripts.push(guest::kit_context_script(&path, bodies));
         entries.push((kit.to_string(), path));

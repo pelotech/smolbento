@@ -254,12 +254,13 @@ fn path_name(p: &Path) -> String {
 }
 
 /// Of a capability declared in several versions, only the newest one smolbento understands
-/// counts: kits declare older versions for older runtimes (sbx's agents give their guide as
-/// agent-context@1 and @2 alike), and applying both would apply it twice. Entries of that one
-/// version all stay (several volume@1, say); unknown capabilities are left as they are.
+/// counts: kits declare older versions for older runtimes, and applying both would apply it
+/// twice. Entries of that one version all stay (several volume@1, say); unknown capabilities
+/// are left as they are. `agent-context` keeps every version: a sandbox uses one version for
+/// all its kits, chosen when they are applied (`apply::select_contexts`).
 fn newest_versions(caps: Vec<Cap>) -> Vec<Cap> {
     let versioned = |c: &Cap| {
-        if matches!(c.body, CapBody::Unsupported) {
+        if matches!(c.body, CapBody::Unsupported | CapBody::AgentContext(_)) {
             return None;
         }
         let (base, v) = c.ty.rsplit_once('@')?;

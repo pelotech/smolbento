@@ -45,6 +45,8 @@ pub fn write_stand_ins(dir: &std::path::Path) -> std::io::Result<()> {
 pub const STAND_IN_SHELL: &str = r#"{"schemaVersion":"3","kind":"workload","capabilities":[
   {"type":"com.docker.sandbox/sbx@1"},
   {"type":"com.docker.sandbox/agent-context@1","optional":true,
+   "config":{"content":"","filename":"AGENTS.md"}},
+  {"type":"com.docker.sandbox/agent-context@2","optional":true,
    "config":{"content":"","filename":"AGENTS.md"}}]}"#;
 
 /// The `claude` stand-in's descriptor: the real kit's `sbx@1`, agent file and skills directory.
@@ -54,6 +56,8 @@ pub const STAND_IN_CLAUDE: &str = r#"{"schemaVersion":"3","kind":"workload","cap
   {"type":"com.docker.sandbox/agent-skills@1","optional":true,
    "config":{"path":"/home/agent/.claude/skills"}},
   {"type":"com.docker.sandbox/agent-context@1","optional":true,
+   "config":{"content":"","directory":"/home/agent/.claude","filename":"CLAUDE.md"}},
+  {"type":"com.docker.sandbox/agent-context@2","optional":true,
    "config":{"content":"","directory":"/home/agent/.claude","filename":"CLAUDE.md"}}]}"#;
 
 /// Writes (or replaces) agent `name`'s stand-in under `dir` with `descriptor`.

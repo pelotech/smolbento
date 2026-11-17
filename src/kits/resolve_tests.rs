@@ -892,7 +892,7 @@ fn hooks_files_and_contexts_expand_args_and_env() {
     );
     assert_eq!(p.merged.files[0].path, "/f/alice");
     assert_eq!(p.merged.files[0].content, b"x");
-    assert_eq!(p.merged.contexts[0].1.content, "for alice");
+    assert_eq!(p.merged.contexts[0].req.content, "for alice");
     assert!(!p.args["m"].contains_key("opt"));
 }
 

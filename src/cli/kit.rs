@@ -626,6 +626,7 @@ fn add_running<R: Runner>(
             .map(|w| Workspace::from_label(w))
             .collect(),
         agent_file: sb.meta.agent_file.clone(),
+        agent_context: sb.meta.agent_context,
         ..Default::default()
     };
     let (mut steps, added) = apply(
@@ -738,6 +739,15 @@ fn add_running<R: Runner>(
     ctx.vm
         .set_label(&sb.machine, labels::KITS, &labels::kits_value(&kits))
         .context("recording the kit in the sandbox's labels")?;
+    // The first kit with agent context settles the version the later ones keep to.
+    if let Some(v) = req
+        .agent_context
+        .filter(|v| sb.meta.agent_context != Some(*v))
+    {
+        ctx.vm
+            .set_label(&sb.machine, labels::AGENT_CONTEXT, &v.to_string())
+            .context("recording the agent-context version in the sandbox's labels")?;
+    }
     // Like a create (R30): the kit stays, and later starts fail until its hooks succeed.
     if let Some((path, _, _)) = &startup
         && let Err(e) = sandbox::run_startup(&ctx.vm, sb, Some(path))

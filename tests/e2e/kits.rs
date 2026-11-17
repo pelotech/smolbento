@@ -876,8 +876,9 @@ setup:
     );
 }
 
-/// sbx #15: a mixin's agent context goes beside the workspace, in the sandbox only: the shell
-/// agent's `AGENTS.md` gets an index block and the kit's text goes to `kits-agent-context/`.
+/// sbx #15: a mixin's agent context goes beside the workspace, in the sandbox only. It is
+/// `agent-context@2` (a v2 kit's instructions are), so the kit's text is in the shell agent's
+/// `AGENTS.md` itself, where the agent reads it at startup.
 #[test]
 #[ignore = "boots real VMs and pulls alpine; run with `just e2e`"]
 pub(crate) fn mixin_agent_context_sits_beside_the_workspace() {
@@ -894,28 +895,23 @@ agentInstructions:
     e.create_with_kits(&[&kit]);
     let parent = e.workspace().parent().unwrap().to_path_buf();
     let p = parent.display();
-    let index = root_out(&e.name, &format!("cat {p}/AGENTS.md"));
-    let line = format!("- **e2e-ctx** — See {p}/kits-agent-context/e2e-ctx.md.");
+    let file = root_out(&e.name, &format!("cat {p}/AGENTS.md"));
+    let section = "<!-- sbx:kit e2e-ctx -->\nUse the e2e tools.\n<!-- sbx:kits-section end -->";
     assert!(
-        index.contains("<!-- sbx:kits-section start -->")
-            && index.contains(&line)
-            && index.contains("<!-- sbx:kits-section end -->"),
-        "{index}"
+        file.contains("<!-- sbx:kits-section start -->") && file.contains(section),
+        "{file}"
     );
-    let body = root_out(&e.name, &format!("cat {p}/kits-agent-context/e2e-ctx.md"));
-    assert!(body.contains("Use the e2e tools."), "{body}");
+    assert!(
+        !root_sh(&e.name, &format!("test -e {p}/kits-agent-context"))
+            .status
+            .success(),
+        "no per-kit files: the text is inline"
+    );
     assert_eq!(
-        root_out(
-            &e.name,
-            &format!("stat -c %U {p}/AGENTS.md {p}/kits-agent-context/e2e-ctx.md")
-        ),
-        "agent\nagent\n"
+        root_out(&e.name, &format!("stat -c %U {p}/AGENTS.md")),
+        "agent\n"
     );
     assert!(!parent.join("AGENTS.md").exists(), "nothing on the host");
-    assert!(
-        !parent.join("kits-agent-context").exists(),
-        "nothing on the host"
-    );
 }
 
 /// sbx #6, #8, #9: kit argument errors stop `create` before any machine is made.
@@ -1199,9 +1195,12 @@ pub(crate) fn nix_kit_gives_agents_nix_and_direnv() {
         "yes"
     );
     assert!(root_sh(&e.name, "getent passwd agent").status.success());
-    // The agent file lists the kit; its text is beside it.
-    let text = root_out(&e.name, "cat /home/agent/.claude/kits-agent-context/nix.md");
-    assert!(text.contains("direnv exec"), "{text}");
+    // Claude's kit and this one both offer agent-context@2: the text is in the agent file.
+    let text = root_out(&e.name, "cat /home/agent/.claude/CLAUDE.md");
+    assert!(
+        text.contains("<!-- sbx:kit nix -->\nNix and direnv are installed."),
+        "{text}"
+    );
 }
 
 /// `kits/nix` on a workload whose image user isn't `agent`.

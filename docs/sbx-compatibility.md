@@ -327,7 +327,7 @@ with `-D`).
 | `volume@1` | Yes, removed with the sandbox | Yes, on the sandbox's disk. Removed with the sandbox (`rm`, `reset`, recreate); kept across stop and start; each fork gets a copy |
 | `resources@1` | Limited (no GPU) | CPUs and memory. GPU ignored |
 | `lifecycle@1` | Yes | Yes: install steps on first start, startup steps on every start. `interactive` ignored |
-| `agent-context@1`, `@2` | Yes | Yes, in the same places (see below) |
+| `agent-context@1`, `@2` | Yes. As of 0.54 a mixin's `@2` text is still indexed like `@1` (docker/sbx-releases#878) | Yes, in the same places (see below). `@2` text is inline, as the spec requires |
 | `sbx@1` | Yes | Yes: the workload's command is the agent (see below) |
 | `git-identity@1` | Yes | Yes: your `git config user.name/email` |
 | `long-running@1` | Yes | Yes: no auto-stop when the last session ends |
@@ -391,9 +391,17 @@ with `-D`).
   can't remove them; deny a host instead.
 - Agent context goes in the agent's file in the workspace's parent directory, inside the sandbox
   only: `CLAUDE.md` (claude), `GEMINI.md` (gemini), `AGENTS.md` (others), or the file a workload
-  kit's `agent-context` names, with its text appended. A v2 mixin's text goes to
-  `kits-agent-context/<kit>.md` beside it, listed between `<!-- sbx:kits-section start -->` and
-  `<!-- sbx:kits-section end -->`.
+  kit's `agent-context` names. `agent-context@1` text is laid out as sbx does: the workload's
+  appended, a mixin's in `kits-agent-context/<kit>.md` beside it, listed between
+  `<!-- sbx:kits-section start -->` and `<!-- sbx:kits-section end -->`. `agent-context@2` text
+  (a v2 kit's `agentInstructions` too) is in the file itself, between the same markers, as the
+  spec requires. sbx 0.54 still indexes a mixin's `@2` text like `@1`
+  (docker/sbx-releases#878), so the two differ there until sbx is fixed. The layout inside the
+  markers (a `<!-- sbx:kit <name> -->` line before each kit's text) is smolbento's: the spec
+  doesn't set one.
+- A sandbox uses one `agent-context` version for all its kits ([Kits](kits.md#agent-instructions-from-kits)).
+  The spec refuses `@1` and `@2` requests together and leaves the choice between two optional
+  ones to the runtime; sbx's choice isn't measured.
 - The settings are `kit.allowedSources` and `kit.allowLocalKits`
   ([Configuration](configuration.md#settings)).
 - A `host-mount@1` directory is `kit-host-mounts/<sha256(kit)>/<sha256(path)>` under
@@ -463,7 +471,8 @@ with `-D`).
 - A v2 or startup step run as a non-root user keeps the sandbox environment, except `HOME`, `USER`,
   `LOGNAME` and `SHELL`, which are that user's (via `runuser`, or `su` without `-`, which resets
   them).
-- A v3 mixin's agent context: smolbento writes it to `kits-agent-context/<kit>.md`, as for v2.
+- Which `agent-context` version sbx applies when kits offer both, and its layout for inline
+  `@2` text once docker/sbx-releases#878 is fixed.
 - `integrates` and `conflicts` error texts, and a published kit whose provides have no version.
 - An optional argument a kit declares but doesn't use, with no value and no default.
 - A published kit's host-mount identity: keyed on `<registry>/<repository>`; sbx's choice isn't

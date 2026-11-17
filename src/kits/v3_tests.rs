@@ -429,12 +429,17 @@ fn claude_mixin_capabilities_decode() {
             _ => None,
         })
         .collect();
-    // sbx publishes the guide as agent-context@1 and @2 alike: one copy, not both.
-    assert_eq!(ctx.len(), 1);
-    assert!(k.caps.iter().any(|c| c.ty.ends_with("agent-context@2")));
-    assert_eq!(ctx[0].filename.as_deref(), Some("CLAUDE.md"));
-    assert_eq!(ctx[0].directory.as_deref(), Some("/home/agent/.claude"));
-    assert!(ctx[0].content.starts_with("Claude Code is installed"));
+    // sbx publishes the guide as agent-context@1 and @2 alike. Both stay: the sandbox's kits
+    // together settle which one is applied.
+    assert_eq!(ctx.len(), 2);
+    for version in ["agent-context@1", "agent-context@2"] {
+        assert!(k.caps.iter().any(|c| c.ty.ends_with(version) && c.optional));
+    }
+    for c in ctx {
+        assert_eq!(c.filename.as_deref(), Some("CLAUDE.md"));
+        assert_eq!(c.directory.as_deref(), Some("/home/agent/.claude"));
+        assert!(c.content.starts_with("Claude Code is installed"));
+    }
 }
 
 #[test]
@@ -493,9 +498,12 @@ fn one_cap(json_cap: &str) -> Result<Kit> {
 #[test]
 fn only_the_newest_known_version_of_a_capability_counts() {
     let caps = [
+        // Every agent-context version stays: one is chosen for the whole sandbox, later.
         r#"{"type":"com.docker.sandbox/agent-context@1","config":{"content":"old"}}"#,
         r#"{"type":"com.docker.sandbox/agent-context@2","config":{"content":"new"}}"#,
         r#"{"type":"com.docker.sandbox/agent-context@9","config":{"content":"future"}}"#,
+        r#"{"type":"com.docker.sandbox/network-policy@1","config":{}}"#,
+        r#"{"type":"com.docker.sandbox/network-policy@2","config":{}}"#,
         r#"{"type":"com.docker.sandbox/volume@1","config":{"path":"/a"}}"#,
         r#"{"type":"com.docker.sandbox/volume@1","config":{"path":"/b"}}"#,
     ]
@@ -505,13 +513,15 @@ fn only_the_newest_known_version_of_a_capability_counts() {
     assert_eq!(
         types,
         [
+            "com.docker.sandbox/agent-context@1",
             "com.docker.sandbox/agent-context@2",
             "com.docker.sandbox/agent-context@9",
+            "com.docker.sandbox/network-policy@2",
             "com.docker.sandbox/volume@1",
             "com.docker.sandbox/volume@1",
         ]
     );
-    assert!(matches!(k.caps[1].body, CapBody::Unsupported));
+    assert!(matches!(k.caps[2].body, CapBody::Unsupported));
 }
 
 #[test]

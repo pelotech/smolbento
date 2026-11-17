@@ -484,6 +484,9 @@ pub const CLAUDE_STAND_IN: &str = r#"{
      "config": {"path": "/home/agent/.claude/skills"}},
     {"type": "com.docker.sandbox/agent-context@1", "optional": true,
      "config": {"content": "Claude Code notes\n", "directory": "/home/agent/.claude",
+                "filename": "CLAUDE.md"}},
+    {"type": "com.docker.sandbox/agent-context@2", "optional": true,
+     "config": {"content": "Claude Code notes\n", "directory": "/home/agent/.claude",
                 "filename": "CLAUDE.md"}}
   ]
 }"#;

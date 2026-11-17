@@ -260,9 +260,68 @@ fn printf_bytes(bytes: &[u8]) -> String {
 
 /// The directory, next to the agent file, holding one `<kit>.md` per mixin with agent context.
 pub const KITS_CONTEXT_DIR: &str = "kits-agent-context";
-/// The markers around sbx's kits index in the agent file.
+/// The markers around the kits section of the agent file: sbx's index of per-kit files
+/// (`agent-context@1`), or the kits' text itself (`@2`).
 pub const KITS_SECTION_START: &str = "<!-- sbx:kits-section start -->";
 pub const KITS_SECTION_END: &str = "<!-- sbx:kits-section end -->";
+
+/// The line before a kit's text in the kits section of the agent file.
+fn kit_marker(kit: &str) -> String {
+    format!("<!-- sbx:kit {kit} -->")
+}
+
+/// Rewrites the kits section of `file` with `awk` program `rules`, appending the section when
+/// the file has none; text outside it stays. The program gets the markers as `b` and `e`, and
+/// `lines` (the new entries) in the file `s`. It prints the section from a `put()` it defines
+/// (setting `done`), having read the old section's lines through its own `inb` rule.
+fn section_script(file: &str, lines: &[String], rules: &str) -> String {
+    let lines: Vec<String> = lines.iter().map(|l| sh_quote(l)).collect();
+    let f = sh_quote(file);
+    format!(
+        "set -e\n{OWNER}\n{mkdirs}s=$(mktemp); t=$(mktemp)\nprintf '%s\\n' {lines} > \"$s\"\n\
+         new=; [ -e {f} ] || {{ : > {f}; new=1; }}\n\
+         awk -v b={start} -v e={end} -v s=\"$s\" '\n\
+         {rules}\
+         $0 == b {{ inb = 1; drop = 0; next }}\n\
+         inb && $0 == e {{ inb = 0; if (!done) put(); next }}\n\
+         inb {{ old(); next }}\n\
+         {{ print }}\n\
+         END {{ if (!done) {{ if (NR && !inb) print \"\"; put() }} }}' {f} > \"$t\"\n\
+         cat \"$t\" > {f}\nrm -f \"$s\" \"$t\"\n\
+         [ -z \"$new\" ] || [ -z \"$o\" ] || chown \"$o\" {f}\n",
+        mkdirs = mkdirs(file),
+        lines = lines.join(" "),
+        start = sh_quote(KITS_SECTION_START),
+        end = sh_quote(KITS_SECTION_END),
+    )
+}
+
+/// Puts each kit's text itself in the kits section of `file` (`agent-context@2`): `(kit, its
+/// bodies)` in order, under a line naming the kit. A kit already there gets its new text; the
+/// other kits' text stays. Bodies are joined with two newlines, untrimmed, as the spec says. A
+/// section marker in kit text is written as `&lt;!-- sbx:`, so a kit can't end the section or
+/// pass its text off as another kit's.
+pub fn inline_context_script(file: &str, kits: &[(&str, Vec<&str>)]) -> String {
+    let mut lines: Vec<String> = Vec::new();
+    for (i, (kit, bodies)) in kits.iter().enumerate() {
+        if i > 0 {
+            lines.push(String::new());
+        }
+        lines.push(kit_marker(kit));
+        let text = bodies.join("\n\n").replace("<!-- sbx:", "&lt;!-- sbx:");
+        lines.extend(text.trim_end_matches('\n').split('\n').map(String::from));
+    }
+    section_script(
+        file,
+        &lines,
+        "function kit(l) { return substr(l, 1, 13) == \"<!-- sbx:kit \" }\n\
+         function put(  i) { while (m && keep[m] == \"\") m--; print b;\n\
+           for (i = 1; i <= m; i++) print keep[i]; if (m) print \"\";\n\
+           for (i = 1; i <= n; i++) print add[i]; print e; done = 1 }\n\
+         function old() { if (kit($0)) drop = ($0 in new_kit); if (!drop) keep[++m] = $0 }\n\
+         BEGIN { while ((getline l < s) > 0) { add[++n] = l; if (kit(l)) new_kit[l] = 1 } close(s) }\n",
+    )
+}
 
 /// Shell commands printing `bodies` one blank line apart. A body is inline text or
 /// `file:<in-image path>` (copied with `awk 1`, which ends it with a newline).
@@ -312,34 +371,21 @@ pub fn kit_context_script(path: &str, bodies: &[&str]) -> String {
     )
 }
 
-/// Puts one `- **<kit>** — See <path>.` line per entry in sbx's kits index block of `file`,
-/// rewriting the block in place (a kit's old line is replaced) or appending it; text outside
-/// the block stays.
+/// Puts one `- **<kit>** — See <path>.` line per entry in sbx's kits index (`agent-context@1`),
+/// the kits section of `file`; a kit's old line is replaced.
 pub fn kits_index_script(file: &str, entries: &[(String, String)]) -> String {
     let lines: Vec<String> = entries
         .iter()
-        .map(|(kit, path)| sh_quote(&format!("- **{kit}** — See {path}.")))
+        .map(|(kit, path)| format!("- **{kit}** — See {path}."))
         .collect();
-    let f = sh_quote(file);
-    format!(
-        "set -e\n{OWNER}\n{mkdirs}s=$(mktemp); t=$(mktemp)\nprintf '%s\\n' {lines} > \"$s\"\n\
-         new=; [ -e {f} ] || {{ : > {f}; new=1; }}\n\
-         awk -v b={start} -v e={end} -v s=\"$s\" '\n\
-         function key(l,  i) {{ i = index(substr(l, 5), \"**\"); return i ? substr(l, 1, i + 5) : l }}\n\
-         function put(  i) {{ print b; print \"## Kits\"; for (i = 1; i <= m; i++) print keep[i];\n\
-           for (i = 1; i <= n; i++) print add[i]; print e; done = 1 }}\n\
-         BEGIN {{ while ((getline l < s) > 0) {{ add[++n] = l; new_kit[key(l)] = 1 }} close(s) }}\n\
-         $0 == b {{ inb = 1; next }}\n\
-         inb && $0 == e {{ inb = 0; if (!done) put(); next }}\n\
-         inb {{ if ($0 != \"## Kits\" && $0 != \"\" && !(key($0) in new_kit)) keep[++m] = $0; next }}\n\
-         {{ print }}\n\
-         END {{ if (!done) {{ if (NR && !inb) print \"\"; put() }} }}' {f} > \"$t\"\n\
-         cat \"$t\" > {f}\nrm -f \"$s\" \"$t\"\n\
-         [ -z \"$new\" ] || [ -z \"$o\" ] || chown \"$o\" {f}\n",
-        mkdirs = mkdirs(file),
-        lines = lines.join(" "),
-        start = sh_quote(KITS_SECTION_START),
-        end = sh_quote(KITS_SECTION_END),
+    section_script(
+        file,
+        &lines,
+        "function key(l,  i) { i = index(substr(l, 5), \"**\"); return i ? substr(l, 1, i + 5) : l }\n\
+         function put(  i) { print b; print \"## Kits\"; for (i = 1; i <= m; i++) print keep[i];\n\
+           for (i = 1; i <= n; i++) print add[i]; print e; done = 1 }\n\
+         function old() { if ($0 != \"## Kits\" && $0 != \"\" && !(key($0) in new_kit)) keep[++m] = $0 }\n\
+         BEGIN { while ((getline l < s) > 0) { add[++n] = l; new_kit[key(l)] = 1 } close(s) }\n",
     )
 }
 

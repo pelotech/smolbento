@@ -67,8 +67,13 @@ capabilities:
           - github.com
           - api.github.com
           - codeload.github.com
+  # One version is used per sandbox, whichever its other kits offer.
   - type: com.docker.sandbox/agent-context@1
-    config:
+    optional: true
+    config: &agent-context
       content: >-
         Nix and direnv are installed. Run project commands with `direnv exec . <cmd>` (or
         `nix develop -c <cmd>`); non-interactive shells don't load `.envrc` on their own.
+  - type: com.docker.sandbox/agent-context@2
+    optional: true
+    config: *agent-context
