@@ -1,5 +1,18 @@
 # Changelog
 
+## [0.31.1](https://github.com/pelotech/smolbento/compare/v0.31.0...v0.31.1) (2026-11-17)
+
+
+### Bug Fixes
+
+* **kits:** lay out agent context as the kit spec's suite expects ([#157](https://github.com/pelotech/smolbento/issues/157)) ([ca28d3d](https://github.com/pelotech/smolbento/commit/ca28d3dae7082e0226f13eba50c6b339451839d3))
+* **kits:** load kits the spec allows and check [@2](https://github.com/2) entries as it says ([#159](https://github.com/pelotech/smolbento/issues/159)) ([6491558](https://github.com/pelotech/smolbento/commit/6491558f84ccf42a414530ab036829f9e4612eab))
+
+
+### Chores
+
+* **smolvm:** pin 1.35.3 and drop the empty allow-list workaround ([#160](https://github.com/pelotech/smolbento/issues/160)) ([b0482a0](https://github.com/pelotech/smolbento/commit/b0482a0be157d225a10223120ecce0c8d01fa060))
+
 ## [0.31.0](https://github.com/pelotech/smolbento/compare/v0.30.0...v0.31.0) (2026-11-17)
 
 
