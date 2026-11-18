@@ -1125,7 +1125,11 @@ pub(crate) fn a_pushed_kit_pulls_and_runs() {
     let r = reg.reference("pushed");
     let out = e.ok(&["kit", "push", kit.to_str().unwrap(), &r]);
     assert!(out.starts_with(&format!("Pushed {r} (sha256:")), "{out}");
-    e.create_with_kits(&[&r]);
+    // A pulled v2 kit is still v2, so it needs a v2 workload (`create_with_kits` can only tell
+    // from a local `spec.yaml`).
+    let template = e.alpine_template();
+    let shell = e.v2_shell();
+    e.create(&e.name, &["-t", &template, "--kit", &r, &shell]);
     assert_eq!(
         root_out(&e.name, "cat /home/agent/hello"),
         "from-the-registry\n"

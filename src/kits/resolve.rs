@@ -8,8 +8,8 @@ use crate::kits::args::{ArgValues, expand, expand_value};
 use crate::kits::capability;
 use crate::kits::host_mount;
 use crate::kits::model::{
-    AgentContextReq, Cap, CapBody, CredReq, FileReq, Format, Hook, HookCmd, Kind, Kit, Lifecycle,
-    NetRule, Rules, Source, SshPhase,
+    AgentContextReq, Cap, CapBody, CredReq, FileReq, Format, Hook, Kind, Kit, Lifecycle, NetRule,
+    Rules, Source, SshPhase,
 };
 use crate::kits::v3;
 use crate::ssh_agent::{AgentGrant, PhaseGrant};
@@ -401,7 +401,7 @@ pub fn resolve_for(
                     merged.add_bundled(&k.name, name, source, cap.optional)?;
                 }
                 CapBody::Resources { cpus, memory } => merged.set_resources(cpus, memory),
-                CapBody::Lifecycle(l) => add_lifecycle(&mut merged, &k.name, l),
+                CapBody::Lifecycle(l) => add_lifecycle(&mut merged, k, l, workdir),
                 CapBody::AgentContext(c) => merged.contexts.push(KitContext {
                     kit: k.name.clone(),
                     version: context_version(&cap.ty),
@@ -658,18 +658,40 @@ fn enforceable(
     Ok((host_only(install), host_only(runtime), Some(skip)))
 }
 
-/// A kit's install and startup hooks and init files.
-fn add_lifecycle(merged: &mut Merged, kit: &str, l: &Lifecycle) {
-    let tagged = |h: &Hook| (kit.to_string(), h.clone());
-    merged.install_hooks.extend(l.install.iter().map(tagged));
-    merged.startup_hooks.extend(l.startup.iter().map(tagged));
-    merged.files.extend(l.files.iter().cloned());
+/// A kit's install and startup hooks and init files. sbx runs a v3 kit's install hooks in a clean
+/// environment; its startup hooks, and all of a v2 kit's, get the container's. A relative file
+/// path (only a v2 kit's `files/workspace` has one) is under the sandbox's working directory,
+/// `workdir`.
+fn add_lifecycle(merged: &mut Merged, k: &Kit, l: &Lifecycle, workdir: &str) {
+    let tagged = |clean_env: bool| {
+        move |h: &Hook| {
+            let h = Hook {
+                clean_env,
+                ..h.clone()
+            };
+            (k.name.clone(), h)
+        }
+    };
+    let v3 = k.format() != Some(Format::V2);
+    merged
+        .install_hooks
+        .extend(l.install.iter().map(tagged(v3)));
+    merged
+        .startup_hooks
+        .extend(l.startup.iter().map(tagged(false)));
+    merged.files.extend(l.files.iter().map(|f| FileReq {
+        path: if f.path.starts_with('/') {
+            f.path.clone()
+        } else {
+            format!("{workdir}/{}", f.path)
+        },
+        ..f.clone()
+    }));
 }
 
 /// Expands `k`'s `${{ kit.args.* }}` and `${{ kit.env.* }}` references, each once, then checks the
-/// result. A v3 config holding one is expanded as a document and read again, strictly (SPEC-v3
-/// §6). A capability built without a config (a v2 kit's, a Smolfile's) holds its references in
-/// hook commands, file paths and text, and agent-context fields, which expand one by one.
+/// result: a config holding one is expanded as a document and read again, strictly (SPEC-v3 §6).
+/// A v2 kit's hooks, files and agent instructions are configs too; its `files/` are copied as is.
 fn expand_caps(
     k: &mut Kit,
     args: &BTreeMap<String, String>,
@@ -678,54 +700,13 @@ fn expand_caps(
     let unresolved = unresolved(k, args);
     let ex = |s: &str| expand(s, args, &unresolved, env);
     for c in &mut k.caps {
-        c.body = match c.config.take() {
-            Some(config) => {
-                let config = expand_value(&config, v3::text_fields(&c.ty), &ex)?;
-                v3::body(&c.ty, Some(config)).with_context(|| format!("capability {}", c.ty))?
-            }
-            None => expand_fields(&c.body, &ex)?,
-        };
+        if let Some(config) = c.config.take() {
+            let config = expand_value(&config, v3::text_fields(&c.ty), &ex)?;
+            c.body =
+                v3::body(&c.ty, Some(config)).with_context(|| format!("capability {}", c.ty))?;
+        }
     }
     v3::check_caps(&k.name, &k.caps)
-}
-
-/// `body` with the references in its hook commands, file paths and text, and agent-context fields
-/// expanded; other capabilities hold none outside a config.
-fn expand_fields(body: &CapBody, ex: &dyn Fn(&str) -> Result<String>) -> Result<CapBody> {
-    let hooks = |hs: &[Hook]| {
-        hs.iter()
-            .map(|h| expand_hook(h, ex))
-            .collect::<Result<Vec<_>>>()
-    };
-    Ok(match body {
-        CapBody::Lifecycle(l) => CapBody::Lifecycle(Lifecycle {
-            install: hooks(&l.install)?,
-            startup: hooks(&l.startup)?,
-            files: l
-                .files
-                .iter()
-                .map(|f| {
-                    // Only text can hold references; other bytes pass through.
-                    let content = match std::str::from_utf8(&f.content) {
-                        Ok(text) => ex(text)?.into_bytes(),
-                        Err(_) => f.content.clone(),
-                    };
-                    Ok(FileReq {
-                        path: ex(&f.path)?,
-                        content,
-                        ..f.clone()
-                    })
-                })
-                .collect::<Result<_>>()?,
-        }),
-        CapBody::AgentContext(c) => CapBody::AgentContext(AgentContextReq {
-            filename: c.filename.as_deref().map(ex).transpose()?,
-            directory: c.directory.as_deref().map(ex).transpose()?,
-            content: ex(&c.content)?,
-            content_file: c.content_file.clone(),
-        }),
-        b => b.clone(),
-    })
 }
 
 /// An OAuth credential's token and resource hosts join its kit's network rules (the first entry
@@ -806,17 +787,6 @@ fn union<'a>(values: impl Iterator<Item = &'a String>) -> Vec<String> {
         }
     }
     union
-}
-
-fn expand_hook(h: &Hook, ex: &dyn Fn(&str) -> Result<String>) -> Result<Hook> {
-    let command = match &h.command {
-        HookCmd::Shell(s) => HookCmd::Shell(ex(s)?),
-        HookCmd::Argv(v) => HookCmd::Argv(v.iter().map(|s| ex(s)).collect::<Result<_>>()?),
-    };
-    Ok(Hook {
-        command,
-        ..h.clone()
-    })
 }
 
 /// The arguments `k` declares that `args` gives no value.

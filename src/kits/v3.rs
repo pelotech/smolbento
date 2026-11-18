@@ -310,17 +310,23 @@ fn cap(item: CapabilityItem, at: &str) -> Result<Cap> {
     if item.ty.trim().is_empty() {
         bail!("{at} has no type");
     }
-    let refs = item.config.as_ref().is_some_and(args::has_ref);
-    let body = match body(&item.ty, item.config.clone()) {
+    request(item.ty, item.optional.unwrap_or(false), item.config)
+}
+
+/// A capability request from its type and config, as `cap` describes; a v2 kit's hooks, files and
+/// agent instructions are built through it too.
+pub(crate) fn request(ty: String, optional: bool, config: Option<Value>) -> Result<Cap> {
+    let refs = config.as_ref().is_some_and(args::has_ref);
+    let body = match body(&ty, config.clone()) {
         Ok(b) => b,
         Err(_) if refs => CapBody::Pending,
-        Err(e) => return Err(e).with_context(|| format!("capability {}", item.ty)),
+        Err(e) => return Err(e).with_context(|| format!("capability {ty}")),
     };
     // Nothing reads an unsupported type's config.
-    let config = item.config.filter(|_| refs && body != CapBody::Unsupported);
+    let config = config.filter(|_| refs && body != CapBody::Unsupported);
     Ok(Cap {
-        ty: item.ty,
-        optional: item.optional.unwrap_or(false),
+        ty,
+        optional,
         body,
         group: None,
         config,
@@ -430,7 +436,7 @@ pub(crate) fn body(ty: &str, config: Option<Value>) -> Result<CapBody> {
                 memory: c.memory,
             }
         }
-        "lifecycle@1" => CapBody::Lifecycle(lifecycle(decode(config)?)),
+        "lifecycle@1" => CapBody::Lifecycle(lifecycle(decode(config)?)?),
         "agent-context@1" => {
             let c: AgentContextV1 = decode(config)?;
             if c.content.is_some() && c.content_file.is_some() {
@@ -989,9 +995,14 @@ struct FileCfg {
     description: Option<String>,
 }
 
-fn lifecycle(c: LifecycleCfg) -> Lifecycle {
-    // sbx runs only install hooks in a clean environment.
-    let hook = |h: HookCfg, clean_env: bool| Hook {
+/// A file's path must be absolute (once its references expand: a config holding one is read
+/// again then).
+fn lifecycle(c: LifecycleCfg) -> Result<Lifecycle> {
+    if let Some(f) = c.files.iter().find(|f| !f.path.starts_with('/')) {
+        bail!("lifecycle@1 file path {:?} must be absolute", f.path);
+    }
+    // `clean_env` is decided when hooks are merged (`resolve`).
+    let hook = |h: HookCfg| Hook {
         command: match h.command {
             CommandCfg::Shell(s) => HookCmd::Shell(s),
             CommandCfg::Argv(a) => HookCmd::Argv(a),
@@ -999,11 +1010,11 @@ fn lifecycle(c: LifecycleCfg) -> Lifecycle {
         user: h.user,
         env: h.env,
         background: h.background.unwrap_or(false),
-        clean_env,
+        clean_env: false,
     };
-    Lifecycle {
-        install: c.install.into_iter().map(|h| hook(h, true)).collect(),
-        startup: c.startup.into_iter().map(|h| hook(h, false)).collect(),
+    Ok(Lifecycle {
+        install: c.install.into_iter().map(hook).collect(),
+        startup: c.startup.into_iter().map(hook).collect(),
         files: c
             .files
             .into_iter()
@@ -1015,7 +1026,7 @@ fn lifecycle(c: LifecycleCfg) -> Lifecycle {
                 overwrite: f.overwrite.unwrap_or(true),
             })
             .collect(),
-    }
+    })
 }
 
 #[cfg(test)]

@@ -386,9 +386,15 @@ fn claude_mixin_capabilities_decode() {
     assert_eq!(l.install[0].env, ["WORKSPACE_DIR"]);
     assert!(matches!(l.install[0].command, HookCmd::Shell(_)));
     assert!(matches!(l.startup[0].command, HookCmd::Argv(_)));
-    // Only install hooks get sbx's clean environment.
-    assert!(l.install.iter().all(|h| h.clean_env));
-    assert!(l.startup.iter().all(|h| !h.clean_env));
+    // Only install hooks get sbx's clean environment, set when they're merged.
+    let p = crate::kits::resolve::resolve(
+        Kit::new("w", Kind::Workload, Source::LocalV3("w".into())),
+        vec![k.clone()],
+        &crate::kits::args::ArgValues::default(),
+    )
+    .unwrap();
+    assert!(p.merged.install_hooks.iter().all(|(_, h)| h.clean_env));
+    assert!(p.merged.startup_hooks.iter().all(|(_, h)| !h.clean_env));
 
     let skills = k
         .caps
@@ -1124,4 +1130,25 @@ capabilities:
         format!("{e:#}").contains("container must be 1..65535"),
         "{e:#}"
     );
+}
+
+#[test]
+fn a_lifecycle_file_path_must_be_absolute_once_expanded() {
+    let doc = r#"schemaVersion: "3"
+kind: mixin
+capabilities:
+  - type: com.docker.sandbox/lifecycle@1
+    config: {files: [{path: notes/a.md, content: x}]}
+"#;
+    let e = parse(doc, local("r")).unwrap_err();
+    assert!(
+        format!("{e:#}").contains(r#"lifecycle@1 file path "notes/a.md" must be absolute"#),
+        "{e:#}"
+    );
+    // With a reference, the path is checked once it expands.
+    let k = yaml_cap(
+        r#"  - type: com.docker.sandbox/lifecycle@1
+    config: {files: [{path: "${{ kit.env.WORKSPACE }}/a.md", content: x}]}"#,
+    );
+    assert_eq!(k.caps[0].body, CapBody::Pending);
 }

@@ -11,8 +11,10 @@ use crate::secrets::{SecretEntry, Source as SecretSource};
 fn kit(name: &str, kind: Kind) -> Kit {
     Kit::test(name, kind)
 }
+/// A published v2 workload: a v2 spec names its image.
 fn workload() -> Kit {
     let mut w = kit("wl", Kind::Workload);
+    w.v2 = true;
     w.content = Content::Image("img:1".into());
     w.command = Some(vec!["wl".into(), "--go".into()]);
     w

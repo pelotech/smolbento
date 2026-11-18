@@ -7,14 +7,14 @@ use std::path::Path;
 
 use anyhow::{Context, Result, bail};
 use serde::Deserialize;
-use serde_json::Value;
+use serde_json::{Value, json};
 
 use super::descriptor::{ApiKeyCfg, InjectCfg, ResourcesCfg, TokenEndpoint};
 use crate::kits::model::*;
-use crate::kits::v3::{check_name, name_from_source};
+use crate::kits::v3::{self, check_name, name_from_source};
 
 const NS: &str = "com.docker.sandbox/";
-/// Left for apply to expand: the workspace path is only known at create time.
+/// `${WORKDIR}`, for `resolve` to expand: the workspace path is only known at create time.
 const WORKSPACE: &str = "${{ kit.env.WORKSPACE }}";
 const HOME: &str = "/home/agent";
 
@@ -145,9 +145,12 @@ fn parse_warn(yaml: &str, dir: &Path) -> Result<(Kit, Vec<String>)> {
             },
         ));
     }
-    if let Some(l) = lifecycle(s.setup.unwrap_or_default(), dir, &name, &mut warnings)? {
-        caps.push(cap("lifecycle@1", CapBody::Lifecycle(l)));
-    }
+    caps.extend(lifecycle(
+        s.setup.unwrap_or_default(),
+        dir,
+        &name,
+        &mut warnings,
+    )?);
     // No content, nothing to write.
     if let Some(a) = s.agent_instructions
         && let Some(content) = a.content.filter(|c| !c.trim().is_empty())
@@ -158,15 +161,12 @@ fn parse_warn(yaml: &str, dir: &Path) -> Result<(Kit, Vec<String>)> {
                  \"sandbox\", not \"mixin\""
             ));
         }
-        caps.push(cap(
-            "agent-context@2",
-            CapBody::AgentContext(AgentContextReq {
-                filename: a.filename,
-                directory: None,
-                content,
-                content_file: None,
-            }),
-        ));
+        let config = json!({"filename": a.filename, "content": content});
+        caps.push(v3::request(
+            format!("{NS}agent-context@2"),
+            false,
+            Some(config),
+        )?);
     }
     if s.security.is_some_and(|s| s.privileged) {
         caps.push(cap("privileged@1", CapBody::Privileged));
@@ -202,8 +202,10 @@ fn parse_warn(yaml: &str, dir: &Path) -> Result<(Kit, Vec<String>)> {
         env: s.environment.variables.into_iter().collect(),
         content: sandbox.image.map_or(Content::None, Content::Image),
         command,
+        v2: true,
         ..Kit::new(&name, kind, source)
     };
+    v3::check_caps(&kit.name, &kit.caps)?;
     Ok((kit, warnings))
 }
 
@@ -508,59 +510,62 @@ struct FileCfg {
     only_if_missing: bool,
 }
 
-/// Hooks and files in v2 apply order: `files/home`, install, `setup.files`, startup,
-/// `files/workspace`. Install and startup stay separate lists, so only the files need ordering.
-fn lifecycle(
-    s: Setup,
-    dir: &Path,
-    kit: &str,
-    warnings: &mut Vec<String>,
-) -> Result<Option<Lifecycle>> {
-    // v2 defaults: install runs as root, startup as the `agent` user.
-    // Both get the full container environment, as in sbx.
-    let install = s.install.into_iter().map(|h| Hook {
-        command: HookCmd::Shell(h.command),
-        user: Some(h.user.unwrap_or_else(|| "0".into())),
-        env: vec![],
-        background: false,
-        clean_env: false,
-    });
-    let startup = s.startup.into_iter().map(|h| Hook {
-        command: HookCmd::Argv(h.command),
-        user: Some(h.user.unwrap_or_else(|| "agent".into())),
-        env: vec![],
-        background: h.background,
-        clean_env: false,
-    });
-    let mut static_files = |sub: &str, dest: &str| -> Result<Vec<FileReq>> {
+/// v2's `setup` and `files/` as lifecycle requests, in v2 apply order: `files/home`, install,
+/// `setup.files`, startup, `files/workspace`. The hooks and `setup.files` are a v3 `lifecycle@1`
+/// config, so their references expand as a v3 kit's do. In `setup.files`, `${WORKDIR}` in the
+/// content and a relative path mean the workspace. `files/` is copied as is, bytes and all, so it
+/// stays outside any config; `files/workspace` paths are relative to the workspace.
+fn lifecycle(s: Setup, dir: &Path, kit: &str, warnings: &mut Vec<String>) -> Result<Vec<Cap>> {
+    let mut static_files = |sub: &str, dest: &str| -> Result<Option<Cap>> {
         let root = dir.join(sub);
-        let mut out = Vec::new();
+        let mut files = Vec::new();
         if root.is_dir() {
-            walk(&root, &root, dest, &mut out, &mut |rel| {
+            walk(&root, &root, dest, &mut files, &mut |rel| {
                 warnings.push(format!("kit {kit}: {sub}/{rel} is a symlink; skipped"))
             })?;
         }
-        Ok(out)
+        let l = Lifecycle {
+            files,
+            ..Default::default()
+        };
+        Ok((!l.files.is_empty()).then(|| cap("lifecycle@1", CapBody::Lifecycle(l))))
     };
-    let mut files = static_files("files/home", HOME)?;
-    files.extend(s.files.into_iter().map(|f| FileReq {
-        path: f.path,
-        content: f.content.replace("${WORKDIR}", WORKSPACE).into_bytes(),
-        mode: f.mode,
-        overwrite: !f.only_if_missing,
-    }));
-    files.extend(static_files("files/workspace", WORKSPACE)?);
-    let l = Lifecycle {
-        install: install.collect(),
-        startup: startup.collect(),
-        files,
-    };
-    check_hooks(kit, &l)?;
-    let empty = l.install.is_empty() && l.startup.is_empty() && l.files.is_empty();
-    Ok((!empty).then_some(l))
+    let mut caps: Vec<Cap> = static_files("files/home", HOME)?.into_iter().collect();
+    if !(s.install.is_empty() && s.startup.is_empty() && s.files.is_empty()) {
+        // v2 defaults: install runs as root, startup as the `agent` user.
+        let config = json!({
+            "install": s.install.into_iter().map(|h| json!({
+                "command": h.command,
+                "user": h.user.unwrap_or_else(|| "0".into()),
+            })).collect::<Vec<_>>(),
+            "startup": s.startup.into_iter().map(|h| json!({
+                "command": h.command,
+                "user": h.user.unwrap_or_else(|| "agent".into()),
+                "background": h.background,
+            })).collect::<Vec<_>>(),
+            "files": s.files.into_iter().map(|f| json!({
+                "path": if f.path.starts_with('/') {
+                    f.path
+                } else {
+                    format!("{WORKSPACE}/{}", f.path)
+                },
+                "content": f.content.replace("${WORKDIR}", WORKSPACE),
+                "mode": f.mode,
+                "overwrite": !f.only_if_missing,
+            })).collect::<Vec<_>>(),
+        });
+        caps.push(v3::request(
+            format!("{NS}lifecycle@1"),
+            false,
+            Some(config),
+        )?);
+    }
+    caps.extend(static_files("files/workspace", "")?);
+    Ok(caps)
 }
 
-/// Every file under `root`, in path order, targeted at `dest` plus its relative path. Each
+/// Every file under `root`, in path order, targeted at `dest` plus its relative path (the relative
+/// path alone for an empty `dest`). Each
 /// skipped symlink's path relative to `root` goes to `symlink`.
 fn walk(
     root: &Path,
@@ -597,7 +602,10 @@ fn walk(
         }
         let content = std::fs::read(&p).with_context(|| format!("reading {}", p.display()))?;
         out.push(FileReq {
-            path: format!("{dest}/{rel}"),
+            path: match dest {
+                "" => rel,
+                _ => format!("{dest}/{rel}"),
+            },
             content,
             mode: None,
             overwrite: true,
@@ -627,36 +635,33 @@ mod tests {
     }
 
     #[test]
-    fn v2_and_its_hand_written_v3_give_the_same_model() {
+    fn v2_and_its_hand_written_v3_resolve_alike() {
         let dir = Path::new("tests/fixtures/kits/v2/full");
         let v2 = parse(
             &std::fs::read_to_string(dir.join("spec.yaml")).unwrap(),
             dir,
         )
         .unwrap();
-        let v3 = crate::kits::v3::parse(
+        // A v2 source, so its install hooks get the container's environment as v2's do.
+        let mut v3 = crate::kits::v3::parse(
             &std::fs::read_to_string("tests/fixtures/kits/v2/full-as-v3.yaml").unwrap(),
             Source::LocalV2(dir.into()),
         )
         .unwrap();
-        // The differences: sbx runs v3 install hooks in a clean environment, v2 hooks in the
-        // container's; and a v3 config with a reference is kept for `resolve` to expand.
-        let mut v3_caps = v3.caps.clone();
-        let mut hooks = 0;
-        for (a, b) in v2.caps.iter().zip(&mut v3_caps) {
-            b.config = None;
-            if let (CapBody::Lifecycle(a), CapBody::Lifecycle(b)) = (&a.body, &mut b.body) {
-                assert!(a.install.iter().chain(&a.startup).all(|h| !h.clean_env));
-                for h in &mut b.install {
-                    assert!(h.clean_env);
-                    h.clean_env = false;
-                    hooks += 1;
-                }
-            }
-        }
-        assert!(hooks > 0, "the fixture has an install hook");
-        assert_eq!(v2.caps, v3_caps);
+        v3.name = v2.name.clone();
+        // v3 has no plain variables (only arguments with `env:`); the fixture covers the rest.
+        v3.env = v2.env.clone();
         assert_eq!(v2.kind, v3.kind);
+        let merged = |k: Kit| {
+            let args = crate::kits::args::ArgValues::default();
+            let p = crate::kits::resolve::resolve_for(k, vec![], &args, "/w/repo").unwrap();
+            assert!(
+                !p.merged.install_hooks.is_empty(),
+                "the fixture has install hooks"
+            );
+            format!("{:#?}", p.merged)
+        };
+        assert_eq!(merged(v2), merged(v3));
     }
 
     #[test]
@@ -777,10 +782,67 @@ mod tests {
         assert_eq!(
             files,
             [
-                ("${{ kit.env.WORKSPACE }}/.AGENTS.md.swp", &swap[..]),
-                ("${{ kit.env.WORKSPACE }}/AGENTS.md", &b"# agents\n"[..]),
+                // Relative: `resolve` puts them under the workspace.
+                (".AGENTS.md.swp", &swap[..]),
+                ("AGENTS.md", &b"# agents\n"[..]),
             ]
         );
+    }
+
+    /// `files/` is copied as is: a reference in a file there is text, unlike one in `setup`.
+    #[test]
+    fn files_are_copied_without_expanding_references() {
+        let d = tempfile::tempdir().unwrap();
+        let home = d.path().join("files/home");
+        std::fs::create_dir_all(&home).unwrap();
+        std::fs::write(home.join("ci.yml"), "ref: ${{ kit.env.WORKSPACE }}\n").unwrap();
+        let yaml = "schemaVersion: \"2\"\nkind: mixin\nsetup:\n  files:\n    - path: /home/agent/w\n      content: \"${WORKDIR}\"\n";
+        let k = parse(yaml, d.path()).unwrap();
+        let w = Kit::new("w", Kind::Workload, Source::LocalV2("w".into()));
+        let args = crate::kits::args::ArgValues::default();
+        let p = crate::kits::resolve::resolve_for(w, vec![k], &args, "/w/repo").unwrap();
+        let files: Vec<(&str, &[u8])> = p
+            .merged
+            .files
+            .iter()
+            .map(|f| (f.path.as_str(), f.content.as_slice()))
+            .collect();
+        assert_eq!(
+            files,
+            [
+                (
+                    "/home/agent/ci.yml",
+                    &b"ref: ${{ kit.env.WORKSPACE }}\n"[..]
+                ),
+                ("/home/agent/w", &b"/w/repo"[..]),
+            ]
+        );
+    }
+
+    /// A published v2 mixin carries no image, so only the parser can say it's v2 (`read_layout`
+    /// replaces its source with the registry reference). Its install hooks keep the container's
+    /// environment.
+    #[test]
+    fn a_published_v2_mixin_stays_v2() {
+        let yaml = "schemaVersion: \"2\"\nkind: mixin\nname: m\nsetup:\n  install:\n    - command: echo hi\n";
+        let mut k = parse(yaml, Path::new("/k/m")).unwrap();
+        k.source = Source::Registry("acme/m:1".into());
+        assert_eq!(k.format(), Some(Format::V2));
+        let w = Kit::new("w", Kind::Workload, Source::LocalV2("w".into()));
+        let args = crate::kits::args::ArgValues::default();
+        let p = crate::kits::resolve::resolve_for(w, vec![k], &args, "/w/repo").unwrap();
+        assert!(!p.merged.install_hooks[0].1.clean_env);
+    }
+
+    /// In `setup.files`, a relative path means the workspace, as `files/workspace` does.
+    #[test]
+    fn a_relative_setup_file_goes_under_the_workspace() {
+        let yaml = "schemaVersion: \"2\"\nkind: mixin\nname: m\nsetup:\n  files:\n    - path: notes/a.md\n      content: x\n";
+        let k = parse(yaml, Path::new("/k/m")).unwrap();
+        let w = Kit::new("w", Kind::Workload, Source::LocalV2("w".into()));
+        let args = crate::kits::args::ArgValues::default();
+        let p = crate::kits::resolve::resolve_for(w, vec![k], &args, "/w/repo").unwrap();
+        assert_eq!(p.merged.files[0].path, "/w/repo/notes/a.md");
     }
 
     #[test]

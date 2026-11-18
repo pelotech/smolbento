@@ -1,4 +1,4 @@
-# Hand-written v3 equivalent of full/spec.yaml; the v2 shim must produce the same capabilities.
+# Hand-written v3 equivalent of full/spec.yaml; the two must resolve alike.
 schemaVersion: "3"
 kind: workload
 capabilities:

@@ -505,6 +505,9 @@ used.
   `@2` text.
 - `integrates` and `conflicts` error texts, and a published kit whose provides have no version.
 - An optional argument a kit declares but doesn't use, with no value and no default.
+- A v2 kit's `files/home` and `files/workspace` are copied as they are: `${{ kit.args.* }}` and
+  `${{ kit.env.* }}` in them stay text. In `setup` hooks and files they're replaced. In
+  `setup.files`, `${WORKDIR}` in the content and a relative path mean the workspace.
 - A published kit's host-mount identity: keyed on `<registry>/<repository>`; sbx's choice isn't
   measured.
 - The kits index after hand edits (a removed or duplicated marker, or text inside the block).
