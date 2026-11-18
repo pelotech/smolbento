@@ -245,10 +245,10 @@ fn check_skill_caps(k: &Kit) -> Result<()> {
     let mut names = BTreeSet::new();
     for c in &k.caps {
         match &c.body {
-            CapBody::AgentSkills { path, .. } if !paths.insert(path) => {
+            CapBody::AgentSkills { path, .. } if !paths.insert((c.scope(), path)) => {
                 bail!("kit {}: agent-skills@1 names {path} twice", k.name)
             }
-            CapBody::AgentSkill { name, .. } if !names.insert(name) => {
+            CapBody::AgentSkill { name, .. } if !names.insert((c.scope(), name)) => {
                 bail!("kit {}: two agent-skill@1 entries are named {name}", k.name)
             }
             _ => {}
@@ -339,7 +339,14 @@ pub fn resolve_for(
     for k in std::iter::once(&mut workload).chain(mixins.iter_mut()) {
         expand_provides(k, &kit_args[&k.name])?;
     }
-    let mixins = order(&workload, mixins)?;
+    let mut mixins = order(&workload, mixins)?;
+    // SPEC-v3 §7.1.1: every declaration is checked before selection, then groups are selected
+    // whole, so nothing after this sees a skipped group's members.
+    let mut skipped = Vec::new();
+    for k in std::iter::once(&mut workload).chain(mixins.iter_mut()) {
+        check_skill_caps(k)?;
+        skipped.extend(select_groups(k)?);
+    }
 
     let all: Vec<Kit> = std::iter::once(workload.clone())
         .chain(mixins.iter().cloned())
@@ -353,7 +360,6 @@ pub fn resolve_for(
     env_map.insert("HOME".into(), AGENT_HOME.into());
     env_map.insert("WORKSPACE".into(), workdir.into());
 
-    let mut skipped = Vec::new();
     let mut ssh_entries = Vec::new();
     if matches!(workload.source, Source::Agent(_)) {
         ssh_entries.push(BUILT_IN);
@@ -364,7 +370,6 @@ pub fn resolve_for(
         let ex = |s: &str| -> Result<String> {
             expand(s, a, &unresolved, &env_map).with_context(|| format!("kit {}", k.name))
         };
-        check_skill_caps(k)?;
         for cap in &k.caps {
             match &cap.body {
                 CapBody::Unsupported => {
@@ -556,6 +561,68 @@ fn merge_env(
     env
 }
 
+/// SPEC-v3 §7.1.1: a group is selected only when smolbento can apply every member as asked. A
+/// rejected optional group is skipped whole; a rejected required one refuses the kit. The answer
+/// is a static list of what smolbento supports, which the spec allows.
+fn select_groups(k: &mut Kit) -> Result<Vec<Skipped>> {
+    let mut rejected = Vec::new();
+    let mut skipped = Vec::new();
+    for c in &k.caps {
+        let Some(g) = &c.group else { continue };
+        if rejected.contains(&g.index) {
+            continue;
+        }
+        let Some(why) = unsupported(c) else { continue };
+        rejected.push(g.index);
+        let name = g
+            .name
+            .as_ref()
+            .map(|n| format!(" ({n})"))
+            .unwrap_or_default();
+        let (group, member) = (g.path(), g.member_path());
+        if !c.optional {
+            bail!(
+                "kit {}: required group {group}{name}: {member} {} {why}",
+                k.name,
+                c.ty
+            );
+        }
+        let what = format!("optional group {group}{name}, for its {member} {}", c.ty);
+        skipped.push(Skipped::new(&k.name, what));
+    }
+    k.caps.retain(|c| {
+        c.group
+            .as_ref()
+            .is_none_or(|g| !rejected.contains(&g.index))
+    });
+    Ok(skipped)
+}
+
+/// Why smolbento can't apply `c` as asked, if it can't.
+fn unsupported(c: &Cap) -> Option<&'static str> {
+    match c.body {
+        CapBody::Unsupported => Some("is not supported by smolbento"),
+        _ if qualified(c) => Some("has method/path rules, which smolbento doesn't enforce"),
+        _ => None,
+    }
+}
+
+/// A `network-policy@2` capability with a method or path rule.
+fn qualified(c: &Cap) -> bool {
+    let CapBody::Network { install, runtime } = &c.body else {
+        return false;
+    };
+    c.ty.ends_with("network-policy@2")
+        && [install, runtime]
+            .iter()
+            .flat_map(|r| r.allow.iter().chain(&r.deny))
+            .any(is_qualified)
+}
+
+fn is_qualified(n: &NetRule) -> bool {
+    !n.methods.is_empty() || !n.paths.is_empty()
+}
+
 /// What of a kit's network rules smolbento can enforce: hosts, not methods or paths. A
 /// `network-policy@2` capability with method or path qualifiers is refused, or, when optional,
 /// downgraded to host-only (with a `Skipped` note): allows widen to their host, and qualified
@@ -567,12 +634,7 @@ fn enforceable(
     install: &Rules,
     runtime: &Rules,
 ) -> Result<(Rules, Rules, Option<Skipped>)> {
-    let is_qualified = |n: &NetRule| !n.methods.is_empty() || !n.paths.is_empty();
-    let qualified = [install, runtime]
-        .iter()
-        .flat_map(|r| r.allow.iter().chain(&r.deny))
-        .any(is_qualified);
-    if !qualified || !cap.ty.ends_with("network-policy@2") {
+    if !qualified(cap) {
         return Ok((install.clone(), runtime.clone(), None));
     }
     if !cap.optional {

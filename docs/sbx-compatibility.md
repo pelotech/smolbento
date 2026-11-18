@@ -325,6 +325,16 @@ A kit that **requires** a capability marked "no" or "later" fails, with its `typ
 anything is created. An optional one is skipped, with a warning when `kit.showWarnings` is on (or
 with `-D`).
 
+Capability groups (spec §7.1.1) are applied whole or not at all. smolbento rejects a group when one
+of its members is a capability marked "no" or "later", or a `network-policy@2` entry with method or
+path rules. A rejected optional group is skipped, and its warning names the member. A rejected
+required group refuses the kit, naming the member the same way. That static list is smolbento's
+only selection answer. A member that is accepted but can't be applied later is skipped on its own,
+not with its group: an optional credential with no secret set, an `agent-context` version the
+sandbox doesn't use, or a skill with no skills directory. smolbento doesn't keep selection records,
+so the spec's `selection` observation isn't available. `declarationBlocks` are accepted and not
+used.
+
 | Capability | sbx (local) | smolbento |
 |---|---|---|
 | `network-policy@1`, `@2` | Yes | Yes, source `kit`. Install-phase rules last through the first start's install steps only. An install-phase CIDR deny stays enforced for the sandbox's life (smolvm takes CIDR denies only at create; create prints a note), though `policy ls` doesn't show it. `@2` method and path rules aren't enforced, so a kit requiring them is refused. Optional: allow rules cover the whole host, and deny rules with methods or paths are dropped (the skipped line says how many) |

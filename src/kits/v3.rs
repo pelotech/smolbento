@@ -46,14 +46,29 @@ struct Descriptor {
     args: BTreeMap<String, Arg>,
 }
 
+/// An ordinary request, or a `group` of them (SPEC-v3 §7.1.1). Lenient like the top level: a
+/// published set's `source` attribution is accepted and ignored.
 #[derive(Deserialize)]
+#[serde(rename_all = "camelCase")]
 struct CapabilityItem {
     #[serde(default, rename = "type")]
     ty: String,
+    /// Kept as given: a group member may not state it, even as false.
+    optional: Option<bool>,
+    #[serde(default)]
+    config: Option<Value>,
+    group: Option<GroupItem>,
+    /// Only checked to be absent on group members; smolbento doesn't use the blocks.
+    declaration_blocks: Option<Value>,
+}
+
+#[derive(Deserialize)]
+struct GroupItem {
+    name: Option<String>,
     #[serde(default)]
     optional: bool,
     #[serde(default)]
-    config: Option<Value>,
+    capabilities: Vec<CapabilityItem>,
 }
 
 // Lenient like the descriptor's top level: an unknown arg key is ignored.
@@ -88,18 +103,7 @@ fn from_value(v: Value, source: Source) -> Result<Kit> {
         k => bail!("unknown kind '{k}'"),
     };
     let provides = provides(&d, &source)?;
-    let caps = d
-        .capabilities
-        .into_iter()
-        .enumerate()
-        .map(|(i, c)| {
-            if c.ty.trim().is_empty() {
-                bail!("capability {i} has no type");
-            }
-            cap(c)
-        })
-        .collect::<Result<Vec<_>>>()?;
-    let caps = newest_versions(caps);
+    let caps = newest_versions(caps(d.capabilities)?);
     let name = name_from_source(&source)?;
     for c in &caps {
         if let CapBody::Lifecycle(l) = &c.body {
@@ -252,30 +256,81 @@ fn path_name(p: &Path) -> String {
 /// twice. Entries of that one version all stay (several volume@1, say); unknown capabilities
 /// are left as they are. `agent-context` keeps every version: a sandbox uses one version for
 /// all its kits, chosen when they are applied (`apply::select_contexts`).
+///
+/// Like the spec's other per-entry constraints, this applies to the top-level entries and to each
+/// group's members separately.
 fn newest_versions(caps: Vec<Cap>) -> Vec<Cap> {
     let versioned = |c: &Cap| {
         if matches!(c.body, CapBody::Unsupported | CapBody::AgentContext(_)) {
             return None;
         }
         let (base, v) = c.ty.rsplit_once('@')?;
-        Some((base.to_string(), v.parse::<u32>().ok()?))
+        Some(((c.scope(), base.to_string()), v.parse::<u32>().ok()?))
     };
-    let mut newest: BTreeMap<String, u32> = BTreeMap::new();
-    for (base, v) in caps.iter().filter_map(versioned) {
-        let n = newest.entry(base).or_insert(v);
+    let mut newest: BTreeMap<(Option<usize>, String), u32> = BTreeMap::new();
+    for (key, v) in caps.iter().filter_map(versioned) {
+        let n = newest.entry(key).or_insert(v);
         *n = (*n).max(v);
     }
     caps.into_iter()
-        .filter(|c| versioned(c).is_none_or(|(base, v)| newest[&base] == v))
+        .filter(|c| versioned(c).is_none_or(|(key, v)| newest[&key] == v))
         .collect()
 }
 
-fn cap(item: CapabilityItem) -> Result<Cap> {
+/// The `capabilities` list with each group's members in its place. SPEC-v3 §7.1.1's grammar: an
+/// item is a request or a group, never both; a group is neither empty nor nested, and its members
+/// don't state `optional` (the group does) or `declarationBlocks`.
+fn caps(items: Vec<CapabilityItem>) -> Result<Vec<Cap>> {
+    let mut caps = Vec::new();
+    for (i, item) in items.into_iter().enumerate() {
+        let path = format!("capabilities[{i}]");
+        let Some(g) = item.group else {
+            caps.push(cap(item, &path)?);
+            continue;
+        };
+        if !item.ty.is_empty() || item.config.is_some() || item.optional.is_some() {
+            bail!("{path}: a group can't also have type, config or optional");
+        }
+        if g.capabilities.is_empty() {
+            bail!("{path}: the group has no capabilities");
+        }
+        for (j, m) in g.capabilities.into_iter().enumerate() {
+            let group = Group {
+                index: i,
+                member: j,
+                name: g.name.clone(),
+            };
+            let at = group.member_path();
+            if m.group.is_some() {
+                bail!("{at}: groups can't be nested");
+            }
+            if m.optional.is_some() {
+                bail!("{at}: a group member can't set optional; the group does");
+            }
+            if m.declaration_blocks.is_some() {
+                bail!("{at}: a group member can't set declarationBlocks");
+            }
+            caps.push(Cap {
+                optional: g.optional,
+                group: Some(group),
+                ..cap(m, &at)?
+            });
+        }
+    }
+    Ok(caps)
+}
+
+/// An ordinary request at `at`.
+fn cap(item: CapabilityItem, at: &str) -> Result<Cap> {
+    if item.ty.trim().is_empty() {
+        bail!("{at} has no type");
+    }
     let body = body(&item.ty, item.config).with_context(|| format!("capability {}", item.ty))?;
     Ok(Cap {
         ty: item.ty,
-        optional: item.optional,
+        optional: item.optional.unwrap_or(false),
         body,
+        group: None,
     })
 }
 
@@ -779,19 +834,21 @@ fn login_destination(dest: &str) -> bool {
             .is_some_and(|l| l.bytes().all(|b| b.is_ascii_digit()))
 }
 
-/// SPEC-v3: one kit's `ssh-agent@1` entries may not name the same phase twice.
+/// SPEC-v3: one kit's `ssh-agent@1` entries may not name the same phase twice (top-level entries
+/// and each group's members apart).
 fn check_ssh_phases(kit: &str, caps: &[Cap]) -> Result<()> {
     let mut seen = Vec::new();
     for c in caps {
         if let CapBody::SshAgent { phases, .. } = &c.body {
             for p in phases {
-                if seen.contains(p) {
+                let p = (c.scope(), *p);
+                if seen.contains(&p) {
                     bail!(
                         "kit {kit}: ssh-agent@1 entries overlap in phase {}",
-                        p.as_str()
+                        p.1.as_str()
                     );
                 }
-                seen.push(*p);
+                seen.push(p);
             }
         }
     }

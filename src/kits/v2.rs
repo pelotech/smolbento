@@ -212,6 +212,7 @@ fn cap(name: &str, body: CapBody) -> Cap {
         ty: format!("{NS}{name}"),
         optional: false,
         body,
+        group: None,
     }
 }
 

@@ -22,6 +22,7 @@ fn with(mut k: Kit, ty: &str, optional: bool, body: CapBody) -> Kit {
         ty: format!("com.docker.sandbox/{ty}"),
         optional,
         body,
+        group: None,
     });
     k
 }
