@@ -1001,8 +1001,8 @@ fn lifecycle(c: LifecycleCfg) -> Result<Lifecycle> {
     if let Some(f) = c.files.iter().find(|f| !f.path.starts_with('/')) {
         bail!("lifecycle@1 file path {:?} must be absolute", f.path);
     }
-    // sbx runs only install hooks in a clean environment.
-    let hook = |h: HookCfg, clean_env: bool| Hook {
+    // `clean_env` is decided when hooks are merged (`resolve`).
+    let hook = |h: HookCfg| Hook {
         command: match h.command {
             CommandCfg::Shell(s) => HookCmd::Shell(s),
             CommandCfg::Argv(a) => HookCmd::Argv(a),
@@ -1010,11 +1010,11 @@ fn lifecycle(c: LifecycleCfg) -> Result<Lifecycle> {
         user: h.user,
         env: h.env,
         background: h.background.unwrap_or(false),
-        clean_env,
+        clean_env: false,
     };
     Ok(Lifecycle {
-        install: c.install.into_iter().map(|h| hook(h, true)).collect(),
-        startup: c.startup.into_iter().map(|h| hook(h, false)).collect(),
+        install: c.install.into_iter().map(hook).collect(),
+        startup: c.startup.into_iter().map(hook).collect(),
         files: c
             .files
             .into_iter()

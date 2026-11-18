@@ -154,9 +154,10 @@ impl Kit {
 
     /// The kit file format it was written in.
     pub fn format(&self) -> Option<Format> {
-        match self.v2 {
-            true => Some(Format::V2),
-            false => self.source.format(),
+        if self.v2 {
+            Some(Format::V2)
+        } else {
+            self.source.format()
         }
     }
 
@@ -381,8 +382,7 @@ pub struct Hook {
     pub env: Vec<String>,
     pub background: bool,
     /// sbx's v3 install-hook environment: `env -i` with a small baseline plus the declared `env`.
-    /// Off for startup hooks, and when merged for a v2 kit's hooks: those get the full container
-    /// environment.
+    /// Set when hooks are merged (`resolve::add_lifecycle`); a parsed hook has it off.
     pub clean_env: bool,
 }
 

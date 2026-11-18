@@ -544,9 +544,10 @@ fn lifecycle(s: Setup, dir: &Path, kit: &str, warnings: &mut Vec<String>) -> Res
                 "background": h.background,
             })).collect::<Vec<_>>(),
             "files": s.files.into_iter().map(|f| json!({
-                "path": match f.path.starts_with('/') {
-                    true => f.path,
-                    false => format!("{WORKSPACE}/{}", f.path),
+                "path": if f.path.starts_with('/') {
+                    f.path
+                } else {
+                    format!("{WORKSPACE}/{}", f.path)
                 },
                 "content": f.content.replace("${WORKDIR}", WORKSPACE),
                 "mode": f.mode,

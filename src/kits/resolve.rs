@@ -658,24 +658,32 @@ fn enforceable(
     Ok((host_only(install), host_only(runtime), Some(skip)))
 }
 
-/// A kit's install and startup hooks and init files. sbx runs a v2 kit's install hooks in the
-/// container's environment, a v3 kit's in a clean one. A relative file path (only a v2 kit's
-/// `files/workspace` has one) is under the sandbox's working directory, `workdir`.
+/// A kit's install and startup hooks and init files. sbx runs a v3 kit's install hooks in a clean
+/// environment; its startup hooks, and all of a v2 kit's, get the container's. A relative file
+/// path (only a v2 kit's `files/workspace` has one) is under the sandbox's working directory,
+/// `workdir`.
 fn add_lifecycle(merged: &mut Merged, k: &Kit, l: &Lifecycle, workdir: &str) {
-    let v2 = k.format() == Some(Format::V2);
-    let tagged = |h: &Hook| {
-        let h = Hook {
-            clean_env: h.clean_env && !v2,
-            ..h.clone()
-        };
-        (k.name.clone(), h)
+    let tagged = |clean_env: bool| {
+        move |h: &Hook| {
+            let h = Hook {
+                clean_env,
+                ..h.clone()
+            };
+            (k.name.clone(), h)
+        }
     };
-    merged.install_hooks.extend(l.install.iter().map(tagged));
-    merged.startup_hooks.extend(l.startup.iter().map(tagged));
+    let v3 = k.format() != Some(Format::V2);
+    merged
+        .install_hooks
+        .extend(l.install.iter().map(tagged(v3)));
+    merged
+        .startup_hooks
+        .extend(l.startup.iter().map(tagged(false)));
     merged.files.extend(l.files.iter().map(|f| FileReq {
-        path: match f.path.starts_with('/') {
-            true => f.path.clone(),
-            false => format!("{workdir}/{}", f.path),
+        path: if f.path.starts_with('/') {
+            f.path.clone()
+        } else {
+            format!("{workdir}/{}", f.path)
         },
         ..f.clone()
     }));

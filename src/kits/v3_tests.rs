@@ -386,9 +386,15 @@ fn claude_mixin_capabilities_decode() {
     assert_eq!(l.install[0].env, ["WORKSPACE_DIR"]);
     assert!(matches!(l.install[0].command, HookCmd::Shell(_)));
     assert!(matches!(l.startup[0].command, HookCmd::Argv(_)));
-    // Only install hooks get sbx's clean environment.
-    assert!(l.install.iter().all(|h| h.clean_env));
-    assert!(l.startup.iter().all(|h| !h.clean_env));
+    // Only install hooks get sbx's clean environment, set when they're merged.
+    let p = crate::kits::resolve::resolve(
+        Kit::new("w", Kind::Workload, Source::LocalV3("w".into())),
+        vec![k.clone()],
+        &crate::kits::args::ArgValues::default(),
+    )
+    .unwrap();
+    assert!(p.merged.install_hooks.iter().all(|(_, h)| h.clean_env));
+    assert!(p.merged.startup_hooks.iter().all(|(_, h)| !h.clean_env));
 
     let skills = k
         .caps
