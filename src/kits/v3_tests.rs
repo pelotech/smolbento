@@ -1092,3 +1092,68 @@ capabilities:
         ]
     );
 }
+
+fn yaml_cap(cap: &str) -> Kit {
+    let doc = format!("schemaVersion: \"3\"\nkind: mixin\ncapabilities:\n{cap}");
+    parse(&doc, local("r")).unwrap()
+}
+
+#[test]
+fn a_config_with_a_reference_is_kept_and_read_as_written_when_it_can_be() {
+    let k = yaml_cap(
+        r#"  - type: com.docker.sandbox/lifecycle@1
+    config: {install: [{command: "echo ${{ kit.args.name }}"}]}
+"#,
+    );
+    let CapBody::Lifecycle(l) = &k.caps[0].body else {
+        panic!("{:?}", k.caps[0].body)
+    };
+    assert_eq!(
+        l.install[0].command,
+        HookCmd::Shell("echo ${{ kit.args.name }}".into())
+    );
+    assert!(k.caps[0].config.is_some());
+}
+
+#[test]
+fn a_config_that_needs_its_references_to_be_read_is_pending() {
+    for cap in [
+        r#"  - type: com.docker.sandbox/port@1
+    config: {container: "${{ kit.args.port }}"}"#,
+        r#"  - type: com.docker.sandbox/host-mount@1
+    config: {path: "${{ kit.args.dir }}"}"#,
+    ] {
+        let k = yaml_cap(cap);
+        assert_eq!(k.caps[0].body, CapBody::Pending, "{cap}");
+        assert!(k.caps[0].config.is_some(), "{cap}");
+    }
+}
+
+#[test]
+fn a_config_without_kit_references_is_read_once_and_not_kept() {
+    for cap in [
+        r#"  - type: com.docker.sandbox/lifecycle@1
+    config: {install: [{command: "echo ${{ github.sha }}"}]}"#,
+        // Nothing reads an unsupported type's config.
+        r#"  - type: com.docker.sandbox/usb-device@1
+    optional: true
+    config: {class: "${{ kit.args.class }}"}"#,
+    ] {
+        assert_eq!(yaml_cap(cap).caps[0].config, None, "{cap}");
+    }
+}
+
+#[test]
+fn a_config_that_is_wrong_whatever_its_references_is_refused_at_load() {
+    let doc = r#"schemaVersion: "3"
+kind: mixin
+capabilities:
+  - type: com.docker.sandbox/port@1
+    config: {container: 0}
+"#;
+    let e = parse(doc, local("r")).unwrap_err();
+    assert!(
+        format!("{e:#}").contains("container must be 1..65535"),
+        "{e:#}"
+    );
+}

@@ -74,8 +74,14 @@ values aren't secret: they reach the environment and smolvm's machine config, an
 Unquoted numbers and booleans in `default:` and `enum:` are read as strings. A `pattern:` has to
 match the whole value, as if it were written `^(?:…)$`.
 
-In a kit, `${{ kit.args.NAME }}` and `${{ kit.env.NAME }}` are replaced. Any other `${{ … }}`, such
-as a GitHub Actions expression in a file the kit writes, is left as it is.
+In a kit, `${{ kit.args.NAME }}` and `${{ kit.env.NAME }}` are replaced, in any field of a
+capability's config and in its map keys. Any other `${{ … }}`, such as a GitHub Actions expression
+in a file the kit writes, is left as it is. A value that is nothing but one reference takes the type
+its value spells, so `container: ${{ kit.args.port }}` with `port=8080` is the number 8080.
+`true`/`false` become booleans, and a number does only when it prints back the same (`1.0`, `007`
+and `1e5` stay text). `volume@1`'s `size` and `mode` always stay text. A config with references is
+checked fully at create, after they're replaced. Two map keys that become the same key are an
+error.
 
 What a kit does, and when:
 

@@ -32,6 +32,7 @@ impl KitExt for Kit {
             optional,
             body,
             group: None,
+            config: None,
         });
         self
     }
@@ -1005,9 +1006,13 @@ fn v2_and_v3_kits_are_not_mixed() {
     check_formats(&agent, &[docker(), mixin("new")]).unwrap();
 }
 
-/// A mixin `g` from a v3 descriptor whose `capabilities` are `caps`.
+/// A mixin `g` from a v3 descriptor whose `capabilities` are `caps`. It declares the arguments
+/// `port`, `dir`, `host`, `mode` and `method`, without values.
 fn v3_mixin(caps: &str) -> Kit {
-    let doc = format!("schemaVersion: \"3\"\nkind: mixin\ncapabilities:\n{caps}");
+    let doc = format!(
+        "schemaVersion: \"3\"\nkind: mixin\nargs:\n  port: {{}}\n  dir: {{}}\n  host: {{}}\n  \
+         mode: {{}}\n  method: {{}}\ncapabilities:\n{caps}"
+    );
     crate::kits::v3::parse(&doc, Source::Registry("g".into())).unwrap()
 }
 
@@ -1146,4 +1151,88 @@ fn one_groups_rejection_leaves_another_group_alone() {
     let p = run(workload("w"), vec![k]).unwrap();
     assert_eq!(p.merged.volumes.len(), 1);
     assert_eq!(p.skipped.len(), 1);
+}
+
+fn with_args(values: &[&str]) -> ArgValues {
+    let flags: Vec<String> = values.iter().map(|v| v.to_string()).collect();
+    ArgValues::parse(&[], &flags).unwrap()
+}
+
+/// SPEC-v3 §6: references expand inside a capability's config before it's read, so a numeric
+/// argument reaches a numeric field and a path argument a checked path.
+#[test]
+fn config_references_expand_before_the_config_is_read() {
+    let k = v3_mixin(
+        r#"  - type: com.docker.sandbox/port@1
+    config: {container: "${{ kit.args.port }}"}
+  - type: com.docker.sandbox/host-mount@1
+    config: {path: "${{ kit.args.dir }}"}
+  - type: com.docker.sandbox/volume@1
+    config: {path: /cache, mode: "${{ kit.args.mode }}"}
+  - type: com.docker.sandbox/network-policy@1
+    config: {runtime: {allow: ["${{ kit.args.host }}"]}}
+"#,
+    );
+    let args = with_args(&[
+        "port=8080",
+        "dir=/srv/data",
+        "mode=0755",
+        "host=api.example.com",
+        "method=GET",
+    ]);
+    let p = resolve(workload("w"), vec![k], &args).unwrap();
+    assert_eq!(p.merged.ports, [(8080, false)]);
+    assert_eq!(p.merged.host_mounts[0].path, "/srv/data");
+    // `volume@1`'s mode stays text, though `0755` would otherwise read as text anyway.
+    assert_eq!(p.merged.volumes[0].mode.as_deref(), Some("0755"));
+    assert_eq!(runtime(&p).allow[0].host, "api.example.com");
+    // The plan's kits hold what was read, not the references.
+    assert!(p.mixins[0].caps.iter().all(|c| c.config.is_none()));
+}
+
+#[test]
+fn an_expanded_config_is_read_strictly() {
+    let k = v3_mixin(
+        r#"  - type: com.docker.sandbox/port@1
+    config: {container: "${{ kit.args.port }}"}
+"#,
+    );
+    let e = resolve(workload("w"), vec![k], &with_args(&["port=web"])).unwrap_err();
+    let e = format!("{e:#}");
+    assert!(
+        e.starts_with("kit g: capability com.docker.sandbox/port@1: "),
+        "{e}"
+    );
+}
+
+/// tck: SPEC-v3 §7.1.1/validate-expanded-declarations
+#[test]
+fn groups_are_selected_from_their_expanded_members() {
+    let k = v3_mixin(
+        r#"  - group:
+      optional: true
+      capabilities:
+        - type: com.docker.sandbox/network-policy@2
+          config:
+            runtime: {allow: [{hosts: [api.example.com], methods: ["${{ kit.args.method }}"]}]}
+"#,
+    );
+    let p = resolve(workload("w"), vec![k], &with_args(&["method=GET"])).unwrap();
+    assert!(runtime(&p).allow.is_empty(), "{:?}", runtime(&p));
+    assert_eq!(p.skipped.len(), 1, "{:?}", p.skipped);
+}
+
+#[test]
+fn a_reference_with_no_value_fails_even_in_an_optional_capability() {
+    let k = v3_mixin(
+        r#"  - type: com.docker.sandbox/port@1
+    optional: true
+    config: {container: "${{ kit.args.port }}"}
+"#,
+    );
+    let e = resolve(workload("w"), vec![k], &ArgValues::default()).unwrap_err();
+    assert!(
+        format!("{e:#}").contains("\"port\" has no resolved value"),
+        "{e:#}"
+    );
 }

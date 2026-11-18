@@ -974,6 +974,42 @@ capabilities:
     );
 }
 
+/// SPEC-v3 §6: kit arguments reach typed config fields (a port number) and paths, expanded
+/// inside the config before smolbento reads it.
+#[test]
+#[ignore = "boots real VMs and builds in the builder sandbox; run with `just e2e`"]
+pub(crate) fn kit_args_reach_typed_config_fields() {
+    let e = E2e::new("cfgargs");
+    let _builder = BuilderGuard::new();
+    // A v3 composition takes a registry base image, not the template archive.
+    let _reg = Registry::start(&e);
+    let kit = e.dir.path().join("e2e-cfgargs");
+    std::fs::create_dir_all(&kit).unwrap();
+    std::fs::write(
+        kit.join("e2e-cfgargs.yaml"),
+        r#"# syntax=docker/sandbox-kit:3
+schemaVersion: "3"
+kind: mixin
+args:
+  port:
+    default: "8123"
+  name:
+    default: cfg-args
+capabilities:
+  - type: com.docker.sandbox/port@1
+    config: {container: "${{ kit.args.port }}"}
+  - type: com.docker.sandbox/lifecycle@1
+    config:
+      files: [{path: "/var/tmp/${{ kit.args.name }}", content: "port ${{ kit.args.port }}"}]
+"#,
+    )
+    .unwrap();
+    e.create_with_kits(&[kit.to_str().unwrap()]);
+    let ports = e.ok(&["ports", &e.name]);
+    assert!(ports.contains("8123"), "{ports}");
+    assert_eq!(root_out(&e.name, "cat /var/tmp/cfg-args"), "port 8123");
+}
+
 /// sbx #6, #8, #9: kit argument errors stop `create` before any machine is made.
 #[test]
 #[ignore = "runs bento against smolvm; run with `just e2e`"]

@@ -4,13 +4,14 @@ use std::collections::{BTreeMap, BTreeSet};
 
 use anyhow::{Context, Result, bail};
 
-use crate::kits::args::{ArgValues, expand};
+use crate::kits::args::{ArgValues, expand, expand_value};
 use crate::kits::capability;
 use crate::kits::host_mount;
 use crate::kits::model::{
     AgentContextReq, Cap, CapBody, CredReq, FileReq, Format, Hook, HookCmd, Kind, Kit, Lifecycle,
     NetRule, Rules, Source, SshPhase,
 };
+use crate::kits::v3;
 use crate::ssh_agent::{AgentGrant, PhaseGrant};
 
 /// The agent user's home in the platform floor; the host can't see the guest's real env.
@@ -340,10 +341,15 @@ pub fn resolve_for(
         expand_provides(k, &kit_args[&k.name])?;
     }
     let mut mixins = order(&workload, mixins)?;
-    // SPEC-v3 §7.1.1: every declaration is checked before selection, then groups are selected
-    // whole, so nothing after this sees a skipped group's members.
+    let env = merge_env(std::iter::once(&workload).chain(&mixins), &kit_args);
+    let mut env_map: BTreeMap<String, String> = env.iter().cloned().collect();
+    env_map.insert("HOME".into(), AGENT_HOME.into());
+    env_map.insert("WORKSPACE".into(), workdir.into());
+    // Every declaration is expanded and checked before selection (SPEC-v3 §6, §7.1.1), then
+    // groups are selected whole, so nothing after this sees a reference or a skipped group.
     let mut skipped = Vec::new();
     for k in std::iter::once(&mut workload).chain(mixins.iter_mut()) {
+        expand_caps(k, &kit_args[&k.name], &env_map).with_context(|| format!("kit {}", k.name))?;
         check_skill_caps(k)?;
         skipped.extend(select_groups(k)?);
     }
@@ -353,23 +359,15 @@ pub fn resolve_for(
         .collect();
 
     let mut merged = Merged {
-        env: merge_env(&all, &kit_args),
+        env,
         ..Default::default()
     };
-    let mut env_map: BTreeMap<String, String> = merged.env.iter().cloned().collect();
-    env_map.insert("HOME".into(), AGENT_HOME.into());
-    env_map.insert("WORKSPACE".into(), workdir.into());
 
     let mut ssh_entries = Vec::new();
     if matches!(workload.source, Source::Agent(_)) {
         ssh_entries.push(BUILT_IN);
     }
     for k in &all {
-        let a = &kit_args[&k.name];
-        let unresolved = unresolved(k, a);
-        let ex = |s: &str| -> Result<String> {
-            expand(s, a, &unresolved, &env_map).with_context(|| format!("kit {}", k.name))
-        };
         for cap in &k.caps {
             match &cap.body {
                 CapBody::Unsupported => {
@@ -409,21 +407,13 @@ pub fn resolve_for(
                     merged.add_bundled(&k.name, name, source, cap.optional)?;
                 }
                 CapBody::Resources { cpus, memory } => merged.set_resources(cpus, memory),
-                CapBody::Lifecycle(l) => add_lifecycle(&mut merged, &k.name, l, &ex)?,
-                CapBody::AgentContext(c) => {
-                    merged.contexts.push(KitContext {
-                        kit: k.name.clone(),
-                        version: context_version(&cap.ty),
-                        optional: cap.optional,
-                        // SPEC §6: references expand in every string of a config.
-                        req: AgentContextReq {
-                            filename: c.filename.as_deref().map(ex).transpose()?,
-                            directory: c.directory.as_deref().map(ex).transpose()?,
-                            content: ex(&c.content)?,
-                            content_file: c.content_file.clone(),
-                        },
-                    });
-                }
+                CapBody::Lifecycle(l) => add_lifecycle(&mut merged, &k.name, l),
+                CapBody::AgentContext(c) => merged.contexts.push(KitContext {
+                    kit: k.name.clone(),
+                    version: context_version(&cap.ty),
+                    optional: cap.optional,
+                    req: c.clone(),
+                }),
                 CapBody::SshAgent {
                     phases,
                     unrestricted,
@@ -441,6 +431,7 @@ pub fn resolve_for(
                 CapBody::LongRunning => merged.long_running = true,
                 CapBody::Privileged => merged.privileged = true,
                 CapBody::Sbx | CapBody::AgentSessions => {}
+                CapBody::Pending => unreachable!("expand_caps reads every pending config"),
             }
         }
     }
@@ -538,8 +529,8 @@ fn check_names(workload: &Kit, mixins: &[Kit]) -> Result<()> {
 /// The kits' env vars in kit order; a later kit's value wins. A kit's own are its plain ones (v2
 /// `environment.variables`), then each arg that declares `env:` and has a value (v3, as Docker's
 /// claude mixin exports `model` as `CLAUDE_MODEL`); a default counts as a value, an empty one too.
-fn merge_env(
-    kits: &[Kit],
+fn merge_env<'a>(
+    kits: impl IntoIterator<Item = &'a Kit>,
     kit_args: &BTreeMap<String, BTreeMap<String, String>>,
 ) -> Vec<(String, String)> {
     let mut env: Vec<(String, String)> = Vec::new();
@@ -673,32 +664,74 @@ fn enforceable(
     Ok((host_only(install), host_only(runtime), Some(skip)))
 }
 
-/// A kit's install and startup hooks and init files, with `${{ }}` references expanded by `ex`.
-fn add_lifecycle(
-    merged: &mut Merged,
-    kit: &str,
-    l: &Lifecycle,
-    ex: &dyn Fn(&str) -> Result<String>,
+/// A kit's install and startup hooks and init files.
+fn add_lifecycle(merged: &mut Merged, kit: &str, l: &Lifecycle) {
+    let tagged = |h: &Hook| (kit.to_string(), h.clone());
+    merged.install_hooks.extend(l.install.iter().map(tagged));
+    merged.startup_hooks.extend(l.startup.iter().map(tagged));
+    merged.files.extend(l.files.iter().cloned());
+}
+
+/// Expands `k`'s `${{ kit.args.* }}` and `${{ kit.env.* }}` references, each once, then checks the
+/// result. A v3 config holding one is expanded as a document and read again, strictly (SPEC-v3
+/// §6). A capability built without a config (a v2 kit's, a Smolfile's) holds its references in
+/// hook commands, file paths and text, and agent-context fields, which expand one by one.
+fn expand_caps(
+    k: &mut Kit,
+    args: &BTreeMap<String, String>,
+    env: &BTreeMap<String, String>,
 ) -> Result<()> {
-    for h in &l.install {
-        merged.install_hooks.push((kit.into(), expand_hook(h, ex)?));
-    }
-    for h in &l.startup {
-        merged.startup_hooks.push((kit.into(), expand_hook(h, ex)?));
-    }
-    for f in &l.files {
-        // Only text can hold `${{ }}` references; other bytes pass through.
-        let content = match std::str::from_utf8(&f.content) {
-            Ok(text) => ex(text)?.into_bytes(),
-            Err(_) => f.content.clone(),
+    let unresolved = unresolved(k, args);
+    let ex = |s: &str| expand(s, args, &unresolved, env);
+    for c in &mut k.caps {
+        c.body = match c.config.take() {
+            Some(config) => {
+                let config = expand_value(&config, v3::text_fields(&c.ty), &ex)?;
+                v3::body(&c.ty, Some(config)).with_context(|| format!("capability {}", c.ty))?
+            }
+            None => expand_fields(&c.body, &ex)?,
         };
-        merged.files.push(FileReq {
-            path: ex(&f.path)?,
-            content,
-            ..f.clone()
-        });
     }
-    Ok(())
+    v3::check_caps(&k.name, &k.caps)
+}
+
+/// `body` with the references in its hook commands, file paths and text, and agent-context fields
+/// expanded; other capabilities hold none outside a config.
+fn expand_fields(body: &CapBody, ex: &dyn Fn(&str) -> Result<String>) -> Result<CapBody> {
+    let hooks = |hs: &[Hook]| {
+        hs.iter()
+            .map(|h| expand_hook(h, ex))
+            .collect::<Result<Vec<_>>>()
+    };
+    Ok(match body {
+        CapBody::Lifecycle(l) => CapBody::Lifecycle(Lifecycle {
+            install: hooks(&l.install)?,
+            startup: hooks(&l.startup)?,
+            files: l
+                .files
+                .iter()
+                .map(|f| {
+                    // Only text can hold references; other bytes pass through.
+                    let content = match std::str::from_utf8(&f.content) {
+                        Ok(text) => ex(text)?.into_bytes(),
+                        Err(_) => f.content.clone(),
+                    };
+                    Ok(FileReq {
+                        path: ex(&f.path)?,
+                        content,
+                        ..f.clone()
+                    })
+                })
+                .collect::<Result<_>>()?,
+        }),
+        CapBody::AgentContext(c) => CapBody::AgentContext(AgentContextReq {
+            filename: c.filename.as_deref().map(ex).transpose()?,
+            directory: c.directory.as_deref().map(ex).transpose()?,
+            content: ex(&c.content)?,
+            content_file: c.content_file.clone(),
+        }),
+        b => b.clone(),
+    })
 }
 
 /// An OAuth credential's token and resource hosts join its kit's network rules (the first entry

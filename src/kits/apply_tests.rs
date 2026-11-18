@@ -23,6 +23,7 @@ fn with(mut k: Kit, ty: &str, optional: bool, body: CapBody) -> Kit {
         optional,
         body,
         group: None,
+        config: None,
     });
     k
 }

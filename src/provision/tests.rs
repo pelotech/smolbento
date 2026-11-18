@@ -603,6 +603,7 @@ fn a_re_create_after_an_interrupted_one_opens_then_drops_its_install_rules() {
         optional: false,
         body,
         group: None,
+        config: None,
     };
     k.caps = vec![
         cap(
@@ -709,6 +710,7 @@ fn ssh_agent(phases: &[SshPhase], sign: &[&str], optional: bool) -> crate::kits:
         optional,
         body: crate::kits::model::CapBody::ssh_agent(phases, sign, &[]),
         group: None,
+        config: None,
     }
 }
 
@@ -742,6 +744,7 @@ fn agent_plan(preset: bool, caps: Vec<crate::kits::model::Cap>) -> Plan {
             ..Default::default()
         }),
         group: None,
+        config: None,
     });
     crate::kits::resolve::resolve(wl, vec![k], &ArgValues::default()).unwrap()
 }

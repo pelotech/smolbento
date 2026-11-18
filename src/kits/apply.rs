@@ -992,6 +992,8 @@ pub fn needs_recreate(kit: &Kit, args: &BTreeMap<String, String>) -> Result<Vec<
             CapBody::SshAgent { .. } => "SSH agent",
             CapBody::Resources { .. } => "resources",
             CapBody::LongRunning => "long-running",
+            // Read only at create, once its kit arguments expand (a port from an argument, say).
+            CapBody::Pending => "settings from kit arguments",
             _ => continue,
         };
         what.push(need);
@@ -1015,6 +1017,7 @@ pub fn needs_recreate(kit: &Kit, args: &BTreeMap<String, String>) -> Result<Vec<
         "resources",
         "environment variables",
         "long-running",
+        "settings from kit arguments",
     ];
     what.sort_by_key(|w| order.iter().position(|o| o == w));
     what.dedup();

@@ -123,6 +123,7 @@ fn host_mount_and_ssh_agent_without_authenticate_are_supported() {
         optional: false,
         body,
         group: None,
+        config: None,
     };
     let host = cap(super::CapBody::HostMount {
         path: "/data".into(),
