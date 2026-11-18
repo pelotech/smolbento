@@ -38,7 +38,8 @@ args:
     description: Effort level (settings.json `effortLevel`); empty keeps the CLI default
     env: CLAUDE_REASONING_EFFORT
 
-provides: ["claude@${{ kit.args.version }}"]
+# As published: the kit frontend expands `claude@${{ kit.args.version }}`.
+provides: ["claude@2.1.311"]
 
 capabilities:
   # The agent's own egress rides with the kit that ships the agent: the

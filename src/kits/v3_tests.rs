@@ -266,41 +266,17 @@ fn host_mount_refuses_a_mode_that_is_not_octal_and_unknown_keys() {
 }
 
 #[test]
-fn a_local_kit_s_provides_need_a_version_like_sbx() {
-    let e = parse(
-        r#"{"schemaVersion":"3","kind":"mixin","provides":["x","y@1.0.0","z"]}"#,
-        local("k"),
-    )
-    .unwrap_err();
-    let hint = "has no version: add @<version> here or a top-level version: field (a \
-                    version-shaped image tag can override it at consumption, but a published kit \
-                    must carry one)";
-    assert_eq!(
-        format!("{e:#}"),
-        format!(
-            "provides[0]: provides entry \"x\" {hint}\nprovides[2]: provides entry \"z\" {hint}"
-        )
-    );
-    let e = parse(
-        "schemaVersion: \"3\"\nkind: mixin\nprovides: [x]\n",
-        Source::Builtin("b"),
-    )
-    .unwrap_err();
-    assert!(format!("{e:#}").starts_with("provides[0]: provides entry \"x\" has no version"));
-}
-
-#[test]
 fn version_is_the_fallback_for_unversioned_provides_and_a_tag_beats_it() {
-    let d = r#"{"schemaVersion":"3","kind":"mixin","version":"1.2.0",
-            "provides":["x","y@3","${{ kit.args.v }}"]}"#;
+    let d = r#"{"schemaVersion":"3","kind":"mixin","version":"1.2.0","provides":["x","y@3"]}"#;
     let k = parse(d, local("k")).unwrap();
-    assert_eq!(k.provides, ["x@1.2.0", "y@3", "${{ kit.args.v }}"]);
+    assert_eq!(k.provides, ["x@1.2.0", "y@3"]);
     let k = parse(d, Source::Registry("docker.io/acme/k:v2.0.1".into())).unwrap();
-    assert_eq!(k.provides, ["x@2.0.1", "y@3", "${{ kit.args.v }}"]);
+    assert_eq!(k.provides, ["x@2.0.1", "y@3"]);
     // Not a version-shaped tag: the descriptor's version stays.
     let k = parse(d, Source::Registry("acme/k:latest@sha256:00".into())).unwrap();
     assert_eq!(k.provides[0], "x@1.2.0");
-    // A published kit without versions is still read; it satisfies unconstrained requires.
+    // A kit without versions is still read (sbx's published `github-ssh` has one); it satisfies
+    // only unconstrained requires.
     let k = parse(
         r#"{"schemaVersion":"3","kind":"mixin","provides":["x"]}"#,
         Source::Registry("acme/k".into()),
@@ -368,7 +344,7 @@ fn sandbox_is_the_old_spelling_of_workload() {
 fn claude_mixin_capabilities_decode() {
     let k = parse(&fixture("claude-mixin.yaml"), local("c")).unwrap();
     assert_eq!(k.name, "c");
-    assert_eq!(k.provides, ["claude@${{ kit.args.version }}"]);
+    assert_eq!(k.provides, ["claude@2.1.311"]);
     assert_eq!(k.args["version"].default.as_deref(), Some("2.1.311"));
     assert_eq!(k.args["reasoningEffort"].enum_values.len(), 7);
     assert_eq!(k.args["model"].env.as_deref(), Some("CLAUDE_MODEL"));
@@ -921,17 +897,9 @@ fn a_published_kits_build_arguments_are_not_required() {
     // `version` only fed the build, which is done.
     let d = r#"{"schemaVersion":"3","kind":"workload","name":"w",
             "args":{"version":{"required":true,"buildArg":"VERSION"},"run":{"required":true}}}"#;
-    let published = parse(d, Source::Registry("acme/w:1".into())).unwrap();
-    assert!(!published.args["version"].required);
-    assert!(
-        published.args["run"].required,
-        "a runtime argument stays required"
-    );
-    let local = parse(d, Source::LocalV3("/k/w".into())).unwrap();
-    assert!(
-        local.args["version"].required,
-        "a kit still to build needs it"
-    );
+    let k = parse(d, Source::Registry("acme/w:1".into())).unwrap();
+    assert!(!k.args["version"].required);
+    assert!(k.args["run"].required, "a runtime argument stays required");
 }
 
 const GROUPS: &str = r#"

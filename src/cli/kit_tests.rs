@@ -781,30 +781,6 @@ fn validate_prints_ok_or_fails_with_the_error() {
 }
 
 #[test]
-fn validate_accepts_a_mixin_whose_provides_name_a_kit_arg() {
-    let mut t = kit_env();
-    let yaml = fs::read_to_string(format!(
-        "{}/tests/fixtures/kits/v3/claude-mixin.yaml",
-        env!("CARGO_MANIFEST_DIR")
-    ))
-    .unwrap();
-    let v: serde_json::Value = serde_saphyr::from_str(&yaml).unwrap();
-    v3_kit(&t, "claude-mixin", &v.to_string(), &[]);
-    assert_eq!(t.sbt(&["kit", "validate", "./claude-mixin"]).unwrap(), 0);
-    assert_eq!(
-        t.sbt(&[
-            "kit",
-            "validate",
-            "./claude-mixin",
-            "--kit-arg",
-            "version=2.2.0"
-        ])
-        .unwrap(),
-        0
-    );
-}
-
-#[test]
 fn validate_refuses_a_workload_without_a_command() {
     let mut t = kit_env();
     v3_kit(

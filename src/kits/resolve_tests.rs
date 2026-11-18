@@ -106,31 +106,6 @@ fn a_mixin_may_require_what_the_workload_provides() {
 }
 
 #[test]
-fn a_provide_naming_a_kit_arg_expands_before_ordering() {
-    let mut c = mixin("c").provides(&["claude@${{ kit.args.version }}"]);
-    c.args.insert(
-        "version".into(),
-        ArgDef {
-            default: Some("2.1.0".into()),
-            ..Default::default()
-        },
-    );
-    let u = mixin("u").requires(&["claude >= 2.0"]);
-    let p = run(workload("w"), vec![u.clone(), c.clone()]).unwrap();
-    assert_eq!(names(&p), ["c", "u"]);
-    assert_eq!(p.mixins[0].provides, ["claude@2.1.0"]);
-    let v = ArgValues::parse(&[], &["version=1.9.0".into()]).unwrap();
-    let e = resolve(workload("w"), vec![u, c.clone()], &v).unwrap_err();
-    assert!(format!("{e:#}").contains("only offers"), "{e:#}");
-    c.args.get_mut("version").unwrap().default = None;
-    let e = run(workload("w"), vec![c]).unwrap_err();
-    assert_eq!(
-        format!("{e:#}"),
-        "kit c: create-phase kit arg \"version\" has no resolved value"
-    );
-}
-
-#[test]
 fn duplicate_provides_fail_like_sbx_at_any_versions() {
     let a = typed(mixin("a").provides(&["x@1.0.0"]), "./chkdupa");
     let b = mixin("b").provides(&["com.docker.kit/x@2.0"]);

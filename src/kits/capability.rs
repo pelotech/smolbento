@@ -378,7 +378,7 @@ pub fn witness(r: &Require) -> String {
 }
 
 /// Checks a v3 descriptor's entries like the spec's validator (`validateCapabilityNames`), one
-/// `field[i]: …` line per problem. Arg references are allowed in `provides` only.
+/// `field[i]: …` line per problem.
 pub fn validate(
     provides: &[String],
     requires: &[String],
@@ -387,9 +387,7 @@ pub fn validate(
 ) -> Vec<String> {
     let mut errs = Vec::new();
     for (i, s) in provides.iter().enumerate() {
-        if !has_arg_ref(s)
-            && let Err(e) = parse_provide(s)
-        {
+        if let Err(e) = parse_provide(s) {
             errs.push(format!("provides[{i}]: {e}"));
         }
     }
@@ -415,15 +413,6 @@ pub fn validate(
         }
     }
     errs
-}
-
-/// The spec frontend's refusal of an unversioned `provides` entry.
-pub fn unversioned(i: usize, s: &str) -> String {
-    format!(
-        "provides[{i}]: provides entry {s:?} has no version: add @<version> here or a top-level \
-         version: field (a version-shaped image tag can override it at consumption, but a \
-         published kit must carry one)"
-    )
 }
 
 /// One offer in a resolver message: `name@version (from kit)`.
