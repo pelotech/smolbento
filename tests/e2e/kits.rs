@@ -212,7 +212,9 @@ pub(crate) fn mixin_layer_is_visible_in_the_guest() {
     assert!(root_out(&e.name, "cat /etc/alpine-release").starts_with('3'));
 }
 
-/// Deletes the shared `_builder` sandbox after the test, unless it existed before.
+/// Deletes the shared `_builder` sandbox after the test, unless it existed before. A test that
+/// takes one must be in the `builder` test group in `.config/nextest.toml`, which runs them one at
+/// a time: another test's guard would delete the sandbox under it.
 pub(crate) struct BuilderGuard(pub(crate) bool);
 
 impl BuilderGuard {
