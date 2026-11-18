@@ -979,21 +979,29 @@ pub fn needs_recreate(kit: &Kit, args: &BTreeMap<String, String>) -> Result<Vec<
         what.push("image layers");
     }
     for c in &kit.caps {
-        let need = match &c.body {
+        // By type, so a config read only at create (a port from an argument, say) counts too.
+        let ty = c.ty.strip_prefix("com.docker.sandbox/").unwrap_or_default();
+        let need = match (ty, &c.body) {
             // A passthrough OAuth credential only adds network rules.
-            CapBody::Credential(r) if r.env.is_some() || !r.inject.is_empty() => "credentials",
-            CapBody::Port { .. } => "ports",
-            CapBody::Volume { .. } => "volumes",
-            CapBody::HostMount { .. } => "host mounts",
-            CapBody::AgentSkills { .. } | CapBody::AgentSkill { .. } => "agent skills",
+            ("credential@1", CapBody::Credential(r)) if r.env.is_none() && r.inject.is_empty() => {
+                continue;
+            }
+            ("credential@1", _) => "credentials",
+            ("port@1", _) => "ports",
+            ("volume@1", _) => "volumes",
+            ("host-mount@1", _) => "host mounts",
+            ("agent-skills@1" | "agent-skill@1", _) => "agent skills",
             // A new agent file needs every kit's context, and `add` has only this kit's.
-            CapBody::AgentContext(r) if r.directory.is_some() => "agent file",
+            ("agent-context@1" | "agent-context@2", CapBody::AgentContext(r))
+                if r.directory.is_none() =>
+            {
+                continue;
+            }
+            ("agent-context@1" | "agent-context@2", _) => "agent file",
             // The agent socket is mounted at create.
-            CapBody::SshAgent { .. } => "SSH agent",
-            CapBody::Resources { .. } => "resources",
-            CapBody::LongRunning => "long-running",
-            // Read only at create, once its kit arguments expand (a port from an argument, say).
-            CapBody::Pending => "settings from kit arguments",
+            ("ssh-agent@1", _) => "SSH agent",
+            ("resources@1", _) => "resources",
+            ("long-running@1", _) => "long-running",
             _ => continue,
         };
         what.push(need);
@@ -1017,7 +1025,6 @@ pub fn needs_recreate(kit: &Kit, args: &BTreeMap<String, String>) -> Result<Vec<
         "resources",
         "environment variables",
         "long-running",
-        "settings from kit arguments",
     ];
     what.sort_by_key(|w| order.iter().position(|o| o == w));
     what.dedup();

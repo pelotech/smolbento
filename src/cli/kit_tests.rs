@@ -1027,6 +1027,29 @@ fn recreate_reasons_keep_their_order() {
     );
 }
 
+/// A config read only at create counts by its type: a port from an argument needs a recreate,
+/// network rules from one don't.
+#[test]
+fn a_config_from_kit_arguments_needs_a_recreate_only_for_its_type() {
+    let mut t = kit_env();
+    dev_sandbox(&t, &base());
+    v3_kit(
+        &t,
+        "argful",
+        r#"{"schemaVersion":"3","kind":"mixin","name":"argful",
+            "args":{"port":{"default":"8080"},"method":{"default":"GET"}},
+            "capabilities":[
+                {"type":"com.docker.sandbox/port@1","config":{"container":"${{ kit.args.port }}"}},
+                {"type":"com.docker.sandbox/network-policy@2","optional":true,"config":{"runtime":
+                    {"allow":[{"hosts":["a.example.com"],"methods":["${{ kit.args.method }}"]}]}}}]}"#,
+        &[],
+    );
+    let e = t
+        .sbt(&["kit", "add", "dev", "./argful", "--yes"])
+        .unwrap_err();
+    assert_eq!(format!("{e:#}"), "recreate required: ports");
+}
+
 #[test]
 fn adding_a_mixin_with_ports_and_env_needs_a_recreate() {
     let mut t = kit_env();
