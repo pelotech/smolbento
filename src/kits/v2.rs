@@ -213,6 +213,7 @@ fn cap(name: &str, body: CapBody) -> Cap {
         optional: false,
         body,
         group: None,
+        config: None,
     }
 }
 
@@ -638,11 +639,12 @@ mod tests {
             Source::LocalV2(dir.into()),
         )
         .unwrap();
-        // The one difference: sbx runs v3 install hooks in a clean environment, v2 hooks in the
-        // container's.
+        // The differences: sbx runs v3 install hooks in a clean environment, v2 hooks in the
+        // container's; and a v3 config with a reference is kept for `resolve` to expand.
         let mut v3_caps = v3.caps.clone();
         let mut hooks = 0;
         for (a, b) in v2.caps.iter().zip(&mut v3_caps) {
+            b.config = None;
             if let (CapBody::Lifecycle(a), CapBody::Lifecycle(b)) = (&a.body, &mut b.body) {
                 assert!(a.install.iter().chain(&a.startup).all(|h| !h.clean_env));
                 for h in &mut b.install {

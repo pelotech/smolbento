@@ -381,6 +381,11 @@ used.
   numbers and booleans in `default:` and `enum:` become strings. A v3 argument with `env:` is
   exported under that name whenever it has a value (defaults and empty values count; no value
   exports nothing). The name may be `PATH`. A later kit's value and your own `-e` still win.
+- References in a capability's config are replaced before the config is read (spec §6), so they
+  work in every field, numbers included. Every such config is replaced and checked at create, an
+  optional one too, even when the capability is then skipped, as the spec says. So a reference
+  with no value fails the create there as well. Capabilities of types smolbento doesn't support
+  are left as written.
 - For `create REF`, a bare or dotted word is an agent name even when a directory of that name
   exists: `bento create alpine` fails with `unknown agent "alpine"`, `bento create .hidden` with
   `unknown agent ".hidden"`. `a/b` is a registry reference even if the directory exists. For

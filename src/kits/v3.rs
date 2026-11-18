@@ -11,8 +11,8 @@ use serde::Deserialize;
 use serde_json::Value;
 
 use super::descriptor::{ApiKeyCfg, ResourcesCfg, TokenEndpoint};
-use crate::kits::capability;
 use crate::kits::model::*;
+use crate::kits::{args, capability};
 
 const NS: &str = "com.docker.sandbox/";
 
@@ -105,12 +105,7 @@ fn from_value(v: Value, source: Source) -> Result<Kit> {
     let provides = provides(&d, &source)?;
     let caps = newest_versions(caps(d.capabilities)?);
     let name = name_from_source(&source)?;
-    for c in &caps {
-        if let CapBody::Lifecycle(l) = &c.body {
-            check_hooks(&name, l)?;
-        }
-    }
-    check_ssh_phases(&name, &caps)?;
+    check_caps(&name, &caps)?;
     // A published kit is built: an argument that only fed the build needs no value now (sbx
     // creates docker.io/sbx/antigravity without its required `version`).
     let published = matches!(source, Source::Registry(_));
@@ -320,18 +315,39 @@ fn caps(items: Vec<CapabilityItem>) -> Result<Vec<Cap>> {
     Ok(caps)
 }
 
-/// An ordinary request at `at`.
+/// An ordinary request at `at`. A config with a reference is kept, and read again once `resolve`
+/// expands it (SPEC-v3 §6). Until then it's read as written, so `kit inspect` and `kit add` see
+/// it, or is `Pending` when it can't be (a reference where a number goes, say).
 fn cap(item: CapabilityItem, at: &str) -> Result<Cap> {
     if item.ty.trim().is_empty() {
         bail!("{at} has no type");
     }
-    let body = body(&item.ty, item.config).with_context(|| format!("capability {}", item.ty))?;
+    let refs = item.config.as_ref().is_some_and(args::has_ref);
+    let body = match body(&item.ty, item.config.clone()) {
+        Ok(b) => b,
+        Err(_) if refs => CapBody::Pending,
+        Err(e) => return Err(e).with_context(|| format!("capability {}", item.ty)),
+    };
+    // Nothing reads an unsupported type's config.
+    let config = item.config.filter(|_| refs && body != CapBody::Unsupported);
     Ok(Cap {
         ty: item.ty,
         optional: item.optional.unwrap_or(false),
         body,
         group: None,
+        config,
     })
+}
+
+/// The checks that span a kit's capabilities: when it loads, and again once `resolve` has
+/// expanded them.
+pub(crate) fn check_caps(kit: &str, caps: &[Cap]) -> Result<()> {
+    for c in caps {
+        if let CapBody::Lifecycle(l) = &c.body {
+            check_hooks(kit, l)?;
+        }
+    }
+    check_ssh_phases(kit, caps)
 }
 
 /// Decodes a known config type, rejecting unknown keys (the structs carry `deny_unknown_fields`).
@@ -347,7 +363,18 @@ fn no_config(config: Option<Value>) -> Result<()> {
     Ok(())
 }
 
-fn body(ty: &str, config: Option<Value>) -> Result<CapBody> {
+/// The top-level config fields of `ty` that stay text when a whole reference fills them (SPEC-v3
+/// §6): a volume's size and octal mode, which would otherwise read as numbers.
+pub(crate) fn text_fields(ty: &str) -> &'static [&'static str] {
+    if ty == "com.docker.sandbox/volume@1" {
+        &["size", "mode"]
+    } else {
+        &[]
+    }
+}
+
+/// Reads a capability's config: strictly, with unknown keys and bad values refused.
+pub(crate) fn body(ty: &str, config: Option<Value>) -> Result<CapBody> {
     let Some(name) = ty.strip_prefix(NS) else {
         return Ok(CapBody::Unsupported);
     };

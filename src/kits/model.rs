@@ -187,9 +187,14 @@ pub struct Cap {
     pub ty: String,
     /// A group member's is its group's.
     pub optional: bool,
+    /// Read from the config as written. One with a reference is read again from `config` once
+    /// `resolve` expands it.
     pub body: CapBody,
     /// Set for a member of a capability group: its members are selected together.
     pub group: Option<Group>,
+    /// A v3 config holding a `${{ kit.args.* }}` or `${{ kit.env.* }}` reference, kept for
+    /// `resolve` to expand and read strictly (SPEC-v3 §6).
+    pub config: Option<serde_json::Value>,
 }
 
 impl Cap {
@@ -276,6 +281,9 @@ pub enum CapBody {
     },
     /// Known-unsupported or unknown type.
     Unsupported,
+    /// A config that can't be read until its references expand (a reference where a number
+    /// goes, say); `Cap::config` holds it.
+    Pending,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]

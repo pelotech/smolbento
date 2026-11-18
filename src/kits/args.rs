@@ -6,6 +6,7 @@ use std::sync::LazyLock;
 
 use anyhow::{Context, Result, anyhow, bail};
 use regex_lite::Regex;
+use serde_json::Value;
 
 use crate::kits::model::{ArgDef, Kit};
 
@@ -209,6 +210,77 @@ pub fn expand(
     Ok(out)
 }
 
+/// Whether a config holds a kit reference, well formed or not, in a string or a map key.
+pub fn has_ref(v: &Value) -> bool {
+    match v {
+        Value::String(s) => KIT_OPENER.is_match(s),
+        Value::Array(a) => a.iter().any(has_ref),
+        Value::Object(m) => m.iter().any(|(k, x)| KIT_OPENER.is_match(k) || has_ref(x)),
+        _ => false,
+    }
+}
+
+/// Expands every string and map key of a capability's config with `ex` (SPEC-v3 §6): the
+/// document, not its text, so a value lands whole whatever it holds. A string that is one whole
+/// reference takes the type its value spells (`typed`), except under a key in `text`, which stays
+/// text (`volume@1`'s `size` and `mode`). Two keys that expand to one are an error.
+pub fn expand_value(
+    v: &Value,
+    text: &[&str],
+    ex: &dyn Fn(&str) -> Result<String>,
+) -> Result<Value> {
+    Ok(match v {
+        Value::String(s) if is_whole_ref(s) => typed(ex(s)?),
+        Value::String(s) => Value::String(ex(s)?),
+        Value::Array(a) => Value::Array(
+            a.iter()
+                .map(|x| expand_value(x, &[], ex))
+                .collect::<Result<_>>()?,
+        ),
+        Value::Object(m) => {
+            let mut out = serde_json::Map::new();
+            for (k, x) in m {
+                let key = ex(k)?;
+                let x = match x {
+                    Value::String(s) if text.contains(&key.as_str()) => Value::String(ex(s)?),
+                    x => expand_value(x, &[], ex)?,
+                };
+                if out.insert(key.clone(), x).is_some() {
+                    bail!("two keys expand to {key:?}");
+                }
+            }
+            Value::Object(out)
+        }
+        v => v.clone(),
+    })
+}
+
+fn is_whole_ref(s: &str) -> bool {
+    KIT_REF
+        .find(s)
+        .is_some_and(|m| m.start() == 0 && m.end() == s.len())
+}
+
+/// The value a whole reference's text spells, when the spelling survives a round trip (the
+/// spec's `typedScalar`): `true`, `8080` and `1.5` do; `1.0`, `007` and `1e5` stay text.
+fn typed(s: String) -> Value {
+    if let Ok(b) = s.parse::<bool>() {
+        return b.into();
+    }
+    if let Ok(n) = s.parse::<i64>()
+        && n.to_string() == s
+    {
+        return n.into();
+    }
+    if let Ok(f) = s.parse::<f64>()
+        && f.is_finite()
+        && f.to_string() == s
+    {
+        return f.into();
+    }
+    Value::String(s)
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -408,5 +480,81 @@ mod tests {
             let err = format!("{:#}", ex(bad).unwrap_err());
             assert_eq!(err, format!("malformed kit placeholder in {bad:?}"));
         }
+    }
+
+    /// `expand_value` with `kit.args.v` set to `value` and `kit.args.k` to `key`.
+    fn expand_with(doc: Value, text: &[&str], value: &str) -> Result<Value> {
+        let args = BTreeMap::from([
+            ("v".to_string(), value.to_string()),
+            ("k".to_string(), "key".to_string()),
+        ]);
+        let ex = |s: &str| expand(s, &args, &BTreeSet::new(), &BTreeMap::new());
+        expand_value(&doc, text, &ex)
+    }
+
+    #[test]
+    fn a_whole_reference_takes_the_type_its_value_spells() {
+        let whole = serde_json::json!("${{ kit.args.v }}");
+        for (value, want) in [
+            ("8080", serde_json::json!(8080)),
+            ("-1", serde_json::json!(-1)),
+            ("1.5", serde_json::json!(1.5)),
+            ("true", serde_json::json!(true)),
+            // Spellings that don't survive a round trip stay text.
+            ("1.0", serde_json::json!("1.0")),
+            ("007", serde_json::json!("007")),
+            ("1e5", serde_json::json!("1e5")),
+            ("NaN", serde_json::json!("NaN")),
+            ("True", serde_json::json!("True")),
+            ("", serde_json::json!("")),
+        ] {
+            assert_eq!(
+                expand_with(whole.clone(), &[], value).unwrap(),
+                want,
+                "{value}"
+            );
+        }
+        // Embedded in text, or under a text key, a reference is text.
+        let doc = serde_json::json!({"a": "port ${{ kit.args.v }}", "mode": "${{ kit.args.v }}"});
+        assert_eq!(
+            expand_with(doc, &["mode"], "755").unwrap(),
+            serde_json::json!({"a": "port 755", "mode": "755"})
+        );
+    }
+
+    #[test]
+    fn a_value_lands_whole_and_is_not_expanded_again() {
+        let doc = serde_json::json!(["${{ kit.args.v }}", "x ${{ kit.args.v }}"]);
+        let value = r#"a "quoted" \n ${{ kit.args.k }}"#;
+        assert_eq!(
+            expand_with(doc, &[], value).unwrap(),
+            serde_json::json!([value, format!("x {value}")])
+        );
+    }
+
+    /// tck: SPEC-v3 §6/expanded-key-collision-rejected
+    #[test]
+    fn keys_expand_and_two_that_become_one_are_an_error() {
+        let doc = serde_json::json!({"${{ kit.args.k }}": 1, "other": 2});
+        assert_eq!(
+            expand_with(doc, &[], "").unwrap(),
+            serde_json::json!({"key": 1, "other": 2})
+        );
+        let doc = serde_json::json!({"${{ kit.args.k }}": 1, "key": 2});
+        let e = expand_with(doc, &[], "").unwrap_err();
+        assert_eq!(format!("{e:#}"), r#"two keys expand to "key""#);
+    }
+
+    #[test]
+    fn has_ref_finds_kit_references_in_strings_and_keys_only() {
+        assert!(has_ref(&serde_json::json!({"a": ["${{ kit.args.x }}"]})));
+        assert!(has_ref(&serde_json::json!({"${{ kit.env.HOME }}": 1})));
+        assert!(
+            has_ref(&serde_json::json!("${{ kit.args.x")),
+            "malformed still counts"
+        );
+        assert!(!has_ref(
+            &serde_json::json!({"a": "${{ github.sha }}", "b": 1})
+        ));
     }
 }
