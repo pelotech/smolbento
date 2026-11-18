@@ -1006,9 +1006,29 @@ capabilities:
 "#,
     )
     .unwrap();
-    e.create_with_kits(&[kit.to_str().unwrap()]);
-    let ports = e.ok(&["ports", &e.name]);
+    // Traced: this test hung in CI on smolvm 1.35.4 (Linux), and the trace names the call.
+    let ws = e.workspace();
+    let template = e.alpine_template();
+    eprintln!("step: create");
+    e.traced(&[
+        "create",
+        "-t",
+        &template,
+        "--kit",
+        kit.to_str().unwrap(),
+        "shell",
+        ws.to_str().unwrap(),
+        "--name",
+        &e.name,
+        "--cpus",
+        "1",
+        "-m",
+        "1g",
+    ]);
+    eprintln!("step: ports");
+    let ports = e.traced(&["ports", &e.name]);
     assert!(ports.contains("8123"), "{ports}");
+    eprintln!("step: cat");
     assert_eq!(root_out(&e.name, "cat /var/tmp/cfg-args"), "port 8123");
 }
 

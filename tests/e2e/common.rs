@@ -59,6 +59,23 @@ impl E2e {
             .unwrap()
     }
 
+    /// `sbt` with `-D`, its stderr (each smolvm command line, as it runs) going straight to this
+    /// test's stderr: nextest keeps that even when it stops a test that hangs, so the log shows the
+    /// call it hung on. Must succeed; returns stdout.
+    pub(crate) fn traced(&self, args: &[&str]) -> String {
+        let out = self
+            .env(
+                Command::new(env!("CARGO_BIN_EXE_smolbento"))
+                    .arg("-D")
+                    .args(args),
+            )
+            .stderr(std::process::Stdio::inherit())
+            .output()
+            .unwrap();
+        assert!(out.status.success(), "sbt -D {args:?} failed");
+        String::from_utf8(out.stdout).unwrap()
+    }
+
     pub(crate) fn env<'a>(&self, cmd: &'a mut Command) -> &'a mut Command {
         cmd.current_dir(self.workspace())
             .env("SMOLBENTO_CONFIG_DIR", self.dir.path().join("config"))

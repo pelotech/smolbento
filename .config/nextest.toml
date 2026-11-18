@@ -20,6 +20,9 @@ test-group = 'builder'
 [profile.ci]
 fail-fast = false
 
+# A test that hangs is stopped after 15 minutes, and nextest prints what it wrote, instead of the
+# job's timeout cancelling the whole shard with nothing to show.
 [[profile.ci.overrides]]
 filter = 'binary(e2e)'
 retries = 1
+slow-timeout = { period = "60s", terminate-after = 15 }
