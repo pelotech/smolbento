@@ -928,6 +928,52 @@ agentInstructions:
     assert!(!parent.join("AGENTS.md").exists(), "nothing on the host");
 }
 
+/// tck: SPEC-v3 §7.1.1/atomic-selection. A group with a member smolbento can't apply leaves
+/// nothing behind, even its supported members; a group it can apply is applied whole.
+#[test]
+#[ignore = "boots real VMs and builds in the builder sandbox; run with `just e2e`"]
+pub(crate) fn capability_groups_apply_whole_or_not_at_all() {
+    let e = E2e::new("groups");
+    let _builder = BuilderGuard::new();
+    // A v3 composition takes a registry base image, not the template archive.
+    let _reg = Registry::start(&e);
+    let kit = e.dir.path().join("e2e-groups");
+    std::fs::create_dir_all(&kit).unwrap();
+    std::fs::write(
+        kit.join("e2e-groups.yaml"),
+        r#"# syntax=docker/sandbox-kit:3
+schemaVersion: "3"
+kind: mixin
+capabilities:
+  - group:
+      optional: true
+      capabilities:
+        - type: com.docker.sandbox/lifecycle@1
+          config:
+            files: [{path: /var/tmp/skipped-feature, content: skipped}]
+        - type: com.docker.sandbox/usb-device@1
+          config: {class: smart-card}
+  - group:
+      name: Feature
+      capabilities:
+        - type: com.docker.sandbox/volume@1
+          config: {path: /var/tmp/group-volume}
+        - type: com.docker.sandbox/lifecycle@1
+          config:
+            files: [{path: /var/tmp/group-feature, content: selected}]
+"#,
+    )
+    .unwrap();
+    e.create_with_kits(&[kit.to_str().unwrap()]);
+    assert_eq!(root_out(&e.name, "cat /var/tmp/group-feature"), "selected");
+    assert!(
+        !root_sh(&e.name, "test -e /var/tmp/skipped-feature")
+            .status
+            .success(),
+        "the skipped group's file was written"
+    );
+}
+
 /// sbx #6, #8, #9: kit argument errors stop `create` before any machine is made.
 #[test]
 #[ignore = "runs bento against smolvm; run with `just e2e`"]

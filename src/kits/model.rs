@@ -185,8 +185,41 @@ pub struct ArgDef {
 pub struct Cap {
     /// Full capability type, e.g. `com.docker.sandbox/volume@1`.
     pub ty: String,
+    /// A group member's is its group's.
     pub optional: bool,
     pub body: CapBody,
+    /// Set for a member of a capability group: its members are selected together.
+    pub group: Option<Group>,
+}
+
+impl Cap {
+    /// Which entries a kit's per-entry checks compare it with: the top-level ones (`None`), or
+    /// its group's (SPEC-v3 §7.1.1).
+    pub fn scope(&self) -> Option<usize> {
+        self.group.as_ref().map(|g| g.index)
+    }
+}
+
+/// Where a group member sits in its descriptor (SPEC-v3 §7.1.1).
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct Group {
+    /// The group's index in `capabilities`.
+    pub index: usize,
+    /// The member's index in the group's `capabilities`.
+    pub member: usize,
+    pub name: Option<String>,
+}
+
+impl Group {
+    /// `capabilities[i]`, the spec's path for the group.
+    pub fn path(&self) -> String {
+        format!("capabilities[{}]", self.index)
+    }
+
+    /// `capabilities[i].group.capabilities[j]`, the spec's path for the member.
+    pub fn member_path(&self) -> String {
+        format!("{}.group.capabilities[{}]", self.path(), self.member)
+    }
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]

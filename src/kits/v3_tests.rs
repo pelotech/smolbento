@@ -59,7 +59,7 @@ fn a_capability_without_a_type_is_an_error_naming_its_index() {
             local("t"),
         )
         .unwrap_err();
-        assert_eq!(format!("{e:#}"), "capability 1 has no type");
+        assert_eq!(format!("{e:#}"), "capabilities[1] has no type");
     }
 }
 
@@ -931,5 +931,164 @@ fn a_published_kits_build_arguments_are_not_required() {
     assert!(
         local.args["version"].required,
         "a kit still to build needs it"
+    );
+}
+
+const GROUPS: &str = r#"
+schemaVersion: "3"
+kind: mixin
+capabilities:
+  - type: com.docker.sandbox/lifecycle@1
+    config: {startup: [{command: "printf base"}]}
+  - group:
+      name: Feature
+      optional: true
+      capabilities:
+        - type: com.docker.sandbox/volume@1
+          config: {path: /var/tmp/group-volume}
+        - type: com.docker.sandbox/lifecycle@1
+          config: {files: [{path: /var/tmp/group-feature, content: selected}]}
+  - group:
+      capabilities:
+        - type: com.docker.sandbox/lifecycle@1
+          config: {startup: [{command: "printf independent"}]}
+"#;
+
+/// tck: SPEC-v3 §7.1.1/group-grammar
+#[test]
+fn group_members_take_the_groups_place_and_optional() {
+    let k = parse(GROUPS, local("g")).unwrap();
+    let at: Vec<(String, bool)> = k
+        .caps
+        .iter()
+        .map(|c| {
+            let at = c.group.as_ref().map_or("top".into(), |g| g.member_path());
+            (at, c.optional)
+        })
+        .collect();
+    assert_eq!(
+        at,
+        [
+            ("top".into(), false),
+            ("capabilities[1].group.capabilities[0]".into(), true),
+            ("capabilities[1].group.capabilities[1]".into(), true),
+            // A group is required unless it says otherwise, and one member is enough.
+            ("capabilities[2].group.capabilities[0]".into(), false),
+        ]
+    );
+    assert_eq!(
+        k.caps[1].group.as_ref().unwrap().name.as_deref(),
+        Some("Feature")
+    );
+}
+
+/// tck: SPEC-v3 §7.1.1/group-grammar
+#[test]
+fn the_group_grammar_refuses_mixed_empty_and_nested_groups_and_member_optional() {
+    let lc = "{type: com.docker.sandbox/lifecycle@1}";
+    for (item, want) in [
+        (
+            format!("{{type: com.docker.sandbox/sbx@1, group: {{capabilities: [{lc}]}}}}"),
+            "capabilities[0]: a group can't also have type, config or optional",
+        ),
+        (
+            format!("{{optional: true, group: {{capabilities: [{lc}]}}}}"),
+            "capabilities[0]: a group can't also have type, config or optional",
+        ),
+        (
+            "{group: {capabilities: []}}".into(),
+            "capabilities[0]: the group has no capabilities",
+        ),
+        (
+            "{group: {}}".into(),
+            "capabilities[0]: the group has no capabilities",
+        ),
+        (
+            format!("{{group: {{capabilities: [{{group: {{capabilities: [{lc}]}}}}]}}}}"),
+            "capabilities[0].group.capabilities[0]: groups can't be nested",
+        ),
+        (
+            "{group: {capabilities: [{type: com.docker.sandbox/sbx@1, optional: false}]}}".into(),
+            "capabilities[0].group.capabilities[0]: a group member can't set optional; the group does",
+        ),
+        (
+            "{group: {capabilities: [{type: com.docker.sandbox/sbx@1, declarationBlocks: [a]}]}}"
+                .into(),
+            "capabilities[0].group.capabilities[0]: a group member can't set declarationBlocks",
+        ),
+        (
+            "{group: {capabilities: [{config: {}}]}}".into(),
+            "capabilities[0].group.capabilities[0] has no type",
+        ),
+    ] {
+        let doc = format!("schemaVersion: \"3\"\nkind: mixin\ncapabilities: [{item}]\n");
+        let e = parse(&doc, local("g")).unwrap_err();
+        assert_eq!(format!("{e:#}"), want, "{item}");
+    }
+}
+
+/// tck: SPEC-v3 §7.1.1/validate-declarations
+#[test]
+fn every_member_is_validated_even_in_an_optional_group() {
+    let doc = r#"
+schemaVersion: "3"
+kind: mixin
+capabilities:
+  - group:
+      optional: true
+      capabilities:
+        - type: com.docker.sandbox/volume@1
+          config: {path: /data, sise: 1}
+"#;
+    let e = parse(doc, local("g")).unwrap_err();
+    assert!(format!("{e:#}").contains("sise"), "{e:#}");
+}
+
+#[test]
+fn a_published_sets_groups_keep_their_attribution_fields() {
+    let doc = r#"
+schemaVersion: "3"
+kind: mixin
+capabilities:
+  - group:
+      capabilities:
+        - type: com.docker.sandbox/lifecycle@1
+          source: {kit: "registry.example/base:1.0.0", path: "capabilities[0]"}
+    source: {kit: "registry.example/base:1.0.0", path: "capabilities[0]"}
+    declarationBlocks: ["0:0"]
+"#;
+    let k = parse(doc, local("g")).unwrap();
+    assert_eq!(k.caps.len(), 1);
+}
+
+#[test]
+fn per_entry_checks_compare_a_groups_members_apart_from_other_entries() {
+    let doc = r#"
+schemaVersion: "3"
+kind: mixin
+capabilities:
+  - type: com.docker.sandbox/ssh-agent@1
+    config: {phase: install, unrestricted: true}
+  - type: com.docker.sandbox/network-policy@1
+    config: {runtime: {allow: [a.example.com]}}
+  - group:
+      optional: true
+      capabilities:
+        - type: com.docker.sandbox/ssh-agent@1
+          config: {phase: install, unrestricted: true}
+        - type: com.docker.sandbox/network-policy@2
+          config: {runtime: {allow: [b.example.com]}}
+"#;
+    let k = parse(doc, local("g")).unwrap();
+    // The group's newer network-policy doesn't replace the top-level @1 one.
+    let tys: Vec<&str> = k.caps.iter().map(|c| c.ty.as_str()).collect();
+    assert_eq!(
+        tys,
+        [
+            "com.docker.sandbox/ssh-agent@1",
+            "com.docker.sandbox/network-policy@1",
+            "com.docker.sandbox/ssh-agent@1",
+            "com.docker.sandbox/network-policy@2",
+        ]
     );
 }

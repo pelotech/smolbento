@@ -602,6 +602,7 @@ fn a_re_create_after_an_interrupted_one_opens_then_drops_its_install_rules() {
         ty: format!("com.docker.sandbox/{ty}"),
         optional: false,
         body,
+        group: None,
     };
     k.caps = vec![
         cap(
@@ -707,6 +708,7 @@ fn ssh_agent(phases: &[SshPhase], sign: &[&str], optional: bool) -> crate::kits:
         ty: "com.docker.sandbox/ssh-agent@1".into(),
         optional,
         body: crate::kits::model::CapBody::ssh_agent(phases, sign, &[]),
+        group: None,
     }
 }
 
@@ -739,6 +741,7 @@ fn agent_plan(preset: bool, caps: Vec<crate::kits::model::Cap>) -> Plan {
             }],
             ..Default::default()
         }),
+        group: None,
     });
     crate::kits::resolve::resolve(wl, vec![k], &ArgValues::default()).unwrap()
 }

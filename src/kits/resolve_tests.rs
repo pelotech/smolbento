@@ -31,6 +31,7 @@ impl KitExt for Kit {
             ty: ty.into(),
             optional,
             body,
+            group: None,
         });
         self
     }
@@ -1002,4 +1003,147 @@ fn v2_and_v3_kits_are_not_mixed() {
     // The shipped docker kit has no format of its own.
     check_formats(&v2_workload(), &[docker(), v2("old"), v2("older")]).unwrap();
     check_formats(&agent, &[docker(), mixin("new")]).unwrap();
+}
+
+/// A mixin `g` from a v3 descriptor whose `capabilities` are `caps`.
+fn v3_mixin(caps: &str) -> Kit {
+    let doc = format!("schemaVersion: \"3\"\nkind: mixin\ncapabilities:\n{caps}");
+    crate::kits::v3::parse(&doc, Source::Registry("g".into())).unwrap()
+}
+
+/// A volume plus a lifecycle file, and `extra` as a third member.
+fn feature_group(optional: bool, extra: &str) -> Kit {
+    v3_mixin(&format!(
+        "  - group:
+      name: Feature
+      optional: {optional}
+      capabilities:
+        - type: com.docker.sandbox/volume@1
+          config: {{path: /var/tmp/group-volume}}
+        - type: com.docker.sandbox/lifecycle@1
+          config: {{files: [{{path: /var/tmp/group-feature, content: selected}}]}}
+{extra}"
+    ))
+}
+
+const USB: &str = "        - type: com.docker.sandbox/usb-device@1\n";
+
+/// tck: SPEC-v3 §7.1.1/atomic-selection
+#[test]
+fn an_optional_group_with_an_unsupported_member_is_skipped_whole() {
+    let p = run(workload("w"), vec![feature_group(true, USB)]).unwrap();
+    assert!(p.merged.volumes.is_empty(), "{:?}", p.merged.volumes);
+    assert!(p.merged.files.is_empty(), "{:?}", p.merged.files);
+    assert_eq!(
+        p.skipped,
+        ["g: optional group capabilities[0] (Feature), for its \
+          capabilities[0].group.capabilities[2] com.docker.sandbox/usb-device@1"]
+    );
+    assert_eq!(
+        p.skipped_warnings(),
+        [
+            "kit g: skipping optional group capabilities[0] (Feature), for its \
+          capabilities[0].group.capabilities[2] com.docker.sandbox/usb-device@1 (not supported)"
+        ]
+    );
+}
+
+/// tck: SPEC-v3 §7.1.1/selection-before-application
+#[test]
+fn a_skipped_groups_members_are_gone_from_the_plans_kits() {
+    let p = run(workload("w"), vec![feature_group(true, USB)]).unwrap();
+    assert!(p.mixins[0].caps.is_empty(), "{:?}", p.mixins[0].caps);
+}
+
+/// tck: SPEC-v3 §7.1.1/atomic-selection
+#[test]
+fn a_required_group_with_an_unsupported_member_refuses_the_kit_naming_the_member() {
+    let e = run(workload("w"), vec![feature_group(false, USB)]).unwrap_err();
+    assert_eq!(
+        format!("{e:#}"),
+        "kit g: required group capabilities[0] (Feature): capabilities[0].group.capabilities[2] \
+         com.docker.sandbox/usb-device@1 is not supported by smolbento"
+    );
+}
+
+/// tck: SPEC-v3 §7.1.1/atomic-selection
+#[test]
+fn a_group_whose_members_are_all_supported_is_applied() {
+    let p = run(workload("w"), vec![feature_group(true, "")]).unwrap();
+    assert_eq!(p.merged.volumes.len(), 1);
+    assert_eq!(p.merged.files[0].path, "/var/tmp/group-feature");
+    assert!(p.skipped.is_empty(), "{:?}", p.skipped);
+}
+
+/// A group member is taken whole or not at all, never widened to its hosts as an optional
+/// ordinary `network-policy@2` entry is.
+#[test]
+fn a_group_with_method_or_path_rules_is_skipped_not_widened() {
+    let k = feature_group(
+        true,
+        "        - type: com.docker.sandbox/network-policy@2
+          config: {runtime: {allow: [{hosts: [api.example.com], methods: [GET]}]}}
+",
+    );
+    let p = run(workload("w"), vec![k]).unwrap();
+    assert!(runtime(&p).allow.is_empty(), "{:?}", runtime(&p));
+    assert!(p.merged.volumes.is_empty());
+    assert!(
+        p.skipped[0].what.contains("network-policy@2"),
+        "{:?}",
+        p.skipped
+    );
+}
+
+/// tck: SPEC-v3 §7.1.1/order
+#[test]
+fn selected_group_members_apply_in_declaration_order() {
+    let k = v3_mixin(
+        r#"  - type: com.docker.sandbox/lifecycle@1
+    config: {startup: [{command: "printf base"}]}
+  - group:
+      optional: true
+      capabilities:
+        - type: com.docker.sandbox/lifecycle@1
+          config: {startup: [{command: "printf feature"}]}
+  - group:
+      name: Feature
+      capabilities:
+        - type: com.docker.sandbox/lifecycle@1
+          config: {startup: [{command: "printf independent"}]}
+"#,
+    );
+    let p = run(workload("w"), vec![k]).unwrap();
+    let hooks: Vec<String> = p
+        .merged
+        .startup_hooks
+        .iter()
+        .map(|(_, h)| format!("{:?}", h.command))
+        .collect();
+    assert_eq!(
+        hooks,
+        [
+            r#"Shell("printf base")"#,
+            r#"Shell("printf feature")"#,
+            r#"Shell("printf independent")"#,
+        ]
+    );
+}
+
+#[test]
+fn one_groups_rejection_leaves_another_group_alone() {
+    let k = v3_mixin(&format!(
+        "  - group:
+      optional: true
+      capabilities:
+{USB}  - group:
+      optional: true
+      capabilities:
+        - type: com.docker.sandbox/volume@1
+          config: {{path: /data}}
+"
+    ));
+    let p = run(workload("w"), vec![k]).unwrap();
+    assert_eq!(p.merged.volumes.len(), 1);
+    assert_eq!(p.skipped.len(), 1);
 }
