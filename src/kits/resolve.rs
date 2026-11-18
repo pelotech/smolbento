@@ -324,10 +324,7 @@ pub fn resolve_for(
         );
     }
     check_names(&workload, &mixins)?;
-    // Args first: a `provides` entry may name one (`claude@${{ kit.args.version }}`), and
-    // ordering parses the expanded entries.
     let mut workload = workload;
-    let mut mixins = mixins;
     let mut kit_args = BTreeMap::new();
     let unordered: Vec<Kit> = std::iter::once(workload.clone())
         .chain(mixins.iter().cloned())
@@ -336,9 +333,6 @@ pub fn resolve_for(
     for k in &unordered {
         // An optional arg with no value and no default stays out: using it is an error.
         kit_args.insert(k.name.clone(), args.for_kit(k)?);
-    }
-    for k in std::iter::once(&mut workload).chain(mixins.iter_mut()) {
-        expand_provides(k, &kit_args[&k.name])?;
     }
     let mut mixins = order(&workload, mixins)?;
     let env = merge_env(std::iter::once(&workload).chain(&mixins), &kit_args);
@@ -829,23 +823,6 @@ fn expand_hook(h: &Hook, ex: &dyn Fn(&str) -> Result<String>) -> Result<Hook> {
 fn unresolved(k: &Kit, args: &BTreeMap<String, String>) -> BTreeSet<String> {
     let missing = k.args.keys().filter(|n| !args.contains_key(*n));
     missing.cloned().collect()
-}
-
-/// Expands the arg references in `k.provides` (the only capability field that may carry them).
-fn expand_provides(k: &mut Kit, args: &BTreeMap<String, String>) -> Result<()> {
-    if !k.provides.iter().any(|s| capability::has_arg_ref(s)) {
-        return Ok(());
-    }
-    let unresolved = unresolved(k, args);
-    let env = BTreeMap::new();
-    let provides = k
-        .provides
-        .iter()
-        .map(|s| expand(s, args, &unresolved, &env))
-        .collect::<Result<Vec<_>>>()
-        .with_context(|| format!("kit {}", k.name))?;
-    k.provides = provides;
-    Ok(())
 }
 
 /// Checks the set's capabilities like the spec's resolver (SPEC-v3 §5.3: one provider per name,

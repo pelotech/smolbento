@@ -16,9 +16,14 @@ use crate::kits::{args, capability};
 
 const NS: &str = "com.docker.sandbox/";
 
-/// Parses a descriptor: authored YAML, or the JSON a published kit carries in its manifest
-/// annotation (YAML reads JSON, and SPEC §9.3 has consumers decode annotations as YAML so older
-/// YAML-valued ones still load).
+/// Parses a published descriptor (SPEC-v3 §9): the one Docker's kit frontend wrote into a kit
+/// image's manifest annotation (a registry kit, an agent's, or a local kit smolbento built), or
+/// one of smolbento's shipped kits, written in that form. YAML reads the annotation's JSON too,
+/// and §9.3 has consumers decode annotations as YAML so older YAML-valued ones still load.
+///
+/// Publishing expanded the arg references in `provides` and `version:`, and built the image, so
+/// an argument that only fed the build needs no value now (sbx creates docker.io/sbx/antigravity
+/// without its required `version`).
 pub fn parse(yaml: &str, source: Source) -> Result<Kit> {
     let v: Value = serde_saphyr::from_str(yaml).context("reading the kit descriptor")?;
     from_value(v, source)
@@ -106,16 +111,13 @@ fn from_value(v: Value, source: Source) -> Result<Kit> {
     let caps = newest_versions(caps(d.capabilities)?);
     let name = name_from_source(&source)?;
     check_caps(&name, &caps)?;
-    // A published kit is built: an argument that only fed the build needs no value now (sbx
-    // creates docker.io/sbx/antigravity without its required `version`).
-    let published = matches!(source, Source::Registry(_));
     let args = d
         .args
         .into_iter()
         .map(|(name, a)| {
             let def = ArgDef {
                 default: a.default,
-                required: a.required && !(published && a.build_arg.is_some()),
+                required: a.required && a.build_arg.is_none(),
                 pattern: a.pattern,
                 enum_values: a.enum_values,
                 env: a.env,
@@ -135,13 +137,11 @@ fn from_value(v: Value, source: Source) -> Result<Kit> {
 }
 
 /// Checks the capability entries (SPEC-v3 §5) and gives each unversioned provide its version: a
-/// version-shaped registry tag's, else the descriptor's `version:`. A kit sbx would build here
-/// (local or shipped) must leave none unversioned, as the spec's frontend refuses; a published kit
-/// that still has one keeps it, and it then satisfies only unconstrained requires.
+/// version-shaped registry tag's, else the descriptor's `version:`. One with neither (sbx's
+/// published `github-ssh` has one) satisfies only unconstrained requires.
 fn provides(d: &Descriptor, source: &Source) -> Result<Vec<String>> {
     let mut errs = Vec::new();
     if let Some(v) = &d.version
-        && !capability::has_arg_ref(v)
         && !capability::is_version(v)
     {
         errs.push(format!("version: invalid version {:?}", v.trim()));
@@ -160,19 +160,7 @@ fn provides(d: &Descriptor, source: &Source) -> Result<Vec<String>> {
         _ => None,
     }
     .or_else(|| d.version.clone().filter(|v| capability::is_version(v)));
-    let unversioned = |s: &str| !s.contains('@') && !capability::has_arg_ref(s);
-    if fallback.is_none() && !matches!(source, Source::Registry(_)) {
-        let errs: Vec<String> = d
-            .provides
-            .iter()
-            .enumerate()
-            .filter(|(_, s)| unversioned(s))
-            .map(|(i, s)| capability::unversioned(i, s))
-            .collect();
-        if !errs.is_empty() {
-            bail!("{}", errs.join("\n"));
-        }
-    }
+    let unversioned = |s: &str| !s.contains('@');
     Ok(d.provides
         .iter()
         .map(|s| match &fallback {
