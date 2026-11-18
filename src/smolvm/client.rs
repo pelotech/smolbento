@@ -64,6 +64,12 @@ pub struct Credential {
 }
 
 impl Credential {
+    /// A binding's name: its variable, lowercased. One variable holds one value, so the name is
+    /// unique, and `secret set` can name the bindings it refreshes.
+    pub fn binding(env_var: &str) -> String {
+        env_var.to_ascii_lowercase()
+    }
+
     fn arg(&self) -> String {
         // smolvm would read `NAME=VAR@` as a credential for no host at all.
         debug_assert!(
@@ -338,6 +344,20 @@ impl<R: Runner> Smolvm<R> {
             }
         };
         checked(self.runner.run_streaming(&a, env, remove, &mut on_line)?).map(drop)
+    }
+
+    /// Hands the running machine new values for its credential `bindings` without a restart (smolvm
+    /// 1.35.4): smolvm reads each binding's variable from `env`, which reaches the smolvm process
+    /// only. The machine uses them from its next request.
+    pub fn refresh_credentials(
+        &self,
+        name: &str,
+        bindings: &[String],
+        env: &[(String, String)],
+    ) -> Result<()> {
+        let mut a = args(&["machine", "credentials", "refresh", "-n", name]);
+        a.extend(bindings.iter().cloned());
+        checked(self.runner.run_with_env(&a, env, &[])?).map(drop)
     }
 
     /// Packs the stopped machine's filesystem into `<out>.smolmachine` (and an executable stub

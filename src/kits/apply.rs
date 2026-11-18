@@ -634,14 +634,6 @@ fn bind_credential(
         .or_else(|| fmt.as_ref().map(|_| "authorization".to_string()))
         .map(|h| h.to_ascii_lowercase());
 
-    let mut name = c.service.clone();
-    if req
-        .credentials
-        .iter()
-        .any(|x| x.name == name && x.env_var != env)
-    {
-        name = env.to_ascii_lowercase();
-    }
     // One variable holds one value: a binding of it merges with the existing one.
     match req.credentials.iter_mut().find(|x| x.env_var == env) {
         Some(x) => {
@@ -683,7 +675,7 @@ fn bind_credential(
             }
         }
         None => req.credentials.push(Credential {
-            name,
+            name: Credential::binding(&env),
             env_var: env.clone(),
             hosts: hosts.clone(),
             set_header,

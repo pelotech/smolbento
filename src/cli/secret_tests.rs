@@ -801,3 +801,66 @@ fn reset_preserves_secrets_only_when_asked() {
     assert!(SecretsFile::load(&t.ctx.paths).unwrap().secrets.is_empty());
     assert_eq!(t.ctx.store.get("global/anthropic").unwrap(), None);
 }
+
+/// `a1` running and `b2` stopped, both created with the github secret; `c3` running without it.
+fn github_sandboxes(t: &TestEnv) {
+    let with = |name: &str, state: &str| {
+        let labels = [("sbx.name", name), ("sbx.secrets", "github")];
+        machine_json(&format!("sbx-{name}"), state, &labels)
+    };
+    let (a1, c3) = (
+        with("a1", "running"),
+        machine_json("sbx-c3", "running", &[("sbx.name", "c3")]),
+    );
+    let ls = format!("[{a1},{},{c3}]", with("b2", "stopped"));
+    t.runner().ok(&["machine", "ls", "--json"], &ls);
+    // A running sandbox's ports come from `machine status`.
+    t.runner().ok(&["machine", "status", "-n", "sbx-a1"], &a1);
+    t.runner().ok(&["machine", "status", "-n", "sbx-c3"], &c3);
+}
+
+/// smolvm 1.35.4's `machine credentials refresh`: the value reaches the smolvm process's
+/// environment only, never its arguments.
+#[test]
+fn set_hands_a_running_sandbox_the_new_value_now() {
+    let mut t = test_env(&[]);
+    github_sandboxes(&t);
+    t.runner().ok(&["machine", "credentials", "refresh"], "");
+    t.sbt(&["secret", "set", "github", "-t", "tok-2"]).unwrap();
+    let out = t.stdout();
+    assert!(out.contains("Applied to a1 now\n"), "{out}");
+    assert!(out.contains("Applies to b2 on their next start\n"), "{out}");
+    assert!(out.contains("c3 were created without it"), "{out}");
+    let calls = t.calls_of("machine credentials refresh");
+    assert_eq!(
+        calls,
+        ["machine credentials refresh -n sbx-a1 gh_token github_token"]
+    );
+    assert!(!calls[0].contains("tok-2"));
+    let env = t.runner().envs().pop().unwrap();
+    assert_eq!(
+        env,
+        [
+            ("GH_TOKEN".to_string(), "tok-2".to_string()),
+            ("GITHUB_TOKEN".to_string(), "tok-2".to_string())
+        ]
+    );
+}
+
+#[test]
+fn a_failed_refresh_leaves_the_value_for_the_next_start() {
+    let mut t = test_env(&[]);
+    github_sandboxes(&t);
+    t.runner().fail(
+        &["machine", "credentials", "refresh"],
+        "CONFIG_ERROR",
+        "no credential binding 'gh_token'",
+    );
+    t.sbt(&["secret", "set", "github", "-t", "tok-2"]).unwrap();
+    let out = t.stdout();
+    assert!(
+        out.contains("Applies to a1, b2 on their next start\n"),
+        "{out}"
+    );
+    assert!(!out.contains("now"), "{out}");
+}

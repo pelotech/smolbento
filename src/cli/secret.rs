@@ -11,11 +11,12 @@ use super::{
 use crate::policy::Policy;
 use crate::policy::rules::{SmolvmHost, check_host};
 use crate::sandbox::{self, name};
+use crate::secrets::resolve::start_env;
 use crate::secrets::{
     CustomService, RegistryEntry, SecretEntry, SecretsFile, Source, registry_account, scope_for,
     services,
 };
-use crate::smolvm::Runner;
+use crate::smolvm::{Credential, Runner};
 
 pub fn run<R: Runner>(ctx: &mut Ctx<R>, cmd: SecretCmd) -> Result<i32> {
     let mut file = SecretsFile::load(&ctx.paths)?;
@@ -186,7 +187,7 @@ fn set<R: Runner>(
     let sandbox = src.sandbox.clone();
     let described = store(ctx, file, service, src)?;
     writeln!(&ctx.out, "Saved {service} secret ({described}; {scope})")?;
-    explain_impact(ctx, service, sandbox.as_deref())
+    explain_impact(ctx, file, service, sandbox.as_deref())
 }
 
 /// `secret set mcp:<server>:<name>`: the value of a registered MCP server's header placeholder
@@ -297,6 +298,33 @@ pub(crate) fn store<R: Runner>(
     Ok(described)
 }
 
+/// Hands the running `sb` the service's current value (`machine credentials refresh`), resolved as
+/// a start would; false when it can't, so the value waits for the next start. A sandbox created
+/// before bindings were named after their variable can't, when a kit bound the service.
+fn refresh<R: Runner>(
+    ctx: &Ctx<R>,
+    file: &SecretsFile,
+    sb: &sandbox::Sandbox,
+    service: &str,
+) -> bool {
+    let meta = sandbox::Meta {
+        secrets: vec![service.to_string()],
+        ..sb.meta.clone()
+    };
+    let (env, _) = start_env(file, &meta, ctx.store.as_ref(), false);
+    if env.is_empty() {
+        return false;
+    }
+    let bindings: Vec<String> = env.iter().map(|(v, _)| Credential::binding(v)).collect();
+    match ctx.vm.refresh_credentials(&sb.machine, &bindings, &env) {
+        Ok(()) => true,
+        Err(e) => {
+            crate::warning!("{}: couldn't hand it the new value now: {e:#}", sb.name());
+            false
+        }
+    }
+}
+
 /// Puts a stored value back as it was before a `set` whose secrets.toml save then failed: the
 /// earlier value, or none. Best effort; the save error is the one the caller reports.
 fn restore<R: Runner>(ctx: &Ctx<R>, account: &str, previous: Option<&str>) {
@@ -306,8 +334,14 @@ fn restore<R: Runner>(ctx: &Ctx<R>, account: &str, previous: Option<&str>) {
     };
 }
 
-/// Which sandboxes pick the change up on their next start, and which would need recreating.
-fn explain_impact<R: Runner>(ctx: &Ctx<R>, service: &str, scope: Option<&str>) -> Result<()> {
+/// Which sandboxes have the new value now, which get it on their next start, and which would need
+/// recreating. A running sandbox bound to the service is handed the value at once.
+fn explain_impact<R: Runner>(
+    ctx: &Ctx<R>,
+    file: &SecretsFile,
+    service: &str,
+    scope: Option<&str>,
+) -> Result<()> {
     let Ok(sandboxes) = sandbox::list(&ctx.vm) else {
         return Ok(());
     };
@@ -315,9 +349,15 @@ fn explain_impact<R: Runner>(ctx: &Ctx<R>, service: &str, scope: Option<&str>) -
         .iter()
         .filter(|s| scope.is_none_or(|n| n == s.name()))
         .partition(|s| s.meta.secrets.iter().any(|x| x == service));
+    let (now, later): (Vec<_>, Vec<_>) = bound
+        .into_iter()
+        .partition(|s| s.is_running() && refresh(ctx, file, s, service));
     let names = |v: &[&sandbox::Sandbox]| v.iter().map(|s| s.name()).collect::<Vec<_>>().join(", ");
-    if !bound.is_empty() {
-        writeln!(&ctx.out, "Applies to {} on their next start", names(&bound))?;
+    if !now.is_empty() {
+        writeln!(&ctx.out, "Applied to {} now", names(&now))?;
+    }
+    if !later.is_empty() {
+        writeln!(&ctx.out, "Applies to {} on their next start", names(&later))?;
     }
     if !unbound.is_empty() {
         writeln!(

@@ -247,7 +247,7 @@ fn an_api_key_credential_becomes_a_smolvm_credential() {
     .unwrap();
     assert_eq!(
         credential_args(&req),
-        ["anthropic=ANTHROPIC_API_KEY@api.anthropic.com"]
+        ["anthropic_api_key=ANTHROPIC_API_KEY@api.anthropic.com"]
     );
     assert_eq!(req.secrets, ["anthropic"]);
     assert_eq!(req.credential_env, ["ANTHROPIC_API_KEY"]);
@@ -340,7 +340,7 @@ fn a_kit_that_takes_a_key_without_a_variable_gets_no_service_variable() {
     run_with(&p, &mut req, &mut Policy::default(), &s).unwrap();
     assert_eq!(
         credential_args(&req),
-        ["anthropic=SBX_KIT_ANTHROPIC@api.anthropic.com:set-header=x-api-key"]
+        ["sbx_kit_anthropic=SBX_KIT_ANTHROPIC@api.anthropic.com:set-header=x-api-key"]
     );
     assert_eq!(req.credential_env, ["SBX_KIT_ANTHROPIC"]);
     assert_eq!(req.secrets, ["anthropic"]);
@@ -383,7 +383,7 @@ fn an_inject_only_credential_sets_its_header() {
     run_with(&p, &mut req, &mut Policy::default(), &secrets(&["xsvc"])).unwrap();
     assert_eq!(
         credential_args(&req),
-        ["xsvc=SBX_KIT_XSVC@api.x.com:set-header=authorization"]
+        ["sbx_kit_xsvc=SBX_KIT_XSVC@api.x.com:set-header=authorization"]
     );
     assert_eq!(
         req.credential_formats["SBX_KIT_XSVC"],
@@ -891,7 +891,7 @@ fn two_kits_binding_one_variable_must_inject_it_alike() {
     run_with(&p, &mut req, &mut Policy::default(), &secrets(&["github"])).unwrap();
     assert_eq!(
         credential_args(&req),
-        ["github=GH_TOKEN@github.com,api.github.com:set-header=authorization"]
+        ["gh_token=GH_TOKEN@github.com,api.github.com:set-header=authorization"]
     );
 
     let mut formatted = inject("api.github.com", Some("authorization"));
