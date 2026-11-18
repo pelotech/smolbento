@@ -1,5 +1,31 @@
 # Changelog
 
+## [0.32.0](https://github.com/pelotech/smolbento/compare/v0.31.1...v0.32.0) (2026-11-18)
+
+
+### Features
+
+* **kits:** expand kit references inside a capability's config before reading it ([#164](https://github.com/pelotech/smolbento/issues/164)) ([cbc3990](https://github.com/pelotech/smolbento/commit/cbc3990818339da989f107f211c9e17d6cf8ec78))
+* **kits:** read capability groups and apply each whole or not at all ([#161](https://github.com/pelotech/smolbento/issues/161)) ([d8159ea](https://github.com/pelotech/smolbento/commit/d8159ea64d8d8a1f439bb919171a9e64c099e5dd))
+
+
+### Refactors
+
+* **kits:** build a v2 kit's hooks and files as v3 configs ([#167](https://github.com/pelotech/smolbento/issues/167)) ([0ee9177](https://github.com/pelotech/smolbento/commit/0ee9177b8c4d20f67f9064113196015b0ea8a7fd))
+* **kits:** decide what kit add must recreate by capability type ([#165](https://github.com/pelotech/smolbento/issues/165)) ([cfadf91](https://github.com/pelotech/smolbento/commit/cfadf9164266b6f26b7a96a0735f201428846803))
+* **kits:** read every v3 descriptor in its published form ([#166](https://github.com/pelotech/smolbento/issues/166)) ([3fddbe1](https://github.com/pelotech/smolbento/commit/3fddbe11bb400872a4590fd1c0effee741926b40))
+
+
+### Chores
+
+* **deps:** update cachix/install-nix-action action to v31.11.4 ([#163](https://github.com/pelotech/smolbento/issues/163)) ([0f0b48d](https://github.com/pelotech/smolbento/commit/0f0b48d88c551c174afd33b282a9ebb5fa820517))
+* **deps:** update cachix/install-nix-action action to v31.11.5 ([#169](https://github.com/pelotech/smolbento/issues/169)) ([b701152](https://github.com/pelotech/smolbento/commit/b701152d10ed67045583f914e5a7323b2e88131a))
+
+
+### Tests
+
+* **e2e:** run every local-kit build test in the builder group ([#168](https://github.com/pelotech/smolbento/issues/168)) ([a7b4bc7](https://github.com/pelotech/smolbento/commit/a7b4bc74705be430b45f63d96a8dc221d01d46e8))
+
 ## [0.31.1](https://github.com/pelotech/smolbento/compare/v0.31.0...v0.31.1) (2026-11-17)
 
 
