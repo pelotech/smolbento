@@ -805,7 +805,12 @@ fn reset_preserves_secrets_only_when_asked() {
 /// `a1` running and `b2` stopped, both created with the github secret; `c3` running without it.
 fn github_sandboxes(t: &TestEnv) {
     let with = |name: &str, state: &str| {
-        let labels = [("sbx.name", name), ("sbx.secrets", "github")];
+        // `a1` also has a `--static-mcp` header secret, which a github refresh leaves alone.
+        let labels = [
+            ("sbx.name", name),
+            ("sbx.secrets", "github"),
+            ("sbx.mcp-secret.SBX_MCP_LINEAR_KEY", "mcp:linear:key"),
+        ];
         machine_json(&format!("sbx-{name}"), state, &labels)
     };
     let (a1, c3) = (
@@ -825,6 +830,8 @@ fn github_sandboxes(t: &TestEnv) {
 fn set_hands_a_running_sandbox_the_new_value_now() {
     let mut t = test_env(&[]);
     github_sandboxes(&t);
+    t.sbt(&["secret", "set", "mcp:linear:key", "-t", "mcp-tok"])
+        .unwrap();
     t.runner().ok(&["machine", "credentials", "refresh"], "");
     t.sbt(&["secret", "set", "github", "-t", "tok-2"]).unwrap();
     let out = t.stdout();

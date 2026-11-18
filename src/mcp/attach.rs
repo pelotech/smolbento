@@ -97,7 +97,6 @@ pub fn attach(
                     );
                 }
                 a.credentials.push(Credential {
-                    name: var.trim_start_matches("SBX_").to_ascii_lowercase(),
                     env_var: var.clone(),
                     hosts: vec![host.clone()],
                     set_header: None,
@@ -162,7 +161,6 @@ mod tests {
         assert_eq!(
             a.credentials,
             [Credential {
-                name: "mcp_linear_api_key".into(),
                 env_var: "SBX_MCP_LINEAR_API_KEY".into(),
                 hosts: vec!["mcp.linear.app".into()],
                 set_header: None,

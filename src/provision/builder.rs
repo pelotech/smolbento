@@ -142,7 +142,6 @@ fn build_with<R: Runner>(ctx: &Ctx<R>, dir: &Path, mint: Minter) -> Result<PathB
 /// build passes at start as `Bearer <token>`. The guest only sees a placeholder.
 pub(crate) fn registry_credential(i: usize, host: &str) -> Credential {
     Credential {
-        name: format!("reg-{i}"),
         env_var: registry_env(i),
         hosts: vec![host.to_string()],
         set_header: Some("authorization".into()),

@@ -347,7 +347,7 @@ mod tests {
             .unwrap();
         let create = t.create_line();
         for want in [
-            " --credential mcp_linear_api_key=SBX_MCP_LINEAR_API_KEY@mcp.linear.app ",
+            " --credential sbx_mcp_linear_api_key=SBX_MCP_LINEAR_API_KEY@mcp.linear.app ",
             " --label sbx.mcp=linear,files ",
             " --label sbx.mcp-secret.SBX_MCP_LINEAR_API_KEY=mcp:linear:api-key ",
         ] {

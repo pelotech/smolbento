@@ -11,7 +11,7 @@ use super::{
 use crate::policy::Policy;
 use crate::policy::rules::{SmolvmHost, check_host};
 use crate::sandbox::{self, name};
-use crate::secrets::resolve::start_env;
+use crate::secrets::resolve::service_env;
 use crate::secrets::{
     CustomService, RegistryEntry, SecretEntry, SecretsFile, Source, registry_account, scope_for,
     services,
@@ -85,7 +85,7 @@ pub fn run<R: Runner>(ctx: &mut Ctx<R>, cmd: SecretCmd) -> Result<i32> {
 }
 
 fn ls<R: Runner>(ctx: &Ctx<R>, file: &SecretsFile, a: &SecretLsArgs) -> Result<()> {
-    // A fork also uses its original's sandbox secrets (see `plan::start_plan`). If smolvm can't be
+    // A fork also uses its original's sandbox secrets (see `secrets::resolve::start_env`). If smolvm can't be
     // asked, the listing stays a plain file read.
     let parent = a
         .sandbox
@@ -299,19 +299,14 @@ pub(crate) fn store<R: Runner>(
 }
 
 /// Hands the running `sb` the service's current value (`machine credentials refresh`), resolved as
-/// a start would; false when it can't, so the value waits for the next start. A sandbox created
-/// before bindings were named after their variable can't, when a kit bound the service.
+/// a start would; false when it can't, so the value waits for the next start.
 fn refresh<R: Runner>(
     ctx: &Ctx<R>,
     file: &SecretsFile,
     sb: &sandbox::Sandbox,
     service: &str,
 ) -> bool {
-    let meta = sandbox::Meta {
-        secrets: vec![service.to_string()],
-        ..sb.meta.clone()
-    };
-    let (env, _) = start_env(file, &meta, ctx.store.as_ref(), false);
+    let env = service_env(file, &sb.meta, service, ctx.store.as_ref(), false);
     if env.is_empty() {
         return false;
     }
@@ -349,9 +344,14 @@ fn explain_impact<R: Runner>(
         .iter()
         .filter(|s| scope.is_none_or(|n| n == s.name()))
         .partition(|s| s.meta.secrets.iter().any(|x| x == service));
-    let (now, later): (Vec<_>, Vec<_>) = bound
-        .into_iter()
-        .partition(|s| s.is_running() && refresh(ctx, file, s, service));
+    let (mut now, mut later) = (Vec::new(), Vec::new());
+    for s in bound {
+        if s.is_running() && refresh(ctx, file, s, service) {
+            now.push(s);
+        } else {
+            later.push(s);
+        }
+    }
     let names = |v: &[&sandbox::Sandbox]| v.iter().map(|s| s.name()).collect::<Vec<_>>().join(", ");
     if !now.is_empty() {
         writeln!(&ctx.out, "Applied to {} now", names(&now))?;

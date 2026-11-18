@@ -675,7 +675,6 @@ fn bind_credential(
             }
         }
         None => req.credentials.push(Credential {
-            name: Credential::binding(&env),
             env_var: env.clone(),
             hosts: hosts.clone(),
             set_header,
