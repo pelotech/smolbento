@@ -1125,3 +1125,24 @@ capabilities:
         "{e:#}"
     );
 }
+
+#[test]
+fn a_lifecycle_file_path_must_be_absolute_once_expanded() {
+    let doc = r#"schemaVersion: "3"
+kind: mixin
+capabilities:
+  - type: com.docker.sandbox/lifecycle@1
+    config: {files: [{path: notes/a.md, content: x}]}
+"#;
+    let e = parse(doc, local("r")).unwrap_err();
+    assert!(
+        format!("{e:#}").contains(r#"lifecycle@1 file path "notes/a.md" must be absolute"#),
+        "{e:#}"
+    );
+    // With a reference, the path is checked once it expands.
+    let k = yaml_cap(
+        r#"  - type: com.docker.sandbox/lifecycle@1
+    config: {files: [{path: "${{ kit.env.WORKSPACE }}/a.md", content: x}]}"#,
+    );
+    assert_eq!(k.caps[0].body, CapBody::Pending);
+}

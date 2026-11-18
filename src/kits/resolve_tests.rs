@@ -1,5 +1,5 @@
 use super::*;
-use crate::kits::model::{ArgDef, Cap, Lifecycle, NetRule, OAuthReq, Source, SshPhase};
+use crate::kits::model::{ArgDef, Cap, HookCmd, NetRule, OAuthReq, Source, SshPhase};
 use crate::ssh_agent::PhaseGrant;
 
 fn base(name: &str, kind: Kind) -> Kit {
@@ -72,15 +72,6 @@ fn vol(path: &str, tmpfs: bool) -> CapBody {
         path: path.into(),
         tmpfs,
         mode: None,
-    }
-}
-fn shell_hook(s: &str) -> Hook {
-    Hook {
-        command: HookCmd::Shell(s.into()),
-        user: None,
-        env: vec![],
-        background: false,
-        clean_env: true,
     }
 }
 
@@ -817,47 +808,29 @@ fn env_merges_with_later_winning() {
     );
 }
 
+/// A v3 mixin `m` from a descriptor: `args` and `caps` are its YAML blocks.
+fn v3_m(args: &str, caps: &str) -> Kit {
+    let doc = format!("schemaVersion: \"3\"\nkind: mixin\nargs:\n{args}capabilities:\n{caps}");
+    crate::kits::v3::parse(&doc, Source::Registry("m".into())).unwrap()
+}
+
 #[test]
 fn hooks_files_and_contexts_expand_args_and_env() {
-    let mut m = mixin("m");
-    m.args.insert(
-        "name".into(),
-        ArgDef {
-            default: Some("bob".into()),
-            ..Default::default()
-        },
-    );
-    m.args.insert("opt".into(), ArgDef::default());
-    m.env = vec![("TOOL".into(), "x".into())];
     // `opt` is declared with no value but never used: not an error.
-    let m = m
-        .cap(
-            "l@1",
-            false,
-            CapBody::Lifecycle(Lifecycle {
-                install: vec![shell_hook("hi ${{ kit.args.name }}")],
-                startup: vec![Hook {
-                    command: HookCmd::Argv(vec!["echo".into(), "${{ kit.env.HOME }}".into()]),
-                    ..shell_hook("")
-                }],
-                files: vec![FileReq {
-                    path: "/f/${{ kit.args.name }}".into(),
-                    content: "${{ kit.env.TOOL }}".into(),
-                    mode: None,
-                    overwrite: true,
-                }],
-            }),
-        )
-        .cap(
-            "c@1",
-            false,
-            CapBody::AgentContext(AgentContextReq {
-                filename: Some("${{ kit.args.name }}.md".into()),
-                directory: Some("/home/${{ kit.args.name }}".into()),
-                content: "for ${{ kit.args.name }}".into(),
-                content_file: None,
-            }),
-        );
+    let m = v3_m(
+        "  name: {default: bob}\n  opt: {}\n  tool: {default: x, env: TOOL}\n",
+        r#"  - type: com.docker.sandbox/lifecycle@1
+    config:
+      install: [{command: "hi ${{ kit.args.name }}"}]
+      startup: [{command: [echo, "${{ kit.env.HOME }}"]}]
+      files: [{path: "/f/${{ kit.args.name }}", content: "${{ kit.env.TOOL }}"}]
+  - type: com.docker.sandbox/agent-context@2
+    config:
+      filename: "${{ kit.args.name }}.md"
+      directory: "/home/${{ kit.args.name }}"
+      content: "for ${{ kit.args.name }}"
+"#,
+    );
     let v = ArgValues::parse(&[], &["name=alice".into()]).unwrap();
     let p = resolve(workload("w"), vec![m], &v).unwrap();
     assert_eq!(
@@ -879,16 +852,9 @@ fn hooks_files_and_contexts_expand_args_and_env() {
 }
 
 fn opt_hook_kit() -> Kit {
-    let mut m = mixin("m");
-    m.args.insert("opt".into(), ArgDef::default());
-    m.cap(
-        "l@1",
-        false,
-        CapBody::Lifecycle(Lifecycle {
-            install: vec![shell_hook("x${{ kit.args.opt }}y")],
-            startup: vec![],
-            files: vec![],
-        }),
+    v3_m(
+        "  opt: {}\n",
+        "  - type: com.docker.sandbox/lifecycle@1\n    config: {install: [{command: \"x${{ kit.args.opt }}y\"}]}\n",
     )
 }
 
@@ -911,17 +877,15 @@ fn a_used_optional_arg_with_no_value_is_an_error_but_empty_is_a_value() {
 fn unknown_args_and_undeclared_placeholders_fail() {
     let v = ArgValues::parse(&[], &["nope=1".into()]).unwrap();
     assert!(resolve(workload("w"), vec![], &v).is_err());
-    let m = mixin("m").cap(
-        "c@1",
-        false,
-        CapBody::AgentContext(AgentContextReq {
-            filename: None,
-            directory: None,
-            content: "${{ kit.args.zzz }}".into(),
-            content_file: None,
-        }),
+    let m = v3_m(
+        "  a: {}\n",
+        "  - type: com.docker.sandbox/agent-context@2\n    config: {content: \"${{ kit.args.zzz }}\"}\n",
     );
-    assert!(run(workload("w"), vec![m]).is_err());
+    let e = run(workload("w"), vec![m]).unwrap_err();
+    assert!(
+        format!("{e:#}").contains("undeclared kit argument \"zzz\""),
+        "{e:#}"
+    );
 }
 
 #[test]

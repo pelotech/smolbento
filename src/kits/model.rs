@@ -98,6 +98,9 @@ pub struct Kit {
     /// The reference the user gave (`--kit`, the agent argument), as typed: resolver messages name
     /// kits by it, as sbx does. None for kits already in a sandbox.
     pub reference: Option<String>,
+    /// Read from a v2 `spec.yaml`. A published v2 kit's source is its registry reference, which
+    /// alone can't tell the format.
+    pub v2: bool,
 }
 
 impl Kit {
@@ -120,6 +123,7 @@ impl Kit {
             config: None,
             starts_docker: false,
             reference: None,
+            v2: false,
         }
     }
 
@@ -148,12 +152,11 @@ impl Kit {
         }
     }
 
-    /// The kit file format it was written in. A published kit is v3 unless it carries a v2
-    /// spec, which names its image instead of holding one (`registry::read_layout`).
+    /// The kit file format it was written in.
     pub fn format(&self) -> Option<Format> {
-        match (&self.source, &self.content) {
-            (Source::Registry(_), Content::Image(_)) => Some(Format::V2),
-            (source, _) => source.format(),
+        match self.v2 {
+            true => Some(Format::V2),
+            false => self.source.format(),
         }
     }
 
@@ -378,7 +381,8 @@ pub struct Hook {
     pub env: Vec<String>,
     pub background: bool,
     /// sbx's v3 install-hook environment: `env -i` with a small baseline plus the declared `env`.
-    /// Off for v3 startup hooks and all v2 hooks, which get the full container environment.
+    /// Off for startup hooks, and when merged for a v2 kit's hooks: those get the full container
+    /// environment.
     pub clean_env: bool,
 }
 
@@ -391,6 +395,7 @@ pub enum HookCmd {
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct FileReq {
+    /// Absolute, or relative to the sandbox's workspace (a v2 kit's `files/workspace`).
     pub path: String,
     /// Bytes, not text: a kit's `files/` directory can hold anything (sbx copies it as is).
     pub content: Vec<u8>,
