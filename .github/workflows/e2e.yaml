@@ -35,7 +35,8 @@ jobs:
   e2e-linux:
     needs: changes
     # Skipped jobs count as passing, so required checks still go green on docs-only PRs.
-    if: ${{ needs.changes.outputs.code == 'true' }}
+    # Off while proving the buildx repro below (temporary).
+    if: false
     runs-on: ubuntu-latest
     timeout-minutes: 30
     # Three runners, each with its own 4 vCPUs: about half the time of one. More barely helps,
@@ -64,3 +65,29 @@ jobs:
         env:
           NEXTEST_PROFILE: ci
           SHARD: ${{ matrix.shard }}
+
+  # Temporary: the smolvm-only buildx repro, with the release that hangs and the one before it.
+  buildx-repro:
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    strategy:
+      fail-fast: false
+      matrix:
+        smolvm: ["1.35.3", "1.35.4"]
+    name: buildx-repro (smolvm ${{ matrix.smolvm }})
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      - uses: $/.github/actions/kvm
+      - name: Download smolvm
+        run: |
+          mkdir -p "$RUNNER_TEMP/smolvm"
+          curl -fsSL "https://github.com/smol-machines/smolvm/releases/download/v${V}/smolvm-${V}-linux-x86_64.tar.gz" \
+            | tar xz -C "$RUNNER_TEMP/smolvm"
+          find "$RUNNER_TEMP/smolvm" -maxdepth 3 -name smolvm -type f | head -1 > "$RUNNER_TEMP/smolvm-path"
+          cat "$RUNNER_TEMP/smolvm-path"
+        env:
+          V: ${{ matrix.smolvm }}
+      - name: Repro
+        run: SMOLVM="$(cat "$RUNNER_TEMP/smolvm-path")" RUNS=3 sh tests/repro/buildx-repro.sh
