@@ -711,7 +711,8 @@ pub(crate) fn smolvm_command() -> Command {
 
 /// Hunting the smolvm 1.35.4 hang on Linux CI (temporary): in CI, 4 minutes into a test (nextest
 /// stops it at 5), print the host's smolvm and smolbento processes, and the processes in each of
-/// `machines`, to tell a command still running in the guest from a smolvm call that never returns.
+/// `machines`, to tell a command still running in the guest from a smolvm call that never returns,
+/// and whether each guest can still resolve and reach the network.
 fn watchdog(machines: Vec<String>) {
     if std::env::var_os("CI").is_none() {
         return;
@@ -742,8 +743,16 @@ fn watchdog(machines: Vec<String>) {
                     cmd.env(k, v);
                 }
             }
+            // Processes, then whether the guest can still reach the network: the builds hang
+            // waiting on a download after the builder's first one passed.
+            let probe = "ps -ef; echo '--- dockerd.log'; tail -n 25 /var/log/dockerd.log 2>&1; \
+                 echo '--- resolve'; getent hosts registry-1.docker.io 2>&1 || nslookup registry-1.docker.io 2>&1; \
+                 echo '--- https'; (wget -q -T 5 -O /dev/null -S https://registry-1.docker.io/v2/ 2>&1 \
+                 || curl -sS -m 5 -o /dev/null -w '%{http_code}' https://registry-1.docker.io/v2/ 2>&1) | tail -n 5; \
+                 echo '--- by ip'; (wget -q -T 5 -O /dev/null http://1.1.1.1/ 2>&1 || curl -sS -m 5 -o /dev/null http://1.1.1.1/ 2>&1) | tail -n 3; \
+                 echo '--- resolv.conf'; cat /etc/resolv.conf";
             cmd.args([
-                "machine", "exec", "--name", m, "-u", "root", "--", "ps", "-ef",
+                "machine", "exec", "--name", m, "-u", "root", "--", "sh", "-c", probe,
             ]);
             match cmd.output() {
                 Ok(out) => eprintln!(
