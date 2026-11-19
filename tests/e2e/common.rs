@@ -29,6 +29,7 @@ impl E2e {
         };
         smolbento::agents::write_stand_ins(&e.dir.path().join("agent-kits")).unwrap();
         e.ok(&["policy", "init", "allow-all"]);
+        watchdog(vec![e.machine(), "sbx-_builder".into()]);
         e
     }
 
@@ -706,4 +707,53 @@ pub(crate) fn smolvm_command() -> Command {
     cmd.arg("smolvm")
         .env("SMOLBENTO_SMOLVM_HOME", smolvm_home());
     cmd
+}
+
+/// Hunting the smolvm 1.35.4 hang on Linux CI (temporary): in CI, 4 minutes into a test (nextest
+/// stops it at 5), print the host's smolvm and smolbento processes, and the processes in each of
+/// `machines`, to tell a command still running in the guest from a smolvm call that never returns.
+fn watchdog(machines: Vec<String>) {
+    if std::env::var_os("CI").is_none() {
+        return;
+    }
+    std::thread::spawn(move || {
+        std::thread::sleep(std::time::Duration::from_secs(240));
+        let host = Command::new("sh")
+            .args([
+                "-c",
+                "ps -eo pid,ppid,etime,args | grep -E '[s]molvm|[s]molbento'",
+            ])
+            .output();
+        if let Ok(out) = host {
+            eprintln!(
+                "watchdog: host processes after 240s:\n{}",
+                String::from_utf8_lossy(&out.stdout)
+            );
+        }
+        for m in &machines {
+            // Under `timeout`: an exec into a stuck machine may hang too.
+            let smolvm = smolvm_command();
+            let mut cmd = Command::new("timeout");
+            cmd.arg("20")
+                .arg(smolvm.get_program())
+                .args(smolvm.get_args());
+            for (k, v) in smolvm.get_envs() {
+                if let Some(v) = v {
+                    cmd.env(k, v);
+                }
+            }
+            cmd.args([
+                "machine", "exec", "--name", m, "-u", "root", "--", "ps", "-ef",
+            ]);
+            match cmd.output() {
+                Ok(out) => eprintln!(
+                    "watchdog: {m} (exit {:?}):\n{}{}",
+                    out.status.code(),
+                    String::from_utf8_lossy(&out.stdout),
+                    String::from_utf8_lossy(&out.stderr)
+                ),
+                Err(e) => eprintln!("watchdog: {m}: {e}"),
+            }
+        }
+    });
 }
