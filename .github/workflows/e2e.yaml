@@ -98,8 +98,8 @@ jobs:
         env:
           IMAGE_OVERRIDE: ${{ matrix.image }}
 
-  # Temporary: the smolvm-only repro inside the e2e environment (its smolvm data dir and cache),
-  # before and after the builder test that stalls, with that test's VMs left running after it.
+  # Temporary: the smolvm-only repro inside the e2e environment, then the stalling test with only
+  # its build-stanza kit and with both kits, each on a fresh builder, then the repro again.
   builder-alone:
     runs-on: ubuntu-latest
     timeout-minutes: 45
@@ -125,9 +125,20 @@ jobs:
         run: >-
           SMOLVM="$(cat "$RUNNER_TEMP/smolvm-path")" SMOLVM_DATA_DIR="$E2E_DIR" XDG_CACHE_HOME="$E2E_DIR/.cache"
           RUNS=3 sh tests/repro/buildx-repro.sh
-      - name: The stalling builder test
+      - name: The build-stanza kit alone (no plain kit)
+        if: always()
         run: >-
-          cargo nextest run --locked --run-ignored only --no-fail-fast
+          cargo nextest run --locked --run-ignored only --no-fail-fast --retries 0
+          -E 'binary(e2e) & test(hunt_build_stanza_kit_alone)'
+        env:
+          NEXTEST_PROFILE: ci
+      - name: Delete the builder
+        if: always()
+        run: SMOLVM_DATA_DIR="$E2E_DIR" "$E2E_DIR/engine/1.35.4/smolvm" machine delete -f -n sbx-_builder || true
+      - name: The stalling builder test (both kits)
+        if: always()
+        run: >-
+          cargo nextest run --locked --run-ignored only --no-fail-fast --retries 0
           -E 'binary(e2e) & test(local_v3_kit_builds_in_the_builder_sandbox)'
         env:
           NEXTEST_PROFILE: ci

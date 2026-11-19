@@ -239,6 +239,37 @@ impl Drop for BuilderGuard {
     }
 }
 
+/// Temporary (hunting the smolvm 1.35.4 stall): the build-stanza kit alone, without `plain`.
+#[test]
+#[ignore = "boots real VMs, builds in the builder sandbox and pulls from Docker Hub; run with `just e2e`"]
+pub(crate) fn hunt_build_stanza_kit_alone() {
+    let e = E2e::new("hunt");
+    let _builder = BuilderGuard::new();
+    let _reg = Registry::start(&e);
+    let kit = e.dir.path().join("built");
+    std::fs::create_dir_all(&kit).unwrap();
+    std::fs::write(
+        kit.join("built.yaml"),
+        r#"# syntax=docker/sandbox-kit:3
+schemaVersion: "3"
+kind: mixin
+version: "1.0.0"
+provides: [e2e-built]
+build: |
+  FROM busybox:1.37 AS build
+  RUN mkdir -p /out/opt/e2e-built && echo "built in the builder" > /out/opt/e2e-built/hello
+  FROM scratch
+  COPY --from=build /out/ /
+"#,
+    )
+    .unwrap();
+    e.create_with_kits(&[kit.to_str().unwrap()]);
+    assert_eq!(
+        root_out(&e.name, "cat /opt/e2e-built/hello"),
+        "built in the builder\n"
+    );
+}
+
 #[test]
 #[ignore = "boots real VMs, builds in the builder sandbox and pulls from Docker Hub; run with `just e2e`"]
 pub(crate) fn local_v3_kit_builds_in_the_builder_sandbox() {

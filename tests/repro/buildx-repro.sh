@@ -50,6 +50,11 @@ sm machine cp "$host/hook" "$NAME:/etc/smolbento/startup.d/01-docker.sh" || exit
 sm machine cp "$host/startup" "$NAME:/etc/smolbento/startup" || exit 1
 vm sh -c 'chmod 644 /etc/smolbento/startup.d/01-docker.sh && chmod 755 /etc/smolbento/startup'
 vm sh -c '[ -x /etc/smolbento/startup ] || exit 0; exec /etc/smolbento/startup'
+# smolbento then runs the docker hook once more itself, straight away, before polling docker.
+vm sh -c 'cd /
+d=nohup; command -v setsid >/dev/null 2>&1 && d=setsid
+$d sh -c "if { sh /etc/smolbento/startup.d/01-docker.sh; }; then :; else echo hook failed; fi" &
+echo "ok $0 hook 1"'
 ok=
 for i in $(seq 1 60); do vm docker info >/dev/null 2>&1 && { ok=1; break; }; sleep 1; done
 [ -n "$ok" ] || { echo "dockerd did not start"; vm tail -n 20 /var/log/dockerd.log; exit 1; }
