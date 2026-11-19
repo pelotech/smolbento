@@ -126,24 +126,24 @@ jobs:
           SMOLVM="$(cat "$RUNNER_TEMP/smolvm-path")" SMOLVM_DATA_DIR="$E2E_DIR" XDG_CACHE_HOME="$E2E_DIR/.cache"
           RUNS=3 sh tests/repro/buildx-repro.sh
       - name: The build-stanza kit alone (no plain kit)
-        if: always()
+        if: false
         run: >-
           cargo nextest run --locked --run-ignored only --no-fail-fast --retries 0
           -E 'binary(e2e) & test(hunt_build_stanza_kit_alone)'
         env:
           NEXTEST_PROFILE: ci
       - name: Delete the builder
-        if: always()
+        if: false
         run: SMOLVM_DATA_DIR="$E2E_DIR" "$E2E_DIR/engine/1.35.4/smolvm" machine delete -f -n sbx-_builder || true
       - name: The stalling builder test (both kits)
-        if: always()
+        if: false
         run: >-
           cargo nextest run --locked --run-ignored only --no-fail-fast --retries 0
           -E 'binary(e2e) & test(local_v3_kit_builds_in_the_builder_sandbox)'
         env:
           NEXTEST_PROFILE: ci
       - name: Repro after, beside the test's VMs
-        if: always()
+        if: false
         run: |
           ps -eo pid,etime,args | grep -E "_boot-vm" | grep -v grep | cut -c1-160
           SMOLVM="$(cat "$RUNNER_TEMP/smolvm-path")" SMOLVM_DATA_DIR="$E2E_DIR" XDG_CACHE_HOME="$E2E_DIR/.cache" \

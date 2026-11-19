@@ -17,7 +17,13 @@ IMAGE=${IMAGE:-}
 NAME=buildx-repro
 host=$(mktemp -d)
 trap 'rm -rf "$host"' EXIT
-sm() { "$SMOLVM" --error-format json "$@"; }
+# As smolbento runs every smolvm call: stdin closed, stdout and stderr read through pipes.
+sm() {
+  out=$("$SMOLVM" --error-format json "$@" </dev/null 2>&1)
+  rc=$?
+  [ -z "$out" ] || printf '%s\n' "$out"
+  return $rc
+}
 vm() { sm machine exec --name "$NAME" -u root -- "$@"; }
 
 "$SMOLVM" --version
