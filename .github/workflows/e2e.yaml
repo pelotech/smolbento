@@ -122,9 +122,14 @@ jobs:
           find "$RUNNER_TEMP/smolvm" -maxdepth 3 -name smolvm -type f | head -1 > "$RUNNER_TEMP/smolvm-path"
           id -u
       - name: Repro before, in the e2e data dir
+        if: false
         run: >-
           SMOLVM="$(cat "$RUNNER_TEMP/smolvm-path")" SMOLVM_DATA_DIR="$E2E_DIR" XDG_CACHE_HOME="$E2E_DIR/.cache"
           RUNS=3 sh tests/repro/buildx-repro.sh
+      - name: smolbento's builder, then a build in it by hand
+        run: |
+          cargo build --locked
+          BENTO=target/debug/smolbento SMOLVM_HOME="$E2E_DIR" sh tests/repro/bento-builder.sh
       - name: The build-stanza kit alone (no plain kit)
         if: false
         run: >-
