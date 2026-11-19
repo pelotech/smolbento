@@ -66,8 +66,8 @@ jobs:
           NEXTEST_PROFILE: ci
           SHARD: ${{ matrix.shard }}
 
-  # Temporary: the smolvm-only buildx repro on 1.35.4, image seeds off, with SMOLVM_DATA_DIR set to
-  # a dir under $HOME, another under /tmp, and smolvm's own default path given explicitly.
+  # Temporary: the same seeds-off repro in nine identical jobs, each printing its runner's CPU: each
+  # job hangs every build or none, whatever the data dir.
   buildx-repro:
     runs-on: ubuntu-latest
     timeout-minutes: 30
@@ -75,10 +75,16 @@ jobs:
       fail-fast: false
       matrix:
         include:
-          - { smolvm: "1.35.4", data: "/home/runner/smolvm-data" }
-          - { smolvm: "1.35.4", data: "/tmp/smolvm-data" }
-          - { smolvm: "1.35.4", data: "/home/runner/.local/share/smolvm" }
-    name: buildx-repro (smolvm ${{ matrix.smolvm }} data ${{ matrix.data || 'default' }})
+          - { smolvm: "1.35.4", n: 1 }
+          - { smolvm: "1.35.4", n: 2 }
+          - { smolvm: "1.35.4", n: 3 }
+          - { smolvm: "1.35.4", n: 4 }
+          - { smolvm: "1.35.4", n: 5 }
+          - { smolvm: "1.35.4", n: 6 }
+          - { smolvm: "1.35.3", n: 1 }
+          - { smolvm: "1.35.3", n: 2 }
+          - { smolvm: "1.35.3", n: 3 }
+    name: buildx-repro (smolvm ${{ matrix.smolvm }} #${{ matrix.n }})
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
@@ -95,10 +101,10 @@ jobs:
           V: ${{ matrix.smolvm }}
       - name: Repro
         run: |
-          [ -z "$DATA" ] || export SMOLVM_DATA_DIR="$DATA"
-          SMOLVM="$(cat "$RUNNER_TEMP/smolvm-path")" SMOLVM_IMAGE_SEEDS=0 RUNS=3 sh tests/repro/buildx-repro.sh
-        env:
-          DATA: ${{ matrix.data }}
+          echo "cpu: $(grep -m1 'model name' /proc/cpuinfo | cut -d: -f2)"
+          echo "kernel: $(uname -r)"
+          SMOLVM="$(cat "$RUNNER_TEMP/smolvm-path")" SMOLVM_IMAGE_SEEDS=0 SMOLVM_DATA_DIR=/tmp/sbt-e2e-1001 \
+            RUNS=3 sh tests/repro/buildx-repro.sh
 
   # Temporary: the seeds-off repro again after the nix dev shell and Rust cache setup, where it hung
   # 3 of 3 once.
