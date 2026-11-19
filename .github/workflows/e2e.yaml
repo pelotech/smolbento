@@ -153,36 +153,35 @@ jobs:
         env:
           NEXTEST_PROFILE: ci
 
-  # Temporary: the shipped 1.35.4 libkrunfw (built with clang/LLD outside libkrunfw's Makefile)
-  # stalls; our gcc build of its pinned commit doesn't. Build that commit with gcc and with clang
-  # and run each six times beside the shipped one.
+  # Temporary: libkrunfw built with clang/LLD stalls (as shipped in 1.35.4), with gcc it doesn't.
+  # Build each libkrunfw commit from 1.35.3's pin up to 1.35.4's with clang, five runs each, to
+  # find where the clang-only stall starts.
   kernel-build:
     runs-on: ubuntu-latest
     timeout-minutes: 60
     strategy:
       fail-fast: false
       matrix:
-        cc: ["gcc", "clang"]
-    name: kernel-build (cb2901f8 ${{ matrix.cc }})
+        sha: ["0fae3853989a7fe5bf9921bc8e0d013e86c630e8", "38a42cedee8434179126d461aa05c01566ed7070", "8862a917824cee6a38b52a858c7c92eb89e2ffca", "3ec7fae1e2f3a625772da1059874d0329ec6c2cb", "006afa497e57a1218e2abf6dd864d430e9219b32", "6d1db8c6d01fc42f1ffb6b07d1bf94a43c192db3", "c4dc25ed8338ecf58ebe99bbe711c56e09edf746", "1ef198987dd0d03347af3069984a9476c950761c"]
+    name: kernel-build (clang ${{ matrix.sha }})
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
           repository: smol-machines/libkrunfw
-          ref: cb2901f882a30f923da88e8310006d3ea5a71f79
+          ref: ${{ matrix.sha }}
           fetch-depth: 0
           persist-credentials: false
       - name: Build
         run: |
           sudo apt-get update -q && sudo apt-get install -yq make gcc bc bison flex elfutils python3-pyelftools curl patch libelf-dev clang lld llvm
-          if [ "$CC_KIND" = clang ]; then export LLVM=1; clang --version | head -1; fi
+          export LLVM=1
+          clang --version | head -1
           make -j"$(nproc)"
           strings -n 8 libkrunfw.so.*.*.* | grep -m1 "Linux version"
           mkdir out && cp -a libkrunfw.so* out/ && ls -l out
-        env:
-          CC_KIND: ${{ matrix.cc }}
       - uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
         with:
-          name: libkrunfw-${{ matrix.cc }}
+          name: libkrunfw-${{ matrix.sha }}
           path: out/
 
   builder-ab:
@@ -193,8 +192,8 @@ jobs:
     strategy:
       fail-fast: false
       matrix:
-        sha: ["release", "gcc", "clang"]
-        n: [1, 2, 3, 4, 5, 6]
+        sha: ["0fae3853989a7fe5bf9921bc8e0d013e86c630e8", "38a42cedee8434179126d461aa05c01566ed7070", "8862a917824cee6a38b52a858c7c92eb89e2ffca", "3ec7fae1e2f3a625772da1059874d0329ec6c2cb", "006afa497e57a1218e2abf6dd864d430e9219b32", "6d1db8c6d01fc42f1ffb6b07d1bf94a43c192db3", "c4dc25ed8338ecf58ebe99bbe711c56e09edf746", "1ef198987dd0d03347af3069984a9476c950761c"]
+        n: [1, 2, 3, 4, 5]
     name: builder-ab (libkrunfw ${{ matrix.sha }} #${{ matrix.n }})
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
