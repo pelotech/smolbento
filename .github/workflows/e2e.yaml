@@ -115,6 +115,7 @@ jobs:
 
   # Temporary: the build-stanza kit test with smolvm's image seeds on, then as e2e runs it (off).
   builder-alone:
+    if: false
     runs-on: ubuntu-latest
     timeout-minutes: 60
     env:
@@ -151,3 +152,44 @@ jobs:
           -E 'binary(e2e) & test(hunt_build_stanza_kit_alone)'
         env:
           NEXTEST_PROFILE: ci
+
+  # Temporary: the e2e builder test that stalls, on 1.35.3 and 1.35.4 in the same run, five jobs
+  # each, so both versions meet the same Docker Hub and runner conditions. Rerun the workflow for
+  # more rounds.
+  builder-ab:
+    runs-on: ubuntu-latest
+    timeout-minutes: 40
+    strategy:
+      fail-fast: false
+      matrix:
+        smolvm: ["1.35.3", "1.35.4"]
+        n: [1, 2, 3, 4, 5]
+    name: builder-ab (smolvm ${{ matrix.smolvm }} #${{ matrix.n }})
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      - uses: $/.github/actions/nix-devshell
+      - uses: Swatinem/rust-cache@d1527c8f67ef9af357290475d4af4b0fab8f12e0 # v2.9.3
+        with:
+          save-if: false
+      - uses: $/.github/actions/kvm
+      - name: Download smolvm
+        run: |
+          mkdir -p "$RUNNER_TEMP/smolvm"
+          curl -fsSL "https://github.com/smol-machines/smolvm/releases/download/v${V}/smolvm-${V}-linux-x86_64.tar.gz" \
+            | tar xz -C "$RUNNER_TEMP/smolvm"
+          echo "SMOLBENTO_SMOLVM=$(find "$RUNNER_TEMP/smolvm" -maxdepth 3 -name smolvm -type f | head -1)" >> "$GITHUB_ENV"
+        env:
+          V: ${{ matrix.smolvm }}
+      - name: Build the tests
+        run: cargo nextest run --locked --run-ignored only --no-run
+      - name: The builder test
+        run: |
+          echo "start: $(date -u +%H:%M:%SZ) cpu: $(grep -m1 'model name' /proc/cpuinfo | cut -d: -f2)"
+          "$SMOLBENTO_SMOLVM" --version
+          cargo nextest run --locked --run-ignored only --no-fail-fast --retries 0 \
+            -E 'binary(e2e) & test(local_v3_kit_builds_in_the_builder_sandbox)'
+        env:
+          NEXTEST_PROFILE: ci
+
