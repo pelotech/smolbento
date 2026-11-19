@@ -1,9 +1,11 @@
 #!/bin/sh
 # Repro: `docker buildx build` inside a smolvm machine loses its BuildKit session as a build
-# frontend starts, and the build then waits forever. Seen every time on Linux with smolvm 1.35.4;
-# 1.35.3 passes. Uses only smolvm.
+# frontend starts, and the build then waits forever. Uses only smolvm.
 #
-#   SMOLVM=/path/to/smolvm RUNS=3 sh buildx-repro.sh
+#   SMOLVM_IMAGE_SEEDS=0 SMOLVM_DATA_DIR=/tmp/sbt-e2e-1001 SMOLVM=/path/to/smolvm RUNS=3 sh buildx-repro.sh
+#
+# On x64 Linux (GitHub's ubuntu-latest), 1.35.4 hangs every build with image seeds off and that
+# data dir; 1.35.3 doesn't, nor 1.35.4 with seeds on or with smolvm's default data dir.
 #
 # Replays, call for call, what smolbento's kit builder does on a fresh machine: Docker's
 # docker.io/sbx/shell image, the builder's create flags, an allow-list reset, startup files copied

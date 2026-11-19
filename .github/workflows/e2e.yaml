@@ -66,8 +66,8 @@ jobs:
           NEXTEST_PROFILE: ci
           SHARD: ${{ matrix.shard }}
 
-  # Temporary: the smolvm-only buildx repro, image seeds off, in the e2e data dir and smolvm's
-  # default, on the release that hangs and the one before it.
+  # Temporary: the smolvm-only buildx repro on 1.35.4, image seeds off, with SMOLVM_DATA_DIR set to
+  # a dir under $HOME, another under /tmp, and smolvm's own default path given explicitly.
   buildx-repro:
     runs-on: ubuntu-latest
     timeout-minutes: 30
@@ -75,9 +75,9 @@ jobs:
       fail-fast: false
       matrix:
         include:
-          - { smolvm: "1.35.4", data: "/tmp/sbt-e2e-1001" }
-          - { smolvm: "1.35.3", data: "/tmp/sbt-e2e-1001" }
-          - { smolvm: "1.35.4", data: "" }
+          - { smolvm: "1.35.4", data: "/home/runner/smolvm-data" }
+          - { smolvm: "1.35.4", data: "/tmp/smolvm-data" }
+          - { smolvm: "1.35.4", data: "/home/runner/.local/share/smolvm" }
     name: buildx-repro (smolvm ${{ matrix.smolvm }} data ${{ matrix.data || 'default' }})
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
@@ -103,6 +103,7 @@ jobs:
   # Temporary: the seeds-off repro again after the nix dev shell and Rust cache setup, where it hung
   # 3 of 3 once.
   builder-alone:
+    if: false
     runs-on: ubuntu-latest
     timeout-minutes: 60
     env:
