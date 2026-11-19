@@ -98,11 +98,11 @@ jobs:
         env:
           IMAGE_OVERRIDE: ${{ matrix.image }}
 
-  # Temporary: the smolvm-only repro inside the e2e environment, then the stalling test with only
-  # its build-stanza kit and with both kits, each on a fresh builder, then the repro again.
+  # Temporary: the build-stanza kit through smolbento with and without the e2e test's local registry
+  # and its traced create, each on a fresh builder.
   builder-alone:
     runs-on: ubuntu-latest
-    timeout-minutes: 45
+    timeout-minutes: 60
     env:
       E2E_DIR: /tmp/sbt-e2e-1001
     steps:
@@ -126,30 +126,37 @@ jobs:
         run: >-
           SMOLVM="$(cat "$RUNNER_TEMP/smolvm-path")" SMOLVM_DATA_DIR="$E2E_DIR" XDG_CACHE_HOME="$E2E_DIR/.cache"
           RUNS=3 sh tests/repro/buildx-repro.sh
-      - name: smolbento's builder, then a build in it by hand
+      - name: smolbento by hand (control; passed before)
         run: |
           cargo build --locked
-          BENTO=target/debug/smolbento SMOLVM_HOME="$E2E_DIR" sh tests/repro/bento-builder.sh
-      - name: The build-stanza kit alone (no plain kit)
-        if: false
+          BENTO=target/debug/smolbento SMOLVM_HOME="$E2E_DIR" sh tests/repro/bento-builder.sh || true
+      - name: Delete the builder
+        if: always()
+        run: SMOLVM_DATA_DIR="$E2E_DIR" "$E2E_DIR/engine/1.35.4/smolvm" machine delete -f -n sbx-_builder || true
+      - name: No registry, traced (as CI runs it)
+        if: always()
         run: >-
           cargo nextest run --locked --run-ignored only --no-fail-fast --retries 0
-          -E 'binary(e2e) & test(hunt_build_stanza_kit_alone)'
+          -E 'binary(e2e) & test(hunt_build_stanza_kit_no_registry)'
         env:
           NEXTEST_PROFILE: ci
       - name: Delete the builder
-        if: false
+        if: always()
         run: SMOLVM_DATA_DIR="$E2E_DIR" "$E2E_DIR/engine/1.35.4/smolvm" machine delete -f -n sbx-_builder || true
-      - name: The stalling builder test (both kits)
-        if: false
+      - name: No registry, untraced
+        if: always()
         run: >-
-          cargo nextest run --locked --run-ignored only --no-fail-fast --retries 0
-          -E 'binary(e2e) & test(local_v3_kit_builds_in_the_builder_sandbox)'
+          env -u CI cargo nextest run --locked --run-ignored only --no-fail-fast --retries 0
+          -E 'binary(e2e) & test(hunt_build_stanza_kit_no_registry)'
         env:
           NEXTEST_PROFILE: ci
-      - name: Repro after, beside the test's VMs
-        if: false
-        run: |
-          ps -eo pid,etime,args | grep -E "_boot-vm" | grep -v grep | cut -c1-160
-          SMOLVM="$(cat "$RUNNER_TEMP/smolvm-path")" SMOLVM_DATA_DIR="$E2E_DIR" XDG_CACHE_HOME="$E2E_DIR/.cache" \
-            RUNS=3 sh tests/repro/buildx-repro.sh
+      - name: Delete the builder
+        if: always()
+        run: SMOLVM_DATA_DIR="$E2E_DIR" "$E2E_DIR/engine/1.35.4/smolvm" machine delete -f -n sbx-_builder || true
+      - name: Registry, untraced
+        if: always()
+        run: >-
+          env -u CI cargo nextest run --locked --run-ignored only --no-fail-fast --retries 0
+          -E 'binary(e2e) & test(hunt_build_stanza_kit_alone)'
+        env:
+          NEXTEST_PROFILE: ci
