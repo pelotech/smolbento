@@ -4,20 +4,29 @@
 # 1.35.3 passes. Uses only smolvm.
 #
 #   SMOLVM=/path/to/smolvm RUNS=3 sh buildx-repro.sh
+#
+# By default the machine is made like smolbento's kit builder: Docker's docker.io/sbx/shell image,
+# the builder's create flags, and an allow-list reset before the start. IMAGE swaps the image
+# (e.g. docker:29-dind) to tell an image from a machine setup.
 set -u
 SMOLVM=${SMOLVM:-smolvm}
 RUNS=${RUNS:-3}
+IMAGE=${IMAGE:-}
+[ -n "$IMAGE" ] || IMAGE=docker.io/sbx/shell:latest@sha256:89ed5d63def6bfb2373d408e3ab6ad55aa5c010f884a182a78299fcf85ea42d1
 NAME=buildx-repro
 vm() { "$SMOLVM" machine exec --name "$NAME" -u root -- sh -c "$1"; }
 
 "$SMOLVM" --version
 "$SMOLVM" machine delete -f --name "$NAME" >/dev/null 2>&1
-"$SMOLVM" machine create --name "$NAME" --image docker:29-dind --net --net-backend virtio-net \
-  -v /var/lib/docker --cpus 4 --mem 4096 -u root -- sleep infinity || exit 1
+echo "image: $IMAGE"
+"$SMOLVM" machine create --name "$NAME" --image "$IMAGE" --net --net-backend virtio-net \
+  --deny-cidr 127.0.0.0/8 --deny-cidr ::1/128 -v /var/lib/docker -v /var/lib/containerd \
+  --cpus 4 --mem 4096 -u root -- sleep infinity || exit 1
+"$SMOLVM" machine update --name "$NAME" --net --reset-allow-list || exit 1
 "$SMOLVM" machine start --name "$NAME" || exit 1
 
-# dockerd in its own session, as a startup hook would start it.
-vm 'setsid dockerd >/var/log/dockerd.log 2>&1 </dev/null &
+# dockerd as the builder's docker kit startup hook starts it: in its own session, from a script.
+vm 'setsid sh -c "pgrep -x dockerd >/dev/null || { rm -f /var/run/docker.pid; exec dockerd >/var/log/dockerd.log 2>&1; }" </dev/null >/dev/null 2>&1 &
 for i in $(seq 1 60); do docker info >/dev/null 2>&1 && exit 0; sleep 1; done
 echo "dockerd did not start"; tail -n 20 /var/log/dockerd.log; exit 1' || exit 1
 

@@ -73,8 +73,11 @@ jobs:
     strategy:
       fail-fast: false
       matrix:
-        smolvm: ["1.35.3", "1.35.4"]
-    name: buildx-repro (smolvm ${{ matrix.smolvm }})
+        include:
+          - { smolvm: "1.35.4", image: "" }
+          - { smolvm: "1.35.4", image: "docker:29-dind" }
+          - { smolvm: "1.35.3", image: "" }
+    name: buildx-repro (smolvm ${{ matrix.smolvm }} ${{ matrix.image || 'builder image' }})
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
@@ -90,4 +93,6 @@ jobs:
         env:
           V: ${{ matrix.smolvm }}
       - name: Repro
-        run: SMOLVM="$(cat "$RUNNER_TEMP/smolvm-path")" RUNS=3 sh tests/repro/buildx-repro.sh
+        run: SMOLVM="$(cat "$RUNNER_TEMP/smolvm-path")" IMAGE="${IMAGE_OVERRIDE:-}" RUNS=3 sh tests/repro/buildx-repro.sh
+        env:
+          IMAGE_OVERRIDE: ${{ matrix.image }}
