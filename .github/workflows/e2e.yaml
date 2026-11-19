@@ -66,8 +66,8 @@ jobs:
           NEXTEST_PROFILE: ci
           SHARD: ${{ matrix.shard }}
 
-  # Temporary: the smolvm-only buildx repro, image seeds off, with the release that hangs and the
-  # one before it.
+  # Temporary: the smolvm-only buildx repro, image seeds off, in the e2e data dir and smolvm's
+  # default, on the release that hangs and the one before it.
   buildx-repro:
     runs-on: ubuntu-latest
     timeout-minutes: 30
@@ -75,10 +75,10 @@ jobs:
       fail-fast: false
       matrix:
         include:
-          - { smolvm: "1.35.4", image: "" }
-          - { smolvm: "1.35.4", image: "docker:29-dind" }
-          - { smolvm: "1.35.3", image: "" }
-    name: buildx-repro (smolvm ${{ matrix.smolvm }} ${{ matrix.image || 'builder image' }})
+          - { smolvm: "1.35.4", data: "/tmp/sbt-e2e-1001" }
+          - { smolvm: "1.35.3", data: "/tmp/sbt-e2e-1001" }
+          - { smolvm: "1.35.4", data: "" }
+    name: buildx-repro (smolvm ${{ matrix.smolvm }} data ${{ matrix.data || 'default' }})
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
@@ -94,14 +94,15 @@ jobs:
         env:
           V: ${{ matrix.smolvm }}
       - name: Repro
-        run: SMOLVM="$(cat "$RUNNER_TEMP/smolvm-path")" SMOLVM_IMAGE_SEEDS=0 IMAGE="${IMAGE_OVERRIDE:-}" RUNS=3 sh tests/repro/buildx-repro.sh
+        run: |
+          [ -z "$DATA" ] || export SMOLVM_DATA_DIR="$DATA"
+          SMOLVM="$(cat "$RUNNER_TEMP/smolvm-path")" SMOLVM_IMAGE_SEEDS=0 RUNS=3 sh tests/repro/buildx-repro.sh
         env:
-          IMAGE_OVERRIDE: ${{ matrix.image }}
+          DATA: ${{ matrix.data }}
 
-  # Temporary: the smolvm-only repro and smolbento's create by hand with smolvm's image seeds off,
-  # as the e2e tests that use a local registry run (SMOLVM_IMAGE_SEEDS=0).
+  # Temporary: the seeds-off repro again after the nix dev shell and Rust cache setup, where it hung
+  # 3 of 3 once.
   builder-alone:
-    if: false
     runs-on: ubuntu-latest
     timeout-minutes: 60
     env:
@@ -127,10 +128,10 @@ jobs:
           SMOLVM="$(cat "$RUNNER_TEMP/smolvm-path")" SMOLVM_DATA_DIR="$E2E_DIR" SMOLVM_IMAGE_SEEDS=0
           RUNS=3 sh tests/repro/buildx-repro.sh
       - name: smolbento by hand, image seeds off
-        if: always()
+        if: false
         run: |
           cargo build --locked
           SMOLVM_IMAGE_SEEDS=0 BENTO=target/debug/smolbento SMOLVM_HOME="$E2E_DIR" sh tests/repro/bento-builder.sh
       - name: smolbento by hand, image seeds on (control)
-        if: always()
+        if: false
         run: BENTO=target/debug/smolbento SMOLVM_HOME="$E2E_DIR" sh tests/repro/bento-builder.sh
