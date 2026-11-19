@@ -4,6 +4,7 @@ use std::process::Command;
 
 use anyhow::{Context, Result, bail};
 
+use super::services::Service;
 use super::store::SecretStore;
 use super::{SecretEntry, SecretsFile, Source};
 use crate::sandbox::Meta;
@@ -114,7 +115,28 @@ pub fn service_env(
         );
         return Vec::new();
     };
-    let vars: Vec<&String> = service
+    let vars = bound_vars(&service, meta, name, install);
+    if vars.is_empty() {
+        return Vec::new();
+    }
+    match resolve(entry, store) {
+        Ok(value) => with_value(meta, vars, &value),
+        Err(e) => {
+            crate::warning!("{name} secret for {sandbox}: {e:#}; requests using it will fail");
+            Vec::new()
+        }
+    }
+}
+
+/// Service `name`'s env vars in `meta`: its own, then kit ones bound to it
+/// (`sbx.credential-service.*`). `install`: also the install-only vars.
+pub fn bound_vars<'a>(
+    service: &'a Service,
+    meta: &'a Meta,
+    name: &str,
+    install: bool,
+) -> Vec<&'a String> {
+    service
         .env_vars
         .iter()
         .chain(
@@ -124,26 +146,20 @@ pub fn service_env(
                 .map(|(v, _)| v),
         )
         .filter(|v| install || !meta.credential_install.contains(v))
-        .collect();
-    if vars.is_empty() {
-        return Vec::new();
-    }
-    match resolve(entry, store) {
-        Ok(value) => vars
-            .into_iter()
-            .map(|v| {
-                let value = match meta.credential_formats.get(v) {
-                    Some(f) => f.apply(&value),
-                    None => value.clone(),
-                };
-                (v.clone(), value)
-            })
-            .collect(),
-        Err(e) => {
-            crate::warning!("{name} secret for {sandbox}: {e:#}; requests using it will fail");
-            Vec::new()
-        }
-    }
+        .collect()
+}
+
+/// Each of `vars` with `value`, formatted as `meta` records.
+pub fn with_value(meta: &Meta, vars: Vec<&String>, value: &str) -> Vec<(String, String)> {
+    vars.into_iter()
+        .map(|v| {
+            let value = match meta.credential_formats.get(v) {
+                Some(f) => f.apply(value),
+                None => value.to_string(),
+            };
+            (v.clone(), value)
+        })
+        .collect()
 }
 
 /// What a sandbox's `machine start` gets for its secrets: each bound service's env vars (and kit

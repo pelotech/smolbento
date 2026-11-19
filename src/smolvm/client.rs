@@ -56,7 +56,7 @@ impl PortMap {
 /// `machine start` environment) on HTTPS requests to `hosts`.
 #[derive(Debug, Clone, Default, PartialEq, Eq)]
 pub struct Credential {
-    /// Also names the binding (`binding`).
+    /// Its lowercase form names the binding (`Credential::binding`).
     pub env_var: String,
     pub hosts: Vec<String>,
     /// smolvm sets this header to the value itself (`:set-header=`), for inject-only credentials.
@@ -66,7 +66,7 @@ pub struct Credential {
 impl Credential {
     /// A binding's name: its variable, lowercased. One variable holds one value, so the name is
     /// unique, and `secret set` can name the bindings it refreshes.
-    pub fn binding(env_var: &str) -> String {
+    fn binding(env_var: &str) -> String {
         env_var.to_ascii_lowercase()
     }
 
@@ -347,17 +347,12 @@ impl<R: Runner> Smolvm<R> {
         checked(self.runner.run_streaming(&a, env, remove, &mut on_line)?).map(drop)
     }
 
-    /// Hands the running machine new values for its credential `bindings` without a restart (smolvm
-    /// 1.35.4): smolvm reads each binding's variable from `env`, which reaches the smolvm process
-    /// only. The machine uses them from its next request.
-    pub fn refresh_credentials(
-        &self,
-        name: &str,
-        bindings: &[String],
-        env: &[(String, String)],
-    ) -> Result<()> {
+    /// Hands the running machine new values for the credentials bound to `env`'s variables, without
+    /// a restart (smolvm 1.35.4): `env` reaches the smolvm process only, and the machine uses the
+    /// values from its next request.
+    pub fn refresh_credentials(&self, name: &str, env: &[(String, String)]) -> Result<()> {
         let mut a = args(&["machine", "credentials", "refresh", "-n", name]);
-        a.extend(bindings.iter().cloned());
+        a.extend(env.iter().map(|(v, _)| Credential::binding(v)));
         checked(self.runner.run_with_env(&a, env, &[])?).map(drop)
     }
 
