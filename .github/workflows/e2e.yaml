@@ -153,16 +153,15 @@ jobs:
         env:
           NEXTEST_PROFILE: ci
 
-  # Temporary: the guest kernel regressed (1.35.4 with 1.35.3's libkrunfw doesn't stall). Build
-  # libkrunfw at each commit between the two releases' pins, then run the e2e builder test four
-  # times on 1.35.4 with each.
+  # Temporary: the guest kernel regressed (1.35.4 with 1.35.3's libkrunfw doesn't stall). Our builds
+  # of both pins never stalled, so check them six times each beside the shipped 1.35.4 libkrunfw.
   kernel-build:
     runs-on: ubuntu-latest
     timeout-minutes: 60
     strategy:
       fail-fast: false
       matrix:
-        sha: ["0fae3853989a7fe5bf9921bc8e0d013e86c630e8", "38a42cedee8434179126d461aa05c01566ed7070", "8862a917824cee6a38b52a858c7c92eb89e2ffca", "3ec7fae1e2f3a625772da1059874d0329ec6c2cb", "006afa497e57a1218e2abf6dd864d430e9219b32", "6d1db8c6d01fc42f1ffb6b07d1bf94a43c192db3", "c4dc25ed8338ecf58ebe99bbe711c56e09edf746", "1ef198987dd0d03347af3069984a9476c950761c", "cb2901f882a30f923da88e8310006d3ea5a71f79"]
+        sha: ["0fae3853989a7fe5bf9921bc8e0d013e86c630e8", "cb2901f882a30f923da88e8310006d3ea5a71f79"]
     name: kernel-build (${{ matrix.sha }})
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
@@ -189,14 +188,15 @@ jobs:
     strategy:
       fail-fast: false
       matrix:
-        sha: ["0fae3853989a7fe5bf9921bc8e0d013e86c630e8", "38a42cedee8434179126d461aa05c01566ed7070", "8862a917824cee6a38b52a858c7c92eb89e2ffca", "3ec7fae1e2f3a625772da1059874d0329ec6c2cb", "006afa497e57a1218e2abf6dd864d430e9219b32", "6d1db8c6d01fc42f1ffb6b07d1bf94a43c192db3", "c4dc25ed8338ecf58ebe99bbe711c56e09edf746", "1ef198987dd0d03347af3069984a9476c950761c", "cb2901f882a30f923da88e8310006d3ea5a71f79"]
-        n: [1, 2, 3, 4]
+        sha: ["release", "0fae3853989a7fe5bf9921bc8e0d013e86c630e8", "cb2901f882a30f923da88e8310006d3ea5a71f79"]
+        n: [1, 2, 3, 4, 5, 6]
     name: builder-ab (libkrunfw ${{ matrix.sha }} #${{ matrix.n }})
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
           persist-credentials: false
       - uses: actions/download-artifact@9000827ccba6bdab643e8b6fd33ac0654aef8333 # v8.0.2
+        if: matrix.sha != 'release'
         with:
           name: libkrunfw-${{ matrix.sha }}
           path: ${{ runner.temp }}/kfw
@@ -214,9 +214,11 @@ jobs:
           real=$(readlink -f "$new/lib/libkrunfw.so.5")
           built=$(find "$RUNNER_TEMP/kfw" -name 'libkrunfw.so*' -type f | head -1)
           ls -l "$RUNNER_TEMP/kfw" "$new/lib"
-          cp "$built" "$real"
+          [ "$SHA" = release ] || cp "$built" "$real"
           echo "SMOLBENTO_SMOLVM=$new/smolvm" >> "$GITHUB_ENV"
           sha256sum "$real"
+        env:
+          SHA: ${{ matrix.sha }}
       - name: Build the tests
         run: cargo nextest run --locked --run-ignored only --no-run
       - name: The builder test
