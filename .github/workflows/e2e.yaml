@@ -81,6 +81,12 @@ jobs:
           - { smolvm: "1.35.4", n: 4 }
           - { smolvm: "1.35.4", n: 5 }
           - { smolvm: "1.35.4", n: 6 }
+          - { smolvm: "1.35.4", n: 7 }
+          - { smolvm: "1.35.4", n: 8 }
+          - { smolvm: "1.35.4", n: 9 }
+          - { smolvm: "1.35.4", n: 10 }
+          - { smolvm: "1.35.4", n: 11 }
+          - { smolvm: "1.35.4", n: 12 }
           - { smolvm: "1.35.3", n: 1 }
           - { smolvm: "1.35.3", n: 2 }
           - { smolvm: "1.35.3", n: 3 }
@@ -102,7 +108,7 @@ jobs:
       - name: Repro
         run: |
           echo "cpu: $(grep -m1 'model name' /proc/cpuinfo | cut -d: -f2)"
-          echo "kernel: $(uname -r)"
+          echo "kernel: $(uname -r) cores: $(nproc)"
           SMOLVM="$(cat "$RUNNER_TEMP/smolvm-path")" SMOLVM_IMAGE_SEEDS=0 SMOLVM_DATA_DIR=/tmp/sbt-e2e-1001 \
             RUNS=3 sh tests/repro/buildx-repro.sh
 
