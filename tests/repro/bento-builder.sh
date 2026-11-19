@@ -1,18 +1,26 @@
 #!/bin/sh
-# Hunt (temporary): let smolbento make and start its kit builder, stop smolbento once its build
-# stalls, then build the same kit in that builder with plain smolvm calls. Tells a builder machine
-# that smolbento leaves broken from a build call of smolbento's that breaks it.
+# Hunt (temporary): smolbento's create of a kit with a `build:` stanza, by hand, on a fresh kit
+# builder. REGISTRY=1 first starts the local registry VM the e2e tests start (registry:2, one CPU,
+# 512 MiB, a published port) and leaves it running through the create.
 #
-#   BENTO=target/debug/smolbento SMOLVM_HOME=/tmp/sbt-e2e-1001 sh bento-builder.sh
+#   BENTO=target/debug/smolbento SMOLVM_HOME=/tmp/sbt-e2e-1001 REGISTRY=1 sh bento-builder.sh
 set -u
 BENTO=${BENTO:-target/debug/smolbento}
 SMOLVM_HOME=${SMOLVM_HOME:?}
+REGISTRY=${REGISTRY:-}
 w=$(mktemp -d)
 export SMOLBENTO_CONFIG_DIR="$w/config" SMOLBENTO_CACHE_DIR="$w/cache" SMOLBENTO_DATA_DIR="$w/data"
 export SMOLBENTO_DOCKER=false SMOLBENTO_SMOLVM_HOME="$SMOLVM_HOME"
-vm() { "$BENTO" smolvm machine exec --name sbx-_builder -u root -- sh -c "$1" </dev/null; }
+sm() { "$BENTO" smolvm "$@" </dev/null; }
 
+sm machine delete -f -n sbx-_builder >/dev/null 2>&1
 "$BENTO" policy init allow-all >/dev/null || exit 1
+if [ -n "$REGISTRY" ]; then
+  sm machine delete -f -n hunt-registry >/dev/null 2>&1
+  sm machine run -d -n hunt-registry --image registry:2 --cpus 1 --mem 512 --net -p 45123:5000 || exit 1
+  for i in $(seq 1 60); do curl -fsS http://127.0.0.1:45123/v2/ >/dev/null 2>&1 && break; sleep 1; done
+  echo "registry: $(curl -sS -o /dev/null -w '%{http_code}' http://127.0.0.1:45123/v2/)"
+fi
 mkdir -p "$w/built" "$w/ws"
 cat >"$w/built/built.yaml" <<'EOF'
 # syntax=docker/sandbox-kit:3
@@ -27,26 +35,12 @@ build: |
   COPY --from=build /out/ /
 EOF
 
-echo "=== smolbento create (stopped after 210s: its build stalls at 180s)"
 start=$(date +%s)
-timeout 210 "$BENTO" create --kit "$w/built" --name hunt shell "$w/ws" </dev/null 2>&1 | tail -n 5
-echo "smolbento create: exit $? after $(( $(date +%s) - start ))s"
-sleep 5
-"$BENTO" smolvm machine status -n sbx-_builder --json </dev/null | cut -c1-200
-
-echo "=== the same build in smolbento's builder, by hand"
-vm 'pkill -f "buildx build"; mkdir -p /hunt'
-vm 'printf "%s\n" "# syntax=docker/sandbox-kit:3" "schemaVersion: \"3\"" "kind: mixin" "version: \"1.0.0\"" \
-  "provides: [e2e-built]" "build: |" "  FROM busybox:1.37 AS build" \
-  "  RUN mkdir -p /out/opt/e2e-built && echo \"built in the builder\" > /out/opt/e2e-built/hello" \
-  "  FROM scratch" "  COPY --from=build /out/ /" > /hunt/built.yaml'
-for i in 1 2 3; do
-  start=$(date +%s)
-  vm "timeout 120 docker buildx build --no-cache --progress=plain -f /hunt/built.yaml \
-    --output type=oci,dest=/hunt/kit.tar /hunt </dev/null >/hunt/build.log 2>&1"
-  rc=$?
-  echo "by hand $i: exit $rc in $(( $(date +%s) - start ))s"
-  [ "$rc" -eq 0 ] || vm 'tail -n 4 /hunt/build.log'
-done
-echo "=== dockerd session failures"
-vm 'grep -E "error reading preface|healthcheck failed fatally" /var/log/dockerd.log | cut -c1-160 | tail -n 12'
+timeout 420 "$BENTO" create --kit "$w/built" --name hunt shell "$w/ws" </dev/null >"$w/create.log" 2>&1
+rc=$?
+echo "smolbento create (registry: ${REGISTRY:-no}): exit $rc after $(( $(date +%s) - start ))s"
+[ "$rc" -eq 0 ] || tail -n 6 "$w/create.log"
+"$BENTO" rm -f hunt </dev/null >/dev/null 2>&1
+[ -z "$REGISTRY" ] || sm machine delete -f -n hunt-registry >/dev/null 2>&1
+sm machine delete -f -n sbx-_builder >/dev/null 2>&1
+exit 0
