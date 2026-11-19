@@ -1,5 +1,17 @@
 # Changelog
 
+## [0.32.1](https://github.com/pelotech/smolbento/compare/v0.32.0...v0.32.1) (2026-11-19)
+
+
+### Bug Fixes
+
+* **builder:** start dockerd before every build instead of trusting the first start ([#174](https://github.com/pelotech/smolbento/issues/174)) ([2e3405a](https://github.com/pelotech/smolbento/commit/2e3405ae86901fd60e373f9601fe942bfad9ef96))
+
+
+### Tests
+
+* **e2e:** trace creates in CI, and stop a hung test after 5 minutes ([#171](https://github.com/pelotech/smolbento/issues/171)) ([5fa356b](https://github.com/pelotech/smolbento/commit/5fa356bcdc070f3a743a2fdb7306748e97de0007))
+
 ## [0.32.0](https://github.com/pelotech/smolbento/compare/v0.31.1...v0.32.0) (2026-11-18)
 
 
