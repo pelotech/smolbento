@@ -123,6 +123,7 @@ fn first_build_creates_starts_builds_copies_back_and_stops() {
         i("machine start -n sbx-_builder"),
         i("sbx-_builder:/etc/smolbento/startup.d/01-docker.sh"),
         i(&format!("-u root -- sh -c {}", sandbox::startup_cmd(None))),
+        i("pgrep -x dockerd"),
         i("-u root -- docker info"),
         i(&format!("-u root -- mkdir -p {n}/ctx")),
         i(&format!("sbx-_builder:{n}/ctx.tar")),
@@ -180,6 +181,28 @@ fn a_running_builder_stays_running() {
         lines.last().unwrap().contains("-- rm -rf /build/"),
         "{lines:#?}"
     );
+}
+
+/// A builder can be up with no dockerd: its first start interrupted before the startup script was
+/// written, or dockerd stopped since. Every build starts it unless it runs, keeping the builder
+/// and its Docker cache, before waiting for it.
+#[test]
+fn every_build_starts_dockerd_unless_it_runs() {
+    let t = test_env(&[]);
+    let fake = t.runner();
+    fake.ok(&["machine", "status"], &builder_json("running"))
+        .download(&kit_tar());
+    let kit = kit_dir();
+    build(&t.ctx, kit.path()).unwrap();
+    let lines = fake.call_lines();
+    let at = |needle: &str| lines.iter().position(|l| l.contains(needle));
+    let (ensure, wait) = (
+        at("pgrep -x dockerd").unwrap(),
+        at("-- docker info").unwrap(),
+    );
+    assert!(ensure < wait, "{lines:#?}");
+    assert!(lines[ensure].starts_with("machine exec --name sbx-_builder -u root -- sh -c "));
+    assert!(!lines.iter().any(|l| l.starts_with("machine delete")));
 }
 
 #[test]
