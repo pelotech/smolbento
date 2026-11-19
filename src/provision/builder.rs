@@ -362,8 +362,29 @@ fn run_build<R: Runner>(
         if !frontend_named {
             build.extend(["--build-arg", FRONTEND]);
         }
-        build.extend(["-f", &file, "--output", &output, &ctx_dir]);
-        exec(&build).map_err(|e| build_error(dir, &e, unbound))?;
+        build.extend([
+            "-f",
+            &file,
+            "--output",
+            &output,
+            "--progress=plain",
+            &ctx_dir,
+        ]);
+        let log = format!("{n}/buildx.log");
+        let script = watch_script();
+        let mut watched = vec!["sh", "-c", script.as_str(), "watch", log.as_str()];
+        watched.extend(&build);
+        exec(&watched)
+            .or_else(|e| {
+                if !format!("{e:#}").contains(STALLED) {
+                    return Err(e);
+                }
+                crate::warning!(
+                    "the kit build made no progress for {STALL_SECS}s; trying it once more"
+                );
+                exec(&watched)
+            })
+            .map_err(|e| build_error(dir, &e, unbound))?;
         ctx.vm
             .cp(&format!("{machine}:{guest_kit_tar}"), &host(kit_tar)?)
             .context("copying the built kit out of the builder")
@@ -372,6 +393,35 @@ fn run_build<R: Runner>(
         crate::warning!("removing {n} in the {BUILDER} sandbox: {e:#}");
     }
     result
+}
+
+/// How long a build may print nothing before it's taken as stalled. buildx prints a line per step
+/// and per download; a stalled build (its BuildKit session dropped as it started, or a download
+/// that stopped) prints nothing and would otherwise wait forever.
+const STALL_SECS: u32 = 180;
+/// What a stalled build's output ends with.
+const STALLED: &str = "smolbento: the build made no progress";
+
+/// `sh -c` script, run as `sh -c SCRIPT watch LOG CMD…`: runs CMD in the background with stdin from
+/// `/dev/null` and its output in LOG, stops it once LOG hasn't grown for `STALL_SECS`, and on a
+/// failure prints LOG to stderr (where `build_error` reads it).
+fn watch_script() -> String {
+    format!(
+        r#"log=$1; shift
+"$@" </dev/null >"$log" 2>&1 &
+pid=$!; last=-1; idle=0
+while kill -0 $pid 2>/dev/null; do
+  sleep 1
+  size=$(wc -c <"$log")
+  if [ "$size" = "$last" ]; then idle=$((idle + 1)); else idle=0; last=$size; fi
+  if [ $idle -ge {STALL_SECS} ]; then
+    kill $pid; sleep 2; kill -9 $pid 2>/dev/null
+    echo "{STALLED} for {STALL_SECS}s" >>"$log"; cat "$log" >&2; exit 124
+  fi
+done
+wait $pid; rc=$?
+[ $rc -eq 0 ] || {{ cat "$log" >&2; exit $rc; }}"#
+    )
 }
 
 /// A failed `docker buildx build`: a stored login it got no token for (`unbound`), a registry

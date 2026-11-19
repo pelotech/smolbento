@@ -239,6 +239,8 @@ Local v3 kits build with BuildKit in a hidden sandbox, `_builder`, so Docker isn
 machine. It's created on first use, stopped after each build, hidden from `bento ls`, and keeps the
 build cache; `bento rm _builder` resets it. Each build starts its `dockerd` if it isn't running, so a
 builder left without Docker (an interrupted first start, say) recovers without losing that cache.
+A build that prints nothing for 3 minutes is stopped and tried once more, so a stuck build fails
+with its log instead of waiting forever.
 Builds use your global network policy (`bento policy log
 _builder` shows blocks) and never get your secrets. An image that needs a login (Docker's examples
 use `dhi.io`) needs a [registry credential](network-and-secrets.md#registry-credentials).

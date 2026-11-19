@@ -129,8 +129,8 @@ fn first_build_creates_starts_builds_copies_back_and_stops() {
         i(&format!("sbx-_builder:{n}/ctx.tar")),
         i(&format!("-u root -- tar -xf {n}/ctx.tar -C {n}/ctx")),
         i(&format!(
-            "-u root -- docker buildx build -f {n}/ctx/claude-mixin.yaml \
-                 --output type=oci,dest={n}/kit.tar {n}/ctx"
+            "watch {n}/buildx.log docker buildx build -f {n}/ctx/claude-mixin.yaml \
+                 --output type=oci,dest={n}/kit.tar --progress=plain {n}/ctx"
         )),
         i(&format!("machine cp sbx-_builder:{n}/kit.tar ")),
         i(&format!("-u root -- rm -rf {n}")),
@@ -239,27 +239,46 @@ fn failing_build(stderr: &str) -> (TestEnv, String) {
     (t, err)
 }
 
+/// The builder's buildx run, as the fake sees it: the watch script around it.
+fn build_call(script: &str) -> [&str; 10] {
+    [
+        "machine",
+        "exec",
+        "--name",
+        "sbx-_builder",
+        "-u",
+        "root",
+        "--",
+        "sh",
+        "-c",
+        script,
+    ]
+}
+
+/// How many times the fake ran the builder's buildx.
+fn builds(fake: &crate::smolvm::fake::FakeRunner) -> usize {
+    let script = watch_script();
+    let call = build_call(&script);
+    fake.calls()
+        .iter()
+        .filter(|c| c.iter().map(String::as_str).take(call.len()).eq(call))
+        .count()
+}
+
+fn failed(stderr: &str) -> crate::smolvm::Output {
+    crate::smolvm::Output {
+        code: 1,
+        stdout: String::new(),
+        stderr: stderr.into(),
+    }
+}
+
 /// A build of `kit_dir()` in the builder `status` describes whose buildx fails with `stderr`.
 fn failing_build_in(t: &TestEnv, status: &str, stderr: &str) -> String {
     let fake = t.runner();
-    fake.ok(&["machine", "status"], status).on(
-        &[
-            "machine",
-            "exec",
-            "--name",
-            "sbx-_builder",
-            "-u",
-            "root",
-            "--",
-            "docker",
-            "buildx",
-        ],
-        crate::smolvm::Output {
-            code: 1,
-            stdout: String::new(),
-            stderr: stderr.into(),
-        },
-    );
+    let script = watch_script();
+    fake.ok(&["machine", "status"], status)
+        .on(&build_call(&script), failed(stderr));
     let kit = kit_dir();
     format!("{:#}", build_with(&t.ctx, kit.path(), no_mint).unwrap_err())
 }
@@ -794,4 +813,36 @@ fn unpack_refuses_entries_outside_the_layout() {
             .to_string();
         assert!(err.contains(bad), "{bad}: {err}");
     }
+}
+
+/// A build that prints nothing for `STALL_SECS` (its BuildKit session dropped, or a download that
+/// stopped) is stopped by the watch script, and smolbento tries it once more.
+#[test]
+fn a_stalled_build_is_tried_once_more() {
+    let t = test_env(&[]);
+    let fake = t.runner();
+    let script = watch_script();
+    let stalled = format!("#4 load kit descriptor\n{STALLED} for {STALL_SECS}s\n");
+    fake.ok(&["machine", "status"], &builder_json("running"))
+        .download(&kit_tar())
+        .once(&build_call(&script), failed(&stalled));
+    let kit = kit_dir();
+    build_with(&t.ctx, kit.path(), no_mint).unwrap();
+    assert_eq!(builds(fake), 2, "{:#?}", fake.call_lines());
+}
+
+#[test]
+fn a_build_that_stalls_twice_fails_with_its_log() {
+    let t = test_env(&[]);
+    let stalled = format!("#4 load kit descriptor\n{STALLED} for {STALL_SECS}s\n");
+    let e = failing_build_in(&t, &builder_json("running"), &stalled);
+    assert!(e.contains(STALLED), "{e}");
+    assert_eq!(builds(t.runner()), 2);
+}
+
+#[test]
+fn a_failed_build_is_not_tried_again() {
+    let t = test_env(&[]);
+    failing_build_in(&t, &builder_json("running"), "ERROR: failed to solve\n");
+    assert_eq!(builds(t.runner()), 1);
 }
