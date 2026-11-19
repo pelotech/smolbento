@@ -113,8 +113,7 @@ jobs:
           SMOLVM="$(cat "$RUNNER_TEMP/smolvm-path")" SMOLVM_IMAGE_SEEDS=0 SMOLVM_DATA_DIR=/tmp/sbt-e2e-1001 \
             RUNS=3 sh tests/repro/buildx-repro.sh
 
-  # Temporary: the builder test that stalled on every 1.35.4 run, again, after the repro stopped
-  # hanging at 17:10Z.
+  # Temporary: the build-stanza kit test with smolvm's image seeds on, then as e2e runs it (off).
   builder-alone:
     runs-on: ubuntu-latest
     timeout-minutes: 60
@@ -136,9 +135,19 @@ jobs:
             | tar xz -C "$RUNNER_TEMP/smolvm"
           find "$RUNNER_TEMP/smolvm" -maxdepth 3 -name smolvm -type f | head -1 > "$RUNNER_TEMP/smolvm-path"
           id -u
-      - name: The stalling builder test (both kits), as e2e runs it
+      - name: Seeds on (the build-stanza kit, registry and -t as the test)
         run: >-
           cargo nextest run --locked --run-ignored only --no-fail-fast --retries 0
-          -E 'binary(e2e) & test(local_v3_kit_builds_in_the_builder_sandbox)'
+          -E 'binary(e2e) & test(hunt_build_stanza_kit_seeds_on)'
+        env:
+          NEXTEST_PROFILE: ci
+      - name: Delete the builder
+        if: always()
+        run: SMOLVM_DATA_DIR="$E2E_DIR" "$E2E_DIR/engine/1.35.4/smolvm" machine delete -f -n sbx-_builder || true
+      - name: Seeds off (the same test as e2e runs it, control)
+        if: always()
+        run: >-
+          cargo nextest run --locked --run-ignored only --no-fail-fast --retries 0
+          -E 'binary(e2e) & test(hunt_build_stanza_kit_alone)'
         env:
           NEXTEST_PROFILE: ci

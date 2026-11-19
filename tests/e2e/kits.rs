@@ -270,6 +270,39 @@ build: |
     );
 }
 
+/// Temporary (hunting the smolvm 1.35.4 stall): as `hunt_build_stanza_kit_alone`, with smolvm's
+/// image seeds left on (`Registry::start` turns them off).
+#[test]
+#[ignore = "boots real VMs, builds in the builder sandbox and pulls from Docker Hub; run with `just e2e`"]
+pub(crate) fn hunt_build_stanza_kit_seeds_on() {
+    let e = E2e::new("huntseeds");
+    let _builder = BuilderGuard::new();
+    let _reg = Registry::start(&e);
+    e.no_seeds.set(false);
+    let kit = e.dir.path().join("built");
+    std::fs::create_dir_all(&kit).unwrap();
+    std::fs::write(
+        kit.join("built.yaml"),
+        r#"# syntax=docker/sandbox-kit:3
+schemaVersion: "3"
+kind: mixin
+version: "1.0.0"
+provides: [e2e-built]
+build: |
+  FROM busybox:1.37 AS build
+  RUN mkdir -p /out/opt/e2e-built && echo "built in the builder" > /out/opt/e2e-built/hello
+  FROM scratch
+  COPY --from=build /out/ /
+"#,
+    )
+    .unwrap();
+    e.create_with_kits(&[kit.to_str().unwrap()]);
+    assert_eq!(
+        root_out(&e.name, "cat /opt/e2e-built/hello"),
+        "built in the builder\n"
+    );
+}
+
 /// Temporary (hunting the smolvm 1.35.4 stall): the build-stanza kit alone, without `plain`.
 #[test]
 #[ignore = "boots real VMs, builds in the builder sandbox and pulls from Docker Hub; run with `just e2e`"]
