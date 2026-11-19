@@ -69,6 +69,7 @@ jobs:
   # Temporary: the same seeds-off repro in nine identical jobs, each printing its runner's CPU: each
   # job hangs every build or none, whatever the data dir.
   buildx-repro:
+    if: false
     runs-on: ubuntu-latest
     timeout-minutes: 30
     strategy:
@@ -112,10 +113,9 @@ jobs:
           SMOLVM="$(cat "$RUNNER_TEMP/smolvm-path")" SMOLVM_IMAGE_SEEDS=0 SMOLVM_DATA_DIR=/tmp/sbt-e2e-1001 \
             RUNS=3 sh tests/repro/buildx-repro.sh
 
-  # Temporary: the seeds-off repro again after the nix dev shell and Rust cache setup, where it hung
-  # 3 of 3 once.
+  # Temporary: the builder test that stalled on every 1.35.4 run, again, after the repro stopped
+  # hanging at 17:10Z.
   builder-alone:
-    if: false
     runs-on: ubuntu-latest
     timeout-minutes: 60
     env:
@@ -136,15 +136,9 @@ jobs:
             | tar xz -C "$RUNNER_TEMP/smolvm"
           find "$RUNNER_TEMP/smolvm" -maxdepth 3 -name smolvm -type f | head -1 > "$RUNNER_TEMP/smolvm-path"
           id -u
-      - name: Repro, image seeds off
+      - name: The stalling builder test (both kits), as e2e runs it
         run: >-
-          SMOLVM="$(cat "$RUNNER_TEMP/smolvm-path")" SMOLVM_DATA_DIR="$E2E_DIR" SMOLVM_IMAGE_SEEDS=0
-          RUNS=3 sh tests/repro/buildx-repro.sh
-      - name: smolbento by hand, image seeds off
-        if: false
-        run: |
-          cargo build --locked
-          SMOLVM_IMAGE_SEEDS=0 BENTO=target/debug/smolbento SMOLVM_HOME="$E2E_DIR" sh tests/repro/bento-builder.sh
-      - name: smolbento by hand, image seeds on (control)
-        if: false
-        run: BENTO=target/debug/smolbento SMOLVM_HOME="$E2E_DIR" sh tests/repro/bento-builder.sh
+          cargo nextest run --locked --run-ignored only --no-fail-fast --retries 0
+          -E 'binary(e2e) & test(local_v3_kit_builds_in_the_builder_sandbox)'
+        env:
+          NEXTEST_PROFILE: ci
