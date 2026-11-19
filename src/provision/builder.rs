@@ -124,6 +124,7 @@ fn build_with<R: Runner>(ctx: &Ctx<R>, dir: &Path, mint: Minter) -> Result<PathB
     };
     let result = pull_tokens(ctx, &registries, &text, mint)
         .and_then(|tokens| start(ctx, &mut sb, tokens).context("starting the kit builder sandbox"))
+        .and_then(|()| ensure_docker(&ctx.vm, &sb.machine))
         .and_then(|()| wait_for_docker(&ctx.vm, &sb.machine, DOCKER_WAIT, Duration::from_secs(1)))
         .and_then(|()| run_build(ctx, &sb.machine, dir, &desc, &ctx_tar, &kit_tar, &unbound));
     if !was_running
@@ -264,7 +265,21 @@ fn pack(dir: &Path, out: &Path) -> Result<()> {
         .with_context(|| format!("packing {}", dir.display()))
 }
 
-/// Waits for the builder's dockerd, which the docker kit's startup hook only launches.
+/// Starts the builder's dockerd unless it runs: the docker kit's startup hook, run before every
+/// build instead of trusted to have run at the builder's start. A builder can be up without it,
+/// its first start interrupted before the startup script was written, or dockerd stopped since,
+/// and a build would then wait for a Docker that never comes. This keeps its Docker cache, as
+/// recreating it would not.
+fn ensure_docker<R: Runner>(vm: &Smolvm<R>, machine: &str) -> Result<()> {
+    let plan = docker_plan()?;
+    let hooks: Vec<_> = plan.merged.startup_hooks.iter().map(|(_, h)| h).collect();
+    let script = crate::kits::guest::startup_script("docker", &hooks);
+    vm.exec_captured(&root(machine, &["sh", "-c", &script]))
+        .context("starting dockerd in the kit builder sandbox")
+        .map(drop)
+}
+
+/// Waits for the builder's dockerd, which `ensure_docker` only launches.
 fn wait_for_docker<R: Runner>(
     vm: &Smolvm<R>,
     machine: &str,
