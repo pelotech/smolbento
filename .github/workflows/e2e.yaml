@@ -153,18 +153,21 @@ jobs:
         env:
           NEXTEST_PROFILE: ci
 
-  # Temporary: the e2e builder test that stalls, on 1.35.3 and 1.35.4 in the same run, five jobs
-  # each, so both versions meet the same Docker Hub and runner conditions. Rerun the workflow for
-  # more rounds.
+  # Temporary: the e2e builder test with the host half (smolvm-bin) of one release and the guest
+  # half (agent-rootfs, via SMOLVM_AGENT_ROOTFS) of another, five jobs each, beside an all-1.35.4
+  # control in the same run: tells a host regression from a guest one.
   builder-ab:
     runs-on: ubuntu-latest
     timeout-minutes: 40
     strategy:
       fail-fast: false
       matrix:
-        smolvm: ["1.35.3", "1.35.4"]
+        mix:
+          - { host: "1.35.4", guest: "1.35.3" }
+          - { host: "1.35.3", guest: "1.35.4" }
+          - { host: "1.35.4", guest: "1.35.4" }
         n: [1, 2, 3, 4, 5]
-    name: builder-ab (smolvm ${{ matrix.smolvm }} #${{ matrix.n }})
+    name: builder-ab (host ${{ matrix.mix.host }} guest ${{ matrix.mix.guest }} #${{ matrix.n }})
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
@@ -174,14 +177,24 @@ jobs:
         with:
           save-if: false
       - uses: $/.github/actions/kvm
-      - name: Download smolvm
+      - name: Download both halves
         run: |
-          mkdir -p "$RUNNER_TEMP/smolvm"
-          curl -fsSL "https://github.com/smol-machines/smolvm/releases/download/v${V}/smolvm-${V}-linux-x86_64.tar.gz" \
-            | tar xz -C "$RUNNER_TEMP/smolvm"
-          echo "SMOLBENTO_SMOLVM=$(find "$RUNNER_TEMP/smolvm" -maxdepth 3 -name smolvm -type f | head -1)" >> "$GITHUB_ENV"
+          for v in "$HOST" "$GUEST"; do
+            mkdir -p "$RUNNER_TEMP/smolvm-$v"
+            [ -n "$(ls -A "$RUNNER_TEMP/smolvm-$v")" ] && continue
+            curl -fsSL "https://github.com/smol-machines/smolvm/releases/download/v${v}/smolvm-${v}-linux-x86_64.tar.gz" \
+              | tar xz -C "$RUNNER_TEMP/smolvm-$v"
+          done
+          host=$(find "$RUNNER_TEMP/smolvm-$HOST" -maxdepth 3 -name smolvm -type f | head -1)
+          guest=$(find "$RUNNER_TEMP/smolvm-$GUEST" -maxdepth 3 -name agent-rootfs -type d | head -1)
+          echo "SMOLBENTO_SMOLVM=$host" >> "$GITHUB_ENV"
+          echo "SMOLVM_AGENT_ROOTFS=$guest" >> "$GITHUB_ENV"
+          echo "host: $host"
+          echo "guest: $guest"
+          find "$guest" -maxdepth 4 -type f -name 'smolvm-agent*' -exec sha256sum {} +
         env:
-          V: ${{ matrix.smolvm }}
+          HOST: ${{ matrix.mix.host }}
+          GUEST: ${{ matrix.mix.guest }}
       - name: Build the tests
         run: cargo nextest run --locked --run-ignored only --no-run
       - name: The builder test
@@ -192,4 +205,3 @@ jobs:
             -E 'binary(e2e) & test(local_v3_kit_builds_in_the_builder_sandbox)'
         env:
           NEXTEST_PROFILE: ci
-
