@@ -66,9 +66,9 @@ jobs:
           NEXTEST_PROFILE: ci
           SHARD: ${{ matrix.shard }}
 
-  # Temporary: the smolvm-only buildx repro, with the release that hangs and the one before it.
+  # Temporary: the smolvm-only buildx repro, image seeds off, with the release that hangs and the
+  # one before it.
   buildx-repro:
-    if: false
     runs-on: ubuntu-latest
     timeout-minutes: 30
     strategy:
@@ -94,13 +94,14 @@ jobs:
         env:
           V: ${{ matrix.smolvm }}
       - name: Repro
-        run: SMOLVM="$(cat "$RUNNER_TEMP/smolvm-path")" IMAGE="${IMAGE_OVERRIDE:-}" RUNS=3 sh tests/repro/buildx-repro.sh
+        run: SMOLVM="$(cat "$RUNNER_TEMP/smolvm-path")" SMOLVM_IMAGE_SEEDS=0 IMAGE="${IMAGE_OVERRIDE:-}" RUNS=3 sh tests/repro/buildx-repro.sh
         env:
           IMAGE_OVERRIDE: ${{ matrix.image }}
 
   # Temporary: the smolvm-only repro and smolbento's create by hand with smolvm's image seeds off,
   # as the e2e tests that use a local registry run (SMOLVM_IMAGE_SEEDS=0).
   builder-alone:
+    if: false
     runs-on: ubuntu-latest
     timeout-minutes: 60
     env:
