@@ -207,7 +207,7 @@ jobs:
       - uses: $/.github/actions/kvm
       - name: 1.35.4 with this libkrunfw
         run: |
-          mkdir -p "$RUNNER_TEMP/smolvm"
+          mkdir -p "$RUNNER_TEMP/smolvm" "$RUNNER_TEMP/kfw"
           curl -fsSL https://github.com/smol-machines/smolvm/releases/download/v1.35.4/smolvm-1.35.4-linux-x86_64.tar.gz \
             | tar xz -C "$RUNNER_TEMP/smolvm"
           new=$(dirname "$(find "$RUNNER_TEMP/smolvm" -maxdepth 3 -name smolvm -type f | head -1)")
