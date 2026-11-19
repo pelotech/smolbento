@@ -68,6 +68,7 @@ jobs:
 
   # Temporary: the smolvm-only buildx repro, with the release that hangs and the one before it.
   buildx-repro:
+    if: false
     runs-on: ubuntu-latest
     timeout-minutes: 30
     strategy:
@@ -97,12 +98,13 @@ jobs:
         env:
           IMAGE_OVERRIDE: ${{ matrix.image }}
 
-  # Temporary: the builder tests alone, one at a time, on smolvm 1.35.4 (this branch's pin), to
-  # tell contention with other VMs from smolbento's own steps around a build.
+  # Temporary: the smolvm-only repro inside the e2e environment (its smolvm data dir and cache),
+  # before and after the builder test that stalls, with that test's VMs left running after it.
   builder-alone:
-    if: false
     runs-on: ubuntu-latest
-    timeout-minutes: 30
+    timeout-minutes: 45
+    env:
+      E2E_DIR: /tmp/sbt-e2e-1001
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
@@ -112,10 +114,26 @@ jobs:
         with:
           save-if: false
       - uses: $/.github/actions/kvm
-      - name: Builder tests, one at a time
+      - name: Download smolvm 1.35.4
+        run: |
+          mkdir -p "$RUNNER_TEMP/smolvm"
+          curl -fsSL https://github.com/smol-machines/smolvm/releases/download/v1.35.4/smolvm-1.35.4-linux-x86_64.tar.gz \
+            | tar xz -C "$RUNNER_TEMP/smolvm"
+          find "$RUNNER_TEMP/smolvm" -maxdepth 3 -name smolvm -type f | head -1 > "$RUNNER_TEMP/smolvm-path"
+          id -u
+      - name: Repro before, in the e2e data dir
         run: >-
-          cargo nextest run --locked --run-ignored only --test-threads 1 --no-fail-fast
-          -E 'binary(e2e) & (test(capability_groups_apply_whole_or_not_at_all)
-          | test(kit_args_reach_typed_config_fields) | test(local_v3_kit_builds_in_the_builder_sandbox))'
+          SMOLVM="$(cat "$RUNNER_TEMP/smolvm-path")" SMOLVM_DATA_DIR="$E2E_DIR" XDG_CACHE_HOME="$E2E_DIR/.cache"
+          RUNS=3 sh tests/repro/buildx-repro.sh
+      - name: The stalling builder test
+        run: >-
+          cargo nextest run --locked --run-ignored only --no-fail-fast
+          -E 'binary(e2e) & test(local_v3_kit_builds_in_the_builder_sandbox)'
         env:
           NEXTEST_PROFILE: ci
+      - name: Repro after, beside the test's VMs
+        if: always()
+        run: |
+          ps -eo pid,etime,args | grep -E "_boot-vm" | grep -v grep | cut -c1-160
+          SMOLVM="$(cat "$RUNNER_TEMP/smolvm-path")" SMOLVM_DATA_DIR="$E2E_DIR" XDG_CACHE_HOME="$E2E_DIR/.cache" \
+            RUNS=3 sh tests/repro/buildx-repro.sh
