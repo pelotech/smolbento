@@ -153,21 +153,18 @@ jobs:
         env:
           NEXTEST_PROFILE: ci
 
-  # Temporary: the e2e builder test with the host half (smolvm-bin) of one release and the guest
-  # half (agent-rootfs, via SMOLVM_AGENT_ROOTFS) of another, five jobs each, beside an all-1.35.4
-  # control in the same run: tells a host regression from a guest one.
+  # Temporary: the e2e builder test on the 1.35.4 release with some of its bundled libraries put
+  # back to 1.35.3's: libkrun (the VMM), libkrunfw (the guest kernel), or both (so only
+  # smolvm-bin is 1.35.4). Five jobs each: the host half regressed, so which part of it.
   builder-ab:
     runs-on: ubuntu-latest
     timeout-minutes: 40
     strategy:
       fail-fast: false
       matrix:
-        mix:
-          - { host: "1.35.4", guest: "1.35.3" }
-          - { host: "1.35.3", guest: "1.35.4" }
-          - { host: "1.35.4", guest: "1.35.4" }
+        old: ["libkrun", "libkrunfw", "libkrun libkrunfw"]
         n: [1, 2, 3, 4, 5]
-    name: builder-ab (host ${{ matrix.mix.host }} guest ${{ matrix.mix.guest }} #${{ matrix.n }})
+    name: builder-ab (1.35.3 ${{ matrix.old }} #${{ matrix.n }})
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
@@ -177,24 +174,24 @@ jobs:
         with:
           save-if: false
       - uses: $/.github/actions/kvm
-      - name: Download both halves
+      - name: Mix the releases
         run: |
-          for v in "$HOST" "$GUEST"; do
+          for v in 1.35.3 1.35.4; do
             mkdir -p "$RUNNER_TEMP/smolvm-$v"
-            [ -n "$(ls -A "$RUNNER_TEMP/smolvm-$v")" ] && continue
             curl -fsSL "https://github.com/smol-machines/smolvm/releases/download/v${v}/smolvm-${v}-linux-x86_64.tar.gz" \
               | tar xz -C "$RUNNER_TEMP/smolvm-$v"
           done
-          host=$(find "$RUNNER_TEMP/smolvm-$HOST" -maxdepth 3 -name smolvm -type f | head -1)
-          guest=$(find "$RUNNER_TEMP/smolvm-$GUEST" -maxdepth 3 -name agent-rootfs -type d | head -1)
-          echo "SMOLBENTO_SMOLVM=$host" >> "$GITHUB_ENV"
-          echo "SMOLVM_AGENT_ROOTFS=$guest" >> "$GITHUB_ENV"
-          echo "host: $host"
-          echo "guest: $guest"
-          find "$guest" -maxdepth 4 -type f -name 'smolvm-agent*' -exec sha256sum {} +
+          new=$(dirname "$(find "$RUNNER_TEMP/smolvm-1.35.4" -maxdepth 3 -name smolvm -type f | head -1)")
+          old=$(dirname "$(find "$RUNNER_TEMP/smolvm-1.35.3" -maxdepth 3 -name smolvm -type f | head -1)")
+          for lib in $OLD; do
+            rm -f "$new/lib/$lib.so"*
+            cp -a "$old/lib/$lib.so"* "$new/lib/"
+          done
+          echo "SMOLBENTO_SMOLVM=$new/smolvm" >> "$GITHUB_ENV"
+          ls -l "$new/lib"
+          sha256sum "$old"/lib/*.so* "$new"/lib/*.so* "$old/smolvm-bin" "$new/smolvm-bin" | sed "s|$RUNNER_TEMP/||"
         env:
-          HOST: ${{ matrix.mix.host }}
-          GUEST: ${{ matrix.mix.guest }}
+          OLD: ${{ matrix.old }}
       - name: Build the tests
         run: cargo nextest run --locked --run-ignored only --no-run
       - name: The builder test
