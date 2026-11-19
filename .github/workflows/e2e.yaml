@@ -98,8 +98,8 @@ jobs:
         env:
           IMAGE_OVERRIDE: ${{ matrix.image }}
 
-  # Temporary: smolbento's create of the build-stanza kit by hand, with and without the e2e tests'
-  # local registry VM running, each on a fresh builder.
+  # Temporary: the smolvm-only repro and smolbento's create by hand with smolvm's image seeds off,
+  # as the e2e tests that use a local registry run (SMOLVM_IMAGE_SEEDS=0).
   builder-alone:
     runs-on: ubuntu-latest
     timeout-minutes: 60
@@ -121,16 +121,15 @@ jobs:
             | tar xz -C "$RUNNER_TEMP/smolvm"
           find "$RUNNER_TEMP/smolvm" -maxdepth 3 -name smolvm -type f | head -1 > "$RUNNER_TEMP/smolvm-path"
           id -u
-      - name: Repro before, in the e2e data dir
-        if: false
+      - name: Repro, image seeds off
         run: >-
-          SMOLVM="$(cat "$RUNNER_TEMP/smolvm-path")" SMOLVM_DATA_DIR="$E2E_DIR" XDG_CACHE_HOME="$E2E_DIR/.cache"
+          SMOLVM="$(cat "$RUNNER_TEMP/smolvm-path")" SMOLVM_DATA_DIR="$E2E_DIR" SMOLVM_IMAGE_SEEDS=0
           RUNS=3 sh tests/repro/buildx-repro.sh
-      - name: smolbento by hand, no registry (control)
+      - name: smolbento by hand, image seeds off
+        if: always()
         run: |
           cargo build --locked
-          BENTO=target/debug/smolbento SMOLVM_HOME="$E2E_DIR" sh tests/repro/bento-builder.sh
-      - name: smolbento by hand, with the registry VM running
-        run: BENTO=target/debug/smolbento SMOLVM_HOME="$E2E_DIR" REGISTRY=1 sh tests/repro/bento-builder.sh
-      - name: smolbento by hand, no registry, again (after the registry run)
+          SMOLVM_IMAGE_SEEDS=0 BENTO=target/debug/smolbento SMOLVM_HOME="$E2E_DIR" sh tests/repro/bento-builder.sh
+      - name: smolbento by hand, image seeds on (control)
+        if: always()
         run: BENTO=target/debug/smolbento SMOLVM_HOME="$E2E_DIR" sh tests/repro/bento-builder.sh
