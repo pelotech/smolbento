@@ -30,9 +30,14 @@ vm 'setsid sh -c "pgrep -x dockerd >/dev/null || { rm -f /var/run/docker.pid; ex
 for i in $(seq 1 60); do docker info >/dev/null 2>&1 && exit 0; sleep 1; done
 echo "dockerd did not start"; tail -n 20 /var/log/dockerd.log; exit 1' || exit 1
 
-# Two builds that each go through an external frontend: Docker's sandbox kit (what failed) and a
-# plain Dockerfile with a syntax line.
-vm 'mkdir -p /kit /df
+# Three builds that each go through an external frontend: a sandbox kit with a `build:` stanza
+# (a nested Dockerfile build, the one smolbento's e2e test stalls on), a descriptor-only kit, and
+# a plain Dockerfile with a syntax line.
+vm 'mkdir -p /built /kit /df
+printf "%s\n" "# syntax=docker/sandbox-kit:3" "schemaVersion: \"3\"" "kind: mixin" "version: \"1.0.0\"" \
+  "provides: [e2e-built]" "build: |" "  FROM busybox:1.37 AS build" \
+  "  RUN mkdir -p /out/opt/e2e-built && echo \"built in the builder\" > /out/opt/e2e-built/hello" \
+  "  FROM scratch" "  COPY --from=build /out/ /" > /built/built.yaml
 printf "%s\n" "# syntax=docker/sandbox-kit:3" "schemaVersion: \"3\"" "kind: mixin" "version: \"1.0.0\"" \
   "provides: [repro]" "capabilities:" "  - type: com.docker.sandbox/lifecycle@1" \
   "    config: {files: [{path: /var/tmp/repro, content: ok}]}" > /kit/repro.yaml
@@ -41,12 +46,12 @@ printf "%s\n" "# syntax=docker/dockerfile:1" "FROM busybox" "RUN echo built > /b
 hung=0
 i=1
 while [ "$i" -le "$RUNS" ]; do
-  for case in kit dockerfile; do
-    if [ "$case" = kit ]; then
-      build="docker buildx build --no-cache --progress=plain -f /kit/repro.yaml --output type=oci,dest=/tmp/kit.tar /kit"
-    else
-      build="docker buildx build --no-cache --progress=plain /df"
-    fi
+  for case in built kit dockerfile; do
+    case $case in
+      built) build="docker buildx build --no-cache --progress=plain -f /built/built.yaml --output type=oci,dest=/tmp/built.tar /built" ;;
+      kit) build="docker buildx build --no-cache --progress=plain -f /kit/repro.yaml --output type=oci,dest=/tmp/kit.tar /kit" ;;
+      *) build="docker buildx build --no-cache --progress=plain /df" ;;
+    esac
     start=$(date +%s)
     vm "timeout 120 $build </dev/null >/tmp/build.log 2>&1"
     rc=$?
@@ -60,7 +65,7 @@ while [ "$i" -le "$RUNS" ]; do
   i=$((i + 1))
 done
 
-echo "--- $hung of $((RUNS * 2)) builds hung (timeout 120s)"
+echo "--- $hung of $((RUNS * 3)) builds hung (timeout 120s)"
 echo "--- BuildKit session failures in dockerd.log (a few after each build are normal; a hung build"
 echo "    has one within seconds of starting):"
 vm 'grep -E "error reading preface|healthcheck failed fatally" /var/log/dockerd.log | cut -c1-160'

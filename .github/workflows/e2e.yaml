@@ -100,6 +100,7 @@ jobs:
   # Temporary: the builder tests alone, one at a time, on smolvm 1.35.4 (this branch's pin), to
   # tell contention with other VMs from smolbento's own steps around a build.
   builder-alone:
+    if: false
     runs-on: ubuntu-latest
     timeout-minutes: 30
     steps:
