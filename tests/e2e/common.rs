@@ -59,6 +59,23 @@ impl E2e {
             .unwrap()
     }
 
+    /// `sbt` with `-D`, its stderr (each smolvm command line, as it runs) going straight to this
+    /// test's stderr: nextest keeps that even when it stops a test that hangs, so the log shows the
+    /// call it hung on. Must succeed; returns stdout.
+    pub(crate) fn traced(&self, args: &[&str]) -> String {
+        let out = self
+            .env(
+                Command::new(env!("CARGO_BIN_EXE_smolbento"))
+                    .arg("-D")
+                    .args(args),
+            )
+            .stderr(std::process::Stdio::inherit())
+            .output()
+            .unwrap();
+        assert!(out.status.success(), "sbt -D {args:?} failed");
+        String::from_utf8(out.stdout).unwrap()
+    }
+
     pub(crate) fn env<'a>(&self, cmd: &'a mut Command) -> &'a mut Command {
         cmd.current_dir(self.workspace())
             .env("SMOLBENTO_CONFIG_DIR", self.dir.path().join("config"))
@@ -123,19 +140,32 @@ impl E2e {
         self.ok(&["exec", sb, "sh", "-c", script])
     }
 
-    /// `bento create HEAD <workspace> --name NAME --cpus 1 -m 1g`, whatever the status: the size
-    /// every e2e sandbox has. `head` is the flags, then the agent.
-    pub(crate) fn try_create(&self, name: &str, head: &[&str]) -> Output {
-        let ws = self.workspace();
-        let mut args = vec!["create"];
-        args.extend(head);
-        args.extend([ws.to_str().unwrap(), "--name", name]);
-        args.extend(["--cpus", "1", "-m", "1g"]);
-        self.sbt(&args)
+    /// `create HEAD <workspace> --name NAME --cpus 1 -m 1g`: the size every e2e sandbox has. `head`
+    /// is the flags, then the agent.
+    fn create_args(&self, name: &str, head: &[&str]) -> Vec<String> {
+        let ws = self.workspace().display().to_string();
+        let tail = [ws.as_str(), "--name", name, "--cpus", "1", "-m", "1g"];
+        std::iter::once("create")
+            .chain(head.iter().copied())
+            .chain(tail)
+            .map(String::from)
+            .collect()
     }
 
-    /// `try_create` that must succeed.
+    /// `bento create`, whatever the status (`create_args`).
+    pub(crate) fn try_create(&self, name: &str, head: &[&str]) -> Output {
+        let args = self.create_args(name, head);
+        self.sbt(&args.iter().map(String::as_str).collect::<Vec<_>>())
+    }
+
+    /// `try_create` that must succeed. In CI it's traced (`traced`), so a create that hangs shows
+    /// the smolvm call it hangs on.
     pub(crate) fn create(&self, name: &str, head: &[&str]) {
+        let args = self.create_args(name, head);
+        if std::env::var_os("CI").is_some() {
+            self.traced(&args.iter().map(String::as_str).collect::<Vec<_>>());
+            return;
+        }
         let out = self.try_create(name, head);
         assert!(
             out.status.success(),
