@@ -145,7 +145,10 @@ When things take effect:
 
 - A sandbox binds the services that have a secret when it's **created**, and can always reach their
   hosts.
-- A new value for a bound service applies at the **next start**, usually the next `bento run`.
+- A new value for a bound service applies **at once** to running sandboxes (`secret set` says
+  `Applied to … now`), from their next request, and to stopped ones at their **next start**.
+  Removing a secret (`secret rm`) still waits for the next start, and so does a new value for a
+  sandbox an earlier smolbento made, when a kit gave it the service's credential.
 - A secret for a service the sandbox wasn't created with needs a **recreate**; `secret set` tells
   you which.
 

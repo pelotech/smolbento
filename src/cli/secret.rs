@@ -11,6 +11,8 @@ use super::{
 use crate::policy::Policy;
 use crate::policy::rules::{SmolvmHost, check_host};
 use crate::sandbox::{self, name};
+use crate::secrets::resolve::{bound_vars, resolve, with_value};
+use crate::secrets::services::Service;
 use crate::secrets::{
     CustomService, RegistryEntry, SecretEntry, SecretsFile, Source, registry_account, scope_for,
     services,
@@ -84,8 +86,8 @@ pub fn run<R: Runner>(ctx: &mut Ctx<R>, cmd: SecretCmd) -> Result<i32> {
 }
 
 fn ls<R: Runner>(ctx: &Ctx<R>, file: &SecretsFile, a: &SecretLsArgs) -> Result<()> {
-    // A fork also uses its original's sandbox secrets (see `plan::start_plan`). If smolvm can't be
-    // asked, the listing stays a plain file read.
+    // A fork also uses its original's sandbox secrets (`SecretsFile::entry_for`). If smolvm can't
+    // be asked, the listing stays a plain file read.
     let parent = a
         .sandbox
         .as_deref()
@@ -186,7 +188,7 @@ fn set<R: Runner>(
     let sandbox = src.sandbox.clone();
     let described = store(ctx, file, service, src)?;
     writeln!(&ctx.out, "Saved {service} secret ({described}; {scope})")?;
-    explain_impact(ctx, service, sandbox.as_deref())
+    explain_impact(ctx, file, service, sandbox.as_deref())
 }
 
 /// `secret set mcp:<server>:<name>`: the value of a registered MCP server's header placeholder
@@ -297,6 +299,36 @@ pub(crate) fn store<R: Runner>(
     Ok(described)
 }
 
+/// Hands the running `sb` service `name`'s new `value` (`machine credentials refresh`); false when
+/// it can't, so the value waits for the next start.
+fn refresh<R: Runner>(
+    ctx: &Ctx<R>,
+    sb: &sandbox::Sandbox,
+    service: &Service,
+    name: &str,
+    value: &str,
+) -> bool {
+    // Only the variables `sb` binds: smolvm refuses the whole refresh for one it doesn't, and a
+    // kit can take a service's key without its variable (Claude's binds only SBX_KIT_ANTHROPIC).
+    let vars: Vec<&String> = bound_vars(service, &sb.meta, name, false)
+        .into_iter()
+        .filter(|v| sb.meta.credential_env.contains(v))
+        .collect();
+    if vars.is_empty() {
+        return false;
+    }
+    match ctx
+        .vm
+        .refresh_credentials(&sb.machine, &with_value(&sb.meta, vars, value))
+    {
+        Ok(()) => true,
+        Err(e) => {
+            crate::warning!("{}: couldn't hand it the new value now: {e:#}", sb.name());
+            false
+        }
+    }
+}
+
 /// Puts a stored value back as it was before a `set` whose secrets.toml save then failed: the
 /// earlier value, or none. Best effort; the save error is the one the caller reports.
 fn restore<R: Runner>(ctx: &Ctx<R>, account: &str, previous: Option<&str>) {
@@ -306,18 +338,62 @@ fn restore<R: Runner>(ctx: &Ctx<R>, account: &str, previous: Option<&str>) {
     };
 }
 
-/// Which sandboxes pick the change up on their next start, and which would need recreating.
-fn explain_impact<R: Runner>(ctx: &Ctx<R>, service: &str, scope: Option<&str>) -> Result<()> {
+/// Which sandboxes have the new value now, which get it on their next start, and which would need
+/// recreating. A running sandbox bound to the service is handed the value at once.
+fn explain_impact<R: Runner>(
+    ctx: &Ctx<R>,
+    file: &SecretsFile,
+    service: &str,
+    scope: Option<&str>,
+) -> Result<()> {
     let Ok(sandboxes) = sandbox::list(&ctx.vm) else {
         return Ok(());
     };
+    // The sandboxes that use this entry: a sandbox's own secret wins over its original's (for a
+    // fork), which wins over the global one.
+    let own = scope_for(scope);
     let (bound, unbound): (Vec<_>, Vec<_>) = sandboxes
         .iter()
-        .filter(|s| scope.is_none_or(|n| n == s.name()))
+        .filter(|s| {
+            file.entry_for(s.name(), s.meta.fork_of.as_deref(), service)
+                .is_some_and(|e| e.scope == own)
+        })
         .partition(|s| s.meta.secrets.iter().any(|x| x == service));
+    // Read once for every running sandbox: a --ref or --command source may prompt, or be slow.
+    let new = match (
+        bound.iter().any(|s| s.is_running()),
+        file.scoped_entry(scope, service),
+    ) {
+        (true, Some(entry)) => match (file.service(service), resolve(entry, ctx.store.as_ref())) {
+            (Some(svc), Ok(value)) => Some((svc, value)),
+            (_, Err(e)) => {
+                crate::warning!(
+                    "couldn't read the new {service} secret to hand it over now: {e:#}"
+                );
+                None
+            }
+            (None, _) => None,
+        },
+        _ => None,
+    };
+    let (mut now, mut later) = (Vec::new(), Vec::new());
+    for s in bound {
+        let refreshed = s.is_running()
+            && new
+                .as_ref()
+                .is_some_and(|(svc, value)| refresh(ctx, s, svc, service, value));
+        if refreshed {
+            now.push(s);
+        } else {
+            later.push(s);
+        }
+    }
     let names = |v: &[&sandbox::Sandbox]| v.iter().map(|s| s.name()).collect::<Vec<_>>().join(", ");
-    if !bound.is_empty() {
-        writeln!(&ctx.out, "Applies to {} on their next start", names(&bound))?;
+    if !now.is_empty() {
+        writeln!(&ctx.out, "Applied to {} now", names(&now))?;
+    }
+    if !later.is_empty() {
+        writeln!(&ctx.out, "Applies to {} on their next start", names(&later))?;
     }
     if !unbound.is_empty() {
         writeln!(

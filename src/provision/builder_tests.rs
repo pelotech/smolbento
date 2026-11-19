@@ -567,7 +567,9 @@ fn the_builder_binds_stored_registry_logins_and_starts_with_a_fresh_token() {
         .find(|l| l.starts_with("machine create -n sbx-_builder"))
         .unwrap();
     assert!(
-        create.contains("--credential reg-0=SBX_REGISTRY_0_AUTH@dhi.io:set-header=authorization"),
+        create.contains(
+            "--credential sbx_registry_0_auth=SBX_REGISTRY_0_AUTH@dhi.io:set-header=authorization"
+        ),
         "{create}"
     );
     assert!(create.contains("--allow-host dhi.io"), "{create}");

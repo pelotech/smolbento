@@ -4,6 +4,7 @@ use std::process::Command;
 
 use anyhow::{Context, Result, bail};
 
+use super::services::Service;
 use super::store::SecretStore;
 use super::{SecretEntry, SecretsFile, Source};
 use crate::sandbox::Meta;
@@ -96,6 +97,71 @@ pub fn resolve(entry: &SecretEntry, store: &dyn SecretStore) -> Result<String> {
     Ok(value)
 }
 
+/// One bound service's env vars (its own, then kit ones bound to it, `sbx.credential-service.*`)
+/// with their values, formatted as recorded. `install`: also the install-only vars. A secret
+/// that's gone or can't be read only warns, and gives none.
+pub fn service_env(
+    secrets: &SecretsFile,
+    meta: &Meta,
+    name: &str,
+    store: &dyn SecretStore,
+    install: bool,
+) -> Vec<(String, String)> {
+    let sandbox = meta.name.as_str();
+    let entry = secrets.entry_for(sandbox, meta.fork_of.as_deref(), name);
+    let (Some(service), Some(entry)) = (secrets.service(name), entry) else {
+        crate::warning!(
+            "{sandbox} was created with a {name} secret that's no longer set; requests using it will fail"
+        );
+        return Vec::new();
+    };
+    let vars = bound_vars(&service, meta, name, install);
+    if vars.is_empty() {
+        return Vec::new();
+    }
+    match resolve(entry, store) {
+        Ok(value) => with_value(meta, vars, &value),
+        Err(e) => {
+            crate::warning!("{name} secret for {sandbox}: {e:#}; requests using it will fail");
+            Vec::new()
+        }
+    }
+}
+
+/// Service `name`'s env vars in `meta`: its own, then kit ones bound to it
+/// (`sbx.credential-service.*`). `install`: also the install-only vars.
+pub fn bound_vars<'a>(
+    service: &'a Service,
+    meta: &'a Meta,
+    name: &str,
+    install: bool,
+) -> Vec<&'a String> {
+    service
+        .env_vars
+        .iter()
+        .chain(
+            meta.credential_services
+                .iter()
+                .filter(|(_, s)| *s == name)
+                .map(|(v, _)| v),
+        )
+        .filter(|v| install || !meta.credential_install.contains(v))
+        .collect()
+}
+
+/// Each of `vars` with `value`, formatted as `meta` records.
+pub fn with_value(meta: &Meta, vars: Vec<&String>, value: &str) -> Vec<(String, String)> {
+    vars.into_iter()
+        .map(|v| {
+            let value = match meta.credential_formats.get(v) {
+                Some(f) => f.apply(value),
+                None => value.to_string(),
+            };
+            (v.clone(), value)
+        })
+        .collect()
+}
+
 /// What a sandbox's `machine start` gets for its secrets: each bound service's env vars (and kit
 /// vars bound to it, `sbx.credential-service.*`) with their values, formatted as recorded; and the
 /// recorded vars that have no value now, which must be removed from smolvm's own environment so
@@ -110,40 +176,7 @@ pub fn start_env(
     let sandbox = meta.name.as_str();
     let mut env = Vec::new();
     for name in &meta.secrets {
-        let entry = secrets.entry_for(sandbox, meta.fork_of.as_deref(), name);
-        let (Some(service), Some(entry)) = (secrets.service(name), entry) else {
-            crate::warning!(
-                "{sandbox} was created with a {name} secret that's no longer set; requests using it will fail"
-            );
-            continue;
-        };
-        // The service's own env vars, then kit ones bound to it (`sbx.credential-service.*`).
-        let vars: Vec<&String> = service
-            .env_vars
-            .iter()
-            .chain(
-                meta.credential_services
-                    .iter()
-                    .filter(|(_, s)| *s == name)
-                    .map(|(v, _)| v),
-            )
-            .filter(|v| install || !meta.credential_install.contains(v))
-            .collect();
-        if vars.is_empty() {
-            continue;
-        }
-        match resolve(entry, store) {
-            Ok(value) => env.extend(vars.into_iter().map(|v| {
-                let value = match meta.credential_formats.get(v) {
-                    Some(f) => f.apply(&value),
-                    None => value.clone(),
-                };
-                (v.clone(), value)
-            })),
-            Err(e) => {
-                crate::warning!("{name} secret for {sandbox}: {e:#}; requests using it will fail")
-            }
-        }
+        env.extend(service_env(secrets, meta, name, store, install));
     }
     // A `--static-mcp` server's header secrets (`sbx.mcp-secret.*`, which only `--static-mcp`
     // writes): each a global `mcp:<server>:<name>` secret bound to its own env var.

@@ -195,7 +195,7 @@ impl SecretsFile {
     }
 
     /// The entry in exactly one scope (`None` = global), with no fallback.
-    fn scoped_entry(&self, sandbox: Option<&str>, service: &str) -> Option<&SecretEntry> {
+    pub fn scoped_entry(&self, sandbox: Option<&str>, service: &str) -> Option<&SecretEntry> {
         let scope = scope_for(sandbox);
         self.secrets
             .iter()

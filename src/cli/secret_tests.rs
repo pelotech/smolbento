@@ -801,3 +801,174 @@ fn reset_preserves_secrets_only_when_asked() {
     assert!(SecretsFile::load(&t.ctx.paths).unwrap().secrets.is_empty());
     assert_eq!(t.ctx.store.get("global/anthropic").unwrap(), None);
 }
+
+/// `a1` running and `b2` stopped, both created with the github secret; `c3` running without it.
+fn github_sandboxes(t: &TestEnv) {
+    let with = |name: &str, state: &str| {
+        // `a1` also has a `--static-mcp` header secret, which a github refresh leaves alone.
+        let labels = [
+            ("sbx.name", name),
+            ("sbx.secrets", "github"),
+            ("sbx.credential-env", "GH_TOKEN,GITHUB_TOKEN"),
+            ("sbx.mcp-secret.SBX_MCP_LINEAR_KEY", "mcp:linear:key"),
+        ];
+        machine_json(&format!("sbx-{name}"), state, &labels)
+    };
+    let (a1, c3) = (
+        with("a1", "running"),
+        machine_json("sbx-c3", "running", &[("sbx.name", "c3")]),
+    );
+    let ls = format!("[{a1},{},{c3}]", with("b2", "stopped"));
+    t.runner().ok(&["machine", "ls", "--json"], &ls);
+    // A running sandbox's ports come from `machine status`.
+    t.runner().ok(&["machine", "status", "-n", "sbx-a1"], &a1);
+    t.runner().ok(&["machine", "status", "-n", "sbx-c3"], &c3);
+}
+
+/// smolvm 1.35.4's `machine credentials refresh`: the value reaches the smolvm process's
+/// environment only, never its arguments.
+#[test]
+fn set_hands_a_running_sandbox_the_new_value_now() {
+    let mut t = test_env(&[]);
+    github_sandboxes(&t);
+    t.sbt(&["secret", "set", "mcp:linear:key", "-t", "mcp-tok"])
+        .unwrap();
+    t.runner().ok(&["machine", "credentials", "refresh"], "");
+    t.sbt(&["secret", "set", "github", "-t", "tok-2"]).unwrap();
+    let out = t.stdout();
+    assert!(out.contains("Applied to a1 now\n"), "{out}");
+    assert!(out.contains("Applies to b2 on their next start\n"), "{out}");
+    assert!(out.contains("c3 were created without it"), "{out}");
+    let calls = t.calls_of("machine credentials refresh");
+    assert_eq!(
+        calls,
+        ["machine credentials refresh -n sbx-a1 gh_token github_token"]
+    );
+    assert!(!calls[0].contains("tok-2"));
+    let env = t.runner().envs().pop().unwrap();
+    assert_eq!(
+        env,
+        [
+            ("GH_TOKEN".to_string(), "tok-2".to_string()),
+            ("GITHUB_TOKEN".to_string(), "tok-2".to_string())
+        ]
+    );
+}
+
+#[test]
+fn a_failed_refresh_leaves_the_value_for_the_next_start() {
+    let mut t = test_env(&[]);
+    github_sandboxes(&t);
+    t.runner().fail(
+        &["machine", "credentials", "refresh"],
+        "CONFIG_ERROR",
+        "no credential binding 'gh_token'",
+    );
+    t.sbt(&["secret", "set", "github", "-t", "tok-2"]).unwrap();
+    let out = t.stdout();
+    assert!(
+        out.contains("Applies to a1, b2 on their next start\n"),
+        "{out}"
+    );
+    assert!(!out.contains("now"), "{out}");
+}
+
+/// Running sandboxes, each bound to `service` through the variables `env` (`sbx.credential-env`).
+fn running(t: &TestEnv, sandboxes: &[(&str, &[(&str, &str)])]) {
+    let all: Vec<String> = sandboxes
+        .iter()
+        .map(|(name, labels)| {
+            let mut l = vec![("sbx.name", *name)];
+            l.extend_from_slice(labels);
+            let m = machine_json(&format!("sbx-{name}"), "running", &l);
+            t.runner()
+                .ok(&["machine", "status", "-n", &format!("sbx-{name}")], &m);
+            m
+        })
+        .collect();
+    t.runner().ok(
+        &["machine", "ls", "--json"],
+        &format!("[{}]", all.join(",")),
+    );
+    t.runner().ok(&["machine", "credentials", "refresh"], "");
+}
+
+/// Claude's kit takes the anthropic key as SBX_KIT_ANTHROPIC alone, with no ANTHROPIC_API_KEY
+/// binding: the refresh names only the bound variable, or smolvm refuses it all.
+#[test]
+fn a_refresh_names_only_the_variables_the_sandbox_binds() {
+    let mut t = test_env(&[]);
+    running(
+        &t,
+        &[(
+            "cl",
+            &[
+                ("sbx.secrets", "anthropic"),
+                ("sbx.credential-env", "SBX_KIT_ANTHROPIC"),
+                ("sbx.credential-service.SBX_KIT_ANTHROPIC", "anthropic"),
+            ],
+        )],
+    );
+    t.sbt(&["secret", "set", "anthropic", "-t", "sk-2"])
+        .unwrap();
+    assert!(t.stdout().contains("Applied to cl now\n"));
+    assert_eq!(
+        t.calls_of("machine credentials refresh"),
+        ["machine credentials refresh -n sbx-cl sbx_kit_anthropic"]
+    );
+    assert_eq!(
+        t.runner().envs().pop().unwrap(),
+        [("SBX_KIT_ANTHROPIC".to_string(), "sk-2".to_string())]
+    );
+}
+
+/// A sandbox's own secret wins over its original's, which wins over the global one: a set
+/// refreshes exactly the sandboxes that use the entry it changed.
+#[test]
+fn a_set_refreshes_the_sandboxes_that_use_that_entry() {
+    let mut t = test_env(&[]);
+    let gh: &[(&str, &str)] = &[
+        ("sbx.secrets", "github"),
+        ("sbx.credential-env", "GH_TOKEN"),
+    ];
+    let fork: &[(&str, &str)] = &[
+        ("sbx.secrets", "github"),
+        ("sbx.credential-env", "GH_TOKEN"),
+        ("sbx.fork-of", "pa"),
+    ];
+    running(&t, &[("pa", gh), ("fo", fork), ("gl", gh)]);
+    t.sbt(&["secret", "set", "github", "--sandbox", "pa", "-t", "pa-tok"])
+        .unwrap();
+    let out = t.stdout();
+    assert!(out.contains("Applied to fo, pa now\n"), "{out}");
+    t.sbt(&["secret", "set", "github", "-t", "global-tok"])
+        .unwrap();
+    let out = t.stdout();
+    assert!(out.ends_with("Applied to gl now\n"), "{out}");
+    assert_eq!(
+        t.calls_of("machine credentials refresh"),
+        [
+            "machine credentials refresh -n sbx-fo gh_token",
+            "machine credentials refresh -n sbx-pa gh_token",
+            "machine credentials refresh -n sbx-gl gh_token",
+        ]
+    );
+}
+
+/// A --command (or --ref) source may prompt or be slow: one set reads it once, however many
+/// running sandboxes get it.
+#[test]
+fn a_set_reads_the_new_value_once() {
+    let mut t = test_env(&[]);
+    let gh: &[(&str, &str)] = &[
+        ("sbx.secrets", "github"),
+        ("sbx.credential-env", "GH_TOKEN"),
+    ];
+    running(&t, &[("a", gh), ("b", gh)]);
+    let runs = t.ctx.paths.config.join("runs");
+    let command = format!("printf x >> '{}'; printf tok", runs.display());
+    t.sbt(&["secret", "set", "github", "--command", &command])
+        .unwrap();
+    assert!(t.stdout().contains("Applied to a, b now\n"));
+    assert_eq!(std::fs::read_to_string(runs).unwrap(), "x");
+}

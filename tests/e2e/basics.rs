@@ -220,6 +220,23 @@ pub(crate) fn secrets_are_placeholders_in_the_guest() {
         !basic_auth_ok(&e, &e.name, "TOK", "other"),
         "httpbin checks the password"
     );
+    // A new value reaches the running sandbox at once (smolvm's `machine credentials refresh`).
+    let out = e.ok(&[
+        "secret",
+        "set-custom",
+        "--host",
+        "httpbin.org",
+        "--env",
+        "TOK",
+        "--command",
+        "printf %s dXNlcjpyb3RhdGVkLXh5eg==",
+    ]);
+    assert!(out.contains(&format!("Applied to {} now", e.name)), "{out}");
+    assert!(
+        basic_auth_ok(&e, &e.name, "TOK", "rotated-xyz"),
+        "the running sandbox uses the new value"
+    );
+    assert!(!basic_auth_ok(&e, &e.name, "TOK", "real-secret-xyz"));
 }
 
 /// Runs `script` as root in the guest, straight through smolvm.

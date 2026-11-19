@@ -44,7 +44,6 @@ pub fn credentials(secrets: &SecretsFile, services: &[String]) -> Result<Vec<Cre
         }
         for var in &s.env_vars {
             out.push(Credential {
-                name: var.to_ascii_lowercase(),
                 env_var: var.clone(),
                 hosts: s.hosts.clone(),
                 ..Default::default()

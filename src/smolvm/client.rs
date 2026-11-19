@@ -56,7 +56,7 @@ impl PortMap {
 /// `machine start` environment) on HTTPS requests to `hosts`.
 #[derive(Debug, Clone, Default, PartialEq, Eq)]
 pub struct Credential {
-    pub name: String,
+    /// Its lowercase form names the binding (`Credential::binding`).
     pub env_var: String,
     pub hosts: Vec<String>,
     /// smolvm sets this header to the value itself (`:set-header=`), for inject-only credentials.
@@ -64,13 +64,20 @@ pub struct Credential {
 }
 
 impl Credential {
+    /// A binding's name: its variable, lowercased. One variable holds one value, so the name is
+    /// unique, and `secret set` can name the bindings it refreshes.
+    fn binding(env_var: &str) -> String {
+        env_var.to_ascii_lowercase()
+    }
+
     fn arg(&self) -> String {
         // smolvm would read `NAME=VAR@` as a credential for no host at all.
         debug_assert!(
             !self.hosts.is_empty(),
             "a credential needs at least one host"
         );
-        let mut arg = format!("{}={}@{}", self.name, self.env_var, self.hosts.join(","));
+        let name = Self::binding(&self.env_var);
+        let mut arg = format!("{name}={}@{}", self.env_var, self.hosts.join(","));
         if let Some(h) = &self.set_header {
             arg.push_str(&format!(":set-header={h}"));
         }
@@ -340,6 +347,15 @@ impl<R: Runner> Smolvm<R> {
         checked(self.runner.run_streaming(&a, env, remove, &mut on_line)?).map(drop)
     }
 
+    /// Hands the running machine new values for the credentials bound to `env`'s variables, without
+    /// a restart (smolvm 1.35.4): `env` reaches the smolvm process only, and the machine uses the
+    /// values from its next request.
+    pub fn refresh_credentials(&self, name: &str, env: &[(String, String)]) -> Result<()> {
+        let mut a = args(&["machine", "credentials", "refresh", "-n", name]);
+        a.extend(env.iter().map(|(v, _)| Credential::binding(v)));
+        checked(self.runner.run_with_env(&a, env, &[])?).map(drop)
+    }
+
     /// Packs the stopped machine's filesystem into `<out>.smolmachine` (and an executable stub
     /// at `out`, which callers delete). Unsigned: the stub is never run.
     pub fn pack_from_vm(&self, machine: &str, out: &Path) -> Result<()> {
@@ -595,7 +611,6 @@ mod tests {
             )),
             deny_cidrs: vec!["10.0.0.0/8".into()],
             credentials: vec![Credential {
-                name: "gh_token".into(),
                 env_var: "GH_TOKEN".into(),
                 hosts: vec!["github.com".into(), "api.github.com".into()],
                 ..Default::default()
@@ -735,7 +750,6 @@ mod tests {
             name: "m".into(),
             smolfile: Some("/k/Smolfile".into()),
             credentials: vec![Credential {
-                name: "x".into(),
                 env_var: "SBX_KIT_X".into(),
                 hosts: vec!["api.x.com".into()],
                 set_header: Some("authorization".into()),
@@ -745,7 +759,7 @@ mod tests {
         assert_eq!(
             spec.to_args().join(" "),
             "machine create -n m --smolfile /k/Smolfile --net --net-backend virtio-net \
-             --credential x=SBX_KIT_X@api.x.com:set-header=authorization"
+             --credential sbx_kit_x=SBX_KIT_X@api.x.com:set-header=authorization"
         );
     }
 
@@ -754,7 +768,6 @@ mod tests {
     #[cfg(debug_assertions)]
     fn a_credential_without_hosts_is_refused() {
         let c = Credential {
-            name: "t".into(),
             env_var: "T".into(),
             hosts: vec![],
             ..Default::default()
