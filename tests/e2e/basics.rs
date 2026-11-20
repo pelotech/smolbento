@@ -73,6 +73,18 @@ pub(crate) fn cp_round_trip() {
         &format!("{}:/tmp/tree", e.name),
     ]);
     assert_eq!(e.ok(&["exec", &e.name, "cat", "/tmp/tree/sub/f"]), "nested");
+
+    // And copies back out, through an archive (smolvm's cp downloads single files only).
+    let out = e.dir.path().join("out");
+    e.ok(&[
+        "cp",
+        &format!("{}:/tmp/tree", e.name),
+        out.to_str().unwrap(),
+    ]);
+    assert_eq!(
+        std::fs::read_to_string(out.join("sub/f")).unwrap(),
+        "nested"
+    );
 }
 
 #[test]

@@ -95,8 +95,6 @@ meanwhile.
 - **Guest DNS upstream order.** Since smolvm 1.34, guest DNS moves to the host's next resolver when one
   doesn't answer. Not yet checked: a name the first resolver refuses (before 1.34 that failed in every VM,
   even when the host resolved it). Meanwhile: no workaround; the e2e tests avoid such names.
-- **Copying a directory out of a sandbox.** `machine cp` uploads directories but downloads single files
-  only (rechecked on 1.35.0). Meanwhile: `bento cp SANDBOX:/dir ./dir` fails with smolvm's "is a directory".
 - **Install-only credentials after install.** smolvm answers `502 credential unavailable` when a binding
   has no value; sbx sends the request without the credential. Meanwhile: a documented difference.
 
