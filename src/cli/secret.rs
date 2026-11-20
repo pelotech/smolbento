@@ -9,7 +9,6 @@ use super::{
     table,
 };
 use crate::policy::Policy;
-use crate::policy::rules::{SmolvmHost, check_host};
 use crate::sandbox::{self, name};
 use crate::secrets::resolve::{bound_vars, resolve, with_value};
 use crate::secrets::services::Service;
@@ -131,31 +130,7 @@ fn check_env_name(env: &str) -> Result<()> {
 fn custom_hosts(raw: &[String]) -> Result<Vec<String>> {
     let mut hosts: Vec<String> = Vec::new();
     for r in raw {
-        let host = r.trim().to_ascii_lowercase();
-        let unbracketed = host.trim_start_matches('[').trim_end_matches(']');
-        if unbracketed.parse::<std::net::IpAddr>().is_ok() {
-            bail!("'{r}': smolvm only substitutes secrets for host names, not IP addresses");
-        }
-        if host.contains("://") || host.contains([':', '/', '@', ',']) {
-            bail!("'{r}': use a bare host name like api.x.com (no scheme, port or path)");
-        }
-        // smolvm takes `*.domain` (every subdomain, not the domain itself) and no other wildcard.
-        let (prefix, name) = match SmolvmHost::parse(&host) {
-            SmolvmHost::Subdomains(name) => ("*.", name),
-            SmolvmHost::Exact(name) => ("", name),
-        };
-        if name.contains(['*', '?', '[', ']']) {
-            bail!(
-                "'{r}': the only wildcard a secret host takes is a leading `*.`, like *.x.com \
-                 (every subdomain of x.com)"
-            );
-        }
-        check_host(name, r)?;
-        let name = name.strip_suffix('.').unwrap_or(name);
-        if !prefix.is_empty() && !name.contains('.') {
-            bail!("'{r}': a wildcard needs a domain below the top level, like *.x.com");
-        }
-        let host = format!("{prefix}{name}");
+        let host = crate::secrets::check_credential_host(r)?;
         if !hosts.contains(&host) {
             hosts.push(host);
         }
@@ -578,6 +553,7 @@ fn rm<R: Runner>(ctx: &Ctx<R>, file: &mut SecretsFile, a: SecretRmArgs) -> Resul
         let all = std::mem::take(&mut file.secrets);
         let registries = std::mem::take(&mut file.registries);
         file.custom.clear();
+        file.bindings.clear();
         // Saved first: a failed save must not leave entries pointing at deleted values. A delete
         // that fails afterwards orphans a value, which is the lesser harm.
         file.save(&ctx.paths)?;

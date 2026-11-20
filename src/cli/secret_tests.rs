@@ -951,3 +951,18 @@ fn a_set_reads_the_new_value_once() {
     assert!(t.stdout().contains("Applied to a, b now\n"));
     assert_eq!(std::fs::read_to_string(runs).unwrap(), "x");
 }
+
+#[test]
+fn rm_all_clears_bindings() {
+    let mut t = test_env(&[]);
+    let mut file = SecretsFile::default();
+    file.bind("github", &["api.corp.example".into()], &[]);
+    file.save(&t.ctx.paths).unwrap();
+    t.sbt(&["secret", "rm", "--all", "-f"]).unwrap();
+    assert!(
+        SecretsFile::load(&t.ctx.paths)
+            .unwrap()
+            .bindings
+            .is_empty()
+    );
+}

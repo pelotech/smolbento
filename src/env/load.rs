@@ -329,9 +329,8 @@ fn check_merged(f: &EnvFile, first: &str) -> Result<()> {
         }
         for (kind, d) in kinds {
             for domain in d.iter().flat_map(|d| d.domains.iter().flatten()) {
-                if domain.is_empty() || domain.contains("://") || domain.contains(['/', ' ', '@']) {
-                    bail!("{at}.{kind}.domains: \"{domain}\" isn't a domain");
-                }
+                crate::secrets::check_credential_host(domain)
+                    .map_err(|e| anyhow::anyhow!("{at}.{kind}.domains: {e}"))?;
             }
         }
     }
@@ -882,7 +881,7 @@ mod tests {
             ),
             (
                 "bindings:\n  github:\n    apiKey:\n      domains: [\"https://a.b\"]\n",
-                "bindings.github.apiKey.domains: \"https://a.b\" isn't a domain",
+                "bindings.github.apiKey.domains: 'https://a.b': use a bare host name",
             ),
             (
                 "mcp:\n  servers:\n    - name: a\n      url: https://a.b/mcp\n    - name: a\n      url: https://c.d/mcp\n",
@@ -900,6 +899,27 @@ mod tests {
             t.write("proj/a.yaml", &format!("{MIN}{body}"));
             let e = t.load(&["a.yaml"], &none()).err().unwrap().to_string();
             assert!(e.contains(want), "{e}");
+        }
+    }
+
+    #[test]
+    fn bindings_reject_option_injection_commas_ips_and_bad_wildcards() {
+        let t = T::new();
+        for bad in [
+            "api.example.com:set-header=X-Leak",
+            "api.example.com:443",
+            "a.example.com,b.example.com",
+            "1.2.3.4",
+            "[::1]",
+            "*example.com",
+            "*.com",
+        ] {
+            t.write(
+                "proj/a.yaml",
+                &format!("{MIN}bindings:\n  github:\n    apiKey:\n      domains: [\"{bad}\"]\n"),
+            );
+            let err = t.load(&["a.yaml"], &none()).err();
+            assert!(err.is_some(), "expected bindings to reject {bad:?}");
         }
     }
 

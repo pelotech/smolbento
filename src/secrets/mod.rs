@@ -5,13 +5,45 @@ pub mod resolve;
 pub mod services;
 pub mod store;
 
-use anyhow::Result;
+use anyhow::{Result, bail};
 use std::collections::BTreeMap;
 
 use serde::{Deserialize, Serialize};
 
 use crate::config::Paths;
+use crate::policy::rules::{SmolvmHost, check_host};
 use services::Service;
+
+/// Validates and normalizes one credential host (bare DNS name or `*.domain` below the TLD).
+/// smolvm takes them as `--credential NAME=ENV@HOST,…` and `--allow-host`, so schemes, ports,
+/// commas, IPs and arbitrary globs are refused.
+pub fn check_credential_host(raw: &str) -> Result<String> {
+    let host = raw.trim().to_ascii_lowercase();
+    let unbracketed = host.trim_start_matches('[').trim_end_matches(']');
+    if unbracketed.parse::<std::net::IpAddr>().is_ok() {
+        bail!("'{raw}': smolvm only substitutes secrets for host names, not IP addresses");
+    }
+    if host.contains("://") || host.contains([':', '/', '@', ',']) {
+        bail!("'{raw}': use a bare host name like api.x.com (no scheme, port or path)");
+    }
+    // smolvm takes `*.domain` (every subdomain, not the domain itself) and no other wildcard.
+    let (prefix, name) = match SmolvmHost::parse(&host) {
+        SmolvmHost::Subdomains(name) => ("*.", name),
+        SmolvmHost::Exact(name) => ("", name),
+    };
+    if name.contains(['*', '?', '[', ']']) {
+        bail!(
+            "'{raw}': the only wildcard a secret host takes is a leading `*.`, like *.x.com \
+             (every subdomain of x.com)"
+        );
+    }
+    check_host(name, raw)?;
+    let name = name.strip_suffix('.').unwrap_or(name);
+    if !prefix.is_empty() && !name.contains('.') {
+        bail!("'{raw}': a wildcard needs a domain below the top level, like *.x.com");
+    }
+    Ok(format!("{prefix}{name}"))
+}
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(tag = "source", rename_all = "lowercase")]
@@ -146,7 +178,9 @@ impl SecretsFile {
                 })
         })?;
         if let Some(b) = self.bindings.get(name) {
-            for domain in b.api_key.iter().chain(&b.oauth) {
+            // Only API-key domains: smolbento resolves API keys only (no OAuth credentials), so
+            // injecting the API key on oauth.domains would send it to the wrong host.
+            for domain in &b.api_key {
                 if !service.hosts.contains(domain) {
                     service.hosts.push(domain.clone());
                 }
@@ -161,8 +195,9 @@ impl SecretsFile {
         let b = self.bindings.entry(service.to_string()).or_default();
         for (list, add) in [(&mut b.api_key, api_key), (&mut b.oauth, oauth)] {
             for d in add {
-                if !list.contains(d) {
-                    list.push(d.clone());
+                let d = check_credential_host(d).unwrap_or_else(|_| d.trim().to_ascii_lowercase());
+                if !list.contains(&d) {
+                    list.push(d);
                 }
             }
         }
@@ -418,5 +453,22 @@ mod tests {
             [entry("ghcr.io", Some("web"))]
         );
         assert_eq!(f.registries.len(), 3);
+    }
+
+    #[test]
+    fn bindings_only_add_api_key_domains_to_service_hosts() {
+        let mut f = SecretsFile::default();
+        f.bind(
+            "github",
+            &["api.corp.example".into()],
+            &["oauth.corp.example".into()],
+        );
+        let s = f.service("github").unwrap();
+        assert!(s.hosts.contains(&"api.corp.example".to_string()));
+        assert!(
+            !s.hosts.contains(&"oauth.corp.example".to_string()),
+            "API key must not be injected on oauth domains: {:?}",
+            s.hosts
+        );
     }
 }
