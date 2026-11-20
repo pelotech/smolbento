@@ -175,6 +175,11 @@ pub(crate) fn host_services_serve_a_detached_sandbox_and_are_removed_with_it() {
         .push(("SMOLBENTO_OPEN_CMD", opener.display().to_string()));
     e.create_alpine_with("apk add -q curl openssh-client");
     if unit_files(&e, &e.name).is_empty() {
+        // CI's runners have one: a run there that found none would pass having checked nothing.
+        assert!(
+            std::env::var_os("CI").is_none(),
+            "no usable service manager on CI: this test would check nothing"
+        );
         eprintln!("no usable service manager here: sockets are served while attached only");
         return;
     }

@@ -88,7 +88,7 @@ pub(crate) fn cp_round_trip() {
 }
 
 #[test]
-#[ignore = "boots real VMs; run with `just e2e`"]
+#[ignore = "runs bento diagnose against smolvm; run with `just e2e`"]
 pub(crate) fn diagnose_passes() {
     let e = E2e::new("diag");
     let out = e.ok(&["diagnose"]);
@@ -96,7 +96,7 @@ pub(crate) fn diagnose_passes() {
 }
 
 #[test]
-#[ignore = "boots real VMs; run with `just e2e`"]
+#[ignore = "downloads and runs the pinned smolvm; run with `just e2e`"]
 pub(crate) fn the_pinned_smolvm_runs_from_smolbentos_home() {
     // Even when the run picks its own smolvm (`SMOLBENTO_SMOLVM`), this checks the pinned one.
     let out = smolvm_command()
@@ -137,7 +137,7 @@ pub(crate) fn http_answers(e: &E2e, ip: &str) -> bool {
 }
 
 #[test]
-#[ignore = "boots real VMs; run with `just e2e`"]
+#[ignore = "boots real VMs and reaches httpbin.org; run with `just e2e`"]
 pub(crate) fn policy_changes_apply_on_start_and_live() {
     let e = E2e::new("pol");
     e.create_alpine();
@@ -251,7 +251,6 @@ pub(crate) fn secrets_are_placeholders_in_the_guest() {
     assert!(!basic_auth_ok(&e, &e.name, "TOK", "real-secret-xyz"));
 }
 
-/// Runs `script` as root in the guest, straight through smolvm.
 /// Runs `script` as root in sandbox `sb`, with `bento smolvm` (not `bento exec`) so it works before
 /// setup.
 pub(crate) fn root_sh(sb: &str, script: &str) -> std::process::Output {

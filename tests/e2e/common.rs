@@ -242,9 +242,9 @@ agentInstructions:
         guest_root(name, then);
     }
 
-    /// Creates this test's sandbox as a `--clone` of its workspace. A clone sandbox needs git and
-    /// the `agent` user from its first start, and plain Alpine has neither (a create that fails
-    /// its first start removes the sandbox), so it comes from a template saved with both.
+    /// Creates this test's sandbox as a `--clone` of its workspace. A clone sandbox needs git from
+    /// its first start, which the Alpine archive lacks (a create that fails its first start removes
+    /// the sandbox), so it comes from a template saved with git installed.
     pub(crate) fn create_clone(&self) {
         let base = format!("{}-base", self.name);
         // Removed below; the guard covers a panic in between.

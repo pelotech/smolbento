@@ -69,7 +69,7 @@ mod tests {
     }
 
     #[test]
-    fn is_hidden_and_needs_smolvm() {
+    fn is_hidden_and_fails_when_smolvm_does() {
         use clap::CommandFactory;
         let cmd = super::super::Cli::command();
         let sub = cmd.find_subcommand("_bridge").expect("exists");
