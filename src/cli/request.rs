@@ -6,7 +6,6 @@ use anyhow::{Context, Result, bail};
 use super::progress::Progress;
 use super::{Ctx, DiskSizes, SandboxOpts};
 use crate::agents;
-use crate::kits::args::ArgValues;
 use crate::kits::capability;
 use crate::kits::load;
 use crate::kits::model::{Content, Kind, Kit, Source};
@@ -19,7 +18,7 @@ use crate::workspace::{self, Workspace, clone};
 /// Turns sbx's create options into a [`CreateRequest`], all but the image: `agent` is the agent
 /// or workload kit name (the `sbx.agent` label and the default name's prefix). `default_to_cwd`:
 /// `run` mounts the current directory when no path is given; `create` makes a mountless sandbox.
-pub(crate) fn base_request<R: Runner>(
+fn base_request<R: Runner>(
     ctx: &Ctx<R>,
     agent: &str,
     paths: &[String],
@@ -90,7 +89,7 @@ pub(crate) fn base_request<R: Runner>(
 /// command, including `run` of an existing sandbox.
 pub(crate) fn check_kit_args(targets: &[String], opts: &SandboxOpts) -> Result<()> {
     // Every target is a workload kit, built-in agents included.
-    if targets.is_empty() && opts.kit.is_empty() && has_kit_args(opts) {
+    if targets.is_empty() && opts.kit.is_empty() && opts.kit_args.given() {
         bail!("kit arguments were supplied but no kits were referenced");
     }
     Ok(())
@@ -234,11 +233,7 @@ pub(crate) fn kit_target<R: Runner>(
 
 /// Whether any kit flag was given (`run` warns that they don't apply to an existing sandbox).
 pub(crate) fn has_kit_flags(opts: &SandboxOpts) -> bool {
-    !opts.kit.is_empty() || has_kit_args(opts)
-}
-
-fn has_kit_args(opts: &SandboxOpts) -> bool {
-    !opts.kit_arg.is_empty() || !opts.kit_args_file.is_empty()
+    !opts.kit.is_empty() || opts.kit_args.given()
 }
 
 /// The second half of `kit_target`, for a sandbox about to be created: loads the workload kit
@@ -315,7 +310,7 @@ pub(crate) fn kit_plan<R: Runner>(
         }
         req.docker = wants_docker(&workload, ctx.settings.bool("docker.enabled")?);
     }
-    let mut args = ArgValues::parse(&opts.kit_args_file, &opts.kit_arg)?;
+    let mut args = opts.kit_args.values()?;
     for (kit, pins) in &recorded_args {
         args.pin(kit, pins)?;
     }
@@ -500,14 +495,12 @@ fn wants_docker(kit: &Kit, enabled: bool) -> bool {
         }
 }
 
-fn split_tag(image: &str) -> Option<(&str, &str)> {
-    image.rsplit_once(':').filter(|(_, tag)| !tag.contains('/'))
-}
-
 /// True for Docker's `-docker` template variants, which bundle a Docker engine: how an image given
 /// with `-t` (not a kit) is judged.
 fn is_docker_image(image: &str) -> bool {
-    split_tag(image).is_some_and(|(_, tag)| tag.ends_with("-docker") || tag.contains("-docker-"))
+    image.rsplit_once(':').is_some_and(|(_, tag)| {
+        !tag.contains('/') && (tag.ends_with("-docker") || tag.contains("-docker-"))
+    })
 }
 
 /// A path or a registry reference rather than a misspelt agent, which mustn't reach a registry.

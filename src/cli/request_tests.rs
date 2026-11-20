@@ -35,7 +35,10 @@ fn kit_pins_apply_beneath_kit_args() {
             targets: vec![v2_fixture("shell-workload"), ".".into()],
             opts: SandboxOpts {
                 kit: vec![kit.clone()],
-                kit_arg: flags.iter().map(|s| s.to_string()).collect(),
+                kit_args: super::super::args::KitArgOpts {
+                    kit_arg: flags.iter().map(|s| s.to_string()).collect(),
+                    ..Default::default()
+                },
                 kit_pins: vec![(kit.clone(), vec!["mode=pinned".into()])],
                 ..Default::default()
             },

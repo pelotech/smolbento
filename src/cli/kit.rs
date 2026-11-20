@@ -5,7 +5,7 @@ use std::io::Write;
 use anyhow::{Context, Result, anyhow, bail};
 
 use super::Ctx;
-use super::args::{Format, KitArgOpts, KitCmd, SignOpts};
+use super::args::{Format, KitArgOpts, KitCmd, KitRefArgs, SignOpts};
 use super::kit_doc::Doc;
 use crate::kits::apply::apply;
 use crate::kits::args::{ArgValues, NoResolvedValue};
@@ -26,19 +26,11 @@ use crate::workspace::Workspace;
 pub fn run<R: Runner>(ctx: &mut Ctx<R>, cmd: KitCmd) -> Result<i32> {
     match cmd {
         KitCmd::Inspect {
-            reference,
-            args,
-            output,
-            offline,
+            kit,
             // The loader accepts `extends:` and ignores it, so there is no parent to merge.
             resolved: _,
-        } => inspect(ctx, &reference, &args, output.pick(), offline),
-        KitCmd::Validate {
-            reference,
-            args,
-            output,
-            offline,
-        } => validate(ctx, &reference, &args, output.pick(), offline),
+        } => inspect(ctx, &kit),
+        KitCmd::Validate { kit } => validate(ctx, &kit),
         KitCmd::Add {
             sandbox,
             reference,
@@ -338,53 +330,41 @@ fn pack<R: Runner>(ctx: &Ctx<R>, directory: &str, output: Option<&str>) -> Resul
     Ok(0)
 }
 
-fn arg_values(a: &KitArgOpts) -> Result<ArgValues> {
-    ArgValues::parse(&a.kit_args_file, &a.kit_arg)
-}
-
 /// The kit as loaded, without resolving it: sbx's summary table (then which capabilities
 /// smolbento supports), or its v2-shaped descriptor as JSON or YAML.
-fn inspect<R: Runner>(
-    ctx: &Ctx<R>,
-    reference: &str,
-    args: &KitArgOpts,
-    format: Format,
-    offline: bool,
-) -> Result<i32> {
+fn inspect<R: Runner>(ctx: &Ctx<R>, a: &KitRefArgs) -> Result<i32> {
     // Only checked: inspecting doesn't expand anything.
-    arg_values(args)?;
-    let kit = load::load_with(ctx, reference, offline)?;
+    a.args.values()?;
+    let kit = load::load_with(ctx, &a.reference, a.offline)?;
+    let format = a.output.pick();
     let doc = Doc::new(&kit);
     let mut out = &ctx.out;
-    match format {
-        f @ (Format::Json | Format::Yaml) => {
-            write!(out, "{}", f.structured(&doc)?.unwrap_or_default())?
-        }
-        Format::Table => {
-            write!(out, "{}", doc.table(&kit))?;
-            if !kit.caps.is_empty() {
-                writeln!(out, "Capabilities:")?;
-                let mut rows = Vec::new();
-                for c in &kit.caps {
-                    rows.push(vec![
-                        c.ty.clone(),
-                        if c.optional { "yes" } else { "no" }.into(),
-                        if supported(c) {
-                            "supported"
-                        } else {
-                            "not supported"
-                        }
-                        .into(),
-                    ]);
-                }
-                write!(
-                    out,
-                    "{}",
-                    super::table(&["TYPE", "OPTIONAL", "SUPPORT"], rows)
-                )?;
+    if let Some(text) = format.structured(&doc)? {
+        write!(out, "{text}")?;
+    } else {
+        write!(out, "{}", doc.table(&kit))?;
+        if !kit.caps.is_empty() {
+            writeln!(out, "Capabilities:")?;
+            let mut rows = Vec::new();
+            for c in &kit.caps {
+                rows.push(vec![
+                    c.ty.clone(),
+                    if c.optional { "yes" } else { "no" }.into(),
+                    if supported(c) {
+                        "supported"
+                    } else {
+                        "not supported"
+                    }
+                    .into(),
+                ]);
             }
-            write!(out, "{}", doc.extras_table())?;
+            write!(
+                out,
+                "{}",
+                super::table(&["TYPE", "OPTIONAL", "SUPPORT"], rows)
+            )?;
         }
+        write!(out, "{}", doc.extras_table())?;
     }
     Ok(0)
 }
@@ -407,14 +387,9 @@ fn supported(c: &Cap) -> bool {
 
 /// Loads and resolves the kit on its own: a workload by itself, a mixin on an empty workload that
 /// provides whatever the mixin requires, at a version its constraints accept.
-fn validate<R: Runner>(
-    ctx: &Ctx<R>,
-    reference: &str,
-    args: &KitArgOpts,
-    format: Format,
-    offline: bool,
-) -> Result<i32> {
-    let checked = check_kit(ctx, reference, args, offline);
+fn validate<R: Runner>(ctx: &Ctx<R>, a: &KitRefArgs) -> Result<i32> {
+    let (reference, format) = (a.reference.as_str(), a.output.pick());
+    let checked = check_kit(ctx, reference, &a.args, a.offline);
     if format == Format::Table {
         for w in checked? {
             crate::warning!("{w}");
@@ -459,7 +434,7 @@ fn check_kit<R: Runner>(
     args: &KitArgOpts,
     offline: bool,
 ) -> Result<Vec<String>> {
-    let values = arg_values(args)?;
+    let values = args.values()?;
     let mut kit = load::load_with(ctx, reference, offline)?;
     if offline
         && kit.kind == Kind::Workload
@@ -549,7 +524,7 @@ fn add<R: Runner>(
     args: &KitArgOpts,
     yes: bool,
 ) -> Result<i32> {
-    let values = arg_values(args)?;
+    let values = args.values()?;
     let mut sb = sandbox::get(&ctx.vm, name)?;
     sb.check_current()?;
     let kit = load::load(ctx, reference)?;
@@ -766,12 +741,7 @@ fn approve<R: Runner>(ctx: &Ctx<R>, kit: &str, hosts: &[String], started: bool) 
     if !ctx.can_prompt() {
         bail!("kit add needs --yes to grant network access without a terminal");
     }
-    // A question, not command output: stderr, like the secret value prompt.
-    let mut err = std::io::stderr().lock();
-    write!(err, "Allow {kit} to reach: {}? [y/N] ", hosts.join(", "))?;
-    err.flush()?;
-    drop(err);
-    if super::is_yes(&ctx.read_line()?) {
+    if super::ask(ctx, &format!("Allow {kit} to reach: {}?", hosts.join(", ")))? {
         Ok(())
     } else {
         // `add` notes the start itself.

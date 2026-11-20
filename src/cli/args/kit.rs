@@ -2,38 +2,26 @@
 
 use std::path::PathBuf;
 
+use anyhow::Result;
 use clap::{Args, Subcommand};
 
 use super::OutputArgs;
+use crate::kits::args::ArgValues;
 
 #[derive(Debug, Subcommand)]
 pub enum KitCmd {
     /// Show what a kit provides and requests
     Inspect {
-        /// Kit: a registry reference or a local path (./dir, descriptor or Smolfile)
-        reference: String,
         #[command(flatten)]
-        args: KitArgOpts,
-        #[command(flatten)]
-        output: OutputArgs,
-        /// Skip the source policy check; local kits only, no network
-        #[arg(long)]
-        offline: bool,
+        kit: KitRefArgs,
         /// Accepted as in sbx; `extends:` parents aren't merged, so the output is the same
         #[arg(long)]
         resolved: bool,
     },
     /// Check a kit without running it
     Validate {
-        /// Kit: a registry reference or a local path (./dir, descriptor or Smolfile)
-        reference: String,
         #[command(flatten)]
-        args: KitArgOpts,
-        #[command(flatten)]
-        output: OutputArgs,
-        /// Skip the source policy check; local kits only, no network
-        #[arg(long)]
-        offline: bool,
+        kit: KitRefArgs,
     },
     /// Add a mixin kit to an existing sandbox
     Add {
@@ -138,4 +126,30 @@ pub struct KitArgOpts {
     /// Read kit arguments (NAME=VALUE lines) from a file (repeatable)
     #[arg(long = "kit-args-file", value_name = "FILE")]
     pub kit_args_file: Vec<PathBuf>,
+}
+
+impl KitArgOpts {
+    /// The `--kit-arg` and `--kit-args-file` values, parsed.
+    pub fn values(&self) -> Result<ArgValues> {
+        ArgValues::parse(&self.kit_args_file, &self.kit_arg)
+    }
+
+    /// Whether any kit argument was given.
+    pub fn given(&self) -> bool {
+        !self.kit_arg.is_empty() || !self.kit_args_file.is_empty()
+    }
+}
+
+/// The kit `kit inspect` and `kit validate` read, and how.
+#[derive(Debug, Args)]
+pub struct KitRefArgs {
+    /// Kit: a registry reference or a local path (./dir, descriptor or Smolfile)
+    pub reference: String,
+    #[command(flatten)]
+    pub args: KitArgOpts,
+    #[command(flatten)]
+    pub output: OutputArgs,
+    /// Skip the source policy check; local kits only, no network
+    #[arg(long)]
+    pub offline: bool,
 }

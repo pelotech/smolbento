@@ -302,12 +302,8 @@ pub struct SandboxOpts {
     /// Add a kit: registry reference or local path, e.g. ./kit (repeatable)
     #[arg(long, value_name = "REF")]
     pub kit: Vec<String>,
-    /// Kit argument: NAME=VALUE, or KIT.NAME=VALUE for one kit (repeatable)
-    #[arg(long = "kit-arg", value_name = "NAME=VALUE")]
-    pub kit_arg: Vec<String>,
-    /// Read kit arguments (NAME=VALUE lines) from a file (repeatable)
-    #[arg(long = "kit-args-file", value_name = "FILE")]
-    pub kit_args_file: Vec<PathBuf>,
+    #[command(flatten)]
+    pub kit_args: KitArgOpts,
     /// Kit args an sbxenv.yaml pins: (kit source as given to `--kit`, `NAME=VALUE`s). Beneath
     /// `--kit-arg` and `--kit-args-file`.
     #[arg(skip)]

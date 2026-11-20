@@ -4,7 +4,7 @@ use std::path::Path;
 
 use anyhow::{Context, Result, bail};
 
-use super::{DiskSizes, EnvOverrideOpts, SandboxOpts};
+use super::{DiskSizes, EnvOverrideOpts, KitArgOpts, SandboxOpts};
 use crate::agents;
 use crate::env::file::{
     Binding, EnvFile, KitEntry, Lifecycle, PinnedKit, Port, RegistryDecl, SecretDecl, Workspace,
@@ -200,8 +200,10 @@ pub fn spec(
             files_in_mounted_workspaces(loaded, clone)
         },
         kit: kits,
-        kit_arg: overrides.kit_arg.clone(),
-        kit_args_file: overrides.kit_args_file.clone(),
+        kit_args: KitArgOpts {
+            kit_arg: overrides.kit_arg.clone(),
+            kit_args_file: overrides.kit_args_file.clone(),
+        },
         kit_pins,
         ..Default::default()
     };
