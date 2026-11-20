@@ -508,14 +508,14 @@ pub(crate) fn install_only_credential_is_gone_after_install() {
 pub(crate) fn kit_add_applies_network_and_hooks_live() {
     let e = E2e::new("kitadd");
     // A v2 mixin is added below: a v2 workload.
-    e.create_alpine_v2();
+    e.create_alpine_as(&e.v2_shell(), "apk add -q bash");
     e.ok(&["policy", "init", "deny-all"]);
     e.ok(&["stop", &e.name]); // allow-all -> restricted applies on the next start
     e.ok(&["start", &e.name]);
     assert!(!reachable(&e, "https://httpbin.org"), "deny-all blocks");
     let boot = root_out(&e.name, "cat /proc/sys/kernel/random/boot_id");
 
-    let kit = e.kit_dir(
+    let kit = e.v2_kit_dir(
         "e2e-add",
         r#"schemaVersion: "2"
 kind: mixin
@@ -699,7 +699,7 @@ pub(crate) fn numeric_image_user_runs_as_its_account() {
 #[ignore = "boots real VMs and pulls alpine; run with `just e2e`"]
 pub(crate) fn failing_startup_hook_warns_and_the_sandbox_runs() {
     let e = E2e::new("startfail");
-    let kit = e.kit_dir(
+    let kit = e.v2_kit_dir(
         "e2e-fail-start",
         r#"schemaVersion: "2"
 kind: mixin
@@ -742,7 +742,7 @@ setup:
 #[ignore = "boots real VMs and pulls alpine; run with `just e2e`"]
 pub(crate) fn v2_startup_hook_runs_as_agent_by_default() {
     let e = E2e::new("v2user");
-    let kit = e.kit_dir(
+    let kit = e.v2_kit_dir(
         "e2e-v2-user",
         r#"schemaVersion: "2"
 kind: mixin
@@ -772,7 +772,7 @@ setup:
 #[ignore = "boots real VMs and pulls alpine; run with `just e2e`"]
 pub(crate) fn mixin_agent_context_sits_beside_the_workspace() {
     let e = E2e::new("ctx");
-    let kit = e.kit_dir(
+    let kit = e.v2_kit_dir(
         "e2e-ctx",
         r#"schemaVersion: "2"
 kind: mixin
@@ -889,7 +889,7 @@ pub(crate) fn kit_args_reach_typed_config_fields() {
 #[ignore = "runs bento against smolvm; run with `just e2e`"]
 pub(crate) fn kit_validate_and_inspect_take_a_relative_path() {
     let e = E2e::new("relkit");
-    e.kit_dir(
+    e.v2_kit_dir(
         "e2e-path",
         "schemaVersion: \"2\"\nkind: mixin\nname: e2e-path\n",
     );
@@ -908,7 +908,7 @@ pub(crate) fn kit_validate_and_inspect_take_a_relative_path() {
 pub(crate) fn a_pushed_kit_pulls_and_runs() {
     let e = E2e::new("push");
     let reg = Registry::start(&e);
-    let kit = e.kit_dir(
+    let kit = e.v2_kit_dir(
         "pushed",
         "schemaVersion: \"2\"\nkind: mixin\nname: pushed\n",
     );
@@ -987,7 +987,7 @@ pub(crate) fn a_signed_kit_verifies_with_its_key() {
     };
     let (key, public) = keypair("signer");
     let (_, other) = keypair("other");
-    let kit = e.kit_dir(
+    let kit = e.v2_kit_dir(
         "signed",
         "schemaVersion: \"2\"\nkind: mixin\nname: signed\n",
     );

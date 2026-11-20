@@ -1,8 +1,9 @@
 # The e2e tests that build a local kit share smolbento's one `_builder` sandbox, which stays
-# between tests (in the tests' own smolvm home) so BuildKit keeps its cache. They run one at a time:
-# a build stops the builder afterwards when it wasn't running, which would stop it under another
-# test's build, and one with other registry logins recreates it. Every profile inherits this.
-# CI's `just e2e-shard` puts the two `just e2e` runs on different runners, each with its builder.
+# between tests (in the tests' own smolvm home) so BuildKit keeps its cache. The `builder` group runs
+# them one at a time within a run: a build stops the builder afterwards when it wasn't running, which
+# would stop it under another test's build, and one with other registry logins recreates it. Every
+# profile inherits this. On CI, `just e2e-shard` puts the two builder tests (nix, local_v3) on
+# different shards, each with its own builder.
 [test-groups]
 builder = { max-threads = 1 }
 

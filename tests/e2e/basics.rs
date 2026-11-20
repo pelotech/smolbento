@@ -179,7 +179,7 @@ pub(crate) fn policy_changes_apply_on_start_and_live() {
 pub(crate) fn ports_publish_live() {
     let e = E2e::new("port");
     e.create_alpine();
-    smolvm(&[
+    smolvm_ok(&[
         "machine",
         "exec",
         "--name",
@@ -239,37 +239,14 @@ pub(crate) fn secrets_are_placeholders_in_the_guest() {
     assert!(!basic_auth_ok(&e, &e.name, "TOK", "real-secret-xyz"));
 }
 
-/// Runs `script` as root in sandbox `sb`, with `bento smolvm` (not `bento exec`) so it works before
-/// setup.
-pub(crate) fn root_sh(sb: &str, script: &str) -> std::process::Output {
-    let machine = format!("sbx-{sb}");
-    let args = [
-        "machine", "exec", "--name", &machine, "-u", "root", "--", "sh", "-c", script,
-    ];
-    smolvm_command().args(args).output().unwrap()
-}
-
-/// `root_sh` that must succeed.
-pub(crate) fn guest_root(sb: &str, script: &str) {
-    let out = root_sh(sb, script);
-    assert!(
-        out.status.success(),
-        "{script} in {sb}:\n{}",
-        err_text(&out)
-    );
-}
-
 /// A create whose first start fails removes the sandbox, and the remote `--clone` added with it:
-/// Alpine has no `agent` user or git, so the clone inside the VM fails.
+/// this Alpine has no git, so the clone inside the VM fails.
 #[test]
 #[ignore = "boots real VMs; run with `just e2e`"]
 pub(crate) fn a_failed_clone_create_removes_the_sandbox() {
     let e = E2e::new("clonefail");
     let remote = format!("sandbox-{}", e.name);
-    std::fs::write(e.workspace().join("README"), "host\n").unwrap();
-    e.git_ok(&["init", "-q", "-b", "main"]);
-    e.git_ok(&["add", "README"]);
-    e.git_ok(&["commit", "-q", "-m", "host commit"]);
+    e.git_repo();
 
     let archive = Image::alpine_agent_archive();
     let head = ["--clone", "-t", archive.to_str().unwrap(), "shell"];

@@ -127,17 +127,3 @@ pub(crate) fn host_services_open_and_close_live() {
         "no restart"
     );
 }
-
-/// Polls `check` every second until it returns true or `secs` pass.
-pub(crate) fn wait_until(secs: u64, mut check: impl FnMut() -> bool) -> bool {
-    let deadline = std::time::Instant::now() + std::time::Duration::from_secs(secs);
-    loop {
-        if check() {
-            return true;
-        }
-        if std::time::Instant::now() > deadline {
-            return false;
-        }
-        std::thread::sleep(std::time::Duration::from_secs(1));
-    }
-}

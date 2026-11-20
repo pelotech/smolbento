@@ -214,7 +214,7 @@ pub(crate) fn host_services_serve_a_detached_sandbox_and_are_removed_with_it() {
     let archive = Image::alpine_agent_archive();
     e.create(&second, &["-t", archive.to_str().unwrap(), "shell"]);
     assert!(!unit_files(&e, &second).is_empty());
-    smolvm(&["machine", "delete", "-n", &format!("sbx-{second}"), "-f"]);
+    smolvm_ok(&["machine", "delete", "-n", &format!("sbx-{second}"), "-f"]);
     e.ok(&["ls"]);
     assert!(!unit_files(&e, &second).is_empty(), "ls is read-only");
     let diagnose = e.sbt(&["diagnose"]);

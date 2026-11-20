@@ -144,11 +144,10 @@ impl E2e {
         self.ok(&["exec", sb, "sh", "-c", script])
     }
 
-    /// `create HEAD <workspace> --name NAME --cpus 1 -m 1g`: the size every e2e sandbox has. `head`
-    /// is the flags, then the agent.
-    fn create_args(&self, name: &str, head: &[&str]) -> Vec<String> {
+    /// `create HEAD <workspace> --name NAME --cpus 1 -m MEM`. `head` is the flags, then the agent.
+    fn create_args(&self, name: &str, head: &[&str], mem: &str) -> Vec<String> {
         let ws = self.workspace().display().to_string();
-        let tail = [ws.as_str(), "--name", name, "--cpus", "1", "-m", "1g"];
+        let tail = [ws.as_str(), "--name", name, "--cpus", "1", "-m", mem];
         std::iter::once("create")
             .chain(head.iter().copied())
             .chain(tail)
@@ -156,21 +155,27 @@ impl E2e {
             .collect()
     }
 
-    /// `bento create`, whatever the status (`create_args`).
+    /// `bento create` with 1 GiB, the size every e2e sandbox has, whatever the status.
     pub(crate) fn try_create(&self, name: &str, head: &[&str]) -> Output {
-        let args = self.create_args(name, head);
+        let args = self.create_args(name, head, "1g");
         self.sbt(&args.iter().map(String::as_str).collect::<Vec<_>>())
     }
 
-    /// `try_create` that must succeed. In CI it's traced (`traced`), so a create that hangs shows
-    /// the smolvm call it hangs on.
+    /// `try_create` that must succeed (`create_sized` with 1 GiB).
     pub(crate) fn create(&self, name: &str, head: &[&str]) {
-        let args = self.create_args(name, head);
+        self.create_sized(name, head, "1g");
+    }
+
+    /// `bento create` with `mem` that must succeed. In CI it's traced (`traced`), so a create that
+    /// hangs shows the smolvm call it hangs on.
+    fn create_sized(&self, name: &str, head: &[&str], mem: &str) {
+        let args = self.create_args(name, head, mem);
+        let args: Vec<&str> = args.iter().map(String::as_str).collect();
         if std::env::var_os("CI").is_some() {
-            self.traced(&args.iter().map(String::as_str).collect::<Vec<_>>());
+            self.traced(&args);
             return;
         }
-        let out = self.try_create(name, head);
+        let out = self.sbt(&args);
         assert!(
             out.status.success(),
             "create {name} {head:?} failed:\n{}",
@@ -178,9 +183,9 @@ impl E2e {
         );
     }
 
-    /// A local kit: directory `name` in the test's directory holding `spec` as `spec.yaml`.
+    /// A local v2 kit: directory `name` in the test's directory holding `spec` as `spec.yaml`.
     /// Returns its path.
-    pub(crate) fn kit_dir(&self, name: &str, spec: &str) -> String {
+    pub(crate) fn v2_kit_dir(&self, name: &str, spec: &str) -> String {
         let dir = self.dir.path().join(name);
         std::fs::create_dir_all(&dir).unwrap();
         std::fs::write(dir.join("spec.yaml"), spec).unwrap();
@@ -207,19 +212,15 @@ impl E2e {
         self.create_alpine_with("true");
     }
 
+    /// `create_alpine_as` with the `shell` agent.
     pub(crate) fn create_alpine_with(&self, then: &str) {
-        self.create_alpine_from("shell", &self.name, then);
-    }
-
-    /// `create_alpine` from [`E2e::v2_shell`], for tests that add v2 mixins.
-    pub(crate) fn create_alpine_v2(&self) {
-        self.create_alpine_from(&self.v2_shell(), &self.name, "apk add -q bash");
+        self.create_alpine_as("shell", then);
     }
 
     /// A v2 workload named `shell` with an agent file (`AGENTS.md`): v2 mixins
     /// need a v2 workload, as in sbx, and the built-in agents are v3 kits. Boot it with `-t`.
     pub(crate) fn v2_shell(&self) -> String {
-        self.kit_dir(
+        self.v2_kit_dir(
             "v2-shell",
             r#"schemaVersion: "2"
 kind: sandbox
@@ -234,12 +235,12 @@ agentInstructions:
         )
     }
 
-    /// An Alpine sandbox `name` (with its `agent` user) with `target` as the agent, then `then`
+    /// This test's Alpine sandbox (with its `agent` user) with `target` as the agent, then `then`
     /// run as root.
-    fn create_alpine_from(&self, target: &str, name: &str, then: &str) {
+    pub(crate) fn create_alpine_as(&self, target: &str, then: &str) {
         let archive = Image::alpine_agent_archive();
-        self.create(name, &["-t", archive.to_str().unwrap(), target]);
-        guest_root(name, then);
+        self.create(&self.name, &["-t", archive.to_str().unwrap(), target]);
+        guest_root(&self.name, then);
     }
 
     /// Creates this test's sandbox as a `--clone` of its workspace. A clone sandbox needs git and
@@ -255,11 +256,7 @@ agentInstructions:
 
     /// `bento create AGENT` with 2 GiB, for sbx's published agent kits (`real_agent_kits`).
     pub(crate) fn create_real_kit(&self, agent: &str) {
-        let ws = self.workspace().display().to_string();
-        let name = self.name.as_str();
-        self.ok(&[
-            "create", agent, &ws, "--name", name, "--cpus", "1", "-m", "2g",
-        ]);
+        self.create_sized(&self.name, &[agent], "2g");
     }
 
     /// A local v3 kit: directory `name` in the test's directory holding `yaml` as `name.yaml`.
@@ -333,10 +330,44 @@ impl Drop for Machines {
     }
 }
 
-/// Whether `smolvm args` succeeds.
-pub(crate) fn smolvm(args: &[&str]) {
+/// Runs `smolvm args`, which must succeed.
+pub(crate) fn smolvm_ok(args: &[&str]) {
     let out = smolvm_command().args(args).output().unwrap();
     assert!(out.status.success(), "smolvm {args:?}:\n{}", err_text(&out));
+}
+
+/// Runs `script` as root in sandbox `sb`, with `bento smolvm` (not `bento exec`) so it works before
+/// setup.
+pub(crate) fn root_sh(sb: &str, script: &str) -> Output {
+    let machine = format!("sbx-{sb}");
+    let args = [
+        "machine", "exec", "--name", &machine, "-u", "root", "--", "sh", "-c", script,
+    ];
+    smolvm_command().args(args).output().unwrap()
+}
+
+/// `root_sh` that must succeed.
+pub(crate) fn guest_root(sb: &str, script: &str) {
+    let out = root_sh(sb, script);
+    assert!(
+        out.status.success(),
+        "{script} in {sb}:\n{}",
+        err_text(&out)
+    );
+}
+
+/// Polls `check` every second until it returns true or `secs` pass.
+pub(crate) fn wait_until(secs: u64, mut check: impl FnMut() -> bool) -> bool {
+    let deadline = std::time::Instant::now() + std::time::Duration::from_secs(secs);
+    loop {
+        if check() {
+            return true;
+        }
+        if std::time::Instant::now() > deadline {
+            return false;
+        }
+        std::thread::sleep(std::time::Duration::from_secs(1));
+    }
 }
 
 /// A throwaway `registry:2` in its own smolvm machine on a free loopback port, for published-kit
@@ -357,7 +388,7 @@ impl Registry {
             port: smolbento::sandbox::options::free_port().unwrap(),
         };
         let publish = format!("{}:5000", r.port);
-        smolvm(&[
+        smolvm_ok(&[
             "machine",
             "run",
             "-d",
