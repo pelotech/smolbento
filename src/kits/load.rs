@@ -1003,7 +1003,7 @@ mod tests {
         assert_eq!(fake.call_lines().len(), builds);
         let lines = fake.call_lines();
         assert!(
-            lines.iter().any(|l| l.starts_with("machine cp /")),
+            lines.iter().any(|l| l.contains(" upload-folder ")),
             "{lines:?}"
         );
     }
