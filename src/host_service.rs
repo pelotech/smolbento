@@ -563,9 +563,16 @@ pub fn render_systemd_service(
         .iter()
         .map(|(k, v)| format!("Environment={}\n", systemd_quote(&format!("{k}={v}"))))
         .collect();
+    // The bridge spawns clipboard holders (wl-copy/xclip/xsel) and browsers that must outlive the
+    // short-lived `_serve bridge` process; systemd's default control-group KillMode kills them on exit.
+    let kill = if kind == Kind::Bridge {
+        "KillMode=process\n"
+    } else {
+        ""
+    };
     format!(
         "[Unit]\nDescription=smolbento {} connection for sandbox {}\n\n[Service]\n\
-         ExecStart={} _serve {} {}\nStandardInput=socket\nStandardOutput=null\nStandardError=null\n{env}",
+         ExecStart={} _serve {} {}\nStandardInput=socket\nStandardOutput=null\nStandardError=null\n{kill}{env}",
         kind.as_str(),
         sandbox.replace('%', "%%"),
         systemd_quote(&exe.display().to_string()),
@@ -804,6 +811,7 @@ mod tests {
             "{svc}"
         );
         assert!(svc.contains("StandardInput=socket\n"), "{svc}");
+        assert!(svc.contains("KillMode=process\n"), "{svc}");
         assert!(svc.contains("Environment=\"K=a\\\"b$$c%%d\"\n"), "{svc}");
     }
 
