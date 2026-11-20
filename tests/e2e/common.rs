@@ -208,7 +208,7 @@ impl E2e {
     }
 
     pub(crate) fn create_alpine_with(&self, then: &str) {
-        self.create_alpine_named(&self.name, then);
+        self.create_alpine_from("shell", &self.name, then);
     }
 
     /// `create_alpine` from [`E2e::v2_shell`], for tests that add v2 mixins.
@@ -234,31 +234,67 @@ agentInstructions:
         )
     }
 
-    /// An Alpine sandbox `name` (with its `agent` user), then `then` run as root.
-    fn create_alpine_named(&self, name: &str, then: &str) {
-        self.create_alpine_from("shell", name, then);
-    }
-
-    /// `create_alpine_named` with `target` as the agent.
+    /// An Alpine sandbox `name` (with its `agent` user) with `target` as the agent, then `then`
+    /// run as root.
     fn create_alpine_from(&self, target: &str, name: &str, then: &str) {
         let archive = Image::alpine_agent_archive();
         self.create(name, &["-t", archive.to_str().unwrap(), target]);
         guest_root(name, then);
     }
 
-    /// Creates this test's sandbox as a `--clone` of its workspace. A clone sandbox needs git from
-    /// its first start, which the Alpine archive lacks (a create that fails its first start removes
-    /// the sandbox), so it comes from a template saved with git installed.
+    /// Creates this test's sandbox as a `--clone` of its workspace. A clone sandbox needs git and
+    /// the `agent` user at its first start (a create that fails it removes the sandbox), so it
+    /// boots [`Image::git_agent_archive`].
     pub(crate) fn create_clone(&self) {
-        let base = format!("{}-base", self.name);
-        // Removed below; the guard covers a panic in between.
-        let _base = Forks(vec![base.clone()]);
-        self.create_alpine_named(&base, "apk add -q git");
-        self.ok(&["stop", &base]);
-        self.ok(&["template", "save", &base, "e2e-git:v1"]);
-        self.ok(&["rm", "-f", &base]);
-        let head = ["--clone", "-t", "e2e-git:v1", "--pull", "never", "shell"];
-        self.create(&self.name, &head);
+        let archive = Image::git_agent_archive();
+        self.create(
+            &self.name,
+            &["--clone", "-t", archive.to_str().unwrap(), "shell"],
+        );
+    }
+
+    /// `bento create AGENT` with 2 GiB, for sbx's published agent kits (`real_agent_kits`).
+    pub(crate) fn create_real_kit(&self, agent: &str) {
+        let ws = self.workspace().display().to_string();
+        let name = self.name.as_str();
+        self.ok(&[
+            "create", agent, &ws, "--name", name, "--cpus", "1", "-m", "2g",
+        ]);
+    }
+
+    /// A local v3 kit: directory `name` in the test's directory holding `yaml` as `name.yaml`.
+    /// Returns its path.
+    pub(crate) fn v3_kit_dir(&self, name: &str, yaml: &str) -> String {
+        let dir = self.dir.path().join(name);
+        std::fs::create_dir_all(&dir).unwrap();
+        std::fs::write(dir.join(format!("{name}.yaml")), yaml).unwrap();
+        dir.display().to_string()
+    }
+
+    /// Makes the workspace a git repository on `main` with one commit, "host commit", of `README`.
+    pub(crate) fn git_repo(&self) {
+        std::fs::write(self.workspace().join("README"), "host\n").unwrap();
+        self.git_ok(&["init", "-q", "-b", "main"]);
+        self.git_ok(&["add", "README"]);
+        self.git_ok(&["commit", "-q", "-m", "host commit"]);
+    }
+
+    /// Commits `msg`, appended to `README`, in sandbox `sb`'s clone of the workspace.
+    pub(crate) fn guest_commit(&self, sb: &str, msg: &str) {
+        self.sh_ok(
+            sb,
+            &format!(
+                "echo {msg} >> README && git -c user.name=a -c user.email=a@a \
+                 -c commit.gpgsign=false commit -q -am {msg}"
+            ),
+        );
+    }
+
+    /// A secret `env` for httpbin.org whose value is [`BASIC_SECRET`].
+    pub(crate) fn httpbin_secret(&self, env: &str) {
+        let command = format!("printf {BASIC_SECRET}");
+        let args = ["--host", "httpbin.org", "--env", env, "--command", &command];
+        self.ok(&[&["secret", "set-custom"][..], &args].concat());
     }
 
     pub(crate) fn state(&self) -> String {
@@ -280,6 +316,20 @@ impl Drop for E2e {
         // Machines deleted with smolvm leave host service units behind: any state-changing
         // command sweeps the ones of this test's own data dir (here `rm` of a name that is gone).
         let _ = self.sbt(&["rm", "-f", &self.name]);
+    }
+}
+
+/// Deletes the machines of these sandboxes on drop: extra sandboxes a test makes besides its own.
+/// Declare it after the `E2e`, so it drops first.
+pub(crate) struct Machines(pub(crate) Vec<String>);
+
+impl Drop for Machines {
+    fn drop(&mut self) {
+        for n in &self.0 {
+            let _ = smolvm_command()
+                .args(["machine", "delete", "-n", &format!("sbx-{n}"), "-f"])
+                .output();
+        }
     }
 }
 
@@ -575,18 +625,81 @@ impl Image {
 
     /// Alpine with an `agent` account (`with_agent_account`) as an archive for `-t`: the
     /// sandbox's workload user is `agent`, so the image must have it before the first start.
-    /// Built once per run and shared by every test.
     pub(crate) fn alpine_agent_archive() -> PathBuf {
-        let path = std::env::temp_dir().join(format!(
-            "smolbento-e2e-alpine-agent-{}.tar",
-            smolbento::util::host_uid()
-        ));
+        Image::shared_archive("alpine-agent", Image::alpine_agent)
+    }
+
+    /// `alpine/git` (git and OpenSSH from the first start) with an `agent` account, as an image
+    /// that idles in a shell.
+    pub(crate) fn git_agent() -> Image {
+        let base = Image::pull("alpine/git");
+        let mut image = base.clone().with_agent_account(&base);
+        image.config["config"]["Entrypoint"] = serde_json::Value::Null;
+        image.config["config"]["Cmd"] = serde_json::json!(["/bin/sh"]);
+        image
+    }
+
+    /// [`Image::git_agent`] as an archive for `-t`.
+    pub(crate) fn git_agent_archive() -> PathBuf {
+        Image::shared_archive("git-agent", Image::git_agent)
+    }
+
+    /// The archive `smolbento-e2e-<name>-<uid>.tar` in the temp dir, made from `image` the first
+    /// time a test asks, and then shared by every test of the run (and later runs).
+    fn shared_archive(name: &str, image: fn() -> Image) -> PathBuf {
+        let uid = smolbento::util::host_uid();
+        let path = std::env::temp_dir().join(format!("smolbento-e2e-{name}-{uid}.tar"));
         if !path.exists() {
             let tmp = path.with_extension(format!("tmp{}", std::process::id()));
-            Image::alpine_agent().save_oci(&tmp);
+            image().save_oci(&tmp);
             std::fs::rename(&tmp, &path).unwrap();
         }
         path
+    }
+
+    /// Appends a layer giving Alpine (`base`) an `agent` account with the host's uid and its own
+    /// home, as sbx images have one before any kit hook runs: the skills steps hand directories
+    /// and links to it, and the tests `bento exec` as it.
+    pub(crate) fn with_agent_account(mut self, base: &Image) -> Image {
+        let uid = smolbento::util::host_uid();
+        let passwd =
+            base.file("etc/passwd") + &format!("agent:x:{uid}:{uid}::/home/agent:/bin/sh\n");
+        let group = base.file("etc/group") + &format!("agent:x:{uid}:\n");
+        let mut b = tar::Builder::new(Vec::new());
+        let mut entry = |path: &str, body: Option<&str>, owner: u64| {
+            let mut h = tar::Header::new_gnu();
+            h.set_uid(owner);
+            h.set_gid(owner);
+            match body {
+                Some(body) => {
+                    h.set_mode(0o644);
+                    h.set_size(body.len() as u64);
+                    h.set_cksum();
+                    b.append_data(&mut h, path, body.as_bytes()).unwrap();
+                }
+                None => {
+                    h.set_entry_type(tar::EntryType::Directory);
+                    h.set_mode(0o755);
+                    h.set_size(0);
+                    h.set_cksum();
+                    b.append_data(&mut h, path, std::io::empty()).unwrap();
+                }
+            }
+        };
+        entry("etc/", None, 0);
+        entry("etc/passwd", Some(&passwd), 0);
+        entry("etc/group", Some(&group), 0);
+        entry("home/", None, 0);
+        entry("home/agent/", None, uid.into());
+        let data = b.into_inner().unwrap();
+        let diff_id = smolbento::util::sha256_digest(&data);
+        self.config["rootfs"]["diff_ids"]
+            .as_array_mut()
+            .unwrap()
+            .push(diff_id.into());
+        self.layers
+            .push((data, "application/vnd.oci.image.layer.v1.tar".to_string()));
+        self
     }
 
     /// The image's `path` (e.g. `etc/passwd`) from its topmost layer that has it, read with the
@@ -703,6 +816,10 @@ pub(crate) fn root_out(sb: &str, script: &str) -> String {
 
 /// A secret httpbin can check: the base64 of `user:real-secret-xyz`, for `Authorization: Basic`.
 pub(crate) const BASIC_SECRET: &str = "dXNlcjpyZWFsLXNlY3JldC14eXo=";
+
+/// A guest shell command printing httpbin.org's first IPv4 address.
+pub(crate) const HTTPBIN_IP: &str =
+    "nslookup httpbin.org 2>/dev/null | awk '/^Address/ && $NF !~ /:/ {print $NF}' | head -n 1";
 
 /// Whether httpbin accepts `Authorization: Basic $VAR` from sandbox `sb` as the password `pass`
 /// of `user`. smolvm (1.35+) scrubs an injected value out of what the host sends back, so an echo

@@ -15,9 +15,38 @@ test:
 needs_dhi := "test(local_kit_builds_from_a_registry_that_needs_a_login)"
 
 # Run end-to-end tests against real smolvm VMs (needs a hypervisor), `threads` VMs at a time;
-# further arguments go to nextest (e.g. `--partition slice:1/3`)
+# further arguments go to nextest (e.g. `-E 'test(clone)'`)
 e2e threads="2" *args:
     cargo nextest run --locked --run-ignored only --test-threads {{threads}} --no-fail-fast -E 'binary(e2e) & !({{needs_dhi}})' {{args}}
+
+# The slowest e2e tests (CI, two at a time), dealt to `e2e-shard`'s shards by hand: nextest's
+# `slice` deals by position, whatever a test takes, and once put most of them on one runner. CI
+# times: nix 125s; claude 52s, local_v3 36s; shell 46s, fork 28s, clone 24s; the rest 23s or less.
+# A renamed test just joins the rest. `.config/nextest.toml` starts these first (keep it in step).
+e2e_heavy_1 := "test(=kits::real_claude_kit_binds_its_api_key_and_seeds_its_settings) | test(=kits::local_v3_kit_builds_in_the_builder_sandbox)"
+e2e_heavy_2 := "test(=kits::real_shell_kit_runs_dockerd_across_restarts) | test(=fork_template::fork_round_trip) | test(=basics::clone_round_trip)"
+e2e_heavy_3 := "test(=kits::nix_kit_works_for_an_agent_and_a_workload_image_user)"
+
+# Run CI shard `shard` (1, 2 or 3) of `e2e`: its own heavy tests (e2e_heavy_N) and nextest's
+# `slice:N/3` of the rest, in one nextest run so the heavy ones run beside the others.
+e2e-shard shard threads="2" *args:
+    #!/usr/bin/env bash
+    set -euo pipefail
+    case "{{shard}}" in
+        1) mine='{{e2e_heavy_1}}' ;;
+        2) mine='{{e2e_heavy_2}}' ;;
+        3) mine='{{e2e_heavy_3}}' ;;
+        *) echo "shard is 1, 2 or 3" >&2; exit 2 ;;
+    esac
+    # Every test runs on exactly one shard. The heavy sets are disjoint and together are every
+    # heavy test. `rest` is the same set on every shard (every e2e test that isn't heavy), and
+    # nextest partitions after filtering, so slice 1, 2 and 3 of it are disjoint and cover it.
+    rest=$(cargo nextest list --locked --run-ignored only --message-format oneline \
+        --partition "slice:{{shard}}/3" \
+        -E 'binary(e2e) & !({{needs_dhi}}) & !({{e2e_heavy_1}} | {{e2e_heavy_2}} | {{e2e_heavy_3}})' \
+        | awk '{ printf " | test(=%s)", $2 }')
+    cargo nextest run --locked --run-ignored only --test-threads {{threads}} --no-fail-fast \
+        -E "binary(e2e) & ($mine$rest)" {{args}}
 
 # Run the e2e test that builds from dhi.io (needs a Docker Hardened Images login; see needs_dhi)
 e2e-dhi *args:

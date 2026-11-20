@@ -2,6 +2,7 @@
 # between tests (in the tests' own smolvm home) so BuildKit keeps its cache. They run one at a time:
 # a build stops the builder afterwards when it wasn't running, which would stop it under another
 # test's build, and one with other registry logins recreates it. Every profile inherits this.
+# CI's `just e2e-shard` puts the two `just e2e` runs on different runners, each with its builder.
 [test-groups]
 builder = { max-threads = 1 }
 
@@ -12,6 +13,19 @@ filter = '''binary(e2e) & (
     | test(nix_kit_works_for_an_agent_and_a_workload_image_user)
 )'''
 test-group = 'builder'
+
+# The slowest e2e tests (`e2e_heavy_*` in the justfile, which deals them to the CI shards) start
+# first, so the longest of a shard doesn't start last and run on alone.
+[[profile.default.overrides]]
+filter = '''binary(e2e) & (
+    test(=kits::nix_kit_works_for_an_agent_and_a_workload_image_user)
+    | test(=kits::real_claude_kit_binds_its_api_key_and_seeds_its_settings)
+    | test(=kits::real_shell_kit_runs_dockerd_across_restarts)
+    | test(=kits::local_v3_kit_builds_in_the_builder_sandbox)
+    | test(=fork_template::fork_round_trip)
+    | test(=basics::clone_round_trip)
+)'''
+priority = 10
 
 # CI's e2e job runs with NEXTEST_PROFILE=ci. Several e2e tests reach example.com and httpbin.org,
 # so a failed e2e test gets one retry there; nextest still reports it as flaky.

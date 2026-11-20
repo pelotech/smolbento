@@ -1,52 +1,5 @@
 use super::*;
 
-impl Image {
-    /// Appends a layer giving Alpine (`base`) an `agent` account with the host's uid and its own
-    /// home, as sbx images have one before any kit hook runs: the skills steps hand directories
-    /// and links to it, and the tests `bento exec` as it.
-    pub(crate) fn with_agent_account(mut self, base: &Image) -> Image {
-        let uid = smolbento::util::host_uid();
-        let passwd =
-            base.file("etc/passwd") + &format!("agent:x:{uid}:{uid}::/home/agent:/bin/sh\n");
-        let group = base.file("etc/group") + &format!("agent:x:{uid}:\n");
-        let mut b = tar::Builder::new(Vec::new());
-        let mut entry = |path: &str, body: Option<&str>, owner: u64| {
-            let mut h = tar::Header::new_gnu();
-            h.set_uid(owner);
-            h.set_gid(owner);
-            match body {
-                Some(body) => {
-                    h.set_mode(0o644);
-                    h.set_size(body.len() as u64);
-                    h.set_cksum();
-                    b.append_data(&mut h, path, body.as_bytes()).unwrap();
-                }
-                None => {
-                    h.set_entry_type(tar::EntryType::Directory);
-                    h.set_mode(0o755);
-                    h.set_size(0);
-                    h.set_cksum();
-                    b.append_data(&mut h, path, std::io::empty()).unwrap();
-                }
-            }
-        };
-        entry("etc/", None, 0);
-        entry("etc/passwd", Some(&passwd), 0);
-        entry("etc/group", Some(&group), 0);
-        entry("home/", None, 0);
-        entry("home/agent/", None, uid.into());
-        let data = b.into_inner().unwrap();
-        let diff_id = smolbento::util::sha256_digest(&data);
-        self.config["rootfs"]["diff_ids"]
-            .as_array_mut()
-            .unwrap()
-            .push(diff_id.into());
-        self.layers
-            .push((data, "application/vnd.oci.image.layer.v1.tar".to_string()));
-        self
-    }
-}
-
 pub(crate) const SKILLS_DIR: &str = "/home/agent/.claude/skills";
 
 /// A published mixin giving an Alpine `shell` sandbox an `agent` account and a read-write-capable
