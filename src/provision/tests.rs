@@ -1063,9 +1063,13 @@ fn settle_agent_checks_fallback_socket_dir_when_service_socket_path_is_too_long(
     let long = tempfile::tempdir_in("/tmp").unwrap();
     let deep = long.path().join("a".repeat(80));
     std::fs::create_dir_all(&deep).unwrap();
-    let (svc, _ctl) = crate::host_service::fake::services(&deep, crate::host_service::Flavor::Launchd, "ns1");
+    let (svc, _ctl) =
+        crate::host_service::fake::services(&deep, crate::host_service::Flavor::Launchd, "ns1");
     assert!(svc.usable());
-    assert!(svc.plan("s1").is_none(), "service path must exceed socket limit");
+    assert!(
+        svc.plan("s1").is_none(),
+        "service path must exceed socket limit"
+    );
     let svc_dir = svc.sock_dir().to_path_buf();
     t.ctx.services = svc;
 

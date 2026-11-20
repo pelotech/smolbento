@@ -959,10 +959,5 @@ fn rm_all_clears_bindings() {
     file.bind("github", &["api.corp.example".into()], &[]);
     file.save(&t.ctx.paths).unwrap();
     t.sbt(&["secret", "rm", "--all", "-f"]).unwrap();
-    assert!(
-        SecretsFile::load(&t.ctx.paths)
-            .unwrap()
-            .bindings
-            .is_empty()
-    );
+    assert!(SecretsFile::load(&t.ctx.paths).unwrap().bindings.is_empty());
 }

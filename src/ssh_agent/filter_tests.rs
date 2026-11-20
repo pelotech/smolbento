@@ -225,7 +225,11 @@ fn a_login_needs_a_verified_binding_to_a_listed_server() {
     // Once forwarding is set on a connection, it latches: later non-forwarding binds fail,
     // and prior bindings are cleared so a compromised host can't downgrade or reuse them.
     assert_eq!(
-        run(&a, &kh, &[bind(&gh, SESSION, true), bind(&gh, SESSION, false)]),
+        run(
+            &a,
+            &kh,
+            &[bind(&gh, SESSION, true), bind(&gh, SESSION, false)]
+        ),
         Verdict::Fail
     );
     assert_eq!(
@@ -398,10 +402,7 @@ fn other_login_data_is_refused() {
     // RFC 4252 §7 requires service == "ssh-connection".
     let wrong_service = {
         let mut d = good.clone();
-        let pos = d
-            .windows(14)
-            .position(|w| w == b"ssh-connection")
-            .unwrap();
+        let pos = d.windows(14).position(|w| w == b"ssh-connection").unwrap();
         d[pos..pos + 14].copy_from_slice(b"ssh-otherproto");
         d
     };
