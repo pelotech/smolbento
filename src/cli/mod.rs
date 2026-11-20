@@ -74,8 +74,11 @@ pub fn main(args: impl IntoIterator<Item = OsString>) -> Result<i32> {
     let (settings, config_error) = Settings::load(&paths, env.clone());
     let store = crate::secrets::store::platform(&paths, &env);
     let smolvm = crate::smolvm::locate::locate(&settings, &env)?;
+    let uid = crate::util::host_uid();
     let runner = with_image_cache(
-        ProcessRunner::for_cmd(&smolvm).debug(cli.debug),
+        ProcessRunner::for_cmd(&smolvm)
+            .ready(crate::smolvm::locate::Ready::new(&smolvm, uid, &env))
+            .debug(cli.debug),
         &settings,
         &env,
     );
@@ -95,7 +98,6 @@ pub fn main(args: impl IntoIterator<Item = OsString>) -> Result<i32> {
         stdin_tty: std::io::stdin().is_terminal(),
         no_input: false,
         stdout_tty: std::io::stdout().is_terminal(),
-        uid: crate::util::host_uid(),
         store,
         config_error,
         out: Out::Stdout,
@@ -150,11 +152,6 @@ pub fn dispatch<R: Runner>(ctx: &mut Ctx<R>, cli: Cli) -> Result<i32> {
         if matches!(cmd, Cmd::Settings(_)) {
             crate::warning!("ignoring {}: {err}", path.display());
         }
-    }
-    if cmd.needs_smolvm() {
-        refuse_root(ctx.uid)?;
-        crate::smolvm::locate::check_home(&ctx.smolvm)?;
-        crate::smolvm::locate::ensure_installed(&ctx.smolvm, &ctx.env)?;
     }
     match cmd {
         Cmd::Run(a) => run::run(ctx, &a),
@@ -236,18 +233,6 @@ fn version<R: Runner>(ctx: &Ctx<R>, output: &OutputArgs) -> Result<i32> {
         Err(e) => writeln!(out, "smolvm not available: {e:#}")?,
     }
     Ok(0)
-}
-
-/// smolvm shows a workspace as owned by the sandbox's workload user only when it runs as a normal
-/// user: as root, or on a directory owned by root, it maps nothing, so the agent couldn't write.
-fn refuse_root(uid: u32) -> Result<()> {
-    if uid == 0 {
-        bail!(
-            "don't run bento as root: smolvm doesn't map a workspace owned by root to the agent user, so \
-the agent couldn't write it; run it as your normal user"
-        );
-    }
-    Ok(())
 }
 
 /// sbx flags smolbento parses but doesn't implement: the first one set is refused (exit 2).
@@ -370,34 +355,6 @@ mod tests {
     use crate::testutil::*;
 
     /// `ls`, the bare command (which lists too), and `ls` with an explicit smolvm home.
-    #[test]
-    fn a_command_that_needs_smolvm_installs_it_first() {
-        // Short, so its sockets fit macOS's limit (an explicit home is checked).
-        let home = tempfile::tempdir_in("/tmp").unwrap();
-        let home = home.path().display().to_string();
-        let ls = &["ls"][..];
-        for (args, home) in [(ls, None), (&[][..], None), (ls, Some(home.as_str()))] {
-            // Not the pinned release, so it fails the checksum: proof that it was downloaded.
-            let (url, seen) = http_server(b"not smolvm".to_vec());
-            let mut env = vec![("SMOLBENTO_SMOLVM_URL", url.as_str())];
-            env.extend(home.map(|h| ("SMOLBENTO_SMOLVM_HOME", h)));
-            let mut t = test_env(&env);
-            t.use_managed_smolvm();
-            let err = t.sbt_err(args);
-            assert!(err.contains("checksum"), "{args:?}: {err}");
-            assert_eq!(seen.lock().unwrap().len(), 1, "{args:?}");
-        }
-    }
-
-    #[test]
-    fn settings_and_help_never_download() {
-        let (url, seen) = http_server(b"not smolvm".to_vec());
-        let mut t = test_env(&[("SMOLBENTO_SMOLVM_URL", &url)]);
-        t.use_managed_smolvm();
-        t.sbt(&["settings", "ls"]).unwrap();
-        t.sbt(&["version"]).unwrap();
-        assert!(seen.lock().unwrap().is_empty(), "nothing was downloaded");
-    }
 
     #[test]
     fn pending_and_cloud_commands_exit_2() {
@@ -445,21 +402,6 @@ mod tests {
             assert_eq!(exit_code(&err), 2, "{args:?}: {err:#}");
             assert!(err.to_string().contains("not implemented yet"), "{err:#}");
         }
-    }
-
-    #[test]
-    fn root_is_refused() {
-        assert!(
-            refuse_root(0)
-                .unwrap_err()
-                .to_string()
-                .contains("don't run bento as root")
-        );
-        refuse_root(501).unwrap();
-        let mut t = test_env(&[]);
-        t.ctx.uid = 0;
-        let err = t.sbt(&["ls"]).unwrap_err();
-        assert!(err.to_string().contains("don't run bento as root"), "{err}");
     }
 
     #[test]

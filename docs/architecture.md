@@ -10,8 +10,9 @@ bento ── clap CLI (mirrors sbx) ── sandbox logic ── Runner ──> s
 ```
 
 The smolvm it drives is a release pinned in `smolvm.lock` (version and SHA-256 per platform, built
-into the binary). The first command that needs smolvm downloads it, checks the checksum and unpacks
-it into `~/.smolbento/engine/<version>/`. Every call sets `SMOLVM_DATA_DIR=~/.smolbento`, so
+into the binary). The real runner downloads it before its first smolvm process, so any command that
+runs smolvm gets it first, checks the checksum and unpacks it into
+`~/.smolbento/engine/<version>/`. Every call sets `SMOLVM_DATA_DIR=~/.smolbento`, so
 smolbento's machines and cache stay apart from a smolvm the user runs themselves.
 
 All smolvm calls go through the `Runner` trait in `src/smolvm/`. The real runner parses smolvm's JSON

@@ -167,34 +167,6 @@ pub enum Cmd {
     Serve { kind: String, sandbox: String },
 }
 
-impl Cmd {
-    /// Commands that talk to smolvm (and so check its version first).
-    pub fn needs_smolvm(&self) -> bool {
-        matches!(
-            self,
-            Cmd::Run(_)
-                | Cmd::Create(_)
-                | Cmd::Exec(_)
-                | Cmd::Ls(_)
-                | Cmd::Inspect(_)
-                | Cmd::Start { .. }
-                | Cmd::Stop { .. }
-                | Cmd::Rm(_)
-                | Cmd::Prune(_)
-                | Cmd::Reset(_)
-                | Cmd::Cp(_)
-                | Cmd::Fork(_)
-                | Cmd::Ports(_)
-                | Cmd::UploadPack { .. }
-                | Cmd::Bridge { .. }
-                | Cmd::Ssh(_)
-                | Cmd::Smolvm(_)
-                | Cmd::Template(TemplateCmd::Save(_))
-                | Cmd::Env(EnvCmd::Create(_) | EnvCmd::Run(_) | EnvCmd::Exec(_) | EnvCmd::Rm(_))
-        )
-    }
-}
-
 #[derive(Debug, Subcommand)]
 pub enum SshCmd {
     /// Serves SSH for the sandbox named by HOST (NAME.sbx) on stdin and stdout

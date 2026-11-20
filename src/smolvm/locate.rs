@@ -80,20 +80,68 @@ fn absolute_home(h: &str, env: &BTreeMap<String, String>) -> Result<PathBuf> {
     Ok(p)
 }
 
-/// Downloads the pinned smolvm when `cmd` is the managed copy and it's missing; progress goes to
-/// stderr. An explicit smolvm is the user's: nothing to do.
-pub fn ensure_installed(cmd: &SmolvmCmd, env: &BTreeMap<String, String>) -> Result<()> {
+/// Downloads the pinned smolvm from `releases` when `cmd` is the managed copy and it's missing;
+/// progress goes to stderr. An explicit smolvm is the user's: nothing to do.
+fn ensure_installed(cmd: &SmolvmCmd, releases: &str) -> Result<()> {
     if !cmd.managed || cmd.bin.is_file() {
         return Ok(());
     }
-    let base = env.get(URL_ENV).map_or(pin::RELEASES, String::as_str);
     install::ensure(
         &cmd.home,
         pin::pin(),
         pin::host_platform()?,
-        base,
+        releases,
         &mut |line| eprintln!("{line}"),
     )?;
+    Ok(())
+}
+
+/// What must hold before smolbento runs smolvm: not as root, a home whose sockets fit, and the
+/// pinned release downloaded. Checked once, by the runner before its first smolvm process, so a
+/// command needs smolvm exactly when it runs it: no list of commands to keep up to date.
+#[derive(Debug)]
+pub struct Ready {
+    cmd: SmolvmCmd,
+    uid: u32,
+    releases: String,
+    done: std::sync::OnceLock<()>,
+}
+
+impl Ready {
+    pub fn new(cmd: &SmolvmCmd, uid: u32, env: &BTreeMap<String, String>) -> Self {
+        Ready {
+            cmd: cmd.clone(),
+            uid,
+            releases: env
+                .get(URL_ENV)
+                .map_or(pin::RELEASES, String::as_str)
+                .to_string(),
+            done: std::sync::OnceLock::new(),
+        }
+    }
+
+    /// Checks (and downloads) once; later calls are free.
+    pub fn check(&self) -> Result<()> {
+        if self.done.get().is_some() {
+            return Ok(());
+        }
+        refuse_root(self.uid)?;
+        check_home(&self.cmd)?;
+        ensure_installed(&self.cmd, &self.releases)?;
+        let _ = self.done.set(());
+        Ok(())
+    }
+}
+
+/// smolvm shows a workspace as owned by the sandbox's workload user only when it runs as a normal
+/// user: as root, or on a directory owned by root, it maps nothing, so the agent couldn't write.
+fn refuse_root(uid: u32) -> Result<()> {
+    if uid == 0 {
+        bail!(
+            "don't run bento as root: smolvm doesn't map a workspace owned by root to the agent user, so \
+the agent couldn't write it; run it as your normal user"
+        );
+    }
     Ok(())
 }
 
@@ -144,6 +192,57 @@ mod tests {
         }
         let settings = crate::config::Settings::load(&t.ctx.paths, env.clone()).0;
         locate(&settings, &env)
+    }
+
+    /// The managed smolvm in a short home (its sockets must fit macOS's limit), with releases
+    /// from a server that serves `not smolvm`: a download fails its checksum, which proves it ran.
+    #[allow(clippy::type_complexity)]
+    fn managed() -> (
+        Ready,
+        Ready,
+        std::sync::Arc<std::sync::Mutex<Vec<String>>>,
+        tempfile::TempDir,
+    ) {
+        let home = tempfile::tempdir_in("/tmp").unwrap();
+        let cmd =
+            located(&[("SMOLBENTO_SMOLVM_HOME", &home.path().display().to_string())]).unwrap();
+        assert!(cmd.managed && !cmd.bin.is_file());
+        let (url, seen) = http_server(b"not smolvm".to_vec());
+        let env = BTreeMap::from([(URL_ENV.to_string(), url)]);
+        (
+            Ready::new(&cmd, 501, &env),
+            Ready::new(&cmd, 0, &env),
+            seen,
+            home,
+        )
+    }
+
+    /// Any command that runs smolvm gets the pinned release first: the runner checks before its
+    /// first smolvm process, so no list of commands can miss one.
+    #[test]
+    fn ready_downloads_the_pinned_smolvm_at_the_first_check_only() {
+        let (ready, _, seen, _home) = managed();
+        assert!(seen.lock().unwrap().is_empty(), "nothing before a check");
+        let err = ready.check().unwrap_err();
+        assert!(format!("{err:#}").contains("checksum"), "{err:#}");
+        assert_eq!(seen.lock().unwrap().len(), 1);
+    }
+
+    #[test]
+    fn ready_refuses_root_before_downloading() {
+        let (_, root, seen, _home) = managed();
+        let err = root.check().unwrap_err();
+        assert!(err.to_string().contains("don't run bento as root"), "{err}");
+        assert!(seen.lock().unwrap().is_empty());
+    }
+
+    #[test]
+    fn ready_leaves_an_explicit_smolvm_alone() {
+        let (url, seen) = http_server(b"not smolvm".to_vec());
+        let cmd = located(&[("SMOLBENTO_SMOLVM", "/opt/smolvm")]).unwrap();
+        let env = BTreeMap::from([(URL_ENV.to_string(), url)]);
+        Ready::new(&cmd, 501, &env).check().unwrap();
+        assert!(seen.lock().unwrap().is_empty());
     }
 
     #[test]

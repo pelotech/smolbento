@@ -27,8 +27,6 @@ pub struct Ctx<R: Runner> {
     pub no_input: bool,
     /// Whether stdout is a terminal: progress redraws in place and uses colour only then.
     pub stdout_tty: bool,
-    /// The host user's uid.
-    pub uid: u32,
     /// Where stored secret values live (OS keychain, or the 0600 file).
     pub store: Box<dyn crate::secrets::store::SecretStore>,
     /// Why config.toml couldn't be loaded; only `diagnose` and `settings` run despite it.
