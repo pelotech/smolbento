@@ -209,13 +209,7 @@ fn parse_warn(yaml: &str, dir: &Path) -> Result<(Kit, Vec<String>)> {
 }
 
 fn cap(name: &str, body: CapBody) -> Cap {
-    Cap {
-        ty: format!("{CAP_NS}{name}"),
-        optional: false,
-        body,
-        group: None,
-        config: None,
-    }
+    Cap::new(format!("{CAP_NS}{name}"), false, body)
 }
 
 #[derive(Deserialize)]

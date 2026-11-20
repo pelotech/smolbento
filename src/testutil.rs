@@ -9,6 +9,9 @@ use crate::smolvm::Smolvm;
 use crate::smolvm::fake::FakeRunner;
 pub use crate::testgit::*;
 
+/// A sandbox for [`TestEnv::sandboxes`]: (name, state, labels besides `sbx.name`).
+pub type Listed<'a> = (&'a str, &'a str, &'a [(&'a str, &'a str)]);
+
 pub struct TestEnv {
     pub ctx: Ctx<FakeRunner>,
     /// Keeps the temp dirs alive for the test's duration.
@@ -153,12 +156,32 @@ impl TestEnv {
     /// Makes `machine status` answer with sandbox `name` (machine `sbx-<name>`) in `state`. It
     /// launches `bash` unless `labels` give an `sbx.command`, as every kit sandbox records one.
     pub fn sandbox(&self, name: &str, state: &str, labels: &[(&str, &str)]) -> &FakeRunner {
-        let mut all = vec![("sbx.name", name)];
-        if !labels.iter().any(|(k, _)| *k == "sbx.command") {
-            all.push(("sbx.command", r#"["bash"]"#));
+        self.runner()
+            .ok(&["machine", "status"], &sandbox_json(name, state, labels))
+    }
+
+    /// Makes `machine ls` list these (name, state, labels) sandboxes and `machine status -n` answer
+    /// for each, labelled as [`Self::sandbox`] labels them.
+    pub fn sandboxes(&self, list: &[Listed]) -> &FakeRunner {
+        let jsons: Vec<String> = list
+            .iter()
+            .map(|(name, state, labels)| sandbox_json(name, state, labels))
+            .collect();
+        let fake = self.runner();
+        fake.ok(
+            &["machine", "ls", "--json"],
+            &format!("[{}]", jsons.join(",")),
+        );
+        for ((name, ..), json) in list.iter().zip(&jsons) {
+            let machine = crate::sandbox::name::machine_name(name);
+            fake.ok(&["machine", "status", "-n", &machine], json);
         }
-        all.extend_from_slice(labels);
-        self.machine(&crate::sandbox::name::machine_name(name), state, &all)
+        fake
+    }
+
+    /// Sandbox `claude-proj`, running, with workspace `/w/proj`.
+    pub fn running_proj(&self) -> &FakeRunner {
+        self.sandbox("claude-proj", "running", &[("sbx.workspace", "/w/proj")])
     }
 
     /// A sandbox from before agents were kits: no `sbx.command`.
@@ -279,6 +302,17 @@ pub fn machine_json(machine: &str, state: &str, labels: &[(&str, &str)]) -> Stri
     .to_string()
 }
 
+/// `machine status --json` output for sandbox `name`: `sbx.name`, `labels`, and `sbx.command` =
+/// `["bash"]` unless `labels` give one.
+pub fn sandbox_json(name: &str, state: &str, labels: &[(&str, &str)]) -> String {
+    let mut all = vec![("sbx.name", name)];
+    if !labels.iter().any(|(k, _)| *k == "sbx.command") {
+        all.push(("sbx.command", r#"["bash"]"#));
+    }
+    all.extend_from_slice(labels);
+    machine_json(&crate::sandbox::name::machine_name(name), state, &all)
+}
+
 /// A local v3 kit directory `dir` (under the cwd) whose `_builder` build hands back `descriptor`
 /// (JSON) with `layers`.
 pub fn v3_kit(t: &TestEnv, dir: &str, descriptor: &str, layers: &[&[u8]]) {
@@ -356,6 +390,9 @@ pub fn socket_probe(
     (seen, probe)
 }
 
+/// The labels [`labels`] gives besides `sbx.name`: a claude sandbox created at 999000.
+pub const CLAUDE_LABELS: &[(&str, &str)] = &[("sbx.agent", "claude"), ("sbx.created", "999000")];
+
 pub fn labels(name: &str) -> Vec<(&'static str, String)> {
     vec![
         ("sbx.name", name.to_string()),
@@ -381,10 +418,15 @@ pub fn global_github_secret(t: &TestEnv) {
 
 /// A global secret for `service` in the keychain store.
 pub fn global_secret(t: &TestEnv, service: &str, value: &str) {
+    save_secret(t, service, None, value);
+}
+
+/// A secret for `service` in the keychain store, scoped to `sandbox` (global when `None`).
+pub fn save_secret(t: &TestEnv, service: &str, sandbox: Option<&str>, value: &str) {
     use crate::secrets::{SecretEntry, SecretsFile, Source, scope_for};
     let entry = SecretEntry {
         service: service.into(),
-        scope: scope_for(None),
+        scope: scope_for(sandbox),
         source: Source::Keychain,
     };
     t.ctx.store.set(&entry.account(), value).unwrap();

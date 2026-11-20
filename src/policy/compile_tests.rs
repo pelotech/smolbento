@@ -19,10 +19,8 @@ fn list(spec: &NetworkSpec) -> &crate::smolvm::AllowList {
 /// The patterns smolvm gets in deny-all mode for these global allows and denies.
 fn patterns(allows: &str, denies: &str) -> Vec<String> {
     let mut p = policy(Mode::DenyAll);
-    p.add_rule(None, Decision::Allow, allows, "added", None, None)
-        .unwrap();
-    p.add_rule(None, Decision::Deny, denies, "added", None, None)
-        .unwrap();
+    p.allow(None, allows);
+    p.deny(None, denies);
     list(&network(&p, "s1", &[], false)).patterns().to_vec()
 }
 
@@ -45,15 +43,7 @@ fn allow_all_and_unchosen_are_open() {
 #[test]
 fn deny_all_is_loopback_plus_rules_and_credentials() {
     let mut p = policy(Mode::DenyAll);
-    p.add_rule(
-        Some("s1"),
-        Decision::Allow,
-        "*.npmjs.org",
-        "added",
-        None,
-        None,
-    )
-    .unwrap();
+    p.allow(Some("s1"), "*.npmjs.org");
     let spec = network(&p, "s1", &["api.anthropic.com".to_string()], false);
     let l = list(&spec);
     assert_eq!(l.hosts(), ["api.anthropic.com"]);
@@ -83,15 +73,7 @@ fn balanced_has_the_preset_and_widens_globs() {
 #[test]
 fn deny_rules_subtract() {
     let mut p = policy(Mode::Balanced);
-    p.add_rule(
-        None,
-        Decision::Deny,
-        "registry.npmjs.org",
-        "added",
-        None,
-        None,
-    )
-    .unwrap();
+    p.deny(None, "registry.npmjs.org");
     assert!(
         !list(&network(&p, "s1", &[], false))
             .patterns()
@@ -127,15 +109,7 @@ fn a_port_scoped_deny_never_removes_a_host_allow() {
 #[test]
 fn a_port_scoped_deny_cidr_isnt_a_create_deny() {
     let mut p = policy(Mode::AllowAll);
-    p.add_rule(
-        None,
-        Decision::Deny,
-        "10.0.0.0/8:22, 192.168.0.0/16",
-        "added",
-        None,
-        None,
-    )
-    .unwrap();
+    p.deny(None, "10.0.0.0/8:22, 192.168.0.0/16");
     assert_eq!(
         deny_cidrs(&p, "s1", host_access(&p, "s1")),
         with_loopback(&["192.168.0.0/16"])
@@ -151,11 +125,8 @@ fn a_port_scoped_deny_cidr_isnt_a_create_deny() {
 #[test]
 fn check_honours_ports() {
     let mut p = policy(Mode::Balanced);
-    p.add_rule(None, Decision::Allow, "api.x.com", "added", None, None)
-        .unwrap();
-    let deny = p
-        .add_rule(None, Decision::Deny, "api.x.com:8080", "added", None, None)
-        .unwrap();
+    p.allow(None, "api.x.com");
+    let deny = p.deny(None, "api.x.com:8080");
     let v = check(&p, Some("s1"), &[], "api.x.com:8080");
     assert!(
         v.allowed && v.reason.contains(&deny) && v.reason.contains("isn't enforced"),
@@ -183,11 +154,8 @@ fn check_honours_ports() {
 #[test]
 fn check_prefers_an_enforced_cidr_deny() {
     let mut p = policy(Mode::AllowAll);
-    p.add_rule(None, Decision::Deny, "**", "added", None, None)
-        .unwrap();
-    let cidr = p
-        .add_rule(None, Decision::Deny, "10.0.0.0/8", "added", None, None)
-        .unwrap();
+    p.deny(None, "**");
+    let cidr = p.deny(None, "10.0.0.0/8");
     let v = check(&p, Some("s1"), &[], "10.1.2.3");
     assert!(!v.allowed && v.reason.contains(&cidr), "{}", v.reason);
     assert!(!v.reason.contains("isn't enforced"), "{}", v.reason);
@@ -196,32 +164,15 @@ fn check_prefers_an_enforced_cidr_deny() {
 #[test]
 fn everything_rule_opens() {
     let mut p = policy(Mode::DenyAll);
-    p.add_rule(None, Decision::Allow, "**", "added", None, None)
-        .unwrap();
+    p.allow(None, "**");
     assert_eq!(network(&p, "s1", &[], false), NetworkSpec::Open);
 }
 
 #[test]
 fn deny_cidrs_for_create() {
     let mut p = policy(Mode::AllowAll);
-    p.add_rule(
-        None,
-        Decision::Deny,
-        "10.0.0.0/8, bad.com",
-        "added",
-        None,
-        None,
-    )
-    .unwrap();
-    p.add_rule(
-        Some("s1"),
-        Decision::Deny,
-        "192.168.0.0/16",
-        "added",
-        None,
-        None,
-    )
-    .unwrap();
+    p.deny(None, "10.0.0.0/8, bad.com");
+    p.deny(Some("s1"), "192.168.0.0/16");
     assert_eq!(
         deny_cidrs(&p, "s1", host_access(&p, "s1")),
         with_loopback(&["10.0.0.0/8", "192.168.0.0/16"])
@@ -302,15 +253,7 @@ fn host_loopback_is_denied_in_every_mode_without_a_localhost_rule() {
     }
     // A broad allow CIDR covering the gateway doesn't give host access.
     let mut p = policy(Mode::DenyAll);
-    p.add_rule(
-        None,
-        Decision::Allow,
-        "100.64.0.0/10, 0.0.0.0/0",
-        "added",
-        None,
-        None,
-    )
-    .unwrap();
+    p.allow(None, "100.64.0.0/10, 0.0.0.0/0");
     assert_eq!(
         deny_cidrs(&p, "s1", host_access(&p, "s1")),
         with_loopback(&[])
@@ -318,8 +261,7 @@ fn host_loopback_is_denied_in_every_mode_without_a_localhost_rule() {
     assert!(!host_access(&p, "s1"));
     // A rule for the same range doesn't repeat it.
     let mut p = policy(Mode::AllowAll);
-    p.add_rule(None, Decision::Deny, "127.0.0.0/8", "added", None, None)
-        .unwrap();
+    p.deny(None, "127.0.0.0/8");
     assert_eq!(
         deny_cidrs(&p, "s1", host_access(&p, "s1")),
         with_loopback(&[])
@@ -329,19 +271,8 @@ fn host_loopback_is_denied_in_every_mode_without_a_localhost_rule() {
 #[test]
 fn check_explains() {
     let mut p = policy(Mode::Balanced);
-    let deny = p
-        .add_rule(None, Decision::Deny, "evil.com", "added", None, None)
-        .unwrap();
-    let allow = p
-        .add_rule(
-            Some("s1"),
-            Decision::Allow,
-            "api.x.com",
-            "added",
-            None,
-            None,
-        )
-        .unwrap();
+    let deny = p.deny(None, "evil.com");
+    let allow = p.allow(Some("s1"), "api.x.com");
     let v = check(&p, Some("s1"), &[], "evil.com");
     assert!(!v.allowed && v.reason.contains(&deny), "{}", v.reason);
     let v = check(&p, Some("s1"), &[], "api.x.com");
@@ -360,10 +291,8 @@ fn check_explains() {
 #[test]
 fn check_reports_what_is_enforced() {
     let mut p = policy(Mode::AllowAll);
-    p.add_rule(None, Decision::Deny, "evil.com", "added", None, None)
-        .unwrap();
-    p.add_rule(None, Decision::Deny, "10.0.0.0/8", "added", None, None)
-        .unwrap();
+    p.deny(None, "evil.com");
+    p.deny(None, "10.0.0.0/8");
     let v = check(&p, Some("s1"), &[], "evil.com");
     assert!(
         v.allowed && v.reason.contains("isn't enforced") && v.reason.contains("allow-all"),
@@ -381,8 +310,7 @@ fn check_reports_what_is_enforced() {
     );
 
     let mut p = policy(Mode::Balanced);
-    p.add_rule(None, Decision::Deny, "api.openai.com", "added", None, None)
-        .unwrap();
+    p.deny(None, "api.openai.com");
     let v = check(&p, Some("s1"), &[], "api.openai.com");
     assert!(
         v.allowed && v.reason.contains("isn't enforced") && v.reason.contains("openai.com"),
@@ -391,10 +319,8 @@ fn check_reports_what_is_enforced() {
     );
 
     let mut p = policy(Mode::DenyAll);
-    p.add_rule(None, Decision::Allow, "**", "added", None, None)
-        .unwrap();
-    p.add_rule(None, Decision::Deny, "evil.com", "added", None, None)
-        .unwrap();
+    p.allow(None, "**");
+    p.deny(None, "evil.com");
     let v = check(&p, None, &[], "evil.com");
     assert!(
         v.allowed && v.reason.contains("allow-everything"),
@@ -541,8 +467,7 @@ fn has_gateway(spec: &NetworkSpec) -> bool {
 fn localhost_rules_open_the_gateway_with_host_access_only() {
     for rule in ["localhost:11434", "localhost", "LOCALHOST:11434"] {
         let mut p = policy(Mode::DenyAll);
-        p.add_rule(None, Decision::Allow, rule, "added", None, None)
-            .unwrap();
+        p.allow(None, rule);
         for sb in ["s1", "s2"] {
             let spec = network(&p, sb, &[], true);
             assert!(has_gateway(&spec), "{rule} {sb}");
@@ -557,16 +482,7 @@ fn localhost_rules_open_the_gateway_with_host_access_only() {
     }
     // Scoped to one sandbox: only that one.
     let mut p = policy(Mode::Balanced);
-    let id = p
-        .add_rule(
-            Some("s1"),
-            Decision::Allow,
-            "localhost:8080",
-            "added",
-            None,
-            None,
-        )
-        .unwrap();
+    let id = p.allow(Some("s1"), "localhost:8080");
     assert!(has_gateway(&network(&p, "s1", &[], true)));
     assert!(!has_gateway(&network(&p, "s2", &[], true)));
     assert!(host_access(&p, "s1") && !host_access(&p, "s2"));
@@ -584,8 +500,7 @@ fn localhost_rules_open_the_gateway_with_host_access_only() {
 fn other_loopback_spellings_are_not_host_services() {
     let rules = "127.0.0.1:80, host.docker.internal:80";
     let mut p = policy(Mode::DenyAll);
-    p.add_rule(None, Decision::Allow, rules, "added", None, None)
-        .unwrap();
+    p.allow(None, rules);
     let spec = network(&p, "s1", &[], true);
     let l = list(&spec);
     assert_eq!(l.patterns(), ["host.docker.internal"]);
@@ -601,15 +516,7 @@ fn other_loopback_spellings_are_not_host_services() {
 fn a_localhost_rule_drops_the_host_loopback_deny_in_every_mode() {
     for mode in [Mode::AllowAll, Mode::Balanced, Mode::DenyAll] {
         let mut p = policy(mode);
-        p.add_rule(
-            Some("s1"),
-            Decision::Allow,
-            "localhost:11434",
-            "added",
-            None,
-            None,
-        )
-        .unwrap();
+        p.allow(Some("s1"), "localhost:11434");
         assert!(
             deny_cidrs(&p, "s1", host_access(&p, "s1")).is_empty(),
             "{mode:?}"
@@ -620,8 +527,7 @@ fn a_localhost_rule_drops_the_host_loopback_deny_in_every_mode() {
             "{mode:?}"
         );
         // A deny of localhost wins.
-        p.add_rule(Some("s1"), Decision::Deny, "localhost", "added", None, None)
-            .unwrap();
+        p.deny(Some("s1"), "localhost");
         assert_eq!(
             deny_cidrs(&p, "s1", host_access(&p, "s1")),
             with_loopback(&[]),
@@ -683,15 +589,7 @@ fn kit_rules_never_grant_host_access() {
         assert!(list(&spec).patterns().is_empty(), "{spec:?}");
     }
     // A user rule alongside still works.
-    p.add_rule(
-        Some("s1"),
-        Decision::Allow,
-        "localhost:3000",
-        "added",
-        None,
-        None,
-    )
-    .unwrap();
+    p.allow(Some("s1"), "localhost:3000");
     assert!(host_access(&p, "s1"));
     assert!(deny_cidrs_with(&p, "s1", host_access(&p, "s1"), ids).is_empty());
     assert!(has_gateway(&network_with(&p, "s1", &[], ids, true)));

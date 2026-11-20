@@ -20,13 +20,8 @@ fn workload() -> Kit {
     w
 }
 fn with(mut k: Kit, ty: &str, optional: bool, body: CapBody) -> Kit {
-    k.caps.push(Cap {
-        ty: format!("com.docker.sandbox/{ty}"),
-        optional,
-        body,
-        group: None,
-        config: None,
-    });
+    k.caps
+        .push(Cap::new(format!("com.docker.sandbox/{ty}"), optional, body));
     k
 }
 fn rules(hosts: &[&str]) -> Rules {

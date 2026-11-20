@@ -15,14 +15,6 @@ fn with_file(text: &str) -> TestEnv {
     t
 }
 
-fn missing_then_created(t: &TestEnv) {
-    t.project_creatable();
-}
-
-fn existing(t: &TestEnv, state: &str) {
-    t.project(state);
-}
-
 /// Call lines with what differs between test envs masked: fresh UUIDs (SANDBOX_ID) and
 /// temp directories.
 fn lines(t: &TestEnv) -> Vec<String> {
@@ -65,7 +57,7 @@ fn stored(t: &TestEnv, service: &str) -> Option<String> {
 #[test]
 fn create_force_runs_what_sbt_create_runs() {
     let mut env = with_file(FILE);
-    missing_then_created(&env);
+    env.project_creatable();
     sbt(&mut env.ctx, &["env", "create", "--force"]).unwrap();
     let out = env.stdout();
     assert!(
@@ -81,7 +73,7 @@ fn create_force_runs_what_sbt_create_runs() {
     assert!(!out.contains("PROVISION"), "{out}");
 
     let mut plain = with_file(FILE);
-    missing_then_created(&plain);
+    plain.project_creatable();
     let ws = plain.ctx.cwd.display().to_string();
     sbt(
         &mut plain.ctx,
@@ -161,7 +153,7 @@ fn create_provisions_scoped_secrets_before_the_create() {
     let mut t = with_file(&format!(
         "{FILE}secrets:\n  github:\n    value: ghp_dummy\n"
     ));
-    missing_then_created(&t);
+    t.project_creatable();
     t.sbt(&["env", "create", "-f"]).unwrap();
     let out = t.stdout();
     assert!(
@@ -181,7 +173,7 @@ fn without_force_or_a_terminal_nothing_happens() {
     let mut t = with_file(&format!(
         "{FILE}secrets:\n  github:\n    value: ghp_dummy\n"
     ));
-    missing_then_created(&t);
+    t.project_creatable();
     let file = t.ctx.cwd.join("sbxenv.yaml").display().to_string();
     for cmd in ["create", "run"] {
         let err = t.sbt_err(&["env", cmd]);
@@ -232,7 +224,7 @@ fn the_force_hint_repeats_the_original_arguments() {
 #[test]
 fn create_of_an_existing_sandbox_fails() {
     let mut t = with_file(FILE);
-    existing(&t, "running");
+    t.project("running");
     let err = t.sbt_err(&["env", "create", "-f"]);
     assert_eq!(
         err,
@@ -247,7 +239,7 @@ fn a_failed_create_leaves_the_secret() {
     let mut t = with_file(&format!(
         "{FILE}secrets:\n  github:\n    value: ghp_dummy\n"
     ));
-    missing_then_created(&t);
+    t.project_creatable();
     t.runner()
         .fail(&["machine", "create"], "CREATE_FAILED", "no space left");
     assert!(t.sbt(&["env", "create", "-f"]).is_err());
@@ -260,7 +252,7 @@ fn snapshot_stores_the_resolved_value_as_a_literal() {
     let mut t = with_file(&format!(
         "{FILE}secrets:\n  github:\n    command: printf snap\n    snapshot: true\n"
     ));
-    missing_then_created(&t);
+    t.project_creatable();
     t.sbt(&["env", "create", "-f"]).unwrap();
     assert!(t.stdout().contains("  ✓ github — secret · literal\n"));
     assert_eq!(scoped(&t)[0].source, Source::Keychain);
@@ -272,7 +264,7 @@ fn sources_are_verified_unless_no_verify() {
     let mut t = with_file(&format!(
         "{FILE}secrets:\n  github:\n    command: \"false\"\n"
     ));
-    missing_then_created(&t);
+    t.project_creatable();
     let err = t.sbt_err(&["env", "create", "-f"]);
     assert!(err.starts_with("secret \"github\": "), "{err}");
     assert!(scoped(&t).is_empty());
@@ -281,7 +273,7 @@ fn sources_are_verified_unless_no_verify() {
     let mut t = with_file(&format!(
         "{FILE}secrets:\n  github:\n    command: \"false\"\n    noVerify: true\n"
     ));
-    missing_then_created(&t);
+    t.project_creatable();
     t.sbt(&["env", "create", "-f"]).unwrap();
     assert!(t.stdout().contains("  ✓ github — secret · command\n"));
     assert_eq!(
@@ -296,7 +288,7 @@ fn sources_are_verified_unless_no_verify() {
 #[test]
 fn run_of_an_existing_sandbox_attaches_with_the_files_env() {
     let mut t = with_file(&FILE.replace("X: one", "X: two"));
-    existing(&t, "running");
+    t.project("running");
     t.runner().interactive_exit(0);
     assert_eq!(t.sbt(&["env", "run", "-f"]).unwrap(), 0);
     let exec = t.runner().interactive_calls()[0].join(" ");
@@ -309,25 +301,22 @@ fn run_of_an_existing_sandbox_attaches_with_the_files_env() {
 fn run_of_a_new_sandbox_creates_it_and_detaches() {
     let mut t = with_file(FILE);
     // env run looks the name up, and the create once more; the attach finds it.
-    missing_then_created(&t);
+    t.project_creatable();
     assert_eq!(t.sbt(&["env", "run", "-d", "-f"]).unwrap(), 0);
     assert_eq!(creates(&t).len(), 1);
     assert!(t.stdout().ends_with("claude-proj\n"));
     assert!(t.runner().interactive_calls().is_empty());
 }
 
-fn listed(t: &TestEnv, extra: &[(&str, &str)]) {
-    let mut labels = vec![("sbx.name", "claude-proj"), ("sbx.agent", "claude")];
-    labels.extend_from_slice(extra);
-    let json = machine_json("sbx-claude-proj", "created", &labels);
-    t.runner()
-        .ok(&["machine", "ls", "--json"], &format!("[{json}]"));
+/// `claude-proj`, created, is the one sandbox smolvm lists.
+fn listed(t: &TestEnv) {
+    t.sandboxes(&[("claude-proj", "created", &[("sbx.agent", "claude")])]);
 }
 
 #[test]
 fn exec_splits_paths_from_the_command_at_dashes() {
     let mut t = with_file(FILE);
-    existing(&t, "running");
+    t.project("running");
     t.runner().interactive_exit(3);
     let file = t.ctx.cwd.join("sbxenv.yaml").display().to_string();
     let code = t.sbt(&["env", "exec", &file, "--", "npm", "test"]).unwrap();
@@ -340,7 +329,7 @@ fn exec_splits_paths_from_the_command_at_dashes() {
 #[test]
 fn exec_without_dashes_takes_every_positional_as_the_command() {
     let mut t = with_file(FILE);
-    existing(&t, "running");
+    t.project("running");
     t.runner().interactive_exit(0);
     t.sbt(&["env", "exec", "go", "test", "./..."]).unwrap();
     let call = t.runner().interactive_calls()[0].join(" ");
@@ -350,7 +339,7 @@ fn exec_without_dashes_takes_every_positional_as_the_command() {
 #[test]
 fn exec_passes_the_files_env_and_the_users_wins() {
     let mut t = with_file(FILE);
-    existing(&t, "running");
+    t.project("running");
     t.runner().interactive_exit(0);
     t.sbt(&["env", "exec", "-e", "X=mine", "--", "env"])
         .unwrap();
@@ -374,7 +363,7 @@ fn exec_of_a_missing_sandbox_fails() {
 #[test]
 fn exec_works_when_the_workspace_is_gone() {
     let mut t = with_file(&FILE.replace("workspace: .", "workspace: ./gone"));
-    existing(&t, "running");
+    t.project("running");
     t.runner().interactive_exit(0);
     t.sbt(&["env", "exec", "--", "ls"]).unwrap();
     let call = t.runner().interactive_calls()[0].join(" ");
@@ -399,7 +388,7 @@ fn rm_force_removes_the_sandbox_and_only_its_scoped_secret() {
     let mut t = with_file(FILE);
     set_scoped(&mut t, &["--sandbox", "claude-proj"]);
     set_scoped(&mut t, &[]);
-    listed(&t, &[]);
+    listed(&t);
     assert_eq!(t.sbt(&["env", "rm", "--force"]).unwrap(), 0);
     let out = t.stdout();
     assert!(out.contains("ENVIRONMENT\n  Name:  claude-proj\n"), "{out}");
@@ -423,7 +412,7 @@ fn rm_force_removes_the_sandbox_and_only_its_scoped_secret() {
 fn rm_without_a_terminal_or_force_changes_nothing() {
     let mut t = with_file(FILE);
     set_scoped(&mut t, &["--sandbox", "claude-proj"]);
-    listed(&t, &[]);
+    listed(&t);
     let err = t.sbt_err(&["env", "rm"]);
     assert_eq!(
         err,
@@ -437,7 +426,7 @@ fn rm_without_a_terminal_or_force_changes_nothing() {
 #[test]
 fn rm_of_nothing_exits_0() {
     let mut t = with_file(FILE);
-    t.runner().ok(&["machine", "ls", "--json"], "[]");
+    t.sandboxes(&[]);
     assert_eq!(t.sbt(&["env", "rm", "-f"]).unwrap(), 0);
     assert_eq!(t.stdout(), "");
     assert!(deletes(&t).is_empty());
@@ -447,7 +436,7 @@ fn rm_of_nothing_exits_0() {
 fn rm_with_only_scoped_secrets_removes_them() {
     let mut t = with_file(FILE);
     set_scoped(&mut t, &["--sandbox", "claude-proj"]);
-    t.runner().ok(&["machine", "ls", "--json"], "[]");
+    t.sandboxes(&[]);
     t.sbt(&["env", "rm", "-f"]).unwrap();
     assert!(
         t.stdout()
@@ -463,21 +452,14 @@ fn rm_with_only_scoped_secrets_removes_them() {
 #[test]
 fn rm_refuses_a_sandbox_with_forks() {
     let mut t = with_file(FILE);
-    let a = machine_json(
-        "sbx-claude-proj",
-        "created",
-        &[("sbx.name", "claude-proj"), ("sbx.agent", "claude")],
-    );
-    let b = machine_json(
-        "sbx-claude-proj-fork-1",
-        "created",
-        &[
-            ("sbx.name", "claude-proj-fork-1"),
-            ("sbx.fork-of", "claude-proj"),
-        ],
-    );
-    t.runner()
-        .ok(&["machine", "ls", "--json"], &format!("[{a},{b}]"));
+    t.sandboxes(&[
+        ("claude-proj", "created", &[("sbx.agent", "claude")]),
+        (
+            "claude-proj-fork-1",
+            "created",
+            &[("sbx.fork-of", "claude-proj")],
+        ),
+    ]);
     let err = t.sbt_err(&["env", "rm", "-f"]);
     assert_eq!(
         err,
@@ -509,7 +491,7 @@ const COMMAND_SECRET: &str = "secrets:\n  github:\n    command: printf tok\n";
 /// and the sandbox exists.
 fn approved(text: &str) -> TestEnv {
     let mut t = with_file(text);
-    missing_then_created(&t);
+    t.project_creatable();
     t.answer("y\n");
     t.sbt(&["env", "create"]).unwrap();
     assert!(t.stdout().contains("\n  Approve this plan? (y/N) "));
@@ -568,7 +550,7 @@ fn an_approved_environment_applies_without_a_terminal() {
     let mut t = approved(FILE);
     // Attaching, and creating it again after a plain `rm`.
     t.sbt(&["env", "run", "-d"]).unwrap();
-    missing_then_created(&t);
+    t.project_creatable();
     t.sbt(&["env", "create"]).unwrap();
     assert_eq!(creates(&t).len(), 2);
 }
@@ -576,7 +558,7 @@ fn an_approved_environment_applies_without_a_terminal() {
 #[test]
 fn force_approves_nothing() {
     let mut t = with_file(FILE);
-    missing_then_created(&t);
+    t.project_creatable();
     t.sbt(&["env", "create", "--force"]).unwrap();
     assert_eq!(record(&t), None);
     let err = t.sbt_err(&["env", "run", "-d"]);
@@ -627,7 +609,7 @@ fn unchanged_host_commands_ask_every_time_unless_remembered() {
     // As in sbx: also when attaching, where the secret's command doesn't run again.
     assert_eq!(t.sbt_err(&["env", "run", "-d"]), refusal("run -d"));
     t.stdout();
-    missing_then_created(&t);
+    t.project_creatable();
     assert_eq!(t.sbt_err(&["env", "create"]), refusal("create"));
     let out = t.stdout();
     assert!(
@@ -643,9 +625,9 @@ fn unchanged_host_commands_ask_every_time_unless_remembered() {
         .settings
         .set("env.rememberHostCommands", "true")
         .unwrap();
-    existing(&t, "running");
+    t.project("running");
     t.sbt(&["env", "run", "-d"]).unwrap();
-    missing_then_created(&t);
+    t.project_creatable();
     t.sbt(&["env", "create"]).unwrap();
 }
 
@@ -653,7 +635,7 @@ fn unchanged_host_commands_ask_every_time_unless_remembered() {
 fn env_rm_forgets_the_approval() {
     let mut t = approved(FILE);
     assert!(record(&t).is_some());
-    listed(&t, &[]);
+    listed(&t);
     t.sbt(&["env", "rm", "--force"]).unwrap();
     assert_eq!(record(&t), None);
 }
@@ -662,7 +644,7 @@ fn env_rm_forgets_the_approval() {
 fn env_rm_forgets_the_approval_when_nothing_else_is_left() {
     // The sandbox went with a plain `rm`, which leaves the approval.
     let mut t = approved(FILE);
-    t.runner().ok(&["machine", "ls", "--json"], "[]");
+    t.sandboxes(&[]);
     t.sbt(&["env", "rm", "--force"]).unwrap();
     assert_eq!(record(&t), None);
 }
@@ -722,7 +704,7 @@ fn log(t: &TestEnv) -> String {
 #[test]
 fn lifecycle_phases_run_around_the_create_and_on_every_run() {
     let mut t = with_file(&lifecycle_file(""));
-    missing_then_created(&t);
+    t.project_creatable();
     t.sbt(&["env", "create", "--force"]).unwrap();
     assert_eq!(log(&t), "init\npost\n");
     let out = t.stdout();
@@ -748,7 +730,7 @@ fn a_failing_initialize_creates_and_stores_nothing() {
         "{FILE}secrets:\n  github:\n    value: ghp_dummy\nlifecycle:\n  initialize:\n    \
              - command: exit 7\n"
     ));
-    missing_then_created(&t);
+    t.project_creatable();
     for cmd in ["create", "run"] {
         assert_eq!(
             t.sbt_err(&["env", cmd, "--force"]),
@@ -764,7 +746,7 @@ fn a_failing_post_create_keeps_the_sandbox() {
     let mut t = with_file(&format!(
         "{FILE}lifecycle:\n  postCreate:\n    - command: exit 4\n"
     ));
-    missing_then_created(&t);
+    t.project_creatable();
     assert_eq!(
         t.sbt_err(&["env", "run", "--force"]),
         "postCreate[0] (exit 4): exit status 4; remove this environment's sandbox and \
@@ -778,7 +760,7 @@ fn a_failing_post_create_keeps_the_sandbox() {
 #[test]
 fn pre_remove_runs_with_or_without_the_sandbox_and_never_stops_the_removal() {
     let mut t = with_file(&lifecycle_file("    - command: exit 3\n"));
-    listed(&t, &[]);
+    listed(&t);
     t.sbt(&["env", "rm", "--force"]).unwrap();
     assert_eq!(log(&t), "pre\n");
     let out = t.stdout();
@@ -792,7 +774,7 @@ fn pre_remove_runs_with_or_without_the_sandbox_and_never_stops_the_removal() {
     assert_eq!(deletes(&t).len(), 1);
 
     // The sandbox is gone already: the commands still run.
-    t.runner().ok(&["machine", "ls", "--json"], "[]");
+    t.sandboxes(&[]);
     t.sbt(&["env", "rm", "--force"]).unwrap();
     assert_eq!(log(&t), "pre\npre\n");
     assert_eq!(deletes(&t).len(), 1);
@@ -806,7 +788,7 @@ fn skip_host_commands_skips_every_phase_and_leaves_the_approval() {
     // Approved, and the lifecycle commands (which would ask every time) are left out.
     t.sbt(&["env", "run", "-d", "--skip-host-commands"])
         .unwrap();
-    listed(&t, &[]);
+    listed(&t);
     t.sbt(&["env", "rm", "--force", "--skip-host-commands"])
         .unwrap();
     assert_eq!(log(&t), "init\npost\n", "nothing more ran");
@@ -841,7 +823,7 @@ fn skip_host_commands_skips_every_phase_and_leaves_the_approval() {
 fn env_run_launches_the_entrypoint_and_cmd() {
     let launch = "entrypoint: [\"/bin/sh\", \"-c\"]\ncmd: [\"echo hi\"]\n";
     let mut t = with_file(&format!("{FILE}{launch}"));
-    existing(&t, "running");
+    t.project("running");
     t.sbt(&["env", "run", "--force"]).unwrap();
     let call = t.runner().interactive_calls()[0].join(" ");
     assert!(call.ends_with(" -- /bin/sh -c echo hi"), "{call}");
@@ -850,7 +832,7 @@ fn env_run_launches_the_entrypoint_and_cmd() {
     // Only `cmd`: the agent's own command with those arguments, as `-- ARGS` (measured: sbx
     // treats the two alike).
     let mut t = with_file(&format!("{FILE}cmd: [\"--version\"]\n"));
-    existing(&t, "running");
+    t.project("running");
     t.sbt(&["env", "run", "--force"]).unwrap();
     let call = t.runner().interactive_calls()[0].join(" ");
     assert!(
@@ -860,7 +842,7 @@ fn env_run_launches_the_entrypoint_and_cmd() {
 
     // Plain `run` doesn't know the file.
     let mut t = with_file(&format!("{FILE}{launch}"));
-    existing(&t, "running");
+    t.project("running");
     t.sbt(&["run", "--name", "claude-proj"]).unwrap();
     let call = t.runner().interactive_calls()[0].join(" ");
     assert!(!call.contains("/bin/sh -c echo hi"), "{call}");
@@ -878,7 +860,7 @@ fn registries_are_stored_for_the_sandbox_and_removed_with_it() {
     let mut t = with_file(&format!("{FILE}{REGISTRY}"));
     // A host-wide login for the same host stays as it is.
     t.ctx.store.set("registry:ghcr.io", "host-wide").unwrap();
-    missing_then_created(&t);
+    t.project_creatable();
     t.sbt(&["env", "create", "--force"]).unwrap();
     let out = t.stdout();
     assert!(
@@ -913,7 +895,7 @@ fn registries_are_stored_for_the_sandbox_and_removed_with_it() {
     t.sbt(&["secret", "ls", "--sandbox", "other"]).unwrap();
     assert!(!t.stdout().contains("ghcr.io"));
 
-    listed(&t, &[]);
+    listed(&t);
     t.sbt(&["env", "rm", "--force"]).unwrap();
     let out = t.stdout();
     assert!(out.contains("\nREGISTRIES\n  - ghcr.io\n"), "{out}");
@@ -930,9 +912,9 @@ fn registries_are_stored_for_the_sandbox_and_removed_with_it() {
 #[test]
 fn a_plain_rm_removes_the_sandboxs_registry_login() {
     let mut t = with_file(&format!("{FILE}{REGISTRY}"));
-    missing_then_created(&t);
+    t.project_creatable();
     t.sbt(&["env", "create", "--force"]).unwrap();
-    listed(&t, &[]);
+    listed(&t);
     t.sbt(&["rm", "-f", "claude-proj"]).unwrap();
     assert!(registries(&t).is_empty());
     let key = "sandbox-registry:claude-proj/ghcr.io";
@@ -943,7 +925,7 @@ fn a_plain_rm_removes_the_sandboxs_registry_login() {
 fn a_registry_source_that_fails_stops_before_the_create() {
     let bad = REGISTRY.replace("printf 'reg-%s' tok3n", "exit 1");
     let mut t = with_file(&format!("{FILE}{bad}"));
-    missing_then_created(&t);
+    t.project_creatable();
     let err = t.sbt_err(&["env", "create", "--force"]);
     assert!(err.starts_with("registry \"GHCR.io\": secret: "), "{err}");
     assert!(creates(&t).is_empty());
@@ -956,7 +938,7 @@ fn env_run_detached_launches_nothing_and_no_workspace_means_mountless() {
     let file = "schemaVersion: \"1\"\nagent: claude\nname: claude-proj\n\
                     entrypoint: [\"/bin/sh\", \"-c\"]\ncmd: [\"echo hi\"]\n";
     let mut t = with_file(file);
-    missing_then_created(&t);
+    t.project_creatable();
     t.sbt(&["env", "run", "-d", "--force"]).unwrap();
     assert!(t.runner().interactive_calls().is_empty());
     let create = &creates(&t)[0];
@@ -1023,7 +1005,7 @@ fn a_failing_initialize_stores_no_registry_login() {
     let mut t = with_file(&format!(
         "{FILE}{REGISTRY}lifecycle:\n  initialize:\n    - command: exit 7\n"
     ));
-    missing_then_created(&t);
+    t.project_creatable();
     assert!(
         t.sbt_err(&["env", "create", "--force"])
             .ends_with("exit status 7")
@@ -1037,7 +1019,7 @@ fn env_run_creates_runs_post_create_then_attaches_with_the_launch_command() {
     let mut t = with_file(&format!(
         "{FILE}{launch}lifecycle:\n  postCreate:\n    - command: echo post >> log\n"
     ));
-    missing_then_created(&t);
+    t.project_creatable();
     t.sbt(&["env", "run", "--force"]).unwrap();
     assert_eq!(log(&t), "post\n");
     let out = t.stdout();
@@ -1056,7 +1038,7 @@ fn arguments_after_dashes_replace_cmd_or_go_to_the_agent() {
     // the file's), without one the agent gets them.
     let launch = "entrypoint: [\"/bin/sh\", \"-c\"]\ncmd: [\"echo from-file\"]\n";
     let mut t = with_file(&format!("{FILE}{launch}"));
-    existing(&t, "running");
+    t.project("running");
     t.sbt(&["env", "run", "--force", "--", "echo from-args"])
         .unwrap();
     let call = t.runner().interactive_calls()[0].join(" ");
@@ -1064,7 +1046,7 @@ fn arguments_after_dashes_replace_cmd_or_go_to_the_agent() {
     assert!(t.stdout().contains("argv: \"[\\\"echo from-file\\\"]\""));
 
     let mut t = with_file(FILE);
-    existing(&t, "running");
+    t.project("running");
     t.sbt(&["env", "run", "--force", "--", "--version"])
         .unwrap();
     let call = t.runner().interactive_calls()[0].join(" ");
@@ -1075,7 +1057,7 @@ fn arguments_after_dashes_replace_cmd_or_go_to_the_agent() {
 
     // Paths still come before the dashes.
     let mut t = with_file(FILE);
-    existing(&t, "running");
+    t.project("running");
     t.sbt(&["env", "run", "--force", "sbxenv.yaml", "--", "-c"])
         .unwrap();
     let call = t.runner().interactive_calls()[0].join(" ");
@@ -1095,7 +1077,7 @@ fn bindings(t: &TestEnv) -> Vec<String> {
 #[test]
 fn bindings_are_saved_globally_and_send_the_credential_there() {
     let mut t = with_file(&format!("{FILE}{BINDING}"));
-    missing_then_created(&t);
+    t.project_creatable();
     t.sbt(&["env", "create", "--force"]).unwrap();
     let out = t.stdout();
     assert!(
@@ -1117,14 +1099,14 @@ fn bindings_are_saved_globally_and_send_the_credential_there() {
 #[test]
 fn env_rm_keeps_bindings_unless_pruned() {
     let mut t = with_file(&format!("{FILE}{BINDING}"));
-    missing_then_created(&t);
+    t.project_creatable();
     t.sbt(&["env", "create", "--force"]).unwrap();
-    listed(&t, &[]);
+    listed(&t);
     t.sbt(&["env", "rm", "--force"]).unwrap();
     assert_eq!(bindings(&t), ["github"]);
     t.stdout();
     // The sandbox is gone: only the binding is left to prune.
-    t.runner().ok(&["machine", "ls", "--json"], "[]");
+    t.sandboxes(&[]);
     t.sbt(&["env", "rm", "--force", "--prune-bindings"])
         .unwrap();
     let out = t.stdout();
@@ -1141,7 +1123,7 @@ fn a_binding_for_an_unknown_service_is_refused() {
     let mut t = with_file(&format!(
         "{FILE}bindings:\n  nosuch:\n    apiKey:\n      domains: [a.example]\n"
     ));
-    missing_then_created(&t);
+    t.project_creatable();
     let err = t.sbt_err(&["env", "create", "--force"]);
     assert!(err.starts_with("unknown service 'nosuch'"), "{err}");
 }
@@ -1151,7 +1133,7 @@ fn mcp_url_servers_are_registered_and_attached() {
     let mut t = with_file(&format!(
         "{FILE}mcp:\n  servers:\n    - name: deep\n      url: https://mcp.deepwiki.com/mcp\n"
     ));
-    missing_then_created(&t);
+    t.project_creatable();
     t.sbt(&["env", "create", "--force"]).unwrap();
     let out = t.stdout();
     assert!(
@@ -1164,7 +1146,7 @@ fn mcp_url_servers_are_registered_and_attached() {
     let create = &creates(&t)[0];
     assert!(create.contains("sbx.mcp=deep"), "{create}");
     // It stays after `env rm`, as in sbx.
-    listed(&t, &[]);
+    listed(&t);
     t.sbt(&["env", "rm", "--force"]).unwrap();
     let registered = crate::mcp::McpFile::load(&t.ctx.paths).unwrap();
     assert!(registered.servers.contains_key("deep"));
@@ -1177,7 +1159,7 @@ fn an_unreachable_mcp_server_fails_the_create_before_anything_is_stored() {
         "{FILE}secrets:\n  github:\n    value: ghp_dummy\n\
              mcp:\n  servers:\n    - name: gone\n      url: https://mcp.example.invalid/mcp\n"
     ));
-    missing_then_created(&t);
+    t.project_creatable();
     let err = t.sbt_err(&["env", "create", "--force"]);
     assert!(
         err.starts_with(

@@ -323,11 +323,8 @@ pub(crate) fn request(ty: String, optional: bool, config: Option<Value>) -> Resu
     // Nothing reads an unsupported type's config.
     let config = config.filter(|_| refs && body != CapBody::Unsupported);
     Ok(Cap {
-        ty,
-        optional,
-        body,
-        group: None,
         config,
+        ..Cap::new(ty, optional, body)
     })
 }
 

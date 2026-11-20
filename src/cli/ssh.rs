@@ -157,10 +157,6 @@ mod tests {
         (out, err, code)
     }
 
-    fn running(t: &TestEnv) {
-        t.sandbox("claude-proj", "running", &[("sbx.workspace", "/w/proj")]);
-    }
-
     /// A fake `smolvm` that records its arguments (one line per call) in `log`, drops everything up
     /// to and including the first `--`, and runs the rest on this host. `path`, when given, is the
     /// `PATH` the guest command sees.
@@ -239,7 +235,7 @@ while [ \"$1\" != \"--\" ]; do shift; done\nshift\nexec \"$@\"\n",
     #[test]
     fn exec_returns_output_stderr_and_exit_status_as_the_session_user() {
         let mut t = test_env(&[]);
-        running(&t);
+        t.running_proj();
         let fake = FakeSmolvm::install(&t, None);
         let got = drive(&mut t, "claude-proj.sbx", |h| async move {
             let mut ch = h.channel_open_session().await.unwrap();
@@ -266,7 +262,7 @@ while [ \"$1\" != \"--\" ]; do shift; done\nshift\nexec \"$@\"\n",
     #[test]
     fn stdin_reaches_the_command_and_its_end_ends_it() {
         let mut t = test_env(&[]);
-        running(&t);
+        t.running_proj();
         let _fake = FakeSmolvm::install(&t, None);
         let got = drive(&mut t, "claude-proj.sbx", |h| async move {
             let mut ch = h.channel_open_session().await.unwrap();
@@ -282,7 +278,7 @@ while [ \"$1\" != \"--\" ]; do shift; done\nshift\nexec \"$@\"\n",
     #[test]
     fn a_shell_on_a_pty_follows_window_changes_and_returns_its_exit_status() {
         let mut t = test_env(&[("TZ", "Asia/Kolkata")]);
-        running(&t);
+        t.running_proj();
         let fake = FakeSmolvm::install(&t, None);
         let (first, second, tty, code) = drive(&mut t, "claude-proj.sbx", |h| async move {
             let mut ch = h.channel_open_session().await.unwrap();
@@ -328,7 +324,7 @@ while [ \"$1\" != \"--\" ]; do shift; done\nshift\nexec \"$@\"\n",
     #[test]
     fn subsystems_x11_and_remote_forwarding_are_refused() {
         let mut t = test_env(&[]);
-        running(&t);
+        t.running_proj();
         let fake = FakeSmolvm::install(&t, None);
         let (sftp, x11, forward) = drive(&mut t, "claude-proj.sbx", |h| async move {
             let mut ch = h.channel_open_session().await.unwrap();
@@ -350,7 +346,7 @@ while [ \"$1\" != \"--\" ]; do shift; done\nshift\nexec \"$@\"\n",
     #[test]
     fn a_second_command_on_one_channel_is_refused() {
         let mut t = test_env(&[]);
-        running(&t);
+        t.running_proj();
         let _fake = FakeSmolvm::install(&t, None);
         let (second, out) = drive(&mut t, "claude-proj.sbx", |h| async move {
             let mut ch = h.channel_open_session().await.unwrap();
@@ -368,7 +364,7 @@ while [ \"$1\" != \"--\" ]; do shift; done\nshift\nexec \"$@\"\n",
     #[test]
     fn at_most_64_channels_are_open_at_once() {
         let mut t = test_env(&[]);
-        running(&t);
+        t.running_proj();
         let _fake = FakeSmolvm::install(&t, None);
         let (first_64, the_65th) = drive(&mut t, "claude-proj.sbx", |h| async move {
             let mut open = Vec::new();
@@ -403,7 +399,7 @@ while [ \"$1\" != \"--\" ]; do shift; done\nshift\nexec \"$@\"\n",
     /// back, and the calls made.
     fn forward(path: Option<&str>) -> (Vec<u8>, Vec<String>) {
         let mut t = test_env(&[]);
-        running(&t);
+        t.running_proj();
         let fake = FakeSmolvm::install(&t, path);
         let port = echo_server();
         let out = drive(&mut t, "claude-proj.sbx", move |h| async move {
@@ -451,7 +447,7 @@ while [ \"$1\" != \"--\" ]; do shift; done\nshift\nexec \"$@\"\n",
     #[test]
     fn forwards_to_anything_but_guest_loopback_are_refused_and_start_nothing() {
         let mut t = test_env(&[]);
-        running(&t);
+        t.running_proj();
         let fake = FakeSmolvm::install(&t, None);
         let refused = drive(&mut t, "claude-proj.sbx", |h| async move {
             let mut refused = Vec::new();
@@ -471,7 +467,7 @@ while [ \"$1\" != \"--\" ]; do shift; done\nshift\nexec \"$@\"\n",
     #[test]
     fn only_auth_none_is_accepted() {
         let mut t = test_env(&[]);
-        running(&t);
+        t.running_proj();
         let _fake = FakeSmolvm::install(&t, None);
         let ok = drive_as(&mut t, "claude-proj.sbx", false, |mut h| async move {
             let password = h.authenticate_password("agent", "x").await.unwrap();

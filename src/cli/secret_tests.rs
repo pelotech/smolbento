@@ -774,10 +774,7 @@ fn rm_sandbox_forgets_its_secrets_and_policy() {
     )
     .unwrap();
     p.save(&t.ctx.paths).unwrap();
-    let a1 = machine_json("sbx-a1", "stopped", &[("sbx.name", "a1")]);
-    t.runner().ok(&["machine", "status"], &a1);
-    t.runner()
-        .ok(&["machine", "ls", "--json"], &format!("[{a1}]"));
+    t.sandboxes(&[("a1", "stopped", &[])]);
     t.sbt(&["rm", "-f", "a1"]).unwrap();
     assert!(SecretsFile::load(&t.ctx.paths).unwrap().secrets.is_empty());
     assert_eq!(t.ctx.store.get("sandbox:a1/github").unwrap(), None);
@@ -792,7 +789,7 @@ fn rm_sandbox_forgets_its_secrets_and_policy() {
 #[test]
 fn reset_preserves_secrets_only_when_asked() {
     let mut t = test_env(&[]);
-    t.runner().ok(&["machine", "ls", "--json"], "[]");
+    t.sandboxes(&[]);
     t.sbt(&["secret", "set", "anthropic", "-t", "sk-1"])
         .unwrap();
     t.sbt(&["reset", "-f", "--preserve-secrets"]).unwrap();
@@ -804,25 +801,17 @@ fn reset_preserves_secrets_only_when_asked() {
 
 /// `a1` running and `b2` stopped, both created with the github secret; `c3` running without it.
 fn github_sandboxes(t: &TestEnv) {
-    let with = |name: &str, state: &str| {
-        // `a1` also has a `--static-mcp` header secret, which a github refresh leaves alone.
-        let labels = [
-            ("sbx.name", name),
-            ("sbx.secrets", "github"),
-            ("sbx.credential-env", "GH_TOKEN,GITHUB_TOKEN"),
-            ("sbx.mcp-secret.SBX_MCP_LINEAR_KEY", "mcp:linear:key"),
-        ];
-        machine_json(&format!("sbx-{name}"), state, &labels)
-    };
-    let (a1, c3) = (
-        with("a1", "running"),
-        machine_json("sbx-c3", "running", &[("sbx.name", "c3")]),
-    );
-    let ls = format!("[{a1},{},{c3}]", with("b2", "stopped"));
-    t.runner().ok(&["machine", "ls", "--json"], &ls);
-    // A running sandbox's ports come from `machine status`.
-    t.runner().ok(&["machine", "status", "-n", "sbx-a1"], &a1);
-    t.runner().ok(&["machine", "status", "-n", "sbx-c3"], &c3);
+    // Both also have a `--static-mcp` header secret, which a github refresh leaves alone.
+    let github = [
+        ("sbx.secrets", "github"),
+        ("sbx.credential-env", "GH_TOKEN,GITHUB_TOKEN"),
+        ("sbx.mcp-secret.SBX_MCP_LINEAR_KEY", "mcp:linear:key"),
+    ];
+    t.sandboxes(&[
+        ("a1", "running", &github),
+        ("b2", "stopped", &github),
+        ("c3", "running", &[]),
+    ]);
 }
 
 /// smolvm 1.35.4's `machine credentials refresh`: the value reaches the smolvm process's
@@ -875,21 +864,11 @@ fn a_failed_refresh_leaves_the_value_for_the_next_start() {
 
 /// Running sandboxes, each bound to `service` through the variables `env` (`sbx.credential-env`).
 fn running(t: &TestEnv, sandboxes: &[(&str, &[(&str, &str)])]) {
-    let all: Vec<String> = sandboxes
+    let all: Vec<_> = sandboxes
         .iter()
-        .map(|(name, labels)| {
-            let mut l = vec![("sbx.name", *name)];
-            l.extend_from_slice(labels);
-            let m = machine_json(&format!("sbx-{name}"), "running", &l);
-            t.runner()
-                .ok(&["machine", "status", "-n", &format!("sbx-{name}")], &m);
-            m
-        })
+        .map(|(name, labels)| (*name, "running", *labels))
         .collect();
-    t.runner().ok(
-        &["machine", "ls", "--json"],
-        &format!("[{}]", all.join(",")),
-    );
+    t.sandboxes(&all);
     t.runner().ok(&["machine", "credentials", "refresh"], "");
 }
 
