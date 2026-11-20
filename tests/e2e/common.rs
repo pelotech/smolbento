@@ -7,8 +7,11 @@ pub(crate) struct E2e {
     pub(crate) vars: Vec<(&'static str, String)>,
     /// Set by [`E2e::one_off_images`].
     pub(crate) no_seeds: std::cell::Cell<bool>,
-    /// Alpine with an `agent` user in the test's registry, set by [`Registry::start`]: a kit
-    /// from a registry only combines with a `-t` that is a registry reference, not an archive.
+    /// The port of the test's registry, set by [`Registry::start`].
+    pub(crate) registry: std::cell::Cell<Option<u16>>,
+    /// Alpine with an `agent` user in the test's registry, pushed by [`E2e::alpine_template`] the
+    /// first time a test with a registry needs it: a kit from a registry only combines with a `-t`
+    /// that is a registry reference, not an archive.
     pub(crate) base: std::cell::RefCell<Option<String>>,
     /// Built-in agents load sbx's published kits from Docker Hub instead of the stand-ins
     /// ([`E2e::real_agent_kits`]).
@@ -24,6 +27,7 @@ impl E2e {
             name: format!("e2e-{}-{test}", std::process::id()),
             vars: Vec::new(),
             no_seeds: Default::default(),
+            registry: Default::default(),
             base: Default::default(),
             real_kits: Default::default(),
         };
@@ -287,7 +291,8 @@ pub(crate) fn smolvm(args: &[&str]) {
 
 /// A throwaway `registry:2` in its own smolvm machine on a free loopback port, for published-kit
 /// fixtures. Each test starts its own: nextest runs every test in a process of its own. `start`
-/// also lets `e` load kits from any registry (`kit.allowedSources=["*"]`).
+/// also lets `e` load kits from any registry (`kit.allowedSources=["*"]`), and makes it the
+/// registry [`E2e::alpine_template`] pushes the Alpine base to.
 pub(crate) struct Registry {
     pub(crate) machine: String,
     pub(crate) port: u16,
@@ -319,13 +324,7 @@ impl Registry {
             &publish,
         ]);
         assert!(wait_until(60, || r.answers()), "the local registry answers");
-        let base = Image::alpine().with_agent_account(&Image::alpine());
-        let base = r.push(
-            "base",
-            base,
-            descriptor("mixin", &[], serde_json::json!([])),
-        );
-        *e.base.borrow_mut() = Some(base);
+        e.registry.set(Some(r.port));
         r
     }
 
@@ -335,54 +334,64 @@ impl Registry {
 
     /// `localhost:<port>/e2e/<repo>:1`.
     pub(crate) fn reference(&self, repo: &str) -> String {
-        format!("localhost:{}/e2e/{repo}:1", self.port)
+        reference(self.port, repo)
     }
 
     /// Pushes `image` as a kit: the descriptor goes in the manifest annotation, as `sbx kit push`
     /// publishes it.
     pub(crate) fn push(&self, repo: &str, image: Image, descriptor: serde_json::Value) -> String {
-        use oci_client::client::{ClientConfig, ClientProtocol, Config, ImageLayer};
-        use oci_client::manifest::OciImageManifest;
-        use oci_client::secrets::RegistryAuth;
-        let reference = self.reference(repo);
-        let _ = rustls::crypto::ring::default_provider().install_default();
-        let client = oci_client::Client::new(ClientConfig {
-            protocol: ClientProtocol::Http,
-            ..Default::default()
-        });
-        let layers: Vec<ImageLayer> = image
-            .layers
-            .into_iter()
-            .map(|(data, media)| ImageLayer::new(data, media, None))
-            .collect();
-        let config = Config::oci_v1(serde_json::to_vec(&image.config).unwrap(), None);
-        let annotations = std::collections::BTreeMap::from([
-            (
-                "vnd.docker.sandbox.kit.descriptor".to_string(),
-                descriptor.to_string(),
-            ),
-            (
-                "vnd.docker.sandbox.kit.schema-version".to_string(),
-                "3".to_string(),
-            ),
-        ]);
-        let mut manifest = OciImageManifest::build(&layers, &config, Some(annotations));
-        // smolvm's puller (for the `-t` base image) needs it; `build` leaves it out.
-        manifest.media_type = Some(oci_client::manifest::OCI_IMAGE_MEDIA_TYPE.to_string());
-        let rt = tokio::runtime::Builder::new_current_thread()
-            .enable_all()
-            .build()
-            .unwrap();
-        rt.block_on(client.push(
-            &reference.parse().unwrap(),
-            &layers,
-            config,
-            &RegistryAuth::Anonymous,
-            Some(manifest),
-        ))
-        .unwrap_or_else(|e| panic!("pushing {reference}: {e}"));
-        reference
+        push(self.port, repo, image, descriptor)
     }
+}
+
+/// `localhost:<port>/e2e/<repo>:1`.
+fn reference(port: u16, repo: &str) -> String {
+    format!("localhost:{port}/e2e/{repo}:1")
+}
+
+/// [`Registry::push`] to the registry on `port`.
+fn push(port: u16, repo: &str, image: Image, descriptor: serde_json::Value) -> String {
+    use oci_client::client::{ClientConfig, ClientProtocol, Config, ImageLayer};
+    use oci_client::manifest::OciImageManifest;
+    use oci_client::secrets::RegistryAuth;
+    let reference = reference(port, repo);
+    let _ = rustls::crypto::ring::default_provider().install_default();
+    let client = oci_client::Client::new(ClientConfig {
+        protocol: ClientProtocol::Http,
+        ..Default::default()
+    });
+    let layers: Vec<ImageLayer> = image
+        .layers
+        .into_iter()
+        .map(|(data, media)| ImageLayer::new(data, media, None))
+        .collect();
+    let config = Config::oci_v1(serde_json::to_vec(&image.config).unwrap(), None);
+    let annotations = std::collections::BTreeMap::from([
+        (
+            "vnd.docker.sandbox.kit.descriptor".to_string(),
+            descriptor.to_string(),
+        ),
+        (
+            "vnd.docker.sandbox.kit.schema-version".to_string(),
+            "3".to_string(),
+        ),
+    ]);
+    let mut manifest = OciImageManifest::build(&layers, &config, Some(annotations));
+    // smolvm's puller (for the `-t` base image) needs it; `build` leaves it out.
+    manifest.media_type = Some(oci_client::manifest::OCI_IMAGE_MEDIA_TYPE.to_string());
+    let rt = tokio::runtime::Builder::new_current_thread()
+        .enable_all()
+        .build()
+        .unwrap();
+    rt.block_on(client.push(
+        &reference.parse().unwrap(),
+        &layers,
+        config,
+        &RegistryAuth::Anonymous,
+        Some(manifest),
+    ))
+    .unwrap_or_else(|e| panic!("pushing {reference}: {e}"));
+    reference
 }
 
 impl Drop for Registry {
@@ -394,6 +403,7 @@ impl Drop for Registry {
 }
 
 /// Layers (data, media type) and image config of a kit image to push.
+#[derive(Clone)]
 pub(crate) struct Image {
     pub(crate) layers: Vec<(Vec<u8>, String)>,
     pub(crate) config: serde_json::Value,
@@ -421,9 +431,17 @@ impl Image {
         }
     }
 
-    /// Alpine's layers and config, pulled from Docker Hub with smolbento's own client.
+    /// Alpine's layers and config, pulled from Docker Hub with smolbento's own client the first
+    /// time the test asks (nextest runs each test in a process of its own), then copied.
     pub(crate) fn alpine() -> Image {
-        Image::pull("alpine")
+        static ALPINE: std::sync::OnceLock<Image> = std::sync::OnceLock::new();
+        ALPINE.get_or_init(|| Image::pull("alpine")).clone()
+    }
+
+    /// Alpine with an `agent` account (`with_agent_account`).
+    pub(crate) fn alpine_agent() -> Image {
+        let alpine = Image::alpine();
+        alpine.clone().with_agent_account(&alpine)
     }
 
     /// `reference`'s layers and config, pulled from Docker Hub with smolbento's own client.
@@ -565,9 +583,7 @@ impl Image {
         ));
         if !path.exists() {
             let tmp = path.with_extension(format!("tmp{}", std::process::id()));
-            Image::alpine()
-                .with_agent_account(&Image::alpine())
-                .save_oci(&tmp);
+            Image::alpine_agent().save_oci(&tmp);
             std::fs::rename(&tmp, &path).unwrap();
         }
         path
@@ -644,12 +660,18 @@ pub(crate) fn add_agent_hook() -> String {
 
 impl E2e {
     /// The `-t` of an Alpine sandbox with an `agent` user: the registry's copy once a test has
-    /// one, else the local archive.
+    /// one (pushed there on first use), else the local archive.
     pub(crate) fn alpine_template(&self) -> String {
+        let Some(port) = self.registry.get() else {
+            return Image::alpine_agent_archive().to_str().unwrap().to_string();
+        };
         self.base
-            .borrow()
+            .borrow_mut()
+            .get_or_insert_with(|| {
+                let empty = descriptor("mixin", &[], serde_json::json!([]));
+                push(port, "base", Image::alpine_agent(), empty)
+            })
             .clone()
-            .unwrap_or_else(|| Image::alpine_agent_archive().to_str().unwrap().to_string())
     }
 
     /// `bento create` of an Alpine-based shell sandbox with `kits` (`-t <alpine> --kit ...`).
