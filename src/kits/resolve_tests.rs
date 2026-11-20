@@ -605,7 +605,7 @@ fn host_mounts_are_collected_in_kit_order_with_their_kit_s_identity() {
     let mut a = mixin("a")
         .requires(&["b"])
         .cap(HM, false, host("/home/agent/.a", None));
-    a.source = Source::LocalV3("/kits/a".into());
+    a.source = Source::Local("/kits/a".into());
     let b = mixin("b")
         .provides(&["b@1.0.0"])
         .cap(HM, false, host("/home/agent/.b", Some("0700")));
@@ -772,7 +772,7 @@ fn the_claude_mixin_exports_its_model_arg() {
     .unwrap();
     let mixin = crate::kits::v3::parse(
         &text,
-        Source::LocalV3(std::path::PathBuf::from("/k/claude-mixin")),
+        Source::Local(std::path::PathBuf::from("/k/claude-mixin")),
     )
     .unwrap();
     let v = ArgValues::parse(&[], &["model=x".into()]).unwrap();
@@ -887,7 +887,10 @@ fn v2_workspace_files_and_workdir_expand_to_the_workdir() {
     let dir = std::path::Path::new("tests/fixtures/kits/v2/workspace-files");
     let yaml = std::fs::read_to_string(dir.join("spec.yaml")).unwrap();
     let kit = crate::kits::v2::parse(&yaml, dir).unwrap();
-    let v2_workload = || Kit::new("w", Kind::Workload, Source::LocalV2("w".into()));
+    let v2_workload = || Kit {
+        v2: true,
+        ..Kit::new("w", Kind::Workload, Source::Local("w".into()))
+    };
     let files = |p: &Plan| -> Vec<(String, Vec<u8>)> {
         p.merged
             .files
@@ -919,8 +922,14 @@ fn v2_workspace_files_and_workdir_expand_to_the_workdir() {
 
 #[test]
 fn v2_and_v3_kits_are_not_mixed() {
-    let v2_workload = || Kit::new("w2", Kind::Workload, Source::LocalV2("w2".into()));
-    let v2 = |name: &str| Kit::new(name, Kind::Mixin, Source::LocalV2(name.into()));
+    let v2_workload = || Kit {
+        v2: true,
+        ..Kit::new("w2", Kind::Workload, Source::Local("w2".into()))
+    };
+    let v2 = |name: &str| Kit {
+        v2: true,
+        ..Kit::new(name, Kind::Mixin, Source::Local(name.into()))
+    };
     let docker = || Kit::new("docker", Kind::Mixin, Source::Builtin("docker"));
     // sbx's wording.
     let err = check_formats(&v2_workload(), &[v2("old"), mixin("new")]).unwrap_err();

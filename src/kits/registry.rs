@@ -694,7 +694,7 @@ pub fn read_layout(dir: &Path, source: Source) -> Result<Kit> {
     let what = match &source {
         Source::Registry(r) | Source::Agent(r) => r.clone(),
         Source::Builtin(n) => format!("builtin:{n}"),
-        Source::LocalV3(p) | Source::LocalV2(p) | Source::Smolfile(p) => p.display().to_string(),
+        Source::Local(p) | Source::Smolfile(p) => p.display().to_string(),
     };
     let l = Layout::read(dir)?;
     if let Some((spec, files)) = v2_spec(&l.manifest, &what)? {

@@ -948,7 +948,7 @@ fn pinned_ref(k: &Kit) -> Result<String> {
             None => bail!("kit {}: {r} has no digest to pin it to", k.name),
         },
         Source::Builtin(n) => format!("builtin:{n}"),
-        Source::LocalV3(p) | Source::LocalV2(p) | Source::Smolfile(p) => p
+        Source::Local(p) | Source::Smolfile(p) => p
             .canonicalize()
             .unwrap_or_else(|_| p.clone())
             .display()

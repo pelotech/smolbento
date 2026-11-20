@@ -15,8 +15,8 @@ pub enum Kind {
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum Source {
     Registry(String),
-    LocalV3(PathBuf),
-    LocalV2(PathBuf),
+    /// A kit directory or file on this host: a v3 descriptor or a v2 `spec.yaml` (`Kit.v2`).
+    Local(PathBuf),
     Smolfile(PathBuf),
     /// A built-in agent's published kit (`load::agent`), by the ref it was loaded from: trusted
     /// like smolbento's own kits, and the only kind that gets the built-in agent's extras.
@@ -39,19 +39,6 @@ impl Format {
         match self {
             Format::V2 => "v2",
             Format::V3 => "v3",
-        }
-    }
-}
-
-impl Source {
-    /// `None` for a Smolfile, which isn't a kit file.
-    pub fn format(&self) -> Option<Format> {
-        match self {
-            Source::LocalV2(_) => Some(Format::V2),
-            Source::Smolfile(_) => None,
-            Source::Registry(_) | Source::LocalV3(_) | Source::Agent(_) | Source::Builtin(_) => {
-                Some(Format::V3)
-            }
         }
     }
 }
@@ -98,8 +85,7 @@ pub struct Kit {
     /// The reference the user gave (`--kit`, the agent argument), as typed: resolver messages name
     /// kits by it, as sbx does. None for kits already in a sandbox.
     pub reference: Option<String>,
-    /// Read from a v2 `spec.yaml`. A published v2 kit's source is its registry reference, which
-    /// alone can't tell the format.
+    /// Read from a v2 `spec.yaml`, local or published: the kit's one record of its format.
     pub v2: bool,
 }
 
@@ -152,12 +138,12 @@ impl Kit {
         }
     }
 
-    /// The kit file format it was written in.
+    /// The kit file format it was written in: `None` for a Smolfile, which isn't a kit file.
     pub fn format(&self) -> Option<Format> {
-        if self.v2 {
-            Some(Format::V2)
-        } else {
-            self.source.format()
+        match (&self.source, self.v2) {
+            (Source::Smolfile(_), _) => None,
+            (_, true) => Some(Format::V2),
+            (_, false) => Some(Format::V3),
         }
     }
 

@@ -31,7 +31,7 @@ pub fn name_in(yaml: &str, dir: &Path) -> Result<String> {
 fn name_or_source(name: Option<String>, dir: &Path) -> Result<String> {
     match name {
         Some(n) => check_name(n),
-        None => name_from_source(&Source::LocalV2(dir.to_path_buf())),
+        None => name_from_source(&Source::Local(dir.to_path_buf())),
     }
 }
 
@@ -61,7 +61,7 @@ fn parse_warn(yaml: &str, dir: &Path) -> Result<(Kit, Vec<String>)> {
         "mixin" => Kind::Mixin,
         k => bail!("unknown kind '{k}'"),
     };
-    let source = Source::LocalV2(dir.to_path_buf());
+    let source = Source::Local(dir.to_path_buf());
     let name = name_or_source(s.name.clone(), dir)?;
     let mut warnings = Vec::new();
     let mut ignored = |field: &str| warnings.push(format!("kit {name}: {field} is ignored"));
@@ -614,9 +614,10 @@ mod tests {
         // A v2 source, so its install hooks get the container's environment as v2's do.
         let mut v3 = crate::kits::v3::parse(
             &std::fs::read_to_string("tests/fixtures/kits/v2/full-as-v3.yaml").unwrap(),
-            Source::LocalV2(dir.into()),
+            Source::Local(dir.into()),
         )
         .unwrap();
+        v3.v2 = true;
         v3.name = v2.name.clone();
         // v3 has no plain variables (only arguments with `env:`); the fixture covers the rest.
         v3.env = v2.env.clone();
@@ -767,7 +768,10 @@ mod tests {
         std::fs::write(home.join("ci.yml"), "ref: ${{ kit.env.WORKSPACE }}\n").unwrap();
         let yaml = "schemaVersion: \"2\"\nkind: mixin\nsetup:\n  files:\n    - path: /home/agent/w\n      content: \"${WORKDIR}\"\n";
         let k = parse(yaml, d.path()).unwrap();
-        let w = Kit::new("w", Kind::Workload, Source::LocalV2("w".into()));
+        let w = Kit {
+            v2: true,
+            ..Kit::new("w", Kind::Workload, Source::Local("w".into()))
+        };
         let args = crate::kits::args::ArgValues::default();
         let p = crate::kits::resolve::resolve_for(w, vec![k], &args, "/w/repo").unwrap();
         let files: Vec<(&str, &[u8])> = p
@@ -797,7 +801,10 @@ mod tests {
         let mut k = parse(yaml, Path::new("/k/m")).unwrap();
         k.source = Source::Registry("acme/m:1".into());
         assert_eq!(k.format(), Some(Format::V2));
-        let w = Kit::new("w", Kind::Workload, Source::LocalV2("w".into()));
+        let w = Kit {
+            v2: true,
+            ..Kit::new("w", Kind::Workload, Source::Local("w".into()))
+        };
         let args = crate::kits::args::ArgValues::default();
         let p = crate::kits::resolve::resolve_for(w, vec![k], &args, "/w/repo").unwrap();
         assert!(!p.merged.install_hooks[0].1.clean_env);
@@ -808,7 +815,10 @@ mod tests {
     fn a_relative_setup_file_goes_under_the_workspace() {
         let yaml = "schemaVersion: \"2\"\nkind: mixin\nname: m\nsetup:\n  files:\n    - path: notes/a.md\n      content: x\n";
         let k = parse(yaml, Path::new("/k/m")).unwrap();
-        let w = Kit::new("w", Kind::Workload, Source::LocalV2("w".into()));
+        let w = Kit {
+            v2: true,
+            ..Kit::new("w", Kind::Workload, Source::Local("w".into()))
+        };
         let args = crate::kits::args::ArgValues::default();
         let p = crate::kits::resolve::resolve_for(w, vec![k], &args, "/w/repo").unwrap();
         assert_eq!(p.merged.files[0].path, "/w/repo/notes/a.md");

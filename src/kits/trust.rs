@@ -26,7 +26,7 @@ pub fn check(source: &Source, settings: &Settings) -> Result<()> {
                 serde_json::to_string(&suggested)?,
             )
         }
-        Source::LocalV3(_) | Source::LocalV2(_) | Source::Smolfile(_) => {
+        Source::Local(_) | Source::Smolfile(_) => {
             if !settings.bool("kit.allowLocalKits")? {
                 bail!(
                     "local kits are disabled; enable them with \
@@ -299,13 +299,9 @@ mod tests {
     fn local_kits_can_be_disabled() {
         let (_d, s) = settings(&[]);
         let p = PathBuf::from("/k");
-        check(&Source::LocalV3(p.clone()), &s).unwrap();
+        check(&Source::Local(p.clone()), &s).unwrap();
         let (_d, s) = settings(&[("SMOLBENTO_KIT_ALLOW_LOCAL_KITS", "false")]);
-        for src in [
-            Source::LocalV3(p.clone()),
-            Source::LocalV2(p.clone()),
-            Source::Smolfile(p),
-        ] {
+        for src in [Source::Local(p.clone()), Source::Smolfile(p)] {
             assert_eq!(
                 check(&src, &s).unwrap_err().to_string(),
                 "local kits are disabled; enable them with bento settings set kit.allowLocalKits true"
