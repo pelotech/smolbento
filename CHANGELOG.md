@@ -1,5 +1,37 @@
 # Changelog
 
+## [0.33.0](https://github.com/pelotech/smolbento/compare/v0.32.1...v0.33.0) (2026-11-20)
+
+
+### Features
+
+* **cli:** bento cp copies a directory out of a sandbox ([#184](https://github.com/pelotech/smolbento/issues/184)) ([a44ea84](https://github.com/pelotech/smolbento/commit/a44ea842747b884ba7efe84f8edf664dca5313ff))
+* **kits:** apply credential@1 inject schemes in v3, and read v2 through v3 ([#185](https://github.com/pelotech/smolbento/issues/185)) ([37a85ec](https://github.com/pelotech/smolbento/commit/37a85ecdae0e577ce9472db9a635ce6041ea6521))
+* **secret:** hand running sandboxes a new secret value at once ([#177](https://github.com/pelotech/smolbento/issues/177)) ([0a88c4e](https://github.com/pelotech/smolbento/commit/0a88c4e87069accfe16c68633a2bcf6dd8d1c799))
+
+
+### Bug Fixes
+
+* launch published v2 workloads, keep others' MCP rules on a failed create, and tidy ([#179](https://github.com/pelotech/smolbento/issues/179)) ([7a3714e](https://github.com/pelotech/smolbento/commit/7a3714e413dfa870935613760a9ef3c696e22332))
+
+
+### Refactors
+
+* **builder:** copy the kit in and the build out with machine files ([#178](https://github.com/pelotech/smolbento/issues/178)) ([2ad9c9c](https://github.com/pelotech/smolbento/commit/2ad9c9c590b3a1e216d6c18044825109bf6b6c44))
+* **kits:** make Kit.v2 the one record of a kit's format ([#182](https://github.com/pelotech/smolbento/issues/182)) ([92d7bae](https://github.com/pelotech/smolbento/commit/92d7bae13cca3401d8f51f776c2a2613efc30190))
+* **sandbox:** one definition of the recorded fields; two start layers ([#183](https://github.com/pelotech/smolbento/issues/183)) ([e43003a](https://github.com/pelotech/smolbento/commit/e43003afdd8f7341fb7b3bc2d09fd25c7fd5ef6f))
+* share helpers, one policy rule check, simpler kit loading and cli cleanups ([#181](https://github.com/pelotech/smolbento/issues/181)) ([7099bf9](https://github.com/pelotech/smolbento/commit/7099bf948a61938f79638cda82729c772c2b9613))
+
+
+### Chores
+
+* **smolvm:** pin 1.35.5 ([#175](https://github.com/pelotech/smolbento/issues/175)) ([42090fd](https://github.com/pelotech/smolbento/commit/42090fd034d41beb64fd64eb520975a958788d8f))
+
+
+### Tests
+
+* share sandbox, policy, secret and capability fixtures ([#180](https://github.com/pelotech/smolbento/issues/180)) ([e506247](https://github.com/pelotech/smolbento/commit/e5062472ef99d5184ec5dc226230b26d628a7b3b))
+
 ## [0.32.1](https://github.com/pelotech/smolbento/compare/v0.32.0...v0.32.1) (2026-11-19)
 
 
