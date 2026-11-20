@@ -25,7 +25,7 @@ pub use clone_step::*;
 pub use create::CreateRequest;
 pub use guest_cmd::*;
 pub use kit_steps::*;
-pub use labels::Meta;
+pub use labels::{Meta, Recorded};
 
 /// What a create or start is doing, for the caller's progress output.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -94,7 +94,7 @@ impl Sandbox {
     /// Refuses a sandbox made when built-in agents weren't kits: it records no command
     /// (`sbx.command`), which every kit sandbox has.
     pub fn check_current(&self) -> Result<()> {
-        if self.meta.command.is_none() {
+        if self.meta.rec.command.is_none() {
             return Err(anyhow!(
                 "sandbox {n} was created by an older smolbento whose built-in agents weren't \
                  kits; recreate it (bento rm {n}, then bento create …)",
@@ -174,13 +174,8 @@ pub fn list<R: Runner>(vm: &Smolvm<R>) -> Result<Vec<Sandbox>> {
 
 /// Applies the network to the stopped machine, starts it with the secret env, then its setup steps.
 /// A failed setup step stops the machine again: left running half set up, later commands would
-/// skip `start` and never retry it.
-pub fn start<R: Runner>(vm: &Smolvm<R>, sb: &Sandbox, plan: &StartPlan) -> Result<()> {
-    start_with(vm, sb, plan, &mut |_| {})
-}
-
-/// `start`, telling `on` what it's doing.
-pub fn start_with<R: Runner>(
+/// skip `start` and never retry it. `on` hears what it's doing.
+pub fn start<R: Runner>(
     vm: &Smolvm<R>,
     sb: &Sandbox,
     plan: &StartPlan,
@@ -189,7 +184,7 @@ pub fn start_with<R: Runner>(
     start_checked(vm, sb, plan, on, &bridge::ensure_private_dir)
 }
 
-/// `start_with`, with `private` deciding whether the bridge's socket directory is safe.
+/// `start`, with `private` deciding whether the bridge's socket directory is safe.
 fn start_checked<R: Runner>(
     vm: &Smolvm<R>,
     sb: &Sandbox,
@@ -234,7 +229,7 @@ fn setup<R: Runner>(
         );
     }
     // Not fatal: an image without `mount` keeps the files writable, as they were before.
-    if let Some(cmd) = lockdown_cmd(sb.meta.no_fuse, &sb.meta.read_only_files)
+    if let Some(cmd) = lockdown_cmd(sb.meta.rec.no_fuse, &sb.meta.rec.read_only_files)
         && let Err(e) = vm.exec_captured(&ExecSpec::sh(&sb.machine, "root", cmd))
     {
         crate::warning!(
@@ -320,7 +315,7 @@ pub fn ensure_running<R: Runner>(
     plan: impl FnOnce() -> Result<StartPlan>,
 ) -> Result<()> {
     if !sb.is_running() {
-        start(vm, sb, &plan()?)?;
+        start(vm, sb, &plan()?, &mut |_| {})?;
         sb.state = MachineState::Running;
     }
     Ok(())
@@ -357,12 +352,12 @@ pub fn create<R: Runner>(
         ),
     };
     let Some(kit) = &plan.kit else {
-        start_with(vm, &sb, plan, on).map_err(removed)?;
+        start(vm, &sb, plan, on).map_err(removed)?;
         on(Event::Booted);
         sb.state = MachineState::Running;
         return Ok(sb);
     };
-    start_with(vm, &sb, plan, on)
+    start(vm, &sb, plan, on)
         .and_then(|()| first_start(vm, &sb, plan, kit, drop_install_rules, on))
         .map_err(removed)?;
     on(Event::Booted);
@@ -421,7 +416,8 @@ fn first_start<R: Runner>(
                     .collect(),
                 ..plan.clone()
             };
-            start(vm, sb, &restart).context("restarting without install-only credentials")?;
+            start(vm, sb, &restart, &mut |_| {})
+                .context("restarting without install-only credentials")?;
         }
         Ok(())
     };

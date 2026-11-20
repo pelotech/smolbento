@@ -305,7 +305,7 @@ fn host_notes<R: Runner>(
     };
     let sbs: Vec<(&str, bool)> = sandboxes
         .iter()
-        .map(|s| (s.name(), s.meta.host_access))
+        .map(|s| (s.name(), s.meta.rec.host_access))
         .collect();
     if allowed && added.iter().any(compile::is_host_services) {
         notes.extend(without_access_note(scope, &sbs));
@@ -369,8 +369,8 @@ fn guard_bound_secrets<R: Runner>(
         .filter(|s| scope.is_none_or(|n| n == s.name()))
     {
         if let Some((host, service)) = bound_conflict(
-            &sb.meta.credential_hosts,
-            &sb.meta.secrets,
+            &sb.meta.rec.credential_hosts,
+            &sb.meta.rec.secrets,
             secrets.as_ref(),
             denies,
         ) {
@@ -730,7 +730,7 @@ fn check<R: Runner>(ctx: &Ctx<R>, policy: &Policy, a: &CheckArgs) -> Result<i32>
         Some(n) => sandbox::find(&ctx.vm, n)
             .ok()
             .flatten()
-            .map(|s| s.meta.credential_hosts)
+            .map(|s| s.meta.rec.credential_hosts)
             .unwrap_or_default(),
         None => Vec::new(),
     };

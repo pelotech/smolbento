@@ -60,13 +60,13 @@ pub fn render(sb: &Sandbox, sessions: usize, format: Format) -> Result<String> {
         created_at: super::rfc3339(m.created),
         name: sb.name(),
         agent: &m.agent,
-        kits: m.kits.iter().map(|k| k.reference.clone()).collect(),
+        kits: m.rec.kits.iter().map(|k| k.reference.clone()).collect(),
         state: super::ls::status(sb.state),
         created_version: m.version.as_ref().map(|v| format!("v{v}")),
         image: sb.image.as_deref(),
         workspace: m.workspace.as_deref(),
         clone_source: m.clone_repo.as_deref(),
-        secrets: &m.secrets,
+        secrets: &m.rec.secrets,
         // smolvm publishes TCP on 127.0.0.1 only; sbx's measured form.
         ports: sb
             .ports
@@ -124,8 +124,8 @@ fn table(d: &Details) -> String {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::sandbox::Meta;
     use crate::sandbox::labels::KitRecord;
+    use crate::sandbox::{Meta, Recorded};
     use crate::testutil::*;
 
     /// `machine status --json` for a sandbox with `meta`'s labels.
@@ -146,23 +146,26 @@ mod tests {
     /// A running clone sandbox with kits, a host mount, secrets, a port and one live session.
     fn full(t: &TestEnv) -> session::Session {
         let meta = Meta {
+            rec: Recorded {
+                secrets: vec!["anthropic".into(), "github".into()],
+                kits: ["ghcr.io/example/kit:1@sha256:abc", "/Users/dev/kits/cache"]
+                    .map(|r| KitRecord {
+                        name: "k".into(),
+                        reference: r.into(),
+                        provides: vec![],
+                        format: None,
+                        args: Default::default(),
+                    })
+                    .to_vec(),
+                ..Default::default()
+            },
             name: "claude-proj".into(),
             agent: "claude".into(),
             workspace: Some("/Users/dev/proj".into()),
             workspaces: vec!["/Users/dev/proj".into()],
             created: 999_000,
             version: Some("0.27.0".into()),
-            secrets: vec!["anthropic".into(), "github".into()],
             clone_repo: Some("/Users/dev/proj".into()),
-            kits: ["ghcr.io/example/kit:1@sha256:abc", "/Users/dev/kits/cache"]
-                .map(|r| KitRecord {
-                    name: "k".into(),
-                    reference: r.into(),
-                    provides: vec![],
-                    format: None,
-                    args: Default::default(),
-                })
-                .to_vec(),
             host_mounts: BTreeMap::from([(
                 "/home/agent/.cache/x".into(),
                 "/Users/dev/.local/share/smolbento/kit-host-mounts/aa/bb".into(),

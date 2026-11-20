@@ -140,12 +140,13 @@ pub fn bound_vars<'a>(
         .env_vars
         .iter()
         .chain(
-            meta.credential_services
+            meta.rec
+                .credential_services
                 .iter()
                 .filter(|(_, s)| *s == name)
                 .map(|(v, _)| v),
         )
-        .filter(|v| install || !meta.credential_install.contains(v))
+        .filter(|v| install || !meta.rec.credential_install.contains(v))
         .collect()
 }
 
@@ -153,7 +154,7 @@ pub fn bound_vars<'a>(
 pub fn with_value(meta: &Meta, vars: Vec<&String>, value: &str) -> Vec<(String, String)> {
     vars.into_iter()
         .map(|v| {
-            let value = match meta.credential_formats.get(v) {
+            let value = match meta.rec.credential_formats.get(v) {
                 Some(f) => f.apply(value),
                 None => value.to_string(),
             };
@@ -175,12 +176,12 @@ pub fn start_env(
 ) -> (Vec<(String, String)>, Vec<String>) {
     let sandbox = meta.name.as_str();
     let mut env = Vec::new();
-    for name in &meta.secrets {
+    for name in &meta.rec.secrets {
         env.extend(service_env(secrets, meta, name, store, install));
     }
     // A `--static-mcp` server's header secrets (`sbx.mcp-secret.*`, which only `--static-mcp`
     // writes): each a global `mcp:<server>:<name>` secret bound to its own env var.
-    for (var, secret) in &meta.mcp_secrets {
+    for (var, secret) in &meta.rec.mcp_secrets {
         match secrets.global_entry(secret).map(|e| resolve(e, store)) {
             Some(Ok(value)) => env.push((var.clone(), value)),
             Some(Err(e)) => crate::warning!(
@@ -195,11 +196,12 @@ pub fn start_env(
     // Recorded env vars without a value, even of services secrets.toml no longer defines, and
     // install-only and kit ones: none may come from the host shell's environment instead.
     let mut remove: Vec<String> = meta
+        .rec
         .credential_env
         .iter()
-        .chain(&meta.credential_install)
-        .chain(meta.credential_services.keys())
-        .chain(meta.mcp_secrets.keys())
+        .chain(&meta.rec.credential_install)
+        .chain(meta.rec.credential_services.keys())
+        .chain(meta.rec.mcp_secrets.keys())
         .filter(|v| !env.iter().any(|(k, _)| k == *v))
         .cloned()
         .collect();
@@ -211,6 +213,7 @@ pub fn start_env(
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::sandbox::Recorded;
     use crate::secrets::store::MemoryStore;
     use crate::secrets::{SecretEntry, Source};
 
@@ -227,10 +230,13 @@ mod tests {
         secrets.set(entry);
         // GITHUB_TOKEN is install-only; openai's secret isn't set any more.
         let meta = Meta {
+            rec: Recorded {
+                secrets: vec!["github".into(), "openai".into()],
+                credential_env: vec!["GH_TOKEN".into(), "OPENAI_API_KEY".into()],
+                credential_install: vec!["GITHUB_TOKEN".into()],
+                ..Default::default()
+            },
             name: "s".into(),
-            secrets: vec!["github".into(), "openai".into()],
-            credential_env: vec!["GH_TOKEN".into(), "OPENAI_API_KEY".into()],
-            credential_install: vec!["GITHUB_TOKEN".into()],
             ..Default::default()
         };
         let (env, remove) = start_env(&secrets, &meta, &store, false);
@@ -263,9 +269,12 @@ mod tests {
             "mcp:linear:api-key".to_string(),
         )]);
         let meta = Meta {
+            rec: Recorded {
+                credential_env: vec!["SBX_MCP_LINEAR_API_KEY".into()],
+                mcp_secrets: bound.clone(),
+                ..Default::default()
+            },
             name: "s".into(),
-            credential_env: vec!["SBX_MCP_LINEAR_API_KEY".into()],
-            mcp_secrets: bound.clone(),
             ..Default::default()
         };
         let (env, remove) = start_env(&secrets, &meta, &store, false);
@@ -277,9 +286,12 @@ mod tests {
         // Only what `--static-mcp` recorded gets the value: the same binding among a kit's
         // credential services (which kits write) gets nothing.
         let kit = Meta {
+            rec: Recorded {
+                credential_env: vec!["SBX_MCP_LINEAR_API_KEY".into()],
+                credential_services: bound,
+                ..Default::default()
+            },
             name: "s".into(),
-            credential_env: vec!["SBX_MCP_LINEAR_API_KEY".into()],
-            credential_services: bound,
             ..Default::default()
         };
         let (env, remove) = start_env(&secrets, &kit, &store, false);

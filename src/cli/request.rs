@@ -10,7 +10,7 @@ use crate::kits::capability;
 use crate::kits::load;
 use crate::kits::model::{Content, Kind, Kit, Source};
 use crate::kits::resolve::{Plan, resolve_for};
-use crate::sandbox::{self, CreateRequest, Sandbox, name, options};
+use crate::sandbox::{self, CreateRequest, Recorded, Sandbox, name, options};
 use crate::smolvm::Runner;
 use crate::util;
 use crate::workspace::{self, Workspace, clone};
@@ -64,6 +64,11 @@ fn base_request<R: Runner>(
     let skills_mode = crate::skills::resolve_mode(opts.skills.as_deref(), &ctx.settings)?;
 
     Ok(CreateRequest {
+        rec: Recorded {
+            no_fuse: opts.no_fuse,
+            read_only_files: opts.read_only_files.clone(),
+            ..Default::default()
+        },
         name,
         agent: agent.into(),
         workspaces,
@@ -79,8 +84,6 @@ fn base_request<R: Runner>(
         host_mounts,
         skills_mode,
         mcp: opts.static_mcp.clone(),
-        no_fuse: opts.no_fuse,
-        read_only_files: opts.read_only_files.clone(),
         ..Default::default()
     })
 }
@@ -204,7 +207,7 @@ pub(crate) fn kit_target<R: Runner>(
         }
         let mut req = base_request(ctx, &e.agent, paths, opts, default_to_cwd)?;
         req.template_pack = Some(store.pack(&e));
-        req.template = Some(e.full());
+        req.rec.template = Some(e.full());
         req.image = e.image.clone();
         // The docker kit as the source sandbox had it.
         req.docker = e.docker && ctx.settings.bool("docker.enabled")?;
@@ -335,7 +338,7 @@ pub(crate) fn kit_plan<R: Runner>(
     let mixins = order_mixins(req.docker, &workload, mixins)?;
     crate::kits::resolve::check_formats(&workload, &mixins)?;
     let plan = resolve_for(workload, mixins, &args, &req.workdir())?;
-    if let Some(t) = &req.template {
+    if let Some(t) = &req.rec.template {
         let layered = crate::kits::compose::layered_names(&plan)?;
         if !layered.is_empty() {
             bail!(

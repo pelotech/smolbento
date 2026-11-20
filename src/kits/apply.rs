@@ -135,7 +135,7 @@ pub fn apply(
     let mut notes = Vec::new();
     for kc in &m.credentials {
         // `resolve` added its hosts to the kit's network rules.
-        if let Some(note) = oauth_note(kc, req.secrets.contains(&kc.req.service))
+        if let Some(note) = oauth_note(kc, req.rec.secrets.contains(&kc.req.service))
             && !notes.contains(&note)
         {
             notes.push(note);
@@ -160,11 +160,11 @@ pub fn apply(
         .into_iter()
         .map(guest::file_script)
         .collect();
-    let (context_version, contexts) = select_contexts(&m.contexts, req.agent_context)?;
-    let agent_files = if req.agent_files.is_empty() {
+    let (context_version, contexts) = select_contexts(&m.contexts, req.rec.agent_context)?;
+    let agent_files = if req.rec.agent_files.is_empty() {
         agent_files(&plan.workload.name, &contexts, &req.workdir())?
     } else {
-        req.agent_files.clone()
+        req.rec.agent_files.clone()
     };
     let mounts: Vec<&Path> = req.workspaces.iter().map(|w| w.path.as_path()).collect();
     steps.context = context_scripts(
@@ -176,7 +176,7 @@ pub fn apply(
     );
     // Settled by the first text written: until then a later kit is free to choose.
     if !steps.context.is_empty() {
-        req.agent_context = context_version;
+        req.rec.agent_context = context_version;
     }
     steps.startup_d = startup_d(&kits, m, &tmpfs);
 
@@ -187,8 +187,8 @@ pub fn apply(
         .any(|c| matches!(c.body, CapBody::Sbx));
     set_workload_fields(req, &plan.workload, workdir, agent_files);
     record_kits(&kits, &plan.args, req)?;
-    steps.kit_names = req.kits.iter().map(|k| k.name.clone()).collect();
-    req.long_running = m.long_running;
+    steps.kit_names = req.rec.kits.iter().map(|k| k.name.clone()).collect();
+    req.rec.long_running = m.long_running;
     // `sbx.docker` (shown by `ls`) says the sandbox has a private dockerd: the docker kit's, or
     // that of a kit providing `docker` in its place.
     req.docker = kits.iter().any(|k| {
@@ -270,13 +270,13 @@ fn drop_service_variables(req: &mut CreateRequest, kit_creds: &[KitCred]) {
     let vars: Vec<String> = kit_creds
         .iter()
         // Bound: a kit credential that was skipped leaves the user's variable the only way in.
-        .filter(|kc| kc.req.env.is_none() && req.credential_env.contains(&kit_env(&kc.req)))
+        .filter(|kc| kc.req.env.is_none() && req.rec.credential_env.contains(&kit_env(&kc.req)))
         .filter_map(|kc| services::builtin(&kc.req.service))
         .flat_map(|s| s.env_vars)
         .filter(|v| !named.contains(&v.as_str()))
         .collect();
     req.credentials.retain(|c| !vars.contains(&c.env_var));
-    req.credential_env.retain(|e| !vars.contains(e));
+    req.rec.credential_env.retain(|e| !vars.contains(e));
 }
 
 /// The variable a kit credential binds: the one it names, else `SBX_KIT_<SERVICE>`.
@@ -293,6 +293,7 @@ fn user_credentials(req: &CreateRequest, secrets: &SecretsFile) -> Vec<(String, 
         .iter()
         .map(|c| {
             let service = req
+                .rec
                 .secrets
                 .iter()
                 .find(|s| {
@@ -353,11 +354,11 @@ fn set_workload_fields(
     workdir: Option<&str>,
     agent_files: Vec<String>,
 ) {
-    req.command = workload.command.clone();
-    req.image_workdir = workdir.map(String::from);
+    req.rec.command = workload.command.clone();
+    req.rec.image_workdir = workdir.map(String::from);
     // `kit add` can't reload the workload: it reads this back from `sbx.agent-file`.
-    req.agent_files = agent_files;
-    req.user = workload.config.as_ref().map(|c| match c.user.as_str() {
+    req.rec.agent_files = agent_files;
+    req.rec.user = workload.config.as_ref().map(|c| match c.user.as_str() {
         "" => "0".to_string(),
         u => u.to_string(),
     });
@@ -372,7 +373,7 @@ fn record_kits(
     for k in kits {
         let mut r = kit_record(k)?;
         r.args = args.get(&k.name).cloned().unwrap_or_default();
-        req.kits.push(r);
+        req.rec.kits.push(r);
     }
     Ok(())
 }
@@ -634,8 +635,8 @@ fn bind_credential(
             let user = user_creds.iter().find(|(e, _)| *e == env);
             let owner = match user {
                 Some((_, s)) => Some(s),
-                None => req.credential_services.get(&env).or_else(|| {
-                    req.secrets.iter().find(|s| {
+                None => req.rec.credential_services.get(&env).or_else(|| {
+                    req.rec.secrets.iter().find(|s| {
                         secrets
                             .service(s)
                             .is_some_and(|sv| sv.env_vars.contains(&env))
@@ -651,7 +652,7 @@ fn bind_credential(
                 );
             }
             // Two bindings of the same variable must agree on how smolvm injects it.
-            if x.set_header != set_header || req.credential_formats.get(&env) != fmt.as_ref() {
+            if x.set_header != set_header || req.rec.credential_formats.get(&env) != fmt.as_ref() {
                 let other = match user {
                     Some(_) => format!("your {} secret", c.service),
                     None => "another kit".to_string(),
@@ -675,25 +676,26 @@ fn bind_credential(
         }),
     }
     if let Some(f) = fmt {
-        req.credential_formats.insert(env.clone(), f);
+        req.rec.credential_formats.insert(env.clone(), f);
     }
     if !service.is_some_and(|s| s.env_vars.contains(&env)) {
-        req.credential_services
+        req.rec
+            .credential_services
             .insert(env.clone(), c.service.clone());
     }
     // The user's own secret stays set at runtime.
     let user = user_creds.iter().any(|(e, _)| *e == env);
-    if c.install && !c.runtime && !user && !req.credential_install.contains(&env) {
-        req.credential_install.push(env.clone());
+    if c.install && !c.runtime && !user && !req.rec.credential_install.contains(&env) {
+        req.rec.credential_install.push(env.clone());
     }
     let sorted_push = |v: &mut Vec<String>, items: &[String]| {
         v.extend(items.iter().cloned());
         v.sort();
         v.dedup();
     };
-    sorted_push(&mut req.secrets, std::slice::from_ref(&c.service));
-    sorted_push(&mut req.credential_env, std::slice::from_ref(&env));
-    sorted_push(&mut req.credential_hosts, &hosts);
+    sorted_push(&mut req.rec.secrets, std::slice::from_ref(&c.service));
+    sorted_push(&mut req.rec.credential_env, std::slice::from_ref(&env));
+    sorted_push(&mut req.rec.credential_hosts, &hosts);
     Ok(())
 }
 

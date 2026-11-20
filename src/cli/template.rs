@@ -149,7 +149,7 @@ fn save<R: Runner>(ctx: &Ctx<R>, a: &TemplateSaveArgs) -> Result<()> {
     ])?;
     let r = TemplateRef::parse(&a.tag)?;
     let sb = sandbox::get(&ctx.vm, &a.sandbox)?;
-    if let Some(t) = &sb.meta.template {
+    if let Some(t) = &sb.meta.rec.template {
         bail!(
             "cannot save {}: it was created from template {t}, and smolvm can't save a sandbox \
              made from a template yet",
@@ -197,7 +197,7 @@ fn save<R: Runner>(ctx: &Ctx<R>, a: &TemplateSaveArgs) -> Result<()> {
             agent: sb.meta.agent.clone(),
             image: sb.image.clone().unwrap_or_default(),
             docker: sb.meta.docker,
-            kits: sb.meta.kits.clone(),
+            kits: sb.meta.rec.kits.clone(),
             created_at: super::rfc3339(ctx.now),
             ..Default::default()
         },

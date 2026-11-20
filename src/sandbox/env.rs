@@ -34,7 +34,7 @@ pub fn defaults(req: &CreateRequest, id: &str, services: &[String]) -> Vec<(Stri
         ("SBX_AGENT".to_string(), req.agent.clone()),
     ];
     for svc in services {
-        let mode = if req.secrets.contains(svc) {
+        let mode = if req.rec.secrets.contains(svc) {
             "apikey"
         } else {
             "none"
@@ -83,17 +83,21 @@ pub fn session_env(
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::sandbox::Recorded;
     use crate::workspace::Workspace;
 
     fn req(agent: &str, secrets: &[&str]) -> CreateRequest {
         CreateRequest {
+            rec: Recorded {
+                secrets: secrets.iter().map(|s| s.to_string()).collect(),
+                ..Default::default()
+            },
             name: "my-sb".into(),
             agent: agent.into(),
             workspaces: vec![Workspace {
                 path: "/w/repo".into(),
                 read_only: false,
             }],
-            secrets: secrets.iter().map(|s| s.to_string()).collect(),
             ..Default::default()
         }
     }
