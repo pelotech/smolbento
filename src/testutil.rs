@@ -18,7 +18,7 @@ pub struct TestEnv {
     _dir: tempfile::TempDir,
 }
 
-/// A context with temp config/cache/data dirs, cwd `<tmp>/proj`, `now` = 1_000_000, uid 501 and smolvm
+/// A context with temp config/cache/data dirs, cwd `<tmp>/proj`, `now` = 1_000_000 and smolvm
 /// 1.35.1.
 pub fn test_env(extra_env: &[(&str, &str)]) -> TestEnv {
     // Under /tmp, so `~/.smolbento`'s sockets fit macOS's limit.
@@ -80,7 +80,6 @@ pub fn test_env(extra_env: &[(&str, &str)]) -> TestEnv {
             stdin_tty: false,
             no_input: false,
             stdout_tty: false,
-            uid: 501,
             store: Box::new(crate::secrets::store::MemoryStore::default()),
             config_error,
             out: crate::ctx::Out::Buffer(Default::default()),

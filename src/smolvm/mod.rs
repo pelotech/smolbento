@@ -69,6 +69,8 @@ pub struct ProcessRunner {
     debug: bool,
     /// Set on every smolvm process, before each call's own `env`.
     env: Vec<(String, String)>,
+    /// Checked before the first smolvm process (`bento`'s runner always has one).
+    ready: Option<locate::Ready>,
 }
 
 /// A `-D` line: the call as `bento smolvm …`, which runs the same smolvm with the same state, so
@@ -98,7 +100,15 @@ impl ProcessRunner {
             bin: bin.into(),
             debug: false,
             env: Vec::new(),
+            ready: None,
         }
+    }
+
+    /// Checks `ready` (not root, the home fits, the pinned smolvm downloaded) before the first
+    /// smolvm process.
+    pub fn ready(mut self, ready: locate::Ready) -> Self {
+        self.ready = Some(ready);
+        self
     }
 
     /// A runner for `cmd`: its smolvm, with its env on every process.
@@ -128,11 +138,25 @@ impl ProcessRunner {
         }
     }
 
-    /// `smolvm --error-format json ARGS` with stdin closed: the runner's env, then `remove` unset
-    /// (it can unset the runner's own), then the call's `env` set.
-    fn command(&self, args: &[String], env: &[(String, String)], remove: &[String]) -> Command {
+    /// Every smolvm process starts here: once `ready` holds, smolvm with the runner's env.
+    fn base(&self) -> Result<Command> {
+        if let Some(ready) = &self.ready {
+            ready.check()?;
+        }
         let mut cmd = Command::new(&self.bin);
         cmd.envs(self.env.iter().map(|(k, v)| (k, v)));
+        Ok(cmd)
+    }
+
+    /// `smolvm --error-format json ARGS` with stdin closed: the runner's env, then `remove` unset
+    /// (it can unset the runner's own), then the call's `env` set.
+    fn command(
+        &self,
+        args: &[String],
+        env: &[(String, String)],
+        remove: &[String],
+    ) -> Result<Command> {
+        let mut cmd = self.base()?;
         for name in remove {
             cmd.env_remove(name);
         }
@@ -141,7 +165,7 @@ impl ProcessRunner {
             .args(args)
             .envs(env.iter().map(|(k, v)| (k, v)))
             .stdin(Stdio::null());
-        cmd
+        Ok(cmd)
     }
 
     /// Like `run`, for output an untrusted guest controls (the login relay's replay): smolvm is
@@ -150,7 +174,7 @@ impl ProcessRunner {
         self.trace(args);
         let until = Instant::now() + timeout;
         let mut child = self
-            .command(args, &[], &[])
+            .command(args, &[], &[])?
             .stdout(Stdio::piped())
             .stderr(Stdio::null())
             .spawn()
@@ -204,7 +228,7 @@ impl Runner for ProcessRunner {
     ) -> Result<Output> {
         self.trace(args);
         let out = self
-            .command(args, env, remove)
+            .command(args, env, remove)?
             .output()
             .with_context(|| self.spawn_error())?;
         Ok(Output {
@@ -223,7 +247,7 @@ impl Runner for ProcessRunner {
     ) -> Result<Output> {
         self.trace(args);
         let mut child = self
-            .command(args, env, remove)
+            .command(args, env, remove)?
             .stdout(Stdio::piped())
             .stderr(Stdio::piped())
             .spawn()
@@ -252,6 +276,8 @@ impl Runner for ProcessRunner {
     }
 
     fn spawner(&self) -> Option<ProcessSpawner> {
+        // Its processes skip `base`: they need `ready` all the same.
+        self.ready.as_ref().map_or(Ok(()), |r| r.check()).ok()?;
         Some(ProcessSpawner {
             bin: self.bin.clone(),
             env: self.env.clone(),
@@ -261,10 +287,8 @@ impl Runner for ProcessRunner {
     fn interactive(&self, args: &[String]) -> Result<i32> {
         use std::os::unix::process::CommandExt;
         self.trace(args);
-        let mut command = Command::new(&self.bin);
-        command
-            .args(args)
-            .envs(self.env.iter().map(|(k, v)| (k, v)));
+        let mut command = self.base()?;
+        command.args(args);
         // A caller with a sandbox to stop or remove ignores the hang-up before calling (see
         // `cli::run`), and an ignored signal is inherited: the child would outlive a closed
         // terminal. It has to end with the terminal, so it gets the default back.
@@ -404,6 +428,32 @@ mod tests {
 
     fn pair(k: &str, v: &str) -> (String, String) {
         (k.to_string(), v.to_string())
+    }
+
+    /// No smolvm process starts until the runner's `ready` holds: here, never, as root.
+    #[test]
+    fn a_runner_starts_smolvm_only_when_ready() {
+        let dir = tempfile::tempdir().unwrap();
+        let ran = dir.path().join("ran");
+        let cmd = locate::SmolvmCmd {
+            bin: dir.path().join("fake-smolvm"),
+            env: Vec::new(),
+            managed: false,
+            home: dir.path().into(),
+        };
+        let r = script(dir.path(), &format!("touch '{}'", ran.display())).ready(
+            locate::Ready::new(&cmd, 0, &std::collections::BTreeMap::new()),
+        );
+        let args = ["ls".to_string()];
+        for err in [
+            r.run(&args).unwrap_err(),
+            r.run_streaming(&args, &[], &[], &mut |_| {}).unwrap_err(),
+            r.interactive(&args).unwrap_err(),
+        ] {
+            assert!(err.to_string().contains("don't run bento as root"), "{err}");
+        }
+        assert!(r.spawner().is_none());
+        assert!(!ran.exists(), "smolvm ran");
     }
 
     #[test]
