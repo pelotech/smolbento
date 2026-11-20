@@ -7,11 +7,7 @@ use super::*;
 /// `agent` account, as an image that idles in a shell.
 fn git_image() -> Image {
     let base = Image::pull("alpine/git");
-    let copy = Image {
-        layers: base.layers.clone(),
-        config: base.config.clone(),
-    };
-    let mut image = copy.with_agent_account(&base);
+    let mut image = base.clone().with_agent_account(&base);
     image.config["config"]["Entrypoint"] = serde_json::Value::Null;
     image.config["config"]["Cmd"] = serde_json::json!(["/bin/sh"]);
     image

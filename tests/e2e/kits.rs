@@ -212,38 +212,14 @@ pub(crate) fn mixin_layer_is_visible_in_the_guest() {
     assert!(root_out(&e.name, "cat /etc/alpine-release").starts_with('3'));
 }
 
-/// Deletes the shared `_builder` sandbox after the test, unless it existed before. A test that
-/// takes one must be in the `builder` test group in `.config/nextest.toml`, which runs them one at
-/// a time: another test's guard would delete the sandbox under it.
-pub(crate) struct BuilderGuard(pub(crate) bool);
-
-impl BuilderGuard {
-    pub(crate) fn new() -> BuilderGuard {
-        let existed = smolvm_command()
-            .args(["machine", "status", "-n", "sbx-_builder"])
-            .output()
-            .unwrap()
-            .status
-            .success();
-        BuilderGuard(existed)
-    }
-}
-
-impl Drop for BuilderGuard {
-    fn drop(&mut self) {
-        if !self.0 {
-            let _ = smolvm_command()
-                .args(["machine", "delete", "-f", "-n", "sbx-_builder"])
-                .output();
-        }
-    }
-}
+// A test that builds a local kit uses the shared `_builder` sandbox (in the tests' own smolvm home,
+// `smolvm_home`), which it leaves in place for the next one, so BuildKit keeps its cache. It must
+// be in the `builder` test group in `.config/nextest.toml`, which runs them one at a time.
 
 #[test]
 #[ignore = "boots real VMs, builds in the builder sandbox and pulls from Docker Hub; run with `just e2e`"]
 pub(crate) fn local_v3_kit_builds_in_the_builder_sandbox() {
     let e = E2e::new("build");
-    let _builder = BuilderGuard::new();
     // Layers are composed onto the base image, which must then be a registry reference.
     let _reg = Registry::start(&e);
     let kit = e.dir.path().join("built");
@@ -453,9 +429,8 @@ pub(crate) fn local_kit_builds_from_a_registry_that_needs_a_login() {
     );
     let token = std::fs::read(&token_file).unwrap();
     // This recreates the tests' `_builder` (under their own smolvm home, not yours) with the dhi.io
-    // login bound.
+    // login bound, and leaves it so: the next build, with other logins, recreates it again.
     let e = E2e::new("dhi");
-    let _builder = BuilderGuard::new();
     e.one_off_images();
 
     // Removed on every exit path; directly from the keychain too, in case `secret rm` refuses
@@ -932,41 +907,40 @@ agentInstructions:
 
 /// tck: SPEC-v3 §7.1.1/atomic-selection. A group with a member smolbento can't apply leaves
 /// nothing behind, even its supported members; a group it can apply is applied whole.
+///
+/// A published kit: a local v3 kit is built in the builder (even without a `build:` step) and read
+/// from the build's descriptor annotation, as a pushed one is, so pushing keeps this test out of
+/// the serial builder group.
 #[test]
-#[ignore = "boots real VMs and builds in the builder sandbox; run with `just e2e`"]
+#[ignore = "boots real VMs and pulls alpine; run with `just e2e`"]
 pub(crate) fn capability_groups_apply_whole_or_not_at_all() {
     let e = E2e::new("groups");
-    let _builder = BuilderGuard::new();
-    // A v3 composition takes a registry base image, not the template archive.
-    let _reg = Registry::start(&e);
-    let kit = e.dir.path().join("e2e-groups");
-    std::fs::create_dir_all(&kit).unwrap();
-    std::fs::write(
-        kit.join("e2e-groups.yaml"),
-        r#"# syntax=docker/sandbox-kit:3
-schemaVersion: "3"
-kind: mixin
-capabilities:
-  - group:
-      optional: true
-      capabilities:
-        - type: com.docker.sandbox/lifecycle@1
-          config:
-            files: [{path: /var/tmp/skipped-feature, content: skipped}]
-        - type: com.docker.sandbox/usb-device@1
-          config: {class: smart-card}
-  - group:
-      name: Feature
-      capabilities:
-        - type: com.docker.sandbox/volume@1
-          config: {path: /var/tmp/group-volume}
-        - type: com.docker.sandbox/lifecycle@1
-          config:
-            files: [{path: /var/tmp/group-feature, content: selected}]
-"#,
-    )
-    .unwrap();
-    e.create_with_kits(&[kit.to_str().unwrap()]);
+    let reg = Registry::start(&e);
+    let kit = reg.push(
+        "groups",
+        Image::empty(),
+        serde_json::json!({
+            "schemaVersion": "3",
+            "kind": "mixin",
+            "capabilities": [
+                {"group": {"optional": true, "capabilities": [
+                    {"type": "com.docker.sandbox/lifecycle@1",
+                     "config": {"files": [{"path": "/var/tmp/skipped-feature",
+                                           "content": "skipped"}]}},
+                    {"type": "com.docker.sandbox/usb-device@1",
+                     "config": {"class": "smart-card"}},
+                ]}},
+                {"group": {"name": "Feature", "capabilities": [
+                    {"type": "com.docker.sandbox/volume@1",
+                     "config": {"path": "/var/tmp/group-volume"}},
+                    {"type": "com.docker.sandbox/lifecycle@1",
+                     "config": {"files": [{"path": "/var/tmp/group-feature",
+                                           "content": "selected"}]}},
+                ]}},
+            ],
+        }),
+    );
+    e.create_with_kits(&[&kit]);
     assert_eq!(root_out(&e.name, "cat /var/tmp/group-feature"), "selected");
     assert!(
         !root_sh(&e.name, "test -e /var/tmp/skipped-feature")
@@ -977,36 +951,34 @@ capabilities:
 }
 
 /// SPEC-v3 §6: kit arguments reach typed config fields (a port number) and paths, expanded
-/// inside the config before smolbento reads it.
+/// inside the config before smolbento reads it. A published kit, as in
+/// `capability_groups_apply_whole_or_not_at_all`: its descriptor keeps the references, which
+/// smolbento expands when it applies the kit.
 #[test]
-#[ignore = "boots real VMs and builds in the builder sandbox; run with `just e2e`"]
+#[ignore = "boots real VMs and pulls alpine; run with `just e2e`"]
 pub(crate) fn kit_args_reach_typed_config_fields() {
     let e = E2e::new("cfgargs");
-    let _builder = BuilderGuard::new();
-    // A v3 composition takes a registry base image, not the template archive.
-    let _reg = Registry::start(&e);
-    let kit = e.dir.path().join("e2e-cfgargs");
-    std::fs::create_dir_all(&kit).unwrap();
-    std::fs::write(
-        kit.join("e2e-cfgargs.yaml"),
-        r#"# syntax=docker/sandbox-kit:3
-schemaVersion: "3"
-kind: mixin
-args:
-  port:
-    default: "8123"
-  name:
-    default: cfg-args
-capabilities:
-  - type: com.docker.sandbox/port@1
-    config: {container: "${{ kit.args.port }}"}
-  - type: com.docker.sandbox/lifecycle@1
-    config:
-      files: [{path: "/var/tmp/${{ kit.args.name }}", content: "port ${{ kit.args.port }}"}]
-"#,
-    )
-    .unwrap();
-    e.create_with_kits(&[kit.to_str().unwrap()]);
+    let reg = Registry::start(&e);
+    let kit = reg.push(
+        "cfgargs",
+        Image::empty(),
+        serde_json::json!({
+            "schemaVersion": "3",
+            "kind": "mixin",
+            "args": {
+                "port": {"default": "8123"},
+                "name": {"default": "cfg-args"},
+            },
+            "capabilities": [
+                {"type": "com.docker.sandbox/port@1",
+                 "config": {"container": "${{ kit.args.port }}"}},
+                {"type": "com.docker.sandbox/lifecycle@1",
+                 "config": {"files": [{"path": "/var/tmp/${{ kit.args.name }}",
+                                       "content": "port ${{ kit.args.port }}"}]}},
+            ],
+        }),
+    );
+    e.create_with_kits(&[&kit]);
     let ports = e.ok(&["ports", &e.name]);
     assert!(ports.contains("8123"), "{ports}");
     assert_eq!(root_out(&e.name, "cat /var/tmp/cfg-args"), "port 8123");
@@ -1278,25 +1250,34 @@ fn nix_kit_dir() -> String {
 /// A trivial build: exercises nix-daemon (the store is root's) without nixpkgs.
 const NIX_BUILD: &str = r#"nix build --impure --no-link --expr 'builtins.derivation { name = "x"; system = builtins.currentSystem; builder = "/bin/sh"; args = [ "-c" "echo ok > $out" ]; }'"#;
 
-/// `kits/nix` on an agent: Nix and its daemon, direnv on the workspace's `.envrc`, the kit's agent
-/// instructions, and the image's accounts left alone.
+/// `kits/nix`, built once, in two sandboxes in turn. On the `claude` agent: Nix and its daemon,
+/// direnv on the workspace's `.envrc`, the kit's agent instructions, and the image's accounts left
+/// alone. Then on a workload whose image user isn't `agent`: Nix works for that user. The second
+/// create builds again, but in the builder the first build left, from BuildKit's cache.
 #[test]
 #[ignore = "boots real VMs, builds in the builder sandbox and downloads Nix; run with `just e2e`"]
-pub(crate) fn nix_kit_gives_agents_nix_and_direnv() {
+pub(crate) fn nix_kit_works_for_an_agent_and_a_workload_image_user() {
     let e = E2e::new("nixkit");
-    let _builder = BuilderGuard::new();
-    let _reg = Registry::start(&e);
+    let reg = Registry::start(&e);
+    let nix = nix_kit_dir();
+
+    // The `claude` agent. Its agent file is in `~/.claude`, so the kit's instructions are too.
+    let agent = "the claude agent sandbox";
     std::fs::write(e.workspace().join(".envrc"), "export E2E_DIRENV=yes\n").unwrap();
-    // `claude`'s agent file is in `~/.claude`, so the kit's instructions are there too.
-    e.create_with_kits_as("claude", &[&nix_kit_dir()]);
+    e.create_with_kits_as("claude", &[&nix]);
     let as_agent = |script: &str| e.sh_ok(&e.name, script);
-    assert!(as_agent("nix --version").contains("nix"));
+    let version = as_agent("nix --version");
+    assert!(version.contains("nix"), "{agent}: nix --version: {version}");
     as_agent(NIX_BUILD);
     assert_eq!(
         as_agent("direnv exec . sh -c 'echo $E2E_DIRENV'").trim(),
-        "yes"
+        "yes",
+        "{agent}: direnv loads the workspace's .envrc"
     );
-    assert!(root_sh(&e.name, "getent passwd agent").status.success());
+    assert!(
+        root_sh(&e.name, "getent passwd agent").status.success(),
+        "{agent}: the image's agent account is left alone"
+    );
     // Claude's kit and this one both offer agent-context@2: the text is in the agent file.
     let text = root_out(&e.name, "cat /home/agent/.claude/CLAUDE.md");
     let section = text
@@ -1305,20 +1286,27 @@ pub(crate) fn nix_kit_gives_agents_nix_and_direnv() {
         .map(|(section, _)| section);
     assert!(
         section.is_some_and(|s| s.contains("Nix and direnv are installed.")),
-        "{text}"
+        "{agent}: the kit's instructions in CLAUDE.md:\n{text}"
     );
-}
+    // Only one sandbox at a time, as when these were two tests.
+    e.ok(&["rm", "-f", &e.name]);
+    std::fs::remove_file(e.workspace().join(".envrc")).unwrap();
 
-/// `kits/nix` on a workload whose image user isn't `agent`.
-#[test]
-#[ignore = "boots real VMs, builds in the builder sandbox and downloads Nix; run with `just e2e`"]
-pub(crate) fn nix_kit_works_for_a_workload_image_user() {
-    let e = E2e::new("nixwl");
-    let _builder = BuilderGuard::new();
-    let reg = Registry::start(&e);
+    // A workload whose image user is `somebody`, in its own sandbox.
+    let workload = "the somebody workload sandbox";
+    let wl = format!("{}-wl", e.name);
+    let _wl = Forks(vec![wl.clone()]);
     let kit = image_user_kit(&reg, "nix-image-user", "somebody", serde_json::Value::Null);
-    e.create(&e.name, &["--kit", &nix_kit_dir(), &kit]);
-    assert_eq!(e.ok(&["exec", &e.name, "id", "-un"]).trim(), "somebody");
-    assert!(e.ok(&["exec", &e.name, "nix", "--version"]).contains("nix"));
-    e.sh_ok(&e.name, NIX_BUILD);
+    e.create(&wl, &["--kit", &nix, &kit]);
+    assert_eq!(
+        e.ok(&["exec", &wl, "id", "-un"]).trim(),
+        "somebody",
+        "{workload}: the session user"
+    );
+    let version = e.ok(&["exec", &wl, "nix", "--version"]);
+    assert!(
+        version.contains("nix"),
+        "{workload}: nix --version: {version}"
+    );
+    e.sh_ok(&wl, NIX_BUILD);
 }
