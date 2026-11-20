@@ -34,6 +34,17 @@ pub struct Target {
     pub host_env: BTreeMap<String, String>,
 }
 
+impl Target {
+    /// An interactive exec of `cmd` in the sandbox, as the session user in its workdir.
+    fn exec(&self, cmd: Vec<String>) -> ExecSpec {
+        ExecSpec {
+            workdir: Some(self.workdir.clone()),
+            interactive: true,
+            ..ExecSpec::new(&self.machine, &self.user, cmd)
+        }
+    }
+}
+
 /// Serves one SSH connection on `stream` until the client goes away.
 pub async fn serve<S>(stream: S, target: Target) -> anyhow::Result<()>
 where
@@ -118,7 +129,6 @@ struct Running {
     /// Bytes for the process's stdin; dropped on the client's EOF.
     stdin: Option<mpsc::Sender<Vec<u8>>>,
     ctl: Arc<ProcCtl>,
-    pty: bool,
 }
 
 struct Conn {
@@ -161,22 +171,17 @@ impl Conn {
             env.push(("TERM".to_string(), p.term.clone()));
         }
         session_env(&t.host_env, tty, t.bridge, &mut env);
+        // Not `stream`: `-i` streams the output as it is written.
         let spec = ExecSpec {
-            name: t.machine.clone(),
-            user: Some(t.user.clone()),
-            workdir: Some(t.workdir.clone()),
             env,
-            interactive: true,
             tty,
-            // `-i` streams the output as it is written.
-            stream: false,
-            cmd: shell_command(command),
+            ..t.exec(shell_command(command))
         };
         let proc = t
             .spawner
             .spawn(&spec.to_args(), chan.pty.as_ref().map(|p| p.size))
             .map_err(|e| format!("{e:#}"))?;
-        chan.run = Some(relay(proc, handle, ch, tty, Kind::Session));
+        chan.run = Some(relay(proc, handle, ch, Kind::Session));
         Ok(())
     }
 }
@@ -198,7 +203,7 @@ enum Ev {
 
 /// Relays between `proc` and channel `ch`: threads read its output (blocking pipes) into one
 /// ordered queue that a task writes to the channel, followed by the exit status, EOF and close.
-fn relay(proc: Proc, handle: Handle, ch: ChannelId, pty: bool, kind: Kind) -> Running {
+fn relay(proc: Proc, handle: Handle, ch: ChannelId, kind: Kind) -> Running {
     let Proc {
         stdin,
         stdout,
@@ -284,7 +289,6 @@ fn relay(proc: Proc, handle: Handle, ch: ChannelId, pty: bool, kind: Kind) -> Ru
     Running {
         stdin: Some(in_tx),
         ctl,
-        pty,
     }
 }
 
@@ -335,21 +339,13 @@ impl Handler for Conn {
             return Ok(());
         }
         let t = &self.target;
-        let spec = ExecSpec {
-            name: t.machine.clone(),
-            user: Some(t.user.clone()),
-            workdir: Some(t.workdir.clone()),
-            interactive: true,
-            cmd: forward_command(to),
-            ..ExecSpec::default()
-        };
+        let spec = t.exec(forward_command(to));
         match t.spawner.spawn(&spec.to_args(), None) {
             Ok(proc) => {
                 let run = relay(
                     proc,
                     session.handle(),
                     channel.id(),
-                    false,
                     Kind::Forward(to.0, to.1),
                 );
                 self.chans.insert(
@@ -404,11 +400,12 @@ impl Handler for Conn {
     ) -> Result<(), Self::Error> {
         if let Some(c) = self.chans.get_mut(&channel) {
             let new = size(col_width, row_height);
+            // A channel's pty is set before its command runs (`pty_request`), never after.
             if let Some(p) = &mut c.pty {
                 p.size = new;
-            }
-            if let Some(r) = c.run.as_ref().filter(|r| r.pty) {
-                r.ctl.resize(new);
+                if let Some(r) = &c.run {
+                    r.ctl.resize(new);
+                }
             }
         }
         Ok(())
@@ -493,8 +490,9 @@ impl Handler for Conn {
         _session: &mut Session,
     ) -> Result<(), Self::Error> {
         // On a terminal, Ctrl-D is data; there is no end of input to deliver.
-        if let Some(r) = self.chans.get_mut(&channel).and_then(|c| c.run.as_mut())
-            && !r.pty
+        if let Some(c) = self.chans.get_mut(&channel)
+            && c.pty.is_none()
+            && let Some(r) = c.run.as_mut()
         {
             r.stdin = None;
         }

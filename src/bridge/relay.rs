@@ -14,7 +14,7 @@ use std::time::{Duration, Instant};
 use anyhow::Result;
 
 use super::http::{self, Request, Response};
-use super::listener::{DEADLINE, POLL};
+use super::listener::{DEADLINE, POLL, Stream};
 use crate::smolvm::{ExecSpec, Output};
 use crate::util::sh_quote;
 
@@ -164,8 +164,7 @@ fn accept_loop(
 }
 
 fn answer(stream: &TcpStream, port: u16, exec: &Exec, guest: &Guest, stop: &AtomicBool) {
-    // Accepted sockets inherit non-blocking mode on some systems.
-    if stream.set_nonblocking(false).is_err() || stream.set_write_timeout(Some(DEADLINE)).is_err() {
+    if stream.blocking().is_err() {
         return;
     }
     let resp = match http::read_within(stream, Instant::now() + DEADLINE, stop) {

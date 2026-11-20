@@ -97,12 +97,7 @@ impl<R: Runner> Steps<'_, R> {
         } else {
             (vec!["sh".into(), "-c".into(), script.into()], None)
         };
-        let spec = ExecSpec {
-            name: self.sb.machine.clone(),
-            user: Some(user.into()),
-            cmd,
-            ..Default::default()
-        };
+        let spec = ExecSpec::new(&self.sb.machine, user, cmd);
         Ok((spec, copied))
     }
 
@@ -110,12 +105,11 @@ impl<R: Runner> Steps<'_, R> {
     /// the step's own result is what matters.
     pub(super) fn remove(&self, copied: Option<String>) {
         if let Some(path) = copied {
-            let _ = self.vm.exec_captured(&ExecSpec {
-                name: self.sb.machine.clone(),
-                user: Some("root".into()),
-                cmd: vec!["rm".into(), "-f".into(), path],
-                ..Default::default()
-            });
+            let _ = self.vm.exec_captured(&ExecSpec::new(
+                &self.sb.machine,
+                "root",
+                vec!["rm".into(), "-f".into(), path],
+            ));
         }
     }
 
@@ -195,7 +189,7 @@ pub(super) fn put_files<R: Runner>(
 }
 
 /// The last `n` lines of `text`.
-pub(super) fn last_lines(text: &str, n: usize) -> String {
+pub fn last_lines(text: &str, n: usize) -> String {
     let lines: Vec<&str> = text.trim_end().lines().collect();
     lines[lines.len().saturating_sub(n)..].join("\n")
 }

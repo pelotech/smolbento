@@ -273,6 +273,20 @@ pub struct SecretDecl {
     pub no_verify: Option<bool>,
 }
 
+impl SecretDecl {
+    /// How many of `value`, `ref` and `command` are set (a valid declaration has one).
+    pub fn source_count(&self) -> usize {
+        [
+            self.value.is_some(),
+            self.r#ref.is_some(),
+            self.command.is_some(),
+        ]
+        .into_iter()
+        .filter(|set| *set)
+        .count()
+    }
+}
+
 /// Like the derived one, but a literal `value` is never shown.
 impl std::fmt::Debug for SecretDecl {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {

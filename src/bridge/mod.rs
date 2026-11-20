@@ -59,11 +59,7 @@ fn socket_id(name: &str) -> String {
 /// Whether `dir` is private to this user, for a sandbox's socket (checked at create and at every
 /// start): see `private_dir`.
 pub fn ensure_private_dir(dir: &Path) -> bool {
-    ensure_private_dir_of(dir, crate::util::host_uid())
-}
-
-fn ensure_private_dir_of(dir: &Path, uid: u32) -> bool {
-    private_dir(dir, uid).is_ok()
+    private_dir(dir, crate::util::host_uid()).is_ok()
 }
 
 /// Creates `dir` 0700 if it is missing; otherwise it must be a real directory (not a symlink)
@@ -147,23 +143,23 @@ mod tests {
         let me = crate::util::host_uid();
         // Missing: created 0700.
         let dir = tmp.path().join("sbt");
-        assert!(ensure_private_dir_of(&dir, me));
+        assert!(private_dir(&dir, me).is_ok());
         let mode = fs::metadata(&dir).unwrap().permissions().mode();
         assert_eq!(mode & 0o777, 0o700);
-        assert!(ensure_private_dir_of(&dir, me), "an existing private dir");
+        assert!(private_dir(&dir, me).is_ok(), "an existing private dir");
         // Someone else's (as another uid would see it).
-        assert!(!ensure_private_dir_of(&dir, me + 1));
+        assert!(private_dir(&dir, me + 1).is_err());
         // Readable by others.
         fs::set_permissions(&dir, fs::Permissions::from_mode(0o755)).unwrap();
-        assert!(!ensure_private_dir_of(&dir, me));
+        assert!(private_dir(&dir, me).is_err());
         // A symlink to a private dir, or a file.
         let real = tmp.path().join("real");
         fs::DirBuilder::new().mode(0o700).create(&real).unwrap();
         let link = tmp.path().join("link");
         std::os::unix::fs::symlink(&real, &link).unwrap();
-        assert!(!ensure_private_dir_of(&link, me));
+        assert!(private_dir(&link, me).is_err());
         let file = tmp.path().join("file");
         fs::write(&file, "").unwrap();
-        assert!(!ensure_private_dir_of(&file, me));
+        assert!(private_dir(&file, me).is_err());
     }
 }

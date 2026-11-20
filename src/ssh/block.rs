@@ -45,7 +45,7 @@ pub fn render(bin: &str, env: &[(String, String)]) -> String {
 /// `s` as one shell word (ssh runs the ProxyCommand through the user's shell), with `%` doubled so
 /// ssh doesn't read it as a token.
 fn quote(s: &str) -> String {
-    format!("'{}'", s.replace('\'', "'\\''").replace('%', "%%"))
+    crate::util::sh_quote(s).replace('%', "%%")
 }
 
 /// Whether `config` has an sbx block.

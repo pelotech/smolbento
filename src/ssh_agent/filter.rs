@@ -18,7 +18,7 @@ use ssh_key::{PublicKey, Signature};
 
 use super::known_hosts::host_keys;
 use super::{self as agent, Access};
-use crate::bridge::listener::{self, DEADLINE, Deadline, POLL, Server};
+use crate::bridge::listener::{self, DEADLINE, Deadline, POLL, Server, Stream};
 use crate::config::{Paths, Settings};
 use crate::host_service::MAX_CONNECTIONS;
 use crate::sandbox::Sandbox;
@@ -178,12 +178,7 @@ fn relay(
     backing: &Backing,
     stop: &AtomicBool,
 ) {
-    // Accepted sockets inherit non-blocking mode on some systems.
-    let blocking = |s: &UnixStream| {
-        s.set_nonblocking(false)
-            .and_then(|()| s.set_write_timeout(Some(DEADLINE)))
-    };
-    if blocking(guest).is_err() || blocking(host).is_err() {
+    if guest.blocking().is_err() || host.blocking().is_err() {
         return;
     }
     let mut conn = Conn::default();

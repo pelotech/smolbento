@@ -15,6 +15,7 @@ use super::relay::{self, Relays};
 use crate::config::Settings;
 use crate::sandbox::Sandbox;
 use crate::smolvm::ProcessRunner;
+use crate::util::wait_until;
 
 /// Internal test overrides: a program run with the URL as its argument / the text on stdin.
 const OPEN_CMD: &str = "SMOLBENTO_OPEN_CMD";
@@ -57,8 +58,7 @@ pub fn handlers(
     let open_cmd = env.get(OPEN_CMD).cloned();
     let copy_cmd = env.get(COPY_CMD).cloned();
     Handlers {
-        browser_enabled: allowed.browser,
-        copy_enabled: allowed.copy,
+        allowed,
         open: Box::new(move |url| open_url(open_cmd.as_deref(), url)),
         copy: Box::new(move |text| copy_text(copy_cmd.as_deref(), text)),
         relay: relay(smolvm, &sb.machine, relay_user(sb), linger),
@@ -137,15 +137,11 @@ fn launch(program: &str, args: &[&str], grace: Duration) -> Result<()> {
         .stderr(Stdio::null())
         .spawn()
         .with_context(|| format!("running {program}"))?;
-    let until = Instant::now() + grace;
-    while Instant::now() < until {
-        if let Some(status) = child.try_wait()? {
-            if !status.success() {
-                bail!("{program} failed ({status})");
-            }
-            return Ok(());
+    if let Some(status) = wait_until(&mut child, Instant::now() + grace)? {
+        if !status.success() {
+            bail!("{program} failed ({status})");
         }
-        thread::sleep(Duration::from_millis(20));
+        return Ok(());
     }
     // Reaped when it exits, so it leaves no zombie.
     thread::spawn(move || child.wait());
@@ -192,17 +188,10 @@ fn run(program: &str, args: &[&str], input: &[u8], timeout: Duration) -> Result<
         let input = input.to_vec();
         thread::spawn(move || stdin.write_all(&input));
     }
-    let until = Instant::now() + timeout;
-    let status = loop {
-        if let Some(status) = child.try_wait()? {
-            break status;
-        }
-        if Instant::now() >= until {
-            let _ = child.kill();
-            let _ = child.wait();
-            bail!("{program} didn't finish within {}s", timeout.as_secs());
-        }
-        thread::sleep(Duration::from_millis(20));
+    let Some(status) = wait_until(&mut child, Instant::now() + timeout)? else {
+        let _ = child.kill();
+        let _ = child.wait();
+        bail!("{program} didn't finish within {}s", timeout.as_secs());
     };
     if !status.success() {
         bail!("{program} failed ({status})");
@@ -326,8 +315,8 @@ mod tests {
 
     #[test]
     fn handlers_carry_the_browser_setting() {
-        assert!(test_handlers(&[], true).browser_enabled);
-        assert!(!test_handlers(&[], false).browser_enabled);
+        assert!(test_handlers(&[], true).allowed.browser);
+        assert!(!test_handlers(&[], false).allowed.browser);
     }
 
     #[test]

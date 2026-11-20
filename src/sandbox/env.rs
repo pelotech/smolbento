@@ -3,6 +3,7 @@
 use std::collections::BTreeMap;
 
 use super::CreateRequest;
+use crate::util::env_default;
 
 /// A random (v4) UUID.
 pub fn new_uuid() -> String {
@@ -49,9 +50,7 @@ pub fn defaults(req: &CreateRequest, id: &str, services: &[String]) -> Vec<(Stri
 /// Adds the defaults to `req.env`, behind anything already there (the user's `-e` wins).
 pub fn apply(req: &mut CreateRequest, services: &[String]) {
     for (k, v) in defaults(req, &new_uuid(), services) {
-        if !req.env.iter().any(|(n, _)| *n == k) {
-            req.env.push((k, v));
-        }
+        env_default(&mut req.env, &k, v);
     }
 }
 
@@ -69,20 +68,15 @@ pub fn session_env(
     bridge: bool,
     env: &mut Vec<(String, String)>,
 ) {
-    let mut add = |k: &str, v: &str| {
-        if !env.iter().any(|(e, _)| e == k) {
-            env.push((k.into(), v.into()));
-        }
-    };
     if tty {
         for k in TTY_HOST_VARS {
             if let Some(v) = host.get(k).filter(|v| !v.is_empty()) {
-                add(k, v);
+                env_default(env, k, v);
             }
         }
     }
     if bridge {
-        add("BROWSER", "xdg-open");
+        env_default(env, "BROWSER", "xdg-open");
     }
 }
 

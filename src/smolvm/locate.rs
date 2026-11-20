@@ -6,6 +6,7 @@ use std::path::{Path, PathBuf};
 
 use anyhow::{Context, Result, bail};
 
+use super::client::DATA_DIR;
 use super::{install, pin};
 use crate::config::Settings;
 
@@ -52,7 +53,7 @@ pub fn locate(settings: &Settings, env: &BTreeMap<String, String>) -> Result<Smo
     let env = if set_home == "-" {
         Vec::new()
     } else {
-        vec![("SMOLVM_DATA_DIR".to_string(), home.display().to_string())]
+        vec![(DATA_DIR.to_string(), home.display().to_string())]
     };
     let path = settings.value("smolvm.path")?;
     let (bin, managed) = if path.is_empty() {

@@ -2,7 +2,7 @@ use std::collections::BTreeMap;
 use std::path::{Path, PathBuf};
 
 /// smolvm's state directory variable; smolbento sets it on every call (`locate`).
-const DATA_DIR: &str = "SMOLVM_DATA_DIR";
+pub(super) const DATA_DIR: &str = "SMOLVM_DATA_DIR";
 
 use anyhow::{Context, Result, anyhow};
 
@@ -201,14 +201,19 @@ pub struct ExecSpec {
 }
 
 impl ExecSpec {
-    /// `sh -c script` in `machine` as `user`.
-    pub fn sh(machine: &str, user: &str, script: impl Into<String>) -> Self {
+    /// `cmd` in `machine` as `user`, with no other options.
+    pub fn new(machine: &str, user: &str, cmd: Vec<String>) -> Self {
         Self {
             name: machine.into(),
             user: Some(user.into()),
-            cmd: vec!["sh".into(), "-c".into(), script.into()],
+            cmd,
             ..Default::default()
         }
+    }
+
+    /// `sh -c script` in `machine` as `user`.
+    pub fn sh(machine: &str, user: &str, script: impl Into<String>) -> Self {
+        Self::new(machine, user, vec!["sh".into(), "-c".into(), script.into()])
     }
 
     pub fn to_args(&self) -> Vec<String> {

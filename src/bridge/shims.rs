@@ -6,7 +6,7 @@ use crate::util::sh_quote;
 
 use super::GUEST_SOCKET;
 
-/// What the shims (except `wl-paste`) start with: their name (`pbcopy` and `clip.exe` are links
+/// What the shims start with: their name (`pbcopy` and `clip.exe` are links
 /// to `wl-copy`); `post PATH`, which sends stdin to the host (`-m 10`: a listener that never
 /// answers can't hang the agent); `need`, for an option's value; and `copy`, which sends stdin to
 /// the host clipboard. With `trim` set, `copy` drops one trailing newline; that goes through a
@@ -61,9 +61,8 @@ done
 if [ -n "$text" ]; then printf %s "$*" | copy; else copy; fi
 "#;
 
-/// Reading the host clipboard isn't supported: no output. A whole script, without the prelude.
-const WL_PASTE: &str = "#!/bin/sh\n# smolbento bridge shim\n\
-                        # smolbento: host clipboard reads are not supported.\nexit 1\n";
+/// Reading the host clipboard isn't supported: no output.
+const WL_PASTE: &str = "# smolbento: host clipboard reads are not supported.\nexit 1\n";
 
 /// A line in every shim, so `remove_cmd` takes out only ours, never a real `xclip`.
 const MARKER: &str = "# smolbento bridge shim";
@@ -152,7 +151,6 @@ fn install_script(dir: &str) -> String {
     );
     let prelude = prelude();
     for (name, body) in SHIMS {
-        let prelude = if body.starts_with("#!") { "" } else { &prelude };
         s += &format!("cat > {name} <<'SMOLBENTO_SHIM'\n{prelude}{body}SMOLBENTO_SHIM\n");
     }
     let files: Vec<&str> = SHIMS.iter().map(|(n, _)| *n).collect();
