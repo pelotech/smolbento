@@ -502,22 +502,17 @@ pub fn check_launchable<R: Runner>(
     kit: &mut Kit,
     sandbox: Option<&str>,
 ) -> Result<()> {
-    if kit.kind == Kind::Workload
-        && kit.command.is_none()
-        && let (Source::LocalV2(_), Content::Image(image)) = (&kit.source, &kit.content)
-    {
-        let registries = registries(&SecretsFile::load(&ctx.paths)?, sandbox);
-        let logins = Logins::new(&registries, &*ctx.store);
-        kit.command = registry::image_command(image, &ctx.paths.kit_cache(), logins)?;
-    }
-    if kit.kind == Kind::Workload
-        && kit.command.is_none()
-        && matches!(
-            (&kit.source, &kit.content),
-            (Source::LocalV2(_), Content::None)
-        )
-    {
-        bail!("workload kit declares no image or command");
+    // A v2 workload, local or published, may leave its command to its image.
+    if kit.kind == Kind::Workload && kit.command.is_none() && kit.v2 {
+        match &kit.content {
+            Content::Image(image) => {
+                let registries = registries(&SecretsFile::load(&ctx.paths)?, sandbox);
+                let logins = Logins::new(&registries, &*ctx.store);
+                kit.command = registry::image_command(image, &ctx.paths.kit_cache(), logins)?;
+            }
+            Content::None => bail!("workload kit declares no image or command"),
+            _ => {}
+        }
     }
     if kit.kind == Kind::Workload
         && kit.command.is_none()
@@ -1140,5 +1135,30 @@ mod tests {
         let t = test_env(&[("SMOLBENTO_KIT_ALLOWED_SOURCES", r#"["ghcr.io/ok/"]"#)]);
         let e = load(&t.ctx, "evil.example/x/y:1").unwrap_err();
         assert!(format!("{e:#}").contains("not in your allowlist"), "{e:#}");
+    }
+
+    /// A published v2 workload, like a local one, launches its image's own command.
+    #[test]
+    fn a_published_v2_workload_without_a_command_launches_its_image() {
+        let t = test_env(&[]);
+        registry::fixtures::cached_image(
+            &t.ctx.paths.kit_cache(),
+            "img:1",
+            r#"{"config":{"Entrypoint":["/bin/agent"],"Cmd":["--x"]}}"#,
+        );
+        let mut kit = Kit {
+            v2: true,
+            content: Content::Image("img:1".into()),
+            ..Kit::new(
+                "bare",
+                Kind::Workload,
+                Source::Registry("ex.io/k/bare:1".into()),
+            )
+        };
+        check_launchable(&t.ctx, &mut kit, None).unwrap();
+        assert_eq!(
+            kit.command,
+            Some(vec!["/bin/agent".to_string(), "--x".to_string()])
+        );
     }
 }
