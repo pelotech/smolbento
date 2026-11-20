@@ -513,8 +513,9 @@ fn settle_agent<R: Runner>(
         return Ok(vec![]);
     }
     // The agent's socket goes where the bridge's does, checked only when there's an agent: in
-    // the units' directory when the host has a service manager.
-    let dir = if ctx.services.usable() {
+    // the units' directory only when host services are usable AND the socket paths fit the OS
+    // limit (matching `HostServices::plan()`).
+    let dir = if ctx.services.fits(&req.name) {
         ctx.services.sock_dir().to_path_buf()
     } else {
         bridge::socket_dir()

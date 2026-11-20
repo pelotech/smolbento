@@ -205,19 +205,23 @@ impl HostServices {
             .join(format!("{}{id}.{}.sock", self.ns, kind.as_str()))
     }
 
+    /// Whether this host has a service manager and `name`'s sockets fit the OS path limit.
+    pub fn fits(&self, name: &str) -> bool {
+        self.usable()
+            && self.socket_path(name, Kind::Bridge).as_os_str().len() < MAX_SOCKET_PATH
+            && self.socket_path(name, Kind::Agent).as_os_str().len() < MAX_SOCKET_PATH
+    }
+
     /// The sockets a new sandbox `name` gets, or `None` (served while attached, as before) when
     /// there is no service manager, the directory isn't private and ours, or a path is too long.
     pub fn plan(&self, name: &str) -> Option<Sockets> {
-        if !self.usable() || !crate::bridge::ensure_private_dir(&self.sock_dir) {
+        if !self.fits(name) || !crate::bridge::ensure_private_dir(&self.sock_dir) {
             return None;
         }
-        let s = Sockets {
+        Some(Sockets {
             bridge: self.socket_path(name, Kind::Bridge),
             agent: self.socket_path(name, Kind::Agent),
-        };
-        (s.bridge.as_os_str().len() < MAX_SOCKET_PATH
-            && s.agent.as_os_str().len() < MAX_SOCKET_PATH)
-            .then_some(s)
+        })
     }
 
     /// The slot files `_serve` locks for sandbox `name`'s `kind`, beside its socket.
