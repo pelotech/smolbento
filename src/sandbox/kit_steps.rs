@@ -212,10 +212,6 @@ pub fn startup_cmd(script: Option<&str>) -> String {
     )
 }
 
-/// Runs the kits' startup hooks (or one kit's `script`) as sbx does on every start: one pass in
-/// kit order that waits for each blocking hook and starts each background one detached at its
-/// position. A failed blocking hook is an error with sbx's text (its output is in the guest's
-/// startup log).
 /// Prints the startup log's last lines, for a failed start's warning.
 pub fn startup_log_tail_cmd() -> String {
     format!("tail -n 20 {} 2>/dev/null", guest::STARTUP_LOG)
@@ -244,6 +240,10 @@ pub fn startup_failure_warning<R: Runner>(
     w
 }
 
+/// Runs the kits' startup hooks (or one kit's `script`) as sbx does on every start: one pass in
+/// kit order that waits for each blocking hook and starts each background one detached at its
+/// position. A failed blocking hook is an error with sbx's text (its output is in the guest's
+/// startup log).
 pub fn run_startup<R: Runner>(vm: &Smolvm<R>, sb: &Sandbox, script: Option<&str>) -> Result<()> {
     let what = "running the kits' startup hooks";
     let out = vm

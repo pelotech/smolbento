@@ -283,7 +283,7 @@ fn verdict(
         EXTENSION => match string(payload) {
             None => Verdict::Close,
             Some((name, rest)) if name == SESSION_BIND => {
-                // Bindings matter only to a grant with logins; others relay them as before.
+                // Bindings matter only to a grant with logins; others relay them.
                 if access.authenticate.is_empty() {
                     return Verdict::Relay;
                 }

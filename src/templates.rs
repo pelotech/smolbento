@@ -92,9 +92,7 @@ impl Entry {
         }
         Ok(())
     }
-}
 
-impl Entry {
     pub fn full(&self) -> String {
         format!("{}:{}", self.repository, self.tag)
     }
