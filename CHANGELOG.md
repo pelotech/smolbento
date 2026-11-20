@@ -1,5 +1,12 @@
 # Changelog
 
+## [0.33.1](https://github.com/pelotech/smolbento/compare/v0.33.0...v0.33.1) (2026-11-20)
+
+
+### Bug Fixes
+
+* **smolvm:** download the pinned smolvm before the first smolvm call, whatever the command ([#187](https://github.com/pelotech/smolbento/issues/187)) ([f1bdee0](https://github.com/pelotech/smolbento/commit/f1bdee0c287aabc9cd1c4604f7edefbfc0c61658))
+
 ## [0.33.0](https://github.com/pelotech/smolbento/compare/v0.32.1...v0.33.0) (2026-11-20)
 
 
