@@ -200,7 +200,7 @@ fn start_checked<R: Runner>(
     vm.update_network(&sb.machine, &plan.network)
         .context("applying the network policy")?;
     on(Event::Boot);
-    vm.start_with_progress(
+    vm.start(
         &sb.machine,
         plan.branchable,
         &plan.env,

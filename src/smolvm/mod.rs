@@ -45,10 +45,7 @@ pub trait Runner {
         args: &[String],
         env: &[(String, String)],
         remove: &[String],
-    ) -> Result<Output> {
-        let _ = (env, remove);
-        self.run(args)
-    }
+    ) -> Result<Output>;
     /// Like `run_with_env`, calling `on_line` with each piece of stderr (split on `\r` and `\n`)
     /// as smolvm writes it, for progress. The returned `Output` still holds all of stderr.
     fn run_streaming(
@@ -57,18 +54,13 @@ pub trait Runner {
         env: &[(String, String)],
         remove: &[String],
         on_line: &mut dyn FnMut(&str),
-    ) -> Result<Output> {
-        let _ = on_line;
-        self.run_with_env(args, env, remove)
-    }
+    ) -> Result<Output>;
     /// Runs smolvm attached to this terminal (stdio inherited) and returns its exit code.
     /// Used for `exec`, so raw mode, resizes and colour pass straight through.
     fn interactive(&self, args: &[String]) -> Result<i32>;
     /// A spawner of smolvm processes with piped or pty stdio (the SSH server's), if this runner
     /// can start them.
-    fn spawner(&self) -> Option<ProcessSpawner> {
-        None
-    }
+    fn spawner(&self) -> Option<ProcessSpawner>;
 }
 
 /// Spawns the real smolvm binary.
