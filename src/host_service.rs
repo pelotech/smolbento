@@ -205,19 +205,23 @@ impl HostServices {
             .join(format!("{}{id}.{}.sock", self.ns, kind.as_str()))
     }
 
+    /// Whether this host has a service manager and `name`'s sockets fit the OS path limit.
+    pub fn fits(&self, name: &str) -> bool {
+        self.usable()
+            && self.socket_path(name, Kind::Bridge).as_os_str().len() < MAX_SOCKET_PATH
+            && self.socket_path(name, Kind::Agent).as_os_str().len() < MAX_SOCKET_PATH
+    }
+
     /// The sockets a new sandbox `name` gets, or `None` (served while attached, as before) when
     /// there is no service manager, the directory isn't private and ours, or a path is too long.
     pub fn plan(&self, name: &str) -> Option<Sockets> {
-        if !self.usable() || !crate::bridge::ensure_private_dir(&self.sock_dir) {
+        if !self.fits(name) || !crate::bridge::ensure_private_dir(&self.sock_dir) {
             return None;
         }
-        let s = Sockets {
+        Some(Sockets {
             bridge: self.socket_path(name, Kind::Bridge),
             agent: self.socket_path(name, Kind::Agent),
-        };
-        (s.bridge.as_os_str().len() < MAX_SOCKET_PATH
-            && s.agent.as_os_str().len() < MAX_SOCKET_PATH)
-            .then_some(s)
+        })
     }
 
     /// The slot files `_serve` locks for sandbox `name`'s `kind`, beside its socket.
@@ -563,9 +567,16 @@ pub fn render_systemd_service(
         .iter()
         .map(|(k, v)| format!("Environment={}\n", systemd_quote(&format!("{k}={v}"))))
         .collect();
+    // The bridge spawns clipboard holders (wl-copy/xclip/xsel) and browsers that must outlive the
+    // short-lived `_serve bridge` process; systemd's default control-group KillMode kills them on exit.
+    let kill = if kind == Kind::Bridge {
+        "KillMode=process\n"
+    } else {
+        ""
+    };
     format!(
         "[Unit]\nDescription=smolbento {} connection for sandbox {}\n\n[Service]\n\
-         ExecStart={} _serve {} {}\nStandardInput=socket\nStandardOutput=null\nStandardError=null\n{env}",
+         ExecStart={} _serve {} {}\nStandardInput=socket\nStandardOutput=null\nStandardError=null\n{kill}{env}",
         kind.as_str(),
         sandbox.replace('%', "%%"),
         systemd_quote(&exe.display().to_string()),
@@ -804,6 +815,7 @@ mod tests {
             "{svc}"
         );
         assert!(svc.contains("StandardInput=socket\n"), "{svc}");
+        assert!(svc.contains("KillMode=process\n"), "{svc}");
         assert!(svc.contains("Environment=\"K=a\\\"b$$c%%d\"\n"), "{svc}");
     }
 

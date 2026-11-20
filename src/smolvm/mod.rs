@@ -60,7 +60,7 @@ pub trait Runner {
     fn interactive(&self, args: &[String]) -> Result<i32>;
     /// A spawner of smolvm processes with piped or pty stdio (the SSH server's), if this runner
     /// can start them.
-    fn spawner(&self) -> Option<ProcessSpawner>;
+    fn spawner(&self) -> Result<Option<ProcessSpawner>>;
 }
 
 /// Spawns the real smolvm binary.
@@ -275,13 +275,15 @@ impl Runner for ProcessRunner {
         })
     }
 
-    fn spawner(&self) -> Option<ProcessSpawner> {
+    fn spawner(&self) -> Result<Option<ProcessSpawner>> {
         // Its processes skip `base`: they need `ready` all the same.
-        self.ready.as_ref().map_or(Ok(()), |r| r.check()).ok()?;
-        Some(ProcessSpawner {
+        if let Some(ready) = &self.ready {
+            ready.check()?;
+        }
+        Ok(Some(ProcessSpawner {
             bin: self.bin.clone(),
             env: self.env.clone(),
-        })
+        }))
     }
 
     fn interactive(&self, args: &[String]) -> Result<i32> {
@@ -449,10 +451,10 @@ mod tests {
             r.run(&args).unwrap_err(),
             r.run_streaming(&args, &[], &[], &mut |_| {}).unwrap_err(),
             r.interactive(&args).unwrap_err(),
+            r.spawner().err().expect("root spawner fails"),
         ] {
             assert!(err.to_string().contains("don't run bento as root"), "{err}");
         }
-        assert!(r.spawner().is_none());
         assert!(!ran.exists(), "smolvm ran");
     }
 

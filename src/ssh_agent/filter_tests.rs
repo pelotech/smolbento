@@ -83,11 +83,14 @@ fn a_sign_list_admits_only_its_sshsig_namespaces() {
     assert_eq!(verdict(&git, &sign(b"\0\0\0\x20session")), Verdict::Fail);
     assert_eq!(verdict(&git, &sign(&s(b"git"))), Verdict::Fail);
     assert_eq!(verdict(&git, &sign(b"sshsig")), Verdict::Fail);
-    // Truncated after the preamble or inside the namespace.
+    // Truncated after the preamble, inside the namespace, or missing remaining SSHSIG fields.
     assert_eq!(verdict(&git, &sign(b"SSHSIG")), Verdict::Fail);
     assert_eq!(verdict(&git, &sign(b"SSHSIG\0\0\0\x03gi")), Verdict::Fail);
-    // Just the namespace is enough to decide.
-    assert_eq!(verdict(&git, &sign(b"SSHSIG\0\0\0\x03git")), Verdict::Relay);
+    assert_eq!(verdict(&git, &sign(b"SSHSIG\0\0\0\x03git")), Verdict::Fail);
+    assert_eq!(
+        verdict(&git, &sign(&[&sshsig(b"git")[..], b"extra"].concat())),
+        Verdict::Fail
+    );
 }
 
 #[test]
@@ -217,6 +220,40 @@ fn a_login_needs_a_verified_binding_to_a_listed_server() {
     // A forwarding binding never counts.
     assert_eq!(
         run(&a, &kh, &[bind(&gh, SESSION, true), login.clone()]),
+        Verdict::Fail
+    );
+    // Once forwarding is set on a connection, it latches: later non-forwarding binds fail,
+    // and prior bindings are cleared so a compromised host can't downgrade or reuse them.
+    assert_eq!(
+        run(
+            &a,
+            &kh,
+            &[bind(&gh, SESSION, true), bind(&gh, SESSION, false)]
+        ),
+        Verdict::Fail
+    );
+    assert_eq!(
+        run(
+            &a,
+            &kh,
+            &[
+                bind(&gh, SESSION, true),
+                bind(&gh, SESSION, false),
+                login.clone()
+            ]
+        ),
+        Verdict::Fail
+    );
+    assert_eq!(
+        run(
+            &a,
+            &kh,
+            &[
+                bind(&gh, SESSION, false),
+                bind(&gh, SESSION, true),
+                login.clone()
+            ]
+        ),
         Verdict::Fail
     );
     // A binding for another session.
@@ -362,6 +399,14 @@ fn other_login_data_is_refused() {
     let mut wrong_type = good.clone();
     wrong_type[SESSION.len() + 4] = 51;
     assert_eq!(refused(wrong_type), Verdict::Fail);
+    // RFC 4252 §7 requires service == "ssh-connection".
+    let wrong_service = {
+        let mut d = good.clone();
+        let pos = d.windows(14).position(|w| w == b"ssh-connection").unwrap();
+        d[pos..pos + 14].copy_from_slice(b"ssh-otherproto");
+        d
+    };
+    assert_eq!(refused(wrong_service), Verdict::Fail);
     assert_eq!(refused(b"garbage".to_vec()), Verdict::Fail);
     assert_eq!(refused(vec![]), Verdict::Fail);
     // Certificate-signed data and other bytes are neither SSHSIG nor a login.

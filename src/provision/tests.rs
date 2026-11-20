@@ -1053,3 +1053,39 @@ fn an_unsafe_socket_dir_refuses_a_required_grant_and_drops_the_rest() {
     );
     assert!(req.ssh_agent.is_some());
 }
+
+/// When the host-service socket path exceeds macOS's limit (`plan()` returns `None` and create
+/// falls back to `bridge::socket_dir()`), `settle_agent` must check that fallback directory.
+#[test]
+fn settle_agent_checks_fallback_socket_dir_when_service_socket_path_is_too_long() {
+    let (_agent, sock) = host_agent();
+    let mut t = test_env(&[("SSH_AUTH_SOCK", &sock)]);
+    let long = tempfile::tempdir_in("/tmp").unwrap();
+    let deep = long.path().join("a".repeat(80));
+    std::fs::create_dir_all(&deep).unwrap();
+    let (svc, _ctl) =
+        crate::host_service::fake::services(&deep, crate::host_service::Flavor::Launchd, "ns1");
+    assert!(svc.usable());
+    assert!(
+        svc.plan("s1").is_none(),
+        "service path must exceed socket limit"
+    );
+    let svc_dir = svc.sock_dir().to_path_buf();
+    t.ctx.services = svc;
+
+    let fallback = crate::bridge::socket_dir();
+    let plan = agent_plan(false, vec![ssh_agent(&[Runtime], &[], false)]);
+    let mut req = agent_request(false);
+    let mut checked = None;
+    let err = settle_agent(&t.ctx, &mut req, Some(&plan), |d| {
+        checked = Some(d.to_path_buf());
+        // The service dir is private, but the fallback dir we'll actually mount is NOT.
+        d == svc_dir
+    })
+    .unwrap_err();
+    assert_eq!(checked.as_deref(), Some(fallback.as_path()));
+    assert!(
+        err.to_string().contains(&fallback.display().to_string()),
+        "{err}"
+    );
+}

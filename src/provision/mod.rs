@@ -167,7 +167,7 @@ pub fn sweep_orphans<R: Runner>(ctx: &Ctx<R>) -> Vec<String> {
 
 /// Sandbox names with units here and no machine in smolvm: `sweep_orphans` without removing.
 pub fn orphan_services<R: Runner>(ctx: &Ctx<R>) -> Vec<String> {
-    if ctx.services.units().is_empty() {
+    if ctx.services.units().is_empty() || (ctx.smolvm.managed && !ctx.smolvm.bin.is_file()) {
         return Vec::new();
     }
     live_sandboxes(ctx).map_or_else(Vec::new, |live| ctx.services.orphans(&live))
@@ -513,8 +513,9 @@ fn settle_agent<R: Runner>(
         return Ok(vec![]);
     }
     // The agent's socket goes where the bridge's does, checked only when there's an agent: in
-    // the units' directory when the host has a service manager.
-    let dir = if ctx.services.usable() {
+    // the units' directory only when host services are usable AND the socket paths fit the OS
+    // limit (matching `HostServices::plan()`).
+    let dir = if ctx.services.fits(&req.name) {
         ctx.services.sock_dir().to_path_buf()
     } else {
         bridge::socket_dir()

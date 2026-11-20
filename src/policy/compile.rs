@@ -43,10 +43,10 @@ fn covers(deny: &Resource, domain: &str, any_depth: bool) -> bool {
     }
 }
 
-/// Whether a deny with a port cancels `allow`: only an allow of exactly the same text. smolvm
+/// Whether a deny with a port cancels `allow`: only an allow of the same pattern and port. smolvm
 /// can't deny one port, and dropping the host would block all its other ports too.
 pub fn cancels(deny: &Resource, allow: &Resource) -> bool {
-    deny.port.is_some() && deny.port == allow.port && deny.raw.eq_ignore_ascii_case(&allow.raw)
+    deny.port.is_some() && deny.port == allow.port && deny.pattern == allow.pattern
 }
 
 /// An allow entry is dropped when a deny repeats it or covers all it allows: an exact host the
@@ -56,12 +56,13 @@ fn denied(allow: &Resource, denies: &[Resource]) -> bool {
         if d.port.is_some() {
             return cancels(d, allow);
         }
-        d.raw.eq_ignore_ascii_case(&allow.raw)
+        d.pattern == Pattern::Everything
+            || d.pattern == allow.pattern
             || match &allow.pattern {
                 Pattern::Exact(h) => d.matches(h),
                 Pattern::Subdomains(h) => covers(d, h, true),
                 Pattern::OneLabel(h) | Pattern::Glob { parent: h, .. } => covers(d, h, false),
-                _ => false,
+                Pattern::Everything | Pattern::Cidr { .. } => false,
             }
     })
 }
@@ -123,10 +124,13 @@ fn network_for(
         return NetworkSpec::Open;
     }
     let allows = allows_with(policy, sandbox, install);
-    if allows.iter().any(|r| r.pattern == Pattern::Everything) {
+    let denies = resources(policy, sandbox, install, Decision::Deny);
+    if allows
+        .iter()
+        .any(|r| r.pattern == Pattern::Everything && !denied(r, &denies))
+    {
         return NetworkSpec::Open;
     }
-    let denies = resources(policy, sandbox, install, Decision::Deny);
     let (mut patterns, mut cidrs) = (BTreeSet::new(), BTreeSet::new());
     for r in allows.iter().filter(|r| !denied(r, &denies)) {
         // Host services come from the user's own rules only (`user_host_services`), never a
@@ -394,9 +398,8 @@ pub fn check(
 ) -> Verdict {
     let target = target.trim().to_ascii_lowercase();
     // Rules match the target with its port; smolvm's allow list and credentials see the host.
-    let host = split_port(&target)
-        .map_or(target.as_str(), |(h, _)| h)
-        .to_string();
+    let host = split_port(&target).map_or(target.as_str(), |(h, _)| h);
+    let host = host.strip_suffix('.').unwrap_or(host).to_string();
     if credential_hosts.iter().any(|h| credential_admits(h, &host)) {
         return verdict(true, "a secret bound to this sandbox uses this host");
     }

@@ -37,11 +37,12 @@ fn names(patterns: &HostPatterns, host: &str) -> bool {
         HostPatterns::Patterns(list) => {
             // `host` is a literal name (the kit parser checked it), so only a literal pattern can
             // equal it: wildcard and `[host]:port` patterns never match.
-            !list.iter().any(|p| p.starts_with('!')) && list.iter().any(|p| p == host)
+            !list.iter().any(|p| p.starts_with('!'))
+                && list.iter().any(|p| p.eq_ignore_ascii_case(host))
         }
         HostPatterns::HashedName { salt, hash } => Hmac::<Sha1>::new_from_slice(salt)
             .map(|mut mac| {
-                mac.update(host.as_bytes());
+                mac.update(host.to_ascii_lowercase().as_bytes());
                 mac.verify_slice(hash).is_ok()
             })
             .unwrap_or(false),
@@ -102,6 +103,9 @@ mod tests {
             line(3)
         );
         assert_eq!(host_keys(&t, "github.com"), [data(1), data(3)]);
+        assert_eq!(host_keys(&t, "GITHUB.COM"), [data(1), data(3)]);
+        let mixed = format!("GitHub.COM {}\n", line(4));
+        assert_eq!(host_keys(&mixed, "github.com"), [data(4)]);
         assert_eq!(host_keys(&t, "other.org"), [data(2)]);
         for h in [
             "hub.com",
@@ -121,7 +125,7 @@ mod tests {
         assert_eq!(host_keys(&t, "github.com"), [data(1)]);
         assert_eq!(host_keys(&t, "gitlab.com"), [data(2)]);
         assert!(host_keys(&t, "example.com").is_empty());
-        assert!(host_keys(&t, "GITHUB.COM").is_empty());
+        assert_eq!(host_keys(&t, "GITHUB.COM"), [data(1)]);
     }
 
     #[test]

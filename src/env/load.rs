@@ -76,25 +76,21 @@ pub fn load(paths: &[String], args: &ArgInputs, cwd: &Path, home: &Path) -> Resu
 fn select(paths: &[String], cwd: &Path, home: &Path) -> Result<(Vec<PathBuf>, bool)> {
     let mut files = Vec::new();
     if paths.is_empty() {
-        let user = home.join(".sbxenv.yaml");
+        let user = lexical(&home.join(".sbxenv.yaml"));
         let user_default = user.is_file();
         if user_default {
             files.push(user);
         }
-        let project = cwd.join("sbxenv.yaml");
+        let project = lexical(&cwd.join("sbxenv.yaml"));
         if project.is_file() {
             files.push(project);
-        }
-        if files.is_empty() {
-            bail!(
-                "no sbxenv.yaml found at {}",
-                cwd.join("sbxenv.yaml").display()
-            );
+        } else if files.is_empty() {
+            bail!("no sbxenv.yaml found at {}", project.display());
         }
         return Ok((files, user_default));
     }
     for p in paths {
-        let p = cwd.join(p);
+        let p = lexical(&cwd.join(p));
         if p.is_dir() {
             let f = p.join("sbxenv.yaml");
             if !f.is_file() {
@@ -329,9 +325,8 @@ fn check_merged(f: &EnvFile, first: &str) -> Result<()> {
         }
         for (kind, d) in kinds {
             for domain in d.iter().flat_map(|d| d.domains.iter().flatten()) {
-                if domain.is_empty() || domain.contains("://") || domain.contains(['/', ' ', '@']) {
-                    bail!("{at}.{kind}.domains: \"{domain}\" isn't a domain");
-                }
+                crate::secrets::check_credential_host(domain)
+                    .map_err(|e| anyhow::anyhow!("{at}.{kind}.domains: {e}"))?;
             }
         }
     }
@@ -611,7 +606,7 @@ mod tests {
         let e = t.err(&["."], &none());
         assert_eq!(
             e,
-            format!("no sbxenv.yaml found at {}/./sbxenv.yaml", cwd.display())
+            format!("no sbxenv.yaml found at {}/sbxenv.yaml", cwd.display())
         );
         assert!(
             t.err(&["nope.yaml"], &none())
@@ -634,6 +629,10 @@ mod tests {
         std::fs::create_dir(t.cwd().join("sub")).unwrap();
         assert_eq!(t.load(&["."], &none()).unwrap().project_dir, t.cwd());
         assert_eq!(t.load(&["sub/.."], &none()).unwrap().project_dir, t.cwd());
+        let expected = vec![t.cwd().join("sbxenv.yaml")];
+        for arg in [".", "./sbxenv.yaml", "sub/..", "sub/../sbxenv.yaml"] {
+            assert_eq!(t.load(&[arg], &none()).unwrap().files, expected, "{arg}");
+        }
     }
 
     #[test]
@@ -882,7 +881,7 @@ mod tests {
             ),
             (
                 "bindings:\n  github:\n    apiKey:\n      domains: [\"https://a.b\"]\n",
-                "bindings.github.apiKey.domains: \"https://a.b\" isn't a domain",
+                "bindings.github.apiKey.domains: 'https://a.b': use a bare host name",
             ),
             (
                 "mcp:\n  servers:\n    - name: a\n      url: https://a.b/mcp\n    - name: a\n      url: https://c.d/mcp\n",
@@ -900,6 +899,27 @@ mod tests {
             t.write("proj/a.yaml", &format!("{MIN}{body}"));
             let e = t.load(&["a.yaml"], &none()).err().unwrap().to_string();
             assert!(e.contains(want), "{e}");
+        }
+    }
+
+    #[test]
+    fn bindings_reject_option_injection_commas_ips_and_bad_wildcards() {
+        let t = T::new();
+        for bad in [
+            "api.example.com:set-header=X-Leak",
+            "api.example.com:443",
+            "a.example.com,b.example.com",
+            "1.2.3.4",
+            "[::1]",
+            "*example.com",
+            "*.com",
+        ] {
+            t.write(
+                "proj/a.yaml",
+                &format!("{MIN}bindings:\n  github:\n    apiKey:\n      domains: [\"{bad}\"]\n"),
+            );
+            let err = t.load(&["a.yaml"], &none()).err();
+            assert!(err.is_some(), "expected bindings to reject {bad:?}");
         }
     }
 

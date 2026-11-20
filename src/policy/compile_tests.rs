@@ -166,6 +166,22 @@ fn everything_rule_opens() {
     let mut p = policy(Mode::DenyAll);
     p.allow(None, "**");
     assert_eq!(network(&p, "s1", &[], false), NetworkSpec::Open);
+    p.deny(None, "**");
+    assert!(matches!(
+        network(&p, "s1", &[], false),
+        NetworkSpec::Restricted(_)
+    ));
+}
+
+#[test]
+fn trailing_dot_rules_and_targets_normalize() {
+    assert!(patterns("api.x.com.", "api.x.com").is_empty());
+    assert!(patterns("api.x.com", "api.x.com.").is_empty());
+    let mut p = policy(Mode::DenyAll);
+    p.allow(None, "localhost.");
+    assert!(host_access(&p, "s1"));
+    let v = check(&p, Some("s1"), &["cred.example".into()], "cred.example.");
+    assert!(v.allowed && v.reason.contains("secret"), "{}", v.reason);
 }
 
 #[test]
