@@ -167,7 +167,7 @@ pub fn sweep_orphans<R: Runner>(ctx: &Ctx<R>) -> Vec<String> {
 
 /// Sandbox names with units here and no machine in smolvm: `sweep_orphans` without removing.
 pub fn orphan_services<R: Runner>(ctx: &Ctx<R>) -> Vec<String> {
-    if ctx.services.units().is_empty() {
+    if ctx.services.units().is_empty() || (ctx.smolvm.managed && !ctx.smolvm.bin.is_file()) {
         return Vec::new();
     }
     live_sandboxes(ctx).map_or_else(Vec::new, |live| ctx.services.orphans(&live))

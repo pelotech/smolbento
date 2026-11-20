@@ -234,7 +234,15 @@ fn pending(cmd: &str) -> Result<i32> {
 
 fn version<R: Runner>(ctx: &Ctx<R>, output: &OutputArgs) -> Result<i32> {
     let mut out = &ctx.out;
-    let smolvm = ctx.vm.version();
+    // Before the first download, report it without triggering the managed smolvm download.
+    let smolvm = if ctx.smolvm.managed && !ctx.smolvm.bin.is_file() {
+        Err(anyhow::anyhow!(
+            "not downloaded yet (pinned v{})",
+            crate::smolvm::pin::pin().version
+        ))
+    } else {
+        ctx.vm.version()
+    };
     // sbx's shape has `client` and `server`; smolbento has no server, and names its smolvm.
     let doc = serde_json::json!({
         "client": { "version": concat!("v", env!("CARGO_PKG_VERSION")) },
@@ -465,6 +473,21 @@ mod tests {
         let mut t = test_env(&[]);
         assert_eq!(t.sbt(&["daemon", "status"]).unwrap(), 0);
         assert!(t.runner().calls().is_empty());
+    }
+
+    #[test]
+    fn version_does_not_invoke_smolvm_when_managed_binary_is_not_downloaded() {
+        let mut t = test_env(&[]);
+        t.use_managed_smolvm();
+        assert_eq!(t.sbt(&["version"]).unwrap(), 0);
+        assert!(t.runner().calls().is_empty(), "{:?}", t.runner().calls());
+        let out = t.stdout();
+        assert!(out.contains("not downloaded yet"), "{out}");
+
+        assert_eq!(t.sbt(&["version", "--json"]).unwrap(), 0);
+        assert!(t.runner().calls().is_empty(), "{:?}", t.runner().calls());
+        let doc: serde_json::Value = serde_json::from_str(&t.stdout()).unwrap();
+        assert!(doc["smolvm"]["version"].is_null(), "{doc}");
     }
 
     #[test]

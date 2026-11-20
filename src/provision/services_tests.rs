@@ -252,6 +252,16 @@ fn diagnose_reports_leftovers_and_suggests_prune() {
 }
 
 #[test]
+fn diagnose_does_not_invoke_smolvm_when_managed_binary_is_not_downloaded() {
+    let mut t = test_env(&[]);
+    let _services = with_services(&mut t, "ns1");
+    install(&t, "gone", &[Kind::Bridge]);
+    t.use_managed_smolvm();
+    t.sbt(&["diagnose"]).unwrap();
+    assert!(t.runner().calls().is_empty(), "{:?}", t.runner().calls());
+}
+
+#[test]
 fn a_failed_first_start_removes_the_units_with_the_sandbox() {
     let mut t = test_env(&[]);
     let (ctl, _, _tmp) = with_services(&mut t, "ns1");

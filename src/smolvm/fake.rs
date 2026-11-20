@@ -289,11 +289,11 @@ impl Runner for FakeRunner {
         self.run_with_env(args, env, remove)
     }
 
-    fn spawner(&self) -> Option<ProcessSpawner> {
-        self.spawn_bin.borrow().clone().map(|bin| ProcessSpawner {
+    fn spawner(&self) -> Result<Option<ProcessSpawner>> {
+        Ok(self.spawn_bin.borrow().clone().map(|bin| ProcessSpawner {
             bin,
             env: Vec::new(),
-        })
+        }))
     }
 
     fn interactive(&self, args: &[String]) -> Result<i32> {

@@ -48,7 +48,7 @@ where
     provision::ensure_running(ctx, &mut sb)?;
     let spawner = ctx
         .vm
-        .spawner()
+        .spawner()?
         .context("this smolvm runner can't serve SSH sessions")?;
     // Served for the connection's life, as for an attached session.
     let _bridge = bridge::attach(&ctx.env, &ctx.settings, &ctx.smolvm, &sb);
