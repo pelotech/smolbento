@@ -474,6 +474,31 @@ impl<R: Runner> Smolvm<R> {
         self.call(args(&["machine", "cp", src, dst])).map(drop)
     }
 
+    /// Uploads the host folder `src` into exactly `dst` in the running machine (smolvm 1.35.4).
+    /// `dst`'s parent must exist.
+    pub fn upload_folder(&self, name: &str, src: &Path, dst: &str) -> Result<()> {
+        let src = src.display().to_string();
+        self.call(args(&[
+            "machine",
+            "files",
+            "--name",
+            name,
+            "upload-folder",
+            &src,
+            dst,
+        ]))
+        .map(drop)
+    }
+
+    /// Downloads the running machine's file `src` to the host's `dst` (smolvm 1.35.4).
+    pub fn download(&self, name: &str, src: &str, dst: &Path) -> Result<()> {
+        let dst = dst.display().to_string();
+        self.call(args(&[
+            "machine", "files", "--name", name, "download", src, &dst,
+        ]))
+        .map(drop)
+    }
+
     /// Runs an exec attached to this terminal and returns the command's exit code.
     pub fn exec(&self, spec: &ExecSpec) -> Result<i32> {
         self.runner.interactive(&spec.to_args())
@@ -925,6 +950,10 @@ mod tests {
         vm.stop("m").unwrap();
         vm.delete("m").unwrap();
         vm.cp("/a", "m:/b").unwrap();
+        vm.upload_folder("m", Path::new("/kit"), "/build/1/ctx")
+            .unwrap();
+        vm.download("m", "/build/1/kit.tar", Path::new("/c/kit.tar"))
+            .unwrap();
         assert_eq!(
             vm.runner().call_lines(),
             vec![
@@ -932,6 +961,8 @@ mod tests {
                 "machine stop -n m",
                 "machine delete -n m -f",
                 "machine cp /a m:/b",
+                "machine files --name m upload-folder /kit /build/1/ctx",
+                "machine files --name m download /build/1/kit.tar /c/kit.tar",
             ]
         );
     }

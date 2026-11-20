@@ -95,8 +95,7 @@ fn build_with<R: Runner>(ctx: &Ctx<R>, dir: &Path, mint: Minter) -> Result<PathB
         .prefix(".build-")
         .tempdir_in(&cache)
         .with_context(|| format!("creating a temp dir in {}", cache.display()))?;
-    let (ctx_tar, kit_tar) = (tmp.path().join("ctx.tar"), tmp.path().join("kit.tar"));
-    pack(dir, &ctx_tar)?;
+    let kit_tar = tmp.path().join("kit.tar");
 
     let found = match sandbox::find(&ctx.vm, BUILDER)? {
         // Its registry bindings are fixed at create: a changed set of logins needs a new one.
@@ -126,7 +125,7 @@ fn build_with<R: Runner>(ctx: &Ctx<R>, dir: &Path, mint: Minter) -> Result<PathB
         .and_then(|tokens| start(ctx, &mut sb, tokens).context("starting the kit builder sandbox"))
         .and_then(|()| ensure_docker(&ctx.vm, &sb.machine))
         .and_then(|()| wait_for_docker(&ctx.vm, &sb.machine, DOCKER_WAIT, Duration::from_secs(1)))
-        .and_then(|()| run_build(ctx, &sb.machine, dir, &desc, &ctx_tar, &kit_tar, &unbound));
+        .and_then(|()| run_build(ctx, &sb.machine, dir, &desc, &kit_tar, &unbound));
     if !was_running
         && sb.is_running()
         && let Err(e) = ctx.vm.stop(&sb.machine)
@@ -254,16 +253,6 @@ fn request<R: Runner>(ctx: &Ctx<R>, registries: &[String]) -> CreateRequest {
     }
 }
 
-/// Tars the kit directory: smolvm's `machine cp` copies files, not directories.
-fn pack(dir: &Path, out: &Path) -> Result<()> {
-    let mut b = tar::Builder::new(File::create(out)?);
-    // Like a Docker build context: links stay links instead of pulling in what they point at.
-    b.follow_symlinks(false);
-    b.append_dir_all(".", dir)
-        .and_then(|()| b.finish())
-        .with_context(|| format!("packing {}", dir.display()))
-}
-
 /// Starts the builder's dockerd unless it runs: the docker kit's startup hook, run before every
 /// build instead of trusted to have run at the builder's start. A builder can be up without it,
 /// its first start interrupted before the startup script was written, or dockerd stopped since,
@@ -320,7 +309,6 @@ fn run_build<R: Runner>(
     machine: &str,
     dir: &Path,
     desc: &str,
-    ctx_tar: &Path,
     kit_tar: &Path,
     unbound: &[String],
 ) -> Result<()> {
@@ -332,27 +320,14 @@ fn run_build<R: Runner>(
     // A descriptor's syntax line picks the kit frontend. One that sbx takes without it (by its
     // `schemaVersion`) has the build name the frontend instead.
     let frontend_named = fs::read(dir.join(desc)).is_ok_and(|b| starts_with_syntax(&b));
-    let host = |p: &Path| -> Result<String> {
-        let s = p.display().to_string();
-        // smolvm reads `a:b` as MACHINE:PATH.
-        if s.contains(':') {
-            bail!("the kit cache path {s} contains ':', which smolvm cp can't copy from");
-        }
-        Ok(s)
-    };
     let exec = |cmd: &[&str]| ctx.vm.exec_captured(&root(machine, cmd));
-    let (ctx_dir, guest_ctx_tar, guest_kit_tar) = (
-        format!("{n}/ctx"),
-        format!("{n}/ctx.tar"),
-        format!("{n}/kit.tar"),
-    );
+    let (ctx_dir, guest_kit_tar) = (format!("{n}/ctx"), format!("{n}/kit.tar"));
     let result = (|| {
-        exec(&["mkdir", "-p", &ctx_dir]).context("preparing the build in the builder")?;
+        exec(&["mkdir", "-p", &n]).context("preparing the build in the builder")?;
+        // Like a Docker build context: links stay links instead of pulling in what they point at.
         ctx.vm
-            .cp(&host(ctx_tar)?, &format!("{machine}:{guest_ctx_tar}"))
+            .upload_folder(machine, dir, &ctx_dir)
             .context("copying the kit into the builder")?;
-        exec(&["tar", "-xf", &guest_ctx_tar, "-C", &ctx_dir])
-            .context("unpacking the kit in the builder")?;
         let (file, output) = (
             format!("{ctx_dir}/{desc}"),
             format!("type=oci,dest={guest_kit_tar}"),
@@ -364,7 +339,7 @@ fn run_build<R: Runner>(
         build.extend(["-f", &file, "--output", &output, &ctx_dir]);
         exec(&build).map_err(|e| build_error(dir, &e, unbound))?;
         ctx.vm
-            .cp(&format!("{machine}:{guest_kit_tar}"), &host(kit_tar)?)
+            .download(machine, &guest_kit_tar, kit_tar)
             .context("copying the built kit out of the builder")
     })();
     if let Err(e) = exec(&["rm", "-rf", &n]) {

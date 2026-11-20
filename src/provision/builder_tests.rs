@@ -56,8 +56,7 @@ fn build_dir(lines: &[String]) -> String {
         .iter()
         .find(|l| l.contains("-- mkdir -p /build/"))
         .expect("mkdir");
-    let ctx = mkdir.rsplit(' ').next().unwrap();
-    ctx.strip_suffix("/ctx").unwrap().to_string()
+    mkdir.rsplit(' ').next().unwrap().to_string()
 }
 
 #[test]
@@ -125,14 +124,18 @@ fn first_build_creates_starts_builds_copies_back_and_stops() {
         i(&format!("-u root -- sh -c {}", sandbox::startup_cmd(None))),
         i("pgrep -x dockerd"),
         i("-u root -- docker info"),
-        i(&format!("-u root -- mkdir -p {n}/ctx")),
-        i(&format!("sbx-_builder:{n}/ctx.tar")),
-        i(&format!("-u root -- tar -xf {n}/ctx.tar -C {n}/ctx")),
+        i(&format!("-u root -- mkdir -p {n}")),
+        i(&format!(
+            "machine files --name sbx-_builder upload-folder {} {n}/ctx",
+            kit.path().display()
+        )),
         i(&format!(
             "-u root -- docker buildx build -f {n}/ctx/claude-mixin.yaml \
                  --output type=oci,dest={n}/kit.tar {n}/ctx"
         )),
-        i(&format!("machine cp sbx-_builder:{n}/kit.tar ")),
+        i(&format!(
+            "machine files --name sbx-_builder download {n}/kit.tar "
+        )),
         i(&format!("-u root -- rm -rf {n}")),
         i("machine stop -n sbx-_builder"),
     ];
@@ -142,10 +145,6 @@ fn first_build_creates_starts_builds_copies_back_and_stops() {
         "not branchable: {rest:#?}"
     );
     assert_eq!(rest.last().unwrap(), "machine stop -n sbx-_builder");
-    // The upload is a file: smolvm's cp copies files only.
-    let up = &rest[i(&format!("sbx-_builder:{n}/ctx.tar"))];
-    assert!(up.starts_with("machine cp /"), "{up}");
-    assert!(up.split(' ').nth(2).unwrap().ends_with(".tar"), "{up}");
 }
 
 #[test]
@@ -157,12 +156,11 @@ fn host_temp_files_are_removed() {
     let kit = kit_dir();
     build(&t.ctx, kit.path()).unwrap();
     let lines = fake.call_lines();
-    let up = lines
-        .iter()
-        .find(|l| l.starts_with("machine cp /"))
+    let down = lines.iter().find(|l| l.contains(" download ")).unwrap();
+    let tmp = Path::new(down.rsplit(' ').next().unwrap())
+        .parent()
         .unwrap();
-    let host = up.split(' ').nth(2).unwrap();
-    assert!(!Path::new(host).exists(), "temp files are removed: {host}");
+    assert!(!tmp.exists(), "the temp dir is removed: {}", tmp.display());
 }
 
 #[test]
@@ -382,31 +380,6 @@ fn dockerd_is_waited_for() {
     fake.once_fail(&["machine", "exec"], "UNKNOWN", "not yet");
     wait_for_docker(&t.ctx.vm, "sbx-_builder", 3, Duration::ZERO).unwrap();
     assert_eq!(fake.calls().len(), 2);
-}
-
-#[test]
-fn pack_tars_the_kit_dir_keeping_links_as_links() {
-    let kit = kit_dir();
-    std::os::unix::fs::symlink("/etc/passwd", kit.path().join("link")).unwrap();
-    let out = tempfile::tempdir().unwrap();
-    let tar_path = out.path().join("ctx.tar");
-    pack(kit.path(), &tar_path).unwrap();
-    let mut a = tar::Archive::new(File::open(&tar_path).unwrap());
-    let mut names = Vec::new();
-    for e in a.entries().unwrap() {
-        let e = e.unwrap();
-        let name = e.path().unwrap().display().to_string();
-        if name.ends_with("link") {
-            assert!(e.header().entry_type().is_symlink(), "{name}");
-        }
-        names.push(name);
-    }
-    for want in ["claude-mixin.yaml", "files/hello.txt", "link"] {
-        assert!(
-            names.iter().any(|n| n.ends_with(want)),
-            "{want} in {names:?}"
-        );
-    }
 }
 
 #[test]

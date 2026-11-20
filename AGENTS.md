@@ -97,8 +97,11 @@ As of smolvm 1.35. Check the reference source before depending on anything not l
 - **Exec output:** a plain `machine exec` prints when the command ends, and fails past 11 MiB of output.
   `--stream` prints as it arrives, with no cap. `-i` streams too.
 - **Published ports** listen on `127.0.0.1` and `[::1]`, up to 4096 per machine. Ports below 1024 work
-  on macOS too. `machine cp` uploads a directory like `cp -r` (following symlinks), but downloads
-  single files only.
+  on macOS too.
+- **Files:** `machine cp` uploads a directory like `cp -r` (following symlinks), but downloads single
+  files only. `machine files --name M upload-folder|download|archive` (1.35.4, `--name` only, absolute
+  guest paths, a running machine) uploads a folder keeping links as links (the destination's parent
+  must exist), downloads a file, or downloads a directory as a tar.
 - **Secret refs** (`--secret-env GUEST=HOST_VAR`, `--secret-file`) resolve at launch and are never
   persisted. The HTTP API and `.smolmachine` packs refuse them.
 
