@@ -145,7 +145,7 @@ fn remote_owner(repo: &Path, sandbox: &str) -> Result<Remote> {
 }
 
 /// `git config <key>`: `None` when the key is unset (exit 1); any other failure is an error.
-fn config_get(repo: &Path, key: &str) -> Result<Option<String>> {
+pub(crate) fn config_get(repo: &Path, key: &str) -> Result<Option<String>> {
     let out = git_output("git", repo, &["config", key])?;
     match out.status.code() {
         Some(0) => Ok(Some(stdout(&out))),

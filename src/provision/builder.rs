@@ -291,13 +291,9 @@ fn wait_for_docker<R: Runner>(
     )
 }
 
+/// `cmd` in `machine` as root.
 fn root(machine: &str, cmd: &[&str]) -> ExecSpec {
-    ExecSpec {
-        name: machine.into(),
-        user: Some("root".into()),
-        cmd: cmd.iter().map(|s| s.to_string()).collect(),
-        ..Default::default()
-    }
+    ExecSpec::new(machine, "root", cmd.iter().map(|s| s.to_string()).collect())
 }
 
 /// Selects the kit frontend for a descriptor without the syntax line.
@@ -351,10 +347,7 @@ fn run_build<R: Runner>(
 /// A failed `docker buildx build`: a stored login it got no token for (`unbound`), a registry
 /// login it needed, or the end of its output.
 fn build_error(dir: &Path, e: &anyhow::Error, unbound: &[String]) -> anyhow::Error {
-    let output = match e.downcast_ref::<SmolvmError>() {
-        Some(s) => s.message.clone(),
-        None => format!("{e:#}"),
-    };
+    let output = SmolvmError::message_of(e);
     if !unbound.is_empty() && output.contains("credential unavailable") {
         let hosts = unbound.join(", ");
         let (host, refs) = match unbound {
@@ -382,8 +375,7 @@ fn build_error(dir: &Path, e: &anyhow::Error, unbound: &[String]) -> anyhow::Err
             dir.display()
         );
     }
-    let lines: Vec<&str> = output.lines().collect();
-    let tail = lines[lines.len().saturating_sub(TAIL_LINES)..].join("\n");
+    let tail = crate::sandbox::last_lines(&output, TAIL_LINES);
     anyhow::anyhow!("building {} failed:\n{tail}", dir.display())
 }
 

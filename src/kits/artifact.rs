@@ -77,10 +77,11 @@ pub fn read_dir(dir: &Path) -> Result<Payload> {
     })
 }
 
-/// Regular files under `root`, sorted, as paths relative to it; symlinks are skipped (the loader
-/// warns about them).
-fn files_under(root: &Path) -> Result<Vec<PathBuf>> {
-    fn walk(root: &Path, dir: &Path, out: &mut Vec<PathBuf>) -> Result<()> {
+/// Regular files and symlinks under `root` (none when it isn't a directory), each in path order
+/// and relative to it. Symlinks are never followed: a directory link can loop forever, and a link
+/// could pull in files from outside the kit (sbx rejects `../` traversal for the same reason).
+pub(crate) fn files_under(root: &Path) -> Result<(Vec<PathBuf>, Vec<PathBuf>)> {
+    fn walk(root: &Path, dir: &Path, out: &mut (Vec<PathBuf>, Vec<PathBuf>)) -> Result<()> {
         let mut entries: Vec<_> = fs::read_dir(dir)
             .with_context(|| format!("reading {}", dir.display()))?
             .collect::<std::io::Result<_>>()?;
@@ -90,12 +91,14 @@ fn files_under(root: &Path) -> Result<Vec<PathBuf>> {
             if t.is_dir() {
                 walk(root, &e.path(), out)?;
             } else if t.is_file() {
-                out.push(e.path().strip_prefix(root)?.to_path_buf());
+                out.0.push(e.path().strip_prefix(root)?.to_path_buf());
+            } else if t.is_symlink() {
+                out.1.push(e.path().strip_prefix(root)?.to_path_buf());
             }
         }
         Ok(())
     }
-    let mut out = Vec::new();
+    let mut out = Default::default();
     if root.is_dir() {
         walk(root, root, &mut out)?;
     }
@@ -115,7 +118,7 @@ pub fn empty_files_layer() -> Result<Vec<u8>> {
 
 /// The files layer: `files/home/X` as `home/agent/X`, owned by 1000, mtime 0.
 fn files_layer(home: &Path) -> Result<Option<Vec<u8>>> {
-    let files = files_under(home)?;
+    let (files, _) = files_under(home)?;
     if files.is_empty() {
         return Ok(None);
     }
@@ -144,7 +147,7 @@ pub fn zip(dir: &Path) -> Result<Vec<u8>> {
     let files = dir.join("files");
     if files.is_dir() {
         let mut dirs = std::collections::BTreeSet::from(["files/".to_string()]);
-        for rel in files_under(&files)? {
+        for rel in files_under(&files)?.0 {
             let name = format!("files/{}", rel.display());
             let mut parent = rel.parent();
             while let Some(p) = parent.filter(|p| !p.as_os_str().is_empty()) {

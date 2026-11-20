@@ -91,6 +91,11 @@ impl Rule {
         }
     }
 
+    /// A kit's rule, runtime or install phase (`source` "kit").
+    pub fn is_kit(&self) -> bool {
+        self.source() == "kit"
+    }
+
     /// An install-phase kit rule.
     pub fn is_kit_install(&self) -> bool {
         self.created_via.starts_with(KIT_INSTALL_VIA)
@@ -210,6 +215,20 @@ impl Policy {
         method: Option<String>,
         path: Option<String>,
     ) -> Result<String> {
+        self.insert_rule(sandbox, decision, resources, created_via, method, path)
+            .map(|(id, _)| id)
+    }
+
+    /// `add_rule`, also saying whether this call created the rule (`false`: it was there).
+    pub fn insert_rule(
+        &mut self,
+        sandbox: Option<&str>,
+        decision: Decision,
+        resources: &str,
+        created_via: &str,
+        method: Option<String>,
+        path: Option<String>,
+    ) -> Result<(String, bool)> {
         let parsed = rules::parse_list(resources)?;
         let resources: Vec<String> = parsed.into_iter().map(|r| r.raw).collect();
         let method = method.as_deref().and_then(normalise_methods);
@@ -222,7 +241,7 @@ impl Policy {
         );
         let list = self.rules_mut(sandbox);
         if list.iter().any(|r| r.id == id) {
-            return Ok(id);
+            return Ok((id, false));
         }
         list.push(Rule {
             id: id.clone(),
@@ -232,7 +251,7 @@ impl Policy {
             method,
             path,
         });
-        Ok(id)
+        Ok((id, true))
     }
 
     /// Adds a kit's rules for `sandbox` with `created_via = "kit:<kit>"`, or for its install-phase
@@ -262,12 +281,7 @@ impl Policy {
                     n.paths.iter().cloned().map(Some).collect()
                 };
                 for path in paths {
-                    let before: Vec<String> = self
-                        .rules_mut(Some(sandbox))
-                        .iter()
-                        .map(|r| r.id.clone())
-                        .collect();
-                    let id = self.add_rule(
+                    let (id, new) = self.insert_rule(
                         Some(sandbox),
                         decision,
                         &n.host,
@@ -285,7 +299,7 @@ impl Policy {
                     {
                         r.created_via = via.clone();
                     }
-                    if !before.contains(&id) && !added.contains(&id) {
+                    if new {
                         added.push(id.clone());
                     }
                     if !all.contains(&id) {
@@ -301,7 +315,7 @@ impl Policy {
     /// with one of them stays.
     pub fn remove_rules_by_ids(&mut self, sandbox: &str, ids: &[String]) {
         self.rules_mut(Some(sandbox))
-            .retain(|r| !(ids.contains(&r.id) && r.source() == "kit"));
+            .retain(|r| !(ids.contains(&r.id) && r.is_kit()));
         self.prune(sandbox);
     }
 
@@ -324,7 +338,7 @@ impl Policy {
         if let Some(res) = resource {
             // Kit rules go with their kit, never by resource.
             for r in list.iter_mut().filter(|r| {
-                r.source() != "kit"
+                !r.is_kit()
                     && method.is_none_or(|m| r.method.as_deref() == Some(m))
                     && path.is_none_or(|p| r.path.as_deref() == Some(p))
             }) {
@@ -355,15 +369,14 @@ impl Policy {
             if let Some(id) = id
                 && (id == kit_rule_id(name)
                     || id == kit_rule_id(&format!("{name}|deny"))
-                    || sp.rules.iter().any(|r| r.id == id && r.source() == "kit"))
+                    || sp.rules.iter().any(|r| r.id == id && r.is_kit()))
             {
                 return Some(name.clone());
             }
             if let (None, Some(res)) = (id, resource) {
                 let lists = |kit: bool| {
                     sp.rules.iter().any(|r| {
-                        (r.source() == "kit") == kit
-                            && r.resources.iter().any(|x| x.eq_ignore_ascii_case(res))
+                        r.is_kit() == kit && r.resources.iter().any(|x| x.eq_ignore_ascii_case(res))
                     })
                 };
                 if sandbox.is_some() && lists(true) && !lists(false) {
@@ -722,7 +735,7 @@ mod tests {
         assert_eq!(sb.len(), 5);
         assert!(
             sb.iter()
-                .filter(|r| r.source() == "kit")
+                .filter(|r| r.is_kit())
                 .all(|r| r.created_via == "kit:gh")
         );
         assert_eq!(sb[0].source(), "local");

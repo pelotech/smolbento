@@ -10,7 +10,9 @@ use super::progress::{CreateSteps, Progress};
 use super::request::{
     Workload, check_kit_args, kit_plan, kit_target, resolve_clone, settle_default_name,
 };
-use super::{CreateArgs, Ctx, OutputArgs, PruneArgs, ResetArgs, RmArgs, SandboxOpts, confirm};
+use super::{
+    CreateArgs, Ctx, Done, OutputArgs, PruneArgs, ResetArgs, RmArgs, SandboxOpts, confirm,
+};
 use crate::provision;
 use crate::sandbox::{self, CreateRequest, Event, Sandbox, session};
 use crate::smolvm::Runner;
@@ -152,14 +154,6 @@ struct Report<'a> {
     done: Vec<Done>,
 }
 
-/// In sbx's key order.
-#[derive(serde::Serialize)]
-struct Done {
-    action: String,
-    resource: &'static str,
-    name: String,
-}
-
 /// `prune --dry-run --json`, in sbx's shape: its `would_remove` and `skipped_unknown_stop`
 /// (always empty: smolvm always knows a machine's state), then smolbento's leftover units.
 #[derive(serde::Serialize)]
@@ -285,12 +279,21 @@ fn forks_first(mut targets: Vec<&Sandbox>) -> Vec<&Sandbox> {
     targets
 }
 
+/// Fails when `sb` has forks that aren't being removed with it.
+pub(crate) fn check_no_forks(sb: &Sandbox, all: &[Sandbox], removing: &[&str]) -> Result<()> {
+    let forks = remaining_forks(sb, all, removing);
+    if !forks.is_empty() {
+        bail!(
+            "{} has forks; remove its forks first: {}",
+            sb.name(),
+            forks.join(", ")
+        );
+    }
+    Ok(())
+}
+
 /// Forks of `sb` that aren't being removed with it.
-pub(crate) fn remaining_forks<'a>(
-    sb: &Sandbox,
-    all: &'a [Sandbox],
-    removing: &[&str],
-) -> Vec<&'a str> {
+fn remaining_forks<'a>(sb: &Sandbox, all: &'a [Sandbox], removing: &[&str]) -> Vec<&'a str> {
     all.iter()
         .filter(|f| f.meta.fork_of.as_deref() == Some(sb.name()) && !removing.contains(&f.name()))
         .map(Sandbox::name)
@@ -323,14 +326,7 @@ pub fn rm<R: Runner>(ctx: &mut Ctx<R>, a: &RmArgs) -> Result<i32> {
     }
     let names: Vec<&str> = targets.iter().map(|sb| sb.name()).collect();
     for sb in &targets {
-        let forks = remaining_forks(sb, &all, &names);
-        if !forks.is_empty() {
-            bail!(
-                "{} has forks; remove its forks first: {}",
-                sb.name(),
-                forks.join(", ")
-            );
-        }
+        check_no_forks(sb, &all, &names)?;
     }
     confirm(ctx, &format!("Remove {}?", names.join(", ")), a.force)?;
     let result = forks_first(targets).into_iter().try_for_each(|sb| {

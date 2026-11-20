@@ -35,6 +35,14 @@ impl SmolvmError {
         })
     }
 
+    /// The smolvm error's message when `e` is one, else the whole error chain.
+    pub fn message_of(e: &anyhow::Error) -> String {
+        match e.downcast_ref::<Self>() {
+            Some(s) => s.message.clone(),
+            None => format!("{e:#}"),
+        }
+    }
+
     /// Reads the JSON error smolvm prints on stderr, falling back to the raw text.
     pub fn from_output(out: &Output) -> Self {
         match Self::from_json(out) {

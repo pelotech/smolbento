@@ -293,8 +293,7 @@ fn check_merged(f: &EnvFile, first: &str) -> Result<()> {
         }
     }
     for (name, s) in f.secrets.iter().flatten() {
-        let sources = [s.value.is_some(), s.r#ref.is_some(), s.command.is_some()];
-        let why = if sources.iter().filter(|x| **x).count() != 1 {
+        let why = if s.source_count() != 1 {
             "must specify only one of 'value', 'ref', or 'command'"
         } else if s.snapshot == Some(true) && s.refresh.is_some() {
             "snapshot cannot be combined with refresh"
@@ -322,7 +321,6 @@ fn check_merged(f: &EnvFile, first: &str) -> Result<()> {
             }
         }
     }
-    let mut hosts: Vec<String> = Vec::new();
     for (service, b) in f.bindings.iter().flatten() {
         let at = format!("invalid {first}: bindings.{service}");
         let kinds = [("apiKey", &b.api_key), ("oauth", &b.oauth)];
@@ -355,6 +353,7 @@ fn check_merged(f: &EnvFile, first: &str) -> Result<()> {
             _ => bail!("{at}: give exactly one of url or command"),
         }
     }
+    let mut hosts: Vec<String> = Vec::new();
     for (host, r) in f.registries.iter().flatten() {
         let at = format!("invalid {first}: registry \"{host}\"");
         let lower = host.to_ascii_lowercase();
@@ -370,8 +369,7 @@ fn check_merged(f: &EnvFile, first: &str) -> Result<()> {
             ("username", r.username.as_ref()),
         ] {
             let Some(s) = s else { continue };
-            let sources = [s.value.is_some(), s.r#ref.is_some(), s.command.is_some()];
-            if sources.iter().filter(|set| **set).count() != 1 {
+            if s.source_count() != 1 {
                 bail!("{at}: {what} needs exactly one of value, ref or command");
             }
         }

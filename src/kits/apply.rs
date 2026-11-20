@@ -102,31 +102,25 @@ pub fn apply(
         .chain(&plan.mixins)
         .collect();
     let mut steps = KitSteps::default();
+    let registries = secrets.registries_for(&req.name);
+    let logins = Logins::new(&registries, store);
 
     match &plan.workload.content {
         Content::Smolfile(path) => {
-            if compose::has_mixin_layers(plan)? {
+            if !compose::layered_names(plan)?.is_empty() {
                 bail!("mixins with image layers can't be added to a Smolfile kit");
             }
             req.image.clear();
             req.smolfile = Some(path.clone());
         }
-        _ => {
-            let registries = secrets.registries_for(&req.name);
-            req.image = compose::image_for(plan, cache, Logins::new(&registries, store))?
-        }
+        _ => req.image = compose::image_for(plan, cache, logins)?,
     }
-    let kit_env = expand_self_references(plan, &m.env, || {
-        let registries = secrets.registries_for(&req.name);
-        compose::image_env(plan, cache, Logins::new(&registries, store))
-    })?;
+    let kit_env = expand_self_references(plan, &m.env, || compose::image_env(plan, cache, logins))?;
 
     apply_resources(req, m)?;
     // The user's -e wins over a kit's variable.
     for (k, v) in &kit_env {
-        if !req.env.iter().any(|(n, _)| n == k) {
-            req.env.push((k.clone(), v.clone()));
-        }
+        crate::util::env_default(&mut req.env, k, v.clone());
     }
     for &(guest, udp) in &m.ports {
         if !req.ports.iter().any(|p| p.guest == guest && p.udp == udp) {

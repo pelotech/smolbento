@@ -6,7 +6,7 @@ use std::io::Write;
 use anyhow::{Context, Result, bail};
 use serde::Serialize;
 
-use super::{Ctx, Format, McpAddArgs, McpCmd, McpInspectArgs, McpLsArgs, Unsupported, table};
+use super::{Ctx, McpAddArgs, McpCmd, McpInspectArgs, McpLsArgs, Unsupported, table};
 use crate::mcp::{self, McpFile, Server};
 use crate::smolvm::Runner;
 
@@ -178,18 +178,17 @@ fn ls<R: Runner>(ctx: &Ctx<R>, a: &McpLsArgs) -> Result<()> {
     let file = McpFile::load(&ctx.paths)?;
     let rows: Vec<Row> = file.servers.iter().map(|(n, s)| Row::new(n, s)).collect();
     let mut out = &ctx.out;
-    match a.output.pick() {
-        _ if a.quiet => rows.iter().try_for_each(|r| writeln!(out, "{}", r.name))?,
-        f @ (Format::Json | Format::Yaml) => {
-            write!(out, "{}", f.structured(&rows)?.unwrap_or_default())?
-        }
-        Format::Table if rows.is_empty() => writeln!(out, "No MCP servers registered")?,
-        Format::Table => {
-            let lines = rows.iter();
-            let lines = lines.map(|r| vec![r.name.to_string(), r.kind.to_string(), r.target()]);
-            let head = ["NAME", "TYPE", "TARGET"];
-            write!(out, "{}", table(&head, lines.collect()))?;
-        }
+    if a.quiet {
+        rows.iter().try_for_each(|r| writeln!(out, "{}", r.name))?;
+    } else if let Some(text) = a.output.structured(&rows)? {
+        write!(out, "{text}")?;
+    } else if rows.is_empty() {
+        writeln!(out, "No MCP servers registered")?;
+    } else {
+        let lines = rows.iter();
+        let lines = lines.map(|r| vec![r.name.to_string(), r.kind.to_string(), r.target()]);
+        let head = ["NAME", "TYPE", "TARGET"];
+        write!(out, "{}", table(&head, lines.collect()))?;
     }
     Ok(())
 }
@@ -202,25 +201,22 @@ fn inspect<R: Runner>(ctx: &Ctx<R>, a: &McpInspectArgs) -> Result<()> {
         .with_context(|| crate::mcp::unknown(&a.name))?;
     let row = Row::new(&a.name, server);
     let mut out = &ctx.out;
-    match a.output.pick() {
-        f @ (Format::Json | Format::Yaml) => {
-            write!(out, "{}", f.structured(&row)?.unwrap_or_default())?
-        }
-        Format::Table => {
-            writeln!(out, "Name:     {}", row.name)?;
-            writeln!(out, "Type:     {}", row.kind)?;
-            match server {
-                Server::Remote { url, headers } => {
-                    writeln!(out, "URL:      {url}")?;
-                    for (name, value) in headers {
-                        writeln!(out, "Header:   {name}: {value}")?;
-                    }
+    if let Some(text) = a.output.structured(&row)? {
+        write!(out, "{text}")?;
+    } else {
+        writeln!(out, "Name:     {}", row.name)?;
+        writeln!(out, "Type:     {}", row.kind)?;
+        match server {
+            Server::Remote { url, headers } => {
+                writeln!(out, "URL:      {url}")?;
+                for (name, value) in headers {
+                    writeln!(out, "Header:   {name}: {value}")?;
                 }
-                Server::Command { .. } => writeln!(out, "Command:  {}", row.target())?,
             }
-            for secret in &row.secrets {
-                writeln!(out, "Secret:   {secret}")?;
-            }
+            Server::Command { .. } => writeln!(out, "Command:  {}", row.target())?,
+        }
+        for secret in &row.secrets {
+            writeln!(out, "Secret:   {secret}")?;
         }
     }
     Ok(())

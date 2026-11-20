@@ -104,15 +104,11 @@ pub fn add_create_denies(
             "can't deny {host}: sandbox {sandbox} would be created with {service} bound to it; remove the secret first"
         );
     }
-    let before: Vec<String> = policy
-        .sandboxes
-        .get(sandbox)
-        .map(|s| s.rules.iter().map(|r| r.id.clone()).collect())
-        .unwrap_or_default();
     let mut added = Vec::new();
     for (value, _) in denies {
-        let id = policy.add_rule(Some(sandbox), Decision::Deny, value, "added", None, None)?;
-        if !before.contains(&id) && !added.contains(&id) {
+        let (id, new) =
+            policy.insert_rule(Some(sandbox), Decision::Deny, value, "added", None, None)?;
+        if new {
             added.push(id);
         }
     }

@@ -9,7 +9,7 @@ use anyhow::{Context, Result, anyhow, bail};
 use super::{Ctx, ForkArgs};
 use crate::policy::Policy;
 use crate::provision;
-use crate::sandbox::{self, Sandbox, labels, name};
+use crate::sandbox::{self, Sandbox, StartPlan, labels, name};
 use crate::smolvm::{Runner, SmolvmError};
 use crate::workspace::clone;
 
@@ -37,7 +37,7 @@ pub fn run<R: Runner>(ctx: &mut Ctx<R>, a: &ForkArgs) -> Result<i32> {
     let start = provision::start_plan(ctx, &parent.meta)?;
     sandbox::ensure_running(&ctx.vm, &mut parent, || Ok(start.clone()))?;
     for n in &names {
-        fork_one(ctx, &parent, n, &start.env, &start.remove)
+        fork_one(ctx, &parent, n, &start)
             .with_context(|| format!("forking {} as {n}", parent.name()))?;
         writeln!(&ctx.out, "{n}")?;
     }
@@ -77,8 +77,7 @@ fn fork_one<R: Runner>(
     ctx: &Ctx<R>,
     parent: &Sandbox,
     fork: &str,
-    env: &[(String, String)],
-    remove: &[String],
+    start: &StartPlan,
 ) -> Result<()> {
     // The name is free, so anything stored under it is stale (say, a machine deleted with raw
     // smolvm): drop its secrets, keychain values included, and policy entry.
@@ -86,7 +85,7 @@ fn fork_one<R: Runner>(
     let mut policy = Policy::load(&ctx.paths)?;
     policy.copy_sandbox(parent.name(), fork);
     policy.save(&ctx.paths)?;
-    let result = add_remote_and_branch(ctx, parent, fork, env, remove);
+    let result = add_remote_and_branch(ctx, parent, fork, start);
     if result.is_err()
         && let Err(e) = super::secret::forget_sandbox(ctx, fork, false)
     {
@@ -99,8 +98,7 @@ fn add_remote_and_branch<R: Runner>(
     ctx: &Ctx<R>,
     parent: &Sandbox,
     fork: &str,
-    env: &[(String, String)],
-    remove: &[String],
+    start: &StartPlan,
 ) -> Result<()> {
     let repo = parent.meta.clone_repo.as_deref().map(Path::new);
     let added = match repo {
@@ -137,8 +135,8 @@ fn add_remote_and_branch<R: Runner>(
             &name::machine_name(fork),
             &labels,
             &vars,
-            env,
-            remove,
+            &start.env,
+            &start.remove,
         )
         .map_err(|e| branch_hint(e, parent.name()));
     if result.is_err()

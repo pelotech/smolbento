@@ -21,10 +21,8 @@ pub type Relay = Box<dyn Fn(u16) + Send + Sync>;
 
 /// What the requests do; tests inject their own opener and copier.
 pub struct Handlers {
-    /// The `browser.enabled` setting.
-    pub browser_enabled: bool,
-    /// The `clipboard.textCopy` setting.
-    pub copy_enabled: bool,
+    /// The `browser.enabled` and `clipboard.textCopy` settings.
+    pub allowed: super::Allowed,
     pub open: Opener,
     pub copy: Copier,
     pub relay: Relay,
@@ -72,8 +70,7 @@ pub fn serve_connection(stream: &UnixStream, h: &Handlers) {
 
 /// Answers one request. Request bodies (clipboard text) are never logged.
 fn handle(stream: &UnixStream, h: &Handlers, until: Instant, stop: &AtomicBool) {
-    // Accepted sockets inherit non-blocking mode on some systems.
-    if stream.set_nonblocking(false).is_err() || stream.set_write_timeout(Some(DEADLINE)).is_err() {
+    if stream.blocking().is_err() {
         return;
     }
     let resp = match read_within(stream, until, stop) {
@@ -191,7 +188,7 @@ fn route(h: &Handlers, req: &Request) -> Response {
     }
     if req.path == "/open" {
         open(h, &req.body)
-    } else if !h.copy_enabled {
+    } else if !h.allowed.copy {
         Response::new(
             403,
             "copying to the host clipboard is off; enable it with \
@@ -203,7 +200,7 @@ fn route(h: &Handlers, req: &Request) -> Response {
 }
 
 fn open(h: &Handlers, body: &[u8]) -> Response {
-    if !h.browser_enabled {
+    if !h.allowed.browser {
         return Response::new(403, "browser is disabled");
     }
     let Ok(url) = std::str::from_utf8(body) else {
@@ -329,8 +326,10 @@ mod tests {
         let seen = Arc::new(Mutex::new(Vec::new()));
         let (o, c, r) = (seen.clone(), seen.clone(), seen.clone());
         let h = Handlers {
-            browser_enabled: enabled,
-            copy_enabled: true,
+            allowed: super::super::Allowed {
+                browser: enabled,
+                copy: true,
+            },
             open: Box::new(move |url| {
                 o.lock().unwrap().push(format!("open {url}"));
                 if fail {
@@ -601,7 +600,7 @@ mod tests {
     #[test]
     fn copy_is_forbidden_unless_text_copy_is_enabled() {
         let (mut h, seen) = recording(true, false);
-        h.copy_enabled = false;
+        h.allowed.copy = false;
         let r = route(&h, &post("/copy", "secret"));
         assert_eq!(
             (r.status, r.body.as_str()),

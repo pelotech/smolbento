@@ -62,39 +62,39 @@ pub fn render(sandboxes: &[Sandbox], format: Format, quiet: bool, now: i64) -> R
             fork_of: s.meta.fork_of.as_deref(),
         })
         .collect();
-    match format {
-        f @ (Format::Json | Format::Yaml) => Ok(f.structured(&rows)?.unwrap_or_default()),
-        Format::Table if rows.is_empty() => Ok("No sandboxes found\n".into()),
-        Format::Table => {
-            let head = [
-                "SANDBOX",
-                "AGENT",
-                "STATUS",
-                "PORTS",
-                "WORKSPACE",
-                "CREATED",
-            ];
-            let mut lines = Vec::new();
-            for (row, sb) in rows.iter().zip(sandboxes) {
-                let dot = if sb.is_running() { "●" } else { "○" };
-                let ports = row
-                    .ports
-                    .iter()
-                    .map(|p| format!("127.0.0.1:{}->{}", p.host, p.guest))
-                    .collect::<Vec<_>>()
-                    .join(", ");
-                lines.push(vec![
-                    row.name.into(),
-                    row.agent.into(),
-                    format!("{dot} {}", row.status),
-                    ports,
-                    row.workspace.unwrap_or("-").into(),
-                    age(now - sb.meta.created),
-                ]);
-            }
-            Ok(table(&head, lines))
-        }
+    if let Some(text) = format.structured(&rows)? {
+        return Ok(text);
     }
+    if rows.is_empty() {
+        return Ok("No sandboxes found\n".into());
+    }
+    let head = [
+        "SANDBOX",
+        "AGENT",
+        "STATUS",
+        "PORTS",
+        "WORKSPACE",
+        "CREATED",
+    ];
+    let mut lines = Vec::new();
+    for (row, sb) in rows.iter().zip(sandboxes) {
+        let dot = if sb.is_running() { "●" } else { "○" };
+        let ports = row
+            .ports
+            .iter()
+            .map(|p| format!("127.0.0.1:{}->{}", p.host, p.guest))
+            .collect::<Vec<_>>()
+            .join(", ");
+        lines.push(vec![
+            row.name.into(),
+            row.agent.into(),
+            format!("{dot} {}", row.status),
+            ports,
+            row.workspace.unwrap_or("-").into(),
+            age(now - sb.meta.created),
+        ]);
+    }
+    Ok(table(&head, lines))
 }
 
 /// sbx-style relative age: `5s`, `2m`, `3h`, `4d`.

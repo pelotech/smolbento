@@ -6,12 +6,12 @@ use anyhow::{Context, Result, bail};
 use serde::Serialize;
 
 use super::args::{
-    Format, TemplateCmd, TemplateLoadArgs, TemplateLsArgs, TemplateRmArgs, TemplateSaveArgs,
+    TemplateCmd, TemplateLoadArgs, TemplateLsArgs, TemplateRmArgs, TemplateSaveArgs,
 };
 use super::lifecycle::stop_sandbox;
 use super::ls::age;
 use super::progress::Progress;
-use super::{Ctx, Unsupported, confirm, confirm_or, table};
+use super::{Ctx, Done, Unsupported, confirm, confirm_or, table};
 use crate::sandbox;
 use crate::smolvm::Runner;
 use crate::templates::{Entry, Store, TemplateRef};
@@ -60,38 +60,29 @@ fn ls<R: Runner>(ctx: &Ctx<R>, a: &TemplateLsArgs) -> Result<()> {
         })
         .collect();
     let mut out = &ctx.out;
-    match a.output.pick() {
-        _ if a.quiet => all.iter().try_for_each(|e| writeln!(out, "{}", e.full()))?,
-        f @ (Format::Json | Format::Yaml) => {
-            write!(out, "{}", f.structured(&rows)?.unwrap_or_default())?
+    if a.quiet {
+        all.iter().try_for_each(|e| writeln!(out, "{}", e.full()))?;
+    } else if let Some(text) = a.output.structured(&rows)? {
+        write!(out, "{text}")?;
+    } else {
+        let head = ["REPOSITORY", "TAG", "IMAGE ID", "FLAVOR", "CREATED"];
+        let mut lines = Vec::new();
+        for e in &all {
+            let created = humantime::parse_rfc3339(&e.created_at)
+                .ok()
+                .and_then(|t| t.duration_since(std::time::UNIX_EPOCH).ok())
+                .map_or_else(String::new, |d| age(ctx.now - d.as_secs() as i64));
+            lines.push(vec![
+                e.repository.clone(),
+                e.tag.clone(),
+                e.id.clone(),
+                e.agent.clone(),
+                created,
+            ]);
         }
-        Format::Table => {
-            let head = ["REPOSITORY", "TAG", "IMAGE ID", "FLAVOR", "CREATED"];
-            let mut lines = Vec::new();
-            for e in &all {
-                let created = humantime::parse_rfc3339(&e.created_at)
-                    .ok()
-                    .and_then(|t| t.duration_since(std::time::UNIX_EPOCH).ok())
-                    .map_or_else(String::new, |d| age(ctx.now - d.as_secs() as i64));
-                lines.push(vec![
-                    e.repository.clone(),
-                    e.tag.clone(),
-                    e.id.clone(),
-                    e.agent.clone(),
-                    created,
-                ]);
-            }
-            write!(out, "{}", table(&head, lines))?;
-        }
+        write!(out, "{}", table(&head, lines))?;
     }
     Ok(())
-}
-
-#[derive(Serialize)]
-struct Removed<'a> {
-    action: &'a str,
-    resource: &'a str,
-    name: &'a str,
 }
 
 fn rm<R: Runner>(ctx: &Ctx<R>, a: &TemplateRmArgs) -> Result<()> {
@@ -121,10 +112,10 @@ fn rm<R: Runner>(ctx: &Ctx<R>, a: &TemplateRmArgs) -> Result<()> {
     )?;
     store.remove(&e)?;
     let mut out = &ctx.out;
-    let doc = [Removed {
-        action: "removed",
+    let doc = [Done {
+        action: "removed".into(),
         resource: "template",
-        name: &a.name,
+        name: a.name.clone(),
     }];
     match a.output.structured(&doc)? {
         Some(text) => write!(out, "{text}")?,

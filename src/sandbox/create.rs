@@ -258,8 +258,8 @@ pub fn spec(req: &CreateRequest) -> CreateSpec {
         mount_sockets.push((host, agent::GUEST_SOCKET.into()));
         // A runtime grant's sessions find the agent; an install-only one's hooks set it themselves
         // (`kits::apply`). The user's -e wins.
-        if grant.runtime.is_some() && !env.iter().any(|(k, _)| k == "SSH_AUTH_SOCK") {
-            env.push(("SSH_AUTH_SOCK".into(), agent::GUEST_SOCKET.into()));
+        if grant.runtime.is_some() {
+            crate::util::env_default(&mut env, "SSH_AUTH_SOCK", agent::GUEST_SOCKET);
         }
     }
     CreateSpec {

@@ -105,6 +105,30 @@ fn registries(secrets: &SecretsFile, sandbox: Option<&str>) -> Vec<RegistryEntry
     }
 }
 
+/// Runs F with the logins of `registries` for SANDBOX, read from the secrets file.
+fn with_logins<R: Runner, T>(
+    ctx: &Ctx<R>,
+    sandbox: Option<&str>,
+    f: impl FnOnce(Logins) -> Result<T>,
+) -> Result<T> {
+    let registries = registries(&SecretsFile::load(&ctx.paths)?, sandbox);
+    f(Logins::new(&registries, &*ctx.store))
+}
+
+/// Pulls REF (calling `before` first); also returns whether that added no blob to the cache.
+fn pull_noting(
+    reference: &str,
+    pin: Option<&str>,
+    cache: &Path,
+    logins: Logins,
+    before: &mut dyn FnMut(Fetch),
+) -> Result<(Kit, bool)> {
+    before(Fetch::Pull);
+    let blobs = entries(&registry::store_dir(cache));
+    let kit = registry::pull(reference, pin, cache, logins)?;
+    Ok((kit, entries(&registry::store_dir(cache)) == blobs))
+}
+
 /// The kit and whether loading it added nothing to the kit cache, with `reference` recorded as
 /// typed.
 fn fetch<R: Runner>(
@@ -127,20 +151,15 @@ fn fetch<R: Runner>(
             return Err(signers::refuse_local(reference, p));
         }
         match located {
-            Located::Registry(r) => {
-                let registries = registries(&SecretsFile::load(&ctx.paths)?, sandbox);
-                let logins = Logins::new(&registries, &*ctx.store);
+            Located::Registry(r) => with_logins(ctx, sandbox, |logins| {
                 let verified = if require {
                     Some(signers::verify_registry(&r, &ctx.settings, logins)?)
                 } else {
                     None
                 };
                 let cache = ctx.paths.kit_cache();
-                before(Fetch::Pull);
-                let blobs = entries(&registry::store_dir(&cache));
-                let kit = registry::pull(&r, verified.as_deref(), &cache, logins)?;
-                (kit, entries(&registry::store_dir(&cache)) == blobs)
-            }
+                pull_noting(&r, verified.as_deref(), &cache, logins, before)
+            })?,
             Located::V2(dir) => {
                 let spec = dir.join("spec.yaml");
                 let yaml = fs::read_to_string(&spec)
@@ -187,13 +206,10 @@ pub fn agent<R: Runner>(
         if offline {
             bail!("kit {reference} isn't in the kit cache, and --pull never can't fetch it");
         }
-        let registries = registries(&SecretsFile::load(&ctx.paths)?, sandbox);
-        let logins = Logins::new(&registries, &*ctx.store);
-        before(Fetch::Pull);
-        let blobs = entries(&registry::store_dir(&cache));
-        let kit = registry::pull(&reference, pin, &cache, logins)
-            .with_context(|| format!("pulling agent kit {reference}"))?;
-        (kit, entries(&registry::store_dir(&cache)) == blobs)
+        with_logins(ctx, sandbox, |logins| {
+            pull_noting(&reference, pin, &cache, logins, before)
+                .with_context(|| format!("pulling agent kit {reference}"))
+        })?
     };
     kit.source = source;
     kit.reference = Some(name.to_string());
@@ -256,9 +272,9 @@ pub fn pinned<R: Runner>(
                      never can't reach"
                 );
             }
-            let registries = registries(&SecretsFile::load(&ctx.paths)?, sandbox);
-            let logins = Logins::new(&registries, &*ctx.store);
-            signers::verify_registry(reference, &ctx.settings, logins)?;
+            with_logins(ctx, sandbox, |logins| {
+                signers::verify_registry(reference, &ctx.settings, logins)
+            })?;
         }
         let cache = ctx.paths.kit_cache();
         match registry::cached(base, digest, &cache)? {
@@ -268,9 +284,10 @@ pub fn pinned<R: Runner>(
             }
             None => {
                 before(Fetch::Pull);
-                let registries = registries(&SecretsFile::load(&ctx.paths)?, sandbox);
-                let logins = Logins::new(&registries, &*ctx.store);
-                (registry::pull(base, digest, &cache, logins)?, false)
+                let kit = with_logins(ctx, sandbox, |logins| {
+                    registry::pull(base, digest, &cache, logins)
+                })?;
+                (kit, false)
             }
         }
     };
@@ -506,9 +523,9 @@ pub fn check_launchable<R: Runner>(
     if kit.kind == Kind::Workload && kit.command.is_none() && kit.v2 {
         match &kit.content {
             Content::Image(image) => {
-                let registries = registries(&SecretsFile::load(&ctx.paths)?, sandbox);
-                let logins = Logins::new(&registries, &*ctx.store);
-                kit.command = registry::image_command(image, &ctx.paths.kit_cache(), logins)?;
+                kit.command = with_logins(ctx, sandbox, |logins| {
+                    registry::image_command(image, &ctx.paths.kit_cache(), logins)
+                })?;
             }
             Content::None => bail!("workload kit declares no image or command"),
             _ => {}

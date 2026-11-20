@@ -348,13 +348,8 @@ pub fn prepare_create<R: Runner>(
     }
     if let Some(mcp) = attachment {
         // A rule that was already there isn't this create's: a failed create leaves it.
-        let before: Vec<String> = policy
-            .sandboxes
-            .get(&req.name)
-            .map(|s| s.rules.iter().map(|r| r.id.clone()).collect())
-            .unwrap_or_default();
         for host in &mcp.hosts {
-            let id = policy.add_rule(
+            let (id, new) = policy.insert_rule(
                 Some(&req.name),
                 crate::policy::Decision::Allow,
                 host,
@@ -362,7 +357,7 @@ pub fn prepare_create<R: Runner>(
                 None,
                 None,
             )?;
-            if !before.contains(&id) && !added.contains(&id) {
+            if new {
                 added.push(id);
             }
         }
@@ -538,13 +533,9 @@ fn host_access_note(name: &str, host_access: bool) -> Option<String> {
 /// The host's git `user.name` and `user.email`, for a kit's `git-identity@1`.
 pub(crate) fn host_git_identity<R: Runner>(ctx: &Ctx<R>) -> Option<(String, String)> {
     let get = |key: &str| -> Option<String> {
-        let out = std::process::Command::new("git")
-            .args(["config", "--get", key])
-            .current_dir(&ctx.cwd)
-            .output()
-            .ok()?;
-        let v = String::from_utf8(out.stdout).ok()?.trim().to_string();
-        (out.status.success() && !v.is_empty()).then_some(v)
+        let v = crate::workspace::clone::config_get(&ctx.cwd, key).ok()??;
+        let v = v.trim();
+        (!v.is_empty()).then(|| v.to_string())
     };
     Some((get("user.name")?, get("user.email")?))
 }

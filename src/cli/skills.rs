@@ -8,8 +8,7 @@ use anyhow::{Result, bail};
 use serde::Serialize;
 
 use super::args::{
-    Format, SkillsAddArgs, SkillsCmd, SkillsImportArgs, SkillsLsArgs, SkillsRmArgs,
-    SkillsUpdateArgs,
+    SkillsAddArgs, SkillsCmd, SkillsImportArgs, SkillsLsArgs, SkillsRmArgs, SkillsUpdateArgs,
 };
 use super::{Ctx, confirm_or, plural};
 use crate::skills::import::{Event, scan};
@@ -41,25 +40,23 @@ struct Listing<'a> {
 fn ls<R: Runner>(ctx: &Ctx<R>, store: &Store, a: &SkillsLsArgs) -> Result<()> {
     let names = store.list()?;
     let path = store.dir.display().to_string();
-    let format = a.output.pick();
     let mut out = &ctx.out;
     let doc = Listing {
         store: path.clone(),
         skills: &names,
     };
-    match format {
-        _ if a.quiet => names.iter().try_for_each(|n| writeln!(out, "{n}"))?,
-        f @ (Format::Json | Format::Yaml) => {
-            write!(out, "{}", f.structured(&doc)?.unwrap_or_default())?
-        }
-        Format::Table if names.is_empty() => writeln!(out, "No skills found in {path}")?,
-        Format::Table => {
-            // sbx pads the name column to its widest cell plus 4 spaces.
-            let w = names.iter().map(|n| n.len()).chain([5]).max().unwrap_or(5) + 4;
-            writeln!(out, "{:<w$}STORE", "SKILL")?;
-            for n in &names {
-                writeln!(out, "{n:<w$}{path}")?;
-            }
+    if a.quiet {
+        names.iter().try_for_each(|n| writeln!(out, "{n}"))?;
+    } else if let Some(text) = a.output.structured(&doc)? {
+        write!(out, "{text}")?;
+    } else if names.is_empty() {
+        writeln!(out, "No skills found in {path}")?;
+    } else {
+        // sbx pads the name column to its widest cell plus 4 spaces.
+        let w = names.iter().map(|n| n.len()).chain([5]).max().unwrap_or(5) + 4;
+        writeln!(out, "{:<w$}STORE", "SKILL")?;
+        for n in &names {
+            writeln!(out, "{n:<w$}{path}")?;
         }
     }
     Ok(())

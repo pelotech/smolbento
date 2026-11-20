@@ -12,6 +12,29 @@ pub fn sh_quote(s: &str) -> String {
     format!("'{}'", s.replace('\'', r"'\''"))
 }
 
+/// Waits for `child` to exit until `until`, polling; `None` when it is still running then.
+pub fn wait_until(
+    child: &mut std::process::Child,
+    until: std::time::Instant,
+) -> std::io::Result<Option<std::process::ExitStatus>> {
+    loop {
+        if let Some(status) = child.try_wait()? {
+            return Ok(Some(status));
+        }
+        if std::time::Instant::now() >= until {
+            return Ok(None);
+        }
+        std::thread::sleep(std::time::Duration::from_millis(20));
+    }
+}
+
+/// Sets `key` in `env` to `value` unless it is already set.
+pub fn env_default(env: &mut Vec<(String, String)>, key: &str, value: impl Into<String>) {
+    if !env.iter().any(|(k, _)| k == key) {
+        env.push((key.into(), value.into()));
+    }
+}
+
 pub fn host_uid() -> u32 {
     // SAFETY: getuid has no preconditions and cannot fail.
     unsafe { libc::getuid() }

@@ -413,7 +413,7 @@ fn pick_platform(index: &Value, arch: &str) -> Result<String> {
 }
 
 /// Config, then layer digests, of an image manifest.
-fn blob_digests(manifest: &Value) -> Result<Vec<String>> {
+pub(crate) fn blob_digests(manifest: &Value) -> Result<Vec<String>> {
     let mut out = vec![
         manifest["config"]["digest"]
             .as_str()
@@ -510,10 +510,12 @@ pub(crate) fn persist(tmp: tempfile::NamedTempFile, path: &Path) -> Result<()> {
     Ok(())
 }
 
+/// The `blobs/sha256` directory of the cache's store or of a layout.
 pub(crate) fn store_dir(cache: &Path) -> PathBuf {
     cache.join("blobs").join("sha256")
 }
 
+/// The path of blob DIGEST under `store_dir`.
 fn blob_path(cache: &Path, digest: &str) -> Result<PathBuf> {
     Ok(store_dir(cache).join(hex_of(digest)?))
 }
@@ -590,12 +592,12 @@ fn build_layout(cache: &Path, manifest: &[u8], digest: &str, reference: &str) ->
     let hexd = hex_of(digest)?;
     let value: Value = serde_json::from_slice(manifest)?;
     let dir = cache.join("oci").join(hexd);
-    let blobs = dir.join("blobs").join("sha256");
+    let blobs = store_dir(&dir);
     fs::create_dir_all(&blobs).with_context(|| format!("creating {}", blobs.display()))?;
     let mut all = vec![digest.to_string()];
     all.extend(blob_digests(&value)?);
     for d in &all {
-        let dst = blobs.join(hex_of(d)?);
+        let dst = blob_path(&dir, d)?;
         if dst.exists() {
             continue;
         }
@@ -631,6 +633,61 @@ fn build_layout(cache: &Path, manifest: &[u8], digest: &str, reference: &str) ->
     Ok(dir)
 }
 
+/// An OCI image layout directory (or the cache's store) and the one manifest it names.
+pub(crate) struct Layout {
+    pub dir: PathBuf,
+    pub digest: String,
+    pub manifest: Value,
+}
+
+impl Layout {
+    /// Reads `index.json` and the manifest it names.
+    pub fn read(dir: &Path) -> Result<Self> {
+        let index: Value = serde_json::from_slice(&read_file(&dir.join("index.json"))?)
+            .context("reading the layout's index.json")?;
+        let digest = index["manifests"][0]["digest"]
+            .as_str()
+            .ok_or_else(|| anyhow!("the layout in {} has no manifest", dir.display()))?;
+        Self::at(dir, digest)
+    }
+
+    /// Reads manifest DIGEST from `dir/blobs/sha256`, refusing bytes that don't match it.
+    pub fn at(dir: &Path, digest: &str) -> Result<Self> {
+        let bytes = read_file(&blob_path(dir, digest)?)?;
+        if sha256_digest(&bytes) != digest {
+            bail!("manifest {digest} in {} is corrupt", dir.display());
+        }
+        Ok(Self {
+            dir: dir.to_path_buf(),
+            digest: digest.to_string(),
+            manifest: serde_json::from_slice(&bytes).context("reading the manifest")?,
+        })
+    }
+
+    /// The path of blob DIGEST in this layout.
+    pub fn blob(&self, digest: &str) -> Result<PathBuf> {
+        blob_path(&self.dir, digest)
+    }
+
+    /// The manifest's layer descriptors.
+    pub fn layers(&self) -> &[Value] {
+        self.manifest["layers"].as_array().map_or(&[], |v| v)
+    }
+
+    /// The image config as JSON, read only when asked (a v2 kit's config is YAML).
+    pub fn config(&self) -> Result<Value> {
+        let digest = self.manifest["config"]["digest"]
+            .as_str()
+            .ok_or_else(|| anyhow!("the manifest has no config"))?;
+        serde_json::from_slice(&read_file(&self.blob(digest)?)?).context("reading the image config")
+    }
+}
+
+/// Reads a file, naming it in the error.
+fn read_file(p: &Path) -> Result<Vec<u8>> {
+    fs::read(p).with_context(|| format!("reading {}", p.display()))
+}
+
 /// Reads a kit from an OCI layout directory: the descriptor from the manifest annotation, the
 /// command, user and working directory from the image config. Also used for local builds, with their own `source`.
 pub fn read_layout(dir: &Path, source: Source) -> Result<Kit> {
@@ -639,51 +696,35 @@ pub fn read_layout(dir: &Path, source: Source) -> Result<Kit> {
         Source::Builtin(n) => format!("builtin:{n}"),
         Source::LocalV3(p) | Source::LocalV2(p) | Source::Smolfile(p) => p.display().to_string(),
     };
-    let read = |p: PathBuf| fs::read(&p).with_context(|| format!("reading {}", p.display()));
-    let index: Value = serde_json::from_slice(&read(dir.join("index.json"))?)
-        .context("reading the layout's index.json")?;
-    let digest = index["manifests"][0]["digest"]
-        .as_str()
-        .ok_or_else(|| anyhow!("the layout in {} has no manifest", dir.display()))?
-        .to_string();
-    let blobs = dir.join("blobs").join("sha256");
-    let bytes = read(blobs.join(hex_of(&digest)?))?;
-    if sha256_digest(&bytes) != digest {
-        bail!("manifest {digest} in {} is corrupt", dir.display());
-    }
-    let manifest: Value = serde_json::from_slice(&bytes).context("reading the manifest")?;
-    if let Some((spec, files)) = v2_spec(&manifest, &what)? {
+    let l = Layout::read(dir)?;
+    if let Some((spec, files)) = v2_spec(&l.manifest, &what)? {
         if let Some(files) = files {
-            let layer = read(blobs.join(hex_of(&files)?))?;
+            let layer = read_file(&l.blob(&files)?)?;
             if sha256_digest(&layer) != files {
                 bail!("layer {files} in {} is corrupt", dir.display());
             }
             unpack_v2_files(dir, &layer).with_context(|| format!("reading the v2 kit {what}"))?;
         }
-        let yaml = String::from_utf8(read(blobs.join(hex_of(&spec)?))?)
-            .context("reading the v2 kit's spec")?;
+        let yaml =
+            String::from_utf8(read_file(&l.blob(&spec)?)?).context("reading the v2 kit's spec")?;
         let mut kit = crate::kits::v2::parse(&yaml, dir)
             .with_context(|| format!("reading the v2 kit {what}"))?;
         // Its image is named in the spec (`Content::Image`) and pulled when a sandbox is made.
         kit.source = source;
-        kit.digest = Some(digest);
+        kit.digest = Some(l.digest);
         return Ok(kit);
     }
-    let descriptor = kit_descriptor(&manifest, &what)?;
+    let descriptor = kit_descriptor(&l.manifest, &what)?;
     let mut kit = v3::parse(&descriptor, source)?;
-    let config_digest = manifest["config"]["digest"]
-        .as_str()
-        .ok_or_else(|| anyhow!("the manifest has no config"))?;
-    let config: Value = serde_json::from_slice(&read(blobs.join(hex_of(config_digest)?))?)
-        .context("reading the image config")?;
+    let config = l.config()?;
     kit.command = command_of(&config);
     let text = |k: &str| config["config"][k].as_str().unwrap_or_default().to_string();
     kit.config = Some(ImageConfig {
         user: text("User"),
         workdir: text("WorkingDir"),
     });
-    kit.starts_docker = manifest["annotations"][START_DOCKER_ANNOTATION].as_str() == Some("true");
-    kit.digest = Some(digest);
+    kit.starts_docker = l.manifest["annotations"][START_DOCKER_ANNOTATION].as_str() == Some("true");
+    kit.digest = Some(l.digest);
     kit.content = Content::Oci(dir.to_path_buf());
     Ok(kit)
 }
@@ -713,11 +754,6 @@ pub(crate) fn env_of(config: &Value) -> Vec<String> {
 /// An image's config: from the cache when a layout for `reference` is there, else its manifest
 /// and config are fetched.
 fn image_config(reference: &str, cache: &Path, logins: Logins) -> Result<Value> {
-    let blobs = store_dir(cache);
-    let read_json = |p: PathBuf| -> Result<Value> {
-        let bytes = fs::read(&p).with_context(|| format!("reading {}", p.display()))?;
-        serde_json::from_slice(&bytes).with_context(|| format!("reading {}", p.display()))
-    };
     let manifest_digest = match cached_manifest(reference, cache) {
         Some(d) => d,
         None => {
@@ -726,11 +762,7 @@ fn image_config(reference: &str, cache: &Path, logins: Logins) -> Result<Value> 
                 .digest
         }
     };
-    let manifest = read_json(blobs.join(hex_of(&manifest_digest)?))?;
-    let config_digest = manifest["config"]["digest"]
-        .as_str()
-        .ok_or_else(|| anyhow!("the manifest of {reference} has no config"))?;
-    read_json(blobs.join(hex_of(config_digest)?))
+    Layout::at(cache, &manifest_digest)?.config()
 }
 
 /// The manifest digest of a layout in the cache made for `reference`.
@@ -771,7 +803,7 @@ pub(crate) fn write_layout(
     layers: &[&[u8]],
     config_json: &str,
 ) -> io::Result<String> {
-    let blobs = dir.join("blobs").join("sha256");
+    let blobs = store_dir(dir);
     fs::create_dir_all(&blobs)?;
     let put = |data: &[u8]| -> io::Result<String> {
         let d = sha256_digest(data);

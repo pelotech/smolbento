@@ -254,8 +254,7 @@ fn ignored_options_warning(a: &RunArgs, name: &str) -> Option<String> {
         static_mcp,
         // Kits, --mount and --deny-network have their own warnings.
         kit: _,
-        kit_arg: _,
-        kit_args_file: _,
+        kit_args: _,
         kit_pins: _,
         // Set only by an environment file, which `env run` applies at create.
         no_fuse: _,

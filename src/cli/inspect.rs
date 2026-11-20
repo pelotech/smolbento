@@ -76,10 +76,7 @@ pub fn render(sb: &Sandbox, sessions: usize, format: Format) -> Result<String> {
         mcp_servers: m.mcp.as_deref(),
         sessions,
     };
-    match format {
-        f @ (Format::Json | Format::Yaml) => Ok(f.structured(&d)?.unwrap_or_default()),
-        Format::Table => Ok(table(&d)),
-    }
+    Ok(format.structured(&d)?.unwrap_or_else(|| table(&d)))
 }
 
 /// sbx's layout: a blank line, then two-space indented keys padded to 17 columns.

@@ -9,7 +9,7 @@ use anyhow::{Context, Result, anyhow, bail};
 use serde_json::{Value, json};
 
 use crate::kits::model::{Content, Kit};
-use crate::kits::registry::{self, hex_of, persist, put_bytes, store_dir};
+use crate::kits::registry::{self, Layout, blob_digests, hex_of, persist, put_bytes, store_dir};
 use crate::kits::registry_auth::Logins;
 use crate::kits::resolve::Plan;
 use crate::util::sha256_digest;
@@ -27,7 +27,7 @@ pub fn image_for(plan: &Plan, cache: &Path, logins: Logins) -> Result<String> {
                 let tar = cache
                     .join("images")
                     .join(format!("{}.tar", hex_of(&l.digest)?));
-                ensure_tar(&tar, |out| l.archive(out))?;
+                ensure_tar(&tar, |out| archive(&l, out))?;
                 Ok(tar.display().to_string())
             }
             _ => bail!("kit '{}' has no image", w.name),
@@ -54,14 +54,9 @@ pub fn image_for(plan: &Plan, cache: &Path, logins: Logins) -> Result<String> {
 pub fn image_env(plan: &Plan, cache: &Path, logins: Logins) -> Result<Option<Vec<String>>> {
     Ok(match &plan.workload.content {
         Content::Image(r) => Some(registry::image_env(r, cache, logins)?),
-        Content::Oci(dir) => Some(registry::env_of(&Layout::read(dir)?.config)),
+        Content::Oci(dir) => Some(registry::env_of(&Layout::read(dir)?.config()?)),
         Content::Smolfile(_) | Content::None => None,
     })
-}
-
-/// Whether any mixin brings image layers (a Smolfile workload can't take them).
-pub fn has_mixin_layers(plan: &Plan) -> Result<bool> {
-    Ok(!layered_mixins(plan)?.is_empty())
 }
 
 /// Whether this kit brings image layers of its own (`kit add` can't apply them live).
@@ -93,65 +88,16 @@ fn layered_mixins(plan: &Plan) -> Result<Vec<(&Kit, Layout)>> {
     Ok(layered)
 }
 
-/// An OCI layout directory read just enough to stack layers.
-struct Layout {
-    dir: PathBuf,
-    digest: String,
-    manifest: Value,
-    config: Value,
-}
-
-impl Layout {
-    fn read(dir: &Path) -> Result<Self> {
-        let read = |p: PathBuf| fs::read(&p).with_context(|| format!("reading {}", p.display()));
-        let index: Value = serde_json::from_slice(&read(dir.join("index.json"))?)
-            .with_context(|| format!("reading {}/index.json", dir.display()))?;
-        let digest = index["manifests"][0]["digest"]
-            .as_str()
-            .ok_or_else(|| anyhow!("the layout in {} has no manifest", dir.display()))?
-            .to_string();
-        let blobs = dir.join("blobs").join("sha256");
-        let bytes = read(blobs.join(hex_of(&digest)?))?;
-        if sha256_digest(&bytes) != digest {
-            bail!("manifest {digest} in {} is corrupt", dir.display());
-        }
-        let manifest: Value = serde_json::from_slice(&bytes).context("reading the manifest")?;
-        let cfg = manifest["config"]["digest"]
-            .as_str()
-            .ok_or_else(|| anyhow!("the manifest {digest} has no config"))?;
-        let config = serde_json::from_slice(&read(blobs.join(hex_of(cfg)?))?)
-            .context("reading the image config")?;
-        Ok(Self {
-            dir: dir.to_path_buf(),
-            digest,
-            manifest,
-            config,
-        })
+/// The layout as a tar, unchanged.
+fn archive(l: &Layout, out: &mut impl Write) -> Result<()> {
+    let mut blobs = vec![(l.digest.clone(), l.blob(&l.digest)?)];
+    for d in blob_digests(&l.manifest)? {
+        let path = l.blob(&d)?;
+        blobs.push((d, path));
     }
-
-    fn layers(&self) -> &[Value] {
-        self.manifest["layers"].as_array().map_or(&[], |v| v)
-    }
-
-    fn blob(&self, digest: &str) -> Result<PathBuf> {
-        Ok(self.dir.join("blobs").join("sha256").join(hex_of(digest)?))
-    }
-
-    /// The layout as a tar, unchanged.
-    fn archive(&self, out: &mut impl Write) -> Result<()> {
-        let mut blobs = vec![(self.digest.clone(), self.blob(&self.digest)?)];
-        let cfg = self.manifest["config"]["digest"]
-            .as_str()
-            .unwrap_or_default();
-        blobs.push((cfg.to_string(), self.blob(cfg)?));
-        for l in self.layers() {
-            let d = l["digest"].as_str().unwrap_or_default();
-            blobs.push((d.to_string(), self.blob(d)?));
-        }
-        let media = self.manifest["mediaType"].as_str();
-        let size = fs::metadata(self.blob(&self.digest)?)?.len();
-        write_tar(out, &self.digest, media, size, blobs)
-    }
+    let media = l.manifest["mediaType"].as_str();
+    let size = fs::metadata(l.blob(&l.digest)?)?.len();
+    write_tar(out, &l.digest, media, size, blobs)
 }
 
 fn compose(
@@ -161,7 +107,7 @@ fn compose(
     out: &mut impl Write,
 ) -> Result<()> {
     let mut manifest = base.manifest.clone();
-    let mut config = base.config.clone();
+    let mut config = base.config()?;
     let mut blobs = Vec::new();
     for l in base.layers() {
         let d = l["digest"].as_str().unwrap_or_default();
@@ -176,7 +122,8 @@ fn compose(
         .ok_or_else(|| anyhow!("the image config of {} has no rootfs.diff_ids", base.digest))?;
     let mut history = config["history"].as_array().cloned().unwrap_or_default();
     for (kit, l) in layered {
-        let ids = l.config["rootfs"]["diff_ids"]
+        let cfg = l.config()?;
+        let ids = cfg["rootfs"]["diff_ids"]
             .as_array()
             .filter(|ids| ids.len() == l.layers().len())
             .ok_or_else(|| {

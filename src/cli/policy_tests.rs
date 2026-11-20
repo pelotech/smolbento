@@ -1,4 +1,7 @@
+use super::ls::{filtered, ls_note, ls_rules};
 use super::*;
+use crate::cli::PolicyLsArgs;
+use crate::policy::Mode;
 use crate::secrets::{SecretEntry, Source};
 use crate::testutil::*;
 

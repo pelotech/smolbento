@@ -962,20 +962,13 @@ struct LifecycleCfg {
 // Some fields are only accepted, so published descriptors parse.
 #[allow(dead_code)]
 struct HookCfg {
-    command: CommandCfg,
+    command: HookCmd,
     user: Option<String>,
     #[serde(default)]
     env: Vec<String>,
     // Meaningful for startup hooks only.
     background: Option<bool>,
     description: Option<String>,
-}
-
-#[derive(Deserialize)]
-#[serde(untagged)]
-enum CommandCfg {
-    Shell(String),
-    Argv(Vec<String>),
 }
 
 #[derive(Deserialize)]
@@ -998,10 +991,7 @@ fn lifecycle(c: LifecycleCfg) -> Result<Lifecycle> {
     }
     // `clean_env` is decided when hooks are merged (`resolve`).
     let hook = |h: HookCfg| Hook {
-        command: match h.command {
-            CommandCfg::Shell(s) => HookCmd::Shell(s),
-            CommandCfg::Argv(a) => HookCmd::Argv(a),
-        },
+        command: h.command,
         user: h.user,
         env: h.env,
         background: h.background.unwrap_or(false),

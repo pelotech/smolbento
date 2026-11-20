@@ -87,6 +87,10 @@ fn bind(path: &Path) -> Result<Option<UnixListener>> {
 /// A socket that can wait a while for data: Unix (the bridge) or TCP (the login relay).
 pub(crate) trait Stream {
     fn read_for(&self, buf: &mut [u8], timeout: Duration) -> std::io::Result<usize>;
+
+    /// Makes a socket blocking (accepted sockets inherit non-blocking mode on some systems), with
+    /// writes bounded by `DEADLINE`.
+    fn blocking(&self) -> std::io::Result<()>;
 }
 
 impl Stream for UnixStream {
@@ -94,12 +98,22 @@ impl Stream for UnixStream {
         self.set_read_timeout(Some(timeout))?;
         (&mut &*self).read(buf)
     }
+
+    fn blocking(&self) -> std::io::Result<()> {
+        self.set_nonblocking(false)?;
+        self.set_write_timeout(Some(DEADLINE))
+    }
 }
 
 impl Stream for std::net::TcpStream {
     fn read_for(&self, buf: &mut [u8], timeout: Duration) -> std::io::Result<usize> {
         self.set_read_timeout(Some(timeout))?;
         (&mut &*self).read(buf)
+    }
+
+    fn blocking(&self) -> std::io::Result<()> {
+        self.set_nonblocking(false)?;
+        self.set_write_timeout(Some(DEADLINE))
     }
 }
 

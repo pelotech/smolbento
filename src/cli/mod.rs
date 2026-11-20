@@ -263,6 +263,14 @@ pub fn refuse_as(flags: &[(bool, &str)], why: &str) -> Result<()> {
     }
 }
 
+/// One thing a command did, as sbx's `--json` lists it, in its key order.
+#[derive(serde::Serialize)]
+struct Done {
+    action: String,
+    resource: &'static str,
+    name: String,
+}
+
 /// Asks before destructive actions. sbx behaviour: fails without a terminal unless forced, and
 /// declining is an error.
 pub fn confirm<R: Runner>(ctx: &Ctx<R>, question: &str, force: bool) -> Result<()> {
@@ -272,16 +280,21 @@ pub fn confirm<R: Runner>(ctx: &Ctx<R>, question: &str, force: bool) -> Result<(
     if !ctx.can_prompt() {
         bail!("{question} Refusing without a terminal; pass -f to confirm");
     }
+    if ask(ctx, question)? {
+        Ok(())
+    } else {
+        bail!("aborted")
+    }
+}
+
+/// Prints `question [y/N]` on stderr and reads whether the answer is yes.
+pub fn ask<R: Runner>(ctx: &Ctx<R>, question: &str) -> Result<bool> {
     // A question, not command output: stderr, so stdout stays clean for `--json` and pipes.
     let mut err = std::io::stderr().lock();
     write!(err, "{question} [y/N] ")?;
     err.flush()?;
     drop(err);
-    if is_yes(&ctx.read_line()?) {
-        Ok(())
-    } else {
-        bail!("aborted")
-    }
+    Ok(is_yes(&ctx.read_line()?))
 }
 
 /// sbx's prompt rule: unless `force`, ask on a terminal, else fail with the command's own

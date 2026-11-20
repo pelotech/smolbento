@@ -87,10 +87,7 @@ pub(super) fn run_clone<R: Runner>(
             .exec_captured(&ExecSpec::sh(&sb.machine, user, cmd))
             .map_err(|e| {
                 // git's first error line, not the whole stderr.
-                let text = match e.downcast_ref::<SmolvmError>() {
-                    Some(s) => s.message.clone(),
-                    None => format!("{e:#}"),
-                };
+                let text = SmolvmError::message_of(&e);
                 let line = text
                     .lines()
                     .find(|l| !l.trim().is_empty())

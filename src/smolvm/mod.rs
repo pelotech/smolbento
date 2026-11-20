@@ -23,7 +23,7 @@ use std::path::PathBuf;
 use std::process::{Child, Command, ExitStatus, Stdio};
 use std::time::{Duration, Instant};
 
-use anyhow::{Context, Result, anyhow, bail};
+use anyhow::{Context, Result, anyhow};
 
 /// Captured result of one smolvm invocation.
 #[derive(Debug, Clone, Default, PartialEq, Eq)]
@@ -328,15 +328,7 @@ fn read_pieces(r: &mut impl Read, on_line: &mut dyn FnMut(&str)) -> std::io::Res
 
 /// Waits for `child` to exit, until `until`.
 fn wait_until(child: &mut Child, until: Instant) -> Result<ExitStatus> {
-    loop {
-        if let Some(status) = child.try_wait()? {
-            return Ok(status);
-        }
-        if Instant::now() >= until {
-            bail!("smolvm didn't exit in time");
-        }
-        std::thread::sleep(Duration::from_millis(20));
-    }
+    crate::util::wait_until(child, until)?.context("smolvm didn't exit in time")
 }
 
 fn exit_code(status: ExitStatus) -> i32 {

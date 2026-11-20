@@ -312,13 +312,7 @@ fn env_rm<R: Runner>(ctx: &mut Ctx<R>, a: EnvRmArgs) -> Result<i32> {
     let nothing_stored =
         sb.is_none() && scoped.is_empty() && registries.is_empty() && pruned.is_empty();
     if let Some(sb) = sb {
-        let forks = super::lifecycle::remaining_forks(sb, &all, &[&name]);
-        if !forks.is_empty() {
-            bail!(
-                "{name} has forks; remove its forks first: {}",
-                forks.join(", ")
-            );
-        }
+        super::lifecycle::check_no_forks(sb, &all, &[&name])?;
     }
     // With nothing to remove and nothing to run there is nothing to confirm.
     if !(nothing_stored && to_run.is_empty()) {
