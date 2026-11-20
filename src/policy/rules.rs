@@ -79,12 +79,12 @@ impl Resource {
             && !has_glob(rest)
         {
             check_host(rest, raw)?;
-            Pattern::Subdomains(rest.into())
+            Pattern::Subdomains(rest.strip_suffix('.').unwrap_or(rest).into())
         } else if let Some(rest) = host.strip_prefix("*.")
             && !has_glob(rest)
         {
             check_host(rest, raw)?;
-            Pattern::OneLabel(rest.into())
+            Pattern::OneLabel(rest.strip_suffix('.').unwrap_or(rest).into())
         } else if has_glob(&host) {
             match host.split_once('.') {
                 Some((label, parent)) if !parent.is_empty() && !has_glob(parent) => {
@@ -100,8 +100,8 @@ impl Resource {
                     }
                     check_classes(label, raw)?;
                     Pattern::Glob {
-                        pattern: host.clone(),
-                        parent: parent.into(),
+                        pattern: host.strip_suffix('.').unwrap_or(&host).into(),
+                        parent: parent.strip_suffix('.').unwrap_or(parent).into(),
                     }
                 }
                 _ => bail!(
@@ -110,7 +110,7 @@ impl Resource {
             }
         } else {
             check_host(&host, raw)?;
-            Pattern::Exact(host)
+            Pattern::Exact(host.strip_suffix('.').unwrap_or(&host).into())
         };
         Ok(Resource {
             raw: raw.into(),
@@ -125,6 +125,7 @@ impl Resource {
     pub fn matches(&self, target: &str) -> bool {
         let target = target.trim().to_ascii_lowercase();
         let (host, port) = split_port(&target).unwrap_or((target.as_str(), None));
+        let host = host.strip_suffix('.').unwrap_or(host);
         if self.port.is_some_and(|p| p != port.unwrap_or(443)) {
             return false;
         }
@@ -568,5 +569,19 @@ mod tests {
             "port 8443 not enforced (all ports allowed); matches any depth"
         );
         assert_eq!(r("**.x.com").note(false), None);
+    }
+
+    #[test]
+    fn trailing_dot_is_normalized() {
+        assert_eq!(
+            r("api.x.com.").to_allow(),
+            Allow::Pattern("api.x.com".into())
+        );
+        assert!(r("api.x.com.").matches("api.x.com"));
+        assert!(r("api.x.com").matches("api.x.com."));
+        assert!(r("**.x.com.").matches("a.b.x.com."));
+        assert_eq!(r("*.x.com.").to_allow(), Allow::Pattern("*.x.com".into()));
+        assert!(r("crl*.digicert.com.").matches("crl1.digicert.com."));
+        assert_eq!(r("localhost.").pattern, Pattern::Exact("localhost".into()));
     }
 }
