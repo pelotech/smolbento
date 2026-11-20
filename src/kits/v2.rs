@@ -12,11 +12,10 @@ use serde_json::{Value, json};
 use super::descriptor::{ApiKeyCfg, InjectCfg, ResourcesCfg, TokenEndpoint};
 use crate::kits::model::*;
 use crate::kits::v3::{self, check_name, name_from_source};
+use crate::kits::{AGENT_HOME, CAP_NS};
 
-const NS: &str = "com.docker.sandbox/";
 /// `${WORKDIR}`, for `resolve` to expand: the workspace path is only known at create time.
 const WORKSPACE: &str = "${{ kit.env.WORKSPACE }}";
-const HOME: &str = "/home/agent";
 
 /// The kit's name as `parse` gives it, reading only the `name` field.
 pub fn name_in(yaml: &str, dir: &Path) -> Result<String> {
@@ -163,7 +162,7 @@ fn parse_warn(yaml: &str, dir: &Path) -> Result<(Kit, Vec<String>)> {
         }
         let config = json!({"filename": a.filename, "content": content});
         caps.push(v3::request(
-            format!("{NS}agent-context@2"),
+            format!("{CAP_NS}agent-context@2"),
             false,
             Some(config),
         )?);
@@ -211,7 +210,7 @@ fn parse_warn(yaml: &str, dir: &Path) -> Result<(Kit, Vec<String>)> {
 
 fn cap(name: &str, body: CapBody) -> Cap {
     Cap {
-        ty: format!("{NS}{name}"),
+        ty: format!("{CAP_NS}{name}"),
         optional: false,
         body,
         group: None,
@@ -530,7 +529,9 @@ fn lifecycle(s: Setup, dir: &Path, kit: &str, warnings: &mut Vec<String>) -> Res
         };
         Ok((!l.files.is_empty()).then(|| cap("lifecycle@1", CapBody::Lifecycle(l))))
     };
-    let mut caps: Vec<Cap> = static_files("files/home", HOME)?.into_iter().collect();
+    let mut caps: Vec<Cap> = static_files("files/home", AGENT_HOME)?
+        .into_iter()
+        .collect();
     if !(s.install.is_empty() && s.startup.is_empty() && s.files.is_empty()) {
         // v2 defaults: install runs as root, startup as the `agent` user.
         let config = json!({
@@ -555,7 +556,7 @@ fn lifecycle(s: Setup, dir: &Path, kit: &str, warnings: &mut Vec<String>) -> Res
             })).collect::<Vec<_>>(),
         });
         caps.push(v3::request(
-            format!("{NS}lifecycle@1"),
+            format!("{CAP_NS}lifecycle@1"),
             false,
             Some(config),
         )?);

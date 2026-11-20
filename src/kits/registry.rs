@@ -49,11 +49,6 @@ const SCHEMA_ANNOTATION: &str = "vnd.docker.sandbox.kit.schema-version";
 const REF_NAME_ANNOTATION: &str = "org.opencontainers.image.ref.name";
 /// sbx's published kits set it to `"true"` when the image's Docker engine should start.
 const START_DOCKER_ANNOTATION: &str = "com.docker.sandboxes.start-docker";
-/// The config of a v2 kit published as an OCI artifact: the kit's spec.yaml.
-const V2_SPEC_MEDIA_TYPE: &str = "application/vnd.docker.sandbox.kit.v2.spec+yaml";
-const EMPTY_MEDIA_TYPE: &str = "application/vnd.oci.empty.v1+json";
-/// A published v2 kit's `files/`, as `home/agent/...`.
-const V2_FILES_MEDIA_TYPE: &str = "application/vnd.oci.image.layer.v1.tar+gzip";
 
 /// Fetches REF's manifest and config and its layers into the cache. A manifest without the kit
 /// descriptor annotation is a plain image and an error. A DIGEST (one a signature check
@@ -446,14 +441,14 @@ fn blob_digests(manifest: &Value) -> Result<Vec<String>> {
 /// A published v2 kit's spec digest (its config) and files layer digest (`None` for the empty
 /// layer), or None for any other manifest.
 fn v2_spec(manifest: &Value, what: &str) -> Result<Option<(String, Option<String>)>> {
-    if manifest["config"]["mediaType"] != V2_SPEC_MEDIA_TYPE {
+    if manifest["config"]["mediaType"] != artifact::V2_SPEC_MEDIA_TYPE {
         return Ok(None);
     }
     let mut files = None;
     for l in manifest["layers"].as_array().map_or(&[][..], Vec::as_slice) {
         match l["mediaType"].as_str().unwrap_or_default() {
-            EMPTY_MEDIA_TYPE => {}
-            V2_FILES_MEDIA_TYPE if files.is_none() => {
+            artifact::EMPTY_MEDIA_TYPE => {}
+            artifact::V2_FILES_MEDIA_TYPE if files.is_none() => {
                 files = Some(
                     l["digest"]
                         .as_str()

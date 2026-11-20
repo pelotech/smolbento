@@ -14,9 +14,6 @@ use crate::kits::model::{
 use crate::kits::v3;
 use crate::ssh_agent::{AgentGrant, PhaseGrant};
 
-/// The agent user's home in the platform floor; the host can't see the guest's real env.
-const AGENT_HOME: &str = "/home/agent";
-
 #[derive(Debug)]
 pub struct Plan {
     /// The workload kit: a built-in agent's or the one given.
@@ -337,7 +334,7 @@ pub fn resolve_for(
     let mut mixins = order(&workload, mixins)?;
     let env = merge_env(std::iter::once(&workload).chain(&mixins), &kit_args);
     let mut env_map: BTreeMap<String, String> = env.iter().cloned().collect();
-    env_map.insert("HOME".into(), AGENT_HOME.into());
+    env_map.insert("HOME".into(), super::AGENT_HOME.into());
     env_map.insert("WORKSPACE".into(), workdir.into());
     // Every declaration is expanded and checked before selection (SPEC-v3 §6, §7.1.1), then
     // groups are selected whole, so nothing after this sees a reference or a skipped group.

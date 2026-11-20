@@ -198,8 +198,6 @@ pub fn git_identity_script(name: &str, email: &str) -> String {
     )
 }
 
-const AGENT_HOME: &str = "/home/agent";
-
 /// Sets `$o` to `agent` when the image has that user, else leaves it empty (no chown).
 const OWNER: &str = "o=; id agent >/dev/null 2>&1 && o=agent";
 
@@ -218,7 +216,7 @@ fn mkdirs(path: &str) -> String {
     dirs.iter()
         .map(|d| {
             let q = sh_quote(&d.display().to_string());
-            if d.starts_with(AGENT_HOME) && *d != Path::new(AGENT_HOME) {
+            if d.starts_with(super::AGENT_HOME) && *d != Path::new(super::AGENT_HOME) {
                 format!("[ -d {q} ] || {{ mkdir {q}; [ -z \"$o\" ] || chown \"$o\" {q}; }}\n")
             } else {
                 format!("[ -d {q} ] || mkdir {q}\n")

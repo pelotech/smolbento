@@ -377,7 +377,7 @@ fn v2_artifact_with(dir: &Path, spec: &str, layer: Option<(&str, &[u8])>) {
         "schemaVersion": 2,
         "mediaType": OCI_IMAGE_MEDIA_TYPE,
         "artifactType": "application/vnd.docker.sandbox.kit.v2",
-        "config": {"mediaType": V2_SPEC_MEDIA_TYPE, "digest": config, "size": spec.len()},
+        "config": {"mediaType": artifact::V2_SPEC_MEDIA_TYPE, "digest": config, "size": spec.len()},
         "layers": [layer],
         "annotations": {"vnd.docker.sandbox.kit.name": "gemini"},
     });
@@ -431,7 +431,7 @@ fn the_signature_manifest_matches_sbx() {
             "mediaType": OCI_IMAGE_MEDIA_TYPE,
             "artifactType": "application/vnd.docker.sandbox.kit.signature.v1",
             "config": {
-                "mediaType": EMPTY_MEDIA_TYPE,
+                "mediaType": artifact::EMPTY_MEDIA_TYPE,
                 "digest": "sha256:44136fa355b3678a1146ad16f7e8649e94fb4fc21fe77e8310c060f61caaff8a",
                 "size": 2,
                 "data": "e30=",
@@ -467,12 +467,12 @@ fn the_fallback_index_keeps_earlier_referrers() {
 fn only_a_v2_kit_artifact_has_a_payload() {
     let files = "sha256:".to_string() + &"a".repeat(64);
     let v2 = json!({"artifactType": artifact::KIT_V2_ARTIFACT,
-            "config": {"mediaType": V2_SPEC_MEDIA_TYPE, "digest": files.clone()},
+            "config": {"mediaType": artifact::V2_SPEC_MEDIA_TYPE, "digest": files.clone()},
             "layers": [{"mediaType": TAR_GZ, "digest": files.clone()}]});
     assert_eq!(payload_layer(&v2, "r").unwrap(), Some(files.clone()));
     let empty = json!({"artifactType": artifact::KIT_V2_ARTIFACT,
-            "config": {"mediaType": V2_SPEC_MEDIA_TYPE, "digest": files},
-            "layers": [{"mediaType": EMPTY_MEDIA_TYPE}]});
+            "config": {"mediaType": artifact::V2_SPEC_MEDIA_TYPE, "digest": files},
+            "layers": [{"mediaType": artifact::EMPTY_MEDIA_TYPE}]});
     assert_eq!(payload_layer(&empty, "r").unwrap(), None);
     let image = json!({"config": {"mediaType": "application/vnd.oci.image.config.v1+json"},
             "annotations": {DESCRIPTOR_ANNOTATION: "{}"}});

@@ -12,9 +12,7 @@ use serde_json::Value;
 
 use super::descriptor::{ApiKeyCfg, ResourcesCfg, TokenEndpoint};
 use crate::kits::model::*;
-use crate::kits::{args, capability};
-
-const NS: &str = "com.docker.sandbox/";
+use crate::kits::{CAP_NS, args, capability};
 
 /// Parses a published descriptor (SPEC-v3 §9): the one Docker's kit frontend wrote into a kit
 /// image's manifest annotation (a registry kit, an agent's, or a local kit smolbento built), or
@@ -369,7 +367,7 @@ pub(crate) fn text_fields(ty: &str) -> &'static [&'static str] {
 
 /// Reads a capability's config: strictly, with unknown keys and bad values refused.
 pub(crate) fn body(ty: &str, config: Option<Value>) -> Result<CapBody> {
-    let Some(name) = ty.strip_prefix(NS) else {
+    let Some(name) = ty.strip_prefix(CAP_NS) else {
         return Ok(CapBody::Unsupported);
     };
     Ok(match name {

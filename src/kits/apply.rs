@@ -971,7 +971,7 @@ pub fn needs_recreate(kit: &Kit, args: &BTreeMap<String, String>) -> Result<Vec<
     }
     for c in &kit.caps {
         // By type, so a config read only at create (a port from an argument, say) counts too.
-        let ty = c.ty.strip_prefix("com.docker.sandbox/").unwrap_or_default();
+        let ty = c.ty.strip_prefix(super::CAP_NS).unwrap_or_default();
         let need = match (ty, &c.body) {
             // A passthrough OAuth credential only adds network rules.
             ("credential@1", CapBody::Credential(r)) if r.env.is_none() && r.inject.is_empty() => {
