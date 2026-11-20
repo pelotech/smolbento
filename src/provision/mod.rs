@@ -347,6 +347,12 @@ pub fn prepare_create<R: Runner>(
         });
     }
     if let Some(mcp) = attachment {
+        // A rule that was already there isn't this create's: a failed create leaves it.
+        let before: Vec<String> = policy
+            .sandboxes
+            .get(&req.name)
+            .map(|s| s.rules.iter().map(|r| r.id.clone()).collect())
+            .unwrap_or_default();
         for host in &mcp.hosts {
             let id = policy.add_rule(
                 Some(&req.name),
@@ -356,7 +362,7 @@ pub fn prepare_create<R: Runner>(
                 None,
                 None,
             )?;
-            if !added.contains(&id) {
+            if !before.contains(&id) && !added.contains(&id) {
                 added.push(id);
             }
         }
