@@ -80,7 +80,7 @@ fn first_build_creates_starts_builds_copies_back_and_stops() {
             .join("built")
             .join(registry::hex_of(&digest).unwrap())
     );
-    let k = registry::read_layout(&out, Source::LocalV3(kit.path().into())).unwrap();
+    let k = registry::read_layout(&out, Source::Local(kit.path().into())).unwrap();
     assert_eq!(k.kind, crate::kits::model::Kind::Mixin);
 
     let lines = fake.call_lines();

@@ -251,7 +251,7 @@ pub fn pinned<R: Runner>(
     let path = Path::new(base);
     let require = ctx.settings.bool("kit.requireSignature")?;
     let (mut kit, cached) = if path.is_absolute() {
-        trust::check(&Source::LocalV3(path.into()), &ctx.settings)?;
+        trust::check(&Source::Local(path.into()), &ctx.settings)?;
         if require {
             return Err(signers::refuse_local(base, path));
         }
@@ -316,7 +316,7 @@ pub fn kit_name<R: Runner>(ctx: &Ctx<R>, reference: &str) -> Result<String> {
                 fs::read_to_string(&spec).with_context(|| format!("reading {}", spec.display()))?;
             v2::name_in(&yaml, &dir)
         }
-        Located::V3(dir) => v3::name_from_source(&Source::LocalV3(dir)),
+        Located::V3(dir) => v3::name_from_source(&Source::Local(dir)),
         Located::Smolfile(path) => v3::name_from_source(&Source::Smolfile(path)),
     }
 }
@@ -367,7 +367,7 @@ fn locate<R: Runner>(
     };
     // The local check is the same for every local kind, so it runs before anything is read.
     if !offline {
-        trust::check(&Source::LocalV3(path.clone()), &ctx.settings)?;
+        trust::check(&Source::Local(path.clone()), &ctx.settings)?;
     }
     if path.is_dir() {
         return Ok(if is_v2_dir(&path) {
@@ -423,7 +423,7 @@ fn load_v3<R: Runner>(
     dir: &Path,
     before: &mut dyn FnMut(Fetch),
 ) -> Result<(Kit, bool)> {
-    let source = Source::LocalV3(dir.to_path_buf());
+    let source = Source::Local(dir.to_path_buf());
     // Before a build is announced. The build looks again.
     descriptor(dir)?;
     before(Fetch::Build);
@@ -614,7 +614,8 @@ mod tests {
         fs::write(dir.join("spec.yaml"), V2).unwrap();
         let k = load(&t.ctx, "./kit").unwrap();
         assert_eq!(k.name, "my-kit");
-        assert_eq!(k.source, Source::LocalV2(dir.canonicalize().unwrap()));
+        assert_eq!(k.source, Source::Local(dir.canonicalize().unwrap()));
+        assert!(k.v2);
         assert!(t.calls().is_empty());
     }
 
@@ -659,7 +660,7 @@ mod tests {
         );
         let line = yaml.lines().find(|l| l.starts_with("version:")).unwrap();
         assert!(!line.contains('#'), "{line}");
-        let kit = v3::parse(yaml, Source::LocalV3("kits/nix".into())).unwrap();
+        let kit = v3::parse(yaml, Source::Local("kits/nix".into())).unwrap();
         assert_eq!(kit.name, "nix");
     }
 
@@ -818,7 +819,8 @@ mod tests {
         fs::write(dir.join("spec.yaml"), V2).unwrap();
         let k = load(&t.ctx, "./docker").unwrap();
         assert_eq!(k.name, "my-kit");
-        assert_eq!(k.source, Source::LocalV2(dir.canonicalize().unwrap()));
+        assert_eq!(k.source, Source::Local(dir.canonicalize().unwrap()));
+        assert!(k.v2);
         // The bare word stays the shipped kit, even with a `docker` directory in the cwd.
         assert_eq!(
             load(&t.ctx, "docker").unwrap().source,
@@ -966,12 +968,14 @@ mod tests {
         )
         .unwrap();
         let k = load(&t.ctx, "./kit").unwrap();
-        assert_eq!(k.source, Source::LocalV3(dir.canonicalize().unwrap()));
+        assert_eq!(k.source, Source::Local(dir.canonicalize().unwrap()));
+        assert!(!k.v2);
         assert_eq!(kit_name(&t.ctx, "./kit").unwrap(), k.name);
         // A v2 `spec.yaml` is still v2.
         fs::write(dir.join("spec.yaml"), V2).unwrap();
         let k = load(&t.ctx, "./kit").unwrap();
-        assert_eq!(k.source, Source::LocalV2(dir.canonicalize().unwrap()));
+        assert_eq!(k.source, Source::Local(dir.canonicalize().unwrap()));
+        assert!(k.v2);
     }
 
     #[test]
@@ -1007,7 +1011,8 @@ mod tests {
         .download(&b.into_inner().unwrap());
         let k = load(&t.ctx, "./kit/m.yaml").unwrap();
         // The source is the parent directory, the build context buildx was given.
-        assert_eq!(k.source, Source::LocalV3(dir.canonicalize().unwrap()));
+        assert_eq!(k.source, Source::Local(dir.canonicalize().unwrap()));
+        assert!(!k.v2);
         // `kit_name` agrees without building, for the file and for its directory.
         let builds = fake.call_lines().len();
         assert_eq!(kit_name(&t.ctx, "./kit/m.yaml").unwrap(), k.name);

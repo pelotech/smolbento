@@ -15,9 +15,7 @@ use crate::util::hex;
 pub fn identity(kit: &Kit) -> Result<String> {
     match &kit.source {
         // Loading stores local kits by their canonical path.
-        Source::LocalV3(p) | Source::LocalV2(p) | Source::Smolfile(p) => {
-            Ok(p.to_string_lossy().into_owned())
-        }
+        Source::Local(p) | Source::Smolfile(p) => Ok(p.to_string_lossy().into_owned()),
         Source::Registry(r) | Source::Agent(r) => {
             let r: Reference = r
                 .parse()
@@ -132,8 +130,7 @@ mod tests {
     #[test]
     fn a_local_kit_is_its_canonical_path() {
         for source in [
-            Source::LocalV3("/private/tmp/k".into()),
-            Source::LocalV2("/private/tmp/k".into()),
+            Source::Local("/private/tmp/k".into()),
             Source::Smolfile("/private/tmp/k".into()),
         ] {
             assert_eq!(identity(&kit(source)).unwrap(), "/private/tmp/k");

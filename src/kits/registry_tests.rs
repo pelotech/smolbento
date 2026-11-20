@@ -124,7 +124,7 @@ fn image_command_reads_a_cached_image_without_the_network() {
 fn local_source_is_kept() {
     let d = tempfile::tempdir().unwrap();
     fixtures::oci_layout(d.path(), Some(DESC), &[], "{}");
-    let s = Source::LocalV3(d.path().to_path_buf());
+    let s = Source::Local(d.path().to_path_buf());
     assert_eq!(read_layout(d.path(), s.clone()).unwrap().source, s);
 }
 

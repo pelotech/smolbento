@@ -1059,14 +1059,15 @@ fn an_agent_file_sits_in_the_workspace_parent() {
         ("shell", "AGENTS.md"),
     ] {
         // v2 and v3 mixins get the same layout.
-        for source in [Source::LocalV2, Source::LocalV3] {
+        for v2 in [true, false] {
+            let mixin = |name: &str, body: &str| Kit {
+                v2,
+                ..context_mixin(name, Source::Local(format!("/k/{name}").into()), body)
+            };
             let p = agent_kit_plan(
                 agent,
                 file,
-                vec![
-                    context_mixin("m1", source("/k/m1".into()), "use m1"),
-                    context_mixin("m2", source("/k/m2".into()), "use m2"),
-                ],
+                vec![mixin("m1", "use m1"), mixin("m2", "use m2")],
             );
             let mut req = in_workspace("/w/proj");
             let (steps, _) = run(&p, &mut req, &mut Policy::default()).unwrap();
@@ -1086,7 +1087,7 @@ fn a_mountless_sandbox_uses_the_parent_of_its_workdir() {
     let p = agent_kit_plan(
         "claude",
         "CLAUDE.md",
-        vec![context_mixin("m", Source::LocalV3("/k/m".into()), "b")],
+        vec![context_mixin("m", Source::Local("/k/m".into()), "b")],
     );
     let (steps, _) = run(&p, &mut request(), &mut Policy::default()).unwrap();
     assert_eq!(
@@ -1103,7 +1104,7 @@ fn a_workload_appends_its_own_context_and_records_its_agent_file() {
         false,
         context(None, Some("AGENTS.md"), "wl body"),
     );
-    let mixin = context_mixin_at(1, "m", Source::LocalV3("/k/m".into()), "use m");
+    let mixin = context_mixin_at(1, "m", Source::Local("/k/m".into()), "use m");
     let p = resolve(w, vec![mixin], &ArgValues::default()).unwrap();
     let mut req = in_workspace("/w/proj");
     let (steps, _) = run(&p, &mut req, &mut Policy::default()).unwrap();
@@ -1133,11 +1134,7 @@ fn a_workload_appends_its_own_context_and_records_its_agent_file() {
 
 #[test]
 fn mixin_context_is_dropped_when_the_workload_declares_no_agent_file() {
-    let p = plan(vec![context_mixin(
-        "m",
-        Source::LocalV3("/k/m".into()),
-        "b",
-    )]);
+    let p = plan(vec![context_mixin("m", Source::Local("/k/m".into()), "b")]);
     let mut req = in_workspace("/w/proj");
     let (steps, _) = run(&p, &mut req, &mut Policy::default()).unwrap();
     assert!(steps.context.is_empty(), "{:?}", steps.context);
@@ -1165,8 +1162,8 @@ fn version_2_context_goes_inline_the_workloads_own_too() {
     let p = resolve(
         context_workload(&[(1, true), (2, true)], "wl body"),
         vec![
-            context_mixin("m1", Source::LocalV3("/k/m1".into()), "use m1"),
-            context_mixin("m2", Source::LocalV3("/k/m2".into()), ""),
+            context_mixin("m1", Source::Local("/k/m1".into()), "use m1"),
+            context_mixin("m2", Source::Local("/k/m2".into()), ""),
         ],
         &ArgValues::default(),
     )
@@ -1299,7 +1296,7 @@ fn a_staged_context_file_is_listed_where_the_image_has_it() {
         }),
     );
     // A mixin offering both versions follows the workload's `@1`.
-    let mut m = context_mixin_at(1, "m", Source::LocalV3("/k/m".into()), "use m");
+    let mut m = context_mixin_at(1, "m", Source::Local("/k/m".into()), "use m");
     m.caps[0].optional = true;
     let m = with(m, "agent-context@2", true, context(None, None, "use m"));
     let p = resolve(w, vec![m], &ArgValues::default()).unwrap();
@@ -1321,7 +1318,7 @@ fn a_staged_context_file_is_listed_where_the_image_has_it() {
 
 #[test]
 fn a_sandbox_uses_one_context_version_for_all_its_kits() {
-    let m = |version| context_mixin_at(version, "m", Source::LocalV3("/k/m".into()), "use m");
+    let m = |version| context_mixin_at(version, "m", Source::Local("/k/m".into()), "use m");
     let both = [(1, true), (2, true)];
     let chosen = |w: Kit, mixin: Kit, pin: Option<u8>| {
         let p = resolve(w, vec![mixin], &ArgValues::default()).unwrap();
@@ -1388,11 +1385,7 @@ fn a_sandbox_uses_one_context_version_for_all_its_kits() {
 #[test]
 fn a_recorded_agent_file_wins() {
     // `kit add` passes the sandbox's `sbx.agent-file`: its workload isn't reloaded.
-    let p = plan(vec![context_mixin(
-        "m",
-        Source::LocalV3("/k/m".into()),
-        "b",
-    )]);
+    let p = plan(vec![context_mixin("m", Source::Local("/k/m".into()), "b")]);
     let mut req = CreateRequest {
         agent_files: vec!["/x/CLAUDE.md".into()],
         ..in_workspace("/w/proj")
@@ -1406,7 +1399,7 @@ fn context_is_never_written_into_a_mounted_workspace() {
     let p = agent_kit_plan(
         "claude",
         "CLAUDE.md",
-        vec![context_mixin("m", Source::LocalV3("/k/m".into()), "b")],
+        vec![context_mixin("m", Source::Local("/k/m".into()), "b")],
     );
     let mut req = in_workspace("/w/proj");
     req.workspaces.push(crate::workspace::Workspace {
@@ -1423,7 +1416,7 @@ fn the_index_directory_is_guarded_like_the_agent_file() {
     let p = plan(vec![context_mixin_at(
         1,
         "m",
-        Source::LocalV3("/k/m".into()),
+        Source::Local("/k/m".into()),
         "b",
     )]);
     let mut req = CreateRequest {

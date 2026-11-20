@@ -4,7 +4,7 @@ fn fixture(name: &str) -> String {
     std::fs::read_to_string(format!("tests/fixtures/kits/v3/{name}")).unwrap()
 }
 fn local(name: &str) -> Source {
-    Source::LocalV3(name.into())
+    Source::Local(name.into())
 }
 
 #[test]
@@ -388,7 +388,7 @@ fn claude_mixin_capabilities_decode() {
     assert!(matches!(l.startup[0].command, HookCmd::Argv(_)));
     // Only install hooks get sbx's clean environment, set when they're merged.
     let p = crate::kits::resolve::resolve(
-        Kit::new("w", Kind::Workload, Source::LocalV3("w".into())),
+        Kit::new("w", Kind::Workload, Source::Local("w".into())),
         vec![k.clone()],
         &crate::kits::args::ArgValues::default(),
     )
@@ -856,7 +856,7 @@ fn kit_names_are_restricted() {
             format!("kit name '{bad}' may only contain letters, digits, '.', '_' and '-'")
         );
     }
-    let e = name_from_source(&Source::LocalV3("/k/bad\nname".into())).unwrap_err();
+    let e = name_from_source(&Source::Local("/k/bad\nname".into())).unwrap_err();
     assert!(e.to_string().contains("may only contain"), "{e}");
 }
 
@@ -874,11 +874,11 @@ fn name_comes_from_the_source_not_display_name() {
         name(Source::Registry("ghcr.io/acme/tool:1.2".into())),
         "tool"
     );
-    assert_eq!(name(Source::LocalV3("kits/dev.yaml".into())), "dev");
+    assert_eq!(name(Source::Local("kits/dev.yaml".into())), "dev");
     let dir = tempfile::tempdir().unwrap();
     let kit_dir = dir.path().join("my-kit");
     std::fs::create_dir(&kit_dir).unwrap();
-    assert_eq!(name(Source::LocalV3(kit_dir)), "my-kit");
+    assert_eq!(name(Source::Local(kit_dir)), "my-kit");
     assert_eq!(name(Source::Smolfile("proj/Smolfile".into())), "proj");
     assert_eq!(name(Source::Registry("localhost:5000/kit:1".into())), "kit");
     let digest = format!("acme/kit@sha256:{}", "ab".repeat(32));

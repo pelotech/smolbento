@@ -234,7 +234,7 @@ impl Doc {
                 _ => {}
             }
         }
-        let source = source_of(&kit.source);
+        let source = source_of(kit);
         Doc {
             schema_version: "2",
             kind: match kit.kind {
@@ -358,13 +358,13 @@ impl Doc {
 }
 
 /// The ref or path, and what kind of source it is.
-fn source_of(s: &Source) -> (String, &'static str) {
-    match s {
+fn source_of(kit: &Kit) -> (String, &'static str) {
+    match &kit.source {
         Source::Registry(r) => (r.clone(), "registry"),
         Source::Agent(r) => (r.clone(), "agent"),
         Source::Builtin(n) => (n.to_string(), "builtin"),
-        Source::LocalV3(p) => (p.display().to_string(), "local v3"),
-        Source::LocalV2(p) => (p.display().to_string(), "local v2"),
+        Source::Local(p) if kit.v2 => (p.display().to_string(), "local v2"),
+        Source::Local(p) => (p.display().to_string(), "local v3"),
         Source::Smolfile(p) => (p.display().to_string(), "smolfile"),
     }
 }
@@ -382,7 +382,8 @@ fn schema(kit: &Kit) -> &'static str {
 
 /// sbx's name for a built local v3 kit: `sbx-kit-src:<dir>-<hash>`; the hash is the build's.
 fn template(kit: &Kit) -> Option<String> {
-    let (Source::LocalV3(dir), Content::Oci(layout)) = (&kit.source, &kit.content) else {
+    let (Source::Local(dir), Content::Oci(layout), false) = (&kit.source, &kit.content, kit.v2)
+    else {
         return None;
     };
     let dir = dir.file_name()?.to_str()?;
