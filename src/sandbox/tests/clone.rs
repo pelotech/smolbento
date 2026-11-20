@@ -112,7 +112,7 @@ fn start_runs_the_clone_step_after_setup() {
     fake.ok(&["machine"], "");
     let vm = Smolvm::new(fake);
     let (sb, plan) = clone_sandbox();
-    start(&vm, &sb, &plan).unwrap();
+    start(&vm, &sb, &plan, &mut |_| {}).unwrap();
     let lines = vm.runner().call_lines();
     // The startup hooks follow the clone.
     assert!(
@@ -140,7 +140,7 @@ fn a_failed_clone_stops_the_machine_and_reports_gits_first_line() {
     );
     let vm = Smolvm::new(fake);
     let (sb, p) = clone_sandbox();
-    let err = start(&vm, &sb, &p).unwrap_err();
+    let err = start(&vm, &sb, &p, &mut |_| {}).unwrap_err();
     assert_eq!(
         err.to_string(),
         "cloning the repo in the sandbox: fatal: repository not found"
@@ -162,7 +162,7 @@ fn a_failed_clone_prep_reports_the_first_line_and_stops() {
     );
     let vm = Smolvm::new(fake);
     let (sb, p) = clone_sandbox();
-    let err = start(&vm, &sb, &p).unwrap_err();
+    let err = start(&vm, &sb, &p, &mut |_| {}).unwrap_err();
     assert_eq!(
         err.to_string(),
         "cloning the repo in the sandbox: could not run smolvm"
@@ -316,6 +316,7 @@ fn a_plain_start_runs_the_startup_hooks_in_one_blocking_exec() {
             clone: None,
             ..plan
         },
+        &mut |_| {},
     )
     .unwrap();
     let lines = vm.runner().call_lines();

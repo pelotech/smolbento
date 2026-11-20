@@ -68,7 +68,7 @@ pub fn handlers(
 /// Who replays a login callback: a v3 workload's image user (`sbx.user`), else `agent`, as for
 /// the session itself. Any user reaches the guest's loopback; the image may have no `agent`.
 fn relay_user(sb: &Sandbox) -> &str {
-    sb.meta.user.as_deref().unwrap_or("agent")
+    sb.meta.rec.user.as_deref().unwrap_or("agent")
 }
 
 /// Starts the login callback relays; they stop when the handlers are dropped (the server stops).
@@ -278,7 +278,7 @@ mod tests {
             image: None,
         };
         assert_eq!(relay_user(&sb), "agent");
-        sb.meta.user = Some("1000:staff".into());
+        sb.meta.rec.user = Some("1000:staff".into());
         assert_eq!(relay_user(&sb), "1000:staff");
     }
 

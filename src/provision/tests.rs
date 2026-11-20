@@ -1,6 +1,6 @@
 use super::*;
 use crate::kits::model::SshPhase::{self, Install, Runtime};
-use crate::sandbox::Meta;
+use crate::sandbox::{Meta, Recorded};
 use crate::secrets::{SecretEntry, Source, scope_for};
 use crate::smolvm::NetworkSpec;
 use crate::testutil::*;
@@ -24,12 +24,15 @@ fn meta(name: &str, secrets: &[String], hosts: &[String]) -> Meta {
         .collect();
     credential_env.sort();
     Meta {
+        rec: Recorded {
+            secrets: secrets.to_vec(),
+            credential_hosts: hosts.to_vec(),
+            credential_env,
+            ..Default::default()
+        },
         name: name.into(),
         agent: "claude".into(),
         created: 1,
-        secrets: secrets.to_vec(),
-        credential_hosts: hosts.to_vec(),
-        credential_env,
         ..Default::default()
     }
 }
@@ -124,14 +127,12 @@ fn start_keeps_recorded_credential_hosts_after_the_service_is_gone() {
 fn recorded_env_vars_of_a_deleted_service_are_still_removed() {
     let t = test_env(&[]);
     // `internal` was a custom service with INTERNAL_TOKEN at create; it's gone now.
-    let m = Meta {
-        credential_env: vec!["INTERNAL_TOKEN".into()],
-        ..meta(
-            "s1",
-            &["internal".to_string()],
-            &["api.internal.example".to_string()],
-        )
-    };
+    let mut m = meta(
+        "s1",
+        &["internal".to_string()],
+        &["api.internal.example".to_string()],
+    );
+    m.rec.credential_env = vec!["INTERNAL_TOKEN".into()];
     let plan = start_plan(&t.ctx, &m).unwrap();
     assert!(plan.env.is_empty());
     assert_eq!(plan.remove, vec!["INTERNAL_TOKEN"]);
@@ -147,11 +148,12 @@ fn prepare_create_binds_configured_services() {
         ..Default::default()
     };
     let (added, _) = prepare_create(&t.ctx, &mut req, &["evil.com".to_string()], None).unwrap();
-    assert_eq!(req.secrets, vec!["anthropic"]);
-    assert_eq!(req.credential_env, vec!["ANTHROPIC_API_KEY"]);
+    assert_eq!(req.rec.secrets, vec!["anthropic"]);
+    assert_eq!(req.rec.credential_env, vec!["ANTHROPIC_API_KEY"]);
     assert_eq!(req.credentials[0].env_var, "ANTHROPIC_API_KEY");
     assert!(
-        req.credential_hosts
+        req.rec
+            .credential_hosts
             .contains(&"api.anthropic.com".to_string())
     );
     let NetworkSpec::Restricted(list) = &req.network else {
@@ -352,10 +354,8 @@ fn start_plan_warns_when_the_host_repo_is_gone() {
 fn install_only_credentials_are_left_out_of_later_starts() {
     let t = deny_all_env();
     save_secret(&t, "github", None, "gh-123");
-    let m = Meta {
-        credential_install: vec!["GH_TOKEN".into()],
-        ..meta("s1", &["github".to_string()], &[])
-    };
+    let mut m = meta("s1", &["github".to_string()], &[]);
+    m.rec.credential_install = vec!["GH_TOKEN".into()];
     let plan = start_plan(&t.ctx, &m).unwrap();
     assert_eq!(
         plan.env,
@@ -379,9 +379,9 @@ fn kit_credential_vars_resolve_their_service_and_format() {
     let t = deny_all_env();
     save_secret(&t, "github", None, "gh-123");
     let mut m = meta("s1", &["github".to_string()], &[]);
-    m.credential_env.push("SBX_KIT_GITHUB".into());
-    m.credential_services = [("SBX_KIT_GITHUB".to_string(), "github".to_string())].into();
-    m.credential_formats = [
+    m.rec.credential_env.push("SBX_KIT_GITHUB".into());
+    m.rec.credential_services = [("SBX_KIT_GITHUB".to_string(), "github".to_string())].into();
+    m.rec.credential_formats = [
         (
             "SBX_KIT_GITHUB".to_string(),
             CredFormat::Format("Bearer %s".into()),
@@ -661,15 +661,10 @@ fn unrecorded_install_and_kit_vars_are_still_removed() {
     let t = deny_all_env();
     save_secret(&t, "github", None, "gh-123");
     // `credential_env` doesn't list either; the labels still name them.
-    let m = Meta {
-        credential_install: vec!["GH_TOKEN".into()],
-        credential_services: [("SBX_KIT_GONE".to_string(), "gone".to_string())].into(),
-        ..meta("s1", &["github".to_string()], &[])
-    };
-    let m = Meta {
-        credential_env: vec!["GITHUB_TOKEN".into()],
-        ..m
-    };
+    let mut m = meta("s1", &["github".to_string()], &[]);
+    m.rec.credential_install = vec!["GH_TOKEN".into()];
+    m.rec.credential_services = [("SBX_KIT_GONE".to_string(), "gone".to_string())].into();
+    m.rec.credential_env = vec!["GITHUB_TOKEN".into()];
     let plan = start_plan(&t.ctx, &m).unwrap();
     assert_eq!(plan.remove, vec!["GH_TOKEN", "SBX_KIT_GONE"]);
     assert_eq!(

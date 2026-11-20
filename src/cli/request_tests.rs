@@ -408,7 +408,7 @@ fn a_kit_binding_merges_with_a_global_secret_of_the_same_variable() {
     assert_eq!(gh.len(), 1, "{:?}", req.credentials);
     assert!(gh[0].hosts.contains(&"gist.github.com".to_string()));
     assert!(gh[0].hosts.contains(&"api.github.com".to_string()));
-    assert_eq!(req.secrets, vec!["github"]);
+    assert_eq!(req.rec.secrets, vec!["github"]);
 }
 
 /// A mixin `gh` binding `service`'s secret to GH_TOKEN for `domain`.
@@ -520,7 +520,7 @@ fn a_kit_format_must_match_the_user_secret_of_its_variable() {
         match ok {
             true => {
                 r.unwrap();
-                assert!(req.credential_formats.is_empty());
+                assert!(req.rec.credential_formats.is_empty());
             }
             false => {
                 let err = r.unwrap_err().to_string();

@@ -45,11 +45,11 @@ fn a_linking_skills_sandbox_links_the_store_as_root_at_start() {
 fn a_start_takes_fuse_away_and_keeps_env_files_read_only_when_asked() {
     let vm = vm_with(&stopped());
     let mut sb = get(&vm, "claude-myrepo").unwrap();
-    sb.meta.no_fuse = true;
-    sb.meta.read_only_files = vec!["/w/sbxenv.yaml".into()];
+    sb.meta.rec.no_fuse = true;
+    sb.meta.rec.read_only_files = vec!["/w/sbxenv.yaml".into()];
     ensure_running(&vm, &mut sb, || Ok(plan())).unwrap();
     let lines = vm.runner().call_lines();
-    let script = crate::sandbox::lockdown_cmd(true, &sb.meta.read_only_files).unwrap();
+    let script = crate::sandbox::lockdown_cmd(true, &sb.meta.rec.read_only_files).unwrap();
     assert!(script.contains("rm -f /dev/fuse"), "{script}");
     assert!(
         script.contains("mount --bind '/w/sbxenv.yaml' '/w/sbxenv.yaml'"),

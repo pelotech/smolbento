@@ -822,7 +822,7 @@ fn a_saved_template_is_created_from_its_pack() {
     let pack = crate::templates::Store::new(&t.ctx.paths).pack(&e);
     assert_eq!(req.template_pack, Some(pack));
     assert_eq!(
-        req.template.as_deref(),
+        req.rec.template.as_deref(),
         Some("docker.io/library/chk-tpl:v1")
     );
     assert_eq!(req.image, e.image);

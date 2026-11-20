@@ -1,4 +1,3 @@
-use std::collections::BTreeMap;
 use std::path::{Path, PathBuf};
 
 use crate::bridge;
@@ -7,7 +6,7 @@ use crate::ssh_agent::{self as agent, AgentLabel};
 use crate::workspace::clone::{CloneSource, SOURCE_MOUNT};
 use crate::workspace::{MOUNTLESS_WORKDIR, Workspace};
 
-use super::labels::{CredFormat, Meta};
+use super::labels::{Meta, Recorded};
 use super::name;
 
 /// Everything decided about a new sandbox before it's created.
@@ -32,55 +31,20 @@ pub struct CreateRequest {
     pub network: NetworkSpec,
     pub deny_cidrs: Vec<String>,
     pub credentials: Vec<Credential>,
-    /// Services the credentials come from (the `sbx.secrets` label).
-    pub secrets: Vec<String>,
-    /// The credentials' hosts, sorted (the `sbx.credential-hosts` label).
-    pub credential_hosts: Vec<String>,
-    /// The credentials' env vars, sorted (the `sbx.credential-env` label).
-    pub credential_env: Vec<String>,
-    /// Stored registry hosts the kit builder binds (the `sbx.registries` label).
-    pub registries: Vec<String>,
+    /// What `meta` records as labels unchanged.
+    pub rec: Recorded,
     /// `--clone`: the host repo the sandbox clones; its git dir replaces the primary workspace's
     /// mount.
     pub clone: Option<CloneSource>,
     /// The user gave `--cpus` / `-m`, which a kit's `resources@1` doesn't override.
     pub cpus_set: bool,
     pub memory_set: bool,
-    /// The applied kits (the `sbx.kits` label).
-    pub kits: Vec<crate::sandbox::labels::KitRecord>,
-    /// The workload kit's launch argv (the `sbx.command` label).
-    pub command: Option<Vec<String>>,
-    /// A v3 workload kit's image user (the `sbx.user` label).
-    pub user: Option<String>,
     /// The workload declares `sbx@1`: the host launches its agent (in `run` or `exec`, under
     /// bash), so its image entrypoint isn't started at boot.
     pub launched_by_host: bool,
-    /// A v3 workload kit's image WORKDIR, when not `/` (the `sbx.workdir` label).
-    pub image_workdir: Option<String>,
-    /// The kits' agent files in the guest (the `sbx.agent-file` label). `kits::apply` uses
-    /// those already set (`kit add`) instead of deriving them.
-    pub agent_files: Vec<String>,
-    /// The `agent-context` version the kits use (the `sbx.agent-context` label). `kits::apply`
-    /// keeps to one already set (`kit add`) instead of choosing.
-    pub agent_context: Option<u8>,
-    /// Env vars of install-only credentials (the `sbx.credential-install` label).
-    pub credential_install: Vec<String>,
-    /// Kit credential value formats by env var (`sbx.credential-format.<ENV>` labels).
-    pub credential_formats: BTreeMap<String, CredFormat>,
-    /// Kit credential env vars to their service (`sbx.credential-service.<ENV>` labels).
-    pub credential_services: BTreeMap<String, String>,
-    /// `long-running@1` (the `sbx.long-running` label).
-    pub long_running: bool,
-    /// Created without the host loopback deny, as a `localhost` rule applied (the
-    /// `sbx.host-access` label).
-    pub host_access: bool,
     /// `(host, guest)`: the `--mount` bindings until kits are applied; then every kit
     /// `host-mount@1`, in kit order (the `sbx.host-mounts` label).
     pub host_mounts: Vec<(PathBuf, String)>,
-    /// Take `/dev/fuse` away at each start (the `sbx.no-fuse` label).
-    pub no_fuse: bool,
-    /// Guest files made read-only at each start (the `sbx.read-only-files` label).
-    pub read_only_files: Vec<String>,
     /// Extra guest-only volumes (kit `volume@1`, non-tmpfs).
     pub volumes: Vec<String>,
     /// tmpfs volumes, mounted by a kit startup step (`mount -t tmpfs`), not by smolvm.
@@ -100,16 +64,13 @@ pub struct CreateRequest {
     pub skills_mode: crate::skills::Mode,
     /// The store mount and `sbx.skills` label; `None` without skills directories.
     pub skills: Option<crate::skills::Setup>,
-    /// `-t` named a saved template: its full ref (the `sbx.template` label) and its pack,
-    /// created with `--from` in place of the image.
-    pub template: Option<String>,
+    /// `-t` named a saved template (`rec.template`): its pack, created with `--from` in place of
+    /// the image.
     pub template_pack: Option<PathBuf>,
     /// The `--static-mcp` value as given; `provision` resolves it into `mcp_servers`.
     pub mcp: Option<String>,
     /// The registered MCP servers attached (the `sbx.mcp` label); `None` without the flag.
     pub mcp_servers: Option<Vec<String>>,
-    /// Guest env var to the `mcp:` secret it stands for (the `sbx.mcp-secret.*` labels).
-    pub mcp_secrets: BTreeMap<String, String>,
 }
 
 impl CreateRequest {
@@ -143,42 +104,24 @@ pub fn meta(req: &CreateRequest) -> Meta {
         created: req.created,
         version: Some(env!("CARGO_PKG_VERSION").into()),
         docker: req.docker,
-        secrets: req.secrets.clone(),
-        credential_hosts: req.credential_hosts.clone(),
-        credential_env: req.credential_env.clone(),
-        registries: req.registries.clone(),
+        rec: req.rec.clone(),
         clone_repo: req.clone.as_ref().map(|c| c.top.display().to_string()),
         fork_of: None,
-        kits: req.kits.clone(),
-        command: req.command.clone(),
-        user: req.user.clone(),
-        image_workdir: req.image_workdir.clone(),
-        agent_files: req.agent_files.clone(),
-        agent_context: req.agent_context,
-        credential_install: req.credential_install.clone(),
-        long_running: req.long_running,
-        host_access: req.host_access,
         // Internal sandboxes (`_builder`) never have a user attached.
         bridge: !req.no_bridge && !name::is_internal(&req.name),
         service: req.host_services.is_some() && !name::is_internal(&req.name),
-        credential_formats: req.credential_formats.clone(),
-        credential_services: req.credential_services.clone(),
         host_mounts: req
             .host_mounts
             .iter()
             .map(|(host, guest)| (guest.clone(), host.display().to_string()))
             .collect(),
-        no_fuse: req.no_fuse,
-        read_only_files: req.read_only_files.clone(),
         // Internal sandboxes run untrusted build steps: never an agent.
         ssh_agent: req
             .ssh_agent
             .clone()
             .filter(|_| !name::is_internal(&req.name)),
         skills: req.skills.as_ref().map(|s| s.label.clone()),
-        template: req.template.clone(),
         mcp: req.mcp_servers.clone(),
-        mcp_secrets: req.mcp_secrets.clone(),
     }
 }
 
@@ -293,7 +236,7 @@ pub fn spec(req: &CreateRequest) -> CreateSpec {
 /// `sbx@1` (the host launches its agent, as for every built-in agent); every other sandbox, the
 /// internal builder included, just idles for `exec` and sessions.
 fn boot_command(req: &CreateRequest) -> Vec<String> {
-    match (&req.user, &req.command) {
+    match (&req.rec.user, &req.rec.command) {
         (Some(_), Some(c))
             if !c.is_empty() && !req.launched_by_host && !name::is_internal(&req.name) =>
         {
@@ -333,7 +276,7 @@ mod tests {
         let user = |name: &str, user: Option<&str>| {
             let mut req = request(false, vec![]);
             req.name = name.into();
-            req.user = user.map(String::from);
+            req.rec.user = user.map(String::from);
             spec(&req).user
         };
         // No image user: `agent`. A v3 workload: its image user, `0` when the image names none.
@@ -352,8 +295,8 @@ mod tests {
         let cmd = |name: &str, user: Option<&str>, command: Option<&[&str]>| {
             let mut req = request(false, vec![]);
             req.name = name.into();
-            req.user = user.map(String::from);
-            req.command = command.map(|c| c.iter().map(|s| s.to_string()).collect());
+            req.rec.user = user.map(String::from);
+            req.rec.command = command.map(|c| c.iter().map(|s| s.to_string()).collect());
             spec(&req)
         };
         let idle = ["sleep", "infinity"];
@@ -376,8 +319,8 @@ mod tests {
         // A built-in agent's kit idles too: its agent starts in `run` or `exec`, on a terminal.
         let mut req = request(false, vec![]);
         req.name = "claude-x".into();
-        req.user = Some("agent".into());
-        req.command = Some(vec!["claude".into()]);
+        req.rec.user = Some("agent".into());
+        req.rec.command = Some(vec!["claude".into()]);
         req.launched_by_host = true;
         assert_eq!(spec(&req).cmd, idle);
         assert_eq!(cmd("tool", None, Some(&["wl"])).cmd, idle);
@@ -389,7 +332,7 @@ mod tests {
     #[test]
     fn a_template_sandbox_is_created_from_its_pack() {
         let mut req = request(false, vec![]);
-        req.template = Some("docker.io/library/t:v1".into());
+        req.rec.template = Some("docker.io/library/t:v1".into());
         req.template_pack = Some("/d/templates/abc.smolmachine".into());
         let spec = spec(&req);
         assert_eq!(

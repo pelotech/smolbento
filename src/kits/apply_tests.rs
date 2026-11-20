@@ -53,8 +53,8 @@ fn user_anthropic() -> (SecretsFile, CreateRequest) {
     let s = secrets(&["anthropic"]);
     let mut req = request();
     req.credentials = crate::provision::credentials(&s, &["anthropic".into()]).unwrap();
-    req.credential_env = vec!["ANTHROPIC_API_KEY".into()];
-    req.secrets = vec!["anthropic".into()];
+    req.rec.credential_env = vec!["ANTHROPIC_API_KEY".into()];
+    req.rec.secrets = vec!["anthropic".into()];
     (s, req)
 }
 fn request() -> CreateRequest {
@@ -212,7 +212,7 @@ fn a_kit_cant_use_an_mcp_servers_secret() {
     let mut req = request();
     run_with(&p(true), &mut req, &mut Policy::default(), &has_it).unwrap();
     assert!(req.credentials.is_empty(), "{:?}", req.credentials);
-    assert!(req.credential_services.is_empty());
+    assert!(req.rec.credential_services.is_empty());
 }
 
 #[test]
@@ -244,10 +244,10 @@ fn an_api_key_credential_becomes_a_smolvm_credential() {
         credential_args(&req),
         ["anthropic_api_key=ANTHROPIC_API_KEY@api.anthropic.com"]
     );
-    assert_eq!(req.secrets, ["anthropic"]);
-    assert_eq!(req.credential_env, ["ANTHROPIC_API_KEY"]);
-    assert_eq!(req.credential_hosts, ["api.anthropic.com"]);
-    assert!(req.credential_services.is_empty());
+    assert_eq!(req.rec.secrets, ["anthropic"]);
+    assert_eq!(req.rec.credential_env, ["ANTHROPIC_API_KEY"]);
+    assert_eq!(req.rec.credential_hosts, ["api.anthropic.com"]);
+    assert!(req.rec.credential_services.is_empty());
 }
 
 #[test]
@@ -313,7 +313,7 @@ fn a_kit_key_that_isnt_bound_leaves_the_service_variable() {
     let p = plan(vec![with(kit("k", Kind::Mixin), "credential@1", true, c)]);
     let (s, mut req) = user_anthropic();
     run_with(&p, &mut req, &mut Policy::default(), &s).unwrap();
-    assert_eq!(req.credential_env, ["ANTHROPIC_API_KEY"]);
+    assert_eq!(req.rec.credential_env, ["ANTHROPIC_API_KEY"]);
 }
 
 #[test]
@@ -337,8 +337,8 @@ fn a_kit_that_takes_a_key_without_a_variable_gets_no_service_variable() {
         credential_args(&req),
         ["sbx_kit_anthropic=SBX_KIT_ANTHROPIC@api.anthropic.com:set-header=x-api-key"]
     );
-    assert_eq!(req.credential_env, ["SBX_KIT_ANTHROPIC"]);
-    assert_eq!(req.secrets, ["anthropic"]);
+    assert_eq!(req.rec.credential_env, ["SBX_KIT_ANTHROPIC"]);
+    assert_eq!(req.rec.secrets, ["anthropic"]);
 
     // Another kit that names the variable keeps it.
     let named = cred(
@@ -362,7 +362,8 @@ fn a_kit_that_takes_a_key_without_a_variable_gets_no_service_variable() {
     let (_, mut req) = user_anthropic();
     run_with(&p, &mut req, &mut Policy::default(), &s).unwrap();
     assert!(
-        req.credential_env
+        req.rec
+            .credential_env
             .contains(&"ANTHROPIC_API_KEY".to_string()),
         "{req:?}"
     );
@@ -381,10 +382,10 @@ fn an_inject_only_credential_sets_its_header() {
         ["sbx_kit_xsvc=SBX_KIT_XSVC@api.x.com:set-header=authorization"]
     );
     assert_eq!(
-        req.credential_formats["SBX_KIT_XSVC"],
+        req.rec.credential_formats["SBX_KIT_XSVC"],
         crate::sandbox::labels::CredFormat::Format("Bearer %s".into())
     );
-    assert_eq!(req.credential_services["SBX_KIT_XSVC"], "xsvc");
+    assert_eq!(req.rec.credential_services["SBX_KIT_XSVC"], "xsvc");
 }
 
 #[test]
@@ -429,7 +430,7 @@ fn install_only_credentials_are_recorded() {
     )]);
     let mut req = request();
     run_with(&p, &mut req, &mut Policy::default(), &secrets(&["github"])).unwrap();
-    assert_eq!(req.credential_install, ["GH_TOKEN"]);
+    assert_eq!(req.rec.credential_install, ["GH_TOKEN"]);
     c.runtime = true;
     let p = plan(vec![with(
         kit("gh", Kind::Mixin),
@@ -439,7 +440,7 @@ fn install_only_credentials_are_recorded() {
     )]);
     let mut req = request();
     run_with(&p, &mut req, &mut Policy::default(), &secrets(&["github"])).unwrap();
-    assert!(req.credential_install.is_empty());
+    assert!(req.rec.credential_install.is_empty());
 }
 
 #[test]
@@ -513,7 +514,7 @@ fn oauth_only_allows_its_hosts() {
     assert_eq!(rule_hosts(&policy, &added), ["auth.x.com", "api.x.com"]);
     assert!(steps.install_rules.is_empty(), "same hosts as runtime");
     assert!(credential_args(&req).is_empty());
-    assert!(req.secrets.is_empty());
+    assert!(req.rec.secrets.is_empty());
 
     // Without passthrough (sbx's sentinels) the hosts are allowed too: the login happens in
     // the sandbox.
@@ -624,7 +625,7 @@ fn image_command_kits_and_long_running() {
     let mut req = request();
     let (steps, _) = run(&p, &mut req, &mut Policy::default()).unwrap();
     assert_eq!(req.image, "img:1");
-    assert_eq!(req.command, Some(vec!["wl".to_string(), "--go".into()]));
+    assert_eq!(req.rec.command, Some(vec!["wl".to_string(), "--go".into()]));
     let pinned = |n: &str| format!("acme/{n}:1@sha256:{}", "ab".repeat(32));
     let record = |name: &str, provides: &[&str], format| KitRecord {
         name: name.into(),
@@ -634,13 +635,13 @@ fn image_command_kits_and_long_running() {
         args: Default::default(),
     };
     assert_eq!(
-        req.kits,
+        req.rec.kits,
         [
             record("wl", &[], Format::V2),
             record("m", &["a", "b"], Format::V3)
         ]
     );
-    assert!(req.long_running);
+    assert!(req.rec.long_running);
     // The fixture workload is a published kit that names an image: a v2 one.
     assert_eq!(steps.kit_names, ["wl", "m"]);
     let labels = create::spec(&req).labels;
@@ -674,7 +675,7 @@ fn a_v3_workload_records_its_image_user_and_installs_in_its_workdir() {
     let p = resolve(w, vec![m.clone()], &ArgValues::default()).unwrap();
     let mut req = request();
     let (steps, _) = run(&p, &mut req, &mut Policy::default()).unwrap();
-    assert_eq!(req.user.as_deref(), Some("somebody"));
+    assert_eq!(req.rec.user.as_deref(), Some("somebody"));
     assert_eq!(create::spec(&req).labels["sbx.user"], "somebody");
     assert_eq!(create::spec(&req).labels["sbx.workdir"], "/x");
     assert_eq!(steps.install[0].user, None);
@@ -690,8 +691,8 @@ fn a_v3_workload_records_its_image_user_and_installs_in_its_workdir() {
     let p = resolve(w, vec![m], &ArgValues::default()).unwrap();
     let mut req = request();
     let (steps, _) = run(&p, &mut req, &mut Policy::default()).unwrap();
-    assert_eq!(req.user.as_deref(), Some("0"));
-    assert_eq!(req.image_workdir, None);
+    assert_eq!(req.rec.user.as_deref(), Some("0"));
+    assert_eq!(req.rec.image_workdir, None);
     assert!(steps.install[0].script.starts_with("cd / && env -i "));
 }
 
@@ -700,7 +701,7 @@ fn a_workload_without_an_image_config_records_no_user() {
     let p = plan(vec![]);
     let mut req = request();
     run(&p, &mut req, &mut Policy::default()).unwrap();
-    assert_eq!(req.user, None);
+    assert_eq!(req.rec.user, None);
     assert!(!create::spec(&req).labels.contains_key("sbx.user"));
 }
 
@@ -1076,7 +1077,7 @@ fn an_agent_file_sits_in_the_workspace_parent() {
                 inline_layout(&format!("/w/{file}"), &[("m1", "use m1"), ("m2", "use m2")]),
                 "{agent}"
             );
-            assert_eq!(req.agent_files, [format!("/w/{file}")]);
+            assert_eq!(req.rec.agent_files, [format!("/w/{file}")]);
             assert_eq!(create::spec(&req).labels["sbx.agent-context"], "2");
         }
     }
@@ -1111,7 +1112,7 @@ fn a_workload_appends_its_own_context_and_records_its_agent_file() {
     // SPEC agent-context@1: the workload's body is indexed like any kit's.
     let want = mixin_layout("/w/AGENTS.md", &[("wl", "wl body"), ("m", "use m")]);
     assert_eq!(steps.context, want);
-    assert_eq!(req.agent_files, ["/w/AGENTS.md"]);
+    assert_eq!(req.rec.agent_files, ["/w/AGENTS.md"]);
     let labels = create::spec(&req).labels;
     assert_eq!(labels["sbx.agent-file"], "/w/AGENTS.md");
     assert_eq!(labels["sbx.agent-context"], "1");
@@ -1138,7 +1139,7 @@ fn mixin_context_is_dropped_when_the_workload_declares_no_agent_file() {
     let mut req = in_workspace("/w/proj");
     let (steps, _) = run(&p, &mut req, &mut Policy::default()).unwrap();
     assert!(steps.context.is_empty(), "{:?}", steps.context);
-    assert!(req.agent_files.is_empty());
+    assert!(req.rec.agent_files.is_empty());
     let labels = create::spec(&req).labels;
     assert!(!labels.contains_key("sbx.agent-file"));
     assert!(!labels.contains_key("sbx.agent-context"), "nothing written");
@@ -1174,7 +1175,7 @@ fn version_2_context_goes_inline_the_workloads_own_too() {
         steps.context,
         inline_layout("/w/AGENTS.md", &[("wl", "wl body"), ("m1", "use m1")])
     );
-    assert_eq!(req.agent_context, Some(2));
+    assert_eq!(req.rec.agent_context, Some(2));
 }
 
 /// An agent mixin: agent context `content` with an agent file of its own, `dir/file`.
@@ -1217,7 +1218,7 @@ fn every_explicit_agent_file_gets_every_kits_context() {
         "/home/agent/.claude/CLAUDE.md",
         "/home/agent/.codex/AGENTS.md",
     ];
-    assert_eq!(req.agent_files, files);
+    assert_eq!(req.rec.agent_files, files);
     let want: Vec<String> = files.iter().flat_map(|f| inline_layout(f, &kits)).collect();
     assert_eq!(steps.context, want);
     assert_eq!(
@@ -1313,7 +1314,7 @@ fn a_staged_context_file_is_listed_where_the_image_has_it() {
             ),
         ]
     );
-    assert_eq!(req.agent_context, Some(1));
+    assert_eq!(req.rec.agent_context, Some(1));
 }
 
 #[test]
@@ -1322,11 +1323,9 @@ fn a_sandbox_uses_one_context_version_for_all_its_kits() {
     let both = [(1, true), (2, true)];
     let chosen = |w: Kit, mixin: Kit, pin: Option<u8>| {
         let p = resolve(w, vec![mixin], &ArgValues::default()).unwrap();
-        let mut req = CreateRequest {
-            agent_context: pin,
-            ..in_workspace("/w/proj")
-        };
-        run(&p, &mut req, &mut Policy::default()).map(|(steps, _)| (req.agent_context, steps))
+        let mut req = in_workspace("/w/proj");
+        req.rec.agent_context = pin;
+        run(&p, &mut req, &mut Policy::default()).map(|(steps, _)| (req.rec.agent_context, steps))
     };
     // `@2`, unless a kit requires `@1`: a kit offering both then follows it.
     let (version, steps) = chosen(context_workload(&both, "wl"), m(1), None).unwrap();
@@ -1360,11 +1359,9 @@ fn a_sandbox_uses_one_context_version_for_all_its_kits() {
     // `kit add`: the sandbox's version stays.
     let pinned = |mixin: Kit, pin| {
         let p = resolve(workload(), vec![mixin], &ArgValues::default()).unwrap();
-        let mut req = CreateRequest {
-            agent_files: vec!["/w/AGENTS.md".into()],
-            agent_context: Some(pin),
-            ..in_workspace("/w/proj")
-        };
+        let mut req = in_workspace("/w/proj");
+        req.rec.agent_files = vec!["/w/AGENTS.md".into()];
+        req.rec.agent_context = Some(pin);
         run(&p, &mut req, &mut Policy::default()).map(|(steps, _)| steps.context)
     };
     assert_eq!(
@@ -1386,10 +1383,8 @@ fn a_sandbox_uses_one_context_version_for_all_its_kits() {
 fn a_recorded_agent_file_wins() {
     // `kit add` passes the sandbox's `sbx.agent-file`: its workload isn't reloaded.
     let p = plan(vec![context_mixin("m", Source::Local("/k/m".into()), "b")]);
-    let mut req = CreateRequest {
-        agent_files: vec!["/x/CLAUDE.md".into()],
-        ..in_workspace("/w/proj")
-    };
+    let mut req = in_workspace("/w/proj");
+    req.rec.agent_files = vec!["/x/CLAUDE.md".into()];
     let (steps, _) = run(&p, &mut req, &mut Policy::default()).unwrap();
     assert_eq!(steps.context, inline_layout("/x/CLAUDE.md", &[("m", "b")]));
 }
@@ -1419,10 +1414,8 @@ fn the_index_directory_is_guarded_like_the_agent_file() {
         Source::Local("/k/m".into()),
         "b",
     )]);
-    let mut req = CreateRequest {
-        agent_files: vec!["/x/CLAUDE.md".into()],
-        ..in_workspace("/x/kits-agent-context")
-    };
+    let mut req = in_workspace("/x/kits-agent-context");
+    req.rec.agent_files = vec!["/x/CLAUDE.md".into()];
     let (steps, _) = run(&p, &mut req, &mut Policy::default()).unwrap();
     assert!(steps.context.is_empty(), "{:?}", steps.context);
 }

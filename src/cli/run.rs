@@ -90,7 +90,7 @@ pub fn run<R: Runner>(ctx: &mut Ctx<R>, a: &RunArgs) -> Result<i32> {
     // command (`sbx.command`; a sandbox without one is from before agents were kits). Looked up
     // before the start, so a sandbox with no known agent isn't started and left running.
     sb.check_current()?;
-    let command: Option<Vec<String>> = match (&a.entrypoint, &sb.meta.command, a.detach) {
+    let command: Option<Vec<String>> = match (&a.entrypoint, &sb.meta.rec.command, a.detach) {
         (_, _, true) | (None, None, false) => None,
         (Some(e), _, false) => Some([e.as_slice(), a.agent_args.as_slice()].concat()),
         (None, Some(c), false) => Some(command_with_args(c, &a.agent_args)),
@@ -132,7 +132,7 @@ pub fn run<R: Runner>(ctx: &mut Ctx<R>, a: &RunArgs) -> Result<i32> {
         if let Err(e) = super::lifecycle::delete_keeping_remote(ctx, &sb, true) {
             crate::warning!("removing sandbox {}: {e:#}", sb.name());
         }
-    } else if !sb.meta.long_running
+    } else if !sb.meta.rec.long_running
         && session::idle(&sessions, sb.name())
         && let Err(e) = ctx.vm.stop(&sb.machine)
     {
@@ -166,7 +166,7 @@ fn attach<R: Runner>(ctx: &Ctx<R>, a: &RunArgs, sb: &Sandbox, command: Vec<Strin
     spec.env.extend(a.session_env.iter().cloned());
     sandbox::env::session_env(&ctx.env, spec.tty, sb.meta.bridge, &mut spec.env);
     // A v3 workload runs as its image user, through bash so the image's BASH_ENV is sourced.
-    let image_user = sb.meta.user.is_some();
+    let image_user = sb.meta.rec.user.is_some();
     if image_user {
         spec.cmd = [BASH, "-c", "exec -- \"$@\"", "bash"]
             .into_iter()

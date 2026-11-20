@@ -120,7 +120,7 @@ pub fn start<R: Runner>(ctx: &mut Ctx<R>, names: &[String]) -> Result<i32> {
         }
         let start_plan = provision::start_plan(ctx, &sb.meta)?;
         let mut step = p.step(n, "starting");
-        let started = sandbox::start_with(&ctx.vm, &sb, &start_plan, &mut |e| {
+        let started = sandbox::start(&ctx.vm, &sb, &start_plan, &mut |e| {
             if let Event::Pull(pull) = e {
                 step.detail(&pull.to_string());
             }

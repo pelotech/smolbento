@@ -85,9 +85,9 @@ fn plan_for<R: Runner>(
     let network = compile::network_with(
         &policy,
         sandbox,
-        &meta.credential_hosts,
+        &meta.rec.credential_hosts,
         install_rules.unwrap_or_default(),
-        meta.host_access,
+        meta.rec.host_access,
     );
     let (env, remove) = start_env(&secrets, meta, ctx.store.as_ref(), install);
     let clone = meta.clone_repo.as_ref().map(|dir| {
@@ -291,17 +291,17 @@ pub fn prepare_create<R: Runner>(
             .collect()
     };
     req.credentials = credentials(&secrets, &services)?;
-    req.credential_hosts = credential_hosts(&secrets, &services);
-    for (i, host) in req.registries.iter().enumerate() {
+    req.rec.credential_hosts = credential_hosts(&secrets, &services);
+    for (i, host) in req.rec.registries.iter().enumerate() {
         req.credentials.push(builder::registry_credential(i, host));
-        req.credential_hosts.push(host.clone());
+        req.rec.credential_hosts.push(host.clone());
     }
-    req.credential_hosts.sort();
-    req.credential_hosts.dedup();
-    req.credential_env = req.credentials.iter().map(|c| c.env_var.clone()).collect();
-    req.credential_env.sort();
-    req.credential_env.dedup();
-    req.secrets = services;
+    req.rec.credential_hosts.sort();
+    req.rec.credential_hosts.dedup();
+    req.rec.credential_env = req.credentials.iter().map(|c| c.env_var.clone()).collect();
+    req.rec.credential_env.sort();
+    req.rec.credential_env.dedup();
+    req.rec.secrets = services;
     if !name::is_internal(&req.name) {
         // The services the kits declare a credential for get a mode.
         let mut services: Vec<String> = kits
@@ -340,7 +340,7 @@ pub fn prepare_create<R: Runner>(
         added.extend(ids.iter().cloned());
         first_start = Some(sandbox::KitFirstStart {
             steps,
-            restart_without: req.credential_install.clone(),
+            restart_without: req.rec.credential_install.clone(),
             rule_ids: ids,
             agent_backing: Some(crate::ssh_agent::filter::Backing::new(&ctx.paths, &ctx.env)),
             agent_socket: None,
@@ -362,15 +362,15 @@ pub fn prepare_create<R: Runner>(
             }
         }
         for c in &mcp.credentials {
-            req.credential_hosts.extend(c.hosts.iter().cloned());
-            req.credential_env.push(c.env_var.clone());
+            req.rec.credential_hosts.extend(c.hosts.iter().cloned());
+            req.rec.credential_env.push(c.env_var.clone());
         }
-        req.credential_hosts.sort();
-        req.credential_hosts.dedup();
-        req.credential_env.sort();
-        req.credential_env.dedup();
+        req.rec.credential_hosts.sort();
+        req.rec.credential_hosts.dedup();
+        req.rec.credential_env.sort();
+        req.rec.credential_env.dedup();
         req.credentials.extend(mcp.credentials);
-        req.mcp_secrets = mcp.secrets;
+        req.rec.mcp_secrets = mcp.secrets;
         req.mcp_servers = Some(mcp.names);
         if !mcp.steps.is_empty() {
             // After the kits' install hooks. A sandbox without kits gets a first start for these
@@ -394,8 +394,8 @@ pub fn prepare_create<R: Runner>(
             &req.name,
             &denies,
             &secrets,
-            &req.secrets,
-            &req.credential_hosts,
+            &req.rec.secrets,
+            &req.rec.credential_hosts,
         )?);
     }
     let wants = skill_wants(kits);
@@ -455,10 +455,15 @@ pub fn prepare_create<R: Runner>(
         // The last fallible step, so an error here leaves no rules for `create` to roll back.
         policy.save(&ctx.paths)?;
     }
-    req.host_access = compile::host_access(&policy, &req.name);
-    req.network = compile::network(&policy, &req.name, &req.credential_hosts, req.host_access);
-    req.deny_cidrs = compile::deny_cidrs(&policy, &req.name, req.host_access);
-    if let Some(note) = host_access_note(&req.name, req.host_access) {
+    req.rec.host_access = compile::host_access(&policy, &req.name);
+    req.network = compile::network(
+        &policy,
+        &req.name,
+        &req.rec.credential_hosts,
+        req.rec.host_access,
+    );
+    req.deny_cidrs = compile::deny_cidrs(&policy, &req.name, req.rec.host_access);
+    if let Some(note) = host_access_note(&req.name, req.rec.host_access) {
         eprintln!("{note}");
     }
     Ok((added, first_start))
@@ -617,20 +622,20 @@ pub fn create_with<R: Runner>(
             req.network = compile::network_with(
                 &policy,
                 &req.name,
-                &req.credential_hosts,
+                &req.rec.credential_hosts,
                 &k.steps.install_rules,
-                req.host_access,
+                req.rec.host_access,
             );
             req.deny_cidrs = compile::deny_cidrs_with(
                 &policy,
                 &req.name,
-                req.host_access,
+                req.rec.host_access,
                 &k.steps.install_rules,
             );
             for note in compile::install_deny_cidr_notes(
                 &policy,
                 &req.name,
-                req.host_access,
+                req.rec.host_access,
                 &k.steps.install_rules,
             ) {
                 eprintln!("{note}");
@@ -763,8 +768,8 @@ fn drop_install_rules<R: Runner>(
     Ok(compile::network(
         &policy,
         &req.name,
-        &req.credential_hosts,
-        req.host_access,
+        &req.rec.credential_hosts,
+        req.rec.host_access,
     ))
 }
 
@@ -789,8 +794,8 @@ pub fn push_network<R: Runner>(ctx: &Ctx<R>, policy: &Policy) -> Result<()> {
         let network = compile::network(
             policy,
             sb.name(),
-            &sb.meta.credential_hosts,
-            sb.meta.host_access,
+            &sb.meta.rec.credential_hosts,
+            sb.meta.rec.host_access,
         );
         match ctx.vm.update_network(&sb.machine, &network) {
             Ok(()) => updated += 1,

@@ -18,7 +18,7 @@ use crate::kits::{apply, artifact, capability, guest, load, registry, signing};
 use crate::policy::{Decision, Policy, compile};
 use crate::provision;
 use crate::sandbox::labels::{self, KitRecord};
-use crate::sandbox::{self, CreateRequest, KitPhase, Sandbox};
+use crate::sandbox::{self, CreateRequest, KitPhase, Recorded, Sandbox};
 use crate::secrets::SecretsFile;
 use crate::smolvm::Runner;
 use crate::workspace::Workspace;
@@ -557,7 +557,7 @@ fn add_running<R: Runner>(
     started: bool,
 ) -> Result<i32> {
     let name = sb.name();
-    let existing = &sb.meta.kits;
+    let existing = &sb.meta.rec.kits;
     if existing.iter().any(|r| r.name == kit.name) {
         bail!("kit {} is already in {name}", kit.name);
     }
@@ -580,10 +580,15 @@ fn add_running<R: Runner>(
     // Its agent files are the recorded `sbx.agent-file`, or none.
     let mut workload = empty_workload(&sb.meta.agent);
     workload.provides = own.iter().flat_map(|r| r.provides.clone()).collect();
-    workload.config = sb.meta.image_workdir.clone().map(|workdir| ImageConfig {
-        workdir,
-        ..Default::default()
-    });
+    workload.config = sb
+        .meta
+        .rec
+        .image_workdir
+        .clone()
+        .map(|workdir| ImageConfig {
+            workdir,
+            ..Default::default()
+        });
     let plan = resolve_for(workload, mixins, values, &sb.workdir())?;
     plan.warn_skipped();
 
@@ -593,6 +598,11 @@ fn add_running<R: Runner>(
     // The workspaces place the agent file (and keep context out of mounts); a workload kit's
     // agent file was recorded at create.
     let mut req = CreateRequest {
+        rec: Recorded {
+            agent_files: sb.meta.rec.agent_files.clone(),
+            agent_context: sb.meta.rec.agent_context,
+            ..Default::default()
+        },
         name: name.to_string(),
         workspaces: sb
             .meta
@@ -600,8 +610,6 @@ fn add_running<R: Runner>(
             .iter()
             .map(|w| Workspace::from_label(w))
             .collect(),
-        agent_files: sb.meta.agent_files.clone(),
-        agent_context: sb.meta.agent_context,
         ..Default::default()
     };
     let (mut steps, added) = apply(
@@ -628,7 +636,7 @@ fn add_running<R: Runner>(
     // The record (`sbx.kits`) and startup script go after the existing ones. The recorded kits'
     // records in `req` carry the placeholder digest, so only the new kit's is taken.
     let mut kits = existing.clone();
-    kits.extend(req.kits.iter().find(|k| k.name == kit_name).cloned());
+    kits.extend(req.rec.kits.iter().find(|k| k.name == kit_name).cloned());
     steps.kit_names = kits.iter().map(|k| k.name.clone()).collect();
     let startup = steps.startup_d.pop().map(|(_, body)| {
         let file = format!("{:02}-{kit_name}.sh", existing.len() + 1);
@@ -644,9 +652,9 @@ fn add_running<R: Runner>(
         let network = compile::network_with(
             policy,
             name,
-            &sb.meta.credential_hosts,
+            &sb.meta.rec.credential_hosts,
             &steps.install_rules,
-            sb.meta.host_access,
+            sb.meta.rec.host_access,
         );
         ctx.vm.update_network(&sb.machine, &network)
     };
@@ -716,8 +724,9 @@ fn add_running<R: Runner>(
         .context("recording the kit in the sandbox's labels")?;
     // The first kit with agent context settles the version the later ones keep to.
     if let Some(v) = req
+        .rec
         .agent_context
-        .filter(|v| sb.meta.agent_context != Some(*v))
+        .filter(|v| sb.meta.rec.agent_context != Some(*v))
     {
         ctx.vm
             .set_label(&sb.machine, labels::AGENT_CONTEXT, &v.to_string())

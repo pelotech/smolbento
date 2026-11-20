@@ -15,7 +15,7 @@ use crate::kits::model::{Content, Kind, Kit, Source};
 use crate::kits::registry_auth;
 use crate::kits::resolve::{Plan, resolve};
 use crate::provision;
-use crate::sandbox::{self, CreateRequest, Sandbox, options};
+use crate::sandbox::{self, CreateRequest, Recorded, Sandbox, options};
 use crate::secrets::{RegistryEntry, SecretsFile, registry_secret};
 use crate::smolvm::{Credential, ExecSpec, MachineState, Runner, Smolvm, SmolvmError};
 use crate::util;
@@ -99,7 +99,7 @@ fn build_with<R: Runner>(ctx: &Ctx<R>, dir: &Path, mint: Minter) -> Result<PathB
 
     let found = match sandbox::find(&ctx.vm, BUILDER)? {
         // Its registry bindings are fixed at create: a changed set of logins needs a new one.
-        Some(sb) if sb.meta.registries != hosts => {
+        Some(sb) if sb.meta.rec.registries != hosts => {
             ctx.vm
                 .delete(&sb.machine)
                 .context("removing the kit builder sandbox to bind the stored registry logins")?;
@@ -241,6 +241,10 @@ fn docker_plan() -> Result<Plan> {
 /// The builder sandbox: mountless, with a private dockerd, under the global network policy.
 fn request<R: Runner>(ctx: &Ctx<R>, registries: &[String]) -> CreateRequest {
     CreateRequest {
+        rec: Recorded {
+            registries: registries.to_vec(),
+            ..Default::default()
+        },
         name: BUILDER.into(),
         agent: "shell".into(),
         image: BUILDER_IMAGE.into(),
@@ -248,7 +252,6 @@ fn request<R: Runner>(ctx: &Ctx<R>, registries: &[String]) -> CreateRequest {
         memory_mib: MEMORY_MIB,
         docker: true,
         created: ctx.now,
-        registries: registries.to_vec(),
         ..Default::default()
     }
 }

@@ -312,7 +312,7 @@ fn refresh<R: Runner>(
     // kit can take a service's key without its variable (Claude's binds only SBX_KIT_ANTHROPIC).
     let vars: Vec<&String> = bound_vars(service, &sb.meta, name, false)
         .into_iter()
-        .filter(|v| sb.meta.credential_env.contains(v))
+        .filter(|v| sb.meta.rec.credential_env.contains(v))
         .collect();
     if vars.is_empty() {
         return false;
@@ -358,7 +358,7 @@ fn explain_impact<R: Runner>(
             file.entry_for(s.name(), s.meta.fork_of.as_deref(), service)
                 .is_some_and(|e| e.scope == own)
         })
-        .partition(|s| s.meta.secrets.iter().any(|x| x == service));
+        .partition(|s| s.meta.rec.secrets.iter().any(|x| x == service));
     // Read once for every running sandbox: a --ref or --command source may prompt, or be slow.
     let new = match (
         bound.iter().any(|s| s.is_running()),
