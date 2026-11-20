@@ -133,7 +133,6 @@ impl SecretsFile {
         crate::config::save_toml(&paths.secrets_file(), self)
     }
 
-    /// A built-in or custom service.
     /// A built-in or custom service, with the domains bound to it added to its hosts.
     pub fn service(&self, name: &str) -> Option<Service> {
         let mut service = services::builtin(name).or_else(|| {

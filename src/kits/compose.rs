@@ -238,7 +238,7 @@ fn write_tar(
     let index = json!({
         "schemaVersion": 2,
         "manifests": [{
-            "mediaType": media_type.unwrap_or("application/vnd.oci.image.manifest.v1+json"),
+            "mediaType": media_type.unwrap_or(super::artifact::OCI_MANIFEST_MEDIA_TYPE),
             "digest": manifest_digest,
             "size": manifest_size,
         }],

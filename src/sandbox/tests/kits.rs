@@ -163,27 +163,25 @@ fn create_runs_kit_steps_in_lifecycle_order() {
     let start = position(&lines, "start", |l| l.starts_with("machine start"));
     let hosts = position(&lines, "hosts", |l| l.ends_with(&hosts_cmd()));
     let install1 = position(&lines, "install 1", |l| {
-        *l == exec_line("root", false, "echo install-1")
+        *l == exec_line("root", "echo install-1")
     });
     let install2 = position(&lines, "install 2", |l| {
-        *l == exec_line("agent", false, "echo install-2")
+        *l == exec_line("agent", "echo install-2")
     });
     let update = position(&lines, "post-install update", |l| {
         l.starts_with("machine update")
             && l.contains("--allow-host api.example.com")
             && !l.contains("registry.npmjs.org")
     });
-    let files = position(&lines, "files", |l| {
-        *l == exec_line("root", false, "echo files-1")
-    });
+    let files = position(&lines, "files", |l| *l == exec_line("root", "echo files-1"));
     let context = position(&lines, "context", |l| {
-        *l == exec_line("root", false, "echo context-1")
+        *l == exec_line("root", "echo context-1")
     });
     let startup_d = position(&lines, "startup.d cp", |l| {
         l.starts_with("machine cp ")
             && l.ends_with(&format!("{MACHINE}:/etc/smolbento/startup.d/01-k.sh"))
     });
-    let runner = exec_line("root", false, &startup_cmd(None));
+    let runner = exec_line("root", &startup_cmd(None));
     assert!(
         start < hosts
             && hosts < install1
@@ -244,16 +242,14 @@ fn install_only_credentials_restart_the_machine_without_them() {
     .unwrap();
     let lines = vm.runner().call_lines();
     let install2 = position(&lines, "install 2", |l| {
-        *l == exec_line("agent", false, "echo install-2")
+        *l == exec_line("agent", "echo install-2")
     });
     let stop = position(&lines, "stop", |l| l.starts_with("machine stop"));
     let restart = lines
         .iter()
         .rposition(|l| l.starts_with("machine start"))
         .unwrap();
-    let files = position(&lines, "files", |l| {
-        *l == exec_line("root", false, "echo files-1")
-    });
+    let files = position(&lines, "files", |l| *l == exec_line("root", "echo files-1"));
     assert!(
         install2 < stop && stop < restart && restart < files,
         "{lines:#?}"

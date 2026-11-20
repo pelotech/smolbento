@@ -87,8 +87,8 @@ pub fn run<R: Runner>(ctx: &mut Ctx<R>, a: &RunArgs) -> Result<i32> {
         );
     }
     // What to launch, with the arguments given: an environment's `entrypoint`, else the agent's
-    // command (`sbx.command`; a sandbox without one is from before agents were kits). Looked up before the start, so a sandbox
-    // with no known agent isn't started and left running.
+    // command (`sbx.command`; a sandbox without one is from before agents were kits). Looked up
+    // before the start, so a sandbox with no known agent isn't started and left running.
     sb.check_current()?;
     let command: Option<Vec<String>> = match (&a.entrypoint, &sb.meta.command, a.detach) {
         (_, _, true) | (None, None, false) => None,
@@ -110,7 +110,6 @@ pub fn run<R: Runner>(ctx: &mut Ctx<R>, a: &RunArgs) -> Result<i32> {
 
     // Whatever `attach` returns, the sandbox is cleaned up below: nothing after the start may
     // return early and leave it running, or skip `--rm`.
-    // Closing the terminal ends the agent, not this process, which has the cleanup still to do.
     let result = attach(ctx, a, &sb, command);
 
     // Fetch before `--rm` deletes the sandbox, and while it still runs for `_upload-pack`.

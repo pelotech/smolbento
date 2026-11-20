@@ -391,6 +391,39 @@ mod tests {
         assert_eq!(mcp[0].source(), "mcp");
     }
 
+    /// A failed create removes only the rules it added: an MCP host's rule that was already
+    /// there (left by an earlier create of the name) stays.
+    #[test]
+    fn a_failed_create_keeps_an_mcp_rule_it_did_not_add() {
+        let mut t = mcp_env(&[]);
+        let mut policy = crate::policy::Policy::load(&t.ctx.paths).unwrap();
+        let id = policy
+            .add_rule(
+                Some("claude-proj"),
+                crate::policy::Decision::Allow,
+                "mcp.linear.app",
+                crate::policy::MCP_VIA,
+                None,
+                None,
+            )
+            .unwrap();
+        policy.save(&t.ctx.paths).unwrap();
+        let fake = t.runner();
+        fake.fail(&["machine", "status"], "NOT_FOUND", "vm not found");
+        fake.fail(&["machine", "create"], "CREATE_FAILED", "no space left");
+        let err = t
+            .sbt(&["create", "claude", ".", "--static-mcp", "linear"])
+            .unwrap_err();
+        assert!(err.to_string().contains("no space left"), "{err:#}");
+        let policy = crate::policy::Policy::load(&t.ctx.paths).unwrap();
+        let rules = policy
+            .sandboxes
+            .get("claude-proj")
+            .map(|s| s.rules.clone())
+            .unwrap_or_default();
+        assert!(rules.iter().any(|r| r.id == id), "{rules:?}");
+    }
+
     #[test]
     fn static_mcp_without_kits_still_registers() {
         let mut t = mcp_env(&[("SMOLBENTO_DOCKER", "false")]);

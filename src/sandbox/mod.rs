@@ -200,7 +200,7 @@ fn start_checked<R: Runner>(
     vm.update_network(&sb.machine, &plan.network)
         .context("applying the network policy")?;
     on(Event::Boot);
-    vm.start_with_progress(
+    vm.start(
         &sb.machine,
         plan.branchable,
         &plan.env,
@@ -443,6 +443,5 @@ fn install_agent(sb: &Sandbox, kit: &KitFirstStart) -> Option<bridge::Server> {
     crate::ssh_agent::filter::serve_for(sb.name(), &socket, access, backing)
 }
 
-/// sbx's warning when a create's startup hooks fail (the sandbox is kept).
 #[cfg(test)]
 mod tests;

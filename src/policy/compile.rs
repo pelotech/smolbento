@@ -144,8 +144,8 @@ fn network_for(
             Allow::Everything => {}
         }
     }
-    // Exact credential hosts stay `--allow-host`, as before: they must resolve for the secret to
-    // work. A `*.x` one can't be resolved, so it's the pattern smolvm wants for it.
+    // Exact credential hosts are `--allow-host`: they must resolve for the secret to work. A
+    // `*.x` one can't be resolved, so it's the pattern smolvm wants for it.
     let (wild, hosts): (Vec<String>, Vec<String>) = credential_hosts
         .iter()
         .cloned()
@@ -190,9 +190,8 @@ fn reaches_under(deny: &Resource, x: &str) -> bool {
     }
 }
 
-/// The guest's gateway, which smolvm forwards to the host's loopback (measured in
-/// docs/superpowers/notes/2026-10-28-host-services-spike.md). A restricted machine reaches it only
-/// while `HOST_GATEWAY/32` is in its allow list, which `machine update` changes live.
+/// The guest's gateway, which smolvm forwards to the host's loopback. A restricted machine reaches
+/// it only while `HOST_GATEWAY/32` is in its allow list, which `machine update` changes live.
 pub const HOST_GATEWAY: &str = "100.96.0.1";
 
 /// Whether an allow entry is a host-services rule: `localhost`, with any port or none. It becomes

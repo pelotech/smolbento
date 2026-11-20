@@ -1,3 +1,10 @@
+use super::*;
+use crate::kits::model::SshPhase::{self, Install, Runtime};
+use crate::sandbox::Meta;
+use crate::secrets::{SecretEntry, Source, scope_for};
+use crate::smolvm::NetworkSpec;
+use crate::testutil::*;
+
 #[test]
 fn host_access_note_only_for_sandboxes_with_host_access() {
     assert_eq!(
@@ -6,13 +13,6 @@ fn host_access_note_only_for_sandboxes_with_host_access() {
     );
     assert_eq!(host_access_note("s1", false), None);
 }
-
-use super::*;
-use crate::kits::model::SshPhase::{self, Install, Runtime};
-use crate::sandbox::Meta;
-use crate::secrets::{SecretEntry, Source, scope_for};
-use crate::smolvm::NetworkSpec;
-use crate::testutil::*;
 
 /// A sandbox's labels as recorded at create: `credential_env` holds the built-in services'
 /// env vars.

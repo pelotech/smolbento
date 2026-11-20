@@ -17,9 +17,12 @@ use serde_json::{Value, json};
 use crate::util::sha256_digest;
 
 pub const KIT_V2_ARTIFACT: &str = "application/vnd.docker.sandbox.kit.v2";
-const SPEC_MEDIA_TYPE: &str = "application/vnd.docker.sandbox.kit.v2.spec+yaml";
-const LAYER_MEDIA_TYPE: &str = "application/vnd.oci.image.layer.v1.tar+gzip";
-const EMPTY_MEDIA_TYPE: &str = "application/vnd.oci.empty.v1+json";
+/// The config of a v2 kit published as an OCI artifact: the kit's spec.yaml.
+pub(crate) const V2_SPEC_MEDIA_TYPE: &str = "application/vnd.docker.sandbox.kit.v2.spec+yaml";
+/// A published v2 kit's `files/`, as `home/agent/...`.
+pub(crate) const V2_FILES_MEDIA_TYPE: &str = "application/vnd.oci.image.layer.v1.tar+gzip";
+pub(crate) const EMPTY_MEDIA_TYPE: &str = "application/vnd.oci.empty.v1+json";
+pub(crate) const OCI_MANIFEST_MEDIA_TYPE: &str = "application/vnd.oci.image.manifest.v1+json";
 /// Where a kit's `files/home` lands in the guest, and so its prefix in the layer.
 const HOME_IN_LAYER: &str = "home/agent";
 
@@ -229,7 +232,7 @@ pub fn manifest(p: &Payload, created: &str) -> (Vec<u8>, Vec<(String, Vec<u8>)>)
         Some(f) => {
             let digest = sha256_digest(f);
             blobs.push((digest.clone(), f.clone()));
-            json!({"mediaType": LAYER_MEDIA_TYPE, "digest": digest, "size": f.len()})
+            json!({"mediaType": V2_FILES_MEDIA_TYPE, "digest": digest, "size": f.len()})
         }
         None => {
             let digest = sha256_digest(b"{}");
@@ -242,9 +245,9 @@ pub fn manifest(p: &Payload, created: &str) -> (Vec<u8>, Vec<(String, Vec<u8>)>)
     annotations.insert("org.opencontainers.image.created".into(), created.into());
     let m = json!({
         "schemaVersion": 2,
-        "mediaType": "application/vnd.oci.image.manifest.v1+json",
+        "mediaType": OCI_MANIFEST_MEDIA_TYPE,
         "artifactType": KIT_V2_ARTIFACT,
-        "config": {"mediaType": SPEC_MEDIA_TYPE, "digest": spec_digest, "size": p.spec.len()},
+        "config": {"mediaType": V2_SPEC_MEDIA_TYPE, "digest": spec_digest, "size": p.spec.len()},
         "layers": [layer],
         "annotations": annotations,
     });

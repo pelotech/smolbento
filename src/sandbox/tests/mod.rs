@@ -156,9 +156,8 @@ pub(super) fn kit_plan(restart_without: &[&str]) -> StartPlan {
     }
 }
 
-pub(super) fn exec_line(user: &str, detach: bool, script: &str) -> String {
-    let d = if detach { " -d" } else { "" };
-    format!("machine exec --name {MACHINE} -u {user}{d} -- sh -c {script}")
+pub(super) fn exec_line(user: &str, script: &str) -> String {
+    format!("machine exec --name {MACHINE} -u {user} -- sh -c {script}")
 }
 
 pub(super) fn position(lines: &[String], what: &str, pred: impl Fn(&String) -> bool) -> usize {

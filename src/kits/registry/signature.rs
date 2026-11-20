@@ -14,7 +14,8 @@ use serde_json::{Value, json};
 use crate::kits::registry_auth::Logins;
 use crate::util::sha256_digest;
 
-use super::{EMPTY_MEDIA_TYPE, parse_ref, with_client};
+use super::{parse_ref, with_client};
+use crate::kits::artifact::EMPTY_MEDIA_TYPE;
 
 pub(super) const SIGNATURE_ARTIFACT: &str = "application/vnd.docker.sandbox.kit.signature.v1";
 pub(super) const BUNDLE_MEDIA_TYPE: &str = "application/vnd.dev.sigstore.bundle.v0.3+json";

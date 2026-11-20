@@ -168,7 +168,6 @@ impl Conn {
             env,
             interactive: true,
             tty,
-            detach: false,
             // `-i` streams the output as it is written.
             stream: false,
             cmd: shell_command(command),
