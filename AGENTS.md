@@ -142,8 +142,9 @@ Shipped kits live in `kits/`. Planned for later phases: `tui`, and `images/plus/
   the shared `_builder`) must be the only one that does. A test that needs outside credentials gets
   its own recipe (`just e2e-dhi`) and fails without them; it never returns early, which would pass.
 - CI runs Linux only by default. VM tests (`just e2e`) run in CI only on x64 Linux, split over three
-  runners by nextest's `--partition slice:N/3`. So an e2e test can't rely on another having run on the
-  same machine. GitHub's arm64 Linux and macOS runners can't boot VMs. Run `just test` and `just e2e`
+  runners by `just e2e-shard N`: the slowest tests are placed by hand (`e2e_heavy_*` in the justfile,
+  kept in step with `.config/nextest.toml`), the rest by nextest's `--partition slice:N/3`. So an e2e
+  test can't rely on another having run on the same machine. GitHub's arm64 Linux and macOS runners can't boot VMs. Run `just test` and `just e2e`
   on your Mac before pushing changes that affect macOS. A macOS unit-test job runs only on manual
   `workflow_dispatch` with `macos: true`.
 - The macOS release binary is cross-compiled on Linux and never run in CI. Pull requests build

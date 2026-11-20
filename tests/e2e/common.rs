@@ -144,11 +144,10 @@ impl E2e {
         self.ok(&["exec", sb, "sh", "-c", script])
     }
 
-    /// `create HEAD <workspace> --name NAME --cpus 1 -m 1g`: the size every e2e sandbox has. `head`
-    /// is the flags, then the agent.
-    fn create_args(&self, name: &str, head: &[&str]) -> Vec<String> {
+    /// `create HEAD <workspace> --name NAME --cpus 1 -m MEM`. `head` is the flags, then the agent.
+    fn create_args(&self, name: &str, head: &[&str], mem: &str) -> Vec<String> {
         let ws = self.workspace().display().to_string();
-        let tail = [ws.as_str(), "--name", name, "--cpus", "1", "-m", "1g"];
+        let tail = [ws.as_str(), "--name", name, "--cpus", "1", "-m", mem];
         std::iter::once("create")
             .chain(head.iter().copied())
             .chain(tail)
@@ -156,21 +155,27 @@ impl E2e {
             .collect()
     }
 
-    /// `bento create`, whatever the status (`create_args`).
+    /// `bento create` with 1 GiB, the size every e2e sandbox has, whatever the status.
     pub(crate) fn try_create(&self, name: &str, head: &[&str]) -> Output {
-        let args = self.create_args(name, head);
+        let args = self.create_args(name, head, "1g");
         self.sbt(&args.iter().map(String::as_str).collect::<Vec<_>>())
     }
 
-    /// `try_create` that must succeed. In CI it's traced (`traced`), so a create that hangs shows
-    /// the smolvm call it hangs on.
+    /// `try_create` that must succeed (`create_sized` with 1 GiB).
     pub(crate) fn create(&self, name: &str, head: &[&str]) {
-        let args = self.create_args(name, head);
+        self.create_sized(name, head, "1g");
+    }
+
+    /// `bento create` with `mem` that must succeed. In CI it's traced (`traced`), so a create that
+    /// hangs shows the smolvm call it hangs on.
+    fn create_sized(&self, name: &str, head: &[&str], mem: &str) {
+        let args = self.create_args(name, head, mem);
+        let args: Vec<&str> = args.iter().map(String::as_str).collect();
         if std::env::var_os("CI").is_some() {
-            self.traced(&args.iter().map(String::as_str).collect::<Vec<_>>());
+            self.traced(&args);
             return;
         }
-        let out = self.try_create(name, head);
+        let out = self.sbt(&args);
         assert!(
             out.status.success(),
             "create {name} {head:?} failed:\n{}",
@@ -178,9 +183,9 @@ impl E2e {
         );
     }
 
-    /// A local kit: directory `name` in the test's directory holding `spec` as `spec.yaml`.
+    /// A local v2 kit: directory `name` in the test's directory holding `spec` as `spec.yaml`.
     /// Returns its path.
-    pub(crate) fn kit_dir(&self, name: &str, spec: &str) -> String {
+    pub(crate) fn v2_kit_dir(&self, name: &str, spec: &str) -> String {
         let dir = self.dir.path().join(name);
         std::fs::create_dir_all(&dir).unwrap();
         std::fs::write(dir.join("spec.yaml"), spec).unwrap();
@@ -207,19 +212,15 @@ impl E2e {
         self.create_alpine_with("true");
     }
 
+    /// `create_alpine_as` with the `shell` agent.
     pub(crate) fn create_alpine_with(&self, then: &str) {
-        self.create_alpine_named(&self.name, then);
-    }
-
-    /// `create_alpine` from [`E2e::v2_shell`], for tests that add v2 mixins.
-    pub(crate) fn create_alpine_v2(&self) {
-        self.create_alpine_from(&self.v2_shell(), &self.name, "apk add -q bash");
+        self.create_alpine_as("shell", then);
     }
 
     /// A v2 workload named `shell` with an agent file (`AGENTS.md`): v2 mixins
     /// need a v2 workload, as in sbx, and the built-in agents are v3 kits. Boot it with `-t`.
     pub(crate) fn v2_shell(&self) -> String {
-        self.kit_dir(
+        self.v2_kit_dir(
             "v2-shell",
             r#"schemaVersion: "2"
 kind: sandbox
@@ -234,31 +235,63 @@ agentInstructions:
         )
     }
 
-    /// An Alpine sandbox `name` (with its `agent` user), then `then` run as root.
-    fn create_alpine_named(&self, name: &str, then: &str) {
-        self.create_alpine_from("shell", name, then);
-    }
-
-    /// `create_alpine_named` with `target` as the agent.
-    fn create_alpine_from(&self, target: &str, name: &str, then: &str) {
+    /// This test's Alpine sandbox (with its `agent` user) with `target` as the agent, then `then`
+    /// run as root.
+    pub(crate) fn create_alpine_as(&self, target: &str, then: &str) {
         let archive = Image::alpine_agent_archive();
-        self.create(name, &["-t", archive.to_str().unwrap(), target]);
-        guest_root(name, then);
+        self.create(&self.name, &["-t", archive.to_str().unwrap(), target]);
+        guest_root(&self.name, then);
     }
 
-    /// Creates this test's sandbox as a `--clone` of its workspace. A clone sandbox needs git from
-    /// its first start, which the Alpine archive lacks (a create that fails its first start removes
-    /// the sandbox), so it comes from a template saved with git installed.
+    /// Creates this test's sandbox as a `--clone` of its workspace. A clone sandbox needs git and
+    /// the `agent` user at its first start (a create that fails it removes the sandbox), so it
+    /// boots [`Image::git_agent_archive`].
     pub(crate) fn create_clone(&self) {
-        let base = format!("{}-base", self.name);
-        // Removed below; the guard covers a panic in between.
-        let _base = Forks(vec![base.clone()]);
-        self.create_alpine_named(&base, "apk add -q git");
-        self.ok(&["stop", &base]);
-        self.ok(&["template", "save", &base, "e2e-git:v1"]);
-        self.ok(&["rm", "-f", &base]);
-        let head = ["--clone", "-t", "e2e-git:v1", "--pull", "never", "shell"];
-        self.create(&self.name, &head);
+        let archive = Image::git_agent_archive();
+        self.create(
+            &self.name,
+            &["--clone", "-t", archive.to_str().unwrap(), "shell"],
+        );
+    }
+
+    /// `bento create AGENT` with 2 GiB, for sbx's published agent kits (`real_agent_kits`).
+    pub(crate) fn create_real_kit(&self, agent: &str) {
+        self.create_sized(&self.name, &[agent], "2g");
+    }
+
+    /// A local v3 kit: directory `name` in the test's directory holding `yaml` as `name.yaml`.
+    /// Returns its path.
+    pub(crate) fn v3_kit_dir(&self, name: &str, yaml: &str) -> String {
+        let dir = self.dir.path().join(name);
+        std::fs::create_dir_all(&dir).unwrap();
+        std::fs::write(dir.join(format!("{name}.yaml")), yaml).unwrap();
+        dir.display().to_string()
+    }
+
+    /// Makes the workspace a git repository on `main` with one commit, "host commit", of `README`.
+    pub(crate) fn git_repo(&self) {
+        std::fs::write(self.workspace().join("README"), "host\n").unwrap();
+        self.git_ok(&["init", "-q", "-b", "main"]);
+        self.git_ok(&["add", "README"]);
+        self.git_ok(&["commit", "-q", "-m", "host commit"]);
+    }
+
+    /// Commits `msg`, appended to `README`, in sandbox `sb`'s clone of the workspace.
+    pub(crate) fn guest_commit(&self, sb: &str, msg: &str) {
+        self.sh_ok(
+            sb,
+            &format!(
+                "echo {msg} >> README && git -c user.name=a -c user.email=a@a \
+                 -c commit.gpgsign=false commit -q -am {msg}"
+            ),
+        );
+    }
+
+    /// A secret `env` for httpbin.org whose value is [`BASIC_SECRET`].
+    pub(crate) fn httpbin_secret(&self, env: &str) {
+        let command = format!("printf {BASIC_SECRET}");
+        let args = ["--host", "httpbin.org", "--env", env, "--command", &command];
+        self.ok(&[&["secret", "set-custom"][..], &args].concat());
     }
 
     pub(crate) fn state(&self) -> String {
@@ -283,10 +316,58 @@ impl Drop for E2e {
     }
 }
 
-/// Whether `smolvm args` succeeds.
-pub(crate) fn smolvm(args: &[&str]) {
+/// Deletes the machines of these sandboxes on drop: extra sandboxes a test makes besides its own.
+/// Declare it after the `E2e`, so it drops first.
+pub(crate) struct Machines(pub(crate) Vec<String>);
+
+impl Drop for Machines {
+    fn drop(&mut self) {
+        for n in &self.0 {
+            let _ = smolvm_command()
+                .args(["machine", "delete", "-n", &format!("sbx-{n}"), "-f"])
+                .output();
+        }
+    }
+}
+
+/// Runs `smolvm args`, which must succeed.
+pub(crate) fn smolvm_ok(args: &[&str]) {
     let out = smolvm_command().args(args).output().unwrap();
     assert!(out.status.success(), "smolvm {args:?}:\n{}", err_text(&out));
+}
+
+/// Runs `script` as root in sandbox `sb`, with `bento smolvm` (not `bento exec`) so it works before
+/// setup.
+pub(crate) fn root_sh(sb: &str, script: &str) -> Output {
+    let machine = format!("sbx-{sb}");
+    let args = [
+        "machine", "exec", "--name", &machine, "-u", "root", "--", "sh", "-c", script,
+    ];
+    smolvm_command().args(args).output().unwrap()
+}
+
+/// `root_sh` that must succeed.
+pub(crate) fn guest_root(sb: &str, script: &str) {
+    let out = root_sh(sb, script);
+    assert!(
+        out.status.success(),
+        "{script} in {sb}:\n{}",
+        err_text(&out)
+    );
+}
+
+/// Polls `check` every second until it returns true or `secs` pass.
+pub(crate) fn wait_until(secs: u64, mut check: impl FnMut() -> bool) -> bool {
+    let deadline = std::time::Instant::now() + std::time::Duration::from_secs(secs);
+    loop {
+        if check() {
+            return true;
+        }
+        if std::time::Instant::now() > deadline {
+            return false;
+        }
+        std::thread::sleep(std::time::Duration::from_secs(1));
+    }
 }
 
 /// A throwaway `registry:2` in its own smolvm machine on a free loopback port, for published-kit
@@ -307,7 +388,7 @@ impl Registry {
             port: smolbento::sandbox::options::free_port().unwrap(),
         };
         let publish = format!("{}:5000", r.port);
-        smolvm(&[
+        smolvm_ok(&[
             "machine",
             "run",
             "-d",
@@ -575,18 +656,81 @@ impl Image {
 
     /// Alpine with an `agent` account (`with_agent_account`) as an archive for `-t`: the
     /// sandbox's workload user is `agent`, so the image must have it before the first start.
-    /// Built once per run and shared by every test.
     pub(crate) fn alpine_agent_archive() -> PathBuf {
-        let path = std::env::temp_dir().join(format!(
-            "smolbento-e2e-alpine-agent-{}.tar",
-            smolbento::util::host_uid()
-        ));
+        Image::shared_archive("alpine-agent", Image::alpine_agent)
+    }
+
+    /// `alpine/git` (git and OpenSSH from the first start) with an `agent` account, as an image
+    /// that idles in a shell.
+    pub(crate) fn git_agent() -> Image {
+        let base = Image::pull("alpine/git");
+        let mut image = base.clone().with_agent_account(&base);
+        image.config["config"]["Entrypoint"] = serde_json::Value::Null;
+        image.config["config"]["Cmd"] = serde_json::json!(["/bin/sh"]);
+        image
+    }
+
+    /// [`Image::git_agent`] as an archive for `-t`.
+    pub(crate) fn git_agent_archive() -> PathBuf {
+        Image::shared_archive("git-agent", Image::git_agent)
+    }
+
+    /// The archive `smolbento-e2e-<name>-<uid>.tar` in the temp dir, made from `image` the first
+    /// time a test asks, and then shared by every test of the run (and later runs).
+    fn shared_archive(name: &str, image: fn() -> Image) -> PathBuf {
+        let uid = smolbento::util::host_uid();
+        let path = std::env::temp_dir().join(format!("smolbento-e2e-{name}-{uid}.tar"));
         if !path.exists() {
             let tmp = path.with_extension(format!("tmp{}", std::process::id()));
-            Image::alpine_agent().save_oci(&tmp);
+            image().save_oci(&tmp);
             std::fs::rename(&tmp, &path).unwrap();
         }
         path
+    }
+
+    /// Appends a layer giving Alpine (`base`) an `agent` account with the host's uid and its own
+    /// home, as sbx images have one before any kit hook runs: the skills steps hand directories
+    /// and links to it, and the tests `bento exec` as it.
+    pub(crate) fn with_agent_account(mut self, base: &Image) -> Image {
+        let uid = smolbento::util::host_uid();
+        let passwd =
+            base.file("etc/passwd") + &format!("agent:x:{uid}:{uid}::/home/agent:/bin/sh\n");
+        let group = base.file("etc/group") + &format!("agent:x:{uid}:\n");
+        let mut b = tar::Builder::new(Vec::new());
+        let mut entry = |path: &str, body: Option<&str>, owner: u64| {
+            let mut h = tar::Header::new_gnu();
+            h.set_uid(owner);
+            h.set_gid(owner);
+            match body {
+                Some(body) => {
+                    h.set_mode(0o644);
+                    h.set_size(body.len() as u64);
+                    h.set_cksum();
+                    b.append_data(&mut h, path, body.as_bytes()).unwrap();
+                }
+                None => {
+                    h.set_entry_type(tar::EntryType::Directory);
+                    h.set_mode(0o755);
+                    h.set_size(0);
+                    h.set_cksum();
+                    b.append_data(&mut h, path, std::io::empty()).unwrap();
+                }
+            }
+        };
+        entry("etc/", None, 0);
+        entry("etc/passwd", Some(&passwd), 0);
+        entry("etc/group", Some(&group), 0);
+        entry("home/", None, 0);
+        entry("home/agent/", None, uid.into());
+        let data = b.into_inner().unwrap();
+        let diff_id = smolbento::util::sha256_digest(&data);
+        self.config["rootfs"]["diff_ids"]
+            .as_array_mut()
+            .unwrap()
+            .push(diff_id.into());
+        self.layers
+            .push((data, "application/vnd.oci.image.layer.v1.tar".to_string()));
+        self
     }
 
     /// The image's `path` (e.g. `etc/passwd`) from its topmost layer that has it, read with the
@@ -703,6 +847,10 @@ pub(crate) fn root_out(sb: &str, script: &str) -> String {
 
 /// A secret httpbin can check: the base64 of `user:real-secret-xyz`, for `Authorization: Basic`.
 pub(crate) const BASIC_SECRET: &str = "dXNlcjpyZWFsLXNlY3JldC14eXo=";
+
+/// A guest shell command printing httpbin.org's first IPv4 address.
+pub(crate) const HTTPBIN_IP: &str =
+    "nslookup httpbin.org 2>/dev/null | awk '/^Address/ && $NF !~ /:/ {print $NF}' | head -n 1";
 
 /// Whether httpbin accepts `Authorization: Basic $VAR` from sandbox `sb` as the password `pass`
 /// of `user`. smolvm (1.35+) scrubs an injected value out of what the host sends back, so an echo

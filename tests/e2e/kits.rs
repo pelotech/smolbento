@@ -21,18 +21,7 @@ pub(crate) fn real_shell_kit_runs_dockerd_across_restarts() {
     let mut e = E2e::new("dock");
     e.real_agent_kits();
     e.vars.push(("SMOLBENTO_DOCKER", "true".into()));
-    let ws = e.workspace();
-    e.ok(&[
-        "create",
-        "shell",
-        ws.to_str().unwrap(),
-        "--name",
-        &e.name,
-        "--cpus",
-        "1",
-        "-m",
-        "2g",
-    ]);
+    e.create_real_kit("shell");
     assert_eq!(e.state(), "running");
     let inspect = e.ok(&["inspect", &e.name, "--json"]);
     assert!(
@@ -46,15 +35,7 @@ pub(crate) fn real_shell_kit_runs_dockerd_across_restarts() {
             .success()
     };
     // dockerd starts in the background: wait for it, as an agent would.
-    let wait = || {
-        for _ in 0..90 {
-            if docker_info() {
-                return true;
-            }
-            std::thread::sleep(std::time::Duration::from_secs(1));
-        }
-        false
-    };
+    let wait = || wait_until(90, docker_info);
     assert!(
         wait(),
         "docker info after create:\n{}\n{}",
@@ -97,17 +78,7 @@ pub(crate) fn real_claude_kit_binds_its_api_key_and_seeds_its_settings() {
         "--command",
         "printf sk-ant-e2e-not-a-real-key",
     ]);
-    e.ok(&[
-        "create",
-        "claude",
-        ws.to_str().unwrap(),
-        "--name",
-        &e.name,
-        "--cpus",
-        "1",
-        "-m",
-        "2g",
-    ]);
+    e.create_real_kit("claude");
     let sh = |script: &str| out_text(&e.sh(&e.name, script));
     let settings = sh("cat ~/.claude/settings.json");
     assert!(
@@ -222,10 +193,8 @@ pub(crate) fn local_v3_kit_builds_in_the_builder_sandbox() {
     let e = E2e::new("build");
     // Layers are composed onto the base image, which must then be a registry reference.
     let _reg = Registry::start(&e);
-    let kit = e.dir.path().join("built");
-    std::fs::create_dir_all(&kit).unwrap();
-    std::fs::write(
-        kit.join("built.yaml"),
+    let kit = e.v3_kit_dir(
+        "built",
         r#"# syntax=docker/sandbox-kit:3
 schemaVersion: "3"
 kind: mixin
@@ -237,54 +206,17 @@ build: |
   FROM scratch
   COPY --from=build /out/ /
 "#,
-    )
-    .unwrap();
-    // As sbx takes it: a v3 kit in a file called `spec.yaml`, without the syntax line.
-    let plain = e.dir.path().join("plain");
-    std::fs::create_dir_all(&plain).unwrap();
-    std::fs::write(
-        plain.join("spec.yaml"),
-        r#"schemaVersion: "3"
-kind: mixin
-displayName: Some kit
-description: Something
-
-capabilities:
-  - type: com.docker.sandbox/agent-context@2
-    config:
-      content: |
-        Something something
-"#,
-    )
-    .unwrap();
-    e.create_with_kits(&[kit.to_str().unwrap(), plain.to_str().unwrap()]);
+    );
+    e.create_with_kits(&[&kit]);
     assert_eq!(
         root_out(&e.name, "cat /opt/e2e-built/hello"),
         "built in the builder\n"
     );
-    // A mixin that gives only `agent-context@2` text has it in the agent file itself, where
-    // the agent reads it at startup, and not in a file the agent may never open.
-    let parent = e.workspace().parent().unwrap().display().to_string();
-    let agents = root_out(&e.name, &format!("cat {parent}/AGENTS.md"));
-    assert!(
-        agents.contains("Something something\n<!-- sbx:kits-section end -->"),
-        "{agents}"
-    );
-    assert!(
-        !root_sh(&e.name, &format!("test -e {parent}/kits-agent-context"))
-            .status
-            .success(),
-        "no per-kit files: {agents}"
-    );
-    let shown = e.ok(&["kit", "inspect", plain.to_str().unwrap()]);
-    assert!(shown.contains("Schema: v3"), "{shown}");
-    assert!(shown.contains("agent-context@2"), "{shown}");
-    let ls = e.ok(&["ls", "--json"]);
-    assert!(!ls.contains("_builder"), "the builder is hidden: {ls}");
 }
 
-/// A kit's `host-mount@1` directory is shared by its sandboxes and outlives them; `--mount`
-/// replaces it with your own directory.
+/// A kit's `host-mount@1` directory is shared by its sandboxes and outlives them. (`--mount`
+/// binding your own directory instead is `mount_binds_a_host_directory_instead_of_the_managed_one`
+/// in `src/cli/request_tests.rs`.)
 #[test]
 #[ignore = "boots real VMs and pulls debian; run with `just e2e`"]
 pub(crate) fn kit_host_mount_shared_and_kept() {
@@ -317,27 +249,11 @@ pub(crate) fn kit_host_mount_shared_and_kept() {
             ]),
         ),
     );
-    let (a, b) = (format!("{}-a", e.name), format!("{}-b", e.name));
-    struct Cleanup<'a>([&'a str; 2]);
-    impl Drop for Cleanup<'_> {
-        fn drop(&mut self) {
-            for n in self.0 {
-                let _ = smolvm_command()
-                    .args(["machine", "delete", "-f", "-n", &format!("sbx-{n}")])
-                    .output();
-            }
-        }
-    }
-    let _cleanup = Cleanup([&a, &b]);
-    let create = |name: &str, flags: &[&str]| e.create(name, &[flags, &[&kit]].concat());
-    let mounts = |name: &str| -> serde_json::Value {
-        let out = e.ok(&["inspect", "--json", name]);
-        serde_json::from_str::<serde_json::Value>(&out).unwrap()["mounts"].clone()
-    };
-
     // The agent in one sandbox writes; another sandbox of the same kit reads it.
-    create(&a, &[]);
-    create(&b, &[]);
+    let (a, b) = (&e.name, format!("{}-b", e.name));
+    let _b = Machines(vec![b.clone()]);
+    e.create(a, &[&kit]);
+    e.create(&b, &[&kit]);
     // A published kit's directories are keyed by `<registry>/<repository>`, as in sbx.
     let r: oci_client::Reference = kit.parse().unwrap();
     let managed = smolbento::kits::host_mount::managed_dir(
@@ -345,27 +261,19 @@ pub(crate) fn kit_host_mount_shared_and_kept() {
         &format!("{}/{}", r.registry(), r.repository()),
         SHARED,
     );
-    assert_eq!(mounts(&a)[SHARED], managed.to_str().unwrap());
+    let inspect: serde_json::Value =
+        serde_json::from_str(&e.ok(&["inspect", "--json", a])).unwrap();
+    assert_eq!(inspect["mounts"][SHARED], managed.to_str().unwrap());
     let note = format!("{SHARED}/note");
-    e.sh_ok(&a, &format!("echo from-a > {note}"));
+    e.sh_ok(a, &format!("echo from-a > {note}"));
     assert_eq!(e.ok(&["exec", &b, "cat", &note]), "from-a\n");
 
     // Removing both sandboxes keeps the directory and its file.
-    e.ok(&["rm", "-f", &a, &b]);
+    e.ok(&["rm", "-f", a, &b]);
     assert_eq!(
         std::fs::read_to_string(managed.join("note")).unwrap(),
         "from-a\n"
     );
-
-    // `--mount` binds a directory of yours instead.
-    let mine = e.dir.path().join("mine");
-    std::fs::create_dir_all(&mine).unwrap();
-    let mine = mine.canonicalize().unwrap();
-    std::fs::write(mine.join("note"), "from-host\n").unwrap();
-    let bind = format!("{}:{SHARED}", mine.display());
-    create(&e.name, &["--mount", &bind]);
-    assert_eq!(e.ok(&["exec", &e.name, "cat", &note]), "from-host\n");
-    assert_eq!(mounts(&e.name)[SHARED], mine.to_str().unwrap());
 }
 
 /// The keychain smolbento's secret store uses here (src/secrets/store.rs `platform`): macOS
@@ -469,10 +377,8 @@ pub(crate) fn local_kit_builds_from_a_registry_that_needs_a_login() {
         err_text(&out)
     );
 
-    let kit = e.dir.path().join("dhi");
-    std::fs::create_dir_all(&kit).unwrap();
-    std::fs::write(
-        kit.join("dhi.yaml"),
+    let kit = e.v3_kit_dir(
+        "dhi",
         r#"# syntax=docker/sandbox-kit:3
 schemaVersion: "3"
 kind: mixin
@@ -483,9 +389,8 @@ build: |
   FROM scratch
   COPY --from=base /etc/os-release /opt/e2e-dhi/os-release
 "#,
-    )
-    .unwrap();
-    e.create_with_kits(&[kit.to_str().unwrap()]);
+    );
+    e.create_with_kits(&[&kit]);
     let release = root_out(&e.name, "cat /opt/e2e-dhi/os-release");
     assert!(
         release.contains(r#"VERSION_CODENAME="trixie""#),
@@ -500,12 +405,14 @@ pub(crate) fn install_phase_network_closes_after_install() {
     e.ok(&["policy", "init", "deny-all"]);
     let reg = Registry::start(&e);
     // During install: httpbin.org by name, then by the IP it resolved to (any HTTP answer).
-    let probe = r#"set -e
+    let probe = format!(
+        r#"set -e
 wget -q -T 15 -O /dev/null https://httpbin.org
-ip=$(nslookup httpbin.org 2>/dev/null | awk '/^Address/ && $NF !~ /:/ {print $NF}' | head -n 1)
+ip=$({HTTPBIN_IP})
 [ -n "$ip" ]
 wget -S -T 15 -O /dev/null "http://$ip/" 2>&1 | grep -q 'HTTP/'
-echo "$ip" > /etc/e2e-install-ip"#;
+echo "$ip" > /etc/e2e-install-ip"#
+    );
     let kit = reg.push(
         "install-net",
         Image::empty(),
@@ -554,16 +461,7 @@ echo "$ip" > /etc/e2e-install-ip"#;
 #[ignore = "boots real VMs and needs httpbin.org; run with `just e2e`"]
 pub(crate) fn install_only_credential_is_gone_after_install() {
     let e = E2e::new("instcred");
-    e.ok(&[
-        "secret",
-        "set-custom",
-        "--host",
-        "httpbin.org",
-        "--env",
-        "E2E_TOK",
-        "--command",
-        &format!("printf {BASIC_SECRET}"),
-    ]);
+    e.httpbin_secret("E2E_TOK");
     let reg = Registry::start(&e);
     let kit = reg.push(
         "install-cred",
@@ -610,14 +508,14 @@ pub(crate) fn install_only_credential_is_gone_after_install() {
 pub(crate) fn kit_add_applies_network_and_hooks_live() {
     let e = E2e::new("kitadd");
     // A v2 mixin is added below: a v2 workload.
-    e.create_alpine_v2();
+    e.create_alpine_as(&e.v2_shell(), "apk add -q bash");
     e.ok(&["policy", "init", "deny-all"]);
     e.ok(&["stop", &e.name]); // allow-all -> restricted applies on the next start
     e.ok(&["start", &e.name]);
     assert!(!reachable(&e, "https://httpbin.org"), "deny-all blocks");
     let boot = root_out(&e.name, "cat /proc/sys/kernel/random/boot_id");
 
-    let kit = e.kit_dir(
+    let kit = e.v2_kit_dir(
         "e2e-add",
         r#"schemaVersion: "2"
 kind: mixin
@@ -801,7 +699,7 @@ pub(crate) fn numeric_image_user_runs_as_its_account() {
 #[ignore = "boots real VMs and pulls alpine; run with `just e2e`"]
 pub(crate) fn failing_startup_hook_warns_and_the_sandbox_runs() {
     let e = E2e::new("startfail");
-    let kit = e.kit_dir(
+    let kit = e.v2_kit_dir(
         "e2e-fail-start",
         r#"schemaVersion: "2"
 kind: mixin
@@ -844,7 +742,7 @@ setup:
 #[ignore = "boots real VMs and pulls alpine; run with `just e2e`"]
 pub(crate) fn v2_startup_hook_runs_as_agent_by_default() {
     let e = E2e::new("v2user");
-    let kit = e.kit_dir(
+    let kit = e.v2_kit_dir(
         "e2e-v2-user",
         r#"schemaVersion: "2"
 kind: mixin
@@ -874,7 +772,7 @@ setup:
 #[ignore = "boots real VMs and pulls alpine; run with `just e2e`"]
 pub(crate) fn mixin_agent_context_sits_beside_the_workspace() {
     let e = E2e::new("ctx");
-    let kit = e.kit_dir(
+    let kit = e.v2_kit_dir(
         "e2e-ctx",
         r#"schemaVersion: "2"
 kind: mixin
@@ -984,100 +882,23 @@ pub(crate) fn kit_args_reach_typed_config_fields() {
     assert_eq!(root_out(&e.name, "cat /var/tmp/cfg-args"), "port 8123");
 }
 
-/// sbx #6, #8, #9: kit argument errors stop `create` before any machine is made.
+/// As in sbx: a local kit is a path, here `../e2e-path` from the workspace. (Kit argument and kit
+/// reference errors are unit tests: `src/kits/resolve_tests.rs`, `src/kits/load.rs`,
+/// `src/cli/kit_tests.rs`, `src/cli/run_tests.rs`, `src/cli/lifecycle_tests.rs`.)
 #[test]
 #[ignore = "runs bento against smolvm; run with `just e2e`"]
-pub(crate) fn kit_arg_errors_stop_create() {
-    let e = E2e::new("args");
-    let ws = e.workspace();
-    let ws = ws.to_str().unwrap();
-    let fails = |args: &[&str], want: &str| {
-        let out = e.sbt(args);
-        let err = err_text(&out);
-        assert!(!out.status.success(), "{args:?} fails");
-        assert!(err.contains(want), "{args:?}: want {want:?} in:\n{err}");
-        assert_eq!(e.state(), "absent", "{args:?} made no sandbox");
-    };
-    // `shell` is a kit too (sbx 0.53: "no kit declares this argument").
-    fails(
-        &["create", "shell", ws, "--name", &e.name, "--kit-arg", "a=1"],
-        "unknown kit argument a",
+pub(crate) fn kit_validate_and_inspect_take_a_relative_path() {
+    let e = E2e::new("relkit");
+    e.v2_kit_dir(
+        "e2e-path",
+        "schemaVersion: \"2\"\nkind: mixin\nname: e2e-path\n",
     );
-    // A v2 mixin needs a v2 workload: the built-in agents are v3 kits.
-    let wl = e.kit_dir(
-        "e2e-wl",
-        "schemaVersion: \"2\"\nkind: sandbox\nname: wl\nsandbox:\n  image: alpine\n  entrypoint: [sh]\n",
-    );
-    let wl = wl.as_str();
-
-    let kit = e.kit_dir(
-        "e2e-args",
-        r#"schemaVersion: "2"
-kind: mixin
-name: e2e-args
-args:
-  opt:
-    description: optional, no default
-  num:
-    default: 5
-    enum: [5, 6]
-setup:
-  install:
-    - command: "echo ${{ kit.args.opt }} ${{ kit.args.num }}"
-"#,
-    );
-    let kit = kit.as_str();
-    fails(
-        &[
-            "create", "-t", "alpine", "--kit", kit, wl, ws, "--name", &e.name,
-        ],
-        "create-phase kit arg \"opt\" has no resolved value",
-    );
-    // An empty value is a value, and unquoted numbers are strings.
-    e.ok(&["kit", "validate", kit, "--kit-arg", "opt="]);
-
-    // As in sbx: a local kit is a path (`../e2e-args` from the workspace).
-    let out = e.ok(&["kit", "validate", "../e2e-args", "--kit-arg", "opt="]);
-    assert_eq!(out, "✓ ../e2e-args — valid\n");
-    let out = e.ok(&[
-        "kit",
-        "validate",
-        "../e2e-args",
-        "--json",
-        "--kit-arg",
-        "opt=",
-    ]);
-    let v: serde_json::Value = serde_json::from_str(&out).unwrap();
-    assert_eq!(v["valid"], true, "{out}");
-    let out = e.ok(&["kit", "inspect", "../e2e-args"]);
+    let out = e.ok(&["kit", "validate", "../e2e-path"]);
+    assert_eq!(out, "✓ ../e2e-path — valid\n");
+    let out = e.ok(&["kit", "inspect", "../e2e-path"]);
     assert!(
-        out.starts_with("Name: e2e-args\nKind: mixin\nSchema: v2\n"),
+        out.starts_with("Name: e2e-path\nKind: mixin\nSchema: v2\n"),
         "{out}"
-    );
-    // Where the agent goes, a bare word is an agent even with that directory present; where
-    // only a kit goes, the directory is read (here an empty one, so it isn't a kit).
-    std::fs::create_dir_all(e.workspace().join("e2e-args")).unwrap();
-    fails(
-        &["create", "e2e-args", ws, "--name", &e.name],
-        "unknown agent \"e2e-args\"",
-    );
-    fails(
-        &[
-            "create", "shell", ws, "--name", &e.name, "--kit", "e2e-args",
-        ],
-        "isn't a kit: no spec.yaml or kit descriptor",
-    );
-    fails(
-        &[
-            "create",
-            "shell",
-            ws,
-            "--name",
-            &e.name,
-            "--kit",
-            "e2e-missing",
-        ],
-        "not a local path and does not look like a registry reference",
     );
 }
 
@@ -1087,7 +908,7 @@ setup:
 pub(crate) fn a_pushed_kit_pulls_and_runs() {
     let e = E2e::new("push");
     let reg = Registry::start(&e);
-    let kit = e.kit_dir(
+    let kit = e.v2_kit_dir(
         "pushed",
         "schemaVersion: \"2\"\nkind: mixin\nname: pushed\n",
     );
@@ -1166,7 +987,7 @@ pub(crate) fn a_signed_kit_verifies_with_its_key() {
     };
     let (key, public) = keypair("signer");
     let (_, other) = keypair("other");
-    let kit = e.kit_dir(
+    let kit = e.v2_kit_dir(
         "signed",
         "schemaVersion: \"2\"\nkind: mixin\nname: signed\n",
     );
@@ -1295,7 +1116,7 @@ pub(crate) fn nix_kit_works_for_an_agent_and_a_workload_image_user() {
     // A workload whose image user is `somebody`, in its own sandbox.
     let workload = "the somebody workload sandbox";
     let wl = format!("{}-wl", e.name);
-    let _wl = Forks(vec![wl.clone()]);
+    let _wl = Machines(vec![wl.clone()]);
     let kit = image_user_kit(&reg, "nix-image-user", "somebody", serde_json::Value::Null);
     e.create(&wl, &["--kit", &nix, &kit]);
     assert_eq!(

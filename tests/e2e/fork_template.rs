@@ -1,56 +1,22 @@
 use super::*;
 
-/// Deletes fork machines the test made, before the parent's `E2e` drops (declare it after).
-pub(crate) struct Forks(pub(crate) Vec<String>);
-
-impl Drop for Forks {
-    fn drop(&mut self) {
-        for n in &self.0 {
-            let _ = smolvm_command()
-                .args(["machine", "delete", "-n", &format!("sbx-{n}"), "-f"])
-                .output();
-        }
-    }
-}
-
 #[test]
 #[ignore = "boots real VMs and needs httpbin.org; run with `just e2e`"]
 pub(crate) fn fork_round_trip() {
     let e = E2e::new("fork");
     let ws = e.workspace();
     let ws = ws.to_str().unwrap();
-    std::fs::write(e.workspace().join("README"), "host\n").unwrap();
-    e.git_ok(&["init", "-q", "-b", "main"]);
-    e.git_ok(&["add", "README"]);
-    e.git_ok(&["commit", "-q", "-m", "host commit"]);
+    e.git_repo();
     e.ok(&["policy", "init", "balanced"]);
-    e.ok(&[
-        "secret",
-        "set-custom",
-        "--host",
-        "httpbin.org",
-        "--env",
-        "TOK",
-        "--command",
-        &format!("printf {BASIC_SECRET}"),
-    ]);
+    e.httpbin_secret("TOK");
 
     e.create_clone();
 
-    let guest_commit = |sb: &str, msg: &str| {
-        e.sh_ok(
-            sb,
-            &format!(
-                "echo {msg} >> README && git -c user.name=a -c user.email=a@a \
-                 -c commit.gpgsign=false commit -q -am {msg}"
-            ),
-        );
-    };
     guest_root(&e.name, "echo before > /root/before");
-    guest_commit(&e.name, "before-fork");
+    e.guest_commit(&e.name, "before-fork");
 
     // Guard the predicted names first: a partial failure still cleans up the copy it made.
-    let forks = Forks(vec![
+    let forks = Machines(vec![
         format!("{}-fork-1", e.name),
         format!("{}-fork-2", e.name),
     ]);
@@ -109,7 +75,7 @@ pub(crate) fn fork_round_trip() {
         "the fork's secret after a restart"
     );
 
-    guest_commit(f1, "in-fork-1");
+    e.guest_commit(f1, "in-fork-1");
     e.git_ok(&["fetch", "-q", &format!("sandbox-{f1}")]);
     let log = e.git_ok(&["log", "--format=%s", "-1", &format!("sandbox-{f1}/main")]);
     assert_eq!(log, "in-fork-1\n");
@@ -132,17 +98,6 @@ pub(crate) fn fork_round_trip() {
         let remote = format!("sandbox-{n}");
         assert!(!remotes.lines().any(|r| r == remote), "{remote} removed");
     }
-
-    // A sandbox with a writable host folder can't be forked: the copies would share it.
-    let m = E2e::new("forkmnt");
-    m.create_alpine();
-    let out = m.sbt(&["fork", &m.name]);
-    let err = err_text(&out);
-    assert!(
-        !out.status.success(),
-        "fork of a host-mounted sandbox fails"
-    );
-    assert!(err.contains("--clone"), "{err}");
 }
 
 #[test]
@@ -168,7 +123,7 @@ pub(crate) fn template_round_trip() {
 
     // A second sandbox from it has the file and the deletion.
     let copy = format!("{}-copy", e.name);
-    let _guard = Forks(vec![copy.clone()]);
+    let _guard = Machines(vec![copy.clone()]);
     let ws = e.workspace();
     e.create(&copy, &["-t", "e2e-tpl:v1", "--pull", "never", "shell"]);
     let got = e.sh_ok(

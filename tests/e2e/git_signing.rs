@@ -3,16 +3,6 @@
 use super::bridge_agent::{ThrowawayAgent, guest_sign};
 use super::*;
 
-/// `alpine/git` (git and OpenSSH, which the kit's steps need from the first start) with an
-/// `agent` account, as an image that idles in a shell.
-fn git_image() -> Image {
-    let base = Image::pull("alpine/git");
-    let mut image = base.clone().with_agent_account(&base);
-    image.config["config"]["Entrypoint"] = serde_json::Value::Null;
-    image.config["config"]["Cmd"] = serde_json::json!(["/bin/sh"]);
-    image
-}
-
 /// Makes the test's workspace a repository with a git identity of its own (what `git-identity@1`
 /// reads, whatever yours is) and, with `remote`, an `origin`.
 fn workspace_repo(e: &E2e, remote: bool) {
@@ -29,10 +19,10 @@ fn workspace_repo(e: &E2e, remote: bool) {
     }
 }
 
-/// The built-in `shell` agent on `git_image`, with the kit.
+/// The built-in `shell` agent on [`Image::git_agent`] (git and OpenSSH, which the kit's steps
+/// need from the first start), with the kit.
 fn create_shell(e: &E2e) {
-    let archive = e.dir.path().join("git-image.tar");
-    git_image().save_oci(&archive);
+    let archive = Image::git_agent_archive();
     let head = [
         "-t",
         archive.to_str().unwrap(),
@@ -96,7 +86,7 @@ pub(crate) fn git_signing_gives_a_workload_agent_git_signatures_only() {
     agent.serve_to(&mut e);
     workspace_repo(&e, true);
     let reg = Registry::start(&e);
-    let mut image = git_image();
+    let mut image = Image::git_agent();
     image.config["config"]["User"] = "agent".into();
     let workload = reg.push(
         "git-workload",

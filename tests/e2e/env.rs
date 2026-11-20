@@ -63,7 +63,7 @@ pub(crate) fn sbx_sandbox_variables_reach_the_agent_exec_and_forks() {
         "apk add -q bash && install -d -o agent /home/agent/workspace",
     );
     let fork = format!("{}-fork-1", m.name);
-    let forks = Forks(vec![fork.clone()]);
+    let forks = Machines(vec![fork.clone()]);
     assert_eq!(m.ok(&["fork", &m.name]).trim(), fork);
     let parent = sbx_vars(&m.sh_ok(&m.name, SBX_VARS));
     let child = sbx_vars(&m.sh_ok(&fork, SBX_VARS));

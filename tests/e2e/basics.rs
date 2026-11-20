@@ -146,10 +146,7 @@ pub(crate) fn policy_changes_apply_on_start_and_live() {
     assert!(!reachable(&e, "https://httpbin.org"), "deny-all blocks");
     e.ok(&["policy", "allow", "network", "httpbin.org"]);
     assert!(reachable(&e, "https://httpbin.org"), "live allow");
-    let ip = e.sh_ok(
-        &e.name,
-        "nslookup httpbin.org 2>/dev/null | awk '/^Address/ && $NF !~ /:/ {print $NF}' | head -n 1",
-    );
+    let ip = e.sh_ok(&e.name, HTTPBIN_IP);
     let ip = ip.trim();
     assert!(!ip.is_empty(), "httpbin.org resolved");
     assert!(http_answers(&e, ip), "live allow reaches {ip}");
@@ -182,7 +179,7 @@ pub(crate) fn policy_changes_apply_on_start_and_live() {
 pub(crate) fn ports_publish_live() {
     let e = E2e::new("port");
     e.create_alpine();
-    smolvm(&[
+    smolvm_ok(&[
         "machine",
         "exec",
         "--name",
@@ -211,16 +208,7 @@ pub(crate) fn ports_publish_live() {
 pub(crate) fn secrets_are_placeholders_in_the_guest() {
     let e = E2e::new("sec");
     e.ok(&["policy", "init", "balanced"]);
-    e.ok(&[
-        "secret",
-        "set-custom",
-        "--host",
-        "httpbin.org",
-        "--env",
-        "TOK",
-        "--command",
-        &format!("printf {BASIC_SECRET}"),
-    ]);
+    e.httpbin_secret("TOK");
     e.create_alpine();
     let seen = e.sh_ok(&e.name, "printf %s \"$TOK\"");
     assert!(seen.starts_with("SMOL_PLACEHOLDER_"), "{seen}");
@@ -251,37 +239,14 @@ pub(crate) fn secrets_are_placeholders_in_the_guest() {
     assert!(!basic_auth_ok(&e, &e.name, "TOK", "real-secret-xyz"));
 }
 
-/// Runs `script` as root in sandbox `sb`, with `bento smolvm` (not `bento exec`) so it works before
-/// setup.
-pub(crate) fn root_sh(sb: &str, script: &str) -> std::process::Output {
-    let machine = format!("sbx-{sb}");
-    let args = [
-        "machine", "exec", "--name", &machine, "-u", "root", "--", "sh", "-c", script,
-    ];
-    smolvm_command().args(args).output().unwrap()
-}
-
-/// `root_sh` that must succeed.
-pub(crate) fn guest_root(sb: &str, script: &str) {
-    let out = root_sh(sb, script);
-    assert!(
-        out.status.success(),
-        "{script} in {sb}:\n{}",
-        err_text(&out)
-    );
-}
-
 /// A create whose first start fails removes the sandbox, and the remote `--clone` added with it:
-/// Alpine has no `agent` user or git, so the clone inside the VM fails.
+/// this Alpine has no git, so the clone inside the VM fails.
 #[test]
 #[ignore = "boots real VMs; run with `just e2e`"]
 pub(crate) fn a_failed_clone_create_removes_the_sandbox() {
     let e = E2e::new("clonefail");
     let remote = format!("sandbox-{}", e.name);
-    std::fs::write(e.workspace().join("README"), "host\n").unwrap();
-    e.git_ok(&["init", "-q", "-b", "main"]);
-    e.git_ok(&["add", "README"]);
-    e.git_ok(&["commit", "-q", "-m", "host commit"]);
+    e.git_repo();
 
     let archive = Image::alpine_agent_archive();
     let head = ["--clone", "-t", archive.to_str().unwrap(), "shell"];
@@ -304,10 +269,7 @@ pub(crate) fn clone_round_trip() {
     let ws = e.workspace();
     let ws = ws.to_str().unwrap();
     let remote = format!("sandbox-{}", e.name);
-    std::fs::write(e.workspace().join("README"), "host\n").unwrap();
-    e.git_ok(&["init", "-q", "-b", "main"]);
-    e.git_ok(&["add", "README"]);
-    e.git_ok(&["commit", "-q", "-m", "host commit"]);
+    e.git_repo();
     e.git_ok(&[
         "remote",
         "add",
@@ -341,16 +303,7 @@ pub(crate) fn clone_round_trip() {
     );
     let tok = e.sh_ok(&e.name, "printf %s \"$TOK\"");
     assert!(tok.starts_with("SMOL_PLACEHOLDER_"), "{tok}");
-    let guest_commit = |msg: &str| {
-        e.sh_ok(
-            &e.name,
-            &format!(
-                "echo {msg} >> README && git -c user.name=a -c user.email=a@a \
-                 -c commit.gpgsign=false commit -q -am {msg}"
-            ),
-        );
-    };
-    guest_commit("guest-one");
+    e.guest_commit(&e.name, "guest-one");
     e.ok(&["exec", &e.name, "git", "-C", ws, "tag", "v9.9.9"]);
     assert_eq!(
         std::fs::read_to_string(e.workspace().join("README")).unwrap(),
@@ -373,7 +326,7 @@ pub(crate) fn clone_round_trip() {
     assert!(config.contains("u:tok@example.com"), "{config}");
 
     // Fetching a stopped sandbox starts it, fetches and stops it again; the clone survives.
-    guest_commit("guest-two");
+    e.guest_commit(&e.name, "guest-two");
     e.ok(&["stop", &e.name]);
     e.git_ok(&["fetch", "-q", &remote]);
     assert_eq!(e.state(), "stopped");

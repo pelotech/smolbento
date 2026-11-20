@@ -210,11 +210,11 @@ pub(crate) fn host_services_serve_a_detached_sandbox_and_are_removed_with_it() {
 
     // `smolvm machine delete` gives no hook: the next state-changing command sweeps (not `ls`).
     let second = format!("{}-b", e.name);
-    let _cleanup = Forks(vec![second.clone()]);
+    let _cleanup = Machines(vec![second.clone()]);
     let archive = Image::alpine_agent_archive();
     e.create(&second, &["-t", archive.to_str().unwrap(), "shell"]);
     assert!(!unit_files(&e, &second).is_empty());
-    smolvm(&["machine", "delete", "-n", &format!("sbx-{second}"), "-f"]);
+    smolvm_ok(&["machine", "delete", "-n", &format!("sbx-{second}"), "-f"]);
     e.ok(&["ls"]);
     assert!(!unit_files(&e, &second).is_empty(), "ls is read-only");
     let diagnose = e.sbt(&["diagnose"]);
@@ -346,12 +346,13 @@ pub(crate) fn built_in_agent_lists_and_signs_but_cannot_remove_keys() {
     assert!(agent.has_key(), "the key is still in the agent");
 }
 
-/// Kit grants: a `sign: [git]` mixin signs only git signatures; an install-only grant reaches the
-/// install hooks that declare `SSH_AUTH_SOCK` but not the workload; a v3 workload without a grant
-/// gets no agent.
+/// Kit grants: an install-only grant reaches the install hooks that declare `SSH_AUTH_SOCK` but
+/// not the workload. (A `sign: [git]` grant is checked by
+/// `git_signing_gives_a_workload_agent_git_signatures_only`; no grant, no agent by
+/// `a_v3_workload_without_a_grant_gets_no_agent` in `src/provision/tests.rs`.)
 #[test]
 #[ignore = "boots real VMs and pulls alpine; run with `just e2e`"]
-pub(crate) fn kit_ssh_agent_grants_limit_signing_and_phases() {
+pub(crate) fn kit_ssh_agent_install_grant_reaches_only_install_hooks() {
     let mut e = E2e::new("sshkit");
     let agent = ThrowawayAgent::start(&e, 2);
     agent.serve_to(&mut e);
@@ -372,18 +373,6 @@ pub(crate) fn kit_ssh_agent_grants_limit_signing_and_phases() {
             ]),
         ),
     );
-    let git_only = reg.push(
-        "ssh-git",
-        Image::empty(),
-        descriptor(
-            "mixin",
-            &["e2e-ssh-git"],
-            serde_json::json!([
-                {"type": "com.docker.sandbox/ssh-agent@1",
-                 "config": {"phase": "runtime", "unrestricted": false, "sign": ["git"]}},
-            ]),
-        ),
-    );
     let install_only = reg.push(
         "ssh-install",
         Image::empty(),
@@ -400,30 +389,13 @@ pub(crate) fn kit_ssh_agent_grants_limit_signing_and_phases() {
             ]),
         ),
     );
-    let create = |name: &str, mixin: Option<&str>| match mixin {
-        Some(m) => e.create(name, &["--kit", m, &workload]),
-        None => e.create(name, &[&workload]),
-    };
-    let (git, inst) = (format!("{}-git", e.name), format!("{}-inst", e.name));
-    let _cleanup = Forks(vec![git.clone(), inst.clone()]);
-    let env = "echo ${SSH_AUTH_SOCK-unset}";
-
-    create(&git, Some(&git_only));
-    let signed = guest_sign(&e, &git, "git");
-    assert!(signed.status.success(), "sign -n git: {signed:?}");
-    let refused = guest_sign(&e, &git, "file");
-    assert!(!refused.status.success(), "sign -n file is refused");
-
-    create(&inst, Some(&install_only));
-    let during = root_out(&inst, "cat /etc/e2e-install-keys");
+    e.create(&e.name, &["--kit", &install_only, &workload]);
+    let during = root_out(&e.name, "cat /etc/e2e-install-keys");
     assert!(
         during.contains(&agent.comment),
         "install hooks list keys: {during}"
     );
-    assert_eq!(e.sh_ok(&inst, env), "unset\n", "not at runtime");
-
-    create(&e.name, None);
-    let none = format!("{env}; test -e /run/ssh-agent.sock && echo socket || true");
-    assert_eq!(e.sh_ok(&e.name, &none), "unset\n", "no grant, no agent");
+    let env = "echo ${SSH_AUTH_SOCK-unset}";
+    assert_eq!(e.sh_ok(&e.name, env), "unset\n", "not at runtime");
     assert!(agent.has_key(), "the key is still in the agent");
 }
