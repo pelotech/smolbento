@@ -98,6 +98,7 @@ smolbento-only:
 | Host services | Per-port `host.docker.internal` when the policy allows `localhost:PORT`, live; a blocked request gets `403 Approval required…` | Live `host.docker.internal`, but a `localhost` rule opens **every** port on the host's `127.0.0.1` (smolvm can't open one port), not `::1`. More below. |
 | Published ports | Any host IP | Loopback only: `127.0.0.1` and `[::1]` |
 | Automatic publishing | None: ports are published on request (`sbx ports --publish`) | None. smolvm's `--auto-ports` (publish every port a guest listens on) isn't used: sbx publishes on request, and auto-publishing would open ports without the user asking |
+| `cp` of a directory out of a sandbox | As `docker cp`: into an existing directory, merging | Placed the same way, but refused if the copy's target already exists: it's unpacked whole and moved into place, never merged |
 | Single-file `:ro` mounts | Supported | Directories only (smolvm mounts directories) |
 | Machine names | `.` allowed | No `--`, no trailing `-` (smolvm rules) |
 | Daemon | `sandboxd` | None; each command talks to smolvm directly |

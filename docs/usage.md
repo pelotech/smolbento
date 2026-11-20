@@ -417,8 +417,9 @@ bento cp -L ./linked-file claude-myrepo:/tmp/f
 ```
 
 One side must be `SANDBOX:/absolute/path`; sandbox-to-sandbox copies aren't supported. A directory
-copies in like `cp -r`, with symlinks copied as the files they point to. Out of a sandbox, only
-single files copy.
+copies in like `cp -r`, with symlinks copied as the files they point to. A directory copies out as
+`docker cp` places it: as the destination when that doesn't exist, else into it under its own name,
+with symlinks kept as links. It never merges into a directory that's already there.
 
 ## List
 

@@ -76,7 +76,12 @@ pub fn cp<R: Runner>(ctx: &mut Ctx<R>, a: &CpArgs) -> Result<i32> {
     provision::ensure_running(ctx, &mut sb)?;
     let guest = format!("{}:{guest_path}", name::machine_name(sandbox_name));
     if sandbox_is_src {
-        ctx.vm.cp(&guest, &a.dst)?;
+        // smolvm's cp downloads single files only: a directory comes out as an archive.
+        if ctx.vm.is_dir(&sb.machine, guest_path) {
+            copy_dir_out(ctx, &sb.machine, guest_path, &ctx.cwd.join(&a.dst))?;
+        } else {
+            ctx.vm.cp(&guest, &a.dst)?;
+        }
     } else {
         let src = if a.follow_link {
             Path::new(&a.src)
@@ -90,6 +95,51 @@ pub fn cp<R: Runner>(ctx: &mut Ctx<R>, a: &CpArgs) -> Result<i32> {
         ctx.vm.cp(&src, &guest)?;
     }
     Ok(0)
+}
+
+/// Copies the sandbox's directory `src` to the host as `docker cp` does: as `dst` when that
+/// doesn't exist, else into it as `dst/<name>`. It never merges into an existing directory. The
+/// archive comes from the guest, so it's unpacked into a fresh directory by the `tar` crate,
+/// which keeps every entry inside it, and moved into place only whole.
+fn copy_dir_out<R: Runner>(ctx: &Ctx<R>, machine: &str, src: &str, dst: &Path) -> Result<()> {
+    let target = if dst.is_dir() {
+        let name = Path::new(src)
+            .file_name()
+            .with_context(|| format!("can't copy {src} into a directory: it has no name"))?;
+        dst.join(name)
+    } else if dst.exists() {
+        bail!(
+            "can't copy the directory {src} to the file {}",
+            dst.display()
+        );
+    } else {
+        dst.to_path_buf()
+    };
+    if target.exists() {
+        bail!(
+            "{} already exists; bento cp doesn't copy a directory into an existing one",
+            target.display()
+        );
+    }
+    let parent = target
+        .parent()
+        .with_context(|| format!("{} has no parent directory", target.display()))?;
+    let staging = tempfile::Builder::new()
+        .prefix(".bento-cp-")
+        .tempdir_in(parent)
+        .with_context(|| format!("creating a temp dir in {}", parent.display()))?;
+    let archive = staging.path().join("archive.tar");
+    ctx.vm
+        .archive(machine, src, &archive)
+        .with_context(|| format!("copying {src} out of the sandbox"))?;
+    let tree = staging.path().join("tree");
+    std::fs::create_dir(&tree).with_context(|| format!("creating {}", tree.display()))?;
+    let file =
+        std::fs::File::open(&archive).with_context(|| format!("opening {}", archive.display()))?;
+    tar::Archive::new(file)
+        .unpack(&tree)
+        .with_context(|| format!("unpacking {src}"))?;
+    std::fs::rename(&tree, &target).with_context(|| format!("moving {src} to {}", target.display()))
 }
 
 #[cfg(test)]
@@ -231,10 +281,32 @@ mod tests {
         assert_eq!(super::super::exit_code(&err), 2);
     }
 
+    /// `machine files list` lists directories only: anything else is a file.
+    fn not_a_dir(t: &TestEnv) {
+        t.runner().fail(
+            &["machine", "files", "--name", "sbx-claude-proj", "list"],
+            "SMOLVM_ERROR",
+            "not a directory",
+        );
+    }
+
+    /// A tar of `entries` (path, content), as `machine files archive` sends a directory.
+    fn tar_of(entries: &[(&str, &str)]) -> Vec<u8> {
+        let mut b = tar::Builder::new(Vec::new());
+        for (path, content) in entries {
+            let mut h = tar::Header::new_gnu();
+            h.set_size(content.len() as u64);
+            h.set_mode(0o644);
+            b.append_data(&mut h, path, content.as_bytes()).unwrap();
+        }
+        b.into_inner().unwrap()
+    }
+
     #[test]
     fn cp_rewrites_sandbox_paths() {
         let mut t = test_env(&[]);
         t.running_proj();
+        not_a_dir(&t);
         t.sbt(&["cp", "./file", "claude-proj:/tmp/file"]).unwrap();
         t.sbt(&["cp", "claude-proj:/etc/hosts", "./hosts"]).unwrap();
         let cps: Vec<String> = t
@@ -249,6 +321,102 @@ mod tests {
                 "machine cp sbx-claude-proj:/etc/hosts ./hosts"
             ]
         );
+    }
+
+    /// A directory comes out as an archive, unpacked as `docker cp` places it: as DST when DST
+    /// doesn't exist, else into DST under its own name.
+    #[test]
+    fn cp_copies_a_directory_out() {
+        let mut t = test_env(&[]);
+        t.running_proj();
+        t.runner()
+            .download(&tar_of(&[("./a.txt", "one"), ("./sub/b.txt", "two")]));
+        let out = t.ctx.cwd.join("out");
+        t.sbt(&["cp", "claude-proj:/w/proj/src", "out"]).unwrap();
+        assert_eq!(std::fs::read_to_string(out.join("a.txt")).unwrap(), "one");
+        assert_eq!(
+            std::fs::read_to_string(out.join("sub/b.txt")).unwrap(),
+            "two"
+        );
+        assert!(
+            t.calls().iter().any(
+                |l| l.starts_with("machine files --name sbx-claude-proj archive /w/proj/src /")
+            ),
+            "{:?}",
+            t.calls()
+        );
+
+        // Into an existing directory: under the source's name.
+        t.sbt(&["cp", "claude-proj:/w/proj/src", "out"]).unwrap();
+        assert_eq!(
+            std::fs::read_to_string(out.join("src/a.txt")).unwrap(),
+            "one"
+        );
+
+        // Never merged into an existing copy, and no temp dir is left behind.
+        let err = t.sbt_err(&["cp", "claude-proj:/w/proj/src", "out"]);
+        assert!(err.contains("already exists"), "{err}");
+        let leftovers: Vec<_> = std::fs::read_dir(&out)
+            .unwrap()
+            .map(|e| e.unwrap().file_name())
+            .filter(|n| n.to_string_lossy().starts_with(".bento-cp-"))
+            .collect();
+        assert!(leftovers.is_empty(), "{leftovers:?}");
+    }
+
+    #[test]
+    fn cp_refuses_a_directory_onto_a_file() {
+        let mut t = test_env(&[]);
+        t.running_proj();
+        t.runner().download(&tar_of(&[("./a.txt", "one")]));
+        std::fs::write(t.ctx.cwd.join("file"), "x").unwrap();
+        let err = t.sbt_err(&["cp", "claude-proj:/w/proj/src", "file"]);
+        assert!(err.contains("to the file"), "{err}");
+        assert_eq!(
+            std::fs::read_to_string(t.ctx.cwd.join("file")).unwrap(),
+            "x"
+        );
+    }
+
+    /// The guest makes the archive: an entry that climbs out of the copy, or writes through a
+    /// link the archive itself planted, lands nowhere outside it.
+    #[test]
+    fn cp_keeps_a_hostile_archive_inside_the_copy() {
+        let mut t = test_env(&[]);
+        t.running_proj();
+        let outside = t.ctx.cwd.join("outside");
+        std::fs::create_dir(&outside).unwrap();
+
+        let mut b = tar::Builder::new(Vec::new());
+        // `../escaped`: written raw, as the tar crate won't build such a path itself.
+        let mut h = tar::Header::new_old();
+        h.as_old_mut().name[..10].copy_from_slice(b"../escaped");
+        h.set_size(1);
+        h.set_mode(0o644);
+        h.set_cksum();
+        b.append(&h, &b"x"[..]).unwrap();
+        // A link to `outside`, then a file written through it.
+        let mut l = tar::Header::new_gnu();
+        l.set_entry_type(tar::EntryType::Symlink);
+        l.set_size(0);
+        b.append_link(&mut l, "./link", &outside).unwrap();
+        let mut f = tar::Header::new_gnu();
+        f.set_size(1);
+        f.set_mode(0o644);
+        b.append_data(&mut f, "./link/planted", &b"x"[..]).unwrap();
+        t.runner().download(&b.into_inner().unwrap());
+
+        let err = t.sbt_err(&["cp", "claude-proj:/w/proj/src", "out"]);
+        assert!(err.contains("unpacking /w/proj/src"), "{err}");
+        assert!(!t.ctx.cwd.join("escaped").exists());
+        assert!(!outside.join("planted").exists());
+        // Refused whole: no partial copy, no temp dir.
+        let left: Vec<_> = std::fs::read_dir(&t.ctx.cwd)
+            .unwrap()
+            .map(|e| e.unwrap().file_name().to_string_lossy().into_owned())
+            .filter(|n| n == "out" || n.starts_with(".bento-cp-"))
+            .collect();
+        assert!(left.is_empty(), "{left:?}");
     }
 
     #[test]

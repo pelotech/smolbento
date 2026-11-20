@@ -493,6 +493,25 @@ impl<R: Runner> Smolvm<R> {
         .map(drop)
     }
 
+    /// Downloads the running machine's directory `src` to the host's `dst` as a tar archive,
+    /// without following its links (smolvm 1.35.4).
+    pub fn archive(&self, name: &str, src: &str, dst: &Path) -> Result<()> {
+        let dst = dst.display().to_string();
+        self.call(args(&[
+            "machine", "files", "--name", name, "archive", src, &dst,
+        ]))
+        .map(drop)
+    }
+
+    /// Whether `path` in the running machine is a directory: `machine files list` lists only
+    /// directories (smolvm 1.35.4), and its error for anything else has no code of its own.
+    pub fn is_dir(&self, name: &str, path: &str) -> bool {
+        self.call(args(&[
+            "machine", "files", "--name", name, "list", path, "--json",
+        ]))
+        .is_ok()
+    }
+
     /// Runs an exec attached to this terminal and returns the command's exit code.
     pub fn exec(&self, spec: &ExecSpec) -> Result<i32> {
         self.runner.interactive(&spec.to_args())
@@ -940,6 +959,8 @@ mod tests {
             .unwrap();
         vm.download("m", "/build/1/kit.tar", Path::new("/c/kit.tar"))
             .unwrap();
+        vm.archive("m", "/w/src", Path::new("/c/src.tar")).unwrap();
+        assert!(vm.is_dir("m", "/w/src"));
         assert_eq!(
             vm.runner().call_lines(),
             vec![
@@ -949,6 +970,8 @@ mod tests {
                 "machine cp /a m:/b",
                 "machine files --name m upload-folder /kit /build/1/ctx",
                 "machine files --name m download /build/1/kit.tar /c/kit.tar",
+                "machine files --name m archive /w/src /c/src.tar",
+                "machine files --name m list /w/src --json",
             ]
         );
     }

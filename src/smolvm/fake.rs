@@ -129,8 +129,8 @@ impl FakeRunner {
         self
     }
 
-    /// Make each `machine files --name M download PATH HOST` write `bytes` to `HOST`, as a real
-    /// download would.
+    /// Make each `machine files --name M download|archive PATH HOST` write `bytes` to `HOST`, as a
+    /// real download would.
     pub fn download(&self, bytes: &[u8]) -> &Self {
         *self.download.borrow_mut() = Some(bytes.to_vec());
         self
@@ -216,9 +216,9 @@ impl Runner for FakeRunner {
         {
             anyhow::bail!("{message}");
         }
-        if let (Some(bytes), [m, files, .., download, _, dst]) =
-            (self.download.borrow().as_ref(), args)
-            && (m.as_str(), files.as_str(), download.as_str()) == ("machine", "files", "download")
+        if let (Some(bytes), [m, files, .., verb, _, dst]) = (self.download.borrow().as_ref(), args)
+            && (m.as_str(), files.as_str()) == ("machine", "files")
+            && matches!(verb.as_str(), "download" | "archive")
         {
             std::fs::write(dst, bytes)?;
         }
