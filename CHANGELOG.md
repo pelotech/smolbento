@@ -1,5 +1,19 @@
 # Changelog
 
+## [0.33.2](https://github.com/pelotech/smolbento/compare/v0.33.1...v0.33.2) (2026-11-20)
+
+
+### Chores
+
+* run the release builds on the release PR and build changes; check darwin on every PR ([#189](https://github.com/pelotech/smolbento/issues/189)) ([2f101cc](https://github.com/pelotech/smolbento/commit/2f101ccfc6a6e548bfb602346472785c66f11cc8))
+
+
+### Tests
+
+* **e2e:** balance CI shards by duration and drop VM checks unit tests prove ([#193](https://github.com/pelotech/smolbento/issues/193)) ([2cb1bb7](https://github.com/pelotech/smolbento/commit/2cb1bb7898dca75421b1d77c29fb758caf0da62f))
+* **e2e:** fix stale ignore reasons and comments; fail an unchecked host services test on CI ([#190](https://github.com/pelotech/smolbento/issues/190)) ([a864c2c](https://github.com/pelotech/smolbento/commit/a864c2cb724ff28a152f6b23e599ac25ea5762e6))
+* **e2e:** pull images once, build the nix kit once, keep the builder ([#192](https://github.com/pelotech/smolbento/issues/192)) ([680eab2](https://github.com/pelotech/smolbento/commit/680eab2c6fa5728f1316651bda3ce9147935607a))
+
 ## [0.33.1](https://github.com/pelotech/smolbento/compare/v0.33.0...v0.33.1) (2026-11-20)
 
 
