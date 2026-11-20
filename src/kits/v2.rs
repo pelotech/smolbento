@@ -5,11 +5,11 @@
 use std::collections::BTreeMap;
 use std::path::Path;
 
-use anyhow::{Context, Result, bail};
+use anyhow::{Context, Result, anyhow, bail};
 use serde::Deserialize;
 use serde_json::{Value, json};
 
-use super::descriptor::{ApiKeyCfg, InjectCfg, ResourcesCfg, TokenEndpoint};
+use super::descriptor::{ApiKeyCfg, ResourcesCfg, TokenEndpoint};
 use crate::kits::model::*;
 use crate::kits::v3::{self, check_name, name_from_source};
 use crate::kits::{AGENT_HOME, CAP_NS};
@@ -83,66 +83,35 @@ fn parse_warn(yaml: &str, dir: &Path) -> Result<(Kit, Vec<String>)> {
             ignored("sandbox.command");
         }
     }
+    // v2's resources, network, ports, volumes and privileged mode are v3 capabilities in another
+    // grammar: each is translated to its v3 config and read by the v3 reader, checks and all.
+    let v3 = |ty: &str, config: Option<Value>| v3::request(format!("{CAP_NS}{ty}"), false, config);
     if let Some(r) = sandbox.resources {
-        caps.push(cap(
+        caps.push(v3(
             "resources@1",
-            CapBody::Resources {
-                cpus: r.cpu.map(|n| n.to_string()),
-                memory: r.memory,
-            },
-        ));
+            Some(json!({"cpu": r.cpu, "memory": r.memory})),
+        )?);
     }
     if let Some(n) = s.permissions.and_then(|p| p.network) {
-        let rule = |host| NetRule {
-            host,
-            methods: vec![],
-            paths: vec![],
-        };
-        caps.push(cap(
-            "network-policy@1",
-            CapBody::Network {
-                install: Rules::default(),
-                runtime: Rules {
-                    allow: n.allow.into_iter().map(rule).collect(),
-                    deny: n.deny.into_iter().map(rule).collect(),
-                },
-            },
-        ));
+        let config = json!({"runtime": {"allow": n.allow, "deny": n.deny}});
+        caps.push(v3("network-policy@1", Some(config))?);
     }
     for c in s.credentials {
         caps.push(cap("credential@1", CapBody::Credential(credential(c)?)));
     }
     for p in s.ports {
-        if p.container == 0 {
-            bail!("ports: container must be 1..65535");
-        }
-        let udp = match p.protocol.as_deref() {
-            None | Some("") | Some("tcp") => false,
-            Some("udp") => true,
-            Some(t) => bail!("ports: protocol must be tcp or udp (got {t:?})"),
-        };
-        caps.push(cap(
-            "port@1",
-            CapBody::Port {
-                container: p.container,
-                udp,
-            },
-        ));
+        let config = json!({"name": p.name, "container": p.container, "transport": p.protocol});
+        caps.push(v3("port@1", Some(config))?);
     }
     for v in s.volumes {
+        // v2 names a tmpfs volume by its type; v3 by a flag.
         let tmpfs = match v.ty.as_deref() {
             None | Some("") => false,
             Some("tmpfs") => true,
             Some(t) => bail!("volumes: type must be empty or tmpfs (got {t:?})"),
         };
-        caps.push(cap(
-            "volume@1",
-            CapBody::Volume {
-                path: v.path,
-                tmpfs,
-                mode: v.mode,
-            },
-        ));
+        let config = json!({"path": v.path, "size": v.size, "tmpfs": tmpfs, "mode": v.mode});
+        caps.push(v3("volume@1", Some(config))?);
     }
     caps.extend(lifecycle(
         s.setup.unwrap_or_default(),
@@ -161,14 +130,10 @@ fn parse_warn(yaml: &str, dir: &Path) -> Result<(Kit, Vec<String>)> {
             ));
         }
         let config = json!({"filename": a.filename, "content": content});
-        caps.push(v3::request(
-            format!("{CAP_NS}agent-context@2"),
-            false,
-            Some(config),
-        )?);
+        caps.push(v3("agent-context@2", Some(config))?);
     }
     if s.security.is_some_and(|s| s.privileged) {
-        caps.push(cap("privileged@1", CapBody::Privileged));
+        caps.push(v3("privileged@1", None)?);
     }
 
     let args = s
@@ -300,25 +265,23 @@ struct NetworkCfg {
     deny: Vec<String>,
 }
 
+/// v2's port grammar (`protocol` where v3 says `transport`); `parse` translates it to `port@1`.
 #[derive(Deserialize)]
 #[serde(deny_unknown_fields)]
-// Some fields are only accepted, so published descriptors parse.
-#[allow(dead_code)]
 struct PortCfg {
     container: u16,
     protocol: Option<String>,
     name: Option<String>,
 }
 
+/// v2's volume grammar (`type: tmpfs` where v3 says `tmpfs: true`); `parse` translates it to
+/// `volume@1`.
 #[derive(Deserialize)]
 #[serde(deny_unknown_fields)]
-// Some fields are only accepted, so published descriptors parse.
-#[allow(dead_code)]
 struct VolumeCfg {
     path: String,
     #[serde(rename = "type")]
     ty: Option<String>,
-    // smolvm volumes are not sized per mount.
     size: Option<String>,
     mode: Option<String>,
 }
@@ -411,7 +374,10 @@ fn credential(c: CredCfg) -> Result<CredReq> {
             let inject = k
                 .inject
                 .into_iter()
-                .map(|i| inject(i, &c.service))
+                .map(|i| {
+                    i.into_inject()
+                        .map_err(|e| anyhow!("credentials: {} {e}", c.service))
+                })
                 .collect::<Result<_>>()?;
             ((!k.name.is_empty()).then_some(k.name), inject)
         }
@@ -429,34 +395,6 @@ fn credential(c: CredCfg) -> Result<CredReq> {
         env,
         inject,
         oauth,
-    })
-}
-
-/// `scheme` is shorthand: `bearer` is `Authorization: Bearer %s`; `basic` is implied by a
-/// username, which the model carries instead.
-fn inject(i: InjectCfg, service: &str) -> Result<Inject> {
-    if i.format.is_some() && i.scheme.is_some() {
-        bail!("credentials: {service} inject sets both format and scheme");
-    }
-    let (mut header, mut format) = (i.header, i.format);
-    match i.scheme.as_deref() {
-        None => {}
-        Some("bearer") => {
-            header.get_or_insert_with(|| "Authorization".to_string());
-            format = Some("Bearer %s".to_string());
-        }
-        Some("basic") => {
-            if i.username.is_none() {
-                bail!("credentials: {service} scheme basic needs a username");
-            }
-        }
-        Some(s) => bail!("credentials: {service} scheme must be bearer or basic (got {s:?})"),
-    }
-    Ok(Inject {
-        domain: i.domain,
-        header,
-        format,
-        basic_user: i.username,
     })
 }
 
@@ -705,6 +643,39 @@ mod tests {
         assert!(c.runtime && !c.install);
         assert_eq!(c.inject[0].header.as_deref(), Some("Authorization"));
         assert_eq!(c.inject[0].format.as_deref(), Some("Bearer %s"));
+    }
+
+    /// Ports, network hosts and volumes are read by the v3 reader, so they get its checks and
+    /// error text, and a bare `*` host means everything (SPEC network-policy@1).
+    #[test]
+    fn ports_network_and_volumes_are_read_as_v3_capabilities() {
+        let err = |body: &str| {
+            let yaml = format!("schemaVersion: \"2\"\nkind: mixin\nname: m\n{body}");
+            format!("{:#}", parse(&yaml, Path::new("/nonexistent")).unwrap_err())
+        };
+        assert_eq!(
+            err("ports:\n  - container: 80\n    protocol: sctp\n"),
+            "capability com.docker.sandbox/port@1: transport must be tcp or udp (got \"sctp\")"
+        );
+        assert_eq!(
+            err("ports:\n  - container: 0\n"),
+            "capability com.docker.sandbox/port@1: container must be 1..65535"
+        );
+        // v2's own grammar: `type` names a tmpfs volume.
+        assert_eq!(
+            err("volumes:\n  - path: /v\n    type: bind\n"),
+            "volumes: type must be empty or tmpfs (got \"bind\")"
+        );
+
+        let yaml = "schemaVersion: \"2\"\nkind: mixin\nname: m\npermissions:\n  network:\n    \
+                    allow: [\"*\", a.com]\n";
+        let k = parse(yaml, Path::new("/nonexistent")).unwrap();
+        let CapBody::Network { install, runtime } = &k.caps[0].body else {
+            panic!()
+        };
+        assert_eq!(install, &Rules::default());
+        let hosts: Vec<_> = runtime.allow.iter().map(|r| r.host.as_str()).collect();
+        assert_eq!(hosts, ["**", "a.com"]);
     }
 
     #[test]

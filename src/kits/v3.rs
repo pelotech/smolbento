@@ -311,8 +311,9 @@ fn cap(item: CapabilityItem, at: &str) -> Result<Cap> {
     request(item.ty, item.optional.unwrap_or(false), item.config)
 }
 
-/// A capability request from its type and config, as `cap` describes; a v2 kit's hooks, files and
-/// agent instructions are built through it too.
+/// A capability request from its type and config, as `cap` describes. A v2 kit's capabilities,
+/// other than its credentials and `files/` copies, are translated to v3 configs and built through
+/// it too.
 pub(crate) fn request(ty: String, optional: bool, config: Option<Value>) -> Result<Cap> {
     let refs = config.as_ref().is_some_and(args::has_ref);
     let body = match body(&ty, config.clone()) {
@@ -716,13 +717,12 @@ fn credential(c: CredCfg) -> Result<CredReq> {
             let inject = k
                 .inject
                 .into_iter()
-                .map(|i| Inject {
-                    domain: i.domain,
-                    header: i.header,
-                    format: i.format,
-                    basic_user: i.username,
+                .enumerate()
+                .map(|(n, i)| {
+                    i.into_inject()
+                        .with_context(|| format!("apiKey.inject[{n}]"))
                 })
-                .collect();
+                .collect::<Result<_>>()?;
             ((!k.name.is_empty()).then_some(k.name), inject)
         }
         None => (None, vec![]),

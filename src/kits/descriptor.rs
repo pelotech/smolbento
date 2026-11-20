@@ -1,6 +1,9 @@
 //! Config shapes that v2 and v3 kit files share.
 
+use anyhow::{Result, bail};
 use serde::Deserialize;
+
+use super::model::Inject;
 
 #[derive(Deserialize)]
 #[serde(rename_all = "camelCase", deny_unknown_fields)]
@@ -22,9 +25,42 @@ pub(super) struct InjectCfg {
     pub(super) domain: String,
     pub(super) header: Option<String>,
     pub(super) format: Option<String>,
-    /// v2 checks it; in v3 `basic` is implied by a username.
     pub(super) scheme: Option<String>,
     pub(super) username: Option<String>,
+}
+
+impl InjectCfg {
+    /// One outbound rewrite rule, as smolvm presents it (credential@1 `apiKey.inject[]`, the same
+    /// in v2 and v3). `header`/`format` set a header. `scheme` is the non-header presentation:
+    /// `bearer` is shorthand for `Authorization: Bearer %s`, and `basic` sends the credential as
+    /// the password of HTTP basic auth for `username`, which a username alone also implies.
+    /// smolvm can present only these two, so any other scheme is refused here rather than
+    /// sending the raw value.
+    pub(super) fn into_inject(self) -> Result<Inject> {
+        if self.format.is_some() && self.scheme.is_some() {
+            bail!("inject sets both format and scheme");
+        }
+        let (mut header, mut format) = (self.header, self.format);
+        match self.scheme.as_deref() {
+            None => {}
+            Some("bearer") => {
+                header.get_or_insert_with(|| "Authorization".to_string());
+                format = Some("Bearer %s".to_string());
+            }
+            Some("basic") => {
+                if self.username.is_none() {
+                    bail!("scheme basic needs a username");
+                }
+            }
+            Some(s) => bail!("scheme must be bearer or basic (got {s:?})"),
+        }
+        Ok(Inject {
+            domain: self.domain,
+            header,
+            format,
+            basic_user: self.username,
+        })
+    }
 }
 
 #[derive(Deserialize)]
