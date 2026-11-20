@@ -321,33 +321,29 @@ pub fn resolve_for(
         );
     }
     check_names(&workload, &mixins)?;
-    let mut workload = workload;
     let mut kit_args = BTreeMap::new();
-    let unordered: Vec<Kit> = std::iter::once(workload.clone())
-        .chain(mixins.iter().cloned())
-        .collect();
-    args.check_unknown(&unordered)?;
-    for k in &unordered {
+    // The workload, then the mixins: as given until `order` sorts the mixins.
+    let mut all: Vec<Kit> = std::iter::once(workload).chain(mixins).collect();
+    args.check_unknown(&all)?;
+    for k in &all {
         // An optional arg with no value and no default stays out: using it is an error.
         kit_args.insert(k.name.clone(), args.for_kit(k)?);
     }
-    let mut mixins = order(&workload, mixins)?;
-    let env = merge_env(std::iter::once(&workload).chain(&mixins), &kit_args);
+    let workload = all.remove(0);
+    let mixins = order(&workload, all)?;
+    let mut all: Vec<Kit> = std::iter::once(workload).chain(mixins).collect();
+    let env = merge_env(&all, &kit_args);
     let mut env_map: BTreeMap<String, String> = env.iter().cloned().collect();
     env_map.insert("HOME".into(), super::AGENT_HOME.into());
     env_map.insert("WORKSPACE".into(), workdir.into());
     // Every declaration is expanded and checked before selection (SPEC-v3 §6, §7.1.1), then
     // groups are selected whole, so nothing after this sees a reference or a skipped group.
     let mut skipped = Vec::new();
-    for k in std::iter::once(&mut workload).chain(mixins.iter_mut()) {
+    for k in &mut all {
         expand_caps(k, &kit_args[&k.name], &env_map).with_context(|| format!("kit {}", k.name))?;
         check_skill_caps(k)?;
         skipped.extend(select_groups(k)?);
     }
-
-    let all: Vec<Kit> = std::iter::once(workload.clone())
-        .chain(mixins.iter().cloned())
-        .collect();
 
     let mut merged = Merged {
         env,
@@ -355,7 +351,7 @@ pub fn resolve_for(
     };
 
     let mut ssh_entries = Vec::new();
-    if matches!(workload.source, Source::Agent(_)) {
+    if matches!(all[0].source, Source::Agent(_)) {
         ssh_entries.push(BUILT_IN);
     }
     for k in &all {

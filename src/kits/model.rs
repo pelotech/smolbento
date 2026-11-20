@@ -397,7 +397,10 @@ pub struct Hook {
     pub clean_env: bool,
 }
 
-#[derive(Debug, Clone, PartialEq, Eq)]
+/// A hook's command, read from a v3 `lifecycle@1` config as a string or an argv list.
+#[derive(Debug, Clone, PartialEq, Eq, Deserialize)]
+// The name a refused command has always been reported under.
+#[serde(untagged, rename = "CommandCfg")]
 pub enum HookCmd {
     /// A string command, run via `sh -c`.
     Shell(String),

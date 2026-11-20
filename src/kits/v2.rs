@@ -511,11 +511,27 @@ struct FileCfg {
 fn lifecycle(s: Setup, dir: &Path, kit: &str, warnings: &mut Vec<String>) -> Result<Vec<Cap>> {
     let mut static_files = |sub: &str, dest: &str| -> Result<Option<Cap>> {
         let root = dir.join(sub);
+        let (paths, symlinks) = crate::kits::artifact::files_under(&root)?;
+        for rel in symlinks {
+            warnings.push(format!(
+                "kit {kit}: {sub}/{} is a symlink; skipped",
+                slashed(&rel)
+            ));
+        }
         let mut files = Vec::new();
-        if root.is_dir() {
-            walk(&root, &root, dest, &mut files, &mut |rel| {
-                warnings.push(format!("kit {kit}: {sub}/{rel} is a symlink; skipped"))
-            })?;
+        for rel in paths {
+            let p = root.join(&rel);
+            let content = std::fs::read(&p).with_context(|| format!("reading {}", p.display()))?;
+            let rel = slashed(&rel);
+            files.push(FileReq {
+                path: match dest {
+                    "" => rel,
+                    _ => format!("{dest}/{rel}"),
+                },
+                content,
+                mode: None,
+                overwrite: true,
+            });
         }
         let l = Lifecycle {
             files,
@@ -559,54 +575,12 @@ fn lifecycle(s: Setup, dir: &Path, kit: &str, warnings: &mut Vec<String>) -> Res
     Ok(caps)
 }
 
-/// Every file under `root`, in path order, targeted at `dest` plus its relative path (the relative
-/// path alone for an empty `dest`). Each
-/// skipped symlink's path relative to `root` goes to `symlink`.
-fn walk(
-    root: &Path,
-    dir: &Path,
-    dest: &str,
-    out: &mut Vec<FileReq>,
-    symlink: &mut dyn FnMut(&str),
-) -> Result<()> {
-    let mut entries = std::fs::read_dir(dir)
-        .with_context(|| format!("reading {}", dir.display()))?
-        .collect::<std::io::Result<Vec<_>>>()?;
-    entries.sort_by_key(|e| e.file_name());
-    for e in entries {
-        let p = e.path();
-        // Symlinks are skipped: following a directory link can loop forever, and a link could
-        // pull in files from outside the kit (sbx rejects `../` traversal for the same reason).
-        let ty = e.file_type()?;
-        if ty.is_dir() {
-            walk(root, &p, dest, out, symlink)?;
-            continue;
-        }
-        let rel = p
-            .strip_prefix(root)?
-            .components()
-            .map(|c| c.as_os_str().to_string_lossy())
-            .collect::<Vec<_>>()
-            .join("/");
-        if ty.is_symlink() {
-            symlink(&rel);
-            continue;
-        }
-        if !ty.is_file() {
-            continue;
-        }
-        let content = std::fs::read(&p).with_context(|| format!("reading {}", p.display()))?;
-        out.push(FileReq {
-            path: match dest {
-                "" => rel,
-                _ => format!("{dest}/{rel}"),
-            },
-            content,
-            mode: None,
-            overwrite: true,
-        });
-    }
-    Ok(())
+/// A relative path written with `/` separators.
+fn slashed(rel: &Path) -> String {
+    rel.components()
+        .map(|c| c.as_os_str().to_string_lossy())
+        .collect::<Vec<_>>()
+        .join("/")
 }
 
 #[cfg(test)]
