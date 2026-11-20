@@ -72,7 +72,7 @@ pub fn pending<'a>(policy: &Policy, rows: &'a [LogRow]) -> Vec<&'a LogRow> {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::policy::{Decision, Policy};
+    use crate::policy::Policy;
 
     fn ev(ts: &str, dest: &str) -> EgressEvent {
         EgressEvent {
@@ -108,8 +108,7 @@ mod tests {
     #[test]
     fn pending_skips_hosts_with_rules() {
         let mut p = Policy::default();
-        p.add_rule(None, Decision::Deny, "b.com", "added", None, None)
-            .unwrap();
+        p.deny(None, "b.com");
         let events = vec![("s1".to_string(), vec![ev("t1", "a.com"), ev("t2", "b.com")])];
         let rows = rows(&events);
         let pending: Vec<&str> = pending(&p, &rows).iter().map(|r| r.host.as_str()).collect();
@@ -145,8 +144,7 @@ mod tests {
     fn a_rule_with_a_port_still_handles_its_host() {
         // Egress log hosts carry no port.
         let mut p = Policy::default();
-        p.add_rule(None, Decision::Allow, "a.com:80", "added", None, None)
-            .unwrap();
+        p.allow(None, "a.com:80");
         let events = vec![("s1".to_string(), vec![ev("t1", "a.com"), ev("t2", "b.com")])];
         let rows = rows(&events);
         let pending: Vec<&str> = pending(&p, &rows).iter().map(|r| r.host.as_str()).collect();

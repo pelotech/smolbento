@@ -2,13 +2,6 @@ use super::*;
 use crate::secrets::{SecretEntry, Source};
 use crate::testutil::*;
 
-fn running(t: &TestEnv, labels: &[(&str, &str)]) {
-    let m = machine_json("sbx-a1", "running", labels);
-    t.runner()
-        .ok(&["machine", "ls", "--json"], &format!("[{m}]"));
-    t.runner().ok(&["machine", "status", "-n", "sbx-a1"], &m);
-}
-
 /// The `machine update` calls that set a whole allow list.
 fn resets(t: &TestEnv) -> Vec<String> {
     updates(t)
@@ -24,7 +17,7 @@ fn updates(t: &TestEnv) -> Vec<String> {
 #[test]
 fn init_saves_and_pushes() {
     let mut t = test_env(&[]);
-    running(&t, &[("sbx.name", "a1")]);
+    t.sandboxes(&[("a1", "running", &[])]);
     t.sbt(&["policy", "init", "deny-all"]).unwrap();
     assert_eq!(
         Policy::load(&t.ctx.paths).unwrap().mode,
@@ -40,7 +33,7 @@ fn init_saves_and_pushes() {
 fn allow_and_rm_push_live() {
     let mut t = test_env(&[]);
     set_policy(&t, "mode = \"deny-all\"");
-    running(&t, &[("sbx.name", "a1")]);
+    t.sandboxes(&[("a1", "running", &[])]);
     t.sbt(&["policy", "allow", "network", "api.x.com,*.npmjs.org"])
         .unwrap();
     let last = updates(&t).pop().unwrap();
@@ -64,14 +57,14 @@ fn allow_and_rm_push_live() {
 #[test]
 fn deny_refuses_a_bound_secret_host() {
     let mut t = test_env(&[]);
-    running(
-        &t,
+    t.sandboxes(&[(
+        "a1",
+        "running",
         &[
-            ("sbx.name", "a1"),
             ("sbx.secrets", "github"),
             ("sbx.credential-hosts", "api.github.com,github.com"),
         ],
-    );
+    )]);
     let mut f = crate::secrets::SecretsFile::default();
     f.set(SecretEntry {
         service: "github".into(),
@@ -92,14 +85,14 @@ fn deny_refuses_a_bound_secret_host() {
 #[test]
 fn deny_refuses_hosts_under_a_wildcard_secret_host() {
     let mut t = test_env(&[]);
-    running(
-        &t,
+    t.sandboxes(&[(
+        "a1",
+        "running",
         &[
-            ("sbx.name", "a1"),
             ("sbx.secrets", "notion-token"),
             ("sbx.credential-hosts", "*.notion.com"),
         ],
-    );
+    )]);
     for deny in ["api.notion.com", "**.notion.com", "*.notion.com"] {
         let err = t.sbt(&["policy", "deny", "network", deny]).unwrap_err();
         let msg = err.to_string();
@@ -420,14 +413,14 @@ fn reset_needs_force_and_refresh_is_unsupported() {
 #[test]
 fn reset_stops_running_sandboxes() {
     let mut t = test_env(&[]);
-    running(&t, &[("sbx.name", "a1")]);
+    t.sandboxes(&[("a1", "running", &[])]);
     t.sbt(&["policy", "reset", "-f"]).unwrap();
     assert!(t.calls().contains(&"machine stop -n sbx-a1".to_string()));
     assert_eq!(Policy::load(&t.ctx.paths).unwrap().mode, None);
 }
 
 fn blocked(t: &TestEnv) {
-    running(t, &[("sbx.name", "a1")]);
+    t.sandboxes(&[("a1", "running", &[])]);
     t.runner().ok(
         &["machine", "egress-events"],
         r#"[{"timestamp":"2026-10-26T10:00:00Z","operation":"resolve","dest":"example.com"},
@@ -489,14 +482,14 @@ fn approval_respond_refuses_to_deny_a_bound_secret_host() {
     set_policy(&t, "mode = \"deny-all\"");
     blocked(&t);
     // Blocked earlier, and since bound to a secret of the same sandbox.
-    running(
-        &t,
+    t.sandboxes(&[(
+        "a1",
+        "running",
         &[
-            ("sbx.name", "a1"),
             ("sbx.secrets", "internal"),
             ("sbx.credential-hosts", "example.com"),
         ],
-    );
+    )]);
     let err = t.sbt_err(&["policy", "approval", "respond", "example.com", "deny"]);
     assert!(err.contains("can't deny example.com"), "{err}");
     let p = Policy::load(&t.ctx.paths).unwrap();
@@ -547,15 +540,7 @@ fn deny_notes_explain_ports_and_cidrs() {
     );
     // The same text as an allow cancels that allow.
     let mut p = Policy::default();
-    p.add_rule(
-        Some("s1"),
-        Decision::Allow,
-        "api.x.com:8080",
-        "added",
-        None,
-        None,
-    )
-    .unwrap();
+    p.allow(Some("s1"), "api.x.com:8080");
     let (_, notes) = deny_notes(&p, Some("s1"), &res("api.x.com:8080"));
     assert_eq!(
         notes,
@@ -584,15 +569,7 @@ fn a_port_scoped_deny_cancels_a_balanced_preset_entry() {
     assert!(notes[0].contains("only cancels"), "{notes:?}");
     // As compile does: the preset entry (widened to *.digicert.com) is gone.
     let mut p = p;
-    p.add_rule(
-        None,
-        Decision::Deny,
-        "crl*.digicert.com:80",
-        "added",
-        None,
-        None,
-    )
-    .unwrap();
+    p.deny(None, "crl*.digicert.com:80");
     assert!(!compile::check(&p, Some("s1"), &[], "crl3.digicert.com:80").allowed);
 }
 
@@ -612,13 +589,11 @@ fn log_rows_render() {
 fn check_allows_a_bound_secret_host_under_deny_all() {
     let mut t = test_env(&[]);
     set_policy(&t, "mode = \"deny-all\"");
-    running(
-        &t,
-        &[
-            ("sbx.name", "a1"),
-            ("sbx.credential-hosts", "api.github.com"),
-        ],
-    );
+    t.sandboxes(&[(
+        "a1",
+        "running",
+        &[("sbx.credential-hosts", "api.github.com")],
+    )]);
     let code = t
         .sbt(&[
             "policy",
@@ -636,7 +611,7 @@ fn check_allows_a_bound_secret_host_under_deny_all() {
 fn log_empty_and_json() {
     assert_eq!(render_log(&[]), "No blocked requests\n");
     let mut t = test_env(&[]);
-    running(&t, &[("sbx.name", "a1")]);
+    t.sandboxes(&[("a1", "running", &[])]);
     t.runner().ok(&["machine", "egress-events"], "[]");
     assert_eq!(t.sbt(&["policy", "log"]).unwrap(), 0);
     assert_eq!(t.sbt(&["policy", "log", "--json"]).unwrap(), 0);
@@ -795,7 +770,7 @@ fn approval_respond_option_allow_adds_the_sandboxs_rule() {
 fn approval_respond_option_allow_gives_the_notes_policy_allow_gives() {
     let mut t = test_env(&[]);
     set_policy(&t, "mode = \"deny-all\"");
-    running(&t, &[("sbx.name", "a1")]);
+    t.sandboxes(&[("a1", "running", &[])]);
     t.runner().ok(
         &["machine", "egress-events"],
         r#"[{"timestamp":"2026-10-26T10:00:00Z","operation":"resolve","dest":"localhost"}]"#,
@@ -882,9 +857,7 @@ fn rm_by_id_finds_a_sandbox_rule_without_sandbox() {
     let mut t = test_env(&[]);
     set_policy(&t, "mode = \"deny-all\"");
     let mut p = Policy::load(&t.ctx.paths).unwrap();
-    let id = p
-        .add_rule(Some("a1"), Decision::Allow, "a.com", "added", None, None)
-        .unwrap();
+    let id = p.allow(Some("a1"), "a.com");
     p.save(&t.ctx.paths).unwrap();
     t.sbt(&["policy", "rm", "network", "--id", &id]).unwrap();
     assert!(Policy::load(&t.ctx.paths).unwrap().sandboxes.is_empty());
@@ -964,11 +937,12 @@ fn localhost_rules_push_the_gateway_live_with_host_access_only() {
     for access in [true, false] {
         let mut t = test_env(&[]);
         set_policy(&t, "mode = \"deny-all\"");
-        let mut labels = vec![("sbx.name", "a1")];
-        if access {
-            labels.push(("sbx.host-access", "true"));
-        }
-        running(&t, &labels);
+        let labels: &[(&str, &str)] = if access {
+            &[("sbx.host-access", "true")]
+        } else {
+            &[]
+        };
+        t.sandboxes(&[("a1", "running", labels)]);
         t.sbt(&[
             "policy",
             "allow",
@@ -1042,9 +1016,7 @@ fn keeps_access_notes_name_open_sandboxes_with_host_access_that_lose_the_rule() 
         mode: Some(Mode::AllowAll),
         ..Default::default()
     };
-    before
-        .add_rule(None, Decision::Allow, "localhost:80", "added", None, None)
-        .unwrap();
+    before.allow(None, "localhost:80");
     let mut after = before.clone();
     after.remove_rules(None, None, Some("localhost:80"), None, None);
     let sbs = [("a1", true), ("b2", false)];

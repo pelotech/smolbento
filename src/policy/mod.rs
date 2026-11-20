@@ -447,14 +447,28 @@ impl Policy {
 }
 
 #[cfg(test)]
+impl Policy {
+    /// Adds an allow rule for `resources` as `policy allow` does; returns its id.
+    pub fn allow(&mut self, sandbox: Option<&str>, resources: &str) -> String {
+        self.add_rule(sandbox, Decision::Allow, resources, "added", None, None)
+            .unwrap()
+    }
+
+    /// Adds a deny rule for `resources` as `policy deny` does; returns its id.
+    pub fn deny(&mut self, sandbox: Option<&str>, resources: &str) -> String {
+        self.add_rule(sandbox, Decision::Deny, resources, "added", None, None)
+            .unwrap()
+    }
+}
+
+#[cfg(test)]
 mod tests {
     use super::*;
 
     #[test]
     fn copy_sandbox_clones_rules() {
         let mut p = Policy::default();
-        p.add_rule(Some("a"), Decision::Deny, "evil.com", "added", None, None)
-            .unwrap();
+        p.deny(Some("a"), "evil.com");
         p.copy_sandbox("a", "a-fork-1");
         assert_eq!(p.sandboxes["a-fork-1"].rules.len(), 1);
         assert_ne!(
@@ -468,8 +482,7 @@ mod tests {
     #[test]
     fn a_copied_rule_is_removed_by_its_own_id_only() {
         let mut p = Policy::default();
-        p.add_rule(Some("a"), Decision::Deny, "evil.com", "added", None, None)
-            .unwrap();
+        p.deny(Some("a"), "evil.com");
         p.copy_sandbox("a", "a-fork-1");
         let copy_id = p.sandboxes["a-fork-1"].rules[0].id.clone();
         let parent_id = p.sandboxes["a"].rules[0].id.clone();
@@ -484,10 +497,8 @@ mod tests {
     #[test]
     fn copy_sandbox_replaces_the_target() {
         let mut p = Policy::default();
-        p.add_rule(Some("a"), Decision::Deny, "new.com", "added", None, None)
-            .unwrap();
-        p.add_rule(Some("b"), Decision::Deny, "old.com", "added", None, None)
-            .unwrap();
+        p.deny(Some("a"), "new.com");
+        p.deny(Some("b"), "old.com");
         p.copy_sandbox("a", "b");
         assert_eq!(p.sandboxes["b"].rules.len(), 1, "replaced, not merged");
         assert_eq!(p.sandboxes["b"].rules[0].resources, ["new.com"]);
@@ -499,25 +510,8 @@ mod tests {
         let mut p = Policy::load(&paths).unwrap();
         assert_eq!(p, Policy::default());
         p.mode = Some(Mode::Balanced);
-        let id = p
-            .add_rule(
-                None,
-                Decision::Allow,
-                "api.x.com, *.y.com",
-                "added",
-                None,
-                None,
-            )
-            .unwrap();
-        p.add_rule(
-            Some("claude-repo"),
-            Decision::Deny,
-            "10.0.0.0/8",
-            "added",
-            None,
-            None,
-        )
-        .unwrap();
+        let id = p.allow(None, "api.x.com, *.y.com");
+        p.deny(Some("claude-repo"), "10.0.0.0/8");
         p.save(&paths).unwrap();
         let back = Policy::load(&paths).unwrap();
         assert_eq!(back, p);
@@ -558,12 +552,8 @@ mod tests {
             p.add_rule(None, Decision::Allow, "*", "added", None, None)
                 .is_err()
         );
-        let a = p
-            .add_rule(None, Decision::Allow, "a.com,b.com", "added", None, None)
-            .unwrap();
-        let again = p
-            .add_rule(None, Decision::Allow, "a.com,b.com", "added", None, None)
-            .unwrap();
+        let a = p.allow(None, "a.com,b.com");
+        let again = p.allow(None, "a.com,b.com");
         assert_eq!(a, again);
         assert_eq!(p.rules.len(), 1);
         assert!(p.remove_rules(None, None, Some("a.com"), None, None));
@@ -594,9 +584,7 @@ mod tests {
     #[test]
     fn method_and_path_make_a_distinct_rule() {
         let mut p = Policy::default();
-        let plain = p
-            .add_rule(None, Decision::Allow, "a.com", "added", None, None)
-            .unwrap();
+        let plain = p.allow(None, "a.com");
         // Ids of rules without qualifiers don't change.
         assert_eq!(
             plain,
@@ -676,12 +664,9 @@ mod tests {
             mode: Some(Mode::Balanced),
             ..Default::default()
         };
-        p.add_rule(None, Decision::Allow, "g.com", "added", None, None)
-            .unwrap();
-        p.add_rule(Some("s1"), Decision::Allow, "s.com", "added", None, None)
-            .unwrap();
-        p.add_rule(Some("s2"), Decision::Allow, "t.com", "added", None, None)
-            .unwrap();
+        p.allow(None, "g.com");
+        p.allow(Some("s1"), "s.com");
+        p.allow(Some("s2"), "t.com");
         p.reset();
         assert_eq!(p, Policy::default());
     }
@@ -689,10 +674,8 @@ mod tests {
     #[test]
     fn rules_for_sandbox_and_forget() {
         let mut p = Policy::default();
-        p.add_rule(None, Decision::Allow, "g.com", "added", None, None)
-            .unwrap();
-        p.add_rule(Some("s1"), Decision::Allow, "s.com", "added", None, None)
-            .unwrap();
+        p.allow(None, "g.com");
+        p.allow(Some("s1"), "s.com");
         let scopes: Vec<Option<&str>> = p.rules_for(Some("s1")).map(|(_, s)| s).collect();
         assert_eq!(scopes, [None, Some("s1")]);
         assert_eq!(p.rules_for(Some("other")).count(), 1);
@@ -847,15 +830,7 @@ mod tests {
         assert!(compile::check(&p, Some("sb"), &[], "api.kit.com").allowed);
         assert!(!compile::check(&p, Some("other"), &[], "api.kit.com").allowed);
 
-        p.add_rule(
-            Some("sb"),
-            Decision::Deny,
-            "api.kit.com",
-            "added",
-            None,
-            None,
-        )
-        .unwrap();
+        p.deny(Some("sb"), "api.kit.com");
         assert!(!compile::check(&p, Some("sb"), &[], "api.kit.com").allowed);
     }
 }

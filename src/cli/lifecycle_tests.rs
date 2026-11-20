@@ -1138,23 +1138,15 @@ fn start_needs_a_policy() {
     assert!(started(&t));
 }
 
-fn clone_json(name: &str, state: &str, repo: &std::path::Path) -> String {
-    machine_json(
-        &format!("sbx-{name}"),
-        state,
-        &[
-            ("sbx.name", name),
-            ("sbx.created", "999000"),
-            ("sbx.clone", "true"),
-            ("sbx.workspace", &repo.display().to_string()),
-        ],
-    )
-}
-
-/// Fakes `machine ls --json` for the one sandbox a test `rm`s by name.
-fn ls_one(t: &TestEnv, json: &str) {
-    t.runner()
-        .ok(&["machine", "ls", "--json"], &format!("[{json}]"));
+/// Stopped clone-mode sandbox `box`, whose workspace is `repo`.
+fn clone_box(t: &TestEnv, repo: &std::path::Path) {
+    let ws = repo.display().to_string();
+    let labels = [
+        ("sbx.created", "999000"),
+        ("sbx.clone", "true"),
+        ("sbx.workspace", ws.as_str()),
+    ];
+    t.sandboxes(&[("box", "stopped", &labels)]);
 }
 
 fn remote(repo: &std::path::Path, name: &str) -> String {
@@ -1180,12 +1172,7 @@ fn rm_prune_and_reset_remove_our_remote_but_keep_foreign_ones() {
                 "https://example.com/x.git",
             ],
         );
-        let fake = t.runner();
-        fake.ok(&["machine", "status"], &clone_json("box", "stopped", &repo));
-        fake.ok(
-            &["machine", "ls", "--json"],
-            &format!("[{}]", clone_json("box", "stopped", &repo)),
-        );
+        clone_box(&t, &repo);
         assert!(!remote(&repo, "box").is_empty());
         t.sbt(&cmd).unwrap();
         assert_eq!(remote(&repo, "box"), "", "{cmd:?}");
@@ -1201,9 +1188,7 @@ fn rm_keeps_a_foreign_remote_of_the_same_name() {
         &repo,
         &["remote", "add", "sandbox-box", "https://example.com/x.git"],
     );
-    t.runner()
-        .ok(&["machine", "status"], &clone_json("box", "stopped", &repo));
-    ls_one(&t, &clone_json("box", "stopped", &repo));
+    clone_box(&t, &repo);
     t.sbt(&["rm", "-f", "box"]).unwrap();
     assert!(!remote(&repo, "box").is_empty());
 }
@@ -1212,9 +1197,7 @@ fn rm_keeps_a_foreign_remote_of_the_same_name() {
 fn rm_succeeds_when_the_clone_workspace_is_gone() {
     let mut t = test_env(&[]);
     let gone = t.ctx.cwd.join("deleted");
-    t.runner()
-        .ok(&["machine", "status"], &clone_json("box", "stopped", &gone));
-    ls_one(&t, &clone_json("box", "stopped", &gone));
+    clone_box(&t, &gone);
     t.sbt(&["rm", "-f", "box"]).unwrap();
     assert!(t.made("machine delete -n sbx-box"), "{:?}", t.calls());
 }
@@ -1225,18 +1208,13 @@ fn rm_removes_the_remote_from_the_repo_top_when_the_subdirectory_is_gone() {
     let (_d, repo) = temp_repo();
     crate::workspace::clone::add_remote(&repo, "box").unwrap();
     let sub = repo.join("deleted").display().to_string();
-    let box_json = machine_json(
-        "sbx-box",
-        "stopped",
-        &[
-            ("sbx.name", "box"),
-            ("sbx.clone", "true"),
-            ("sbx.workspace", &sub),
-            ("sbx.clone-top", &repo.display().to_string()),
-        ],
-    );
-    t.runner().ok(&["machine", "status"], &box_json);
-    ls_one(&t, &box_json);
+    let top = repo.display().to_string();
+    let labels = [
+        ("sbx.clone", "true"),
+        ("sbx.workspace", sub.as_str()),
+        ("sbx.clone-top", top.as_str()),
+    ];
+    t.sandboxes(&[("box", "stopped", &labels)]);
     t.sbt(&["rm", "-f", "box"]).unwrap();
     assert_eq!(remote(&repo, "box"), "");
 }
@@ -1244,11 +1222,7 @@ fn rm_removes_the_remote_from_the_repo_top_when_the_subdirectory_is_gone() {
 #[test]
 fn rm_needs_force_without_a_terminal() {
     let mut t = test_env(&[]);
-    t.runner().ok(
-        &["machine", "status"],
-        &json("sbx-claude-proj", "running", "claude-proj"),
-    );
-    ls_one(&t, &json("sbx-claude-proj", "running", "claude-proj"));
+    t.sandboxes(&[("claude-proj", "running", CLAUDE_LABELS)]);
     assert!(t.sbt_err(&["rm", "claude-proj"]).contains("pass -f"));
     t.sbt(&["rm", "-f", "claude-proj"]).unwrap();
     assert!(
@@ -1260,11 +1234,7 @@ fn rm_needs_force_without_a_terminal() {
 #[test]
 fn rm_asks_on_a_terminal_and_removes_only_on_yes() {
     let mut t = test_env(&[]);
-    t.ctx.vm.runner().ok(
-        &["machine", "status"],
-        &json("sbx-claude-proj", "running", "claude-proj"),
-    );
-    ls_one(&t, &json("sbx-claude-proj", "running", "claude-proj"));
+    t.sandboxes(&[("claude-proj", "running", CLAUDE_LABELS)]);
     let deleted = |t: &TestEnv| t.made("machine delete");
     t.answer("n\n");
     let e = sbt(&mut t.ctx, &["rm", "claude-proj"]).unwrap_err();
@@ -1280,21 +1250,11 @@ fn rm_asks_on_a_terminal_and_removes_only_on_yes() {
 #[test]
 fn prune_removes_only_old_stopped_sandboxes() {
     let mut t = test_env(&[]);
-    let ls = format!(
-        "[{},{},{}]",
-        json("sbx-old", "stopped", "old"),
-        json("sbx-live", "running", "live"),
-        machine_json(
-            "sbx-new",
-            "stopped",
-            &[("sbx.name", "new"), ("sbx.created", "999990")]
-        )
-    );
-    t.runner().ok(&["machine", "ls", "--json"], &ls);
-    t.runner().ok(
-        &["machine", "status", "-n", "sbx-live"],
-        &json("sbx-live", "running", "live"),
-    );
+    t.sandboxes(&[
+        ("old", "stopped", CLAUDE_LABELS),
+        ("live", "running", CLAUDE_LABELS),
+        ("new", "stopped", &[("sbx.created", "999990")]),
+    ]);
     t.sbt(&["prune", "-f", "--filter", "until=1m"]).unwrap();
     let deletes: Vec<String> = t
         .calls()
@@ -1304,23 +1264,13 @@ fn prune_removes_only_old_stopped_sandboxes() {
     assert_eq!(deletes, vec!["machine delete -n sbx-old -f"]);
 }
 
+/// The labels of a claude sandbox for another folder, `/other/proj`.
+const OTHER_FOLDERS: &[(&str, &str)] = &[("sbx.agent", "claude"), ("sbx.workspace", "/other/proj")];
+
 #[test]
 fn create_refuses_a_default_name_another_folder_uses() {
-    let t = test_env(&[]);
-    let theirs = machine_json(
-        "sbx-claude-proj",
-        "stopped",
-        &[
-            ("sbx.name", "claude-proj"),
-            ("sbx.agent", "claude"),
-            ("sbx.workspace", "/other/proj"),
-        ],
-    );
-    t.runner()
-        .ok(&["machine", "ls", "--json"], &format!("[{theirs}]"));
-    t.runner()
-        .ok(&["machine", "status", "-n", "sbx-claude-proj"], &theirs);
-    let mut t = t;
+    let mut t = test_env(&[]);
+    t.sandboxes(&[("claude-proj", "stopped", OTHER_FOLDERS)]);
     let err = t.sbt_err(&["create", "claude", "."]);
     assert!(
         err.contains("is already used by workspace \"/other/proj\""),
@@ -1336,19 +1286,7 @@ fn auto_name_creates_under_the_suggested_name() {
     let suggested =
         crate::sandbox::name::suggest_name("claude", &t.ctx.cwd, |n| n == "claude-proj");
     creatable_as(&t, &suggested);
-    let theirs = machine_json(
-        "sbx-claude-proj",
-        "stopped",
-        &[
-            ("sbx.name", "claude-proj"),
-            ("sbx.agent", "claude"),
-            ("sbx.workspace", "/other/proj"),
-        ],
-    );
-    t.runner()
-        .ok(&["machine", "ls", "--json"], &format!("[{theirs}]"));
-    t.runner()
-        .ok(&["machine", "status", "-n", "sbx-claude-proj"], &theirs);
+    t.sandboxes(&[("claude-proj", "stopped", OTHER_FOLDERS)]);
     let mut t = t;
     t.sbt(&["create", "claude", "."]).unwrap();
     let machine = crate::sandbox::name::machine_name(&suggested);
@@ -1407,10 +1345,7 @@ fn reset_preserve_secrets_keeps_sandbox_scoped_secrets() {
         "mode = \"balanced\"\n[[sandboxes.a1.rules]]\nid = \"r-1\"\ndecision = \"allow\"\n\
              resources = [\"a.com\"]\n",
     );
-    t.runner().ok(
-        &["machine", "ls", "--json"],
-        &format!("[{}]", json("sbx-a1", "stopped", "a1")),
-    );
+    t.sandboxes(&[("a1", "stopped", CLAUDE_LABELS)]);
     t.sbt(&["reset", "-f", "--preserve-secrets"]).unwrap();
     let f = SecretsFile::load(&t.ctx.paths).unwrap();
     assert_eq!(f.secrets, vec![entry.clone()]);
@@ -1454,7 +1389,7 @@ fn reset_removes_old_location_sandboxes_but_not_others() {
 #[test]
 fn reset_removes_smolbentos_dirs_and_its_home() {
     let mut t = test_env(&[]);
-    t.runner().ok(&["machine", "ls", "--json"], "[]");
+    t.sandboxes(&[]);
     let home = std::path::PathBuf::from(&t.ctx.env["HOME"]).join(".smolbento");
     for d in [
         &t.ctx.paths.config,
@@ -1512,7 +1447,7 @@ fn reset_keeps_a_smolvm_home_you_chose_but_removes_its_smolvm() {
     std::fs::create_dir_all(home.path().join("engine/1.0.0")).unwrap();
     std::fs::write(home.path().join("notes.txt"), "mine").unwrap();
     let mut t = test_env(&[("SMOLBENTO_SMOLVM_HOME", home.path().to_str().unwrap())]);
-    t.runner().ok(&["machine", "ls", "--json"], "[]");
+    t.sandboxes(&[]);
     t.sbt(&["reset", "-f"]).unwrap();
     assert!(!home.path().join("engine").exists());
     assert!(home.path().join("notes.txt").exists());
@@ -1535,8 +1470,7 @@ fn stop_rm_and_prune_print_sbxs_json() {
     );
 
     let listed = |t: &TestEnv| {
-        let ls = format!("[{}]", crate::testutil::json("sbx-a", "stopped", "a"));
-        t.runner().ok(&["machine", "ls", "--json"], &ls);
+        t.sandboxes(&[("a", "stopped", CLAUDE_LABELS)]);
     };
     let mut t = test_env(&[]);
     listed(&t);
@@ -1561,7 +1495,7 @@ fn stop_rm_and_prune_print_sbxs_json() {
     );
     // Nothing to do is an empty list, not a sentence.
     let mut t = test_env(&[]);
-    t.runner().ok(&["machine", "ls", "--json"], "[]");
+    t.sandboxes(&[]);
     t.sbt(&["rm", "--all", "-f", "--json"]).unwrap();
     assert_eq!(t.stdout(), "[]\n");
 }
@@ -1569,12 +1503,10 @@ fn stop_rm_and_prune_print_sbxs_json() {
 #[test]
 fn rm_that_fails_partway_still_reports_what_it_removed() {
     let mut t = test_env(&[]);
-    let ls = format!(
-        "[{},{}]",
-        crate::testutil::json("sbx-a", "stopped", "a"),
-        crate::testutil::json("sbx-b", "stopped", "b")
-    );
-    t.runner().ok(&["machine", "ls", "--json"], &ls);
+    t.sandboxes(&[
+        ("a", "stopped", CLAUDE_LABELS),
+        ("b", "stopped", CLAUDE_LABELS),
+    ]);
     t.runner().fail(
         &["machine", "delete", "-n", "sbx-b"],
         "SMOLVM_ERROR",
@@ -1592,7 +1524,7 @@ fn rm_that_fails_partway_still_reports_what_it_removed() {
 #[test]
 fn reset_removes_the_ssh_block() {
     let mut t = test_env(&[]);
-    t.runner().ok(&["machine", "ls", "--json"], "[]");
+    t.sandboxes(&[]);
     let ssh = std::path::PathBuf::from(&t.ctx.env["HOME"]).join(".ssh");
     std::fs::create_dir_all(&ssh).unwrap();
     let user = "Host gh\n  User git\n";
@@ -1602,27 +1534,18 @@ fn reset_removes_the_ssh_block() {
     assert_eq!(std::fs::read_to_string(ssh.join("config")).unwrap(), user);
 }
 
-fn fork_json(name: &str, state: &str, parent: Option<&str>) -> String {
-    let mut l = labels(name);
-    if let Some(p) = parent {
-        l.push(("sbx.fork-of", p.to_string()));
-    }
-    let pairs: Vec<(&str, &str)> = l.iter().map(|(k, v)| (*k, v.as_str())).collect();
-    machine_json(&format!("sbx-{name}"), state, &pairs)
-}
-
 /// `a` with forks `a-fork-1` and `a-fork-2`, in the given states.
 fn with_forks(t: &TestEnv, a: &str, f1: &str, f2: &str) {
-    let (ja, j1, j2) = (
-        fork_json("a", a, None),
-        fork_json("a-fork-1", f1, Some("a")),
-        fork_json("a-fork-2", f2, Some("a")),
-    );
-    let fake = t.runner();
-    fake.ok(&["machine", "ls", "--json"], &format!("[{ja},{j1},{j2}]"));
-    fake.ok(&["machine", "status", "-n", "sbx-a"], &ja);
-    fake.ok(&["machine", "status", "-n", "sbx-a-fork-1"], &j1);
-    fake.ok(&["machine", "status", "-n", "sbx-a-fork-2"], &j2);
+    let fork = [
+        ("sbx.agent", "claude"),
+        ("sbx.created", "999000"),
+        ("sbx.fork-of", "a"),
+    ];
+    t.sandboxes(&[
+        ("a", a, CLAUDE_LABELS),
+        ("a-fork-1", f1, &fork),
+        ("a-fork-2", f2, &fork),
+    ]);
 }
 
 fn deletes(t: &TestEnv) -> Vec<String> {
@@ -1702,21 +1625,12 @@ fn prune_says_which_parents_it_skipped() {
 #[test]
 fn prune_until_keeps_a_new_fork_of_an_old_parent() {
     let mut t = test_env(&[]);
-    let parent = fork_json("a", "stopped", None);
     // `fork` labels the copy with its own creation time (now), not the parent's.
-    let fork = machine_json(
-        "sbx-a-fork-1",
-        "stopped",
-        &[
-            ("sbx.name", "a-fork-1"),
-            ("sbx.created", "1000000"),
-            ("sbx.fork-of", "a"),
-        ],
-    );
-    let fake = t.runner();
-    fake.ok(&["machine", "ls", "--json"], &format!("[{parent},{fork}]"));
-    fake.ok(&["machine", "status", "-n", "sbx-a"], &parent);
-    fake.ok(&["machine", "status", "-n", "sbx-a-fork-1"], &fork);
+    let fork = [("sbx.created", "1000000"), ("sbx.fork-of", "a")];
+    t.sandboxes(&[
+        ("a", "stopped", CLAUDE_LABELS),
+        ("a-fork-1", "stopped", &fork),
+    ]);
     t.sbt(&["prune", "-f", "--filter", "until=1m"]).unwrap();
     assert!(deletes(&t).is_empty(), "{:?}", deletes(&t));
 }
@@ -1733,7 +1647,7 @@ fn reset_deletes_forks_before_parents() {
 #[test]
 fn reset_removes_the_skills_store() {
     let mut t = test_env(&[]);
-    t.runner().ok(&["machine", "ls", "--json"], "[]");
+    t.sandboxes(&[]);
     let store = t.ctx.paths.skills_store();
     std::fs::create_dir_all(store.join("a")).unwrap();
     std::fs::create_dir_all(t.ctx.paths.skills_metadata()).unwrap();

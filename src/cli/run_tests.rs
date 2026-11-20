@@ -1,10 +1,6 @@
 use crate::sandbox::session;
 use crate::testutil::*;
 
-fn created(t: &TestEnv, state: &str) {
-    t.project(state);
-}
-
 #[test]
 fn agent_args_rule() {
     let base = &["claude", "--dangerously-skip-permissions"];
@@ -41,7 +37,7 @@ fn an_old_preset_sandbox_is_refused_with_recreate() {
 #[test]
 fn clone_is_ignored_when_run_attaches_to_an_existing_sandbox() {
     let mut t = test_env(&[]);
-    created(&t, "running");
+    t.project("running");
     t.runner().interactive_exit(0);
     // cwd is not a git repo, yet --clone must not matter for an existing sandbox.
     t.sbt(&["run", "claude", "--clone"]).unwrap();
@@ -67,38 +63,25 @@ fn workdir_starts_the_session_in_a_directory_of_the_workspace() {
     }
 }
 
+/// The labels of a sandbox running `claude` with workspace `ws`.
+fn claude_in(ws: &str) -> [(&str, &str); 3] {
+    [
+        ("sbx.agent", "claude"),
+        ("sbx.command", r#"["claude"]"#),
+        ("sbx.workspace", ws),
+    ]
+}
+
 /// Two folders with the same name (sbx 0.53): a plain `run` attaches to this folder's sandbox,
 /// whatever it's called, and never to the other folder's.
 #[test]
 fn run_reuses_this_folders_sandbox_under_another_name() {
     let mut t = test_env(&[]);
     let ws = t.ctx.cwd.display().to_string();
-    let mine = machine_json(
-        "sbx-claude-proj-2",
-        "running",
-        &[
-            ("sbx.name", "claude-proj-2"),
-            ("sbx.agent", "claude"),
-            ("sbx.command", r#"["claude"]"#),
-            ("sbx.workspace", &ws),
-        ],
-    );
-    let theirs = machine_json(
-        "sbx-claude-proj",
-        "running",
-        &[
-            ("sbx.name", "claude-proj"),
-            ("sbx.agent", "claude"),
-            ("sbx.command", r#"["claude"]"#),
-            ("sbx.workspace", "/other/proj"),
-        ],
-    );
-    t.runner()
-        .ok(&["machine", "ls", "--json"], &format!("[{mine},{theirs}]"));
-    t.runner()
-        .ok(&["machine", "status", "-n", "sbx-claude-proj-2"], &mine);
-    t.runner()
-        .ok(&["machine", "status", "-n", "sbx-claude-proj"], &theirs);
+    t.sandboxes(&[
+        ("claude-proj-2", "running", &claude_in(&ws)),
+        ("claude-proj", "running", &claude_in("/other/proj")),
+    ]);
     t.runner().interactive_exit(0);
     t.sbt(&["run", "claude"]).unwrap();
     let call = t.runner().interactive_calls()[0].join(" ");
@@ -112,20 +95,7 @@ fn run_reuses_this_folders_sandbox_under_another_name() {
 #[test]
 fn run_refuses_a_default_name_another_folder_uses_and_suggests_one() {
     let mut t = test_env(&[]);
-    let theirs = machine_json(
-        "sbx-claude-proj",
-        "running",
-        &[
-            ("sbx.name", "claude-proj"),
-            ("sbx.agent", "claude"),
-            ("sbx.command", r#"["claude"]"#),
-            ("sbx.workspace", "/other/proj"),
-        ],
-    );
-    t.runner()
-        .ok(&["machine", "ls", "--json"], &format!("[{theirs}]"));
-    t.runner()
-        .ok(&["machine", "status", "-n", "sbx-claude-proj"], &theirs);
+    t.sandboxes(&[("claude-proj", "running", &claude_in("/other/proj"))]);
     let err = t.sbt_err(&["run", "claude"]);
     assert!(
         err.starts_with(
@@ -218,7 +188,7 @@ fn no_progress_leaves_only_the_detached_name() {
 #[test]
 fn run_of_an_existing_sandbox_reports_no_progress() {
     let mut t = test_env(&[]);
-    created(&t, "stopped");
+    t.project("stopped");
     t.sbt(&["run", "-d", "--name", "claude-proj"]).unwrap();
     assert_eq!(t.stdout(), "claude-proj\n");
 }
@@ -275,7 +245,7 @@ fn deny_network_adds_sandbox_deny_rules_at_create() {
 fn running_an_existing_sandbox_records_nothing_and_starting_it_needs_a_policy() {
     let mut t = test_env(&[]);
     std::fs::remove_file(t.ctx.paths.policy_file()).unwrap();
-    created(&t, "running");
+    t.project("running");
     t.runner().interactive_exit(0);
     assert_eq!(
         t.sbt(&["run", "claude", "--deny-network", "evil.com"])
@@ -289,7 +259,7 @@ fn running_an_existing_sandbox_records_nothing_and_starting_it_needs_a_policy() 
     // A stopped one has to start, and every start needs a policy.
     let mut t = test_env(&[]);
     std::fs::remove_file(t.ctx.paths.policy_file()).unwrap();
-    created(&t, "stopped");
+    t.project("stopped");
     let err = t.sbt_err(&["run", "claude", "--deny-network", "evil.com"]);
     assert!(err.contains("bento policy init"), "{err}");
     assert!(!t.ctx.paths.policy_file().exists());
@@ -305,7 +275,7 @@ fn running_an_existing_sandbox_records_nothing_and_starting_it_needs_a_policy() 
 #[test]
 fn reattaches_by_name_and_returns_the_agent_status() {
     let mut t = test_env(&[]);
-    created(&t, "running");
+    t.project("running");
     t.runner().interactive_exit(42);
     assert_eq!(t.sbt(&["run", "--name", "claude-proj"]).unwrap(), 42);
     assert!(!t.calls().iter().any(|l| l.contains("create")));
@@ -314,7 +284,7 @@ fn reattaches_by_name_and_returns_the_agent_status() {
 #[test]
 fn detach_leaves_it_running_and_later_runs_keep_it() {
     let mut t = test_env(&[]);
-    created(&t, "running");
+    t.project("running");
     t.sbt(&["run", "-d", "--name", "claude-proj"]).unwrap();
     assert!(t.runner().interactive_calls().is_empty());
     t.sbt(&["run", "--name", "claude-proj"]).unwrap();
@@ -324,7 +294,7 @@ fn detach_leaves_it_running_and_later_runs_keep_it() {
 #[test]
 fn rm_deletes_after_exit() {
     let mut t = test_env(&[]);
-    created(&t, "running");
+    t.project("running");
     t.sbt(&["run", "--rm", "--name", "claude-proj"]).unwrap();
     assert_eq!(
         t.calls().last().unwrap(),
@@ -387,7 +357,7 @@ fn a_sandbox_from_before_kits_is_not_started() {
 #[test]
 fn a_session_that_cant_be_registered_still_stops_the_sandbox() {
     let mut t = test_env(&[]);
-    created(&t, "stopped");
+    t.project("stopped");
     // The sessions directory can't be created: a file is in its place.
     let sessions = t.ctx.paths.sessions();
     std::fs::create_dir_all(sessions.parent().unwrap()).unwrap();
@@ -406,7 +376,7 @@ fn a_session_that_cant_be_registered_still_stops_the_sandbox() {
 #[test]
 fn rm_keeps_a_sandbox_another_session_is_using() {
     let mut t = test_env(&[]);
-    created(&t, "running");
+    t.project("running");
     // A live session of another process (this test's parent).
     let dir = t.ctx.paths.sessions().join("claude-proj");
     std::fs::create_dir_all(&dir).unwrap();
@@ -424,7 +394,7 @@ fn a_failed_attach_still_stops_or_removes_the_sandbox() {
         (vec!["--rm"], "machine delete -n sbx-claude-proj -f"),
     ] {
         let mut t = test_env(&[]);
-        created(&t, "running");
+        t.project("running");
         t.runner().interactive_fail("can't run smolvm");
         let mut args = vec!["run"];
         args.extend(flags);
@@ -442,7 +412,7 @@ fn rm_forgets_the_sandbox_policy_and_scoped_secrets_like_sbt_rm() {
     use crate::policy::{Decision, Policy};
     use crate::secrets::{SecretEntry, SecretsFile, Source, scope_for};
     let mut t = test_env(&[]);
-    created(&t, "running");
+    t.project("running");
     let mut p = Policy::load(&t.ctx.paths).unwrap();
     p.add_rule(
         Some("claude-proj"),
@@ -478,7 +448,7 @@ fn rm_forgets_the_sandbox_policy_and_scoped_secrets_like_sbt_rm() {
 #[test]
 fn cleanup_failures_warn_and_keep_the_agent_status() {
     let mut t = test_env(&[]);
-    created(&t, "running");
+    t.project("running");
     t.runner().interactive_exit(7);
     t.runner()
         .fail(&["machine", "stop"], "SMOLVM_ERROR", "boom");
@@ -570,7 +540,7 @@ fn fetch_on_exit_needs_a_clone_and_the_setting() {
         if clone {
             clone_sandbox(&t, &repo);
         } else {
-            created(&t, "running");
+            t.project("running");
         }
         let sb = crate::sandbox::find(&t.ctx.vm, "claude-proj")
             .unwrap()
@@ -748,7 +718,7 @@ fn gemini_is_refused_for_a_new_sandbox_and_an_old_one_must_be_recreated() {
 #[test]
 fn attaching_to_an_existing_sandbox_loads_no_kits() {
     let mut t = kit_env();
-    created(&t, "running");
+    t.project("running");
     t.runner().interactive_exit(0);
     // Loading either would fail: the path doesn't exist.
     t.sbt(&[
@@ -829,7 +799,7 @@ fn mount_on_an_existing_sandbox_is_warned_about_and_attaches() {
     assert_eq!(warning(&["run", "--name", "s1"]), None);
 
     let mut t = test_env(&[]);
-    created(&t, "running");
+    t.project("running");
     t.runner().interactive_exit(0);
     t.sbt(&["run", "claude", "--mount", ".:/home/agent/x"])
         .unwrap();
@@ -864,7 +834,7 @@ fn kit_flags_on_an_existing_sandbox_are_warned_about() {
 fn kit_args_without_a_kit_always_fail() {
     let want = "kit arguments were supplied but no kits were referenced";
     let mut t = test_env(&[]);
-    created(&t, "running");
+    t.project("running");
     t.runner().interactive_exit(0);
     // `run claude` names a kit now (sbx 0.53), so only a bare --name has none.
     for args in [
@@ -890,7 +860,7 @@ fn kit_args_without_a_kit_always_fail() {
 #[test]
 fn existing_name_with_kit_flags_attaches_without_loading() {
     let mut t = kit_env();
-    created(&t, "running");
+    t.project("running");
     t.runner().interactive_exit(0);
     t.sbt(&["run", "--name", "claude-proj", "--kit", "./no-such-kit"])
         .unwrap();

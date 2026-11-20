@@ -202,6 +202,17 @@ pub struct Cap {
 }
 
 impl Cap {
+    /// A top-level capability of type `ty`, with no kept config.
+    pub fn new(ty: impl Into<String>, optional: bool, body: CapBody) -> Self {
+        Self {
+            ty: ty.into(),
+            optional,
+            body,
+            group: None,
+            config: None,
+        }
+    }
+
     /// Which entries a kit's per-entry checks compare it with: the top-level ones (`None`), or
     /// its group's (SPEC-v3 §7.1.1).
     pub fn scope(&self) -> Option<usize> {

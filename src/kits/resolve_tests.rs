@@ -27,13 +27,7 @@ impl KitExt for Kit {
         self
     }
     fn cap(mut self, ty: &str, optional: bool, body: CapBody) -> Self {
-        self.caps.push(Cap {
-            ty: ty.into(),
-            optional,
-            body,
-            group: None,
-            config: None,
-        });
+        self.caps.push(Cap::new(ty, optional, body));
         self
     }
 }

@@ -96,14 +96,10 @@ pub fn cp<R: Runner>(ctx: &mut Ctx<R>, a: &CpArgs) -> Result<i32> {
 mod tests {
     use crate::testutil::*;
 
-    fn running(t: &TestEnv) {
-        t.sandbox("claude-proj", "running", &[("sbx.workspace", "/w/proj")]);
-    }
-
     #[test]
     fn exec_defaults_to_agent_in_the_workspace() {
         let mut t = test_env(&[]);
-        running(&t);
+        t.running_proj();
         t.runner().interactive_exit(7);
         assert_eq!(
             t.sbt(&["exec", "-it", "claude-proj", "ls", "-la"]).unwrap(),
@@ -219,7 +215,7 @@ mod tests {
     #[test]
     fn exec_tty_passes_the_host_terminal() {
         let mut t = test_env(&[("TERM_PROGRAM", "iTerm.app"), ("COLORTERM", "truecolor")]);
-        running(&t);
+        t.running_proj();
         t.sbt(&["exec", "-it", "claude-proj", "id"]).unwrap();
         let line = t.runner().interactive_calls()[0].join(" ");
         assert!(line.contains(" -e TERM_PROGRAM=iTerm.app"), "{line}");
@@ -230,7 +226,7 @@ mod tests {
     #[test]
     fn exec_detach_is_unsupported() {
         let mut t = test_env(&[]);
-        running(&t);
+        t.running_proj();
         let err = t.sbt(&["exec", "-d", "claude-proj", "true"]).unwrap_err();
         assert_eq!(super::super::exit_code(&err), 2);
     }
@@ -238,7 +234,7 @@ mod tests {
     #[test]
     fn cp_rewrites_sandbox_paths() {
         let mut t = test_env(&[]);
-        running(&t);
+        t.running_proj();
         t.sbt(&["cp", "./file", "claude-proj:/tmp/file"]).unwrap();
         t.sbt(&["cp", "claude-proj:/etc/hosts", "./hosts"]).unwrap();
         let cps: Vec<String> = t
@@ -258,7 +254,7 @@ mod tests {
     #[test]
     fn cp_rules() {
         let mut t = test_env(&[]);
-        running(&t);
+        t.running_proj();
         assert!(t.sbt_err(&["cp", "a", "b"]).contains("one of"));
         assert!(
             t.sbt_err(&["cp", "claude-proj:/a", "claude-proj:/b"])

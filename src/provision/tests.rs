@@ -34,22 +34,16 @@ fn meta(name: &str, secrets: &[String], hosts: &[String]) -> Meta {
     }
 }
 
-fn save_secret(t: &TestEnv, service: &str, sandbox: Option<&str>, value: &str) {
-    let mut f = SecretsFile::load(&t.ctx.paths).unwrap();
-    let entry = SecretEntry {
-        service: service.into(),
-        scope: scope_for(sandbox),
-        source: Source::Keychain,
-    };
-    t.ctx.store.set(&entry.account(), value).unwrap();
-    f.set(entry);
-    f.save(&t.ctx.paths).unwrap();
+/// A test env whose policy is deny-all.
+fn deny_all_env() -> TestEnv {
+    let t = test_env(&[]);
+    set_policy(&t, "mode = \"deny-all\"");
+    t
 }
 
 #[test]
 fn start_plan_resolves_bound_secrets_into_env() {
-    let t = test_env(&[]);
-    set_policy(&t, "mode = \"deny-all\"");
+    let t = deny_all_env();
     save_secret(&t, "github", None, "gh-123");
     let github = ["github".to_string()];
     let hosts = credential_hosts(&SecretsFile::load(&t.ctx.paths).unwrap(), &github);
@@ -70,8 +64,7 @@ fn start_plan_resolves_bound_secrets_into_env() {
 
 #[test]
 fn fork_secrets_resolve_own_then_parent_then_global() {
-    let t = test_env(&[]);
-    set_policy(&t, "mode = \"deny-all\"");
+    let t = deny_all_env();
     save_secret(&t, "github", None, "gh-global");
     save_secret(&t, "github", Some("a"), "gh-parent");
     let github = ["github".to_string()];
@@ -109,8 +102,7 @@ fn unresolvable_secret_vars_are_removed_not_inherited() {
 
 #[test]
 fn start_keeps_recorded_credential_hosts_after_the_service_is_gone() {
-    let t = test_env(&[]);
-    set_policy(&t, "mode = \"deny-all\"");
+    let t = deny_all_env();
     // `internal` was a custom service at create; secrets.toml no longer defines it.
     let plan = start_plan(
         &t.ctx,
@@ -233,8 +225,7 @@ fn no_policy_and_no_terminal_is_an_error() {
 
 #[test]
 fn push_updates_running_sandboxes_only() {
-    let t = test_env(&[]);
-    set_policy(&t, "mode = \"deny-all\"");
+    let t = deny_all_env();
     let ls = format!(
         "[{},{}]",
         machine_json(
@@ -286,8 +277,7 @@ fn host_repo(origin: &str) -> (tempfile::TempDir, String) {
 
 #[test]
 fn start_plan_clones_with_the_host_repos_remotes() {
-    let t = test_env(&[]);
-    set_policy(&t, "mode = \"deny-all\"");
+    let t = deny_all_env();
     let (_d, repo) = host_repo("https://x:y@github.com/o/r.git");
     let mut m = meta("s1", &[], &[]);
     m.clone_repo = Some(repo.clone());
@@ -315,8 +305,7 @@ fn start_plan_is_branchable_only_for_forkable_sandboxes() {
         fork_of: Some("s0".into()),
         ..mountless.clone()
     };
-    let t = test_env(&[]);
-    set_policy(&t, "mode = \"deny-all\"");
+    let t = deny_all_env();
     assert!(branchable(&t, &mountless));
     assert!(!branchable(&t, &fork));
 
@@ -327,8 +316,7 @@ fn start_plan_is_branchable_only_for_forkable_sandboxes() {
 
 #[test]
 fn start_plan_for_a_linked_worktree_names_its_branch() {
-    let t = test_env(&[]);
-    set_policy(&t, "mode = \"deny-all\"");
+    let t = deny_all_env();
     let (d, repo) = host_repo("https://github.com/o/r.git");
     let wt = d.path().canonicalize().unwrap().join("wt");
     git(
@@ -346,8 +334,7 @@ fn start_plan_for_a_linked_worktree_names_its_branch() {
 
 #[test]
 fn start_plan_warns_when_the_host_repo_is_gone() {
-    let t = test_env(&[]);
-    set_policy(&t, "mode = \"deny-all\"");
+    let t = deny_all_env();
     let mut m = meta("s1", &[], &[]);
     m.clone_repo = Some("/nonexistent/repo".into());
     let plan = start_plan(&t.ctx, &m).unwrap();
@@ -363,8 +350,7 @@ fn start_plan_warns_when_the_host_repo_is_gone() {
 
 #[test]
 fn install_only_credentials_are_left_out_of_later_starts() {
-    let t = test_env(&[]);
-    set_policy(&t, "mode = \"deny-all\"");
+    let t = deny_all_env();
     save_secret(&t, "github", None, "gh-123");
     let m = Meta {
         credential_install: vec!["GH_TOKEN".into()],
@@ -390,8 +376,7 @@ fn install_only_credentials_are_left_out_of_later_starts() {
 #[test]
 fn kit_credential_vars_resolve_their_service_and_format() {
     use crate::sandbox::labels::CredFormat;
-    let t = test_env(&[]);
-    set_policy(&t, "mode = \"deny-all\"");
+    let t = deny_all_env();
     save_secret(&t, "github", None, "gh-123");
     let mut m = meta("s1", &["github".to_string()], &[]);
     m.credential_env.push("SBX_KIT_GITHUB".into());
@@ -424,8 +409,7 @@ fn kit_create(
     use crate::kits::apply::KitSteps;
     use crate::policy::Decision;
     use crate::sandbox::KitFirstStart;
-    let t = test_env(&[]);
-    set_policy(&t, "mode = \"deny-all\"");
+    let t = deny_all_env();
     let mut policy = Policy::load(&t.ctx.paths).unwrap();
     let mut add = |host: &str, via: &str| {
         policy
@@ -523,8 +507,7 @@ fn the_first_start_opens_this_creates_install_rules() {
 #[test]
 fn install_rules_left_by_an_interrupted_create_stay_shut() {
     use crate::policy::Decision;
-    let t = test_env(&[]);
-    set_policy(&t, "mode = \"deny-all\"");
+    let t = deny_all_env();
     let mut policy = Policy::load(&t.ctx.paths).unwrap();
     let install = policy
         .add_rule(
@@ -572,8 +555,7 @@ fn a_re_create_after_an_interrupted_one_opens_then_drops_its_install_rules() {
         Cap, CapBody, Content, Hook, HookCmd, Kind, Kit, Lifecycle, NetRule, Rules,
     };
     use crate::policy::Decision;
-    let t = test_env(&[]);
-    set_policy(&t, "mode = \"deny-all\"");
+    let t = deny_all_env();
     // An interrupted create of s1 left its install rule behind, and no machine.
     let mut policy = Policy::load(&t.ctx.paths).unwrap();
     policy
@@ -598,13 +580,7 @@ fn a_re_create_after_an_interrupted_one_opens_then_drops_its_install_rules() {
     let mut wl = kit("wl", Kind::Workload);
     wl.content = Content::Image("img:1".into());
     let mut k = kit("k", Kind::Mixin);
-    let cap = |ty: &str, body| Cap {
-        ty: format!("com.docker.sandbox/{ty}"),
-        optional: false,
-        body,
-        group: None,
-        config: None,
-    };
+    let cap = |ty: &str, body| Cap::new(format!("com.docker.sandbox/{ty}"), false, body);
     k.caps = vec![
         cap(
             "network-policy@2",
@@ -682,8 +658,7 @@ fn a_create_failing_before_the_machine_exists_drops_the_kit_rules() {
 
 #[test]
 fn unrecorded_install_and_kit_vars_are_still_removed() {
-    let t = test_env(&[]);
-    set_policy(&t, "mode = \"deny-all\"");
+    let t = deny_all_env();
     save_secret(&t, "github", None, "gh-123");
     // `credential_env` doesn't list either; the labels still name them.
     let m = Meta {
@@ -705,13 +680,11 @@ fn unrecorded_install_and_kit_vars_are_still_removed() {
 
 /// An `ssh-agent@1` entry of mixin `k`.
 fn ssh_agent(phases: &[SshPhase], sign: &[&str], optional: bool) -> crate::kits::model::Cap {
-    crate::kits::model::Cap {
-        ty: "com.docker.sandbox/ssh-agent@1".into(),
+    crate::kits::model::Cap::new(
+        "com.docker.sandbox/ssh-agent@1",
         optional,
-        body: crate::kits::model::CapBody::ssh_agent(phases, sign, &[]),
-        group: None,
-        config: None,
-    }
+        crate::kits::model::CapBody::ssh_agent(phases, sign, &[]),
+    )
 }
 
 /// The `shell` preset (`preset`) or a v3 image workload, plus a mixin `k` with an install hook
@@ -730,10 +703,10 @@ fn agent_plan(preset: bool, caps: Vec<crate::kits::model::Cap>) -> Plan {
     };
     let mut k = kit("k", Kind::Mixin, Content::None);
     k.caps = caps;
-    k.caps.push(Cap {
-        ty: "com.docker.sandbox/lifecycle@1".into(),
-        optional: false,
-        body: CapBody::Lifecycle(Lifecycle {
+    k.caps.push(Cap::new(
+        "com.docker.sandbox/lifecycle@1",
+        false,
+        CapBody::Lifecycle(Lifecycle {
             install: vec![Hook {
                 command: HookCmd::Shell("ssh-add -l".into()),
                 user: None,
@@ -743,9 +716,7 @@ fn agent_plan(preset: bool, caps: Vec<crate::kits::model::Cap>) -> Plan {
             }],
             ..Default::default()
         }),
-        group: None,
-        config: None,
-    });
+    ));
     crate::kits::resolve::resolve(wl, vec![k], &ArgValues::default()).unwrap()
 }
 

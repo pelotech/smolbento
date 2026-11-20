@@ -58,22 +58,16 @@ fn dev_sandbox_in(t: &TestEnv, state: &str, kits: &[KitRecord]) {
     dev_sandbox_labeled(t, state, &labels, kits);
 }
 
-/// `dev` with `labels` besides its name.
+/// `dev` with `labels` (and the default `sbx.command`) besides its name.
 fn dev_sandbox_labeled(t: &TestEnv, state: &str, labels: &[(&str, &str)], kits: &[KitRecord]) {
-    let fake = t.runner();
     let value = labels::kits_value(kits);
-    let mut all = vec![("sbx.name", "dev")];
-    // Every kit sandbox records its command.
-    if !labels.iter().any(|(k, _)| *k == "sbx.command") {
-        all.push(("sbx.command", r#"["bash"]"#));
-    }
-    all.extend_from_slice(labels);
+    let mut all = labels.to_vec();
     if !kits.is_empty() {
         all.push(("sbx.kits", &value));
     }
-    fake.ok(
+    t.runner().ok(
         &["machine", "status", "-n", MACHINE],
-        &machine_json(MACHINE, state, &all),
+        &sandbox_json("dev", state, &all),
     );
 }
 
@@ -118,13 +112,7 @@ fn dev_calls(t: &TestEnv) -> Vec<String> {
 
 #[test]
 fn host_mount_and_ssh_agent_without_authenticate_are_supported() {
-    let cap = |body| super::Cap {
-        ty: String::new(),
-        optional: false,
-        body,
-        group: None,
-        config: None,
-    };
+    let cap = |body| super::Cap::new("", false, body);
     let host = cap(super::CapBody::HostMount {
         path: "/data".into(),
         mode: None,
