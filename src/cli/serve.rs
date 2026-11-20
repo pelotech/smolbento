@@ -19,8 +19,13 @@ use crate::sandbox::{self, Sandbox};
 use crate::smolvm::Runner;
 use crate::ssh_agent::filter::{self, Backing};
 
-pub fn run<R: Runner>(ctx: &Ctx<R>, kind: &str, name: &str) -> Result<i32> {
-    let conn = take_connection()?;
+pub fn run<R: Runner>(
+    ctx: &Ctx<R>,
+    kind: &str,
+    name: &str,
+    conn: Option<UnixStream>,
+) -> Result<i32> {
+    let conn = conn.map_or_else(take_connection, Ok)?;
     let kind = Kind::parse(kind).with_context(|| format!("unknown service kind '{kind}'"))?;
     let slots = ctx.services.slot_files(name, kind);
     guarded(conn, &slots, MAX_CONNECTIONS, |conn, slot| {
@@ -74,17 +79,8 @@ fn lock(path: &Path) -> Option<File> {
 
 /// stdin as the connection, then stdout and stderr to /dev/null (under launchd's inetd mode and
 /// systemd's `StandardInput=socket` they would otherwise be the guest's end of the socket too).
-fn take_connection() -> Result<UnixStream> {
-    // SAFETY: dup of fd 0 either fails or returns a new descriptor nothing else owns.
-    let fd = unsafe { libc::dup(0) };
-    if fd < 0 {
-        bail!(
-            "no connection on stdin: {}",
-            std::io::Error::last_os_error()
-        );
-    }
-    // SAFETY: `fd` is open and owned only here.
-    let conn = UnixStream::from(unsafe { OwnedFd::from_raw_fd(fd) });
+/// Redirects fds 1 and 2 first so even an error here cannot write onto the guest socket.
+pub(super) fn take_connection() -> Result<UnixStream> {
     // SAFETY: open and dup2 on constant arguments; fds 1 and 2 are replaced, not closed.
     unsafe {
         let null = libc::open(c"/dev/null".as_ptr(), libc::O_WRONLY);
@@ -94,7 +90,16 @@ fn take_connection() -> Result<UnixStream> {
             libc::close(null);
         }
     }
-    Ok(conn)
+    // SAFETY: dup of fd 0 either fails or returns a new descriptor nothing else owns.
+    let fd = unsafe { libc::dup(0) };
+    if fd < 0 {
+        bail!(
+            "no connection on stdin: {}",
+            std::io::Error::last_os_error()
+        );
+    }
+    // SAFETY: `fd` is open and owned only here.
+    Ok(UnixStream::from(unsafe { OwnedFd::from_raw_fd(fd) }))
 }
 
 fn agent<R: Runner>(ctx: &Ctx<R>, sb: &Sandbox, conn: &UnixStream) {

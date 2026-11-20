@@ -68,6 +68,15 @@ pub fn hint(err: &anyhow::Error) -> Option<&'static str> {
 
 pub fn main(args: impl IntoIterator<Item = OsString>) -> Result<i32> {
     let args: Vec<OsString> = args.into_iter().collect();
+    // Under launchd inetdCompatibility, fds 0/1/2 all start attached to the untrusted guest socket:
+    // detach stdout/stderr before clap, config loading, or error printing can write to them.
+    let serve_conn = if args.get(1).is_some_and(|a| a == "_serve")
+        && !args.iter().skip(2).any(|a| a == "-h" || a == "--help")
+    {
+        Some(serve::take_connection()?)
+    } else {
+        None
+    };
     let cli = Cli::parse_from(&args);
     let env: BTreeMap<String, String> = std::env::vars().collect();
     let paths = Paths::from_env(&env)?;
@@ -109,7 +118,7 @@ pub fn main(args: impl IntoIterator<Item = OsString>) -> Result<i32> {
             .collect(),
         program: program_name(args.first()),
     };
-    dispatch(&mut ctx, cli)
+    dispatch_with(&mut ctx, cli, serve_conn)
 }
 
 /// smolvm's own `SMOLVM_IMAGE_SEED_MAX_BYTES` wins; else `smolvm.image-cache-size` sets it. A bad
@@ -133,6 +142,14 @@ fn with_image_cache(
 }
 
 pub fn dispatch<R: Runner>(ctx: &mut Ctx<R>, cli: Cli) -> Result<i32> {
+    dispatch_with(ctx, cli, None)
+}
+
+fn dispatch_with<R: Runner>(
+    ctx: &mut Ctx<R>,
+    cli: Cli,
+    serve_conn: Option<std::os::unix::net::UnixStream>,
+) -> Result<i32> {
     if cli.cloud {
         return Err(Unsupported("--cloud: Docker Cloud sandboxes are not supported".into()).into());
     }
@@ -184,7 +201,7 @@ pub fn dispatch<R: Runner>(ctx: &mut Ctx<R>, cli: Cli) -> Result<i32> {
         Cmd::UploadPack { sandbox, .. } => upload_pack::run(ctx, &sandbox),
         Cmd::Bridge { sandbox } => bridge::run(ctx, &sandbox),
         Cmd::Ssh(s) => ssh::run(ctx, s),
-        Cmd::Serve { kind, sandbox } => serve::run(ctx, &kind, &sandbox),
+        Cmd::Serve { kind, sandbox } => serve::run(ctx, &kind, &sandbox, serve_conn),
         Cmd::Smolvm(p) => ctx.vm.runner().interactive(&p.args),
         Cmd::Daemon(_) => {
             writeln!(
