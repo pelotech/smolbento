@@ -28,6 +28,7 @@ shows changes. The GIF stays out of git: only the tape is committed.
 | `just lint` | All pre-commit hooks: fmt, clippy, cargo-deny, yamllint, actionlint, zizmor |
 | `just install` | Install to `~/.cargo/bin`, with the `bento` and `sbx` links |
 | `just release-build TARGET BUILDER` | Build a release tarball into `dist/` |
+| `just check-target TARGET` | Unoptimised build for TARGET in the release container (checks macOS-only code) |
 
 ## Tests
 
