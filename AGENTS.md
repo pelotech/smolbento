@@ -146,8 +146,10 @@ Shipped kits live in `kits/`. Planned for later phases: `tui`, and `images/plus/
   same machine. GitHub's arm64 Linux and macOS runners can't boot VMs. Run `just test` and `just e2e`
   on your Mac before pushing changes that affect macOS. A macOS unit-test job runs only on manual
   `workflow_dispatch` with `macos: true`.
-- The macOS release binary is cross-compiled on Linux and never run in CI. Before merging a
-  release-please PR, run `just test` and `just e2e` on a Mac. To build it natively instead, change its
+- The macOS release binary is cross-compiled on Linux and never run in CI. Pull requests build
+  macOS-only code with `just check-target aarch64-apple-darwin`; the full release builds run on the
+  release-please PR and on PRs that change the build's inputs. Before merging a release-please PR,
+  run `just test` and `just e2e` on a Mac. To build it natively instead, change its
   release matrix entry to `runner: macos-latest, builder: cargo`.
 - New command or flag: add a parity line to `tests/parity/sbx-commands.txt` if it exists in sbx, a
   fake-`Runner` test asserting the smolvm argv, and update `--help` snapshots (`cargo insta review`).

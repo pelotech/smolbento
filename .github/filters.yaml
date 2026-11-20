@@ -11,3 +11,11 @@ code:
   - 'justfile'
   - 'smolvm.lock'
   - '.github/**'
+# Inputs of the release build, which runs on pull requests that change them (and on the release PR).
+build:
+  - 'Cargo.toml'
+  - 'Cargo.lock'
+  - 'flake.nix'
+  - 'flake.lock'
+  - 'justfile'
+  - '.github/workflows/build.yaml'

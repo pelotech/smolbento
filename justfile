@@ -65,6 +65,22 @@ install:
     cargo install --locked --path .
     for n in bento sbx; do ln -sf smolbento "$HOME/.cargo/bin/$n"; done
 
+# Unoptimised build for TARGET in the release container: checks code only it compiles (macOS-only)
+check-target target:
+    just _zigbuild {{target}} --locked --target {{target}}
+
+# `cargo zigbuild ARGS` for TARGET in the release cross-build container, whose image carries the
+# macOS SDK the darwin target links against, on the Nix dev shell's rustc (the one tested in CI)
+_zigbuild target *args:
+    #!/usr/bin/env bash
+    set -euo pipefail
+    rust_ver=$(rustc -V | cut -d' ' -f2)
+    docker run --rm -v "$PWD":/io -w /io -e MACOSX_DEPLOYMENT_TARGET=13.0 \
+        -e RUSTUP_TOOLCHAIN="$rust_ver" \
+        ghcr.io/rust-cross/cargo-zigbuild:0.23.4@sha256:d8313491ec5798de0633fdc1c5753761bff79967bea69076020dc78121b2cca8 \
+        sh -c "rustup toolchain install $rust_ver --profile minimal --no-self-update -t {{target}} && cargo zigbuild {{args}}"
+    sudo chown -R "$(id -u):$(id -g)" target
+
 # Build a release tarball for TARGET into dist/ with BUILDER: cargo (native) or zigbuild (cross from Linux)
 release-build target builder:
     #!/usr/bin/env bash
@@ -75,14 +91,7 @@ release-build target builder:
         # host's, so they run on any mainstream distro; the output still lands in target/{{target}}.
         zig_target="{{target}}"
         case "{{target}}" in *-linux-gnu) zig_target="{{target}}.2.28" ;; esac
-        # The image carries the macOS SDK, which the darwin target links against.
-        # Match the Nix dev shell's rustc so release builds use the same compiler tested in CI.
-        rust_ver=$(rustc -V | cut -d' ' -f2)
-        docker run --rm -v "$PWD":/io -w /io -e MACOSX_DEPLOYMENT_TARGET=13.0 \
-            -e RUSTUP_TOOLCHAIN="$rust_ver" \
-            ghcr.io/rust-cross/cargo-zigbuild:0.23.4@sha256:d8313491ec5798de0633fdc1c5753761bff79967bea69076020dc78121b2cca8 \
-            sh -c "rustup toolchain install $rust_ver --profile minimal --no-self-update -t {{target}} && cargo zigbuild --locked --release --target $zig_target"
-        sudo chown -R "$(id -u):$(id -g)" target
+        just _zigbuild {{target}} --locked --release --target "$zig_target"
         case "{{target}}" in *-apple-darwin)
             # Apple Silicon refuses unsigned binaries; an ad-hoc signature is enough for a CLI.
             rcodesign sign "$bin"
