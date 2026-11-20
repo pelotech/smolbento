@@ -250,6 +250,9 @@ struct Binding {
 struct Conn {
     /// Verified, non-forwarding bindings, newest last.
     bindings: Vec<Binding>,
+    /// Once a connection carries a forwarding binding, it stays forwarded: later non-forwarding
+    /// bindings and login signatures are refused even against host agents that don't enforce this.
+    forwarded: bool,
 }
 
 /// What to do with one guest message (type byte and payload, never empty). `known_hosts` reads
@@ -283,16 +286,23 @@ fn verdict(
                     return Verdict::Relay;
                 }
                 match binding(rest) {
-                    // Remembered when verified and not for a forwarded agent. The host agent
-                    // still gets it and answers as it would, so its own limits apply.
+                    // Remembered when verified and not for a forwarded agent. Once forwarding is
+                    // observed on a connection, latch it and drop prior bindings so a compromised
+                    // forwarded host can't downgrade against non-OpenSSH host agents.
                     Some((b, forwarding)) => {
-                        if !forwarding {
+                        if forwarding {
+                            conn.forwarded = true;
+                            conn.bindings.clear();
+                            Verdict::Relay
+                        } else if conn.forwarded {
+                            Verdict::Fail
+                        } else {
                             conn.bindings.push(b);
                             if conn.bindings.len() > MAX_BINDINGS {
                                 conn.bindings.remove(0);
                             }
+                            Verdict::Relay
                         }
-                        Verdict::Relay
                     }
                     None => Verdict::Fail,
                 }
@@ -303,15 +313,32 @@ fn verdict(
     }
 }
 
-/// An unrestricted grant signs anything; a `sign` list only namespaced signatures (`SSHSIG`) in
-/// one of its namespaces. Logins and other data don't start with `SSHSIG`.
+/// An unrestricted grant signs anything; a `sign` list only well-formed `PROTOCOL.sshsig`
+/// payloads (`"SSHSIG"`, namespace, reserved, hash_algorithm, hash, with nothing trailing) in one
+/// of its namespaces. Logins and other data don't start with `SSHSIG`.
 fn admitted(access: &Access, data: &[u8]) -> bool {
     let Some(namespaces) = &access.sign else {
         return true;
     };
-    data.strip_prefix(SSHSIG)
-        .and_then(string)
-        .is_some_and(|(ns, _)| namespaces.iter().any(|n| n.as_bytes() == ns))
+    let Some(rest) = data.strip_prefix(SSHSIG) else {
+        return false;
+    };
+    let Some((ns, rest)) = string(rest) else {
+        return false;
+    };
+    let Some((_reserved, rest)) = string(rest) else {
+        return false;
+    };
+    let Some((hash_alg, rest)) = string(rest) else {
+        return false;
+    };
+    let Some((hash, rest)) = string(rest) else {
+        return false;
+    };
+    rest.is_empty()
+        && !hash_alg.is_empty()
+        && !hash.is_empty()
+        && namespaces.iter().any(|n| n.as_bytes() == ns)
 }
 
 /// A `session-bind@openssh.com` body after the extension name (`string hostkey, string
@@ -346,7 +373,7 @@ fn login_admitted(
     key: &[u8],
     data: &[u8],
 ) -> bool {
-    if access.sign.is_none() || access.authenticate.is_empty() {
+    if conn.forwarded || access.sign.is_none() || access.authenticate.is_empty() {
         return false;
     }
     let Some(login) = login(key, data) else {
@@ -395,7 +422,10 @@ fn login<'a>(request_key: &[u8], data: &'a [u8]) -> Option<Login<'a>> {
         return None;
     }
     let (user, rest) = string(rest)?;
-    let (_service, rest) = string(rest)?;
+    let (service, rest) = string(rest)?;
+    if service != b"ssh-connection" {
+        return None;
+    }
     let (method, rest) = string(rest)?;
     let (&has_signature, rest) = rest.split_first()?;
     let (algorithm, rest) = string(rest)?;
