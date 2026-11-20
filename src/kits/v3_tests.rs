@@ -700,6 +700,91 @@ fn credential_phase_list_and_validation() {
     assert!(format!("{e:#}").contains("apiKey"), "{e:#}");
 }
 
+/// The `apiKey.inject[]` rules of a v3 credential@1 with `inject` (a JSON list), and of the
+/// same rules in a v2 kit's `credentials`.
+fn v3_and_v2_injects(inject: &str) -> (Result<Vec<Inject>>, Result<Vec<Inject>>) {
+    let v3 = one_cap(&format!(
+        r#"{{"type":"com.docker.sandbox/credential@1","config":{{"service":"github",
+            "phase":"runtime","apiKey":{{"name":"GH_TOKEN","inject":{inject}}}}}}}"#
+    ))
+    .map(|k| match &k.caps[0].body {
+        CapBody::Credential(c) => c.inject.clone(),
+        b => panic!("{b:?}"),
+    });
+    // JSON is YAML.
+    let v2 = crate::kits::v2::parse(
+        &format!(
+            "schemaVersion: \"2\"\nkind: mixin\nname: m\ncredentials:\n  - service: github\n    \
+             apiKey:\n      name: GH_TOKEN\n      inject: {inject}\n"
+        ),
+        std::path::Path::new("/nonexistent"),
+    )
+    .map(|k| match &k.caps[0].body {
+        CapBody::Credential(c) => c.inject.clone(),
+        b => panic!("{b:?}"),
+    });
+    (v3, v2)
+}
+
+/// SPEC credential@1, Config table row `apiKey.inject[].scheme` / `username` ("Non-header
+/// presentation, e.g. `basic` with `username` (credential as password)"). The row has no `tck:`
+/// id at the pinned SPEC_COMMIT. v3 presents a scheme as v2 does: `basic` is smolvm's basic-auth
+/// format for the username, `bearer` an `Authorization: Bearer %s` header.
+#[test]
+fn credential_inject_scheme_is_presented_as_in_v2() {
+    let (v3, v2) = v3_and_v2_injects(
+        r#"[{"domain":"github.com","scheme":"basic","username":"x-access-token"}]"#,
+    );
+    let v3 = v3.unwrap();
+    assert_eq!(
+        v3,
+        [Inject {
+            domain: "github.com".into(),
+            header: None,
+            format: None,
+            basic_user: Some("x-access-token".into()),
+        }]
+    );
+    assert_eq!(v3, v2.unwrap());
+
+    let (v3, v2) = v3_and_v2_injects(r#"[{"domain":"api.github.com","scheme":"bearer"}]"#);
+    let v3 = v3.unwrap();
+    assert_eq!(v3[0].header.as_deref(), Some("Authorization"));
+    assert_eq!(v3[0].format.as_deref(), Some("Bearer %s"));
+    assert_eq!(v3, v2.unwrap());
+}
+
+/// SPEC credential@1, row `apiKey.inject[].scheme` / `username` (no `tck:` id at the pinned
+/// SPEC_COMMIT): smolvm presents only `bearer` and `basic`, so another scheme is refused at load
+/// instead of sending the raw value, as is `basic` without a username or a scheme with a format.
+#[test]
+fn credential_inject_scheme_smolvm_cant_present_is_refused() {
+    for (inject, want) in [
+        (
+            r#"[{"domain":"a.com","scheme":"digest"}]"#,
+            r#"scheme must be bearer or basic (got "digest")"#,
+        ),
+        (
+            r#"[{"domain":"a.com","scheme":"basic"}]"#,
+            "scheme basic needs a username",
+        ),
+        (
+            r#"[{"domain":"a.com","scheme":"bearer","format":"Token %s"}]"#,
+            "inject sets both format and scheme",
+        ),
+    ] {
+        let (v3, v2) = v3_and_v2_injects(inject);
+        assert_eq!(
+            format!("{:#}", v3.unwrap_err()),
+            format!("capability com.docker.sandbox/credential@1: apiKey.inject[0]: {want}")
+        );
+        assert_eq!(
+            format!("{:#}", v2.unwrap_err()),
+            format!("credentials: github {want}")
+        );
+    }
+}
+
 fn ssh(config: &str) -> Result<CapBody> {
     one_cap(&format!(
         r#"{{"type":"com.docker.sandbox/ssh-agent@1","config":{config}}}"#

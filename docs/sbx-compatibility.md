@@ -421,8 +421,14 @@ used.
   `agentInstructions` too) is in the file itself, between the same markers, joined with two
   newlines. sbx 0.54 lists a mixin's `@2` text in the index, as for `@1`, so the two differ there
   for now.
-- A kit's network hosts follow the spec: `*` means everything, as `**` does (only `bento policy
-  allow` refuses a bare `*`, as sbx does). A `network-policy@2` entry is a host string or an object,
+- A kit's network hosts follow the spec: `*` means everything, as `**` does, a v2 kit's
+  `permissions.network` too (only `bento policy allow` refuses a bare `*`, as sbx does). A v2
+  kit's resources, network, ports and volumes are read as their v3 capabilities, so their errors
+  use v3's names (`transport` for a port's `protocol`).
+- A credential's `inject` `scheme` is presented by smolvm, in v2 and v3 kits alike: `bearer` is
+  `Authorization: Bearer %s`, and `basic` (which needs a `username`) sends the credential as the
+  basic-auth password. smolvm can't present other schemes, so a kit naming one is refused when it
+  loads, as is one setting both `scheme` and `format`. A `network-policy@2` entry is a host string or an object,
   and its objects are checked as the spec says: an empty `methods` or `paths` list, `paths` without
   `methods`, a lowercase method, `ANY` beside another method, a path not starting with `/`, or a
   pattern in a bounded allow entry is an error.
@@ -506,7 +512,8 @@ used.
 - `integrates` and `conflicts` error texts, and a published kit whose provides have no version.
 - An optional argument a kit declares but doesn't use, with no value and no default.
 - A v2 kit's `files/home` and `files/workspace` are copied as they are: `${{ kit.args.* }}` and
-  `${{ kit.env.* }}` in them stay text. In `setup` hooks and files they're replaced. In
+  `${{ kit.env.* }}` in them stay text. In `setup` hooks and files, and in resources, network
+  hosts, ports and volumes, they're replaced. In
   `setup.files`, `${WORKDIR}` in the content and a relative path mean the workspace.
 - A published kit's host-mount identity: keyed on `<registry>/<repository>`; sbx's choice isn't
   measured.

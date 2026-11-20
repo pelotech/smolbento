@@ -684,7 +684,7 @@ fn add_lifecycle(merged: &mut Merged, k: &Kit, l: &Lifecycle, workdir: &str) {
 
 /// Expands `k`'s `${{ kit.args.* }}` and `${{ kit.env.* }}` references, each once, then checks the
 /// result: a config holding one is expanded as a document and read again, strictly (SPEC-v3 §6).
-/// A v2 kit's hooks, files and agent instructions are configs too; its `files/` are copied as is.
+/// A v2 kit's capabilities are configs too, except its credentials; its `files/` are copied as is.
 fn expand_caps(
     k: &mut Kit,
     args: &BTreeMap<String, String>,
