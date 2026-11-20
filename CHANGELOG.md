@@ -1,5 +1,12 @@
 # Changelog
 
+## [0.33.3](https://github.com/pelotech/smolbento/compare/v0.33.2...v0.33.3) (2026-11-20)
+
+
+### Bug Fixes
+
+* harden secrets, ssh-agent, policy, serve and host-service edge cases ([#194](https://github.com/pelotech/smolbento/issues/194)) ([30234aa](https://github.com/pelotech/smolbento/commit/30234aaf1190ccd9b11cf91241bc23c6b0f36cfc))
+
 ## [0.33.2](https://github.com/pelotech/smolbento/compare/v0.33.1...v0.33.2) (2026-11-20)
 
 
