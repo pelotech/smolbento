@@ -110,7 +110,7 @@ What a kit does, and when:
   socket is handed to the image user's group. A kit that starts dockerd itself declares
   `dockerd@1` with `config: {autoStart: false}`; if another kit also asks for the engine, smolbento
   starts it, so that kit's step must accept a running engine. With `docker.enabled=false` a required
-  `dockerd@1` refuses the create and an optional one is skipped.
+  `dockerd@1` refuses the create, `--kit docker` included, and an optional one is skipped.
 - A v3 install step gets a clean environment (`PATH`, `HOME`, `USER`, `TERM`, the proxy and CA
   variables, and what its `env` lists). Startup steps and v2 steps get the full sandbox environment.
 - A missing credential doesn't block create. You get `WARN: required credential not found for

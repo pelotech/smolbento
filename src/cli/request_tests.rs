@@ -717,7 +717,10 @@ fn docker_disabled_refuses_a_required_dockerd_and_skips_an_optional_one() {
     let mut t = env(false);
     let e = t.sbt(&args).unwrap_err();
     assert!(
-        format!("{e:#}").contains("dockerd@1: Docker is disabled (docker.enabled=false)"),
+        format!("{e:#}").ends_with(
+            "kit dind: dockerd@1: Docker is disabled (docker.enabled=false); turn it on with \
+             `bento settings set docker.enabled true`"
+        ),
         "{e:#}"
     );
     assert!(!t.made("machine create"));
@@ -732,6 +735,13 @@ fn docker_disabled_refuses_a_required_dockerd_and_skips_an_optional_one() {
     let plan = super::kit_plan(&t.ctx, &mut req, workload, &a.opts, &quiet).unwrap();
     assert_eq!(plan.merged.dockerd, None);
     assert_eq!(plan.skipped, ["dind: com.docker.sandbox/dockerd@1"]);
+    assert_eq!(
+        plan.skipped_warnings(),
+        [
+            "kit dind: skipping com.docker.sandbox/dockerd@1 (Docker is disabled: \
+          docker.enabled=false)"
+        ]
+    );
 
     let mut t = env(true);
     t.sbt(&args).unwrap();

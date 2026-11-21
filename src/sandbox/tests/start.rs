@@ -429,3 +429,28 @@ fn each_probe_is_bounded() {
     let probes: Vec<_> = lines.iter().filter(|l| l.contains("_ping")).collect();
     assert_eq!(probes, [&probe_argv(MACHINE).join(" ")], "{lines:#?}");
 }
+
+/// tck: dockerd@1/fails-when-engine-unanswered
+#[test]
+fn an_unanswered_engine_on_a_kit_create_removes_the_sandbox() {
+    let fake = FakeRunner::new();
+    fake.ok(
+        &["machine", "status"],
+        &STATUS.replace("\"state\": \"running\"", "\"state\": \"created\""),
+    );
+    fake.fail(&probe_argv(MACHINE), "COMMAND_FAILED", "no engine");
+    let vm = Smolvm::new(fake);
+    let err = create(
+        &vm,
+        &request(),
+        &kit_plan(&[]),
+        |_| Ok(NetworkSpec::Open),
+        &mut |_| {},
+    )
+    .unwrap_err();
+    assert!(err.chain().any(|e| e.to_string() == UNANSWERED), "{err:#}");
+    assert_eq!(
+        vm.runner().call_lines().last().unwrap(),
+        &format!("machine delete -n {MACHINE} -f")
+    );
+}

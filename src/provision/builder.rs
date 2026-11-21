@@ -227,8 +227,8 @@ fn start<R: Runner>(ctx: &Ctx<R>, sb: &mut Sandbox, tokens: Vec<(String, String)
 }
 
 /// The builder's kits: the `shell` agent's image as a plain image, and the shipped docker kit,
-/// whose startup hook starts dockerd on every start of the builder. It runs as root, like every
-/// internal sandbox.
+/// whose `dockerd@1` has smolbento start the engine on every start of the builder (no startup
+/// hook). It runs as root, like every internal sandbox.
 fn docker_plan() -> Result<Plan> {
     let workload = Kit {
         content: Content::Image(BUILDER_IMAGE.into()),

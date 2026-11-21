@@ -55,6 +55,8 @@ pub struct Volume {
 pub struct Skipped {
     pub kit: String,
     pub what: String,
+    /// Why, for the warning.
+    pub reason: &'static str,
 }
 
 impl Skipped {
@@ -62,6 +64,7 @@ impl Skipped {
         Skipped {
             kit: kit.into(),
             what: what.into(),
+            reason: "not supported",
         }
     }
 }
@@ -86,7 +89,7 @@ impl Plan {
     pub fn skipped_warnings(&self) -> Vec<String> {
         self.skipped
             .iter()
-            .map(|s| format!("kit {}: skipping {} (not supported)", s.kit, s.what))
+            .map(|s| format!("kit {}: skipping {} ({})", s.kit, s.what, s.reason))
             .collect()
     }
 }
@@ -360,20 +363,21 @@ pub const NO_SANDBOX_WORKDIR: &str = crate::workspace::MOUNTLESS_WORKDIR;
 
 /// For `docker.enabled=false`: `kit` without its `dockerd@1` requests. A required one refuses the
 /// create; an optional one is skipped.
-pub fn without_dockerd(kit: &mut Kit) -> Result<Vec<Skipped>> {
+pub fn without_dockerd(kit: &mut Kit) -> Result<Option<Skipped>> {
     let ty = format!("{}dockerd@1", super::CAP_NS);
     if kit.caps.iter().any(|c| c.ty == ty && !c.optional) {
         bail!(
-            "kit {}: dockerd@1: Docker is disabled (docker.enabled=false)",
+            "kit {}: dockerd@1: Docker is disabled (docker.enabled=false); turn it on with \
+             `bento settings set docker.enabled true`",
             kit.name
         );
     }
     let before = kit.caps.len();
     kit.caps.retain(|c| c.ty != ty);
-    Ok((kit.caps.len() < before)
-        .then(|| Skipped::new(&kit.name, ty))
-        .into_iter()
-        .collect())
+    Ok((kit.caps.len() < before).then(|| Skipped {
+        reason: "Docker is disabled: docker.enabled=false",
+        ..Skipped::new(&kit.name, ty)
+    }))
 }
 
 /// `resolve_for` without a sandbox, for checking kits: `WORKSPACE` is `NO_SANDBOX_WORKDIR`.
