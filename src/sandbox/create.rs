@@ -27,6 +27,8 @@ pub struct CreateRequest {
     /// The sandbox has a private dockerd (the `sbx.docker` label). Before kits are applied: the
     /// image should get the `docker` kit; `kits::apply` then sets it from the applied kits.
     pub docker: bool,
+    /// With `docker`: the engine isn't started on its own (the `manual` value of `sbx.docker`).
+    pub docker_manual: bool,
     pub created: i64,
     pub network: NetworkSpec,
     pub deny_cidrs: Vec<String>,
@@ -104,6 +106,7 @@ pub fn meta(req: &CreateRequest) -> Meta {
         created: req.created,
         version: Some(env!("CARGO_PKG_VERSION").into()),
         docker: req.docker,
+        docker_manual: req.docker_manual,
         rec: req.rec.clone(),
         clone_repo: req.clone.as_ref().map(|c| c.top.display().to_string()),
         fork_of: None,

@@ -6,7 +6,6 @@ use std::path::Path;
 
 use anyhow::{Context, Result, bail};
 
-use crate::kits::capability;
 use crate::kits::compose;
 use crate::kits::env_ref;
 use crate::kits::guest;
@@ -189,15 +188,14 @@ pub fn apply(
     record_kits(&kits, &plan.args, req)?;
     steps.kit_names = req.rec.kits.iter().map(|k| k.name.clone()).collect();
     req.rec.long_running = m.long_running;
-    // `sbx.docker` (shown by `ls`) says the sandbox has a private dockerd: the docker kit's, or
-    // that of a mixin providing `docker` in its place. A workload's `provides` lists its tools
-    // (sbx's `docker@29.10.0`), not an engine, as `needs_docker_kit` reads it.
-    req.docker = plan.mixins.iter().any(|k| {
-        k.source == Source::Builtin("docker")
-            || k.provides
-                .iter()
-                .any(|p| capability::provides_name(p, "docker"))
-    });
+    // `sbx.docker` (shown by `ls`) records a `dockerd@1` grant. A workload's `provides` lists its
+    // tools, not an engine. The Builtin clause goes when the shipped kit declares dockerd@1.
+    req.docker = m.dockerd.is_some()
+        || plan
+            .mixins
+            .iter()
+            .any(|k| k.source == Source::Builtin("docker"));
+    req.docker_manual = m.dockerd == Some(false);
 
     // Last, so an error above leaves the policy untouched.
     let added = add_policy(policy, &req.name, m, &mut steps.install_rules)?;

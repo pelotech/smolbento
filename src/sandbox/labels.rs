@@ -199,6 +199,8 @@ pub struct Meta {
     pub version: Option<String>,
     /// Whether the sandbox runs a private dockerd.
     pub docker: bool,
+    /// The engine is not started on its own (`dockerd@1` with `autoStart: false`).
+    pub docker_manual: bool,
     /// What the `CreateRequest` gave, recorded unchanged.
     pub rec: Recorded,
     /// `--clone`: the host repo's top, which is also the clone's path in the guest. Stored as
@@ -239,7 +241,15 @@ impl Meta {
             (AGENT.to_string(), self.agent.clone()),
             (WORKSPACES.to_string(), json(&self.workspaces)),
             (CREATED.to_string(), self.created.to_string()),
-            (DOCKER.to_string(), self.docker.to_string()),
+            (
+                DOCKER.to_string(),
+                match (self.docker, self.docker_manual) {
+                    (true, true) => "manual",
+                    (true, false) => "true",
+                    _ => "false",
+                }
+                .into(),
+            ),
         ]);
         // Everything else is written only when set, so a sandbox's labels don't change when a
         // field it doesn't use is added. Kit labels exist only on sandboxes created with kits.
@@ -322,7 +332,11 @@ impl Meta {
                 .and_then(|c| c.parse().ok())
                 .unwrap_or(0),
             version: text(VERSION),
-            docker: flag(DOCKER),
+            docker: matches!(
+                labels.get(DOCKER).map(String::as_str),
+                Some("true" | "manual")
+            ),
+            docker_manual: labels.get(DOCKER).is_some_and(|v| v == "manual"),
             clone_repo: flag(CLONE)
                 .then(|| text(CLONE_TOP).or(text(WORKSPACE)))
                 .flatten(),
@@ -426,6 +440,24 @@ mod tests {
         let labels = meta().to_labels();
         assert!(!labels.contains_key("sbx.kits"), "{labels:?}");
         assert!(Meta::from_labels(&labels).unwrap().rec.kits.is_empty());
+    }
+
+    #[test]
+    fn docker_label_round_trips() {
+        for (docker, manual, value) in [
+            (true, false, "true"),
+            (true, true, "manual"),
+            (false, false, "false"),
+        ] {
+            let m = Meta {
+                docker,
+                docker_manual: manual,
+                ..meta()
+            };
+            let labels = m.to_labels();
+            assert_eq!(labels["sbx.docker"], value);
+            assert_eq!(Meta::from_labels(&labels), Some(m));
+        }
     }
 
     #[test]
