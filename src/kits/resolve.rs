@@ -59,12 +59,14 @@ pub struct Skipped {
     pub reason: &'static str,
 }
 
+const NOT_SUPPORTED: &str = "not supported";
+
 impl Skipped {
     fn new(kit: &str, what: impl Into<String>) -> Skipped {
         Skipped {
             kit: kit.into(),
             what: what.into(),
-            reason: "not supported",
+            reason: NOT_SUPPORTED,
         }
     }
 }
@@ -369,34 +371,29 @@ pub const NO_SANDBOX_WORKDIR: &str = crate::workspace::MOUNTLESS_WORKDIR;
 /// (SPEC-v3 §7.1.1).
 pub fn without_dockerd(kit: &mut Kit) -> Result<Vec<Skipped>> {
     let ty = format!("{}dockerd@1", super::CAP_NS);
-    if kit.caps.iter().any(|c| c.ty == ty && !c.optional) {
+    if let Some(c) = kit.caps.iter().find(|c| c.ty == ty && !c.optional) {
+        let group =
+            (c.group.as_ref()).map_or(String::new(), |g| format!("group {}: ", group_label(g)));
         bail!(
-            "kit {}: dockerd@1: Docker is disabled (docker.enabled=false); turn it on with \
+            "kit {}: {group}dockerd@1: Docker is disabled (docker.enabled=false); turn it on with \
              `bento settings set docker.enabled true`",
             kit.name
         );
     }
-    let skip = |what: String| Skipped {
-        reason: "Docker is disabled: docker.enabled=false",
-        ..Skipped::new(&kit.name, what)
-    };
-    let (mut bare, mut groups, mut skipped) = (false, Vec::new(), Vec::new());
-    for c in kit.caps.iter().filter(|c| c.ty == ty) {
-        match &c.group {
-            None => bare = true,
-            Some(g) if !groups.contains(&g.index) => {
-                groups.push(g.index);
-                skipped.push(skip(format!(
-                    "optional group {}, for its {} {ty}",
-                    group_label(g),
-                    g.member_path()
-                )));
-            }
-            Some(_) => {}
-        }
+    const REASON: &str = "Docker is disabled: docker.enabled=false";
+    let mut skipped = Vec::new();
+    if kit.caps.iter().any(|c| c.ty == ty && c.group.is_none()) {
+        skipped.push(Skipped {
+            reason: REASON,
+            ..Skipped::new(&kit.name, ty.clone())
+        });
     }
-    if bare {
-        skipped.insert(0, skip(ty.clone()));
+    let mut groups = Vec::new();
+    for c in kit.caps.iter().filter(|c| c.ty == ty) {
+        if let Some(g) = c.group.as_ref().filter(|g| !groups.contains(&g.index)) {
+            groups.push(g.index);
+            skipped.push(group_skip(&kit.name, g, &ty, REASON));
+        }
     }
     kit.caps
         .retain(|c| c.ty != ty && c.group.as_ref().is_none_or(|g| !groups.contains(&g.index)));
@@ -644,16 +641,16 @@ fn select_groups(k: &mut Kit) -> Result<Vec<Skipped>> {
         }
         let Some(why) = unsupported(c) else { continue };
         rejected.push(g.index);
-        let (group, member) = (group_label(g), g.member_path());
         if !c.optional {
             bail!(
-                "kit {}: required group {group}: {member} {} {why}",
+                "kit {}: required group {}: {} {} {why}",
                 k.name,
+                group_label(g),
+                g.member_path(),
                 c.ty
             );
         }
-        let what = format!("optional group {group}, for its {member} {}", c.ty);
-        skipped.push(Skipped::new(&k.name, what));
+        skipped.push(group_skip(&k.name, g, &c.ty, NOT_SUPPORTED));
     }
     k.caps.retain(|c| {
         c.group
@@ -668,6 +665,19 @@ fn group_label(g: &Group) -> String {
     match &g.name {
         Some(n) => format!("{} ({n})", g.path()),
         None => g.path(),
+    }
+}
+
+/// The warning for an optional group skipped for its `ty` member.
+fn group_skip(kit: &str, g: &Group, ty: &str, reason: &'static str) -> Skipped {
+    let what = format!(
+        "optional group {}, for its {} {ty}",
+        group_label(g),
+        g.member_path()
+    );
+    Skipped {
+        reason,
+        ..Skipped::new(kit, what)
     }
 }
 

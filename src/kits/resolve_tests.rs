@@ -1065,12 +1065,16 @@ fn docker_disabled_skips_a_whole_optional_group_with_dockerd() {
     assert!(p.skipped.is_empty(), "{:?}", p.skipped);
 }
 
-/// A required group holding `dockerd@1` refuses like a required `dockerd@1`.
+/// A required group holding `dockerd@1` refuses like a required `dockerd@1`, naming the group.
 /// tck: SPEC-v3 §7.1.1/atomic-selection
 #[test]
 fn docker_disabled_refuses_a_required_group_with_dockerd() {
     let e = without_dockerd(&mut dockerd_group(false)).unwrap_err();
-    assert!(format!("{e:#}").contains("Docker is disabled"), "{e:#}");
+    assert_eq!(
+        format!("{e:#}"),
+        "kit g: group capabilities[0] (Docker): dockerd@1: Docker is disabled \
+         (docker.enabled=false); turn it on with `bento settings set docker.enabled true`"
+    );
 }
 
 /// A group member is taken whole or not at all, never widened to its hosts as an optional
