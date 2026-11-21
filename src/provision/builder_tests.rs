@@ -42,10 +42,7 @@ fn builder_json(state: &str) -> String {
         &[
             ("sbx.name", "_builder"),
             ("sbx.docker", "true"),
-            (
-                "sbx.kits",
-                r#"[{"name":"docker","ref":"builtin:docker","provides":["docker@1.0.0"]}]"#,
-            ),
+            ("sbx.kits", r#"[{"name":"docker","ref":"builtin:docker"}]"#),
         ],
     )
 }
@@ -545,10 +542,7 @@ fn dhi_builder_json(state: &str) -> String {
         &[
             ("sbx.name", "_builder"),
             ("sbx.docker", "true"),
-            (
-                "sbx.kits",
-                r#"[{"name":"docker","ref":"builtin:docker","provides":["docker@1.0.0"]}]"#,
-            ),
+            ("sbx.kits", r#"[{"name":"docker","ref":"builtin:docker"}]"#),
             ("sbx.registries", "dhi.io"),
             ("sbx.credential-hosts", "dhi.io"),
             ("sbx.credential-env", "SBX_REGISTRY_0_AUTH"),
