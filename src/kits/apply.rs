@@ -190,8 +190,9 @@ pub fn apply(
     steps.kit_names = req.rec.kits.iter().map(|k| k.name.clone()).collect();
     req.rec.long_running = m.long_running;
     // `sbx.docker` (shown by `ls`) says the sandbox has a private dockerd: the docker kit's, or
-    // that of a kit providing `docker` in its place.
-    req.docker = kits.iter().any(|k| {
+    // that of a mixin providing `docker` in its place. A workload's `provides` lists its tools
+    // (sbx's `docker@29.10.0`), not an engine, as `needs_docker_kit` reads it.
+    req.docker = plan.mixins.iter().any(|k| {
         k.source == Source::Builtin("docker")
             || k.provides
                 .iter()

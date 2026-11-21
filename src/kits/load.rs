@@ -672,7 +672,11 @@ mod tests {
         assert_eq!(k.name, "docker");
         assert_eq!(k.source, Source::Builtin("docker"));
         assert_eq!(k.kind, Kind::Mixin);
-        assert_eq!(k.provides, ["docker@1.0.0"]);
+        assert!(
+            k.provides.is_empty(),
+            "it only starts dockerd: {:?}",
+            k.provides
+        );
         let volumes: Vec<&str> = k
             .caps
             .iter()

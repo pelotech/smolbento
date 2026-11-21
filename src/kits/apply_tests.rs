@@ -1521,3 +1521,20 @@ fn the_later_kit_wins_a_file_path() {
         .collect();
     assert_eq!(got, [("/y", b"2".to_vec()), ("/x", b"3".to_vec())]);
 }
+
+/// `sbx.docker` says a dockerd runs: a workload listing `docker` among its tools doesn't run one.
+#[test]
+fn a_workload_providing_docker_alone_has_no_engine() {
+    let mut w = workload();
+    w.provides = vec!["docker@29.10.0".into()];
+    let p = resolve(w, vec![], &ArgValues::default()).unwrap();
+    let mut req = request();
+    run(&p, &mut req, &mut Policy::default()).unwrap();
+    assert!(!req.docker);
+    // A mixin providing docker in the shipped kit's place still counts.
+    let mut dind = kit("dind", Kind::Mixin);
+    dind.provides = vec!["docker".into()];
+    let mut req = request();
+    run(&plan(vec![dind]), &mut req, &mut Policy::default()).unwrap();
+    assert!(req.docker);
+}

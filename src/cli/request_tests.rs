@@ -128,7 +128,7 @@ fn create_with_a_mixin_kit_applies_it() {
     assert!(
             create.contains(&format!(
                 "--label sbx.kits=[{{\"name\":\"shell\",\"ref\":\"{shell}\",\"format\":\"v2\"}},{},{{\"name\":\"tool\",\"ref\":\"{kit}\",\"format\":\"v2\",\"args\":{{\"mode\":\"slow\"}}}}]",
-                r#"{"name":"docker","ref":"builtin:docker","provides":["docker@1.0.0"]}"#
+                r#"{"name":"docker","ref":"builtin:docker"}"#
             )),
             "{create}"
         );
@@ -655,24 +655,20 @@ fn a_start_docker_workload_gets_the_docker_kit() {
 fn order_mixins_puts_the_docker_kit_first() {
     use crate::kits::load;
     use crate::kits::model::{Kind, Kit, Source};
-    let wl = Kit::new("wl", Kind::Workload, Source::Registry("acme/wl:1".into()));
     let mixin = |n: &str| Kit::new(n, Kind::Mixin, Source::Registry(format!("acme/{n}:1")));
     let names = |ks: Vec<Kit>| ks.into_iter().map(|k| k.name).collect::<Vec<_>>();
     let docker = load::builtin("docker").unwrap().unwrap();
     // No Docker image: as given.
-    assert_eq!(
-        names(order_mixins(false, &wl, vec![mixin("a")]).unwrap()),
-        ["a"]
-    );
+    assert_eq!(names(order_mixins(false, vec![mixin("a")]).unwrap()), ["a"]);
     // A Docker image gets the shipped kit, first.
     assert_eq!(
-        names(order_mixins(true, &wl, vec![mixin("a")]).unwrap()),
+        names(order_mixins(true, vec![mixin("a")]).unwrap()),
         [docker.name.as_str(), "a"]
     );
     // `--kit docker` after another kit moves first, and isn't added twice.
     let given = vec![mixin("a"), docker.clone()];
     assert_eq!(
-        names(order_mixins(true, &wl, given).unwrap()),
+        names(order_mixins(true, given).unwrap()),
         [docker.name.as_str(), "a"]
     );
 }
@@ -680,18 +676,33 @@ fn order_mixins_puts_the_docker_kit_first() {
 /// `kit_target` and a quiet `kit_plan` for `args` followed by `kit`.
 #[test]
 fn a_kit_providing_docker_replaces_the_shipped_one() {
-    use crate::kits::{load, model::Kit, model::Source};
-    let preset = Kit::agent_test("shell");
+    use crate::kits::{load, model::Source};
     let mut own = load::builtin("docker").unwrap().unwrap();
     own.source = Source::Registry("acme/dind:1".into());
     own.name = "dind".into();
-    assert!(needs_docker_kit(true, &preset, &[]));
-    assert!(!needs_docker_kit(false, &preset, &[]));
-    assert!(!needs_docker_kit(true, &preset, &[own.clone()]));
+    own.provides = vec!["docker".into()];
+    assert!(needs_docker_kit(true, &[]));
+    assert!(!needs_docker_kit(false, &[]));
+    assert!(!needs_docker_kit(true, &[own.clone()]));
     let shipped = load::builtin("docker").unwrap().unwrap();
-    assert!(!needs_docker_kit(true, &preset, &[shipped]));
+    assert!(!needs_docker_kit(true, &[shipped]));
     own.provides.clear();
-    assert!(needs_docker_kit(true, &preset, &[own]));
+    assert!(needs_docker_kit(true, &[own]));
+}
+
+/// The shipped kit only starts dockerd (the image has Docker), so it provides nothing and composes
+/// with a workload that lists `docker` among its tools, as sbx's shell kit does.
+/// tck: SPEC-v3 §5.3/one-provider-per-name
+#[test]
+fn a_workload_providing_docker_composes_with_the_shipped_kit() {
+    use crate::kits::{args::ArgValues, load, model::Kit, model::Source, resolve::resolve};
+    let shipped = load::builtin("docker").unwrap().unwrap();
+    assert!(shipped.provides.is_empty(), "{:?}", shipped.provides);
+    let mut wl = Kit::agent_test("shell");
+    wl.provides = vec!["docker@29.10.0".into()];
+    let mixins = order_mixins(true, vec![]).unwrap();
+    assert_eq!(mixins[0].source, Source::Builtin("docker"));
+    resolve(wl, mixins, &ArgValues::default()).unwrap();
 }
 
 fn kit_request(
@@ -1223,7 +1234,7 @@ fn kit_docker_adds_dockerd_to_any_template() {
     assert!(
         line.contains(&format!(
             ",{}]",
-            r#"{"name":"docker","ref":"builtin:docker","provides":["docker@1.0.0"]}"#
+            r#"{"name":"docker","ref":"builtin:docker"}"#
         )),
         "{line}"
     );
