@@ -335,9 +335,17 @@ pub(crate) fn kit_plan<R: Runner>(
         };
         args.pin(&kit.name, pins)?;
     }
-    let mixins = order_mixins(req.docker, mixins)?;
+    // A template's shipped kit comes only from its recorded kits.
+    let mut mixins = order_mixins(req.docker && req.template_pack.is_none(), mixins)?;
     crate::kits::resolve::check_formats(&workload, &mixins)?;
-    let plan = resolve_for(workload, mixins, &args, &req.workdir())?;
+    let mut skipped = Vec::new();
+    if !ctx.settings.bool("docker.enabled")? {
+        for k in std::iter::once(&mut workload).chain(&mut mixins) {
+            skipped.extend(crate::kits::resolve::without_dockerd(k)?);
+        }
+    }
+    let mut plan = resolve_for(workload, mixins, &args, &req.workdir())?;
+    plan.skipped.extend(skipped);
     if let Some(t) = &req.rec.template {
         let layered = crate::kits::compose::layered_names(&plan)?;
         if !layered.is_empty() {
@@ -475,18 +483,11 @@ fn order_mixins(docker_image: bool, mut mixins: Vec<Kit>) -> Result<Vec<Kit>> {
     Ok(mixins)
 }
 
-/// A Docker-enabled image gets dockerd through the shipped kit, unless `--kit docker` added it or
-/// a mixin provides `docker` in its place. The shipped kit provides nothing (the image has Docker;
-/// it only starts dockerd, like SPEC-v3's later `dockerd@1`), so the workload's own `provides`
-/// (sbx's kits list `docker@29.10.0` among their tools) neither decides nor clashes.
+/// A Docker-enabled image gets dockerd through the shipped kit (one `dockerd@1` request), unless
+/// `--kit docker` added it. Other kits' `provides` don't decide: a kit that starts its own dockerd
+/// declares `dockerd@1` (`autoStart: false`), and the merge collapses duplicate requests.
 fn needs_docker_kit(docker_image: bool, mixins: &[Kit]) -> bool {
-    docker_image
-        && !mixins.iter().any(|k| {
-            k.source == Source::Builtin("docker")
-                || k.provides
-                    .iter()
-                    .any(|p| capability::provides_name(p, "docker"))
-        })
+    docker_image && !mixins.iter().any(|k| k.source == Source::Builtin("docker"))
 }
 
 /// Whether a workload kit gets the `docker` kit: a prebuilt kit when its manifest asks for an

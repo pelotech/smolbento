@@ -1522,8 +1522,8 @@ fn the_later_kit_wins_a_file_path() {
     assert_eq!(got, [("/y", b"2".to_vec()), ("/x", b"3".to_vec())]);
 }
 
-/// `sbx.docker` follows the merged `dockerd@1`; a workload or mixin that only provides `docker`
-/// has no engine.
+/// `sbx.docker` follows the merged `dockerd@1`; a workload or mixin that only provides `docker`,
+/// or is the shipped kit's namesake without one, has no engine.
 #[test]
 fn docker_follows_the_merged_dockerd() {
     let dockerd = |auto_start| {
@@ -1556,6 +1556,10 @@ fn docker_follows_the_merged_dockerd() {
     let mut dind = kit("dind", Kind::Mixin);
     dind.provides = vec!["docker".into()];
     assert_eq!(docker(vec![dind]), (false, false));
+    // A kit named like the shipped one has no engine without `dockerd@1` either.
+    let mut builtin = kit("docker", Kind::Mixin);
+    builtin.source = Source::Builtin("docker");
+    assert_eq!(docker(vec![builtin]), (false, false));
 }
 
 /// The engine's store and elevation are set at create, so `kit add` can't add it live.

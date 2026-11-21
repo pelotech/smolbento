@@ -120,7 +120,7 @@ fn first_build_creates_starts_builds_copies_back_and_stops() {
     };
     let order = [
         i("machine start -n sbx-_builder"),
-        i("sbx-_builder:/etc/smolbento/startup.d/01-docker.sh"),
+        i("_ping"),
         i(&format!("-u root -- sh -c {}", sandbox::startup_cmd(None))),
         i(&format!("-u root -- mkdir -p {n}")),
         i(&format!(

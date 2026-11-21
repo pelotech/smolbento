@@ -246,8 +246,7 @@ fn a_mixin_as_the_workload_and_two_kits_of_one_name_are_rejected() {
     assert_eq!(
         format!("{e:#}"),
         "two kits are named docker: yours and the shipped one a Docker-enabled image gets; \
-             rename your kit, or have it provide docker (`provides: [docker@<version>]`) to \
-             replace the shipped one"
+             rename your kit"
     );
     // A built-in agent is a kit like any other: its name is taken.
     let e = run(Kit::agent_test("claude"), vec![mixin("claude")]).unwrap_err();

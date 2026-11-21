@@ -189,12 +189,8 @@ pub fn apply(
     steps.kit_names = req.rec.kits.iter().map(|k| k.name.clone()).collect();
     req.rec.long_running = m.long_running;
     // `sbx.docker` (shown by `ls`) records a `dockerd@1` grant. A workload's `provides` lists its
-    // tools, not an engine. The Builtin clause goes when the shipped kit declares dockerd@1.
-    req.docker = m.dockerd.is_some()
-        || plan
-            .mixins
-            .iter()
-            .any(|k| k.source == Source::Builtin("docker"));
+    // tools, not an engine.
+    req.docker = m.dockerd.is_some();
     req.docker_manual = m.dockerd == Some(false);
 
     // Last, so an error above leaves the policy untouched.

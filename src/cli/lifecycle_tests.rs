@@ -201,8 +201,9 @@ fn create_builds_the_machine_from_the_preset() {
     assert_eq!(pair("-p"), vec!["8080:80"]);
     assert!(pair("--label").contains(&"sbx.created=1000000".to_string()));
     assert!(pair("--label").contains(&"sbx.docker=true".to_string()));
-    // Docker-in-sandbox is the shipped `docker` kit: its volumes above, its startup hook here.
-    // The agent's kit, then the shipped docker kit.
+    // Docker-in-sandbox is the shipped `docker` kit's `dockerd@1`: its volumes above, and no
+    // startup hook (smolbento starts the engine: `src/sandbox/tests/start.rs`). The agent's kit,
+    // then the docker kit.
     let kits = pair("--label");
     let kits = kits.iter().find(|l| l.starts_with("sbx.kits=")).unwrap();
     assert!(
@@ -213,14 +214,9 @@ fn create_builds_the_machine_from_the_preset() {
         "{kits}"
     );
     let uploads = t.runner().uploads();
-    let (_, script) = uploads
-        .iter()
-        .find(|(to, _)| to == "sbx-claude-proj:/etc/smolbento/startup.d/01-docker.sh")
-        .expect("the docker kit's startup script");
-    assert!(script.contains("exec dockerd"), "{script}");
     assert!(
-        script.contains("$d sh -c ") && script.contains("fi' &\n"),
-        "dockerd runs in the background: {script}"
+        !uploads.iter().any(|(to, _)| to.contains("docker.sh")),
+        "{uploads:?}"
     );
     // A host-mounted sandbox can't be forked, so it isn't started branchable.
     assert!(
@@ -477,6 +473,30 @@ fn a_template_drops_its_docker_kit_when_docker_is_disabled() {
     let create = t.create_line();
     assert!(!create.contains("builtin:docker"), "{create}");
     assert!(create.contains("--label sbx.docker=false"), "{create}");
+}
+
+/// A template saved from a `manual` sandbox (its own kit starts dockerd) gets no shipped kit,
+/// so no auto-started engine: a template's kits are the ones it recorded.
+#[test]
+fn a_template_with_a_manual_engine_gets_no_shipped_docker_kit() {
+    let mut t = test_env(&[("SMOLBENTO_KIT_ALLOW_LOCAL_KITS", "true")]);
+    v3_kit(
+        &t,
+        "own-dockerd",
+        r#"{"schemaVersion":"3","kind":"mixin","name":"own-dockerd","capabilities":[
+            {"type":"com.docker.sandbox/dockerd@1","config":{"autoStart":false}}]}"#,
+        &[],
+    );
+    let kit = t.ctx.cwd.join("own-dockerd");
+    template_with(&t, vec![record(&kit.display().to_string())], true);
+    let fake = t.runner();
+    fake.ok(&["machine", "status"], &json("sbx-bb", "created", "bb"));
+    fake.missing_until_created("sbx-bb");
+    t.sbt(&["create", "shell", "-t", "x:v1", "--name", "bb"])
+        .unwrap();
+    let create = t.create_line();
+    assert!(!create.contains("builtin:docker"), "{create}");
+    assert!(create.contains("--label sbx.docker=manual"), "{create}");
 }
 
 #[test]

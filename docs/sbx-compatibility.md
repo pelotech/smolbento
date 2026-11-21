@@ -350,6 +350,7 @@ used.
 | `git-identity@1` | Yes | Yes: your `git config user.name/email` |
 | `long-running@1` | Yes | Yes: no auto-stop when the last session ends |
 | `privileged@1` | Yes | Yes |
+| `dockerd@1` | Yes | Yes: dockerd starts before startup steps, waited for up to 60 s. Granted without asking while `docker.enabled` is on (`tck: dockerd@1/explicit-consent` is a SHOULD); with it off, a required one is refused and an optional one skipped |
 | `agent-sessions@1` | Declaration only | Declaration only |
 | `host-mount@1` | Yes | Yes: a directory on your machine, shared by the kit's sandboxes and kept after `rm` (see below) |
 | `ssh-agent@1` | Yes | Yes, with `sign` and `authenticate` limits, served by a service unit ([SSH agent](#ssh-agent)) |
@@ -472,7 +473,8 @@ used.
 | `kit sign`, `kit verify`, `kit push --sign` | Sigstore bundles as `application/vnd.docker.sandbox.kit.signature.v1` referrers; keyless (Fulcio and Rekor) or `--key` (unencrypted PEM, no Rekor upload) | Same bundles and referrers, made and checked by `cosign` (must be on PATH; `--key` PEM is imported into a private temp directory). Registries without the referrers API get the `sha256-<hex>` tag index, which sbx reads. More below. |
 | `kit validate` output | `✓ <ref> — valid`; `--json` is `{reference, kind, valid, warnings}` | Adds `--format table\|json\|yaml`. A failure with `--json` or `--format json\|yaml` prints the object with `valid: false` and `errors: [...]` on stdout and exits 1; table output prints the plain error |
 | The name `docker` | A registry ref (the `docker` image) | The shipped Docker kit. Write `docker.io/library/docker` for the image |
-| Docker in the sandbox | Run by the `-docker` images | The shipped `docker` kit comes first, before your kits (added to Docker-enabled images, or `--kit docker`). Its `dockerd` step runs in the background: a failure is only logged (`/var/log/dockerd.log`). smolvm's Docker Engine API (`smolvm engine`) isn't used: its containers are host machines that can bind any host path |
+| Docker in the sandbox | Run by the `-docker` images | The shipped `docker` kit, one `dockerd@1` request, is added to Docker-enabled images (or `--kit docker`). smolbento starts dockerd before startup steps and fails the start if it doesn't answer within 60 s (`/var/log/dockerd.log`). smolvm's Docker Engine API (`smolvm engine`) isn't used: its containers are host machines that can bind any host path |
+| A kit providing `docker` (changed) | n/a | No longer replaces the shipped `docker` kit or stands in for the engine: declare `dockerd@1` (`autoStart: false` to start dockerd yourself). Sandboxes made that way before get a dockerd started by smolbento on their next start, before their own step |
 | v3 mixins on built-in agents | Allowed since sbx 0.53 (earlier: `no workload kit in the set`) | Allowed |
 | v2 and v3 kits in one sandbox | Refused: `cannot mix v3 kits with v1/v2 kits in one sandbox; compositions are single-format (v3: …; v1/v2: …)` | Same message, at create and by `kit add`. |
 | v2 mixins on built-in agents | Refused, since the agents are v3 kits (sbx 0.53) | Refused, the same way. The shipped `docker` kit and Smolfiles go with either format |

@@ -358,6 +358,24 @@ pub struct KitCred {
 /// working directory, so a kit validates the same way it applies to a mountless sandbox.
 pub const NO_SANDBOX_WORKDIR: &str = crate::workspace::MOUNTLESS_WORKDIR;
 
+/// For `docker.enabled=false`: `kit` without its `dockerd@1` requests. A required one refuses the
+/// create; an optional one is skipped.
+pub fn without_dockerd(kit: &mut Kit) -> Result<Vec<Skipped>> {
+    let ty = format!("{}dockerd@1", super::CAP_NS);
+    if kit.caps.iter().any(|c| c.ty == ty && !c.optional) {
+        bail!(
+            "kit {}: dockerd@1: Docker is disabled (docker.enabled=false)",
+            kit.name
+        );
+    }
+    let before = kit.caps.len();
+    kit.caps.retain(|c| c.ty != ty);
+    Ok((kit.caps.len() < before)
+        .then(|| Skipped::new(&kit.name, ty))
+        .into_iter()
+        .collect())
+}
+
 /// `resolve_for` without a sandbox, for checking kits: `WORKSPACE` is `NO_SANDBOX_WORKDIR`.
 pub fn resolve(workload: Kit, mixins: Vec<Kit>, args: &ArgValues) -> Result<Plan> {
     resolve_for(workload, mixins, args, NO_SANDBOX_WORKDIR)
@@ -554,8 +572,7 @@ fn check_names(workload: &Kit, mixins: &[Kit]) -> Result<()> {
             if k.name == "docker" && shipped {
                 bail!(
                     "two kits are named docker: yours and the shipped one a Docker-enabled image \
-                     gets; rename your kit, or have it provide docker \
-                     (`provides: [docker@<version>]`) to replace the shipped one"
+                     gets; rename your kit"
                 );
             }
             bail!("two kits are named {}", k.name);
