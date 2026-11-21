@@ -863,7 +863,7 @@ fn a_saved_template_is_created_from_its_pack() {
     assert_eq!(
         plan.merged.dockerd,
         crate::sandbox::Engine::Off,
-        "the template's docker flag, not the image's"
+        "a template's engine comes from its recorded kits, not its image"
     );
 }
 
