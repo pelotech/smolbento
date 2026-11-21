@@ -1557,3 +1557,18 @@ fn docker_follows_the_merged_dockerd() {
     dind.provides = vec!["docker".into()];
     assert_eq!(docker(vec![dind]), (false, false));
 }
+
+/// The engine's store and elevation are set at create, so `kit add` can't add it live.
+#[test]
+fn adding_dockerd_needs_a_recreate() {
+    let k = with(
+        kit("dind", Kind::Mixin),
+        "dockerd@1",
+        false,
+        CapBody::Dockerd { auto_start: true },
+    );
+    assert_eq!(
+        needs_recreate(&k, &BTreeMap::new()).unwrap(),
+        ["Docker engine"]
+    );
+}

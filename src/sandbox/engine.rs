@@ -27,6 +27,9 @@ const LAUNCH: &str = "pgrep -x dockerd >/dev/null || { rm -f /var/run/docker.pid
 const PROBE: &str = "curl -sf --unix-socket /var/run/docker.sock http://localhost/_ping >/dev/null \
                      2>&1 || docker version >/dev/null 2>&1";
 
+/// How long one probe may take.
+const PROBE_TIMEOUT: Duration = Duration::from_secs(2);
+
 /// Starts the engine unless it runs, waits up to `ENGINE_BOUND` for it to answer (probing every
 /// `poll`), then hands its socket to `user`'s group unless `user` is root.
 pub fn start_engine<R: Runner>(
@@ -58,10 +61,12 @@ pub fn start_engine<R: Runner>(
             }
             std::thread::sleep(poll);
         }
-        if vm
-            .exec_captured(&ExecSpec::sh(machine, "root", PROBE))
-            .is_ok()
-        {
+        // Bounded by smolvm: a hung engine can block curl or `docker version` past the bound.
+        let probe = ExecSpec {
+            timeout: Some(PROBE_TIMEOUT),
+            ..ExecSpec::sh(machine, "root", PROBE)
+        };
+        if vm.exec_captured(&probe).is_ok() {
             answered = true;
             break;
         }

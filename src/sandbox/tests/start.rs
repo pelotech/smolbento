@@ -241,6 +241,24 @@ const PROBE: &str = "curl -sf --unix-socket /var/run/docker.sock http://localhos
 const UNANSWERED: &str =
     "dockerd didn't answer within 60s; see /var/log/dockerd.log in the sandbox";
 
+/// A probe's argv: bounded by smolvm, so a hung engine can't outlast `ENGINE_BOUND`.
+fn probe_argv(machine: &str) -> [&str; 12] {
+    [
+        "machine",
+        "exec",
+        "--name",
+        machine,
+        "-u",
+        "root",
+        "--timeout",
+        "2s",
+        "--",
+        "sh",
+        "-c",
+        PROBE,
+    ]
+}
+
 fn socket_step(user: &str) -> String {
     exec_line(
         "root",
@@ -276,7 +294,7 @@ fn the_engine_answers_before_startup_hooks() {
     let runner = exec_line("root", &startup_cmd(None));
     let order = |lines: &[String]| {
         let launch = position(lines, "launch", |l| l.contains(LAUNCH));
-        let probe = position(lines, "probe", |l| *l == exec_line("root", PROBE));
+        let probe = position(lines, "probe", |l| *l == probe_argv(MACHINE).join(" "));
         let socket = position(lines, "socket step", |l| *l == socket_step("agent"));
         let hooks = position(lines, "startup hooks", |l| *l == runner);
         assert!(
@@ -314,7 +332,7 @@ fn the_engine_answers_before_startup_hooks() {
 fn an_unanswered_engine_fails_the_start() {
     let fake = FakeRunner::new();
     fake.ok(&["machine", "status"], &stopped());
-    fake.fail(&root_sh(MACHINE, PROBE), "COMMAND_FAILED", "no engine");
+    fake.fail(&probe_argv(MACHINE), "COMMAND_FAILED", "no engine");
     let vm = Smolvm::new(fake);
     let mut sb = get(&vm, "claude-myrepo").unwrap();
     let err = ensure_running(&vm, &mut sb, || Ok(plan())).unwrap_err();
@@ -344,7 +362,7 @@ fn manual_engine_is_never_started() {
 fn no_engine_without_a_grant() {
     let lines = restarted(&docker_status("false"));
     assert_eq!(launches(&lines), 0, "{lines:#?}");
-    assert!(!lines.contains(&exec_line("root", PROBE)), "{lines:#?}");
+    assert!(!lines.iter().any(|l| l.contains("_ping")), "{lines:#?}");
 }
 
 /// tck: dockerd@1/socket-usable-by-image-user
@@ -382,4 +400,13 @@ fn the_probe_works_without_curl() {
         "{probe}"
     );
     assert!(probe.contains("|| docker version"), "{probe}");
+}
+
+/// A hung engine can block `curl` or `docker version`; smolvm kills each probe after 2s, so the
+/// bound holds whatever the image has.
+#[test]
+fn each_probe_is_bounded() {
+    let lines = restarted(&stopped());
+    let probes: Vec<_> = lines.iter().filter(|l| l.contains("_ping")).collect();
+    assert_eq!(probes, [&probe_argv(MACHINE).join(" ")], "{lines:#?}");
 }

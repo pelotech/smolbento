@@ -976,6 +976,8 @@ pub fn needs_recreate(kit: &Kit, args: &BTreeMap<String, String>) -> Result<Vec<
             ("port@1", _) => "ports",
             ("volume@1", _) => "volumes",
             ("host-mount@1", _) => "host mounts",
+            // Its store and elevation are set at create.
+            ("dockerd@1", _) => "Docker engine",
             ("agent-skills@1" | "agent-skill@1", _) => "agent skills",
             // A new agent file needs every kit's context, and `add` has only this kit's.
             ("agent-context@1" | "agent-context@2", CapBody::AgentContext(r))
@@ -1006,6 +1008,7 @@ pub fn needs_recreate(kit: &Kit, args: &BTreeMap<String, String>) -> Result<Vec<
         "ports",
         "volumes",
         "host mounts",
+        "Docker engine",
         "agent skills",
         "SSH agent",
         "resources",

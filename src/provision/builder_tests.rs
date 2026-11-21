@@ -346,11 +346,28 @@ fn a_descriptor_without_the_syntax_line_is_built_with_the_frontend_named() {
 const PROBE: &str = "curl -sf --unix-socket /var/run/docker.sock http://localhost/_ping >/dev/null \
                      2>&1 || docker version >/dev/null 2>&1";
 
+fn probe_argv() -> [&'static str; 12] {
+    [
+        "machine",
+        "exec",
+        "--name",
+        "sbx-_builder",
+        "-u",
+        "root",
+        "--timeout",
+        "2s",
+        "--",
+        "sh",
+        "-c",
+        PROBE,
+    ]
+}
+
 #[test]
 fn dockerd_that_never_answers_times_out_pointing_at_its_log() {
     let t = test_env(&[]);
     t.runner().fail(
-        &root_sh("sbx-_builder", PROBE),
+        &probe_argv(),
         "COMMAND_FAILED",
         "Cannot connect to the Docker daemon",
     );
@@ -369,7 +386,7 @@ fn dockerd_that_never_answers_times_out_pointing_at_its_log() {
 fn dockerd_is_waited_for() {
     let t = test_env(&[]);
     let fake = t.runner();
-    fake.once_fail(&root_sh("sbx-_builder", PROBE), "COMMAND_FAILED", "not yet");
+    fake.once_fail(&probe_argv(), "COMMAND_FAILED", "not yet");
     sandbox::start_engine(&t.ctx.vm, "sbx-_builder", Some("root"), Duration::ZERO).unwrap();
     let lines = fake.call_lines();
     assert_eq!(
