@@ -212,6 +212,24 @@ fn a_stopped_builder_is_started_and_stopped_again() {
     assert_eq!(lines.last().unwrap(), "machine stop -n sbx-_builder");
 }
 
+/// A stopped builder's start (`ensure_running`, then its setup) launches the engine before the
+/// build runs.
+#[test]
+fn a_stopped_builder_launches_dockerd_before_the_build() {
+    let t = test_env(&[]);
+    let fake = t.runner();
+    fake.ok(&["machine", "status"], &builder_json("stopped"))
+        .download(&kit_tar());
+    let kit = kit_dir();
+    build(&t.ctx, kit.path()).unwrap();
+    let lines = fake.call_lines();
+    let at = |needle: &str| lines.iter().position(|l| l.contains(needle));
+    let start = at("machine start -n sbx-_builder").expect("start");
+    let launch = at("exec dockerd >/var/log/dockerd.log").expect("launch");
+    let build = at("docker buildx build").expect("build");
+    assert!(start < launch && launch < build, "{lines:#?}");
+}
+
 #[test]
 fn a_second_build_of_the_same_output_reuses_the_cache() {
     let t = test_env(&[]);

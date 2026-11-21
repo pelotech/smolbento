@@ -1562,6 +1562,34 @@ fn docker_follows_the_merged_dockerd() {
     assert_eq!(docker(vec![builtin]), Engine::Off);
 }
 
+/// An `autoStart` reference is read once its arg is pinned (SPEC-v3 §6): `false` is a manual
+/// engine, `true` an automatic one, and with no value the merge refuses.
+#[test]
+fn an_auto_start_reference_is_read_at_merge() {
+    let kit = || {
+        crate::kits::v3::parse(
+            "schemaVersion: \"3\"\nkind: mixin\nargs:\n  auto: {}\ncapabilities:\n  \
+             - type: com.docker.sandbox/dockerd@1\n    config: {autoStart: \"${{ kit.args.auto }}\"}\n",
+            Source::Local("/k/dind".into()),
+        )
+        .unwrap()
+    };
+    let engine = |value: &str| {
+        let args = ArgValues::parse(&[], &[format!("auto={value}")]).unwrap();
+        let mut req = request();
+        let p = resolve(workload(), vec![kit()], &args).unwrap();
+        run(&p, &mut req, &mut Policy::default()).unwrap();
+        req.engine
+    };
+    assert_eq!(engine("false"), Engine::Manual);
+    assert_eq!(engine("true"), Engine::Auto);
+    let e = resolve(workload(), vec![kit()], &ArgValues::default()).unwrap_err();
+    assert!(
+        format!("{e:#}").contains("\"auto\" has no resolved value"),
+        "{e:#}"
+    );
+}
+
 /// The engine's store and elevation are set at create, so `kit add` can't add it live.
 #[test]
 fn adding_dockerd_needs_a_recreate() {
