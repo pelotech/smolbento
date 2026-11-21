@@ -335,7 +335,7 @@ pub(crate) fn kit_plan<R: Runner>(
         };
         args.pin(&kit.name, pins)?;
     }
-    let mut mixins = order_mixins(docker_kit, mixins)?;
+    let mut mixins = with_docker_kit(docker_kit, mixins)?;
     crate::kits::resolve::check_formats(&workload, &mixins)?;
     let mut skipped = Vec::new();
     if !docker_enabled {
@@ -463,30 +463,15 @@ impl<'a> KitsSection<'a> {
     }
 }
 
-/// The mixins with the shipped docker kit first, whether given with `--kit docker` or added
-/// because the image is Docker-enabled (`needs_docker_kit`): other kits' startup steps may use the
-/// dockerd it starts (in sbx it's in the image).
-fn order_mixins(docker_image: bool, mut mixins: Vec<Kit>) -> Result<Vec<Kit>> {
-    if let Some(i) = mixins
-        .iter()
-        .position(|k| k.source == Source::Builtin("docker"))
-    {
-        let docker = mixins.remove(i);
-        mixins.insert(0, docker);
-    } else if needs_docker_kit(docker_image, &mixins) {
-        mixins.insert(
-            0,
-            load::builtin("docker").expect("the docker kit is shipped")?,
-        );
+/// The mixins, plus the shipped docker kit (one `dockerd@1` request) for a Docker-enabled image
+/// unless `--kit docker` already added it. Other kits' `provides` don't decide: a kit that starts
+/// its own dockerd declares `dockerd@1` (`autoStart: false`), and the merge collapses duplicate
+/// requests.
+fn with_docker_kit(docker_image: bool, mut mixins: Vec<Kit>) -> Result<Vec<Kit>> {
+    if docker_image && !mixins.iter().any(|k| k.source == Source::Builtin("docker")) {
+        mixins.push(load::builtin("docker").expect("the docker kit is shipped")?);
     }
     Ok(mixins)
-}
-
-/// A Docker-enabled image gets dockerd through the shipped kit (one `dockerd@1` request), unless
-/// `--kit docker` added it. Other kits' `provides` don't decide: a kit that starts its own dockerd
-/// declares `dockerd@1` (`autoStart: false`), and the merge collapses duplicate requests.
-fn needs_docker_kit(docker_image: bool, mixins: &[Kit]) -> bool {
-    docker_image && !mixins.iter().any(|k| k.source == Source::Builtin("docker"))
 }
 
 /// Whether a workload kit gets the `docker` kit: a prebuilt kit when its manifest asks for an
