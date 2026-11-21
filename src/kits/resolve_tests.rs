@@ -1178,3 +1178,100 @@ fn a_reference_with_no_value_fails_even_in_an_optional_capability() {
         "{e:#}"
     );
 }
+
+const DD: &str = "com.docker.sandbox/dockerd@1";
+const VOL: &str = "com.docker.sandbox/volume@1";
+fn dockerd(auto_start: bool) -> CapBody {
+    CapBody::Dockerd { auto_start }
+}
+
+#[test]
+fn dockerd_merges_auto_start_true_wins() {
+    let two = |a, b| {
+        let p = run(
+            workload("w").cap(DD, false, dockerd(a)),
+            vec![mixin("m").cap(DD, false, dockerd(b))],
+        );
+        p.unwrap().merged.dockerd
+    };
+    assert_eq!(two(false, false), Some(false));
+    assert_eq!(two(true, false), Some(true));
+    assert_eq!(two(false, true), Some(true));
+}
+
+/// tck: dockerd@1/elevation-granted
+/// tck: dockerd@1/storage-private-and-persistent
+/// tck: dockerd@1/manual-elevation-granted
+/// tck: dockerd@1/manual-storage-private-and-persistent
+/// tck: dockerd@1/storage-removed-with-sandbox
+/// tck: dockerd@1/removed-store-not-reused
+#[test]
+fn dockerd_brings_elevation_and_the_engine_store() {
+    for auto_start in [true, false] {
+        let p = run(workload("w").cap(DD, false, dockerd(auto_start)), vec![]).unwrap();
+        assert!(p.merged.privileged);
+        let got: Vec<_> = (p.merged.volumes.iter())
+            .map(|v| (&*v.path, v.tmpfs, v.mode.as_deref()))
+            .collect();
+        assert_eq!(
+            got,
+            [
+                ("/var/lib/docker", false, None),
+                ("/var/lib/containerd", false, None)
+            ]
+        );
+    }
+}
+
+/// tck: dockerd@1/engine-store-owned
+#[test]
+fn dockerd_owns_the_engine_store() {
+    let others: [(&str, CapBody); 3] = [
+        (VOL, vol("/var/lib/docker/", false)),
+        (VOL, vol("/var/lib/docker/volumes", false)),
+        (
+            "com.docker.sandbox/host-mount@1",
+            host("/var/lib/docker", None),
+        ),
+    ];
+    for (ty, body) in others {
+        // Whichever side is added first.
+        let d = || workload("w").cap(DD, false, dockerd(true));
+        let o = || mixin("m").cap(ty, false, body.clone());
+        assert!(run(d(), vec![o()]).is_err(), "{body:?}");
+        let w = workload("w").cap(ty, false, body.clone());
+        let m = mixin("m").cap(DD, false, dockerd(true));
+        assert!(run(w, vec![m]).is_err(), "{body:?}");
+    }
+    for ok in ["/var/lib/docker2", "/var/lib/docker-cache"] {
+        let m = mixin("m").cap(VOL, false, vol(ok, false));
+        run(workload("w").cap(DD, false, dockerd(true)), vec![m]).unwrap();
+    }
+}
+
+/// tck: dockerd@1/absent-without-grant
+#[test]
+fn dockerd_absent_without_a_declaration() {
+    let p = run(workload("w"), vec![]).unwrap();
+    assert_eq!(p.merged.dockerd, None);
+    assert!(!p.merged.privileged);
+}
+
+/// tck: dockerd@1/engine-store-owned (the cleaned path decides, not its spelling)
+#[test]
+fn dockerd_engine_store_is_compared_on_the_cleaned_path() {
+    for bad in [
+        "/var/lib/x/../docker",
+        "/var/lib/docker/./volumes",
+        "//var/lib//docker",
+    ] {
+        let d = || workload("w").cap(DD, false, dockerd(true));
+        let m = || mixin("m").cap(VOL, false, vol(bad, false));
+        assert!(run(d(), vec![m()]).is_err(), "{bad}");
+        let w = workload("w").cap(VOL, false, vol(bad, false));
+        let m = mixin("m").cap(DD, false, dockerd(true));
+        assert!(run(w, vec![m]).is_err(), "{bad}");
+    }
+    let m = mixin("m").cap(VOL, false, vol("/var/lib/docker2/../docker2", false));
+    run(workload("w").cap(DD, false, dockerd(true)), vec![m]).unwrap();
+}

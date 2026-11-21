@@ -116,10 +116,31 @@ pub struct Merged {
     pub git_identity: bool,
     pub long_running: bool,
     pub privileged: bool,
+    /// `dockerd@1`: `Some(autoStart)` when any kit declares it; one `true` wins.
+    pub dockerd: Option<bool>,
     /// `ssh-agent@1` entries merged per phase, plus a built-in agent's implicit runtime grant.
     pub ssh_agent: AgentGrant,
     /// The kit that first declared each volume path: a host mount there conflicts with it.
     volume_kits: BTreeMap<String, String>,
+    /// The kit that first declared `dockerd@1`: it owns `/var/lib/docker` and below.
+    dockerd_kit: Option<String>,
+}
+
+const ENGINE_STORE: &str = "/var/lib/docker";
+/// Lexically cleaned first (`.`, `..`, repeated and trailing `/`), as the storage key is.
+fn in_engine_store(path: &str) -> bool {
+    use std::path::{Component, PathBuf};
+    let mut clean = PathBuf::new();
+    for c in std::path::Path::new(path).components() {
+        match c {
+            Component::ParentDir => {
+                clean.pop();
+            }
+            Component::CurDir => {}
+            c => clean.push(c),
+        }
+    }
+    clean.starts_with(ENGINE_STORE)
 }
 
 impl Merged {
@@ -136,6 +157,7 @@ impl Merged {
         tmpfs: bool,
         mode: &Option<String>,
     ) -> Result<()> {
+        self.check_engine_store(kit, path)?;
         if let Some(h) = self.host_mounts.iter().find(|h| h.path == path) {
             bail!("{}", one_owner(&h.kit, kit, path));
         }
@@ -157,6 +179,7 @@ impl Merged {
     }
 
     fn add_host_mount(&mut self, k: &Kit, path: &str, mode: &Option<String>) -> Result<()> {
+        self.check_engine_store(&k.name, path)?;
         let owner = self.host_mounts.iter().find(|h| h.path == path);
         if let Some(a) = owner.map(|h| &h.kit).or(self.volume_kits.get(path)) {
             bail!("{}", one_owner(a, &k.name, path));
@@ -167,6 +190,40 @@ impl Merged {
             path: path.into(),
             mode: mode.clone(),
         });
+        Ok(())
+    }
+
+    /// dockerd@1/engine-store-owned: no other kit's volume or host mount sits in the engine store.
+    fn check_engine_store(&self, kit: &str, path: &str) -> Result<()> {
+        match &self.dockerd_kit {
+            Some(d) if in_engine_store(path) => {
+                bail!("kit {kit}: {path} is in {ENGINE_STORE}, which kit {d}'s dockerd@1 owns")
+            }
+            _ => Ok(()),
+        }
+    }
+
+    /// Elevation and a private, persistent engine store; the engine starts if any kit says so.
+    fn add_dockerd(&mut self, kit: &str, auto_start: bool) -> Result<()> {
+        if self.dockerd_kit.is_none() {
+            let others = (self
+                .volumes
+                .iter()
+                .map(|v| (&v.path, self.volume_kits.get(&v.path))))
+            .chain(self.host_mounts.iter().map(|h| (&h.path, Some(&h.kit))));
+            for (path, owner) in others {
+                if in_engine_store(path) {
+                    let owner = owner.map_or("another kit", |o| o.as_str());
+                    bail!("kit {kit}: dockerd@1 owns {ENGINE_STORE}, but {owner} uses {path}");
+                }
+            }
+            for dir in [ENGINE_STORE, "/var/lib/containerd"] {
+                self.add_volume(kit, dir, false, &None)?;
+            }
+            self.dockerd_kit = Some(kit.into());
+        }
+        self.privileged = true;
+        self.dockerd = Some(self.dockerd.unwrap_or(false) | auto_start);
         Ok(())
     }
 
@@ -417,6 +474,7 @@ pub fn resolve_for(
                 CapBody::GitIdentity => merged.git_identity = true,
                 CapBody::LongRunning => merged.long_running = true,
                 CapBody::Privileged => merged.privileged = true,
+                CapBody::Dockerd { auto_start } => merged.add_dockerd(&k.name, *auto_start)?,
                 CapBody::Sbx | CapBody::AgentSessions => {}
                 CapBody::Pending => unreachable!("expand_caps reads every pending config"),
             }
