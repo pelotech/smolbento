@@ -1,5 +1,17 @@
 # Changelog
 
+## [0.33.4](https://github.com/pelotech/smolbento/compare/v0.33.3...v0.33.4) (2026-11-21)
+
+
+### Bug Fixes
+
+* **kits:** the shipped docker kit only starts dockerd and provides nothing ([#197](https://github.com/pelotech/smolbento/issues/197)) ([8f10175](https://github.com/pelotech/smolbento/commit/8f101757e9e53ce2133e1f950df7cfaa3e69f52c))
+
+
+### Chores
+
+* **smolvm:** pin 1.36.1 ([#196](https://github.com/pelotech/smolbento/issues/196)) ([61e9e1b](https://github.com/pelotech/smolbento/commit/61e9e1b2ee25f1ca5f296e5db1d2772354b1db78))
+
 ## [0.33.3](https://github.com/pelotech/smolbento/compare/v0.33.2...v0.33.3) (2026-11-20)
 
 
