@@ -372,7 +372,10 @@ fn manual_engine_is_never_started() {
 fn no_engine_without_a_grant() {
     let lines = restarted(&docker_status("false"));
     assert_eq!(launches(&lines), 0, "{lines:#?}");
-    assert!(!lines.iter().any(|l| l.contains("_ping")), "{lines:#?}");
+    assert!(
+        !lines.contains(&probe_argv(MACHINE).join(" ")),
+        "{lines:#?}"
+    );
 }
 
 /// tck: dockerd@1/socket-usable-by-image-user
@@ -396,6 +399,13 @@ fn a_user_with_a_group_gets_the_socket_by_that_group() {
     let lines = restarted(&as_user("somebody:1001"));
     assert!(lines.contains(&socket_step_to("'1001'")), "{lines:#?}");
     assert!(!lines.iter().any(|l| l.contains("id -gn")), "{lines:#?}");
+}
+
+/// `somebody:` names no group: its own is looked up, not `chgrp ''`.
+#[test]
+fn a_user_with_an_empty_group_gets_the_socket_by_its_own_group() {
+    let lines = restarted(&as_user("somebody:"));
+    assert!(lines.contains(&socket_step("somebody")), "{lines:#?}");
 }
 
 /// tck: dockerd@1/daemon-json-honored

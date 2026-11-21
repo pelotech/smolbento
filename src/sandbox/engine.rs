@@ -59,8 +59,8 @@ pub fn start_engine<R: Runner>(vm: &Smolvm<R>, machine: &str, user: Option<&str>
         return Ok(());
     }
     let group = match group {
-        Some(g) => sh_quote(g),
-        None => format!("\"$(id -gn -- {})\"", sh_quote(name)),
+        Some(g) if !g.is_empty() => sh_quote(g),
+        _ => format!("\"$(id -gn -- {})\"", sh_quote(name)),
     };
     let cmd = format!("chgrp {group} /var/run/docker.sock && chmod g+rw /var/run/docker.sock");
     vm.exec_captured(&ExecSpec::sh(machine, "root", cmd))
