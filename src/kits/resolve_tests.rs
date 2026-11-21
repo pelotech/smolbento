@@ -238,19 +238,21 @@ fn a_mixin_as_the_workload_and_two_kits_of_one_name_are_rejected() {
     let mut other = mixin("a");
     other.source = Source::Registry("other/a".into());
     let e = run(workload("w"), vec![mixin("a"), other.clone()]).unwrap_err();
-    assert_eq!(format!("{e:#}"), "two kits are named a");
+    assert_eq!(format!("{e:#}"), "two kits are named a; rename one of them");
     let e = run(workload("a"), vec![other]).unwrap_err();
-    assert_eq!(format!("{e:#}"), "two kits are named a");
+    assert_eq!(format!("{e:#}"), "two kits are named a; rename one of them");
     let shipped = crate::kits::load::builtin("docker").unwrap().unwrap();
     let e = run(workload("w"), vec![mixin("docker"), shipped]).unwrap_err();
     assert_eq!(
         format!("{e:#}"),
-        "two kits are named docker: yours and the shipped one a Docker-enabled image gets; \
-             rename your kit"
+        "two kits are named docker; rename one of them"
     );
     // A built-in agent is a kit like any other: its name is taken.
     let e = run(Kit::agent_test("claude"), vec![mixin("claude")]).unwrap_err();
-    assert_eq!(format!("{e:#}"), "two kits are named claude");
+    assert_eq!(
+        format!("{e:#}"),
+        "two kits are named claude; rename one of them"
+    );
 }
 
 #[test]

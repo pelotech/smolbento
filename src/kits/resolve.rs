@@ -592,17 +592,7 @@ fn check_names(workload: &Kit, mixins: &[Kit]) -> Result<()> {
     let mut seen = BTreeSet::new();
     for k in named {
         if !seen.insert(k.name.as_str()) {
-            // Most likely a user's own docker kit beside the shipped one a Docker image gets.
-            let shipped = std::iter::once(workload)
-                .chain(mixins)
-                .any(|k| k.source == Source::Builtin("docker"));
-            if k.name == "docker" && shipped {
-                bail!(
-                    "two kits are named docker: yours and the shipped one a Docker-enabled image \
-                     gets; rename your kit"
-                );
-            }
-            bail!("two kits are named {}", k.name);
+            bail!("two kits are named {}; rename one of them", k.name);
         }
     }
     if let Some(m) = mixins.iter().find(|m| m.kind == Kind::Workload) {
