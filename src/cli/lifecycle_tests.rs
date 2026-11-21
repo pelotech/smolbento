@@ -461,18 +461,21 @@ fn a_template_never_reads_a_layout_outside_the_stand_ins() {
 
 #[test]
 fn a_template_drops_its_docker_kit_when_docker_is_disabled() {
-    let mut t = test_env(&[("SMOLBENTO_DOCKER", "false")]);
-    let mut docker = record("builtin:docker");
-    docker.name = "docker".into();
-    template_with(&t, vec![docker], true);
-    let fake = t.runner();
-    fake.ok(&["machine", "status"], &json("sbx-bb", "created", "bb"));
-    fake.missing_until_created("sbx-bb");
-    t.sbt(&["create", "shell", "-t", "x:v1", "--name", "bb"])
-        .unwrap();
-    let create = t.create_line();
-    assert!(!create.contains("builtin:docker"), "{create}");
-    assert!(create.contains("--label sbx.docker=false"), "{create}");
+    for enabled in [false, true] {
+        let mut t = test_env(&[("SMOLBENTO_DOCKER", if enabled { "true" } else { "false" })]);
+        let mut docker = record("builtin:docker");
+        docker.name = "docker".into();
+        template_with(&t, vec![docker], true);
+        let fake = t.runner();
+        fake.ok(&["machine", "status"], &json("sbx-bb", "created", "bb"));
+        fake.missing_until_created("sbx-bb");
+        t.sbt(&["create", "shell", "-t", "x:v1", "--name", "bb"])
+            .unwrap();
+        let create = t.create_line();
+        assert_eq!(create.contains("builtin:docker"), enabled, "{create}");
+        let label = format!("--label sbx.docker={enabled}");
+        assert!(create.contains(&label), "{create}");
+    }
 }
 
 /// A template saved from a `manual` sandbox (its own kit starts dockerd) gets no shipped kit,
@@ -959,38 +962,6 @@ fn create_from_a_saved_template_passes_from_and_the_label() {
         "{create}"
     );
     assert!(!create.contains("--image"), "{create}");
-}
-
-#[test]
-fn a_templates_docker_flag_follows_docker_enabled() {
-    for (enabled, want) in [("false", false), ("true", true)] {
-        let t = test_env(&[("SMOLBENTO_DOCKER", enabled)]);
-        let kits = saved_template(&t, "s:v1", "shell").kits;
-        let src = t.ctx.cwd.join("p.smolmachine");
-        std::fs::write(&src, "packed").unwrap();
-        let r = crate::templates::TemplateRef::parse("d:v1").unwrap();
-        crate::templates::Store::new(&t.ctx.paths)
-            .add(
-                crate::templates::Entry {
-                    repository: r.repository,
-                    tag: r.tag,
-                    agent: "shell".into(),
-                    image: "img:1".into(),
-                    docker: true,
-                    created_at: "1970-01-12T13:46:30Z".into(),
-                    kits,
-                    ..Default::default()
-                },
-                &src,
-            )
-            .unwrap();
-        let opts = SandboxOpts {
-            template: Some("d:v1".into()),
-            ..Default::default()
-        };
-        let req = planned(&t, "shell", &opts).unwrap();
-        assert_eq!(req.docker, want, "docker.enabled={enabled}");
-    }
 }
 
 #[test]

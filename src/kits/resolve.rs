@@ -209,16 +209,19 @@ impl Merged {
     /// Elevation and a private, persistent engine store; the engine starts if any kit says so.
     fn add_dockerd(&mut self, kit: &str, auto_start: bool) -> Result<()> {
         if self.dockerd_kit.is_none() {
-            let others = (self
-                .volumes
-                .iter()
-                .map(|v| (&v.path, self.volume_kits.get(&v.path))))
-            .chain(self.host_mounts.iter().map(|h| (&h.path, Some(&h.kit))));
-            for (path, owner) in others {
-                if in_engine_store(path) {
-                    let owner = owner.map_or("another kit", |o| o.as_str());
-                    bail!("kit {kit}: dockerd@1 owns {ENGINE_STORE}, but {owner} uses {path}");
-                }
+            if let Some(v) = self.volumes.iter().find(|v| in_engine_store(&v.path)) {
+                let owner = self.volume_kits.get(&v.path).map_or("another kit", |o| o);
+                bail!(
+                    "kit {kit}: dockerd@1 owns {ENGINE_STORE}, but {owner} uses {}",
+                    v.path
+                );
+            }
+            if let Some(h) = self.host_mounts.iter().find(|h| in_engine_store(&h.path)) {
+                bail!(
+                    "kit {kit}: dockerd@1 owns {ENGINE_STORE}, but {} uses {}",
+                    h.kit,
+                    h.path
+                );
             }
             for dir in [ENGINE_STORE, "/var/lib/containerd"] {
                 self.add_volume(kit, dir, false, &None)?;

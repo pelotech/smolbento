@@ -30,14 +30,9 @@ const PROBE: &str = "curl -sf --unix-socket /var/run/docker.sock http://localhos
 /// How long one probe may take.
 const PROBE_TIMEOUT: Duration = Duration::from_secs(2);
 
-/// Starts the engine unless it runs, waits up to `ENGINE_BOUND` for it to answer (probing every
-/// `poll`), then hands its socket to `user`'s group unless `user` is root.
-pub fn start_engine<R: Runner>(
-    vm: &Smolvm<R>,
-    machine: &str,
-    user: Option<&str>,
-    poll: Duration,
-) -> Result<()> {
+/// Starts the engine unless it runs, waits up to `ENGINE_BOUND` for it to answer, then hands its
+/// socket to `user`'s group unless `user` is root.
+pub fn start_engine<R: Runner>(vm: &Smolvm<R>, machine: &str, user: Option<&str>) -> Result<()> {
     let hook = Hook {
         command: HookCmd::Shell(LAUNCH.into()),
         user: Some("0".into()),
@@ -51,27 +46,7 @@ pub fn start_engine<R: Runner>(
         startup_script("dockerd", &[&hook]),
     ))
     .context("starting dockerd")?;
-    let deadline = Instant::now() + ENGINE_BOUND;
-    let mut answered = false;
-    // At most one probe a second of the bound, so a zero `poll` (tests) ends too.
-    for i in 0..ENGINE_BOUND.as_secs() {
-        if i > 0 {
-            if Instant::now() >= deadline {
-                break;
-            }
-            std::thread::sleep(poll);
-        }
-        // Bounded by smolvm: a hung engine can block curl or `docker version` past the bound.
-        let probe = ExecSpec {
-            timeout: Some(PROBE_TIMEOUT),
-            ..ExecSpec::sh(machine, "root", PROBE)
-        };
-        if vm.exec_captured(&probe).is_ok() {
-            answered = true;
-            break;
-        }
-    }
-    if !answered {
+    if !answers(vm, machine) {
         bail!(
             "dockerd didn't answer within {}s; see /var/log/dockerd.log in the sandbox",
             ENGINE_BOUND.as_secs()
@@ -93,11 +68,34 @@ pub fn start_engine<R: Runner>(
     Ok(())
 }
 
+/// Probes every `ENGINE_POLL` until the engine answers or `ENGINE_BOUND` passes.
+fn answers<R: Runner>(vm: &Smolvm<R>, machine: &str) -> bool {
+    let deadline = Instant::now() + ENGINE_BOUND;
+    // At most one probe a second of the bound, so a zero `ENGINE_POLL` (tests) ends too.
+    for i in 0..ENGINE_BOUND.as_secs() {
+        if i > 0 {
+            if Instant::now() >= deadline {
+                break;
+            }
+            std::thread::sleep(ENGINE_POLL);
+        }
+        // Bounded by smolvm: a hung engine can block curl or `docker version` past the bound.
+        let probe = ExecSpec {
+            timeout: Some(PROBE_TIMEOUT),
+            ..ExecSpec::sh(machine, "root", PROBE)
+        };
+        if vm.exec_captured(&probe).is_ok() {
+            return true;
+        }
+    }
+    false
+}
+
 /// `start_engine` for a sandbox whose `dockerd@1` grant starts it on its own.
 pub(super) fn start_granted<R: Runner>(vm: &Smolvm<R>, sb: &Sandbox) -> Result<()> {
     if !sb.meta.docker || sb.meta.docker_manual {
         return Ok(());
     }
     let user = super::create::workload_user(&sb.meta);
-    start_engine(vm, &sb.machine, Some(&user), ENGINE_POLL)
+    start_engine(vm, &sb.machine, Some(&user))
 }

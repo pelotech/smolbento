@@ -24,7 +24,7 @@ use crate::workspace::MOUNTLESS_WORKDIR;
 
 pub use clone_step::*;
 pub use create::CreateRequest;
-pub use engine::{ENGINE_BOUND, start_engine};
+pub use engine::start_engine;
 pub use guest_cmd::*;
 pub use kit_steps::*;
 pub use labels::{Meta, Recorded};

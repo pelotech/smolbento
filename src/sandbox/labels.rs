@@ -322,6 +322,7 @@ impl Meta {
         }
         let text = |key: &str| labels.get(key).cloned();
         let flag = |key: &str| labels.get(key).is_some_and(|v| v == "true");
+        let docker = labels.get(DOCKER).map(String::as_str);
         Some(Meta {
             name: labels.get(NAME)?.clone(),
             agent: text(AGENT).unwrap_or_default(),
@@ -332,11 +333,8 @@ impl Meta {
                 .and_then(|c| c.parse().ok())
                 .unwrap_or(0),
             version: text(VERSION),
-            docker: matches!(
-                labels.get(DOCKER).map(String::as_str),
-                Some("true" | "manual")
-            ),
-            docker_manual: labels.get(DOCKER).is_some_and(|v| v == "manual"),
+            docker: matches!(docker, Some("true" | "manual")),
+            docker_manual: docker == Some("manual"),
             clone_repo: flag(CLONE)
                 .then(|| text(CLONE_TOP).or(text(WORKSPACE)))
                 .flatten(),

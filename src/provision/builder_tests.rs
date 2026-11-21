@@ -371,7 +371,7 @@ fn dockerd_that_never_answers_times_out_pointing_at_its_log() {
         "COMMAND_FAILED",
         "Cannot connect to the Docker daemon",
     );
-    let err = sandbox::start_engine(&t.ctx.vm, "sbx-_builder", Some("root"), Duration::ZERO)
+    let err = sandbox::start_engine(&t.ctx.vm, "sbx-_builder", Some("root"))
         .unwrap_err()
         .to_string();
     assert_eq!(
@@ -387,7 +387,7 @@ fn dockerd_is_waited_for() {
     let t = test_env(&[]);
     let fake = t.runner();
     fake.once_fail(&probe_argv(), "COMMAND_FAILED", "not yet");
-    sandbox::start_engine(&t.ctx.vm, "sbx-_builder", Some("root"), Duration::ZERO).unwrap();
+    sandbox::start_engine(&t.ctx.vm, "sbx-_builder", Some("root")).unwrap();
     let lines = fake.call_lines();
     assert_eq!(
         lines.len(),

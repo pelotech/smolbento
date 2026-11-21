@@ -4,7 +4,6 @@
 use std::fs::{self, File};
 use std::path::{Path, PathBuf};
 use std::sync::atomic::{AtomicU32, Ordering};
-use std::time::Duration;
 
 use anyhow::{Context, Result, bail};
 
@@ -121,10 +120,13 @@ fn build_with<R: Runner>(ctx: &Ctx<R>, dir: &Path, mint: Minter) -> Result<PathB
     };
     let result = pull_tokens(ctx, &registries, &text, mint)
         .and_then(|tokens| start(ctx, &mut sb, tokens).context("starting the kit builder sandbox"))
-        // Before every build, not trusted to have run at the builder's start: a builder can be
-        // up without dockerd (its first start interrupted, or dockerd stopped since).
+        // A builder that was already up may have lost dockerd since; a start just ran it.
         .and_then(|()| {
-            sandbox::start_engine(&ctx.vm, &sb.machine, Some("root"), Duration::from_secs(1))
+            if was_running {
+                sandbox::start_engine(&ctx.vm, &sb.machine, Some("root"))
+            } else {
+                Ok(())
+            }
         })
         .and_then(|()| run_build(ctx, &sb.machine, dir, &desc, &kit_tar, &unbound));
     if !was_running

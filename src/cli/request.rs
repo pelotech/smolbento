@@ -209,8 +209,6 @@ pub(crate) fn kit_target<R: Runner>(
         req.template_pack = Some(store.pack(&e));
         req.rec.template = Some(e.full());
         req.image = e.image.clone();
-        // The docker kit as the source sandbox had it.
-        req.docker = e.docker && ctx.settings.bool("docker.enabled")?;
         return Ok((req, Workload::Template(Box::new(e))));
     }
     if opts.pull.as_deref() == Some("never") {
@@ -251,6 +249,7 @@ pub(crate) fn kit_plan<R: Runner>(
     p: &Progress,
 ) -> Result<Plan> {
     let mut kits = KitsSection::new(p, &req.name);
+    let docker_enabled = ctx.settings.bool("docker.enabled")?;
     // A template's own mixins, and every recorded kit's args.
     let mut recorded: Vec<Kit> = Vec::new();
     let mut recorded_args: Vec<(String, Vec<String>)> = Vec::new();
@@ -261,7 +260,7 @@ pub(crate) fn kit_plan<R: Runner>(
             let records = e
                 .kits
                 .iter()
-                .filter(|r| req.docker || r.reference != "builtin:docker");
+                .filter(|r| docker_enabled || r.reference != "builtin:docker");
             for (i, rec) in records.enumerate() {
                 // The workload record is the agent's own kit for an agent's template.
                 let agent = (i == 0 && e.is_agent_template(&ctx.env)).then_some(e.agent.as_str());
@@ -296,7 +295,7 @@ pub(crate) fn kit_plan<R: Runner>(
             (Some(target), kit)
         }
     };
-    // A template already set the image and the docker flag.
+    // A template already set the image; its docker kit comes only from its recorded kits.
     if req.template_pack.is_none() {
         load::check_launchable(ctx, &mut workload, Some(&req.name))?;
         // A Smolfile kit gets a login shell, recorded in `sbx.command` so every attach launches
@@ -311,7 +310,7 @@ pub(crate) fn kit_plan<R: Runner>(
         if let Content::Image(image) = &workload.content {
             req.image = image.clone();
         }
-        req.docker = wants_docker(&workload, ctx.settings.bool("docker.enabled")?);
+        req.docker = wants_docker(&workload, docker_enabled);
     }
     let mut args = opts.kit_args.values()?;
     for (kit, pins) in &recorded_args {
@@ -335,11 +334,10 @@ pub(crate) fn kit_plan<R: Runner>(
         };
         args.pin(&kit.name, pins)?;
     }
-    // A template's shipped kit comes only from its recorded kits.
-    let mut mixins = order_mixins(req.docker && req.template_pack.is_none(), mixins)?;
+    let mut mixins = order_mixins(req.docker, mixins)?;
     crate::kits::resolve::check_formats(&workload, &mixins)?;
     let mut skipped = Vec::new();
-    if !ctx.settings.bool("docker.enabled")? {
+    if !docker_enabled {
         for k in std::iter::once(&mut workload).chain(&mut mixins) {
             skipped.extend(crate::kits::resolve::without_dockerd(k)?);
         }
