@@ -234,3 +234,152 @@ fn a_create_whose_first_start_fails_removes_the_sandbox() {
     // The smolvm error stays reachable, for its hint.
     assert!(err.chain().any(|e| e.is::<crate::smolvm::SmolvmError>()));
 }
+
+const LAUNCH: &str = "exec dockerd >/var/log/dockerd.log 2>&1";
+const PROBE: &str = "curl -sf --unix-socket /var/run/docker.sock http://localhost/_ping >/dev/null \
+                     2>&1 || docker version >/dev/null 2>&1";
+const UNANSWERED: &str =
+    "dockerd didn't answer within 60s; see /var/log/dockerd.log in the sandbox";
+
+fn socket_step(user: &str) -> String {
+    exec_line(
+        "root",
+        &format!(
+            "chgrp \"$(id -gn {})\" /var/run/docker.sock && chmod g+rw /var/run/docker.sock",
+            sh_quote(user)
+        ),
+    )
+}
+
+/// The fixture with `sbx.docker` set to `value`.
+fn docker_status(value: &str) -> String {
+    stopped().replace(
+        "\"sbx.docker\": \"true\"",
+        &format!("\"sbx.docker\": \"{value}\""),
+    )
+}
+
+fn restarted(status: &str) -> Vec<String> {
+    let vm = vm_with(status);
+    let mut sb = get(&vm, "claude-myrepo").unwrap();
+    ensure_running(&vm, &mut sb, || Ok(plan())).unwrap();
+    vm.runner().call_lines()
+}
+
+fn launches(lines: &[String]) -> usize {
+    lines.iter().filter(|l| l.contains(LAUNCH)).count()
+}
+
+/// tck: dockerd@1/engine-before-startup
+#[test]
+fn the_engine_answers_before_startup_hooks() {
+    let runner = exec_line("root", &startup_cmd(None));
+    let order = |lines: &[String]| {
+        let launch = position(lines, "launch", |l| l.contains(LAUNCH));
+        let probe = position(lines, "probe", |l| *l == exec_line("root", PROBE));
+        let socket = position(lines, "socket step", |l| *l == socket_step("agent"));
+        let hooks = position(lines, "startup hooks", |l| *l == runner);
+        assert!(
+            launch < probe && probe < socket && socket < hooks,
+            "{lines:#?}"
+        );
+    };
+    order(&restarted(&stopped()));
+
+    // The first start of a kit sandbox: after its startup scripts are written.
+    let fake = FakeRunner::new();
+    fake.ok(
+        &["machine", "status"],
+        &STATUS.replace("\"state\": \"running\"", "\"state\": \"created\""),
+    );
+    let vm = Smolvm::new(fake);
+    create(
+        &vm,
+        &request(),
+        &kit_plan(&[]),
+        |_| Ok(NetworkSpec::Open),
+        &mut |_| {},
+    )
+    .unwrap();
+    let lines = vm.runner().call_lines();
+    order(&lines);
+    let startup_d = position(&lines, "startup.d cp", |l| l.contains("startup.d/01-k.sh"));
+    assert!(startup_d < position(&lines, "launch", |l| l.contains(LAUNCH)));
+    assert_eq!(launches(&lines), 1, "{lines:#?}");
+}
+
+/// tck: dockerd@1/fails-when-engine-unanswered
+/// tck: dockerd@1/unanswered-bound-named
+#[test]
+fn an_unanswered_engine_fails_the_start() {
+    let fake = FakeRunner::new();
+    fake.ok(&["machine", "status"], &stopped());
+    fake.fail(&root_sh(MACHINE, PROBE), "COMMAND_FAILED", "no engine");
+    let vm = Smolvm::new(fake);
+    let mut sb = get(&vm, "claude-myrepo").unwrap();
+    let err = ensure_running(&vm, &mut sb, || Ok(plan())).unwrap_err();
+    assert_eq!(err.to_string(), UNANSWERED);
+    let lines = vm.runner().call_lines();
+    assert!(
+        !lines.iter().any(|l| l.ends_with(&startup_cmd(None))),
+        "{lines:#?}"
+    );
+    assert!(!lines.contains(&socket_step("agent")), "{lines:#?}");
+    assert_eq!(lines.last().unwrap(), &format!("machine stop -n {MACHINE}"));
+}
+
+/// tck: dockerd@1/manual-engine-not-started
+#[test]
+fn manual_engine_is_never_started() {
+    let lines = restarted(&docker_status("manual"));
+    assert_eq!(launches(&lines), 0, "{lines:#?}");
+    assert!(
+        lines.last().unwrap().ends_with(&startup_cmd(None)),
+        "{lines:#?}"
+    );
+}
+
+/// tck: dockerd@1/absent-without-grant
+#[test]
+fn no_engine_without_a_grant() {
+    let lines = restarted(&docker_status("false"));
+    assert_eq!(launches(&lines), 0, "{lines:#?}");
+    assert!(!lines.contains(&exec_line("root", PROBE)), "{lines:#?}");
+}
+
+/// tck: dockerd@1/socket-usable-by-image-user
+#[test]
+fn the_socket_is_handed_to_the_image_user() {
+    let lines = restarted(&stopped());
+    assert!(lines.contains(&socket_step("agent")), "{lines:#?}");
+    let as_root = stopped().replace(
+        "\"sbx.docker\"",
+        "\"sbx.user\": \"root\",\n    \"sbx.docker\"",
+    );
+    let lines = restarted(&as_root);
+    assert_eq!(launches(&lines), 1, "{lines:#?}");
+    assert!(!lines.iter().any(|l| l.contains("chgrp")), "{lines:#?}");
+}
+
+/// tck: dockerd@1/daemon-json-honored
+#[test]
+fn dockerd_gets_no_flags() {
+    let lines = restarted(&stopped());
+    let launch = &lines[position(&lines, "launch", |l| l.contains(LAUNCH))];
+    assert!(
+        launch.starts_with(&exec_line("root", "")),
+        "as root: {launch}"
+    );
+    assert!(!launch.contains("dockerd --"), "{launch}");
+}
+
+#[test]
+fn the_probe_works_without_curl() {
+    let lines = restarted(&stopped());
+    let probe = &lines[position(&lines, "probe", |l| l.contains("_ping"))];
+    assert!(
+        probe.contains("curl -sf --unix-socket /var/run/docker.sock http://localhost/_ping"),
+        "{probe}"
+    );
+    assert!(probe.contains("|| docker version"), "{probe}");
+}

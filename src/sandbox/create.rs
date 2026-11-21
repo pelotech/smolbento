@@ -88,7 +88,7 @@ impl CreateRequest {
 
 /// The machine's workload user, which smolvm maps the workspace to: the session user
 /// (`Meta::session_user`), root for an internal sandbox (`_builder`).
-fn workload_user(meta: &Meta) -> String {
+pub(super) fn workload_user(meta: &Meta) -> String {
     if name::is_internal(&meta.name) {
         return "root".into();
     }

@@ -17,7 +17,7 @@ use crate::kits::resolve::{Plan, resolve};
 use crate::provision;
 use crate::sandbox::{self, CreateRequest, Recorded, Sandbox, options};
 use crate::secrets::{RegistryEntry, SecretsFile, registry_secret};
-use crate::smolvm::{Credential, ExecSpec, MachineState, Runner, Smolvm, SmolvmError};
+use crate::smolvm::{Credential, ExecSpec, MachineState, Runner, SmolvmError};
 use crate::util;
 
 pub const BUILDER: &str = "_builder";
@@ -30,8 +30,6 @@ pub const BUILDER_IMAGE: &str = "docker.io/sbx/shell:latest@sha256:89ed5d63def6b
 
 const MEMORY_MIB: u64 = 4096;
 
-/// `docker info` tries, a second apart, before dockerd counts as not starting.
-const DOCKER_WAIT: u32 = 30;
 /// How much of a failed build's output the error shows.
 const TAIL_LINES: usize = 20;
 /// Phrases registries and buildx use for a missing login (matched lowercased).
@@ -123,8 +121,11 @@ fn build_with<R: Runner>(ctx: &Ctx<R>, dir: &Path, mint: Minter) -> Result<PathB
     };
     let result = pull_tokens(ctx, &registries, &text, mint)
         .and_then(|tokens| start(ctx, &mut sb, tokens).context("starting the kit builder sandbox"))
-        .and_then(|()| ensure_docker(&ctx.vm, &sb.machine))
-        .and_then(|()| wait_for_docker(&ctx.vm, &sb.machine, DOCKER_WAIT, Duration::from_secs(1)))
+        // Before every build, not trusted to have run at the builder's start: a builder can be
+        // up without dockerd (its first start interrupted, or dockerd stopped since).
+        .and_then(|()| {
+            sandbox::start_engine(&ctx.vm, &sb.machine, Some("root"), Duration::from_secs(1))
+        })
         .and_then(|()| run_build(ctx, &sb.machine, dir, &desc, &kit_tar, &unbound));
     if !was_running
         && sb.is_running()
@@ -254,44 +255,6 @@ fn request<R: Runner>(ctx: &Ctx<R>, registries: &[String]) -> CreateRequest {
         created: ctx.now,
         ..Default::default()
     }
-}
-
-/// Starts the builder's dockerd unless it runs: the docker kit's startup hook, run before every
-/// build instead of trusted to have run at the builder's start. A builder can be up without it,
-/// its first start interrupted before the startup script was written, or dockerd stopped since,
-/// and a build would then wait for a Docker that never comes. This keeps its Docker cache, as
-/// recreating it would not.
-fn ensure_docker<R: Runner>(vm: &Smolvm<R>, machine: &str) -> Result<()> {
-    let plan = docker_plan()?;
-    let hooks: Vec<_> = plan.merged.startup_hooks.iter().map(|(_, h)| h).collect();
-    let script = crate::kits::guest::startup_script("docker", &hooks);
-    vm.exec_captured(&root(machine, &["sh", "-c", &script]))
-        .context("starting dockerd in the kit builder sandbox")
-        .map(drop)
-}
-
-/// Waits for the builder's dockerd, which `ensure_docker` only launches.
-fn wait_for_docker<R: Runner>(
-    vm: &Smolvm<R>,
-    machine: &str,
-    attempts: u32,
-    interval: Duration,
-) -> Result<()> {
-    for i in 0..attempts {
-        if i > 0 {
-            std::thread::sleep(interval);
-        }
-        if vm
-            .exec_captured(&root(machine, &["docker", "info"]))
-            .is_ok()
-        {
-            return Ok(());
-        }
-    }
-    bail!(
-        "dockerd in the {BUILDER} sandbox didn't answer within {}s; see /var/log/dockerd.log in it",
-        (interval * attempts).as_secs()
-    )
 }
 
 /// `cmd` in `machine` as root.

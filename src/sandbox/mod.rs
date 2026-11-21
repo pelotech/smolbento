@@ -2,6 +2,7 @@
 
 mod clone_step;
 pub mod create;
+mod engine;
 pub mod env;
 mod guest_cmd;
 mod kit_steps;
@@ -23,6 +24,7 @@ use crate::workspace::MOUNTLESS_WORKDIR;
 
 pub use clone_step::*;
 pub use create::CreateRequest;
+pub use engine::{ENGINE_BOUND, start_engine};
 pub use guest_cmd::*;
 pub use kit_steps::*;
 pub use labels::{Meta, Recorded};
@@ -278,11 +280,13 @@ fn setup<R: Runner>(
             eprintln!("{w}");
         }
     }
-    // A kit first start runs them once its startup scripts are written.
-    if plan.kit.is_none()
-        && let Err(e) = run_startup(vm, sb, None)
-    {
-        eprintln!("{}", startup_failure_warning(vm, sb, &e));
+    // A kit first start runs them once its startup scripts are written. The engine answers
+    // first (`dockerd@1`), and unlike a hook it fails the start.
+    if plan.kit.is_none() {
+        engine::start_granted(vm, sb)?;
+        if let Err(e) = run_startup(vm, sb, None) {
+            eprintln!("{}", startup_failure_warning(vm, sb, &e));
+        }
     }
     Ok(())
 }
@@ -359,6 +363,7 @@ pub fn create<R: Runner>(
     };
     start(vm, &sb, plan, on)
         .and_then(|()| first_start(vm, &sb, plan, kit, drop_install_rules, on))
+        .and_then(|()| engine::start_granted(vm, &sb))
         .map_err(removed)?;
     on(Event::Booted);
     sb.state = MachineState::Running;
