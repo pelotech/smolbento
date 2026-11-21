@@ -77,14 +77,19 @@ pub fn start_engine<R: Runner>(
             ENGINE_BOUND.as_secs()
         );
     }
-    if let Some(u) = user.filter(|u| !matches!(*u, "root" | "0")) {
-        let q = sh_quote(u);
-        let cmd = format!(
-            "chgrp \"$(id -gn {q})\" /var/run/docker.sock && chmod g+rw /var/run/docker.sock"
-        );
-        vm.exec_captured(&ExecSpec::sh(machine, "root", cmd))
-            .with_context(|| format!("giving {u} the docker socket"))?;
+    // An image user may be `user:group` (`somebody:1001`, `0:0`).
+    let Some(u) = user else { return Ok(()) };
+    let (name, group) = u.split_once(':').map_or((u, None), |(n, g)| (n, Some(g)));
+    if matches!(name, "root" | "0") {
+        return Ok(());
     }
+    let group = match group {
+        Some(g) => sh_quote(g),
+        None => format!("\"$(id -gn -- {})\"", sh_quote(name)),
+    };
+    let cmd = format!("chgrp {group} /var/run/docker.sock && chmod g+rw /var/run/docker.sock");
+    vm.exec_captured(&ExecSpec::sh(machine, "root", cmd))
+        .with_context(|| format!("giving {u} the docker socket"))?;
     Ok(())
 }
 

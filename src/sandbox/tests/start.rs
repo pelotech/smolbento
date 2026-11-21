@@ -260,12 +260,22 @@ fn probe_argv(machine: &str) -> [&str; 12] {
 }
 
 fn socket_step(user: &str) -> String {
+    socket_step_to(&format!("\"$(id -gn -- {})\"", sh_quote(user)))
+}
+
+/// The socket step handing the socket to `group`, a shell word.
+fn socket_step_to(group: &str) -> String {
     exec_line(
         "root",
-        &format!(
-            "chgrp \"$(id -gn {})\" /var/run/docker.sock && chmod g+rw /var/run/docker.sock",
-            sh_quote(user)
-        ),
+        &format!("chgrp {group} /var/run/docker.sock && chmod g+rw /var/run/docker.sock"),
+    )
+}
+
+/// The fixture with `sbx.user` set to `user`.
+fn as_user(user: &str) -> String {
+    stopped().replace(
+        "\"sbx.docker\"",
+        &format!("\"sbx.user\": \"{user}\",\n    \"sbx.docker\""),
     )
 }
 
@@ -370,13 +380,22 @@ fn no_engine_without_a_grant() {
 fn the_socket_is_handed_to_the_image_user() {
     let lines = restarted(&stopped());
     assert!(lines.contains(&socket_step("agent")), "{lines:#?}");
-    let as_root = stopped().replace(
-        "\"sbx.docker\"",
-        "\"sbx.user\": \"root\",\n    \"sbx.docker\"",
-    );
-    let lines = restarted(&as_root);
-    assert_eq!(launches(&lines), 1, "{lines:#?}");
-    assert!(!lines.iter().any(|l| l.contains("chgrp")), "{lines:#?}");
+    for root in ["root", "0", "0:0", "root:root"] {
+        let lines = restarted(&as_user(root));
+        assert_eq!(launches(&lines), 1, "{root}: {lines:#?}");
+        assert!(
+            !lines.iter().any(|l| l.contains("chgrp")),
+            "{root}: {lines:#?}"
+        );
+    }
+}
+
+/// A `user:group` image user names its group: no `id` lookup, which would fail on the pair.
+#[test]
+fn a_user_with_a_group_gets_the_socket_by_that_group() {
+    let lines = restarted(&as_user("somebody:1001"));
+    assert!(lines.contains(&socket_step_to("'1001'")), "{lines:#?}");
+    assert!(!lines.iter().any(|l| l.contains("id -gn")), "{lines:#?}");
 }
 
 /// tck: dockerd@1/daemon-json-honored
