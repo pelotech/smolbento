@@ -8,8 +8,8 @@ use crate::kits::args::{ArgValues, expand, expand_value};
 use crate::kits::capability;
 use crate::kits::host_mount;
 use crate::kits::model::{
-    AgentContextReq, Cap, CapBody, CredReq, FileReq, Format, Hook, Kind, Kit, Lifecycle, NetRule,
-    Rules, Source, SshPhase,
+    AgentContextReq, Cap, CapBody, CredReq, FileReq, Format, Group, Hook, Kind, Kit, Lifecycle,
+    NetRule, Rules, Source, SshPhase,
 };
 use crate::kits::v3;
 use crate::ssh_agent::{AgentGrant, PhaseGrant};
@@ -364,9 +364,10 @@ pub struct KitCred {
 /// working directory, so a kit validates the same way it applies to a mountless sandbox.
 pub const NO_SANDBOX_WORKDIR: &str = crate::workspace::MOUNTLESS_WORKDIR;
 
-/// For `docker.enabled=false`: `kit` without its `dockerd@1` requests. A required one refuses the
-/// create; an optional one is skipped.
-pub fn without_dockerd(kit: &mut Kit) -> Result<Option<Skipped>> {
+/// For `docker.enabled=false`: `kit` without its `dockerd@1` requests. A required one (or one in a
+/// required group) refuses the create; an optional one is skipped, with its whole group
+/// (SPEC-v3 §7.1.1).
+pub fn without_dockerd(kit: &mut Kit) -> Result<Vec<Skipped>> {
     let ty = format!("{}dockerd@1", super::CAP_NS);
     if kit.caps.iter().any(|c| c.ty == ty && !c.optional) {
         bail!(
@@ -375,12 +376,31 @@ pub fn without_dockerd(kit: &mut Kit) -> Result<Option<Skipped>> {
             kit.name
         );
     }
-    let before = kit.caps.len();
-    kit.caps.retain(|c| c.ty != ty);
-    Ok((kit.caps.len() < before).then(|| Skipped {
+    let skip = |what: String| Skipped {
         reason: "Docker is disabled: docker.enabled=false",
-        ..Skipped::new(&kit.name, ty)
-    }))
+        ..Skipped::new(&kit.name, what)
+    };
+    let (mut bare, mut groups, mut skipped) = (false, Vec::new(), Vec::new());
+    for c in kit.caps.iter().filter(|c| c.ty == ty) {
+        match &c.group {
+            None => bare = true,
+            Some(g) if !groups.contains(&g.index) => {
+                groups.push(g.index);
+                skipped.push(skip(format!(
+                    "optional group {}, for its {} {ty}",
+                    group_label(g),
+                    g.member_path()
+                )));
+            }
+            Some(_) => {}
+        }
+    }
+    if bare {
+        skipped.insert(0, skip(ty.clone()));
+    }
+    kit.caps
+        .retain(|c| c.ty != ty && c.group.as_ref().is_none_or(|g| !groups.contains(&g.index)));
+    Ok(skipped)
 }
 
 /// `resolve_for` without a sandbox, for checking kits: `WORKSPACE` is `NO_SANDBOX_WORKDIR`.
@@ -634,20 +654,15 @@ fn select_groups(k: &mut Kit) -> Result<Vec<Skipped>> {
         }
         let Some(why) = unsupported(c) else { continue };
         rejected.push(g.index);
-        let name = g
-            .name
-            .as_ref()
-            .map(|n| format!(" ({n})"))
-            .unwrap_or_default();
-        let (group, member) = (g.path(), g.member_path());
+        let (group, member) = (group_label(g), g.member_path());
         if !c.optional {
             bail!(
-                "kit {}: required group {group}{name}: {member} {} {why}",
+                "kit {}: required group {group}: {member} {} {why}",
                 k.name,
                 c.ty
             );
         }
-        let what = format!("optional group {group}{name}, for its {member} {}", c.ty);
+        let what = format!("optional group {group}, for its {member} {}", c.ty);
         skipped.push(Skipped::new(&k.name, what));
     }
     k.caps.retain(|c| {
@@ -656,6 +671,14 @@ fn select_groups(k: &mut Kit) -> Result<Vec<Skipped>> {
             .is_none_or(|g| !rejected.contains(&g.index))
     });
     Ok(skipped)
+}
+
+/// A group as warnings name it: `capabilities[0] (Feature)`.
+fn group_label(g: &Group) -> String {
+    match &g.name {
+        Some(n) => format!("{} ({n})", g.path()),
+        None => g.path(),
+    }
 }
 
 /// Why smolbento can't apply `c` as asked, if it can't.

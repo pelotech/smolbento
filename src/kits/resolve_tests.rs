@@ -1021,6 +1021,56 @@ fn a_group_whose_members_are_all_supported_is_applied() {
     assert!(p.skipped.is_empty(), "{:?}", p.skipped);
 }
 
+fn dockerd_group(optional: bool) -> Kit {
+    v3_mixin(&format!(
+        "  - group:
+      name: Docker
+      optional: {optional}
+      capabilities:
+        - type: com.docker.sandbox/dockerd@1
+        - type: com.docker.sandbox/volume@1
+          config: {{path: /var/cache/x}}
+"
+    ))
+}
+
+/// With `docker.enabled=false`, an optional group holding `dockerd@1` is skipped whole.
+/// tck: SPEC-v3 §7.1.1/atomic-selection
+#[test]
+fn docker_disabled_skips_a_whole_optional_group_with_dockerd() {
+    let mut k = dockerd_group(true);
+    let skipped = without_dockerd(&mut k).unwrap();
+    let p = run(workload("w"), vec![k]).unwrap();
+    assert_eq!(p.merged.dockerd, None);
+    assert!(p.merged.volumes.is_empty(), "{:?}", p.merged.volumes);
+    assert_eq!(
+        skipped,
+        ["g: optional group capabilities[0] (Docker), for its \
+          capabilities[0].group.capabilities[0] com.docker.sandbox/dockerd@1"]
+    );
+    assert_eq!(
+        skipped[0].reason,
+        "Docker is disabled: docker.enabled=false"
+    );
+
+    let p = run(workload("w"), vec![dockerd_group(true)]).unwrap();
+    assert_eq!(p.merged.dockerd, Some(true));
+    assert!(
+        p.merged.volumes.iter().any(|v| v.path == "/var/cache/x"),
+        "{:?}",
+        p.merged.volumes
+    );
+    assert!(p.skipped.is_empty(), "{:?}", p.skipped);
+}
+
+/// A required group holding `dockerd@1` refuses like a required `dockerd@1`.
+/// tck: SPEC-v3 §7.1.1/atomic-selection
+#[test]
+fn docker_disabled_refuses_a_required_group_with_dockerd() {
+    let e = without_dockerd(&mut dockerd_group(false)).unwrap_err();
+    assert!(format!("{e:#}").contains("Docker is disabled"), "{e:#}");
+}
+
 /// A group member is taken whole or not at all, never widened to its hosts as an optional
 /// ordinary `network-policy@2` entry is.
 #[test]
