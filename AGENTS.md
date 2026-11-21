@@ -44,7 +44,7 @@ on first use into `<smolvm.home>/engine/<version>/` (default `~/.smolbento`). Ev
 users to run `bento smolvm …`, never a bare `smolvm …`, which sees other machines. Tests:
 `SMOLBENTO_SMOLVM` runs another binary (a local build), and e2e shares `/tmp/sbt-e2e-<uid>`.
 
-As of smolvm 1.35. Check the reference source before depending on anything not listed here.
+As of smolvm 1.36. Check the reference source before depending on anything not listed here.
 
 - **Errors:** `--error-format json` prints `{"error":{"code":…,"message":…}}` on stderr. The exit
   status is unchanged. Branch on `code` (`NOT_FOUND`, `CONFLICT`, `INTERRUPTED`, `CONFIG_ERROR`,
@@ -78,8 +78,18 @@ As of smolvm 1.35. Check the reference source before depending on anything not l
   server's answer instead (the e2e tests use httpbin's `/basic-auth`).
 - **Credential values change live (1.35.4):** `machine credentials refresh -n M [BINDING…]` reads
   each binding's variable from its own environment and the running machine uses it from its next
-  request. It refuses an unset or empty variable, so it can't take a value away: that still needs a
-  restart. smolbento names every binding after its variable, lowercased (`Credential::binding`).
+  request. It refuses an unset or empty variable, so it can't take a value away. smolbento names
+  every binding after its variable, lowercased (`Credential::binding`).
+- **Credential bindings change live (1.36.1):** `machine credentials add -n M --credential SPEC`
+  (replaces a binding of the same name) and `machine credentials remove -n M BINDING…` work on a
+  running or stopped machine, from its next request. A new host gets its own CA, trusted by the
+  guest at once. `machine ls --json` and `machine status --json` list each machine's `credentials`
+  (name, variable, hosts; never values). smolbento doesn't use these yet.
+- **Host loopback (1.36):** a machine with a network reaches the host's `127.0.0.1` through its
+  gateway or `host.docker.internal` unless `--deny-cidr` closes it. smolbento always passes
+  `--deny-cidr 127.0.0.0/8 ::1/128` at create unless the sandbox gets host access.
+- **First start (1.36):** smolvm no longer adds the image's registry to the allow list for a
+  machine's first boot; it fetches the image on the host instead.
 - **Guest `/tmp`, `/run` and `/dev/shm` are emptied on every restart,** and never enter a pack. `/run`
   and `/dev/shm` are tmpfs. `/tmp` is on the machine's root disk since 1.33. Anything smolbento puts
   there (for example `/run/smolbento`) must be recreated after each start. Persistent data goes on the
