@@ -335,7 +335,7 @@ pub(crate) fn kit_plan<R: Runner>(
         };
         args.pin(&kit.name, pins)?;
     }
-    let mixins = order_mixins(req.docker, &workload, mixins)?;
+    let mixins = order_mixins(req.docker, mixins)?;
     crate::kits::resolve::check_formats(&workload, &mixins)?;
     let plan = resolve_for(workload, mixins, &args, &req.workdir())?;
     if let Some(t) = &req.rec.template {
@@ -459,14 +459,14 @@ impl<'a> KitsSection<'a> {
 /// The mixins with the shipped docker kit first, whether given with `--kit docker` or added
 /// because the image is Docker-enabled (`needs_docker_kit`): other kits' startup steps may use the
 /// dockerd it starts (in sbx it's in the image).
-fn order_mixins(docker_image: bool, workload: &Kit, mut mixins: Vec<Kit>) -> Result<Vec<Kit>> {
+fn order_mixins(docker_image: bool, mut mixins: Vec<Kit>) -> Result<Vec<Kit>> {
     if let Some(i) = mixins
         .iter()
         .position(|k| k.source == Source::Builtin("docker"))
     {
         let docker = mixins.remove(i);
         mixins.insert(0, docker);
-    } else if needs_docker_kit(docker_image, workload, &mixins) {
+    } else if needs_docker_kit(docker_image, &mixins) {
         mixins.insert(
             0,
             load::builtin("docker").expect("the docker kit is shipped")?,
@@ -476,10 +476,12 @@ fn order_mixins(docker_image: bool, workload: &Kit, mut mixins: Vec<Kit>) -> Res
 }
 
 /// A Docker-enabled image gets dockerd through the shipped kit, unless `--kit docker` added it or
-/// another kit in the plan provides `docker` (two would clash on `provides`).
-fn needs_docker_kit(docker_image: bool, workload: &Kit, mixins: &[Kit]) -> bool {
+/// a mixin provides `docker` in its place. The shipped kit provides nothing (the image has Docker;
+/// it only starts dockerd, like SPEC-v3's later `dockerd@1`), so the workload's own `provides`
+/// (sbx's kits list `docker@29.10.0` among their tools) neither decides nor clashes.
+fn needs_docker_kit(docker_image: bool, mixins: &[Kit]) -> bool {
     docker_image
-        && !std::iter::once(workload).chain(mixins).any(|k| {
+        && !mixins.iter().any(|k| {
             k.source == Source::Builtin("docker")
                 || k.provides
                     .iter()

@@ -208,7 +208,7 @@ fn create_builds_the_machine_from_the_preset() {
     assert!(
         kits.ends_with(&format!(
             ",{}]",
-            r#"{"name":"docker","ref":"builtin:docker","provides":["docker@1.0.0"]}"#
+            r#"{"name":"docker","ref":"builtin:docker"}"#
         )),
         "{kits}"
     );

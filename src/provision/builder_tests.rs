@@ -98,7 +98,7 @@ fn first_build_creates_starts_builds_copies_back_and_stops() {
     );
     assert!(c.contains("--label sbx.name=_builder"), "{c}");
     assert!(c.contains("--label sbx.docker=true"), "{c}");
-    assert!(c.contains(r#"--label sbx.kits=[{"name":"builder","ref":"builtin:builder"},{"name":"docker","ref":"builtin:docker","provides":["docker@1.0.0"]}]"#), "{c}");
+    assert!(c.contains(r#"--label sbx.kits=[{"name":"builder","ref":"builtin:builder"},{"name":"docker","ref":"builtin:docker"}]"#), "{c}");
     assert!(
         c.contains("-v /var/lib/docker -v /var/lib/containerd"),
         "{c}"

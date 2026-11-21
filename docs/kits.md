@@ -100,7 +100,10 @@ What a kit does, and when:
 - At create and `kit add`, a failing startup step is the same warning; the sandbox is created and
   runs.
 - Startup steps run as `agent` unless they name a user (a numeric user runs as the account with that
-  uid). The `docker` kit runs before your kits.
+  uid). The `docker` kit runs before your kits. It only starts dockerd (the image
+  has Docker), so it provides nothing: a workload that asks for an engine
+  (`com.docker.sandboxes.start-docker`, or a `-docker` image) gets it even when its own `provides`
+  lists `docker`, as sbx's kits do. Only another kit providing `docker` replaces it.
 - A v3 install step gets a clean environment (`PATH`, `HOME`, `USER`, `TERM`, the proxy and CA
   variables, and what its `env` lists). Startup steps and v2 steps get the full sandbox environment.
 - A missing credential doesn't block create. You get `WARN: required credential not found for
