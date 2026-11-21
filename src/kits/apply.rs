@@ -14,10 +14,10 @@ use crate::kits::registry_auth::Logins;
 use crate::kits::resolve::{KitContext, KitCred, Merged, Plan};
 use crate::policy::Policy;
 use crate::policy::rules::is_under;
+use crate::sandbox::CreateRequest;
 use crate::sandbox::labels::CredFormat;
 use crate::sandbox::labels::KitRecord;
 use crate::sandbox::options::{free_port, parse_memory};
-use crate::sandbox::{CreateRequest, Engine};
 use crate::secrets::store::SecretStore;
 use crate::secrets::{SecretsFile, services};
 use crate::smolvm::{Credential, PortMap};
@@ -188,13 +188,9 @@ pub fn apply(
     record_kits(&kits, &plan.args, req)?;
     steps.kit_names = req.rec.kits.iter().map(|k| k.name.clone()).collect();
     req.rec.long_running = m.long_running;
-    // `sbx.docker` (shown by `ls`) records a `dockerd@1` grant. A workload's `provides` lists its
-    // tools, not an engine.
-    req.engine = match m.dockerd {
-        None => Engine::Off,
-        Some(true) => Engine::Auto,
-        Some(false) => Engine::Manual,
-    };
+    // `sbx.docker` records a `dockerd@1` grant; the engine start reads it on every boot. A
+    // workload's `provides` lists its tools, not an engine.
+    req.engine = m.dockerd;
 
     // Last, so an error above leaves the policy untouched.
     let added = add_policy(policy, &req.name, m, &mut steps.install_rules)?;

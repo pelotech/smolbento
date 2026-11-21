@@ -1043,7 +1043,7 @@ fn docker_disabled_skips_a_whole_optional_group_with_dockerd() {
     let mut k = dockerd_group(true);
     let skipped = without_dockerd(&mut k).unwrap();
     let p = run(workload("w"), vec![k]).unwrap();
-    assert_eq!(p.merged.dockerd, None);
+    assert_eq!(p.merged.dockerd, Engine::Off);
     assert!(p.merged.volumes.is_empty(), "{:?}", p.merged.volumes);
     assert_eq!(
         skipped,
@@ -1056,7 +1056,7 @@ fn docker_disabled_skips_a_whole_optional_group_with_dockerd() {
     );
 
     let p = run(workload("w"), vec![dockerd_group(true)]).unwrap();
-    assert_eq!(p.merged.dockerd, Some(true));
+    assert_eq!(p.merged.dockerd, Engine::Auto);
     assert!(
         p.merged.volumes.iter().any(|v| v.path == "/var/cache/x"),
         "{:?}",
@@ -1249,9 +1249,9 @@ fn dockerd_merges_auto_start_true_wins() {
         );
         p.unwrap().merged.dockerd
     };
-    assert_eq!(two(false, false), Some(false));
-    assert_eq!(two(true, false), Some(true));
-    assert_eq!(two(false, true), Some(true));
+    assert_eq!(two(false, false), Engine::Manual);
+    assert_eq!(two(true, false), Engine::Auto);
+    assert_eq!(two(false, true), Engine::Auto);
 }
 
 /// tck: dockerd@1/elevation-granted
@@ -1308,7 +1308,7 @@ fn dockerd_owns_the_engine_store() {
 #[test]
 fn dockerd_absent_without_a_declaration() {
     let p = run(workload("w"), vec![]).unwrap();
-    assert_eq!(p.merged.dockerd, None);
+    assert_eq!(p.merged.dockerd, Engine::Off);
     assert!(!p.merged.privileged);
 }
 

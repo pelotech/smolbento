@@ -412,7 +412,7 @@ fn a_kit_template_reruns_install_steps_from_the_cache() {
 }
 
 /// A current template of the `shell` stand-in plus `extra` records, saved as `x:v1`.
-fn template_with(t: &TestEnv, extra: Vec<crate::sandbox::labels::KitRecord>, docker: bool) {
+fn template_with(t: &TestEnv, extra: Vec<crate::sandbox::labels::KitRecord>) {
     let mut kits = saved_template_kits(t, "shell");
     kits.extend(extra);
     let src = t.ctx.cwd.join("x.smolmachine");
@@ -424,7 +424,6 @@ fn template_with(t: &TestEnv, extra: Vec<crate::sandbox::labels::KitRecord>, doc
                 tag: "v1".into(),
                 agent: "shell".into(),
                 image: "img:1".into(),
-                docker,
                 created_at: "1970-01-12T13:46:30Z".into(),
                 kits,
                 ..Default::default()
@@ -473,7 +472,7 @@ fn a_template_drops_its_docker_kit_when_docker_is_disabled() {
         let mut t = test_env(&[("SMOLBENTO_DOCKER", if enabled { "true" } else { "false" })]);
         let mut docker = record("builtin:docker");
         docker.name = "docker".into();
-        template_with(&t, vec![docker], true);
+        template_with(&t, vec![docker]);
         let fake = t.runner();
         fake.ok(&["machine", "status"], &json("sbx-bb", "created", "bb"));
         fake.missing_until_created("sbx-bb");
@@ -499,7 +498,7 @@ fn a_template_with_a_manual_engine_gets_no_shipped_docker_kit() {
         &[],
     );
     let kit = t.ctx.cwd.join("own-dockerd");
-    template_with(&t, vec![record(&kit.display().to_string())], true);
+    template_with(&t, vec![record(&kit.display().to_string())]);
     let fake = t.runner();
     fake.ok(&["machine", "status"], &json("sbx-bb", "created", "bb"));
     fake.missing_until_created("sbx-bb");
@@ -520,7 +519,7 @@ fn pull_never_names_itself_for_a_template_kit_that_needs_a_build() {
         "# syntax=docker/sandbox-kit:3\nschemaVersion: \"3\"\nkind: mixin\n",
     )
     .unwrap();
-    template_with(&t, vec![record(&kit.display().to_string())], false);
+    template_with(&t, vec![record(&kit.display().to_string())]);
     creatable_as(&t, "bb");
     let err = t.sbt_err(&[
         "create", "shell", "-t", "x:v1", "--pull", "never", "--name", "bb",
@@ -534,7 +533,7 @@ fn template_kits_follow_kit_policy() {
     let tool = v2_fixture("tool-mixin");
     // A local kit, under --pull never, still needs kit.allowLocalKits.
     let mut t = test_env(&[("SMOLBENTO_KIT_ALLOW_LOCAL_KITS", "false")]);
-    template_with(&t, vec![record(&tool)], false);
+    template_with(&t, vec![record(&tool)]);
     creatable_as(&t, "bb");
     let err = t.sbt_err(&[
         "create", "shell", "-t", "x:v1", "--pull", "never", "--name", "bb",
@@ -551,7 +550,7 @@ fn template_kits_follow_kit_policy() {
             ("SMOLBENTO_KIT_REQUIRE_SIGNATURE", "true"),
             ("SMOLBENTO_KIT_ALLOWED_SOURCES", r#"["docker.io/acme/"]"#),
         ]);
-        template_with(&t, vec![record(kit)], false);
+        template_with(&t, vec![record(kit)]);
         creatable_as(&t, "bb");
         let err = t.sbt_err(&[
             "create", "shell", "-t", "x:v1", "--pull", "never", "--name", "bb",
@@ -838,7 +837,8 @@ fn explicit_template_is_kept_when_docker_is_disabled() {
     let (req, plan) = planned_kits(&t, "shell", &a.opts).unwrap();
     assert_eq!(req.image, "docker/sandbox-templates:shell-docker-0.10.0");
     assert_eq!(
-        plan.merged.dockerd, None,
+        plan.merged.dockerd,
+        crate::sandbox::Engine::Off,
         "docker.enabled=false still skips dockerd"
     );
 }
@@ -861,7 +861,8 @@ fn a_saved_template_is_created_from_its_pack() {
     );
     assert_eq!(req.image, e.image);
     assert_eq!(
-        plan.merged.dockerd, None,
+        plan.merged.dockerd,
+        crate::sandbox::Engine::Off,
         "the template's docker flag, not the image's"
     );
 }

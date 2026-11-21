@@ -5,7 +5,7 @@ use crate::kits::model::{
     Kit, Lifecycle, NetRule, OAuthReq, Rules, Source,
 };
 use crate::kits::resolve::resolve;
-use crate::sandbox::create;
+use crate::sandbox::{Engine, create};
 use crate::secrets::{SecretEntry, Source as SecretSource};
 
 fn kit(name: &str, kind: Kind) -> Kit {

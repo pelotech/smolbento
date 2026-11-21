@@ -493,7 +493,6 @@ fn add_template(
                 tag: r.tag,
                 agent: agent.into(),
                 image: "docker/sandbox-templates:shell-docker-0.10.0".into(),
-                docker: false,
                 created_at: "1970-01-12T13:46:30Z".into(),
                 kits,
                 ..Default::default()

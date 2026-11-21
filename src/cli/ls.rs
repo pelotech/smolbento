@@ -128,7 +128,6 @@ mod tests {
                 workspace: workspace.map(String::from),
                 workspaces: workspace.map(|w| vec![w.to_string()]).unwrap_or_default(),
                 created,
-                engine: crate::sandbox::Engine::Auto,
                 ..Default::default()
             },
             machine: format!("sbx-{name}"),

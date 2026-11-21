@@ -660,7 +660,7 @@ fn docker_disabled_refuses_a_required_dockerd_and_skips_an_optional_one() {
     let (mut req, workload) = super::kit_target(&t.ctx, &a.targets, &a.opts, true).unwrap();
     let quiet = super::Progress::new(t.ctx.out.clone(), false, false, true);
     let plan = super::kit_plan(&t.ctx, &mut req, workload, &a.opts, &quiet).unwrap();
-    assert_eq!(plan.merged.dockerd, None);
+    assert_eq!(plan.merged.dockerd, crate::sandbox::Engine::Off);
     assert_eq!(plan.skipped, ["dind: com.docker.sandbox/dockerd@1"]);
     assert_eq!(
         plan.skipped_warnings(),

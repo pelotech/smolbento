@@ -12,6 +12,7 @@ use crate::kits::model::{
     NetRule, Rules, Source, SshPhase,
 };
 use crate::kits::v3;
+use crate::sandbox::Engine;
 use crate::ssh_agent::{AgentGrant, PhaseGrant};
 
 #[derive(Debug)]
@@ -121,8 +122,8 @@ pub struct Merged {
     pub git_identity: bool,
     pub long_running: bool,
     pub privileged: bool,
-    /// `dockerd@1`: `Some(autoStart)` when any kit declares it; one `true` wins.
-    pub dockerd: Option<bool>,
+    /// `dockerd@1`: `Off` unless a kit declares it; one `autoStart: true` makes it `Auto`.
+    pub dockerd: Engine,
     /// `ssh-agent@1` entries merged per phase, plus a built-in agent's implicit runtime grant.
     pub ssh_agent: AgentGrant,
     /// The kit that first declared each volume path: a host mount there conflicts with it.
@@ -231,7 +232,11 @@ impl Merged {
             self.dockerd_kit = Some(kit.into());
         }
         self.privileged = true;
-        self.dockerd = Some(self.dockerd.unwrap_or(false) | auto_start);
+        self.dockerd = self.dockerd.max(if auto_start {
+            Engine::Auto
+        } else {
+            Engine::Manual
+        });
         Ok(())
     }
 

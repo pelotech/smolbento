@@ -185,23 +185,19 @@ pub struct Recorded {
 }
 
 /// A sandbox's private dockerd, from its `dockerd@1` grant (the `sbx.docker` label).
-#[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
+/// Ordered Off < Manual < Auto, so merging grants takes the max.
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq, PartialOrd, Ord)]
 pub enum Engine {
     /// No engine: `"false"`, absent or unknown.
     #[default]
     Off,
-    /// Started after each start (`autoStart: true`): `"true"`.
-    Auto,
     /// Installed but not started on its own (`autoStart: false`): `"manual"`.
     Manual,
+    /// Started after each start (`autoStart: true`): `"true"`.
+    Auto,
 }
 
 impl Engine {
-    /// The sandbox has Docker, started or not.
-    pub fn on(self) -> bool {
-        self != Engine::Off
-    }
-
     fn label(self) -> &'static str {
         match self {
             Engine::Off => "false",
