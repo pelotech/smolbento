@@ -1537,11 +1537,11 @@ fn docker_follows_the_merged_dockerd() {
     let docker = |mixins: Vec<Kit>| {
         let mut req = request();
         run(&plan(mixins), &mut req, &mut Policy::default()).unwrap();
-        (req.docker, req.docker_manual)
+        req.engine
     };
-    assert_eq!(docker(vec![dockerd(true)]), (true, false));
-    assert_eq!(docker(vec![dockerd(false)]), (true, true));
-    assert_eq!(docker(vec![]), (false, false));
+    assert_eq!(docker(vec![dockerd(true)]), Engine::Auto);
+    assert_eq!(docker(vec![dockerd(false)]), Engine::Manual);
+    assert_eq!(docker(vec![]), Engine::Off);
 
     let mut w = workload();
     w.provides = vec!["docker@29.10.0".into()];
@@ -1552,14 +1552,14 @@ fn docker_follows_the_merged_dockerd() {
         &mut Policy::default(),
     )
     .unwrap();
-    assert!(!req.docker);
+    assert_eq!(req.engine, Engine::Off);
     let mut dind = kit("dind", Kind::Mixin);
     dind.provides = vec!["docker".into()];
-    assert_eq!(docker(vec![dind]), (false, false));
+    assert_eq!(docker(vec![dind]), Engine::Off);
     // A kit named like the shipped one has no engine without `dockerd@1` either.
     let mut builtin = kit("docker", Kind::Mixin);
     builtin.source = Source::Builtin("docker");
-    assert_eq!(docker(vec![builtin]), (false, false));
+    assert_eq!(docker(vec![builtin]), Engine::Off);
 }
 
 /// The engine's store and elevation are set at create, so `kit add` can't add it live.

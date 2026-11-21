@@ -93,7 +93,7 @@ fn answers<R: Runner>(vm: &Smolvm<R>, machine: &str) -> bool {
 
 /// `start_engine` for a sandbox whose `dockerd@1` grant starts it on its own.
 pub(super) fn start_granted<R: Runner>(vm: &Smolvm<R>, sb: &Sandbox) -> Result<()> {
-    if !sb.meta.docker || sb.meta.docker_manual {
+    if sb.meta.engine != super::Engine::Auto {
         return Ok(());
     }
     let user = super::create::workload_user(&sb.meta);

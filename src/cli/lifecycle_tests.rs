@@ -255,10 +255,18 @@ fn planned(
     agent: &str,
     opts: &SandboxOpts,
 ) -> anyhow::Result<crate::sandbox::CreateRequest> {
+    Ok(planned_kits(t, agent, opts)?.0)
+}
+
+fn planned_kits(
+    t: &TestEnv,
+    agent: &str,
+    opts: &SandboxOpts,
+) -> anyhow::Result<(crate::sandbox::CreateRequest, crate::kits::resolve::Plan)> {
     let (mut req, w) = super::kit_target(&t.ctx, &[agent.to_string()], opts, false)?;
     let quiet = crate::cli::progress::Progress::new(t.ctx.out.clone(), false, false, true);
-    super::kit_plan(&t.ctx, &mut req, w, opts, &quiet)?;
-    Ok(req)
+    let plan = super::kit_plan(&t.ctx, &mut req, w, opts, &quiet)?;
+    Ok((req, plan))
 }
 
 fn creatable(t: &TestEnv) {
@@ -827,9 +835,12 @@ fn explicit_template_is_kept_when_docker_is_disabled() {
     else {
         panic!("expected create");
     };
-    let req = planned(&t, "shell", &a.opts).unwrap();
+    let (req, plan) = planned_kits(&t, "shell", &a.opts).unwrap();
     assert_eq!(req.image, "docker/sandbox-templates:shell-docker-0.10.0");
-    assert!(!req.docker, "docker.enabled=false still skips dockerd");
+    assert_eq!(
+        plan.merged.dockerd, None,
+        "docker.enabled=false still skips dockerd"
+    );
 }
 
 #[test]
@@ -841,7 +852,7 @@ fn a_saved_template_is_created_from_its_pack() {
         pull: Some("never".into()),
         ..Default::default()
     };
-    let req = planned(&t, "shell", &opts).unwrap();
+    let (req, plan) = planned_kits(&t, "shell", &opts).unwrap();
     let pack = crate::templates::Store::new(&t.ctx.paths).pack(&e);
     assert_eq!(req.template_pack, Some(pack));
     assert_eq!(
@@ -849,7 +860,10 @@ fn a_saved_template_is_created_from_its_pack() {
         Some("docker.io/library/chk-tpl:v1")
     );
     assert_eq!(req.image, e.image);
-    assert!(!req.docker, "the template's docker flag, not the image's");
+    assert_eq!(
+        plan.merged.dockerd, None,
+        "the template's docker flag, not the image's"
+    );
 }
 
 #[test]

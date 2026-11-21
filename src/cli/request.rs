@@ -296,6 +296,7 @@ pub(crate) fn kit_plan<R: Runner>(
         }
     };
     // A template already set the image; its docker kit comes only from its recorded kits.
+    let mut docker_kit = false;
     if req.template_pack.is_none() {
         load::check_launchable(ctx, &mut workload, Some(&req.name))?;
         // A Smolfile kit gets a login shell, recorded in `sbx.command` so every attach launches
@@ -310,7 +311,7 @@ pub(crate) fn kit_plan<R: Runner>(
         if let Content::Image(image) = &workload.content {
             req.image = image.clone();
         }
-        req.docker = wants_docker(&workload, docker_enabled);
+        docker_kit = wants_docker(&workload, docker_enabled);
     }
     let mut args = opts.kit_args.values()?;
     for (kit, pins) in &recorded_args {
@@ -334,7 +335,7 @@ pub(crate) fn kit_plan<R: Runner>(
         };
         args.pin(&kit.name, pins)?;
     }
-    let mut mixins = order_mixins(req.docker, mixins)?;
+    let mut mixins = order_mixins(docker_kit, mixins)?;
     crate::kits::resolve::check_formats(&workload, &mixins)?;
     let mut skipped = Vec::new();
     if !docker_enabled {

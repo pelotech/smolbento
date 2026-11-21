@@ -196,7 +196,7 @@ fn save<R: Runner>(ctx: &Ctx<R>, a: &TemplateSaveArgs) -> Result<()> {
             tag: r.tag,
             agent: sb.meta.agent.clone(),
             image: sb.image.clone().unwrap_or_default(),
-            docker: sb.meta.docker,
+            docker: sb.meta.engine.on(),
             kits: sb.meta.rec.kits.clone(),
             created_at: super::rfc3339(ctx.now),
             ..Default::default()

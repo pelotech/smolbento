@@ -27,7 +27,7 @@ pub use create::CreateRequest;
 pub use engine::start_engine;
 pub use guest_cmd::*;
 pub use kit_steps::*;
-pub use labels::{Meta, Recorded};
+pub use labels::{Engine, Meta, Recorded};
 
 /// What a create or start is doing, for the caller's progress output.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]

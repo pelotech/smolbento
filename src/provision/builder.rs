@@ -253,7 +253,6 @@ fn request<R: Runner>(ctx: &Ctx<R>, registries: &[String]) -> CreateRequest {
         image: BUILDER_IMAGE.into(),
         cpus: options::host_cpus(),
         memory_mib: MEMORY_MIB,
-        docker: true,
         created: ctx.now,
         ..Default::default()
     }

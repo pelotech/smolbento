@@ -6,7 +6,7 @@ use crate::ssh_agent::{self as agent, AgentLabel};
 use crate::workspace::clone::{CloneSource, SOURCE_MOUNT};
 use crate::workspace::{MOUNTLESS_WORKDIR, Workspace};
 
-use super::labels::{Meta, Recorded};
+use super::labels::{Engine, Meta, Recorded};
 use super::name;
 
 /// Everything decided about a new sandbox before it's created.
@@ -24,11 +24,9 @@ pub struct CreateRequest {
     pub overlay_gib: Option<u32>,
     pub env: Vec<(String, String)>,
     pub ports: Vec<PortMap>,
-    /// The sandbox has a private dockerd (the `sbx.docker` label). Before kits are applied: the
-    /// image should get the `docker` kit; `kits::apply` then sets it from the applied kits.
-    pub docker: bool,
-    /// With `docker`: the engine isn't started on its own (the `manual` value of `sbx.docker`).
-    pub docker_manual: bool,
+    /// The sandbox's private dockerd (the `sbx.docker` label); `kits::apply` sets it from the
+    /// applied kits' `dockerd@1`.
+    pub engine: Engine,
     pub created: i64,
     pub network: NetworkSpec,
     pub deny_cidrs: Vec<String>,
@@ -105,8 +103,7 @@ pub fn meta(req: &CreateRequest) -> Meta {
         workspaces: req.workspaces.iter().map(Workspace::label).collect(),
         created: req.created,
         version: Some(env!("CARGO_PKG_VERSION").into()),
-        docker: req.docker,
-        docker_manual: req.docker_manual,
+        engine: req.engine,
         rec: req.rec.clone(),
         clone_repo: req.clone.as_ref().map(|c| c.top.display().to_string()),
         fork_of: None,
@@ -268,7 +265,7 @@ mod tests {
                 guest: 80,
                 udp: false,
             }],
-            docker,
+            engine: if docker { Engine::Auto } else { Engine::Off },
             created: 1000,
             ..Default::default()
         }
