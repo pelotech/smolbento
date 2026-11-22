@@ -731,11 +731,16 @@ fn revoke<R: Runner>(
         .filter(|s| s.is_running() && !name::is_internal(s.name()))
     {
         let fork_of = sb.meta.fork_of.as_deref();
-        let mut any = false;
+        let (mut any, mut restart) = (false, false);
         for (service, svc) in &services {
             let was = before.entry_for(sb.name(), fork_of, service);
             let now = after.entry_for(sb.name(), fork_of, service);
             if was.map(|e| &e.scope) == now.map(|e| &e.scope) || !is_bound(sb, Some(svc), service) {
+                continue;
+            }
+            // A hosted sandbox's egress process reads its secrets itself, once for them all.
+            if sb.meta.egress.is_some() {
+                restart = true;
                 continue;
             }
             let value = match now.map(|e| resolve(e, ctx.store.as_ref())) {
@@ -746,10 +751,6 @@ fn revoke<R: Runner>(
                 }
                 None => REMOVED_MARKER.to_string(),
             };
-            if sb.meta.egress.is_some() {
-                any |= restart_egress(ctx, sb);
-                continue;
-            }
             match refresh(ctx, sb, svc, service, &value) {
                 Ok(r) => any |= r,
                 Err(e) => crate::warning!(
@@ -758,6 +759,9 @@ fn revoke<R: Runner>(
                     sb.name()
                 ),
             }
+        }
+        if restart {
+            any |= restart_egress(ctx, sb);
         }
         if any {
             reached.push(sb.name().to_string());

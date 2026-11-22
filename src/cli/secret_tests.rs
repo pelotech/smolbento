@@ -1438,6 +1438,15 @@ fn a_fork_is_bound_with_its_originals_value() {
 
 /// A running hosted sandbox bound to github, with a fake service manager and its egress unit.
 fn hosted(t: &mut TestEnv, state: &str) -> crate::host_service::fake::FakeControl {
+    hosted_with(t, state, "github")
+}
+
+/// `hosted`, bound to `secrets`.
+fn hosted_with(
+    t: &mut TestEnv,
+    state: &str,
+    secrets: &str,
+) -> crate::host_service::fake::FakeControl {
     use crate::host_service::{Kind, fake::services};
     let dir = t.ctx.paths.config.join("units");
     std::fs::create_dir_all(&dir).unwrap();
@@ -1456,7 +1465,7 @@ fn hosted(t: &mut TestEnv, state: &str) -> crate::host_service::fake::FakeContro
         "h1",
         state,
         &[
-            ("sbx.secrets", "github"),
+            ("sbx.secrets", secrets),
             ("sbx.credential-env", "GH_TOKEN"),
             ("sbx.egress", label),
         ],
@@ -1526,6 +1535,24 @@ fn secret_rm_on_a_hosted_sandbox_restarts_its_egress_process() {
     );
     assert_eq!(restarts(&ctl), before + 1);
     assert!(!t.made("machine credentials"));
+}
+
+#[test]
+fn secret_rm_of_two_services_restarts_a_hosted_sandbox_once() {
+    let mut t = test_env(&[]);
+    let ctl = hosted_with(&mut t, "running", "github,anthropic");
+    t.sbt(&["secret", "set", "github", "-t", "tok-2"]).unwrap();
+    t.sbt(&["secret", "set", "anthropic", "-t", "sk-1"])
+        .unwrap();
+    let before = restarts(&ctl);
+    t.sbt(&["secret", "rm", "--all", "-f"]).unwrap();
+    assert!(
+        t.stdout()
+            .contains("Running sandboxes h1 no longer send it\n"),
+        "{}",
+        t.stdout()
+    );
+    assert_eq!(restarts(&ctl), before + 1, "{:?}", ctl.calls());
 }
 
 #[test]
