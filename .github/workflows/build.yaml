@@ -68,10 +68,11 @@ jobs:
         run: just test
 
   # The tests never compile macOS-only code: an unoptimised darwin build in the release container
-  # checks it on every code change, in less time than a release build.
+  # checks it on every code change, in less time than a release build. Skipped wherever
+  # release-build runs: its aarch64-apple-darwin build covers the same code.
   darwin-check:
     needs: changes
-    if: ${{ (needs.changes.outputs.code == 'true' && github.event_name == 'pull_request') || github.event_name == 'workflow_dispatch' }}
+    if: ${{ github.event_name == 'pull_request' && needs.changes.outputs.code == 'true' && needs.changes.outputs.build != 'true' && !startsWith(github.head_ref, 'release-please--') }}
     runs-on: ubuntu-latest
     timeout-minutes: 30
     steps:

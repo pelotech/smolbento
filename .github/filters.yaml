@@ -19,3 +19,4 @@ build:
   - 'flake.lock'
   - 'justfile'
   - '.github/workflows/build.yaml'
+  - '.github/actions/nix-devshell/**'
