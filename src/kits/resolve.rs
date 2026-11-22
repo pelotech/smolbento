@@ -435,6 +435,7 @@ pub fn resolve_for(
         check_skill_caps(k)?;
         skipped.extend(select_groups(k)?);
     }
+    check_lifecycle_conflicts(&all, workdir)?;
 
     let mut merged = Merged {
         env,
@@ -776,13 +777,46 @@ fn add_lifecycle(merged: &mut Merged, k: &Kit, l: &Lifecycle, workdir: &str) {
         .startup_hooks
         .extend(l.startup.iter().map(tagged(false)));
     merged.files.extend(l.files.iter().map(|f| FileReq {
-        path: if f.path.starts_with('/') {
-            f.path.clone()
-        } else {
-            format!("{workdir}/{}", f.path)
-        },
+        path: file_path(f, workdir),
         ..f.clone()
     }));
+}
+
+/// Where a lifecycle file goes: a v2 kit's relative path is under `workdir`.
+fn file_path(f: &FileReq, workdir: &str) -> String {
+    if f.path.starts_with('/') {
+        f.path.clone()
+    } else {
+        format!("{workdir}/{}", f.path)
+    }
+}
+
+/// tck: lifecycle@1/shared-paths-avoided. Composition refuses two lifecycle entries writing one
+/// file path, or two declaring `interactive`, selected groups included; the error names both.
+fn check_lifecycle_conflicts(kits: &[Kit], workdir: &str) -> Result<()> {
+    let source = |k: &Kit, c: &Cap| match &c.group {
+        Some(g) => format!("kit {} {}", k.name, g.member_path()),
+        None => format!("kit {} {}", k.name, c.ty),
+    };
+    let mut seen: Vec<(String, String)> = Vec::new();
+    for k in kits {
+        for c in &k.caps {
+            let CapBody::Lifecycle(l) = &c.body else {
+                continue;
+            };
+            let what = l
+                .files
+                .iter()
+                .map(|f| format!("file {}", file_path(f, workdir)));
+            for what in what.chain(l.interactive.then(|| "interactive".to_string())) {
+                if let Some((_, first)) = seen.iter().find(|(w, _)| *w == what) {
+                    bail!("{first} and {} both declare {what}", source(k, c));
+                }
+                seen.push((what, source(k, c)));
+            }
+        }
+    }
+    Ok(())
 }
 
 /// Expands `k`'s `${{ kit.args.* }}` and `${{ kit.env.* }}` references, each once, then checks the

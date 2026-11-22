@@ -1309,3 +1309,70 @@ fn dockerd_absent_without_a_declaration() {
     let p = run(workload("w"), vec![]).unwrap();
     assert_eq!(p.merged.dockerd, Engine::Off);
 }
+
+/// Two lifecycle groups of `g`, each with `config`.
+fn two_lifecycle_groups(first: &str, second: &str) -> Kit {
+    v3_mixin(&format!(
+        "  - group:
+      optional: true
+      capabilities:
+        - type: com.docker.sandbox/lifecycle@1
+          config: {first}
+  - group:
+      optional: true
+      capabilities:
+        - type: com.docker.sandbox/lifecycle@1
+          config: {second}
+"
+    ))
+}
+
+/// tck: lifecycle@1/shared-paths-avoided, SPEC-v3 §7.1.1/conflicts. Composition refuses two
+/// lifecycle entries writing one file path, or two declaring `interactive`, naming both sources;
+/// selected groups included. Before, the later one won the path silently.
+#[test]
+fn two_lifecycle_entries_writing_one_path_or_declaring_interactive_are_refused() {
+    let e = run(
+        workload("w"),
+        vec![two_lifecycle_groups(
+            "{files: [{path: /var/tmp/conflict, content: first}]}",
+            "{files: [{path: /var/tmp/conflict, content: second}]}",
+        )],
+    )
+    .unwrap_err();
+    assert_eq!(
+        format!("{e:#}"),
+        "kit g capabilities[0].group.capabilities[0] and kit g \
+         capabilities[1].group.capabilities[0] both declare file /var/tmp/conflict"
+    );
+    let e = run(
+        workload("w"),
+        vec![two_lifecycle_groups(
+            "{interactive: [-l]}",
+            "{interactive: [-i]}",
+        )],
+    )
+    .unwrap_err();
+    assert_eq!(
+        format!("{e:#}"),
+        "kit g capabilities[0].group.capabilities[0] and kit g \
+         capabilities[1].group.capabilities[0] both declare interactive"
+    );
+    // Across kits, and different paths are fine.
+    let file = |name: &str, p: &str| {
+        let doc = format!(
+            "schemaVersion: \"3\"\nkind: mixin\ncapabilities:\n  - type: \
+             com.docker.sandbox/lifecycle@1\n    config: {{files: [{{path: {p}, content: x}}]}}\n"
+        );
+        crate::kits::v3::parse(&doc, Source::Registry(name.into())).unwrap()
+    };
+    let a = file("a", "/x");
+    let e = run(workload("w"), vec![a.clone(), file("b", "/x")]).unwrap_err();
+    assert_eq!(
+        format!("{e:#}"),
+        "kit a com.docker.sandbox/lifecycle@1 and kit b com.docker.sandbox/lifecycle@1 both \
+         declare file /x"
+    );
+    let c = file("c", "/y");
+    run(workload("w"), vec![a, c]).unwrap();
+}

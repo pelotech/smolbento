@@ -374,6 +374,9 @@ pub struct Lifecycle {
     pub install: Vec<Hook>,
     pub startup: Vec<Hook>,
     pub files: Vec<FileReq>,
+    /// Declares an `interactive` tail. smolbento doesn't use it, but two in one composition are
+    /// refused (`resolve`).
+    pub interactive: bool,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]

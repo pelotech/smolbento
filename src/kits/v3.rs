@@ -1013,7 +1013,8 @@ struct LifecycleCfg {
     startup: Vec<HookCfg>,
     #[serde(default)]
     files: Vec<FileCfg>,
-    // The launch-argv tail for interactive sessions belongs to the agent launcher.
+    // The launch-argv tail for interactive sessions belongs to the agent launcher; only whether
+    // it's declared is kept.
     interactive: Option<Vec<String>>,
 }
 
@@ -1058,6 +1059,7 @@ fn lifecycle(c: LifecycleCfg) -> Result<Lifecycle> {
         clean_env: false,
     };
     Ok(Lifecycle {
+        interactive: c.interactive.is_some(),
         install: c.install.into_iter().map(hook).collect(),
         startup: c.startup.into_iter().map(hook).collect(),
         files: c

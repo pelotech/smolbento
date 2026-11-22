@@ -9,7 +9,7 @@ use anyhow::{Context, Result, bail};
 use crate::kits::compose;
 use crate::kits::env_ref;
 use crate::kits::guest;
-use crate::kits::model::{CapBody, Content, CredReq, FileReq, Hook, Kit, Source};
+use crate::kits::model::{CapBody, Content, CredReq, Hook, Kit, Source};
 use crate::kits::registry_auth::Logins;
 use crate::kits::resolve::{KitContext, KitCred, Merged, Plan};
 use crate::policy::Policy;
@@ -155,10 +155,8 @@ pub fn apply(
     }
     let workdir = image_workdir(plan);
     steps.install.extend(kit_install_steps(plan, req));
-    steps.files = last_wins(&m.files)
-        .into_iter()
-        .map(guest::file_script)
-        .collect();
+    // `resolve` refuses two kits writing one path.
+    steps.files = m.files.iter().map(guest::file_script).collect();
     let (context_version, contexts) = select_contexts(&m.contexts, req.rec.agent_context)?;
     let agent_files = if req.rec.agent_files.is_empty() {
         agent_files(&plan.workload.name, &contexts, &req.workdir())?
@@ -333,16 +331,6 @@ fn git_identity_step(kits: &[&Kit], host: Option<(String, String)>) -> Result<Op
             Ok(None)
         }
     }
-}
-
-/// The files with a repeated path kept once: the later kit (in dependency order) wins it.
-fn last_wins(files: &[FileReq]) -> Vec<&FileReq> {
-    let mut out: Vec<&FileReq> = Vec::new();
-    for f in files {
-        out.retain(|x| x.path != f.path);
-        out.push(f);
-    }
-    out
 }
 
 /// The request fields the workload kit sets. A v3 workload's agent runs as its image's user, root
