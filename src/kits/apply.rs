@@ -754,7 +754,8 @@ const DEFAULT_CONTEXT_FILE: &str = "AGENTS.md";
 
 /// The `agent-context` requests a sandbox applies, and their version. A sandbox uses one version
 /// for all its kits (SPEC agent-context@2/mixed-versions refuses `@1` and `@2` together): `pin`
-/// when it already has one (`kit add`), else `@2`, unless a kit requires `@1`. Requests of the
+/// when it already has one (`kit add`), else `@2`, unless a kit requires `@1` or none offers `@2`.
+/// Requests of the
 /// other version are skipped when optional (a kit left with none gets a warning) and an error
 /// when required.
 pub fn select_contexts(
@@ -765,7 +766,12 @@ pub fn select_contexts(
         return Ok((pin, Vec::new()));
     }
     let required = |v: u8| all.iter().find(|c| c.version == v && !c.optional);
-    let version = pin.unwrap_or(if required(1).is_some() { 1 } else { 2 });
+    let offers_2 = all.iter().any(|c| c.version == 2);
+    let version = pin.unwrap_or(if required(1).is_some() || !offers_2 {
+        1
+    } else {
+        2
+    });
     let other = if version == 1 { 2 } else { 1 };
     if let Some(c) = required(other) {
         match (pin, required(version)) {

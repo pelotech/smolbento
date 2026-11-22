@@ -1604,3 +1604,20 @@ fn adding_dockerd_needs_a_recreate() {
         ["Docker engine"]
     );
 }
+
+/// With no kit offering `agent-context@2`, the sandbox uses `@1` rather than dropping every
+/// optional `@1` request and writing no agent file (agent-context@2/mixed-versions only forbids
+/// both versions together).
+#[test]
+fn optional_version_1_context_is_kept_when_no_kit_offers_version_2() {
+    let p = resolve(
+        context_workload(&[(1, true)], "wl body"),
+        vec![],
+        &ArgValues::default(),
+    )
+    .unwrap();
+    let mut req = in_workspace("/w/proj");
+    let (steps, _) = run(&p, &mut req, &mut Policy::default()).unwrap();
+    assert_eq!(req.rec.agent_context, Some(1));
+    assert!(!steps.context.is_empty(), "the agent file is written");
+}
