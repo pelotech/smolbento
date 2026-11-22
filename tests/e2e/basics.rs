@@ -247,16 +247,10 @@ pub(crate) fn hosted_egress_swaps_a_credential() {
     assert!(seen.starts_with("SMOL_PLACEHOLDER_"), "{seen}");
     assert!(!seen.contains("real-secret"), "{seen}");
 
-    let units = unit_files(&e, &e.name);
-    let Some(unit) = units
-        .iter()
+    let unit = unit_files(&e, &e.name)
+        .into_iter()
         .find(|u| u.to_string_lossy().contains("egress"))
-        .cloned()
-    else {
-        assert!(std::env::var_os("CI").is_none(), "no egress unit on CI");
-        eprintln!("no usable service manager here: nothing hosts the egress");
-        return;
-    };
+        .expect("a hosted sandbox has an egress unit");
     // Socket activation restarts a killed egress process on the next connection.
     let pid = egress_pid(&unit).expect("the egress process runs after a request");
     let _ = std::process::Command::new("kill")
