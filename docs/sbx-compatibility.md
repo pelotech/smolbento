@@ -327,8 +327,8 @@ falls back to attached-only serving and the boot-time checks fail.
 ## Kits
 
 smolbento implements the [sandbox kit spec](https://github.com/docker/sandbox-kit-spec) at commit
-`198d50b5fd57b216b511fd7200010a3636cb3f01` (`SPEC_COMMIT` in the code). v3 is still experimental
-upstream. v2 `spec.yaml` kits and smolvm Smolfiles work too.
+`fa512f4b5812abfe3210b28e80c5ee773b98e2cb` (`SPEC_COMMIT` in the code; `just conformance` runs the
+spec's suite at the same commit). v3 is still experimental upstream. v2 `spec.yaml` kits and smolvm Smolfiles work too.
 
 A kit that **requires** a capability marked "no" or "later" fails, with its `type@version`, before
 anything is created. An optional one is skipped, with a warning when `kit.showWarnings` is on (or
@@ -343,6 +343,11 @@ not with its group: an optional credential with no secret set, an `agent-context
 sandbox doesn't use, or a skill with no skills directory. smolbento doesn't keep selection records,
 so the spec's `selection` observation isn't available. `declarationBlocks` are accepted and not
 used.
+
+Each declared capability version is its own request (spec §7.1.2). A kit declaring both
+`network-policy@1` and `@2`, anywhere in its descriptor, is refused: the spec makes them exclusive.
+The spec's own validator accepts the pair and merges it. A capability `type` must read
+`<namespace>/<name>@<version>` (spec §7), or the kit is refused, even for an optional entry.
 
 | Capability | sbx (local) | smolbento |
 |---|---|---|
