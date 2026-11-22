@@ -394,16 +394,18 @@ pub fn without_dockerd(kit: &mut Kit) -> Result<Vec<Skipped>> {
 
 /// `resolve_for` without a sandbox, for checking kits: `WORKSPACE` is `NO_SANDBOX_WORKDIR`.
 pub fn resolve(workload: Kit, mixins: Vec<Kit>, args: &ArgValues) -> Result<Plan> {
-    resolve_for(workload, mixins, args, NO_SANDBOX_WORKDIR)
+    resolve_for(workload, mixins, args, NO_SANDBOX_WORKDIR, &[])
 }
 
 /// Resolves the kits for a sandbox whose working directory in the guest is `workdir`: v2's
-/// `files/workspace` and `${WORKDIR}` expand to it as `${{ kit.env.WORKSPACE }}`.
+/// `files/workspace` and `${WORKDIR}` expand to it as `${{ kit.env.WORKSPACE }}`. `create_env` is
+/// the create's own environment (`-e`), which `${{ kit.env.* }}` reads last.
 pub fn resolve_for(
     workload: Kit,
     mixins: Vec<Kit>,
     args: &ArgValues,
     workdir: &str,
+    create_env: &[(String, String)],
 ) -> Result<Plan> {
     if workload.kind != Kind::Workload {
         bail!(
@@ -424,7 +426,11 @@ pub fn resolve_for(
     let mixins = order(&workload, all)?;
     let mut all: Vec<Kit> = std::iter::once(workload).chain(mixins).collect();
     let env = merge_env(&all, &kit_args);
-    let mut env_map: BTreeMap<String, String> = env.iter().cloned().collect();
+    // The final container environment (SPEC-v3 §6.1): the image's, then the kits' exports, then
+    // the create's own; `HOME` and `WORKSPACE` last, as smolbento sets them in the guest.
+    let image = all[0].config.iter().flat_map(|c| c.env.iter().cloned());
+    let mut env_map: BTreeMap<String, String> = image.chain(env.iter().cloned()).collect();
+    env_map.extend(create_env.iter().cloned());
     env_map.insert("HOME".into(), super::AGENT_HOME.into());
     env_map.insert("WORKSPACE".into(), workdir.into());
     // Every declaration is expanded and checked before selection (SPEC-v3 §6, §7.1.1), then
@@ -435,6 +441,7 @@ pub fn resolve_for(
         check_skill_caps(k)?;
         skipped.extend(select_groups(k)?);
     }
+    check_lifecycle_conflicts(&all, workdir)?;
 
     let mut merged = Merged {
         env,
@@ -776,13 +783,46 @@ fn add_lifecycle(merged: &mut Merged, k: &Kit, l: &Lifecycle, workdir: &str) {
         .startup_hooks
         .extend(l.startup.iter().map(tagged(false)));
     merged.files.extend(l.files.iter().map(|f| FileReq {
-        path: if f.path.starts_with('/') {
-            f.path.clone()
-        } else {
-            format!("{workdir}/{}", f.path)
-        },
+        path: file_path(f, workdir),
         ..f.clone()
     }));
+}
+
+/// Where a lifecycle file goes: a v2 kit's relative path is under `workdir`.
+fn file_path(f: &FileReq, workdir: &str) -> String {
+    if f.path.starts_with('/') {
+        f.path.clone()
+    } else {
+        format!("{workdir}/{}", f.path)
+    }
+}
+
+/// tck: lifecycle@1/shared-paths-avoided. Composition refuses two lifecycle entries writing one
+/// file path, or two declaring `interactive`, selected groups included; the error names both.
+fn check_lifecycle_conflicts(kits: &[Kit], workdir: &str) -> Result<()> {
+    let source = |k: &Kit, c: &Cap| match &c.group {
+        Some(g) => format!("kit {} {}", k.name, g.member_path()),
+        None => format!("kit {} {}", k.name, c.ty),
+    };
+    let mut seen: Vec<(String, String)> = Vec::new();
+    for k in kits {
+        for c in &k.caps {
+            let CapBody::Lifecycle(l) = &c.body else {
+                continue;
+            };
+            let what = l
+                .files
+                .iter()
+                .map(|f| format!("file {}", file_path(f, workdir)));
+            for what in what.chain(l.interactive.then(|| "interactive".to_string())) {
+                if let Some((_, first)) = seen.iter().find(|(w, _)| *w == what) {
+                    bail!("{first} and {} both declare {what}", source(k, c));
+                }
+                seen.push((what, source(k, c)));
+            }
+        }
+    }
+    Ok(())
 }
 
 /// Expands `k`'s `${{ kit.args.* }}` and `${{ kit.env.* }}` references, each once, then checks the
@@ -798,8 +838,11 @@ fn expand_caps(
     for c in &mut k.caps {
         if let Some(config) = c.config.take() {
             let config = expand_value(&config, v3::text_fields(&c.ty), &ex)?;
-            c.body =
-                v3::body(&c.ty, Some(config)).with_context(|| format!("capability {}", c.ty))?;
+            // A group member is named by its place, as the spec's diagnostics do.
+            let at =
+                (c.group.as_ref()).map_or(String::new(), |g| format!(" at {}", g.member_path()));
+            c.body = v3::body(&c.ty, Some(config))
+                .with_context(|| format!("capability {}{at}", c.ty))?;
         }
     }
     v3::check_caps(&k.name, &k.caps)

@@ -671,6 +671,7 @@ fn a_v3_workload_records_its_image_user_and_installs_in_its_workdir() {
     w.config = Some(crate::kits::model::ImageConfig {
         user: "somebody".into(),
         workdir: "/x".into(),
+        ..Default::default()
     });
     let p = resolve(w, vec![m.clone()], &ArgValues::default()).unwrap();
     let mut req = request();
@@ -742,6 +743,7 @@ fn hooks_and_files_become_steps() {
             install: vec![hook("apt-get install x", None, false)],
             startup: vec![hook("serve", Some("agent"), true)],
             files: vec![file("/etc/x", "from a")],
+            interactive: false,
         }),
     );
     let b = with(
@@ -751,7 +753,8 @@ fn hooks_and_files_become_steps() {
         CapBody::Lifecycle(Lifecycle {
             install: vec![hook("npm i -g y", Some("agent"), false)],
             startup: vec![],
-            files: vec![file("/etc/x", "from b")],
+            files: vec![file("/etc/y", "from b")],
+            interactive: false,
         }),
     );
     let p = plan(vec![a, b]);
@@ -779,8 +782,9 @@ fn hooks_and_files_become_steps() {
             (Some("agent".into()), script("npm i -g y")),
         ]
     );
-    assert_eq!(steps.files.len(), 1, "the later kit wins one path");
-    assert!(steps.files[0].contains("'from b'"));
+    // `resolve` refuses two kits writing one path; each kit's file is written, in order.
+    assert_eq!(steps.files.len(), 2);
+    assert!(steps.files[0].contains("'from a'") && steps.files[1].contains("'from b'"));
     let names: Vec<&str> = steps.startup_d.iter().map(|(n, _)| n.as_str()).collect();
     assert_eq!(names, ["01-a.sh"]);
     assert!(
@@ -1506,22 +1510,6 @@ fn volumes_split_into_tmpfs_and_disk() {
     assert_eq!(tmpfs, [("/a".to_string(), Some("1777".to_string()))]);
 }
 
-#[test]
-fn the_later_kit_wins_a_file_path() {
-    let file = |path: &str, c: &str| FileReq {
-        path: path.into(),
-        content: c.as_bytes().to_vec(),
-        mode: None,
-        overwrite: true,
-    };
-    let files = [file("/x", "1"), file("/y", "2"), file("/x", "3")];
-    let got: Vec<_> = last_wins(&files)
-        .iter()
-        .map(|f| (f.path.as_str(), f.content.clone()))
-        .collect();
-    assert_eq!(got, [("/y", b"2".to_vec()), ("/x", b"3".to_vec())]);
-}
-
 /// `sbx.docker` follows the merged `dockerd@1`; a workload or mixin that only provides `docker`,
 /// or is the shipped kit's namesake without one, has no engine.
 #[test]
@@ -1641,6 +1629,7 @@ fn a_startup_hook_without_a_user_runs_as_the_session_user() {
                     clean_env: false,
                 }],
                 files: vec![],
+                interactive: false,
             }),
         )
     };
@@ -1654,7 +1643,7 @@ fn a_startup_hook_without_a_user_runs_as_the_session_user() {
     let mut node = workload();
     node.config = Some(crate::kits::model::ImageConfig {
         user: "node".into(),
-        workdir: String::new(),
+        ..Default::default()
     });
     let as_node = script(node, None);
     assert!(as_node.contains("runuser -u 'node'"), "{as_node}");

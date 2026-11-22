@@ -160,6 +160,8 @@ pub struct ImageConfig {
     pub user: String,
     /// `WorkingDir`; empty for `/`.
     pub workdir: String,
+    /// `Env`, in order: the base of `${{ kit.env.* }}` (SPEC-v3 §6.1).
+    pub env: Vec<(String, String)>,
 }
 
 #[derive(Debug, Clone, Default, PartialEq, Eq)]
@@ -374,6 +376,9 @@ pub struct Lifecycle {
     pub install: Vec<Hook>,
     pub startup: Vec<Hook>,
     pub files: Vec<FileReq>,
+    /// Declares an `interactive` tail. smolbento doesn't use it, but two in one composition are
+    /// refused (`resolve`).
+    pub interactive: bool,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]

@@ -321,10 +321,9 @@ Docker's kit-spec conformance suite checks this capability through `tests/confor
 (`just conformance`, at `SPEC_COMMIT`). The adapter claims `ssh-agent@1`, `host-mount@1` and
 `lifecycle@1`. In the last run 26 checks pass. Of the failures, `lifecycle@1/hook-env-restricted`
 is the recorded difference above (install steps keep the proxy variables), and these are open:
-`ssh-agent@1/phase-scoped` (the install-phase socket stays open after install), `SPEC-v3
-§6/env-expanded` (`create --env` values don't fill `${{ kit.env.* }}`), and `SPEC-v3
-§7.1.1/conflicts`, `validate-expanded-declarations` and `atomic-selection` (group conflicts,
-diagnostics and selection records). `volume@1` isn't claimed: the spec's `recreate` keeps volumes
+`ssh-agent@1/phase-scoped` (the install-phase socket stays open after install), and `SPEC-v3
+§7.1.1/validate-expanded-declarations` and `atomic-selection`, which use the suite's selection
+controls (`--reject-capability`, selection records) that smolbento doesn't have. `volume@1` isn't claimed: the spec's `recreate` keeps volumes
 while discarding the sandbox's disk, and smolbento keeps them on that disk. The suite's
 isolated setup needs the units' socket path under 104 bytes (a short `SMOLBENTO_TCK_HOME`); a
 longer one falls back to attached-only serving and the boot-time checks fail.
@@ -361,7 +360,7 @@ The spec's own validator accepts the pair and merges it. A capability `type` mus
 | `port@1` | Yes | Yes, on `127.0.0.1` |
 | `volume@1` | Yes, removed with the sandbox | Yes, on the sandbox's disk. Removed with the sandbox (`rm`, `reset`, recreate); kept across stop and start; each fork gets a copy. The path is cleaned (`.`, `..`, doubled `/`); one holding `:` is refused, because smolvm reads it as host:guest (the spec allows it) |
 | `resources@1` | Limited (no GPU) | CPUs and memory. GPU ignored |
-| `lifecycle@1` | Yes | Yes: install steps on first start, startup steps on every start. `interactive` ignored. A v3 install step's clean environment also keeps `USER`, the proxy variables and the CA-bundle variables (when set), as sbx's does, so downloads work behind a proxy and with smolvm's CA; the spec's baseline (`lifecycle@1/hook-env-restricted`) has only `PATH`, `HOME`, `HOSTNAME`, `TERM`, `PWD`, `OLDPWD`, `SHLVL` and `_` |
+| `lifecycle@1` | Yes | Yes: install steps on first start, startup steps on every start. `interactive` ignored, but two entries declaring it are refused, as are two writing one file path (`kit A … and kit B … both declare file PATH`, naming each entry; spec `lifecycle@1/shared-paths-avoided`, selected groups included). Before, the later kit won the path. A v3 install step's clean environment also keeps `USER`, the proxy variables and the CA-bundle variables (when set), as sbx's does, so downloads work behind a proxy and with smolvm's CA; the spec's baseline (`lifecycle@1/hook-env-restricted`) has only `PATH`, `HOME`, `HOSTNAME`, `TERM`, `PWD`, `OLDPWD`, `SHLVL` and `_` |
 | `agent-context@1`, `@2` | Yes. In 0.54 a mixin's `@2` text is listed in the index, as for `@1` | Yes, in the same places (see below). `@2` text is inline, following the spec |
 | `sbx@1` | Yes | Yes: the workload's command is the agent (see below) |
 | `git-identity@1` | Yes | Yes: your `git config user.name/email` |

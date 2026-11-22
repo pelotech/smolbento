@@ -904,6 +904,7 @@ fn v2_workspace_files_and_workdir_expand_to_the_workdir() {
         vec![kit.clone()],
         &ArgValues::default(),
         "/w/repo",
+        &[],
     )
     .unwrap();
     assert_eq!(
@@ -1308,4 +1309,141 @@ fn dockerd_owns_the_engine_store() {
 fn dockerd_absent_without_a_declaration() {
     let p = run(workload("w"), vec![]).unwrap();
     assert_eq!(p.merged.dockerd, Engine::Off);
+}
+
+/// Two lifecycle groups of `g`, each with `config`.
+fn two_lifecycle_groups(first: &str, second: &str) -> Kit {
+    v3_mixin(&format!(
+        "  - group:
+      optional: true
+      capabilities:
+        - type: com.docker.sandbox/lifecycle@1
+          config: {first}
+  - group:
+      optional: true
+      capabilities:
+        - type: com.docker.sandbox/lifecycle@1
+          config: {second}
+"
+    ))
+}
+
+/// tck: lifecycle@1/shared-paths-avoided, SPEC-v3 §7.1.1/conflicts. Composition refuses two
+/// lifecycle entries writing one file path, or two declaring `interactive`, naming both sources;
+/// selected groups included. Before, the later one won the path silently.
+#[test]
+fn two_lifecycle_entries_writing_one_path_or_declaring_interactive_are_refused() {
+    let e = run(
+        workload("w"),
+        vec![two_lifecycle_groups(
+            "{files: [{path: /var/tmp/conflict, content: first}]}",
+            "{files: [{path: /var/tmp/conflict, content: second}]}",
+        )],
+    )
+    .unwrap_err();
+    assert_eq!(
+        format!("{e:#}"),
+        "kit g capabilities[0].group.capabilities[0] and kit g \
+         capabilities[1].group.capabilities[0] both declare file /var/tmp/conflict"
+    );
+    let e = run(
+        workload("w"),
+        vec![two_lifecycle_groups(
+            "{interactive: [-l]}",
+            "{interactive: [-i]}",
+        )],
+    )
+    .unwrap_err();
+    assert_eq!(
+        format!("{e:#}"),
+        "kit g capabilities[0].group.capabilities[0] and kit g \
+         capabilities[1].group.capabilities[0] both declare interactive"
+    );
+    // Across kits, and different paths are fine.
+    let file = |name: &str, p: &str| {
+        let doc = format!(
+            "schemaVersion: \"3\"\nkind: mixin\ncapabilities:\n  - type: \
+             com.docker.sandbox/lifecycle@1\n    config: {{files: [{{path: {p}, content: x}}]}}\n"
+        );
+        crate::kits::v3::parse(&doc, Source::Registry(name.into())).unwrap()
+    };
+    let a = file("a", "/x");
+    let e = run(workload("w"), vec![a.clone(), file("b", "/x")]).unwrap_err();
+    assert_eq!(
+        format!("{e:#}"),
+        "kit a com.docker.sandbox/lifecycle@1 and kit b com.docker.sandbox/lifecycle@1 both \
+         declare file /x"
+    );
+    let c = file("c", "/y");
+    run(workload("w"), vec![a, c]).unwrap();
+}
+
+/// tck: SPEC-v3 §7.1.1/validate-expanded-declarations. A declaration that's invalid once its
+/// references expand is refused, naming the group member it came from.
+#[test]
+fn an_invalid_expanded_member_is_named_by_its_path() {
+    let k = v3_mixin(
+        "  - group:
+      optional: true
+      capabilities:
+        - type: com.docker.sandbox/lifecycle@1
+          config: {files: [{path: \"${{ kit.args.dir }}\", content: x}]}
+",
+    );
+    let v = ArgValues::parse(&[], &["dir=relative".into()]).unwrap();
+    let e = resolve(workload("w"), vec![k], &v).unwrap_err();
+    assert_eq!(
+        format!("{e:#}"),
+        "kit g: capability com.docker.sandbox/lifecycle@1 at \
+         capabilities[0].group.capabilities[0]: lifecycle@1 file path \"relative\" must be absolute"
+    );
+}
+
+/// tck: SPEC-v3 §6/env-expanded. `${{ kit.env.NAME }}` reads the final container environment:
+/// the workload image's `Env`, then the kits' exports, then the create's own `-e` values (an empty
+/// one is present).
+#[test]
+fn kit_env_reads_the_image_then_exports_then_the_create() {
+    let mut w = workload("w");
+    w.config = Some(crate::kits::model::ImageConfig {
+        env: vec![("KIT_GREETING".into(), "image".into())],
+        ..Default::default()
+    });
+    let mixin = |export: bool, name: &str| {
+        let args = if export {
+            "args:\n  greeting:\n    default: arg\n    env: KIT_GREETING\n"
+        } else {
+            ""
+        };
+        let doc = format!(
+            "schemaVersion: \"3\"\nkind: mixin\n{args}capabilities:\n  - type: \
+             com.docker.sandbox/lifecycle@1\n    config: {{files: [{{path: /f, content: \
+             \"${{{{ kit.env.{name} }}}}\"}}]}}\n"
+        );
+        crate::kits::v3::parse(&doc, Source::Registry("m".into())).unwrap()
+    };
+    let written = |export: bool, create: &[(&str, &str)]| {
+        let create: Vec<(String, String)> = create
+            .iter()
+            .map(|(k, v)| (k.to_string(), v.to_string()))
+            .collect();
+        let p = resolve_for(
+            w.clone(),
+            vec![mixin(export, "KIT_GREETING")],
+            &ArgValues::default(),
+            "/w",
+            &create,
+        )
+        .unwrap();
+        String::from_utf8(p.merged.files[0].content.clone()).unwrap()
+    };
+    assert_eq!(written(false, &[]), "image");
+    assert_eq!(written(true, &[]), "arg");
+    assert_eq!(written(true, &[("KIT_GREETING", "create")]), "create");
+    assert_eq!(written(true, &[("KIT_GREETING", "")]), "");
+    // smolbento sets these in the guest, whatever the create or a kit says.
+    let k = mixin(false, "HOME");
+    let home = vec![("HOME".to_string(), "/elsewhere".to_string())];
+    let p = resolve_for(w.clone(), vec![k], &ArgValues::default(), "/w", &home).unwrap();
+    assert_eq!(p.merged.files[0].content, b"/home/agent");
 }

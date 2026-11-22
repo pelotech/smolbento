@@ -719,9 +719,14 @@ pub fn read_layout(dir: &Path, source: Source) -> Result<Kit> {
     let config = l.config()?;
     kit.command = command_of(&config);
     let text = |k: &str| config["config"][k].as_str().unwrap_or_default().to_string();
+    let env = (config["config"]["Env"].as_array().into_iter().flatten())
+        .filter_map(|e| e.as_str()?.split_once('='))
+        .map(|(k, v)| (k.to_string(), v.to_string()))
+        .collect();
     kit.config = Some(ImageConfig {
         user: text("User"),
         workdir: text("WorkingDir"),
+        env,
     });
     kit.starts_docker = l.manifest["annotations"][START_DOCKER_ANNOTATION].as_str() == Some("true");
     kit.digest = Some(l.digest);
