@@ -355,6 +355,22 @@ impl<R: Runner> Smolvm<R> {
         checked(self.runner.run_with_env(&a, env, &[])?).map(drop)
     }
 
+    /// Adds or replaces credential bindings on a running or stopped machine (smolvm 1.36.1); smolvm
+    /// reads each value from `env`, which reaches the smolvm process only. A running machine that
+    /// booted with no bindings takes them from its next start.
+    pub fn add_credentials(
+        &self,
+        name: &str,
+        creds: &[Credential],
+        env: &[(String, String)],
+    ) -> Result<()> {
+        let mut a = args(&["machine", "credentials", "add", "-n", name]);
+        for c in creds {
+            flag(&mut a, "--credential", c.arg());
+        }
+        checked(self.runner.run_with_env(&a, env, &[])?).map(drop)
+    }
+
     /// Packs the stopped machine's filesystem into `<out>.smolmachine` (and an executable stub
     /// at `out`, which callers delete). Unsigned: the stub is never run.
     pub fn pack_from_vm(&self, machine: &str, out: &Path) -> Result<()> {
@@ -709,6 +725,37 @@ mod tests {
                 "machine update -n m --remove-port 8080:80",
             ]
         );
+    }
+
+    #[test]
+    fn add_credentials_args() {
+        let vm = Smolvm::new(FakeRunner::new());
+        let creds = [
+            Credential {
+                env_var: "GH_TOKEN".into(),
+                hosts: vec!["github.com".into(), "api.github.com".into()],
+                set_header: None,
+            },
+            Credential {
+                env_var: "X_KEY".into(),
+                hosts: vec!["x.example".into()],
+                set_header: Some("X-Api-Key".into()),
+            },
+        ];
+        let env = [
+            ("GH_TOKEN".to_string(), "secret-gh".to_string()),
+            ("X_KEY".to_string(), "secret-x".to_string()),
+        ];
+        vm.add_credentials("sbx-a", &creds, &env).unwrap();
+        let line = &vm.runner().call_lines()[0];
+        assert_eq!(
+            line,
+            "machine credentials add -n sbx-a \
+             --credential gh_token=GH_TOKEN@github.com,api.github.com \
+             --credential x_key=X_KEY@x.example:set-header=X-Api-Key"
+        );
+        assert!(!line.contains("secret-"));
+        assert_eq!(vm.runner().envs(), [env.to_vec()]);
     }
 
     #[test]
