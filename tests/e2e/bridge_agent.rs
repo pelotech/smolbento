@@ -397,5 +397,16 @@ pub(crate) fn kit_ssh_agent_install_grant_reaches_only_install_hooks() {
     );
     let env = "echo ${SSH_AUTH_SOCK-unset}";
     assert_eq!(e.sh_ok(&e.name, env), "unset\n", "not at runtime");
+    // The grant ends with the install phase: the socket smolvm mounts is gone, at every start
+    // (`tck: ssh-agent@1/phase-scoped`).
+    let gone = "[ -e /run/ssh-agent.sock ] && echo there || echo gone";
+    assert_eq!(
+        root_out(&e.name, gone).trim(),
+        "gone",
+        "after the install hooks"
+    );
+    e.ok(&["stop", &e.name]);
+    e.ok(&["start", &e.name]);
+    assert_eq!(root_out(&e.name, gone).trim(), "gone", "after a restart");
     assert!(agent.has_key(), "the key is still in the agent");
 }
