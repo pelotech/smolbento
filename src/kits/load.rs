@@ -406,6 +406,10 @@ fn local_path<R: Runner>(
     reference: &str,
     position: Position,
 ) -> Result<Option<PathBuf>> {
+    // `cwd.join("")` is the current directory, which exists: an empty reference would load it.
+    if reference.is_empty() {
+        bail!("an empty kit reference names no kit");
+    }
     let path =
         crate::util::expand_home(reference, &ctx.env)?.unwrap_or_else(|| ctx.cwd.join(reference));
     let looks_local = [".", ".."].contains(&reference)
@@ -1118,6 +1122,19 @@ mod tests {
         let want = "kit reference \"alpine\": not a local path and does not look like a registry \
                     reference";
         assert_eq!(load(&t.ctx, "alpine").unwrap_err().to_string(), want);
+        assert!(t.calls().is_empty());
+    }
+
+    /// An empty reference names no kit: it isn't the current directory (`cwd.join("")`), even
+    /// though that exists. `--kit ""` and anything else that hands one over is refused.
+    #[test]
+    fn an_empty_kit_reference_is_refused() {
+        let t = allow_local();
+        fs::write(t.ctx.cwd.join("spec.yaml"), V2).unwrap();
+        assert_eq!(
+            load(&t.ctx, "").unwrap_err().to_string(),
+            "an empty kit reference names no kit"
+        );
         assert!(t.calls().is_empty());
     }
 

@@ -1210,3 +1210,19 @@ fn clone_takes_an_optional_value() {
     assert_eq!(clone(&["--clone=true"]).0, Some(true));
     assert_eq!(clone(&["--clone=false"]).0, Some(false));
 }
+
+/// As in sbx 0.54: a `kits:` entry that expands to nothing isn't planned (no blank `+ ` line);
+/// filled in, it is.
+#[test]
+fn an_empty_kit_entry_is_not_planned() {
+    let file = "schemaVersion: \"1\"\nagent: claude\nworkspace: .\nargs:\n  agentKit: {default: \"\"}\n\
+                kits:\n  - ${{ env.args.agentKit }}\n";
+    let mut t = with_file(file);
+    t.no_machine();
+    let out = plan(&mut t);
+    assert!(!out.contains("KITS"), "{out}");
+    t.sbt(&["env", "plan", "--env-arg", "agentKit=org/tool"])
+        .unwrap();
+    let out = t.stdout();
+    assert!(out.contains("KITS\n  + org/tool"), "{out}");
+}
