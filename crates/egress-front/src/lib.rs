@@ -5,3 +5,11 @@ pub use smolvm_credentials::{
     MachineCa, StaticResolver, generate_placeholders,
 };
 pub use smolvm_protocol::intercept::InterceptEndpoint;
+
+mod listener;
+mod relay;
+mod serve;
+
+pub use listener::activated_listener;
+pub use relay::relay;
+pub use serve::serve;
