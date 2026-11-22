@@ -346,7 +346,7 @@ used.
 | `port@1` | Yes | Yes, on `127.0.0.1` |
 | `volume@1` | Yes, removed with the sandbox | Yes, on the sandbox's disk. Removed with the sandbox (`rm`, `reset`, recreate); kept across stop and start; each fork gets a copy |
 | `resources@1` | Limited (no GPU) | CPUs and memory. GPU ignored |
-| `lifecycle@1` | Yes | Yes: install steps on first start, startup steps on every start. `interactive` ignored |
+| `lifecycle@1` | Yes | Yes: install steps on first start, startup steps on every start. `interactive` ignored. A v3 install step's clean environment also keeps `USER`, the proxy variables and the CA-bundle variables (when set), as sbx's does, so downloads work behind a proxy and with smolvm's CA; the spec's baseline (`lifecycle@1/hook-env-restricted`) has only `PATH`, `HOME`, `HOSTNAME`, `TERM`, `PWD`, `OLDPWD`, `SHLVL` and `_` |
 | `agent-context@1`, `@2` | Yes. In 0.54 a mixin's `@2` text is listed in the index, as for `@1` | Yes, in the same places (see below). `@2` text is inline, following the spec |
 | `sbx@1` | Yes | Yes: the workload's command is the agent (see below) |
 | `git-identity@1` | Yes | Yes: your `git config user.name/email` |
