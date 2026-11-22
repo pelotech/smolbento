@@ -196,7 +196,6 @@ fn save<R: Runner>(ctx: &Ctx<R>, a: &TemplateSaveArgs) -> Result<()> {
             tag: r.tag,
             agent: sb.meta.agent.clone(),
             image: sb.image.clone().unwrap_or_default(),
-            docker: sb.meta.docker,
             kits: sb.meta.rec.kits.clone(),
             created_at: super::rfc3339(ctx.now),
             ..Default::default()
@@ -263,10 +262,7 @@ mod tests {
         );
         let store = Store::new(&t.ctx.paths);
         let e = store.find("chk-tpl:v1").unwrap().unwrap();
-        assert_eq!(
-            (e.agent.as_str(), e.image.as_str(), e.docker),
-            ("shell", "img", true)
-        );
+        assert_eq!((e.agent.as_str(), e.image.as_str()), ("shell", "img"));
         assert_eq!(std::fs::read_to_string(store.pack(&e)).unwrap(), "packed");
         // Only the index and the pack are left: the stub and temp dir are gone.
         assert_eq!(std::fs::read_dir(&store.dir).unwrap().count(), 2);

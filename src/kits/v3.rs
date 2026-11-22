@@ -470,6 +470,12 @@ pub(crate) fn body(ty: &str, config: Option<Value>) -> Result<CapBody> {
             no_config(config)?;
             CapBody::Privileged
         }
+        "dockerd@1" => {
+            let c: DockerdCfg = decode(config)?;
+            CapBody::Dockerd {
+                auto_start: c.auto_start.unwrap_or(true),
+            }
+        }
         // Its command templates matter to the agent launcher, not to the kit model.
         "agent-sessions@1" => CapBody::AgentSessions,
         "ssh-agent@1" => ssh_agent(decode(config)?)?,
@@ -901,6 +907,13 @@ struct VolumeCfg {
 struct HostMountCfg {
     path: String,
     mode: Option<String>,
+}
+
+#[derive(Deserialize)]
+#[serde(deny_unknown_fields)]
+struct DockerdCfg {
+    #[serde(rename = "autoStart")]
+    auto_start: Option<bool>,
 }
 
 #[derive(Deserialize)]

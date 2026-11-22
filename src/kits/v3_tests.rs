@@ -1237,3 +1237,18 @@ capabilities:
     );
     assert_eq!(k.caps[0].body, CapBody::Pending);
 }
+
+/// tck: dockerd@1 config section (no id): `autoStart` defaults true, no other field.
+#[test]
+fn dockerd_config_decodes_strictly() {
+    use serde_json::json;
+    let ty = "com.docker.sandbox/dockerd@1";
+    let auto = |c| match body(ty, c).unwrap() {
+        CapBody::Dockerd { auto_start } => auto_start,
+        b => panic!("{b:?}"),
+    };
+    assert!(auto(None));
+    assert!(auto(Some(json!({}))));
+    assert!(!auto(Some(json!({"autoStart": false}))));
+    assert!(body(ty, Some(json!({"other": 1}))).is_err());
+}

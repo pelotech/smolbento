@@ -42,10 +42,7 @@ fn builder_json(state: &str) -> String {
         &[
             ("sbx.name", "_builder"),
             ("sbx.docker", "true"),
-            (
-                "sbx.kits",
-                r#"[{"name":"docker","ref":"builtin:docker","provides":["docker@1.0.0"]}]"#,
-            ),
+            ("sbx.kits", r#"[{"name":"docker","ref":"builtin:docker"}]"#),
         ],
     )
 }
@@ -120,10 +117,8 @@ fn first_build_creates_starts_builds_copies_back_and_stops() {
     };
     let order = [
         i("machine start -n sbx-_builder"),
-        i("sbx-_builder:/etc/smolbento/startup.d/01-docker.sh"),
+        i("_ping"),
         i(&format!("-u root -- sh -c {}", sandbox::startup_cmd(None))),
-        i("pgrep -x dockerd"),
-        i("-u root -- docker info"),
         i(&format!("-u root -- mkdir -p {n}")),
         i(&format!(
             "machine files --name sbx-_builder upload-folder {} {n}/ctx",
@@ -194,10 +189,7 @@ fn every_build_starts_dockerd_unless_it_runs() {
     build(&t.ctx, kit.path()).unwrap();
     let lines = fake.call_lines();
     let at = |needle: &str| lines.iter().position(|l| l.contains(needle));
-    let (ensure, wait) = (
-        at("pgrep -x dockerd").unwrap(),
-        at("-- docker info").unwrap(),
-    );
+    let (ensure, wait) = (at("pgrep -x dockerd").unwrap(), at("_ping").unwrap());
     assert!(ensure < wait, "{lines:#?}");
     assert!(lines[ensure].starts_with("machine exec --name sbx-_builder -u root -- sh -c "));
     assert!(!lines.iter().any(|l| l.starts_with("machine delete")));
@@ -215,6 +207,24 @@ fn a_stopped_builder_is_started_and_stopped_again() {
     assert!(!lines.iter().any(|l| l.starts_with("machine create")));
     assert!(lines.iter().any(|l| l == "machine start -n sbx-_builder"));
     assert_eq!(lines.last().unwrap(), "machine stop -n sbx-_builder");
+}
+
+/// A stopped builder's start (`ensure_running`, then its setup) launches the engine before the
+/// build runs.
+#[test]
+fn a_stopped_builder_launches_dockerd_before_the_build() {
+    let t = test_env(&[]);
+    let fake = t.runner();
+    fake.ok(&["machine", "status"], &builder_json("stopped"))
+        .download(&kit_tar());
+    let kit = kit_dir();
+    build(&t.ctx, kit.path()).unwrap();
+    let lines = fake.call_lines();
+    let at = |needle: &str| lines.iter().position(|l| l.contains(needle));
+    let start = at("machine start -n sbx-_builder").expect("start");
+    let launch = at("exec dockerd >/var/log/dockerd.log").expect("launch");
+    let build = at("docker buildx build").expect("build");
+    assert!(start < launch && launch < build, "{lines:#?}");
 }
 
 #[test]
@@ -348,38 +358,58 @@ fn a_descriptor_without_the_syntax_line_is_built_with_the_frontend_named() {
     assert!(build.contains("/ctx/spec.yaml "), "{build}");
 }
 
+const PROBE: &str = "curl -sf --unix-socket /var/run/docker.sock http://localhost/_ping >/dev/null \
+                     2>&1 || docker version >/dev/null 2>&1";
+
+fn probe_argv() -> [&'static str; 12] {
+    [
+        "machine",
+        "exec",
+        "--name",
+        "sbx-_builder",
+        "-u",
+        "root",
+        "--timeout",
+        "2s",
+        "--",
+        "sh",
+        "-c",
+        PROBE,
+    ]
+}
+
 #[test]
 fn dockerd_that_never_answers_times_out_pointing_at_its_log() {
     let t = test_env(&[]);
     t.runner().fail(
-        &[
-            "machine",
-            "exec",
-            "--name",
-            "sbx-_builder",
-            "-u",
-            "root",
-            "--",
-            "docker",
-            "info",
-        ],
-        "UNKNOWN",
+        &probe_argv(),
+        "COMMAND_FAILED",
         "Cannot connect to the Docker daemon",
     );
-    let err = wait_for_docker(&t.ctx.vm, "sbx-_builder", 3, Duration::ZERO)
+    let err = sandbox::start_engine(&t.ctx.vm, "sbx-_builder", Some("root"))
         .unwrap_err()
         .to_string();
-    assert!(err.contains("/var/log/dockerd.log"), "{err}");
-    assert_eq!(t.runner().calls().len(), 3);
+    assert_eq!(
+        err,
+        "dockerd didn't answer within 60s; see /var/log/dockerd.log in the sandbox"
+    );
+    // The launch, then one probe a second of the bound.
+    assert_eq!(t.runner().calls().len(), 61);
 }
 
 #[test]
 fn dockerd_is_waited_for() {
     let t = test_env(&[]);
     let fake = t.runner();
-    fake.once_fail(&["machine", "exec"], "UNKNOWN", "not yet");
-    wait_for_docker(&t.ctx.vm, "sbx-_builder", 3, Duration::ZERO).unwrap();
-    assert_eq!(fake.calls().len(), 2);
+    fake.once_fail(&probe_argv(), "COMMAND_FAILED", "not yet");
+    sandbox::start_engine(&t.ctx.vm, "sbx-_builder", Some("root")).unwrap();
+    let lines = fake.call_lines();
+    assert_eq!(
+        lines.len(),
+        3,
+        "launch, two probes, no socket step for root: {lines:#?}"
+    );
+    assert!(lines[0].contains("exec dockerd"), "{lines:#?}");
 }
 
 #[test]
@@ -512,10 +542,7 @@ fn dhi_builder_json(state: &str) -> String {
         &[
             ("sbx.name", "_builder"),
             ("sbx.docker", "true"),
-            (
-                "sbx.kits",
-                r#"[{"name":"docker","ref":"builtin:docker","provides":["docker@1.0.0"]}]"#,
-            ),
+            ("sbx.kits", r#"[{"name":"docker","ref":"builtin:docker"}]"#),
             ("sbx.registries", "dhi.io"),
             ("sbx.credential-hosts", "dhi.io"),
             ("sbx.credential-env", "SBX_REGISTRY_0_AUTH"),

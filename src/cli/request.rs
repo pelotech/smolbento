@@ -209,8 +209,6 @@ pub(crate) fn kit_target<R: Runner>(
         req.template_pack = Some(store.pack(&e));
         req.rec.template = Some(e.full());
         req.image = e.image.clone();
-        // The docker kit as the source sandbox had it.
-        req.docker = e.docker && ctx.settings.bool("docker.enabled")?;
         return Ok((req, Workload::Template(Box::new(e))));
     }
     if opts.pull.as_deref() == Some("never") {
@@ -251,6 +249,7 @@ pub(crate) fn kit_plan<R: Runner>(
     p: &Progress,
 ) -> Result<Plan> {
     let mut kits = KitsSection::new(p, &req.name);
+    let docker_enabled = ctx.settings.bool("docker.enabled")?;
     // A template's own mixins, and every recorded kit's args.
     let mut recorded: Vec<Kit> = Vec::new();
     let mut recorded_args: Vec<(String, Vec<String>)> = Vec::new();
@@ -261,7 +260,7 @@ pub(crate) fn kit_plan<R: Runner>(
             let records = e
                 .kits
                 .iter()
-                .filter(|r| req.docker || r.reference != "builtin:docker");
+                .filter(|r| docker_enabled || r.reference != "builtin:docker");
             for (i, rec) in records.enumerate() {
                 // The workload record is the agent's own kit for an agent's template.
                 let agent = (i == 0 && e.is_agent_template(&ctx.env)).then_some(e.agent.as_str());
@@ -296,7 +295,8 @@ pub(crate) fn kit_plan<R: Runner>(
             (Some(target), kit)
         }
     };
-    // A template already set the image and the docker flag.
+    // A template already set the image; its docker kit comes only from its recorded kits.
+    let mut docker_kit = false;
     if req.template_pack.is_none() {
         load::check_launchable(ctx, &mut workload, Some(&req.name))?;
         // A Smolfile kit gets a login shell, recorded in `sbx.command` so every attach launches
@@ -311,7 +311,7 @@ pub(crate) fn kit_plan<R: Runner>(
         if let Content::Image(image) = &workload.content {
             req.image = image.clone();
         }
-        req.docker = wants_docker(&workload, ctx.settings.bool("docker.enabled")?);
+        docker_kit = wants_docker(&workload, docker_enabled);
     }
     let mut args = opts.kit_args.values()?;
     for (kit, pins) in &recorded_args {
@@ -335,9 +335,16 @@ pub(crate) fn kit_plan<R: Runner>(
         };
         args.pin(&kit.name, pins)?;
     }
-    let mixins = order_mixins(req.docker, mixins)?;
+    let mut mixins = with_docker_kit(docker_kit, mixins)?;
     crate::kits::resolve::check_formats(&workload, &mixins)?;
-    let plan = resolve_for(workload, mixins, &args, &req.workdir())?;
+    let mut skipped = Vec::new();
+    if !docker_enabled {
+        for k in std::iter::once(&mut workload).chain(&mut mixins) {
+            skipped.extend(crate::kits::resolve::without_dockerd(k)?);
+        }
+    }
+    let mut plan = resolve_for(workload, mixins, &args, &req.workdir())?;
+    plan.skipped.extend(skipped);
     if let Some(t) = &req.rec.template {
         let layered = crate::kits::compose::layered_names(&plan)?;
         if !layered.is_empty() {
@@ -456,37 +463,15 @@ impl<'a> KitsSection<'a> {
     }
 }
 
-/// The mixins with the shipped docker kit first, whether given with `--kit docker` or added
-/// because the image is Docker-enabled (`needs_docker_kit`): other kits' startup steps may use the
-/// dockerd it starts (in sbx it's in the image).
-fn order_mixins(docker_image: bool, mut mixins: Vec<Kit>) -> Result<Vec<Kit>> {
-    if let Some(i) = mixins
-        .iter()
-        .position(|k| k.source == Source::Builtin("docker"))
-    {
-        let docker = mixins.remove(i);
-        mixins.insert(0, docker);
-    } else if needs_docker_kit(docker_image, &mixins) {
-        mixins.insert(
-            0,
-            load::builtin("docker").expect("the docker kit is shipped")?,
-        );
+/// The mixins, plus the shipped docker kit (one `dockerd@1` request) for a Docker-enabled image
+/// unless `--kit docker` already added it. Other kits' `provides` don't decide: a kit that starts
+/// its own dockerd declares `dockerd@1` (`autoStart: false`), and the merge collapses duplicate
+/// requests.
+fn with_docker_kit(docker_image: bool, mut mixins: Vec<Kit>) -> Result<Vec<Kit>> {
+    if docker_image && !mixins.iter().any(|k| k.source == Source::Builtin("docker")) {
+        mixins.push(load::builtin("docker").expect("the docker kit is shipped")?);
     }
     Ok(mixins)
-}
-
-/// A Docker-enabled image gets dockerd through the shipped kit, unless `--kit docker` added it or
-/// a mixin provides `docker` in its place. The shipped kit provides nothing (the image has Docker;
-/// it only starts dockerd, like SPEC-v3's later `dockerd@1`), so the workload's own `provides`
-/// (sbx's kits list `docker@29.10.0` among their tools) neither decides nor clashes.
-fn needs_docker_kit(docker_image: bool, mixins: &[Kit]) -> bool {
-    docker_image
-        && !mixins.iter().any(|k| {
-            k.source == Source::Builtin("docker")
-                || k.provides
-                    .iter()
-                    .any(|p| capability::provides_name(p, "docker"))
-        })
 }
 
 /// Whether a workload kit gets the `docker` kit: a prebuilt kit when its manifest asks for an

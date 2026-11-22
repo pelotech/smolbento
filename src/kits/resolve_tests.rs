@@ -238,20 +238,21 @@ fn a_mixin_as_the_workload_and_two_kits_of_one_name_are_rejected() {
     let mut other = mixin("a");
     other.source = Source::Registry("other/a".into());
     let e = run(workload("w"), vec![mixin("a"), other.clone()]).unwrap_err();
-    assert_eq!(format!("{e:#}"), "two kits are named a");
+    assert_eq!(format!("{e:#}"), "two kits are named a; rename one of them");
     let e = run(workload("a"), vec![other]).unwrap_err();
-    assert_eq!(format!("{e:#}"), "two kits are named a");
+    assert_eq!(format!("{e:#}"), "two kits are named a; rename one of them");
     let shipped = crate::kits::load::builtin("docker").unwrap().unwrap();
     let e = run(workload("w"), vec![mixin("docker"), shipped]).unwrap_err();
     assert_eq!(
         format!("{e:#}"),
-        "two kits are named docker: yours and the shipped one a Docker-enabled image gets; \
-             rename your kit, or have it provide docker (`provides: [docker@<version>]`) to \
-             replace the shipped one"
+        "two kits are named docker; rename one of them"
     );
     // A built-in agent is a kit like any other: its name is taken.
     let e = run(Kit::agent_test("claude"), vec![mixin("claude")]).unwrap_err();
-    assert_eq!(format!("{e:#}"), "two kits are named claude");
+    assert_eq!(
+        format!("{e:#}"),
+        "two kits are named claude; rename one of them"
+    );
 }
 
 #[test]
@@ -1022,6 +1023,60 @@ fn a_group_whose_members_are_all_supported_is_applied() {
     assert!(p.skipped.is_empty(), "{:?}", p.skipped);
 }
 
+fn dockerd_group(optional: bool) -> Kit {
+    v3_mixin(&format!(
+        "  - group:
+      name: Docker
+      optional: {optional}
+      capabilities:
+        - type: com.docker.sandbox/dockerd@1
+        - type: com.docker.sandbox/volume@1
+          config: {{path: /var/cache/x}}
+"
+    ))
+}
+
+/// With `docker.enabled=false`, an optional group holding `dockerd@1` is skipped whole.
+/// tck: SPEC-v3 §7.1.1/atomic-selection
+#[test]
+fn docker_disabled_skips_a_whole_optional_group_with_dockerd() {
+    let mut k = dockerd_group(true);
+    let skipped = without_dockerd(&mut k).unwrap();
+    let p = run(workload("w"), vec![k]).unwrap();
+    assert_eq!(p.merged.dockerd, Engine::Off);
+    assert!(p.merged.volumes.is_empty(), "{:?}", p.merged.volumes);
+    assert_eq!(
+        skipped,
+        ["g: optional group capabilities[0] (Docker), for its \
+          capabilities[0].group.capabilities[0] com.docker.sandbox/dockerd@1"]
+    );
+    assert_eq!(
+        skipped[0].reason,
+        "Docker is disabled: docker.enabled=false"
+    );
+
+    let p = run(workload("w"), vec![dockerd_group(true)]).unwrap();
+    assert_eq!(p.merged.dockerd, Engine::Auto);
+    assert!(
+        p.merged.volumes.iter().any(|v| v.path == "/var/cache/x"),
+        "{:?}",
+        p.merged.volumes
+    );
+    assert!(p.skipped.is_empty(), "{:?}", p.skipped);
+}
+
+/// A required group holding `dockerd@1` refuses like a required `dockerd@1`, naming the group.
+/// tck: SPEC-v3 §7.1.1/atomic-selection
+#[test]
+fn docker_disabled_refuses_a_required_group_with_dockerd() {
+    let e = without_dockerd(&mut dockerd_group(false)).unwrap_err();
+    assert_eq!(
+        format!("{e:#}"),
+        "kit g: group capabilities[0] (Docker): dockerd@1: Docker is disabled \
+         (docker.enabled=false); turn it on with `bento settings set docker.enabled true`"
+    );
+}
+
 /// A group member is taken whole or not at all, never widened to its hosts as an optional
 /// ordinary `network-policy@2` entry is.
 #[test]
@@ -1177,4 +1232,101 @@ fn a_reference_with_no_value_fails_even_in_an_optional_capability() {
         format!("{e:#}").contains("\"port\" has no resolved value"),
         "{e:#}"
     );
+}
+
+const DD: &str = "com.docker.sandbox/dockerd@1";
+const VOL: &str = "com.docker.sandbox/volume@1";
+fn dockerd(auto_start: bool) -> CapBody {
+    CapBody::Dockerd { auto_start }
+}
+
+#[test]
+fn dockerd_merges_auto_start_true_wins() {
+    let two = |a, b| {
+        let p = run(
+            workload("w").cap(DD, false, dockerd(a)),
+            vec![mixin("m").cap(DD, false, dockerd(b))],
+        );
+        p.unwrap().merged.dockerd
+    };
+    assert_eq!(two(false, false), Engine::Manual);
+    assert_eq!(two(true, false), Engine::Auto);
+    assert_eq!(two(false, true), Engine::Auto);
+}
+
+/// tck: dockerd@1/elevation-granted
+/// tck: dockerd@1/storage-private-and-persistent
+/// tck: dockerd@1/manual-elevation-granted
+/// tck: dockerd@1/manual-storage-private-and-persistent
+/// tck: dockerd@1/storage-removed-with-sandbox
+/// tck: dockerd@1/removed-store-not-reused
+#[test]
+fn dockerd_brings_elevation_and_the_engine_store() {
+    for auto_start in [true, false] {
+        let p = run(workload("w").cap(DD, false, dockerd(auto_start)), vec![]).unwrap();
+        assert!(p.merged.privileged);
+        let got: Vec<_> = (p.merged.volumes.iter())
+            .map(|v| (&*v.path, v.tmpfs, v.mode.as_deref()))
+            .collect();
+        assert_eq!(
+            got,
+            [
+                ("/var/lib/docker", false, None),
+                ("/var/lib/containerd", false, None)
+            ]
+        );
+    }
+}
+
+/// tck: dockerd@1/engine-store-owned
+#[test]
+fn dockerd_owns_the_engine_store() {
+    let others: [(&str, CapBody); 3] = [
+        (VOL, vol("/var/lib/docker/", false)),
+        (VOL, vol("/var/lib/docker/volumes", false)),
+        (
+            "com.docker.sandbox/host-mount@1",
+            host("/var/lib/docker", None),
+        ),
+    ];
+    for (ty, body) in others {
+        // Whichever side is added first.
+        let d = || workload("w").cap(DD, false, dockerd(true));
+        let o = || mixin("m").cap(ty, false, body.clone());
+        assert!(run(d(), vec![o()]).is_err(), "{body:?}");
+        let w = workload("w").cap(ty, false, body.clone());
+        let m = mixin("m").cap(DD, false, dockerd(true));
+        assert!(run(w, vec![m]).is_err(), "{body:?}");
+    }
+    for ok in ["/var/lib/docker2", "/var/lib/docker-cache"] {
+        let m = mixin("m").cap(VOL, false, vol(ok, false));
+        run(workload("w").cap(DD, false, dockerd(true)), vec![m]).unwrap();
+    }
+}
+
+/// tck: dockerd@1/absent-without-grant
+#[test]
+fn dockerd_absent_without_a_declaration() {
+    let p = run(workload("w"), vec![]).unwrap();
+    assert_eq!(p.merged.dockerd, Engine::Off);
+    assert!(!p.merged.privileged);
+}
+
+/// tck: dockerd@1/engine-store-owned (the cleaned path decides, not its spelling)
+#[test]
+fn dockerd_engine_store_is_compared_on_the_cleaned_path() {
+    for bad in [
+        "/var/lib/x/../docker",
+        "/var/lib/docker/./volumes",
+        "//var/lib//docker",
+    ] {
+        let d = || workload("w").cap(DD, false, dockerd(true));
+        let m = || mixin("m").cap(VOL, false, vol(bad, false));
+        assert!(run(d(), vec![m()]).is_err(), "{bad}");
+        let w = workload("w").cap(VOL, false, vol(bad, false));
+        let m = mixin("m").cap(DD, false, dockerd(true));
+        assert!(run(w, vec![m]).is_err(), "{bad}");
+    }
+    let m = mixin("m").cap(VOL, false, vol("/var/lib/docker2/../docker2", false));
+    run(workload("w").cap(DD, false, dockerd(true)), vec![m]).unwrap();
 }

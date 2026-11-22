@@ -8,10 +8,11 @@ use crate::kits::args::{ArgValues, expand, expand_value};
 use crate::kits::capability;
 use crate::kits::host_mount;
 use crate::kits::model::{
-    AgentContextReq, Cap, CapBody, CredReq, FileReq, Format, Hook, Kind, Kit, Lifecycle, NetRule,
-    Rules, Source, SshPhase,
+    AgentContextReq, Cap, CapBody, CredReq, FileReq, Format, Group, Hook, Kind, Kit, Lifecycle,
+    NetRule, Rules, Source, SshPhase,
 };
 use crate::kits::v3;
+use crate::sandbox::Engine;
 use crate::ssh_agent::{AgentGrant, PhaseGrant};
 
 #[derive(Debug)]
@@ -55,13 +56,18 @@ pub struct Volume {
 pub struct Skipped {
     pub kit: String,
     pub what: String,
+    /// Why, for the warning.
+    pub reason: &'static str,
 }
+
+const NOT_SUPPORTED: &str = "not supported";
 
 impl Skipped {
     fn new(kit: &str, what: impl Into<String>) -> Skipped {
         Skipped {
             kit: kit.into(),
             what: what.into(),
+            reason: NOT_SUPPORTED,
         }
     }
 }
@@ -86,7 +92,7 @@ impl Plan {
     pub fn skipped_warnings(&self) -> Vec<String> {
         self.skipped
             .iter()
-            .map(|s| format!("kit {}: skipping {} (not supported)", s.kit, s.what))
+            .map(|s| format!("kit {}: skipping {} ({})", s.kit, s.what, s.reason))
             .collect()
     }
 }
@@ -116,10 +122,31 @@ pub struct Merged {
     pub git_identity: bool,
     pub long_running: bool,
     pub privileged: bool,
+    /// `dockerd@1`: `Off` unless a kit declares it; one `autoStart: true` makes it `Auto`.
+    pub dockerd: Engine,
     /// `ssh-agent@1` entries merged per phase, plus a built-in agent's implicit runtime grant.
     pub ssh_agent: AgentGrant,
     /// The kit that first declared each volume path: a host mount there conflicts with it.
     volume_kits: BTreeMap<String, String>,
+    /// The kit that first declared `dockerd@1`: it owns `/var/lib/docker` and below.
+    dockerd_kit: Option<String>,
+}
+
+const ENGINE_STORE: &str = "/var/lib/docker";
+/// Lexically cleaned first (`.`, `..`, repeated and trailing `/`), as the storage key is.
+fn in_engine_store(path: &str) -> bool {
+    use std::path::{Component, PathBuf};
+    let mut clean = PathBuf::new();
+    for c in std::path::Path::new(path).components() {
+        match c {
+            Component::ParentDir => {
+                clean.pop();
+            }
+            Component::CurDir => {}
+            c => clean.push(c),
+        }
+    }
+    clean.starts_with(ENGINE_STORE)
 }
 
 impl Merged {
@@ -136,6 +163,7 @@ impl Merged {
         tmpfs: bool,
         mode: &Option<String>,
     ) -> Result<()> {
+        self.check_engine_store(kit, path)?;
         if let Some(h) = self.host_mounts.iter().find(|h| h.path == path) {
             bail!("{}", one_owner(&h.kit, kit, path));
         }
@@ -157,6 +185,7 @@ impl Merged {
     }
 
     fn add_host_mount(&mut self, k: &Kit, path: &str, mode: &Option<String>) -> Result<()> {
+        self.check_engine_store(&k.name, path)?;
         let owner = self.host_mounts.iter().find(|h| h.path == path);
         if let Some(a) = owner.map(|h| &h.kit).or(self.volume_kits.get(path)) {
             bail!("{}", one_owner(a, &k.name, path));
@@ -166,6 +195,47 @@ impl Merged {
             identity: host_mount::identity(k)?,
             path: path.into(),
             mode: mode.clone(),
+        });
+        Ok(())
+    }
+
+    /// dockerd@1/engine-store-owned: no other kit's volume or host mount sits in the engine store.
+    fn check_engine_store(&self, kit: &str, path: &str) -> Result<()> {
+        match &self.dockerd_kit {
+            Some(d) if in_engine_store(path) => {
+                bail!("kit {kit}: {path} is in {ENGINE_STORE}, which kit {d}'s dockerd@1 owns")
+            }
+            _ => Ok(()),
+        }
+    }
+
+    /// Elevation and a private, persistent engine store; the engine starts if any kit says so.
+    fn add_dockerd(&mut self, kit: &str, auto_start: bool) -> Result<()> {
+        if self.dockerd_kit.is_none() {
+            if let Some(v) = self.volumes.iter().find(|v| in_engine_store(&v.path)) {
+                let owner = self.volume_kits.get(&v.path).map_or("another kit", |o| o);
+                bail!(
+                    "kit {kit}: dockerd@1 owns {ENGINE_STORE}, but {owner} uses {}",
+                    v.path
+                );
+            }
+            if let Some(h) = self.host_mounts.iter().find(|h| in_engine_store(&h.path)) {
+                bail!(
+                    "kit {kit}: dockerd@1 owns {ENGINE_STORE}, but {} uses {}",
+                    h.kit,
+                    h.path
+                );
+            }
+            for dir in [ENGINE_STORE, "/var/lib/containerd"] {
+                self.add_volume(kit, dir, false, &None)?;
+            }
+            self.dockerd_kit = Some(kit.into());
+        }
+        self.privileged = true;
+        self.dockerd = self.dockerd.max(if auto_start {
+            Engine::Auto
+        } else {
+            Engine::Manual
         });
         Ok(())
     }
@@ -301,6 +371,40 @@ pub struct KitCred {
 /// working directory, so a kit validates the same way it applies to a mountless sandbox.
 pub const NO_SANDBOX_WORKDIR: &str = crate::workspace::MOUNTLESS_WORKDIR;
 
+/// For `docker.enabled=false`: `kit` without its `dockerd@1` requests. A required one (or one in a
+/// required group) refuses the create; an optional one is skipped, with its whole group
+/// (SPEC-v3 §7.1.1).
+pub fn without_dockerd(kit: &mut Kit) -> Result<Vec<Skipped>> {
+    let ty = format!("{}dockerd@1", super::CAP_NS);
+    if let Some(c) = kit.caps.iter().find(|c| c.ty == ty && !c.optional) {
+        let group =
+            (c.group.as_ref()).map_or(String::new(), |g| format!("group {}: ", group_label(g)));
+        bail!(
+            "kit {}: {group}dockerd@1: Docker is disabled (docker.enabled=false); turn it on with \
+             `bento settings set docker.enabled true`",
+            kit.name
+        );
+    }
+    const REASON: &str = "Docker is disabled: docker.enabled=false";
+    let mut skipped = Vec::new();
+    if kit.caps.iter().any(|c| c.ty == ty && c.group.is_none()) {
+        skipped.push(Skipped {
+            reason: REASON,
+            ..Skipped::new(&kit.name, ty.clone())
+        });
+    }
+    let mut groups = Vec::new();
+    for c in kit.caps.iter().filter(|c| c.ty == ty) {
+        if let Some(g) = c.group.as_ref().filter(|g| !groups.contains(&g.index)) {
+            groups.push(g.index);
+            skipped.push(group_skip(&kit.name, g, &ty, REASON));
+        }
+    }
+    kit.caps
+        .retain(|c| c.ty != ty && c.group.as_ref().is_none_or(|g| !groups.contains(&g.index)));
+    Ok(skipped)
+}
+
 /// `resolve_for` without a sandbox, for checking kits: `WORKSPACE` is `NO_SANDBOX_WORKDIR`.
 pub fn resolve(workload: Kit, mixins: Vec<Kit>, args: &ArgValues) -> Result<Plan> {
     resolve_for(workload, mixins, args, NO_SANDBOX_WORKDIR)
@@ -417,6 +521,7 @@ pub fn resolve_for(
                 CapBody::GitIdentity => merged.git_identity = true,
                 CapBody::LongRunning => merged.long_running = true,
                 CapBody::Privileged => merged.privileged = true,
+                CapBody::Dockerd { auto_start } => merged.add_dockerd(&k.name, *auto_start)?,
                 CapBody::Sbx | CapBody::AgentSessions => {}
                 CapBody::Pending => unreachable!("expand_caps reads every pending config"),
             }
@@ -489,18 +594,7 @@ fn check_names(workload: &Kit, mixins: &[Kit]) -> Result<()> {
     let mut seen = BTreeSet::new();
     for k in named {
         if !seen.insert(k.name.as_str()) {
-            // Most likely a user's own docker kit beside the shipped one a Docker image gets.
-            let shipped = std::iter::once(workload)
-                .chain(mixins)
-                .any(|k| k.source == Source::Builtin("docker"));
-            if k.name == "docker" && shipped {
-                bail!(
-                    "two kits are named docker: yours and the shipped one a Docker-enabled image \
-                     gets; rename your kit, or have it provide docker \
-                     (`provides: [docker@<version>]`) to replace the shipped one"
-                );
-            }
-            bail!("two kits are named {}", k.name);
+            bail!("two kits are named {}; rename one of them", k.name);
         }
     }
     if let Some(m) = mixins.iter().find(|m| m.kind == Kind::Workload) {
@@ -552,21 +646,16 @@ fn select_groups(k: &mut Kit) -> Result<Vec<Skipped>> {
         }
         let Some(why) = unsupported(c) else { continue };
         rejected.push(g.index);
-        let name = g
-            .name
-            .as_ref()
-            .map(|n| format!(" ({n})"))
-            .unwrap_or_default();
-        let (group, member) = (g.path(), g.member_path());
         if !c.optional {
             bail!(
-                "kit {}: required group {group}{name}: {member} {} {why}",
+                "kit {}: required group {}: {} {} {why}",
                 k.name,
+                group_label(g),
+                g.member_path(),
                 c.ty
             );
         }
-        let what = format!("optional group {group}{name}, for its {member} {}", c.ty);
-        skipped.push(Skipped::new(&k.name, what));
+        skipped.push(group_skip(&k.name, g, &c.ty, NOT_SUPPORTED));
     }
     k.caps.retain(|c| {
         c.group
@@ -574,6 +663,27 @@ fn select_groups(k: &mut Kit) -> Result<Vec<Skipped>> {
             .is_none_or(|g| !rejected.contains(&g.index))
     });
     Ok(skipped)
+}
+
+/// A group as warnings name it: `capabilities[0] (Feature)`.
+fn group_label(g: &Group) -> String {
+    match &g.name {
+        Some(n) => format!("{} ({n})", g.path()),
+        None => g.path(),
+    }
+}
+
+/// The warning for an optional group skipped for its `ty` member.
+fn group_skip(kit: &str, g: &Group, ty: &str, reason: &'static str) -> Skipped {
+    let what = format!(
+        "optional group {}, for its {} {ty}",
+        group_label(g),
+        g.member_path()
+    );
+    Skipped {
+        reason,
+        ..Skipped::new(kit, what)
+    }
 }
 
 /// Why smolbento can't apply `c` as asked, if it can't.

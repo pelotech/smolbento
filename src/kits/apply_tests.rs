@@ -5,7 +5,7 @@ use crate::kits::model::{
     Kit, Lifecycle, NetRule, OAuthReq, Rules, Source,
 };
 use crate::kits::resolve::resolve;
-use crate::sandbox::create;
+use crate::sandbox::{Engine, create};
 use crate::secrets::{SecretEntry, Source as SecretSource};
 
 fn kit(name: &str, kind: Kind) -> Kit {
@@ -1522,19 +1522,85 @@ fn the_later_kit_wins_a_file_path() {
     assert_eq!(got, [("/y", b"2".to_vec()), ("/x", b"3".to_vec())]);
 }
 
-/// `sbx.docker` says a dockerd runs: a workload listing `docker` among its tools doesn't run one.
+/// `sbx.docker` follows the merged `dockerd@1`; a workload or mixin that only provides `docker`,
+/// or is the shipped kit's namesake without one, has no engine.
 #[test]
-fn a_workload_providing_docker_alone_has_no_engine() {
+fn docker_follows_the_merged_dockerd() {
+    let dockerd = |auto_start| {
+        with(
+            kit("dind", Kind::Mixin),
+            "dockerd@1",
+            false,
+            CapBody::Dockerd { auto_start },
+        )
+    };
+    let docker = |mixins: Vec<Kit>| {
+        let mut req = request();
+        run(&plan(mixins), &mut req, &mut Policy::default()).unwrap();
+        req.engine
+    };
+    assert_eq!(docker(vec![dockerd(true)]), Engine::Auto);
+    assert_eq!(docker(vec![dockerd(false)]), Engine::Manual);
+    assert_eq!(docker(vec![]), Engine::Off);
+
     let mut w = workload();
     w.provides = vec!["docker@29.10.0".into()];
-    let p = resolve(w, vec![], &ArgValues::default()).unwrap();
     let mut req = request();
-    run(&p, &mut req, &mut Policy::default()).unwrap();
-    assert!(!req.docker);
-    // A mixin providing docker in the shipped kit's place still counts.
+    run(
+        &resolve(w, vec![], &ArgValues::default()).unwrap(),
+        &mut req,
+        &mut Policy::default(),
+    )
+    .unwrap();
+    assert_eq!(req.engine, Engine::Off);
     let mut dind = kit("dind", Kind::Mixin);
     dind.provides = vec!["docker".into()];
-    let mut req = request();
-    run(&plan(vec![dind]), &mut req, &mut Policy::default()).unwrap();
-    assert!(req.docker);
+    assert_eq!(docker(vec![dind]), Engine::Off);
+    // A kit named like the shipped one has no engine without `dockerd@1` either.
+    let mut builtin = kit("docker", Kind::Mixin);
+    builtin.source = Source::Builtin("docker");
+    assert_eq!(docker(vec![builtin]), Engine::Off);
+}
+
+/// An `autoStart` reference is read once its arg is pinned (SPEC-v3 §6): `false` is a manual
+/// engine, `true` an automatic one, and with no value the merge refuses.
+#[test]
+fn an_auto_start_reference_is_read_at_merge() {
+    let kit = || {
+        crate::kits::v3::parse(
+            "schemaVersion: \"3\"\nkind: mixin\nargs:\n  auto: {}\ncapabilities:\n  \
+             - type: com.docker.sandbox/dockerd@1\n    config: {autoStart: \"${{ kit.args.auto }}\"}\n",
+            Source::Local("/k/dind".into()),
+        )
+        .unwrap()
+    };
+    let engine = |value: &str| {
+        let args = ArgValues::parse(&[], &[format!("auto={value}")]).unwrap();
+        let mut req = request();
+        let p = resolve(workload(), vec![kit()], &args).unwrap();
+        run(&p, &mut req, &mut Policy::default()).unwrap();
+        req.engine
+    };
+    assert_eq!(engine("false"), Engine::Manual);
+    assert_eq!(engine("true"), Engine::Auto);
+    let e = resolve(workload(), vec![kit()], &ArgValues::default()).unwrap_err();
+    assert!(
+        format!("{e:#}").contains("\"auto\" has no resolved value"),
+        "{e:#}"
+    );
+}
+
+/// The engine's store and elevation are set at create, so `kit add` can't add it live.
+#[test]
+fn adding_dockerd_needs_a_recreate() {
+    let k = with(
+        kit("dind", Kind::Mixin),
+        "dockerd@1",
+        false,
+        CapBody::Dockerd { auto_start: true },
+    );
+    assert_eq!(
+        needs_recreate(&k, &BTreeMap::new()).unwrap(),
+        ["Docker engine"]
+    );
 }

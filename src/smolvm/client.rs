@@ -197,6 +197,8 @@ pub struct ExecSpec {
     /// Prints output as it arrives rather than when the command ends, and without the 11 MiB
     /// cap of a buffered exec. For an exec whose output goes straight to the user.
     pub stream: bool,
+    /// smolvm kills the command after this long (`--timeout`).
+    pub timeout: Option<std::time::Duration>,
     pub cmd: Vec<String>,
 }
 
@@ -236,6 +238,9 @@ impl ExecSpec {
             if on {
                 a.push(f.into());
             }
+        }
+        if let Some(t) = self.timeout {
+            flag(&mut a, "--timeout", format!("{}s", t.as_secs()));
         }
         a.push("--".into());
         a.extend(self.cmd.iter().cloned());
@@ -897,11 +902,20 @@ mod tests {
             interactive: true,
             tty: true,
             stream: false,
+            timeout: None,
             cmd: vec!["ls".into(), "-la".into()],
         };
         assert_eq!(
             spec.to_args().join(" "),
             "machine exec --name sbx-a -u agent -w /w -e K=v -i -t -- ls -la"
+        );
+        let bounded = ExecSpec {
+            timeout: Some(std::time::Duration::from_secs(2)),
+            ..ExecSpec::new("sbx-a", "root", vec!["true".into()])
+        };
+        assert_eq!(
+            bounded.to_args().join(" "),
+            "machine exec --name sbx-a -u root --timeout 2s -- true"
         );
         let plain = ExecSpec {
             name: "sbx-a".into(),

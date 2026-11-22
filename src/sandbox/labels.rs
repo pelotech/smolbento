@@ -184,6 +184,37 @@ pub struct Recorded {
     pub mcp_secrets: BTreeMap<String, String>,
 }
 
+/// A sandbox's private dockerd, from its `dockerd@1` grant (the `sbx.docker` label).
+/// Ordered Off < Manual < Auto, so merging grants takes the max.
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq, PartialOrd, Ord)]
+pub enum Engine {
+    /// No engine: `"false"`, absent or unknown.
+    #[default]
+    Off,
+    /// Installed but not started on its own (`autoStart: false`): `"manual"`.
+    Manual,
+    /// Started after each start (`autoStart: true`): `"true"`.
+    Auto,
+}
+
+impl Engine {
+    fn label(self) -> &'static str {
+        match self {
+            Engine::Off => "false",
+            Engine::Auto => "true",
+            Engine::Manual => "manual",
+        }
+    }
+
+    fn from_label(v: Option<&str>) -> Engine {
+        match v {
+            Some("true") => Engine::Auto,
+            Some("manual") => Engine::Manual,
+            _ => Engine::Off,
+        }
+    }
+}
+
 /// Sandbox metadata, fixed at create and stored as smolvm machine labels.
 #[derive(Debug, Clone, Default, PartialEq, Eq)]
 pub struct Meta {
@@ -197,8 +228,8 @@ pub struct Meta {
     pub created: i64,
     /// The smolbento version that created it; `None` for a sandbox from before 0.27.
     pub version: Option<String>,
-    /// Whether the sandbox runs a private dockerd.
-    pub docker: bool,
+    /// The sandbox's private dockerd (`sbx.docker`).
+    pub engine: Engine,
     /// What the `CreateRequest` gave, recorded unchanged.
     pub rec: Recorded,
     /// `--clone`: the host repo's top, which is also the clone's path in the guest. Stored as
@@ -239,7 +270,7 @@ impl Meta {
             (AGENT.to_string(), self.agent.clone()),
             (WORKSPACES.to_string(), json(&self.workspaces)),
             (CREATED.to_string(), self.created.to_string()),
-            (DOCKER.to_string(), self.docker.to_string()),
+            (DOCKER.to_string(), self.engine.label().into()),
         ]);
         // Everything else is written only when set, so a sandbox's labels don't change when a
         // field it doesn't use is added. Kit labels exist only on sandboxes created with kits.
@@ -322,7 +353,7 @@ impl Meta {
                 .and_then(|c| c.parse().ok())
                 .unwrap_or(0),
             version: text(VERSION),
-            docker: flag(DOCKER),
+            engine: Engine::from_label(labels.get(DOCKER).map(String::as_str)),
             clone_repo: flag(CLONE)
                 .then(|| text(CLONE_TOP).or(text(WORKSPACE)))
                 .flatten(),
@@ -416,7 +447,7 @@ mod tests {
             workspace: Some("/w/repo".into()),
             workspaces: vec!["/w/repo".into(), "/w/docs:ro".into()],
             created: 1000,
-            docker: true,
+            engine: Engine::Auto,
             ..Default::default()
         }
     }
@@ -426,6 +457,28 @@ mod tests {
         let labels = meta().to_labels();
         assert!(!labels.contains_key("sbx.kits"), "{labels:?}");
         assert!(Meta::from_labels(&labels).unwrap().rec.kits.is_empty());
+    }
+
+    #[test]
+    fn docker_label_round_trips() {
+        for (engine, value) in [
+            (Engine::Auto, "true"),
+            (Engine::Manual, "manual"),
+            (Engine::Off, "false"),
+        ] {
+            let m = Meta { engine, ..meta() };
+            let labels = m.to_labels();
+            assert_eq!(labels["sbx.docker"], value);
+            assert_eq!(Meta::from_labels(&labels), Some(m));
+        }
+        for value in [None, Some("yes")] {
+            let mut labels = meta().to_labels();
+            labels.remove("sbx.docker");
+            if let Some(v) = value {
+                labels.insert("sbx.docker".into(), v.into());
+            }
+            assert_eq!(Meta::from_labels(&labels).unwrap().engine, Engine::Off);
+        }
     }
 
     #[test]

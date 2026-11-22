@@ -57,8 +57,6 @@ pub struct Entry {
     pub agent: String,
     /// The source machine's image.
     pub image: String,
-    /// The source sandbox ran a private dockerd (`sbx.docker`).
-    pub docker: bool,
     /// RFC 3339, UTC.
     pub created_at: String,
     #[serde(default)]
@@ -377,7 +375,6 @@ mod tests {
             tag: t.tag,
             agent: "shell".into(),
             image: "img:1".into(),
-            docker: true,
             created_at: "2026-10-30T00:00:00Z".into(),
             kits: vec![crate::sandbox::labels::KitRecord {
                 name: "shell".into(),

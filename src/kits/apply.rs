@@ -6,7 +6,6 @@ use std::path::Path;
 
 use anyhow::{Context, Result, bail};
 
-use crate::kits::capability;
 use crate::kits::compose;
 use crate::kits::env_ref;
 use crate::kits::guest;
@@ -189,15 +188,9 @@ pub fn apply(
     record_kits(&kits, &plan.args, req)?;
     steps.kit_names = req.rec.kits.iter().map(|k| k.name.clone()).collect();
     req.rec.long_running = m.long_running;
-    // `sbx.docker` (shown by `ls`) says the sandbox has a private dockerd: the docker kit's, or
-    // that of a mixin providing `docker` in its place. A workload's `provides` lists its tools
-    // (sbx's `docker@29.10.0`), not an engine, as `needs_docker_kit` reads it.
-    req.docker = plan.mixins.iter().any(|k| {
-        k.source == Source::Builtin("docker")
-            || k.provides
-                .iter()
-                .any(|p| capability::provides_name(p, "docker"))
-    });
+    // `sbx.docker` records a `dockerd@1` grant; the engine start reads it on every boot. A
+    // workload's `provides` lists its tools, not an engine.
+    req.engine = m.dockerd;
 
     // Last, so an error above leaves the policy untouched.
     let added = add_policy(policy, &req.name, m, &mut steps.install_rules)?;
@@ -978,6 +971,8 @@ pub fn needs_recreate(kit: &Kit, args: &BTreeMap<String, String>) -> Result<Vec<
             ("port@1", _) => "ports",
             ("volume@1", _) => "volumes",
             ("host-mount@1", _) => "host mounts",
+            // Its store and elevation are set at create.
+            ("dockerd@1", _) => "Docker engine",
             ("agent-skills@1" | "agent-skill@1", _) => "agent skills",
             // A new agent file needs every kit's context, and `add` has only this kit's.
             ("agent-context@1" | "agent-context@2", CapBody::AgentContext(r))
@@ -1008,6 +1003,7 @@ pub fn needs_recreate(kit: &Kit, args: &BTreeMap<String, String>) -> Result<Vec<
         "ports",
         "volumes",
         "host mounts",
+        "Docker engine",
         "agent skills",
         "SSH agent",
         "resources",

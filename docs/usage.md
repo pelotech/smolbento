@@ -383,8 +383,9 @@ To skip Docker (smaller images, faster first pull), run `bento settings set dock
 before creating sandboxes; agents then use the plain image variants.
 
 The engine comes from the shipped `docker` kit ([Kits](kits.md#kits)). Docker-enabled images get it
-automatically; add it to any image with `--kit docker`, as in `bento create -t alpine --kit docker
-shell .`. dockerd starts on every start, and logs to `/var/log/dockerd.log`.
+automatically; add it to another image that has Docker with `--kit docker`. dockerd starts on every
+start, before kit startup steps, and logs to `/var/log/dockerd.log`; a start fails if it doesn't
+answer within 60 s.
 
 ## Files and ownership
 

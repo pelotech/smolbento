@@ -12,6 +12,8 @@ filter = '''binary(e2e) & (
     test(local_v3_kit_builds_in_the_builder_sandbox)
     | test(local_kit_builds_from_a_registry_that_needs_a_login)
     | test(nix_kit_works_for_an_agent_and_a_workload_image_user)
+    | test(a_kit_declaring_dockerd_finds_the_engine_at_startup)
+    | test(mixin_layer_is_visible_in_the_guest)
 )'''
 test-group = 'builder'
 

@@ -39,6 +39,7 @@ pub fn exec<R: Runner>(ctx: &mut Ctx<R>, a: &ExecArgs) -> Result<i32> {
         // Without stdin or a TTY smolvm buffers the output until the command ends and fails it
         // past 11 MiB; streamed, it arrives as it's written and has no cap.
         stream: !f.interactive && !f.tty,
+        timeout: None,
         cmd: a.command.clone(),
     };
     // `exec -it` is an attached session: serve the browser and clipboard bridge during it.

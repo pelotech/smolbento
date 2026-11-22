@@ -91,19 +91,27 @@ What a kit does, and when:
   are the primary workspace, or `/home/agent/workspace` without one.
 - On every start, startup steps run in kit order, before the agent. A failing one is a warning
   with the log's last lines, and the sandbox starts anyway, as in sbx 0.51. A `background: true`
-  step (such as the `docker` kit's
-  `dockerd`) keeps running; if it fails, only the log records it. A step that doesn't finish holds
-  up the start; there is no timeout, as in sbx.
+  step keeps running; if it fails, only the log records it. A step that doesn't finish holds up the
+  start; there is no timeout, as in sbx.
 - Logs go to `/var/log/sbx-kit-startup.log` in the sandbox. Each start adds a `=== dispatcher run …
   ===` line, each finished step an `ok /etc/smolbento/startup.d/NN-<kit>.sh hook N` line, and a
   failing step its output and exit code.
 - At create and `kit add`, a failing startup step is the same warning; the sandbox is created and
   runs.
 - Startup steps run as `agent` unless they name a user (a numeric user runs as the account with that
-  uid). The `docker` kit runs before your kits. It only starts dockerd (the image
-  has Docker), so it provides nothing: a workload that asks for an engine
-  (`com.docker.sandboxes.start-docker`, or a `-docker` image) gets it even when its own `provides`
-  lists `docker`, as sbx's kits do. Only another kit providing `docker` replaces it.
+  uid).
+- A Docker engine comes from `dockerd@1`. The shipped `docker` kit is that one request and nothing
+  else (the image must have Docker). A workload that asks for an engine
+  (`com.docker.sandboxes.start-docker`, or a `-docker` image) gets the `docker` kit even when its own
+  `provides` lists `docker`, as sbx's kits do. A kit providing `docker` no longer replaces it.
+- `dockerd@1` makes the sandbox privileged and gives the engine its own volumes (`/var/lib/docker`,
+  `/var/lib/containerd`). On every start smolbento starts `dockerd` before any startup step and waits
+  up to 60 s for it to answer; if it doesn't, the start fails (see `/var/log/dockerd.log`). The
+  socket is handed to the image user's group. A kit that starts dockerd itself declares
+  `dockerd@1` with `config: {autoStart: false}`; if another kit also asks for the engine, smolbento
+  starts it, so that kit's step must accept a running engine. With `docker.enabled=false` a required
+  `dockerd@1` refuses the create, `--kit docker` included, and an optional one is skipped with its
+  whole group.
 - A v3 install step gets a clean environment (`PATH`, `HOME`, `USER`, `TERM`, the proxy and CA
   variables, and what its `env` lists). Startup steps and v2 steps get the full sandbox environment.
 - A missing credential doesn't block create. You get `WARN: required credential not found for

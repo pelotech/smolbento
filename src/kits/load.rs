@@ -677,16 +677,9 @@ mod tests {
             "it only starts dockerd: {:?}",
             k.provides
         );
-        let volumes: Vec<&str> = k
-            .caps
-            .iter()
-            .filter_map(|c| match &c.body {
-                CapBody::Volume { path, .. } => Some(path.as_str()),
-                _ => None,
-            })
-            .collect();
-        assert_eq!(volumes, ["/var/lib/docker", "/var/lib/containerd"]);
-        assert!(k.caps.iter().any(|c| c.body == CapBody::Privileged));
+        // One engine request: no volumes, elevation or hooks of its own.
+        let caps: Vec<&CapBody> = k.caps.iter().map(|c| &c.body).collect();
+        assert_eq!(caps, [&CapBody::Dockerd { auto_start: true }]);
         assert_eq!(kit_name(&t.ctx, "docker").unwrap(), "docker");
         assert!(t.calls().is_empty());
     }

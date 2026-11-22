@@ -123,11 +123,10 @@ fn create_with_a_mixin_kit_applies_it() {
     let create = t.create_line();
     assert!(create.contains("-e TOOL_MODE=fast"), "{create}");
     assert!(create.contains(":8080 "), "{create}");
-    // The workload's image is Docker-enabled, so the docker kit comes too, first of the
-    // mixins.
+    // The workload's image is Docker-enabled, so the docker kit comes too.
     assert!(
             create.contains(&format!(
-                "--label sbx.kits=[{{\"name\":\"shell\",\"ref\":\"{shell}\",\"format\":\"v2\"}},{},{{\"name\":\"tool\",\"ref\":\"{kit}\",\"format\":\"v2\",\"args\":{{\"mode\":\"slow\"}}}}]",
+                "--label sbx.kits=[{{\"name\":\"shell\",\"ref\":\"{shell}\",\"format\":\"v2\"}},{{\"name\":\"tool\",\"ref\":\"{kit}\",\"format\":\"v2\",\"args\":{{\"mode\":\"slow\"}}}},{}]",
                 r#"{"name":"docker","ref":"builtin:docker"}"#
             )),
             "{create}"
@@ -570,59 +569,6 @@ fn two_kits_with_the_same_format_merge_and_differing_ones_fail() {
 }
 
 #[test]
-fn the_shipped_docker_kit_comes_before_user_kits() {
-    let t = kit_env();
-    let kit = |name: &str| {
-        let dir = tempfile::tempdir().unwrap();
-        std::fs::write(
-            dir.path().join("spec.yaml"),
-            format!("schemaVersion: \"2\"\nkind: mixin\nname: {name}\n"),
-        )
-        .unwrap();
-        dir
-    };
-    let (b, a) = (kit("bkit"), kit("akit"));
-    let b_path = b.path().display().to_string();
-    let (_, plan) = kit_request(
-        &t,
-        &["create", "shell", "--kit", &b_path, "--kit"],
-        a.path(),
-    );
-    let names: Vec<String> = plan
-        .unwrap()
-        .mixins
-        .iter()
-        .map(|k| k.name.clone())
-        .collect();
-    assert_eq!(names, ["docker", "bkit", "akit"]);
-}
-
-#[test]
-fn an_explicit_docker_kit_comes_before_user_kits_too() {
-    let t = kit_env();
-    let dir = tempfile::tempdir().unwrap();
-    std::fs::write(
-        dir.path().join("spec.yaml"),
-        "schemaVersion: \"2\"\nkind: mixin\nname: akit\n",
-    )
-    .unwrap();
-    let a = dir.path().display().to_string();
-    // `--kit docker` after the user kit.
-    let (_, plan) = kit_request(
-        &t,
-        &["create", "-t", "alpine", "shell", "--kit", &a, "--kit"],
-        std::path::Path::new("docker"),
-    );
-    let names: Vec<String> = plan
-        .unwrap()
-        .mixins
-        .iter()
-        .map(|k| k.name.clone())
-        .collect();
-    assert_eq!(names, ["docker", "akit"]);
-}
-
-#[test]
 fn docker_image_detection() {
     assert!(is_docker_image("docker/sandbox-templates:shell-docker"));
     assert!(is_docker_image(
@@ -651,43 +597,83 @@ fn a_start_docker_workload_gets_the_docker_kit() {
     assert!(wants_docker(&w, true));
 }
 
+/// A Docker image gets the shipped kit once; a kit providing `docker` doesn't stand in for it.
 #[test]
-fn order_mixins_puts_the_docker_kit_first() {
+fn a_docker_image_gets_the_shipped_kit_once() {
     use crate::kits::load;
     use crate::kits::model::{Kind, Kit, Source};
-    let mixin = |n: &str| Kit::new(n, Kind::Mixin, Source::Registry(format!("acme/{n}:1")));
+    let mut dind = Kit::new("dind", Kind::Mixin, Source::Registry("acme/dind:1".into()));
+    dind.provides = vec!["docker".into()];
     let names = |ks: Vec<Kit>| ks.into_iter().map(|k| k.name).collect::<Vec<_>>();
     let docker = load::builtin("docker").unwrap().unwrap();
-    // No Docker image: as given.
-    assert_eq!(names(order_mixins(false, vec![mixin("a")]).unwrap()), ["a"]);
-    // A Docker image gets the shipped kit, first.
+    // docker.enabled=false (or a plain image): not added.
     assert_eq!(
-        names(order_mixins(true, vec![mixin("a")]).unwrap()),
-        [docker.name.as_str(), "a"]
+        names(with_docker_kit(false, vec![dind.clone()]).unwrap()),
+        ["dind"]
     );
-    // `--kit docker` after another kit moves first, and isn't added twice.
-    let given = vec![mixin("a"), docker.clone()];
     assert_eq!(
-        names(order_mixins(true, given).unwrap()),
-        [docker.name.as_str(), "a"]
+        names(with_docker_kit(true, vec![dind.clone()]).unwrap()),
+        ["dind", "docker"]
+    );
+    // `--kit docker`: not added twice.
+    assert_eq!(
+        names(with_docker_kit(true, vec![docker, dind]).unwrap()),
+        ["docker", "dind"]
     );
 }
 
-/// `kit_target` and a quiet `kit_plan` for `args` followed by `kit`.
+/// With `docker.enabled=false`, a required `dockerd@1` refuses the create; an optional one is
+/// skipped like any other optional capability smolbento can't grant.
 #[test]
-fn a_kit_providing_docker_replaces_the_shipped_one() {
-    use crate::kits::{load, model::Source};
-    let mut own = load::builtin("docker").unwrap().unwrap();
-    own.source = Source::Registry("acme/dind:1".into());
-    own.name = "dind".into();
-    own.provides = vec!["docker".into()];
-    assert!(needs_docker_kit(true, &[]));
-    assert!(!needs_docker_kit(false, &[]));
-    assert!(!needs_docker_kit(true, &[own.clone()]));
-    let shipped = load::builtin("docker").unwrap().unwrap();
-    assert!(!needs_docker_kit(true, &[shipped]));
-    own.provides.clear();
-    assert!(needs_docker_kit(true, &[own]));
+fn docker_disabled_refuses_a_required_dockerd_and_skips_an_optional_one() {
+    let env = |optional: bool| {
+        let t = test_env(&[
+            ("SMOLBENTO_KIT_ALLOW_LOCAL_KITS", "true"),
+            ("SMOLBENTO_DOCKER", "false"),
+        ]);
+        creatable_as(&t, "shell-proj");
+        let descriptor = format!(
+            r#"{{"schemaVersion":"3","kind":"mixin","name":"dind","capabilities":[
+                {{"type":"com.docker.sandbox/dockerd@1","optional":{optional}}}]}}"#
+        );
+        v3_kit(&t, "dind", &descriptor, &[]);
+        t
+    };
+    let args = ["create", "shell", ".", "--kit", "./dind"];
+
+    let mut t = env(false);
+    let e = t.sbt(&args).unwrap_err();
+    assert!(
+        format!("{e:#}").ends_with(
+            "kit dind: dockerd@1: Docker is disabled (docker.enabled=false); turn it on with \
+             `bento settings set docker.enabled true`"
+        ),
+        "{e:#}"
+    );
+    assert!(!t.made("machine create"));
+
+    let t = env(true);
+    let argv: Vec<&str> = std::iter::once("sbt").chain(args).collect();
+    let Some(Cmd::Create(a)) = Cli::try_parse_from(argv).unwrap().command else {
+        panic!("expected create");
+    };
+    let (mut req, workload) = super::kit_target(&t.ctx, &a.targets, &a.opts, true).unwrap();
+    let quiet = super::Progress::new(t.ctx.out.clone(), false, false, true);
+    let plan = super::kit_plan(&t.ctx, &mut req, workload, &a.opts, &quiet).unwrap();
+    assert_eq!(plan.merged.dockerd, crate::sandbox::Engine::Off);
+    assert_eq!(plan.skipped, ["dind: com.docker.sandbox/dockerd@1"]);
+    assert_eq!(
+        plan.skipped_warnings(),
+        [
+            "kit dind: skipping com.docker.sandbox/dockerd@1 (Docker is disabled: \
+          docker.enabled=false)"
+        ]
+    );
+
+    let mut t = env(true);
+    t.sbt(&args).unwrap();
+    let line = t.create_line();
+    assert!(line.contains("--label sbx.docker=false"), "{line}");
 }
 
 /// The shipped kit only starts dockerd (the image has Docker), so it provides nothing and composes
@@ -700,11 +686,12 @@ fn a_workload_providing_docker_composes_with_the_shipped_kit() {
     assert!(shipped.provides.is_empty(), "{:?}", shipped.provides);
     let mut wl = Kit::agent_test("shell");
     wl.provides = vec!["docker@29.10.0".into()];
-    let mixins = order_mixins(true, vec![]).unwrap();
+    let mixins = with_docker_kit(true, vec![]).unwrap();
     assert_eq!(mixins[0].source, Source::Builtin("docker"));
     resolve(wl, mixins, &ArgValues::default()).unwrap();
 }
 
+/// `kit_target` and a quiet `kit_plan` for `args` followed by `kit`.
 fn kit_request(
     t: &TestEnv,
     args: &[&str],

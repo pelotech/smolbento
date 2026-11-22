@@ -12,9 +12,8 @@ pub(crate) fn dockerds(e: &E2e) -> usize {
 }
 
 /// The real `shell` agent kit (sbx's `docker.io/sbx/shell:latest`, pulled from Docker Hub) runs
-/// Docker through the shipped `docker` kit, as its `start-docker` annotation asks: its background
-/// startup hook starts dockerd in its own session, inside the startup runner's exec, so dockerd
-/// must outlive that exec and start again, once, on every start.
+/// Docker through the shipped `docker` kit, as its `start-docker` annotation asks: the kit's
+/// `dockerd@1` has smolbento start dockerd on every start, once, and it outlives that exec.
 #[test]
 #[ignore = "boots real VMs and pulls sbx's shell kit; run with `just e2e`"]
 pub(crate) fn real_shell_kit_runs_dockerd_across_restarts() {
@@ -48,15 +47,42 @@ pub(crate) fn real_shell_kit_runs_dockerd_across_restarts() {
     e.ok(&["start", &e.name]);
     assert!(wait(), "docker info after a restart");
     assert_one_dockerd(&e, "exactly one dockerd after a restart");
-    let log = startup_log(&e);
-    let count = |line: &str| log.lines().filter(|l| l.trim() == line).count();
-    assert!(
-        count("ok /etc/smolbento/startup.d/01-docker.sh hook 1") >= 2,
-        "dockerd started on both starts:\n{log}"
+}
+
+/// A kit declaring `dockerd@1` finds the engine running when its startup hooks run: its blocking
+/// hook calls `docker info` without waiting. The image (sbx's shell image, which has Docker) is
+/// given with `-t`, so no shipped kit is added: the local kit's request alone starts the engine.
+/// tck: dockerd@1/engine-before-startup
+#[test]
+#[ignore = "boots real VMs and pulls sbx's shell image from Docker Hub; run with `just e2e`"]
+pub(crate) fn a_kit_declaring_dockerd_finds_the_engine_at_startup() {
+    let mut e = E2e::new("dockerd");
+    e.vars.push(("SMOLBENTO_DOCKER", "true".into()));
+    let kit = e.v3_kit_dir(
+        "engine",
+        r#"# syntax=docker/sandbox-kit:3
+schemaVersion: "3"
+kind: mixin
+version: "1.0.0"
+capabilities:
+  - type: com.docker.sandbox/dockerd@1
+  - type: com.docker.sandbox/lifecycle@1
+    config:
+      startup:
+        - command: "docker info >/tmp/dinfo 2>&1"
+"#,
     );
+    e.create(
+        &e.name,
+        &["-t", "docker.io/sbx/shell:latest", "--kit", &kit, "shell"],
+    );
+    let inspect = e.ok(&["inspect", &e.name, "--json"]);
+    assert!(!inspect.contains("builtin:docker"), "{inspect}");
+    let info = root_out(&e.name, "cat /tmp/dinfo");
     assert!(
-        log.matches("=== dispatcher run ").count() >= 2,
-        "one dispatcher run per start:\n{log}"
+        info.contains("Server Version"),
+        "{info}\n{}",
+        startup_log(&e)
     );
 }
 

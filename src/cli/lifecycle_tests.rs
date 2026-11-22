@@ -201,8 +201,9 @@ fn create_builds_the_machine_from_the_preset() {
     assert_eq!(pair("-p"), vec!["8080:80"]);
     assert!(pair("--label").contains(&"sbx.created=1000000".to_string()));
     assert!(pair("--label").contains(&"sbx.docker=true".to_string()));
-    // Docker-in-sandbox is the shipped `docker` kit: its volumes above, its startup hook here.
-    // The agent's kit, then the shipped docker kit.
+    // Docker-in-sandbox is the shipped `docker` kit's `dockerd@1`: its volumes above, and no
+    // startup hook (smolbento starts the engine: `src/sandbox/tests/start.rs`). The agent's kit,
+    // then the docker kit.
     let kits = pair("--label");
     let kits = kits.iter().find(|l| l.starts_with("sbx.kits=")).unwrap();
     assert!(
@@ -213,14 +214,9 @@ fn create_builds_the_machine_from_the_preset() {
         "{kits}"
     );
     let uploads = t.runner().uploads();
-    let (_, script) = uploads
-        .iter()
-        .find(|(to, _)| to == "sbx-claude-proj:/etc/smolbento/startup.d/01-docker.sh")
-        .expect("the docker kit's startup script");
-    assert!(script.contains("exec dockerd"), "{script}");
     assert!(
-        script.contains("$d sh -c ") && script.contains("fi' &\n"),
-        "dockerd runs in the background: {script}"
+        !uploads.iter().any(|(to, _)| to.contains("docker.sh")),
+        "{uploads:?}"
     );
     // A host-mounted sandbox can't be forked, so it isn't started branchable.
     assert!(
@@ -259,10 +255,18 @@ fn planned(
     agent: &str,
     opts: &SandboxOpts,
 ) -> anyhow::Result<crate::sandbox::CreateRequest> {
+    Ok(planned_kits(t, agent, opts)?.0)
+}
+
+fn planned_kits(
+    t: &TestEnv,
+    agent: &str,
+    opts: &SandboxOpts,
+) -> anyhow::Result<(crate::sandbox::CreateRequest, crate::kits::resolve::Plan)> {
     let (mut req, w) = super::kit_target(&t.ctx, &[agent.to_string()], opts, false)?;
     let quiet = crate::cli::progress::Progress::new(t.ctx.out.clone(), false, false, true);
-    super::kit_plan(&t.ctx, &mut req, w, opts, &quiet)?;
-    Ok(req)
+    let plan = super::kit_plan(&t.ctx, &mut req, w, opts, &quiet)?;
+    Ok((req, plan))
 }
 
 fn creatable(t: &TestEnv) {
@@ -408,7 +412,7 @@ fn a_kit_template_reruns_install_steps_from_the_cache() {
 }
 
 /// A current template of the `shell` stand-in plus `extra` records, saved as `x:v1`.
-fn template_with(t: &TestEnv, extra: Vec<crate::sandbox::labels::KitRecord>, docker: bool) {
+fn template_with(t: &TestEnv, extra: Vec<crate::sandbox::labels::KitRecord>) {
     let mut kits = saved_template_kits(t, "shell");
     kits.extend(extra);
     let src = t.ctx.cwd.join("x.smolmachine");
@@ -420,7 +424,6 @@ fn template_with(t: &TestEnv, extra: Vec<crate::sandbox::labels::KitRecord>, doc
                 tag: "v1".into(),
                 agent: "shell".into(),
                 image: "img:1".into(),
-                docker,
                 created_at: "1970-01-12T13:46:30Z".into(),
                 kits,
                 ..Default::default()
@@ -465,10 +468,37 @@ fn a_template_never_reads_a_layout_outside_the_stand_ins() {
 
 #[test]
 fn a_template_drops_its_docker_kit_when_docker_is_disabled() {
-    let mut t = test_env(&[("SMOLBENTO_DOCKER", "false")]);
-    let mut docker = record("builtin:docker");
-    docker.name = "docker".into();
-    template_with(&t, vec![docker], true);
+    for enabled in [false, true] {
+        let mut t = test_env(&[("SMOLBENTO_DOCKER", if enabled { "true" } else { "false" })]);
+        let mut docker = record("builtin:docker");
+        docker.name = "docker".into();
+        template_with(&t, vec![docker]);
+        let fake = t.runner();
+        fake.ok(&["machine", "status"], &json("sbx-bb", "created", "bb"));
+        fake.missing_until_created("sbx-bb");
+        t.sbt(&["create", "shell", "-t", "x:v1", "--name", "bb"])
+            .unwrap();
+        let create = t.create_line();
+        assert_eq!(create.contains("builtin:docker"), enabled, "{create}");
+        let label = format!("--label sbx.docker={enabled}");
+        assert!(create.contains(&label), "{create}");
+    }
+}
+
+/// A template saved from a `manual` sandbox (its own kit starts dockerd) gets no shipped kit,
+/// so no auto-started engine: a template's kits are the ones it recorded.
+#[test]
+fn a_template_with_a_manual_engine_gets_no_shipped_docker_kit() {
+    let mut t = test_env(&[("SMOLBENTO_KIT_ALLOW_LOCAL_KITS", "true")]);
+    v3_kit(
+        &t,
+        "own-dockerd",
+        r#"{"schemaVersion":"3","kind":"mixin","name":"own-dockerd","capabilities":[
+            {"type":"com.docker.sandbox/dockerd@1","config":{"autoStart":false}}]}"#,
+        &[],
+    );
+    let kit = t.ctx.cwd.join("own-dockerd");
+    template_with(&t, vec![record(&kit.display().to_string())]);
     let fake = t.runner();
     fake.ok(&["machine", "status"], &json("sbx-bb", "created", "bb"));
     fake.missing_until_created("sbx-bb");
@@ -476,7 +506,7 @@ fn a_template_drops_its_docker_kit_when_docker_is_disabled() {
         .unwrap();
     let create = t.create_line();
     assert!(!create.contains("builtin:docker"), "{create}");
-    assert!(create.contains("--label sbx.docker=false"), "{create}");
+    assert!(create.contains("--label sbx.docker=manual"), "{create}");
 }
 
 #[test]
@@ -489,7 +519,7 @@ fn pull_never_names_itself_for_a_template_kit_that_needs_a_build() {
         "# syntax=docker/sandbox-kit:3\nschemaVersion: \"3\"\nkind: mixin\n",
     )
     .unwrap();
-    template_with(&t, vec![record(&kit.display().to_string())], false);
+    template_with(&t, vec![record(&kit.display().to_string())]);
     creatable_as(&t, "bb");
     let err = t.sbt_err(&[
         "create", "shell", "-t", "x:v1", "--pull", "never", "--name", "bb",
@@ -503,7 +533,7 @@ fn template_kits_follow_kit_policy() {
     let tool = v2_fixture("tool-mixin");
     // A local kit, under --pull never, still needs kit.allowLocalKits.
     let mut t = test_env(&[("SMOLBENTO_KIT_ALLOW_LOCAL_KITS", "false")]);
-    template_with(&t, vec![record(&tool)], false);
+    template_with(&t, vec![record(&tool)]);
     creatable_as(&t, "bb");
     let err = t.sbt_err(&[
         "create", "shell", "-t", "x:v1", "--pull", "never", "--name", "bb",
@@ -520,7 +550,7 @@ fn template_kits_follow_kit_policy() {
             ("SMOLBENTO_KIT_REQUIRE_SIGNATURE", "true"),
             ("SMOLBENTO_KIT_ALLOWED_SOURCES", r#"["docker.io/acme/"]"#),
         ]);
-        template_with(&t, vec![record(kit)], false);
+        template_with(&t, vec![record(kit)]);
         creatable_as(&t, "bb");
         let err = t.sbt_err(&[
             "create", "shell", "-t", "x:v1", "--pull", "never", "--name", "bb",
@@ -804,9 +834,13 @@ fn explicit_template_is_kept_when_docker_is_disabled() {
     else {
         panic!("expected create");
     };
-    let req = planned(&t, "shell", &a.opts).unwrap();
+    let (req, plan) = planned_kits(&t, "shell", &a.opts).unwrap();
     assert_eq!(req.image, "docker/sandbox-templates:shell-docker-0.10.0");
-    assert!(!req.docker, "docker.enabled=false still skips dockerd");
+    assert_eq!(
+        plan.merged.dockerd,
+        crate::sandbox::Engine::Off,
+        "docker.enabled=false still skips dockerd"
+    );
 }
 
 #[test]
@@ -818,7 +852,7 @@ fn a_saved_template_is_created_from_its_pack() {
         pull: Some("never".into()),
         ..Default::default()
     };
-    let req = planned(&t, "shell", &opts).unwrap();
+    let (req, plan) = planned_kits(&t, "shell", &opts).unwrap();
     let pack = crate::templates::Store::new(&t.ctx.paths).pack(&e);
     assert_eq!(req.template_pack, Some(pack));
     assert_eq!(
@@ -826,7 +860,11 @@ fn a_saved_template_is_created_from_its_pack() {
         Some("docker.io/library/chk-tpl:v1")
     );
     assert_eq!(req.image, e.image);
-    assert!(!req.docker, "the template's docker flag, not the image's");
+    assert_eq!(
+        plan.merged.dockerd,
+        crate::sandbox::Engine::Off,
+        "a template's engine comes from its recorded kits, not its image"
+    );
 }
 
 #[test]
@@ -939,38 +977,6 @@ fn create_from_a_saved_template_passes_from_and_the_label() {
         "{create}"
     );
     assert!(!create.contains("--image"), "{create}");
-}
-
-#[test]
-fn a_templates_docker_flag_follows_docker_enabled() {
-    for (enabled, want) in [("false", false), ("true", true)] {
-        let t = test_env(&[("SMOLBENTO_DOCKER", enabled)]);
-        let kits = saved_template(&t, "s:v1", "shell").kits;
-        let src = t.ctx.cwd.join("p.smolmachine");
-        std::fs::write(&src, "packed").unwrap();
-        let r = crate::templates::TemplateRef::parse("d:v1").unwrap();
-        crate::templates::Store::new(&t.ctx.paths)
-            .add(
-                crate::templates::Entry {
-                    repository: r.repository,
-                    tag: r.tag,
-                    agent: "shell".into(),
-                    image: "img:1".into(),
-                    docker: true,
-                    created_at: "1970-01-12T13:46:30Z".into(),
-                    kits,
-                    ..Default::default()
-                },
-                &src,
-            )
-            .unwrap();
-        let opts = SandboxOpts {
-            template: Some("d:v1".into()),
-            ..Default::default()
-        };
-        let req = planned(&t, "shell", &opts).unwrap();
-        assert_eq!(req.docker, want, "docker.enabled={enabled}");
-    }
 }
 
 #[test]

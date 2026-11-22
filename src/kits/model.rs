@@ -261,6 +261,10 @@ pub enum CapBody {
     GitIdentity,
     LongRunning,
     Privileged,
+    /// `dockerd@1`: an engine in the sandbox, as `privileged@1` plus a store at `/var/lib/docker`.
+    Dockerd {
+        auto_start: bool,
+    },
     AgentSessions,
     /// `ssh-agent@1`: the user's SSH agent in these phases. Unrestricted signs anything; a
     /// bounded entry signs only `sign` namespaces and `authenticate` logins.

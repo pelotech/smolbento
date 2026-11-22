@@ -1,7 +1,6 @@
 use super::*;
 
-/// The fixture has `sbx.docker=true` and no kits: dockerd comes only from the docker kit's
-/// startup hook, so `setup` never starts it.
+/// The fixture has `sbx.docker=true` and no kits: `setup` starts the engine before the hooks.
 #[test]
 fn start_applies_network_then_starts_with_env_then_setup() {
     let vm = vm_with(&stopped());
@@ -16,14 +15,17 @@ fn start_applies_network_then_starts_with_env_then_setup() {
     assert_eq!(lines[2], "machine start -n sbx-claude-myrepo --branchable");
     assert!(lines[3].ends_with(&hosts_cmd()), "{lines:#?}");
     assert!(lines[4].ends_with(&bridge::remove_cmd()), "{lines:#?}");
+    assert!(lines[5].contains("exec dockerd"), "{lines:#?}");
+    assert!(lines[6].contains("/_ping"), "{lines:#?}");
+    assert!(lines[7].contains("chgrp"), "{lines:#?}");
     assert_eq!(
-        lines[5],
+        lines[8],
         format!(
             "machine exec --name sbx-claude-myrepo -u root -- sh -c {}",
             startup_cmd(None)
         )
     );
-    assert_eq!(lines.len(), 6, "{lines:#?}");
+    assert_eq!(lines.len(), 9, "{lines:#?}");
     assert_eq!(
         vm.runner().envs(),
         vec![vec![("TOK".to_string(), "secret".to_string())]]
