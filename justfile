@@ -152,7 +152,7 @@ release-build target builder:
             ;;
     esac
 
-# Run Docker's kit-spec conformance suite (ssh-agent@1, host-mount@1) against the adapter in
+# Run Docker's kit-spec conformance suite (ssh-agent@1, host-mount@1, lifecycle@1) against the adapter in
 # tests/conformance. Boots real VMs and builds the suite's workload image (needs a hypervisor
 # and the image builder); further arguments go to `kit-tck runtime` (e.g. `--verbose`).
 conformance *args:

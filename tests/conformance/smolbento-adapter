@@ -1,7 +1,7 @@
 #!/usr/bin/env bash
 # Conformance adapter: drives smolbento through docs/spec/conformance.md of docker/sandbox-kit-spec.
-# It claims com.docker.sandbox/ssh-agent@1 and host-mount@1 and implements the verbs those checks
-# call. Needs jq (`just conformance` provides it).
+# It claims com.docker.sandbox/ssh-agent@1, host-mount@1 and lifecycle@1, and implements the verbs
+# those checks call. Needs jq (`just conformance` provides it).
 #
 # Environment:
 #   SMOLBENTO_BIN      the binary to drive (default: smolbento on PATH)
@@ -97,6 +97,7 @@ case "$verb" in
 capabilities)
 	echo com.docker.sandbox/ssh-agent@1
 	echo com.docker.sandbox/host-mount@1
+	echo com.docker.sandbox/lifecycle@1
 	;;
 
 create)
