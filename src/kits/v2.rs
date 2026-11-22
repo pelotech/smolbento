@@ -97,7 +97,9 @@ fn parse_warn(yaml: &str, dir: &Path) -> Result<(Kit, Vec<String>)> {
         caps.push(v3("network-policy@1", Some(config))?);
     }
     for c in s.credentials {
-        caps.push(cap("credential@1", CapBody::Credential(credential(c)?)));
+        let optional = c.required == Some(false);
+        let body = CapBody::Credential(credential(c)?);
+        caps.push(Cap::new(format!("{CAP_NS}credential@1"), optional, body));
     }
     for p in s.ports {
         let config = json!({"name": p.name, "container": p.container, "transport": p.protocol});
@@ -643,6 +645,22 @@ mod tests {
         assert!(c.runtime && !c.install);
         assert_eq!(c.inject[0].header.as_deref(), Some("Authorization"));
         assert_eq!(c.inject[0].format.as_deref(), Some("Bearer %s"));
+    }
+
+    /// A v2 credential with `required: false` is an optional credential@1: the kit runs without its
+    /// secret. Left out or `true`, it's required.
+    #[test]
+    fn a_credential_marked_not_required_is_optional() {
+        let y = |required: &str| {
+            format!(
+                "schemaVersion: \"2\"\nkind: mixin\ncredentials:\n  - service: s\n{required}    apiKey:\n      name: K\n"
+            )
+        };
+        let optional =
+            |required: &str| parse(&y(required), Path::new(".")).unwrap().caps[0].optional;
+        assert!(optional("    required: false\n"));
+        assert!(!optional("    required: true\n"));
+        assert!(!optional(""));
     }
 
     /// Ports, network hosts and volumes are read by the v3 reader, so they get its checks and
