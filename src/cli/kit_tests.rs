@@ -1642,3 +1642,55 @@ fn a_refusal_after_starting_a_stopped_sandbox_says_so() {
         dev_calls(&t)
     );
 }
+
+/// A kept host-mount directory for kit `/k` at `path`, as a create leaves it.
+fn kept_mount(t: &TestEnv, path: &str) -> std::path::PathBuf {
+    use crate::kits::host_mount::{HostDir, Managed, create_managed, managed_dir};
+    let host = managed_dir(&t.ctx.paths.kit_host_mounts(), "/k", path);
+    let d = HostDir {
+        host: host.clone(),
+        guest: path.into(),
+        managed: Some(Managed {
+            mode: 0o755,
+            kit: "/k".into(),
+        }),
+    };
+    create_managed(&[d]).unwrap();
+    host
+}
+
+#[test]
+fn kit_mounts_ls_lists_kept_host_mounts() {
+    let mut t = test_env(&[]);
+    t.sbt(&["kit", "mounts", "ls"]).unwrap();
+    assert_eq!(t.stdout(), "ID   KIT   PATH   HOST PATH\n");
+    let host = kept_mount(&t, "/home/agent/.cache");
+    t.sbt(&["kit", "mounts", "ls", "--json"]).unwrap();
+    let v: serde_json::Value = serde_json::from_str(&t.stdout()).unwrap();
+    assert_eq!(v[0]["kit"], "/k");
+    assert_eq!(v[0]["path"], "/home/agent/.cache");
+    assert_eq!(v[0]["host_path"], host.display().to_string());
+    assert!(v[0]["id"].as_str().is_some_and(|id| !id.is_empty()));
+}
+
+#[test]
+fn kit_mounts_rm_refuses_a_mount_a_sandbox_uses() {
+    let mut t = test_env(&[]);
+    let host = kept_mount(&t, "/data");
+    let id = crate::kits::host_mount::kept(&t.ctx.paths.kit_host_mounts()).unwrap()[0]
+        .id
+        .clone();
+    let label = format!(r#"{{"/data":"{}"}}"#, host.display());
+    t.sandboxes(&[("a", "stopped", &[("sbx.host-mounts", &label)])]);
+    let e = t.sbt_err(&["kit", "mounts", "rm", &id]);
+    assert!(
+        e.contains("sandbox a mounts it; remove the sandbox first"),
+        "{e}"
+    );
+    assert!(host.exists());
+
+    t.sandboxes(&[]);
+    t.sbt(&["kit", "mounts", "rm", &id]).unwrap();
+    assert!(!host.exists());
+    assert_eq!(t.stdout(), format!("Removed {id}\n"));
+}

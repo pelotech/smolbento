@@ -8,6 +8,22 @@ use clap::{Args, Subcommand};
 use super::OutputArgs;
 use crate::kits::args::ArgValues;
 
+/// `kit mounts`: the directories kept for kits' host mounts, which outlive their sandboxes.
+#[derive(Debug, Subcommand)]
+pub enum KitMountsCmd {
+    /// List the kept host-mount directories
+    Ls {
+        #[command(flatten)]
+        output: OutputArgs,
+    },
+    /// Remove kept host-mount directories and their contents
+    Rm {
+        /// IDs, as `kit mounts ls` shows them
+        #[arg(required = true)]
+        ids: Vec<String>,
+    },
+}
+
 #[derive(Debug, Subcommand)]
 pub enum KitCmd {
     /// Show what a kit provides and requests
@@ -63,6 +79,9 @@ pub enum KitCmd {
         #[arg(short, long)]
         output: Option<String>,
     },
+    /// List or remove the host directories kits keep (host-mount@1)
+    #[command(subcommand)]
+    Mounts(KitMountsCmd),
     /// Sign a kit artifact
     Sign {
         /// Kit: registry/repo:tag or registry/repo@sha256:digest

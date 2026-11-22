@@ -13,6 +13,7 @@ Commands:
   pack      Package a directory as a kit artifact
   push      Push a kit artifact to an OCI registry
   pull      Pull a kit artifact from an OCI registry
+  mounts    List or remove the host directories kits keep (host-mount@1)
   sign      Sign a kit artifact
   verify    Verify a kit artifact's signature
   help      Print this message or the help of the given subcommand(s)

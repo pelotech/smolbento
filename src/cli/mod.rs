@@ -10,6 +10,7 @@ mod fork;
 mod inspect;
 mod kit;
 mod kit_doc;
+mod kit_mounts;
 pub(crate) mod lifecycle;
 mod ls;
 mod mcp;

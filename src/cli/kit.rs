@@ -43,6 +43,7 @@ pub fn run<R: Runner>(ctx: &mut Ctx<R>, cmd: KitCmd) -> Result<i32> {
             signing,
         } => push(ctx, &directory, &reference, sign, &signing),
         KitCmd::Pull { reference, output } => pull(ctx, &reference, output.as_deref()),
+        KitCmd::Mounts(cmd) => super::kit_mounts::run(ctx, cmd),
         KitCmd::Sign { reference, signing } => sign(ctx, &reference, &signing),
         KitCmd::Verify {
             reference,

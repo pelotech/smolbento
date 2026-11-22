@@ -35,6 +35,8 @@ smolbento-only:
 - `start` and `exec --privileged`. sbx 0.53 no longer has them; smolbento keeps them.
 - `fork`. sbx has none; its `template save` saves only the disk.
 - `daemon`. Accepted and does nothing.
+- `kit mounts ls|rm`. Lists and removes the directories kept for kits' host mounts. sbx keeps
+  them too, with no command to see or remove them.
 - `smolvm ARGS…`. Runs the smolvm smolbento uses (the pinned release it downloads) on its own
   state (`~/.smolbento`), passing ARGS through. sbx has no `smolvm` command.
 
@@ -460,8 +462,10 @@ The spec's own validator accepts the pair and merges it. A capability `type` mus
   `~/.local/share/smolbento`, keyed on the kit that declares it (a mixin's own, not the workload's;
   a local kit's key is its canonical directory). Parents are `0700`; the directory takes the kit's
   `mode` (default `0755`) and an existing one is reused. Sandboxes of the same kit share it, and
-  `rm` keeps it. `--mount HOST:SANDBOX_PATH` and `sbxenv.yaml` `mounts:` replace it, at create
-  only, with sbx's errors (`--mount "X" requires HOST:SANDBOX_PATH`,
+  `rm` keeps it. Beside each, `<sha256(path)>.json` records the kit and path for `kit mounts`;
+  a directory made before records existed gets one when a sandbox next uses it.
+  `--mount HOST:SANDBOX_PATH` and `sbxenv.yaml` `mounts:` replace it, at create only, with sbx's
+  errors (`--mount "X" requires HOST:SANDBOX_PATH`,
   `HOST "X" does not exist on the host`, `no kit declares host-mount@1 at "PATH"`). Two kits
   declaring storage at one path fail with
   `kits A and B both declare storage at PATH; a host mount has one owner`.
