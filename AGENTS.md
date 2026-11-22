@@ -144,7 +144,7 @@ As of smolvm 1.36. Check the reference source before depending on anything not l
 | `host_service` | launchd and `systemd --user` units that own a sandbox's agent and bridge sockets; the orphan sweep |
 | `ssh_agent` | SSH agent forwarding: grants, the label, the filtering proxy |
 | `ssh` | `setup ssh` config block; the SSH server `ssh proxy` runs (sessions on a pty, `-L` forwards) |
-| `crates/egress-front` | workspace member, the only crate on smolvm's `smolvm-credentials` and `smolvm-protocol` (git, at the tag in `smolvm.lock`); written to be lifted into smolvm, so no bento terms; see its README |
+| `crates/egress-front` | workspace member, the only crate on smolvm's `smolvm-credentials` and `smolvm-protocol` (git, at a fork `rev`: see its `Cargo.toml`); written to be lifted into smolvm, so no bento terms; see its README |
 
 Shipped kits live in `kits/`. Planned for later phases: `tui`, and `images/plus/` for the plus image.
 

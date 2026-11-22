@@ -31,7 +31,7 @@ impl Label {
         serde_json::to_string(self).expect("egress label serializes")
     }
 
-    /// `None` for a garbled label: the sandbox is not treated as hosted.
+    /// `None` for a garbled label, which a start refuses (`egress_unreadable`).
     pub fn from_label(s: &str) -> Option<Label> {
         serde_json::from_str(s).ok()
     }

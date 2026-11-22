@@ -143,8 +143,9 @@ Sign a kit with `bento kit sign --help`.
 | `~/.local/share/smolbento/agent-skills-metadata/` | Where each skill added from a repository came from (`sources.json`) |
 | `~/.local/share/smolbento/env/` | Your approval record for each environment file (`<name>.toml`) |
 | `~/.local/share/smolbento/templates/` | Saved templates: `templates.json` and the `<id>.smolmachine` packs |
+| `~/.local/share/smolbento/egress/<sandbox>/` | A hosted-egress sandbox's CA (its private key included), its interceptor token and `egress.log`, in a 0700 directory. Removed with the sandbox. |
 | `~/.local/share/smolbento/kit-host-mounts/` | Kit [host mounts](kits.md#kit-host-mounts), kept after their sandboxes are removed |
-| `~/Library/Application Support/smolbento/launchd/dev.smolbento.<id>.<sandbox>.<agent\|bridge>.plist` (macOS), `~/.config/systemd/user/smolbento-<id>-<sandbox>-<agent\|bridge>.socket` and `…@.service` (Linux) | [Host service](usage.md#browser-and-clipboard) units, one per socket of a sandbox; `<id>` is a short hash of the data dir. Removed with the sandbox. |
+| `~/Library/Application Support/smolbento/launchd/dev.smolbento.<id>.<sandbox>.<agent\|bridge\|egress>.plist` (macOS), `~/.config/systemd/user/smolbento-<id>-<sandbox>-<agent\|bridge\|egress>.socket` and `…@.service` (`….service` for egress) (Linux) | [Host service](usage.md#browser-and-clipboard) units, one per socket of a sandbox; `<id>` is a short hash of the data dir. Removed with the sandbox. |
 | `~/Library/Application Support/smolbento/sock/` (macOS), `$XDG_RUNTIME_DIR/smolbento/` (Linux) | Their sockets, mode 0600 in a private (0700) directory. Without a service manager, sockets are `/tmp/sbt-<uid>/`, served while attached. |
 
 `bento setup ssh` also edits one file outside these directories: `~/.ssh/config`, between its

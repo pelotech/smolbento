@@ -150,7 +150,8 @@ pub fn ensure_running<R: Runner>(ctx: &Ctx<R>, sb: &mut Sandbox) -> Result<()> {
     sandbox::ensure_running(&ctx.vm, sb, || start_plan(ctx, &meta))
 }
 
-/// The units a sandbox's sockets need: the bridge, and the agent when a runtime phase is granted.
+/// The units a sandbox needs: the bridge, the agent when a runtime phase is granted, and the
+/// egress process when it is hosted.
 pub(crate) fn service_kinds(meta: &Meta) -> Vec<Kind> {
     let mut kinds = Vec::new();
     if meta.ssh_agent.as_ref().is_some_and(|a| a.runtime.is_some()) {
@@ -819,7 +820,7 @@ pub fn create_with<R: Runner>(
 }
 
 /// The sockets units serve for a new sandbox: the host has a service manager and the sandbox gets
-/// a bridge or a runtime agent grant.
+/// a bridge, a runtime agent grant or hosted egress.
 fn plan_services<R: Runner>(
     ctx: &Ctx<R>,
     req: &CreateRequest,
