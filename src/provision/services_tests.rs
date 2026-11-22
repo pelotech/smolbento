@@ -83,9 +83,14 @@ fn create_installs_the_units_before_the_first_start_and_mounts_their_sockets() {
         "{line}"
     );
     assert!(line.contains("--label sbx.service=true"), "{line}");
+    // Hosted egress by default: its unit too.
     assert_eq!(
         ctl.calls(),
-        ["refresh", "load dev.smolbento.ns1.claude-proj.bridge"]
+        [
+            "refresh",
+            "load dev.smolbento.ns1.claude-proj.bridge",
+            "load dev.smolbento.ns1.claude-proj.egress"
+        ]
     );
     assert!(
         unit_dir
@@ -195,7 +200,10 @@ fn create_and_start_sweep_leftovers() {
     install(&t, "gone2", &[Kind::Bridge]);
     creatable_as(&t, "claude-proj");
     t.sbt(&["create", "claude", "."]).unwrap();
-    assert_eq!(units(&t), ["box:bridge", "claude-proj:bridge"]);
+    assert_eq!(
+        units(&t),
+        ["box:bridge", "claude-proj:bridge", "claude-proj:egress"]
+    );
 }
 
 #[test]

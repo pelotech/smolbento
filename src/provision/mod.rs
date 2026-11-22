@@ -456,11 +456,23 @@ pub fn prepare_create<R: Runner>(
                 .extend(mcp.steps);
         }
     }
-    // Before anything is made. Hosted egress swaps values in bento, where an install-only
-    // credential (restarted away after the install hooks) has no way to be withdrawn yet.
-    let hosted = !req.credentials.is_empty() && crate::egress::hosted(&ctx.settings, &req.name)?;
+    // Hosted egress swaps values in bento, where an install-only credential (restarted away after
+    // the install hooks) has no way to be withdrawn yet; and without its unit nothing would own
+    // the interceptor port, so every connection would fail.
+    let mut hosted = crate::egress::hosted(&ctx.settings, &req.name)?;
     if hosted && !req.rec.credential_install.is_empty() {
-        bail!("install-only credentials aren't supported with network.egress=hosted yet");
+        crate::warning!(
+            "install-only credentials need network.egress=smolvm; creating {} with smolvm egress",
+            req.name
+        );
+        hosted = false;
+    }
+    if hosted && ctx.services.plan(&req.name).is_none() {
+        crate::warning!(
+            "no service manager for its egress unit; creating {} with smolvm egress",
+            req.name
+        );
+        hosted = false;
     }
     if !denies.is_empty() {
         added.extend(crate::policy::notes::add_create_denies(
@@ -541,14 +553,6 @@ pub fn prepare_create<R: Runner>(
         eprintln!("{note}");
     }
     if hosted {
-        // Without its unit nothing owns the interceptor port and every connection would fail.
-        if ctx.services.plan(&req.name).is_none() {
-            bail!(
-                "network.egress=hosted needs a service manager (launchd or a private `systemd --user` \
-                 socket directory, and a shorter sandbox name if its socket path is too long); \
-                 unset it or use smolvm"
-            );
-        }
         req.egress = Some(crate::egress::prepare(
             &ctx.paths,
             &req.name,

@@ -210,11 +210,6 @@ pub fn spec(req: &CreateRequest) -> CreateSpec {
     }
     // Hosted egress: the guest gets placeholders and the CA, and smolvm no credential.
     if let Some(p) = &req.egress {
-        mounts.push(Mount {
-            host: Some(p.ca_guest_dir.clone()),
-            guest: "/run/smol/credentials".into(),
-            read_only: true,
-        });
         // A bound variable's placeholder wins over a user -e, so the guest sees one value.
         let bindings = &p.label.bindings;
         env.retain(|(k, _)| !bindings.iter().any(|b| b.env == *k));
@@ -223,6 +218,14 @@ pub fn spec(req: &CreateRequest) -> CreateSpec {
                 .iter()
                 .map(|b| (b.env.clone(), b.placeholder.clone())),
         );
+    }
+    // Without credentials nothing is terminated, so there's no CA to trust.
+    if let Some(ca) = req.egress.as_ref().and_then(|p| p.ca_guest_dir.clone()) {
+        mounts.push(Mount {
+            host: Some(ca),
+            guest: "/run/smol/credentials".into(),
+            read_only: true,
+        });
         for var in [
             "SSL_CERT_FILE",
             "NODE_EXTRA_CA_CERTS",

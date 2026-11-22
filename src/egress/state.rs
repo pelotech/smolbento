@@ -13,8 +13,8 @@ use std::path::PathBuf;
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct Prepared {
     pub label: Label,
-    /// The CA's guest-facing half, mounted at `/run/smol/credentials`.
-    pub ca_guest_dir: PathBuf,
+    /// The CA's guest-facing half, mounted at `/run/smol/credentials`; `None` without credentials.
+    pub ca_guest_dir: Option<PathBuf>,
 }
 
 pub fn prepare(paths: &Paths, sandbox: &str, creds: &[Credential]) -> Result<Prepared> {
@@ -29,7 +29,11 @@ pub fn prepare(paths: &Paths, sandbox: &str, creds: &[Credential]) -> Result<Pre
         .flat_map(|c| &c.hosts)
         .map(|h| host_subtree(h).to_string())
         .collect();
-    let hosts: Vec<String> = hosts.into_iter().collect();
+    let mut hosts: Vec<String> = hosts.into_iter().collect();
+    if hosts.is_empty() {
+        // A CA needs a permitted host; `invalid` never resolves, so this one can sign for nothing real.
+        hosts.push("invalid".into());
+    }
     let machine = name::machine_name(sandbox);
     let ca = MachineCa::generate(&machine, &hosts)?;
     ca.save(&dir.join("ca"))?;
@@ -62,7 +66,8 @@ pub fn prepare(paths: &Paths, sandbox: &str, creds: &[Credential]) -> Result<Pre
     }
     Ok(Prepared {
         label,
-        ca_guest_dir: MachineCa::guest_dir(&dir.join("ca")),
+        // Nothing is terminated without a binding, so the guest needs no CA.
+        ca_guest_dir: (!creds.is_empty()).then(|| MachineCa::guest_dir(&dir.join("ca"))),
     })
 }
 
@@ -146,8 +151,21 @@ mod tests {
         assert_eq!(t.len(), 64);
         assert!(t.bytes().all(|b| b.is_ascii_hexdigit()));
         assert!(load_ca(&p, "w").unwrap().permits("api.github.com"));
-        assert!(got.ca_guest_dir.starts_with(&dir));
+        assert!(got.ca_guest_dir.unwrap().starts_with(&dir));
         assert!(got.label.port > 0);
+    }
+
+    #[test]
+    fn prepare_without_credentials_constrains_the_ca_to_invalid() {
+        let d = tempfile::tempdir().unwrap();
+        let p = paths(d.path());
+        let got = prepare(&p, "w", &[]).unwrap();
+        assert!(got.label.bindings.is_empty());
+        assert_eq!(got.ca_guest_dir, None);
+        assert_eq!(token(&p, "w").unwrap().len(), 64);
+        let ca = load_ca(&p, "w").unwrap();
+        assert!(ca.permits("invalid"));
+        assert!(!ca.permits("example.com"));
     }
 
     #[test]
