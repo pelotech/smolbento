@@ -70,6 +70,10 @@ pub struct UnitPaths {
 pub trait Control {
     /// Whether the user's service manager can be used.
     fn usable(&self) -> bool;
+    /// Once after a batch of unit files is written, before they are loaded.
+    fn refresh(&self) -> Result<()> {
+        Ok(())
+    }
     /// Loads the unit (again, if it was loaded) once its files are written.
     fn load(&self, unit: &UnitPaths) -> Result<()>;
     /// Whether the unit is loaded now (a launchd job is gone after a reboot: its plist is not in
@@ -287,22 +291,33 @@ impl HostServices {
         let Some(ctl) = self.active() else {
             return Ok(());
         };
-        first_error(Kind::ALL.map(|kind| {
+        let mut to_load = Vec::new();
+        let written = Kind::ALL.map(|kind| {
             if kinds.contains(&kind) {
-                self.ensure(ctl, name, kind, &service_env(paths, env, self.flavor))
+                self.write_units(ctl, name, kind, &service_env(paths, env, self.flavor))
+                    .map(|unit| to_load.extend(unit))
             } else {
                 self.remove_kind(ctl, name, kind)
             }
-        }))
+        });
+        // One reload for every file written, then the loads.
+        let mut loaded = Vec::new();
+        if !to_load.is_empty() {
+            loaded.push(ctl.refresh());
+            loaded.extend(to_load.iter().map(|u| ctl.load(u)));
+        }
+        first_error(written.into_iter().chain(loaded))
     }
 
-    fn ensure(
+    /// Writes the unit files of `kind` unless they're current and loaded; returns the unit when
+    /// it needs loading.
+    fn write_units(
         &self,
         ctl: &dyn Control,
         name: &str,
         kind: Kind,
         env: &[(String, String)],
-    ) -> Result<()> {
+    ) -> Result<Option<UnitPaths>> {
         if !crate::bridge::ensure_private_dir(&self.sock_dir) {
             bail!(
                 "{} isn't a private directory owned by you",
@@ -319,14 +334,13 @@ impl HostServices {
             .all(|(f, t)| current(f).as_deref() == Some(t))
             && ctl.loaded(&unit)
         {
-            return Ok(());
+            return Ok(None);
         }
-        fs::create_dir_all(&self.unit_dir)
-            .with_context(|| format!("creating {}", self.unit_dir.display()))?;
         for (f, t) in unit.files.iter().zip(&texts) {
-            fs::write(f, t).with_context(|| format!("writing {}", f.display()))?;
+            crate::config::write_atomic(f, t.as_bytes(), None, crate::config::Symlink::Replace)
+                .with_context(|| format!("writing {}", f.display()))?;
         }
-        ctl.load(&unit)
+        Ok(Some(unit))
     }
 
     /// Unloads and deletes the units and sockets of sandbox `name`.
@@ -401,8 +415,8 @@ impl HostServices {
     }
 }
 
-/// The first error of `results`; an array, so every one has already run.
-fn first_error<const N: usize>(results: [Result<()>; N]) -> Result<()> {
+/// The first error of `results`, each already run (collected, not a lazy iterator).
+fn first_error(results: impl IntoIterator<Item = Result<()>>) -> Result<()> {
     results.into_iter().find(Result::is_err).unwrap_or(Ok(()))
 }
 
@@ -654,8 +668,11 @@ impl Control for Systemctl {
         run("systemctl", &["--user", "show-environment"]).is_ok()
     }
 
+    fn refresh(&self) -> Result<()> {
+        run("systemctl", &["--user", "daemon-reload"])
+    }
+
     fn load(&self, unit: &UnitPaths) -> Result<()> {
-        run("systemctl", &["--user", "daemon-reload"])?;
         run("systemctl", &["--user", "enable", &unit.id])?;
         run("systemctl", &["--user", "restart", &unit.id])
     }
@@ -686,6 +703,10 @@ pub(crate) mod fake {
     impl Control for FakeControl {
         fn usable(&self) -> bool {
             true
+        }
+        fn refresh(&self) -> Result<()> {
+            self.0.borrow_mut().push("refresh".into());
+            Ok(())
         }
         fn load(&self, u: &UnitPaths) -> Result<()> {
             self.0.borrow_mut().push(format!("load {}", u.id));
@@ -885,14 +906,46 @@ mod tests {
         assert_eq!(
             ctl.calls(),
             [
+                "refresh",
                 "load dev.smolbento.ns1.s1.agent",
                 "load dev.smolbento.ns1.s1.bridge"
             ]
         );
         sync(&[("PATH", "/bin")]);
-        assert_eq!(ctl.calls().len(), 2, "unchanged: no reload");
+        assert_eq!(ctl.calls().len(), 3, "unchanged: no reload");
         sync(&[("PATH", "/usr/bin")]);
-        assert_eq!(ctl.calls().len(), 4, "a changed PATH rewrites and reloads");
+        assert_eq!(
+            ctl.calls().len(),
+            6,
+            "a changed PATH rewrites, refreshes once and reloads"
+        );
+    }
+
+    #[test]
+    fn sync_writes_unit_files_through_write_atomic() {
+        let tmp = tempfile::tempdir().unwrap();
+        let (s, _) = services(tmp.path(), Flavor::Systemd, "ns1");
+        let link = tmp.path().join("units/real");
+        std::fs::create_dir_all(tmp.path().join("units")).unwrap();
+        std::fs::write(&link, "x").unwrap();
+        let unit = s.paths_of("s1", Kind::Agent);
+        std::os::unix::fs::symlink(&link, &unit.files[0]).unwrap();
+        s.sync("s1", &[Kind::Agent], &paths("/d"), &envs(&[]))
+            .unwrap();
+        // Symlink::Replace: the link is replaced, never written through; no temp files remain.
+        assert_eq!(std::fs::read_to_string(&link).unwrap(), "x");
+        assert!(!unit.files[0].is_symlink());
+        let leftovers = std::fs::read_dir(tmp.path().join("units"))
+            .unwrap()
+            .filter(|e| {
+                e.as_ref()
+                    .unwrap()
+                    .file_name()
+                    .to_string_lossy()
+                    .ends_with(".tmp")
+            })
+            .count();
+        assert_eq!(leftovers, 0);
     }
 
     #[test]
@@ -913,7 +966,7 @@ mod tests {
             ctl.calls().last().unwrap(),
             "load dev.smolbento.ns1.s1.agent"
         );
-        assert_eq!(ctl.calls().len(), 3);
+        assert_eq!(ctl.calls().len(), 5);
     }
 
     #[test]
