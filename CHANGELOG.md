@@ -1,5 +1,18 @@
 # Changelog
 
+## [0.36.0](https://github.com/pelotech/smolbento/compare/v0.35.0...v0.36.0) (2026-11-22)
+
+
+### Features
+
+* **kits:** kit mounts ls|rm; conformance claims host-mount@1 and lifecycle@1 ([#216](https://github.com/pelotech/smolbento/issues/216)) ([2f25c36](https://github.com/pelotech/smolbento/commit/2f25c3684ca2d1bc80342f9345ef28f131937b66))
+
+
+### Bug Fixes
+
+* **kits:** keep every declared capability version; run conformance at SPEC_COMMIT ([#214](https://github.com/pelotech/smolbento/issues/214)) ([21cd2fe](https://github.com/pelotech/smolbento/commit/21cd2fe6ec68f88314cc2a5269cd8e158c50b17a))
+* **policy:** policy check reads URLs as sbx does and reports the closed host loopback ([#217](https://github.com/pelotech/smolbento/issues/217)) ([d5513f3](https://github.com/pelotech/smolbento/commit/d5513f370e54f310bb4e3115d15a7beb52cb336e))
+
 ## [0.35.0](https://github.com/pelotech/smolbento/compare/v0.34.0...v0.35.0) (2026-11-22)
 
 
