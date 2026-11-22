@@ -1,5 +1,14 @@
 # Changelog
 
+## [0.36.1](https://github.com/pelotech/smolbento/compare/v0.36.0...v0.36.1) (2026-11-22)
+
+
+### Bug Fixes
+
+* **bridge:** bound the processes login relays keep alive; rm stops them on Linux ([#218](https://github.com/pelotech/smolbento/issues/218)) ([eb8f54d](https://github.com/pelotech/smolbento/commit/eb8f54d460a965489b1e74579083951b7d0f2d88))
+* **kits:** refuse lifecycle conflicts, name invalid group members, kit.env reads the container environment ([#221](https://github.com/pelotech/smolbento/issues/221)) ([ccc62f3](https://github.com/pelotech/smolbento/commit/ccc62f366167867645abacc75dbe790224b55b2b))
+* **ssh-agent:** an install-only grant's guest socket goes when the install phase ends ([#220](https://github.com/pelotech/smolbento/issues/220)) ([23bbf9f](https://github.com/pelotech/smolbento/commit/23bbf9f6a44070dde28784a3ece5a497617c9adf))
+
 ## [0.36.0](https://github.com/pelotech/smolbento/compare/v0.35.0...v0.36.0) (2026-11-22)
 
 
