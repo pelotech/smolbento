@@ -65,6 +65,8 @@ pub const BRIDGE: &str = "sbx.bridge";
 pub const SERVICE: &str = "sbx.service";
 /// The SSH agent granted at create, per phase (`ssh_agent::AgentLabel`, JSON).
 pub const SSH_AGENT: &str = "sbx.ssh-agent";
+/// The hosted-egress port and bindings (`egress::Label`, JSON); absent unless `network.egress` is `hosted`.
+pub const EGRESS: &str = "sbx.egress";
 /// Kit host mounts: a JSON object of guest path to host directory.
 pub const HOST_MOUNTS: &str = "sbx.host-mounts";
 /// Created with `/dev/fuse` taken away (an environment file's `sandboxOptions.fuse: false`).
@@ -246,6 +248,8 @@ pub struct Meta {
     pub host_mounts: BTreeMap<String, String>,
     /// The SSH agent phases granted at create and what each may sign (`sbx.ssh-agent`).
     pub ssh_agent: Option<AgentLabel>,
+    /// Hosted egress recorded at create (`sbx.egress`).
+    pub egress: Option<crate::egress::Label>,
     /// The skills mode and directories set at create (`sbx.skills`).
     pub skills: Option<crate::skills::Label>,
     /// The registered MCP servers chosen at create (`sbx.mcp`); `None` without `--static-mcp`.
@@ -312,6 +316,7 @@ impl Meta {
                 (!self.rec.read_only_files.is_empty()).then(|| json(&self.rec.read_only_files)),
             ),
             (SSH_AGENT, self.ssh_agent.as_ref().map(|a| a.to_label())),
+            (EGRESS, self.egress.as_ref().map(|e| e.to_label())),
             (SKILLS, self.skills.as_ref().map(|s| s.to_label())),
             (TEMPLATE, self.rec.template.clone()),
             (MCP, self.mcp.as_ref().map(|names| names.join(","))),
@@ -362,6 +367,7 @@ impl Meta {
             service: flag(SERVICE),
             host_mounts: json(labels, HOST_MOUNTS).unwrap_or_default(),
             ssh_agent: text(SSH_AGENT).and_then(|j| AgentLabel::from_label(&j)),
+            egress: text(EGRESS).and_then(|j| crate::egress::Label::from_label(&j)),
             skills: text(SKILLS).and_then(|j| crate::skills::Label::from_label(&j)),
             mcp: labels.get(MCP).map(|names| list(Some(names))),
             rec: Recorded {
@@ -630,6 +636,26 @@ mod tests {
         // None of them is written for a sandbox that doesn't use it, so its labels don't change.
         let plain = meta().to_labels();
         assert_eq!(plain.len(), 6, "{plain:?}");
+    }
+
+    #[test]
+    fn a_sandbox_with_an_egress_label_round_trips() {
+        let m = Meta {
+            egress: Some(crate::egress::Label {
+                port: 4455,
+                bindings: vec![crate::egress::Binding {
+                    name: "gh_token".into(),
+                    env: "GH_TOKEN".into(),
+                    hosts: vec!["api.github.com".into()],
+                    set_header: Some("Authorization".into()),
+                    placeholder: "bento-gh_token".into(),
+                }],
+            }),
+            ..meta()
+        };
+        let labels = m.to_labels();
+        assert!(labels["sbx.egress"].starts_with(r#"{"port":4455,"bindings":[{"name":"gh_token""#));
+        assert_eq!(Meta::from_labels(&labels), Some(m));
     }
 
     #[test]

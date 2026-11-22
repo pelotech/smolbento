@@ -116,6 +116,7 @@ pub fn meta(req: &CreateRequest) -> Meta {
             .map(|(host, guest)| (guest.clone(), host.display().to_string()))
             .collect(),
         // Internal sandboxes run untrusted build steps: never an agent.
+        egress: None,
         ssh_agent: req
             .ssh_agent
             .clone()
