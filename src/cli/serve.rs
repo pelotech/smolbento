@@ -47,6 +47,15 @@ pub fn run<R: Runner>(
     Ok(0)
 }
 
+/// Whether `args` run a unit that gets a connection on stdin (`_serve agent|bridge`), whose stdout
+/// and stderr must go before anything can write to them. The egress unit serves a listener and
+/// keeps stderr: it's the egress log.
+pub(super) fn takes_connection(args: &[std::ffi::OsString]) -> bool {
+    args.get(1).is_some_and(|a| a == "_serve")
+        && args.get(2).is_none_or(|k| k != "egress")
+        && !args.iter().skip(2).any(|a| a == "-h" || a == "--help")
+}
+
 /// Runs `serve` on `conn` holding one of `slots`, so at most that many at once per sandbox and
 /// kind, whichever service manager started us (the guest is untrusted and could open connections
 /// in a loop). A connection past the cap is closed at once, silently. The slot is released when
@@ -119,6 +128,24 @@ fn bridge<R: Runner>(ctx: &Ctx<R>, sb: &Sandbox, conn: &UnixStream, slot: File) 
 mod tests {
     use super::*;
     use std::io::Read;
+
+    #[test]
+    fn egress_keeps_its_stderr_for_its_log() {
+        let args = |a: &[&str]| {
+            a.iter()
+                .map(Into::into)
+                .collect::<Vec<std::ffi::OsString>>()
+        };
+        assert!(takes_connection(&args(&["bento", "_serve", "agent", "s"])));
+        assert!(takes_connection(&args(&["bento", "_serve", "bridge", "s"])));
+        assert!(!takes_connection(&args(&[
+            "bento", "_serve", "egress", "s"
+        ])));
+        assert!(!takes_connection(&args(&[
+            "bento", "_serve", "agent", "--help"
+        ])));
+        assert!(!takes_connection(&args(&["bento", "ls"])));
+    }
 
     #[test]
     fn the_cap_plus_first_concurrent_connection_is_closed_unserved() {
