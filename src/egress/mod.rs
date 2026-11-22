@@ -1,5 +1,8 @@
 //! Hosted egress: bento runs the interceptor that swaps a sandbox's credentials.
 
+mod state;
+pub use state::{Prepared, forget, load_ca, policy, prepare, token};
+
 use crate::config::Settings;
 use crate::sandbox::name;
 use anyhow::{Result, bail};

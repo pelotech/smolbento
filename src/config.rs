@@ -66,6 +66,11 @@ impl Paths {
         self.cache.join("kits")
     }
 
+    /// A hosted-egress sandbox's CA and front token (`egress::prepare`).
+    pub fn egress(&self, sandbox: &str) -> PathBuf {
+        self.data.join("egress").join(sandbox)
+    }
+
     /// Managed directories of kit host mounts (`kits::host_mount::managed_dir`), kept after `rm`.
     pub fn kit_host_mounts(&self) -> PathBuf {
         self.data.join("kit-host-mounts")

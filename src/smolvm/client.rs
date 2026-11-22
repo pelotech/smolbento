@@ -66,7 +66,7 @@ pub struct Credential {
 impl Credential {
     /// A binding's name: its variable, lowercased. One variable holds one value, so the name is
     /// unique, and `secret set` can name the bindings it refreshes.
-    fn binding(env_var: &str) -> String {
+    pub(crate) fn binding(env_var: &str) -> String {
         env_var.to_ascii_lowercase()
     }
 
