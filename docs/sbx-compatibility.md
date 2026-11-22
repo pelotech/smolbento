@@ -315,14 +315,15 @@ your agent (`ssh-add -D` fails with `Failed to remove all identities.`). The set
 | `kit add` of an `ssh-agent@1` kit | Recreates the container | `recreate required: … SSH agent` |
 
 Docker's kit-spec conformance suite checks this capability through `tests/conformance/smolbento-adapter`
-(`just conformance`, pinned to sandbox-kit-spec `06ac386`). Ten `ssh-agent@1` checks pass
+(`just conformance`, at `SPEC_COMMIT`). Ten `ssh-agent@1` checks pass
 (`agent-reachable`, `operations-restricted`, `signatures-bounded`, `logins-bounded`,
 `binding-verified`, `destination-keys-outside-sandbox`, `absent-without-grant`, `every-boot`,
 `unavailable-refuses-required`, `unavailable-skips-optional`); `phase-scoped` is
-skipped (needs `lifecycle@1`). Two other checks fail in the run, neither about the agent:
-`host-mount@1/unadvertised-is-unmet` and `SPEC-v3 §7.1.2/exact-version`. The suite's isolated
-setup needs the units' socket path under 104 bytes (a short `SMOLBENTO_TCK_HOME`); a longer one
-falls back to attached-only serving and the boot-time checks fail.
+skipped (needs `lifecycle@1`). One other check fails, not about the agent:
+`host-mount@1/unadvertised-is-unmet`. It expects an unclaimed optional host mount to be skipped,
+but smolbento provides it; claiming `host-mount@1` in the adapter will retire it. The suite's
+isolated setup needs the units' socket path under 104 bytes (a short `SMOLBENTO_TCK_HOME`); a
+longer one falls back to attached-only serving and the boot-time checks fail.
 
 ## Kits
 

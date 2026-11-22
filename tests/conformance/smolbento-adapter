@@ -126,7 +126,7 @@ create)
 	# A kit requiring a capability type this adapter doesn't claim is refused, even where
 	# smolbento could provide it: the claim is what the suite judges.
 	for ref in "$first" ${extra[@]+"${extra[@]}"}; do
-		[ -f "$ref/kit.yaml" ] || [ -d "$ref" ] || continue
+		[ -d "$ref" ] || continue
 		for f in "$ref"/*.yaml "$ref"/*.yml; do
 			[ -f "$f" ] || continue
 			t=$(required_unclaimed "$f")
