@@ -375,7 +375,8 @@ fn implicit_deny(reason: &str) -> Verdict {
 
 /// `check` for a UDP destination. smolvm's allow list admits UDP wherever it admits TCP, so the
 /// rules decide the same way. The exception is port 53, where the rules allow it: smolvm answers
-/// DNS itself and never relays a datagram there.
+/// DNS itself and never relays a datagram there. A hosted sandbox's machine drops every datagram
+/// but DNS, so an allow says so.
 pub fn check_udp(
     policy: &Policy,
     sandbox: Option<&str>,
@@ -383,9 +384,13 @@ pub fn check_udp(
     host_access: Option<bool>,
     target: &str,
 ) -> Verdict {
-    let v = check(policy, sandbox, credential_hosts, host_access, target);
+    let mut v = check(policy, sandbox, credential_hosts, host_access, target);
     if v.allowed && split_port(target.trim()).is_ok_and(|(_, port)| port == Some(53)) {
         return implicit_deny("smolvm answers DNS itself; UDP to port 53 never reaches the target");
+    }
+    if v.allowed {
+        v.reason
+            .push_str("; not from hosted sandboxes, which send no UDP but DNS");
     }
     v
 }
