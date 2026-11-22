@@ -85,7 +85,10 @@ As of smolvm 1.36. Check the reference source before depending on anything not l
   (replaces a binding of the same name) and `machine credentials remove -n M BINDING…` work on a
   running or stopped machine, from its next request. A new host gets its own CA, trusted by the
   guest at once. `machine ls --json` and `machine status --json` list each machine's `credentials`
-  (name, variable, hosts; never values). smolbento doesn't use these yet.
+  (name, variable, hosts; never values). A running machine that booted with no bindings takes
+  added ones from its next start. `secret set` adds a service a sandbox lacks; `secret rm`
+  refreshes running sandboxes with the value that still applies, else `smolbento-secret-removed`,
+  and never removes a binding (a removed kit binding can't be rebuilt).
 - **Host loopback (1.36):** a machine with a network reaches the host's `127.0.0.1` through its
   gateway or `host.docker.internal` unless `--deny-cidr` closes it. smolbento always passes
   `--deny-cidr 127.0.0.0/8 ::1/128` at create unless the sandbox gets host access.

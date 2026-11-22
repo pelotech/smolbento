@@ -487,7 +487,7 @@ echo "$ip" > /etc/e2e-install-ip"#
 #[ignore = "boots real VMs and needs httpbin.org; run with `just e2e`"]
 pub(crate) fn install_only_credential_is_gone_after_install() {
     let e = E2e::new("instcred");
-    e.httpbin_secret("E2E_TOK");
+    e.own_httpbin_secret("E2E_TOK", BASIC_SECRET);
     let reg = Registry::start(&e);
     let kit = reg.push(
         "install-cred",

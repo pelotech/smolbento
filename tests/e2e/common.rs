@@ -287,11 +287,14 @@ agentInstructions:
         );
     }
 
-    /// A secret `env` for httpbin.org whose value is [`BASIC_SECRET`].
-    pub(crate) fn httpbin_secret(&self, env: &str) {
-        let command = format!("printf {BASIC_SECRET}");
+    /// A secret `env` for httpbin.org whose value is `value` (base64 `user:pass`, as
+    /// [`BASIC_SECRET`]), for this test's sandbox and its forks only: e2e tests share smolvm, so a
+    /// global secret set or removed by one would reach the sandboxes another test runs meanwhile.
+    pub(crate) fn own_httpbin_secret(&self, env: &str, value: &str) -> String {
+        let command = format!("printf {value}");
         let args = ["--host", "httpbin.org", "--env", env, "--command", &command];
-        self.ok(&[&["secret", "set-custom"][..], &args].concat());
+        let own = ["--sandbox", self.name.as_str()];
+        self.ok(&[&["secret", "set-custom"][..], &args, &own].concat())
     }
 
     pub(crate) fn state(&self) -> String {

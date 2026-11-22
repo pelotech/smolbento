@@ -2,14 +2,15 @@
 
 use std::io::{BufRead, Write};
 
-use anyhow::{Context, Result, bail};
+use anyhow::{Context, Result, anyhow, bail};
 
 use super::{
     Ctx, SecretCmd, SecretLsArgs, SecretRmArgs, SecretSetArgs, SecretSource, Unsupported, confirm,
     table,
 };
-use crate::policy::Policy;
-use crate::sandbox::{self, name};
+use crate::policy::{Policy, compile};
+use crate::provision;
+use crate::sandbox::{self, labels, name};
 use crate::secrets::resolve::{bound_vars, resolve, with_value};
 use crate::secrets::services::Service;
 use crate::secrets::{
@@ -277,15 +278,16 @@ pub(crate) fn store<R: Runner>(
     Ok(described)
 }
 
-/// Hands the running `sb` service `name`'s new `value` (`machine credentials refresh`); false when
-/// it can't, so the value waits for the next start.
+/// Hands the running `sb` service `name`'s new `value` (`machine credentials refresh`): false when
+/// `sb` binds none of its variables, an error when smolvm can't (a machine that booted without
+/// bindings can't take values live). The caller says what that means.
 fn refresh<R: Runner>(
     ctx: &Ctx<R>,
     sb: &sandbox::Sandbox,
     service: &Service,
     name: &str,
     value: &str,
-) -> bool {
+) -> Result<bool> {
     // Only the variables `sb` binds: smolvm refuses the whole refresh for one it doesn't, and a
     // kit can take a service's key without its variable (Claude's binds only SBX_KIT_ANTHROPIC).
     let vars: Vec<&String> = bound_vars(service, &sb.meta, name, false)
@@ -293,18 +295,11 @@ fn refresh<R: Runner>(
         .filter(|v| sb.meta.rec.credential_env.contains(v))
         .collect();
     if vars.is_empty() {
-        return false;
+        return Ok(false);
     }
-    match ctx
-        .vm
-        .refresh_credentials(&sb.machine, &with_value(&sb.meta, vars, value))
-    {
-        Ok(()) => true,
-        Err(e) => {
-            crate::warning!("{}: couldn't hand it the new value now: {e:#}", sb.name());
-            false
-        }
-    }
+    ctx.vm
+        .refresh_credentials(&sb.machine, &with_value(&sb.meta, vars, value))?;
+    Ok(true)
 }
 
 /// Puts a stored value back as it was before a `set` whose store write or secrets.toml save then
@@ -316,8 +311,8 @@ fn restore<R: Runner>(ctx: &Ctx<R>, account: &str, previous: Option<&str>) {
     };
 }
 
-/// Which sandboxes have the new value now, which get it on their next start, and which would need
-/// recreating. A running sandbox bound to the service is handed the value at once.
+/// Which sandboxes have the new value now and which get it on their next start. A running sandbox
+/// bound to the service is handed the value at once; one in scope without it gets it bound.
 fn explain_impact<R: Runner>(
     ctx: &Ctx<R>,
     file: &SecretsFile,
@@ -327,22 +322,24 @@ fn explain_impact<R: Runner>(
     let Ok(sandboxes) = sandbox::list(&ctx.vm) else {
         return Ok(());
     };
+    let svc = file.service(service);
     // The sandboxes that use this entry: a sandbox's own secret wins over its original's (for a
-    // fork), which wins over the global one.
+    // fork), which wins over the global one. Internal ones (`_builder`) never get a secret.
     let own = scope_for(scope);
     let (bound, unbound): (Vec<_>, Vec<_>) = sandboxes
         .iter()
+        .filter(|s| !name::is_internal(s.name()))
         .filter(|s| {
             file.entry_for(s.name(), s.meta.fork_of.as_deref(), service)
                 .is_some_and(|e| e.scope == own)
         })
-        .partition(|s| s.meta.rec.secrets.iter().any(|x| x == service));
-    // Read once for every running sandbox: a --ref or --command source may prompt, or be slow.
+        .partition(|s| is_bound(s, svc.as_ref(), service));
+    // Read once for every sandbox: a --ref or --command source may prompt, or be slow.
     let new = match (
-        bound.iter().any(|s| s.is_running()),
+        bound.iter().any(|s| s.is_running()) || !unbound.is_empty(),
         file.scoped_entry(scope, service),
     ) {
-        (true, Some(entry)) => match (file.service(service), resolve(entry, ctx.store.as_ref())) {
+        (true, Some(entry)) => match (svc, resolve(entry, ctx.store.as_ref())) {
             (Some(svc), Ok(value)) => Some((svc, value)),
             (_, Err(e)) => {
                 crate::warning!(
@@ -359,7 +356,8 @@ fn explain_impact<R: Runner>(
         let refreshed = s.is_running()
             && new
                 .as_ref()
-                .is_some_and(|(svc, value)| refresh(ctx, s, svc, service, value));
+                // Not now (no live bindings yet): the sandbox gets it at its next start, as listed.
+                .is_some_and(|(svc, value)| refresh(ctx, s, svc, service, value).unwrap_or(false));
         if refreshed {
             now.push(s);
         } else {
@@ -367,20 +365,103 @@ fn explain_impact<R: Runner>(
         }
     }
     let names = |v: &[&sandbox::Sandbox]| v.iter().map(|s| s.name()).collect::<Vec<_>>().join(", ");
+    match (&new, Policy::load(&ctx.paths)) {
+        _ if unbound.is_empty() => {}
+        (None, _) => writeln!(
+            &ctx.out,
+            "{} don't have it yet; run `bento secret set {service}` again once it can be read",
+            names(&unbound)
+        )?,
+        (Some(_), Err(e)) => crate::warning!(
+            "couldn't read the policy to give {} the secret: {e:#}",
+            names(&unbound)
+        ),
+        (Some((_, value)), Ok(policy)) => {
+            for s in unbound {
+                match bind(ctx, file, &policy, s, service, value) {
+                    Ok(true) => now.push(s),
+                    Ok(false) => later.push(s),
+                    Err(e) => crate::warning!(
+                        "{}: couldn't give it the {service} secret: {e:#}",
+                        s.name()
+                    ),
+                }
+            }
+        }
+    }
     if !now.is_empty() {
         writeln!(&ctx.out, "Applied to {} now", names(&now))?;
     }
     if !later.is_empty() {
         writeln!(&ctx.out, "Applies to {} on their next start", names(&later))?;
     }
-    if !unbound.is_empty() {
-        writeln!(
-            &ctx.out,
-            "{} were created without it; recreate them to use it (new sandboxes get it)",
-            names(&unbound)
-        )?;
-    }
     Ok(())
+}
+
+/// Whether `sb` has service `name`: created with it, or a kit binds one of its variables.
+fn is_bound(sb: &sandbox::Sandbox, service: Option<&Service>, name: &str) -> bool {
+    sb.meta.rec.secrets.iter().any(|x| x == name)
+        || service.is_some_and(|svc| {
+            bound_vars(svc, &sb.meta, name, true)
+                .iter()
+                .any(|v| sb.meta.rec.credential_env.contains(v))
+        })
+}
+
+/// `old` and `new` together, sorted and deduped, as create records a list label.
+fn merged(old: &[String], new: Vec<String>) -> Vec<String> {
+    let mut all: Vec<String> = old.iter().cloned().chain(new).collect();
+    all.sort();
+    all.dedup();
+    all
+}
+
+/// Binds service `name` to `sb`, which was created without it, as create would have: its
+/// network, its credentials (`value` in smolvm's env only) and its labels. True when a running
+/// `sb` uses the value now; false when it waits for the next start.
+fn bind<R: Runner>(
+    ctx: &Ctx<R>,
+    file: &SecretsFile,
+    policy: &Policy,
+    sb: &sandbox::Sandbox,
+    name: &str,
+    value: &str,
+) -> Result<bool> {
+    let services = [name.to_string()];
+    let creds = provision::credentials(file, &services)?;
+    let rec = &sb.meta.rec;
+    let hosts = merged(
+        &rec.credential_hosts,
+        provision::credential_hosts(file, &services),
+    );
+    // First: smolvm refuses a credential whose host the machine's allow list (running or
+    // stopped) doesn't reach.
+    let network = compile::network(policy, sb.name(), &hosts, rec.host_access);
+    ctx.vm.update_network(&sb.machine, &network)?;
+    let env = with_value(&sb.meta, creds.iter().map(|c| &c.env_var).collect(), value);
+    if !creds.is_empty() {
+        ctx.vm
+            .add_credentials(&sb.machine, &creds, &env)
+            .map_err(|e| anyhow!("{e:#}; its new hosts stay allowed until its next start"))?;
+    }
+    let vars = creds.into_iter().map(|c| c.env_var).collect();
+    ctx.vm.set_labels(
+        &sb.machine,
+        &[
+            (
+                labels::SECRETS,
+                merged(&rec.secrets, services.to_vec()).join(","),
+            ),
+            (
+                labels::CREDENTIAL_ENV,
+                merged(&rec.credential_env, vars).join(","),
+            ),
+            (labels::CREDENTIAL_HOSTS, hosts.join(",")),
+        ],
+    )?;
+    // The probe: smolvm takes values live only on a machine that booted with bindings, and
+    // refuses the refresh on one that didn't.
+    Ok(sb.is_running() && !env.is_empty() && ctx.vm.refresh_credentials(&sb.machine, &env).is_ok())
 }
 
 fn read_value<R: Runner>(ctx: &Ctx<R>, service: &str) -> Result<String> {
@@ -551,7 +632,9 @@ fn rm<R: Runner>(ctx: &Ctx<R>, file: &mut SecretsFile, a: SecretRmArgs) -> Resul
     if a.all_sandboxes {
         return Err(Unsupported("--all-sandboxes removal is not implemented yet".into()).into());
     }
-    if a.all {
+    // Before the removal: a custom service's definition can go with its last entry.
+    let before = file.clone();
+    let removed: Vec<String> = if a.all {
         confirm(ctx, "Remove every secret?", a.force)?;
         let all = std::mem::take(&mut file.secrets);
         let registries = std::mem::take(&mut file.registries);
@@ -562,6 +645,10 @@ fn rm<R: Runner>(ctx: &Ctx<R>, file: &mut SecretsFile, a: SecretRmArgs) -> Resul
         file.save(&ctx.paths)?;
         forget(ctx, &all)?;
         forget_registries(ctx, &registries)?;
+        let mut services: Vec<String> = all.into_iter().map(|e| e.service).collect();
+        services.sort();
+        services.dedup();
+        services
     } else {
         let service = a.service.context("specify a service, or --all")?;
         let scope = scope_for(a.sandbox.as_deref());
@@ -570,9 +657,75 @@ fn rm<R: Runner>(ctx: &Ctx<R>, file: &mut SecretsFile, a: SecretRmArgs) -> Resul
             .with_context(|| format!("no {service} secret ({scope})"))?;
         file.save(&ctx.paths)?;
         forget(ctx, &[removed])?;
-    }
+        vec![service]
+    };
     writeln!(&ctx.out, "Removed")?;
+    let revoked = revoke(ctx, &before, file, &removed);
+    if !revoked.is_empty() {
+        writeln!(
+            &ctx.out,
+            "Running sandboxes {} no longer send it",
+            revoked.join(", ")
+        )?;
+    }
     Ok(())
+}
+
+/// What a running sandbox is handed for a removed secret with no other entry to fall back on.
+/// smolvm refuses an empty value, so a fixed one that isn't a secret replaces it.
+const REMOVED_MARKER: &str = "smolbento-secret-removed";
+
+/// Hands running sandboxes that used a removed entry of `services` the entry that applies now (a
+/// global one under a removed sandbox one, or the original's for a fork), else the marker, so
+/// their requests stop carrying the removed value at once. Returns the sandboxes it reached.
+fn revoke<R: Runner>(
+    ctx: &Ctx<R>,
+    before: &SecretsFile,
+    after: &SecretsFile,
+    services: &[String],
+) -> Vec<String> {
+    let Ok(sandboxes) = sandbox::list(&ctx.vm) else {
+        return Vec::new();
+    };
+    let services: Vec<(&String, Service)> = services
+        .iter()
+        .filter_map(|n| Some((n, before.service(n)?)))
+        .collect();
+    let mut reached = Vec::new();
+    for sb in sandboxes
+        .iter()
+        .filter(|s| s.is_running() && !name::is_internal(s.name()))
+    {
+        let fork_of = sb.meta.fork_of.as_deref();
+        let mut any = false;
+        for (service, svc) in &services {
+            let was = before.entry_for(sb.name(), fork_of, service);
+            let now = after.entry_for(sb.name(), fork_of, service);
+            if was.map(|e| &e.scope) == now.map(|e| &e.scope) || !is_bound(sb, Some(svc), service) {
+                continue;
+            }
+            let value = match now.map(|e| resolve(e, ctx.store.as_ref())) {
+                Some(Ok(value)) => value,
+                Some(Err(e)) => {
+                    crate::warning!("{}: couldn't read its {service} secret: {e:#}", sb.name());
+                    REMOVED_MARKER.to_string()
+                }
+                None => REMOVED_MARKER.to_string(),
+            };
+            match refresh(ctx, sb, svc, service, &value) {
+                Ok(r) => any |= r,
+                Err(e) => crate::warning!(
+                    "{}: couldn't stop it sending the removed {service} secret now ({e:#}); it \
+                     stops at its next start",
+                    sb.name()
+                ),
+            }
+        }
+        if any {
+            reached.push(sb.name().to_string());
+        }
+    }
+    reached
 }
 
 /// `bento rm`: forget a sandbox's policy and, with `secrets`, its own secrets.
