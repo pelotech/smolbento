@@ -152,7 +152,6 @@ mcp rm linear
 mcp auth status
 mcp load linear --sandbox my-sandbox
 mcp unload linear --sandbox my-sandbox
-env plan
 setup ssh
 setup ssh remove
 setup ssh --auto-create

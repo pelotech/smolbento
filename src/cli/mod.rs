@@ -379,8 +379,6 @@ mod tests {
     use super::*;
     use crate::testutil::*;
 
-    /// `ls`, the bare command (which lists too), and `ls` with an explicit smolvm home.
-
     #[test]
     fn pending_and_cloud_commands_exit_2() {
         let mut t = test_env(&[]);

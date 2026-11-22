@@ -81,8 +81,6 @@ struct GroupItem {
 // Lenient like the descriptor's top level: an unknown arg key is ignored.
 #[derive(Deserialize)]
 #[serde(rename_all = "camelCase")]
-// Some fields are only accepted, so published descriptors parse.
-#[allow(dead_code)]
 struct Arg {
     #[serde(default, deserialize_with = "opt_scalar")]
     default: Option<String>,
@@ -92,8 +90,6 @@ struct Arg {
     #[serde(default, rename = "enum", deserialize_with = "scalar_list")]
     enum_values: Vec<String>,
     env: Option<String>,
-    // Accepted so published descriptors parse.
-    description: Option<String>,
     /// Set for an argument the build takes.
     build_arg: Option<String>,
 }
@@ -161,7 +157,7 @@ fn provides(d: &Descriptor, source: &Source) -> Result<Vec<String>> {
         Source::Registry(r) => capability::version_from_reference(r),
         _ => None,
     }
-    .or_else(|| d.version.clone().filter(|v| capability::is_version(v)));
+    .or_else(|| d.version.clone());
     let unversioned = |s: &str| !s.contains('@');
     Ok(d.provides
         .iter()

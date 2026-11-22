@@ -121,7 +121,6 @@ pub struct Merged {
     pub contexts: Vec<KitContext>,
     pub git_identity: bool,
     pub long_running: bool,
-    pub privileged: bool,
     /// `dockerd@1`: `Off` unless a kit declares it; one `autoStart: true` makes it `Auto`.
     pub dockerd: Engine,
     /// `ssh-agent@1` entries merged per phase, plus a built-in agent's implicit runtime grant.
@@ -220,7 +219,6 @@ impl Merged {
             }
             self.dockerd_kit = Some(kit.into());
         }
-        self.privileged = true;
         self.dockerd = self.dockerd.max(if auto_start {
             Engine::Auto
         } else {
@@ -344,7 +342,7 @@ const BUILT_IN: SshEntry<'static> = SshEntry {
 /// A built-in agent's own grant, for a create with no plan (`resolve` adds it to a plan).
 pub fn built_in_ssh_agent() -> AgentGrant {
     AgentGrant {
-        runtime: ssh_phase(&[BUILT_IN], SshPhase::Runtime).expect("the built-in grant merges"),
+        runtime: ssh_phase(&[BUILT_IN], SshPhase::Runtime),
         install: None,
     }
 }
@@ -509,17 +507,18 @@ pub fn resolve_for(
                 }),
                 CapBody::GitIdentity => merged.git_identity = true,
                 CapBody::LongRunning => merged.long_running = true,
-                CapBody::Privileged => merged.privileged = true,
                 CapBody::Dockerd { auto_start } => merged.add_dockerd(&k.name, *auto_start)?,
-                CapBody::Sbx | CapBody::AgentSessions => {}
+                // Nothing to merge; `privileged@1` because a machine already runs its startup
+                // steps as root.
+                CapBody::Privileged | CapBody::Sbx | CapBody::AgentSessions => {}
                 CapBody::Pending => unreachable!("expand_caps reads every pending config"),
             }
         }
     }
 
     merged.ssh_agent = AgentGrant {
-        install: ssh_phase(&ssh_entries, SshPhase::Install)?,
-        runtime: ssh_phase(&ssh_entries, SshPhase::Runtime)?,
+        install: ssh_phase(&ssh_entries, SshPhase::Install),
+        runtime: ssh_phase(&ssh_entries, SshPhase::Runtime),
     };
     add_oauth_hosts(&mut merged);
 
@@ -846,13 +845,13 @@ fn add_oauth_hosts(merged: &mut Merged) {
 /// Merges the `ssh-agent@1` entries for `phase` (kit spec "Composition"): unrestricted when any
 /// entry is, else the union of their namespaces and of their `authenticate` entries; required when
 /// any entry is.
-fn ssh_phase(entries: &[SshEntry], phase: SshPhase) -> Result<Option<PhaseGrant>> {
+fn ssh_phase(entries: &[SshEntry], phase: SshPhase) -> Option<PhaseGrant> {
     let es: Vec<&SshEntry> = entries
         .iter()
         .filter(|e| e.phases.contains(&phase))
         .collect();
     if es.is_empty() {
-        return Ok(None);
+        return None;
     }
     let unrestricted = es.iter().any(|e| e.unrestricted);
     let sign = (!unrestricted).then(|| union(es.iter().flat_map(|e| e.sign)));
@@ -867,12 +866,12 @@ fn ssh_phase(entries: &[SshEntry], phase: SshPhase) -> Result<Option<PhaseGrant>
         .find(|e| !e.optional)
         .or_else(|| es.iter().find(|e| e.kit.is_some()))
         .and_then(|e| e.kit.map(String::from));
-    Ok(Some(PhaseGrant {
+    Some(PhaseGrant {
         sign,
         authenticate,
         required,
         kit,
-    }))
+    })
 }
 
 /// The distinct `values`, in the order first seen.
