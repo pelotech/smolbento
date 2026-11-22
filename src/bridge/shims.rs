@@ -19,7 +19,7 @@ fn prelude() -> String {
 n=${{0##*/}}
 post() {{
   command -v curl >/dev/null 2>&1 &&
-    curl -sf -m 10 --unix-socket {GUEST_SOCKET} -X POST --data-binary @- "http://bridge/$1" >/dev/null 2>&1
+    curl -sf -m 10 --unix-socket {GUEST_SOCKET} -X POST -H 'Expect:' --data-binary @- "http://bridge/$1" >/dev/null 2>&1
 }}
 bad() {{ echo "$n: unsupported option $1" >&2; exit 1; }}
 need() {{ [ "$1" -gt 1 ] || {{ echo "$n: option requires an argument" >&2; exit 1; }}; }}
@@ -248,6 +248,8 @@ mod tests {
             GUEST_SOCKET,
             "-X",
             "POST",
+            "-H",
+            "Expect:",
             "--data-binary",
             "@-",
         ]

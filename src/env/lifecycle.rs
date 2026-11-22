@@ -178,7 +178,8 @@ pub fn parse_timeout(text: &str) -> Result<Duration> {
         total += number * seconds;
         rest = &rest[end..];
     }
-    Ok(Duration::from_secs_f64(total))
+    Duration::try_from_secs_f64(total)
+        .map_err(|_| anyhow::anyhow!("duration \"{text}\" is too long"))
 }
 
 /// One command through `sh -c`, its output written as it arrives. The error says how it failed.
@@ -262,7 +263,8 @@ fn watch(
 ) -> Result<()> {
     let (lines, received) = mpsc::channel();
     std::thread::spawn(move || read_lines(output, &lines));
-    let deadline = timeout.map(|t| Instant::now() + t);
+    // A timeout past what `Instant` holds is no deadline at all.
+    let deadline = timeout.and_then(|t| Instant::now().checked_add(t));
     let indent = if terminal { "" } else { "      " };
     let mut output_open = true;
     // The exit status, and when the output must have been let go of.
@@ -533,6 +535,10 @@ mod tests {
             ("5", "missing unit in duration \"5\""),
             ("soon", "invalid duration \"soon\""),
             ("", "invalid duration \"\""),
+            (
+                "99999999999999999999h",
+                "duration \"99999999999999999999h\" is too long",
+            ),
         ] {
             assert_eq!(parse_timeout(bad).unwrap_err().to_string(), why);
         }

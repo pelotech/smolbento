@@ -507,10 +507,16 @@ impl RawFile {
     pub fn restore(&self, s: &str) -> String {
         TOKEN
             .replace_all(s, |c: &regex_lite::Captures| {
-                match c.get(1).and_then(|n| n.as_str().parse::<usize>().ok()) {
-                    Some(n) => format!("${{{{ {} }}}}", self.refs[n].expr),
-                    None => "$${{".to_string(),
-                }
+                let Some(n) = c.get(1) else {
+                    return "$${{".to_string();
+                };
+                // Token-shaped text the file itself holds, not one we made, stays as written.
+                let r = n
+                    .as_str()
+                    .parse::<usize>()
+                    .ok()
+                    .and_then(|n| self.refs.get(n));
+                r.map_or_else(|| c[0].to_string(), |r| format!("${{{{ {} }}}}", r.expr))
             })
             .into_owned()
     }
@@ -791,6 +797,17 @@ mod tests {
     fn expand(yaml: &str, a: &[(&str, &str)]) -> Result<Value> {
         let (_d, f) = load(yaml);
         f.expand(&args(a), Path::new("/proj"))
+    }
+
+    /// A file can hold text shaped like a reference token; restoring it must not index past the
+    /// recorded references.
+    #[test]
+    fn a_literal_token_in_a_file_is_left_as_written() {
+        let d = tempfile::tempdir().unwrap();
+        let path = d.path().join("sbxenv.yaml");
+        std::fs::write(&path, "a: [__sbxenv_ref_7__\n").unwrap();
+        let e = read(&path).err().expect("invalid YAML").to_string();
+        assert!(!e.contains("${{"), "{e}");
     }
 
     #[test]

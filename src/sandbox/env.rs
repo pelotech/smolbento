@@ -40,7 +40,10 @@ pub fn defaults(req: &CreateRequest, id: &str, services: &[String]) -> Vec<(Stri
             "none"
         };
         env.push((
-            format!("SBX_CRED_{}_MODE", svc.to_ascii_uppercase()),
+            format!(
+                "SBX_CRED_{}_MODE",
+                svc.to_ascii_uppercase().replace('-', "_")
+            ),
             mode.into(),
         ));
     }
@@ -135,6 +138,9 @@ mod tests {
         assert_eq!(get(&env, "SBX_CRED_OPENAI_MODE"), Some("none"));
         // A bound secret no kit asks for gets no mode.
         assert_eq!(get(&env, "SBX_CRED_GITHUB_MODE"), None);
+        // A custom service's `-` isn't valid in a shell variable name: it becomes `_`.
+        let env = defaults(&req("tool", &["my-api"]), "ID", &svcs(&["my-api"]));
+        assert_eq!(get(&env, "SBX_CRED_MY_API_MODE"), Some("apikey"));
         // No credential in any kit (sbx 0.53's shell): no modes at all.
         let env = defaults(&req("shell", &["github"]), "ID", &[]);
         assert!(
