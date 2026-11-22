@@ -293,7 +293,7 @@ fn section_script(file: &str, lines: &[String], rules: &str) -> String {
 /// (SPEC agent-context@2/content-untrusted). The text isn't keyed by kit, so a `kit add` rerun
 /// after it failed partway adds that kit's text again.
 pub fn inline_context_script(file: &str, text: &str) -> String {
-    let text = text.replace("<!-- sbx:", "&lt;!-- sbx:");
+    let text = neutralize(text);
     let lines: Vec<String> = text
         .strip_suffix('\n')
         .unwrap_or(&text)
@@ -341,12 +341,20 @@ pub fn kit_context_script(path: &str, bodies: &[&str]) -> String {
     )
 }
 
+/// Kit-supplied text with any section marker written as `&lt;!-- sbx:`, so it can't end the kits
+/// section (SPEC agent-context@1/content-neutralized, @2/content-untrusted).
+fn neutralize(text: &str) -> String {
+    text.replace("<!-- sbx:", "&lt;!-- sbx:")
+}
+
 /// Puts one `- **<kit>** — See <path>.` line per entry in the kits index (`agent-context@1`),
 /// the kits section of `file`; a kit's old lines are replaced.
 pub fn kits_index_script(file: &str, entries: &[(String, String)]) -> String {
+    // A kit's name and `contentFile` are kit-supplied: one line each, no markers of their own.
+    let one_line = |s: &str| neutralize(s).replace(['\n', '\r'], " ");
     let lines: Vec<String> = entries
         .iter()
-        .map(|(kit, path)| format!("- **{kit}** — See {path}."))
+        .map(|(kit, path)| format!("- **{}** — See {}.", one_line(kit), one_line(path)))
         .collect();
     section_script(
         file,
