@@ -823,6 +823,12 @@ fn set_hands_a_running_sandbox_the_new_value_now() {
     t.sbt(&["secret", "set", "mcp:linear:key", "-t", "mcp-tok"])
         .unwrap();
     t.runner().ok(&["machine", "credentials", "refresh"], "");
+    // c3 booted with no bindings: smolvm refuses its probe.
+    t.runner().fail(
+        &["machine", "credentials", "refresh", "-n", "sbx-c3"],
+        "INVALID_STATE",
+        "booted without credential bindings",
+    );
     t.sbt(&["secret", "set", "github", "-t", "tok-2"]).unwrap();
     let out = t.stdout();
     assert!(out.contains("Applied to a1 now\n"), "{out}");
@@ -833,9 +839,12 @@ fn set_hands_a_running_sandbox_the_new_value_now() {
     let calls = t.calls_of("machine credentials refresh");
     assert_eq!(
         calls,
-        ["machine credentials refresh -n sbx-a1 gh_token github_token"]
+        [
+            "machine credentials refresh -n sbx-a1 gh_token github_token",
+            "machine credentials refresh -n sbx-c3 gh_token github_token",
+        ]
     );
-    assert!(!calls[0].contains("tok-2"));
+    assert!(!calls.iter().any(|l| l.contains("tok-2")));
     let env = t.runner().envs().pop().unwrap();
     assert_eq!(
         env,
@@ -1055,7 +1064,10 @@ fn assert_bound_xtok(t: &TestEnv, sb: &str, labels: [&str; 3]) {
     );
     assert_eq!(
         t.calls_of(&format!("machine update -n {m} --label")),
-        labels.map(|l| format!("machine update -n {m} --label {l}"))
+        [format!(
+            "machine update -n {m} --label {}",
+            labels.join(" --label ")
+        )]
     );
     assert!(!t.calls().iter().any(|l| l.contains("x-secret")));
 }
@@ -1085,6 +1097,11 @@ fn set_binds_a_new_service_to_a_running_sandbox() {
     set_xtok(&mut t).unwrap();
     assert_bound_xtok(&t, "a", XTOK_ON_ANTHROPIC);
     assert_network_pushed_first(&t, "a");
+    // The probe: a refresh succeeds only on a machine that takes bindings live.
+    assert_eq!(
+        t.calls_of("machine credentials refresh"),
+        ["machine credentials refresh -n sbx-a xtok"]
+    );
     let out = t.stdout();
     assert!(out.contains("Applied to a now\n"), "{out}");
     assert!(!out.contains("recreate"), "{out}");
@@ -1097,6 +1114,7 @@ fn set_binds_a_new_service_to_a_stopped_sandbox() {
     set_xtok(&mut t).unwrap();
     assert_bound_xtok(&t, "a", XTOK_ON_ANTHROPIC);
     assert_network_pushed_first(&t, "a");
+    assert!(!t.made("machine credentials refresh"));
     let out = t.stdout();
     assert!(out.contains("Applies to a on their next start\n"), "{out}");
 }
@@ -1106,6 +1124,7 @@ fn set_binds_a_new_service_to_a_stopped_sandbox() {
 fn a_running_sandbox_booted_without_bindings_gets_it_next_start() {
     let mut t = test_env(&[]);
     t.sandboxes(&[("a", "running", &[])]);
+    no_live_bindings(&t);
     set_xtok(&mut t).unwrap();
     assert_bound_xtok(
         &t,
@@ -1318,4 +1337,101 @@ fn rm_all_revokes_every_removed_service() {
         t.stdout()
             .ends_with("Running sandboxes a no longer send it\n")
     );
+}
+
+/// smolvm refuses a refresh on a machine that booted with no bindings: it has nothing to take
+/// values live through until its next start.
+fn no_live_bindings(t: &TestEnv) {
+    t.runner().fail(
+        &["machine", "credentials", "refresh"],
+        "INVALID_STATE",
+        "booted without credential bindings",
+    );
+}
+
+/// Its labels list a binding added after it booted with none: a later set still waits for the
+/// next start, which the refresh probe (not the labels) tells.
+#[test]
+fn a_second_set_on_a_sandbox_booted_without_bindings_waits_for_its_next_start() {
+    let mut t = test_env(&[]);
+    t.sbt(&["secret", "set", "github", "-t", "gh"]).unwrap();
+    let later: &[(&str, &str)] = &[
+        ("sbx.secrets", "github"),
+        ("sbx.credential-env", "GH_TOKEN,GITHUB_TOKEN"),
+    ];
+    t.sandboxes(&[("a", "running", later)]);
+    no_live_bindings(&t);
+    set_xtok(&mut t).unwrap();
+    assert!(t.made("machine credentials add -n sbx-a"));
+    let out = t.stdout();
+    assert!(out.contains("Applies to a on their next start\n"), "{out}");
+    assert!(!out.contains("now"), "{out}");
+}
+
+/// A value that can't be read binds nothing, and says which sandboxes still lack it.
+#[test]
+fn an_unreadable_value_names_the_sandboxes_left_without_it() {
+    let mut t = test_env(&[]);
+    t.sandboxes(&[("a", "running", ANTHROPIC), ("b", "stopped", ANTHROPIC)]);
+    t.sbt(&[
+        "secret",
+        "set-custom",
+        "--host",
+        "x.example",
+        "--env",
+        "XTOK",
+        "--command",
+        "exit 3",
+    ])
+    .unwrap();
+    assert!(!t.made("machine credentials add"));
+    let out = t.stdout();
+    assert!(
+        out.contains(
+            "a, b don't have it yet; run `bento secret set xtok` again once it can be read\n"
+        ),
+        "{out}"
+    );
+}
+
+/// The secret is saved before the binds: a policy that can't be read skips them, not the set.
+#[test]
+fn an_unreadable_policy_skips_the_binds() {
+    let mut t = test_env(&[]);
+    t.sandboxes(&[("a", "running", ANTHROPIC)]);
+    std::fs::write(t.ctx.paths.policy_file(), "not = [toml").unwrap();
+    set_xtok(&mut t).unwrap();
+    assert!(!t.made("machine credentials add"));
+    assert!(
+        SecretsFile::load(&t.ctx.paths)
+            .unwrap()
+            .scoped_entry(None, "xtok")
+            .is_some()
+    );
+}
+
+/// A fork created without the service gets its original's value, not the global one.
+#[test]
+fn a_fork_is_bound_with_its_originals_value() {
+    let mut t = test_env(&[]);
+    t.sbt(&["secret", "set", "github", "-t", "global-tok"])
+        .unwrap();
+    let fork: &[(&str, &str)] = &[
+        ("sbx.secrets", "anthropic"),
+        ("sbx.credential-env", "ANTHROPIC_API_KEY"),
+        ("sbx.fork-of", "pa"),
+    ];
+    t.sandboxes(&[("fo", "running", fork)]);
+    t.sbt(&["secret", "set", "github", "--sandbox", "pa", "-t", "pa-tok"])
+        .unwrap();
+    assert!(t.made("machine credentials add -n sbx-fo"));
+    let envs = t.runner().envs();
+    assert!(
+        envs.contains(&pairs(&[
+            ("GH_TOKEN", "pa-tok"),
+            ("GITHUB_TOKEN", "pa-tok")
+        ])),
+        "{envs:?}"
+    );
+    assert!(!envs.iter().flatten().any(|(_, v)| v == "global-tok"));
 }

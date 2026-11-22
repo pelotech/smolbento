@@ -8,7 +8,7 @@ pub(crate) fn fork_round_trip() {
     let ws = ws.to_str().unwrap();
     e.git_repo();
     e.ok(&["policy", "init", "balanced"]);
-    e.httpbin_secret("TOK");
+    e.own_httpbin_secret("TOK", BASIC_SECRET);
 
     e.create_clone();
 

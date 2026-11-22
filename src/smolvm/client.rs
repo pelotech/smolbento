@@ -421,6 +421,15 @@ impl<R: Runner> Smolvm<R> {
         Ok(())
     }
 
+    /// Sets several labels in one update, so they change together; running or stopped.
+    pub fn set_labels(&self, name: &str, labels: &[(&str, String)]) -> Result<()> {
+        let mut a = args(&["machine", "update", "-n", name]);
+        for (k, v) in labels {
+            flag(&mut a, "--label", format!("{k}={v}"));
+        }
+        self.call(a).map(drop)
+    }
+
     pub fn publish(&self, name: &str, ports: &[PortMap]) -> Result<()> {
         self.update_ports(name, "-p", ports)
     }
@@ -756,6 +765,17 @@ mod tests {
         );
         assert!(!line.contains("secret-"));
         assert_eq!(vm.runner().envs(), [env.to_vec()]);
+    }
+
+    #[test]
+    fn set_labels_updates_them_in_one_call() {
+        let vm = Smolvm::new(FakeRunner::new());
+        vm.set_labels("sbx-x", &[("sbx.a", "1".into()), ("sbx.b", "x,y".into())])
+            .unwrap();
+        assert_eq!(
+            vm.runner().call_lines(),
+            ["machine update -n sbx-x --label sbx.a=1 --label sbx.b=x,y"]
+        );
     }
 
     #[test]
