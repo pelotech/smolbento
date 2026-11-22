@@ -205,7 +205,10 @@ fn start_without_a_mode_asks_on_a_terminal_and_saves_the_choice() {
     set_policy(&t, "");
     t.answer("3\n");
     let _ = start_plan(&t.ctx, &meta("s1", &[], &[]));
-    assert!(t.stdout().ends_with("Choice [2]: "));
+    // A question, as in sbx: on stderr, so stdout stays clean for `--json` and pipes.
+    assert_eq!(t.stdout(), "");
+    assert!(super::POLICY_PROMPT.starts_with("  Choose the network policy for sandboxes\n"));
+    assert!(super::POLICY_PROMPT.ends_with("\n  Choice [1-3, default 2]: "));
     assert_eq!(
         Policy::load(&t.ctx.paths).unwrap().mode,
         Some(Mode::DenyAll)

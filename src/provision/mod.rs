@@ -185,6 +185,13 @@ fn live_sandboxes<R: Runner>(ctx: &Ctx<R>) -> Option<Vec<String>> {
     )
 }
 
+/// sbx 0.54's question when no network policy is chosen yet, word for word.
+pub(crate) const POLICY_PROMPT: &str = "  Choose the network policy for sandboxes
+    1. Open   all network traffic allowed, no restrictions
+    2. Balanced   default deny, with common dev sites allowed
+    3. Locked Down   all network traffic blocked unless you allow it
+  Choice [1-3, default 2]: ";
+
 /// The policy, asking for a network policy the first time one is needed (sbx behaviour).
 pub fn ensure_policy<R: Runner>(ctx: &Ctx<R>) -> Result<Policy> {
     let mut policy = Policy::load(&ctx.paths)?;
@@ -196,19 +203,11 @@ pub fn ensure_policy<R: Runner>(ctx: &Ctx<R>) -> Result<Policy> {
             "no network policy chosen yet; run `bento policy init allow-all|balanced|deny-all` first"
         );
     }
-    let mut out = &ctx.out;
-    writeln!(
-        out,
-        "Choose a network policy for your sandboxes (saved; change it with `bento policy init`):"
-    )?;
-    writeln!(out, "  1) allow-all  open network")?;
-    writeln!(
-        out,
-        "  2) balanced   AI APIs, package registries, code hosts and more (recommended)"
-    )?;
-    writeln!(out, "  3) deny-all   nothing unless you allow it")?;
-    write!(out, "Choice [2]: ")?;
-    out.flush()?;
+    // A question, not command output: stderr, as sbx asks it, so stdout stays clean.
+    let mut err = std::io::stderr().lock();
+    write!(err, "{POLICY_PROMPT}")?;
+    err.flush()?;
+    drop(err);
     let line = ctx.read_line()?;
     policy.mode = Some(match line.trim() {
         "1" | "allow-all" => Mode::AllowAll,
