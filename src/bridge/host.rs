@@ -46,14 +46,14 @@ impl Allowed {
 }
 
 /// Handlers that run the host's browser and clipboard commands, or the env overrides, and relay
-/// login callbacks into the sandbox with the `smolvm` binary. With `linger` a login's relay
-/// outlives the handlers (for a process that serves one connection).
+/// login callbacks into the sandbox with the `smolvm` binary. With `linger` (the sandbox's relay
+/// slot files) a login's relay outlives the handlers, for a process that serves one connection.
 pub fn handlers(
     env: &BTreeMap<String, String>,
     allowed: Allowed,
     smolvm: &crate::smolvm::locate::SmolvmCmd,
     sb: &Sandbox,
-    linger: bool,
+    linger: Option<Vec<std::path::PathBuf>>,
 ) -> Handlers {
     let open_cmd = env.get(OPEN_CMD).cloned();
     let copy_cmd = env.get(COPY_CMD).cloned();
@@ -77,14 +77,17 @@ fn relay(
     smolvm: &crate::smolvm::locate::SmolvmCmd,
     machine: &str,
     user: &str,
-    linger: bool,
+    linger: Option<Vec<std::path::PathBuf>>,
 ) -> Relay {
     let runner = ProcessRunner::for_cmd(smolvm);
     let exec = Box::new(move |args: &[String]| {
         runner.run_bounded(args, relay::REPLAY_TIMEOUT, relay::MAX_REPLAY)
     });
     let relays = Relays::new(exec, machine, user);
-    let relays = Mutex::new(if linger { relays.lingering() } else { relays });
+    let relays = Mutex::new(match linger {
+        Some(slots) => relays.lingering(slots),
+        None => relays,
+    });
     Box::new(move |port| {
         if let Some(warning) = relays.lock().ok().and_then(|mut r| r.start(port)) {
             eprintln!("{warning}");
@@ -108,7 +111,7 @@ pub fn attach(
         crate::warning!("not opening URLs or copying from the sandbox: {e:#}");
         Allowed::default()
     });
-    let h = handlers(env, allowed, smolvm, sb, false);
+    let h = handlers(env, allowed, smolvm, sb, None);
     http::serve(&super::host_socket(sb.name()), h).unwrap_or_else(|e| {
         crate::warning!("{}: no browser and clipboard bridge: {e:#}", sb.name());
         None
@@ -265,7 +268,7 @@ mod tests {
             managed: false,
             home: "/nonexistent".into(),
         };
-        handlers(&env(vars), allowed, &smolvm, &sb, false)
+        handlers(&env(vars), allowed, &smolvm, &sb, None)
     }
 
     #[test]

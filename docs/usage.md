@@ -302,8 +302,10 @@ git diff | wl-copy
   failed to write host clipboard (copying may be off: …)`.
 - Browser logins work. For a `redirect_uri` of `http://localhost:PORT/…` or
   `http://127.0.0.1:PORT/…`, smolbento listens on your `127.0.0.1:PORT` for 10 minutes (the
-  connection's process stays that long) and relays the callback. If something else answers that port, it warns and still
-  opens the URL. A session relays at most 4 ports. A callback with a body
+  connection's process stays that long) and relays the callback. If something else answers that
+  port, it warns and still opens the URL. A session relays at most 4 ports, and a sandbox's
+  sessions keep at most 4 such processes alive. On Linux `bento rm` stops them with the
+  sandbox's units. A callback with a body
   (`response_mode=form_post`) loses it; query-string redirects work.
 - Over SSH without a forwarded display (Linux: no `DISPLAY` or `WAYLAND_DISPLAY`; macOS: always over
   SSH), URLs are printed instead.

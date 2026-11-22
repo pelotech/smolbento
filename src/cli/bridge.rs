@@ -26,7 +26,7 @@ fn serve<R: Runner>(ctx: &Ctx<R>, name: &str) -> Result<Server> {
         bridge::Allowed::from_settings(&ctx.settings)?,
         &ctx.smolvm,
         &sb,
-        false,
+        None,
     );
     bridge::serve(&bridge::host_socket(sb.name()), handlers)?
         .with_context(|| format!("another session already serves sandbox '{name}'s bridge"))
