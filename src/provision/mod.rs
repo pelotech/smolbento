@@ -157,12 +157,29 @@ pub fn refresh_services<R: Runner>(ctx: &Ctx<R>, sb: &Sandbox) {
 /// which gives no hook). Called by commands that change state; names are returned.
 pub fn sweep_orphans<R: Runner>(ctx: &Ctx<R>) -> Vec<String> {
     let gone = orphan_services(ctx);
-    for name in &gone {
+    remove_services(ctx, &gone);
+    gone
+}
+
+/// `sweep_orphans` for a caller that just listed the sandboxes: no second `machine ls`.
+pub fn sweep_orphans_among<R: Runner>(ctx: &Ctx<R>, all: &[Sandbox]) -> Vec<String> {
+    let gone = orphans_among(ctx, all);
+    remove_services(ctx, &gone);
+    gone
+}
+
+fn remove_services<R: Runner>(ctx: &Ctx<R>, names: &[String]) {
+    for name in names {
         if let Err(e) = ctx.services.remove(name) {
             crate::warning!("removing the leftover host services of {name}: {e:#}");
         }
     }
-    gone
+}
+
+/// `orphan_services`, given the sandboxes smolvm has.
+pub fn orphans_among<R: Runner>(ctx: &Ctx<R>, all: &[Sandbox]) -> Vec<String> {
+    let live: Vec<String> = all.iter().map(|sb| sb.name().to_string()).collect();
+    ctx.services.orphans(&live)
 }
 
 /// Sandbox names with units here and no machine in smolvm: `sweep_orphans` without removing.
@@ -776,11 +793,20 @@ fn drop_install_rules<R: Runner>(
 /// Pushes the policy (as just saved) to running sandboxes. Failures are warnings: the policy
 /// applies on each sandbox's next start anyway.
 pub fn push_network<R: Runner>(ctx: &Ctx<R>, policy: &Policy) -> Result<()> {
+    push_network_with(ctx, policy, &sandbox::Listing::new(&ctx.vm))
+}
+
+/// `push_network` for a caller that already listed (or will list) the sandboxes.
+pub fn push_network_with<R: Runner>(
+    ctx: &Ctx<R>,
+    policy: &Policy,
+    sandboxes: &sandbox::Listing<R>,
+) -> Result<()> {
     // Before the first download there is no smolvm to ask, and no sandbox to update.
     if ctx.smolvm.managed && !ctx.smolvm.bin.is_file() {
         return Ok(());
     }
-    let sandboxes = match sandbox::list(&ctx.vm) {
+    let sandboxes = match sandboxes.get() {
         Ok(s) => s,
         Err(e) => {
             crate::warning!(

@@ -83,7 +83,10 @@ fn create_installs_the_units_before_the_first_start_and_mounts_their_sockets() {
         "{line}"
     );
     assert!(line.contains("--label sbx.service=true"), "{line}");
-    assert_eq!(ctl.calls(), ["load dev.smolbento.ns1.claude-proj.bridge"]);
+    assert_eq!(
+        ctl.calls(),
+        ["refresh", "load dev.smolbento.ns1.claude-proj.bridge"]
+    );
     assert!(
         unit_dir
             .join("dev.smolbento.ns1.claude-proj.bridge.plist")
@@ -207,9 +210,9 @@ fn start_rewrites_a_stale_unit_and_only_a_stale_one() {
     t.runner()
         .ok(&["machine", "ls", "--json"], &ls_json(&["box"]));
     install(&t, "box", &[Kind::Bridge]);
-    assert_eq!(ctl.calls().len(), 1);
+    assert_eq!(ctl.calls().len(), 2);
     t.sbt(&["start", "box"]).unwrap();
-    assert_eq!(ctl.calls().len(), 1, "unchanged: not reloaded");
+    assert_eq!(ctl.calls().len(), 2, "unchanged: not reloaded");
     let file = unit_dir.join("dev.smolbento.ns1.box.bridge.plist");
     std::fs::write(&file, "stale").unwrap();
     t.sandbox(
@@ -218,7 +221,7 @@ fn start_rewrites_a_stale_unit_and_only_a_stale_one() {
         &[("sbx.service", "true"), ("sbx.bridge", "true")],
     );
     t.sbt(&["start", "box"]).unwrap();
-    assert_eq!(ctl.calls().len(), 2);
+    assert_eq!(ctl.calls().len(), 4);
     assert!(std::fs::read_to_string(&file).unwrap().contains("_serve"));
 }
 

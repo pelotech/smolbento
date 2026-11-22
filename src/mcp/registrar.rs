@@ -25,7 +25,10 @@ fn claude(name: &str, server: &Server) -> String {
         Server::Remote { url, headers } => {
             // Claude Code's SSE transport is for servers that still serve the older protocol,
             // by convention at a path ending in /sse.
-            let path = url.split(['?', '#']).next().unwrap_or(url);
+            let path = reqwest::Url::parse(url).map_or_else(
+                |_| url.split(['?', '#']).next().unwrap_or(url).to_string(),
+                |u| u.path().to_string(),
+            );
             let transport = if path.trim_end_matches('/').ends_with("/sse") {
                 "sse"
             } else {

@@ -156,6 +156,26 @@ pub fn not_found(name: &str) -> anyhow::Error {
     anyhow::anyhow!("sandbox '{name}' not found\n  try: bento ls")
 }
 
+/// `list`, run on first use and kept: a command that needs the list several times asks smolvm
+/// once. Only for steps with nothing in between that changes the sandboxes.
+pub struct Listing<'a, R: Runner> {
+    vm: &'a Smolvm<R>,
+    cell: std::cell::OnceCell<Result<Vec<Sandbox>>>,
+}
+
+impl<'a, R: Runner> Listing<'a, R> {
+    pub fn new(vm: &'a Smolvm<R>) -> Self {
+        Self {
+            vm,
+            cell: std::cell::OnceCell::new(),
+        }
+    }
+
+    pub fn get(&self) -> Result<&[Sandbox], &anyhow::Error> {
+        self.cell.get_or_init(|| list(self.vm)).as_deref()
+    }
+}
+
 /// All sandboxes, sorted by name; running ones include their published ports.
 pub fn list<R: Runner>(vm: &Smolvm<R>) -> Result<Vec<Sandbox>> {
     let mut out = Vec::new();

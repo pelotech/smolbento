@@ -58,6 +58,31 @@ fn allow_and_rm_push_live() {
 }
 
 #[test]
+fn a_rule_change_lists_the_sandboxes_once() {
+    let mut t = test_env(&[]);
+    set_policy(&t, "mode = \"deny-all\"");
+    t.sandboxes(&[("a1", "running", &[])]);
+    for args in [
+        &["policy", "deny", "network", "localhost"][..],
+        &["policy", "allow", "network", "localhost"],
+        &["policy", "rm", "network", "--resource", "localhost"],
+    ] {
+        let before = t
+            .calls()
+            .iter()
+            .filter(|l| *l == "machine ls --json")
+            .count();
+        t.sbt(args).unwrap();
+        let after = t
+            .calls()
+            .iter()
+            .filter(|l| *l == "machine ls --json")
+            .count();
+        assert_eq!(after - before, 1, "{args:?}");
+    }
+}
+
+#[test]
 fn deny_refuses_a_bound_secret_host() {
     let mut t = test_env(&[]);
     t.sandboxes(&[(
@@ -795,7 +820,14 @@ fn approval_respond_option_allow_gives_the_notes_policy_allow_gives() {
     // The same sandbox twice: each note once.
     let waiting = [&rows[0], &rows[0]];
     assert_eq!(
-        approval_notes(&t.ctx, &before, &after, &waiting, "localhost").unwrap(),
+        approval_notes(
+            &sandbox::Listing::new(&t.ctx.vm),
+            &before,
+            &after,
+            &waiting,
+            "localhost"
+        )
+        .unwrap(),
         [
             "warning: smolvm can't open a single host port yet; this opens every port on your \
              host's localhost to sandbox a1",
@@ -804,9 +836,15 @@ fn approval_respond_option_allow_gives_the_notes_policy_allow_gives() {
     );
     // Another host has none.
     assert!(
-        approval_notes(&t.ctx, &before, &before, &waiting, "example.com")
-            .unwrap()
-            .is_empty()
+        approval_notes(
+            &sandbox::Listing::new(&t.ctx.vm),
+            &before,
+            &before,
+            &waiting,
+            "example.com"
+        )
+        .unwrap()
+        .is_empty()
     );
     t.sbt(&[
         "policy",
