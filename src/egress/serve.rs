@@ -6,7 +6,7 @@ use crate::sandbox;
 use crate::secrets::{SecretsFile, resolve::start_env};
 use crate::smolvm::{Credential, Runner};
 use anyhow::{Result, bail};
-use egress_front::{InterceptorConfig, StaticResolver, activated_listener, serve};
+use egress_front::{Decision, InterceptorConfig, StaticResolver, activated_listener, serve};
 use std::sync::Arc;
 
 /// Serves the unit's activated listener until the process is stopped.
@@ -38,7 +38,9 @@ pub fn run<R: Runner>(ctx: &Ctx<R>, name: &str) -> Result<()> {
         extra_cas: vec![],
         upstream_roots_pem: vec![],
     };
-    serve(listener, token, config, Arc::new(resolver(pairs)))
+    // Task 3 replaces this
+    let decide = Arc::new(|_: &egress_front::Flow| Decision::Allow);
+    serve(listener, token, config, Arc::new(resolver(pairs)), decide)
 }
 
 /// Values keyed by binding name; a variable with no value stays absent, so its requests fail.

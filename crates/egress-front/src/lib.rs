@@ -7,8 +7,11 @@ pub use smolvm_credentials::{
 pub use smolvm_protocol::credentials::host_subtree;
 
 mod listener;
+mod name;
 mod relay;
 mod serve;
 
 pub use listener::activated_listener;
+pub use name::flow_name;
+pub use relay::{Decide, Decision, Flow};
 pub use serve::serve;

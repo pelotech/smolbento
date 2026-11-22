@@ -6,10 +6,18 @@ interceptor, which substitutes credentials. It is the only crate that depends on
 `smolvm-credentials` and `smolvm-protocol` (git dependencies at a fork `rev`, see `Cargo.toml`), and
 it re-exports what its users need.
 
+Each flow is decided by the caller's `Decide` hook twice: from smolvm's preamble (destination address
+and port, no name), and again from the first bytes the machine sends, with the name they ask for
+(`flow_name`: TLS SNI, else an HTTP request's `Host:`). The first-bytes read ends at a whole
+ClientHello, the end of the HTTP headers, 16 KiB, or 200 ms with nothing more, so a flow whose server
+speaks first (SSH) is decided without a name. A destination deny answers `ECONNREFUSED`; a name deny
+closes the flow and sends the interceptor nothing. An allowed flow to smolvm's gateway (`100.96.0.1`)
+is dialled as `127.0.0.1`.
+
 It is written to be lifted into smolvm, so it names nothing of its users. Each piece has an upstream home:
 
 | Piece | Upstream home |
 |---|---|
 | relay | a "spawn on a given listener" interceptor constructor in `smolvm-credentials` |
-| egress rules (planned) | `smolvm-network` egress checks |
+| flow decisions (`Decide`, `flow_name`) | `smolvm-network` egress checks |
 | request matcher (planned) | `smolvm-protocol` |
