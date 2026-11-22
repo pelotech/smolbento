@@ -8,8 +8,9 @@ use super::{
     Ctx, SecretCmd, SecretLsArgs, SecretRmArgs, SecretSetArgs, SecretSource, Unsupported, confirm,
     table,
 };
-use crate::policy::Policy;
-use crate::sandbox::{self, name};
+use crate::policy::{Policy, compile};
+use crate::provision;
+use crate::sandbox::{self, labels, name};
 use crate::secrets::resolve::{bound_vars, resolve, with_value};
 use crate::secrets::services::Service;
 use crate::secrets::{
@@ -316,8 +317,8 @@ fn restore<R: Runner>(ctx: &Ctx<R>, account: &str, previous: Option<&str>) {
     };
 }
 
-/// Which sandboxes have the new value now, which get it on their next start, and which would need
-/// recreating. A running sandbox bound to the service is handed the value at once.
+/// Which sandboxes have the new value now and which get it on their next start. A running sandbox
+/// bound to the service is handed the value at once; one in scope without it gets it bound.
 fn explain_impact<R: Runner>(
     ctx: &Ctx<R>,
     file: &SecretsFile,
@@ -327,22 +328,24 @@ fn explain_impact<R: Runner>(
     let Ok(sandboxes) = sandbox::list(&ctx.vm) else {
         return Ok(());
     };
+    let svc = file.service(service);
     // The sandboxes that use this entry: a sandbox's own secret wins over its original's (for a
-    // fork), which wins over the global one.
+    // fork), which wins over the global one. Internal ones (`_builder`) never get a secret.
     let own = scope_for(scope);
     let (bound, unbound): (Vec<_>, Vec<_>) = sandboxes
         .iter()
+        .filter(|s| !name::is_internal(s.name()))
         .filter(|s| {
             file.entry_for(s.name(), s.meta.fork_of.as_deref(), service)
                 .is_some_and(|e| e.scope == own)
         })
-        .partition(|s| s.meta.rec.secrets.iter().any(|x| x == service));
-    // Read once for every running sandbox: a --ref or --command source may prompt, or be slow.
+        .partition(|s| is_bound(s, svc.as_ref(), service));
+    // Read once for every sandbox: a --ref or --command source may prompt, or be slow.
     let new = match (
-        bound.iter().any(|s| s.is_running()),
+        bound.iter().any(|s| s.is_running()) || !unbound.is_empty(),
         file.scoped_entry(scope, service),
     ) {
-        (true, Some(entry)) => match (file.service(service), resolve(entry, ctx.store.as_ref())) {
+        (true, Some(entry)) => match (svc, resolve(entry, ctx.store.as_ref())) {
             (Some(svc), Ok(value)) => Some((svc, value)),
             (_, Err(e)) => {
                 crate::warning!(
@@ -366,6 +369,19 @@ fn explain_impact<R: Runner>(
             later.push(s);
         }
     }
+    if let Some((_, value)) = &new {
+        let policy = Policy::load(&ctx.paths)?;
+        for s in unbound {
+            match bind(ctx, file, &policy, s, service, value) {
+                // smolvm takes a binding live only on a machine that booted with some.
+                Ok(()) if s.is_running() && !s.meta.rec.credential_env.is_empty() => now.push(s),
+                Ok(()) => later.push(s),
+                Err(e) => {
+                    crate::warning!("{}: couldn't give it the {service} secret: {e:#}", s.name())
+                }
+            }
+        }
+    }
     let names = |v: &[&sandbox::Sandbox]| v.iter().map(|s| s.name()).collect::<Vec<_>>().join(", ");
     if !now.is_empty() {
         writeln!(&ctx.out, "Applied to {} now", names(&now))?;
@@ -373,12 +389,61 @@ fn explain_impact<R: Runner>(
     if !later.is_empty() {
         writeln!(&ctx.out, "Applies to {} on their next start", names(&later))?;
     }
-    if !unbound.is_empty() {
-        writeln!(
-            &ctx.out,
-            "{} were created without it; recreate them to use it (new sandboxes get it)",
-            names(&unbound)
-        )?;
+    Ok(())
+}
+
+/// Whether `sb` has service `name`: created with it, or a kit binds one of its variables.
+fn is_bound(sb: &sandbox::Sandbox, service: Option<&Service>, name: &str) -> bool {
+    sb.meta.rec.secrets.iter().any(|x| x == name)
+        || service.is_some_and(|svc| {
+            bound_vars(svc, &sb.meta, name, true)
+                .iter()
+                .any(|v| sb.meta.rec.credential_env.contains(v))
+        })
+}
+
+/// Binds service `name` to `sb`, which was created without it, as create would have: its
+/// credentials (`value` in smolvm's env only), its labels, and on a running sandbox its network.
+fn bind<R: Runner>(
+    ctx: &Ctx<R>,
+    file: &SecretsFile,
+    policy: &Policy,
+    sb: &sandbox::Sandbox,
+    name: &str,
+    value: &str,
+) -> Result<()> {
+    let services = [name.to_string()];
+    let creds = provision::credentials(file, &services)?;
+    if !creds.is_empty() {
+        let vars = creds.iter().map(|c| &c.env_var).collect();
+        ctx.vm
+            .add_credentials(&sb.machine, &creds, &with_value(&sb.meta, vars, value))?;
+    }
+    let rec = &sb.meta.rec;
+    let merged = |old: &[String], new: Vec<String>| {
+        let mut all: Vec<String> = old.iter().cloned().chain(new).collect();
+        all.sort();
+        all.dedup();
+        all
+    };
+    let hosts = merged(
+        &rec.credential_hosts,
+        provision::credential_hosts(file, &services),
+    );
+    let env = merged(
+        &rec.credential_env,
+        creds.into_iter().map(|c| c.env_var).collect(),
+    );
+    for (key, list) in [
+        (labels::SECRETS, merged(&rec.secrets, services.to_vec())),
+        (labels::CREDENTIAL_ENV, env),
+        (labels::CREDENTIAL_HOSTS, hosts.clone()),
+    ] {
+        ctx.vm.set_label(&sb.machine, key, &list.join(","))?;
+    }
+    if sb.is_running() {
+        let network = compile::network(policy, sb.name(), &hosts, rec.host_access);
+        ctx.vm.update_network(&sb.machine, &network)?;
     }
     Ok(())
 }

@@ -826,8 +826,10 @@ fn set_hands_a_running_sandbox_the_new_value_now() {
     t.sbt(&["secret", "set", "github", "-t", "tok-2"]).unwrap();
     let out = t.stdout();
     assert!(out.contains("Applied to a1 now\n"), "{out}");
-    assert!(out.contains("Applies to b2 on their next start\n"), "{out}");
-    assert!(out.contains("c3 were created without it"), "{out}");
+    assert!(
+        out.contains("Applies to b2, c3 on their next start\n"),
+        "{out}"
+    );
     let calls = t.calls_of("machine credentials refresh");
     assert_eq!(
         calls,
@@ -856,7 +858,7 @@ fn a_failed_refresh_leaves_the_value_for_the_next_start() {
     t.sbt(&["secret", "set", "github", "-t", "tok-2"]).unwrap();
     let out = t.stdout();
     assert!(
-        out.contains("Applies to a1, b2 on their next start\n"),
+        out.contains("Applies to a1, b2, c3 on their next start\n"),
         "{out}"
     );
     assert!(!out.contains("now"), "{out}");
@@ -1014,4 +1016,156 @@ fn a_failed_store_write_keeps_the_previous_registry_login() {
     assert!(set_registry_from(&mut t, "ghcr.io", Some("me"), "new\n").is_err());
     let values = store.values.borrow();
     assert_eq!(values.values().collect::<Vec<_>>(), ["old"], "{values:?}");
+}
+
+/// Bound to anthropic only: `credentials add` gives it a new service.
+const ANTHROPIC: &[(&str, &str)] = &[
+    ("sbx.secrets", "anthropic"),
+    ("sbx.credential-env", "ANTHROPIC_API_KEY"),
+    ("sbx.credential-hosts", "api.anthropic.com"),
+];
+
+/// Defines and sets the custom `xtok` service (XTOK, for x.example) to `x-secret`.
+fn set_xtok(t: &mut TestEnv) -> Result<i32> {
+    t.sbt(&[
+        "secret",
+        "set-custom",
+        "--host",
+        "x.example",
+        "--env",
+        "XTOK",
+        "-t",
+        "x-secret",
+    ])
+}
+
+/// `sb` got xtok's binding (its value only in smolvm's env) and labels listing it.
+fn assert_bound_xtok(t: &TestEnv, sb: &str, labels: [&str; 3]) {
+    let m = format!("sbx-{sb}");
+    assert_eq!(
+        t.calls_of(&format!("machine credentials add -n {m} ")),
+        [format!(
+            "machine credentials add -n {m} --credential xtok=XTOK@x.example"
+        )]
+    );
+    assert!(
+        t.runner()
+            .envs()
+            .contains(&vec![("XTOK".to_string(), "x-secret".to_string())])
+    );
+    assert_eq!(
+        t.calls_of(&format!("machine update -n {m} --label")),
+        labels.map(|l| format!("machine update -n {m} --label {l}"))
+    );
+    assert!(!t.calls().iter().any(|l| l.contains("x-secret")));
+}
+
+/// A network update, not a label one.
+fn network_pushed(t: &TestEnv, sb: &str) -> bool {
+    t.calls_of(&format!("machine update -n sbx-{sb} "))
+        .iter()
+        .any(|l| !l.contains("--label"))
+}
+
+const XTOK_ON_ANTHROPIC: [&str; 3] = [
+    "sbx.secrets=anthropic,xtok",
+    "sbx.credential-env=ANTHROPIC_API_KEY,XTOK",
+    "sbx.credential-hosts=api.anthropic.com,x.example",
+];
+
+#[test]
+fn set_binds_a_new_service_to_a_running_sandbox() {
+    let mut t = test_env(&[]);
+    t.sandboxes(&[("a", "running", ANTHROPIC)]);
+    set_xtok(&mut t).unwrap();
+    assert_bound_xtok(&t, "a", XTOK_ON_ANTHROPIC);
+    assert!(network_pushed(&t, "a"));
+    let out = t.stdout();
+    assert!(out.contains("Applied to a now\n"), "{out}");
+    assert!(!out.contains("recreate"), "{out}");
+}
+
+#[test]
+fn set_binds_a_new_service_to_a_stopped_sandbox() {
+    let mut t = test_env(&[]);
+    t.sandboxes(&[("a", "stopped", ANTHROPIC)]);
+    set_xtok(&mut t).unwrap();
+    assert_bound_xtok(&t, "a", XTOK_ON_ANTHROPIC);
+    assert!(!network_pushed(&t, "a"));
+    let out = t.stdout();
+    assert!(out.contains("Applies to a on their next start\n"), "{out}");
+}
+
+/// smolvm records a binding on a machine that booted with none, but uses it from its next start.
+#[test]
+fn a_running_sandbox_booted_without_bindings_gets_it_next_start() {
+    let mut t = test_env(&[]);
+    t.sandboxes(&[("a", "running", &[])]);
+    set_xtok(&mut t).unwrap();
+    assert_bound_xtok(
+        &t,
+        "a",
+        [
+            "sbx.secrets=xtok",
+            "sbx.credential-env=XTOK",
+            "sbx.credential-hosts=x.example",
+        ],
+    );
+    let out = t.stdout();
+    assert!(out.contains("Applies to a on their next start\n"), "{out}");
+    assert!(!out.contains("now"), "{out}");
+}
+
+#[test]
+fn internal_sandboxes_get_no_secret() {
+    let mut t = test_env(&[]);
+    t.sandboxes(&[("_builder", "running", &[])]);
+    set_xtok(&mut t).unwrap();
+    assert!(!t.made("machine credentials"));
+    assert!(!t.made("machine update"));
+    assert!(!t.stdout().contains("_builder"));
+}
+
+#[test]
+fn a_failed_add_warns_and_binds_the_others() {
+    let mut t = test_env(&[]);
+    t.sandboxes(&[("a", "running", ANTHROPIC), ("b", "running", ANTHROPIC)]);
+    t.runner().fail(
+        &["machine", "credentials", "add", "-n", "sbx-a"],
+        "INVALID_STATE",
+        "boom",
+    );
+    set_xtok(&mut t).unwrap();
+    assert!(!t.made("machine update -n sbx-a"));
+    assert_bound_xtok(&t, "b", XTOK_ON_ANTHROPIC);
+    let out = t.stdout();
+    assert!(out.contains("Applied to b now\n"), "{out}");
+    assert!(!out.contains("a now") && !out.contains("to a "), "{out}");
+    let f = SecretsFile::load(&t.ctx.paths).unwrap();
+    assert!(f.scoped_entry(None, "xtok").is_some());
+}
+
+/// A kit already binds one of the service's variables (`sbx.credential-service.*`): it's bound,
+/// so a set refreshes it rather than binding it again.
+#[test]
+fn a_service_a_kit_already_binds_is_not_added_again() {
+    let mut t = test_env(&[]);
+    running(
+        &t,
+        &[(
+            "cl",
+            &[
+                ("sbx.credential-env", "SBX_KIT_ANTHROPIC"),
+                ("sbx.credential-service.SBX_KIT_ANTHROPIC", "anthropic"),
+            ],
+        )],
+    );
+    t.sbt(&["secret", "set", "anthropic", "-t", "sk-2"])
+        .unwrap();
+    assert!(!t.made("machine credentials add"));
+    assert_eq!(
+        t.calls_of("machine credentials refresh"),
+        ["machine credentials refresh -n sbx-cl sbx_kit_anthropic"]
+    );
+    assert!(t.stdout().contains("Applied to cl now\n"));
 }
