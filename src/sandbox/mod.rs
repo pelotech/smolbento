@@ -303,6 +303,7 @@ fn setup<R: Runner>(
     // A kit first start runs them once its startup scripts are written. The engine answers
     // first (`dockerd@1`), and unlike a hook it fails the start.
     if plan.kit.is_none() {
+        close_install_agent_socket(vm, sb);
         engine::start_granted(vm, sb)?;
         if let Err(e) = run_startup(vm, sb, None) {
             eprintln!("{}", startup_failure_warning(vm, sb, &e));
@@ -444,9 +445,35 @@ fn first_start<R: Runner>(
             start(vm, sb, &restart, &mut |_| {})
                 .context("restarting without install-only credentials")?;
         }
+        // After the restart above, which mounts the socket again.
+        close_install_agent_socket(vm, sb);
         Ok(())
     };
     apply_kit_steps(vm, sb, &kit.steps, after_install, on).map_err(|(_, e)| e)
+}
+
+/// Ends an install-only `ssh-agent@1` grant in the guest (`tck: ssh-agent@1/phase-scoped`): smolvm
+/// bind-mounts the agent socket at every start, so once the install hooks are done it's unmounted
+/// and removed, and a connection fails instead of reaching a host that refuses it (the host side
+/// serves no runtime grant either way). Lazily: a connection may still be open. Not fatal: the
+/// host still refuses.
+fn close_install_agent_socket<R: Runner>(vm: &Smolvm<R>, sb: &Sandbox) {
+    if !sb
+        .meta
+        .ssh_agent
+        .as_ref()
+        .is_some_and(|g| g.runtime.is_none())
+    {
+        return;
+    }
+    let s = crate::ssh_agent::GUEST_SOCKET;
+    let cmd = format!("umount -l {s}; rm -f {s}");
+    if let Err(e) = vm.exec_captured(&ExecSpec::sh(&sb.machine, "root", cmd)) {
+        crate::warning!(
+            "{}: couldn't close the install-phase SSH agent socket: {e:#}",
+            sb.name()
+        );
+    }
 }
 
 /// Serves the sandbox's install-phase agent grant, if it has one and install hooks to run.

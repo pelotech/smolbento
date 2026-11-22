@@ -464,3 +464,29 @@ fn an_unanswered_engine_on_a_kit_create_removes_the_sandbox() {
         &format!("machine delete -n {MACHINE} -f")
     );
 }
+
+/// smolvm mounts the agent socket at every start: a later start of a sandbox whose grant was for
+/// the install phase only closes it again (`tck: ssh-agent@1/phase-scoped`).
+#[test]
+fn a_later_start_closes_an_install_only_agent_socket() {
+    let close = "machine exec --name sbx-claude-myrepo -u root -- sh -c umount -l \
+                 /run/ssh-agent.sock; rm -f /run/ssh-agent.sock";
+    for (grant, closed) in [("install", true), ("runtime", false)] {
+        let status = stopped().replace(
+            "\"sbx.docker\"",
+            &format!(
+                "\"sbx.ssh-agent\": \"{{\\\"{grant}\\\":{{\\\"sign\\\":null}}}}\",\n    \"sbx.docker\""
+            ),
+        );
+        let vm = vm_with(&status);
+        let sb = get(&vm, "claude-myrepo").unwrap();
+        assert!(sb.meta.ssh_agent.is_some(), "{grant}");
+        start_checked(&vm, &sb, &plan(), &mut |_| {}, &|_| true).unwrap();
+        let lines = vm.runner().call_lines();
+        assert_eq!(
+            lines.iter().any(|l| l == close),
+            closed,
+            "{grant}: {lines:#?}"
+        );
+    }
+}

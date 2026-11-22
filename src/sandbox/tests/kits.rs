@@ -145,6 +145,55 @@ fn an_install_grant_is_served_only_while_the_install_hooks_run() {
     }
 }
 
+/// An install-only grant ends with the install phase (`tck: ssh-agent@1/phase-scoped`): the guest
+/// socket smolvm mounts is unmounted and removed once the install hooks are done, so a connection to it fails
+/// instead of reaching a host that refuses it. A runtime grant keeps it.
+#[test]
+fn an_install_only_grant_closes_the_guest_socket_after_the_install_hooks() {
+    let close = exec_line(
+        "root",
+        "umount -l /run/ssh-agent.sock; rm -f /run/ssh-agent.sock",
+    );
+    for (grant, closed) in [
+        (r#"{"install":{"sign":null}}"#, true),
+        (
+            r#"{"install":{"sign":null},"runtime":{"sign":null}}"#,
+            false,
+        ),
+    ] {
+        let label = serde_json::to_string(grant).unwrap();
+        let status = STATUS
+            .replace("\"state\": \"running\"", "\"state\": \"created\"")
+            .replace("\"sbx.docker\": \"true\"", "\"sbx.docker\": \"false\"")
+            .replace(
+                "\"sbx.name\": \"claude-myrepo\"",
+                &format!("\"sbx.name\": \"claude-myrepo\", \"sbx.ssh-agent\": {label}"),
+            );
+        let fake = FakeRunner::new();
+        fake.ok(&["machine", "status"], &status);
+        let vm = Smolvm::new(fake);
+        let plan = kit_plan(&[]);
+        create(
+            &vm,
+            &request(),
+            &plan,
+            |_| Ok(plan.network.clone()),
+            &mut |_| {},
+        )
+        .unwrap();
+        let lines = vm.runner().call_lines();
+        if closed {
+            let install = position(&lines, "install 2", |l| {
+                *l == exec_line("agent", "echo install-2")
+            });
+            let closed_at = position(&lines, "close", |l| *l == close);
+            assert!(install < closed_at, "{lines:#?}");
+        } else {
+            assert!(!lines.contains(&close), "{grant}: {lines:#?}");
+        }
+    }
+}
+
 #[test]
 fn create_runs_kit_steps_in_lifecycle_order() {
     let vm = created_vm();

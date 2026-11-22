@@ -362,7 +362,8 @@ ssh-add -D
   allow only those namespaces. A v3 workload kit gets no agent without it. A required grant with no
   agent stops the create (`kit K: com.docker.sandbox/ssh-agent@1 needs an SSH agent, but SSH_AUTH_SOCK is unset`); an
   optional one is left out with a note. An `install` grant is served only during install steps, and
-  a step sees `SSH_AUTH_SOCK` only if it lists it in `env`.
+  a step sees `SSH_AUTH_SOCK` only if it lists it in `env`. Without a `runtime` grant, the guest's
+  `/run/ssh-agent.sock` is removed once the install steps finish, and at every later start.
 - `authenticate: [host | user@host]` (with `unrestricted: false`) allows logins to those servers
   and nothing else. A login is signed only when the same connection first sent a session binding
   (OpenSSH 8.9+ does) that smolbento verified, for that login's session, with a host key your
