@@ -240,12 +240,16 @@ pub const GROUPS: &[(&str, &[&str])] = &[
     ),
 ];
 
-pub fn balanced() -> Vec<Resource> {
+static BALANCED: std::sync::LazyLock<Vec<Resource>> = std::sync::LazyLock::new(|| {
     GROUPS
         .iter()
         .flat_map(|(_, rules)| rules.iter())
         .map(|r| Resource::parse(r).expect("preset rules parse"))
         .collect()
+});
+
+pub fn balanced() -> Vec<Resource> {
+    BALANCED.clone()
 }
 
 /// The preset group that allows `target`, if any.

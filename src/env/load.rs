@@ -150,7 +150,9 @@ fn arg_values(
             }
         }
     }
-    let name_ok = Regex::new(r"^[A-Za-z_][A-Za-z0-9_-]*$").unwrap();
+    static NAME_OK: std::sync::LazyLock<Regex> =
+        std::sync::LazyLock::new(|| Regex::new(r"^[A-Za-z_][A-Za-z0-9_-]*$").unwrap());
+    let name_ok = &*NAME_OK;
     for (name, d) in &decls {
         if !name_ok.is_match(name) {
             bail!("invalid {first}: args[\"{name}\"]: invalid name");
