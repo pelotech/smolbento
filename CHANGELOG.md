@@ -1,5 +1,32 @@
 # Changelog
 
+## [0.35.0](https://github.com/pelotech/smolbento/compare/v0.34.0...v0.35.0) (2026-11-22)
+
+
+### Features
+
+* **secrets:** bind and revoke secrets in existing sandboxes live ([#210](https://github.com/pelotech/smolbento/issues/210)) ([10cdec7](https://github.com/pelotech/smolbento/commit/10cdec77c21d0ec7fcd818031fcc8418aa0e052a))
+
+
+### Bug Fixes
+
+* **env:** drop empty kit entries and refuse blank paths, as sbx does ([#213](https://github.com/pelotech/smolbento/issues/213)) ([d1fdf1f](https://github.com/pelotech/smolbento/commit/d1fdf1f2b6b98636bfe06a9d15dc393b14306246))
+* **kits:** refuse malformed volume, host-mount, resources and credential requests ([#204](https://github.com/pelotech/smolbento/issues/204)) ([a1dbb00](https://github.com/pelotech/smolbento/commit/a1dbb00e9d2a9b9a1c2157c4221c8c7bdf12f4b1))
+* **kits:** run a v3 startup hook without a user as the session user ([#211](https://github.com/pelotech/smolbento/issues/211)) ([0a6b113](https://github.com/pelotech/smolbento/commit/0a6b11329fbd59c0b7897822441c534d08778c82))
+* **kits:** unset hook variables stay unset; agent-context@1 kept and neutralized ([#206](https://github.com/pelotech/smolbento/issues/206)) ([09581f7](https://github.com/pelotech/smolbento/commit/09581f7a5d0b1c95db1444655c81655c1ad1410e))
+* **smolvm:** never signal a pid after its process is reaped ([#207](https://github.com/pelotech/smolbento/issues/207)) ([c2a109f](https://github.com/pelotech/smolbento/commit/c2a109fecc530a2f920055df329ba42a522e7123))
+* **ssh:** a session that stops reading its input can't stall the connection ([#208](https://github.com/pelotech/smolbento/issues/208)) ([2a130b5](https://github.com/pelotech/smolbento/commit/2a130b592a7dd738c729d3517e20de8abc57ad03))
+
+
+### Refactors
+
+* one sandbox listing per command, atomic unit files, cached presets ([#212](https://github.com/pelotech/smolbento/issues/212)) ([eed0213](https://github.com/pelotech/smolbento/commit/eed021325af4aac7719f9d22a29b04d81868cb5f))
+
+
+### Chores
+
+* remove dead code, fix contradictory docs, skip a redundant CI job ([#209](https://github.com/pelotech/smolbento/issues/209)) ([5a05d9a](https://github.com/pelotech/smolbento/commit/5a05d9a4349e454293381d982a98d2573c691c8d))
+
 ## [0.34.0](https://github.com/pelotech/smolbento/compare/v0.33.4...v0.34.0) (2026-11-22)
 
 
