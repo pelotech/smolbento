@@ -23,8 +23,13 @@ pub fn run<R: Runner>(
     name: &str,
     conn: Option<UnixStream>,
 ) -> Result<i32> {
-    let conn = conn.map_or_else(take_connection, Ok)?;
     let kind = Kind::parse(kind).with_context(|| format!("unknown service kind '{kind}'"))?;
+    // Egress has no connection: it serves its activated listener.
+    if kind == Kind::Egress {
+        crate::egress::serve::run(ctx, name)?;
+        return Ok(0);
+    }
+    let conn = conn.map_or_else(take_connection, Ok)?;
     let slots = ctx.services.slot_files(name, kind);
     guarded(conn, &slots, |conn, slot| {
         let sb = sandbox::get(&ctx.vm, name)?;
@@ -35,7 +40,7 @@ pub fn run<R: Runner>(
         match kind {
             Kind::Agent => agent(ctx, &sb, &conn),
             Kind::Bridge => bridge(ctx, &sb, &conn, slot)?,
-            Kind::Egress => bail!("_serve egress isn't implemented yet"),
+            Kind::Egress => unreachable!("served above"),
         }
         Ok(())
     })?;

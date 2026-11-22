@@ -358,6 +358,8 @@ impl HostServices {
         let mut to_load = Vec::new();
         let written = Kind::ALL.map(|kind| {
             if kinds.contains(&kind) {
+                // Only the egress unit owns the port; the others serve one connection each on a socket path.
+                let port = port.filter(|_| kind == Kind::Egress);
                 self.write_units(ctl, name, kind, port, &service_env(paths, env, self.flavor))
                     .map(|unit| to_load.extend(unit))
             } else {
@@ -1063,6 +1065,35 @@ mod tests {
             let n = ctl.calls().len();
             s.restart_egress("s1").unwrap();
             assert_eq!(ctl.calls().len(), n, "no unit, no restart");
+        }
+    }
+
+    #[test]
+    fn only_the_egress_unit_gets_the_port() {
+        let tmp = tempfile::tempdir().unwrap();
+        let (s, _ctl) = services(tmp.path(), Flavor::Launchd, "ns1");
+        s.sync_egress(
+            "s1",
+            &[Kind::Agent, Kind::Bridge, Kind::Egress],
+            Some(47331),
+            &paths("/d"),
+            &envs(&[]),
+        )
+        .unwrap();
+        let read = |k: &str| {
+            std::fs::read_to_string(
+                tmp.path()
+                    .join(format!("units/dev.smolbento.ns1.s1.{k}.plist")),
+            )
+            .unwrap()
+        };
+        assert!(read("egress").contains("47331"));
+        for k in ["agent", "bridge"] {
+            let p = read(k);
+            assert!(
+                !p.contains("47331") && p.contains("inetdCompatibility"),
+                "{k}: {p}"
+            );
         }
     }
 
