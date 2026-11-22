@@ -4,6 +4,7 @@ use std::path::{Path, PathBuf};
 
 use anyhow::{Context, Result, bail};
 use oci_client::Reference;
+use serde::{Deserialize, Serialize};
 use sha2::{Digest, Sha256};
 
 use super::model::{Kit, Source};
@@ -39,8 +40,15 @@ pub fn managed_dir(root: &Path, identity: &str, path: &str) -> PathBuf {
 pub struct HostDir {
     pub host: PathBuf,
     pub guest: String,
-    /// The managed directory's mode; `None` for a `--mount` binding.
-    pub managed_mode: Option<u32>,
+    /// `None` for a `--mount` binding: the user's directory, not one smolbento keeps.
+    pub managed: Option<Managed>,
+}
+
+/// A managed directory's mode, and the kit identity that keys it.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct Managed {
+    pub mode: u32,
+    pub kit: String,
 }
 
 /// Each `declared` host mount's directory, in kit order: its `--mount` binding (`(host, guest)`
@@ -68,17 +76,18 @@ pub fn host_dirs(
                 Some((host, _)) => HostDir {
                     host: host.clone(),
                     guest: d.path.clone(),
-                    managed_mode: None,
+                    managed: None,
                 },
                 None => {
                     let mode = d.mode.as_deref().unwrap_or("0755");
                     HostDir {
                         host: managed_dir(root, &d.identity, &d.path),
                         guest: d.path.clone(),
-                        managed_mode: Some(
-                            u32::from_str_radix(mode, 8)
+                        managed: Some(Managed {
+                            mode: u32::from_str_radix(mode, 8)
                                 .with_context(|| format!("host-mount@1 mode {mode:?}"))?,
-                        ),
+                            kit: d.identity.clone(),
+                        }),
                     }
                 }
             })
@@ -87,13 +96,98 @@ pub fn host_dirs(
 }
 
 /// Creates the missing managed directories: parents `0700`, the directory itself with its mode.
-/// An existing one is left as it is, contents and permissions.
+/// An existing one is left as it is, contents and permissions. Each gets its record (beside it,
+/// never inside: the sandbox sees the directory) when it has none, so older ones gain one too.
 pub fn create_managed(dirs: &[HostDir]) -> Result<()> {
     for d in dirs {
-        let Some(mode) = d.managed_mode.filter(|_| !d.host.is_dir()) else {
+        let Some(m) = &d.managed else { continue };
+        if !d.host.is_dir() {
+            create_dir(&d.host, m.mode)
+                .with_context(|| format!("creating {}", d.host.display()))?;
+        }
+        let record = d.host.with_extension("json");
+        if !record.exists() {
+            let r = Record {
+                kit: m.kit.clone(),
+                path: d.guest.clone(),
+            };
+            crate::config::write_atomic(
+                &record,
+                &serde_json::to_vec(&r)?,
+                Some(0o600),
+                crate::config::Symlink::Replace,
+            )?;
+        }
+    }
+    Ok(())
+}
+
+/// A managed directory's record: `<dir>.json`. The directory's name is a hash, so this is the
+/// only place its kit and path can be read back.
+#[derive(Serialize, Deserialize)]
+struct Record {
+    kit: String,
+    path: String,
+}
+
+/// A kept managed directory, as `kit mounts ls` lists it.
+#[derive(Debug, Serialize)]
+pub struct Kept {
+    pub id: String,
+    pub kit: String,
+    pub path: String,
+    pub host_path: PathBuf,
+}
+
+/// The managed directories under `root` that have a record, by kit then path.
+pub fn kept(root: &Path) -> Result<Vec<Kept>> {
+    let mut kept = Vec::new();
+    let Ok(kits) = std::fs::read_dir(root) else {
+        return Ok(kept);
+    };
+    for kit_dir in kits {
+        let kit_dir = kit_dir?.path();
+        let Ok(entries) = std::fs::read_dir(&kit_dir) else {
             continue;
         };
-        create_dir(&d.host, mode).with_context(|| format!("creating {}", d.host.display()))?;
+        for e in entries {
+            let record = e?.path();
+            let host = record.with_extension("");
+            if record.extension().is_none_or(|x| x != "json") || !host.is_dir() {
+                continue;
+            }
+            let text =
+                std::fs::read(&record).with_context(|| format!("reading {}", record.display()))?;
+            let r: Record = serde_json::from_slice(&text)
+                .with_context(|| format!("reading {}", record.display()))?;
+            let short = |p: &Path| {
+                let n = p.file_name().unwrap_or_default().to_string_lossy();
+                n.chars().take(12).collect::<String>()
+            };
+            kept.push(Kept {
+                id: format!("{}-{}", short(&kit_dir), short(&host)),
+                kit: r.kit,
+                path: r.path,
+                host_path: host,
+            });
+        }
+    }
+    kept.sort_by(|a, b| (&a.kit, &a.path).cmp(&(&b.kit, &b.path)));
+    Ok(kept)
+}
+
+/// Removes the kept directory `id` names (from `kept`), its contents and record; the kit's
+/// directory too once it holds nothing else.
+pub fn remove(root: &Path, id: &str) -> Result<()> {
+    let Some(k) = kept(root)?.into_iter().find(|k| k.id == id) else {
+        bail!("no kept host mount {id:?}; see: bento kit mounts ls");
+    };
+    std::fs::remove_dir_all(&k.host_path)
+        .with_context(|| format!("removing {}", k.host_path.display()))?;
+    std::fs::remove_file(k.host_path.with_extension("json"))?;
+    if let Some(parent) = k.host_path.parent() {
+        // Fails while another of the kit's directories is there, as it should.
+        let _ = std::fs::remove_dir(parent);
     }
     Ok(())
 }
@@ -185,5 +279,70 @@ mod tests {
         let mode = std::fs::metadata(&host).unwrap().permissions().mode() & 0o777;
         assert_eq!(mode, 0o700);
         std::fs::remove_dir_all(&root).unwrap();
+    }
+
+    fn managed(root: &Path, kit: &str, path: &str) -> HostDir {
+        HostDir {
+            host: managed_dir(root, kit, path),
+            guest: path.into(),
+            managed: Some(Managed {
+                mode: 0o755,
+                kit: kit.into(),
+            }),
+        }
+    }
+
+    #[test]
+    fn a_managed_dir_is_kept_with_its_kit_and_path() {
+        let root = tempfile::tempdir().unwrap();
+        let d = managed(root.path(), "/k", "/home/agent/.cache");
+        create_managed(std::slice::from_ref(&d)).unwrap();
+        let kept = kept(root.path()).unwrap();
+        assert_eq!(kept.len(), 1);
+        assert_eq!(kept[0].kit, "/k");
+        assert_eq!(kept[0].path, "/home/agent/.cache");
+        assert_eq!(kept[0].host_path, d.host);
+        assert!(!kept[0].id.is_empty());
+        // A `--mount` binding is the user's directory: nothing is kept for it.
+        let bound = HostDir {
+            managed: None,
+            ..managed(root.path(), "/k", "/other")
+        };
+        create_managed(&[bound]).unwrap();
+        assert_eq!(super::kept(root.path()).unwrap().len(), 1);
+    }
+
+    /// A directory made before records existed gains one when a sandbox next uses it.
+    #[test]
+    fn an_existing_dir_gains_its_record_untouched() {
+        let root = tempfile::tempdir().unwrap();
+        let d = managed(root.path(), "/k", "/data");
+        create_dir(&d.host, 0o755).unwrap();
+        std::fs::write(d.host.join("keep"), "1").unwrap();
+        assert!(kept(root.path()).unwrap().is_empty());
+        create_managed(std::slice::from_ref(&d)).unwrap();
+        assert_eq!(kept(root.path()).unwrap()[0].path, "/data");
+        assert!(d.host.join("keep").exists());
+    }
+
+    #[test]
+    fn remove_takes_only_a_listed_id() {
+        let root = tempfile::tempdir().unwrap();
+        let d = managed(root.path(), "/k", "/data");
+        create_managed(std::slice::from_ref(&d)).unwrap();
+        std::fs::write(d.host.join("keep"), "1").unwrap();
+        for id in ["", "..", "../x", "nope"] {
+            let e = remove(root.path(), id).unwrap_err();
+            assert_eq!(
+                e.to_string(),
+                format!("no kept host mount {id:?}; see: bento kit mounts ls")
+            );
+        }
+        let id = kept(root.path()).unwrap()[0].id.clone();
+        remove(root.path(), &id).unwrap();
+        assert!(!d.host.exists());
+        assert!(kept(root.path()).unwrap().is_empty());
+        // The kit's directory goes with its last mount.
+        assert_eq!(std::fs::read_dir(root.path()).unwrap().count(), 0);
     }
 }

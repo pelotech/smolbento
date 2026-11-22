@@ -243,8 +243,9 @@ exist. Mounts are set at create only: `bento run --mount` on an existing sandbox
 required`. `mounts:` in an [environment file](environments.md#environments-sbxenvyaml) does the same.
 
 `bento inspect` shows `Host mounts: HOST:PATH` (`mounts` in JSON). `rm` and `prune` never delete
-these directories; delete one yourself when no sandbox needs it. `reset` deletes them with the rest
-of smolbento's data.
+these directories. `bento kit mounts ls` lists them (`ID`, the kit, its path, the host directory;
+`--json` too), and `bento kit mounts rm ID…` deletes them with their contents, refusing one a
+sandbox still mounts. `reset` deletes them with the rest of smolbento's data.
 
 ### The builder sandbox
 

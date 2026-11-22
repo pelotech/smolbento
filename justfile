@@ -152,7 +152,7 @@ release-build target builder:
             ;;
     esac
 
-# Run Docker's kit-spec conformance suite (ssh-agent@1 only) against the adapter in
+# Run Docker's kit-spec conformance suite (ssh-agent@1, host-mount@1, lifecycle@1) against the adapter in
 # tests/conformance. Boots real VMs and builds the suite's workload image (needs a hypervisor
 # and the image builder); further arguments go to `kit-tck runtime` (e.g. `--verbose`).
 conformance *args:
@@ -171,7 +171,7 @@ conformance *args:
     export SMOLBENTO_BIN="$PWD/target/debug/smolbento"
     adapter="$PWD/tests/conformance/smolbento-adapter"
     cd "$spec"
-    GOWORK=off nix shell nixpkgs#go -c go run ./cmd/kit-tck runtime --adapter "$adapter" --timeout 2h {{args}}
+    GOWORK=off nix shell nixpkgs#go nixpkgs#jq -c go run ./cmd/kit-tck runtime --adapter "$adapter" --timeout 2h {{args}}
 
 # Record the README demo into dist/demo.gif with VHS (boots a VM; needs Nix). Your own sandboxes,
 # settings and secrets are untouched: the demo has its own dirs and a sandbox-scoped dummy secret.

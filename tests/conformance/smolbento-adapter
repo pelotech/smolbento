@@ -1,6 +1,7 @@
 #!/usr/bin/env bash
 # Conformance adapter: drives smolbento through docs/spec/conformance.md of docker/sandbox-kit-spec.
-# It claims only com.docker.sandbox/ssh-agent@1 and implements the verbs those checks call.
+# It claims com.docker.sandbox/ssh-agent@1, host-mount@1 and lifecycle@1, and implements the verbs
+# those checks call. Needs jq (`just conformance` provides it).
 #
 # Environment:
 #   SMOLBENTO_BIN      the binary to drive (default: smolbento on PATH)
@@ -56,6 +57,26 @@ if [ ! -f "$home/config/policy.toml" ]; then
 	sbt none policy init allow-all >&2 || die "could not initialise the network policy"
 fi
 
+# The suite's two versions of one kit (host-mount-version-v1, -v2) are imported as versions of one
+# local kit: copied into the same directory, which is what smolbento keys a local kit's host mounts
+# on. Prints the reference to use for `ref`.
+kit_ref() {
+	case "$(basename "$1")" in
+	host-mount-version-v1 | host-mount-version-v2)
+		dir=$state/kits/host-mount-version
+		mkdir -p "$dir"
+		cp "$1"/*.yaml "$dir/kit.yaml"
+		echo "$dir"
+		;;
+	*) echo "$1" ;;
+	esac
+}
+
+# A local kit's identity, as smolbento keys its host mounts: its canonical directory.
+kit_identity() {
+	(cd "$(kit_ref "$1")" && pwd -P)
+}
+
 # Capability types a kit file requires (entries not marked `optional: true`) that this adapter
 # doesn't claim; prints the first. Reads the fixtures' plain `- type:` list layout.
 required_unclaimed() {
@@ -75,6 +96,8 @@ shift
 case "$verb" in
 capabilities)
 	echo com.docker.sandbox/ssh-agent@1
+	echo com.docker.sandbox/host-mount@1
+	echo com.docker.sandbox/lifecycle@1
 	;;
 
 create)
@@ -109,7 +132,7 @@ create)
 		-*) die "unknown create option: $1" ;;
 		*)
 			# A local kit reference has to say so: smolbento reads a bare name as a registry one.
-			ref=$1
+			ref=$(kit_ref "$1")
 			case "$ref" in /* | ./* | ../*) ;; *) [ ! -e "$ref" ] || ref=./$ref ;; esac
 			if [ -z "$first" ]; then first=$ref; else extra+=(--kit "$ref"); fi
 			shift
@@ -146,7 +169,7 @@ create)
 		rm -f "$state/$id.agent" "$state/$id.known-hosts"
 		# smolbento exits 1 for every error; its refusals are told apart by message, which is
 		# why this lives in the adapter.
-		if grep -qE 'is not supported by smolbento|needs an SSH agent, but' "$err"; then
+		if grep -qE 'is not supported by smolbento|needs an SSH agent, but|both declare storage at' "$err"; then
 			status=2
 		fi
 		rm -f "$err"
@@ -180,6 +203,28 @@ stop)
 
 start)
 	sbt "$1" start "$1" >&2
+	;;
+
+host-mounts)
+	# Through `kit mounts ls`, smolbento's own listing; `[]` when there are none.
+	sbt none kit mounts ls --json |
+		jq --arg kit "$(kit_identity "$1")" '[.[] | select(.kit == $kit) | {id, path, hostPath: .host_path}]'
+	;;
+
+host-mount-read)
+	host=$(sbt none kit mounts ls --json | jq -r --arg id "$1" '.[] | select(.id == $id) | .host_path')
+	[ -n "$host" ] || die "no host mount $1"
+	cat "$host/$2"
+	;;
+
+host-mount-rm)
+	sbt none kit mounts rm "$1" >&2
+	;;
+
+selection)
+	# smolbento keeps no selection records; the surface is the sandbox's host mounts, from inspect.
+	sbt "$1" inspect "$1" --json |
+		jq '{selection: {capabilities: []}, surface: {hostMountPaths: (.mounts // {} | keys)}}'
 	;;
 
 rm)
