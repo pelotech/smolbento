@@ -1376,3 +1376,24 @@ fn two_lifecycle_entries_writing_one_path_or_declaring_interactive_are_refused()
     let c = file("c", "/y");
     run(workload("w"), vec![a, c]).unwrap();
 }
+
+/// tck: SPEC-v3 §7.1.1/validate-expanded-declarations. A declaration that's invalid once its
+/// references expand is refused, naming the group member it came from.
+#[test]
+fn an_invalid_expanded_member_is_named_by_its_path() {
+    let k = v3_mixin(
+        "  - group:
+      optional: true
+      capabilities:
+        - type: com.docker.sandbox/lifecycle@1
+          config: {files: [{path: \"${{ kit.args.dir }}\", content: x}]}
+",
+    );
+    let v = ArgValues::parse(&[], &["dir=relative".into()]).unwrap();
+    let e = resolve(workload("w"), vec![k], &v).unwrap_err();
+    assert_eq!(
+        format!("{e:#}"),
+        "kit g: capability com.docker.sandbox/lifecycle@1 at \
+         capabilities[0].group.capabilities[0]: lifecycle@1 file path \"relative\" must be absolute"
+    );
+}

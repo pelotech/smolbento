@@ -832,8 +832,11 @@ fn expand_caps(
     for c in &mut k.caps {
         if let Some(config) = c.config.take() {
             let config = expand_value(&config, v3::text_fields(&c.ty), &ex)?;
-            c.body =
-                v3::body(&c.ty, Some(config)).with_context(|| format!("capability {}", c.ty))?;
+            // A group member is named by its place, as the spec's diagnostics do.
+            let at =
+                (c.group.as_ref()).map_or(String::new(), |g| format!(" at {}", g.member_path()));
+            c.body = v3::body(&c.ty, Some(config))
+                .with_context(|| format!("capability {}{at}", c.ty))?;
         }
     }
     v3::check_caps(&k.name, &k.caps)
