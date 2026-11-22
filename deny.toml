@@ -10,6 +10,8 @@ ignore = [
   { id = "RUSTSEC-2026-0543", reason = "transitive (oci-client, russh-util); no upgrade available" },
   # humantime is flagged only because it wraps chrono. Ours to replace (jiff or time).
   { id = "RUSTSEC-2026-0542", reason = "flagged for wrapping chrono; replace with jiff or time" },
+  # rustls-pemfile comes with smolvm-credentials' reqwest 0.12; drops out when it moves to reqwest 0.13.
+  { id = "RUSTSEC-2025-0134", reason = "transitive (smolvm-credentials via reqwest 0.12); no upgrade available" },
 ]
 
 [licenses]
@@ -36,4 +38,5 @@ wildcards = "deny"
 unknown-registry = "deny"
 unknown-git = "deny"
 # Temporary: russh from git until a release pins ssh-key 0.7.0-rc.12+; then drop this, the flake outputHashes, and use crates.io.
-allow-git = ["https://github.com/Eugeny/russh"]
+# Temporary: smolvm-credentials and smolvm-protocol from a fork branch (smolvm plus an https .gitmodules) until smolvm-credentials is on crates.io.
+allow-git = ["https://github.com/Eugeny/russh", "https://github.com/josmo/smolvm"]

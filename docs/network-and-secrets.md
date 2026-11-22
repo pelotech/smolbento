@@ -156,6 +156,30 @@ When things take effect:
 - A secret for a service the sandbox wasn't created with needs a **recreate**; `secret set` tells
   you which.
 
+### Hosted egress
+
+`network.egress=hosted` (experimental, set before create) makes bento run the credential
+interceptor instead of smolvm: one socket-activated `bento _serve egress` process per sandbox
+(a launchd job on macOS, a `systemd --user` socket and service on Linux). It resolves secrets
+when it starts, and the guest sees placeholders as usual. A sandbox with no credentials gets
+no egress process. It needs a service manager: create is refused without one (launchd, or
+`systemd --user` with a private socket directory).
+
+The egress process logs to `<data>/egress/<name>/egress.log`: startup errors, a secret that
+failed to resolve (by name, never value) and dropped flows. Look there when a hosted sandbox's
+connections fail. `bento rm` removes the log with the sandbox.
+
+Limits in this release:
+
+- `fork` is refused for a hosted sandbox.
+- Install-only credentials (a kit's install hooks) are refused at create.
+- `secret set` and `secret rm` restart the sandbox's egress process, so a new value applies at
+  once and a removed one is gone at once; open connections drop at that moment. A stopped
+  sandbox's process is restarted before the machine starts, so boot-time connections use the
+  new value. Binding a *new* service needs a recreate
+  (`<name> uses hosted egress; recreate it to bind <service>`); live binding is planned.
+- The Linux systemd units are tested in CI only; the macOS launchd path is tested by hand.
+
 ### Registry credentials
 
 A registry credential lets smolbento pull kits and images that need a login. It stays on your

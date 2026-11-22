@@ -4,6 +4,7 @@ pub mod bridge;
 pub mod cli;
 pub mod config;
 pub mod ctx;
+pub mod egress;
 pub mod env;
 pub mod host_service;
 pub mod kits;

@@ -1,4 +1,5 @@
 use super::*;
+use crate::bridge_agent::unit_files;
 
 #[test]
 #[ignore = "boots real VMs; run with `just e2e`"]
@@ -201,6 +202,80 @@ pub(crate) fn ports_publish_live() {
     let body = body.expect("published port answers");
     assert!(body.contains("hi-from-guest"), "{body}");
     e.ok(&["ports", &e.name, "--unpublish", &format!("{port}:8000")]);
+}
+
+/// The pid of this sandbox's egress process, from the service manager; `None` while it isn't running.
+fn egress_pid(unit: &std::path::Path) -> Option<u32> {
+    let stem = unit.file_stem()?.to_str()?;
+    let out = if cfg!(target_os = "macos") {
+        let uid = smolbento::util::host_uid();
+        let o = std::process::Command::new("launchctl")
+            .args(["print", &format!("gui/{uid}/{stem}")])
+            .output()
+            .ok()?;
+        let text = String::from_utf8_lossy(&o.stdout).into_owned();
+        let line = text
+            .lines()
+            .find(|l| l.trim_start().starts_with("pid = "))?;
+        line.rsplit('=').next()?.trim().to_string()
+    } else {
+        let o = std::process::Command::new("systemctl")
+            .args([
+                "--user",
+                "show",
+                "-p",
+                "MainPID",
+                "--value",
+                &format!("{stem}.service"),
+            ])
+            .output()
+            .ok()?;
+        String::from_utf8_lossy(&o.stdout).trim().to_string()
+    };
+    out.parse().ok().filter(|p| *p > 0)
+}
+
+#[test]
+#[ignore = "boots real VMs and needs httpbin.org; run with `just e2e`"]
+pub(crate) fn hosted_egress_swaps_a_credential() {
+    let mut e = E2e::new("hegr");
+    e.vars.push(("SMOLBENTO_NETWORK_EGRESS", "hosted".into()));
+    e.own_httpbin_secret("TOK", BASIC_SECRET);
+    e.create_alpine();
+    assert!(basic_auth_ok(&e, &e.name, "TOK", "real-secret-xyz"));
+    let seen = e.sh_ok(&e.name, "printf %s \"$TOK\"");
+    assert!(seen.starts_with("SMOL_PLACEHOLDER_"), "{seen}");
+    assert!(!seen.contains("real-secret"), "{seen}");
+
+    let unit = unit_files(&e, &e.name)
+        .into_iter()
+        .find(|u| u.to_string_lossy().contains("egress"))
+        .expect("a hosted sandbox has an egress unit");
+    // Socket activation restarts a killed egress process on the next connection.
+    let pid = egress_pid(&unit).expect("the egress process runs after a request");
+    let _ = std::process::Command::new("kill")
+        .args(["-9", &pid.to_string()])
+        .status();
+    assert!(
+        basic_auth_ok(&e, &e.name, "TOK", "real-secret-xyz"),
+        "egress is restarted by its socket"
+    );
+
+    // A new value applies at once: `secret set` restarts the egress process.
+    let out = e.own_httpbin_secret("TOK", "dXNlcjpyb3RhdGVkLXh5eg==");
+    let now = format!("Applied to {} now", e.name);
+    assert!(out.contains(&now), "{out}");
+    assert!(basic_auth_ok(&e, &e.name, "TOK", "rotated-xyz"));
+    assert!(!basic_auth_ok(&e, &e.name, "TOK", "real-secret-xyz"));
+    // A removed one is gone at once.
+    let out = e.ok(&["secret", "rm", "tok", "--sandbox", &e.name]);
+    let gone = format!("Running sandboxes {} no longer send it", e.name);
+    assert!(out.contains(&gone), "{out}");
+    assert!(!basic_auth_ok(&e, &e.name, "TOK", "rotated-xyz"));
+
+    e.ok(&["rm", "-f", &e.name]);
+    assert!(unit_files(&e, &e.name).is_empty(), "units go with rm");
+    assert!(!e.dir.path().join("data/egress").join(&e.name).exists());
 }
 
 #[test]

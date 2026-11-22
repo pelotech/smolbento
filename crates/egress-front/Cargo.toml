@@ -1,0 +1,15 @@
+[package]
+name = "egress-front"
+version = "0.0.0"
+edition = "2024"
+description = "Hosted egress front for smolvm machines, written to be lifted into smolvm"
+license = "Apache-2.0"
+authors = ["Pelotech"]
+publish = false
+
+# Stopgap until smolvm-credentials is on crates.io (or upstream's submodules use https): a fork branch that is
+# the smolvm release pinned in smolvm.lock plus an https .gitmodules, recreated for each smolvm pin.
+[dependencies]
+anyhow = "1.0.104"
+smolvm-credentials = { git = "https://github.com/josmo/smolvm", rev = "f026f22864f059e8f5d3260aef03157df2d1fc82", version = "1.36.1" }
+smolvm-protocol = { git = "https://github.com/josmo/smolvm", rev = "f026f22864f059e8f5d3260aef03157df2d1fc82", version = "1.36.1" }

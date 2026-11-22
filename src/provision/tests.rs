@@ -1092,3 +1092,299 @@ fn settle_agent_checks_fallback_socket_dir_when_service_socket_path_is_too_long(
         "{err}"
     );
 }
+
+/// An env where `s1` (with the github secret bound) can be created under
+/// `network.egress=<egress>`, plus `env`; returns it and its fake service manager.
+fn egress_env(
+    egress: &str,
+    env: &[(&str, &str)],
+) -> (TestEnv, crate::host_service::fake::FakeControl) {
+    let mut env = env.to_vec();
+    env.push(("SMOLBENTO_NETWORK_EGRESS", egress));
+    let mut t = test_env(&env);
+    // A hosted sandbox needs its egress unit: a fake service manager under a short temp dir.
+    let tmp = tempfile::Builder::new()
+        .prefix("sbe")
+        .tempdir_in("/tmp")
+        .unwrap();
+    let (services, ctl) = crate::host_service::fake::services(
+        tmp.path(),
+        crate::host_service::Flavor::Launchd,
+        "ns1",
+    );
+    t.ctx.services = services;
+    std::mem::forget(tmp);
+    set_policy(&t, "mode = \"deny-all\"");
+    save_secret(&t, "github", None, "gh-123");
+    let fake = t.runner();
+    fake.fail(&["machine", "status"], "NOT_FOUND", "vm not found");
+    fake.once_ok(
+        &["machine", "status"],
+        &machine_json("sbx-s1", "created", &[("sbx.name", "s1")]),
+    );
+    fake.missing_until_created("sbx-s1");
+    (t, ctl)
+}
+
+/// Creates `s1` in `egress_env`; returns the env, the request as prepared and the result.
+fn egress_create(
+    egress: &str,
+    tweak: impl FnOnce(&mut CreateRequest),
+) -> (TestEnv, CreateRequest, Result<Sandbox>) {
+    let (t, _) = egress_env(egress, &[]);
+    let mut req = CreateRequest {
+        name: "s1".into(),
+        ..Default::default()
+    };
+    tweak(&mut req);
+    let result = create_with(&t.ctx, &mut req, &[], None, None, &mut |_| {});
+    (t, req, result)
+}
+
+#[test]
+fn a_hosted_create_passes_no_credential_and_mounts_the_ca() {
+    let (t, req, result) = egress_create("hosted", |_| {});
+    result.unwrap();
+    let label = req.egress.as_ref().expect("prepared").label.clone();
+    let placeholder = &label
+        .bindings
+        .iter()
+        .find(|b| b.env == "GH_TOKEN")
+        .unwrap()
+        .placeholder;
+    let create = t.create_line();
+    assert!(!create.contains("--credential"), "{create}");
+    let ca = t.ctx.paths.egress("s1").join("ca/guest");
+    assert!(
+        create.contains(&format!("-v {}:/run/smol/credentials:ro", ca.display())),
+        "{create}"
+    );
+    assert!(
+        create.contains(&format!("-e GH_TOKEN={placeholder}")),
+        "{create}"
+    );
+    for var in [
+        "SSL_CERT_FILE",
+        "NODE_EXTRA_CA_CERTS",
+        "REQUESTS_CA_BUNDLE",
+        "CURL_CA_BUNDLE",
+        "GIT_SSL_CAINFO",
+    ] {
+        assert!(
+            create.contains(&format!("-e {var}=/run/smolvm/ca-bundle.pem")),
+            "{create}"
+        );
+    }
+    assert!(create.contains("sbx.egress="), "{create}");
+    assert!(!create.contains("gh-123"), "{create}");
+}
+
+#[test]
+fn an_install_agent_grant_doesnt_hold_back_the_egress_unit() {
+    // The other units wait for the install hooks; their port-443 flows need the egress process.
+    let (_agent, sock) = host_agent();
+    let (t, ctl) = egress_env("hosted", &[("SSH_AUTH_SOCK", &sock)]);
+    let plan = agent_plan(false, vec![ssh_agent(&[Install], &[], false)]);
+    let mut req = agent_request(false);
+    let mut at_created = Vec::new();
+    create_with(&t.ctx, &mut req, &[], Some(&plan), None, &mut |e| {
+        if e == sandbox::Event::Created {
+            at_created = ctl.calls();
+        }
+    })
+    .unwrap();
+    assert!(req.egress.is_some());
+    assert_eq!(at_created, ["refresh", "load dev.smolbento.ns1.s1.egress"]);
+}
+
+#[test]
+fn a_hosted_create_is_refused_when_no_egress_unit_can_be_installed() {
+    // The test context has no service manager.
+    let t = test_env(&[("SMOLBENTO_NETWORK_EGRESS", "hosted")]);
+    set_policy(&t, "mode = \"deny-all\"");
+    save_secret(&t, "github", None, "gh-123");
+    let mut req = CreateRequest {
+        name: "s1".into(),
+        ..Default::default()
+    };
+    let e = prepare_create(&t.ctx, &mut req, &[], None)
+        .unwrap_err()
+        .to_string();
+    assert!(
+        e.contains("network.egress=hosted needs a service manager"),
+        "{e}"
+    );
+    assert!(req.egress.is_none());
+    assert!(!t.ctx.paths.egress("s1").exists());
+}
+
+#[test]
+fn a_hosted_create_keeps_the_users_ca_env() {
+    let (t, _, result) = egress_create("hosted", |r| {
+        r.env.push(("SSL_CERT_FILE".into(), "/mine.pem".into()));
+    });
+    result.unwrap();
+    let create = t.create_line();
+    assert!(create.contains("-e SSL_CERT_FILE=/mine.pem"), "{create}");
+    assert!(!create.contains("SSL_CERT_FILE=/run/smolvm"), "{create}");
+}
+
+#[test]
+fn a_hosted_create_gives_a_bound_variable_only_its_placeholder() {
+    let (t, req, result) = egress_create("hosted", |r| {
+        r.env.push(("GH_TOKEN".into(), "mine".into()));
+        r.env.push(("OTHER".into(), "kept".into()));
+    });
+    result.unwrap();
+    let label = &req.egress.as_ref().unwrap().label;
+    let placeholder = &label
+        .bindings
+        .iter()
+        .find(|b| b.env == "GH_TOKEN")
+        .unwrap()
+        .placeholder;
+    let create = t.create_line();
+    assert_eq!(create.matches("-e GH_TOKEN=").count(), 1, "{create}");
+    assert!(
+        create.contains(&format!("-e GH_TOKEN={placeholder}")),
+        "{create}"
+    );
+    // Only bound variables give way: a user's own variable stays.
+    assert!(create.contains("-e OTHER=kept"), "{create}");
+}
+
+#[test]
+fn a_hosted_create_without_credentials_is_a_smolvm_create() {
+    let t = test_env(&[("SMOLBENTO_NETWORK_EGRESS", "hosted")]);
+    set_policy(&t, "mode = \"deny-all\"");
+    let mut req = CreateRequest {
+        name: "s1".into(),
+        ..Default::default()
+    };
+    prepare_create(&t.ctx, &mut req, &[], None).unwrap();
+    assert!(req.egress.is_none());
+    assert!(!t.ctx.paths.egress("s1").exists());
+    let spec = sandbox::create::spec(&req);
+    assert!(!spec.labels.contains_key("sbx.egress"));
+    assert!(
+        spec.mounts
+            .iter()
+            .all(|m| m.guest != "/run/smol/credentials")
+    );
+}
+
+#[test]
+fn a_smolvm_create_is_unchanged() {
+    let (t, req, result) = egress_create("smolvm", |_| {});
+    result.unwrap();
+    assert!(req.egress.is_none());
+    let create = t.create_line();
+    assert!(create.contains("--credential"), "{create}");
+    assert!(!create.contains("/run/smol/credentials"), "{create}");
+    assert!(!create.contains("SSL_CERT_FILE"), "{create}");
+    assert!(!create.contains("sbx.egress"), "{create}");
+    assert!(
+        t.calls_of("machine start")
+            .iter()
+            .all(|l| !l.contains("--egress-interceptor"))
+    );
+}
+
+#[test]
+fn install_only_credentials_are_refused_when_hosted() {
+    let (t, _, result) = egress_create("hosted", |r| {
+        r.rec.credential_install = vec!["GH_TOKEN".into()];
+    });
+    assert_eq!(
+        result.unwrap_err().to_string(),
+        "install-only credentials aren't supported with network.egress=hosted yet"
+    );
+    assert!(!t.made("machine create"));
+    assert!(!t.ctx.paths.egress("s1").exists());
+}
+
+#[test]
+fn a_hosted_start_passes_the_interceptor_and_token_not_values() {
+    let (t, req, result) = egress_create("hosted", |_| {});
+    result.unwrap();
+    let starts = t.calls_of("machine start");
+    let port = req.egress.as_ref().unwrap().label.port;
+    assert!(
+        starts[0].contains(&format!("--egress-interceptor 127.0.0.1:{port}")),
+        "{starts:?}"
+    );
+    let token = crate::egress::token(&t.ctx.paths, "s1").unwrap();
+    let envs = t.runner().envs();
+    let start_env = envs.last().unwrap();
+    assert_eq!(
+        start_env,
+        &vec![("SMOLVM_INTERCEPTOR_TOKEN".to_string(), token)]
+    );
+    // A later start is the same.
+    let mut m = meta("s1", &["github".to_string()], &[]);
+    m.egress = req.egress.map(|p| p.label);
+    let plan = start_plan(&t.ctx, &m).unwrap();
+    assert_eq!(
+        plan.egress,
+        Some(std::net::SocketAddr::from(([127, 0, 0, 1], port)))
+    );
+    assert_eq!(plan.env.len(), 1);
+    assert!(plan.env.iter().all(|(_, v)| v != "gh-123"));
+}
+
+#[test]
+fn a_start_fails_closed_when_the_egress_label_is_unreadable() {
+    let t = deny_all_env();
+    save_secret(&t, "github", None, "gh-123");
+    let mut m = meta("s1", &["github".to_string()], &[]);
+    m.rec.egress_unreadable = true;
+    let e = start_plan(&t.ctx, &m).unwrap_err().to_string();
+    assert!(e.contains("sbx.egress label is unreadable"), "{e}");
+}
+
+#[test]
+fn rm_forgets_the_egress_state() {
+    let mut t = test_env(&[]);
+    let cred = crate::smolvm::Credential {
+        env_var: "GH_TOKEN".into(),
+        hosts: vec!["api.github.com".into()],
+        ..Default::default()
+    };
+    crate::egress::prepare(&t.ctx.paths, "box", &[cred]).unwrap();
+    assert!(t.ctx.paths.egress("box").exists());
+    t.sandbox("box", "stopped", &[]);
+    t.runner().ok(
+        &["machine", "ls", "--json"],
+        &format!("[{}]", sandbox_json("box", "stopped", &[])),
+    );
+    t.sbt(&["rm", "-f", "box"]).unwrap();
+    assert!(!t.ctx.paths.egress("box").exists());
+}
+
+#[test]
+fn a_start_fails_closed_when_a_hosted_sandbox_lost_its_label() {
+    let t = deny_all_env();
+    save_secret(&t, "github", None, "gh-123");
+    let labels =
+        r#"{"sbx.name":"s1","sbx.secrets":"github","sbx.credential-env":"GH_TOKEN,GITHUB_TOKEN"}"#;
+    let machine = |creds: &str| -> crate::smolvm::Machine {
+        serde_json::from_str(&format!(
+            r#"{{"name":"sbx-s1","state":"stopped","labels":{labels}{creds}}}"#
+        ))
+        .unwrap()
+    };
+    let sb = Sandbox::from_machine(&machine(r#","credentials":[]"#)).unwrap();
+    let e = start_plan(&t.ctx, &sb.meta).unwrap_err().to_string();
+    assert!(e.contains("has no sbx.egress label"), "{e}");
+    assert!(t.runner().envs().is_empty());
+    // Bindings listed, or a smolvm that doesn't say: a smolvm-mode start as before.
+    for creds in [
+        r#","credentials":[{"name":"gh_token","variable":"GH_TOKEN","hosts":["api.github.com"]}]"#,
+        "",
+    ] {
+        let sb = Sandbox::from_machine(&machine(creds)).unwrap();
+        let plan = start_plan(&t.ctx, &sb.meta).unwrap();
+        assert!(plan.egress.is_none());
+        assert!(plan.env.iter().any(|(_, v)| v == "gh-123"));
+    }
+}

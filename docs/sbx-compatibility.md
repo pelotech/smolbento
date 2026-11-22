@@ -34,6 +34,7 @@ smolbento-only:
 
 - `start` and `exec --privileged`. sbx 0.53 no longer has them; smolbento keeps them.
 - `fork`. sbx has none; its `template save` saves only the disk.
+- `fork` is refused for a sandbox with hosted egress (`network.egress=hosted` and credentials): `fork isn't supported with network.egress=hosted yet`.
 - `daemon`. Accepted and does nothing.
 - `kit mounts ls|rm`. Lists and removes the directories kept for kits' host mounts. sbx keeps
   them too, with no command to see or remove them.

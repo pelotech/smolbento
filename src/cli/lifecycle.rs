@@ -119,6 +119,7 @@ pub fn start<R: Runner>(ctx: &mut Ctx<R>, names: &[String]) -> Result<i32> {
             continue;
         }
         let start_plan = provision::start_plan(ctx, &sb.meta)?;
+        provision::restart_egress(ctx, &sb);
         let mut step = p.step(n, "starting");
         let started = sandbox::start(&ctx.vm, &sb, &start_plan, &mut |e| {
             if let Event::Pull(pull) = e {
@@ -264,6 +265,9 @@ pub(crate) fn delete_keeping_remote<R: Runner>(
         crate::warning!("removing the host services of {}: {e:#}", sb.name());
     }
     session::clear(&ctx.paths.sessions(), sb.name());
+    if let Err(e) = crate::egress::forget(&ctx.paths, sb.name()) {
+        crate::warning!("removing the egress state of {}: {e:#}", sb.name());
+    }
     super::secret::forget_sandbox(ctx, sb.name(), forget_secrets)
 }
 

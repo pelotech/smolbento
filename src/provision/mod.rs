@@ -89,7 +89,28 @@ fn plan_for<R: Runner>(
         install_rules.unwrap_or_default(),
         meta.rec.host_access,
     );
-    let (env, remove) = start_env(&secrets, meta, ctx.store.as_ref(), install);
+    let (env, remove, egress) = match &meta.egress {
+        // Secret values stay with bento's interceptor; smolvm gets only its token.
+        Some(label) => (
+            vec![(
+                "SMOLVM_INTERCEPTOR_TOKEN".to_string(),
+                crate::egress::token(&ctx.paths, sandbox)?,
+            )],
+            Vec::new(),
+            Some(std::net::SocketAddr::from(([127, 0, 0, 1], label.port))),
+        ),
+        None if meta.rec.egress_unreadable => bail!(
+            "{sandbox}: its sbx.egress label is unreadable; recreate it (bento rm {sandbox}, then bento create …)"
+        ),
+        // A hosted sandbox whose label was removed: smolvm holds no bindings for its credentials.
+        None if !meta.rec.credential_env.is_empty() && meta.rec.no_credential_bindings => bail!(
+            "{sandbox} has no sbx.egress label but was created for hosted egress (smolvm holds no credential bindings); recreate it"
+        ),
+        None => {
+            let (env, remove) = start_env(&secrets, meta, ctx.store.as_ref(), install);
+            (env, remove, None)
+        }
+    };
     let clone = meta.clone_repo.as_ref().map(|dir| {
         let repo = Path::new(dir);
         let read =
@@ -110,6 +131,7 @@ fn plan_for<R: Runner>(
         network,
         env,
         remove,
+        egress,
         clone,
         branchable: meta.forkable() && ctx.settings.bool("fork.enabled")?,
         kit: None,
@@ -122,10 +144,14 @@ pub fn ensure_running<R: Runner>(ctx: &Ctx<R>, sb: &mut Sandbox) -> Result<()> {
     sweep_orphans(ctx);
     refresh_services(ctx, sb);
     let meta = sb.meta.clone();
+    if !sb.is_running() {
+        restart_egress(ctx, sb);
+    }
     sandbox::ensure_running(&ctx.vm, sb, || start_plan(ctx, &meta))
 }
 
-/// The units a sandbox's sockets need: the bridge, and the agent when a runtime phase is granted.
+/// The units a sandbox needs: the bridge, the agent when a runtime phase is granted, and the
+/// egress process when it is hosted.
 pub(crate) fn service_kinds(meta: &Meta) -> Vec<Kind> {
     let mut kinds = Vec::new();
     if meta.ssh_agent.as_ref().is_some_and(|a| a.runtime.is_some()) {
@@ -134,22 +160,48 @@ pub(crate) fn service_kinds(meta: &Meta) -> Vec<Kind> {
     if meta.bridge {
         kinds.push(Kind::Bridge);
     }
+    if meta.egress.is_some() {
+        kinds.push(Kind::Egress);
+    }
     kinds
 }
 
-/// Writes (and loads) the units of the sandbox `name`, or removes the other kind's. Failures only
-/// warn: without a unit the sockets are served while a session is attached only, if at all.
-pub(crate) fn sync_services<R: Runner>(ctx: &Ctx<R>, name: &str, kinds: &[Kind]) {
-    if let Err(e) = ctx.services.sync(name, kinds, &ctx.paths, &ctx.env) {
-        crate::warning!("{name}: host services for the browser, clipboard and SSH agent: {e:#}");
+/// Writes (and loads) the `kinds` units of the sandbox `name`, or removes the other kinds'.
+/// Failures only warn: without a unit the sockets are served while a session is attached only, if
+/// at all.
+fn sync_services<R: Runner>(ctx: &Ctx<R>, name: &str, kinds: &[Kind], meta: &Meta) {
+    let port = meta.egress.as_ref().map(|e| e.port);
+    if let Err(e) = ctx.services.sync(name, kinds, port, &ctx.paths, &ctx.env) {
+        let what = match (kinds.contains(&Kind::Egress), kinds.len()) {
+            (true, 1) => "its egress unit",
+            (true, _) => {
+                "host services (the egress unit, and the browser, clipboard and SSH agent units)"
+            }
+            _ => "host services for the browser, clipboard and SSH agent",
+        };
+        crate::warning!("{name}: {what}: {e:#}");
     }
+}
+
+/// Restarts a hosted sandbox's egress process, which resolves its secrets once, as it starts: so
+/// a new value applies, before a start or at once. Open connections drop. Returns false when `sb`
+/// isn't hosted or the restart failed, which only warns.
+pub fn restart_egress<R: Runner>(ctx: &Ctx<R>, sb: &Sandbox) -> bool {
+    if sb.meta.egress.is_none() {
+        return false;
+    }
+    let result = ctx.services.restart_egress(sb.name());
+    if let Err(e) = &result {
+        crate::warning!("{}: restarting its egress process: {e:#}", sb.name());
+    }
+    result.is_ok()
 }
 
 /// Rewrites the units of a sandbox served by them if they differ (a new binary path, a new
 /// `SSH_AUTH_SOCK`), so a stale unit mends itself on next use.
 pub fn refresh_services<R: Runner>(ctx: &Ctx<R>, sb: &Sandbox) {
     if sb.meta.service {
-        sync_services(ctx, sb.name(), &service_kinds(&sb.meta));
+        sync_services(ctx, sb.name(), &service_kinds(&sb.meta), &sb.meta);
     }
 }
 
@@ -404,6 +456,12 @@ pub fn prepare_create<R: Runner>(
                 .extend(mcp.steps);
         }
     }
+    // Before anything is made. Hosted egress swaps values in bento, where an install-only
+    // credential (restarted away after the install hooks) has no way to be withdrawn yet.
+    let hosted = !req.credentials.is_empty() && crate::egress::hosted(&ctx.settings, &req.name)?;
+    if hosted && !req.rec.credential_install.is_empty() {
+        bail!("install-only credentials aren't supported with network.egress=hosted yet");
+    }
     if !denies.is_empty() {
         added.extend(crate::policy::notes::add_create_denies(
             &mut policy,
@@ -481,6 +539,21 @@ pub fn prepare_create<R: Runner>(
     req.deny_cidrs = compile::deny_cidrs(&policy, &req.name, req.rec.host_access);
     if let Some(note) = host_access_note(&req.name, req.rec.host_access) {
         eprintln!("{note}");
+    }
+    if hosted {
+        // Without its unit nothing owns the interceptor port and every connection would fail.
+        if ctx.services.plan(&req.name).is_none() {
+            bail!(
+                "network.egress=hosted needs a service manager (launchd or a private `systemd --user` \
+                 socket directory, and a shorter sandbox name if its socket path is too long); \
+                 unset it or use smolvm"
+            );
+        }
+        req.egress = Some(crate::egress::prepare(
+            &ctx.paths,
+            &req.name,
+            &req.credentials,
+        )?);
     }
     Ok((added, first_start))
 }
@@ -678,17 +751,20 @@ pub fn create_with<R: Runner>(
         // The units go in once the machine exists (the orphan sweep would remove them before)
         // and before its first start, so a boot-time workload reaches the agent and the bridge.
         // An install-phase agent grant is served by the install hooks alone on the same socket,
-        // so the units wait until they are done.
-        let kinds = service_kinds(&meta);
+        // so those units wait until they are done; the egress unit never waits, as every flow
+        // of the install hooks goes through it.
         let install_grant = meta.ssh_agent.as_ref().is_some_and(|a| a.install.is_some());
-        let at = if install_grant {
-            sandbox::Event::Booted
-        } else {
-            sandbox::Event::Created
-        };
         let mut on_event = |e: sandbox::Event| {
-            if e == at && req.host_services.is_some() {
-                sync_services(ctx, &req.name, &kinds);
+            let kinds = match e {
+                sandbox::Event::Created if install_grant => {
+                    meta.egress.is_some().then(|| vec![Kind::Egress])
+                }
+                sandbox::Event::Created => Some(service_kinds(&meta)),
+                sandbox::Event::Booted if install_grant => Some(service_kinds(&meta)),
+                _ => None,
+            };
+            if let Some(kinds) = kinds.filter(|_| req.host_services.is_some()) {
+                sync_services(ctx, &req.name, &kinds, &meta);
             }
             on(e);
         };
@@ -746,7 +822,7 @@ pub fn create_with<R: Runner>(
 }
 
 /// The sockets units serve for a new sandbox: the host has a service manager and the sandbox gets
-/// a bridge or a runtime agent grant.
+/// a bridge, a runtime agent grant or hosted egress.
 fn plan_services<R: Runner>(
     ctx: &Ctx<R>,
     req: &CreateRequest,

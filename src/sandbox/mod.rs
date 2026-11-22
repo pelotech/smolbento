@@ -56,6 +56,8 @@ pub struct StartPlan {
     /// Credential env vars without a value, removed from the inherited environment so the host
     /// shell's same-named variables can't stand in for them.
     pub remove: Vec<String>,
+    /// Hosted egress: where bento's interceptor listens; `env` then holds only its token.
+    pub egress: Option<std::net::SocketAddr>,
     /// Set for a clone sandbox; the clone itself is skipped once it exists, the remote copy is not.
     pub clone: Option<CloneStep>,
     /// Start with `--branchable` so `bento fork` can copy it; only for forkable sandboxes.
@@ -107,8 +109,10 @@ impl Sandbox {
     }
 
     pub fn from_machine(m: &Machine) -> Option<Sandbox> {
+        let mut meta = Meta::from_labels(&m.labels)?;
+        meta.rec.no_credential_bindings = m.credentials.as_ref().is_some_and(Vec::is_empty);
         Some(Sandbox {
-            meta: Meta::from_labels(&m.labels)?,
+            meta,
             machine: m.name.clone(),
             state: m.state,
             ports: m.published_ports.clone(),
@@ -222,6 +226,7 @@ fn start_checked<R: Runner>(
         plan.branchable,
         &plan.env,
         &plan.remove,
+        plan.egress,
         &mut |p| on(Event::Pull(p)),
     )?;
     on(Event::Setup);

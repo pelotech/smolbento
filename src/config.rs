@@ -66,6 +66,11 @@ impl Paths {
         self.cache.join("kits")
     }
 
+    /// A hosted-egress sandbox's CA and front token (`egress::prepare`).
+    pub fn egress(&self, sandbox: &str) -> PathBuf {
+        self.data.join("egress").join(sandbox)
+    }
+
     /// Managed directories of kit host mounts (`kits::host_mount::managed_dir`), kept after `rm`.
     pub fn kit_host_mounts(&self) -> PathBuf {
         self.data.join("kit-host-mounts")
@@ -206,6 +211,12 @@ pub const SETTINGS: &[SettingDef] = &[
         help: "Allow sandboxed processes to open URLs in the host browser. Disabling it also prevents in-sandbox OAuth logins that redirect to localhost.",
     },
     SettingDef {
+        key: "network.egress",
+        env: "SMOLBENTO_NETWORK_EGRESS",
+        default: "smolvm",
+        help: "Who swaps credentials on egress: smolvm (built in) or hosted (a bento-run interceptor, experimental).",
+    },
+    SettingDef {
         key: "ssh.agentForwardingEnabled",
         env: "SMOLBENTO_SSH_AGENT_FORWARDING",
         default: "true",
@@ -319,6 +330,9 @@ impl Settings {
         }
         if key == "smolvm.image-cache-size" {
             parse_cache_size(value)?;
+        }
+        if key == "network.egress" {
+            crate::egress::parse(value)?;
         }
         if key == "skills.defaultMode" {
             crate::skills::Mode::parse(value)?;

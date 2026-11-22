@@ -31,6 +31,8 @@ pub struct CreateRequest {
     pub network: NetworkSpec,
     pub deny_cidrs: Vec<String>,
     pub credentials: Vec<Credential>,
+    /// Hosted egress: set when `credentials` are swapped by bento's interceptor, not smolvm.
+    pub egress: Option<crate::egress::Prepared>,
     /// What `meta` records as labels unchanged.
     pub rec: Recorded,
     /// `--clone`: the host repo the sandbox clones; its git dir replaces the primary workspace's
@@ -115,6 +117,7 @@ pub fn meta(req: &CreateRequest) -> Meta {
             .iter()
             .map(|(host, guest)| (guest.clone(), host.display().to_string()))
             .collect(),
+        egress: req.egress.as_ref().map(|p| p.label.clone()),
         // Internal sandboxes run untrusted build steps: never an agent.
         ssh_agent: req
             .ssh_agent
@@ -205,6 +208,31 @@ pub fn spec(req: &CreateRequest) -> CreateSpec {
             crate::util::env_default(&mut env, "SSH_AUTH_SOCK", agent::GUEST_SOCKET);
         }
     }
+    // Hosted egress: the guest gets placeholders and the CA, and smolvm no credential.
+    if let Some(p) = &req.egress {
+        mounts.push(Mount {
+            host: Some(p.ca_guest_dir.clone()),
+            guest: "/run/smol/credentials".into(),
+            read_only: true,
+        });
+        // A bound variable's placeholder wins over a user -e, so the guest sees one value.
+        let bindings = &p.label.bindings;
+        env.retain(|(k, _)| !bindings.iter().any(|b| b.env == *k));
+        env.extend(
+            bindings
+                .iter()
+                .map(|b| (b.env.clone(), b.placeholder.clone())),
+        );
+        for var in [
+            "SSL_CERT_FILE",
+            "NODE_EXTRA_CA_CERTS",
+            "REQUESTS_CA_BUNDLE",
+            "CURL_CA_BUNDLE",
+            "GIT_SSL_CAINFO",
+        ] {
+            crate::util::env_default(&mut env, var, "/run/smolvm/ca-bundle.pem");
+        }
+    }
     CreateSpec {
         name: name::machine_name(&req.name),
         image: req.image.clone(),
@@ -220,7 +248,11 @@ pub fn spec(req: &CreateRequest) -> CreateSpec {
         ports: req.ports.clone(),
         network: req.network.clone(),
         deny_cidrs: req.deny_cidrs.clone(),
-        credentials: req.credentials.clone(),
+        credentials: if req.egress.is_some() {
+            Vec::new()
+        } else {
+            req.credentials.clone()
+        },
         smolfile: req.smolfile.clone(),
         from: req.template_pack.clone(),
         // The workload user is the one sessions run as: smolvm shows the workspace as owned by

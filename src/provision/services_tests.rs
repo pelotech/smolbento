@@ -25,7 +25,7 @@ fn with_services(
 fn install(t: &TestEnv, name: &str, kinds: &[Kind]) {
     t.ctx
         .services
-        .sync(name, kinds, &t.ctx.paths, &t.ctx.env)
+        .sync(name, kinds, None, &t.ctx.paths, &t.ctx.env)
         .unwrap();
 }
 
