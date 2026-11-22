@@ -32,6 +32,11 @@ const BUILTINS: [(&str, &str); 2] = [
     ),
 ];
 
+/// Whether `reference` is a bare name for a kit shipped inside smolbento.
+pub fn is_builtin(reference: &str) -> bool {
+    BUILTINS.iter().any(|(n, _)| *n == reference)
+}
+
 /// Bare names for kits smolbento publishes, loaded from their registry like any registry kit
 /// (pulled, source- and signature-checked). The tag follows the kit's 0.x releases.
 const ALIASES: [(&str, &str); 1] = [("nix", "ghcr.io/pelotech/smolbento/kits/nix:latest")];

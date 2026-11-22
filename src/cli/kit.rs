@@ -9,11 +9,9 @@ use super::args::{Format, KitArgOpts, KitCmd, KitRefArgs, SignOpts};
 use super::kit_doc::Doc;
 use crate::kits::apply::apply;
 use crate::kits::args::{ArgValues, NoResolvedValue};
-use crate::kits::model::{
-    Cap, CapBody, Content, Format as KitFormat, ImageConfig, Kind, Kit, Source,
-};
+use crate::kits::model::{Content, Format as KitFormat, ImageConfig, Kind, Kit, Source};
 use crate::kits::registry_auth::Logins;
-use crate::kits::resolve::{check_named_formats, mixing_format, resolve, resolve_for};
+use crate::kits::resolve::{check_named_formats, mixing_format, resolve, resolve_for, supported};
 use crate::kits::{apply, artifact, capability, guest, load, registry, signing};
 use crate::policy::{Decision, Policy, compile};
 use crate::provision;
@@ -369,22 +367,6 @@ fn inspect<R: Runner>(ctx: &Ctx<R>, a: &KitRefArgs) -> Result<i32> {
     Ok(0)
 }
 
-/// Whether smolbento can provide the capability (`resolve` fails a required one it can't).
-fn supported(c: &Cap) -> bool {
-    match &c.body {
-        CapBody::Unsupported => false,
-        CapBody::Credential(r) => r.oauth.as_ref().is_none_or(|o| o.passthrough),
-        // Method and path qualifiers aren't enforced.
-        CapBody::Network { install, runtime } => [install, runtime]
-            .iter()
-            .flat_map(|r| r.allow.iter().chain(&r.deny))
-            .all(|n| n.methods.is_empty() && n.paths.is_empty()),
-        // `authenticate` limits aren't enforced yet (Phase 5g).
-        CapBody::SshAgent { authenticate, .. } => authenticate.is_empty(),
-        _ => true,
-    }
-}
-
 /// Loads and resolves the kit on its own: a workload by itself, a mixin on an empty workload that
 /// provides whatever the mixin requires, at a version its constraints accept.
 fn validate<R: Runner>(ctx: &Ctx<R>, a: &KitRefArgs) -> Result<i32> {
@@ -480,7 +462,7 @@ fn reference_kind(reference: &str) -> &'static str {
             .iter()
             .any(|p| reference.starts_with(p));
     if !local {
-        return if reference == "docker" {
+        return if load::is_builtin(reference) {
             "builtin"
         } else {
             "registry"
