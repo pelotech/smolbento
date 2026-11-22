@@ -88,6 +88,16 @@ impl SmolvmError {
     /// `machine update` (still in smolvm 1.36.1) reports a missing machine as `CONFIG_ERROR`
     /// ("machine 'x' not found"), not `NOT_FOUND`, so a `CONFIG_ERROR` naming a missing machine
     /// counts too.
+    /// A fork of a machine started without `--branchable` (smolvm states it only in the message).
+    pub fn is_not_branchable(&self) -> bool {
+        self.message.contains("was not started as branchable")
+    }
+
+    /// A fork past smolvm's limit on a disk's chain of copies (stated only in the message).
+    pub fn is_chain_too_deep(&self) -> bool {
+        self.message.contains("qcow2 backing layers") || self.message.contains("safe backing depth")
+    }
+
     pub fn is_not_found(&self) -> bool {
         self.code == "NOT_FOUND"
             || (self.code == "CONFIG_ERROR"

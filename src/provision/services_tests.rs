@@ -286,3 +286,32 @@ fn a_failed_first_start_removes_the_units_with_the_sandbox() {
             .contains(&"unload dev.smolbento.ns1.claude-proj.bridge".to_string())
     );
 }
+
+/// `fork` starts the parent itself when it's stopped (one secrets resolution for the parent and
+/// its copies), so it sweeps leftovers and brings the parent's units up to date as `start` does.
+#[test]
+fn fork_sweeps_and_refreshes_the_parents_units() {
+    let mut t = test_env(&[]);
+    let _services = with_services(&mut t, "ns1");
+    install(&t, "gone", &[Kind::Bridge]);
+    t.runner()
+        .ok(&["machine", "ls", "--json"], &ls_json(&["box"]));
+    // Every other machine is missing, so the first fork name is free.
+    t.runner()
+        .fail(&["machine", "status"], "NOT_FOUND", "machine not found");
+    let labels = [
+        ("sbx.name", "box"),
+        ("sbx.service", "true"),
+        ("sbx.bridge", "true"),
+    ];
+    t.runner().ok(
+        &["machine", "status", "-n", "sbx-box"],
+        &machine_json("sbx-box", "running", &labels),
+    );
+    t.sbt(&["fork", "box"]).unwrap();
+    assert_eq!(
+        units(&t),
+        ["box:bridge"],
+        "gone is swept, box's own is written"
+    );
+}
