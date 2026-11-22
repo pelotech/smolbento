@@ -303,8 +303,8 @@ fn remaining_forks<'a>(sb: &Sandbox, all: &'a [Sandbox], removing: &[&str]) -> V
 pub fn rm<R: Runner>(ctx: &mut Ctx<R>, a: &RmArgs) -> Result<i32> {
     // First, so it happens even when a name isn't found: that is how leftovers of a sandbox
     // deleted with `smolvm machine delete` get cleaned by naming it.
-    provision::sweep_orphans(ctx);
     let all = sandbox::list(&ctx.vm)?;
+    provision::sweep_orphans_among(ctx, &all);
     let targets: Vec<&Sandbox> = if a.all {
         all.iter().collect()
     } else {
@@ -373,7 +373,7 @@ pub fn prune<R: Runner>(ctx: &mut Ctx<R>, a: &PruneArgs) -> Result<i32> {
         .partition(|sb| !remaining_forks(sb, &all, &names).is_empty());
     let targets = forks_first(targets);
     // Units of sandboxes deleted with `smolvm machine delete`: leftovers, not sandboxes.
-    let orphans = provision::orphan_services(ctx);
+    let orphans = provision::orphans_among(ctx, &all);
     // --json and --format describe the dry-run listing only, and print nothing else.
     if !a.output.is_table() {
         if !a.dry_run {

@@ -190,8 +190,9 @@ fn rm<R: Runner>(ctx: &Ctx<R>, policy: &mut Policy, a: &PolicyRmArgs) -> Result<
     }
     policy.save(&ctx.paths)?;
     writeln!(&ctx.out, "Removed")?;
-    print_host_notes(ctx, &before, policy, None, Decision::Deny, &[]);
-    provision::push_network(ctx, policy)
+    let sandboxes = sandbox::Listing::new(&ctx.vm);
+    print_host_notes(&sandboxes, &before, policy, None, Decision::Deny, &[]);
+    provision::push_network_with(ctx, policy, &sandboxes)
 }
 
 /// Adds the rule `a` describes (its protocol aside), says so, and applies it to running sandboxes.
@@ -203,8 +204,9 @@ fn add_rule<R: Runner>(
     created_via: &str,
 ) -> Result<()> {
     let parsed = parse_list(&a.resources)?;
+    let sandboxes = sandbox::Listing::new(&ctx.vm);
     if decision == Decision::Deny {
-        guard_bound_secrets(ctx, a.sandbox.as_deref(), &parsed)?;
+        guard_bound_secrets(ctx, &sandboxes, a.sandbox.as_deref(), &parsed)?;
     }
     let before = policy.clone();
     let id = policy.add_rule(
@@ -221,14 +223,14 @@ fn add_rule<R: Runner>(
         print_deny_notes(ctx, policy, a.sandbox.as_deref(), &parsed)?;
     }
     print_host_notes(
-        ctx,
+        &sandboxes,
         &before,
         policy,
         a.sandbox.as_deref(),
         decision,
         &parsed,
     );
-    provision::push_network(ctx, policy)
+    provision::push_network_with(ctx, policy, &sandboxes)
 }
 
 /// For an allow of `localhost[:PORT]` (host services, see `compile::HOST_GATEWAY`): smolvm opens
@@ -281,7 +283,7 @@ fn keeps_access_notes(before: &Policy, after: &Policy, sandboxes: &[(&str, bool)
 /// Sandboxes are listed only when a `localhost` rule is involved; a failure to list is left to
 /// `push_network` to report.
 fn host_notes<R: Runner>(
-    ctx: &Ctx<R>,
+    sandboxes: &sandbox::Listing<R>,
     before: &Policy,
     after: &Policy,
     scope: Option<&str>,
@@ -300,7 +302,7 @@ fn host_notes<R: Runner>(
     if !localhost(before) && !localhost(after) {
         return notes;
     }
-    let Ok(sandboxes) = sandbox::list(&ctx.vm) else {
+    let Ok(sandboxes) = sandboxes.get() else {
         return notes;
     };
     let sbs: Vec<(&str, bool)> = sandboxes
@@ -316,14 +318,14 @@ fn host_notes<R: Runner>(
 
 /// `host_notes`, on stderr.
 fn print_host_notes<R: Runner>(
-    ctx: &Ctx<R>,
+    sandboxes: &sandbox::Listing<R>,
     before: &Policy,
     after: &Policy,
     scope: Option<&str>,
     decision: Decision,
     added: &[Resource],
 ) {
-    for n in host_notes(ctx, before, after, scope, decision, added) {
+    for n in host_notes(sandboxes, before, after, scope, decision, added) {
         eprintln!("{n}");
     }
 }
@@ -351,10 +353,11 @@ fn print_deny_notes<R: Runner>(
 /// smolvm keeps a bound credential's hosts reachable, so a deny on them can't be honoured.
 fn guard_bound_secrets<R: Runner>(
     ctx: &Ctx<R>,
+    sandboxes: &sandbox::Listing<R>,
     scope: Option<&str>,
     denies: &[Resource],
 ) -> Result<()> {
-    let sandboxes = match sandbox::list(&ctx.vm) {
+    let sandboxes = match sandboxes.get() {
         Ok(s) => s,
         Err(e) => {
             crate::warning!(
@@ -652,10 +655,11 @@ fn respond<R: Runner>(
     policy.save(&ctx.paths)?;
     writeln!(&ctx.out, "Recorded answer {}", answer.label)?;
     if allow {
-        for n in approval_notes(ctx, &before, policy, &waiting, &id)? {
+        let sandboxes = sandbox::Listing::new(&ctx.vm);
+        for n in approval_notes(&sandboxes, &before, policy, &waiting, &id)? {
             eprintln!("{n}");
         }
-        provision::push_network(ctx, policy)?;
+        provision::push_network_with(ctx, policy, &sandboxes)?;
     }
     Ok(())
 }
@@ -663,7 +667,7 @@ fn respond<R: Runner>(
 /// What `policy allow` would note (`host_notes`) for an approval's allow rule in each of the
 /// `waiting` sandboxes, each note once.
 fn approval_notes<R: Runner>(
-    ctx: &Ctx<R>,
+    sandboxes: &sandbox::Listing<R>,
     before: &Policy,
     after: &Policy,
     waiting: &[&log::LogRow],
@@ -673,7 +677,7 @@ fn approval_notes<R: Runner>(
     let mut notes = Vec::new();
     for r in waiting {
         for n in host_notes(
-            ctx,
+            sandboxes,
             before,
             after,
             Some(&r.sandbox),
