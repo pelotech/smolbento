@@ -9,8 +9,10 @@
 
 use std::collections::BTreeMap;
 use std::ffi::OsStr;
-use std::fs;
+use std::fs::{self, File, OpenOptions};
+use std::os::fd::AsRawFd;
 use std::os::unix::fs::FileTypeExt;
+use std::os::unix::fs::OpenOptionsExt;
 use std::path::{Path, PathBuf};
 use std::process::{Command, Stdio};
 use std::sync::OnceLock;
@@ -105,6 +107,28 @@ pub fn namespace(paths: &Paths) -> String {
 /// Connections a unit serves at once per sandbox and kind (`_serve` holds one `flock`ed slot file
 /// each; the in-process agent server allowed the same). More are closed on arrival.
 pub const MAX_CONNECTIONS: usize = 8;
+
+/// `_serve bridge` processes a sandbox's login relays may keep alive after their connection ends
+/// (each holds a `flock`ed relay slot file while its relays run, `bridge::relay::LIFETIME`).
+pub const RELAY_SLOTS: usize = 4;
+
+/// Locks the first free file of `slots` (created 0600) until the returned file is dropped or the
+/// process ends; `None` when every one is held, or the files can't be made.
+pub fn acquire_slot(slots: &[PathBuf]) -> Option<File> {
+    slots.iter().find_map(|p| lock(p))
+}
+
+fn lock(path: &Path) -> Option<File> {
+    let f = OpenOptions::new()
+        .create(true)
+        .truncate(false)
+        .write(true)
+        .mode(0o600)
+        .open(path)
+        .ok()?;
+    // SAFETY: flock on a descriptor we own; it fails (EWOULDBLOCK) when another process holds it.
+    (unsafe { libc::flock(f.as_raw_fd(), libc::LOCK_EX | libc::LOCK_NB) } == 0).then_some(f)
+}
 
 /// Socket paths must be shorter than this: macOS caps them at 104 bytes including the NUL.
 const MAX_SOCKET_PATH: usize = 104;
@@ -236,6 +260,14 @@ impl HostServices {
             .collect()
     }
 
+    /// The relay slot files of sandbox `name`'s bridge (`RELAY_SLOTS`), beside its socket.
+    pub fn relay_slot_files(&self, name: &str) -> Vec<PathBuf> {
+        let sock = self.socket_path(name, Kind::Bridge);
+        (0..RELAY_SLOTS)
+            .map(|i| sock.with_extension(format!("relay{i}")))
+            .collect()
+    }
+
     fn paths_of(&self, name: &str, kind: Kind) -> UnitPaths {
         let k = kind.as_str();
         match self.flavor {
@@ -274,7 +306,7 @@ impl HostServices {
             )],
             Flavor::Systemd => vec![
                 render_systemd_socket(name, kind, &unit.socket),
-                render_systemd_service(&self.exe, kind, name, env),
+                render_systemd_service(&self.exe, kind, name, &unit.id, env),
             ],
         }
     }
@@ -353,7 +385,12 @@ impl HostServices {
 
     fn remove_kind(&self, ctl: &dyn Control, name: &str, kind: Kind) -> Result<()> {
         let unit = self.paths_of(name, kind);
-        for slot in self.slot_files(name, kind) {
+        let relays = (kind == Kind::Bridge).then(|| self.relay_slot_files(name));
+        for slot in self
+            .slot_files(name, kind)
+            .into_iter()
+            .chain(relays.into_iter().flatten())
+        {
             let _ = fs::remove_file(slot);
         }
         let socket_kind = fs::symlink_metadata(&unit.socket).map(|m| m.file_type());
@@ -564,10 +601,12 @@ fn systemd_quote(s: &str) -> String {
 fn render_systemd_socket(sandbox: &str, kind: Kind, socket: &Path) -> String {
     format!(
         "[Unit]\nDescription=smolbento {} socket for sandbox {}\n\n[Socket]\nListenStream={}\n\
-         SocketMode=0600\nDirectoryMode=0700\nAccept=yes\nMaxConnections={MAX_CONNECTIONS}\n\n[Install]\nWantedBy=sockets.target\n",
+         SocketMode=0600\nDirectoryMode=0700\nAccept=yes\nMaxConnections={}\n\n[Install]\nWantedBy=sockets.target\n",
         kind.as_str(),
         sandbox.replace('%', "%%"),
         socket.display().to_string().replace('%', "%%"),
+        // systemd counts a process that a login relay keeps alive as a connection.
+        MAX_CONNECTIONS + if kind == Kind::Bridge { RELAY_SLOTS } else { 0 },
     )
 }
 
@@ -575,6 +614,7 @@ fn render_systemd_service(
     exe: &Path,
     kind: Kind,
     sandbox: &str,
+    socket_unit: &str,
     env: &[(String, String)],
 ) -> String {
     let env: String = env
@@ -589,10 +629,11 @@ fn render_systemd_service(
         ""
     };
     format!(
-        "[Unit]\nDescription=smolbento {} connection for sandbox {}\n\n[Service]\n\
+        "[Unit]\nDescription=smolbento {} connection for sandbox {}\nPartOf={}\n\n[Service]\n\
          ExecStart={} _serve {} {}\nStandardInput=socket\nStandardOutput=null\nStandardError=null\n{kill}{env}",
         kind.as_str(),
         sandbox.replace('%', "%%"),
+        socket_unit.replace('%', "%%"),
         systemd_quote(&exe.display().to_string()),
         kind.as_str(),
         systemd_quote(sandbox),
@@ -819,17 +860,26 @@ mod tests {
             "SocketMode=0600\n",
             "DirectoryMode=0700\n",
             "Accept=yes\n",
-            "MaxConnections=8\n",
+            // The connections, and the processes login relays keep alive.
+            "MaxConnections=12\n",
             "WantedBy=sockets.target",
             "sandbox a%%b",
         ] {
             assert!(s.contains(want), "{want}: {s}");
         }
+        let agent = render_systemd_socket("s1", Kind::Agent, Path::new("/run/a.sock"));
+        assert!(agent.contains("MaxConnections=8\n"), "{agent}");
         let svc = render_systemd_service(
             Path::new("/opt/sbt"),
             Kind::Bridge,
             "s1",
+            "smolbento-n-s1-bridge.socket",
             &[("K".into(), "a\"b$c%d".into())],
+        );
+        // Stopping the socket (`rm`) stops its connections, a lingering login relay's included.
+        assert!(
+            svc.contains("PartOf=smolbento-n-s1-bridge.socket\n"),
+            "{svc}"
         );
         assert!(
             svc.contains("ExecStart=\"/opt/sbt\" _serve bridge \"s1\"\n"),

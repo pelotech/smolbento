@@ -4,8 +4,10 @@
 //! the sandbox with `curl`, returning the guest's answer.
 
 use std::collections::BTreeSet;
+use std::fs::File;
 use std::io::Write;
 use std::net::{IpAddr, Ipv4Addr, Ipv6Addr, SocketAddr, TcpListener, TcpStream};
+use std::path::PathBuf;
 use std::sync::Arc;
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::thread::{self, JoinHandle};
@@ -48,9 +50,13 @@ pub struct Relays {
     /// Warned that `MAX_RELAYS` were started.
     warned_full: bool,
     lifetime: Duration,
-    /// Dropping waits for the relays to run their `lifetime` out instead of stopping them: a unit's
-    /// `_serve bridge` handles one connection, and a login's relay outlives it.
-    linger: bool,
+    /// Set, dropping waits for the relays to run their `lifetime` out instead of stopping them: a
+    /// unit's `_serve bridge` handles one connection, and a login's relay outlives it. Its relays
+    /// then hold one of these slot files (`host_service::RELAY_SLOTS` per sandbox), bounding the
+    /// processes they keep alive.
+    linger: Option<Vec<PathBuf>>,
+    /// The slot held while lingering relays run.
+    held: Option<File>,
     stop: Arc<AtomicBool>,
     /// One per started relay.
     threads: Vec<JoinHandle<()>>,
@@ -68,15 +74,16 @@ impl Relays {
             tried: BTreeSet::new(),
             warned_full: false,
             lifetime: LIFETIME,
-            linger: false,
+            linger: None,
+            held: None,
             stop: Arc::default(),
             threads: Vec::new(),
         }
     }
 
-    /// Relays outlive the `Relays` value: dropping it waits for them (see `linger`).
-    pub fn lingering(mut self) -> Relays {
-        self.linger = true;
+    /// Relays outlive the `Relays` value: dropping it waits for them, holding one of `slots`.
+    pub fn lingering(mut self, slots: Vec<PathBuf>) -> Relays {
+        self.linger = Some(slots);
         self
     }
 
@@ -94,6 +101,17 @@ impl Relays {
                 "warning: this session already relays {MAX_RELAYS} login callbacks; not relaying \
                  localhost:{port} or any more"
             ));
+        }
+        if let Some(slots) = &self.linger
+            && self.held.is_none()
+        {
+            self.held = crate::host_service::acquire_slot(slots);
+            if self.held.is_none() {
+                return Some(format!(
+                    "warning: the sandbox's other sessions already relay login callbacks; not \
+                     relaying localhost:{port}"
+                ));
+            }
         }
         let listener = match listen(port) {
             Ok(l) => l,
@@ -115,7 +133,7 @@ impl Relays {
 impl Drop for Relays {
     /// Stops the listeners (within `POLL`, or once a running replay returns).
     fn drop(&mut self) {
-        if !self.linger {
+        if self.linger.is_none() {
             self.stop.store(true, Ordering::Relaxed);
         }
         for t in self.threads.drain(..) {
@@ -636,6 +654,38 @@ mod tests {
         assert_eq!(relays.start(ports[5]), None, "warned once");
         assert_eq!(relays.threads.len(), 4);
         assert!(TcpStream::connect((Ipv4Addr::LOCALHOST, ports[4])).is_err());
+    }
+
+    /// A process whose relays outlive its connection holds one of the sandbox's relay slots while
+    /// they run, so lingering relays are bounded across processes, not only per process.
+    #[test]
+    fn lingering_relays_hold_one_of_the_sandboxs_slots() {
+        let dir = tempfile::tempdir().unwrap();
+        let slots = vec![dir.path().join("b.relay0")];
+        let lingering = |lifetime| {
+            let (exec, _) = fake(answered(""));
+            let mut r = Relays::new(exec, "sbx-m", "agent").lingering(slots.clone());
+            r.lifetime = lifetime;
+            r
+        };
+        let mut first = lingering(Duration::from_millis(300));
+        assert_eq!(first.start(free_port()), None);
+        let mut second = lingering(Duration::from_millis(300));
+        let port = free_port();
+        assert_eq!(
+            second.start(port).as_deref(),
+            Some(
+                format!(
+                    "warning: the sandbox's other sessions already relay login callbacks; not \
+                     relaying localhost:{port}"
+                )
+                .as_str()
+            )
+        );
+        assert!(TcpStream::connect((Ipv4Addr::LOCALHOST, port)).is_err());
+        // Once the first's relays have run out, its slot is free.
+        drop(first);
+        assert_eq!(second.start(free_port()), None);
     }
 
     #[test]
