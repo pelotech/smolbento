@@ -533,6 +533,14 @@ pub fn prepare_create<R: Runner>(
         eprintln!("{note}");
     }
     if hosted {
+        // Without its unit nothing owns the interceptor port and every connection would fail.
+        if ctx.services.plan(&req.name).is_none() {
+            bail!(
+                "network.egress=hosted needs a service manager (launchd or a private `systemd --user` \
+                 socket directory, and a shorter sandbox name if its socket path is too long); \
+                 unset it or use smolvm"
+            );
+        }
         req.egress = Some(crate::egress::prepare(
             &ctx.paths,
             &req.name,

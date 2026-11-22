@@ -1099,7 +1099,19 @@ fn egress_create(
     egress: &str,
     tweak: impl FnOnce(&mut CreateRequest),
 ) -> (TestEnv, CreateRequest, Result<Sandbox>) {
-    let t = test_env(&[("SMOLBENTO_NETWORK_EGRESS", egress)]);
+    let mut t = test_env(&[("SMOLBENTO_NETWORK_EGRESS", egress)]);
+    // A hosted sandbox needs its egress unit: a fake service manager under a short temp dir.
+    let tmp = tempfile::Builder::new()
+        .prefix("sbe")
+        .tempdir_in("/tmp")
+        .unwrap();
+    t.ctx.services = crate::host_service::fake::services(
+        tmp.path(),
+        crate::host_service::Flavor::Launchd,
+        "ns1",
+    )
+    .0;
+    std::mem::forget(tmp);
     set_policy(&t, "mode = \"deny-all\"");
     save_secret(&t, "github", None, "gh-123");
     let fake = t.runner();
@@ -1154,6 +1166,27 @@ fn a_hosted_create_passes_no_credential_and_mounts_the_ca() {
     }
     assert!(create.contains("sbx.egress="), "{create}");
     assert!(!create.contains("gh-123"), "{create}");
+}
+
+#[test]
+fn a_hosted_create_is_refused_when_no_egress_unit_can_be_installed() {
+    // The test context has no service manager.
+    let t = test_env(&[("SMOLBENTO_NETWORK_EGRESS", "hosted")]);
+    set_policy(&t, "mode = \"deny-all\"");
+    save_secret(&t, "github", None, "gh-123");
+    let mut req = CreateRequest {
+        name: "s1".into(),
+        ..Default::default()
+    };
+    let e = prepare_create(&t.ctx, &mut req, &[], None)
+        .unwrap_err()
+        .to_string();
+    assert!(
+        e.contains("network.egress=hosted needs a service manager"),
+        "{e}"
+    );
+    assert!(req.egress.is_none());
+    assert!(!t.ctx.paths.egress("s1").exists());
 }
 
 #[test]
