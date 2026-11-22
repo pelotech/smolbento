@@ -149,8 +149,8 @@ impl SecretStore for MacKeychain {
         if code != 0 {
             bail!("writing the keychain: {err}");
         }
+        // The caller puts the previous value back (or removes this one); deleting here would lose it.
         if self.get(account).ok().flatten().as_deref() != Some(value) {
-            let _ = self.delete(account);
             bail!("the macOS Keychain didn't store the value intact");
         }
         Ok(())

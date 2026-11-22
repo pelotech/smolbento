@@ -248,7 +248,10 @@ pub(crate) fn store<R: Runner>(
         if old.as_ref().is_some_and(|e| e.source == Source::Keychain) {
             previous = ctx.store.get(&account)?;
         }
-        ctx.store.set(&account, v)?;
+        if let Err(e) = ctx.store.set(&account, v) {
+            restore(ctx, &account, previous.as_deref());
+            return Err(e);
+        }
     }
     let described = match &source {
         Source::Keychain => format!("stored in {}", ctx.store.describe()),
@@ -304,8 +307,8 @@ fn refresh<R: Runner>(
     }
 }
 
-/// Puts a stored value back as it was before a `set` whose secrets.toml save then failed: the
-/// earlier value, or none. Best effort; the save error is the one the caller reports.
+/// Puts a stored value back as it was before a `set` whose store write or secrets.toml save then
+/// failed: the earlier value, or none. Best effort; the first error is the one the caller reports.
 fn restore<R: Runner>(ctx: &Ctx<R>, account: &str, previous: Option<&str>) {
     let _ = match previous {
         Some(v) => ctx.store.set(account, v),
@@ -684,15 +687,16 @@ pub fn put_registry<R: Runner>(
     let account = entry.account();
     // Kept in memory to put back if secrets.toml can't be saved.
     let previous = ctx.store.get(&account)?;
-    ctx.store.set(&account, value)?;
-    file.registries
-        .retain(|r| !(r.host == entry.host && r.sandbox == entry.sandbox));
-    file.registries.push(entry);
-    if let Err(e) = file.save(&ctx.paths) {
+    let saved = ctx.store.set(&account, value).and_then(|()| {
+        file.registries
+            .retain(|r| !(r.host == entry.host && r.sandbox == entry.sandbox));
+        file.registries.push(entry);
+        file.save(&ctx.paths)
+    });
+    if saved.is_err() {
         restore(ctx, &account, previous.as_deref());
-        return Err(e);
     }
-    Ok(())
+    saved
 }
 
 #[cfg(test)]
