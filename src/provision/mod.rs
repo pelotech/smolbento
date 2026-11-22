@@ -89,7 +89,24 @@ fn plan_for<R: Runner>(
         install_rules.unwrap_or_default(),
         meta.rec.host_access,
     );
-    let (env, remove) = start_env(&secrets, meta, ctx.store.as_ref(), install);
+    let (env, remove, egress) = match &meta.egress {
+        // Secret values stay with bento's interceptor; smolvm gets only its token.
+        Some(label) => (
+            vec![(
+                "SMOLVM_INTERCEPTOR_TOKEN".to_string(),
+                crate::egress::token(&ctx.paths, sandbox)?,
+            )],
+            Vec::new(),
+            Some(std::net::SocketAddr::from(([127, 0, 0, 1], label.port))),
+        ),
+        None if meta.rec.egress_unreadable => bail!(
+            "{sandbox}: its sbx.egress label is unreadable; recreate it (bento rm {sandbox}, then bento create …)"
+        ),
+        None => {
+            let (env, remove) = start_env(&secrets, meta, ctx.store.as_ref(), install);
+            (env, remove, None)
+        }
+    };
     let clone = meta.clone_repo.as_ref().map(|dir| {
         let repo = Path::new(dir);
         let read =
@@ -110,6 +127,7 @@ fn plan_for<R: Runner>(
         network,
         env,
         remove,
+        egress,
         clone,
         branchable: meta.forkable() && ctx.settings.bool("fork.enabled")?,
         kit: None,
@@ -404,6 +422,12 @@ pub fn prepare_create<R: Runner>(
                 .extend(mcp.steps);
         }
     }
+    // Before anything is made. Hosted egress swaps values in bento, where an install-only
+    // credential (restarted away after the install hooks) has no way to be withdrawn yet.
+    let hosted = !req.credentials.is_empty() && crate::egress::hosted(&ctx.settings, &req.name)?;
+    if hosted && !req.rec.credential_install.is_empty() {
+        bail!("install-only credentials aren't supported with network.egress=hosted yet");
+    }
     if !denies.is_empty() {
         added.extend(crate::policy::notes::add_create_denies(
             &mut policy,
@@ -481,6 +505,13 @@ pub fn prepare_create<R: Runner>(
     req.deny_cidrs = compile::deny_cidrs(&policy, &req.name, req.rec.host_access);
     if let Some(note) = host_access_note(&req.name, req.rec.host_access) {
         eprintln!("{note}");
+    }
+    if hosted {
+        req.egress = Some(crate::egress::prepare(
+            &ctx.paths,
+            &req.name,
+            &req.credentials,
+        )?);
     }
     Ok((added, first_start))
 }

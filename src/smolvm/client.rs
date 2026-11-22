@@ -323,7 +323,7 @@ impl<R: Runner> Smolvm<R> {
     /// Starts the machine, calling `on_progress` as smolvm pulls the image (only when it has to
     /// pull). `env` reaches the smolvm process only: it's how secret values get to credentials.
     /// `remove` names inherited variables to drop, so a credential without a value isn't the
-    /// host's. `branchable` lets `bento fork` branch it later, at a cost: smolvm doesn't reclaim
+    /// host's. `egress` is the address of bento's own interceptor (hosted egress). `branchable` lets `bento fork` branch it later, at a cost: smolvm doesn't reclaim
     /// its idle memory, and on Linux other processes running as the user can read the VM
     /// process's memory.
     pub fn start(
@@ -332,11 +332,15 @@ impl<R: Runner> Smolvm<R> {
         branchable: bool,
         env: &[(String, String)],
         remove: &[String],
+        egress: Option<std::net::SocketAddr>,
         on_progress: &mut dyn FnMut(PullProgress),
     ) -> Result<()> {
         let mut a = args(&["machine", "start", "-n", name]);
         if branchable {
             a.push("--branchable".into());
+        }
+        if let Some(addr) = egress {
+            flag(&mut a, "--egress-interceptor", addr.to_string());
         }
         let mut on_line = |line: &str| {
             if let Some(p) = pull_progress(line) {
@@ -575,8 +579,8 @@ mod tests {
         let fake = FakeRunner::new();
         fake.ok(&["machine", "start"], "");
         let vm = Smolvm::new(fake);
-        vm.start("m", true, &[], &[], &mut |_| {}).unwrap();
-        vm.start("m", false, &[], &[], &mut |_| {}).unwrap();
+        vm.start("m", true, &[], &[], None, &mut |_| {}).unwrap();
+        vm.start("m", false, &[], &[], None, &mut |_| {}).unwrap();
         assert_eq!(
             vm.runner().call_lines(),
             vec!["machine start -n m --branchable", "machine start -n m"]
@@ -701,6 +705,7 @@ mod tests {
             true,
             &[("TOK".into(), "secret".into())],
             &["GONE".into()],
+            None,
             &mut |_| {},
         )
         .unwrap();
@@ -913,9 +918,14 @@ mod tests {
         );
         let vm = Smolvm::new(fake);
         let mut seen = Vec::new();
-        vm.start("m", false, &[("T".into(), "v".into())], &[], &mut |p| {
-            seen.push(p)
-        })
+        vm.start(
+            "m",
+            false,
+            &[("T".into(), "v".into())],
+            &[],
+            None,
+            &mut |p| seen.push(p),
+        )
         .unwrap();
         assert_eq!(seen, [PullProgress::Percent(10), PullProgress::Syncing]);
         assert_eq!(vm.runner().call_lines(), vec!["machine start -n m"]);
@@ -930,7 +940,7 @@ mod tests {
         let fake = FakeRunner::new();
         fake.fail(&["machine", "start"], "SMOLVM_ERROR", "boom");
         let err = Smolvm::new(fake)
-            .start("m", true, &[], &[], &mut |_| {})
+            .start("m", true, &[], &[], None, &mut |_| {})
             .unwrap_err();
         assert_eq!(err.to_string(), "smolvm: boom");
     }
@@ -1032,7 +1042,7 @@ mod tests {
     #[test]
     fn lifecycle_calls() {
         let vm = Smolvm::new(FakeRunner::new());
-        vm.start("m", true, &[], &[], &mut |_| {}).unwrap();
+        vm.start("m", true, &[], &[], None, &mut |_| {}).unwrap();
         vm.stop("m").unwrap();
         vm.delete("m").unwrap();
         vm.cp("/a", "m:/b").unwrap();

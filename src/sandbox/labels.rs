@@ -134,6 +134,8 @@ impl CredFormat {
 /// and `Meta`.
 #[derive(Debug, Clone, Default, PartialEq, Eq)]
 pub struct Recorded {
+    /// Read only: `sbx.egress` is present but unreadable, so a start must refuse.
+    pub egress_unreadable: bool,
     /// Services whose credentials were bound at create (`sbx.secrets`).
     pub secrets: Vec<String>,
     /// Hosts of those credentials as bound at create, sorted (`sbx.credential-hosts`). The
@@ -371,6 +373,10 @@ impl Meta {
             skills: text(SKILLS).and_then(|j| crate::skills::Label::from_label(&j)),
             mcp: labels.get(MCP).map(|names| list(Some(names))),
             rec: Recorded {
+                egress_unreadable: labels.contains_key(EGRESS)
+                    && text(EGRESS)
+                        .and_then(|j| crate::egress::Label::from_label(&j))
+                        .is_none(),
                 secrets: list(labels.get(SECRETS)),
                 credential_hosts: list(labels.get(CREDENTIAL_HOSTS)),
                 credential_env: list(labels.get(CREDENTIAL_ENV)),
@@ -636,6 +642,15 @@ mod tests {
         // None of them is written for a sandbox that doesn't use it, so its labels don't change.
         let plain = meta().to_labels();
         assert_eq!(plain.len(), 6, "{plain:?}");
+    }
+
+    #[test]
+    fn a_garbled_egress_label_is_marked_unreadable() {
+        let labels: BTreeMap<String, String> = [("sbx.name", "w"), ("sbx.egress", "{nope")]
+            .map(|(k, v)| (k.to_string(), v.to_string()))
+            .into();
+        let m = Meta::from_labels(&labels).unwrap();
+        assert!(m.egress.is_none() && m.rec.egress_unreadable);
     }
 
     #[test]

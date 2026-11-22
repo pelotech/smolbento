@@ -264,6 +264,9 @@ pub(crate) fn delete_keeping_remote<R: Runner>(
         crate::warning!("removing the host services of {}: {e:#}", sb.name());
     }
     session::clear(&ctx.paths.sessions(), sb.name());
+    if let Err(e) = crate::egress::forget(&ctx.paths, sb.name()) {
+        crate::warning!("removing the egress state of {}: {e:#}", sb.name());
+    }
     super::secret::forget_sandbox(ctx, sb.name(), forget_secrets)
 }
 

@@ -32,6 +32,7 @@ pub(super) fn plan() -> StartPlan {
     StartPlan {
         network: NetworkSpec::Open,
         env: vec![("TOK".into(), "secret".into())],
+        egress: None,
         remove: vec!["GONE".into()],
         clone: None,
         branchable: true,

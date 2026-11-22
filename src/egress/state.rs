@@ -10,6 +10,7 @@ use std::collections::BTreeSet;
 use std::os::unix::fs::PermissionsExt;
 use std::path::PathBuf;
 
+#[derive(Debug, Clone, PartialEq, Eq)]
 pub struct Prepared {
     pub label: Label,
     /// The CA's guest-facing half, mounted at `/run/smol/credentials`.
