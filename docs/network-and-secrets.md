@@ -71,6 +71,10 @@ network --id`), `--json` the same rules as `{"rules": [...]}`, and `-q` only the
 - Blocked requests come from smolvm's egress log. `policy approval` lists hosts with no rule yet;
   the host is the approval ID. `--option dismiss` adds no rule and hides the host until it is
   blocked again.
+- `policy check network` takes a URL too, as sbx does: `https://example.com/x` checks
+  `example.com:443` (`http` is port 80; another scheme needs a port). The host's loopback
+  (`localhost`, `127.0.0.1`, `::1`, `host.docker.internal`) is denied whatever the mode unless the
+  sandbox has host access, which a `localhost` allow rule gives at create; the check says so.
 - `policy check network --protocol udp HOST:PORT` checks a UDP destination. smolvm admits UDP
   wherever its allow list admits TCP, except port 53: it answers DNS itself.
 - `policy rm network --resource HOST --method GET --path '/v1/**'` removes the host from the rule

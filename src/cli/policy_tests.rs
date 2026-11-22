@@ -598,7 +598,7 @@ fn a_port_scoped_deny_cancels_a_balanced_preset_entry() {
     // As compile does: the preset entry (widened to *.digicert.com) is gone.
     let mut p = p;
     p.deny(None, "crl*.digicert.com:80");
-    assert!(!compile::check(&p, Some("s1"), &[], "crl3.digicert.com:80").allowed);
+    assert!(!compile::check(&p, Some("s1"), &[], None, "crl3.digicert.com:80").allowed);
 }
 
 #[test]
@@ -1784,4 +1784,99 @@ kit:my-sb   kit      sandbox:my-sb   network: 2 allow, 2 deny
         rows[0]["actions"],
         serde_json::json!(["net:connect:tcp", "net:connect:udp"])
     );
+}
+
+/// `policy check network` target and resource, as sbx 0.54 prints them.
+fn checked(t: &mut TestEnv, target: &str) -> serde_json::Value {
+    t.sbt(&["policy", "check", "network", "--json", target])
+        .ok();
+    serde_json::from_str(&t.stdout()).unwrap()
+}
+
+#[test]
+fn check_reads_urls_as_sbx_does() {
+    let mut t = test_env(&[]);
+    set_policy(&t, "mode = \"deny-all\"");
+    for (given, target, resource) in [
+        (
+            "https://Example.COM/path",
+            "example.com:443",
+            "example.com:443",
+        ),
+        ("http://example.com", "example.com:80", "example.com:80"),
+        (
+            "http://example.com:8080/x",
+            "example.com:8080",
+            "example.com:8080",
+        ),
+        ("https://[::1]/", "[::1]:443", "::1:443"),
+        ("[::1]:80", "[::1]:80", "::1:80"),
+        ("host.docker.internal", "localhost:443", "localhost:443"),
+    ] {
+        let v = checked(&mut t, given);
+        assert_eq!(
+            (v["target"].as_str(), v["resource_value"].as_str()),
+            (Some(target), Some(resource)),
+            "{given}"
+        );
+    }
+    for (given, want) in [
+        (
+            "ftp://example.com",
+            "target URL scheme \"ftp\" must include an explicit port",
+        ),
+        (
+            "example.com/path",
+            "target must be a host, host:port, IP literal, or URL with a port",
+        ),
+    ] {
+        let e = t.sbt(&["policy", "check", "network", given]).unwrap_err();
+        assert_eq!(e.to_string(), want, "{given}");
+    }
+}
+
+/// Every sandbox without host access is created with the host's loopback denied
+/// (`compile::HOST_LOOPBACK`), whatever the mode; the check says so.
+#[test]
+fn check_denies_the_hosts_loopback_without_host_access() {
+    let mut t = test_env(&[]);
+    set_policy(&t, "mode = \"allow-all\"");
+    for target in [
+        "localhost",
+        "127.0.0.1:8080",
+        "[::1]:80",
+        "100.96.0.1",
+        "host.docker.internal",
+    ] {
+        let v = checked(&mut t, target);
+        assert_eq!(v["allowed"], false, "{target}: {v}");
+        assert_eq!(v["deny_kind"], "implicit", "{target}");
+        assert_eq!(
+            v["reason"],
+            "The host's loopback is closed to sandboxes created without a localhost allow rule",
+            "{target}"
+        );
+    }
+    assert_eq!(checked(&mut t, "example.com")["allowed"], true);
+
+    // A sandbox's own record decides: created with host access, it has it.
+    t.sandboxes(&[
+        ("open", "running", &[("sbx.host-access", "true")]),
+        ("shut", "running", &[]),
+    ]);
+    let v = |t: &mut TestEnv, sb: &str| {
+        t.sbt(&[
+            "policy",
+            "check",
+            "network",
+            "--json",
+            "--sandbox",
+            sb,
+            "localhost",
+        ])
+        .ok();
+        serde_json::from_str::<serde_json::Value>(&t.stdout()).unwrap()["allowed"].clone()
+    };
+    assert_eq!(v(&mut t, "open"), true);
+    assert_eq!(v(&mut t, "shut"), false);
 }

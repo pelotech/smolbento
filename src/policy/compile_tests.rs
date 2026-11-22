@@ -114,7 +114,7 @@ fn a_port_scoped_deny_cidr_isnt_a_create_deny() {
         deny_cidrs(&p, "s1", host_access(&p, "s1")),
         with_loopback(&["192.168.0.0/16"])
     );
-    let v = check(&p, Some("s1"), &[], "10.1.2.3:22");
+    let v = check(&p, Some("s1"), &[], None, "10.1.2.3:22");
     assert!(
         v.allowed && v.reason.contains("isn't enforced"),
         "{}",
@@ -127,23 +127,29 @@ fn check_honours_ports() {
     let mut p = policy(Mode::Balanced);
     p.allow(None, "api.x.com");
     let deny = p.deny(None, "api.x.com:8080");
-    let v = check(&p, Some("s1"), &[], "api.x.com:8080");
+    let v = check(&p, Some("s1"), &[], None, "api.x.com:8080");
     assert!(
         v.allowed && v.reason.contains(&deny) && v.reason.contains("isn't enforced"),
         "{}",
         v.reason
     );
-    let v = check(&p, Some("s1"), &[], "api.x.com:9090");
+    let v = check(&p, Some("s1"), &[], None, "api.x.com:9090");
     assert!(v.allowed && !v.reason.contains(&deny), "{}", v.reason);
-    let v = check(&p, Some("s1"), &[], "api.x.com");
+    let v = check(&p, Some("s1"), &[], None, "api.x.com");
     assert!(v.allowed && !v.reason.contains(&deny), "{}", v.reason);
     // A bound secret's host with a port is still that host.
-    let v = check(&p, Some("s1"), &["cred.example".into()], "cred.example:443");
+    let v = check(
+        &p,
+        Some("s1"),
+        &["cred.example".into()],
+        None,
+        "cred.example:443",
+    );
     assert!(v.allowed && v.reason.contains("secret"), "{}", v.reason);
     // The preset allows ocsp.digicert.com:80 only, in sbx; smolvm allows every port.
-    let v = check(&p, Some("s1"), &[], "ocsp.digicert.com:80");
+    let v = check(&p, Some("s1"), &[], None, "ocsp.digicert.com:80");
     assert!(v.allowed && v.reason.contains("balanced"), "{}", v.reason);
-    let v = check(&p, Some("s1"), &[], "ocsp.digicert.com");
+    let v = check(&p, Some("s1"), &[], None, "ocsp.digicert.com");
     assert!(
         v.allowed && v.reason.contains("smolvm still allows"),
         "{}",
@@ -156,7 +162,7 @@ fn check_prefers_an_enforced_cidr_deny() {
     let mut p = policy(Mode::AllowAll);
     p.deny(None, "**");
     let cidr = p.deny(None, "10.0.0.0/8");
-    let v = check(&p, Some("s1"), &[], "10.1.2.3");
+    let v = check(&p, Some("s1"), &[], None, "10.1.2.3");
     assert!(!v.allowed && v.reason.contains(&cidr), "{}", v.reason);
     assert!(!v.reason.contains("isn't enforced"), "{}", v.reason);
 }
@@ -180,7 +186,13 @@ fn trailing_dot_rules_and_targets_normalize() {
     let mut p = policy(Mode::DenyAll);
     p.allow(None, "localhost.");
     assert!(host_access(&p, "s1"));
-    let v = check(&p, Some("s1"), &["cred.example".into()], "cred.example.");
+    let v = check(
+        &p,
+        Some("s1"),
+        &["cred.example".into()],
+        None,
+        "cred.example.",
+    );
     assert!(v.allowed && v.reason.contains("secret"), "{}", v.reason);
 }
 
@@ -289,19 +301,19 @@ fn check_explains() {
     let mut p = policy(Mode::Balanced);
     let deny = p.deny(None, "evil.com");
     let allow = p.allow(Some("s1"), "api.x.com");
-    let v = check(&p, Some("s1"), &[], "evil.com");
+    let v = check(&p, Some("s1"), &[], None, "evil.com");
     assert!(!v.allowed && v.reason.contains(&deny), "{}", v.reason);
-    let v = check(&p, Some("s1"), &[], "api.x.com");
+    let v = check(&p, Some("s1"), &[], None, "api.x.com");
     assert!(v.allowed && v.reason.contains(&allow), "{}", v.reason);
     assert!(
-        check(&p, Some("s1"), &[], "pypi.org")
+        check(&p, Some("s1"), &[], None, "pypi.org")
             .reason
             .contains("default-package-managers")
     );
-    assert!(!check(&p, None, &[], "example.com").allowed);
-    let v = check(&p, Some("s1"), &["example.com".into()], "example.com");
+    assert!(!check(&p, None, &[], None, "example.com").allowed);
+    let v = check(&p, Some("s1"), &["example.com".into()], None, "example.com");
     assert!(v.allowed && v.reason.contains("secret"), "{}", v.reason);
-    assert!(check(&Policy::default(), None, &[], "example.com").allowed);
+    assert!(check(&Policy::default(), None, &[], None, "example.com").allowed);
 }
 
 #[test]
@@ -309,13 +321,13 @@ fn check_reports_what_is_enforced() {
     let mut p = policy(Mode::AllowAll);
     p.deny(None, "evil.com");
     p.deny(None, "10.0.0.0/8");
-    let v = check(&p, Some("s1"), &[], "evil.com");
+    let v = check(&p, Some("s1"), &[], None, "evil.com");
     assert!(
         v.allowed && v.reason.contains("isn't enforced") && v.reason.contains("allow-all"),
         "{}",
         v.reason
     );
-    let v = check(&p, Some("s1"), &[], "10.1.2.3");
+    let v = check(&p, Some("s1"), &[], None, "10.1.2.3");
     assert!(!v.allowed && v.reason.contains("deny rule"), "{}", v.reason);
     // Deny CIDRs reach smolvm at create only.
     assert!(
@@ -327,7 +339,7 @@ fn check_reports_what_is_enforced() {
 
     let mut p = policy(Mode::Balanced);
     p.deny(None, "api.openai.com");
-    let v = check(&p, Some("s1"), &[], "api.openai.com");
+    let v = check(&p, Some("s1"), &[], None, "api.openai.com");
     assert!(
         v.allowed && v.reason.contains("isn't enforced") && v.reason.contains("openai.com"),
         "{}",
@@ -337,7 +349,7 @@ fn check_reports_what_is_enforced() {
     let mut p = policy(Mode::DenyAll);
     p.allow(None, "**");
     p.deny(None, "evil.com");
-    let v = check(&p, None, &[], "evil.com");
+    let v = check(&p, None, &[], None, "evil.com");
     assert!(
         v.allowed && v.reason.contains("allow-everything"),
         "{}",
@@ -371,6 +383,7 @@ fn credential_hosts_match_case_insensitively() {
         &policy(Mode::DenyAll),
         Some("s1"),
         &["API.Example.com".into()],
+        None,
         "api.example.COM",
     );
     assert!(v.allowed && v.reason.contains("secret"), "{}", v.reason);
@@ -379,9 +392,21 @@ fn credential_hosts_match_case_insensitively() {
 #[test]
 fn credential_hosts_cover_their_subdomains_as_smolvm_does() {
     let bound = ["github.com".to_string()];
-    let v = check(&policy(Mode::DenyAll), Some("s1"), &bound, "foo.github.com");
+    let v = check(
+        &policy(Mode::DenyAll),
+        Some("s1"),
+        &bound,
+        None,
+        "foo.github.com",
+    );
     assert!(v.allowed && v.reason.contains("secret"), "{}", v.reason);
-    let v = check(&policy(Mode::DenyAll), Some("s1"), &bound, "notgithub.com");
+    let v = check(
+        &policy(Mode::DenyAll),
+        Some("s1"),
+        &bound,
+        None,
+        "notgithub.com",
+    );
     assert!(!v.allowed, "{}", v.reason);
 }
 
@@ -398,11 +423,29 @@ fn wildcard_credential_hosts_are_patterns() {
 #[test]
 fn wildcard_credential_hosts_cover_subdomains_only() {
     let bound = ["*.notion.com".to_string()];
-    let v = check(&policy(Mode::DenyAll), Some("s1"), &bound, "api.notion.com");
+    let v = check(
+        &policy(Mode::DenyAll),
+        Some("s1"),
+        &bound,
+        None,
+        "api.notion.com",
+    );
     assert!(v.allowed && v.reason.contains("secret"), "{}", v.reason);
-    let v = check(&policy(Mode::DenyAll), Some("s1"), &bound, "a.b.notion.com");
+    let v = check(
+        &policy(Mode::DenyAll),
+        Some("s1"),
+        &bound,
+        None,
+        "a.b.notion.com",
+    );
     assert!(v.allowed && v.reason.contains("secret"), "{}", v.reason);
-    let v = check(&policy(Mode::DenyAll), Some("s1"), &bound, "notion.com");
+    let v = check(
+        &policy(Mode::DenyAll),
+        Some("s1"),
+        &bound,
+        None,
+        "notion.com",
+    );
     assert!(!v.allowed, "the apex isn't covered: {}", v.reason);
     let spec = network(&policy(Mode::DenyAll), "s1", &bound, false);
     assert!(admits(&spec, "api.notion.com", Mode::DenyAll).is_some());

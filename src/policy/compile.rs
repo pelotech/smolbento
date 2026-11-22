@@ -380,20 +380,34 @@ pub fn check_udp(
     policy: &Policy,
     sandbox: Option<&str>,
     credential_hosts: &[String],
+    host_access: Option<bool>,
     target: &str,
 ) -> Verdict {
-    let v = check(policy, sandbox, credential_hosts, target);
+    let v = check(policy, sandbox, credential_hosts, host_access, target);
     if v.allowed && split_port(target.trim()).is_ok_and(|(_, port)| port == Some(53)) {
         return implicit_deny("smolvm answers DNS itself; UDP to port 53 never reaches the target");
     }
     v
 }
 
-/// sbx semantics: bound secrets, then deny rules, then the mode, allow rules and the preset.
+/// Whether `host` is the host's loopback as a guest reaches it: `localhost` (host services),
+/// a loopback address, or the gateway smolvm forwards to it.
+fn is_host_loopback(host: &str) -> bool {
+    host == "localhost"
+        || host == HOST_GATEWAY
+        || host
+            .parse::<std::net::IpAddr>()
+            .is_ok_and(|ip| ip.is_loopback())
+}
+
+/// sbx semantics: bound secrets, then deny rules, then the mode, allow rules and the preset. The
+/// host's loopback comes first: it's denied at create, whatever the rules, unless the sandbox has
+/// host access (`host_access`: the sandbox's record; `None` predicts one created now).
 pub fn check(
     policy: &Policy,
     sandbox: Option<&str>,
     credential_hosts: &[String],
+    host_access: Option<bool>,
     target: &str,
 ) -> Verdict {
     let target = target.trim().to_ascii_lowercase();
@@ -402,6 +416,15 @@ pub fn check(
     let host = host.strip_suffix('.').unwrap_or(host).to_string();
     if credential_hosts.iter().any(|h| credential_admits(h, &host)) {
         return verdict(true, "a secret bound to this sandbox uses this host");
+    }
+    let host_access = host_access.unwrap_or_else(|| match sandbox {
+        Some(s) => self::host_access(policy, s),
+        None => user_host_services(policy, None),
+    });
+    if is_host_loopback(&host) && !host_access {
+        return implicit_deny(
+            "the host's loopback is closed to sandboxes created without a localhost allow rule",
+        );
     }
     // No sandbox: the global rules only.
     let mode = policy.current_mode();
