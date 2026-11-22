@@ -65,9 +65,13 @@ struct CapabilityItem {
     declaration_blocks: Option<Value>,
 }
 
+/// Strict (SPEC-v3 §1.2); `name` and `description` are display metadata (§7.1.1).
 #[derive(Deserialize)]
+#[serde(deny_unknown_fields)]
 struct GroupItem {
     name: Option<String>,
+    #[allow(dead_code)]
+    description: Option<String>,
     #[serde(default)]
     optional: bool,
     #[serde(default)]
@@ -401,8 +405,17 @@ pub(crate) fn body(ty: &str, config: Option<Value>) -> Result<CapBody> {
         }
         "volume@1" => {
             let c: VolumeCfg = decode(config)?;
+            no_colon("volume@1", &c.path)?;
+            // Cleaned as the storage key is (SPEC-v3 §7.1).
+            let path = clean_path(&c.path);
+            if !path.starts_with('/') || path == "/" {
+                bail!(
+                    "volume@1 path {:?} must be an absolute path other than /",
+                    c.path
+                );
+            }
             CapBody::Volume {
-                path: c.path,
+                path,
                 tmpfs: c.tmpfs,
                 mode: c.mode,
             }
@@ -415,6 +428,7 @@ pub(crate) fn body(ty: &str, config: Option<Value>) -> Result<CapBody> {
                     c.path
                 );
             }
+            no_colon("host-mount@1", &c.path)?;
             if let Some(m) = &c.mode
                 && !((3..=4).contains(&m.len()) && m.bytes().all(|b| (b'0'..=b'7').contains(&b)))
             {
@@ -427,6 +441,12 @@ pub(crate) fn body(ty: &str, config: Option<Value>) -> Result<CapBody> {
         }
         "resources@1" => {
             let c: ResourcesCfg = decode(config)?;
+            // The YAML and JSON readers never produce infinity or NaN.
+            if let Some(cpu) = c.cpu
+                && cpu < 0.0
+            {
+                bail!("resources@1 cpu must be a non-negative number of cores (got {cpu})");
+            }
             CapBody::Resources {
                 cpus: c.cpu.map(|n| n.to_string()),
                 memory: c.memory,
@@ -717,7 +737,21 @@ fn credential(c: CredCfg) -> Result<CredReq> {
     if c.api_key.is_none() && c.oauth.is_none() {
         bail!("one of apiKey or oauth is required");
     }
-    let phases = phases(c.phase, false)?;
+    // `split` gives one empty word for an empty name, so that's refused too.
+    let kebab = |s: &str| {
+        s.split('-').all(|w| {
+            !w.is_empty()
+                && w.bytes()
+                    .all(|b| b.is_ascii_lowercase() || b.is_ascii_digit())
+        })
+    };
+    if !kebab(&c.service) {
+        bail!(
+            "credential@1 service {:?} must be a lowercase-kebab name",
+            c.service
+        );
+    }
+    let phases = phases(c.phase, true)?;
     let (env, inject) = match c.api_key {
         Some(k) => {
             let inject = k
@@ -928,6 +962,31 @@ struct AgentSkillsCfg {
 struct AgentSkillCfg {
     path: String,
     name: Option<String>,
+}
+
+/// smolvm's `-v` reads `:` as the host:guest separator, so a guest path can't hold one.
+fn no_colon(ty: &str, path: &str) -> Result<()> {
+    if path.contains(':') {
+        bail!("{ty} path {path:?} can't contain ':' (smolvm reads it as host:guest)");
+    }
+    Ok(())
+}
+
+/// `path` cleaned lexically: `.` dropped, `..` taking the component before it (none above the
+/// root), repeated and trailing `/` collapsed. No file system access, so links aren't followed.
+fn clean_path(path: &str) -> String {
+    use std::path::{Component, PathBuf};
+    let mut clean = PathBuf::new();
+    for c in std::path::Path::new(path).components() {
+        match c {
+            Component::ParentDir => {
+                clean.pop();
+            }
+            Component::CurDir => {}
+            c => clean.push(c),
+        }
+    }
+    clean.to_string_lossy().into_owned()
 }
 
 /// Absolute with no `.`/`..`/empty components (so no `//` or trailing `/`), not `/`, no NUL.

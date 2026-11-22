@@ -1252,3 +1252,124 @@ fn dockerd_config_decodes_strictly() {
     assert!(!auto(Some(json!({"autoStart": false}))));
     assert!(body(ty, Some(json!({"other": 1}))).is_err());
 }
+
+fn volume_path(path: &str) -> Result<String> {
+    let k = one_cap(&format!(
+        r#"{{"type":"com.docker.sandbox/volume@1","config":{{"path":"{path}"}}}}"#
+    ))?;
+    match &k.caps[0].body {
+        CapBody::Volume { path, .. } => Ok(path.clone()),
+        other => panic!("{other:?}"),
+    }
+}
+
+/// volume@1's path is REQUIRED and absolute; it's compared as the storage key cleans it (§7.1), so
+/// it's cleaned here. smolvm reads `:` as host:guest, so a path can't hold one.
+#[test]
+fn volume_paths_are_cleaned_and_must_be_absolute() {
+    assert_eq!(volume_path("/a/./b//c/").unwrap(), "/a/b/c");
+    assert_eq!(volume_path("/a/../b").unwrap(), "/b");
+    // So the engine-store check (dockerd@1/engine-store-owned) sees one spelling.
+    assert_eq!(
+        volume_path("/var/lib/x/../docker").unwrap(),
+        "/var/lib/docker"
+    );
+    assert_eq!(
+        volume_path("//var/lib//docker/./volumes").unwrap(),
+        "/var/lib/docker/volumes"
+    );
+    for path in ["data", "", "/", "/..", "../x"] {
+        let e = volume_path(path).unwrap_err();
+        assert_eq!(
+            e.root_cause().to_string(),
+            format!("volume@1 path {path:?} must be an absolute path other than /"),
+        );
+    }
+    let e = volume_path("/a:b").unwrap_err();
+    assert_eq!(
+        e.root_cause().to_string(),
+        "volume@1 path \"/a:b\" can't contain ':' (smolvm reads it as host:guest)"
+    );
+}
+
+#[test]
+fn host_mount_refuses_a_colon() {
+    let e = host_mount(r#"{"path":"/a:b"}"#).unwrap_err();
+    assert_eq!(
+        e.root_cause().to_string(),
+        "host-mount@1 path \"/a:b\" can't contain ':' (smolvm reads it as host:guest)"
+    );
+}
+
+/// resources@1 cpu: cores, non-negative (0 is valid).
+#[test]
+fn resources_cpu_must_be_a_non_negative_number() {
+    let cpu = |v: &str| {
+        one_cap(&format!(
+            r#"{{"type":"com.docker.sandbox/resources@1","config":{{"cpu":{v}}}}}"#
+        ))
+    };
+    assert!(cpu("0").is_ok());
+    assert!(cpu("1.5").is_ok());
+    assert_eq!(
+        cpu("-1").unwrap_err().root_cause().to_string(),
+        "resources@1 cpu must be a non-negative number of cores (got -1)"
+    );
+    // The descriptor's YAML reader refuses non-finite numbers first.
+    for v in [".inf", ".nan"] {
+        assert!(cpu(v).is_err(), "{v}");
+    }
+}
+
+/// tck: SPEC-v3 §7.1.1/group-grammar (strict decoding, §1.2): a group's fields are name,
+/// description, optional and capabilities.
+#[test]
+fn a_group_refuses_unknown_fields() {
+    let group = |extra: &str| {
+        one_cap(&format!(
+            r#"{{"group":{{"name":"g","description":"d"{extra},"capabilities":[
+                {{"type":"com.docker.sandbox/long-running@1"}}]}}}}"#
+        ))
+    };
+    assert!(group("").is_ok());
+    assert!(group(r#","optinal":true"#).is_err());
+}
+
+fn credential(config: &str) -> Result<Kit> {
+    one_cap(&format!(
+        r#"{{"type":"com.docker.sandbox/credential@1","config":{config}}}"#
+    ))
+}
+
+/// credential@1: `service` is a lowercase-kebab name, `phase` lists distinct phases, and
+/// `username` belongs with `scheme: basic`.
+#[test]
+fn credential_service_phases_and_username_are_checked() {
+    let with = |service: &str, phase: &str, inject: &str| {
+        credential(&format!(
+            r#"{{"service":"{service}","phase":{phase},"apiKey":{{"name":"K","inject":[{inject}]}}}}"#
+        ))
+    };
+    let plain = r#"{"domain":"a.com","header":"x"}"#;
+    for ok in ["github", "my-api", "e2e-tok"] {
+        assert!(with(ok, r#""runtime""#, plain).is_ok(), "{ok}");
+    }
+    for bad in ["", "GitHub", "git_hub", "-x", "x-"] {
+        let e = with(bad, r#""runtime""#, plain).unwrap_err();
+        assert_eq!(
+            e.root_cause().to_string(),
+            format!("credential@1 service {bad:?} must be a lowercase-kebab name"),
+        );
+    }
+    assert!(with("gh", r#"["install","install"]"#, plain).is_err());
+    let e = with(
+        "gh",
+        r#""runtime""#,
+        r#"{"domain":"a.com","header":"x","format":"Bearer %s","username":"u"}"#,
+    )
+    .unwrap_err();
+    assert!(
+        format!("{e:#}").contains("username is only for scheme basic"),
+        "{e:#}"
+    );
+}

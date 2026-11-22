@@ -40,6 +40,9 @@ impl InjectCfg {
         if self.format.is_some() && self.scheme.is_some() {
             bail!("inject sets both format and scheme");
         }
+        if self.username.is_some() && self.scheme.as_deref() != Some("basic") {
+            bail!("username is only for scheme basic");
+        }
         let (mut header, mut format) = (self.header, self.format);
         match self.scheme.as_deref() {
             None => {}
