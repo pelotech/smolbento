@@ -1255,7 +1255,7 @@ fn dockerd_merges_auto_start_true_wins() {
 }
 
 /// Elevation (`dockerd@1/elevation-granted`, `manual-elevation-granted`) needs nothing from
-/// smolbento: a machine already runs its startup steps as root.
+/// smolbento: it starts dockerd as root, and a kit's steps can run as root (`user: "0"`).
 /// tck: dockerd@1/storage-private-and-persistent
 /// tck: dockerd@1/manual-storage-private-and-persistent
 /// tck: dockerd@1/storage-removed-with-sandbox

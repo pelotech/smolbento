@@ -98,8 +98,9 @@ What a kit does, and when:
   failing step its output and exit code.
 - At create and `kit add`, a failing startup step is the same warning; the sandbox is created and
   runs.
-- Startup steps run as `agent` unless they name a user (a numeric user runs as the account with that
-  uid).
+- Startup steps run as the session user (the workload image's user, else `agent`) unless they name a
+  user, as the kit spec's `lifecycle@1/default-users` says; install steps run as root. A numeric user
+  runs as the account with that uid.
 - A Docker engine comes from `dockerd@1`. The shipped `docker` kit is that one request and nothing
   else (the image must have Docker). A workload that asks for an engine
   (`com.docker.sandboxes.start-docker`, or a `-docker` image) gets the `docker` kit even when its own

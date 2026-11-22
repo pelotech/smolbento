@@ -177,14 +177,19 @@ pub fn apply(
     if !steps.context.is_empty() {
         req.rec.agent_context = context_version;
     }
-    steps.startup_d = startup_d(&kits, m, &tmpfs);
-
     req.launched_by_host = plan
         .workload
         .caps
         .iter()
         .any(|c| matches!(c.body, CapBody::Sbx));
     set_workload_fields(req, &plan.workload, workdir, agent_files);
+    // After the workload's fields: a startup hook without `user:` runs as the session user.
+    let session = if crate::sandbox::name::is_internal(&req.name) {
+        "root"
+    } else {
+        req.rec.user.as_deref().unwrap_or("agent")
+    };
+    steps.startup_d = startup_d(&kits, m, &tmpfs, session);
     record_kits(&kits, &plan.args, req)?;
     steps.kit_names = req.rec.kits.iter().map(|k| k.name.clone()).collect();
     req.rec.long_running = m.long_running;
@@ -432,10 +437,13 @@ fn kit_install_steps(plan: &Plan, req: &CreateRequest) -> Vec<InstallStep> {
 }
 
 /// The `startup.d` scripts: tmpfs volumes first, then each kit's startup hooks, in kit order.
+/// `session`: the user a hook without `user:` runs as (SPEC lifecycle@1/default-users: the agent
+/// user for startup, as sessions run; v2 kits already name `agent`).
 fn startup_d(
     kits: &[&Kit],
     m: &Merged,
     tmpfs: &[(String, Option<String>)],
+    session: &str,
 ) -> Vec<(String, String)> {
     let mut out = Vec::new();
     if !tmpfs.is_empty() {
@@ -443,14 +451,18 @@ fn startup_d(
     }
     let mut n = 0;
     for k in kits {
-        let hooks: Vec<&Hook> = m
+        let hooks: Vec<Hook> = m
             .startup_hooks
             .iter()
             .filter(|(kit, _)| *kit == k.name)
-            .map(|(_, h)| h)
+            .map(|(_, h)| Hook {
+                user: h.user.clone().or_else(|| Some(session.to_string())),
+                ..h.clone()
+            })
             .collect();
         if !hooks.is_empty() {
             n += 1;
+            let hooks: Vec<&Hook> = hooks.iter().collect();
             out.push((
                 format!("{n:02}-{}.sh", k.name),
                 guest::startup_script(&k.name, &hooks),
