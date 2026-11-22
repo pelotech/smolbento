@@ -172,10 +172,12 @@ pub(crate) fn service_kinds(meta: &Meta) -> Vec<Kind> {
 fn sync_services<R: Runner>(ctx: &Ctx<R>, name: &str, kinds: &[Kind], meta: &Meta) {
     let port = meta.egress.as_ref().map(|e| e.port);
     if let Err(e) = ctx.services.sync(name, kinds, port, &ctx.paths, &ctx.env) {
-        let what = if kinds.contains(&Kind::Egress) {
-            "host services (the egress unit, and the browser, clipboard and SSH agent units)"
-        } else {
-            "host services for the browser, clipboard and SSH agent"
+        let what = match (kinds.contains(&Kind::Egress), kinds.len()) {
+            (true, 1) => "its egress unit",
+            (true, _) => {
+                "host services (the egress unit, and the browser, clipboard and SSH agent units)"
+            }
+            _ => "host services for the browser, clipboard and SSH agent",
         };
         crate::warning!("{name}: {what}: {e:#}");
     }

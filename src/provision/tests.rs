@@ -1233,6 +1233,7 @@ fn a_hosted_create_keeps_the_users_ca_env() {
 fn a_hosted_create_gives_a_bound_variable_only_its_placeholder() {
     let (t, req, result) = egress_create("hosted", |r| {
         r.env.push(("GH_TOKEN".into(), "mine".into()));
+        r.env.push(("OTHER".into(), "kept".into()));
     });
     result.unwrap();
     let label = &req.egress.as_ref().unwrap().label;
@@ -1248,6 +1249,8 @@ fn a_hosted_create_gives_a_bound_variable_only_its_placeholder() {
         create.contains(&format!("-e GH_TOKEN={placeholder}")),
         "{create}"
     );
+    // Only bound variables give way: a user's own variable stays.
+    assert!(create.contains("-e OTHER=kept"), "{create}");
 }
 
 #[test]
