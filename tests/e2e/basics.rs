@@ -261,6 +261,18 @@ pub(crate) fn hosted_egress_swaps_a_credential() {
         "egress is restarted by its socket"
     );
 
+    // A new value applies at once: `secret set` restarts the egress process.
+    let out = e.own_httpbin_secret("TOK", "dXNlcjpyb3RhdGVkLXh5eg==");
+    let now = format!("Applied to {} now", e.name);
+    assert!(out.contains(&now), "{out}");
+    assert!(basic_auth_ok(&e, &e.name, "TOK", "rotated-xyz"));
+    assert!(!basic_auth_ok(&e, &e.name, "TOK", "real-secret-xyz"));
+    // A removed one is gone at once.
+    let out = e.ok(&["secret", "rm", "tok", "--sandbox", &e.name]);
+    let gone = format!("Running sandboxes {} no longer send it", e.name);
+    assert!(out.contains(&gone), "{out}");
+    assert!(!basic_auth_ok(&e, &e.name, "TOK", "rotated-xyz"));
+
     e.ok(&["rm", "-f", &e.name]);
     assert!(unit_files(&e, &e.name).is_empty(), "units go with rm");
     assert!(!e.dir.path().join("data/egress").join(&e.name).exists());

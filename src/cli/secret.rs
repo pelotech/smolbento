@@ -334,6 +334,12 @@ fn explain_impact<R: Runner>(
                 .is_some_and(|e| e.scope == own)
         })
         .partition(|s| is_bound(s, svc.as_ref(), service));
+    // A hosted sandbox's values live in its egress process: smolvm refuses credential changes in
+    // external mode. A restart applies a new value at once; a new service needs a recreate.
+    let (hosted_bound, bound): (Vec<_>, Vec<_>) =
+        bound.into_iter().partition(|s| s.meta.egress.is_some());
+    let (hosted_unbound, unbound): (Vec<_>, Vec<_>) =
+        unbound.into_iter().partition(|s| s.meta.egress.is_some());
     // Read once for every sandbox: a --ref or --command source may prompt, or be slow.
     let new = match (
         bound.iter().any(|s| s.is_running()) || !unbound.is_empty(),
@@ -352,6 +358,15 @@ fn explain_impact<R: Runner>(
         _ => None,
     };
     let (mut now, mut later) = (Vec::new(), Vec::new());
+    for s in hosted_bound {
+        if !s.is_running() {
+            later.push(s);
+        } else if restart_egress(ctx, s) {
+            now.push(s);
+        } else {
+            later.push(s);
+        }
+    }
     for s in bound {
         let refreshed = s.is_running()
             && new
@@ -389,6 +404,13 @@ fn explain_impact<R: Runner>(
             }
         }
     }
+    for s in hosted_unbound {
+        writeln!(
+            &ctx.out,
+            "{} uses hosted egress; recreate it to bind {service}",
+            s.name()
+        )?;
+    }
     if !now.is_empty() {
         writeln!(&ctx.out, "Applied to {} now", names(&now))?;
     }
@@ -396,6 +418,18 @@ fn explain_impact<R: Runner>(
         writeln!(&ctx.out, "Applies to {} on their next start", names(&later))?;
     }
     Ok(())
+}
+
+/// Restarts a hosted `sb`'s egress process, which resolves its secrets again as it starts. Open
+/// connections drop. Warns and returns false on failure.
+fn restart_egress<R: Runner>(ctx: &Ctx<R>, sb: &sandbox::Sandbox) -> bool {
+    match ctx.services.restart_egress(sb.name()) {
+        Ok(()) => true,
+        Err(e) => {
+            crate::warning!("{}: restarting its egress process: {e:#}", sb.name());
+            false
+        }
+    }
 }
 
 /// Whether `sb` has service `name`: created with it, or a kit binds one of its variables.
@@ -712,6 +746,10 @@ fn revoke<R: Runner>(
                 }
                 None => REMOVED_MARKER.to_string(),
             };
+            if sb.meta.egress.is_some() {
+                any |= restart_egress(ctx, sb);
+                continue;
+            }
             match refresh(ctx, sb, svc, service, &value) {
                 Ok(r) => any |= r,
                 Err(e) => crate::warning!(

@@ -52,6 +52,9 @@ fn check_forkable(sb: &Sandbox) -> Result<()> {
     if sb.meta.fork_of.is_some() {
         bail!("forking a fork isn't supported yet");
     }
+    if sb.meta.egress.is_some() {
+        bail!("fork isn't supported with network.egress=hosted yet");
+    }
     if sb.meta.writable_host_folder() {
         bail!("fork needs a sandbox with no writable host folder; create it with --clone");
     }
@@ -422,7 +425,7 @@ mod tests {
 
     #[test]
     fn refusals_make_no_branch() {
-        let cases: [Refusal; 4] = [
+        let cases: [Refusal; 5] = [
             (
                 &[("sbx.workspace", "/w/p"), ("sbx.workspaces", "[\"/w/p\"]")],
                 &["fork", "a"],
@@ -437,6 +440,11 @@ mod tests {
                 &[("sbx.fork-of", "x")],
                 &["fork", "a"],
                 "forking a fork isn't supported yet",
+            ),
+            (
+                &[("sbx.egress", r#"{"port":47331,"bindings":[]}"#)],
+                &["fork", "a"],
+                "fork isn't supported with network.egress=hosted yet",
             ),
             (
                 &[],

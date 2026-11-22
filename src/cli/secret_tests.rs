@@ -1435,3 +1435,88 @@ fn a_fork_is_bound_with_its_originals_value() {
     );
     assert!(!envs.iter().flatten().any(|(_, v)| v == "global-tok"));
 }
+
+/// A running hosted sandbox bound to github, with a fake service manager and its egress unit.
+fn hosted(t: &mut TestEnv, state: &str) -> crate::host_service::fake::FakeControl {
+    use crate::host_service::{Kind, fake::services};
+    let dir = t.ctx.paths.config.join("units");
+    std::fs::create_dir_all(&dir).unwrap();
+    let (s, ctl) = services(&dir, crate::host_service::Flavor::Launchd, "ns");
+    s.sync_egress(
+        "h1",
+        &[Kind::Egress],
+        Some(47331),
+        &t.ctx.paths,
+        &Default::default(),
+    )
+    .unwrap();
+    t.ctx.services = s;
+    let label = r#"{"port":47331,"bindings":[{"name":"gh_token","env":"GH_TOKEN","hosts":["api.github.com"],"set_header":null,"placeholder":"P"}]}"#;
+    t.sandboxes(&[(
+        "h1",
+        state,
+        &[
+            ("sbx.secrets", "github"),
+            ("sbx.credential-env", "GH_TOKEN"),
+            ("sbx.egress", label),
+        ],
+    )]);
+    ctl
+}
+
+fn restarts(ctl: &crate::host_service::fake::FakeControl) -> usize {
+    ctl.calls()
+        .iter()
+        .filter(|c| c.starts_with("restart "))
+        .count()
+}
+
+#[test]
+fn secret_set_on_a_hosted_sandbox_restarts_its_egress_process() {
+    let mut t = test_env(&[]);
+    let ctl = hosted(&mut t, "running");
+    t.sbt(&["secret", "set", "github", "-t", "tok-2"]).unwrap();
+    assert!(t.stdout().contains("Applied to h1 now\n"), "{}", t.stdout());
+    assert_eq!(restarts(&ctl), 1);
+    assert!(!t.made("machine credentials"));
+}
+
+#[test]
+fn secret_rm_on_a_hosted_sandbox_restarts_its_egress_process() {
+    let mut t = test_env(&[]);
+    let ctl = hosted(&mut t, "running");
+    t.sbt(&["secret", "set", "github", "-t", "tok-2"]).unwrap();
+    let before = restarts(&ctl);
+    t.sbt(&["secret", "rm", "github"]).unwrap();
+    let out = t.stdout();
+    assert!(
+        out.contains("Running sandboxes h1 no longer send it\n"),
+        "{out}"
+    );
+    assert_eq!(restarts(&ctl), before + 1);
+    assert!(!t.made("machine credentials"));
+}
+
+#[test]
+fn a_stopped_hosted_sandbox_waits_for_its_next_start() {
+    let mut t = test_env(&[]);
+    let ctl = hosted(&mut t, "stopped");
+    t.sbt(&["secret", "set", "github", "-t", "tok-2"]).unwrap();
+    assert!(t.stdout().contains("Applies to h1 on their next start\n"));
+    assert_eq!(restarts(&ctl), 0);
+}
+
+#[test]
+fn a_new_service_isnt_bound_to_a_hosted_sandbox() {
+    let mut t = test_env(&[]);
+    let ctl = hosted(&mut t, "running");
+    set_xtok(&mut t).unwrap();
+    let out = t.stdout();
+    assert!(
+        out.contains("h1 uses hosted egress; recreate it to bind xtok\n"),
+        "{out}"
+    );
+    assert!(!t.made("machine credentials"));
+    assert!(!t.made("machine update"));
+    assert_eq!(restarts(&ctl), 0);
+}
