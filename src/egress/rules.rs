@@ -67,17 +67,20 @@ impl Rules {
                 target,
             )
         };
-        // The rules see the gateway as `localhost`, by address or by name (`Host: 100.96.0.1`).
-        let target = |host: &str| match host {
-            HOST_GATEWAY => format!("localhost:{}", flow.port),
-            _ => format!("{host}:{}", flow.port),
-        };
-        let addr = match flow.ip.to_string() {
-            ip if ip == HOST_GATEWAY => target(&ip),
-            _ => SocketAddr::new(flow.ip, flow.port).to_string(),
-        };
+        // A gateway flow is the host's `localhost:PORT`, judged strictly: no rule, no flow, and the
+        // guest's name for it (any SNI or `Host:` it likes) plays no part.
+        if flow.ip.to_string() == HOST_GATEWAY {
+            let v = verdict(&format!("localhost:{}", flow.port));
+            let d = if v.allowed {
+                Decision::Allow
+            } else {
+                Decision::Deny
+            };
+            return (d, v.reason);
+        }
+        let addr = SocketAddr::new(flow.ip, flow.port).to_string();
         if let Some(name) = &flow.name {
-            let v = verdict(&target(name));
+            let v = verdict(&format!("{name}:{}", flow.port));
             if !v.allowed {
                 return (Decision::Deny, v.reason);
             }
@@ -187,15 +190,18 @@ mod tests {
         save(&p, &[(true, "localhost:8080")]);
         let r = Rules::new(&p, SB, true, vec![]);
         assert_eq!(ask(&r, &flow(None, HOST_GATEWAY, 8080)), Decision::Allow);
-        assert_eq!(
-            ask(&r, &flow(Some(HOST_GATEWAY), HOST_GATEWAY, 8080)),
-            Decision::Allow
-        );
-        assert_eq!(ask(&r, &flow(None, HOST_GATEWAY, 9090)), Decision::Allow);
-        assert_eq!(
-            ask(&r, &flow(Some("localhost"), HOST_GATEWAY, 9090)),
-            Decision::Deny
-        );
+        assert_eq!(ask(&r, &flow(None, HOST_GATEWAY, 9090)), Decision::Deny);
+    }
+
+    #[test]
+    fn a_gateway_flow_ignores_its_name() {
+        let d = tempfile::tempdir().unwrap();
+        let p = paths(d.path());
+        save(&p, &[(true, "localhost:8080"), (true, "github.com")]);
+        let r = Rules::new(&p, SB, true, vec![]);
+        let gh = |port| flow(Some("github.com"), HOST_GATEWAY, port);
+        assert_eq!(ask(&r, &gh(8080)), Decision::Allow);
+        assert_eq!(ask(&r, &gh(9090)), Decision::Deny);
     }
 
     #[test]
