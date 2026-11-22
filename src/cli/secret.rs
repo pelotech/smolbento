@@ -403,7 +403,7 @@ fn is_bound(sb: &sandbox::Sandbox, service: Option<&Service>, name: &str) -> boo
 }
 
 /// Binds service `name` to `sb`, which was created without it, as create would have: its
-/// credentials (`value` in smolvm's env only), its labels, and on a running sandbox its network.
+/// network, its credentials (`value` in smolvm's env only) and its labels.
 fn bind<R: Runner>(
     ctx: &Ctx<R>,
     file: &SecretsFile,
@@ -414,11 +414,6 @@ fn bind<R: Runner>(
 ) -> Result<()> {
     let services = [name.to_string()];
     let creds = provision::credentials(file, &services)?;
-    if !creds.is_empty() {
-        let vars = creds.iter().map(|c| &c.env_var).collect();
-        ctx.vm
-            .add_credentials(&sb.machine, &creds, &with_value(&sb.meta, vars, value))?;
-    }
     let rec = &sb.meta.rec;
     let merged = |old: &[String], new: Vec<String>| {
         let mut all: Vec<String> = old.iter().cloned().chain(new).collect();
@@ -430,6 +425,15 @@ fn bind<R: Runner>(
         &rec.credential_hosts,
         provision::credential_hosts(file, &services),
     );
+    // First: smolvm refuses a credential whose host the machine's allow list (running or
+    // stopped) doesn't reach.
+    let network = compile::network(policy, sb.name(), &hosts, rec.host_access);
+    ctx.vm.update_network(&sb.machine, &network)?;
+    if !creds.is_empty() {
+        let vars = creds.iter().map(|c| &c.env_var).collect();
+        ctx.vm
+            .add_credentials(&sb.machine, &creds, &with_value(&sb.meta, vars, value))?;
+    }
     let env = merged(
         &rec.credential_env,
         creds.into_iter().map(|c| c.env_var).collect(),
@@ -437,13 +441,9 @@ fn bind<R: Runner>(
     for (key, list) in [
         (labels::SECRETS, merged(&rec.secrets, services.to_vec())),
         (labels::CREDENTIAL_ENV, env),
-        (labels::CREDENTIAL_HOSTS, hosts.clone()),
+        (labels::CREDENTIAL_HOSTS, hosts),
     ] {
         ctx.vm.set_label(&sb.machine, key, &list.join(","))?;
-    }
-    if sb.is_running() {
-        let network = compile::network(policy, sb.name(), &hosts, rec.host_access);
-        ctx.vm.update_network(&sb.machine, &network)?;
     }
     Ok(())
 }
@@ -616,7 +616,9 @@ fn rm<R: Runner>(ctx: &Ctx<R>, file: &mut SecretsFile, a: SecretRmArgs) -> Resul
     if a.all_sandboxes {
         return Err(Unsupported("--all-sandboxes removal is not implemented yet".into()).into());
     }
-    if a.all {
+    // Before the removal: a custom service's definition can go with its last entry.
+    let before = file.clone();
+    let removed: Vec<String> = if a.all {
         confirm(ctx, "Remove every secret?", a.force)?;
         let all = std::mem::take(&mut file.secrets);
         let registries = std::mem::take(&mut file.registries);
@@ -627,6 +629,10 @@ fn rm<R: Runner>(ctx: &Ctx<R>, file: &mut SecretsFile, a: SecretRmArgs) -> Resul
         file.save(&ctx.paths)?;
         forget(ctx, &all)?;
         forget_registries(ctx, &registries)?;
+        let mut services: Vec<String> = all.into_iter().map(|e| e.service).collect();
+        services.sort();
+        services.dedup();
+        services
     } else {
         let service = a.service.context("specify a service, or --all")?;
         let scope = scope_for(a.sandbox.as_deref());
@@ -635,9 +641,69 @@ fn rm<R: Runner>(ctx: &Ctx<R>, file: &mut SecretsFile, a: SecretRmArgs) -> Resul
             .with_context(|| format!("no {service} secret ({scope})"))?;
         file.save(&ctx.paths)?;
         forget(ctx, &[removed])?;
-    }
+        vec![service]
+    };
     writeln!(&ctx.out, "Removed")?;
+    let revoked = revoke(ctx, &before, file, &removed);
+    if !revoked.is_empty() {
+        writeln!(
+            &ctx.out,
+            "Running sandboxes {} no longer send it",
+            revoked.join(", ")
+        )?;
+    }
     Ok(())
+}
+
+/// What a running sandbox is handed for a removed secret with no other entry to fall back on.
+/// smolvm refuses an empty value, so a fixed one that isn't a secret replaces it.
+const REMOVED_MARKER: &str = "smolbento-secret-removed";
+
+/// Hands running sandboxes that used a removed entry of `services` the entry that applies now (a
+/// global one under a removed sandbox one, or the original's for a fork), else the marker, so
+/// their requests stop carrying the removed value at once. Returns the sandboxes it reached.
+fn revoke<R: Runner>(
+    ctx: &Ctx<R>,
+    before: &SecretsFile,
+    after: &SecretsFile,
+    services: &[String],
+) -> Vec<String> {
+    let Ok(sandboxes) = sandbox::list(&ctx.vm) else {
+        return Vec::new();
+    };
+    let mut reached = Vec::new();
+    for sb in sandboxes
+        .iter()
+        .filter(|s| s.is_running() && !name::is_internal(s.name()))
+    {
+        let mut any = false;
+        for service in services {
+            let entry = |f: &SecretsFile| {
+                f.entry_for(sb.name(), sb.meta.fork_of.as_deref(), service)
+                    .map(|e| e.scope.clone())
+            };
+            let Some(svc) = before.service(service) else {
+                continue;
+            };
+            if entry(before) == entry(after) || !is_bound(sb, Some(&svc), service) {
+                continue;
+            }
+            let fallback = after.entry_for(sb.name(), sb.meta.fork_of.as_deref(), service);
+            let value = match fallback.map(|e| resolve(e, ctx.store.as_ref())) {
+                Some(Ok(value)) => value,
+                Some(Err(e)) => {
+                    crate::warning!("{}: couldn't read its {service} secret: {e:#}", sb.name());
+                    REMOVED_MARKER.to_string()
+                }
+                None => REMOVED_MARKER.to_string(),
+            };
+            any |= refresh(ctx, sb, &svc, service, &value);
+        }
+        if any {
+            reached.push(sb.name().to_string());
+        }
+    }
+    reached
 }
 
 /// `bento rm`: forget a sandbox's policy and, with `secrets`, its own secrets.

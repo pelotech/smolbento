@@ -208,7 +208,7 @@ pub(crate) fn ports_publish_live() {
 pub(crate) fn secrets_are_placeholders_in_the_guest() {
     let e = E2e::new("sec");
     e.ok(&["policy", "init", "balanced"]);
-    e.httpbin_secret("TOK");
+    e.own_httpbin_secret("TOK", BASIC_SECRET);
     e.create_alpine();
     let seen = e.sh_ok(&e.name, "printf %s \"$TOK\"");
     assert!(seen.starts_with("SMOL_PLACEHOLDER_"), "{seen}");
@@ -221,22 +221,44 @@ pub(crate) fn secrets_are_placeholders_in_the_guest() {
         "httpbin checks the password"
     );
     // A new value reaches the running sandbox at once (smolvm's `machine credentials refresh`).
-    let out = e.ok(&[
-        "secret",
-        "set-custom",
-        "--host",
-        "httpbin.org",
-        "--env",
-        "TOK",
-        "--command",
-        "printf %s dXNlcjpyb3RhdGVkLXh5eg==",
-    ]);
-    assert!(out.contains(&format!("Applied to {} now", e.name)), "{out}");
+    let out = e.own_httpbin_secret("TOK", "dXNlcjpyb3RhdGVkLXh5eg==");
+    let now = format!("Applied to {} now", e.name);
+    assert!(out.contains(&now), "{out}");
     assert!(
         basic_auth_ok(&e, &e.name, "TOK", "rotated-xyz"),
         "the running sandbox uses the new value"
     );
     assert!(!basic_auth_ok(&e, &e.name, "TOK", "real-secret-xyz"));
+    // A service it was created without is bound at once (`machine credentials add`).
+    let out = e.own_httpbin_secret("TOK2", "dXNlcjpzZWNvbmQteHl6");
+    assert!(out.contains(&now), "{out}");
+    assert!(basic_auth_ok(&e, &e.name, "TOK2", "second-xyz"));
+    // A removed one stops being sent at once.
+    let out = e.ok(&["secret", "rm", "tok", "--sandbox", &e.name]);
+    let gone = format!("Running sandboxes {} no longer send it", e.name);
+    assert!(out.contains(&gone), "{out}");
+    assert!(
+        !basic_auth_ok(&e, &e.name, "TOK", "rotated-xyz"),
+        "the removed value isn't sent"
+    );
+}
+
+/// A sandbox that booted with no secrets records one set later, and uses it from its next start.
+#[test]
+#[ignore = "boots real VMs and needs httpbin.org; run with `just e2e`"]
+pub(crate) fn a_secret_set_after_create_is_bound_without_recreating() {
+    let e = E2e::new("secadd");
+    e.ok(&["policy", "init", "balanced"]);
+    e.create_alpine();
+    // Running, but booted with no bindings: smolvm takes the new one from its next start.
+    let out = e.own_httpbin_secret("TOK", BASIC_SECRET);
+    let next = format!("Applies to {} on their next start", e.name);
+    assert!(out.contains(&next), "{out}");
+    e.ok(&["stop", &e.name]);
+    assert!(
+        basic_auth_ok(&e, &e.name, "TOK", "real-secret-xyz"),
+        "bound from its next start"
+    );
 }
 
 /// A create whose first start fails removes the sandbox, and the remote `--clone` added with it:

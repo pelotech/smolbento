@@ -294,6 +294,15 @@ agentInstructions:
         self.ok(&[&["secret", "set-custom"][..], &args].concat());
     }
 
+    /// `httpbin_secret` for this test's sandbox only: e2e tests share smolvm, so a global secret
+    /// set or removed by one reaches the sandboxes another test runs at the same time.
+    pub(crate) fn own_httpbin_secret(&self, env: &str, value: &str) -> String {
+        let command = format!("printf {value}");
+        let args = ["--host", "httpbin.org", "--env", env, "--command", &command];
+        let own = ["--sandbox", self.name.as_str()];
+        self.ok(&[&["secret", "set-custom"][..], &args, &own].concat())
+    }
+
     pub(crate) fn state(&self) -> String {
         let ls: serde_json::Value = serde_json::from_str(&self.ok(&["ls", "--json"])).unwrap();
         ls.as_array()

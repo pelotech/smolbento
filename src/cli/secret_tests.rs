@@ -1060,11 +1060,16 @@ fn assert_bound_xtok(t: &TestEnv, sb: &str, labels: [&str; 3]) {
     assert!(!t.calls().iter().any(|l| l.contains("x-secret")));
 }
 
-/// A network update, not a label one.
-fn network_pushed(t: &TestEnv, sb: &str) -> bool {
-    t.calls_of(&format!("machine update -n sbx-{sb} "))
-        .iter()
-        .any(|l| !l.contains("--label"))
+/// A network update, not a label one, before the add: smolvm refuses a credential whose host the
+/// machine's allow list doesn't reach, running or stopped.
+fn assert_network_pushed_first(t: &TestEnv, sb: &str) {
+    let calls = t.calls();
+    let at = |p: &str| calls.iter().position(|l| l.starts_with(p));
+    let network = calls.iter().position(|l| {
+        l.starts_with(&format!("machine update -n sbx-{sb} ")) && !l.contains("--label")
+    });
+    let add = at(&format!("machine credentials add -n sbx-{sb} "));
+    assert!(network.is_some() && network < add, "{calls:#?}");
 }
 
 const XTOK_ON_ANTHROPIC: [&str; 3] = [
@@ -1079,7 +1084,7 @@ fn set_binds_a_new_service_to_a_running_sandbox() {
     t.sandboxes(&[("a", "running", ANTHROPIC)]);
     set_xtok(&mut t).unwrap();
     assert_bound_xtok(&t, "a", XTOK_ON_ANTHROPIC);
-    assert!(network_pushed(&t, "a"));
+    assert_network_pushed_first(&t, "a");
     let out = t.stdout();
     assert!(out.contains("Applied to a now\n"), "{out}");
     assert!(!out.contains("recreate"), "{out}");
@@ -1091,7 +1096,7 @@ fn set_binds_a_new_service_to_a_stopped_sandbox() {
     t.sandboxes(&[("a", "stopped", ANTHROPIC)]);
     set_xtok(&mut t).unwrap();
     assert_bound_xtok(&t, "a", XTOK_ON_ANTHROPIC);
-    assert!(!network_pushed(&t, "a"));
+    assert_network_pushed_first(&t, "a");
     let out = t.stdout();
     assert!(out.contains("Applies to a on their next start\n"), "{out}");
 }
@@ -1136,7 +1141,7 @@ fn a_failed_add_warns_and_binds_the_others() {
         "boom",
     );
     set_xtok(&mut t).unwrap();
-    assert!(!t.made("machine update -n sbx-a"));
+    assert!(!t.made("machine update -n sbx-a --label"));
     assert_bound_xtok(&t, "b", XTOK_ON_ANTHROPIC);
     let out = t.stdout();
     assert!(out.contains("Applied to b now\n"), "{out}");
@@ -1168,4 +1173,149 @@ fn a_service_a_kit_already_binds_is_not_added_again() {
         ["machine credentials refresh -n sbx-cl sbx_kit_anthropic"]
     );
     assert!(t.stdout().contains("Applied to cl now\n"));
+}
+
+const MARKER: &str = "smolbento-secret-removed";
+
+/// The env of the last `run_with_env` call.
+fn last_env(t: &TestEnv) -> Vec<(String, String)> {
+    t.runner().envs().pop().unwrap()
+}
+
+fn pairs(vars: &[(&str, &str)]) -> Vec<(String, String)> {
+    vars.iter()
+        .map(|(k, v)| (k.to_string(), v.to_string()))
+        .collect()
+}
+
+/// A removed secret's value can't be taken from a running machine (smolvm refuses an empty one):
+/// it's replaced with a fixed marker, so requests stop carrying it at once.
+#[test]
+fn rm_hands_running_sandboxes_the_removed_marker() {
+    let mut t = test_env(&[]);
+    t.sbt(&["secret", "set", "github", "-t", "tok"]).unwrap();
+    github_sandboxes(&t);
+    t.runner().ok(&["machine", "credentials", "refresh"], "");
+    t.sbt(&["secret", "rm", "github"]).unwrap();
+    assert_eq!(
+        t.calls_of("machine credentials refresh"),
+        ["machine credentials refresh -n sbx-a1 gh_token github_token"]
+    );
+    assert_eq!(
+        last_env(&t),
+        pairs(&[("GH_TOKEN", MARKER), ("GITHUB_TOKEN", MARKER)])
+    );
+    assert!(!t.made("machine credentials remove"));
+    assert!(!t.made("machine update"));
+    assert!(
+        t.stdout()
+            .ends_with("Removed\nRunning sandboxes a1 no longer send it\n")
+    );
+}
+
+/// A sandbox's own secret removed: it falls back to its original's (a fork), then the global one.
+#[test]
+fn rm_of_a_sandbox_secret_falls_back_to_the_global_value() {
+    let mut t = test_env(&[]);
+    t.sbt(&["secret", "set", "github", "-t", "global-tok"])
+        .unwrap();
+    for sb in ["pa", "fo"] {
+        let tok = format!("{sb}-tok");
+        t.sbt(&["secret", "set", "github", "--sandbox", sb, "-t", &tok])
+            .unwrap();
+    }
+    let gh: &[(&str, &str)] = &[
+        ("sbx.secrets", "github"),
+        ("sbx.credential-env", "GH_TOKEN"),
+    ];
+    let fork: &[(&str, &str)] = &[
+        ("sbx.secrets", "github"),
+        ("sbx.credential-env", "GH_TOKEN"),
+        ("sbx.fork-of", "pa"),
+    ];
+    running(&t, &[("pa", gh), ("fo", fork), ("gl", gh)]);
+    t.sbt(&["secret", "rm", "github", "--sandbox", "fo"])
+        .unwrap();
+    assert_eq!(
+        t.calls_of("machine credentials refresh"),
+        ["machine credentials refresh -n sbx-fo gh_token"]
+    );
+    assert_eq!(last_env(&t), pairs(&[("GH_TOKEN", "pa-tok")]));
+    assert!(
+        t.stdout()
+            .ends_with("Running sandboxes fo no longer send it\n")
+    );
+    t.sbt(&["secret", "rm", "github", "--sandbox", "pa"])
+        .unwrap();
+    let calls = t.calls_of("machine credentials refresh");
+    assert_eq!(
+        calls[1..],
+        [
+            "machine credentials refresh -n sbx-fo gh_token",
+            "machine credentials refresh -n sbx-pa gh_token",
+        ]
+    );
+    let envs = t.runner().envs();
+    assert!(
+        envs[envs.len() - 2..]
+            .iter()
+            .all(|e| *e == pairs(&[("GH_TOKEN", "global-tok")]))
+    );
+    assert!(
+        t.stdout()
+            .ends_with("Running sandboxes fo, pa no longer send it\n")
+    );
+}
+
+#[test]
+fn rm_leaves_stopped_sandboxes_alone() {
+    let mut t = test_env(&[]);
+    t.sbt(&["secret", "set", "github", "-t", "tok"]).unwrap();
+    let gh: &[(&str, &str)] = &[
+        ("sbx.secrets", "github"),
+        ("sbx.credential-env", "GH_TOKEN"),
+    ];
+    t.sandboxes(&[("b", "stopped", gh)]);
+    t.sbt(&["secret", "rm", "github"]).unwrap();
+    assert!(!t.made("machine credentials"));
+    assert!(t.stdout().ends_with("Removed\n"));
+}
+
+/// `rm --all` revokes every service, a custom one too (whose definition goes with it).
+#[test]
+fn rm_all_revokes_every_removed_service() {
+    let mut t = test_env(&[]);
+    t.sbt(&["secret", "set", "github", "-t", "tok"]).unwrap();
+    set_xtok(&mut t).unwrap();
+    running(
+        &t,
+        &[(
+            "a",
+            &[
+                ("sbx.secrets", "github,xtok"),
+                ("sbx.credential-env", "GH_TOKEN,GITHUB_TOKEN,XTOK"),
+            ],
+        )],
+    );
+    t.sbt(&["secret", "rm", "--all", "-f"]).unwrap();
+    let mut calls = t.calls_of("machine credentials refresh");
+    calls.sort();
+    assert_eq!(
+        calls,
+        [
+            "machine credentials refresh -n sbx-a gh_token github_token",
+            "machine credentials refresh -n sbx-a xtok",
+        ]
+    );
+    let envs = t.runner().envs();
+    assert!(
+        envs[envs.len() - 2..]
+            .iter()
+            .flatten()
+            .all(|(_, v)| v == MARKER)
+    );
+    assert!(
+        t.stdout()
+            .ends_with("Running sandboxes a no longer send it\n")
+    );
 }
