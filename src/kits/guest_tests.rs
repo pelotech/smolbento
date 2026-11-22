@@ -61,10 +61,29 @@ fn hook_script_passes_only_declared_env() {
     let h = hook(HookCmd::Shell("echo hi".into()), &["FOO"]);
     assert_eq!(
         hook_script(&h),
-        format!(r#"{BASE} FOO="$FOO" sh -c 'echo hi'"#)
+        format!(r#"{BASE} ${{FOO+FOO="$FOO"}} sh -c 'echo hi'"#)
     );
     let h = hook(HookCmd::Argv(vec!["echo".into(), "it's".into()]), &[]);
     assert_eq!(hook_script(&h), format!(r#"{BASE} 'echo' 'it'\''s'"#));
+}
+
+/// tck: lifecycle@1/hook-env-restricted: a declared name that isn't set stays unset in the hook
+/// (as the baseline's do), not an empty value; one set to empty stays empty.
+#[test]
+fn a_declared_env_var_that_is_not_set_stays_unset() {
+    let h = hook(
+        HookCmd::Shell("echo \"${FOO-unset}|${EMPTY-unset}\"".into()),
+        &["FOO", "EMPTY"],
+    );
+    let out = Command::new("sh")
+        .arg("-c")
+        .arg(hook_script(&h))
+        .env_remove("FOO")
+        .env("EMPTY", "")
+        .output()
+        .unwrap();
+    assert!(out.status.success(), "{out:?}");
+    assert_eq!(String::from_utf8_lossy(&out.stdout), "unset|\n");
 }
 
 #[test]

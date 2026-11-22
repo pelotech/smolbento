@@ -71,13 +71,11 @@ pub fn hook_script(h: &Hook) -> String {
     if h.clean_env {
         s.push_str("env -i");
         // `${V+V="$V"}` expands to one word when V is set (even empty) and to nothing when unset,
-        // so an unset var stays unset rather than becoming an empty value.
-        for v in CLEAN_ENV.iter().chain(CA_ENV) {
+        // so an unset var stays unset rather than becoming an empty value. apply refuses other
+        // declared names; skipping them here keeps the script well-formed regardless.
+        let declared = h.env.iter().map(String::as_str).filter(|v| is_env_name(v));
+        for v in CLEAN_ENV.iter().chain(CA_ENV).copied().chain(declared) {
             s.push_str(&format!(r#" ${{{v}+{v}="${v}"}}"#));
-        }
-        // apply refuses other names; skipping them here keeps the script well-formed regardless.
-        for v in h.env.iter().filter(|v| is_env_name(v)) {
-            s.push_str(&format!(r#" {v}="${v}""#));
         }
         s.push(' ');
     }
