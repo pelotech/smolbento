@@ -359,9 +359,7 @@ fn explain_impact<R: Runner>(
     };
     let (mut now, mut later) = (Vec::new(), Vec::new());
     for s in hosted_bound {
-        if !s.is_running() {
-            later.push(s);
-        } else if restart_egress(ctx, s) {
+        if s.is_running() && provision::restart_egress(ctx, s) {
             now.push(s);
         } else {
             later.push(s);
@@ -418,18 +416,6 @@ fn explain_impact<R: Runner>(
         writeln!(&ctx.out, "Applies to {} on their next start", names(&later))?;
     }
     Ok(())
-}
-
-/// Restarts a hosted `sb`'s egress process, which resolves its secrets again as it starts. Open
-/// connections drop. Warns and returns false on failure.
-fn restart_egress<R: Runner>(ctx: &Ctx<R>, sb: &sandbox::Sandbox) -> bool {
-    match ctx.services.restart_egress(sb.name()) {
-        Ok(()) => true,
-        Err(e) => {
-            crate::warning!("{}: restarting its egress process: {e:#}", sb.name());
-            false
-        }
-    }
 }
 
 /// Whether `sb` has service `name`: created with it, or a kit binds one of its variables.
@@ -761,7 +747,7 @@ fn revoke<R: Runner>(
             }
         }
         if restart {
-            any |= restart_egress(ctx, sb);
+            any |= provision::restart_egress(ctx, sb);
         }
         if any {
             reached.push(sb.name().to_string());

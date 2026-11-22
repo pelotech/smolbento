@@ -1451,7 +1451,7 @@ fn hosted_with(
     let dir = t.ctx.paths.config.join("units");
     std::fs::create_dir_all(&dir).unwrap();
     let (s, ctl) = services(&dir, crate::host_service::Flavor::Launchd, "ns");
-    s.sync_egress(
+    s.sync(
         "h1",
         &[Kind::Egress],
         Some(47331),

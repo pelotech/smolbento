@@ -147,8 +147,7 @@ pub fn ensure_running<R: Runner>(ctx: &Ctx<R>, sb: &mut Sandbox) -> Result<()> {
     if !sb.is_running() {
         restart_egress(ctx, sb);
     }
-    sandbox::ensure_running(&ctx.vm, sb, || start_plan(ctx, &meta))?;
-    Ok(())
+    sandbox::ensure_running(&ctx.vm, sb, || start_plan(ctx, &meta))
 }
 
 /// The units a sandbox's sockets need: the bridge, and the agent when a runtime phase is granted.
@@ -171,10 +170,7 @@ pub(crate) fn service_kinds(meta: &Meta) -> Vec<Kind> {
 /// at all.
 fn sync_services<R: Runner>(ctx: &Ctx<R>, name: &str, kinds: &[Kind], meta: &Meta) {
     let port = meta.egress.as_ref().map(|e| e.port);
-    if let Err(e) = ctx
-        .services
-        .sync_egress(name, kinds, port, &ctx.paths, &ctx.env)
-    {
+    if let Err(e) = ctx.services.sync(name, kinds, port, &ctx.paths, &ctx.env) {
         let what = if kinds.contains(&Kind::Egress) {
             "host services (the egress unit, and the browser, clipboard and SSH agent units)"
         } else {
@@ -184,14 +180,18 @@ fn sync_services<R: Runner>(ctx: &Ctx<R>, name: &str, kinds: &[Kind], meta: &Met
     }
 }
 
-/// Before a sandbox's machine starts: restarts its egress process, which resolves secrets once,
-/// when it starts, so boot-time connections use current values. Failures only warn.
-pub fn restart_egress<R: Runner>(ctx: &Ctx<R>, sb: &Sandbox) {
-    if sb.meta.egress.is_some()
-        && let Err(e) = ctx.services.restart_egress(sb.name())
-    {
+/// Restarts a hosted sandbox's egress process, which resolves its secrets once, as it starts: so
+/// a new value applies, before a start or at once. Open connections drop. Returns false when `sb`
+/// isn't hosted or the restart failed, which only warns.
+pub fn restart_egress<R: Runner>(ctx: &Ctx<R>, sb: &Sandbox) -> bool {
+    if sb.meta.egress.is_none() {
+        return false;
+    }
+    let result = ctx.services.restart_egress(sb.name());
+    if let Err(e) = &result {
         crate::warning!("{}: restarting its egress process: {e:#}", sb.name());
     }
+    result.is_ok()
 }
 
 /// Rewrites the units of a sandbox served by them if they differ (a new binary path, a new

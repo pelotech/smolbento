@@ -305,13 +305,12 @@ impl HostServices {
         }
     }
 
-    /// `port` is the loopback TCP port of an egress unit (`None` for the others).
+    /// `egress` is an egress unit's loopback TCP port and log file (`None` for the others).
     fn render(
         &self,
         name: &str,
         kind: Kind,
-        port: Option<u16>,
-        log: Option<&Path>,
+        egress: Option<(u16, &Path)>,
         env: &[(String, String)],
     ) -> Vec<String> {
         let unit = self.paths_of(name, kind);
@@ -322,31 +321,20 @@ impl HostServices {
                 kind,
                 name,
                 &unit.socket,
-                port,
-                log,
+                egress,
                 env,
             )],
             Flavor::Systemd => vec![
-                render_systemd_socket(name, kind, &unit.socket, port),
-                render_systemd_service(&self.exe, kind, name, &unit.id, log, env),
+                render_systemd_socket(name, kind, &unit.socket, egress.map(|e| e.0)),
+                render_systemd_service(&self.exe, kind, name, &unit.id, egress.map(|e| e.1), env),
             ],
         }
     }
 
     /// Makes `kinds` of sandbox `name` served by units, and removes the other kind's: writes the
-    /// files and loads them only when they differ from what is there.
+    /// files and loads them only when they differ from what is there. `port` is the egress unit's,
+    /// needed when `kinds` has one.
     pub fn sync(
-        &self,
-        name: &str,
-        kinds: &[Kind],
-        paths: &Paths,
-        env: &BTreeMap<String, String>,
-    ) -> Result<()> {
-        self.sync_egress(name, kinds, None, paths, env)
-    }
-
-    /// `sync`, with the port of the egress unit when `kinds` has one.
-    pub fn sync_egress(
         &self,
         name: &str,
         kinds: &[Kind],
@@ -358,14 +346,16 @@ impl HostServices {
             return Ok(());
         };
         let mut to_load = Vec::new();
+        // Only the egress unit owns a port, and logs: its failures are otherwise invisible. The
+        // others serve one connection each on a socket path.
+        let log = paths.egress(name).join("egress.log");
         let written = Kind::ALL.map(|kind| {
             if kinds.contains(&kind) {
-                // Only the egress unit owns the port; the others serve one connection each on a socket path.
-                let port = port.filter(|_| kind == Kind::Egress);
-                // Only the egress unit logs: its failures are otherwise invisible.
-                let log = (kind == Kind::Egress).then(|| paths.egress(name).join("egress.log"));
+                let egress = port
+                    .filter(|_| kind == Kind::Egress)
+                    .map(|p| (p, log.as_path()));
                 let env = service_env(paths, env, self.flavor);
-                self.write_units(ctl, name, kind, port, log.as_deref(), &env)
+                self.write_units(ctl, name, kind, egress, &env)
                     .map(|unit| to_load.extend(unit))
             } else {
                 self.remove_kind(ctl, name, kind)
@@ -387,11 +377,10 @@ impl HostServices {
         ctl: &dyn Control,
         name: &str,
         kind: Kind,
-        port: Option<u16>,
-        log: Option<&Path>,
+        egress: Option<(u16, &Path)>,
         env: &[(String, String)],
     ) -> Result<Option<UnitPaths>> {
-        if kind == Kind::Egress && port.is_none() {
+        if kind == Kind::Egress && egress.is_none() {
             bail!("an egress unit needs a port");
         }
         if !crate::bridge::ensure_private_dir(&self.sock_dir) {
@@ -401,7 +390,7 @@ impl HostServices {
             );
         }
         let unit = self.paths_of(name, kind);
-        let texts = self.render(name, kind, port, log, env);
+        let texts = self.render(name, kind, egress, env);
         let current = |f: &PathBuf| fs::read_to_string(f).ok();
         if unit
             .files
@@ -584,11 +573,10 @@ fn render_plist(
     kind: Kind,
     sandbox: &str,
     socket: &Path,
-    port: Option<u16>,
-    log: Option<&Path>,
+    egress: Option<(u16, &Path)>,
     env: &[(String, String)],
 ) -> String {
-    let log = log.map_or_else(String::new, |l| {
+    let log = egress.map_or_else(String::new, |(_, l)| {
         format!(
             "  <key>StandardErrorPath</key>\n  <string>{}</string>\n",
             xml(&l.display().to_string())
@@ -615,8 +603,8 @@ fn render_plist(
         })
         .collect();
     // An egress job owns a loopback port and keeps its process; the others serve one connection each.
-    let (inetd, listener) = match port {
-        Some(port) => (
+    let (inetd, listener) = match egress {
+        Some((port, _)) => (
             String::new(),
             format!(
                 "      <key>SockNodeName</key>\n      <string>127.0.0.1</string>\n      \
@@ -826,7 +814,8 @@ impl Control for Systemctl {
 
     fn restart(&self, unit: &UnitPaths) -> Result<()> {
         // The socket's id is `<base>.socket`; its process is `<base>.service`.
-        let service = unit.id.replace(".socket", ".service");
+        let base = unit.id.strip_suffix(".socket").unwrap_or(&unit.id);
+        let service = format!("{base}.service");
         run("systemctl", &["--user", "restart", &service])
     }
 
@@ -935,7 +924,6 @@ mod tests {
             "s&1",
             Path::new("/Users/me/Library/Application Support/smolbento/sock/x.sock"),
             None,
-            None,
             &[("HOME".into(), "/Users/me".into())],
         );
         assert!(
@@ -1010,8 +998,7 @@ mod tests {
             Kind::Egress,
             "s1",
             Path::new("/unused.sock"),
-            Some(47331),
-            None,
+            Some((47331, Path::new("/d/egress.log"))),
             &[("HOME".into(), "/Users/me".into())],
         );
         for want in [
@@ -1067,11 +1054,11 @@ mod tests {
             let tmp = tempfile::tempdir().unwrap();
             let (s, ctl) = services(tmp.path(), flavor, "ns1");
             assert!(
-                s.sync("s1", &[Kind::Egress], &paths("/d"), &envs(&[]))
+                s.sync("s1", &[Kind::Egress], None, &paths("/d"), &envs(&[]))
                     .is_err(),
                 "no port, no unit"
             );
-            s.sync_egress("s1", &[Kind::Egress], Some(47331), &paths("/d"), &envs(&[]))
+            s.sync("s1", &[Kind::Egress], Some(47331), &paths("/d"), &envs(&[]))
                 .unwrap();
             for f in &files {
                 assert!(tmp.path().join("units").join(f).exists(), "{f}");
@@ -1108,7 +1095,7 @@ mod tests {
         ] {
             let tmp = tempfile::tempdir().unwrap();
             let (s, _ctl) = services(tmp.path(), flavor, "ns1");
-            s.sync_egress(
+            s.sync(
                 "s1",
                 &[Kind::Agent, Kind::Egress],
                 Some(47331),
@@ -1130,7 +1117,7 @@ mod tests {
     fn only_the_egress_unit_gets_the_port() {
         let tmp = tempfile::tempdir().unwrap();
         let (s, _ctl) = services(tmp.path(), Flavor::Launchd, "ns1");
-        s.sync_egress(
+        s.sync(
             "s1",
             &[Kind::Agent, Kind::Bridge, Kind::Egress],
             Some(47331),
@@ -1197,7 +1184,7 @@ mod tests {
             let tmp = tempfile::tempdir().unwrap();
             let (s, _) = services(tmp.path(), flavor, "ns1");
             let (other, _) = services(tmp.path(), flavor, "ns2");
-            s.sync("my.box", &[Kind::Agent], &paths("/d"), &envs(&[]))
+            s.sync("my.box", &[Kind::Agent], None, &paths("/d"), &envs(&[]))
                 .unwrap();
             assert!(tmp.path().join("units").join(file).exists(), "{file}");
             assert_eq!(s.units(), [("my.box".to_string(), Kind::Agent)]);
@@ -1214,8 +1201,14 @@ mod tests {
         let tmp = tempfile::tempdir().unwrap();
         let (s, ctl) = services(tmp.path(), Flavor::Launchd, "ns1");
         let sync = |env: &[(&str, &str)]| {
-            s.sync("s1", &[Kind::Agent, Kind::Bridge], &paths("/d"), &envs(env))
-                .unwrap()
+            s.sync(
+                "s1",
+                &[Kind::Agent, Kind::Bridge],
+                None,
+                &paths("/d"),
+                &envs(env),
+            )
+            .unwrap()
         };
         sync(&[("PATH", "/bin")]);
         assert_eq!(
@@ -1245,7 +1238,7 @@ mod tests {
         std::fs::write(&link, "x").unwrap();
         let unit = s.paths_of("s1", Kind::Agent);
         std::os::unix::fs::symlink(&link, &unit.files[0]).unwrap();
-        s.sync("s1", &[Kind::Agent], &paths("/d"), &envs(&[]))
+        s.sync("s1", &[Kind::Agent], None, &paths("/d"), &envs(&[]))
             .unwrap();
         // Symlink::Replace: the link is replaced, never written through; no temp files remain.
         assert_eq!(std::fs::read_to_string(&link).unwrap(), "x");
@@ -1268,7 +1261,7 @@ mod tests {
         let tmp = tempfile::tempdir().unwrap();
         let (s, ctl) = services(tmp.path(), Flavor::Launchd, "ns1");
         let sync = || {
-            s.sync("s1", &[Kind::Agent], &paths("/d"), &envs(&[]))
+            s.sync("s1", &[Kind::Agent], None, &paths("/d"), &envs(&[]))
                 .unwrap()
         };
         sync();
@@ -1288,9 +1281,15 @@ mod tests {
     fn sync_removes_the_kind_a_sandbox_no_longer_has() {
         let tmp = tempfile::tempdir().unwrap();
         let (s, _) = services(tmp.path(), Flavor::Systemd, "ns1");
-        s.sync("s1", &[Kind::Agent, Kind::Bridge], &paths("/d"), &envs(&[]))
-            .unwrap();
-        s.sync("s1", &[Kind::Bridge], &paths("/d"), &envs(&[]))
+        s.sync(
+            "s1",
+            &[Kind::Agent, Kind::Bridge],
+            None,
+            &paths("/d"),
+            &envs(&[]),
+        )
+        .unwrap();
+        s.sync("s1", &[Kind::Bridge], None, &paths("/d"), &envs(&[]))
             .unwrap();
         assert_eq!(s.units(), [("s1".to_string(), Kind::Bridge)]);
         let dir = tmp.path().join("units");
@@ -1304,7 +1303,8 @@ mod tests {
         let tmp = tempfile::tempdir().unwrap();
         let (s, ctl) = services(tmp.path(), Flavor::Launchd, "ns1");
         for n in ["s1", "s2"] {
-            s.sync(n, &[Kind::Agent], &paths("/d"), &envs(&[])).unwrap();
+            s.sync(n, &[Kind::Agent], None, &paths("/d"), &envs(&[]))
+                .unwrap();
         }
         // The socket launchd leaves behind after bootout.
         let sock = s.plan("s1").unwrap().agent;
@@ -1331,8 +1331,14 @@ mod tests {
         let tmp = tempfile::tempdir().unwrap();
         let (s, _) = services(tmp.path(), Flavor::Systemd, "ns1");
         for n in ["live", "gone", "also-gone"] {
-            s.sync(n, &[Kind::Agent, Kind::Bridge], &paths("/d"), &envs(&[]))
-                .unwrap();
+            s.sync(
+                n,
+                &[Kind::Agent, Kind::Bridge],
+                None,
+                &paths("/d"),
+                &envs(&[]),
+            )
+            .unwrap();
         }
         let live = vec!["live".to_string()];
         assert_eq!(s.orphans(&live), ["also-gone", "gone"]);
@@ -1362,7 +1368,7 @@ mod tests {
         fs::set_permissions(tmp.path().join("sock"), fs::Permissions::from_mode(0o755)).unwrap();
         assert!(s.plan("s1").is_none());
         assert!(
-            s.sync("s1", &[Kind::Agent], &paths("/d"), &envs(&[]))
+            s.sync("s1", &[Kind::Agent], None, &paths("/d"), &envs(&[]))
                 .is_err()
         );
         // Too long.
@@ -1376,7 +1382,7 @@ mod tests {
         let s = HostServices::disabled();
         assert!(!s.usable());
         assert!(s.plan("s1").is_none());
-        s.sync("s1", &[Kind::Agent], &paths("/d"), &envs(&[]))
+        s.sync("s1", &[Kind::Agent], None, &paths("/d"), &envs(&[]))
             .unwrap();
         s.remove("s1").unwrap();
         assert!(s.units().is_empty());
