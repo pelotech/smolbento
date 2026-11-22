@@ -2,21 +2,36 @@
 
 use std::io::{Read, Write};
 use std::net::{Shutdown, TcpStream};
+use std::time::Duration;
 
 use smolvm_protocol::intercept::{InterceptEndpoint, VERDICT_CONNECTED};
+
+/// How long a flow may take to present its preamble, and the interceptor to answer with a verdict.
+const HANDSHAKE_TIMEOUT: Duration = Duration::from_secs(15);
 
 /// Relay one flow: check smolvm's preamble against `front`, open a flow to `inner` for the same
 /// destination, pass the connect verdict back, then copy bytes both ways until both sides close.
 ///
 /// A preamble with the wrong token is an error and the flow is dropped without touching `inner`.
 pub fn relay(
-    mut guest: TcpStream,
+    guest: TcpStream,
     front: &InterceptEndpoint,
     inner: &InterceptEndpoint,
 ) -> std::io::Result<()> {
+    relay_with_timeout(guest, front, inner, HANDSHAKE_TIMEOUT)
+}
+
+fn relay_with_timeout(
+    mut guest: TcpStream,
+    front: &InterceptEndpoint,
+    inner: &InterceptEndpoint,
+    handshake: Duration,
+) -> std::io::Result<()> {
+    guest.set_read_timeout(Some(handshake))?;
     let dest = front.read_preamble(&mut guest)?;
     let mut upstream = TcpStream::connect(inner.addr)?;
     upstream.write_all(&inner.preamble(dest))?;
+    upstream.set_read_timeout(Some(handshake))?;
     let mut verdict = [0u8; 1];
     upstream.read_exact(&mut verdict)?;
     guest.write_all(&verdict)?;
@@ -24,6 +39,8 @@ pub fn relay(
         return Ok(());
     }
 
+    guest.set_read_timeout(None)?;
+    upstream.set_read_timeout(None)?;
     let (mut guest_rx, mut upstream_tx) = (guest.try_clone()?, upstream.try_clone()?);
     let up = std::thread::spawn(move || {
         let r = std::io::copy(&mut guest_rx, &mut upstream_tx);
@@ -103,5 +120,16 @@ mod tests {
             .unwrap();
         assert!(relay(server_side, &front, &inner).is_err());
         assert!(inner_l.accept().is_err(), "inner must not be contacted");
+    }
+
+    #[test]
+    fn relay_gives_up_on_a_guest_that_sends_nothing() {
+        let inner_l = TcpListener::bind("127.0.0.1:0").unwrap();
+        let (front, inner) = (endpoint(&inner_l, 1), endpoint(&inner_l, 2));
+        let (_client, server_side) = pair();
+        let start = std::time::Instant::now();
+        let r = relay_with_timeout(server_side, &front, &inner, Duration::from_millis(100));
+        assert!(r.is_err());
+        assert!(start.elapsed() < Duration::from_secs(5));
     }
 }
