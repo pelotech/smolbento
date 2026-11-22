@@ -5,8 +5,10 @@
 
 use std::collections::BTreeMap;
 use std::path::Path;
+use std::sync::LazyLock;
 
 use anyhow::{Context, Result, anyhow, bail};
+use regex_lite::Regex;
 use serde::Deserialize;
 use serde_json::Value;
 
@@ -106,7 +108,7 @@ fn from_value(v: Value, source: Source) -> Result<Kit> {
         k => bail!("unknown kind '{k}'"),
     };
     let provides = provides(&d, &source)?;
-    let caps = newest_versions(caps(d.capabilities)?);
+    let caps = caps(d.capabilities)?;
     let name = name_from_source(&source)?;
     check_caps(&name, &caps)?;
     let args = d
@@ -232,32 +234,6 @@ fn path_name(p: &Path) -> String {
     part.and_then(|n| n.to_str()).unwrap_or("kit").to_string()
 }
 
-/// Of a capability declared in several versions, only the newest one smolbento understands
-/// counts: kits declare older versions for older runtimes, and applying both would apply it
-/// twice. Entries of that one version all stay (several volume@1, say); unknown capabilities
-/// are left as they are. `agent-context` keeps every version: a sandbox uses one version for
-/// all its kits, chosen when they are applied (`apply::select_contexts`).
-///
-/// Like the spec's other per-entry constraints, this applies to the top-level entries and to each
-/// group's members separately.
-fn newest_versions(caps: Vec<Cap>) -> Vec<Cap> {
-    let versioned = |c: &Cap| {
-        if matches!(c.body, CapBody::Unsupported | CapBody::AgentContext(_)) {
-            return None;
-        }
-        let (base, v) = c.ty.rsplit_once('@')?;
-        Some(((c.scope(), base.to_string()), v.parse::<u32>().ok()?))
-    };
-    let mut newest: BTreeMap<(Option<usize>, String), u32> = BTreeMap::new();
-    for (key, v) in caps.iter().filter_map(versioned) {
-        let n = newest.entry(key).or_insert(v);
-        *n = (*n).max(v);
-    }
-    caps.into_iter()
-        .filter(|c| versioned(c).is_none_or(|(key, v)| newest[&key] == v))
-        .collect()
-}
-
 /// The `capabilities` list with each group's members in its place. SPEC-v3 §7.1.1's grammar: an
 /// item is a request or a group, never both; a group is neither empty nor nested, and its members
 /// don't state `optional` (the group does) or `declarationBlocks`.
@@ -308,6 +284,17 @@ fn cap(item: CapabilityItem, at: &str) -> Result<Cap> {
     if item.ty.trim().is_empty() {
         bail!("{at} has no type");
     }
+    // The spec validator's pattern (spec/validate.go `needType`).
+    static TYPE: LazyLock<Regex> = LazyLock::new(|| {
+        Regex::new(r"^[a-z0-9]([a-z0-9.-]*[a-z0-9])?/[a-z0-9]([a-z0-9-]*[a-z0-9])?@[1-9][0-9]*$")
+            .unwrap()
+    });
+    if !TYPE.is_match(&item.ty) {
+        bail!(
+            "{at}: type {:?} is not <namespace>/<name>@<version>",
+            item.ty
+        );
+    }
     request(item.ty, item.optional.unwrap_or(false), item.config)
 }
 
@@ -336,6 +323,11 @@ pub(crate) fn check_caps(kit: &str, caps: &[Cap]) -> Result<()> {
         if let CapBody::Lifecycle(l) = &c.body {
             check_hooks(kit, l)?;
         }
+    }
+    // SPEC-v3 §7.1: both describe the same grant, so a descriptor states one of them.
+    let has = |ty: &str| caps.iter().any(|c| c.ty == ty);
+    if has("com.docker.sandbox/network-policy@1") && has("com.docker.sandbox/network-policy@2") {
+        bail!("kit {kit}: network-policy@1 and network-policy@2 are exclusive; declare one");
     }
     check_ssh_phases(kit, caps)
 }

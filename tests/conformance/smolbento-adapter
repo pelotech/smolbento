@@ -43,6 +43,8 @@ sbt() {
 	if [ -f "$state/$id.known-hosts" ]; then
 		SMOLBENTO_SSH_KNOWN_HOSTS_FILE=$(cat "$state/$id.known-hosts")
 		export SMOLBENTO_SSH_KNOWN_HOSTS_FILE
+	else
+		unset SMOLBENTO_SSH_KNOWN_HOSTS_FILE || true
 	fi
 	SMOLBENTO_CONFIG_DIR=$home/config SMOLBENTO_DATA_DIR=$home/data SMOLBENTO_CACHE_DIR=$home/cache \
 		SMOLBENTO_KIT_ALLOW_LOCAL_KITS=true \
@@ -124,8 +126,8 @@ create)
 	# A kit requiring a capability type this adapter doesn't claim is refused, even where
 	# smolbento could provide it: the claim is what the suite judges.
 	for ref in "$first" ${extra[@]+"${extra[@]}"}; do
-		[ -f "$ref/kit.yaml" ] || [ -d "$ref" ] || continue
-		for f in "$ref"/*.yaml; do
+		[ -d "$ref" ] || continue
+		for f in "$ref"/*.yaml "$ref"/*.yml; do
 			[ -f "$f" ] || continue
 			t=$(required_unclaimed "$f")
 			if [ -n "$t" ]; then

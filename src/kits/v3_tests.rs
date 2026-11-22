@@ -589,15 +589,13 @@ fn one_cap(json_cap: &str) -> Result<Kit> {
     )
 }
 
+/// SPEC-v3 §7.1: each declared version is its own request; none is dropped for a newer one.
 #[test]
-fn only_the_newest_known_version_of_a_capability_counts() {
+fn every_declared_version_of_a_capability_counts() {
     let caps = [
-        // Every agent-context version stays: one is chosen for the whole sandbox, later.
         r#"{"type":"com.docker.sandbox/agent-context@1","config":{"content":"old"}}"#,
         r#"{"type":"com.docker.sandbox/agent-context@2","config":{"content":"new"}}"#,
         r#"{"type":"com.docker.sandbox/agent-context@9","config":{"content":"future"}}"#,
-        r#"{"type":"com.docker.sandbox/network-policy@1","config":{}}"#,
-        r#"{"type":"com.docker.sandbox/network-policy@2","config":{}}"#,
         r#"{"type":"com.docker.sandbox/volume@1","config":{"path":"/a"}}"#,
         r#"{"type":"com.docker.sandbox/volume@1","config":{"path":"/b"}}"#,
     ]
@@ -610,12 +608,29 @@ fn only_the_newest_known_version_of_a_capability_counts() {
             "com.docker.sandbox/agent-context@1",
             "com.docker.sandbox/agent-context@2",
             "com.docker.sandbox/agent-context@9",
-            "com.docker.sandbox/network-policy@2",
             "com.docker.sandbox/volume@1",
             "com.docker.sandbox/volume@1",
         ]
     );
     assert!(matches!(k.caps[2].body, CapBody::Unsupported));
+}
+
+/// SPEC-v3 §7.1: the two network-policy versions are exclusive; a descriptor states one, even
+/// across a group.
+#[test]
+fn both_network_policy_versions_are_refused() {
+    let np1 = r#"{"type":"com.docker.sandbox/network-policy@1","config":{}}"#;
+    let np2 = r#"{"type":"com.docker.sandbox/network-policy@2","config":{}}"#;
+    for caps in [
+        format!("{np1},{np2}"),
+        format!(r#"{np1},{{"group":{{"name":"g","capabilities":[{np2}]}}}}"#),
+    ] {
+        let e = one_cap(&caps).unwrap_err();
+        assert!(
+            format!("{e:#}").contains("network-policy@1 and network-policy@2 are exclusive"),
+            "{e:#}"
+        );
+    }
 }
 
 #[test]
@@ -1128,28 +1143,14 @@ kind: mixin
 capabilities:
   - type: com.docker.sandbox/ssh-agent@1
     config: {phase: install, unrestricted: true}
-  - type: com.docker.sandbox/network-policy@1
-    config: {runtime: {allow: [a.example.com]}}
   - group:
       optional: true
       capabilities:
         - type: com.docker.sandbox/ssh-agent@1
           config: {phase: install, unrestricted: true}
-        - type: com.docker.sandbox/network-policy@2
-          config: {runtime: {allow: [b.example.com]}}
 "#;
     let k = parse(doc, local("g")).unwrap();
-    // The group's newer network-policy doesn't replace the top-level @1 one.
-    let tys: Vec<&str> = k.caps.iter().map(|c| c.ty.as_str()).collect();
-    assert_eq!(
-        tys,
-        [
-            "com.docker.sandbox/ssh-agent@1",
-            "com.docker.sandbox/network-policy@1",
-            "com.docker.sandbox/ssh-agent@1",
-            "com.docker.sandbox/network-policy@2",
-        ]
-    );
+    assert_eq!(k.caps.len(), 2);
 }
 
 fn yaml_cap(cap: &str) -> Kit {
@@ -1372,4 +1373,27 @@ fn credential_service_phases_and_username_are_checked() {
         format!("{e:#}").contains("username is only for scheme basic"),
         "{e:#}"
     );
+}
+
+/// SPEC-v3 §7: a type is `<namespace>/<name>@<version>`, as the spec's validator reads it.
+#[test]
+fn a_malformed_capability_type_is_refused() {
+    for ty in [
+        "network-policy@1",
+        "com.docker.sandbox/network-policy",
+        "com.docker.sandbox/network-policy@0",
+        "com.docker.sandbox/network-policy@v1",
+        "Com.Docker.Sandbox/network-policy@1",
+        "com.docker.sandbox/network_policy@1",
+        "com.docker.sandbox/-np@1",
+    ] {
+        let e = one_cap(&format!(r#"{{"type":"{ty}","optional":true}}"#)).unwrap_err();
+        assert!(
+            format!("{e:#}").contains(&format!(
+                "capabilities[0]: type {ty:?} is not <namespace>/<name>@<version>"
+            )),
+            "{ty}: {e:#}"
+        );
+    }
+    one_cap(r#"{"type":"com.example-1/x-y2@12","optional":true}"#).unwrap();
 }
