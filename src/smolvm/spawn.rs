@@ -6,8 +6,8 @@ use std::io::{Read, Write};
 use std::os::fd::{AsRawFd, FromRawFd, OwnedFd};
 use std::os::unix::process::CommandExt;
 use std::path::PathBuf;
-use std::process::{Command, Stdio};
-use std::sync::Arc;
+use std::process::{Child, Command, Stdio};
+use std::sync::{Arc, Mutex};
 
 use anyhow::{Context, Result};
 
@@ -21,6 +21,9 @@ pub struct Pty {
 /// What can be done to a running [`Proc`] from another thread.
 pub struct ProcCtl {
     pid: libc::pid_t,
+    /// Set once the process has exited: from then on its pid can be another process's. `kill`
+    /// holds it while signalling, so the wait can't reap the pid between the check and the signal.
+    exited: Mutex<bool>,
     master: Option<File>,
 }
 
@@ -35,16 +38,61 @@ impl ProcCtl {
         }
     }
 
-    /// Ends the process (a hang-up for a terminal session, else a termination).
-    pub fn kill(&self) {
+    /// Ends the process (a hang-up for a terminal session, else a termination); false when it has
+    /// already exited, so nothing was signalled.
+    pub fn kill(&self) -> bool {
         let sig = if self.master.is_some() {
             libc::SIGHUP
         } else {
             libc::SIGTERM
         };
-        // SAFETY: signalling a pid we spawned; at worst it has exited (ESRCH).
+        let exited = self.exited();
+        if *exited {
+            return false;
+        }
+        // SAFETY: signalling a pid we spawned and haven't reaped, so it's still ours (a zombie at
+        // worst).
         unsafe { libc::kill(self.pid, sig) };
+        true
     }
+
+    fn exited(&self) -> std::sync::MutexGuard<'_, bool> {
+        self.exited.lock().unwrap_or_else(|e| e.into_inner())
+    }
+}
+
+/// The control for `child`, and its `wait`: it blocks until the process exits without reaping it
+/// (`WNOWAIT`), marks it exited, then reaps it, so no `kill` can reach the pid once it's free.
+fn watch(
+    mut child: Child,
+    master: Option<File>,
+) -> (Arc<ProcCtl>, Box<dyn FnOnce() -> Result<i32> + Send>) {
+    let ctl = Arc::new(ProcCtl {
+        pid: child.id() as libc::pid_t,
+        exited: Mutex::new(false),
+        master,
+    });
+    let waiter = ctl.clone();
+    let wait = Box::new(move || {
+        loop {
+            // SAFETY: `info` is a valid out pointer; WNOWAIT leaves the child to be reaped below.
+            let mut info: libc::siginfo_t = unsafe { std::mem::zeroed() };
+            let rc = unsafe {
+                libc::waitid(
+                    libc::P_PID,
+                    waiter.pid as libc::id_t,
+                    &mut info,
+                    libc::WEXITED | libc::WNOWAIT,
+                )
+            };
+            if rc == 0 || std::io::Error::last_os_error().raw_os_error() != Some(libc::EINTR) {
+                break;
+            }
+        }
+        *waiter.exited() = true;
+        Ok(super::exit_code(child.wait()?))
+    });
+    (ctl, wait)
 }
 
 /// A running process. With a pty, `stdout` and `stdin` are the master side and there is no
@@ -124,13 +172,16 @@ impl ProcessSpawner {
                 .stderr(Stdio::piped())
                 .spawn()
                 .with_context(spawn_error)?;
-            let pid = child.id() as libc::pid_t;
+            let stdin = Box::new(child.stdin.take().context("smolvm stdin")?);
+            let stdout = Box::new(child.stdout.take().context("smolvm stdout")?);
+            let stderr = Box::new(child.stderr.take().context("smolvm stderr")?);
+            let (ctl, wait) = watch(child, None);
             return Ok(Proc {
-                stdin: Box::new(child.stdin.take().context("smolvm stdin")?),
-                stdout: Box::new(child.stdout.take().context("smolvm stdout")?),
-                stderr: Some(Box::new(child.stderr.take().context("smolvm stderr")?)),
-                ctl: Arc::new(ProcCtl { pid, master: None }),
-                wait: Box::new(move || Ok(super::exit_code(child.wait()?))),
+                stdin,
+                stdout,
+                stderr: Some(stderr),
+                ctl,
+                wait,
             });
         };
         let (master, slave) = open_pty(size)?;
@@ -148,20 +199,18 @@ impl ProcessSpawner {
                 Ok(())
             });
         }
-        let mut child = cmd.spawn().with_context(spawn_error)?;
+        let child = cmd.spawn().with_context(spawn_error)?;
         // Our copies of the slave must close, or the master never sees the end of the session.
         drop(cmd);
         let master = File::from(master);
-        let pid = child.id() as libc::pid_t;
+        let (stdin, stdout) = (master.try_clone()?, PtyReader(master.try_clone()?));
+        let (ctl, wait) = watch(child, Some(master));
         Ok(Proc {
-            stdin: Box::new(master.try_clone()?),
-            stdout: Box::new(PtyReader(master.try_clone()?)),
+            stdin: Box::new(stdin),
+            stdout: Box::new(stdout),
             stderr: None,
-            ctl: Arc::new(ProcCtl {
-                pid,
-                master: Some(master),
-            }),
-            wait: Box::new(move || Ok(super::exit_code(child.wait()?))),
+            ctl,
+            wait,
         })
     }
 }
@@ -250,6 +299,18 @@ mod tests {
         }
         assert!(seen.contains("40 120"), "{seen:?}");
         assert_eq!(wait().unwrap(), 0);
+    }
+
+    /// After `wait` has reaped the process, its pid can belong to another process: `kill` must
+    /// not signal it. Before, `kill` returns true (it signalled); after, false.
+    #[test]
+    fn kill_never_signals_a_reaped_pid() {
+        for pty in [None, Some(Pty { cols: 80, rows: 24 })] {
+            let p = sh().spawn(&script("sleep 30"), pty).unwrap();
+            assert!(p.ctl.kill(), "{pty:?}: a running process is signalled");
+            (p.wait)().unwrap();
+            assert!(!p.ctl.kill(), "{pty:?}: a reaped pid is never signalled");
+        }
     }
 
     #[test]
