@@ -725,7 +725,7 @@ fn resources_last_wins_and_flags_are_set() {
     let p = run(w, vec![m]).unwrap();
     assert_eq!(p.merged.cpus.as_deref(), Some("4"));
     assert_eq!(p.merged.memory.as_deref(), Some("1g"));
-    assert!(p.merged.git_identity && p.merged.long_running && p.merged.privileged);
+    assert!(p.merged.git_identity && p.merged.long_running);
 }
 
 #[test]
@@ -1254,17 +1254,16 @@ fn dockerd_merges_auto_start_true_wins() {
     assert_eq!(two(false, true), Engine::Auto);
 }
 
-/// tck: dockerd@1/elevation-granted
+/// Elevation (`dockerd@1/elevation-granted`, `manual-elevation-granted`) needs nothing from
+/// smolbento: a machine already runs its startup steps as root.
 /// tck: dockerd@1/storage-private-and-persistent
-/// tck: dockerd@1/manual-elevation-granted
 /// tck: dockerd@1/manual-storage-private-and-persistent
 /// tck: dockerd@1/storage-removed-with-sandbox
 /// tck: dockerd@1/removed-store-not-reused
 #[test]
-fn dockerd_brings_elevation_and_the_engine_store() {
+fn dockerd_brings_the_engine_store() {
     for auto_start in [true, false] {
         let p = run(workload("w").cap(DD, false, dockerd(auto_start)), vec![]).unwrap();
-        assert!(p.merged.privileged);
         let got: Vec<_> = (p.merged.volumes.iter())
             .map(|v| (&*v.path, v.tmpfs, v.mode.as_deref()))
             .collect();
@@ -1309,5 +1308,4 @@ fn dockerd_owns_the_engine_store() {
 fn dockerd_absent_without_a_declaration() {
     let p = run(workload("w"), vec![]).unwrap();
     assert_eq!(p.merged.dockerd, Engine::Off);
-    assert!(!p.merged.privileged);
 }

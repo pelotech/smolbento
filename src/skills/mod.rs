@@ -43,14 +43,6 @@ impl Mode {
             _ => bail!("invalid skills mode {s:?}: use off, readonly or readwrite"),
         })
     }
-
-    pub fn as_str(self) -> &'static str {
-        match self {
-            Mode::Off => "off",
-            Mode::Readonly => "readonly",
-            Mode::Readwrite => "readwrite",
-        }
-    }
 }
 
 /// How a sandbox sees the store in one skills directory.

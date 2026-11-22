@@ -410,7 +410,7 @@ fn first_error<const N: usize>(results: [Result<()>; N]) -> Result<()> {
 /// (a launchd job has almost none), what the bridge reads to see a display, and on Linux the
 /// `SSH_AUTH_SOCK` of the user who last ran smolbento (systemd's user session has none; launchd
 /// supplies macOS's own).
-pub fn service_env(
+fn service_env(
     paths: &Paths,
     env: &BTreeMap<String, String>,
     flavor: Flavor,
@@ -473,7 +473,7 @@ fn xml(s: &str) -> String {
         .replace('"', "&quot;")
 }
 
-pub fn render_plist(
+fn render_plist(
     label: &str,
     exe: &Path,
     kind: Kind,
@@ -547,7 +547,7 @@ fn systemd_quote(s: &str) -> String {
     format!("\"{s}\"")
 }
 
-pub fn render_systemd_socket(sandbox: &str, kind: Kind, socket: &Path) -> String {
+fn render_systemd_socket(sandbox: &str, kind: Kind, socket: &Path) -> String {
     format!(
         "[Unit]\nDescription=smolbento {} socket for sandbox {}\n\n[Socket]\nListenStream={}\n\
          SocketMode=0600\nDirectoryMode=0700\nAccept=yes\nMaxConnections={MAX_CONNECTIONS}\n\n[Install]\nWantedBy=sockets.target\n",
@@ -557,7 +557,7 @@ pub fn render_systemd_socket(sandbox: &str, kind: Kind, socket: &Path) -> String
     )
 }
 
-pub fn render_systemd_service(
+fn render_systemd_service(
     exe: &Path,
     kind: Kind,
     sandbox: &str,

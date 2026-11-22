@@ -190,6 +190,21 @@ name turned into `_`). Its details are stored as labels on that machine:
 | `sbx.workdir` | A v3 workload kit's image `WORKDIR`, where install hooks run (absent for `/`) |
 | `sbx.skills` | The skills mode, the `/run/sbx/skills-shared` mount (`none`, `ro` or `rw`), and each skills directory with its access (`none`, `link`, or the store mounted over it `ro` or `rw`), set at create |
 | `sbx.long-running` | `true` when a kit asked not to stop the sandbox when its last session ends |
+| `sbx.version` | The smolbento version that created it |
+| `sbx.fork-of` | The sandbox it was forked from |
+| `sbx.template` | The saved template it was created from |
+| `sbx.registries` | The kit builder's stored registry hosts, comma-separated, fixed at create |
+| `sbx.credential-format.<ENV>` | How a kit credential's value is formatted (`format:…` or `basic:<user>`) |
+| `sbx.credential-service.<ENV>` | The secret service behind a kit credential's env var, when it isn't one of that service's own |
+| `sbx.mcp` | The `--static-mcp` servers, comma-separated (empty for `none`; absent without the flag) |
+| `sbx.mcp-secret.<ENV>` | The `--static-mcp` server secret a guest env var is bound to |
+| `sbx.host-access` | `true` when created without the host loopback deny, because a `localhost` rule applied |
+| `sbx.bridge` | `true` when created with the browser and clipboard bridge socket |
+| `sbx.service` | `true` when launchd or `systemd --user` units own its host sockets |
+| `sbx.ssh-agent` | The SSH agent granted at create, per phase, as JSON |
+| `sbx.host-mounts` | Kit host mounts: guest path to host directory, as a JSON object |
+| `sbx.no-fuse` | `true` when created without `/dev/fuse` (an environment file's `sandboxOptions.fuse: false`) |
+| `sbx.read-only-files` | Workspace files made read-only at each start (an environment's files), as a JSON list |
 
 `bento smolvm machine ls` shows these. Machines you make with `bento smolvm` sit next to smolbento's
 sandboxes, but `bento ls` shows only the ones smolbento made.

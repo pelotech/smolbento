@@ -216,7 +216,7 @@ fn start_checked<R: Runner>(
 
 /// What follows `machine start`: the guest's hosts file, the clone, then the kits' startup
 /// hooks (a no-op without kits; deferred during a kit first start). A failed blocking startup
-/// hook fails the start.
+/// hook only warns; a `dockerd@1` engine that doesn't answer fails the start.
 fn setup<R: Runner>(
     vm: &Smolvm<R>,
     sb: &Sandbox,

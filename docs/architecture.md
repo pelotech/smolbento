@@ -74,6 +74,7 @@ other session is live, unless the sandbox was started with `run -d`.
 | `src/bridge/` | Host services: browser and clipboard shims, login relay, socket listener |
 | `src/host_service.rs` | launchd and `systemd --user` units that own a sandbox's agent and bridge sockets and run `_serve` per connection; the orphan sweep |
 | `src/ssh_agent/` | SSH agent forwarding: grants, label, filtering proxy |
+| `src/ssh/` | The `~/.ssh/config` block `setup ssh` manages; the SSH server `ssh proxy` runs (sessions on a pty, `-L` forwards) |
 | `src/util.rs` | Leaf helpers: shell quoting, hashing, size parsing |
 
 Later phases are listed in [Development status](development-status.md).

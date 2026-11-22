@@ -17,7 +17,7 @@ use crate::sandbox::{self, Sandbox, session};
 use crate::smolvm::{ExecSpec, Runner, SmolvmError};
 use crate::workspace::clone;
 
-/// Flag checks that need no smolvm; `dispatch` runs them before its smolvm gate.
+/// Flag checks that need no smolvm; `dispatch` runs them first.
 pub fn check_args(a: &RunArgs) -> Result<()> {
     a.opts.check_supported()?;
     super::refuse_as(&[(a.new, "--new")], "is a Docker Cloud option")?;

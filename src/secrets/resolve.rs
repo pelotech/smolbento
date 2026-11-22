@@ -100,7 +100,7 @@ pub fn resolve(entry: &SecretEntry, store: &dyn SecretStore) -> Result<String> {
 /// One bound service's env vars (its own, then kit ones bound to it, `sbx.credential-service.*`)
 /// with their values, formatted as recorded. `install`: also the install-only vars. A secret
 /// that's gone or can't be read only warns, and gives none.
-pub fn service_env(
+fn service_env(
     secrets: &SecretsFile,
     meta: &Meta,
     name: &str,

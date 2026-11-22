@@ -59,10 +59,12 @@ usage guide is linked from its row in the [Phases](#phases) table.
 - The bridge and the SSH agent are served by launchd or `systemd --user` units for sandboxes created
   by this version. Without a usable service manager, or for earlier sandboxes, they are served only
   while `bento run`, `bento exec -it` or `bento exec` runs. A sandbox deleted with `bento smolvm machine delete`
-  leaves its units until the next state-changing command sweeps them (`prune`, `diagnose`).
+  leaves its units until the next state-changing command (`create`, `start`, `rm`, `prune`) sweeps
+  them. `diagnose` reports them.
 - Templates don't keep `/tmp`.
-- Shared skills are linked by a start script running as `agent`. Images without that account get no
-  links (a warning). A required bundled kit skill there fails the create.
+- Shared skills are linked at every start by a script running as root, and the links are owned by
+  `agent` (uid 1000 in images without that account). A required bundled kit skill that can't be
+  linked fails the create.
 - smolvm maps only a mounted directory's owner and group to the agent. A subdirectory owned by another
   of your groups keeps that group, so the agent can't write it through the group.
 
@@ -109,7 +111,7 @@ in [sbx compatibility](sbx-compatibility.md). Worth another look:
 - **Secrets sent to other hosts.** sbx lets a kit send a built-in secret (e.g. GitHub) to another host
   after you approve it once per host. smolbento refuses. An approval flow would close the gap.
 - **Kit host mounts.** A published kit's directory is keyed on its repository (sbx's key isn't measured).
-  `reset` keeps the directories (sbx deletes them). `inspect` omits sbx's CPU, memory, uptime, digest,
+  `inspect` omits sbx's CPU, memory, uptime, digest,
   auth, policy, proxy, MCP and daemon rows.
 - **Kit volume `size`.** sbx gives the volume a block device of that size. smolbento ignores it.
 - **Kit signing and publishing.** Local-directory signing (`kit.sig.bundle`; sbx's directory digest isn't

@@ -714,12 +714,12 @@ fn add_running<R: Runner>(
             .set_label(&sb.machine, labels::AGENT_CONTEXT, &v.to_string())
             .context("recording the agent-context version in the sandbox's labels")?;
     }
-    // Like a create (R30): the kit stays, and later starts fail until its hooks succeed.
+    // Like a create (R30): the kit stays, and each later start warns until its hooks succeed.
     if let Some((path, _, _)) = &startup
         && let Err(e) = sandbox::run_startup(&ctx.vm, sb, Some(path))
     {
         crate::warning!(
-            "kit {kit_name}'s startup hooks failed: {e:#}; later starts fail until they \
+            "kit {kit_name}'s startup hooks failed: {e:#}; later starts warn until they \
              succeed"
         );
     }

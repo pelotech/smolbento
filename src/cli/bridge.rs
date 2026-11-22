@@ -69,13 +69,15 @@ mod tests {
     }
 
     #[test]
-    fn is_hidden_and_fails_when_smolvm_does() {
+    fn is_hidden_and_refuses_an_unknown_sandbox() {
         use clap::CommandFactory;
         let cmd = super::super::Cli::command();
         let sub = cmd.find_subcommand("_bridge").expect("exists");
         assert!(sub.is_hide_set());
         let mut t = test_env(&[]);
-        t.runner().fail(&["--version"], "E", "no smolvm");
-        assert!(t.sbt(&["_bridge", "x"]).is_err());
+        t.runner()
+            .fail(&["machine", "status"], "NOT_FOUND", "machine not found");
+        let e = format!("{:#}", t.sbt(&["_bridge", "x"]).unwrap_err());
+        assert!(e.contains("sandbox 'x' not found"), "{e}");
     }
 }
