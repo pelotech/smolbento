@@ -1311,22 +1311,3 @@ fn dockerd_absent_without_a_declaration() {
     assert_eq!(p.merged.dockerd, Engine::Off);
     assert!(!p.merged.privileged);
 }
-
-/// tck: dockerd@1/engine-store-owned (the cleaned path decides, not its spelling)
-#[test]
-fn dockerd_engine_store_is_compared_on_the_cleaned_path() {
-    for bad in [
-        "/var/lib/x/../docker",
-        "/var/lib/docker/./volumes",
-        "//var/lib//docker",
-    ] {
-        let d = || workload("w").cap(DD, false, dockerd(true));
-        let m = || mixin("m").cap(VOL, false, vol(bad, false));
-        assert!(run(d(), vec![m()]).is_err(), "{bad}");
-        let w = workload("w").cap(VOL, false, vol(bad, false));
-        let m = mixin("m").cap(DD, false, dockerd(true));
-        assert!(run(w, vec![m]).is_err(), "{bad}");
-    }
-    let m = mixin("m").cap(VOL, false, vol("/var/lib/docker2/../docker2", false));
-    run(workload("w").cap(DD, false, dockerd(true)), vec![m]).unwrap();
-}

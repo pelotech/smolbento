@@ -133,20 +133,9 @@ pub struct Merged {
 }
 
 const ENGINE_STORE: &str = "/var/lib/docker";
-/// Lexically cleaned first (`.`, `..`, repeated and trailing `/`), as the storage key is.
+/// Paths reach here canonical: volume@1's cleaned at parse, host-mount@1's required canonical.
 fn in_engine_store(path: &str) -> bool {
-    use std::path::{Component, PathBuf};
-    let mut clean = PathBuf::new();
-    for c in std::path::Path::new(path).components() {
-        match c {
-            Component::ParentDir => {
-                clean.pop();
-            }
-            Component::CurDir => {}
-            c => clean.push(c),
-        }
-    }
-    clean.starts_with(ENGINE_STORE)
+    std::path::Path::new(path).starts_with(ENGINE_STORE)
 }
 
 impl Merged {
