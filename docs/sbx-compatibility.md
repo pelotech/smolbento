@@ -356,8 +356,8 @@ used.
 | `sbx@1` | Yes | Yes: the workload's command is the agent (see below) |
 | `git-identity@1` | Yes | Yes: your `git config user.name/email` |
 | `long-running@1` | Yes | Yes: no auto-stop when the last session ends |
-| `privileged@1` | Yes | Accepted, with no effect of its own: a smolvm machine already runs its startup steps as root, so smolbento passes no extra flag |
-| `dockerd@1` | Yes | Yes: dockerd starts before startup steps, waited for up to 60 s. Elevation needs nothing extra: a machine already runs its startup steps as root. Granted without asking while `docker.enabled` is on (`tck: dockerd@1/explicit-consent` is a SHOULD); with it off, a required one is refused and an optional one skipped |
+| `privileged@1` | Yes | Accepted, with no effect of its own: a kit's steps can already run as root (`user: "0"`), so smolbento passes no extra flag |
+| `dockerd@1` | Yes | Yes: dockerd starts before startup steps, waited for up to 60 s. Elevation needs nothing extra: smolbento starts dockerd as root, and a kit's steps can run as root (`user: "0"`). Granted without asking while `docker.enabled` is on (`tck: dockerd@1/explicit-consent` is a SHOULD); with it off, a required one is refused and an optional one skipped |
 | `agent-sessions@1` | Declaration only | Declaration only |
 | `host-mount@1` | Yes | Yes: a directory on your machine, shared by the kit's sandboxes and kept after `rm` (see below). A path holding `:` is refused, because smolvm reads it as host:guest (the spec allows it) |
 | `ssh-agent@1` | Yes | Yes, with `sign` and `authenticate` limits, served by a service unit ([SSH agent](#ssh-agent)) |

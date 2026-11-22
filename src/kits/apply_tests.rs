@@ -1621,3 +1621,43 @@ fn optional_version_1_context_is_kept_when_no_kit_offers_version_2() {
     assert_eq!(req.rec.agent_context, Some(1));
     assert!(!steps.context.is_empty(), "the agent file is written");
 }
+
+/// tck: lifecycle@1/default-users: a v3 startup hook without `user:` runs as the agent user (the
+/// session user: the workload image's user, else `agent`), not root. One that names a user keeps it.
+#[test]
+fn a_startup_hook_without_a_user_runs_as_the_session_user() {
+    let lifecycle = |user: Option<&str>| {
+        with(
+            kit("k", Kind::Mixin),
+            "lifecycle@1",
+            false,
+            CapBody::Lifecycle(Lifecycle {
+                install: vec![],
+                startup: vec![Hook {
+                    command: HookCmd::Shell("serve".into()),
+                    user: user.map(String::from),
+                    env: vec![],
+                    background: false,
+                    clean_env: false,
+                }],
+                files: vec![],
+            }),
+        )
+    };
+    let script = |workload: Kit, user: Option<&str>| {
+        let p = resolve(workload, vec![lifecycle(user)], &ArgValues::default()).unwrap();
+        let (steps, _) = run(&p, &mut request(), &mut Policy::default()).unwrap();
+        steps.startup_d[0].1.clone()
+    };
+    let agent = script(workload(), None);
+    assert!(agent.contains("runuser -u 'agent'"), "{agent}");
+    let mut node = workload();
+    node.config = Some(crate::kits::model::ImageConfig {
+        user: "node".into(),
+        workdir: String::new(),
+    });
+    let as_node = script(node, None);
+    assert!(as_node.contains("runuser -u 'node'"), "{as_node}");
+    let root = script(workload(), Some("0"));
+    assert!(!root.contains("runuser"), "a named user is kept: {root}");
+}

@@ -791,6 +791,30 @@ setup:
     );
 }
 
+/// tck: lifecycle@1/default-users: a v3 startup hook without `user:` runs as the session user
+/// (`agent` here, Alpine having no image user of its own), not root.
+#[test]
+#[ignore = "boots real VMs and pulls alpine; run with `just e2e`"]
+pub(crate) fn v3_startup_hook_runs_as_the_session_user_by_default() {
+    let e = E2e::new("v3user");
+    let reg = Registry::start(&e);
+    let kit = reg.push(
+        "v3user",
+        Image::empty(),
+        descriptor(
+            "mixin",
+            &["e2e-v3-user@1.0.0"],
+            serde_json::json!([{
+                "type": "com.docker.sandbox/lifecycle@1",
+                "config": {"startup": [{"command": "id -un > /tmp/e2e-started-as"}]}
+            }]),
+        ),
+    );
+    e.create_with_kits(&[&kit]);
+    assert_eq!(e.state(), "running");
+    assert_eq!(root_out(&e.name, "cat /tmp/e2e-started-as"), "agent\n");
+}
+
 /// sbx #15: a mixin's agent context goes beside the workspace, in the sandbox only. It is
 /// `agent-context@2` (a v2 kit's instructions are), so the kit's text is in the shell agent's
 /// `AGENTS.md` itself, where the agent reads it at startup.
