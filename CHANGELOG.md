@@ -1,5 +1,19 @@
 # Changelog
 
+## [0.34.0](https://github.com/pelotech/smolbento/compare/v0.33.4...v0.34.0) (2026-11-22)
+
+
+### Features
+
+* **kits:** start Docker for dockerd@1 in the runtime ([#199](https://github.com/pelotech/smolbento/issues/199)) ([9c406b3](https://github.com/pelotech/smolbento/commit/9c406b34c4fa4b658526574995215f5d7ad65058))
+
+
+### Bug Fixes
+
+* ask for the network policy on stderr like sbx; fork refreshes the parent's units ([#203](https://github.com/pelotech/smolbento/issues/203)) ([a949968](https://github.com/pelotech/smolbento/commit/a9499686bb3fcf5f2628988893cdb0430aa92be5))
+* clipboard stall, hyphenated credential modes, two env-file panics ([#201](https://github.com/pelotech/smolbento/issues/201)) ([fcf8174](https://github.com/pelotech/smolbento/commit/fcf81745598942b6a00e70b9a679f129a5fa186e))
+* keep secrets and skills on failed writes; kit inspect/validate agree with resolve ([#202](https://github.com/pelotech/smolbento/issues/202)) ([4e6c4b7](https://github.com/pelotech/smolbento/commit/4e6c4b763edef959ec94343a50ae802049d74386))
+
 ## [0.33.4](https://github.com/pelotech/smolbento/compare/v0.33.3...v0.33.4) (2026-11-21)
 
 
