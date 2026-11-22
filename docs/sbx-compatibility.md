@@ -51,12 +51,16 @@ smolbento-only:
 | `tui` | Later |
 | `--pull always`; `--pull never` without a saved template ([Templates](#templates)) | Not implemented. `--pull missing` works, as in smolvm |
 | `exec -d`, `--detach-keys` | Not supported (sbx doesn't support `exec -d` either) |
+| `secret set-custom --placeholder` | Not supported: smolvm chooses the placeholder |
+| `secret rm --all-sandboxes` | Not implemented |
+| `policy allow\|deny --protocol` other than `tcp`; `policy log --type filesystem` | Not supported: smolbento has TCP network rules only |
 
 ## Never (Docker Cloud only, exit 2)
 
-`login`, `logout`, `move`, `ttl`, `attach`, `volume`, the global `--cloud` flag, and the cloud-only
-`run`/`create` flags (`--allow-network`, `--image-ref`, `--platform`, `--ttl`, `--on-timeout`,
-`-v/--volume`, `--new`).
+`login`, `logout`, `move`, `ttl`, `attach`, `volume`, `template inspect`, `policy init --sandbox`,
+the global `--cloud` flag, and the cloud-only `run`/`create` flags (`--allow-network`, `--image-ref`,
+`--platform`, `--ttl`, `--on-timeout`, `-v/--volume`, `--new`; `env create` and `env run` take
+`--ttl` and `--on-timeout` too).
 
 ## SSH
 
@@ -134,7 +138,7 @@ smolbento-only:
 | `kit inspect --resolved` | Merges the kit's `extends:` parent into the output | Accepted; prints the same as without it. smolbento's loader accepts `extends:` and ignores it, so there is no parent to merge |
 | `diagnose --format github-issue` | A Markdown report for a GitHub issue: OS, architecture, `DS Version`, a `Check \| Status \| Message` table, and the JSON in a `<details>` block | Same shape over smolbento's checks, with `smolbento Version`. Statuses are `✓` and `✗` (`✗` wasn't measured in sbx). Messages are the ones `bento diagnose` prints, paths included: read it before posting |
 | `df` | Disk usage of images, containers and volumes | Not implemented (`unrecognized subcommand`) |
-| `--format`, `--json` | On every command that prints something | The same flags on every command that prints something, except `template inspect` (not implemented). Differences in the output: [Output formats](#output-formats) |
+| `--format`, `--json` | On every command that prints something | The same flags on every command that prints something, except `template inspect` (refused: sbx has it for cloud templates only). Differences in the output: [Output formats](#output-formats) |
 
 - **Host services:** Only sandboxes created while a `localhost` rule applied get it; others need
   recreating. Kit rules never grant it, and `_builder` never has it. A blocked request gets
@@ -222,6 +226,7 @@ servers are written into the agent's own MCP config at create.
 | Kit args | Not measured where sbx keeps them | Kept with the sandbox (`sbx.kits`), in its templates and their archives, defaults included |
 | `-t IMAGE` with a workload kit | Only for `shell` | Any workload kit, built-in agents included: the image replaces the kit's, its capabilities and command stay |
 | `save` of a running sandbox, no terminal | Suggests a nonexistent `--force` | Says to `bento stop` it first |
+| `save` of a sandbox created with `--static-mcp` | Not measured | Refused: a sandbox made from the template would list those servers without their secrets or network access |
 | `inspect` | Needs `--cloud`; local templates are Docker images | Not supported |
 | `--pull never` | Default for saved local snapshots; an uncached image fails (`not cached locally and pull_policy=never`) | Accepted only with a saved template, whose kits must be in the kit cache; exit 2 otherwise |
 
@@ -351,8 +356,8 @@ used.
 | `sbx@1` | Yes | Yes: the workload's command is the agent (see below) |
 | `git-identity@1` | Yes | Yes: your `git config user.name/email` |
 | `long-running@1` | Yes | Yes: no auto-stop when the last session ends |
-| `privileged@1` | Yes | Yes |
-| `dockerd@1` | Yes | Yes: dockerd starts before startup steps, waited for up to 60 s. Granted without asking while `docker.enabled` is on (`tck: dockerd@1/explicit-consent` is a SHOULD); with it off, a required one is refused and an optional one skipped |
+| `privileged@1` | Yes | Accepted, with no effect of its own: a smolvm machine already runs its startup steps as root, so smolbento passes no extra flag |
+| `dockerd@1` | Yes | Yes: dockerd starts before startup steps, waited for up to 60 s. Elevation needs nothing extra: a machine already runs its startup steps as root. Granted without asking while `docker.enabled` is on (`tck: dockerd@1/explicit-consent` is a SHOULD); with it off, a required one is refused and an optional one skipped |
 | `agent-sessions@1` | Declaration only | Declaration only |
 | `host-mount@1` | Yes | Yes: a directory on your machine, shared by the kit's sandboxes and kept after `rm` (see below). A path holding `:` is refused, because smolvm reads it as host:guest (the spec allows it) |
 | `ssh-agent@1` | Yes | Yes, with `sign` and `authenticate` limits, served by a service unit ([SSH agent](#ssh-agent)) |
@@ -494,7 +499,7 @@ used.
 | v2 kits' `requires.agent` | A base-agent name | A capability name with no version, so any version meets it (v2 has no versioned provides) |
 | `kit add` and earlier kits | Recreates with the whole set | Checks the new kit against the provides recorded at create, with versions. Older records hold bare names, which meet only unconstrained requires. Errors name kits by kit name. Earlier kits' requires and conflicts aren't rechecked |
 | Kit settings | Also `kit.requireSignature`, `kit.trustedSigners`, `kit.ignoreTransparencyLog`, `kit.allowExtractedAgents` | All but `kit.allowExtractedAgents` (not implemented) |
-| Default kit sources and signers | `kit.allowedSources` `["docker.io/","dhi.io/"]` (0.53); `kit.trustedSigners` `*@docker.com` | Also `ghcr.io/pelotech/smolbento/` and smolbento's release workflow (GitHub OIDC), so smolbento's own kits load and verify with default settings |
+| Default kit sources and signers | `kit.allowedSources` `["docker.io/","dhi.io/"]` (0.53); `kit.trustedSigners` `*@docker.com` | `kit.allowedSources` is `["docker.io/","ghcr.io/pelotech/smolbento/"]`: `ghcr.io/pelotech/smolbento/` replaces `dhi.io/`. `kit.trustedSigners` also has smolbento's release workflow (GitHub OIDC), so smolbento's own kits load and verify with default settings |
 | Bare kit names | None for published kits | `nix` names `ghcr.io/pelotech/smolbento/kits/nix:latest` and loads as a registry kit (source and signature checks apply). `docker` is the shipped kit |
 | `kit.requireSignature` | Enforced wherever a kit loads (not `kit pull` or `--offline`): a registry or local kit needs a signature verifying against `kit.trustedSigners` (`{"key": PATH}`, or keyless `issuer`/`identity`, each also `…Regexp`). Success: `✓ REF — signature verified (IDENTITY via ISSUER)` on stderr | Registry kits only, checked on the resolved digest. Built-in agents' kits (`claude`: sbx publishes them unsigned) and shipped kits (`docker`) are exempt. More below. |
 

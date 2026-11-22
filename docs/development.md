@@ -22,13 +22,13 @@ Without the direnv hook, prefix commands with `direnv exec .`. Without direnv, u
 | `just smolvm-lock-check` | Check `smolvm.lock` against its release (CI runs it) |
 | `just demo` | Record the README demo (`docs/demo.tape`) into `dist/demo.gif`. Boots a VM; uses its own dirs, never yours |
 | `just demo-publish` | Replace the GIF the README shows (the `demo` release's asset) |
-
-Re-record the demo (`just demo`, check `dist/demo.gif`, then `just demo-publish`) when the output it
-shows changes. The GIF stays out of git: only the tape is committed.
 | `just lint` | All pre-commit hooks: fmt, clippy, cargo-deny, yamllint, actionlint, zizmor |
 | `just install` | Install to `~/.cargo/bin`, with the `bento` and `sbx` links |
 | `just release-build TARGET BUILDER` | Build a release tarball into `dist/` |
 | `just check-target TARGET` | Unoptimised build for TARGET in the release container (checks macOS-only code) |
+
+Re-record the demo (`just demo`, check `dist/demo.gif`, then `just demo-publish`) when the output it
+shows changes. The GIF stays out of git: only the tape is committed.
 
 ## Tests
 
@@ -39,7 +39,7 @@ shows changes. The GIF stays out of git: only the tape is committed.
   parsing.
 - End-to-end tests (`tests/e2e/`, ignored by default) boot small Alpine VMs. They cover lifecycle,
   exec, mounts, `run` auto-stop, `cp`, `diagnose`, network policy, ports and secrets. The policy
-  test reaches `example.com`; the secrets test reaches `httpbin.org`.
+  and secrets tests reach `httpbin.org`.
 
 ## Running tests
 
@@ -92,6 +92,8 @@ smolbento runs the smolvm release pinned in `smolvm.lock`. It downloads it on fi
 | Workflow | Runs on | Does |
 |---|---|---|
 | `build` | PRs, main | Build and test on Linux x86_64 and arm64; macOS only on manual dispatch with `macos: true` |
+| `build` / `release-build` | PRs changing build inputs, the release PR, manual dispatch | Cross-build every release target (nothing signed or uploaded) |
+| `build` / `darwin-check` | Other PRs with code changes | Unoptimised `aarch64-apple-darwin` build, for macOS-only code |
 | `e2e` | PRs, main | Real-VM tests on `ubuntu-latest`, the only GitHub runner that boots VMs |
 | `pre-commit` | PRs, main | `prek run --all-files` |
 | `lint-pr-title` | PRs | Checks conventional-commit PR titles |

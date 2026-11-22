@@ -22,7 +22,8 @@ only some checkouts have it. If it's there, read the relevant section before cha
   as env to `smolvm machine start`. Never write values to disk, logs or argv. The one exception is
   the secret store itself, which on Linux without a Secret Service is a 0600 file.
 - **Never use smolvm `--docker-socket` or `smolvm engine`.** Docker in a sandbox is its own private
-  dockerd, started by the `docker` kit after each start. The engine's containers are host machines
+  dockerd, which a kit's `dockerd@1` (the shipped `docker` kit) asks for and `src/sandbox/engine.rs`
+  starts on each start, before the startup steps. The engine's containers are host machines
   that can bind any host path, so a sandbox given its socket could reach the whole host.
 - **sbx compatibility:** flags and output match the sbx CLI reference. Record intentional differences
   in `docs/sbx-compatibility.md`; don't diverge silently. smolbento-only commands must not collide with
@@ -137,6 +138,7 @@ As of smolvm 1.36. Check the reference source before depending on anything not l
 | `kits` | kit files: load, resolve, compose the image, apply to a sandbox; registry pulls |
 | `env` | `sbxenv.yaml` environment files |
 | `bridge` | host services for a sandbox: browser and clipboard shims, login relay; the socket listener |
+| `host_service` | launchd and `systemd --user` units that own a sandbox's agent and bridge sockets; the orphan sweep |
 | `ssh_agent` | SSH agent forwarding: grants, the label, the filtering proxy |
 | `ssh` | `setup ssh` config block; the SSH server `ssh proxy` runs (sessions on a pty, `-L` forwards) |
 
