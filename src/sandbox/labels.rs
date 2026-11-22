@@ -352,6 +352,8 @@ impl Meta {
         }
         let text = |key: &str| labels.get(key).cloned();
         let flag = |key: &str| labels.get(key).is_some_and(|v| v == "true");
+        let egress = text(EGRESS).and_then(|j| crate::egress::Label::from_label(&j));
+        let egress_unreadable = labels.contains_key(EGRESS) && egress.is_none();
         Some(Meta {
             name: labels.get(NAME)?.clone(),
             agent: text(AGENT).unwrap_or_default(),
@@ -371,15 +373,12 @@ impl Meta {
             service: flag(SERVICE),
             host_mounts: json(labels, HOST_MOUNTS).unwrap_or_default(),
             ssh_agent: text(SSH_AGENT).and_then(|j| AgentLabel::from_label(&j)),
-            egress: text(EGRESS).and_then(|j| crate::egress::Label::from_label(&j)),
+            egress,
             skills: text(SKILLS).and_then(|j| crate::skills::Label::from_label(&j)),
             mcp: labels.get(MCP).map(|names| list(Some(names))),
             rec: Recorded {
                 no_credential_bindings: false,
-                egress_unreadable: labels.contains_key(EGRESS)
-                    && text(EGRESS)
-                        .and_then(|j| crate::egress::Label::from_label(&j))
-                        .is_none(),
+                egress_unreadable,
                 secrets: list(labels.get(SECRETS)),
                 credential_hosts: list(labels.get(CREDENTIAL_HOSTS)),
                 credential_env: list(labels.get(CREDENTIAL_ENV)),

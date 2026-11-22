@@ -5,7 +5,7 @@ use crate::config::{Paths, Symlink, write_atomic};
 use crate::sandbox::{name, options::free_port};
 use crate::smolvm::Credential;
 use anyhow::{Context, Result};
-use egress_front::{CredentialPolicy, MachineCa, generate_placeholders};
+use egress_front::{CredentialPolicy, MachineCa, generate_placeholders, host_subtree};
 use std::collections::BTreeSet;
 use std::os::unix::fs::PermissionsExt;
 use std::path::PathBuf;
@@ -24,11 +24,10 @@ pub fn prepare(paths: &Paths, sandbox: &str, creds: &[Credential]) -> Result<Pre
     std::fs::create_dir_all(&dir).with_context(|| format!("creating {}", dir.display()))?;
     std::fs::set_permissions(&dir, std::fs::Permissions::from_mode(0o700))?;
 
-    // smolvm permits a CA for a wildcard's parent domain (`host_subtree`).
     let hosts: BTreeSet<String> = creds
         .iter()
         .flat_map(|c| &c.hosts)
-        .map(|h| h.strip_prefix("*.").unwrap_or(h).to_string())
+        .map(|h| host_subtree(h).to_string())
         .collect();
     let hosts: Vec<String> = hosts.into_iter().collect();
     let machine = name::machine_name(sandbox);
@@ -36,7 +35,7 @@ pub fn prepare(paths: &Paths, sandbox: &str, creds: &[Credential]) -> Result<Pre
     ca.save(&dir.join("ca"))?;
 
     let tok: [u8; 32] = rand::random();
-    let tok: String = tok.iter().map(|b| format!("{b:02x}")).collect();
+    let tok = crate::util::hex(&tok);
     write_atomic(
         &dir.join("token"),
         tok.as_bytes(),

@@ -118,7 +118,8 @@ mod tests {
         client
             .write_all(&wrong.preamble("1.2.3.4:80".parse().unwrap()))
             .unwrap();
-        assert!(relay(server_side, &front, &inner).is_err());
+        let err = relay(server_side, &front, &inner).unwrap_err();
+        assert_eq!(err.kind(), std::io::ErrorKind::InvalidData, "{err}");
         assert!(inner_l.accept().is_err(), "inner must not be contacted");
     }
 
