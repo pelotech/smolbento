@@ -533,6 +533,7 @@ impl RawFile {
     /// Substitutes references, makes relative paths absolute, and type-checks the result.
     pub fn expand(&self, args: &BTreeMap<String, String>, project_dir: &Path) -> Result<Value> {
         let mut value = self.substitute(&self.value, args, project_dir)?;
+        self.blank_values(&mut value)?;
         self.absolutize(&mut value);
         self.type_check(&value)?;
         Ok(value)
@@ -624,6 +625,40 @@ impl RawFile {
     /// Relative `workspace`, `additionalWorkspaces[].path`, `mounts` host paths, lifecycle
     /// `workdir`s and local kit sources become absolute against the file's directory (symlinks
     /// are not resolved).
+    /// Values that expanded to nothing, as sbx 0.54 treats them: a `kits:` entry is dropped (an env
+    /// arg can add an optional kit), and a blank path is refused, since it would read as the file's
+    /// own directory.
+    fn blank_values(&self, value: &mut Value) -> Result<()> {
+        // A workspace is a path or `{path: …}`.
+        let blank = |v: &Value| v.get("path").unwrap_or(v).as_str() == Some("");
+        if value.get("workspace").is_some_and(blank) {
+            bail!(
+                "{}: workspace: path cannot be blank; omit 'workspace:' to mount nothing",
+                self.name()
+            );
+        }
+        if let Some(Value::Array(list)) = value.get("additionalWorkspaces")
+            && let Some(i) = list.iter().position(blank)
+        {
+            bail!(
+                "{}: additionalWorkspaces[{i}]: path is required",
+                self.name()
+            );
+        }
+        if let Some(Value::Object(m)) = value.get("mounts")
+            && let Some((target, _)) = m.iter().find(|(_, v)| v.as_str() == Some(""))
+        {
+            bail!(
+                "{}: mounts source for {target:?} must be a host directory path",
+                self.name()
+            );
+        }
+        if let Some(Value::Array(list)) = value.get_mut("kits") {
+            list.retain(|k| k.get("source").unwrap_or(k).as_str() != Some(""));
+        }
+        Ok(())
+    }
+
     fn absolutize(&self, value: &mut Value) {
         let abs = |s: &mut String| {
             if let Ok(p) = std::path::absolute(self.dir.join(&*s)) {
@@ -934,6 +969,56 @@ mod tests {
         );
         let parent = f.dir.parent().unwrap().display().to_string();
         assert_eq!(v["additionalWorkspaces"][0]["path"], format!("{parent}/x"));
+    }
+
+    /// As in sbx 0.54: a kit entry that expands to nothing (a string, or an object's `source`) is
+    /// dropped, so an env arg can add an optional kit.
+    #[test]
+    fn an_empty_kit_entry_is_dropped() {
+        let (_d, f) = load(
+            "args:\n  k: {default: \"\"}\nkits:\n  - org/a\n  - ${{ env.args.k }}\n  \
+             - source: ${{ env.args.k }}\n",
+        );
+        let v = f.expand(&args(&[("k", "")]), Path::new("/proj")).unwrap();
+        assert_eq!(v["kits"], serde_json::json!(["org/a"]));
+        let v = f
+            .expand(&args(&[("k", "org/b")]), Path::new("/proj"))
+            .unwrap();
+        assert_eq!(
+            v["kits"],
+            serde_json::json!(["org/a", "org/b", {"source": "org/b"}])
+        );
+    }
+
+    /// As in sbx 0.54: a workspace, additional workspace or mount source that expands to nothing
+    /// is refused, not read as the file's own directory.
+    #[test]
+    fn a_blank_path_is_refused() {
+        let head = "args:\n  e: {default: \"\"}\n";
+        for (body, want) in [
+            (
+                "workspace: ${{ env.args.e }}\n",
+                "workspace: path cannot be blank; omit 'workspace:' to mount nothing",
+            ),
+            (
+                "workspace:\n  path: ${{ env.args.e }}\n",
+                "workspace: path cannot be blank; omit 'workspace:' to mount nothing",
+            ),
+            (
+                "additionalWorkspaces:\n  - path: ${{ env.args.e }}\n",
+                "additionalWorkspaces[0]: path is required",
+            ),
+            (
+                "mounts:\n  /home/agent/x: ${{ env.args.e }}\n",
+                "mounts source for \"/home/agent/x\" must be a host directory path",
+            ),
+        ] {
+            let (_d, f) = load(&format!("{head}{body}"));
+            let e = f
+                .expand(&args(&[("e", "")]), Path::new("/proj"))
+                .unwrap_err();
+            assert!(e.to_string().ends_with(want), "{body}: {e}");
+        }
     }
 
     #[test]
