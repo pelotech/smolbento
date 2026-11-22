@@ -686,6 +686,11 @@ fn group_skip(kit: &str, g: &Group, ty: &str, reason: &'static str) -> Skipped {
     }
 }
 
+/// Whether smolbento can provide `c` as asked: `resolve` fails a required one it can't.
+pub fn supported(c: &Cap) -> bool {
+    unsupported(c).is_none()
+}
+
 /// Why smolbento can't apply `c` as asked, if it can't.
 fn unsupported(c: &Cap) -> Option<&'static str> {
     match c.body {

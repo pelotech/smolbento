@@ -961,3 +961,57 @@ fn rm_all_clears_bindings() {
     t.sbt(&["secret", "rm", "--all", "-f"]).unwrap();
     assert!(SecretsFile::load(&t.ctx.paths).unwrap().bindings.is_empty());
 }
+
+/// A store whose writes can be made to fail after they've changed the value, as a keychain write
+/// that lands garbled does.
+#[derive(Clone, Default)]
+struct FailingStore {
+    values: std::rc::Rc<std::cell::RefCell<std::collections::BTreeMap<String, String>>>,
+    fail: std::rc::Rc<std::cell::Cell<bool>>,
+}
+
+impl crate::secrets::store::SecretStore for FailingStore {
+    fn get(&self, account: &str) -> Result<Option<String>> {
+        Ok(self.values.borrow().get(account).cloned())
+    }
+    fn set(&self, account: &str, value: &str) -> Result<()> {
+        self.values
+            .borrow_mut()
+            .insert(account.into(), value.into());
+        if self.fail.get() {
+            bail!("the store didn't keep the value intact");
+        }
+        Ok(())
+    }
+    fn delete(&self, account: &str) -> Result<()> {
+        self.values.borrow_mut().remove(account);
+        Ok(())
+    }
+    fn describe(&self) -> String {
+        "failing".into()
+    }
+}
+
+#[test]
+fn a_failed_store_write_keeps_the_previous_secret() {
+    let mut t = test_env(&[]);
+    let store = FailingStore::default();
+    t.ctx.store = Box::new(store.clone());
+    t.sbt(&["secret", "set", "github", "-t", "old"]).unwrap();
+    store.fail.set(true);
+    assert!(t.sbt(&["secret", "set", "github", "-t", "new"]).is_err());
+    let values = store.values.borrow();
+    assert_eq!(values.values().collect::<Vec<_>>(), ["old"], "{values:?}");
+}
+
+#[test]
+fn a_failed_store_write_keeps_the_previous_registry_login() {
+    let mut t = test_env(&[]);
+    let store = FailingStore::default();
+    t.ctx.store = Box::new(store.clone());
+    set_registry_from(&mut t, "ghcr.io", Some("me"), "old\n").unwrap();
+    store.fail.set(true);
+    assert!(set_registry_from(&mut t, "ghcr.io", Some("me"), "new\n").is_err());
+    let values = store.values.borrow();
+    assert_eq!(values.values().collect::<Vec<_>>(), ["old"], "{values:?}");
+}

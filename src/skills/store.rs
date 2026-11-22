@@ -85,15 +85,9 @@ impl Store {
         fs::set_permissions(tmp.path(), fs::Permissions::from_mode(0o755))?;
         let target = self.dir.join(name);
         let old = self.dir.join(format!(".old-{name}-{}", std::process::id()));
-        let had = target.exists();
-        if had {
-            fs::rename(&target, &old).with_context(|| format!("replacing {}", target.display()))?;
-        }
-        fs::rename(tmp.keep(), &target)
-            .with_context(|| format!("installing {}", target.display()))?;
-        if had {
-            fs::remove_dir_all(&old).with_context(|| format!("removing {}", old.display()))?;
-        }
+        swap_in(tmp.path(), &target, &old)?;
+        // Moved into place: nothing is left for the temporary directory to clean up.
+        let _ = tmp.keep();
         Ok(())
     }
 
@@ -147,7 +141,27 @@ fn private_dir(dir: &Path) -> Result<()> {
         .with_context(|| format!("setting the mode of {}", dir.display()))
 }
 
-/// Copies directories and regular files (mode bits kept) from `src` into the existing `dst`.
+/// Moves `new` to `target`, moving an existing `target` aside to `old` first and removing it after.
+/// If `new` can't be moved in, the old tree goes back.
+fn swap_in(new: &Path, target: &Path, old: &Path) -> Result<()> {
+    let had = target.exists();
+    if had {
+        fs::rename(target, old).with_context(|| format!("replacing {}", target.display()))?;
+    }
+    if let Err(e) = fs::rename(new, target) {
+        if had {
+            let _ = fs::rename(old, target);
+        }
+        return Err(e).with_context(|| format!("installing {}", target.display()));
+    }
+    if had {
+        fs::remove_dir_all(old).with_context(|| format!("removing {}", old.display()))?;
+    }
+    Ok(())
+}
+
+/// Copies directories and regular files (permission bits kept; setuid, setgid and sticky dropped)
+/// from `src` into the existing `dst`.
 /// Symlinks and other file types are skipped, as sbx does. A directory gets its mode after its
 /// children are in, with owner rwx added, so a read-only source (a Nix store path) copies and the
 /// store can still replace and remove the tree.
@@ -159,10 +173,12 @@ pub fn copy_tree(src: &Path, dst: &Path) -> Result<()> {
         if t.is_dir() {
             fs::create_dir(&to)?;
             copy_tree(&from, &to)?;
-            let mode = fs::metadata(&from)?.permissions().mode() & 0o7777 | 0o700;
+            let mode = fs::metadata(&from)?.permissions().mode() & 0o777 | 0o700;
             fs::set_permissions(&to, fs::Permissions::from_mode(mode))?;
         } else if t.is_file() {
             fs::copy(&from, &to).with_context(|| format!("copying {}", from.display()))?;
+            let mode = fs::metadata(&from)?.permissions().mode() & 0o777;
+            fs::set_permissions(&to, fs::Permissions::from_mode(mode))?;
         }
     }
     Ok(())
@@ -179,6 +195,35 @@ mod tests {
             meta: d.path().join("agent-skills-metadata"),
         };
         (d, s)
+    }
+
+    /// A copied skill never keeps setuid, setgid or sticky bits.
+    #[test]
+    fn copy_tree_drops_special_mode_bits() {
+        let d = tempfile::tempdir().unwrap();
+        let (src, dst) = (d.path().join("src"), d.path().join("dst"));
+        fs::create_dir_all(src.join("sub")).unwrap();
+        fs::write(src.join("run.sh"), "#!/bin/sh\n").unwrap();
+        fs::set_permissions(src.join("run.sh"), fs::Permissions::from_mode(0o4755)).unwrap();
+        fs::set_permissions(src.join("sub"), fs::Permissions::from_mode(0o1755)).unwrap();
+        fs::create_dir(&dst).unwrap();
+        copy_tree(&src, &dst).unwrap();
+        let mode = |p: &Path| fs::metadata(p).unwrap().permissions().mode() & 0o7777;
+        assert_eq!(mode(&dst.join("run.sh")), 0o755);
+        assert_eq!(mode(&dst.join("sub")), 0o755);
+    }
+
+    /// A swap that can't put the new tree in puts the old one back.
+    #[test]
+    fn a_failed_swap_keeps_the_installed_skill() {
+        let d = tempfile::tempdir().unwrap();
+        let (target, old) = (d.path().join("skill"), d.path().join(".old-skill"));
+        fs::create_dir(&target).unwrap();
+        fs::write(target.join("SKILL.md"), "old").unwrap();
+        let missing = d.path().join("no-such-tree");
+        assert!(swap_in(&missing, &target, &old).is_err());
+        assert_eq!(fs::read_to_string(target.join("SKILL.md")).unwrap(), "old");
+        assert!(!old.exists());
     }
 
     fn skill(root: &Path, name: &str, body: &str) -> PathBuf {

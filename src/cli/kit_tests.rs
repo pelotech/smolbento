@@ -110,25 +110,47 @@ fn dev_calls(t: &TestEnv) -> Vec<String> {
         .collect()
 }
 
+/// `kit inspect`'s SUPPORT column says what `resolve` does: `authenticate` limits and OAuth
+/// without passthrough (the login happens inside the sandbox) both apply.
 #[test]
-fn host_mount_and_ssh_agent_without_authenticate_are_supported() {
-    let cap = |body| super::Cap::new("", false, body);
-    let host = cap(super::CapBody::HostMount {
-        path: "/data".into(),
-        mode: None,
-    });
+fn support_is_what_resolve_accepts() {
+    let cap = |ty: &str, body| crate::kits::model::Cap::new(ty, false, body);
+    let host = cap(
+        "com.docker.sandbox/host-mount@1",
+        crate::kits::model::CapBody::HostMount {
+            path: "/data".into(),
+            mode: None,
+        },
+    );
     assert!(super::supported(&host));
-    assert!(!super::supported(&cap(super::CapBody::Unsupported)));
-    let ssh = |authenticate: Vec<String>| {
-        cap(super::CapBody::SshAgent {
+    assert!(!super::supported(&cap(
+        "x",
+        crate::kits::model::CapBody::Unsupported
+    )));
+    let ssh = cap(
+        "com.docker.sandbox/ssh-agent@1",
+        crate::kits::model::CapBody::SshAgent {
             phases: vec![crate::kits::model::SshPhase::Runtime],
             unrestricted: false,
             sign: vec!["git".into()],
-            authenticate,
-        })
-    };
-    assert!(super::supported(&ssh(vec![])));
-    assert!(!super::supported(&ssh(vec!["github.com".into()])));
+            authenticate: vec!["github.com".into()],
+        },
+    );
+    assert!(super::supported(&ssh));
+}
+
+#[test]
+fn reference_kinds_know_every_shipped_kit() {
+    for (reference, kind) in [
+        ("docker", "builtin"),
+        ("git-signing", "builtin"),
+        ("nix", "registry"),
+        ("docker.io/acme/kit:1", "registry"),
+        ("./my-kit", "directory"),
+        ("./my-kit/kit.yaml", "file"),
+    ] {
+        assert_eq!(super::reference_kind(reference), kind, "{reference}");
+    }
 }
 
 #[test]
