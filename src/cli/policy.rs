@@ -715,6 +715,47 @@ struct Governance {
     active: bool,
 }
 
+/// `policy check network`'s target as sbx 0.54 reads it: `host:port`, the host lowercased (an IPv6
+/// one bracketed) and `host.docker.internal` as `localhost`. A bare host is port 443; a URL's
+/// scheme gives its port (`http` 80, `https` 443, others must state one) and its path is dropped.
+fn check_target(raw: &str) -> Result<String> {
+    const SHAPE: &str = "target must be a host, host:port, IP literal, or URL with a port";
+    let raw = raw.trim();
+    let (authority, default) = match raw.split_once("://") {
+        Some((scheme, rest)) => {
+            let scheme = scheme.to_ascii_lowercase();
+            let port = match scheme.as_str() {
+                "http" => Ok(80),
+                "https" => Ok(443),
+                _ => Err(scheme),
+            };
+            (rest.split(['/', '?', '#']).next().unwrap_or_default(), port)
+        }
+        None if raw.contains('/') => bail!("{SHAPE}"),
+        None => (raw, Ok(443)),
+    };
+    // A bare IPv6 address has several colons and no port.
+    let (host, port) = if authority.matches(':').count() > 1 && !authority.starts_with('[') {
+        (authority, None)
+    } else {
+        crate::policy::rules::split_port(authority).map_err(|_| anyhow!("{SHAPE}"))?
+    };
+    let port = match (port, default) {
+        (Some(p), _) | (None, Ok(p)) => p,
+        (None, Err(scheme)) => bail!("target URL scheme {scheme:?} must include an explicit port"),
+    };
+    let host = match host.to_ascii_lowercase() {
+        h if h.is_empty() => bail!("{SHAPE}"),
+        h if h == "host.docker.internal" => "localhost".to_string(),
+        h => h,
+    };
+    Ok(if host.contains(':') {
+        format!("[{host}]:{port}")
+    } else {
+        format!("{host}:{port}")
+    })
+}
+
 fn check<R: Runner>(ctx: &Ctx<R>, policy: &Policy, a: &CheckArgs) -> Result<i32> {
     let udp = match a.protocol.as_deref() {
         None | Some("tcp") => false,
@@ -730,26 +771,18 @@ fn check<R: Runner>(ctx: &Ctx<R>, policy: &Policy, a: &CheckArgs) -> Result<i32>
             ));
         }
     };
-    let bound = match &a.sandbox {
-        Some(n) => sandbox::find(&ctx.vm, n)
-            .ok()
-            .flatten()
-            .map(|s| s.meta.rec.credential_hosts)
-            .unwrap_or_default(),
-        None => Vec::new(),
-    };
-    // A bare host means port 443, as in sbx.
-    let target = match a.target.matches(':').count() {
-        0 => format!("{}:443", a.target),
-        // A bare IPv6 address.
-        n if n > 1 && !a.target.contains(']') => format!("[{}]:443", a.target),
-        _ => a.target.clone(),
-    };
+    let target = check_target(&a.target)?;
+    let found = (a.sandbox.as_deref()).and_then(|n| sandbox::find(&ctx.vm, n).ok().flatten());
+    let bound = found
+        .as_ref()
+        .map(|s| s.meta.rec.credential_hosts.clone())
+        .unwrap_or_default();
+    let host_access = found.as_ref().map(|s| s.meta.rec.host_access);
     let scope = a.sandbox.as_deref();
     let v = if udp {
-        compile::check_udp(policy, scope, &bound, &a.target)
+        compile::check_udp(policy, scope, &bound, host_access, &target)
     } else {
-        compile::check(policy, scope, &bound, &a.target)
+        compile::check(policy, scope, &bound, host_access, &target)
     };
     let deny_kind = match (v.allowed, v.implicit) {
         (true, _) => None,
@@ -773,7 +806,7 @@ fn check<R: Runner>(ctx: &Ctx<R>, policy: &Policy, a: &CheckArgs) -> Result<i32>
             capitalised(&v.reason)
         },
         resource_type: "net:domain",
-        resource_value: &target,
+        resource_value: &target.replace(['[', ']'], ""),
         target: &target,
         kind: "network",
     };

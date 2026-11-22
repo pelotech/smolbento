@@ -785,7 +785,7 @@ mod tests {
             plain.contains("run.kit.com") && !plain.contains("pkg.kit.com"),
             "{plain}"
         );
-        assert!(!compile::check(&p, Some("sb"), &[], "pkg.kit.com").allowed);
+        assert!(!compile::check(&p, Some("sb"), &[], None, "pkg.kit.com").allowed);
         let with = format!(
             "{:?}",
             compile::network_with(&p, "sb", &[], &install, false)
@@ -840,10 +840,10 @@ mod tests {
         let spec = |sb: &str| format!("{:?}", compile::network(&p, sb, &[], false));
         assert!(spec("sb").contains("api.kit.com"));
         assert!(!spec("other").contains("api.kit.com"));
-        assert!(compile::check(&p, Some("sb"), &[], "api.kit.com").allowed);
-        assert!(!compile::check(&p, Some("other"), &[], "api.kit.com").allowed);
+        assert!(compile::check(&p, Some("sb"), &[], None, "api.kit.com").allowed);
+        assert!(!compile::check(&p, Some("other"), &[], None, "api.kit.com").allowed);
 
         p.deny(Some("sb"), "api.kit.com");
-        assert!(!compile::check(&p, Some("sb"), &[], "api.kit.com").allowed);
+        assert!(!compile::check(&p, Some("sb"), &[], None, "api.kit.com").allowed);
     }
 }
