@@ -166,15 +166,16 @@ pub(crate) fn service_kinds(meta: &Meta) -> Vec<Kind> {
     kinds
 }
 
-/// Writes (and loads) the units of the sandbox `name`, or removes the other kind's. Failures only
-/// warn: without a unit the sockets are served while a session is attached only, if at all.
-pub(crate) fn sync_services<R: Runner>(ctx: &Ctx<R>, name: &str, meta: &Meta) {
+/// Writes (and loads) the `kinds` units of the sandbox `name`, or removes the other kinds'.
+/// Failures only warn: without a unit the sockets are served while a session is attached only, if
+/// at all.
+fn sync_services<R: Runner>(ctx: &Ctx<R>, name: &str, kinds: &[Kind], meta: &Meta) {
     let port = meta.egress.as_ref().map(|e| e.port);
     if let Err(e) = ctx
         .services
-        .sync_egress(name, &service_kinds(meta), port, &ctx.paths, &ctx.env)
+        .sync_egress(name, kinds, port, &ctx.paths, &ctx.env)
     {
-        let what = if meta.egress.is_some() {
+        let what = if kinds.contains(&Kind::Egress) {
             "host services (the egress unit, and the browser, clipboard and SSH agent units)"
         } else {
             "host services for the browser, clipboard and SSH agent"
@@ -197,7 +198,7 @@ pub fn restart_egress<R: Runner>(ctx: &Ctx<R>, sb: &Sandbox) {
 /// `SSH_AUTH_SOCK`), so a stale unit mends itself on next use.
 pub fn refresh_services<R: Runner>(ctx: &Ctx<R>, sb: &Sandbox) {
     if sb.meta.service {
-        sync_services(ctx, sb.name(), &sb.meta);
+        sync_services(ctx, sb.name(), &service_kinds(&sb.meta), &sb.meta);
     }
 }
 
@@ -747,16 +748,20 @@ pub fn create_with<R: Runner>(
         // The units go in once the machine exists (the orphan sweep would remove them before)
         // and before its first start, so a boot-time workload reaches the agent and the bridge.
         // An install-phase agent grant is served by the install hooks alone on the same socket,
-        // so the units wait until they are done.
+        // so those units wait until they are done; the egress unit never waits, as every flow
+        // of the install hooks goes through it.
         let install_grant = meta.ssh_agent.as_ref().is_some_and(|a| a.install.is_some());
-        let at = if install_grant {
-            sandbox::Event::Booted
-        } else {
-            sandbox::Event::Created
-        };
         let mut on_event = |e: sandbox::Event| {
-            if e == at && req.host_services.is_some() {
-                sync_services(ctx, &req.name, &meta);
+            let kinds = match e {
+                sandbox::Event::Created if install_grant => {
+                    meta.egress.is_some().then(|| vec![Kind::Egress])
+                }
+                sandbox::Event::Created => Some(service_kinds(&meta)),
+                sandbox::Event::Booted if install_grant => Some(service_kinds(&meta)),
+                _ => None,
+            };
+            if let Some(kinds) = kinds.filter(|_| req.host_services.is_some()) {
+                sync_services(ctx, &req.name, &kinds, &meta);
             }
             on(e);
         };

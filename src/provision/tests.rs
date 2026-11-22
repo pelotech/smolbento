@@ -1093,24 +1093,26 @@ fn settle_agent_checks_fallback_socket_dir_when_service_socket_path_is_too_long(
     );
 }
 
-/// Creates `s1` (with the github secret bound) under `network.egress=<egress>`; returns the env,
-/// the request as prepared and the result.
-fn egress_create(
+/// An env where `s1` (with the github secret bound) can be created under
+/// `network.egress=<egress>`, plus `env`; returns it and its fake service manager.
+fn egress_env(
     egress: &str,
-    tweak: impl FnOnce(&mut CreateRequest),
-) -> (TestEnv, CreateRequest, Result<Sandbox>) {
-    let mut t = test_env(&[("SMOLBENTO_NETWORK_EGRESS", egress)]);
+    env: &[(&str, &str)],
+) -> (TestEnv, crate::host_service::fake::FakeControl) {
+    let mut env = env.to_vec();
+    env.push(("SMOLBENTO_NETWORK_EGRESS", egress));
+    let mut t = test_env(&env);
     // A hosted sandbox needs its egress unit: a fake service manager under a short temp dir.
     let tmp = tempfile::Builder::new()
         .prefix("sbe")
         .tempdir_in("/tmp")
         .unwrap();
-    t.ctx.services = crate::host_service::fake::services(
+    let (services, ctl) = crate::host_service::fake::services(
         tmp.path(),
         crate::host_service::Flavor::Launchd,
         "ns1",
-    )
-    .0;
+    );
+    t.ctx.services = services;
     std::mem::forget(tmp);
     set_policy(&t, "mode = \"deny-all\"");
     save_secret(&t, "github", None, "gh-123");
@@ -1121,6 +1123,15 @@ fn egress_create(
         &machine_json("sbx-s1", "created", &[("sbx.name", "s1")]),
     );
     fake.missing_until_created("sbx-s1");
+    (t, ctl)
+}
+
+/// Creates `s1` in `egress_env`; returns the env, the request as prepared and the result.
+fn egress_create(
+    egress: &str,
+    tweak: impl FnOnce(&mut CreateRequest),
+) -> (TestEnv, CreateRequest, Result<Sandbox>) {
+    let (t, _) = egress_env(egress, &[]);
     let mut req = CreateRequest {
         name: "s1".into(),
         ..Default::default()
@@ -1166,6 +1177,24 @@ fn a_hosted_create_passes_no_credential_and_mounts_the_ca() {
     }
     assert!(create.contains("sbx.egress="), "{create}");
     assert!(!create.contains("gh-123"), "{create}");
+}
+
+#[test]
+fn an_install_agent_grant_doesnt_hold_back_the_egress_unit() {
+    // The other units wait for the install hooks; their port-443 flows need the egress process.
+    let (_agent, sock) = host_agent();
+    let (t, ctl) = egress_env("hosted", &[("SSH_AUTH_SOCK", &sock)]);
+    let plan = agent_plan(false, vec![ssh_agent(&[Install], &[], false)]);
+    let mut req = agent_request(false);
+    let mut at_created = Vec::new();
+    create_with(&t.ctx, &mut req, &[], Some(&plan), None, &mut |e| {
+        if e == sandbox::Event::Created {
+            at_created = ctl.calls();
+        }
+    })
+    .unwrap();
+    assert!(req.egress.is_some());
+    assert_eq!(at_created, ["refresh", "load dev.smolbento.ns1.s1.egress"]);
 }
 
 #[test]
