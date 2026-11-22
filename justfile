@@ -158,8 +158,9 @@ release-build target builder:
 conformance *args:
     #!/usr/bin/env bash
     set -euo pipefail
-    # sandbox-kit-spec commit the suite is taken from; bump it deliberately.
-    spec_commit=06ac386a1b5d570daff36bba4232fb9e71e45d50
+    # The suite runs at the spec commit the code implements (SPEC_COMMIT in src/kits/mod.rs).
+    spec_commit=$(sed -n 's/^pub const SPEC_COMMIT: &str = "\(.*\)";$/\1/p' src/kits/mod.rs)
+    [ -n "$spec_commit" ] || { echo "SPEC_COMMIT not found in src/kits/mod.rs" >&2; exit 1; }
     cache="${XDG_CACHE_HOME:-$HOME/.cache}/smolbento/conformance"
     spec="$cache/sandbox-kit-spec"
     mkdir -p "$cache"
