@@ -144,11 +144,10 @@ pub fn ensure_running<R: Runner>(ctx: &Ctx<R>, sb: &mut Sandbox) -> Result<()> {
     sweep_orphans(ctx);
     refresh_services(ctx, sb);
     let meta = sb.meta.clone();
-    let was_running = sb.is_running();
-    sandbox::ensure_running(&ctx.vm, sb, || start_plan(ctx, &meta))?;
-    if !was_running {
+    if !sb.is_running() {
         restart_egress(ctx, sb);
     }
+    sandbox::ensure_running(&ctx.vm, sb, || start_plan(ctx, &meta))?;
     Ok(())
 }
 
@@ -184,8 +183,8 @@ pub(crate) fn sync_services<R: Runner>(ctx: &Ctx<R>, name: &str, meta: &Meta) {
     }
 }
 
-/// After a sandbox's machine started: restarts its egress process, which resolves secrets once,
-/// when it starts. Failures only warn.
+/// Before a sandbox's machine starts: restarts its egress process, which resolves secrets once,
+/// when it starts, so boot-time connections use current values. Failures only warn.
 pub fn restart_egress<R: Runner>(ctx: &Ctx<R>, sb: &Sandbox) {
     if sb.meta.egress.is_some()
         && let Err(e) = ctx.services.restart_egress(sb.name())

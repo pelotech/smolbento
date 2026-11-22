@@ -175,7 +175,8 @@ Limits in this release:
 - Install-only credentials (a kit's install hooks) are refused at create.
 - `secret set` and `secret rm` restart the sandbox's egress process, so a new value applies at
   once and a removed one is gone at once; open connections drop at that moment. A stopped
-  sandbox picks it up at its next start. Binding a *new* service needs a recreate
+  sandbox's process is restarted before the machine starts, so boot-time connections use the
+  new value. Binding a *new* service needs a recreate
   (`<name> uses hosted egress; recreate it to bind <service>`); live binding is planned.
 - The Linux systemd units are tested in CI only; the macOS launchd path is tested by hand.
 

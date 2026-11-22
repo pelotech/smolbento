@@ -1471,6 +1471,37 @@ fn restarts(ctl: &crate::host_service::fake::FakeControl) -> usize {
         .count()
 }
 
+/// How many egress restarts had happened when `machine start` ran, for `argv` run on a stopped
+/// hosted sandbox.
+fn restarts_before_machine_start(argv: &[&str]) -> usize {
+    let mut t = test_env(&[]);
+    let ctl = hosted(&mut t, "stopped");
+    let cred = crate::smolvm::Credential {
+        env_var: "GH_TOKEN".into(),
+        hosts: vec!["api.github.com".into()],
+        ..Default::default()
+    };
+    crate::egress::prepare(&t.ctx.paths, "h1", &[cred]).unwrap();
+    let seen = std::rc::Rc::new(std::cell::Cell::new(None));
+    let (c, s) = (ctl.clone(), seen.clone());
+    t.runner().during(&["machine", "start"], move |_| {
+        s.set(Some(restarts(&c)));
+    });
+    t.sbt(argv).unwrap();
+    assert_eq!(restarts(&ctl), 1, "{:?}", ctl.calls());
+    seen.get().expect("machine start ran")
+}
+
+#[test]
+fn start_restarts_the_egress_process_before_the_machine_starts() {
+    assert_eq!(restarts_before_machine_start(&["start", "h1"]), 1);
+}
+
+#[test]
+fn exec_on_a_stopped_hosted_sandbox_restarts_egress_before_the_machine_starts() {
+    assert_eq!(restarts_before_machine_start(&["exec", "h1", "true"]), 1);
+}
+
 #[test]
 fn secret_set_on_a_hosted_sandbox_restarts_its_egress_process() {
     let mut t = test_env(&[]);
