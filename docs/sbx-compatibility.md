@@ -272,7 +272,9 @@ so every process sees them. Your own `-e` wins. None holds a secret value.
 - `SBX_AGENT`: the agent or kit name. `IS_SANDBOX=1` comes from the `claude` kit's image.
 - `SBX_CRED_<SVC>_MODE`: one per service a kit in the sandbox declares a credential for: `apikey`
   when the service's secret is bound at create, else `none`. As measured in sbx 0.53, `claude` gets
-  `ANTHROPIC` and `shell` none.
+  `ANTHROPIC` and `shell` none. A `-` in a service name becomes `_` (`my-api` gives
+  `SBX_CRED_MY_API_MODE`): sbx 0.54 keeps it (`SBX_CRED_MY-API_MODE`), but smolvm's guest agent
+  refuses an environment name with anything but letters, digits and `_`.
 - Each secret's own variables (`ANTHROPIC_API_KEY`, `GITHUB_TOKEN`…), holding smolvm's
   placeholder. Not for a service whose key a kit takes without naming a variable: `claude` reads
   its key through the `apiKeyHelper` its kit seeds, and would ask about an unknown
