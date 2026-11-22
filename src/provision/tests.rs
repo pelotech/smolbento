@@ -1230,6 +1230,27 @@ fn a_hosted_create_keeps_the_users_ca_env() {
 }
 
 #[test]
+fn a_hosted_create_gives_a_bound_variable_only_its_placeholder() {
+    let (t, req, result) = egress_create("hosted", |r| {
+        r.env.push(("GH_TOKEN".into(), "mine".into()));
+    });
+    result.unwrap();
+    let label = &req.egress.as_ref().unwrap().label;
+    let placeholder = &label
+        .bindings
+        .iter()
+        .find(|b| b.env == "GH_TOKEN")
+        .unwrap()
+        .placeholder;
+    let create = t.create_line();
+    assert_eq!(create.matches("-e GH_TOKEN=").count(), 1, "{create}");
+    assert!(
+        create.contains(&format!("-e GH_TOKEN={placeholder}")),
+        "{create}"
+    );
+}
+
+#[test]
 fn a_hosted_create_without_credentials_is_a_smolvm_create() {
     let t = test_env(&[("SMOLBENTO_NETWORK_EGRESS", "hosted")]);
     set_policy(&t, "mode = \"deny-all\"");

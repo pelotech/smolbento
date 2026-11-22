@@ -215,9 +215,11 @@ pub fn spec(req: &CreateRequest) -> CreateSpec {
             guest: "/run/smol/credentials".into(),
             read_only: true,
         });
+        // A bound variable's placeholder wins over a user -e, so the guest sees one value.
+        let bindings = &p.label.bindings;
+        env.retain(|(k, _)| !bindings.iter().any(|b| b.env == *k));
         env.extend(
-            p.label
-                .bindings
+            bindings
                 .iter()
                 .map(|b| (b.env.clone(), b.placeholder.clone())),
         );
