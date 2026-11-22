@@ -126,7 +126,10 @@ pub fn start<R: Runner>(ctx: &mut Ctx<R>, names: &[String]) -> Result<i32> {
             }
         });
         match started {
-            Ok(()) => step.done_as(&format!("Started {n}")),
+            Ok(()) => {
+                provision::restart_egress(ctx, &sb);
+                step.done_as(&format!("Started {n}"))
+            }
             Err(e) => {
                 step.fail();
                 return Err(e);

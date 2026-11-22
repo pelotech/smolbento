@@ -35,6 +35,7 @@ pub fn run<R: Runner>(
         match kind {
             Kind::Agent => agent(ctx, &sb, &conn),
             Kind::Bridge => bridge(ctx, &sb, &conn, slot)?,
+            Kind::Egress => bail!("_serve egress isn't implemented yet"),
         }
         Ok(())
     })?;

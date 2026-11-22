@@ -144,7 +144,12 @@ pub fn ensure_running<R: Runner>(ctx: &Ctx<R>, sb: &mut Sandbox) -> Result<()> {
     sweep_orphans(ctx);
     refresh_services(ctx, sb);
     let meta = sb.meta.clone();
-    sandbox::ensure_running(&ctx.vm, sb, || start_plan(ctx, &meta))
+    let was_running = sb.is_running();
+    sandbox::ensure_running(&ctx.vm, sb, || start_plan(ctx, &meta))?;
+    if !was_running {
+        restart_egress(ctx, sb);
+    }
+    Ok(())
 }
 
 /// The units a sandbox's sockets need: the bridge, and the agent when a runtime phase is granted.
@@ -156,14 +161,31 @@ pub(crate) fn service_kinds(meta: &Meta) -> Vec<Kind> {
     if meta.bridge {
         kinds.push(Kind::Bridge);
     }
+    if meta.egress.is_some() {
+        kinds.push(Kind::Egress);
+    }
     kinds
 }
 
 /// Writes (and loads) the units of the sandbox `name`, or removes the other kind's. Failures only
 /// warn: without a unit the sockets are served while a session is attached only, if at all.
-pub(crate) fn sync_services<R: Runner>(ctx: &Ctx<R>, name: &str, kinds: &[Kind]) {
-    if let Err(e) = ctx.services.sync(name, kinds, &ctx.paths, &ctx.env) {
+pub(crate) fn sync_services<R: Runner>(ctx: &Ctx<R>, name: &str, meta: &Meta) {
+    let port = meta.egress.as_ref().map(|e| e.port);
+    if let Err(e) = ctx
+        .services
+        .sync_egress(name, &service_kinds(meta), port, &ctx.paths, &ctx.env)
+    {
         crate::warning!("{name}: host services for the browser, clipboard and SSH agent: {e:#}");
+    }
+}
+
+/// After a sandbox's machine started: restarts its egress process, which resolves secrets once,
+/// when it starts. Failures only warn.
+pub fn restart_egress<R: Runner>(ctx: &Ctx<R>, sb: &Sandbox) {
+    if sb.meta.egress.is_some()
+        && let Err(e) = ctx.services.restart_egress(sb.name())
+    {
+        crate::warning!("{}: restarting its egress process: {e:#}", sb.name());
     }
 }
 
@@ -171,7 +193,7 @@ pub(crate) fn sync_services<R: Runner>(ctx: &Ctx<R>, name: &str, kinds: &[Kind])
 /// `SSH_AUTH_SOCK`), so a stale unit mends itself on next use.
 pub fn refresh_services<R: Runner>(ctx: &Ctx<R>, sb: &Sandbox) {
     if sb.meta.service {
-        sync_services(ctx, sb.name(), &service_kinds(&sb.meta));
+        sync_services(ctx, sb.name(), &sb.meta);
     }
 }
 
@@ -714,7 +736,6 @@ pub fn create_with<R: Runner>(
         // and before its first start, so a boot-time workload reaches the agent and the bridge.
         // An install-phase agent grant is served by the install hooks alone on the same socket,
         // so the units wait until they are done.
-        let kinds = service_kinds(&meta);
         let install_grant = meta.ssh_agent.as_ref().is_some_and(|a| a.install.is_some());
         let at = if install_grant {
             sandbox::Event::Booted
@@ -723,7 +744,7 @@ pub fn create_with<R: Runner>(
         };
         let mut on_event = |e: sandbox::Event| {
             if e == at && req.host_services.is_some() {
-                sync_services(ctx, &req.name, &kinds);
+                sync_services(ctx, &req.name, &meta);
             }
             on(e);
         };
