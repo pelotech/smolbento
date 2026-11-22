@@ -35,6 +35,9 @@ pub fn run<R: Runner>(ctx: &mut Ctx<R>, a: &ForkArgs) -> Result<i32> {
     }
     // One secrets resolution (one Touch ID) for the parent's start, if needed, and every copy.
     let start = provision::start_plan(ctx, &parent.meta)?;
+    // As `provision::ensure_running` does, with the plan already made.
+    provision::sweep_orphans(ctx);
+    provision::refresh_services(ctx, &parent);
     sandbox::ensure_running(&ctx.vm, &mut parent, || Ok(start.clone()))?;
     for n in &names {
         fork_one(ctx, &parent, n, &start)
@@ -151,16 +154,16 @@ fn add_remote_and_branch<R: Runner>(
 
 /// smolvm's not-branchable and backing-chain errors (`src/agent/fork.rs` in smolvm), in bento terms.
 fn branch_hint(e: anyhow::Error, parent: &str) -> anyhow::Error {
-    let Some(message) = e.downcast_ref::<SmolvmError>().map(|s| s.message.as_str()) else {
+    let Some(s) = e.downcast_ref::<SmolvmError>() else {
         return e;
     };
-    if message.contains("was not started as branchable") {
+    if s.is_not_branchable() {
         return anyhow!(
             "{parent} was started without fork support; restart it once \
              (`bento stop {parent} && bento start {parent}`) to enable fork"
         );
     }
-    if message.contains("qcow2 backing layers") || message.contains("safe backing depth") {
+    if s.is_chain_too_deep() {
         return e.context("smolvm limits how deep a chain of copies can get");
     }
     e
