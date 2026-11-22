@@ -410,6 +410,37 @@ pub fn check(
     host_access: Option<bool>,
     target: &str,
 ) -> Verdict {
+    verdict_for(policy, sandbox, credential_hosts, host_access, target, true)
+}
+
+/// The sbx verdict alone, as the egress process enforces it per flow: smolvm's allow list
+/// (`admits`) and its enforced-CIDR wording play no part.
+pub fn decide(
+    policy: &Policy,
+    sandbox: &str,
+    credential_hosts: &[String],
+    host_access: bool,
+    target: &str,
+) -> Verdict {
+    verdict_for(
+        policy,
+        Some(sandbox),
+        credential_hosts,
+        Some(host_access),
+        target,
+        false,
+    )
+}
+
+/// `smolvm`: layer on what smolvm actually enforces (`check`), or stay pure sbx (`decide`).
+fn verdict_for(
+    policy: &Policy,
+    sandbox: Option<&str>,
+    credential_hosts: &[String],
+    host_access: Option<bool>,
+    target: &str,
+    smolvm: bool,
+) -> Verdict {
     let target = target.trim().to_ascii_lowercase();
     // Rules match the target with its port; smolvm's allow list and credentials see the host.
     let host = split_port(&target).map_or(target.as_str(), |(h, _)| h);
@@ -445,6 +476,9 @@ pub fn check(
     denies.sort_by_key(|(_, _, res)| !enforced(res));
     if let Some((r, scope, res)) = denies.first() {
         let text = format!("deny rule {} ({scope})", r.id);
+        if !smolvm {
+            return verdict(false, text);
+        }
         if enforced(res) {
             // Rules don't record when they were added, so an older sandbox can't be told apart.
             return verdict(
@@ -479,6 +513,9 @@ pub fn check(
     }
     // sbx's wording.
     let text = "no matching allow rule (default deny)";
+    if !smolvm {
+        return implicit_deny(text);
+    }
     // smolvm allows a host on every port, and widens wildcards: say so when it lets this through.
     match admits(&spec(), &host, mode) {
         Some(why) => verdict(
