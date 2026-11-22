@@ -1,5 +1,12 @@
 # Changelog
 
+## [0.36.2](https://github.com/pelotech/smolbento/compare/v0.36.1...v0.36.2) (2026-11-22)
+
+
+### Bug Fixes
+
+* **deps:** update url to 2.5.9 for RUSTSEC-2026-0592 ([#222](https://github.com/pelotech/smolbento/issues/222)) ([77e513a](https://github.com/pelotech/smolbento/commit/77e513a797169d5a3168412d91be7f2d7b7a6bf9))
+
 ## [0.36.1](https://github.com/pelotech/smolbento/compare/v0.36.0...v0.36.1) (2026-11-22)
 
 
