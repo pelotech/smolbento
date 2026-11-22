@@ -326,3 +326,28 @@ fn fork_sweeps_and_refreshes_the_parents_units() {
         "gone is swept, box's own is written"
     );
 }
+
+/// A hosted fork is `sbx.service=false` (its socket units would serve the parent's sockets), but its
+/// start keeps its egress unit, and adds no other.
+#[test]
+fn starting_a_hosted_fork_keeps_only_its_egress_unit() {
+    let mut t = test_env(&[]);
+    let _services = with_services(&mut t, "ns1");
+    let label = crate::egress::prepare(&t.ctx.paths, "f", &[])
+        .unwrap()
+        .label;
+    t.runner()
+        .ok(&["machine", "ls", "--json"], &ls_json(&["f"]));
+    t.sandbox(
+        "f",
+        "stopped",
+        &[
+            ("sbx.fork-of", "a"),
+            ("sbx.service", "false"),
+            ("sbx.bridge", "true"),
+            ("sbx.egress", &label.to_label()),
+        ],
+    );
+    t.sbt(&["start", "f"]).unwrap();
+    assert_eq!(units(&t), ["f:egress"]);
+}

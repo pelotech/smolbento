@@ -384,7 +384,9 @@ impl<R: Runner> Smolvm<R> {
     }
 
     /// A copy-on-write child of the running, branchable `from`: its memory, processes and disk. Its
-    /// credential values come from this process's environment, like `start`'s.
+    /// credential values come from this process's environment, like `start`'s. `egress` rebinds
+    /// the child to its own interceptor, which must already listen (smolvm fails closed).
+    #[allow(clippy::too_many_arguments)]
     pub fn branch(
         &self,
         from: &str,
@@ -393,8 +395,12 @@ impl<R: Runner> Smolvm<R> {
         vars: &[(String, String)],
         env: &[(String, String)],
         remove: &[String],
+        egress: Option<std::net::SocketAddr>,
     ) -> Result<()> {
         let mut a = args(&["machine", "branch", "--from", from, "-n", name]);
+        if let Some(addr) = egress {
+            flag(&mut a, "--egress-interceptor", addr.to_string());
+        }
         for (k, v) in labels {
             flag(&mut a, "--label", format!("{k}={v}"));
         }
@@ -602,6 +608,7 @@ mod tests {
             &[("V".into(), "1".into())],
             &[("TOK".into(), "secret-value".into())],
             &["GH_TOKEN".into()],
+            None,
         )
         .unwrap();
         let line = &vm.runner().call_lines()[0];
@@ -616,6 +623,23 @@ mod tests {
             vec![("TOK".into(), "secret-value".into())]
         );
         assert_eq!(vm.runner().removed()[0], vec!["GH_TOKEN".to_string()]);
+    }
+
+    #[test]
+    fn branch_passes_the_egress_interceptor() {
+        let fake = FakeRunner::new();
+        fake.ok(&["machine", "branch"], "");
+        let vm = Smolvm::new(fake);
+        let tok = [("SMOLVM_INTERCEPTOR_TOKEN".into(), "tok-value".into())];
+        let addr = "127.0.0.1:47332".parse().ok();
+        vm.branch("sbx-a", "sbx-b", &[], &[], &tok, &[], addr)
+            .unwrap();
+        let line = &vm.runner().call_lines()[0];
+        assert_eq!(
+            line,
+            "machine branch --from sbx-a -n sbx-b --egress-interceptor 127.0.0.1:47332"
+        );
+        assert_eq!(vm.runner().envs()[0], tok);
     }
 
     #[test]

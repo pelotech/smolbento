@@ -169,9 +169,11 @@ The egress process logs to `<data>/egress/<name>/egress.log`: startup errors, a 
 failed to resolve (by name, never value) and dropped flows. Look there when a hosted sandbox's
 connections fail. `bento rm` removes the log with the sandbox.
 
+A fork of a hosted sandbox gets its own egress process on its own port, with a copy of its
+parent's CA and token: the copied guest already trusts that CA and holds those placeholders.
+
 Limits in this release:
 
-- `fork` is refused for a hosted sandbox.
 - Install-only credentials (a kit's install hooks) are refused at create.
 - `secret set` and `secret rm` restart the sandbox's egress process, so a new value applies at
   once and a removed one is gone at once; open connections drop at that moment. A stopped

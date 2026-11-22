@@ -151,9 +151,14 @@ pub fn ensure_running<R: Runner>(ctx: &Ctx<R>, sb: &mut Sandbox) -> Result<()> {
 }
 
 /// The units a sandbox needs: the bridge, the agent when a runtime phase is granted, and the
-/// egress process when it is hosted.
+/// egress process when it is hosted. A fork's is the egress process only: the others would serve
+/// its parent's sockets (`cli::fork`).
 pub(crate) fn service_kinds(meta: &Meta) -> Vec<Kind> {
     let mut kinds = Vec::new();
+    if meta.fork_of.is_some() {
+        kinds.extend(meta.egress.as_ref().map(|_| Kind::Egress));
+        return kinds;
+    }
     if meta.ssh_agent.as_ref().is_some_and(|a| a.runtime.is_some()) {
         kinds.push(Kind::Agent);
     }
@@ -200,7 +205,8 @@ pub fn restart_egress<R: Runner>(ctx: &Ctx<R>, sb: &Sandbox) -> bool {
 /// Rewrites the units of a sandbox served by them if they differ (a new binary path, a new
 /// `SSH_AUTH_SOCK`), so a stale unit mends itself on next use.
 pub fn refresh_services<R: Runner>(ctx: &Ctx<R>, sb: &Sandbox) {
-    if sb.meta.service {
+    // A fork is `sbx.service=false` for its socket units, but a hosted one has an egress unit.
+    if sb.meta.service || sb.meta.fork_of.is_some() {
         sync_services(ctx, sb.name(), &service_kinds(&sb.meta), &sb.meta);
     }
 }

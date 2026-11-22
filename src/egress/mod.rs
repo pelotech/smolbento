@@ -3,7 +3,7 @@
 pub mod rules;
 pub mod serve;
 mod state;
-pub use state::{Prepared, forget, load_ca, policy, prepare, token};
+pub use state::{Prepared, copy_for_fork, forget, load_ca, policy, prepare, token};
 
 use crate::config::Settings;
 use crate::sandbox::name;
