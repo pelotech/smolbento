@@ -131,6 +131,25 @@ struct Running {
     ctl: Arc<ProcCtl>,
 }
 
+/// How many chunks of a channel's input may wait for its process to read them (SSH packets are
+/// at most 32 KiB, so up to 8 MiB). Past it the process isn't reading, and waiting for it would
+/// hold every channel of the connection.
+const STDIN_BACKLOG: usize = 256;
+
+/// A writer thread feeding `w` from the returned channel, which holds up to `STDIN_BACKLOG`
+/// chunks.
+fn stdin_writer(mut w: Box<dyn Write + Send>) -> mpsc::Sender<Vec<u8>> {
+    let (tx, mut rx) = mpsc::channel::<Vec<u8>>(STDIN_BACKLOG);
+    std::thread::spawn(move || {
+        while let Some(bytes) = rx.blocking_recv() {
+            if w.write_all(&bytes).and_then(|()| w.flush()).is_err() {
+                break;
+            }
+        }
+    });
+    tx
+}
+
 struct Conn {
     target: Arc<Target>,
     chans: HashMap<ChannelId, Chan>,
@@ -211,15 +230,7 @@ fn relay(proc: Proc, handle: Handle, ch: ChannelId, kind: Kind) -> Running {
         ctl,
         wait,
     } = proc;
-    let (in_tx, in_rx) = mpsc::channel::<Vec<u8>>(64);
-    std::thread::spawn(move || {
-        let (mut w, mut rx) = (stdin, in_rx);
-        while let Some(bytes) = rx.blocking_recv() {
-            if w.write_all(&bytes).and_then(|()| w.flush()).is_err() {
-                break;
-            }
-        }
-    });
+    let stdin = stdin_writer(stdin);
     let (tx, mut rx) = mpsc::channel::<Ev>(32);
     let pump = |mut r: Box<dyn Read + Send>, tx: mpsc::Sender<Ev>, wrap: fn(Vec<u8>) -> Ev| {
         std::thread::spawn(move || {
@@ -287,7 +298,7 @@ fn relay(proc: Proc, handle: Handle, ch: ChannelId, kind: Kind) -> Running {
         }
     });
     Running {
-        stdin: Some(in_tx),
+        stdin: Some(stdin),
         ctl,
     }
 }
@@ -473,13 +484,14 @@ impl Handler for Conn {
         data: &[u8],
         _session: &mut Session,
     ) -> Result<(), Self::Error> {
-        let tx = self
-            .chans
-            .get(&channel)
-            .and_then(|c| c.run.as_ref())
-            .and_then(|r| r.stdin.clone());
-        if let Some(tx) = tx {
-            let _ = tx.send(data.to_vec()).await;
+        // Never waits: this runs in the connection's one event loop, so a wait here would stall
+        // every channel. A process that stops reading its input is ended instead.
+        if let Some(r) = self.chans.get_mut(&channel).and_then(|c| c.run.as_mut())
+            && let Some(stdin) = &r.stdin
+            && stdin.try_send(data.to_vec()).is_err()
+        {
+            r.stdin = None;
+            r.ctl.kill();
         }
         Ok(())
     }
@@ -532,7 +544,23 @@ impl Conn {
 
 #[cfg(test)]
 mod tests {
-    use super::{forward_address, shell_command};
+    use super::{STDIN_BACKLOG, forward_address, shell_command, stdin_writer};
+
+    /// A process that stops reading its stdin can't stall the connection: once the backlog is
+    /// full, delivery is refused at once instead of waiting.
+    #[test]
+    fn stdin_refuses_instead_of_waiting_once_its_backlog_is_full() {
+        let (reader, writer) = std::io::pipe().unwrap();
+        let tx = stdin_writer(Box::new(writer));
+        let chunk = vec![b'x'; 16 * 1024];
+        let mut accepted = 0;
+        while tx.try_send(chunk.clone()).is_ok() {
+            accepted += 1;
+            assert!(accepted < 10 * STDIN_BACKLOG, "never refused");
+        }
+        assert!(accepted >= STDIN_BACKLOG, "{accepted}");
+        drop(reader);
+    }
 
     #[test]
     fn forwards_go_to_guest_loopback_only() {
