@@ -1,0 +1,14 @@
+[package]
+name = "egress-front"
+version = "0.0.0"
+edition = "2024"
+description = "Hosted egress front for smolvm machines, written to be lifted into smolvm"
+license = "Apache-2.0"
+repository = "https://github.com/pelotech/smolbento"
+authors = ["Pelotech"]
+publish = false
+
+# Both track the release pinned in smolvm.lock; `just smolvm-pin` rewrites the tags.
+[dependencies]
+smolvm-credentials = { git = "https://github.com/smol-machines/smolvm", version = "1.36.1", tag = "v1.36.1" }
+smolvm-protocol = { git = "https://github.com/smol-machines/smolvm", version = "1.36.1", tag = "v1.36.1" }

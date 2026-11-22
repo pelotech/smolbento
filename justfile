@@ -8,7 +8,7 @@ build:
 
 # Run unit, snapshot and parity tests
 test:
-    cargo nextest run --locked
+    cargo nextest run --locked --workspace
 
 # The e2e test that builds from dhi.io: it needs a Docker Hardened Images login, so `e2e` leaves
 # it out and `e2e-dhi` runs it (set SMOLBENTO_E2E_DHI_USER and SMOLBENTO_E2E_DHI_TOKEN_FILE).
@@ -58,7 +58,8 @@ smolvm-pin version:
     set -euo pipefail
     lock=$(just _smolvm-lock {{version}})
     printf '%s\n' "$lock" > smolvm.lock
-    echo "pinned smolvm {{version}}"
+    sed -i.bak 's|version = "[0-9.]*", tag = "v[^"]*"|version = "{{version}}", tag = "v{{version}}"|' crates/egress-front/Cargo.toml && rm crates/egress-front/Cargo.toml.bak
+    echo "pinned smolvm {{version}}; run cargo update -p smolvm-credentials, and refresh the smolvm-* outputHashes in flake.nix (the failing nix build prints them)"
 
 # Check smolvm.lock's checksums against its version's release (fails a version bump until pinned)
 smolvm-lock-check:

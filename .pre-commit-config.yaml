@@ -34,7 +34,7 @@ repos:
         pass_filenames: false
       - id: cargo-clippy
         name: cargo clippy
-        entry: cargo clippy --locked --all-targets -- -D warnings
+        entry: cargo clippy --locked --workspace --all-targets -- -D warnings
         language: system
         types: [rust]
         pass_filenames: false
@@ -42,5 +42,5 @@ repos:
         name: cargo deny
         entry: cargo deny check
         language: system
-        files: ^(Cargo\.(toml|lock)|deny\.toml)$
+        files: ^(Cargo\.(toml|lock)|crates/[^/]+/Cargo\.toml|deny\.toml)$
         pass_filenames: false
