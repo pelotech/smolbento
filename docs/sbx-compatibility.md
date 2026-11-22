@@ -321,10 +321,9 @@ Docker's kit-spec conformance suite checks this capability through `tests/confor
 (`just conformance`, at `SPEC_COMMIT`). The adapter claims `ssh-agent@1`, `host-mount@1` and
 `lifecycle@1`. In the last run 26 checks pass. Of the failures, `lifecycle@1/hook-env-restricted`
 is the recorded difference above (install steps keep the proxy variables), and these are open:
-`ssh-agent@1/phase-scoped` (the install-phase socket stays open after install), `SPEC-v3
-§6/env-expanded` (`create --env` values don't fill `${{ kit.env.* }}`), and `SPEC-v3
-§7.1.1/conflicts`, `validate-expanded-declarations` and `atomic-selection` (group conflicts,
-diagnostics and selection records). `volume@1` isn't claimed: the spec's `recreate` keeps volumes
+`ssh-agent@1/phase-scoped` (the install-phase socket stays open after install), and `SPEC-v3
+§7.1.1/validate-expanded-declarations` and `atomic-selection`, which use the suite's selection
+controls (`--reject-capability`, selection records) that smolbento doesn't have. `volume@1` isn't claimed: the spec's `recreate` keeps volumes
 while discarding the sandbox's disk, and smolbento keeps them on that disk. The suite's
 isolated setup needs the units' socket path under 104 bytes (a short `SMOLBENTO_TCK_HOME`); a
 longer one falls back to attached-only serving and the boot-time checks fail.

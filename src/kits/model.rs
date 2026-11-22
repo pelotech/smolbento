@@ -160,6 +160,8 @@ pub struct ImageConfig {
     pub user: String,
     /// `WorkingDir`; empty for `/`.
     pub workdir: String,
+    /// `Env`, in order: the base of `${{ kit.env.* }}` (SPEC-v3 §6.1).
+    pub env: Vec<(String, String)>,
 }
 
 #[derive(Debug, Clone, Default, PartialEq, Eq)]

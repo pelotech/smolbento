@@ -83,6 +83,11 @@ and `1e5` stay text). `volume@1`'s `size` and `mode` always stay text. A config 
 checked fully at create, after they're replaced. Two map keys that become the same key are an
 error.
 
+`${{ kit.env.NAME }}` reads the sandbox's environment as the spec defines it: the workload image's
+`ENV`, then what kits export (`args.*.env`), then `-e`/`--env` at create, the last winning; an empty
+`-e NAME=` is a value. `HOME` and `WORKSPACE` are smolbento's. `kit add` reads only what kits export,
+since a sandbox doesn't keep its image's `ENV` or its create's `-e`.
+
 What a kit does, and when:
 
 - On first start, install steps run once, as root, in a workload image's `WORKDIR` (`/` otherwise),

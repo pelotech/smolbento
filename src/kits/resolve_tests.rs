@@ -904,6 +904,7 @@ fn v2_workspace_files_and_workdir_expand_to_the_workdir() {
         vec![kit.clone()],
         &ArgValues::default(),
         "/w/repo",
+        &[],
     )
     .unwrap();
     assert_eq!(
@@ -1396,4 +1397,53 @@ fn an_invalid_expanded_member_is_named_by_its_path() {
         "kit g: capability com.docker.sandbox/lifecycle@1 at \
          capabilities[0].group.capabilities[0]: lifecycle@1 file path \"relative\" must be absolute"
     );
+}
+
+/// tck: SPEC-v3 §6/env-expanded. `${{ kit.env.NAME }}` reads the final container environment:
+/// the workload image's `Env`, then the kits' exports, then the create's own `-e` values (an empty
+/// one is present).
+#[test]
+fn kit_env_reads_the_image_then_exports_then_the_create() {
+    let mut w = workload("w");
+    w.config = Some(crate::kits::model::ImageConfig {
+        env: vec![("KIT_GREETING".into(), "image".into())],
+        ..Default::default()
+    });
+    let mixin = |export: bool, name: &str| {
+        let args = if export {
+            "args:\n  greeting:\n    default: arg\n    env: KIT_GREETING\n"
+        } else {
+            ""
+        };
+        let doc = format!(
+            "schemaVersion: \"3\"\nkind: mixin\n{args}capabilities:\n  - type: \
+             com.docker.sandbox/lifecycle@1\n    config: {{files: [{{path: /f, content: \
+             \"${{{{ kit.env.{name} }}}}\"}}]}}\n"
+        );
+        crate::kits::v3::parse(&doc, Source::Registry("m".into())).unwrap()
+    };
+    let written = |export: bool, create: &[(&str, &str)]| {
+        let create: Vec<(String, String)> = create
+            .iter()
+            .map(|(k, v)| (k.to_string(), v.to_string()))
+            .collect();
+        let p = resolve_for(
+            w.clone(),
+            vec![mixin(export, "KIT_GREETING")],
+            &ArgValues::default(),
+            "/w",
+            &create,
+        )
+        .unwrap();
+        String::from_utf8(p.merged.files[0].content.clone()).unwrap()
+    };
+    assert_eq!(written(false, &[]), "image");
+    assert_eq!(written(true, &[]), "arg");
+    assert_eq!(written(true, &[("KIT_GREETING", "create")]), "create");
+    assert_eq!(written(true, &[("KIT_GREETING", "")]), "");
+    // smolbento sets these in the guest, whatever the create or a kit says.
+    let k = mixin(false, "HOME");
+    let home = vec![("HOME".to_string(), "/elsewhere".to_string())];
+    let p = resolve_for(w.clone(), vec![k], &ArgValues::default(), "/w", &home).unwrap();
+    assert_eq!(p.merged.files[0].content, b"/home/agent");
 }

@@ -671,6 +671,7 @@ fn a_v3_workload_records_its_image_user_and_installs_in_its_workdir() {
     w.config = Some(crate::kits::model::ImageConfig {
         user: "somebody".into(),
         workdir: "/x".into(),
+        ..Default::default()
     });
     let p = resolve(w, vec![m.clone()], &ArgValues::default()).unwrap();
     let mut req = request();
@@ -1642,7 +1643,7 @@ fn a_startup_hook_without_a_user_runs_as_the_session_user() {
     let mut node = workload();
     node.config = Some(crate::kits::model::ImageConfig {
         user: "node".into(),
-        workdir: String::new(),
+        ..Default::default()
     });
     let as_node = script(node, None);
     assert!(as_node.contains("runuser -u 'node'"), "{as_node}");

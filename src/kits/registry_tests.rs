@@ -82,16 +82,18 @@ fn command_is_entrypoint_then_cmd() {
 }
 
 #[test]
-fn user_and_workdir_come_from_the_image_config() {
+fn user_workdir_and_env_come_from_the_image_config() {
     let d = tempfile::tempdir().unwrap();
-    let cfg = r#"{"config":{"Cmd":["sh"],"User":"somebody","WorkingDir":"/x"}}"#;
+    let cfg =
+        r#"{"config":{"Cmd":["sh"],"User":"somebody","WorkingDir":"/x","Env":["A=1","B=x=y"]}}"#;
     fixtures::oci_layout(d.path(), Some(DESC), &[], cfg);
     let kit = read_layout(d.path(), src()).unwrap();
     assert_eq!(
         kit.config,
         Some(ImageConfig {
             user: "somebody".into(),
-            workdir: "/x".into()
+            workdir: "/x".into(),
+            env: vec![("A".into(), "1".into()), ("B".into(), "x=y".into())],
         })
     );
     // Unset fields are empty: root in `/`.

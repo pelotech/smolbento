@@ -572,7 +572,9 @@ fn add_running<R: Runner>(
             workdir,
             ..Default::default()
         });
-    let plan = resolve_for(workload, mixins, values, &sb.workdir())?;
+    // The image's `Env` and the create's `-e` aren't kept with the sandbox: `${{ kit.env.* }}`
+    // reads the kits' exports only here.
+    let plan = resolve_for(workload, mixins, values, &sb.workdir(), &[])?;
     plan.warn_skipped();
 
     // In memory until approved.
