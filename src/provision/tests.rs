@@ -1274,3 +1274,31 @@ fn rm_forgets_the_egress_state() {
     t.sbt(&["rm", "-f", "box"]).unwrap();
     assert!(!t.ctx.paths.egress("box").exists());
 }
+
+#[test]
+fn a_start_fails_closed_when_a_hosted_sandbox_lost_its_label() {
+    let t = deny_all_env();
+    save_secret(&t, "github", None, "gh-123");
+    let labels =
+        r#"{"sbx.name":"s1","sbx.secrets":"github","sbx.credential-env":"GH_TOKEN,GITHUB_TOKEN"}"#;
+    let machine = |creds: &str| -> crate::smolvm::Machine {
+        serde_json::from_str(&format!(
+            r#"{{"name":"sbx-s1","state":"stopped","labels":{labels}{creds}}}"#
+        ))
+        .unwrap()
+    };
+    let sb = Sandbox::from_machine(&machine(r#","credentials":[]"#)).unwrap();
+    let e = start_plan(&t.ctx, &sb.meta).unwrap_err().to_string();
+    assert!(e.contains("has no sbx.egress label"), "{e}");
+    assert!(t.runner().envs().is_empty());
+    // Bindings listed, or a smolvm that doesn't say: a smolvm-mode start as before.
+    for creds in [
+        r#","credentials":[{"name":"gh_token","variable":"GH_TOKEN","hosts":["api.github.com"]}]"#,
+        "",
+    ] {
+        let sb = Sandbox::from_machine(&machine(creds)).unwrap();
+        let plan = start_plan(&t.ctx, &sb.meta).unwrap();
+        assert!(plan.egress.is_none());
+        assert!(plan.env.iter().any(|(_, v)| v == "gh-123"));
+    }
+}

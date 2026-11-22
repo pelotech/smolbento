@@ -102,6 +102,10 @@ fn plan_for<R: Runner>(
         None if meta.rec.egress_unreadable => bail!(
             "{sandbox}: its sbx.egress label is unreadable; recreate it (bento rm {sandbox}, then bento create …)"
         ),
+        // A hosted sandbox whose label was removed: smolvm holds no bindings for its credentials.
+        None if !meta.rec.credential_env.is_empty() && meta.rec.no_credential_bindings => bail!(
+            "{sandbox} has no sbx.egress label but was created for hosted egress (smolvm holds no credential bindings); recreate it"
+        ),
         None => {
             let (env, remove) = start_env(&secrets, meta, ctx.store.as_ref(), install);
             (env, remove, None)

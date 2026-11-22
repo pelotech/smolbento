@@ -109,8 +109,10 @@ impl Sandbox {
     }
 
     pub fn from_machine(m: &Machine) -> Option<Sandbox> {
+        let mut meta = Meta::from_labels(&m.labels)?;
+        meta.rec.no_credential_bindings = m.credentials.as_ref().is_some_and(Vec::is_empty);
         Some(Sandbox {
-            meta: Meta::from_labels(&m.labels)?,
+            meta,
             machine: m.name.clone(),
             state: m.state,
             ports: m.published_ports.clone(),

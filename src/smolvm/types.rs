@@ -25,6 +25,9 @@ pub struct Machine {
     /// Only `machine status --json` reports these.
     #[serde(default)]
     pub published_ports: Vec<PublishedPort>,
+    /// Credential bindings (smolvm 1.36.1+; never values). `None`: this smolvm doesn't say.
+    #[serde(default)]
+    pub credentials: Option<Vec<serde_json::Value>>,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Deserialize, Serialize)]

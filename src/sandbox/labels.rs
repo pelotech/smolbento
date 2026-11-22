@@ -134,6 +134,8 @@ impl CredFormat {
 /// and `Meta`.
 #[derive(Debug, Clone, Default, PartialEq, Eq)]
 pub struct Recorded {
+    /// Read only: smolvm reports the machine holds no credential bindings.
+    pub no_credential_bindings: bool,
     /// Read only: `sbx.egress` is present but unreadable, so a start must refuse.
     pub egress_unreadable: bool,
     /// Services whose credentials were bound at create (`sbx.secrets`).
@@ -373,6 +375,7 @@ impl Meta {
             skills: text(SKILLS).and_then(|j| crate::skills::Label::from_label(&j)),
             mcp: labels.get(MCP).map(|names| list(Some(names))),
             rec: Recorded {
+                no_credential_bindings: false,
                 egress_unreadable: labels.contains_key(EGRESS)
                     && text(EGRESS)
                         .and_then(|j| crate::egress::Label::from_label(&j))
