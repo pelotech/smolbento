@@ -8,7 +8,8 @@ repository = "https://github.com/pelotech/smolbento"
 authors = ["Pelotech"]
 publish = false
 
-# Both track the release pinned in smolvm.lock; `just smolvm-pin` rewrites the tags.
+# Stopgap until smolvm-credentials is on crates.io (or upstream's submodules use https): a fork branch that is
+# the smolvm release pinned in smolvm.lock plus an https .gitmodules, recreated for each smolvm pin.
 [dependencies]
-smolvm-credentials = { git = "https://github.com/smol-machines/smolvm", version = "1.36.1", tag = "v1.36.1" }
-smolvm-protocol = { git = "https://github.com/smol-machines/smolvm", version = "1.36.1", tag = "v1.36.1" }
+smolvm-credentials = { git = "https://github.com/josmo/smolvm", rev = "f026f22864f059e8f5d3260aef03157df2d1fc82", version = "1.36.1" }
+smolvm-protocol = { git = "https://github.com/josmo/smolvm", rev = "f026f22864f059e8f5d3260aef03157df2d1fc82", version = "1.36.1" }

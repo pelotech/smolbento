@@ -58,8 +58,7 @@ smolvm-pin version:
     set -euo pipefail
     lock=$(just _smolvm-lock {{version}})
     printf '%s\n' "$lock" > smolvm.lock
-    sed -i.bak 's|version = "[0-9.]*", tag = "v[^"]*"|version = "{{version}}", tag = "v{{version}}"|' crates/egress-front/Cargo.toml && rm crates/egress-front/Cargo.toml.bak
-    echo "pinned smolvm {{version}}; run cargo update -p smolvm-credentials, and refresh the smolvm-* outputHashes in flake.nix (the failing nix build prints them)"
+    echo "pinned smolvm {{version}}; recreate the josmo/smolvm https-submodules branch for v{{version}}, then update rev and version in crates/egress-front/Cargo.toml, run cargo update -p smolvm-credentials, and refresh the smolvm-* outputHashes in flake.nix"
 
 # Check smolvm.lock's checksums against its version's release (fails a version bump until pinned)
 smolvm-lock-check:

@@ -2053,7 +2053,7 @@ dependencies = [
  "once_cell",
  "socket2",
  "tracing",
- "windows-sys 0.52.0",
+ "windows-sys 0.61.2",
 ]
 
 [[package]]
@@ -2823,7 +2823,7 @@ dependencies = [
 [[package]]
 name = "smolvm-credentials"
 version = "1.36.1"
-source = "git+https://github.com/smol-machines/smolvm?tag=v1.36.1#4a709e43f352fe8b8d852c19e44266a8d895ff20"
+source = "git+https://github.com/josmo/smolvm?rev=f026f22864f059e8f5d3260aef03157df2d1fc82#f026f22864f059e8f5d3260aef03157df2d1fc82"
 dependencies = [
  "anyhow",
  "bytes",
@@ -2849,7 +2849,7 @@ dependencies = [
 [[package]]
 name = "smolvm-protocol"
 version = "1.36.1"
-source = "git+https://github.com/smol-machines/smolvm?tag=v1.36.1#4a709e43f352fe8b8d852c19e44266a8d895ff20"
+source = "git+https://github.com/josmo/smolvm?rev=f026f22864f059e8f5d3260aef03157df2d1fc82#f026f22864f059e8f5d3260aef03157df2d1fc82"
 dependencies = [
  "base64 0.22.1",
  "serde",

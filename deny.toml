@@ -38,5 +38,5 @@ wildcards = "deny"
 unknown-registry = "deny"
 unknown-git = "deny"
 # Temporary: russh from git until a release pins ssh-key 0.7.0-rc.12+; then drop this, the flake outputHashes, and use crates.io.
-# Temporary: smolvm-credentials and smolvm-protocol from git until smolvm-credentials is on crates.io.
-allow-git = ["https://github.com/Eugeny/russh", "https://github.com/smol-machines/smolvm"]
+# Temporary: smolvm-credentials and smolvm-protocol from a fork branch (smolvm plus an https .gitmodules) until smolvm-credentials is on crates.io.
+allow-git = ["https://github.com/Eugeny/russh", "https://github.com/josmo/smolvm"]

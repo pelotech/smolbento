@@ -70,10 +70,9 @@
                 "russh-cryptovec-0.62.0" = "sha256-4972RiU0ayW6snBUsJ2ju3yR9dwsGBeaKwOWsJrmprA=";
                 "russh-util-0.52.0" = "sha256-4972RiU0ayW6snBUsJ2ju3yR9dwsGBeaKwOWsJrmprA=";
                 "pageant-0.2.5" = "sha256-4972RiU0ayW6snBUsJ2ju3yR9dwsGBeaKwOWsJrmprA=";
-                # Temporary: smolvm from git until smolvm-credentials is on crates.io.
-                # FIXME placeholder: smolvm's .gitmodules use ssh URLs, so a sandboxed fetch fails; replace once smolvm-credentials is fetchable without ssh (crates.io or https submodules).
-                "smolvm-credentials-1.36.1" = "sha256-AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA=";
-                "smolvm-protocol-1.36.1" = "sha256-AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA=";
+                # Temporary: smolvm crates from a fork branch until smolvm-credentials is on crates.io.
+                "smolvm-credentials-1.36.1" = "sha256-Nr8b2JwuWC67ioBqPKhDUrsRaqNruvX/HtP8cPnGcys=";
+                "smolvm-protocol-1.36.1" = "sha256-Nr8b2JwuWC67ioBqPKhDUrsRaqNruvX/HtP8cPnGcys=";
               };
             };
             # Some unit tests read host facts (memory, free ports) the build sandbox hides; CI runs them.

@@ -152,6 +152,8 @@ Shipped kits live in `kits/`. Planned for later phases: `tui`, and `images/plus/
 
 - Dev shell: `direnv allow` once (nix-direnv loads the flake). Shells without the direnv hook, such as
   agent tool shells, use `direnv exec . <cmd>`.
+- `crates/egress-front` takes smolvm's crates from a `josmo/smolvm` branch (the pinned release plus an https `.gitmodules`; upstream's
+  submodule URLs are ssh). A smolvm bump recreates that branch, then updates the crate's `rev` and the flake hashes.
 - Fetching the smolvm git dependency may need `CARGO_NET_GIT_FETCH_WITH_CLI=true GIT_LFS_SKIP_SMUDGE=1`: a user git
   config can rewrite https to ssh, and smolvm's repo carries ~800 MB of LFS the crate doesn't need.
 - `just build`, `just test` (nextest: unit, `insta` snapshots, sbx parity), `just lint` (prek), and
