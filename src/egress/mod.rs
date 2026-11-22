@@ -1,5 +1,6 @@
 //! Hosted egress: bento runs the interceptor that swaps a sandbox's credentials.
 
+pub mod rules;
 pub mod serve;
 mod state;
 pub use state::{Prepared, forget, load_ca, policy, prepare, token};

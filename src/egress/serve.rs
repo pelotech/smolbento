@@ -1,12 +1,13 @@
 //! `_serve egress SANDBOX`: the interceptor a hosted sandbox's egress unit runs.
 
+use super::rules::Rules;
 use super::{load_ca, policy, token};
 use crate::cli::Ctx;
 use crate::sandbox;
 use crate::secrets::{SecretsFile, resolve::start_env};
 use crate::smolvm::{Credential, Runner};
 use anyhow::{Result, bail};
-use egress_front::{Decision, InterceptorConfig, StaticResolver, activated_listener, serve};
+use egress_front::{Decision, Flow, InterceptorConfig, StaticResolver, activated_listener, serve};
 use std::sync::Arc;
 
 /// Serves the unit's activated listener until the process is stopped.
@@ -26,6 +27,12 @@ pub fn run<R: Runner>(ctx: &Ctx<R>, name: &str) -> Result<()> {
     for var in missing {
         eprintln!("egress: no value for {var}; requests using it will fail");
     }
+    let hosts = label
+        .bindings
+        .iter()
+        .flat_map(|b| b.hosts.clone())
+        .collect();
+    let rules = Rules::new(&ctx.paths, name, sb.meta.rec.host_access, hosts);
     let config = InterceptorConfig {
         machine: sb.machine,
         policy: policy(label),
@@ -38,8 +45,14 @@ pub fn run<R: Runner>(ctx: &Ctx<R>, name: &str) -> Result<()> {
         extra_cas: vec![],
         upstream_roots_pem: vec![],
     };
-    // Task 3 replaces this
-    let decide = Arc::new(|_: &egress_front::Flow| Decision::Allow);
+    let decide = Arc::new(move |f: &Flow| {
+        let (decision, reason) = rules.decide(f);
+        if decision == Decision::Deny {
+            let host = f.name.clone().unwrap_or_else(|| f.ip.to_string());
+            eprintln!("deny {host}:{}: {reason}", f.port);
+        }
+        decision
+    });
     serve(listener, token, config, Arc::new(resolver(pairs)), decide)
 }
 
