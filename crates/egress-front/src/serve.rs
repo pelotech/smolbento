@@ -10,7 +10,8 @@ use smolvm_protocol::intercept::InterceptEndpoint;
 use crate::relay::relay;
 
 /// Spawn the interceptor, then accept smolvm's per-flow connections on `listener` forever, relaying
-/// each on its own thread. Accept errors are ridden out; only an interceptor start-up failure returns.
+/// each on its own thread. Accept and relay errors are logged to stderr and ridden out; only an
+/// interceptor start-up failure returns.
 pub fn serve(
     listener: TcpListener,
     front_token: [u8; 32],
@@ -27,12 +28,17 @@ pub fn serve(
         match listener.accept() {
             Ok((guest, _)) => {
                 std::thread::spawn(move || {
-                    // A bad or dropped flow is that flow's problem only.
-                    let _ = relay(guest, &front, &inner);
+                    // A bad or dropped flow is that flow's problem only; the log says why.
+                    if let Err(e) = relay(guest, &front, &inner) {
+                        eprintln!("egress: a flow was dropped: {e}");
+                    }
                 });
             }
             // A reset before accept, or running out of fds, must not end the service for every flow.
-            Err(_) => std::thread::sleep(Duration::from_millis(100)),
+            Err(e) => {
+                eprintln!("egress: accept failed: {e}");
+                std::thread::sleep(Duration::from_millis(100));
+            }
         }
     }
 }

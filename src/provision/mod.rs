@@ -175,7 +175,12 @@ pub(crate) fn sync_services<R: Runner>(ctx: &Ctx<R>, name: &str, meta: &Meta) {
         .services
         .sync_egress(name, &service_kinds(meta), port, &ctx.paths, &ctx.env)
     {
-        crate::warning!("{name}: host services for the browser, clipboard and SSH agent: {e:#}");
+        let what = if meta.egress.is_some() {
+            "host services (the egress unit, and the browser, clipboard and SSH agent units)"
+        } else {
+            "host services for the browser, clipboard and SSH agent"
+        };
+        crate::warning!("{name}: {what}: {e:#}");
     }
 }
 

@@ -162,7 +162,12 @@ When things take effect:
 interceptor instead of smolvm: one socket-activated `bento _serve egress` process per sandbox
 (a launchd job on macOS, a `systemd --user` socket and service on Linux). It resolves secrets
 when it starts, and the guest sees placeholders as usual. A sandbox with no credentials gets
-no egress process.
+no egress process. It needs a service manager: create is refused without one (launchd, or
+`systemd --user` with a private socket directory).
+
+The egress process logs to `<data>/egress/<name>/egress.log`: startup errors, a secret that
+failed to resolve (by name, never value) and dropped flows. Look there when a hosted sandbox's
+connections fail. `bento rm` removes the log with the sandbox.
 
 Limits in this release:
 

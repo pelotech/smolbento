@@ -21,7 +21,11 @@ pub fn run<R: Runner>(ctx: &Ctx<R>, name: &str) -> Result<()> {
     let ca = load_ca(&ctx.paths, name)?;
     let token = decode_token(&token(&ctx.paths, name)?)?;
     let secrets = SecretsFile::load(&ctx.paths)?;
-    let (pairs, _) = start_env(&secrets, &sb.meta, ctx.store.as_ref(), false);
+    // The unit's stderr is its log. Resolution failures warn from `start_env`; names only, never values.
+    let (pairs, missing) = start_env(&secrets, &sb.meta, ctx.store.as_ref(), false);
+    for var in missing {
+        eprintln!("egress: no value for {var}; requests using it will fail");
+    }
     let config = InterceptorConfig {
         machine: sb.machine,
         policy: policy(label),
