@@ -7,10 +7,8 @@ use crate::cli::Ctx;
 use crate::sandbox;
 use crate::secrets::{SecretsFile, resolve::start_env};
 use crate::smolvm::{Credential, Runner};
-use anyhow::{Result, bail};
-use egress_front::{
-    Decision, Flow, InterceptorConfig, StaticResolver, activated_listener, is_broad, serve,
-};
+use anyhow::{Context, Result, bail};
+use egress_front::{Decision, Flow, InterceptorConfig, StaticResolver, activated_listener, serve};
 use std::sync::Arc;
 
 /// Serves the unit's activated listener until the process is stopped.
@@ -37,17 +35,8 @@ pub fn run<R: Runner>(ctx: &Ctx<R>, name: &str) -> Result<()> {
         .collect();
     let source = Arc::new(PolicySource::new(&ctx.paths, name, hosts.clone()));
     let ruled = source.ruled_hosts().unwrap_or_default();
-    // A CA from before request rules is name-constrained: the interceptor refuses to start with a host
-    // it doesn't permit, so ruled hosts aren't decrypted and their flows count as uninspectable.
     let mut terminated = hosts.clone();
-    let broad = is_broad(&ca);
-    if broad {
-        terminated.extend(ruled.iter().cloned());
-    } else if !ruled.is_empty() {
-        eprintln!(
-            "egress: this sandbox predates request rules, so their hosts aren't decrypted; recreate it to filter requests"
-        );
-    }
+    terminated.extend(ruled.iter().cloned());
     terminated.sort();
     terminated.dedup();
     // The unit's socket starts the process again on the next connection.
@@ -57,7 +46,7 @@ pub fn run<R: Runner>(ctx: &Ctx<R>, name: &str) -> Result<()> {
         name,
         sb.meta.rec.host_access,
         hosts,
-        broad.then(|| terminated.clone()),
+        Some(terminated.clone()),
     );
     let config = InterceptorConfig {
         machine: sb.machine,
@@ -86,7 +75,9 @@ pub fn run<R: Runner>(ctx: &Ctx<R>, name: &str) -> Result<()> {
         }
         decision
     });
-    serve(listener, token, config, Arc::new(resolver(pairs)), decide)
+    serve(listener, token, config, Arc::new(resolver(pairs)), decide).context(
+        "egress interceptor failed to start; if the sandbox was created before 0.38, recreate it",
+    )
 }
 
 /// The log line for a denied flow. The name is the guest's, so it's capped at a DNS name's length

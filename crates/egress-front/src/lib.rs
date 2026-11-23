@@ -14,7 +14,7 @@ mod relay;
 mod rules;
 mod serve;
 
-pub use ca::{broad_ca, is_broad};
+pub use ca::broad_ca;
 pub use listener::activated_listener;
 pub use relay::{Decide, Decision, Flow, FlowKind};
 pub use rules::{

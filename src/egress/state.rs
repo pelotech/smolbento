@@ -5,7 +5,7 @@ use crate::config::{Paths, Symlink, write_atomic};
 use crate::sandbox::{name, options::free_port};
 use crate::smolvm::Credential;
 use anyhow::{Context, Result, bail};
-use egress_front::{CredentialPolicy, MachineCa, broad_ca, generate_placeholders, is_broad};
+use egress_front::{CredentialPolicy, MachineCa, broad_ca, generate_placeholders};
 use std::os::unix::fs::PermissionsExt;
 use std::path::PathBuf;
 
@@ -106,12 +106,6 @@ pub fn load_ca(paths: &Paths, sandbox: &str) -> Result<MachineCa> {
     )
 }
 
-/// Whether request denies act per request on a sandbox: it's hosted, and its CA can sign for any
-/// host. One from before request rules can't, so there they act on their whole host, as in 0.37.0.
-pub fn per_request(paths: &Paths, sandbox: &str, hosted: bool) -> bool {
-    hosted && load_ca(paths, sandbox).is_ok_and(|ca| is_broad(&ca))
-}
-
 pub fn forget(paths: &Paths, sandbox: &str) -> Result<()> {
     match std::fs::remove_dir_all(paths.egress(sandbox)) {
         Err(e) if e.kind() != std::io::ErrorKind::NotFound => Err(e.into()),
@@ -180,22 +174,6 @@ mod tests {
         assert_eq!(mode(&dir.join("ca").join("ca.key")), 0o600);
         assert!(got.ca_guest_dir.starts_with(&dir));
         assert!(got.label.port > 0);
-    }
-
-    #[test]
-    fn a_request_deny_on_a_non_broad_sandbox_stays_host_wide() {
-        let d = tempfile::tempdir().unwrap();
-        let p = paths(d.path());
-        prepare(&p, "w", &[]).unwrap();
-        assert!(per_request(&p, "w", true));
-        assert!(!per_request(&p, "w", false), "smolvm egress");
-        // A CA from before request rules is name-constrained.
-        MachineCa::generate(&name::machine_name("w"), &["example.com".into()])
-            .unwrap()
-            .save(&p.egress("w").join("ca"))
-            .unwrap();
-        assert!(!per_request(&p, "w", true));
-        assert!(!per_request(&p, "none", true), "no CA");
     }
 
     #[test]

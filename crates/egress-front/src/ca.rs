@@ -39,23 +39,6 @@ pub fn broad_ca(machine: &str) -> Result<MachineCa> {
     MachineCa::import(&document)
 }
 
-/// Whether `ca` can sign for any host: its certificate has no NameConstraints extension. An interceptor
-/// may terminate only hosts a constrained CA permits.
-pub fn is_broad(ca: &MachineCa) -> bool {
-    // A byte search for the extension's OID: a constrained certificate always holds it, so a CA is
-    // never taken for broad wrongly. A broad one with the bytes by chance is only treated as narrow.
-    rustls_pemfile::certs(&mut ca.certificate_pem().as_bytes())
-        .next()
-        .and_then(Result::ok)
-        .is_some_and(|der| {
-            !der.windows(NAME_CONSTRAINTS_OID.len())
-                .any(|w| w == NAME_CONSTRAINTS_OID)
-        })
-}
-
-/// The DER encoding of the NameConstraints extension's OID, 2.5.29.30.
-const NAME_CONSTRAINTS_OID: [u8; 5] = [0x06, 0x03, 0x55, 0x1d, 0x1e];
-
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -69,13 +52,6 @@ mod tests {
             .unwrap()
             .unwrap()
             .to_vec()
-    }
-
-    #[test]
-    fn broad_ca_has_no_name_constraints() {
-        let constrained = MachineCa::generate("m", &["example.com".into()]).unwrap();
-        assert!(!is_broad(&constrained), "the probe finds one");
-        assert!(is_broad(&broad_ca("m").unwrap()));
     }
 
     #[test]

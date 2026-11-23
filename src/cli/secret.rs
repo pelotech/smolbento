@@ -461,7 +461,7 @@ fn bind<R: Runner>(
         sb.name(),
         &hosts,
         rec.host_access,
-        crate::egress::per_request(&ctx.paths, sb.name(), sb.meta.egress.is_some()),
+        sb.meta.egress.is_some(),
     );
     ctx.vm.update_network(&sb.machine, &network)?;
     let env = with_value(&sb.meta, creds.iter().map(|c| &c.env_var).collect(), value);

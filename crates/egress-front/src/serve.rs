@@ -205,4 +205,29 @@ mod tests {
         assert!(passed.starts_with("HTTP/1.1 200"), "{passed}");
         assert!(passed.contains("upstream ok"), "{passed}");
     }
+
+    #[test]
+    fn a_constrained_ca_that_does_not_permit_a_ruled_host_refuses_to_serve() {
+        let config = InterceptorConfig {
+            machine: "m".into(),
+            policy: CredentialPolicy::default(),
+            placeholders: Default::default(),
+            ca: smolvm_credentials::MachineCa::generate("m", &["other.test".into()]).unwrap(),
+            extra_cas: vec![],
+            upstream_roots_pem: vec![],
+            terminate_hosts: vec![HOST.into()],
+            request_filter: None,
+        };
+        let listener = TcpListener::bind("127.0.0.1:0").unwrap();
+        let decide: Decide = Arc::new(|_| Decision::Allow);
+        let err = serve(
+            listener,
+            [3; 32],
+            config,
+            Arc::new(StaticResolver::new()),
+            decide,
+        )
+        .unwrap_err();
+        assert!(err.to_string().contains(HOST), "{err:#}");
+    }
 }
