@@ -159,22 +159,41 @@ Shipped kits live in `kits/`. Planned for later phases: `tui`, and `images/plus/
   submodule URLs are ssh). A smolvm bump recreates that branch, then updates the crate's `rev` and the flake hashes.
 - Fetching the smolvm git dependency may need `CARGO_NET_GIT_FETCH_WITH_CLI=true GIT_LFS_SKIP_SMUDGE=1`: a user git
   config can rewrite https to ssh, and smolvm's repo carries ~800 MB of LFS the crate doesn't need.
-- `just build`, `just test` (nextest: unit, `insta` snapshots, sbx parity), `just lint` (prek), and
-  `just e2e` (boots real VMs; needs a hypervisor). e2e tests run two at a time (`just e2e 4` for more),
-  so each needs its own sandbox names and config/cache dirs. A test that changes global state (like
-  the shared `_builder`) must be the only one that does. A test that needs outside credentials gets
-  its own recipe (`just e2e-dhi`) and fails without them; it never returns early, which would pass.
-- CI runs Linux only by default. VM tests (`just e2e`) run in CI only on x64 Linux, split over three
-  runners by `just e2e-shard N`: the slowest tests are placed by hand (`e2e_heavy_*` in the justfile,
-  kept in step with `.config/nextest.toml`), the rest by nextest's `--partition slice:N/3`. So an e2e
-  test can't rely on another having run on the same machine. GitHub's arm64 Linux and macOS runners can't boot VMs. Run `just test` and `just e2e`
-  on your Mac before pushing changes that affect macOS. A macOS unit-test job runs only on manual
-  `workflow_dispatch` with `macos: true`.
-- The macOS release binary is cross-compiled on Linux and never run in CI. Pull requests build
-  macOS-only code with `just check-target aarch64-apple-darwin`; the full release builds run on the
-  release-please PR and on PRs that change the build's inputs. Before merging a release-please PR,
-  run `just test` and `just e2e` on a Mac. To build it natively instead, change its
-  release matrix entry to `runner: macos-latest, builder: cargo`.
+- Recipes: `just build`, `just test` (nextest: unit, `insta` snapshots, sbx parity), `just lint` (prek),
+  `just e2e [threads] [filter]` (boots real VMs; needs a hypervisor), and `just check-target TARGET`
+  (cross-compiles in a container).
+- **Testing: fastest check first, each long run once.**
+  - While iterating, run only the tests for what you changed: `direnv exec . cargo nextest run --lib
+    <module or test name>`, or one group of e2e tests with `just e2e 2 <name filter>` (for example
+    `basics::hosted_`). A name filter narrows the recipe's; never add a second `-E`, which is ORed and
+    runs the whole suite.
+  - Run each long check once, on the final tree. `just test` and `just lint` before each commit. The
+    e2e tests your change touches once, after the last code change: commits that only change docs,
+    or a rebase that brings no new code, don't need another run. The full `just e2e` only when a
+    change reaches every sandbox (a new default, the create or start path), and then once.
+  - Leave to CI what it already runs. CI's `darwin-check` covers `just check-target
+    aarch64-apple-darwin` in about 3 minutes, while a local run can take 15 or more on a cold
+    submodule fetch, so run it locally only for macOS-only code. The Linux e2e shards run on every PR.
+  - A run that shows no progress for about twice its usual time (a stalled fetch, a hung image build)
+    is stopped, not waited out. After a failure, rerun only the failed tests to tell a flake from a
+    regression; Docker Hub pull timeouts are the environment, not the change.
+  - Run `just test` and the affected `just e2e` tests on your Mac before pushing changes that affect
+    macOS: CI can't boot VMs on macOS.
+- Writing e2e tests: they run two at a time (`just e2e 4` for more), so each needs its own sandbox
+  names and config/cache dirs. A test that changes global state (like the shared `_builder`) must be
+  the only one that does. A test that runs `bento policy` goes in the `policy` nextest group: policy
+  changes reach every running sandbox in the shared smolvm home. A test that needs outside
+  credentials gets its own recipe (`just e2e-dhi`) and fails without them; it never returns early,
+  which would pass.
+- CI runs Linux only by default. VM tests run in CI only on x64 Linux, split over three runners by
+  `just e2e-shard N`: the slowest tests are placed by hand (`e2e_heavy_*` in the justfile, kept in
+  step with `.config/nextest.toml`), the rest by nextest's `--partition slice:N/3`. So an e2e test
+  can't rely on another having run on the same machine. GitHub's arm64 Linux and macOS runners can't
+  boot VMs. A macOS unit-test job runs only on manual `workflow_dispatch` with `macos: true`.
+- The macOS release binary is cross-compiled on Linux and never run in CI. The full release builds
+  run on the release-please PR and on PRs that change the build's inputs. Before merging a
+  release-please PR, run `just test` and `just e2e` on a Mac. To build it natively instead, change
+  its release matrix entry to `runner: macos-latest, builder: cargo`.
 - New command or flag: add a parity line to `tests/parity/sbx-commands.txt` if it exists in sbx, a
   fake-`Runner` test asserting the smolvm argv, and update `--help` snapshots (`cargo insta review`).
 - Reference smolvm source: `../smolvm-ref` (flags in `src/cli/machine.rs`, Smolfile in
