@@ -1,5 +1,6 @@
 //! Hosted egress: bento runs the interceptor that swaps a sandbox's credentials.
 
+pub mod filter;
 pub mod request_rules;
 pub mod rules;
 pub mod serve;

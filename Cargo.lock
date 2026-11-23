@@ -748,6 +748,7 @@ dependencies = [
  "anyhow",
  "http",
  "rcgen",
+ "rustls",
  "rustls-pemfile",
  "rustls-pki-types",
  "rustls-webpki",

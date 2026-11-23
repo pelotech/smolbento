@@ -2,6 +2,8 @@
 
 use smolvm_protocol::sni::{Peek, peek_client_hello};
 
+use crate::relay::FlowKind;
+
 /// The host name in a flow's first bytes: the SNI of a TLS ClientHello, else the `Host:` header of an
 /// HTTP request (port stripped). Lowercased, without a trailing dot. `None` when there is neither.
 pub(crate) fn flow_name(first: &[u8]) -> Option<String> {
@@ -11,6 +13,25 @@ pub(crate) fn flow_name(first: &[u8]) -> Option<String> {
     };
     let name = name.trim_end_matches('.').to_ascii_lowercase();
     (!name.is_empty()).then_some(name)
+}
+
+/// What a flow's first bytes are: a TLS ClientHello (a handshake record, whole or not), an HTTP/1
+/// request line, or anything else.
+pub(crate) fn flow_kind(first: &[u8]) -> FlowKind {
+    if first.starts_with(&[0x16, 0x03]) {
+        FlowKind::Tls
+    } else if request_line(first).is_some() {
+        FlowKind::Http
+    } else {
+        FlowKind::Other
+    }
+}
+
+/// The first line of an HTTP/1 request, if `first` starts with one.
+fn request_line(first: &[u8]) -> Option<&str> {
+    let end = first.windows(2).position(|w| w == b"\r\n")?;
+    let line = std::str::from_utf8(&first[..end]).ok()?;
+    line.contains(" HTTP/1.").then_some(line)
 }
 
 /// The `Host:` header of an HTTP/1 request, without its port. Only whole lines count, so a header cut
@@ -99,6 +120,26 @@ mod tests {
             flow_name(b"GET / HTTP/1.1\r\nHost: [::1]:8080\r\n\r\n").as_deref(),
             Some("::1")
         );
+    }
+
+    #[test]
+    fn flow_kind_from_first_bytes() {
+        assert_eq!(flow_kind(&client_hello(Some("a.example"))), FlowKind::Tls);
+        assert_eq!(flow_kind(&client_hello(None)), FlowKind::Tls);
+        // Cut short, still a handshake record.
+        assert_eq!(
+            flow_kind(&client_hello(Some("a.example"))[..8]),
+            FlowKind::Tls
+        );
+        assert_eq!(
+            flow_kind(b"GET / HTTP/1.1\r\nHost: a\r\n\r\n"),
+            FlowKind::Http
+        );
+        assert_eq!(flow_kind(b"GET / HTTP/1.0\r\n\r\n"), FlowKind::Http);
+        assert_eq!(flow_kind(b""), FlowKind::Other);
+        assert_eq!(flow_kind(b"SSH-2.0-x\r\n"), FlowKind::Other);
+        assert_eq!(flow_kind(b"GET / HTTP/1.1"), FlowKind::Other);
+        assert_eq!(flow_kind(b"\x16"), FlowKind::Other);
     }
 
     #[test]

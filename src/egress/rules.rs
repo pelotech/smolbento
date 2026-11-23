@@ -102,6 +102,7 @@ mod tests {
     fn flow(name: Option<&str>, ip: &str, port: u16) -> Flow {
         Flow {
             name: name.map(String::from),
+            kind: egress_front::FlowKind::Other,
             ip: ip.parse().unwrap(),
             port,
         }

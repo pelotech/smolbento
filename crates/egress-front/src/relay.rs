@@ -7,14 +7,27 @@ use std::time::Duration;
 use smolvm_protocol::intercept::{InterceptEndpoint, VERDICT_CONNECTED};
 use smolvm_protocol::sni::{MAX_CLIENT_HELLO, Peek, peek_client_hello};
 
-use crate::name::flow_name;
+use crate::name::{flow_kind, flow_name};
 
-/// A flow the relay asks about: the name its first bytes ask for, if any, and its destination.
+/// A flow the relay asks about: the name its first bytes ask for, if any, what they are, and its
+/// destination.
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct Flow {
     pub name: Option<String>,
+    pub kind: FlowKind,
     pub ip: IpAddr,
     pub port: u16,
+}
+
+/// What a flow's first bytes are. A flow decided from its destination alone is `Other`.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum FlowKind {
+    /// A TLS ClientHello.
+    Tls,
+    /// An HTTP/1 request.
+    Http,
+    /// Anything else, including nothing.
+    Other,
 }
 
 /// Whether a flow may go on.
@@ -65,12 +78,13 @@ fn relay_with_timeout(
 ) -> std::io::Result<()> {
     guest.set_read_timeout(Some(handshake))?;
     let dest = front.read_preamble(&mut guest)?;
-    let flow = |name| Flow {
+    let flow = |name, kind| Flow {
         name,
+        kind,
         ip: dest.ip(),
         port: dest.port(),
     };
-    if decide(&flow(None)) == Decision::Deny {
+    if decide(&flow(None, FlowKind::Other)) == Decision::Deny {
         return guest.write_all(&[REFUSED]);
     }
     let dial = if dest.ip() == GATEWAY {
@@ -89,7 +103,7 @@ fn relay_with_timeout(
     }
 
     let first = read_first_bytes(&mut guest)?;
-    if decide(&flow(flow_name(&first))) == Decision::Deny {
+    if decide(&flow(flow_name(&first), flow_kind(&first))) == Decision::Deny {
         let _ = guest.shutdown(Shutdown::Both);
         let _ = upstream.shutdown(Shutdown::Both);
         return Ok(());
@@ -268,6 +282,7 @@ mod tests {
         assert!(inner_l.accept().is_err(), "inner must not be contacted");
         let want = Flow {
             name: None,
+            kind: FlowKind::Other,
             ip: dest.ip(),
             port: 22,
         };

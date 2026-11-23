@@ -1,5 +1,6 @@
 //! `_serve egress SANDBOX`: the interceptor a hosted sandbox's egress unit runs.
 
+use super::filter::{Filter, PolicySource, Restart, connection};
 use super::rules::Rules;
 use super::{load_ca, policy, token};
 use crate::cli::Ctx;
@@ -7,7 +8,9 @@ use crate::sandbox;
 use crate::secrets::{SecretsFile, resolve::start_env};
 use crate::smolvm::{Credential, Runner};
 use anyhow::{Result, bail};
-use egress_front::{Decision, Flow, InterceptorConfig, StaticResolver, activated_listener, serve};
+use egress_front::{
+    Decision, Flow, InterceptorConfig, StaticResolver, activated_listener, is_broad, serve,
+};
 use std::sync::Arc;
 
 /// Serves the unit's activated listener until the process is stopped.
@@ -27,11 +30,27 @@ pub fn run<R: Runner>(ctx: &Ctx<R>, name: &str) -> Result<()> {
     for var in missing {
         eprintln!("egress: no value for {var}; requests using it will fail");
     }
-    let hosts = label
+    let hosts: Vec<String> = label
         .bindings
         .iter()
         .flat_map(|b| b.hosts.clone())
         .collect();
+    let source = Arc::new(PolicySource::new(&ctx.paths, name, hosts.clone()));
+    let ruled = source.ruled_hosts().unwrap_or_default();
+    // A CA from before request rules is name-constrained: the interceptor refuses to start with a host
+    // it doesn't permit, so ruled hosts aren't decrypted and their flows count as uninspectable.
+    let mut terminated = hosts.clone();
+    if is_broad(&ca) {
+        terminated.extend(ruled.iter().cloned());
+    } else if !ruled.is_empty() {
+        eprintln!(
+            "egress: this sandbox predates request rules, so their hosts aren't decrypted; recreate it to filter requests"
+        );
+    }
+    terminated.sort();
+    terminated.dedup();
+    // The unit's socket starts the process again on the next connection.
+    let restart = Restart::new(ruled, Box::new(|| std::process::exit(0)));
     let rules = Rules::new(&ctx.paths, name, sb.meta.rec.host_access, hosts);
     let config = InterceptorConfig {
         machine: sb.machine,
@@ -44,11 +63,17 @@ pub fn run<R: Runner>(ctx: &Ctx<R>, name: &str) -> Result<()> {
         ca,
         extra_cas: vec![],
         upstream_roots_pem: vec![],
-        terminate_hosts: Vec::new(),
-        request_filter: None,
+        terminate_hosts: terminated.clone(),
+        request_filter: Some(Arc::new(Filter(source.clone()))),
     };
     let decide = Arc::new(move |f: &Flow| {
-        let (decision, reason) = rules.decide(f);
+        restart.check(source.ruled_hosts().as_deref());
+        let (mut decision, mut reason) = rules.decide(f);
+        if decision == Decision::Allow
+            && let Some(step) = connection(&source.current(), f, &terminated)
+        {
+            (decision, reason) = step;
+        }
         if decision == Decision::Deny {
             eprintln!("{}", deny_line(f, &reason));
         }
@@ -118,6 +143,7 @@ mod tests {
                 "a.com\ndeny x.com:443: forged\u{1b}[2K{}",
                 "z".repeat(400)
             )),
+            kind: egress_front::FlowKind::Other,
             ip: "192.0.2.1".parse().unwrap(),
             port: 443,
         };
