@@ -17,10 +17,19 @@ pub fn request_policy(
     sandbox: &str,
     credential_hosts: &[String],
 ) -> Result<Policy, String> {
+    // Connection rules only, and no glob allows: a glob can match the `*` probe label (`?.x.com`)
+    // without admitting every subdomain, and a doubtful admit must keep the bounded allow.
     let mut plain = policy.clone();
-    plain.rules.retain(|r| !r.is_request());
-    for sp in plain.sandboxes.values_mut() {
-        sp.rules.retain(|r| !r.is_request());
+    let lists = std::iter::once(&mut plain.rules)
+        .chain(plain.sandboxes.values_mut().map(|sp| &mut sp.rules));
+    for list in lists {
+        list.retain(|r| !r.is_request());
+        for r in list.iter_mut().filter(|r| r.decision == Decision::Allow) {
+            r.resources.retain(|x| {
+                !Resource::parse(x).is_ok_and(|x| matches!(x.pattern, Pattern::Glob { .. }))
+            });
+        }
+        list.retain(|r| !r.resources.is_empty());
     }
     let admits = |target: &str| {
         let host_access = compile::host_access(&plain, sandbox);
@@ -613,5 +622,29 @@ mod tests {
             None,
         );
         assert!(!post_passes(&p, &[], "h.com"));
+    }
+
+    #[test]
+    fn a_glob_allow_never_makes_a_subdomain_bounded_allow_moot() {
+        let mut p = deny_all();
+        add(
+            &mut p,
+            Decision::Allow,
+            "?.x.com",
+            "added",
+            None,
+            None,
+            None,
+        );
+        add(
+            &mut p,
+            Decision::Allow,
+            "*.x.com",
+            "added",
+            Some("GET"),
+            None,
+            None,
+        );
+        assert!(!post_passes(&p, &[], "api.x.com"));
     }
 }
