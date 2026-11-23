@@ -809,13 +809,10 @@ fn enforceable(
         return Ok((install.clone(), runtime.clone(), None));
     }
     if !cap.optional {
-        match why {
-            Some(why) => bail!("kit {}: network-policy@2 {why}", k.name),
-            None => bail!(
-                "kit {}: network-policy@2 method/path rules are enforced under hosted egress only",
-                k.name
-            ),
-        }
+        let why = why
+            .as_deref()
+            .unwrap_or("method/path rules are enforced under hosted egress only");
+        bail!("kit {}: network-policy@2 {why}", k.name);
     }
     let host_only = |r: &Rules| Rules {
         allow: r
