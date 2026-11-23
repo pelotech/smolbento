@@ -1678,7 +1678,7 @@ fn ls_shows_what_isnt_enforced_as_the_status_reason() {
     add(&mut p, None, Decision::Allow, "a.com", "added");
     let http = loose_policy(&mut p);
     p.save(&t.ctx.paths).unwrap();
-    // A rule with a method or a path is sbx's `http` type; neither is enforced.
+    // A rule with a method or a path is sbx's `http` type. On a host glob it's skipped.
     assert_eq!(ls(&mut t, &["--type", "http", "-q"]), format!("{http}\n"));
     assert_eq!(
         ls(&mut t, &["--type", "http"]),
@@ -1687,17 +1687,18 @@ POLICY       SOURCE   APPLIES TO   SUMMARY
 sandbox:s1   local    sandbox:s1   http: 1 allow
 "
     );
-    let head = "SOURCE   CREATED VIA   APPLIES TO   POLICY   POLICY_ID    RULE   RULE_ID      TYPE   METHOD   PATH     DECISION   PROTOCOLS   STATUS                       RESOURCES";
+    let head = "SOURCE   CREATED VIA   APPLIES TO   POLICY   POLICY_ID    RULE   RULE_ID      TYPE   METHOD   PATH     DECISION   PROTOCOLS   STATUS                     RESOURCES";
     let status = |text| under(head, &[("STATUS", text), ("RESOURCES", "")]);
     assert_eq!(
         ls(&mut t, &["--type", "http", "--wide"]),
         format!(
             "{head}\n\
-local    added         sandbox:s1   -        sandbox:s1   -      {http}   http   GET      /v1/**   allow      tcp         active — crl*.x.com:         crl*.x.com\n\
-{}\n{}\n{}\n",
-            status("widened to *.x.com; method"),
-            status("GET not enforced; path"),
-            status("/v1/** not enforced"),
+local    added         sandbox:s1   -        sandbox:s1   -      {http}   http   GET      /v1/**   allow      tcp         active — crl*.x.com:       crl*.x.com\n\
+{}\n{}\n{}\n{}\n",
+            status("widened to *.x.com;"),
+            status("crl*.x.com: request rule"),
+            status("not enforced (needs a"),
+            status("named host)"),
         )
     );
     let json = ls(&mut t, &["--decision", "deny", "--json"]);
@@ -1745,7 +1746,8 @@ fn ls_says_each_kit_rule_note_once() {
     assert_eq!(
         json["rules"][0]["reason"],
         "kit.com:8080: port 8080 not enforced by smolvm (all ports allowed; enforced for hosted \
-         sandboxes); method GET not enforced; path /a not enforced; path /b not enforced"
+         sandboxes); method GET, path /a enforced for hosted sandboxes created on 0.38 or later; \
+         method GET, path /b enforced for hosted sandboxes created on 0.38 or later"
     );
 }
 
@@ -1974,4 +1976,89 @@ fn policy_allow_takes_query() {
     ])
     .unwrap();
     assert_eq!(Policy::load(&t.ctx.paths).unwrap().rules.len(), 2);
+}
+
+#[test]
+fn ls_says_where_request_rules_are_enforced_and_shows_a_query_column() {
+    let mut t = test_env(&[]);
+    set_policy(&t, "mode = \"deny-all\"");
+    t.sbt(&[
+        "policy", "allow", "network", "api.dev", "--method", "GET", "--query", "v=1",
+    ])
+    .unwrap();
+    t.stdout();
+    let wide = ls(&mut t, &["--type", "http", "--wide"]);
+    assert!(wide.contains("   PATH   QUERY   DECISION   "), "{wide}");
+    assert!(
+        wide.contains("   GET      -      v=1     allow   "),
+        "{wide}"
+    );
+    let json = ls(&mut t, &["--type", "http", "--json"]);
+    let json: serde_json::Value = serde_json::from_str(&json).unwrap();
+    assert_eq!(
+        json["rules"][0]["reason"],
+        "method GET, query v=1 enforced for hosted sandboxes created on 0.38 or later"
+    );
+    // No listed rule has a query: sbx's columns.
+    assert!(!ls(&mut t, &["--type", "network", "--wide"]).contains("QUERY"));
+}
+
+#[test]
+fn ls_says_a_stored_request_rule_on_every_host_is_skipped() {
+    let mut t = test_env(&[]);
+    let mut p = policy(Mode::DenyAll);
+    // `policy deny` refuses this now; an older version stored it.
+    p.add_rule(
+        None,
+        Decision::Deny,
+        "**",
+        "added",
+        Some("POST".into()),
+        None,
+    )
+    .unwrap();
+    p.save(&t.ctx.paths).unwrap();
+    let json = ls(&mut t, &["--type", "http", "--json"]);
+    let json: serde_json::Value = serde_json::from_str(&json).unwrap();
+    assert_eq!(
+        json["rules"][0]["reason"],
+        "**: request rule not enforced (needs a named host)"
+    );
+}
+
+#[test]
+fn check_notes_name_request_rules_on_the_host() {
+    let mut p = policy(Mode::Balanced);
+    assert!(check_notes(&p, None, "github.com:443").is_empty());
+    p.add_rule(
+        None,
+        Decision::Allow,
+        "github.com",
+        "added",
+        Some("GET".into()),
+        None,
+    )
+    .unwrap();
+    assert_eq!(
+        check_notes(&p, None, "github.com:443"),
+        ["note: request rules apply on this host"]
+    );
+    assert!(check_notes(&p, None, "gitlab.com:443").is_empty());
+    p.add_rule(
+        None,
+        Decision::Deny,
+        "github.com",
+        "added",
+        Some("POST".into()),
+        None,
+    )
+    .unwrap();
+    assert_eq!(
+        check_notes(&p, None, "github.com:443"),
+        [
+            "note: request rules apply on this host",
+            "note: with network.egress=smolvm a request deny drops its whole host from the \
+             allow list, as in 0.37.0"
+        ]
+    );
 }

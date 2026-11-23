@@ -812,7 +812,7 @@ fn enforceable(
         match why {
             Some(why) => bail!("kit {}: network-policy@2 {why}", k.name),
             None => bail!(
-                "kit {}: network-policy@2 method/path rules are not enforced by smolbento",
+                "kit {}: network-policy@2 method/path rules are enforced under hosted egress only",
                 k.name
             ),
         }

@@ -534,7 +534,7 @@ fn network_policy_2_method_and_path_rules_need_to_be_optional() {
     let e = run(workload("w"), vec![req]).unwrap_err();
     assert_eq!(
         format!("{e:#}"),
-        "kit m: network-policy@2 method/path rules are not enforced by smolbento"
+        "kit m: network-policy@2 method/path rules are enforced under hosted egress only"
     );
     let opt = mixin("m").cap(ty, true, n("a.com", &["GET"]));
     let p = run(workload("w"), vec![opt]).unwrap();
@@ -1514,7 +1514,8 @@ fn a_smolvm_kit_still_refuses_required_request_rules() {
         allow: vec![bounded("api.a.com", &["GET"], &[])],
         deny: vec![],
     };
-    let not_enforced = "kit m: network-policy@2 method/path rules are not enforced by smolbento";
+    let not_enforced =
+        "kit m: network-policy@2 method/path rules are enforced under hosted egress only";
     let k = mixin("m").cap(NP2, false, np2(Rules::default(), rules.clone()));
     let e = run(workload("w"), vec![k]).unwrap_err();
     assert_eq!(format!("{e:#}"), not_enforced);

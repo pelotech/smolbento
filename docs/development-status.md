@@ -90,10 +90,13 @@ meanwhile.
   host port reachable from a sandbox, and a process that outlives the attached session.
 - **Credential hosts with a port.** `--credential` can't bind a host with a port. Meanwhile: the builder
   skips logins for registries on a port (documented).
-- **OAuth sentinel tokens and enforced method/path rules.** Both need to read decrypted HTTPS requests;
-  smolvm's proxy only substitutes credentials. Meanwhile: sentinel OAuth binds only its API key (logins happen in the sandbox), and method/path
-  rules (kits' and `policy allow --method/--path`) aren't enforced. Preferred: method/path matching and
-  an OAuth sentinel mode upstream in smolvm. If declined: smolbento's own egress proxy, as its own phase.
+- **OAuth sentinel tokens.** They need to read decrypted HTTPS requests; smolvm's proxy only
+  substitutes credentials. Meanwhile, sentinel OAuth binds only its API key (logins happen in the
+  sandbox). Preferred: an OAuth sentinel mode upstream in smolvm.
+- **Request rules: the rest.** Hosted sandboxes enforce method, path and query rules
+  ([Request rules](network-and-secrets.md#request-rules)). Still to do: closing the bypasses there (a
+  spoofed or missing name on a ruled host's address), plain HTTP filtered per request rather than
+  refused, and request rules under `network.egress=smolvm`.
 - **Guest DNS upstream order.** Since smolvm 1.34, guest DNS moves to the host's next resolver when one
   doesn't answer. Not yet checked: a name the first resolver refuses (before 1.34 that failed in every VM,
   even when the host resolved it). Meanwhile: no workaround; the e2e tests avoid such names.
@@ -124,8 +127,6 @@ in [sbx compatibility](sbx-compatibility.md). Worth another look:
   - `kit add` installs a kit's image layers into a running v3 sandbox; smolbento says `recreate
     required` (smolvm can't add layers to a running machine).
   - `sbx df` (disk usage of images, sandboxes and volumes).
-  - HTTP rules with `--query` parameters, and case-insensitive path matching: stored only, like
-    `--method`/`--path`, until smolvm enforces request rules.
 - **Kept on purpose; recheck if sbx changes:** `kit add` applies live (sbx recreates the sandbox and
   refuses some kits); plain HTTP for loopback registries (sbx: HTTPS only); the `_builder` sandbox (sbx:
   host buildx); the built-in `docker` kit; v3 mixins on built-in agents (sbx refuses).

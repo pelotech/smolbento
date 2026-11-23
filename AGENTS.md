@@ -71,7 +71,8 @@ As of smolvm 1.36. Check the reference source before depending on anything not l
   matches an exact host, or `*.domain` for subdomains only. `--deny-cidr` (create and run only) is
   checked before every allow. `--allow-udp CIDR[:PORT[-END]]` is the only port-aware rule. Cloud
   metadata is always blocked. smolvm has no host-port, host-deny, method or path rules: see
-  `docs/sbx-compatibility.md`.
+  `docs/sbx-compatibility.md`. Hosted egress enforces them in bento's egress process (method, path
+  and query rules by decrypting the hosts they name: `docs/network-and-secrets.md#request-rules`).
 - **Interception:** credential substitution (`--credential`) can't be combined with
   `--egress-interceptor`/`--mediated-egress` or with `--trust-host-certs`. Proxy variables aren't
   forwarded unless `--use-host-proxy` is given. Since 1.35, a credential host's responses have the
@@ -80,6 +81,9 @@ As of smolvm 1.36. Check the reference source before depending on anything not l
   default `network.egress`) starts with `--egress-interceptor`, so bento's egress process decides
   every TCP flow (by address and port, then by SNI or `Host:`) and swaps its secrets; smolvm gets
   no `--credential`. smolvm still applies the allow list, and drops every UDP datagram but DNS.
+  It decrypts secret hosts and request-rule hosts with one broad CA per sandbox, and judges each
+  request there through the interceptor's request filter (a 403 names the rule). A change to the
+  set of request-rule hosts makes it exit 0, and its socket starts it again.
 - **Credential values change live (1.35.4):** `machine credentials refresh -n M [BINDING…]` reads
   each binding's variable from its own environment and the running machine uses it from its next
   request. It refuses an unset or empty variable, so it can't take a value away. smolbento names

@@ -8,6 +8,7 @@ use serde::Serialize;
 
 use super::invalid_flag;
 use crate::cli::{Ctx, PolicyLsArgs, aligned, plural, table};
+use crate::egress::request_rules;
 use crate::policy::{Decision, Mode, Policy, Rule, presets};
 use crate::sandbox;
 use crate::smolvm::Runner;
@@ -46,6 +47,8 @@ pub(super) struct LsRule {
     method: Option<String>,
     #[serde(skip)]
     path: Option<String>,
+    #[serde(skip)]
+    query: Option<String>,
 }
 
 #[derive(Serialize)]
@@ -85,6 +88,7 @@ impl LsRule {
             },
             method: None,
             path: None,
+            query: None,
         }
     }
 
@@ -122,10 +126,30 @@ fn rule_notes(rule: &Rule) -> Vec<String> {
             Some(format!("{}: {note}", r.raw))
         })
         .collect();
-    for (label, value) in [("method", &rule.method), ("path", &rule.path)] {
-        if let Some(v) = value {
-            notes.push(format!("{label} {v} not enforced"));
-        }
+    if !rule.is_request() {
+        return notes;
+    }
+    // The egress process decrypts named hosts only: a request rule on any other is skipped.
+    let (named, skipped): (Vec<_>, Vec<_>) = rule.parsed().partition(|r| {
+        request_rules::check(rule.decision, std::slice::from_ref(r), None, None, None).is_ok()
+    });
+    notes.extend(
+        (skipped.iter())
+            .map(|r| format!("{}: request rule not enforced (needs a named host)", r.raw)),
+    );
+    if !named.is_empty() {
+        let qualifiers: Vec<String> = [
+            ("method", &rule.method),
+            ("path", &rule.path),
+            ("query", &rule.query),
+        ]
+        .into_iter()
+        .filter_map(|(label, v)| Some(format!("{label} {}", v.as_ref()?)))
+        .collect();
+        notes.push(format!(
+            "{} enforced for hosted sandboxes created on 0.38 or later",
+            qualifiers.join(", ")
+        ));
     }
     notes
 }
@@ -153,11 +177,7 @@ fn ls_rule(rule: &Rule, scope: Option<&str>) -> LsRule {
         policy_id: Some(policy_id),
         scope: scoped.clone().unwrap_or_else(|| "global".into()),
         applies_to: scoped.unwrap_or_else(|| "all".into()),
-        resource_type: if rule.method.is_some() || rule.path.is_some() {
-            "http"
-        } else {
-            "network"
-        },
+        resource_type: if rule.is_request() { "http" } else { "network" },
         origin: if scope.is_some() { "scoped" } else { "local" },
         layer,
         reason: reason(&rule_notes(rule)),
@@ -171,6 +191,7 @@ fn ls_rule(rule: &Rule, scope: Option<&str>) -> LsRule {
         }),
         method: rule.method.clone(),
         path: rule.path.clone(),
+        query: rule.query.clone(),
         ..LsRule::global(&rule.id, rule.decision, rule.resources.clone())
     }
 }
@@ -207,6 +228,7 @@ fn kit_rule(sandbox: &str, decision: Decision, rules: &[&Rule]) -> LsRule {
         editable: false,
         method: None,
         path: None,
+        query: None,
         ..ls_rule(rules[0], Some(sandbox))
     }
 }
@@ -468,7 +490,8 @@ fn wrap(text: &str, width: usize) -> Vec<String> {
 }
 
 /// sbx's `--wide` table: a row per rule, with a line per resource (sorted) and a blank line
-/// between rules. STATUS is there only when some rule has more than `active` to say; it wraps
+/// between rules. STATUS is there only when some rule has more than `active` to say, and QUERY
+/// only when some rule has a query (sbx has no such column); STATUS wraps
 /// at sbx's width. Unlike `table`, lines keep their padding, as sbx's do.
 fn render_wide(rows: &[LsRule]) -> String {
     let head = [
@@ -482,6 +505,7 @@ fn render_wide(rows: &[LsRule]) -> String {
         "TYPE",
         "METHOD",
         "PATH",
+        "QUERY",
         "DECISION",
         "PROTOCOLS",
         "STATUS",
@@ -521,6 +545,7 @@ fn render_wide(rows: &[LsRule]) -> String {
                 first(r.resource_type.to_string()),
                 each(dash(r.method.as_deref())),
                 each(dash(r.path.as_deref())),
+                each(dash(r.query.as_deref())),
                 first(r.decision.name().to_string()),
                 first(r.protocols().join(",")),
                 status.get(n).cloned().unwrap_or_default(),
@@ -528,10 +553,17 @@ fn render_wide(rows: &[LsRule]) -> String {
             ]);
         }
     }
-    if rows.iter().all(|r| r.reason.is_none()) {
-        let status = head.iter().position(|h| *h == "STATUS").expect("a column");
-        for line in &mut lines {
-            line.remove(status);
+    // sbx's 14 columns, unless a rule has something for STATUS or (smolbento's) QUERY. STATUS
+    // goes first: it's after QUERY, so removing it leaves QUERY's index as it was.
+    for (column, unused) in [
+        ("STATUS", rows.iter().all(|r| r.reason.is_none())),
+        ("QUERY", rows.iter().all(|r| r.query.is_none())),
+    ] {
+        if unused {
+            let at = head.iter().position(|h| *h == column).expect("a column");
+            for line in &mut lines {
+                line.remove(at);
+            }
         }
     }
     aligned(&lines).iter().map(|l| format!("{l}\n")).collect()

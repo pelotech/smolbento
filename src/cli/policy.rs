@@ -863,7 +863,34 @@ fn check<R: Runner>(ctx: &Ctx<R>, policy: &Policy, a: &CheckArgs) -> Result<i32>
     for (label, value) in lines {
         writeln!(&ctx.out, "  {label:<13}{value}")?;
     }
+    // stderr, so the block stays what sbx prints.
+    if !udp {
+        for n in check_notes(policy, scope, &target) {
+            eprintln!("{n}");
+        }
+    }
     Ok(code)
+}
+
+/// What `policy check`'s connection verdict leaves out: request rules on the target's host, and
+/// that a request deny there still drops the whole host under `network.egress=smolvm`.
+fn check_notes(policy: &Policy, scope: Option<&str>, target: &str) -> Vec<String> {
+    let ruled: Vec<Decision> = compile::active(policy, scope, &[])
+        .filter(|(r, _)| r.is_request() && r.parsed().any(|res| res.matches(target)))
+        .map(|(r, _)| r.decision)
+        .collect();
+    let mut notes = Vec::new();
+    if !ruled.is_empty() {
+        notes.push("note: request rules apply on this host".to_string());
+    }
+    if ruled.contains(&Decision::Deny) {
+        notes.push(
+            "note: with network.egress=smolvm a request deny drops its whole host from the \
+             allow list, as in 0.37.0"
+                .to_string(),
+        );
+    }
+    notes
 }
 
 /// sbx's (cobra's) error for a flag of `command` whose value isn't one of `allowed`.

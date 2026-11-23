@@ -56,7 +56,11 @@ reachable. `balanced` and `deny-all` block that unless you allow the address.
 
   With `network.egress=smolvm`, host rules are
   looser than sbx's: `*.x.com` matches any depth, wildcards inside a label widen, and ports aren't
-  enforced. Methods and paths are never enforced. See [sbx compatibility](sbx-compatibility.md).
+  enforced, and method, path and query rules aren't enforced. See [sbx compatibility](sbx-compatibility.md).
+
+  Hosted sandboxes enforce method, path and query rules per request on the hosts they name. The same
+  name spoofing gets past them: a guest that connects to a ruled host's address while sending
+  another name, or none, isn't filtered. See [Request rules](network-and-secrets.md#request-rules).
 
 ## Kits
 

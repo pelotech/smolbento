@@ -1737,7 +1737,7 @@ fn kit_validate_refuses_request_rules_under_smolvm() {
     let e = t.sbt(&["kit", "validate", "./rr"]).unwrap_err();
     assert_eq!(
         format!("{e:#}"),
-        "kit rr: network-policy@2 method/path rules are not enforced by smolbento"
+        "kit rr: network-policy@2 method/path rules are enforced under hosted egress only"
     );
 }
 
