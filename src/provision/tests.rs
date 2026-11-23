@@ -1321,6 +1321,42 @@ fn install_only_credentials_fall_back_to_smolvm() {
     );
 }
 
+/// The egress process judges by the stored policy, where install-phase kit rules apply only while
+/// the install hooks run; nothing tells it when they do.
+#[test]
+fn install_phase_kit_rules_fall_back_to_smolvm() {
+    use crate::kits::args::ArgValues;
+    use crate::kits::model::{Cap, CapBody, Content, Kind, Kit, NetRule, Rules};
+    let (t, _ctl) = egress_env("hosted", &[]);
+    let mut wl = Kit::test("wl", Kind::Workload);
+    wl.content = Content::Image("img:1".into());
+    let mut k = Kit::test("k", Kind::Mixin);
+    k.caps = vec![Cap::new(
+        "com.docker.sandbox/network-policy@2".to_string(),
+        false,
+        CapBody::Network {
+            install: Rules {
+                allow: vec![NetRule::host("registry.npmjs.org")],
+                deny: vec![],
+            },
+            runtime: Rules::default(),
+        },
+    )];
+    let plan = crate::kits::resolve::resolve(wl, vec![k], &ArgValues::default()).unwrap();
+    let mut req = CreateRequest {
+        name: "s1".into(),
+        ..Default::default()
+    };
+    create_with(&t.ctx, &mut req, &[], Some(&plan), None, &mut |_| {}).unwrap();
+    assert!(req.egress.is_none());
+    assert!(!t.ctx.paths.egress("s1").exists());
+    assert!(
+        t.calls_of("machine start")
+            .iter()
+            .all(|l| !l.contains("--egress-interceptor"))
+    );
+}
+
 #[test]
 fn a_hosted_start_passes_the_interceptor_and_token_not_values() {
     let (t, req, result) = egress_create("hosted", |_| {});

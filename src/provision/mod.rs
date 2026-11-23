@@ -473,6 +473,20 @@ pub fn prepare_create<R: Runner>(
         );
         hosted = false;
     }
+    // The egress process judges by the stored policy, and nothing tells it when the install hooks
+    // run, which alone may use install-phase kit rules.
+    if hosted
+        && first_start
+            .as_ref()
+            .is_some_and(|k| !k.steps.install_rules.is_empty())
+    {
+        crate::warning!(
+            "install-phase kit network rules need network.egress=smolvm; creating {} with smolvm \
+             egress",
+            req.name
+        );
+        hosted = false;
+    }
     if hosted && ctx.services.plan(&req.name).is_none() {
         crate::warning!(
             "no service manager for its egress unit; creating {} with smolvm egress",

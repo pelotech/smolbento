@@ -214,7 +214,7 @@ pub const SETTINGS: &[SettingDef] = &[
         key: "network.egress",
         env: "SMOLBENTO_NETWORK_EGRESS",
         default: "hosted",
-        help: "Who handles a sandbox's egress: hosted (a bento-run process that enforces its network rules and swaps its credentials; smolvm without a service manager or with install-only credentials) or smolvm (built in).",
+        help: "Who handles a sandbox's egress: hosted (a bento-run process that enforces its network rules and swaps its credentials; smolvm without a service manager, or for a kit's install-only credentials or install-phase network rules) or smolvm (built in).",
     },
     SettingDef {
         key: "ssh.agentForwardingEnabled",
