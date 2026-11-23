@@ -90,7 +90,7 @@ impl NetworkSpec {
 
     /// Flags for `machine update`: the whole list is replaced, never patched. On a running machine
     /// smolvm drops the IPs it learned for names the new list no longer allows, even when the new
-    /// list has no hosts (fixed in smolvm 1.35.3).
+    /// list has no hosts.
     pub fn update_args(&self) -> Vec<String> {
         match self {
             NetworkSpec::Open => vec!["--net".into(), "--reset-allow-list".into()],
