@@ -40,8 +40,10 @@ bento create claude . --deny-network evil.com,tracker.example
 ```
 
 Rules take hosts (`api.x.com`), wildcards (`*.x.com`, `**.x.com`), IPs and CIDRs, comma-separated.
-`**` allows everything. Where smolvm enforces a rule more loosely than sbx, see [sbx
-compatibility](sbx-compatibility.md).
+`**` allows everything. A sandbox's egress process enforces the rules as sbx does, ports included,
+for every connection that names its host ([Hosted egress](#hosted-egress), the default). Where
+smolvm enforces a rule more loosely than sbx (`network.egress=smolvm`, or a connection with no
+name), see [sbx compatibility](sbx-compatibility.md).
 
 `bento policy ls` prints what sbx does. Under `balanced` with one allow rule and one deny rule:
 
@@ -61,22 +63,28 @@ network --id`), `--json` the same rules as `{"rules": [...]}`, and `-q` only the
   `run` warns and changes nothing. If the create fails, its rules are removed.
 - A sandbox's secret hosts, and their subdomains, are always reachable. `policy deny` of one is
   refused, naming the secret's service.
-- A deny with a port (`host.example.com:8080`) isn't enforced: smolvm can't filter by port. Deny the
-  host without a port. The exception is a deny with exactly the same text as an allow, which cancels
-  that allow. `policy ls --wide` says in STATUS which rules aren't fully enforced; `policy check` without a port
-  checks 443. Details are in [sbx compatibility](sbx-compatibility.md).
+- Ports (`host.example.com:8080`) are enforced for hosted sandboxes, in allows and denies. smolvm
+  can't filter by port, so with `network.egress=smolvm` an allow opens every port and a deny with a
+  port isn't enforced: deny the host without a port. The exception is a deny with exactly the same
+  text as an allow, which cancels that allow. `policy ls --wide` says in STATUS which rules smolvm
+  doesn't fully enforce; `policy check` without a port checks 443. Details are in [sbx
+  compatibility](sbx-compatibility.md).
 - `balanced` allows its hosts on any port. sbx limits them to 443.
 - `bento policy reset` stops running sandboxes, then removes the mode and every rule. The next create
   or start asks for a mode again.
-- Blocked requests come from smolvm's egress log. `policy approval` lists hosts with no rule yet;
+- Blocked requests come from smolvm's egress log. A connection a hosted sandbox's egress process
+  denies (by port or name) is logged in its `egress.log` instead, and isn't in `policy log` or
+  `policy approval`. `policy approval` lists hosts with no rule yet;
   the host is the approval ID. `--option dismiss` adds no rule and hides the host until it is
   blocked again.
 - `policy check network` takes a URL too, as sbx does: `https://example.com/x` checks
   `example.com:443` (`http` is port 80; another scheme needs a port). The host's loopback
   (`localhost`, `127.0.0.1`, `::1`, `host.docker.internal`) is denied whatever the mode unless the
   sandbox has host access, which a `localhost` allow rule gives at create; the check says so.
-- `policy check network --protocol udp HOST:PORT` checks a UDP destination. smolvm admits UDP
-  wherever its allow list admits TCP, except port 53: it answers DNS itself.
+- `policy check network --protocol udp HOST:PORT` checks a UDP destination. With
+  `network.egress=smolvm`, smolvm admits UDP wherever its allow list admits TCP, except port 53: it
+  answers DNS itself. A hosted sandbox sends no UDP but DNS, whatever the rules, and an allowed
+  verdict says so.
 - `policy rm network --resource HOST --method GET --path '/v1/**'` removes the host from the rule
   with those methods and that path only.
 
@@ -100,21 +108,24 @@ bento policy allow network --sandbox claude-myrepo localhost
   For such a sandbox, later `localhost` rules open and close access live. Other sandboxes have
   loopback blocked for life; a rule added later prints `note: NAME were created without host access;
   recreate them to use it`.
-- smolvm can't open a single host port yet, so `localhost:11434` opens every port on your
-  `127.0.0.1` to those sandboxes, and `policy allow` warns (`warning: smolvm can't open a single
-  host port yet; …`). See [Security](SECURITY.md#host-services-localhost-rules).
+- A hosted sandbox reaches only the rule's port: `localhost:11434` opens `11434` and nothing else,
+  and the guest's `Host:` or SNI plays no part. smolvm can't open a single host port, so with
+  `network.egress=smolvm` it opens every port on your `127.0.0.1`. `policy allow` warns about that
+  (`warning: smolvm can't open a single host port yet; …`) for hosted sandboxes too. See
+  [Security](SECURITY.md#host-services-localhost-rules).
 - Kit rules never grant host access, and `_builder` never has it. An `allow-all` sandbox keeps host
   access until recreated.
 - Each start adds `100.96.0.1 host.docker.internal` to `/etc/hosts`. The name resolves everywhere,
   but only sandboxes created with host access can connect.
 - `127.0.0.1`, `::1` and `host.docker.internal` rules aren't host-services rules; the rule must say
-  `localhost`. A blocked request gets connection refused. sbx returns `403 Approval required`
-  instead.
+  `localhost`. A blocked request gets connection refused (on a hosted sandbox, its connection is
+  reset). sbx returns `403 Approval required` instead.
 
 ## Secrets
 
-Agents never see your API keys. The variable holds a placeholder inside the sandbox, and smolvm
-swaps in the real value only on HTTPS requests to that service's hosts. An agent whose kit takes
+Agents never see your API keys. The variable holds a placeholder inside the sandbox, and the
+sandbox's egress process (smolvm with `network.egress=smolvm`) swaps in the real value only on HTTPS
+requests to that service's hosts. An agent whose kit takes
 the key another way gets no variable: `claude` reads it through its `apiKeyHelper`.
 
 ```sh
@@ -153,34 +164,69 @@ When things take effect:
   `Applied to … now`), from their next request, and to stopped ones at their **next start**.
   Removing a secret (`secret rm`) still waits for the next start, and so does a new value for a
   sandbox an earlier smolbento made, when a kit gave it the service's credential.
-- A secret for a service the sandbox wasn't created with needs a **recreate**; `secret set` tells
-  you which.
+- A secret for a service the sandbox wasn't created with needs a **recreate** on a hosted sandbox
+  (the default), and `secret set` tells you which. With `network.egress=smolvm` it's bound to a
+  running sandbox at once, or from the next start of one that booted with no secrets.
 
 ### Hosted egress
 
-`network.egress=hosted` (experimental, set before create) makes bento run the credential
-interceptor instead of smolvm: one socket-activated `bento _serve egress` process per sandbox
-(a launchd job on macOS, a `systemd --user` socket and service on Linux). It resolves secrets
-when it starts, and the guest sees placeholders as usual. A sandbox with no credentials gets
-no egress process. It needs a service manager: create is refused without one (launchd, or
-`systemd --user` with a private socket directory).
+Every new sandbox with a network gets hosted egress unless `network.egress=smolvm` is set before
+create. bento runs one socket-activated `bento _serve egress` process per sandbox (a launchd job on
+macOS, a `systemd --user` socket and service on Linux), and every byte the sandbox sends over TCP
+goes through it. It enforces the network rules and swaps the sandbox's secrets. It resolves secrets
+when it starts, and the guest sees placeholders as usual.
 
-The egress process logs to `<data>/egress/<name>/egress.log`: startup errors, a secret that
-failed to resolve (by name, never value) and dropped flows. Look there when a hosted sandbox's
-connections fail. `bento rm` removes the log with the sandbox.
+Each connection is decided twice, and smolvm's allow list still applies first:
 
-A fork of a hosted sandbox gets its own egress process on its own port, with a copy of its
-parent's CA and token: the copied guest already trusts that CA and holds those placeholders.
+- **By address and port**, when the guest connects. An IP or CIDR deny rule (`10.0.0.0/8`,
+  `1.1.1.0/24:443`), or a host port no `localhost` rule opens, refuses the connection before the
+  destination is dialled. Other address checks are smolvm's allow list's.
+- **By name and port**, from the guest's first bytes: the TLS SNI, or the HTTP `Host:` header.
+  Nothing is forwarded until they're read. A deny (a denied host, or a port its rules don't allow)
+  closes the connection. A name deny inside an allowed wildcard (`**.github.com` allowed,
+  `gist.github.com` denied) holds.
 
-Limits in this release:
+Either way the guest sees the connection open, then reset, not refused: smolvm accepts it before
+asking the egress process. curl exits 35 or 56 (52 for plain HTTP), not 7.
+- A client that sends no name (SSH, TLS without SNI), or waits more than 200 ms before its first
+  bytes, is judged by address and port only, so name rules don't apply to it.
+- The host's gateway (`host.docker.internal`, `100.96.0.1`) is judged strictly as `localhost:<port>`:
+  only a `localhost` rule for that port opens it.
 
-- Install-only credentials (a kit's install hooks) are refused at create.
-- `secret set` and `secret rm` restart the sandbox's egress process, so a new value applies at
-  once and a removed one is gone at once; open connections drop at that moment. A stopped
-  sandbox's process is restarted before the machine starts, so boot-time connections use the
-  new value. Binding a *new* service needs a recreate
-  (`<name> uses hosted egress; recreate it to bind <service>`); live binding is planned.
-- The Linux systemd units are tested in CI only; the macOS launchd path is tested by hand.
+The egress process reads rule changes at the next connection, with no restart. smolvm's allow list
+changes as for any sandbox: a switch between `allow-all` and a restricted mode reaches it at the
+next start. A `policy.toml` that can't be read denies every connection until it can, with the
+reason logged.
+
+Caveats:
+
+- **CDNs:** a name rule judges the name the guest sends, and many sites share a CDN's addresses. An
+  address rule or smolvm's allow list (resolved at start) can admit or refuse a shared address for
+  every name on it.
+- **UDP:** smolvm drops every datagram from a hosted sandbox except DNS, even to allowed hosts. QUIC
+  falls back to TCP; NTP and mosh fail. Use `network.egress=smolvm` for a sandbox that needs UDP.
+- **Live secret bindings:** a hosted sandbox can't bind a new service while it exists: `secret set`
+  says `<name> uses hosted egress; recreate it to bind <service>`. A new value or a removed one
+  applies at once: `secret set` and `secret rm` restart the egress process, and open connections
+  drop at that moment. A stopped sandbox's process is restarted before the machine starts, so
+  boot-time connections use the new value. Live binding is planned.
+- No flow limits apply.
+
+A sandbox falls back to smolvm egress, with a warning at create, when there's no service manager
+for its unit (launchd, or `systemd --user` with a private socket directory and a short enough socket
+path), when it has install-only credentials, or when a kit gives it install-phase network rules
+(both for a kit's install hooks). `_builder` is never hosted.
+
+The egress process logs to `<data>/egress/<name>/egress.log`: startup errors, a secret that failed
+to resolve (by name, never value), and each denied connection with its reason (`deny
+gist.github.com:443: …`). Look there when a hosted sandbox's connections fail. `bento rm` removes
+the log with the sandbox.
+
+A fork of a hosted sandbox gets its own egress process on its own port, with a copy of its parent's
+CA and token: the copied guest already trusts that CA and holds those placeholders. It keeps the
+parent's sandbox rules, as every fork does.
+
+The Linux systemd units are tested in CI, and the macOS launchd units by running `just e2e` on a Mac.
 
 ### Registry credentials
 

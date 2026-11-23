@@ -76,7 +76,10 @@ As of smolvm 1.36. Check the reference source before depending on anything not l
   `--egress-interceptor`/`--mediated-egress` or with `--trust-host-certs`. Proxy variables aren't
   forwarded unless `--use-host-proxy` is given. Since 1.35, a credential host's responses have the
   injected value replaced by the placeholder, so an echo can't prove substitution: check the
-  server's answer instead (the e2e tests use httpbin's `/basic-auth`).
+  server's answer instead (the e2e tests use httpbin's `/basic-auth`). A hosted sandbox (the
+  default `network.egress`) starts with `--egress-interceptor`, so bento's egress process decides
+  every TCP flow (by address and port, then by SNI or `Host:`) and swaps its secrets; smolvm gets
+  no `--credential`. smolvm still applies the allow list, and drops every UDP datagram but DNS.
 - **Credential values change live (1.35.4):** `machine credentials refresh -n M [BINDING…]` reads
   each binding's variable from its own environment and the running machine uses it from its next
   request. It refuses an unset or empty variable, so it can't take a value away. smolbento names
