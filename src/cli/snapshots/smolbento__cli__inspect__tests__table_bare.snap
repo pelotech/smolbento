@@ -1,12 +1,13 @@
 ---
 source: src/cli/inspect.rs
-expression: t.stdout()
+expression: out
 ---
 
   Name:            shell-x
   Agent:           shell
   Kits:            none
   State:           stopped
+  Created with:    v0.27.0
   Image:           -
   Workspace:       -
   Clone source:    -

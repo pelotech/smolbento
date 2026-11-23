@@ -8,5 +8,6 @@ expression: t.stdout()
   "agent": "shell",
   "kits": [],
   "state": "stopped",
+  "created_version": "v0.27.0",
   "sessions": 0
 }

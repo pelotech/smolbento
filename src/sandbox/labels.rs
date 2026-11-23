@@ -235,8 +235,8 @@ pub struct Meta {
     pub workspaces: Vec<String>,
     /// Unix seconds.
     pub created: i64,
-    /// The smolbento version that created it; `None` for a sandbox from before 0.27.
-    pub version: Option<String>,
+    /// The smolbento version that created it.
+    pub version: String,
     /// The sandbox's private dockerd (`sbx.docker`).
     pub engine: Engine,
     /// What the `CreateRequest` gave, recorded unchanged.
@@ -305,7 +305,7 @@ impl Meta {
                 KITS,
                 (!self.rec.kits.is_empty()).then(|| json(&self.rec.kits)),
             ),
-            (VERSION, self.version.clone()),
+            (VERSION, Some(self.version.clone())),
             (COMMAND, self.rec.command.as_ref().map(json)),
             (USER, self.rec.user.clone()),
             (WORKDIR, self.rec.image_workdir.clone()),
@@ -369,7 +369,7 @@ impl Meta {
                 .get(CREATED)
                 .and_then(|c| c.parse().ok())
                 .unwrap_or(0),
-            version: text(VERSION),
+            version: text(VERSION).unwrap_or_default(),
             engine: Engine::from_label(labels.get(DOCKER).map(String::as_str)),
             clone_repo: flag(CLONE)
                 .then(|| text(CLONE_TOP).or(text(WORKSPACE)))
@@ -650,7 +650,7 @@ mod tests {
         assert_eq!(Meta::from_labels(&labels), Some(m));
         // None of them is written for a sandbox that doesn't use it, so its labels don't change.
         let plain = meta().to_labels();
-        assert_eq!(plain.len(), 6, "{plain:?}");
+        assert_eq!(plain.len(), 7, "{plain:?}");
     }
 
     #[test]
