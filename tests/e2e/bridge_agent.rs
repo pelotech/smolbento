@@ -200,8 +200,13 @@ pub(crate) fn host_services_serve_a_detached_sandbox_and_are_removed_with_it() {
 
     // `rm`: units, files and sockets are gone.
     let files = unit_files(&e, &e.name);
+    let egress = |f: &PathBuf| f.to_string_lossy().contains("egress");
+    assert!(
+        files.iter().any(egress),
+        "a hosted sandbox's egress unit: {files:?}"
+    );
     assert_eq!(
-        files.len(),
+        files.iter().filter(|f| !egress(f)).count(),
         if cfg!(target_os = "macos") { 2 } else { 4 },
         "{files:?}"
     );

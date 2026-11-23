@@ -140,7 +140,10 @@ pub(crate) fn http_answers(e: &E2e, ip: &str) -> bool {
 #[test]
 #[ignore = "boots real VMs and reaches httpbin.org; run with `just e2e`"]
 pub(crate) fn policy_changes_apply_on_start_and_live() {
-    let e = E2e::new("pol");
+    // smolvm's allow list by address: a hosted sandbox also judges `Host: <ip>` by the rules, which
+    // allow httpbin.org by name only (`hosted_policy_change_is_live` covers hosted).
+    let mut e = E2e::new("pol");
+    e.vars.push(("SMOLBENTO_NETWORK_EGRESS", "smolvm".into()));
     e.create_alpine();
     e.ok(&["policy", "init", "deny-all"]);
     e.ok(&["stop", &e.name]); // allow-all -> restricted applies on the next start
@@ -278,10 +281,194 @@ pub(crate) fn hosted_egress_swaps_a_credential() {
     assert!(!e.dir.path().join("data/egress").join(&e.name).exists());
 }
 
+/// curl's exit status fetching `url` from sandbox `sb` (0: any HTTP answer), and what it printed.
+fn curl(e: &E2e, sb: &str, url: &str) -> (i32, String) {
+    let out = e.sh_ok(
+        sb,
+        &format!("curl -sS -o /dev/null -m 10 {url} 2>&1; echo $?"),
+    );
+    let code = out.lines().last().and_then(|l| l.parse().ok());
+    (code.unwrap_or(-1), out)
+}
+
+/// Sandbox `sb`'s egress log: a line per connection its egress process denied.
+fn egress_log(e: &E2e, sb: &str) -> String {
+    let log = e.dir.path().join("data/egress").join(sb).join("egress.log");
+    std::fs::read_to_string(log).unwrap()
+}
+
+/// A hosted sandbox's egress process enforces a rule's port, which smolvm can't.
+#[test]
+#[ignore = "boots real VMs and reaches github.com; run with `just e2e`"]
+pub(crate) fn hosted_port_rule() {
+    let e = E2e::new("hport");
+    e.ok(&["policy", "init", "deny-all"]);
+    let rules = "dl-cdn.alpinelinux.org,github.com:443";
+    e.ok(&["policy", "allow", "network", rules]);
+    e.create_alpine_with("apk add -q curl");
+    let (code, out) = curl(&e, &e.name, "https://github.com");
+    assert_eq!(code, 0, "port 443 is allowed: {out}");
+    let (code, out) = curl(&e, &e.name, "http://github.com");
+    assert_ne!(code, 0, "port 80 isn't: {out}");
+    let log = egress_log(&e, &e.name);
+    assert!(log.contains("deny github.com:80: "), "{log}");
+}
+
+/// A name deny inside an allowed wildcard closes the connection once the guest sends its SNI.
+#[test]
+#[ignore = "boots real VMs and reaches github.com; run with `just e2e`"]
+pub(crate) fn hosted_host_deny_inside_wildcard() {
+    let e = E2e::new("hwild");
+    e.ok(&["policy", "init", "deny-all"]);
+    let rules = "dl-cdn.alpinelinux.org,**.github.com";
+    e.ok(&["policy", "allow", "network", rules]);
+    e.ok(&["policy", "deny", "network", "gist.github.com"]);
+    e.create_alpine_with("apk add -q curl");
+    let (code, out) = curl(&e, &e.name, "https://api.github.com");
+    assert_eq!(code, 0, "the wildcard allows api.github.com: {out}");
+    let (code, out) = curl(&e, &e.name, "https://gist.github.com");
+    assert!(
+        [35, 56].contains(&code),
+        "connected, then reset (TLS handshake or receive error): {out}"
+    );
+    let log = egress_log(&e, &e.name);
+    assert!(log.contains("deny gist.github.com:443: "), "{log}");
+}
+
+/// An address deny with a port is decided before the guest sends anything: the egress process
+/// answers smolvm's preamble with `ECONNREFUSED` (111). smolvm's stack has already accepted the
+/// guest's SYN, so the guest sees the connection reset, not refused: curl's exit is 35 or 56, not 7.
+#[test]
+#[ignore = "boots real VMs and reaches 1.1.1.1; run with `just e2e`"]
+pub(crate) fn hosted_cidr_deny_is_a_refused_connect() {
+    let e = E2e::new("hcidr");
+    e.ok(&["policy", "deny", "network", "1.1.1.0/24:443"]);
+    e.create_alpine_with("apk add -q curl");
+    let (code, out) = curl(&e, &e.name, "http://1.1.1.1");
+    assert_eq!(code, 0, "port 80 is allowed: {out}");
+    let (code, out) = curl(&e, &e.name, "https://1.1.1.1");
+    assert!([35, 56].contains(&code), "port 443 is reset: {out}");
+    let log = egress_log(&e, &e.name);
+    assert!(log.contains("deny 1.1.1.1:443: "), "{log}");
+}
+
+/// A `localhost:PORT` rule opens that host port alone to a hosted sandbox, where smolvm would open
+/// every port.
+#[test]
+#[ignore = "boots real VMs; run with `just e2e`"]
+pub(crate) fn hosted_localhost_port() {
+    let (a, b) = (
+        super::network::host_service(),
+        super::network::host_service(),
+    );
+    let e = E2e::new("hlo");
+    e.ok(&["policy", "init", "deny-all"]);
+    e.ok(&["policy", "allow", "network", &format!("localhost:{a}")]);
+    e.create_alpine_offline();
+    let url = |p: u16| format!("http://host.docker.internal:{p}/");
+    assert!(reachable(&e, &url(a)), "the rule's port");
+    assert!(!reachable(&e, &url(b)), "another host port");
+}
+
+/// A deny applies to a running hosted sandbox from its next connection.
+#[test]
+#[ignore = "boots real VMs and reaches httpbin.org; run with `just e2e`"]
+pub(crate) fn hosted_policy_change_is_live() {
+    let e = E2e::new("hlive");
+    e.create_alpine_offline();
+    let boot = root_out(&e.name, "cat /proc/sys/kernel/random/boot_id");
+    assert!(reachable(&e, "https://httpbin.org"), "allow-all");
+    // Scoped: a global deny is refused while another test's sandbox binds an httpbin secret.
+    e.ok(&[
+        "policy",
+        "deny",
+        "network",
+        "--sandbox",
+        &e.name,
+        "httpbin.org",
+    ]);
+    assert!(!reachable(&e, "https://httpbin.org"), "denied live");
+    assert_eq!(
+        root_out(&e.name, "cat /proc/sys/kernel/random/boot_id"),
+        boot,
+        "no restart"
+    );
+}
+
+/// A fork of a hosted sandbox gets its own egress process: it swaps the parent's credential and
+/// keeps the parent's deny.
+#[test]
+#[ignore = "boots real VMs and needs httpbin.org; run with `just e2e`"]
+pub(crate) fn hosted_fork_swaps_and_enforces() {
+    let e = E2e::new("hfork");
+    e.git_repo();
+    e.own_httpbin_secret("TOK", BASIC_SECRET);
+    e.create_clone();
+    let wiki = "https://www.wikipedia.org";
+    assert!(reachable(&e, wiki), "allow-all");
+    e.ok(&[
+        "policy",
+        "deny",
+        "network",
+        "--sandbox",
+        &e.name,
+        "www.wikipedia.org",
+    ]);
+    assert!(!reachable(&e, wiki), "the parent's deny");
+
+    let forks = Machines(vec![format!("{}-fork-1", e.name)]);
+    let f = &forks.0[0];
+    assert_eq!(e.ok(&["fork", &e.name]).trim(), f.as_str());
+    assert!(
+        unit_files(&e, f)
+            .iter()
+            .any(|u| u.to_string_lossy().contains("egress")),
+        "the fork has its own egress unit"
+    );
+    assert!(
+        basic_auth_ok(&e, f, "TOK", "real-secret-xyz"),
+        "the fork swaps"
+    );
+    let wget = format!("wget -q -T 8 -O /dev/null {wiki}");
+    assert!(
+        !e.sh(f, &wget).status.success(),
+        "the deny holds in the fork"
+    );
+    e.ok(&["rm", "-f", f]);
+    assert!(unit_files(&e, f).is_empty(), "the fork's units go with rm");
+}
+
+/// `network.egress=smolvm` opts out: smolvm alone handles egress, with no unit and no interceptor.
+#[test]
+#[ignore = "boots real VMs; run with `just e2e`"]
+pub(crate) fn smolvm_mode_has_no_egress_unit() {
+    let mut e = E2e::new("hsmol");
+    e.vars.push(("SMOLBENTO_NETWORK_EGRESS", "smolvm".into()));
+    let archive = Image::alpine_agent_archive();
+    let args = e.create_args(&e.name, &["-t", archive.to_str().unwrap(), "shell"], "1g");
+    let args: Vec<&str> = std::iter::once("-D")
+        .chain(args.iter().map(String::as_str))
+        .collect();
+    let out = e.sbt(&args);
+    let err = err_text(&out);
+    assert!(out.status.success(), "{err}");
+    assert!(err.contains("machine start"), "-D prints the start: {err}");
+    assert!(!err.contains("--egress-interceptor"), "{err}");
+    assert!(
+        !unit_files(&e, &e.name)
+            .iter()
+            .any(|u| u.to_string_lossy().contains("egress")),
+        "no egress unit"
+    );
+    assert!(!e.dir.path().join("data/egress").join(&e.name).exists());
+}
+
 #[test]
 #[ignore = "boots real VMs and needs httpbin.org; run with `just e2e`"]
 pub(crate) fn secrets_are_placeholders_in_the_guest() {
-    let e = E2e::new("sec");
+    // smolvm's live credential binding: a hosted sandbox needs a recreate for a new service.
+    let mut e = E2e::new("sec");
+    e.vars.push(("SMOLBENTO_NETWORK_EGRESS", "smolvm".into()));
     e.ok(&["policy", "init", "balanced"]);
     e.own_httpbin_secret("TOK", BASIC_SECRET);
     e.create_alpine();
@@ -322,7 +509,9 @@ pub(crate) fn secrets_are_placeholders_in_the_guest() {
 #[test]
 #[ignore = "boots real VMs and needs httpbin.org; run with `just e2e`"]
 pub(crate) fn a_secret_set_after_create_is_bound_without_recreating() {
-    let e = E2e::new("secadd");
+    // smolvm binds it at the next start; a hosted sandbox needs a recreate.
+    let mut e = E2e::new("secadd");
+    e.vars.push(("SMOLBENTO_NETWORK_EGRESS", "smolvm".into()));
     e.ok(&["policy", "init", "balanced"]);
     e.create_alpine();
     // Running, but booted with no bindings: smolvm takes the new one from its next start.

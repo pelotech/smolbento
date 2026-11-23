@@ -145,7 +145,7 @@ impl E2e {
     }
 
     /// `create HEAD <workspace> --name NAME --cpus 1 -m MEM`. `head` is the flags, then the agent.
-    fn create_args(&self, name: &str, head: &[&str], mem: &str) -> Vec<String> {
+    pub(crate) fn create_args(&self, name: &str, head: &[&str], mem: &str) -> Vec<String> {
         let ws = self.workspace().display().to_string();
         let tail = [ws.as_str(), "--name", name, "--cpus", "1", "-m", mem];
         std::iter::once("create")
