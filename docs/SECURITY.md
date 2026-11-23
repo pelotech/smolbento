@@ -47,8 +47,10 @@ reachable. `balanced` and `deny-all` block that unless you allow the address.
   only over HTTPS. A secret's hosts and their subdomains are always reachable from sandboxes that
   bind it.
 - A hosted sandbox's egress process enforces host rules and ports as sbx does, for every
-  connection that names its host (TLS SNI or HTTP `Host:`). A connection with no name (SSH, TLS
-  without SNI) is judged by address and port only. With `network.egress=smolvm`, host rules are
+  connection that names its host (TLS SNI or HTTP `Host:`) within 200 ms. A connection with no
+  name (SSH, TLS without SNI), or one that holds its first bytes back for longer, is judged by
+  address and port only: host deny rules and a host rule's port don't apply to it, so an agent can
+  escape them by waiting before it sends. With `network.egress=smolvm`, host rules are
   looser than sbx's: `*.x.com` matches any depth, wildcards inside a label widen, and ports aren't
   enforced. Methods and paths are never enforced. See [sbx compatibility](sbx-compatibility.md).
 
