@@ -11,7 +11,9 @@ use crate::kits::apply::apply;
 use crate::kits::args::{ArgValues, NoResolvedValue};
 use crate::kits::model::{Content, Format as KitFormat, ImageConfig, Kind, Kit, Source};
 use crate::kits::registry_auth::Logins;
-use crate::kits::resolve::{check_named_formats, mixing_format, resolve, resolve_for, supported};
+use crate::kits::resolve::{
+    NO_SANDBOX_WORKDIR, check_named_formats, mixing_format, resolve_for, supported,
+};
 use crate::kits::{apply, artifact, capability, guest, load, registry, signing};
 use crate::policy::{Decision, Policy, compile};
 use crate::provision;
@@ -20,6 +22,10 @@ use crate::sandbox::{self, CreateRequest, KitPhase, Recorded, Sandbox};
 use crate::secrets::SecretsFile;
 use crate::smolvm::Runner;
 use crate::workspace::Workspace;
+
+/// The sandbox `kit inspect|validate` ask `may_host` about: there is none yet, and only an
+/// internal (`_`) name changes the answer, so a plain name stands in. A kit's name could be internal.
+const STAND_IN: &str = "sandbox";
 
 pub fn run<R: Runner>(ctx: &mut Ctx<R>, cmd: KitCmd) -> Result<i32> {
     match cmd {
@@ -338,6 +344,8 @@ fn inspect<R: Runner>(ctx: &Ctx<R>, a: &KitRefArgs) -> Result<i32> {
     let format = a.output.pick();
     let doc = Doc::new(&kit);
     let mut out = &ctx.out;
+    // As a create would resolve it, so the two agree.
+    let hosted = crate::provision::may_host(ctx, STAND_IN)?;
     if let Some(text) = format.structured(&doc)? {
         write!(out, "{text}")?;
     } else {
@@ -349,7 +357,7 @@ fn inspect<R: Runner>(ctx: &Ctx<R>, a: &KitRefArgs) -> Result<i32> {
                 rows.push(vec![
                     c.ty.clone(),
                     if c.optional { "yes" } else { "no" }.into(),
-                    if supported(c) {
+                    if supported(c, hosted) {
                         "supported"
                     } else {
                         "not supported"
@@ -430,8 +438,11 @@ fn check_kit<R: Runner>(
         );
     }
     load::check_launchable(ctx, &mut kit, None)?;
+    // As a create would resolve it, so the two agree.
+    let hosted = crate::provision::may_host(ctx, STAND_IN)?;
+    let resolve = |w, m| resolve_for(w, m, &values, NO_SANDBOX_WORKDIR, &[], hosted);
     let resolved = match kit.kind {
-        Kind::Workload => resolve(kit, vec![], &values),
+        Kind::Workload => resolve(kit, vec![]),
         Kind::Mixin => {
             let mut base = empty_workload("validate");
             // A version within each require's constraints; a malformed one fails in `resolve`.
@@ -441,7 +452,7 @@ fn check_kit<R: Runner>(
                 .filter_map(|r| capability::parse_require(r).ok())
                 .map(|r| capability::witness(&r))
                 .collect();
-            resolve(base, vec![kit], &values)
+            resolve(base, vec![kit])
         }
     };
     // sbx's validate says the artifact failed validation when an arg has no value.
@@ -574,7 +585,8 @@ fn add_running<R: Runner>(
         });
     // The image's `Env` and the create's `-e` aren't kept with the sandbox: `${{ kit.env.* }}`
     // reads the kits' exports only here.
-    let plan = resolve_for(workload, mixins, values, &sb.workdir(), &[])?;
+    let hosted = sb.meta.egress.is_some();
+    let plan = resolve_for(workload, mixins, values, &sb.workdir(), &[], hosted)?;
     plan.warn_skipped();
 
     // In memory until approved.
@@ -640,6 +652,7 @@ fn add_running<R: Runner>(
             &sb.meta.rec.credential_hosts,
             &steps.install_rules,
             sb.meta.rec.host_access,
+            sb.meta.egress.is_some(),
         );
         ctx.vm.update_network(&sb.machine, &network)
     };

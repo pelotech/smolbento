@@ -38,6 +38,7 @@ filter = '''binary(e2e) & (
     | test(=kits::install_phase_network_closes_after_install)
     | test(=kits::kit_add_applies_network_and_hooks_live)
     | test(=network::host_services_open_and_close_live)
+    | test(/^request_rules::/)
 )'''
 test-group = 'policy'
 

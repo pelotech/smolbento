@@ -87,6 +87,7 @@ policy check network registry.npmjs.org --sandbox my-sandbox --verbose
 policy inspect r-0123abcd
 policy reset -f
 policy allow network api.example.com --method GET,POST --path '/v1/**'
+policy allow network api.example.com --method GET --query 'page=*'
 # Secrets
 secret set anthropic -t sk-test
 secret set github --command "gh auth token"

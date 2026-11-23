@@ -20,4 +20,13 @@ It is written to be lifted into smolvm, so it names nothing of its users. Each p
 |---|---|
 | relay | a "spawn on a given listener" interceptor constructor in `smolvm-credentials` |
 | flow decisions (`Decide`) | `smolvm-network` egress checks |
-| request matcher (planned) | `smolvm-protocol` |
+| request rules (`Policy`) | `smolvm-protocol` |
+
+`broad_ca(machine)` mints a machine CA with no name constraint, for a machine whose decrypted hosts
+change while it runs. The interceptor still decrypts only its `terminate_hosts`.
+
+## Request rules
+
+`Policy` holds request rules for decrypted hosts: `terminate_hosts()` lists the hosts to decrypt,
+`inspection(host, port)` says whether rules apply to a connection, and `request(..)` judges one
+request. The doc comments in `src/rules/mod.rs` and `src/rules/path.rs` say how requests match.

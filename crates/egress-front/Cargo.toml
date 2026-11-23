@@ -13,5 +13,15 @@ publish = false
 # request-filter hook, ahead of the 1.36.1 binary until the next smolvm release; the binary stays at `smolvm.lock`.
 [dependencies]
 anyhow = "1.0.104"
+# The header type of smolvm-credentials' `RequestInfo` (hyper re-exports it), so a filter passes its headers straight through.
+http = "1.5.0"
+# Mints the broad CA as smolvm-credentials mints its own: same version and features.
+rcgen = { version = "0.13.2", default-features = false, features = ["ring", "pem"] }
+serde_json = "1.0.154"
 smolvm-credentials = { git = "https://github.com/josmo/smolvm", tag = "bento-main-c5ae3713-hook0d03d418", version = "1.36.1" }
 smolvm-protocol = { git = "https://github.com/josmo/smolvm", tag = "bento-main-c5ae3713-hook0d03d418", version = "1.36.1" }
+zeroize = "1.9.2"
+
+[dev-dependencies]
+rustls = { version = "0.23.46", default-features = false, features = ["ring", "std", "tls12"] }
+rustls-pemfile = "2.2.0"

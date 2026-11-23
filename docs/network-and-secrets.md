@@ -85,6 +85,9 @@ network --id`), `--json` the same rules as `{"rules": [...]}`, and `-q` only the
   `network.egress=smolvm`, smolvm admits UDP wherever its allow list admits TCP, except port 53: it
   answers DNS itself. A hosted sandbox sends no UDP but DNS ([Hosted egress](#hosted-egress)), and an
   allowed verdict says so.
+- `--method`, `--path` and `--query` on `policy allow|deny` bound a rule to some requests. Hosted
+  sandboxes enforce them per request: see [Request rules](#request-rules). `policy check` gives
+  the connection's verdict; `policy ls --wide` shows the request rules.
 - `policy rm network --resource HOST --method GET --path '/v1/**'` removes the host from the rule
   with those methods and that path only.
 
@@ -214,7 +217,7 @@ Caveats:
   applies at once: `secret set` and `secret rm` restart the egress process, and open connections
   drop at that moment. A stopped sandbox's process is restarted before the machine starts, so
   boot-time connections use the new value. Live binding is planned.
-- No flow limits apply.
+- No flow limits apply, except to decrypted connections ([Request rules](#request-rules)).
 
 A sandbox falls back to smolvm egress, with a warning at create, when there's no service manager
 for its unit (launchd, or `systemd --user` with a private socket directory and a short enough socket
@@ -231,6 +234,79 @@ CA and token: the copied guest already trusts that CA and holds those placeholde
 parent's sandbox rules, as every fork does.
 
 The Linux systemd units are tested in CI, and the macOS launchd units by running `just e2e` on a Mac.
+
+#### Request rules
+
+A rule with `--method`, `--path` or `--query`, or a kit's `network-policy@2` entry with `methods` or
+`paths`, is bounded: it applies to some requests to its hosts. A hosted sandbox enforces bounded rules per
+request:
+
+```sh
+# GET and HEAD only, on every path
+bento policy allow network --sandbox claude-myrepo registry.npmjs.org --method GET,HEAD
+# no pushes over HTTPS
+bento policy deny network --sandbox claude-myrepo github.com --method POST --path '/*/*/git-receive-pack'
+```
+
+- **Ruled hosts are decrypted.** The egress process decrypts each host a bounded rule names, and
+  each secret's host, with the sandbox's own CA, which the guest trusts. Every other connection is
+  passed through as before.
+- **A refused request gets `403`.** The body names a deny rule (`… (rule r-1a2b3c4d)`), or on a host
+  that only bounded allows admit, says `no rule allows POST /post on httpbin.org`. It never shows a
+  rule's content.
+- **What a bounded rule means** (sbx's meaning):
+  - A bounded deny acts on the requests it names, never on the whole host: `deny H --method POST`
+    refuses POSTs, and GETs and other ports pass. A deny wins over any allow.
+  - A bounded allow makes its host reachable, and then only the requests it names pass.
+  - An unbounded allow of the same host and port beats it, and so do `allow-all`, a secret's host,
+    and a host the `balanced` preset admits: they leave every request admitted.
+- **Matching.**
+  - Methods are matched in any case. `X-HTTP-Method-Override`, `X-HTTP-Method` and
+    `X-Method-Override` count as the method too: a deny fires if any of them matches, and an allow
+    needs all of them to match.
+  - Paths and queries follow sbx (any case) for `bento policy` rules, and the kit spec (exact case)
+    for kit rules.
+  - A path is judged with its dot segments resolved. One with `%2f` or `%5c`, double encoding, `%u`,
+    `%00`, a control character or invalid UTF-8 is refused as `ambiguous request target`.
+- **Named hosts only.** `policy allow|deny` refuses bounded rules on `*`, `**`, IPs and CIDRs, and a
+  bounded allow on a host glob (`crl*.x.com`). A bounded deny on a glob widens to `*.x.com`. A
+  bounded deny on `localhost` acts on the whole host port: host services aren't decrypted. A
+  stored bounded rule egress can't map (edited by hand, say) denies its whole host, allow or deny.
+- **Changes apply live.**
+  - A change on a host that's already decrypted applies from the next request, on open connections
+    too.
+  - A new ruled host, or one no longer ruled, restarts the sandbox's egress process at its next
+    connection. Open connections drop then, that connection among them. The next one starts the
+    process again: at once with systemd, and within 10 s with launchd.
+- **Upgrading:** sandboxes created before 0.38 must be recreated; `--method/--path` rules now act
+  per request.
+
+On a ruled host:
+
+- **HTTP/1.1 only.** HTTP/2 and HTTP/3 aren't offered.
+- **`Range` and `If-Range` are stripped,** so a resumed download starts over.
+- **Replies are asked for uncompressed** (`Accept-Encoding: identity`). One compressed anyway is
+  decoded if it's gzip or deflate, up to 64 MiB. A br or zstd reply, or a larger one, gets `502`.
+- **WebSocket:** the upgrade request is judged. The frames after it pass unfiltered.
+- **At most 256 decrypted connections at once** per sandbox.
+- **Plain HTTP is refused** (a reset, logged as `plain HTTP to a host with request rules`). The
+  egress process can't judge it per request yet: use HTTPS.
+- **Other protocols pass** a host with only bounded denies, as in sbx: SSH to `github.com` still
+  works under `deny github.com --method POST`. Deny the SSH port (`github.com:22`) to block pushes
+  completely. Where a bounded allow names the host, a connection that can't be read is refused.
+- **`_method` overrides** in a query or a form body aren't seen.
+- **Upstream certificates** are checked against the public web roots only: a ruled host with a
+  private CA fails.
+
+Request rules stop cooperative clients, not a hostile agent. The egress process knows a connection's
+host only from the name the guest sends, so a guest can get past them (closing these is planned):
+
+- by sending another allowed name, in the TLS SNI or `Host:`, on a connection to a ruled host's
+  address;
+- by sending no name: TLS without SNI, or plain HTTP without `Host:`, to a ruled host's address is
+  judged by address and port, and passes unfiltered when the address is allowed.
+
+To keep a host out, deny the host.
 
 ### Registry credentials
 

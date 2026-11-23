@@ -746,8 +746,14 @@ name = "egress-front"
 version = "0.37.0"
 dependencies = [
  "anyhow",
+ "http",
+ "rcgen",
+ "rustls",
+ "rustls-pemfile",
+ "serde_json",
  "smolvm-credentials",
  "smolvm-protocol",
+ "zeroize",
 ]
 
 [[package]]
@@ -2797,6 +2803,7 @@ dependencies = [
  "egress-front",
  "flate2",
  "hmac",
+ "http",
  "humantime",
  "insta",
  "libc",

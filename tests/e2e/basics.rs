@@ -220,7 +220,7 @@ pub(crate) fn ports_publish_live() {
 }
 
 /// The pid of this sandbox's egress process, from the service manager; `None` while it isn't running.
-fn egress_pid(unit: &std::path::Path) -> Option<u32> {
+pub(crate) fn egress_pid(unit: &std::path::Path) -> Option<u32> {
     let stem = unit.file_stem()?.to_str()?;
     let out = if cfg!(target_os = "macos") {
         let uid = smolbento::util::host_uid();
@@ -294,7 +294,7 @@ pub(crate) fn hosted_egress_swaps_a_credential() {
 }
 
 /// Sandbox `sb`'s egress log: a line per connection its egress process denied.
-fn egress_log(e: &E2e, sb: &str) -> String {
+pub(crate) fn egress_log(e: &E2e, sb: &str) -> String {
     let log = e.dir.path().join("data/egress").join(sb).join("egress.log");
     std::fs::read_to_string(log).unwrap()
 }

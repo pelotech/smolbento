@@ -78,12 +78,16 @@ pub struct RuleArgs {
     /// Only tcp is supported
     #[arg(long)]
     pub protocol: Option<String>,
-    /// HTTP methods (stored, not enforced)
+    /// HTTP methods, comma-separated, or ANY (enforced for hosted sandboxes)
     #[arg(long)]
     pub method: Option<String>,
-    /// HTTP path (stored, not enforced)
+    /// HTTP path glob; defaults to /** (enforced for hosted sandboxes)
     #[arg(long)]
     pub path: Option<String>,
+    /// Query parameter: name=value, name=prefix*, name=*suffix or name=*; repeatable or
+    /// comma-separated (enforced for hosted sandboxes)
+    #[arg(long)]
+    pub query: Vec<String>,
 }
 
 #[derive(Debug, Subcommand)]
@@ -100,7 +104,7 @@ pub struct PolicyRmArgs {
     /// With --resource: only the rule with this HTTP path
     #[arg(long)]
     pub path: Option<String>,
-    /// With --resource: only the rule with this query (smolbento's rules have none)
+    /// With --resource: only the rule with this query
     #[arg(long)]
     pub query: Option<String>,
     /// Rule id

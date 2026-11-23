@@ -10,10 +10,11 @@ use super::{
     ApprovalCmd, CheckArgs, CheckKind, Ctx, PolicyCmd, PolicyRmArgs, PolicyRmKind, RuleArgs,
     RuleKind, Unsupported, confirm, table,
 };
+use crate::egress::request_rules;
 use crate::policy::log;
 use crate::policy::notes::{bound_conflict, deny_notes};
 use crate::policy::rules::{Resource, parse_list};
-use crate::policy::{Decision, Policy, compile, normalise_methods};
+use crate::policy::{Decision, Policy, compile, normalise_methods, normalise_query};
 use crate::provision;
 use crate::provision::builder::BUILDER;
 use crate::sandbox::{self, name};
@@ -168,16 +169,23 @@ fn rm<R: Runner>(ctx: &Ctx<R>, policy: &mut Policy, a: &PolicyRmArgs) -> Result<
         (None, Some(id)) => policy.find(id).and_then(|(_, s)| s.map(String::from)),
         _ => a.sandbox.clone(),
     };
+    let query = a
+        .query
+        .as_deref()
+        .map(|q| {
+            normalise_query(&[q])
+                .context("--query names no parameter\n  try: bento policy rm network --help")
+        })
+        .transpose()?;
     let before = policy.clone();
-    // Rules never carry a query, so --query matches none.
-    let removed = a.query.is_none()
-        && policy.remove_rules(
-            sandbox.as_deref(),
-            a.id.as_deref(),
-            a.resource.as_deref(),
-            method.as_deref(),
-            a.path.as_deref(),
-        );
+    let removed = policy.remove_rules(
+        sandbox.as_deref(),
+        a.id.as_deref(),
+        a.resource.as_deref(),
+        method.as_deref(),
+        a.path.as_deref(),
+        query.as_deref(),
+    );
     if !removed {
         // sbx's error for a resource no rule has.
         bail!(match a.resource {
@@ -204,18 +212,37 @@ fn add_rule<R: Runner>(
     created_via: &str,
 ) -> Result<()> {
     let parsed = parse_list(&a.resources)?;
+    let query = normalise_query(&a.query);
+    let request = a.method.is_some() || a.path.is_some() || query.is_some();
+    if request {
+        request_rules::check(
+            decision,
+            &parsed,
+            a.method.as_deref(),
+            a.path.as_deref(),
+            query.as_deref(),
+        )
+        .map_err(|e| {
+            anyhow::anyhow!(
+                "{e}\n  try: bento policy {} network --help",
+                decision.name()
+            )
+        })?;
+    }
     let sandboxes = sandbox::Listing::new(&ctx.vm);
-    if decision == Decision::Deny {
+    // A request deny leaves the host reachable, so a bound secret still works.
+    if decision == Decision::Deny && !request {
         guard_bound_secrets(ctx, &sandboxes, a.sandbox.as_deref(), &parsed)?;
     }
     let before = policy.clone();
-    let id = policy.add_rule(
+    let (id, _) = policy.insert_rule(
         a.sandbox.as_deref(),
         decision,
         &a.resources,
         created_via,
         a.method,
         a.path,
+        query,
     )?;
     policy.save(&ctx.paths)?;
     writeln!(&ctx.out, "{} rule {id}: {}", decision.name(), a.resources)?;
@@ -270,7 +297,7 @@ fn keeps_access_notes(before: &Policy, after: &Policy, sandboxes: &[(&str, bool)
         .iter()
         .filter(|(n, access)| {
             *access
-                && compile::network(after, n, &[], true) == NetworkSpec::Open
+                && compile::network(after, n, &[], true, false) == NetworkSpec::Open
                 && compile::host_access(before, n)
                 && !compile::host_access(after, n)
         })
@@ -617,6 +644,7 @@ fn respond<R: Runner>(
                 protocol: None,
                 method: None,
                 path: None,
+                query: Vec::new(),
             };
             return add_rule(ctx, policy, decision, rule, "approval");
         }

@@ -219,8 +219,7 @@ pub fn spec(req: &CreateRequest) -> CreateSpec {
                 .map(|b| (b.env.clone(), b.placeholder.clone())),
         );
     }
-    // Without credentials nothing is terminated, so there's no CA to trust.
-    if let Some(ca) = req.egress.as_ref().and_then(|p| p.ca_guest_dir.clone()) {
+    if let Some(ca) = req.egress.as_ref().map(|p| p.ca_guest_dir.clone()) {
         mounts.push(Mount {
             host: Some(ca),
             guest: "/run/smol/credentials".into(),

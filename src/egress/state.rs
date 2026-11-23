@@ -5,16 +5,15 @@ use crate::config::{Paths, Symlink, write_atomic};
 use crate::sandbox::{name, options::free_port};
 use crate::smolvm::Credential;
 use anyhow::{Context, Result, bail};
-use egress_front::{CredentialPolicy, MachineCa, generate_placeholders, host_subtree};
-use std::collections::BTreeSet;
+use egress_front::{CredentialPolicy, MachineCa, broad_ca, generate_placeholders};
 use std::os::unix::fs::PermissionsExt;
 use std::path::PathBuf;
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct Prepared {
     pub label: Label,
-    /// The CA's guest-facing half, mounted at `/run/smol/credentials`; `None` without credentials.
-    pub ca_guest_dir: Option<PathBuf>,
+    /// The CA's guest-facing half, mounted at `/run/smol/credentials`.
+    pub ca_guest_dir: PathBuf,
 }
 
 pub fn prepare(paths: &Paths, sandbox: &str, creds: &[Credential]) -> Result<Prepared> {
@@ -24,19 +23,8 @@ pub fn prepare(paths: &Paths, sandbox: &str, creds: &[Credential]) -> Result<Pre
     std::fs::create_dir_all(&dir).with_context(|| format!("creating {}", dir.display()))?;
     std::fs::set_permissions(&dir, std::fs::Permissions::from_mode(0o700))?;
 
-    let hosts: BTreeSet<String> = creds
-        .iter()
-        .flat_map(|c| &c.hosts)
-        .map(|h| host_subtree(h).to_string())
-        .collect();
-    let mut hosts: Vec<String> = hosts.into_iter().collect();
-    if hosts.is_empty() {
-        // A CA needs a permitted host; `invalid` never resolves, so this one can sign for nothing real.
-        hosts.push("invalid".into());
-    }
-    let machine = name::machine_name(sandbox);
-    let ca = MachineCa::generate(&machine, &hosts)?;
-    ca.save(&dir.join("ca"))?;
+    // Unconstrained: the hosts it decrypts (ruled ones, chosen live) aren't known at create.
+    broad_ca(&name::machine_name(sandbox))?.save(&dir.join("ca"))?;
 
     let tok: [u8; 32] = rand::random();
     let tok = crate::util::hex(&tok);
@@ -66,8 +54,7 @@ pub fn prepare(paths: &Paths, sandbox: &str, creds: &[Credential]) -> Result<Pre
     }
     Ok(Prepared {
         label,
-        // Nothing is terminated without a binding, so the guest needs no CA.
-        ca_guest_dir: (!creds.is_empty()).then(|| MachineCa::guest_dir(&dir.join("ca"))),
+        ca_guest_dir: MachineCa::guest_dir(&dir.join("ca")),
     })
 }
 
@@ -183,22 +170,25 @@ mod tests {
         let t = token(&p, "w").unwrap();
         assert_eq!(t.len(), 64);
         assert!(t.bytes().all(|b| b.is_ascii_hexdigit()));
-        assert!(load_ca(&p, "w").unwrap().permits("api.github.com"));
-        assert!(got.ca_guest_dir.unwrap().starts_with(&dir));
+        assert!(load_ca(&p, "w").unwrap().permitted().is_empty(), "broad");
+        assert_eq!(mode(&dir.join("ca").join("ca.key")), 0o600);
+        assert!(got.ca_guest_dir.starts_with(&dir));
         assert!(got.label.port > 0);
     }
 
     #[test]
-    fn prepare_without_credentials_constrains_the_ca_to_invalid() {
+    fn prepare_without_credentials_mounts_the_ca() {
         let d = tempfile::tempdir().unwrap();
         let p = paths(d.path());
         let got = prepare(&p, "w", &[]).unwrap();
         assert!(got.label.bindings.is_empty());
-        assert_eq!(got.ca_guest_dir, None);
         assert_eq!(token(&p, "w").unwrap().len(), 64);
-        let ca = load_ca(&p, "w").unwrap();
-        assert!(ca.permits("invalid"));
-        assert!(!ca.permits("example.com"));
+        // Ruled hosts are decrypted without a binding, so the guest trusts the CA from the start.
+        assert_eq!(
+            got.ca_guest_dir,
+            MachineCa::guest_dir(&p.egress("w").join("ca"))
+        );
+        assert!(load_ca(&p, "w").unwrap().permitted().is_empty(), "broad");
     }
 
     #[test]
@@ -242,7 +232,6 @@ mod tests {
         assert_eq!(token(&p, "b").unwrap(), token(&p, "a").unwrap());
         let (a, b) = (load_ca(&p, "a").unwrap(), load_ca(&p, "b").unwrap());
         assert_eq!(a.certificate_pem(), b.certificate_pem());
-        assert!(b.permits("api.github.com"));
         let dir = p.egress("b");
         assert!(!dir.join("stale").exists());
         assert_eq!(mode(&dir), 0o700);

@@ -55,11 +55,14 @@ pub struct Rule {
     pub resources: Vec<String>,
     #[serde(default = "default_created_via")]
     pub created_via: String,
-    /// sbx HTTP qualifiers: stored and shown, not enforced.
+    /// sbx HTTP qualifiers, enforced per request for hosted sandboxes (`egress::request_rules`).
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub method: Option<String>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub path: Option<String>,
+    /// `--query`, as `normalise_query` gives it.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub query: Option<String>,
 }
 
 /// `created_via` of the allow rule for a `--static-mcp` server's host.
@@ -99,6 +102,11 @@ impl Rule {
     /// An install-phase kit rule.
     pub fn is_kit_install(&self) -> bool {
         self.created_via.starts_with(KIT_INSTALL_VIA)
+    }
+
+    /// A rule with `--method`, `--path` or `--query`: it acts on requests, not on the whole host.
+    pub fn is_request(&self) -> bool {
+        self.method.is_some() || self.path.is_some() || self.query.is_some()
     }
 }
 
@@ -140,6 +148,17 @@ pub fn normalise_methods(m: &str) -> Option<String> {
     (!v.is_empty()).then(|| v.join(","))
 }
 
+/// `--query` as one canonical list: comma-separated, sorted and deduped. `None` when it names none.
+pub fn normalise_query<S: AsRef<str>>(q: &[S]) -> Option<String> {
+    let mut v: Vec<&str> = (q.iter().flat_map(|x| x.as_ref().split(',')))
+        .map(str::trim)
+        .filter(|x| !x.is_empty())
+        .collect();
+    v.sort_unstable();
+    v.dedup();
+    (!v.is_empty()).then(|| v.join(","))
+}
+
 /// What a rule id hashes as its scope: kit rules get their kit too, so they never share an id
 /// with a user rule for the same resources. A kit's install and runtime rules share the scope: an
 /// install rule that is also a runtime rule is the runtime rule, and outlives the install phase.
@@ -156,7 +175,14 @@ fn id_scope(sandbox: &str, created_via: &str) -> String {
 /// The id `policy ls` shows for a sandbox's aggregated kit rule (`kit:<sandbox>`): a stable hash
 /// of the sandbox name, so it never changes as kits come and go.
 pub fn kit_rule_id(sandbox: &str) -> String {
-    rule_id(&format!("kit:{sandbox}"), Decision::Allow, &[], None, None)
+    rule_id(
+        &format!("kit:{sandbox}"),
+        Decision::Allow,
+        &[],
+        None,
+        None,
+        None,
+    )
 }
 
 /// A short, stable id from the rule's content, qualifiers included (FNV-1a).
@@ -166,6 +192,7 @@ fn rule_id(
     resources: &[String],
     method: Option<&str>,
     path: Option<&str>,
+    query: Option<&str>,
 ) -> String {
     // Qualifiers are appended only when present, so ids of rules without them stay the same.
     let mut input = format!("{scope}|{}|{}", decision.name(), resources.join(","));
@@ -174,6 +201,9 @@ fn rule_id(
     }
     if let Some(p) = path {
         input.push_str(&format!("|path={p}"));
+    }
+    if let Some(q) = query {
+        input.push_str(&format!("|query={q}"));
     }
     let mut h: u64 = 0xcbf2_9ce4_8422_2325;
     for b in input.bytes() {
@@ -215,11 +245,21 @@ impl Policy {
         method: Option<String>,
         path: Option<String>,
     ) -> Result<String> {
-        self.insert_rule(sandbox, decision, resources, created_via, method, path)
-            .map(|(id, _)| id)
+        self.insert_rule(
+            sandbox,
+            decision,
+            resources,
+            created_via,
+            method,
+            path,
+            None,
+        )
+        .map(|(id, _)| id)
     }
 
-    /// `add_rule`, also saying whether this call created the rule (`false`: it was there).
+    /// `add_rule` with a `query` (as `normalise_query` gives it), also saying whether this call
+    /// created the rule (`false`: it was there).
+    #[allow(clippy::too_many_arguments)]
     pub fn insert_rule(
         &mut self,
         sandbox: Option<&str>,
@@ -228,6 +268,7 @@ impl Policy {
         created_via: &str,
         method: Option<String>,
         path: Option<String>,
+        query: Option<String>,
     ) -> Result<(String, bool)> {
         let parsed = rules::parse_list(resources)?;
         let resources: Vec<String> = parsed.into_iter().map(|r| r.raw).collect();
@@ -238,6 +279,7 @@ impl Policy {
             &resources,
             method.as_deref(),
             path.as_deref(),
+            query.as_deref(),
         );
         let list = self.rules_mut(sandbox);
         if list.iter().any(|r| r.id == id) {
@@ -250,6 +292,7 @@ impl Policy {
             created_via: created_via.to_string(),
             method,
             path,
+            query,
         });
         Ok((id, true))
     }
@@ -288,6 +331,7 @@ impl Policy {
                         &via,
                         method.clone(),
                         path,
+                        None,
                     )?;
                     // A runtime rule that an interrupted create left as an install rule becomes
                     // a runtime rule again.
@@ -320,8 +364,9 @@ impl Policy {
     }
 
     /// Removes rules by id, or one resource from every non-kit rule listing it (dropping emptied
-    /// rules). `method` (as `normalise_methods` gives it) and `path` take the resource only from
-    /// rules with those HTTP qualifiers (`policy rm --method/--path`); `None` is any rule.
+    /// rules). `method` (as `normalise_methods` gives it), `path` and `query` (as `normalise_query`
+    /// gives it) take the resource only from rules with those HTTP qualifiers (`policy rm
+    /// --method/--path/--query`); `None` is any rule.
     pub fn remove_rules(
         &mut self,
         sandbox: Option<&str>,
@@ -329,6 +374,7 @@ impl Policy {
         resource: Option<&str>,
         method: Option<&str>,
         path: Option<&str>,
+        query: Option<&str>,
     ) -> bool {
         let list = self.rules_mut(sandbox);
         let before: usize = list.iter().map(|r| r.resources.len()).sum();
@@ -341,6 +387,7 @@ impl Policy {
                 !r.is_kit()
                     && method.is_none_or(|m| r.method.as_deref() == Some(m))
                     && path.is_none_or(|p| r.path.as_deref() == Some(p))
+                    && query.is_none_or(|q| r.query.as_deref() == Some(q))
             }) {
                 r.resources.retain(|x| !x.eq_ignore_ascii_case(res));
             }
@@ -440,6 +487,7 @@ impl Policy {
                 &r.resources,
                 r.method.as_deref(),
                 r.path.as_deref(),
+                r.query.as_deref(),
             );
         }
         self.sandboxes.insert(to.to_string(), entry);
@@ -500,8 +548,8 @@ mod tests {
         let copy_id = p.sandboxes["a-fork-1"].rules[0].id.clone();
         let parent_id = p.sandboxes["a"].rules[0].id.clone();
         // The parent's id doesn't name the copy's rule.
-        assert!(!p.remove_rules(Some("a-fork-1"), Some(&parent_id), None, None, None));
-        assert!(p.remove_rules(Some("a-fork-1"), Some(&copy_id), None, None, None));
+        assert!(!p.remove_rules(Some("a-fork-1"), Some(&parent_id), None, None, None, None));
+        assert!(p.remove_rules(Some("a-fork-1"), Some(&copy_id), None, None, None, None));
         assert!(!p.sandboxes.contains_key("a-fork-1"));
         assert_eq!(p.sandboxes["a"].rules.len(), 1);
         assert_eq!(p.sandboxes["a"].rules[0].id, parent_id);
@@ -569,7 +617,7 @@ mod tests {
         let again = p.allow(None, "a.com,b.com");
         assert_eq!(a, again);
         assert_eq!(p.rules.len(), 1);
-        assert!(p.remove_rules(None, None, Some("a.com"), None, None));
+        assert!(p.remove_rules(None, None, Some("a.com"), None, None, None));
         // HTTP qualifiers pick one of a resource's rules.
         for (method, path) in [(Some("post,get"), Some("/v1/**")), (None, None)] {
             let (m, pa) = (method.map(String::from), path.map(String::from));
@@ -577,20 +625,27 @@ mod tests {
                 .unwrap();
         }
         let n = p.rules.len();
-        assert!(!p.remove_rules(None, None, Some("h.com"), Some("GET"), None));
+        assert!(!p.remove_rules(None, None, Some("h.com"), Some("GET"), None, None));
         // No method is no rule's methods, never "any rule".
-        assert!(!p.remove_rules(None, None, Some("h.com"), Some(""), None));
-        assert!(!p.remove_rules(None, None, Some("h.com"), None, Some("/v2")));
-        assert!(p.remove_rules(None, None, Some("h.com"), Some("GET,POST"), Some("/v1/**")));
+        assert!(!p.remove_rules(None, None, Some("h.com"), Some(""), None, None));
+        assert!(!p.remove_rules(None, None, Some("h.com"), None, Some("/v2"), None));
+        assert!(p.remove_rules(
+            None,
+            None,
+            Some("h.com"),
+            Some("GET,POST"),
+            Some("/v1/**"),
+            None
+        ));
         assert_eq!(p.rules.len(), n - 1);
         assert!(
             p.rules
                 .iter()
                 .any(|r| r.resources == ["h.com"] && r.method.is_none())
         );
-        assert!(p.remove_rules(None, None, Some("h.com"), None, None));
+        assert!(p.remove_rules(None, None, Some("h.com"), None, None, None));
         assert_eq!(p.rules[0].resources, vec!["b.com"]);
-        assert!(p.remove_rules(None, Some(&a), None, None, None));
+        assert!(p.remove_rules(None, Some(&a), None, None, None, None));
         assert!(p.rules.is_empty());
     }
 
@@ -601,7 +656,14 @@ mod tests {
         // Ids of rules without qualifiers don't change.
         assert_eq!(
             plain,
-            rule_id("global", Decision::Allow, &["a.com".into()], None, None)
+            rule_id(
+                "global",
+                Decision::Allow,
+                &["a.com".into()],
+                None,
+                None,
+                None
+            )
         );
         assert_eq!(plain, "r-38093da7");
         let get = p
@@ -702,7 +764,7 @@ mod tests {
     #[test]
     fn removing_from_an_unknown_sandbox_leaves_no_entry() {
         let mut p = Policy::default();
-        assert!(!p.remove_rules(Some("ghost"), None, Some("a.com"), None, None));
+        assert!(!p.remove_rules(Some("ghost"), None, Some("a.com"), None, None, None));
         assert!(p.sandboxes.is_empty());
     }
 
@@ -780,7 +842,7 @@ mod tests {
             (r.created_via.as_str(), r.source()),
             ("kit-install:gh", "kit")
         );
-        let plain = format!("{:?}", compile::network(&p, "sb", &[], false));
+        let plain = format!("{:?}", compile::network(&p, "sb", &[], false, false));
         assert!(
             plain.contains("run.kit.com") && !plain.contains("pkg.kit.com"),
             "{plain}"
@@ -788,7 +850,7 @@ mod tests {
         assert!(!compile::check(&p, Some("sb"), &[], None, "pkg.kit.com").allowed);
         let with = format!(
             "{:?}",
-            compile::network_with(&p, "sb", &[], &install, false)
+            compile::network_with(&p, "sb", &[], &install, false, false)
         );
         assert!(with.contains("pkg.kit.com"), "{with}");
         p.copy_sandbox("sb", "fork");
@@ -819,7 +881,7 @@ mod tests {
         };
         p.add_kit_rules("sb", "gh", &rules, false).unwrap();
         assert!(p.kit_rule_target(Some("sb"), None, Some("x.com")).is_none());
-        assert!(p.remove_rules(Some("sb"), None, Some("x.com"), None, None));
+        assert!(p.remove_rules(Some("sb"), None, Some("x.com"), None, None, None));
         let left: Vec<_> = p.rules_for(Some("sb")).collect();
         assert_eq!(left.len(), 1);
         assert_eq!(left[0].0.created_via, "kit:gh");
@@ -837,7 +899,7 @@ mod tests {
             deny: vec![],
         };
         p.add_kit_rules("sb", "gh", &rules, false).unwrap();
-        let spec = |sb: &str| format!("{:?}", compile::network(&p, sb, &[], false));
+        let spec = |sb: &str| format!("{:?}", compile::network(&p, sb, &[], false, false));
         assert!(spec("sb").contains("api.kit.com"));
         assert!(!spec("other").contains("api.kit.com"));
         assert!(compile::check(&p, Some("sb"), &[], None, "api.kit.com").allowed);

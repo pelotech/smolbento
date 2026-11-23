@@ -122,11 +122,21 @@ fn rule_notes(rule: &Rule) -> Vec<String> {
             Some(format!("{}: {note}", r.raw))
         })
         .collect();
-    for (label, value) in [("method", &rule.method), ("path", &rule.path)] {
-        if let Some(v) = value {
-            notes.push(format!("{label} {v} not enforced"));
-        }
+    if !rule.is_request() {
+        return notes;
     }
+    let qualifiers: Vec<String> = [
+        ("method", &rule.method),
+        ("path", &rule.path),
+        ("query", &rule.query),
+    ]
+    .into_iter()
+    .filter_map(|(label, v)| Some(format!("{label} {}", v.as_ref()?)))
+    .collect();
+    notes.push(format!(
+        "{} enforced for hosted sandboxes",
+        qualifiers.join(", ")
+    ));
     notes
 }
 
@@ -153,11 +163,7 @@ fn ls_rule(rule: &Rule, scope: Option<&str>) -> LsRule {
         policy_id: Some(policy_id),
         scope: scoped.clone().unwrap_or_else(|| "global".into()),
         applies_to: scoped.unwrap_or_else(|| "all".into()),
-        resource_type: if rule.method.is_some() || rule.path.is_some() {
-            "http"
-        } else {
-            "network"
-        },
+        resource_type: if rule.is_request() { "http" } else { "network" },
         origin: if scope.is_some() { "scoped" } else { "local" },
         layer,
         reason: reason(&rule_notes(rule)),

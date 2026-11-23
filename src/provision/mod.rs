@@ -88,6 +88,7 @@ fn plan_for<R: Runner>(
         &meta.rec.credential_hosts,
         install_rules.unwrap_or_default(),
         meta.rec.host_access,
+        meta.egress.is_some(),
     );
     let (env, remove, egress) = match &meta.egress {
         // Secret values stay with bento's interceptor; smolvm gets only its token.
@@ -267,6 +268,12 @@ pub(crate) const POLICY_PROMPT: &str = "  Choose the network policy for sandboxe
     3. Locked Down   all network traffic blocked unless you allow it
   Choice [1-3, default 2]: ";
 
+/// Whether `name` may get hosted egress, as known before its kits are resolved: the setting, and a
+/// service manager for its egress unit. Its kits can still make it fall back (see `prepare_create`).
+pub fn may_host<R: Runner>(ctx: &Ctx<R>, name: &str) -> Result<bool> {
+    Ok(crate::egress::hosted(&ctx.settings, name)? && ctx.services.plan(name).is_some())
+}
+
 /// The policy, asking for a network policy the first time one is needed (sbx behaviour).
 pub fn ensure_policy<R: Runner>(ctx: &Ctx<R>) -> Result<Policy> {
     let mut policy = Policy::load(&ctx.paths)?;
@@ -430,6 +437,7 @@ pub fn prepare_create<R: Runner>(
                 crate::policy::MCP_VIA,
                 None,
                 None,
+                None,
             )?;
             if new {
                 added.push(id);
@@ -463,29 +471,40 @@ pub fn prepare_create<R: Runner>(
         }
     }
     // A sandbox that can't be hosted falls back to smolvm egress, with the first reason why.
-    let hosted = crate::egress::hosted(&ctx.settings, &req.name)? && {
-        let smolvm_because = if !req.rec.credential_install.is_empty() {
-            // Hosted egress swaps values in bento, where an install-only credential (restarted
-            // away after the install hooks) has no way to be withdrawn yet.
-            Some("install-only credentials need network.egress=smolvm")
-        } else if first_start
-            .as_ref()
-            .is_some_and(|k| !k.steps.install_rules.is_empty())
-        {
-            // The egress process judges by the stored policy, and nothing tells it when the
-            // install hooks run, which alone may use install-phase kit rules.
-            Some("install-phase kit network rules need network.egress=smolvm")
-        } else if ctx.services.plan(&req.name).is_none() {
-            // Without its unit nothing would own the interceptor port, so every connection fails.
-            Some("no service manager for its egress unit")
-        } else {
-            None
-        };
-        if let Some(why) = smolvm_because {
-            crate::warning!("{why}; creating {} with smolvm egress", req.name);
-        }
-        smolvm_because.is_none()
+    let setting = crate::egress::hosted(&ctx.settings, &req.name)?;
+    let smolvm_because = if !setting {
+        None
+    } else if !req.rec.credential_install.is_empty() {
+        // Hosted egress swaps values in bento, where an install-only credential (restarted
+        // away after the install hooks) has no way to be withdrawn yet.
+        Some("install-only credentials need network.egress=smolvm")
+    } else if first_start
+        .as_ref()
+        .is_some_and(|k| !k.steps.install_rules.is_empty())
+    {
+        // The egress process judges by the stored policy, and nothing tells it when the
+        // install hooks run, which alone may use install-phase kit rules.
+        Some("install-phase kit network rules need network.egress=smolvm")
+    } else if ctx.services.plan(&req.name).is_none() {
+        // Without its unit nothing would own the interceptor port, so every connection fails.
+        Some("no service manager for its egress unit")
+    } else {
+        None
     };
+    let hosted = setting && smolvm_because.is_none();
+    // Kits are resolved for hosted egress when it may be used (`may_host`); a fallback found
+    // since leaves their request rules unenforced, so refuse them before anything is made.
+    if !hosted && let Some(kit) = kits.and_then(Plan::request_rules_kit) {
+        bail!(
+            "kit {kit}: network-policy@2 method/path rules need hosted egress, but {} uses smolvm \
+             egress: {}",
+            req.name,
+            smolvm_because.unwrap_or("network.egress is smolvm")
+        );
+    }
+    if let Some(why) = smolvm_because {
+        crate::warning!("{why}; creating {} with smolvm egress", req.name);
+    }
     if !denies.is_empty() {
         added.extend(crate::policy::notes::add_create_denies(
             &mut policy,
@@ -559,6 +578,7 @@ pub fn prepare_create<R: Runner>(
         &req.name,
         &req.rec.credential_hosts,
         req.rec.host_access,
+        hosted,
     );
     req.deny_cidrs = compile::deny_cidrs(&policy, &req.name, req.rec.host_access);
     if let Some(note) = host_access_note(&req.name, req.rec.host_access) {
@@ -731,6 +751,7 @@ pub fn create_with<R: Runner>(
                 &req.rec.credential_hosts,
                 &k.steps.install_rules,
                 req.rec.host_access,
+                req.egress.is_some(),
             );
             req.deny_cidrs = compile::deny_cidrs_with(
                 &policy,
@@ -826,7 +847,7 @@ pub fn create_with<R: Runner>(
             && let Ok(mut policy) = Policy::load(&ctx.paths)
         {
             for id in &added {
-                policy.remove_rules(Some(&req.name), Some(id), None, None, None);
+                policy.remove_rules(Some(&req.name), Some(id), None, None, None, None);
             }
             let _ = policy.save(&ctx.paths);
         }
@@ -879,6 +900,7 @@ fn drop_install_rules<R: Runner>(
         &req.name,
         &req.rec.credential_hosts,
         req.rec.host_access,
+        req.egress.is_some(),
     ))
 }
 
@@ -914,6 +936,7 @@ pub fn push_network_with<R: Runner>(
             sb.name(),
             &sb.meta.rec.credential_hosts,
             sb.meta.rec.host_access,
+            sb.meta.egress.is_some(),
         );
         match ctx.vm.update_network(&sb.machine, &network) {
             Ok(()) => updated += 1,

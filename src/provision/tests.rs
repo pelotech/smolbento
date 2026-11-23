@@ -542,7 +542,7 @@ fn install_rules_left_by_an_interrupted_create_stay_shut() {
     // Neither a first start without these ids nor a policy push opens them.
     let first = format!("{:?}", first_start_plan(&t.ctx, &m, &[]).unwrap().network);
     assert!(!first.contains("registry.npmjs.org"), "{first}");
-    let pushed = format!("{:?}", compile::network(&policy, "s1", &[], false));
+    let pushed = format!("{:?}", compile::network(&policy, "s1", &[], false, false));
     assert!(!pushed.contains("registry.npmjs.org"), "{pushed}");
     let first = format!(
         "{:?}",
@@ -1234,10 +1234,10 @@ fn a_sandbox_without_credentials_is_hosted() {
         t.runner().envs().last().unwrap(),
         &vec![("SMOLVM_INTERCEPTOR_TOKEN".to_string(), token)]
     );
-    // Nothing is terminated, so the guest gets no CA and no trust variables.
+    // Ruled hosts are decrypted without a binding, so the guest gets the CA and trust variables.
     let create = t.create_line();
-    assert!(!create.contains("/run/smol/credentials"), "{create}");
-    assert!(!create.contains("SSL_CERT_FILE"), "{create}");
+    assert!(create.contains("/run/smol/credentials:ro"), "{create}");
+    assert!(create.contains("SSL_CERT_FILE"), "{create}");
     assert!(create.contains("sbx.egress="), "{create}");
 }
 
@@ -1439,4 +1439,92 @@ fn a_start_fails_closed_when_a_hosted_sandbox_lost_its_label() {
         assert!(plan.egress.is_none());
         assert!(plan.env.iter().any(|(_, v)| v == "gh-123"));
     }
+}
+
+/// `wl` plus a mixin `k` with a required runtime `network-policy@2` capability: an allow of GET
+/// and POST on two paths of `api.a.com`, resolved for a hosted sandbox.
+fn request_rule_plan() -> Plan {
+    use crate::kits::args::ArgValues;
+    use crate::kits::model::{Cap, CapBody, Content, Kind, Kit, NetRule, Rules};
+    let mut wl = Kit::test("wl", Kind::Workload);
+    wl.content = Content::Image("img:1".into());
+    let mut k = Kit::test("k", Kind::Mixin);
+    k.caps = vec![Cap::new(
+        "com.docker.sandbox/network-policy@2".to_string(),
+        false,
+        CapBody::Network {
+            install: Rules::default(),
+            runtime: Rules {
+                allow: vec![NetRule {
+                    host: "api.a.com".into(),
+                    methods: vec!["POST".into(), "GET".into()],
+                    paths: vec!["/v1/**".into(), "/v2".into()],
+                }],
+                deny: vec![],
+            },
+        },
+    )];
+    let workdir = crate::kits::resolve::NO_SANDBOX_WORKDIR;
+    crate::kits::resolve::resolve_for(wl, vec![k], &ArgValues::default(), workdir, &[], true)
+        .unwrap()
+}
+
+#[test]
+fn kit_request_rules_reach_policy_toml() {
+    let (t, _ctl) = egress_env("hosted", &[]);
+    let plan = request_rule_plan();
+    let mut req = CreateRequest {
+        name: "s1".into(),
+        ..Default::default()
+    };
+    create_with(&t.ctx, &mut req, &[], Some(&plan), None, &mut |_| {}).unwrap();
+    assert!(req.egress.is_some());
+    let p = Policy::load(&t.ctx.paths).unwrap();
+    let rules: Vec<(&str, Option<&str>, Option<&str>)> = p
+        .rules_for(Some("s1"))
+        .map(|(r, _)| {
+            (
+                r.created_via.as_str(),
+                r.method.as_deref(),
+                r.path.as_deref(),
+            )
+        })
+        .collect();
+    assert_eq!(
+        rules,
+        [
+            ("kit:k", Some("GET,POST"), Some("/v1/**")),
+            ("kit:k", Some("GET,POST"), Some("/v2")),
+        ]
+    );
+    // Both map to the egress process's request policy, case-sensitive as kit rules.
+    let mapped = crate::egress::request_rules::request_policy(&p, "s1", &[]);
+    assert_eq!(mapped.rules.len(), 2);
+    assert!(
+        mapped
+            .rules
+            .iter()
+            .all(|r| r.case == egress_front::Case::Sensitive)
+    );
+}
+
+#[test]
+fn a_fallback_sandbox_refuses_a_required_request_rule_before_create() {
+    // The default (hosted), and a test context with no service manager: smolvm egress.
+    let t = test_env(&[]);
+    set_policy(&t, "mode = \"deny-all\"");
+    let plan = request_rule_plan();
+    let mut req = CreateRequest {
+        name: "s1".into(),
+        ..Default::default()
+    };
+    let e = create_with(&t.ctx, &mut req, &[], Some(&plan), None, &mut |_| {}).unwrap_err();
+    assert_eq!(
+        format!("{e:#}"),
+        "kit k: network-policy@2 method/path rules need hosted egress, but s1 uses smolvm egress: \
+         no service manager for its egress unit"
+    );
+    assert!(t.calls_of("machine create").is_empty());
+    let p = Policy::load(&t.ctx.paths).unwrap();
+    assert_eq!(p.rules_for(Some("s1")).count(), 0);
 }

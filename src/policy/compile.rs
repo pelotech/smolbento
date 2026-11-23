@@ -9,7 +9,7 @@ use crate::smolvm::{AllowList, NetworkSpec};
 
 /// The rules that apply to a sandbox (`None`: the global rules only): every rule but install-phase
 /// kit rules, of which only those in `install` (the ids the running install step added) apply.
-fn active<'a>(
+pub(crate) fn active<'a>(
     policy: &'a Policy,
     sandbox: Option<&'a str>,
     install: &'a [String],
@@ -83,15 +83,60 @@ fn allows_with(policy: &Policy, sandbox: Option<&str>, install: &[String]) -> Ve
     allows
 }
 
+/// Whether this resource of a deny rule acts per request, not on its whole host: on a hosted
+/// sandbox, a request deny the interceptor maps to a named host. The gateway (`localhost`) is
+/// never decrypted.
+fn per_request(hosted: bool, r: &Rule, res: &Resource) -> bool {
+    hosted
+        && r.is_request()
+        && res.pattern != Pattern::Exact("localhost".into())
+        && crate::egress::request_rules::map(r, res).is_ok()
+}
+
+/// How one resource of a rule acts on its whole host in a verdict. A request deny the interceptor
+/// maps acts per request (`None`); a request allow still makes its host reachable, unless the
+/// interceptor can't map it: then it denies the host rather than allow all of it.
+fn acts(r: &Rule, res: &Resource) -> Option<Decision> {
+    match r.decision {
+        Decision::Deny if per_request(true, r, res) => None,
+        Decision::Allow if r.is_request() && crate::egress::request_rules::map(r, res).is_err() => {
+            Some(Decision::Deny)
+        }
+        d => Some(d),
+    }
+}
+
+/// The deny resources that act on their whole host: every deny but the per-request ones.
+fn host_denies(
+    policy: &Policy,
+    sandbox: Option<&str>,
+    install: &[String],
+    hosted: bool,
+) -> Vec<Resource> {
+    active(policy, sandbox, install)
+        .filter(|(r, _)| r.decision == Decision::Deny)
+        .flat_map(|(r, _)| r.parsed().filter(move |res| !per_request(hosted, r, res)))
+        .collect()
+}
+
 /// What smolvm should allow for a sandbox. A bound credential's hosts are always included: smolvm
-/// requires them. Install-phase kit rules are left out (see `network_with`).
+/// requires them. Install-phase kit rules are left out (see `network_with`). `hosted`: the
+/// sandbox's interceptor enforces the request denies it maps, so they leave their host in the list.
 pub fn network(
     policy: &Policy,
     sandbox: &str,
     credential_hosts: &[String],
     host_access: bool,
+    hosted: bool,
 ) -> NetworkSpec {
-    network_for(policy, Some(sandbox), credential_hosts, &[], host_access)
+    network_for(
+        policy,
+        Some(sandbox),
+        credential_hosts,
+        &[],
+        host_access,
+        hosted,
+    )
 }
 
 /// `network` plus the install-phase kit rules with these ids: only for the steps that run a kit's
@@ -102,6 +147,7 @@ pub fn network_with(
     credential_hosts: &[String],
     install: &[String],
     host_access: bool,
+    hosted: bool,
 ) -> NetworkSpec {
     network_for(
         policy,
@@ -109,6 +155,7 @@ pub fn network_with(
         credential_hosts,
         install,
         host_access,
+        hosted,
     )
 }
 
@@ -119,12 +166,13 @@ fn network_for(
     credential_hosts: &[String],
     install: &[String],
     host_access: bool,
+    hosted: bool,
 ) -> NetworkSpec {
     if policy.current_mode() == Mode::AllowAll {
         return NetworkSpec::Open;
     }
     let allows = allows_with(policy, sandbox, install);
-    let denies = resources(policy, sandbox, install, Decision::Deny);
+    let denies = host_denies(policy, sandbox, install, hosted);
     if allows
         .iter()
         .any(|r| r.pattern == Pattern::Everything && !denied(r, &denies))
@@ -464,23 +512,25 @@ fn verdict_for(
     }
     // No sandbox: the global rules only.
     let mode = policy.current_mode();
+    let t = target.as_str();
     let hits = |decision: Decision| {
-        active(policy, sandbox, &[])
-            .filter(move |(r, _)| r.decision == decision)
-            .flat_map(|(r, scope)| {
-                r.parsed()
-                    .filter(|res| res.matches(&target))
-                    .map(move |res| (r, scope.unwrap_or("global"), res))
-            })
+        active(policy, sandbox, &[]).flat_map(move |(r, scope)| {
+            r.parsed()
+                .filter(move |res| res.matches(t) && acts(r, res) == Some(decision))
+                .map(move |res| (r, scope.unwrap_or("global"), res))
+        })
     };
     // A CIDR deny without a port is enforced (at create); report it before any other deny.
     let enforced =
         |res: &Resource| matches!(res.pattern, Pattern::Cidr { .. }) && res.port.is_none();
-    let spec = || network_for(policy, sandbox, credential_hosts, &[], false);
+    let spec = || network_for(policy, sandbox, credential_hosts, &[], false, false);
     let mut denies: Vec<_> = hits(Decision::Deny).collect();
     denies.sort_by_key(|(_, _, res)| !enforced(res));
     if let Some((r, scope, res)) = denies.first() {
-        let text = format!("deny rule {} ({scope})", r.id);
+        let text = match r.decision {
+            Decision::Deny => format!("deny rule {} ({scope})", r.id),
+            Decision::Allow => format!("allow rule {} ({scope}) can't be mapped per request", r.id),
+        };
         if !smolvm {
             return verdict(false, text);
         }
