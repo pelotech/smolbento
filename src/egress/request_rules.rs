@@ -127,8 +127,8 @@ fn spare_port(policy: &policy::Policy) -> u16 {
     (1..=u16::MAX).find(|p| !named.contains(p)).unwrap_or(443)
 }
 
-/// Whether a rule with these qualifiers can be enforced per request: `policy allow|deny` refuses
-/// one that can't.
+/// Whether a rule with these qualifiers can be enforced per request, by the mapping egress uses:
+/// `policy allow|deny` and kits refuse one that can't.
 pub fn check(
     decision: Decision,
     resources: &[Resource],
@@ -136,10 +136,18 @@ pub fn check(
     path: Option<&str>,
     query: Option<&str>,
 ) -> Result<(), String> {
-    request(method, path, query)?;
-    resources
-        .iter()
-        .try_for_each(|r| host(decision, r).map(drop))
+    resources.iter().try_for_each(|res| {
+        let r = policy::Rule {
+            id: res.raw.clone(),
+            decision,
+            resources: vec![],
+            created_via: String::new(),
+            method: method.map(Into::into),
+            path: path.map(Into::into),
+            query: query.map(Into::into),
+        };
+        map(&r, res).map(drop)
+    })
 }
 
 fn action(d: Decision) -> Action {
@@ -510,6 +518,15 @@ mod tests {
         let res = |s: &str| Resource::parse(s).unwrap();
         assert_eq!(mapped_host(r("api.x.com"), &res("api.x.com")), None);
         assert_eq!(mapped_host(r("h.com"), &res("h.com")), Some("h.com".into()));
+    }
+
+    #[test]
+    fn check_refuses_what_egress_cant_map() {
+        let h = parse_list("h.com").unwrap();
+        for d in [Decision::Allow, Decision::Deny] {
+            let err = check(d, &h, Some("GET POST"), None, None).unwrap_err();
+            assert!(err.contains("uppercase tokens"), "{err}");
+        }
     }
 
     #[test]
