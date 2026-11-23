@@ -747,8 +747,14 @@ version = "0.37.0"
 dependencies = [
  "anyhow",
  "http",
+ "rcgen",
+ "rustls-pemfile",
+ "rustls-pki-types",
+ "rustls-webpki",
+ "serde_json",
  "smolvm-credentials",
  "smolvm-protocol",
+ "zeroize",
 ]
 
 [[package]]

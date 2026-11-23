@@ -22,6 +22,9 @@ It is written to be lifted into smolvm, so it names nothing of its users. Each p
 | flow decisions (`Decide`) | `smolvm-network` egress checks |
 | request rules (`Policy`) | `smolvm-protocol` |
 
+`broad_ca(machine)` mints a machine CA with no name constraint, for a machine whose decrypted hosts
+change while it runs. The interceptor still decrypts only its `terminate_hosts`.
+
 ## Request rules
 
 `Policy` holds rules over the HTTP requests on a decrypted host: hosts (exact, or subdomains one label

@@ -1234,10 +1234,10 @@ fn a_sandbox_without_credentials_is_hosted() {
         t.runner().envs().last().unwrap(),
         &vec![("SMOLVM_INTERCEPTOR_TOKEN".to_string(), token)]
     );
-    // Nothing is terminated, so the guest gets no CA and no trust variables.
+    // Ruled hosts are decrypted without a binding, so the guest gets the CA and trust variables.
     let create = t.create_line();
-    assert!(!create.contains("/run/smol/credentials"), "{create}");
-    assert!(!create.contains("SSL_CERT_FILE"), "{create}");
+    assert!(create.contains("/run/smol/credentials:ro"), "{create}");
+    assert!(create.contains("SSL_CERT_FILE"), "{create}");
     assert!(create.contains("sbx.egress="), "{create}");
 }
 

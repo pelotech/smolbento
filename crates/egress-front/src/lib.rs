@@ -6,12 +6,14 @@ pub use smolvm_credentials::{
 };
 pub use smolvm_protocol::credentials::host_subtree;
 
+mod ca;
 mod listener;
 mod name;
 mod relay;
 mod rules;
 mod serve;
 
+pub use ca::broad_ca;
 pub use listener::activated_listener;
 pub use relay::{Decide, Decision, Flow};
 pub use rules::{
