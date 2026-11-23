@@ -3,8 +3,8 @@
 A small library that fronts a smolvm machine's egress on the host: it takes the listener its service
 manager hands it (socket activation) and relays each of the machine's connections to smolvm's
 interceptor, which substitutes credentials. It is the only crate that depends on smolvm's
-`smolvm-credentials` and `smolvm-protocol` (git dependencies at a fork `rev`, see `Cargo.toml`), and
-it re-exports what its users need.
+`smolvm-credentials` and `smolvm-protocol` (git dependencies at a tag on the smolvm fork made by
+`just smolvm-fork`, see the comment in `Cargo.toml`), and it re-exports what its users need.
 
 Each flow is decided by the caller's `Decide` hook twice: from smolvm's preamble (destination address
 and port, no name), and again from the first bytes the machine sends, with the name they ask for

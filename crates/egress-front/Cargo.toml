@@ -7,9 +7,11 @@ license = "Apache-2.0"
 authors = ["Pelotech"]
 publish = false
 
-# Stopgap until smolvm-credentials is on crates.io (or upstream's submodules use https): a fork branch that is
-# the smolvm release pinned in smolvm.lock plus an https .gitmodules, recreated for each smolvm pin.
+# Stopgap until smolvm's request-filter hook is released and smolvm-credentials is on crates.io: a tag on the fork
+# that is a smolvm base plus the hook (and an https .gitmodules). `just smolvm-fork [BASE]` makes it and updates
+# these lines; BASE defaults to the release in smolvm.lock. Currently the tag is smolvm main plus the
+# request-filter hook, ahead of the 1.36.1 binary until the next smolvm release; the binary stays at `smolvm.lock`.
 [dependencies]
 anyhow = "1.0.104"
-smolvm-credentials = { git = "https://github.com/josmo/smolvm", rev = "f026f22864f059e8f5d3260aef03157df2d1fc82", version = "1.36.1" }
-smolvm-protocol = { git = "https://github.com/josmo/smolvm", rev = "f026f22864f059e8f5d3260aef03157df2d1fc82", version = "1.36.1" }
+smolvm-credentials = { git = "https://github.com/josmo/smolvm", tag = "bento-main-c5ae3713-hook0d03d418", version = "1.36.1" }
+smolvm-protocol = { git = "https://github.com/josmo/smolvm", tag = "bento-main-c5ae3713-hook0d03d418", version = "1.36.1" }

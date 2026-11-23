@@ -2824,8 +2824,9 @@ dependencies = [
 [[package]]
 name = "smolvm-credentials"
 version = "1.36.1"
-source = "git+https://github.com/josmo/smolvm?rev=f026f22864f059e8f5d3260aef03157df2d1fc82#f026f22864f059e8f5d3260aef03157df2d1fc82"
+source = "git+https://github.com/josmo/smolvm?tag=bento-main-c5ae3713-hook0d03d418#f713f25cb3fe3882e54d6104cb12f8a60a98dbf5"
 dependencies = [
+ "aho-corasick",
  "anyhow",
  "bytes",
  "flate2",
@@ -2850,7 +2851,7 @@ dependencies = [
 [[package]]
 name = "smolvm-protocol"
 version = "1.36.1"
-source = "git+https://github.com/josmo/smolvm?rev=f026f22864f059e8f5d3260aef03157df2d1fc82#f026f22864f059e8f5d3260aef03157df2d1fc82"
+source = "git+https://github.com/josmo/smolvm?tag=bento-main-c5ae3713-hook0d03d418#f713f25cb3fe3882e54d6104cb12f8a60a98dbf5"
 dependencies = [
  "base64 0.22.1",
  "serde",
