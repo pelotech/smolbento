@@ -66,6 +66,9 @@ pub struct Entry {
     /// its own and the rest of the index still loads.
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub kits: Vec<crate::sandbox::labels::KitRecord>,
+    /// The source sandbox's command (`sbx.command`), which a sandbox made from it runs.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub command: Vec<String>,
 }
 
 impl Entry {
@@ -80,11 +83,12 @@ impl Entry {
         agent_ref.is_some() && agent_ref.as_deref() == workload
     }
 
-    /// Refuses a template with no kit records: a sandbox made from it would have no kits.
+    /// Refuses a template with no kit records or command: a sandbox made from it would have no
+    /// kits, or run nothing.
     pub fn check_current(&self) -> Result<()> {
-        if self.kits.is_empty() {
+        if self.kits.is_empty() || self.command.is_empty() {
             bail!(
-                "template {} has no kit records; save it again from a new sandbox",
+                "template {} has no kit records or command; save it again from a new sandbox",
                 self.full()
             );
         }
@@ -368,6 +372,20 @@ mod tests {
         (dir, s)
     }
 
+    #[test]
+    fn a_template_without_a_command_is_refused() {
+        let e = Entry {
+            command: vec![],
+            ..meta("t:v1")
+        };
+        assert_eq!(
+            e.check_current().unwrap_err().to_string(),
+            "template docker.io/library/t:v1 has no kit records or command; save it again from a \
+             new sandbox"
+        );
+        assert!(meta("t:v1").check_current().is_ok());
+    }
+
     fn meta(r: &str) -> Entry {
         let t = TemplateRef::parse(r).unwrap();
         Entry {
@@ -383,6 +401,7 @@ mod tests {
                 format: None,
                 args: Default::default(),
             }],
+            command: vec!["bash".into(), "-l".into()],
             ..Default::default()
         }
     }

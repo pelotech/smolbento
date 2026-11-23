@@ -277,7 +277,11 @@ pub(crate) fn kit_plan<R: Runner>(
                 recorded_args.push((kit.name.clone(), args));
                 recorded.push(kit);
             }
-            (None, recorded.remove(0))
+            let mut workload = recorded.remove(0);
+            // What the source sandbox ran: its kit may take its command from an image the pack
+            // replaced, or (a Smolfile) have none.
+            workload.command = Some(e.command.clone());
+            (None, workload)
         }
         Workload::Agent { name, reference } => {
             let kit = kits.load_agent(ctx, &name, &reference)?;

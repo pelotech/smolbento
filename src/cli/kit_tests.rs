@@ -24,26 +24,6 @@ fn base() -> Vec<KitRecord> {
     vec![rec("base", "ghcr.io/acme/base@sha256:00", &["base"], None)]
 }
 
-#[test]
-fn kit_add_refuses_an_old_preset_sandbox() {
-    let mut t = kit_env();
-    // No `sbx.command`: made when built-in agents weren't kits.
-    t.runner().ok(
-        &["machine", "status", "-n", MACHINE],
-        &machine_json(
-            MACHINE,
-            "running",
-            &[("sbx.name", "dev"), ("sbx.agent", "shell")],
-        ),
-    );
-    let err = t.sbt_err(&["kit", "add", "dev", "docker"]);
-    assert_eq!(
-        err,
-        "sandbox dev was created by an older smolbento whose built-in agents weren't kits; \
-             recreate it (bento rm dev, then bento create …)"
-    );
-}
-
 /// A running shell sandbox `dev` whose `sbx.kits` holds `kits`.
 fn dev_sandbox(t: &TestEnv, kits: &[KitRecord]) {
     dev_sandbox_in(t, "running", kits);

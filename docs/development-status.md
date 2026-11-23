@@ -150,7 +150,3 @@ Small issues found in review and deferred. None affect normal use.
 
 - More tests for: `cp -L`, `exec --privileged -u`, session cleanup on `rm`/`prune`/`reset`,
   `ProcessRunner` itself.
-- A create from a template records no `sbx.command` when the workload is a v2 kit that leaves its
-  command to its image, or a Smolfile kit: `kit_plan` skips `check_launchable` and the `bash -l`
-  default for templates. `Sandbox::check_current` then refuses the sandbox as if it were old.
-  Record the command there, then drop `check_current`.

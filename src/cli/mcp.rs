@@ -327,6 +327,7 @@ mod tests {
                         format: None,
                         args: Default::default(),
                     }],
+                    command: vec!["bash".into(), "-l".into()],
                     ..Default::default()
                 },
                 &src,
