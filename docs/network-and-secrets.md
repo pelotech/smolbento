@@ -184,7 +184,9 @@ Each connection is decided twice, and smolvm's allow list still applies first:
 - **By name and port**, from the guest's first bytes: the TLS SNI, or the HTTP `Host:` header.
   Nothing is forwarded until they're read. A deny (a denied host, or a port its rules don't allow)
   closes the connection. A name deny inside an allowed wildcard (`**.github.com` allowed,
-  `gist.github.com` denied) holds.
+  `gist.github.com` denied) holds. A name no rule mentions still passes when an IP or CIDR allow rule
+  matches the destination (`10.0.0.0/8` admits `gitlab.corp` at `10.1.2.3`, and a proxy's CONNECT),
+  unless a deny matches the name or the address.
 
 Either way the guest sees the connection open, then reset, not refused: smolvm accepts it before
 asking the egress process. curl exits 35 or 56 (52 for plain HTTP), not 7.

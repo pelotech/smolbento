@@ -78,15 +78,16 @@ impl Rules {
             };
             return (d, v.reason);
         }
-        let addr = SocketAddr::new(flow.ip, flow.port).to_string();
+        let v = verdict(&SocketAddr::new(flow.ip, flow.port).to_string());
         if let Some(name) = &flow.name {
-            let v = verdict(&format!("{name}:{}", flow.port));
-            if !v.allowed {
-                return (Decision::Deny, v.reason);
+            let n = verdict(&format!("{name}:{}", flow.port));
+            // An IP or CIDR allow rule still admits a name no rule mentions; a deny always wins.
+            // Allow-all and presets never reach here, as they would have allowed the name.
+            if !n.allowed && !(n.implicit && v.allowed) {
+                return (Decision::Deny, n.reason);
             }
         }
         // By address, only a deny rule refuses: smolvm's allow list already admitted the flow.
-        let v = verdict(&addr);
         if v.allowed || v.implicit {
             return (Decision::Allow, v.reason);
         }
@@ -231,6 +232,48 @@ mod tests {
             Decision::Deny
         );
         assert_eq!(ask(&r, &flow(None, "192.0.2.1", 443)), Decision::Allow);
+    }
+
+    #[test]
+    fn a_cidr_allow_admits_a_named_flow_to_its_range() {
+        let d = tempfile::tempdir().unwrap();
+        let p = paths(d.path());
+        save(&p, &[(true, "10.0.0.0/8")]);
+        let r = Rules::new(&p, SB, false, vec![]);
+        assert_eq!(
+            ask(&r, &flow(Some("gitlab.corp"), "10.1.2.3", 443)),
+            Decision::Allow
+        );
+        // Outside the range, the name alone decides.
+        assert_eq!(
+            ask(&r, &flow(Some("gitlab.corp"), "192.0.2.1", 443)),
+            Decision::Deny
+        );
+    }
+
+    #[test]
+    fn a_name_deny_beats_a_cidr_allow() {
+        let d = tempfile::tempdir().unwrap();
+        let p = paths(d.path());
+        save(&p, &[(true, "10.0.0.0/8"), (false, "gitlab.corp")]);
+        let r = Rules::new(&p, SB, false, vec![]);
+        assert_eq!(
+            ask(&r, &flow(Some("gitlab.corp"), "10.1.2.3", 443)),
+            Decision::Deny
+        );
+    }
+
+    #[test]
+    fn a_proxy_connect_is_admitted_by_the_proxy_cidr() {
+        let d = tempfile::tempdir().unwrap();
+        let p = paths(d.path());
+        save(&p, &[(true, "10.9.9.0/24")]);
+        let r = Rules::new(&p, SB, false, vec![]);
+        // A CONNECT names its target, not the proxy.
+        assert_eq!(
+            ask(&r, &flow(Some("example.com"), "10.9.9.9", 3128)),
+            Decision::Allow
+        );
     }
 
     #[test]
