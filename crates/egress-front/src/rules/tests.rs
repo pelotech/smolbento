@@ -145,6 +145,24 @@ fn repeated_query_params_allow_only_if_every_value_matches_and_deny_if_any_does(
 }
 
 #[test]
+fn an_allow_needs_the_path_with_and_without_params() {
+    let p = policy(vec![allow("h", &[], &["/files/report"])]);
+    assert!(check(&p, "GET", "/files/report").is_ok());
+    for target in ["/files/report;x", "/files/report%3Bx"] {
+        assert_eq!(
+            check(&p, "GET", target).unwrap_err(),
+            "no rule allows GET /files/report on h",
+            "{target}"
+        );
+    }
+    let p = policy(vec![deny("h", &[], &["/files/report"])]);
+    for target in ["/files/report", "/files/report;x", "/files/report%3Bx"] {
+        assert!(check(&p, "GET", target).is_err(), "{target}");
+    }
+    assert!(check(&p, "GET", "/files/other;x").is_ok());
+}
+
+#[test]
 fn deny_beats_allow() {
     let mut d = deny("h", &[], &["/repos/*/*/hooks/**"]);
     d.reason = Some("webhooks are blocked".into());

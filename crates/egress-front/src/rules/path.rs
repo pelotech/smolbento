@@ -91,10 +91,11 @@ fn glob<P, S>(
     pat[p..].iter().all(is_star)
 }
 
-/// A request target as judged: canonical path segments, and the query read two ways (split on `&` and
-/// `;`, and on `&` only). It never changes what is forwarded.
+/// A request target as judged: the canonical path read with `;params` dropped, and kept (when it has
+/// any), and the query read two ways (split on `&` and `;`, and on `&` only). It never changes what is
+/// forwarded.
 pub(super) struct View {
-    pub segments: Vec<String>,
+    pub paths: Vec<Vec<String>>,
     pub readings: Vec<Vec<(Vec<u8>, Vec<u8>)>>,
 }
 
@@ -127,29 +128,41 @@ impl View {
         {
             return None;
         }
-        let mut segments: Vec<String> = Vec::new();
-        for seg in path
-            .split('/')
-            .map(|s| s.split(';').next().unwrap_or_default())
-        {
-            match seg {
-                "" | "." => {}
-                ".." => {
-                    segments.pop();
-                }
-                s => segments.push(s.to_owned()),
-            }
+        let mut paths = vec![segments(&path, true)];
+        if path.contains(';') {
+            paths.push(segments(&path, false));
         }
         let mut readings = vec![params(query, &['&', ';'])];
         if query.contains(';') {
             readings.push(params(query, &['&']));
         }
-        Some(View { segments, readings })
+        Some(View { paths, readings })
     }
 
     pub fn path(&self) -> String {
-        format!("/{}", self.segments.join("/"))
+        format!("/{}", self.paths[0].join("/"))
     }
+}
+
+/// The decoded path's segments, each with its `;params` dropped or not: empty segments merged, dots
+/// resolved without rising above the root.
+fn segments(path: &str, drop_params: bool) -> Vec<String> {
+    let mut out: Vec<String> = Vec::new();
+    for seg in path.split('/') {
+        let seg = if drop_params {
+            seg.split(';').next().unwrap_or_default()
+        } else {
+            seg
+        };
+        match seg {
+            "" | "." => {}
+            ".." => {
+                out.pop();
+            }
+            s => out.push(s.to_owned()),
+        }
+    }
+    out
 }
 
 /// Query parameters split on `seps`, each name and value `application/x-www-form-urlencoded` decoded.

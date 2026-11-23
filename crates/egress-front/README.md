@@ -35,9 +35,8 @@ matches (`no rule allows METHOD PATH on HOST`); a refusal names only the denying
 
 The guest is taken to be adversarial. A deny fires if **any** reading of the request matches, and an
 allow needs **every** reading to: the method plus any `X-HTTP-Method-Override`, `X-HTTP-Method` or
-`X-Method-Override` value, and the query split on `&` and `;` or on `&` alone, with each repeated
-parameter. Paths are judged by a canonical view (decoded once, `;params` dropped, empty segments merged,
-dots resolved), which never changes what is forwarded. A target with an encoded `/` or `\`, a `%` that
+`X-Method-Override` value, the path with `;params` dropped and kept, and the query split on `&` and `;` or on `&` alone, with each repeated
+parameter. Paths are judged by a canonical view (decoded once, empty segments merged, dots resolved), which never changes what is forwarded. A target with an encoded `/` or `\`, a `%` that
 isn't one valid escape (double encoding, `%u`), invalid UTF-8 or a control character is refused as
 `ambiguous request target` on a host the rules name. Path globs: `*` within a segment, `**` as a whole
 segment for zero or more. Not covered: request bodies, a `_method` parameter, Unicode normalization.

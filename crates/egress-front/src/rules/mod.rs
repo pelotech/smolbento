@@ -1,8 +1,8 @@
 //! A request-rule language: which HTTP requests to a host are allowed, by method, path and query.
 //!
 //! Rules add up and order never matters: a deny that matches wins over any allow. The guest is taken to be
-//! adversarial, so where a request can be read more than one way (method override headers, repeated or
-//! `;`-separated query parameters), a deny fires if any reading matches, and an allow needs every reading
+//! adversarial, so where a request can be read more than one way (method override headers, a path with
+//! or without `;params`, repeated or `;`-separated query parameters), a deny fires if any reading matches, and an allow needs every reading
 //! to match. A target is judged by a canonical view and never rewritten.
 
 mod path;
@@ -264,7 +264,14 @@ impl Rule {
         let query_ok =
             |params: &Vec<(Vec<u8>, Vec<u8>)>| m.query.iter().all(|q| q.matches(params, ci, every));
         method_ok
-            && m.paths.iter().any(|g| g.matches(&view.segments, ci))
+            && {
+                let path_ok = |segs: &Vec<String>| m.paths.iter().any(|g| g.matches(segs, ci));
+                if every {
+                    view.paths.iter().all(path_ok)
+                } else {
+                    view.paths.iter().any(path_ok)
+                }
+            }
             && if every {
                 view.readings.iter().all(query_ok)
             } else {
