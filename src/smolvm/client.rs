@@ -351,17 +351,17 @@ impl<R: Runner> Smolvm<R> {
     }
 
     /// Hands the running machine new values for the credentials bound to `env`'s variables, without
-    /// a restart (smolvm 1.35.4): `env` reaches the smolvm process only, and the machine uses the
-    /// values from its next request.
+    /// a restart: `env` reaches the smolvm process only, and the machine uses the values from its
+    /// next request.
     pub fn refresh_credentials(&self, name: &str, env: &[(String, String)]) -> Result<()> {
         let mut a = args(&["machine", "credentials", "refresh", "-n", name]);
         a.extend(env.iter().map(|(v, _)| Credential::binding(v)));
         checked(self.runner.run_with_env(&a, env, &[])?).map(drop)
     }
 
-    /// Adds or replaces credential bindings on a running or stopped machine (smolvm 1.36.1); smolvm
-    /// reads each value from `env`, which reaches the smolvm process only. A running machine that
-    /// booted with no bindings takes them from its next start.
+    /// Adds or replaces credential bindings on a running or stopped machine; smolvm reads each
+    /// value from `env`, which reaches the smolvm process only. A running machine that booted with
+    /// no bindings takes them from its next start.
     pub fn add_credentials(
         &self,
         name: &str,
@@ -418,7 +418,7 @@ impl<R: Runner> Smolvm<R> {
         self.call(a).map(drop)
     }
 
-    /// Sets one label; works running or stopped (smolvm 1.35).
+    /// Sets one label; works running or stopped.
     pub fn set_label(&self, name: &str, key: &str, value: &str) -> Result<()> {
         self.call(args(&[
             "machine",
@@ -479,26 +479,6 @@ impl<R: Runner> Smolvm<R> {
         self.call(args(&["machine", "stop", "-n", name])).map(drop)
     }
 
-    /// `list` against smolvm's own default state (without smolbento's `SMOLVM_DATA_DIR`), where
-    /// sandboxes from before smolbento kept its own state may still be.
-    pub fn list_default_state(&self) -> Result<Vec<Machine>> {
-        machines(&self.call_default_state(&["machine", "ls", "--json"])?)
-    }
-
-    /// `delete` in smolvm's own default state (see `list_default_state`).
-    pub fn delete_default_state(&self, name: &str) -> Result<()> {
-        self.call_default_state(&["machine", "delete", "-n", name, "-f"])
-            .map(drop)
-    }
-
-    /// A call without smolbento's `SMOLVM_DATA_DIR`.
-    fn call_default_state(&self, a: &[&str]) -> Result<Output> {
-        checked(
-            self.runner
-                .run_with_env(&args(a), &[], &[DATA_DIR.to_string()])?,
-        )
-    }
-
     pub fn delete(&self, name: &str) -> Result<()> {
         self.call(args(&["machine", "delete", "-n", name, "-f"]))
             .map(drop)
@@ -508,7 +488,7 @@ impl<R: Runner> Smolvm<R> {
         self.call(args(&["machine", "cp", src, dst])).map(drop)
     }
 
-    /// Uploads the host folder `src` into exactly `dst` in the running machine (smolvm 1.35.4).
+    /// Uploads the host folder `src` into exactly `dst` in the running machine.
     /// `dst`'s parent must exist.
     pub fn upload_folder(&self, name: &str, src: &Path, dst: &str) -> Result<()> {
         let src = src.display().to_string();
@@ -524,7 +504,7 @@ impl<R: Runner> Smolvm<R> {
         .map(drop)
     }
 
-    /// Downloads the running machine's file `src` to the host's `dst` (smolvm 1.35.4).
+    /// Downloads the running machine's file `src` to the host's `dst`.
     pub fn download(&self, name: &str, src: &str, dst: &Path) -> Result<()> {
         let dst = dst.display().to_string();
         self.call(args(&[
@@ -534,7 +514,7 @@ impl<R: Runner> Smolvm<R> {
     }
 
     /// Downloads the running machine's directory `src` to the host's `dst` as a tar archive,
-    /// without following its links (smolvm 1.35.4).
+    /// without following its links.
     pub fn archive(&self, name: &str, src: &str, dst: &Path) -> Result<()> {
         let dst = dst.display().to_string();
         self.call(args(&[
@@ -544,7 +524,7 @@ impl<R: Runner> Smolvm<R> {
     }
 
     /// Whether `path` in the running machine is a directory: `machine files list` lists only
-    /// directories (smolvm 1.35.4), and its error for anything else has no code of its own.
+    /// directories, and its error for anything else has no code of its own.
     pub fn is_dir(&self, name: &str, path: &str) -> bool {
         self.call(args(&[
             "machine", "files", "--name", name, "list", path, "--json",

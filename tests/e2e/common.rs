@@ -859,7 +859,7 @@ pub(crate) const HTTPBIN_IP: &str =
     "nslookup httpbin.org 2>/dev/null | awk '/^Address/ && $NF !~ /:/ {print $NF}' | head -n 1";
 
 /// Whether httpbin accepts `Authorization: Basic $VAR` from sandbox `sb` as the password `pass`
-/// of `user`. smolvm (1.35+) scrubs an injected value out of what the host sends back, so an echo
+/// of `user`. smolvm scrubs an injected value out of what the host sends back, so an echo
 /// shows the placeholder; the server's answer is what proves the substitution.
 pub(crate) fn basic_auth_ok(e: &E2e, sb: &str, var: &str, pass: &str) -> bool {
     let cmd = format!(

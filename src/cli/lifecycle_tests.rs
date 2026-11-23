@@ -560,15 +560,18 @@ fn template_kits_follow_kit_policy() {
 }
 
 #[test]
-fn an_old_template_is_refused_on_create() {
+fn a_template_without_kit_records_is_refused_on_create() {
     let mut t = test_env(&[]);
     legacy_template(&t, "old:v1", "shell");
+    // Another entry still loads.
+    saved_template(&t, "new:v1", "shell");
     let err = t.sbt_err(&["create", "shell", "-t", "old:v1"]);
     assert_eq!(
         err,
-        "template docker.io/library/old:v1 was saved by an older smolbento; save it again \
-             from a new sandbox"
+        "template docker.io/library/old:v1 has no kit records; save it again from a new sandbox"
     );
+    t.sbt(&["template", "ls"]).unwrap();
+    assert!(t.stdout().contains("new"), "{}", t.stdout());
 }
 
 #[test]
@@ -1363,36 +1366,6 @@ fn reset_preserve_secrets_keeps_sandbox_scoped_secrets() {
 }
 
 #[test]
-fn reset_removes_old_location_sandboxes_but_not_others() {
-    let mut t = test_env(&[]);
-    let old = format!(
-        "[{},{}]",
-        json("sbx-old", "stopped", "old"),
-        machine_json("mine", "stopped", &[])
-    );
-    // smolbento's own state is empty; smolvm's default has one of ours and one of yours.
-    t.runner().ok(&["machine", "ls", "--json"], &old);
-    t.runner().once_ok(&["machine", "ls", "--json"], "[]");
-    t.sbt(&["reset", "-f"]).unwrap();
-    let calls = t.calls();
-    assert!(
-        calls.contains(&"machine delete -n sbx-old -f".to_string()),
-        "{calls:?}"
-    );
-    assert!(!calls.iter().any(|l| l.contains("-n mine")), "{calls:?}");
-    // The old-location calls run without smolbento's SMOLVM_DATA_DIR.
-    let removed = t.runner().removed();
-    assert!(
-        removed
-            .iter()
-            .filter(|r| r.contains(&"SMOLVM_DATA_DIR".to_string()))
-            .count()
-            >= 2,
-        "{removed:?}"
-    );
-}
-
-#[test]
 fn reset_removes_smolbentos_dirs_and_its_home() {
     let mut t = test_env(&[]);
     t.sandboxes(&[]);
@@ -1415,35 +1388,6 @@ fn reset_removes_smolbentos_dirs_and_its_home() {
     ] {
         assert!(!d.exists(), "{} is left", d.display());
     }
-}
-
-#[test]
-fn reset_goes_on_when_an_old_location_sandbox_wont_go_and_removes_forks_first() {
-    let mut t = test_env(&[]);
-    let old = format!(
-        "[{},{}]",
-        machine_json("sbx-a", "stopped", &[("sbx.name", "a")]),
-        machine_json(
-            "sbx-b",
-            "stopped",
-            &[("sbx.name", "b"), ("sbx.fork-of", "a")]
-        )
-    );
-    t.runner().ok(&["machine", "ls", "--json"], &old);
-    t.runner().once_ok(&["machine", "ls", "--json"], "[]");
-    t.runner().fail(
-        &["machine", "delete", "-n", "sbx-b"],
-        "SMOLVM_ERROR",
-        "busy",
-    );
-    std::fs::create_dir_all(&t.ctx.paths.config).unwrap();
-    t.sbt(&["reset", "-f"]).unwrap();
-    let deletes: Vec<String> = t.calls_of("machine delete");
-    assert_eq!(
-        deletes,
-        ["machine delete -n sbx-b -f", "machine delete -n sbx-a -f"]
-    );
-    assert!(!t.ctx.paths.config.exists(), "the reset went on");
 }
 
 #[test]
@@ -1646,8 +1590,7 @@ fn reset_deletes_forks_before_parents() {
     let mut t = test_env(&[]);
     with_forks(&t, "stopped", "stopped", "stopped");
     t.sbt(&["reset", "-f"]).unwrap();
-    // The fake answers smolvm's default location with the same machines, deleted after.
-    assert_eq!(deletes(&t)[..3], ["a-fork-1", "a-fork-2", "a"]);
+    assert_eq!(deletes(&t), ["a-fork-1", "a-fork-2", "a"]);
 }
 
 #[test]

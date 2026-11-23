@@ -60,7 +60,7 @@ smolvm-pin version:
     set -euo pipefail
     lock=$(just _smolvm-lock {{version}})
     printf '%s\n' "$lock" > smolvm.lock
-    echo "pinned smolvm {{version}}; recreate the josmo/smolvm https-submodules branch for v{{version}}, then update rev and version in crates/egress-front/Cargo.toml, run cargo update -p smolvm-credentials, and refresh the smolvm-* outputHashes in flake.nix"
+    echo "pinned smolvm {{version}}; now run just smolvm-fork v{{version}} (add push if the fork has no tag for it yet)"
 
 # Check smolvm.lock's checksums against its version's release (fails a version bump until pinned)
 smolvm-lock-check:

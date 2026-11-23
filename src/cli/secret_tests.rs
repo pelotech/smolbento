@@ -814,7 +814,7 @@ fn github_sandboxes(t: &TestEnv) {
     ]);
 }
 
-/// smolvm 1.35.4's `machine credentials refresh`: the value reaches the smolvm process's
+/// smolvm's `machine credentials refresh`: the value reaches the smolvm process's
 /// environment only, never its arguments.
 #[test]
 fn set_hands_a_running_sandbox_the_new_value_now() {

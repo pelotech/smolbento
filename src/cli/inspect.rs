@@ -30,9 +30,8 @@ struct Details<'a> {
     /// The kits' refs, as sbx lists them.
     kits: Vec<String>,
     state: &'static str,
-    /// `v` and the smolbento version that created it (sbx 0.51); absent for older sandboxes.
-    #[serde(skip_serializing_if = "Option::is_none")]
-    created_version: Option<String>,
+    /// `v` and the smolbento version that created it (sbx 0.51).
+    created_version: String,
     #[serde(skip_serializing_if = "Option::is_none")]
     image: Option<&'a str>,
     #[serde(skip_serializing_if = "Option::is_none")]
@@ -62,7 +61,7 @@ pub fn render(sb: &Sandbox, sessions: usize, format: Format) -> Result<String> {
         agent: &m.agent,
         kits: m.rec.kits.iter().map(|k| k.reference.clone()).collect(),
         state: super::ls::status(sb.state),
-        created_version: m.version.as_ref().map(|v| format!("v{v}")),
+        created_version: format!("v{}", m.version),
         image: sb.image.as_deref(),
         workspace: m.workspace.as_deref(),
         clone_source: m.clone_repo.as_deref(),
@@ -94,10 +93,8 @@ fn table(d: &Details) -> String {
         ("Agent", d.agent.to_string()),
         ("Kits", list(&d.kits, "none")),
         ("State", d.state.to_string()),
+        ("Created with", d.created_version.clone()),
     ];
-    if let Some(v) = &d.created_version {
-        rows.push(("Created with", v.clone()));
-    }
     rows.extend([
         ("Image", d.image.unwrap_or("-").to_string()),
         ("Workspace", d.workspace.unwrap_or("-").to_string()),
@@ -164,7 +161,7 @@ mod tests {
             workspace: Some("/Users/dev/proj".into()),
             workspaces: vec!["/Users/dev/proj".into()],
             created: 999_000,
-            version: Some("0.27.0".into()),
+            version: "0.27.0".into(),
             clone_repo: Some("/Users/dev/proj".into()),
             host_mounts: BTreeMap::from([(
                 "/home/agent/.cache/x".into(),
@@ -188,6 +185,7 @@ mod tests {
             name: "shell-x".into(),
             agent: "shell".into(),
             created: 999_000,
+            version: "0.27.0".into(),
             ..Default::default()
         };
         status(t, &meta, "stopped", None, "[]");
@@ -250,13 +248,6 @@ mod tests {
             "{}",
             t.stdout()
         );
-        // A sandbox from before the label has a time and no version.
-        let mut t = test_env(&[]);
-        bare(&t);
-        t.sbt(&["inspect", "shell-x", "--json"]).unwrap();
-        let json: serde_json::Value = serde_json::from_str(&t.stdout()).unwrap();
-        assert!(json.get("created_version").is_none(), "{json}");
-        assert!(json.get("created_at").is_some(), "{json}");
     }
 
     #[test]

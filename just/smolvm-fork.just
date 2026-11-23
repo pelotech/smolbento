@@ -58,7 +58,7 @@ smolvm-fork base="" push="":
     CARGO_NET_GIT_FETCH_WITH_CLI=true cargo update -q -p smolvm-credentials -p smolvm-protocol
     # flake.nix pins the checkout's hash: write a dummy, build, and take the hash nix reports
     dummy=sha256-AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA=
-    sed -i.bak -E "s#(\"smolvm-(credentials|protocol)-[0-9.]+\" = )\"sha256-[^\"]*\"#\1\"$dummy\"#" flake.nix
+    sed -i.bak -E "s#\"smolvm-(credentials|protocol)-[0-9.]+\" = \"sha256-[^\"]*\"#\"smolvm-\1-$version\" = \"$dummy\"#" flake.nix
     rm flake.nix.bak
     hash=$(nix build --no-link .#default 2>&1 | sed -n 's/^ *got: *//p' | head -1 || true)
     if [ -z "$hash" ]; then

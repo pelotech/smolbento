@@ -118,21 +118,17 @@ fn clean_stale(engine: &Path) {
     }
 }
 
-/// Removes installed versions older than `pinned`, except the newest of them. Newer ones belong
-/// to a newer smolbento sharing this home, and the newest older one to an older smolbento, so two
-/// installed versions don't download over each other. A failure only warns: a sandbox started by
-/// an old version keeps its open files, and the next upgrade tries again.
+/// Removes installed versions older than `pinned`; newer ones belong to a newer smolbento sharing
+/// this home. A failure only warns: a sandbox started by an old version keeps its open files, and
+/// the next upgrade tries again.
 fn prune(engine: &Path, pinned: &str) {
     let Ok(entries) = std::fs::read_dir(engine) else {
         return;
     };
-    let mut older: Vec<String> = entries
+    let older = entries
         .flatten()
         .map(|e| e.file_name().to_string_lossy().into_owned())
-        .filter(|n| !n.starts_with('.') && version_key(n) < version_key(pinned))
-        .collect();
-    older.sort_by_key(|n| version_key(n));
-    older.pop();
+        .filter(|n| !n.starts_with('.') && version_key(n) < version_key(pinned));
     for name in older {
         if let Err(err) = std::fs::remove_dir_all(engine.join(&name)) {
             crate::warning!("couldn't remove smolvm {name}: {err}");
@@ -276,8 +272,7 @@ mod tests {
     fn older_versions_are_pruned_and_a_failure_only_warns() {
         let home = tempfile::tempdir().unwrap();
         let engine = home.path().join("engine");
-        // Another smolbento's: newer, or the newest older one. Both stay, so two installed
-        // versions sharing the home don't download over each other.
+        // A newer smolbento's stays; every older one goes.
         std::fs::create_dir_all(engine.join("1.10.0")).unwrap();
         std::fs::create_dir_all(engine.join("0.9.0")).unwrap();
         std::fs::create_dir_all(engine.join("0.10.0")).unwrap();
@@ -291,7 +286,7 @@ mod tests {
         std::fs::set_permissions(&ro, std::fs::Permissions::from_mode(0o700)).unwrap();
         assert!(r.is_ok(), "{r:?}");
         assert!(engine.join("1.10.0").exists());
-        assert!(engine.join("0.10.0").exists());
+        assert!(!engine.join("0.10.0").exists());
         assert!(!engine.join("0.9.0").exists());
     }
 

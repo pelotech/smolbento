@@ -218,9 +218,6 @@ pub enum ApprovalCmd {
     Respond {
         /// Approval ID (as shown by `approval ls`)
         id: String,
-        /// allow or deny, in place of --option: adds the rule for every sandbox (smolbento only)
-        #[arg(conflicts_with = "option")]
-        decision: Option<crate::policy::Decision>,
         /// The option to answer with (as shown by `approval ls`)
         #[arg(long, value_name = "OPTION-ID")]
         option: Option<String>,

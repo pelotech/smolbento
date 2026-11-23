@@ -45,20 +45,21 @@ on first use into `<smolvm.home>/engine/<version>/` (default `~/.smolbento`). Ev
 users to run `bento smolvm …`, never a bare `smolvm …`, which sees other machines. Tests:
 `SMOLBENTO_SMOLVM` runs another binary (a local build), and e2e shares `/tmp/sbt-e2e-<uid>`.
 
-As of smolvm 1.36. Check the reference source before depending on anything not listed here.
+This is the contract of the pinned smolvm. Check the reference source before depending on anything
+not listed here.
 
 - **Errors:** `--error-format json` prints `{"error":{"code":…,"message":…}}` on stderr. The exit
   status is unchanged. Branch on `code` (`NOT_FOUND`, `CONFLICT`, `INTERRUPTED`, `CONFIG_ERROR`,
   `INVALID_STATE`, `STORAGE_ERROR`, `MOUNT_ERROR`, `KVM_UNAVAILABLE`, `HYPERVISOR_UNAVAILABLE`,
-  `COMMAND_FAILED`, `SMOLVM_ERROR`), never on the message. Known quirks live in
-  `src/smolvm/error.rs`.
-- **Idmapped mounts (1.34.2+):** a `-v` host directory shows as owned by the machine's workload user
+  `COMMAND_FAILED`, `SMOLVM_ERROR`), never on the message. Every command reports a missing machine
+  as `NOT_FOUND`. Known quirks live in `src/smolvm/error.rs`.
+- **Idmapped mounts:** a `-v` host directory shows as owned by the machine's workload user
   (`-u` at `machine create`) when that user isn't root and the directory isn't owned by root (nor is
   smolvm run as root). Files stay owned by the host user. Live `machine mount add` mounts are mapped
   too. `--mount-socket` sockets are unaffected. So create with the session user (`agent`, or a
   workload's image user; `_builder` stays root), and never remap uids. The user must exist in the
   image, or the start fails. Startup steps exec as root.
-- **Labels change in any state (1.35):** `machine update --label KEY=VALUE` and `--remove-label KEY`
+- **Labels change in any state:** `machine update --label KEY=VALUE` and `--remove-label KEY`
   work on a running or stopped machine and need no restart, so sandbox metadata can change after
   create.
 - **Always pass `--name`.** Without it, smolvm targets `$SMOLVM_MACHINE_NAME` (a user's direnv may set
@@ -75,8 +76,8 @@ As of smolvm 1.36. Check the reference source before depending on anything not l
   and query rules by decrypting the hosts they name: `docs/network-and-secrets.md#request-rules`).
 - **Interception:** credential substitution (`--credential`) can't be combined with
   `--egress-interceptor`/`--mediated-egress` or with `--trust-host-certs`. Proxy variables aren't
-  forwarded unless `--use-host-proxy` is given. Since 1.35, a credential host's responses have the
-  injected value replaced by the placeholder, so an echo can't prove substitution: check the
+  forwarded unless `--use-host-proxy` is given. A credential host's responses have the injected
+  value replaced by the placeholder, so an echo can't prove substitution: check the
   server's answer instead (the e2e tests use httpbin's `/basic-auth`). A hosted sandbox (the
   default `network.egress`) starts with `--egress-interceptor`, so bento's egress process decides
   every TCP flow (by address and port, then by SNI or `Host:`) and swaps its secrets; smolvm gets
@@ -84,11 +85,11 @@ As of smolvm 1.36. Check the reference source before depending on anything not l
   It decrypts secret hosts and request-rule hosts with one broad CA per sandbox, and judges each
   request there through the interceptor's request filter (a 403 names the rule). A change to the
   set of request-rule hosts makes it exit 0, and its socket starts it again.
-- **Credential values change live (1.35.4):** `machine credentials refresh -n M [BINDING…]` reads
-  each binding's variable from its own environment and the running machine uses it from its next
-  request. It refuses an unset or empty variable, so it can't take a value away. smolbento names
-  every binding after its variable, lowercased (`Credential::binding`).
-- **Credential bindings change live (1.36.1):** `machine credentials add -n M --credential SPEC`
+- **Credential values change live:** `machine credentials refresh -n M [BINDING…]` reads each
+  binding's variable from its own environment and the running machine uses it from its next
+  request. It refuses an unset or empty variable (so it can't take a value away) and a value over
+  8 KiB. smolbento names every binding after its variable, lowercased (`Credential::binding`).
+- **Credential bindings change live:** `machine credentials add -n M --credential SPEC`
   (replaces a binding of the same name) and `machine credentials remove -n M BINDING…` work on a
   running or stopped machine, from its next request. A new host gets its own CA, trusted by the
   guest at once. `machine ls --json` and `machine status --json` list each machine's `credentials`
@@ -96,17 +97,15 @@ As of smolvm 1.36. Check the reference source before depending on anything not l
   added ones from its next start. `secret set` adds a service a sandbox lacks; `secret rm`
   refreshes running sandboxes with the value that still applies, else `smolbento-secret-removed`,
   and never removes a binding (a removed kit binding can't be rebuilt).
-- **Host loopback (1.36):** a machine with a network reaches the host's `127.0.0.1` through its
+- **Host loopback:** a machine with a network reaches the host's `127.0.0.1` through its
   gateway or `host.docker.internal` unless `--deny-cidr` closes it. smolbento always passes
   `--deny-cidr 127.0.0.0/8 ::1/128` at create unless the sandbox gets host access.
-- **First start (1.36):** smolvm no longer adds the image's registry to the allow list for a
-  machine's first boot; it fetches the image on the host instead.
 - **Guest `/tmp`, `/run` and `/dev/shm` are emptied on every restart,** and never enter a pack. `/run`
-  and `/dev/shm` are tmpfs. `/tmp` is on the machine's root disk since 1.33. Anything smolbento puts
+  and `/dev/shm` are tmpfs; `/tmp` is on the machine's root disk. Anything smolbento puts
   there (for example `/run/smolbento`) must be recreated after each start. Persistent data goes on the
   machine's disk or in `/workspace`.
-- **Images:** when the guest can't reach the registry, smolvm pulls the image on the host at the first
-  start. That start still needs registry authorization. Later starts don't contact the registry.
+- **Images:** smolvm pulls the image on the host at the first start, and never adds its registry to
+  the allow list. That start still needs registry authorization. Later starts don't contact the registry.
   `--image` also takes a local archive (`./img.tar`, or `-` for stdin) or an unpacked rootfs dir.
   smolvm boots images and never builds them.
 - **Lifecycle:** read-only commands (`ls`, `status`, `images`) never change a VM's state. `machine stop`
@@ -120,9 +119,10 @@ As of smolvm 1.36. Check the reference source before depending on anything not l
 - **Published ports** listen on `127.0.0.1` and `[::1]`, up to 4096 per machine. Ports below 1024 work
   on macOS too.
 - **Files:** `machine cp` uploads a directory like `cp -r` (following symlinks), but downloads single
-  files only. `machine files --name M upload-folder|download|archive` (1.35.4, `--name` only, absolute
+  files only. `machine files --name M upload-folder|download|archive|list` (`--name` only, absolute
   guest paths, a running machine) uploads a folder keeping links as links (the destination's parent
-  must exist), downloads a file, or downloads a directory as a tar.
+  must exist), downloads a file, downloads a directory as a tar, or lists a directory (and fails on
+  anything else).
 - **Secret refs** (`--secret-env GUEST=HOST_VAR`, `--secret-file`) resolve at launch and are never
   persisted. The HTTP API and `.smolmachine` packs refuse them.
 

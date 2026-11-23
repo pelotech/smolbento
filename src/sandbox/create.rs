@@ -106,7 +106,7 @@ pub fn meta(req: &CreateRequest) -> Meta {
         workspace: primary,
         workspaces: req.workspaces.iter().map(Workspace::label).collect(),
         created: req.created,
-        version: Some(env!("CARGO_PKG_VERSION").into()),
+        version: env!("CARGO_PKG_VERSION").into(),
         engine: req.engine,
         rec: req.rec.clone(),
         clone_repo: req.clone.as_ref().map(|c| c.top.display().to_string()),

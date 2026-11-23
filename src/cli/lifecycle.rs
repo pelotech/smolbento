@@ -430,10 +430,9 @@ pub fn prune<R: Runner>(ctx: &mut Ctx<R>, a: &PruneArgs) -> Result<i32> {
     Ok(0)
 }
 
-/// Resets smolbento to a freshly installed state, as `sbx reset` does: every sandbox (smolbento's
-/// own, and its leftovers in smolvm's default state), the SSH config block, background services,
-/// settings, policy, templates, kits, skills and caches, stored secrets unless
-/// `--preserve-secrets`, and last `~/.smolbento` (smolvm's state and the downloaded smolvm, which
+/// Resets smolbento to a freshly installed state, as `sbx reset` does: every sandbox, the SSH config
+/// block, background services, settings, policy, templates, kits, skills and caches, stored secrets
+/// unless `--preserve-secrets`, and last `~/.smolbento` (smolvm's state and the downloaded smolvm, which
 /// does the deleting before that).
 pub fn reset<R: Runner>(ctx: &mut Ctx<R>, a: &ResetArgs) -> Result<i32> {
     // A home the user chose may hold their own files: only the smolvm in it goes.
@@ -446,9 +445,8 @@ pub fn reset<R: Runner>(ctx: &mut Ctx<R>, a: &ResetArgs) -> Result<i32> {
     confirm(
         ctx,
         &format!(
-            "Reset smolbento to a freshly installed state? This removes every sandbox (also \
-             smolbento's in smolvm's default location), {} (smolvm's state and the downloaded \
-             smolvm), settings and network policy, templates, kits and skills, the SSH config \
+            "Reset smolbento to a freshly installed state? This removes every sandbox, {} \
+             (smolvm's state and the downloaded smolvm), settings and network policy, templates, kits and skills, the SSH config \
              block, background services, and stored secrets (unless --preserve-secrets)",
             home.display()
         ),
@@ -457,23 +455,6 @@ pub fn reset<R: Runner>(ctx: &mut Ctx<R>, a: &ResetArgs) -> Result<i32> {
     let all = sandbox::list(&ctx.vm)?;
     for sb in forks_first(all.iter().collect()) {
         remove(ctx, sb, !a.preserve_secrets)?;
-    }
-    // Sandboxes from before smolbento kept its own state; never a machine without its labels.
-    // Problems there only warn: what follows still resets this installation.
-    match ctx.vm.list_default_state() {
-        Ok(mut machines) => {
-            machines.retain(|m| m.labels.contains_key("sbx.name"));
-            machines.sort_by_key(|m| !m.labels.contains_key("sbx.fork-of"));
-            for m in machines {
-                if let Err(e) = ctx.vm.delete_default_state(&m.name) {
-                    crate::warning!(
-                        "couldn't remove {} from smolvm's default location: {e:#}",
-                        m.name
-                    );
-                }
-            }
-        }
-        Err(e) => crate::warning!("couldn't list smolvm's default location: {e:#}"),
     }
     provision::sweep_orphans(ctx);
     if let Some(home) = ctx.env.get("HOME") {

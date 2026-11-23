@@ -66,8 +66,9 @@ Linux binaries need glibc 2.28 or newer. On macOS, sandboxes with a disk larger 
 ## Upgrading
 
 Before 1.0, recreate your sandboxes after upgrading smolbento: a sandbox from an older version may
-not start or work fully. Settings, secrets, policies and saved templates carry over. To keep what's
-inside a sandbox (installed tools, agent logins), save it as a template first:
+not start or work fully. Settings, secrets and policies carry over. Saved templates may not: if
+`create -t` refuses one, save it again from a new sandbox. To keep what's inside a sandbox
+(installed tools, agent logins), save it as a template first:
 
 ```sh
 bento stop NAME
@@ -75,9 +76,6 @@ bento template save NAME NAME-saved:v1
 bento rm NAME
 bento create AGENT PATH --name NAME -t NAME-saved:v1
 ```
-
-Sandboxes made before smolbento downloaded its own smolvm stay in your smolvm's default location,
-so `bento ls` no longer shows them. Recreate them, and run `bento reset` to remove the old ones.
 
 ## Uninstalling
 
