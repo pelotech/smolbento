@@ -5,7 +5,7 @@ fn rule(action: Action, host: &str, methods: &[&str], paths: &[&str]) -> Rule {
     Rule {
         id: None,
         action,
-        hosts: vec![HostMatch::Exact(host.into())],
+        host: HostMatch::Exact(host.into()),
         port: None,
         request: RequestMatch {
             methods: if methods.is_empty() {
@@ -16,7 +16,6 @@ fn rule(action: Action, host: &str, methods: &[&str], paths: &[&str]) -> Rule {
             paths: paths.iter().map(|p| PathGlob::parse(p).unwrap()).collect(),
             query: vec![],
         },
-        reason: None,
         case: Case::Insensitive,
     }
 }
@@ -165,7 +164,6 @@ fn an_allow_needs_the_path_with_and_without_params() {
 #[test]
 fn deny_beats_allow() {
     let mut d = deny("h", &[], &["/repos/*/*/hooks/**"]);
-    d.reason = Some("webhooks are blocked".into());
     d.id = Some("r7".into());
     // Order never matters.
     for rules in [
@@ -176,7 +174,7 @@ fn deny_beats_allow() {
         assert!(check(&p, "GET", "/repos/o/r/issues").is_ok());
         assert_eq!(
             check(&p, "POST", "/repos/o/r/hooks").unwrap_err(),
-            "webhooks are blocked (rule r7)"
+            "request denied by policy (rule r7)"
         );
     }
 }
@@ -325,10 +323,10 @@ fn inspection_by_rule_kind() {
     let mut on_22 = allow("ssh.h", &[], &["/**"]);
     on_22.port = Some(22);
     let mut sub = deny("x", &[], &["/**"]);
-    sub.hosts = vec![HostMatch::Subdomains {
+    sub.host = HostMatch::Subdomains {
         domain: "d.com".into(),
         any_depth: false,
-    }];
+    };
     let p = policy(vec![
         allow("a", &["GET"], &["/**"]),
         deny("a", &[], &["/x"]),
@@ -362,29 +360,32 @@ fn inspection_by_rule_kind() {
 
 #[test]
 fn terminate_hosts_forms() {
-    let mut r = deny("Api.Example.com.", &[], &["/**"]);
-    r.hosts.extend([
-        HostMatch::Subdomains {
+    let on = |host| Rule {
+        host,
+        ..deny("x", &[], &["/**"])
+    };
+    let p = policy(vec![
+        deny("Api.Example.com.", &[], &["/**"]),
+        on(HostMatch::Subdomains {
             domain: "one.com".into(),
             any_depth: false,
-        },
-        HostMatch::Subdomains {
+        }),
+        on(HostMatch::Subdomains {
             domain: "deep.com".into(),
             any_depth: true,
-        },
-        HostMatch::Exact("api.example.com".into()),
+        }),
+        deny("api.example.com", &[], &["/**"]),
     ]);
-    let p = policy(vec![r]);
     assert_eq!(
         p.terminate_hosts(),
         ["*.deep.com", "*.one.com", "api.example.com"]
     );
 
     let mut deep = deny("x", &[], &["/**"]);
-    deep.hosts = vec![HostMatch::Subdomains {
+    deep.host = HostMatch::Subdomains {
         domain: "deep.com".into(),
         any_depth: true,
-    }];
+    };
     let p = policy(vec![deep]);
     assert_eq!(
         p.inspection("a.b.deep.com", 443),
@@ -410,13 +411,11 @@ fn validate_refuses_rule_paths_that_never_match() {
     for path in ["/", "/**", "/a/*/b", "/v*", "/**/x"] {
         assert!(PathGlob::parse(path).is_ok(), "{path}");
     }
-    let mut no_hosts = allow("h", &[], &["/**"]);
-    no_hosts.hosts.clear();
     let mut no_paths = allow("h", &[], &[]);
     no_paths.request.paths.clear();
     let mut no_methods = allow("h", &[], &["/**"]);
     no_methods.request.methods = Methods::Only(vec![]);
-    for r in [no_hosts, no_paths, no_methods] {
+    for r in [no_paths, no_methods] {
         assert!(
             Policy {
                 rules: vec![r],

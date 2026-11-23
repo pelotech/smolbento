@@ -30,13 +30,10 @@ pub struct Rule {
     /// Named in a refusal.
     pub id: Option<String>,
     pub action: Action,
-    /// Non-empty.
-    pub hosts: Vec<HostMatch>,
+    pub host: HostMatch,
     /// `None` matches every port.
     pub port: Option<u16>,
     pub request: RequestMatch,
-    /// Sent as a refusal's reason.
-    pub reason: Option<String>,
     /// How paths and query names and values compare. Methods always compare ASCII-case-insensitively.
     pub case: Case,
 }
@@ -97,7 +94,7 @@ pub enum Inspection {
     Inspect { uninspectable: Action },
 }
 
-/// Why a request is refused: a deny rule's reason and id, or a generic miss. Nothing else of the policy.
+/// Why a request is refused: a deny rule's id, or a generic miss. Nothing else of the policy.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct Refusal {
     pub reason: String,
@@ -120,18 +117,10 @@ impl Policy {
                     r.id.as_deref().map_or(i.to_string(), str::to_owned)
                 ))
             };
-            if r.hosts.is_empty() {
-                return at("it names no host");
-            }
-            for h in &r.hosts {
-                match h {
-                    HostMatch::Exact(n) | HostMatch::Subdomains { domain: n, .. }
-                        if n.is_empty() || n.contains('*') =>
-                    {
-                        return at("a host is empty or holds *");
-                    }
-                    _ => {}
-                }
+            if let HostMatch::Exact(n) | HostMatch::Subdomains { domain: n, .. } = &r.host
+                && (n.is_empty() || n.contains('*'))
+            {
+                return at("a host is empty or holds *");
             }
             if r.request.paths.is_empty() {
                 return at("it names no path");
@@ -225,7 +214,7 @@ impl Policy {
     /// to `*.d`, and no apex is listed, since neither form matches it. A one-label rule terminates deeper
     /// hosts too; their requests fall to the default, as no rule names them.
     pub fn terminate_hosts(&self) -> Vec<String> {
-        let mut hosts: Vec<String> = (self.rules.iter().flat_map(|r| &r.hosts))
+        let mut hosts: Vec<String> = (self.rules.iter().map(|r| &r.host))
             .map(|h| match h {
                 HostMatch::Exact(n) => normal(n),
                 HostMatch::Subdomains { domain, .. } => format!("*.{}", normal(domain)),
@@ -239,7 +228,7 @@ impl Policy {
 
 impl Rule {
     fn applies(&self, host: &str, port: u16) -> bool {
-        self.port.is_none_or(|p| p == port) && self.hosts.iter().any(|h| h.matches(host))
+        self.port.is_none_or(|p| p == port) && self.host.matches(host)
     }
 
     /// Whether the request matches: on any reading (`every: false`, for a deny) or on every reading.
@@ -276,10 +265,9 @@ impl Rule {
     }
 
     fn refusal(&self) -> Refusal {
-        let reason = self.reason.as_deref().unwrap_or("request denied by policy");
         let reason = match &self.id {
-            Some(id) => format!("{reason} (rule {id})"),
-            None => reason.to_owned(),
+            Some(id) => format!("request denied by policy (rule {id})"),
+            None => "request denied by policy".into(),
         };
         Refusal { reason }
     }

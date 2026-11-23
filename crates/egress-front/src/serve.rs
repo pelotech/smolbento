@@ -155,14 +155,13 @@ mod tests {
             rules: vec![Rule {
                 id: Some("r1".into()),
                 action: Action::Deny,
-                hosts: vec![HostMatch::Exact(HOST.into())],
+                host: HostMatch::Exact(HOST.into()),
                 port: None,
                 request: RequestMatch {
                     methods: Methods::Only(vec!["POST".into()]),
                     paths: vec![PathGlob::parse("/**").unwrap()],
                     query: vec![],
                 },
-                reason: None,
                 case: Case::Insensitive,
             }],
             default: Action::Allow,

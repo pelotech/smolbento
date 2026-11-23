@@ -30,7 +30,7 @@ change while it runs. The interceptor still decrypts only its `terminate_hosts`.
 `Policy` holds rules over the HTTP requests on a decrypted host: hosts (exact, or subdomains one label
 or any depth deep, never the apex), an optional port, methods, path globs and query matchers. Rules add
 up and order never matters: a matching deny wins. A host with an allow refuses every request no allow
-matches (`no rule allows METHOD PATH on HOST`); a refusal names only the denying rule's reason and id.
+matches (`no rule allows METHOD PATH on HOST`); a refusal names only the denying rule's id.
 
 - `terminate_hosts()` lists the hosts to decrypt, in the interceptor's `*.domain` form.
 - `inspection(host, port)` says whether rules apply to a connection, and what to do when it can't be read.

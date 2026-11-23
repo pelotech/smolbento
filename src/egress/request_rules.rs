@@ -51,7 +51,7 @@ pub fn request_policy(
                     continue;
                 }
             };
-            if r.decision == Decision::Allow && moot(&admits, &rule.hosts[0], res.port, spare) {
+            if r.decision == Decision::Allow && moot(&admits, &rule.host, res.port, spare) {
                 continue;
             }
             rules.push(rule);
@@ -68,10 +68,9 @@ fn map(r: &policy::Rule, res: &Resource) -> Result<Rule, String> {
     let rule = Rule {
         id: Some(r.id.clone()),
         action: action(r.decision),
-        hosts: vec![host(r.decision, res)?],
+        host: host(r.decision, res)?,
         port: res.port,
         request: request(r.method.as_deref(), r.path.as_deref(), r.query.as_deref())?,
-        reason: None,
         // Kits follow the kit spec; `bento policy` follows sbx.
         case: if r.created_via.starts_with(policy::KIT_VIA) {
             Case::Sensitive
@@ -339,23 +338,23 @@ mod tests {
         let mut p = deny_all();
         let id = add(&mut p, D::Allow, "a.com:8443,*.b.com,**.c.com", "GET");
         let got = request_policy(&p, "s1", &[]).rules;
-        let hosts: Vec<_> = got.iter().map(|r| (r.hosts.clone(), r.port)).collect();
+        let hosts: Vec<_> = got.iter().map(|r| (r.host.clone(), r.port)).collect();
         assert_eq!(
             hosts,
             [
-                (vec![HostMatch::Exact("a.com".into())], Some(8443)),
+                (HostMatch::Exact("a.com".into()), Some(8443)),
                 (
-                    vec![HostMatch::Subdomains {
+                    HostMatch::Subdomains {
                         domain: "b.com".into(),
                         any_depth: false
-                    }],
+                    },
                     None
                 ),
                 (
-                    vec![HostMatch::Subdomains {
+                    HostMatch::Subdomains {
                         domain: "c.com".into(),
                         any_depth: true
-                    }],
+                    },
                     None
                 ),
             ]
@@ -434,11 +433,11 @@ mod tests {
         let got = request_policy(&p, "s1", &[]).rules;
         assert_eq!(got.len(), 1);
         assert_eq!(
-            got[0].hosts,
-            [HostMatch::Subdomains {
+            got[0].host,
+            HostMatch::Subdomains {
                 domain: "x.com".into(),
                 any_depth: true
-            }]
+            }
         );
     }
 
@@ -466,7 +465,7 @@ mod tests {
         add(&mut p, D::Deny, "h.com", "POST");
         let got = request_policy(&p, "s1", &[]).rules;
         assert_eq!(got.len(), 1);
-        assert_eq!(got[0].hosts, [HostMatch::Exact("h.com".into())]);
+        assert_eq!(got[0].host, HostMatch::Exact("h.com".into()));
         let r = |res: &str| {
             (compile::active(&p, Some("s1"), &[]).map(|(r, _)| r))
                 .find(|r| r.resources == [res])

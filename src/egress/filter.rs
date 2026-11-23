@@ -6,8 +6,8 @@ use super::request_rules::request_policy;
 use crate::config::Paths;
 use crate::policy::compile::HOST_GATEWAY;
 use egress_front::{
-    Action, Case, Decision, Flow, FlowKind, HeaderMap, HostMatch, Inspection, Methods, PathGlob,
-    Policy, RequestFilter, RequestInfo, RequestMatch, Rule, host_matches,
+    Action, Decision, Flow, FlowKind, HeaderMap, Inspection, Policy, RequestFilter, RequestInfo,
+    host_matches,
 };
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::{Arc, Mutex, PoisonError};
@@ -31,8 +31,6 @@ struct Loaded {
     policy: Arc<Policy>,
     /// The policy's `terminate_hosts`; `None` while `policy.toml` can't be used.
     ruled: Option<Vec<String>>,
-    /// The last ruled hosts that could be read, which an unusable file refuses.
-    last_ruled: Vec<String>,
 }
 
 impl PolicySource {
@@ -43,18 +41,16 @@ impl PolicySource {
             credential_hosts,
             state: Mutex::new(Loaded {
                 stamp: None,
-                policy: Arc::new(refuse(&[])),
+                policy: Arc::new(REFUSE),
                 ruled: None,
-                last_ruled: Vec::new(),
             }),
         };
         source.reload(stamp(&source.paths));
         source
     }
 
-    /// The current request policy. When `policy.toml` can't be read or mapped, a policy that refuses
-    /// every request on the hosts that were ruled and the credential hosts, with reason
-    /// `policy.toml unreadable`.
+    /// The current request policy. When `policy.toml` can't be read or mapped, one that refuses
+    /// every request: the filter sees decrypted hosts only, the ruled and credential hosts.
     pub fn current(&self) -> Arc<Policy> {
         self.refresh().0
     }
@@ -78,9 +74,6 @@ impl PolicySource {
 
     /// Reads and maps the file outside the lock; a racing reload just reads it too.
     fn reload(&self, now: Stamp) -> (Arc<Policy>, Option<Vec<String>>) {
-        let last = (self.state.lock().unwrap_or_else(PoisonError::into_inner))
-            .last_ruled
-            .clone();
         let built = crate::policy::Policy::load(&self.paths)
             .map_err(|e| format!("{e:#}"))
             .map(|p| request_policy(&p, &self.sandbox, &self.credential_hosts));
@@ -92,56 +85,26 @@ impl PolicySource {
             Err(e) => {
                 // The detail goes to the unit's log only: a 403 never shows the policy's content.
                 eprintln!("egress: policy.toml unreadable, refusing requests on ruled hosts: {e}");
-                let hosts: Vec<String> =
-                    last.iter().chain(&self.credential_hosts).cloned().collect();
-                (Arc::new(refuse(&hosts)), None)
+                (Arc::new(REFUSE), None)
             }
         };
         let mut s = self.state.lock().unwrap_or_else(PoisonError::into_inner);
         s.stamp = now;
         s.policy = policy.clone();
         s.ruled = ruled.clone();
-        if let Some(r) = &ruled {
-            s.last_ruled = r.clone();
-        }
         (policy, ruled)
     }
 }
 
+/// Refuses every request.
+const REFUSE: Policy = Policy {
+    rules: vec![],
+    default: Action::Deny,
+};
+
 fn stamp(paths: &Paths) -> Stamp {
     let m = std::fs::metadata(paths.policy_file()).ok()?;
     Some((m.modified().ok()?, m.len()))
-}
-
-/// A policy that refuses every request on `hosts` (`terminate_hosts` patterns).
-fn refuse(hosts: &[String]) -> Policy {
-    let hosts: Vec<HostMatch> = hosts
-        .iter()
-        .map(|h| match h.strip_prefix("*.") {
-            Some(domain) => HostMatch::Subdomains {
-                domain: domain.to_string(),
-                any_depth: true,
-            },
-            None => HostMatch::Exact(h.clone()),
-        })
-        .collect();
-    let rules = (!hosts.is_empty()).then(|| Rule {
-        id: None,
-        action: Action::Deny,
-        hosts,
-        port: None,
-        request: RequestMatch {
-            methods: Methods::Any,
-            paths: vec![PathGlob::parse("/**").expect("/** parses")],
-            query: vec![],
-        },
-        reason: Some("policy.toml unreadable".into()),
-        case: Case::Insensitive,
-    });
-    Policy {
-        rules: rules.into_iter().collect(),
-        default: Action::Allow,
-    }
 }
 
 /// The interceptor's request filter: the current rules, judged with no file read beyond a `stat`.
@@ -465,14 +428,8 @@ mod tests {
         std::fs::write(paths.policy_file(), "mode = [not toml").unwrap();
         bump(&paths, 2);
         for host in ["d.com", "cred.com"] {
-            let err = judge(&f, host, "GET").unwrap_err();
-            assert!(err.starts_with("policy.toml unreadable"), "{host}: {err}");
+            assert!(judge(&f, host, "GET").is_err(), "{host}");
         }
-        assert_eq!(
-            judge(&f, "other.com", "GET"),
-            Ok(()),
-            "hosts with no rules keep working"
-        );
         assert_eq!(source.ruled_hosts(), None, "keeps the running set");
 
         save(&paths, &p, 3);
