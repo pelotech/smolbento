@@ -72,6 +72,8 @@ network --id`), `--json` the same rules as `{"rules": [...]}`, and `-q` only the
 - `balanced` allows its hosts on any port. sbx limits them to 443.
 - `bento policy reset` stops running sandboxes, then removes the mode and every rule. The next create
   or start asks for a mode again.
+- Policy changes reach only the sandboxes this setup (its data directory) created, even when another
+  setup shares the same `smolvm.home`.
 - Blocked requests come from smolvm's egress log. A connection a hosted sandbox's egress process
   denies (by port or name) is logged in its `egress.log` instead, and isn't in `policy log` or
   `policy approval`. `policy approval` lists hosts with no rule yet;

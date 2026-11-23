@@ -12,6 +12,8 @@ use super::name;
 /// Everything decided about a new sandbox before it's created.
 #[derive(Debug, Clone, Default, PartialEq, Eq)]
 pub struct CreateRequest {
+    /// This setup (`host_service::namespace`), recorded as `sbx.setup`.
+    pub setup: Option<String>,
     pub name: String,
     pub agent: String,
     pub image: String,
@@ -109,6 +111,7 @@ pub fn meta(req: &CreateRequest) -> Meta {
         rec: req.rec.clone(),
         clone_repo: req.clone.as_ref().map(|c| c.top.display().to_string()),
         fork_of: None,
+        setup: req.setup.clone(),
         // Internal sandboxes (`_builder`) never have a user attached.
         bridge: !req.no_bridge && !name::is_internal(&req.name),
         service: req.host_services.is_some() && !name::is_internal(&req.name),

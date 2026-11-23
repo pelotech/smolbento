@@ -22,11 +22,13 @@ fn lines(t: &TestEnv) -> Vec<String> {
         regex_lite::Regex::new("[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}")
             .unwrap();
     let tmp = regex_lite::Regex::new(r"/[^ :]*/\.tmp[A-Za-z0-9]+").unwrap();
+    // Each test env is its own setup.
+    let setup = crate::host_service::namespace(&t.ctx.paths);
     t.calls()
         .iter()
         .map(|l| {
             tmp.replace_all(&uuid.replace_all(l, "UUID"), "TMP")
-                .into_owned()
+                .replace(&setup, "SETUP")
         })
         .collect()
 }
@@ -110,6 +112,12 @@ fn create_force_runs_what_sbt_create_runs() {
         .unwrap();
     assert!(env_lines[create].contains(label), "{}", env_lines[create]);
     env_lines[create] = env_lines[create].replace(label, "");
+    // Each records its own setup, so policy changes reach only that setup's sandboxes.
+    assert!(
+        env_lines[create].contains(" --label sbx.setup=SETUP"),
+        "{}",
+        env_lines[create]
+    );
     assert_eq!(env_lines, lines(&plain));
 }
 

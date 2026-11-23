@@ -930,7 +930,7 @@ pub fn push_network_with<R: Runner>(
         }
     };
     let mut updated = 0;
-    for sb in sandboxes.iter().filter(|s| s.is_running()) {
+    for sb in (sandboxes.iter()).filter(|s| s.is_running() && s.in_setup(&ctx.paths)) {
         let network = compile::network(
             policy,
             sb.name(),
