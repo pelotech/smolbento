@@ -106,8 +106,15 @@ pub fn add_create_denies(
     }
     let mut added = Vec::new();
     for (value, _) in denies {
-        let (id, new) =
-            policy.insert_rule(Some(sandbox), Decision::Deny, value, "added", None, None)?;
+        let (id, new) = policy.insert_rule(
+            Some(sandbox),
+            Decision::Deny,
+            value,
+            "added",
+            None,
+            None,
+            None,
+        )?;
         if new {
             added.push(id);
         }

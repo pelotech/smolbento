@@ -430,6 +430,7 @@ pub fn prepare_create<R: Runner>(
                 crate::policy::MCP_VIA,
                 None,
                 None,
+                None,
             )?;
             if new {
                 added.push(id);
@@ -826,7 +827,7 @@ pub fn create_with<R: Runner>(
             && let Ok(mut policy) = Policy::load(&ctx.paths)
         {
             for id in &added {
-                policy.remove_rules(Some(&req.name), Some(id), None, None, None);
+                policy.remove_rules(Some(&req.name), Some(id), None, None, None, None);
             }
             let _ = policy.save(&ctx.paths);
         }

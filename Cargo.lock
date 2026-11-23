@@ -2804,6 +2804,7 @@ dependencies = [
  "egress-front",
  "flate2",
  "hmac",
+ "http",
  "humantime",
  "insta",
  "libc",

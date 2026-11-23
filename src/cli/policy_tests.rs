@@ -129,6 +129,16 @@ fn deny_refuses_hosts_under_a_wildcard_secret_host() {
         assert!(msg.contains("has a secret bound to it"), "{err}");
     }
     t.sbt(&["policy", "deny", "network", "notion.com"]).unwrap();
+    // A request deny leaves the host reachable, so the secret keeps working.
+    t.sbt(&[
+        "policy",
+        "deny",
+        "network",
+        "api.notion.com",
+        "--method",
+        "POST",
+    ])
+    .unwrap();
 }
 
 #[test]
@@ -1064,7 +1074,7 @@ fn keeps_access_notes_name_open_sandboxes_with_host_access_that_lose_the_rule() 
     };
     before.allow(None, "localhost:80");
     let mut after = before.clone();
-    after.remove_rules(None, None, Some("localhost:80"), None, None);
+    after.remove_rules(None, None, Some("localhost:80"), None, None, None);
     let sbs = [("a1", true), ("b2", false)];
     assert_eq!(
         keeps_access_notes(&before, &after, &sbs),
@@ -1884,4 +1894,84 @@ fn check_denies_the_hosts_loopback_without_host_access() {
     };
     assert_eq!(v(&mut t, "open"), true);
     assert_eq!(v(&mut t, "shut"), false);
+}
+
+#[test]
+fn policy_allow_takes_query() {
+    let mut t = test_env(&[]);
+    set_policy(&t, "mode = \"deny-all\"");
+    t.sbt(&[
+        "policy",
+        "allow",
+        "network",
+        "a.com",
+        "--method",
+        "GET",
+        "--query",
+        "v=1.*",
+        "--query",
+        "tag=prod,x=*",
+    ])
+    .unwrap();
+    let p = Policy::load(&t.ctx.paths).unwrap();
+    let r = &p.rules[0];
+    assert_eq!(r.query.as_deref(), Some("tag=prod,v=1.*,x=*"));
+    assert_eq!(t.stdout(), format!("allow rule {}: a.com\n", r.id));
+    // The query is part of the rule: another query is another rule.
+    t.sbt(&[
+        "policy", "allow", "network", "a.com", "--method", "GET", "--query", "y=*",
+    ])
+    .unwrap();
+    assert_eq!(Policy::load(&t.ctx.paths).unwrap().rules.len(), 2);
+    // `policy rm --query` matches the stored query.
+    let rm = [
+        "policy",
+        "rm",
+        "network",
+        "--resource",
+        "a.com",
+        "-f",
+        "--query",
+    ];
+    t.sbt(&[&rm[..], &["x=*,v=1.*,tag=prod"]].concat()).unwrap();
+    let p = Policy::load(&t.ctx.paths).unwrap();
+    assert_eq!(p.rules.len(), 1);
+    assert_eq!(p.rules[0].query.as_deref(), Some("y=*"));
+
+    for (args, want) in [
+        (
+            &["deny", "network", "**", "--method", "POST"][..],
+            "request rules need a named host",
+        ),
+        (
+            &["allow", "network", "10.0.0.1", "--path", "/a"],
+            "request rules need a named host",
+        ),
+        (
+            &["allow", "network", "crl*.x.com", "--method", "GET"],
+            "host glob",
+        ),
+        (
+            &["allow", "network", "a.com", "--query", "a*b"],
+            "--query 'a*b'",
+        ),
+        (
+            &["allow", "network", "a.com", "--path", "/a/../b"],
+            "--path",
+        ),
+    ] {
+        let err = t.sbt(&[&["policy"][..], args].concat()).unwrap_err();
+        assert!(err.to_string().contains(want), "{args:?}: {err}");
+    }
+    // A glob deny widens rather than fails.
+    t.sbt(&[
+        "policy",
+        "deny",
+        "network",
+        "crl*.x.com",
+        "--method",
+        "POST",
+    ])
+    .unwrap();
+    assert_eq!(Policy::load(&t.ctx.paths).unwrap().rules.len(), 2);
 }

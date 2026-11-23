@@ -9,7 +9,7 @@ use crate::smolvm::{AllowList, NetworkSpec};
 
 /// The rules that apply to a sandbox (`None`: the global rules only): every rule but install-phase
 /// kit rules, of which only those in `install` (the ids the running install step added) apply.
-fn active<'a>(
+pub(crate) fn active<'a>(
     policy: &'a Policy,
     sandbox: Option<&'a str>,
     install: &'a [String],
@@ -464,9 +464,13 @@ fn verdict_for(
     }
     // No sandbox: the global rules only.
     let mode = policy.current_mode();
+    // A request deny acts per request (`egress::request_rules`), never on the whole host; a
+    // request allow still makes its host reachable.
     let hits = |decision: Decision| {
         active(policy, sandbox, &[])
-            .filter(move |(r, _)| r.decision == decision)
+            .filter(move |(r, _)| {
+                r.decision == decision && (decision == Decision::Allow || !r.is_request())
+            })
             .flat_map(|(r, scope)| {
                 r.parsed()
                     .filter(|res| res.matches(&target))

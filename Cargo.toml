@@ -53,5 +53,6 @@ codegen-units = 1
 strip = true
 
 [dev-dependencies]
+http = "=1.5.0"
 insta = "=1.49.0"
 shlex = "=2.0.1"

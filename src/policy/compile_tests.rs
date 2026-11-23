@@ -551,7 +551,7 @@ fn localhost_rules_open_the_gateway_with_host_access_only() {
             .contains(&"localhost".to_string())
     );
     // Removed: gone.
-    p.remove_rules(Some("s1"), Some(&id), None, None, None);
+    p.remove_rules(Some("s1"), Some(&id), None, None, None, None);
     assert!(!has_gateway(&network(&p, "s1", &[], true)));
 }
 
@@ -708,4 +708,45 @@ fn decide_ignores_smolvm_widening() {
     assert!(v.allowed && v.reason.contains("smolvm still allows"));
     let v = decided(&p, false, t);
     assert!(!v.allowed && v.implicit, "{}", v.reason);
+}
+
+#[test]
+fn a_request_deny_no_longer_denies_its_host() {
+    let mut p = policy(Mode::AllowAll);
+    p.add_rule(
+        None,
+        Decision::Deny,
+        "h.com",
+        "added",
+        Some("POST".into()),
+        None,
+    )
+    .unwrap();
+    assert!(decided(&p, false, "h.com:443").allowed);
+    assert!(decided(&p, false, "h.com:22").allowed);
+    assert_eq!(check(&p, None, &[], None, "h.com").reason, "allow-all mode");
+    // A plain deny still does.
+    p.deny(None, "h.com");
+    assert!(!decided(&p, false, "h.com:443").allowed);
+}
+
+#[test]
+fn bounded_allow_still_admits_its_host() {
+    let mut p = policy(Mode::DenyAll);
+    let id = p
+        .add_rule(
+            None,
+            Decision::Allow,
+            "h.com",
+            "added",
+            Some("GET".into()),
+            Some("/v1/**".into()),
+        )
+        .unwrap();
+    for port in [443, 8080] {
+        let v = decided(&p, false, &format!("h.com:{port}"));
+        assert!(v.allowed, "{port}: {}", v.reason);
+        assert_eq!(v.reason, format!("allow rule {id} (global)"));
+    }
+    assert!(!decided(&p, false, "other.com:443").allowed);
 }
