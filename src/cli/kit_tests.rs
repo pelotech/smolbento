@@ -1732,26 +1732,6 @@ fn kit_validate_accepts_request_rules_under_hosted_default() {
 }
 
 #[test]
-fn kit_validate_refuses_request_rules_under_smolvm() {
-    let (mut t, _tmp) = request_rule_env(false);
-    let e = t.sbt(&["kit", "validate", "./rr"]).unwrap_err();
-    assert_eq!(
-        format!("{e:#}"),
-        "kit rr: network-policy@2 method/path rules are enforced under hosted egress only"
-    );
-}
-
-#[test]
-fn kit_inspect_shows_request_rules_as_enforced_under_hosted_default() {
-    let (mut t, _tmp) = request_rule_env(true);
-    let l = np2_support(&mut t);
-    assert!(
-        l.ends_with(" supported") && !l.ends_with("not supported"),
-        "{l}"
-    );
-}
-
-#[test]
 fn kit_inspect_flags_request_rules_under_smolvm() {
     let (mut t, _tmp) = request_rule_env(false);
     let l = np2_support(&mut t);

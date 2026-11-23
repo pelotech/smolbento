@@ -23,6 +23,10 @@ use crate::secrets::SecretsFile;
 use crate::smolvm::Runner;
 use crate::workspace::Workspace;
 
+/// The sandbox `kit inspect|validate` ask `may_host` about: there is none yet, and only an
+/// internal (`_`) name changes the answer, so a plain name stands in. A kit's name could be internal.
+const STAND_IN: &str = "sandbox";
+
 pub fn run<R: Runner>(ctx: &mut Ctx<R>, cmd: KitCmd) -> Result<i32> {
     match cmd {
         KitCmd::Inspect {
@@ -341,7 +345,7 @@ fn inspect<R: Runner>(ctx: &Ctx<R>, a: &KitRefArgs) -> Result<i32> {
     let doc = Doc::new(&kit);
     let mut out = &ctx.out;
     // As a create would resolve it, so the two agree.
-    let hosted = crate::provision::may_host(ctx, &kit.name)?;
+    let hosted = crate::provision::may_host(ctx, STAND_IN)?;
     if let Some(text) = format.structured(&doc)? {
         write!(out, "{text}")?;
     } else {
@@ -435,7 +439,7 @@ fn check_kit<R: Runner>(
     }
     load::check_launchable(ctx, &mut kit, None)?;
     // As a create would resolve it, so the two agree.
-    let hosted = crate::provision::may_host(ctx, &kit.name)?;
+    let hosted = crate::provision::may_host(ctx, STAND_IN)?;
     let resolve = |w, m| resolve_for(w, m, &values, NO_SANDBOX_WORKDIR, &[], hosted);
     let resolved = match kit.kind {
         Kind::Workload => resolve(kit, vec![]),
