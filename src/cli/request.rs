@@ -64,6 +64,7 @@ fn base_request<R: Runner>(
     let skills_mode = crate::skills::resolve_mode(opts.skills.as_deref(), &ctx.settings)?;
 
     Ok(CreateRequest {
+        setup: Some(crate::host_service::namespace(&ctx.paths)),
         rec: Recorded {
             no_fuse: opts.no_fuse,
             read_only_files: opts.read_only_files.clone(),

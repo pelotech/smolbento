@@ -18,6 +18,9 @@ pub const REGISTRIES: &str = "sbx.registries";
 pub const CLONE: &str = "sbx.clone";
 pub const CLONE_TOP: &str = "sbx.clone-top";
 pub const FORK_OF: &str = "sbx.fork-of";
+/// The setup that created it (`host_service::namespace`): policy changes reach only their own setup's
+/// sandboxes, though setups can share a smolvm home. A fork inherits it.
+pub const SETUP: &str = "sbx.setup";
 pub const KITS: &str = "sbx.kits";
 
 /// The `sbx.kits` value for `kits`.
@@ -244,6 +247,8 @@ pub struct Meta {
     pub clone_repo: Option<String>,
     /// The sandbox this one was forked from.
     pub fork_of: Option<String>,
+    /// `sbx.setup`; `None` on an unlabelled (older) sandbox, which every setup treats as its own.
+    pub setup: Option<String>,
     /// Created with the bridge socket mounted: starts install the guest shims (`sbx.bridge`).
     pub bridge: bool,
     /// Its host sockets are served by units, not by an attached session (`sbx.service`).
@@ -295,6 +300,7 @@ impl Meta {
             (CLONE, flag(self.clone_repo.is_some())),
             (CLONE_TOP, clone_top.cloned()),
             (FORK_OF, self.fork_of.clone()),
+            (SETUP, self.setup.clone()),
             (
                 KITS,
                 (!self.rec.kits.is_empty()).then(|| json(&self.rec.kits)),
@@ -369,6 +375,7 @@ impl Meta {
                 .then(|| text(CLONE_TOP).or(text(WORKSPACE)))
                 .flatten(),
             fork_of: text(FORK_OF),
+            setup: text(SETUP),
             bridge: flag(BRIDGE),
             service: flag(SERVICE),
             host_mounts: json(labels, HOST_MOUNTS).unwrap_or_default(),

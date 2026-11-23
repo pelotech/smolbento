@@ -22,7 +22,7 @@ use crate::secrets::SecretsFile;
 use crate::smolvm::{NetworkSpec, Runner};
 use ls::ls;
 
-/// Stops every running sandbox, as sbx's `policy reset` does. Failures are warnings: the reset
+/// Stops every running sandbox of this setup, as sbx's `policy reset` does. Failures are warnings: the reset
 /// itself must still happen.
 fn stop_running<R: Runner>(ctx: &Ctx<R>) {
     let sandboxes = match sandbox::list(&ctx.vm) {
@@ -32,7 +32,7 @@ fn stop_running<R: Runner>(ctx: &Ctx<R>) {
             return;
         }
     };
-    for sb in sandboxes.iter().filter(|s| s.is_running()) {
+    for sb in (sandboxes.iter()).filter(|s| s.is_running() && s.in_setup(&ctx.paths)) {
         if let Err(e) = super::lifecycle::stop_sandbox(ctx, sb) {
             crate::warning!("couldn't stop {} ({e:#})", sb.name());
         }

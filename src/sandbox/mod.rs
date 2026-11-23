@@ -128,6 +128,11 @@ impl Sandbox {
         self.state == MachineState::Running
     }
 
+    /// Whether this setup's policy applies to it (`labels::SETUP`).
+    pub fn in_setup(&self, paths: &crate::config::Paths) -> bool {
+        (self.meta.setup.as_deref()).is_none_or(|s| s == crate::host_service::namespace(paths))
+    }
+
     /// The primary workspace, or sbx's mountless directory.
     pub fn workdir(&self) -> String {
         self.meta

@@ -6,7 +6,6 @@
 # different shards, each with its own builder.
 [test-groups]
 builder = { max-threads = 1 }
-policy = { max-threads = 1 }
 
 [[profile.default.overrides]]
 filter = '''binary(e2e) & (
@@ -17,30 +16,6 @@ filter = '''binary(e2e) & (
     | test(mixin_layer_is_visible_in_the_guest)
 )'''
 test-group = 'builder'
-
-# The e2e tests that run `bento policy init|allow|deny|rm|reset` run one at a time within a run:
-# `push_network` and `policy reset` reach every sandbox in the tests' shared smolvm home, so one
-# test's policy would land in another's running sandbox. Drop this when they are scoped to their own
-# config. (`E2e::new` writes its `policy.toml` directly for the same reason.)
-[[profile.default.overrides]]
-filter = '''binary(e2e) & (
-    test(=basics::policy_changes_apply_on_start_and_live)
-    | test(=basics::smolvm_allow_list_opens_and_closes_an_address_live)
-    | test(=basics::hosted_port_rule)
-    | test(=basics::hosted_host_deny_inside_wildcard)
-    | test(=basics::hosted_cidr_deny_is_a_refused_connect)
-    | test(=basics::hosted_localhost_port)
-    | test(=basics::hosted_policy_change_is_live)
-    | test(=basics::hosted_fork_swaps_and_enforces)
-    | test(=basics::secrets_are_placeholders_in_the_guest)
-    | test(=basics::a_secret_set_after_create_is_bound_without_recreating)
-    | test(=fork_template::fork_round_trip)
-    | test(=kits::install_phase_network_closes_after_install)
-    | test(=kits::kit_add_applies_network_and_hooks_live)
-    | test(=network::host_services_open_and_close_live)
-    | test(/^request_rules::/)
-)'''
-test-group = 'policy'
 
 # The slowest e2e tests (`e2e_heavy_*` in the justfile, which deals them to the CI shards) start
 # first, so the longest of a shard doesn't start last and run on alone.
