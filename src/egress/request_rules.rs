@@ -109,7 +109,6 @@ fn moot(admits: &impl Fn(&str) -> bool, host: &HostMatch, port: Option<u16>, spa
             }
             v
         }
-        HostMatch::Any => return false,
     };
     // A rule without a port names every port: admitted on 443 and on a port no rule names.
     let ports = port.map_or_else(|| vec![443, spare], |p| vec![p]);

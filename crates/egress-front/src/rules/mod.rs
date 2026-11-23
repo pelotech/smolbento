@@ -44,8 +44,6 @@ pub struct Rule {
 /// Hosts compare ASCII-case-insensitively, with one trailing dot ignored.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum HostMatch {
-    /// Every host. [`Policy::validate`] refuses it: an interceptor terminates named hosts only.
-    Any,
     Exact(String),
     /// Subdomains of `domain`, never `domain` itself: one label deep, or any depth.
     Subdomains {
@@ -113,7 +111,7 @@ const METHOD_OVERRIDES: [&str; 3] = [
 ];
 
 impl Policy {
-    /// Refuses a policy with a rule that could never match, or that names every host.
+    /// Refuses a policy with a rule that could never match.
     pub fn validate(&self) -> Result<(), String> {
         for (i, r) in self.rules.iter().enumerate() {
             let at = |why: &str| {
@@ -127,7 +125,6 @@ impl Policy {
             }
             for h in &r.hosts {
                 match h {
-                    HostMatch::Any => return at("a request rule must name its hosts"),
                     HostMatch::Exact(n) | HostMatch::Subdomains { domain: n, .. }
                         if n.is_empty() || n.contains('*') =>
                     {
@@ -229,10 +226,9 @@ impl Policy {
     /// hosts too; their requests fall to the default, as no rule names them.
     pub fn terminate_hosts(&self) -> Vec<String> {
         let mut hosts: Vec<String> = (self.rules.iter().flat_map(|r| &r.hosts))
-            .filter_map(|h| match h {
-                HostMatch::Any => None,
-                HostMatch::Exact(n) => Some(normal(n)),
-                HostMatch::Subdomains { domain, .. } => Some(format!("*.{}", normal(domain))),
+            .map(|h| match h {
+                HostMatch::Exact(n) => normal(n),
+                HostMatch::Subdomains { domain, .. } => format!("*.{}", normal(domain)),
             })
             .collect();
         hosts.sort();
@@ -293,7 +289,6 @@ impl HostMatch {
     /// `host` is already [`normal`].
     fn matches(&self, host: &str) -> bool {
         match self {
-            HostMatch::Any => true,
             HostMatch::Exact(n) => normal(n) == host,
             HostMatch::Subdomains { domain, any_depth } => host
                 .strip_suffix(&normal(domain))

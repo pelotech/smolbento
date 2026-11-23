@@ -416,9 +416,7 @@ fn validate_refuses_rule_paths_that_never_match() {
     no_paths.request.paths.clear();
     let mut no_methods = allow("h", &[], &["/**"]);
     no_methods.request.methods = Methods::Only(vec![]);
-    let mut every_host = allow("h", &[], &["/**"]);
-    every_host.hosts = vec![HostMatch::Any];
-    for r in [no_hosts, no_paths, no_methods, every_host] {
+    for r in [no_hosts, no_paths, no_methods] {
         assert!(
             Policy {
                 rules: vec![r],
