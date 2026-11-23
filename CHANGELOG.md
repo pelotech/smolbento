@@ -1,5 +1,32 @@
 # Changelog
 
+## [0.38.0](https://github.com/pelotech/smolbento/compare/v0.37.0...v0.38.0) (2026-11-23)
+
+
+### Features
+
+* **egress:** method, path and query rules for hosted sandboxes ([#231](https://github.com/pelotech/smolbento/issues/231)) ([30f01cd](https://github.com/pelotech/smolbento/commit/30f01cda1323726376316d512472ad99555cefed))
+
+
+### Bug Fixes
+
+* **deps:** update rust crate rcgen to 0.14.0 ([#233](https://github.com/pelotech/smolbento/issues/233)) ([223bbfa](https://github.com/pelotech/smolbento/commit/223bbfaaf47b8322d7843731b65509f1a04834e8))
+* **policy:** policy changes reach only this setup's sandboxes ([#234](https://github.com/pelotech/smolbento/issues/234)) ([a53eb1b](https://github.com/pelotech/smolbento/commit/a53eb1bf6628ef100bf449e6fecc32f0fb1caba3))
+* **templates:** a sandbox made from a template runs its source's command ([#236](https://github.com/pelotech/smolbento/issues/236)) ([85fb885](https://github.com/pelotech/smolbento/commit/85fb885be0ec6182efdd29b5a4c674f75f1c31fc))
+
+
+### Chores
+
+* **deps:** lock file maintenance ([#226](https://github.com/pelotech/smolbento/issues/226)) ([c146a27](https://github.com/pelotech/smolbento/commit/c146a277a92ea72ed06a857f599fb6c97dac7b3a))
+* **deps:** pin dependencies ([#232](https://github.com/pelotech/smolbento/issues/232)) ([ab724d8](https://github.com/pelotech/smolbento/commit/ab724d86df05b00b78150f6892512e6e4dd999a2))
+* **egress:** build egress-front on the smolvm request-filter hook tag ([#228](https://github.com/pelotech/smolbento/issues/228)) ([07a8485](https://github.com/pelotech/smolbento/commit/07a8485dd25b68216d08c146df946f515eddf035))
+* **smolvm:** run smolvm 1.37.0 and drop compatibility code ([#235](https://github.com/pelotech/smolbento/issues/235)) ([af8b7f2](https://github.com/pelotech/smolbento/commit/af8b7f2d93973abbc109376cf9f5f81e8d585fe0))
+
+
+### Docs
+
+* **agents:** run the fastest check first and each long test once ([#229](https://github.com/pelotech/smolbento/issues/229)) ([da50ca4](https://github.com/pelotech/smolbento/commit/da50ca486b338e499b8158d57eb93773b0dc03fb))
+
 ## [0.37.0](https://github.com/pelotech/smolbento/compare/v0.36.2...v0.37.0) (2026-11-23)
 
 
