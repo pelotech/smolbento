@@ -12,5 +12,5 @@ publish = false
 # these lines; BASE defaults to the release in smolvm.lock.
 [dependencies]
 anyhow = "1.0.104"
-smolvm-credentials = { git = "https://github.com/josmo/smolvm", rev = "f026f22864f059e8f5d3260aef03157df2d1fc82", version = "1.36.1" }
-smolvm-protocol = { git = "https://github.com/josmo/smolvm", rev = "f026f22864f059e8f5d3260aef03157df2d1fc82", version = "1.36.1" }
+smolvm-credentials = { git = "https://github.com/josmo/smolvm", tag = "bento-main-c5ae3713-hook0d03d418", version = "1.36.1" }
+smolvm-protocol = { git = "https://github.com/josmo/smolvm", tag = "bento-main-c5ae3713-hook0d03d418", version = "1.36.1" }

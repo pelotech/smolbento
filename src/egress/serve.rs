@@ -44,6 +44,8 @@ pub fn run<R: Runner>(ctx: &Ctx<R>, name: &str) -> Result<()> {
         ca,
         extra_cas: vec![],
         upstream_roots_pem: vec![],
+        terminate_hosts: Vec::new(),
+        request_filter: None,
     };
     let decide = Arc::new(move |f: &Flow| {
         let (decision, reason) = rules.decide(f);
