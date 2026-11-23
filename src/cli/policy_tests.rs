@@ -525,6 +525,7 @@ fn approval_respond_adds_a_rule_and_pushes() {
         "approval",
         "respond",
         "example.com",
+        "--option",
         "allow",
         "--sandbox",
         "a1",
@@ -549,29 +550,6 @@ fn approval_respond_adds_a_rule_and_pushes() {
 }
 
 #[test]
-fn approval_respond_refuses_to_deny_a_bound_secret_host() {
-    let mut t = test_env(&[]);
-    set_policy(&t, "mode = \"deny-all\"");
-    blocked(&t);
-    // Blocked earlier, and since bound to a secret of the same sandbox.
-    t.sandboxes(&[(
-        "a1",
-        "running",
-        &[
-            ("sbx.secrets", "internal"),
-            ("sbx.credential-hosts", "example.com"),
-        ],
-    )]);
-    let err = t.sbt_err(&["policy", "approval", "respond", "example.com", "deny"]);
-    assert!(err.contains("can't deny example.com"), "{err}");
-    let p = Policy::load(&t.ctx.paths).unwrap();
-    assert!(p.sandboxes.is_empty() && p.rules.is_empty());
-    // Allowing it is still fine.
-    t.sbt(&["policy", "approval", "respond", "example.com", "allow"])
-        .unwrap();
-}
-
-#[test]
 fn approval_respond_checks_the_sandbox_that_was_blocked() {
     let mut t = test_env(&[]);
     set_policy(&t, "mode = \"deny-all\"");
@@ -581,11 +559,15 @@ fn approval_respond_checks_the_sandbox_that_was_blocked() {
         "approval",
         "respond",
         "example.com",
+        "--option",
         "allow",
         "--sandbox",
         "b2",
     ]);
     assert!(err.contains("b2") && err.contains("blocked in a1"), "{err}");
+    // sbx answers only with --option.
+    let err = t.sbt_err(&["policy", "approval", "respond", "example.com", "allow"]);
+    assert!(err.contains("unexpected argument 'allow'"), "{err}");
     let p = Policy::load(&t.ctx.paths).unwrap();
     assert!(p.sandboxes.is_empty() && p.rules.is_empty());
     assert!(updates(&t).is_empty());
@@ -712,9 +694,16 @@ fn a_failed_live_update_only_warns() {
     blocked(&t);
     t.runner()
         .fail(&["machine", "update"], "SMOLVM_ERROR", "not running");
-    t.sbt(&["policy", "approval", "respond", "example.com", "allow"])
-        .unwrap();
-    assert_eq!(Policy::load(&t.ctx.paths).unwrap().rules.len(), 1);
+    t.sbt(&[
+        "policy",
+        "approval",
+        "respond",
+        "example.com",
+        "--option",
+        "allow",
+    ])
+    .unwrap();
+    assert_eq!(sandbox_rules(&t, "a1").len(), 1);
     assert_eq!(updates(&t).len(), 1);
     // And a stop that fails doesn't keep a reset from happening.
     t.runner()

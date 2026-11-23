@@ -584,32 +584,20 @@ fn approval<R: Runner>(ctx: &Ctx<R>, policy: &mut Policy, cmd: ApprovalCmd) -> R
         }
         ApprovalCmd::Respond {
             id,
-            decision,
             option,
             sandbox,
         } => {
             // sbx (cobra) checks its required flag before it looks anything up.
-            let answer = match (decision, option) {
-                (Some(decision), _) => Answer::Rule(decision),
-                (None, Some(option)) => Answer::Option(option),
-                (None, None) => bail!(
+            let Some(option) = option else {
+                bail!(
                     "required flag(s) \"option\" not set\n  \
                      try: bento policy approval respond --help"
-                ),
+                );
             };
-            respond(ctx, policy, &blocked()?, id, answer, sandbox)?;
+            respond(ctx, policy, &blocked()?, id, option, sandbox)?;
         }
     }
     Ok(0)
-}
-
-/// How `approval respond` was answered.
-enum Answer {
-    /// sbx's `--option OPTION-ID`. An approval belongs to a sandbox, and so does the rule an
-    /// allow makes.
-    Option(String),
-    /// smolbento's older `ID allow|deny`: a rule for every sandbox unless --sandbox.
-    Rule(Decision),
 }
 
 fn respond<R: Runner>(
@@ -617,7 +605,7 @@ fn respond<R: Runner>(
     policy: &mut Policy,
     rows: &[log::LogRow],
     id: String,
-    answer: Answer,
+    option: String,
     sandbox: Option<String>,
 ) -> Result<()> {
     let seen: Vec<&str> = rows
@@ -636,20 +624,6 @@ fn respond<R: Runner>(
             seen.join(", ")
         );
     }
-    let option = match answer {
-        Answer::Rule(decision) => {
-            let rule = RuleArgs {
-                resources: id,
-                sandbox,
-                protocol: None,
-                method: None,
-                path: None,
-                query: Vec::new(),
-            };
-            return add_rule(ctx, policy, decision, rule, "approval");
-        }
-        Answer::Option(option) => option,
-    };
     let waiting: Vec<&log::LogRow> = log::pending(policy, rows)
         .into_iter()
         .filter(|r| r.host == id && sandbox.as_deref().is_none_or(|s| s == r.sandbox))
