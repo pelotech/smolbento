@@ -27,19 +27,6 @@ change while it runs. The interceptor still decrypts only its `terminate_hosts`.
 
 ## Request rules
 
-`Policy` holds rules over the HTTP requests on a decrypted host: hosts (exact, or subdomains one label
-or any depth deep, never the apex), an optional port, methods, path globs and query matchers. Rules add
-up and order never matters: a matching deny wins. A host with an allow refuses every request no allow
-matches (`no rule allows METHOD PATH on HOST`); a refusal names only the denying rule's id.
-
-- `terminate_hosts()` lists the hosts to decrypt, in the interceptor's `*.domain` form.
-- `inspection(host, port)` says whether rules apply to a connection, and what to do when it can't be read.
-- `request(..)` judges one request.
-
-The guest is taken to be adversarial. A deny fires if **any** reading of the request matches, and an
-allow needs **every** reading to: the method plus any `X-HTTP-Method-Override`, `X-HTTP-Method` or
-`X-Method-Override` value, the path with `;params` dropped and kept, and the query split on `&` and `;` or on `&` alone, with each repeated
-parameter. Paths are judged by a canonical view (decoded once, empty segments merged, dots resolved), which never changes what is forwarded. A target with an encoded `/` or `\`, a `%` that
-isn't one valid escape (double encoding, `%u`), invalid UTF-8 or a control character is refused as
-`ambiguous request target` on a host the rules name. Path globs: `*` within a segment, `**` as a whole
-segment for zero or more. Not covered: request bodies, a `_method` parameter, Unicode normalization.
+`Policy` holds request rules for decrypted hosts: `terminate_hosts()` lists the hosts to decrypt,
+`inspection(host, port)` says whether rules apply to a connection, and `request(..)` judges one
+request. The doc comments in `src/rules/mod.rs` and `src/rules/path.rs` say how requests match.
