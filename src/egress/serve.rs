@@ -48,12 +48,21 @@ pub fn run<R: Runner>(ctx: &Ctx<R>, name: &str) -> Result<()> {
     let decide = Arc::new(move |f: &Flow| {
         let (decision, reason) = rules.decide(f);
         if decision == Decision::Deny {
-            let host = f.name.clone().unwrap_or_else(|| f.ip.to_string());
-            eprintln!("deny {host}:{}: {reason}", f.port);
+            eprintln!("{}", deny_line(f, &reason));
         }
         decision
     });
     serve(listener, token, config, Arc::new(resolver(pairs)), decide)
+}
+
+/// The log line for a denied flow. The name is the guest's, so it's capped at a DNS name's length
+/// and escaped: a newline or terminal escape in an SNI can't forge or hide log lines.
+fn deny_line(f: &Flow, reason: &str) -> String {
+    let host = f.name.as_ref().map_or_else(
+        || f.ip.to_string(),
+        |n| n.chars().take(253).flat_map(char::escape_debug).collect(),
+    );
+    format!("deny {host}:{}: {reason}", f.port)
 }
 
 /// Values keyed by binding name; a variable with no value stays absent, so its requests fail.
@@ -98,6 +107,26 @@ mod tests {
         let r = resolver(vec![("GH_TOKEN".into(), "v".into())]);
         assert!(ask(&r, "gh_token"));
         assert!(!ask(&r, "other_token"));
+    }
+
+    #[test]
+    fn a_guest_name_cant_forge_log_lines() {
+        let f = Flow {
+            name: Some(format!(
+                "a.com\ndeny x.com:443: forged\u{1b}[2K{}",
+                "z".repeat(400)
+            )),
+            ip: "192.0.2.1".parse().unwrap(),
+            port: 443,
+        };
+        let line = deny_line(&f, "why");
+        assert!(!line.contains('\n') && !line.contains('\u{1b}'), "{line}");
+        assert!(
+            line.starts_with(r"deny a.com\ndeny x.com:443: forged\u{1b}[2K"),
+            "{line}"
+        );
+        assert!(line.len() < 300, "{line}");
+        assert!(line.ends_with(":443: why"), "{line}");
     }
 
     #[test]
