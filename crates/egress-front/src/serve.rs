@@ -29,12 +29,17 @@ pub fn serve(
         match listener.accept() {
             Ok((guest, _)) => {
                 let decide = decide.clone();
-                std::thread::spawn(move || {
+                // `thread::spawn` panics when the OS refuses a thread; that must drop one flow, not
+                // the process. The closure, and with it the guest's socket, is dropped on error.
+                let spawned = std::thread::Builder::new().spawn(move || {
                     // A bad or dropped flow is that flow's problem only; the log says why.
                     if let Err(e) = relay(guest, &front, &inner, &decide) {
                         eprintln!("egress: a flow was dropped: {e}");
                     }
                 });
+                if let Err(e) = spawned {
+                    eprintln!("egress: a flow was dropped: no thread for it: {e}");
+                }
             }
             // A reset before accept, or running out of fds, must not end the service for every flow.
             Err(e) => {
