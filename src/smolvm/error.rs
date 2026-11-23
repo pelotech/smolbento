@@ -92,7 +92,7 @@ impl SmolvmError {
 
     /// A fork past smolvm's limit on a disk's chain of copies (stated only in the message).
     pub fn is_chain_too_deep(&self) -> bool {
-        self.message.contains("qcow2 backing layers") || self.message.contains("safe backing depth")
+        self.message.contains("qcow2 backing layers")
     }
 
     pub fn is_not_found(&self) -> bool {
