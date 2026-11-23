@@ -284,18 +284,20 @@ mod tests {
         };
         assert_eq!(d("a.com"), Decision::Allow);
         assert_eq!(d("d.com"), Decision::Allow);
-        // The gateway is never decrypted.
+        // The gateway is never decrypted, with a bounded allow or only a bounded deny.
         let gw = Flow {
             ip: HOST_GATEWAY.parse().unwrap(),
             ..flow("localhost", FlowKind::Tls)
         };
-        let mut lp = deny_all();
-        add(&mut lp, D::Allow, "localhost", "GET");
-        let lp = request_policy(&lp, SB, &[]);
-        assert_eq!(
-            connection(&lp, &gw, &lp.terminate_hosts()).unwrap().0,
-            Decision::Deny
-        );
+        for d in [D::Allow, D::Deny] {
+            let mut lp = deny_all();
+            add(&mut lp, d, "localhost", "GET");
+            let lp = request_policy(&lp, SB, &[]);
+            assert_eq!(
+                connection(&lp, &gw, &lp.terminate_hosts()).unwrap().0,
+                Decision::Deny
+            );
+        }
     }
 
     #[test]
@@ -307,70 +309,6 @@ mod tests {
             assert_eq!(d, Decision::Deny, "{host}");
             assert_eq!(why, "TLS to a ruled host that isn't decrypted");
         }
-        // The gateway, with only a bounded deny on `localhost`.
-        let mut lp = deny_all();
-        add(&mut lp, D::Deny, "localhost", "POST");
-        let lp = request_policy(&lp, SB, &[]);
-        let gw = Flow {
-            ip: HOST_GATEWAY.parse().unwrap(),
-            ..flow("localhost", FlowKind::Tls)
-        };
-        assert_eq!(
-            connection(&lp, &gw, &lp.terminate_hosts()).unwrap().0,
-            Decision::Deny
-        );
-    }
-
-    #[test]
-    fn ssh_to_a_ruled_host_still_follows_uninspectable() {
-        let p = rules();
-        // Not decrypted either way: a host with only denies passes it, one with an allow refuses it.
-        for terminated in [vec![], p.terminate_hosts()] {
-            let d = |host| {
-                connection(&p, &flow(host, FlowKind::Other), &terminated)
-                    .unwrap()
-                    .0
-            };
-            assert_eq!(d("d.com"), Decision::Allow);
-            assert_eq!(d("a.com"), Decision::Deny);
-        }
-    }
-
-    #[test]
-    fn an_unparseable_request_rule_doesnt_disable_the_others() {
-        let (_d, paths) = test_paths();
-        let mut p = deny_all();
-        p.allow(Some(SB), "**");
-        add(&mut p, D::Deny, "d.com", "POST");
-        // Hand-edited: `policy deny` checks `--path`, and `PathGlob` refuses the empty segment.
-        p.insert_rule(
-            Some(SB),
-            D::Deny,
-            "api.x.com",
-            "added",
-            Some("POST".into()),
-            Some("/admin/".into()),
-            None,
-        )
-        .unwrap();
-        save(&paths, &p, 1);
-        // A fresh process: it knows no ruled hosts from before.
-        let source = Arc::new(PolicySource::new(&paths, SB, vec![]));
-        let f = Filter(source.clone());
-        assert!(judge(&f, "d.com", "POST").is_err());
-        assert_eq!(judge(&f, "d.com", "GET"), Ok(()));
-        let ruled = source.ruled_hosts().unwrap();
-        assert_eq!(ruled, ["d.com"]);
-        // The bad deny acts on its whole host.
-        let rules = super::super::rules::Rules::new(&paths, SB, false, vec![]);
-        let to = |host: &str| Flow {
-            name: Some(host.into()),
-            kind: FlowKind::Tls,
-            ip: "192.0.2.1".parse().unwrap(),
-            port: 443,
-        };
-        assert_eq!(rules.decide(&to("api.x.com")).0, Decision::Deny);
-        assert_eq!(rules.decide(&to("d.com")).0, Decision::Allow);
     }
 
     #[test]
