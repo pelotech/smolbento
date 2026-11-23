@@ -100,8 +100,9 @@ pub(super) struct View {
 }
 
 impl View {
-    /// `None` for an ambiguous target: one that isn't origin-form, or whose path holds an encoded `/` or
-    /// `\`, a `%` that isn't one valid escape (double encoding, `%u`), invalid UTF-8 or a control character.
+    /// `None` for an ambiguous target: one that isn't origin-form, whose path holds an encoded `/` or `\`,
+    /// a `%` that isn't one valid escape (`%u`), invalid UTF-8 or a control character, or whose path or
+    /// query is still encoded once decoded (double encoding).
     pub fn parse(target: &str) -> Option<View> {
         let (path, query) = target.split_once('?').unwrap_or((target, ""));
         let path = path.strip_prefix('/')?;
@@ -122,10 +123,7 @@ impl View {
             }
         }
         let path = String::from_utf8(bytes).ok()?;
-        if path
-            .chars()
-            .any(|c| c == '%' || c == '\\' || c.is_control())
-        {
+        if encoded(path.as_bytes()) || path.chars().any(|c| c == '\\' || c.is_control()) {
             return None;
         }
         let mut paths = vec![segments(&path, true)];
@@ -135,6 +133,9 @@ impl View {
         let mut readings = vec![params(query, &['&', ';'])];
         if query.contains(';') {
             readings.push(params(query, &['&']));
+        }
+        if readings[0].iter().any(|(k, v)| encoded(k) || encoded(v)) {
+            return None;
         }
         Some(View { paths, readings })
     }
@@ -194,6 +195,13 @@ fn form_decode(s: &str) -> Vec<u8> {
         i += 1;
     }
     out
+}
+
+/// Whether decoded bytes still hold an escape (`%41`, `%u0041`) a server could decode again.
+fn encoded(b: &[u8]) -> bool {
+    b.windows(2).enumerate().any(|(i, w)| {
+        w[0] == b'%' && (w[1] | 0x20 == b'u' || b.get(i + 1..i + 3).and_then(hex).is_some())
+    })
 }
 
 /// The byte a two-digit hex escape stands for. (`from_str_radix` would take a sign, as in `%+f`.)

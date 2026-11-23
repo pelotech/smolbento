@@ -245,6 +245,18 @@ fn ambiguous_targets_are_refused() {
             "{target}"
         );
     }
+    // An encoded `%` is a plain percent sign unless an escape follows it.
+    assert!(check(&p, "GET", "/100%25").is_ok());
+    assert!(check(&p, "GET", "/100%25off").is_ok());
+    // A query value that is still encoded after decoding is double encoded.
+    for target in ["/?a=%2541", "/?%2561=A", "/?a=%25u0041"] {
+        assert_eq!(
+            check(&p, "GET", target).unwrap_err(),
+            "ambiguous request target",
+            "{target}"
+        );
+    }
+    assert!(check(&p, "GET", "/?a=100%25").is_ok());
     // A host no rule names isn't judged, so its encoded slashes pass.
     assert!(
         p.request("other", 443, "GET", "/g%2Fp", &HeaderMap::new())
