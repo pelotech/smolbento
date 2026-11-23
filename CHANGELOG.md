@@ -1,5 +1,13 @@
 # Changelog
 
+## [0.37.0](https://github.com/pelotech/smolbento/compare/v0.36.2...v0.37.0) (2026-11-23)
+
+
+### Features
+
+* **egress:** hosted credential swap behind network.egress ([#224](https://github.com/pelotech/smolbento/issues/224)) ([26668e7](https://github.com/pelotech/smolbento/commit/26668e706dfbeffc5246608eae2dac520a7099c7))
+* **egress:** hosted egress enforces network rules and is the default ([#227](https://github.com/pelotech/smolbento/issues/227)) ([94b5be3](https://github.com/pelotech/smolbento/commit/94b5be32a54050611a847bc07bfd342169b4b147))
+
 ## [0.36.2](https://github.com/pelotech/smolbento/compare/v0.36.1...v0.36.2) (2026-11-22)
 
 
