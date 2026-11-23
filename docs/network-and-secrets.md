@@ -238,8 +238,8 @@ The Linux systemd units are tested in CI, and the macOS launchd units by running
 #### Request rules
 
 A rule with `--method`, `--path` or `--query`, or a kit's `network-policy@2` entry with `methods` or
-`paths`, is bounded: it applies to some requests to its hosts. A hosted sandbox created on 0.38 or
-later enforces bounded rules per request:
+`paths`, is bounded: it applies to some requests to its hosts. A hosted sandbox enforces bounded rules per
+request:
 
 ```sh
 # GET and HEAD only, on every path
@@ -269,23 +269,16 @@ bento policy deny network --sandbox claude-myrepo github.com --method POST --pat
   - A path is judged with its dot segments resolved. One with `%2f` or `%5c`, double encoding, `%u`,
     `%00`, a control character or invalid UTF-8 is refused as `ambiguous request target`.
 - **Named hosts only.** `policy allow|deny` refuses bounded rules on `*`, `**`, IPs and CIDRs, and a
-  bounded allow on a host glob (`crl*.x.com`). A bounded deny on a glob widens to `*.x.com`. A rule
-  of these kinds stored by an earlier version, or one whose path or query can't be read, keeps
-  0.37.0's meaning: a deny acts on its whole host, and an allow admits its host. `policy ls --wide`
-  says so, and the egress log names the rule. The other rules are still enforced per request. A
-  bounded deny on `localhost` acts on the whole host port too: host services aren't decrypted.
+  bounded allow on a host glob (`crl*.x.com`). A bounded deny on a glob widens to `*.x.com`. A
+  bounded deny on `localhost` acts on the whole host port: host services aren't decrypted.
 - **Changes apply live.**
   - A change on a host that's already decrypted applies from the next request, on open connections
     too.
   - A new ruled host, or one no longer ruled, restarts the sandbox's egress process at its next
     connection. Open connections drop then, that connection among them. The next one starts the
     process again: at once with systemd, and within 10 s with launchd.
-- **Sandboxes created before 0.38 need a recreate.** Their CA can't sign for new hosts, so ruled
-  hosts aren't decrypted. Until the sandbox is recreated, a bounded deny acts on its whole host, as
-  in 0.37.0, and TLS and HTTP to a host a bounded allow names are refused. The egress log says
-  `this sandbox predates request rules`. A secret's host is still decrypted and filtered.
-- **Upgrading from 0.37:** it stored `--method/--path` rules but acted on their whole host. They now
-  mean what they say: `deny H --method POST` no longer blocks H's GETs.
+- **Upgrading:** sandboxes created before 0.38 must be recreated; `--method/--path` rules now act
+  per request.
 
 On a ruled host:
 
