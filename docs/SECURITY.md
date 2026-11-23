@@ -49,8 +49,15 @@ reachable. `balanced` and `deny-all` block that unless you allow the address.
 - A hosted sandbox's egress process enforces host rules and ports as sbx does, for every
   connection that names its host (TLS SNI or HTTP `Host:`) within 200 ms. A connection with no
   name (SSH, TLS without SNI), or one that holds its first bytes back for longer, is judged by
-  address and port only: host deny rules and a host rule's port don't apply to it, so an agent can
-  escape them by waiting before it sends. With `network.egress=smolvm`, host rules are
+  address and port only: host deny rules and a host rule's port don't apply to it. The name is
+  whatever the guest sends, so host rules stop cooperative clients, not a hostile agent. It can
+  escape them three ways:
+  - wait more than 200 ms before it sends;
+  - send an allowed host's name (SNI or `Host:`) to any address smolvm admits, which is every
+    address under `allow-all` (domain fronting, or a server that ignores SNI);
+  - split its TLS ClientHello across records, or pad it past 16 KiB, so the connection has no name.
+
+  With `network.egress=smolvm`, host rules are
   looser than sbx's: `*.x.com` matches any depth, wildcards inside a label widen, and ports aren't
   enforced. Methods and paths are never enforced. See [sbx compatibility](sbx-compatibility.md).
 
