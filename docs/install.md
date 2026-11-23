@@ -76,9 +76,6 @@ bento rm NAME
 bento create AGENT PATH --name NAME -t NAME-saved:v1
 ```
 
-Sandboxes made before smolbento downloaded its own smolvm stay in your smolvm's default location,
-so `bento ls` no longer shows them. Recreate them, and run `bento reset` to remove the old ones.
-
 ## Uninstalling
 
 Remove smolbento's sandboxes and files first, then smolbento:

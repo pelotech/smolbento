@@ -479,26 +479,6 @@ impl<R: Runner> Smolvm<R> {
         self.call(args(&["machine", "stop", "-n", name])).map(drop)
     }
 
-    /// `list` against smolvm's own default state (without smolbento's `SMOLVM_DATA_DIR`), where
-    /// sandboxes from before smolbento kept its own state may still be.
-    pub fn list_default_state(&self) -> Result<Vec<Machine>> {
-        machines(&self.call_default_state(&["machine", "ls", "--json"])?)
-    }
-
-    /// `delete` in smolvm's own default state (see `list_default_state`).
-    pub fn delete_default_state(&self, name: &str) -> Result<()> {
-        self.call_default_state(&["machine", "delete", "-n", name, "-f"])
-            .map(drop)
-    }
-
-    /// A call without smolbento's `SMOLVM_DATA_DIR`.
-    fn call_default_state(&self, a: &[&str]) -> Result<Output> {
-        checked(
-            self.runner
-                .run_with_env(&args(a), &[], &[DATA_DIR.to_string()])?,
-        )
-    }
-
     pub fn delete(&self, name: &str) -> Result<()> {
         self.call(args(&["machine", "delete", "-n", name, "-f"]))
             .map(drop)
