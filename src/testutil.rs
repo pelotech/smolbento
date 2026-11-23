@@ -183,13 +183,6 @@ impl TestEnv {
         self.sandbox("claude-proj", "running", &[("sbx.workspace", "/w/proj")])
     }
 
-    /// A sandbox from before agents were kits: no `sbx.command`.
-    pub fn old_sandbox(&self, name: &str, state: &str, labels: &[(&str, &str)]) -> &FakeRunner {
-        let mut all = vec![("sbx.name", name)];
-        all.extend_from_slice(labels);
-        self.machine(&crate::sandbox::name::machine_name(name), state, &all)
-    }
-
     /// Sandbox `name` is missing until the command creates it, then exists as `created`.
     pub fn creatable(&self, name: &str, labels: &[(&str, &str)]) -> &FakeRunner {
         self.sandbox(name, "created", labels)
@@ -519,6 +512,7 @@ fn add_template(
                 image: "docker/sandbox-templates:shell-docker-0.10.0".into(),
                 created_at: "1970-01-12T13:46:30Z".into(),
                 kits,
+                command: vec!["saved-agent".into(), "--flag".into()],
                 ..Default::default()
             },
             &src,

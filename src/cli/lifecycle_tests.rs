@@ -426,6 +426,7 @@ fn template_with(t: &TestEnv, extra: Vec<crate::sandbox::labels::KitRecord>) {
                 image: "img:1".into(),
                 created_at: "1970-01-12T13:46:30Z".into(),
                 kits,
+                command: vec!["bash".into(), "-l".into()],
                 ..Default::default()
             },
             &src,
@@ -568,7 +569,7 @@ fn a_template_without_kit_records_is_refused_on_create() {
     let err = t.sbt_err(&["create", "shell", "-t", "old:v1"]);
     assert_eq!(
         err,
-        "template docker.io/library/old:v1 has no kit records; save it again from a new sandbox"
+        "template docker.io/library/old:v1 has no kit records or command; save it again from a new sandbox"
     );
     t.sbt(&["template", "ls"]).unwrap();
     assert!(t.stdout().contains("new"), "{}", t.stdout());
@@ -863,6 +864,11 @@ fn a_saved_template_is_created_from_its_pack() {
         Some("docker.io/library/chk-tpl:v1")
     );
     assert_eq!(req.image, e.image);
+    assert_eq!(
+        plan.workload.command.as_deref(),
+        Some(e.command.as_slice()),
+        "the source sandbox's command, whatever the kit's image says"
+    );
     assert_eq!(
         plan.merged.dockerd,
         crate::sandbox::Engine::Off,

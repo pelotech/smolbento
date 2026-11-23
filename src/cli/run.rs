@@ -87,9 +87,8 @@ pub fn run<R: Runner>(ctx: &mut Ctx<R>, a: &RunArgs) -> Result<i32> {
         );
     }
     // What to launch, with the arguments given: an environment's `entrypoint`, else the agent's
-    // command (`sbx.command`; a sandbox without one is from before agents were kits). Looked up
+    // command (`sbx.command`). Looked up
     // before the start, so a sandbox with no known agent isn't started and left running.
-    sb.check_current()?;
     let command: Option<Vec<String>> = match (&a.entrypoint, &sb.meta.rec.command, a.detach) {
         (_, _, true) | (None, None, false) => None,
         (Some(e), _, false) => Some([e.as_slice(), a.agent_args.as_slice()].concat()),

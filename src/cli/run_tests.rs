@@ -16,25 +16,6 @@ fn agent_args_rule() {
     );
 }
 #[test]
-fn an_old_preset_sandbox_is_refused_with_recreate() {
-    let mut t = test_env(&[]);
-    let ws = t.ctx.cwd.display().to_string();
-    // No `sbx.command`: made when built-in agents weren't kits.
-    t.old_sandbox(
-        "claude-proj",
-        "running",
-        &[("sbx.agent", "claude"), ("sbx.workspace", &ws)],
-    );
-    let err = t.sbt_err(&["run", "claude"]);
-    assert_eq!(
-        err,
-        "sandbox claude-proj was created by an older smolbento whose built-in agents weren't \
-             kits; recreate it (bento rm claude-proj, then bento create …)"
-    );
-    assert!(t.runner().interactive_calls().is_empty());
-}
-
-#[test]
 fn clone_is_ignored_when_run_attaches_to_an_existing_sandbox() {
     let mut t = test_env(&[]);
     t.project("running");
@@ -342,16 +323,6 @@ fn create_options_on_an_existing_sandbox_get_a_warning() {
         super::ignored_options_warning(&parse(&["sbt", "run", "--name", "s1"]), "s1"),
         None
     );
-}
-
-#[test]
-fn a_sandbox_from_before_kits_is_not_started() {
-    let mut t = test_env(&[]);
-    t.old_sandbox("x", "stopped", &[("sbx.agent", "nope")]);
-    let err = t.sbt_err(&["run", "--name", "x"]);
-    assert!(err.contains("recreate it (bento rm x"), "{err}");
-    // Checked before the start: nothing to stop afterwards.
-    assert!(!t.made("machine start"), "{:#?}", t.calls());
 }
 
 #[test]
@@ -696,23 +667,12 @@ fn a_smolvm_error_from_the_bash_probe_is_not_a_missing_bash() {
 }
 
 #[test]
-fn gemini_is_refused_for_a_new_sandbox_and_an_old_one_must_be_recreated() {
+fn gemini_is_refused_for_a_new_sandbox() {
     let mut t = test_env(&[]);
     t.no_machine();
     let err = t.sbt_err(&["run", "gemini", "."]);
     assert!(err.starts_with("\"gemini\" is retired"), "{err}");
     assert!(!t.made("machine create"));
-
-    let mut t = test_env(&[]);
-    let ws = t.ctx.cwd.display().to_string();
-    t.old_sandbox(
-        "old",
-        "running",
-        &[("sbx.agent", "gemini"), ("sbx.workspace", &ws)],
-    );
-    let err = t.sbt_err(&["run", "--name", "old"]);
-    assert!(err.contains("recreate it (bento rm old"), "{err}");
-    assert!(t.runner().interactive_calls().is_empty());
 }
 
 #[test]

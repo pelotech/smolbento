@@ -444,7 +444,8 @@ bento template load myimage.tar
   `kit.allowedSources`, `kit.allowLocalKits`, and `kit.requireSignature` (which needs the registry,
   even with `--pull never`). With `docker.enabled=false` the docker kit is left out. A sandbox made
   from a template can't be saved yet.
-- Templates and sandboxes from before agents were kits are refused: save or create them again.
+- A template saved without kit records or a command is refused: save it again from a new sandbox.
+  A create from a template runs the command its source sandbox ran.
 - `-t` can't combine with `--kit` kits that add image layers, since the disk is saved whole.
   Layer-free kits such as `docker` work.
 - Removing a template doesn't affect sandboxes made from it. Kit install steps run again for each

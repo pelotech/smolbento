@@ -163,7 +163,6 @@ fn save<R: Runner>(ctx: &Ctx<R>, a: &TemplateSaveArgs) -> Result<()> {
             sb.name()
         );
     }
-    sb.check_current()?;
     if sb.is_running() {
         let refused = || {
             anyhow::anyhow!(
@@ -197,6 +196,7 @@ fn save<R: Runner>(ctx: &Ctx<R>, a: &TemplateSaveArgs) -> Result<()> {
             agent: sb.meta.agent.clone(),
             image: sb.image.clone().unwrap_or_default(),
             kits: sb.meta.rec.kits.clone(),
+            command: sb.meta.rec.command.clone().unwrap_or_default(),
             created_at: super::rfc3339(ctx.now),
             ..Default::default()
         },
@@ -311,26 +311,6 @@ mod tests {
     }
 
     #[test]
-    fn an_old_preset_sandbox_is_refused_before_any_pack() {
-        // No `sbx.command`: made when built-in agents weren't kits.
-        let mut t = test_env(&[]);
-        let labels = [("sbx.name", "a"), ("sbx.agent", "shell")];
-        t.runner().ok(
-            &["machine", "status", "-n", "sbx-a"],
-            &machine_json("sbx-a", "running", &labels),
-        );
-        let err = t.sbt_err(&["template", "save", "a", "t2"]);
-        assert_eq!(
-            err,
-            "sandbox a was created by an older smolbento whose built-in agents weren't kits; \
-             recreate it (bento rm a, then bento create …)"
-        );
-        let calls = t.calls();
-        assert!(!t.made("pack"), "{calls:?}");
-        assert!(!calls.iter().any(|l| l.contains("stop")), "{calls:?}");
-    }
-
-    #[test]
     fn rm_refuses_an_ambiguous_id_prefix() {
         let mut t = test_env(&[]);
         let a = with_template(&t, "t:a");
@@ -396,6 +376,7 @@ mod tests {
                     image: "img".into(),
                     created_at: "1970-01-12T13:46:30Z".into(),
                     kits: crate::testutil::saved_template_kits(t, "shell"),
+                    command: vec!["bash".into(), "-l".into()],
                     ..Default::default()
                 },
                 &src,
