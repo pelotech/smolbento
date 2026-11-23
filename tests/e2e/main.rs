@@ -17,6 +17,7 @@ mod fork_template;
 mod git_signing;
 mod kits;
 mod network;
+mod request_rules;
 mod skills;
 mod ssh;
 
