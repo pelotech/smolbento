@@ -496,7 +496,7 @@ pub fn saved_template_kits(t: &TestEnv, agent: &str) -> Vec<crate::sandbox::labe
     }]
 }
 
-/// A template saved before agents were kits: no kit records.
+/// A template with no kit records.
 pub fn legacy_template(t: &TestEnv, name: &str, agent: &str) -> crate::templates::Entry {
     add_template(t, name, agent, vec![])
 }

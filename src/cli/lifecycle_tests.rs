@@ -560,15 +560,18 @@ fn template_kits_follow_kit_policy() {
 }
 
 #[test]
-fn an_old_template_is_refused_on_create() {
+fn a_template_without_kit_records_is_refused_on_create() {
     let mut t = test_env(&[]);
     legacy_template(&t, "old:v1", "shell");
+    // Another entry still loads.
+    saved_template(&t, "new:v1", "shell");
     let err = t.sbt_err(&["create", "shell", "-t", "old:v1"]);
     assert_eq!(
         err,
-        "template docker.io/library/old:v1 was saved by an older smolbento; save it again \
-             from a new sandbox"
+        "template docker.io/library/old:v1 has no kit records; save it again from a new sandbox"
     );
+    t.sbt(&["template", "ls"]).unwrap();
+    assert!(t.stdout().contains("new"), "{}", t.stdout());
 }
 
 #[test]

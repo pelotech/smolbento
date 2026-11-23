@@ -62,8 +62,8 @@ pub struct Entry {
     #[serde(default)]
     pub size: u64,
     /// The source sandbox's kit records, workload first: a create from the template loads them
-    /// by their pinned refs, with their args. Empty for a template from before kits were
-    /// recorded, which is refused.
+    /// by their pinned refs, with their args. Defaulted, so an entry without them is refused on
+    /// its own and the rest of the index still loads.
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub kits: Vec<crate::sandbox::labels::KitRecord>,
 }
@@ -80,11 +80,11 @@ impl Entry {
         agent_ref.is_some() && agent_ref.as_deref() == workload
     }
 
-    /// Refuses a template saved before agents were kits (no kit records).
+    /// Refuses a template with no kit records: a sandbox made from it would have no kits.
     pub fn check_current(&self) -> Result<()> {
         if self.kits.is_empty() {
             bail!(
-                "template {} was saved by an older smolbento; save it again from a new sandbox",
+                "template {} has no kit records; save it again from a new sandbox",
                 self.full()
             );
         }
@@ -584,7 +584,7 @@ mod tests {
     }
 
     #[test]
-    fn import_refuses_an_old_template() {
+    fn import_refuses_a_template_without_kit_records() {
         let (dir, s) = store();
         let old = Entry {
             kits: vec![],
@@ -594,7 +594,7 @@ mod tests {
             .import(&archive(dir.path(), &old))
             .unwrap_err()
             .to_string();
-        assert!(err.contains("saved by an older smolbento"), "{err}");
+        assert!(err.contains("has no kit records"), "{err}");
         assert!(s.list().unwrap().is_empty());
     }
 
