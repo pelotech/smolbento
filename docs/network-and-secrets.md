@@ -86,8 +86,8 @@ network --id`), `--json` the same rules as `{"rules": [...]}`, and `-q` only the
   answers DNS itself. A hosted sandbox sends no UDP but DNS ([Hosted egress](#hosted-egress)), and an
   allowed verdict says so.
 - `--method`, `--path` and `--query` on `policy allow|deny` bound a rule to some requests. Hosted
-  sandboxes enforce them per request: see [Request rules](#request-rules). `policy check` keeps
-  its connection verdict and notes (`note: request rules apply on this host`) when they apply.
+  sandboxes enforce them per request: see [Request rules](#request-rules). `policy check` gives
+  the connection's verdict; `policy ls --wide` shows the request rules.
 - `policy rm network --resource HOST --method GET --path '/v1/**'` removes the host from the rule
   with those methods and that path only.
 
