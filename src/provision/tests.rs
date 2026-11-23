@@ -1109,17 +1109,8 @@ fn egress_env(
 /// An env with a fake service manager where `s1` can be created with no secret, under `env`.
 fn service_env(env: &[(&str, &str)]) -> (TestEnv, crate::host_service::fake::FakeControl) {
     let mut t = test_env(env);
-    // A hosted sandbox needs its egress unit: a fake service manager under a short temp dir.
-    let tmp = tempfile::Builder::new()
-        .prefix("sbe")
-        .tempdir_in("/tmp")
-        .unwrap();
-    let (services, ctl) = crate::host_service::fake::services(
-        tmp.path(),
-        crate::host_service::Flavor::Launchd,
-        "ns1",
-    );
-    t.ctx.services = services;
+    // A hosted sandbox needs its egress unit.
+    let (ctl, tmp) = with_services(&mut t);
     std::mem::forget(tmp);
     set_policy(&t, "mode = \"deny-all\"");
     let fake = t.runner();

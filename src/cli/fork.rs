@@ -220,8 +220,6 @@ mod tests {
     use std::rc::Rc;
 
     use crate::egress::{self, Label};
-    use crate::host_service::Flavor;
-    use crate::host_service::fake::{FakeControl, services};
     use crate::policy::Policy;
     use crate::secrets::{SecretEntry, SecretsFile, Source, scope_for};
     use crate::smolvm::{Credential, SmolvmError};
@@ -696,17 +694,6 @@ mod tests {
         assert!(!p.sandboxes.contains_key("a-fork-2"));
         assert_eq!(remote(&repo, "a-fork-1", "url"), "file:///sbt/a-fork-1");
         assert_eq!(remote(&repo, "a-fork-2", "url"), "");
-    }
-
-    /// A fake service manager under a short temp dir (socket paths are limited to ~104 bytes).
-    fn with_services(t: &mut TestEnv) -> (FakeControl, tempfile::TempDir) {
-        let tmp = tempfile::Builder::new()
-            .prefix("sbf")
-            .tempdir_in("/tmp")
-            .unwrap();
-        let (s, ctl) = services(tmp.path(), Flavor::Launchd, "ns1");
-        t.ctx.services = s;
-        (ctl, tmp)
     }
 
     /// `a` as a running hosted sandbox with one credential, and its egress state on disk.

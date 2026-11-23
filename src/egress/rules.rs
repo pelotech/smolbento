@@ -77,21 +77,11 @@ impl Rules {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::config::test_paths;
     use crate::policy::Mode;
-    use std::collections::BTreeMap;
+    use Decision::{Allow, Deny};
 
     const SB: &str = "sb";
-
-    fn paths(dir: &std::path::Path) -> Paths {
-        let e: BTreeMap<String, String> = [
-            ("SMOLBENTO_CONFIG_DIR", dir.to_str().unwrap()),
-            ("SMOLBENTO_CACHE_DIR", "/k"),
-            ("SMOLBENTO_DATA_DIR", "/d"),
-        ]
-        .map(|(k, v)| (k.to_string(), v.to_string()))
-        .into();
-        Paths::from_env(&e).unwrap()
-    }
 
     /// Saves a deny-all policy with these `(allow?, resource)` sandbox rules.
     fn save(p: &Paths, rules: &[(bool, &str)]) {
@@ -121,145 +111,78 @@ mod tests {
         r.decide(f).0
     }
 
+    /// Sandbox rules, host access, then the flow's name, address and port, and its decision.
+    type Case = (
+        &'static [(bool, &'static str)],
+        bool,
+        Option<&'static str>,
+        &'static str,
+        u16,
+        Decision,
+    );
+
     #[test]
-    fn a_port_rule_refuses_other_ports() {
-        let d = tempfile::tempdir().unwrap();
-        let p = paths(d.path());
-        save(&p, &[(true, "github.com:443")]);
-        let r = Rules::new(&p, SB, false, vec![]);
-        assert_eq!(
-            ask(&r, &flow(Some("github.com"), "140.82.1.1", 443)),
-            Decision::Allow
-        );
-        assert_eq!(
-            ask(&r, &flow(Some("github.com"), "140.82.1.1", 80)),
-            Decision::Deny
-        );
+    fn rule_combinations() {
+        const GH: &str = "140.82.1.1";
+        let gw = HOST_GATEWAY;
+        #[rustfmt::skip]
+        let cases: &[Case] = &[
+            // A port rule refuses other ports.
+            (&[(true, "github.com:443")], false, Some("github.com"), GH, 443, Allow),
+            (&[(true, "github.com:443")], false, Some("github.com"), GH, 80, Deny),
+            // A host deny beats a wildcard allow.
+            (&[(true, "**.github.com"), (false, "gist.github.com")], false, Some("api.github.com"), GH, 443, Allow),
+            (&[(true, "**.github.com"), (false, "gist.github.com")], false, Some("gist.github.com"), GH, 443, Deny),
+            // The gateway is localhost.
+            (&[(true, "localhost:8080")], true, None, gw, 8080, Allow),
+            (&[(true, "localhost:8080")], true, None, gw, 9090, Deny),
+            // A gateway flow ignores its name.
+            (&[(true, "localhost:8080"), (true, "github.com")], true, Some("github.com"), gw, 8080, Allow),
+            (&[(true, "localhost:8080"), (true, "github.com")], true, Some("github.com"), gw, 9090, Deny),
+            // Deny-all with no rules denies implicitly: a nameless flow keeps smolvm's admission,
+            // a named one is refused.
+            (&[], false, None, "203.0.113.5", 22, Allow),
+            (&[], false, Some("example.com"), "203.0.113.5", 443, Deny),
+            // A CIDR deny refuses a nameless flow, and an allowed name doesn't lift it.
+            (&[(true, "**.example.com"), (false, "10.0.0.0/8")], false, None, "10.1.2.3", 443, Deny),
+            (&[(true, "**.example.com"), (false, "10.0.0.0/8")], false, Some("api.example.com"), "10.1.2.3", 443, Deny),
+            (&[(true, "**.example.com"), (false, "10.0.0.0/8")], false, None, "192.0.2.1", 443, Allow),
+            // A CIDR allow admits a named flow to its range; outside it, the name alone decides.
+            (&[(true, "10.0.0.0/8")], false, Some("gitlab.corp"), "10.1.2.3", 443, Allow),
+            (&[(true, "10.0.0.0/8")], false, Some("gitlab.corp"), "192.0.2.1", 443, Deny),
+            // A name deny beats a CIDR allow.
+            (&[(true, "10.0.0.0/8"), (false, "gitlab.corp")], false, Some("gitlab.corp"), "10.1.2.3", 443, Deny),
+            // A proxy CONNECT names its target, not the proxy, and the proxy's CIDR admits it.
+            (&[(true, "10.9.9.0/24")], false, Some("example.com"), "10.9.9.9", 3128, Allow),
+            // The gateway is closed without host access.
+            (&[(true, "localhost:8080")], false, Some("localhost"), gw, 8080, Deny),
+        ];
+        for (rules, host_access, name, ip, port, want) in cases {
+            let (_d, p) = test_paths();
+            save(&p, rules);
+            let r = Rules::new(&p, SB, *host_access, vec![]);
+            let f = flow(*name, ip, *port);
+            assert_eq!(
+                ask(&r, &f),
+                *want,
+                "{rules:?} host_access={host_access} {f:?}"
+            );
+        }
     }
 
     #[test]
-    fn a_host_deny_beats_a_wildcard_allow() {
-        let d = tempfile::tempdir().unwrap();
-        let p = paths(d.path());
+    fn a_host_deny_says_deny_rule() {
+        let (_d, p) = test_paths();
         save(&p, &[(true, "**.github.com"), (false, "gist.github.com")]);
         let r = Rules::new(&p, SB, false, vec![]);
-        assert_eq!(
-            ask(&r, &flow(Some("api.github.com"), "140.82.1.1", 443)),
-            Decision::Allow
-        );
         let (d, why) = r.decide(&flow(Some("gist.github.com"), "140.82.1.1", 443));
-        assert_eq!(d, Decision::Deny);
+        assert_eq!(d, Deny);
         assert!(why.contains("deny rule"), "{why}");
     }
 
     #[test]
-    fn the_gateway_is_localhost() {
-        let d = tempfile::tempdir().unwrap();
-        let p = paths(d.path());
-        save(&p, &[(true, "localhost:8080")]);
-        let r = Rules::new(&p, SB, true, vec![]);
-        assert_eq!(ask(&r, &flow(None, HOST_GATEWAY, 8080)), Decision::Allow);
-        assert_eq!(ask(&r, &flow(None, HOST_GATEWAY, 9090)), Decision::Deny);
-    }
-
-    #[test]
-    fn a_gateway_flow_ignores_its_name() {
-        let d = tempfile::tempdir().unwrap();
-        let p = paths(d.path());
-        save(&p, &[(true, "localhost:8080"), (true, "github.com")]);
-        let r = Rules::new(&p, SB, true, vec![]);
-        let gh = |port| flow(Some("github.com"), HOST_GATEWAY, port);
-        assert_eq!(ask(&r, &gh(8080)), Decision::Allow);
-        assert_eq!(ask(&r, &gh(9090)), Decision::Deny);
-    }
-
-    #[test]
-    fn a_nameless_flow_keeps_smolvms_decision() {
-        let d = tempfile::tempdir().unwrap();
-        let p = paths(d.path());
-        save(&p, &[]);
-        let r = Rules::new(&p, SB, false, vec![]);
-        // Deny-all with no rules denies implicitly; smolvm already admitted the flow.
-        assert_eq!(ask(&r, &flow(None, "203.0.113.5", 22)), Decision::Allow);
-        assert_eq!(
-            ask(&r, &flow(Some("example.com"), "203.0.113.5", 443)),
-            Decision::Deny
-        );
-    }
-
-    #[test]
-    fn a_cidr_deny_refuses_a_nameless_flow() {
-        let d = tempfile::tempdir().unwrap();
-        let p = paths(d.path());
-        save(&p, &[(true, "**.example.com"), (false, "10.0.0.0/8")]);
-        let r = Rules::new(&p, SB, false, vec![]);
-        assert_eq!(ask(&r, &flow(None, "10.1.2.3", 443)), Decision::Deny);
-        // An allowed name doesn't lift an explicit address deny.
-        assert_eq!(
-            ask(&r, &flow(Some("api.example.com"), "10.1.2.3", 443)),
-            Decision::Deny
-        );
-        assert_eq!(ask(&r, &flow(None, "192.0.2.1", 443)), Decision::Allow);
-    }
-
-    #[test]
-    fn a_cidr_allow_admits_a_named_flow_to_its_range() {
-        let d = tempfile::tempdir().unwrap();
-        let p = paths(d.path());
-        save(&p, &[(true, "10.0.0.0/8")]);
-        let r = Rules::new(&p, SB, false, vec![]);
-        assert_eq!(
-            ask(&r, &flow(Some("gitlab.corp"), "10.1.2.3", 443)),
-            Decision::Allow
-        );
-        // Outside the range, the name alone decides.
-        assert_eq!(
-            ask(&r, &flow(Some("gitlab.corp"), "192.0.2.1", 443)),
-            Decision::Deny
-        );
-    }
-
-    #[test]
-    fn a_name_deny_beats_a_cidr_allow() {
-        let d = tempfile::tempdir().unwrap();
-        let p = paths(d.path());
-        save(&p, &[(true, "10.0.0.0/8"), (false, "gitlab.corp")]);
-        let r = Rules::new(&p, SB, false, vec![]);
-        assert_eq!(
-            ask(&r, &flow(Some("gitlab.corp"), "10.1.2.3", 443)),
-            Decision::Deny
-        );
-    }
-
-    #[test]
-    fn a_proxy_connect_is_admitted_by_the_proxy_cidr() {
-        let d = tempfile::tempdir().unwrap();
-        let p = paths(d.path());
-        save(&p, &[(true, "10.9.9.0/24")]);
-        let r = Rules::new(&p, SB, false, vec![]);
-        // A CONNECT names its target, not the proxy.
-        assert_eq!(
-            ask(&r, &flow(Some("example.com"), "10.9.9.9", 3128)),
-            Decision::Allow
-        );
-    }
-
-    #[test]
-    fn the_gateway_is_closed_without_host_access() {
-        let d = tempfile::tempdir().unwrap();
-        let p = paths(d.path());
-        save(&p, &[(true, "localhost:8080")]);
-        let r = Rules::new(&p, SB, false, vec![]);
-        assert_eq!(
-            ask(&r, &flow(Some("localhost"), HOST_GATEWAY, 8080)),
-            Decision::Deny
-        );
-    }
-
-    #[test]
     fn an_unreadable_policy_denies_then_recovers() {
-        let d = tempfile::tempdir().unwrap();
-        let p = paths(d.path());
+        let (_d, p) = test_paths();
         std::fs::write(p.policy_file(), "mode = [garbage").unwrap();
         let r = Rules::new(&p, SB, false, vec![]);
         for f in [
@@ -267,36 +190,29 @@ mod tests {
             flow(Some("a.com"), "192.0.2.1", 443),
         ] {
             let (d, why) = r.decide(&f);
-            assert_eq!(d, Decision::Deny);
+            assert_eq!(d, Deny);
             assert!(why.starts_with("policy.toml unreadable: "), "{why}");
         }
         save(&p, &[(true, "github.com")]);
-        assert_eq!(
-            ask(&r, &flow(Some("github.com"), "140.82.1.1", 443)),
-            Decision::Allow
-        );
+        assert_eq!(ask(&r, &flow(Some("github.com"), "140.82.1.1", 443)), Allow);
     }
 
     #[test]
     fn a_missing_policy_is_the_default() {
-        let d = tempfile::tempdir().unwrap();
-        let r = Rules::new(&paths(d.path()), SB, false, vec![]);
+        let (_d, p) = test_paths();
+        let r = Rules::new(&p, SB, false, vec![]);
         // No mode chosen yet: open, as before policies existed.
-        assert_eq!(
-            ask(&r, &flow(Some("example.com"), "192.0.2.1", 443)),
-            Decision::Allow
-        );
+        assert_eq!(ask(&r, &flow(Some("example.com"), "192.0.2.1", 443)), Allow);
     }
 
     #[test]
     fn a_policy_change_applies_to_the_next_flow() {
-        let d = tempfile::tempdir().unwrap();
-        let p = paths(d.path());
+        let (_d, p) = test_paths();
         save(&p, &[(true, "github.com")]);
         let r = Rules::new(&p, SB, false, vec![]);
         let f = flow(Some("github.com"), "140.82.1.1", 443);
-        assert_eq!(ask(&r, &f), Decision::Allow);
+        assert_eq!(ask(&r, &f), Allow);
         save(&p, &[(false, "github.com")]);
-        assert_eq!(ask(&r, &f), Decision::Deny);
+        assert_eq!(ask(&r, &f), Deny);
     }
 }

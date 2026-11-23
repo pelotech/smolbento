@@ -1,25 +1,9 @@
 //! Host service units around create, start, rm, prune and the orphan sweep, with a fake service
 //! manager: nothing here touches a real launchd or systemd.
 
-use crate::host_service::fake::{FakeControl, services};
-use crate::host_service::{Flavor, Kind};
+use crate::host_service::Kind;
 use crate::testutil::*;
 use sha2::Digest;
-
-/// Gives the test's context a fake service manager under a short temp dir (socket paths are
-/// limited to ~104 bytes); returns it, the directory of the unit files and the temp dir.
-fn with_services(
-    t: &mut TestEnv,
-    ns: &str,
-) -> (FakeControl, std::path::PathBuf, tempfile::TempDir) {
-    let tmp = tempfile::Builder::new()
-        .prefix("sbs")
-        .tempdir_in("/tmp")
-        .unwrap();
-    let (s, ctl) = services(tmp.path(), Flavor::Launchd, ns);
-    t.ctx.services = s;
-    (ctl, tmp.path().join("units"), tmp)
-}
 
 /// Installs units for `name` as a create would.
 fn install(t: &TestEnv, name: &str, kinds: &[Kind]) {
@@ -55,7 +39,8 @@ fn ls_json(names: &[&str]) -> String {
 #[test]
 fn create_installs_the_units_before_the_first_start_and_mounts_their_sockets() {
     let mut t = test_env(&[]);
-    let (ctl, unit_dir, _tmp) = with_services(&mut t, "ns1");
+    let (ctl, tmp) = with_services(&mut t);
+    let unit_dir = tmp.path().join("units");
     creatable_as(&t, "claude-proj");
     t.sbt(&["create", "claude", "."]).unwrap();
     let calls = t.calls();
@@ -123,7 +108,7 @@ fn without_a_service_manager_a_create_is_as_before() {
 #[test]
 fn rm_removes_the_units_and_ignores_other_namespaces() {
     let mut t = test_env(&[]);
-    let (ctl, _, _tmp) = with_services(&mut t, "ns1");
+    let (ctl, _tmp) = with_services(&mut t);
     install(&t, "box", &[Kind::Bridge, Kind::Agent]);
     t.sandbox("box", "stopped", &[("sbx.service", "true")]);
     t.runner()
@@ -140,7 +125,7 @@ fn rm_removes_the_units_and_ignores_other_namespaces() {
 #[test]
 fn prune_lists_and_removes_leftovers_of_sandboxes_deleted_with_smolvm() {
     let mut t = test_env(&[]);
-    let _services = with_services(&mut t, "ns1");
+    let _services = with_services(&mut t);
     install(&t, "live", &[Kind::Bridge]);
     install(&t, "gone", &[Kind::Bridge, Kind::Agent]);
     t.runner().ok(&["machine", "ls", "--json"], "[]");
@@ -169,7 +154,7 @@ fn prune_lists_and_removes_leftovers_of_sandboxes_deleted_with_smolvm() {
 #[test]
 fn ls_stays_read_only() {
     let mut t = test_env(&[]);
-    let (ctl, _, _tmp) = with_services(&mut t, "ns1");
+    let (ctl, _tmp) = with_services(&mut t);
     install(&t, "gone", &[Kind::Bridge]);
     let before = ctl.calls();
     t.runner().ok(&["machine", "ls", "--json"], "[]");
@@ -181,7 +166,7 @@ fn ls_stays_read_only() {
 #[test]
 fn create_and_start_sweep_leftovers() {
     let mut t = test_env(&[]);
-    let _services = with_services(&mut t, "ns1");
+    let _services = with_services(&mut t);
     install(&t, "gone", &[Kind::Bridge]);
     t.runner()
         .ok(&["machine", "ls", "--json"], &ls_json(&["box"]));
@@ -209,7 +194,8 @@ fn create_and_start_sweep_leftovers() {
 #[test]
 fn start_rewrites_a_stale_unit_and_only_a_stale_one() {
     let mut t = test_env(&[]);
-    let (ctl, unit_dir, _tmp) = with_services(&mut t, "ns1");
+    let (ctl, tmp) = with_services(&mut t);
+    let unit_dir = tmp.path().join("units");
     t.sandbox(
         "box",
         "stopped",
@@ -236,7 +222,7 @@ fn start_rewrites_a_stale_unit_and_only_a_stale_one() {
 #[test]
 fn a_sandbox_made_before_units_gets_none() {
     let mut t = test_env(&[]);
-    let (ctl, _, _tmp) = with_services(&mut t, "ns1");
+    let (ctl, _tmp) = with_services(&mut t);
     t.runner()
         .ok(&["machine", "ls", "--json"], &ls_json(&["old"]));
     t.sandbox("old", "stopped", &[("sbx.bridge", "true")]);
@@ -248,7 +234,7 @@ fn a_sandbox_made_before_units_gets_none() {
 #[test]
 fn diagnose_reports_leftovers_and_suggests_prune() {
     let mut t = test_env(&[]);
-    let _services = with_services(&mut t, "ns1");
+    let _services = with_services(&mut t);
     install(&t, "gone", &[Kind::Bridge]);
     t.runner().ok(&["machine", "ls", "--json"], "[]");
     assert_eq!(t.sbt(&["diagnose"]).unwrap(), 1);
@@ -265,7 +251,7 @@ fn diagnose_reports_leftovers_and_suggests_prune() {
 #[test]
 fn diagnose_does_not_invoke_smolvm_when_managed_binary_is_not_downloaded() {
     let mut t = test_env(&[]);
-    let _services = with_services(&mut t, "ns1");
+    let _services = with_services(&mut t);
     install(&t, "gone", &[Kind::Bridge]);
     t.use_managed_smolvm();
     t.sbt(&["diagnose"]).unwrap();
@@ -275,7 +261,7 @@ fn diagnose_does_not_invoke_smolvm_when_managed_binary_is_not_downloaded() {
 #[test]
 fn a_failed_first_start_removes_the_units_with_the_sandbox() {
     let mut t = test_env(&[]);
-    let (ctl, _, _tmp) = with_services(&mut t, "ns1");
+    let (ctl, _tmp) = with_services(&mut t);
     let fake = t.runner();
     // Later registrations win: gone for good, created for the second lookup, free for the first.
     fake.fail(&["machine", "status"], "NOT_FOUND", "vm not found");
@@ -303,7 +289,7 @@ fn a_failed_first_start_removes_the_units_with_the_sandbox() {
 #[test]
 fn fork_sweeps_and_refreshes_the_parents_units() {
     let mut t = test_env(&[]);
-    let _services = with_services(&mut t, "ns1");
+    let _services = with_services(&mut t);
     install(&t, "gone", &[Kind::Bridge]);
     t.runner()
         .ok(&["machine", "ls", "--json"], &ls_json(&["box"]));
@@ -332,7 +318,7 @@ fn fork_sweeps_and_refreshes_the_parents_units() {
 #[test]
 fn starting_a_hosted_fork_keeps_only_its_egress_unit() {
     let mut t = test_env(&[]);
-    let _services = with_services(&mut t, "ns1");
+    let _services = with_services(&mut t);
     let label = crate::egress::prepare(&t.ctx.paths, "f", &[])
         .unwrap()
         .label;
