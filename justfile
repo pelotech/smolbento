@@ -1,3 +1,5 @@
+import 'just/smolvm-fork.just'
+
 # List recipes
 default:
     @just --list
