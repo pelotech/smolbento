@@ -141,9 +141,6 @@ in [sbx compatibility](sbx-compatibility.md). Worth another look:
 Proven on GitHub: e2e on `ubuntu-latest`, and the v0.1.1 release (all three binaries; macOS binary
 verified on a Mac).
 
-- Refusals of sandboxes and templates from before built-in agents were kits
-  (`Sandbox::check_current`, `templates::Entry::check_current`, and their tests): remove them one
-  release after the agents-as-kits change ships, once users have had a release to recreate them.
 - russh from git (commit b541663a8838) until a release pins ssh-key 0.7.0-rc.12 or later: then switch
   to crates.io, drop the `deny.toml` allow-git entry and the flake `outputHashes`.
 
@@ -153,3 +150,7 @@ Small issues found in review and deferred. None affect normal use.
 
 - More tests for: `cp -L`, `exec --privileged -u`, session cleanup on `rm`/`prune`/`reset`,
   `ProcessRunner` itself.
+- A create from a template records no `sbx.command` when the workload is a v2 kit that leaves its
+  command to its image, or a Smolfile kit: `kit_plan` skips `check_launchable` and the `bash -l`
+  default for templates. `Sandbox::check_current` then refuses the sandbox as if it were old.
+  Record the command there, then drop `check_current`.
