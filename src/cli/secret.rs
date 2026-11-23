@@ -456,7 +456,13 @@ fn bind<R: Runner>(
     );
     // First: smolvm refuses a credential whose host the machine's allow list (running or
     // stopped) doesn't reach.
-    let network = compile::network(policy, sb.name(), &hosts, rec.host_access);
+    let network = compile::network(
+        policy,
+        sb.name(),
+        &hosts,
+        rec.host_access,
+        sb.meta.egress.is_some(),
+    );
     ctx.vm.update_network(&sb.machine, &network)?;
     let env = with_value(&sb.meta, creds.iter().map(|c| &c.env_var).collect(), value);
     if !creds.is_empty() {

@@ -542,7 +542,7 @@ fn install_rules_left_by_an_interrupted_create_stay_shut() {
     // Neither a first start without these ids nor a policy push opens them.
     let first = format!("{:?}", first_start_plan(&t.ctx, &m, &[]).unwrap().network);
     assert!(!first.contains("registry.npmjs.org"), "{first}");
-    let pushed = format!("{:?}", compile::network(&policy, "s1", &[], false));
+    let pushed = format!("{:?}", compile::network(&policy, "s1", &[], false, false));
     assert!(!pushed.contains("registry.npmjs.org"), "{pushed}");
     let first = format!(
         "{:?}",

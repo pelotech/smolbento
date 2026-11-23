@@ -88,6 +88,7 @@ fn plan_for<R: Runner>(
         &meta.rec.credential_hosts,
         install_rules.unwrap_or_default(),
         meta.rec.host_access,
+        meta.egress.is_some(),
     );
     let (env, remove, egress) = match &meta.egress {
         // Secret values stay with bento's interceptor; smolvm gets only its token.
@@ -560,6 +561,7 @@ pub fn prepare_create<R: Runner>(
         &req.name,
         &req.rec.credential_hosts,
         req.rec.host_access,
+        hosted,
     );
     req.deny_cidrs = compile::deny_cidrs(&policy, &req.name, req.rec.host_access);
     if let Some(note) = host_access_note(&req.name, req.rec.host_access) {
@@ -732,6 +734,7 @@ pub fn create_with<R: Runner>(
                 &req.rec.credential_hosts,
                 &k.steps.install_rules,
                 req.rec.host_access,
+                req.egress.is_some(),
             );
             req.deny_cidrs = compile::deny_cidrs_with(
                 &policy,
@@ -880,6 +883,7 @@ fn drop_install_rules<R: Runner>(
         &req.name,
         &req.rec.credential_hosts,
         req.rec.host_access,
+        req.egress.is_some(),
     ))
 }
 
@@ -915,6 +919,7 @@ pub fn push_network_with<R: Runner>(
             sb.name(),
             &sb.meta.rec.credential_hosts,
             sb.meta.rec.host_access,
+            sb.meta.egress.is_some(),
         );
         match ctx.vm.update_network(&sb.machine, &network) {
             Ok(()) => updated += 1,

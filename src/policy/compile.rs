@@ -84,14 +84,23 @@ fn allows_with(policy: &Policy, sandbox: Option<&str>, install: &[String]) -> Ve
 }
 
 /// What smolvm should allow for a sandbox. A bound credential's hosts are always included: smolvm
-/// requires them. Install-phase kit rules are left out (see `network_with`).
+/// requires them. Install-phase kit rules are left out (see `network_with`). `hosted`: the sandbox
+/// runs bento's interceptor, which enforces request denies, so they leave its host in the list.
 pub fn network(
     policy: &Policy,
     sandbox: &str,
     credential_hosts: &[String],
     host_access: bool,
+    hosted: bool,
 ) -> NetworkSpec {
-    network_for(policy, Some(sandbox), credential_hosts, &[], host_access)
+    network_for(
+        policy,
+        Some(sandbox),
+        credential_hosts,
+        &[],
+        host_access,
+        hosted,
+    )
 }
 
 /// `network` plus the install-phase kit rules with these ids: only for the steps that run a kit's
@@ -102,6 +111,7 @@ pub fn network_with(
     credential_hosts: &[String],
     install: &[String],
     host_access: bool,
+    hosted: bool,
 ) -> NetworkSpec {
     network_for(
         policy,
@@ -109,6 +119,7 @@ pub fn network_with(
         credential_hosts,
         install,
         host_access,
+        hosted,
     )
 }
 
@@ -119,12 +130,17 @@ fn network_for(
     credential_hosts: &[String],
     install: &[String],
     host_access: bool,
+    hosted: bool,
 ) -> NetworkSpec {
     if policy.current_mode() == Mode::AllowAll {
         return NetworkSpec::Open;
     }
     let allows = allows_with(policy, sandbox, install);
-    let denies = resources(policy, sandbox, install, Decision::Deny);
+    // Without the interceptor a request deny drops its whole host, as in 0.37.0.
+    let denies: Vec<Resource> = active(policy, sandbox, install)
+        .filter(|(r, _)| r.decision == Decision::Deny && !(hosted && r.is_request()))
+        .flat_map(|(r, _)| r.parsed())
+        .collect();
     if allows
         .iter()
         .any(|r| r.pattern == Pattern::Everything && !denied(r, &denies))
@@ -480,7 +496,7 @@ fn verdict_for(
     // A CIDR deny without a port is enforced (at create); report it before any other deny.
     let enforced =
         |res: &Resource| matches!(res.pattern, Pattern::Cidr { .. }) && res.port.is_none();
-    let spec = || network_for(policy, sandbox, credential_hosts, &[], false);
+    let spec = || network_for(policy, sandbox, credential_hosts, &[], false, false);
     let mut denies: Vec<_> = hits(Decision::Deny).collect();
     denies.sort_by_key(|(_, _, res)| !enforced(res));
     if let Some((r, scope, res)) = denies.first() {

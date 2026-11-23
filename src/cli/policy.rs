@@ -297,7 +297,7 @@ fn keeps_access_notes(before: &Policy, after: &Policy, sandboxes: &[(&str, bool)
         .iter()
         .filter(|(n, access)| {
             *access
-                && compile::network(after, n, &[], true) == NetworkSpec::Open
+                && compile::network(after, n, &[], true, false) == NetworkSpec::Open
                 && compile::host_access(before, n)
                 && !compile::host_access(after, n)
         })

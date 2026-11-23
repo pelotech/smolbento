@@ -640,6 +640,7 @@ fn add_running<R: Runner>(
             &sb.meta.rec.credential_hosts,
             &steps.install_rules,
             sb.meta.rec.host_access,
+            sb.meta.egress.is_some(),
         );
         ctx.vm.update_network(&sb.machine, &network)
     };

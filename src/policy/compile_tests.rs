@@ -21,7 +21,9 @@ fn patterns(allows: &str, denies: &str) -> Vec<String> {
     let mut p = policy(Mode::DenyAll);
     p.allow(None, allows);
     p.deny(None, denies);
-    list(&network(&p, "s1", &[], false)).patterns().to_vec()
+    list(&network(&p, "s1", &[], false, false))
+        .patterns()
+        .to_vec()
 }
 
 fn reaches(deny: &str, cred: &str) -> bool {
@@ -31,11 +33,11 @@ fn reaches(deny: &str, cred: &str) -> bool {
 #[test]
 fn allow_all_and_unchosen_are_open() {
     assert_eq!(
-        network(&Policy::default(), "s1", &[], false),
+        network(&Policy::default(), "s1", &[], false, false),
         NetworkSpec::Open
     );
     assert_eq!(
-        network(&policy(Mode::AllowAll), "s1", &[], false),
+        network(&policy(Mode::AllowAll), "s1", &[], false, false),
         NetworkSpec::Open
     );
 }
@@ -44,17 +46,22 @@ fn allow_all_and_unchosen_are_open() {
 fn deny_all_is_loopback_plus_rules_and_credentials() {
     let mut p = policy(Mode::DenyAll);
     p.allow(Some("s1"), "*.npmjs.org");
-    let spec = network(&p, "s1", &["api.anthropic.com".to_string()], false);
+    let spec = network(&p, "s1", &["api.anthropic.com".to_string()], false, false);
     let l = list(&spec);
     assert_eq!(l.hosts(), ["api.anthropic.com"]);
     assert_eq!(l.patterns(), ["*.npmjs.org"]);
     assert_eq!(l.cidrs(), ["127.0.0.0/8", "::1/128"]);
-    assert_eq!(list(&network(&p, "other", &[], false)).patterns().len(), 0);
+    assert_eq!(
+        list(&network(&p, "other", &[], false, false))
+            .patterns()
+            .len(),
+        0
+    );
 }
 
 #[test]
 fn balanced_has_the_preset_and_widens_globs() {
-    let spec = network(&policy(Mode::Balanced), "s1", &[], false);
+    let spec = network(&policy(Mode::Balanced), "s1", &[], false, false);
     let l = list(&spec);
     assert!(l.hosts().is_empty(), "rules never become --allow-host");
     assert!(l.patterns().contains(&"registry.npmjs.org".to_string()));
@@ -75,7 +82,7 @@ fn deny_rules_subtract() {
     let mut p = policy(Mode::Balanced);
     p.deny(None, "registry.npmjs.org");
     assert!(
-        !list(&network(&p, "s1", &[], false))
+        !list(&network(&p, "s1", &[], false, false))
             .patterns()
             .contains(&"registry.npmjs.org".to_string())
     );
@@ -171,10 +178,10 @@ fn check_prefers_an_enforced_cidr_deny() {
 fn everything_rule_opens() {
     let mut p = policy(Mode::DenyAll);
     p.allow(None, "**");
-    assert_eq!(network(&p, "s1", &[], false), NetworkSpec::Open);
+    assert_eq!(network(&p, "s1", &[], false, false), NetworkSpec::Open);
     p.deny(None, "**");
     assert!(matches!(
-        network(&p, "s1", &[], false),
+        network(&p, "s1", &[], false, false),
         NetworkSpec::Restricted(_)
     ));
 }
@@ -413,7 +420,7 @@ fn credential_hosts_cover_their_subdomains_as_smolvm_does() {
 #[test]
 fn wildcard_credential_hosts_are_patterns() {
     let bound = ["*.notion.com".to_string(), "api.y.example".to_string()];
-    let spec = network(&policy(Mode::DenyAll), "s1", &bound, false);
+    let spec = network(&policy(Mode::DenyAll), "s1", &bound, false, false);
     let l = list(&spec);
     assert_eq!(l.hosts(), ["api.y.example"]);
     assert!(l.patterns().contains(&"*.notion.com".to_string()));
@@ -447,7 +454,7 @@ fn wildcard_credential_hosts_cover_subdomains_only() {
         "notion.com",
     );
     assert!(!v.allowed, "the apex isn't covered: {}", v.reason);
-    let spec = network(&policy(Mode::DenyAll), "s1", &bound, false);
+    let spec = network(&policy(Mode::DenyAll), "s1", &bound, false, false);
     assert!(admits(&spec, "api.notion.com", Mode::DenyAll).is_some());
     assert!(admits(&spec, "notion.com", Mode::DenyAll).is_none());
 }
@@ -528,12 +535,12 @@ fn localhost_rules_open_the_gateway_with_host_access_only() {
         let mut p = policy(Mode::DenyAll);
         p.allow(None, rule);
         for sb in ["s1", "s2"] {
-            let spec = network(&p, sb, &[], true);
+            let spec = network(&p, sb, &[], true, false);
             assert!(has_gateway(&spec), "{rule} {sb}");
             let l = list(&spec);
             assert!(l.patterns().is_empty() && l.hosts().is_empty(), "{rule}");
             // Created without host access: never the gateway.
-            let spec = network(&p, sb, &[], false);
+            let spec = network(&p, sb, &[], false, false);
             assert!(!has_gateway(&spec), "{rule} {sb}");
             assert!(list(&spec).patterns().is_empty(), "{rule}");
             assert!(host_access(&p, sb), "{rule}");
@@ -542,17 +549,17 @@ fn localhost_rules_open_the_gateway_with_host_access_only() {
     // Scoped to one sandbox: only that one.
     let mut p = policy(Mode::Balanced);
     let id = p.allow(Some("s1"), "localhost:8080");
-    assert!(has_gateway(&network(&p, "s1", &[], true)));
-    assert!(!has_gateway(&network(&p, "s2", &[], true)));
+    assert!(has_gateway(&network(&p, "s1", &[], true, false)));
+    assert!(!has_gateway(&network(&p, "s2", &[], true, false)));
     assert!(host_access(&p, "s1") && !host_access(&p, "s2"));
     assert!(
-        !list(&network(&p, "s1", &[], true))
+        !list(&network(&p, "s1", &[], true, false))
             .patterns()
             .contains(&"localhost".to_string())
     );
     // Removed: gone.
     p.remove_rules(Some("s1"), Some(&id), None, None, None, None);
-    assert!(!has_gateway(&network(&p, "s1", &[], true)));
+    assert!(!has_gateway(&network(&p, "s1", &[], true, false)));
 }
 
 #[test]
@@ -560,7 +567,7 @@ fn other_loopback_spellings_are_not_host_services() {
     let rules = "127.0.0.1:80, host.docker.internal:80";
     let mut p = policy(Mode::DenyAll);
     p.allow(None, rules);
-    let spec = network(&p, "s1", &[], true);
+    let spec = network(&p, "s1", &[], true, false);
     let l = list(&spec);
     assert_eq!(l.patterns(), ["host.docker.internal"]);
     assert_eq!(l.cidrs(), ["127.0.0.0/8", "127.0.0.1/32", "::1/128"]);
@@ -641,8 +648,8 @@ fn kit_rules_never_grant_host_access() {
         with_loopback(&[])
     );
     for spec in [
-        network_with(&p, "s1", &[], ids, true),
-        network(&p, "s1", &[], true),
+        network_with(&p, "s1", &[], ids, true, false),
+        network(&p, "s1", &[], true, false),
     ] {
         assert!(!has_gateway(&spec), "{spec:?}");
         assert!(list(&spec).patterns().is_empty(), "{spec:?}");
@@ -651,7 +658,7 @@ fn kit_rules_never_grant_host_access() {
     p.allow(Some("s1"), "localhost:3000");
     assert!(host_access(&p, "s1"));
     assert!(deny_cidrs_with(&p, "s1", host_access(&p, "s1"), ids).is_empty());
-    assert!(has_gateway(&network_with(&p, "s1", &[], ids, true)));
+    assert!(has_gateway(&network_with(&p, "s1", &[], ids, true, false)));
     // An approved rule is the user's too.
     let mut p = policy(Mode::DenyAll);
     p.add_rule(None, Decision::Allow, "localhost", "approval", None, None)
@@ -749,4 +756,48 @@ fn bounded_allow_still_admits_its_host() {
         assert_eq!(v.reason, format!("allow rule {id} (global)"));
     }
     assert!(!decided(&p, false, "other.com:443").allowed);
+}
+
+#[test]
+fn a_request_deny_keeps_its_host_in_a_hosted_allow_list() {
+    let mut p = policy(Mode::DenyAll);
+    p.allow(None, "h.com");
+    p.add_rule(
+        None,
+        Decision::Deny,
+        "h.com",
+        "added",
+        Some("POST".into()),
+        None,
+    )
+    .unwrap();
+    let spec = network(&p, "s1", &[], false, true);
+    assert_eq!(list(&spec).patterns(), ["h.com"]);
+    // A plain deny still drops it.
+    p.deny(None, "h.com");
+    assert!(
+        list(&network(&p, "s1", &[], false, true))
+            .patterns()
+            .is_empty()
+    );
+}
+
+#[test]
+fn a_request_deny_still_drops_its_host_for_smolvm_mode() {
+    let mut p = policy(Mode::DenyAll);
+    p.allow(None, "h.com");
+    p.add_rule(
+        None,
+        Decision::Deny,
+        "h.com",
+        "added",
+        Some("POST".into()),
+        None,
+    )
+    .unwrap();
+    assert!(
+        list(&network(&p, "s1", &[], false, false))
+            .patterns()
+            .is_empty()
+    );
 }
