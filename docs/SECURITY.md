@@ -46,13 +46,10 @@ reachable. `balanced` and `deny-all` block that unless you allow the address.
 - Secrets are placeholders inside the sandbox. A real value goes only to that service's hosts, and
   only over HTTPS. A secret's hosts and their subdomains are always reachable from sandboxes that
   bind it.
-- A hosted sandbox's egress process enforces host rules and ports as sbx does, for every
-  connection that names its host (TLS SNI or HTTP `Host:`) within 200 ms. A connection with no
-  name (SSH, TLS without SNI), or one that holds its first bytes back for longer, is judged by
-  address and port only: host deny rules and a host rule's port don't apply to it. The name is
-  whatever the guest sends, so host rules stop cooperative clients, not a hostile agent. It can
-  escape them three ways:
-  - wait more than 200 ms before it sends;
+- A hosted sandbox enforces host rules and ports by the name each connection sends (see [Hosted
+  egress](network-and-secrets.md#hosted-egress)), so they stop cooperative clients, not a hostile
+  agent. It can escape them three ways:
+  - send nothing for 200 ms before its name is in;
   - send an allowed host's name (SNI or `Host:`) to any address smolvm admits, which is every
     address under `allow-all` (domain fronting, or a server that ignores SNI);
   - split its TLS ClientHello across records, or pad it past 16 KiB, so the connection has no name.

@@ -83,8 +83,8 @@ network --id`), `--json` the same rules as `{"rules": [...]}`, and `-q` only the
   sandbox has host access, which a `localhost` allow rule gives at create; the check says so.
 - `policy check network --protocol udp HOST:PORT` checks a UDP destination. With
   `network.egress=smolvm`, smolvm admits UDP wherever its allow list admits TCP, except port 53: it
-  answers DNS itself. A hosted sandbox sends no UDP but DNS, whatever the rules, and an allowed
-  verdict says so.
+  answers DNS itself. A hosted sandbox sends no UDP but DNS ([Hosted egress](#hosted-egress)), and an
+  allowed verdict says so.
 - `policy rm network --resource HOST --method GET --path '/v1/**'` removes the host from the rule
   with those methods and that path only.
 
@@ -190,8 +190,10 @@ Each connection is decided twice, and smolvm's allow list still applies first:
 
 Either way the guest sees the connection open, then reset, not refused: smolvm accepts it before
 asking the egress process. curl exits 35 or 56 (52 for plain HTTP), not 7.
-- A client that sends no name (SSH, TLS without SNI), or waits more than 200 ms before its first
-  bytes, is judged by address and port only, so name rules don't apply to it.
+- A client that sends no name (SSH, TLS without SNI), or sends nothing for 200 ms before its name
+  is in, is judged by address and port only, so name rules don't apply to it. The name is whatever
+  the guest sends, so name rules stop cooperative clients, not a hostile agent: see
+  [Security](SECURITY.md#network-and-secrets) for the ways around them.
 - The host's gateway (`host.docker.internal`, `100.96.0.1`) is judged strictly as `localhost:<port>`:
   only a `localhost` rule for that port opens it.
 
