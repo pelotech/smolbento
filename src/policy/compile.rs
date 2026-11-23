@@ -92,6 +92,21 @@ fn per_request(hosted: bool, r: &Rule, res: &Resource) -> bool {
         && crate::egress::request_rules::mapped_host(r, res).is_some_and(|h| h != "localhost")
 }
 
+/// How one resource of a rule acts on its whole host in a verdict. A request deny the interceptor
+/// maps acts per request (`None`); a request allow still makes its host reachable, unless the
+/// interceptor can't map it: then it denies the host rather than allow all of it.
+fn acts(r: &Rule, res: &Resource) -> Option<Decision> {
+    match r.decision {
+        Decision::Deny if per_request(true, r, res) => None,
+        Decision::Allow
+            if r.is_request() && crate::egress::request_rules::mapped_host(r, res).is_none() =>
+        {
+            Some(Decision::Deny)
+        }
+        d => Some(d),
+    }
+}
+
 /// The deny resources that act on their whole host: every deny but the per-request ones.
 fn host_denies(
     policy: &Policy,
@@ -498,18 +513,13 @@ fn verdict_for(
     }
     // No sandbox: the global rules only.
     let mode = policy.current_mode();
-    // A request deny the interceptor maps acts per request, never on the whole host; a request
-    // allow still makes its host reachable.
     let t = target.as_str();
     let hits = |decision: Decision| {
-        active(policy, sandbox, &[])
-            .filter(move |(r, _)| r.decision == decision)
-            .flat_map(move |(r, scope)| {
-                r.parsed()
-                    .filter(move |res| res.matches(t))
-                    .filter(move |res| decision == Decision::Allow || !per_request(true, r, res))
-                    .map(move |res| (r, scope.unwrap_or("global"), res))
-            })
+        active(policy, sandbox, &[]).flat_map(move |(r, scope)| {
+            r.parsed()
+                .filter(move |res| res.matches(t) && acts(r, res) == Some(decision))
+                .map(move |res| (r, scope.unwrap_or("global"), res))
+        })
     };
     // A CIDR deny without a port is enforced (at create); report it before any other deny.
     let enforced =
@@ -518,7 +528,10 @@ fn verdict_for(
     let mut denies: Vec<_> = hits(Decision::Deny).collect();
     denies.sort_by_key(|(_, _, res)| !enforced(res));
     if let Some((r, scope, res)) = denies.first() {
-        let text = format!("deny rule {} ({scope})", r.id);
+        let text = match r.decision {
+            Decision::Deny => format!("deny rule {} ({scope})", r.id),
+            Decision::Allow => format!("allow rule {} ({scope}) can't be mapped per request", r.id),
+        };
         if !smolvm {
             return verdict(false, text);
         }

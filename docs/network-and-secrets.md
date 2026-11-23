@@ -270,7 +270,8 @@ bento policy deny network --sandbox claude-myrepo github.com --method POST --pat
     `%00`, a control character or invalid UTF-8 is refused as `ambiguous request target`.
 - **Named hosts only.** `policy allow|deny` refuses bounded rules on `*`, `**`, IPs and CIDRs, and a
   bounded allow on a host glob (`crl*.x.com`). A bounded deny on a glob widens to `*.x.com`. A
-  bounded deny on `localhost` acts on the whole host port: host services aren't decrypted.
+  bounded deny on `localhost` acts on the whole host port: host services aren't decrypted. A
+  stored bounded rule egress can't map (edited by hand, say) denies its whole host, allow or deny.
 - **Changes apply live.**
   - A change on a host that's already decrypted applies from the next request, on open connections
     too.

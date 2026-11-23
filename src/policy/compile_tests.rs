@@ -841,6 +841,25 @@ fn an_unmapped_request_deny_stays_host_wide() {
 }
 
 #[test]
+fn an_unmapped_request_allow_denies_its_host() {
+    // Hand-edited: egress can't map the method, so the allow mustn't widen to its whole host.
+    let mut p = policy(Mode::DenyAll);
+    p.allow(None, "h.com");
+    p.insert_rule(
+        None,
+        Decision::Allow,
+        "h.com",
+        "added",
+        Some("GET POST".into()),
+        None,
+        None,
+    )
+    .unwrap();
+    let v = decided(&p, false, "h.com:443");
+    assert!(!v.allowed && !v.implicit, "{}", v.reason);
+}
+
+#[test]
 fn a_request_deny_acts_per_request_except_on_the_gateway() {
     let mut p = policy(Mode::AllowAll);
     request_deny(&mut p, "h.com", None);

@@ -12,7 +12,7 @@ use crate::policy::{self, Decision, compile};
 /// method, path or query, one crate rule per resource. Connection defaults stay in `decide`, so a
 /// host no rule names is allowed. As in sbx, a bounded allow on a host that connection rules alone
 /// already admit (`moot`) is dropped; bounded denies never are. A resource the crate can't take
-/// is skipped and acts on its whole host instead (`compile::per_request`).
+/// is skipped and denies its whole host instead (`compile::acts`).
 pub fn request_policy(
     policy: &policy::Policy,
     sandbox: &str,
@@ -43,9 +43,9 @@ pub fn request_policy(
             let rule = match map(r, &res) {
                 Ok(rule) => rule,
                 Err(e) => {
-                    // A rule the filter can't take acts on its whole host (`compile::per_request`).
+                    // A rule the filter can't take denies its whole host (`compile::acts`).
                     eprintln!(
-                        "egress: rule {} on {}: {e}; it acts on the whole host",
+                        "egress: rule {} on {}: {e}; it denies the whole host",
                         r.id, res.raw
                     );
                     continue;
