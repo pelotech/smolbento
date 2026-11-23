@@ -12,6 +12,5 @@ mod relay;
 mod serve;
 
 pub use listener::activated_listener;
-pub use name::flow_name;
 pub use relay::{Decide, Decision, Flow};
 pub use serve::serve;

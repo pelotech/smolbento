@@ -4,7 +4,7 @@ use smolvm_protocol::sni::{Peek, peek_client_hello};
 
 /// The host name in a flow's first bytes: the SNI of a TLS ClientHello, else the `Host:` header of an
 /// HTTP request (port stripped). Lowercased, without a trailing dot. `None` when there is neither.
-pub fn flow_name(first: &[u8]) -> Option<String> {
+pub(crate) fn flow_name(first: &[u8]) -> Option<String> {
     let name = match peek_client_hello(first) {
         Peek::ServerName(sni) => sni,
         _ => http_host(first)?,

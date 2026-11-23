@@ -53,14 +53,7 @@ pub fn relay(
     inner: &InterceptEndpoint,
     decide: &Decide,
 ) -> std::io::Result<()> {
-    relay_with_timeout(
-        guest,
-        front,
-        inner,
-        decide,
-        HANDSHAKE_TIMEOUT,
-        FIRST_BYTES_IDLE,
-    )
+    relay_with_timeout(guest, front, inner, decide, HANDSHAKE_TIMEOUT)
 }
 
 fn relay_with_timeout(
@@ -69,7 +62,6 @@ fn relay_with_timeout(
     inner: &InterceptEndpoint,
     decide: &Decide,
     handshake: Duration,
-    idle: Duration,
 ) -> std::io::Result<()> {
     guest.set_read_timeout(Some(handshake))?;
     let dest = front.read_preamble(&mut guest)?;
@@ -96,7 +88,7 @@ fn relay_with_timeout(
         return Ok(());
     }
 
-    let first = read_first_bytes(&mut guest, idle)?;
+    let first = read_first_bytes(&mut guest)?;
     if decide(&flow(flow_name(&first))) == Decision::Deny {
         let _ = guest.shutdown(Shutdown::Both);
         let _ = upstream.shutdown(Shutdown::Both);
@@ -122,9 +114,9 @@ fn relay_with_timeout(
 }
 
 /// Read what the guest sends first: until a whole ClientHello (or bytes that aren't one) or the end of
-/// HTTP headers is in, nothing more arrives for `idle`, the guest closes, or `MAX_CLIENT_HELLO` bytes.
-fn read_first_bytes(guest: &mut TcpStream, idle: Duration) -> std::io::Result<Vec<u8>> {
-    guest.set_read_timeout(Some(idle))?;
+/// HTTP headers is in, nothing more arrives for `FIRST_BYTES_IDLE`, the guest closes, or `MAX_CLIENT_HELLO` bytes.
+fn read_first_bytes(guest: &mut TcpStream) -> std::io::Result<Vec<u8>> {
+    guest.set_read_timeout(Some(FIRST_BYTES_IDLE))?;
     let mut first = Vec::new();
     let mut chunk = [0u8; 4096];
     while first.len() < MAX_CLIENT_HELLO {
@@ -255,7 +247,6 @@ mod tests {
             &inner,
             &allow(),
             Duration::from_millis(100),
-            FIRST_BYTES_IDLE,
         );
         assert!(r.is_err());
         assert!(start.elapsed() < Duration::from_secs(5));
