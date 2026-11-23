@@ -229,7 +229,7 @@ fn query_match(q: &str) -> Result<QueryMatch, String> {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::policy::{Mode, rules::parse_list};
+    use crate::policy::{Decision as D, Mode, rules::parse_list};
     use http::HeaderMap;
 
     fn deny_all() -> policy::Policy {
@@ -239,9 +239,14 @@ mod tests {
         }
     }
 
-    fn add(
+    /// Adds a method rule on `res` for sandbox `s1`; returns its id.
+    fn add(p: &mut policy::Policy, d: D, res: &str, method: &str) -> String {
+        add_full(p, d, res, "added", Some(method), None, None)
+    }
+
+    fn add_full(
         p: &mut policy::Policy,
-        d: Decision,
+        d: D,
         res: &str,
         via: &str,
         method: Option<&str>,
@@ -263,15 +268,7 @@ mod tests {
 
     fn one(method: Option<&str>, path: Option<&str>, query: Option<&str>) -> Rule {
         let mut p = deny_all();
-        add(
-            &mut p,
-            Decision::Deny,
-            "h.com",
-            "added",
-            method,
-            path,
-            query,
-        );
+        add_full(&mut p, D::Deny, "h.com", "added", method, path, query);
         let mut got = request_policy(&p, "s1", &[]).rules;
         assert_eq!(got.len(), 1);
         got.remove(0)
@@ -340,15 +337,7 @@ mod tests {
         }
         // Hosts and ports.
         let mut p = deny_all();
-        let id = add(
-            &mut p,
-            Decision::Allow,
-            "a.com:8443,*.b.com,**.c.com",
-            "added",
-            Some("GET"),
-            None,
-            None,
-        );
+        let id = add(&mut p, D::Allow, "a.com:8443,*.b.com,**.c.com", "GET");
         let got = request_policy(&p, "s1", &[]).rules;
         let hosts: Vec<_> = got.iter().map(|r| (r.hosts.clone(), r.port)).collect();
         assert_eq!(
@@ -383,8 +372,8 @@ mod tests {
     #[test]
     fn connection_rules_dont_map_and_the_default_allows() {
         let mut p = deny_all();
-        add(&mut p, Decision::Deny, "h.com", "added", None, None, None);
-        add(&mut p, Decision::Allow, "a.com", "added", None, None, None);
+        p.deny(Some("s1"), "h.com");
+        p.allow(Some("s1"), "a.com");
         let got = request_policy(&p, "s1", &[]);
         assert!(got.rules.is_empty());
         assert_eq!(got.default, Action::Allow);
@@ -393,16 +382,8 @@ mod tests {
     #[test]
     fn a_stored_method_deny_becomes_request_level() {
         let mut p = deny_all();
-        add(
-            &mut p,
-            Decision::Deny,
-            "h.com",
-            "added",
-            Some("POST"),
-            None,
-            None,
-        );
-        add(&mut p, Decision::Allow, "h.com", "added", None, None, None);
+        add(&mut p, D::Deny, "h.com", "POST");
+        p.allow(Some("s1"), "h.com");
         assert!(compile::decide(&p, "s1", &[], false, "h.com:443").allowed);
         let rp = request_policy(&p, "s1", &[]);
         let h = HeaderMap::new();
@@ -413,18 +394,18 @@ mod tests {
     #[test]
     fn kit_rules_are_case_sensitive() {
         let mut p = deny_all();
-        add(
+        add_full(
             &mut p,
-            Decision::Deny,
+            D::Deny,
             "h.com",
             "kit:k",
             Some("GET"),
             Some("/A"),
             None,
         );
-        add(
+        add_full(
             &mut p,
-            Decision::Deny,
+            D::Deny,
             "h.com",
             "added",
             Some("GET"),
@@ -440,32 +421,16 @@ mod tests {
     #[test]
     fn a_glob_host_widens_on_deny_and_is_refused_on_allow() {
         let crl = parse_list("crl*.x.com").unwrap();
-        assert!(check(Decision::Deny, &crl, Some("POST"), None, None).is_ok());
+        assert!(check(D::Deny, &crl, Some("POST"), None, None).is_ok());
         assert!(
-            check(Decision::Allow, &crl, Some("GET"), None, None)
+            check(D::Allow, &crl, Some("GET"), None, None)
                 .unwrap_err()
                 .contains("host glob")
         );
         let mut p = deny_all();
-        add(
-            &mut p,
-            Decision::Deny,
-            "crl*.x.com",
-            "added",
-            Some("POST"),
-            None,
-            None,
-        );
+        add(&mut p, D::Deny, "crl*.x.com", "POST");
         // Stored by an older version: skipped, not fatal.
-        add(
-            &mut p,
-            Decision::Allow,
-            "crl*.y.com",
-            "added",
-            Some("GET"),
-            None,
-            None,
-        );
+        add(&mut p, D::Allow, "crl*.y.com", "GET");
         let got = request_policy(&p, "s1", &[]).rules;
         assert_eq!(got.len(), 1);
         assert_eq!(
@@ -480,33 +445,25 @@ mod tests {
     #[test]
     fn an_unparseable_request_rule_doesnt_disable_the_others() {
         let mut p = deny_all();
-        add(
+        add_full(
             &mut p,
-            Decision::Deny,
+            D::Deny,
             "api.x.com",
             "added",
             None,
             Some("/admin/"),
             None,
         );
-        add(
+        add_full(
             &mut p,
-            Decision::Allow,
+            D::Allow,
             "a.com",
             "added",
             Some("GET"),
             Some("//x"),
             None,
         );
-        add(
-            &mut p,
-            Decision::Deny,
-            "h.com",
-            "added",
-            Some("POST"),
-            None,
-            None,
-        );
+        add(&mut p, D::Deny, "h.com", "POST");
         let got = request_policy(&p, "s1", &[]).rules;
         assert_eq!(got.len(), 1);
         assert_eq!(got[0].hosts, [HostMatch::Exact("h.com".into())]);
@@ -523,7 +480,7 @@ mod tests {
     #[test]
     fn check_refuses_what_egress_cant_map() {
         let h = parse_list("h.com").unwrap();
-        for d in [Decision::Allow, Decision::Deny] {
+        for d in [D::Allow, D::Deny] {
             let err = check(d, &h, Some("GET POST"), None, None).unwrap_err();
             assert!(err.contains("uppercase tokens"), "{err}");
         }
@@ -532,35 +489,13 @@ mod tests {
     #[test]
     fn request_rules_need_a_named_host() {
         for res in ["**", "10.0.0.0/8", "1.2.3.4"] {
-            let err = check(
-                Decision::Deny,
-                &parse_list(res).unwrap(),
-                Some("POST"),
-                None,
-                None,
-            );
+            let err = check(D::Deny, &parse_list(res).unwrap(), Some("POST"), None, None);
             assert_eq!(err.unwrap_err(), "request rules need a named host", "{res}");
         }
         // A stored one is skipped, and never fails the rest.
         let mut p = deny_all();
-        add(
-            &mut p,
-            Decision::Deny,
-            "**",
-            "added",
-            Some("POST"),
-            None,
-            None,
-        );
-        add(
-            &mut p,
-            Decision::Deny,
-            "h.com",
-            "added",
-            Some("POST"),
-            None,
-            None,
-        );
+        add(&mut p, D::Deny, "**", "POST");
+        add(&mut p, D::Deny, "h.com", "POST");
         assert_eq!(request_policy(&p, "s1", &[]).rules.len(), 1);
     }
 
@@ -573,81 +508,25 @@ mod tests {
     #[test]
     fn an_unbounded_allow_makes_a_bounded_allow_moot() {
         let mut p = deny_all();
-        add(&mut p, Decision::Allow, "h.com", "added", None, None, None);
-        add(
-            &mut p,
-            Decision::Allow,
-            "h.com",
-            "added",
-            Some("GET"),
-            None,
-            None,
-        );
+        p.allow(Some("s1"), "h.com");
+        add(&mut p, D::Allow, "h.com", "GET");
         assert!(request_policy(&p, "s1", &[]).rules.is_empty());
         assert!(post_passes(&p, &[], "h.com"));
         // An allow of one port leaves the others to the bounded allow.
         let mut p = deny_all();
-        add(
-            &mut p,
-            Decision::Allow,
-            "h.com:443",
-            "added",
-            None,
-            None,
-            None,
-        );
-        add(
-            &mut p,
-            Decision::Allow,
-            "h.com",
-            "added",
-            Some("GET"),
-            None,
-            None,
-        );
+        p.allow(Some("s1"), "h.com:443");
+        add(&mut p, D::Allow, "h.com", "GET");
         assert!(!post_passes(&p, &[], "h.com"));
         // One subdomain doesn't cover them all.
         let mut p = deny_all();
-        add(
-            &mut p,
-            Decision::Allow,
-            "a.x.com",
-            "added",
-            None,
-            None,
-            None,
-        );
-        add(
-            &mut p,
-            Decision::Allow,
-            "*.x.com",
-            "added",
-            Some("GET"),
-            None,
-            None,
-        );
+        p.allow(Some("s1"), "a.x.com");
+        add(&mut p, D::Allow, "*.x.com", "GET");
         assert!(!post_passes(&p, &[], "b.x.com"));
-        add(
-            &mut p,
-            Decision::Allow,
-            "*.x.com",
-            "added",
-            None,
-            None,
-            None,
-        );
+        p.allow(Some("s1"), "*.x.com");
         assert!(post_passes(&p, &[], "b.x.com"));
         // A credential host is admitted before any rule.
         let mut p = deny_all();
-        add(
-            &mut p,
-            Decision::Allow,
-            "h.com",
-            "added",
-            Some("GET"),
-            None,
-            None,
-        );
+        add(&mut p, D::Allow, "h.com", "GET");
         assert!(!post_passes(&p, &[], "h.com"));
         assert!(post_passes(&p, &["h.com".into()], "h.com"));
     }
@@ -658,15 +537,7 @@ mod tests {
             mode: Some(Mode::Balanced),
             ..Default::default()
         };
-        add(
-            &mut p,
-            Decision::Allow,
-            "api.anthropic.com",
-            "added",
-            Some("GET"),
-            None,
-            None,
-        );
+        add(&mut p, D::Allow, "api.anthropic.com", "GET");
         assert!(post_passes(&p, &[], "api.anthropic.com"));
     }
 
@@ -676,15 +547,7 @@ mod tests {
             mode: Some(Mode::AllowAll),
             ..Default::default()
         };
-        add(
-            &mut p,
-            Decision::Allow,
-            "h.com",
-            "added",
-            Some("GET"),
-            None,
-            None,
-        );
+        add(&mut p, D::Allow, "h.com", "GET");
         assert!(post_passes(&p, &[], "h.com"));
     }
 
@@ -694,40 +557,16 @@ mod tests {
             mode: Some(Mode::AllowAll),
             ..Default::default()
         };
-        add(&mut p, Decision::Allow, "h.com", "added", None, None, None);
-        add(
-            &mut p,
-            Decision::Deny,
-            "h.com",
-            "added",
-            Some("POST"),
-            None,
-            None,
-        );
+        p.allow(Some("s1"), "h.com");
+        add(&mut p, D::Deny, "h.com", "POST");
         assert!(!post_passes(&p, &[], "h.com"));
     }
 
     #[test]
     fn a_glob_allow_never_makes_a_subdomain_bounded_allow_moot() {
         let mut p = deny_all();
-        add(
-            &mut p,
-            Decision::Allow,
-            "?.x.com",
-            "added",
-            None,
-            None,
-            None,
-        );
-        add(
-            &mut p,
-            Decision::Allow,
-            "*.x.com",
-            "added",
-            Some("GET"),
-            None,
-            None,
-        );
+        p.allow(Some("s1"), "?.x.com");
+        add(&mut p, D::Allow, "*.x.com", "GET");
         assert!(!post_passes(&p, &[], "api.x.com"));
     }
 }
