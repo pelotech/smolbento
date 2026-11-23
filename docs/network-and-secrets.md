@@ -258,8 +258,8 @@ bento policy deny network --sandbox claude-myrepo github.com --method POST --pat
   - A bounded deny acts on the requests it names, never on the whole host: `deny H --method POST`
     refuses POSTs, and GETs and other ports pass. A deny wins over any allow.
   - A bounded allow makes its host reachable, and then only the requests it names pass.
-  - An unbounded allow of the same host and port beats it, and so do `balanced`, `allow-all` and a
-    secret's host: they leave every request admitted.
+  - An unbounded allow of the same host and port beats it, and so do `allow-all`, a secret's host,
+    and a host the `balanced` preset admits: they leave every request admitted.
 - **Matching.**
   - Methods are matched in any case. `X-HTTP-Method-Override`, `X-HTTP-Method` and
     `X-Method-Override` count as the method too: a deny fires if any of them matches, and an allow
@@ -270,7 +270,10 @@ bento policy deny network --sandbox claude-myrepo github.com --method POST --pat
     `%00`, a control character or invalid UTF-8 is refused as `ambiguous request target`.
 - **Named hosts only.** `policy allow|deny` refuses bounded rules on `*`, `**`, IPs and CIDRs, and a
   bounded allow on a host glob (`crl*.x.com`). A bounded deny on a glob widens to `*.x.com`. A rule
-  of these kinds stored by an earlier version isn't enforced, and `policy ls --wide` says so.
+  of these kinds stored by an earlier version, or one whose path or query can't be read, keeps
+  0.37.0's meaning: a deny acts on its whole host, and an allow admits its host. `policy ls --wide`
+  says so, and the egress log names the rule. The other rules are still enforced per request. A
+  bounded deny on `localhost` acts on the whole host port too: host services aren't decrypted.
 - **Changes apply live.**
   - A change on a host that's already decrypted applies from the next request, on open connections
     too.
@@ -278,9 +281,9 @@ bento policy deny network --sandbox claude-myrepo github.com --method POST --pat
     connection. Open connections drop then, that connection among them. The next one starts the
     process again: at once with systemd, and within 10 s with launchd.
 - **Sandboxes created before 0.38 need a recreate.** Their CA can't sign for new hosts, so ruled
-  hosts aren't decrypted. A connection to a host a bounded allow names is refused, and one to a host
-  with only bounded denies passes unfiltered. The egress log says `this sandbox predates request
-  rules`.
+  hosts aren't decrypted. Until the sandbox is recreated, a bounded deny acts on its whole host, as
+  in 0.37.0, and TLS and HTTP to a host a bounded allow names are refused. The egress log says
+  `this sandbox predates request rules`. A secret's host is still decrypted and filtered.
 - **Upgrading from 0.37:** it stored `--method/--path` rules but acted on their whole host. They now
   mean what they say: `deny H --method POST` no longer blocks H's GETs.
 
