@@ -7,7 +7,7 @@ use std::time::Duration;
 use smolvm_protocol::intercept::{InterceptEndpoint, VERDICT_CONNECTED};
 use smolvm_protocol::sni::{MAX_CLIENT_HELLO, Peek, peek_client_hello};
 
-use crate::name::{flow_kind, flow_name};
+use crate::name::flow_id;
 
 /// A flow the relay asks about: the name its first bytes ask for, if any, what they are, and its
 /// destination.
@@ -78,13 +78,13 @@ fn relay_with_timeout(
 ) -> std::io::Result<()> {
     guest.set_read_timeout(Some(handshake))?;
     let dest = front.read_preamble(&mut guest)?;
-    let flow = |name, kind| Flow {
+    let flow = |(name, kind)| Flow {
         name,
         kind,
         ip: dest.ip(),
         port: dest.port(),
     };
-    if decide(&flow(None, FlowKind::Other)) == Decision::Deny {
+    if decide(&flow((None, FlowKind::Other))) == Decision::Deny {
         return guest.write_all(&[REFUSED]);
     }
     let dial = if dest.ip() == GATEWAY {
@@ -103,7 +103,7 @@ fn relay_with_timeout(
     }
 
     let first = read_first_bytes(&mut guest)?;
-    if decide(&flow(flow_name(&first), flow_kind(&first))) == Decision::Deny {
+    if decide(&flow(flow_id(&first))) == Decision::Deny {
         let _ = guest.shutdown(Shutdown::Both);
         let _ = upstream.shutdown(Shutdown::Both);
         return Ok(());
