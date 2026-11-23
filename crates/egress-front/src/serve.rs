@@ -66,10 +66,8 @@ mod tests {
 
     impl RequestFilter for Rules {
         fn check(&self, r: &RequestInfo<'_>) -> Result<(), String> {
-            (self
-                .0
-                .request(r.host, r.port, r.method, r.target, r.headers))
-            .map_err(|r| r.reason)
+            self.0
+                .request(r.host, r.port, r.method, r.target, r.headers)
         }
     }
 
@@ -159,7 +157,7 @@ mod tests {
                 port: None,
                 request: RequestMatch {
                     methods: Methods::Only(vec!["POST".into()]),
-                    paths: vec![PathGlob::parse("/**").unwrap()],
+                    path: PathGlob::parse("/**").unwrap(),
                     query: vec![],
                 },
                 case: Case::Insensitive,

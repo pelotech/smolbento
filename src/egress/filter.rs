@@ -120,11 +120,7 @@ impl Filter {
         headers: &HeaderMap,
     ) -> Result<(), String> {
         // The hook has already resolved dot segments and `\`, so the target goes as it is.
-        (self
-            .0
-            .current()
-            .request(host, port, method, target, headers))
-        .map_err(|r| r.reason)
+        (self.0.current()).request(host, port, method, target, headers)
     }
 }
 

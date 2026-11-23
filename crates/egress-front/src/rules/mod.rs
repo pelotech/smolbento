@@ -52,8 +52,8 @@ pub enum HostMatch {
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct RequestMatch {
     pub methods: Methods,
-    /// Non-empty; any one matches. Every path is `/**`.
-    pub paths: Vec<PathGlob>,
+    /// `/**` for every path.
+    pub path: PathGlob,
     /// All must match; empty matches any query.
     pub query: Vec<QueryMatch>,
 }
@@ -94,12 +94,6 @@ pub enum Inspection {
     Inspect { uninspectable: Action },
 }
 
-/// Why a request is refused: a deny rule's id, or a generic miss. Nothing else of the policy.
-#[derive(Debug, Clone, PartialEq, Eq)]
-pub struct Refusal {
-    pub reason: String,
-}
-
 /// Headers whose values are read as the request's method too.
 const METHOD_OVERRIDES: [&str; 3] = [
     "x-http-method-override",
@@ -121,9 +115,6 @@ impl Policy {
                 && (n.is_empty() || n.contains('*'))
             {
                 return at("a host is empty or holds *");
-            }
-            if r.request.paths.is_empty() {
-                return at("it names no path");
             }
             if let Methods::Only(ms) = &r.request.methods
                 && (ms.is_empty()
@@ -165,7 +156,8 @@ impl Policy {
         }
     }
 
-    /// Judges a request on `host:port`. `target` is its path and query as sent.
+    /// Judges a request on `host:port`. `target` is its path and query as sent. A refusal says why:
+    /// a deny rule's id, or a generic miss, and nothing else of the policy.
     pub fn request(
         &self,
         host: &str,
@@ -173,7 +165,7 @@ impl Policy {
         method: &str,
         target: &str,
         headers: &HeaderMap,
-    ) -> Result<(), Refusal> {
+    ) -> Result<(), String> {
         let host = normal(host);
         let ruled: Vec<&Rule> = self
             .rules
@@ -184,9 +176,7 @@ impl Policy {
         if ruled.is_empty() && self.default == Action::Allow {
             return Ok(());
         }
-        let view = View::parse(target).ok_or_else(|| Refusal {
-            reason: "ambiguous request target".into(),
-        })?;
+        let view = View::parse(target).ok_or("ambiguous request target")?;
         let methods = method_views(method, headers);
         if let Some(r) = ruled
             .iter()
@@ -202,9 +192,7 @@ impl Policy {
         if unbounded || allows.any(|r| r.matches(&methods, &view, true)) {
             return Ok(());
         }
-        Err(Refusal {
-            reason: format!("no rule allows {method} {} on {host}", view.path()),
-        })
+        Err(format!("no rule allows {method} {} on {host}", view.path()))
     }
 
     /// The hosts an interceptor must terminate for these rules, in its `terminate_hosts` form, sorted.
@@ -250,7 +238,7 @@ impl Rule {
             |params: &Vec<(Vec<u8>, Vec<u8>)>| m.query.iter().all(|q| q.matches(params, ci, every));
         method_ok
             && {
-                let path_ok = |segs: &Vec<String>| m.paths.iter().any(|g| g.matches(segs, ci));
+                let path_ok = |segs: &Vec<String>| m.path.matches(segs, ci);
                 if every {
                     view.paths.iter().all(path_ok)
                 } else {
@@ -264,12 +252,11 @@ impl Rule {
             }
     }
 
-    fn refusal(&self) -> Refusal {
-        let reason = match &self.id {
+    fn refusal(&self) -> String {
+        match &self.id {
             Some(id) => format!("request denied by policy (rule {id})"),
             None => "request denied by policy".into(),
-        };
-        Refusal { reason }
+        }
     }
 }
 

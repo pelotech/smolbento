@@ -182,7 +182,7 @@ fn request(
         Some(m) if m.split(',').any(|x| x == "ANY") => Methods::Any,
         Some(m) => Methods::Only(m.split(',').map(String::from).collect()),
     };
-    let paths = vec![PathGlob::parse(path.unwrap_or("/**")).map_err(|e| format!("--path: {e}"))?];
+    let path = PathGlob::parse(path.unwrap_or("/**")).map_err(|e| format!("--path: {e}"))?;
     let query = (query.into_iter().flat_map(|q| q.split(',')))
         .map(str::trim)
         .filter(|q| !q.is_empty())
@@ -190,7 +190,7 @@ fn request(
         .collect::<Result<_, _>>()?;
     Ok(RequestMatch {
         methods,
-        paths,
+        path,
         query,
     })
 }
@@ -270,7 +270,7 @@ mod tests {
             name: name.into(),
             value,
         };
-        let glob = |p: &str| vec![PathGlob::parse(p).unwrap()];
+        let glob = |p: &str| PathGlob::parse(p).unwrap();
         for (method, path, query, want) in [
             (
                 Some("post"),
@@ -278,7 +278,7 @@ mod tests {
                 None,
                 RequestMatch {
                     methods: only(&["POST"]),
-                    paths: glob("/**"),
+                    path: glob("/**"),
                     query: vec![],
                 },
             ),
@@ -288,7 +288,7 @@ mod tests {
                 None,
                 RequestMatch {
                     methods: only(&["GET", "HEAD"]),
-                    paths: glob("/v1/**"),
+                    path: glob("/v1/**"),
                     query: vec![],
                 },
             ),
@@ -298,7 +298,7 @@ mod tests {
                 None,
                 RequestMatch {
                     methods: Methods::Any,
-                    paths: glob("/a/*"),
+                    path: glob("/a/*"),
                     query: vec![],
                 },
             ),
@@ -308,7 +308,7 @@ mod tests {
                 Some("tag=prod,v=1.*,s=*-rc,x=*"),
                 RequestMatch {
                     methods: Methods::Any,
-                    paths: glob("/**"),
+                    path: glob("/**"),
                     query: vec![
                         q("tag", ValueMatch::Exact("prod".into())),
                         q("v", ValueMatch::Prefix("1.".into())),

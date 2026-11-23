@@ -1,7 +1,7 @@
 use super::*;
 use http::HeaderMap;
 
-fn rule(action: Action, host: &str, methods: &[&str], paths: &[&str]) -> Rule {
+fn rule(action: Action, host: &str, methods: &[&str], path: &str) -> Rule {
     Rule {
         id: None,
         action,
@@ -13,19 +13,19 @@ fn rule(action: Action, host: &str, methods: &[&str], paths: &[&str]) -> Rule {
             } else {
                 Methods::Only(methods.iter().map(|m| (*m).into()).collect())
             },
-            paths: paths.iter().map(|p| PathGlob::parse(p).unwrap()).collect(),
+            path: PathGlob::parse(path).unwrap(),
             query: vec![],
         },
         case: Case::Insensitive,
     }
 }
 
-fn allow(host: &str, methods: &[&str], paths: &[&str]) -> Rule {
-    rule(Action::Allow, host, methods, paths)
+fn allow(host: &str, methods: &[&str], path: &str) -> Rule {
+    rule(Action::Allow, host, methods, path)
 }
 
-fn deny(host: &str, methods: &[&str], paths: &[&str]) -> Rule {
-    rule(Action::Deny, host, methods, paths)
+fn deny(host: &str, methods: &[&str], path: &str) -> Rule {
+    rule(Action::Deny, host, methods, path)
 }
 
 fn policy(rules: Vec<Rule>) -> Policy {
@@ -43,7 +43,6 @@ fn check(p: &Policy, method: &str, target: &str) -> Result<(), String> {
 
 fn check_with(p: &Policy, method: &str, target: &str, headers: &HeaderMap) -> Result<(), String> {
     p.request("h", 443, method, target, headers)
-        .map_err(|r| r.reason)
 }
 
 fn query(name: &str, value: ValueMatch) -> QueryMatch {
@@ -55,19 +54,19 @@ fn query(name: &str, value: ValueMatch) -> QueryMatch {
 
 #[test]
 fn method_rules_match_their_methods() {
-    let p = policy(vec![allow("h", &["GET", "HEAD"], &["/**"])]);
+    let p = policy(vec![allow("h", &["GET", "HEAD"], "/**")]);
     assert!(check(&p, "GET", "/x").is_ok());
     assert!(check(&p, "HEAD", "/x").is_ok());
     assert!(check(&p, "POST", "/x").is_err());
 
-    let p = policy(vec![deny("h", &["POST"], &["/**"])]);
+    let p = policy(vec![deny("h", &["POST"], "/**")]);
     assert!(check(&p, "GET", "/x").is_ok());
     assert!(check(&p, "POST", "/x").is_err());
 }
 
 #[test]
 fn star_matches_one_segment_and_inside_a_segment() {
-    let p = policy(vec![allow("h", &[], &["/v*/x", "/a/*/c"])]);
+    let p = policy(vec![allow("h", &[], "/v*/x"), allow("h", &[], "/a/*/c")]);
     assert!(check(&p, "GET", "/v1/x").is_ok());
     assert!(check(&p, "GET", "/v/x").is_ok());
     assert!(check(&p, "GET", "/v1/y/x").is_err());
@@ -81,13 +80,13 @@ fn star_matches_one_segment_and_inside_a_segment() {
 
 #[test]
 fn double_star_matches_zero_or_more_segments() {
-    let p = policy(vec![allow("h", &[], &["/a/**"])]);
+    let p = policy(vec![allow("h", &[], "/a/**")]);
     assert!(check(&p, "GET", "/a").is_ok());
     assert!(check(&p, "GET", "/a/b/c").is_ok());
     assert!(check(&p, "GET", "/ab").is_err());
     assert!(check(&p, "GET", "/").is_err());
 
-    let p = policy(vec![allow("h", &[], &["/**/hooks"])]);
+    let p = policy(vec![allow("h", &[], "/**/hooks")]);
     assert!(check(&p, "GET", "/hooks").is_ok());
     assert!(check(&p, "GET", "/r/o/hooks").is_ok());
     assert!(check(&p, "GET", "/r/o/hooks/1").is_err());
@@ -95,7 +94,7 @@ fn double_star_matches_zero_or_more_segments() {
 
 #[test]
 fn query_any_value_and_prefix_and_suffix() {
-    let mut r = allow("h", &[], &["/**"]);
+    let mut r = allow("h", &[], "/**");
     r.request.query = vec![
         query("a", ValueMatch::Any),
         query("v", ValueMatch::Prefix("1.".into())),
@@ -120,7 +119,7 @@ fn query_any_value_and_prefix_and_suffix() {
 
 #[test]
 fn repeated_query_params_allow_only_if_every_value_matches_and_deny_if_any_does() {
-    let mut r = allow("h", &[], &["/**"]);
+    let mut r = allow("h", &[], "/**");
     r.request.query = vec![query("t", ValueMatch::Exact("prod".into()))];
     let p = policy(vec![r]);
     assert!(check(&p, "GET", "/?t=prod&t=prod").is_ok());
@@ -134,7 +133,7 @@ fn repeated_query_params_allow_only_if_every_value_matches_and_deny_if_any_does(
         "`&`-only reading sees t=prod;x"
     );
 
-    let mut r = deny("h", &[], &["/**"]);
+    let mut r = deny("h", &[], "/**");
     r.request.query = vec![query("t", ValueMatch::Exact("dev".into()))];
     let p = policy(vec![r]);
     assert!(check(&p, "GET", "/?t=prod").is_ok());
@@ -145,7 +144,7 @@ fn repeated_query_params_allow_only_if_every_value_matches_and_deny_if_any_does(
 
 #[test]
 fn an_allow_needs_the_path_with_and_without_params() {
-    let p = policy(vec![allow("h", &[], &["/files/report"])]);
+    let p = policy(vec![allow("h", &[], "/files/report")]);
     assert!(check(&p, "GET", "/files/report").is_ok());
     for target in ["/files/report;x", "/files/report%3Bx"] {
         assert_eq!(
@@ -154,7 +153,7 @@ fn an_allow_needs_the_path_with_and_without_params() {
             "{target}"
         );
     }
-    let p = policy(vec![deny("h", &[], &["/files/report"])]);
+    let p = policy(vec![deny("h", &[], "/files/report")]);
     for target in ["/files/report", "/files/report;x", "/files/report%3Bx"] {
         assert!(check(&p, "GET", target).is_err(), "{target}");
     }
@@ -163,12 +162,12 @@ fn an_allow_needs_the_path_with_and_without_params() {
 
 #[test]
 fn deny_beats_allow() {
-    let mut d = deny("h", &[], &["/repos/*/*/hooks/**"]);
+    let mut d = deny("h", &[], "/repos/*/*/hooks/**");
     d.id = Some("r7".into());
     // Order never matters.
     for rules in [
-        vec![allow("h", &[], &["/repos/**"]), d.clone()],
-        vec![d.clone(), allow("h", &[], &["/repos/**"])],
+        vec![allow("h", &[], "/repos/**"), d.clone()],
+        vec![d.clone(), allow("h", &[], "/repos/**")],
     ] {
         let p = policy(rules);
         assert!(check(&p, "GET", "/repos/o/r/issues").is_ok());
@@ -181,7 +180,7 @@ fn deny_beats_allow() {
 
 #[test]
 fn a_host_with_bounded_allows_refuses_the_rest() {
-    let p = policy(vec![allow("h", &["GET"], &["/x"])]);
+    let p = policy(vec![allow("h", &["GET"], "/x")]);
     assert_eq!(
         check(&p, "DELETE", "/x").unwrap_err(),
         "no rule allows DELETE /x on h"
@@ -208,10 +207,7 @@ fn a_host_with_bounded_allows_refuses_the_rest() {
 
 #[test]
 fn confused_paths_never_reach_a_denied_path() {
-    let p = policy(vec![
-        allow("h", &[], &["/**"]),
-        deny("h", &[], &["/admin/**"]),
-    ]);
+    let p = policy(vec![allow("h", &[], "/**"), deny("h", &[], "/admin/**")]);
     for target in [
         "/admin",
         "/admin;x=1",
@@ -232,7 +228,7 @@ fn confused_paths_never_reach_a_denied_path() {
 
 #[test]
 fn ambiguous_targets_are_refused() {
-    let p = policy(vec![allow("h", &[], &["/**"])]);
+    let p = policy(vec![allow("h", &[], "/**")]);
     for target in [
         "/a%2Fb", "/a%2fb", "/a%5cb", "/a%5Cb", "/%252e", "/%c0%af", "/a%00", "/%u002e", "/a%",
         "/a%zz", "/a%+f", "/a\tb", "a", "*",
@@ -265,8 +261,8 @@ fn ambiguous_targets_are_refused() {
 #[test]
 fn an_override_header_counts_as_the_method() {
     let p = policy(vec![
-        allow("h", &["GET"], &["/**"]),
-        deny("h", &["DELETE"], &["/"]),
+        allow("h", &["GET"], "/**"),
+        deny("h", &["DELETE"], "/"),
     ]);
     for name in [
         "x-http-method-override",
@@ -280,7 +276,7 @@ fn an_override_header_counts_as_the_method() {
         );
         assert!(check_with(&p, "GET", "/", &headers).is_err(), "{name}");
         // A deny alone fires on any view.
-        let deny_only = policy(vec![deny("h", &["DELETE"], &["/"])]);
+        let deny_only = policy(vec![deny("h", &["DELETE"], "/")]);
         assert!(
             check_with(&deny_only, "GET", "/", &headers).is_err(),
             "{name}, deny only"
@@ -299,17 +295,17 @@ fn an_override_header_counts_as_the_method() {
 
 #[test]
 fn case_is_per_rule() {
-    let mut sensitive = deny("h", &[], &["/Admin/**"]);
+    let mut sensitive = deny("h", &[], "/Admin/**");
     sensitive.case = Case::Sensitive;
     let p = policy(vec![sensitive]);
     assert!(check(&p, "GET", "/Admin").is_err());
     assert!(check(&p, "GET", "/admin").is_ok());
 
-    let p = policy(vec![deny("h", &[], &["/Admin/**"])]);
+    let p = policy(vec![deny("h", &[], "/Admin/**")]);
     assert!(check(&p, "GET", "/admin").is_err());
     assert!(check(&p, "GET", "/ADMIN").is_err());
 
-    let mut q = allow("h", &[], &["/**"]);
+    let mut q = allow("h", &[], "/**");
     q.case = Case::Sensitive;
     q.request.query = vec![query("T", ValueMatch::Exact("Prod".into()))];
     let p = policy(vec![q]);
@@ -320,17 +316,17 @@ fn case_is_per_rule() {
 
 #[test]
 fn inspection_by_rule_kind() {
-    let mut on_22 = allow("ssh.h", &[], &["/**"]);
+    let mut on_22 = allow("ssh.h", &[], "/**");
     on_22.port = Some(22);
-    let mut sub = deny("x", &[], &["/**"]);
+    let mut sub = deny("x", &[], "/**");
     sub.host = HostMatch::Subdomains {
         domain: "d.com".into(),
         any_depth: false,
     };
     let p = policy(vec![
-        allow("a", &["GET"], &["/**"]),
-        deny("a", &[], &["/x"]),
-        deny("b", &[], &["/x"]),
+        allow("a", &["GET"], "/**"),
+        deny("a", &[], "/x"),
+        deny("b", &[], "/x"),
         on_22,
         sub,
     ]);
@@ -362,10 +358,10 @@ fn inspection_by_rule_kind() {
 fn terminate_hosts_forms() {
     let on = |host| Rule {
         host,
-        ..deny("x", &[], &["/**"])
+        ..deny("x", &[], "/**")
     };
     let p = policy(vec![
-        deny("Api.Example.com.", &[], &["/**"]),
+        deny("Api.Example.com.", &[], "/**"),
         on(HostMatch::Subdomains {
             domain: "one.com".into(),
             any_depth: false,
@@ -374,14 +370,14 @@ fn terminate_hosts_forms() {
             domain: "deep.com".into(),
             any_depth: true,
         }),
-        deny("api.example.com", &[], &["/**"]),
+        deny("api.example.com", &[], "/**"),
     ]);
     assert_eq!(
         p.terminate_hosts(),
         ["*.deep.com", "*.one.com", "api.example.com"]
     );
 
-    let mut deep = deny("x", &[], &["/**"]);
+    let mut deep = deny("x", &[], "/**");
     deep.host = HostMatch::Subdomains {
         domain: "deep.com".into(),
         any_depth: true,
@@ -411,18 +407,11 @@ fn validate_refuses_rule_paths_that_never_match() {
     for path in ["/", "/**", "/a/*/b", "/v*", "/**/x"] {
         assert!(PathGlob::parse(path).is_ok(), "{path}");
     }
-    let mut no_paths = allow("h", &[], &[]);
-    no_paths.request.paths.clear();
-    let mut no_methods = allow("h", &[], &["/**"]);
+    let mut no_methods = allow("h", &[], "/**");
     no_methods.request.methods = Methods::Only(vec![]);
-    for r in [no_paths, no_methods] {
-        assert!(
-            Policy {
-                rules: vec![r],
-                default: Action::Allow
-            }
-            .validate()
-            .is_err()
-        );
-    }
+    let p = Policy {
+        rules: vec![no_methods],
+        default: Action::Allow,
+    };
+    assert!(p.validate().is_err());
 }
