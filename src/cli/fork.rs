@@ -136,30 +136,28 @@ fn add_remote_and_branch<R: Runner>(
         ("SANDBOX_ID".to_string(), sandbox::env::new_uuid()),
     ];
     let hosted = parent.meta.egress.as_ref();
-    let result = hosted
-        .map(|label| fork_egress(ctx, parent.name(), fork, label))
-        .transpose()
-        .and_then(|egress| {
-            let (env, remove, addr) = match egress {
-                Some((label, token)) => {
-                    labels.push((labels::EGRESS.to_string(), label.to_label()));
-                    let addr = SocketAddr::from(([127, 0, 0, 1], label.port));
-                    (vec![token], &[][..], Some(addr))
-                }
-                None => (start.env.clone(), &start.remove[..], None),
-            };
-            ctx.vm
-                .branch(
-                    &parent.machine,
-                    &name::machine_name(fork),
-                    &labels,
-                    &vars,
-                    &env,
-                    remove,
-                    addr,
-                )
-                .map_err(|e| branch_hint(e, parent.name()))
-        });
+    // The fork's token is a copy of the parent's, so the parent's start env serves it too.
+    let result = (|| {
+        let egress = match hosted {
+            Some(label) => {
+                let label = fork_egress(ctx, parent.name(), fork, label)?;
+                labels.push((labels::EGRESS.to_string(), label.to_label()));
+                Some(SocketAddr::from(([127, 0, 0, 1], label.port)))
+            }
+            None => None,
+        };
+        ctx.vm
+            .branch(
+                &parent.machine,
+                &name::machine_name(fork),
+                &labels,
+                &vars,
+                &start.env,
+                &start.remove,
+                egress,
+            )
+            .map_err(|e| branch_hint(e, parent.name()))
+    })();
     if result.is_err() && hosted.is_some() {
         if let Err(e) = ctx.services.remove(fork) {
             crate::warning!("removing {fork}'s egress unit: {e:#}");
@@ -179,14 +177,13 @@ fn add_remote_and_branch<R: Runner>(
 }
 
 /// A hosted fork's egress: its parent's CA and token under its own name, on its own port, served by
-/// its unit, loaded now as smolvm fails closed without a listener. Returns its label and the
-/// token's variable for the branch.
+/// its unit, loaded now as smolvm fails closed without a listener. Returns its label.
 fn fork_egress<R: Runner>(
     ctx: &Ctx<R>,
     parent: &str,
     fork: &str,
     label: &egress::Label,
-) -> Result<(egress::Label, (String, String))> {
+) -> Result<egress::Label> {
     let label = egress::copy_for_fork(&ctx.paths, parent, fork, label)?;
     ctx.services
         .sync(
@@ -197,8 +194,7 @@ fn fork_egress<R: Runner>(
             &ctx.env,
         )
         .context("loading its egress unit")?;
-    let token = egress::token(&ctx.paths, fork)?;
-    Ok((label, ("SMOLVM_INTERCEPTOR_TOKEN".to_string(), token)))
+    Ok(label)
 }
 
 /// smolvm's not-branchable and backing-chain errors (`src/agent/fork.rs` in smolvm), in bento terms.
