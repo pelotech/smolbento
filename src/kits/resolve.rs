@@ -707,10 +707,10 @@ fn group_skip(kit: &str, g: &Group, ty: &str, reason: &'static str) -> Skipped {
     }
 }
 
-/// Whether smolbento can provide `c` as asked under smolvm egress: `resolve` fails a required one
-/// it can't.
-pub fn supported(c: &Cap) -> bool {
-    unsupported(c, false).is_none()
+/// Whether smolbento can provide `c` as asked: `resolve_for` fails a required one it can't.
+/// `hosted` as for `resolve_for`.
+pub fn supported(c: &Cap, hosted: bool) -> bool {
+    unsupported(c, hosted).is_none()
 }
 
 /// Why smolbento can't apply `c` as asked, if it can't. `hosted` as for `resolve_for`.

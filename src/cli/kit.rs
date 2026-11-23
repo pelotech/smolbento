@@ -11,7 +11,9 @@ use crate::kits::apply::apply;
 use crate::kits::args::{ArgValues, NoResolvedValue};
 use crate::kits::model::{Content, Format as KitFormat, ImageConfig, Kind, Kit, Source};
 use crate::kits::registry_auth::Logins;
-use crate::kits::resolve::{check_named_formats, mixing_format, resolve, resolve_for, supported};
+use crate::kits::resolve::{
+    NO_SANDBOX_WORKDIR, check_named_formats, mixing_format, resolve_for, supported,
+};
 use crate::kits::{apply, artifact, capability, guest, load, registry, signing};
 use crate::policy::{Decision, Policy, compile};
 use crate::provision;
@@ -338,6 +340,8 @@ fn inspect<R: Runner>(ctx: &Ctx<R>, a: &KitRefArgs) -> Result<i32> {
     let format = a.output.pick();
     let doc = Doc::new(&kit);
     let mut out = &ctx.out;
+    // As a create would resolve it, so the two agree.
+    let hosted = crate::provision::may_host(ctx, &kit.name)?;
     if let Some(text) = format.structured(&doc)? {
         write!(out, "{text}")?;
     } else {
@@ -349,7 +353,7 @@ fn inspect<R: Runner>(ctx: &Ctx<R>, a: &KitRefArgs) -> Result<i32> {
                 rows.push(vec![
                     c.ty.clone(),
                     if c.optional { "yes" } else { "no" }.into(),
-                    if supported(c) {
+                    if supported(c, hosted) {
                         "supported"
                     } else {
                         "not supported"
@@ -430,8 +434,11 @@ fn check_kit<R: Runner>(
         );
     }
     load::check_launchable(ctx, &mut kit, None)?;
+    // As a create would resolve it, so the two agree.
+    let hosted = crate::provision::may_host(ctx, &kit.name)?;
+    let resolve = |w, m| resolve_for(w, m, &values, NO_SANDBOX_WORKDIR, &[], hosted);
     let resolved = match kit.kind {
-        Kind::Workload => resolve(kit, vec![], &values),
+        Kind::Workload => resolve(kit, vec![]),
         Kind::Mixin => {
             let mut base = empty_workload("validate");
             // A version within each require's constraints; a malformed one fails in `resolve`.
@@ -441,7 +448,7 @@ fn check_kit<R: Runner>(
                 .filter_map(|r| capability::parse_require(r).ok())
                 .map(|r| capability::witness(&r))
                 .collect();
-            resolve(base, vec![kit], &values)
+            resolve(base, vec![kit])
         }
     };
     // sbx's validate says the artifact failed validation when an arg has no value.

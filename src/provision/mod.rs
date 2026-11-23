@@ -471,37 +471,39 @@ pub fn prepare_create<R: Runner>(
         }
     }
     // A sandbox that can't be hosted falls back to smolvm egress, with the first reason why.
-    let hosted = crate::egress::hosted(&ctx.settings, &req.name)? && {
-        let smolvm_because = if !req.rec.credential_install.is_empty() {
-            // Hosted egress swaps values in bento, where an install-only credential (restarted
-            // away after the install hooks) has no way to be withdrawn yet.
-            Some("install-only credentials need network.egress=smolvm")
-        } else if first_start
-            .as_ref()
-            .is_some_and(|k| !k.steps.install_rules.is_empty())
-        {
-            // The egress process judges by the stored policy, and nothing tells it when the
-            // install hooks run, which alone may use install-phase kit rules.
-            Some("install-phase kit network rules need network.egress=smolvm")
-        } else if ctx.services.plan(&req.name).is_none() {
-            // Without its unit nothing would own the interceptor port, so every connection fails.
-            Some("no service manager for its egress unit")
-        } else {
-            None
-        };
-        if let Some(why) = smolvm_because {
-            crate::warning!("{why}; creating {} with smolvm egress", req.name);
-        }
-        smolvm_because.is_none()
+    let setting = crate::egress::hosted(&ctx.settings, &req.name)?;
+    let smolvm_because = if !setting {
+        None
+    } else if !req.rec.credential_install.is_empty() {
+        // Hosted egress swaps values in bento, where an install-only credential (restarted
+        // away after the install hooks) has no way to be withdrawn yet.
+        Some("install-only credentials need network.egress=smolvm")
+    } else if first_start
+        .as_ref()
+        .is_some_and(|k| !k.steps.install_rules.is_empty())
+    {
+        // The egress process judges by the stored policy, and nothing tells it when the
+        // install hooks run, which alone may use install-phase kit rules.
+        Some("install-phase kit network rules need network.egress=smolvm")
+    } else if ctx.services.plan(&req.name).is_none() {
+        // Without its unit nothing would own the interceptor port, so every connection fails.
+        Some("no service manager for its egress unit")
+    } else {
+        None
     };
+    let hosted = setting && smolvm_because.is_none();
     // Kits are resolved for hosted egress when it may be used (`may_host`); a fallback found
     // since leaves their request rules unenforced, so refuse them before anything is made.
     if !hosted && let Some(kit) = kits.and_then(Plan::request_rules_kit) {
         bail!(
-            "kit {kit}: network-policy@2 method/path rules need hosted egress, and {} falls back \
-             to smolvm egress",
-            req.name
+            "kit {kit}: network-policy@2 method/path rules need hosted egress, but {} uses smolvm \
+             egress: {}",
+            req.name,
+            smolvm_because.unwrap_or("network.egress is smolvm")
         );
+    }
+    if let Some(why) = smolvm_because {
+        crate::warning!("{why}; creating {} with smolvm egress", req.name);
     }
     if !denies.is_empty() {
         added.extend(crate::policy::notes::add_create_denies(

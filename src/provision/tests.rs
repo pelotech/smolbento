@@ -1521,7 +1521,8 @@ fn a_fallback_sandbox_refuses_a_required_request_rule_before_create() {
     let e = create_with(&t.ctx, &mut req, &[], Some(&plan), None, &mut |_| {}).unwrap_err();
     assert_eq!(
         format!("{e:#}"),
-        "kit k: network-policy@2 method/path rules need hosted egress, and s1 falls back to smolvm egress"
+        "kit k: network-policy@2 method/path rules need hosted egress, but s1 uses smolvm egress: \
+         no service manager for its egress unit"
     );
     assert!(t.calls_of("machine create").is_empty());
     let p = Policy::load(&t.ctx.paths).unwrap();

@@ -122,11 +122,11 @@ fn support_is_what_resolve_accepts() {
             mode: None,
         },
     );
-    assert!(super::supported(&host));
-    assert!(!super::supported(&cap(
-        "x",
-        crate::kits::model::CapBody::Unsupported
-    )));
+    assert!(super::supported(&host, false));
+    assert!(!super::supported(
+        &cap("x", crate::kits::model::CapBody::Unsupported),
+        false
+    ));
     let ssh = cap(
         "com.docker.sandbox/ssh-agent@1",
         crate::kits::model::CapBody::SshAgent {
@@ -136,7 +136,7 @@ fn support_is_what_resolve_accepts() {
             authenticate: vec!["github.com".into()],
         },
     );
-    assert!(super::supported(&ssh));
+    assert!(super::supported(&ssh, false));
 }
 
 #[test]
@@ -1693,4 +1693,67 @@ fn kit_mounts_rm_refuses_a_mount_a_sandbox_uses() {
     t.sbt(&["kit", "mounts", "rm", &id]).unwrap();
     assert!(!host.exists());
     assert_eq!(t.stdout(), format!("Removed {id}\n"));
+}
+
+/// A mixin with a required `network-policy@2` request rule, which only hosted egress enforces.
+const REQUEST_RULE_KIT: &str = r#"{"schemaVersion":"3","kind":"mixin","name":"rr","capabilities":[
+    {"type":"com.docker.sandbox/network-policy@2","config":{"runtime":
+        {"allow":[{"hosts":["api.example.com"],"methods":["GET"],"paths":["/v1/**"]}]}}}]}"#;
+
+/// The default (hosted) with a service manager, or `network.egress=smolvm`, and `./rr`.
+fn request_rule_env(hosted: bool) -> (TestEnv, Option<tempfile::TempDir>) {
+    let mut t = if hosted {
+        kit_env()
+    } else {
+        test_env(&[
+            ("SMOLBENTO_KIT_ALLOW_LOCAL_KITS", "true"),
+            ("SMOLBENTO_NETWORK_EGRESS", "smolvm"),
+        ])
+    };
+    let tmp = hosted.then(|| with_services(&mut t).1);
+    v3_kit(&t, "rr", REQUEST_RULE_KIT, &[]);
+    (t, tmp)
+}
+
+fn np2_support(t: &mut TestEnv) -> String {
+    t.sbt(&["kit", "inspect", "./rr"]).unwrap();
+    let out = t.stdout();
+    out.lines()
+        .find(|l| l.starts_with("com.docker.sandbox/network-policy@2"))
+        .unwrap_or_else(|| panic!("{out}"))
+        .to_string()
+}
+
+#[test]
+fn kit_validate_accepts_request_rules_under_hosted_default() {
+    let (mut t, _tmp) = request_rule_env(true);
+    assert_eq!(t.sbt(&["kit", "validate", "./rr"]).unwrap(), 0);
+    assert_eq!(t.stdout(), "✓ ./rr — valid\n");
+}
+
+#[test]
+fn kit_validate_refuses_request_rules_under_smolvm() {
+    let (mut t, _tmp) = request_rule_env(false);
+    let e = t.sbt(&["kit", "validate", "./rr"]).unwrap_err();
+    assert_eq!(
+        format!("{e:#}"),
+        "kit rr: network-policy@2 method/path rules are not enforced by smolbento"
+    );
+}
+
+#[test]
+fn kit_inspect_shows_request_rules_as_enforced_under_hosted_default() {
+    let (mut t, _tmp) = request_rule_env(true);
+    let l = np2_support(&mut t);
+    assert!(
+        l.ends_with(" supported") && !l.ends_with("not supported"),
+        "{l}"
+    );
+}
+
+#[test]
+fn kit_inspect_flags_request_rules_under_smolvm() {
+    let (mut t, _tmp) = request_rule_env(false);
+    let l = np2_support(&mut t);
+    assert!(l.ends_with("not supported"), "{l}");
 }
