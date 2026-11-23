@@ -64,7 +64,7 @@ pub fn request_policy(
 }
 
 /// The crate rule for one resource of a request rule, or why the crate can't take it.
-fn map(r: &policy::Rule, res: &Resource) -> Result<Rule, String> {
+pub fn map(r: &policy::Rule, res: &Resource) -> Result<Rule, String> {
     let rule = Rule {
         id: Some(r.id.clone()),
         action: action(r.decision),
@@ -84,16 +84,6 @@ fn map(r: &policy::Rule, res: &Resource) -> Result<Rule, String> {
     };
     one.validate()?;
     Ok(one.rules.remove(0))
-}
-
-/// The host, in `terminate_hosts` form, that one resource of a request rule maps to; `None` when
-/// the crate can't take it.
-pub fn mapped_host(r: &policy::Rule, res: &Resource) -> Option<String> {
-    let one = Policy {
-        rules: vec![map(r, res).ok()?],
-        default: Action::Allow,
-    };
-    one.terminate_hosts().pop()
 }
 
 /// Whether connection rules alone admit every host and port a bounded allow on `host` names. A
@@ -472,8 +462,8 @@ mod tests {
                 .unwrap()
         };
         let res = |s: &str| Resource::parse(s).unwrap();
-        assert_eq!(mapped_host(r("api.x.com"), &res("api.x.com")), None);
-        assert_eq!(mapped_host(r("h.com"), &res("h.com")), Some("h.com".into()));
+        assert!(map(r("api.x.com"), &res("api.x.com")).is_err());
+        assert!(map(r("h.com"), &res("h.com")).is_ok());
     }
 
     #[test]

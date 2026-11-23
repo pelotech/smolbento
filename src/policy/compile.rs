@@ -89,7 +89,8 @@ fn allows_with(policy: &Policy, sandbox: Option<&str>, install: &[String]) -> Ve
 fn per_request(hosted: bool, r: &Rule, res: &Resource) -> bool {
     hosted
         && r.is_request()
-        && crate::egress::request_rules::mapped_host(r, res).is_some_and(|h| h != "localhost")
+        && res.pattern != Pattern::Exact("localhost".into())
+        && crate::egress::request_rules::map(r, res).is_ok()
 }
 
 /// How one resource of a rule acts on its whole host in a verdict. A request deny the interceptor
@@ -98,9 +99,7 @@ fn per_request(hosted: bool, r: &Rule, res: &Resource) -> bool {
 fn acts(r: &Rule, res: &Resource) -> Option<Decision> {
     match r.decision {
         Decision::Deny if per_request(true, r, res) => None,
-        Decision::Allow
-            if r.is_request() && crate::egress::request_rules::mapped_host(r, res).is_none() =>
-        {
+        Decision::Allow if r.is_request() && crate::egress::request_rules::map(r, res).is_err() => {
             Some(Decision::Deny)
         }
         d => Some(d),
