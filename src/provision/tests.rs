@@ -1498,7 +1498,7 @@ fn kit_request_rules_reach_policy_toml() {
         ]
     );
     // Both map to the egress process's request policy, case-sensitive as kit rules.
-    let mapped = crate::egress::request_rules::request_policy(&p, "s1", &[]).unwrap();
+    let mapped = crate::egress::request_rules::request_policy(&p, "s1", &[]);
     assert_eq!(mapped.rules.len(), 2);
     assert!(
         mapped

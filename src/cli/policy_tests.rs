@@ -1687,18 +1687,18 @@ POLICY       SOURCE   APPLIES TO   SUMMARY
 sandbox:s1   local    sandbox:s1   http: 1 allow
 "
     );
-    let head = "SOURCE   CREATED VIA   APPLIES TO   POLICY   POLICY_ID    RULE   RULE_ID      TYPE   METHOD   PATH     DECISION   PROTOCOLS   STATUS                     RESOURCES";
+    let head = "SOURCE   CREATED VIA   APPLIES TO   POLICY   POLICY_ID    RULE   RULE_ID      TYPE   METHOD   PATH     DECISION   PROTOCOLS   STATUS                       RESOURCES";
     let status = |text| under(head, &[("STATUS", text), ("RESOURCES", "")]);
     assert_eq!(
         ls(&mut t, &["--type", "http", "--wide"]),
         format!(
             "{head}\n\
-local    added         sandbox:s1   -        sandbox:s1   -      {http}   http   GET      /v1/**   allow      tcp         active — crl*.x.com:       crl*.x.com\n\
+local    added         sandbox:s1   -        sandbox:s1   -      {http}   http   GET      /v1/**   allow      tcp         active — crl*.x.com:         crl*.x.com\n\
 {}\n{}\n{}\n{}\n",
             status("widened to *.x.com;"),
             status("crl*.x.com: request rule"),
-            status("not enforced (needs a"),
-            status("named host)"),
+            status("acts on the whole host, as"),
+            status("in 0.37.0"),
         )
     );
     let json = ls(&mut t, &["--decision", "deny", "--json"]);
@@ -2022,7 +2022,7 @@ fn ls_says_a_stored_request_rule_on_every_host_is_skipped() {
     let json: serde_json::Value = serde_json::from_str(&json).unwrap();
     assert_eq!(
         json["rules"][0]["reason"],
-        "**: request rule not enforced (needs a named host)"
+        "**: request rule acts on the whole host, as in 0.37.0"
     );
 }
 

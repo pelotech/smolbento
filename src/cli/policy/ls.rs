@@ -129,14 +129,23 @@ fn rule_notes(rule: &Rule) -> Vec<String> {
     if !rule.is_request() {
         return notes;
     }
-    // The egress process decrypts named hosts only: a request rule on any other is skipped.
+    // The egress process takes request rules on named hosts only; any other keeps 0.37.0's meaning.
     let (named, skipped): (Vec<_>, Vec<_>) = rule.parsed().partition(|r| {
-        request_rules::check(rule.decision, std::slice::from_ref(r), None, None, None).is_ok()
+        request_rules::check(
+            rule.decision,
+            std::slice::from_ref(r),
+            rule.method.as_deref(),
+            rule.path.as_deref(),
+            rule.query.as_deref(),
+        )
+        .is_ok()
     });
-    notes.extend(
-        (skipped.iter())
-            .map(|r| format!("{}: request rule not enforced (needs a named host)", r.raw)),
-    );
+    notes.extend((skipped.iter()).map(|r| {
+        format!(
+            "{}: request rule acts on the whole host, as in 0.37.0",
+            r.raw
+        )
+    }));
     if !named.is_empty() {
         let qualifiers: Vec<String> = [
             ("method", &rule.method),

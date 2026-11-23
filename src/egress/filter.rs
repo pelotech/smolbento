@@ -83,7 +83,7 @@ impl PolicySource {
             .clone();
         let built = crate::policy::Policy::load(&self.paths)
             .map_err(|e| format!("{e:#}"))
-            .and_then(|p| request_policy(&p, &self.sandbox, &self.credential_hosts));
+            .map(|p| request_policy(&p, &self.sandbox, &self.credential_hosts));
         let (policy, ruled) = match built {
             Ok(p) => {
                 let ruled = p.terminate_hosts();
@@ -196,7 +196,13 @@ pub fn connection(
         FlowKind::Tls if !gateway && terminated.iter().any(|p| host_matches(p, host)) => {
             (Decision::Allow, "decrypted for request rules".into())
         }
-        _ => match uninspectable {
+        // A CA from before request rules, the gateway, or a host ruled since the process started:
+        // refused, as 0.37.0 refused the host.
+        FlowKind::Tls => (
+            Decision::Deny,
+            "TLS to a ruled host that isn't decrypted".into(),
+        ),
+        FlowKind::Other => match uninspectable {
             Action::Allow => (Decision::Allow, "request rules only deny".into()),
             Action::Deny => (
                 Decision::Deny,
@@ -264,7 +270,7 @@ mod tests {
         let mut p = deny_all();
         add(&mut p, D::Allow, "a.com", "GET");
         add(&mut p, D::Deny, "d.com", "POST");
-        request_policy(&p, SB, &[]).unwrap()
+        request_policy(&p, SB, &[])
     }
 
     fn add(p: &mut policy::Policy, d: D, host: &str, method: &str) {
@@ -316,10 +322,6 @@ mod tests {
         };
         assert_eq!(d("a.com"), Decision::Allow);
         assert_eq!(d("d.com"), Decision::Allow);
-        // Not decrypted (a CA from before request rules): it can't be read, so it's uninspectable.
-        let nd = |host| connection(&p, &flow(host, FlowKind::Tls), &[]).unwrap().0;
-        assert_eq!(nd("a.com"), Decision::Deny);
-        assert_eq!(nd("d.com"), Decision::Allow);
         // The gateway is never decrypted.
         let gw = Flow {
             ip: HOST_GATEWAY.parse().unwrap(),
@@ -327,11 +329,87 @@ mod tests {
         };
         let mut lp = deny_all();
         add(&mut lp, D::Allow, "localhost", "GET");
-        let lp = request_policy(&lp, SB, &[]).unwrap();
+        let lp = request_policy(&lp, SB, &[]);
         assert_eq!(
             connection(&lp, &gw, &lp.terminate_hosts()).unwrap().0,
             Decision::Deny
         );
+    }
+
+    #[test]
+    fn tls_to_a_ruled_host_outside_terminated_is_denied() {
+        let p = rules();
+        // A CA from before request rules, or a host ruled since the process started: refused, as
+        // 0.37.0 refused the host, even with only bounded denies.
+        for host in ["a.com", "d.com"] {
+            let (d, why) = connection(&p, &flow(host, FlowKind::Tls), &[]).unwrap();
+            assert_eq!(d, Decision::Deny, "{host}");
+            assert_eq!(why, "TLS to a ruled host that isn't decrypted");
+        }
+        // The gateway, with only a bounded deny on `localhost`.
+        let mut lp = deny_all();
+        add(&mut lp, D::Deny, "localhost", "POST");
+        let lp = request_policy(&lp, SB, &[]);
+        let gw = Flow {
+            ip: HOST_GATEWAY.parse().unwrap(),
+            ..flow("localhost", FlowKind::Tls)
+        };
+        assert_eq!(
+            connection(&lp, &gw, &lp.terminate_hosts()).unwrap().0,
+            Decision::Deny
+        );
+    }
+
+    #[test]
+    fn ssh_to_a_ruled_host_still_follows_uninspectable() {
+        let p = rules();
+        // Not decrypted either way: a host with only denies passes it, one with an allow refuses it.
+        for terminated in [vec![], p.terminate_hosts()] {
+            let d = |host| {
+                connection(&p, &flow(host, FlowKind::Other), &terminated)
+                    .unwrap()
+                    .0
+            };
+            assert_eq!(d("d.com"), Decision::Allow);
+            assert_eq!(d("a.com"), Decision::Deny);
+        }
+    }
+
+    #[test]
+    fn an_unparseable_request_rule_doesnt_disable_the_others() {
+        let (_d, paths) = test_paths();
+        let mut p = deny_all();
+        p.allow(Some(SB), "**");
+        add(&mut p, D::Deny, "d.com", "POST");
+        // Stored by 0.37.0, which didn't check `--path`; `PathGlob` refuses the empty segment.
+        p.insert_rule(
+            Some(SB),
+            D::Deny,
+            "api.x.com",
+            "added",
+            Some("POST".into()),
+            Some("/admin/".into()),
+            None,
+        )
+        .unwrap();
+        save(&paths, &p, 1);
+        // A fresh process: it knows no ruled hosts from before.
+        let source = Arc::new(PolicySource::new(&paths, SB, vec![]));
+        let f = Filter(source.clone());
+        assert!(judge(&f, "d.com", "POST").is_err());
+        assert_eq!(judge(&f, "d.com", "GET"), Ok(()));
+        let ruled = source.ruled_hosts().unwrap();
+        assert_eq!(ruled, ["d.com"]);
+        // The bad deny keeps 0.37.0's meaning: its whole host is denied.
+        let rules = super::super::rules::Rules::new(&paths, SB, false, vec![], Some(ruled));
+        let to = |host: &str| Flow {
+            name: Some(host.into()),
+            kind: FlowKind::Tls,
+            ip: "192.0.2.1".parse().unwrap(),
+            port: 443,
+        };
+        assert_eq!(rules.decide(&to("api.x.com")).0, Decision::Deny);
+        assert_eq!(rules.decide(&to("d.com")).0, Decision::Allow);
     }
 
     #[test]

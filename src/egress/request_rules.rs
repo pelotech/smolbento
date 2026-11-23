@@ -11,12 +11,13 @@ use crate::policy::{self, Decision, compile};
 /// The request rules that apply to `sandbox`: its active global, per-sandbox and kit rules with a
 /// method, path or query, one crate rule per resource. Connection defaults stay in `decide`, so a
 /// host no rule names is allowed. As in sbx, a bounded allow on a host that connection rules alone
-/// already admit (`moot`) is dropped; bounded denies always map.
+/// already admit (`moot`) is dropped; bounded denies never are. A resource the crate can't take
+/// is skipped, and keeps 0.37.0's meaning on its whole host (`compile::Requests`).
 pub fn request_policy(
     policy: &policy::Policy,
     sandbox: &str,
     credential_hosts: &[String],
-) -> Result<Policy, String> {
+) -> Policy {
     // Connection rules only, and no glob allows: a glob can match the `*` probe label (`?.x.com`)
     // without admitting every subdomain, and a doubtful admit must keep the bounded allow.
     let mut plain = policy.clone();
@@ -33,44 +34,74 @@ pub fn request_policy(
     }
     let admits = |target: &str| {
         let host_access = compile::host_access(&plain, sandbox);
-        compile::decide(&plain, sandbox, credential_hosts, host_access, target).allowed
+        compile::decide(
+            &plain,
+            sandbox,
+            credential_hosts,
+            host_access,
+            target,
+            compile::Requests::HostWide,
+        )
+        .allowed
     };
     let spare = spare_port(policy);
     let mut rules = Vec::new();
     for (r, _) in compile::active(policy, Some(sandbox), &[]).filter(|(r, _)| r.is_request()) {
-        let request = request(r.method.as_deref(), r.path.as_deref(), r.query.as_deref())
-            .map_err(|e| format!("rule {}: {e}", r.id))?;
         for res in r.parsed() {
-            // A host `policy allow` refuses now but an older version stored: unenforced, as in
-            // 0.37.0, rather than failing every other rule.
-            let Ok(host) = host(r.decision, &res) else {
-                continue;
+            let rule = match map(r, &res) {
+                Ok(rule) => rule,
+                Err(e) => {
+                    eprintln!(
+                        "egress: rule {} on {}: {e}; it acts on the whole host, as in 0.37.0",
+                        r.id, res.raw
+                    );
+                    continue;
+                }
             };
-            if r.decision == Decision::Allow && moot(&admits, &host, res.port, spare) {
+            if r.decision == Decision::Allow && moot(&admits, &rule.hosts[0], res.port, spare) {
                 continue;
             }
-            rules.push(Rule {
-                id: Some(r.id.clone()),
-                action: action(r.decision),
-                hosts: vec![host],
-                port: res.port,
-                request: request.clone(),
-                reason: None,
-                // Kits follow the kit spec; `bento policy` follows sbx.
-                case: if r.created_via.starts_with(policy::KIT_VIA) {
-                    Case::Sensitive
-                } else {
-                    Case::Insensitive
-                },
-            });
+            rules.push(rule);
         }
     }
-    let p = Policy {
+    Policy {
         rules,
         default: Action::Allow,
+    }
+}
+
+/// The crate rule for one resource of a request rule, or why the crate can't take it.
+fn map(r: &policy::Rule, res: &Resource) -> Result<Rule, String> {
+    let rule = Rule {
+        id: Some(r.id.clone()),
+        action: action(r.decision),
+        hosts: vec![host(r.decision, res)?],
+        port: res.port,
+        request: request(r.method.as_deref(), r.path.as_deref(), r.query.as_deref())?,
+        reason: None,
+        // Kits follow the kit spec; `bento policy` follows sbx.
+        case: if r.created_via.starts_with(policy::KIT_VIA) {
+            Case::Sensitive
+        } else {
+            Case::Insensitive
+        },
     };
-    p.validate()?;
-    Ok(p)
+    let mut one = Policy {
+        rules: vec![rule],
+        default: Action::Allow,
+    };
+    one.validate()?;
+    Ok(one.rules.remove(0))
+}
+
+/// The host, in `terminate_hosts` form, that one resource of a request rule maps to; `None` when
+/// the crate can't take it.
+pub fn mapped_host(r: &policy::Rule, res: &Resource) -> Option<String> {
+    let one = Policy {
+        rules: vec![map(r, res).ok()?],
+        default: Action::Allow,
+    };
+    one.terminate_hosts().pop()
 }
 
 /// Whether connection rules alone admit every host and port a bounded allow on `host` names. A
@@ -241,7 +272,7 @@ mod tests {
             path,
             query,
         );
-        let mut got = request_policy(&p, "s1", &[]).unwrap().rules;
+        let mut got = request_policy(&p, "s1", &[]).rules;
         assert_eq!(got.len(), 1);
         got.remove(0)
     }
@@ -318,7 +349,7 @@ mod tests {
             None,
             None,
         );
-        let got = request_policy(&p, "s1", &[]).unwrap().rules;
+        let got = request_policy(&p, "s1", &[]).rules;
         let hosts: Vec<_> = got.iter().map(|r| (r.hosts.clone(), r.port)).collect();
         assert_eq!(
             hosts,
@@ -354,7 +385,7 @@ mod tests {
         let mut p = deny_all();
         add(&mut p, Decision::Deny, "h.com", "added", None, None, None);
         add(&mut p, Decision::Allow, "a.com", "added", None, None, None);
-        let got = request_policy(&p, "s1", &[]).unwrap();
+        let got = request_policy(&p, "s1", &[]);
         assert!(got.rules.is_empty());
         assert_eq!(got.default, Action::Allow);
     }
@@ -372,8 +403,10 @@ mod tests {
             None,
         );
         add(&mut p, Decision::Allow, "h.com", "added", None, None, None);
-        assert!(compile::decide(&p, "s1", &[], false, "h.com:443").allowed);
-        let rp = request_policy(&p, "s1", &[]).unwrap();
+        assert!(
+            compile::decide(&p, "s1", &[], false, "h.com:443", compile::Requests::Mapped).allowed
+        );
+        let rp = request_policy(&p, "s1", &[]);
         let h = HeaderMap::new();
         assert!(rp.request("h.com", 443, "POST", "/", &h).is_err());
         assert!(rp.request("h.com", 443, "GET", "/", &h).is_ok());
@@ -400,7 +433,7 @@ mod tests {
             Some("/B"),
             None,
         );
-        let cases: Vec<_> = (request_policy(&p, "s1", &[]).unwrap().rules.iter())
+        let cases: Vec<_> = (request_policy(&p, "s1", &[]).rules.iter())
             .map(|r| r.case)
             .collect();
         assert_eq!(cases, [Case::Sensitive, Case::Insensitive]);
@@ -435,7 +468,7 @@ mod tests {
             None,
             None,
         );
-        let got = request_policy(&p, "s1", &[]).unwrap().rules;
+        let got = request_policy(&p, "s1", &[]).rules;
         assert_eq!(got.len(), 1);
         assert_eq!(
             got[0].hosts,
@@ -444,6 +477,49 @@ mod tests {
                 any_depth: true
             }]
         );
+    }
+
+    #[test]
+    fn an_unparseable_request_rule_doesnt_disable_the_others() {
+        let mut p = deny_all();
+        add(
+            &mut p,
+            Decision::Deny,
+            "api.x.com",
+            "added",
+            None,
+            Some("/admin/"),
+            None,
+        );
+        add(
+            &mut p,
+            Decision::Allow,
+            "a.com",
+            "added",
+            Some("GET"),
+            Some("//x"),
+            None,
+        );
+        add(
+            &mut p,
+            Decision::Deny,
+            "h.com",
+            "added",
+            Some("POST"),
+            None,
+            None,
+        );
+        let got = request_policy(&p, "s1", &[]).rules;
+        assert_eq!(got.len(), 1);
+        assert_eq!(got[0].hosts, [HostMatch::Exact("h.com".into())]);
+        let r = |res: &str| {
+            (compile::active(&p, Some("s1"), &[]).map(|(r, _)| r))
+                .find(|r| r.resources == [res])
+                .unwrap()
+        };
+        let res = |s: &str| Resource::parse(s).unwrap();
+        assert_eq!(mapped_host(r("api.x.com"), &res("api.x.com")), None);
+        assert_eq!(mapped_host(r("h.com"), &res("h.com")), Some("h.com".into()));
     }
 
     #[test]
@@ -478,11 +554,11 @@ mod tests {
             None,
             None,
         );
-        assert_eq!(request_policy(&p, "s1", &[]).unwrap().rules.len(), 1);
+        assert_eq!(request_policy(&p, "s1", &[]).rules.len(), 1);
     }
 
     fn post_passes(p: &policy::Policy, creds: &[String], host: &str) -> bool {
-        (request_policy(p, "s1", creds).unwrap())
+        request_policy(p, "s1", creds)
             .request(host, 443, "POST", "/", &HeaderMap::new())
             .is_ok()
     }
@@ -500,7 +576,7 @@ mod tests {
             None,
             None,
         );
-        assert!(request_policy(&p, "s1", &[]).unwrap().rules.is_empty());
+        assert!(request_policy(&p, "s1", &[]).rules.is_empty());
         assert!(post_passes(&p, &[], "h.com"));
         // An allow of one port leaves the others to the bounded allow.
         let mut p = deny_all();

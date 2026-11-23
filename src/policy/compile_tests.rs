@@ -667,7 +667,7 @@ fn kit_rules_never_grant_host_access() {
 }
 
 fn decided(p: &Policy, host_access: bool, target: &str) -> Verdict {
-    decide(p, "s1", &[], host_access, target)
+    decide(p, "s1", &[], host_access, target, Requests::Mapped)
 }
 
 #[test]
@@ -800,4 +800,67 @@ fn a_request_deny_still_drops_its_host_for_smolvm_mode() {
             .patterns()
             .is_empty()
     );
+}
+
+/// Adds a request deny on `res` with these qualifiers, as an older version may have stored it.
+fn request_deny(p: &mut Policy, res: &str, path: Option<&str>) {
+    p.insert_rule(
+        None,
+        Decision::Deny,
+        res,
+        "added",
+        Some("POST".into()),
+        path.map(Into::into),
+        None,
+    )
+    .unwrap();
+}
+
+#[test]
+fn an_unmapped_request_deny_stays_host_wide() {
+    // `*`/`**`, a CIDR, a glob and a path the interceptor can't parse: 0.37.0's host-wide deny.
+    for (res, path, target) in [
+        ("**", None, "any.com:443"),
+        ("10.0.0.0/8", None, "10.1.2.3:443"),
+        ("h.com", Some("/admin/"), "h.com:443"),
+    ] {
+        let mut p = policy(Mode::AllowAll);
+        request_deny(&mut p, res, path);
+        let v = decided(&p, false, target);
+        assert!(!v.allowed && !v.implicit, "{res}: {}", v.reason);
+    }
+    // A hosted allow list drops its host too.
+    let mut p = policy(Mode::DenyAll);
+    p.allow(None, "h.com");
+    request_deny(&mut p, "h.com", Some("/admin/"));
+    assert!(
+        list(&network(&p, "s1", &[], false, true))
+            .patterns()
+            .is_empty()
+    );
+}
+
+#[test]
+fn a_request_deny_on_a_non_broad_sandbox_stays_host_wide() {
+    let mut p = policy(Mode::AllowAll);
+    request_deny(&mut p, "h.com", None);
+    let (h, other) = (["h.com".to_string()], ["other.com".to_string()]);
+    let at = |requests| decide(&p, "s1", &[], false, "h.com:443", requests);
+    assert!(!at(Requests::HostWide).allowed);
+    // Decrypted: per request. A host the process doesn't decrypt (ruled since it started): host-wide.
+    assert!(at(Requests::Decrypted(&h)).allowed);
+    assert!(!at(Requests::Decrypted(&other)).allowed);
+    // The gateway is never decrypted.
+    let mut p = policy(Mode::AllowAll);
+    p.allow(None, "localhost");
+    request_deny(&mut p, "localhost:8443", None);
+    let gw = decide(
+        &p,
+        "s1",
+        &[],
+        true,
+        "localhost:8443",
+        Requests::Decrypted(&["localhost".into()]),
+    );
+    assert!(!gw.allowed, "{}", gw.reason);
 }

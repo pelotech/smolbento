@@ -40,7 +40,8 @@ pub fn run<R: Runner>(ctx: &Ctx<R>, name: &str) -> Result<()> {
     // A CA from before request rules is name-constrained: the interceptor refuses to start with a host
     // it doesn't permit, so ruled hosts aren't decrypted and their flows count as uninspectable.
     let mut terminated = hosts.clone();
-    if is_broad(&ca) {
+    let broad = is_broad(&ca);
+    if broad {
         terminated.extend(ruled.iter().cloned());
     } else if !ruled.is_empty() {
         eprintln!(
@@ -51,7 +52,13 @@ pub fn run<R: Runner>(ctx: &Ctx<R>, name: &str) -> Result<()> {
     terminated.dedup();
     // The unit's socket starts the process again on the next connection.
     let restart = Restart::new(ruled, Box::new(|| std::process::exit(0)));
-    let rules = Rules::new(&ctx.paths, name, sb.meta.rec.host_access, hosts);
+    let rules = Rules::new(
+        &ctx.paths,
+        name,
+        sb.meta.rec.host_access,
+        hosts,
+        broad.then(|| terminated.clone()),
+    );
     let config = InterceptorConfig {
         machine: sb.machine,
         policy: policy(label),

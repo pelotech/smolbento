@@ -2,7 +2,7 @@
 
 use crate::config::Paths;
 use crate::policy::Policy;
-use crate::policy::compile::{HOST_GATEWAY, decide};
+use crate::policy::compile::{HOST_GATEWAY, Requests, decide};
 use egress_front::{Decision, Flow};
 use std::net::SocketAddr;
 
@@ -11,6 +11,8 @@ pub struct Rules {
     sandbox: String,
     host_access: bool,
     credential_hosts: Vec<String>,
+    /// The hosts the interceptor decrypts; `None` when its CA predates request rules.
+    decrypted: Option<Vec<String>>,
     paths: Paths,
 }
 
@@ -20,11 +22,13 @@ impl Rules {
         sandbox: &str,
         host_access: bool,
         credential_hosts: Vec<String>,
+        decrypted: Option<Vec<String>>,
     ) -> Rules {
         Rules {
             sandbox: sandbox.to_string(),
             host_access,
             credential_hosts,
+            decrypted,
             paths: paths.clone(),
         }
     }
@@ -43,6 +47,9 @@ impl Rules {
                 &self.credential_hosts,
                 self.host_access,
                 target,
+                self.decrypted
+                    .as_deref()
+                    .map_or(Requests::HostWide, Requests::Decrypted),
             )
         };
         let (allowed, reason) = if flow.ip.to_string() == HOST_GATEWAY {
@@ -161,7 +168,7 @@ mod tests {
         for (rules, host_access, name, ip, port, want) in cases {
             let (_d, p) = test_paths();
             save(&p, rules);
-            let r = Rules::new(&p, SB, *host_access, vec![]);
+            let r = Rules::new(&p, SB, *host_access, vec![], None);
             let f = flow(*name, ip, *port);
             assert_eq!(
                 ask(&r, &f),
@@ -175,7 +182,7 @@ mod tests {
     fn a_host_deny_says_deny_rule() {
         let (_d, p) = test_paths();
         save(&p, &[(true, "**.github.com"), (false, "gist.github.com")]);
-        let r = Rules::new(&p, SB, false, vec![]);
+        let r = Rules::new(&p, SB, false, vec![], None);
         let (d, why) = r.decide(&flow(Some("gist.github.com"), "140.82.1.1", 443));
         assert_eq!(d, Deny);
         assert!(why.contains("deny rule"), "{why}");
@@ -185,7 +192,7 @@ mod tests {
     fn an_unreadable_policy_denies_then_recovers() {
         let (_d, p) = test_paths();
         std::fs::write(p.policy_file(), "mode = [garbage").unwrap();
-        let r = Rules::new(&p, SB, false, vec![]);
+        let r = Rules::new(&p, SB, false, vec![], None);
         for f in [
             flow(None, "192.0.2.1", 443),
             flow(Some("a.com"), "192.0.2.1", 443),
@@ -201,7 +208,7 @@ mod tests {
     #[test]
     fn a_missing_policy_is_the_default() {
         let (_d, p) = test_paths();
-        let r = Rules::new(&p, SB, false, vec![]);
+        let r = Rules::new(&p, SB, false, vec![], None);
         // No mode chosen yet: open, as before policies existed.
         assert_eq!(ask(&r, &flow(Some("example.com"), "192.0.2.1", 443)), Allow);
     }
@@ -210,7 +217,7 @@ mod tests {
     fn a_policy_change_applies_to_the_next_flow() {
         let (_d, p) = test_paths();
         save(&p, &[(true, "github.com")]);
-        let r = Rules::new(&p, SB, false, vec![]);
+        let r = Rules::new(&p, SB, false, vec![], None);
         let f = flow(Some("github.com"), "140.82.1.1", 443);
         assert_eq!(ask(&r, &f), Allow);
         save(&p, &[(false, "github.com")]);

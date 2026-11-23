@@ -88,7 +88,7 @@ fn plan_for<R: Runner>(
         &meta.rec.credential_hosts,
         install_rules.unwrap_or_default(),
         meta.rec.host_access,
-        meta.egress.is_some(),
+        crate::egress::per_request(&ctx.paths, sandbox, meta.egress.is_some()),
     );
     let (env, remove, egress) = match &meta.egress {
         // Secret values stay with bento's interceptor; smolvm gets only its token.
@@ -936,7 +936,7 @@ pub fn push_network_with<R: Runner>(
             sb.name(),
             &sb.meta.rec.credential_hosts,
             sb.meta.rec.host_access,
-            sb.meta.egress.is_some(),
+            crate::egress::per_request(&ctx.paths, sb.name(), sb.meta.egress.is_some()),
         );
         match ctx.vm.update_network(&sb.machine, &network) {
             Ok(()) => updated += 1,
