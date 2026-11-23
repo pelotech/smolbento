@@ -746,6 +746,7 @@ name = "egress-front"
 version = "0.37.0"
 dependencies = [
  "anyhow",
+ "http",
  "smolvm-credentials",
  "smolvm-protocol",
 ]

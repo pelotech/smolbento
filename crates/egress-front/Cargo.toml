@@ -13,5 +13,7 @@ publish = false
 # request-filter hook, ahead of the 1.36.1 binary until the next smolvm release; the binary stays at `smolvm.lock`.
 [dependencies]
 anyhow = "1.0.104"
+# The header type of smolvm-credentials' `RequestInfo` (hyper re-exports it), so a filter passes its headers straight through.
+http = "1.5.0"
 smolvm-credentials = { git = "https://github.com/josmo/smolvm", tag = "bento-main-c5ae3713-hook0d03d418", version = "1.36.1" }
 smolvm-protocol = { git = "https://github.com/josmo/smolvm", tag = "bento-main-c5ae3713-hook0d03d418", version = "1.36.1" }

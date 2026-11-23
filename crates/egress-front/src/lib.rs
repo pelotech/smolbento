@@ -9,8 +9,13 @@ pub use smolvm_protocol::credentials::host_subtree;
 mod listener;
 mod name;
 mod relay;
+mod rules;
 mod serve;
 
 pub use listener::activated_listener;
 pub use relay::{Decide, Decision, Flow};
+pub use rules::{
+    Action, Case, HostMatch, Inspection, Methods, PathGlob, Policy, QueryMatch, Refusal,
+    RequestMatch, Rule, ValueMatch,
+};
 pub use serve::serve;
