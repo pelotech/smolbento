@@ -1282,6 +1282,13 @@ fn network_egress_smolvm_creates_as_before() {
     result.unwrap();
     assert!(req.egress.is_none());
     assert!(!t.ctx.paths.egress("s1").exists());
+    let units = t.ctx.services.units();
+    assert!(
+        units
+            .iter()
+            .all(|(_, k)| *k != crate::host_service::Kind::Egress),
+        "no egress unit: {units:?}"
+    );
     let create = t.create_line();
     assert!(create.contains("--credential"), "{create}");
     assert!(!create.contains("/run/smol/credentials"), "{create}");

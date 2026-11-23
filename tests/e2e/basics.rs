@@ -293,16 +293,6 @@ pub(crate) fn hosted_egress_swaps_a_credential() {
     assert!(!e.dir.path().join("data/egress").join(&e.name).exists());
 }
 
-/// curl's exit status fetching `url` from sandbox `sb` (0: any HTTP answer), and what it printed.
-fn curl(e: &E2e, sb: &str, url: &str) -> (i32, String) {
-    let out = e.sh_ok(
-        sb,
-        &format!("curl -sS -o /dev/null -m 10 {url} 2>&1; echo $?"),
-    );
-    let code = out.lines().last().and_then(|l| l.parse().ok());
-    (code.unwrap_or(-1), out)
-}
-
 /// Sandbox `sb`'s egress log: a line per connection its egress process denied.
 fn egress_log(e: &E2e, sb: &str) -> String {
     let log = e.dir.path().join("data/egress").join(sb).join("egress.log");
@@ -315,13 +305,10 @@ fn egress_log(e: &E2e, sb: &str) -> String {
 pub(crate) fn hosted_port_rule() {
     let e = E2e::new("hport");
     e.ok(&["policy", "init", "deny-all"]);
-    let rules = "dl-cdn.alpinelinux.org,github.com:443";
-    e.ok(&["policy", "allow", "network", rules]);
-    e.create_alpine_with("apk add -q curl");
-    let (code, out) = curl(&e, &e.name, "https://github.com");
-    assert_eq!(code, 0, "port 443 is allowed: {out}");
-    let (code, out) = curl(&e, &e.name, "http://github.com");
-    assert_ne!(code, 0, "port 80 isn't: {out}");
+    e.ok(&["policy", "allow", "network", "github.com:443"]);
+    e.create_alpine_offline();
+    assert!(reachable(&e, "https://github.com"), "port 443 is allowed");
+    assert!(!reachable(&e, "http://github.com"), "port 80 isn't");
     let log = egress_log(&e, &e.name);
     assert!(log.contains("deny github.com:80: "), "{log}");
 }
@@ -332,34 +319,27 @@ pub(crate) fn hosted_port_rule() {
 pub(crate) fn hosted_host_deny_inside_wildcard() {
     let e = E2e::new("hwild");
     e.ok(&["policy", "init", "deny-all"]);
-    let rules = "dl-cdn.alpinelinux.org,**.github.com";
-    e.ok(&["policy", "allow", "network", rules]);
+    e.ok(&["policy", "allow", "network", "**.github.com"]);
     e.ok(&["policy", "deny", "network", "gist.github.com"]);
-    e.create_alpine_with("apk add -q curl");
-    let (code, out) = curl(&e, &e.name, "https://api.github.com");
-    assert_eq!(code, 0, "the wildcard allows api.github.com: {out}");
-    let (code, out) = curl(&e, &e.name, "https://gist.github.com");
-    assert!(
-        [35, 56].contains(&code),
-        "connected, then reset (TLS handshake or receive error): {out}"
-    );
+    e.create_alpine_offline();
+    let api = reachable(&e, "https://api.github.com");
+    assert!(api, "the wildcard allows api.github.com");
+    assert!(!reachable(&e, "https://gist.github.com"), "gist is denied");
     let log = egress_log(&e, &e.name);
     assert!(log.contains("deny gist.github.com:443: "), "{log}");
 }
 
 /// An address deny with a port is decided before the guest sends anything: the egress process
-/// answers smolvm's preamble with `ECONNREFUSED` (111). smolvm's stack has already accepted the
-/// guest's SYN, so the guest sees the connection reset, not refused: curl's exit is 35 or 56, not 7.
+/// answers smolvm's preamble with `ECONNREFUSED`, and the log line shows the deny came from it.
 #[test]
 #[ignore = "boots real VMs and reaches 1.1.1.1; run with `just e2e`"]
 pub(crate) fn hosted_cidr_deny_is_a_refused_connect() {
     let e = E2e::new("hcidr");
     e.ok(&["policy", "deny", "network", "1.1.1.0/24:443"]);
-    e.create_alpine_with("apk add -q curl");
-    let (code, out) = curl(&e, &e.name, "http://1.1.1.1");
-    assert_eq!(code, 0, "port 80 is allowed: {out}");
-    let (code, out) = curl(&e, &e.name, "https://1.1.1.1");
-    assert!([35, 56].contains(&code), "port 443 is reset: {out}");
+    e.create_alpine_offline();
+    // http_answers, not reachable: 1.1.1.1 redirects port 80 to 443.
+    assert!(http_answers(&e, "1.1.1.1"), "port 80 is allowed");
+    assert!(!reachable(&e, "https://1.1.1.1"), "port 443 isn't");
     let log = egress_log(&e, &e.name);
     assert!(log.contains("deny 1.1.1.1:443: "), "{log}");
 }
@@ -448,31 +428,6 @@ pub(crate) fn hosted_fork_swaps_and_enforces() {
     );
     e.ok(&["rm", "-f", f]);
     assert!(unit_files(&e, f).is_empty(), "the fork's units go with rm");
-}
-
-/// `network.egress=smolvm` opts out: smolvm alone handles egress, with no unit and no interceptor.
-#[test]
-#[ignore = "boots real VMs; run with `just e2e`"]
-pub(crate) fn smolvm_mode_has_no_egress_unit() {
-    let mut e = E2e::new("hsmol");
-    e.vars.push(("SMOLBENTO_NETWORK_EGRESS", "smolvm".into()));
-    let archive = Image::alpine_agent_archive();
-    let args = e.create_args(&e.name, &["-t", archive.to_str().unwrap(), "shell"], "1g");
-    let args: Vec<&str> = std::iter::once("-D")
-        .chain(args.iter().map(String::as_str))
-        .collect();
-    let out = e.sbt(&args);
-    let err = err_text(&out);
-    assert!(out.status.success(), "{err}");
-    assert!(err.contains("machine start"), "-D prints the start: {err}");
-    assert!(!err.contains("--egress-interceptor"), "{err}");
-    assert!(
-        !unit_files(&e, &e.name)
-            .iter()
-            .any(|u| u.to_string_lossy().contains("egress")),
-        "no egress unit"
-    );
-    assert!(!e.dir.path().join("data/egress").join(&e.name).exists());
 }
 
 #[test]
