@@ -69,9 +69,8 @@ pub fn run<R: Runner>(ctx: &Ctx<R>, name: &str) -> Result<()> {
         }
         decision
     });
-    serve(listener, token, config, Arc::new(resolver(pairs)), decide).context(
-        "egress interceptor failed to start; if the sandbox was created before 0.38, recreate it",
-    )
+    serve(listener, token, config, Arc::new(resolver(pairs)), decide)
+        .context("egress interceptor failed to start")
 }
 
 /// The log line for a denied flow. The name is the guest's, so it's capped at a DNS name's length
