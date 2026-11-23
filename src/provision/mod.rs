@@ -151,9 +151,14 @@ pub fn ensure_running<R: Runner>(ctx: &Ctx<R>, sb: &mut Sandbox) -> Result<()> {
 }
 
 /// The units a sandbox needs: the bridge, the agent when a runtime phase is granted, and the
-/// egress process when it is hosted.
+/// egress process when it is hosted. A fork's is the egress process only: the others would serve
+/// its parent's sockets (`cli::fork`).
 pub(crate) fn service_kinds(meta: &Meta) -> Vec<Kind> {
     let mut kinds = Vec::new();
+    if meta.fork_of.is_some() {
+        kinds.extend(meta.egress.as_ref().map(|_| Kind::Egress));
+        return kinds;
+    }
     if meta.ssh_agent.as_ref().is_some_and(|a| a.runtime.is_some()) {
         kinds.push(Kind::Agent);
     }
@@ -200,7 +205,8 @@ pub fn restart_egress<R: Runner>(ctx: &Ctx<R>, sb: &Sandbox) -> bool {
 /// Rewrites the units of a sandbox served by them if they differ (a new binary path, a new
 /// `SSH_AUTH_SOCK`), so a stale unit mends itself on next use.
 pub fn refresh_services<R: Runner>(ctx: &Ctx<R>, sb: &Sandbox) {
-    if sb.meta.service {
+    // A fork is `sbx.service=false` for its socket units, but a hosted one has an egress unit.
+    if sb.meta.service || sb.meta.fork_of.is_some() {
         sync_services(ctx, sb.name(), &service_kinds(&sb.meta), &sb.meta);
     }
 }
@@ -456,12 +462,30 @@ pub fn prepare_create<R: Runner>(
                 .extend(mcp.steps);
         }
     }
-    // Before anything is made. Hosted egress swaps values in bento, where an install-only
-    // credential (restarted away after the install hooks) has no way to be withdrawn yet.
-    let hosted = !req.credentials.is_empty() && crate::egress::hosted(&ctx.settings, &req.name)?;
-    if hosted && !req.rec.credential_install.is_empty() {
-        bail!("install-only credentials aren't supported with network.egress=hosted yet");
-    }
+    // A sandbox that can't be hosted falls back to smolvm egress, with the first reason why.
+    let hosted = crate::egress::hosted(&ctx.settings, &req.name)? && {
+        let smolvm_because = if !req.rec.credential_install.is_empty() {
+            // Hosted egress swaps values in bento, where an install-only credential (restarted
+            // away after the install hooks) has no way to be withdrawn yet.
+            Some("install-only credentials need network.egress=smolvm")
+        } else if first_start
+            .as_ref()
+            .is_some_and(|k| !k.steps.install_rules.is_empty())
+        {
+            // The egress process judges by the stored policy, and nothing tells it when the
+            // install hooks run, which alone may use install-phase kit rules.
+            Some("install-phase kit network rules need network.egress=smolvm")
+        } else if ctx.services.plan(&req.name).is_none() {
+            // Without its unit nothing would own the interceptor port, so every connection fails.
+            Some("no service manager for its egress unit")
+        } else {
+            None
+        };
+        if let Some(why) = smolvm_because {
+            crate::warning!("{why}; creating {} with smolvm egress", req.name);
+        }
+        smolvm_because.is_none()
+    };
     if !denies.is_empty() {
         added.extend(crate::policy::notes::add_create_denies(
             &mut policy,
@@ -541,14 +565,6 @@ pub fn prepare_create<R: Runner>(
         eprintln!("{note}");
     }
     if hosted {
-        // Without its unit nothing owns the interceptor port and every connection would fail.
-        if ctx.services.plan(&req.name).is_none() {
-            bail!(
-                "network.egress=hosted needs a service manager (launchd or a private `systemd --user` \
-                 socket directory, and a shorter sandbox name if its socket path is too long); \
-                 unset it or use smolvm"
-            );
-        }
         req.egress = Some(crate::egress::prepare(
             &ctx.paths,
             &req.name,

@@ -279,6 +279,11 @@ fn check_udp_follows_the_rules_except_dns_and_json_has_sbxs_keys() {
     assert_eq!(v["allowed"], true);
     assert_eq!(v["action"], "net:connect:udp");
     assert!(v.get("deny_kind").is_none(), "{v}");
+    let reason = v["reason"].as_str().unwrap();
+    assert!(
+        reason.ends_with("; not from hosted sandboxes, which send no UDP but DNS"),
+        "{reason}"
+    );
     assert_eq!(t.sbt(&[&udp[..], &["github.com:53"]].concat()).unwrap(), 1);
     let v: serde_json::Value = serde_json::from_str(&t.stdout()).unwrap();
     assert_eq!(
@@ -1278,7 +1283,7 @@ fn ls_json_and_yaml_are_sbx_s_rules_document() {
       "origin": "scoped",
       "layer": "local",
       "status": "active",
-      "reason": "example.org:443: port 443 not enforced (all ports allowed)",
+      "reason": "example.org:443: port 443 not enforced by smolvm (all ports allowed; enforced for hosted sandboxes)",
       "editable": true,
       "sandbox_id": "chk-pol",
       "provenance": {{
@@ -1729,8 +1734,8 @@ fn ls_says_each_kit_rule_note_once() {
     );
     assert_eq!(
         json["rules"][0]["reason"],
-        "kit.com:8080: port 8080 not enforced (all ports allowed); method GET not enforced; \
-         path /a not enforced; path /b not enforced"
+        "kit.com:8080: port 8080 not enforced by smolvm (all ports allowed; enforced for hosted \
+         sandboxes); method GET not enforced; path /a not enforced; path /b not enforced"
     );
 }
 

@@ -2,11 +2,14 @@
 //! or as an undo point. smolbento-only (sbx has no fork).
 
 use std::io::Write;
+use std::net::SocketAddr;
 use std::path::Path;
 
 use anyhow::{Context, Result, anyhow, bail};
 
 use super::{Ctx, ForkArgs};
+use crate::egress;
+use crate::host_service::Kind;
 use crate::policy::Policy;
 use crate::provision;
 use crate::sandbox::{self, Sandbox, StartPlan, labels, name};
@@ -51,9 +54,6 @@ pub fn run<R: Runner>(ctx: &mut Ctx<R>, a: &ForkArgs) -> Result<i32> {
 fn check_forkable(sb: &Sandbox) -> Result<()> {
     if sb.meta.fork_of.is_some() {
         bail!("forking a fork isn't supported yet");
-    }
-    if sb.meta.egress.is_some() {
-        bail!("fork isn't supported with network.egress=hosted yet");
     }
     if sb.meta.writable_host_folder() {
         bail!("fork needs a sandbox with no writable host folder; create it with --clone");
@@ -120,7 +120,8 @@ fn add_remote_and_branch<R: Runner>(
         // its own (`bridge::host_socket`): a fork gets no shims at starts, though its processes
         // can still reach the parent's socket while the parent is attached.
         (labels::BRIDGE.to_string(), "false".to_string()),
-        // Nor units: they serve their own sandbox's sockets.
+        // Nor units: they serve their own sandbox's sockets. A hosted fork's egress unit is the
+        // exception (`provision::service_kinds`).
         (labels::SERVICE.to_string(), "false".to_string()),
     ];
     // Nor an SSH agent: an empty label reads as none (smolvm can't remove an inherited one).
@@ -134,17 +135,37 @@ fn add_remote_and_branch<R: Runner>(
         ("SANDBOX_VM_ID".to_string(), fork.to_string()),
         ("SANDBOX_ID".to_string(), sandbox::env::new_uuid()),
     ];
-    let result = ctx
-        .vm
-        .branch(
-            &parent.machine,
-            &name::machine_name(fork),
-            &labels,
-            &vars,
-            &start.env,
-            &start.remove,
-        )
-        .map_err(|e| branch_hint(e, parent.name()));
+    let hosted = parent.meta.egress.as_ref();
+    // The fork's token is a copy of the parent's, so the parent's start env serves it too.
+    let result = (|| {
+        let egress = match hosted {
+            Some(label) => {
+                let label = fork_egress(ctx, parent.name(), fork, label)?;
+                labels.push((labels::EGRESS.to_string(), label.to_label()));
+                Some(SocketAddr::from(([127, 0, 0, 1], label.port)))
+            }
+            None => None,
+        };
+        ctx.vm
+            .branch(
+                &parent.machine,
+                &name::machine_name(fork),
+                &labels,
+                &vars,
+                &start.env,
+                &start.remove,
+                egress,
+            )
+            .map_err(|e| branch_hint(e, parent.name()))
+    })();
+    if result.is_err() && hosted.is_some() {
+        if let Err(e) = ctx.services.remove(fork) {
+            crate::warning!("removing {fork}'s egress unit: {e:#}");
+        }
+        if let Err(e) = egress::forget(&ctx.paths, fork) {
+            crate::warning!("removing {fork}'s egress state: {e:#}");
+        }
+    }
     if result.is_err()
         && added
         && let Some(r) = repo
@@ -153,6 +174,27 @@ fn add_remote_and_branch<R: Runner>(
         crate::warning!("removing the sandbox-{fork} remote: {e:#}");
     }
     result
+}
+
+/// A hosted fork's egress: its parent's CA and token under its own name, on its own port, served by
+/// its unit, loaded now as smolvm fails closed without a listener. Returns its label.
+fn fork_egress<R: Runner>(
+    ctx: &Ctx<R>,
+    parent: &str,
+    fork: &str,
+    label: &egress::Label,
+) -> Result<egress::Label> {
+    let label = egress::copy_for_fork(&ctx.paths, parent, fork, label)?;
+    ctx.services
+        .sync(
+            fork,
+            &[Kind::Egress],
+            Some(label.port),
+            &ctx.paths,
+            &ctx.env,
+        )
+        .context("loading its egress unit")?;
+    Ok(label)
 }
 
 /// smolvm's not-branchable and backing-chain errors (`src/agent/fork.rs` in smolvm), in bento terms.
@@ -174,9 +216,13 @@ fn branch_hint(e: anyhow::Error, parent: &str) -> anyhow::Error {
 
 #[cfg(test)]
 mod tests {
+    use std::cell::RefCell;
+    use std::rc::Rc;
+
+    use crate::egress::{self, Label};
     use crate::policy::Policy;
     use crate::secrets::{SecretEntry, SecretsFile, Source, scope_for};
-    use crate::smolvm::SmolvmError;
+    use crate::smolvm::{Credential, SmolvmError};
     use crate::testutil::*;
 
     const NOT_BRANCHABLE: &str = "agent operation failed: fork: machine 'sbx-a' was not started \
@@ -425,7 +471,7 @@ mod tests {
 
     #[test]
     fn refusals_make_no_branch() {
-        let cases: [Refusal; 5] = [
+        let cases: [Refusal; 4] = [
             (
                 &[("sbx.workspace", "/w/p"), ("sbx.workspaces", "[\"/w/p\"]")],
                 &["fork", "a"],
@@ -440,11 +486,6 @@ mod tests {
                 &[("sbx.fork-of", "x")],
                 &["fork", "a"],
                 "forking a fork isn't supported yet",
-            ),
-            (
-                &[("sbx.egress", r#"{"port":47331,"bindings":[]}"#)],
-                &["fork", "a"],
-                "fork isn't supported with network.egress=hosted yet",
             ),
             (
                 &[],
@@ -653,5 +694,107 @@ mod tests {
         assert!(!p.sandboxes.contains_key("a-fork-2"));
         assert_eq!(remote(&repo, "a-fork-1", "url"), "file:///sbt/a-fork-1");
         assert_eq!(remote(&repo, "a-fork-2", "url"), "");
+    }
+
+    /// `a` as a running hosted sandbox with one credential, and its egress state on disk.
+    fn hosted_parent(t: &TestEnv) -> Label {
+        let creds = [Credential {
+            env_var: "GH_TOKEN".into(),
+            hosts: vec!["api.github.com".into()],
+            set_header: None,
+        }];
+        let label = egress::prepare(&t.ctx.paths, "a", &creds).unwrap().label;
+        parent(t, "running", &[("sbx.egress", &label.to_label())]);
+        label
+    }
+
+    const FORK_UNIT: &str = "load dev.smolbento.ns1.a-fork-1.egress";
+
+    #[test]
+    fn forks_a_hosted_sandbox() {
+        let mut t = test_env(&[]);
+        let (ctl, _tmp) = with_services(&mut t);
+        let parent_label = hosted_parent(&t);
+        // What the service manager had loaded when smolvm branched: it fails closed without a listener.
+        let at_branch = Rc::new(RefCell::new(Vec::new()));
+        let (seen, c) = (at_branch.clone(), ctl.clone());
+        t.runner().during(&["machine", "branch"], move |_| {
+            *seen.borrow_mut() = c.calls()
+        });
+        assert_eq!(t.sbt(&["fork", "a"]).unwrap(), 0);
+
+        let line = t.calls_of("machine branch").pop().unwrap();
+        let json = line
+            .split(" --label sbx.egress=")
+            .nth(1)
+            .and_then(|r| r.split(' ').next())
+            .expect("an sbx.egress label");
+        let label = Label::from_label(json).unwrap();
+        assert_eq!(
+            label.bindings, parent_label.bindings,
+            "the guest holds the parent's placeholders"
+        );
+        assert!(
+            line.contains(&format!(
+                "-n sbx-a-fork-1 --egress-interceptor 127.0.0.1:{} ",
+                label.port
+            )),
+            "{line}"
+        );
+        let token = egress::token(&t.ctx.paths, "a-fork-1").unwrap();
+        assert_eq!(token, egress::token(&t.ctx.paths, "a").unwrap());
+        let env = t.runner().envs().last().unwrap().clone();
+        assert!(env.contains(&("SMOLVM_INTERCEPTOR_TOKEN".to_string(), token.clone())));
+        assert!(t.calls().iter().all(|c| !c.contains(&token)));
+        assert!(line.contains("--label sbx.service=false"), "{line}");
+
+        assert!(
+            at_branch.borrow().iter().any(|c| c == FORK_UNIT),
+            "{:?}",
+            at_branch.borrow()
+        );
+        // Its only unit is egress: the bridge and agent ones would serve the parent's sockets.
+        let units = t.ctx.services.units();
+        assert_eq!(units.len(), 1, "{units:?}");
+        assert_eq!(units[0].0, "a-fork-1");
+        assert!(ctl.calls().iter().all(|c| !c.contains("a-fork-1.bridge")));
+    }
+
+    #[test]
+    fn a_failed_branch_removes_the_forks_unit_and_dir() {
+        let mut t = test_env(&[]);
+        let (ctl, _tmp) = with_services(&mut t);
+        hosted_parent(&t);
+        t.runner()
+            .fail(&["machine", "branch"], "SMOLVM_ERROR", "boom");
+        let err = format!("{:#}", t.sbt(&["fork", "a"]).unwrap_err());
+        assert_eq!(err, "forking a as a-fork-1: smolvm: boom");
+        assert!(
+            ctl.calls().iter().any(|c| c == FORK_UNIT),
+            "{:?}",
+            ctl.calls()
+        );
+        assert!(t.ctx.services.units().is_empty());
+        assert!(!t.ctx.paths.egress("a-fork-1").exists());
+        assert!(t.ctx.paths.egress("a").join("token").exists());
+    }
+
+    #[test]
+    fn a_hosted_parent_without_its_ca_fails_before_branching() {
+        let mut t = test_env(&[]);
+        let (ctl, _tmp) = with_services(&mut t);
+        hosted_parent(&t);
+        // Its token stays (the parent's start plan reads it); its CA is gone.
+        std::fs::remove_dir_all(t.ctx.paths.egress("a").join("ca")).unwrap();
+        let err = format!("{:#}", t.sbt(&["fork", "a"]).unwrap_err());
+        assert!(err.contains("has no CA"), "{err}");
+        assert!(branches(&t).is_empty());
+        assert!(
+            ctl.calls().iter().all(|c| !c.contains("a-fork-1")),
+            "{:?}",
+            ctl.calls()
+        );
+        assert!(t.ctx.services.units().is_empty());
+        assert!(!t.ctx.paths.egress("a-fork-1").exists());
     }
 }

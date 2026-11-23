@@ -71,9 +71,7 @@ pub fn main(args: impl IntoIterator<Item = OsString>) -> Result<i32> {
     let args: Vec<OsString> = args.into_iter().collect();
     // Under launchd inetdCompatibility, fds 0/1/2 all start attached to the untrusted guest socket:
     // detach stdout/stderr before clap, config loading, or error printing can write to them.
-    let serve_conn = if args.get(1).is_some_and(|a| a == "_serve")
-        && !args.iter().skip(2).any(|a| a == "-h" || a == "--help")
-    {
+    let serve_conn = if serve::takes_connection(&args) {
         Some(serve::take_connection()?)
     } else {
         None

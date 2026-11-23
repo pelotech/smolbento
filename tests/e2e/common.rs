@@ -32,7 +32,11 @@ impl E2e {
             real_kits: Default::default(),
         };
         smolbento::agents::write_stand_ins(&e.dir.path().join("agent-kits")).unwrap();
-        e.ok(&["policy", "init", "allow-all"]);
+        // What `policy init allow-all` saves, without its push to every running sandbox in the
+        // shared smolvm home: other tests' sandboxes among them.
+        let config = e.dir.path().join("config");
+        std::fs::create_dir_all(&config).unwrap();
+        std::fs::write(config.join("policy.toml"), "mode = \"allow-all\"\n").unwrap();
         e
     }
 

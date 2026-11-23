@@ -1101,21 +1101,18 @@ fn egress_env(
 ) -> (TestEnv, crate::host_service::fake::FakeControl) {
     let mut env = env.to_vec();
     env.push(("SMOLBENTO_NETWORK_EGRESS", egress));
-    let mut t = test_env(&env);
-    // A hosted sandbox needs its egress unit: a fake service manager under a short temp dir.
-    let tmp = tempfile::Builder::new()
-        .prefix("sbe")
-        .tempdir_in("/tmp")
-        .unwrap();
-    let (services, ctl) = crate::host_service::fake::services(
-        tmp.path(),
-        crate::host_service::Flavor::Launchd,
-        "ns1",
-    );
-    t.ctx.services = services;
+    let (t, ctl) = service_env(&env);
+    save_secret(&t, "github", None, "gh-123");
+    (t, ctl)
+}
+
+/// An env with a fake service manager where `s1` can be created with no secret, under `env`.
+fn service_env(env: &[(&str, &str)]) -> (TestEnv, crate::host_service::fake::FakeControl) {
+    let mut t = test_env(env);
+    // A hosted sandbox needs its egress unit.
+    let (ctl, tmp) = with_services(&mut t);
     std::mem::forget(tmp);
     set_policy(&t, "mode = \"deny-all\"");
-    save_secret(&t, "github", None, "gh-123");
     let fake = t.runner();
     fake.fail(&["machine", "status"], "NOT_FOUND", "vm not found");
     fake.once_ok(
@@ -1198,24 +1195,50 @@ fn an_install_agent_grant_doesnt_hold_back_the_egress_unit() {
 }
 
 #[test]
-fn a_hosted_create_is_refused_when_no_egress_unit_can_be_installed() {
-    // The test context has no service manager.
-    let t = test_env(&[("SMOLBENTO_NETWORK_EGRESS", "hosted")]);
+fn no_service_manager_falls_back_to_smolvm() {
+    // The default (hosted), and a test context with no service manager.
+    let t = test_env(&[]);
     set_policy(&t, "mode = \"deny-all\"");
     save_secret(&t, "github", None, "gh-123");
     let mut req = CreateRequest {
         name: "s1".into(),
         ..Default::default()
     };
-    let e = prepare_create(&t.ctx, &mut req, &[], None)
-        .unwrap_err()
-        .to_string();
-    assert!(
-        e.contains("network.egress=hosted needs a service manager"),
-        "{e}"
-    );
+    prepare_create(&t.ctx, &mut req, &[], None).unwrap();
     assert!(req.egress.is_none());
     assert!(!t.ctx.paths.egress("s1").exists());
+    let spec = sandbox::create::spec(&req);
+    assert!(!spec.labels.contains_key("sbx.egress"));
+    // smolvm swaps the credential, as with network.egress=smolvm.
+    assert!(!spec.credentials.is_empty());
+}
+
+#[test]
+fn a_sandbox_without_credentials_is_hosted() {
+    // The default setting, with a service manager and no secret.
+    let (t, _) = service_env(&[]);
+    let mut req = CreateRequest {
+        name: "s1".into(),
+        ..Default::default()
+    };
+    create_with(&t.ctx, &mut req, &[], None, None, &mut |_| {}).unwrap();
+    let label = &req.egress.as_ref().expect("hosted").label;
+    assert!(label.bindings.is_empty());
+    let starts = t.calls_of("machine start");
+    assert!(
+        starts[0].contains(&format!("--egress-interceptor 127.0.0.1:{}", label.port)),
+        "{starts:?}"
+    );
+    let token = crate::egress::token(&t.ctx.paths, "s1").unwrap();
+    assert_eq!(
+        t.runner().envs().last().unwrap(),
+        &vec![("SMOLVM_INTERCEPTOR_TOKEN".to_string(), token)]
+    );
+    // Nothing is terminated, so the guest gets no CA and no trust variables.
+    let create = t.create_line();
+    assert!(!create.contains("/run/smol/credentials"), "{create}");
+    assert!(!create.contains("SSL_CERT_FILE"), "{create}");
+    assert!(create.contains("sbx.egress="), "{create}");
 }
 
 #[test]
@@ -1254,30 +1277,18 @@ fn a_hosted_create_gives_a_bound_variable_only_its_placeholder() {
 }
 
 #[test]
-fn a_hosted_create_without_credentials_is_a_smolvm_create() {
-    let t = test_env(&[("SMOLBENTO_NETWORK_EGRESS", "hosted")]);
-    set_policy(&t, "mode = \"deny-all\"");
-    let mut req = CreateRequest {
-        name: "s1".into(),
-        ..Default::default()
-    };
-    prepare_create(&t.ctx, &mut req, &[], None).unwrap();
-    assert!(req.egress.is_none());
-    assert!(!t.ctx.paths.egress("s1").exists());
-    let spec = sandbox::create::spec(&req);
-    assert!(!spec.labels.contains_key("sbx.egress"));
-    assert!(
-        spec.mounts
-            .iter()
-            .all(|m| m.guest != "/run/smol/credentials")
-    );
-}
-
-#[test]
-fn a_smolvm_create_is_unchanged() {
+fn network_egress_smolvm_creates_as_before() {
     let (t, req, result) = egress_create("smolvm", |_| {});
     result.unwrap();
     assert!(req.egress.is_none());
+    assert!(!t.ctx.paths.egress("s1").exists());
+    let units = t.ctx.services.units();
+    assert!(
+        units
+            .iter()
+            .all(|(_, k)| *k != crate::host_service::Kind::Egress),
+        "no egress unit: {units:?}"
+    );
     let create = t.create_line();
     assert!(create.contains("--credential"), "{create}");
     assert!(!create.contains("/run/smol/credentials"), "{create}");
@@ -1291,16 +1302,57 @@ fn a_smolvm_create_is_unchanged() {
 }
 
 #[test]
-fn install_only_credentials_are_refused_when_hosted() {
-    let (t, _, result) = egress_create("hosted", |r| {
+fn install_only_credentials_fall_back_to_smolvm() {
+    let (t, req, result) = egress_create("hosted", |r| {
         r.rec.credential_install = vec!["GH_TOKEN".into()];
     });
-    assert_eq!(
-        result.unwrap_err().to_string(),
-        "install-only credentials aren't supported with network.egress=hosted yet"
-    );
-    assert!(!t.made("machine create"));
+    result.unwrap();
+    assert!(req.egress.is_none());
     assert!(!t.ctx.paths.egress("s1").exists());
+    let create = t.create_line();
+    assert!(create.contains("--credential"), "{create}");
+    assert!(!create.contains("sbx.egress"), "{create}");
+    assert!(
+        t.calls_of("machine start")
+            .iter()
+            .all(|l| !l.contains("--egress-interceptor"))
+    );
+}
+
+/// The egress process judges by the stored policy, where install-phase kit rules apply only while
+/// the install hooks run; nothing tells it when they do.
+#[test]
+fn install_phase_kit_rules_fall_back_to_smolvm() {
+    use crate::kits::args::ArgValues;
+    use crate::kits::model::{Cap, CapBody, Content, Kind, Kit, NetRule, Rules};
+    let (t, _ctl) = egress_env("hosted", &[]);
+    let mut wl = Kit::test("wl", Kind::Workload);
+    wl.content = Content::Image("img:1".into());
+    let mut k = Kit::test("k", Kind::Mixin);
+    k.caps = vec![Cap::new(
+        "com.docker.sandbox/network-policy@2".to_string(),
+        false,
+        CapBody::Network {
+            install: Rules {
+                allow: vec![NetRule::host("registry.npmjs.org")],
+                deny: vec![],
+            },
+            runtime: Rules::default(),
+        },
+    )];
+    let plan = crate::kits::resolve::resolve(wl, vec![k], &ArgValues::default()).unwrap();
+    let mut req = CreateRequest {
+        name: "s1".into(),
+        ..Default::default()
+    };
+    create_with(&t.ctx, &mut req, &[], Some(&plan), None, &mut |_| {}).unwrap();
+    assert!(req.egress.is_none());
+    assert!(!t.ctx.paths.egress("s1").exists());
+    assert!(
+        t.calls_of("machine start")
+            .iter()
+            .all(|l| !l.contains("--egress-interceptor"))
+    );
 }
 
 #[test]

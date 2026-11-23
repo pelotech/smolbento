@@ -1,8 +1,9 @@
 //! Hosted egress: bento runs the interceptor that swaps a sandbox's credentials.
 
+pub mod rules;
 pub mod serve;
 mod state;
-pub use state::{Prepared, forget, load_ca, policy, prepare, token};
+pub use state::{Prepared, copy_for_fork, forget, load_ca, policy, prepare, token};
 
 use crate::config::Settings;
 use crate::sandbox::name;
@@ -74,8 +75,13 @@ mod tests {
     }
 
     #[test]
+    fn hosted_is_the_default() {
+        assert!(hosted(&settings(None), "w").unwrap());
+        assert!(!hosted(&settings(None), "_builder").unwrap());
+    }
+
+    #[test]
     fn egress_setting_accepts_smolvm_and_hosted_only() {
-        assert!(!hosted(&settings(None), "w").unwrap());
         assert!(!hosted(&settings(Some("smolvm")), "w").unwrap());
         assert!(hosted(&settings(Some("hosted")), "w").unwrap());
         let e = hosted(&settings(Some("bogus")), "w").unwrap_err();

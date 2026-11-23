@@ -658,3 +658,54 @@ fn kit_rules_never_grant_host_access() {
         .unwrap();
     assert!(host_access(&p, "s1"));
 }
+
+fn decided(p: &Policy, host_access: bool, target: &str) -> Verdict {
+    decide(p, "s1", &[], host_access, target)
+}
+
+#[test]
+fn decide_enforces_a_port() {
+    let mut p = policy(Mode::DenyAll);
+    p.allow(None, "github.com:443");
+    assert!(decided(&p, false, "github.com:443").allowed);
+    let v = decided(&p, false, "github.com:22");
+    assert!(!v.allowed && v.implicit, "{}", v.reason);
+}
+
+#[test]
+fn decide_enforces_a_host_deny_under_allow_all() {
+    let mut p = policy(Mode::AllowAll);
+    p.deny(None, "evil.example");
+    let v = decided(&p, false, "evil.example:443");
+    assert!(!v.allowed && !v.implicit, "{}", v.reason);
+    assert!(decided(&p, false, "good.example:443").allowed);
+}
+
+#[test]
+fn decide_one_label_is_not_any_depth() {
+    let mut p = policy(Mode::DenyAll);
+    p.allow(None, "*.x.com");
+    assert!(decided(&p, false, "a.x.com:443").allowed);
+    assert!(!decided(&p, false, "a.b.x.com:443").allowed);
+    assert!(!decided(&p, false, "x.com:443").allowed);
+}
+
+#[test]
+fn decide_localhost_port_opens_only_that_port() {
+    let mut p = policy(Mode::DenyAll);
+    p.allow(None, "localhost:8080");
+    assert!(decided(&p, true, "localhost:8080").allowed);
+    assert!(!decided(&p, true, "localhost:9090").allowed);
+    let v = decided(&p, false, "localhost:8080");
+    assert!(!v.allowed && v.implicit);
+}
+
+#[test]
+fn decide_ignores_smolvm_widening() {
+    let p = policy(Mode::Balanced);
+    let t = "ocsp.digicert.com";
+    let v = check(&p, Some("s1"), &[], None, t);
+    assert!(v.allowed && v.reason.contains("smolvm still allows"));
+    let v = decided(&p, false, t);
+    assert!(!v.allowed && v.implicit, "{}", v.reason);
+}

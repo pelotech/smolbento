@@ -4,7 +4,7 @@ use super::{Binding, Label};
 use crate::config::{Paths, Symlink, write_atomic};
 use crate::sandbox::{name, options::free_port};
 use crate::smolvm::Credential;
-use anyhow::{Context, Result};
+use anyhow::{Context, Result, bail};
 use egress_front::{CredentialPolicy, MachineCa, generate_placeholders, host_subtree};
 use std::collections::BTreeSet;
 use std::os::unix::fs::PermissionsExt;
@@ -13,8 +13,8 @@ use std::path::PathBuf;
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct Prepared {
     pub label: Label,
-    /// The CA's guest-facing half, mounted at `/run/smol/credentials`.
-    pub ca_guest_dir: PathBuf,
+    /// The CA's guest-facing half, mounted at `/run/smol/credentials`; `None` without credentials.
+    pub ca_guest_dir: Option<PathBuf>,
 }
 
 pub fn prepare(paths: &Paths, sandbox: &str, creds: &[Credential]) -> Result<Prepared> {
@@ -29,7 +29,11 @@ pub fn prepare(paths: &Paths, sandbox: &str, creds: &[Credential]) -> Result<Pre
         .flat_map(|c| &c.hosts)
         .map(|h| host_subtree(h).to_string())
         .collect();
-    let hosts: Vec<String> = hosts.into_iter().collect();
+    let mut hosts: Vec<String> = hosts.into_iter().collect();
+    if hosts.is_empty() {
+        // A CA needs a permitted host; `invalid` never resolves, so this one can sign for nothing real.
+        hosts.push("invalid".into());
+    }
     let machine = name::machine_name(sandbox);
     let ca = MachineCa::generate(&machine, &hosts)?;
     ca.save(&dir.join("ca"))?;
@@ -62,8 +66,42 @@ pub fn prepare(paths: &Paths, sandbox: &str, creds: &[Credential]) -> Result<Pre
     }
     Ok(Prepared {
         label,
-        ca_guest_dir: MachineCa::guest_dir(&dir.join("ca")),
+        // Nothing is terminated without a binding, so the guest needs no CA.
+        ca_guest_dir: (!creds.is_empty()).then(|| MachineCa::guest_dir(&dir.join("ca"))),
     })
+}
+
+/// A fork's egress state: a copy of its parent's CA and token, which the copied guest memory already
+/// trusts and holds, and the parent's label (its placeholders) on a port of its own. Nothing is left
+/// under the fork's name on failure.
+pub fn copy_for_fork(
+    paths: &Paths,
+    parent: &str,
+    fork: &str,
+    parent_label: &Label,
+) -> Result<Label> {
+    let (from, to) = (paths.egress(parent), paths.egress(fork));
+    if !MachineCa::exists(&from.join("ca")) {
+        bail!("{parent} has no CA in {}; recreate it", from.display());
+    }
+    forget(paths, fork)?;
+    let copied = (|| {
+        std::fs::create_dir_all(&to).with_context(|| format!("creating {}", to.display()))?;
+        std::fs::set_permissions(&to, std::fs::Permissions::from_mode(0o700))?;
+        // The CA and token only: the parent's egress.log stays its own.
+        std::fs::create_dir(to.join("ca"))?;
+        crate::skills::store::copy_tree(&from.join("ca"), &to.join("ca"))?;
+        // `fs::copy` keeps the 0600 mode.
+        std::fs::copy(from.join("token"), to.join("token")).context("copying the token")?;
+        Ok(Label {
+            port: free_port()?,
+            ..parent_label.clone()
+        })
+    })();
+    if copied.is_err() {
+        let _ = forget(paths, fork);
+    }
+    copied
 }
 
 pub fn token(paths: &Paths, sandbox: &str) -> Result<String> {
@@ -146,8 +184,21 @@ mod tests {
         assert_eq!(t.len(), 64);
         assert!(t.bytes().all(|b| b.is_ascii_hexdigit()));
         assert!(load_ca(&p, "w").unwrap().permits("api.github.com"));
-        assert!(got.ca_guest_dir.starts_with(&dir));
+        assert!(got.ca_guest_dir.unwrap().starts_with(&dir));
         assert!(got.label.port > 0);
+    }
+
+    #[test]
+    fn prepare_without_credentials_constrains_the_ca_to_invalid() {
+        let d = tempfile::tempdir().unwrap();
+        let p = paths(d.path());
+        let got = prepare(&p, "w", &[]).unwrap();
+        assert!(got.label.bindings.is_empty());
+        assert_eq!(got.ca_guest_dir, None);
+        assert_eq!(token(&p, "w").unwrap().len(), 64);
+        let ca = load_ca(&p, "w").unwrap();
+        assert!(ca.permits("invalid"));
+        assert!(!ca.permits("example.com"));
     }
 
     #[test]
@@ -173,6 +224,43 @@ mod tests {
             .len(),
             2
         );
+    }
+
+    #[test]
+    fn copy_for_fork_keeps_the_ca_and_token_and_takes_a_new_port() {
+        let d = tempfile::tempdir().unwrap();
+        let p = paths(d.path());
+        let parent = prepare(&p, "a", &[cred("GH_TOKEN", "api.github.com", None)])
+            .unwrap()
+            .label;
+        // A stale fork directory is replaced, not merged.
+        std::fs::create_dir_all(p.egress("b")).unwrap();
+        std::fs::write(p.egress("b").join("stale"), "x").unwrap();
+        let got = copy_for_fork(&p, "a", "b", &parent).unwrap();
+        assert_eq!(got.bindings, parent.bindings);
+        assert!(got.port > 0);
+        assert_eq!(token(&p, "b").unwrap(), token(&p, "a").unwrap());
+        let (a, b) = (load_ca(&p, "a").unwrap(), load_ca(&p, "b").unwrap());
+        assert_eq!(a.certificate_pem(), b.certificate_pem());
+        assert!(b.permits("api.github.com"));
+        let dir = p.egress("b");
+        assert!(!dir.join("stale").exists());
+        assert_eq!(mode(&dir), 0o700);
+        assert_eq!(mode(&dir.join("token")), 0o600);
+        assert_eq!(mode(&dir.join("ca").join("ca.key")), 0o600);
+        assert!(p.egress("a").join("token").exists(), "the parent's stays");
+    }
+
+    #[test]
+    fn copy_for_fork_without_the_parent_dir_fails_and_leaves_nothing() {
+        let d = tempfile::tempdir().unwrap();
+        let p = paths(d.path());
+        let label = Label {
+            port: 1,
+            bindings: vec![],
+        };
+        assert!(copy_for_fork(&p, "a", "b", &label).is_err());
+        assert!(!p.egress("b").exists());
     }
 
     #[test]

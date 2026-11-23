@@ -163,20 +163,22 @@ impl Resource {
     }
 
     /// How smolvm enforces this more loosely than sbx would, if it does. smolvm can't limit a
-    /// host to some ports: an allow opens every port, and a deny with a port isn't applied (denying
-    /// the whole host would block the ports it leaves open), except that it cancels an allow with
-    /// exactly the same text. An allow of `*.x` becomes smolvm's `*.x`, which matches any depth.
+    /// host to some ports (a hosted sandbox's egress process can): an allow opens every port, and
+    /// a deny with a port isn't applied (denying the whole host would block the ports it leaves
+    /// open), except that it cancels an allow with exactly the same text. An allow of `*.x` becomes smolvm's `*.x`, which matches any depth.
     pub fn note(&self, deny: bool) -> Option<String> {
         let mut notes = Vec::new();
         match self.port {
             Some(p) if deny => {
                 return Some(format!(
-                    "port {p} not enforced (deny not applied, except that it cancels an allow \
-                     of exactly {})",
+                    "port {p} not enforced by smolvm (deny not applied, except that it cancels \
+                     an allow of exactly {}; enforced for hosted sandboxes)",
                     self.raw
                 ));
             }
-            Some(p) => notes.push(format!("port {p} not enforced (all ports allowed)")),
+            Some(p) => notes.push(format!(
+                "port {p} not enforced by smolvm (all ports allowed; enforced for hosted sandboxes)"
+            )),
             None => {}
         }
         match &self.pattern {
@@ -554,8 +556,8 @@ mod tests {
         );
         assert_eq!(
             r("a.com:8443").note(true).unwrap(),
-            "port 8443 not enforced (deny not applied, except that it cancels an allow of \
-             exactly a.com:8443)"
+            "port 8443 not enforced by smolvm (deny not applied, except that it cancels an \
+             allow of exactly a.com:8443; enforced for hosted sandboxes)"
         );
         assert!(
             r("crl*.digicert.com")
@@ -566,7 +568,8 @@ mod tests {
         assert_eq!(r("*.x.com").note(false).unwrap(), "matches any depth");
         assert_eq!(
             r("*.x.com:8443").note(false).unwrap(),
-            "port 8443 not enforced (all ports allowed); matches any depth"
+            "port 8443 not enforced by smolvm (all ports allowed; enforced for hosted sandboxes); \
+             matches any depth"
         );
         assert_eq!(r("**.x.com").note(false), None);
     }

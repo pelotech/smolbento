@@ -15,11 +15,14 @@ you add a `localhost` rule.
 ### Host services (`localhost` rules)
 
 `bento policy allow network [--sandbox NAME] localhost[:PORT]` lets sandboxes reach your localhost as
-`host.docker.internal`. smolvm can't open a single host port yet, so a rule opens more than it
+`host.docker.internal`. A hosted sandbox (the default, see [Hosted
+egress](network-and-secrets.md#hosted-egress)) reaches only the ports the rules name: its egress
+process judges every connection to the gateway as `localhost:<port>`. smolvm can't open a single
+host port yet, so for a sandbox created with `network.egress=smolvm` a rule opens more than it
 names:
 
 - The rule opens every port on your `127.0.0.1` (not `::1`) to the sandboxes it applies to.
-  `policy allow` warns about this each time.
+  `policy allow` warns about this each time, for hosted sandboxes too.
 - A sandbox gets host access only if a `localhost` allow rule applies to it at create. Any other
   sandbox keeps your loopback blocked for its life, and a later rule doesn't open it. `policy allow`
   names those sandboxes.
@@ -43,8 +46,17 @@ reachable. `balanced` and `deny-all` block that unless you allow the address.
 - Secrets are placeholders inside the sandbox. A real value goes only to that service's hosts, and
   only over HTTPS. A secret's hosts and their subdomains are always reachable from sandboxes that
   bind it.
-- Host rules are looser than sbx's. `*.x.com` matches any depth, wildcards inside a label widen,
-  and ports, methods and paths aren't enforced. See [sbx compatibility](sbx-compatibility.md).
+- A hosted sandbox enforces host rules and ports by the name each connection sends (see [Hosted
+  egress](network-and-secrets.md#hosted-egress)), so they stop cooperative clients, not a hostile
+  agent. It can escape them three ways:
+  - send nothing for 200 ms before its name is in;
+  - send an allowed host's name (SNI or `Host:`) to any address smolvm admits, which is every
+    address under `allow-all` (domain fronting, or a server that ignores SNI);
+  - split its TLS ClientHello across records, or pad it past 16 KiB, so the connection has no name.
+
+  With `network.egress=smolvm`, host rules are
+  looser than sbx's: `*.x.com` matches any depth, wildcards inside a label widen, and ports aren't
+  enforced. Methods and paths are never enforced. See [sbx compatibility](sbx-compatibility.md).
 
 ## Kits
 

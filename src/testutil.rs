@@ -269,6 +269,24 @@ impl TestEnv {
     }
 }
 
+/// Gives the test's context a fake service manager under a short temp dir (socket paths are
+/// limited to ~104 bytes); returns its control and the temp dir, whose `units` holds the unit files.
+pub fn with_services(
+    t: &mut TestEnv,
+) -> (crate::host_service::fake::FakeControl, tempfile::TempDir) {
+    let tmp = tempfile::Builder::new()
+        .prefix("sbs")
+        .tempdir_in("/tmp")
+        .unwrap();
+    let (s, ctl) = crate::host_service::fake::services(
+        tmp.path(),
+        crate::host_service::Flavor::Launchd,
+        "ns1",
+    );
+    t.ctx.services = s;
+    (ctl, tmp)
+}
+
 /// Replaces policy.toml.
 pub fn set_policy(t: &TestEnv, toml: &str) {
     std::fs::write(t.ctx.paths.policy_file(), toml).unwrap();

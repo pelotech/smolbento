@@ -213,8 +213,8 @@ pub const SETTINGS: &[SettingDef] = &[
     SettingDef {
         key: "network.egress",
         env: "SMOLBENTO_NETWORK_EGRESS",
-        default: "smolvm",
-        help: "Who swaps credentials on egress: smolvm (built in) or hosted (a bento-run interceptor, experimental).",
+        default: "hosted",
+        help: "Who handles a sandbox's egress: hosted or smolvm. Some sandboxes fall back to smolvm; see Hosted egress in docs/network-and-secrets.md.",
     },
     SettingDef {
         key: "ssh.agentForwardingEnabled",
