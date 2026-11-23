@@ -268,6 +268,12 @@ pub(crate) const POLICY_PROMPT: &str = "  Choose the network policy for sandboxe
     3. Locked Down   all network traffic blocked unless you allow it
   Choice [1-3, default 2]: ";
 
+/// Whether `name` may get hosted egress, as known before its kits are resolved: the setting, and a
+/// service manager for its egress unit. Its kits can still make it fall back (see `prepare_create`).
+pub fn may_host<R: Runner>(ctx: &Ctx<R>, name: &str) -> Result<bool> {
+    Ok(crate::egress::hosted(&ctx.settings, name)? && ctx.services.plan(name).is_some())
+}
+
 /// The policy, asking for a network policy the first time one is needed (sbx behaviour).
 pub fn ensure_policy<R: Runner>(ctx: &Ctx<R>) -> Result<Policy> {
     let mut policy = Policy::load(&ctx.paths)?;
@@ -488,6 +494,15 @@ pub fn prepare_create<R: Runner>(
         }
         smolvm_because.is_none()
     };
+    // Kits are resolved for hosted egress when it may be used (`may_host`); a fallback found
+    // since leaves their request rules unenforced, so refuse them before anything is made.
+    if !hosted && let Some(kit) = kits.and_then(Plan::request_rules_kit) {
+        bail!(
+            "kit {kit}: network-policy@2 method/path rules need hosted egress, and {} falls back \
+             to smolvm egress",
+            req.name
+        );
+    }
     if !denies.is_empty() {
         added.extend(crate::policy::notes::add_create_denies(
             &mut policy,

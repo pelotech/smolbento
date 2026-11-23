@@ -564,7 +564,8 @@ mod tests {
         assert_eq!(v2.kind, v3.kind);
         let merged = |k: Kit| {
             let args = crate::kits::args::ArgValues::default();
-            let p = crate::kits::resolve::resolve_for(k, vec![], &args, "/w/repo", &[]).unwrap();
+            let p =
+                crate::kits::resolve::resolve_for(k, vec![], &args, "/w/repo", &[], false).unwrap();
             assert!(
                 !p.merged.install_hooks.is_empty(),
                 "the fixture has install hooks"
@@ -762,7 +763,8 @@ mod tests {
             ..Kit::new("w", Kind::Workload, Source::Local("w".into()))
         };
         let args = crate::kits::args::ArgValues::default();
-        let p = crate::kits::resolve::resolve_for(w, vec![k], &args, "/w/repo", &[]).unwrap();
+        let p =
+            crate::kits::resolve::resolve_for(w, vec![k], &args, "/w/repo", &[], false).unwrap();
         let files: Vec<(&str, &[u8])> = p
             .merged
             .files
@@ -795,7 +797,8 @@ mod tests {
             ..Kit::new("w", Kind::Workload, Source::Local("w".into()))
         };
         let args = crate::kits::args::ArgValues::default();
-        let p = crate::kits::resolve::resolve_for(w, vec![k], &args, "/w/repo", &[]).unwrap();
+        let p =
+            crate::kits::resolve::resolve_for(w, vec![k], &args, "/w/repo", &[], false).unwrap();
         assert!(!p.merged.install_hooks[0].1.clean_env);
     }
 
@@ -809,7 +812,8 @@ mod tests {
             ..Kit::new("w", Kind::Workload, Source::Local("w".into()))
         };
         let args = crate::kits::args::ArgValues::default();
-        let p = crate::kits::resolve::resolve_for(w, vec![k], &args, "/w/repo", &[]).unwrap();
+        let p =
+            crate::kits::resolve::resolve_for(w, vec![k], &args, "/w/repo", &[], false).unwrap();
         assert_eq!(p.merged.files[0].path, "/w/repo/notes/a.md");
     }
 

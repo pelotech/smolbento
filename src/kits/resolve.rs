@@ -88,6 +88,21 @@ impl Plan {
         }
     }
 
+    /// A kit whose `network-policy@2` request rules were kept: the plan was resolved for hosted
+    /// egress, which alone enforces them.
+    pub fn request_rules_kit(&self) -> Option<&str> {
+        self.merged
+            .network
+            .iter()
+            .find(|k| {
+                [&k.install, &k.runtime]
+                    .iter()
+                    .flat_map(|r| r.allow.iter().chain(&r.deny))
+                    .any(is_qualified)
+            })
+            .map(|k| k.kit.as_str())
+    }
+
     /// The same, without the `warning: ` prefix.
     pub fn skipped_warnings(&self) -> Vec<String> {
         self.skipped
@@ -392,20 +407,24 @@ pub fn without_dockerd(kit: &mut Kit) -> Result<Vec<Skipped>> {
     Ok(skipped)
 }
 
-/// `resolve_for` without a sandbox, for checking kits: `WORKSPACE` is `NO_SANDBOX_WORKDIR`.
+/// `resolve_for` without a sandbox, for checking kits: `WORKSPACE` is `NO_SANDBOX_WORKDIR`, and
+/// egress is smolvm's.
 pub fn resolve(workload: Kit, mixins: Vec<Kit>, args: &ArgValues) -> Result<Plan> {
-    resolve_for(workload, mixins, args, NO_SANDBOX_WORKDIR, &[])
+    resolve_for(workload, mixins, args, NO_SANDBOX_WORKDIR, &[], false)
 }
 
 /// Resolves the kits for a sandbox whose working directory in the guest is `workdir`: v2's
 /// `files/workspace` and `${WORKDIR}` expand to it as `${{ kit.env.WORKSPACE }}`. `create_env` is
-/// the create's own environment (`-e`), which `${{ kit.env.* }}` reads last.
+/// the create's own environment (`-e`), which `${{ kit.env.* }}` reads last. `hosted`: the sandbox
+/// may use hosted egress, which enforces `network-policy@2` request rules, unless the kits make it
+/// fall back to smolvm's (`falls_back`).
 pub fn resolve_for(
     workload: Kit,
     mixins: Vec<Kit>,
     args: &ArgValues,
     workdir: &str,
     create_env: &[(String, String)],
+    hosted: bool,
 ) -> Result<Plan> {
     if workload.kind != Kind::Workload {
         bail!(
@@ -438,8 +457,13 @@ pub fn resolve_for(
     let mut skipped = Vec::new();
     for k in &mut all {
         expand_caps(k, &kit_args[&k.name], &env_map).with_context(|| format!("kit {}", k.name))?;
+    }
+    // Before groups are selected, so a group the selection drops still counts: refusing a request
+    // rule a hosted sandbox could have had is safe, the reverse isn't.
+    let hosted = hosted && !all.iter().flat_map(|k| &k.caps).any(falls_back);
+    for k in &mut all {
         check_skill_caps(k)?;
-        skipped.extend(select_groups(k)?);
+        skipped.extend(select_groups(k, hosted)?);
     }
     check_lifecycle_conflicts(&all, workdir)?;
 
@@ -472,7 +496,7 @@ pub fn resolve_for(
                     });
                 }
                 CapBody::Network { install, runtime } => {
-                    let (install, runtime, skip) = enforceable(k, cap, install, runtime)?;
+                    let (install, runtime, skip) = enforceable(k, cap, install, runtime, hosted)?;
                     skipped.extend(skip);
                     merged.network.push(KitRules {
                         kit: k.name.clone(),
@@ -631,7 +655,7 @@ fn merge_env<'a>(
 /// SPEC-v3 §7.1.1: a group is selected only when smolbento can apply every member as asked. A
 /// rejected optional group is skipped whole; a rejected required one refuses the kit. The answer
 /// is a static list of what smolbento supports, which the spec allows.
-fn select_groups(k: &mut Kit) -> Result<Vec<Skipped>> {
+fn select_groups(k: &mut Kit, hosted: bool) -> Result<Vec<Skipped>> {
     let mut rejected = Vec::new();
     let mut skipped = Vec::new();
     for c in &k.caps {
@@ -639,7 +663,9 @@ fn select_groups(k: &mut Kit) -> Result<Vec<Skipped>> {
         if rejected.contains(&g.index) {
             continue;
         }
-        let Some(why) = unsupported(c) else { continue };
+        let Some(why) = unsupported(c, hosted) else {
+            continue;
+        };
         rejected.push(g.index);
         if !c.optional {
             bail!(
@@ -681,18 +707,70 @@ fn group_skip(kit: &str, g: &Group, ty: &str, reason: &'static str) -> Skipped {
     }
 }
 
-/// Whether smolbento can provide `c` as asked: `resolve` fails a required one it can't.
+/// Whether smolbento can provide `c` as asked under smolvm egress: `resolve` fails a required one
+/// it can't.
 pub fn supported(c: &Cap) -> bool {
-    unsupported(c).is_none()
+    unsupported(c, false).is_none()
 }
 
-/// Why smolbento can't apply `c` as asked, if it can't.
-fn unsupported(c: &Cap) -> Option<&'static str> {
+/// Why smolbento can't apply `c` as asked, if it can't. `hosted` as for `resolve_for`.
+fn unsupported(c: &Cap, hosted: bool) -> Option<&'static str> {
     match c.body {
         CapBody::Unsupported => Some("is not supported by smolbento"),
-        _ if qualified(c) => Some("has method/path rules, which smolbento doesn't enforce"),
+        _ if qualified(c) && !(hosted && unenforceable(c).is_none()) => {
+            Some("has method/path rules, which smolbento doesn't enforce")
+        }
         _ => None,
     }
+}
+
+/// What makes a sandbox fall back to smolvm egress (see `provision`): install-phase network rules,
+/// or an install-only credential. A credential the user also has stays at runtime and doesn't, but
+/// that isn't known here.
+fn falls_back(c: &Cap) -> bool {
+    match &c.body {
+        CapBody::Network { install, .. } => *install != Rules::default(),
+        CapBody::Credential(r) => r.install && !r.runtime,
+        _ => false,
+    }
+}
+
+/// The first of a `network-policy@2` capability's request rules that hosted egress can't
+/// enforce, and why: one on `*`, or a bounded allow on a host glob.
+fn unenforceable(c: &Cap) -> Option<String> {
+    use crate::policy::{Decision, rules::Resource};
+    let CapBody::Network { install, runtime } = &c.body else {
+        return None;
+    };
+    let rules = [install, runtime].into_iter().flat_map(|r| {
+        (r.allow.iter().map(|n| (Decision::Allow, n)))
+            .chain(r.deny.iter().map(|n| (Decision::Deny, n)))
+    });
+    for (decision, n) in rules.filter(|(_, n)| is_qualified(n)) {
+        let method = (!n.methods.is_empty()).then(|| n.methods.join(","));
+        let paths: Vec<Option<&str>> = if n.paths.is_empty() {
+            vec![None]
+        } else {
+            n.paths.iter().map(|p| Some(p.as_str())).collect()
+        };
+        let checked = Resource::parse(&n.host)
+            .map_err(|e| format!("{e:#}"))
+            .and_then(|res| {
+                paths.iter().try_for_each(|path| {
+                    crate::egress::request_rules::check(
+                        decision,
+                        std::slice::from_ref(&res),
+                        method.as_deref(),
+                        *path,
+                        None,
+                    )
+                })
+            });
+        if let Err(e) = checked {
+            return Some(format!("rule on {}: {e}", n.host));
+        }
+    }
+    None
 }
 
 /// A `network-policy@2` capability with a method or path rule.
@@ -711,25 +789,33 @@ fn is_qualified(n: &NetRule) -> bool {
     !n.methods.is_empty() || !n.paths.is_empty()
 }
 
-/// What of a kit's network rules smolbento can enforce: hosts, not methods or paths. A
-/// `network-policy@2` capability with method or path qualifiers is refused, or, when optional,
-/// downgraded to host-only (with a `Skipped` note): allows widen to their host, and qualified
-/// denies are dropped, since widening one would block the whole host, the opposite of what the
-/// kit asked for.
+/// What of a kit's network rules smolbento can enforce. Hosted egress (`hosted`) enforces
+/// `network-policy@2` method and path qualifiers; smolvm's enforces hosts only. A capability whose
+/// qualifiers can't be enforced is refused, or, when optional, downgraded to host-only (with a
+/// `Skipped` note): allows widen to their host, and qualified denies are dropped, since widening
+/// one would block the whole host, the opposite of what the kit asked for.
 fn enforceable(
     k: &Kit,
     cap: &Cap,
     install: &Rules,
     runtime: &Rules,
+    hosted: bool,
 ) -> Result<(Rules, Rules, Option<Skipped>)> {
     if !qualified(cap) {
         return Ok((install.clone(), runtime.clone(), None));
     }
+    let why = if hosted { unenforceable(cap) } else { None };
+    if hosted && why.is_none() {
+        return Ok((install.clone(), runtime.clone(), None));
+    }
     if !cap.optional {
-        bail!(
-            "kit {}: network-policy@2 method/path rules are not enforced by smolbento",
-            k.name
-        );
+        match why {
+            Some(why) => bail!("kit {}: network-policy@2 {why}", k.name),
+            None => bail!(
+                "kit {}: network-policy@2 method/path rules are not enforced by smolbento",
+                k.name
+            ),
+        }
     }
     let host_only = |r: &Rules| Rules {
         allow: r

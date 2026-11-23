@@ -343,7 +343,8 @@ pub(crate) fn kit_plan<R: Runner>(
             skipped.extend(crate::kits::resolve::without_dockerd(k)?);
         }
     }
-    let mut plan = resolve_for(workload, mixins, &args, &req.workdir(), &req.env)?;
+    let hosted = crate::provision::may_host(ctx, &req.name)?;
+    let mut plan = resolve_for(workload, mixins, &args, &req.workdir(), &req.env, hosted)?;
     plan.skipped.extend(skipped);
     if let Some(t) = &req.rec.template {
         let layered = crate::kits::compose::layered_names(&plan)?;

@@ -574,7 +574,8 @@ fn add_running<R: Runner>(
         });
     // The image's `Env` and the create's `-e` aren't kept with the sandbox: `${{ kit.env.* }}`
     // reads the kits' exports only here.
-    let plan = resolve_for(workload, mixins, values, &sb.workdir(), &[])?;
+    let hosted = sb.meta.egress.is_some();
+    let plan = resolve_for(workload, mixins, values, &sb.workdir(), &[], hosted)?;
     plan.warn_skipped();
 
     // In memory until approved.

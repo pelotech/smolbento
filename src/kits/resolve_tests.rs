@@ -905,6 +905,7 @@ fn v2_workspace_files_and_workdir_expand_to_the_workdir() {
         &ArgValues::default(),
         "/w/repo",
         &[],
+        false,
     )
     .unwrap();
     assert_eq!(
@@ -1433,6 +1434,7 @@ fn kit_env_reads_the_image_then_exports_then_the_create() {
             &ArgValues::default(),
             "/w",
             &create,
+            false,
         )
         .unwrap();
         String::from_utf8(p.merged.files[0].content.clone()).unwrap()
@@ -1444,6 +1446,86 @@ fn kit_env_reads_the_image_then_exports_then_the_create() {
     // smolbento sets these in the guest, whatever the create or a kit says.
     let k = mixin(false, "HOME");
     let home = vec![("HOME".to_string(), "/elsewhere".to_string())];
-    let p = resolve_for(w.clone(), vec![k], &ArgValues::default(), "/w", &home).unwrap();
+    let p = resolve_for(
+        w.clone(),
+        vec![k],
+        &ArgValues::default(),
+        "/w",
+        &home,
+        false,
+    )
+    .unwrap();
     assert_eq!(p.merged.files[0].content, b"/home/agent");
+}
+
+const NP2: &str = "com.docker.sandbox/network-policy@2";
+
+fn bounded(host: &str, methods: &[&str], paths: &[&str]) -> NetRule {
+    NetRule {
+        host: host.into(),
+        methods: methods.iter().map(|s| s.to_string()).collect(),
+        paths: paths.iter().map(|s| s.to_string()).collect(),
+    }
+}
+
+fn np2(install: Rules, runtime: Rules) -> CapBody {
+    CapBody::Network { install, runtime }
+}
+
+fn hosted(w: Kit, m: Vec<Kit>) -> Result<Plan> {
+    resolve_for(w, m, &ArgValues::default(), NO_SANDBOX_WORKDIR, &[], true)
+}
+
+#[test]
+fn a_hosted_kit_keeps_its_request_rules() {
+    let rules = Rules {
+        allow: vec![bounded("api.a.com", &["GET", "POST"], &["/v1/**", "/v2"])],
+        deny: vec![bounded("**.a.com", &["DELETE"], &[])],
+    };
+    let k = mixin("m").cap(NP2, false, np2(Rules::default(), rules.clone()));
+    let p = hosted(workload("w"), vec![k]).unwrap();
+    assert!(p.skipped.is_empty(), "{:?}", p.skipped);
+    assert_eq!(runtime(&p), rules);
+
+    // A host no request rule can bound: a required capability fails, an optional one is
+    // downgraded as under smolvm egress.
+    let everything = Rules {
+        allow: vec![],
+        deny: vec![bounded("**", &["POST"], &[])],
+    };
+    let req = mixin("m").cap(NP2, false, np2(Rules::default(), everything.clone()));
+    let e = hosted(workload("w"), vec![req]).unwrap_err();
+    assert_eq!(
+        format!("{e:#}"),
+        "kit m: network-policy@2 rule on **: request rules need a named host"
+    );
+    let opt = mixin("m").cap(NP2, true, np2(Rules::default(), everything));
+    let p = hosted(workload("w"), vec![opt]).unwrap();
+    assert_eq!(
+        p.skipped,
+        ["m: network-policy@2 method/path (host-only; 1 qualified deny rule dropped)"]
+    );
+    assert!(runtime(&p).deny.is_empty());
+}
+
+#[test]
+fn a_smolvm_kit_still_refuses_required_request_rules() {
+    let rules = Rules {
+        allow: vec![bounded("api.a.com", &["GET"], &[])],
+        deny: vec![],
+    };
+    let not_enforced = "kit m: network-policy@2 method/path rules are not enforced by smolbento";
+    let k = mixin("m").cap(NP2, false, np2(Rules::default(), rules.clone()));
+    let e = run(workload("w"), vec![k]).unwrap_err();
+    assert_eq!(format!("{e:#}"), not_enforced);
+    // Install-phase rules (here another kit's) make the sandbox fall back to smolvm egress, so a
+    // hosted resolve refuses too.
+    let k = mixin("m").cap(NP2, false, np2(Rules::default(), rules));
+    let install = Rules {
+        allow: vec![rule("registry.npmjs.org")],
+        deny: vec![],
+    };
+    let other = mixin("i").cap(NP2, false, np2(install, Rules::default()));
+    let e = hosted(workload("w"), vec![k, other]).unwrap_err();
+    assert_eq!(format!("{e:#}"), not_enforced);
 }
