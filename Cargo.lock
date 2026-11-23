@@ -750,8 +750,6 @@ dependencies = [
  "rcgen",
  "rustls",
  "rustls-pemfile",
- "rustls-pki-types",
- "rustls-webpki",
  "serde_json",
  "smolvm-credentials",
  "smolvm-protocol",
