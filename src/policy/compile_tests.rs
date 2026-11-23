@@ -720,21 +720,19 @@ fn decide_ignores_smolvm_widening() {
 #[test]
 fn a_request_deny_no_longer_denies_its_host() {
     let mut p = policy(Mode::AllowAll);
-    p.add_rule(
-        None,
-        Decision::Deny,
-        "h.com",
-        "added",
-        Some("POST".into()),
-        None,
-    )
-    .unwrap();
+    request_deny(&mut p, "h.com", None);
     assert!(decided(&p, false, "h.com:443").allowed);
     assert!(decided(&p, false, "h.com:22").allowed);
     assert_eq!(check(&p, None, &[], None, "h.com").reason, "allow-all mode");
     // A plain deny still does.
     p.deny(None, "h.com");
     assert!(!decided(&p, false, "h.com:443").allowed);
+    // The gateway is never decrypted.
+    let mut p = policy(Mode::AllowAll);
+    p.allow(None, "localhost");
+    request_deny(&mut p, "localhost:8443", None);
+    let gw = decided(&p, true, "localhost:8443");
+    assert!(!gw.allowed, "{}", gw.reason);
 }
 
 #[test]
@@ -759,47 +757,19 @@ fn bounded_allow_still_admits_its_host() {
 }
 
 #[test]
-fn a_request_deny_keeps_its_host_in_a_hosted_allow_list() {
+fn a_request_deny_keeps_its_host_in_a_hosted_allow_list_only() {
     let mut p = policy(Mode::DenyAll);
     p.allow(None, "h.com");
-    p.add_rule(
-        None,
-        Decision::Deny,
-        "h.com",
-        "added",
-        Some("POST".into()),
-        None,
-    )
-    .unwrap();
-    let spec = network(&p, "s1", &[], false, true);
-    assert_eq!(list(&spec).patterns(), ["h.com"]);
-    // A plain deny still drops it.
+    request_deny(&mut p, "h.com", None);
+    let patterns = |p: &Policy, hosted| {
+        list(&network(p, "s1", &[], false, hosted))
+            .patterns()
+            .to_vec()
+    };
+    assert_eq!(patterns(&p, true), ["h.com"]);
+    assert!(patterns(&p, false).is_empty(), "smolvm's egress drops it");
     p.deny(None, "h.com");
-    assert!(
-        list(&network(&p, "s1", &[], false, true))
-            .patterns()
-            .is_empty()
-    );
-}
-
-#[test]
-fn a_request_deny_still_drops_its_host_for_smolvm_mode() {
-    let mut p = policy(Mode::DenyAll);
-    p.allow(None, "h.com");
-    p.add_rule(
-        None,
-        Decision::Deny,
-        "h.com",
-        "added",
-        Some("POST".into()),
-        None,
-    )
-    .unwrap();
-    assert!(
-        list(&network(&p, "s1", &[], false, false))
-            .patterns()
-            .is_empty()
-    );
+    assert!(patterns(&p, true).is_empty(), "a plain deny drops it");
 }
 
 /// Adds a request deny on `res` with these qualifiers, as an older version may have stored it.
@@ -857,17 +827,4 @@ fn an_unmapped_request_allow_denies_its_host() {
     .unwrap();
     let v = decided(&p, false, "h.com:443");
     assert!(!v.allowed && !v.implicit, "{}", v.reason);
-}
-
-#[test]
-fn a_request_deny_acts_per_request_except_on_the_gateway() {
-    let mut p = policy(Mode::AllowAll);
-    request_deny(&mut p, "h.com", None);
-    assert!(decided(&p, false, "h.com:443").allowed);
-    // The gateway is never decrypted.
-    let mut p = policy(Mode::AllowAll);
-    p.allow(None, "localhost");
-    request_deny(&mut p, "localhost:8443", None);
-    let gw = decided(&p, true, "localhost:8443");
-    assert!(!gw.allowed, "{}", gw.reason);
 }
