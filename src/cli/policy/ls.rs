@@ -46,8 +46,6 @@ pub(super) struct LsRule {
     method: Option<String>,
     #[serde(skip)]
     path: Option<String>,
-    #[serde(skip)]
-    query: Option<String>,
 }
 
 #[derive(Serialize)]
@@ -87,7 +85,6 @@ impl LsRule {
             },
             method: None,
             path: None,
-            query: None,
         }
     }
 
@@ -180,7 +177,6 @@ fn ls_rule(rule: &Rule, scope: Option<&str>) -> LsRule {
         }),
         method: rule.method.clone(),
         path: rule.path.clone(),
-        query: rule.query.clone(),
         ..LsRule::global(&rule.id, rule.decision, rule.resources.clone())
     }
 }
@@ -217,7 +213,6 @@ fn kit_rule(sandbox: &str, decision: Decision, rules: &[&Rule]) -> LsRule {
         editable: false,
         method: None,
         path: None,
-        query: None,
         ..ls_rule(rules[0], Some(sandbox))
     }
 }
@@ -479,8 +474,7 @@ fn wrap(text: &str, width: usize) -> Vec<String> {
 }
 
 /// sbx's `--wide` table: a row per rule, with a line per resource (sorted) and a blank line
-/// between rules. STATUS is there only when some rule has more than `active` to say, and QUERY
-/// only when some rule has a query (sbx has no such column); STATUS wraps
+/// between rules. STATUS is there only when some rule has more than `active` to say; it wraps
 /// at sbx's width. Unlike `table`, lines keep their padding, as sbx's do.
 fn render_wide(rows: &[LsRule]) -> String {
     let head = [
@@ -494,7 +488,6 @@ fn render_wide(rows: &[LsRule]) -> String {
         "TYPE",
         "METHOD",
         "PATH",
-        "QUERY",
         "DECISION",
         "PROTOCOLS",
         "STATUS",
@@ -534,7 +527,6 @@ fn render_wide(rows: &[LsRule]) -> String {
                 first(r.resource_type.to_string()),
                 each(dash(r.method.as_deref())),
                 each(dash(r.path.as_deref())),
-                each(dash(r.query.as_deref())),
                 first(r.decision.name().to_string()),
                 first(r.protocols().join(",")),
                 status.get(n).cloned().unwrap_or_default(),
@@ -542,17 +534,10 @@ fn render_wide(rows: &[LsRule]) -> String {
             ]);
         }
     }
-    // sbx's 14 columns, unless a rule has something for STATUS or (smolbento's) QUERY. STATUS
-    // goes first: it's after QUERY, so removing it leaves QUERY's index as it was.
-    for (column, unused) in [
-        ("STATUS", rows.iter().all(|r| r.reason.is_none())),
-        ("QUERY", rows.iter().all(|r| r.query.is_none())),
-    ] {
-        if unused {
-            let at = head.iter().position(|h| *h == column).expect("a column");
-            for line in &mut lines {
-                line.remove(at);
-            }
+    if rows.iter().all(|r| r.reason.is_none()) {
+        let status = head.iter().position(|h| *h == "STATUS").expect("a column");
+        for line in &mut lines {
+            line.remove(status);
         }
     }
     aligned(&lines).iter().map(|l| format!("{l}\n")).collect()

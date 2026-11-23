@@ -1978,7 +1978,7 @@ fn policy_allow_takes_query() {
 }
 
 #[test]
-fn ls_says_where_request_rules_are_enforced_and_shows_a_query_column() {
+fn ls_says_where_request_rules_are_enforced() {
     let mut t = test_env(&[]);
     set_policy(&t, "mode = \"deny-all\"");
     t.sbt(&[
@@ -1986,20 +1986,12 @@ fn ls_says_where_request_rules_are_enforced_and_shows_a_query_column() {
     ])
     .unwrap();
     t.stdout();
-    let wide = ls(&mut t, &["--type", "http", "--wide"]);
-    assert!(wide.contains("   PATH   QUERY   DECISION   "), "{wide}");
-    assert!(
-        wide.contains("   GET      -      v=1     allow   "),
-        "{wide}"
-    );
     let json = ls(&mut t, &["--type", "http", "--json"]);
     let json: serde_json::Value = serde_json::from_str(&json).unwrap();
     assert_eq!(
         json["rules"][0]["reason"],
         "method GET, query v=1 enforced for hosted sandboxes"
     );
-    // No listed rule has a query: sbx's columns.
-    assert!(!ls(&mut t, &["--type", "network", "--wide"]).contains("QUERY"));
 }
 
 #[test]
