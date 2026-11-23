@@ -305,9 +305,14 @@ pub fn root_sh<'a>(machine: &'a str, script: &'a str) -> [&'a str; 10] {
     ]
 }
 
-/// `machine status --json` output for a smolbento sandbox.
+/// `machine status --json` output for a smolbento sandbox, with a credential binding for each
+/// `sbx.credential-env` variable, as smolvm lists them.
 pub fn machine_json(machine: &str, state: &str, labels: &[(&str, &str)]) -> String {
     let labels: BTreeMap<&str, &str> = labels.iter().copied().collect();
+    let credentials: Vec<_> = (labels.get("sbx.credential-env").into_iter())
+        .flat_map(|vars| vars.split(','))
+        .map(|v| serde_json::json!({"name": v.to_lowercase(), "variable": v, "hosts": []}))
+        .collect();
     serde_json::json!({
         "name": machine,
         "state": state,
@@ -315,6 +320,7 @@ pub fn machine_json(machine: &str, state: &str, labels: &[(&str, &str)]) -> Stri
         "labels": labels,
         "created_at": 999_000,
         "published_ports": [],
+        "credentials": credentials,
     })
     .to_string()
 }

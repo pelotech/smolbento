@@ -1425,20 +1425,21 @@ fn a_start_fails_closed_when_a_hosted_sandbox_lost_its_label() {
         ))
         .unwrap()
     };
-    let sb = Sandbox::from_machine(&machine(r#","credentials":[]"#)).unwrap();
-    let e = start_plan(&t.ctx, &sb.meta).unwrap_err().to_string();
-    assert!(e.contains("has no sbx.egress label"), "{e}");
-    assert!(t.runner().envs().is_empty());
-    // Bindings listed, or a smolvm that doesn't say: a smolvm-mode start as before.
-    for creds in [
-        r#","credentials":[{"name":"gh_token","variable":"GH_TOKEN","hosts":["api.github.com"]}]"#,
-        "",
-    ] {
+    // No bindings listed, or none reported at all.
+    for creds in [r#","credentials":[]"#, ""] {
         let sb = Sandbox::from_machine(&machine(creds)).unwrap();
-        let plan = start_plan(&t.ctx, &sb.meta).unwrap();
-        assert!(plan.egress.is_none());
-        assert!(plan.env.iter().any(|(_, v)| v == "gh-123"));
+        let e = start_plan(&t.ctx, &sb.meta).unwrap_err().to_string();
+        assert!(e.contains("has no sbx.egress label"), "{e}");
     }
+    assert!(t.runner().envs().is_empty());
+    // Bindings listed: a smolvm-mode start.
+    let sb = Sandbox::from_machine(&machine(
+        r#","credentials":[{"name":"gh_token","variable":"GH_TOKEN","hosts":["api.github.com"]}]"#,
+    ))
+    .unwrap();
+    let plan = start_plan(&t.ctx, &sb.meta).unwrap();
+    assert!(plan.egress.is_none());
+    assert!(plan.env.iter().any(|(_, v)| v == "gh-123"));
 }
 
 /// `wl` plus a mixin `k` with a required runtime `network-policy@2` capability: an allow of GET
