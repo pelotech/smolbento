@@ -6,11 +6,13 @@
 smolvm_upstream := "https://github.com/smol-machines/smolvm"
 smolvm_fork := "git@github.com:josmo/smolvm.git"
 
-# Tag BASE (default: the release in smolvm.lock) plus the request-filter hook on josmo/smolvm, and point egress-front at it
-smolvm-fork base="":
+# Point egress-front at the tag for BASE (default: the release in smolvm.lock) plus the request-filter hook on josmo/smolvm.
+# A missing tag is only created and pushed with `push` as the second argument.
+smolvm-fork base="" push="":
     #!/usr/bin/env bash
     set -euo pipefail
     base="{{ base }}"
+    push="{{ push }}"
     [ -n "$base" ] || base="v$(sed -n 's/^version = "\(.*\)"/\1/p' smolvm.lock)"
     root=$PWD
     work=$(mktemp -d)
@@ -31,6 +33,10 @@ smolvm-fork base="":
         echo "$tag already on the fork"
         git fetch -q {{ smolvm_fork }} "refs/tags/$tag:refs/tags/$tag"
     else
+        if [ "$push" != push ]; then
+            echo "$tag is not on the fork: run \`just smolvm-fork ${base} push\` to create and push it" >&2
+            exit 1
+        fi
         # the https .gitmodules, until upstream's uses https
         if grep -q 'git@github.com:' .gitmodules; then
             git cherry-pick https >/dev/null
@@ -40,7 +46,7 @@ smolvm-fork base="":
             exit 1
         }
         git tag "$tag"
-        git push -q {{ smolvm_fork }} "refs/tags/$tag"
+        GIT_LFS_SKIP_PUSH=1 git push -q {{ smolvm_fork }} "refs/tags/$tag"
         echo "pushed $tag"
     fi
     git checkout -q "$tag"
@@ -50,4 +56,15 @@ smolvm-fork base="":
     rm crates/egress-front/Cargo.toml.bak
     # the git CLI, so a url.insteadOf rewrite to ssh authenticates as git itself does
     CARGO_NET_GIT_FETCH_WITH_CLI=true cargo update -q -p smolvm-credentials -p smolvm-protocol
+    # flake.nix pins the checkout's hash: write a dummy, build, and take the hash nix reports
+    dummy=sha256-AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA=
+    sed -i.bak -E "s#(\"smolvm-(credentials|protocol)-[0-9.]+\" = )\"sha256-[^\"]*\"#\1\"$dummy\"#" flake.nix
+    rm flake.nix.bak
+    hash=$(nix build --no-link .#default 2>&1 | sed -n 's/^ *got: *//p' | head -1 || true)
+    if [ -z "$hash" ]; then
+        echo "error: nix reported no hash; set the two smolvm-* outputHashes in flake.nix by hand" >&2
+        exit 1
+    fi
+    sed -i.bak "s#$dummy#$hash#g" flake.nix
+    rm flake.nix.bak
     echo "egress-front now uses josmo/smolvm $tag (crates $version); run just test"

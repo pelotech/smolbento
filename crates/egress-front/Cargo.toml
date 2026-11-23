@@ -9,7 +9,8 @@ publish = false
 
 # Stopgap until smolvm's request-filter hook is released and smolvm-credentials is on crates.io: a tag on the fork
 # that is a smolvm base plus the hook (and an https .gitmodules). `just smolvm-fork [BASE]` makes it and updates
-# these lines; BASE defaults to the release in smolvm.lock.
+# these lines; BASE defaults to the release in smolvm.lock. Currently the tag is smolvm main plus the
+# request-filter hook, ahead of the 1.36.1 binary until the next smolvm release; the binary stays at `smolvm.lock`.
 [dependencies]
 anyhow = "1.0.104"
 smolvm-credentials = { git = "https://github.com/josmo/smolvm", tag = "bento-main-c5ae3713-hook0d03d418", version = "1.36.1" }

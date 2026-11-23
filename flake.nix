@@ -70,9 +70,9 @@
                 "russh-cryptovec-0.62.0" = "sha256-4972RiU0ayW6snBUsJ2ju3yR9dwsGBeaKwOWsJrmprA=";
                 "russh-util-0.52.0" = "sha256-4972RiU0ayW6snBUsJ2ju3yR9dwsGBeaKwOWsJrmprA=";
                 "pageant-0.2.5" = "sha256-4972RiU0ayW6snBUsJ2ju3yR9dwsGBeaKwOWsJrmprA=";
-                # Temporary: smolvm crates from a fork branch until smolvm-credentials is on crates.io.
-                "smolvm-credentials-1.36.1" = "sha256-Nr8b2JwuWC67ioBqPKhDUrsRaqNruvX/HtP8cPnGcys=";
-                "smolvm-protocol-1.36.1" = "sha256-Nr8b2JwuWC67ioBqPKhDUrsRaqNruvX/HtP8cPnGcys=";
+                # Temporary: smolvm crates from a tag on the smolvm fork until smolvm-credentials is on crates.io.
+                "smolvm-credentials-1.36.1" = "sha256-gpHnJYDFb8nhaDRSuESDXf6ac13jkaKNSezsIL9e0jc=";
+                "smolvm-protocol-1.36.1" = "sha256-gpHnJYDFb8nhaDRSuESDXf6ac13jkaKNSezsIL9e0jc=";
               };
             };
             # Some unit tests read host facts (memory, free ports) the build sandbox hides; CI runs them.
