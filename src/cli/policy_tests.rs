@@ -1678,7 +1678,7 @@ fn ls_shows_what_isnt_enforced_as_the_status_reason() {
     add(&mut p, None, Decision::Allow, "a.com", "added");
     let http = loose_policy(&mut p);
     p.save(&t.ctx.paths).unwrap();
-    // A rule with a method or a path is sbx's `http` type. On a host glob it's skipped.
+    // A rule with a method or a path is sbx's `http` type.
     assert_eq!(ls(&mut t, &["--type", "http", "-q"]), format!("{http}\n"));
     assert_eq!(
         ls(&mut t, &["--type", "http"]),
@@ -1694,11 +1694,10 @@ sandbox:s1   local    sandbox:s1   http: 1 allow
         format!(
             "{head}\n\
 local    added         sandbox:s1   -        sandbox:s1   -      {http}   http   GET      /v1/**   allow      tcp         active — crl*.x.com:         crl*.x.com\n\
-{}\n{}\n{}\n{}\n",
-            status("widened to *.x.com;"),
-            status("crl*.x.com: request rule"),
-            status("acts on the whole host, as"),
-            status("in 0.37.0"),
+{}\n{}\n{}\n",
+            status("widened to *.x.com; method"),
+            status("GET, path /v1/** enforced"),
+            status("for hosted sandboxes"),
         )
     );
     let json = ls(&mut t, &["--decision", "deny", "--json"]);
@@ -1746,8 +1745,8 @@ fn ls_says_each_kit_rule_note_once() {
     assert_eq!(
         json["rules"][0]["reason"],
         "kit.com:8080: port 8080 not enforced by smolvm (all ports allowed; enforced for hosted \
-         sandboxes); method GET, path /a enforced for hosted sandboxes created on 0.38 or later; \
-         method GET, path /b enforced for hosted sandboxes created on 0.38 or later"
+         sandboxes); method GET, path /a enforced for hosted sandboxes; \
+         method GET, path /b enforced for hosted sandboxes"
     );
 }
 
@@ -1997,33 +1996,10 @@ fn ls_says_where_request_rules_are_enforced_and_shows_a_query_column() {
     let json: serde_json::Value = serde_json::from_str(&json).unwrap();
     assert_eq!(
         json["rules"][0]["reason"],
-        "method GET, query v=1 enforced for hosted sandboxes created on 0.38 or later"
+        "method GET, query v=1 enforced for hosted sandboxes"
     );
     // No listed rule has a query: sbx's columns.
     assert!(!ls(&mut t, &["--type", "network", "--wide"]).contains("QUERY"));
-}
-
-#[test]
-fn ls_says_a_stored_request_rule_on_every_host_is_skipped() {
-    let mut t = test_env(&[]);
-    let mut p = policy(Mode::DenyAll);
-    // `policy deny` refuses this now; an older version stored it.
-    p.add_rule(
-        None,
-        Decision::Deny,
-        "**",
-        "added",
-        Some("POST".into()),
-        None,
-    )
-    .unwrap();
-    p.save(&t.ctx.paths).unwrap();
-    let json = ls(&mut t, &["--type", "http", "--json"]);
-    let json: serde_json::Value = serde_json::from_str(&json).unwrap();
-    assert_eq!(
-        json["rules"][0]["reason"],
-        "**: request rule acts on the whole host, as in 0.37.0"
-    );
 }
 
 #[test]
@@ -2058,7 +2034,7 @@ fn check_notes_name_request_rules_on_the_host() {
         [
             "note: request rules apply on this host",
             "note: with network.egress=smolvm a request deny drops its whole host from the \
-             allow list, as in 0.37.0"
+             allow list"
         ]
     );
 }

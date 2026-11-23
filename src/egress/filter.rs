@@ -196,8 +196,7 @@ pub fn connection(
         FlowKind::Tls if !gateway && terminated.iter().any(|p| host_matches(p, host)) => {
             (Decision::Allow, "decrypted for request rules".into())
         }
-        // A CA from before request rules, the gateway, or a host ruled since the process started:
-        // refused, as 0.37.0 refused the host.
+        // The gateway, or a host ruled since the process started: refused.
         FlowKind::Tls => (
             Decision::Deny,
             "TLS to a ruled host that isn't decrypted".into(),
@@ -339,8 +338,7 @@ mod tests {
     #[test]
     fn tls_to_a_ruled_host_outside_terminated_is_denied() {
         let p = rules();
-        // A CA from before request rules, or a host ruled since the process started: refused, as
-        // 0.37.0 refused the host, even with only bounded denies.
+        // A host ruled since the process started: refused, even with only bounded denies.
         for host in ["a.com", "d.com"] {
             let (d, why) = connection(&p, &flow(host, FlowKind::Tls), &[]).unwrap();
             assert_eq!(d, Decision::Deny, "{host}");
@@ -381,7 +379,7 @@ mod tests {
         let mut p = deny_all();
         p.allow(Some(SB), "**");
         add(&mut p, D::Deny, "d.com", "POST");
-        // Stored by 0.37.0, which didn't check `--path`; `PathGlob` refuses the empty segment.
+        // Hand-edited: `policy deny` checks `--path`, and `PathGlob` refuses the empty segment.
         p.insert_rule(
             Some(SB),
             D::Deny,
@@ -400,7 +398,7 @@ mod tests {
         assert_eq!(judge(&f, "d.com", "GET"), Ok(()));
         let ruled = source.ruled_hosts().unwrap();
         assert_eq!(ruled, ["d.com"]);
-        // The bad deny keeps 0.37.0's meaning: its whole host is denied.
+        // The bad deny acts on its whole host.
         let rules = super::super::rules::Rules::new(&paths, SB, false, vec![]);
         let to = |host: &str| Flow {
             name: Some(host.into()),

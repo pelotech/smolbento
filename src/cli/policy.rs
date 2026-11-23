@@ -886,7 +886,7 @@ fn check_notes(policy: &Policy, scope: Option<&str>, target: &str) -> Vec<String
     if ruled.contains(&Decision::Deny) {
         notes.push(
             "note: with network.egress=smolvm a request deny drops its whole host from the \
-             allow list, as in 0.37.0"
+             allow list"
                 .to_string(),
         );
     }

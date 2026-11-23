@@ -818,7 +818,7 @@ fn request_deny(p: &mut Policy, res: &str, path: Option<&str>) {
 
 #[test]
 fn an_unmapped_request_deny_stays_host_wide() {
-    // `*`/`**`, a CIDR, a glob and a path the interceptor can't parse: 0.37.0's host-wide deny.
+    // `*`/`**`, a CIDR, a glob and a path the interceptor can't parse: host-wide.
     for (res, path, target) in [
         ("**", None, "any.com:443"),
         ("10.0.0.0/8", None, "10.1.2.3:443"),

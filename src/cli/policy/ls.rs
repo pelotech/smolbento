@@ -8,7 +8,6 @@ use serde::Serialize;
 
 use super::invalid_flag;
 use crate::cli::{Ctx, PolicyLsArgs, aligned, plural, table};
-use crate::egress::request_rules;
 use crate::policy::{Decision, Mode, Policy, Rule, presets};
 use crate::sandbox;
 use crate::smolvm::Runner;
@@ -129,37 +128,18 @@ fn rule_notes(rule: &Rule) -> Vec<String> {
     if !rule.is_request() {
         return notes;
     }
-    // The egress process takes request rules on named hosts only; any other keeps 0.37.0's meaning.
-    let (named, skipped): (Vec<_>, Vec<_>) = rule.parsed().partition(|r| {
-        request_rules::check(
-            rule.decision,
-            std::slice::from_ref(r),
-            rule.method.as_deref(),
-            rule.path.as_deref(),
-            rule.query.as_deref(),
-        )
-        .is_ok()
-    });
-    notes.extend((skipped.iter()).map(|r| {
-        format!(
-            "{}: request rule acts on the whole host, as in 0.37.0",
-            r.raw
-        )
-    }));
-    if !named.is_empty() {
-        let qualifiers: Vec<String> = [
-            ("method", &rule.method),
-            ("path", &rule.path),
-            ("query", &rule.query),
-        ]
-        .into_iter()
-        .filter_map(|(label, v)| Some(format!("{label} {}", v.as_ref()?)))
-        .collect();
-        notes.push(format!(
-            "{} enforced for hosted sandboxes created on 0.38 or later",
-            qualifiers.join(", ")
-        ));
-    }
+    let qualifiers: Vec<String> = [
+        ("method", &rule.method),
+        ("path", &rule.path),
+        ("query", &rule.query),
+    ]
+    .into_iter()
+    .filter_map(|(label, v)| Some(format!("{label} {}", v.as_ref()?)))
+    .collect();
+    notes.push(format!(
+        "{} enforced for hosted sandboxes",
+        qualifiers.join(", ")
+    ));
     notes
 }
 

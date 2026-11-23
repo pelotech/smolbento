@@ -43,8 +43,9 @@ pub fn request_policy(
             let rule = match map(r, &res) {
                 Ok(rule) => rule,
                 Err(e) => {
+                    // A rule the filter can't take acts on its whole host (`compile::per_request`).
                     eprintln!(
-                        "egress: rule {} on {}: {e}; it acts on the whole host, as in 0.37.0",
+                        "egress: rule {} on {}: {e}; it acts on the whole host",
                         r.id, res.raw
                     );
                     continue;
