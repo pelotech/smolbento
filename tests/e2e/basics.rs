@@ -140,27 +140,16 @@ pub(crate) fn http_answers(e: &E2e, ip: &str) -> bool {
 #[test]
 #[ignore = "boots real VMs and reaches httpbin.org; run with `just e2e`"]
 pub(crate) fn policy_changes_apply_on_start_and_live() {
-    // smolvm's allow list by address: a hosted sandbox also judges `Host: <ip>` by the rules, which
-    // allow httpbin.org by name only (`hosted_policy_change_is_live` covers hosted).
-    let mut e = E2e::new("pol");
-    e.vars.push(("SMOLBENTO_NETWORK_EGRESS", "smolvm".into()));
+    let e = E2e::new("pol");
     e.create_alpine();
     e.ok(&["policy", "init", "deny-all"]);
     e.ok(&["stop", &e.name]); // allow-all -> restricted applies on the next start
     assert!(!reachable(&e, "https://httpbin.org"), "deny-all blocks");
     e.ok(&["policy", "allow", "network", "httpbin.org"]);
     assert!(reachable(&e, "https://httpbin.org"), "live allow");
-    let ip = e.sh_ok(&e.name, HTTPBIN_IP);
-    let ip = ip.trim();
-    assert!(!ip.is_empty(), "httpbin.org resolved");
-    assert!(http_answers(&e, ip), "live allow reaches {ip}");
-    // The last host leaves a host-less list: closed live, by name and by its IP (no restart).
+    // The last host leaves a host-less list: closed live (no restart).
     e.ok(&["policy", "rm", "network", "--resource", "httpbin.org"]);
     assert!(!reachable(&e, "https://httpbin.org"), "live rm");
-    assert!(
-        !http_answers(&e, ip),
-        "live rm closes {ip} (httpbin.org's address)"
-    );
     assert!(
         !reachable(&e, "https://www.wikipedia.org"),
         "still restricted"
@@ -176,6 +165,29 @@ pub(crate) fn policy_changes_apply_on_start_and_live() {
     );
     let log = e.ok(&["policy", "log", &e.name]);
     assert!(log.contains("httpbin.org"), "{log}");
+}
+
+/// smolvm's allow list admits a host's address live, and closes it with the last host. smolvm-only:
+/// the probe sends `Host: <ip>`, which a hosted sandbox's egress process judges by the rules, and
+/// they allow httpbin.org by name only (sbx denies it too).
+#[test]
+#[ignore = "boots real VMs and reaches httpbin.org; run with `just e2e`"]
+pub(crate) fn smolvm_allow_list_opens_and_closes_an_address_live() {
+    let mut e = E2e::new("polip");
+    e.vars.push(("SMOLBENTO_NETWORK_EGRESS", "smolvm".into()));
+    e.ok(&["policy", "init", "deny-all"]);
+    e.create_alpine_offline();
+    e.ok(&["policy", "allow", "network", "httpbin.org"]);
+    let ip = e.sh_ok(&e.name, HTTPBIN_IP);
+    let ip = ip.trim();
+    assert!(!ip.is_empty(), "httpbin.org resolved");
+    assert!(http_answers(&e, ip), "live allow reaches {ip}");
+    // The last host leaves a host-less list: closed live.
+    e.ok(&["policy", "rm", "network", "--resource", "httpbin.org"]);
+    assert!(
+        !http_answers(&e, ip),
+        "live rm closes {ip} (httpbin.org's address)"
+    );
 }
 
 #[test]
