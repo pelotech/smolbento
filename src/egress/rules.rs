@@ -5,19 +5,13 @@ use crate::policy::Policy;
 use crate::policy::compile::{HOST_GATEWAY, decide};
 use egress_front::{Decision, Flow};
 use std::net::SocketAddr;
-use std::sync::Mutex;
-use std::time::SystemTime;
 
-/// `policy.toml`'s mtime (`None`: no file) and what loading it gave.
-type Loaded = (Option<SystemTime>, Result<Policy, String>);
-
-/// One sandbox's rules, reloaded whenever `policy.toml`'s mtime changes.
+/// One sandbox's rules, read from `policy.toml` on every decision.
 pub struct Rules {
     sandbox: String,
     host_access: bool,
     credential_hosts: Vec<String>,
     paths: Paths,
-    loaded: Mutex<Option<Loaded>>,
 }
 
 impl Rules {
@@ -32,66 +26,51 @@ impl Rules {
             host_access,
             credential_hosts,
             paths: paths.clone(),
-            loaded: Mutex::new(None),
         }
     }
 
     /// The flow's decision and why, for the log.
     pub fn decide(&self, flow: &Flow) -> (Decision, String) {
-        let mut loaded = self.loaded.lock().unwrap_or_else(|e| e.into_inner());
-        let mtime = match std::fs::metadata(self.paths.policy_file()).and_then(|m| m.modified()) {
-            Ok(t) => Some(t),
-            Err(e) if e.kind() == std::io::ErrorKind::NotFound => None,
-            Err(e) => {
-                *loaded = None;
-                return (Decision::Deny, format!("policy.toml unreadable: {e}"));
-            }
-        };
-        let fresh = loaded.take().filter(|(t, _)| *t == mtime);
-        let (_, policy) = loaded.insert(fresh.unwrap_or_else(|| {
-            (
-                mtime,
-                Policy::load(&self.paths).map_err(|e| format!("{e:#}")),
-            )
-        }));
-        let policy = match policy {
-            Ok(p) => &*p,
-            Err(e) => return (Decision::Deny, format!("policy.toml unreadable: {e}")),
+        // `policy save` writes atomically, so a read never sees half a file.
+        let policy = match Policy::load(&self.paths) {
+            Ok(p) => p,
+            Err(e) => return (Decision::Deny, format!("policy.toml unreadable: {e:#}")),
         };
         let verdict = |target: &str| {
             decide(
-                policy,
+                &policy,
                 &self.sandbox,
                 &self.credential_hosts,
                 self.host_access,
                 target,
             )
         };
-        // A gateway flow is the host's `localhost:PORT`, judged strictly: no rule, no flow, and the
-        // guest's name for it (any SNI or `Host:` it likes) plays no part.
-        if flow.ip.to_string() == HOST_GATEWAY {
-            let v = verdict(&format!("localhost:{}", flow.port));
-            let d = if v.allowed {
-                Decision::Allow
-            } else {
-                Decision::Deny
-            };
-            return (d, v.reason);
-        }
-        let v = verdict(&SocketAddr::new(flow.ip, flow.port).to_string());
-        if let Some(name) = &flow.name {
-            let n = verdict(&format!("{name}:{}", flow.port));
-            // An IP or CIDR allow rule still admits a name no rule mentions; a deny always wins.
-            // Allow-all and presets never reach here, as they would have allowed the name.
-            if !n.allowed && !(n.implicit && v.allowed) {
-                return (Decision::Deny, n.reason);
+        let (allowed, reason) = if flow.ip.to_string() == HOST_GATEWAY {
+            // A gateway flow is the host's `localhost:PORT`, judged strictly: no rule, no flow,
+            // and the guest's name for it (any SNI or `Host:` it likes) plays no part.
+            let g = verdict(&format!("localhost:{}", flow.port));
+            (g.allowed, g.reason)
+        } else {
+            let v = verdict(&SocketAddr::new(flow.ip, flow.port).to_string());
+            let n = flow
+                .name
+                .as_ref()
+                .map(|name| verdict(&format!("{name}:{}", flow.port)));
+            match n {
+                // An IP or CIDR allow rule still admits a name no rule mentions; a deny always
+                // wins. Allow-all and presets never reach here, as they would have allowed the
+                // name.
+                Some(n) if !n.allowed && !(n.implicit && v.allowed) => (false, n.reason),
+                // By address, only a deny rule refuses: smolvm's allow list already admitted it.
+                _ => (v.allowed || v.implicit, v.reason),
             }
-        }
-        // By address, only a deny rule refuses: smolvm's allow list already admitted the flow.
-        if v.allowed || v.implicit {
-            return (Decision::Allow, v.reason);
-        }
-        (Decision::Deny, v.reason)
+        };
+        let d = if allowed {
+            Decision::Allow
+        } else {
+            Decision::Deny
+        };
+        (d, reason)
     }
 }
 
@@ -100,7 +79,6 @@ mod tests {
     use super::*;
     use crate::policy::Mode;
     use std::collections::BTreeMap;
-    use std::time::Duration;
 
     const SB: &str = "sb";
 
@@ -141,16 +119,6 @@ mod tests {
 
     fn ask(r: &Rules, f: &Flow) -> Decision {
         r.decide(f).0
-    }
-
-    /// Moves `policy.toml`'s mtime forward, so a rewrite within the clock's granularity is seen.
-    fn touch_later(p: &Paths, secs: u64) {
-        let f = std::fs::File::options()
-            .write(true)
-            .open(p.policy_file())
-            .unwrap();
-        f.set_modified(SystemTime::now() + Duration::from_secs(secs))
-            .unwrap();
     }
 
     #[test]
@@ -303,7 +271,6 @@ mod tests {
             assert!(why.starts_with("policy.toml unreadable: "), "{why}");
         }
         save(&p, &[(true, "github.com")]);
-        touch_later(&p, 10);
         assert_eq!(
             ask(&r, &flow(Some("github.com"), "140.82.1.1", 443)),
             Decision::Allow
@@ -330,7 +297,6 @@ mod tests {
         let f = flow(Some("github.com"), "140.82.1.1", 443);
         assert_eq!(ask(&r, &f), Decision::Allow);
         save(&p, &[(false, "github.com")]);
-        touch_later(&p, 10);
         assert_eq!(ask(&r, &f), Decision::Deny);
     }
 }
