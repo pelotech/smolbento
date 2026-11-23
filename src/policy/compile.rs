@@ -83,68 +83,37 @@ fn allows_with(policy: &Policy, sandbox: Option<&str>, install: &[String]) -> Ve
     allows
 }
 
-/// Which request denies act per request on a sandbox (`egress::request_rules`). Every other deny
-/// acts on its whole host, as in 0.37.0.
-#[derive(Debug, Clone, Copy)]
-pub enum Requests<'a> {
-    /// None: smolvm egress, or a hosted sandbox whose CA predates request rules.
-    HostWide,
-    /// Each one the interceptor maps to a named host (`request_rules::mapped_host`).
-    Mapped,
-    /// Each one it maps to a host the egress process decrypts (`terminate_hosts` form).
-    Decrypted(&'a [String]),
+/// Whether this resource of a deny rule acts per request, not on its whole host: on a hosted
+/// sandbox, a request deny the interceptor maps to a named host. The gateway (`localhost`) is
+/// never decrypted.
+fn per_request(hosted: bool, r: &Rule, res: &Resource) -> bool {
+    hosted
+        && r.is_request()
+        && crate::egress::request_rules::mapped_host(r, res).is_some_and(|h| h != "localhost")
 }
 
-impl Requests<'_> {
-    /// `per_request`: `egress::per_request`.
-    fn of(per_request: bool) -> Self {
-        if per_request {
-            Requests::Mapped
-        } else {
-            Requests::HostWide
-        }
-    }
-
-    /// Whether this resource of a deny rule acts per request, not on its whole host.
-    fn per_request(self, r: &Rule, res: &Resource) -> bool {
-        if matches!(self, Requests::HostWide) || !r.is_request() {
-            return false;
-        }
-        let Some(host) = crate::egress::request_rules::mapped_host(r, res) else {
-            return false;
-        };
-        // The gateway (`localhost`) is never decrypted.
-        host != "localhost"
-            && match self {
-                Requests::Decrypted(d) => d.contains(&host),
-                _ => true,
-            }
-    }
-}
-
-/// The deny resources that act on their whole host: every deny but `requests`' per-request ones.
+/// The deny resources that act on their whole host: every deny but the per-request ones.
 fn host_denies(
     policy: &Policy,
     sandbox: Option<&str>,
     install: &[String],
-    requests: Requests,
+    hosted: bool,
 ) -> Vec<Resource> {
     active(policy, sandbox, install)
         .filter(|(r, _)| r.decision == Decision::Deny)
-        .flat_map(|(r, _)| r.parsed().filter(move |res| !requests.per_request(r, res)))
+        .flat_map(|(r, _)| r.parsed().filter(move |res| !per_request(hosted, r, res)))
         .collect()
 }
 
 /// What smolvm should allow for a sandbox. A bound credential's hosts are always included: smolvm
-/// requires them. Install-phase kit rules are left out (see `network_with`). `per_request`
-/// (`egress::per_request`): the sandbox's interceptor enforces the request denies it maps, so they
-/// leave their host in the list.
+/// requires them. Install-phase kit rules are left out (see `network_with`). `hosted`: the
+/// sandbox's interceptor enforces the request denies it maps, so they leave their host in the list.
 pub fn network(
     policy: &Policy,
     sandbox: &str,
     credential_hosts: &[String],
     host_access: bool,
-    per_request: bool,
+    hosted: bool,
 ) -> NetworkSpec {
     network_for(
         policy,
@@ -152,7 +121,7 @@ pub fn network(
         credential_hosts,
         &[],
         host_access,
-        per_request,
+        hosted,
     )
 }
 
@@ -164,7 +133,7 @@ pub fn network_with(
     credential_hosts: &[String],
     install: &[String],
     host_access: bool,
-    per_request: bool,
+    hosted: bool,
 ) -> NetworkSpec {
     network_for(
         policy,
@@ -172,7 +141,7 @@ pub fn network_with(
         credential_hosts,
         install,
         host_access,
-        per_request,
+        hosted,
     )
 }
 
@@ -183,13 +152,13 @@ fn network_for(
     credential_hosts: &[String],
     install: &[String],
     host_access: bool,
-    per_request: bool,
+    hosted: bool,
 ) -> NetworkSpec {
     if policy.current_mode() == Mode::AllowAll {
         return NetworkSpec::Open;
     }
     let allows = allows_with(policy, sandbox, install);
-    let denies = host_denies(policy, sandbox, install, Requests::of(per_request));
+    let denies = host_denies(policy, sandbox, install, hosted);
     if allows
         .iter()
         .any(|r| r.pattern == Pattern::Everything && !denied(r, &denies))
@@ -480,15 +449,7 @@ pub fn check(
     host_access: Option<bool>,
     target: &str,
 ) -> Verdict {
-    verdict_for(
-        policy,
-        sandbox,
-        credential_hosts,
-        host_access,
-        target,
-        Requests::Mapped,
-        true,
-    )
+    verdict_for(policy, sandbox, credential_hosts, host_access, target, true)
 }
 
 /// The sbx verdict alone, as the egress process enforces it per flow: smolvm's allow list
@@ -499,7 +460,6 @@ pub fn decide(
     credential_hosts: &[String],
     host_access: bool,
     target: &str,
-    requests: Requests,
 ) -> Verdict {
     verdict_for(
         policy,
@@ -507,7 +467,6 @@ pub fn decide(
         credential_hosts,
         Some(host_access),
         target,
-        requests,
         false,
     )
 }
@@ -519,7 +478,6 @@ fn verdict_for(
     credential_hosts: &[String],
     host_access: Option<bool>,
     target: &str,
-    requests: Requests,
     smolvm: bool,
 ) -> Verdict {
     let target = target.trim().to_ascii_lowercase();
@@ -540,7 +498,7 @@ fn verdict_for(
     }
     // No sandbox: the global rules only.
     let mode = policy.current_mode();
-    // A request deny `requests` enforces acts per request, never on the whole host; a request
+    // A request deny the interceptor maps acts per request, never on the whole host; a request
     // allow still makes its host reachable.
     let t = target.as_str();
     let hits = |decision: Decision| {
@@ -549,7 +507,7 @@ fn verdict_for(
             .flat_map(move |(r, scope)| {
                 r.parsed()
                     .filter(move |res| res.matches(t))
-                    .filter(move |res| decision == Decision::Allow || !requests.per_request(r, res))
+                    .filter(move |res| decision == Decision::Allow || !per_request(true, r, res))
                     .map(move |res| (r, scope.unwrap_or("global"), res))
             })
     };

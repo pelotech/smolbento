@@ -12,7 +12,7 @@ use crate::policy::{self, Decision, compile};
 /// method, path or query, one crate rule per resource. Connection defaults stay in `decide`, so a
 /// host no rule names is allowed. As in sbx, a bounded allow on a host that connection rules alone
 /// already admit (`moot`) is dropped; bounded denies never are. A resource the crate can't take
-/// is skipped, and keeps 0.37.0's meaning on its whole host (`compile::Requests`).
+/// is skipped and acts on its whole host instead (`compile::per_request`).
 pub fn request_policy(
     policy: &policy::Policy,
     sandbox: &str,
@@ -34,15 +34,7 @@ pub fn request_policy(
     }
     let admits = |target: &str| {
         let host_access = compile::host_access(&plain, sandbox);
-        compile::decide(
-            &plain,
-            sandbox,
-            credential_hosts,
-            host_access,
-            target,
-            compile::Requests::HostWide,
-        )
-        .allowed
+        compile::decide(&plain, sandbox, credential_hosts, host_access, target).allowed
     };
     let spare = spare_port(policy);
     let mut rules = Vec::new();
@@ -403,9 +395,7 @@ mod tests {
             None,
         );
         add(&mut p, Decision::Allow, "h.com", "added", None, None, None);
-        assert!(
-            compile::decide(&p, "s1", &[], false, "h.com:443", compile::Requests::Mapped).allowed
-        );
+        assert!(compile::decide(&p, "s1", &[], false, "h.com:443").allowed);
         let rp = request_policy(&p, "s1", &[]);
         let h = HeaderMap::new();
         assert!(rp.request("h.com", 443, "POST", "/", &h).is_err());

@@ -667,7 +667,7 @@ fn kit_rules_never_grant_host_access() {
 }
 
 fn decided(p: &Policy, host_access: bool, target: &str) -> Verdict {
-    decide(p, "s1", &[], host_access, target, Requests::Mapped)
+    decide(p, "s1", &[], host_access, target)
 }
 
 #[test]
@@ -841,26 +841,14 @@ fn an_unmapped_request_deny_stays_host_wide() {
 }
 
 #[test]
-fn a_request_deny_on_a_non_broad_sandbox_stays_host_wide() {
+fn a_request_deny_acts_per_request_except_on_the_gateway() {
     let mut p = policy(Mode::AllowAll);
     request_deny(&mut p, "h.com", None);
-    let (h, other) = (["h.com".to_string()], ["other.com".to_string()]);
-    let at = |requests| decide(&p, "s1", &[], false, "h.com:443", requests);
-    assert!(!at(Requests::HostWide).allowed);
-    // Decrypted: per request. A host the process doesn't decrypt (ruled since it started): host-wide.
-    assert!(at(Requests::Decrypted(&h)).allowed);
-    assert!(!at(Requests::Decrypted(&other)).allowed);
+    assert!(decided(&p, false, "h.com:443").allowed);
     // The gateway is never decrypted.
     let mut p = policy(Mode::AllowAll);
     p.allow(None, "localhost");
     request_deny(&mut p, "localhost:8443", None);
-    let gw = decide(
-        &p,
-        "s1",
-        &[],
-        true,
-        "localhost:8443",
-        Requests::Decrypted(&["localhost".into()]),
-    );
+    let gw = decided(&p, true, "localhost:8443");
     assert!(!gw.allowed, "{}", gw.reason);
 }

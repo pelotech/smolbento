@@ -401,7 +401,7 @@ mod tests {
         let ruled = source.ruled_hosts().unwrap();
         assert_eq!(ruled, ["d.com"]);
         // The bad deny keeps 0.37.0's meaning: its whole host is denied.
-        let rules = super::super::rules::Rules::new(&paths, SB, false, vec![], Some(ruled));
+        let rules = super::super::rules::Rules::new(&paths, SB, false, vec![]);
         let to = |host: &str| Flow {
             name: Some(host.into()),
             kind: FlowKind::Tls,
