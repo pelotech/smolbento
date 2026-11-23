@@ -45,13 +45,13 @@ on first use into `<smolvm.home>/engine/<version>/` (default `~/.smolbento`). Ev
 users to run `bento smolvm …`, never a bare `smolvm …`, which sees other machines. Tests:
 `SMOLBENTO_SMOLVM` runs another binary (a local build), and e2e shares `/tmp/sbt-e2e-<uid>`.
 
-As of smolvm 1.36. Check the reference source before depending on anything not listed here.
+As of smolvm 1.37. Check the reference source before depending on anything not listed here.
 
 - **Errors:** `--error-format json` prints `{"error":{"code":…,"message":…}}` on stderr. The exit
   status is unchanged. Branch on `code` (`NOT_FOUND`, `CONFLICT`, `INTERRUPTED`, `CONFIG_ERROR`,
   `INVALID_STATE`, `STORAGE_ERROR`, `MOUNT_ERROR`, `KVM_UNAVAILABLE`, `HYPERVISOR_UNAVAILABLE`,
-  `COMMAND_FAILED`, `SMOLVM_ERROR`), never on the message. Known quirks live in
-  `src/smolvm/error.rs`.
+  `COMMAND_FAILED`, `SMOLVM_ERROR`), never on the message. Every command reports a missing machine
+  as `NOT_FOUND` (1.37). Known quirks live in `src/smolvm/error.rs`.
 - **Idmapped mounts (1.34.2+):** a `-v` host directory shows as owned by the machine's workload user
   (`-u` at `machine create`) when that user isn't root and the directory isn't owned by root (nor is
   smolvm run as root). Files stay owned by the host user. Live `machine mount add` mounts are mapped
@@ -86,7 +86,8 @@ As of smolvm 1.36. Check the reference source before depending on anything not l
   set of request-rule hosts makes it exit 0, and its socket starts it again.
 - **Credential values change live (1.35.4):** `machine credentials refresh -n M [BINDING…]` reads
   each binding's variable from its own environment and the running machine uses it from its next
-  request. It refuses an unset or empty variable, so it can't take a value away. smolbento names
+  request. It refuses an unset or empty variable, so it can't take a value away, and since 1.37 a
+  value over 8 KiB. smolbento names
   every binding after its variable, lowercased (`Credential::binding`).
 - **Credential bindings change live (1.36.1):** `machine credentials add -n M --credential SPEC`
   (replaces a binding of the same name) and `machine credentials remove -n M BINDING…` work on a
