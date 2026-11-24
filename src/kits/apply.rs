@@ -145,9 +145,6 @@ pub fn apply(
     }
     drop_service_variables(req, &m.credentials);
 
-    if m.git_identity {
-        steps.install.extend(git_identity_step(&kits, host_git())?);
-    }
     for (kit, h) in m.install_hooks.iter().chain(&m.startup_hooks) {
         if let Some(v) = h.env.iter().find(|v| !guest::is_env_name(v)) {
             bail!("kit {kit}: hook env '{v}' is not a valid variable name");
@@ -188,6 +185,11 @@ pub fn apply(
         req.rec.user.as_deref().unwrap_or("agent")
     };
     steps.startup_d = startup_d(&kits, m, &tmpfs, session);
+    if m.git_identity
+        && let Some(step) = git_identity_step(&kits, host_git(), session)?
+    {
+        steps.install.insert(0, step);
+    }
     record_kits(&kits, &plan.args, req)?;
     steps.kit_names = req.rec.kits.iter().map(|k| k.name.clone()).collect();
     req.rec.long_running = m.long_running;
@@ -305,9 +307,13 @@ fn user_credentials(req: &CreateRequest, secrets: &SecretsFile) -> Vec<(String, 
         .collect()
 }
 
-/// The install step setting the guest's git identity from the host's `git`. Without one on the
-/// host it's an error when a kit requires it, else a warning.
-fn git_identity_step(kits: &[&Kit], host: Option<(String, String)>) -> Result<Option<InstallStep>> {
+/// The first install step, setting the session user's global git identity from the host's `git`.
+/// Without one on the host it's an error when a kit requires it, else a warning.
+fn git_identity_step(
+    kits: &[&Kit],
+    host: Option<(String, String)>,
+    session: &str,
+) -> Result<Option<InstallStep>> {
     let required = kits.iter().find(|k| {
         k.caps
             .iter()
@@ -317,7 +323,7 @@ fn git_identity_step(kits: &[&Kit], host: Option<(String, String)>) -> Result<Op
         (Some((name, email)), _) => Ok(Some(InstallStep {
             label: "the git identity step".into(),
             kit: None,
-            user: None,
+            user: Some(session.to_string()),
             script: guest::git_identity_script(&name, &email),
             relay_stderr: false,
         })),

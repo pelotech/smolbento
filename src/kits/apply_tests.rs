@@ -795,6 +795,8 @@ fn hooks_and_files_become_steps() {
     );
 }
 
+/// The workload user's global defaults, which outrank an image's own `~/.gitconfig` (`tck:
+/// git-identity@1/global-defaults`), set before any install hook (`tck: git-identity@1/before-hooks`).
 #[test]
 fn git_identity_comes_from_the_host() {
     let p = plan(vec![with(
@@ -820,8 +822,8 @@ fn git_identity_comes_from_the_host() {
             [InstallStep {
                 label: "the git identity step".into(),
                 kit: None,
-                user: None,
-                script: "git config --system user.name 'Ada L' && git config --system user.email 'ada@x.org'"
+                user: Some("agent".into()),
+                script: "git config --global user.name 'Ada L' && git config --global user.email 'ada@x.org'"
                     .to_string(),
                 relay_stderr: false,
             }]

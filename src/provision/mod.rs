@@ -545,6 +545,23 @@ pub fn prepare_create<R: Runner>(
             },
         );
     }
+    // sbx's mountless directory, where exec starts: a kit workload's image may not have it.
+    if req.workspaces.is_empty()
+        && let Some(first) = first_start.as_mut()
+    {
+        let dir = crate::workspace::MOUNTLESS_WORKDIR;
+        let user = crate::util::sh_quote(req.rec.user.as_deref().unwrap_or("agent"));
+        first.steps.install.insert(
+            0,
+            crate::kits::apply::InstallStep {
+                label: "the workspace directory".into(),
+                kit: None,
+                user: None,
+                script: format!("mkdir -p {dir} && chown {user}: {dir}"),
+                relay_stderr: false,
+            },
+        );
+    }
     req.skills = (!label.dirs.is_empty()).then(|| crate::skills::Setup {
         store: crate::skills::store::Store::new(&ctx.paths).dir,
         label,

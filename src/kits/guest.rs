@@ -187,10 +187,10 @@ pub fn tmpfs_script(volumes: &[(String, Option<String>)]) -> String {
     s
 }
 
-/// Sets the guest's system git identity (`git-identity@1`), as root.
+/// Sets the exec user's global git identity (`git-identity@1`).
 pub fn git_identity_script(name: &str, email: &str) -> String {
     format!(
-        "git config --system user.name {} && git config --system user.email {}",
+        "git config --global user.name {} && git config --global user.email {}",
         sh_quote(name),
         sh_quote(email)
     )

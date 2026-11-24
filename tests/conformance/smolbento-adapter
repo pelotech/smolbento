@@ -1,7 +1,8 @@
 #!/usr/bin/env bash
 # Conformance adapter: drives smolbento through docs/spec/conformance.md of docker/sandbox-kit-spec.
-# It claims com.docker.sandbox/ssh-agent@1, host-mount@1, lifecycle@1 and network-policy@1/@2, and
-# implements the verbs those checks call. Needs jq (`just conformance` provides it).
+# It claims com.docker.sandbox/ssh-agent@1, host-mount@1, lifecycle@1, network-policy@1/@2,
+# agent-context@1, long-running@1, privileged@1 and resources@1, and implements the verbs those
+# checks call. Needs jq (`just conformance` provides it).
 #
 # Environment:
 #   SMOLBENTO_BIN      the binary to drive (default: smolbento on PATH)
@@ -39,7 +40,7 @@ die() {
 
 # Runs smolbento isolated, with the sandbox's agent and host keys when it has them.
 sbt() {
-	id=$1
+	local id=$1
 	shift
 	if [ -f "$state/$id.agent" ]; then
 		SMOLBENTO_SSH_AGENT_SOCKET=$(cat "$state/$id.agent")
@@ -113,12 +114,16 @@ capabilities)
 		echo com.docker.sandbox/lifecycle@1
 		echo com.docker.sandbox/network-policy@1
 		echo com.docker.sandbox/network-policy@2
+		echo com.docker.sandbox/agent-context@1
+		echo com.docker.sandbox/long-running@1
+		echo com.docker.sandbox/privileged@1
+		echo com.docker.sandbox/resources@1
 	fi
 	;;
 
 create)
-	name="" agent="" known_hosts="" first=""
-	extra=()
+	name="" agent="" known_hosts="" first="" skills=readwrite store_scenario="" git_config=/dev/null
+	extra=() refs=()
 	while [ $# -gt 0 ]; do
 		case "$1" in
 		--name) name=$2; shift 2 ;;
@@ -137,7 +142,15 @@ create)
 			;;
 		--arg) extra+=(--kit-arg "$2"); shift 2 ;;
 		--env) extra+=(--env "$2"); shift 2 ;;
-		--skills-host-mode | --skills-host-store | --git-identity-config | --docker-auth-config | --open-url-budget)
+		# The host's half of skills access; the contract's default is the most permissive.
+		--skills-host-mode) skills=$2; shift 2 ;;
+		--skills-host-store) store_scenario=$2; shift 2 ;;
+		# smolbento reads the identity from the host's git config at create; `off` is no config.
+		--git-identity-config)
+			case "$2" in off) git_config=/dev/null ;; *) git_config=$2 ;; esac
+			shift 2
+			;;
+		--docker-auth-config | --open-url-budget)
 			echo "unsupported option: $1" >&2
 			exit 2
 			;;
@@ -150,12 +163,19 @@ create)
 			# A local kit reference has to say so: smolbento reads a bare name as a registry one.
 			ref=$(kit_ref "$1")
 			case "$ref" in /* | ./* | ../*) ;; *) [ ! -e "$ref" ] || ref=./$ref ;; esac
-			if [ -z "$first" ]; then first=$ref; else extra+=(--kit "$ref"); fi
+			refs+=("$ref")
 			shift
 			;;
 		esac
 	done
-	[ -n "$first" ] || die "create needs at least one kit reference"
+	[ ${#refs[@]} -gt 0 ] || die "create needs at least one kit reference"
+	# The workload is the reference whose kit says `kind: workload` (the suite may list a mixin
+	# first), else the first; the rest are mixins, in order.
+	for ref in "${refs[@]}"; do
+		if [ -z "$first" ] && grep -qsx 'kind: *"\{0,1\}workload"\{0,1\}' "$ref"/*.yaml; then first=$ref; fi
+	done
+	[ -n "$first" ] || first=${refs[0]}
+	for ref in "${refs[@]}"; do [ "$ref" = "$first" ] || extra+=(--kit "$ref"); done
 	[ -n "$name" ] || name=kit-tck-$(od -An -tx1 -N5 /dev/urandom | tr -d ' \n')
 	case "$name" in *[!a-zA-Z0-9_-]*) die "invalid sandbox name: $name" ;; esac
 	id=$name
@@ -176,16 +196,40 @@ create)
 			fi
 		done
 	done
+	# The isolated store holds only the suite's marker skill (§2.3), so the missing and empty
+	# scenarios just take it away, and the next create without one puts it back.
+	store=$home/data/agent-skills
+	case "$store_scenario" in
+	missing) rm -rf "$store" ;;
+	empty) rm -rf "$store" && mkdir -p "$store" ;;
+	"")
+		if [ -n "${KIT_TCK_SKILL_NAME:-}" ] && $0 capabilities | grep -qx com.docker.sandbox/agent-skills@1; then
+			mkdir -p "$store/$KIT_TCK_SKILL_NAME"
+			printf -- '---\nname: %s\ndescription: kit-tck marker skill\n---\n' "$KIT_TCK_SKILL_NAME" \
+				>"$store/$KIT_TCK_SKILL_NAME/SKILL.md"
+		fi
+		;;
+	*) die "unknown skills-host-store: $store_scenario" ;;
+	esac
+	# The fixture credential service's secret, bound by name only: its command reads the suite's
+	# value from the environment at each start, so the value never reaches a file or an argv.
+	# mkdir makes concurrent creates bind it once.
+	if [ -n "${KIT_TCK_BOUND_SECRET:-}" ] && $0 capabilities | grep -qx com.docker.sandbox/credential@1 &&
+		mkdir "$state/secret-bound" 2>/dev/null; then
+		sbt none secret set-custom --host example.com --env KIT_TCK \
+			--command 'printf %s "$KIT_TCK_BOUND_SECRET"' >&2 || die "could not bind the kit-tck secret"
+	fi
 	# The first reference is the workload; no workspace path makes a mountless sandbox.
 	status=0
 	err=$(mktemp)
-	sbt "$id" create --no-progress --name "$id" "$first" ${extra[@]+"${extra[@]}"} 2>"$err" >&2 || status=$?
+	GIT_CONFIG_GLOBAL=$git_config GIT_CONFIG_NOSYSTEM=1 \
+		sbt "$id" create --no-progress --skills "$skills" --name "$id" "$first" ${extra[@]+"${extra[@]}"} 2>"$err" >&2 || status=$?
 	cat "$err" >&2
 	if [ "$status" -ne 0 ]; then
 		rm -f "$state/$id.agent" "$state/$id.known-hosts"
 		# smolbento exits 1 for every error; its refusals are told apart by message, which is
 		# why this lives in the adapter.
-		if grep -qE 'is not supported by smolbento|needs an SSH agent, but|both declare | at capabilities\[' "$err"; then
+		if grep -qE 'is not supported by smolbento|needs an SSH agent, but|needs your git identity|and a sandbox uses one version|both declare | at capabilities\[' "$err"; then
 			status=2
 		fi
 		rm -f "$err"
@@ -219,6 +263,17 @@ stop)
 
 start)
 	sbt "$1" start "$1" >&2
+	;;
+
+status)
+	# `created` (never started) and `unknown` count as stopped: neither is running.
+	sbt "$1" ls --json | jq -r --arg id "$1" \
+		'.[] | select(.name == $id) | if .status == "running" then "running" else "stopped" end'
+	;;
+
+wait-idle)
+	# The adapter's exec attaches no session, and smolbento stops a sandbox only as its last
+	# `run` session ends (never after a grace period), so there is nothing to disconnect or wait for.
 	;;
 
 host-mounts)
