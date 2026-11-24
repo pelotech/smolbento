@@ -154,9 +154,10 @@ release-build target builder:
             ;;
     esac
 
-# Run Docker's kit-spec conformance suite (ssh-agent@1, host-mount@1, lifecycle@1) against the adapter in
-# tests/conformance. Boots real VMs and builds the suite's workload image (needs a hypervisor
-# and the image builder); further arguments go to `kit-tck runtime` (e.g. `--verbose`).
+# Run Docker's kit-spec conformance suite (ssh-agent@1, host-mount@1, lifecycle@1, network-policy@1
+# and @2) against the adapter in tests/conformance, listing passed checks too. Boots real VMs and
+# builds the suite's workload image (needs a hypervisor and the image builder); further arguments
+# go to `kit-tck runtime`. One slice: SMOLBENTO_TCK_CAPABILITIES=network-policy@2 just conformance.
 conformance *args:
     #!/usr/bin/env bash
     set -euo pipefail
@@ -172,8 +173,15 @@ conformance *args:
     cargo build --locked
     export SMOLBENTO_BIN="$PWD/target/debug/smolbento"
     adapter="$PWD/tests/conformance/smolbento-adapter"
+    home=${SMOLBENTO_TCK_HOME:-/tmp/sbt-tck-$(id -u)}
+    mkdir -p "$home" && : >"$home/adapter.log"
+    echo "follow the run: tail -f $home/adapter.log" >&2
     cd "$spec"
-    GOWORK=off nix shell nixpkgs#go nixpkgs#jq -c go run ./cmd/kit-tck runtime --adapter "$adapter" --timeout 2h {{args}}
+    status=0
+    GOWORK=off nix shell nixpkgs#go nixpkgs#jq -c go run ./cmd/kit-tck runtime --adapter "$adapter" --timeout 2h -v {{args}} || status=$?
+    # Kept for the next run's cached builds; nothing else shrinks it.
+    echo "$home holds $(du -sh "$home" | cut -f1); free it with: rm -rf $home" >&2
+    exit "$status"
 
 # Record the README demo into dist/demo.gif with VHS (boots a VM; needs Nix). Your own sandboxes,
 # settings and secrets are untouched: the demo has its own dirs and a sandbox-scoped dummy secret.

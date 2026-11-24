@@ -9,7 +9,14 @@
 #                      per-sandbox state (default: /tmp/sbt-tck-<uid>). Keep it short: the suite
 #                      runs the adapter with a long sentinel HOME, and smolvm puts machine sockets
 #                      under HOME, where unix socket paths top out near 100 bytes. The runs also
-#                      keep smolvm's own state (machines, images) here, apart from the user's.
+#                      keep smolvm's own state (machines, images) here, apart from the user's,
+#                      with smolvm's image cache held to 30g. Each call is logged, one line, to
+#                      adapter.log there.
+#   SMOLBENTO_TCK_CAPABILITIES
+#                      comma- or newline-separated capability types that replace the claim list,
+#                      to run one slice of the suite (`network-policy@2` is short for
+#                      `com.docker.sandbox/network-policy@2`). The checks that need a refusal of
+#                      a required capability this adapter normally claims then fail.
 #
 # smolbento's own config, sandboxes and secrets are never touched: every call runs with
 # SMOLBENTO_CONFIG_DIR/DATA_DIR/CACHE_DIR under SMOLBENTO_TCK_HOME. The suite's --ssh-agent and
@@ -48,7 +55,7 @@ sbt() {
 		unset SMOLBENTO_SSH_KNOWN_HOSTS_FILE || true
 	fi
 	SMOLBENTO_CONFIG_DIR=$home/config SMOLBENTO_DATA_DIR=$home/data SMOLBENTO_CACHE_DIR=$home/cache \
-		SMOLBENTO_KIT_ALLOW_LOCAL_KITS=true \
+		SMOLBENTO_KIT_ALLOW_LOCAL_KITS=true SMOLBENTO_IMAGE_CACHE_SIZE=30g \
 		"$bin" "$@"
 }
 
@@ -94,14 +101,19 @@ required_unclaimed() {
 [ $# -gt 0 ] || die "usage: smolbento-adapter <verb> [args]"
 verb=$1
 shift
+printf '%s %s\n' "$(date +%T)" "$verb $*" >>"$home/adapter.log"
 
 case "$verb" in
 capabilities)
-	echo com.docker.sandbox/ssh-agent@1
-	echo com.docker.sandbox/host-mount@1
-	echo com.docker.sandbox/lifecycle@1
-	echo com.docker.sandbox/network-policy@1
-	echo com.docker.sandbox/network-policy@2
+	if [ -n "${SMOLBENTO_TCK_CAPABILITIES:-}" ]; then
+		printf '%s\n' "$SMOLBENTO_TCK_CAPABILITIES" | tr ',' '\n' | sed 's/^[[:space:]]*//; s/[[:space:]]*$//; /^$/d; /\//!s#^#com.docker.sandbox/#'
+	else
+		echo com.docker.sandbox/ssh-agent@1
+		echo com.docker.sandbox/host-mount@1
+		echo com.docker.sandbox/lifecycle@1
+		echo com.docker.sandbox/network-policy@1
+		echo com.docker.sandbox/network-policy@2
+	fi
 	;;
 
 create)
