@@ -1253,7 +1253,12 @@ fn add_runs_install_hooks_in_the_recorded_image_workdir() {
     dev_sandbox_labeled(
         &t,
         "running",
-        &[("sbx.agent", "shell"), ("sbx.workdir", "/x")],
+        // A create records `sbx.user` with `sbx.workdir`: both come from the image config.
+        &[
+            ("sbx.agent", "shell"),
+            ("sbx.workdir", "/x"),
+            ("sbx.user", "0"),
+        ],
         &base(),
     );
     v3_kit(&t, "net", NET_KIT, &[]);

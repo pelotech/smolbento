@@ -82,17 +82,12 @@ impl CreateRequest {
     /// the primary workspace (inside the clone with `--clone`), else the workload image's WORKDIR
     /// (SPEC sbx@1/workspace-at-workdir), else sbx's mountless directory.
     pub fn workdir(&self) -> String {
-        self.workspaces.first().map_or_else(
-            || {
-                (self
-                    .rec
-                    .image_workdir
-                    .as_deref()
-                    .unwrap_or(MOUNTLESS_WORKDIR))
-                .into()
-            },
-            |w| w.path.display().to_string(),
-        )
+        match self.workspaces.first() {
+            Some(w) => w.path.display().to_string(),
+            None => (self.rec.image_workdir.as_deref())
+                .unwrap_or(MOUNTLESS_WORKDIR)
+                .into(),
+        }
     }
 }
 

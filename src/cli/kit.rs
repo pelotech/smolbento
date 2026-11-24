@@ -574,9 +574,9 @@ fn add_running<R: Runner>(
     let mut workload = empty_workload(&sb.meta.agent);
     workload.provides = own.iter().flat_map(|r| r.provides.clone()).collect();
     let rec = &sb.meta.rec;
-    workload.config = (rec.image_workdir.is_some() || rec.user.is_some()).then(|| ImageConfig {
+    workload.config = rec.user.clone().map(|user| ImageConfig {
         workdir: rec.image_workdir.clone().unwrap_or_default(),
-        user: rec.user.clone().unwrap_or_default(),
+        user,
         ..Default::default()
     });
     // The image's `Env` and the create's `-e` aren't kept with the sandbox: `${{ kit.env.* }}`
