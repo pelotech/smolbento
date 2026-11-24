@@ -896,6 +896,52 @@ fn a_kit_grant_for_both_phases_reaches_the_install_hooks_too() {
     );
 }
 
+/// tck: ssh-agent@1/signatures-bounded, lifecycle@1/files-before-entrypoint: with an install and
+/// runtime grant, the runtime agent unit is loaded (at `Booted`) before the start's last exec
+/// releases the workload, so its first process never meets the install-phase agent.
+#[test]
+fn the_runtime_agent_unit_is_up_before_the_workload_is_released() {
+    let (_agent, sock) = host_agent();
+    let mut t = test_env(&[("SSH_AUTH_SOCK", &sock)]);
+    let (ctl, _tmp) = with_services(&mut t);
+    let fake = t.runner();
+    fake.fail(&["machine", "status"], "NOT_FOUND", "vm not found");
+    fake.once_ok(
+        &["machine", "status"],
+        &machine_json(
+            &sandbox::name::machine_name("s1"),
+            "created",
+            &[("sbx.name", "s1")],
+        ),
+    );
+    fake.missing_until_created(&sandbox::name::machine_name("s1"));
+    let plan = agent_plan(false, vec![ssh_agent(&[Install, Runtime], &[], false)]);
+    let mut req = agent_request(false);
+    let mut at_boot = None;
+    create_with(&t.ctx, &mut req, &[], Some(&plan), None, &mut |e| {
+        if matches!(e, sandbox::Event::Booted) {
+            at_boot = Some((t.calls().len(), ctl.calls()));
+        }
+    })
+    .unwrap();
+    let (calls_before, units) = at_boot.expect("Booted is heard");
+    assert!(
+        units
+            .iter()
+            .any(|c| c.starts_with("load ") && c.ends_with(".s1.agent")),
+        "{units:?}"
+    );
+    let calls = t.calls();
+    let release = calls
+        .iter()
+        .rposition(|c| c.starts_with("machine exec") && c.contains("/run/smolbento/ready"))
+        .unwrap_or_else(|| panic!("{calls:#?}"));
+    assert!(
+        release >= calls_before,
+        "released before Booted: {calls:#?}"
+    );
+}
+
 #[test]
 fn an_install_only_grant_sets_ssh_auth_sock_only_for_install_hooks() {
     let (_agent, sock) = host_agent();
