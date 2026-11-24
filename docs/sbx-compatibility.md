@@ -336,10 +336,11 @@ Not claimed, each for checks that fail: `dockerd@1` and `volume@1` (the spec's `
 the engine store and volumes while discarding the sandbox's disk, and smolbento keeps them on that
 disk); `git-identity@1` and `agent-context@2` (`recreate` and selection records are missing;
 `git-identity@1/global-defaults` and `agent-context@2/materialized` pass); `agent-skills@1` and
-`agent-skill@1` (selection records); and `credential@1` (not yet run in full
-since its fixes). The adapter can still run these slices (`SMOLBENTO_TCK_CAPABILITIES`): it maps `--skills-host-mode` to `--skills`, `--skills-host-store`
-to its isolated store, `--git-identity-config` to the host git config bento reads, and binds the
-fixture's credential as a `secret set-custom --command` that reads the suite's value at each start.
+`agent-skill@1` (selection records); and `credential@1` (not yet run in full since its fixes). The
+adapter can still run these slices (`SMOLBENTO_TCK_CAPABILITIES`): it maps `--skills-host-mode` to
+`--skills`, `--skills-host-store` to its isolated store, `--git-identity-config` to the host git
+config bento reads, and binds the fixture's credential as a `secret set-custom --command` that reads
+the suite's dummy value from a 0600 file in `SMOLBENTO_TCK_HOME` at each start.
 The suite's isolated setup needs the units' socket path under 104 bytes (a short
 `SMOLBENTO_TCK_HOME`); a longer one falls back to attached-only serving and the boot-time checks
 fail.
