@@ -131,9 +131,11 @@ create)
 		--ssh-agent) agent=$2; shift 2 ;;
 		--ssh-known-hosts) known_hosts=$2; shift 2 ;;
 		--workspace-mode)
+			# A mountless sandbox's workspace is internal: the image's WORKDIR. smolbento has no
+			# workspace-free mode, and the suite's host and cloned sources aren't mapped yet.
 			case "$2" in
-			none) ;;
-			internal | host | cloned)
+			internal) ;;
+			none | host | cloned)
 				echo "unsupported workspace mode: $2" >&2
 				exit 2
 				;;
