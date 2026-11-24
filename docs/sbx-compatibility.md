@@ -326,11 +326,19 @@ Docker's kit-spec conformance suite checks this capability through `tests/confor
 `resources@1` and `sbx@1`, under the `balanced` mode (sbx's default: under `allow-all` a kit's
 bounded allow bounds nothing, as the mode already grants the host). All 11 `ssh-agent@1` checks
 pass: a workload's first process starts only once the start's install steps, files, agent context and
-startup hooks are done, and after the runtime agent's unit is up. The failures left are
-`lifecycle@1/hook-env-restricted`, the recorded difference above (install steps keep the proxy
-and CA variables); and `SPEC-v3 §7.1.1/validate-expanded-declarations` and `atomic-selection`,
-which use the suite's selection controls (`--reject-capability`, selection records) that
-smolbento doesn't have.
+startup hooks are done, and after the runtime agent's unit is up. So do the `host-mount@1`,
+`network-policy@1`/`@2`, `agent-context@1`, `long-running@1` and `privileged@1` checks, and
+`sbx@1/honors-image-user`, `workspace-at-workdir` and `entrypoint-not-pid-one`. The failures left
+are `lifecycle@1/hook-env-restricted`, the recorded difference above (install steps keep the proxy
+and CA variables); `SPEC-v3 §7.1.1/validate-expanded-declarations`, `atomic-selection` and
+`§7.1.2/exact-version`, which use the suite's selection controls (`--reject-capability`, selection
+records) that smolbento doesn't have; and the `sbx@1` workspace and identity environment checks
+(`environment-provided`, `-process`, `-internal`, `-hooks`, `-hooks-internal`,
+`identity-stable`, `identity-new-after-deletion`). Those read the environment the workload's agent
+was launched with, and smolbento launches an `sbx@1` workload's agent only on `run`; the four
+variables also don't yet override yours, `IS_SANDBOX` isn't set, and there's no `recreate`. The
+adapter maps `--workspace-mode internal` to a sandbox without a workspace mount (its workspace is
+the image's `WORKDIR`) and refuses `none`, `host` and `cloned`, so those scenario checks skip.
 `resources@1/limit-applied` warns: the sandbox reports its memory limit as unknown. The limit is
 applied, as the VM's size (`--mem`, which the spec allows), but the check reads only the cgroup's
 `memory.max`, and a smolvm machine's workload sees the cgroup2 root, which has none. It needs smolvm
