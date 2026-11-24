@@ -350,27 +350,32 @@ new session after a change.
 | `kiro`, `docker-agent`, `shell` | none: the store isn't shared |
 
 `~` is `/home/agent`. Links are
-made as root at each start, owned by the image's `agent` account (uid 1000 without one). A skills
+made as root at each start, owned by the image's `agent` account (uid 1000 without one), as is
+any directory made for a link or bind (such as `~/.claude`). A skills
 directory reached through a symlink gets no links, and a required bundled skill for it fails the
-create. If linking fails, the start warns (`couldn't link shared skills`) and goes on.
+create. If linking fails, the start warns (`couldn't set up shared skills`) and goes on.
 
 ### Skills from kits
 
 - `agent-skills@1` names a `path` (absolute) that gets the store, with `mode` `readonly` (default)
   or `readwrite`. Access is the narrower of the kit's mode (the widest across kits) and `--skills`.
-  The store is mounted over that path, with no links. `off` leaves it out.
+  smolvm mounts the store once, at `/run/sbx/skills-shared`, and each such path is a bind of that
+  mount (read-only unless its access is read-write), made as root at each start before any hook,
+  with no links. Every path is the one store: a write through one shows through the others. `off`
+  leaves it out.
 - `agent-skill@1` bundles a skill from the kit's image. `path` is its directory; `name` (optional)
   is its name, defaulting to the directory's. At first start smolbento checks that `SKILL.md` is a
   file and no skill of that name exists, then links it into every skills directory. A required
   bundled skill that fails either check, or has nowhere to go, fails the create and removes the
   sandbox. An optional one prints `warning: skipping skill NAME: reason` and the sandbox starts
-  without it. A name that matches a stored skill is a conflict: the store link comes first.
+  without it. A name that matches a stored skill is a conflict: the store link comes first, and a
+  required bundled skill is refused before the sandbox is made.
   smolbento links bundled skills and never runs them.
 - With bundled skills, no skills directory is mounted over, since that would put the kit's skills in
   your store. Every directory instead links into `/run/sbx/skills-shared`. That mount is read-write
-  if any directory would have been, else read-only. With `off`, the directories hold only the
+  if any directory's access is, else read-only, with or without bundled skills. With `off`, the directories hold only the
   bundled skills.
-- A bundled skill named like a stored skill fails the create with `failed to compose shared skills
+- A required bundled skill named like a stored skill fails the create with `failed to compose shared skills
   into the sandbox: bundled skills NAME cannot be exposed in DIR: another skill already uses the
   name`.
 - `kit add` refuses kits with either capability, since mounts are set at create. Create a new

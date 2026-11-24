@@ -271,8 +271,8 @@ directory names. What you share with a sandbox is what its agent follows.
   loads whatever the store holds at each start, including changes made by a `readwrite` sandbox or
   by you.
 - Use `--skills off` for untrusted work. The sandbox gets no store and no skills directory.
-- A kit can widen `readwrite` to links. With `--skills readwrite`, a kit that bundles a skill and
-  names a `readwrite` directory makes `/run/sbx/skills-shared` read-write. The agent can then
+- A kit can widen `readwrite` to links. With `--skills readwrite`, a kit that names a `readwrite`
+  directory makes `/run/sbx/skills-shared` read-write. The agent can then
   change stored skills through every link. Check a kit's `agent-skills@1` modes before using it
   with `readwrite`.
 - Prefer HTTPS or SSH for `skills add`. `http://` and `git://` URLs are accepted, as in sbx, but

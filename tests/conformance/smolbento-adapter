@@ -230,7 +230,7 @@ create)
 		rm -f "$state/$id.agent" "$state/$id.known-hosts"
 		# smolbento exits 1 for every error; its refusals are told apart by message, which is
 		# why this lives in the adapter.
-		if grep -qE 'is not supported by smolbento|needs an SSH agent, but|needs your git identity|and a sandbox uses one version|both declare | at capabilities\[' "$err"; then
+		if grep -qE 'is not supported by smolbento|needs an SSH agent, but|needs your git identity|and a sandbox uses one version|both declare | at capabilities\[|another skill already uses the name|needs a skills directory' "$err"; then
 			status=2
 		fi
 		rm -f "$err"

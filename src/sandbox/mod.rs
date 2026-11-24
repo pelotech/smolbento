@@ -281,7 +281,7 @@ fn setup<R: Runner>(
             sb.name()
         );
     }
-    // Not fatal: without the links the agent just doesn't see the shared skills this start.
+    // Not fatal: without links and binds the agent doesn't see the shared skills this start.
     // As root, as in sbx; the script hands the directories and links to the agent's uid.
     if let Some(script) = sb
         .meta
@@ -290,7 +290,7 @@ fn setup<R: Runner>(
         .and_then(|l| crate::skills::link_script(&l.dirs))
         && let Err(e) = vm.exec_captured(&ExecSpec::sh(&sb.machine, "root", script))
     {
-        crate::warning!("{}: couldn't link shared skills: {e:#}", sb.name());
+        crate::warning!("{}: couldn't set up shared skills: {e:#}", sb.name());
     }
     if let Some(step) = &plan.clone {
         for w in run_clone(vm, sb, step)? {

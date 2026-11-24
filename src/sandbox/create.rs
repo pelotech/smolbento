@@ -181,7 +181,7 @@ pub fn spec(req: &CreateRequest) -> CreateSpec {
         read_only: false,
     }));
     if let Some(s) = &req.skills {
-        mounts.extend(crate::skills::mounts(&s.store, &s.label));
+        mounts.extend(crate::skills::mount(&s.store, &s.label));
     }
     for v in &req.volumes {
         // Two kits may ask for the same volume.
