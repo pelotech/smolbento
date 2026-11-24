@@ -1253,7 +1253,12 @@ fn add_runs_install_hooks_in_the_recorded_image_workdir() {
     dev_sandbox_labeled(
         &t,
         "running",
-        &[("sbx.agent", "shell"), ("sbx.workdir", "/x")],
+        // A create records `sbx.user` with `sbx.workdir`: both come from the image config.
+        &[
+            ("sbx.agent", "shell"),
+            ("sbx.workdir", "/x"),
+            ("sbx.user", "0"),
+        ],
         &base(),
     );
     v3_kit(&t, "net", NET_KIT, &[]);
@@ -1263,6 +1268,33 @@ fn add_runs_install_hooks_in_the_recorded_image_workdir() {
         install_script().replacen("cd / ", "cd '/x' ", 1)
     );
     assert!(dev_calls(&t).contains(&want), "{:#?}", dev_calls(&t));
+}
+
+#[test]
+fn add_gives_the_image_user_back_their_home_after_root_install_hooks() {
+    // tck: sbx@1/honors-image-user, lifecycle@1/default-users (install hooks run as root)
+    let mut t = kit_env();
+    set_policy(&t, "mode = \"deny-all\"\n");
+    dev_sandbox_labeled(
+        &t,
+        "running",
+        &[("sbx.agent", "shell"), ("sbx.user", "somebody")],
+        &base(),
+    );
+    v3_kit(&t, "net", NET_KIT, &[]);
+    t.sbt(&["kit", "add", "dev", "./net", "--yes"]).unwrap();
+    let calls = dev_calls(&t);
+    let hook = format!(
+        "machine exec --name {MACHINE} -u root -- sh -c {}{}",
+        guest::image_home("somebody"),
+        install_script()
+    );
+    let home = format!(
+        "machine exec --name {MACHINE} -u root -- sh -c {}",
+        guest::home_to_user("somebody")
+    );
+    let at = |c: &str| calls.iter().position(|l| l == c);
+    assert!(at(&hook) < at(&home) && at(&hook).is_some(), "{calls:#?}");
 }
 
 #[test]

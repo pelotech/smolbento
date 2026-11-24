@@ -679,12 +679,19 @@ fn a_v3_workload_records_its_image_user_and_installs_in_its_workdir() {
     assert_eq!(req.rec.user.as_deref(), Some("somebody"));
     assert_eq!(create::spec(&req).labels["sbx.user"], "somebody");
     assert_eq!(create::spec(&req).labels["sbx.workdir"], "/x");
+    // tck: sbx@1/honors-image-user. A hook without `user:` runs as root (lifecycle@1), with the
+    // image user's `HOME`.
     assert_eq!(steps.install[0].user, None);
+    let want = format!("{}cd '/x' && env -i ", guest::image_home("somebody"));
     assert!(
-        steps.install[0].script.starts_with("cd '/x' && env -i "),
+        steps.install[0].script.starts_with(&want),
         "{}",
         steps.install[0].script
     );
+    // Then, as root, what root left in that home goes back to the image user.
+    assert_eq!(steps.install.len(), 2);
+    assert_eq!(steps.install[1].user, None);
+    assert_eq!(steps.install[1].script, guest::home_to_user("somebody"));
 
     // No USER is root; no WORKDIR is `/`.
     let mut w = workload();
@@ -692,6 +699,11 @@ fn a_v3_workload_records_its_image_user_and_installs_in_its_workdir() {
     let p = resolve(w, vec![m], &ArgValues::default()).unwrap();
     let mut req = request();
     let (steps, _) = run(&p, &mut req, &mut Policy::default()).unwrap();
+    assert_eq!(
+        steps.install.len(),
+        1,
+        "a root image user has nothing to get back"
+    );
     assert_eq!(req.rec.user.as_deref(), Some("0"));
     assert_eq!(req.rec.image_workdir, None);
     assert!(steps.install[0].script.starts_with("cd / && env -i "));
@@ -1101,6 +1113,35 @@ fn a_mountless_sandbox_uses_the_parent_of_its_workdir() {
         steps.context,
         inline_layout("/home/agent/CLAUDE.md", &[("m", "b")])
     );
+}
+
+#[test]
+fn a_mountless_sandbox_works_in_the_image_workdir() {
+    // tck: sbx@1/workspace-at-workdir, with its fixture's image config.
+    let mut w = with(
+        workload(),
+        "agent-context@1",
+        false,
+        context(None, Some("AGENTS.md"), "wl body"),
+    );
+    w.config = Some(crate::kits::model::ImageConfig {
+        user: "sbxagent".into(),
+        workdir: "/home/sbxagent/workspace".into(),
+        ..Default::default()
+    });
+    let p = resolve(w, vec![], &ArgValues::default()).unwrap();
+    let mut req = request();
+    let (steps, _) = run(&p, &mut req, &mut Policy::default()).unwrap();
+    assert_eq!(req.workdir(), "/home/sbxagent/workspace");
+    assert_eq!(req.rec.agent_files, ["/home/sbxagent/AGENTS.md"]);
+    assert_eq!(
+        steps.context,
+        mixin_layout("/home/sbxagent/AGENTS.md", &[("wl", "wl body")])
+    );
+    // A mounted workspace stays at its host path.
+    let mut req = in_workspace("/w/proj");
+    run(&p, &mut req, &mut Policy::default()).unwrap();
+    assert_eq!(req.workdir(), "/w/proj");
 }
 
 #[test]

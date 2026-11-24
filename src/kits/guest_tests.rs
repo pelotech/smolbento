@@ -459,6 +459,80 @@ fn fake_guest() -> tempfile::TempDir {
     d
 }
 
+#[test]
+fn image_home_exports_the_accounts_home_by_name_or_uid() {
+    // tck: sbx@1/honors-image-user
+    let d = fake_guest();
+    let passwd = d.path().join("passwd").display().to_string();
+    let home = |user: &str| {
+        let out = Command::new("/bin/sh")
+            .arg("-c")
+            .arg(format!("{}echo \"$HOME\"", image_home_in(user, &passwd)))
+            .env("HOME", "/root")
+            .output()
+            .unwrap();
+        assert!(out.status.success(), "{out:?}");
+        String::from_utf8_lossy(&out.stdout).trim().to_string()
+    };
+    assert_eq!(home("acct"), "/home/acct");
+    assert_eq!(home("4321:4321"), "/home/acct");
+    // No account: `HOME` is left as it was.
+    assert_eq!(home("nobody-here"), "/root");
+}
+
+#[test]
+fn home_to_user_chowns_roots_files_in_the_accounts_home() {
+    // tck: sbx@1/honors-image-user, lifecycle@1/default-users (install hooks run as root)
+    let d = fake_guest();
+    let home = d.path().join("home");
+    std::fs::create_dir(&home).unwrap();
+    // `acct` owns its home; `nobody` (Alpine's) has home `/`, which root owns.
+    let uid = std::os::unix::fs::MetadataExt::uid(&std::fs::metadata(&home).unwrap());
+    let passwd = d.path().join("passwd").display().to_string();
+    std::fs::write(
+        &passwd,
+        format!(
+            "acct:x:{uid}:4322::{}:/bin/sh\nhomeless:x:99:99::/no/such/home:/bin/sh\n\
+             nobody:x:{uid}:4322::/:/sbin/nologin\n",
+            home.display()
+        ),
+    )
+    .unwrap();
+    let bin = d.path().join("bin");
+    {
+        use std::os::unix::fs::PermissionsExt;
+        let p = bin.join("find");
+        std::fs::write(&p, "#!/bin/sh\necho \"find $*\"\n").unwrap();
+        std::fs::set_permissions(&p, std::fs::Permissions::from_mode(0o755)).unwrap();
+    }
+    let run = |user: &str| {
+        let out = Command::new("/bin/sh")
+            .arg("-c")
+            .arg(home_to_user_in(user, &passwd))
+            .env("PATH", fake_path(&d))
+            .output()
+            .unwrap();
+        assert!(out.status.success(), "{out:?}");
+        String::from_utf8_lossy(&out.stdout).to_string()
+    };
+    let want = format!(
+        "find {} -xdev -user 0 -exec chown -h {uid}:4322 {{}} +\n",
+        home.display()
+    );
+    assert_eq!(run("acct"), want);
+    assert_eq!(run(&format!("{uid}:4322")), want);
+    // No account, no home directory, or a home the account doesn't own: nothing to give back.
+    assert_eq!(run("nobody-here"), "");
+    assert_eq!(run("homeless"), "");
+    if uid != 0 {
+        assert_eq!(
+            run("nobody"),
+            "",
+            "a home of `/` would hand over the whole disk"
+        );
+    }
+}
+
 /// `as_user_in` against the fake guest, with `path` as `PATH`.
 fn run_as(d: &tempfile::TempDir, user: &str, path: &str) -> std::process::Output {
     let passwd = d.path().join("passwd").display().to_string();

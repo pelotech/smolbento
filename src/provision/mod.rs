@@ -545,11 +545,11 @@ pub fn prepare_create<R: Runner>(
             },
         );
     }
-    // sbx's mountless directory, where exec starts: a kit workload's image may not have it.
+    // The mountless directory, where exec starts: a kit workload's image may not have it.
     if req.workspaces.is_empty()
         && let Some(first) = first_start.as_mut()
     {
-        let dir = crate::workspace::MOUNTLESS_WORKDIR;
+        let dir = crate::util::sh_quote(&req.workdir());
         let user = crate::util::sh_quote(req.rec.user.as_deref().unwrap_or("agent"));
         first.steps.install.insert(
             0,

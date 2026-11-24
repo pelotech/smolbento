@@ -150,7 +150,8 @@ pub fn apply(
             bail!("kit {kit}: hook env '{v}' is not a valid variable name");
         }
     }
-    let workdir = image_workdir(plan);
+    // Before `req.workdir()`: a mountless sandbox works there (SPEC sbx@1/workspace-at-workdir).
+    req.rec.image_workdir = image_workdir(&plan.workload).map(String::from);
     steps.install.extend(kit_install_steps(plan, req));
     // `resolve` refuses two kits writing one path.
     steps.files = m.files.iter().map(guest::file_script).collect();
@@ -177,7 +178,7 @@ pub fn apply(
         .caps
         .iter()
         .any(|c| matches!(c.body, CapBody::Sbx));
-    set_workload_fields(req, &plan.workload, workdir, agent_files);
+    set_workload_fields(req, &plan.workload, agent_files);
     // After the workload's fields: a startup hook without `user:` runs as the session user.
     let session = if crate::sandbox::name::is_internal(&req.name) {
         "root"
@@ -341,14 +342,8 @@ fn git_identity_step(
 
 /// The request fields the workload kit sets. A v3 workload's agent runs as its image's user, root
 /// when the image names none.
-fn set_workload_fields(
-    req: &mut CreateRequest,
-    workload: &Kit,
-    workdir: Option<&str>,
-    agent_files: Vec<String>,
-) {
+fn set_workload_fields(req: &mut CreateRequest, workload: &Kit, agent_files: Vec<String>) {
     req.rec.command = workload.command.clone();
-    req.rec.image_workdir = workdir.map(String::from);
     // `kit add` can't reload the workload: it reads this back from `sbx.agent-file`.
     req.rec.agent_files = agent_files;
     req.rec.user = workload.config.as_ref().map(|c| match c.user.as_str() {
@@ -383,21 +378,27 @@ pub fn kit_record(k: &Kit) -> Result<KitRecord> {
     })
 }
 
-/// The workload image's WORKDIR, unless it's unset or `/`.
-fn image_workdir(plan: &Plan) -> Option<&str> {
-    plan.workload
+/// The workload image's WORKDIR, unless it's unset, `/` or relative.
+pub fn image_workdir(workload: &Kit) -> Option<&str> {
+    workload
         .config
         .as_ref()
         .map(|c| c.workdir.as_str())
-        .filter(|d| !d.is_empty() && *d != "/")
+        .filter(|d| d.starts_with('/') && *d != "/")
 }
 
 /// The kits' install hooks as steps, numbered per kit. They run in the workload image's WORKDIR,
 /// as sbx runs them (`/` without one), and see `SSH_AUTH_SOCK` only with an install grant (a
 /// clean-env hook only when it declares it); a runtime grant's create-time variable is unset for
-/// them.
+/// them. One run as root has the image user's `HOME` (SPEC sbx@1/honors-image-user); after them,
+/// what root left in that home goes back to the image user.
 fn kit_install_steps(plan: &Plan, req: &CreateRequest) -> Vec<InstallStep> {
-    let install_dir = image_workdir(plan).map_or_else(|| "/".to_string(), crate::util::sh_quote);
+    let install_dir =
+        image_workdir(&plan.workload).map_or_else(|| "/".to_string(), crate::util::sh_quote);
+    let image_user = (plan.workload.config.as_ref())
+        .map(|c| c.user.as_str())
+        .filter(|u| !matches!(u.split(':').next(), Some("" | "0" | "root")));
+    let image_home = image_user.map(guest::image_home).unwrap_or_default();
     let granted = req.ssh_agent.as_ref();
     let agent_env = if granted.is_some_and(|a| a.install.is_some()) {
         format!("export SSH_AUTH_SOCK={} && ", agent::GUEST_SOCKET)
@@ -423,7 +424,20 @@ fn kit_install_steps(plan: &Plan, req: &CreateRequest) -> Vec<InstallStep> {
             label: format!("kit {kit} install hook {n}"),
             kit: Some(kit.to_string()),
             user: h.user.clone(),
-            script: format!("cd {install_dir} && {agent_env}{}", guest::hook_script(h)),
+            script: format!(
+                "{}cd {install_dir} && {agent_env}{}",
+                if h.user.is_none() { &image_home } else { "" },
+                guest::hook_script(h)
+            ),
+            relay_stderr: false,
+        });
+    }
+    if let Some(u) = image_user.filter(|_| !steps.is_empty()) {
+        steps.push(InstallStep {
+            label: "returning the image user's home".into(),
+            kit: None,
+            user: None,
+            script: guest::home_to_user(u),
             relay_stderr: false,
         });
     }

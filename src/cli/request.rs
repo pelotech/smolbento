@@ -349,6 +349,8 @@ pub(crate) fn kit_plan<R: Runner>(
         }
     }
     let hosted = crate::provision::may_host(ctx, &req.name)?;
+    // `WORKSPACE` is where a mountless sandbox works: the image's WORKDIR (`apply` sets it too).
+    req.rec.image_workdir = crate::kits::apply::image_workdir(&workload).map(String::from);
     let mut plan = resolve_for(workload, mixins, &args, &req.workdir(), &req.env, hosted)?;
     plan.skipped.extend(skipped);
     if let Some(t) = &req.rec.template {

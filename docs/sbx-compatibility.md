@@ -320,10 +320,10 @@ your agent (`ssh-add -D` fails with `Failed to remove all identities.`). The set
 
 Docker's kit-spec conformance suite checks this capability through `tests/conformance/smolbento-adapter`
 (`just conformance`, at `SPEC_COMMIT`). The adapter claims `ssh-agent@1`, `host-mount@1`,
-`lifecycle@1`, `network-policy@1`/`@2`, `agent-context@1`, `long-running@1`, `privileged@1` and
-`resources@1`, under the `balanced` mode (sbx's default: under `allow-all` a kit's bounded allow
-bounds nothing, as the mode already grants the host). All 11 `ssh-agent@1` checks pass: a
-workload's first process starts only once the start's install steps, files, agent context and
+`lifecycle@1`, `network-policy@1`/`@2`, `agent-context@1`, `long-running@1`, `privileged@1`,
+`resources@1` and `sbx@1`, under the `balanced` mode (sbx's default: under `allow-all` a kit's
+bounded allow bounds nothing, as the mode already grants the host). All 11 `ssh-agent@1` checks
+pass: a workload's first process starts only once the start's install steps, files, agent context and
 startup hooks are done, and after the runtime agent's unit is up. The failures left are
 `lifecycle@1/hook-env-restricted`, the recorded difference above (install steps keep the proxy
 and CA variables); and `SPEC-v3 §7.1.1/validate-expanded-declarations` and `atomic-selection`,
@@ -335,10 +335,9 @@ Not claimed, each for checks that fail: `dockerd@1` and `volume@1` (the spec's `
 the engine store and volumes while discarding the sandbox's disk, and smolbento keeps them on that
 disk); `git-identity@1` and `agent-context@2` (`recreate` and selection records are missing;
 `git-identity@1/global-defaults` and `agent-context@2/materialized` pass);
-`sbx@1` (hooks and the workspace assume the `agent` user rather than the image's); `agent-skills@1`
-and `agent-skill@1` (selection records, and paths backed by separate copies of the store;
-bundled skills are in place before launch); and `credential@1` (an install-only credential stays
-set for the workload, and an inject-only one adds variables). The adapter can still run these slices
+`agent-skills@1` and `agent-skill@1` (selection records, and paths backed by separate copies of
+the store; bundled skills are in place before launch); and `credential@1` (an install-only
+credential stays set for the workload, and an inject-only one adds variables). The adapter can still run these slices
 (`SMOLBENTO_TCK_CAPABILITIES`): it maps `--skills-host-mode` to `--skills`, `--skills-host-store`
 to its isolated store, `--git-identity-config` to the host git config bento reads, and binds the
 fixture's credential as a `secret set-custom --command` that reads the suite's value at each start.
@@ -395,7 +394,8 @@ The spec's own validator accepts the pair and merges it. A capability `type` mus
 ### What works as in sbx
 
 - A workload kit's command runs as the image's `USER` (root if none), under `/bin/bash` so
-  `BASH_ENV` is sourced, in the workspace path rather than `WORKDIR`. `bento exec` uses the same
+  `BASH_ENV` is sourced, in the workspace path rather than `WORKDIR`. A sandbox without a workspace
+  works in the image's `WORKDIR` (spec `sbx@1/workspace-at-workdir`), else `/home/agent/workspace`. `bento exec` uses the same
   user. Without `/bin/bash` the error is `executable file '/bin/bash' not found` (exit 127).
   smolvm maps the workspace to the image user so it can write it. An image with no `ENTRYPOINT`
   or `CMD` is refused at create and by `kit validate`.
@@ -403,8 +403,12 @@ The spec's own validator accepts the pair and merges it. A capability `type` mus
   spec's default launch mode says (the machine's command; smolvm keeps the machine up after it
   exits). It waits, in `sh`, until the start's install steps, files, agent context and startup
   steps are done. Not measured against sbx. `bento run` is unchanged: an interactive session through `exec`.
-- Install steps run as root in the image `WORKDIR` (`/` otherwise). Startup steps and kit files
-  default to `agent`. v3 install steps get a clean environment: `PATH`, `HOME`, `USER`, `TERM`,
+- Install steps run as root in the image `WORKDIR` (`/` otherwise); one that names no user gets
+  the image user's `HOME` (spec `sbx@1/honors-image-user`; sbx not measured). After the steps, at
+  create and `kit add`, files owned by root in that home go to the image user and its group (not
+  for a root image user, nor for a home the user doesn't own, such as `nobody`'s `/`), so a step's
+  `~/.npm` or `~/.cache` stays writable. Startup steps and kit
+  files default to `agent`. v3 install steps get a clean environment: `PATH`, `HOME`, `USER`, `TERM`,
   the proxy and CA variables, and the step's own `env`. v3 startup steps and all v2 steps get the
   full sandbox environment.
 - Startup steps block, in kit order. A failure is a warning with the log's last lines
