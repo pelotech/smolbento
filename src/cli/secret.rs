@@ -17,7 +17,7 @@ use crate::secrets::{
     CustomService, RegistryEntry, SecretEntry, SecretsFile, Source, registry_account, scope_for,
     services,
 };
-use crate::smolvm::Runner;
+use crate::smolvm::{NetworkSpec, Runner};
 
 pub fn run<R: Runner>(ctx: &mut Ctx<R>, cmd: SecretCmd) -> Result<i32> {
     let mut file = SecretsFile::load(&ctx.paths)?;
@@ -335,11 +335,9 @@ fn explain_impact<R: Runner>(
         })
         .partition(|s| is_bound(s, svc.as_ref(), service));
     // A hosted sandbox's values live in its egress process: smolvm refuses credential changes in
-    // external mode. A restart applies a new value at once; a new service needs a recreate.
+    // external mode. A restart applies a new value, or a new service bound to its label.
     let (hosted_bound, bound): (Vec<_>, Vec<_>) =
         bound.into_iter().partition(|s| s.meta.egress.is_some());
-    let (hosted_unbound, unbound): (Vec<_>, Vec<_>) =
-        unbound.into_iter().partition(|s| s.meta.egress.is_some());
     // Read once for every sandbox: a --ref or --command source may prompt, or be slow.
     let new = match (
         bound.iter().any(|s| s.is_running()) || !unbound.is_empty(),
@@ -358,6 +356,7 @@ fn explain_impact<R: Runner>(
         _ => None,
     };
     let (mut now, mut later) = (Vec::new(), Vec::new());
+    let mut fresh_env = false;
     for s in hosted_bound {
         if s.is_running() && provision::restart_egress(ctx, s) {
             now.push(s);
@@ -392,7 +391,11 @@ fn explain_impact<R: Runner>(
         (Some((_, value)), Ok(policy)) => {
             for s in unbound {
                 match bind(ctx, file, &policy, s, service, value) {
-                    Ok(true) => now.push(s),
+                    Ok(true) => {
+                        // A hosted sandbox's guest gets its placeholder as a new variable.
+                        fresh_env |= s.meta.egress.is_some();
+                        now.push(s);
+                    }
                     Ok(false) => later.push(s),
                     Err(e) => crate::warning!(
                         "{}: couldn't give it the {service} secret: {e:#}",
@@ -402,15 +405,15 @@ fn explain_impact<R: Runner>(
             }
         }
     }
-    for s in hosted_unbound {
-        writeln!(
-            &ctx.out,
-            "{} uses hosted egress; recreate it to bind {service}",
-            s.name()
-        )?;
-    }
     if !now.is_empty() {
         writeln!(&ctx.out, "Applied to {} now", names(&now))?;
+    }
+    if fresh_env {
+        writeln!(
+            &ctx.out,
+            "Commands started from now see its variable; sessions already running keep their \
+             environment until they restart"
+        )?;
     }
     if !later.is_empty() {
         writeln!(&ctx.out, "Applies to {} on their next start", names(&later))?;
@@ -436,9 +439,11 @@ fn merged(old: &[String], new: Vec<String>) -> Vec<String> {
     all
 }
 
-/// Binds service `name` to `sb`, which was created without it, as create would have: its
-/// network, its credentials (`value` in smolvm's env only) and its labels. True when a running
-/// `sb` uses the value now; false when it waits for the next start.
+/// Binds service `name` to `sb`, which was created without it, as create would have: its network,
+/// its labels, and its credentials. smolvm swaps `value` (in smolvm's env only); a hosted
+/// sandbox's egress process swaps it, from a binding in its `sbx.egress` label, while the guest
+/// gets the placeholder. True when a running `sb` uses the value now; false when it waits for the
+/// next start.
 fn bind<R: Runner>(
     ctx: &Ctx<R>,
     file: &SecretsFile,
@@ -455,7 +460,8 @@ fn bind<R: Runner>(
         provision::credential_hosts(file, &services),
     );
     // First: smolvm refuses a credential whose host the machine's allow list (running or
-    // stopped) doesn't reach.
+    // stopped) doesn't reach. An open network (allow-all) has no allow list to change, and smolvm
+    // can't add one live.
     let network = compile::network(
         policy,
         sb.name(),
@@ -463,28 +469,40 @@ fn bind<R: Runner>(
         rec.host_access,
         sb.meta.egress.is_some(),
     );
-    ctx.vm.update_network(&sb.machine, &network)?;
+    if network != NetworkSpec::Open {
+        ctx.vm.update_network(&sb.machine, &network)?;
+    }
+    let vars: Vec<String> = creds.iter().map(|c| c.env_var.clone()).collect();
+    let mut labels = vec![
+        (
+            labels::SECRETS,
+            merged(&rec.secrets, services.to_vec()).join(","),
+        ),
+        (
+            labels::CREDENTIAL_ENV,
+            merged(&rec.credential_env, vars).join(","),
+        ),
+        (labels::CREDENTIAL_HOSTS, hosts.join(",")),
+    ];
+    if let Some(label) = &sb.meta.egress {
+        let mut label = label.clone();
+        let had = label.bindings.len();
+        crate::egress::add_bindings(&mut label, &creds);
+        let placeholders: Vec<_> = (label.bindings[had..].iter())
+            .map(|b| (b.env.clone(), b.placeholder.clone()))
+            .collect();
+        ctx.vm.set_env(&sb.machine, &placeholders)?;
+        labels.push((labels::EGRESS, label.to_label()));
+        ctx.vm.set_labels(&sb.machine, &labels)?;
+        return Ok(sb.is_running() && provision::restart_egress(ctx, sb));
+    }
     let env = with_value(&sb.meta, creds.iter().map(|c| &c.env_var).collect(), value);
     if !creds.is_empty() {
         ctx.vm
             .add_credentials(&sb.machine, &creds, &env)
             .map_err(|e| anyhow!("{e:#}; its new hosts stay allowed until its next start"))?;
     }
-    let vars = creds.into_iter().map(|c| c.env_var).collect();
-    ctx.vm.set_labels(
-        &sb.machine,
-        &[
-            (
-                labels::SECRETS,
-                merged(&rec.secrets, services.to_vec()).join(","),
-            ),
-            (
-                labels::CREDENTIAL_ENV,
-                merged(&rec.credential_env, vars).join(","),
-            ),
-            (labels::CREDENTIAL_HOSTS, hosts.join(",")),
-        ],
-    )?;
+    ctx.vm.set_labels(&sb.machine, &labels)?;
     // The probe: smolvm takes values live only on a machine that booted with bindings, and
     // refuses the refresh on one that didn't.
     Ok(sb.is_running() && !env.is_empty() && ctx.vm.refresh_credentials(&sb.machine, &env).is_ok())

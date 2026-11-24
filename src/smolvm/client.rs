@@ -418,6 +418,19 @@ impl<R: Runner> Smolvm<R> {
         self.call(a).map(drop)
     }
 
+    /// Sets environment variables; a running machine's later commands see them. Never for secret
+    /// values: they're on smolvm's command line.
+    pub fn set_env(&self, name: &str, env: &[(String, String)]) -> Result<()> {
+        if env.is_empty() {
+            return Ok(());
+        }
+        let mut a = args(&["machine", "update", "-n", name]);
+        for (k, v) in env {
+            flag(&mut a, "-e", format!("{k}={v}"));
+        }
+        self.call(a).map(drop)
+    }
+
     /// Sets one label; works running or stopped.
     pub fn set_label(&self, name: &str, key: &str, value: &str) -> Result<()> {
         self.call(args(&[

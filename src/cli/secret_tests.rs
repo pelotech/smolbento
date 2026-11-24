@@ -1091,8 +1091,26 @@ const XTOK_ON_ANTHROPIC: [&str; 3] = [
 ];
 
 #[test]
+fn binding_under_allow_all_pushes_no_network() {
+    // A running allow-all sandbox has no allow list, which smolvm refuses to change live.
+    let mut t = test_env(&[]);
+    set_policy(&t, "mode = \"allow-all\"\n");
+    t.sandboxes(&[("a", "running", ANTHROPIC)]);
+    set_xtok(&mut t).unwrap();
+    assert!(
+        !t.calls_of("machine update -n sbx-a")
+            .iter()
+            .any(|l| !l.contains("--label")),
+        "{:#?}",
+        t.calls()
+    );
+    assert!(t.made("machine credentials add -n sbx-a "));
+}
+
+#[test]
 fn set_binds_a_new_service_to_a_running_sandbox() {
     let mut t = test_env(&[]);
+    set_policy(&t, "mode = \"deny-all\"\n");
     t.sandboxes(&[("a", "running", ANTHROPIC)]);
     set_xtok(&mut t).unwrap();
     assert_bound_xtok(&t, "a", XTOK_ON_ANTHROPIC);
@@ -1110,6 +1128,7 @@ fn set_binds_a_new_service_to_a_running_sandbox() {
 #[test]
 fn set_binds_a_new_service_to_a_stopped_sandbox() {
     let mut t = test_env(&[]);
+    set_policy(&t, "mode = \"deny-all\"\n");
     t.sandboxes(&[("a", "stopped", ANTHROPIC)]);
     set_xtok(&mut t).unwrap();
     assert_bound_xtok(&t, "a", XTOK_ON_ANTHROPIC);
@@ -1565,16 +1584,75 @@ fn a_stopped_hosted_sandbox_waits_for_its_next_start() {
 }
 
 #[test]
-fn a_new_service_isnt_bound_to_a_hosted_sandbox() {
+fn a_new_service_is_bound_to_a_running_hosted_sandbox_live() {
     let mut t = test_env(&[]);
+    set_policy(&t, "mode = \"deny-all\"\n");
     let ctl = hosted(&mut t, "running");
     set_xtok(&mut t).unwrap();
     let out = t.stdout();
+    assert!(out.contains("Applied to h1 now\n"), "{out}");
     assert!(
-        out.contains("h1 uses hosted egress; recreate it to bind xtok\n"),
+        out.contains("already running keep their environment"),
         "{out}"
     );
+    // Never smolvm's credentials: the egress process swaps it.
     assert!(!t.made("machine credentials"));
-    assert!(!t.made("machine update"));
+    // The allow list reaches the new host, and the guest gets its placeholder.
+    let updates = t.calls_of("machine update -n sbx-h1");
+    assert!(
+        updates.iter().any(|l| l.contains("--allow-host x.example")),
+        "{updates:#?}"
+    );
+    let label = |k: &str| {
+        t.calls_of("machine update -n sbx-h1")
+            .iter()
+            .find_map(|l| {
+                l.split(" --label ")
+                    .find_map(|kv| kv.strip_prefix(&format!("{k}=")).map(str::to_string))
+            })
+            .unwrap_or_default()
+    };
+    let egress = crate::egress::Label::from_label(&label("sbx.egress")).expect("egress label");
+    let x = egress
+        .bindings
+        .iter()
+        .find(|b| b.env == "XTOK")
+        .expect("xtok bound");
+    assert_eq!(x.hosts, ["x.example"]);
+    assert!(!x.placeholder.is_empty() && x.placeholder != "x-secret");
+    let gh = egress
+        .bindings
+        .iter()
+        .find(|b| b.env == "GH_TOKEN")
+        .unwrap();
+    assert_eq!(gh.placeholder, "P", "existing placeholders stay");
+    assert!(
+        updates
+            .iter()
+            .any(|l| *l == format!("machine update -n sbx-h1 -e XTOK={}", x.placeholder)),
+        "{updates:#?}"
+    );
+    assert!(label("sbx.secrets").split(',').any(|s| s == "xtok"));
+    assert!(label("sbx.credential-env").split(',').any(|s| s == "XTOK"));
+    assert_eq!(restarts(&ctl), 1);
+    // The value is never on a command line.
+    assert!(!t.calls().iter().any(|l| l.contains("x-secret")));
+}
+
+#[test]
+fn a_new_service_waits_for_a_stopped_hosted_sandboxs_next_start() {
+    let mut t = test_env(&[]);
+    let ctl = hosted(&mut t, "stopped");
+    set_xtok(&mut t).unwrap();
+    assert!(
+        t.stdout().contains("Applies to h1 on their next start\n"),
+        "{}",
+        t.stdout()
+    );
+    assert!(
+        t.made("machine update -n sbx-h1 -e XTOK="),
+        "{:#?}",
+        t.calls()
+    );
     assert_eq!(restarts(&ctl), 0);
 }
