@@ -320,9 +320,9 @@ your agent (`ssh-add -D` fails with `Failed to remove all identities.`). The set
 
 Docker's kit-spec conformance suite checks this capability through `tests/conformance/smolbento-adapter`
 (`just conformance`, at `SPEC_COMMIT`). The adapter claims `ssh-agent@1`, `host-mount@1`,
-`lifecycle@1`, `network-policy@1`/`@2`, `agent-context@1`, `long-running@1`, `privileged@1` and
-`resources@1`, under the `balanced` mode (sbx's default: under `allow-all` a kit's bounded allow
-bounds nothing, as the mode already grants the host). All 11 `ssh-agent@1` checks pass: a
+`lifecycle@1`, `network-policy@1`/`@2`, `agent-context@1`, `long-running@1`, `privileged@1`,
+`resources@1` and `sbx@1`, under the `balanced` mode (sbx's default: under `allow-all` a kit's
+bounded allow bounds nothing, as the mode already grants the host). All 11 `ssh-agent@1` checks pass: a
 workload's first process starts only once the start's install steps, files, agent context and
 startup hooks are done, and after the runtime agent's unit is up. The failures left are
 `lifecycle@1/hook-env-restricted`, the recorded difference above (install steps keep the proxy
@@ -335,9 +335,8 @@ Not claimed, each for checks that fail: `dockerd@1` and `volume@1` (the spec's `
 the engine store and volumes while discarding the sandbox's disk, and smolbento keeps them on that
 disk); `git-identity@1` and `agent-context@2` (`recreate` and selection records are missing;
 `git-identity@1/global-defaults` and `agent-context@2/materialized` pass);
-`sbx@1` (hooks and the workspace assume the `agent` user rather than the image's); `agent-skills@1`
-and `agent-skill@1` (selection records, and paths backed by separate copies of the store;
-bundled skills are in place before launch); and `credential@1` (an install-only credential stays
+`agent-skills@1` and `agent-skill@1` (selection records, and paths backed by separate copies of
+the store; bundled skills are in place before launch); and `credential@1` (an install-only credential stays
 set for the workload, and an inject-only one adds variables). The adapter can still run these slices
 (`SMOLBENTO_TCK_CAPABILITIES`): it maps `--skills-host-mode` to `--skills`, `--skills-host-store`
 to its isolated store, `--git-identity-config` to the host git config bento reads, and binds the

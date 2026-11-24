@@ -118,6 +118,7 @@ capabilities)
 		echo com.docker.sandbox/long-running@1
 		echo com.docker.sandbox/privileged@1
 		echo com.docker.sandbox/resources@1
+		echo com.docker.sandbox/sbx@1
 	fi
 	;;
 
