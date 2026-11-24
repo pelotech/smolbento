@@ -1002,7 +1002,7 @@ fn a_kit_s_bundled_skill_caps_its_directory_and_links_before_install_hooks() {
 fn a_mountless_kit_sandbox_gets_its_workdir_before_install_hooks() {
     let caps = r#"{"type":"com.docker.sandbox/lifecycle@1",
                    "config":{"install":[{"command":"echo hook-ran"}]}}"#;
-    let mkdir = "mkdir -p /home/agent/workspace";
+    let mkdir = "mkdir -p '/home/agent/workspace'";
     let mut t = skills_kit_env("shell", caps);
     t.sbt(&["create", "--name", "shell-proj", "shell", "--kit", "./k"])
         .unwrap();

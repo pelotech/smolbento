@@ -395,7 +395,8 @@ The spec's own validator accepts the pair and merges it. A capability `type` mus
 ### What works as in sbx
 
 - A workload kit's command runs as the image's `USER` (root if none), under `/bin/bash` so
-  `BASH_ENV` is sourced, in the workspace path rather than `WORKDIR`. `bento exec` uses the same
+  `BASH_ENV` is sourced, in the workspace path rather than `WORKDIR`. A sandbox without a workspace
+  works in the image's `WORKDIR` (spec `sbx@1/workspace-at-workdir`), else `/home/agent/workspace`. `bento exec` uses the same
   user. Without `/bin/bash` the error is `executable file '/bin/bash' not found` (exit 127).
   smolvm maps the workspace to the image user so it can write it. An image with no `ENTRYPOINT`
   or `CMD` is refused at create and by `kit validate`.
@@ -403,8 +404,9 @@ The spec's own validator accepts the pair and merges it. A capability `type` mus
   spec's default launch mode says (the machine's command; smolvm keeps the machine up after it
   exits). It waits, in `sh`, until the start's install steps, files, agent context and startup
   steps are done. Not measured against sbx. `bento run` is unchanged: an interactive session through `exec`.
-- Install steps run as root in the image `WORKDIR` (`/` otherwise). Startup steps and kit files
-  default to `agent`. v3 install steps get a clean environment: `PATH`, `HOME`, `USER`, `TERM`,
+- Install steps run as root in the image `WORKDIR` (`/` otherwise); one that names no user gets
+  the image user's `HOME` (spec `sbx@1/honors-image-user`; sbx not measured). Startup steps and kit
+  files default to `agent`. v3 install steps get a clean environment: `PATH`, `HOME`, `USER`, `TERM`,
   the proxy and CA variables, and the step's own `env`. v3 startup steps and all v2 steps get the
   full sandbox environment.
 - Startup steps block, in kit order. A failure is a warning with the log's last lines

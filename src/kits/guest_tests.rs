@@ -459,6 +459,27 @@ fn fake_guest() -> tempfile::TempDir {
     d
 }
 
+#[test]
+fn image_home_exports_the_accounts_home_by_name_or_uid() {
+    // tck: sbx@1/honors-image-user
+    let d = fake_guest();
+    let passwd = d.path().join("passwd").display().to_string();
+    let home = |user: &str| {
+        let out = Command::new("/bin/sh")
+            .arg("-c")
+            .arg(format!("{}echo \"$HOME\"", image_home_in(user, &passwd)))
+            .env("HOME", "/root")
+            .output()
+            .unwrap();
+        assert!(out.status.success(), "{out:?}");
+        String::from_utf8_lossy(&out.stdout).trim().to_string()
+    };
+    assert_eq!(home("acct"), "/home/acct");
+    assert_eq!(home("4321:4321"), "/home/acct");
+    // No account: `HOME` is left as it was.
+    assert_eq!(home("nobody-here"), "/root");
+}
+
 /// `as_user_in` against the fake guest, with `path` as `PATH`.
 fn run_as(d: &tempfile::TempDir, user: &str, path: &str) -> std::process::Output {
     let passwd = d.path().join("passwd").display().to_string();

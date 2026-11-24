@@ -175,13 +175,14 @@ mod tests {
             ],
         );
         t.sbt(&["exec", "tool-proj", "id"]).unwrap();
-        // A numeric image user stays as given (its uid is no longer moved).
+        // A numeric image user stays as given (its uid is no longer moved). Mountless, it works
+        // in the image's WORKDIR (tck: sbx@1/workspace-at-workdir).
         t.machine(
             "sbx-tool-proj",
             "running",
             &[
                 ("sbx.name", "tool-proj"),
-                ("sbx.workspace", "/w/proj"),
+                ("sbx.workdir", "/img/wd"),
                 ("sbx.user", "1001:1001"),
             ],
         );
@@ -199,8 +200,8 @@ mod tests {
             calls,
             [
                 "machine exec --name sbx-tool-proj -u somebody -w /w/proj --stream -- id",
-                "machine exec --name sbx-tool-proj -u 1001:1001 -w /w/proj --stream -- id",
-                "machine exec --name sbx-tool-proj -u root -w /w/proj --stream -- id",
+                "machine exec --name sbx-tool-proj -u 1001:1001 -w /img/wd --stream -- id",
+                "machine exec --name sbx-tool-proj -u root -w /img/wd --stream -- id",
             ]
         );
     }

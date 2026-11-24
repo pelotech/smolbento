@@ -89,6 +89,24 @@ pub fn hook_script(h: &Hook) -> String {
     s
 }
 
+/// Shell that exports `HOME` as `user`'s home (SPEC sbx@1/honors-image-user: read from the image,
+/// so a root install hook sees it too). `user` is a name or uid, optionally `:group`; with no
+/// such account `HOME` is left as it was. Ends in `; `, to go before a script.
+pub fn image_home(user: &str) -> String {
+    image_home_in(user, "/etc/passwd")
+}
+
+/// `image_home` against `passwd` (tests use a temp file).
+fn image_home_in(user: &str, passwd: &str) -> String {
+    let u = user.split(':').next().unwrap_or(user);
+    format!(
+        "_sbh=$(awk -F: -v u={} '$1 == u || $3 == u {{ print $6; exit }}' {}); \
+         [ -z \"$_sbh\" ] || export HOME=\"$_sbh\"; ",
+        sh_quote(u),
+        sh_quote(passwd)
+    )
+}
+
 /// `script` as `user` from a root shell. `runuser` where the image has it (util-linux), else `su`.
 /// A numeric user runs as the account with that uid (`runuser` and `su` take names); a uid with
 /// no account runs through `setpriv`, if present.

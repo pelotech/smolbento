@@ -92,9 +92,10 @@ since a sandbox doesn't keep its image's `ENV` or its create's `-e`.
 What a kit does, and when:
 
 - On first start, install steps run once, as root, in a workload image's `WORKDIR` (`/` otherwise),
-  with network only for installing. A failing step, or a kit file that can't be written, removes the
+  with network only for installing. One that names no user has the image user's `HOME`. A failing step, or a kit file that can't be written, removes the
   sandbox. Fix the cause and run the same command. In a v2 kit, `files/workspace` and `${WORKDIR}`
-  are the primary workspace, or `/home/agent/workspace` without one.
+  are the primary workspace. Without one, a sandbox works in its workload image's `WORKDIR`, or in
+  `/home/agent/workspace` when the image has none.
 - On every start, startup steps run in kit order, before the agent. A failing one is a warning
   with the log's last lines, and the sandbox starts anyway, as in sbx 0.51. A `background: true`
   step keeps running; if it fails, only the log records it. A step that doesn't finish holds up the
@@ -177,7 +178,8 @@ repositories and key it signs with, the `signingKey` argument and its limits.
 
 Kit instructions go in the agent's file in the workspace's parent directory, inside the sandbox
 only. For workspace `~/src/app`, claude reads `~/src/CLAUDE.md`, gemini `~/src/GEMINI.md`, and other
-agents `~/src/AGENTS.md`. With no workspace, `/home/agent` is used.
+agents `~/src/AGENTS.md`. With no workspace, the parent of the workload image's `WORKDIR` is used,
+else `/home/agent`.
 
 A kit can name the file instead, with `directory` and `filename` in its `agent-context`, as an
 agent's kit does for the place its agent reads at startup (`/home/agent/.claude/CLAUDE.md`). Any

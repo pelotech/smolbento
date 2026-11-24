@@ -120,12 +120,12 @@ impl Sandbox {
         (self.meta.setup.as_deref()).is_none_or(|s| s == crate::host_service::namespace(paths))
     }
 
-    /// The primary workspace, or sbx's mountless directory.
+    /// The primary workspace, else the workload image's WORKDIR, else sbx's mountless directory.
     pub fn workdir(&self) -> String {
-        self.meta
-            .workspace
-            .clone()
-            .unwrap_or_else(|| MOUNTLESS_WORKDIR.into())
+        (self.meta.workspace.as_deref())
+            .or(self.meta.rec.image_workdir.as_deref())
+            .unwrap_or(MOUNTLESS_WORKDIR)
+            .into()
     }
 }
 

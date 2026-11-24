@@ -79,10 +79,18 @@ pub struct CreateRequest {
 
 impl CreateRequest {
     /// The sandbox's working directory in the guest, as `Sandbox::workdir` gives it once created:
-    /// the primary workspace (inside the clone with `--clone`), or sbx's mountless directory.
+    /// the primary workspace (inside the clone with `--clone`), else the workload image's WORKDIR
+    /// (SPEC sbx@1/workspace-at-workdir), else sbx's mountless directory.
     pub fn workdir(&self) -> String {
         self.workspaces.first().map_or_else(
-            || MOUNTLESS_WORKDIR.into(),
+            || {
+                (self
+                    .rec
+                    .image_workdir
+                    .as_deref()
+                    .unwrap_or(MOUNTLESS_WORKDIR))
+                .into()
+            },
             |w| w.path.display().to_string(),
         )
     }
