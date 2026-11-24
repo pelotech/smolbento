@@ -323,11 +323,12 @@ fn a_plain_start_runs_the_startup_hooks_in_one_blocking_exec() {
     assert_eq!(lines.len(), 5, "{lines:#?}");
     assert!(lines[2].ends_with(&hosts_cmd()), "{lines:#?}");
     assert!(lines[3].ends_with(&bridge::remove_cmd()), "{lines:#?}");
-    // A no-op without kits (no runner).
+    // Without kits (no runner), it only releases the workload (none here).
     assert_eq!(
         lines[4],
         "machine exec --name sbx-r -u root -- sh -c \
-         [ -x /etc/smolbento/startup ] || exit 0; exec /etc/smolbento/startup"
+         s=0; [ -x /etc/smolbento/startup ] && { /etc/smolbento/startup; s=$?; }; \
+         mkdir -p /run/smolbento && : >/run/smolbento/ready; exit $s"
     );
 }
 

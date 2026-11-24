@@ -307,6 +307,45 @@ fn create_runs_kit_steps_in_lifecycle_order() {
     );
 }
 
+/// tck: lifecycle@1/install-before-entrypoint, lifecycle@1/files-before-entrypoint,
+/// git-identity@1/global-defaults, agent-context@2/materialized, agent-skill@1/before-launch:
+/// a v3 workload boots waiting, and the start releases it after the install hooks, files, agent
+/// context and startup hooks (the bundled skills and git identity are install steps).
+#[test]
+fn the_workload_starts_after_the_kit_steps() {
+    let vm = created_vm();
+    let mut req = request();
+    req.rec.user = Some("0".into());
+    req.rec.command = Some(vec!["/bin/agent".into(), "--go".into()]);
+    create(
+        &vm,
+        &req,
+        &kit_plan(&[]),
+        |_| Ok(restricted(&["api.example.com"])),
+        &mut |_| {},
+    )
+    .unwrap();
+    let lines = vm.runner().call_lines();
+    let ready = "/run/smolbento/ready";
+    let created = &lines[position(&lines, "create", |l| l.starts_with("machine create"))];
+    assert!(
+        created.contains(ready) && created.ends_with(" sh /bin/agent --go"),
+        "{created}"
+    );
+    let released = position(&lines, "release", |l| {
+        l.starts_with("machine exec") && l.contains(ready)
+    });
+    let context = position(&lines, "context", |l| {
+        *l == exec_line("root", "echo context-1")
+    });
+    assert!(context < released, "{lines:#?}");
+    assert_eq!(
+        released,
+        lines.len() - 1,
+        "after the startup hooks: {lines:#?}"
+    );
+}
+
 #[test]
 fn install_only_credentials_restart_the_machine_without_them() {
     let vm = created_vm();

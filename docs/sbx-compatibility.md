@@ -399,7 +399,8 @@ The spec's own validator accepts the pair and merges it. A capability `type` mus
   or `CMD` is refused at create and by `kit validate`.
 - A v3 workload's `ENTRYPOINT` + `CMD` also run at every boot, as the image user, as the kit
   spec's default launch mode says (the machine's command; smolvm keeps the machine up after it
-  exits). Not measured against sbx. `bento run` is unchanged: an interactive session through `exec`.
+  exits). It waits, in `sh`, until the start's install steps, files, agent context and startup
+  steps are done. Not measured against sbx. `bento run` is unchanged: an interactive session through `exec`.
 - Install steps run as root in the image `WORKDIR` (`/` otherwise). Startup steps and kit files
   default to `agent`. v3 install steps get a clean environment: `PATH`, `HOME`, `USER`, `TERM`,
   the proxy and CA variables, and the step's own `env`. v3 startup steps and all v2 steps get the

@@ -190,6 +190,51 @@ pub(crate) fn published_workload_kit_runs_its_command() {
     assert!(out.contains(&want), "{out}");
 }
 
+/// tck: lifecycle@1/install-before-entrypoint: a workload booted by the machine (no `sbx@1`)
+/// first runs once its (slow) install hook is done, and again at the next start.
+#[test]
+#[ignore = "boots real VMs and pulls alpine; run with `just e2e`"]
+pub(crate) fn boot_workload_waits_for_its_install_hooks() {
+    let e = E2e::new("wlorder");
+    let reg = Registry::start(&e);
+    let mut image = Image::alpine();
+    image.config["config"]["Entrypoint"] = serde_json::Value::Null;
+    image.config["config"]["Cmd"] = serde_json::json!([
+        "sh",
+        "-c",
+        "{ cat /etc/e2e-installed 2>/dev/null || echo missing; } >>/etc/e2e-boot"
+    ]);
+    let kit = reg.push(
+        "wl-order",
+        image,
+        descriptor(
+            "workload",
+            &[],
+            serde_json::json!([
+                {"type": "com.docker.sandbox/lifecycle@1",
+                 "config": {"install": [
+                     {"command": "sleep 3; echo installed > /etc/e2e-installed", "user": "0"},
+                 ]}},
+            ]),
+        ),
+    );
+    e.create_workload(&kit);
+    let boots = |n: usize| {
+        let until = std::time::Instant::now() + std::time::Duration::from_secs(30);
+        loop {
+            let out = root_out(&e.name, "cat /etc/e2e-boot 2>/dev/null || true");
+            if out.lines().count() >= n || std::time::Instant::now() >= until {
+                return out;
+            }
+            std::thread::sleep(std::time::Duration::from_millis(500));
+        }
+    };
+    assert_eq!(boots(1), "installed\n");
+    e.ok(&["stop", &e.name]);
+    e.ok(&["start", &e.name]);
+    assert_eq!(boots(2), "installed\ninstalled\n");
+}
+
 #[test]
 #[ignore = "boots real VMs and pulls alpine; run with `just e2e`"]
 pub(crate) fn mixin_layer_is_visible_in_the_guest() {
