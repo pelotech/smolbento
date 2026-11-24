@@ -14,7 +14,7 @@ use super::{
     CreateArgs, Ctx, Done, OutputArgs, PruneArgs, ResetArgs, RmArgs, SandboxOpts, confirm,
 };
 use crate::provision;
-use crate::sandbox::{self, CreateRequest, Event, Sandbox, session};
+use crate::sandbox::{self, CreateRequest, Event, Sandbox, name, session};
 use crate::smolvm::Runner;
 use crate::workspace::clone;
 
@@ -310,7 +310,10 @@ pub fn rm<R: Runner>(ctx: &mut Ctx<R>, a: &RmArgs) -> Result<i32> {
     let all = sandbox::list(&ctx.vm)?;
     provision::sweep_orphans_among(ctx, &all);
     let targets: Vec<&Sandbox> = if a.all {
-        all.iter().collect()
+        // The builder is shared by every setup on the smolvm home: removed only when named.
+        all.iter()
+            .filter(|sb| !name::is_internal(sb.name()))
+            .collect()
     } else {
         if a.sandboxes.is_empty() {
             bail!("specify sandboxes to remove, or --all");
@@ -366,7 +369,7 @@ pub fn prune<R: Runner>(ctx: &mut Ctx<R>, a: &PruneArgs) -> Result<i32> {
     let all = sandbox::list(&ctx.vm)?;
     let targets: Vec<&Sandbox> = all
         .iter()
-        .filter(|sb| !sb.is_running())
+        .filter(|sb| !sb.is_running() && !name::is_internal(sb.name()))
         .filter(|sb| cutoff.is_none_or(|c| sb.meta.created < c))
         .collect();
     // A parent whose forks stay can't be deleted. One pass is enough while forks can't be forked

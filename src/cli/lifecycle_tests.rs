@@ -1279,6 +1279,29 @@ fn prune_removes_only_old_stopped_sandboxes() {
     assert_eq!(deletes, vec!["machine delete -n sbx-old -f"]);
 }
 
+/// The builder is shared by every setup on the smolvm home, and keeps their build cache: only
+/// naming it (or `reset`) removes it.
+#[test]
+fn rm_all_and_prune_leave_the_builder() {
+    let mut t = test_env(&[]);
+    t.sandboxes(&[
+        ("old", "stopped", CLAUDE_LABELS),
+        ("_builder", "stopped", CLAUDE_LABELS),
+    ]);
+    t.sbt(&["prune", "-f"]).unwrap();
+    t.sbt(&["rm", "--all", "-f"]).unwrap();
+    let deletes: Vec<String> = t
+        .calls()
+        .into_iter()
+        .filter(|l| l.contains("delete"))
+        .collect();
+    assert!(
+        !deletes.iter().any(|l| l.contains("sbx-_builder")),
+        "{deletes:?}"
+    );
+    assert!(deletes.iter().any(|l| l.contains("sbx-old")), "{deletes:?}");
+}
+
 /// The labels of a claude sandbox for another folder, `/other/proj`.
 const OTHER_FOLDERS: &[(&str, &str)] = &[("sbx.agent", "claude"), ("sbx.workspace", "/other/proj")];
 
