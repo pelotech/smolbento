@@ -69,9 +69,9 @@ pub struct Rule {
 pub const MCP_VIA: &str = "mcp";
 /// `created_via` of a kit's runtime rules: `kit:<kit>`.
 pub const KIT_VIA: &str = "kit:";
-/// `created_via` of a kit's install-phase rules: `kit-install:<kit>`. Only the steps that run the
-/// install hooks compile them (`compile::network_with`), so one left behind by an interrupted
-/// create never opens a later start.
+/// `created_via` of a kit's install-phase rules: `kit-install:<kit>`. Like any rule they apply
+/// while they're in the policy: the steps that run the install hooks remove them afterwards, and a
+/// start removes any an interrupted create or `kit add` left (`provision::start_plan`).
 pub const KIT_INSTALL_VIA: &str = "kit-install:";
 
 impl Rule {
@@ -818,7 +818,7 @@ mod tests {
     }
 
     #[test]
-    fn install_rules_apply_only_when_named_and_are_not_forked() {
+    fn install_rules_apply_while_stored_and_are_not_forked() {
         let mut p = Policy {
             mode: Some(Mode::DenyAll),
             ..Default::default()
@@ -842,17 +842,13 @@ mod tests {
             (r.created_via.as_str(), r.source()),
             ("kit-install:gh", "kit")
         );
-        let plain = format!("{:?}", compile::network(&p, "sb", &[], false, false));
+        // In effect while stored, for every consumer.
+        let net = format!("{:?}", compile::network(&p, "sb", &[], false, false));
         assert!(
-            plain.contains("run.kit.com") && !plain.contains("pkg.kit.com"),
-            "{plain}"
+            net.contains("run.kit.com") && net.contains("pkg.kit.com"),
+            "{net}"
         );
-        assert!(!compile::check(&p, Some("sb"), &[], None, "pkg.kit.com").allowed);
-        let with = format!(
-            "{:?}",
-            compile::network_with(&p, "sb", &[], &install, false, false)
-        );
-        assert!(with.contains("pkg.kit.com"), "{with}");
+        assert!(compile::check(&p, Some("sb"), &[], None, "pkg.kit.com").allowed);
         p.copy_sandbox("sb", "fork");
         assert!(
             p.sandboxes["fork"]

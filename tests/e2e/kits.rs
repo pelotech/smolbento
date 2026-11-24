@@ -428,15 +428,38 @@ build: |
 #[ignore = "boots real VMs and needs httpbin.org; run with `just e2e`"]
 pub(crate) fn install_phase_network_closes_after_install() {
     let e = E2e::new("instnet");
+    install_phase_network_closes(&e, false);
+    // Hosted (the default), not a fallback to smolvm egress.
+    let state = e.dir.path().join("data/egress").join(&e.name);
+    assert!(state.is_dir(), "{} is hosted", e.name);
+}
+
+#[test]
+#[ignore = "boots real VMs and needs httpbin.org; run with `just e2e`"]
+pub(crate) fn install_phase_network_closes_after_install_smolvm() {
+    let mut e = E2e::new("instnsm");
+    e.vars.push(("SMOLBENTO_NETWORK_EGRESS", "smolvm".into()));
+    install_phase_network_closes(&e, true);
+}
+
+/// A kit's install-phase rule opens httpbin.org for its install hooks, and closes it after.
+/// `smolvm`: under smolvm egress, whose allow list also admits the address the name resolved to
+/// during install (hosted egress judges `Host: <ip>` by the rules, which name httpbin.org only).
+fn install_phase_network_closes(e: &E2e, smolvm: bool) {
     e.ok(&["policy", "init", "deny-all"]);
-    let reg = Registry::start(&e);
+    let reg = Registry::start(e);
     // During install: httpbin.org by name, then by the IP it resolved to (any HTTP answer).
+    let by_ip = if smolvm {
+        r#"wget -S -T 15 -O /dev/null "http://$ip/" 2>&1 | grep -q 'HTTP/'"#
+    } else {
+        "true"
+    };
     let probe = format!(
         r#"set -e
 wget -q -T 15 -O /dev/null https://httpbin.org
 ip=$({HTTPBIN_IP})
 [ -n "$ip" ]
-wget -S -T 15 -O /dev/null "http://$ip/" 2>&1 | grep -q 'HTTP/'
+{by_ip}
 echo "$ip" > /etc/e2e-install-ip"#
     );
     let kit = reg.push(
@@ -463,14 +486,14 @@ echo "$ip" > /etc/e2e-install-ip"#
     assert!(!ip.is_empty(), "the install hook reached httpbin.org");
 
     assert!(
-        !reachable(&e, "https://httpbin.org"),
+        !reachable(e, "https://httpbin.org"),
         "httpbin.org is closed after install"
     );
     assert!(
-        !http_answers(&e, &ip),
+        !http_answers(e, &ip),
         "{ip} (httpbin.org's address) is closed after install"
     );
-    // `policy ls` never lists install-phase rules (as sbx), so check the stored policy too.
+    // Removed after install: neither listed (as sbx) nor stored.
     let rules = e.ok(&["policy", "ls", "--wide"]);
     assert!(
         !rules.contains("httpbin.org"),

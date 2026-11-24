@@ -82,9 +82,10 @@ kits you trust.
 - Kit network rules apply to their sandbox only, even under `deny-all`. `bento policy ls --source kit`
   lists them, one `kit:NAME` policy per sandbox. Deny rules always win: to block a host a kit allows,
   run `bento policy deny network --sandbox NAME HOST`.
-- Install-only rules aren't listed by `policy ls`, as in sbx. They apply from create through the
-  first start's setup and install steps, then go, and later starts never use them. `bento rm` removes
-  leftovers from an interrupted create, as does the next create of that name. A CIDR deny made
+- Install-only rules apply while they're in the policy: from create (or `kit add`) through the
+  install steps, then go, before the workload's entrypoint starts. `policy ls` lists them only
+  then. A start removes any an interrupted create or `kit add` left, and `bento rm` or the next
+  create of that name removes an interrupted create's. A CIDR deny made
   during install stays for the sandbox's life, because smolvm takes CIDR denies only at create.
 - `kit add` asks before opening new network access on an existing sandbox. `-y` grants it. Without
   a terminal it fails.

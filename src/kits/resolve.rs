@@ -724,15 +724,10 @@ fn unsupported(c: &Cap, hosted: bool) -> Option<&'static str> {
     }
 }
 
-/// What makes a sandbox fall back to smolvm egress (see `provision`): install-phase network rules,
-/// or an install-only credential. A credential the user also has stays at runtime and doesn't, but
-/// that isn't known here.
+/// What makes a sandbox fall back to smolvm egress (see `provision`): an install-only credential.
+/// A credential the user also has stays at runtime and doesn't, but that isn't known here.
 fn falls_back(c: &Cap) -> bool {
-    match &c.body {
-        CapBody::Network { install, .. } => *install != Rules::default(),
-        CapBody::Credential(r) => r.install && !r.runtime,
-        _ => false,
-    }
+    matches!(&c.body, CapBody::Credential(r) if r.install && !r.runtime)
 }
 
 /// The first of a `network-policy@2` capability's request rules that hosted egress can't

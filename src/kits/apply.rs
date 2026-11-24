@@ -462,8 +462,8 @@ fn startup_d(
 
 /// Writes the kits' rules for sandbox `sandbox` and returns the ids it added, for rollback. Runtime
 /// rules go first: an install rule that is also a runtime rule must outlive the install phase.
-/// Every install rule in place goes into `install_rules`, as it opens for the first start (one an
-/// interrupted create left too); only new ones are returned. A failure part-way through (a bad
+/// Every install rule in place goes into `install_rules`, to be removed after the install hooks
+/// (one an interrupted `kit add` left too); only new ones are returned. A failure part-way through (a bad
 /// host) restores the policy as it was.
 fn add_policy(
     policy: &mut Policy,

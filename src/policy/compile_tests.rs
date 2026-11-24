@@ -229,36 +229,37 @@ fn deny_cidrs_for_create() {
         deny_cidrs(&p, "s2", host_access(&p, "s2")),
         with_loopback(&["10.0.0.0/8"])
     );
-    // An install-phase deny counts only for the create that passes its id.
-    let id = p
-        .add_rule(
-            Some("s1"),
-            Decision::Deny,
-            "172.16.0.0/12",
-            "kit-install:k",
-            None,
-            None,
-        )
-        .unwrap();
-    assert!(!deny_cidrs(&p, "s1", host_access(&p, "s1")).contains(&"172.16.0.0/12".to_string()));
-    let cidrs = deny_cidrs_with(&p, "s1", host_access(&p, "s1"), std::slice::from_ref(&id));
+    // An install-phase deny counts while it's stored, and gets a note.
+    p.add_rule(
+        Some("s1"),
+        Decision::Deny,
+        "172.16.0.0/12",
+        "kit-install:k",
+        None,
+        None,
+    )
+    .unwrap();
+    let cidrs = deny_cidrs(&p, "s1", host_access(&p, "s1"));
     assert!(cidrs.contains(&"172.16.0.0/12".to_string()));
+    let note = ["note: kit k's install-phase deny of 172.16.0.0/12 stays for this sandbox's life"];
     assert_eq!(
-        install_deny_cidr_notes(&p, "s1", host_access(&p, "s1"), &[id]),
-        ["note: kit k's install-phase deny of 172.16.0.0/12 stays for this sandbox's life"]
+        install_deny_cidr_notes(&p, "s1", host_access(&p, "s1")),
+        note
     );
     // One a lasting rule denies anyway needs no note.
-    let id = p
-        .add_rule(
-            Some("s1"),
-            Decision::Deny,
-            "10.0.0.0/8, bad.example",
-            "kit-install:k",
-            None,
-            None,
-        )
-        .unwrap();
-    assert!(install_deny_cidr_notes(&p, "s1", host_access(&p, "s1"), &[id]).is_empty());
+    p.add_rule(
+        Some("s1"),
+        Decision::Deny,
+        "10.0.0.0/8, bad.example",
+        "kit-install:k",
+        None,
+        None,
+    )
+    .unwrap();
+    assert_eq!(
+        install_deny_cidr_notes(&p, "s1", host_access(&p, "s1")),
+        note
+    );
 }
 
 fn with_loopback(cidrs: &[&str]) -> Vec<String> {
@@ -618,16 +619,15 @@ fn host_services_rules_are_localhost_in_any_case() {
 #[test]
 fn kit_rules_never_grant_host_access() {
     let mut p = policy(Mode::DenyAll);
-    let install = p
-        .add_rule(
-            Some("s1"),
-            Decision::Allow,
-            "localhost:11434",
-            "kit-install:k",
-            None,
-            None,
-        )
-        .unwrap();
+    p.add_rule(
+        Some("s1"),
+        Decision::Allow,
+        "localhost:11434",
+        "kit-install:k",
+        None,
+        None,
+    )
+    .unwrap();
     p.add_rule(
         Some("s1"),
         Decision::Allow,
@@ -637,28 +637,19 @@ fn kit_rules_never_grant_host_access() {
         None,
     )
     .unwrap();
-    let ids = std::slice::from_ref(&install);
     assert!(!host_access(&p, "s1"));
-    assert_eq!(
-        deny_cidrs_with(&p, "s1", host_access(&p, "s1"), ids),
-        with_loopback(&[])
-    );
     assert_eq!(
         deny_cidrs(&p, "s1", host_access(&p, "s1")),
         with_loopback(&[])
     );
-    for spec in [
-        network_with(&p, "s1", &[], ids, true, false),
-        network(&p, "s1", &[], true, false),
-    ] {
-        assert!(!has_gateway(&spec), "{spec:?}");
-        assert!(list(&spec).patterns().is_empty(), "{spec:?}");
-    }
+    let spec = network(&p, "s1", &[], true, false);
+    assert!(!has_gateway(&spec), "{spec:?}");
+    assert!(list(&spec).patterns().is_empty(), "{spec:?}");
     // A user rule alongside still works.
     p.allow(Some("s1"), "localhost:3000");
     assert!(host_access(&p, "s1"));
-    assert!(deny_cidrs_with(&p, "s1", host_access(&p, "s1"), ids).is_empty());
-    assert!(has_gateway(&network_with(&p, "s1", &[], ids, true, false)));
+    assert!(deny_cidrs(&p, "s1", host_access(&p, "s1")).is_empty());
+    assert!(has_gateway(&network(&p, "s1", &[], true, false)));
     // An approved rule is the user's too.
     let mut p = policy(Mode::DenyAll);
     p.add_rule(None, Decision::Allow, "localhost", "approval", None, None)

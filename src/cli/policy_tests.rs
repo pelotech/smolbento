@@ -1557,21 +1557,27 @@ fn ls_shows_kit_rules_as_one_policy_per_sandbox() {
         .unwrap();
     p.add_kit_rules("my-sb", "jq", &rules("jq.dev"), false)
         .unwrap();
-    p.add_kit_rules("my-sb", "gh", &rules("pkg.kit.com"), true)
+    let (_, install) = p
+        .add_kit_rules("my-sb", "gh", &rules("pkg.kit.com"), true)
         .unwrap();
     let mcp = crate::policy::MCP_VIA;
     add(&mut p, Some("my-sb"), Decision::Allow, "mcp.dev", mcp);
     p.save(&t.ctx.paths).unwrap();
     t.sandbox("my-sb", "running", &[]);
-    // One aggregated rule per sandbox, like sbx: runtime hosts only (install-phase hosts are
-    // not listed).
-    assert_eq!(
-        ls(&mut t, &["--source", "kit"]),
-        "\
+    // One aggregated rule per sandbox, like sbx. Install-phase hosts are listed while they're in
+    // effect (sbx no longer lists them once the install is done, when they're gone here too).
+    let kit_ls = |n: usize| {
+        format!(
+            "\
 POLICY      SOURCE   APPLIES TO      SUMMARY
-kit:my-sb   kit      sandbox:my-sb   network: 2 allow
+kit:my-sb   kit      sandbox:my-sb   network: {n} allow
 "
-    );
+        )
+    };
+    assert_eq!(ls(&mut t, &["--source", "kit"]), kit_ls(3));
+    p.remove_rules_by_ids("my-sb", &install);
+    p.save(&t.ctx.paths).unwrap();
+    assert_eq!(ls(&mut t, &["--source", "kit"]), kit_ls(2));
     let id = crate::policy::kit_rule_id("my-sb");
     // sbx 0.49.2's row for a kit rule: the rule is named `kit:<sandbox>`.
     let head = "SOURCE   CREATED VIA   APPLIES TO      POLICY   POLICY_ID   RULE        RULE_ID      TYPE      METHOD   PATH   DECISION   PROTOCOLS   RESOURCES";

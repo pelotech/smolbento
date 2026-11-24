@@ -55,38 +55,32 @@ pub fn credentials(secrets: &SecretsFile, services: &[String]) -> Result<Vec<Cre
 
 /// Network and secret values for starting the sandbox `meta` describes: its credentials came from
 /// `meta.secrets`, cover `meta.credential_hosts` and use `meta.credential_env` (all recorded at
-/// create). Install-only credentials (`meta.credential_install`) are left out.
+/// create). Install-only credentials (`meta.credential_install`) are left out, and install-phase
+/// kit rules an interrupted create or `kit add` left are removed first.
 pub fn start_plan<R: Runner>(ctx: &Ctx<R>, meta: &Meta) -> Result<StartPlan> {
-    plan_for(ctx, meta, None)
+    plan_for(ctx, meta, false)
 }
 
 /// `start_plan` for a create's first start, which also passes the install-only credentials and
-/// opens the install-phase rules with these ids (this create's kits').
-pub fn first_start_plan<R: Runner>(
-    ctx: &Ctx<R>,
-    meta: &Meta,
-    install_rules: &[String],
-) -> Result<StartPlan> {
-    plan_for(ctx, meta, Some(install_rules))
+/// keeps the install-phase rules (this create's kits') for its install hooks.
+pub fn first_start_plan<R: Runner>(ctx: &Ctx<R>, meta: &Meta) -> Result<StartPlan> {
+    plan_for(ctx, meta, true)
 }
 
-/// `install`: the first start's install-phase rule ids; `None` for any other start, which never
-/// opens install-phase rules (one left by an interrupted create stays shut).
-fn plan_for<R: Runner>(
-    ctx: &Ctx<R>,
-    meta: &Meta,
-    install_rules: Option<&[String]>,
-) -> Result<StartPlan> {
-    let install = install_rules.is_some();
+fn plan_for<R: Runner>(ctx: &Ctx<R>, meta: &Meta, install: bool) -> Result<StartPlan> {
     let sandbox = meta.name.as_str();
+    // Before the network is compiled, and before the guest runs: the egress process reads the
+    // policy on its next connection.
+    if !install {
+        drop_stale_install_rules(ctx, sandbox)?;
+    }
     // Like create (and sbx after `policy reset`), a start needs a chosen policy.
     let policy = ensure_policy(ctx)?;
     let secrets = SecretsFile::load(&ctx.paths)?;
-    let network = compile::network_with(
+    let network = compile::network(
         &policy,
         sandbox,
         &meta.rec.credential_hosts,
-        install_rules.unwrap_or_default(),
         meta.rec.host_access,
         meta.egress.is_some(),
     );
@@ -478,13 +472,6 @@ pub fn prepare_create<R: Runner>(
         // Hosted egress swaps values in bento, where an install-only credential (restarted
         // away after the install hooks) has no way to be withdrawn yet.
         Some("install-only credentials need network.egress=smolvm")
-    } else if first_start
-        .as_ref()
-        .is_some_and(|k| !k.steps.install_rules.is_empty())
-    {
-        // The egress process judges by the stored policy, and nothing tells it when the
-        // install hooks run, which alone may use install-phase kit rules.
-        Some("install-phase kit network rules need network.egress=smolvm")
     } else if ctx.services.plan(&req.name).is_none() {
         // Without its unit nothing would own the interceptor port, so every connection fails.
         Some("no service manager for its egress unit")
@@ -581,6 +568,9 @@ pub fn prepare_create<R: Runner>(
         hosted,
     );
     req.deny_cidrs = compile::deny_cidrs(&policy, &req.name, req.rec.host_access);
+    for note in compile::install_deny_cidr_notes(&policy, &req.name, req.rec.host_access) {
+        eprintln!("{note}");
+    }
     if let Some(note) = host_access_note(&req.name, req.rec.host_access) {
         eprintln!("{note}");
     }
@@ -739,35 +729,6 @@ pub fn create_with<R: Runner>(
         if let Some(k) = &mut kit {
             k.agent_socket = req.host_services.as_ref().map(|s| s.agent.clone());
         }
-        // The machine is created with this create's install-phase rules open: the first start's
-        // setup and install hooks run under them, until `drop_install_rules`.
-        if let Some(k) = &kit
-            && !k.steps.install_rules.is_empty()
-        {
-            let policy = Policy::load(&ctx.paths)?;
-            req.network = compile::network_with(
-                &policy,
-                &req.name,
-                &req.rec.credential_hosts,
-                &k.steps.install_rules,
-                req.rec.host_access,
-                req.egress.is_some(),
-            );
-            req.deny_cidrs = compile::deny_cidrs_with(
-                &policy,
-                &req.name,
-                req.rec.host_access,
-                &k.steps.install_rules,
-            );
-            for note in compile::install_deny_cidr_notes(
-                &policy,
-                &req.name,
-                req.rec.host_access,
-                &k.steps.install_rules,
-            ) {
-                eprintln!("{note}");
-            }
-        }
         if let Some(repo) = &repo
             && clone::add_remote(repo, &req.name)?
         {
@@ -776,7 +737,7 @@ pub fn create_with<R: Runner>(
         let meta = sandbox::create::meta(req);
         let plan = match kit {
             Some(kit) => {
-                let plan = first_start_plan(ctx, &meta, &kit.steps.install_rules)?;
+                let plan = first_start_plan(ctx, &meta)?;
                 StartPlan {
                     kit: Some(kit),
                     ..plan
@@ -870,7 +831,8 @@ fn plan_services<R: Runner>(
         .flatten()
 }
 
-/// Removes the install-phase kit rules an interrupted create of `name` left in the policy.
+/// Removes the install-phase kit rules of `name` that an interrupted create or `kit add` left in
+/// the policy.
 fn drop_stale_install_rules<R: Runner>(ctx: &Ctx<R>, name: &str) -> Result<()> {
     let mut policy = Policy::load(&ctx.paths)?;
     let stale: Vec<String> = policy
