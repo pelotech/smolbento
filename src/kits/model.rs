@@ -429,6 +429,18 @@ pub struct AgentContextReq {
     pub content: String,
     /// `agent-context@1` `contentFile`: the body's path in the kit image, where the agent reads it.
     pub content_file: Option<String>,
+    /// How a mixin's body reaches the agent (`agent-context@2` `delivery`; `@1` is progressive).
+    pub delivery: Delivery,
+}
+
+/// `agent-context@2` `delivery`.
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
+pub enum Delivery {
+    /// A per-kit file, linked from every profile.
+    #[default]
+    Progressive,
+    /// The body in every profile.
+    Inline,
 }
 
 /// A YAML scalar: sbx accepts an unquoted number or bool where an arg default or enum value is

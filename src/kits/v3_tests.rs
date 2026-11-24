@@ -641,6 +641,39 @@ fn both_network_policy_versions_are_refused() {
     }
 }
 
+/// tck: agent-context@2/delivery: `progressive` when omitted, else `progressive` or `inline`;
+/// an explicit empty value is invalid. `@1` bodies are progressive.
+#[test]
+fn agent_context_delivery() {
+    use crate::kits::model::Delivery;
+    let ctx = |ty: &str, extra: &str| {
+        let c = format!(r#"{{"type":"com.docker.sandbox/{ty}","config":{{"content":"x"{extra}}}}}"#);
+        one_cap(&c).map(|k| match &k.caps[0].body {
+            CapBody::AgentContext(r) => r.delivery,
+            b => panic!("{b:?}"),
+        })
+    };
+    assert_eq!(ctx("agent-context@2", "").unwrap(), Delivery::Progressive);
+    assert_eq!(
+        ctx("agent-context@2", r#","delivery":"progressive""#).unwrap(),
+        Delivery::Progressive
+    );
+    assert_eq!(
+        ctx("agent-context@2", r#","delivery":"inline""#).unwrap(),
+        Delivery::Inline
+    );
+    assert_eq!(ctx("agent-context@1", "").unwrap(), Delivery::Progressive);
+    for bad in ["", "eager"] {
+        let e = ctx("agent-context@2", &format!(r#","delivery":"{bad}""#)).unwrap_err();
+        assert!(
+            format!("{e:#}").contains("delivery must be progressive or inline"),
+            "{e:#}"
+        );
+    }
+    // `@1` has no delivery field.
+    assert!(ctx("agent-context@1", r#","delivery":"inline""#).is_err());
+}
+
 /// agent-sessions@2 is a declaration, like @1, and exclusive with it.
 #[test]
 fn agent_sessions_2_is_a_declaration_exclusive_with_1() {

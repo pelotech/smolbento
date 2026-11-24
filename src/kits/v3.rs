@@ -453,15 +453,23 @@ pub(crate) fn body(ty: &str, config: Option<Value>) -> Result<CapBody> {
                 directory: c.directory,
                 content: c.content.unwrap_or_default(),
                 content_file: c.content_file,
+                delivery: Delivery::Progressive,
             })
         }
         "agent-context@2" => {
             let c: AgentContextV2 = decode(config)?;
+            // Read once expanded: a reference is `Pending` until then.
+            let delivery = match c.delivery.as_deref() {
+                None | Some("progressive") => Delivery::Progressive,
+                Some("inline") => Delivery::Inline,
+                Some(d) => bail!("agent-context@2 delivery must be progressive or inline (got {d:?})"),
+            };
             CapBody::AgentContext(AgentContextReq {
                 filename: c.filename,
                 directory: c.directory,
                 content: c.content.unwrap_or_default(),
                 content_file: None,
+                delivery,
             })
         }
         "sbx@1" => {
@@ -1000,6 +1008,7 @@ struct AgentContextV2 {
     filename: Option<String>,
     directory: Option<String>,
     content: Option<String>,
+    delivery: Option<String>,
 }
 
 #[derive(Deserialize, Default)]

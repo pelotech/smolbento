@@ -945,6 +945,8 @@ fn context_scripts(
     if contexts.is_empty() {
         return Vec::new();
     }
+    // shortcut: every `@2` body is inlined, whatever its `delivery` (`AgentContextReq::delivery`);
+    // progressive delivery of mixin bodies is a follow-up.
     let inline = version == Some(2);
     let mut scripts = Vec::new();
     for file in agent_files {

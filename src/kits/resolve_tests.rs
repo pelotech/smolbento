@@ -869,6 +869,29 @@ fn hooks_files_and_contexts_expand_args_and_env() {
     assert!(!p.args["m"].contains_key("opt"));
 }
 
+/// tck: agent-context@2/delivery: progressive when omitted; after expansion only `progressive`
+/// or `inline`, so an empty or other value refuses the kit.
+#[test]
+fn agent_context_2_delivery_is_read_after_expansion() {
+    use crate::kits::model::Delivery;
+    let kit = || {
+        v3_m(
+            "  d: {}\n",
+            "  - type: com.docker.sandbox/agent-context@2\n    config: {content: x, delivery: \"${{ kit.args.d }}\"}\n",
+        )
+    };
+    let delivery = |v: &str| {
+        let p = resolve(workload("w"), vec![kit()], &with_args(&[v]))?;
+        anyhow::Ok(p.merged.contexts[0].req.delivery)
+    };
+    assert_eq!(delivery("d=inline").unwrap(), Delivery::Inline);
+    assert_eq!(delivery("d=progressive").unwrap(), Delivery::Progressive);
+    for bad in ["d=", "d=eager"] {
+        let e = delivery(bad).unwrap_err();
+        assert!(format!("{e:#}").contains("delivery"), "{bad}: {e:#}");
+    }
+}
+
 fn opt_hook_kit() -> Kit {
     v3_m(
         "  opt: {}\n",
