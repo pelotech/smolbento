@@ -1,5 +1,30 @@
 # Changelog
 
+## [0.39.0](https://github.com/pelotech/smolbento/compare/v0.38.0...v0.39.0) (2026-11-24)
+
+
+### Features
+
+* **secrets:** bind a new service to a running hosted sandbox live ([#239](https://github.com/pelotech/smolbento/issues/239)) ([c95d20b](https://github.com/pelotech/smolbento/commit/c95d20b57a4aa0faa617685ee07db1a611ea31ae))
+
+
+### Bug Fixes
+
+* **egress:** a secret's host keeps its method and path rules ([#243](https://github.com/pelotech/smolbento/issues/243)) ([463232a](https://github.com/pelotech/smolbento/commit/463232a3804efbd88ecb254153823b27736d2887))
+* **kits:** honor the workload image's user and WORKDIR ([#246](https://github.com/pelotech/smolbento/issues/246)) ([12f614d](https://github.com/pelotech/smolbento/commit/12f614d286107b935aa1c24bb1330ba0ab5f4795))
+* **kits:** install-phase network rules work under allow-all; conformance checks network-policy ([#237](https://github.com/pelotech/smolbento/issues/237)) ([244ff13](https://github.com/pelotech/smolbento/commit/244ff139d4f1287469d04b28d590e23975b4ac39))
+* **kits:** install-phase rules apply while stored, so kits with them get hosted egress ([#240](https://github.com/pelotech/smolbento/issues/240)) ([66f3876](https://github.com/pelotech/smolbento/commit/66f3876ec9d1158c9e260a0cde5a92606ece056e))
+* **kits:** scope credentials to their phase and report unresolved secrets ([#248](https://github.com/pelotech/smolbento/issues/248)) ([81df865](https://github.com/pelotech/smolbento/commit/81df86539f80ab80b96c8c526707bd8d6a1bca68))
+* **kits:** start a v3 workload only after the start's kit steps ([#245](https://github.com/pelotech/smolbento/issues/245)) ([c22af97](https://github.com/pelotech/smolbento/commit/c22af97b1cccc7e0a029ecb2ace8988043d6c5fe))
+* **lifecycle:** rm --all and prune leave the shared kit builder ([#241](https://github.com/pelotech/smolbento/issues/241)) ([f699e23](https://github.com/pelotech/smolbento/commit/f699e238f01245de0d0233def71cf516c313d9e0))
+* **lifecycle:** rm --all and prune remove only this setup's sandboxes ([#244](https://github.com/pelotech/smolbento/issues/244)) ([fc96c7a](https://github.com/pelotech/smolbento/commit/fc96c7aaefe347600a895da9d1f4f142f29880ea))
+* **skills:** one skills store at every path, owned by the agent ([#247](https://github.com/pelotech/smolbento/issues/247)) ([64d72a6](https://github.com/pelotech/smolbento/commit/64d72a6ffdf6528588d74283303df28fdd147335))
+
+
+### Tests
+
+* **conformance:** claim four more capabilities and fix two kit bugs they found ([#242](https://github.com/pelotech/smolbento/issues/242)) ([bbe66cf](https://github.com/pelotech/smolbento/commit/bbe66cf902f393cba2e73ea3ecaba0527b030e8b))
+
 ## [0.38.0](https://github.com/pelotech/smolbento/compare/v0.37.0...v0.38.0) (2026-11-23)
 
 
