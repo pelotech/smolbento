@@ -28,6 +28,19 @@ pub fn run<R: Runner>(ctx: &Ctx<R>, name: &str) -> Result<()> {
     for var in missing {
         eprintln!("egress: no value for {var}; requests using it will fail");
     }
+    // For the start that started this process to tell the user (`provision::egress_warnings`).
+    let unresolved = crate::secrets::resolve::unresolved(&secrets, &sb.meta, &pairs);
+    let text: String = unresolved.iter().map(|n| format!("{n}\n")).collect();
+    let file = super::unresolved_file(&ctx.paths, name);
+    // Only a report: the process serves without it.
+    if let Err(e) = crate::config::write_atomic(
+        &file,
+        text.as_bytes(),
+        None,
+        crate::config::Symlink::Replace,
+    ) {
+        eprintln!("egress: writing {}: {e:#}", file.display());
+    }
     let hosts: Vec<String> = label
         .bindings
         .iter()

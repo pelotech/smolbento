@@ -212,13 +212,17 @@ create)
 		;;
 	*) die "unknown skills-host-store: $store_scenario" ;;
 	esac
-	# The fixture credential service's secret, bound by name only: its command reads the suite's
-	# value from the environment at each start, so the value never reaches a file or an argv.
+	# The fixture credential service's secret: its command reads the suite's dummy value from a 0600
+	# file in this throwaway home at each start. Not from the environment, which hosted egress
+	# doesn't pass on; never in an argv. Written each create, so a reused home has this run's value;
 	# mkdir makes concurrent creates bind it once.
-	if [ -n "${KIT_TCK_BOUND_SECRET:-}" ] && $0 capabilities | grep -qx com.docker.sandbox/credential@1 &&
-		mkdir "$state/secret-bound" 2>/dev/null; then
-		sbt none secret set-custom --host example.com --env KIT_TCK \
-			--command 'printf %s "$KIT_TCK_BOUND_SECRET"' >&2 || die "could not bind the kit-tck secret"
+	secret_file=$state/kit-tck-secret
+	if [ -n "${KIT_TCK_BOUND_SECRET:-}" ] && $0 capabilities | grep -qx com.docker.sandbox/credential@1; then
+		(umask 077 && printf %s "$KIT_TCK_BOUND_SECRET" >"$secret_file.$$" && mv "$secret_file.$$" "$secret_file")
+		if mkdir "$state/secret-bound" 2>/dev/null; then
+			sbt none secret set-custom --host example.com --env KIT_TCK \
+				--command "cat '$secret_file'" >&2 || die "could not bind the kit-tck secret"
+		fi
 	fi
 	# The first reference is the workload; no workspace path makes a mountless sandbox.
 	status=0

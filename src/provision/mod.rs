@@ -139,10 +139,34 @@ pub fn ensure_running<R: Runner>(ctx: &Ctx<R>, sb: &mut Sandbox) -> Result<()> {
     sweep_orphans(ctx);
     refresh_services(ctx, sb);
     let meta = sb.meta.clone();
-    if !sb.is_running() {
-        restart_egress(ctx, sb);
+    if sb.is_running() {
+        return sandbox::ensure_running(&ctx.vm, sb, || start_plan(ctx, &meta));
     }
-    sandbox::ensure_running(&ctx.vm, sb, || start_plan(ctx, &meta))
+    // The restarted process writes a new list.
+    let _ = std::fs::remove_file(crate::egress::unresolved_file(&ctx.paths, sb.name()));
+    restart_egress(ctx, sb);
+    sandbox::ensure_running(&ctx.vm, sb, || start_plan(ctx, &meta))?;
+    for w in egress_warnings(ctx, sb.name()) {
+        crate::warning!("{w}");
+    }
+    Ok(())
+}
+
+/// What the egress process of `sandbox` reported it couldn't resolve, as warnings. Read without
+/// waiting: nothing when it hasn't started or got that far yet.
+fn egress_warnings<R: Runner>(ctx: &Ctx<R>, sandbox: &str) -> Vec<String> {
+    let file = crate::egress::unresolved_file(&ctx.paths, sandbox);
+    let text = std::fs::read_to_string(file).unwrap_or_default();
+    text.lines()
+        .filter(|l| !l.is_empty())
+        .map(|name| {
+            format!(
+                "the {name} secret resolved to nothing in {sandbox}'s egress process, which \
+                 doesn't get your shell's environment; requests using it will fail. Use a source \
+                 that doesn't need it, or create the sandbox with network.egress=smolvm"
+            )
+        })
+        .collect()
 }
 
 /// The units a sandbox needs: the bridge, the agent when a runtime phase is granted, and the
@@ -378,12 +402,13 @@ pub fn prepare_create<R: Runner>(
     req.rec.credential_env.dedup();
     req.rec.secrets = services;
     if !name::is_internal(&req.name) {
-        // The services the kits declare a credential for get a mode.
+        // The services the kits declare a credential for get a mode, unless it's inject-only.
         let mut services: Vec<String> = kits
             .map(|p| {
                 p.merged
                     .credentials
                     .iter()
+                    .filter(|c| !c.req.inject_only())
                     .map(|c| c.req.service.clone())
                     .collect()
             })
@@ -856,6 +881,11 @@ pub fn create_with<R: Runner>(
         }
         if let Some(repo) = added_remote {
             let _ = clone::remove_remote(repo, &req.name);
+        }
+    }
+    if result.is_ok() {
+        for w in egress_warnings(ctx, &req.name) {
+            crate::warning!("{w}");
         }
     }
     result

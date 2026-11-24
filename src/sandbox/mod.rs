@@ -426,6 +426,9 @@ fn first_start<R: Runner>(
         if !kit.restart_without.is_empty() {
             vm.stop(&sb.machine)
                 .context("restarting without install-only credentials")?;
+            // smolvm sets a binding's placeholder at every start, value or not.
+            vm.remove_credentials(&sb.machine, &kit.restart_without)
+                .context("removing install-only credentials")?;
             let without = |v: &String| kit.restart_without.contains(v);
             let restart = StartPlan {
                 network,

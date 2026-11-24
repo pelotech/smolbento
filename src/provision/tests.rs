@@ -1212,9 +1212,10 @@ fn a_hosted_create_passes_no_credential_and_mounts_the_ca() {
         create.contains(&format!("-e GH_TOKEN={placeholder}")),
         "{create}"
     );
+    // As smolvm sets them for a machine with credentials, so the variables don't tell the egress
+    // modes apart (`tck: credential@1/inject-only-no-env` compares a hosted baseline).
     for var in [
         "SSL_CERT_FILE",
-        "NODE_EXTRA_CA_CERTS",
         "REQUESTS_CA_BUNDLE",
         "CURL_CA_BUNDLE",
         "GIT_SSL_CAINFO",
@@ -1224,8 +1225,53 @@ fn a_hosted_create_passes_no_credential_and_mounts_the_ca() {
             "{create}"
         );
     }
+    for var in ["NODE_EXTRA_CA_CERTS", "DENO_CERT"] {
+        assert!(
+            create.contains(&format!("-e {var}=/run/smol/credentials/ca.pem")),
+            "{create}"
+        );
+    }
     assert!(create.contains("sbx.egress="), "{create}");
     assert!(!create.contains("gh-123"), "{create}");
+}
+
+/// A kit credential with inject rules and no variable is outbound rewrites only: the guest gets
+/// no variable for it, neither its placeholder nor its `SBX_CRED_*_MODE`.
+/// tck: credential@1/inject-only-no-env
+#[test]
+fn an_inject_only_credential_adds_no_variable() {
+    use crate::kits::model::{Cap, CapBody, CredReq, Inject};
+    let (t, _) = egress_env("hosted", &[]);
+    let plan = agent_plan(
+        false,
+        vec![Cap::new(
+            "com.docker.sandbox/credential@1",
+            false,
+            CapBody::Credential(CredReq {
+                service: "github".into(),
+                install: false,
+                runtime: true,
+                env: None,
+                inject: vec![Inject {
+                    domain: "api.github.com".into(),
+                    header: Some("Authorization".into()),
+                    format: Some("Bearer %s".into()),
+                    basic_user: None,
+                }],
+                oauth: None,
+            }),
+        )],
+    );
+    let mut req = agent_request(false);
+    create_with(&t.ctx, &mut req, &[], Some(&plan), None, &mut |_| {}).unwrap();
+    let label = &req.egress.as_ref().expect("hosted").label;
+    assert!(
+        label.bindings.iter().any(|b| b.env == "SBX_KIT_GITHUB"),
+        "still bound: {label:?}"
+    );
+    let create = t.create_line();
+    assert!(!create.contains("-e SBX_KIT_"), "{create}");
+    assert!(!create.contains("-e SBX_CRED_"), "{create}");
 }
 
 #[test]
@@ -1579,4 +1625,23 @@ fn a_fallback_sandbox_refuses_a_required_request_rule_before_create() {
     assert!(t.calls_of("machine create").is_empty());
     let p = Policy::load(&t.ctx.paths).unwrap();
     assert_eq!(p.rules_for(Some("s1")).count(), 0);
+}
+
+/// The egress process lists the secrets it couldn't resolve; a start says so, naming each. No
+/// list (the process hasn't got that far): nothing.
+#[test]
+fn egress_warnings_name_each_secret_the_egress_process_reported() {
+    let t = test_env(&[]);
+    assert!(egress_warnings(&t.ctx, "s").is_empty());
+    let file = crate::egress::unresolved_file(&t.ctx.paths, "s");
+    std::fs::create_dir_all(file.parent().unwrap()).unwrap();
+    std::fs::write(&file, "github\n").unwrap();
+    assert_eq!(
+        egress_warnings(&t.ctx, "s"),
+        [
+            "the github secret resolved to nothing in s's egress process, which doesn't get your \
+          shell's environment; requests using it will fail. Use a source that doesn't need it, \
+          or create the sandbox with network.egress=smolvm"
+        ]
+    );
 }

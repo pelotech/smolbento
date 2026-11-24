@@ -280,7 +280,8 @@ so every process sees them. Your own `-e` wins. None holds a secret value.
 - `WORKSPACE_DIR`: the host path of the primary workspace (the guest workdir when mountless).
 - `SBX_AGENT`: the agent or kit name. `IS_SANDBOX=1` comes from the `claude` kit's image.
 - `SBX_CRED_<SVC>_MODE`: one per service a kit in the sandbox declares a credential for: `apikey`
-  when the service's secret is bound at create, else `none`. As measured in sbx 0.53, `claude` gets
+  when the service's secret is bound at create, else `none`. Not for an inject-only credential
+  (`inject` rules, no `name`, no OAuth), which the spec gives no variable at all. As measured in sbx 0.53, `claude` gets
   `ANTHROPIC` and `shell` none. A `-` in a service name becomes `_` (`my-api` gives
   `SBX_CRED_MY_API_MODE`): sbx 0.54 keeps it (`SBX_CRED_MY-API_MODE`), but smolvm's guest agent
   refuses an environment name with anything but letters, digits and `_`.
@@ -335,11 +336,12 @@ Not claimed, each for checks that fail: `dockerd@1` and `volume@1` (the spec's `
 the engine store and volumes while discarding the sandbox's disk, and smolbento keeps them on that
 disk); `git-identity@1` and `agent-context@2` (`recreate` and selection records are missing;
 `git-identity@1/global-defaults` and `agent-context@2/materialized` pass); `agent-skills@1` and
-`agent-skill@1` (selection records); and `credential@1` (an install-only credential stays set for
-the workload, and an inject-only one adds variables). The adapter can still run these slices
-(`SMOLBENTO_TCK_CAPABILITIES`): it maps `--skills-host-mode` to `--skills`, `--skills-host-store`
-to its isolated store, `--git-identity-config` to the host git config bento reads, and binds the
-fixture's credential as a `secret set-custom --command` that reads the suite's value at each start.
+`agent-skill@1` (selection records); and `credential@1` (`inject-only-no-env` finds the CA variables
+that install steps keep, the recorded difference above; the rest that ran pass). The adapter can
+still run these slices (`SMOLBENTO_TCK_CAPABILITIES`): it maps `--skills-host-mode` to `--skills`,
+`--skills-host-store` to its isolated store, `--git-identity-config` to the host git config bento
+reads, and binds the fixture's credential as a `secret set-custom --command` that reads
+the suite's dummy value from a 0600 file in `SMOLBENTO_TCK_HOME` at each start.
 The suite's isolated setup needs the units' socket path under 104 bytes (a short
 `SMOLBENTO_TCK_HOME`); a longer one falls back to attached-only serving and the boot-time checks
 fail.
@@ -372,7 +374,7 @@ The spec's own validator accepts the pair and merges it. A capability `type` mus
 | Capability | sbx (local) | smolbento |
 |---|---|---|
 | `network-policy@1`, `@2` | Yes | Yes, source `kit`. Install-phase rules apply while they're in the policy: from create (or `kit add`) until its install steps are done, when they're removed, before the workload's entrypoint starts. A start removes any an interrupted create or `kit add` left. An install-phase CIDR deny stays enforced for the sandbox's life (smolvm takes CIDR denies only at create; create prints a note), though `policy ls` doesn't show it after install. `@2` method and path rules are enforced on hosted sandboxes ([Request rules](network-and-secrets.md#request-rules)), with paths matched in exact case. Where a sandbox won't be hosted (`network.egress=smolvm`, install-only credentials, no service manager), a kit requiring them is refused. Optional ones there: allow rules cover the whole host, and deny rules with methods or paths are dropped (the skipped line says how many) |
-| `credential@1` | Yes | API keys: yes, through your secrets. OAuth with `passthrough: true`: yes (the agent's own login keeps its tokens in the sandbox). OAuth without passthrough: its API key part binds; logins happen inside the sandbox |
+| `credential@1` | Yes | API keys: yes, through your secrets. OAuth with `passthrough: true`: yes (the agent's own login keeps its tokens in the sandbox). OAuth without passthrough: its API key part binds; logins happen inside the sandbox. An inject-only credential (no `name`) adds no variable on a hosted sandbox; with `network.egress=smolvm`, and during install for an install-only one, `SBX_KIT_<SERVICE>` holds smolvm's placeholder (smolvm's CLI gives every credential a variable) |
 | `port@1` | Yes | Yes, on `127.0.0.1` |
 | `volume@1` | Yes, removed with the sandbox | Yes, on the sandbox's disk. Removed with the sandbox (`rm`, `reset`, recreate); kept across stop and start; each fork gets a copy. The path is cleaned (`.`, `..`, doubled `/`); one holding `:` is refused, because smolvm reads it as host:guest (the spec allows it) |
 | `resources@1` | Limited (no GPU) | CPUs and memory. GPU ignored |

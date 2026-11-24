@@ -375,6 +375,14 @@ impl<R: Runner> Smolvm<R> {
         checked(self.runner.run_with_env(&a, env, &[])?).map(drop)
     }
 
+    /// Removes the bindings of `env_vars`' credentials on a running or stopped machine: from its
+    /// next start the guest no longer gets their placeholders.
+    pub fn remove_credentials(&self, name: &str, env_vars: &[String]) -> Result<()> {
+        let mut a = args(&["machine", "credentials", "remove", "-n", name]);
+        a.extend(env_vars.iter().map(|v| Credential::binding(v)));
+        self.call(a).map(drop)
+    }
+
     /// Packs the stopped machine's filesystem into `<out>.smolmachine` (and an executable stub
     /// at `out`, which callers delete). Unsigned: the stub is never run.
     pub fn pack_from_vm(&self, machine: &str, out: &Path) -> Result<()> {

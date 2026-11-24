@@ -129,7 +129,8 @@ What a kit does, and when:
   service SERVICE` and the `bento secret set` command. Requests go out without it until you set it and
   recreate the sandbox. A built-in service's secret goes only to its own hosts
   ([Security](SECURITY.md#kits)). A credential needed only for install is available during install;
-  the sandbox then restarts once without it, and later requests to its hosts get `502`.
+  the sandbox then restarts once without it: its variable is gone, and requests to its hosts go out
+  without it.
 - Volumes live on the sandbox's disk and are removed with it. Host mounts are shared and kept ([kit
   host mounts](#kit-host-mounts)).
 

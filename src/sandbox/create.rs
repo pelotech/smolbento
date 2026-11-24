@@ -33,6 +33,9 @@ pub struct CreateRequest {
     pub network: NetworkSpec,
     pub deny_cidrs: Vec<String>,
     pub credentials: Vec<Credential>,
+    /// The variables of inject-only kit credentials, bound for the host only: a hosted guest gets
+    /// no placeholder for them (smolvm's own egress always sets one).
+    pub host_only_env: Vec<String>,
     /// Hosted egress: set when `credentials` are swapped by bento's interceptor, not smolvm.
     pub egress: Option<crate::egress::Prepared>,
     /// What `meta` records as labels unchanged.
@@ -222,6 +225,7 @@ pub fn spec(req: &CreateRequest) -> CreateSpec {
         env.extend(
             bindings
                 .iter()
+                .filter(|b| !req.host_only_env.contains(&b.env))
                 .map(|b| (b.env.clone(), b.placeholder.clone())),
         );
     }
@@ -231,14 +235,16 @@ pub fn spec(req: &CreateRequest) -> CreateSpec {
             guest: "/run/smol/credentials".into(),
             read_only: true,
         });
-        for var in [
-            "SSL_CERT_FILE",
-            "NODE_EXTRA_CA_CERTS",
-            "REQUESTS_CA_BUNDLE",
-            "CURL_CA_BUNDLE",
-            "GIT_SSL_CAINFO",
+        // As smolvm sets them: Node and Deno add the CA to their own roots.
+        for (var, path) in [
+            ("SSL_CERT_FILE", "/run/smolvm/ca-bundle.pem"),
+            ("CURL_CA_BUNDLE", "/run/smolvm/ca-bundle.pem"),
+            ("REQUESTS_CA_BUNDLE", "/run/smolvm/ca-bundle.pem"),
+            ("GIT_SSL_CAINFO", "/run/smolvm/ca-bundle.pem"),
+            ("NODE_EXTRA_CA_CERTS", "/run/smol/credentials/ca.pem"),
+            ("DENO_CERT", "/run/smol/credentials/ca.pem"),
         ] {
-            crate::util::env_default(&mut env, var, "/run/smolvm/ca-bundle.pem");
+            crate::util::env_default(&mut env, var, path);
         }
     }
     CreateSpec {

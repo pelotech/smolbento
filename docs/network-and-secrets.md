@@ -181,6 +181,16 @@ macOS, a `systemd --user` socket and service on Linux), and every byte the sandb
 goes through it. It enforces the network rules and swaps the sandbox's secrets. It resolves secrets
 when it starts, and the guest sees placeholders as usual.
 
+The egress process doesn't get your shell's environment: only bento's own `SMOLBENTO_*` variables
+and a few of your session's (`HOME`, `PATH`, `DISPLAY`, `WAYLAND_DISPLAY`, `SSH_CONNECTION`, and
+`SSH_AUTH_SOCK` on Linux). So a `--ref` or `--command` secret that needs a shell variable (`op read`
+with `OP_SERVICE_ACCOUNT_TOKEN`, `aws` with `AWS_PROFILE`, `printf %s "$TOKEN"`) gets nothing there,
+and requests using it fail with `502`. The egress process lists the secrets it couldn't resolve, and
+`bento create` and `start` warn about each once the sandbox is up, if the process has got that far.
+Use a source that doesn't need the shell's variables (a stored value, a command that reads a file),
+or create the sandbox with `network.egress=smolvm`, where secrets resolve in the shell that starts
+it.
+
 Each connection is decided twice, and smolvm's allow list still applies first:
 
 - **By address and port**, when the guest connects. An IP or CIDR deny rule (`10.0.0.0/8`,
