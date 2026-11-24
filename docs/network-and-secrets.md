@@ -263,8 +263,9 @@ bento policy deny network --sandbox claude-myrepo github.com --method POST --pat
   - A bounded deny acts on the requests it names, never on the whole host: `deny H --method POST`
     refuses POSTs, and GETs and other ports pass. A deny wins over any allow.
   - A bounded allow makes its host reachable, and then only the requests it names pass.
-  - An unbounded allow of the same host and port beats it, and so do `allow-all`, a secret's host,
-    and a host the `balanced` preset admits: they leave every request admitted.
+  - An unbounded allow of the same host and port beats it, and so do `allow-all` and a host the
+    `balanced` preset admits: they leave every request admitted. A secret's host doesn't: the
+    secret makes the host reachable, and its bounded allows still bound it.
 - **Matching.**
   - Methods are matched in any case. `X-HTTP-Method-Override`, `X-HTTP-Method` and
     `X-Method-Override` count as the method too: a deny fires if any of them matches, and an allow
