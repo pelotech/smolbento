@@ -641,6 +641,20 @@ fn both_network_policy_versions_are_refused() {
     }
 }
 
+/// agent-sessions@2 is a declaration, like @1, and exclusive with it.
+#[test]
+fn agent_sessions_2_is_a_declaration_exclusive_with_1() {
+    let s1 = r#"{"type":"com.docker.sandbox/agent-sessions@1","config":{"prompt":["-p","{{.Prompt}}"]}}"#;
+    let s2 = r#"{"type":"com.docker.sandbox/agent-sessions@2","config":{"prompt":["-p","{{.Prompt}}"]}}"#;
+    let k = one_cap(s2).unwrap();
+    assert_eq!(k.caps[0].body, CapBody::AgentSessions);
+    let e = one_cap(&format!("{s1},{s2}")).unwrap_err();
+    assert!(
+        format!("{e:#}").contains("agent-sessions@1 and agent-sessions@2 are exclusive"),
+        "{e:#}"
+    );
+}
+
 #[test]
 fn port_resources_and_agent_context_variants() {
     let k = one_cap(

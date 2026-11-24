@@ -311,6 +311,22 @@ pub struct Bundled {
     pub optional: bool,
 }
 
+/// `agent-sessions@2` is exclusive with `@1` across kits too (`v3::check_caps` refuses both in one).
+fn check_sessions(all: &[Kit]) -> Result<()> {
+    let by = |v: &str| {
+        let ty = format!("com.docker.sandbox/agent-sessions@{v}");
+        all.iter().find(|k| k.caps.iter().any(|c| c.ty == ty))
+    };
+    if let (Some(a), Some(b)) = (by("1"), by("2")) {
+        bail!(
+            "agent-sessions@1 and agent-sessions@2 are exclusive: kits {} and {} declare one each",
+            a.name,
+            b.name
+        );
+    }
+    Ok(())
+}
+
 /// Within one kit, a skills path or a bundled skill name may appear once.
 fn check_skill_caps(k: &Kit) -> Result<()> {
     let mut paths = BTreeSet::new();
@@ -487,6 +503,7 @@ pub fn resolve_for(
         check_skill_caps(k)?;
         skipped.extend(select_groups(k, hosted)?);
     }
+    check_sessions(&all)?;
     check_lifecycle_conflicts(&all, workdir)?;
 
     let mut merged = Merged {

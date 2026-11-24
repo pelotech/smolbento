@@ -661,6 +661,23 @@ fn skill(source: &str, name: &str) -> CapBody {
     }
 }
 
+/// agent-sessions@2 is exclusive with @1 across kits too: two kits describing the workload's
+/// agent are two authors (spec agent-sessions@2 "Shape").
+#[test]
+fn agent_sessions_1_and_2_from_two_kits_are_refused() {
+    const S1: &str = "com.docker.sandbox/agent-sessions@1";
+    const S2: &str = "com.docker.sandbox/agent-sessions@2";
+    let w = workload("w").cap(S1, true, CapBody::AgentSessions);
+    let m = mixin("m").cap(S2, false, CapBody::AgentSessions);
+    let e = run(w, vec![m]).unwrap_err();
+    assert_eq!(
+        format!("{e:#}"),
+        "agent-sessions@1 and agent-sessions@2 are exclusive: kits w and m declare one each"
+    );
+    let w = workload("w").cap(S2, false, CapBody::AgentSessions);
+    assert!(run(w, vec![]).is_ok());
+}
+
 /// Widest declared mode, ordered off, readonly, readwrite (spec agent-skills@1 "Composition").
 #[test]
 fn skill_dirs_merge_to_the_widest_mode_and_one_kit_names_a_path_once() {

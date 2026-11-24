@@ -324,10 +324,12 @@ pub(crate) fn check_caps(kit: &str, caps: &[Cap]) -> Result<()> {
             check_hooks(kit, l)?;
         }
     }
-    // SPEC-v3 §7.1: both describe the same grant, so a descriptor states one of them.
-    let has = |ty: &str| caps.iter().any(|c| c.ty == ty);
-    if has("com.docker.sandbox/network-policy@1") && has("com.docker.sandbox/network-policy@2") {
-        bail!("kit {kit}: network-policy@1 and network-policy@2 are exclusive; declare one");
+    // SPEC-v3 §7.1: each pair describes the same thing, so a descriptor states one of them.
+    let has = |ty: &str| caps.iter().any(|c| c.ty == format!("com.docker.sandbox/{ty}"));
+    for name in ["network-policy", "agent-sessions"] {
+        if has(&format!("{name}@1")) && has(&format!("{name}@2")) {
+            bail!("kit {kit}: {name}@1 and {name}@2 are exclusive; declare one");
+        }
     }
     check_ssh_phases(kit, caps)
 }
@@ -485,7 +487,7 @@ pub(crate) fn body(ty: &str, config: Option<Value>) -> Result<CapBody> {
             }
         }
         // Its command templates matter to the agent launcher, not to the kit model.
-        "agent-sessions@1" => CapBody::AgentSessions,
+        "agent-sessions@1" | "agent-sessions@2" => CapBody::AgentSessions,
         "ssh-agent@1" => ssh_agent(decode(config)?)?,
         "agent-skills@1" => {
             let c: AgentSkillsCfg = decode(config)?;
