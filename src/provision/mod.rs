@@ -522,6 +522,27 @@ pub fn prepare_create<R: Runner>(
         bundled.clear();
     }
     let label = crate::skills::plan(req.skills_mode, &wants, !bundled.is_empty());
+    // A stored skill takes its name in every linking directory before bundled skills are linked
+    // (agent-skill@1/host-conflict), so a required one's clash is known now: refuse it before
+    // anything is made. Image content can clash too, which only the first start sees.
+    if let Some(d) = label
+        .dirs
+        .iter()
+        .find(|d| d.access == crate::skills::Access::Link)
+    {
+        let store = ctx.paths.skills_store();
+        if let Some(b) = bundled
+            .iter()
+            .find(|b| !b.optional && store.join(&b.name).symlink_metadata().is_ok())
+        {
+            bail!(
+                "failed to compose shared skills into the sandbox: bundled skills {} cannot be \
+                 exposed in {}: another skill already uses the name",
+                b.name,
+                d.path
+            );
+        }
+    }
     // The first start's first step, so it runs before every install hook and after the start's
     // setup linked the store (a store entry of the same name is then taken). As root, like the
     // store's links; the script hands the links to the agent.

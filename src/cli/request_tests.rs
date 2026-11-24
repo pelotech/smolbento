@@ -842,9 +842,9 @@ fn create_shares_skills_by_mode() {
         (
             &[],
             &["create", "claude", ".", "--skills", "readwrite"],
-            Some(claude),
+            Some("/run/sbx/skills-shared"),
             Mode::Readwrite,
-            Shared::None,
+            Shared::Rw,
             Access::Rw,
         ),
         (
@@ -1041,8 +1041,9 @@ fn kit_skills_mounts(caps: &str, mode: &str) -> (Vec<String>, crate::skills::Lab
     (mounts, skills_label(&t))
 }
 
-/// sbx's kit table: without a bundled skill the store is mounted over each kit directory
-/// (no links); with one, every directory links and the shared mount takes the widest access.
+/// sbx's kit table: without a bundled skill the store is bound over each kit directory (no
+/// links); with one, every directory links. Either way smolvm mounts the store once
+/// (agent-skills@1/same-store-at-every-path), with the widest access.
 #[test]
 fn kit_skills_directories_follow_sbx_s_table() {
     use crate::skills::{Access, Shared};
@@ -1054,13 +1055,13 @@ fn kit_skills_directories_follow_sbx_s_table() {
     let access =
         |l: &crate::skills::Label| -> Vec<Access> { l.dirs.iter().map(|d| d.access).collect() };
     let (m, l) = kit_skills_mounts(&dirs, "readwrite");
-    assert_eq!(m, ["/r:ro", "/w"]);
+    assert_eq!(m, ["/run/sbx/skills-shared"]);
     assert_eq!(
         (l.shared, access(&l)),
-        (Shared::None, vec![Access::Ro, Access::Rw])
+        (Shared::Rw, vec![Access::Ro, Access::Rw])
     );
     let (m, l) = kit_skills_mounts(&dirs, "readonly");
-    assert_eq!(m, ["/r:ro", "/w:ro"]);
+    assert_eq!(m, ["/run/sbx/skills-shared:ro"]);
     assert_eq!(access(&l), [Access::Ro, Access::Ro]);
     let (m, l) = kit_skills_mounts(&dirs, "off");
     assert!(m.is_empty(), "{m:?}");
@@ -1107,6 +1108,34 @@ fn a_bundled_skill_without_a_skills_directory_fails_or_is_skipped() {
     let lines = t.calls();
     assert!(t.made("machine create"));
     assert!(!lines.iter().any(|l| l.contains("ln -sn ")), "{lines:#?}");
+}
+
+/// agent-skill@1/host-conflict: a stored skill of a required bundled skill's name is refused
+/// before anything is made; under `off` the store isn't shared, so there's no conflict.
+#[test]
+fn a_bundled_skill_named_like_a_stored_one_is_refused_before_create() {
+    let caps = format!(
+        r#"{{"type":"{AS}","config":{{"path":"/s"}}}},
+           {{"type":"{AK}","config":{{"path":"/opt/k/review"}}}}"#
+    );
+    let mut t = skills_kit_env("shell", &caps);
+    std::fs::create_dir_all(t.ctx.paths.skills_store().join("review")).unwrap();
+    let e = t
+        .sbt(&["create", "shell", ".", "--kit", "./k"])
+        .unwrap_err();
+    assert_eq!(
+        format!("{e:#}"),
+        "failed to compose shared skills into the sandbox: bundled skills review cannot be \
+         exposed in /s: another skill already uses the name"
+    );
+    let lines = t.calls();
+    assert!(!t.made("machine create"), "{lines:#?}");
+
+    let mut t = skills_kit_env("shell", &caps);
+    std::fs::create_dir_all(t.ctx.paths.skills_store().join("review")).unwrap();
+    t.sbt(&["create", "shell", ".", "--kit", "./k", "--skills", "off"])
+        .unwrap();
+    assert!(t.made("machine create"));
 }
 
 #[test]

@@ -143,9 +143,9 @@ pub(crate) fn shared_skills_read_only_links_and_relinks() {
     );
 }
 
-/// Without a bundled skill a kit's directory has the store mounted over it: read-only under
-/// `readonly` (no links, writes fail), read-write under `readwrite` (writes land in the store);
-/// `off` mounts and links nothing.
+/// Without a bundled skill a kit's directory has the store's one mount bound over it: read-only
+/// under `readonly` (no links, writes fail), read-write under `readwrite` (writes land in the
+/// store); `off` mounts and links nothing.
 #[test]
 #[ignore = "boots real VMs and pulls alpine; run with `just e2e`"]
 pub(crate) fn shared_skills_kit_dirs_are_mounted_over_and_off() {
@@ -156,7 +156,10 @@ pub(crate) fn shared_skills_kit_dirs_are_mounted_over_and_off() {
     e.create_skills_ok(&kit, "readonly");
     assert_eq!(
         skills_mounts(&e.name),
-        [(SKILLS_DIR.to_string(), "ro".to_string())]
+        [
+            (SHARED_SKILLS.to_string(), "ro".to_string()),
+            (SKILLS_DIR.to_string(), "ro".to_string())
+        ]
     );
     assert!(
         root_sh(
@@ -174,7 +177,10 @@ pub(crate) fn shared_skills_kit_dirs_are_mounted_over_and_off() {
     e.create_skills_ok(&kit, "readwrite");
     assert_eq!(
         skills_mounts(&e.name),
-        [(SKILLS_DIR.to_string(), "rw".to_string())]
+        [
+            (SHARED_SKILLS.to_string(), "rw".to_string()),
+            (SKILLS_DIR.to_string(), "rw".to_string())
+        ]
     );
     let write = format!("mkdir {SKILLS_DIR}/fromrw && echo x > {SKILLS_DIR}/fromrw/SKILL.md");
     e.sh_ok(&e.name, &write);
@@ -194,6 +200,35 @@ pub(crate) fn shared_skills_kit_dirs_are_mounted_over_and_off() {
         !root_sh(&e.name, &format!("test -e {SKILLS_DIR}"))
             .status
             .success()
+    );
+}
+
+/// agent-skills@1/same-store-at-every-path: every directory is the one store, not a copy per
+/// path, so a write through the read-write directory shows through the read-only one, even after
+/// that one was listed.
+#[test]
+#[ignore = "boots real VMs and pulls alpine; run with `just e2e`"]
+pub(crate) fn shared_skills_are_one_store_at_every_path() {
+    let e = E2e::new("skills-one");
+    let reg = Registry::start(&e);
+    store_skill(&e, "alpha");
+    let ro = "/home/agent/.other/skills";
+    let kit = skills_kit(
+        &reg,
+        &[],
+        &[serde_json::json!({
+            "type": "com.docker.sandbox/agent-skills@1",
+            "config": {"path": ro},
+        })],
+    );
+    e.create_skills_ok(&kit, "readwrite");
+    assert_eq!(root_out(&e.name, &format!("ls {ro}")), "alpha\n");
+    e.sh_ok(&e.name, &format!("mkdir {SKILLS_DIR}/probe"));
+    assert_eq!(root_out(&e.name, &format!("ls {ro}")), "alpha\nprobe\n");
+    let w = e.sbt(&["exec", &e.name, "mkdir", &format!("{ro}/mine")]);
+    assert!(
+        !w.status.success(),
+        "the read-only directory refuses writes"
     );
 }
 

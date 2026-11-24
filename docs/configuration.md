@@ -190,7 +190,7 @@ name turned into `_`). Its details are stored as labels on that machine:
 | `sbx.agent-file` | The agent instructions files the kits' `agent-context` names, comma-separated, so `kit add` can add a new mixin's context to each |
 | `sbx.agent-context` | The `agent-context` version (`1` or `2`) the sandbox's kit instructions were written under, so `kit add` keeps to it. Absent until a kit's instructions are written |
 | `sbx.workdir` | A v3 workload kit's image `WORKDIR`, where install hooks run (absent for `/`) |
-| `sbx.skills` | The skills mode, the `/run/sbx/skills-shared` mount (`none`, `ro` or `rw`), and each skills directory with its access (`none`, `link`, or the store mounted over it `ro` or `rw`), set at create |
+| `sbx.skills` | The skills mode, the `/run/sbx/skills-shared` mount (`none`, `ro` or `rw`), and each skills directory with its access (`none`, `link`, or the shared mount bound over it `ro` or `rw`), set at create |
 | `sbx.long-running` | `true` when a kit asked not to stop the sandbox when its last session ends |
 | `sbx.version` | The smolbento version that created it |
 | `sbx.fork-of` | The sandbox it was forked from |

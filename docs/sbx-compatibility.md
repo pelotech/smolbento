@@ -191,7 +191,7 @@ Where they differ:
 | `update` | Per-skill messages; `No repository-installed skills found` | A failing repository prints an error and the others still update. Exit code 1 (not measured in sbx) |
 | Path that is both the agent's and a kit's directory | Can't happen: a v3 mixin can't join a built-in agent | Allowed; the path behaves like the agent's own directory |
 | Who links | Root; links to uid 1000. Fails the create when uid 1000 can't reach the directory | Root; links to the image's `agent` account, else uid 1000. No reachability check. A skills path that goes through a symlink gets no links (the start warns; a required bundled skill fails) |
-| Kits | `agent-skills@1`, `agent-skill@1` | Both, as measured. A kit directory gets the store mounted over it unless the sandbox has bundled skills; then every directory links, read-write if any directory is. `kit add` refuses kits with either |
+| Kits | `agent-skills@1`, `agent-skill@1` | Both, as measured. smolvm mounts the store once, at `/run/sbx/skills-shared`, read-write if any directory is. A kit directory gets that mount bound over it unless the sandbox has bundled skills; then every directory links. A required bundled skill named like a stored skill is refused before anything is made; one that clashes with image content fails the first start, which fails the create. `kit add` refuses kits with either |
 | Other agents' directories | sbx's docs table | The same table, from the docs. Not measured for copilot, cursor, droid, opencode or devin |
 
 ## MCP servers
@@ -334,10 +334,9 @@ smolbento doesn't have.
 Not claimed, each for checks that fail: `dockerd@1` and `volume@1` (the spec's `recreate` keeps
 the engine store and volumes while discarding the sandbox's disk, and smolbento keeps them on that
 disk); `git-identity@1` and `agent-context@2` (`recreate` and selection records are missing;
-`git-identity@1/global-defaults` and `agent-context@2/materialized` pass);
-`agent-skills@1` and `agent-skill@1` (selection records, and paths backed by separate copies of
-the store; bundled skills are in place before launch); and `credential@1` (an install-only
-credential stays set for the workload, and an inject-only one adds variables). The adapter can still run these slices
+`git-identity@1/global-defaults` and `agent-context@2/materialized` pass); `agent-skills@1` and
+`agent-skill@1` (selection records); and `credential@1` (an install-only credential stays set for
+the workload, and an inject-only one adds variables). The adapter can still run these slices
 (`SMOLBENTO_TCK_CAPABILITIES`): it maps `--skills-host-mode` to `--skills`, `--skills-host-store`
 to its isolated store, `--git-identity-config` to the host git config bento reads, and binds the
 fixture's credential as a `secret set-custom --command` that reads the suite's value at each start.
