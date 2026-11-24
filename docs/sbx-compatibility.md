@@ -414,7 +414,9 @@ The spec's own validator accepts the pair and merges it. A capability `type` mus
   `~/.npm` or `~/.cache` stays writable. Startup steps and kit
   files default to `agent`. v3 install steps get a clean environment: `PATH`, `HOME`, `USER`, `TERM`,
   the proxy and CA variables, and the step's own `env`. v3 startup steps and all v2 steps get the
-  full sandbox environment.
+  full sandbox environment, except that no install step sees a runtime-only credential's variable,
+  a v2 kit's included (v2 credentials are runtime-only), as spec `credential@1/phase-scoped` says
+  (sbx not measured).
 - Startup steps block, in kit order. A failure is a warning with the log's last lines
   (`a kit startup step failed (kit startup exited with code N); starting anyway`), and the start,
   create or `kit add` goes on, as in sbx 0.51 (sbx's wording not measured). `background: true`

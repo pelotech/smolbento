@@ -127,7 +127,8 @@ What a kit does, and when:
   `dockerd@1` refuses the create, `--kit docker` included, and an optional one is skipped with its
   whole group.
 - A v3 install step gets a clean environment (`PATH`, `HOME`, `USER`, `TERM`, the proxy and CA
-  variables, and what its `env` lists). Startup steps and v2 steps get the full sandbox environment.
+  variables, and what its `env` lists). Startup steps and v2 steps get the full sandbox environment,
+  but no install step, v2 or v3, sees a credential that is only for runtime (every v2 credential).
 - A missing credential doesn't block create. You get `WARN: required credential not found for
   service SERVICE` and the `bento secret set` command. Requests go out without it until you set it and
   recreate the sandbox. A built-in service's secret goes only to its own hosts

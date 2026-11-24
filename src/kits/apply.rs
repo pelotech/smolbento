@@ -295,6 +295,8 @@ fn runtime_only_vars(creds: &[KitCred], user_creds: &[(String, String)]) -> Vec<
         .iter()
         .filter(|kc| !kc.req.install)
         .map(|kc| kit_env(&kc.req))
+        // Only valid names reach a v2 hook's `unset`: an unbound credential's is never checked.
+        .filter(|v| guest::is_env_name(v))
         .filter(|v| !install.contains(v) && !user_creds.iter().any(|(e, _)| e == v))
         .collect()
 }
@@ -446,12 +448,18 @@ fn kit_install_steps(
         };
         let mut h = h.clone();
         h.env.retain(|v| !runtime_only.contains(v));
+        // A hook that inherits the sandbox's environment (v2's) would still see them.
+        let unset = if h.clean_env || runtime_only.is_empty() {
+            String::new()
+        } else {
+            format!("unset {} && ", runtime_only.join(" "))
+        };
         steps.push(InstallStep {
             label: format!("kit {kit} install hook {n}"),
             kit: Some(kit.to_string()),
             user: h.user.clone(),
             script: format!(
-                "{}cd {install_dir} && {agent_env}{}",
+                "{}cd {install_dir} && {agent_env}{unset}{}",
                 if h.user.is_none() { &image_home } else { "" },
                 guest::hook_script(&h)
             ),

@@ -1694,12 +1694,12 @@ fn a_startup_hook_without_a_user_runs_as_the_session_user() {
     assert!(!root.contains("runuser"), "a named user is kept: {root}");
 }
 
-/// A runtime-only credential's variable isn't passed to an install hook that declares it; an
-/// install-phase one's is.
-/// tck: credential@1/sentinel-phase-scoped
+/// A runtime-only credential's variable isn't passed to an install hook that declares it, nor
+/// left set for one that inherits the sandbox's environment (a v2 kit's); an install-phase one's is.
+/// tck: credential@1/sentinel-phase-scoped, credential@1/phase-scoped
 #[test]
 fn an_install_hook_gets_no_runtime_only_credential() {
-    let script = |install: bool| {
+    let script_env = |install: bool, v3: bool| {
         let mut c = cred(
             "github",
             Some("TOK"),
@@ -1715,7 +1715,7 @@ fn an_install_hook_gets_no_runtime_only_credential() {
             background: false,
             clean_env: true,
         };
-        let m = with(
+        let mut m = with(
             with(kit("m", Kind::Mixin), "credential@1", false, c),
             "lifecycle@1",
             false,
@@ -1724,6 +1724,7 @@ fn an_install_hook_gets_no_runtime_only_credential() {
                 ..Default::default()
             }),
         );
+        m.v2 = !v3;
         let mut req = request();
         let (steps, _) = run_with(
             &plan(vec![m]),
@@ -1734,10 +1735,30 @@ fn an_install_hook_gets_no_runtime_only_credential() {
         .unwrap();
         steps.install[0].script.clone()
     };
+    let script = |install: bool| script_env(install, true);
     assert!(!script(false).contains("TOK"), "{}", script(false));
+    let inherited = script_env(false, false);
+    assert!(inherited.contains("unset TOK && "), "{inherited}");
+    assert!(!script_env(true, false).contains("unset"));
     assert!(
         script(true).contains(r#"${TOK+TOK="$TOK"}"#),
         "{}",
         script(true)
     );
+}
+
+/// An unbound credential's variable is never checked, and a v2 hook's `unset` is shell: only valid
+/// names are runtime-only variables.
+#[test]
+fn runtime_only_vars_are_valid_names() {
+    let kc = |env: &str| KitCred {
+        kit: "m".into(),
+        optional: false,
+        req: match cred("s", Some(env), vec![]) {
+            CapBody::Credential(r) => r,
+            _ => unreachable!(),
+        },
+    };
+    let creds = [kc("TOK"), kc("X;reboot")];
+    assert_eq!(runtime_only_vars(&creds, &[]), ["TOK"]);
 }
