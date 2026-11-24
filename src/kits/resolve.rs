@@ -8,8 +8,8 @@ use crate::kits::args::{ArgValues, expand, expand_value};
 use crate::kits::capability;
 use crate::kits::host_mount;
 use crate::kits::model::{
-    AgentContextReq, Cap, CapBody, CredReq, FileReq, Format, Group, Hook, Kind, Kit, Lifecycle,
-    NetRule, Rules, Source, SshPhase,
+    AgentContextReq, Cap, CapBody, CredReq, FileReq, Format, Group, Hook, ImageConfig, Kind, Kit,
+    Lifecycle, NetRule, Rules, Source, SshPhase,
 };
 use crate::kits::v3;
 use crate::sandbox::Engine;
@@ -413,6 +413,23 @@ pub fn resolve(workload: Kit, mixins: Vec<Kit>, args: &ArgValues) -> Result<Plan
     resolve_for(workload, mixins, args, NO_SANDBOX_WORKDIR, &[], false)
 }
 
+/// The workload's `HOME` (sbx@1/honors-image-user): the image's `ENV HOME`, else its user's home,
+/// where that's known without the image's passwd file (root's, or the spec's `agent`); `None`
+/// when only that file knows.
+fn image_home(config: Option<&ImageConfig>) -> Option<String> {
+    let Some(c) = config else {
+        return Some(super::AGENT_HOME.into());
+    };
+    if let Some((_, h)) = c.env.iter().rev().find(|(k, _)| k == "HOME") {
+        return Some(h.clone());
+    }
+    match c.user.split(':').next() {
+        Some("agent") => Some(super::AGENT_HOME.into()),
+        Some("" | "0" | "root") => Some("/root".into()),
+        _ => None,
+    }
+}
+
 /// Resolves the kits for a sandbox whose working directory in the guest is `workdir`: v2's
 /// `files/workspace` and `${WORKDIR}` expand to it as `${{ kit.env.WORKSPACE }}`. `create_env` is
 /// the create's own environment (`-e`), which `${{ kit.env.* }}` reads last. `hosted`: the sandbox
@@ -446,11 +463,14 @@ pub fn resolve_for(
     let mut all: Vec<Kit> = std::iter::once(workload).chain(mixins).collect();
     let env = merge_env(&all, &kit_args);
     // The final container environment (SPEC-v3 §6.1): the image's, then the kits' exports, then
-    // the create's own; `HOME` and `WORKSPACE` last, as smolbento sets them in the guest.
+    // the create's own; `HOME` and `WORKSPACE` last, as the guest has them.
     let image = all[0].config.iter().flat_map(|c| c.env.iter().cloned());
     let mut env_map: BTreeMap<String, String> = image.chain(env.iter().cloned()).collect();
     env_map.extend(create_env.iter().cloned());
-    env_map.insert("HOME".into(), super::AGENT_HOME.into());
+    match image_home(all[0].config.as_ref()) {
+        Some(h) => env_map.insert("HOME".into(), h),
+        None => env_map.remove("HOME"),
+    };
     env_map.insert("WORKSPACE".into(), workdir.into());
     // Every declaration is expanded and checked before selection (SPEC-v3 §6, §7.1.1), then
     // groups are selected whole, so nothing after this sees a reference or a skipped group.

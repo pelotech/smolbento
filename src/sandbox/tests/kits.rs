@@ -221,6 +221,56 @@ fn an_open_network_has_no_install_rules_to_close() {
     );
 }
 
+/// tck: sbx@1/honors-image-user, lifecycle@1/default-users. What root left in the image user's
+/// home (smolbento's own install steps, kit files, agent context; not only kit hooks) goes back
+/// to that user once, after the last root write; with nothing run as root, nothing is handed back.
+#[test]
+fn the_image_users_home_is_handed_back_once_after_every_root_write() {
+    let hand_back = exec_line("root", &crate::kits::guest::home_to_user("somebody"));
+    let lines = |steps: KitSteps| {
+        let vm = created_vm();
+        let mut plan = kit_plan(&[]);
+        plan.kit.as_mut().unwrap().steps = KitSteps {
+            home_owner: Some("somebody".into()),
+            ..steps
+        };
+        create(&vm, &request(), &plan, |_| Ok(restricted(&[])), &mut |_| {}).unwrap();
+        vm.runner().call_lines()
+    };
+    let smolbento_step = InstallStep {
+        kit: None,
+        ..hook(1, None, "echo bundled-skills")
+    };
+    let all = lines(KitSteps {
+        install: vec![smolbento_step.clone()],
+        context: vec!["echo context-1".into()],
+        ..Default::default()
+    });
+    let context = position(&all, "context", |l| {
+        *l == exec_line("root", "echo context-1")
+    });
+    let back = position(&all, "hand-back", |l| *l == hand_back);
+    assert!(context < back, "{all:#?}");
+    assert_eq!(all.iter().filter(|l| **l == hand_back).count(), 1);
+    for only in [
+        KitSteps {
+            install: vec![smolbento_step],
+            ..Default::default()
+        },
+        KitSteps {
+            files: vec!["echo files-1".into()],
+            ..Default::default()
+        },
+    ] {
+        assert!(lines(only).contains(&hand_back));
+    }
+    let as_user = lines(KitSteps {
+        install: vec![hook(1, Some("somebody"), "echo mine")],
+        ..Default::default()
+    });
+    assert!(!as_user.contains(&hand_back), "{as_user:#?}");
+}
+
 #[test]
 fn create_runs_kit_steps_in_lifecycle_order() {
     let vm = created_vm();

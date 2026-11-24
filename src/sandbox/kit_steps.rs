@@ -21,7 +21,7 @@ pub enum KitPhase {
 
 /// Applies kit steps to a running sandbox, for a create's first start and for `kit add`: install
 /// hooks, then `after_install` (dropping the install-phase rules), then files, agent context, the
-/// `startup.d` scripts, the startup runner and the kits record (written whole). `on` hears
+/// image user's home back from root (when anything ran as root), the `startup.d` scripts, the startup runner and the kits record (written whole). `on` hears
 /// `Install` for each kit: before its first install hook, and after the hooks for kits with none.
 pub fn apply_kit_steps<R: Runner>(
     vm: &Smolvm<R>,
@@ -56,6 +56,13 @@ pub fn apply_kit_steps<R: Runner>(
         }
         for script in &steps.context {
             run.run("root", script).context("writing agent context")?;
+        }
+        let root_wrote = steps.install.iter().any(|s| s.user.is_none())
+            || !steps.files.is_empty()
+            || !steps.context.is_empty();
+        if let Some(u) = steps.home_owner.as_deref().filter(|_| root_wrote) {
+            run.run("root", &guest::home_to_user(u))
+                .context("returning the image user's home")?;
         }
         let mut files: Vec<(String, &str, &str)> = steps
             .startup_d

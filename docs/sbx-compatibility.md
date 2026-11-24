@@ -330,7 +330,11 @@ startup hooks are done, and after the runtime agent's unit is up. The failures l
 and CA variables); and `SPEC-v3 §7.1.1/validate-expanded-declarations` and `atomic-selection`,
 which use the suite's selection controls (`--reject-capability`, selection records) that
 smolbento doesn't have.
-`resources@1/limit-applied` warns: the sandbox reports its memory limit as unknown.
+`resources@1/limit-applied` warns: the sandbox reports its memory limit as unknown. The limit is
+applied, as the VM's size (`--mem`, which the spec allows), but the check reads only the cgroup's
+`memory.max`, and a smolvm machine's workload sees the cgroup2 root, which has none. It needs smolvm
+to give the workload its own cgroup with the VM's memory as `memory.max`, as it already does for
+pod containers; no adapter verb is involved, so the adapter can't report it.
 
 Not claimed, each for checks that fail: `dockerd@1` and `volume@1` (the spec's `recreate` keeps
 the engine store and volumes while discarding the sandbox's disk, and smolbento keeps them on that
@@ -404,14 +408,19 @@ The spec's own validator accepts the pair and merges it. A capability `type` mus
   spec's default launch mode says (the machine's command; smolvm keeps the machine up after it
   exits). It waits, in `sh`, until the start's install steps, files, agent context and startup
   steps are done. Not measured against sbx. `bento run` is unchanged: an interactive session through `exec`.
+- `${{ kit.env.HOME }}` is the image's `ENV HOME`, else root's `/root` or `agent`'s `/home/agent`.
+  For any other image user it's an error: the spec expands it at create, on the host, and that
+  user's home is only in the image's passwd file, which smolvm reads in the guest. sbx not measured.
 - Install steps run as root in the image `WORKDIR` (`/` otherwise); one that names no user gets
-  the image user's `HOME` (spec `sbx@1/honors-image-user`; sbx not measured). After the steps, at
-  create and `kit add`, files owned by root in that home go to the image user and its group (not
+  the image user's `HOME` (spec `sbx@1/honors-image-user`; sbx not measured). After the steps, kit files
+  and agent context, at create and `kit add`, files owned by root in that home go to the image user and its group (not
   for a root image user, nor for a home the user doesn't own, such as `nobody`'s `/`), so a step's
   `~/.npm` or `~/.cache` stays writable. Startup steps and kit
   files default to `agent`. v3 install steps get a clean environment: `PATH`, `HOME`, `USER`, `TERM`,
   the proxy and CA variables, and the step's own `env`. v3 startup steps and all v2 steps get the
-  full sandbox environment.
+  full sandbox environment, except that no install step sees a runtime-only credential's variable,
+  a v2 kit's included (v2 credentials are runtime-only), as spec `credential@1/phase-scoped` says
+  (sbx not measured).
 - Startup steps block, in kit order. A failure is a warning with the log's last lines
   (`a kit startup step failed (kit startup exited with code N); starting anyway`), and the start,
   create or `kit add` goes on, as in sbx 0.51 (sbx's wording not measured). `background: true`

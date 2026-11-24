@@ -688,10 +688,9 @@ fn a_v3_workload_records_its_image_user_and_installs_in_its_workdir() {
         "{}",
         steps.install[0].script
     );
-    // Then, as root, what root left in that home goes back to the image user.
-    assert_eq!(steps.install.len(), 2);
-    assert_eq!(steps.install[1].user, None);
-    assert_eq!(steps.install[1].script, guest::home_to_user("somebody"));
+    // After the root writes, what root left in that home goes back to the image user.
+    assert_eq!(steps.install.len(), 1);
+    assert_eq!(steps.home_owner.as_deref(), Some("somebody"));
 
     // No USER is root; no WORKDIR is `/`.
     let mut w = workload();
@@ -700,8 +699,7 @@ fn a_v3_workload_records_its_image_user_and_installs_in_its_workdir() {
     let mut req = request();
     let (steps, _) = run(&p, &mut req, &mut Policy::default()).unwrap();
     assert_eq!(
-        steps.install.len(),
-        1,
+        steps.home_owner, None,
         "a root image user has nothing to get back"
     );
     assert_eq!(req.rec.user.as_deref(), Some("0"));
@@ -1694,12 +1692,12 @@ fn a_startup_hook_without_a_user_runs_as_the_session_user() {
     assert!(!root.contains("runuser"), "a named user is kept: {root}");
 }
 
-/// A runtime-only credential's variable isn't passed to an install hook that declares it; an
-/// install-phase one's is.
-/// tck: credential@1/sentinel-phase-scoped
+/// A runtime-only credential's variable isn't passed to an install hook that declares it, nor
+/// left set for one that inherits the sandbox's environment (a v2 kit's); an install-phase one's is.
+/// tck: credential@1/sentinel-phase-scoped, credential@1/phase-scoped
 #[test]
 fn an_install_hook_gets_no_runtime_only_credential() {
-    let script = |install: bool| {
+    let script_env = |install: bool, v3: bool| {
         let mut c = cred(
             "github",
             Some("TOK"),
@@ -1715,7 +1713,7 @@ fn an_install_hook_gets_no_runtime_only_credential() {
             background: false,
             clean_env: true,
         };
-        let m = with(
+        let mut m = with(
             with(kit("m", Kind::Mixin), "credential@1", false, c),
             "lifecycle@1",
             false,
@@ -1724,6 +1722,7 @@ fn an_install_hook_gets_no_runtime_only_credential() {
                 ..Default::default()
             }),
         );
+        m.v2 = !v3;
         let mut req = request();
         let (steps, _) = run_with(
             &plan(vec![m]),
@@ -1734,10 +1733,30 @@ fn an_install_hook_gets_no_runtime_only_credential() {
         .unwrap();
         steps.install[0].script.clone()
     };
+    let script = |install: bool| script_env(install, true);
     assert!(!script(false).contains("TOK"), "{}", script(false));
+    let inherited = script_env(false, false);
+    assert!(inherited.contains("unset TOK && "), "{inherited}");
+    assert!(!script_env(true, false).contains("unset"));
     assert!(
         script(true).contains(r#"${TOK+TOK="$TOK"}"#),
         "{}",
         script(true)
     );
+}
+
+/// An unbound credential's variable is never checked, and a v2 hook's `unset` is shell: only valid
+/// names are runtime-only variables.
+#[test]
+fn runtime_only_vars_are_valid_names() {
+    let kc = |env: &str| KitCred {
+        kit: "m".into(),
+        optional: false,
+        req: match cred("s", Some(env), vec![]) {
+            CapBody::Credential(r) => r,
+            _ => unreachable!(),
+        },
+    };
+    let creds = [kc("TOK"), kc("X;reboot")];
+    assert_eq!(runtime_only_vars(&creds, &[]), ["TOK"]);
 }
