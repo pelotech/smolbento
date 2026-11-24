@@ -255,10 +255,6 @@ pub(super) fn ls_rules(policy: &Policy, sandbox: Option<&str>) -> Vec<LsRule> {
     // Each sandbox's kit rules by decision, in the order they first appear.
     let mut kits: Vec<((&str, Decision), Vec<&Rule>)> = Vec::new();
     for (rule, scope) in rules {
-        // sbx doesn't list install-only hosts after create.
-        if rule.is_kit_install() {
-            continue;
-        }
         // (Kit rules always carry a sandbox scope; a scopeless one lists as a plain rule.)
         let Some(sandbox) = scope.filter(|_| rule.is_kit()) else {
             rows.push(ls_rule(rule, scope));

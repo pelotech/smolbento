@@ -643,13 +643,12 @@ fn add_running<R: Runner>(
         .map(|(_, file, body)| (file.clone(), body.clone()))
         .collect();
 
-    // Opens this add's install-phase rules (and no others) until they're removed.
+    // Pushes the sandbox's network: this add's install-phase rules are open while they're stored.
     let push = |policy: &Policy| -> Result<()> {
-        let network = compile::network_with(
+        let network = compile::network(
             policy,
             name,
             &sb.meta.rec.credential_hosts,
-            &steps.install_rules,
             sb.meta.rec.host_access,
             sb.meta.egress.is_some(),
         );
@@ -661,7 +660,7 @@ fn add_running<R: Runner>(
     };
     // `None`: opening the kit's network, before any hook ran.
     let result = (|| -> std::result::Result<(), (Option<KitPhase>, anyhow::Error)> {
-        // Install rules an interrupted add left are opened too: `added` doesn't list them.
+        // Install rules an interrupted add left are pushed too: `added` doesn't list them.
         if !added.is_empty() || !steps.install_rules.is_empty() {
             let open = || -> Result<()> {
                 policy.save(&ctx.paths)?;

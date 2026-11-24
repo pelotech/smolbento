@@ -224,8 +224,10 @@ Caveats:
 
 A sandbox falls back to smolvm egress, with a warning at create, when there's no service manager
 for its unit (launchd, or `systemd --user` with a private socket directory and a short enough socket
-path), when it has install-only credentials, or when a kit gives it install-phase network rules
-(both for a kit's install hooks). `_builder` is never hosted.
+path), or when it has install-only credentials (for a kit's install hooks). `_builder` is never
+hosted. A kit's install-phase network rules apply, hosted or not, while they're in the policy:
+until the install hooks are done, or until the next start removes ones an interrupted create or
+`kit add` left.
 
 The egress process logs to `<data>/egress/<name>/egress.log`: startup errors, a secret that failed
 to resolve (by name, never value), and each denied connection with its reason (`deny

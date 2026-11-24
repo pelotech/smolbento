@@ -216,4 +216,30 @@ mod tests {
         save(&p, &[(false, "github.com")]);
         assert_eq!(ask(&r, &f), Deny);
     }
+
+    #[test]
+    fn an_install_rule_applies_while_it_is_in_the_policy() {
+        let (_d, p) = test_paths();
+        let mut policy = Policy {
+            mode: Some(Mode::DenyAll),
+            ..Policy::default()
+        };
+        let id = policy
+            .add_rule(
+                Some(SB),
+                crate::policy::Decision::Allow,
+                "registry.npmjs.org",
+                "kit-install:k",
+                None,
+                None,
+            )
+            .unwrap();
+        policy.save(&p).unwrap();
+        let r = Rules::new(&p, SB, false, vec![]);
+        let f = flow(Some("registry.npmjs.org"), "104.16.0.1", 443);
+        assert_eq!(ask(&r, &f), Allow);
+        policy.remove_rules_by_ids(SB, &[id]);
+        policy.save(&p).unwrap();
+        assert_eq!(ask(&r, &f), Deny);
+    }
 }

@@ -1519,14 +1519,13 @@ fn a_smolvm_kit_still_refuses_required_request_rules() {
     let k = mixin("m").cap(NP2, false, np2(Rules::default(), rules.clone()));
     let e = run(workload("w"), vec![k]).unwrap_err();
     assert_eq!(format!("{e:#}"), not_enforced);
-    // Install-phase rules (here another kit's) make the sandbox fall back to smolvm egress, so a
-    // hosted resolve refuses too.
+    // Install-phase rules (here another kit's) don't make the sandbox fall back to smolvm egress.
     let k = mixin("m").cap(NP2, false, np2(Rules::default(), rules));
     let install = Rules {
         allow: vec![rule("registry.npmjs.org")],
         deny: vec![],
     };
     let other = mixin("i").cap(NP2, false, np2(install, Rules::default()));
-    let e = hosted(workload("w"), vec![k, other]).unwrap_err();
-    assert_eq!(format!("{e:#}"), not_enforced);
+    let plan = hosted(workload("w"), vec![k, other]).unwrap();
+    assert_eq!(plan.request_rules_kit(), Some("m"));
 }

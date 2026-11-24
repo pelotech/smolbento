@@ -366,7 +366,7 @@ fn install_only_credentials_are_left_out_of_later_starts() {
     );
     assert_eq!(plan.remove, vec!["GH_TOKEN"]);
     // The create's first start has them, for the install hooks.
-    let first = first_start_plan(&t.ctx, &m, &[]).unwrap();
+    let first = first_start_plan(&t.ctx, &m).unwrap();
     assert!(
         first
             .env
@@ -507,48 +507,64 @@ fn the_first_start_opens_this_creates_install_rules() {
     );
 }
 
-#[test]
-fn install_rules_left_by_an_interrupted_create_stay_shut() {
+/// A policy with an install rule (`registry.npmjs.org`) and a runtime rule (`api.example.com`)
+/// for `s1`, as an interrupted create or `kit add` leaves it.
+fn leftover_install_rule(t: &TestEnv) {
     use crate::policy::Decision;
-    let t = deny_all_env();
     let mut policy = Policy::load(&t.ctx.paths).unwrap();
-    let install = policy
-        .add_rule(
-            Some("s1"),
-            Decision::Allow,
-            "registry.npmjs.org",
-            "kit-install:k",
-            None,
-            None,
-        )
-        .unwrap();
-    policy
-        .add_rule(
-            Some("s1"),
-            Decision::Allow,
-            "api.example.com",
-            "kit:k",
-            None,
-            None,
-        )
-        .unwrap();
+    for (host, via) in [
+        ("registry.npmjs.org", "kit-install:k"),
+        ("api.example.com", "kit:k"),
+    ] {
+        policy
+            .add_rule(Some("s1"), Decision::Allow, host, via, None, None)
+            .unwrap();
+    }
     policy.save(&t.ctx.paths).unwrap();
+}
+
+#[test]
+fn a_start_removes_leftover_install_rules() {
+    let t = deny_all_env();
+    leftover_install_rule(&t);
     let m = meta("s1", &[], &[]);
     let later = format!("{:?}", start_plan(&t.ctx, &m).unwrap().network);
     assert!(
         later.contains("api.example.com") && !later.contains("registry.npmjs.org"),
         "{later}"
     );
-    // Neither a first start without these ids nor a policy push opens them.
-    let first = format!("{:?}", first_start_plan(&t.ctx, &m, &[]).unwrap().network);
-    assert!(!first.contains("registry.npmjs.org"), "{first}");
-    let pushed = format!("{:?}", compile::network(&policy, "s1", &[], false, false));
-    assert!(!pushed.contains("registry.npmjs.org"), "{pushed}");
+    let p = Policy::load(&t.ctx.paths).unwrap();
+    assert!(p.all_rules().all(|(r, _)| !r.is_kit_install()), "{p:?}");
+}
+
+#[test]
+fn the_first_start_keeps_its_install_rules() {
+    let t = deny_all_env();
+    leftover_install_rule(&t);
     let first = format!(
         "{:?}",
-        first_start_plan(&t.ctx, &m, &[install]).unwrap().network
+        first_start_plan(&t.ctx, &meta("s1", &[], &[]))
+            .unwrap()
+            .network
     );
     assert!(first.contains("registry.npmjs.org"), "{first}");
+}
+
+#[test]
+fn a_policy_push_during_install_keeps_the_install_rules() {
+    let t = deny_all_env();
+    leftover_install_rule(&t);
+    let running = machine_json("sbx-s1", "running", &[("sbx.name", "s1")]);
+    t.runner()
+        .ok(&["machine", "ls", "--json"], &format!("[{running}]"));
+    t.runner()
+        .ok(&["machine", "status", "-n", "sbx-s1"], &running);
+    push_network(&t.ctx, &Policy::load(&t.ctx.paths).unwrap()).unwrap();
+    let update = t.calls_of("machine update");
+    assert!(
+        update.len() == 1 && update[0].contains("registry.npmjs.org"),
+        "{update:?}"
+    );
 }
 
 #[test]
@@ -1319,10 +1335,10 @@ fn install_only_credentials_fall_back_to_smolvm() {
     );
 }
 
-/// The egress process judges by the stored policy, where install-phase kit rules apply only while
-/// the install hooks run; nothing tells it when they do.
+/// The egress process judges by the stored policy, where install-phase kit rules apply until
+/// they're removed after the install hooks.
 #[test]
-fn install_phase_kit_rules_fall_back_to_smolvm() {
+fn install_phase_kit_rules_are_hosted() {
     use crate::kits::args::ArgValues;
     use crate::kits::model::{Cap, CapBody, Content, Kind, Kit, NetRule, Rules};
     let (t, _ctl) = egress_env("hosted", &[]);
@@ -1346,12 +1362,11 @@ fn install_phase_kit_rules_fall_back_to_smolvm() {
         ..Default::default()
     };
     create_with(&t.ctx, &mut req, &[], Some(&plan), None, &mut |_| {}).unwrap();
-    assert!(req.egress.is_none());
-    assert!(!t.ctx.paths.egress("s1").exists());
+    assert!(req.egress.is_some());
     assert!(
         t.calls_of("machine start")
             .iter()
-            .all(|l| !l.contains("--egress-interceptor"))
+            .all(|l| l.contains("--egress-interceptor"))
     );
 }
 

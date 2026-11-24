@@ -8,8 +8,8 @@ use egress_front::{
 use crate::policy::rules::{Pattern, Resource};
 use crate::policy::{self, Decision, compile};
 
-/// The request rules that apply to `sandbox`: its active global, per-sandbox and kit rules with a
-/// method, path or query, one crate rule per resource. Connection defaults stay in `decide`, so a
+/// The request rules that apply to `sandbox`: its global, per-sandbox and kit rules (install-phase
+/// ones while stored) with a method, path or query, one crate rule per resource. Connection defaults stay in `decide`, so a
 /// host no rule names is allowed. As in sbx, a bounded allow on a host that connection rules alone
 /// already admit (`moot`) is dropped; bounded denies never are. A resource the crate can't take
 /// is skipped and denies its whole host instead (`compile::acts`).
@@ -38,7 +38,10 @@ pub fn request_policy(
     };
     let spare = spare_port(policy);
     let mut rules = Vec::new();
-    for (r, _) in compile::active(policy, Some(sandbox), &[]).filter(|(r, _)| r.is_request()) {
+    for (r, _) in policy
+        .rules_for(Some(sandbox))
+        .filter(|(r, _)| r.is_request())
+    {
         for res in r.parsed() {
             let rule = match map(r, &res) {
                 Ok(rule) => rule,
@@ -457,13 +460,32 @@ mod tests {
         assert_eq!(got.len(), 1);
         assert_eq!(got[0].host, HostMatch::Exact("h.com".into()));
         let r = |res: &str| {
-            (compile::active(&p, Some("s1"), &[]).map(|(r, _)| r))
+            (p.rules_for(Some("s1")).map(|(r, _)| r))
                 .find(|r| r.resources == [res])
                 .unwrap()
         };
         let res = |s: &str| Resource::parse(s).unwrap();
         assert!(map(r("api.x.com"), &res("api.x.com")).is_err());
         assert!(map(r("h.com"), &res("h.com")).is_ok());
+    }
+
+    #[test]
+    fn an_install_request_rule_applies_while_it_is_in_the_policy() {
+        let mut p = deny_all();
+        let id = add_full(
+            &mut p,
+            D::Allow,
+            "pkg.x.com",
+            "kit-install:k",
+            Some("GET"),
+            Some("/dl/**"),
+            None,
+        );
+        let got = request_policy(&p, "s1", &[]).rules;
+        assert_eq!(got.len(), 1);
+        assert_eq!(got[0].host, HostMatch::Exact("pkg.x.com".into()));
+        p.remove_rules_by_ids("s1", &[id]);
+        assert!(request_policy(&p, "s1", &[]).rules.is_empty());
     }
 
     #[test]
