@@ -1619,3 +1619,22 @@ fn a_fallback_sandbox_refuses_a_required_request_rule_before_create() {
     let p = Policy::load(&t.ctx.paths).unwrap();
     assert_eq!(p.rules_for(Some("s1")).count(), 0);
 }
+
+/// The egress process lists the secrets it couldn't resolve; a start says so, naming each. No
+/// list (the process hasn't got that far): nothing.
+#[test]
+fn egress_warnings_name_each_secret_the_egress_process_reported() {
+    let t = test_env(&[]);
+    assert!(egress_warnings(&t.ctx, "s").is_empty());
+    let file = crate::egress::unresolved_file(&t.ctx.paths, "s");
+    std::fs::create_dir_all(file.parent().unwrap()).unwrap();
+    std::fs::write(&file, "github\n").unwrap();
+    assert_eq!(
+        egress_warnings(&t.ctx, "s"),
+        [
+            "the github secret resolved to nothing in s's egress process, which doesn't get your \
+          shell's environment; requests using it will fail. Use a source that doesn't need it, \
+          or create the sandbox with network.egress=smolvm"
+        ]
+    );
+}

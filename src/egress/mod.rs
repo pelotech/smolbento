@@ -40,6 +40,12 @@ impl Label {
     }
 }
 
+/// Where a hosted sandbox's egress process lists, one per line, the ref and command secrets it
+/// couldn't resolve as it started (`secrets::resolve::unresolved`). Names only, never values.
+pub fn unresolved_file(paths: &crate::config::Paths, sandbox: &str) -> std::path::PathBuf {
+    paths.egress(sandbox).join("unresolved")
+}
+
 /// Whether `sandbox` gets hosted egress: `network.egress` is `hosted` and it isn't internal.
 pub fn hosted(settings: &Settings, sandbox: &str) -> Result<bool> {
     Ok(parse(&settings.value("network.egress")?)? && !name::is_internal(sandbox))

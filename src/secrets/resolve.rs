@@ -210,6 +210,27 @@ pub fn start_env(
     (env, remove)
 }
 
+/// The ref and command secrets bound to `meta` that `env` (`start_env`'s, without install-only
+/// vars) has no value for: what a hosted sandbox's egress process reports, since it runs them
+/// without the shell's environment. Names only.
+pub fn unresolved(secrets: &SecretsFile, meta: &Meta, env: &[(String, String)]) -> Vec<String> {
+    let sandbox = meta.name.as_str();
+    let has = |v: &String| env.iter().any(|(k, _)| k == v);
+    let not_stored = |e: Option<&SecretEntry>| e.is_some_and(|e| e.source != Source::Keychain);
+    let services = meta.rec.secrets.iter().filter(|name| {
+        let entry = secrets.entry_for(sandbox, meta.fork_of.as_deref(), name);
+        let unset = secrets.service(name).is_some_and(|s| {
+            let vars = bound_vars(&s, meta, name, false);
+            !vars.is_empty() && !vars.into_iter().any(has)
+        });
+        not_stored(entry) && unset
+    });
+    let mcp = (meta.rec.mcp_secrets.iter())
+        .filter(|(var, secret)| not_stored(secrets.global_entry(secret)) && !has(var))
+        .map(|(_, secret)| secret);
+    services.chain(mcp).cloned().collect()
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -251,6 +272,44 @@ mod tests {
             ]
         );
         assert_eq!(remove, ["OPENAI_API_KEY"]);
+    }
+
+    /// What a hosted sandbox's egress process reports: the ref and command secrets that gave it
+    /// no value (a stored value that's missing isn't about its environment).
+    #[test]
+    fn unresolved_names_the_ref_and_command_secrets_without_a_value() {
+        let mut secrets = SecretsFile::default();
+        for (service, source) in [
+            (
+                "github",
+                Source::Command {
+                    command: "x".into(),
+                },
+            ),
+            ("openai", Source::Keychain),
+            (
+                "groq",
+                Source::Command {
+                    command: "y".into(),
+                },
+            ),
+        ] {
+            secrets.set(SecretEntry {
+                service: service.into(),
+                scope: crate::secrets::scope_for(None),
+                source,
+            });
+        }
+        let meta = Meta {
+            rec: Recorded {
+                secrets: vec!["github".into(), "groq".into(), "openai".into()],
+                ..Default::default()
+            },
+            name: "s".into(),
+            ..Default::default()
+        };
+        let env = [("GROQ_API_KEY".to_string(), "v".to_string())];
+        assert_eq!(unresolved(&secrets, &meta, &env), ["github"]);
     }
 
     #[test]
