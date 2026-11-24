@@ -527,12 +527,8 @@ pub(crate) fn body(ty: &str, config: Option<Value>) -> Result<CapBody> {
                 );
             }
             // An omitted mode is `off` (agent-skills@1/off-default-honored).
-            let mode = match c.mode.as_deref() {
-                None => crate::skills::Mode::Off,
-                Some(m) => crate::skills::Mode::parse(m).map_err(|_| {
-                    anyhow!("agent-skills@1 mode {m:?} must be off, readonly or readwrite")
-                })?,
-            };
+            let mode = (c.mode.as_deref())
+                .map_or(Ok(crate::skills::Mode::Off), crate::skills::Mode::parse)?;
             CapBody::AgentSkills { path: c.path, mode }
         }
         "agent-skill@1" => {
