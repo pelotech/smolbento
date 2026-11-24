@@ -1,7 +1,7 @@
 #!/usr/bin/env bash
 # Conformance adapter: drives smolbento through docs/spec/conformance.md of docker/sandbox-kit-spec.
-# It claims com.docker.sandbox/ssh-agent@1, host-mount@1 and lifecycle@1, and implements the verbs
-# those checks call. Needs jq (`just conformance` provides it).
+# It claims com.docker.sandbox/ssh-agent@1, host-mount@1, lifecycle@1 and network-policy@1/@2, and
+# implements the verbs those checks call. Needs jq (`just conformance` provides it).
 #
 # Environment:
 #   SMOLBENTO_BIN      the binary to drive (default: smolbento on PATH)
@@ -52,9 +52,11 @@ sbt() {
 		"$bin" "$@"
 }
 
-# The isolated config starts with no network policy; the kit builder needs the network.
+# The isolated config starts with no network policy. balanced, sbx's default: the kit builder reaches
+# its registries, and a kit's network policy is what grants anything else (under allow-all a kit's
+# bounded allow would bound nothing, as allow-all already grants the host).
 if [ ! -f "$home/config/policy.toml" ]; then
-	sbt none policy init allow-all >&2 || die "could not initialise the network policy"
+	sbt none policy init balanced >&2 || die "could not initialise the network policy"
 fi
 
 # The suite's two versions of one kit (host-mount-version-v1, -v2) are imported as versions of one
@@ -98,6 +100,8 @@ capabilities)
 	echo com.docker.sandbox/ssh-agent@1
 	echo com.docker.sandbox/host-mount@1
 	echo com.docker.sandbox/lifecycle@1
+	echo com.docker.sandbox/network-policy@1
+	echo com.docker.sandbox/network-policy@2
 	;;
 
 create)
