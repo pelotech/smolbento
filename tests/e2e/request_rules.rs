@@ -59,12 +59,20 @@ fn wait_for_answer(e: &E2e, url: &str) -> bool {
     wait_until(25, || status(e, &format!("{url} -o /dev/null")) != "000")
 }
 
+/// tck: network-policy@2/http-method-enforced, network-policy@2/http-path-enforced,
+/// network-policy@1/deny-by-default. The host's secret leaves it bounded by its rules, and opens
+/// nothing else.
 #[test]
 #[ignore = "boots real VMs and needs httpbin.org; run with `just e2e`"]
 pub(crate) fn hosted_request_rule_refuses_post() {
     let e = E2e::new("rqpost");
+    e.own_httpbin_secret("TOK", BASIC_SECRET);
     sandbox(&e, true);
-    rule(&e, "allow", &["httpbin.org", "--method", "GET"]);
+    rule(
+        &e,
+        "allow",
+        &["httpbin.org", "--method", "GET", "--path", "/get"],
+    );
     let deny = rule(&e, "deny", &["httpbin.org", "--method", "DELETE"]);
     assert!(wait_for_get(&e, "httpbin.org"), "GET is allowed");
     // A decrypted host is HTTP/1.1 only.
@@ -82,6 +90,11 @@ pub(crate) fn hosted_request_rule_refuses_post() {
     let (code, body) = curl(&e, "-X DELETE https://httpbin.org/delete");
     assert_eq!(code, "403", "{body}");
     assert!(body.contains(&deny), "the refusal names the rule: {body}");
+    assert_eq!(
+        status(&e, "https://httpbin.org/anything -o /dev/null"),
+        "403"
+    );
+    assert_eq!(status(&e, "https://example.org -o /dev/null"), "000");
     // Plain HTTP to a ruled host can't be judged per request: refused.
     assert_eq!(status(&e, "http://httpbin.org/get -o /dev/null"), "000");
     let log = egress_log(&e, &e.name);

@@ -22,7 +22,6 @@ type Stamp = Option<(SystemTime, u64)>;
 pub struct PolicySource {
     paths: Paths,
     sandbox: String,
-    credential_hosts: Vec<String>,
     state: Mutex<Loaded>,
 }
 
@@ -34,11 +33,10 @@ struct Loaded {
 }
 
 impl PolicySource {
-    pub fn new(paths: &Paths, sandbox: &str, credential_hosts: Vec<String>) -> PolicySource {
+    pub fn new(paths: &Paths, sandbox: &str) -> PolicySource {
         let source = PolicySource {
             paths: paths.clone(),
             sandbox: sandbox.to_string(),
-            credential_hosts,
             state: Mutex::new(Loaded {
                 stamp: None,
                 policy: Arc::new(REFUSE),
@@ -76,7 +74,7 @@ impl PolicySource {
     fn reload(&self, now: Stamp) -> (Arc<Policy>, Option<Vec<String>>) {
         let built = crate::policy::Policy::load(&self.paths)
             .map_err(|e| format!("{e:#}"))
-            .map(|p| request_policy(&p, &self.sandbox, &self.credential_hosts));
+            .map(|p| request_policy(&p, &self.sandbox));
         let (policy, ruled) = match built {
             Ok(p) => {
                 let ruled = p.terminate_hosts();
@@ -228,7 +226,7 @@ mod tests {
         let mut p = deny_all();
         add(&mut p, D::Allow, "a.com", "GET");
         add(&mut p, D::Deny, "d.com", "POST");
-        request_policy(&p, SB, &[])
+        request_policy(&p, SB)
     }
 
     fn add(p: &mut policy::Policy, d: D, host: &str, method: &str) {
@@ -288,7 +286,7 @@ mod tests {
         for d in [D::Allow, D::Deny] {
             let mut lp = deny_all();
             add(&mut lp, d, "localhost", "GET");
-            let lp = request_policy(&lp, SB, &[]);
+            let lp = request_policy(&lp, SB);
             assert_eq!(
                 connection(&lp, &gw, &lp.terminate_hosts()).unwrap().0,
                 Decision::Deny
@@ -329,7 +327,7 @@ mod tests {
         let mut p = policy::Policy::default();
         add(&mut p, D::Deny, "d.com", "POST");
         save(&paths, &p, 1);
-        let f = Filter(Arc::new(PolicySource::new(&paths, SB, vec![])));
+        let f = Filter(Arc::new(PolicySource::new(&paths, SB)));
         let err = judge(&f, "d.com", "POST").unwrap_err();
         assert!(err.starts_with("request denied by policy (rule "), "{err}");
         assert_eq!(judge(&f, "d.com", "GET"), Ok(()));
@@ -342,7 +340,7 @@ mod tests {
         let mut p = policy::Policy::default();
         add(&mut p, D::Deny, "d.com", "PUT");
         save(&paths, &p, 1);
-        let f = Filter(Arc::new(PolicySource::new(&paths, SB, vec![])));
+        let f = Filter(Arc::new(PolicySource::new(&paths, SB)));
         assert_eq!(judge(&f, "d.com", "POST"), Ok(()));
         add(&mut p, D::Deny, "d.com", "POST");
         save(&paths, &p, 2);
@@ -355,7 +353,7 @@ mod tests {
         let mut p = policy::Policy::default();
         add(&mut p, D::Deny, "d.com", "POST");
         save(&paths, &p, 1);
-        let source = Arc::new(PolicySource::new(&paths, SB, vec!["cred.com".into()]));
+        let source = Arc::new(PolicySource::new(&paths, SB));
         let f = Filter(source.clone());
         assert_eq!(source.ruled_hosts(), Some(vec!["d.com".to_string()]));
 

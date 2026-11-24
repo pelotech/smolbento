@@ -33,7 +33,7 @@ pub fn run<R: Runner>(ctx: &Ctx<R>, name: &str) -> Result<()> {
         .iter()
         .flat_map(|b| b.hosts.clone())
         .collect();
-    let source = Arc::new(PolicySource::new(&ctx.paths, name, hosts.clone()));
+    let source = Arc::new(PolicySource::new(&ctx.paths, name));
     let ruled = source.ruled_hosts().unwrap_or_default();
     let mut terminated = hosts.clone();
     terminated.extend(ruled.iter().cloned());
