@@ -319,17 +319,30 @@ your agent (`ssh-add -D` fails with `Failed to remove all identities.`). The set
 
 Docker's kit-spec conformance suite checks this capability through `tests/conformance/smolbento-adapter`
 (`just conformance`, at `SPEC_COMMIT`). The adapter claims `ssh-agent@1`, `host-mount@1`,
-`lifecycle@1` and `network-policy@1`/`@2`, under the `balanced` mode (sbx's default: under
-`allow-all` a kit's bounded allow bounds nothing, as the mode already grants the host). The
-`network-policy` checks pass: deny-by-default, and `@2`'s method, path and deny-precedence checks.
-In the last full run, before they were claimed, 26 checks passed. Of the failures, `lifecycle@1/hook-env-restricted`
-is the recorded difference above (install steps keep the proxy variables), and these are open:
-`ssh-agent@1/phase-scoped` (the install-phase socket stays open after install), and `SPEC-v3
-§7.1.1/validate-expanded-declarations` and `atomic-selection`, which use the suite's selection
-controls (`--reject-capability`, selection records) that smolbento doesn't have. `volume@1` isn't claimed: the spec's `recreate` keeps volumes
-while discarding the sandbox's disk, and smolbento keeps them on that disk. The suite's
-isolated setup needs the units' socket path under 104 bytes (a short `SMOLBENTO_TCK_HOME`); a
-longer one falls back to attached-only serving and the boot-time checks fail.
+`lifecycle@1`, `network-policy@1`/`@2`, `agent-context@1`, `long-running@1`, `privileged@1` and
+`resources@1`, under the `balanced` mode (sbx's default: under `allow-all` a kit's bounded allow
+bounds nothing, as the mode already grants the host). In the last run (129 checks: 43 passed, 4
+failed, 1 warned, 81 skipped as unclaimed), the failures are `lifecycle@1/hook-env-restricted`,
+the recorded difference above (install steps keep the proxy and CA variables);
+`ssh-agent@1/signatures-bounded` (the workload's initial process doesn't see the agent's key); and
+`SPEC-v3 §7.1.1/validate-expanded-declarations` and `atomic-selection`, which use the suite's
+selection controls (`--reject-capability`, selection records) that smolbento doesn't have.
+`resources@1/limit-applied` warns: the sandbox reports its memory limit as unknown.
+
+Not claimed, each for checks that fail: `dockerd@1` and `volume@1` (the spec's `recreate` keeps
+the engine store and volumes while discarding the sandbox's disk, and smolbento keeps them on that
+disk); `git-identity@1` and `agent-context@2` (smolvm starts the workload before the install steps
+that set the identity and write the context, and `recreate` and selection records are missing);
+`sbx@1` (hooks and the workspace assume the `agent` user rather than the image's); `agent-skills@1`
+and `agent-skill@1` (selection records, bundled skills missing at launch, and paths backed by
+separate copies of the store); and `credential@1` (an install-only credential stays set for the
+workload, and an inject-only one adds variables). The adapter can still run these slices
+(`SMOLBENTO_TCK_CAPABILITIES`): it maps `--skills-host-mode` to `--skills`, `--skills-host-store`
+to its isolated store, `--git-identity-config` to the host git config bento reads, and binds the
+fixture's credential as a `secret set-custom --command` that reads the suite's value at each start.
+The suite's isolated setup needs the units' socket path under 104 bytes (a short
+`SMOLBENTO_TCK_HOME`); a longer one falls back to attached-only serving and the boot-time checks
+fail.
 
 ## Kits
 
