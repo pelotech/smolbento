@@ -330,7 +330,11 @@ startup hooks are done, and after the runtime agent's unit is up. The failures l
 and CA variables); and `SPEC-v3 §7.1.1/validate-expanded-declarations` and `atomic-selection`,
 which use the suite's selection controls (`--reject-capability`, selection records) that
 smolbento doesn't have.
-`resources@1/limit-applied` warns: the sandbox reports its memory limit as unknown.
+`resources@1/limit-applied` warns: the sandbox reports its memory limit as unknown. The limit is
+applied, as the VM's size (`--mem`, which the spec allows), but the check reads only the cgroup's
+`memory.max`, and a smolvm machine's workload sees the cgroup2 root, which has none. It needs smolvm
+to give the workload its own cgroup with the VM's memory as `memory.max`, as it already does for
+pod containers; no adapter verb is involved, so the adapter can't report it.
 
 Not claimed, each for checks that fail: `dockerd@1` and `volume@1` (the spec's `recreate` keeps
 the engine store and volumes while discarding the sandbox's disk, and smolbento keeps them on that
