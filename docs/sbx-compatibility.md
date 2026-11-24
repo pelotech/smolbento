@@ -408,8 +408,8 @@ The spec's own validator accepts the pair and merges it. A capability `type` mus
   For any other image user it's an error: the spec expands it at create, on the host, and that
   user's home is only in the image's passwd file, which smolvm reads in the guest. sbx not measured.
 - Install steps run as root in the image `WORKDIR` (`/` otherwise); one that names no user gets
-  the image user's `HOME` (spec `sbx@1/honors-image-user`; sbx not measured). After the steps, at
-  create and `kit add`, files owned by root in that home go to the image user and its group (not
+  the image user's `HOME` (spec `sbx@1/honors-image-user`; sbx not measured). After the steps, kit files
+  and agent context, at create and `kit add`, files owned by root in that home go to the image user and its group (not
   for a root image user, nor for a home the user doesn't own, such as `nobody`'s `/`), so a step's
   `~/.npm` or `~/.cache` stays writable. Startup steps and kit
   files default to `agent`. v3 install steps get a clean environment: `PATH`, `HOME`, `USER`, `TERM`,

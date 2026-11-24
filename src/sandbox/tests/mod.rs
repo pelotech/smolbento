@@ -147,6 +147,7 @@ pub(super) fn kit_plan(restart_without: &[&str]) -> StartPlan {
                 context: vec!["echo context-1".into()],
                 startup_d: vec![("01-k.sh".into(), "echo startup".into())],
                 kit_names: vec!["k".into()],
+                home_owner: None,
             },
             restart_without: restart_without.iter().map(|v| v.to_string()).collect(),
             rule_ids: vec!["r-npm".into(), "r-api".into()],

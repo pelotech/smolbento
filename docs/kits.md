@@ -95,8 +95,9 @@ since a sandbox doesn't keep its image's `ENV` or its create's `-e`.
 What a kit does, and when:
 
 - On first start, install steps run once, as root, in a workload image's `WORKDIR` (`/` otherwise),
-  with network only for installing. One that names no user has the image user's `HOME`; after the
-  steps, files root left in that home are handed to the image user (and its group), so the agent
+  with network only for installing. One that names no user has the image user's `HOME`. After the
+  install steps, kit files and agent context, files root left in that home (smolbento's own steps,
+  such as bundled skills, included) are handed to the image user (and its group), so the agent
   can write there; only when the user already owns the home, so a system account's `/` or `/bin`
   is left alone. A failing step, or a kit file that can't be written, removes the sandbox. Fix the
   cause and run the same command. In a v2 kit, `files/workspace` and `${WORKDIR}`

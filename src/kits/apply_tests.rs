@@ -688,10 +688,9 @@ fn a_v3_workload_records_its_image_user_and_installs_in_its_workdir() {
         "{}",
         steps.install[0].script
     );
-    // Then, as root, what root left in that home goes back to the image user.
-    assert_eq!(steps.install.len(), 2);
-    assert_eq!(steps.install[1].user, None);
-    assert_eq!(steps.install[1].script, guest::home_to_user("somebody"));
+    // After the root writes, what root left in that home goes back to the image user.
+    assert_eq!(steps.install.len(), 1);
+    assert_eq!(steps.home_owner.as_deref(), Some("somebody"));
 
     // No USER is root; no WORKDIR is `/`.
     let mut w = workload();
@@ -700,8 +699,7 @@ fn a_v3_workload_records_its_image_user_and_installs_in_its_workdir() {
     let mut req = request();
     let (steps, _) = run(&p, &mut req, &mut Policy::default()).unwrap();
     assert_eq!(
-        steps.install.len(),
-        1,
+        steps.home_owner, None,
         "a root image user has nothing to get back"
     );
     assert_eq!(req.rec.user.as_deref(), Some("0"));
