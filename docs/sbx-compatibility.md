@@ -353,7 +353,7 @@ fail.
 ## Kits
 
 smolbento implements the [sandbox kit spec](https://github.com/docker/sandbox-kit-spec) at commit
-`fa512f4b5812abfe3210b28e80c5ee773b98e2cb` (`SPEC_COMMIT` in the code; `just conformance` runs the
+`a4d6ca06175f2d9cac57428b8c254ba7f5f36570` (`SPEC_COMMIT` in the code; `just conformance` runs the
 spec's suite at the same commit). v3 is still experimental upstream. v2 `spec.yaml` kits and smolvm Smolfiles work too.
 
 A kit that **requires** a capability marked "no" or "later" fails, with its `type@version`, before
