@@ -1693,3 +1693,51 @@ fn a_startup_hook_without_a_user_runs_as_the_session_user() {
     let root = script(workload(), Some("0"));
     assert!(!root.contains("runuser"), "a named user is kept: {root}");
 }
+
+/// A runtime-only credential's variable isn't passed to an install hook that declares it; an
+/// install-phase one's is.
+/// tck: credential@1/sentinel-phase-scoped
+#[test]
+fn an_install_hook_gets_no_runtime_only_credential() {
+    let script = |install: bool| {
+        let mut c = cred(
+            "github",
+            Some("TOK"),
+            vec![inject("api.github.com", Some("authorization"))],
+        );
+        if let CapBody::Credential(r) = &mut c {
+            r.install = install;
+        }
+        let hook = Hook {
+            command: HookCmd::Shell("make".into()),
+            user: None,
+            env: vec!["TOK".into()],
+            background: false,
+            clean_env: true,
+        };
+        let m = with(
+            with(kit("m", Kind::Mixin), "credential@1", false, c),
+            "lifecycle@1",
+            false,
+            CapBody::Lifecycle(Lifecycle {
+                install: vec![hook],
+                ..Default::default()
+            }),
+        );
+        let mut req = request();
+        let (steps, _) = run_with(
+            &plan(vec![m]),
+            &mut req,
+            &mut Policy::default(),
+            &secrets(&["github"]),
+        )
+        .unwrap();
+        steps.install[0].script.clone()
+    };
+    assert!(!script(false).contains("TOK"), "{}", script(false));
+    assert!(
+        script(true).contains(r#"${TOK+TOK="$TOK"}"#),
+        "{}",
+        script(true)
+    );
+}

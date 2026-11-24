@@ -152,7 +152,10 @@ pub fn apply(
     }
     // Before `req.workdir()`: a mountless sandbox works there (SPEC sbx@1/workspace-at-workdir).
     req.rec.image_workdir = image_workdir(&plan.workload).map(String::from);
-    steps.install.extend(kit_install_steps(plan, req));
+    let runtime_only = runtime_only_vars(&m.credentials, &user_creds);
+    steps
+        .install
+        .extend(kit_install_steps(plan, req, &runtime_only));
     // `resolve` refuses two kits writing one path.
     steps.files = m.files.iter().map(guest::file_script).collect();
     let (context_version, contexts) = select_contexts(&m.contexts, req.rec.agent_context)?;
@@ -279,6 +282,23 @@ fn drop_service_variables(req: &mut CreateRequest, kit_creds: &[KitCred]) {
     req.rec.credential_env.retain(|e| !vars.contains(e));
 }
 
+/// The variables of runtime-only kit credentials, which install hooks don't get even when they
+/// declare them (`tck: credential@1/sentinel-phase-scoped`). Not one an install-phase credential
+/// or the user's own secret also binds.
+fn runtime_only_vars(creds: &[KitCred], user_creds: &[(String, String)]) -> Vec<String> {
+    let install: Vec<String> = creds
+        .iter()
+        .filter(|kc| kc.req.install)
+        .map(|kc| kit_env(&kc.req))
+        .collect();
+    creds
+        .iter()
+        .filter(|kc| !kc.req.install)
+        .map(|kc| kit_env(&kc.req))
+        .filter(|v| !install.contains(v) && !user_creds.iter().any(|(e, _)| e == v))
+        .collect()
+}
+
 /// The variable a kit credential binds: the one it names, else `SBX_KIT_<SERVICE>`.
 fn kit_env(c: &CredReq) -> String {
     c.env
@@ -392,7 +412,11 @@ pub fn image_workdir(workload: &Kit) -> Option<&str> {
 /// clean-env hook only when it declares it); a runtime grant's create-time variable is unset for
 /// them. One run as root has the image user's `HOME` (SPEC sbx@1/honors-image-user); after them,
 /// what root left in that home goes back to the image user.
-fn kit_install_steps(plan: &Plan, req: &CreateRequest) -> Vec<InstallStep> {
+fn kit_install_steps(
+    plan: &Plan,
+    req: &CreateRequest,
+    runtime_only: &[String],
+) -> Vec<InstallStep> {
     let install_dir =
         image_workdir(&plan.workload).map_or_else(|| "/".to_string(), crate::util::sh_quote);
     let image_user = (plan.workload.config.as_ref())
@@ -420,6 +444,8 @@ fn kit_install_steps(plan: &Plan, req: &CreateRequest) -> Vec<InstallStep> {
                 1
             }
         };
+        let mut h = h.clone();
+        h.env.retain(|v| !runtime_only.contains(v));
         steps.push(InstallStep {
             label: format!("kit {kit} install hook {n}"),
             kit: Some(kit.to_string()),
@@ -427,7 +453,7 @@ fn kit_install_steps(plan: &Plan, req: &CreateRequest) -> Vec<InstallStep> {
             script: format!(
                 "{}cd {install_dir} && {agent_env}{}",
                 if h.user.is_none() { &image_home } else { "" },
-                guest::hook_script(h)
+                guest::hook_script(&h)
             ),
             relay_stderr: false,
         });
