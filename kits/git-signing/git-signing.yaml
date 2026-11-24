@@ -4,7 +4,7 @@ kind: mixin
 displayName: Git signing
 description: Your git identity, and commits signed with a key from your SSH agent.
 # x-release-please-start-version
-version: "0.39.0"
+version: "0.39.1"
 # x-release-please-end
 provides: [git-signing]
 
