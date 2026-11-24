@@ -92,8 +92,11 @@ since a sandbox doesn't keep its image's `ENV` or its create's `-e`.
 What a kit does, and when:
 
 - On first start, install steps run once, as root, in a workload image's `WORKDIR` (`/` otherwise),
-  with network only for installing. One that names no user has the image user's `HOME`. A failing step, or a kit file that can't be written, removes the
-  sandbox. Fix the cause and run the same command. In a v2 kit, `files/workspace` and `${WORKDIR}`
+  with network only for installing. One that names no user has the image user's `HOME`; after the
+  steps, files root left in that home are handed to the image user (and its group), so the agent
+  can write there; only when the user already owns the home, so a system account's `/` or `/bin`
+  is left alone. A failing step, or a kit file that can't be written, removes the sandbox. Fix the
+  cause and run the same command. In a v2 kit, `files/workspace` and `${WORKDIR}`
   are the primary workspace. Without one, a sandbox works in its workload image's `WORKDIR`, or in
   `/home/agent/workspace` when the image has none.
 - On every start, startup steps run in kit order, before the agent. A failing one is a warning

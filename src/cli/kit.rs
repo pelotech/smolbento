@@ -569,19 +569,16 @@ fn add_running<R: Runner>(
         .map(recorded_kit)
         .chain(std::iter::once(kit))
         .collect();
-    // Install hooks run where the create ran them: a v3 workload's image WORKDIR.
-    // Its agent files are the recorded `sbx.agent-file`, or none.
+    // Install hooks run as the create ran them: in a v3 workload's image WORKDIR, with its image
+    // user's HOME. Its agent files are the recorded `sbx.agent-file`, or none.
     let mut workload = empty_workload(&sb.meta.agent);
     workload.provides = own.iter().flat_map(|r| r.provides.clone()).collect();
-    workload.config = sb
-        .meta
-        .rec
-        .image_workdir
-        .clone()
-        .map(|workdir| ImageConfig {
-            workdir,
-            ..Default::default()
-        });
+    let rec = &sb.meta.rec;
+    workload.config = (rec.image_workdir.is_some() || rec.user.is_some()).then(|| ImageConfig {
+        workdir: rec.image_workdir.clone().unwrap_or_default(),
+        user: rec.user.clone().unwrap_or_default(),
+        ..Default::default()
+    });
     // The image's `Env` and the create's `-e` aren't kept with the sandbox: `${{ kit.env.* }}`
     // reads the kits' exports only here.
     let hosted = sb.meta.egress.is_some();

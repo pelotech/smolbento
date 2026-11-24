@@ -98,10 +98,39 @@ pub fn image_home(user: &str) -> String {
 
 /// `image_home` against `passwd` (tests use a temp file).
 fn image_home_in(user: &str, passwd: &str) -> String {
+    format!(
+        "{}[ -z \"$_sbh\" ] || export HOME=\"$_sbh\"; ",
+        account(user, passwd, "_sbh", "$6")
+    )
+}
+
+/// Shell that gives `user` (as in `image_home`) the files root owns in their home, with the
+/// account's own group: install hooks run as root with that `HOME` (lifecycle@1/default-users,
+/// sbx@1/honors-image-user), and the workload must still write there. Only a home the account
+/// already owns: a system account's is often `/` or `/bin`, owned by root. No such account or
+/// directory: nothing.
+pub fn home_to_user(user: &str) -> String {
+    home_to_user_in(user, "/etc/passwd")
+}
+
+/// `home_to_user` against `passwd` (tests use a temp file).
+fn home_to_user_in(user: &str, passwd: &str) -> String {
+    // `ls -n`, as busybox has no `stat -c` in every build.
+    format!(
+        "{}{}[ -z \"$_sbh\" ] || \
+         [ \"$(ls -nd \"$_sbh\" 2>/dev/null | awk '{{ print $3 }}')\" != \"${{_sbo%%:*}}\" ] || \
+         find \"$_sbh\" -xdev -user 0 -exec chown -h \"$_sbo\" {{}} +",
+        account(user, passwd, "_sbh", "$6"),
+        account(user, passwd, "_sbo", r#"$3 ":" $4"#)
+    )
+}
+
+/// `var=` the `print` of `user`'s `passwd` entry (by name or uid; a `:group` is dropped), empty
+/// with no such account.
+fn account(user: &str, passwd: &str, var: &str, print: &str) -> String {
     let u = user.split(':').next().unwrap_or(user);
     format!(
-        "_sbh=$(awk -F: -v u={} '$1 == u || $3 == u {{ print $6; exit }}' {}); \
-         [ -z \"$_sbh\" ] || export HOME=\"$_sbh\"; ",
+        "{var}=$(awk -F: -v u={} '$1 == u || $3 == u {{ print {print}; exit }}' {}); ",
         sh_quote(u),
         sh_quote(passwd)
     )

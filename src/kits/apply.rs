@@ -390,15 +390,15 @@ pub fn image_workdir(workload: &Kit) -> Option<&str> {
 /// The kits' install hooks as steps, numbered per kit. They run in the workload image's WORKDIR,
 /// as sbx runs them (`/` without one), and see `SSH_AUTH_SOCK` only with an install grant (a
 /// clean-env hook only when it declares it); a runtime grant's create-time variable is unset for
-/// them. One run as root has the image user's `HOME` (SPEC sbx@1/honors-image-user).
+/// them. One run as root has the image user's `HOME` (SPEC sbx@1/honors-image-user); after them,
+/// what root left in that home goes back to the image user.
 fn kit_install_steps(plan: &Plan, req: &CreateRequest) -> Vec<InstallStep> {
     let install_dir =
         image_workdir(&plan.workload).map_or_else(|| "/".to_string(), crate::util::sh_quote);
-    let image_home = (plan.workload.config.as_ref())
+    let image_user = (plan.workload.config.as_ref())
         .map(|c| c.user.as_str())
-        .filter(|u| !matches!(u.split(':').next(), Some("" | "0" | "root")))
-        .map(guest::image_home)
-        .unwrap_or_default();
+        .filter(|u| !matches!(u.split(':').next(), Some("" | "0" | "root")));
+    let image_home = image_user.map(guest::image_home).unwrap_or_default();
     let granted = req.ssh_agent.as_ref();
     let agent_env = if granted.is_some_and(|a| a.install.is_some()) {
         format!("export SSH_AUTH_SOCK={} && ", agent::GUEST_SOCKET)
@@ -429,6 +429,15 @@ fn kit_install_steps(plan: &Plan, req: &CreateRequest) -> Vec<InstallStep> {
                 if h.user.is_none() { &image_home } else { "" },
                 guest::hook_script(h)
             ),
+            relay_stderr: false,
+        });
+    }
+    if let Some(u) = image_user.filter(|_| !steps.is_empty()) {
+        steps.push(InstallStep {
+            label: "returning the image user's home".into(),
+            kit: None,
+            user: None,
+            script: guest::home_to_user(u),
             relay_stderr: false,
         });
     }
