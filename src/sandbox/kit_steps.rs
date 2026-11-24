@@ -194,16 +194,22 @@ pub fn last_lines(text: &str, n: usize) -> String {
     lines[lines.len().saturating_sub(n)..].join("\n")
 }
 
-/// The startup runner's command, as root; `script` limits it to one kit's `startup.d` script. A
-/// no-op without kits.
+/// Created by the last step of every start; a v3 workload's boot command waits for it (`/run` is
+/// emptied on every restart).
+pub(super) const WORKLOAD_READY: &str = "/run/smolbento/ready";
+
+/// The startup runner's command, as root; `script` limits it to one kit's `startup.d` script. Runs
+/// the runner if there is one; a whole pass (`None`) then releases the workload, even after a
+/// failed hook, as sbx starts the agent anyway.
 pub fn startup_cmd(script: Option<&str>) -> String {
-    let script = script
-        .map(|s| format!(" {}", sh_quote(s)))
-        .unwrap_or_default();
-    format!(
-        "[ -x {p} ] || exit 0; exec {p}{script}",
-        p = guest::STARTUP_PATH
-    )
+    let p = guest::STARTUP_PATH;
+    match script {
+        Some(s) => format!("[ -x {p} ] || exit 0; exec {p} {}", sh_quote(s)),
+        None => format!(
+            "s=0; [ -x {p} ] && {{ {p}; s=$?; }}; mkdir -p {STEP_DIR} && : >{WORKLOAD_READY}; \
+             exit $s"
+        ),
+    }
 }
 
 /// Prints the startup log's last lines, for a failed start's warning.

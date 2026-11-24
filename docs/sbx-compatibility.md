@@ -322,22 +322,23 @@ Docker's kit-spec conformance suite checks this capability through `tests/confor
 (`just conformance`, at `SPEC_COMMIT`). The adapter claims `ssh-agent@1`, `host-mount@1`,
 `lifecycle@1`, `network-policy@1`/`@2`, `agent-context@1`, `long-running@1`, `privileged@1` and
 `resources@1`, under the `balanced` mode (sbx's default: under `allow-all` a kit's bounded allow
-bounds nothing, as the mode already grants the host). In the last run (129 checks: 43 passed, 4
-failed, 1 warned, 81 skipped as unclaimed), the failures are `lifecycle@1/hook-env-restricted`,
-the recorded difference above (install steps keep the proxy and CA variables);
-`ssh-agent@1/signatures-bounded` (the workload's initial process doesn't see the agent's key); and
-`SPEC-v3 §7.1.1/validate-expanded-declarations` and `atomic-selection`, which use the suite's
-selection controls (`--reject-capability`, selection records) that smolbento doesn't have.
+bounds nothing, as the mode already grants the host). All 11 `ssh-agent@1` checks pass: a
+workload's first process starts only once the start's install steps, files, agent context and
+startup hooks are done, and after the runtime agent's unit is up. The failures left are
+`lifecycle@1/hook-env-restricted`, the recorded difference above (install steps keep the proxy
+and CA variables); and `SPEC-v3 §7.1.1/validate-expanded-declarations` and `atomic-selection`,
+which use the suite's selection controls (`--reject-capability`, selection records) that
+smolbento doesn't have.
 `resources@1/limit-applied` warns: the sandbox reports its memory limit as unknown.
 
 Not claimed, each for checks that fail: `dockerd@1` and `volume@1` (the spec's `recreate` keeps
 the engine store and volumes while discarding the sandbox's disk, and smolbento keeps them on that
-disk); `git-identity@1` and `agent-context@2` (smolvm starts the workload before the install steps
-that set the identity and write the context, and `recreate` and selection records are missing);
+disk); `git-identity@1` and `agent-context@2` (`recreate` and selection records are missing;
+`git-identity@1/global-defaults` and `agent-context@2/materialized` pass);
 `sbx@1` (hooks and the workspace assume the `agent` user rather than the image's); `agent-skills@1`
-and `agent-skill@1` (selection records, bundled skills missing at launch, and paths backed by
-separate copies of the store); and `credential@1` (an install-only credential stays set for the
-workload, and an inject-only one adds variables). The adapter can still run these slices
+and `agent-skill@1` (selection records, and paths backed by separate copies of the store;
+bundled skills are in place before launch); and `credential@1` (an install-only credential stays
+set for the workload, and an inject-only one adds variables). The adapter can still run these slices
 (`SMOLBENTO_TCK_CAPABILITIES`): it maps `--skills-host-mode` to `--skills`, `--skills-host-store`
 to its isolated store, `--git-identity-config` to the host git config bento reads, and binds the
 fixture's credential as a `secret set-custom --command` that reads the suite's value at each start.
@@ -400,7 +401,8 @@ The spec's own validator accepts the pair and merges it. A capability `type` mus
   or `CMD` is refused at create and by `kit validate`.
 - A v3 workload's `ENTRYPOINT` + `CMD` also run at every boot, as the image user, as the kit
   spec's default launch mode says (the machine's command; smolvm keeps the machine up after it
-  exits). Not measured against sbx. `bento run` is unchanged: an interactive session through `exec`.
+  exits). It waits, in `sh`, until the start's install steps, files, agent context and startup
+  steps are done. Not measured against sbx. `bento run` is unchanged: an interactive session through `exec`.
 - Install steps run as root in the image `WORKDIR` (`/` otherwise). Startup steps and kit files
   default to `agent`. v3 install steps get a clean environment: `PATH`, `HOME`, `USER`, `TERM`,
   the proxy and CA variables, and the step's own `env`. v3 startup steps and all v2 steps get the

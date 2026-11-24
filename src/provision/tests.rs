@@ -742,6 +742,16 @@ fn agent_request(preset: bool) -> CreateRequest {
     }
 }
 
+/// Makes the fake answer for `name` as for a machine that `create` makes.
+fn fresh_machine(t: &TestEnv, name: &str) {
+    let fake = t.runner();
+    let machine = sandbox::name::machine_name(name);
+    fake.fail(&["machine", "status"], "NOT_FOUND", "vm not found");
+    let created = machine_json(&machine, "created", &[("sbx.name", name)]);
+    fake.once_ok(&["machine", "status"], &created);
+    fake.missing_until_created(&machine);
+}
+
 /// Creates `name` from `plan` (`None`: a bare `create`), with `env` as bento's environment.
 /// Returns the env, the result and the smolvm calls.
 fn agent_create(
@@ -751,17 +761,7 @@ fn agent_create(
     plan: Option<Plan>,
 ) -> (TestEnv, Result<Sandbox>, Vec<String>) {
     let t = test_env(env);
-    let fake = t.runner();
-    fake.fail(&["machine", "status"], "NOT_FOUND", "vm not found");
-    fake.once_ok(
-        &["machine", "status"],
-        &machine_json(
-            &sandbox::name::machine_name(name),
-            "created",
-            &[("sbx.name", name)],
-        ),
-    );
-    fake.missing_until_created(&sandbox::name::machine_name(name));
+    fresh_machine(&t, name);
     let mut req = agent_request(preset);
     req.name = name.into();
     let result = check_free(&t.ctx, name)
@@ -893,6 +893,42 @@ fn a_kit_grant_for_both_phases_reaches_the_install_hooks_too() {
     assert!(
         hook.contains("export SSH_AUTH_SOCK=/run/ssh-agent.sock && "),
         "{hook}"
+    );
+}
+
+/// tck: ssh-agent@1/signatures-bounded, lifecycle@1/files-before-entrypoint: with an install and
+/// runtime grant, the runtime agent unit is loaded (at `Booted`) before the start's last exec
+/// releases the workload, so its first process never meets the install-phase agent.
+#[test]
+fn the_runtime_agent_unit_is_up_before_the_workload_is_released() {
+    let (_agent, sock) = host_agent();
+    let mut t = test_env(&[("SSH_AUTH_SOCK", &sock)]);
+    let (ctl, _tmp) = with_services(&mut t);
+    fresh_machine(&t, "s1");
+    let plan = agent_plan(false, vec![ssh_agent(&[Install, Runtime], &[], false)]);
+    let mut req = agent_request(false);
+    let mut at_boot = None;
+    create_with(&t.ctx, &mut req, &[], Some(&plan), None, &mut |e| {
+        if matches!(e, sandbox::Event::Booted) {
+            at_boot = Some((t.calls().len(), ctl.calls()));
+        }
+    })
+    .unwrap();
+    let (calls_before, units) = at_boot.expect("Booted is heard");
+    assert!(
+        units
+            .iter()
+            .any(|c| c.starts_with("load ") && c.ends_with(".s1.agent")),
+        "{units:?}"
+    );
+    let calls = t.calls();
+    let release = calls
+        .iter()
+        .rposition(|c| c.starts_with("machine exec") && c.contains("/run/smolbento/ready"))
+        .unwrap_or_else(|| panic!("{calls:#?}"));
+    assert!(
+        release >= calls_before,
+        "released before Booted: {calls:#?}"
     );
 }
 

@@ -271,13 +271,22 @@ pub fn spec(req: &CreateRequest) -> CreateSpec {
 /// after it exits). A v3 workload kit launches its image's `Entrypoint` + `Cmd`, as the kit spec's
 /// default launch mode says (an image user, `sbx.user`, marks a v3 workload), unless it declares
 /// `sbx@1` (the host launches its agent, as for every built-in agent); every other sandbox, the
-/// internal builder included, just idles for `exec` and sessions.
+/// internal builder included, just idles for `exec` and sessions. The workload waits for the
+/// start's kit steps to finish (`tck: lifecycle@1/install-before-entrypoint`).
 fn boot_command(req: &CreateRequest) -> Vec<String> {
     match (&req.rec.user, &req.rec.command) {
         (Some(_), Some(c))
             if !c.is_empty() && !req.launched_by_host && !name::is_internal(&req.name) =>
         {
-            c.clone()
+            let wait = format!(
+                "until [ -e {} ]; do sleep 0.1; done; exec \"$@\"",
+                super::kit_steps::WORKLOAD_READY
+            );
+            ["sh", "-c", &wait, "sh"]
+                .into_iter()
+                .map(String::from)
+                .chain(c.iter().cloned())
+                .collect()
         }
         _ => vec!["sleep".into(), "infinity".into()],
     }
@@ -337,19 +346,20 @@ mod tests {
             spec(&req)
         };
         let idle = ["sleep", "infinity"];
-        // A v3 workload (an image user): its Entrypoint + Cmd, as that user, after `--`.
+        // A v3 workload (an image user): its Entrypoint + Cmd, as that user, after `--`, once the
+        // start's kit steps are done.
         let wl = cmd(
             "tool",
             Some("somebody:1001"),
             Some(&["/bin/agent", "--x", "run"]),
         );
-        assert_eq!(wl.cmd, ["/bin/agent", "--x", "run"]);
+        let wait = "until [ -e /run/smolbento/ready ]; do sleep 0.1; done; exec \"$@\"";
+        let gated = ["sh", "-c", wait, "sh", "/bin/agent", "--x", "run"];
+        assert_eq!(wl.cmd, gated);
         let args = wl.to_args();
-        let tail = &args[args.len() - 6..];
-        assert_eq!(
-            tail,
-            ["-u", "somebody:1001", "--", "/bin/agent", "--x", "run"]
-        );
+        let tail = &args[args.len() - 10..];
+        assert_eq!(tail[..3], ["-u", "somebody:1001", "--"]);
+        assert_eq!(tail[3..], gated);
         // No image user, a v2 workload (a command but no image user), a v3 image without a command,
         // and the internal builder keep `sleep infinity`.
         assert_eq!(cmd("claude.repo", None, None).cmd, idle);
