@@ -463,6 +463,8 @@ bento reset -f
 
 `prune --dry-run` also lists host service units left by sandboxes deleted with `bento smolvm
 machine delete` (`Would remove NAME (leftover host services)`), and `prune` removes them without asking.
+`rm --all` and `prune` leave sandboxes of another bento setup sharing the same `smolvm.home` (another
+config or data directory) and the kit builder; naming one removes it.
 
 Commands that delete things ask for confirmation, and refuse to run without a terminal unless you
 pass `-f`.

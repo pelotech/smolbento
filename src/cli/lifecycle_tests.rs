@@ -1302,6 +1302,29 @@ fn rm_all_and_prune_leave_the_builder() {
     assert!(deletes.iter().any(|l| l.contains("sbx-old")), "{deletes:?}");
 }
 
+/// Two bento setups can share one smolvm home (the e2e tests do): `rm --all` and `prune` remove
+/// only this setup's sandboxes.
+#[test]
+fn rm_all_and_prune_leave_another_setups_sandboxes() {
+    let mut t = test_env(&[]);
+    t.sandboxes(&[
+        ("old", "stopped", CLAUDE_LABELS),
+        ("theirs", "stopped", &[("sbx.setup", "00000000")]),
+    ]);
+    t.sbt(&["prune", "-f"]).unwrap();
+    t.sbt(&["rm", "--all", "-f"]).unwrap();
+    let deletes: Vec<String> = t
+        .calls()
+        .into_iter()
+        .filter(|l| l.contains("delete"))
+        .collect();
+    assert!(
+        !deletes.iter().any(|l| l.contains("sbx-theirs")),
+        "{deletes:?}"
+    );
+    assert!(deletes.iter().any(|l| l.contains("sbx-old")), "{deletes:?}");
+}
+
 /// The labels of a claude sandbox for another folder, `/other/proj`.
 const OTHER_FOLDERS: &[(&str, &str)] = &[("sbx.agent", "claude"), ("sbx.workspace", "/other/proj")];
 
