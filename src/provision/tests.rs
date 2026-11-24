@@ -1212,15 +1212,22 @@ fn a_hosted_create_passes_no_credential_and_mounts_the_ca() {
         create.contains(&format!("-e GH_TOKEN={placeholder}")),
         "{create}"
     );
+    // As smolvm sets them for a machine with credentials, so the variables don't tell the egress
+    // modes apart (`tck: credential@1/inject-only-no-env` compares a hosted baseline).
     for var in [
         "SSL_CERT_FILE",
-        "NODE_EXTRA_CA_CERTS",
         "REQUESTS_CA_BUNDLE",
         "CURL_CA_BUNDLE",
         "GIT_SSL_CAINFO",
     ] {
         assert!(
             create.contains(&format!("-e {var}=/run/smolvm/ca-bundle.pem")),
+            "{create}"
+        );
+    }
+    for var in ["NODE_EXTRA_CA_CERTS", "DENO_CERT"] {
+        assert!(
+            create.contains(&format!("-e {var}=/run/smol/credentials/ca.pem")),
             "{create}"
         );
     }
