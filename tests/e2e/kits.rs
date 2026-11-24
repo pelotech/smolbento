@@ -530,7 +530,7 @@ echo "$ip" > /etc/e2e-install-ip"#
         "httpbin.org is closed after install"
     );
     assert!(
-        !http_answers(e, &ip),
+        !http_answers(e, &format!("http://{ip}/")),
         "{ip} (httpbin.org's address) is closed after install"
     );
     // Removed after install: neither listed (as sbx) nor stored.
