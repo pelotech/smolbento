@@ -31,7 +31,7 @@ where the agent name goes, and the sandbox takes its name. Its image's command r
 smolvm maps the workspace to that user. A workload with no `ENTRYPOINT` or `CMD` is refused, and one
 without `/bin/bash` can't start its agent. A v3 workload's `ENTRYPOINT` + `CMD` also run at every
 boot (as the image user), as the kit spec's default launch mode says, once that start's install
-steps, files, agent context and startup steps are done (a `/bin/sh` waits for them); the machine
+steps, files, agent context and startup steps are done (an `sh` waits for them); the machine
 stays up if it exits, and `bento run` still starts its own interactive session.
 
 | Reference | Kit |

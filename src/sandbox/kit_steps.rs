@@ -198,9 +198,9 @@ pub fn last_lines(text: &str, n: usize) -> String {
 /// emptied on every restart).
 pub(super) const WORKLOAD_READY: &str = "/run/smolbento/ready";
 
-/// The startup runner's command, as root; `script` limits it to one kit's `startup.d` script. A
-/// no-op without kits. A start's whole pass (`None`) then releases the workload, even after a
-/// failed hook: sbx starts the agent anyway.
+/// The startup runner's command, as root; `script` limits it to one kit's `startup.d` script. Runs
+/// the runner if there is one; a whole pass (`None`) then releases the workload, even after a
+/// failed hook, as sbx starts the agent anyway.
 pub fn startup_cmd(script: Option<&str>) -> String {
     let p = guest::STARTUP_PATH;
     match script {

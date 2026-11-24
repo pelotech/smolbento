@@ -742,6 +742,16 @@ fn agent_request(preset: bool) -> CreateRequest {
     }
 }
 
+/// Makes the fake answer for `name` as for a machine that `create` makes.
+fn fresh_machine(t: &TestEnv, name: &str) {
+    let fake = t.runner();
+    let machine = sandbox::name::machine_name(name);
+    fake.fail(&["machine", "status"], "NOT_FOUND", "vm not found");
+    let created = machine_json(&machine, "created", &[("sbx.name", name)]);
+    fake.once_ok(&["machine", "status"], &created);
+    fake.missing_until_created(&machine);
+}
+
 /// Creates `name` from `plan` (`None`: a bare `create`), with `env` as bento's environment.
 /// Returns the env, the result and the smolvm calls.
 fn agent_create(
@@ -751,17 +761,7 @@ fn agent_create(
     plan: Option<Plan>,
 ) -> (TestEnv, Result<Sandbox>, Vec<String>) {
     let t = test_env(env);
-    let fake = t.runner();
-    fake.fail(&["machine", "status"], "NOT_FOUND", "vm not found");
-    fake.once_ok(
-        &["machine", "status"],
-        &machine_json(
-            &sandbox::name::machine_name(name),
-            "created",
-            &[("sbx.name", name)],
-        ),
-    );
-    fake.missing_until_created(&sandbox::name::machine_name(name));
+    fresh_machine(&t, name);
     let mut req = agent_request(preset);
     req.name = name.into();
     let result = check_free(&t.ctx, name)
@@ -904,17 +904,7 @@ fn the_runtime_agent_unit_is_up_before_the_workload_is_released() {
     let (_agent, sock) = host_agent();
     let mut t = test_env(&[("SSH_AUTH_SOCK", &sock)]);
     let (ctl, _tmp) = with_services(&mut t);
-    let fake = t.runner();
-    fake.fail(&["machine", "status"], "NOT_FOUND", "vm not found");
-    fake.once_ok(
-        &["machine", "status"],
-        &machine_json(
-            &sandbox::name::machine_name("s1"),
-            "created",
-            &[("sbx.name", "s1")],
-        ),
-    );
-    fake.missing_until_created(&sandbox::name::machine_name("s1"));
+    fresh_machine(&t, "s1");
     let plan = agent_plan(false, vec![ssh_agent(&[Install, Runtime], &[], false)]);
     let mut req = agent_request(false);
     let mut at_boot = None;

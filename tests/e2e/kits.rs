@@ -219,15 +219,10 @@ pub(crate) fn boot_workload_waits_for_its_install_hooks() {
         ),
     );
     e.create_workload(&kit);
+    let cat = || root_out(&e.name, "cat /etc/e2e-boot 2>/dev/null || true");
     let boots = |n: usize| {
-        let until = std::time::Instant::now() + std::time::Duration::from_secs(30);
-        loop {
-            let out = root_out(&e.name, "cat /etc/e2e-boot 2>/dev/null || true");
-            if out.lines().count() >= n || std::time::Instant::now() >= until {
-                return out;
-            }
-            std::thread::sleep(std::time::Duration::from_millis(500));
-        }
+        wait_until(30, || cat().lines().count() >= n);
+        cat()
     };
     assert_eq!(boots(1), "installed\n");
     e.ok(&["stop", &e.name]);
