@@ -1228,6 +1228,45 @@ fn a_hosted_create_passes_no_credential_and_mounts_the_ca() {
     assert!(!create.contains("gh-123"), "{create}");
 }
 
+/// A kit credential with inject rules and no variable is outbound rewrites only: the guest gets
+/// no variable for it, neither its placeholder nor its `SBX_CRED_*_MODE`.
+/// tck: credential@1/inject-only-no-env
+#[test]
+fn an_inject_only_credential_adds_no_variable() {
+    use crate::kits::model::{Cap, CapBody, CredReq, Inject};
+    let (t, _) = egress_env("hosted", &[]);
+    let plan = agent_plan(
+        false,
+        vec![Cap::new(
+            "com.docker.sandbox/credential@1",
+            false,
+            CapBody::Credential(CredReq {
+                service: "github".into(),
+                install: false,
+                runtime: true,
+                env: None,
+                inject: vec![Inject {
+                    domain: "api.github.com".into(),
+                    header: Some("Authorization".into()),
+                    format: Some("Bearer %s".into()),
+                    basic_user: None,
+                }],
+                oauth: None,
+            }),
+        )],
+    );
+    let mut req = agent_request(false);
+    create_with(&t.ctx, &mut req, &[], Some(&plan), None, &mut |_| {}).unwrap();
+    let label = &req.egress.as_ref().expect("hosted").label;
+    assert!(
+        label.bindings.iter().any(|b| b.env == "SBX_KIT_GITHUB"),
+        "still bound: {label:?}"
+    );
+    let create = t.create_line();
+    assert!(!create.contains("-e SBX_KIT_"), "{create}");
+    assert!(!create.contains("-e SBX_CRED_"), "{create}");
+}
+
 #[test]
 fn an_install_agent_grant_doesnt_hold_back_the_egress_unit() {
     // The other units wait for the install hooks; their port-443 flows need the egress process.

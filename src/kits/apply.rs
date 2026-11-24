@@ -699,6 +699,9 @@ fn bind_credential(
     }
     // The user's own secret stays set at runtime.
     let user = user_creds.iter().any(|(e, _)| *e == env);
+    if c.inject_only() && !user && !req.host_only_env.contains(&env) {
+        req.host_only_env.push(env.clone());
+    }
     if c.install && !c.runtime && !user && !req.rec.credential_install.contains(&env) {
         req.rec.credential_install.push(env.clone());
     }

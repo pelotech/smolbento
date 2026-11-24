@@ -33,6 +33,9 @@ pub struct CreateRequest {
     pub network: NetworkSpec,
     pub deny_cidrs: Vec<String>,
     pub credentials: Vec<Credential>,
+    /// The variables of inject-only kit credentials, bound for the host only: a hosted guest gets
+    /// no placeholder for them (smolvm's own egress always sets one).
+    pub host_only_env: Vec<String>,
     /// Hosted egress: set when `credentials` are swapped by bento's interceptor, not smolvm.
     pub egress: Option<crate::egress::Prepared>,
     /// What `meta` records as labels unchanged.
@@ -222,6 +225,7 @@ pub fn spec(req: &CreateRequest) -> CreateSpec {
         env.extend(
             bindings
                 .iter()
+                .filter(|b| !req.host_only_env.contains(&b.env))
                 .map(|b| (b.env.clone(), b.placeholder.clone())),
         );
     }

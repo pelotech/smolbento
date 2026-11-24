@@ -378,12 +378,13 @@ pub fn prepare_create<R: Runner>(
     req.rec.credential_env.dedup();
     req.rec.secrets = services;
     if !name::is_internal(&req.name) {
-        // The services the kits declare a credential for get a mode.
+        // The services the kits declare a credential for get a mode, unless it's inject-only.
         let mut services: Vec<String> = kits
             .map(|p| {
                 p.merged
                     .credentials
                     .iter()
+                    .filter(|c| !c.req.inject_only())
                     .map(|c| c.req.service.clone())
                     .collect()
             })

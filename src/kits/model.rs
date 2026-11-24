@@ -356,6 +356,14 @@ pub struct CredReq {
     pub oauth: Option<OAuthReq>,
 }
 
+impl CredReq {
+    /// Outbound rewrites only (an `apiKey` with `inject` and no `name`, and no OAuth): the guest
+    /// gets no variable for it (`tck: credential@1/inject-only-no-env`).
+    pub fn inject_only(&self) -> bool {
+        self.env.is_none() && self.oauth.is_none() && !self.inject.is_empty()
+    }
+}
+
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct OAuthReq {
     pub passthrough: bool,
