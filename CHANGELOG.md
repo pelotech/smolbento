@@ -1,5 +1,22 @@
 # Changelog
 
+## [0.39.1](https://github.com/pelotech/smolbento/compare/v0.39.0...v0.39.1) (2026-11-24)
+
+
+### Bug Fixes
+
+* **kits:** kit.env.HOME, v2 install-hook credentials and the home hand-back ([#251](https://github.com/pelotech/smolbento/issues/251)) ([9641485](https://github.com/pelotech/smolbento/commit/9641485626af2049d27add4f5f045055680b21dd))
+
+
+### Chores
+
+* **smolvm:** run smolvm 1.37.1 ([#249](https://github.com/pelotech/smolbento/issues/249)) ([b00de29](https://github.com/pelotech/smolbento/commit/b00de29292da47a26b101a7301db5cb304bb4d92))
+
+
+### Tests
+
+* **e2e:** judge the wildcard allow by any HTTP answer, not a 2xx ([#250](https://github.com/pelotech/smolbento/issues/250)) ([51732cd](https://github.com/pelotech/smolbento/commit/51732cdebee0e2e9d82672e86ee920ce8c9d331a))
+
 ## [0.39.0](https://github.com/pelotech/smolbento/compare/v0.38.0...v0.39.0) (2026-11-24)
 
 
