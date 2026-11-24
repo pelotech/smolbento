@@ -710,7 +710,11 @@ mod tests {
     /// sbx's kit table (notes, "Kits in sbx"): `/r` readonly, `/w` readwrite.
     #[test]
     fn kit_directories_are_mounted_over_unless_a_skill_is_bundled() {
-        let w = [want("/r", Mode::Readonly), want("/w", Mode::Readwrite), want("/r", Mode::Readonly)];
+        let w = [
+            want("/r", Mode::Readonly),
+            want("/w", Mode::Readwrite),
+            want("/r", Mode::Readonly),
+        ];
         use Access::*;
         assert_eq!(
             planned(Mode::Readwrite, &w, false),
@@ -772,7 +776,11 @@ mod tests {
     #[test]
     fn a_path_that_is_built_in_and_a_kit_s_behaves_as_built_in() {
         use Access::*;
-        let w = [want("/c", Mode::Readonly), builtin("/c"), want("/k", Mode::Readonly)];
+        let w = [
+            want("/c", Mode::Readonly),
+            builtin("/c"),
+            want("/k", Mode::Readonly),
+        ];
         assert_eq!(
             planned(Mode::Readonly, &w, false),
             (Shared::Ro, pa(&[("/c", Link), ("/k", Ro)]))

@@ -94,6 +94,8 @@ struct Arg {
     env: Option<String>,
     /// Set for an argument the build takes.
     build_arg: Option<String>,
+    /// A BuildKit secret ID: the build's input alone (SPEC-v3 §6.2).
+    build_secret: Option<String>,
 }
 
 fn from_value(v: Value, source: Source) -> Result<Kit> {
@@ -111,9 +113,12 @@ fn from_value(v: Value, source: Source) -> Result<Kit> {
     let caps = caps(d.capabilities)?;
     let name = name_from_source(&source)?;
     check_caps(&name, &caps)?;
+    // A build secret is no create-time input: left out, `--kit-arg` and references to it fail
+    // as for an undeclared argument, and nothing exports it (SPEC-v3 §6/build-secret-no-expansion).
     let args = d
         .args
         .into_iter()
+        .filter(|(_, a)| a.build_secret.is_none())
         .map(|(name, a)| {
             let def = ArgDef {
                 default: a.default,
@@ -325,7 +330,10 @@ pub(crate) fn check_caps(kit: &str, caps: &[Cap]) -> Result<()> {
         }
     }
     // SPEC-v3 §7.1: each pair describes the same thing, so a descriptor states one of them.
-    let has = |ty: &str| caps.iter().any(|c| c.ty == format!("com.docker.sandbox/{ty}"));
+    let has = |ty: &str| {
+        caps.iter()
+            .any(|c| c.ty == format!("com.docker.sandbox/{ty}"))
+    };
     for name in ["network-policy", "agent-sessions"] {
         if has(&format!("{name}@1")) && has(&format!("{name}@2")) {
             bail!("kit {kit}: {name}@1 and {name}@2 are exclusive; declare one");
@@ -462,7 +470,9 @@ pub(crate) fn body(ty: &str, config: Option<Value>) -> Result<CapBody> {
             let delivery = match c.delivery.as_deref() {
                 None | Some("progressive") => Delivery::Progressive,
                 Some("inline") => Delivery::Inline,
-                Some(d) => bail!("agent-context@2 delivery must be progressive or inline (got {d:?})"),
+                Some(d) => {
+                    bail!("agent-context@2 delivery must be progressive or inline (got {d:?})")
+                }
             };
             CapBody::AgentContext(AgentContextReq {
                 filename: c.filename,
@@ -519,8 +529,9 @@ pub(crate) fn body(ty: &str, config: Option<Value>) -> Result<CapBody> {
             // An omitted mode is `off` (agent-skills@1/off-default-honored).
             let mode = match c.mode.as_deref() {
                 None => crate::skills::Mode::Off,
-                Some(m) => crate::skills::Mode::parse(m)
-                    .map_err(|_| anyhow!("agent-skills@1 mode {m:?} must be off, readonly or readwrite"))?,
+                Some(m) => crate::skills::Mode::parse(m).map_err(|_| {
+                    anyhow!("agent-skills@1 mode {m:?} must be off, readonly or readwrite")
+                })?,
             };
             CapBody::AgentSkills { path: c.path, mode }
         }

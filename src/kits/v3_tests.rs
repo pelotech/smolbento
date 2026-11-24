@@ -647,7 +647,8 @@ fn both_network_policy_versions_are_refused() {
 fn agent_context_delivery() {
     use crate::kits::model::Delivery;
     let ctx = |ty: &str, extra: &str| {
-        let c = format!(r#"{{"type":"com.docker.sandbox/{ty}","config":{{"content":"x"{extra}}}}}"#);
+        let c =
+            format!(r#"{{"type":"com.docker.sandbox/{ty}","config":{{"content":"x"{extra}}}}}"#);
         one_cap(&c).map(|k| match &k.caps[0].body {
             CapBody::AgentContext(r) => r.delivery,
             b => panic!("{b:?}"),

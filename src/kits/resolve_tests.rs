@@ -694,7 +694,10 @@ fn skill_dirs_merge_to_the_widest_mode_and_one_kit_names_a_path_once() {
             mode,
         }]
     };
-    assert_eq!(merged(&[Mode::Readonly, Mode::Readwrite]), dir(Mode::Readwrite));
+    assert_eq!(
+        merged(&[Mode::Readonly, Mode::Readwrite]),
+        dir(Mode::Readwrite)
+    );
     assert_eq!(merged(&[Mode::Off, Mode::Readonly]), dir(Mode::Readonly));
     assert_eq!(merged(&[Mode::Readonly, Mode::Off]), dir(Mode::Readonly));
     assert_eq!(merged(&[Mode::Off]), dir(Mode::Off));
@@ -890,6 +893,25 @@ fn agent_context_2_delivery_is_read_after_expansion() {
         let e = delivery(bad).unwrap_err();
         assert!(format!("{e:#}").contains("delivery"), "{bad}: {e:#}");
     }
+}
+
+/// tck: SPEC-v3 §6/build-secret-no-expansion: a `buildSecret` arg is the build's alone. It takes
+/// no `--kit-arg`, can't be referenced, and exports nothing, even when it (wrongly) names `env`.
+#[test]
+fn a_build_secret_arg_is_build_only() {
+    let kit = |caps: &str| v3_m("  tok: {buildSecret: tok, env: TOK, default: x}\n", caps);
+    let p = resolve(workload("w"), vec![kit("  []\n")], &ArgValues::default()).unwrap();
+    assert!(
+        !p.merged.env.iter().any(|(k, _)| k == "TOK"),
+        "{:?}",
+        p.merged.env
+    );
+    assert!(!p.args["m"].contains_key("tok"));
+    let e = resolve(workload("w"), vec![kit("  []\n")], &with_args(&["tok=1"])).unwrap_err();
+    assert_eq!(format!("{e:#}"), "unknown kit argument tok");
+    let reference = "  - type: com.docker.sandbox/agent-context@2\n    config: {content: \"${{ kit.args.tok }}\"}\n";
+    let e = resolve(workload("w"), vec![kit(reference)], &ArgValues::default()).unwrap_err();
+    assert!(format!("{e:#}").contains("\"tok\""), "{e:#}");
 }
 
 fn opt_hook_kit() -> Kit {
