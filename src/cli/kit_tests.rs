@@ -1558,6 +1558,28 @@ fn a_failed_install_hook_drops_the_kits_rules() {
 }
 
 #[test]
+fn kit_add_under_allow_all_pushes_no_network() {
+    // A running allow-all sandbox has no allow list: nothing to open or close, and smolvm
+    // refuses to change one live.
+    let mut t = kit_env();
+    set_policy(&t, "mode = \"allow-all\"\n");
+    dev_sandbox(&t, &base());
+    v3_kit(&t, "net", NET_KIT, &[]);
+    t.sbt(&["kit", "add", "dev", "./net", "--yes"]).unwrap();
+    let lines = dev_calls(&t);
+    assert!(
+        !lines
+            .iter()
+            .any(|l| l.starts_with("machine update") && l.contains("allow")),
+        "{lines:#?}"
+    );
+    assert!(
+        lines.iter().any(|l| l.contains("echo hi")),
+        "the hook ran: {lines:#?}"
+    );
+}
+
+#[test]
 fn a_failed_network_push_is_not_blamed_on_hooks() {
     let mut t = kit_env();
     set_policy(&t, "mode = \"deny-all\"\n");

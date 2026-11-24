@@ -653,6 +653,10 @@ fn add_running<R: Runner>(
             sb.meta.rec.host_access,
             sb.meta.egress.is_some(),
         );
+        // An open network (allow-all) has no allow list to change, and smolvm can't add one live.
+        if network == crate::smolvm::NetworkSpec::Open {
+            return Ok(());
+        }
         ctx.vm.update_network(&sb.machine, &network)
     };
     // `None`: opening the kit's network, before any hook ran.

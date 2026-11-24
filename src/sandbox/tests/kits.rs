@@ -195,6 +195,33 @@ fn an_install_only_grant_closes_the_guest_socket_after_the_install_hooks() {
 }
 
 #[test]
+fn an_open_network_has_no_install_rules_to_close() {
+    // allow-all: the machine runs with no allow list, which smolvm can't change live, and with
+    // nothing to close.
+    let vm = created_vm();
+    let plan = StartPlan {
+        network: NetworkSpec::Open,
+        ..kit_plan(&[])
+    };
+    create(
+        &vm,
+        &request(),
+        &plan,
+        |_| Ok(NetworkSpec::Open),
+        &mut |_| {},
+    )
+    .unwrap();
+    let lines = vm.runner().call_lines();
+    let start = position(&lines, "start", |l| l.starts_with("machine start"));
+    assert!(
+        !lines[start..]
+            .iter()
+            .any(|l| l.starts_with("machine update")),
+        "{lines:#?}"
+    );
+}
+
+#[test]
 fn create_runs_kit_steps_in_lifecycle_order() {
     let vm = created_vm();
     let dropped = std::cell::RefCell::new(Vec::new());

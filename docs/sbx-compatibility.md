@@ -318,8 +318,11 @@ your agent (`ssh-add -D` fails with `Failed to remove all identities.`). The set
 | `kit add` of an `ssh-agent@1` kit | Recreates the container | `recreate required: … SSH agent` |
 
 Docker's kit-spec conformance suite checks this capability through `tests/conformance/smolbento-adapter`
-(`just conformance`, at `SPEC_COMMIT`). The adapter claims `ssh-agent@1`, `host-mount@1` and
-`lifecycle@1`. In the last run 26 checks pass. Of the failures, `lifecycle@1/hook-env-restricted`
+(`just conformance`, at `SPEC_COMMIT`). The adapter claims `ssh-agent@1`, `host-mount@1`,
+`lifecycle@1` and `network-policy@1`/`@2`, under the `balanced` mode (sbx's default: under
+`allow-all` a kit's bounded allow bounds nothing, as the mode already grants the host). The
+`network-policy` checks pass: deny-by-default, and `@2`'s method, path and deny-precedence checks.
+In the last full run, before they were claimed, 26 checks passed. Of the failures, `lifecycle@1/hook-env-restricted`
 is the recorded difference above (install steps keep the proxy variables), and these are open:
 `ssh-agent@1/phase-scoped` (the install-phase socket stays open after install), and `SPEC-v3
 §7.1.1/validate-expanded-declarations` and `atomic-selection`, which use the suite's selection

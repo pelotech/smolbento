@@ -410,7 +410,11 @@ fn first_start<R: Runner>(
                 .context("removing the install-phase network rules")?;
         }
         // A restart below applies `network` itself (`start` sends it to the stopped machine).
-        if !kit.steps.install_rules.is_empty() && kit.restart_without.is_empty() {
+        // An open network (allow-all) has no allow list to close, and smolvm can't change one live.
+        if !kit.steps.install_rules.is_empty()
+            && kit.restart_without.is_empty()
+            && network != NetworkSpec::Open
+        {
             // R11: smolvm resolves each allowed host to CIDRs, and `--remove-allow-host` leaves
             // those behind, so the host would stay reachable by IP. `update_network` sends
             // `--reset-allow-list` with the whole list, which clears the stored hosts and CIDRs
