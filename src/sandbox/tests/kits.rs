@@ -332,6 +332,9 @@ fn the_workload_starts_after_the_kit_steps() {
     );
 }
 
+/// smolvm sets a binding's placeholder in the workload's environment at every start, value or
+/// not, so an install-only credential's binding goes before the restart.
+/// tck: credential@1/sentinel-phase-scoped
 #[test]
 fn install_only_credentials_restart_the_machine_without_them() {
     let vm = created_vm();
@@ -352,9 +355,12 @@ fn install_only_credentials_restart_the_machine_without_them() {
         .iter()
         .rposition(|l| l.starts_with("machine start"))
         .unwrap();
+    let unbind = position(&lines, "unbind", |l| {
+        *l == format!("machine credentials remove -n {MACHINE} tok")
+    });
     let files = position(&lines, "files", |l| *l == exec_line("root", "echo files-1"));
     assert!(
-        install2 < stop && stop < restart && restart < files,
+        install2 < stop && stop < unbind && unbind < restart && restart < files,
         "{lines:#?}"
     );
     // The network without the install rules goes once, to the stopped machine, by `start`.

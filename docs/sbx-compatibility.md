@@ -335,8 +335,8 @@ Not claimed, each for checks that fail: `dockerd@1` and `volume@1` (the spec's `
 the engine store and volumes while discarding the sandbox's disk, and smolbento keeps them on that
 disk); `git-identity@1` and `agent-context@2` (`recreate` and selection records are missing;
 `git-identity@1/global-defaults` and `agent-context@2/materialized` pass); `agent-skills@1` and
-`agent-skill@1` (selection records); and `credential@1` (an install-only credential stays set for
-the workload, and an inject-only one adds variables). The adapter can still run these slices
+`agent-skill@1` (selection records); and `credential@1` (an inject-only credential adds
+variables). The adapter can still run these slices
 (`SMOLBENTO_TCK_CAPABILITIES`): it maps `--skills-host-mode` to `--skills`, `--skills-host-store`
 to its isolated store, `--git-identity-config` to the host git config bento reads, and binds the
 fixture's credential as a `secret set-custom --command` that reads the suite's value at each start.

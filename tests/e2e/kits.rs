@@ -587,9 +587,20 @@ pub(crate) fn install_only_credential_is_gone_after_install() {
         &e.name,
         "wget -S -T 20 -O - https://httpbin.org/basic-auth/user/real-secret-xyz 2>&1",
     );
+    // Revoked before the workload (tck: credential@1/sentinel-phase-scoped): its binding is gone,
+    // so the request goes out without it and doesn't authenticate.
     let after = out_text(&after);
-    assert!(after.contains("502"), "502 after install: {after}");
+    assert!(
+        after.contains("401"),
+        "unauthenticated after install: {after}"
+    );
     assert!(!after.contains(BASIC_SECRET), "{after}");
+    let var = e.sh(&e.name, "printenv KIT_TOK");
+    assert!(
+        !var.status.success(),
+        "no variable after install: {}",
+        out_text(&var)
+    );
 }
 
 #[test]
