@@ -476,7 +476,7 @@ pub(crate) fn secrets_are_placeholders_in_the_guest() {
 #[test]
 #[ignore = "boots real VMs and needs httpbin.org; run with `just e2e`"]
 pub(crate) fn a_secret_set_after_create_is_bound_without_recreating() {
-    // smolvm binds it at the next start; a hosted sandbox needs a recreate.
+    // smolvm binds it at the next start (a hosted sandbox binds it live: see below).
     let mut e = E2e::new("secadd");
     e.vars.push(("SMOLBENTO_NETWORK_EGRESS", "smolvm".into()));
     e.ok(&["policy", "init", "balanced"]);
@@ -489,6 +489,24 @@ pub(crate) fn a_secret_set_after_create_is_bound_without_recreating() {
     assert!(
         basic_auth_ok(&e, &e.name, "TOK", "real-secret-xyz"),
         "bound from its next start"
+    );
+}
+
+/// A running hosted sandbox binds a secret set after create at once: its egress process restarts
+/// with the binding, and a new command sees the placeholder.
+#[test]
+#[ignore = "boots real VMs and needs httpbin.org; run with `just e2e`"]
+pub(crate) fn a_secret_set_after_create_binds_a_hosted_sandbox_live() {
+    let mut e = E2e::new("secaddh");
+    e.vars.push(("SMOLBENTO_NETWORK_EGRESS", "hosted".into()));
+    e.ok(&["policy", "init", "balanced"]);
+    e.create_alpine();
+    let out = e.own_httpbin_secret("TOK", BASIC_SECRET);
+    let now = format!("Applied to {} now", e.name);
+    assert!(out.contains(&now), "{out}");
+    assert!(
+        basic_auth_ok(&e, &e.name, "TOK", "real-secret-xyz"),
+        "bound live, without a restart"
     );
 }
 

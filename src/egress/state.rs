@@ -16,6 +16,31 @@ pub struct Prepared {
     pub ca_guest_dir: PathBuf,
 }
 
+/// Adds a binding with a fresh placeholder for each of `creds` that `label` doesn't have yet;
+/// existing bindings and their placeholders are left as they are.
+pub fn add_bindings(label: &mut Label, creds: &[Credential]) {
+    for c in creds {
+        let name = Credential::binding(&c.env_var);
+        if !label.bindings.iter().any(|b| b.name == name) {
+            label.bindings.push(Binding {
+                name,
+                env: c.env_var.clone(),
+                hosts: c.hosts.clone(),
+                set_header: c.set_header.clone(),
+                placeholder: String::new(),
+            });
+        }
+    }
+    let placeholders = generate_placeholders(&policy(label));
+    for b in label
+        .bindings
+        .iter_mut()
+        .filter(|b| b.placeholder.is_empty())
+    {
+        b.placeholder = placeholders[&b.name].clone();
+    }
+}
+
 pub fn prepare(paths: &Paths, sandbox: &str, creds: &[Credential]) -> Result<Prepared> {
     let dir = paths.egress(sandbox);
     // A leftover from an earlier create must not leak a stale CA or token.
@@ -37,21 +62,9 @@ pub fn prepare(paths: &Paths, sandbox: &str, creds: &[Credential]) -> Result<Pre
 
     let mut label = Label {
         port: free_port()?,
-        bindings: creds
-            .iter()
-            .map(|c| Binding {
-                name: Credential::binding(&c.env_var),
-                env: c.env_var.clone(),
-                hosts: c.hosts.clone(),
-                set_header: c.set_header.clone(),
-                placeholder: String::new(),
-            })
-            .collect(),
+        bindings: vec![],
     };
-    let placeholders = generate_placeholders(&policy(&label));
-    for b in &mut label.bindings {
-        b.placeholder = placeholders[&b.name].clone();
-    }
+    add_bindings(&mut label, creds);
     Ok(Prepared {
         label,
         ca_guest_dir: MachineCa::guest_dir(&dir.join("ca")),

@@ -214,11 +214,12 @@ Caveats:
   every name on it.
 - **UDP:** smolvm drops every datagram from a hosted sandbox except DNS, even to allowed hosts. QUIC
   falls back to TCP; NTP and mosh fail. Use `network.egress=smolvm` for a sandbox that needs UDP.
-- **Live secret bindings:** a hosted sandbox can't bind a new service while it exists: `secret set`
-  says `<name> uses hosted egress; recreate it to bind <service>`. A new value or a removed one
-  applies at once: `secret set` and `secret rm` restart the egress process, and open connections
-  drop at that moment. A stopped sandbox's process is restarted before the machine starts, so
-  boot-time connections use the new value. Live binding is planned.
+- **Secrets change live:** `secret set` binds a new service to a running hosted sandbox at once.
+  Its placeholder variable reaches commands started afterwards; a session already running keeps
+  its environment until it restarts. A new value or a removed one applies at once too. Each of
+  these restarts the egress process, and open connections drop at that moment. A stopped
+  sandbox's process is restarted before the machine starts, so boot-time connections use the new
+  value.
 - No flow limits apply, except to decrypted connections ([Request rules](#request-rules)).
 
 A sandbox falls back to smolvm egress, with a warning at create, when there's no service manager
