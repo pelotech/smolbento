@@ -350,7 +350,8 @@ new session after a change.
 | `kiro`, `docker-agent`, `shell` | none: the store isn't shared |
 
 `~` is `/home/agent`. Links are
-made as root at each start, owned by the image's `agent` account (uid 1000 without one). A skills
+made as root at each start, owned by the image's `agent` account (uid 1000 without one), as is
+any directory made for a link or bind (such as `~/.claude`). A skills
 directory reached through a symlink gets no links, and a required bundled skill for it fails the
 create. If linking fails, the start warns (`couldn't set up shared skills`) and goes on.
 

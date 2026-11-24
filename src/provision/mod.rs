@@ -590,7 +590,11 @@ pub fn prepare_create<R: Runner>(
     // After every check, so a refused create makes no directories.
     host_mount::create_managed(&host_dirs)?;
     // Created empty so it can be mounted; `off` mounts nothing.
-    if req.skills.as_ref().is_some_and(|s| s.label.mounts_store()) {
+    if req
+        .skills
+        .as_ref()
+        .is_some_and(|s| s.label.shared != crate::skills::Shared::None)
+    {
         crate::skills::store::Store::new(&ctx.paths).ensure()?;
     }
     if !added.is_empty() {

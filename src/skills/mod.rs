@@ -90,11 +90,6 @@ impl Label {
     pub fn from_label(s: &str) -> Option<Label> {
         serde_json::from_str(s).ok()
     }
-
-    /// Whether the store is mounted at all (so it must exist).
-    pub fn mounts_store(&self) -> bool {
-        self.shared != Shared::None
-    }
 }
 
 /// A skills directory someone asked for: the built-in agent's or a kit's `agent-skills@1`.
@@ -102,7 +97,7 @@ impl Label {
 pub struct Want {
     pub path: String,
     pub readwrite: bool,
-    /// The built-in agent's directory: links when read-only (a kit's is mounted over).
+    /// The built-in agent's directory: links when read-only (a kit's has `SHARED` bound over).
     pub builtin: bool,
 }
 
@@ -118,8 +113,8 @@ pub struct Setup {
 /// - `off`: nothing from the store; bundled skills are linked anyway.
 /// - With bundled skills, every directory links (bundled skills must never land in the user's
 ///   store).
-/// - Otherwise the built-in agent's directory links when read-only and has the store mounted over
-///   it when read-write; a kit's has the store mounted over it either way.
+/// - Otherwise the built-in agent's directory links when read-only and has `SHARED` bound over it
+///   when read-write; a kit's has it bound over either way.
 ///
 /// `SHARED` is read-write if any directory's effective access is, so a read-only directory that
 /// links into it shares that (one store, one mount: agent-skills@1/same-store-at-every-path).
@@ -160,26 +155,25 @@ pub fn plan(mode: Mode, wants: &[Want], has_bundled: bool) -> Label {
 
 /// The store, mounted once at `SHARED`: every directory sees it through that one mount (a link
 /// into it or a bind of it), since a mount per directory is a separately cached copy in the guest.
-pub fn mounts(store: &Path, label: &Label) -> Vec<Mount> {
-    (label.shared != Shared::None)
-        .then(|| Mount {
-            host: Some(store.to_path_buf()),
-            guest: SHARED.into(),
-            read_only: label.shared == Shared::Ro,
-        })
-        .into_iter()
-        .collect()
+pub fn mount(store: &Path, label: &Label) -> Option<Mount> {
+    (label.shared != Shared::None).then(|| Mount {
+        host: Some(store.to_path_buf()),
+        guest: SHARED.into(),
+        read_only: label.shared == Shared::Ro,
+    })
 }
 
 /// Sets `o` to the owner of skills directories and links: the `agent` account if the image has
 /// one, else uid 1000, as sbx does.
 const OWNER: &str = r#"if u=$(id -u agent 2>/dev/null) && g=$(id -g agent 2>/dev/null); then o=$u:$g; else o=1000:1000; fi"#;
 
-/// `real DIR` succeeds when DIR's longest existing prefix resolves to itself: no symlink anywhere
-/// in the path (skills paths are canonical), so root never creates or chowns through one. Run
-/// before `mkdir -p` and again after it. A root-owned symlinked component (`/home -> /var/home`)
-/// is refused too.
-const REAL: &str = r#"real() { q=$1; while [ ! -e "$q" ] && [ ! -L "$q" ]; do q=${q%/*}; q=${q:-/}; done; [ "$(cd "$q" 2>/dev/null && pwd -P)" = "$q" ]; }"#;
+/// `real DIR` succeeds when DIR's longest existing prefix (`q`) resolves to itself: no symlink
+/// anywhere in the path (skills paths are canonical), so root never creates or chowns through one.
+/// A root-owned symlinked component (`/home -> /var/home`) is refused too. `plain DIR WHAT` checks
+/// that, makes DIR, checks again and hands each directory it made to `$o` (a root-owned
+/// `~/.claude` would keep the agent from its settings); it says why it failed, `not WHAT skills`.
+const REAL: &str = r#"real() { q=$1; while [ ! -e "$q" ] && [ ! -L "$q" ]; do q=${q%/*}; q=${q:-/}; done; [ "$(cd "$q" 2>/dev/null && pwd -P)" = "$q" ]; }
+plain() { if real "$1" && p=$q && mkdir -p "$1" && real "$1"; then c=$1; while [ "$c" != "$p" ] && [ -n "$c" ]; do chown "$o" "$c" || return 1; c=${c%/*}; done; return 0; fi; echo "$1 is not a plain directory path (a symlink in it?); not $2 skills there" >&2; return 1; }"#;
 
 /// Run as root at every start, before any hook. Binds `SHARED` over each `Ro`/`Rw` directory
 /// (read-only for `Ro`; a bind that can't be made read-only is undone). For each linking
@@ -216,14 +210,14 @@ fn link_script_at(shared: &str, owner: &str, dirs: &[Dir]) -> Option<String> {
 {REAL}
 bind() {{
   grep -qsF " $1 " /proc/mounts && return
-  if ! real "$1" || ! mkdir -p "$1" || ! real "$1"; then echo "$1 is not a plain directory path (a symlink in it?); not mounting skills there" >&2; return 1; fi
+  plain "$1" mounting || return 1
   mount --bind "$S" "$1" || return 1
   [ "$2" = ro ] || return 0
   mount -o remount,bind,ro "$1" || {{ umount "$1"; return 1; }}
 }}
 rc=0
 {binds}for d in {dirs}; do
-  if ! real "$d" || ! mkdir -p "$d" || ! real "$d"; then echo "$d is not a plain directory path (a symlink in it?); not linking skills there" >&2; rc=1; continue; fi
+  plain "$d" linking || {{ rc=1; continue; }}
   chown "$o" "$d" || {{ rc=1; continue; }}
   for l in "$d"/* "$d"/.[!.]*; do
     [ -L "$l" ] || continue
@@ -280,7 +274,7 @@ if [ -L {src}/SKILL.md ] || [ ! -f {src}/SKILL.md ]; then why="{source}/SKILL.md
 for d in {dirs}; do
   if [ -z "$why" ] && {{ [ -e "$d"/{n} ] || [ -L "$d"/{n} ]; }}; then why="$d/{name} already exists"; taken=$d; fi
 done
-if [ -n "$why" ]; then {fail}; else for d in {dirs}; do real "$d" && mkdir -p "$d" && real "$d" && chown "$o" "$d" && ln -sn {src} "$d"/{n} && chown -h "$o" "$d"/{n} || {{ {unlinked}; }}; done; fi
+if [ -n "$why" ]; then {fail}; else for d in {dirs}; do plain "$d" linking && chown "$o" "$d" && ln -sn {src} "$d"/{n} && chown -h "$o" "$d"/{n} || {{ {unlinked}; }}; done; fi
 "#
         );
     }
@@ -629,19 +623,24 @@ mod tests {
     }
 
     /// agent-skills@1/same-store-at-every-path: a mounted-over directory is a bind of the one
-    /// store mount, read-only for `Ro`; a bind that can't be made read-only is undone.
+    /// store mount, read-only for `Ro`; a bind that can't be made read-only is undone. Every
+    /// directory it makes, mount point and parents, is the agent's (so it can still write next to
+    /// its skills directory, as in `~/.claude`).
     #[test]
     fn link_script_binds_the_shared_mount_over_mounted_directories() {
         let t = tmp();
         let rw = t.path().join("a/skills-rw");
         let ro = t.path().join("b/skills");
+        std::fs::create_dir(t.path().join("b")).unwrap();
         let dirs = [
             dir(rw.to_str().unwrap(), Access::Rw),
             dir(ro.to_str().unwrap(), Access::Ro),
         ];
-        let script = link_script_at("/s", ME, &dirs).unwrap();
+        let script = link_script_at("/s", "o=A", &dirs).unwrap();
         let run = |mount: &str| {
-            let fakes = format!("{mount}\numount() {{ echo umount \"$@\"; }}\n");
+            let fakes = format!(
+                "{mount}\numount() {{ echo umount \"$@\"; }}\nchown() {{ echo chown \"$@\"; }}\n"
+            );
             std::process::Command::new("sh")
                 .args(["-c", &(fakes + &script)])
                 .output()
@@ -656,8 +655,10 @@ mod tests {
         assert_eq!(
             String::from_utf8_lossy(&out.stdout),
             format!(
-                "mount --bind /s {rw}\nmount --bind /s {ro}\nmount -o remount,bind,ro {ro}\n",
+                "chown A {rw}\nchown A {a}\nmount --bind /s {rw}\nchown A {ro}\nmount --bind /s {ro}\n\
+                 mount -o remount,bind,ro {ro}\n",
                 rw = rw.display(),
+                a = t.path().join("a").display(),
                 ro = ro.display()
             )
         );
@@ -761,21 +762,18 @@ mod tests {
     /// agent-skills@1/same-store-at-every-path: the store is mounted once, at `SHARED`, however
     /// many directories see it (a mount per directory is a copy per path in the guest).
     #[test]
-    fn mounts_follow_the_label() {
+    fn the_mount_follows_the_label() {
         let store = Path::new("/h/store");
         let label = |shared, dirs: Vec<Dir>| Label {
             mode: Mode::Readwrite,
             shared,
             dirs,
         };
-        let got = |l: &Label| -> Vec<(String, bool)> {
-            mounts(store, l)
-                .iter()
-                .map(|m| {
-                    assert_eq!(m.host.as_deref(), Some(store));
-                    (m.guest.clone(), m.read_only)
-                })
-                .collect()
+        let got = |l: &Label| -> Option<(String, bool)> {
+            mount(store, l).map(|m| {
+                assert_eq!(m.host.as_deref(), Some(store));
+                (m.guest, m.read_only)
+            })
         };
         let l = label(
             Shared::Rw,
@@ -786,12 +784,11 @@ mod tests {
                 dir("/d", Access::None),
             ],
         );
-        assert!(l.mounts_store());
-        assert_eq!(got(&l), [(SHARED.to_string(), false)]);
+        assert_eq!(got(&l), Some((SHARED.to_string(), false)));
         let l = label(Shared::Ro, vec![dir("/a", Access::Link)]);
-        assert_eq!(got(&l), [(SHARED.to_string(), true)]);
+        assert_eq!(got(&l), Some((SHARED.to_string(), true)));
         let l = label(Shared::None, vec![dir("/d", Access::None)]);
-        assert!(got(&l).is_empty() && !l.mounts_store());
+        assert_eq!(got(&l), None);
     }
 
     #[test]
