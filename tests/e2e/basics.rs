@@ -131,9 +131,10 @@ pub(crate) fn reachable(e: &E2e, url: &str) -> bool {
     .success()
 }
 
-/// Whether `http://IP/` gives any HTTP answer from `e`'s sandbox.
-pub(crate) fn http_answers(e: &E2e, ip: &str) -> bool {
-    let probe = format!("wget -S -T 8 -O /dev/null http://{ip}/ 2>&1 | grep -q 'HTTP/'");
+/// Whether `url` gives any HTTP answer, an error status included, from `e`'s sandbox: the connection
+/// was let through. `reachable` needs a 2xx, which a rate-limited API doesn't always give.
+pub(crate) fn http_answers(e: &E2e, url: &str) -> bool {
+    let probe = format!("wget -S -T 8 -O /dev/null {url} 2>&1 | grep -q 'HTTP/'");
     e.sh(&e.name, &probe).status.success()
 }
 
@@ -181,11 +182,12 @@ pub(crate) fn smolvm_allow_list_opens_and_closes_an_address_live() {
     let ip = e.sh_ok(&e.name, HTTPBIN_IP);
     let ip = ip.trim();
     assert!(!ip.is_empty(), "httpbin.org resolved");
-    assert!(http_answers(&e, ip), "live allow reaches {ip}");
+    let url = format!("http://{ip}/");
+    assert!(http_answers(&e, &url), "live allow reaches {ip}");
     // The last host leaves a host-less list: closed live.
     e.ok(&["policy", "rm", "network", "--resource", "httpbin.org"]);
     assert!(
-        !http_answers(&e, ip),
+        !http_answers(&e, &url),
         "live rm closes {ip} (httpbin.org's address)"
     );
 }
@@ -322,9 +324,13 @@ pub(crate) fn hosted_host_deny_inside_wildcard() {
     e.ok(&["policy", "allow", "network", "**.github.com"]);
     e.ok(&["policy", "deny", "network", "gist.github.com"]);
     e.create_alpine_offline();
-    let api = reachable(&e, "https://api.github.com");
+    // Any answer counts: shared CI addresses often get api.github.com's 403 rate limit.
+    let api = http_answers(&e, "https://api.github.com");
     assert!(api, "the wildcard allows api.github.com");
-    assert!(!reachable(&e, "https://gist.github.com"), "gist is denied");
+    assert!(
+        !http_answers(&e, "https://gist.github.com"),
+        "gist is denied"
+    );
     let log = egress_log(&e, &e.name);
     assert!(log.contains("deny gist.github.com:443: "), "{log}");
 }
@@ -338,7 +344,7 @@ pub(crate) fn hosted_cidr_deny_is_a_refused_connect() {
     e.ok(&["policy", "deny", "network", "1.1.1.0/24:443"]);
     e.create_alpine_offline();
     // http_answers, not reachable: 1.1.1.1 redirects port 80 to 443.
-    assert!(http_answers(&e, "1.1.1.1"), "port 80 is allowed");
+    assert!(http_answers(&e, "http://1.1.1.1/"), "port 80 is allowed");
     assert!(!reachable(&e, "https://1.1.1.1"), "port 443 isn't");
     let log = egress_log(&e, &e.name);
     assert!(log.contains("deny 1.1.1.1:443: "), "{log}");
