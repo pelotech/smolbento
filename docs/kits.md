@@ -86,7 +86,10 @@ error.
 
 `${{ kit.env.NAME }}` reads the sandbox's environment as the spec defines it: the workload image's
 `ENV`, then what kits export (`args.*.env`), then `-e`/`--env` at create, the last winning; an empty
-`-e NAME=` is a value. `HOME` and `WORKSPACE` are smolbento's. `kit add` reads only what kits export,
+`-e NAME=` is a value. `WORKSPACE` is smolbento's. `HOME` is the workload's: the image's `ENV HOME`,
+else its user's home, `/root` for root and `/home/agent` for `agent` (or a kit with no image). Any
+other user's home is only in the image's passwd file, read in the guest, so `${{ kit.env.HOME }}` is
+an error there unless the image sets `ENV HOME`. `kit add` reads only what kits export,
 since a sandbox doesn't keep its image's `ENV` or its create's `-e`.
 
 What a kit does, and when:

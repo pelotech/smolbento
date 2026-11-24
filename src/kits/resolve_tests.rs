@@ -1443,19 +1443,41 @@ fn kit_env_reads_the_image_then_exports_then_the_create() {
     assert_eq!(written(true, &[]), "arg");
     assert_eq!(written(true, &[("KIT_GREETING", "create")]), "create");
     assert_eq!(written(true, &[("KIT_GREETING", "")]), "");
-    // smolbento sets these in the guest, whatever the create or a kit says.
-    let k = mixin(false, "HOME");
-    let home = vec![("HOME".to_string(), "/elsewhere".to_string())];
-    let p = resolve_for(
-        w.clone(),
-        vec![k],
-        &ArgValues::default(),
-        "/w",
-        &home,
-        false,
-    )
-    .unwrap();
-    assert_eq!(p.merged.files[0].content, b"/home/agent");
+}
+
+/// tck: SPEC-v3 §6/env-expanded, sbx@1/honors-image-user. `${{ kit.env.HOME }}` is the home the
+/// workload's commands get: the image's `HOME`, else its user's, whatever a kit or the create says.
+/// A home only the image's passwd file knows is missing, so a reference to it is an error.
+#[test]
+fn kit_env_home_is_the_image_users() {
+    let home = |user: Option<&str>, image_env: &[(&str, &str)]| {
+        let mut w = workload("w");
+        w.config = user.map(|u| crate::kits::model::ImageConfig {
+            user: u.into(),
+            env: (image_env.iter())
+                .map(|(k, v)| (k.to_string(), v.to_string()))
+                .collect(),
+            ..Default::default()
+        });
+        let k = crate::kits::v3::parse(
+            "schemaVersion: \"3\"\nkind: mixin\nargs:\n  h:\n    default: /kit\n    env: HOME\n\
+             capabilities:\n  - type: com.docker.sandbox/lifecycle@1\n    config: {files: \
+             [{path: /f, content: \"${{ kit.env.HOME }}\"}]}\n",
+            Source::Registry("m".into()),
+        )
+        .unwrap();
+        let create = vec![("HOME".to_string(), "/elsewhere".to_string())];
+        resolve_for(w, vec![k], &ArgValues::default(), "/w", &create, false)
+            .map(|p| String::from_utf8(p.merged.files[0].content.clone()).unwrap())
+    };
+    assert_eq!(home(None, &[]).unwrap(), "/home/agent");
+    assert_eq!(home(Some("agent"), &[]).unwrap(), "/home/agent");
+    assert_eq!(home(Some(""), &[]).unwrap(), "/root");
+    assert_eq!(home(Some("0:0"), &[]).unwrap(), "/root");
+    assert_eq!(home(Some("root"), &[]).unwrap(), "/root");
+    assert_eq!(home(Some("sbxagent"), &[("HOME", "/srv")]).unwrap(), "/srv");
+    let e = home(Some("sbxagent"), &[]).unwrap_err();
+    assert!(format!("{e:#}").contains("\"HOME\""), "{e:#}");
 }
 
 const NP2: &str = "com.docker.sandbox/network-policy@2";
