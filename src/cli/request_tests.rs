@@ -996,6 +996,37 @@ fn a_kit_s_bundled_skill_caps_its_directory_and_links_before_install_hooks() {
     assert!(bundled < hook, "{lines:#?}");
 }
 
+/// A mountless kit sandbox's workdir is made before its install hooks: a kit workload's image
+/// may not have it, and exec starts there (`tck: dockerd@1/elevation-granted` execs in it).
+#[test]
+fn a_mountless_kit_sandbox_gets_its_workdir_before_install_hooks() {
+    let caps = r#"{"type":"com.docker.sandbox/lifecycle@1",
+                   "config":{"install":[{"command":"echo hook-ran"}]}}"#;
+    let mkdir = "mkdir -p /home/agent/workspace";
+    let mut t = skills_kit_env("shell", caps);
+    t.sbt(&["create", "--name", "shell-proj", "shell", "--kit", "./k"])
+        .unwrap();
+    let lines = t.calls();
+    let dir = lines
+        .iter()
+        .position(|l| l.starts_with("machine exec") && l.contains(mkdir))
+        .expect("the workdir step");
+    assert!(lines[dir].contains(" -u root "), "{}", lines[dir]);
+    assert!(lines[dir].contains("chown 'agent': "), "{}", lines[dir]);
+    let hook = lines
+        .iter()
+        .position(|l| l.starts_with("machine exec") && l.contains("echo hook-ran"))
+        .expect("the install hook");
+    assert!(dir < hook, "{lines:#?}");
+
+    let mut t = skills_kit_env("shell", caps);
+    t.sbt(&["create", "shell", ".", "--kit", "./k"]).unwrap();
+    assert!(
+        !t.calls().iter().any(|l| l.contains(mkdir)),
+        "a workspace has its own directory"
+    );
+}
+
 /// The store's `-v` targets (`guest[:ro]`) of a `shell-proj` create with kit `k` and `caps`.
 fn kit_skills_mounts(caps: &str, mode: &str) -> (Vec<String>, crate::skills::Label) {
     let mut t = skills_kit_env("shell", caps);
