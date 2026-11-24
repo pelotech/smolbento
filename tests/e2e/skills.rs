@@ -155,7 +155,7 @@ pub(crate) fn shared_skills_kit_dirs_are_mounted_over_and_off() {
         &[],
         &[serde_json::json!({
             "type": "com.docker.sandbox/agent-skills@1",
-            "config": {"path": ro},
+            "config": {"path": ro, "mode": "readonly"},
         })],
     );
     e.create_skills_ok(&kit, "readonly");

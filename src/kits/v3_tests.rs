@@ -136,8 +136,10 @@ fn a_port_of_zero_and_content_with_content_file_are_errors() {
     );
 }
 
+/// tck: agent-skills@1/off-default-honored (an omitted mode is `off`)
 #[test]
 fn agent_skills_caps() {
+    use crate::skills::Mode;
     use serde_json::json;
     let b = |ty: &str, c: serde_json::Value| body(&format!("com.docker.sandbox/{ty}"), Some(c));
     assert_eq!(
@@ -148,16 +150,22 @@ fn agent_skills_caps() {
         .unwrap(),
         CapBody::AgentSkills {
             path: "/home/agent/.claude/skills".into(),
-            readwrite: false
+            mode: Mode::Off
         }
     );
-    assert_eq!(
-        b("agent-skills@1", json!({"path": "/s", "mode": "readwrite"})).unwrap(),
-        CapBody::AgentSkills {
-            path: "/s".into(),
-            readwrite: true
-        }
-    );
+    for (given, mode) in [
+        ("off", Mode::Off),
+        ("readonly", Mode::Readonly),
+        ("readwrite", Mode::Readwrite),
+    ] {
+        assert_eq!(
+            b("agent-skills@1", json!({"path": "/s", "mode": given})).unwrap(),
+            CapBody::AgentSkills {
+                path: "/s".into(),
+                mode
+            }
+        );
+    }
     for bad in [
         json!({"path": "s"}),
         json!({"path": "/s/"}),

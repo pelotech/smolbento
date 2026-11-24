@@ -648,10 +648,10 @@ fn a_host_mount_path_has_one_owner() {
     }
 }
 
-fn skills_dir(path: &str, rw: bool) -> CapBody {
+fn skills_dir(path: &str, mode: Mode) -> CapBody {
     CapBody::AgentSkills {
         path: path.into(),
-        readwrite: rw,
+        mode,
     }
 }
 fn skill(source: &str, name: &str) -> CapBody {
@@ -661,23 +661,29 @@ fn skill(source: &str, name: &str) -> CapBody {
     }
 }
 
+/// Widest declared mode, ordered off, readonly, readwrite (spec agent-skills@1 "Composition").
 #[test]
 fn skill_dirs_merge_to_the_widest_mode_and_one_kit_names_a_path_once() {
     const AS: &str = "com.docker.sandbox/agent-skills@1";
-    let a = mixin("a").cap(AS, false, skills_dir("/s", false));
-    let b = mixin("b").cap(AS, false, skills_dir("/s", true));
-    let p = run(workload("w"), vec![a, b]).unwrap();
-    assert_eq!(
-        p.merged.skill_dirs,
-        [SkillDir {
+    let merged = |modes: &[Mode]| {
+        let kits = (modes.iter().enumerate())
+            .map(|(i, m)| mixin(&format!("m{i}")).cap(AS, false, skills_dir("/s", *m)))
+            .collect();
+        run(workload("w"), kits).unwrap().merged.skill_dirs
+    };
+    let dir = |mode| {
+        vec![SkillDir {
             path: "/s".into(),
-            readwrite: true
+            mode,
         }]
-    );
-    let k =
-        mixin("k")
-            .cap(AS, false, skills_dir("/s", false))
-            .cap(AS, false, skills_dir("/s", true));
+    };
+    assert_eq!(merged(&[Mode::Readonly, Mode::Readwrite]), dir(Mode::Readwrite));
+    assert_eq!(merged(&[Mode::Off, Mode::Readonly]), dir(Mode::Readonly));
+    assert_eq!(merged(&[Mode::Readonly, Mode::Off]), dir(Mode::Readonly));
+    assert_eq!(merged(&[Mode::Off]), dir(Mode::Off));
+    let k = mixin("k")
+        .cap(AS, false, skills_dir("/s", Mode::Readonly))
+        .cap(AS, false, skills_dir("/s", Mode::Readwrite));
     let e = run(workload("w"), vec![k]).unwrap_err();
     assert_eq!(format!("{e:#}"), "kit k: agent-skills@1 names /s twice");
 }

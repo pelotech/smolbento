@@ -951,7 +951,7 @@ fn skills_label(t: &TestEnv) -> crate::skills::Label {
 fn a_kit_s_bundled_skill_caps_its_directory_and_links_before_install_hooks() {
     use crate::skills::Access;
     let caps = format!(
-        r#"{{"type":"{AS}","config":{{"path":"/home/agent/.k/skills"}}}},
+        r#"{{"type":"{AS}","config":{{"path":"/home/agent/.k/skills","mode":"readonly"}}}},
                {{"type":"{AK}","config":{{"path":"/opt/k/review"}}}},
                {{"type":"com.docker.sandbox/lifecycle@1",
                  "config":{{"install":[{{"command":"echo hook-ran"}}]}}}}"#
@@ -1043,12 +1043,15 @@ fn kit_skills_mounts(caps: &str, mode: &str) -> (Vec<String>, crate::skills::Lab
 
 /// sbx's kit table: without a bundled skill the store is bound over each kit directory (no
 /// links); with one, every directory links. Either way smolvm mounts the store once
-/// (agent-skills@1/same-store-at-every-path), with the widest access.
+/// (agent-skills@1/same-store-at-every-path), with the widest access. A directory whose mode is
+/// omitted (`/o`) is `off`: no store, whatever `--skills` says, but bundled skills still land.
+/// tck: agent-skills@1/off-default-honored, agent-skills@1/bundled-with-sharing-off
 #[test]
 fn kit_skills_directories_follow_sbx_s_table() {
     use crate::skills::{Access, Shared};
     let dirs = format!(
-        r#"{{"type":"{AS}","config":{{"path":"/r"}}}},
+        r#"{{"type":"{AS}","config":{{"path":"/o"}}}},
+               {{"type":"{AS}","config":{{"path":"/r","mode":"readonly"}}}},
                {{"type":"{AS}","config":{{"path":"/w","mode":"readwrite"}}}}"#
     );
     let bundled = format!(r#"{dirs},{{"type":"{AK}","config":{{"path":"/opt/k/review"}}}}"#);
@@ -1058,31 +1061,31 @@ fn kit_skills_directories_follow_sbx_s_table() {
     assert_eq!(m, ["/run/sbx/skills-shared"]);
     assert_eq!(
         (l.shared, access(&l)),
-        (Shared::Rw, vec![Access::Ro, Access::Rw])
+        (Shared::Rw, vec![Access::None, Access::Ro, Access::Rw])
     );
     let (m, l) = kit_skills_mounts(&dirs, "readonly");
     assert_eq!(m, ["/run/sbx/skills-shared:ro"]);
-    assert_eq!(access(&l), [Access::Ro, Access::Ro]);
+    assert_eq!(access(&l), [Access::None, Access::Ro, Access::Ro]);
     let (m, l) = kit_skills_mounts(&dirs, "off");
     assert!(m.is_empty(), "{m:?}");
-    assert_eq!(access(&l), [Access::None, Access::None]);
+    assert_eq!(access(&l), [Access::None; 3]);
     let (m, l) = kit_skills_mounts(&bundled, "readwrite");
     assert_eq!(m, ["/run/sbx/skills-shared"]);
     assert_eq!(
         (l.shared, access(&l)),
-        (Shared::Rw, vec![Access::Link, Access::Link])
+        (Shared::Rw, vec![Access::None, Access::Link, Access::Link])
     );
     let (m, l) = kit_skills_mounts(&bundled, "readonly");
     assert_eq!(m, ["/run/sbx/skills-shared:ro"]);
     assert_eq!(
         (l.shared, access(&l)),
-        (Shared::Ro, vec![Access::Link, Access::Link])
+        (Shared::Ro, vec![Access::None, Access::Link, Access::Link])
     );
     let (m, l) = kit_skills_mounts(&bundled, "off");
     assert!(m.is_empty(), "{m:?}");
     assert_eq!(
         (l.shared, access(&l)),
-        (Shared::None, vec![Access::None, Access::None])
+        (Shared::None, vec![Access::None; 3])
     );
 }
 
@@ -1115,7 +1118,7 @@ fn a_bundled_skill_without_a_skills_directory_fails_or_is_skipped() {
 #[test]
 fn a_bundled_skill_named_like_a_stored_one_is_refused_before_create() {
     let caps = format!(
-        r#"{{"type":"{AS}","config":{{"path":"/s"}}}},
+        r#"{{"type":"{AS}","config":{{"path":"/s","mode":"readonly"}}}},
            {{"type":"{AK}","config":{{"path":"/opt/k/review"}}}}"#
     );
     let mut t = skills_kit_env("shell", &caps);

@@ -25,7 +25,8 @@ pub fn valid_name(name: &str) -> bool {
 }
 
 /// How a sandbox shares the store (`--skills`, `skills.defaultMode`).
-#[derive(Debug, Clone, Copy, Default, PartialEq, Eq, Serialize, Deserialize)]
+/// Ordered narrowest first, so `max` is the widest and `min` the narrower of two.
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq, PartialOrd, Ord, Serialize, Deserialize)]
 #[serde(rename_all = "lowercase")]
 pub enum Mode {
     Off,
@@ -96,7 +97,8 @@ impl Label {
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct Want {
     pub path: String,
-    pub readwrite: bool,
+    /// The most store access asked for here.
+    pub mode: Mode,
     /// The built-in agent's directory: links when read-only (a kit's has `SHARED` bound over).
     pub builtin: bool,
 }
@@ -109,7 +111,7 @@ pub struct Setup {
 }
 
 /// sbx's model. Per path (requests merged: the widest mode, and built-in if any is), a directory's
-/// effective access is the narrower of `mode` and its request.
+/// effective access is the narrower of `mode` and its request (agent-skills@1/access-narrower-of-both).
 /// - `off`: nothing from the store; bundled skills are linked anyway.
 /// - With bundled skills, every directory links (bundled skills must never land in the user's
 ///   store).
@@ -119,19 +121,20 @@ pub struct Setup {
 /// `SHARED` is read-write if any directory's effective access is, so a read-only directory that
 /// links into it shares that (one store, one mount: agent-skills@1/same-store-at-every-path).
 pub fn plan(mode: Mode, wants: &[Want], has_bundled: bool) -> Label {
-    let mut by_path: std::collections::BTreeMap<&str, (bool, bool)> = Default::default();
+    let mut by_path: std::collections::BTreeMap<&str, (Mode, bool)> = Default::default();
     for w in wants {
-        let e = by_path.entry(&w.path).or_default();
-        e.0 |= w.readwrite;
+        let e = by_path.entry(&w.path).or_insert((Mode::Off, false));
+        e.0 = e.0.max(w.mode);
         e.1 |= w.builtin;
     }
     let mut shared_rw = false;
     let dirs: Vec<Dir> = by_path
         .into_iter()
-        .map(|(path, (rw, builtin))| {
-            let rw = rw && mode == Mode::Readwrite;
+        .map(|(path, (want, builtin))| {
+            let effective = want.min(mode);
+            let rw = effective == Mode::Readwrite;
             shared_rw |= rw;
-            let access = match (mode, has_bundled, builtin, rw) {
+            let access = match (effective, has_bundled, builtin, rw) {
                 (Mode::Off, ..) => Access::None,
                 (_, true, ..) | (_, false, true, false) => Access::Link,
                 (_, false, _, true) => Access::Rw,
@@ -322,17 +325,17 @@ mod tests {
         assert!(e.contains("off, readonly or readwrite"), "{e}");
     }
 
-    fn want(p: &str, rw: bool) -> Want {
+    fn want(p: &str, mode: Mode) -> Want {
         Want {
             path: p.into(),
-            readwrite: rw,
+            mode,
             builtin: false,
         }
     }
     fn builtin(p: &str) -> Want {
         Want {
             path: p.into(),
-            readwrite: true,
+            mode: Mode::Readwrite,
             builtin: true,
         }
     }
@@ -707,7 +710,7 @@ mod tests {
     /// sbx's kit table (notes, "Kits in sbx"): `/r` readonly, `/w` readwrite.
     #[test]
     fn kit_directories_are_mounted_over_unless_a_skill_is_bundled() {
-        let w = [want("/r", false), want("/w", true), want("/r", false)];
+        let w = [want("/r", Mode::Readonly), want("/w", Mode::Readwrite), want("/r", Mode::Readonly)];
         use Access::*;
         assert_eq!(
             planned(Mode::Readwrite, &w, false),
@@ -735,15 +738,41 @@ mod tests {
         );
         // Readwrite but no directory asks for it: the shared mount stays read-only.
         assert_eq!(
-            planned(Mode::Readwrite, &[want("/r", false)], true),
+            planned(Mode::Readwrite, &[want("/r", Mode::Readonly)], true),
             (Shared::Ro, pa(&[("/r", Link)]))
+        );
+    }
+
+    /// A kit's `off` directory gets nothing from the store whatever the user's mode, but still
+    /// takes bundled skills; at one path the widest declared mode wins.
+    /// tck: agent-skills@1/off-honored, agent-skills@1/bundled-with-sharing-off
+    #[test]
+    fn a_kit_s_off_directory_gets_no_store() {
+        use Access::*;
+        let w = [want("/o", Mode::Off), want("/r", Mode::Readonly)];
+        assert_eq!(
+            planned(Mode::Readwrite, &w, false),
+            (Shared::Ro, pa(&[("/o", None), ("/r", Ro)]))
+        );
+        assert_eq!(
+            planned(Mode::Readwrite, &w, true),
+            (Shared::Ro, pa(&[("/o", None), ("/r", Link)]))
+        );
+        assert_eq!(
+            planned(Mode::Readwrite, &[want("/o", Mode::Off)], true),
+            (Shared::None, pa(&[("/o", None)]))
+        );
+        let widest = [want("/o", Mode::Off), want("/o", Mode::Readwrite)];
+        assert_eq!(
+            planned(Mode::Readwrite, &widest, false),
+            (Shared::Rw, pa(&[("/o", Rw)]))
         );
     }
 
     #[test]
     fn a_path_that_is_built_in_and_a_kit_s_behaves_as_built_in() {
         use Access::*;
-        let w = [want("/c", false), builtin("/c"), want("/k", false)];
+        let w = [want("/c", Mode::Readonly), builtin("/c"), want("/k", Mode::Readonly)];
         assert_eq!(
             planned(Mode::Readonly, &w, false),
             (Shared::Ro, pa(&[("/c", Link), ("/k", Ro)]))

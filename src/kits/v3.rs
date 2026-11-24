@@ -506,15 +506,13 @@ pub(crate) fn body(ty: &str, config: Option<Value>) -> Result<CapBody> {
                     c.path
                 );
             }
-            let readwrite = match c.mode.as_deref() {
-                None | Some("readonly") => false,
-                Some("readwrite") => true,
-                Some(m) => bail!("agent-skills@1 mode {m:?} must be readonly or readwrite"),
+            // An omitted mode is `off` (agent-skills@1/off-default-honored).
+            let mode = match c.mode.as_deref() {
+                None => crate::skills::Mode::Off,
+                Some(m) => crate::skills::Mode::parse(m)
+                    .map_err(|_| anyhow!("agent-skills@1 mode {m:?} must be off, readonly or readwrite"))?,
             };
-            CapBody::AgentSkills {
-                path: c.path,
-                readwrite,
-            }
+            CapBody::AgentSkills { path: c.path, mode }
         }
         "agent-skill@1" => {
             let c: AgentSkillCfg = decode(config)?;

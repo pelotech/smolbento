@@ -276,10 +276,11 @@ pub enum CapBody {
         sign: Vec<String>,
         authenticate: Vec<String>,
     },
-    /// `agent-skills@1`: a directory the agent reads skills from.
+    /// `agent-skills@1`: a directory the agent reads skills from, and the most store access the
+    /// kit takes there.
     AgentSkills {
         path: String,
-        readwrite: bool,
+        mode: crate::skills::Mode,
     },
     /// `agent-skill@1`: a skill in the image at `source`, exposed as `name`.
     AgentSkill {
