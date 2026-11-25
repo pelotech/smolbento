@@ -153,7 +153,8 @@ Sign a kit with `bento kit sign --help`.
 
 `XDG_CONFIG_HOME`, `XDG_CACHE_HOME` and `XDG_DATA_HOME` are honoured, also on macOS.
 `SMOLBENTO_CONFIG_DIR`, `SMOLBENTO_CACHE_DIR` and `SMOLBENTO_DATA_DIR` override them. An empty
-`SMOLBENTO_*_DIR`, or an empty or relative XDG variable, counts as unset.
+`SMOLBENTO_*_DIR`, or an empty or relative XDG variable, counts as unset. A relative
+`SMOLBENTO_*_DIR` is taken from the current directory.
 
 `config.toml` looks like this:
 

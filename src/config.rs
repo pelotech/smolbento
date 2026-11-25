@@ -38,8 +38,9 @@ impl Paths {
     pub fn from_env(env: &BTreeMap<String, String>) -> Result<Paths> {
         let pick = |own: &str, xdg: &str, fallback: &str| -> Result<PathBuf> {
             // An empty value is as if unset; so is a relative XDG one (the XDG spec).
+            // A relative one is from here: the unit namespace hashes it, and units start in `/`.
             if let Some(dir) = env.get(own).filter(|d| !d.is_empty()) {
-                return Ok(PathBuf::from(dir));
+                return std::path::absolute(dir).with_context(|| format!("{own}={dir}"));
             }
             if let Some(dir) = env.get(xdg).filter(|d| Path::new(d).is_absolute()) {
                 return Ok(Path::new(dir).join("smolbento"));
@@ -705,6 +706,13 @@ mod tests {
         assert_eq!(p.config, PathBuf::from("/h/.config/smolbento"));
         assert_eq!(p.cache, PathBuf::from("/h/.cache/smolbento"));
         assert_eq!(p.data, PathBuf::from("/xd/smolbento"));
+    }
+
+    #[test]
+    fn a_relative_own_dir_is_taken_from_the_current_directory() {
+        // Else `./d` and its absolute spelling are two unit namespaces.
+        let p = Paths::from_env(&env(&[("HOME", "/h"), ("SMOLBENTO_DATA_DIR", "./d")])).unwrap();
+        assert_eq!(p.data, std::env::current_dir().unwrap().join("d"));
     }
 
     #[test]
