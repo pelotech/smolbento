@@ -56,6 +56,8 @@ capabilities:
             runuser -u "$owner" -- env HOME="$home" direnv allow . 2>/dev/null \
               || su "$owner" -s /bin/sh -c "HOME='$home' direnv allow ." || true
           user: "0"
+          # sbx@1 gives a hook the workspace's path only when it asks.
+          env: [WORKSPACE_DIR]
   - type: com.docker.sandbox/network-policy@1
     config:
       runtime:
