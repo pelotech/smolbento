@@ -1,7 +1,7 @@
 # smolvm release smolbento runs; `just smolvm-pin VERSION` rewrites this file.
-version = "1.37.2"
+version = "1.37.6"
 
 [sha256]
-darwin-arm64 = "c27cb9cfbc144c15c4613a65b29bcda3488ba22c4b77c60db4c6dbbd9f79b65d"
-linux-arm64 = "51aed24b502b7d0a07a5c9bb8ac5f26caa46170e39bd85bd6c47e819675a0915"
-linux-x86_64 = "9c643d0477def63fb093434f8666d9eb89738df21b5b04f1d44822bc0aa0de83"
+darwin-arm64 = "0243cba59caf4464cd2721e81a9a3e4e513d3a7ae160c625601ce1b5139c090e"
+linux-arm64 = "574b95beefa7a4af0a9d79b7ed4720c7fe6fe0667dd3c1786a5bece71329cb10"
+linux-x86_64 = "f152d649a2cd0ebb23812d0a6194feb2195a4ef39504e5fdb115aca45f4f48d5"
