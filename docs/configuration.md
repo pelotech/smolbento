@@ -177,6 +177,7 @@ name turned into `_`). Its details are stored as labels on that machine:
 | `sbx.workspace` | Primary workspace path (absent for a sandbox without one) |
 | `sbx.workspaces` | All mounted paths, as a JSON list |
 | `sbx.created` | Creation time, unix seconds |
+| `sbx.id` | The sandbox's `SANDBOX_ID`, a UUID made at create (a fork gets its own) |
 | `sbx.docker` | Whether it runs a private Docker engine |
 | `sbx.secrets` | Services whose secrets were bound at create |
 | `sbx.credential-hosts` | Hosts those secrets use, recorded at create so the sandbox can always reach them |

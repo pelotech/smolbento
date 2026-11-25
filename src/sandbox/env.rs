@@ -1,4 +1,5 @@
-//! The variables sbx sets in every sandbox (measured: `docs/sbx-compatibility.md`).
+//! The variables every sandbox gets: sbx@1's runtime-owned names and the others sbx sets
+//! (measured: `docs/sbx-compatibility.md`).
 
 use std::collections::BTreeMap;
 
@@ -21,16 +22,44 @@ pub fn new_uuid() -> String {
     )
 }
 
-/// The sandbox variables for `req` (after its secrets are bound), with `id` as `SANDBOX_ID`.
-/// `services` are those its kits declare a credential for: each gets `SBX_CRED_<SVC>_MODE`,
-/// `apikey` when the service's secret is bound, else `none` (sbx 0.53: `claude` gets anthropic's,
-/// `shell` none). Never a secret value.
-pub fn defaults(req: &CreateRequest, id: &str, services: &[String]) -> Vec<(String, String)> {
+/// The names sbx@1 makes runtime-owned: the sandbox sets them over the image's `Env`, kit exports
+/// and every `-e` (tck: sbx@1/environment-authoritative).
+pub const RUNTIME_OWNED: [&str; 4] = ["SANDBOX_NAME", "SANDBOX_ID", "WORKSPACE_DIR", "IS_SANDBOX"];
+
+/// The runtime-owned values of the sandbox `name` (tck: sbx@1/environment-provided). smolbento
+/// always assigns a workspace (a mountless one too), so `WORKSPACE_DIR` is always set.
+pub fn runtime_env(name: &str, id: &str, workdir: &str) -> Vec<(String, String)> {
+    RUNTIME_OWNED
+        .iter()
+        .zip([name, id, workdir, "1"])
+        .map(|(k, v)| (k.to_string(), v.to_string()))
+        .collect()
+}
+
+/// `req`'s runtime-owned values, minting its `SANDBOX_ID` (`sbx.id`) the first time.
+pub fn runtime(req: &mut CreateRequest) -> Vec<(String, String)> {
+    let id = req.rec.id.get_or_insert_with(new_uuid).clone();
+    runtime_env(&req.name, &id, &req.workdir())
+}
+
+/// Drops the user's values for the runtime-owned names, warning once for each: the sandbox's win
+/// (in sbx yours do: `docs/sbx-compatibility.md`).
+pub fn drop_runtime_owned(env: &mut Vec<(String, String)>) {
+    for name in RUNTIME_OWNED {
+        if env.iter().any(|(k, _)| k == name) {
+            crate::warning!("ignoring the {name} you gave: the sandbox sets it");
+            env.retain(|(k, _)| k != name);
+        }
+    }
+}
+
+/// The other sandbox variables for `req` (after its secrets are bound). `services` are those its
+/// kits declare a credential for: each gets `SBX_CRED_<SVC>_MODE`, `apikey` when the service's
+/// secret is bound, else `none` (sbx 0.53: `claude` gets anthropic's, `shell` none). Never a
+/// secret value.
+pub fn defaults(req: &CreateRequest, services: &[String]) -> Vec<(String, String)> {
     let mut env = vec![
-        ("SANDBOX_NAME".to_string(), req.name.clone()),
         ("SANDBOX_VM_ID".to_string(), req.name.clone()),
-        ("SANDBOX_ID".to_string(), id.to_string()),
-        ("WORKSPACE_DIR".to_string(), req.workdir()),
         ("SBX_AGENT".to_string(), req.agent.clone()),
     ];
     for svc in services {
@@ -50,9 +79,12 @@ pub fn defaults(req: &CreateRequest, id: &str, services: &[String]) -> Vec<(Stri
     env
 }
 
-/// Adds the defaults to `req.env`, behind anything already there (the user's `-e` wins).
+/// Adds the runtime-owned values to `req.env` (kit exports, added later behind them, lose), then
+/// the defaults behind what's there (the user's `-e` wins those).
 pub fn apply(req: &mut CreateRequest, services: &[String]) {
-    for (k, v) in defaults(req, &new_uuid(), services) {
+    let runtime = runtime(req);
+    req.env.extend(runtime);
+    for (k, v) in defaults(req, services) {
         env_default(&mut req.env, &k, v);
     }
 }
@@ -115,7 +147,10 @@ mod tests {
 
     #[test]
     fn identity_and_the_kits_credential_modes() {
-        let env = defaults(&req("claude", &["anthropic"]), "ID", &svcs(&["anthropic"]));
+        let mut r = req("claude", &["anthropic"]);
+        r.rec.id = Some("ID".into());
+        apply(&mut r, &svcs(&["anthropic"]));
+        let env = r.env;
         assert_eq!(get(&env, "SANDBOX_NAME"), Some("my-sb"));
         assert_eq!(get(&env, "SANDBOX_VM_ID"), Some("my-sb"));
         assert_eq!(get(&env, "SANDBOX_ID"), Some("ID"));
@@ -123,15 +158,26 @@ mod tests {
         assert_eq!(get(&env, "SBX_AGENT"), Some("claude"));
         assert_eq!(get(&env, "SBX_CRED_ANTHROPIC_MODE"), Some("apikey"));
         assert_eq!(get(&env, "SBX_CRED_OPENAI_MODE"), None);
-        // sbx 0.53's claude image sets it in its own environment.
-        assert_eq!(get(&env, "IS_SANDBOX"), None);
+        // In every sandbox, though sbx 0.54 leaves it to the claude image.
+        assert_eq!(get(&env, "IS_SANDBOX"), Some("1"));
+    }
+
+    #[test]
+    fn user_values_for_runtime_owned_names_are_dropped() {
+        let mut env = vars(&[
+            ("SANDBOX_ID", "x"),
+            ("A", "1"),
+            ("SANDBOX_ID", "y"),
+            ("IS_SANDBOX", ""),
+        ]);
+        drop_runtime_owned(&mut env);
+        assert_eq!(env, vars(&[("A", "1")]));
     }
 
     #[test]
     fn modes_follow_the_kits_credentials() {
         let env = defaults(
             &req("tool", &["anthropic", "github"]),
-            "ID",
             &svcs(&["anthropic", "openai"]),
         );
         assert_eq!(get(&env, "SBX_CRED_ANTHROPIC_MODE"), Some("apikey"));
@@ -139,10 +185,10 @@ mod tests {
         // A bound secret no kit asks for gets no mode.
         assert_eq!(get(&env, "SBX_CRED_GITHUB_MODE"), None);
         // A custom service's `-` isn't valid in a shell variable name: it becomes `_`.
-        let env = defaults(&req("tool", &["my-api"]), "ID", &svcs(&["my-api"]));
+        let env = defaults(&req("tool", &["my-api"]), &svcs(&["my-api"]));
         assert_eq!(get(&env, "SBX_CRED_MY_API_MODE"), Some("apikey"));
         // No credential in any kit (sbx 0.53's shell): no modes at all.
-        let env = defaults(&req("shell", &["github"]), "ID", &[]);
+        let env = defaults(&req("shell", &["github"]), &[]);
         assert!(
             env.iter().all(|(k, _)| !k.starts_with("SBX_CRED_")),
             "{env:?}"
@@ -153,7 +199,8 @@ mod tests {
     fn mountless_sandboxes_get_the_mountless_workdir() {
         let mut r = req("mykit", &[]);
         r.workspaces.clear();
-        let env = defaults(&r, "ID", &[]);
+        apply(&mut r, &[]);
+        let env = r.env;
         assert_eq!(get(&env, "SBX_AGENT"), Some("mykit"));
         assert_eq!(
             get(&env, "WORKSPACE_DIR"),

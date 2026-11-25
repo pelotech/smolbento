@@ -111,6 +111,8 @@ fn add_remote_and_branch<R: Runner>(
         Some(r) => clone::add_remote(r, fork)?,
         None => false,
     };
+    // A fork is a new sandbox: its own id.
+    let id = sandbox::env::new_uuid();
     let mut labels = vec![
         (labels::NAME.to_string(), fork.to_string()),
         (labels::FORK_OF.to_string(), parent.name().to_string()),
@@ -123,6 +125,7 @@ fn add_remote_and_branch<R: Runner>(
         // Nor units: they serve their own sandbox's sockets. A hosted fork's egress unit is the
         // exception (`provision::service_kinds`).
         (labels::SERVICE.to_string(), "false".to_string()),
+        (labels::ID.to_string(), id.clone()),
     ];
     // Nor an SSH agent: an empty label reads as none (smolvm can't remove an inherited one).
     // Like the bridge, the copy's mount still points at the parent's socket.
@@ -133,7 +136,7 @@ fn add_remote_and_branch<R: Runner>(
     let vars = [
         ("SANDBOX_NAME".to_string(), fork.to_string()),
         ("SANDBOX_VM_ID".to_string(), fork.to_string()),
-        ("SANDBOX_ID".to_string(), sandbox::env::new_uuid()),
+        ("SANDBOX_ID".to_string(), id),
     ];
     let hosted = parent.meta.egress.as_ref();
     // The fork's token is a copy of the parent's, so the parent's start env serves it too.
@@ -260,18 +263,18 @@ mod tests {
             .collect()
     }
 
-    /// The fresh SANDBOX_ID replaced by `ID`.
+    /// The fresh SANDBOX_ID (also its `sbx.id`) replaced by `ID`.
     fn normalize_id(line: &str) -> String {
         let at = line.find("SANDBOX_ID=").expect("a SANDBOX_ID") + "SANDBOX_ID=".len();
         assert_eq!(line.len() - at, 36, "{line}");
-        format!("{}ID", &line[..at])
+        line.replace(&line[at..], "ID")
     }
 
     fn branch(fork: &str) -> String {
         format!(
             "machine branch --from sbx-a -n sbx-{fork} --label sbx.name={fork} \
              --label sbx.fork-of=a --label sbx.created=1000000 --label sbx.bridge=false --label sbx.service=false \
-             -e SANDBOX_NAME={fork} -e SANDBOX_VM_ID={fork} -e SANDBOX_ID=ID"
+             --label sbx.id=ID -e SANDBOX_NAME={fork} -e SANDBOX_VM_ID={fork} -e SANDBOX_ID=ID"
         )
     }
 
@@ -375,7 +378,7 @@ mod tests {
             vec![
                 "machine branch --from sbx-a -n sbx-try_2 --label sbx.name=try.2 \
                  --label sbx.fork-of=a --label sbx.created=1000000 --label sbx.bridge=false --label sbx.service=false \
-                 -e SANDBOX_NAME=try.2 -e SANDBOX_VM_ID=try.2 -e SANDBOX_ID=ID"
+                 --label sbx.id=ID -e SANDBOX_NAME=try.2 -e SANDBOX_VM_ID=try.2 -e SANDBOX_ID=ID"
             ]
         );
     }

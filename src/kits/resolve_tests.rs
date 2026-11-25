@@ -858,6 +858,9 @@ fn hooks_files_and_contexts_expand_args_and_env() {
         p.merged.startup_hooks[0].1.command,
         HookCmd::Argv(vec!["echo".into(), "/home/agent".into()])
     );
+    // tck: sbx@1/environment-hooks: a v3 startup hook gets the runtime-owned names it lists.
+    assert!(p.merged.startup_hooks[0].1.listed_runtime_env);
+    assert!(!p.merged.install_hooks[0].1.listed_runtime_env);
     assert_eq!(p.merged.files[0].path, "/f/alice");
     assert_eq!(p.merged.files[0].content, b"x");
     // SPEC §6: the file's name and directory expand too.

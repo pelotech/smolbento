@@ -620,6 +620,7 @@ fn a_re_create_after_an_interrupted_one_opens_then_drops_its_install_rules() {
                     env: vec![],
                     background: false,
                     clean_env: true,
+                    listed_runtime_env: false,
                 }],
                 ..Default::default()
             }),
@@ -727,6 +728,7 @@ fn agent_plan(preset: bool, caps: Vec<crate::kits::model::Cap>) -> Plan {
                 env: vec!["SSH_AUTH_SOCK".into()],
                 background: false,
                 clean_env: true,
+                listed_runtime_env: false,
             }],
             ..Default::default()
         }),

@@ -667,6 +667,7 @@ fn a_v3_workload_records_its_image_user_and_installs_in_its_workdir() {
         env: vec![],
         background: false,
         clean_env: true,
+        listed_runtime_env: false,
     };
     let m = with(
         kit("m", Kind::Mixin),
@@ -743,6 +744,7 @@ fn hooks_and_files_become_steps() {
         env: vec![],
         background,
         clean_env: true,
+        listed_runtime_env: false,
     };
     let file = |path: &str, content: &str| FileReq {
         path: path.into(),
@@ -1670,6 +1672,7 @@ fn a_startup_hook_without_a_user_runs_as_the_session_user() {
                     env: vec![],
                     background: false,
                     clean_env: false,
+                    listed_runtime_env: false,
                 }],
                 files: vec![],
                 interactive: false,
@@ -1731,6 +1734,7 @@ fn an_install_hook_gets_no_runtime_only_credential() {
             env: vec!["TOK".into()],
             background: false,
             clean_env: true,
+            listed_runtime_env: false,
         };
         let mut m = with(
             with(kit("m", Kind::Mixin), "credential@1", false, c),

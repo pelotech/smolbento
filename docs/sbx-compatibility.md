@@ -273,13 +273,24 @@ and `pullPolicy: always`.
 
 ## Sandbox environment
 
-Every sandbox gets the variables below, the same set sbx sets. They are passed with `-e` at create
-so every process sees them. Your own `-e` wins. None holds a secret value.
+Every sandbox gets the variables below, the set sbx sets plus `IS_SANDBOX`. They are passed with
+`-e` at create so every process sees them. None holds a secret value.
 
-- `SANDBOX_NAME`, `SANDBOX_VM_ID` (the name), `SANDBOX_ID` (a new UUID per create). A `fork`
-  gets its own name and id.
-- `WORKSPACE_DIR`: the host path of the primary workspace (the guest workdir when mountless).
-- `SBX_AGENT`: the agent or kit name. `IS_SANDBOX=1` comes from the `claude` kit's image.
+- `SANDBOX_NAME`, `SANDBOX_ID`, `WORKSPACE_DIR` and `IS_SANDBOX=1` are runtime-owned (spec
+  `sbx@1/environment-authoritative`). The sandbox's values win over the image's `Env`, kit exports,
+  and every `-e` or `--env-file` value of `create`, `exec` and `run` (an environment file's `env:`
+  too, empty values included). A value you give for one is ignored with a warning naming it. sbx
+  0.54 lets yours win, and sets `IS_SANDBOX` only from the `claude` kit's image.
+- `SANDBOX_ID` is a UUID made at create and kept in the `sbx.id` label: the same after a restart,
+  new for a new sandbox (also one created after `rm` under the same name). A `fork` gets its own
+  name and id. `${{ kit.env.* }}` expands the four to the sandbox's values, at create and on `kit add`.
+- `WORKSPACE_DIR`: the host path of the primary workspace (the guest workdir when mountless: that
+  is still an assigned workspace, so it's always set).
+- A v3 kit's install and startup hooks get the four only when the hook lists them in its `env`
+  (spec `sbx@1/environment-hooks`). sbx 0.54 gives startup hooks the whole container environment.
+  A v2 kit's hooks, which can't list them, still get them.
+- `SANDBOX_VM_ID` (the name), as sbx sets it.
+- `SBX_AGENT`: the agent or kit name. Your own `-e` wins for this and the variables below.
 - `SBX_CRED_<SVC>_MODE`: one per service a kit in the sandbox declares a credential for: `apikey`
   when the service's secret is bound at create, else `none`. Not for an inject-only credential
   (`inject` rules, no `name`, no OAuth), which the spec gives no variable at all. As measured in sbx 0.53, `claude` gets
@@ -332,8 +343,9 @@ and CA variables); `SPEC-v3 §7.1.1/validate-expanded-declarations`, `atomic-sel
 records) that smolbento doesn't have; and the `sbx@1` workspace and identity environment checks
 (`environment-provided`, `-process`, `-internal`, `-hooks`, `-hooks-internal`,
 `identity-stable`, `identity-new-after-deletion`). Those read the environment the workload's agent
-was launched with, and smolbento launches an `sbx@1` workload's agent only on `run`; the four
-variables also don't yet override yours, `IS_SANDBOX` isn't set, and there's no `recreate`. The
+was launched with by `create` and `start`. Like sbx 0.54, smolbento starts an `sbx@1` workload's
+agent only on `run` (sbx 0.54 runs only `sleep infinity` for the suite's own probe kit), so these
+checks fail on both. `identity-stable` also needs a `recreate`, which smolbento doesn't have. The
 adapter maps `--workspace-mode internal` to a sandbox without a workspace mount (its workspace is
 the image's `WORKDIR`) and refuses `none`, `host` and `cloned`, so those scenario checks skip.
 `resources@1/limit-applied` warns: the sandbox reports its memory limit as unknown. The limit is

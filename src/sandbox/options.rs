@@ -100,7 +100,8 @@ pub fn host_cpus() -> u32 {
 
 /// `--env-file` lines, then `-e` items. `KEY=VALUE` is taken as is; a bare `KEY` copies the
 /// host's value and is skipped when the host doesn't have it. A line that is neither (no name,
-/// or a name with spaces) is an error, named by its file and line.
+/// or a name with spaces) is an error, named by its file and line. The runtime-owned names are
+/// dropped with a warning (`env::drop_runtime_owned`).
 pub fn parse_env(
     items: &[String],
     files: &[PathBuf],
@@ -133,6 +134,7 @@ pub fn parse_env(
     for item in items {
         add(item, &|| format!("--env '{item}'"))?;
     }
+    super::env::drop_runtime_owned(&mut out);
     Ok(out)
 }
 

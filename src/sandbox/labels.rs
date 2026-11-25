@@ -7,6 +7,8 @@ pub const AGENT: &str = "sbx.agent";
 pub const WORKSPACE: &str = "sbx.workspace";
 pub const WORKSPACES: &str = "sbx.workspaces";
 pub const CREATED: &str = "sbx.created";
+/// The sandbox's `SANDBOX_ID`, minted at create: kept across restarts, new for a new sandbox.
+pub const ID: &str = "sbx.id";
 /// The smolbento version that created the sandbox (sbx's `created_version`).
 pub const VERSION: &str = "sbx.version";
 pub const DOCKER: &str = "sbx.docker";
@@ -162,6 +164,8 @@ pub struct Recorded {
     /// A v3 workload's image WORKDIR, where install hooks run (`kit add` too); `None` for `/`
     /// (`sbx.workdir`).
     pub image_workdir: Option<String>,
+    /// `sbx.id`.
+    pub id: Option<String>,
     /// The kits' agent files in the guest; empty when no kit declares one (`sbx.agent-file`).
     /// `kits::apply` uses those already set (`kit add`) instead of deriving them.
     pub agent_files: Vec<String>,
@@ -326,6 +330,7 @@ impl Meta {
             (COMMAND, self.rec.command.as_ref().map(json)),
             (USER, self.rec.user.clone()),
             (WORKDIR, self.rec.image_workdir.clone()),
+            (ID, self.rec.id.clone()),
             (AGENT_FILE, list(&self.rec.agent_files)),
             (AGENT_CONTEXT, self.rec.agent_context.map(|v| v.to_string())),
             (CREDENTIAL_INSTALL, list(&self.rec.credential_install)),
@@ -411,6 +416,7 @@ impl Meta {
                 command: json(labels, COMMAND),
                 user: text(USER),
                 image_workdir: text(WORKDIR),
+                id: text(ID),
                 agent_files: list(labels.get(AGENT_FILE)),
                 agent_context: text(AGENT_CONTEXT).and_then(|v| v.parse().ok()),
                 credential_install: list(labels.get(CREDENTIAL_INSTALL)),
@@ -590,6 +596,7 @@ mod tests {
                 command: Some(vec!["wl".into(), "--a b".into()]),
                 user: Some("somebody".into()),
                 image_workdir: Some("/x".into()),
+                id: Some("af577721-672a-4708-9be0-178813f4cea3".into()),
                 agent_files: vec!["/w/AGENTS.md".into(), "/home/agent/.codex/AGENTS.md".into()],
                 credential_install: vec!["GH_TOKEN".into(), "NPM_TOKEN".into()],
                 long_running: true,

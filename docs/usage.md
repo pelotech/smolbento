@@ -245,10 +245,12 @@ bento exec -u root -w /tmp -e DEBUG=1 claude-myrepo env
 `exec` starts a stopped sandbox first and runs as `agent` in the workspace, unless you pass `-u` or
 `-w`. `--privileged` runs as root. It exits with the command's status.
 
-The agent and every `exec` see the sbx sandbox variables: `SANDBOX_NAME`, `SANDBOX_VM_ID` (the
-name), `SANDBOX_ID` (a UUID, new per sandbox and per fork), `WORKSPACE_DIR`, `SBX_AGENT`, and
-`SBX_CRED_<SERVICE>_MODE` for each service a kit declares a credential for (`apikey` if that secret
-was set at create, else `none`; `claude` has `ANTHROPIC`), except an inject-only one. Your `-e` wins. Differences from sbx are in [sbx compatibility](sbx-compatibility.md#sandbox-environment).
+The agent and every `exec` see the sbx sandbox variables: `SANDBOX_NAME`, `SANDBOX_ID` (a UUID, new
+per sandbox and per fork, kept across restarts), `WORKSPACE_DIR`, `IS_SANDBOX=1`, `SANDBOX_VM_ID`
+(the name), `SBX_AGENT`, and `SBX_CRED_<SERVICE>_MODE` for each service a kit declares a
+credential for (`apikey` if that secret was set at create, else `none`; `claude` has `ANTHROPIC`),
+except an inject-only one. Your `-e` wins, except for the first four: the sandbox sets those.
+Differences from sbx are in [sbx compatibility](sbx-compatibility.md#sandbox-environment).
 
 ## SSH into a sandbox
 
