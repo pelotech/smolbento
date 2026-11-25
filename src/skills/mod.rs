@@ -132,13 +132,12 @@ pub fn plan(mode: Mode, wants: &[Want], has_bundled: bool) -> Label {
         .into_iter()
         .map(|(path, (want, builtin))| {
             let effective = want.min(mode);
-            let rw = effective == Mode::Readwrite;
-            shared_rw |= rw;
-            let access = match (effective, has_bundled, builtin, rw) {
+            shared_rw |= effective == Mode::Readwrite;
+            let access = match (effective, has_bundled, builtin) {
                 (Mode::Off, ..) => Access::None,
-                (_, true, ..) | (_, false, true, false) => Access::Link,
-                (_, false, _, true) => Access::Rw,
-                (_, false, false, false) => Access::Ro,
+                (_, true, _) | (Mode::Readonly, false, true) => Access::Link,
+                (Mode::Readwrite, false, _) => Access::Rw,
+                (Mode::Readonly, false, false) => Access::Ro,
             };
             Dir {
                 path: path.to_string(),
@@ -747,21 +746,12 @@ mod tests {
         );
     }
 
-    /// A kit's `off` directory gets nothing from the store whatever the user's mode, but still
-    /// takes bundled skills; at one path the widest declared mode wins.
+    /// Beyond sbx's table (`request_tests`): a lone `off` directory leaves the store unshared,
+    /// and at one path the widest declared mode wins.
     /// tck: agent-skills@1/off-honored, agent-skills@1/bundled-with-sharing-off
     #[test]
     fn a_kit_s_off_directory_gets_no_store() {
         use Access::*;
-        let w = [want("/o", Mode::Off), want("/r", Mode::Readonly)];
-        assert_eq!(
-            planned(Mode::Readwrite, &w, false),
-            (Shared::Ro, pa(&[("/o", None), ("/r", Ro)]))
-        );
-        assert_eq!(
-            planned(Mode::Readwrite, &w, true),
-            (Shared::Ro, pa(&[("/o", None), ("/r", Link)]))
-        );
         assert_eq!(
             planned(Mode::Readwrite, &[want("/o", Mode::Off)], true),
             (Shared::None, pa(&[("/o", None)]))

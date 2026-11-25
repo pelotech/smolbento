@@ -191,7 +191,7 @@ Where they differ:
 | `update` | Per-skill messages; `No repository-installed skills found` | A failing repository prints an error and the others still update. Exit code 1 (not measured in sbx) |
 | Path that is both the agent's and a kit's directory | Can't happen: a v3 mixin can't join a built-in agent | Allowed; the path behaves like the agent's own directory |
 | Who links | Root; links to uid 1000. Fails the create when uid 1000 can't reach the directory | Root; links to the image's `agent` account, else uid 1000. No reachability check. A skills path that goes through a symlink gets no links (the start warns; a required bundled skill fails) |
-| Kit `mode` | A built-in agent's kit omits it and still gets your skills | As the spec says, an omitted `mode` is `off` (`agent-skills@1/off-default-honored`): a kit's directory gets nothing from the store, but bundled skills still land there. At one path the widest declared mode wins. A built-in agent's own directories stay read-write requests whatever its kit says, so `--skills` decides for them as in sbx: a recorded difference from the spec, which lets only the kit opt in |
+| Kit `mode` | A built-in agent's kit omits it and still gets your skills | An omitted `mode` is `off` (spec): a kit's directory gets bundled skills but nothing from the store; the widest mode at a path wins. A built-in agent's own directories follow `--skills` alone, as in sbx (the spec would make them `off`) |
 | Kits | `agent-skills@1`, `agent-skill@1` | Both, as measured. smolvm mounts the store once, at `/run/sbx/skills-shared`, read-write if any directory is. A kit directory gets that mount bound over it unless the sandbox has bundled skills; then every directory links. A required bundled skill named like a stored skill is refused before anything is made; one that clashes with image content fails the first start, which fails the create. `kit add` refuses kits with either |
 | Other agents' directories | sbx's docs table | The same table, from the docs. Not measured for copilot, cursor, droid, opencode or devin |
 
@@ -326,10 +326,7 @@ Docker's kit-spec conformance suite checks this capability through `tests/confor
 `resources@1` and `sbx@1`, under the `balanced` mode (sbx's default: under `allow-all` a kit's
 bounded allow bounds nothing, as the mode already grants the host). All 11 `ssh-agent@1` checks
 pass: a workload's first process starts only once the start's install steps, files, agent context and
-startup hooks are done, and after the runtime agent's unit is up. So do the `host-mount@1`,
-`network-policy@1`/`@2`, `agent-context@1`, `long-running@1` and `privileged@1` checks, and
-`sbx@1/honors-image-user`, `workspace-at-workdir` and `entrypoint-not-pid-one`. The failures left
-are `lifecycle@1/hook-env-restricted`, the recorded difference above (install steps keep the proxy
+startup hooks are done, and after the runtime agent's unit is up. The failures left are `lifecycle@1/hook-env-restricted`, the recorded difference above (install steps keep the proxy
 and CA variables); `SPEC-v3 §7.1.1/validate-expanded-declarations`, `atomic-selection` and
 `§7.1.2/exact-version`, which use the suite's selection controls (`--reject-capability`, selection
 records) that smolbento doesn't have; and the `sbx@1` workspace and identity environment checks
@@ -385,18 +382,19 @@ Each declared capability version is its own request (spec §7.1.2). A kit declar
 The spec's own validator accepts the pair and merges it. `agent-sessions@1` and `@2` are exclusive
 too, within a kit and across the kits of a sandbox. For `agent-context`, smolbento uses one version
 per sandbox, the explicit "accept one version" policy §7.1.2 allows: `@2` unless a kit requires
-`@1`. An optional request for the other version is skipped; a required one refuses the kit. A capability `type` must read
-`<namespace>/<name>@<version>` (spec §7), or the kit is refused, even for an optional entry.
+`@1`. An optional request for the other version is skipped; a required one refuses the kit. A
+capability `type` must read `<namespace>/<name>@<version>` (spec §7), or the kit is refused, even
+for an optional entry.
 
 | Capability | sbx (local) | smolbento |
 |---|---|---|
 | `network-policy@1`, `@2` | Yes | Yes, source `kit`. Install-phase rules apply while they're in the policy: from create (or `kit add`) until its install steps are done, when they're removed, before the workload's entrypoint starts. A start removes any an interrupted create or `kit add` left. An install-phase CIDR deny stays enforced for the sandbox's life (smolvm takes CIDR denies only at create; create prints a note), though `policy ls` doesn't show it after install. `@2` method and path rules are enforced on hosted sandboxes ([Request rules](network-and-secrets.md#request-rules)), with paths matched in exact case. Where a sandbox won't be hosted (`network.egress=smolvm`, install-only credentials, no service manager), a kit requiring them is refused. Optional ones there: allow rules cover the whole host, and deny rules with methods or paths are dropped (the skipped line says how many) |
 | `credential@1` | Yes | API keys: yes, through your secrets. OAuth with `passthrough: true`: yes (the agent's own login keeps its tokens in the sandbox). OAuth without passthrough: its API key part binds; logins happen inside the sandbox. An inject-only credential (no `name`) adds no variable on a hosted sandbox; with `network.egress=smolvm`, and during install for an install-only one, `SBX_KIT_<SERVICE>` holds smolvm's placeholder (smolvm's CLI gives every credential a variable) |
 | `port@1` | Yes | Yes, on `127.0.0.1` |
-| `volume@1` | Yes, removed with the sandbox; no retained volume storage to list or remove | Differs from the spec, which keeps block volumes across delete and create of the same name. smolbento keeps them on the sandbox's disk, so `rm` and `reset` remove them: no retention across delete, no commands to list or remove retained volumes, no check that a create's request matches a retained one, and `size` is ignored (no dedicated capacity). Kept across stop and start; each fork gets a copy. The path is cleaned (`.`, `..`, doubled `/`); one holding `:` is refused, because smolvm reads it as host:guest (the spec allows it). Not claimed in the conformance adapter |
+| `volume@1` | Yes, removed with the sandbox; no retained volume storage to list or remove | Differs from the spec, which keeps volumes across delete and create: smolbento keeps them on the sandbox's disk, so `rm` and `reset` remove them, and `size` is ignored. Kept across stop and start; each fork gets a copy. The path is cleaned (`.`, `..`, doubled `/`); one holding `:` is refused, because smolvm reads it as host:guest (the spec allows it) |
 | `resources@1` | Limited (no GPU) | CPUs and memory. GPU ignored |
 | `lifecycle@1` | Yes | Yes: install steps on first start, startup steps on every start. `interactive` ignored, but two entries declaring it are refused, as are two writing one file path (`kit A … and kit B … both declare file PATH`, naming each entry; spec `lifecycle@1/shared-paths-avoided`, selected groups included). Before, the later kit won the path. A v3 install step's clean environment also keeps `USER`, the proxy variables and the CA-bundle variables (when set), as sbx's does, so downloads work behind a proxy and with smolvm's CA; the spec's baseline (`lifecycle@1/hook-env-restricted`) has only `PATH`, `HOME`, `HOSTNAME`, `TERM`, `PWD`, `OLDPWD`, `SHLVL` and `_` |
-| `agent-context@1`, `@2` | Yes. In 0.54 a mixin's `@2` text is listed in the index, as for `@1` | Yes, in the same places (see below). `@2` `delivery` is read (after expansion; only `progressive`, the default, or `inline`), but all `@2` text is still inline: the spec puts a progressive mixin body in a per-kit file linked from every profile, which smolbento doesn't do yet |
+| `agent-context@1`, `@2` | Yes. In 0.54 a mixin's `@2` text is listed in the index, as for `@1` | Yes, in the same places (see below). `@2` `delivery` is read, but all `@2` text is inline for now |
 | `sbx@1` | Yes | Yes: the workload's command is the agent (see below) |
 | `git-identity@1` | Yes | Yes: your `git config user.name/email` |
 | `long-running@1` | Yes | Yes: no auto-stop when the last session ends |

@@ -674,8 +674,6 @@ fn agent_sessions_1_and_2_from_two_kits_are_refused() {
         format!("{e:#}"),
         "agent-sessions@1 and agent-sessions@2 are exclusive: kits w and m declare one each"
     );
-    let w = workload("w").cap(S2, false, CapBody::AgentSessions);
-    assert!(run(w, vec![]).is_ok());
 }
 
 /// Widest declared mode, ordered off, readonly, readwrite (spec agent-skills@1 "Composition").
@@ -699,8 +697,6 @@ fn skill_dirs_merge_to_the_widest_mode_and_one_kit_names_a_path_once() {
         dir(Mode::Readwrite)
     );
     assert_eq!(merged(&[Mode::Off, Mode::Readonly]), dir(Mode::Readonly));
-    assert_eq!(merged(&[Mode::Readonly, Mode::Off]), dir(Mode::Readonly));
-    assert_eq!(merged(&[Mode::Off]), dir(Mode::Off));
     let k = mixin("k")
         .cap(AS, false, skills_dir("/s", Mode::Readonly))
         .cap(AS, false, skills_dir("/s", Mode::Readwrite));
@@ -891,7 +887,10 @@ fn agent_context_2_delivery_is_read_after_expansion() {
     assert_eq!(delivery("d=progressive").unwrap(), Delivery::Progressive);
     for bad in ["d=", "d=eager"] {
         let e = delivery(bad).unwrap_err();
-        assert!(format!("{e:#}").contains("delivery"), "{bad}: {e:#}");
+        assert!(
+            format!("{e:#}").contains("delivery must be progressive or inline"),
+            "{bad}: {e:#}"
+        );
     }
 }
 

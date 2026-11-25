@@ -15,6 +15,7 @@ use serde_json::Value;
 use super::descriptor::{ApiKeyCfg, ResourcesCfg, TokenEndpoint};
 use crate::kits::model::*;
 use crate::kits::{CAP_NS, args, capability};
+use crate::skills::Mode;
 
 /// Parses a published descriptor (SPEC-v3 §9): the one Docker's kit frontend wrote into a kit
 /// image's manifest annotation (a registry kit, an agent's, or a local kit smolbento built), or
@@ -330,10 +331,7 @@ pub(crate) fn check_caps(kit: &str, caps: &[Cap]) -> Result<()> {
         }
     }
     // SPEC-v3 §7.1: each pair describes the same thing, so a descriptor states one of them.
-    let has = |ty: &str| {
-        caps.iter()
-            .any(|c| c.ty == format!("com.docker.sandbox/{ty}"))
-    };
+    let has = |ty: &str| caps.iter().any(|c| c.ty.strip_prefix(CAP_NS) == Some(ty));
     for name in ["network-policy", "agent-sessions"] {
         if has(&format!("{name}@1")) && has(&format!("{name}@2")) {
             bail!("kit {kit}: {name}@1 and {name}@2 are exclusive; declare one");
@@ -466,7 +464,7 @@ pub(crate) fn body(ty: &str, config: Option<Value>) -> Result<CapBody> {
         }
         "agent-context@2" => {
             let c: AgentContextV2 = decode(config)?;
-            // Read once expanded: a reference is `Pending` until then.
+            // `body()` sees expanded configs only: a reference stays `Pending` until then.
             let delivery = match c.delivery.as_deref() {
                 None | Some("progressive") => Delivery::Progressive,
                 Some("inline") => Delivery::Inline,
@@ -527,8 +525,7 @@ pub(crate) fn body(ty: &str, config: Option<Value>) -> Result<CapBody> {
                 );
             }
             // An omitted mode is `off` (agent-skills@1/off-default-honored).
-            let mode = (c.mode.as_deref())
-                .map_or(Ok(crate::skills::Mode::Off), crate::skills::Mode::parse)?;
+            let mode = c.mode.as_deref().map_or(Ok(Mode::Off), Mode::parse)?;
             CapBody::AgentSkills { path: c.path, mode }
         }
         "agent-skill@1" => {
