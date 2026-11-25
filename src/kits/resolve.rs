@@ -122,7 +122,7 @@ pub struct Merged {
     pub volumes: Vec<Volume>,
     /// In kit order.
     pub host_mounts: Vec<HostMount>,
-    /// `agent-skills@1` directories, one per path (widest mode).
+    /// `agent-skills@1` directories, in kit order; `skills::plan` merges a path's requests.
     pub skill_dirs: Vec<SkillDir>,
     /// `agent-skill@1` skills, one per name.
     pub bundled: Vec<Bundled>,
@@ -241,16 +241,6 @@ impl Merged {
             Engine::Manual
         });
         Ok(())
-    }
-
-    fn add_skill_dir(&mut self, path: &str, mode: Mode) {
-        match self.skill_dirs.iter_mut().find(|d| d.path == path) {
-            Some(d) => d.mode = d.mode.max(mode),
-            None => self.skill_dirs.push(SkillDir {
-                path: path.into(),
-                mode,
-            }),
-        }
     }
 
     fn add_bundled(&mut self, kit: &str, name: &str, source: &str, optional: bool) -> Result<()> {
@@ -548,7 +538,10 @@ pub fn resolve_for(
                     merged.add_volume(&k.name, path, *tmpfs, mode)?;
                 }
                 CapBody::HostMount { path, mode } => merged.add_host_mount(k, path, mode)?,
-                CapBody::AgentSkills { path, mode } => merged.add_skill_dir(path, *mode),
+                CapBody::AgentSkills { path, mode } => merged.skill_dirs.push(SkillDir {
+                    path: path.clone(),
+                    mode: *mode,
+                }),
                 CapBody::AgentSkill { source, name } => {
                     merged.add_bundled(&k.name, name, source, cap.optional)?;
                 }
