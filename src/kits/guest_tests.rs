@@ -720,6 +720,17 @@ fn startup_scripts_only_quote_the_kit_name() {
     );
 }
 
+/// A background hook holds none of its caller's fds: an exec waits for its output pipes to close,
+/// and the engine launch (`start_engine`) runs this script outside the runner.
+#[test]
+fn a_background_hook_lets_go_of_the_callers_stdio() {
+    let s = startup_script("k", &[&background("sleep 9")]);
+    assert!(
+        s.contains(&format!(" </dev/null >>{STARTUP_LOG} 2>&1 &\n")),
+        "{s}"
+    );
+}
+
 /// A temp `startup.d` and log, and the runner pointed at them.
 struct Startup {
     d: tempfile::TempDir,
@@ -732,12 +743,14 @@ impl Startup {
         let d = tempfile::tempdir().unwrap();
         let dir = d.path().join("startup.d");
         std::fs::create_dir(&dir).unwrap();
+        let log = d.path().join("log").display().to_string();
         for (file, kit, hooks) in scripts {
-            std::fs::write(dir.join(file), startup_script(kit, hooks)).unwrap();
+            let script = startup_script(kit, hooks).replace(STARTUP_LOG, &log);
+            std::fs::write(dir.join(file), script).unwrap();
         }
         let runner = STARTUP_RUNNER
             .replace(STARTUP_DIR, &dir.display().to_string())
-            .replace(STARTUP_LOG, &d.path().join("log").display().to_string());
+            .replace(STARTUP_LOG, &log);
         Startup { d, runner }
     }
 
