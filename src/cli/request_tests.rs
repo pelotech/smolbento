@@ -55,6 +55,60 @@ fn kit_pins_apply_beneath_kit_args() {
     }
 }
 
+/// tck: sbx@1/environment-expanded, sbx@1/environment-authoritative. `${{ kit.env.* }}` sees the
+/// sandbox's runtime-owned values, not the user's or a kit export's: the id is the one the machine
+/// gets and `sbx.id` keeps.
+#[test]
+fn kit_env_expands_to_the_runtime_owned_values() {
+    let dir = tempfile::tempdir().unwrap();
+    std::fs::write(
+        dir.path().join("spec.yaml"),
+        "schemaVersion: \"2\"\nkind: mixin\nname: ids\nenvironment:\n  variables:\n    \
+         SANDBOX_NAME: exported\n    IS_SANDBOX: \"0\"\nsetup:\n  install:\n    - command: echo \
+         id=${{ kit.env.SANDBOX_ID }} name=${{ kit.env.SANDBOX_NAME }} \
+         is=${{ kit.env.IS_SANDBOX }} ws=${{ kit.env.WORKSPACE_DIR }}\n",
+    )
+    .unwrap();
+    let mut t = kit_env();
+    creatable_as(&t, "shell-proj");
+    let kit = dir.path().display().to_string();
+    let shell = v2_fixture("shell-workload");
+    t.sbt(&[
+        "create",
+        &shell,
+        ".",
+        "--kit",
+        &kit,
+        "-e",
+        "SANDBOX_ID=mine",
+        "-e",
+        "SANDBOX_NAME=mine",
+    ])
+    .unwrap();
+    let create = t.create_line();
+    let id = create
+        .split(" --label sbx.id=")
+        .nth(1)
+        .and_then(|s| s.split(' ').next())
+        .expect(&create);
+    assert!(create.contains(&format!("-e SANDBOX_ID={id} ")), "{create}");
+    assert!(create.contains("-e SANDBOX_NAME=shell-proj "), "{create}");
+    assert!(create.contains("-e IS_SANDBOX=1 "), "{create}");
+    assert!(
+        !create.contains("exported") && !create.contains("IS_SANDBOX=0"),
+        "{create}"
+    );
+    let ws = t.ctx.cwd.display().to_string();
+    let want = format!("id={id} name=shell-proj is=1 ws={ws}");
+    let lines = t.calls();
+    assert!(
+        lines
+            .iter()
+            .any(|l| l.contains("machine exec") && l.contains(&want)),
+        "{want}: {lines:#?}"
+    );
+}
+
 #[test]
 fn kit_pins_apply_to_a_workload_kit() {
     let dir = tempfile::tempdir().unwrap();
@@ -234,7 +288,8 @@ fn a_workload_kit_named_claude_gets_no_preset_variables() {
     let create = t.create_line();
     assert!(create.contains("-e SBX_AGENT=claude"), "{create}");
     assert!(!create.contains("SBX_CRED_"), "{create}");
-    assert!(!create.contains("IS_SANDBOX"), "{create}");
+    // Runtime-owned, so in every sandbox.
+    assert!(create.contains("-e IS_SANDBOX=1"), "{create}");
 }
 
 #[test]

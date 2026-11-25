@@ -9,6 +9,7 @@ fn hook(cmd: HookCmd, env: &[&str]) -> Hook {
         env: env.iter().map(|s| s.to_string()).collect(),
         background: false,
         clean_env: true,
+        listed_runtime_env: false,
     }
 }
 
@@ -109,6 +110,54 @@ fn hook_script_keeps_ca_vars_only_when_set() {
         String::from_utf8_lossy(&out.stdout),
         "/run/smolvm/ca bundle.pem|unset||unset\n"
     );
+}
+
+/// tck: sbx@1/environment-hooks. Install and startup hooks get the runtime-owned names only when
+/// they list them; everything else a startup hook inherits stays.
+#[test]
+fn hooks_get_runtime_owned_names_only_when_listed() {
+    let echo = HookCmd::Shell(
+        "echo \"${SANDBOX_NAME-unset}|${SANDBOX_ID-unset}|${WORKSPACE_DIR-unset}|\
+         ${IS_SANDBOX-unset}|${BAR-unset}\""
+            .into(),
+    );
+    let startup = |env: &[&str]| Hook {
+        clean_env: false,
+        listed_runtime_env: true,
+        ..hook(echo.clone(), env)
+    };
+    let install = |env: &[&str]| hook(echo.clone(), env);
+    let run = |h: &Hook| {
+        let out = Command::new("sh")
+            .arg("-c")
+            .arg(hook_script(h))
+            .env("SANDBOX_NAME", "n")
+            .env("SANDBOX_ID", "i")
+            .env("WORKSPACE_DIR", "/w")
+            .env("IS_SANDBOX", "1")
+            .env("BAR", "b")
+            .output()
+            .unwrap();
+        assert!(out.status.success(), "{out:?}");
+        String::from_utf8(out.stdout).unwrap()
+    };
+    assert_eq!(run(&startup(&[])), "unset|unset|unset|unset|b\n");
+    assert_eq!(
+        run(&startup(&["WORKSPACE_DIR", "SANDBOX_ID"])),
+        "unset|i|/w|unset|b\n"
+    );
+    assert_eq!(run(&install(&[])), "unset|unset|unset|unset|unset\n");
+    assert_eq!(
+        run(&install(&[
+            "SANDBOX_NAME",
+            "SANDBOX_ID",
+            "WORKSPACE_DIR",
+            "IS_SANDBOX"
+        ])),
+        "n|i|/w|1|unset\n"
+    );
+    // A v2 hook (no `env` to list them in) inherits them all, as in sbx.
+    assert_eq!(run(&full_env(echo.clone())), "n|i|/w|1|b\n");
 }
 
 #[test]

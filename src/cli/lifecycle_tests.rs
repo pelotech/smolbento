@@ -179,22 +179,21 @@ fn create_builds_the_machine_from_the_preset() {
     );
     assert_eq!(pair("--cpus"), vec!["2"]);
     assert_eq!(pair("--mem"), vec!["4096"]);
-    // The user's -e first, then sbx's sandbox variables (SANDBOX_ID is a fresh UUID).
+    // The user's -e first, then the sandbox's (SANDBOX_ID is a fresh UUID, kept as sbx.id).
     let mut env = pair("-e");
-    let id = env.remove(3);
-    assert!(
-        id.starts_with("SANDBOX_ID=") && id.len() == "SANDBOX_ID=".len() + 36,
-        "{id}"
-    );
+    let id = env.remove(2);
+    let id = id.strip_prefix("SANDBOX_ID=").expect(&id);
+    assert_eq!(id.len(), 36, "{id}");
+    assert!(pair("--label").contains(&format!("sbx.id={id}")));
     assert_eq!(
         env,
         vec![
             "A=1".to_string(),
             "SANDBOX_NAME=claude-proj".into(),
-            "SANDBOX_VM_ID=claude-proj".into(),
             format!("WORKSPACE_DIR={ws}"),
-            // The default stand-in declares no credential, so no mode; IS_SANDBOX is the
-            // image's own.
+            "IS_SANDBOX=1".into(),
+            "SANDBOX_VM_ID=claude-proj".into(),
+            // The default stand-in declares no credential, so no mode.
             "SBX_AGENT=claude".into(),
         ]
     );

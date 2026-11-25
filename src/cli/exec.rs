@@ -162,6 +162,32 @@ mod tests {
         );
     }
 
+    /// tck: sbx@1/environment-authoritative. An exec's overrides of the runtime-owned names, empty
+    /// ones too, are dropped: the process gets the machine's values.
+    #[test]
+    fn exec_drops_overrides_of_runtime_owned_names() {
+        let mut t = test_env(&[]);
+        t.running_proj();
+        t.runner().interactive_exit(0);
+        let args = [
+            "exec",
+            "-i",
+            "-e",
+            "SANDBOX_ID=x",
+            "-e",
+            "A=1",
+            "-e",
+            "WORKSPACE_DIR=",
+            "claude-proj",
+            "env",
+        ];
+        t.sbt(&args).unwrap();
+        assert_eq!(
+            t.runner().interactive_calls()[0].join(" "),
+            "machine exec --name sbx-claude-proj -u agent -w /w/proj -e A=1 -i -- env"
+        );
+    }
+
     #[test]
     fn exec_defaults_to_a_v3_workloads_image_user() {
         let mut t = test_env(&[]);

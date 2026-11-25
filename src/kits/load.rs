@@ -671,6 +671,21 @@ mod tests {
         assert!(!line.contains('#'), "{line}");
         let kit = v3::parse(yaml, Source::Local("kits/nix".into())).unwrap();
         assert_eq!(kit.name, "nix");
+        // tck: sbx@1/environment-hooks: a hook reading WORKSPACE_DIR must list it to get it.
+        let readers: Vec<_> = kit
+            .caps
+            .iter()
+            .filter_map(|c| match &c.body {
+                crate::kits::model::CapBody::Lifecycle(l) => Some(&l.startup),
+                _ => None,
+            })
+            .flatten()
+            .filter(|h| format!("{:?}", h.command).contains("WORKSPACE_DIR"))
+            .collect();
+        assert!(!readers.is_empty());
+        for h in readers {
+            assert!(h.env.contains(&"WORKSPACE_DIR".to_string()), "{h:?}");
+        }
     }
 
     #[test]

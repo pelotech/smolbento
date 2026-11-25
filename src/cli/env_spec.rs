@@ -158,7 +158,8 @@ pub fn spec(
         .filter_map(|s| Some((s.name.clone(), s.url.clone()?)))
         .collect();
 
-    let env: Vec<(String, String)> = f.env.clone().unwrap_or_default().into_iter().collect();
+    let mut env: Vec<(String, String)> = f.env.clone().unwrap_or_default().into_iter().collect();
+    crate::sandbox::env::drop_runtime_owned(&mut env);
     let o = f.sandbox_options.as_ref();
     let clone = overrides
         .clone

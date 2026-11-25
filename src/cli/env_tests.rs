@@ -295,12 +295,14 @@ fn sources_are_verified_unless_no_verify() {
 
 #[test]
 fn run_of_an_existing_sandbox_attaches_with_the_files_env() {
-    let mut t = with_file(&FILE.replace("X: one", "X: two"));
+    // tck: sbx@1/environment-authoritative: the session's runtime-owned names are the sandbox's.
+    let mut t = with_file(&FILE.replace("X: one", "X: two\n  SANDBOX_NAME: mine"));
     t.project("running");
     t.runner().interactive_exit(0);
     assert_eq!(t.sbt(&["env", "run", "-f"]).unwrap(), 0);
     let exec = t.runner().interactive_calls()[0].join(" ");
     assert!(exec.contains("-e X=two"), "{exec}");
+    assert!(!exec.contains("SANDBOX_NAME"), "{exec}");
     assert!(creates(&t).is_empty());
     assert!(scoped(&t).is_empty());
 }
@@ -525,6 +527,18 @@ fn plan_of_a_fresh_environment() {
     insta::assert_snapshot!(plan(&mut t));
     assert!(creates(&t).is_empty());
     assert_eq!(record(&t), None, "a plan records nothing");
+}
+
+/// tck: sbx@1/environment-authoritative. A file's value for a runtime-owned name is dropped once,
+/// as the file is read: the plan doesn't list it as applied, and neither the create nor the
+/// session gets it (so `env run` warns once, not once for each).
+#[test]
+fn a_files_runtime_owned_names_are_dropped_when_read() {
+    let mut t = with_file(&FILE.replace("X: one", "X: one\n  SANDBOX_NAME: mine"));
+    t.no_machine();
+    let out = plan(&mut t);
+    assert!(out.contains("X"), "{out}");
+    assert!(!out.contains("SANDBOX_NAME"), "{out}");
 }
 
 #[test]

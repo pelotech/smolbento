@@ -3,7 +3,7 @@ use super::*;
 /// A shell loop printing `NAME=value` for each sbx sandbox variable, run in the guest by `exec`
 /// and `run`.
 pub(crate) const SBX_VARS: &str = "for v in SANDBOX_NAME SANDBOX_VM_ID SANDBOX_ID WORKSPACE_DIR SBX_AGENT \
-                        SBX_CRED_ANTHROPIC_MODE; do eval \"echo $v=\\$$v\"; done";
+                        SBX_CRED_ANTHROPIC_MODE IS_SANDBOX; do eval \"echo $v=\\$$v\"; done";
 
 pub(crate) fn sbx_vars(out: &str) -> std::collections::BTreeMap<String, String> {
     out.lines()
@@ -38,10 +38,32 @@ pub(crate) fn sbx_sandbox_variables_reach_the_agent_exec_and_forks() {
     assert_eq!(exec["SBX_AGENT"], "shell", "{exec:?}");
     // sbx 0.53's shell kit declares no credentials, so it has no modes.
     assert_eq!(exec["SBX_CRED_ANTHROPIC_MODE"], "", "{exec:?}");
+    assert_eq!(exec["IS_SANDBOX"], "1", "{exec:?}");
 
     // The agent (the shell kit's login shell) sees the same values.
     let agent = sbx_vars(&e.ok(&["run", "--name", &e.name, "--", "-c", SBX_VARS]));
     assert_eq!(agent, exec, "the agent's variables match exec's");
+
+    // tck: sbx@1/environment-authoritative: an exec can't override the runtime-owned names, and
+    // the id outlives a restart.
+    let args = [
+        "exec",
+        "-e",
+        "SANDBOX_ID=mine",
+        "-e",
+        "IS_SANDBOX=",
+        &e.name,
+        "sh",
+        "-c",
+        SBX_VARS,
+    ];
+    assert_eq!(sbx_vars(&e.ok(&args)), exec, "-e is ignored for them");
+    e.ok(&["stop", &e.name]);
+    assert_eq!(
+        sbx_vars(&e.sh_ok(&e.name, SBX_VARS)),
+        exec,
+        "the same after a restart"
+    );
 
     // A mountless sandbox can be forked. Set up as `create_alpine` does, plus the guest workdir
     // (sbx images have it; Alpine doesn't).

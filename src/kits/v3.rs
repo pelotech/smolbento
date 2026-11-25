@@ -1070,6 +1070,7 @@ fn lifecycle(c: LifecycleCfg) -> Result<Lifecycle> {
         env: h.env,
         background: h.background.unwrap_or(false),
         clean_env: false,
+        listed_runtime_env: false,
     };
     Ok(Lifecycle {
         interactive: c.interactive.is_some(),

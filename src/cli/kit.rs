@@ -580,9 +580,14 @@ fn add_running<R: Runner>(
         ..Default::default()
     });
     // The image's `Env` and the create's `-e` aren't kept with the sandbox: `${{ kit.env.* }}`
-    // reads the kits' exports only here.
+    // reads the kits' exports and the sandbox's runtime-owned values only here (no id: missing).
+    let id = rec.id.as_deref().unwrap_or_default();
+    let runtime: Vec<_> = sandbox::env::runtime_env(&sb.meta.name, id, &sb.workdir())
+        .into_iter()
+        .filter(|(_, v)| !v.is_empty())
+        .collect();
     let hosted = sb.meta.egress.is_some();
-    let plan = resolve_for(workload, mixins, values, &sb.workdir(), &[], hosted)?;
+    let plan = resolve_for(workload, mixins, values, &sb.workdir(), &runtime, hosted)?;
     plan.warn_skipped();
 
     // In memory until approved.

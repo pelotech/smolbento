@@ -39,6 +39,7 @@ pub fn start_engine<R: Runner>(vm: &Smolvm<R>, machine: &str, user: &str) -> Res
         env: vec![],
         background: true,
         clean_env: false,
+        listed_runtime_env: false,
     };
     vm.exec_captured(&ExecSpec::sh(
         machine,

@@ -65,7 +65,7 @@ const CLEAN_ENV: &[&str] = &[
 /// A hook's command line, run as the hook's user (`exec -u`, or `as_user` in a startup script).
 /// A `clean_env` hook (v3 install) gets sbx's `env -i` with only the `CLEAN_ENV` and `CA_ENV` vars
 /// that are set in the guest and its declared env vars; any other hook inherits the container's
-/// environment, as in sbx.
+/// environment, as in sbx, less the runtime-owned names it doesn't list when `listed_runtime_env`.
 pub fn hook_script(h: &Hook) -> String {
     let mut s = String::new();
     if h.clean_env {
@@ -78,6 +78,12 @@ pub fn hook_script(h: &Hook) -> String {
             s.push_str(&format!(r#" ${{{v}+{v}="${v}"}}"#));
         }
         s.push(' ');
+    }
+    if h.listed_runtime_env {
+        let owned = crate::sandbox::env::RUNTIME_OWNED.iter();
+        for v in owned.filter(|v| !h.env.iter().any(|e| e == *v)) {
+            s.push_str(&format!("env -u {v} "));
+        }
     }
     match &h.command {
         HookCmd::Shell(c) => s.push_str(&format!("sh -c {}", sh_quote(c))),

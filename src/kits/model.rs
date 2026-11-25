@@ -399,6 +399,10 @@ pub struct Hook {
     /// sbx's v3 install-hook environment: `env -i` with a small baseline plus the declared `env`.
     /// Set when hooks are merged (`resolve::add_lifecycle`); a parsed hook has it off.
     pub clean_env: bool,
+    /// sbx@1: the runtime-owned names (`sandbox::env::RUNTIME_OWNED`) reach the hook only when its
+    /// `env` lists them. Set on v3 startup hooks when merged; a `clean_env` hook gets only what it
+    /// lists anyway.
+    pub listed_runtime_env: bool,
 }
 
 /// A hook's command, read from a v3 `lifecycle@1` config as a string or an argv list.

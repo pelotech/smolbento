@@ -69,6 +69,7 @@ fn install_script() -> String {
         env: vec![],
         background: false,
         clean_env: true,
+        listed_runtime_env: false,
     };
     format!("cd / && {}", guest::hook_script(&h))
 }
@@ -1268,6 +1269,37 @@ fn add_runs_install_hooks_in_the_recorded_image_workdir() {
         install_script().replacen("cd / ", "cd '/x' ", 1)
     );
     assert!(dev_calls(&t).contains(&want), "{:#?}", dev_calls(&t));
+}
+
+/// tck: sbx@1/environment-expanded. A kit added later expands the runtime-owned names to the
+/// sandbox's own values; one from before `sbx.id` has no id to give.
+#[test]
+fn add_expands_the_sandboxs_runtime_owned_values() {
+    const IDS_KIT: &str = r#"{"schemaVersion":"3","kind":"mixin","name":"ids",
+        "capabilities":[{"type":"com.docker.sandbox/lifecycle@1","config":{"install":[{"command":
+          "echo ${{ kit.env.SANDBOX_ID }} ${{ kit.env.SANDBOX_NAME }} ${{ kit.env.IS_SANDBOX }}"}]}}]}"#;
+    let mut t = kit_env();
+    set_policy(&t, "mode = \"deny-all\"\n");
+    dev_sandbox_labeled(
+        &t,
+        "running",
+        &[("sbx.agent", "shell"), ("sbx.id", "ID-1")],
+        &base(),
+    );
+    v3_kit(&t, "ids", IDS_KIT, &[]);
+    t.sbt(&["kit", "add", "dev", "./ids", "--yes"]).unwrap();
+    let calls = dev_calls(&t);
+    assert!(
+        calls.iter().any(|c| c.contains("echo ID-1 dev 1")),
+        "{calls:#?}"
+    );
+
+    let mut t = kit_env();
+    set_policy(&t, "mode = \"deny-all\"\n");
+    dev_sandbox_labeled(&t, "running", &[("sbx.agent", "shell")], &base());
+    v3_kit(&t, "ids", IDS_KIT, &[]);
+    let err = t.sbt(&["kit", "add", "dev", "./ids", "--yes"]).unwrap_err();
+    assert!(format!("{err:#}").contains("SANDBOX_ID"), "{err:#}");
 }
 
 #[test]
