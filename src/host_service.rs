@@ -624,6 +624,7 @@ fn render_plist(
             ),
         ),
     };
+    // ThrottleInterval is launchd's minimum: the default 10 s made each `kickstart -k` wait it out.
     format!(
         r#"<?xml version="1.0" encoding="UTF-8"?>
 <!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
@@ -637,7 +638,9 @@ fn render_plist(
   <key>EnvironmentVariables</key>
   <dict>
 {env}  </dict>
-{log}{inetd}  <key>Sockets</key>
+{log}{inetd}  <key>ThrottleInterval</key>
+  <integer>1</integer>
+  <key>Sockets</key>
   <dict>
     <key>Listeners</key>
     <dict>
@@ -1008,6 +1011,7 @@ mod tests {
             "<key>SockServiceName</key>\n      <string>47331</string>",
             "<key>SockType</key>\n      <string>stream</string>",
             "<key>SockFamily</key>\n      <string>IPv4</string>",
+            "<key>ThrottleInterval</key>\n  <integer>1</integer>",
         ] {
             assert!(p.contains(want), "{want}: {p}");
         }
