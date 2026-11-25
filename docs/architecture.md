@@ -65,6 +65,7 @@ other session is live, unless the sandbox was started with `run -d`.
 | `src/workspace/` | Workspace paths and mounts; `clone.rs` is clone mode on the host |
 | `src/config.rs` | Paths and settings |
 | `src/policy/` | Network rules, presets, compilation to smolvm flags |
+| `src/egress/` | Hosted egress: the per-sandbox `_serve egress` process that enforces network and request rules and swaps secrets |
 | `src/secrets/` | Secret sources, stores, resolution at start |
 | `src/kits/` | Kit files: load, resolve, compose the image, apply; registry pulls |
 | `src/env/` | `sbxenv.yaml` environment files |
@@ -76,5 +77,6 @@ other session is live, unless the sandbox was started with `run -d`.
 | `src/ssh_agent/` | SSH agent forwarding: grants, label, filtering proxy |
 | `src/ssh/` | The `~/.ssh/config` block `setup ssh` manages; the SSH server `ssh proxy` runs (sessions on a pty, `-L` forwards) |
 | `src/util.rs` | Leaf helpers: shell quoting, hashing, size parsing |
+| `src/log.rs` | `SMOLBENTO_LOG` and `-D`: step spans and timings on stderr |
 
 Later phases are listed in [Development status](development-status.md).

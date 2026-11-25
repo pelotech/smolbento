@@ -22,7 +22,7 @@ no background process. Each command calls smolvm directly. See
  │  bento secret set anthropic ──▶ OS keychain, 1Password ref or a command             │
  │                                    │ read at each start; never written to disk      │
  │                                    ▼                                                │
- │  smolvm, outside the VM                                                             │
+ │  bento's egress process and smolvm, outside the VM                                  │
  │   ├─ network policy: allowed hosts only, everything else refused ──▶ the internet   │
  │   ├─ credential swap: placeholder ──▶ real key, only on HTTPS to that service       │
  │   └─ hypervisor                                                                     │
@@ -35,8 +35,8 @@ no background process. Each command calls smolvm directly. See
  ───────────────────────────────────────────────────────────────────────────────────────
 ```
 
-- **Secrets:** the agent holds a placeholder. smolvm puts the real value in only on HTTPS requests
-  to that service's hosts, so a leaked environment or prompt-injected `curl` gets nothing useful.
+- **Secrets:** the agent holds a placeholder. bento's egress process puts the real value in only on
+  HTTPS requests to that service's hosts, so a leaked environment or prompt-injected `curl` gets nothing useful.
 - **Network:** each sandbox gets a policy (`balanced`, `deny-all` or `allow-all`, plus your rules),
   enforced outside the VM. Blocked requests show in `bento policy log`.
 - **MicroVM:** a separate kernel per sandbox. The agent can be root inside without touching the

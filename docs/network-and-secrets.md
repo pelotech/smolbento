@@ -293,7 +293,7 @@ bento policy deny network --sandbox claude-myrepo github.com --method POST --pat
     too.
   - A new ruled host, or one no longer ruled, restarts the sandbox's egress process at its next
     connection. Open connections drop then, that connection among them. The next one starts the
-    process again: at once with systemd, and within 10 s with launchd.
+    process again: at once with systemd, and within 1 s with launchd.
 
 On a ruled host:
 

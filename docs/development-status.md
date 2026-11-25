@@ -1,12 +1,12 @@
 # Development status
 
-Last updated: 2026-11-14.
+Last updated: 2026-11-25.
 
 smolbento is built in phases. Each phase ships on its own.
 
 ## Current state
 
-Phases 0 to 4, 5a to 5h, and 6 to 8 are done. Phases 9 and 10 are planned. Each feature's
+Phases 0 to 4, 5a to 5h, 6 to 8, and hosted egress are done. Phases 9 and 10 are planned. Each feature's
 usage guide is linked from its row in the [Phases](#phases) table.
 
 - Before 1.0, recreate sandboxes after upgrading smolbento ([Install](install.md#upgrading)).
@@ -41,6 +41,7 @@ usage guide is linked from its row in the [Phases](#phases) table.
 | 6c | `sbxenv.yaml` `bindings`, `mcp` url servers, `fuse`, `pullPolicy: never`, `writableEnvFiles`; `gemini` retired | Done |
 | 7 | Kit publishing: `kit pack/push/pull/sign/verify` and `push --sign` (v2 kits; cosign signing) | Done |
 | 8 | The `nix` kit: Nix, direnv and xz for any agent (`--kit nix`), published to GHCR and signed. See [Usage](kits.md#the-nix-kit) | Done |
+| Egress | Hosted egress, the default `network.egress`: bento's own per-sandbox process enforces the network rules, method, path and query rules, and swaps secrets. See [Usage](network-and-secrets.md#hosted-egress) | Done |
 | 9 | `tui` dashboard (bare `bento` opens it on a terminal) | Planned |
 | 10 | Warm-start pool for near-instant creates; Windows | Planned |
 
@@ -70,7 +71,7 @@ usage guide is linked from its row in the [Phases](#phases) table.
 
 ## Needs smolvm support (later decisions)
 
-Changes we'd propose to smolvm. Each item says what smolvm 1.35 lacks and what smolbento does
+Changes we'd propose to smolvm. Each item says what the pinned smolvm lacks and what smolbento does
 meanwhile.
 
 - **`smolvm machine connect NAME PORT`** (stdin and stdout to a guest port). `ssh -L` forwards run
