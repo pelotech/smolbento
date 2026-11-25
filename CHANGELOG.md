@@ -1,5 +1,26 @@
 # Changelog
 
+## [0.41.0](https://github.com/pelotech/smolbento/compare/v0.40.0...v0.41.0) (2026-11-25)
+
+
+### Features
+
+* **kits:** progressive agent-context@2 delivery for mixin text ([#260](https://github.com/pelotech/smolbento/issues/260)) ([fd3e6d5](https://github.com/pelotech/smolbento/commit/fd3e6d54da32a6d4cb59a13dac89640344df3c60))
+* log steps and their timings with SMOLBENTO_LOG ([#261](https://github.com/pelotech/smolbento/issues/261)) ([10f2e4f](https://github.com/pelotech/smolbento/commit/10f2e4f69f0d435e8cb2e99125770404022197d6))
+
+
+### Refactors
+
+* **host-service:** restart the egress job without launchd's 10 s throttle ([#265](https://github.com/pelotech/smolbento/issues/265)) ([345c3c8](https://github.com/pelotech/smolbento/commit/345c3c8e9628031ea61d50be15aeef2321e02682))
+* **kits:** start background hooks without the exec's stdio ([#262](https://github.com/pelotech/smolbento/issues/262)) ([6c66eb9](https://github.com/pelotech/smolbento/commit/6c66eb9a1d424e5566e7ab48a289c12c35ec31c6))
+* share repeated kit, provision and egress code ([#263](https://github.com/pelotech/smolbento/issues/263)) ([e47c1d4](https://github.com/pelotech/smolbento/commit/e47c1d4acba68e63b62079394145794cd0d8b12a))
+
+
+### Chores
+
+* **deps:** update actions/create-github-app-token action to v3.4.0 ([#264](https://github.com/pelotech/smolbento/issues/264)) ([566996e](https://github.com/pelotech/smolbento/commit/566996e23d31056fbace00e1d8b668c51a32f6e7))
+* **smolvm:** run smolvm 1.37.2 ([#258](https://github.com/pelotech/smolbento/issues/258)) ([b7a0529](https://github.com/pelotech/smolbento/commit/b7a0529bafea13e141fe66d2a7bbddaf29823081))
+
 ## [0.40.0](https://github.com/pelotech/smolbento/compare/v0.39.1...v0.40.0) (2026-11-25)
 
 
