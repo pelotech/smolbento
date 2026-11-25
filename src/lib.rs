@@ -8,6 +8,7 @@ pub mod egress;
 pub mod env;
 pub mod host_service;
 pub mod kits;
+pub mod log;
 pub mod mcp;
 pub mod policy;
 pub mod provision;

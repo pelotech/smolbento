@@ -31,7 +31,7 @@ use super::Unsupported;
     about = "Docker Sandboxes (sbx) compatible agent sandboxes on smolvm microVMs"
 )]
 pub struct Cli {
-    /// Print each smolvm command line
+    /// Enable debug logging: each smolvm call, and SMOLBENTO_LOG at info unless set
     #[arg(short = 'D', long, global = true)]
     pub debug: bool,
     /// Docker Cloud sandboxes (not supported)

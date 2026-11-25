@@ -1,8 +1,36 @@
 # Troubleshooting
 
-Start with `bento diagnose`. Add `-D` to any command to print the smolvm commands it runs, for example
-`bento -D run claude`. `bento diagnose --format github-issue` prints the checks as Markdown to paste
-into an issue. It includes paths on your machine, so read it first. Nothing is uploaded.
+Start with `bento diagnose`. Add `-D` to any command to print the smolvm commands it runs and turn
+on the log below at `info`, for example `bento -D run claude`. `bento diagnose --format github-issue`
+prints the checks as Markdown to paste into an issue. It includes paths on your machine, so read it
+first. Nothing is uploaded.
+
+## Logs and timings
+
+`SMOLBENTO_LOG` turns on smolbento's log, on stderr. It takes a level (`info`, `debug`, `trace`) or a
+filter per crate (`smolbento=debug,smolvm_credentials=info`), and wins over `-D`'s `info`. Unset,
+nothing is logged. Stdout, `--json` included, is unchanged. Each step logs its time when it ends:
+every smolvm call (its arguments and exit code) and the phases of `create`, `start`, `run` and
+`exec`: kit resolve and loads, the kit build, the start plan, the boot, setup, install and startup
+steps, the Docker engine, and the host services.
+
+```console
+$ SMOLBENTO_LOG=info bento create shell . 2>bento.log
+$ grep close bento.log
+… INFO bento_create:kit_resolve{sandbox=shell-proj}: smolbento::cli::request: close time.busy=104s …
+… INFO bento_create:provision{sandbox=shell-proj}:create:start{sandbox=shell-proj}:smolvm{cmd=machine start -n sbx-shell-proj --egress-interceptor 127.0.0.1:51558 code=0}: smolbento::smolvm: close time.busy=1.07s …
+…
+```
+
+The log and `-D` name flags, variables and hosts, never secret or environment values: smolvm gets
+those in its environment, which isn't shown. `-e` values, long arguments (scripts, labels) and a
+guest command's arguments are left out (`-- gh (+3 args)`). `h2`, `hyper`, `reqwest` and `rustls`
+stay at `info` unless the filter names them, or a span directive such as `[kit_load]=trace` lifts
+everything inside that span.
+
+`SMOLBENTO_LOG` doesn't reach a hosted sandbox's egress process, so changing it never restarts one.
+That process keeps logging startup errors and denied connections to its `egress.log` (see [Network
+and secrets](network-and-secrets.md)). `SMOLBENTO_LOG` is smolbento's own; sbx has no counterpart.
 
 ## `downloading smolvm from … failed`
 

@@ -18,6 +18,7 @@ use crate::sandbox::{self, CreateRequest, Event, Sandbox, name, session};
 use crate::smolvm::Runner;
 use crate::workspace::clone;
 
+#[tracing::instrument(name = "bento_create", skip_all)]
 pub fn create<R: Runner>(ctx: &mut Ctx<R>, a: &CreateArgs) -> Result<i32> {
     check_kit_args(&a.targets, &a.opts)?;
     let (mut req, workload) = kit_target(ctx, &a.targets, &a.opts, false)?;
@@ -108,6 +109,7 @@ fn memory(mib: u64) -> String {
 }
 
 /// `start NAME` reports one step per sandbox: `○ NAME — starting…`, then `✓ Started NAME`.
+#[tracing::instrument(name = "bento_start", skip_all)]
 pub fn start<R: Runner>(ctx: &mut Ctx<R>, names: &[String]) -> Result<i32> {
     let p = Progress::for_ctx(ctx, false);
     provision::sweep_orphans(ctx);

@@ -12,7 +12,7 @@ Arguments:
 
 Options:
   -D, --debug
-          Print each smolvm command line
+          Enable debug logging: each smolvm call, and SMOLBENTO_LOG at info unless set
 
   -s, --skill <SKILL>
           Add only the named skill (repeatable or comma-separated)

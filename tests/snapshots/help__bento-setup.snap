@@ -12,7 +12,7 @@ Commands:
 
 Options:
   -D, --debug
-          Print each smolvm command line
+          Enable debug logging: each smolvm call, and SMOLBENTO_LOG at info unless set
 
       --no-input
           Never prompt; commands that need an answer fail with the command to run instead

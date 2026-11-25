@@ -12,7 +12,7 @@ Arguments:
 
 Options:
   -D, --debug
-          Print each smolvm command line
+          Enable debug logging: each smolvm call, and SMOLBENTO_LOG at info unless set
 
   -p, --publish <PUBLISH>
           [[127.0.0.1:]HOST:]PORT[/proto]; no host port picks a free one

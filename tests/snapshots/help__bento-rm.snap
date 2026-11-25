@@ -15,7 +15,7 @@ Options:
           Remove every sandbox
 
   -D, --debug
-          Print each smolvm command line
+          Enable debug logging: each smolvm call, and SMOLBENTO_LOG at info unless set
 
   -f, --force
           Don't ask for confirmation

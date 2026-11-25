@@ -77,6 +77,8 @@ pub fn main(args: impl IntoIterator<Item = OsString>) -> Result<i32> {
         None
     };
     let cli = Cli::parse_from(&args);
+    // After the above: a served connection's stderr was the guest's socket.
+    crate::log::init(cli.debug);
     let env: BTreeMap<String, String> = std::env::vars().collect();
     let paths = Paths::from_env(&env)?;
     let (settings, config_error) = Settings::load(&paths, env.clone());

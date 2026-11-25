@@ -519,7 +519,8 @@ fn service_env(
         out.insert(k.into(), v.display().to_string());
     }
     for (k, v) in env {
-        let kept = k.starts_with("SMOLBENTO_")
+        // Not the log level: changing it would rewrite the units, restarting their processes.
+        let kept = (k.starts_with("SMOLBENTO_") && k != crate::log::VAR)
             || [
                 "HOME",
                 "PATH",
@@ -1149,6 +1150,8 @@ mod tests {
             ("PATH", "/bin"),
             ("SMOLBENTO_SSH_AGENT_SOCKET", "/a"),
             ("SMOLBENTO_DATA_DIR", "/ignored"),
+            // A log level must never rewrite (and restart) a running sandbox's units.
+            ("SMOLBENTO_LOG", "debug"),
             ("AWS_SECRET_ACCESS_KEY", "nope"),
             ("SSH_AUTH_SOCK", "/s"),
             ("DISPLAY", ""),
