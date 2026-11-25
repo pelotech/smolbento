@@ -31,6 +31,7 @@ pub fn check_args(a: &RunArgs) -> Result<()> {
     Ok(())
 }
 
+#[tracing::instrument(name = "bento_run", skip_all)]
 pub fn run<R: Runner>(ctx: &mut Ctx<R>, a: &RunArgs) -> Result<i32> {
     super::request::check_kit_args(&a.targets, &a.opts)?;
     let existing = match &a.opts.name {

@@ -8,7 +8,7 @@ Usage: bento skills import [OPTIONS]
 
 Options:
   -D, --debug
-          Print each smolvm command line
+          Enable debug logging: each smolvm call, and SMOLBENTO_LOG at info unless set
 
       --dry-run
           Preview which skills would be imported without copying anything

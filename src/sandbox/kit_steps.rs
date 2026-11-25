@@ -23,6 +23,7 @@ pub enum KitPhase {
 /// hooks, then `after_install` (dropping the install-phase rules), then files, agent context, the
 /// image user's home back from root (when anything ran as root), the `startup.d` scripts, the startup runner and the kits record (written whole). `on` hears
 /// `Install` for each kit: before its first install hook, and after the hooks for kits with none.
+#[tracing::instrument(name = "install_steps", skip_all, fields(steps = steps.install.len()))]
 pub fn apply_kit_steps<R: Runner>(
     vm: &Smolvm<R>,
     sb: &Sandbox,
@@ -251,6 +252,7 @@ pub fn startup_failure_warning<R: Runner>(
 /// kit order that waits for each blocking hook and starts each background one detached at its
 /// position. A failed blocking hook is an error with sbx's text (its output is in the guest's
 /// startup log).
+#[tracing::instrument(name = "startup_steps", skip_all)]
 pub fn run_startup<R: Runner>(vm: &Smolvm<R>, sb: &Sandbox, script: Option<&str>) -> Result<()> {
     let what = "running the kits' startup hooks";
     let out = vm

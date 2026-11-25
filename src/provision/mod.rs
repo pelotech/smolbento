@@ -67,6 +67,7 @@ pub fn first_start_plan<R: Runner>(ctx: &Ctx<R>, meta: &Meta) -> Result<StartPla
     plan_for(ctx, meta, true)
 }
 
+#[tracing::instrument(name = "start_plan", skip_all, fields(sandbox = %meta.name, install))]
 fn plan_for<R: Runner>(ctx: &Ctx<R>, meta: &Meta, install: bool) -> Result<StartPlan> {
     let sandbox = meta.name.as_str();
     // Before the network is compiled, and before the guest runs: the egress process reads the
@@ -187,6 +188,7 @@ pub(crate) fn service_kinds(meta: &Meta) -> Vec<Kind> {
 /// Writes (and loads) the `kinds` units of the sandbox `name`, or removes the other kinds'.
 /// Failures only warn: without a unit the sockets are served while a session is attached only, if
 /// at all.
+#[tracing::instrument(name = "host_services", skip_all, fields(sandbox = %name, kinds = ?kinds))]
 fn sync_services<R: Runner>(ctx: &Ctx<R>, name: &str, kinds: &[Kind], meta: &Meta) {
     let port = meta.egress.as_ref().map(|e| e.port);
     if let Err(e) = ctx.services.sync(name, kinds, port, &ctx.paths, &ctx.env) {
@@ -204,6 +206,7 @@ fn sync_services<R: Runner>(ctx: &Ctx<R>, name: &str, kinds: &[Kind], meta: &Met
 /// Restarts a hosted sandbox's egress process, which resolves its secrets once, as it starts: so
 /// a new value applies, before a start or at once. Open connections drop. Returns false when `sb`
 /// isn't hosted or the restart failed, which only warns.
+#[tracing::instrument(name = "restart_egress", skip_all, fields(sandbox = %sb.name()))]
 pub fn restart_egress<R: Runner>(ctx: &Ctx<R>, sb: &Sandbox) -> bool {
     if sb.meta.egress.is_none() {
         return false;
@@ -339,6 +342,7 @@ pub fn mcp_attachment<R: Runner>(
 /// merge with the user's secrets and their rules join the policy, and their host mounts get a
 /// `--mount` binding or a managed directory (made here). Returns the ids of the rules it added
 /// (see `create`) and the kits' first-start steps.
+#[tracing::instrument(name = "prepare_create", skip_all)]
 pub fn prepare_create<R: Runner>(
     ctx: &Ctx<R>,
     req: &mut CreateRequest,
@@ -492,6 +496,7 @@ pub fn prepare_create<R: Runner>(
         None
     };
     let hosted = setting && smolvm_because.is_none();
+    tracing::info!(hosted, fallback = smolvm_because, "egress");
     // Kits are resolved for hosted egress when it may be used (`may_host`); a fallback found
     // since leaves their request rules unenforced, so refuse them before anything is made.
     if !hosted && let Some(kit) = kits.and_then(Plan::request_rules_kit) {
@@ -743,6 +748,7 @@ pub fn check_free<R: Runner>(ctx: &Ctx<R>, name: &str) -> Result<()> {
 
 /// `create` once the name is known to be free, or with `prepared` steps whose rules are already
 /// in the policy (tests); `on` hears what the start and the kit steps are doing.
+#[tracing::instrument(name = "provision", skip_all, fields(sandbox = %req.name))]
 pub fn create_with<R: Runner>(
     ctx: &Ctx<R>,
     req: &mut CreateRequest,

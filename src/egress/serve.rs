@@ -77,6 +77,8 @@ pub fn run<R: Runner>(ctx: &Ctx<R>, name: &str) -> Result<()> {
         {
             (decision, reason) = step;
         }
+        // Only the name, address and port: the request itself is decided (and logged) by the filter.
+        tracing::debug!(flow = %shown(f), port = f.port, ?decision, %reason, "egress flow");
         if decision == Decision::Deny {
             eprintln!("{}", deny_line(f, &reason));
         }
@@ -89,11 +91,15 @@ pub fn run<R: Runner>(ctx: &Ctx<R>, name: &str) -> Result<()> {
 /// The log line for a denied flow. The name is the guest's, so it's capped at a DNS name's length
 /// and escaped: a newline or terminal escape in an SNI can't forge or hide log lines.
 fn deny_line(f: &Flow, reason: &str) -> String {
-    let host = f.name.as_ref().map_or_else(
+    format!("deny {}:{}: {reason}", shown(f), f.port)
+}
+
+/// The flow's name, capped and escaped (see `deny_line`), or its address.
+fn shown(f: &Flow) -> String {
+    f.name.as_ref().map_or_else(
         || f.ip.to_string(),
         |n| n.chars().take(253).flat_map(char::escape_debug).collect(),
-    );
-    format!("deny {host}:{}: {reason}", f.port)
+    )
 }
 
 /// Values keyed by binding name; a variable with no value stays absent, so its requests fail.

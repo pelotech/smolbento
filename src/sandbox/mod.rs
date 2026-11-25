@@ -203,6 +203,7 @@ pub fn start<R: Runner>(
 }
 
 /// `start`, with `private` deciding whether the bridge's socket directory is safe.
+#[tracing::instrument(name = "start", skip_all, fields(sandbox = %sb.name()))]
 fn start_checked<R: Runner>(
     vm: &Smolvm<R>,
     sb: &Sandbox,
@@ -234,6 +235,7 @@ fn start_checked<R: Runner>(
 /// What follows `machine start`: the guest's hosts file, the clone, then the kits' startup
 /// hooks (a no-op without kits; deferred during a kit first start). A failed blocking startup
 /// hook only warns; a `dockerd@1` engine that doesn't answer fails the start.
+#[tracing::instrument(name = "setup", skip_all)]
 fn setup<R: Runner>(
     vm: &Smolvm<R>,
     sb: &Sandbox,
@@ -348,6 +350,7 @@ pub fn ensure_running<R: Runner>(
 /// sandbox's network without them. A failed first start (the start itself, its setup, or a kit
 /// step) removes the sandbox.
 /// `on` hears what the start and the kit steps are doing.
+#[tracing::instrument(name = "create", skip_all)]
 pub fn create<R: Runner>(
     vm: &Smolvm<R>,
     req: &CreateRequest,
@@ -392,6 +395,7 @@ pub fn create<R: Runner>(
 }
 
 /// Steps 3–8 of the first start (spec "Data flow" 7); the caller removes the sandbox on error.
+#[tracing::instrument(name = "first_start", skip_all)]
 fn first_start<R: Runner>(
     vm: &Smolvm<R>,
     sb: &Sandbox,

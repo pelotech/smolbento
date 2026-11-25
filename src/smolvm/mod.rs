@@ -73,25 +73,47 @@ pub struct ProcessRunner {
     ready: Option<locate::Ready>,
 }
 
-/// A `-D` line: the call as `bento smolvm …`, which runs the same smolvm with the same state, so
-/// it can be pasted.
+/// A `-D` line: the call as `bento smolvm …` (runs the same smolvm on the same state), with what
+/// `shown` leaves out.
 fn trace_line(args: &[String]) -> String {
-    let plain = |a: &str| {
-        !a.is_empty()
+    format!("+ bento smolvm {}", shown(args))
+}
+
+/// A smolvm call as `-D` and `SMOLBENTO_LOG` show it: smolvm's own arguments shell-quoted, but `-e`
+/// values and anything over 64 bytes (scripts, label JSON) left out; after `--` only the program
+/// and a count, as a guest command's arguments can be tokens. Secret values reach smolvm in its
+/// env, which is never shown.
+fn shown(args: &[String]) -> String {
+    let quoted = |a: &str| {
+        let plain = !a.is_empty()
             && a.chars()
-                .all(|c| c.is_ascii_alphanumeric() || "_-./:=@%+,".contains(c))
+                .all(|c| c.is_ascii_alphanumeric() || "_-./:=@%+,".contains(c));
+        if plain {
+            a.to_string()
+        } else {
+            crate::util::sh_quote(a)
+        }
     };
-    let words: Vec<String> = args
+    let end = args.iter().position(|a| a == "--").unwrap_or(args.len());
+    let mut words: Vec<String> = args[..end]
         .iter()
-        .map(|a| {
-            if plain(a) {
-                a.clone()
-            } else {
-                crate::util::sh_quote(a)
-            }
+        .enumerate()
+        .map(|(i, a)| match a.split_once('=') {
+            Some((k, _)) if i > 0 && args[i - 1] == "-e" => format!("{}=…", quoted(k)),
+            _ if a.len() > 64 => format!("…({} bytes)", a.len()),
+            _ => quoted(a),
         })
         .collect();
-    format!("+ bento smolvm {}", words.join(" "))
+    if let Some(guest) = args.get(end + 1..) {
+        words.push("--".into());
+        if let Some((program, rest)) = guest.split_first() {
+            words.push(quoted(program));
+            if !rest.is_empty() {
+                words.push(format!("(+{} args)", rest.len()));
+            }
+        }
+    }
+    words.join(" ")
 }
 
 impl ProcessRunner {
@@ -130,12 +152,15 @@ impl ProcessRunner {
         self
     }
 
-    fn trace(&self, args: &[String]) {
+    /// Every smolvm call starts here: its `-D` line, and its span (for `SMOLBENTO_LOG`), entered
+    /// until the caller drops it. The caller records `code`.
+    fn trace(&self, args: &[String]) -> tracing::span::EnteredSpan {
         if self.debug {
             // Not `eprintln!`: after a hang-up stderr is gone, and the calls that stop or remove
             // the sandbox still have to run.
             let _ = writeln!(std::io::stderr(), "{}", trace_line(args));
         }
+        tracing::info_span!("smolvm", cmd = %shown(args), code = tracing::field::Empty).entered()
     }
 
     /// Every smolvm process starts here: once `ready` holds, smolvm with the runner's env.
@@ -171,7 +196,7 @@ impl ProcessRunner {
     /// Like `run`, for output an untrusted guest controls (the login relay's replay): smolvm is
     /// killed after `timeout`, and an error once stdout passes `cap` bytes. Stderr is dropped.
     pub fn run_bounded(&self, args: &[String], timeout: Duration, cap: usize) -> Result<Output> {
-        self.trace(args);
+        let span = self.trace(args);
         let until = Instant::now() + timeout;
         let mut child = self
             .command(args, &[], &[])?
@@ -204,6 +229,9 @@ impl ProcessRunner {
             let _ = child.kill();
             let _ = child.wait();
         }
+        if let Ok(o) = &out {
+            span.record("code", o.code);
+        }
         out
     }
 
@@ -226,11 +254,12 @@ impl Runner for ProcessRunner {
         env: &[(String, String)],
         remove: &[String],
     ) -> Result<Output> {
-        self.trace(args);
+        let span = self.trace(args);
         let out = self
             .command(args, env, remove)?
             .output()
             .with_context(|| self.spawn_error())?;
+        span.record("code", exit_code(out.status));
         Ok(Output {
             code: exit_code(out.status),
             stdout: String::from_utf8_lossy(&out.stdout).into_owned(),
@@ -245,7 +274,7 @@ impl Runner for ProcessRunner {
         remove: &[String],
         on_line: &mut dyn FnMut(&str),
     ) -> Result<Output> {
-        self.trace(args);
+        let span = self.trace(args);
         let mut child = self
             .command(args, env, remove)?
             .stdout(Stdio::piped())
@@ -268,6 +297,7 @@ impl Runner for ProcessRunner {
             (stdout, stderr)
         });
         let status = child.wait().context("waiting for smolvm")?;
+        span.record("code", exit_code(status));
         Ok(Output {
             code: exit_code(status),
             stdout: String::from_utf8_lossy(&stdout.context("reading smolvm stdout")?).into_owned(),
@@ -288,7 +318,7 @@ impl Runner for ProcessRunner {
 
     fn interactive(&self, args: &[String]) -> Result<i32> {
         use std::os::unix::process::CommandExt;
-        self.trace(args);
+        let span = self.trace(args);
         let mut command = self.base()?;
         command.args(args);
         // A caller with a sandbox to stop or remove ignores the hang-up before calling (see
@@ -306,6 +336,7 @@ impl Runner for ProcessRunner {
         // and a hang-up ends it, not us: we return when it exits.
         let _guard = IgnoreSignals::new(&[libc::SIGINT, libc::SIGHUP]);
         let status = child.wait().context("waiting for smolvm")?;
+        span.record("code", exit_code(status));
         Ok(exit_code(status))
     }
 }
@@ -467,6 +498,33 @@ mod tests {
             trace_line(&args),
             r#"+ bento smolvm exec 'sh -c '\''x'\''' a=b/c:1"#
         );
+    }
+
+    #[test]
+    fn debug_lines_hide_env_values_long_arguments_and_the_guest_commands_arguments() {
+        let args = [
+            "machine",
+            "exec",
+            "-n",
+            "m",
+            "-e",
+            "TOKEN=ghp_x",
+            "--label",
+            &"x".repeat(65),
+            "--",
+            "gh",
+            "auth",
+            "login",
+            "--with-token",
+            "ghp_y",
+        ]
+        .map(String::from);
+        assert_eq!(
+            trace_line(&args),
+            "+ bento smolvm machine exec -n m -e TOKEN=… --label …(65 bytes) -- gh (+4 args)"
+        );
+        let bare = ["exec".to_string(), "--".into()];
+        assert_eq!(trace_line(&bare), "+ bento smolvm exec --");
     }
 
     #[test]

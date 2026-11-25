@@ -63,6 +63,7 @@ type Minter = fn(&str, &RegistryEntry, &str, &[String]) -> Result<String>;
 
 /// Builds the v3 kit directory `dir` and returns the OCI layout it produced, unpacked into the
 /// cache (`<cache>/built/<sha256 of the tar>`).
+#[tracing::instrument(name = "kit_build", skip_all, fields(dir = %dir.display()))]
 pub fn build<R: Runner>(ctx: &Ctx<R>, dir: &Path) -> Result<PathBuf> {
     build_with(ctx, dir, registry_auth::pull_token)
 }

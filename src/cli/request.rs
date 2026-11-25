@@ -242,6 +242,7 @@ pub(crate) fn has_kit_flags(opts: &SandboxOpts) -> bool {
 /// (filling `req`'s image) and the `--kit` mixins, each a step under `KITS`, and resolves them
 /// with the kit args and `req`'s working directory. Touches neither smolvm's machines nor the
 /// policy: `provision::create` applies the plan.
+#[tracing::instrument(name = "kit_resolve", skip_all, fields(sandbox = %req.name))]
 pub(crate) fn kit_plan<R: Runner>(
     ctx: &Ctx<R>,
     req: &mut CreateRequest,
@@ -428,11 +429,13 @@ impl<'a> KitsSection<'a> {
     }
 
     /// Runs `load` (given the hook it calls before a fetch) with `reference`'s step.
+    #[tracing::instrument(name = "kit_load", skip_all, fields(kit = %reference, fetch = tracing::field::Empty))]
     fn fetch(
         &mut self,
         reference: &str,
         load: impl FnOnce(&mut dyn FnMut(load::Fetch)) -> Result<(Kit, bool)>,
     ) -> Result<Kit> {
+        let span = tracing::Span::current();
         let mut step = None;
         let loaded = load(&mut |fetch| {
             self.open_section();
@@ -440,6 +443,7 @@ impl<'a> KitsSection<'a> {
                 load::Fetch::Pull => "pulling",
                 load::Fetch::Build => "building",
             };
+            span.record("fetch", doing);
             step = Some(self.p.step(reference, doing));
         });
         match (loaded, step) {

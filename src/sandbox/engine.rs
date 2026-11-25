@@ -32,6 +32,7 @@ const PROBE_TIMEOUT: Duration = Duration::from_secs(2);
 
 /// Starts the engine unless it runs, waits up to `ENGINE_BOUND` for it to answer, then hands its
 /// socket to `user`'s group unless `user` is root.
+#[tracing::instrument(name = "engine", skip_all)]
 pub fn start_engine<R: Runner>(vm: &Smolvm<R>, machine: &str, user: &str) -> Result<()> {
     let hook = Hook {
         command: HookCmd::Shell(LAUNCH.into()),

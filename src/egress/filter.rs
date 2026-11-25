@@ -118,7 +118,16 @@ impl Filter {
         headers: &HeaderMap,
     ) -> Result<(), String> {
         // The hook has already resolved dot segments and `\`, so the target goes as it is.
-        (self.0.current()).request(host, port, method, target, headers)
+        let result = (self.0.current()).request(host, port, method, target, headers);
+        // The rule id only: the target, its headers and a miss's refusal (which quotes the path)
+        // can carry a token.
+        let rule = result.as_ref().err().and_then(|e| {
+            e.strip_prefix("request denied by policy (rule ")
+                .and_then(|rest| rest.split_once(')'))
+                .map(|(id, _)| id)
+        });
+        tracing::debug!(host = ?host, port, method = ?method, denied = result.is_err(), rule, "egress request");
+        result
     }
 }
 
@@ -332,6 +341,27 @@ mod tests {
         assert!(err.starts_with("request denied by policy (rule "), "{err}");
         assert_eq!(judge(&f, "d.com", "GET"), Ok(()));
         assert_eq!(judge(&f, "other.com", "POST"), Ok(()));
+    }
+
+    #[test]
+    fn the_request_log_names_the_rule_but_never_the_path() {
+        let (_d, paths) = test_paths();
+        let mut p = deny_all();
+        add(&mut p, D::Allow, "a.com", "GET");
+        add(&mut p, D::Deny, "d.com", "POST");
+        save(&paths, &p, 1);
+        let f = Filter(Arc::new(PolicySource::new(&paths, SB)));
+        // A path that looks like a refusal's rule id can't smuggle itself in either.
+        let token = "bot123:SECRET(rule SECRET2)";
+        let (results, log) = crate::log::logged("debug", || {
+            [("a.com", "POST"), ("d.com", "POST")].map(|(host, method)| {
+                f.judge(host, 443, method, &format!("/{token}/x"), &HeaderMap::new())
+            })
+        });
+        assert!(results.iter().all(Result::is_err), "{results:?}");
+        assert!(log.contains("denied=true"), "{log}");
+        assert!(log.contains("rule="), "{log}");
+        assert!(!log.contains("SECRET"), "{log}");
     }
 
     #[test]

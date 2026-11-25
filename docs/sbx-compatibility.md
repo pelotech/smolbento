@@ -39,6 +39,9 @@ smolbento-only:
   them too, with no command to see or remove them.
 - `smolvm ARGS…`. Runs the smolvm smolbento uses (the pinned release it downloads) on its own
   state (`~/.smolbento`), passing ARGS through. sbx has no `smolvm` command.
+- `SMOLBENTO_LOG`. Logs smolbento's steps and their times on stderr
+  ([Troubleshooting](troubleshooting.md#logs-and-timings)). `-D, --debug` (sbx: "Enable debug
+  logging") prints each smolvm call and turns this log on at `info`.
 
 ## Parses, not implemented yet (exit 2)
 

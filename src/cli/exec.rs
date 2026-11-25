@@ -10,6 +10,7 @@ use crate::provision;
 use crate::sandbox::{self, name, options};
 use crate::smolvm::{ExecSpec, Runner};
 
+#[tracing::instrument(name = "bento_exec", skip_all)]
 pub fn exec<R: Runner>(ctx: &mut Ctx<R>, a: &ExecArgs) -> Result<i32> {
     let f = &a.flags;
     super::refuse_as(&[(f.detach, "exec -d")], "is not supported (as in sbx)")?;

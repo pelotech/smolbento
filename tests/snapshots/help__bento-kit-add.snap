@@ -15,7 +15,7 @@ Arguments:
 
 Options:
   -D, --debug
-          Print each smolvm command line
+          Enable debug logging: each smolvm call, and SMOLBENTO_LOG at info unless set
 
       --kit-arg <NAME=VALUE>
           Kit argument: NAME=VALUE, or KIT.NAME=VALUE for one kit (repeatable)
