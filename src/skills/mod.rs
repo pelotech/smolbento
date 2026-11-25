@@ -747,7 +747,7 @@ mod tests {
     }
 
     /// Beyond sbx's table (`request_tests`): a lone `off` directory leaves the store unshared,
-    /// and at one path the widest declared mode wins.
+    /// and at one path the widest declared mode wins (spec agent-skills@1 "Composition").
     /// tck: agent-skills@1/off-honored, agent-skills@1/bundled-with-sharing-off
     #[test]
     fn a_kit_s_off_directory_gets_no_store() {
@@ -757,6 +757,11 @@ mod tests {
             (Shared::None, pa(&[("/o", None)]))
         );
         let widest = [want("/o", Mode::Off), want("/o", Mode::Readwrite)];
+        assert_eq!(
+            planned(Mode::Readwrite, &widest, false),
+            (Shared::Rw, pa(&[("/o", Rw)]))
+        );
+        let widest = [want("/o", Mode::Readonly), want("/o", Mode::Readwrite)];
         assert_eq!(
             planned(Mode::Readwrite, &widest, false),
             (Shared::Rw, pa(&[("/o", Rw)]))

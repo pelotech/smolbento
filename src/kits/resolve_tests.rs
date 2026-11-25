@@ -676,27 +676,22 @@ fn agent_sessions_1_and_2_from_two_kits_are_refused() {
     );
 }
 
-/// Widest declared mode, ordered off, readonly, readwrite (spec agent-skills@1 "Composition").
+/// Each kit's request is kept, in kit order: `skills::plan` merges a path's to the widest mode.
 #[test]
-fn skill_dirs_merge_to_the_widest_mode_and_one_kit_names_a_path_once() {
+fn skill_dirs_keep_each_kits_request_and_one_kit_names_a_path_once() {
     const AS: &str = "com.docker.sandbox/agent-skills@1";
-    let merged = |modes: &[Mode]| {
-        let kits = (modes.iter().enumerate())
-            .map(|(i, m)| mixin(&format!("m{i}")).cap(AS, false, skills_dir("/s", *m)))
-            .collect();
-        run(workload("w"), kits).unwrap().merged.skill_dirs
-    };
-    let dir = |mode| {
-        vec![SkillDir {
-            path: "/s".into(),
-            mode,
-        }]
+    let kits = vec![
+        mixin("m0").cap(AS, false, skills_dir("/s", Mode::Readwrite)),
+        mixin("m1").cap(AS, false, skills_dir("/s", Mode::Readonly)),
+    ];
+    let dir = |mode| SkillDir {
+        path: "/s".into(),
+        mode,
     };
     assert_eq!(
-        merged(&[Mode::Readonly, Mode::Readwrite]),
-        dir(Mode::Readwrite)
+        run(workload("w"), kits).unwrap().merged.skill_dirs,
+        [dir(Mode::Readwrite), dir(Mode::Readonly)]
     );
-    assert_eq!(merged(&[Mode::Off, Mode::Readonly]), dir(Mode::Readonly));
     let k = mixin("k")
         .cap(AS, false, skills_dir("/s", Mode::Readonly))
         .cap(AS, false, skills_dir("/s", Mode::Readwrite));

@@ -1140,7 +1140,7 @@ fn add_indexes_a_mixin_context_beside_the_workspace() {
     t.sbt(&["kit", "add", "dev", "./net", "--yes"]).unwrap();
     let path = "/w/kits-agent-context/net.md";
     assert!(ran(&t, &guest::kit_context_script(path, &["Use net."])));
-    let index = guest::kits_index_script("/w/CLAUDE.md", &[("net".into(), path.into())]);
+    let index = guest::kits_section_script("/w/CLAUDE.md", "", &[("net".into(), path.into())]);
     assert!(ran(&t, &index), "{:#?}", dev_calls(&t));
     // The first kit with agent context settles the sandbox's version.
     let label = format!("machine update -n {MACHINE} --label sbx.agent-context=1");
@@ -1182,7 +1182,7 @@ fn add_indexes_into_a_workload_kits_recorded_agent_file() {
     v3_kit(&t, "net", NET_KIT, &[]);
     t.sbt(&["kit", "add", "dev", "./net", "--yes"]).unwrap();
     let path = "/x/kits-agent-context/net.md";
-    let index = guest::kits_index_script("/x/AGENTS.md", &[("net".into(), path.into())]);
+    let index = guest::kits_section_script("/x/AGENTS.md", "", &[("net".into(), path.into())]);
     assert!(ran(&t, &index), "{:#?}", dev_calls(&t));
 }
 

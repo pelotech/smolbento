@@ -1,7 +1,7 @@
 #!/usr/bin/env bash
 # Conformance adapter: drives smolbento through docs/spec/conformance.md of docker/sandbox-kit-spec.
 # It claims com.docker.sandbox/ssh-agent@1, host-mount@1, lifecycle@1, network-policy@1/@2,
-# agent-context@1, long-running@1, privileged@1 and resources@1, and implements the verbs those
+# agent-context@1/@2, long-running@1, privileged@1 and resources@1, and implements the verbs those
 # checks call. Needs jq (`just conformance` provides it).
 #
 # Environment:
@@ -115,6 +115,7 @@ capabilities)
 		echo com.docker.sandbox/network-policy@1
 		echo com.docker.sandbox/network-policy@2
 		echo com.docker.sandbox/agent-context@1
+		echo com.docker.sandbox/agent-context@2
 		echo com.docker.sandbox/long-running@1
 		echo com.docker.sandbox/privileged@1
 		echo com.docker.sandbox/resources@1

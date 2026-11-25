@@ -199,13 +199,16 @@ without a `directory` counts only in the workload kit.
 
 How the text gets there depends on the `agent-context` version the kits declare:
 
-- **`agent-context@2`** (and a v2 kit's `agentInstructions`): the kits' text is in the file
-  itself, so the agent reads it at startup. It sits between `<!-- sbx:kits-section start -->` and
-  `<!-- sbx:kits-section end -->`, one kit's text after another, a blank line apart.
-- **`agent-context@1`**: the file gets a `## Kits` list between the same two markers, one line per
-  kit saying where its text is. The agent reads a kit's text when it needs it. Text a kit ships as
-  a file (`contentFile`) is listed where the kit's image has it; inline text is written to
-  `kits-agent-context/<kit>.md` beside the agent file.
+- **`agent-context@2`** (and a v2 kit's `agentInstructions`): the workload kit's text, and a
+  mixin's with `delivery: inline`, is in the file itself, so the agent reads it at startup. It sits
+  between `<!-- sbx:kits-section start -->` and `<!-- sbx:kits-section end -->`, one kit's text
+  after another, a blank line apart. A mixin's text is otherwise progressive (`delivery:
+  progressive`, the default): it goes in `kits-agent-context/<kit>.md` beside the agent file,
+  listed in a `## Kits` list after the inline text, one line per kit saying where its text is. The
+  agent reads it when it needs it.
+- **`agent-context@1`**: every kit's text, the workload kit's too, is listed in the `## Kits` list.
+  Text a kit ships as a file (`contentFile`) is listed where the kit's image has it; inline text is
+  written to `kits-agent-context/<kit>.md`.
 
 A sandbox uses one version for all its kits, as the kit spec requires. It is `@2`, unless a kit
 requires `@1` (declares it without `optional: true`). A kit can offer both by declaring each with
@@ -218,14 +221,15 @@ one needs a recreate.
 Text outside the markers is yours and is kept. Unlike sbx, smolbento writes no platform preamble.
 
 - Nothing is written on your machine. A file that would land in a mounted workspace is skipped with
-  a warning.
+  a warning. When only `kits-agent-context` would, a kit with listed text is refused: the spec
+  refuses it rather than putting the text in the file itself.
 - When no kit names a file and the workload kit declares no `agent-context`, mixin instructions are
   dropped (`kit.showWarnings` shows a warning).
 - `kit add` of a kit that names its own file needs a recreate (`recreate required: agent file`): a
   new file gets every kit's instructions, and only a create has them all.
 - A kit can't end the section: a `<!-- sbx:` marker in kit text is written as `&lt;!-- sbx:`.
 - `kit add` puts the new kit's text after what the section holds. If an add fails partway and you
-  run it again, that kit's `@2` text is there twice; remove one copy by hand.
+  run it again, that kit's inline `@2` text is there twice; remove one copy by hand.
 - Files are owned by `agent`, except a file the image already has owned by root, which keeps its
   owner.
 - With `--clone` and a subdirectory workspace, the parent directory is in the clone, so the files
