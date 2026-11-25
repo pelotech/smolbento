@@ -10,6 +10,7 @@ use serde::{Deserialize, Serialize};
 
 use super::valid_name;
 use crate::config::{Paths, Symlink, write_atomic};
+use crate::util::create_private_dir;
 
 pub struct Store {
     pub dir: PathBuf,
@@ -48,7 +49,7 @@ impl Store {
 
     /// Creates the store (0700) so it can be mounted while empty.
     pub fn ensure(&self) -> Result<()> {
-        private_dir(&self.dir)
+        create_private_dir(&self.dir)
     }
 
     /// Valid skill names, sorted. Temp and old directories start with `.` and never list.
@@ -124,7 +125,7 @@ impl Store {
     }
 
     pub fn save_sources(&self, s: &Sources) -> Result<()> {
-        private_dir(&self.meta)?;
+        create_private_dir(&self.meta)?;
         let text = serde_json::to_string_pretty(s)? + "\n";
         write_atomic(
             &self.meta.join("sources.json"),
@@ -133,12 +134,6 @@ impl Store {
             Symlink::Replace,
         )
     }
-}
-
-fn private_dir(dir: &Path) -> Result<()> {
-    fs::create_dir_all(dir).with_context(|| format!("creating {}", dir.display()))?;
-    fs::set_permissions(dir, fs::Permissions::from_mode(0o700))
-        .with_context(|| format!("setting the mode of {}", dir.display()))
 }
 
 /// Moves `new` to `target`, moving an existing `target` aside to `old` first and removing it after.
