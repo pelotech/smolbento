@@ -32,16 +32,10 @@ it.
 
 ## What we haven't verified
 
-The Docker Sandboxes column is our reading of Docker's documentation and of the sbx versions named
-in [sbx compatibility](sbx-compatibility.md). Docker's own documentation is the authority, and sbx
-changes quickly, so a row here can be out of date.
-
-- **Taken from Docker's documentation, not tried by us:** Windows and Ubuntu host support, cloud
-  sandboxes and organization policy. smolbento has none of these to compare against.
-- **Not checked at all:** how sbx is licensed. The table says only how it is distributed.
-- **Measured on specific versions:** command, flag and kit behaviour. The compatibility page names
-  the version for each area, and lists what is
-  [not measured yet](sbx-compatibility.md#not-measured-against-sbx-yet).
-
-If something here is wrong or out of date, please
-[open an issue](https://github.com/pelotech/smolbento/issues) and we'll correct it.
+The sbx column is our reading of Docker's documentation and of the sbx versions named in
+[sbx compatibility](sbx-compatibility.md), which also lists what is
+[not measured yet](sbx-compatibility.md#not-measured-against-sbx-yet). Windows and Ubuntu host
+support, cloud sandboxes and organization policy are from Docker's documentation, not tried by us.
+We haven't checked how sbx is licensed. Docker's documentation is the authority and sbx changes
+quickly, so a row can be out of date. If something here is wrong,
+[open an issue](https://github.com/pelotech/smolbento/issues).

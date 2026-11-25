@@ -25,8 +25,7 @@ brew install pelotech/tap/smolbento
 This installs `smolbento` and links `bento` to it, plus `e2fsprogs` on macOS (smolvm formats
 disks larger than 20 GiB with it). `sbx` and `sbt` aren't linked, so they can't clash with Docker's
 `sbx` or Scala's `sbt`. To use those names, add `alias sbx=bento sbt=bento` to your shell.
-`brew upgrade` picks up new releases. Tap before trusting, as above: Homebrew rejects tapping a tap
-that is already trusted.
+`brew upgrade` picks up new releases.
 
 ## Install from source
 
@@ -60,8 +59,7 @@ cosign verify-blob --bundle "smolbento-$TARGET.tar.gz.sigstore.json" \
 tar xzf "smolbento-$TARGET.tar.gz"
 ```
 
-Linux binaries need glibc 2.28 or newer. On macOS, sandboxes with a disk larger than 20 GiB need `e2fsprogs`
-(`brew install e2fsprogs`); the Homebrew formula installs it for you.
+Linux binaries need glibc 2.28 or newer. On macOS, `brew install e2fsprogs` for disks over 20 GiB.
 
 ## Upgrading
 

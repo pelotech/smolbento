@@ -76,8 +76,8 @@ forces a full rebuild on every switch, and it grows past 40 GB.
 
 ## smolvm versions
 
-smolbento runs the smolvm release pinned in `smolvm.lock`. It downloads it on first use into
-`<smolvm.home>/engine/<version>/`. e2e tests share the home `/tmp/sbt-e2e-<uid>`, apart from your own
+smolbento runs the smolvm release pinned in `smolvm.lock` ([Architecture](architecture.md#shape)).
+e2e tests share the home `/tmp/sbt-e2e-<uid>`, apart from your own
 `~/.smolbento`, and reach smolvm through `bento smolvm`.
 
 - **Try a new release:** `just smolvm-pin 1.36.0`, then `just test` and `just e2e`. Commit
@@ -108,11 +108,9 @@ Runner time savings:
   skipped on docs-only PRs, which passes required checks.
 - Cargo caches (`Swatinem/rust-cache`) are saved from `main` only. A dependency change makes the first
   `main` run slow.
-- Every job has a `timeout-minutes`.
 
-macOS isn't tested in CI. It's expensive, and GitHub's Apple Silicon runners can't boot VMs. Run
-`just test` and `just e2e` on a Mac before merging changes that affect macOS and before merging a
-release PR.
+macOS isn't tested in CI: GitHub's Apple Silicon runners can't boot VMs. Before merging a change
+that affects macOS, or a release PR, run `just test` and `just e2e` on a Mac.
 
 ## Releases
 
