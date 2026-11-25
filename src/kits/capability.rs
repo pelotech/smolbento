@@ -484,11 +484,6 @@ pub fn listed_twice(kit: &str) -> String {
     format!("kit {kit} is listed more than once")
 }
 
-/// Whether a `provides` entry names `name` (any version, either spelling).
-pub fn provides_name(entry: &str, name: &str) -> bool {
-    parse_provide(entry).is_ok_and(|p| p.name == normalize(name))
-}
-
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -633,12 +628,5 @@ mod tests {
         }
         assert_eq!(witness(&req("x")), "x");
         assert_eq!(witness(&req("x >= 1.2")), "x@1.2");
-    }
-
-    #[test]
-    fn provides_name_ignores_version_and_spelling() {
-        assert!(provides_name("docker@1.0.0", "docker"));
-        assert!(provides_name("com.docker.kit/docker", "docker"));
-        assert!(!provides_name("com.example/docker@1", "docker"));
     }
 }

@@ -438,18 +438,9 @@ fn kit_install_steps(
         String::new()
     };
     let mut steps = Vec::new();
-    let mut per_kit: Vec<(&str, usize)> = Vec::new();
+    let mut per_kit: BTreeMap<&str, usize> = BTreeMap::new();
     for (kit, h) in &plan.merged.install_hooks {
-        let n = match per_kit.iter_mut().find(|(k, _)| k == kit) {
-            Some((_, n)) => {
-                *n += 1;
-                *n
-            }
-            None => {
-                per_kit.push((kit, 1));
-                1
-            }
-        };
+        let n = *per_kit.entry(kit).and_modify(|n| *n += 1).or_insert(1);
         let mut h = h.clone();
         h.env.retain(|v| !runtime_only.contains(v));
         // A hook that inherits the sandbox's environment (v2's) would still see them.

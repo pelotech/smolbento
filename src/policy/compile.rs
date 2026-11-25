@@ -108,6 +108,17 @@ pub fn network(
     network_for(policy, Some(sandbox), credential_hosts, host_access, hosted)
 }
 
+/// `network` for a created sandbox, from its labels.
+pub fn network_of(policy: &Policy, meta: &crate::sandbox::Meta) -> NetworkSpec {
+    network(
+        policy,
+        &meta.name,
+        &meta.rec.credential_hosts,
+        meta.rec.host_access,
+        meta.egress.is_some(),
+    )
+}
+
 /// `network` for a sandbox, or with `None` for the global policy alone.
 fn network_for(
     policy: &Policy,

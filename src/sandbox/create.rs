@@ -412,12 +412,7 @@ mod tests {
         assert_eq!(spec.labels["sbx.name"], "claude.repo");
         assert_eq!(spec.labels["sbx.workspace"], "/w/repo");
         assert_eq!(spec.labels["sbx.docker"], "true");
-        let mounts: Vec<String> = spec
-            .to_args()
-            .windows(2)
-            .filter(|w| w[0] == "-v")
-            .map(|w| w[1].clone())
-            .collect();
+        let mounts = flag_values(&spec.to_args(), "-v");
         assert_eq!(
             mounts,
             vec![
@@ -440,8 +435,7 @@ mod tests {
             bridge::host_socket("claude.repo").display()
         );
         assert!(
-            args.windows(2)
-                .any(|w| w[0] == "--mount-socket" && w[1] == socket),
+            flag_values(&args, "--mount-socket").contains(&socket),
             "{args:?}"
         );
         assert!(args.contains(&"sbx.bridge=true".to_string()), "{args:?}");
@@ -500,12 +494,7 @@ mod tests {
         req.host_mounts = vec![("/data/x".into(), "/home/agent/x".into())];
         req.volumes = vec!["/var/lib/docker".into()];
         let spec = spec(&req);
-        let mounts: Vec<String> = spec
-            .to_args()
-            .windows(2)
-            .filter(|w| w[0] == "-v")
-            .map(|w| w[1].clone())
-            .collect();
+        let mounts = flag_values(&spec.to_args(), "-v");
         assert_eq!(
             mounts,
             vec![
@@ -540,12 +529,7 @@ mod tests {
             git_dir: "/w/repo/.git".into(),
         });
         let spec = spec(&req);
-        let mounts: Vec<String> = spec
-            .to_args()
-            .windows(2)
-            .filter(|w| w[0] == "-v")
-            .map(|w| w[1].clone())
-            .collect();
+        let mounts = flag_values(&spec.to_args(), "-v");
         assert_eq!(
             mounts,
             vec![
@@ -597,18 +581,24 @@ mod tests {
         })
     }
 
-    fn agent_mounts(args: &[String]) -> Vec<String> {
+    /// The value after each `flag` in `args`.
+    fn flag_values(args: &[String], flag: &str) -> Vec<String> {
         args.windows(2)
-            .filter(|w| w[0] == "--mount-socket" && w[1].ends_with(":/run/ssh-agent.sock"))
+            .filter(|w| w[0] == flag)
             .map(|w| w[1].clone())
             .collect()
     }
 
+    fn agent_mounts(args: &[String]) -> Vec<String> {
+        let mut v = flag_values(args, "--mount-socket");
+        v.retain(|m| m.ends_with(":/run/ssh-agent.sock"));
+        v
+    }
+
     fn agent_env(args: &[String]) -> Vec<String> {
-        args.windows(2)
-            .filter(|w| w[0] == "-e" && w[1].starts_with("SSH_AUTH_SOCK="))
-            .map(|w| w[1].clone())
-            .collect()
+        let mut v = flag_values(args, "-e");
+        v.retain(|e| e.starts_with("SSH_AUTH_SOCK="));
+        v
     }
 
     /// A runtime grant: the socket, `SSH_AUTH_SOCK` in the sandbox env, and the label.

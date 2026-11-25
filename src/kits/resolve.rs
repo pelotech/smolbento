@@ -1102,49 +1102,33 @@ fn order(workload: &Kit, mixins: Vec<Kit>) -> Result<Vec<Kit>> {
     };
 
     let mut deps: Vec<BTreeSet<usize>> = vec![BTreeSet::new(); all.len()];
-    for (me, k) in all.iter().enumerate() {
-        for s in &k.requires {
-            let r = match capability::parse_require(s) {
-                Ok(r) => r,
-                Err(e) => {
-                    problems.push(format!("{}: {e}", k.label()));
-                    continue;
-                }
-            };
-            match provider(&r, me) {
-                Some(p) => {
+    // Every kit's `requires`, then every kit's `integrates`: they differ only when unmet.
+    for required in [true, false] {
+        for (me, k) in all.iter().enumerate() {
+            for s in if required { &k.requires } else { &k.integrates } {
+                let r = match capability::parse_require(s) {
+                    Ok(r) => r,
+                    Err(e) => {
+                        problems.push(format!("{}: {e}", k.label()));
+                        continue;
+                    }
+                };
+                if let Some(p) = provider(&r, me) {
                     deps[me].insert(p);
-                }
-                None if index.contains_key(&r.name) => problems.push(capability::unmet_version(
-                    k.label(),
-                    s,
-                    &index[&r.name]
+                } else if !required {
+                    let present = offered(&r.name, me);
+                    if !present.is_empty() {
+                        problems.push(capability::integrates_violated(k.label(), s, &present));
+                    }
+                } else if let Some(ps) = index.get(&r.name) {
+                    let offers: Vec<_> = ps
                         .iter()
                         .map(|(i, p)| capability::describe(p, all[*i].label()))
-                        .collect::<Vec<_>>(),
-                )),
-                None => problems.push(capability::unmet(k.label(), s, &r.name)),
-            }
-        }
-    }
-    for (me, k) in all.iter().enumerate() {
-        for s in &k.integrates {
-            let r = match capability::parse_require(s) {
-                Ok(r) => r,
-                Err(e) => {
-                    problems.push(format!("{}: {e}", k.label()));
-                    continue;
+                        .collect();
+                    problems.push(capability::unmet_version(k.label(), s, &offers));
+                } else {
+                    problems.push(capability::unmet(k.label(), s, &r.name));
                 }
-            };
-            let present = offered(&r.name, me);
-            match provider(&r, me) {
-                Some(p) => {
-                    deps[me].insert(p);
-                }
-                None if !present.is_empty() => {
-                    problems.push(capability::integrates_violated(k.label(), s, &present))
-                }
-                None => {}
             }
         }
     }
