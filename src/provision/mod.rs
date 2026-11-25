@@ -376,29 +376,7 @@ pub fn prepare_create<R: Runner>(
     }
     let mut policy = ensure_policy(ctx)?;
     let secrets = SecretsFile::load(&ctx.paths)?;
-    // Internal sandboxes run untrusted code (a kit's build steps): no secrets, not even as
-    // placeholders. The builder only binds stored registry hosts (`req.registries`) below.
-    let services: Vec<String> = if name::is_internal(&req.name) {
-        Vec::new()
-    } else {
-        secrets
-            .services_for(&req.name)
-            .into_iter()
-            .filter(|s| secrets.service(s).is_some())
-            .collect()
-    };
-    req.credentials = credentials(&secrets, &services)?;
-    req.rec.credential_hosts = credential_hosts(&secrets, &services);
-    for (i, host) in req.rec.registries.iter().enumerate() {
-        req.credentials.push(builder::registry_credential(i, host));
-        req.rec.credential_hosts.push(host.clone());
-    }
-    req.rec.credential_hosts.sort();
-    req.rec.credential_hosts.dedup();
-    req.rec.credential_env = req.credentials.iter().map(|c| c.env_var.clone()).collect();
-    req.rec.credential_env.sort();
-    req.rec.credential_env.dedup();
-    req.rec.secrets = services;
+    bind_user_secrets(req, &secrets)?;
     if !name::is_internal(&req.name) {
         // The services the kits declare a credential for get a mode, unless it's inject-only.
         let mut services: Vec<String> = kits
@@ -417,11 +395,7 @@ pub fn prepare_create<R: Runner>(
     }
     // Before the policy is saved or smolvm creates anything. A workload kit named like a built-in
     // agent isn't that agent.
-    let attachment = mcp_attachment(
-        ctx,
-        req,
-        kits.is_none_or(|p| crate::kits::apply::is_builtin_agent(&p.workload)),
-    )?;
+    let attachment = mcp_attachment(ctx, req, kits.is_none_or(|p| p.workload.is_builtin_agent()))?;
     let mut added = Vec::new();
     let mut first_start = None;
     if let Some(plan) = kits {
@@ -445,71 +419,9 @@ pub fn prepare_create<R: Runner>(
         });
     }
     if let Some(mcp) = attachment {
-        // A rule that was already there isn't this create's: a failed create leaves it.
-        for host in &mcp.hosts {
-            let (id, new) = policy.insert_rule(
-                Some(&req.name),
-                crate::policy::Decision::Allow,
-                host,
-                crate::policy::MCP_VIA,
-                None,
-                None,
-                None,
-            )?;
-            if new {
-                added.push(id);
-            }
-        }
-        for c in &mcp.credentials {
-            req.rec.credential_hosts.extend(c.hosts.iter().cloned());
-            req.rec.credential_env.push(c.env_var.clone());
-        }
-        req.rec.credential_hosts.sort();
-        req.rec.credential_hosts.dedup();
-        req.rec.credential_env.sort();
-        req.rec.credential_env.dedup();
-        req.credentials.extend(mcp.credentials);
-        req.rec.mcp_secrets = mcp.secrets;
-        req.mcp_servers = Some(mcp.names);
-        if !mcp.steps.is_empty() {
-            // After the kits' install hooks. A sandbox without kits gets a first start for these
-            // steps alone.
-            first_start
-                .get_or_insert_default()
-                .steps
-                .install
-                .extend(mcp.steps);
-        }
+        added.extend(attach_mcp(req, &mut policy, mcp, &mut first_start)?);
     }
-    // A sandbox that can't be hosted falls back to smolvm egress, with the first reason why.
-    let setting = crate::egress::hosted(&ctx.settings, &req.name)?;
-    let smolvm_because = if !setting {
-        None
-    } else if !req.rec.credential_install.is_empty() {
-        // Hosted egress swaps values in bento, where an install-only credential (restarted
-        // away after the install hooks) has no way to be withdrawn yet.
-        Some("install-only credentials need network.egress=smolvm")
-    } else if ctx.services.plan(&req.name).is_none() {
-        // Without its unit nothing would own the interceptor port, so every connection fails.
-        Some("no service manager for its egress unit")
-    } else {
-        None
-    };
-    let hosted = setting && smolvm_because.is_none();
-    tracing::info!(hosted, fallback = smolvm_because, "egress");
-    // Kits are resolved for hosted egress when it may be used (`may_host`); a fallback found
-    // since leaves their request rules unenforced, so refuse them before anything is made.
-    if !hosted && let Some(kit) = kits.and_then(Plan::request_rules_kit) {
-        bail!(
-            "kit {kit}: network-policy@2 method/path rules need hosted egress, but {} uses smolvm \
-             egress: {}",
-            req.name,
-            smolvm_because.unwrap_or("network.egress is smolvm")
-        );
-    }
-    if let Some(why) = smolvm_because {
-        crate::warning!("{why}; creating {} with smolvm egress", req.name);
-    }
+    let hosted = egress_choice(ctx, req, kits)?;
     if !denies.is_empty() {
         added.extend(crate::policy::notes::add_create_denies(
             &mut policy,
@@ -520,71 +432,18 @@ pub fn prepare_create<R: Runner>(
             &req.rec.credential_hosts,
         )?);
     }
-    let wants = skill_wants(kits);
-    let mut bundled: Vec<&crate::kits::resolve::Bundled> =
-        kits.map_or(Vec::new(), |p| p.merged.bundled.iter().collect());
-    if wants.is_empty() {
-        if let Some(b) = bundled.iter().find(|b| !b.optional) {
-            bail!(
-                "kit {}: skill {} needs a skills directory: no agent-skills@1 in this sandbox",
-                b.kit,
-                b.name
-            );
-        }
-        for b in &bundled {
-            eprintln!(
-                "note: kit {}: skipping skill {}: no skills directory in this sandbox",
-                b.kit, b.name
-            );
-        }
-        bundled.clear();
-    }
-    let label = crate::skills::plan(req.skills_mode, &wants, !bundled.is_empty());
-    // A stored skill takes its name in every linking directory before bundled skills are linked
-    // (agent-skill@1/host-conflict), so a required one's clash is known now: refuse it before
-    // anything is made. Image content can clash too, which only the first start sees.
-    if let Some(d) = label
-        .dirs
-        .iter()
-        .find(|d| d.access == crate::skills::Access::Link)
-    {
-        let store = ctx.paths.skills_store();
-        if let Some(b) = bundled
-            .iter()
-            .find(|b| !b.optional && store.join(&b.name).symlink_metadata().is_ok())
-        {
-            bail!(
-                "failed to compose shared skills into the sandbox: bundled skills {} cannot be \
-                 exposed in {}: another skill already uses the name",
-                b.name,
-                d.path
-            );
-        }
-    }
-    // The first start's first step, so it runs before every install hook and after the start's
-    // setup linked the store (a store entry of the same name is then taken). As root, like the
-    // store's links; the script hands the links to the agent.
+    let (label, skills_step) = plan_skills(ctx, req, kits)?;
     // Bundled skills come from kits, and kits always make a first start.
-    debug_assert!(bundled.is_empty() || first_start.is_some());
-    if !bundled.is_empty()
+    debug_assert!(skills_step.is_none() || first_start.is_some());
+    // The bundled skills step runs before every install hook and after the start's setup linked
+    // the store (a store entry of the same name is then taken).
+    if let Some(step) = skills_step
         && let Some(first) = first_start.as_mut()
     {
-        let skills: Vec<(String, String, bool)> = bundled
-            .iter()
-            .map(|b| (b.name.clone(), b.source.clone(), b.optional))
-            .collect();
-        first.steps.install.insert(
-            0,
-            crate::kits::apply::InstallStep {
-                label: "bundled agent skills".into(),
-                kit: None,
-                user: None,
-                script: crate::skills::bundled_script(&label.dirs, &skills),
-                relay_stderr: true,
-            },
-        );
+        first.steps.install.insert(0, step);
     }
-    // The mountless directory, where exec starts: a kit workload's image may not have it.
+    // The mountless directory, where exec starts: a kit workload's image may not have it. First,
+    // ahead of the bundled skills step.
     if req.workspaces.is_empty()
         && let Some(first) = first_start.as_mut()
     {
@@ -645,6 +504,189 @@ pub fn prepare_create<R: Runner>(
     Ok((added, first_start))
 }
 
+/// Binds the user's secrets for `req.name` as its credentials, with the builder's registry
+/// logins (`req.rec.registries`).
+fn bind_user_secrets(req: &mut CreateRequest, secrets: &SecretsFile) -> Result<()> {
+    // Internal sandboxes run untrusted code (a kit's build steps): no secrets, not even as
+    // placeholders. The builder only binds stored registry hosts (`req.registries`) below.
+    let services: Vec<String> = if name::is_internal(&req.name) {
+        Vec::new()
+    } else {
+        secrets
+            .services_for(&req.name)
+            .into_iter()
+            .filter(|s| secrets.service(s).is_some())
+            .collect()
+    };
+    req.credentials = credentials(secrets, &services)?;
+    req.rec.credential_hosts = credential_hosts(secrets, &services);
+    for (i, host) in req.rec.registries.iter().enumerate() {
+        req.credentials.push(builder::registry_credential(i, host));
+        req.rec.credential_hosts.push(host.clone());
+    }
+    req.rec.credential_hosts.sort();
+    req.rec.credential_hosts.dedup();
+    req.rec.credential_env = req.credentials.iter().map(|c| c.env_var.clone()).collect();
+    req.rec.credential_env.sort();
+    req.rec.credential_env.dedup();
+    req.rec.secrets = services;
+    Ok(())
+}
+
+/// Adds the `--static-mcp` attachment: its hosts' allow rules, its credentials and its
+/// first-start steps. Returns the ids of the rules it added.
+fn attach_mcp(
+    req: &mut CreateRequest,
+    policy: &mut Policy,
+    mcp: crate::mcp::Attachment,
+    first_start: &mut Option<sandbox::KitFirstStart>,
+) -> Result<Vec<String>> {
+    let mut added = Vec::new();
+    // A rule that was already there isn't this create's: a failed create leaves it.
+    for host in &mcp.hosts {
+        let (id, new) = policy.insert_rule(
+            Some(&req.name),
+            crate::policy::Decision::Allow,
+            host,
+            crate::policy::MCP_VIA,
+            None,
+            None,
+            None,
+        )?;
+        if new {
+            added.push(id);
+        }
+    }
+    for c in &mcp.credentials {
+        req.rec.credential_hosts.extend(c.hosts.iter().cloned());
+        req.rec.credential_env.push(c.env_var.clone());
+    }
+    req.rec.credential_hosts.sort();
+    req.rec.credential_hosts.dedup();
+    req.rec.credential_env.sort();
+    req.rec.credential_env.dedup();
+    req.credentials.extend(mcp.credentials);
+    req.rec.mcp_secrets = mcp.secrets;
+    req.mcp_servers = Some(mcp.names);
+    if !mcp.steps.is_empty() {
+        // After the kits' install hooks. A sandbox without kits gets a first start for these
+        // steps alone.
+        first_start
+            .get_or_insert_default()
+            .steps
+            .install
+            .extend(mcp.steps);
+    }
+    Ok(added)
+}
+
+/// Whether `req` gets hosted egress. Refuses kits' request rules that a fallback to smolvm egress
+/// would leave unenforced.
+fn egress_choice<R: Runner>(
+    ctx: &Ctx<R>,
+    req: &CreateRequest,
+    kits: Option<&Plan>,
+) -> Result<bool> {
+    // A sandbox that can't be hosted falls back to smolvm egress, with the first reason why.
+    let setting = crate::egress::hosted(&ctx.settings, &req.name)?;
+    let smolvm_because = if !setting {
+        None
+    } else if !req.rec.credential_install.is_empty() {
+        // Hosted egress swaps values in bento, where an install-only credential (restarted
+        // away after the install hooks) has no way to be withdrawn yet.
+        Some("install-only credentials need network.egress=smolvm")
+    } else if ctx.services.plan(&req.name).is_none() {
+        // Without its unit nothing would own the interceptor port, so every connection fails.
+        Some("no service manager for its egress unit")
+    } else {
+        None
+    };
+    let hosted = setting && smolvm_because.is_none();
+    tracing::info!(hosted, fallback = smolvm_because, "egress");
+    // Kits are resolved for hosted egress when it may be used (`may_host`); a fallback found
+    // since leaves their request rules unenforced, so refuse them before anything is made.
+    if !hosted && let Some(kit) = kits.and_then(Plan::request_rules_kit) {
+        bail!(
+            "kit {kit}: network-policy@2 method/path rules need hosted egress, but {} uses smolvm \
+             egress: {}",
+            req.name,
+            smolvm_because.unwrap_or("network.egress is smolvm")
+        );
+    }
+    if let Some(why) = smolvm_because {
+        crate::warning!("{why}; creating {} with smolvm egress", req.name);
+    }
+    Ok(hosted)
+}
+
+/// The skills label for `req`, after checking the kits' bundled skills can be linked, and the
+/// install step that links them, if there are any.
+fn plan_skills<R: Runner>(
+    ctx: &Ctx<R>,
+    req: &CreateRequest,
+    kits: Option<&Plan>,
+) -> Result<(
+    crate::skills::Label,
+    Option<crate::kits::apply::InstallStep>,
+)> {
+    let wants = skill_wants(kits);
+    let mut bundled: Vec<&crate::kits::resolve::Bundled> =
+        kits.map_or(Vec::new(), |p| p.merged.bundled.iter().collect());
+    if wants.is_empty() {
+        if let Some(b) = bundled.iter().find(|b| !b.optional) {
+            bail!(
+                "kit {}: skill {} needs a skills directory: no agent-skills@1 in this sandbox",
+                b.kit,
+                b.name
+            );
+        }
+        for b in &bundled {
+            eprintln!(
+                "note: kit {}: skipping skill {}: no skills directory in this sandbox",
+                b.kit, b.name
+            );
+        }
+        bundled.clear();
+    }
+    let label = crate::skills::plan(req.skills_mode, &wants, !bundled.is_empty());
+    // A stored skill takes its name in every linking directory before bundled skills are linked
+    // (agent-skill@1/host-conflict), so a required one's clash is known now: refuse it before
+    // anything is made. Image content can clash too, which only the first start sees.
+    if let Some(d) = label
+        .dirs
+        .iter()
+        .find(|d| d.access == crate::skills::Access::Link)
+    {
+        let store = ctx.paths.skills_store();
+        if let Some(b) = bundled
+            .iter()
+            .find(|b| !b.optional && store.join(&b.name).symlink_metadata().is_ok())
+        {
+            bail!(
+                "failed to compose shared skills into the sandbox: bundled skills {} cannot be \
+                 exposed in {}: another skill already uses the name",
+                b.name,
+                d.path
+            );
+        }
+    }
+    // As root, like the store's links; the script hands the links to the agent.
+    let step = (!bundled.is_empty()).then(|| {
+        let skills: Vec<(String, String, bool)> = bundled
+            .iter()
+            .map(|b| (b.name.clone(), b.source.clone(), b.optional))
+            .collect();
+        crate::kits::apply::InstallStep {
+            label: "bundled agent skills".into(),
+            kit: None,
+            user: None,
+            script: crate::skills::bundled_script(&label.dirs, &skills),
+            relay_stderr: true,
+        }
+    });
+    Ok((label, step))
+}
+
 /// A built-in agent's own `agent-skills@1` directories as read-write requests whatever its kit
 /// says (the user's mode decides, as in sbx; a recorded difference from the spec's `off` default),
 /// then every kit's.
@@ -652,7 +694,7 @@ fn skill_wants(kits: Option<&Plan>) -> Vec<crate::skills::Want> {
     let mut wants = Vec::new();
     if let Some(p) = kits {
         // A built-in agent's own skills directories are the agent's.
-        if matches!(p.workload.source, crate::kits::model::Source::Agent(_)) {
+        if p.workload.is_builtin_agent() {
             wants.extend(p.workload.caps.iter().filter_map(|c| match &c.body {
                 crate::kits::model::CapBody::AgentSkills { path, .. } => {
                     Some(crate::skills::Want {

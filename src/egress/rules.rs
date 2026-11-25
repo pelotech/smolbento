@@ -1,45 +1,42 @@
 //! The egress process's per-flow verdict, from the user's `policy.toml`.
 
-use crate::config::Paths;
-use crate::policy::Policy;
+use super::filter::PolicySource;
 use crate::policy::compile::{HOST_GATEWAY, decide};
 use egress_front::{Decision, Flow};
 use std::net::SocketAddr;
+use std::sync::Arc;
 
-/// One sandbox's rules, read from `policy.toml` on every decision.
+/// One sandbox's rules, from `policy.toml` as `source` last read it (re-read when it changes).
 pub struct Rules {
-    sandbox: String,
+    source: Arc<PolicySource>,
     host_access: bool,
     credential_hosts: Vec<String>,
-    paths: Paths,
 }
 
 impl Rules {
     pub fn new(
-        paths: &Paths,
-        sandbox: &str,
+        source: Arc<PolicySource>,
         host_access: bool,
         credential_hosts: Vec<String>,
     ) -> Rules {
         Rules {
-            sandbox: sandbox.to_string(),
+            source,
             host_access,
             credential_hosts,
-            paths: paths.clone(),
         }
     }
 
     /// The flow's decision and why, for the log.
     pub fn decide(&self, flow: &Flow) -> (Decision, String) {
         // `policy save` writes atomically, so a read never sees half a file.
-        let policy = match Policy::load(&self.paths) {
+        let policy = match self.source.file() {
             Ok(p) => p,
-            Err(e) => return (Decision::Deny, format!("policy.toml unreadable: {e:#}")),
+            Err(e) => return (Decision::Deny, format!("policy.toml unreadable: {e}")),
         };
         let verdict = |target: &str| {
             decide(
                 &policy,
-                &self.sandbox,
+                &self.source.sandbox,
                 &self.credential_hosts,
                 self.host_access,
                 target,
@@ -77,8 +74,8 @@ impl Rules {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::config::test_paths;
-    use crate::policy::Mode;
+    use crate::config::{Paths, test_paths};
+    use crate::policy::{Mode, Policy};
     use Decision::{Allow, Deny};
 
     const SB: &str = "sb";
@@ -106,6 +103,10 @@ mod tests {
             ip: ip.parse().unwrap(),
             port,
         }
+    }
+
+    fn source(p: &Paths) -> Arc<PolicySource> {
+        Arc::new(PolicySource::new(p, SB))
     }
 
     fn ask(r: &Rules, f: &Flow) -> Decision {
@@ -161,7 +162,7 @@ mod tests {
         for (rules, host_access, name, ip, port, want) in cases {
             let (_d, p) = test_paths();
             save(&p, rules);
-            let r = Rules::new(&p, SB, *host_access, vec![]);
+            let r = Rules::new(source(&p), *host_access, vec![]);
             let f = flow(*name, ip, *port);
             assert_eq!(
                 ask(&r, &f),
@@ -175,7 +176,7 @@ mod tests {
     fn a_host_deny_says_deny_rule() {
         let (_d, p) = test_paths();
         save(&p, &[(true, "**.github.com"), (false, "gist.github.com")]);
-        let r = Rules::new(&p, SB, false, vec![]);
+        let r = Rules::new(source(&p), false, vec![]);
         let (d, why) = r.decide(&flow(Some("gist.github.com"), "140.82.1.1", 443));
         assert_eq!(d, Deny);
         assert!(why.contains("deny rule"), "{why}");
@@ -185,7 +186,7 @@ mod tests {
     fn an_unreadable_policy_denies_then_recovers() {
         let (_d, p) = test_paths();
         std::fs::write(p.policy_file(), "mode = [garbage").unwrap();
-        let r = Rules::new(&p, SB, false, vec![]);
+        let r = Rules::new(source(&p), false, vec![]);
         for f in [
             flow(None, "192.0.2.1", 443),
             flow(Some("a.com"), "192.0.2.1", 443),
@@ -201,7 +202,7 @@ mod tests {
     #[test]
     fn a_missing_policy_is_the_default() {
         let (_d, p) = test_paths();
-        let r = Rules::new(&p, SB, false, vec![]);
+        let r = Rules::new(source(&p), false, vec![]);
         // No mode chosen yet: open, as before policies existed.
         assert_eq!(ask(&r, &flow(Some("example.com"), "192.0.2.1", 443)), Allow);
     }
@@ -210,11 +211,32 @@ mod tests {
     fn a_policy_change_applies_to_the_next_flow() {
         let (_d, p) = test_paths();
         save(&p, &[(true, "github.com")]);
-        let r = Rules::new(&p, SB, false, vec![]);
+        let r = Rules::new(source(&p), false, vec![]);
         let f = flow(Some("github.com"), "140.82.1.1", 443);
         assert_eq!(ask(&r, &f), Allow);
         save(&p, &[(false, "github.com")]);
         assert_eq!(ask(&r, &f), Deny);
+    }
+
+    #[test]
+    fn a_save_of_the_same_length_and_time_still_applies() {
+        let (_d, p) = test_paths();
+        save(&p, &[(true, "a.com")]);
+        let r = Rules::new(source(&p), false, vec![]);
+        let f = flow(Some("b.com"), "192.0.2.1", 443);
+        assert_eq!(ask(&r, &f), Deny);
+        let mtime = std::fs::metadata(p.policy_file())
+            .unwrap()
+            .modified()
+            .unwrap();
+        // A coarse-mtime filesystem: same length, same time; only the file (a rename) is new.
+        save(&p, &[(true, "b.com")]);
+        let file = std::fs::File::options()
+            .write(true)
+            .open(p.policy_file())
+            .unwrap();
+        file.set_modified(mtime).unwrap();
+        assert_eq!(ask(&r, &f), Allow);
     }
 
     #[test]
@@ -235,7 +257,7 @@ mod tests {
             )
             .unwrap();
         policy.save(&p).unwrap();
-        let r = Rules::new(&p, SB, false, vec![]);
+        let r = Rules::new(source(&p), false, vec![]);
         let f = flow(Some("registry.npmjs.org"), "104.16.0.1", 443);
         assert_eq!(ask(&r, &f), Allow);
         policy.remove_rules_by_ids(SB, &[id]);

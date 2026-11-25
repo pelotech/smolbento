@@ -90,6 +90,13 @@ pub struct Kit {
 }
 
 impl Kit {
+    /// A built-in agent's published kit (`load::agent`). It gets the SSH agent, the agent name for
+    /// `--static-mcp` and its skills as the agent's own; a kit merely named like one doesn't. (When
+    /// its agent starts is the kit's own `sbx@1`, not this.)
+    pub fn is_builtin_agent(&self) -> bool {
+        matches!(self.source, Source::Agent(_))
+    }
+
     /// A kit with nothing in it but its name, kind and source; set the rest with `..Kit::new(..)`.
     pub fn new(name: &str, kind: Kind, source: Source) -> Kit {
         Kit {

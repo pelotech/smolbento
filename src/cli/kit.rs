@@ -636,13 +636,9 @@ fn add_running<R: Runner>(
     let mut kits = existing.clone();
     kits.extend(req.rec.kits.iter().find(|k| k.name == kit_name).cloned());
     steps.kit_names = kits.iter().map(|k| k.name.clone()).collect();
-    let startup = steps.startup_d.pop().map(|(_, body)| {
-        let file = format!("{:02}-{kit_name}.sh", existing.len() + 1);
-        (format!("{}/{file}", guest::STARTUP_DIR), file, body)
-    });
-    steps.startup_d = startup
-        .iter()
-        .map(|(_, file, body)| (file.clone(), body.clone()))
+    steps.startup_d = (steps.startup_d.pop())
+        .map(|(_, body)| (format!("{:02}-{kit_name}.sh", existing.len() + 1), body))
+        .into_iter()
         .collect();
 
     // Pushes the sandbox's network: this add's install-phase rules are open while they're stored.
@@ -729,8 +725,9 @@ fn add_running<R: Runner>(
             .context("recording the agent-context version in the sandbox's labels")?;
     }
     // Like a create (R30): the kit stays, and each later start warns until its hooks succeed.
-    if let Some((path, _, _)) = &startup
-        && let Err(e) = sandbox::run_startup(&ctx.vm, sb, Some(path))
+    if let Some((file, _)) = steps.startup_d.first()
+        && let Err(e) =
+            sandbox::run_startup(&ctx.vm, sb, Some(&format!("{}/{file}", guest::STARTUP_DIR)))
     {
         crate::warning!(
             "kit {kit_name}'s startup hooks failed: {e:#}; later starts warn until they \

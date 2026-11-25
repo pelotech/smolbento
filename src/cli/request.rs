@@ -402,7 +402,7 @@ impl<'a> KitsSection<'a> {
     ) -> Result<Kit> {
         let sandbox = self.sandbox.clone();
         self.fetch(reference, |before| {
-            load::load_noting(ctx, reference, Some(&sandbox), position, before)
+            load::fetch(ctx, reference, false, Some(&sandbox), position, before)
         })
     }
 

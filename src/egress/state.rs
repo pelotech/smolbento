@@ -4,9 +4,9 @@ use super::{Binding, Label};
 use crate::config::{Paths, Symlink, write_atomic};
 use crate::sandbox::{name, options::free_port};
 use crate::smolvm::Credential;
+use crate::util::create_private_dir;
 use anyhow::{Context, Result, bail};
 use egress_front::{CredentialPolicy, MachineCa, broad_ca, generate_placeholders};
-use std::os::unix::fs::PermissionsExt;
 use std::path::PathBuf;
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -45,8 +45,7 @@ pub fn prepare(paths: &Paths, sandbox: &str, creds: &[Credential]) -> Result<Pre
     let dir = paths.egress(sandbox);
     // A leftover from an earlier create must not leak a stale CA or token.
     forget(paths, sandbox)?;
-    std::fs::create_dir_all(&dir).with_context(|| format!("creating {}", dir.display()))?;
-    std::fs::set_permissions(&dir, std::fs::Permissions::from_mode(0o700))?;
+    create_private_dir(&dir)?;
 
     // Unconstrained: the hosts it decrypts (ruled ones, chosen live) aren't known at create.
     broad_ca(&name::machine_name(sandbox))?.save(&dir.join("ca"))?;
@@ -86,8 +85,7 @@ pub fn copy_for_fork(
     }
     forget(paths, fork)?;
     let copied = (|| {
-        std::fs::create_dir_all(&to).with_context(|| format!("creating {}", to.display()))?;
-        std::fs::set_permissions(&to, std::fs::Permissions::from_mode(0o700))?;
+        create_private_dir(&to)?;
         // The CA and token only: the parent's egress.log stays its own.
         std::fs::create_dir(to.join("ca"))?;
         crate::skills::store::copy_tree(&from.join("ca"), &to.join("ca"))?;
@@ -148,6 +146,7 @@ pub fn policy(label: &Label) -> CredentialPolicy {
 mod tests {
     use super::*;
     use std::collections::BTreeMap;
+    use std::os::unix::fs::PermissionsExt;
 
     fn paths(dir: &std::path::Path) -> Paths {
         let e: BTreeMap<String, String> = [

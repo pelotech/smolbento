@@ -7,6 +7,25 @@ use std::path::{Path, PathBuf};
 use anyhow::{Context, Result, bail};
 use sha2::{Digest, Sha256};
 
+/// Creates `dir` (and its parents) and makes it the owner's only (0700).
+pub fn create_private_dir(dir: &Path) -> Result<()> {
+    use std::os::unix::fs::PermissionsExt;
+    std::fs::create_dir_all(dir).with_context(|| format!("creating {}", dir.display()))?;
+    std::fs::set_permissions(dir, std::fs::Permissions::from_mode(0o700))
+        .with_context(|| format!("setting the mode of {}", dir.display()))
+}
+
+/// The distinct `values`, in the order first seen.
+pub fn union<'a>(values: impl Iterator<Item = &'a String>) -> Vec<String> {
+    let mut union: Vec<String> = Vec::new();
+    for v in values {
+        if !union.contains(v) {
+            union.push(v.clone());
+        }
+    }
+    union
+}
+
 /// Single-quotes `s` for `sh -c`.
 pub fn sh_quote(s: &str) -> String {
     format!("'{}'", s.replace('\'', r"'\''"))

@@ -15,6 +15,7 @@ use crate::kits::v3;
 use crate::sandbox::Engine;
 use crate::skills::Mode;
 use crate::ssh_agent::{AgentGrant, PhaseGrant};
+use crate::util::union;
 
 #[derive(Debug)]
 pub struct Plan {
@@ -95,12 +96,7 @@ impl Plan {
         self.merged
             .network
             .iter()
-            .find(|k| {
-                [&k.install, &k.runtime]
-                    .iter()
-                    .flat_map(|r| r.allow.iter().chain(&r.deny))
-                    .any(is_qualified)
-            })
+            .find(|k| rules(&k.install, &k.runtime).any(is_qualified))
             .map(|k| k.kit.as_str())
     }
 
@@ -403,15 +399,9 @@ pub fn without_dockerd(kit: &mut Kit) -> Result<Vec<Skipped>> {
             ..Skipped::new(&kit.name, ty.clone())
         });
     }
-    let mut groups = Vec::new();
-    for c in kit.caps.iter().filter(|c| c.ty == ty) {
-        if let Some(g) = c.group.as_ref().filter(|g| !groups.contains(&g.index)) {
-            groups.push(g.index);
-            skipped.push(group_skip(&kit.name, g, &ty, REASON));
-        }
-    }
-    kit.caps
-        .retain(|c| c.ty != ty && c.group.as_ref().is_none_or(|g| !groups.contains(&g.index)));
+    kit.caps.retain(|c| c.ty != ty || c.group.is_some());
+    // Every required one bailed above, so this only skips: the why and the error go unused.
+    skipped.extend(drop_groups(kit, |c| (c.ty == ty).then_some(""), REASON)?);
     Ok(skipped)
 }
 
@@ -502,7 +492,7 @@ pub fn resolve_for(
     };
 
     let mut ssh_entries = Vec::new();
-    if matches!(all[0].source, Source::Agent(_)) {
+    if all[0].is_builtin_agent() {
         ssh_entries.push(BUILT_IN);
     }
     for k in &all {
@@ -686,6 +676,16 @@ fn merge_env<'a>(
 /// rejected optional group is skipped whole; a rejected required one refuses the kit. The answer
 /// is a static list of what smolbento supports, which the spec allows.
 fn select_groups(k: &mut Kit, hosted: bool) -> Result<Vec<Skipped>> {
+    drop_groups(k, |c| unsupported(c, hosted), NOT_SUPPORTED)
+}
+
+/// Drops each group with a member `rejects` (which says why): an optional group is skipped with
+/// `reason`, a required one refuses the kit.
+fn drop_groups(
+    k: &mut Kit,
+    rejects: impl Fn(&Cap) -> Option<&'static str>,
+    reason: &'static str,
+) -> Result<Vec<Skipped>> {
     let mut rejected = Vec::new();
     let mut skipped = Vec::new();
     for c in &k.caps {
@@ -693,7 +693,7 @@ fn select_groups(k: &mut Kit, hosted: bool) -> Result<Vec<Skipped>> {
         if rejected.contains(&g.index) {
             continue;
         }
-        let Some(why) = unsupported(c, hosted) else {
+        let Some(why) = rejects(c) else {
             continue;
         };
         rejected.push(g.index);
@@ -706,7 +706,7 @@ fn select_groups(k: &mut Kit, hosted: bool) -> Result<Vec<Skipped>> {
                 c.ty
             );
         }
-        skipped.push(group_skip(&k.name, g, &c.ty, NOT_SUPPORTED));
+        skipped.push(group_skip(&k.name, g, &c.ty, reason));
     }
     k.caps.retain(|c| {
         c.group
@@ -803,11 +803,14 @@ fn qualified(c: &Cap) -> bool {
     let CapBody::Network { install, runtime } = &c.body else {
         return false;
     };
-    c.ty.ends_with("network-policy@2")
-        && [install, runtime]
-            .iter()
-            .flat_map(|r| r.allow.iter().chain(&r.deny))
-            .any(is_qualified)
+    c.ty.ends_with("network-policy@2") && rules(install, runtime).any(is_qualified)
+}
+
+/// Every allow and deny rule of both phases.
+fn rules<'a>(install: &'a Rules, runtime: &'a Rules) -> impl Iterator<Item = &'a NetRule> {
+    [install, runtime]
+        .into_iter()
+        .flat_map(|r| r.allow.iter().chain(&r.deny))
 }
 
 fn is_qualified(n: &NetRule) -> bool {
@@ -1024,17 +1027,6 @@ fn ssh_phase(entries: &[SshEntry], phase: SshPhase) -> Option<PhaseGrant> {
         required,
         kit,
     })
-}
-
-/// The distinct `values`, in the order first seen.
-fn union<'a>(values: impl Iterator<Item = &'a String>) -> Vec<String> {
-    let mut union: Vec<String> = Vec::new();
-    for v in values {
-        if !union.contains(v) {
-            union.push(v.clone());
-        }
-    }
-    union
 }
 
 /// The arguments `k` declares that `args` gives no value.
