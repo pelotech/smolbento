@@ -89,18 +89,6 @@ pub enum Fetch {
     Build,
 }
 
-/// `load`, calling `before` just before it pulls or builds the kit. Also returns whether that
-/// added nothing to the kit cache (true when there was nothing to pull or build).
-pub fn load_noting<R: Runner>(
-    ctx: &Ctx<R>,
-    reference: &str,
-    sandbox: Option<&str>,
-    position: Position,
-    before: &mut dyn FnMut(Fetch),
-) -> Result<(Kit, bool)> {
-    fetch(ctx, reference, false, sandbox, position, before)
-}
-
 /// The registry logins a pull may use: those of the sandbox being created, else the host-wide
 /// ones.
 fn registries(secrets: &SecretsFile, sandbox: Option<&str>) -> Vec<RegistryEntry> {
@@ -134,9 +122,10 @@ fn pull_noting(
     Ok((kit, entries(&registry::store_dir(cache)) == blobs))
 }
 
-/// The kit and whether loading it added nothing to the kit cache, with `reference` recorded as
-/// typed.
-fn fetch<R: Runner>(
+/// The kit and whether loading it added nothing to the kit cache (true when there was nothing to
+/// pull or build), with `reference` recorded as typed. Calls `before` just before it pulls or
+/// builds the kit.
+pub fn fetch<R: Runner>(
     ctx: &Ctx<R>,
     reference: &str,
     offline: bool,
@@ -1047,7 +1036,7 @@ mod tests {
     }
 
     #[test]
-    fn load_noting_tells_what_it_fetches_and_whether_the_cache_had_it() {
+    fn fetch_tells_what_it_fetches_and_whether_the_cache_had_it() {
         let t = allow_local();
         v3_kit(
             &t,
@@ -1057,7 +1046,7 @@ mod tests {
         );
         let fetched = |reference: &str| {
             let mut seen = Vec::new();
-            let (_, cached) = load_noting(&t.ctx, reference, None, Position::Kit, &mut |f| {
+            let (_, cached) = fetch(&t.ctx, reference, false, None, Position::Kit, &mut |f| {
                 seen.push(f)
             })
             .unwrap();
@@ -1162,7 +1151,7 @@ mod tests {
         fs::write(t.ctx.cwd.join("mykit/spec.yaml"), V2).unwrap();
         let e = kit_name(&t.ctx, "mykit").unwrap_err().to_string();
         assert!(e.contains("not a local path"), "{e}");
-        let e = load_noting(&t.ctx, "mykit", None, Position::Agent, &mut |_| {})
+        let e = fetch(&t.ctx, "mykit", false, None, Position::Agent, &mut |_| {})
             .unwrap_err()
             .to_string();
         assert!(e.contains("not a local path"), "{e}");

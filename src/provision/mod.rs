@@ -417,11 +417,7 @@ pub fn prepare_create<R: Runner>(
     }
     // Before the policy is saved or smolvm creates anything. A workload kit named like a built-in
     // agent isn't that agent.
-    let attachment = mcp_attachment(
-        ctx,
-        req,
-        kits.is_none_or(|p| crate::kits::apply::is_builtin_agent(&p.workload)),
-    )?;
+    let attachment = mcp_attachment(ctx, req, kits.is_none_or(|p| p.workload.is_builtin_agent()))?;
     let mut added = Vec::new();
     let mut first_start = None;
     if let Some(plan) = kits {
@@ -652,7 +648,7 @@ fn skill_wants(kits: Option<&Plan>) -> Vec<crate::skills::Want> {
     let mut wants = Vec::new();
     if let Some(p) = kits {
         // A built-in agent's own skills directories are the agent's.
-        if matches!(p.workload.source, crate::kits::model::Source::Agent(_)) {
+        if p.workload.is_builtin_agent() {
             wants.extend(p.workload.caps.iter().filter_map(|c| match &c.body {
                 crate::kits::model::CapBody::AgentSkills { path, .. } => {
                     Some(crate::skills::Want {

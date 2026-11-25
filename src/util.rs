@@ -7,6 +7,17 @@ use std::path::{Path, PathBuf};
 use anyhow::{Context, Result, bail};
 use sha2::{Digest, Sha256};
 
+/// The distinct `values`, in the order first seen.
+pub fn union<'a>(values: impl Iterator<Item = &'a String>) -> Vec<String> {
+    let mut union: Vec<String> = Vec::new();
+    for v in values {
+        if !union.contains(v) {
+            union.push(v.clone());
+        }
+    }
+    union
+}
+
 /// Single-quotes `s` for `sh -c`.
 pub fn sh_quote(s: &str) -> String {
     format!("'{}'", s.replace('\'', r"'\''"))

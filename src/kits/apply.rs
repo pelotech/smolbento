@@ -22,6 +22,7 @@ use crate::secrets::store::SecretStore;
 use crate::secrets::{SecretsFile, services};
 use crate::smolvm::{Credential, PortMap};
 use crate::ssh_agent as agent;
+use crate::util::union;
 
 /// Guest steps for a sandbox's first start (and `kit add`).
 #[derive(Debug, Clone, Default, PartialEq, Eq)]
@@ -315,20 +316,25 @@ fn user_credentials(req: &CreateRequest, secrets: &SecretsFile) -> Vec<(String, 
     req.credentials
         .iter()
         .map(|c| {
-            let service = req
-                .rec
-                .secrets
-                .iter()
-                .find(|s| {
-                    secrets
-                        .service(s)
-                        .is_some_and(|sv| sv.env_vars.contains(&c.env_var))
-                })
+            let service = secret_owning(&req.rec.secrets, secrets, &c.env_var)
                 .cloned()
                 .unwrap_or_default();
             (c.env_var.clone(), service)
         })
         .collect()
+}
+
+/// The one of the user's `services` whose secret sets `env`.
+fn secret_owning<'a>(
+    services: &'a [String],
+    secrets: &SecretsFile,
+    env: &str,
+) -> Option<&'a String> {
+    services.iter().find(|s| {
+        secrets
+            .service(s)
+            .is_some_and(|sv| sv.env_vars.iter().any(|e| e == env))
+    })
 }
 
 /// The first install step, setting the session user's global git identity from the host's `git`.
@@ -554,6 +560,16 @@ fn host_within(host: &str, hosts: &[String]) -> bool {
     })
 }
 
+/// Skips an optional credential with a warning saying `why`; a required one fails with `why` and
+/// `refusing`.
+fn optional_or_bail(kc: &KitCred, why: String, refusing: &str) -> Result<()> {
+    if kc.optional {
+        crate::kit_warning!("{why}; skipping its optional credential");
+        return Ok(());
+    }
+    bail!("{why}{refusing}");
+}
+
 /// Binds a kit credential through the user's secrets: a smolvm credential whose value
 /// `start` resolves from the service's secret. `user_creds`: (env var, service) of the
 /// credentials `req` already had from the user's secrets. A built-in service's secret only goes
@@ -573,21 +589,13 @@ fn bind_credential(
             "kit {} asks for {}, an MCP server's secret, which kits can't use",
             kc.kit, c.service
         );
-        if kc.optional {
-            crate::kit_warning!("{why}; skipping its optional credential");
-            return Ok(());
-        }
-        bail!("{why}");
+        return optional_or_bail(kc, why, "");
     }
     let service = secrets.service(&c.service);
     // Checked before asking for the secret: setting it wouldn't help.
     if let Some(builtin) = services::builtin(&c.service) {
-        let mut outside: Vec<&str> = Vec::new();
-        for i in &c.inject {
-            if !host_within(&i.domain, &builtin.hosts) && !outside.contains(&i.domain.as_str()) {
-                outside.push(&i.domain);
-            }
-        }
+        let outside =
+            union((c.inject.iter().map(|i| &i.domain)).filter(|d| !host_within(d, &builtin.hosts)));
         if !outside.is_empty() {
             let why = format!(
                 "kit {} wants to send your {} secret to {}, which {} doesn't use",
@@ -596,11 +604,7 @@ fn bind_credential(
                 outside.join(", "),
                 c.service
             );
-            if kc.optional {
-                crate::kit_warning!("{why}; skipping its optional credential");
-                return Ok(());
-            }
-            bail!("{why}; refusing");
+            return optional_or_bail(kc, why, "; refusing");
         }
     }
     if secrets.entry_for(&req.name, None, &c.service).is_none() {
@@ -620,12 +624,7 @@ fn bind_credential(
     if !guest::is_env_name(&env) {
         bail!("kit {}: '{env}' is not a valid variable name", kc.kit);
     }
-    let mut hosts: Vec<String> = Vec::new();
-    for i in &c.inject {
-        if !hosts.contains(&i.domain) {
-            hosts.push(i.domain.clone());
-        }
-    }
+    let mut hosts = union(c.inject.iter().map(|i| &i.domain));
     if hosts.is_empty() {
         hosts = service
             .as_ref()
@@ -669,13 +668,8 @@ fn bind_credential(
             let user = user_creds.iter().find(|(e, _)| *e == env);
             let owner = match user {
                 Some((_, s)) => Some(s),
-                None => req.rec.credential_services.get(&env).or_else(|| {
-                    req.rec.secrets.iter().find(|s| {
-                        secrets
-                            .service(s)
-                            .is_some_and(|sv| sv.env_vars.contains(&env))
-                    })
-                }),
+                None => (req.rec.credential_services.get(&env))
+                    .or_else(|| secret_owning(&req.rec.secrets, secrets, &env)),
             };
             if owner.is_some_and(|s| *s != c.service) {
                 bail!(
@@ -981,13 +975,6 @@ fn context_scripts(
         scripts.push(guest::kits_section_script(file, &text, &entries));
     }
     Ok(scripts)
-}
-
-/// A built-in agent's published kit (`load::agent`). It gets the SSH agent, the agent name for
-/// `--static-mcp` and its skills as the agent's own; a kit merely named like one doesn't. (When
-/// its agent starts is the kit's own `sbx@1`, not this.)
-pub fn is_builtin_agent(w: &Kit) -> bool {
-    matches!(w.source, Source::Agent(_))
 }
 
 /// A registry kit pinned to its digest, a shipped kit as `builtin:<name>`, or a local kit's
