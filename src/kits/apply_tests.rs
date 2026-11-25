@@ -19,6 +19,16 @@ fn workload() -> Kit {
     w.command = Some(vec!["wl".into(), "--go".into()]);
     w
 }
+/// A v3-style workload whose image config names `user` and `workdir`.
+fn image_workload(user: &str, workdir: &str) -> Kit {
+    let mut w = workload();
+    w.config = Some(crate::kits::model::ImageConfig {
+        user: user.into(),
+        workdir: workdir.into(),
+        ..Default::default()
+    });
+    w
+}
 fn with(mut k: Kit, ty: &str, optional: bool, body: CapBody) -> Kit {
     k.caps
         .push(Cap::new(format!("com.docker.sandbox/{ty}"), optional, body));
@@ -667,12 +677,7 @@ fn a_v3_workload_records_its_image_user_and_installs_in_its_workdir() {
             ..Default::default()
         }),
     );
-    let mut w = workload();
-    w.config = Some(crate::kits::model::ImageConfig {
-        user: "somebody".into(),
-        workdir: "/x".into(),
-        ..Default::default()
-    });
+    let w = image_workload("somebody", "/x");
     let p = resolve(w, vec![m.clone()], &ArgValues::default()).unwrap();
     let mut req = request();
     let (steps, _) = run(&p, &mut req, &mut Policy::default()).unwrap();
@@ -1117,17 +1122,12 @@ fn a_mountless_sandbox_uses_the_parent_of_its_workdir() {
 #[test]
 fn a_mountless_sandbox_works_in_the_image_workdir() {
     // tck: sbx@1/workspace-at-workdir, with its fixture's image config.
-    let mut w = with(
-        workload(),
+    let w = with(
+        image_workload("sbxagent", "/home/sbxagent/workspace"),
         "agent-context@1",
         false,
         context(None, Some("AGENTS.md"), "wl body"),
     );
-    w.config = Some(crate::kits::model::ImageConfig {
-        user: "sbxagent".into(),
-        workdir: "/home/sbxagent/workspace".into(),
-        ..Default::default()
-    });
     let p = resolve(w, vec![], &ArgValues::default()).unwrap();
     let mut req = request();
     let (steps, _) = run(&p, &mut req, &mut Policy::default()).unwrap();
@@ -1683,15 +1683,32 @@ fn a_startup_hook_without_a_user_runs_as_the_session_user() {
     };
     let agent = script(workload(), None);
     assert!(agent.contains("runuser -u 'agent'"), "{agent}");
-    let mut node = workload();
-    node.config = Some(crate::kits::model::ImageConfig {
-        user: "node".into(),
-        ..Default::default()
-    });
-    let as_node = script(node, None);
+    let as_node = script(image_workload("node", ""), None);
     assert!(as_node.contains("runuser -u 'node'"), "{as_node}");
     let root = script(workload(), Some("0"));
     assert!(!root.contains("runuser"), "a named user is kept: {root}");
+    // An image `USER` that names a group reaches the hook as is (`as_user` splits it).
+    let named = script(image_workload("somebody:1001", ""), None);
+    assert!(named.contains("runuser -u 'somebody' "), "{named}");
+}
+
+/// A mountless workload's directory is given to the image user, with the group it names.
+#[test]
+fn the_mountless_directory_goes_to_the_image_user_and_group() {
+    let t = crate::testutil::test_env(&[]);
+    crate::testutil::set_policy(&t, "mode = \"balanced\"");
+    let p = resolve(
+        image_workload("somebody:1001", ""),
+        vec![],
+        &ArgValues::default(),
+    )
+    .unwrap();
+    let (_, first) =
+        crate::provision::prepare_create(&t.ctx, &mut request(), &[], Some(&p)).unwrap();
+    let steps = first.expect("a first start").steps.install;
+    let step = steps.iter().find(|s| s.label == "the workspace directory");
+    let script = &step.expect("the workspace directory step").script;
+    assert!(script.contains("chown 'somebody:1001' "), "{script}");
 }
 
 /// A runtime-only credential's variable isn't passed to an install hook that declares it, nor

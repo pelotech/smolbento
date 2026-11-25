@@ -25,7 +25,7 @@ pub fn exec<R: Runner>(ctx: &mut Ctx<R>, a: &ExecArgs) -> Result<i32> {
         // A v3 workload's image user, as sbx; else `agent`.
         f.user
             .clone()
-            .unwrap_or_else(|| sb.meta.session_user().to_string())
+            .unwrap_or_else(|| sb.meta.rec.session_user().to_string())
     };
     let mut env = options::parse_env(&f.env, &f.env_file, &ctx.env)?;
     sandbox::env::session_env(&ctx.env, f.tty, sb.meta.bridge, &mut env);

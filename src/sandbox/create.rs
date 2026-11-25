@@ -94,15 +94,6 @@ impl CreateRequest {
     }
 }
 
-/// The machine's workload user, which smolvm maps the workspace to: the session user
-/// (`Meta::session_user`), root for an internal sandbox (`_builder`).
-pub(super) fn workload_user(meta: &Meta) -> String {
-    if name::is_internal(&meta.name) {
-        return "root".into();
-    }
-    meta.session_user().into()
-}
-
 /// The labels the sandbox gets.
 pub fn meta(req: &CreateRequest) -> Meta {
     let primary = req.workspaces.first().map(|w| w.path.display().to_string());
@@ -271,7 +262,7 @@ pub fn spec(req: &CreateRequest) -> CreateSpec {
         from: req.template_pack.clone(),
         // The workload user is the one sessions run as: smolvm shows the workspace as owned by
         // it. Startup steps exec as root explicitly.
-        user: Some(workload_user(&meta)),
+        user: Some(req.rec.workload_user(&req.name).into()),
         cmd: boot_command(req),
     }
 }

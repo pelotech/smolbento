@@ -186,15 +186,12 @@ pub fn apply(
         .iter()
         .any(|c| matches!(c.body, CapBody::Sbx));
     set_workload_fields(req, &plan.workload, agent_files);
-    // After the workload's fields: a startup hook without `user:` runs as the session user.
-    let session = if crate::sandbox::name::is_internal(&req.name) {
-        "root"
-    } else {
-        req.rec.user.as_deref().unwrap_or("agent")
-    };
-    steps.startup_d = startup_d(&kits, m, &tmpfs, session);
+    // After the workload's fields: a startup hook without `user:` runs as the workload user (the
+    // session user, root for `_builder`).
+    let user = req.rec.workload_user(&req.name);
+    steps.startup_d = startup_d(&kits, m, &tmpfs, user);
     if m.git_identity
-        && let Some(step) = git_identity_step(&kits, host_git(), session)?
+        && let Some(step) = git_identity_step(&kits, host_git(), user)?
     {
         steps.install.insert(0, step);
     }

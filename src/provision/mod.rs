@@ -596,14 +596,15 @@ pub fn prepare_create<R: Runner>(
         && let Some(first) = first_start.as_mut()
     {
         let dir = crate::util::sh_quote(&req.workdir());
-        let user = crate::util::sh_quote(req.rec.user.as_deref().unwrap_or("agent"));
+        let (user, group) = crate::sandbox::labels::split_user(req.rec.session_user());
+        let owner = crate::util::sh_quote(&format!("{user}:{}", group.unwrap_or("")));
         first.steps.install.insert(
             0,
             crate::kits::apply::InstallStep {
                 label: "the workspace directory".into(),
                 kit: None,
                 user: None,
-                script: format!("mkdir -p {dir} && chown {user}: {dir}"),
+                script: format!("mkdir -p {dir} && chown {owner} {dir}"),
                 relay_stderr: false,
             },
         );

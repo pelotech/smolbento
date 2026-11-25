@@ -61,14 +61,9 @@ pub fn handlers(
         allowed,
         open: Box::new(move |url| open_url(open_cmd.as_deref(), url)),
         copy: Box::new(move |text| copy_text(copy_cmd.as_deref(), text)),
-        relay: relay(smolvm, &sb.machine, relay_user(sb), linger),
+        // As the session user: any user reaches the guest's loopback; the image may have no `agent`.
+        relay: relay(smolvm, &sb.machine, sb.meta.rec.session_user(), linger),
     }
-}
-
-/// Who replays a login callback: a v3 workload's image user (`sbx.user`), else `agent`, as for
-/// the session itself. Any user reaches the guest's loopback; the image may have no `agent`.
-fn relay_user(sb: &Sandbox) -> &str {
-    sb.meta.rec.user.as_deref().unwrap_or("agent")
 }
 
 /// Starts the login callback relays; they stop when the handlers are dropped (the server stops).
@@ -269,20 +264,6 @@ mod tests {
             home: "/nonexistent".into(),
         };
         handlers(&env(vars), allowed, &smolvm, &sb, None)
-    }
-
-    #[test]
-    fn callbacks_are_replayed_as_the_sessions_user() {
-        let mut sb = Sandbox {
-            meta: Default::default(),
-            machine: "sbx-x".into(),
-            state: crate::smolvm::MachineState::Running,
-            ports: Vec::new(),
-            image: None,
-        };
-        assert_eq!(relay_user(&sb), "agent");
-        sb.meta.rec.user = Some("1000:staff".into());
-        assert_eq!(relay_user(&sb), "1000:staff");
     }
 
     fn read(dir: &Path, what: &str) -> String {

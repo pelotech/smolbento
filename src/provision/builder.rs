@@ -123,7 +123,7 @@ fn build_with<R: Runner>(ctx: &Ctx<R>, dir: &Path, mint: Minter) -> Result<PathB
         // A builder that was already up may have lost dockerd since; a start just ran it.
         .and_then(|()| {
             if was_running {
-                sandbox::start_engine(&ctx.vm, &sb.machine, Some("root"))
+                sandbox::start_engine(&ctx.vm, &sb.machine, "root")
             } else {
                 Ok(())
             }

@@ -193,6 +193,29 @@ pub struct Recorded {
     pub mcp_secrets: BTreeMap<String, String>,
 }
 
+impl Recorded {
+    /// The user agent sessions run as: a v3 workload's image user, else `agent`. It may name a
+    /// group (`somebody:1001`), which smolvm's `-u` takes; a guest shell wants `split_user`.
+    pub fn session_user(&self) -> &str {
+        self.user.as_deref().unwrap_or("agent")
+    }
+
+    /// The machine's workload user, which smolvm maps the workspace to: the session user, root
+    /// for an internal sandbox (`_builder`).
+    pub fn workload_user(&self, name: &str) -> &str {
+        if super::name::is_internal(name) {
+            return "root";
+        }
+        self.session_user()
+    }
+}
+
+/// A `user[:group]` spec (an image's `USER`) as its user and group.
+pub fn split_user(spec: &str) -> (&str, Option<&str>) {
+    spec.split_once(':')
+        .map_or((spec, None), |(u, g)| (u, Some(g)))
+}
+
 /// A sandbox's private dockerd, from its `dockerd@1` grant (the `sbx.docker` label).
 /// Ordered Off < Manual < Auto, so merging grants takes the max.
 #[derive(Debug, Clone, Copy, Default, PartialEq, Eq, PartialOrd, Ord)]
@@ -266,12 +289,6 @@ pub struct Meta {
 }
 
 impl Meta {
-    /// The user agent sessions run as, and so the machine's workload user, which smolvm maps the
-    /// workspace to: a v3 workload's image user, else `agent`.
-    pub fn session_user(&self) -> &str {
-        self.rec.user.as_deref().unwrap_or("agent")
-    }
-
     pub fn to_labels(&self) -> BTreeMap<String, String> {
         fn json(v: &impl serde::Serialize) -> String {
             serde_json::to_string(v).expect("strings serialize")
