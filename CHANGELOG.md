@@ -1,5 +1,23 @@
 # Changelog
 
+## [0.40.0](https://github.com/pelotech/smolbento/compare/v0.39.1...v0.40.0) (2026-11-25)
+
+
+### Features
+
+* **sandbox:** sbx@1 runtime-owned environment and a stable SANDBOX_ID ([#256](https://github.com/pelotech/smolbento/issues/256)) ([fbca416](https://github.com/pelotech/smolbento/commit/fbca4165e27cd7b17bc784b755dcd4da3335cbad))
+
+
+### Bug Fixes
+
+* **kits:** follow the kit spec at a4d6ca0 ([#253](https://github.com/pelotech/smolbento/issues/253)) ([a36aa82](https://github.com/pelotech/smolbento/commit/a36aa822a00ee35656ad41df9c178454efa6502c))
+* **kits:** run hooks and chown as the user part of an image user:group ([#255](https://github.com/pelotech/smolbento/issues/255)) ([163c129](https://github.com/pelotech/smolbento/commit/163c129f9f083cf7293f33f0038fdbfaac561f7e))
+
+
+### Chores
+
+* **main:** release nix-kit 0.3.0 ([#257](https://github.com/pelotech/smolbento/issues/257)) ([9c0f91d](https://github.com/pelotech/smolbento/commit/9c0f91de3522ce8502f2ea97a3ca16db8e316a7b))
+
 ## [0.39.1](https://github.com/pelotech/smolbento/compare/v0.39.0...v0.39.1) (2026-11-24)
 
 
