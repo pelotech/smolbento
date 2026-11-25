@@ -1,5 +1,12 @@
 # Changelog
 
+## [0.3.0](https://github.com/pelotech/smolbento/compare/nix-kit-v0.2.1...nix-kit-v0.3.0) (2026-11-25)
+
+
+### Features
+
+* **sandbox:** sbx@1 runtime-owned environment and a stable SANDBOX_ID ([#256](https://github.com/pelotech/smolbento/issues/256)) ([fbca416](https://github.com/pelotech/smolbento/commit/fbca4165e27cd7b17bc784b755dcd4da3335cbad))
+
 ## [0.2.1](https://github.com/pelotech/smolbento/compare/nix-kit-v0.2.0...nix-kit-v0.2.1) (2026-11-17)
 
 
