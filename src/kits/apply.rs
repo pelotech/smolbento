@@ -9,7 +9,7 @@ use anyhow::{Context, Result, bail};
 use crate::kits::compose;
 use crate::kits::env_ref;
 use crate::kits::guest;
-use crate::kits::model::{CapBody, Content, CredReq, Hook, Kit, Source};
+use crate::kits::model::{CapBody, Content, CredReq, Delivery, Hook, Kit, Source};
 use crate::kits::registry_auth::Logins;
 use crate::kits::resolve::{KitContext, KitCred, Merged, Plan};
 use crate::policy::Policy;
@@ -175,7 +175,7 @@ pub fn apply(
         &contexts,
         &agent_files,
         &mounts,
-    );
+    )?;
     // Settled by the first text written: until then a later kit is free to choose.
     if !steps.context.is_empty() {
         req.rec.agent_context = context_version;
@@ -900,20 +900,21 @@ fn profile_path(kit: &str, dir: &str, name: Option<&str>) -> Result<String> {
 }
 
 /// Writes the kits' agent context to each agent file, which is the guest's own: nothing is
-/// written into a mounted workspace. The workload kit's context is handled like any kit's.
+/// written into a mounted workspace.
 ///
-/// `agent-context@2`: the kits' text goes in the file itself, in its kits section, joined with
-/// two newlines and not trimmed (SPEC agent-context@2/complete-content).
-/// `@1`: the kits section lists where each kit's text is, for the agent to read when it needs
-/// it (SPEC agent-context@1/progressive-surfacing). A `contentFile` is listed where the kit
-/// image has it; inline text is written to `<dir>/kits-agent-context/<kit>.md` first.
+/// Inline text goes in the file itself, in its kits section, joined with two newlines and not
+/// trimmed: under `agent-context@2`, the workload kit's text and a mixin's `delivery: inline` text
+/// (SPEC agent-context@2/complete-content). The rest is progressive: the section's index lists
+/// where each kit's text is, for the agent to read when it needs it (SPEC
+/// agent-context@1/progressive-surfacing, @2/delivery). A `contentFile` (`@1`) is listed where the
+/// kit image has it; other text is written to `<dir>/kits-agent-context/<kit>.md` first.
 fn context_scripts(
     workload: &str,
     version: Option<u8>,
     contexts: &[&KitContext],
     agent_files: &[String],
     mounts: &[&Path],
-) -> Vec<String> {
+) -> Result<Vec<String>> {
     let has_body =
         |c: &&&KitContext| !c.req.content.trim().is_empty() || c.req.content_file.is_some();
     let contexts: Vec<&&KitContext> = contexts.iter().filter(has_body).collect();
@@ -928,35 +929,40 @@ fn context_scripts(
                 );
             }
         }
-        return Vec::new();
+        return Ok(Vec::new());
     }
     if contexts.is_empty() {
-        return Vec::new();
+        return Ok(Vec::new());
     }
-    // shortcut: every `@2` body is inlined, whatever its `delivery` (`AgentContextReq::delivery`);
-    // progressive delivery of mixin bodies is a follow-up.
-    let inline = version == Some(2);
+    let inline = |c: &KitContext| {
+        version == Some(2) && (c.kit == workload || c.req.delivery == Delivery::Inline)
+    };
+    let text: Vec<&str> = (contexts.iter().filter(|c| inline(c)))
+        .map(|c| c.req.content.as_str())
+        .collect();
+    let text = text.join("\n\n");
+    let indexed: Vec<&&&KitContext> = contexts.iter().filter(|c| !inline(c)).collect();
     let mut scripts = Vec::new();
     for file in agent_files {
         let dir = file.rsplit_once('/').map_or("", |(d, _)| d);
         let index_dir = format!("{dir}/{}", guest::KITS_CONTEXT_DIR);
-        if mounts.iter().any(|m| {
-            Path::new(file).starts_with(m) || (!inline && Path::new(&index_dir).starts_with(m))
-        }) {
+        if mounts.iter().any(|m| Path::new(file).starts_with(m)) {
             crate::warning!(
                 "agent context not written: {file} is in a mounted workspace, outside the \
                  sandbox"
             );
             continue;
         }
-        if inline {
-            let bodies: Vec<&str> = contexts.iter().map(|c| c.req.content.as_str()).collect();
-            scripts.push(guest::inline_context_script(file, &bodies.join("\n\n")));
-            continue;
+        // SPEC agent-context@2/delivery: refused rather than loaded inline.
+        if !indexed.is_empty() && mounts.iter().any(|m| Path::new(&index_dir).starts_with(m)) {
+            bail!(
+                "agent context can't be written for {file}: {index_dir} is in a mounted \
+                 workspace, outside the sandbox"
+            );
         }
-        // One entry per staged file, and one for a kit's inline text, in kit order.
+        // In kit order: one entry per staged file, and one per kit's own file.
         let mut entries: Vec<(String, String)> = Vec::new();
-        for c in &contexts {
+        for c in &indexed {
             if let Some(staged) = &c.req.content_file {
                 entries.push((c.kit.clone(), staged.clone()));
                 continue;
@@ -965,17 +971,16 @@ fn context_scripts(
             if entries.iter().any(|(_, p)| *p == path) {
                 continue;
             }
-            let bodies: Vec<&str> = contexts
-                .iter()
+            let bodies: Vec<&str> = (indexed.iter())
                 .filter(|o| o.kit == c.kit && o.req.content_file.is_none())
                 .map(|o| o.req.content.as_str())
                 .collect();
             scripts.push(guest::kit_context_script(&path, &bodies));
             entries.push((c.kit.clone(), path));
         }
-        scripts.push(guest::kits_index_script(file, &entries));
+        scripts.push(guest::kits_section_script(file, &text, &entries));
     }
-    scripts
+    Ok(scripts)
 }
 
 /// A built-in agent's published kit (`load::agent`). It gets the SSH agent, the agent name for

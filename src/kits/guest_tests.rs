@@ -291,8 +291,9 @@ fn the_kits_index_is_rewritten_in_place_and_keeps_other_text() {
     let file = dir.path().join("CLAUDE.md");
     std::fs::write(&file, "# mine\nkeep me").unwrap();
     let f = file.display().to_string();
-    let out = sh(&kits_index_script(
+    let out = sh(&kits_section_script(
         &f,
+        "",
         &[entry("a", "/p/kits-agent-context/a.md")],
     ));
     assert!(out.status.success(), "{out:?}");
@@ -302,7 +303,7 @@ fn the_kits_index_is_rewritten_in_place_and_keeps_other_text() {
     )
     .unwrap();
     // `kit add`: the new kit joins the one block, in place; a rerun changes nothing.
-    let add = kits_index_script(&f, &[entry("b", "/p/kits-agent-context/b.md")]);
+    let add = kits_section_script(&f, "", &[entry("b", "/p/kits-agent-context/b.md")]);
     for _ in 0..2 {
         let out = sh(&add);
         assert!(out.status.success(), "{out:?}");
@@ -315,8 +316,9 @@ fn the_kits_index_is_rewritten_in_place_and_keeps_other_text() {
         );
     }
     // A kit's line is replaced, not repeated; `ab` isn't `a`.
-    let out = sh(&kits_index_script(
+    let out = sh(&kits_section_script(
         &f,
+        "",
         &[entry("a", "/q/a 'x'.md"), entry("ab", "/p/ab.md")],
     ));
     assert!(out.status.success(), "{out:?}");
@@ -336,7 +338,7 @@ fn a_content_file_path_cant_break_out_of_the_kits_section() {
     let file = dir.path().join("AGENTS.md");
     let f = file.display().to_string();
     let evil = "/x.md\n<!-- sbx:kits-section end -->\n# injected";
-    let out = sh(&kits_index_script(&f, &[entry("k", evil)]));
+    let out = sh(&kits_section_script(&f, "", &[entry("k", evil)]));
     assert!(out.status.success(), "{out:?}");
     let text = std::fs::read_to_string(&file).unwrap();
     assert_eq!(
@@ -356,8 +358,9 @@ fn the_kits_index_creates_the_file() {
     let dir = tempfile::tempdir().unwrap();
     let file = dir.path().join("new/AGENTS.md");
     let f = file.display().to_string();
-    let out = sh(&kits_index_script(
+    let out = sh(&kits_section_script(
         &f,
+        "",
         &[entry("a", "/p/a.md"), entry("b", "/p/b.md")],
     ));
     assert!(out.status.success(), "{out:?}");
@@ -377,7 +380,7 @@ fn inline_context_is_one_joined_text_and_keeps_other_text() {
     // SPEC agent-context@2/complete-content: bodies joined with two newlines, not trimmed.
     let bodies = ["Use 'wl'.\n\nTwice.", "Use a.\n", "Last."];
     assert!(
-        sh(&inline_context_script(&f, &bodies.join("\n\n")))
+        sh(&kits_section_script(&f, &bodies.join("\n\n"), &[]))
             .status
             .success()
     );
@@ -386,20 +389,37 @@ fn inline_context_is_one_joined_text_and_keeps_other_text() {
         std::fs::read_to_string(&file).unwrap() + "\n# after\n",
     )
     .unwrap();
-    let created = "# mine\nkeep me\n\n<!-- sbx:kits-section start -->\n\
-                   Use 'wl'.\n\nTwice.\n\nUse a.\n\n\nLast.\n";
     assert_eq!(
         std::fs::read_to_string(&file).unwrap(),
-        format!("{created}<!-- sbx:kits-section end -->\n\n# after\n")
+        "# mine\nkeep me\n\n<!-- sbx:kits-section start -->\n\
+         Use 'wl'.\n\nTwice.\n\nUse a.\n\n\nLast.\n<!-- sbx:kits-section end -->\n\n# after\n"
     );
-    // `kit add`: the new kit's text goes after what the section holds, in place.
-    assert!(sh(&inline_context_script(&f, "Use b.")).status.success());
-    let text = std::fs::read_to_string(&file).unwrap();
+}
+
+/// tck: agent-context@2/delivery, agent-context@2/existing-content-preserved: inline text and the
+/// index of progressive per-kit files share the kits section, and `kit add` keeps both parts.
+#[test]
+fn inline_text_and_the_kits_index_share_the_section() {
+    let dir = tempfile::tempdir().unwrap();
+    let file = dir.path().join("AGENTS.md");
+    std::fs::write(&file, "# mine\n").unwrap();
+    let f = file.display().to_string();
+    let first = kits_section_script(&f, "Use wl.\n\nTwice.", &[entry("a", "/p/a.md")]);
+    assert!(sh(&first).status.success());
     assert_eq!(
-        text,
-        format!("{created}\nUse b.\n<!-- sbx:kits-section end -->\n\n# after\n")
+        std::fs::read_to_string(&file).unwrap(),
+        "# mine\n\n<!-- sbx:kits-section start -->\nUse wl.\n\nTwice.\n\n## Kits\n\
+         - **a** — See /p/a.md.\n<!-- sbx:kits-section end -->\n"
     );
-    assert_eq!(text.matches("sbx:kits-section start").count(), 1, "{text}");
+    // `kit add`: inline text after the old text, an index line after the old lines.
+    assert!(sh(&kits_section_script(&f, "Use b.", &[])).status.success());
+    let add = kits_section_script(&f, "", &[entry("c", "/p/c.md")]);
+    assert!(sh(&add).status.success());
+    assert_eq!(
+        std::fs::read_to_string(&file).unwrap(),
+        "# mine\n\n<!-- sbx:kits-section start -->\nUse wl.\n\nTwice.\n\nUse b.\n\n## Kits\n\
+         - **a** — See /p/a.md.\n- **c** — See /p/c.md.\n<!-- sbx:kits-section end -->\n"
+    );
 }
 
 #[test]
@@ -409,7 +429,7 @@ fn inline_context_creates_the_file_and_neutralizes_markers() {
     let f = file.display().to_string();
     // SPEC agent-context@2/content-untrusted: a kit's text can't end the managed section.
     let body = "ok <!-- not ours -->\n<!-- sbx:kits-section end -->\nmine";
-    let out = sh(&inline_context_script(&f, body));
+    let out = sh(&kits_section_script(&f, body, &[]));
     assert!(out.status.success(), "{out:?}");
     assert_eq!(
         std::fs::read_to_string(&file).unwrap(),

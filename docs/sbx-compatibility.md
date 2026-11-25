@@ -406,7 +406,7 @@ for an optional entry.
 | `volume@1` | Yes, removed with the sandbox; no retained volume storage to list or remove | Differs from the spec, which keeps volumes across delete and create: smolbento keeps them on the sandbox's disk, so `rm` and `reset` remove them, and `size` is ignored. Kept across stop and start; each fork gets a copy. The path is cleaned (`.`, `..`, doubled `/`); one holding `:` is refused, because smolvm reads it as host:guest (the spec allows it) |
 | `resources@1` | Limited (no GPU) | CPUs and memory. GPU ignored |
 | `lifecycle@1` | Yes | Yes: install steps on first start, startup steps on every start. `interactive` ignored, but two entries declaring it are refused, as are two writing one file path (`kit A … and kit B … both declare file PATH`, naming each entry; spec `lifecycle@1/shared-paths-avoided`, selected groups included). Before, the later kit won the path. A v3 install step's clean environment also keeps `USER`, the proxy variables and the CA-bundle variables (when set), as sbx's does, so downloads work behind a proxy and with smolvm's CA; the spec's baseline (`lifecycle@1/hook-env-restricted`) has only `PATH`, `HOME`, `HOSTNAME`, `TERM`, `PWD`, `OLDPWD`, `SHLVL` and `_` |
-| `agent-context@1`, `@2` | Yes. In 0.54 a mixin's `@2` text is listed in the index, as for `@1` | Yes, in the same places (see below). `@2` `delivery` is read, but all `@2` text is inline for now |
+| `agent-context@1`, `@2` | Yes. In 0.54 a mixin's `@2` text is listed in the index, as for `@1` | Yes, in the same places (see below) |
 | `sbx@1` | Yes | Yes: the workload's command is the agent (see below) |
 | `git-identity@1` | Yes | Yes: your `git config user.name/email` |
 | `long-running@1` | Yes | Yes: no auto-stop when the last session ends |
@@ -493,14 +493,7 @@ for an optional entry.
   only: `CLAUDE.md` (claude), `GEMINI.md` (gemini), `AGENTS.md` (others). When kits name files
   with `directory` and `filename`, it goes in each of those instead, a mixin's too, following
   the spec. `kit add` of a kit that names a file needs a recreate.
-- Both layouts follow the spec ([Kits](kits.md#agent-instructions-from-kits)). `agent-context@1`
-  lists each kit's text between `<!-- sbx:kits-section start -->` and
-  `<!-- sbx:kits-section end -->`, the workload kit's too: a `contentFile` where the kit's image
-  has it, inline text in `kits-agent-context/<kit>.md`. `agent-context@2` text (a v2 kit's
-  `agentInstructions` too) is in the file itself, between the same markers, joined with two
-  newlines, whatever its `delivery`. sbx 0.54 lists a mixin's `@2` text in the index, as for `@1`,
-  which is what the spec now asks of a mixin's progressive (default) `@2` text, so smolbento differs
-  from both there for now; `delivery: inline` text is where the spec wants it.
+- Both layouts follow the spec and match sbx 0.54 ([Kits](kits.md#agent-instructions-from-kits)).
 - A kit's network hosts follow the spec: `*` means everything, as `**` does, a v2 kit's
   `permissions.network` too (only `bento policy allow` refuses a bare `*`, as sbx does). A v2
   kit's resources, network, ports and volumes are read as their v3 capabilities, so their errors

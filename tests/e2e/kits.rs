@@ -890,8 +890,8 @@ pub(crate) fn v3_startup_hook_runs_as_the_session_user_by_default() {
 }
 
 /// sbx #15: a mixin's agent context goes beside the workspace, in the sandbox only. It is
-/// `agent-context@2` (a v2 kit's instructions are), so the kit's text is in the shell agent's
-/// `AGENTS.md` itself, where the agent reads it at startup.
+/// `agent-context@2` (a v2 kit's instructions are), progressive by default: the kit's text is in
+/// its own file, listed in the shell agent's `AGENTS.md` (tck: agent-context@2/delivery).
 #[test]
 #[ignore = "boots real VMs and pulls alpine; run with `just e2e`"]
 pub(crate) fn mixin_agent_context_sits_beside_the_workspace() {
@@ -909,20 +909,19 @@ agentInstructions:
     let parent = e.workspace().parent().unwrap().to_path_buf();
     let p = parent.display();
     let file = root_out(&e.name, &format!("cat {p}/AGENTS.md"));
-    let section = "Use the e2e tools.\n<!-- sbx:kits-section end -->";
+    let kit_file = format!("{p}/kits-agent-context/e2e-ctx.md");
+    let section = format!("- **e2e-ctx** — See {kit_file}.\n<!-- sbx:kits-section end -->");
     assert!(
-        file.contains("<!-- sbx:kits-section start -->") && file.contains(section),
+        file.contains("<!-- sbx:kits-section start -->") && file.contains(&section),
         "{file}"
     );
-    assert!(
-        !root_sh(&e.name, &format!("test -e {p}/kits-agent-context"))
-            .status
-            .success(),
-        "no per-kit files: the text is inline"
+    assert_eq!(
+        root_out(&e.name, &format!("cat {kit_file}")),
+        "Use the e2e tools.\n"
     );
     assert_eq!(
-        root_out(&e.name, &format!("stat -c %U {p}/AGENTS.md")),
-        "agent\n"
+        root_out(&e.name, &format!("stat -c %U {p}/AGENTS.md {kit_file}")),
+        "agent\nagent\n"
     );
     assert!(!parent.join("AGENTS.md").exists(), "nothing on the host");
 }
@@ -1223,15 +1222,22 @@ pub(crate) fn nix_kit_works_for_an_agent_and_a_workload_image_user() {
         root_sh(&e.name, "getent passwd agent").status.success(),
         "{agent}: the image's agent account is left alone"
     );
-    // Claude's kit and this one both offer agent-context@2: the text is in the agent file.
+    // Claude's kit and this one both offer agent-context@2: the kit's text is progressive, in
+    // its own file, listed in the agent file.
     let text = root_out(&e.name, "cat /home/agent/.claude/CLAUDE.md");
+    let kit_file = "/home/agent/.claude/kits-agent-context/nix.md";
     let section = text
         .split_once("<!-- sbx:kits-section start -->")
         .and_then(|(_, rest)| rest.split_once("<!-- sbx:kits-section end -->"))
         .map(|(section, _)| section);
     assert!(
-        section.is_some_and(|s| s.contains("Nix and direnv are installed.")),
-        "{agent}: the kit's instructions in CLAUDE.md:\n{text}"
+        section.is_some_and(|s| s.contains(&format!("- **nix** — See {kit_file}."))),
+        "{agent}: the kit's instructions listed in CLAUDE.md:\n{text}"
+    );
+    let body = root_out(&e.name, &format!("cat {kit_file}"));
+    assert!(
+        body.contains("Nix and direnv are installed."),
+        "{agent}: {body}"
     );
     // Only one sandbox at a time, as when these were two tests.
     e.ok(&["rm", "-f", &e.name]);

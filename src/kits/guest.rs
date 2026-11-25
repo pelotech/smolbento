@@ -314,62 +314,12 @@ fn printf_bytes(bytes: &[u8]) -> String {
     }
 }
 
-/// The directory, next to the agent file, holding one `<kit>.md` per mixin with agent context.
+/// The directory, next to the agent file, holding one `<kit>.md` per kit with progressive context.
 pub const KITS_CONTEXT_DIR: &str = "kits-agent-context";
-/// The markers around the kits section of the agent file: sbx's index of per-kit files
-/// (`agent-context@1`), or the kits' text itself (`@2`).
+/// The markers around the kits section of the agent file: the kits' inline text, then the index
+/// of per-kit files.
 pub const KITS_SECTION_START: &str = "<!-- sbx:kits-section start -->";
 pub const KITS_SECTION_END: &str = "<!-- sbx:kits-section end -->";
-
-/// Rewrites the kits section of `file` with `awk` program `rules`, appending the section when
-/// the file has none; text outside it stays. The program gets the markers as `b` and `e`, and
-/// `lines` (the new entries) in the file `s`. It prints the section from a `put()` it defines
-/// (setting `done`), having read the old section's lines through its own `inb` rule.
-fn section_script(file: &str, lines: &[String], rules: &str) -> String {
-    let lines: Vec<String> = lines.iter().map(|l| sh_quote(l)).collect();
-    let f = sh_quote(file);
-    format!(
-        "set -e\n{OWNER}\n{mkdirs}s=$(mktemp); t=$(mktemp)\nprintf '%s\\n' {lines} > \"$s\"\n\
-         new=; [ -e {f} ] || {{ : > {f}; new=1; }}\n\
-         awk -v b={start} -v e={end} -v s=\"$s\" '\n\
-         {rules}\
-         $0 == b {{ inb = 1; next }}\n\
-         inb && $0 == e {{ inb = 0; if (!done) put(); next }}\n\
-         inb {{ old(); next }}\n\
-         {{ print }}\n\
-         END {{ if (!done) {{ if (NR && !inb) print \"\"; put() }} }}' {f} > \"$t\"\n\
-         cat \"$t\" > {f}\nrm -f \"$s\" \"$t\"\n\
-         [ -z \"$new\" ] || [ -z \"$o\" ] || chown \"$o\" {f}\n",
-        mkdirs = mkdirs(file),
-        lines = lines.join(" "),
-        start = sh_quote(KITS_SECTION_START),
-        end = sh_quote(KITS_SECTION_END),
-    )
-}
-
-/// Adds `text`, the kits' agent context itself, to the kits section of `file`
-/// (`agent-context@2`), after what the section already holds (`kit add`), a blank line apart.
-/// A section marker in the text is written as `&lt;!-- sbx:`, so a kit can't end the section
-/// (SPEC agent-context@2/content-untrusted). The text isn't keyed by kit, so a `kit add` rerun
-/// after it failed partway adds that kit's text again.
-pub fn inline_context_script(file: &str, text: &str) -> String {
-    let text = neutralize(text);
-    let lines: Vec<String> = text
-        .strip_suffix('\n')
-        .unwrap_or(&text)
-        .split('\n')
-        .map(String::from)
-        .collect();
-    section_script(
-        file,
-        &lines,
-        "function put(  i) { while (m && keep[m] == \"\") m--; print b;\n\
-           for (i = 1; i <= m; i++) print keep[i]; if (m) print \"\";\n\
-           for (i = 1; i <= n; i++) print add[i]; print e; done = 1 }\n\
-         function old() { keep[++m] = $0 }\n\
-         BEGIN { while ((getline l < s) > 0) add[++n] = l; close(s) }\n",
-    )
-}
 
 /// Shell commands printing `bodies` one blank line apart.
 fn print_bodies(bodies: &[&str]) -> String {
@@ -386,8 +336,8 @@ fn print_bodies(bodies: &[&str]) -> String {
     s
 }
 
-/// Writes a kit's inline agent context to its own file `path` (`agent-context@1`), replacing
-/// it; the file and its directory go to `agent`.
+/// Writes a kit's own text to its per-kit file `path` (`agent-context@1`, and `@2` progressive),
+/// replacing it; the file and its directory go to `agent`.
 pub fn kit_context_script(path: &str, bodies: &[&str]) -> String {
     let p = sh_quote(path);
     let dir = Path::new(path)
@@ -407,25 +357,66 @@ fn neutralize(text: &str) -> String {
     text.replace("<!-- sbx:", "&lt;!-- sbx:")
 }
 
-/// Puts one `- **<kit>** — See <path>.` line per entry in the kits index (`agent-context@1`),
-/// the kits section of `file`; a kit's old lines are replaced.
-pub fn kits_index_script(file: &str, entries: &[(String, String)]) -> String {
+/// Rewrites the kits section of `file`: `text`, the kits' agent context itself (`agent-context@2`
+/// inline), goes after the text the section holds, a blank line apart, not trimmed. Then the
+/// `## Kits` index, one `- **<kit>** — See <path>.` line per entry, for the per-kit files the agent
+/// reads when it needs them (`@1`, and `@2` progressive); a kit's old line is replaced. Either part
+/// can be empty. A section marker in kit-supplied text is written as `&lt;!-- sbx:`, so a kit can't
+/// end the section (SPEC agent-context@1/content-neutralized, @2/content-untrusted). The text isn't
+/// keyed by kit, so a `kit add` rerun after it failed partway adds that kit's text again.
+pub fn kits_section_script(file: &str, text: &str, entries: &[(String, String)]) -> String {
     // A kit's name and `contentFile` are kit-supplied: one line each, no markers of their own.
     let one_line = |s: &str| neutralize(s).replace(['\n', '\r'], " ");
-    let lines: Vec<String> = entries
+    let mut lines: Vec<String> = entries
         .iter()
         .map(|(kit, path)| format!("- **{}** — See {}.", one_line(kit), one_line(path)))
         .collect();
-    section_script(
-        file,
-        &lines,
-        "function key(l,  i) { i = index(substr(l, 5), \"**\"); return i ? substr(l, 1, i + 5) : l }\n\
-         function put(  i) { print b; print \"## Kits\"; for (i = 1; i <= m; i++) print keep[i];\n\
-           for (i = 1; i <= n; i++) print add[i]; print e; done = 1 }\n\
-         function old() { if ($0 != \"## Kits\" && $0 != \"\" && !(key($0) in new_kit)) keep[++m] = $0 }\n\
-         BEGIN { while ((getline l < s) > 0) { add[++n] = l; new_kit[key(l)] = 1 } close(s) }\n",
+    if !text.is_empty() {
+        let text = neutralize(text);
+        let text = text.strip_suffix('\n').unwrap_or(&text);
+        lines.extend(text.split('\n').map(String::from));
+    }
+    let lines: Vec<String> = lines.iter().map(|l| sh_quote(l)).collect();
+    let f = sh_quote(file);
+    format!(
+        "set -e\n{OWNER}\n{mkdirs}s=$(mktemp); t=$(mktemp)\nprintf '%s\\n' {lines} > \"$s\"\n\
+         new=; [ -e {f} ] || {{ : > {f}; new=1; }}\n\
+         awk -v b={start} -v e={end} -v s=\"$s\" -v ne={ne} '{SECTION_AWK}' {f} > \"$t\"\n\
+         cat \"$t\" > {f}\nrm -f \"$s\" \"$t\"\n\
+         [ -z \"$new\" ] || [ -z \"$o\" ] || chown \"$o\" {f}\n",
+        mkdirs = mkdirs(file),
+        lines = lines.join(" "),
+        start = sh_quote(KITS_SECTION_START),
+        end = sh_quote(KITS_SECTION_END),
+        ne = entries.len(),
     )
 }
+
+/// Rewrites the kits section (markers `b` and `e`) from the file `s`: `ne` index lines, then the
+/// text's lines. Text outside the section stays; with no section, one is appended. The old index
+/// is the `## Kits` line and the entry lines that end the section.
+const SECTION_AWK: &str = r###"
+function key(l,  i) { i = index(substr(l, 5), "**"); return i ? substr(l, 1, i + 5) : l }
+function put(  i, j, k, c) {
+  for (k = m; k && substr(keep[k], 1, 4) == "- **"; k--) ;
+  if (!k || keep[k] != "## Kits") k = m + 1
+  for (j = k - 1; j && keep[j] == ""; j--) ;
+  for (i = k + 1; i <= m; i++) if (!(key(keep[i]) in new_kit)) ent[++c] = keep[i]
+  for (i = 1; i <= n; i++) ent[++c] = add[i]
+  print b; for (i = 1; i <= j; i++) print keep[i]
+  if (j && t) print ""; for (i = 1; i <= t; i++) print txt[i]
+  if ((j || t) && c) print ""
+  if (c) { print "## Kits"; for (i = 1; i <= c; i++) print ent[i] }
+  print e; done = 1 }
+BEGIN { while ((getline l < s) > 0) {
+  if (++r <= ne) { add[++n] = l; new_kit[key(l)] = 1 } else txt[++t] = l }
+  close(s) }
+$0 == b { inb = 1; next }
+inb && $0 == e { inb = 0; if (!done) put(); next }
+inb { keep[++m] = $0; next }
+{ print }
+END { if (!done) { if (NR && !inb) print ""; put() } }
+"###;
 
 #[cfg(test)]
 #[path = "guest_tests.rs"]
