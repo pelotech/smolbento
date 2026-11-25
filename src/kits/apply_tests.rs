@@ -999,6 +999,7 @@ fn context(directory: Option<&str>, filename: Option<&str>, content: &str) -> Ca
         directory: directory.map(String::from),
         content: content.into(),
         content_file: None,
+        delivery: Default::default(),
     })
 }
 
@@ -1339,6 +1340,7 @@ fn a_staged_context_file_is_listed_where_the_image_has_it() {
             directory: None,
             content: String::new(),
             content_file: Some(staged.into()),
+            delivery: Default::default(),
         }),
     );
     // A mixin offering both versions follows the workload's `@1`.

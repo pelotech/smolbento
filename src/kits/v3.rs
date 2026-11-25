@@ -15,6 +15,7 @@ use serde_json::Value;
 use super::descriptor::{ApiKeyCfg, ResourcesCfg, TokenEndpoint};
 use crate::kits::model::*;
 use crate::kits::{CAP_NS, args, capability};
+use crate::skills::Mode;
 
 /// Parses a published descriptor (SPEC-v3 §9): the one Docker's kit frontend wrote into a kit
 /// image's manifest annotation (a registry kit, an agent's, or a local kit smolbento built), or
@@ -94,6 +95,8 @@ struct Arg {
     env: Option<String>,
     /// Set for an argument the build takes.
     build_arg: Option<String>,
+    /// A BuildKit secret ID: the build's input alone (SPEC-v3 §6.2).
+    build_secret: Option<String>,
 }
 
 fn from_value(v: Value, source: Source) -> Result<Kit> {
@@ -111,9 +114,12 @@ fn from_value(v: Value, source: Source) -> Result<Kit> {
     let caps = caps(d.capabilities)?;
     let name = name_from_source(&source)?;
     check_caps(&name, &caps)?;
+    // A build secret is no create-time input: left out, `--kit-arg` and references to it fail
+    // as for an undeclared argument, and nothing exports it (SPEC-v3 §6/build-secret-no-expansion).
     let args = d
         .args
         .into_iter()
+        .filter(|(_, a)| a.build_secret.is_none())
         .map(|(name, a)| {
             let def = ArgDef {
                 default: a.default,
@@ -324,10 +330,12 @@ pub(crate) fn check_caps(kit: &str, caps: &[Cap]) -> Result<()> {
             check_hooks(kit, l)?;
         }
     }
-    // SPEC-v3 §7.1: both describe the same grant, so a descriptor states one of them.
-    let has = |ty: &str| caps.iter().any(|c| c.ty == ty);
-    if has("com.docker.sandbox/network-policy@1") && has("com.docker.sandbox/network-policy@2") {
-        bail!("kit {kit}: network-policy@1 and network-policy@2 are exclusive; declare one");
+    // SPEC-v3 §7.1: each pair describes the same thing, so a descriptor states one of them.
+    let has = |ty: &str| caps.iter().any(|c| c.ty.strip_prefix(CAP_NS) == Some(ty));
+    for name in ["network-policy", "agent-sessions"] {
+        if has(&format!("{name}@1")) && has(&format!("{name}@2")) {
+            bail!("kit {kit}: {name}@1 and {name}@2 are exclusive; declare one");
+        }
     }
     check_ssh_phases(kit, caps)
 }
@@ -451,15 +459,25 @@ pub(crate) fn body(ty: &str, config: Option<Value>) -> Result<CapBody> {
                 directory: c.directory,
                 content: c.content.unwrap_or_default(),
                 content_file: c.content_file,
+                delivery: Delivery::Progressive,
             })
         }
         "agent-context@2" => {
             let c: AgentContextV2 = decode(config)?;
+            // `body()` sees expanded configs only: a reference stays `Pending` until then.
+            let delivery = match c.delivery.as_deref() {
+                None | Some("progressive") => Delivery::Progressive,
+                Some("inline") => Delivery::Inline,
+                Some(d) => {
+                    bail!("agent-context@2 delivery must be progressive or inline (got {d:?})")
+                }
+            };
             CapBody::AgentContext(AgentContextReq {
                 filename: c.filename,
                 directory: c.directory,
                 content: c.content.unwrap_or_default(),
                 content_file: None,
+                delivery,
             })
         }
         "sbx@1" => {
@@ -485,7 +503,7 @@ pub(crate) fn body(ty: &str, config: Option<Value>) -> Result<CapBody> {
             }
         }
         // Its command templates matter to the agent launcher, not to the kit model.
-        "agent-sessions@1" => CapBody::AgentSessions,
+        "agent-sessions@1" | "agent-sessions@2" => CapBody::AgentSessions,
         "ssh-agent@1" => ssh_agent(decode(config)?)?,
         "agent-skills@1" => {
             let c: AgentSkillsCfg = decode(config)?;
@@ -506,15 +524,9 @@ pub(crate) fn body(ty: &str, config: Option<Value>) -> Result<CapBody> {
                     c.path
                 );
             }
-            let readwrite = match c.mode.as_deref() {
-                None | Some("readonly") => false,
-                Some("readwrite") => true,
-                Some(m) => bail!("agent-skills@1 mode {m:?} must be readonly or readwrite"),
-            };
-            CapBody::AgentSkills {
-                path: c.path,
-                readwrite,
-            }
+            // An omitted mode is `off` (agent-skills@1/off-default-honored).
+            let mode = c.mode.as_deref().map_or(Ok(Mode::Off), Mode::parse)?;
+            CapBody::AgentSkills { path: c.path, mode }
         }
         "agent-skill@1" => {
             let c: AgentSkillCfg = decode(config)?;
@@ -1000,6 +1012,7 @@ struct AgentContextV2 {
     filename: Option<String>,
     directory: Option<String>,
     content: Option<String>,
+    delivery: Option<String>,
 }
 
 #[derive(Deserialize, Default)]

@@ -191,6 +191,7 @@ Where they differ:
 | `update` | Per-skill messages; `No repository-installed skills found` | A failing repository prints an error and the others still update. Exit code 1 (not measured in sbx) |
 | Path that is both the agent's and a kit's directory | Can't happen: a v3 mixin can't join a built-in agent | Allowed; the path behaves like the agent's own directory |
 | Who links | Root; links to uid 1000. Fails the create when uid 1000 can't reach the directory | Root; links to the image's `agent` account, else uid 1000. No reachability check. A skills path that goes through a symlink gets no links (the start warns; a required bundled skill fails) |
+| Kit `mode` | A built-in agent's kit omits it and still gets your skills | An omitted `mode` is `off` (spec): a kit's directory gets bundled skills but nothing from the store; the widest mode at a path wins. A built-in agent's own directories follow `--skills` alone, as in sbx (the spec would make them `off`) |
 | Kits | `agent-skills@1`, `agent-skill@1` | Both, as measured. smolvm mounts the store once, at `/run/sbx/skills-shared`, read-write if any directory is. A kit directory gets that mount bound over it unless the sandbox has bundled skills; then every directory links. A required bundled skill named like a stored skill is refused before anything is made; one that clashes with image content fails the first start, which fails the create. `kit add` refuses kits with either |
 | Other agents' directories | sbx's docs table | The same table, from the docs. Not measured for copilot, cursor, droid, opencode or devin |
 
@@ -325,20 +326,26 @@ Docker's kit-spec conformance suite checks this capability through `tests/confor
 `resources@1` and `sbx@1`, under the `balanced` mode (sbx's default: under `allow-all` a kit's
 bounded allow bounds nothing, as the mode already grants the host). All 11 `ssh-agent@1` checks
 pass: a workload's first process starts only once the start's install steps, files, agent context and
-startup hooks are done, and after the runtime agent's unit is up. The failures left are
-`lifecycle@1/hook-env-restricted`, the recorded difference above (install steps keep the proxy
-and CA variables); and `SPEC-v3 §7.1.1/validate-expanded-declarations` and `atomic-selection`,
-which use the suite's selection controls (`--reject-capability`, selection records) that
-smolbento doesn't have.
+startup hooks are done, and after the runtime agent's unit is up. The failures left are `lifecycle@1/hook-env-restricted`, the recorded difference above (install steps keep the proxy
+and CA variables); `SPEC-v3 §7.1.1/validate-expanded-declarations`, `atomic-selection` and
+`§7.1.2/exact-version`, which use the suite's selection controls (`--reject-capability`, selection
+records) that smolbento doesn't have; and the `sbx@1` workspace and identity environment checks
+(`environment-provided`, `-process`, `-internal`, `-hooks`, `-hooks-internal`,
+`identity-stable`, `identity-new-after-deletion`). Those read the environment the workload's agent
+was launched with, and smolbento launches an `sbx@1` workload's agent only on `run`; the four
+variables also don't yet override yours, `IS_SANDBOX` isn't set, and there's no `recreate`. The
+adapter maps `--workspace-mode internal` to a sandbox without a workspace mount (its workspace is
+the image's `WORKDIR`) and refuses `none`, `host` and `cloned`, so those scenario checks skip.
 `resources@1/limit-applied` warns: the sandbox reports its memory limit as unknown. The limit is
 applied, as the VM's size (`--mem`, which the spec allows), but the check reads only the cgroup's
 `memory.max`, and a smolvm machine's workload sees the cgroup2 root, which has none. It needs smolvm
 to give the workload its own cgroup with the VM's memory as `memory.max`, as it already does for
 pod containers; no adapter verb is involved, so the adapter can't report it.
 
-Not claimed, each for checks that fail: `dockerd@1` and `volume@1` (the spec's `recreate` keeps
-the engine store and volumes while discarding the sandbox's disk, and smolbento keeps them on that
-disk); `git-identity@1` and `agent-context@2` (`recreate` and selection records are missing;
+Not claimed, each for checks that fail: `dockerd@1` (the spec's `recreate` replaces the sandbox
+in place, keeping the engine store, and smolbento has no `recreate`); `volume@1` (it also needs
+volumes kept across delete and create, with commands to list and remove them; smolbento keeps
+volumes on the sandbox's disk, see [Kits](#kits)); `git-identity@1` and `agent-context@2` (`recreate` and selection records are missing;
 `git-identity@1/global-defaults` and `agent-context@2/materialized` pass); `agent-skills@1` and
 `agent-skill@1` (selection records); and `credential@1` (`inject-only-no-env` finds the CA variables
 that install steps keep, the recorded difference above; the rest that ran pass). The adapter can
@@ -353,7 +360,7 @@ fail.
 ## Kits
 
 smolbento implements the [sandbox kit spec](https://github.com/docker/sandbox-kit-spec) at commit
-`fa512f4b5812abfe3210b28e80c5ee773b98e2cb` (`SPEC_COMMIT` in the code; `just conformance` runs the
+`a4d6ca06175f2d9cac57428b8c254ba7f5f36570` (`SPEC_COMMIT` in the code; `just conformance` runs the
 spec's suite at the same commit). v3 is still experimental upstream. v2 `spec.yaml` kits and smolvm Smolfiles work too.
 
 A kit that **requires** a capability marked "no" or "later" fails, with its `type@version`, before
@@ -372,29 +379,34 @@ used.
 
 Each declared capability version is its own request (spec §7.1.2). A kit declaring both
 `network-policy@1` and `@2`, anywhere in its descriptor, is refused: the spec makes them exclusive.
-The spec's own validator accepts the pair and merges it. A capability `type` must read
-`<namespace>/<name>@<version>` (spec §7), or the kit is refused, even for an optional entry.
+The spec's own validator accepts the pair and merges it. `agent-sessions@1` and `@2` are exclusive
+too, within a kit and across the kits of a sandbox. For `agent-context`, smolbento uses one version
+per sandbox, the explicit "accept one version" policy §7.1.2 allows: `@2` unless a kit requires
+`@1`. An optional request for the other version is skipped; a required one refuses the kit. A
+capability `type` must read `<namespace>/<name>@<version>` (spec §7), or the kit is refused, even
+for an optional entry.
 
 | Capability | sbx (local) | smolbento |
 |---|---|---|
 | `network-policy@1`, `@2` | Yes | Yes, source `kit`. Install-phase rules apply while they're in the policy: from create (or `kit add`) until its install steps are done, when they're removed, before the workload's entrypoint starts. A start removes any an interrupted create or `kit add` left. An install-phase CIDR deny stays enforced for the sandbox's life (smolvm takes CIDR denies only at create; create prints a note), though `policy ls` doesn't show it after install. `@2` method and path rules are enforced on hosted sandboxes ([Request rules](network-and-secrets.md#request-rules)), with paths matched in exact case. Where a sandbox won't be hosted (`network.egress=smolvm`, install-only credentials, no service manager), a kit requiring them is refused. Optional ones there: allow rules cover the whole host, and deny rules with methods or paths are dropped (the skipped line says how many) |
 | `credential@1` | Yes | API keys: yes, through your secrets. OAuth with `passthrough: true`: yes (the agent's own login keeps its tokens in the sandbox). OAuth without passthrough: its API key part binds; logins happen inside the sandbox. An inject-only credential (no `name`) adds no variable on a hosted sandbox; with `network.egress=smolvm`, and during install for an install-only one, `SBX_KIT_<SERVICE>` holds smolvm's placeholder (smolvm's CLI gives every credential a variable) |
 | `port@1` | Yes | Yes, on `127.0.0.1` |
-| `volume@1` | Yes, removed with the sandbox | Yes, on the sandbox's disk. Removed with the sandbox (`rm`, `reset`, recreate); kept across stop and start; each fork gets a copy. The path is cleaned (`.`, `..`, doubled `/`); one holding `:` is refused, because smolvm reads it as host:guest (the spec allows it) |
+| `volume@1` | Yes, removed with the sandbox; no retained volume storage to list or remove | Differs from the spec, which keeps volumes across delete and create: smolbento keeps them on the sandbox's disk, so `rm` and `reset` remove them, and `size` is ignored. Kept across stop and start; each fork gets a copy. The path is cleaned (`.`, `..`, doubled `/`); one holding `:` is refused, because smolvm reads it as host:guest (the spec allows it) |
 | `resources@1` | Limited (no GPU) | CPUs and memory. GPU ignored |
 | `lifecycle@1` | Yes | Yes: install steps on first start, startup steps on every start. `interactive` ignored, but two entries declaring it are refused, as are two writing one file path (`kit A … and kit B … both declare file PATH`, naming each entry; spec `lifecycle@1/shared-paths-avoided`, selected groups included). Before, the later kit won the path. A v3 install step's clean environment also keeps `USER`, the proxy variables and the CA-bundle variables (when set), as sbx's does, so downloads work behind a proxy and with smolvm's CA; the spec's baseline (`lifecycle@1/hook-env-restricted`) has only `PATH`, `HOME`, `HOSTNAME`, `TERM`, `PWD`, `OLDPWD`, `SHLVL` and `_` |
-| `agent-context@1`, `@2` | Yes. In 0.54 a mixin's `@2` text is listed in the index, as for `@1` | Yes, in the same places (see below). `@2` text is inline, following the spec |
+| `agent-context@1`, `@2` | Yes. In 0.54 a mixin's `@2` text is listed in the index, as for `@1` | Yes, in the same places (see below). `@2` `delivery` is read, but all `@2` text is inline for now |
 | `sbx@1` | Yes | Yes: the workload's command is the agent (see below) |
 | `git-identity@1` | Yes | Yes: your `git config user.name/email` |
 | `long-running@1` | Yes | Yes: no auto-stop when the last session ends |
 | `privileged@1` | Yes | Accepted, with no effect of its own: a kit's steps can already run as root (`user: "0"`), so smolbento passes no extra flag |
 | `dockerd@1` | Yes | Yes: dockerd starts before startup steps, waited for up to 60 s. Elevation needs nothing extra: smolbento starts dockerd as root, and a kit's steps can run as root (`user: "0"`). Granted without asking while `docker.enabled` is on (`tck: dockerd@1/explicit-consent` is a SHOULD); with it off, a required one is refused and an optional one skipped |
-| `agent-sessions@1` | Declaration only | Declaration only |
+| `agent-sessions@1`, `@2` | Declaration only (`@2` not measured) | Declaration only; the two are exclusive |
 | `host-mount@1` | Yes | Yes: a directory on your machine, shared by the kit's sandboxes and kept after `rm` (see below). A path holding `:` is refused, because smolvm reads it as host:guest (the spec allows it) |
 | `ssh-agent@1` | Yes | Yes, with `sign` and `authenticate` limits, served by a service unit ([SSH agent](#ssh-agent)) |
 | `agent-skills@1`, `agent-skill@1` | Yes | Yes ([Skills](#skills)). `kit add` refuses a kit with either, as it does `host-mount@1`. `agent-skill@1` with `name: null` means no name |
 | `kit-registry@1` | Approved builder kits only | No |
 | `agent-interactive-sessions@1`, `usb-device@1` | No | No |
+| `kvm@1`, `auto-restart@1`, `open-url@1`, `docker-auth@1` | Not measured | No |
 
 ### What works as in sbx
 
@@ -433,6 +445,9 @@ The spec's own validator accepts the pair and merges it. A capability `type` mus
   numbers and booleans in `default:` and `enum:` become strings. A v3 argument with `env:` is
   exported under that name whenever it has a value (defaults and empty values count; no value
   exports nothing). The name may be `PATH`. A later kit's value and your own `-e` still win.
+  A `buildSecret` argument is the build's alone (spec §6.2): `--kit-arg` and references to it fail
+  as for an undeclared argument, and nothing is exported for it. A local kit's build gets no
+  secrets yet, so a recipe step that requires one fails.
 - References in a capability's config are replaced before the config is read (spec §6), so they
   work in every field, numbers included. Every such config is replaced and checked at create, an
   optional one too, even when the capability is then skipped, as the spec says. So a reference
@@ -471,8 +486,9 @@ The spec's own validator accepts the pair and merges it. A capability `type` mus
   `<!-- sbx:kits-section end -->`, the workload kit's too: a `contentFile` where the kit's image
   has it, inline text in `kits-agent-context/<kit>.md`. `agent-context@2` text (a v2 kit's
   `agentInstructions` too) is in the file itself, between the same markers, joined with two
-  newlines. sbx 0.54 lists a mixin's `@2` text in the index, as for `@1`, so the two differ there
-  for now.
+  newlines, whatever its `delivery`. sbx 0.54 lists a mixin's `@2` text in the index, as for `@1`,
+  which is what the spec now asks of a mixin's progressive (default) `@2` text, so smolbento differs
+  from both there for now; `delivery: inline` text is where the spec wants it.
 - A kit's network hosts follow the spec: `*` means everything, as `**` does, a v2 kit's
   `permissions.network` too (only `bento policy allow` refuses a bare `*`, as sbx does). A v2
   kit's resources, network, ports and volumes are read as their v3 capabilities, so their errors

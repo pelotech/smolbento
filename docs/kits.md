@@ -363,8 +363,10 @@ create. If linking fails, the start warns (`couldn't set up shared skills`) and 
 
 ### Skills from kits
 
-- `agent-skills@1` names a `path` (absolute) that gets the store, with `mode` `readonly` (default)
-  or `readwrite`. Access is the narrower of the kit's mode (the widest across kits) and `--skills`.
+- `agent-skills@1` names a `path` (absolute) for skills, with `mode` `off` (default), `readonly`
+  or `readwrite`: the most store access the kit takes there. Access is the narrower of the kit's
+  mode (the widest across kits) and `--skills`, so a kit that omits `mode` gets bundled skills at
+  its path but nothing from the store. A built-in agent's own directories follow `--skills` alone.
   smolvm mounts the store once, at `/run/sbx/skills-shared`, and each such path is a bind of that
   mount (read-only unless its access is read-write), made as root at each start before any hook,
   with no links. Every path is the one store: a write through one shows through the others. `off`

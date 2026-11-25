@@ -13,6 +13,7 @@ use crate::kits::model::{
 };
 use crate::kits::v3;
 use crate::sandbox::Engine;
+use crate::skills::Mode;
 use crate::ssh_agent::{AgentGrant, PhaseGrant};
 
 #[derive(Debug)]
@@ -242,12 +243,12 @@ impl Merged {
         Ok(())
     }
 
-    fn add_skill_dir(&mut self, path: &str, readwrite: bool) {
+    fn add_skill_dir(&mut self, path: &str, mode: Mode) {
         match self.skill_dirs.iter_mut().find(|d| d.path == path) {
-            Some(d) => d.readwrite |= readwrite,
+            Some(d) => d.mode = d.mode.max(mode),
             None => self.skill_dirs.push(SkillDir {
                 path: path.into(),
-                readwrite,
+                mode,
             }),
         }
     }
@@ -298,7 +299,8 @@ pub struct HostMount {
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct SkillDir {
     pub path: String,
-    pub readwrite: bool,
+    /// The widest mode declared for the path.
+    pub mode: Mode,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -307,6 +309,22 @@ pub struct Bundled {
     pub name: String,
     pub source: String,
     pub optional: bool,
+}
+
+/// `agent-sessions@2` is exclusive with `@1` across kits too (`v3::check_caps` refuses both in one).
+fn check_sessions(all: &[Kit]) -> Result<()> {
+    let by = |v: &str| {
+        let ty = format!("com.docker.sandbox/agent-sessions@{v}");
+        all.iter().find(|k| k.caps.iter().any(|c| c.ty == ty))
+    };
+    if let (Some(a), Some(b)) = (by("1"), by("2")) {
+        bail!(
+            "agent-sessions@1 and agent-sessions@2 are exclusive: kits {} and {} declare one each",
+            a.name,
+            b.name
+        );
+    }
+    Ok(())
 }
 
 /// Within one kit, a skills path or a bundled skill name may appear once.
@@ -485,6 +503,7 @@ pub fn resolve_for(
         check_skill_caps(k)?;
         skipped.extend(select_groups(k, hosted)?);
     }
+    check_sessions(&all)?;
     check_lifecycle_conflicts(&all, workdir)?;
 
     let mut merged = Merged {
@@ -529,9 +548,7 @@ pub fn resolve_for(
                     merged.add_volume(&k.name, path, *tmpfs, mode)?;
                 }
                 CapBody::HostMount { path, mode } => merged.add_host_mount(k, path, mode)?,
-                CapBody::AgentSkills { path, readwrite } => {
-                    merged.add_skill_dir(path, *readwrite);
-                }
+                CapBody::AgentSkills { path, mode } => merged.add_skill_dir(path, *mode),
                 CapBody::AgentSkill { source, name } => {
                     merged.add_bundled(&k.name, name, source, cap.optional)?;
                 }

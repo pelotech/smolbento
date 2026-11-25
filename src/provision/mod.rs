@@ -651,8 +651,9 @@ pub fn prepare_create<R: Runner>(
     Ok((added, first_start))
 }
 
-/// A built-in agent's own `agent-skills@1` directories as read-write requests (the user's mode
-/// decides), then every kit's.
+/// A built-in agent's own `agent-skills@1` directories as read-write requests whatever its kit
+/// says (the user's mode decides, as in sbx; a recorded difference from the spec's `off` default),
+/// then every kit's.
 fn skill_wants(kits: Option<&Plan>) -> Vec<crate::skills::Want> {
     let mut wants = Vec::new();
     if let Some(p) = kits {
@@ -662,7 +663,7 @@ fn skill_wants(kits: Option<&Plan>) -> Vec<crate::skills::Want> {
                 crate::kits::model::CapBody::AgentSkills { path, .. } => {
                     Some(crate::skills::Want {
                         path: path.clone(),
-                        readwrite: true,
+                        mode: crate::skills::Mode::Readwrite,
                         builtin: true,
                     })
                 }
@@ -671,7 +672,7 @@ fn skill_wants(kits: Option<&Plan>) -> Vec<crate::skills::Want> {
         }
         wants.extend(p.merged.skill_dirs.iter().map(|d| crate::skills::Want {
             path: d.path.clone(),
-            readwrite: d.readwrite,
+            mode: d.mode,
             builtin: false,
         }));
     }

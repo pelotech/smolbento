@@ -136,8 +136,10 @@ fn a_port_of_zero_and_content_with_content_file_are_errors() {
     );
 }
 
+/// tck: agent-skills@1/off-default-honored (an omitted mode is `off`)
 #[test]
 fn agent_skills_caps() {
+    use crate::skills::Mode;
     use serde_json::json;
     let b = |ty: &str, c: serde_json::Value| body(&format!("com.docker.sandbox/{ty}"), Some(c));
     assert_eq!(
@@ -148,16 +150,22 @@ fn agent_skills_caps() {
         .unwrap(),
         CapBody::AgentSkills {
             path: "/home/agent/.claude/skills".into(),
-            readwrite: false
+            mode: Mode::Off
         }
     );
-    assert_eq!(
-        b("agent-skills@1", json!({"path": "/s", "mode": "readwrite"})).unwrap(),
-        CapBody::AgentSkills {
-            path: "/s".into(),
-            readwrite: true
-        }
-    );
+    for (given, mode) in [
+        ("off", Mode::Off),
+        ("readonly", Mode::Readonly),
+        ("readwrite", Mode::Readwrite),
+    ] {
+        assert_eq!(
+            b("agent-skills@1", json!({"path": "/s", "mode": given})).unwrap(),
+            CapBody::AgentSkills {
+                path: "/s".into(),
+                mode
+            }
+        );
+    }
     for bad in [
         json!({"path": "s"}),
         json!({"path": "/s/"}),
@@ -631,6 +639,38 @@ fn both_network_policy_versions_are_refused() {
             "{e:#}"
         );
     }
+}
+
+/// tck: agent-context@2/delivery: `progressive` when omitted; `@1` bodies are progressive and
+/// take no `delivery`. The accepted values: `resolve_tests`.
+#[test]
+fn agent_context_delivery() {
+    use crate::kits::model::Delivery;
+    let ctx = |ty: &str, extra: &str| {
+        let c =
+            format!(r#"{{"type":"com.docker.sandbox/{ty}","config":{{"content":"x"{extra}}}}}"#);
+        one_cap(&c).map(|k| match &k.caps[0].body {
+            CapBody::AgentContext(r) => r.delivery,
+            b => panic!("{b:?}"),
+        })
+    };
+    assert_eq!(ctx("agent-context@2", "").unwrap(), Delivery::Progressive);
+    assert_eq!(ctx("agent-context@1", "").unwrap(), Delivery::Progressive);
+    assert!(ctx("agent-context@1", r#","delivery":"inline""#).is_err());
+}
+
+/// agent-sessions@2 is a declaration, like @1, and exclusive with it.
+#[test]
+fn agent_sessions_2_is_a_declaration_exclusive_with_1() {
+    let s1 = r#"{"type":"com.docker.sandbox/agent-sessions@1","config":{"prompt":["-p","{{.Prompt}}"]}}"#;
+    let s2 = r#"{"type":"com.docker.sandbox/agent-sessions@2","config":{"prompt":["-p","{{.Prompt}}"]}}"#;
+    let k = one_cap(s2).unwrap();
+    assert_eq!(k.caps[0].body, CapBody::AgentSessions);
+    let e = one_cap(&format!("{s1},{s2}")).unwrap_err();
+    assert!(
+        format!("{e:#}").contains("agent-sessions@1 and agent-sessions@2 are exclusive"),
+        "{e:#}"
+    );
 }
 
 #[test]

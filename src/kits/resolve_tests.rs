@@ -648,10 +648,10 @@ fn a_host_mount_path_has_one_owner() {
     }
 }
 
-fn skills_dir(path: &str, rw: bool) -> CapBody {
+fn skills_dir(path: &str, mode: Mode) -> CapBody {
     CapBody::AgentSkills {
         path: path.into(),
-        readwrite: rw,
+        mode,
     }
 }
 fn skill(source: &str, name: &str) -> CapBody {
@@ -661,23 +661,45 @@ fn skill(source: &str, name: &str) -> CapBody {
     }
 }
 
+/// agent-sessions@2 is exclusive with @1 across kits too: two kits describing the workload's
+/// agent are two authors (spec agent-sessions@2 "Shape").
+#[test]
+fn agent_sessions_1_and_2_from_two_kits_are_refused() {
+    const S1: &str = "com.docker.sandbox/agent-sessions@1";
+    const S2: &str = "com.docker.sandbox/agent-sessions@2";
+    let w = workload("w").cap(S1, true, CapBody::AgentSessions);
+    let m = mixin("m").cap(S2, false, CapBody::AgentSessions);
+    let e = run(w, vec![m]).unwrap_err();
+    assert_eq!(
+        format!("{e:#}"),
+        "agent-sessions@1 and agent-sessions@2 are exclusive: kits w and m declare one each"
+    );
+}
+
+/// Widest declared mode, ordered off, readonly, readwrite (spec agent-skills@1 "Composition").
 #[test]
 fn skill_dirs_merge_to_the_widest_mode_and_one_kit_names_a_path_once() {
     const AS: &str = "com.docker.sandbox/agent-skills@1";
-    let a = mixin("a").cap(AS, false, skills_dir("/s", false));
-    let b = mixin("b").cap(AS, false, skills_dir("/s", true));
-    let p = run(workload("w"), vec![a, b]).unwrap();
-    assert_eq!(
-        p.merged.skill_dirs,
-        [SkillDir {
+    let merged = |modes: &[Mode]| {
+        let kits = (modes.iter().enumerate())
+            .map(|(i, m)| mixin(&format!("m{i}")).cap(AS, false, skills_dir("/s", *m)))
+            .collect();
+        run(workload("w"), kits).unwrap().merged.skill_dirs
+    };
+    let dir = |mode| {
+        vec![SkillDir {
             path: "/s".into(),
-            readwrite: true
+            mode,
         }]
+    };
+    assert_eq!(
+        merged(&[Mode::Readonly, Mode::Readwrite]),
+        dir(Mode::Readwrite)
     );
-    let k =
-        mixin("k")
-            .cap(AS, false, skills_dir("/s", false))
-            .cap(AS, false, skills_dir("/s", true));
+    assert_eq!(merged(&[Mode::Off, Mode::Readonly]), dir(Mode::Readonly));
+    let k = mixin("k")
+        .cap(AS, false, skills_dir("/s", Mode::Readonly))
+        .cap(AS, false, skills_dir("/s", Mode::Readwrite));
     let e = run(workload("w"), vec![k]).unwrap_err();
     assert_eq!(format!("{e:#}"), "kit k: agent-skills@1 names /s twice");
 }
@@ -844,6 +866,51 @@ fn hooks_files_and_contexts_expand_args_and_env() {
     assert_eq!(context.directory.as_deref(), Some("/home/alice"));
     assert_eq!(context.filename.as_deref(), Some("alice.md"));
     assert!(!p.args["m"].contains_key("opt"));
+}
+
+/// tck: agent-context@2/delivery: progressive when omitted; after expansion only `progressive`
+/// or `inline`, so an empty or other value refuses the kit.
+#[test]
+fn agent_context_2_delivery_is_read_after_expansion() {
+    use crate::kits::model::Delivery;
+    let kit = || {
+        v3_m(
+            "  d: {}\n",
+            "  - type: com.docker.sandbox/agent-context@2\n    config: {content: x, delivery: \"${{ kit.args.d }}\"}\n",
+        )
+    };
+    let delivery = |v: &str| {
+        let p = resolve(workload("w"), vec![kit()], &with_args(&[v]))?;
+        anyhow::Ok(p.merged.contexts[0].req.delivery)
+    };
+    assert_eq!(delivery("d=inline").unwrap(), Delivery::Inline);
+    assert_eq!(delivery("d=progressive").unwrap(), Delivery::Progressive);
+    for bad in ["d=", "d=eager"] {
+        let e = delivery(bad).unwrap_err();
+        assert!(
+            format!("{e:#}").contains("delivery must be progressive or inline"),
+            "{bad}: {e:#}"
+        );
+    }
+}
+
+/// tck: SPEC-v3 §6/build-secret-no-expansion: a `buildSecret` arg is the build's alone. It takes
+/// no `--kit-arg`, can't be referenced, and exports nothing, even when it (wrongly) names `env`.
+#[test]
+fn a_build_secret_arg_is_build_only() {
+    let kit = |caps: &str| v3_m("  tok: {buildSecret: tok, env: TOK, default: x}\n", caps);
+    let p = resolve(workload("w"), vec![kit("  []\n")], &ArgValues::default()).unwrap();
+    assert!(
+        !p.merged.env.iter().any(|(k, _)| k == "TOK"),
+        "{:?}",
+        p.merged.env
+    );
+    assert!(!p.args["m"].contains_key("tok"));
+    let e = resolve(workload("w"), vec![kit("  []\n")], &with_args(&["tok=1"])).unwrap_err();
+    assert_eq!(format!("{e:#}"), "unknown kit argument tok");
+    let reference = "  - type: com.docker.sandbox/agent-context@2\n    config: {content: \"${{ kit.args.tok }}\"}\n";
+    let e = resolve(workload("w"), vec![kit(reference)], &ArgValues::default()).unwrap_err();
+    assert!(format!("{e:#}").contains("\"tok\""), "{e:#}");
 }
 
 fn opt_hook_kit() -> Kit {
