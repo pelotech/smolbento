@@ -333,11 +333,13 @@ your agent (`ssh-add -D` fails with `Failed to remove all identities.`). The set
 
 Docker's kit-spec conformance suite checks this capability through `tests/conformance/smolbento-adapter`
 (`just conformance`, at `SPEC_COMMIT`). The adapter claims `ssh-agent@1`, `host-mount@1`,
-`lifecycle@1`, `network-policy@1`/`@2`, `agent-context@1`, `long-running@1`, `privileged@1`,
+`lifecycle@1`, `network-policy@1`/`@2`, `agent-context@1`/`@2`, `long-running@1`, `privileged@1`,
 `resources@1` and `sbx@1`, under the `balanced` mode (sbx's default: under `allow-all` a kit's
 bounded allow bounds nothing, as the mode already grants the host). All 11 `ssh-agent@1` checks
 pass: a workload's first process starts only once the start's install steps, files, agent context and
-startup hooks are done, and after the runtime agent's unit is up. The failures left are `lifecycle@1/hook-env-restricted`, the recorded difference above (install steps keep the proxy
+startup hooks are done, and after the runtime agent's unit is up. `agent-context@2/delivery`,
+`materialized` and `mixed-versions` pass; `selection-boundaries` needs `volume@1`, not claimed, so it
+skips. The failures left are `lifecycle@1/hook-env-restricted`, the recorded difference above (install steps keep the proxy
 and CA variables); `SPEC-v3 §7.1.1/validate-expanded-declarations`, `atomic-selection` and
 `§7.1.2/exact-version`, which use the suite's selection controls (`--reject-capability`, selection
 records) that smolbento doesn't have; and the `sbx@1` workspace and identity environment checks
@@ -357,8 +359,8 @@ pod containers; no adapter verb is involved, so the adapter can't report it.
 Not claimed, each for checks that fail: `dockerd@1` (the spec's `recreate` replaces the sandbox
 in place, keeping the engine store, and smolbento has no `recreate`); `volume@1` (it also needs
 volumes kept across delete and create, with commands to list and remove them; smolbento keeps
-volumes on the sandbox's disk, see [Kits](#kits)); `git-identity@1` and `agent-context@2` (`recreate` and selection records are missing;
-`git-identity@1/global-defaults` and `agent-context@2/materialized` pass); `agent-skills@1` and
+volumes on the sandbox's disk, see [Kits](#kits)); `git-identity@1` (`recreate` and selection records are missing;
+`git-identity@1/global-defaults` passes); `agent-skills@1` and
 `agent-skill@1` (selection records); and `credential@1` (`inject-only-no-env` finds the CA variables
 that install steps keep, the recorded difference above; the rest that ran pass). The adapter can
 still run these slices (`SMOLBENTO_TCK_CAPABILITIES`): it maps `--skills-host-mode` to `--skills`,
