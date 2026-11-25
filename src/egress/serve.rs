@@ -54,7 +54,7 @@ pub fn run<R: Runner>(ctx: &Ctx<R>, name: &str) -> Result<()> {
     terminated.dedup();
     // The unit's socket starts the process again on the next connection.
     let restart = Restart::new(ruled, Box::new(|| std::process::exit(0)));
-    let rules = Rules::new(&ctx.paths, name, sb.meta.rec.host_access, hosts);
+    let rules = Rules::new(source.clone(), sb.meta.rec.host_access, hosts);
     let config = InterceptorConfig {
         machine: sb.machine,
         policy: policy(label),

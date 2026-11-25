@@ -13,20 +13,24 @@ use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::{Arc, Mutex, PoisonError};
 use std::time::SystemTime;
 
-/// What `policy.toml` was when last read: its modification time and length, `None` when it can't be
-/// stat'ed.
-type Stamp = Option<(SystemTime, u64)>;
+/// What `policy.toml` was when last read: its modification time, length, device and inode (a save
+/// renames a new file into place, so even a same-length save in one mtime tick changes it); `None`
+/// when it can't be stat'ed, which is never taken as unchanged.
+type Stamp = Option<(SystemTime, u64, u64, u64)>;
 
-/// One sandbox's request policy, rebuilt from `policy.toml` only when the file's stamp changes, so
+/// One sandbox's `policy.toml` and request policy, re-read only when the file's stamp changes, so
 /// asking costs a `stat`.
 pub struct PolicySource {
     paths: Paths,
-    sandbox: String,
+    pub(super) sandbox: String,
     state: Mutex<Loaded>,
 }
 
+#[derive(Clone)]
 struct Loaded {
     stamp: Stamp,
+    /// `policy.toml` as read, or why it can't be.
+    file: Result<Arc<crate::policy::Policy>, String>,
     policy: Arc<Policy>,
     /// The policy's `terminate_hosts`; `None` while `policy.toml` can't be used.
     ruled: Option<Vec<String>>,
@@ -34,63 +38,67 @@ struct Loaded {
 
 impl PolicySource {
     pub fn new(paths: &Paths, sandbox: &str) -> PolicySource {
-        let source = PolicySource {
+        PolicySource {
             paths: paths.clone(),
             sandbox: sandbox.to_string(),
-            state: Mutex::new(Loaded {
-                stamp: None,
-                policy: Arc::new(REFUSE),
-                ruled: None,
-            }),
-        };
-        source.reload(stamp(&source.paths));
-        source
+            state: Mutex::new(load(paths, sandbox, stamp(paths))),
+        }
     }
 
     /// The current request policy. When `policy.toml` can't be read or mapped, one that refuses
     /// every request: the filter sees decrypted hosts only, the ruled and credential hosts.
     pub fn current(&self) -> Arc<Policy> {
-        self.refresh().0
+        self.refresh().policy
+    }
+
+    /// The current `policy.toml`, or why it can't be read.
+    pub fn file(&self) -> Result<Arc<crate::policy::Policy>, String> {
+        self.refresh().file
     }
 
     /// The hosts the current rules name, in `terminate_hosts` form; `None` while `policy.toml` can't
     /// be used.
     pub fn ruled_hosts(&self) -> Option<Vec<String>> {
-        self.refresh().1
+        self.refresh().ruled
     }
 
-    fn refresh(&self) -> (Arc<Policy>, Option<Vec<String>>) {
+    fn refresh(&self) -> Loaded {
         let now = stamp(&self.paths);
         {
             let s = self.state.lock().unwrap_or_else(PoisonError::into_inner);
-            if s.stamp == now {
-                return (s.policy.clone(), s.ruled.clone());
+            if now.is_some() && s.stamp == now {
+                return s.clone();
             }
         }
-        self.reload(now)
+        // Read and mapped outside the lock; a racing refresh just reads it too.
+        let loaded = load(&self.paths, &self.sandbox, now);
+        *self.state.lock().unwrap_or_else(PoisonError::into_inner) = loaded.clone();
+        loaded
     }
+}
 
-    /// Reads and maps the file outside the lock; a racing reload just reads it too.
-    fn reload(&self, now: Stamp) -> (Arc<Policy>, Option<Vec<String>>) {
-        let built = crate::policy::Policy::load(&self.paths)
-            .map_err(|e| format!("{e:#}"))
-            .map(|p| request_policy(&p, &self.sandbox));
-        let (policy, ruled) = match built {
-            Ok(p) => {
-                let ruled = p.terminate_hosts();
-                (Arc::new(p), Some(ruled))
-            }
-            Err(e) => {
-                // The detail goes to the unit's log only: a 403 never shows the policy's content.
-                eprintln!("egress: policy.toml unreadable, refusing requests on ruled hosts: {e}");
-                (Arc::new(REFUSE), None)
-            }
-        };
-        let mut s = self.state.lock().unwrap_or_else(PoisonError::into_inner);
-        s.stamp = now;
-        s.policy = policy.clone();
-        s.ruled = ruled.clone();
-        (policy, ruled)
+/// `policy.toml` and `sandbox`'s request policy from it, as of `now`.
+fn load(paths: &Paths, sandbox: &str, now: Stamp) -> Loaded {
+    let file = crate::policy::Policy::load(paths)
+        .map(Arc::new)
+        .map_err(|e| format!("{e:#}"));
+    let (policy, ruled) = match &file {
+        Ok(p) => {
+            let p = request_policy(p, sandbox);
+            let ruled = p.terminate_hosts();
+            (Arc::new(p), Some(ruled))
+        }
+        Err(e) => {
+            // The detail goes to the unit's log only: a 403 never shows the policy's content.
+            eprintln!("egress: policy.toml unreadable, refusing requests on ruled hosts: {e}");
+            (Arc::new(REFUSE), None)
+        }
+    };
+    Loaded {
+        stamp: now,
+        file,
+        policy,
+        ruled,
     }
 }
 
@@ -101,8 +109,9 @@ const REFUSE: Policy = Policy {
 };
 
 fn stamp(paths: &Paths) -> Stamp {
+    use std::os::unix::fs::MetadataExt;
     let m = std::fs::metadata(paths.policy_file()).ok()?;
-    Some((m.modified().ok()?, m.len()))
+    Some((m.modified().ok()?, m.len(), m.dev(), m.ino()))
 }
 
 /// The interceptor's request filter: the current rules, judged with no file read beyond a `stat`.
