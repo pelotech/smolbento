@@ -155,7 +155,7 @@ fn attach<R: Runner>(ctx: &Ctx<R>, a: &RunArgs, sb: &Sandbox, command: Vec<Strin
     let sessions = ctx.paths.sessions();
     let mut spec = ExecSpec {
         name: sb.machine.clone(),
-        user: Some(sb.meta.session_user().into()),
+        user: Some(sb.meta.rec.session_user().into()),
         workdir: Some(session_dir(sb, a.workdir.as_deref())),
         interactive: true,
         tty: ctx.stdin_tty,

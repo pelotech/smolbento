@@ -1012,7 +1012,7 @@ fn a_mountless_kit_sandbox_gets_its_workdir_before_install_hooks() {
         .position(|l| l.starts_with("machine exec") && l.contains(mkdir))
         .expect("the workdir step");
     assert!(lines[dir].contains(" -u root "), "{}", lines[dir]);
-    assert!(lines[dir].contains("chown 'agent': "), "{}", lines[dir]);
+    assert!(lines[dir].contains("chown 'agent:' "), "{}", lines[dir]);
     let hook = lines
         .iter()
         .position(|l| l.starts_with("machine exec") && l.contains("echo hook-ran"))

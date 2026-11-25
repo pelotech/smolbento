@@ -114,7 +114,8 @@ What a kit does, and when:
   runs.
 - Startup steps run as the session user (the workload image's user, else `agent`) unless they name a
   user, as the kit spec's `lifecycle@1/default-users` says; install steps run as root. A numeric user
-  runs as the account with that uid.
+  runs as the account with that uid. An image user with a group (`1000:1000`) runs as that user, in
+  the account's own group; a uid with no account takes the named group, as sessions do.
 - A Docker engine comes from `dockerd@1`. The shipped `docker` kit is that one request and nothing
   else (the image must have Docker). A workload that asks for an engine
   (`com.docker.sandboxes.start-docker`, or a `-docker` image) gets the `docker` kit even when its own

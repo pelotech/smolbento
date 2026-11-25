@@ -25,7 +25,7 @@ pub struct Target {
     pub spawner: ProcessSpawner,
     /// The smolvm machine name.
     pub machine: String,
-    /// The session user (`Meta::session_user`).
+    /// The session user (`Recorded::session_user`).
     pub user: String,
     pub workdir: String,
     /// Whether the sandbox has the browser bridge (`BROWSER` for sessions).

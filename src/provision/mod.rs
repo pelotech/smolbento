@@ -77,13 +77,7 @@ fn plan_for<R: Runner>(ctx: &Ctx<R>, meta: &Meta, install: bool) -> Result<Start
     // Like create (and sbx after `policy reset`), a start needs a chosen policy.
     let policy = ensure_policy(ctx)?;
     let secrets = SecretsFile::load(&ctx.paths)?;
-    let network = compile::network(
-        &policy,
-        sandbox,
-        &meta.rec.credential_hosts,
-        meta.rec.host_access,
-        meta.egress.is_some(),
-    );
+    let network = compile::network_of(&policy, meta);
     let (env, remove, egress) = match &meta.egress {
         // Secret values stay with bento's interceptor; smolvm gets only its token.
         Some(label) => (
@@ -477,13 +471,7 @@ pub fn prepare_create<R: Runner>(
             // After the kits' install hooks. A sandbox without kits gets a first start for these
             // steps alone.
             first_start
-                .get_or_insert_with(|| sandbox::KitFirstStart {
-                    steps: Default::default(),
-                    restart_without: Vec::new(),
-                    rule_ids: Vec::new(),
-                    agent_backing: None,
-                    agent_socket: None,
-                })
+                .get_or_insert_default()
                 .steps
                 .install
                 .extend(mcp.steps);
@@ -596,14 +584,15 @@ pub fn prepare_create<R: Runner>(
         && let Some(first) = first_start.as_mut()
     {
         let dir = crate::util::sh_quote(&req.workdir());
-        let user = crate::util::sh_quote(req.rec.user.as_deref().unwrap_or("agent"));
+        let (user, group) = crate::sandbox::labels::split_user(req.rec.session_user());
+        let owner = crate::util::sh_quote(&format!("{user}:{}", group.unwrap_or("")));
         first.steps.install.insert(
             0,
             crate::kits::apply::InstallStep {
                 label: "the workspace directory".into(),
                 kit: None,
                 user: None,
-                script: format!("mkdir -p {dir} && chown {user}: {dir}"),
+                script: format!("mkdir -p {dir} && chown {owner} {dir}"),
                 relay_stderr: false,
             },
         );
@@ -966,13 +955,7 @@ pub fn push_network_with<R: Runner>(
     };
     let mut updated = 0;
     for sb in (sandboxes.iter()).filter(|s| s.is_running() && s.in_setup(&ctx.paths)) {
-        let network = compile::network(
-            policy,
-            sb.name(),
-            &sb.meta.rec.credential_hosts,
-            sb.meta.rec.host_access,
-            sb.meta.egress.is_some(),
-        );
+        let network = compile::network_of(policy, &sb.meta);
         match ctx.vm.update_network(&sb.machine, &network) {
             Ok(()) => updated += 1,
             Err(e) => crate::warning!(

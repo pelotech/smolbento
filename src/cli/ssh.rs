@@ -56,7 +56,7 @@ where
     let target = Target {
         spawner,
         machine: sb.machine.clone(),
-        user: sb.meta.session_user().to_string(),
+        user: sb.meta.rec.session_user().to_string(),
         workdir: sb.workdir(),
         bridge: sb.meta.bridge,
         host_env: ctx.env.clone(),

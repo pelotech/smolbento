@@ -92,17 +92,11 @@ mod tests {
     fn egress_setting_accepts_smolvm_and_hosted_only() {
         assert!(!hosted(&settings(Some("smolvm")), "w").unwrap());
         assert!(hosted(&settings(Some("hosted")), "w").unwrap());
+        assert!(!hosted(&settings(Some("hosted")), "_builder").unwrap());
         let e = hosted(&settings(Some("bogus")), "w").unwrap_err();
         assert!(e.to_string().contains("smolvm or hosted"), "{e}");
         let mut s = settings(None);
         assert!(s.set("network.egress", "bogus").is_err());
         s.set("network.egress", "hosted").unwrap();
-    }
-
-    #[test]
-    fn the_builder_is_never_hosted() {
-        let s = settings(Some("hosted"));
-        assert!(!hosted(&s, "_builder").unwrap());
-        assert!(hosted(&s, "work").unwrap());
     }
 }

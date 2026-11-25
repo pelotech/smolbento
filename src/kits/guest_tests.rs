@@ -599,6 +599,19 @@ fn a_uid_without_an_account_runs_through_setpriv() {
     );
 }
 
+/// An image user that names a group (`USER 1000:1000`) runs as its user. A uid without an account
+/// takes the named group, as smolvm's `-u` gives sessions.
+#[test]
+fn a_user_with_a_group_runs_as_the_user() {
+    let d = fake_guest();
+    let path = fake_path(&d);
+    let ran = |user: &str| String::from_utf8_lossy(&run_as(&d, user, &path).stdout).into_owned();
+    assert_eq!(ran("agent:1001"), "runuser agent\nran\n");
+    assert_eq!(ran("4321:99"), "runuser acct\nran\n");
+    assert_eq!(ran("777:2000"), "setpriv 777 2000 --clear-groups\nran\n");
+    assert_eq!(ran("777:"), "setpriv 777 777 --clear-groups\nran\n");
+}
+
 #[test]
 fn a_uid_without_an_account_or_setpriv_fails_clearly() {
     let d = fake_guest();
@@ -618,7 +631,7 @@ fn a_uid_without_an_account_or_setpriv_fails_clearly() {
 
 #[test]
 fn root_needs_no_switch() {
-    for u in ["root", "0"] {
+    for u in ["root", "0", "0:0", "root:root"] {
         assert_eq!(as_user(Some(u), "echo ran"), "echo ran");
     }
 }

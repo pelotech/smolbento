@@ -642,13 +642,7 @@ fn add_running<R: Runner>(
 
     // Pushes the sandbox's network: this add's install-phase rules are open while they're stored.
     let push = |policy: &Policy| -> Result<()> {
-        let network = compile::network(
-            policy,
-            name,
-            &sb.meta.rec.credential_hosts,
-            sb.meta.rec.host_access,
-            sb.meta.egress.is_some(),
-        );
+        let network = compile::network_of(policy, &sb.meta);
         // An open network (allow-all) has no allow list to change, and smolvm can't add one live.
         if network == crate::smolvm::NetworkSpec::Open {
             return Ok(());

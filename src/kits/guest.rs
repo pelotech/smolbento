@@ -128,7 +128,7 @@ fn home_to_user_in(user: &str, passwd: &str) -> String {
 /// `var=` the `print` of `user`'s `passwd` entry (by name or uid; a `:group` is dropped), empty
 /// with no such account.
 fn account(user: &str, passwd: &str, var: &str, print: &str) -> String {
-    let u = user.split(':').next().unwrap_or(user);
+    let u = crate::sandbox::labels::split_user(user).0;
     format!(
         "{var}=$(awk -F: -v u={} '$1 == u || $3 == u {{ print {print}; exit }}' {}); ",
         sh_quote(u),
@@ -138,7 +138,8 @@ fn account(user: &str, passwd: &str, var: &str, print: &str) -> String {
 
 /// `script` as `user` from a root shell. `runuser` where the image has it (util-linux), else `su`.
 /// A numeric user runs as the account with that uid (`runuser` and `su` take names); a uid with
-/// no account runs through `setpriv`, if present.
+/// no account runs through `setpriv`, if present. A `user:group` runs as the user, in the account's
+/// own group; a uid without an account takes the named group.
 pub fn as_user(user: Option<&str>, script: &str) -> String {
     as_user_in(user, script, "/etc/passwd")
 }
@@ -152,6 +153,10 @@ fn as_user_in(user: Option<&str>, script: &str, passwd: &str) -> String {
              else su -s /bin/sh {u} -c {q}; fi"
         )
     };
+    let (user, group) = user.map_or((None, None), |u| {
+        let (u, g) = crate::sandbox::labels::split_user(u);
+        (Some(u), g.filter(|g| !g.is_empty()))
+    });
     match user {
         None | Some("root") | Some("0") => script.to_string(),
         Some(u) if !u.is_empty() && u.bytes().all(|b| b.is_ascii_digit()) => {
@@ -162,10 +167,12 @@ fn as_user_in(user: Option<&str>, script: &str, passwd: &str) -> String {
                 "if _sbu=$(awk -F: -v u={u} '$3 == u {{ print $1; exit }}' {passwd}) \
                  && [ -n \"$_sbu\" ]; then {run}; \
                  elif command -v setpriv >/dev/null 2>&1; then \
-                 setpriv --reuid {u} --regid {u} --clear-groups sh -c {q}; \
+                 setpriv --reuid {u} --regid {g} --clear-groups sh -c {q}; \
                  else echo {missing} >&2; false; fi",
                 passwd = sh_quote(passwd),
                 run = by_name("\"$_sbu\""),
+                // No account to take a group from: the image's, else the uid's own.
+                g = group.map_or_else(|| u.to_string(), sh_quote),
             )
         }
         Some(u) => by_name(&sh_quote(u)),

@@ -186,15 +186,12 @@ pub fn apply(
         .iter()
         .any(|c| matches!(c.body, CapBody::Sbx));
     set_workload_fields(req, &plan.workload, agent_files);
-    // After the workload's fields: a startup hook without `user:` runs as the session user.
-    let session = if crate::sandbox::name::is_internal(&req.name) {
-        "root"
-    } else {
-        req.rec.user.as_deref().unwrap_or("agent")
-    };
-    steps.startup_d = startup_d(&kits, m, &tmpfs, session);
+    // After the workload's fields: a startup hook without `user:` runs as the workload user (the
+    // session user, root for `_builder`).
+    let user = req.rec.workload_user(&req.name);
+    steps.startup_d = startup_d(&kits, m, &tmpfs, user);
     if m.git_identity
-        && let Some(step) = git_identity_step(&kits, host_git(), session)?
+        && let Some(step) = git_identity_step(&kits, host_git(), user)?
     {
         steps.install.insert(0, step);
     }
@@ -441,18 +438,9 @@ fn kit_install_steps(
         String::new()
     };
     let mut steps = Vec::new();
-    let mut per_kit: Vec<(&str, usize)> = Vec::new();
+    let mut per_kit: BTreeMap<&str, usize> = BTreeMap::new();
     for (kit, h) in &plan.merged.install_hooks {
-        let n = match per_kit.iter_mut().find(|(k, _)| k == kit) {
-            Some((_, n)) => {
-                *n += 1;
-                *n
-            }
-            None => {
-                per_kit.push((kit, 1));
-                1
-            }
-        };
+        let n = *per_kit.entry(kit).and_modify(|n| *n += 1).or_insert(1);
         let mut h = h.clone();
         h.env.retain(|v| !runtime_only.contains(v));
         // A hook that inherits the sandbox's environment (v2's) would still see them.

@@ -751,7 +751,7 @@ fn credential(c: CredCfg) -> Result<CredReq> {
             c.service
         );
     }
-    let phases = phases(c.phase, true)?;
+    let phases = phases(c.phase)?;
     let (env, inject) = match c.api_key {
         Some(k) => {
             let inject = k
@@ -791,8 +791,8 @@ struct SshAgentCfg {
     authenticate: Option<Vec<String>>,
 }
 
-/// The phases a capability's `phase:` names; `unique` (ssh-agent@1) refuses one listed twice.
-fn phases(phase: OneOrMany, unique: bool) -> Result<Vec<SshPhase>> {
+/// The phases a capability's `phase:` names, each at most once.
+fn phases(phase: OneOrMany) -> Result<Vec<SshPhase>> {
     let names = match phase {
         OneOrMany::One(p) => vec![p],
         OneOrMany::Many(p) => p,
@@ -804,7 +804,7 @@ fn phases(phase: OneOrMany, unique: bool) -> Result<Vec<SshPhase>> {
             "runtime" => SshPhase::Runtime,
             other => bail!("phase must be install or runtime (got {other:?})"),
         };
-        if unique && phases.contains(&phase) {
+        if phases.contains(&phase) {
             bail!("phase {p} is listed twice");
         }
         phases.push(phase);
@@ -816,7 +816,7 @@ fn phases(phase: OneOrMany, unique: bool) -> Result<Vec<SshPhase>> {
 }
 
 fn ssh_agent(c: SshAgentCfg) -> Result<CapBody> {
-    let phases = phases(c.phase, true)?;
+    let phases = phases(c.phase)?;
     let unrestricted = c.unrestricted.unwrap_or(true);
     if unrestricted && (c.sign.is_some() || c.authenticate.is_some()) {
         bail!("an unrestricted entry can't state sign or authenticate");

@@ -32,7 +32,7 @@ const PROBE_TIMEOUT: Duration = Duration::from_secs(2);
 
 /// Starts the engine unless it runs, waits up to `ENGINE_BOUND` for it to answer, then hands its
 /// socket to `user`'s group unless `user` is root.
-pub fn start_engine<R: Runner>(vm: &Smolvm<R>, machine: &str, user: Option<&str>) -> Result<()> {
+pub fn start_engine<R: Runner>(vm: &Smolvm<R>, machine: &str, user: &str) -> Result<()> {
     let hook = Hook {
         command: HookCmd::Shell(LAUNCH.into()),
         user: Some("0".into()),
@@ -53,8 +53,7 @@ pub fn start_engine<R: Runner>(vm: &Smolvm<R>, machine: &str, user: Option<&str>
         );
     }
     // An image user may be `user:group` (`somebody:1001`, `0:0`).
-    let Some(u) = user else { return Ok(()) };
-    let (name, group) = u.split_once(':').map_or((u, None), |(n, g)| (n, Some(g)));
+    let (name, group) = super::labels::split_user(user);
     if matches!(name, "root" | "0") {
         return Ok(());
     }
@@ -64,7 +63,7 @@ pub fn start_engine<R: Runner>(vm: &Smolvm<R>, machine: &str, user: Option<&str>
     };
     let cmd = format!("chgrp {group} /var/run/docker.sock && chmod g+rw /var/run/docker.sock");
     vm.exec_captured(&ExecSpec::sh(machine, "root", cmd))
-        .with_context(|| format!("giving {u} the docker socket"))?;
+        .with_context(|| format!("giving {user} the docker socket"))?;
     Ok(())
 }
 
@@ -96,6 +95,6 @@ pub(super) fn start_granted<R: Runner>(vm: &Smolvm<R>, sb: &Sandbox) -> Result<(
     if sb.meta.engine != super::Engine::Auto {
         return Ok(());
     }
-    let user = super::create::workload_user(&sb.meta);
-    start_engine(vm, &sb.machine, Some(&user))
+    let user = sb.meta.rec.workload_user(&sb.meta.name);
+    start_engine(vm, &sb.machine, user)
 }

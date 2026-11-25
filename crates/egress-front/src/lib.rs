@@ -5,7 +5,7 @@ pub use smolvm_credentials::{
     CredentialPolicy, CredentialRequest, CredentialResolver, InterceptorConfig, MachineCa,
     RequestFilter, RequestInfo, StaticResolver, generate_placeholders,
 };
-pub use smolvm_protocol::credentials::{host_matches, host_subtree};
+pub use smolvm_protocol::credentials::host_matches;
 
 mod ca;
 mod listener;
